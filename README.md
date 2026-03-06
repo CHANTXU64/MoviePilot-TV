@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://github.com/jxxghp/MoviePilot"><img src="https://img.shields.io/badge/MoviePilot-v2.9.13-darkviolet?style=flat-square" alt="MoviePilot Backend Version"></a>
-  <img src="https://img.shields.io/badge/platform-tvOS_17%2B-lightgrey.svg?style=flat-square" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-tvOS_17%2B-lightgrey.svg" alt="Platform">
   <img src="https://img.shields.io/badge/language-Swift-orange.svg?style=flat-square" alt="Language">
   <img src="https://img.shields.io/badge/UI-SwiftUI-blue.svg?style=flat-square" alt="UI Framework">
   <a href="https://github.com/CHANTXU64/MoviePilot-TV/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-CC0--1.0-blue.svg?style=flat-square" alt="License"></a>
