@@ -74,7 +74,7 @@
 #### 构建步骤
 1. 克隆项目代码：
    ```sh
-   git clone https://github.com/CHANTXU64/MoviePilot-TV.git
+   git clone --filter=blob:none https://github.com/CHANTXU64/MoviePilot-TV.git
    ```
 2. 使用 Xcode 打开 `MoviePilot-TV.xcodeproj`。
 3. 选择你的真实 Apple TV 设备（需在同一局域网并已配对）。
