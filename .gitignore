@@ -1,0 +1,13 @@
+.DS_Store
+/.build
+/Packages
+/*.xcodeproj/xcuserdata/
+/*.xcodeproj/project.xcworkspace/xcuserdata/
+/xcuserdata/
+/*.xccheckout
+/*.xcscmblueprint
+/DerivedData
+.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
+.swiftpm/xcode/xcuserdata
+.swiftpm/configuration/user.settings
+.build/
