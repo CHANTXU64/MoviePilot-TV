@@ -531,10 +531,10 @@ struct DownloaderConf: Codable {
 
 /// 下载任务中关联的轻量级媒体信息
 struct DownloadingMediaInfo: Codable {
-    let image: String?
-    let title: String?
-    let episode: String?
-    let season: String?
+  let image: String?
+  let title: String?
+  let episode: String?
+  let season: String?
 }
 
 /// 实时下载任务详细信息
@@ -567,7 +567,8 @@ struct DownloadingInfo: Codable, Identifiable {
   let id: String
 
   enum CodingKeys: String, CodingKey {
-    case hash, title, name, state, progress, dlspeed, upspeed, size, left_time, media, season_episode, username
+    case hash, title, name, state, progress, dlspeed, upspeed, size, left_time, media,
+      season_episode, username
   }
 
   init(from decoder: Decoder) throws {
@@ -590,7 +591,8 @@ struct DownloadingInfo: Codable, Identifiable {
       self.id = "DownloadingInfo-\(_hash)-\(username ?? "")"
     } else {
       // 备用方案：组合其他信息，确保稳定性
-      let fallbackId = (name ?? "") + (title ?? "") + (username ?? "") + (size.map { String($0) } ?? "")
+      let fallbackId =
+        (name ?? "") + (title ?? "") + (username ?? "") + (size.map { String($0) } ?? "")
       if !fallbackId.isEmpty {
         self.id = "DownloadingInfo-\(fallbackId)"
       } else {
@@ -938,7 +940,11 @@ struct Person: Codable, Identifiable, Hashable {
   let latin_name: String?
   /// 角色
   var character: String?
+  /// TMDB job
   var job: String?
+  // douban
+  // 角色
+  let roles: [String]?
   /// themoviedb图片
   let profile_path: String?
   /// 原名
@@ -970,6 +976,7 @@ struct Person: Codable, Identifiable, Hashable {
     case latin_name
     case character
     case job
+    case roles
     case profile_path
     case original_name
     case known_for_department
@@ -993,6 +1000,7 @@ struct Person: Codable, Identifiable, Hashable {
       self.latin_name = nil
       self.character = nil
       self.job = nil
+      self.roles = nil
       self.profile_path = nil
       self.original_name = nil
       self.known_for_department = nil
@@ -1023,6 +1031,7 @@ struct Person: Codable, Identifiable, Hashable {
     self.latin_name = try keyedContainer.decodeIfPresent(String.self, forKey: .latin_name)
     self.character = try keyedContainer.decodeIfPresent(String.self, forKey: .character)
     self.job = try keyedContainer.decodeIfPresent(String.self, forKey: .job)
+    self.roles = try keyedContainer.decodeIfPresent([String].self, forKey: .roles)
     self.profile_path = try keyedContainer.decodeIfPresent(String.self, forKey: .profile_path)
     self.original_name = try keyedContainer.decodeIfPresent(String.self, forKey: .original_name)
     self.known_for_department = try keyedContainer.decodeIfPresent(
@@ -1046,9 +1055,9 @@ struct Person: Codable, Identifiable, Hashable {
   /// 成员初始化器，用于创建或修改演职人员实例。
   init(
     source: String?, raw_id: String?, name: String?, latin_name: String?,
-    character: String?, job: String?, profile_path: String?, original_name: String?,
-    known_for_department: String?, place_of_birth: String?, popularity: Double?,
-    biography: String?, birthday: String?, also_known_as: [String]?,
+    character: String?, job: String?, roles: [String]?, profile_path: String?,
+    original_name: String?, known_for_department: String?, place_of_birth: String?,
+    popularity: Double?, biography: String?, birthday: String?, also_known_as: [String]?,
     avatar: PersonAvatar?, images: BangumiImages?, id: String
   ) {
     self.source = source
@@ -1057,6 +1066,7 @@ struct Person: Codable, Identifiable, Hashable {
     self.latin_name = latin_name
     self.character = character
     self.job = job
+    self.roles = roles
     self.profile_path = profile_path
     self.original_name = original_name
     self.known_for_department = known_for_department

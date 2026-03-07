@@ -6,7 +6,7 @@ struct StaffManager {
     if let priority = jobPriorityMap[job] {
       return priority
     }
-    return 999 // 未在列表中的职位，给予最低优先级
+    return 999  // 未在列表中的职位，给予最低优先级
   }
 
   /// 通用辅助方法：将两个由 "/" 分隔的字符串合并去重，防止叠字重复和穿透
@@ -23,7 +23,7 @@ struct StaffManager {
     for item in newItems {
       if !itemSet.contains(item) {
         items.append(item)
-        itemSet.insert(item) // 动态更新缓存，完美阻断重复项
+        itemSet.insert(item)  // 动态更新缓存，完美阻断重复项
       }
     }
 
@@ -191,10 +191,27 @@ struct StaffManager {
       }
     }
 
+    // 2. 备选方案：如果没有任何带职位的员工（例如数据源仅提供演员或缺失职位），尝试使用角色信息分组
     if staffGroupedByJob.isEmpty {
       for staff in persons {
-        if let name = staff.name, !name.isEmpty {
-          staffGroupedByJob[(staff.job ?? staff.character ?? " "), default:[]].append(name)
+        guard let name = staff.name, !name.isEmpty else { continue }
+
+        // 优先级：角色名 > 原始职位 > 角色列表 > 兜底 “职员”
+        let jobLabel: String
+        if let character = staff.character, !character.isEmpty {
+          jobLabel = character
+        } else if let job = staff.job, !job.isEmpty {
+          jobLabel = job
+        } else if let rolesStr = staff.roles?.joined(separator: "/"), !rolesStr.isEmpty {
+          jobLabel = rolesStr
+        } else {
+          jobLabel = "职员"
+        }
+
+        // 统一进行姓名查重优化，防止同一分类下出现重复姓名，保持逻辑一致
+        if !(seenNamesPerJob[jobLabel, default: []].contains(name)) {
+          staffGroupedByJob[jobLabel, default: []].append(name)
+          seenNamesPerJob[jobLabel, default: []].insert(name)
         }
       }
     }
@@ -206,7 +223,7 @@ struct StaffManager {
       if p1 != p2 {
         return p1 < p2
       }
-      return $0 < $1 // 使用 key 本身进行稳定排序
+      return $0 < $1  // 使用 key 本身进行稳定排序
     }
 
     // 3. 取前 'count' 个职位

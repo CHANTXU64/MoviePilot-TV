@@ -60,6 +60,7 @@ class PersonDetailViewModel: ObservableObject {
         latin_name: fullDetail.latin_name,
         character: self.person.character,  // 始终保留旧的角色信息
         job: self.person.job,  // 始终保留旧的职位信息
+        roles: self.person.roles,  // 始终保留旧的职位信息
         profile_path: fullDetail.profile_path,
         original_name: finalOriginalName,  // 使用保留的名称
         known_for_department: fullDetail.known_for_department,
