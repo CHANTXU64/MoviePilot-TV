@@ -18,11 +18,12 @@ struct PersonDetailView: View {
 
   var body: some View {
     MediaGridView(
-      items: viewModel.credits,
-      isLoading: viewModel.isLoading,
-      isLoadingMore: viewModel.isLoadingMore,
-      onLoadMore: {_ in 
-        Task { await viewModel.loadMoreData() }
+      items: viewModel.paginator.items,
+      isLoading: viewModel.isLoadingDetails
+        || (viewModel.paginator.isLoading && viewModel.paginator.items.isEmpty),
+      isLoadingMore: viewModel.paginator.isLoading && !viewModel.paginator.items.isEmpty,
+      onLoadMore: { currentItem in
+        Task { await viewModel.paginator.loadMore(currentItem) }
       },
       navigationPath: $navigationPath,
       header: {
@@ -85,7 +86,7 @@ struct PersonDetailView: View {
                 }
               }
 
-              if viewModel.isLoading {
+              if viewModel.isLoadingDetails {
                 // 加载期间保持布局稳定的占位符
                 RoundedRectangle(cornerRadius: 12)
                   .fill(Color.secondary.opacity(0.1))
@@ -141,7 +142,7 @@ struct PersonDetailView: View {
       }
     )
     .task {
-      await viewModel.loadCredits()
+      await viewModel.loadInitialData()
     }
     .sheet(isPresented: $showFullBio) {
       let person = viewModel.person

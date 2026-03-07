@@ -41,6 +41,7 @@ class MediaDetailViewModel: ObservableObject {
     init(_ v: MediaInfo) { value = v }
   }
   private let detailBox: DetailBox
+  private var cancellables = Set<AnyCancellable>()
 
   init(detail: MediaInfo) {
     self.detail = detail
@@ -101,6 +102,19 @@ class MediaDetailViewModel: ObservableObject {
         return items.count > initialCount
       }
     )
+
+    // --- Forward Paginator Updates ---
+    self.recommendPaginator.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
+
+    self.similarPaginator.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
+
+    self.actorsPaginator.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
   }
 
   /// 应用完整的媒体详情数据并加载辅助内容。

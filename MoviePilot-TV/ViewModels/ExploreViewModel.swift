@@ -367,10 +367,10 @@ class ExploreViewModel: ObservableObject {
   private func setupPaginator(for path: String) {
     let newPaginator = Paginator<MediaInfo>(
       threshold: 24,
-      fetcher: { [apiService] page in
+      fetcher: { @MainActor [apiService] page in
         try await apiService.fetchRecommend(path: path, page: page)
       },
-      processor: { [weak self] currentItems, newItems in
+      processor: { @MainActor [weak self] currentItems, newItems in
         guard let self = self else { return false }
         let uniqueNewItems = MediaInfo.deduplicate(newItems, existingKeys: &self.seenKeys)
         if uniqueNewItems.isEmpty {
@@ -379,7 +379,7 @@ class ExploreViewModel: ObservableObject {
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
-      onReset: { [weak self] in
+      onReset: { @MainActor [weak self] in
         self?.seenKeys.removeAll()
       }
     )

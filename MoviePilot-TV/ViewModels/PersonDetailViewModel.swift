@@ -5,44 +5,65 @@ import SwiftUI
 @MainActor
 class PersonDetailViewModel: ObservableObject {
   @Published var person: Person
-  @Published var credits: [MediaInfo] = []
-  @Published var isLoading = true
-  @Published var isLoadingMore = false
-  @Published var hasMoreData = true
+  @Published var isLoadingDetails = true  // 用于控制个人简介加载状态的新属性
 
-  private var currentPage = 1
-  private var detectedPageSize: Int?
-  private var seenKeys = Set<String>()
-
+  let paginator: Paginator<MediaInfo>
   private let apiService = APIService.shared
+  private var cancellables = Set<AnyCancellable>()
 
   init(person: Person) {
     self.person = person
+    var seenKeys = Set<String>()  // Paginator 内部管理
+
+    self.paginator = Paginator<MediaInfo>(
+      threshold: 12,
+      fetcher: { @MainActor [apiService, person] page in
+        // 确保 person.raw_id 存在
+        guard let personId = person.raw_id, !personId.isEmpty else {
+          return []
+        }
+        return try await apiService.fetchPersonCredits(
+          personId: personId,
+          source: person.source,
+          page: page
+        )
+      },
+      processor: { @MainActor items, newItems in
+        // 使用现有的去重逻辑
+        let unique = MediaInfo.deduplicate(newItems, existingKeys: &seenKeys)
+        if !unique.isEmpty {
+          items.append(contentsOf: unique)
+          return true  // 返回 true 表示有新内容添加
+        }
+        return false  // 没有新内容
+      },
+      onReset: { @MainActor in
+        seenKeys.removeAll()  // 重置时清空 seenKeys
+      }
+    )
+
+    self.paginator.objectWillChange
+      .sink { [weak self] _ in
+        self?.objectWillChange.send()
+      }
+      .store(in: &cancellables)
   }
 
-  func loadCredits() async {
-    // 如果缺少 raw_id，则不调用 API。
+  func loadDetails() async {
+    // 如果缺少 raw_id，则不获取详情数据。
     guard let personId = person.raw_id, !personId.isEmpty else {
-      isLoading = false
-      hasMoreData = false
+      isLoadingDetails = false
       return
     }
-
-    isLoading = true
+    isLoadingDetails = true
+    defer { isLoadingDetails = false }
 
     do {
-      // 演员详情已就绪，仅需获取影视作品。
       let source = person.source
 
-      // 并行获取作品列表及更新个人详细信息
-      async let personCredits = apiService.fetchPersonCredits(
-        personId: personId, source: source, page: 1)
-      async let fullPersonDetail = apiService.fetchPersonDetail(
+      // 获取人物详细信息（如生平、履历等）
+      let fullDetail = try await apiService.fetchPersonDetail(
         personId: personId, source: source)
-
-      let (newCredits, fullDetailResponse) = try await (personCredits, fullPersonDetail)
-
-      let fullDetail = fullDetailResponse
 
       // 确定要保留的正确原始名称。
       let finalOriginalName: String?
@@ -75,60 +96,16 @@ class PersonDetailViewModel: ObservableObject {
       )
 
       self.person = newPerson
-
-      // 重置状态以进行完全刷新。
-      currentPage = 1
-      hasMoreData = true
-      detectedPageSize = nil
-      seenKeys.removeAll()
-
-      self.credits = MediaInfo.deduplicate(newCredits, existingKeys: &seenKeys)
-
-      if newCredits.isEmpty {
-        hasMoreData = false
-      } else {
-        detectedPageSize = newCredits.count
-      }
-
     } catch {
       print("加载人物作品出错: \(error)")
     }
-    isLoading = false
   }
 
-  func loadMoreData() async {
-    guard !isLoadingMore, hasMoreData else { return }
-
-    // 如果缺少 raw_id，则不调用 API。
-    guard let personId = person.raw_id, !personId.isEmpty else {
-      isLoadingMore = false
-      hasMoreData = false
-      return
-    }
-
-    isLoadingMore = true
-    currentPage += 1
-
-    do {
-      let source = person.source
-      let newItems = try await apiService.fetchPersonCredits(
-        personId: personId, source: source, page: currentPage)
-
-      if newItems.isEmpty {
-        hasMoreData = false
-      } else {
-        if let pageSize = detectedPageSize, newItems.count < pageSize {
-          hasMoreData = false
-        }
-
-        let uniqueItems = MediaInfo.deduplicate(newItems, existingKeys: &seenKeys)
-        credits.append(contentsOf: uniqueItems)
-      }
-    } catch {
-      print("加载更多人物作品出错: \(error)")
-      currentPage -= 1
-    }
-
-    isLoadingMore = false
+  func loadInitialData() async {
+    // 并行执行：获取人物详情 和 加载第一页作品
+    _ = await (
+      loadDetails(),
+      paginator.refresh()
+    )
   }
 }
