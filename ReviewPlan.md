@@ -17,6 +17,7 @@
 | `Services/KeychainHelper.swift` | ✅ 已完成 | |
 | `Services/Logger.swift` | ✅ 已完成 | 全局静态调用: `Logger.verbose/debug/info/warning/error("message", metadata: ["key": "value"])` |
 | `Services/StaffManager.swift` | ✅ 已完成 | 内部已实现全量去重与排序。后续在处理分页/LoadMore 业务时，ViewModel 直接传入全量合并后的数组即可，无需也**绝不要**在外部手动去重。 |
+| `Services/Paginator.swift` | ⏳ 待开始 | |
 | `Services/ParsedSeason.swift` | ✅ 已完成 | |
 | `Services/TranslationHelper.swift` | ✅ 已完成 | |
 | `Extensions/KingfisherCookies.swift`| ⏳ 待开始 | |

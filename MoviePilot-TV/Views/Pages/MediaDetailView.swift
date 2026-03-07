@@ -45,16 +45,16 @@ struct MediaDetailView: View {
     if viewModel.detail.type == "电视剧" && viewModel.detail.tmdb_id != nil {
       return "season"
     }
-    if !viewModel.uniqueActors.isEmpty {
+    if !viewModel.actorsPaginator.items.isEmpty {
       return "actors"
     }
     if !viewModel.uniqueDirectors.isEmpty {
       return "directors"
     }
-    if !viewModel.recommendations.isEmpty {
+    if !viewModel.recommendPaginator.items.isEmpty {
       return "recommendations"
     }
-    if !viewModel.similarMedia.isEmpty {
+    if !viewModel.similarPaginator.items.isEmpty {
       return "similar"
     }
     return ""
@@ -578,7 +578,7 @@ struct MediaDetailView: View {
 
   @ViewBuilder
   private var actorsSection: some View {
-    let actors = viewModel.uniqueActors
+    let actors = viewModel.actorsPaginator.items
     if !actors.isEmpty {
       VStack(alignment: .leading, spacing: 0) {
         if showContentPage || firstVisibleRow != "actors" {
@@ -606,7 +606,7 @@ struct MediaDetailView: View {
                 }
               }
             }
-            if viewModel.isCreditsLoading {
+            if viewModel.actorsPaginator.isLoading {
               ProgressView()
                 .padding(.horizontal)
             }
@@ -615,12 +615,9 @@ struct MediaDetailView: View {
           .padding(.top, 25)
           .padding(.bottom, 30)
           .onChange(of: focusedActorId) { _, newId in
-            if let newId = newId,
-               let index = viewModel.uniqueActors.firstIndex(where: { $0.id == newId }),
-               index >= max(0, viewModel.uniqueActors.count - 5)
-            {
+            if viewModel.actorsPaginator.shouldLoadMore(currentItemId: newId, threshold: 5) {
               Task {
-                await viewModel.loadMoreActors()
+                await viewModel.actorsPaginator.loadMore()
               }
             }
           }
@@ -633,7 +630,7 @@ struct MediaDetailView: View {
 
   @ViewBuilder
   private var recommendationsSection: some View {
-    if !viewModel.recommendations.isEmpty {
+    if !viewModel.recommendPaginator.items.isEmpty {
       VStack(alignment: .leading, spacing: 0) {
         if showContentPage || firstVisibleRow != "recommendations" {
           Text("推荐")
@@ -646,7 +643,7 @@ struct MediaDetailView: View {
 
         ScrollView(.horizontal, showsIndicators: false) {
           LazyHStack(spacing: 40) {
-            ForEach(viewModel.recommendations) { media in
+            ForEach(viewModel.recommendPaginator.items) { media in
               MediaCard(
                 title: media.cleanedTitle ?? "",
                 posterUrl: APIService.shared.getPosterImageUrl(media),
@@ -671,7 +668,7 @@ struct MediaDetailView: View {
                 subscriptionHandler: subscriptionHandler
               )
             }
-            if viewModel.isRecommendLoading {
+            if viewModel.recommendPaginator.isLoading {
               ProgressView()
                 .padding(.horizontal)
             }
@@ -683,7 +680,7 @@ struct MediaDetailView: View {
             // 聚焦时触发预加载（带 300ms 防抖，避免快速滚动时浪费请求）
             recommendPreloadDebounce?.cancel()
             if let newId = newId,
-              let item = viewModel.recommendations.first(where: { $0.id == newId })
+              let item = viewModel.recommendPaginator.items.first(where: { $0.id == newId })
             {
               recommendPreloadDebounce = Task {
                 try? await Task.sleep(for: .milliseconds(300))
@@ -692,12 +689,9 @@ struct MediaDetailView: View {
               }
             }
             // 分页加载
-            if let newId = newId,
-              let index = viewModel.recommendations.firstIndex(where: { $0.id == newId }),
-              index >= max(0, viewModel.recommendations.count - 10)
-            {
+            if viewModel.recommendPaginator.shouldLoadMore(currentItemId: newId, threshold: 10) {
               Task {
-                await viewModel.loadRecommendations()
+                await viewModel.recommendPaginator.loadMore()
               }
             }
           }
@@ -710,7 +704,7 @@ struct MediaDetailView: View {
 
   @ViewBuilder
   private var similarSection: some View {
-    if !viewModel.similarMedia.isEmpty {
+    if !viewModel.similarPaginator.items.isEmpty {
       VStack(alignment: .leading, spacing: 0) {
         if showContentPage || firstVisibleRow != "similar" {
           Text("类似")
@@ -723,7 +717,7 @@ struct MediaDetailView: View {
 
         ScrollView(.horizontal, showsIndicators: false) {
           LazyHStack(spacing: 40) {
-            ForEach(viewModel.similarMedia) { media in
+            ForEach(viewModel.similarPaginator.items) { media in
               MediaCard(
                 title: media.cleanedTitle ?? "",
                 posterUrl: APIService.shared.getPosterImageUrl(media),
@@ -748,7 +742,7 @@ struct MediaDetailView: View {
                 subscriptionHandler: subscriptionHandler
               )
             }
-            if viewModel.isSimilarLoading {
+            if viewModel.similarPaginator.isLoading {
               ProgressView()
                 .padding(.horizontal)
             }
@@ -760,7 +754,7 @@ struct MediaDetailView: View {
             // 聚焦时触发预加载（带 300ms 防抖）
             similarPreloadDebounce?.cancel()
             if let newId = newId,
-              let item = viewModel.similarMedia.first(where: { $0.id == newId })
+              let item = viewModel.similarPaginator.items.first(where: { $0.id == newId })
             {
               similarPreloadDebounce = Task {
                 try? await Task.sleep(for: .milliseconds(300))
@@ -769,12 +763,9 @@ struct MediaDetailView: View {
               }
             }
             // 分页加载
-            if let newId = newId,
-              let index = viewModel.similarMedia.firstIndex(where: { $0.id == newId }),
-              index >= max(0, viewModel.similarMedia.count - 10)
-            {
+            if viewModel.similarPaginator.shouldLoadMore(currentItemId: newId, threshold: 10) {
               Task {
-                await viewModel.loadSimilar()
+                await viewModel.similarPaginator.loadMore()
               }
             }
           }

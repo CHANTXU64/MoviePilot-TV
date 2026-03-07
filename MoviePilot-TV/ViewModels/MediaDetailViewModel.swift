@@ -19,37 +19,73 @@ class MediaDetailViewModel: ObservableObject {
   @Published var backgroundUrl: URL?
   @Published var isUsingPosterAsBackdrop = false
 
-  // 推荐内容
-  @Published var recommendations: [MediaInfo] = []
-  private var recommendPage = 1
-  @Published var hasMoreRecommendations = true
-  @Published var isRecommendLoading = false
-
-  // 相似媒体
-  @Published var similarMedia: [MediaInfo] = []
-  private var similarPage = 1
-  @Published var hasMoreSimilar = true
-  @Published var isSimilarLoading = false
-
-  // 站点筛选器 ViewModel
-  @Published var siteFilter = SiteFilterViewModel()
+  // 分页加载器
+  let recommendPaginator: Paginator<MediaInfo>
+  let similarPaginator: Paginator<MediaInfo>
+  let actorsPaginator: Paginator<Person>
 
   // 演职人员信息
   @Published var heroTopActors: [Person] = []
   @Published var heroTopStaff: [GroupedStaff] = []
   @Published var uniqueDirectors: [Person] = []
-  @Published var uniqueActors: [Person] = []
 
-  private var creditsPage = 1
-  @Published var hasMoreCredits = true
-  @Published var isCreditsLoading = false
-
+  // 视图模型与服务
+  @Published var siteFilter = SiteFilterViewModel()
   private let apiService = APIService.shared
-  private var recommendSeenKeys = Set<String>()
-  private var similarSeenKeys = Set<String>()
 
   init(detail: MediaInfo) {
     self.detail = detail
+
+    // --- Paginator for Recommend ---
+    var recommendSeenKeys = Set<String>()
+    self.recommendPaginator = Paginator<MediaInfo>(
+      fetcher: { @MainActor [apiService, detail] page in
+        try await apiService.fetchMediaRecommendations(detail: detail, page: page)
+      },
+      processor: { @MainActor items, newItems in
+        let unique = MediaInfo.deduplicate(newItems, existingKeys: &recommendSeenKeys)
+        if !unique.isEmpty {
+          items.append(contentsOf: unique)
+          return true
+        }
+        return false
+      },
+      onReset: { @MainActor in
+        recommendSeenKeys.removeAll()
+      }
+    )
+
+    // --- Paginator for Similar Media ---
+    var similarSeenKeys = Set<String>()
+    self.similarPaginator = Paginator<MediaInfo>(
+      fetcher: { @MainActor [apiService, detail] page in
+        try await apiService.fetchMediaSimilar(detail: detail, page: page)
+      },
+      processor: { @MainActor items, newItems in
+        let unique = MediaInfo.deduplicate(newItems, existingKeys: &similarSeenKeys)
+        if !unique.isEmpty {
+          items.append(contentsOf: unique)
+          return true
+        }
+        return false
+      },
+      onReset: { @MainActor in
+        similarSeenKeys.removeAll()
+      }
+    )
+
+    // --- Paginator for Actors ---
+    self.actorsPaginator = Paginator<Person>(
+      fetcher: { @MainActor [apiService, detail] page in
+        try await apiService.fetchMediaActors(detail: detail, page: page)
+      },
+      processor: { @MainActor items, newItems in
+        let initialCount = items.count
+        items = StaffManager.mergeActors(existing: items, newBatch: newItems)
+        return items.count > initialCount
+      }
+    )
+
     updateBackground()
   }
 
@@ -102,187 +138,40 @@ class MediaDetailViewModel: ObservableObject {
   /// 加载辅助数据：演职员、推荐、相似内容（三个请求互不依赖，并发执行）
   /// 注意：fetchMediaDetail / 订阅 / TMDB 识别 / 分季信息全部由 MediaPreloadTask 负责，此处不再处理。
   func loadSupplementaryData() async {
-    async let initialActors: Void = loadInitialActors()
-    async let recommendations: Void = loadRecommendations(reset: true)
-    async let similar: Void = loadSimilar(reset: true)
-    _ = await (initialActors, recommendations, similar)
-  }
-
-  /// 仅在首次进入详情页时调用，负责设置演职员的初始状态。
-  func loadInitialActors() async {
-    // 重置演员和分页状态
-    creditsPage = 1
-    uniqueActors = []  // 保证列表从零开始，完全由 Fetch 获取
-    hasMoreCredits = true
-    isCreditsLoading = false
-
-    // 从媒体详情中加载初始的职员（如导演）
+    // 准备静态的演职员信息
     uniqueDirectors = StaffManager.processCrew(persons: detail.directors ?? [])
-
-    // 主视觉区域数据直接使用 detail 中的信息
     if heroTopActors.isEmpty {
+      // 在加载网络数据前，先用详情页自带的数据填充
       heroTopActors = StaffManager.processActors(persons: Array((detail.actors ?? []).prefix(4)))
       heroTopStaff = StaffManager.getTopGroupedStaff(from: detail.directors ?? [], count: 1)
     }
 
-    // 尝试加载第一页，uniqueActors 将完全由网络请求填充
-    await loadMoreActors()
-  }
+    // 1. 优先加载演员信息并等待
+    await actorsPaginator.refresh()
 
-  /// 加载更多演员（支持分页）
-  func loadMoreActors() async {
-    guard hasMoreCredits, !isCreditsLoading else { return }
-    isCreditsLoading = true
-    defer { isCreditsLoading = false }
-
-    let maxAttempts = 2
-    var attempts = 0
-    var hasNewContent = false
-
-    while attempts < maxAttempts, hasMoreCredits, !hasNewContent {
-      attempts += 1
-      let initialActorCount = uniqueActors.count
-
-      do {
-        let newActors = try await apiService.fetchMediaActors(detail: detail, page: creditsPage)
-
-        if newActors.isEmpty {
-          hasMoreCredits = false
-          break
-        }
-
-        uniqueActors = StaffManager.mergeActors(existing: uniqueActors, newBatch: newActors)
-
-        if uniqueActors.count > initialActorCount {
-          hasNewContent = true
-        }
-
-        // 如果是第一页加载完，需要更新 Hero 数据
-        if creditsPage == 1 && heroTopActors.isEmpty {
-          updateHeroData()
-        }
-
-        creditsPage += 1
-
-      } catch {
-        print("加载演职员出错: \(error)")
-        hasMoreCredits = false
-        break
-      }
+    // 2. 演员加载完毕，立即更新 Hero 区域
+    if heroTopActors.isEmpty {
+      updateHeroData(from: actorsPaginator.items)
     }
 
-    if !hasNewContent {
-      hasMoreCredits = false
+    // 3. 在后台并发加载推荐和相似内容
+    // 创建显式的 @MainActor 任务来强制在主线程上执行
+    let recommendTask = Task { @MainActor in
+      await recommendPaginator.refresh()
     }
+    let similarTask = Task { @MainActor in
+      await similarPaginator.refresh()
+    }
+
+    // 等待后台任务完成
+    _ = await (recommendTask.value, similarTask.value)
   }
 
-  /// 更新主视觉区域的静态数据。仅调用一次。
-  private func updateHeroData() {
-    heroTopActors = Array(uniqueActors.prefix(4))
+  /// 更新主视觉区域的静态数据。
+  private func updateHeroData(from actors: [Person]) {
+    heroTopActors = Array(actors.prefix(4))
+    // 此处的 Staff 数据也应保持同步更新
     heroTopStaff = StaffManager.getTopGroupedStaff(from: detail.directors ?? [], count: 1)
-  }
-
-  /// 加载推荐内容（带“二次确认”逻辑防止因重复数据导致无限加载）
-  func loadRecommendations(reset: Bool = false) async {
-    if reset {
-      recommendPage = 1
-      recommendations = []
-      hasMoreRecommendations = true
-      isRecommendLoading = false
-      recommendSeenKeys.removeAll()
-    }
-    guard hasMoreRecommendations, !isRecommendLoading else { return }
-    isRecommendLoading = true
-    defer { isRecommendLoading = false }
-
-    let maxAttempts = 2
-    var attempts = 0
-    var hasNewContent = false
-
-    while attempts < maxAttempts, hasMoreRecommendations, !hasNewContent {
-      attempts += 1
-      let initialCount = recommendations.count
-
-      do {
-        let newItems = try await apiService.fetchMediaRecommendations(
-          detail: detail, page: recommendPage)
-
-        if newItems.isEmpty {
-          hasMoreRecommendations = false
-          break
-        }
-
-        let unique = MediaInfo.deduplicate(newItems, existingKeys: &recommendSeenKeys)
-        if !unique.isEmpty {
-          recommendations.append(contentsOf: unique)
-        }
-
-        recommendPage += 1
-
-        if recommendations.count > initialCount {
-          hasNewContent = true
-        }
-
-      } catch {
-        print("加载推荐出错: \(error)")
-        hasMoreRecommendations = false
-        break
-      }
-    }
-
-    if !hasNewContent {
-      hasMoreRecommendations = false
-    }
-  }
-
-  /// 加载相似内容（带“二次确认”逻辑防止因重复数据导致无限加载）
-  func loadSimilar(reset: Bool = false) async {
-    if reset {
-      similarPage = 1
-      similarMedia = []
-      hasMoreSimilar = true
-      isSimilarLoading = false
-      similarSeenKeys.removeAll()
-    }
-
-    guard hasMoreSimilar, !isSimilarLoading else { return }
-    isSimilarLoading = true
-    defer { isSimilarLoading = false }
-
-    let maxAttempts = 2
-    var attempts = 0
-    var hasNewContent = false
-
-    while attempts < maxAttempts, hasMoreSimilar, !hasNewContent {
-      attempts += 1
-      let initialCount = similarMedia.count
-
-      do {
-        let newItems = try await apiService.fetchMediaSimilar(detail: detail, page: similarPage)
-
-        if newItems.isEmpty {
-          hasMoreSimilar = false
-          break
-        }
-
-        let unique = MediaInfo.deduplicate(newItems, existingKeys: &similarSeenKeys)
-        if !unique.isEmpty {
-          similarMedia.append(contentsOf: unique)
-        }
-        similarPage += 1
-
-        if similarMedia.count > initialCount {
-          hasNewContent = true
-        }
-      } catch {
-        print("加载相似内容出错: \(error)")
-        hasMoreSimilar = false
-        break
-      }
-    }
-    if !hasNewContent {
-      hasMoreSimilar = false
-    }
   }
 
   // MARK: - 订阅操作（业务逻辑，由 View 层调用）
