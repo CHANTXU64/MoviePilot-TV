@@ -50,14 +50,46 @@ class ExploreViewModel: ObservableObject {
   @Published var bangumiYear: String = ""
 
   // 数据状态
-  @Published var items: [MediaInfo] = []
-  @Published var isLoading = false
-  @Published var isLoadingMore = false
-  @Published var currentPage = 1
-  @Published var hasMoreData = true
+  @Published private(set) var paginator: Paginator<MediaInfo>?
 
   private let apiService = APIService.shared
   private var seenKeys = Set<String>()
+  private var cancellables = Set<AnyCancellable>()
+  private var paginatorCancellable: AnyCancellable?
+
+  init() {
+    // 将所有筛选器的 Publisher 转换为 AnyPublisher<Void, Never>
+    let filterPublishers: [AnyPublisher<Void, Never>] = [
+      $selectedSource.map { _ in }.eraseToAnyPublisher(),
+      $selectedType.map { _ in }.eraseToAnyPublisher(),
+      $tmdbSortBy.map { _ in }.eraseToAnyPublisher(),
+      $tmdbGenre.map { _ in }.eraseToAnyPublisher(),
+      $tmdbLanguage.map { _ in }.eraseToAnyPublisher(),
+      $tmdbVoteAverage.map { _ in }.eraseToAnyPublisher(),
+      $doubanSort.map { _ in }.eraseToAnyPublisher(),
+      $doubanCategory.map { _ in }.eraseToAnyPublisher(),
+      $doubanZone.map { _ in }.eraseToAnyPublisher(),
+      $doubanYear.map { _ in }.eraseToAnyPublisher(),
+      $bangumiCat.map { _ in }.eraseToAnyPublisher(),
+      $bangumiSort.map { _ in }.eraseToAnyPublisher(),
+      $bangumiYear.map { _ in }.eraseToAnyPublisher(),
+    ]
+
+    // 合并所有筛选器 Publisher
+    Publishers.MergeMany(filterPublishers)
+      // 使用 debounce 来防止快速连续的 UI 更新导致多次加载
+      // 例如，当 onSourceChanged 重置多个属性时
+      .debounce(for: .milliseconds(100), scheduler: DispatchQueue.main)
+      // 映射到 API 路径
+      .map { [unowned self] in self.buildApiPath() }
+      // 只有当路径变化时才继续
+      .removeDuplicates()
+      // 订阅路径变化，并创建新的 Paginator
+      .sink { [unowned self] path in
+        self.setupPaginator(for: path)
+      }
+      .store(in: &cancellables)
+  }
 
   // MARK: - TheMovieDb 字典
 
@@ -332,45 +364,35 @@ class ExploreViewModel: ObservableObject {
 
   // MARK: - 数据加载
 
-  func loadData() async {
-    currentPage = 1
-    hasMoreData = true
-    isLoading = true
-
-    do {
-      let path = buildApiPath()
-      let fetched = try await apiService.fetchRecommend(path: path, page: 1)
-      seenKeys.removeAll()
-      items = MediaInfo.deduplicate(fetched, existingKeys: &seenKeys)
-    } catch {
-      print("Failed to load discover data: \(error)")
-      items = []
-    }
-
-    isLoading = false
-  }
-
-  func loadMoreData() async {
-    guard hasMoreData, !isLoadingMore else { return }
-
-    isLoadingMore = true
-    currentPage += 1
-
-    do {
-      let path = buildApiPath()
-      let newItems = try await apiService.fetchRecommend(path: path, page: currentPage)
-      if newItems.isEmpty {
-        hasMoreData = false
-      } else {
-        let unique = MediaInfo.deduplicate(newItems, existingKeys: &seenKeys)
-        items.append(contentsOf: unique)
+  private func setupPaginator(for path: String) {
+    let newPaginator = Paginator<MediaInfo>(
+      threshold: 24,
+      fetcher: { [apiService] page in
+        try await apiService.fetchRecommend(path: path, page: page)
+      },
+      processor: { [weak self] currentItems, newItems in
+        guard let self = self else { return false }
+        let uniqueNewItems = MediaInfo.deduplicate(newItems, existingKeys: &self.seenKeys)
+        if uniqueNewItems.isEmpty {
+          return false
+        }
+        currentItems.append(contentsOf: uniqueNewItems)
+        return true
+      },
+      onReset: { [weak self] in
+        self?.seenKeys.removeAll()
       }
-    } catch {
-      print("Failed to load more discover data: \(error)")
-      currentPage -= 1
-    }
+    )
+    paginator = newPaginator
 
-    isLoadingMore = false
+    paginatorCancellable = newPaginator.objectWillChange
+      .sink { [weak self] _ in
+        self?.objectWillChange.send()
+      }
+
+    Task {
+      await newPaginator.refresh()
+    }
   }
 
   // MARK: - 重置筛选器

@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 struct ExploreView: View {
   @StateObject private var viewModel = ExploreViewModel()
@@ -8,43 +9,44 @@ struct ExploreView: View {
 
   var body: some View {
     NavigationStack(path: $path) {
-      // 主内容区：媒体网格
-      MediaGridView(
-        items: viewModel.items,
-        isLoading: viewModel.isLoading,
-        isLoadingMore: viewModel.isLoadingMore,
-        onLoadMore: { _ in
-          Task { await viewModel.loadMoreData() }
-        },
-        navigationPath: $path,
-        header: {
-          VStack(alignment: .leading, spacing: 20) {
-            // 第一行：数据源选择器
-            SourcePickerView(selectedSource: $viewModel.selectedSource)
-              .onChange(of: viewModel.selectedSource) { _, _ in
-                viewModel.onSourceChanged()
-                Task { await viewModel.loadData() }
-              }
-
-            // 第二行：筛选器（根据数据源动态显示）
-            FilterPickersView(viewModel: viewModel)
-              .onChange(of: viewModel.selectedType) { _, _ in
-                viewModel.onTypeChanged()
-                Task { await viewModel.loadData() }
-              }
-          }
-        },
-        contextMenu: { item in
-          MediaContextMenuItems(
-            item: item,
+      Group {
+        if let paginator = viewModel.paginator {
+          // 主内容区：媒体网格
+          MediaGridView(
+            items: paginator.items,
+            isLoading: paginator.isLoading && paginator.items.isEmpty,
+            isLoadingMore: paginator.isLoading && !paginator.items.isEmpty,
+            onLoadMore: { itemId in
+              Task { await paginator.loadMore(itemId) }
+            },
             navigationPath: $path,
-            subscriptionHandler: subscriptionHandler
+            header: {
+              VStack(alignment: .leading, spacing: 20) {
+                // 第一行：数据源选择器
+                SourcePickerView(selectedSource: $viewModel.selectedSource)
+                  .onChange(of: viewModel.selectedSource) { _, _ in
+                    viewModel.onSourceChanged()
+                  }
+
+                // 第二行：筛选器（根据数据源动态显示）
+                FilterPickersView(viewModel: viewModel)
+                  .onChange(of: viewModel.selectedType) { _, _ in
+                    viewModel.onTypeChanged()
+                  }
+              }
+            },
+            contextMenu: { item in
+              MediaContextMenuItems(
+                item: item,
+                navigationPath: $path,
+                subscriptionHandler: subscriptionHandler
+              )
+            }
           )
-        }
-      )
-      .task {
-        if viewModel.items.isEmpty {
-          await viewModel.loadData()
+        } else {
+          // 在 Paginator 初始化完成前显示加载指示器
+          ProgressView()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
       }
       .navigationDestination(for: MediaInfo.self) { media in
@@ -59,8 +61,8 @@ struct ExploreView: View {
       .navigationDestination(for: SubscribeSeasonRequest.self) { request in
         SubscribeSeasonView(mediaInfo: request.mediaInfo, initialSeason: request.initialSeason)
       }
-      .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $path)
     }
+    .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $path)
   }
 }
 
@@ -176,9 +178,7 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 1)
-    .onChange(of: viewModel.tmdbSortBy) { _, _ in
-      Task { await viewModel.loadData() }
-    }
+    
 
     // 风格
     Picker("风格", selection: $viewModel.tmdbGenre) {
@@ -189,9 +189,7 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 2)
-    .onChange(of: viewModel.tmdbGenre) { _, _ in
-      Task { await viewModel.loadData() }
-    }
+    
 
     // 语言
     Picker("语言", selection: $viewModel.tmdbLanguage) {
@@ -202,9 +200,7 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 3)
-    .onChange(of: viewModel.tmdbLanguage) { _, _ in
-      Task { await viewModel.loadData() }
-    }
+    
 
     // 评分
     Picker("评分", selection: $viewModel.tmdbVoteAverage) {
@@ -215,9 +211,7 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 4)
-    .onChange(of: viewModel.tmdbVoteAverage) { _, _ in
-      Task { await viewModel.loadData() }
-    }
+    
   }
 
   // MARK: - 豆瓣筛选器
@@ -240,9 +234,7 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 1)
-    .onChange(of: viewModel.doubanSort) { _, _ in
-      Task { await viewModel.loadData() }
-    }
+    
 
     // 风格
     Picker("风格", selection: $viewModel.doubanCategory) {
@@ -253,9 +245,7 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 2)
-    .onChange(of: viewModel.doubanCategory) { _, _ in
-      Task { await viewModel.loadData() }
-    }
+    
 
     // 地区
     Picker("地区", selection: $viewModel.doubanZone) {
@@ -266,9 +256,7 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 3)
-    .onChange(of: viewModel.doubanZone) { _, _ in
-      Task { await viewModel.loadData() }
-    }
+    
 
     // 年代
     Picker("年代", selection: $viewModel.doubanYear) {
@@ -279,9 +267,7 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 4)
-    .onChange(of: viewModel.doubanYear) { _, _ in
-      Task { await viewModel.loadData() }
-    }
+    
   }
 
   // MARK: - Bangumi 筛选器
@@ -296,9 +282,7 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 0)
-    .onChange(of: viewModel.bangumiCat) { _, _ in
-      Task { await viewModel.loadData() }
-    }
+    
 
     // 排序
     Picker("排序", selection: $viewModel.bangumiSort) {
@@ -308,9 +292,7 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 1)
-    .onChange(of: viewModel.bangumiSort) { _, _ in
-      Task { await viewModel.loadData() }
-    }
+    
 
     // 年份
     Picker("年份", selection: $viewModel.bangumiYear) {
@@ -321,8 +303,6 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 2)
-    .onChange(of: viewModel.bangumiYear) { _, _ in
-      Task { await viewModel.loadData() }
-    }
+    
   }
 }

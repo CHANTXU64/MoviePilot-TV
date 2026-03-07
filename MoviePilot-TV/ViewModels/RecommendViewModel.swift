@@ -43,7 +43,7 @@ struct RecommendShelf: Identifiable, Hashable {
 class RecommendViewModel: ObservableObject {
   @Published var selectedCategory: RecommendCategory = .all
   @Published var selectedShelf: RecommendShelf?
-  @Published private(set) var paginator: Paginator<MediaInfo>!
+  @Published private(set) var paginator: Paginator<MediaInfo>?
 
   private let apiService = APIService.shared
   private var seenKeys = Set<String>()
@@ -95,13 +95,14 @@ class RecommendViewModel: ObservableObject {
     $selectedShelf
       .compactMap { $0 }
       .removeDuplicates()
+      .debounce(for: .milliseconds(100), scheduler: DispatchQueue.main)
       .sink { [weak self] shelf in
         self?.setupPaginator(for: shelf)
       }
       .store(in: &cancellables)
 
     // 设置初始货架，这将触发上面的 sink
-    selectedShelf = Self.allShelves.first
+    onCategoryChanged()
   }
 
   private func setupPaginator(for shelf: RecommendShelf) {

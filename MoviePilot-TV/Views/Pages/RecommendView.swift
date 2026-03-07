@@ -8,40 +8,48 @@ struct RecommendView: View {
 
   var body: some View {
     NavigationStack(path: $path) {
-      // 主内容槽（网格布局）
-      MediaGridView(
-        items: viewModel.paginator.items,
-        isLoading: viewModel.paginator.isLoading && viewModel.paginator.items.isEmpty,
-        isLoadingMore: viewModel.paginator.isLoading && !viewModel.paginator.items.isEmpty,
-        onLoadMore: { newId in
-          Task {
-            await viewModel.paginator.loadMore(newId)
-          }
-        },
-        navigationPath: $path,
-        header: {
-          VStack(spacing: 20) {
-            // 分类选择器 - 使用 Picker，带 Icon
-            CategoryPickerView(selectedCategory: $viewModel.selectedCategory)
-              .onChange(of: viewModel.selectedCategory) { _, _ in
-                viewModel.onCategoryChanged()
+      Group {
+        if let paginator = viewModel.paginator {
+          // 主内容槽（网格布局）
+          MediaGridView(
+            items: paginator.items,
+            isLoading: paginator.isLoading && paginator.items.isEmpty,
+            isLoadingMore: paginator.isLoading && !paginator.items.isEmpty,
+            onLoadMore: { newId in
+              Task {
+                await paginator.loadMore(newId)
               }
-
-            // 货架选择器 - 横向滚动 chips
-            ShelfPicker(
-              shelves: viewModel.filteredShelves,
-              selectedShelf: $viewModel.selectedShelf
-            )
-          }
-        },
-        contextMenu: { item in
-          MediaContextMenuItems(
-            item: item,
+            },
             navigationPath: $path,
-            subscriptionHandler: subscriptionHandler
+            header: {
+              VStack(spacing: 20) {
+                // 分类选择器 - 使用 Picker，带 Icon
+                CategoryPickerView(selectedCategory: $viewModel.selectedCategory)
+                  .onChange(of: viewModel.selectedCategory) { _, _ in
+                    viewModel.onCategoryChanged()
+                  }
+
+                // 货架选择器 - 横向滚动 chips
+                ShelfPicker(
+                  shelves: viewModel.filteredShelves,
+                  selectedShelf: $viewModel.selectedShelf
+                )
+              }
+            },
+            contextMenu: { item in
+              MediaContextMenuItems(
+                item: item,
+                navigationPath: $path,
+                subscriptionHandler: subscriptionHandler
+              )
+            }
           )
+        } else {
+          // 在 Paginator 初始化完成前显示加载指示器
+          ProgressView()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-      )
+      }
       .navigationDestination(for: MediaInfo.self) { media in
         MediaDetailContainerView(media: media, navigationPath: $path)
       }
@@ -54,8 +62,8 @@ struct RecommendView: View {
       .navigationDestination(for: SubscribeSeasonRequest.self) { request in
         SubscribeSeasonView(mediaInfo: request.mediaInfo, initialSeason: request.initialSeason)
       }
-      .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $path)
     }
+    .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $path)
   }
 }
 
