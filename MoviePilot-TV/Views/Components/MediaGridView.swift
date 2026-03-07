@@ -6,7 +6,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
   let items: [MediaInfo]
   let isLoading: Bool
   let isLoadingMore: Bool
-  let onLoadMore: () -> Void
+  let onLoadMore: (MediaInfo.ID?) -> Void
   @Binding var navigationPath: NavigationPath
   let header: Header
   let contextMenu: ((MediaInfo) -> ContextMenu)?
@@ -22,7 +22,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     items: [MediaInfo],
     isLoading: Bool,
     isLoadingMore: Bool,
-    onLoadMore: @escaping () -> Void,
+    onLoadMore: @escaping (MediaInfo.ID?) -> Void,
     navigationPath: Binding<NavigationPath>,
     autoFocusFirstItem: Bool = false,
     @ViewBuilder header: () -> Header,
@@ -43,7 +43,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     items: [MediaInfo],
     isLoading: Bool,
     isLoadingMore: Bool,
-    onLoadMore: @escaping () -> Void,
+    onLoadMore: @escaping (MediaInfo.ID?) -> Void,
     navigationPath: Binding<NavigationPath>,
     autoFocusFirstItem: Bool = false,
     @ViewBuilder header: () -> Header
@@ -139,11 +139,8 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
               }
             }
             // 分页加载
-            if let newId = newId,
-              let index = items.firstIndex(where: { $0.id == newId }),
-              index >= max(0, items.count - 24)
-            {
-              onLoadMore()
+            if let newId = newId {
+              onLoadMore(newId)
             }
           }
 
@@ -191,7 +188,7 @@ extension MediaGridView where Header == EmptyView {
     items: [MediaInfo],
     isLoading: Bool,
     isLoadingMore: Bool,
-    onLoadMore: @escaping () -> Void,
+    onLoadMore: @escaping (MediaInfo.ID?) -> Void,
     navigationPath: Binding<NavigationPath>,
     autoFocusFirstItem: Bool = false,
     @ViewBuilder contextMenu: @escaping (MediaInfo) -> ContextMenu
@@ -214,7 +211,7 @@ extension MediaGridView where Header == EmptyView, ContextMenu == EmptyView {
     items: [MediaInfo],
     isLoading: Bool,
     isLoadingMore: Bool,
-    onLoadMore: @escaping () -> Void,
+    onLoadMore: @escaping (MediaInfo.ID?) -> Void,
     navigationPath: Binding<NavigationPath>,
     autoFocusFirstItem: Bool = false
   ) {

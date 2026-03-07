@@ -106,6 +106,7 @@ class RecommendViewModel: ObservableObject {
 
   private func setupPaginator(for shelf: RecommendShelf) {
     let newPaginator = Paginator<MediaInfo>(
+      threshold: 24,
       fetcher: { [apiService] page in
         try await apiService.fetchRecommend(path: shelf.id, page: page)
       },

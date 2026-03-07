@@ -21,7 +21,7 @@ struct PersonDetailView: View {
       items: viewModel.credits,
       isLoading: viewModel.isLoading,
       isLoadingMore: viewModel.isLoadingMore,
-      onLoadMore: {
+      onLoadMore: {_ in 
         Task { await viewModel.loadMoreData() }
       },
       navigationPath: $navigationPath,

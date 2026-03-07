@@ -52,6 +52,7 @@ class MediaDetailViewModel: ObservableObject {
     // applyFullDetail 会更新 box.value，让闭包读取完整数据。
     var recommendSeenKeys = Set<String>()
     self.recommendPaginator = Paginator<MediaInfo>(
+      threshold: 10,
       fetcher: { @MainActor [apiService, box] page in
         try await apiService.fetchMediaRecommendations(detail: box.value, page: page)
       },
@@ -71,6 +72,7 @@ class MediaDetailViewModel: ObservableObject {
     // --- Paginator for Similar Media ---
     var similarSeenKeys = Set<String>()
     self.similarPaginator = Paginator<MediaInfo>(
+      threshold: 10,
       fetcher: { @MainActor [apiService, box] page in
         try await apiService.fetchMediaSimilar(detail: box.value, page: page)
       },
@@ -89,6 +91,7 @@ class MediaDetailViewModel: ObservableObject {
 
     // --- Paginator for Actors ---
     self.actorsPaginator = Paginator<Person>(
+      threshold: 10,
       fetcher: { @MainActor [apiService, box] page in
         try await apiService.fetchMediaActors(detail: box.value, page: page)
       },

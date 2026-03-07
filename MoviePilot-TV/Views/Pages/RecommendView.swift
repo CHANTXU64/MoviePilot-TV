@@ -13,9 +13,9 @@ struct RecommendView: View {
         items: viewModel.paginator.items,
         isLoading: viewModel.paginator.isLoading && viewModel.paginator.items.isEmpty,
         isLoadingMore: viewModel.paginator.isLoading && !viewModel.paginator.items.isEmpty,
-        onLoadMore: {
+        onLoadMore: { newId in
           Task {
-            await viewModel.paginator.loadMore()
+            await viewModel.paginator.loadMore(newId)
           }
         },
         navigationPath: $path,

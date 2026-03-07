@@ -33,7 +33,7 @@ struct CollectionDetailView: View {
           items: items,
           isLoading: false,
           isLoadingMore: false,
-          onLoadMore: {},
+          onLoadMore: {_ in },
           navigationPath: $navigationPath,
           autoFocusFirstItem: true,
           header: {

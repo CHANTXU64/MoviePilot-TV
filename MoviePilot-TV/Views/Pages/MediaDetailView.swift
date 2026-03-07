@@ -613,10 +613,8 @@ struct MediaDetailView: View {
           .padding(.top, 25)
           .padding(.bottom, 30)
           .onChange(of: focusedActorId) { _, newId in
-            if viewModel.actorsPaginator.shouldLoadMore(currentItemId: newId, threshold: 5) {
-              Task {
-                await viewModel.actorsPaginator.loadMore()
-              }
+            Task {
+              await viewModel.actorsPaginator.loadMore(newId)
             }
           }
         }
@@ -687,10 +685,8 @@ struct MediaDetailView: View {
               }
             }
             // 分页加载
-            if viewModel.recommendPaginator.shouldLoadMore(currentItemId: newId, threshold: 10) {
-              Task {
-                await viewModel.recommendPaginator.loadMore()
-              }
+            Task {
+              await viewModel.recommendPaginator.loadMore(newId)
             }
           }
         }
@@ -761,10 +757,8 @@ struct MediaDetailView: View {
               }
             }
             // 分页加载
-            if viewModel.similarPaginator.shouldLoadMore(currentItemId: newId, threshold: 10) {
-              Task {
-                await viewModel.similarPaginator.loadMore()
-              }
+            Task {
+              await viewModel.similarPaginator.loadMore(newId)
             }
           }
         }

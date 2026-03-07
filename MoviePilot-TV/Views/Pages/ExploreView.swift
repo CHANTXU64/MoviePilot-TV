@@ -13,7 +13,7 @@ struct ExploreView: View {
         items: viewModel.items,
         isLoading: viewModel.isLoading,
         isLoadingMore: viewModel.isLoadingMore,
-        onLoadMore: {
+        onLoadMore: { _ in
           Task { await viewModel.loadMoreData() }
         },
         navigationPath: $path,

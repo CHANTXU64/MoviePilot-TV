@@ -28,19 +28,25 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   /// 一个可选的闭包，用于在重置分页器时执行自定义逻辑。
   private var onReset: (() -> Void)?
 
+  /// 从列表末尾开始触发加载更多的项目数。
+  private let threshold: Int
+
   // MARK: - 初始化
 
   /// 初始化一个新的分页器实例。
   /// - 参数:
+  ///   - threshold: 触发加载更多的阈值。
   ///   - fetcher: 一个异步闭包，接收页码并返回一个 `ItemType` 数组。
   ///   - processor: 一个闭包，接收现有项目（`inout`）和新项目，
   ///                处理它们，并在添加了新内容时返回 `true`。
   ///   - onReset: 一个可选的闭包，用于在“重置”期间运行自定义的状态清除逻辑。
   public init(
+    threshold: Int,
     fetcher: @escaping (Int) async throws -> [ItemType],
     processor: @escaping (inout [ItemType], [ItemType]) -> Bool,
     onReset: (() -> Void)? = nil
   ) {
+    self.threshold = threshold
     self.fetcher = fetcher
     self.processor = processor
     self.onReset = onReset
@@ -57,24 +63,15 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
 
   /// 加载下一页内容。
   /// 适用于“加载更多”按钮或无限滚动功能。
-  public func loadMore() async {
-    await loadNextPage()
-  }
-
-  /// 根据当前项目的位置确定是否应加载更多内容。
   /// - 参数:
-  ///   - currentItemId: 当前显示或聚焦的项目的 ID。
-  ///   - threshold: 从列表末尾开始触发加载更多的项目数。
-  /// - 返回: 如果应加载更多内容，则返回 `true`，否则返回 `false`。
-  public func shouldLoadMore(currentItemId: ItemType.ID?, threshold: Int = 5) -> Bool {
-    guard let currentItemId = currentItemId else { return false }
-
-    guard let itemIndex = items.firstIndex(where: { $0.id == currentItemId }) else {
-      return false
+  ///   - currentItemId: 当前显示或聚焦的项目的 ID。如果提供，将根据 threshold 判断是否需要加载。
+  public func loadMore(_ currentItemId: ItemType.ID? = nil) async {
+    if let currentItemId = currentItemId {
+      guard let itemIndex = items.firstIndex(where: { $0.id == currentItemId }) else { return }
+      let thresholdIndex = max(0, items.count - threshold)
+      guard itemIndex >= thresholdIndex else { return }
     }
-
-    let thresholdIndex = items.index(items.endIndex, offsetBy: -threshold)
-    return itemIndex >= thresholdIndex
+    await loadNextPage()
   }
 
   // MARK: - 私有核心逻辑
