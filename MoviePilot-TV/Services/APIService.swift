@@ -414,10 +414,15 @@ class APIService: ObservableObject {
   }
 
   /// 获取合集信息
-  /// - 对应前端: MoviePilot-Frontend/src/components/cards/MediaCard.vue
-  /// - 应用场景: 点击影视卡片中的合集链接时，展示该合集包含的全部影片列表
-  func fetchCollection(collectionId: Int) async throws -> [MediaInfo] {
-    let endpoint = "/tmdb/collection/\(collectionId)"
+  /// - 对应前端: MoviePilot-Frontend/src/components/cards/MediaCard.vue (触发跳转), MoviePilot-Frontend/src/views/discover/MediaCardListView.vue (分页加载)
+  /// - 应用场景: 用户点击合集卡片后，在合集详情页分页浏览影片列表。
+  func fetchCollection(collectionId: Int, page: Int, title: String) async throws -> [MediaInfo] {
+    let endpoint = try buildEndpoint(
+      path: "/tmdb/collection/\(collectionId)",
+      params: [
+        "page": String(page),
+        "title": title,
+      ])
     let data = try await makeRequest(endpoint: endpoint)
     return try decodeOrUnwrap([MediaInfo].self, from: data)
   }

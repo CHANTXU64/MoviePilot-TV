@@ -53,7 +53,7 @@ class ExploreViewModel: ObservableObject {
   @Published private(set) var paginator: Paginator<MediaInfo>?
 
   private let apiService = APIService.shared
-  private var seenKeys = Set<String>()
+
   private var cancellables = Set<AnyCancellable>()
   private var paginatorCancellable: AnyCancellable?
 
@@ -365,22 +365,23 @@ class ExploreViewModel: ObservableObject {
   // MARK: - 数据加载
 
   private func setupPaginator(for path: String) {
+    var seenKeys = Set<String>()
+
     let newPaginator = Paginator<MediaInfo>(
       threshold: 24,
       fetcher: { @MainActor [apiService] page in
         try await apiService.fetchRecommend(path: path, page: page)
       },
-      processor: { @MainActor [weak self] currentItems, newItems in
-        guard let self = self else { return false }
-        let uniqueNewItems = MediaInfo.deduplicate(newItems, existingKeys: &self.seenKeys)
+      processor: { @MainActor currentItems, newItems in
+        let uniqueNewItems = MediaInfo.deduplicate(newItems, existingKeys: &seenKeys)
         if uniqueNewItems.isEmpty {
           return false
         }
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
-      onReset: { @MainActor [weak self] in
-        self?.seenKeys.removeAll()
+      onReset: { @MainActor in
+        seenKeys.removeAll()
       }
     )
     paginator = newPaginator

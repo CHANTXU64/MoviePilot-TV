@@ -46,7 +46,7 @@ class RecommendViewModel: ObservableObject {
   @Published private(set) var paginator: Paginator<MediaInfo>?
 
   private let apiService = APIService.shared
-  private var seenKeys = Set<String>()
+
   private var cancellables = Set<AnyCancellable>()
   private var paginatorCancellable: AnyCancellable?
 
@@ -106,22 +106,23 @@ class RecommendViewModel: ObservableObject {
   }
 
   private func setupPaginator(for shelf: RecommendShelf) {
+    var seenKeys = Set<String>()
+
     let newPaginator = Paginator<MediaInfo>(
       threshold: 24,
       fetcher: { @MainActor [apiService] page in
         try await apiService.fetchRecommend(path: shelf.id, page: page)
       },
-      processor: { @MainActor [weak self] currentItems, newItems in
-        guard let self = self else { return false }
-        let uniqueNewItems = MediaInfo.deduplicate(newItems, existingKeys: &self.seenKeys)
+      processor: { @MainActor currentItems, newItems in
+        let uniqueNewItems = MediaInfo.deduplicate(newItems, existingKeys: &seenKeys)
         if uniqueNewItems.isEmpty {
           return false
         }
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
-      onReset: { @MainActor [weak self] in
-        self?.seenKeys.removeAll()
+      onReset: { @MainActor in
+        seenKeys.removeAll()
       }
     )
     self.paginator = newPaginator

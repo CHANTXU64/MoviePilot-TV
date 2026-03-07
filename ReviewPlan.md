@@ -84,6 +84,7 @@
 | `Views/Pages/MediaDetailView.swift` | ⏳ 待开始 | |
 | `ViewModels/PersonDetailViewModel.swift`| ⏳ 待开始 | |
 | `Views/Pages/PersonDetailView.swift` | ⏳ 待开始 | |
+| `ViewModels/CollectionDetailViewModel.swift`| ⏳ 待开始 | |
 | `Views/Pages/CollectionDetailView.swift`| ⏳ 待开始 | |
 
 #### 5.6 资源结果与下载模块 (Resources & Downloads)
