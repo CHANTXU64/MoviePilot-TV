@@ -73,9 +73,12 @@ private struct MediaDetailContainerContent: View {
   @Binding var navigationPath: NavigationPath
   @ObservedObject var preloadTask: MediaPreloadTask
 
-  /// 数据是否就绪（加载成功或失败均算就绪）
+  /// 第二页首行内容是否已就绪（由 MediaDetailView 回写）
+  @State private var isContentReady = false
+
+  /// 数据是否就绪（加载成功或失败均算就绪，且首行内容已加载）
   private var isReady: Bool {
-    preloadTask.isDetailLoaded || preloadTask.isDetailFailed
+    (preloadTask.isDetailLoaded && isContentReady) || preloadTask.isDetailFailed
   }
 
   var body: some View {
@@ -90,7 +93,8 @@ private struct MediaDetailContainerContent: View {
       MediaDetailView(
         detail: detail,
         navigationPath: $navigationPath,
-        preloadTask: preloadTask
+        preloadTask: preloadTask,
+        isContentReady: $isContentReady
       )
 
       // Loading 遮罩层 — 始终存在于视图树中，通过 opacity 控制显隐

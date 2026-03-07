@@ -8,6 +8,8 @@ struct MediaDetailView: View {
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
   /// 预加载任务：订阅状态、TMDB 识别、分季信息的唯一数据源
   @ObservedObject var preloadTask: MediaPreloadTask
+  /// 由 ContainerView 传入，当第二页首行内容就绪时回写 true，控制 Loading 遮罩显隐
+  @Binding var isContentReady: Bool
   @State private var showSiteSelection = false
   @State private var showContentPage = false
 
@@ -65,12 +67,16 @@ struct MediaDetailView: View {
     viewModel.isSubscribed
   }
 
-  init(detail: MediaInfo, navigationPath: Binding<NavigationPath>, preloadTask: MediaPreloadTask) {
+  init(
+    detail: MediaInfo, navigationPath: Binding<NavigationPath>,
+    preloadTask: MediaPreloadTask, isContentReady: Binding<Bool>
+  ) {
     let vm = MediaDetailViewModel(detail: detail)
     vm.preloadTask = preloadTask
     _viewModel = StateObject(wrappedValue: vm)
     _navigationPath = navigationPath
     self.preloadTask = preloadTask
+    _isContentReady = isContentReady
   }
 
   var body: some View {
@@ -224,6 +230,21 @@ struct MediaDetailView: View {
     .onChange(of: preloadTask.isDetailLoaded) { _, isLoaded in
       if isLoaded, let fullDetail = preloadTask.fullDetail {
         viewModel.applyFullDetail(fullDetail)
+      }
+    }
+    // 当 ViewModel 的 isFirstRowReady 变为 true 时，回写给 ContainerView 控制 Loading 遮罩
+    .onChange(of: viewModel.isFirstRowReady) { _, ready in
+      if ready {
+        isContentReady = true
+      }
+    }
+    // 电视剧首行是 season，由 preloadTask 异步加载，
+    // 当分季数据实际加载完毕时通知 ViewModel（applyFullDetail 时可能尚未就绪）
+    .onChange(of: preloadTask.isSeasonDataLoaded) { _, isLoaded in
+      if isLoaded && !viewModel.isFirstRowReady
+        && viewModel.detail.type == "电视剧" && viewModel.detail.tmdb_id != nil
+      {
+        viewModel.isFirstRowReady = true
       }
     }
     .sheet(item: $sheetSubscribe) { subscribe in

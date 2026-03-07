@@ -20,6 +20,8 @@ class MediaPreloadTask: ObservableObject {
   @Published var tmdbId: Int?
   @Published var isSubscribed: Bool?
   @Published var seasonViewModel: SubscribeSeasonViewModel?
+  /// 分季数据是否已实际加载完毕（seasonViewModel 创建时 isLoading=true，loadData 完成后才设为 true）
+  @Published var isSeasonDataLoaded = false
 
   /// 所有内部异步任务（用于取消）
   private var internalTasks: [Task<Void, Never>] = []
@@ -142,6 +144,7 @@ class MediaPreloadTask: ObservableObject {
     let vm = SubscribeSeasonViewModel(mediaInfo: detail)
     self.seasonViewModel = vm
     await vm.loadData()
+    self.isSeasonDataLoaded = true
   }
 
   // MARK: - ④ 订阅状态
