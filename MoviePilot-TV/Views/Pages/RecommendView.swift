@@ -10,12 +10,12 @@ struct RecommendView: View {
     NavigationStack(path: $path) {
       // 主内容槽（网格布局）
       MediaGridView(
-        items: viewModel.items,
-        isLoading: viewModel.isLoading,
-        isLoadingMore: viewModel.isLoadingMore,
+        items: viewModel.paginator.items,
+        isLoading: viewModel.paginator.isLoading && viewModel.paginator.items.isEmpty,
+        isLoadingMore: viewModel.paginator.isLoading && !viewModel.paginator.items.isEmpty,
         onLoadMore: {
           Task {
-            await viewModel.loadMoreData()
+            await viewModel.paginator.loadMore()
           }
         },
         navigationPath: $path,
@@ -42,16 +42,6 @@ struct RecommendView: View {
           )
         }
       )
-      .onChange(of: viewModel.selectedShelf) { _, _ in
-        Task {
-          await viewModel.loadShelfData()
-        }
-      }
-      .task {
-        if viewModel.items.isEmpty {
-          await viewModel.loadShelfData()
-        }
-      }
       .navigationDestination(for: MediaInfo.self) { media in
         MediaDetailContainerView(media: media, navigationPath: $path)
       }

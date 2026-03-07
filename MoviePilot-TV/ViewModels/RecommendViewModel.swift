@@ -43,14 +43,12 @@ struct RecommendShelf: Identifiable, Hashable {
 class RecommendViewModel: ObservableObject {
   @Published var selectedCategory: RecommendCategory = .all
   @Published var selectedShelf: RecommendShelf?
-  @Published var items: [MediaInfo] = []
-  @Published var isLoading = false
-  @Published var currentPage = 1
-  @Published var hasMoreData = true
-  @Published var isLoadingMore = false
+  @Published private(set) var paginator: Paginator<MediaInfo>!
 
   private let apiService = APIService.shared
   private var seenKeys = Set<String>()
+  private var cancellables = Set<AnyCancellable>()
+  private var paginatorCancellable: AnyCancellable?
 
   // 所有货架配置
   static let allShelves: [RecommendShelf] = [
@@ -92,53 +90,54 @@ class RecommendViewModel: ObservableObject {
 
   init() {
     // 默认选中流行趋势
+    // 当 selectedShelf 改变时，自动创建一个新的 Paginator 实例
+    // sink 会因为 selectedShelf 的初始值而立即触发，所以无需手动调用 setupPaginator
+    $selectedShelf
+      .compactMap { $0 }
+      .removeDuplicates()
+      .sink { [weak self] shelf in
+        self?.setupPaginator(for: shelf)
+      }
+      .store(in: &cancellables)
+
+    // 设置初始货架，这将触发上面的 sink
     selectedShelf = Self.allShelves.first
+  }
+
+  private func setupPaginator(for shelf: RecommendShelf) {
+    let newPaginator = Paginator<MediaInfo>(
+      fetcher: { [apiService] page in
+        try await apiService.fetchRecommend(path: shelf.id, page: page)
+      },
+      processor: { [weak self] currentItems, newItems in
+        guard let self = self else { return false }
+        let uniqueNewItems = MediaInfo.deduplicate(newItems, existingKeys: &self.seenKeys)
+        if uniqueNewItems.isEmpty {
+          return false
+        }
+        currentItems.append(contentsOf: uniqueNewItems)
+        return true
+      },
+      onReset: { [weak self] in
+        self?.seenKeys.removeAll()
+      }
+    )
+    self.paginator = newPaginator
+
+    // 桥接：paginator 内部变化 → ViewModel.objectWillChange
+    paginatorCancellable = newPaginator.objectWillChange
+      .sink { [weak self] _ in
+        self?.objectWillChange.send()
+      }
+
+    Task {
+      await newPaginator.refresh()
+    }
   }
 
   // 分类变更时自动选中第一个货架
   func onCategoryChanged() {
-    let shelves = filteredShelves
-    if let first = shelves.first {
-      selectedShelf = first
-    }
-  }
-
-  // 加载货架数据（首次加载）
-  func loadShelfData() async {
-    guard let shelf = selectedShelf else { return }
-
-    currentPage = 1
-    hasMoreData = true
-    isLoading = true
-    do {
-      let fetched = try await apiService.fetchRecommend(path: shelf.id, page: 1)
-      seenKeys.removeAll()
-      items = MediaInfo.deduplicate(fetched, existingKeys: &seenKeys)
-    } catch {
-      print("Failed to load shelf \(shelf.title): \(error)")
-      items = []
-    }
-    isLoading = false
-  }
-
-  // 加载更多数据（分页加载）
-  func loadMoreData() async {
-    guard hasMoreData, !isLoadingMore, let shelf = selectedShelf else { return }
-
-    isLoadingMore = true
-    currentPage += 1
-    do {
-      let newItems = try await apiService.fetchRecommend(path: shelf.id, page: currentPage)
-      if newItems.isEmpty {
-        hasMoreData = false
-      } else {
-        let unique = MediaInfo.deduplicate(newItems, existingKeys: &seenKeys)
-        items.append(contentsOf: unique)
-      }
-    } catch {
-      print("Failed to load more for shelf \(shelf.title): \(error)")
-      currentPage -= 1  // 恢复页码
-    }
-    isLoadingMore = false
+    // 这将触发 sink pipeline 来设置一个新的 Paginator
+    selectedShelf = filteredShelves.first
   }
 }
