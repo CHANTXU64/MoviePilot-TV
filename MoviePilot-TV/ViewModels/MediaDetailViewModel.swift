@@ -33,14 +33,27 @@ class MediaDetailViewModel: ObservableObject {
   @Published var siteFilter = SiteFilterViewModel()
   private let apiService = APIService.shared
 
+  /// 可变引用盒子：让 Paginator 闭包始终读取最新的 detail 值。
+  /// init 时可能传入 partial data，applyFullDetail 会更新 box 内的值，
+  /// 闭包通过 capture 这个 box（引用类型）自动读到 applyFullDetail 后的 detail。
+  private final class DetailBox {
+    var value: MediaInfo
+    init(_ v: MediaInfo) { value = v }
+  }
+  private let detailBox: DetailBox
+
   init(detail: MediaInfo) {
     self.detail = detail
+    let box = DetailBox(detail)
+    self.detailBox = box
 
     // --- Paginator for Recommend ---
+    // ⚠️ 闭包 capture box（引用类型），而非 capture init 时的 detail 值。
+    // applyFullDetail 会更新 box.value，让闭包读取完整数据。
     var recommendSeenKeys = Set<String>()
     self.recommendPaginator = Paginator<MediaInfo>(
-      fetcher: { @MainActor [apiService, detail] page in
-        try await apiService.fetchMediaRecommendations(detail: detail, page: page)
+      fetcher: { @MainActor [apiService, box] page in
+        try await apiService.fetchMediaRecommendations(detail: box.value, page: page)
       },
       processor: { @MainActor items, newItems in
         let unique = MediaInfo.deduplicate(newItems, existingKeys: &recommendSeenKeys)
@@ -58,8 +71,8 @@ class MediaDetailViewModel: ObservableObject {
     // --- Paginator for Similar Media ---
     var similarSeenKeys = Set<String>()
     self.similarPaginator = Paginator<MediaInfo>(
-      fetcher: { @MainActor [apiService, detail] page in
-        try await apiService.fetchMediaSimilar(detail: detail, page: page)
+      fetcher: { @MainActor [apiService, box] page in
+        try await apiService.fetchMediaSimilar(detail: box.value, page: page)
       },
       processor: { @MainActor items, newItems in
         let unique = MediaInfo.deduplicate(newItems, existingKeys: &similarSeenKeys)
@@ -76,8 +89,8 @@ class MediaDetailViewModel: ObservableObject {
 
     // --- Paginator for Actors ---
     self.actorsPaginator = Paginator<Person>(
-      fetcher: { @MainActor [apiService, detail] page in
-        try await apiService.fetchMediaActors(detail: detail, page: page)
+      fetcher: { @MainActor [apiService, box] page in
+        try await apiService.fetchMediaActors(detail: box.value, page: page)
       },
       processor: { @MainActor items, newItems in
         let initialCount = items.count
@@ -85,24 +98,46 @@ class MediaDetailViewModel: ObservableObject {
         return items.count > initialCount
       }
     )
-
-    updateBackground()
   }
 
-  /// 当 fullDetail 加载完成后，更新详情数据及背景图。
-  /// 由 MediaDetailContainerContent 在 fullDetail 就绪时调用。
-  func updateDetail(_ newDetail: MediaInfo) {
-    // 强制清除旧背景，防止导航时短暂闪烁旧图
-    if detail.id != newDetail.id {
-      backgroundUrl = nil
-    }
+  /// 应用完整的媒体详情数据并加载辅助内容。
+  /// 在 fullDetail 加载完成后调用，负责：
+  /// 1. 设置 detail、更新背景图、派生演职员等所有依赖属性（同步，立即生效）
+  /// 2. 自动启动演职员、推荐、相似内容的网络加载（异步，不阻塞调用方返回）
+  func applyFullDetail(_ fullDetail: MediaInfo) {
+    self.detail = fullDetail
+    detailBox.value = fullDetail  // 同步更新引用盒子，让 Paginator 闭包读取最新数据
+    setBackground()
 
-    self.detail = newDetail
-    updateBackground()
+    // 从完整详情中派生演职员数据，作为 API 加载前的快速初始显示
+    uniqueDirectors = StaffManager.processCrew(persons: fullDetail.directors ?? [])
+    heroTopStaff = StaffManager.getTopGroupedStaff(from: fullDetail.directors ?? [], count: 1)
+    heroTopActors = StaffManager.processActors(
+      persons: Array((fullDetail.actors ?? []).prefix(4)))
+
+    // 异步加载网络数据（不阻塞调用方返回，数据到达后渐进显示）
+    Task {
+      // 1. 优先加载演员信息
+      await actorsPaginator.refresh()
+
+      // 2. 演员加载完毕，用网络数据更新 Hero 区域
+      if heroTopActors.isEmpty {
+        heroTopActors = Array(actorsPaginator.items.prefix(4))
+      }
+
+      // 3. 并发加载推荐和相似内容
+      let recommendTask = Task { @MainActor in
+        await recommendPaginator.refresh()
+      }
+      let similarTask = Task { @MainActor in
+        await similarPaginator.refresh()
+      }
+      _ = await (recommendTask.value, similarTask.value)
+    }
   }
 
   /// 根据媒体的海报或背景图更新详情页背景
-  func updateBackground() {
+  private func setBackground() {
     let backdrop = apiService.getBackdropImageUrl(detail)
     let poster = apiService.getPosterImageUrl(detail)
 
@@ -133,45 +168,6 @@ class MediaDetailViewModel: ObservableObject {
         }
       }
     }
-  }
-
-  /// 加载辅助数据：演职员、推荐、相似内容（三个请求互不依赖，并发执行）
-  /// 注意：fetchMediaDetail / 订阅 / TMDB 识别 / 分季信息全部由 MediaPreloadTask 负责，此处不再处理。
-  func loadSupplementaryData() async {
-    // 准备静态的演职员信息
-    uniqueDirectors = StaffManager.processCrew(persons: detail.directors ?? [])
-    if heroTopActors.isEmpty {
-      // 在加载网络数据前，先用详情页自带的数据填充
-      heroTopActors = StaffManager.processActors(persons: Array((detail.actors ?? []).prefix(4)))
-      heroTopStaff = StaffManager.getTopGroupedStaff(from: detail.directors ?? [], count: 1)
-    }
-
-    // 1. 优先加载演员信息并等待
-    await actorsPaginator.refresh()
-
-    // 2. 演员加载完毕，立即更新 Hero 区域
-    if heroTopActors.isEmpty {
-      updateHeroData(from: actorsPaginator.items)
-    }
-
-    // 3. 在后台并发加载推荐和相似内容
-    // 创建显式的 @MainActor 任务来强制在主线程上执行
-    let recommendTask = Task { @MainActor in
-      await recommendPaginator.refresh()
-    }
-    let similarTask = Task { @MainActor in
-      await similarPaginator.refresh()
-    }
-
-    // 等待后台任务完成
-    _ = await (recommendTask.value, similarTask.value)
-  }
-
-  /// 更新主视觉区域的静态数据。
-  private func updateHeroData(from actors: [Person]) {
-    heroTopActors = Array(actors.prefix(4))
-    // 此处的 Staff 数据也应保持同步更新
-    heroTopStaff = StaffManager.getTopGroupedStaff(from: detail.directors ?? [], count: 1)
   }
 
   // MARK: - 订阅操作（业务逻辑，由 View 层调用）

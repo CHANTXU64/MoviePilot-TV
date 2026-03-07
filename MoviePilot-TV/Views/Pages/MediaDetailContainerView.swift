@@ -27,7 +27,7 @@ private struct MediaLoadingView: View {
 
 /// 媒体详情的容器视图。
 /// 负责从 MediaPreloader 获取预加载任务，管理加载状态，
-/// 在 fullDetail 就绪后通过 updateDetail 刷新 MediaDetailView。
+/// 在 fullDetail 就绪后通过 applyFullDetail 刷新 MediaDetailView。
 ///
 /// ⚠️ 焦点恢复关键设计：
 /// MediaDetailView 从第一帧起就存在于视图树中（用 partialMedia 初始化），

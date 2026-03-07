@@ -212,20 +212,18 @@ struct MediaDetailView: View {
     }
     .task {
       focusedButton = .subscribe
-      // 如果 fullDetail 已经就绪（预加载命中），立即更新 ViewModel
-      if let fullDetail = preloadTask.fullDetail, fullDetail.id != viewModel.detail.id {
-        viewModel.updateDetail(fullDetail)
+      // 如果 fullDetail 已经就绪（预加载命中），立即应用（网络加载自动在后台启动）
+      if let fullDetail = preloadTask.fullDetail {
+        viewModel.applyFullDetail(fullDetail)
       }
       await viewModel.siteFilter.loadSites()
-      // 仅加载辅助数据：演职员、推荐、相似
-      await viewModel.loadSupplementaryData()
     }
-    // ⚠️ 焦点恢复关键：当 fullDetail 加载完成后，更新 ViewModel 的 detail 数据和背景图。
-    // MediaDetailView 现在从第一帧就存在于视图树中（用 partialMedia 初始化），
-    // 需要在 fullDetail 就绪后刷新显示内容，而非重建整个视图。
+    // 焦点恢复关键：当 fullDetail 加载完成后，应用完整详情。
+    // MediaDetailView 从第一帧就存在于视图树中（用 partialMedia 初始化），
+    // 在 fullDetail 就绪前不配置任何内容，仅由 Loading 遮罩覆盖。
     .onChange(of: preloadTask.isDetailLoaded) { _, isLoaded in
       if isLoaded, let fullDetail = preloadTask.fullDetail {
-        viewModel.updateDetail(fullDetail)
+        viewModel.applyFullDetail(fullDetail)
       }
     }
     .sheet(item: $sheetSubscribe) { subscribe in
