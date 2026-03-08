@@ -6,6 +6,7 @@ struct AddDownloadSheet: View {
   @StateObject private var viewModel: AddDownloadViewModel
   @State private var showAdvanced = false
   @FocusState private var isInfoSectionFocused: Bool
+  @FocusState private var isAdvancedButtonFocused: Bool
 
   init(torrent: TorrentInfo, media: MediaInfo? = nil, onSuccess: (() -> Void)? = nil) {
     _viewModel = StateObject(
@@ -105,14 +106,14 @@ struct AddDownloadSheet: View {
                 } label: {
                   HStack {
                     Text("高级配置")
-                      .foregroundColor(.secondary)
                     Spacer()
                     Image(systemName: showAdvanced ? "chevron.down" : "chevron.right")
-                      .foregroundColor(.secondary)
                   }
+                  .foregroundColor(isAdvancedButtonFocused ? .black : .secondary)
                   .padding(.horizontal)
                 }
                 .padding(.horizontal)
+                .focused($isAdvancedButtonFocused)
 
                 if showAdvanced {
                   SheetTextField(
@@ -128,8 +129,13 @@ struct AddDownloadSheet: View {
                     await viewModel.addDownload()
                   }
                 }) {
-                  Text("确定")
-                    .frame(maxWidth: .infinity)
+                  HStack(spacing: 8) {
+                    if viewModel.isSubmitting {
+                      ProgressView()
+                    }
+                    Text("确定")
+                  }
+                  .frame(maxWidth: .infinity)
                 }
                 .disabled(viewModel.isLoading || viewModel.isSubmitting)
                 .padding(.horizontal)

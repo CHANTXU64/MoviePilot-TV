@@ -7,6 +7,7 @@ struct SubscribeSheet: View {
   @State private var showingSiteSelection = false
   @State private var showingFilterGroupSelection = false
   @State private var showAdvanced = false
+  @FocusState private var isAdvancedButtonFocused: Bool
 
   init(subscribe: Subscribe, isNewSubscription: Bool = false) {
     _viewModel = StateObject(
@@ -140,13 +141,13 @@ struct SubscribeSheet: View {
               } label: {
                 HStack {
                   Text("高级配置")
-                    .foregroundColor(.secondary)
                   Spacer()
                   Image(systemName: showAdvanced ? "chevron.down" : "chevron.right")
-                    .foregroundColor(.secondary)
                 }
+                .foregroundColor(isAdvancedButtonFocused ? .black : .secondary)
                 .padding(.horizontal)
               }
+              .focused($isAdvancedButtonFocused)
 
               if showAdvanced {
                 SheetTextField(
@@ -230,12 +231,13 @@ struct SubscribeSheet: View {
                   }
                 }
               }) {
-                if viewModel.isSaving {
-                  ProgressView()
-                } else {
+                HStack(spacing: 8) {
+                  if viewModel.isSaving {
+                    ProgressView()
+                  }
                   Text(viewModel.isNewSubscription ? "确定" : "保存")
-                    .frame(maxWidth: .infinity)
                 }
+                .frame(maxWidth: .infinity)
               }
               .disabled(viewModel.isSaving)
 
