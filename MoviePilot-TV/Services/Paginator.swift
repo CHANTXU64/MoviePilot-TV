@@ -29,6 +29,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   private var page: Int = 1
   private var consecutiveErrorCount: Int = 0
   private let maxConsecutiveErrors: Int = 3
+  private var generation: Int = 0
 
   /// 获取一页项目的函数。
   private let fetcher: (Int) async throws -> [ItemType]
@@ -92,11 +93,22 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   private func loadNextPage() async {
     guard hasMore, !isLoading else { return }
 
+    let currentGeneration = generation
+
     isLoading = true
     if page == 1 {
       isFirstLoading = true
     } else {
       isLoadingMore = true
+    }
+
+    // 仅在 generation 未变时清理（generation 变了说明 reset() 已清理）
+    defer {
+      if currentGeneration == generation {
+        isFirstLoading = false
+        isLoadingMore = false
+        isLoading = false
+      }
     }
 
     let maxAttempts = 2
@@ -110,6 +122,9 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
       do {
         let newItems = try await fetcher(page)
 
+        // 挂起恢复后检查：generation 变化说明已被 reset，丢弃结果
+        guard currentGeneration == generation, !Task.isCancelled else { return }
+
         if newItems.isEmpty {
           hasMore = false
           break
@@ -122,6 +137,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
         page += 1
         consecutiveErrorCount = 0  // 重置错误计数
       } catch {
+        guard currentGeneration == generation, !Task.isCancelled else { return }
         print("[Paginator] Failed to load page \(page): \(error)")
         hasError = true
         consecutiveErrorCount += 1
@@ -135,14 +151,11 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
       print("[Paginator] 连续发生 \(consecutiveErrorCount) 次错误，停止后续加载")
       hasMore = false
     }
-
-    isFirstLoading = false
-    isLoadingMore = false
-    isLoading = false
   }
 
   /// 重置分页器的状态，清除所有项目并重置标志。
   private func reset() {
+    generation += 1
     items = []
     isLoading = false
     isFirstLoading = false
