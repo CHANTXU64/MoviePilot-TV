@@ -246,7 +246,7 @@ struct UnifiedSearchResult<Header: View>: View {
         title: title,
         rowId: rowId,
         items: items,
-        isLoadingMore: paginator?.isLoading == true && !(paginator?.items.isEmpty ?? true),
+        isLoadingMore: paginator?.isLoadingMore ?? false,
         navigationPath: $navigationPath,
         onLoadMore: { focusedId in
           Task { await paginator?.loadMore(focusedId) }
@@ -314,8 +314,7 @@ struct UnifiedSearchResult<Header: View>: View {
             title: "演职人员",
             rowId: "persons",
             items: personResults,
-            isLoadingMore: viewModel.personPaginator?.isLoading == true
-              && !(viewModel.personPaginator?.items.isEmpty ?? true),
+            isLoadingMore: viewModel.personPaginator?.isLoadingMore ?? false,
             navigationPath: $navigationPath,
             onLoadMore: { focusedId in
               Task { await viewModel.personPaginator?.loadMore(focusedId) }

@@ -11,6 +11,12 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   /// 一个布尔值，指示加载操作是否正在进行中。
   @Published public private(set) var isLoading: Bool = false
 
+  /// 一个布尔值，指示是否是首次加载。
+  @Published public private(set) var isFirstLoading: Bool = false
+
+  /// 一个布尔值，指示是否正在加载更多内容。
+  @Published public private(set) var isLoadingMore: Bool = false
+
   /// 一个布尔值，指示是否还有更多内容要加载。
   @Published public private(set) var hasMore: Bool = true
 
@@ -83,6 +89,11 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     guard hasMore, !isLoading else { return }
 
     isLoading = true
+    if page == 1 {
+      isFirstLoading = true
+    } else {
+      isLoadingMore = true
+    }
 
     let maxAttempts = 2
     var attempts = 0
@@ -121,6 +132,8 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
       hasMore = false
     }
 
+    isFirstLoading = false
+    isLoadingMore = false
     isLoading = false
   }
 
@@ -128,6 +141,8 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   private func reset() {
     items = []
     isLoading = false
+    isFirstLoading = false
+    isLoadingMore = false
     hasMore = true
     page = 1
     consecutiveErrorCount = 0

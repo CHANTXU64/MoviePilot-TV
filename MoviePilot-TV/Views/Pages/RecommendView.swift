@@ -13,8 +13,8 @@ struct RecommendView: View {
           // 主内容槽（网格布局）
           MediaGridView(
             items: paginator.items,
-            isLoading: paginator.isLoading && paginator.items.isEmpty,
-            isLoadingMore: paginator.isLoading && !paginator.items.isEmpty,
+            isLoading: paginator.isFirstLoading,
+            isLoadingMore: paginator.isLoadingMore,
             onLoadMore: { newId in
               Task {
                 await paginator.loadMore(newId)

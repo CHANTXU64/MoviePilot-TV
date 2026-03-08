@@ -625,7 +625,7 @@ struct MediaDetailView: View {
                 }
               }
             }
-            if viewModel.actorsPaginator.isLoading {
+            if viewModel.actorsPaginator.isLoadingMore {
               ProgressView()
                 .padding(.horizontal)
             }
@@ -685,7 +685,7 @@ struct MediaDetailView: View {
                 subscriptionHandler: subscriptionHandler
               )
             }
-            if viewModel.recommendPaginator.isLoading {
+            if viewModel.recommendPaginator.isLoadingMore {
               ProgressView()
                 .padding(.horizontal)
             }
@@ -757,7 +757,7 @@ struct MediaDetailView: View {
                 subscriptionHandler: subscriptionHandler
               )
             }
-            if viewModel.similarPaginator.isLoading {
+            if viewModel.similarPaginator.isLoadingMore {
               ProgressView()
                 .padding(.horizontal)
             }

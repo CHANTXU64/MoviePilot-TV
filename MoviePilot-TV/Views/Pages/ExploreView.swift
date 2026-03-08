@@ -14,8 +14,8 @@ struct ExploreView: View {
           // 主内容区：媒体网格
           MediaGridView(
             items: paginator.items,
-            isLoading: paginator.isLoading && paginator.items.isEmpty,
-            isLoadingMore: paginator.isLoading && !paginator.items.isEmpty,
+            isLoading: paginator.isFirstLoading,
+            isLoadingMore: paginator.isLoadingMore,
             onLoadMore: { itemId in
               Task { await paginator.loadMore(itemId) }
             },

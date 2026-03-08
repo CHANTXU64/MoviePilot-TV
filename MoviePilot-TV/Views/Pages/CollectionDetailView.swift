@@ -20,8 +20,8 @@ struct CollectionDetailView: View {
   var body: some View {
     MediaGridView(
       items: viewModel.paginator.items,
-      isLoading: viewModel.paginator.isLoading && viewModel.paginator.items.isEmpty,
-      isLoadingMore: viewModel.paginator.isLoading && !viewModel.paginator.items.isEmpty,
+      isLoading: viewModel.paginator.isFirstLoading,
+      isLoadingMore: viewModel.paginator.isLoadingMore,
       onLoadMore: { currentItem in
         Task {
           await viewModel.paginator.loadMore(currentItem)
