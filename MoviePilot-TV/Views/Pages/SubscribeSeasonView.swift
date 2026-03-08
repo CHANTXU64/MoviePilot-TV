@@ -213,7 +213,7 @@ struct SubscribeSeasonContentView: View {
       .padding(.horizontal, 89)
       .padding(.vertical, 0)
 
-      if !viewModel.episodeGroups.isEmpty {
+      if !viewModel.episodeGroups.isEmpty || (layout == .shelf && viewModel.seasonInfos.count > 10) {
         content.focusSection()
       } else {
         content

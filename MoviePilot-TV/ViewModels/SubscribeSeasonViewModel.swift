@@ -83,19 +83,20 @@ class SubscribeSeasonViewModel: ObservableObject {
     do {
       // 构建临时的 MediaInfo 结构用于状态查询，需手动注入选中的剧集组 (episode_group)
       // 逻辑参考 Vue 前端实现，确保后端能正确识别分组后的集数
+      // 通过完整复制 mediaInfo 属性并仅修改 episode_group，确保用于状态检查的 checkMedia 哈希值稳定
       let checkMedia = MediaInfo(
         tmdb_id: mediaInfo.tmdb_id,
         douban_id: mediaInfo.douban_id,
         bangumi_id: mediaInfo.bangumi_id,
-        imdb_id: nil,
-        tvdb_id: nil,
-        source: nil,
-        mediaid_prefix: nil,
-        media_id: nil,
+        imdb_id: mediaInfo.imdb_id,
+        tvdb_id: mediaInfo.tvdb_id,
+        source: mediaInfo.source,
+        mediaid_prefix: mediaInfo.mediaid_prefix,
+        media_id: mediaInfo.media_id,
         title: mediaInfo.title,
-        original_title: nil,
-        original_name: nil,
-        names: nil,
+        original_title: mediaInfo.original_title,
+        original_name: mediaInfo.original_name,
+        names: mediaInfo.names,
         type: mediaInfo.type,
         year: mediaInfo.year,
         season: mediaInfo.season,
@@ -103,7 +104,7 @@ class SubscribeSeasonViewModel: ObservableObject {
         backdrop_path: mediaInfo.backdrop_path,
         overview: mediaInfo.overview,
         vote_average: mediaInfo.vote_average,
-        popularity: nil,
+        popularity: mediaInfo.popularity,
         season_info: mediaInfo.season_info,
         collection_id: mediaInfo.collection_id,
         directors: mediaInfo.directors,
@@ -198,11 +199,11 @@ class SubscribeSeasonViewModel: ObservableObject {
 
   /// 根据入库状态返回对应的资产颜色名称
   func getStatusColor(season: Int) -> String {
-    guard let state = seasonsNotExisted[season] else { return "green" } // 默认已入库
+    guard let state = seasonsNotExisted[season] else { return "green" }  // 默认已入库
     switch state {
-    case 1: return "orange" // 部分缺失
-    case 2: return "red"    // 完全缺失
-    default: return "green" // 已完整入库
+    case 1: return "orange"  // 部分缺失
+    case 2: return "red"  // 完全缺失
+    default: return "green"  // 已完整入库
     }
   }
 

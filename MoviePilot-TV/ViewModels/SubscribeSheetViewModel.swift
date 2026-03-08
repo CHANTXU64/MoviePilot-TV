@@ -76,7 +76,8 @@ class SubscribeSheetViewModel: ObservableObject {
           episode_group: subscribe.episode_group
         )
 
-        guard let newId = try await apiService.addSubscription(request: req) else {
+        guard let newId = try await apiService.addSubscription(request: req, subscribe: subscribe)
+        else {
           print("Failed to create subscription")
           return  // TODO: 处理错误状态（例如，关闭页面或显示警报）
         }

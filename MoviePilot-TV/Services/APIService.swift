@@ -55,6 +55,10 @@ actor APICache<Key: Hashable, Value> {
     cache[key] = newEntry
   }
 
+  func remove(_ key: Key) {
+    cache.removeValue(forKey: key)
+  }
+
   func clear() {
     cache.removeAll()
   }
@@ -116,6 +120,7 @@ class APIService: ObservableObject {
   private let groupSeasonsCache = APICache<String, [TmdbSeason]>(defaultTTL: 120, size: 20)
   private let seasonsNotExistsCache = APICache<String, [NotExistMediaInfo]>(
     defaultTTL: 120, size: 20)
+  private let subscriptionStatusCache = APICache<String, Bool>(defaultTTL: 120, size: 100)
 
   // MARK: - 用于自动登录的凭据
   private var storedUsername: String? {
@@ -822,7 +827,8 @@ class APIService: ObservableObject {
   /// - 应用场景: 在媒体卡片或详情页点击“订阅”图标进行快速订阅。
   ///   - **订阅电影时**: 直接调用此 API，请求中的 `season` 参数为 null。
   ///   - **订阅电视剧分季时**: 会先弹出 `SubscribeSeasonDialog.vue` 分季选择框。用户确认后，前端遍历所选的每一季，并为每一季都单独调用一次此 API，每次传入对应的 `season` 编号。
-  func addSubscription(request: SubscribeRequest) async throws -> Int? {
+  /// - 备注：Subscribe 参数用于更新订阅状态缓存
+  func addSubscription(request: SubscribeRequest, subscribe: Subscribe) async throws -> Int? {
     let body = try JSONEncoder().encode(request)
     let data = try await makeRequest(endpoint: "/subscribe/", method: "POST", body: body)
 
@@ -830,8 +836,14 @@ class APIService: ObservableObject {
       let id: Int?
     }
 
-    if let response = try? JSONDecoder().decode(ApiResponse<SubscribeAddResp>.self, from: data) {
-      return response.data?.id
+    if let response = try? JSONDecoder().decode(ApiResponse<SubscribeAddResp>.self, from: data),
+      let id = response.data?.id
+    {
+      if let mediaId = subscribe.apiMediaId {
+        let cacheKey = "\(mediaId):\(subscribe.season.map(String.init) ?? "")"
+        await subscriptionStatusCache.remove(cacheKey)
+      }
+      return id
     }
     return nil
   }
@@ -841,6 +853,7 @@ class APIService: ObservableObject {
   /// - 应用场景: 1. 在订阅编辑弹窗中点击“取消订阅”按钮。 2. 在订阅列表页进行批量删除操作时并发调用。
   func deleteSubscription(id: Int) async throws -> Bool {
     let data = try await makeRequest(endpoint: "/subscribe/\(id)", method: "DELETE")
+    await subscriptionStatusCache.clear()
     if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
       return response.success ?? false
     }
@@ -859,6 +872,8 @@ class APIService: ObservableObject {
       path: "/subscribe/media/\(mediaId)",
       params: ["season": season.map(String.init)])
     let data = try await makeRequest(endpoint: endpoint, method: "DELETE")
+    let cacheKey = "\(mediaId):\(season.map(String.init) ?? "")"
+    await subscriptionStatusCache.remove(cacheKey)
     if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
       return response.success ?? false
     }
@@ -920,6 +935,10 @@ class APIService: ObservableObject {
       return false
     }
     do {
+      let cacheKey = "\(mediaId):\(season.map(String.init) ?? "")"
+      if let cached = await subscriptionStatusCache.get(cacheKey) {
+        return cached
+      }
       let endpoint = try buildEndpoint(
         path: "/subscribe/media/\(mediaId)",
         params: [
@@ -928,7 +947,9 @@ class APIService: ObservableObject {
         ])
       let data = try await makeRequest(endpoint: endpoint)
       let resp = try decodeOrUnwrap(SubscribeResp.self, from: data)
-      return resp.id != nil
+      let isSubscribed = resp.id != nil
+      await subscriptionStatusCache.set(cacheKey, value: isSubscribed)
+      return isSubscribed
     } catch {
       return false
     }
