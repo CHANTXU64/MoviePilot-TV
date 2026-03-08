@@ -33,6 +33,7 @@ struct SubscribeSeasonContentView: View {
   var title: String? = nil
   var showTopBadges: Bool = true
   var onSeasonTap: ((TmdbSeason) -> Void)? = nil
+  var onMoreTapped: (() -> Void)? = nil
 
   @State private var selectedSeasonDetail: TmdbSeason?
   @FocusState private var focusedSeasonId: Int?
@@ -86,9 +87,15 @@ struct SubscribeSeasonContentView: View {
         case .shelf:
           ScrollView(.horizontal, showsIndicators: false) {
             LazyHStack(spacing: 40) {
-              ForEach(viewModel.seasonInfos, id: \.self) { season in
+              let displayCount = min(10, viewModel.seasonInfos.count)
+              ForEach(viewModel.seasonInfos.prefix(displayCount), id: \.self) { season in
                 seasonCard(season)
                   .focused($focusedSeasonId, equals: season.season_number)
+              }
+              if viewModel.seasonInfos.count > 10 {
+                let nextSeason = viewModel.seasonInfos[displayCount]
+                viewAllCard(nextSeason: nextSeason)
+                  .focused($focusedSeasonId, equals: -1)
               }
             }
             .padding(.horizontal, 81)
@@ -179,7 +186,6 @@ struct SubscribeSeasonContentView: View {
       .onChange(of: viewModel.selectedGroupId) { _, _ in
         Task { await viewModel.fetchSeasons() }
       }
-      .padding(.trailing, 28)
     }
   }
 
@@ -191,11 +197,20 @@ struct SubscribeSeasonContentView: View {
           .font(.callout)
           .fontWeight(.bold)
           .foregroundStyle(.secondary)
-          .padding(.leading, 89)
 
         Spacer()
-        episodeGroupPicker
+
+        HStack(spacing: 20) {
+          episodeGroupPicker
+
+          if layout == .shelf, viewModel.seasonInfos.count > 10 {
+            Button("展开") {
+              onMoreTapped?()
+            }
+          }
+        }
       }
+      .padding(.horizontal, 89)
       .padding(.vertical, 0)
 
       if !viewModel.episodeGroups.isEmpty {
@@ -275,6 +290,29 @@ struct SubscribeSeasonContentView: View {
         Label("详情", systemImage: "info.circle")
       }
     }
+  }
+
+  @ViewBuilder
+  private func viewAllCard(nextSeason: TmdbSeason) -> some View {
+    MediaCard(
+      title: " ",
+      posterUrl: APIService.shared.getSeasonPosterURL(
+        posterPath: nextSeason.poster_path,
+        mediaPosterPath: viewModel.mediaInfo.poster_path
+      ),
+      subtitle: nil,
+      typeText: nil,
+      ratingText: nil,
+      bottomLeftText: nil,
+      bottomLeftSecondaryText: nil,
+      source: nil,
+      overlayTitle: "查看全部",
+      isBackgroundBlurred: true,
+      footerLabel: (icon: "", text: ""),
+      action: {
+        onMoreTapped?()
+      }
+    )
   }
 }
 

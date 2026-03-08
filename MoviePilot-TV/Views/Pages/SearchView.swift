@@ -287,22 +287,22 @@ struct UnifiedSearchResult<Header: View>: View {
 
         // 电影、电视剧、系列结果行
         mediaResultRow(
-            title: "电影",
-            rowId: "movies",
+          title: "电影",
+          rowId: "movies",
           items: viewModel.moviePaginator?.items ?? [],
           paginator: viewModel.moviePaginator
         )
 
         mediaResultRow(
-            title: "电视剧",
-            rowId: "tv",
+          title: "电视剧",
+          rowId: "tv",
           items: viewModel.tvPaginator?.items ?? [],
           paginator: viewModel.tvPaginator
         )
 
         mediaResultRow(
-            title: "系列",
-            rowId: "collections",
+          title: "系列",
+          rowId: "collections",
           items: viewModel.collectionPaginator?.items ?? [],
           paginator: viewModel.collectionPaginator
         )

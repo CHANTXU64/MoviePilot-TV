@@ -1,4 +1,5 @@
 import Combine
+import CryptoKit
 import Foundation
 
 enum APIError: Error {
@@ -7,6 +8,56 @@ enum APIError: Error {
   case decodingError(Error)
   case unauthorized
   case unknown
+}
+
+/// 泛型轻量级接口缓存，带过期及淘汰策略
+actor APICache<Key: Hashable, Value> {
+  private struct CacheEntry {
+    let value: Value
+    var expiresAt: Date
+  }
+
+  private var cache: [Key: CacheEntry] = [:]
+  private let defaultTTL: TimeInterval
+  private let size: Int
+
+  init(defaultTTL: TimeInterval = 60, size: Int = 50) {
+    self.defaultTTL = defaultTTL
+    self.size = size
+  }
+
+  func get(_ key: Key) -> Value? {
+    guard var entry = cache[key] else { return nil }
+
+    if Date() > entry.expiresAt {
+      cache.removeValue(forKey: key)
+      return nil
+    }
+
+    // 访问时“续期”，变相实现了 LRU
+    entry.expiresAt = Date().addingTimeInterval(defaultTTL)
+    cache[key] = entry
+
+    return entry.value
+  }
+
+  func set(_ key: Key, value: Value, ttl: TimeInterval? = nil) {
+    // 如果缓存已满且要添加的是新 Key，则执行淘汰策略
+    if cache.count >= size, cache[key] == nil {
+      // 淘汰掉最接近过期的项
+      if let keyToEvict = cache.min(by: { $0.value.expiresAt < $1.value.expiresAt })?.key {
+        cache.removeValue(forKey: keyToEvict)
+      }
+    }
+
+    let expiresAt = Date().addingTimeInterval(ttl ?? defaultTTL)
+    let newEntry = CacheEntry(value: value, expiresAt: expiresAt)
+    cache[key] = newEntry
+  }
+
+  func clear() {
+    cache.removeAll()
+  }
 }
 
 @MainActor
@@ -58,6 +109,13 @@ class APIService: ObservableObject {
     }
   }
   @Published var useImageCache: Bool = false
+
+  // MARK: - 短暂内存缓存 (提升二级页面和分季组件流畅度)
+  private let episodeGroupsCache = APICache<String, [EpisodeGroup]>(defaultTTL: 120, size: 20)
+  private let mediaSeasonsCache = APICache<String, [TmdbSeason]>(defaultTTL: 120, size: 20)
+  private let groupSeasonsCache = APICache<String, [TmdbSeason]>(defaultTTL: 120, size: 20)
+  private let seasonsNotExistsCache = APICache<String, [NotExistMediaInfo]>(
+    defaultTTL: 120, size: 20)
 
   // MARK: - 用于自动登录的凭据
   private var storedUsername: String? {
@@ -679,8 +737,11 @@ class APIService: ObservableObject {
   /// - 应用场景: 在前端，有两个地方会用到：1. **季订阅弹窗**中，用于展示所有可供选择的剧集组（如“司法岛篇”）。 2. **订阅配置编辑弹窗**中，当编辑一个电视剧订阅时，作为“剧集组”下拉框的数据源，允许用户修改该订阅所属的剧集组。
   func fetchEpisodeGroups(tmdbId: Int) async throws -> [EpisodeGroup] {
     let endpoint = "/media/groups/\(tmdbId)"
+    if let cached = await episodeGroupsCache.get(endpoint) { return cached }
     let data = try await makeRequest(endpoint: endpoint)
-    return try decodeOrUnwrap([EpisodeGroup].self, from: data)
+    let result = try decodeOrUnwrap([EpisodeGroup].self, from: data)
+    await episodeGroupsCache.set(endpoint, value: result)
+    return result
   }
 
   /// 获取标准电视剧的各季基础信息
@@ -691,20 +752,18 @@ class APIService: ObservableObject {
       // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求，返回空数组
       return []
     }
-    var queryItems: [URLQueryItem] = [
-      URLQueryItem(name: "mediaid", value: mediaId)
+    let params: [String: String?] = [
+      "mediaid": mediaId,
+      "title": media.title,
+      "year": media.year,
+      "season": media.season.map(String.init),
     ]
-    if let title = media.title { queryItems.append(URLQueryItem(name: "title", value: title)) }
-    if let year = media.year { queryItems.append(URLQueryItem(name: "year", value: year)) }
-    if let season = media.season {
-      queryItems.append(URLQueryItem(name: "season", value: String(season)))
-    }
-
-    var components = URLComponents(string: "/media/seasons")
-    components?.queryItems = queryItems
-    guard let endpoint = components?.string else { throw APIError.invalidURL }
+    let endpoint = try buildEndpoint(path: "/media/seasons", params: params)
+    if let cached = await mediaSeasonsCache.get(endpoint) { return cached }
     let data = try await makeRequest(endpoint: endpoint)
-    return try decodeOrUnwrap([TmdbSeason].self, from: data)
+    let result = try decodeOrUnwrap([TmdbSeason].self, from: data)
+    await mediaSeasonsCache.set(endpoint, value: result)
+    return result
   }
 
   /// 获取特定剧集组（如长篇连载划分的部/篇）下的季信息
@@ -712,8 +771,11 @@ class APIService: ObservableObject {
   /// - 应用场景: 在前端的季订阅弹窗中，当用户从下拉列表中**选择**了某个“剧集组”（如“司法岛篇”）后，调用此 API 以获取该组专属的分季信息。
   func getGroupSeasons(groupId: String) async throws -> [TmdbSeason] {
     let endpoint = "/media/group/seasons/\(groupId)"
+    if let cached = await groupSeasonsCache.get(endpoint) { return cached }
     let data = try await makeRequest(endpoint: endpoint)
-    return try decodeOrUnwrap([TmdbSeason].self, from: data)
+    let result = try decodeOrUnwrap([TmdbSeason].self, from: data)
+    await groupSeasonsCache.set(endpoint, value: result)
+    return result
   }
 
   /// 批量检查媒体服务器中已入库的季、集状态
@@ -721,8 +783,13 @@ class APIService: ObservableObject {
   /// - 应用场景: 在前端的 **分季订阅弹窗** 中，实时标记哪些季“已入库”、“部分缺失”或“完全缺失”。
   func checkSeasonsNotExists(mediaInfo: MediaInfo) async throws -> [NotExistMediaInfo] {
     let body = try JSONEncoder().encode(mediaInfo)
+    let hash = SHA256.hash(data: body)
+    let cacheKey = hash.compactMap { String(format: "%02x", $0) }.joined()
+    if let cached = await seasonsNotExistsCache.get(cacheKey) { return cached }
     let data = try await makeRequest(endpoint: "/mediaserver/notexists", method: "POST", body: body)
-    return try decodeOrUnwrap([NotExistMediaInfo].self, from: data)
+    let result = try decodeOrUnwrap([NotExistMediaInfo].self, from: data)
+    await seasonsNotExistsCache.set(cacheKey, value: result)
+    return result
   }
 
   /// 保存（更新）订阅配置

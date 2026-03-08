@@ -47,6 +47,7 @@ struct MediaCard: View {
   let bottomLeftText: String?  // 左下角：主要状态 (例如 "已订阅")
   let bottomLeftSecondaryText: String?  // 左下角：次要状态 (例如 "更新至 10 集")
   let source: MediaSource?  // 右下角：数据源图标
+  let overlayTitle: String?
 
   var showTopBadges: Bool = true
 
@@ -60,12 +61,51 @@ struct MediaCard: View {
   /// 注意：主 `subtitle` 属性现在主要用于聚焦时的覆盖层展示。
   var subTitleBelow: String? = nil
 
+  /// 是否对背景图片应用模糊效果。主要用于类似“查看全部”等特殊展示。
+  var isBackgroundBlurred: Bool = false
+
   /// 聚焦时显示的标签，通常用于“点击订阅”等操作。
   /// 如果提供，则始终保留空间以防止布局抖动。
   var footerLabel: (icon: String, text: String)? = nil
 
   // 卡片被点击时的操作
   var action: (() -> Void)? = nil
+
+  init(
+    title: String = "",
+    posterUrl: URL? = nil,
+    subtitle: String? = nil,
+    typeText: String? = nil,
+    ratingText: String? = nil,
+    bottomLeftText: String? = nil,
+    bottomLeftSecondaryText: String? = nil,
+    source: MediaSource? = nil,
+    overlayTitle: String? = nil,
+    showTopBadges: Bool = true,
+    width: CGFloat = 256,
+    height: CGFloat = 384,
+    subTitleBelow: String? = nil,
+    isBackgroundBlurred: Bool = false,
+    footerLabel: (icon: String, text: String)? = nil,
+    action: (() -> Void)? = nil
+  ) {
+    self.title = title
+    self.posterUrl = posterUrl
+    self.subtitle = subtitle
+    self.typeText = typeText
+    self.ratingText = ratingText
+    self.bottomLeftText = bottomLeftText
+    self.bottomLeftSecondaryText = bottomLeftSecondaryText
+    self.source = source
+    self.overlayTitle = overlayTitle
+    self.showTopBadges = showTopBadges
+    self.width = width
+    self.height = height
+    self.subTitleBelow = subTitleBelow
+    self.isBackgroundBlurred = isBackgroundBlurred
+    self.footerLabel = footerLabel
+    self.action = action
+  }
 
   var body: some View {
     VStack(spacing: 10) {
@@ -165,6 +205,18 @@ struct MediaCard: View {
           .fade(duration: 0.25)
           .aspectRatio(contentMode: .fill)
           .frame(width: width, height: height)
+          // TODO: 如果未来有大量需要模糊的卡片，应考虑切换回 Kingfisher 的 BlurImageProcessor，并结合图片预缓存机制（例如 Kingfisher 的 ImagePrefetcher）来优化性能，避免实时模糊带来的卡顿。
+          .blur(radius: isBackgroundBlurred ? 20 : 0)
+      }
+
+      // 覆盖标题
+      if let overlayTitle = overlayTitle, !overlayTitle.isEmpty {
+        Color.black.opacity(0.3)
+        Text(overlayTitle)
+          .font(.headline.bold())
+          .foregroundStyle(isFocused ? .white : .secondary)
+          .multilineTextAlignment(.center)
+          .padding()
       }
 
       // 聚焦副标题覆盖层 - 带有副标题的底部渐变

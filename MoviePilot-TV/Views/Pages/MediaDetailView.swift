@@ -530,14 +530,22 @@ struct MediaDetailView: View {
             viewModel: seasonVM,
             layout: .shelf,
             title: showContentPage ? "分季订阅" : nil,
-            showTopBadges: showContentPage
-          ) { season in
-            let request = SubscribeSeasonRequest(
-              mediaInfo: viewModel.detail,
-              initialSeason: season.season_number
-            )
-            navigationPath.append(request)
-          }
+            showTopBadges: showContentPage,
+            onSeasonTap: { season in
+              let request = SubscribeSeasonRequest(
+                mediaInfo: viewModel.detail,
+                initialSeason: season.season_number
+              )
+              navigationPath.append(request)
+            },
+            onMoreTapped: {
+              let request = SubscribeSeasonRequest(
+                mediaInfo: viewModel.detail,
+                initialSeason: nil
+              )
+              navigationPath.append(request)
+            }
+          )
         } else {
           // 分季信息尚在加载中
           HStack {

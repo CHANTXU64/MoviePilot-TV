@@ -127,9 +127,9 @@ class SubscribeSeasonViewModel: ObservableObject {
         // 2 -> 整季缺失 (Missing)
         var state = 0
         if item.episodes.isEmpty {
-          state = 2  
+          state = 2
         } else if item.episodes.count < item.total_episode {
-          state = 1  
+          state = 1
         }
         newStatus[item.season] = state
       }

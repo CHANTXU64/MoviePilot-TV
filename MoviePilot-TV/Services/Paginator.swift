@@ -3,6 +3,10 @@ import Foundation
 
 @MainActor
 public class Paginator<ItemType: Identifiable>: ObservableObject {
+  deinit {
+    // 显式声明 deinit，改变 SIL 生成路径以避开优化器 Bug
+  }
+
   // MARK: - 公开状态
 
   /// 分页器加载的项目数组。可被 UI 观察。

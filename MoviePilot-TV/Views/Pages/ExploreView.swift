@@ -1,5 +1,5 @@
-import SwiftUI
 import Combine
+import SwiftUI
 
 struct ExploreView: View {
   @StateObject private var viewModel = ExploreViewModel()
@@ -178,7 +178,6 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 1)
-    
 
     // 风格
     Picker("风格", selection: $viewModel.tmdbGenre) {
@@ -189,7 +188,6 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 2)
-    
 
     // 语言
     Picker("语言", selection: $viewModel.tmdbLanguage) {
@@ -200,7 +198,6 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 3)
-    
 
     // 评分
     Picker("评分", selection: $viewModel.tmdbVoteAverage) {
@@ -211,7 +208,6 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 4)
-    
   }
 
   // MARK: - 豆瓣筛选器
@@ -234,7 +230,6 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 1)
-    
 
     // 风格
     Picker("风格", selection: $viewModel.doubanCategory) {
@@ -245,7 +240,6 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 2)
-    
 
     // 地区
     Picker("地区", selection: $viewModel.doubanZone) {
@@ -256,7 +250,6 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 3)
-    
 
     // 年代
     Picker("年代", selection: $viewModel.doubanYear) {
@@ -267,7 +260,6 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 4)
-    
   }
 
   // MARK: - Bangumi 筛选器
@@ -282,7 +274,6 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 0)
-    
 
     // 排序
     Picker("排序", selection: $viewModel.bangumiSort) {
@@ -292,7 +283,6 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 1)
-    
 
     // 年份
     Picker("年份", selection: $viewModel.bangumiYear) {
@@ -303,6 +293,5 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 2)
-    
   }
 }
