@@ -26,8 +26,8 @@ private func fuzzyMatchScore(text: String?, query: String) -> Int {
   guard let t = text?.lowercased(), !query.isEmpty else { return -1 }
   let q = query.lowercased()
 
-  if t == q { return 1000 } // 完全相等
-  if t.hasPrefix(q) { return 500 - t.count } // 前缀匹配（标题越短权重越高）
+  if t == q { return 1000 }  // 完全相等
+  if t.hasPrefix(q) { return 500 - t.count }  // 前缀匹配（标题越短权重越高）
   if t.contains(q) { return 100 - t.count }  // 包含匹配
 
   // 字符顺序匹配（如搜索 "hml" 匹配 "Hamilton"）
@@ -46,24 +46,23 @@ private func fuzzyMatchScore(text: String?, query: String) -> Int {
 @MainActor
 class SearchViewModel: ObservableObject {
   @Published var query: String = ""
-  @Published var submittedQuery: String = "" // 记录点击搜索时的关键词，用于分页请求
+  @Published var submittedQuery: String = ""  // 记录点击搜索时的关键词，用于分页请求
   @Published var hasSearched: Bool = false
-  @Published var resourceResults: [Context] = []
-  @Published var mediaResults: [MediaInfo] = []
-  @Published var collectionResults: [MediaInfo] = []
-  @Published var personResults: [Person] = []
 
-  var movieResults: [MediaInfo] {
-    mediaResults.filter { $0.type == "电影" }
-  }
+  // MARK: - Paginator 实例
 
-  var tvResults: [MediaInfo] {
-    mediaResults.filter { $0.type == "电视剧" }
-  }
+  /// 电影搜索分页器（由 SharedMediaFetcher 代理）
+  @Published private(set) var moviePaginator: Paginator<MediaInfo>?
+  /// 电视剧搜索分页器（由 SharedMediaFetcher 代理）
+  @Published private(set) var tvPaginator: Paginator<MediaInfo>?
+  /// 系列/合集搜索分页器
+  @Published private(set) var collectionPaginator: Paginator<MediaInfo>?
+  /// 人物搜索分页器
+  @Published private(set) var personPaginator: Paginator<Person>?
 
   @Published var bestResults: [BestResultItem] = []
 
-  /// 核心逻辑：从所有搜索结果中筛选出“最佳匹配”项
+  /// 核心逻辑：从所有搜索结果中筛选出"最佳匹配"项
   /// 规则：结合标题模糊匹配分值和媒体流行度 (Popularity)
   private func calculateBestResults(
     media: [MediaInfo],
@@ -178,27 +177,17 @@ class SearchViewModel: ObservableObject {
   @Published var isLoading = false
   @Published var searchType: SearchType = .unified
 
-  // 分页状态管理 - 每个类别独立，支持无限滚动
-  @Published var mediaCurrentPage = 1
-  @Published var mediaHasMore = true
-  @Published var mediaIsLoadingMore = false
-  private var mediaDetectedPageSize: Int?
-
-  @Published var collectionCurrentPage = 1
-  @Published var collectionHasMore = true
-  @Published var collectionIsLoadingMore = false
-  private var collectionDetectedPageSize: Int?
-
-  @Published var personCurrentPage = 1
-  @Published var personHasMore = true
-  @Published var personIsLoadingMore = false
-  private var personDetectedPageSize: Int?
-
+  @Published var resourceResults: [Context] = []
   @Published var siteFilter = SiteFilterViewModel()
 
   private let apiService = APIService.shared
-  private var mediaSeenKeys = Set<String>()
-  private var collectionSeenKeys = Set<String>()
+  private var cancellables = Set<AnyCancellable>()
+  private var moviePaginatorCancellable: AnyCancellable?
+  private var tvPaginatorCancellable: AnyCancellable?
+  private var collectionPaginatorCancellable: AnyCancellable?
+  private var personPaginatorCancellable: AnyCancellable?
+
+  private var sharedMediaFetcher: SharedMediaFetcher?
 
   /// 执行初始搜索：根据 searchType 决定是资源搜索还是聚合元数据搜索
   func autoSearch() async {
@@ -206,23 +195,6 @@ class SearchViewModel: ObservableObject {
     isLoading = true
     hasSearched = false
     submittedQuery = query
-
-    // 重置各类型的分页状态
-    mediaCurrentPage = 1
-    mediaHasMore = true
-    mediaDetectedPageSize = nil
-    collectionCurrentPage = 1
-    collectionHasMore = true
-    collectionDetectedPageSize = nil
-    personCurrentPage = 1
-    personHasMore = true
-    personDetectedPageSize = nil
-
-    // 清空上一次的搜索结果
-    self.resourceResults = []
-    self.mediaResults = []
-    self.collectionResults = []
-    self.personResults = []
 
     do {
       switch searchType {
@@ -233,36 +205,29 @@ class SearchViewModel: ObservableObject {
         self.resourceResults = results
 
       case .unified:
-        // 聚合搜索：并发向后端请求媒体、合集、演职人员
-        async let mediaTask = apiService.searchMedia(query: query, page: 1)
-        async let collectionTask = apiService.searchCollection(query: query, page: 1)
-        async let personTask = apiService.searchPerson(query: query, page: 1)
+        // 聚合搜索：创建代理 Fetcher 和 Paginators
+        setupPaginators(query: submittedQuery)
 
-        let (media, collections, persons) = try await (mediaTask, collectionTask, personTask)
-        
-        // 元数据去重并保存
-        mediaSeenKeys.removeAll()
-        collectionSeenKeys.removeAll()
-        self.mediaResults = MediaInfo.deduplicate(media, existingKeys: &mediaSeenKeys)
-        self.collectionResults = MediaInfo.deduplicate(
-          collections, existingKeys: &collectionSeenKeys)
-        self.personResults = persons
+        guard let moviePag = moviePaginator,
+          let tvPag = tvPaginator,
+          let collectionPag = collectionPaginator,
+          let personPag = personPaginator
+        else { break }
 
-        // 基于第一页的结果计算“最佳结果”，后续分页不再重新刷新此版块
+        // 并发刷新所有分页器
+        let movieTask = Task { @MainActor in await moviePag.refresh() }
+        let tvTask = Task { @MainActor in await tvPag.refresh() }
+        let collectionTask = Task { @MainActor in await collectionPag.refresh() }
+        let personTask = Task { @MainActor in await personPag.refresh() }
+        _ = await (movieTask.value, tvTask.value, collectionTask.value, personTask.value)
+
+        // 基于第一页的结果计算"最佳结果"
+        // 由于 media 是电影+电视剧的混合，我们需要把它们组合起来传递
         self.bestResults = calculateBestResults(
-          media: self.mediaResults,
-          collections: self.collectionResults,
-          persons: self.personResults
+          media: moviePag.items + tvPag.items,
+          collections: collectionPag.items,
+          persons: personPag.items
         )
-
-        // 自动检测分页大小，如果返回数量小于检测到的单页上限，则标记没有更多
-        if media.isEmpty { mediaHasMore = false } else { mediaDetectedPageSize = media.count }
-        if collections.isEmpty {
-          collectionHasMore = false
-        } else {
-          collectionDetectedPageSize = collections.count
-        }
-        if persons.isEmpty { personHasMore = false } else { personDetectedPageSize = persons.count }
       }
     } catch {
       print("搜索请求失败: \(error)")
@@ -271,90 +236,97 @@ class SearchViewModel: ObservableObject {
     hasSearched = true
   }
 
-  // MARK: - 分页加载逻辑 (Load More)
+  // MARK: - Paginator 创建
 
-  func loadMoreMedia() async {
-    guard !mediaIsLoadingMore, mediaHasMore, !submittedQuery.isEmpty else { return }
+  /// 为当前搜索词创建代理和各个 Paginator
+  private func setupPaginators(query: String) {
+    let fetcher = SharedMediaFetcher(query: query, apiService: apiService)
+    self.sharedMediaFetcher = fetcher
 
-    mediaIsLoadingMore = true
-    mediaCurrentPage += 1
+    // --- Movie Paginator ---
+    var movieSeenKeys = Set<String>()
+    let newMoviePaginator = Paginator<MediaInfo>(
+      threshold: 7,
+      fetcher: { @MainActor [fetcher] _ in
+        try await fetcher.fetchMovies()
+      },
+      processor: { @MainActor currentItems, newItems in
+        let uniqueNewItems = MediaInfo.deduplicate(newItems, existingKeys: &movieSeenKeys)
+        if uniqueNewItems.isEmpty { return false }
+        currentItems.append(contentsOf: uniqueNewItems)
+        return true
+      },
+      onReset: { @MainActor in movieSeenKeys.removeAll() }
+    )
 
-    do {
-      let results = try await apiService.searchMedia(query: submittedQuery, page: mediaCurrentPage)
-      if results.isEmpty {
-        mediaHasMore = false
-      } else {
-        if let pageSize = mediaDetectedPageSize, results.count < pageSize {
-          mediaHasMore = false
-        }
-        // 使用 dedupKey 追加去重
-        let newItems = MediaInfo.deduplicate(results, existingKeys: &mediaSeenKeys)
-        mediaResults.append(contentsOf: newItems)
+    // --- TV Paginator ---
+    var tvSeenKeys = Set<String>()
+    let newTvPaginator = Paginator<MediaInfo>(
+      threshold: 7,
+      fetcher: { @MainActor [fetcher] _ in
+        try await fetcher.fetchTVShows()
+      },
+      processor: { @MainActor currentItems, newItems in
+        let uniqueNewItems = MediaInfo.deduplicate(newItems, existingKeys: &tvSeenKeys)
+        if uniqueNewItems.isEmpty { return false }
+        currentItems.append(contentsOf: uniqueNewItems)
+        return true
+      },
+      onReset: { @MainActor in tvSeenKeys.removeAll() }
+    )
+
+    // --- Collection Paginator ---
+    var collectionSeenKeys = Set<String>()
+    let newCollectionPaginator = Paginator<MediaInfo>(
+      threshold: 10,
+      fetcher: { @MainActor [apiService] page in
+        try await apiService.searchCollection(query: query, page: page)
+      },
+      processor: { @MainActor currentItems, newItems in
+        let uniqueNewItems = MediaInfo.deduplicate(newItems, existingKeys: &collectionSeenKeys)
+        if uniqueNewItems.isEmpty { return false }
+        currentItems.append(contentsOf: uniqueNewItems)
+        return true
+      },
+      onReset: { @MainActor in
+        collectionSeenKeys.removeAll()
       }
-    } catch {
-      print("加载更多媒体失败: \(error)")
-      mediaCurrentPage -= 1
-    }
+    )
 
-    mediaIsLoadingMore = false
-  }
-
-  func loadMoreCollections() async {
-    guard !collectionIsLoadingMore, collectionHasMore, !submittedQuery.isEmpty else { return }
-
-    collectionIsLoadingMore = true
-    collectionCurrentPage += 1
-
-    do {
-      let results = try await apiService.searchCollection(
-        query: submittedQuery, page: collectionCurrentPage)
-      if results.isEmpty {
-        collectionHasMore = false
-      } else {
-        if let pageSize = collectionDetectedPageSize, results.count < pageSize {
-          collectionHasMore = false
-        }
-        let newItems = MediaInfo.deduplicate(results, existingKeys: &collectionSeenKeys)
-        collectionResults.append(contentsOf: newItems)
-      }
-    } catch {
-      print("加载更多系列失败: \(error)")
-      collectionCurrentPage -= 1
-    }
-
-    collectionIsLoadingMore = false
-  }
-
-  func loadMorePersons() async {
-    guard !personIsLoadingMore, personHasMore, !submittedQuery.isEmpty else { return }
-
-    personIsLoadingMore = true
-    personCurrentPage += 1
-
-    do {
-      let results = try await apiService.searchPerson(
-        query: submittedQuery, page: personCurrentPage)
-      if results.isEmpty {
-        personHasMore = false
-      } else {
-        if let pageSize = personDetectedPageSize, results.count < pageSize {
-          personHasMore = false
-        }
-        // 基于 person_id 手动去重
-        let existingIds = Set(personResults.compactMap { $0.raw_id })
-        let newItems = results.filter {
+    // --- Person Paginator ---
+    let newPersonPaginator = Paginator<Person>(
+      threshold: 10,
+      fetcher: { @MainActor [apiService] page in
+        try await apiService.searchPerson(query: query, page: page)
+      },
+      processor: { @MainActor currentItems, newItems in
+        // 基于 raw_id 去重
+        let existingIds = Set(currentItems.compactMap { $0.raw_id })
+        let uniqueNewItems = newItems.filter {
           $0.raw_id == nil || !existingIds.contains($0.raw_id!)
         }
-        personResults.append(contentsOf: newItems)
+        if uniqueNewItems.isEmpty { return false }
+        currentItems.append(contentsOf: uniqueNewItems)
+        return true
       }
-    } catch {
-      print("加载更多人物失败: \(error)")
-      personCurrentPage -= 1
-    }
+    )
 
-    personIsLoadingMore = false
+    // 设置 Paginator 实例
+    self.moviePaginator = newMoviePaginator
+    self.tvPaginator = newTvPaginator
+    self.collectionPaginator = newCollectionPaginator
+    self.personPaginator = newPersonPaginator
+
+    // 桥接：paginator 内部变化 → ViewModel.objectWillChange
+    moviePaginatorCancellable = newMoviePaginator.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+    tvPaginatorCancellable = newTvPaginator.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+    collectionPaginatorCancellable = newCollectionPaginator.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+    personPaginatorCancellable = newPersonPaginator.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
   }
-
 
   func mapMediaToSubscribe(_ media: MediaInfo) -> Subscribe {
     return Subscribe(
@@ -384,5 +356,120 @@ class SearchViewModel: ObservableObject {
       filter_groups: nil,
       custom_words: nil
     )
+  }
+}
+
+// MARK: - 共享分页抓取代理
+
+/// 负责统筹抓取 `searchMedia` API，并按需拆分给各自分页器
+actor SharedMediaFetcher {
+  private let query: String
+  private let apiService: APIService
+
+  private var apiPage: Int = 0
+  private var hasMore: Bool = true
+  private var movieBuffer: [MediaInfo] = []
+  private var tvBuffer: [MediaInfo] = []
+
+  private var currentFetchTask: Task<Void, Error>?
+
+  init(query: String, apiService: APIService) {
+    self.query = query
+    self.apiService = apiService
+  }
+
+  func fetchMovies() async throws -> [MediaInfo] {
+    try await fetchUntil(targetType: "电影")
+  }
+
+  func fetchTVShows() async throws -> [MediaInfo] {
+    try await fetchUntil(targetType: "电视剧")
+  }
+
+  private func fetchUntil(targetType: String) async throws -> [MediaInfo] {
+    let minTargetCount = 8
+    var fetchCount = 0
+    let maxFetchCount = 5  // 每次最多查 5 页，避免遇到极端数据时死锁
+
+    while getBufferCount(for: targetType) < minTargetCount && hasMore && fetchCount < maxFetchCount
+    {
+      let currentPage = apiPage
+      try await fetchNextApiPage()
+      if apiPage > currentPage {
+        fetchCount += 1
+      } else {
+        // 请求失败或者到底了
+        break
+      }
+    }
+
+    return extractAllFromBuffer(for: targetType)
+  }
+
+  private func getBufferCount(for type: String) -> Int {
+    type == "电影" ? movieBuffer.count : tvBuffer.count
+  }
+
+  private func extractAllFromBuffer(for type: String) -> [MediaInfo] {
+    if type == "电影" {
+      let result = movieBuffer
+      movieBuffer.removeAll()
+      return result
+    } else {
+      let result = tvBuffer
+      tvBuffer.removeAll()
+      return result
+    }
+  }
+
+  private func fetchNextApiPage() async throws {
+    if let task = currentFetchTask {
+      try await task.value
+      return
+    }
+
+    let localPage = apiPage + 1
+    let isInitialFetch = (apiPage == 0)
+
+    let task = Task {
+      if isInitialFetch {
+        // 首次搜索时，并发获取前两页，大幅度提升混排首屏加载速度
+        async let fetchPage1 = apiService.searchMedia(query: query, page: 1)
+        async let fetchPage2 = apiService.searchMedia(query: query, page: 2)
+
+        let (page1Items, page2Items) = try await (fetchPage1, fetchPage2)
+        let allItems = page1Items + page2Items
+
+        self.appendAllItems(allItems)
+
+        self.apiPage = 2
+        if page1Items.isEmpty || page2Items.isEmpty {
+          self.hasMore = false
+        }
+      } else {
+        let newItems = try await apiService.searchMedia(query: query, page: localPage)
+
+        if newItems.isEmpty {
+          self.hasMore = false
+        } else {
+          self.appendAllItems(newItems)
+          self.apiPage = localPage
+        }
+      }
+    }
+
+    self.currentFetchTask = task
+    defer { self.currentFetchTask = nil }
+    try await task.value
+  }
+
+  private func appendAllItems(_ items: [MediaInfo]) {
+    for item in items {
+      if item.type == "电影" {
+        self.movieBuffer.append(item)
+      } else if item.type == "电视剧" {
+        self.tvBuffer.append(item)
+      }
+    }
   }
 }

@@ -228,8 +228,34 @@ struct UnifiedSearchResult<Header: View>: View {
   }
 
   private var hasAnyResults: Bool {
-    !viewModel.mediaResults.isEmpty || !viewModel.collectionResults.isEmpty
-      || !viewModel.personResults.isEmpty
+    !(viewModel.moviePaginator?.items.isEmpty ?? true)
+      || !(viewModel.tvPaginator?.items.isEmpty ?? true)
+      || !(viewModel.collectionPaginator?.items.isEmpty ?? true)
+      || !(viewModel.personPaginator?.items.isEmpty ?? true)
+  }
+
+  @ViewBuilder
+  private func mediaResultRow(
+    title: String,
+    rowId: String,
+    items: [MediaInfo],
+    paginator: Paginator<MediaInfo>?
+  ) -> some View {
+    if !items.isEmpty {
+      ResultRow(
+        title: title,
+        rowId: rowId,
+        items: items,
+        isLoadingMore: paginator?.isLoading == true && !(paginator?.items.isEmpty ?? true),
+        navigationPath: $navigationPath,
+        onLoadMore: { focusedId in
+          Task { await paginator?.loadMore(focusedId) }
+        },
+        scrollPosition: $scrollPosition,
+        subscriptionHandler: subscriptionHandler
+      )
+      .id(rowId)
+    }
   }
 
   var body: some View {
@@ -259,68 +285,40 @@ struct UnifiedSearchResult<Header: View>: View {
           }
         }
 
-        // 电影结果行
-        if !viewModel.movieResults.isEmpty {
-
-          ResultRow(
+        // 电影、电视剧、系列结果行
+        mediaResultRow(
             title: "电影",
             rowId: "movies",
-            items: viewModel.movieResults,
-            isLoadingMore: viewModel.mediaIsLoadingMore,
-            navigationPath: $navigationPath,
-            onLoadMore: {
-              Task { await viewModel.loadMoreMedia() }
-            },
-            scrollPosition: $scrollPosition,
-            subscriptionHandler: subscriptionHandler
-          )
-          .id("movies")
-        }
+          items: viewModel.moviePaginator?.items ?? [],
+          paginator: viewModel.moviePaginator
+        )
 
-        // 电视剧结果行
-        if !viewModel.tvResults.isEmpty {
-          ResultRow(
+        mediaResultRow(
             title: "电视剧",
             rowId: "tv",
-            items: viewModel.tvResults,
-            isLoadingMore: viewModel.mediaIsLoadingMore,
-            navigationPath: $navigationPath,
-            onLoadMore: {
-              Task { await viewModel.loadMoreMedia() }
-            },
-            scrollPosition: $scrollPosition,
-            subscriptionHandler: subscriptionHandler
-          )
-          .id("tv")
-        }
+          items: viewModel.tvPaginator?.items ?? [],
+          paginator: viewModel.tvPaginator
+        )
 
-        // 系列结果行
-        if !viewModel.collectionResults.isEmpty {
-          ResultRow(
+        mediaResultRow(
             title: "系列",
             rowId: "collections",
-            items: viewModel.collectionResults,
-            isLoadingMore: viewModel.collectionIsLoadingMore,
-            navigationPath: $navigationPath,
-            onLoadMore: {
-              Task { await viewModel.loadMoreCollections() }
-            },
-            scrollPosition: $scrollPosition,
-            subscriptionHandler: subscriptionHandler
-          )
-          .id("collections")
-        }
+          items: viewModel.collectionPaginator?.items ?? [],
+          paginator: viewModel.collectionPaginator
+        )
 
         // 人物结果行
-        if !viewModel.personResults.isEmpty {
+        let personResults = viewModel.personPaginator?.items ?? []
+        if !personResults.isEmpty {
           PersonResultRow(
             title: "演职人员",
             rowId: "persons",
-            items: viewModel.personResults,
-            isLoadingMore: viewModel.personIsLoadingMore,
+            items: personResults,
+            isLoadingMore: viewModel.personPaginator?.isLoading == true
+              && !(viewModel.personPaginator?.items.isEmpty ?? true),
             navigationPath: $navigationPath,
-            onLoadMore: {
-              Task { await viewModel.loadMorePersons() }
+            onLoadMore: { focusedId in
+              Task { await viewModel.personPaginator?.loadMore(focusedId) }
             },
             scrollPosition: $scrollPosition
           )
@@ -343,7 +341,7 @@ private struct ResultRow: View {
   let items: [MediaInfo]
   let isLoadingMore: Bool
   @Binding var navigationPath: NavigationPath
-  let onLoadMore: () -> Void
+  let onLoadMore: (MediaInfo.ID?) -> Void
   @Binding var scrollPosition: String?
   let subscriptionHandler: SubscriptionHandler
 
@@ -407,11 +405,7 @@ private struct ResultRow: View {
             }
             // 分页加载
             scrollPosition = rowId
-            if let index = items.firstIndex(where: { $0.id == newId }),
-              index >= max(0, items.count - 10)
-            {
-              onLoadMore()
-            }
+            onLoadMore(newId)
           }
         }
       }
@@ -428,7 +422,7 @@ private struct PersonResultRow: View {
   let items: [Person]
   let isLoadingMore: Bool
   @Binding var navigationPath: NavigationPath
-  let onLoadMore: () -> Void
+  let onLoadMore: (Person.ID?) -> Void
   @Binding var scrollPosition: String?
 
   @FocusState private var focusedItemId: Person.ID?
@@ -468,11 +462,7 @@ private struct PersonResultRow: View {
         .onChange(of: focusedItemId) { _, newId in
           if let newId = newId {
             scrollPosition = rowId
-            if let index = items.firstIndex(where: { $0.id == newId }),
-              index >= max(0, items.count - 10)
-            {
-              onLoadMore()
-            }
+            onLoadMore(newId)
           }
         }
       }

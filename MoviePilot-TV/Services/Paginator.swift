@@ -1,5 +1,5 @@
-import Foundation
 import Combine
+import Foundation
 
 @MainActor
 public class Paginator<ItemType: Identifiable>: ObservableObject {
@@ -17,6 +17,8 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   // MARK: - 私有状态
 
   private var page: Int = 1
+  private var consecutiveErrorCount: Int = 0
+  private let maxConsecutiveErrors: Int = 3
 
   /// 获取一页项目的函数。
   private let fetcher: (Int) async throws -> [ItemType]
@@ -85,6 +87,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     let maxAttempts = 2
     var attempts = 0
     var hasNewContent = false
+    var hasError = false
 
     while attempts < maxAttempts, hasMore, !hasNewContent {
       attempts += 1
@@ -102,14 +105,19 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
         }
 
         page += 1
+        consecutiveErrorCount = 0  // 重置错误计数
       } catch {
         print("[Paginator] Failed to load page \(page): \(error)")
-        hasMore = false
+        hasError = true
+        consecutiveErrorCount += 1
         break
       }
     }
 
-    if !hasNewContent {
+    if !hasNewContent && !hasError {
+      hasMore = false
+    } else if hasError && consecutiveErrorCount >= maxConsecutiveErrors {
+      print("[Paginator] 连续发生 \(consecutiveErrorCount) 次错误，停止后续加载")
       hasMore = false
     }
 
@@ -122,6 +130,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     isLoading = false
     hasMore = true
     page = 1
+    consecutiveErrorCount = 0
     onReset?()
   }
 }
