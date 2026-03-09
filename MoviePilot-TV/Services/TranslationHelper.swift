@@ -19,7 +19,7 @@ struct TranslationHelper {
     "aa": [.zhHans: "阿法尔语", .en: "Afar", .zhHant: "阿法爾語"],
     "ab": [.zhHans: "阿布哈兹语", .en: "Abkhaz", .zhHant: "阿布哈茲語"],
     "ae": [.zhHans: "阿维斯陀语", .en: "Avestan", .zhHant: "阿維斯陀語"],
-    "af": [.zhHans: "南非語", .en: "Afrikaans", .zhHant: "南非語"],
+    "af": [.zhHans: "南非语", .en: "Afrikaans", .zhHant: "南非語"],
     "ak": [.zhHans: "阿坎语", .en: "Akan", .zhHant: "阿坎語"],
     "am": [.zhHans: "阿姆哈拉语", .en: "Amharic", .zhHant: "阿姆哈拉語"],
     "an": [.zhHans: "阿拉贡语", .en: "Aragonese", .zhHant: "阿拉貢語"],
@@ -100,7 +100,7 @@ struct TranslationHelper {
     "kl": [.zhHans: "格陵兰语", .en: "Kalaallisut", .zhHant: "格陵蘭語"],
     "km": [.zhHans: "高棉语", .en: "Khmer", .zhHant: "高棉語"],
     "kn": [.zhHans: "卡纳达语", .en: "Kannada", .zhHant: "卡納達語"],
-    "ko": [.zhHans: "朝鲜语", .en: "Korean", .zhHant: "朝鮮語"],
+    "ko": [.zhHans: "韩语", .en: "Korean", .zhHant: "韓語"],
     "kr": [.zhHans: "卡努里语", .en: "Kanuri", .zhHant: "卡努里語"],
     "ks": [.zhHans: "克什米尔语", .en: "Kashmiri", .zhHant: "克什米爾語"],
     "ku": [.zhHans: "库尔德语", .en: "Kurdish", .zhHant: "庫爾德語"],
@@ -159,7 +159,7 @@ struct TranslationHelper {
     "sd": [.zhHans: "信德语", .en: "Sindhi", .zhHant: "信德語"],
     "se": [.zhHans: "北萨米语", .en: "Northern Sami", .zhHant: "北薩米語"],
     "sg": [.zhHans: "桑戈语", .en: "Sango", .zhHant: "桑戈語"],
-    "sh": [.zhHans: "克罗地亚语", .en: "Serbo-Croatian", .zhHant: "塞爾維亞-克羅埃西亞語"],
+    "sh": [.zhHans: "塞尔维亚-克罗地亚语", .en: "Serbo-Croatian", .zhHant: "塞爾維亞-克羅埃西亞語"],
     "si": [.zhHans: "僧伽罗语", .en: "Sinhala", .zhHant: "僧伽羅語"],
     "sk": [.zhHans: "斯洛伐克语", .en: "Slovak", .zhHant: "斯洛伐克語"],
     "sl": [.zhHans: "斯洛文尼亚语", .en: "Slovenian", .zhHant: "斯洛維尼亞語"],
@@ -530,7 +530,7 @@ struct TranslationHelper {
   // MARK: - 类型翻译
 
   private static let genreTranslations: [String: [AppLanguage: String]] = [
-    "Sci-Fi & Fantasy": [.zhHans: "科幻 & 奇幻", .en: "Sci-Fi & Fantasy", .zhHant: "科幻 & 奇幻"],
+    "Sci-Fi & Fantasy": [.zhHans: "科幻 & 奇幻", .en: "Sci-Fi & Fantasy", .zhHant: "科幻 & 奇幻"]
   ]
 
   static func translateGenre(for genreName: String) -> String {
