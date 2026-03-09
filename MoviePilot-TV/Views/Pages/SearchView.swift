@@ -482,6 +482,14 @@ private struct BestResultRow: View {
   /// 预加载防抖任务：避免快速滚动时触发过多无效请求
   @State private var preloadDebounceTask: Task<Void, Never>?
 
+  private var gridRows: [GridItem] {
+    if items.count <= 3 {
+      return [GridItem(.fixed(190))]
+    } else {
+      return [GridItem(.fixed(190), spacing: 26), GridItem(.fixed(190))]
+    }
+  }
+
   private func sourceText(for source: String?) -> String {
     switch source {
     case "themoviedb": return "TMDB"
@@ -500,7 +508,7 @@ private struct BestResultRow: View {
         .padding(.leading, 8)
 
       ScrollView(.horizontal, showsIndicators: false) {
-        LazyHGrid(rows: [GridItem(.fixed(190), spacing: 26), GridItem(.fixed(190))], spacing: 26) {
+        LazyHGrid(rows: gridRows, spacing: 26) {
           ForEach(items) { item in
             switch item {
             case .media(let media):
