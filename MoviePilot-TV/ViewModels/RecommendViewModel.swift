@@ -53,7 +53,7 @@ class RecommendViewModel: ObservableObject {
   // 所有货架配置
   static let allShelves: [RecommendShelf] = [
     // 全部分类（流行趋势作为默认）
-    RecommendShelf(id: "recommend/tmdb_trending", title: "流行趋势", category: .all),
+    RecommendShelf(id: "recommend/tmdb_trending", title: "流行趋势", category: .chart),
 
     // 电影分类
     RecommendShelf(id: "recommend/douban_showing", title: "正在热映", category: .movie),
