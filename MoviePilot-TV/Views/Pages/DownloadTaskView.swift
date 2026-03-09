@@ -1,10 +1,62 @@
 import Kingfisher
 import SwiftUI
 
+struct DownloadTaskView: View {
+  @StateObject private var viewModel = DownloadTaskViewModel()
+
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 20) {
+        HStack {
+          Text("下载任务")
+            .font(.title2)
+            .fontWeight(.bold)
+
+          Spacer()
+
+          if viewModel.clients.count > 1 {
+            Picker("下载器", selection: $viewModel.selectedClient) {
+              ForEach(viewModel.clients, id: \.name) { client in
+                Text(client.name).tag(client.name)
+              }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 300)
+            .onChange(of: viewModel.selectedClient) { _, _ in
+              Task { await viewModel.loadDownloads() }
+            }
+          }
+        }
+
+        if viewModel.downloads.isEmpty {
+          Text("暂无下载任务")
+            .foregroundColor(.secondary)
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .center)
+        } else {
+          LazyVStack(spacing: 15) {
+            ForEach(viewModel.downloads) { item in
+              DownloadTaskRow(item: item, viewModel: viewModel)
+            }
+          }
+        }
+      }
+    }
+    .task {
+      await viewModel.initialLoad()
+      while !Task.isCancelled {
+        await viewModel.loadDownloads()
+        try? await Task.sleep(nanoseconds: 3 * 1_000_000_000)  // 3 seconds
+      }
+    }
+    .navigationTitle("下载任务")
+  }
+}
+
 /// 显示一个下载任务（种子）的行视图，包含封面、信息、进度和可交互的操作按钮。
-struct TorrentDownloadRow: View {
+private struct DownloadTaskRow: View {
   let item: DownloadingInfo
-  @ObservedObject var viewModel: StatusViewModel
+  @ObservedObject var viewModel: DownloadTaskViewModel
 
   @State private var showingDeleteConfirm = false
 
@@ -12,7 +64,7 @@ struct TorrentDownloadRow: View {
   // 仅当 state 为 "downloading" 时为 true，用于控制“暂停/继续”按钮的状态。
   @State private var isDownloading: Bool
 
-  init(item: DownloadingInfo, viewModel: StatusViewModel) {
+  init(item: DownloadingInfo, viewModel: DownloadTaskViewModel) {
     self.item = item
     self.viewModel = viewModel
     _isDownloading = State(initialValue: item.state?.lowercased() == "downloading")

@@ -50,43 +50,8 @@ struct StatusView: View {
 
         Divider()
 
-        // --- 3. 实时下载任务列表 ---
-        HStack {
-          Text("下载任务")
-            .font(.title2)
-            .fontWeight(.bold)
-
-          Spacer()
-
-          // 如果配置了多个下载器，显示切换选择器
-          if viewModel.clients.count > 1 {
-            Picker("下载器", selection: $viewModel.selectedClient) {
-              ForEach(viewModel.clients, id: \.name) { client in
-                Text(client.name).tag(client.name)
-              }
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 300)
-            .onChange(of: viewModel.selectedClient) { _, _ in
-              Task { await viewModel.loadDownloads() }
-            }
-          }
-        }
-
-        if viewModel.downloads.isEmpty {
-          Text("暂无下载任务")
-            .foregroundColor(.secondary)
-            .padding()
-            .frame(maxWidth: .infinity, alignment: .center)
-        } else {
-          LazyVStack(spacing: 15) {
-            ForEach(viewModel.downloads) { item in
-              TorrentDownloadRow(item: item, viewModel: viewModel)
-            }
-          }
-        }
+        DownloadTaskView()
       }
-      .padding(.horizontal)
     }
     .task {
       /// 核心异步刷新逻辑：
