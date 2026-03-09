@@ -12,7 +12,7 @@ enum ActionRole {
 /// 它是一个纯数据结构，用于描述一个操作按钮，包括其文本、图标、角色和要执行的闭包。
 /// `ActionRow` 使用这些描述来动态生成实际的按钮。
 struct ActionDescriptor {
-  let id = UUID()
+  let id: String
   let title: String
   let icon: String
   var role: ActionRole = .normal
@@ -102,10 +102,10 @@ struct ActionButton: View {
 /// 3. 当焦点离开整行（包括内容和所有按钮）时，操作按钮会平滑地隐藏。
 struct ActionRow<Content: View, Background: View, ProgressBar: View>: View {
 
-  // MARK: - Focus Management
+  // MARK: - 焦点管理
   private enum FocusField: Hashable {
     case content
-    case action(UUID)
+    case action(String)
   }
   @FocusState private var focusedField: FocusField?
 

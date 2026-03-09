@@ -55,8 +55,8 @@ struct DownloadTaskView: View {
 
 /// 显示一个下载任务（种子）的行视图，包含封面、信息、进度和可交互的操作按钮。
 private struct DownloadTaskRow: View {
-  let item: DownloadingInfo
-  @ObservedObject var viewModel: DownloadTaskViewModel
+  @ObservedObject var item: DownloadingInfo
+  let viewModel: DownloadTaskViewModel
 
   @State private var showingDeleteConfirm = false
 
@@ -98,12 +98,14 @@ private struct DownloadTaskRow: View {
 
     return [
       ActionDescriptor(
+        id: "toggle",
         title: toggleActionTitle,
         icon: toggleActionIcon,
         role: .normal,
         action: toggleDownload
       ),
       ActionDescriptor(
+        id: "delete",
         title: "删除",
         icon: "trash.fill",
         role: .destructive,

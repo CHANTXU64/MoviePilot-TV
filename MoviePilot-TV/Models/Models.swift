@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 /// 包装类型，用于处理 API 响应中多种格式的布尔值
 /// 从 Bool、Int 或 String 解码，始终编码为 Bool
@@ -530,7 +531,7 @@ struct DownloaderConf: Codable {
 }
 
 /// 下载任务中关联的轻量级媒体信息
-struct DownloadingMediaInfo: Codable {
+struct DownloadingMediaInfo: Codable, Equatable {
   let image: String?
   let title: String?
   let episode: String?
@@ -538,25 +539,22 @@ struct DownloadingMediaInfo: Codable {
 }
 
 /// 实时下载任务详细信息
-struct DownloadingInfo: Codable, Identifiable {
+@MainActor
+class DownloadingInfo: Codable, Identifiable, ObservableObject, Equatable {
+  static func == (lhs: DownloadingInfo, rhs: DownloadingInfo) -> Bool {
+    lhs.id == rhs.id
+  }
+
+  // --- 不可变属性 ---
+  let id: String
   /// 哈希值
   let hash: String?
   /// 种子名称
   let title: String?
   /// 识别后的名称
   let name: String?
-  /// 状态
-  let state: String?
-  /// 下载进度
-  let progress: Double?
-  /// 下载速度
-  let dlspeed: String?
-  /// 上传速度
-  let upspeed: String?
   /// 大小
   let size: Int64?
-  /// 剩余时间
-  let left_time: String?
   /// 关联的媒体信息
   let media: DownloadingMediaInfo?
   // 季集格式 (如 S01E01)
@@ -564,42 +562,81 @@ struct DownloadingInfo: Codable, Identifiable {
   // 下载用户名称
   let username: String?
 
-  let id: String
+  // --- 易变属性，为 UI 更新发布 ---
+  /// 状态
+  @Published var state: String?
+  /// 下载进度
+  @Published var progress: Double?
+  /// 下载速度
+  @Published var dlspeed: String?
+  /// 上传速度
+  @Published var upspeed: String?
+  /// 剩余时间
+  @Published var left_time: String?
 
   enum CodingKeys: String, CodingKey {
     case hash, title, name, state, progress, dlspeed, upspeed, size, left_time, media,
       season_episode, username
   }
 
-  init(from decoder: Decoder) throws {
+  required init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
+
+    // 解码不可变属性
     hash = try container.decodeIfPresent(String.self, forKey: .hash)
     title = try container.decodeIfPresent(String.self, forKey: .title)
     name = try container.decodeIfPresent(String.self, forKey: .name)
-    state = try container.decodeIfPresent(String.self, forKey: .state)
-    progress = try container.decodeIfPresent(Double.self, forKey: .progress)
-    dlspeed = try container.decodeIfPresent(String.self, forKey: .dlspeed)
-    upspeed = try container.decodeIfPresent(String.self, forKey: .upspeed)
     size = try container.decodeIfPresent(Int64.self, forKey: .size)
-    left_time = try container.decodeIfPresent(String.self, forKey: .left_time)
     media = try container.decodeIfPresent(DownloadingMediaInfo.self, forKey: .media)
     season_episode = try container.decodeIfPresent(String.self, forKey: .season_episode)
     username = try container.decodeIfPresent(String.self, forKey: .username)
 
+    // 解码可变的、@Published 的属性
+    state = try container.decodeIfPresent(String.self, forKey: .state)
+    progress = try container.decodeIfPresent(Double.self, forKey: .progress)
+    dlspeed = try container.decodeIfPresent(String.self, forKey: .dlspeed)
+    upspeed = try container.decodeIfPresent(String.self, forKey: .upspeed)
+    left_time = try container.decodeIfPresent(String.self, forKey: .left_time)
+
     // 优先使用 hash 作为稳定标识符
     if let _hash = hash, !_hash.isEmpty {
-      self.id = "DownloadingInfo-\(_hash)-\(username ?? "")"
+      id = "DownloadingInfo-\(_hash)-\(username ?? "")"
     } else {
       // 备用方案：组合其他信息，确保稳定性
       let fallbackId =
         (name ?? "") + (title ?? "") + (username ?? "") + (size.map { String($0) } ?? "")
       if !fallbackId.isEmpty {
-        self.id = "DownloadingInfo-\(fallbackId)"
+        id = "DownloadingInfo-\(fallbackId)"
       } else {
         // 最终备用，理论上不应发生
-        self.id = "DownloadingInfo-\(UUID().uuidString)"
+        id = "DownloadingInfo-\(UUID().uuidString)"
       }
     }
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(hash, forKey: .hash)
+    try container.encode(title, forKey: .title)
+    try container.encode(name, forKey: .name)
+    try container.encode(state, forKey: .state)
+    try container.encode(progress, forKey: .progress)
+    try container.encode(dlspeed, forKey: .dlspeed)
+    try container.encode(upspeed, forKey: .upspeed)
+    try container.encode(size, forKey: .size)
+    try container.encode(left_time, forKey: .left_time)
+    try container.encode(media, forKey: .media)
+    try container.encode(season_episode, forKey: .season_episode)
+    try container.encode(username, forKey: .username)
+  }
+
+  /// 仅更新下载任务的易变属性。
+  func update(with other: DownloadingInfo) {
+    if state != other.state { state = other.state }
+    if progress != other.progress { progress = other.progress }
+    if dlspeed != other.dlspeed { dlspeed = other.dlspeed }
+    if upspeed != other.upspeed { upspeed = other.upspeed }
+    if left_time != other.left_time { left_time = other.left_time }
   }
 }
 

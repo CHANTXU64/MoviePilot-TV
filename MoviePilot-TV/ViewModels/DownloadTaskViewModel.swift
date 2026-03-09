@@ -27,7 +27,25 @@ class DownloadTaskViewModel: ObservableObject {
   func loadDownloads() async {
     guard !selectedClient.isEmpty else { return }
     do {
-      downloads = try await apiService.fetchDownloading(clientName: selectedClient)
+      let newDownloads = try await apiService.fetchDownloading(clientName: selectedClient)
+      let newDownloadIds = Set(newDownloads.map { $0.id })
+      let existingDownloadsById = Dictionary(uniqueKeysWithValues: downloads.map { ($0.id, $0) })
+
+      // 1. 更新现有下载项（通过对象自身的 @Published 属性，不直接修改数组）
+      for newDownload in newDownloads {
+        existingDownloadsById[newDownload.id]?.update(with: newDownload)
+      }
+
+      // 2. 仅在有项目添加或删除时才修改数组
+      let hasRemovals = downloads.contains { !newDownloadIds.contains($0.id) }
+      let newItems = newDownloads.filter { existingDownloadsById[$0.id] == nil }
+
+      if hasRemovals || !newItems.isEmpty {
+        downloads.removeAll { !newDownloadIds.contains($0.id) }
+        for newDownload in newItems.reversed() {
+          downloads.insert(newDownload, at: 0)
+        }
+      }
     } catch {
       print("Error loading downloads: \(error)")
     }
@@ -69,8 +87,8 @@ class DownloadTaskViewModel: ObservableObject {
     do {
       let (success, message) = try await apiService.deleteDownload(
         clientName: selectedClient, hash: hash)
-      if success {
-        downloads.removeAll { $0.hash == hash }
+      if success, let index = downloads.firstIndex(where: { $0.hash == hash }) {
+        downloads.remove(at: index)
       } else {
         print("Failed to delete download: \(message ?? "Unknown error")")
       }
