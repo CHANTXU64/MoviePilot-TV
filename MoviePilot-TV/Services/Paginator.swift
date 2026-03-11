@@ -30,13 +30,17 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   private var consecutiveErrorCount: Int = 0
   private let maxConsecutiveErrors: Int = 3
   private var generation: Int = 0
+  private var inFlightLoadTask: Task<Void, Never>?
+  private var inFlightLoadTaskToken: Int = 0
+  private var shouldRestartAfterCancellation: Bool = false
+  private let maxRestartRoundsPerSequence: Int = 5
 
   /// 获取一页项目的函数。
-  private let fetcher: (Int) async throws -> [ItemType]
+  private let fetcher: @MainActor (Int) async throws -> [ItemType]
 
   /// 处理新项目并将其合并到现有项目数组的函数。
   /// 如果添加了新的、唯一的内容，它应该返回 `true`。
-  private let processor: (inout [ItemType], [ItemType]) -> Bool
+  private let processor: @MainActor (inout [ItemType], [ItemType]) -> Bool
 
   /// 一个可选的闭包，用于在重置分页器时执行自定义逻辑。
   private var onReset: (() -> Void)?
@@ -55,8 +59,8 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   ///   - onReset: 一个可选的闭包，用于在“重置”期间运行自定义的状态清除逻辑。
   public init(
     threshold: Int,
-    fetcher: @escaping (Int) async throws -> [ItemType],
-    processor: @escaping (inout [ItemType], [ItemType]) -> Bool,
+    fetcher: @escaping @MainActor (Int) async throws -> [ItemType],
+    processor: @escaping @MainActor (inout [ItemType], [ItemType]) -> Bool,
     onReset: (() -> Void)? = nil
   ) {
     self.threshold = threshold
@@ -71,7 +75,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   /// 适用于初始加载或“下拉刷新”操作。
   public func refresh() async {
     reset()
-    await loadNextPage()
+    await runLoadSequence()
   }
 
   /// 加载下一页内容。
@@ -84,7 +88,76 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
       let thresholdIndex = max(0, items.count - threshold)
       guard itemIndex >= thresholdIndex else { return }
     }
-    await loadNextPage()
+    await runLoadSequence()
+  }
+
+  /// 将下一次加载的页游标向后推进指定页数。
+  /// 适用于外部已通过其它方式消费了最新若干页的场景（如增量轮询）。
+  /// 仅调整游标，不触发实际请求。
+  /// 注意：调用方若基于本方法改游标并取消/重启加载任务，需自行管理 UI 层的 isLoading 状态。
+  public func advancePageCursor(by pages: Int) {
+    guard pages > 0 else { return }
+    if isLoading {
+      shouldRestartAfterCancellation = true
+      inFlightLoadTask?.cancel()
+    }
+    page += pages
+  }
+
+  /// 将下一次加载的页游标向前回退指定页数。
+  /// 适用于外部删除大量项目后，后续页整体前移的场景。
+  /// 同时重置 hasMore，允许继续向后尝试加载。
+  /// 注意：调用方若基于本方法改游标并取消/重启加载任务，需自行管理 UI 层的 isLoading 状态。
+  public func rewindPageCursor(by pages: Int) {
+    guard pages > 0 else { return }
+    if isLoading {
+      shouldRestartAfterCancellation = true
+      inFlightLoadTask?.cancel()
+    }
+    page = max(1, page - pages)
+    hasMore = true
+  }
+
+  private func startLoadTask() -> Task<Void, Never> {
+    if let runningTask = inFlightLoadTask {
+      if runningTask.isCancelled {
+        inFlightLoadTask = nil
+      } else {
+        return runningTask
+      }
+    }
+
+    inFlightLoadTaskToken += 1
+    let token = inFlightLoadTaskToken
+    let task = Task { @MainActor [weak self] in
+      guard let self else { return }
+      await self.loadNextPage()
+      if self.inFlightLoadTaskToken == token {
+        self.inFlightLoadTask = nil
+      }
+    }
+    inFlightLoadTask = task
+    return task
+  }
+
+  private func runLoadSequence() async {
+    var restartRounds = 0
+
+    while hasMore {
+      let task = startLoadTask()
+      await task.value
+
+      let shouldRestart = consumeRestartAfterCancellationIfNeeded()
+      guard shouldRestart else { break }
+
+      restartRounds += 1
+      if restartRounds >= maxRestartRoundsPerSequence {
+        print(
+          "[Paginator] 达到单次加载序列最大重启次数 (\(maxRestartRoundsPerSequence))，停止继续重启"
+        )
+        break
+      }
+    }
   }
 
   // MARK: - 私有核心逻辑
@@ -137,6 +210,9 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
         page += 1
         consecutiveErrorCount = 0  // 重置错误计数
       } catch {
+        if Task.isCancelled || error is CancellationError {
+          return
+        }
         guard currentGeneration == generation, !Task.isCancelled else { return }
         print("[Paginator] Failed to load page \(page): \(error)")
         hasError = true
@@ -151,11 +227,20 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
       print("[Paginator] 连续发生 \(consecutiveErrorCount) 次错误，停止后续加载")
       hasMore = false
     }
+
+  }
+
+  private func consumeRestartAfterCancellationIfNeeded() -> Bool {
+    defer { shouldRestartAfterCancellation = false }
+    return shouldRestartAfterCancellation && hasMore
   }
 
   /// 重置分页器的状态，清除所有项目并重置标志。
   private func reset() {
     generation += 1
+    shouldRestartAfterCancellation = false
+    inFlightLoadTask?.cancel()
+    inFlightLoadTask = nil
     items = []
     isLoading = false
     isFirstLoading = false

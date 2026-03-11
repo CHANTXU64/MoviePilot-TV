@@ -33,27 +33,25 @@ struct SubscribeSheet: View {
 
             List {
               if viewModel.subscribe.type == "电视剧" {
-                LabeledContent("电视剧总集数") {
-                  SheetTextField(
-                    placeholder: "0",
-                    text: Binding(
-                      get: { String(viewModel.subscribe.total_episode ?? 0) },
-                      set: { viewModel.subscribe.total_episode = Int($0) }
-                    ),
-                    keyboardType: .numberPad
-                  )
-                }
+                SheetTextField(
+                  title: "电视剧总集数",
+                  placeholder: "0",
+                  text: Binding(
+                    get: { String(viewModel.subscribe.total_episode ?? 0) },
+                    set: { viewModel.subscribe.total_episode = Int($0) }
+                  ),
+                  keyboardType: .numberPad
+                )
 
-                LabeledContent("开始订阅集数") {
-                  SheetTextField(
-                    placeholder: "0",
-                    text: Binding(
-                      get: { String(viewModel.subscribe.start_episode ?? 0) },
-                      set: { viewModel.subscribe.start_episode = Int($0) }
-                    ),
-                    keyboardType: .numberPad
-                  )
-                }
+                SheetTextField(
+                  title: "开始订阅集数",
+                  placeholder: "0",
+                  text: Binding(
+                    get: { String(viewModel.subscribe.start_episode ?? 0) },
+                    set: { viewModel.subscribe.start_episode = Int($0) }
+                  ),
+                  keyboardType: .numberPad
+                )
               }
 
               SheetPicker(
@@ -151,21 +149,24 @@ struct SubscribeSheet: View {
 
               if showAdvanced {
                 SheetTextField(
-                  placeholder: "搜索关键词",
+                  title: "搜索关键词",
+                  placeholder: "",
                   text: Binding(
                     get: { viewModel.subscribe.keyword ?? "" },
                     set: { viewModel.subscribe.keyword = $0.isEmpty ? nil : $0 }
                   ))
 
                 SheetTextField(
-                  placeholder: "包含词",
+                  title: "包含词",
+                  placeholder: "",
                   text: Binding(
                     get: { viewModel.subscribe.include ?? "" },
                     set: { viewModel.subscribe.include = $0.isEmpty ? nil : $0 }
                   ))
 
                 SheetTextField(
-                  placeholder: "排除词",
+                  title: "排除词",
+                  placeholder: "",
                   text: Binding(
                     get: { viewModel.subscribe.exclude ?? "" },
                     set: { viewModel.subscribe.exclude = $0.isEmpty ? nil : $0 }
@@ -210,14 +211,16 @@ struct SubscribeSheet: View {
                 }
 
                 SheetTextField(
-                  placeholder: "自定义类别",
+                  title: "自定义类别",
+                  placeholder: "",
                   text: Binding(
                     get: { viewModel.subscribe.media_category ?? "" },
                     set: { viewModel.subscribe.media_category = $0.isEmpty ? nil : $0 }
                   ))
 
                 SheetTextField(
-                  placeholder: "自定义识别词",
+                  title: "自定义识别词",
+                  placeholder: "",
                   text: Binding(
                     get: { viewModel.subscribe.custom_words ?? "" },
                     set: { viewModel.subscribe.custom_words = $0.isEmpty ? nil : $0 }

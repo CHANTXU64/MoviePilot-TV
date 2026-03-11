@@ -17,16 +17,16 @@ struct DownloadTaskView: View {
           if viewModel.clients.count > 1 {
             Picker("下载器", selection: $viewModel.selectedClient) {
               ForEach(viewModel.clients, id: \.name) { client in
-                Text(client.name).tag(client.name)
+                Text("下载器：" + client.name).tag(client.name)
               }
             }
-            .pickerStyle(.segmented)
-            .frame(width: 300)
+            .pickerStyle(.menu)
             .onChange(of: viewModel.selectedClient) { _, _ in
               Task { await viewModel.loadDownloads() }
             }
           }
         }
+        .focusSection()
 
         if viewModel.downloads.isEmpty {
           Text("暂无下载任务")
@@ -123,14 +123,16 @@ private struct DownloadTaskRow: View {
         // 标题对齐 Vue: media.title || name
         let title = item.media?.title ?? item.name ?? "未知任务"
         // 季集对齐 Vue: (media.season media.episode) || season_episode
-        let epInfo = [item.media?.season, item.media?.episode].compactMap { $0 }.joined(
-          separator: " ")
-        let fullTitle = "\(title) \(epInfo.isEmpty ? (item.season_episode ?? "") : epInfo)"
+        let epInfo = [item.media?.season, item.media?.episode].compactMap { $0 }.joined(separator: " ")
 
-        Text(fullTitle)
-          .font(.body)
-          .lineLimit(1)
-          .foregroundColor(isFocused ? .primary : .primary.opacity(0.6))
+        HStack(spacing: 20) {
+          Text(title)
+            .foregroundColor(isFocused ? .primary : .primary.opacity(0.6))
+          Text("\(epInfo.isEmpty ? (item.season_episode ?? "") : epInfo)")
+            .foregroundColor(.secondary)
+        }
+        .font(.headline)
+        .lineLimit(1)
 
         Text(item.title ?? " ")
           .font(.caption)
@@ -154,15 +156,11 @@ private struct DownloadTaskRow: View {
         KFImage(backdropUrl)
           .requestModifier(AnyModifier.cookieModifier)
           .setProcessor(BlurImageProcessor(blurRadius: 2))
-          .resizing(referenceSize: CGSize(width: 500, height: 160), mode: .aspectFill)
+          .resizing(referenceSize: CGSize(width: 500, height: 180), mode: .aspectFill)
           .resizable()
           .aspectRatio(contentMode: .fill)
 
-        LinearGradient(
-          colors: [.black.opacity(0.3), .black.opacity(0.7)],
-          startPoint: .top,
-          endPoint: .bottom
-        )
+        Color.black.opacity(0.6)
       }
     } progressBar: {
       // MARK: - 进度条
@@ -285,7 +283,7 @@ private struct StateBadge: View {
     Text(state.displayText)
       .font(.caption)
       .fontWeight(.medium)
-      .padding(.horizontal, 6)
+      .padding(.horizontal, 10)
       .padding(.vertical, 3)
       .background(state.color.opacity(0.3))
       .foregroundColor(state.color)

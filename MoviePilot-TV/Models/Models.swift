@@ -1,5 +1,5 @@
-import Foundation
 import Combine
+import Foundation
 
 /// 包装类型，用于处理 API 响应中多种格式的布尔值
 /// 从 Bool、Int 或 String 解码，始终编码为 Bool
@@ -820,6 +820,16 @@ struct TransferDirectoryConf: Codable, Hashable {
   let download_path: String?
   /// 整理到媒体库目录
   let library_path: String?
+  /// 存储
+  let library_storage: String?
+  /// 转移方式
+  let transfer_type: String
+  /// 是否刮削
+  let scraping: FlexibleBool?
+  /// 分类目录
+  let library_category_folder: FlexibleBool?
+  /// 类型目录
+  let library_type_folder: FlexibleBool?
 }
 
 struct FilterRuleGroup: Codable, Hashable {
@@ -1191,10 +1201,12 @@ struct GlobalSettings: Codable {
   /// 关于图片缓存是否真实启用，应始终通过 `APIService.shared.useImageCache` 获取。
   /// 该属性已集成了版本判断逻辑，可确保在旧版系统上自动禁用缓存。
   var GLOBAL_IMAGE_CACHE: FlexibleBool?
+  var RECOGNIZE_SOURCE: String?
 
   enum CodingKeys: String, CodingKey {
     case TMDB_IMAGE_DOMAIN
     case GLOBAL_IMAGE_CACHE
+    case RECOGNIZE_SOURCE
   }
 }
 
@@ -1202,4 +1214,101 @@ struct GlobalSettings: Codable {
 struct SubscribeSeasonRequest: Hashable, Codable {
   let mediaInfo: MediaInfo
   let initialSeason: Int?
+}
+
+// MARK: - Transfer History Models
+
+struct TransferHistoryResponse: Codable {
+  let list: [TransferHistory]
+  let total: Int
+}
+
+struct TransferHistory: Codable, Identifiable {
+  // ID
+  let id: Int
+  // 标题
+  let title: String?
+  // 类型：电影、电视剧
+  let type: String?
+  // 季Sxx
+  let seasons: String?
+  // 集Exx
+  let episodes: String?
+  // 二级分类
+  let category: String?
+  // 源目录
+  let src: String?
+  // 目的目录
+  let dest: String?
+  // 源存储
+  let src_storage: String?
+  // 目标存储
+  let dest_storage: String?
+  // 转移模式link/copy/move/softlink/rclone_copy/rclone_move
+  let mode: String?
+  // 状态 1-成功，0-失败
+  let status: FlexibleBool
+  // 失败原因
+  let errmsg: String?
+  // 源文件项
+  let src_fileitem: FileItem?
+  // 日期
+  let date: String?
+}
+
+struct FileItem: Codable {
+  // 文件名
+  let name: String
+  // 文件路径
+  let path: String
+  // 类型 dir/file
+  let type: String
+  // 文件大小
+  let size: Int64?
+}
+
+struct StorageConf: Codable, Hashable {
+  let name: String
+  let type: String
+}
+
+struct ReorganizeForm: Codable {
+  // 文件项
+  var fileitem: FileItem
+  // 历史ID
+  var logid: Int
+  // 目标存储
+  var target_storage: String
+  // 整理方式
+  var transfer_type: String
+  // 目标路径
+  var target_path: String
+  // 最小文件大小
+  var min_filesize: Int
+  // 刮削
+  var scrape: Bool
+  // 复用历史识别信息
+  var from_history: Bool
+  // 类型
+  var type_name: String?
+  // TMDB ID
+  var tmdbid: Int?
+  // 豆瓣 ID
+  var doubanid: String?
+  // 剧集组编号
+  var episode_group: String?
+  // 季号
+  var season: Int?
+  // 指定集数
+  var episode_detail: String?
+  // 自定义格式
+  var episode_format: String?
+  // 集数偏移
+  var episode_offset: String?
+  // 指定PART
+  var episode_part: String?
+  // 媒体库类型子目录
+  var library_type_folder: Bool?
+  // 媒体库类别子目录
+  var library_category_folder: Bool?
 }

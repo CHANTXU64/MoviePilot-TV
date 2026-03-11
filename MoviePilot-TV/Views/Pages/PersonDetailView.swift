@@ -146,16 +146,15 @@ struct PersonDetailView: View {
     .sheet(isPresented: $showFullBio) {
       let person = viewModel.person
       if let biography = person.biography {
-        ScrollView {
-          VStack(alignment: .leading, spacing: 20) {
-            Text(person.name ?? "个人简介")
-              .font(.title2.bold())
+        VStack(alignment: .leading, spacing: 20) {
+          Text(person.name ?? "个人简介")
+            .font(.title2.bold())
 
-            Text(biography)
-              .font(.caption)
-          }
-          .padding(30)
+          Text(biography)
+            .font(.footnote)
         }
+        .padding(50)
+        .frame(width: 1600)
       }
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $navigationPath)

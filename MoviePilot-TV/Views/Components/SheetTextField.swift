@@ -4,21 +4,24 @@ import UIKit
 /// 一个自定义 TextField，用于绕过 SwiftUI 在 tvOS 26.0-26.3 Sheet 中的渲染问题。
 /// 底层使用 UITextField 以避免聚焦时的模糊/毛玻璃效果 Bug。
 struct SheetTextField: View {
+  let title: String
   let placeholder: String
   @Binding var text: String
   var keyboardType: UIKeyboardType = .default
 
   var body: some View {
-    if SheetStyleFix.shouldApply {
-      SheetTextFieldRepresentable(
-        placeholder: placeholder,
-        text: $text,
-        keyboardType: keyboardType
-      )
-      .frame(height: 66)
-    } else {
-      TextField(placeholder, text: $text)
-        .keyboardType(keyboardType)
+    LabeledContent(title) {
+      if SheetStyleFix.shouldApply {
+        SheetTextFieldRepresentable(
+          placeholder: placeholder,
+          text: $text,
+          keyboardType: keyboardType
+        )
+        .frame(height: 66)
+      } else {
+        TextField(placeholder, text: $text)
+          .keyboardType(keyboardType)
+      }
     }
   }
 }

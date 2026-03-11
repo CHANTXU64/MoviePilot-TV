@@ -7,7 +7,8 @@
 ### 1. 数据模型与核心扩展 (Models & Core Extensions)
 | 审查目标 (文件/组件) | 状态 | 核心副作用 / 关键注释 |
 | :--- | :--- | :--- |
-| `Models/Models.swift` | ✅ 已完成 | 1. ⚠️ **核心规范**: API 请求的媒体标识符**必须**使用 `apiMediaId` 计算属性 (`MediaInfo`/`Subscribe`模型提供)。严禁手动拼接。<br>2. 已提取 `isCollection` 存储属性，后续审查判断合集请直接复用此属性。<br>3. ⚠️ **注意**：`Models` 中的模型既包含 JSON 直接解析的字段，也包含 Swift 内部计算处理的属性。后续审查 AI 在遇到模型字段时，**务必先阅读 `Models` 中 Struct 的具体实现**，避免重复计算或误用。<br>4. ⚠️ **注意**：很多 `id` 字段可能是为了 SwiftUI 渲染稳定而拼接的 UUID。若后续业务逻辑需要使用原始 ID（对应 Vue 端的 ID 使用场景），**必须显式使用 `raw_id`**，绝对不可误用拼接后的 `id` 字段。<br>5. 已提取 `canDirectlySubscribe` 计算属性，用于判断是否可以直接订阅还是分季订阅。后续审查中如需此逻辑，直接复用，严禁自行重新实现。 |
+| `Models/Models.swift` | ✅ 已完成 | 1. ⚠️ **核心规范**: API 请求的媒体标识符**必须**使用 `apiMediaId` 计算属性 (`MediaInfo`/`Subscribe`模型提供)。严禁手动拼接。<br>2. 已提取 `isCollection` 存储属性，后续审查判断合集请直接复用此属性。<br>3. ⚠️ **注意**：`Models` 中的模型既包含 JSON 直接解析的字段，也包含 Swift 内部计算处理的属性。后续审查 AI 在遇到模型字段时，**务必先阅读 `Models` 中 Struct 的具体实施**，避免重复计算或误用。<br>4. ⚠️ **注意**：很多 `id` 字段可能是为了 SwiftUI 渲染稳定而拼接的 UUID。若后续业务逻辑需要使用原始 ID（对应 Vue 端的 ID 使用场景），**必须显式使用 `raw_id`**，绝对不可误用拼接后的 `id` 字段。<br>5. 已提取 `canDirectlySubscribe` 计算属性，用于判断是否可以直接订阅还是分季订阅。后续审查中如需此逻辑，直接复用，严禁自行重新实现。 |
+| `Models/JobRegistry.swift` | ⏳ 待开始 | |
 | `Extensions/Formatters.swift` | ✅ 已完成 | 1. 严禁在 View 内实例化 `Formatter` 防掉帧。格式化大小用 `Int64.formattedBytes()`，相对时间用 `String.toRelativeDateString()`。 |
 
 ### 2. 服务层 (Service Layer)
@@ -45,6 +46,7 @@
 | `Views/Components/ShelfPicker.swift` | ⏳ 待开始 | |
 | `Views/Components/MediaActionModifier.swift`| ⏳ 待开始 | |
 | `Views/Components/SubscriptionModifier.swift`| ⏳ 待开始 | |
+| `Views/Components/ActionRow.swift` | ⏳ 待开始 | |
 
 ### 5. 业务模块深度审查 (Feature-based Deep Dive: ViewModel -> View)
 
@@ -115,6 +117,20 @@
 | `ViewModels/SystemViewModel.swift`| ⏳ 待开始 | |
 | `Views/Pages/SystemView.swift` | ⏳ 待开始 | |
 
+#### 5.9 下载管理模块 (Download Management)
+| 审查目标 (文件/组件) | 状态 | 核心副作用 / 关键注释 |
+| :--- | :--- | :--- |
+| `ViewModels/DownloadTaskViewModel.swift`| ⏳ 待开始 | |
+| `Views/Pages/DownloadTaskView.swift` | ⏳ 待开始 | |
+
+#### 5.10 转移与整理模块 (Transfer & Reorganize)
+| 审查目标 (文件/组件) | 状态 | 核心副作用 / 关键注释 |
+| :--- | :--- | :--- |
+| `ViewModels/ReorganizeViewModel.swift`| ⏳ 待开始 | |
+| `ViewModels/TransferHistoryViewModel.swift`| ⏳ 待开始 | |
+| `Views/Sheets/ReorganizeSheet.swift`| ⏳ 待开始 | |
+| `Views/Pages/TransferHistoryView.swift`| ⏳ 待开始 | |
+
 ### 6. 应用入口与根视图 (App Entry & Root View)
 | 审查目标 (文件/组件) | 状态 | 核心副作用 / 关键注释 |
 | :--- | :--- | :--- |
@@ -129,4 +145,4 @@
 - [ ] ⚠️ **通知规范**: 项目已引入全局 `NotificationManager.swift` ，**该通知系统仅用于向用户报告操作失败或需要用户干预的错误状态**。对于操作成功的场景，**严禁**弹出通知，应保持静默，通过 UI 状态的自然变化（如按钮禁用、列表刷新）来提供正反馈。
 
 ---
-*最后更新时间：2026-03-04*
+*最后更新时间：2026-03-11*

@@ -556,6 +556,77 @@ class APIService: ObservableObject {
     return (true, nil)
   }
 
+  // MARK: - Transfer History
+
+  /// 获取媒体整理历史
+  /// - 对应前端: `MoviePilot-Frontend/src/views/reorganize/TransferHistoryView.vue`
+  /// - 应用场景: "媒体整理"页面，分页加载历史记录。
+  /// - Parameters:
+  ///   - page: 分页页码。
+  ///   - count: 每页数量。
+  ///   - title: 按标题搜索的关键词。
+  func fetchTransferHistory(page: Int, count: Int, title: String?) async throws
+    -> TransferHistoryResponse
+  {
+    let endpoint = try buildEndpoint(
+      path: "/history/transfer",
+      params: [
+        "page": String(page),
+        "count": String(count),
+        "title": title,
+      ])
+    let data = try await makeRequest(endpoint: endpoint)
+    return try decodeOrUnwrap(TransferHistoryResponse.self, from: data)
+  }
+
+  /// 删除整理历史记录
+  /// - 对应前端: `MoviePilot-Frontend/src/views/reorganize/TransferHistoryView.vue` (remove)
+  /// - 应用场景: 在"媒体整理"页面删除一条或多条历史记录。
+  /// - Parameters:
+  ///   - item: 要删除的历史记录项。
+  ///   - deleteSource: 是否同时删除源文件。
+  ///   - deleteDest: 是否同时删除目标文件。
+  func deleteTransferHistory(item: TransferHistory, deleteSource: Bool, deleteDest: Bool)
+    async throws
+    -> Bool
+  {
+    let body = try JSONEncoder().encode(item)
+    let endpoint = try buildEndpoint(
+      path: "/history/transfer",
+      params: [
+        "deletesrc": String(deleteSource),
+        "deletedest": String(deleteDest),
+      ])
+    let data = try await makeRequest(endpoint: endpoint, method: "DELETE", body: body)
+    return try decodeActionResponse(from: data).success
+  }
+
+  /// 手动整理
+  /// - 对应前端: `MoviePilot-Frontend/src/components/dialog/ReorganizeDialog.vue`
+  /// - 应用场景: 执行手动文件整理或重新整理。
+  /// - Parameters:
+  ///   - form: 包含整理所需全部信息的表单。
+  ///   - background: 是否在后台执行整理任务。`true`为后台执行，会立即返回；`false`为前台执行，会等待任务完成。
+  func manualTransfer(form: ReorganizeForm, background: Bool) async throws -> Bool {
+    let body = try JSONEncoder().encode(form)
+    let endpoint = try buildEndpoint(
+      path: "/transfer/manual", params: ["background": String(background)])
+    let data = try await makeRequest(endpoint: endpoint, method: "POST", body: body)
+    return try decodeActionResponse(from: data).success
+  }
+
+  /// 获取存储配置
+  /// - 对应前端: `MoviePilot-Frontend/src/components/dialog/ReorganizeDialog.vue` (loadStorages)
+  /// - 应用场景: 在手动整理弹窗中，加载可用的目标存储（如 local, alipan, rclone 等）列表。
+  func fetchStorages() async throws -> [StorageConf] {
+    struct ConfigValue: Decodable {
+      let value: [StorageConf]
+    }
+    let data = try await makeRequest(endpoint: "/system/setting/Storages")
+    let config = try decodeOrUnwrap(ConfigValue.self, from: data)
+    return config.value
+  }
+
   // MARK: - Media Server
 
   /// 获取媒体服务器配置

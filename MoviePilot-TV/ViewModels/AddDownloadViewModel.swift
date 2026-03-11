@@ -1,5 +1,5 @@
-import Foundation
 import Combine
+import Foundation
 
 @MainActor
 class AddDownloadViewModel: ObservableObject {
@@ -9,7 +9,7 @@ class AddDownloadViewModel: ObservableObject {
   @Published var selectedDirectory: String?
   @Published var isLoading = false
   @Published var isSubmitting = false
-  @Published var errorMessage: String?
+  @Published var errorMessage: String? // TODO 
 
   // 高级选项
   @Published var tmdbId: String = ""
@@ -84,7 +84,8 @@ class AddDownloadViewModel: ObservableObject {
       // 但如果我们可以直接使用 makeRequest（如果将其公开或添加一个辅助方法）。
       // 由于 `makeRequest` 是私有的，我们应该向 APIService 添加一个特定的方法。
       // 现在，我将假设我需要向 APIService 添加 `addDownload`。
-      let (success, message) = try await APIService.shared.addDownload(payload: payload, endpoint: endpoint)
+      let (success, message) = try await APIService.shared.addDownload(
+        payload: payload, endpoint: endpoint)
       if success {
         onSuccess?()
       } else {

@@ -1,9 +1,9 @@
-import Kingfisher
 import SwiftUI
 
 /// 系统状态视图：展示媒体库统计、服务器存储空间以及实时下载器状态
 struct StatusView: View {
   @StateObject private var viewModel = StatusViewModel()
+  @StateObject private var transferHistoryViewModel = TransferHistoryViewModel()
 
   var body: some View {
     ScrollView {
@@ -51,6 +51,12 @@ struct StatusView: View {
         Divider()
 
         DownloadTaskView()
+
+        Divider()
+
+        // --- 3. 媒体整理历史 ---
+        TransferHistoryView(viewModel: transferHistoryViewModel)
+
       }
     }
     .task {

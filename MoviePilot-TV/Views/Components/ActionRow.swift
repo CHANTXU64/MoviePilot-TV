@@ -64,10 +64,12 @@ struct ActionButton: View {
         RoundedRectangle(cornerRadius: 30)
           .fill(backgroundColor)
       )
+      .clipShape(RoundedRectangle(cornerRadius: 30))
       // 焦点动画：放大并添加阴影
       .scaleEffect(isFocused ? 1.1 : 1.0)
       .shadow(color: .black.opacity(isFocused ? 0.3 : 0), radius: 10, x: 0, y: 8)
       .animation(.easeIn(duration: 0.2), value: isFocused)
+      .animation(.easeInOut(duration: 0.2), value: title)
     }
     .buttonStyle(NakedButtonStyle())
   }
@@ -91,6 +93,16 @@ struct ActionButton: View {
   }
 }
 
+private struct ActionRowContentButtonStyle: ButtonStyle {
+  let isFocused: Bool
+
+  func makeBody(configuration: Self.Configuration) -> some View {
+    configuration.label
+      .scaleEffect((configuration.isPressed && isFocused) ? 0.99 : 1.0)  // 存在长按不能复位的问题，用isFocused凑合用，还是有点问题
+      .animation(.easeInOut(duration: 0.2), value: configuration.isPressed)
+  }
+}
+
 // MARK: - ActionRow
 
 /// 一个可重用的 SwiftUI 容器视图，它包装任何内容，并在用户聚焦到该行时，
@@ -111,6 +123,8 @@ struct ActionRow<Content: View, Background: View, ProgressBar: View>: View {
 
   // MARK: - Properties
   let actions: [ActionDescriptor]
+  let onTap: (() -> Void)?
+  let onLongPress: (() -> Void)?
   @ViewBuilder let content: (Bool) -> Content
   @ViewBuilder let background: () -> Background
   @ViewBuilder let progressBar: () -> ProgressBar
@@ -135,11 +149,15 @@ struct ActionRow<Content: View, Background: View, ProgressBar: View>: View {
   // MARK: - Initializer
   init(
     actions: [ActionDescriptor],
+    onTap: (() -> Void)? = nil,
+    onLongPress: (() -> Void)? = nil,
     @ViewBuilder content: @escaping (Bool) -> Content,
     @ViewBuilder background: @escaping () -> Background,
     @ViewBuilder progressBar: @escaping () -> ProgressBar
   ) {
     self.actions = actions
+    self.onTap = onTap
+    self.onLongPress = onLongPress
     self.content = content
     self.background = background
     self.progressBar = progressBar
@@ -176,25 +194,37 @@ struct ActionRow<Content: View, Background: View, ProgressBar: View>: View {
       .opacity(isRowActive ? 1 : 0)  // 非激活状态时完全透明
 
       // 图层 2: 主内容 (顶层, 可聚焦)
-      content(isRowActive)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .focusable()
-        .focused($focusedField, equals: .content)
-        .background(Color.white.opacity(0.1))
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-        // 自定义阴影效果：
-        // 由于 content 背景是半透明的，原生的 .shadow 效果不佳。
-        // 这里通过带模糊效果的描边(stroke)来模拟一个更清晰的阴影，
-        // 这种方式不会被背景内容遮挡，并且在 tvOS 上效果更好。
-        .background(
-          RoundedRectangle(cornerRadius: cornerRadius)
-            .stroke(isContentFocused ? Color.black.opacity(0.7) : Color.clear, lineWidth: 10)
-            .blur(radius: 10)
-        )
-        // ✨ 核心动画 ✨
-        // 当 `isRowActive` 变为 true 时，为此视图的尾部添加一个等于操作按钮宽度的 padding。
-        // 这会“挤压”主内容的宽度，使其向左收缩，从而优雅地揭示出下方的操作按钮。
-        .padding(.trailing, isRowActive ? measuredActionsWidth : 0)
+      Button(action: {}) {
+        content(isRowActive)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      }
+      .buttonStyle(ActionRowContentButtonStyle(isFocused: isContentFocused))
+      .simultaneousGesture(
+        TapGesture().onEnded {
+          onTap?()
+        }
+      )
+      .simultaneousGesture(
+        LongPressGesture(minimumDuration: 0.5).onEnded { _ in
+          onLongPress?()
+        }
+      )
+      .focused($focusedField, equals: .content)
+      .background(Color.white.opacity(0.1))
+      .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+      // 自定义阴影效果：
+      // 由于 content 背景是半透明的，原生的 .shadow 效果不佳。
+      // 这里通过带模糊效果的描边(stroke)来模拟一个更清晰的阴影，
+      // 这种方式不会被背景内容遮挡，并且在 tvOS 上效果更好。
+      .background(
+        RoundedRectangle(cornerRadius: cornerRadius)
+          .stroke(isContentFocused ? Color.black.opacity(0.7) : Color.clear, lineWidth: 10)
+          .blur(radius: 10)
+      )
+      // ✨ 核心动画 ✨
+      // 当 `isRowActive` 变为 true 时，为此视图的尾部添加一个等于操作按钮宽度的 padding。
+      // 这会“挤压”主内容的宽度，使其向左收缩，从而优雅地揭示出下方的操作按钮。
+      .padding(.trailing, isRowActive ? measuredActionsWidth : 0)
     }
     // 整体背景 (包含海报图和进度条)
     .background(
@@ -214,35 +244,65 @@ struct ActionRow<Content: View, Background: View, ProgressBar: View>: View {
     .scaleEffect(isRowActive ? 1.02 : 1.0)
     .animation(.easeInOut(duration: 0.2), value: isRowActive)
     .animation(.easeInOut(duration: 0.2), value: focusedField)
+    .animation(.easeInOut(duration: 0.2), value: measuredActionsWidth)
   }
 }
 
 // MARK: - Convenience Initializers
 // 提供便捷初始化器，允许在不提供 background 或 progressBar 时省略它们
 extension ActionRow where Background == EmptyView, ProgressBar == EmptyView {
-  init(actions: [ActionDescriptor], @ViewBuilder content: @escaping (Bool) -> Content) {
+  init(
+    actions: [ActionDescriptor],
+    onTap: (() -> Void)? = nil,
+    onLongPress: (() -> Void)? = nil,
+    @ViewBuilder content: @escaping (Bool) -> Content
+  ) {
     self.init(
-      actions: actions, content: content, background: { EmptyView() }, progressBar: { EmptyView() })
+      actions: actions,
+      onTap: onTap,
+      onLongPress: onLongPress,
+      content: content,
+      background: { EmptyView() },
+      progressBar: { EmptyView() }
+    )
   }
 }
 
 extension ActionRow where ProgressBar == EmptyView {
   init(
-    actions: [ActionDescriptor], @ViewBuilder content: @escaping (Bool) -> Content,
+    actions: [ActionDescriptor],
+    onTap: (() -> Void)? = nil,
+    onLongPress: (() -> Void)? = nil,
+    @ViewBuilder content: @escaping (Bool) -> Content,
     @ViewBuilder background: @escaping () -> Background
   ) {
     self.init(
-      actions: actions, content: content, background: background, progressBar: { EmptyView() })
+      actions: actions,
+      onTap: onTap,
+      onLongPress: onLongPress,
+      content: content,
+      background: background,
+      progressBar: { EmptyView() }
+    )
   }
 }
 
 extension ActionRow where Background == EmptyView {
   init(
-    actions: [ActionDescriptor], @ViewBuilder content: @escaping (Bool) -> Content,
+    actions: [ActionDescriptor],
+    onTap: (() -> Void)? = nil,
+    onLongPress: (() -> Void)? = nil,
+    @ViewBuilder content: @escaping (Bool) -> Content,
     @ViewBuilder progressBar: @escaping () -> ProgressBar
   ) {
     self.init(
-      actions: actions, content: content, background: { EmptyView() }, progressBar: progressBar)
+      actions: actions,
+      onTap: onTap,
+      onLongPress: onLongPress,
+      content: content,
+      background: { EmptyView() },
+      progressBar: progressBar
+    )
   }
 }
 

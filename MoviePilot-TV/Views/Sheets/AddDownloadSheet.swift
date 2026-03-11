@@ -117,7 +117,8 @@ struct AddDownloadSheet: View {
 
                 if showAdvanced {
                   SheetTextField(
-                    placeholder: "TMDB ID",
+                    title: "TMDB ID",
+                    placeholder: "",
                     text: $viewModel.tmdbId,
                     keyboardType: .numberPad
                   )
