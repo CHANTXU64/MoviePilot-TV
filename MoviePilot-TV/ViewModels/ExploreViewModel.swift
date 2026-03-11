@@ -7,6 +7,7 @@ enum DiscoverSource: String, CaseIterable, Identifiable {
   case themoviedb = "TheMovieDb"
   case douban = "豆瓣"
   case bangumi = "Bangumi"
+  case popular = "热门订阅"
 
   var id: String { rawValue }
 }
@@ -49,6 +50,11 @@ class ExploreViewModel: ObservableObject {
   @Published var bangumiSort: String = "rank"
   @Published var bangumiYear: String = ""
 
+  // 热门订阅筛选参数
+  @Published var popularSortBy: String = "count"
+  @Published var popularGenre: String = ""
+  @Published var popularMinRating: Int = 0
+
   // 数据状态
   @Published private(set) var paginator: Paginator<MediaInfo>?
 
@@ -73,6 +79,9 @@ class ExploreViewModel: ObservableObject {
       $bangumiCat.map { _ in }.eraseToAnyPublisher(),
       $bangumiSort.map { _ in }.eraseToAnyPublisher(),
       $bangumiYear.map { _ in }.eraseToAnyPublisher(),
+      $popularSortBy.map { _ in }.eraseToAnyPublisher(),
+      $popularGenre.map { _ in }.eraseToAnyPublisher(),
+      $popularMinRating.map { _ in }.eraseToAnyPublisher(),
     ]
 
     // 合并所有筛选器 Publisher
@@ -271,6 +280,14 @@ class ExploreViewModel: ObservableObject {
     }
   }
 
+  // MARK: - Popular 字典
+
+  static let popularSortDict: [(key: String, value: String)] = [
+    ("count", "热度"),
+    ("time", "时间"),
+    ("rating", "评分"),
+  ]
+
   // MARK: - 计算属性
 
   var currentSortDict: [(key: String, value: String)] {
@@ -281,12 +298,14 @@ class ExploreViewModel: ObservableObject {
       return Self.doubanSortDict
     case .bangumi:
       return Self.bangumiSortDict
+    case .popular:
+      return Self.popularSortDict
     }
   }
 
   var currentGenreDict: [(key: String, value: String)] {
     switch selectedSource {
-    case .themoviedb:
+    case .themoviedb, .popular:
       return selectedType == .movies ? Self.tmdbMovieGenreDict : Self.tmdbTvGenreDict
     case .douban:
       return Self.doubanCategoryDict
@@ -359,6 +378,25 @@ class ExploreViewModel: ObservableObject {
 
       path += "?" + params.joined(separator: "&")
       return path
+
+    case .popular:
+      var path = "subscribe/popular"
+      var params: [String] = []
+      params.append("stype=\(selectedType == .movies ? "电影" : "电视剧")")
+      if !popularSortBy.isEmpty {
+        params.append("sort_type=\(popularSortBy)")
+      }
+      if !popularGenre.isEmpty {
+        params.append("genre_id=\(popularGenre)")
+      }
+      if popularMinRating > 0 {
+        params.append("min_rating=\(popularMinRating)")
+      }
+
+      if !params.isEmpty {
+        path += "?" + params.joined(separator: "&")
+      }
+      return path
     }
   }
 
@@ -412,11 +450,15 @@ class ExploreViewModel: ObservableObject {
     bangumiCat = ""
     bangumiSort = "rank"
     bangumiYear = ""
+    popularSortBy = "count"
+    popularGenre = ""
+    popularMinRating = 0
   }
 
   func onTypeChanged() {
     // 类型变化时重置风格（因为电影和剧集的风格不同）
     tmdbGenre = ""
     doubanCategory = ""
+    popularGenre = ""
   }
 }

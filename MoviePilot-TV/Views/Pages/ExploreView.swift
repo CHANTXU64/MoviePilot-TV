@@ -88,6 +88,7 @@ struct FilterPickersView: View {
   @State private var tmdbFocusedIndex: Int = 0
   @State private var doubanFocusedIndex: Int = 0
   @State private var bangumiFocusedIndex: Int = 0
+  @State private var popularFocusedIndex: Int = 0
 
   // Focus redirectors
   @FocusState private var focusedPickerIndex: Int?
@@ -99,6 +100,7 @@ struct FilterPickersView: View {
     case .themoviedb: tmdbFocusedIndex
     case .douban: doubanFocusedIndex
     case .bangumi: bangumiFocusedIndex
+    case .popular: popularFocusedIndex
     }
   }
 
@@ -107,6 +109,7 @@ struct FilterPickersView: View {
     case .themoviedb: tmdbFocusedIndex = index
     case .douban: doubanFocusedIndex = index
     case .bangumi: bangumiFocusedIndex = index
+    case .popular: popularFocusedIndex = index
     }
   }
 
@@ -134,6 +137,9 @@ struct FilterPickersView: View {
             .foregroundColor(.primary)
         case .bangumi:
           bangumiFilters
+            .foregroundColor(.primary)
+        case .popular:
+          popularFilters
             .foregroundColor(.primary)
         }
       }
@@ -293,5 +299,47 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 2)
+  }
+
+  // MARK: - Popular 筛选器
+  @ViewBuilder
+  private var popularFilters: some View {
+    // 类型
+    Picker("类型", selection: $viewModel.selectedType) {
+      ForEach(DiscoverMediaType.allCases) { type in
+        Text("类型：" + type.rawValue).tag(type)
+      }
+    }
+    .pickerStyle(.menu)
+    .focused($focusedPickerIndex, equals: 0)
+
+    // 排序
+    Picker("排序", selection: $viewModel.popularSortBy) {
+      ForEach(viewModel.currentSortDict, id: \.key) { item in
+        Text("排序：" + item.value).tag(item.key)
+      }
+    }
+    .pickerStyle(.menu)
+    .focused($focusedPickerIndex, equals: 1)
+
+    // 风格
+    Picker("风格", selection: $viewModel.popularGenre) {
+      Text("风格：全部").tag("")
+      ForEach(viewModel.currentGenreDict, id: \.key) { item in
+        Text("风格：" + item.value).tag(item.key)
+      }
+    }
+    .pickerStyle(.menu)
+    .focused($focusedPickerIndex, equals: 2)
+
+    // 评分
+    Picker("评分", selection: $viewModel.popularMinRating) {
+      Text("评分：不限").tag(0)
+      ForEach([5, 6, 7, 8, 9], id: \.self) { rating in
+        Text("评分：\(rating)分以上").tag(rating)
+      }
+    }
+    .pickerStyle(.menu)
+    .focused($focusedPickerIndex, equals: 3)
   }
 }
