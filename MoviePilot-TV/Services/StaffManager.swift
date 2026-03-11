@@ -98,7 +98,16 @@ struct StaffManager {
     let sortedNewlyAdded = newlyAdded.sorted { p1, p2 in
       let p1Priority = idToBestPriority[p1.id] ?? 999
       let p2Priority = idToBestPriority[p2.id] ?? 999
-      return p1Priority < p2Priority
+      if p1Priority != p2Priority {
+        return p1Priority < p2Priority
+      }
+      // 同职位中，没有头像的排后面
+      let h1 = hasAvatar(p1)
+      let h2 = hasAvatar(p2)
+      if h1 != h2 {
+        return h1 && !h2
+      }
+      return false
     }
 
     // 4. 将排序好的新人员拼接到旧列表末尾，完美解决 UI 跳动
@@ -236,5 +245,19 @@ struct StaffManager {
       let translatedJob = TranslationHelper.translateJobs(jobString: key)
       return GroupedStaff(id: key, job: translatedJob, names: names)
     }
+  }
+
+  /// 判断人员是否有头像
+  private static func hasAvatar(_ person: Person) -> Bool {
+    if let profilePath = person.profile_path, !profilePath.isEmpty {
+      return true
+    }
+    if person.avatar != nil {
+      return true
+    }
+    if person.images != nil {
+      return true
+    }
+    return false
   }
 }

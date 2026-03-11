@@ -1089,7 +1089,14 @@ class APIService: ObservableObject {
   func getPosterImageUrl(_ media: MediaInfo) -> URL? {
     let url = media.poster_path?.replacingOccurrences(of: "original", with: "w500")
 
-    // 1. 如果地址中包含 douban 则使用中转代理 (豆瓣必须中转)
+    // 1. 匹配豆瓣默认海报并拦截
+    if let currentUrl = url, currentUrl.contains("doubanio.com") {
+      if currentUrl.contains("movie_default") || currentUrl.contains("tv_default") {
+        return nil
+      }
+    }
+
+    // 2. 如果地址中包含 douban 则使用中转代理 (豆瓣必须中转)
     if let currentUrl = url, currentUrl.contains("doubanio.com") {
       guard
         let encodedUrl = currentUrl.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)

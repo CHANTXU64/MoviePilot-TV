@@ -96,7 +96,11 @@ struct TorrentsResultView<Header: View>: View {
       )
       .onDisappear {
         // 当 sheet 消失时提交选择
-        filterForm[config.id] = tempFilterSelection
+        if tempFilterSelection.isEmpty {
+          filterForm.removeValue(forKey: config.id)
+        } else {
+          filterForm[config.id] = tempFilterSelection
+        }
         updateFilteredResults()
       }
     }
@@ -346,7 +350,8 @@ struct TorrentFilterBar: View {
         }
 
         // 清除全部
-        if !filterForm.isEmpty {
+        let hasActiveFilters = filterForm.values.contains { !$0.isEmpty }
+        if hasActiveFilters {
           Button(action: {
             filterForm = [:]
             onSortChange()  // 触发更新

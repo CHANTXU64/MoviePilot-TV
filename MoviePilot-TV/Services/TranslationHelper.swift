@@ -41,6 +41,7 @@ struct TranslationHelper {
     "ca": [.zhHans: "加泰隆语", .en: "Catalan", .zhHant: "加泰隆語"],
     "ce": [.zhHans: "车臣语", .en: "Chechen", .zhHant: "車臣語"],
     "ch": [.zhHans: "查莫罗语", .en: "Chamorro", .zhHant: "查莫羅語"],
+    "cn": [.zhHans: "中文", .en: "Chinese", .zhHant: "中文"],
     "co": [.zhHans: "科西嘉语", .en: "Corsican", .zhHant: "科西嘉語"],
     "cr": [.zhHans: "克里语", .en: "Cree", .zhHant: "克里語"],
     "cs": [.zhHans: "捷克语", .en: "Czech", .zhHant: "捷克語"],
