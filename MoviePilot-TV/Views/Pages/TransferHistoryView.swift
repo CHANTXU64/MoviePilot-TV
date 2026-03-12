@@ -15,11 +15,13 @@ struct TransferHistoryView: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading) {
+    VStack(alignment: .leading, spacing: 0) {
       HStack {
         Text("媒体整理历史")
-          .font(.title2)
+          .font(.body)
           .fontWeight(.bold)
+          .foregroundStyle(.secondary)
+          .padding(.leading, 8)
 
         Spacer()
 
@@ -49,72 +51,74 @@ struct TransferHistoryView: View {
         EmptyDataView(title: "没有数据")
       } else {
         // 使用 LazyVStack 提高性能
-        ScrollView {
-          LazyVStack {
-            ForEach(viewModel.items) { item in
-              ActionRow(
-                actions: [
-                  ActionDescriptor(
-                    id: "redo",
-                    title: viewModel.selectedIds.isEmpty
-                      ? "重新整理" : "重新批量整理(\(viewModel.selectedIds.count))",
-                    icon: "arrow.clockwise",
-                    action: {
-                      if viewModel.selectedIds.isEmpty {
-                        itemToReorganize = item
-                      } else {
-                        showBatchRedoSheet = true
-                      }
-                    }),
-                  ActionDescriptor(
-                    id: "delete",
-                    title: viewModel.selectedIds.isEmpty
-                      ? "删除" : "批量删除(\(viewModel.selectedIds.count))",
-                    icon: "trash",
-                    role: .destructive,
-                    action: {
-                      if viewModel.selectedIds.isEmpty {
-                        itemToDelete = item
-                      } else {
-                        showBatchDeleteAlert = true
-                      }
-                    }),
-                ],
-                onTap: {
-                  viewModel.toggleSelection(id: item.id)
-                },
-                onLongPress: {
-                  itemForInfoSheet = item
-                }
-              ) { isFocused in
-                HStack(spacing: 10) {
-                  // 多选勾选框
-                  Image(
-                    systemName: viewModel.selectedIds.contains(item.id)
-                      ? "checkmark.circle.fill" : "circle"
-                  )
-                  .font(.caption)
-                  .foregroundColor(.secondary)
-
-                  TransferHistoryRowView(item: item, isFocused: isFocused, storageDict: viewModel.storageDict)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                }
-                .padding()
-                .contentShape(Rectangle())
-              } background: {
-                LinearGradient(
-                  colors: [.black.opacity(0.3), .black.opacity(0.7)],
-                  startPoint: .top,
-                  endPoint: .bottom
-                )
+        LazyVStack {
+          ForEach(viewModel.items) { item in
+            ActionRow(
+              actions: [
+                ActionDescriptor(
+                  id: "redo",
+                  title: viewModel.selectedIds.isEmpty
+                    ? "重新整理" : "重新批量整理(\(viewModel.selectedIds.count))",
+                  icon: "arrow.clockwise",
+                  action: {
+                    if viewModel.selectedIds.isEmpty {
+                      itemToReorganize = item
+                    } else {
+                      showBatchRedoSheet = true
+                    }
+                  }),
+                ActionDescriptor(
+                  id: "delete",
+                  title: viewModel.selectedIds.isEmpty
+                    ? "删除" : "批量删除(\(viewModel.selectedIds.count))",
+                  icon: "trash",
+                  role: .destructive,
+                  action: {
+                    if viewModel.selectedIds.isEmpty {
+                      itemToDelete = item
+                    } else {
+                      showBatchDeleteAlert = true
+                    }
+                  }),
+              ],
+              onTap: {
+                viewModel.toggleSelection(id: item.id)
+              },
+              onLongPress: {
+                itemForInfoSheet = item
               }
-              .focused($focusedHistoryId, equals: item.id)
+            ) { isFocused in
+              HStack(spacing: 10) {
+                // 多选勾选框
+                Image(
+                  systemName: viewModel.selectedIds.contains(item.id)
+                    ? "checkmark.circle.fill" : "circle"
+                )
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+                TransferHistoryRowView(
+                  item: item, isFocused: isFocused, storageDict: viewModel.storageDict
+                )
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+              }
+              .padding()
+              .contentShape(Rectangle())
+            } background: {
+              LinearGradient(
+                colors: [.black.opacity(0.3), .black.opacity(0.7)],
+                startPoint: .top,
+                endPoint: .bottom
+              )
             }
-            if viewModel.isLoadingMore {
-              ProgressView().padding()
-            }
+            .focused($focusedHistoryId, equals: item.id)
+          }
+          if viewModel.isLoadingMore {
+            ProgressView().padding()
           }
         }
+        .padding(.top, 25)
+        .padding(.bottom, 30)
         .onChange(of: focusedHistoryId) { _, newId in
           if let newId = newId {
             Task {
@@ -249,18 +253,20 @@ private struct TransferHistoryRowView: View {
       .font(.headline)
       .lineLimit(1)
 
-      let srcStorageName = item.src_storage.flatMap {
-        $0.isEmpty ? nil : "[\(storageDict[$0] ?? $0)] "
-      } ?? ""
+      let srcStorageName =
+        item.src_storage.flatMap {
+          $0.isEmpty ? nil : "[\(storageDict[$0] ?? $0)] "
+        } ?? ""
       let srcText = srcStorageName + (item.src ?? "N/A")
       Text("源: \(srcText)")
         .font(.caption2)
         .foregroundColor(.secondary)
         .lineLimit(1)
 
-      let destStorageName = item.dest_storage.flatMap {
-        $0.isEmpty ? nil : "[\(storageDict[$0] ?? $0)] "
-      } ?? ""
+      let destStorageName =
+        item.dest_storage.flatMap {
+          $0.isEmpty ? nil : "[\(storageDict[$0] ?? $0)] "
+        } ?? ""
       let destText = destStorageName + (item.dest ?? "N/A")
       Text("目标: \(destText)")
         .font(.caption2)
@@ -348,19 +354,19 @@ private struct TransferHistoryDetailSheet: View {
       HStack(spacing: 30) {
         Text("状态：")
           .fontWeight(.bold)
-        + Text(item.status.value ? "成功" : "失败")
+          + Text(item.status.value ? "成功" : "失败")
         Text("分类：")
           .fontWeight(.bold)
-        + Text(item.category ?? "未知")
+          + Text(item.category ?? "未知")
         Text("转移方式：")
           .fontWeight(.bold)
-        + Text(transferModeDisplayName(for: item.mode ?? "未知"))
+          + Text(transferModeDisplayName(for: item.mode ?? "未知"))
         Text("日期：")
           .fontWeight(.bold)
-        + Text(item.date ?? "N/A")
+          + Text(item.date ?? "N/A")
         Text("大小：")
           .fontWeight(.bold)
-        + Text((item.src_fileitem?.size ?? 0).formattedBytes())
+          + Text((item.src_fileitem?.size ?? 0).formattedBytes())
       }
       .foregroundColor(.secondary)
       .font(.footnote)

@@ -7,55 +7,43 @@ struct StatusView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 40) {
-
-        // --- 1. 媒体库统计看板 ---
-        Text("系统状态")
-          .font(.title2)
-          .fontWeight(.bold)
-
-        HStack(spacing: 40) {
-          StatCard(title: "电影", value: "\(viewModel.statistic?.movie_count ?? 0)", icon: "film")
-          StatCard(title: "电视剧", value: "\(viewModel.statistic?.tv_count ?? 0)", icon: "tv")
-          StatCard(
-            title: "剧集", value: "\(viewModel.statistic?.episode_count ?? 0)", icon: "film.stack")
+      VStack(spacing: 0) {
+        // --- 1. 系统状态 ---
+        // --- 2. 媒体库统计 ---
+        if let statistic = viewModel.statistic {
+          MediaStatCard(statistic: statistic)
+            .padding(.bottom, 20)
+        } else {
+          EmptyDataView(title: "暂无媒体库统计", description: "")
+            .padding(.bottom, 20)
         }
 
-        // --- 2. 存储与下载器概览 ---
-        HStack(alignment: .top, spacing: 40) {
-          // A. 存储空间详情展示
-          VStack(alignment: .leading, spacing: 20) {
-            Text("存储空间")
-              .font(.headline)
-            if let storage = viewModel.storage {
-              StorageView(storage: storage)
-            } else {
-              ProgressView()
-            }
+        // --- 3. 存储与下载器概览 ---
+        HStack(alignment: .top, spacing: 20) {
+          if let storage = viewModel.storage {
+            StorageView(storage: storage, downloader: viewModel.downloader)
+          } else {
+            EmptyDataView(title: "暂无存储空间信息", description: "")
           }
-          .frame(maxWidth: .infinity)
 
-          // B. 下载器全局实时速度与剩余空间
-          VStack(alignment: .leading, spacing: 20) {
-            Text("下载器")
-              .font(.headline)
-            if let downloader = viewModel.downloader {
-              DownloaderView(info: downloader)
-            } else {
-              ProgressView()
-            }
+          if let downloader = viewModel.downloader {
+            DownloaderCard(info: downloader)
+          } else {
+            EmptyDataView(title: "暂无下载器信息", description: "")
           }
-          .frame(maxWidth: .infinity)
         }
+        .padding(.bottom, 20)
 
         Divider()
 
         DownloadTaskView()
+          .padding(.vertical, 20)
 
         Divider()
 
-        // --- 3. 媒体整理历史 ---
+        // --- 4. 媒体整理历史 ---
         TransferHistoryView(viewModel: transferHistoryViewModel)
+          .padding(.vertical, 20)
 
       }
     }
@@ -72,24 +60,70 @@ struct StatusView: View {
   }
 }
 
-private struct StatCard: View {
+private struct MiniStat: View {
   let title: String
   let value: String
   let icon: String
 
   var body: some View {
-    VStack(spacing: 10) {
+    HStack(spacing: 10) {
       Image(systemName: icon)
-        .font(.system(size: 50))
-        .foregroundColor(.accentColor)
-      Text(value)
-        .font(.system(size: 40, weight: .bold))
       Text(title)
-        .font(.headline)
-        .foregroundColor(.secondary)
+      Text(value)
+        .foregroundColor(.primary)
     }
+    .font(.headline.bold())
+    .foregroundColor(.secondary)
+  }
+}
+
+private struct MediaStatCard: View {
+  let statistic: Statistic
+
+  var body: some View {
+    HStack(spacing: 20) {
+      MiniStat(title: "电影", value: "\(statistic.movie_count)", icon: "film")
+        .frame(maxWidth: .infinity)
+      MiniStat(title: "电视剧", value: "\(statistic.tv_count)", icon: "tv")
+        .frame(maxWidth: .infinity)
+      MiniStat(title: "剧集", value: "\(statistic.episode_count ?? 0)", icon: "film.stack")
+        .frame(maxWidth: .infinity)
+    }
+    .padding()
+    .background(Color.white.opacity(0.1))
+    .cornerRadius(20)
+  }
+}
+
+private struct DownloaderCard: View {
+  let info: DownloaderInfo
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      HStack {
+        Label("下载", systemImage: "arrow.down")
+        Spacer()
+        Text("\(Int64(info.download_speed).formattedBytes())/s")
+      }
+      HStack {
+        Label("上传", systemImage: "arrow.up")
+        Spacer()
+        Text("\(Int64(info.upload_speed).formattedBytes())/s")
+      }
+      HStack {
+        Label("总量", systemImage: "arrow.up.arrow.down")
+          .lineLimit(1)
+        Spacer()
+        Text(
+          "↑ \(Int64(info.upload_size).formattedBytes()) / ↓ \(Int64(info.download_size).formattedBytes())"
+        )
+        .lineLimit(1)
+      }
+    }
+    .font(.callout)
+    .foregroundColor(.secondary)
+    .padding()
     .frame(maxWidth: .infinity)
-    .padding(30)
     .background(Color.white.opacity(0.1))
     .cornerRadius(20)
   }
@@ -97,37 +131,24 @@ private struct StatCard: View {
 
 private struct StorageView: View {
   let storage: Storage
+  let downloader: DownloaderInfo?
 
   var body: some View {
-    VStack(alignment: .leading) {
+    VStack(alignment: .leading, spacing: 24) {
       Text(
-        "已用: \(Int64(storage.used_storage).formattedBytes()) / \(Int64(storage.total_storage).formattedBytes())"
+        "存储空间已用：\(Int64(storage.used_storage).formattedBytes()) / \(Int64(storage.total_storage).formattedBytes())"
       )
       ProgressView(value: storage.percent)
         .progressViewStyle(LinearProgressViewStyle())
-    }
-    .padding()
-    .background(Color.white.opacity(0.05))
-    .cornerRadius(15)
-  }
-}
-
-private struct DownloaderView: View {
-  let info: DownloaderInfo
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      HStack {
-        Label("下载: \(Int64(info.download_speed).formattedBytes())/s", systemImage: "arrow.down")
-        Spacer()
-        Label("上传: \(Int64(info.upload_speed).formattedBytes())/s", systemImage: "arrow.up")
+      if let downloader {
+        Text("下载器剩余空间：\(Int64(downloader.free_space).formattedBytes())")
       }
-      Text("剩余空间: \(Int64(info.free_space).formattedBytes())")
-        .font(.caption)
-        .foregroundColor(.secondary)
     }
+    .font(.callout)
+    .foregroundColor(.secondary)
     .padding()
-    .background(Color.white.opacity(0.05))
-    .cornerRadius(15)
+    .frame(maxWidth: .infinity)
+    .background(Color.white.opacity(0.1))
+    .cornerRadius(20)
   }
 }

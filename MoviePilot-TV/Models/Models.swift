@@ -130,6 +130,10 @@ struct DownloaderInfo: Codable {
   var download_speed: Int = 0
   /// 上传速度
   var upload_speed: Int = 0
+  /// 下载量
+  var download_size: Int = 0
+  /// 上传量
+  var upload_size: Int = 0
   /// 剩余空间
   var free_space: Int = 0
 }
@@ -354,8 +358,10 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     self.genres = genres
     self.category = category
 
-    self.id = Self.generateStableId(
-      tmdb_id: tmdb_id, douban_id: douban_id, bangumi_id: bangumi_id, title: title)
+    self.id = Self.generateUniqueKey(
+      source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
+      tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id,
+      mediaid_prefix: mediaid_prefix, media_id: media_id)
 
     self.isCollection = Self.checkIsCollection(type: type, collection_id: collection_id)
 
@@ -403,8 +409,10 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     genres = try container.decodeIfPresent([MediaGenre].self, forKey: .genres)
     category = try container.decodeIfPresent(String.self, forKey: .category)
 
-    self.id = Self.generateStableId(
-      tmdb_id: tmdb_id, douban_id: douban_id, bangumi_id: bangumi_id, title: title)
+    self.id = Self.generateUniqueKey(
+      source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
+      tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id,
+      mediaid_prefix: mediaid_prefix, media_id: media_id)
 
     self.isCollection = Self.checkIsCollection(type: type, collection_id: collection_id)
 
@@ -451,14 +459,27 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     }
   }
 
-  /// 确定性 ID：基于业务标识生成，保证 Hashable/Equatable 语义正确
-  private static func generateStableId(
-    tmdb_id: Int?, douban_id: String?, bangumi_id: Int?, title: String?
+  /// 参考 Vue 前端 dedupFields 去重 key
+  /// 通过拼接多个核心 ID 字段生成唯一标识
+  /// 用于在 UI 渲染前过滤重复项与生成 ID
+  private static func generateUniqueKey(
+    source: String?, type: String?, season: Int?, tmdb_id: Int?,
+    imdb_id: String?, tvdb_id: Int?, douban_id: String?, bangumi_id: Int?,
+    mediaid_prefix: String?, media_id: String?
   ) -> String {
-    if let bangumi = bangumi_id { return "bangumi-\(bangumi)" }
-    if let douban = douban_id { return "douban-\(douban)" }
-    if let tmdb = tmdb_id { return "tmdb-\(tmdb)" }
-    return title ?? UUID().uuidString
+    let parts: [String] = [
+      source ?? "",
+      type ?? "",
+      season.map { String($0) } ?? "",
+      tmdb_id.map { String($0) } ?? "",
+      imdb_id ?? "",
+      tvdb_id.map { String($0) } ?? "",
+      douban_id ?? "",
+      bangumi_id.map { String($0) } ?? "",
+      mediaid_prefix ?? "",
+      media_id ?? "",
+    ]
+    return parts.joined(separator: "~")
   }
 
   /// 判断当前媒体项是否为合集/系列
@@ -482,29 +503,11 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     return nil
   }
 
-  /// 去重 key，参考 Vue 前端 dedupFields
-  /// 通过拼接多个核心 ID 字段生成唯一标识，用于在 UI 渲染前过滤重复项
-  var dedupKey: String {
-    let parts: [String] = [
-      source ?? "",
-      type ?? "",
-      season.map { String($0) } ?? "",
-      tmdb_id.map { String($0) } ?? "",
-      imdb_id ?? "",
-      tvdb_id.map { String($0) } ?? "",
-      douban_id ?? "",
-      bangumi_id.map { String($0) } ?? "",
-      mediaid_prefix ?? "",
-      media_id ?? "",
-    ]
-    return parts.joined(separator: "~")
-  }
-
   /// 对 MediaInfo 数组去重，保留首次出现的元素
   /// 使用传入的 existingKeys 集合记录已存在的 key，实现跨分页或跨类别的去重
   static func deduplicate(_ items: [MediaInfo], existingKeys: inout Set<String>) -> [MediaInfo] {
     return items.filter { item in
-      let key = item.dedupKey
+      let key = item.id
       if existingKeys.contains(key) {
         return false  // 如果 key 已存在，则过滤掉
       }
@@ -654,6 +657,8 @@ struct TorrentInfo: Codable {
   let description: String?
   /// 种子链接
   let enclosure: String?
+  // 详情页面
+  let page_url: String?
   /// 种子大小
   let size: Int64
   /// 做种者
@@ -740,8 +745,15 @@ struct Context: Codable, Identifiable {
     torrent_info = try container.decodeIfPresent(TorrentInfo.self, forKey: .torrent_info)
     meta_info = try container.decodeIfPresent(MetaInfo.self, forKey: .meta_info)
 
-    // 优先使用 enclosure 作为稳定标识符
-    self.id = torrent_info?.enclosure ?? UUID().uuidString
+    // 优先使用 page_url, pubdate, enclosure 组合作为稳定标识符
+    let pageUrl = torrent_info?.page_url ?? ""
+    let pubdate = torrent_info?.pubdate ?? ""
+    let enclosure = torrent_info?.enclosure ?? ""
+    if !pageUrl.isEmpty || !pubdate.isEmpty || !enclosure.isEmpty {
+      self.id = "Context-\(pageUrl)-\(pubdate)-\(enclosure)"
+    } else {
+      self.id = UUID().uuidString
+    }
   }
 }
 

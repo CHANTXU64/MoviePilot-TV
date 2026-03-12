@@ -3,17 +3,20 @@ import SwiftUI
 
 struct DownloadTaskView: View {
   @StateObject private var viewModel = DownloadTaskViewModel()
+  @State private var isExpanded = true
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 20) {
-        HStack {
-          Text("下载任务")
-            .font(.title2)
-            .fontWeight(.bold)
+    VStack(alignment: .leading, spacing: 20) {
+      HStack {
+        Text("下载任务")
+          .font(.body)
+          .fontWeight(.bold)
+          .foregroundStyle(.secondary)
+          .padding(.leading, 8)
 
-          Spacer()
+        Spacer()
 
+        HStack(spacing: 20) {
           if viewModel.clients.count > 1 {
             Picker("下载器", selection: $viewModel.selectedClient) {
               ForEach(viewModel.clients, id: \.name) { client in
@@ -25,9 +28,16 @@ struct DownloadTaskView: View {
               Task { await viewModel.loadDownloads() }
             }
           }
+          Button(isExpanded ? "收起" : "展开") {
+            withAnimation {
+              isExpanded.toggle()
+            }
+          }
         }
-        .focusSection()
+      }
+      .focusSection()
 
+      if isExpanded {
         if viewModel.downloads.isEmpty {
           Text("暂无下载任务")
             .foregroundColor(.secondary)
@@ -49,7 +59,6 @@ struct DownloadTaskView: View {
         try? await Task.sleep(nanoseconds: 3 * 1_000_000_000)  // 3 seconds
       }
     }
-    .navigationTitle("下载任务")
   }
 }
 
