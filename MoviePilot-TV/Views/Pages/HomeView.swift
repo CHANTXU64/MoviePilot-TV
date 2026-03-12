@@ -275,12 +275,12 @@ private struct SubscribeItemView: View {
     MediaCard(
       title: item.name,
       posterUrl: APIService.shared.getSubscribePosterImageUrl(item),
-      subtitle: item.year,
-      typeText: item.type,
+      subtitle: nil,
+      typeText: formatState(item.state),
       ratingText: nil,
-      bottomLeftText: formatState(item.state),
-      bottomLeftSecondaryText: formatProgress(total: item.total_episode, lack: item.lack_episode),
-      source: MediaSource.from(subscribe: item),
+      bottomLeftText: formatProgress(total: item.total_episode, lack: item.lack_episode),
+      bottomLeftSecondaryText: item.last_update?.toRelativeDateString() ?? nil,
+      source: nil,
       action: {
         onEdit()
       }

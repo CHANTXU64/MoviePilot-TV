@@ -33,6 +33,7 @@ class SubscriptionHandler: ObservableObject {
       season: item.season,
       poster: item.poster_path,
       state: "N", // 默认状态为 'N' (New)
+      last_update: nil,
       tmdbid: item.tmdb_id,
       doubanid: item.douban_id,
       bangumiid: item.bangumi_id

@@ -248,14 +248,23 @@ struct MediaCard: View {
           // 顶行徽章
           HStack(alignment: .top, spacing: 8) {
             // 左上：媒体类型徽章
-            if let type = typeText, let iconName = typeIcon(type) {
-              Image(systemName: iconName)
-                .font(.caption2.bold())
-                .foregroundStyle(.white)
-                .padding(8)
-                .background(.ultraThinMaterial)
-                .cornerRadius(8)
+            Group {
+              if let type = typeText, !type.isEmpty {
+                if let iconName = typeIcon(type) {
+                  // 匹配到图标，显示图标徽章
+                  Image(systemName: iconName)
+                } else {
+                  // 未匹配到图标，直接显示文字徽章
+                  Text(type)
+                    .font(.caption2.weight(.medium))
+                }
+              }
             }
+            .font(.caption2.bold())
+            .foregroundStyle(.white)
+            .padding(8)
+            .background(.ultraThinMaterial)
+            .cornerRadius(8)
 
             Spacer(minLength: 0)
 

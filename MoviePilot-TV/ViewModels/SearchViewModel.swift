@@ -338,6 +338,7 @@ class SearchViewModel: ObservableObject {
       season: media.season,
       poster: media.poster_path,
       state: "N",
+      last_update: nil,
       total_episode: nil,
       start_episode: nil,
       lack_episode: nil,

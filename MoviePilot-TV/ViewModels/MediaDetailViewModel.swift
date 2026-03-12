@@ -248,6 +248,7 @@ class MediaDetailViewModel: ObservableObject {
       season: season,
       poster: detail.poster_path,
       state: "N",
+      last_update: nil,
       // 优先使用预加载识别到的 TMDB ID（豆瓣/Bangumi 来源可能在预加载阶段才拿到）
       tmdbid: preloadTask?.tmdbId ?? detail.tmdb_id,
       doubanid: detail.douban_id,

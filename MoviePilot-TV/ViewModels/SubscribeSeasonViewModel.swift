@@ -174,6 +174,7 @@ class SubscribeSeasonViewModel: ObservableObject {
       season: seasonNumber,
       poster: mediaInfo.poster_path,
       state: "N",
+      last_update: nil,
       tmdbid: mediaInfo.tmdb_id,
       doubanid: mediaInfo.douban_id,
       bangumiid: mediaInfo.bangumi_id,

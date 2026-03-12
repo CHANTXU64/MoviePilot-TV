@@ -890,6 +890,8 @@ struct Subscribe: Codable, Identifiable, Hashable {
   var backdrop: String?
   /// 状态：N-新建 R-订阅中 P-待定 S-暂停
   var state: String?
+  // 最后更新时间
+  var last_update: String?
   /// 总集数
   var total_episode: Int?
   /// 开始集数
