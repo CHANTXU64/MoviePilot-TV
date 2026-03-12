@@ -141,4 +141,79 @@ class HomeViewModel: ObservableObject {
       return false
     }
   }
+
+  func openMediaItem(_ item: MediaServerPlayItem, using openURL: OpenURLAction) {
+    guard let link = item.link, let originalUrl = URL(string: link) else { return }
+
+    var finalUrl: URL? = nil
+
+    // 统一处理 Fragment 解析：有些后端返回 #!/item... 有些返回 #/item...
+    let cleanFragment: String? = {
+      guard let fragment = originalUrl.fragment else { return nil }
+      return fragment.starts(with: "!") ? String(fragment.dropFirst(1)) : fragment
+    }()
+
+    switch item.server_type {
+    case .emby:
+      // 如果是 Emby 服务器，则尝试构建深度链接，目前 Emby 2.0.3(2) 还不支持跳转到媒体
+      // 后端链接格式: https://your-emby-server/web/index.html#!/item?id=xxxx&serverId=...
+      // emby://items?serverId={your_server_id}&itemId={your_item_id}
+      if let fragment = cleanFragment, let components = URLComponents(string: "https://dummy.com" + fragment) {
+        let queryItems = components.queryItems ?? []
+        let itemId = queryItems.first { $0.name == "id" }?.value
+        let serverId = queryItems.first { $0.name == "serverId" }?.value
+        if let itemId = itemId, let serverId = serverId {
+          var deepLinkComponents = URLComponents()
+          deepLinkComponents.scheme = "emby"
+          deepLinkComponents.host = "items"
+          deepLinkComponents.queryItems = [
+            URLQueryItem(name: "serverId", value: serverId),
+            URLQueryItem(name: "itemId", value: itemId),
+          ]
+          finalUrl = deepLinkComponents.url
+        }
+      }
+
+    case .plex:
+      // 后端链接格式: http://ip:port/web/index.html#!/media/{server_id}/com.plexapp.plugins.library?source={library.key}&X-Plex-Token={token}
+      // plex://preplay/?metadataKey={metadataKey}&server={serverId}
+      if let fragment = cleanFragment, let components = URLComponents(string: "https://dummy.com" + fragment) {
+        let pathParts = components.path.split(separator: "/")
+        if pathParts.count >= 2, pathParts[0] == "media", let rawId = item.raw_id?.value {
+          let serverId = String(pathParts[1])
+          let metadataKey = "/library/metadata/\(rawId)"
+
+          var deepLinkComponents = URLComponents()
+          deepLinkComponents.scheme = "plex"
+          deepLinkComponents.host = "preplay"
+          deepLinkComponents.path = "/"
+          deepLinkComponents.queryItems = [
+            URLQueryItem(name: "metadataKey", value: metadataKey),
+            URLQueryItem(name: "server", value: serverId),
+          ]
+          finalUrl = deepLinkComponents.url
+        }
+      }
+      // 降级策略
+      if finalUrl == nil { finalUrl = URL(string: "plex://") }
+
+    case .jellyfin:
+      print("Jellyfin 暂不支持在 tvOS 打开媒体")
+    case .trimemedia:
+      print("飞牛 Nas 暂不支持在 tvOS 打开媒体")
+    case .ugreen:
+      print("绿联 Nas 暂不支持在 tvOS 打开媒体")
+    default:
+      // 处理未来未知的服务器类型（item.server_type.rawValue）
+      print("未知的媒体服务器类型: \(item.server_type?.rawValue ?? "未知")，且 tvOS 无法直接打开网页")
+    }
+
+    if let finalUrl = finalUrl {
+      openURL(finalUrl) { accepted in
+        print(accepted ? "成功打开深度链接: \(finalUrl)" : "无法打开深度链接: \(finalUrl)")
+      }
+    } else if let serverType = item.server_type {
+      print("未能生成 \(serverType.rawValue) 的有效深度链接: \(originalUrl)")
+    }
+  }
 }

@@ -258,6 +258,9 @@ struct MediaCard: View {
                   Text(type)
                     .font(.caption2.weight(.medium))
                 }
+              } else {
+                // 如果 typeText 为空或 nil，显示默认的 film 图标
+                Image(systemName: "film")
               }
             }
             .font(.caption2.bold())
@@ -299,7 +302,7 @@ struct MediaCard: View {
               HStack(spacing: 6) {
                 if let status = bottomLeftText, !status.isEmpty {
                   Text(status)
-                    .font(.caption2.weight(.medium))
+                    .font(.caption2)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
@@ -308,7 +311,7 @@ struct MediaCard: View {
                 }
                 if let secondary = bottomLeftSecondaryText, !secondary.isEmpty {
                   Text(secondary)
-                    .font(.caption2.weight(.medium))
+                    .font(.caption2)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)

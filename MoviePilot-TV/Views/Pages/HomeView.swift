@@ -27,7 +27,8 @@ struct HomeView: View {
               MediaSectionView(
                 title: "最近添加",
                 items: viewModel.latestMedia,
-                isFirstRow: true
+                isFirstRow: true,
+                viewModel: viewModel
               )
             }
 
@@ -153,7 +154,9 @@ private struct MediaSectionView: View {
   let title: String
   let items: [MediaServerPlayItem]
   var isFirstRow: Bool = false
+  @ObservedObject var viewModel: HomeViewModel
 
+  @Environment(\.openURL) private var openURL
   @FocusState private var focusedItemId: String?
   @FocusState private var isTopRedirectorFocused: Bool
   @State private var hasRedirectedFocus: Bool = false
@@ -187,14 +190,14 @@ private struct MediaSectionView: View {
             MediaCard(
               title: item.title,
               posterUrl: APIService.shared.getMediaServerPosterImageURL(item),
-              subtitle: item.subtitle,
-              typeText: nil,
+              subtitle: nil,
+              typeText: item.type,
               ratingText: nil,
-              bottomLeftText: nil,
+              bottomLeftText: item.server_type?.rawValue.capitalized,
               bottomLeftSecondaryText: nil,
               source: nil,
               action: {
-                // TODO: 处理媒体服务器项目点击
+                viewModel.openMediaItem(item, using: openURL)
               }
             )
             .focused($focusedItemId, equals: item.id)

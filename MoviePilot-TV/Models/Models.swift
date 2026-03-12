@@ -766,6 +766,18 @@ struct MediaServerConf: Codable {
   let enabled: FlexibleBool?
 }
 
+/// 媒体服务器类型（采用结构体模拟枚举，以保证向后兼容性）
+struct MediaServerType: RawRepresentable, Codable, Hashable, Equatable {
+  let rawValue: String
+  init(rawValue: String) { self.rawValue = rawValue }
+
+  static let emby = MediaServerType(rawValue: "emby")
+  static let jellyfin = MediaServerType(rawValue: "jellyfin")
+  static let plex = MediaServerType(rawValue: "plex")
+  static let trimemedia = MediaServerType(rawValue: "trimemedia")
+  static let ugreen = MediaServerType(rawValue: "ugreen")
+}
+
 /// 媒体服务器最近播放/新增项
 struct MediaServerPlayItem: Codable, Identifiable {
   /// 真实接口返回的原始 ID（保留，以便未来跳转或 API 请求使用）
@@ -776,16 +788,20 @@ struct MediaServerPlayItem: Codable, Identifiable {
   let title: String
   /// 副标题
   let subtitle: String?
+  /// 类型
+  let type: String?
   /// 海报
   let image: String?
   /// 链接
   let link: String?
   /// 图片是否需要Cookies
   let use_cookies: FlexibleBool?
+  /// 媒体服务器类型
+  let server_type: MediaServerType?
 
   enum CodingKeys: String, CodingKey {
     case raw_id = "id"
-    case title, subtitle, image, link, use_cookies
+    case title, subtitle, type, image, link, use_cookies, server_type
   }
 
   init(from decoder: Decoder) throws {
@@ -793,9 +809,11 @@ struct MediaServerPlayItem: Codable, Identifiable {
     raw_id = try container.decodeIfPresent(FlexibleString.self, forKey: .raw_id)
     title = try container.decode(String.self, forKey: .title)
     subtitle = try container.decodeIfPresent(String.self, forKey: .subtitle)
+    type = try container.decodeIfPresent(String.self, forKey: .type)
     image = try container.decodeIfPresent(String.self, forKey: .image)
     link = try container.decodeIfPresent(String.self, forKey: .link)
     use_cookies = try container.decodeIfPresent(FlexibleBool.self, forKey: .use_cookies)
+    server_type = try container.decodeIfPresent(MediaServerType.self, forKey: .server_type)
 
     // 组合原始ID和Link生成唯一的稳定标识符，防止 tvOS 焦点异常
     let baseId = raw_id?.value ?? ""
@@ -809,16 +827,18 @@ struct MediaServerPlayItem: Codable, Identifiable {
 
   /// 供手动构造使用的 init (常用于 Preview 或 Mock)
   init(
-    id: String, title: String, subtitle: String? = nil, image: String? = nil, link: String? = nil,
-    use_cookies: FlexibleBool? = nil
+    id: String, title: String, subtitle: String? = nil, type: String? = nil, image: String? = nil,
+    link: String? = nil, use_cookies: FlexibleBool? = nil, server_type: MediaServerType? = nil
   ) {
     self.raw_id = FlexibleString(id)
     self.id = "playitem-\(id)-\(link ?? "")"
     self.title = title
     self.subtitle = subtitle
+    self.type = type
     self.image = image
     self.link = link
     self.use_cookies = use_cookies
+    self.server_type = server_type
   }
 }
 
