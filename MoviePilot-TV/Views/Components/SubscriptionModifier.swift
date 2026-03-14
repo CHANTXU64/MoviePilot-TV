@@ -3,7 +3,9 @@ import SwiftUI
 struct MediaSubscriptionModifier: ViewModifier {
   @Binding var sheetSubscribe: Subscribe?
   @Binding var tvSubscribeRequest: SubscribeSeasonRequest?
-  @Binding var showSubscribedAlert: Bool
+  @Binding var showAlert: Bool
+  let alertTitle: String
+  let alertMessage: String
   @Binding var navigationPath: NavigationPath
 
   func body(content: Content) -> some View {
@@ -28,10 +30,10 @@ struct MediaSubscriptionModifier: ViewModifier {
             }
           }
       }
-      .alert("提示", isPresented: $showSubscribedAlert) {
+      .alert(alertTitle, isPresented: $showAlert) {
         Button("确定", role: .cancel) {}
       } message: {
-        Text("该内容已在订阅中")
+        Text(alertMessage)
       }
       .onChange(of: tvSubscribeRequest) { _, newValue in
         if let request = newValue {
@@ -43,22 +45,6 @@ struct MediaSubscriptionModifier: ViewModifier {
 }
 
 extension View {
-  /// 添加媒体订阅相关的弹窗（订阅Sheet和电视剧导航）
-  func mediaSubscriptionAlerts(
-    sheetSubscribe: Binding<Subscribe?>,
-    tvSubscribeRequest: Binding<SubscribeSeasonRequest?>,
-    showSubscribedAlert: Binding<Bool>,
-    navigationPath: Binding<NavigationPath>
-  ) -> some View {
-    modifier(
-      MediaSubscriptionModifier(
-        sheetSubscribe: sheetSubscribe,
-        tvSubscribeRequest: tvSubscribeRequest,
-        showSubscribedAlert: showSubscribedAlert,
-        navigationPath: navigationPath
-      ))
-  }
-
   /// 添加媒体订阅相关的弹窗（使用 SubscriptionHandler）
   func mediaSubscriptionAlerts(
     using handler: SubscriptionHandler, navigationPath: Binding<NavigationPath>
@@ -73,10 +59,12 @@ extension View {
           get: { handler.tvSubscribeRequest },
           set: { handler.tvSubscribeRequest = $0 }
         ),
-        showSubscribedAlert: Binding(
-          get: { handler.showSubscribedAlert },
-          set: { handler.showSubscribedAlert = $0 }
+        showAlert: Binding(
+          get: { handler.showAlert },
+          set: { handler.showAlert = $0 }
         ),
+        alertTitle: handler.alertTitle,
+        alertMessage: handler.alertMessage,
         navigationPath: navigationPath
       ))
   }

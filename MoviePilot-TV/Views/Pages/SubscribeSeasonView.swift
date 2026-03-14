@@ -319,21 +319,44 @@ struct SubscribeSeasonContentView: View {
 struct SeasonDetailSheet: View {
   let season: TmdbSeason
   let mediaInfo: MediaInfo
+  @State private var isImageFailed = false
 
   var body: some View {
     HStack(alignment: .top, spacing: 60) {
       // Poster
-      KFImage(
-        APIService.shared.getSeasonPosterURL(
-          posterPath: season.poster_path,
-          mediaPosterPath: mediaInfo.poster_path
-        )
-      )
-      .resizing(referenceSize: CGSize(width: 360, height: 540), mode: .aspectFill)
-      .resizable()
-      .aspectRatio(contentMode: .fill)
+      ZStack {
+        Rectangle()
+          .fill(Color(white: 0.12))
+          .overlay(
+            Image(systemName: "film")
+              .font(.title2)
+              .foregroundColor(.gray)
+          )
+
+        if !isImageFailed,
+          let posterUrl = APIService.shared.getSeasonPosterURL(
+            posterPath: season.poster_path,
+            mediaPosterPath: mediaInfo.poster_path
+          )
+        {
+          KFImage(posterUrl)
+            .requestModifier(AnyModifier.cookieModifier)
+            .onFailure { _ in
+              isImageFailed = true
+            }
+            .placeholder {
+              Rectangle()
+                .fill(Color(white: 0.12))
+                .overlay(ProgressView().tint(.gray))
+            }
+            .resizing(referenceSize: CGSize(width: 360, height: 540), mode: .aspectFill)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
+            .frame(width: 360)
+            .clipped()
+        }
+      }
       .frame(width: 360)
-      .clipped()
       .cornerRadius(20)
 
       // Info
@@ -363,7 +386,6 @@ struct SeasonDetailSheet: View {
         if let overview = season.overview, !overview.isEmpty {
           Text(overview)
             .font(.body)
-            .lineSpacing(10)
             .foregroundColor(.secondary)
         }
       }

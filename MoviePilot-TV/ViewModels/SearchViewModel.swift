@@ -59,6 +59,8 @@ class SearchViewModel: ObservableObject {
   @Published private(set) var collectionPaginator: Paginator<MediaInfo>?
   /// 人物搜索分页器
   @Published private(set) var personPaginator: Paginator<Person>?
+  /// 订阅分享搜索分页器
+  @Published private(set) var subscriptionSharePaginator: Paginator<MediaInfo>?
 
   @Published var bestResults: [BestResultItem] = []
 
@@ -67,7 +69,8 @@ class SearchViewModel: ObservableObject {
   private func calculateBestResults(
     media: [MediaInfo],
     collections: [MediaInfo],
-    persons: [Person]
+    persons: [Person],
+    shares: [MediaInfo]
   ) -> [BestResultItem] {
     guard !submittedQuery.isEmpty else { return [] }
 
@@ -152,6 +155,23 @@ class SearchViewModel: ObservableObject {
       }
     }
 
+    // 4. 处理订阅分享结果
+    for shareItem in shares {
+      // share_title 已经映射到 title, count 映射到 popularity
+      // comment 和 user 已经组合在 overview 中，这里暂不参与评分
+      let titles = [shareItem.title, shareItem.original_title].compactMap { $0 }.filter {
+        !$0.isEmpty
+      }
+      let maxS = Set(titles).map { fuzzyMatchScore(text: $0, query: submittedQuery) }.max() ?? -1
+      let pop = shareItem.popularity ?? 0  // 复用次数
+      let hasNoPoster = shareItem.poster_path == nil || shareItem.poster_path?.isEmpty == true
+
+      // 分享结果通常比较优质，放宽准入
+      if !(hasNoPoster && maxS < 0) {
+        scoredItems.append((item: .media(shareItem), score: maxS, popularity: pop))
+      }
+    }
+
     // 核心排序逻辑：优先按匹配分值倒序，分值相同时按热度 (Popularity) 倒序
     scoredItems.sort {
       if $0.score != $1.score {
@@ -186,6 +206,7 @@ class SearchViewModel: ObservableObject {
   private var tvPaginatorCancellable: AnyCancellable?
   private var collectionPaginatorCancellable: AnyCancellable?
   private var personPaginatorCancellable: AnyCancellable?
+  private var subscriptionSharePaginatorCancellable: AnyCancellable?
 
   private var sharedMediaFetcher: SharedMediaFetcher?
 
@@ -211,7 +232,8 @@ class SearchViewModel: ObservableObject {
         guard let moviePag = moviePaginator,
           let tvPag = tvPaginator,
           let collectionPag = collectionPaginator,
-          let personPag = personPaginator
+          let personPag = personPaginator,
+          let sharePag = subscriptionSharePaginator
         else { break }
 
         // 并发刷新所有分页器
@@ -219,14 +241,17 @@ class SearchViewModel: ObservableObject {
         let tvTask = Task { @MainActor in await tvPag.refresh() }
         let collectionTask = Task { @MainActor in await collectionPag.refresh() }
         let personTask = Task { @MainActor in await personPag.refresh() }
-        _ = await (movieTask.value, tvTask.value, collectionTask.value, personTask.value)
+        let shareTask = Task { @MainActor in await sharePag.refresh() }
+        _ = await (
+          movieTask.value, tvTask.value, collectionTask.value, personTask.value, shareTask.value)
 
         // 基于第一页的结果计算"最佳结果"
         // 由于 media 是电影+电视剧的混合，我们需要把它们组合起来传递
         self.bestResults = calculateBestResults(
           media: moviePag.items + tvPag.items,
           collections: collectionPag.items,
-          persons: personPag.items
+          persons: personPag.items,
+          shares: sharePag.items
         )
       }
     } catch {
@@ -311,11 +336,34 @@ class SearchViewModel: ObservableObject {
       }
     )
 
+    // --- Subscription Share Paginator ---
+    var shareSeenKeys = Set<String>()
+    let newSubscriptionSharePaginator = Paginator<MediaInfo>(
+      threshold: 10,
+      fetcher: { @MainActor [apiService] page in
+        // 获取原始数据
+        let shareItems = try await apiService.searchSubscriptionShares(query: query, page: page)
+        // 转换为 MediaInfo
+        return shareItems.map { $0.toMediaInfo() }
+      },
+      processor: { @MainActor currentItems, newItems in
+        // 使用 MediaInfo 的去重逻辑
+        let uniqueNewItems = MediaInfo.deduplicate(newItems, existingKeys: &shareSeenKeys)
+        if uniqueNewItems.isEmpty { return false }
+        currentItems.append(contentsOf: uniqueNewItems)
+        return true
+      },
+      onReset: { @MainActor in
+        shareSeenKeys.removeAll()
+      }
+    )
+
     // 设置 Paginator 实例
     self.moviePaginator = newMoviePaginator
     self.tvPaginator = newTvPaginator
     self.collectionPaginator = newCollectionPaginator
     self.personPaginator = newPersonPaginator
+    self.subscriptionSharePaginator = newSubscriptionSharePaginator
 
     // 桥接：paginator 内部变化 → ViewModel.objectWillChange
     moviePaginatorCancellable = newMoviePaginator.objectWillChange
@@ -325,6 +373,8 @@ class SearchViewModel: ObservableObject {
     collectionPaginatorCancellable = newCollectionPaginator.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
     personPaginatorCancellable = newPersonPaginator.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+    subscriptionSharePaginatorCancellable = newSubscriptionSharePaginator.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
   }
 

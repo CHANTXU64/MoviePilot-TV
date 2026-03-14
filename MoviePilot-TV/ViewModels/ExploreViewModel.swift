@@ -8,8 +8,15 @@ enum DiscoverSource: String, CaseIterable, Identifiable {
   case douban = "豆瓣"
   case bangumi = "Bangumi"
   case popular = "热门订阅"
+  case subscriptionShare = "订阅分享"
 
   var id: String { rawValue }
+}
+
+// MARK: - 内容包装
+enum ExploreContent {
+  case media(Paginator<MediaInfo>)
+  case shares(Paginator<SubscribeShare>)
 }
 
 // MARK: - 类型枚举
@@ -55,8 +62,15 @@ class ExploreViewModel: ObservableObject {
   @Published var popularGenre: String = ""
   @Published var popularMinRating: Int = 0
 
+  // 订阅分享筛选参数
+  @Published var shareSortBy: String = "count"
+  @Published var shareGenre: String = ""
+  @Published var shareMinRating: Int = 0
+
   // 数据状态
   @Published private(set) var paginator: Paginator<MediaInfo>?
+  @Published var selectedShare: SubscribeShare?
+  @Published var forkToShow: Int?
 
   private let apiService = APIService.shared
 
@@ -82,6 +96,9 @@ class ExploreViewModel: ObservableObject {
       $popularSortBy.map { _ in }.eraseToAnyPublisher(),
       $popularGenre.map { _ in }.eraseToAnyPublisher(),
       $popularMinRating.map { _ in }.eraseToAnyPublisher(),
+      $shareSortBy.map { _ in }.eraseToAnyPublisher(),
+      $shareGenre.map { _ in }.eraseToAnyPublisher(),
+      $shareMinRating.map { _ in }.eraseToAnyPublisher(),
     ]
 
     // 合并所有筛选器 Publisher
@@ -280,9 +297,14 @@ class ExploreViewModel: ObservableObject {
     }
   }
 
-  // MARK: - Popular 字典
-
+  // MARK: - Popular & Share 字典
   static let popularSortDict: [(key: String, value: String)] = [
+    ("count", "热度"),
+    ("time", "时间"),
+    ("rating", "评分"),
+  ]
+
+  static let shareSortDict: [(key: String, value: String)] = [
     ("count", "热度"),
     ("time", "时间"),
     ("rating", "评分"),
@@ -300,6 +322,8 @@ class ExploreViewModel: ObservableObject {
       return Self.bangumiSortDict
     case .popular:
       return Self.popularSortDict
+    case .subscriptionShare:
+      return Self.shareSortDict
     }
   }
 
@@ -307,6 +331,8 @@ class ExploreViewModel: ObservableObject {
     switch selectedSource {
     case .themoviedb, .popular:
       return selectedType == .movies ? Self.tmdbMovieGenreDict : Self.tmdbTvGenreDict
+    case .subscriptionShare:
+      return Self.tmdbTvGenreDict
     case .douban:
       return Self.doubanCategoryDict
     case .bangumi:
@@ -397,18 +423,44 @@ class ExploreViewModel: ObservableObject {
         path += "?" + params.joined(separator: "&")
       }
       return path
+    case .subscriptionShare:
+      var path = "subscribe/shares"
+      var params: [String] = []
+      params.append("stype=电视剧")
+      if !shareSortBy.isEmpty {
+        params.append("sort_type=\(shareSortBy)")
+      }
+      if !shareGenre.isEmpty {
+        params.append("genre_id=\(shareGenre)")
+      }
+      if shareMinRating > 0 {
+        params.append("min_rating=\(shareMinRating)")
+      }
+      if !params.isEmpty {
+        path += "?" + params.joined(separator: "&")
+      }
+      return path
     }
   }
 
   // MARK: - 数据加载
 
   private func setupPaginator(for path: String) {
+    paginatorCancellable?.cancel()
+
     var seenKeys = Set<String>()
+    let source = selectedSource
 
     let newPaginator = Paginator<MediaInfo>(
       threshold: 24,
-      fetcher: { @MainActor [apiService] page in
-        try await apiService.fetchRecommend(path: path, page: page)
+      fetcher: { @MainActor [apiService, source, path] page in
+        switch source {
+        case .subscriptionShare:
+          let shares = try await apiService.fetchSubscriptionShares(path: path, page: page)
+          return shares.map { $0.toMediaInfo() }
+        default:
+          return try await apiService.fetchRecommend(path: path, page: page)
+        }
       },
       processor: { @MainActor currentItems, newItems in
         let uniqueNewItems = MediaInfo.deduplicate(newItems, existingKeys: &seenKeys)
@@ -453,6 +505,9 @@ class ExploreViewModel: ObservableObject {
     popularSortBy = "count"
     popularGenre = ""
     popularMinRating = 0
+    shareSortBy = "count"
+    shareGenre = ""
+    shareMinRating = 0
   }
 
   func onTypeChanged() {

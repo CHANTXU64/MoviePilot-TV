@@ -209,6 +209,7 @@ struct MediaDetailView: View {
         }
       }
     }
+    .environmentObject(subscriptionHandler)
     .defaultFocus($focusedButton, .subscribe)
     .ignoresSafeArea()
     .onDisappear {
@@ -352,7 +353,6 @@ struct MediaDetailView: View {
               .lineLimit(5)
               .frame(maxWidth: 740, alignment: .leading)
               .foregroundColor(.primary.opacity(0.8))
-              .lineSpacing(4)
               .shadow(color: .black.opacity(0.4), radius: 4, x: 0, y: 2)
           }
 
@@ -689,8 +689,7 @@ struct MediaDetailView: View {
               .focused($focusedRecommendId, equals: media.id)
               .mediaContextMenu(
                 item: media,
-                navigationPath: $navigationPath,
-                subscriptionHandler: subscriptionHandler
+                navigationPath: $navigationPath
               )
             }
             if viewModel.recommendPaginator.isLoadingMore {
@@ -761,8 +760,7 @@ struct MediaDetailView: View {
               .focused($focusedSimilarId, equals: media.id)
               .mediaContextMenu(
                 item: media,
-                navigationPath: $navigationPath,
-                subscriptionHandler: subscriptionHandler
+                navigationPath: $navigationPath
               )
             }
             if viewModel.similarPaginator.isLoadingMore {

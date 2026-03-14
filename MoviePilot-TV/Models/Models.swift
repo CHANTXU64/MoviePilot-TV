@@ -284,6 +284,8 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   let genres: [MediaGenre]?
   /// 二级分类
   let category: String?
+  /// 关联的原始订阅分享对象（如果适用）
+  let subscribeShare: SubscribeShare?
 
   /// 稳定的内部标识符，在初始化时生成
   let id: String
@@ -307,7 +309,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
       type, year, season, poster_path, backdrop_path,
       overview, vote_average, popularity, season_info, collection_id, directors, actors,
       episode_group, runtime, release_date, original_language, production_countries, genres,
-      category
+      category, subscribeShare
   }
 
   init(
@@ -324,7 +326,8 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     episode_group: String? = nil, runtime: Int? = nil, release_date: String? = nil,
     original_language: String? = nil,
     production_countries: [ProductionCountry]? = nil, genres: [MediaGenre]? = nil,
-    category: String? = nil
+    category: String? = nil,
+    subscribeShare: SubscribeShare? = nil
   ) {
     self.tmdb_id = tmdb_id
     self.douban_id = douban_id
@@ -357,6 +360,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     self.production_countries = production_countries
     self.genres = genres
     self.category = category
+    self.subscribeShare = subscribeShare
 
     self.id = Self.generateUniqueKey(
       source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
@@ -408,6 +412,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
       [ProductionCountry].self, forKey: .production_countries)
     genres = try container.decodeIfPresent([MediaGenre].self, forKey: .genres)
     category = try container.decodeIfPresent(String.self, forKey: .category)
+    subscribeShare = try container.decodeIfPresent(SubscribeShare.self, forKey: .subscribeShare)
 
     self.id = Self.generateUniqueKey(
       source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
@@ -1236,11 +1241,15 @@ struct GlobalSettings: Codable {
   /// 该属性已集成了版本判断逻辑，可确保在旧版系统上自动禁用缓存。
   var GLOBAL_IMAGE_CACHE: FlexibleBool?
   var RECOGNIZE_SOURCE: String?
+  var USER_UNIQUE_ID: String?
+  var SUBSCRIBE_SHARE_MANAGE: FlexibleBool?
 
   enum CodingKeys: String, CodingKey {
     case TMDB_IMAGE_DOMAIN
     case GLOBAL_IMAGE_CACHE
     case RECOGNIZE_SOURCE
+    case USER_UNIQUE_ID
+    case SUBSCRIBE_SHARE_MANAGE
   }
 }
 
@@ -1304,6 +1313,151 @@ struct FileItem: Codable {
 struct StorageConf: Codable, Hashable {
   let name: String
   let type: String
+}
+
+/// 订阅分享
+struct SubscribeShare: Codable, Identifiable, Hashable {
+  // 分享ID
+  var id: String
+  // 内部使用的分享ID
+  let raw_id: Int?
+  // 订阅ID
+  let subscribe_id: Int?
+  // 分享标题
+  let share_title: String?
+  // 分享说明
+  let share_comment: String?
+  // 分享人
+  let share_user: String?
+  // 分享人唯一ID
+  let share_uid: String?
+  // 订阅名称
+  let name: String?
+  // 订阅年份
+  let year: String?
+  // 订阅类型 电影/电视剧
+  let type: String?
+  // 搜索关键字
+  let keyword: String?
+  // TMDB ID
+  let tmdbid: Int?
+  // 豆瓣ID
+  let doubanid: String?
+  // 季号
+  let season: Int?
+  // 海报
+  let poster: String?
+  // 背景图
+  let backdrop: String?
+  // 评分
+  let vote: Double?
+  // 描述
+  let description: String?
+  // 过滤规则
+  let filter: String?
+  // 包含
+  let include: String?
+  // 排除
+  let exclude: String?
+  // 质量
+  let quality: String?
+  // 分辨率
+  let resolution: String?
+  // 特效
+  let effect: String?
+  // 总集数
+  let total_episode: Int?
+  // 时间
+  let date: String?
+  // 自定义识别词
+  let custom_words: String?
+  // 自定义媒体类别
+  let media_category: String?
+  // 复用次数
+  let count: Int?
+  // 自定义剧集组
+  let episode_group: String?
+
+  enum CodingKeys: String, CodingKey {
+    case raw_id = "id"
+    case subscribe_id, share_title, share_comment, share_user, share_uid, name, year, type, keyword,
+      tmdbid,
+      doubanid, season, poster, backdrop, vote, description, filter, include, exclude, quality,
+      resolution, effect, total_episode, date, custom_words, media_category, count,
+      episode_group
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    raw_id = try container.decodeIfPresent(Int.self, forKey: .raw_id)
+    subscribe_id = try container.decodeIfPresent(Int.self, forKey: .subscribe_id)
+    share_title = try container.decodeIfPresent(String.self, forKey: .share_title)
+    share_comment = try container.decodeIfPresent(String.self, forKey: .share_comment)
+    share_user = try container.decodeIfPresent(String.self, forKey: .share_user)
+    share_uid = try container.decodeIfPresent(String.self, forKey: .share_uid)
+    name = try container.decodeIfPresent(String.self, forKey: .name)
+    year = try container.decodeIfPresent(String.self, forKey: .year)
+    type = try container.decodeIfPresent(String.self, forKey: .type)
+    keyword = try container.decodeIfPresent(String.self, forKey: .keyword)
+    tmdbid = try container.decodeIfPresent(Int.self, forKey: .tmdbid)
+    doubanid = try container.decodeIfPresent(String.self, forKey: .doubanid)
+    season = try container.decodeIfPresent(Int.self, forKey: .season)
+    poster = try container.decodeIfPresent(String.self, forKey: .poster)
+    backdrop = try container.decodeIfPresent(String.self, forKey: .backdrop)
+    vote = try container.decodeIfPresent(Double.self, forKey: .vote)
+    description = try container.decodeIfPresent(String.self, forKey: .description)
+    filter = try container.decodeIfPresent(String.self, forKey: .filter)
+    include = try container.decodeIfPresent(String.self, forKey: .include)
+    exclude = try container.decodeIfPresent(String.self, forKey: .exclude)
+    quality = try container.decodeIfPresent(String.self, forKey: .quality)
+    resolution = try container.decodeIfPresent(String.self, forKey: .resolution)
+    effect = try container.decodeIfPresent(String.self, forKey: .effect)
+    total_episode = try container.decodeIfPresent(Int.self, forKey: .total_episode)
+    date = try container.decodeIfPresent(String.self, forKey: .date)
+    custom_words = try container.decodeIfPresent(String.self, forKey: .custom_words)
+    media_category = try container.decodeIfPresent(String.self, forKey: .media_category)
+    count = try container.decodeIfPresent(Int.self, forKey: .count)
+    episode_group = try container.decodeIfPresent(String.self, forKey: .episode_group)
+
+    // 组合生成唯一的稳定标识符，防止 tvOS 焦点异常
+    let baseId = raw_id.map { String($0) } ?? ""
+    let baseTitle = share_title ?? ""
+    let baseUser = share_user ?? ""
+    if !baseId.isEmpty || !baseTitle.isEmpty || !baseUser.isEmpty {
+      self.id = "Share-\(baseId)-\(baseTitle)-\(baseUser)"
+    } else {
+      self.id = UUID().uuidString
+    }
+  }
+
+  /// 转换为 MediaInfo 以便在通用视图中复用
+  func toMediaInfo() -> MediaInfo {
+    var combinedOverview = ""
+    if let comment = share_comment, !comment.isEmpty {
+      combinedOverview += "💬 \(comment)"
+    }
+    if let user = share_user, !user.isEmpty {
+      if !combinedOverview.isEmpty {
+        combinedOverview += "\n"
+      }
+      combinedOverview += "👤 @\(user)"
+    }
+
+    return MediaInfo(
+      tmdb_id: tmdbid,
+      douban_id: doubanid,
+      title: share_title ?? name,
+      type: type,
+      year: year,
+      season: season,
+      poster_path: poster,
+      backdrop_path: backdrop,
+      overview: combinedOverview,
+      vote_average: vote,
+      popularity: Double(count ?? 0),  // 复用次数映射到 popularity
+      subscribeShare: self
+    )
+  }
 }
 
 struct ReorganizeForm: Codable {

@@ -10,6 +10,15 @@ struct MediaContextMenuItems: View {
   var onSubscribe: ((MediaInfo) -> Void)? = nil
 
   var body: some View {
+    if let share = item.subscribeShare {
+      // 订阅分享的专属菜单
+      Button {
+        subscriptionHandler.forkSheetRequest = share
+      } label: {
+        Label("复用订阅", systemImage: "document.on.document")
+      }
+    }
+
     Button {
       // 点击"详情"时立即触发预加载
       MediaPreloader.shared.preload(for: item)
@@ -71,7 +80,7 @@ struct MediaContextMenuItems: View {
 struct MediaContextMenu: ViewModifier {
   let item: MediaInfo
   @Binding var navigationPath: NavigationPath
-  @ObservedObject var subscriptionHandler: SubscriptionHandler
+  @EnvironmentObject var subscriptionHandler: SubscriptionHandler
 
   // 可选的自定义订阅操作
   var onSubscribe: ((MediaInfo) -> Void)? = nil
@@ -94,14 +103,12 @@ extension View {
   func mediaContextMenu(
     item: MediaInfo,
     navigationPath: Binding<NavigationPath>,
-    subscriptionHandler: SubscriptionHandler,
     onSubscribe: ((MediaInfo) -> Void)? = nil
   ) -> some View {
     self.modifier(
       MediaContextMenu(
         item: item,
         navigationPath: navigationPath,
-        subscriptionHandler: subscriptionHandler,
         onSubscribe: onSubscribe
       )
     )

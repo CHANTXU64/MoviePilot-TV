@@ -10,6 +10,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
   @Binding var navigationPath: NavigationPath
   let header: Header
   let contextMenu: ((MediaInfo) -> ContextMenu)?
+  let onShareTapped: ((SubscribeShare) -> Void)?
   let autoFocusFirstItem: Bool
 
   @FocusState private var focusedItemId: MediaInfo.ID?
@@ -26,7 +27,8 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     navigationPath: Binding<NavigationPath>,
     autoFocusFirstItem: Bool = false,
     @ViewBuilder header: () -> Header,
-    @ViewBuilder contextMenu: @escaping (MediaInfo) -> ContextMenu
+    @ViewBuilder contextMenu: @escaping (MediaInfo) -> ContextMenu,
+    onShareTapped: ((SubscribeShare) -> Void)? = nil
   ) {
     self.items = items
     self.isLoading = isLoading
@@ -36,6 +38,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     self.autoFocusFirstItem = autoFocusFirstItem
     self.header = header()
     self.contextMenu = contextMenu
+    self.onShareTapped = onShareTapped
   }
 
   // 无上下文菜单的初始化方法
@@ -46,7 +49,8 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     onLoadMore: @escaping (MediaInfo.ID?) -> Void,
     navigationPath: Binding<NavigationPath>,
     autoFocusFirstItem: Bool = false,
-    @ViewBuilder header: () -> Header
+    @ViewBuilder header: () -> Header,
+    onShareTapped: ((SubscribeShare) -> Void)? = nil
   ) where ContextMenu == EmptyView {
     self.items = items
     self.isLoading = isLoading
@@ -56,6 +60,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     self.autoFocusFirstItem = autoFocusFirstItem
     self.header = header()
     self.contextMenu = nil
+    self.onShareTapped = onShareTapped
   }
 
   var body: some View {
@@ -104,10 +109,14 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
                 bottomLeftSecondaryText: nil,
                 source: MediaSource.from(mediaInfo: item),
                 action: {
-                  // 点击时立即触发预加载（取消延迟）
-                  preloadDebounceTask?.cancel()
-                  MediaPreloader.shared.preload(for: item)
-                  navigationPath.append(item)
+                  if let share = item.subscribeShare {
+                    onShareTapped?(share)
+                  } else {
+                    // 点击时立即触发预加载（取消延迟）
+                    preloadDebounceTask?.cancel()
+                    MediaPreloader.shared.preload(for: item)
+                    navigationPath.append(item)
+                  }
                 }
               )
               .focused($focusedItemId, equals: item.id)
@@ -191,7 +200,8 @@ extension MediaGridView where Header == EmptyView {
     onLoadMore: @escaping (MediaInfo.ID?) -> Void,
     navigationPath: Binding<NavigationPath>,
     autoFocusFirstItem: Bool = false,
-    @ViewBuilder contextMenu: @escaping (MediaInfo) -> ContextMenu
+    @ViewBuilder contextMenu: @escaping (MediaInfo) -> ContextMenu,
+    onShareTapped: ((SubscribeShare) -> Void)? = nil
   ) {
     self.init(
       items: items,
@@ -201,7 +211,8 @@ extension MediaGridView where Header == EmptyView {
       navigationPath: navigationPath,
       autoFocusFirstItem: autoFocusFirstItem,
       header: { EmptyView() },
-      contextMenu: contextMenu
+      contextMenu: contextMenu,
+      onShareTapped: onShareTapped
     )
   }
 }
@@ -213,7 +224,8 @@ extension MediaGridView where Header == EmptyView, ContextMenu == EmptyView {
     isLoadingMore: Bool,
     onLoadMore: @escaping (MediaInfo.ID?) -> Void,
     navigationPath: Binding<NavigationPath>,
-    autoFocusFirstItem: Bool = false
+    autoFocusFirstItem: Bool = false,
+    onShareTapped: ((SubscribeShare) -> Void)? = nil
   ) {
     self.init(
       items: items,
@@ -222,7 +234,8 @@ extension MediaGridView where Header == EmptyView, ContextMenu == EmptyView {
       onLoadMore: onLoadMore,
       navigationPath: navigationPath,
       autoFocusFirstItem: autoFocusFirstItem,
-      header: { EmptyView() }
+      header: { EmptyView() },
+      onShareTapped: onShareTapped
     )
   }
 }

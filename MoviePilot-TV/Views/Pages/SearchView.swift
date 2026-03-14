@@ -159,7 +159,9 @@ struct SearchView: View {
               viewModel: viewModel,
               navigationPath: $path,
               header: { searchHeader },
-              subscriptionHandler: subscriptionHandler
+              onShareTapped: { share in
+                subscriptionHandler.forkSheetRequest = share
+              }
             )
           }
         }
@@ -185,6 +187,17 @@ struct SearchView: View {
         SubscribeSeasonView(mediaInfo: request.mediaInfo, initialSeason: request.initialSeason)
       }
       .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $path)
+      .sheet(item: $subscriptionHandler.forkSheetRequest) { share in
+        ForkSubscribeSheet(
+          share: share,
+          onFork: { newSubId in
+            Task {
+              await subscriptionHandler.fetchSubscriptionAndShowEditor(subId: newSubId)
+            }
+          },
+          subscriptionHandler: subscriptionHandler
+        )
+      }
       .sheet(isPresented: $showSiteSelection) {
         SiteSelectionView(
           availableSites: viewModel.siteFilter.availableSites,
@@ -203,6 +216,7 @@ struct SearchView: View {
         }
       }
     }
+    .environmentObject(subscriptionHandler)
   }
 }
 
@@ -211,7 +225,7 @@ struct UnifiedSearchResult<Header: View>: View {
   @ObservedObject var viewModel: SearchViewModel
   @Binding var navigationPath: NavigationPath
   let header: Header
-  let subscriptionHandler: SubscriptionHandler
+  let onShareTapped: (SubscribeShare) -> Void
 
   @State private var scrollPosition: String?
 
@@ -219,12 +233,12 @@ struct UnifiedSearchResult<Header: View>: View {
     viewModel: SearchViewModel,
     navigationPath: Binding<NavigationPath>,
     @ViewBuilder header: () -> Header,
-    subscriptionHandler: SubscriptionHandler
+    onShareTapped: @escaping (SubscribeShare) -> Void
   ) {
     self.viewModel = viewModel
     self._navigationPath = navigationPath
     self.header = header()
-    self.subscriptionHandler = subscriptionHandler
+    self.onShareTapped = onShareTapped
   }
 
   private var hasAnyResults: Bool {
@@ -232,6 +246,7 @@ struct UnifiedSearchResult<Header: View>: View {
       || !(viewModel.tvPaginator?.items.isEmpty ?? true)
       || !(viewModel.collectionPaginator?.items.isEmpty ?? true)
       || !(viewModel.personPaginator?.items.isEmpty ?? true)
+      || !(viewModel.subscriptionSharePaginator?.items.isEmpty ?? true)
   }
 
   @ViewBuilder
@@ -252,7 +267,7 @@ struct UnifiedSearchResult<Header: View>: View {
           Task { await paginator?.loadMore(focusedId) }
         },
         scrollPosition: $scrollPosition,
-        subscriptionHandler: subscriptionHandler
+        onShareTapped: onShareTapped
       )
       .id(rowId)
     }
@@ -279,11 +294,19 @@ struct UnifiedSearchResult<Header: View>: View {
               items: bestResults,
               navigationPath: $navigationPath,
               scrollPosition: $scrollPosition,
-              subscriptionHandler: subscriptionHandler
+              onShareTapped: onShareTapped
             )
             .id("best")
           }
         }
+
+        // 订阅分享结果行
+        mediaResultRow(
+          title: "订阅分享",
+          rowId: "shares",
+          items: viewModel.subscriptionSharePaginator?.items ?? [],
+          paginator: viewModel.subscriptionSharePaginator
+        )
 
         // 电影、电视剧、系列结果行
         mediaResultRow(
@@ -342,7 +365,8 @@ private struct ResultRow: View {
   @Binding var navigationPath: NavigationPath
   let onLoadMore: (MediaInfo.ID?) -> Void
   @Binding var scrollPosition: String?
-  let subscriptionHandler: SubscriptionHandler
+  let onShareTapped: (SubscribeShare) -> Void
+  @EnvironmentObject var subscriptionHandler: SubscriptionHandler
 
   @FocusState private var focusedItemId: MediaInfo.ID?
   /// 预加载防抖任务：避免快速滚动时触发过多无效请求
@@ -369,17 +393,19 @@ private struct ResultRow: View {
               bottomLeftSecondaryText: nil,
               source: MediaSource.from(mediaInfo: item),
               action: {
-                // 点击时取消防抖，立即预加载并导航
-                preloadDebounceTask?.cancel()
-                MediaPreloader.shared.preload(for: item)
-                navigationPath.append(item)
+                if let share = item.subscribeShare {
+                  onShareTapped(share)
+                } else {
+                  preloadDebounceTask?.cancel()
+                  MediaPreloader.shared.preload(for: item)
+                  navigationPath.append(item)
+                }
               }
             )
             .focused($focusedItemId, equals: item.id)
             .mediaContextMenu(
               item: item,
-              navigationPath: $navigationPath,
-              subscriptionHandler: subscriptionHandler
+              navigationPath: $navigationPath
             )
           }
 
@@ -477,7 +503,8 @@ private struct BestResultRow: View {
   let items: [BestResultItem]
   @Binding var navigationPath: NavigationPath
   @Binding var scrollPosition: String?
-  let subscriptionHandler: SubscriptionHandler
+  let onShareTapped: (SubscribeShare) -> Void
+  @EnvironmentObject var subscriptionHandler: SubscriptionHandler
   @FocusState private var focusedItemId: String?
   /// 预加载防抖任务：避免快速滚动时触发过多无效请求
   @State private var preloadDebounceTask: Task<Void, Never>?
@@ -513,7 +540,8 @@ private struct BestResultRow: View {
             switch item {
             case .media(let media):
               let sourceStr = sourceText(for: media.source)
-              let subtitleParts = [media.type, media.year, sourceStr].compactMap { $0 }.filter {
+              let typeStr = media.subscribeShare != nil ? "订阅分享" : media.type
+              let subtitleParts = [typeStr, media.year, sourceStr].compactMap { $0 }.filter {
                 !$0.isEmpty
               }
               let subtitle = subtitleParts.joined(separator: " · ")
@@ -524,17 +552,19 @@ private struct BestResultRow: View {
                 posterUrl: APIService.shared.getPosterImageUrl(media),
                 subtitle: subtitle,
                 action: {
-                  // 点击时取消防抖，立即预加载并导航
-                  preloadDebounceTask?.cancel()
-                  MediaPreloader.shared.preload(for: media)
-                  navigationPath.append(media)
+                  if let share = media.subscribeShare {
+                    onShareTapped(share)
+                  } else {
+                    preloadDebounceTask?.cancel()
+                    MediaPreloader.shared.preload(for: media)
+                    navigationPath.append(media)
+                  }
                 }
               )
               .focused($focusedItemId, equals: item.id)
               .mediaContextMenu(
                 item: media,
-                navigationPath: $navigationPath,
-                subscriptionHandler: subscriptionHandler
+                navigationPath: $navigationPath
               )
             case .person(let person):
               let sourceStr = sourceText(for: person.source)

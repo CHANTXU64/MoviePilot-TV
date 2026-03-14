@@ -20,27 +20,16 @@ struct ExploreView: View {
               Task { await paginator.loadMore(itemId) }
             },
             navigationPath: $path,
-            header: {
-              VStack(alignment: .leading, spacing: 20) {
-                // 第一行：数据源选择器
-                SourcePickerView(selectedSource: $viewModel.selectedSource)
-                  .onChange(of: viewModel.selectedSource) { _, _ in
-                    viewModel.onSourceChanged()
-                  }
-
-                // 第二行：筛选器（根据数据源动态显示）
-                FilterPickersView(viewModel: viewModel)
-                  .onChange(of: viewModel.selectedType) { _, _ in
-                    viewModel.onTypeChanged()
-                  }
-              }
-            },
+            header: { headerView },
             contextMenu: { item in
               MediaContextMenuItems(
                 item: item,
                 navigationPath: $path,
                 subscriptionHandler: subscriptionHandler
               )
+            },
+            onShareTapped: { share in
+              subscriptionHandler.forkSheetRequest = share
             }
           )
         } else {
@@ -63,6 +52,33 @@ struct ExploreView: View {
       }
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $path)
+    .sheet(item: $subscriptionHandler.forkSheetRequest) { share in
+      ForkSubscribeSheet(
+        share: share,
+        onFork: { newSubId in
+          Task {
+            await subscriptionHandler.fetchSubscriptionAndShowEditor(subId: newSubId)
+          }
+        },
+        subscriptionHandler: subscriptionHandler
+      )
+    }
+  }
+
+  private var headerView: some View {
+    VStack(alignment: .leading, spacing: 20) {
+      // 第一行：数据源选择器
+      SourcePickerView(selectedSource: $viewModel.selectedSource)
+        .onChange(of: viewModel.selectedSource) { _, _ in
+          viewModel.onSourceChanged()
+        }
+
+      // 第二行：筛选器（根据数据源动态显示）
+      FilterPickersView(viewModel: viewModel)
+        .onChange(of: viewModel.selectedType) { _, _ in
+          viewModel.onTypeChanged()
+        }
+    }
   }
 }
 
@@ -89,6 +105,7 @@ struct FilterPickersView: View {
   @State private var doubanFocusedIndex: Int = 0
   @State private var bangumiFocusedIndex: Int = 0
   @State private var popularFocusedIndex: Int = 0
+  @State private var shareFocusedIndex: Int = 0
 
   // Focus redirectors
   @FocusState private var focusedPickerIndex: Int?
@@ -101,6 +118,7 @@ struct FilterPickersView: View {
     case .douban: doubanFocusedIndex
     case .bangumi: bangumiFocusedIndex
     case .popular: popularFocusedIndex
+    case .subscriptionShare: shareFocusedIndex
     }
   }
 
@@ -110,6 +128,7 @@ struct FilterPickersView: View {
     case .douban: doubanFocusedIndex = index
     case .bangumi: bangumiFocusedIndex = index
     case .popular: popularFocusedIndex = index
+    case .subscriptionShare: shareFocusedIndex = index
     }
   }
 
@@ -140,6 +159,9 @@ struct FilterPickersView: View {
             .foregroundColor(.primary)
         case .popular:
           popularFilters
+            .foregroundColor(.primary)
+        case .subscriptionShare:
+          shareFilters
             .foregroundColor(.primary)
         }
       }
@@ -341,5 +363,38 @@ struct FilterPickersView: View {
     }
     .pickerStyle(.menu)
     .focused($focusedPickerIndex, equals: 3)
+  }
+
+  // MARK: - Share 筛选器
+  @ViewBuilder
+  private var shareFilters: some View {
+    // 排序
+    Picker("排序", selection: $viewModel.shareSortBy) {
+      ForEach(viewModel.currentSortDict, id: \.key) { item in
+        Text("排序：" + item.value).tag(item.key)
+      }
+    }
+    .pickerStyle(.menu)
+    .focused($focusedPickerIndex, equals: 0)
+
+    // 风格
+    Picker("风格", selection: $viewModel.shareGenre) {
+      Text("风格：全部").tag("")
+      ForEach(viewModel.currentGenreDict, id: \.key) { item in
+        Text("风格：" + item.value).tag(item.key)
+      }
+    }
+    .pickerStyle(.menu)
+    .focused($focusedPickerIndex, equals: 1)
+
+    // 评分
+    Picker("评分", selection: $viewModel.shareMinRating) {
+      Text("评分：不限").tag(0)
+      ForEach([5, 6, 7, 8, 9], id: \.self) { rating in
+        Text("评分：\(rating)分以上").tag(rating)
+      }
+    }
+    .pickerStyle(.menu)
+    .focused($focusedPickerIndex, equals: 2)
   }
 }

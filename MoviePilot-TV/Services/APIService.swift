@@ -441,6 +441,31 @@ class APIService: ObservableObject {
     return try decodeOrUnwrap([MediaInfo].self, from: data)
   }
 
+  /// 获取订阅分享列表
+  /// - 对应前端: MoviePilot-Frontend/src/views/subscribe/SubscribeShareView.vue (fetchData)
+  /// - 应用场景: "探索"页面的"订阅分享"板块，分页加载用户分享的订阅规则。
+  func fetchSubscriptionShares(path: String, page: Int = 1) async throws -> [SubscribeShare] {
+    let absolutePath = path.hasPrefix("/") ? path : "/\(path)"
+    let endpoint = try buildEndpoint(path: absolutePath, params: ["page": String(page)])
+    let data = try await makeRequest(endpoint: endpoint)
+    return try decodeOrUnwrap([SubscribeShare].self, from: data)
+  }
+
+  /// 搜索订阅分享
+  /// - 对应前端: MoviePilot-Frontend/src/views/subscribe/SubscribeShareView.vue (但增加了搜索功能)
+  /// - 应用场景: 聚合搜索页面，与电影、电视剧、人物等结果一同展示。
+  func searchSubscriptionShares(query: String, page: Int = 1) async throws -> [SubscribeShare] {
+    let endpoint = try buildEndpoint(
+      path: "/subscribe/shares",
+      params: [
+        "name": query,
+        "page": String(page),
+        "count": "20"
+      ])
+    let data = try await makeRequest(endpoint: endpoint)
+    return try decodeOrUnwrap([SubscribeShare].self, from: data)
+  }
+
   /// 获取推荐媒体
   /// - 对应前端: MoviePilot-Frontend/src/views/discover/MediaDetailView.vue (构造 tmdb|douban|bangumi/recommend/* 系列路径)
   /// - 应用场景: 在媒体详情页底部，根据当前的 tmdb/douban/bangumi ID 获取“推荐”列表。
@@ -949,6 +974,21 @@ class APIService: ObservableObject {
       return response.success ?? false
     }
     return true
+  }
+
+  /// 复用（Fork）一个订阅分享
+  /// - 对应前端: MoviePilot-Frontend/src/components/dialog/ForkSubscribeDialog.vue (doFork)
+  /// - 应用场景: 在"订阅分享"中，点击"复用"按钮，基于分享的配置创建一个新的个人订阅。
+  func forkSubscription(share: SubscribeShare) async throws -> Int? {
+    let body = try JSONEncoder().encode(share)
+    let data = try await makeRequest(endpoint: "/subscribe/fork", method: "POST", body: body)
+    struct ForkResponse: Decodable {
+      let id: Int?
+    }
+    if let response = try? JSONDecoder().decode(ApiResponse<ForkResponse>.self, from: data) {
+      return response.data?.id
+    }
+    return nil
   }
 
   /// 暂停或恢复订阅状态
