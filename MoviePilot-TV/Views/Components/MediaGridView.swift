@@ -1,5 +1,35 @@
 import SwiftUI
 
+private final class PreloadDebouncer {
+  private var tasks: [String: Task<Void, Never>] = [:]
+
+  func schedule(for item: MediaInfo, delayMs: Int = 300) {
+    let id = item.id
+    // 取消该 ID 已有的计时任务
+    tasks[id]?.cancel()
+
+    tasks[id] = Task { @MainActor in
+      try? await Task.sleep(for: .milliseconds(delayMs))
+      guard !Task.isCancelled else { return }
+
+      MediaPreloader.shared.preload(for: item)
+      // 执行完后清理
+      tasks.removeValue(forKey: id)
+    }
+  }
+
+  func cancel(id: String? = nil) {
+    if let id = id {
+      tasks[id]?.cancel()
+      tasks.removeValue(forKey: id)
+    } else {
+      // 取消所有（用于 onDisappear 或全局重置）
+      tasks.values.forEach { $0.cancel() }
+      tasks.removeAll()
+    }
+  }
+}
+
 /// 通用媒体网格视图组件
 /// 用于展示媒体海报卡片的网格布局，支持分页加载
 struct MediaGridView<Header: View, ContextMenu: View>: View {
@@ -11,13 +41,10 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
   let header: Header
   let contextMenu: ((MediaInfo) -> ContextMenu)?
   let onShareTapped: ((SubscribeShare) -> Void)?
-  let autoFocusFirstItem: Bool
+  let loadMoreThreshold: Int
 
-  @FocusState private var focusedItemId: MediaInfo.ID?
-  @FocusState private var isTopRedirectorFocused: Bool
-  @FocusState private var isBottomRedirectorFocused: Bool
-  /// 预加载防抖任务：避免快速滚动时触发过多无效请求
-  @State private var preloadDebounceTask: Task<Void, Never>?
+  /// 预加载防抖器：引用类型，内部状态变化不会触发 View 刷新
+  @State private var preloadDebouncer = PreloadDebouncer()
 
   init(
     items: [MediaInfo],
@@ -25,7 +52,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     isLoadingMore: Bool,
     onLoadMore: @escaping (MediaInfo.ID?) -> Void,
     navigationPath: Binding<NavigationPath>,
-    autoFocusFirstItem: Bool = false,
+    loadMoreThreshold: Int = 24,
     @ViewBuilder header: () -> Header,
     @ViewBuilder contextMenu: @escaping (MediaInfo) -> ContextMenu,
     onShareTapped: ((SubscribeShare) -> Void)? = nil
@@ -35,7 +62,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     self.isLoadingMore = isLoadingMore
     self.onLoadMore = onLoadMore
     self._navigationPath = navigationPath
-    self.autoFocusFirstItem = autoFocusFirstItem
+    self.loadMoreThreshold = loadMoreThreshold
     self.header = header()
     self.contextMenu = contextMenu
     self.onShareTapped = onShareTapped
@@ -48,7 +75,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     isLoadingMore: Bool,
     onLoadMore: @escaping (MediaInfo.ID?) -> Void,
     navigationPath: Binding<NavigationPath>,
-    autoFocusFirstItem: Bool = false,
+    loadMoreThreshold: Int = 24,
     @ViewBuilder header: () -> Header,
     onShareTapped: ((SubscribeShare) -> Void)? = nil
   ) where ContextMenu == EmptyView {
@@ -57,13 +84,15 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     self.isLoadingMore = isLoadingMore
     self.onLoadMore = onLoadMore
     self._navigationPath = navigationPath
-    self.autoFocusFirstItem = autoFocusFirstItem
+    self.loadMoreThreshold = loadMoreThreshold
     self.header = header()
     self.contextMenu = nil
     self.onShareTapped = onShareTapped
   }
 
   var body: some View {
+    let loadMoreCandidateIds = Set(items.suffix(loadMoreThreshold).map(\.id))
+
     ScrollView {
       VStack(spacing: 20) {
         header
@@ -84,25 +113,12 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
             Spacer()
           }
         } else {
-          // 顶部焦点重定向器：捕获从页眉向下导航时的焦点
-          Color.clear
-            .frame(height: 1)
-            .focusable(focusedItemId == nil)
-            .focused($isTopRedirectorFocused)
-            .onChange(of: isTopRedirectorFocused) { _, isFocused in
-              if isFocused {
-                // 将焦点重定向到第一个项目
-                focusedItemId = items.first?.id
-                isTopRedirectorFocused = false
-              }
-            }
 
           LazyVGrid(columns: MediaCard.defaultGridColumns, spacing: 40) {
             ForEach(items) { item in
               let card = MediaCard(
                 title: item.title ?? "",
                 posterUrl: APIService.shared.getPosterImageUrl(item),
-                subtitle: item.year,
                 typeText: item.collection_id != nil ? "合集" : item.type,
                 ratingText: item.vote_average.map { String(format: "%.1f", $0) },
                 bottomLeftText: nil,
@@ -113,17 +129,32 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
                     onShareTapped?(share)
                   } else {
                     // 点击时立即触发预加载（取消延迟）
-                    preloadDebounceTask?.cancel()
+                    preloadDebouncer.cancel(id: item.id)
                     MediaPreloader.shared.preload(for: item)
                     navigationPath.append(item)
                   }
+                },
+                onFocus: { isFocused in
+                  guard isFocused else {
+                    preloadDebouncer.cancel(id: item.id)
+                    return
+                  }
+
+                  // 预加载触发：聚焦后延迟 ~300ms，防止快速滚动时浪费请求
+                  // 这里的 cancel 也要传入 ID，否则会把别人刚开启的给取消了
+                  preloadDebouncer.cancel(id: item.id)
+                  if item.collection_id == nil {
+                    preloadDebouncer.schedule(for: item)
+                  }
+
+                  if loadMoreCandidateIds.contains(item.id) {
+                    onLoadMore(item.id)
+                  }
                 }
               )
-              .focused($focusedItemId, equals: item.id)
 
               if let contextMenu = contextMenu {
                 card
-                  .compositingGroup()
                   .contextMenu {
                     contextMenu(item)
                   }
@@ -134,37 +165,6 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
           }
           .padding(.horizontal, -12)
           .padding(.bottom, 20)
-          .onChange(of: focusedItemId) { _, newId in
-            // 预加载触发：聚焦后延迟 ~300ms，防止快速滚动时浪费请求
-            preloadDebounceTask?.cancel()
-            if let newId = newId, let item = items.first(where: { $0.id == newId }) {
-              // 合集无需预加载（无详情页）
-              if item.collection_id == nil {
-                preloadDebounceTask = Task {
-                  try? await Task.sleep(for: .milliseconds(300))
-                  guard !Task.isCancelled else { return }
-                  MediaPreloader.shared.preload(for: item)
-                }
-              }
-            }
-            // 分页加载
-            if let newId = newId {
-              onLoadMore(newId)
-            }
-          }
-
-          // 焦点重定向器：捕获从不完整行向下导航时的焦点
-          Color.clear
-            .frame(height: 1)
-            .focusable()
-            .focused($isBottomRedirectorFocused)
-            .onChange(of: isBottomRedirectorFocused) { _, isFocused in
-              if isFocused {
-                // 将焦点重定向到最后一个项目
-                focusedItemId = items.last?.id
-                isBottomRedirectorFocused = false
-              }
-            }
 
           // 加载更多指示器
           if isLoadingMore {
@@ -179,15 +179,8 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
       }
     }
     .focusSection()
-    .onAppear {
-      if autoFocusFirstItem && focusedItemId == nil {
-        focusedItemId = items.first?.id
-      }
-    }
-    .onChange(of: items) { _, newItems in
-      if autoFocusFirstItem && focusedItemId == nil {
-        focusedItemId = newItems.first?.id
-      }
+    .onDisappear {
+      preloadDebouncer.cancel()
     }
   }
 }
@@ -199,7 +192,7 @@ extension MediaGridView where Header == EmptyView {
     isLoadingMore: Bool,
     onLoadMore: @escaping (MediaInfo.ID?) -> Void,
     navigationPath: Binding<NavigationPath>,
-    autoFocusFirstItem: Bool = false,
+    loadMoreThreshold: Int = 24,
     @ViewBuilder contextMenu: @escaping (MediaInfo) -> ContextMenu,
     onShareTapped: ((SubscribeShare) -> Void)? = nil
   ) {
@@ -209,7 +202,7 @@ extension MediaGridView where Header == EmptyView {
       isLoadingMore: isLoadingMore,
       onLoadMore: onLoadMore,
       navigationPath: navigationPath,
-      autoFocusFirstItem: autoFocusFirstItem,
+      loadMoreThreshold: loadMoreThreshold,
       header: { EmptyView() },
       contextMenu: contextMenu,
       onShareTapped: onShareTapped
@@ -224,7 +217,7 @@ extension MediaGridView where Header == EmptyView, ContextMenu == EmptyView {
     isLoadingMore: Bool,
     onLoadMore: @escaping (MediaInfo.ID?) -> Void,
     navigationPath: Binding<NavigationPath>,
-    autoFocusFirstItem: Bool = false,
+    loadMoreThreshold: Int = 24,
     onShareTapped: ((SubscribeShare) -> Void)? = nil
   ) {
     self.init(
@@ -233,7 +226,7 @@ extension MediaGridView where Header == EmptyView, ContextMenu == EmptyView {
       isLoadingMore: isLoadingMore,
       onLoadMore: onLoadMore,
       navigationPath: navigationPath,
-      autoFocusFirstItem: autoFocusFirstItem,
+      loadMoreThreshold: loadMoreThreshold,
       header: { EmptyView() },
       onShareTapped: onShareTapped
     )

@@ -33,13 +33,13 @@ enum MediaSource: String {
 }
 
 struct MediaCard: View {
-  static let defaultGridColumns = [
-    GridItem(.adaptive(minimum: 256, maximum: 384), spacing: 20, alignment: .top)
-  ]
+  static let defaultGridColumns = Array(
+    repeating: GridItem(.fixed(256), spacing: 44, alignment: .top),
+    count: 6
+  )
 
   let title: String
   let posterUrl: URL?
-  let subtitle: String?
 
   // 角落文本
   let typeText: String?  // 左上角 (例如 "电影", "电视剧")
@@ -58,7 +58,6 @@ struct MediaCard: View {
   var height: CGFloat = 384
 
   /// 在主标题下方显示的可选副标题。
-  /// 注意：主 `subtitle` 属性现在主要用于聚焦时的覆盖层展示。
   var subTitleBelow: String? = nil
 
   /// 是否对背景图片应用模糊效果。主要用于类似“查看全部”等特殊展示。
@@ -70,11 +69,17 @@ struct MediaCard: View {
 
   // 卡片被点击时的操作
   var action: (() -> Void)? = nil
+  var onFocus: ((Bool) -> Void)? = nil
+
+  private static let typeIconMap: [String: String] = [
+    "电影": "film",
+    "电视剧": "tv",
+    "合集": "rectangle.stack",
+  ]
 
   init(
     title: String = "",
     posterUrl: URL? = nil,
-    subtitle: String? = nil,
     typeText: String? = nil,
     ratingText: String? = nil,
     bottomLeftText: String? = nil,
@@ -87,11 +92,11 @@ struct MediaCard: View {
     subTitleBelow: String? = nil,
     isBackgroundBlurred: Bool = false,
     footerLabel: (icon: String, text: String)? = nil,
-    action: (() -> Void)? = nil
+    action: (() -> Void)? = nil,
+    onFocus: ((Bool) -> Void)? = nil
   ) {
     self.title = title
     self.posterUrl = posterUrl
-    self.subtitle = subtitle
     self.typeText = typeText
     self.ratingText = ratingText
     self.bottomLeftText = bottomLeftText
@@ -105,6 +110,7 @@ struct MediaCard: View {
     self.isBackgroundBlurred = isBackgroundBlurred
     self.footerLabel = footerLabel
     self.action = action
+    self.onFocus = onFocus
   }
 
   var body: some View {
@@ -122,8 +128,8 @@ struct MediaCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 20))
         .shadow(
           color: .black.opacity(isFocused ? 0.5 : 0),
-          radius: isFocused ? 20 : 0,
-          y: isFocused ? 10 : 0
+          radius: 20,
+          y: 10
         )
         .scaleEffect(isFocused ? 1.1 : 1.0)
         .animation(.easeInOut(duration: 0.2), value: isFocused)
@@ -133,6 +139,9 @@ struct MediaCard: View {
 
       // 标题和副标题 - 在按钮外部，清晰分离
       textInfoView
+    }
+    .onChange(of: isFocused) { _, newValue in
+      onFocus?(newValue)
     }
   }
 
@@ -166,7 +175,8 @@ struct MediaCard: View {
       }
       .lineLimit(1)
       .compositingGroup()
-      .frame(maxWidth: isFocused ? width + 30 : width, alignment: .center)
+      .frame(maxWidth: width, alignment: .center)
+      // .frame(maxWidth: isFocused ? width + 30 : width, alignment: .center)
     }
     .frame(width: width + 30)
     .padding(.horizontal, -15)
@@ -176,14 +186,15 @@ struct MediaCard: View {
 
   // 提取的海报内容 - Apple TV 风格设计
   private var posterContent: some View {
-    let _ = APIService.shared.token
     return ZStack {
       // 1. 背景 / 失败状态
       // 如果图片加载失败或 URL 为空，则显示此内容
+      let resolvedTypeIcon = Self.typeIconMap[typeText ?? ""] ?? "film"
+
       Rectangle()
         .fill(Color(white: 0.12))
         .overlay(
-          Image(systemName: typeIcon(typeText ?? "") ?? "film")
+          Image(systemName: resolvedTypeIcon)
             .font(.title2)
             .foregroundColor(.gray)
         )
@@ -198,8 +209,13 @@ struct MediaCard: View {
           .placeholder {
             Rectangle()
               .fill(Color(white: 0.12))
-              .overlay(ProgressView().tint(.gray))
+              .overlay(
+                Image(systemName: "photo")
+                  .font(.title3)
+                  .foregroundStyle(.gray)
+              )
           }
+          .downsampling(size: CGSize(width: width, height: height))
           .resizing(referenceSize: CGSize(width: 256, height: 384), mode: .aspectFill)
           .resizable()
           .fade(duration: 0.25)
@@ -219,30 +235,7 @@ struct MediaCard: View {
           .padding()
       }
 
-      // 聚焦副标题覆盖层 - 带有副标题的底部渐变
-      if isFocused, let subtitle = subtitle, !subtitle.isEmpty {
-        VStack {
-          Spacer()
-          ZStack(alignment: .bottom) {
-            Rectangle()
-              .fill(.black)
-              .frame(height: 30)
-              .blur(radius: 10)
-              .offset(y: 10)
-              .opacity(0.8)
-
-            Text(subtitle)
-              .font(.caption2)
-              .foregroundStyle(.white.opacity(0.8))
-              .lineLimit(1)
-              .padding(.horizontal, 6)
-              .padding(.bottom, 6)
-          }
-        }
-        .transition(.opacity.animation(.easeInOut(duration: 0.2)))
-      }
-
-      // 覆盖徽章 - 毛玻璃风格
+      // 覆盖徽章 - 纯色浅黑风格
       VStack {
         if showTopBadges {
           // 顶行徽章
@@ -250,7 +243,7 @@ struct MediaCard: View {
             // 左上：媒体类型徽章
             Group {
               if let type = typeText, !type.isEmpty {
-                if let iconName = typeIcon(type) {
+                if let iconName = Self.typeIconMap[type] {
                   // 匹配到图标，显示图标徽章
                   Image(systemName: iconName)
                 } else {
@@ -259,14 +252,14 @@ struct MediaCard: View {
                     .font(.caption2.weight(.medium))
                 }
               } else {
-                // 如果 typeText 为空或 nil，显示默认的 film 图标
+                // 如果 typeText 为空 or nil，显示默认的 film 图标
                 Image(systemName: "film")
               }
             }
             .font(.caption2.bold())
             .foregroundStyle(.white)
             .padding(8)
-            .background(.ultraThinMaterial)
+            .background(Color.black.opacity(0.4))
             .cornerRadius(8)
 
             Spacer(minLength: 0)
@@ -283,7 +276,7 @@ struct MediaCard: View {
               }
               .padding(.horizontal, 10)
               .padding(.vertical, 6)
-              .background(.ultraThinMaterial)
+              .background(Color.black.opacity(0.4))
               .cornerRadius(8)
             }
           }
@@ -292,10 +285,7 @@ struct MediaCard: View {
 
         Spacer()
 
-        let showOverlay = isFocused && subtitle != nil && !(subtitle?.isEmpty ?? true)
-        if (bottomLeftText != nil || bottomLeftSecondaryText != nil || source != nil)
-          && !showOverlay
-        {
+        if bottomLeftText != nil || bottomLeftSecondaryText != nil || source != nil {
           HStack(alignment: .bottom, spacing: 6) {
             // 左下：状态徽章 (如果两者都存在则堆叠)
             if bottomLeftText != nil || bottomLeftSecondaryText != nil {
@@ -306,7 +296,7 @@ struct MediaCard: View {
                     .foregroundStyle(.white)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(.ultraThinMaterial)
+                    .background(Color.black.opacity(0.4))
                     .cornerRadius(8)
                 }
                 if let secondary = bottomLeftSecondaryText, !secondary.isEmpty {
@@ -315,7 +305,7 @@ struct MediaCard: View {
                     .foregroundStyle(.white)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(.ultraThinMaterial)
+                    .background(Color.black.opacity(0.4))
                     .cornerRadius(8)
                 }
               }
@@ -343,13 +333,4 @@ struct MediaCard: View {
     }
   }
 
-  // 类型到 SF Symbol 图标的映射 - 如果不匹配则返回 nil
-  private func typeIcon(_ type: String) -> String? {
-    switch type {
-    case "电影": return "film"
-    case "电视剧": return "tv"
-    case "合集": return "rectangle.stack"
-    default: return nil
-    }
-  }
 }

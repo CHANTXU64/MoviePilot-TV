@@ -248,7 +248,6 @@ struct SubscribeSeasonContentView: View {
         posterPath: season.poster_path,
         mediaPosterPath: viewModel.mediaInfo.poster_path
       ),
-      subtitle: nil,
       typeText: nil,
       ratingText: (season.vote_average ?? 0) > 0
         ? String(format: "%.1f", season.vote_average!) : nil,
@@ -300,7 +299,6 @@ struct SubscribeSeasonContentView: View {
         posterPath: nextSeason.poster_path,
         mediaPosterPath: viewModel.mediaInfo.poster_path
       ),
-      subtitle: nil,
       typeText: nil,
       ratingText: nil,
       bottomLeftText: nil,

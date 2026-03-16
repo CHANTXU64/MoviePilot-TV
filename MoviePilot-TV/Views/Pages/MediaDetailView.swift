@@ -672,7 +672,6 @@ struct MediaDetailView: View {
               MediaCard(
                 title: media.cleanedTitle ?? "",
                 posterUrl: APIService.shared.getPosterImageUrl(media),
-                subtitle: media.year,
                 typeText: media.type,
                 ratingText: media.vote_average != nil
                   ? String(format: "%.1f", media.vote_average!) : nil,
@@ -743,7 +742,6 @@ struct MediaDetailView: View {
               MediaCard(
                 title: media.cleanedTitle ?? "",
                 posterUrl: APIService.shared.getPosterImageUrl(media),
-                subtitle: media.year,
                 typeText: media.type,
                 ratingText: media.vote_average != nil
                   ? String(format: "%.1f", media.vote_average!) : nil,

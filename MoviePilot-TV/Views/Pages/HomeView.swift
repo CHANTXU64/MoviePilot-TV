@@ -190,7 +190,6 @@ private struct MediaSectionView: View {
             MediaCard(
               title: item.title,
               posterUrl: APIService.shared.getMediaServerPosterImageURL(item),
-              subtitle: nil,
               typeText: item.type,
               ratingText: nil,
               bottomLeftText: item.server_type?.rawValue.capitalized,
@@ -278,7 +277,6 @@ private struct SubscribeItemView: View {
     MediaCard(
       title: item.name,
       posterUrl: APIService.shared.getSubscribePosterImageUrl(item),
-      subtitle: nil,
       typeText: formatState(item.state),
       ratingText: nil,
       bottomLeftText: formatProgress(total: item.total_episode, lack: item.lack_episode),

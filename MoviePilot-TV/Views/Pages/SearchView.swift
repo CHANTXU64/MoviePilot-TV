@@ -386,7 +386,6 @@ private struct ResultRow: View {
             MediaCard(
               title: item.cleanedTitle ?? "",
               posterUrl: APIService.shared.getPosterImageUrl(item),
-              subtitle: item.year,
               typeText: item.collection_id != nil ? "合集" : item.type,
               ratingText: item.vote_average.map { String(format: "%.1f", $0) },
               bottomLeftText: nil,

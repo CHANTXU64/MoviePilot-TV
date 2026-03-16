@@ -28,7 +28,6 @@ struct CollectionDetailView: View {
         }
       },
       navigationPath: $navigationPath,
-      autoFocusFirstItem: true,
       header: {
         Text(title)
           .font(.largeTitle.bold())
