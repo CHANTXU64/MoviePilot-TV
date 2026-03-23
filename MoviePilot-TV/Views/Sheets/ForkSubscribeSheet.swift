@@ -23,7 +23,7 @@ struct ForkSubscribeSheet: View {
               .foregroundColor(.gray)
           )
 
-        if !isImageFailed, let posterUrl = APIService.shared.getPosterImageUrl(share.toMediaInfo()) {
+        if !isImageFailed, let posterUrl = share.toMediaInfo().imageURLs.poster {
           KFImage(posterUrl)
             .requestModifier(AnyModifier.cookieModifier)
             .onFailure { _ in

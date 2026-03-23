@@ -193,8 +193,8 @@ class MediaDetailViewModel: ObservableObject {
 
   /// 根据媒体的海报或背景图更新详情页背景
   private func setBackground() {
-    let backdrop = apiService.getBackdropImageUrl(detail)
-    let poster = apiService.getPosterImageUrl(detail)
+    let backdrop = detail.imageURLs.backdrop
+    let poster = detail.imageURLs.poster
 
     let targetUrl: URL?
     let targetIsPoster: Bool

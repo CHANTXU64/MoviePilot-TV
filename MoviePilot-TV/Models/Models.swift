@@ -146,6 +146,10 @@ struct RecognizeResponse: Codable {
 
 /// TMDB 单季基础元数据
 struct TmdbSeason: Codable, Identifiable, Hashable {
+  struct ImageURLs: Hashable {
+    let poster: URL?
+  }
+
   /// 上映日期
   let air_date: String?
   /// 总集数
@@ -161,7 +165,33 @@ struct TmdbSeason: Codable, Identifiable, Hashable {
   /// 评分
   let vote_average: Double?
 
+  /// 预计算的图片 URL
+  let imageURLs: ImageURLs
+
   var id: Int { season_number ?? 0 }
+
+  enum CodingKeys: String, CodingKey {
+    case air_date, episode_count, name, overview, poster_path, season_number, vote_average
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    air_date = try container.decodeIfPresent(String.self, forKey: .air_date)
+    episode_count = try container.decodeIfPresent(Int.self, forKey: .episode_count)
+    name = try container.decodeIfPresent(String.self, forKey: .name)
+    overview = try container.decodeIfPresent(String.self, forKey: .overview)
+    poster_path = try container.decodeIfPresent(String.self, forKey: .poster_path)
+    season_number = try container.decodeIfPresent(Int.self, forKey: .season_number)
+    vote_average = try container.decodeIfPresent(Double.self, forKey: .vote_average)
+
+    // 计算图片 URL
+    self.imageURLs = ImageURLs(
+      poster: APIService.shared.getSeasonPosterURL(
+        posterPath: poster_path,
+        mediaPosterPath: nil
+      )
+    )
+  }
 }
 
 /// 媒体风格分类信息
@@ -222,6 +252,11 @@ struct ProductionCountry: Codable, Hashable {
 
 /// 核心媒体详情模型：汇聚多源元数据
 struct MediaInfo: Codable, Identifiable, Hashable {
+  struct ImageURLs: Hashable {
+    let poster: URL?
+    let backdrop: URL?
+  }
+
   /// TMDB ID
   let tmdb_id: Int?
   /// 豆瓣ID
@@ -298,6 +333,9 @@ struct MediaInfo: Codable, Identifiable, Hashable {
 
   /// 标识当前媒体项是否为合集/系列
   let isCollection: Bool
+
+  /// 预计算的图片 URL
+  let imageURLs: ImageURLs
 
   /// 预编译的合集后缀正则表达式，避免重复创建提升性能
   private static let collectionSuffixRegex = try? NSRegularExpression(
@@ -376,6 +414,12 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     self.cleanedOriginalTitle = cleaned.originalTitle
     self.cleanedOriginalName = cleaned.originalName
     self.cleanedNames = cleaned.names
+
+    // 计算图片 URL
+    self.imageURLs = ImageURLs(
+      poster: APIService.shared.getPosterImageUrl(posterPath: poster_path),
+      backdrop: APIService.shared.getBackdropImageUrl(backdropPath: backdrop_path)
+    )
   }
 
   init(from decoder: Decoder) throws {
@@ -428,6 +472,12 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     self.cleanedOriginalTitle = cleaned.originalTitle
     self.cleanedOriginalName = cleaned.originalName
     self.cleanedNames = cleaned.names
+
+    // 计算图片 URL
+    self.imageURLs = ImageURLs(
+      poster: APIService.shared.getPosterImageUrl(posterPath: poster_path),
+      backdrop: APIService.shared.getBackdropImageUrl(backdropPath: backdrop_path)
+    )
   }
 
   private static func parseCleanedNames(
@@ -540,10 +590,32 @@ struct DownloaderConf: Codable {
 
 /// 下载任务中关联的轻量级媒体信息
 struct DownloadingMediaInfo: Codable, Equatable {
+  struct ImageURLs: Hashable {
+    let image: URL?
+  }
+
   let image: String?
   let title: String?
   let episode: String?
   let season: String?
+
+  /// 预计算的图片 URL
+  let imageURLs: ImageURLs
+
+  enum CodingKeys: String, CodingKey {
+    case image, title, episode, season
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    image = try container.decodeIfPresent(String.self, forKey: .image)
+    title = try container.decodeIfPresent(String.self, forKey: .title)
+    episode = try container.decodeIfPresent(String.self, forKey: .episode)
+    season = try container.decodeIfPresent(String.self, forKey: .season)
+
+    // 计算图片 URL
+    self.imageURLs = ImageURLs(image: APIService.shared.getBackdropImageUrl(backdropPath: image))
+  }
 }
 
 /// 实时下载任务详细信息
@@ -785,6 +857,10 @@ struct MediaServerType: RawRepresentable, Codable, Hashable, Equatable {
 
 /// 媒体服务器最近播放/新增项
 struct MediaServerPlayItem: Codable, Identifiable {
+  struct ImageURLs: Hashable {
+    let image: URL?
+  }
+
   /// 真实接口返回的原始 ID（保留，以便未来跳转或 API 请求使用）
   let raw_id: FlexibleString?
   /// SwiftUI 需要的稳定唯一表示符（组合原始 id 和 link）
@@ -803,6 +879,9 @@ struct MediaServerPlayItem: Codable, Identifiable {
   let use_cookies: FlexibleBool?
   /// 媒体服务器类型
   let server_type: MediaServerType?
+
+  /// 预计算的图片 URL
+  let imageURLs: ImageURLs
 
   enum CodingKeys: String, CodingKey {
     case raw_id = "id"
@@ -828,6 +907,11 @@ struct MediaServerPlayItem: Codable, Identifiable {
     } else {
       self.id = UUID().uuidString
     }
+
+    // 计算图片 URL
+    self.imageURLs = ImageURLs(
+      image: APIService.shared.getMediaServerPosterImageURL(
+        image: image, useCookies: use_cookies?.value))
   }
 
   /// 供手动构造使用的 init (常用于 Preview 或 Mock)
@@ -844,6 +928,11 @@ struct MediaServerPlayItem: Codable, Identifiable {
     self.link = link
     self.use_cookies = use_cookies
     self.server_type = server_type
+
+    // 计算图片 URL
+    self.imageURLs = ImageURLs(
+      image: APIService.shared.getMediaServerPosterImageURL(
+        image: image, useCookies: use_cookies?.value))
   }
 }
 
@@ -897,6 +986,10 @@ struct SubscribeRequest: Codable {
 
 /// 订阅详细配置数据
 struct Subscribe: Codable, Identifiable, Hashable {
+  struct ImageURLs: Hashable {
+    let poster: URL?
+  }
+
   /// 订阅ID
   var id: Int?
   /// 订阅名称
@@ -963,6 +1056,106 @@ struct Subscribe: Codable, Identifiable, Hashable {
   /// 媒体ID标识 (如 tmdb:1234)
   var mediaid: String?
 
+  /// 预计算的图片 URL
+  let imageURLs: ImageURLs
+
+  enum CodingKeys: String, CodingKey {
+    case id, name, year, type, keyword, season, poster, backdrop, state, last_update,
+      total_episode, start_episode, lack_episode, tmdbid, doubanid, bangumiid, quality, resolution,
+      effect, include, exclude, sites, downloader, save_path, best_version, filter_groups,
+      custom_words, description, episode_group, search_imdbid, media_category, mediaid
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decodeIfPresent(Int.self, forKey: .id)
+    name = try container.decode(String.self, forKey: .name)
+    year = try container.decodeIfPresent(String.self, forKey: .year)
+    type = try container.decode(String.self, forKey: .type)
+    keyword = try container.decodeIfPresent(String.self, forKey: .keyword)
+    season = try container.decodeIfPresent(Int.self, forKey: .season)
+    poster = try container.decodeIfPresent(String.self, forKey: .poster)
+    backdrop = try container.decodeIfPresent(String.self, forKey: .backdrop)
+    state = try container.decodeIfPresent(String.self, forKey: .state)
+    last_update = try container.decodeIfPresent(String.self, forKey: .last_update)
+    total_episode = try container.decodeIfPresent(Int.self, forKey: .total_episode)
+    start_episode = try container.decodeIfPresent(Int.self, forKey: .start_episode)
+    lack_episode = try container.decodeIfPresent(Int.self, forKey: .lack_episode)
+    tmdbid = try container.decodeIfPresent(Int.self, forKey: .tmdbid)
+    doubanid = try container.decodeIfPresent(String.self, forKey: .doubanid)
+    bangumiid = try container.decodeIfPresent(Int.self, forKey: .bangumiid)
+    quality = try container.decodeIfPresent(String.self, forKey: .quality)
+    resolution = try container.decodeIfPresent(String.self, forKey: .resolution)
+    effect = try container.decodeIfPresent(String.self, forKey: .effect)
+    include = try container.decodeIfPresent(String.self, forKey: .include)
+    exclude = try container.decodeIfPresent(String.self, forKey: .exclude)
+    sites = try container.decodeIfPresent([Int].self, forKey: .sites)
+    downloader = try container.decodeIfPresent(String.self, forKey: .downloader)
+    save_path = try container.decodeIfPresent(String.self, forKey: .save_path)
+    best_version = try container.decodeIfPresent(Int.self, forKey: .best_version)
+    filter_groups = try container.decodeIfPresent([String].self, forKey: .filter_groups)
+    custom_words = try container.decodeIfPresent(String.self, forKey: .custom_words)
+    description = try container.decodeIfPresent(String.self, forKey: .description)
+    episode_group = try container.decodeIfPresent(String.self, forKey: .episode_group)
+    search_imdbid = try container.decodeIfPresent(Int.self, forKey: .search_imdbid)
+    media_category = try container.decodeIfPresent(String.self, forKey: .media_category)
+    mediaid = try container.decodeIfPresent(String.self, forKey: .mediaid)
+
+    // 计算图片 URL
+    self.imageURLs = ImageURLs(poster: APIService.shared.getSubscribePosterImageUrl(poster: poster))
+  }
+
+  /// 成员初始化器，用于手动创建订阅。
+  init(
+    id: Int? = nil, name: String, year: String? = nil, type: String, season: Int? = nil,
+    poster: String? = nil, state: String? = nil, last_update: String? = nil,
+    tmdbid: Int? = nil, doubanid: String? = nil, bangumiid: Int? = nil,
+    best_version: Int? = nil, episode_group: String? = nil,
+    backdrop: String? = nil, keyword: String? = nil, total_episode: Int? = nil,
+    start_episode: Int? = nil, lack_episode: Int? = nil, quality: String? = nil,
+    resolution: String? = nil, effect: String? = nil, include: String? = nil,
+    exclude: String? = nil, sites: [Int]? = nil, downloader: String? = nil,
+    save_path: String? = nil, filter_groups: [String]? = nil,
+    custom_words: String? = nil, description: String? = nil,
+    search_imdbid: Int? = nil, media_category: String? = nil, mediaid: String? = nil
+  ) {
+    self.id = id
+    self.name = name
+    self.year = year
+    self.type = type
+    self.season = season
+    self.poster = poster
+    self.state = state
+    self.last_update = last_update
+    self.tmdbid = tmdbid
+    self.doubanid = doubanid
+    self.bangumiid = bangumiid
+    self.best_version = best_version
+    self.episode_group = episode_group
+    self.backdrop = backdrop
+    self.keyword = keyword
+    self.total_episode = total_episode
+    self.start_episode = start_episode
+    self.lack_episode = lack_episode
+    self.quality = quality
+    self.resolution = resolution
+    self.effect = effect
+    self.include = include
+    self.exclude = exclude
+    self.sites = sites
+    self.downloader = downloader
+    self.save_path = save_path
+    self.filter_groups = filter_groups
+    self.custom_words = custom_words
+    self.description = description
+    self.search_imdbid = search_imdbid
+    self.media_category = media_category
+    self.mediaid = mediaid
+
+    // 计算图片 URL
+    self.imageURLs = ImageURLs(poster: APIService.shared.getSubscribePosterImageUrl(poster: poster))
+  }
+
   /// 动态计算媒体ID，确保与前端逻辑一致
   /// - 对应前端: MoviePilot-Frontend/src/components/cards/SubscribeCard.vue (getMediaId)
   /// - 拼接规则: 优先使用原始ID（tmdbid, doubanid, bangumiid）拼接，如果都没有，则直接使用接口返回的 `mediaid` 字段作为备用。
@@ -971,13 +1164,6 @@ struct Subscribe: Codable, Identifiable, Hashable {
     if let doubanid = self.doubanid { return "douban:\(doubanid)" }
     if let bangumiid = self.bangumiid { return "bangumi:\(bangumiid)" }
     return mediaid
-  }
-
-  /// 生成用于展示的海报完整 URL
-  var fullPosterUrl: URL? {
-    guard let path = poster else { return nil }
-    if path.hasPrefix("http") { return URL(string: path) }
-    return URL(string: "https://image.tmdb.org/t/p/w500\(path)")
   }
 }
 
@@ -1016,6 +1202,10 @@ struct AddDownloadRequest: Codable {
 
 /// 演职人员模型
 struct Person: Codable, Identifiable, Hashable {
+  struct ImageURLs: Hashable {
+    let profile: URL?
+  }
+
   /// 来源：themoviedb、douban、bangumi
   let source: String?
   /// ID
@@ -1054,6 +1244,9 @@ struct Person: Codable, Identifiable, Hashable {
 
   // 计算属性作为 Identifiable 的 ID，保证稳定性
   let id: String
+
+  /// 预计算的图片 URL
+  let imageURLs: ImageURLs
 
   enum CodingKeys: String, CodingKey {
     case source
@@ -1098,6 +1291,7 @@ struct Person: Codable, Identifiable, Hashable {
       self.avatar = nil
       self.images = nil
       self.id = "name-\(nameString)"
+      self.imageURLs = ImageURLs(profile: nil)
       return
     }
 
@@ -1136,6 +1330,15 @@ struct Person: Codable, Identifiable, Hashable {
     } else {
       self.id = "name-\(self.name ?? UUID().uuidString)"
     }
+
+    self.imageURLs = ImageURLs(
+      profile: APIService.shared.getPersonImageURL(
+        source: self.source,
+        profilePath: self.profile_path,
+        avatar: self.avatar,
+        images: self.images
+      )
+    )
   }
 
   /// 成员初始化器，用于创建或修改演职人员实例。
@@ -1164,6 +1367,15 @@ struct Person: Codable, Identifiable, Hashable {
     self.avatar = avatar
     self.images = images
     self.id = id
+
+    self.imageURLs = ImageURLs(
+      profile: APIService.shared.getPersonImageURL(
+        source: self.source,
+        profilePath: self.profile_path,
+        avatar: self.avatar,
+        images: self.images
+      )
+    )
   }
 }
 
@@ -1317,6 +1529,10 @@ struct StorageConf: Codable, Hashable {
 
 /// 订阅分享
 struct SubscribeShare: Codable, Identifiable, Hashable {
+  struct ImageURLs: Hashable {
+    let poster: URL?
+  }
+
   // 分享ID
   var id: String
   // 内部使用的分享ID
@@ -1378,6 +1594,9 @@ struct SubscribeShare: Codable, Identifiable, Hashable {
   // 自定义剧集组
   let episode_group: String?
 
+  /// 预计算的图片 URL
+  let imageURLs: ImageURLs
+
   enum CodingKeys: String, CodingKey {
     case raw_id = "id"
     case subscribe_id, share_title, share_comment, share_user, share_uid, name, year, type, keyword,
@@ -1428,6 +1647,9 @@ struct SubscribeShare: Codable, Identifiable, Hashable {
     } else {
       self.id = UUID().uuidString
     }
+
+    // 计算图片 URL
+    self.imageURLs = ImageURLs(poster: APIService.shared.getSubscribePosterImageUrl(poster: poster))
   }
 
   /// 转换为 MediaInfo 以便在通用视图中复用

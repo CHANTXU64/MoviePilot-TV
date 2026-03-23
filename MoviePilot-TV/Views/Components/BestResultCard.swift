@@ -53,8 +53,7 @@ struct BestResultCard: View {
   }
 
   private var posterContent: some View {
-    let _ = APIService.shared.token
-    return ZStack {
+    ZStack {
       Rectangle()
         .fill(Color(white: 0.12))
         .overlay(

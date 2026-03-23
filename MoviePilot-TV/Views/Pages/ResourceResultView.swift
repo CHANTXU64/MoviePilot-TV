@@ -27,7 +27,7 @@ struct ResourceResultView: View {
     ZStack {
       // 背景图片
       if mediaInfo != nil {
-        if let url = APIService.shared.getBackdropImageUrl(mediaInfo!) {
+        if let url = mediaInfo!.imageURLs.backdrop {
           KFImage(url)
             .requestModifier(AnyModifier.cookieModifier)
             .placeholder {

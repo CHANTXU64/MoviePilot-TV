@@ -118,7 +118,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
             ForEach(items) { item in
               let card = MediaCard(
                 title: item.title ?? "",
-                posterUrl: APIService.shared.getPosterImageUrl(item),
+                posterUrl: item.imageURLs.poster,
                 typeText: item.collection_id != nil ? "合集" : item.type,
                 ratingText: item.vote_average.map { String(format: "%.1f", $0) },
                 bottomLeftText: nil,

@@ -61,7 +61,7 @@ struct PersonCard: View {
   }
 
   private var posterContent: some View {
-    let url = staffImageUrl ?? APIService.shared.getPersonImage(person)
+    let url = staffImageUrl ?? person.imageURLs.profile
     return ZStack {
       // 1. 背景 / 失败状态
       Rectangle()

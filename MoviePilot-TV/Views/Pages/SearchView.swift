@@ -385,7 +385,7 @@ private struct ResultRow: View {
           ForEach(items) { item in
             MediaCard(
               title: item.cleanedTitle ?? "",
-              posterUrl: APIService.shared.getPosterImageUrl(item),
+              posterUrl: item.imageURLs.poster,
               typeText: item.collection_id != nil ? "合集" : item.type,
               ratingText: item.vote_average.map { String(format: "%.1f", $0) },
               bottomLeftText: nil,
@@ -548,7 +548,7 @@ private struct BestResultRow: View {
               BestResultCard(
                 title: media.cleanedTitle ?? "",
                 type: media.type,
-                posterUrl: APIService.shared.getPosterImageUrl(media),
+                posterUrl: media.imageURLs.poster,
                 subtitle: subtitle,
                 action: {
                   if let share = media.subscribeShare {
@@ -577,7 +577,7 @@ private struct BestResultRow: View {
               BestResultCard(
                 title: person.name ?? "未知",
                 type: "人物",
-                posterUrl: APIService.shared.getPersonImage(person),
+                posterUrl: person.imageURLs.profile,
                 subtitle: subtitle,
                 action: { navigationPath.append(person) }
               )

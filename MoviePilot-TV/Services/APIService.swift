@@ -313,6 +313,23 @@ class APIService: ObservableObject {
     }
   }
 
+  /// 静默验证 Token 有效性。
+  /// 仅在 App 启动、切回前台或 Tab 切换时调用，频率极低且不阻塞 UI。
+  /// 如果 Token 失效且有保存凭证，makeRequest 会自动触发重连并更新 Cookie。
+  func validateTokenSilently() {
+    guard isLoggedIn else { return }
+    
+    Task {
+      do {
+        // 请求一个极其轻量的接口来验证 Token 和更新 Cookie
+        _ = try await makeRequest(endpoint: "/dashboard/statistic", retryOn401: true)
+        print("Token/Session validation successful.")
+      } catch {
+        print("Silent token validation background process handled: \(error)")
+      }
+    }
+  }
+
   /// 登录获取 Token
   /// - 对应前端: MoviePilot-Frontend/src/pages/login.vue
   /// - 应用场景: 用户登录验证并获取访问令牌。
@@ -1067,7 +1084,7 @@ class APIService: ObservableObject {
   }
 
   /// 拉取当前用户的所有订阅列表
-  /// - 对应前端: `MoviePilot-Frontend/src/views/subscribe/SubscribeListView.vue`, `MoviePilot-Frontend/src/views/subscribe/FullCalendarView.vue`
+  /// - 对应前端: `MoviePilot-Frontend/src/views/subscribe/SubscribeListView.vue`, `MoviePilot-Frontend/src/views/subscribe/FullCalendarView.swift`
   /// - 应用场景: 1. **订阅列表页面** (`SubscribeListView`) 的核心数据源。 2. **日历视图** (`FullCalendarView`) 的数据源。 (注: 全局搜索栏不直接调用此API)
   func fetchSubscriptions() async throws -> [Subscribe] {
     let data = try await makeRequest(endpoint: "/subscribe/")
@@ -1105,10 +1122,12 @@ class APIService: ObservableObject {
   }
 
   /// 获取订阅的海报图片 URL
-  /// - 对应前端: MoviePilot-Frontend/src/components/cards/SubscribeCard.vue
-  /// - 应用场景: 在订阅卡片中展示海报，并处理全局缓存代理。
   func getSubscribePosterImageUrl(_ subscribe: Subscribe) -> URL? {
-    guard let url = subscribe.poster, !url.isEmpty else { return nil }
+    return getSubscribePosterImageUrl(poster: subscribe.poster)
+  }
+
+  func getSubscribePosterImageUrl(poster: String?) -> URL? {
+    guard let url = poster, !url.isEmpty else { return nil }
 
     if useImageCache {
       guard let encodedUrl = url.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
@@ -1121,13 +1140,18 @@ class APIService: ObservableObject {
     return URL(string: url)
   }
 
+  /// 获取订阅分享的海报图片 URL
+  func getSubscribeSharePosterImageUrl(_ share: SubscribeShare) -> URL? {
+    return getSubscribePosterImageUrl(poster: share.poster)
+  }
+
   /// 获取媒体海报图片 URL
-  /// - 对应前端:
-  ///   1. MoviePilot-Frontend/src/components/cards/MediaCard.vue (getImgUrl)
-  ///   2. MoviePilot-Frontend/src/views/discover/MediaDetailView.vue (getPosterUrl)
-  /// - 应用场景: 自动处理 original 替换为 w500，并针对豆瓣图片进行反盗链代理中转，同时处理系统全局图片缓存。用于通用媒体卡片（电影/电视剧）的海报展示以及详情页的海报展示。
   func getPosterImageUrl(_ media: MediaInfo) -> URL? {
-    let url = media.poster_path?.replacingOccurrences(of: "original", with: "w500")
+    return getPosterImageUrl(posterPath: media.poster_path)
+  }
+
+  func getPosterImageUrl(posterPath: String?) -> URL? {
+    let url = posterPath?.replacingOccurrences(of: "original", with: "w500")
 
     // 1. 匹配豆瓣默认海报并拦截
     if let currentUrl = url, currentUrl.contains("doubanio.com") {
@@ -1163,10 +1187,12 @@ class APIService: ObservableObject {
   }
 
   /// 获取媒体背景图片 URL
-  /// - 对应前端: MoviePilot-Frontend/src/views/discover/MediaDetailView.vue (getBackdropUrl)
-  /// - 应用场景: 详情页大图背景展示，处理系统全局图片缓存中转。
   func getBackdropImageUrl(_ media: MediaInfo) -> URL? {
-    guard let url = media.backdrop_path, !url.isEmpty else { return nil }
+    return getBackdropImageUrl(backdropPath: media.backdrop_path)
+  }
+
+  func getBackdropImageUrl(backdropPath: String?) -> URL? {
+    guard let url = backdropPath, !url.isEmpty else { return nil }
 
     // 使用图片缓存
     if useImageCache {
@@ -1181,28 +1207,17 @@ class APIService: ObservableObject {
   }
 
   /// 获取下载 Card 中的背景图片
-  /// - 对应前端: MoviePilot-Frontend/src/components/cards/DownloadingCard.vue
-  /// - 应用场景: 下载任务卡的背景图片
-  /// 备注：前端是直接访问没有使用缓存，经过测试走缓存没有问题，这是抓包的 Image: https://image.tmdb.org/t/p/w500/zJJQCD9xMhDD4MlQ6haaP3IBCHk.jpg
   func getDownloadItemBackdropImageUrl(_ media: DownloadingMediaInfo) -> URL? {
-    guard let url = media.image, !url.isEmpty else { return nil }
-    // 使用图片缓存
-    if useImageCache {
-      guard let encodedUrl = url.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
-      else {
-        return nil
-      }
-      return URL(string: "\(baseURL)/api/v1/system/cache/image?url=\(encodedUrl)")
-    }
-
-    return URL(string: url)
+    return getBackdropImageUrl(backdropPath: media.image)
   }
 
   /// 获取媒体服务器播放项的海报
-  /// - 对应前端: MoviePilot-Frontend/src/components/cards/PosterCard.vue (getImgUrl)
-  /// - 应用场景: 首页的媒体服务器最近播放或最新入库图片代理。通过 system/img/0 代理图片并携带 use_cookies 参数。
   func getMediaServerPosterImageURL(_ item: MediaServerPlayItem) -> URL? {
-    guard let path = item.image, !path.isEmpty else { return nil }
+    return getMediaServerPosterImageURL(image: item.image, useCookies: item.use_cookies?.value)
+  }
+
+  func getMediaServerPosterImageURL(image: String?, useCookies: Bool?) -> URL? {
+    guard let path = image, !path.isEmpty else { return nil }
     guard let encodedUrl = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
     else {
       return nil
@@ -1210,8 +1225,7 @@ class APIService: ObservableObject {
 
     var urlString = "\(baseURL)/api/v1/system/img/0?imgurl=\(encodedUrl)"
 
-    // use_cookies 现在是 FlexibleBool?
-    if item.use_cookies?.value == true {
+    if useCookies == true {
       urlString += "&use_cookies=true"
     }
 
@@ -1219,8 +1233,6 @@ class APIService: ObservableObject {
   }
 
   /// 获取季海报 URL，严格参照 Vue 逻辑
-  /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeSeasonDialog.vue (getSeasonPoster)
-  /// - 应用场景: 电视剧订阅页面展示具体季的海报，缺失时平滑降级为剧集总海报。
   func getSeasonPosterURL(posterPath: String?, mediaPosterPath: String?) -> URL? {
     // Vue: if (!posterPath) return props.media?.poster_path
     guard let posterPath = posterPath, !posterPath.isEmpty else {
@@ -1234,50 +1246,50 @@ class APIService: ObservableObject {
   }
 
   /// 获取人物图片 URL
-  /// - 对应前端:
-  ///   1. MoviePilot-Frontend/src/components/cards/PersonCard.vue (getPersonImage)
-  ///   2. MoviePilot-Frontend/src/views/discover/PersonDetailView.vue (getPersonImage)
-  /// - 应用场景: 演员列表、人物卡片头像及人物详情页的大图头像。聚合判断图片来源 (TMDB/Douban/Bangumi)，包含拦截豆瓣无头像占位图(personage-default)的原创优化。
   func getPersonImage(_ person: Person) -> URL? {
-    return getPersonImageURL(from: person)
+    return getPersonImageURL(
+      source: person.source,
+      profilePath: person.profile_path,
+      avatar: person.avatar,
+      images: person.images
+    )
   }
 
   /// 获取 Staff 人员图片 URL
-  /// - 对应前端: MoviePilot-Frontend/src/components/cards/PersonCard.vue (getPersonImage)
-  /// - 应用场景: 获取制作人员/工作人员图片，本质与 getPersonImage 逻辑完全一致，仅做语义区分。
   func getStaffImageURL(_ person: Person) -> URL? {
-    return getPersonImageURL(from: person)
+    return getPersonImage(person)
   }
 
-  private func getPersonImageURL(from person: Person) -> URL? {
+  func getPersonImageURL(
+    source: String?, profilePath: String?, avatar: PersonAvatar?, images: BangumiImages?
+  ) -> URL? {
     var url = ""
-    var source = person.source
+    var effectiveSource = source
 
-    // 自动推断来源（对齐 getStaffImageURL 逻辑，Vue: getPersonImage）
-    if source == nil || (source?.isEmpty ?? true) {
-      if let profilePath = person.profile_path, profilePath.hasPrefix("/") {
-        source = "themoviedb"
-      } else if person.avatar != nil {
-        source = "douban"
-      } else if person.images != nil {
-        source = "bangumi"
-      } else if let profilePath = person.profile_path, profilePath.hasPrefix("http") {
-        url = profilePath
+    // 自动推断来源
+    if effectiveSource == nil || (effectiveSource?.isEmpty ?? true) {
+      if let path = profilePath, path.hasPrefix("/") {
+        effectiveSource = "themoviedb"
+      } else if avatar != nil {
+        effectiveSource = "douban"
+      } else if images != nil {
+        effectiveSource = "bangumi"
+      } else if let path = profilePath, path.hasPrefix("http") {
+        url = path
       }
     }
 
-    if source == "themoviedb" {
-      if person.profile_path == nil && url.isEmpty {
+    if effectiveSource == "themoviedb" {
+      if profilePath == nil && url.isEmpty {
         return nil
       }
       let domain = settings?.TMDB_IMAGE_DOMAIN ?? "image.tmdb.org"
-      let path = person.profile_path ?? ""
-      // 保护逻辑：只有当 url 尚未被赋值（例如未由绝对路径推断补充）时才做拼接
+      let path = profilePath ?? ""
       if url.isEmpty {
         url = "https://\(domain)/t/p/w600_and_h900_bestv2\(path)"
       }
-    } else if source == "douban" {
-      guard let avatar = person.avatar else {
+    } else if effectiveSource == "douban" {
+      guard let avatar = avatar else {
         return nil
       }
       switch avatar {
@@ -1286,8 +1298,8 @@ class APIService: ObservableObject {
       case .url(let link):
         url = link
       }
-    } else if source == "bangumi" {
-      guard let medium = person.images?.medium else {
+    } else if effectiveSource == "bangumi" {
+      guard let medium = images?.medium else {
         return nil
       }
       url = medium
@@ -1297,7 +1309,7 @@ class APIService: ObservableObject {
       return nil
     }
 
-    // 匹配豆瓣默认人员图标并拦截 (针对 Apple TV 的特殊优化，Vue 会顺推显示丑陋的缩略默认图)
+    // 匹配豆瓣默认人员图标并拦截 (针对 Apple TV 的特殊优化)
     if url.contains("doubanio.com")
       && (url.contains("personage-default") || (url.contains("celebrity-default")))
     {

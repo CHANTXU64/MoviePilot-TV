@@ -579,7 +579,7 @@ struct MediaDetailView: View {
             ForEach(directors) { director in
               PersonCard(
                 person: director,
-                staffImageUrl: APIService.shared.getStaffImageURL(director)
+                staffImageUrl: director.imageURLs.profile
               ) {
                 navigationPath.append(director)
               }
@@ -671,7 +671,7 @@ struct MediaDetailView: View {
             ForEach(viewModel.recommendPaginator.items) { media in
               MediaCard(
                 title: media.cleanedTitle ?? "",
-                posterUrl: APIService.shared.getPosterImageUrl(media),
+                posterUrl: media.imageURLs.poster,
                 typeText: media.type,
                 ratingText: media.vote_average != nil
                   ? String(format: "%.1f", media.vote_average!) : nil,
@@ -741,7 +741,7 @@ struct MediaDetailView: View {
             ForEach(viewModel.similarPaginator.items) { media in
               MediaCard(
                 title: media.cleanedTitle ?? "",
-                posterUrl: APIService.shared.getPosterImageUrl(media),
+                posterUrl: media.imageURLs.poster,
                 typeText: media.type,
                 ratingText: media.vote_average != nil
                   ? String(format: "%.1f", media.vote_average!) : nil,

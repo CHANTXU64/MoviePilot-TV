@@ -21,7 +21,25 @@ struct SystemView: View {
             .foregroundColor(.secondary)
         }
 
-        Section(header: Text("账户")) {
+        Section(header: Text("账户"), footer: Text(viewModel.refreshMessage ?? "")) {
+          Button(action: {
+            Task {
+              await viewModel.relogin()
+            }
+          }) {
+            HStack {
+              if viewModel.isRefreshing {
+                ProgressView()
+                  .controlSize(.small)
+                  .padding(.trailing, 8)
+              }
+              Text("重新登录凭据")
+              Spacer()
+              Image(systemName: "arrow.clockwise")
+            }
+          }
+          .disabled(viewModel.isRefreshing)
+
           Button(action: {
             APIService.shared.logout()
             // 登出后立即刷新状态

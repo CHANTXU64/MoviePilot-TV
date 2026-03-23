@@ -160,7 +160,7 @@ private struct DownloadTaskRow: View {
       .frame(maxWidth: .infinity, alignment: .topLeading)
     } background: {
       // MARK: - 背景
-      let backdropUrl = item.media.flatMap(APIService.shared.getDownloadItemBackdropImageUrl)
+      let backdropUrl = item.media?.imageURLs.image
       ZStack {
         KFImage(backdropUrl)
           .requestModifier(AnyModifier.cookieModifier)

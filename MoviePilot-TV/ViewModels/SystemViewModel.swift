@@ -15,8 +15,39 @@ class SystemViewModel: ObservableObject {
   private let keychainService = "MoviePilot-TV"
   private let keychainAccount = "accessToken"
 
+  @Published var isRefreshing: Bool = false
+  @Published var refreshMessage: String? = nil
+
   init() {
     checkKeychainStatus()
+  }
+
+  /// 手动刷新登录凭据（解决服务器重启或 Token 失效问题）
+  func relogin() async {
+    isRefreshing = true
+    refreshMessage = nil
+    
+    // 从 Keychain 获取保存的用户名密码
+    let username = KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username") 
+                   ?? UserDefaults.standard.string(forKey: "username")
+    let password = KeychainHelper.shared.read(service: "MoviePilot-TV", account: "password")
+                   ?? UserDefaults.standard.string(forKey: "password")
+
+    guard let u = username, let p = password, !u.isEmpty, !p.isEmpty else {
+      refreshMessage = "未找到保存的凭据，请重新登录"
+      isRefreshing = false
+      return
+    }
+
+    do {
+      _ = try await APIService.shared.login(username: u, password: p)
+      refreshMessage = "刷新成功"
+      checkKeychainStatus()
+    } catch {
+      refreshMessage = "刷新失败: \(error.localizedDescription)"
+    }
+    
+    isRefreshing = false
   }
 
   /// 检查凭证的实际存储方式 (Keychain 或降级的 UserDefaults)

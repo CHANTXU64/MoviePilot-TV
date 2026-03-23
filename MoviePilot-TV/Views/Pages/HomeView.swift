@@ -189,7 +189,7 @@ private struct MediaSectionView: View {
           ForEach(items) { item in
             MediaCard(
               title: item.title,
-              posterUrl: APIService.shared.getMediaServerPosterImageURL(item),
+              posterUrl: item.imageURLs.image,
               typeText: item.type,
               ratingText: nil,
               bottomLeftText: item.server_type?.rawValue.capitalized,
@@ -276,7 +276,7 @@ private struct SubscribeItemView: View {
   var body: some View {
     MediaCard(
       title: item.name,
-      posterUrl: APIService.shared.getSubscribePosterImageUrl(item),
+      posterUrl: item.imageURLs.poster,
       typeText: formatState(item.state),
       ratingText: nil,
       bottomLeftText: formatProgress(total: item.total_episode, lack: item.lack_episode),

@@ -31,7 +31,7 @@ struct PersonDetailView: View {
           // 头部区域
           HStack(alignment: .top, spacing: 40) {
             // 个人照片 - 不可交互，无焦点效果
-            let imageUrl = APIService.shared.getPersonImage(person)
+            let imageUrl = person.imageURLs.profile
             ZStack {
               // 背景 / 占位符
               Rectangle()

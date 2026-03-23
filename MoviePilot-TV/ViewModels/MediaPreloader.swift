@@ -110,8 +110,8 @@ class MediaPreloadTask: ObservableObject {
     // 避免为已取消（LRU 淘汰）的任务发起无意义的图片请求
     guard !Task.isCancelled else { return }
     // 逻辑同 MediaDetailViewModel.updateBackground()：backdrop 优先，无则 poster
-    let backdropUrl = APIService.shared.getBackdropImageUrl(detail)
-    let posterUrl = APIService.shared.getPosterImageUrl(detail)
+    let backdropUrl = detail.imageURLs.backdrop
+    let posterUrl = detail.imageURLs.poster
     let targetUrl = backdropUrl ?? posterUrl
     guard let url = targetUrl else { return }
 
