@@ -281,6 +281,9 @@ class SearchViewModel: ObservableObject {
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
+      imageURLsProvider: { item in
+        [item.imageURLs.poster].compactMap(\.self)
+      },
       onReset: { @MainActor in movieSeenKeys.removeAll() }
     )
 
@@ -297,6 +300,9 @@ class SearchViewModel: ObservableObject {
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
+      imageURLsProvider: { @MainActor item in
+        [item.imageURLs.poster].compactMap { $0 }
+      },
       onReset: { @MainActor in tvSeenKeys.removeAll() }
     )
 
@@ -312,6 +318,9 @@ class SearchViewModel: ObservableObject {
         if uniqueNewItems.isEmpty { return false }
         currentItems.append(contentsOf: uniqueNewItems)
         return true
+      },
+      imageURLsProvider: { @MainActor item in
+        [item.imageURLs.poster].compactMap { $0 }
       },
       onReset: { @MainActor in
         collectionSeenKeys.removeAll()
@@ -333,6 +342,9 @@ class SearchViewModel: ObservableObject {
         if uniqueNewItems.isEmpty { return false }
         currentItems.append(contentsOf: uniqueNewItems)
         return true
+      },
+      imageURLsProvider: { item in
+        [item.imageURLs.profile].compactMap(\.self)
       }
     )
 
@@ -352,6 +364,9 @@ class SearchViewModel: ObservableObject {
         if uniqueNewItems.isEmpty { return false }
         currentItems.append(contentsOf: uniqueNewItems)
         return true
+      },
+      imageURLsProvider: { item in
+        [item.imageURLs.poster].compactMap(\.self)
       },
       onReset: { @MainActor in
         shareSeenKeys.removeAll()

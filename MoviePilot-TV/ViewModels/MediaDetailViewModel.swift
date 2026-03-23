@@ -70,6 +70,9 @@ class MediaDetailViewModel: ObservableObject {
         }
         return false
       },
+      imageURLsProvider: { item in
+        [item.imageURLs.poster].compactMap(\.self)
+      },
       onReset: { @MainActor in
         recommendSeenKeys.removeAll()
       }
@@ -90,6 +93,9 @@ class MediaDetailViewModel: ObservableObject {
         }
         return false
       },
+      imageURLsProvider: { @MainActor item in
+        [item.imageURLs.poster].compactMap { $0 }
+      },
       onReset: { @MainActor in
         similarSeenKeys.removeAll()
       }
@@ -105,6 +111,9 @@ class MediaDetailViewModel: ObservableObject {
         let initialCount = items.count
         items = StaffManager.mergeActors(existing: items, newBatch: newItems)
         return items.count > initialCount
+      },
+      imageURLsProvider: { item in
+        [item.imageURLs.profile].compactMap(\.self)
       }
     )
 

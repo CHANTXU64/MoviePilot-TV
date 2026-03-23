@@ -37,6 +37,9 @@ class PersonDetailViewModel: ObservableObject {
         }
         return false  // 没有新内容
       },
+      imageURLsProvider: { item in
+        [item.imageURLs.poster].compactMap(\.self)
+      },
       onReset: { @MainActor in
         seenKeys.removeAll()  // 重置时清空 seenKeys
       }

@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import Kingfisher
 
 @MainActor
 public class Paginator<ItemType: Identifiable>: ObservableObject {
@@ -38,6 +39,9 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   /// 获取一页项目的函数。
   private let fetcher: @MainActor (Int) async throws -> [ItemType]
 
+  /// 预取图片 URL 的函数。
+  private let imageURLsProvider: (@MainActor (ItemType) -> [URL])?
+
   /// 处理新项目并将其合并到现有项目数组的函数。
   /// 如果添加了新的、唯一的内容，它应该返回 `true`。
   private let processor: @MainActor (inout [ItemType], [ItemType]) -> Bool
@@ -47,6 +51,15 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
 
   /// 从列表末尾开始触发加载更多的项目数。
   private let threshold: Int
+
+  /// 提前触发图片预取的项数。如果未设定，默认为 threshold 的一半（向上取整）。
+  private let prefetchThreshold: Int
+
+  /// 已经最高触发过预取的项目索引，用于进行分批预取并防抖、跳过不可见区。
+  private var maxPrefetchedIndex: Int = -1
+
+  /// 当前正在执行的图片预取器实例，持有以便在 reset 或新批次时取消旧任务。
+  private var activePrefetcher: ImagePrefetcher?
 
   // MARK: - 初始化
 
@@ -61,11 +74,15 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     threshold: Int,
     fetcher: @escaping @MainActor (Int) async throws -> [ItemType],
     processor: @escaping @MainActor (inout [ItemType], [ItemType]) -> Bool,
+    imageURLsProvider: (@MainActor (ItemType) -> [URL])? = nil,
+    prefetchThreshold: Int? = nil,
     onReset: (() -> Void)? = nil
   ) {
     self.threshold = threshold
     self.fetcher = fetcher
     self.processor = processor
+    self.imageURLsProvider = imageURLsProvider
+    self.prefetchThreshold = prefetchThreshold ?? ((threshold + 1) / 2)
     self.onReset = onReset
   }
 
@@ -85,6 +102,28 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   public func loadMore(_ currentItemId: ItemType.ID? = nil) async {
     if let currentItemId = currentItemId {
       guard let itemIndex = items.firstIndex(where: { $0.id == currentItemId }) else { return }
+
+      if let provider = imageURLsProvider {
+        // 当滚动到达之前的预取边界前一点时（预留 margin），才分批触发下一次请求
+        let prefetchMargin = max(1, prefetchThreshold / 2)
+        if itemIndex + prefetchMargin >= maxPrefetchedIndex {
+          let start = max(itemIndex + 1, maxPrefetchedIndex + 1)
+          let end = min(start + prefetchThreshold, items.count)
+          
+          if start < end {
+            let urlsToPrefetch = items[start..<end].flatMap { provider($0) }
+            if !urlsToPrefetch.isEmpty {
+              // 批量预取。由于只在跨越边界时触发，极大降低了 ImagePrefetcher() 实例的创建频率
+              activePrefetcher?.stop()
+              let prefetcher = ImagePrefetcher(urls: urlsToPrefetch)
+              activePrefetcher = prefetcher
+              prefetcher.start()
+            }
+            maxPrefetchedIndex = end - 1
+          }
+        }
+      }
+
       let thresholdIndex = max(0, items.count - threshold)
       guard itemIndex >= thresholdIndex else { return }
     }
@@ -248,6 +287,9 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     hasMore = true
     page = 1
     consecutiveErrorCount = 0
+    maxPrefetchedIndex = -1
+    activePrefetcher?.stop()
+    activePrefetcher = nil
     onReset?()
   }
 }
