@@ -16,6 +16,11 @@ struct PersonDetailView: View {
   @StateObject private var subscriptionHandler = SubscriptionHandler()
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
 
+  @FocusState private var focusedElement: FocusField?
+  enum FocusField: Hashable {
+    case biography
+  }
+
   var body: some View {
     MediaGridView(
       items: viewModel.paginator.items,
@@ -86,11 +91,15 @@ struct PersonDetailView: View {
               }
 
               if viewModel.isLoadingDetails {
-                // 加载期间保持布局稳定的占位符
-                RoundedRectangle(cornerRadius: 12)
-                  .fill(Color.secondary.opacity(0.1))
-                  .frame(height: 150)
-                  .overlay(ProgressView())
+                // 加载期间保持布局稳定的可聚焦占位符
+                Button(action: {}) {
+                  RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.secondary.opacity(0.1))
+                    .frame(height: 150)
+                    .overlay(ProgressView())
+                }
+                .buttonStyle(.card)
+                .focused($focusedElement, equals: .biography)
               } else if let biography = person.biography, !biography.isEmpty {
                 Button(action: {
                   showFullBio = true
@@ -107,12 +116,18 @@ struct PersonDetailView: View {
                   .padding()
                 }
                 .buttonStyle(.card)
+                .focused($focusedElement, equals: .biography)
               } else {
                 // 无简介时的可聚焦占位符 — 确保头部有焦点目标
-                Text("暂无简介")
-                  .font(.callout.bold())
-                  .foregroundColor(.secondary)
-                  .focusable()
+                Button(action: {}) {
+                  Text("暂无简介")
+                    .font(.callout.bold())
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: 1100, alignment: .leading)
+                    .padding()
+                }
+                .buttonStyle(.card)
+                .focused($focusedElement, equals: .biography)
               }
               Spacer(minLength: 0)
             }
@@ -143,6 +158,7 @@ struct PersonDetailView: View {
     .task {
       await viewModel.loadInitialData()
     }
+    .defaultFocus($focusedElement, .biography)
     .sheet(isPresented: $showFullBio) {
       let person = viewModel.person
       if let biography = person.biography {
