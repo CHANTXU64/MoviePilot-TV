@@ -161,18 +161,20 @@ class MediaDetailViewModel: ObservableObject {
 
     // 异步加载网络数据（不阻塞调用方返回，数据到达后渐进显示）
     Task {
-      // 1. 优先加载演员信息
-      await actorsPaginator.refresh()
+      // 1. 并发启动演职员、推荐和相似内容加载
+      let actorsTask = Task { @MainActor in await actorsPaginator.refresh() }
+      let recommendTask = Task { @MainActor in await recommendPaginator.refresh() }
+      let similarTask = Task { @MainActor in await similarPaginator.refresh() }
 
-      // 2. 演员加载完毕，用网络数据更新 Hero 区域
+      // 2. 优先等待演员信息加载完成，用于快速更新 Hero 区域和判断首行就绪
+      await actorsTask.value
+
       if heroTopActors.isEmpty {
         heroTopActors = Array(actorsPaginator.items.prefix(4))
       }
 
-      // ── 非电视剧：演员加载完后判断首行就绪 ──
-      // 加载顺序：directors(同步) → actors(此处) → recommend+similar(下方)
-      // 视图渲染顺序：season → actors → directors → recommend → similar
-      // 此时 actors 和 directors 的数据状态已确定
+      // ── 非电视剧：演员加载完后判断首行是否就绪 ──
+      // 视图渲染优先级：season -> actors -> directors -> recommend -> similar
       if !isSeasonFirst {
         if !actorsPaginator.items.isEmpty || !uniqueDirectors.isEmpty {
           // 首行是 actors 或 directors，数据已就绪
@@ -181,13 +183,7 @@ class MediaDetailViewModel: ObservableObject {
         // 否则需要等 recommend/similar 加载完
       }
 
-      // 3. 并发加载推荐和相似内容
-      let recommendTask = Task { @MainActor in
-        await recommendPaginator.refresh()
-      }
-      let similarTask = Task { @MainActor in
-        await similarPaginator.refresh()
-      }
+      // 3. 继续等待推荐和相似内容的并行任务完成
       _ = await (recommendTask.value, similarTask.value)
 
       // ── 所有数据加载完毕，兜底设置 ──
@@ -278,19 +274,28 @@ class MediaDetailViewModel: ObservableObject {
 
   /// 刷新订阅状态：同时更新全局订阅和分季订阅（preloadTask 是唯一数据源）
   func refreshSubscriptionStatus() async {
-
-    // 刷新全局订阅状态
-    if detail.canDirectlySubscribe {
-      do {
-        preloadTask?.isSubscribed = try await apiService.checkSubscription(media: detail)
-      } catch {
-        print("[MediaDetailViewModel] 刷新订阅状态失败: \(error)")
+    // 使用 TaskGroup 或并发 Task 同时刷新全局和分季订阅
+    await withTaskGroup(of: Void.self) { group in
+      // 刷新全局订阅状态
+      if detail.canDirectlySubscribe {
+        group.addTask {
+          do {
+            let isSubscribed = try await self.apiService.checkSubscription(media: self.detail)
+            await MainActor.run {
+              self.preloadTask?.isSubscribed = isSubscribed
+            }
+          } catch {
+            print("[MediaDetailViewModel] 刷新订阅状态失败: \(error)")
+          }
+        }
       }
-    }
 
-    // 刷新分季订阅状态
-    if let seasonVM = preloadTask?.seasonViewModel {
-      await seasonVM.checkSubscriptionStatus()
+      // 刷新分季订阅状态
+      if let seasonVM = preloadTask?.seasonViewModel {
+        group.addTask {
+          await seasonVM.checkSubscriptionStatus(limit: 10)
+        }
+      }
     }
   }
 }

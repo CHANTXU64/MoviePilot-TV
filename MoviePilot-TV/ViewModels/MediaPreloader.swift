@@ -143,7 +143,7 @@ class MediaPreloadTask: ObservableObject {
 
     let vm = SubscribeSeasonViewModel(mediaInfo: detail)
     self.seasonViewModel = vm
-    await vm.loadData()
+    await vm.loadData(checkSubscriptionLimit: 10)
     self.isSeasonDataLoaded = true
   }
 

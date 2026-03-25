@@ -28,7 +28,7 @@ class SubscribeSeasonViewModel: ObservableObject {
     self.initialSeason = initialSeason
   }
 
-  func loadData() async {
+  func loadData(checkSubscriptionLimit: Int? = nil) async {
     isLoading = true
     defer { isLoading = false }
 
@@ -39,7 +39,7 @@ class SubscribeSeasonViewModel: ObservableObject {
       }
 
       // 执行初始分季数据获取
-      try await fetchSeasonsInternal()
+      try await fetchSeasonsInternal(checkSubscriptionLimit: checkSubscriptionLimit)
     } catch {
       errorMessage = error.localizedDescription
     }
@@ -58,7 +58,7 @@ class SubscribeSeasonViewModel: ObservableObject {
   }
 
   /// 内部核心加载方法：获取分季详情并排序，随后检查入库和订阅状态
-  private func fetchSeasonsInternal() async throws {
+  private func fetchSeasonsInternal(checkSubscriptionLimit: Int? = nil) async throws {
     if !selectedGroupId.isEmpty {
       // 逻辑 A：如果选择了剧集组，则按组获取分季
       self.seasonInfos = try await APIService.shared.getGroupSeasons(
@@ -75,7 +75,7 @@ class SubscribeSeasonViewModel: ObservableObject {
     await checkSeasonsStatus()
 
     // 同时检查各季当前的订阅状态
-    await checkSubscriptionStatus()
+    await checkSubscriptionStatus(limit: checkSubscriptionLimit)
   }
 
   /// 调用后端接口，比对媒体库中已有的集数，确定每一季的完整性
@@ -142,20 +142,32 @@ class SubscribeSeasonViewModel: ObservableObject {
   }
 
   /// 查询每个季是否已经订阅，填充 subscribedSeasons
-  func checkSubscriptionStatus() async {
-    var newSubscribed: Set<Int> = []
-    for season in seasonInfos {
-      guard let seasonNumber = season.season_number else { continue }
-      do {
-        // 遍历所有季并检查订阅状态，失败则静默跳过
-        let isSubscribed = try await APIService.shared.checkSubscription(
-          media: mediaInfo, season: seasonNumber)
-        if isSubscribed {
-          newSubscribed.insert(seasonNumber)
+  func checkSubscriptionStatus(limit: Int? = nil) async {
+    let seasonsToCheck = limit != nil ? Array(seasonInfos.prefix(limit!)) : seasonInfos
+
+    let newSubscribed = await withTaskGroup(of: Int?.self) { group in
+      for season in seasonsToCheck {
+        guard let seasonNumber = season.season_number else { continue }
+        group.addTask {
+          do {
+            // 遍历所有季并检查订阅状态，失败则静默跳过
+            let isSubscribed = try await APIService.shared.checkSubscription(
+              media: self.mediaInfo, season: seasonNumber)
+            return isSubscribed ? seasonNumber : nil
+          } catch {
+            // 静默处理错误
+            return nil
+          }
         }
-      } catch {
-        // 静默处理错误，不中断循环
       }
+
+      var results = Set<Int>()
+      for await result in group {
+        if let seasonNumber = result {
+          results.insert(seasonNumber)
+        }
+      }
+      return results
     }
     self.subscribedSeasons = newSubscribed
   }
