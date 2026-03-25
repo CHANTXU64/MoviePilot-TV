@@ -577,6 +577,14 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   var canDirectlySubscribe: Bool {
     type == "电影" || douban_id != nil || bangumi_id != nil
   }
+
+  static func == (lhs: MediaInfo, rhs: MediaInfo) -> Bool {
+    lhs.id == rhs.id
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine(id)
+  }
 }
 
 struct DownloaderConf: Codable {
@@ -1376,6 +1384,14 @@ struct Person: Codable, Identifiable, Hashable {
         images: self.images
       )
     )
+  }
+
+  static func == (lhs: Person, rhs: Person) -> Bool {
+    lhs.id == rhs.id
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine(id)
   }
 }
 

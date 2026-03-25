@@ -30,6 +30,66 @@ private final class PreloadDebouncer {
   }
 }
 
+// MARK: - EquatableView 包装器
+// 当父视图 body 重新求值（如 Paginator 状态变化）时，
+// `.equatable()` 通过 `==`（仅比较 item.id）短路，跳过 MediaCard 子树的 body 求值。
+// 注意：不在 grid 层使用 @FocusState，避免每次焦点移动触发整个 grid body 重新求值。
+// 焦点处理保留在 per-card 的 onFocus 回调中（由 MediaCard 内部的 @FocusState 驱动）。
+
+private struct GridCardView: View, Equatable {
+  let item: MediaInfo
+  let onTap: () -> Void
+  let onFocus: (Bool) -> Void
+
+  static func == (lhs: GridCardView, rhs: GridCardView) -> Bool {
+    lhs.item.id == rhs.item.id
+  }
+
+  var body: some View {
+    MediaCard(
+      title: item.title ?? "",
+      posterUrl: item.imageURLs.poster,
+      typeText: item.collection_id != nil ? "合集" : item.type,
+      ratingText: item.vote_average.map { String(format: "%.1f", $0) },
+      bottomLeftText: nil,
+      bottomLeftSecondaryText: nil,
+      source: MediaSource.from(mediaInfo: item),
+      action: onTap,
+      onFocus: onFocus
+    )
+  }
+}
+
+private struct GridCardViewWithMenu<MenuContent: View>: View, Equatable {
+  let item: MediaInfo
+  let onTap: () -> Void
+  let onFocus: (Bool) -> Void
+  let menuBuilder: (MediaInfo) -> MenuContent
+
+  static func == (lhs: GridCardViewWithMenu, rhs: GridCardViewWithMenu) -> Bool {
+    lhs.item.id == rhs.item.id
+  }
+
+  var body: some View {
+    MediaCard(
+      title: item.title ?? "",
+      posterUrl: item.imageURLs.poster,
+      typeText: item.collection_id != nil ? "合集" : item.type,
+      ratingText: item.vote_average.map { String(format: "%.1f", $0) },
+      bottomLeftText: nil,
+      bottomLeftSecondaryText: nil,
+      source: MediaSource.from(mediaInfo: item),
+      action: onTap,
+      onFocus: onFocus
+    )
+    .contextMenu {
+      menuBuilder(item)
+    }
+  }
+}
+
+// MARK: - MediaGridView
+
 /// 通用媒体网格视图组件
 /// 用于展示媒体海报卡片的网格布局，支持分页加载
 struct MediaGridView<Header: View, ContextMenu: View>: View {
@@ -91,8 +151,6 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
   }
 
   var body: some View {
-    let loadMoreCandidateIds = Set(items.suffix(loadMoreThreshold).map(\.id))
-
     ScrollView {
       VStack(spacing: 20) {
         header
@@ -116,50 +174,21 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
 
           LazyVGrid(columns: MediaCard.defaultGridColumns, spacing: 40) {
             ForEach(items) { item in
-              let card = MediaCard(
-                title: item.title ?? "",
-                posterUrl: item.imageURLs.poster,
-                typeText: item.collection_id != nil ? "合集" : item.type,
-                ratingText: item.vote_average.map { String(format: "%.1f", $0) },
-                bottomLeftText: nil,
-                bottomLeftSecondaryText: nil,
-                source: MediaSource.from(mediaInfo: item),
-                action: {
-                  if let share = item.subscribeShare {
-                    onShareTapped?(share)
-                  } else {
-                    // 点击时立即触发预加载（取消延迟）
-                    preloadDebouncer.cancel(id: item.id)
-                    MediaPreloader.shared.preload(for: item)
-                    navigationPath.append(item)
-                  }
-                },
-                onFocus: { isFocused in
-                  guard isFocused else {
-                    preloadDebouncer.cancel(id: item.id)
-                    return
-                  }
-
-                  // 预加载触发：聚焦后延迟 ~300ms，防止快速滚动时浪费请求
-                  // 这里的 cancel 也要传入 ID，否则会把别人刚开启的给取消了
-                  preloadDebouncer.cancel(id: item.id)
-                  if item.collection_id == nil {
-                    preloadDebouncer.schedule(for: item)
-                  }
-
-                  if loadMoreCandidateIds.contains(item.id) {
-                    onLoadMore(item.id)
-                  }
-                }
-              )
-
               if let contextMenu = contextMenu {
-                card
-                  .contextMenu {
-                    contextMenu(item)
-                  }
+                GridCardViewWithMenu(
+                  item: item,
+                  onTap: { handleItemTap(item) },
+                  onFocus: { isFocused in handleFocus(item: item, isFocused: isFocused) },
+                  menuBuilder: contextMenu
+                )
+                .equatable()
               } else {
-                card
+                GridCardView(
+                  item: item,
+                  onTap: { handleItemTap(item) },
+                  onFocus: { isFocused in handleFocus(item: item, isFocused: isFocused) }
+                )
+                .equatable()
               }
             }
           }
@@ -181,6 +210,37 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     .focusSection()
     .onDisappear {
       preloadDebouncer.cancel()
+    }
+  }
+
+  /// 集中处理卡片点击逻辑
+  private func handleItemTap(_ item: MediaInfo) {
+    if let share = item.subscribeShare {
+      onShareTapped?(share)
+    } else {
+      preloadDebouncer.cancel(id: item.id)
+      MediaPreloader.shared.preload(for: item)
+      navigationPath.append(item)
+    }
+  }
+
+  /// 集中处理焦点变化逻辑（由 per-card @FocusState 驱动，不触发 grid body 重新求值）
+  private func handleFocus(item: MediaInfo, isFocused: Bool) {
+    guard isFocused else {
+      preloadDebouncer.cancel(id: item.id)
+      return
+    }
+
+    preloadDebouncer.cancel(id: item.id)
+    if item.collection_id == nil {
+      preloadDebouncer.schedule(for: item)
+    }
+
+    // 用 index 判断是否接近末尾，避免创建 Set
+    if let index = items.firstIndex(where: { $0.id == item.id }),
+      index >= items.count - loadMoreThreshold
+    {
+      onLoadMore(item.id)
     }
   }
 }

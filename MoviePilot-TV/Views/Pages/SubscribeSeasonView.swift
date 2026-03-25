@@ -31,7 +31,7 @@ struct SubscribeSeasonContentView: View {
   @ObservedObject var viewModel: SubscribeSeasonViewModel
   var layout: SeasonLayout = .shelf
   var title: String? = nil
-  var showTopBadges: Bool = true
+  var showBadges: Bool = true
   var onSeasonTap: ((TmdbSeason) -> Void)? = nil
   var onMoreTapped: (() -> Void)? = nil
 
@@ -254,7 +254,7 @@ struct SubscribeSeasonContentView: View {
       bottomLeftText: bottomLeft,
       bottomLeftSecondaryText: nil,
       source: nil,
-      showTopBadges: showTopBadges,
+      showBadges: showBadges,
       footerLabel: (
         icon: isSubscribed ? "minus.circle" : "plus.circle",
         text: isSubscribed ? "取消订阅" : "订阅"
@@ -293,20 +293,12 @@ struct SubscribeSeasonContentView: View {
 
   @ViewBuilder
   private func viewAllCard(nextSeason: TmdbSeason) -> some View {
-    MediaCard(
-      title: " ",
+    MoreCard(
+      titleText: "查看全部",
       posterUrl: APIService.shared.getSeasonPosterURL(
         posterPath: nextSeason.poster_path,
         mediaPosterPath: viewModel.mediaInfo.poster_path
       ),
-      typeText: nil,
-      ratingText: nil,
-      bottomLeftText: nil,
-      bottomLeftSecondaryText: nil,
-      source: nil,
-      overlayTitle: "查看全部",
-      isBackgroundBlurred: true,
-      footerLabel: (icon: "", text: ""),
       action: {
         onMoreTapped?()
       }

@@ -52,7 +52,7 @@ struct ContentView: View {
           // 防抖逻辑：取消之前的任务，重新计时
           checkTask?.cancel()
           checkTask = Task {
-            try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 秒
+            try? await Task.sleep(nanoseconds: 5_000_000_000)  // 5 秒
             if !Task.isCancelled {
               APIService.shared.validateTokenSilently()
             }

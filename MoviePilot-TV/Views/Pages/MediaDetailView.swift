@@ -530,7 +530,7 @@ struct MediaDetailView: View {
             viewModel: seasonVM,
             layout: .shelf,
             title: showContentPage ? "分季订阅" : nil,
-            showTopBadges: showContentPage,
+            showBadges: showContentPage,
             onSeasonTap: { season in
               let request = SubscribeSeasonRequest(
                 mediaInfo: viewModel.detail,
@@ -668,23 +668,17 @@ struct MediaDetailView: View {
 
         ScrollView(.horizontal, showsIndicators: false) {
           LazyHStack(spacing: 40) {
+            let badges = showContentPage || firstVisibleRow != "recommendations"
             ForEach(viewModel.recommendPaginator.items) { media in
-              MediaCard(
-                title: media.cleanedTitle ?? "",
-                posterUrl: media.imageURLs.poster,
-                typeText: media.type,
-                ratingText: media.vote_average != nil
-                  ? String(format: "%.1f", media.vote_average!) : nil,
-                bottomLeftText: nil,
-                bottomLeftSecondaryText: nil,
-                source: MediaSource.from(mediaInfo: media),
-                showTopBadges: showContentPage || firstVisibleRow != "recommendations",
-                action: {
-                  // 点击时立即触发预加载
+              DetailCardView(
+                item: media,
+                showBadges: badges,
+                onTap: {
                   MediaPreloader.shared.preload(for: media)
                   navigationPath.append(media)
                 }
               )
+              .equatable()
               .focused($focusedRecommendId, equals: media.id)
               .mediaContextMenu(
                 item: media,
@@ -738,23 +732,17 @@ struct MediaDetailView: View {
 
         ScrollView(.horizontal, showsIndicators: false) {
           LazyHStack(spacing: 40) {
+            let badges = showContentPage || firstVisibleRow != "similar"
             ForEach(viewModel.similarPaginator.items) { media in
-              MediaCard(
-                title: media.cleanedTitle ?? "",
-                posterUrl: media.imageURLs.poster,
-                typeText: media.type,
-                ratingText: media.vote_average != nil
-                  ? String(format: "%.1f", media.vote_average!) : nil,
-                bottomLeftText: nil,
-                bottomLeftSecondaryText: nil,
-                source: MediaSource.from(mediaInfo: media),
-                showTopBadges: showContentPage || firstVisibleRow != "similar",
-                action: {
-                  // 点击时立即触发预加载
+              DetailCardView(
+                item: media,
+                showBadges: badges,
+                onTap: {
                   MediaPreloader.shared.preload(for: media)
                   navigationPath.append(media)
                 }
               )
+              .equatable()
               .focused($focusedSimilarId, equals: media.id)
               .mediaContextMenu(
                 item: media,

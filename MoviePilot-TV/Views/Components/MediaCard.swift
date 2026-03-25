@@ -32,6 +32,204 @@ enum MediaSource: String {
   }
 }
 
+private struct BadgeOverlay: View, Equatable {
+  let typeText: String?
+  let ratingText: String?
+  let bottomLeftText: String?
+  let bottomLeftSecondaryText: String?
+  let source: MediaSource?
+
+  static let typeIconMap: [String: String] = [
+    "电影": "film",
+    "电视剧": "tv",
+    "合集": "rectangle.stack",
+  ]
+
+  var body: some View {
+    Canvas { context, size in
+      let badgeBg = Color.black.opacity(0.4)
+      let cornerRadius: CGFloat = 8
+      let padding: CGFloat = 10
+      // Note: UIFont is for UIKit, not directly used in SwiftUI Canvas for text drawing.
+      // Text drawing in Canvas uses SwiftUI's Text or context.draw(Text(...)).
+      // The font variables here are illustrative and not directly applied in the Canvas drawing logic below.
+      // For actual text styling, the Text views in the symbols block handle it.
+      // let font = UIFont.systemFont(ofSize: 14, weight: .bold)
+      // let smallFont = UIFont.systemFont(ofSize: 14, weight: .medium)
+
+      // 左上：媒体类型徽章
+        // The typeIcon is resolved from symbols, which already has the correct font and foregroundStyle.
+        if let symbol = context.resolveSymbol(id: "typeIcon") {
+          // Calculate badge size based on symbol size and desired padding
+          let badgeContentWidth = symbol.size.width
+          let badgeContentHeight = symbol.size.height
+          let horizontalPadding: CGFloat = 16  // 8 on each side
+          let verticalPadding: CGFloat = 16  // 8 on each side
+          let badgeSize = CGSize(
+            width: badgeContentWidth + horizontalPadding,
+            height: badgeContentHeight + verticalPadding
+          )
+          let badgeRect = CGRect(
+            origin: CGPoint(x: padding, y: padding), size: badgeSize)
+          context.fill(
+            Path(roundedRect: badgeRect, cornerRadius: cornerRadius),
+            with: .color(badgeBg))
+          context.draw(
+            symbol,
+            at: CGPoint(x: badgeRect.midX, y: badgeRect.midY))
+        }
+
+        // 右上：评分徽章
+        if let rating = ratingText, !rating.isEmpty, let score = Double(rating), score > 0,
+          let starSymbol = context.resolveSymbol(id: "ratingStar"),
+          let ratingLabel = context.resolveSymbol(id: "ratingText")
+        {
+          let starWidth = starSymbol.size.width
+          let ratingTextWidth = ratingLabel.size.width
+          let contentSpacing: CGFloat = 4
+          let horizontalPadding: CGFloat = 20  // 10 on each side
+          let verticalPadding: CGFloat = 12  // 6 on each side
+
+          let contentWidth = starWidth + contentSpacing + ratingTextWidth
+          let contentHeight = max(starSymbol.size.height, ratingLabel.size.height)
+
+          let badgeSize = CGSize(
+            width: contentWidth + horizontalPadding, height: contentHeight + verticalPadding)
+          let badgeRect = CGRect(
+            origin: CGPoint(x: size.width - padding - badgeSize.width, y: padding),
+            size: badgeSize)
+          context.fill(
+            Path(roundedRect: badgeRect, cornerRadius: cornerRadius),
+            with: .color(badgeBg))
+
+          // Draw star and text centered within the badge
+          let startX = badgeRect.minX + horizontalPadding / 2
+          context.draw(
+            starSymbol,
+            at: CGPoint(
+              x: startX + starWidth / 2,
+              y: badgeRect.midY))
+          context.draw(
+            ratingLabel,
+            at: CGPoint(
+              x: startX + starWidth + contentSpacing + ratingTextWidth / 2,
+              y: badgeRect.midY))
+        }
+
+      // 底部区域
+      if bottomLeftText != nil || bottomLeftSecondaryText != nil || source != nil {
+        var xOffset: CGFloat = padding
+
+        // 左下：状态徽章
+        if let statusLabel = context.resolveSymbol(id: "statusText") {
+          let horizontalPadding: CGFloat = 20  // 10 on each side
+          let verticalPadding: CGFloat = 12  // 6 on each side
+          let badgeSize = CGSize(
+            width: statusLabel.size.width + horizontalPadding,
+            height: statusLabel.size.height + verticalPadding
+          )
+          let badgeRect = CGRect(
+            origin: CGPoint(x: xOffset, y: size.height - padding - badgeSize.height),
+            size: badgeSize)
+          context.fill(
+            Path(roundedRect: badgeRect, cornerRadius: cornerRadius),
+            with: .color(badgeBg))
+          context.draw(statusLabel, at: CGPoint(x: badgeRect.midX, y: badgeRect.midY))
+          xOffset = badgeRect.maxX + 6
+        }
+
+        // 左下次要状态
+        if let secondaryLabel = context.resolveSymbol(id: "secondaryText") {
+          let horizontalPadding: CGFloat = 20  // 10 on each side
+          let verticalPadding: CGFloat = 12  // 6 on each side
+          let badgeSize = CGSize(
+            width: secondaryLabel.size.width + horizontalPadding,
+            height: secondaryLabel.size.height + verticalPadding
+          )
+          let badgeRect = CGRect(
+            origin: CGPoint(x: xOffset, y: size.height - padding - badgeSize.height),
+            size: badgeSize)
+          context.fill(
+            Path(roundedRect: badgeRect, cornerRadius: cornerRadius),
+            with: .color(badgeBg))
+          context.draw(secondaryLabel, at: CGPoint(x: badgeRect.midX, y: badgeRect.midY))
+        }
+
+        // 右下：来源图标
+        if let sourceIcon = context.resolveSymbol(id: "sourceIcon") {
+          // Apply shadow before drawing the icon
+          context.addFilter(.shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1))
+          context.draw(
+            sourceIcon,
+            at: CGPoint(
+              x: size.width - padding - sourceIcon.size.width / 2 - 6,  // Adjusted for padding and icon's own internal padding
+              y: size.height - padding - sourceIcon.size.height / 2 - 2))  // Adjusted for padding and icon's own internal padding
+        }
+      }
+    } symbols: {
+      // 通过 symbols 提供需要的 SwiftUI 内容（仅创建一次，不参与 view tree diffing）
+      let typeIcon = Self.typeIconMap[typeText ?? ""] ?? "film"
+      Group {
+        if let type = typeText, !type.isEmpty {
+          if Self.typeIconMap[type] != nil {  // Check if it's an icon type
+            Image(systemName: typeIcon)
+          } else {  // It's a text type
+            Text(type)
+          }
+        } else {  // Default to film icon if typeText is nil or empty
+          Image(systemName: "film")
+        }
+      }
+      .font(.caption2.bold())
+      .foregroundStyle(.white)
+      .tag("typeIcon")
+
+      if let rating = ratingText, !rating.isEmpty, let score = Double(rating), score > 0 {
+        Image(systemName: "star.fill")
+          .font(.caption2)
+          .foregroundStyle(.yellow)
+          .tag("ratingStar")
+
+        Text(rating)
+          .font(.caption2.bold())
+          .foregroundStyle(.white)
+          .tag("ratingText")
+      }
+
+      if let status = bottomLeftText, !status.isEmpty {
+        Text(status)
+          .font(.caption2)
+          .foregroundStyle(.white)
+          .tag("statusText")
+      }
+
+      if let secondary = bottomLeftSecondaryText, !secondary.isEmpty {
+        Text(secondary)
+          .font(.caption2)
+          .foregroundStyle(.white)
+          .tag("secondaryText")
+      }
+
+      if let source = source {
+        Image(source.iconName)
+          .resizable()
+          .aspectRatio(contentMode: .fit)
+          .frame(width: 36, height: 36)
+          .padding(.horizontal, 6)  // Re-apply padding from original SwiftUI view
+          .padding(.vertical, 2)
+          .tag("sourceIcon")
+      }
+    }
+  }
+
+  static func == (lhs: BadgeOverlay, rhs: BadgeOverlay) -> Bool {
+    lhs.typeText == rhs.typeText && lhs.ratingText == rhs.ratingText
+      && lhs.bottomLeftText == rhs.bottomLeftText
+      && lhs.bottomLeftSecondaryText == rhs.bottomLeftSecondaryText
+      && lhs.source == rhs.source
+  }
+}
+
 struct MediaCard: View {
   static let defaultGridColumns = Array(
     repeating: GridItem(.fixed(256), spacing: 44, alignment: .top),
@@ -47,9 +245,8 @@ struct MediaCard: View {
   let bottomLeftText: String?  // 左下角：主要状态 (例如 "已订阅")
   let bottomLeftSecondaryText: String?  // 左下角：次要状态 (例如 "更新至 10 集")
   let source: MediaSource?  // 右下角：数据源图标
-  let overlayTitle: String?
 
-  var showTopBadges: Bool = true
+  var showBadges: Bool = true
 
   @FocusState private var isFocused: Bool
   @State private var isImageFailed: Bool = false
@@ -85,8 +282,7 @@ struct MediaCard: View {
     bottomLeftText: String? = nil,
     bottomLeftSecondaryText: String? = nil,
     source: MediaSource? = nil,
-    overlayTitle: String? = nil,
-    showTopBadges: Bool = true,
+    showBadges: Bool = true,
     width: CGFloat = 256,
     height: CGFloat = 384,
     subTitleBelow: String? = nil,
@@ -102,8 +298,7 @@ struct MediaCard: View {
     self.bottomLeftText = bottomLeftText
     self.bottomLeftSecondaryText = bottomLeftSecondaryText
     self.source = source
-    self.overlayTitle = overlayTitle
-    self.showTopBadges = showTopBadges
+    self.showBadges = showBadges
     self.width = width
     self.height = height
     self.subTitleBelow = subTitleBelow
@@ -186,151 +381,68 @@ struct MediaCard: View {
 
   // 提取的海报内容 - Apple TV 风格设计
   private var posterContent: some View {
-    return ZStack {
-      // 1. 背景 / 失败状态
-      // 如果图片加载失败或 URL 为空，则显示此内容
-      let resolvedTypeIcon = Self.typeIconMap[typeText ?? ""] ?? "film"
-
-      Rectangle()
-        .fill(Color(white: 0.12))
-        .overlay(
-          Image(systemName: resolvedTypeIcon)
-            .font(.title2)
-            .foregroundColor(.gray)
-        )
-
-      // 2. 网络图片
-      if !isImageFailed, let url = posterUrl {
-        KFImage(url)
-          .requestModifier(AnyModifier.cookieModifier)
-          .onFailure { _ in
-            isImageFailed = true
-          }
-          .placeholder {
-            Rectangle()
-              .fill(Color(white: 0.12))
-              .overlay(
-                Image(systemName: "photo")
-                  .font(.title3)
-                  .foregroundStyle(.gray)
-              )
-          }
-          .downsampling(size: CGSize(width: width, height: height))
-          .resizing(referenceSize: CGSize(width: 256, height: 384), mode: .aspectFill)
-          .resizable()
-          .fade(duration: 0.25)
-          .aspectRatio(contentMode: .fill)
-          .frame(width: width, height: height)
-          // TODO: 如果未来有大量需要模糊的卡片，应考虑切换回 Kingfisher 的 BlurImageProcessor，并结合图片预缓存机制（例如 Kingfisher 的 ImagePrefetcher）来优化性能，避免实时模糊带来的卡顿。
-          .blur(radius: isBackgroundBlurred ? 20 : 0)
+    let resolvedTypeIcon = Self.typeIconMap[typeText ?? ""] ?? "film"
+    return KFImage(posterUrl)
+      .requestModifier(AnyModifier.cookieModifier)
+      .onFailure { _ in
+        isImageFailed = true
       }
-
-      // 覆盖标题
-      if let overlayTitle = overlayTitle, !overlayTitle.isEmpty {
-        Color.black.opacity(0.3)
-        Text(overlayTitle)
-          .font(.headline.bold())
-          .foregroundStyle(isFocused ? .white : .secondary)
-          .multilineTextAlignment(.center)
-          .padding()
+      .placeholder {
+        Rectangle()
+          .fill(Color(white: 0.12))
+          .overlay(
+            Image(systemName: resolvedTypeIcon)
+              .font(.title2)
+              .foregroundStyle(.gray)
+          )
       }
-
-      // 覆盖徽章 - 纯色浅黑风格
-      VStack {
-        if showTopBadges {
-          // 顶行徽章
-          HStack(alignment: .top, spacing: 8) {
-            // 左上：媒体类型徽章
-            Group {
-              if let type = typeText, !type.isEmpty {
-                if let iconName = Self.typeIconMap[type] {
-                  // 匹配到图标，显示图标徽章
-                  Image(systemName: iconName)
-                } else {
-                  // 未匹配到图标，直接显示文字徽章
-                  Text(type)
-                    .font(.caption2.weight(.medium))
-                }
-              } else {
-                // 如果 typeText 为空 or nil，显示默认的 film 图标
-                Image(systemName: "film")
-              }
-            }
-            .font(.caption2.bold())
-            .foregroundStyle(.white)
-            .padding(8)
-            .background(Color.black.opacity(0.4))
-            .cornerRadius(8)
-
-            Spacer(minLength: 0)
-
-            // 右上：评分徽章
-            if let rating = ratingText, !rating.isEmpty, let score = Double(rating), score > 0 {
-              HStack(spacing: 4) {
-                Image(systemName: "star.fill")
-                  .font(.caption2)
-                  .foregroundStyle(.yellow)
-                Text(rating)
-                  .font(.caption2.bold())
-                  .foregroundStyle(.white)
-              }
-              .padding(.horizontal, 10)
-              .padding(.vertical, 6)
-              .background(Color.black.opacity(0.4))
-              .cornerRadius(8)
-            }
-          }
-          .padding(10)
-        }
-
-        Spacer()
-
-        if bottomLeftText != nil || bottomLeftSecondaryText != nil || source != nil {
-          HStack(alignment: .bottom, spacing: 6) {
-            // 左下：状态徽章 (如果两者都存在则堆叠)
-            if bottomLeftText != nil || bottomLeftSecondaryText != nil {
-              HStack(spacing: 6) {
-                if let status = bottomLeftText, !status.isEmpty {
-                  Text(status)
-                    .font(.caption2)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.black.opacity(0.4))
-                    .cornerRadius(8)
-                }
-                if let secondary = bottomLeftSecondaryText, !secondary.isEmpty {
-                  Text(secondary)
-                    .font(.caption2)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.black.opacity(0.4))
-                    .cornerRadius(8)
-                }
-              }
-            }
-
-            Spacer(minLength: 0)
-
-            // 右下：来源图标
-            if let source = source {
-              Image(source.iconName)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 36, height: 36)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
-            }
-          }
-          .padding(10)
+      .downsampling(size: CGSize(width: width, height: height))
+      .resizing(referenceSize: CGSize(width: 256, height: 384), mode: .aspectFill)
+      .resizable()
+      .fade(duration: 0.25)
+      .aspectRatio(contentMode: .fill)
+      .frame(width: width, height: height)
+      .overlay {
+        if showBadges {
+          // 覆盖徽章 - 纯色浅黑风格
+          BadgeOverlay(
+            typeText: typeText,
+            ratingText: ratingText,
+            bottomLeftText: bottomLeftText,
+            bottomLeftSecondaryText: bottomLeftSecondaryText,
+            source: source
+          )
+          .equatable()
         }
       }
-    }
-    .onChange(of: posterUrl) { _, _ in
-      isImageFailed = false
-    }
   }
 
+}
+
+// MARK: - EquatableView 包装器（用于详情页推荐/类似横向列表）
+
+/// 将 MediaCard 包装在 Equatable 视图中，用于详情页的推荐/类似区域。
+/// 配合 `.equatable()` 修饰符，仅当 item.id 或 showBadges 变化时才重新求值 body。
+struct DetailCardView: View, Equatable {
+  let item: MediaInfo
+  let showBadges: Bool
+  let onTap: () -> Void
+
+  static func == (lhs: DetailCardView, rhs: DetailCardView) -> Bool {
+    lhs.item.id == rhs.item.id && lhs.showBadges == rhs.showBadges
+  }
+
+  var body: some View {
+    MediaCard(
+      title: item.cleanedTitle ?? "",
+      posterUrl: item.imageURLs.poster,
+      typeText: item.type,
+      ratingText: item.vote_average.map { String(format: "%.1f", $0) },
+      bottomLeftText: nil,
+      bottomLeftSecondaryText: nil,
+      source: MediaSource.from(mediaInfo: item),
+      showBadges: showBadges,
+      action: onTap
+    )
+  }
 }
