@@ -14,42 +14,31 @@ struct MoreCard: View {
   var body: some View {
     VStack(spacing: 10) {
       // 海报图片及模糊背景
-      Button(action: action) {
-        ZStack {
-          if let url = posterUrl {
-            KFImage(url)
-              .requestModifier(AnyModifier.cookieModifier)
-              .placeholder {
-                Color(white: 0.12)
-              }
-              .downsampling(size: CGSize(width: width, height: height))
-              .resizing(referenceSize: CGSize(width: 256, height: 384), mode: .aspectFill)
-              .resizable()
-              .fade(duration: 0.25)
-              .aspectRatio(contentMode: .fill)
-              .frame(width: width, height: height)
-              .blur(radius: 20)
-              .clipped()
-          } else {
+      ZStack {
+        KFImage(posterUrl)
+          .requestModifier(AnyModifier.cookieModifier)
+          .placeholder {
             Color(white: 0.12)
-              .frame(width: width, height: height)
           }
+          .downsampling(size: CGSize(width: width, height: height))
+          .resizing(referenceSize: CGSize(width: 256, height: 384), mode: .aspectFill)
+          .resizable()
+          .fade(duration: 0.25)
+          .aspectRatio(contentMode: .fill)
+          .frame(width: width, height: height)
+          .blur(radius: 20)
+          .clipped()
 
-          // 半透明遮罩层
-          Color.black.opacity(0.3)
+        // 半透明遮罩层
+        Color.black.opacity(0.3)
 
-          // 中间文字
-          Text(titleText)
-            .font(.headline.bold())
-            .foregroundStyle(isFocused ? .white : .secondary)
-            .multilineTextAlignment(.center)
-            .padding()
-        }
-        .frame(width: width, height: height)
-        .clipShape(RoundedRectangle(cornerRadius: 20))
+        // 中间文字
+        Text(titleText)
+          .font(.headline.bold())
+          .foregroundStyle(isFocused ? .white : .secondary)
+          .multilineTextAlignment(.center)
+          .padding()
       }
-      .buttonStyle(.plain)
-      .focused($isFocused)
       .frame(width: width, height: height)
       .clipShape(RoundedRectangle(cornerRadius: 20))
       .shadow(
@@ -58,6 +47,11 @@ struct MoreCard: View {
         y: 10
       )
       .scaleEffect(isFocused ? 1.1 : 1.0)
+      .focusable(true)
+      .focused($isFocused)
+      .onTapGesture {
+        action()
+      }
       .animation(.easeInOut(duration: 0.2), value: isFocused)
 
       // 文本占位区 (与 MediaCard 保持一致的高度)

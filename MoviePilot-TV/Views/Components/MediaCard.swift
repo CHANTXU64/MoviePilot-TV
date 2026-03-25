@@ -50,71 +50,71 @@ private struct BadgeOverlay: View, Equatable {
       let badgeBg = Color.black.opacity(0.4)
       let cornerRadius: CGFloat = 8
       let padding: CGFloat = 10
-      // Note: UIFont is for UIKit, not directly used in SwiftUI Canvas for text drawing.
-      // Text drawing in Canvas uses SwiftUI's Text or context.draw(Text(...)).
-      // The font variables here are illustrative and not directly applied in the Canvas drawing logic below.
-      // For actual text styling, the Text views in the symbols block handle it.
+      // 注意：UIFont 属于 UIKit，不直接用于 SwiftUI Canvas 的文本绘制。
+      // Canvas 中的文本绘制使用 SwiftUI 的 Text 或 context.draw(Text(...))。
+      // 这里的字体变量仅用于说明，并未直接应用在下方的 Canvas 绘制逻辑中。
+      // 对于实际的文本样式，由 symbols 块中的 Text 视图处理。
       // let font = UIFont.systemFont(ofSize: 14, weight: .bold)
       // let smallFont = UIFont.systemFont(ofSize: 14, weight: .medium)
 
       // 左上：媒体类型徽章
-        // The typeIcon is resolved from symbols, which already has the correct font and foregroundStyle.
-        if let symbol = context.resolveSymbol(id: "typeIcon") {
-          // Calculate badge size based on symbol size and desired padding
-          let badgeContentWidth = symbol.size.width
-          let badgeContentHeight = symbol.size.height
-          let horizontalPadding: CGFloat = 16  // 8 on each side
-          let verticalPadding: CGFloat = 16  // 8 on each side
-          let badgeSize = CGSize(
-            width: badgeContentWidth + horizontalPadding,
-            height: badgeContentHeight + verticalPadding
-          )
-          let badgeRect = CGRect(
-            origin: CGPoint(x: padding, y: padding), size: badgeSize)
-          context.fill(
-            Path(roundedRect: badgeRect, cornerRadius: cornerRadius),
-            with: .color(badgeBg))
-          context.draw(
-            symbol,
-            at: CGPoint(x: badgeRect.midX, y: badgeRect.midY))
-        }
+      // 媒体类型图标从 symbols 中解析，symbols 已经配置了正确的字体和前景色。
+      if let symbol = context.resolveSymbol(id: "typeIcon") {
+        // 根据 symbol 大小和所需边距计算徽章大小
+        let badgeContentWidth = symbol.size.width
+        let badgeContentHeight = symbol.size.height
+        let horizontalPadding: CGFloat = 16  // 每侧 8px
+        let verticalPadding: CGFloat = 16  // 每侧 8px
+        let badgeSize = CGSize(
+          width: badgeContentWidth + horizontalPadding,
+          height: badgeContentHeight + verticalPadding
+        )
+        let badgeRect = CGRect(
+          origin: CGPoint(x: padding, y: padding), size: badgeSize)
+        context.fill(
+          Path(roundedRect: badgeRect, cornerRadius: cornerRadius),
+          with: .color(badgeBg))
+        context.draw(
+          symbol,
+          at: CGPoint(x: badgeRect.midX, y: badgeRect.midY))
+      }
 
-        // 右上：评分徽章
-        if let rating = ratingText, !rating.isEmpty, let score = Double(rating), score > 0,
-          let starSymbol = context.resolveSymbol(id: "ratingStar"),
-          let ratingLabel = context.resolveSymbol(id: "ratingText")
-        {
-          let starWidth = starSymbol.size.width
-          let ratingTextWidth = ratingLabel.size.width
-          let contentSpacing: CGFloat = 4
-          let horizontalPadding: CGFloat = 20  // 10 on each side
-          let verticalPadding: CGFloat = 12  // 6 on each side
+      // 右上：评分徽章
+      if let rating = ratingText, !rating.isEmpty, let score = Double(rating), score > 0,
+        let starSymbol = context.resolveSymbol(id: "ratingStar"),
+        let ratingLabel = context.resolveSymbol(id: "ratingText")
+      {
+        let starWidth = starSymbol.size.width
+        let ratingTextWidth = ratingLabel.size.width
+        let contentSpacing: CGFloat = 4
+        let horizontalPadding: CGFloat = 20  // 每侧 10px
+        let verticalPadding: CGFloat = 12  // 每侧 6px
 
-          let contentWidth = starWidth + contentSpacing + ratingTextWidth
-          let contentHeight = max(starSymbol.size.height, ratingLabel.size.height)
+        let contentWidth = starWidth + contentSpacing + ratingTextWidth
+        let contentHeight = max(starSymbol.size.height, ratingLabel.size.height)
 
-          let badgeSize = CGSize(
-            width: contentWidth + horizontalPadding, height: contentHeight + verticalPadding)
-          let badgeRect = CGRect(
-            origin: CGPoint(x: size.width - padding - badgeSize.width, y: padding),
-            size: badgeSize)
-          context.fill(
-            Path(roundedRect: badgeRect, cornerRadius: cornerRadius),
-            with: .color(badgeBg))
+        let badgeSize = CGSize(
+          width: contentWidth + horizontalPadding, height: contentHeight + verticalPadding)
+        let badgeRect = CGRect(
+          origin: CGPoint(x: size.width - padding - badgeSize.width, y: padding),
+          size: badgeSize)
+        context.fill(
+          Path(roundedRect: badgeRect, cornerRadius: cornerRadius),
+          with: .color(badgeBg))
 
-          // Draw star and text centered within the badge
-          let startX = badgeRect.minX + horizontalPadding / 2
-          context.draw(
-            starSymbol,
-            at: CGPoint(
-              x: startX + starWidth / 2,
-              y: badgeRect.midY))
-          context.draw(
-            ratingLabel,
-            at: CGPoint(
-              x: startX + starWidth + contentSpacing + ratingTextWidth / 2,
-              y: badgeRect.midY))
-        }
+        // 在徽章内居中绘制星星和文本
+        let startX = badgeRect.minX + horizontalPadding / 2
+        context.draw(
+          starSymbol,
+          at: CGPoint(
+            x: startX + starWidth / 2,
+            y: badgeRect.midY))
+        context.draw(
+          ratingLabel,
+          at: CGPoint(
+            x: startX + starWidth + contentSpacing + ratingTextWidth / 2,
+            y: badgeRect.midY))
+      }
 
       // 底部区域
       if bottomLeftText != nil || bottomLeftSecondaryText != nil || source != nil {
@@ -122,8 +122,8 @@ private struct BadgeOverlay: View, Equatable {
 
         // 左下：状态徽章
         if let statusLabel = context.resolveSymbol(id: "statusText") {
-          let horizontalPadding: CGFloat = 20  // 10 on each side
-          let verticalPadding: CGFloat = 12  // 6 on each side
+          let horizontalPadding: CGFloat = 20  // 每侧 10px
+          let verticalPadding: CGFloat = 12  // 每侧 6px
           let badgeSize = CGSize(
             width: statusLabel.size.width + horizontalPadding,
             height: statusLabel.size.height + verticalPadding
@@ -140,8 +140,8 @@ private struct BadgeOverlay: View, Equatable {
 
         // 左下次要状态
         if let secondaryLabel = context.resolveSymbol(id: "secondaryText") {
-          let horizontalPadding: CGFloat = 20  // 10 on each side
-          let verticalPadding: CGFloat = 12  // 6 on each side
+          let horizontalPadding: CGFloat = 20  // 每侧 10px
+          let verticalPadding: CGFloat = 12  // 每侧 6px
           let badgeSize = CGSize(
             width: secondaryLabel.size.width + horizontalPadding,
             height: secondaryLabel.size.height + verticalPadding
@@ -157,13 +157,13 @@ private struct BadgeOverlay: View, Equatable {
 
         // 右下：来源图标
         if let sourceIcon = context.resolveSymbol(id: "sourceIcon") {
-          // Apply shadow before drawing the icon
+          // 绘制图标前应用阴影
           context.addFilter(.shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1))
           context.draw(
             sourceIcon,
             at: CGPoint(
-              x: size.width - padding - sourceIcon.size.width / 2 - 6,  // Adjusted for padding and icon's own internal padding
-              y: size.height - padding - sourceIcon.size.height / 2 - 2))  // Adjusted for padding and icon's own internal padding
+              x: size.width - padding - sourceIcon.size.width / 2 - 6,  // 考虑了边距和图标自身的内部间距
+              y: size.height - padding - sourceIcon.size.height / 2 - 2))  // 考虑了边距和图标自身的内部间距
         }
       }
     } symbols: {
@@ -171,13 +171,11 @@ private struct BadgeOverlay: View, Equatable {
       let typeIcon = Self.typeIconMap[typeText ?? ""] ?? "film"
       Group {
         if let type = typeText, !type.isEmpty {
-          if Self.typeIconMap[type] != nil {  // Check if it's an icon type
+          if Self.typeIconMap[type] != nil {  // 检查是否为图标类型
             Image(systemName: typeIcon)
-          } else {  // It's a text type
+          } else {
             Text(type)
           }
-        } else {  // Default to film icon if typeText is nil or empty
-          Image(systemName: "film")
         }
       }
       .font(.caption2.bold())
@@ -215,7 +213,7 @@ private struct BadgeOverlay: View, Equatable {
           .resizable()
           .aspectRatio(contentMode: .fit)
           .frame(width: 36, height: 36)
-          .padding(.horizontal, 6)  // Re-apply padding from original SwiftUI view
+          .padding(.horizontal, 6)  // 重新应用原始 SwiftUI 视图中的内边距
           .padding(.vertical, 2)
           .tag("sourceIcon")
       }
@@ -310,15 +308,8 @@ struct MediaCard: View {
 
   var body: some View {
     VStack(spacing: 10) {
-      // 海报图片 - 仅在提供操作时才包装在按钮中
-      if let action = action {
-        Button(action: action) {
-          posterContent
-            .frame(width: width, height: height)
-            .clipShape(RoundedRectangle(cornerRadius: 20))
-        }
-        .buttonStyle(.plain)
-        .focused($isFocused)
+      // 海报图片
+      posterContent
         .frame(width: width, height: height)
         .clipShape(RoundedRectangle(cornerRadius: 20))
         .shadow(
@@ -328,9 +319,11 @@ struct MediaCard: View {
         )
         .scaleEffect(isFocused ? 1.1 : 1.0)
         .animation(.easeInOut(duration: 0.2), value: isFocused)
-      } else {
-        posterContent
-      }
+        .focusable(true)
+        .focused($isFocused)
+        .onTapGesture {
+          action?()
+        }
 
       // 标题和副标题 - 在按钮外部，清晰分离
       textInfoView
