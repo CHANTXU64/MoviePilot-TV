@@ -19,16 +19,21 @@ struct PersonCard: View {
 
   var body: some View {
     VStack(spacing: 10) {
-      if let action = action {
-        Button(action: action) {
-          posterContent
-        }
-        .focused($isFocused)
+      posterContent
         .frame(width: width, height: height)
-        .buttonStyle(.card)
-      } else {
-        posterContent
-      }
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+        .shadow(
+          color: .black.opacity(isFocused ? 0.5 : 0),
+          radius: 20,
+          y: 10
+        )
+        .scaleEffect(isFocused ? 1.1 : 1.0)
+        .animation(.easeInOut(duration: 0.2), value: isFocused)
+        .focusable(true)
+        .focused($isFocused)
+        .onTapGesture {
+          action?()
+        }
 
       textInfoView
     }
@@ -57,7 +62,7 @@ struct PersonCard: View {
     .frame(width: width + 20)
     .padding(.horizontal, -10)
     .offset(y: isFocused ? 16 : 0)
-    .animation(.easeOut(duration: 0.3), value: isFocused)
+    .animation(.easeInOut(duration: 0.2), value: isFocused)
   }
 
   private var posterContent: some View {
