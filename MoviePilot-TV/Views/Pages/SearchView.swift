@@ -381,7 +381,7 @@ private struct ResultRow: View {
         .padding(.leading, 8)
 
       ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: 40) {
+        LazyHStack(spacing: 40) {
           ForEach(items) { item in
             MediaCard(
               title: item.cleanedTitle ?? "",
@@ -460,7 +460,7 @@ private struct PersonResultRow: View {
         .padding(.leading, 8)
 
       ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: 30) {
+        LazyHStack(spacing: 40) {
           ForEach(items) { item in
             PersonCard(person: item) {
               navigationPath.append(item)

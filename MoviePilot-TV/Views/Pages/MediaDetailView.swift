@@ -575,7 +575,7 @@ struct MediaDetailView: View {
         }
 
         ScrollView(.horizontal, showsIndicators: false) {
-          LazyHStack(spacing: 30) {
+          LazyHStack(spacing: 40) {
             ForEach(directors) { director in
               PersonCard(
                 person: director,
@@ -618,7 +618,7 @@ struct MediaDetailView: View {
         }
 
         ScrollView(.horizontal, showsIndicators: false) {
-          LazyHStack(spacing: 30) {
+          LazyHStack(spacing: 40) {
             ForEach(actors) { actor in
               PersonCard(person: actor) {
                 navigationPath.append(actor)

@@ -2,20 +2,15 @@ import Kingfisher
 import SwiftUI
 
 struct PersonCard: View {
-  static let defaultGridColumns = [
-    GridItem(.adaptive(minimum: 180, maximum: 240), spacing: 20, alignment: .top)
-  ]
-
   let person: Person
   var staffImageUrl: URL? = nil
-  let width: CGFloat = 180
-  let height: CGFloat = 270
+  let width: CGFloat = 210
+  let height: CGFloat = 315
 
   // 卡片被点击时的操作
   var action: (() -> Void)? = nil
 
   @FocusState private var isFocused: Bool
-  @State private var isImageFailed: Bool = false
 
   var body: some View {
     VStack(spacing: 10) {
@@ -67,38 +62,22 @@ struct PersonCard: View {
 
   private var posterContent: some View {
     let url = staffImageUrl ?? person.imageURLs.profile
-    return ZStack {
-      // 1. 背景 / 失败状态
-      Rectangle()
-        .fill(Color(white: 0.12))
-        .overlay(
-          Image(systemName: "person.fill")
-            .font(.largeTitle)
-            .foregroundColor(.gray)
-        )
-
-      // 2. 网络图片
-      if !isImageFailed, let validUrl = url {
-        KFImage(validUrl)
-          .requestModifier(AnyModifier.cookieModifier)
-          .onFailure { _ in
-            isImageFailed = true
-          }
-          .placeholder {
-            Rectangle()
-              .fill(Color(white: 0.12))
-              .overlay(ProgressView().tint(.gray))
-          }
-          .resizing(referenceSize: CGSize(width: 180, height: 270), mode: .aspectFill)
-          .resizable()
-          .fade(duration: 0.25)
-          .aspectRatio(contentMode: .fill)
-          .frame(width: width, height: height)
-          .clipped()
+    return KFImage(url)
+      .requestModifier(AnyModifier.cookieModifier)
+      .placeholder {
+        Rectangle()
+          .fill(Color(white: 0.12))
+          .overlay(
+            Image(systemName: "person.fill")
+              .font(.largeTitle)
+              .foregroundColor(.gray)
+          )
       }
-    }
-    .onChange(of: url) { _, _ in
-      isImageFailed = false
-    }
+      .resizing(referenceSize: CGSize(width: 210, height: 315), mode: .aspectFill)
+      .resizable()
+      .fade(duration: 0.25)
+      .aspectRatio(contentMode: .fill)
+      .frame(width: width, height: height)
+      .clipped()
   }
 }

@@ -247,7 +247,6 @@ struct MediaCard: View {
   var showBadges: Bool = true
 
   @FocusState private var isFocused: Bool
-  @State private var isImageFailed: Bool = false
 
   var width: CGFloat = 256
   var height: CGFloat = 384
@@ -377,9 +376,6 @@ struct MediaCard: View {
     let resolvedTypeIcon = Self.typeIconMap[typeText ?? ""] ?? "film"
     return KFImage(posterUrl)
       .requestModifier(AnyModifier.cookieModifier)
-      .onFailure { _ in
-        isImageFailed = true
-      }
       .placeholder {
         Rectangle()
           .fill(Color(white: 0.12))
