@@ -30,21 +30,25 @@ struct ReorganizeSheet: View {
             Text("手动整理")
               .font(.headline)
               .foregroundColor(.secondary)
-              .padding(.top, 10)
+              .padding(.top, 28)
+              .padding(.bottom, 0)
 
-            List {
-              basicSettings
-              recognitionInfo
-              if viewModel.form.type_name == "电视剧" {
-                seriesInfo
+            ScrollView {
+              VStack {
+                basicSettings
+                recognitionInfo
+                if viewModel.form.type_name == "电视剧" {
+                  seriesInfo
+                }
+                advancedSection
+                actionButtons
               }
-              advancedSection
-              actionButtons
+              .padding(.horizontal, 28)
+              .padding(.top, 10)
+              .padding(.bottom, 28)
+              .applySheetStyles()
             }
-            .applySheetStyles()
           }
-          .padding()
-          .frame(maxWidth: 1200)
         }
       }
       .task {
@@ -214,7 +218,9 @@ struct ReorganizeSheet: View {
           Image(systemName: showAdvanced ? "chevron.down" : "chevron.right")
         }
         .foregroundColor(isAdvancedButtonFocused ? .black : .secondary)
-        .padding(.horizontal)
+        .if(SheetStyleFix.shouldApply) { view in
+          view.padding(.horizontal)
+        }
       }
       .focused($isAdvancedButtonFocused)
 

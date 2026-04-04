@@ -3,9 +3,8 @@ import SwiftUI
 enum SheetStyleFix {
   static var shouldApply: Bool {
     let version = ProcessInfo.processInfo.operatingSystemVersion
-    // 用户请求的范围：26.0 到 26.x
-    // return version.majorVersion == 26 && version.minorVersion <= 3
-    return version.majorVersion >= 26
+    // 有Bug的版本：26.0 到 26.3
+    return version.majorVersion == 26 && version.minorVersion <= 3
   }
 }
 

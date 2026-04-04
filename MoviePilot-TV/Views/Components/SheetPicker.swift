@@ -30,7 +30,9 @@ struct SheetPicker<Value: Hashable>: View {
           Text(String(describing: selection).isEmpty ? "未选择" : String(describing: selection))
         }
       }
-      .padding(.horizontal)
+      .if(SheetStyleFix.shouldApply) { view in
+        view.padding(.horizontal)
+      }
     }
     .sheet(isPresented: $showingPicker) {
       SheetPickerDetailView(
@@ -50,43 +52,31 @@ private struct SheetPickerDetailView<Value: Hashable>: View {
   @Binding var isPresented: Bool
 
   var body: some View {
-    ScrollView {
-      VStack(spacing: 12) {
-        ForEach(options) { option in
-          Button(action: {
-            selection = option.value
-            isPresented = false
-          }) {
-            HStack {
-              Text(option.title)
-              Spacer()
-              if option.value == selection {
-                Image(systemName: "checkmark")
+    NavigationStack {
+      ScrollView {
+        VStack {
+          ForEach(options) { option in
+            Button(action: {
+              selection = option.value
+              isPresented = false
+            }) {
+              HStack {
+                Text(option.title)
+                Spacer()
+                if option.value == selection {
+                  Image(systemName: "checkmark")
+                }
+              }
+              .if(SheetStyleFix.shouldApply) { view in
+                view.padding(.horizontal)
               }
             }
-            .padding(.horizontal)
-          }
-          .if(SheetStyleFix.shouldApply) { view in
-            view.buttonStyle(SheetButtonStyle())
           }
         }
+        .applySheetStyles()
+        .padding(28)
       }
-      .padding()
     }
-    .padding(.vertical, 30)
-    .padding(.horizontal, 20)
   }
 }
 
-// 用于条件修饰符的视图扩展
-extension View {
-  @ViewBuilder
-  fileprivate func `if`<Content: View>(_ condition: Bool, transform: (Self) -> Content) -> some View
-  {
-    if condition {
-      transform(self)
-    } else {
-      self
-    }
-  }
-}

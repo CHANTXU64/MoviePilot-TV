@@ -199,9 +199,11 @@ struct SearchView: View {
         )
       }
       .sheet(isPresented: $showSiteSelection) {
-        SiteSelectionView(
-          availableSites: viewModel.siteFilter.availableSites,
-          selectedSites: $viewModel.siteFilter.selectedSites
+        MultiSelectionSheet(
+          options: viewModel.siteFilter.availableSites,
+          id: \.id,
+          selected: $viewModel.siteFilter.selectedSites,
+          label: { $0.name }
         )
       }
       // 使用原生搜索栏

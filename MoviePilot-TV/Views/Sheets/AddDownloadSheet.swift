@@ -29,17 +29,17 @@ struct AddDownloadSheet: View {
               .font(.headline)
               .lineLimit(1)
               .foregroundColor(.secondary)
-              .padding(.top, 10)
+              .padding(.top, 28)
+              .padding(.bottom, 0)
 
             ScrollView {
-              VStack(spacing: 24) {
+              VStack {
                 LabeledContent("标题") {
                   Text(viewModel.torrent.title ?? "未知")
                     .foregroundColor(.secondary)
                     .lineLimit(3)
                     .truncationMode(.tail)
                 }
-                .padding(.horizontal)
 
                 if let description = viewModel.torrent.description {
                   LabeledContent("描述") {
@@ -48,21 +48,18 @@ struct AddDownloadSheet: View {
                       .lineLimit(3)
                       .truncationMode(.tail)
                   }
-                  .padding(.horizontal)
                 }
 
                 LabeledContent("大小") {
                   Text(viewModel.torrent.size.formattedBytes())
                     .foregroundColor(.secondary)
                 }
-                .padding(.horizontal)
 
                 if let seeds = viewModel.torrent.seeders, let peers = viewModel.torrent.peers {
                   LabeledContent("做种/下载") {
                     Text("\(seeds) / \(peers)")
                       .foregroundColor(.secondary)
                   }
-                  .padding(.horizontal)
                 }
 
                 if let site = viewModel.torrent.site_name {
@@ -70,7 +67,6 @@ struct AddDownloadSheet: View {
                     Text(site)
                       .foregroundColor(.secondary)
                   }
-                  .padding(.horizontal)
                 }
 
                 // List {
@@ -84,7 +80,6 @@ struct AddDownloadSheet: View {
                     PickerOption(title: $0.name, value: $0.name)
                   }
                 )
-                .padding(.horizontal)
 
                 SheetPicker(
                   title: "保存路径",
@@ -97,7 +92,6 @@ struct AddDownloadSheet: View {
                       PickerOption(title: $0, value: $0)
                     }
                 )
-                .padding(.horizontal)
 
                 Button {
                   withAnimation {
@@ -110,9 +104,10 @@ struct AddDownloadSheet: View {
                     Image(systemName: showAdvanced ? "chevron.down" : "chevron.right")
                   }
                   .foregroundColor(isAdvancedButtonFocused ? .black : .secondary)
-                  .padding(.horizontal)
+                  .if(SheetStyleFix.shouldApply) { view in
+                    view.padding(.horizontal)
+                  }
                 }
-                .padding(.horizontal)
                 .focused($isAdvancedButtonFocused)
 
                 if showAdvanced {
@@ -122,7 +117,6 @@ struct AddDownloadSheet: View {
                     text: $viewModel.tmdbId,
                     keyboardType: .numberPad
                   )
-                  .padding(.horizontal)
                 }
 
                 Button(action: {
@@ -139,7 +133,6 @@ struct AddDownloadSheet: View {
                   .frame(maxWidth: .infinity)
                 }
                 .disabled(viewModel.isLoading || viewModel.isSubmitting)
-                .padding(.horizontal)
 
                 Button {
                   dismiss()
@@ -147,14 +140,13 @@ struct AddDownloadSheet: View {
                   Text("取消")
                     .frame(maxWidth: .infinity)
                 }
-                .padding(.horizontal)
-                .padding(.bottom, 20)
               }
+              .padding(.horizontal, 28)
+              .padding(.top, 10)
+              .padding(.bottom, 28)
               .applySheetStyles()
             }
           }
-          .padding()
-          .frame(maxWidth: 1200)
         }
       }
       .task {

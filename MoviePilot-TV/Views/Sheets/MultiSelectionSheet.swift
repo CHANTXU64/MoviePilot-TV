@@ -10,27 +10,33 @@ struct MultiSelectionSheet<T, ID: Hashable>: View {
 
   var body: some View {
     NavigationStack {
-      List {
-        ForEach(options, id: id) { item in
-          let itemId = item[keyPath: id]
-          Toggle(
-            label(item),
-            isOn: Binding(
-              get: { selected.contains(itemId) },
-              set: { isSelected in
-                if isSelected {
-                  selected.insert(itemId)
-                } else {
-                  selected.remove(itemId)
+      ScrollView {
+        VStack {
+          ForEach(options, id: id) { item in
+            let itemId = item[keyPath: id]
+            Toggle(
+              label(item),
+              isOn: Binding(
+                get: { selected.contains(itemId) },
+                set: { isSelected in
+                  if isSelected {
+                    selected.insert(itemId)
+                  } else {
+                    selected.remove(itemId)
+                  }
                 }
-              }
+              )
             )
-          )
-          .applySheetStyles()
+          }
+
+          Button(action: { dismiss() }) {
+            Text("确认")
+              .frame(maxWidth: .infinity)
+          }
         }
+        .applySheetStyles()
+        .padding(28)
       }
-      .padding(.vertical, 20)
-      .padding()
     }
   }
 }

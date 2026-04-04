@@ -274,9 +274,11 @@ struct MediaDetailView: View {
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $navigationPath)
     .sheet(isPresented: $showSiteSelection) {
-      SiteSelectionView(
-        availableSites: viewModel.siteFilter.availableSites,
-        selectedSites: $viewModel.siteFilter.selectedSites
+      MultiSelectionSheet(
+        options: viewModel.siteFilter.availableSites,
+        id: \.id,
+        selected: $viewModel.siteFilter.selectedSites,
+        label: { $0.name }
       )
     }
     .onChange(of: focusedButton) { _, newValue in

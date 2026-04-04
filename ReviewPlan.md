@@ -74,7 +74,6 @@
 | 审查目标 (文件/组件) | 状态 | 核心副作用 / 关键注释 |
 | :--- | :--- | :--- |
 | `ViewModels/SiteFilterViewModel.swift` | ⏳ 待开始 | |
-| `Views/Components/SiteSelectionView.swift`| ⏳ 待开始 | |
 | `ViewModels/SearchViewModel.swift` | ⏳ 待开始 | |
 | `Views/Pages/SearchView.swift` | ⏳ 待开始 | |
 

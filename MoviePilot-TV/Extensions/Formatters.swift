@@ -1,5 +1,6 @@
 import Foundation
 import SwiftDate
+import SwiftUI
 
 extension Int64 {
   private static let byteFormatter: ByteCountFormatter = {
@@ -32,5 +33,18 @@ extension String {
       return String.relativeDateFormatter.string(for: time) ?? self
     }
     return self
+  }
+}
+
+// 用于条件修饰符的视图扩展
+extension View {
+  @ViewBuilder
+  func `if`<Content: View>(_ condition: Bool, transform: (Self) -> Content) -> some View
+  {
+    if condition {
+      transform(self)
+    } else {
+      self
+    }
   }
 }
