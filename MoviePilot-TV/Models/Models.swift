@@ -140,6 +140,20 @@ struct DownloaderInfo: Codable {
 
 struct RecognizeResponse: Codable {
   let media_info: MediaInfo?
+
+  enum CodingKeys: String, CodingKey {
+    case media_info
+  }
+
+  init(media_info: MediaInfo?) {
+    self.media_info = media_info
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let raw = try container.decodeIfPresent(MediaInfoJSON.self, forKey: .media_info)
+    self.media_info = raw.map(MediaInfo.init(json:))
+  }
 }
 
 /// MARK: - 媒体详情相关模型
@@ -251,6 +265,41 @@ struct ProductionCountry: Codable, Hashable {
 }
 
 /// 核心媒体详情模型：汇聚多源元数据
+nonisolated struct MediaInfoJSON: Codable {
+  let tmdb_id: Int?
+  let douban_id: String?
+  let bangumi_id: Int?
+  let imdb_id: String?
+  let tvdb_id: Int?
+  let source: String?
+  let mediaid_prefix: String?
+  let media_id: String?
+  let title: String?
+  let original_title: String?
+  let original_name: String?
+  let names: [String]?
+  let type: String?
+  let year: String?
+  let season: Int?
+  let poster_path: String?
+  let backdrop_path: String?
+  let overview: String?
+  let vote_average: Double?
+  let popularity: Double?
+  let season_info: [TmdbSeason]?
+  let collection_id: Int?
+  let directors: [Person]?
+  let actors: [Person]?
+  let episode_group: String?
+  let runtime: Int?
+  let release_date: String?
+  let original_language: String?
+  let production_countries: [ProductionCountry]?
+  let genres: [MediaGenre]?
+  let category: String?
+  let subscribeShare: SubscribeShare?
+}
+
 struct MediaInfo: Codable, Identifiable, Hashable {
   struct ImageURLs: Hashable {
     let poster: URL?
@@ -338,7 +387,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   let imageURLs: ImageURLs
 
   /// 预编译的合集后缀正则表达式，避免重复创建提升性能
-  private static let collectionSuffixRegex = try? NSRegularExpression(
+  nonisolated private static let collectionSuffixRegex = try? NSRegularExpression(
     pattern: "(（系列）|\\(系列\\)|\\s+collection)$", options: .caseInsensitive)
 
   enum CodingKeys: String, CodingKey {
@@ -422,6 +471,95 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     )
   }
 
+  init(json: MediaInfoJSON) {
+    self.init(
+      tmdb_id: json.tmdb_id,
+      douban_id: json.douban_id,
+      bangumi_id: json.bangumi_id,
+      imdb_id: json.imdb_id,
+      tvdb_id: json.tvdb_id,
+      source: json.source,
+      mediaid_prefix: json.mediaid_prefix,
+      media_id: json.media_id,
+      title: json.title,
+      original_title: json.original_title,
+      original_name: json.original_name,
+      names: json.names,
+      type: json.type,
+      year: json.year,
+      season: json.season,
+      poster_path: json.poster_path,
+      backdrop_path: json.backdrop_path,
+      overview: json.overview,
+      vote_average: json.vote_average,
+      popularity: json.popularity,
+      season_info: json.season_info,
+      collection_id: json.collection_id,
+      directors: json.directors,
+      actors: json.actors,
+      episode_group: json.episode_group,
+      runtime: json.runtime,
+      release_date: json.release_date,
+      original_language: json.original_language,
+      production_countries: json.production_countries,
+      genres: json.genres,
+      category: json.category,
+      subscribeShare: json.subscribeShare
+    )
+  }
+
+  nonisolated init(json: MediaInfoJSON, precomputedImageURLs: ImageURLs) {
+    self.tmdb_id = json.tmdb_id
+    self.douban_id = json.douban_id
+    self.bangumi_id = json.bangumi_id
+    self.imdb_id = json.imdb_id
+    self.tvdb_id = json.tvdb_id
+    self.source = json.source
+    self.mediaid_prefix = json.mediaid_prefix
+    self.media_id = json.media_id
+    self.title = json.title
+    self.original_title = json.original_title
+    self.original_name = json.original_name
+    self.names = json.names
+    self.type = json.type
+    self.year = json.year
+    self.season = json.season
+    self.poster_path = json.poster_path
+    self.backdrop_path = json.backdrop_path
+    self.overview = json.overview
+    self.vote_average = json.vote_average
+    self.popularity = json.popularity
+    self.season_info = json.season_info
+    self.collection_id = json.collection_id
+    self.directors = json.directors
+    self.actors = json.actors
+    self.episode_group = json.episode_group
+    self.runtime = json.runtime
+    self.release_date = json.release_date
+    self.original_language = json.original_language
+    self.production_countries = json.production_countries
+    self.genres = json.genres
+    self.category = json.category
+    self.subscribeShare = json.subscribeShare
+
+    self.id = Self.generateUniqueKey(
+      source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
+      tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id,
+      mediaid_prefix: mediaid_prefix, media_id: media_id)
+
+    self.isCollection = Self.checkIsCollection(type: type, collection_id: collection_id)
+
+    let cleaned = Self.parseCleanedNames(
+      isCollection: self.isCollection, title: title,
+      original_title: original_title, original_name: original_name, names: names)
+    self.cleanedTitle = cleaned.title
+    self.cleanedOriginalTitle = cleaned.originalTitle
+    self.cleanedOriginalName = cleaned.originalName
+    self.cleanedNames = cleaned.names
+
+    self.imageURLs = precomputedImageURLs
+  }
+
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     tmdb_id = try container.decodeIfPresent(Int.self, forKey: .tmdb_id)
@@ -480,7 +618,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     )
   }
 
-  private static func parseCleanedNames(
+  nonisolated private static func parseCleanedNames(
     isCollection: Bool, title: String?, original_title: String?,
     original_name: String?, names: [String]?
   ) -> (title: String?, originalTitle: String?, originalName: String?, names: [String]?) {
@@ -517,7 +655,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   /// 参考 Vue 前端 dedupFields 去重 key
   /// 通过拼接多个核心 ID 字段生成唯一标识
   /// 用于在 UI 渲染前过滤重复项与生成 ID
-  private static func generateUniqueKey(
+  nonisolated private static func generateUniqueKey(
     source: String?, type: String?, season: Int?, tmdb_id: Int?,
     imdb_id: String?, tvdb_id: Int?, douban_id: String?, bangumi_id: Int?,
     mediaid_prefix: String?, media_id: String?
@@ -538,7 +676,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   }
 
   /// 判断当前媒体项是否为合集/系列
-  static func checkIsCollection(type: String?, collection_id: Int?) -> Bool {
+  nonisolated static func checkIsCollection(type: String?, collection_id: Int?) -> Bool {
     return type == "合集" || type == "collection" || type == "系列" || collection_id != nil
   }
 

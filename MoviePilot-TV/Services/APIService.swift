@@ -6,8 +6,130 @@ enum APIError: Error {
   case invalidURL
   case networkError(Error)
   case decodingError(Error)
+  case serverMessage(String)
   case unauthorized
   case unknown
+}
+
+nonisolated struct ApiResponse<T: Decodable>: Decodable {
+  let success: Bool?
+  let data: T?
+  let message: String?
+}
+
+
+nonisolated struct MediaImageURLConfig: Sendable {
+  let baseURL: String
+  let useImageCache: Bool
+}
+
+nonisolated private func decodingContext(from error: DecodingError) -> DecodingError.Context? {
+  switch error {
+  case .typeMismatch(_, let context), .valueNotFound(_, let context),
+    .keyNotFound(_, let context), .dataCorrupted(let context):
+    return context
+  @unknown default:
+    return nil
+  }
+}
+
+nonisolated private func firstNonWhitespaceByte(in data: Data) -> UInt8? {
+  data.first { byte in
+    byte != 0x20 && byte != 0x09 && byte != 0x0A && byte != 0x0D
+  }
+}
+
+nonisolated private func decodeOrUnwrapSync<T: Decodable>(from data: Data) throws -> T {
+  let firstByte = firstNonWhitespaceByte(in: data)
+
+  // 顶层数组场景直接解码目标类型，避免先解包 ApiResponse 再失败重试。
+  if firstByte == UInt8(ascii: "[") {
+    return try JSONDecoder().decode(T.self, from: data)
+  }
+
+  if firstByte == UInt8(ascii: "{") {
+    do {
+      let response = try JSONDecoder().decode(ApiResponse<T>.self, from: data)
+      if let wrappedData = response.data {
+        return wrappedData
+      }
+      if response.success == false {
+        throw APIError.serverMessage(response.message ?? "Request failed")
+      }
+      if let message = response.message, !message.isEmpty {
+        throw APIError.serverMessage(message)
+      }
+    } catch let error as APIError {
+      throw error
+    } catch let error as DecodingError {
+      if let context = decodingContext(from: error), !context.codingPath.isEmpty {
+        throw APIError.decodingError(error)
+      }
+    } catch {
+      print("DEBUG: [decodeOrUnwrap] unknown error: \(error)")
+    }
+  }
+
+  return try JSONDecoder().decode(T.self, from: data)
+}
+
+nonisolated private func decodeActionResponseSync(from data: Data) throws -> (success: Bool, message: String?) {
+  struct ActionResponse: Decodable { let success: Bool?, message: String? }
+  if let resp = try? JSONDecoder().decode(ActionResponse.self, from: data) {
+    return (resp.success ?? false, resp.message)
+  }
+  if let apiResp = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
+    return (apiResp.success ?? false, apiResp.message)
+  }
+  // 默认返回成功，因为某些API成功时可能不返回body
+  return (true, nil)
+}
+
+nonisolated private func posterImageURL(posterPath: String?, config: MediaImageURLConfig) -> URL? {
+  let url = posterPath?.replacingOccurrences(of: "original", with: "w500")
+
+  if let currentUrl = url, currentUrl.contains("doubanio.com") {
+    if currentUrl.contains("movie_default") || currentUrl.contains("tv_default") {
+      return nil
+    }
+  }
+
+  if let currentUrl = url, currentUrl.contains("doubanio.com") {
+    guard
+      let encodedUrl = currentUrl.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+    else {
+      return nil
+    }
+    return URL(string: "\(config.baseURL)/api/v1/system/img/0?imgurl=\(encodedUrl)")
+  }
+
+  if config.useImageCache, let currentUrl = url {
+    guard
+      let encodedUrl = currentUrl.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+    else {
+      return nil
+    }
+    return URL(string: "\(config.baseURL)/api/v1/system/cache/image?url=\(encodedUrl)")
+  }
+
+  if let finalUrl = url {
+    return URL(string: finalUrl)
+  }
+  return nil
+}
+
+nonisolated private func backdropImageURL(backdropPath: String?, config: MediaImageURLConfig) -> URL? {
+  guard let url = backdropPath, !url.isEmpty else { return nil }
+
+  if config.useImageCache {
+    guard let encodedUrl = url.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+    else {
+      return nil
+    }
+    return URL(string: "\(config.baseURL)/api/v1/system/cache/image?url=\(encodedUrl)")
+  }
+
+  return URL(string: url)
 }
 
 /// 泛型轻量级接口缓存，带过期及淘汰策略
@@ -253,63 +375,76 @@ class APIService: ObservableObject {
 
   // MARK: - Helpers
 
-  struct ApiResponse<T: Decodable>: Decodable {
-    let success: Bool?
-    let data: T?
-    let message: String?
-  }
-
-  private func decodeOrUnwrap<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
-    // 1. 尝试解码为 ApiResponse<T>
-    do {
-      let response = try JSONDecoder().decode(ApiResponse<T>.self, from: data)
-      if let wrappedData = response.data {
-        return wrappedData
+  private func decodeOrUnwrap<T: Decodable>(
+    _ type: T.Type,
+    from data: Data
+  ) async throws -> T {
+    if type == MediaInfo.self {
+      let config = currentMediaImageURLConfig()
+      let mappedMedia = try await decodeMediaInfoInBackground(from: data, config: config)
+      guard let mapped = mappedMedia as? T else {
+        throw APIError.decodingError(DecodingError.typeMismatch(
+          T.self,
+          DecodingError.Context(codingPath: [], debugDescription: "Failed to map MediaInfoJSON to \(T.self)")
+        ))
       }
-    } catch let error as DecodingError {
-      switch error {
-      case .typeMismatch(_, let context):
-        if context.codingPath.isEmpty {
-          // 期望字典 (ApiResponse) 但找到了数组 (T)。直接解码 T。
-          break
-        } else {
-          print(
-            "DEBUG: [decodeOrUnwrap] typeMismatch in ApiResponse<\(T.self)> at path \(context.codingPath): \(error)"
-          )
-          throw APIError.decodingError(error)
-        }
-      case .keyNotFound(let key, let context):
-        print(
-          "DEBUG: [decodeOrUnwrap] keyNotFound '\(key.stringValue)' in ApiResponse<\(T.self)> at path \(context.codingPath)"
-        )
-        throw APIError.decodingError(error)
-      case .valueNotFound(let type, let context):
-        print(
-          "DEBUG: [decodeOrUnwrap] valueNotFound for type \(type) in ApiResponse<\(T.self)> at path \(context.codingPath)"
-        )
-        throw APIError.decodingError(error)
-      default:
-        print(
-          "DEBUG: [decodeOrUnwrap] dataCorrupted for ApiResponse<\(T.self)> at path \(context(from: error)?.codingPath ?? []): \(error)"
-        )
-        break
-      }
-    } catch {
-      print("DEBUG: [decodeOrUnwrap] unknown error: \(error)")
+      return mapped
     }
-
-    // 2. 尝试直接解码为 T
-    return try JSONDecoder().decode(T.self, from: data)
+    if type == [MediaInfo].self {
+      let config = currentMediaImageURLConfig()
+      let mappedMedia = try await decodeMediaInfoArrayInBackground(from: data, config: config)
+      guard let mapped = mappedMedia as? T else {
+        throw APIError.decodingError(DecodingError.typeMismatch(
+          T.self,
+          DecodingError.Context(codingPath: [], debugDescription: "Failed to map [MediaInfoJSON] to \(T.self)")
+        ))
+      }
+      return mapped
+    }
+    return try decodeOrUnwrapSync(from: data)
   }
 
-  // 安全提取上下文的辅助函数
-  private func context(from error: DecodingError) -> DecodingError.Context? {
-    switch error {
-    case .typeMismatch(_, let context), .valueNotFound(_, let context),
-      .keyNotFound(_, let context), .dataCorrupted(let context):
-      return context
-    @unknown default:
-      return nil
+  private func currentMediaImageURLConfig() -> MediaImageURLConfig {
+    MediaImageURLConfig(baseURL: baseURL, useImageCache: useImageCache)
+  }
+
+  /// 仅对 MediaInfo 热路径做后台解码，避免主线程解析大 JSON。
+  private func decodeMediaInfoInBackground(from data: Data, config: MediaImageURLConfig) async throws -> MediaInfo {
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<MediaInfo, Error>) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          let raw: MediaInfoJSON = try decodeOrUnwrapSync(from: data)
+          let imageURLs = MediaInfo.ImageURLs(
+            poster: posterImageURL(posterPath: raw.poster_path, config: config),
+            backdrop: backdropImageURL(backdropPath: raw.backdrop_path, config: config)
+          )
+          continuation.resume(returning: MediaInfo(json: raw, precomputedImageURLs: imageURLs))
+        } catch {
+          continuation.resume(throwing: error)
+        }
+      }
+    }
+  }
+
+  /// 仅对 MediaInfo 列表热路径做后台解码，缓解分页加载时的主线程压力。
+  private func decodeMediaInfoArrayInBackground(from data: Data, config: MediaImageURLConfig) async throws -> [MediaInfo] {
+    try await withCheckedThrowingContinuation {
+      (continuation: CheckedContinuation<[MediaInfo], Error>) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          let raw: [MediaInfoJSON] = try decodeOrUnwrapSync(from: data)
+          let mapped = raw.map { item -> MediaInfo in
+            let imageURLs = MediaInfo.ImageURLs(
+              poster: posterImageURL(posterPath: item.poster_path, config: config),
+              backdrop: backdropImageURL(backdropPath: item.backdrop_path, config: config)
+            )
+            return MediaInfo(json: item, precomputedImageURLs: imageURLs)
+          }
+          continuation.resume(returning: mapped)
+        } catch {
+          continuation.resume(throwing: error)
+        }
+      }
     }
   }
 
@@ -362,7 +497,7 @@ class APIService: ObservableObject {
   /// - 应用场景: 首页仪表盘展示各类媒体的数量统计。
   func fetchStatistic() async throws -> Statistic {
     let data = try await makeRequest(endpoint: "/dashboard/statistic")
-    return try decodeOrUnwrap(Statistic.self, from: data)
+    return try await decodeOrUnwrap(Statistic.self, from: data)
   }
 
   /// 获取存储空间信息
@@ -370,7 +505,7 @@ class APIService: ObservableObject {
   /// - 应用场景: 首页仪表盘展示磁盘/网盘的存储使用情况。
   func fetchStorage() async throws -> Storage {
     let data = try await makeRequest(endpoint: "/dashboard/storage")
-    return try decodeOrUnwrap(Storage.self, from: data)
+    return try await decodeOrUnwrap(Storage.self, from: data)
   }
 
   /// 获取下载器实时信息
@@ -378,7 +513,7 @@ class APIService: ObservableObject {
   /// - 应用场景: 首页仪表盘展示当前下载速度与任务信息。
   func fetchDownloaderInfo() async throws -> DownloaderInfo {
     let data = try await makeRequest(endpoint: "/dashboard/downloader")
-    return try decodeOrUnwrap(DownloaderInfo.self, from: data)
+    return try await decodeOrUnwrap(DownloaderInfo.self, from: data)
   }
 
   /// 获取全局设置
@@ -387,7 +522,7 @@ class APIService: ObservableObject {
   func fetchSettings() async throws -> GlobalSettings {
     do {
       let data = try await makeRequest(endpoint: "/system/global?token=moviepilot")
-      let response = try decodeOrUnwrap(GlobalSettings.self, from: data)
+      let response = try await decodeOrUnwrap(GlobalSettings.self, from: data)
       self.settings = response
       return response
     } catch {
@@ -407,7 +542,7 @@ class APIService: ObservableObject {
         "page": String(page),
       ])
     let data = try await makeRequest(endpoint: endpoint)
-    return try decodeOrUnwrap([MediaInfo].self, from: data)
+    return try await decodeOrUnwrap([MediaInfo].self, from: data)
   }
 
   /// 搜索合集
@@ -422,7 +557,7 @@ class APIService: ObservableObject {
         "page": String(page),
       ])
     let data = try await makeRequest(endpoint: endpoint)
-    return try decodeOrUnwrap([MediaInfo].self, from: data)
+    return try await decodeOrUnwrap([MediaInfo].self, from: data)
   }
 
   /// 搜索人物
@@ -437,7 +572,7 @@ class APIService: ObservableObject {
         "page": String(page),
       ])
     let data = try await makeRequest(endpoint: endpoint)
-    return try decodeOrUnwrap([Person].self, from: data)
+    return try await decodeOrUnwrap([Person].self, from: data)
   }
 
   /// 通用推荐/发现列表获取接口（底层支撑）
@@ -455,7 +590,7 @@ class APIService: ObservableObject {
     let absolutePath = path.hasPrefix("/") ? path : "/\(path)"
     let endpoint = try buildEndpoint(path: absolutePath, params: ["page": String(page)])
     let data = try await makeRequest(endpoint: endpoint)
-    return try decodeOrUnwrap([MediaInfo].self, from: data)
+    return try await decodeOrUnwrap([MediaInfo].self, from: data)
   }
 
   /// 获取订阅分享列表
@@ -465,7 +600,7 @@ class APIService: ObservableObject {
     let absolutePath = path.hasPrefix("/") ? path : "/\(path)"
     let endpoint = try buildEndpoint(path: absolutePath, params: ["page": String(page)])
     let data = try await makeRequest(endpoint: endpoint)
-    return try decodeOrUnwrap([SubscribeShare].self, from: data)
+    return try await decodeOrUnwrap([SubscribeShare].self, from: data)
   }
 
   /// 搜索订阅分享
@@ -480,7 +615,7 @@ class APIService: ObservableObject {
         "count": "20"
       ])
     let data = try await makeRequest(endpoint: endpoint)
-    return try decodeOrUnwrap([SubscribeShare].self, from: data)
+    return try await decodeOrUnwrap([SubscribeShare].self, from: data)
   }
 
   /// 获取推荐媒体
@@ -529,7 +664,7 @@ class APIService: ObservableObject {
         "title": title,
       ])
     let data = try await makeRequest(endpoint: endpoint)
-    return try decodeOrUnwrap([MediaInfo].self, from: data)
+    return try await decodeOrUnwrap([MediaInfo].self, from: data)
   }
 
   /// 获取下载客户端列表
@@ -537,7 +672,7 @@ class APIService: ObservableObject {
   /// - 应用场景: 获取系统配置的所有下载器实例，用于切换下载器视图或在站点/订阅配置中选择下载目标
   func fetchDownloadClients() async throws -> [DownloaderConf] {
     let data = try await makeRequest(endpoint: "/download/clients")
-    return try decodeOrUnwrap([DownloaderConf].self, from: data)
+    return try await decodeOrUnwrap([DownloaderConf].self, from: data)
   }
 
   /// 获取下载中任务
@@ -546,7 +681,7 @@ class APIService: ObservableObject {
   func fetchDownloading(clientName: String) async throws -> [DownloadingInfo] {
     let endpoint = try buildEndpoint(path: "/download/", params: ["name": clientName])
     let data = try await makeRequest(endpoint: endpoint)
-    return try decodeOrUnwrap([DownloadingInfo].self, from: data)
+    return try await decodeOrUnwrap([DownloadingInfo].self, from: data)
   }
 
   /// 暂停下载任务
@@ -557,7 +692,7 @@ class APIService: ObservableObject {
   ) {
     let endpoint = try buildEndpoint(path: "/download/stop/\(hash)", params: ["name": clientName])
     let data = try await makeRequest(endpoint: endpoint, method: "GET")
-    return try decodeActionResponse(from: data)
+    return try await decodeActionResponse(from: data)
   }
 
   /// 继续下载任务
@@ -568,7 +703,7 @@ class APIService: ObservableObject {
   ) {
     let endpoint = try buildEndpoint(path: "/download/start/\(hash)", params: ["name": clientName])
     let data = try await makeRequest(endpoint: endpoint, method: "GET")
-    return try decodeActionResponse(from: data)
+    return try await decodeActionResponse(from: data)
   }
 
   /// 删除下载任务
@@ -582,20 +717,15 @@ class APIService: ObservableObject {
       params: ["name": clientName]
     )
     let data = try await makeRequest(endpoint: endpoint, method: "DELETE")
-    return try decodeActionResponse(from: data)
+    return try await decodeActionResponse(from: data)
   }
 
   /// 辅助方法：解码通用操作响应
-  private func decodeActionResponse(from data: Data) throws -> (success: Bool, message: String?) {
-    struct ActionResponse: Decodable { let success: Bool?, message: String? }
-    if let resp = try? JSONDecoder().decode(ActionResponse.self, from: data) {
-      return (resp.success ?? false, resp.message)
-    }
-    if let apiResp = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      return (apiResp.success ?? false, apiResp.message)
-    }
-    // 默认返回成功，因为某些API成功时可能不返回body
-    return (true, nil)
+  private func decodeActionResponse(from data: Data) async throws -> (
+    success: Bool,
+    message: String?
+  ) {
+    try decodeActionResponseSync(from: data)
   }
 
   // MARK: - Transfer History
@@ -618,7 +748,7 @@ class APIService: ObservableObject {
         "title": title,
       ])
     let data = try await makeRequest(endpoint: endpoint)
-    return try decodeOrUnwrap(TransferHistoryResponse.self, from: data)
+    return try await decodeOrUnwrap(TransferHistoryResponse.self, from: data)
   }
 
   /// 删除整理历史记录
@@ -640,7 +770,7 @@ class APIService: ObservableObject {
         "deletedest": String(deleteDest),
       ])
     let data = try await makeRequest(endpoint: endpoint, method: "DELETE", body: body)
-    return try decodeActionResponse(from: data).success
+    return try await decodeActionResponse(from: data).success
   }
 
   /// 手动整理
@@ -654,7 +784,7 @@ class APIService: ObservableObject {
     let endpoint = try buildEndpoint(
       path: "/transfer/manual", params: ["background": String(background)])
     let data = try await makeRequest(endpoint: endpoint, method: "POST", body: body)
-    return try decodeActionResponse(from: data).success
+    return try await decodeActionResponse(from: data).success
   }
 
   /// 获取存储配置
@@ -665,7 +795,7 @@ class APIService: ObservableObject {
       let value: [StorageConf]
     }
     let data = try await makeRequest(endpoint: "/system/setting/Storages")
-    let config = try decodeOrUnwrap(ConfigValue.self, from: data)
+    let config = try await decodeOrUnwrap(ConfigValue.self, from: data)
     return config.value
   }
 
@@ -680,7 +810,7 @@ class APIService: ObservableObject {
       let value: [MediaServerConf]
     }
     let data = try await makeRequest(endpoint: "/system/setting/MediaServers")
-    let config = try decodeOrUnwrap(ConfigValue.self, from: data)
+    let config = try await decodeOrUnwrap(ConfigValue.self, from: data)
     return config.value
   }
 
@@ -690,7 +820,7 @@ class APIService: ObservableObject {
   func fetchMediaServerLatest(server: String) async throws -> [MediaServerPlayItem] {
     let endpoint = try buildEndpoint(path: "/mediaserver/latest", params: ["server": server])
     let data = try await makeRequest(endpoint: endpoint)
-    return try decodeOrUnwrap([MediaServerPlayItem].self, from: data)
+    return try await decodeOrUnwrap([MediaServerPlayItem].self, from: data)
   }
 
   // MARK: - 资源搜索
@@ -730,7 +860,7 @@ class APIService: ObservableObject {
         ])
     }
     let data = try await makeRequest(endpoint: endpoint)
-    return try decodeOrUnwrap([Context].self, from: data)
+    return try await decodeOrUnwrap([Context].self, from: data)
   }
 
   // MARK: - 详情与订阅
@@ -744,7 +874,7 @@ class APIService: ObservableObject {
   func recognizeMedia(title: String) async throws -> RecognizeResponse {
     let endpoint = try buildEndpoint(path: "/media/recognize", params: ["title": title])
     let data = try await makeRequest(endpoint: endpoint)
-    return try decodeOrUnwrap(RecognizeResponse.self, from: data)
+    return try await decodeOrUnwrap(RecognizeResponse.self, from: data)
   }
 
   /// 获取媒体详情
@@ -763,7 +893,7 @@ class APIService: ObservableObject {
     ]
     let endpoint = try buildEndpoint(path: "/media/\(mediaId)", params: params)
     let data = try await makeRequest(endpoint: endpoint)
-    return try decodeOrUnwrap(MediaInfo.self, from: data)
+    return try await decodeOrUnwrap(MediaInfo.self, from: data)
   }
 
   /// 获取人物详情
@@ -776,7 +906,7 @@ class APIService: ObservableObject {
     if sourcePath == "themoviedb" { sourcePath = "tmdb" }
     let endpoint = "/\(sourcePath)/person/\(personId)"
     let data = try await makeRequest(endpoint: endpoint)
-    return try decodeOrUnwrap(Person.self, from: data)
+    return try await decodeOrUnwrap(Person.self, from: data)
   }
 
   /// 获取人物参演作品
@@ -793,7 +923,7 @@ class APIService: ObservableObject {
       path: "/\(sourcePath)/person/credits/\(personId)",
       params: ["page": String(page)])
     let data = try await makeRequest(endpoint: endpoint)
-    return try decodeOrUnwrap([MediaInfo].self, from: data)
+    return try await decodeOrUnwrap([MediaInfo].self, from: data)
   }
 
   /// 获取媒体演员
@@ -815,7 +945,7 @@ class APIService: ObservableObject {
 
     let endpoint = try buildEndpoint(path: "/\(path)", params: ["page": String(page)])
     let data = try await makeRequest(endpoint: endpoint)
-    return try decodeOrUnwrap([Person].self, from: data)
+    return try await decodeOrUnwrap([Person].self, from: data)
   }
 
   /// 获取 RSS 站点列表
@@ -823,7 +953,7 @@ class APIService: ObservableObject {
   /// - 应用场景: 在 **订阅编辑对话框** 中，作为“订阅站点”下拉菜单的数据源。
   func fetchSites() async throws -> [Site] {
     let data = try await makeRequest(endpoint: "/site/rss")
-    return try decodeOrUnwrap([Site].self, from: data)
+    return try await decodeOrUnwrap([Site].self, from: data)
   }
 
   /// 获取目录配置
@@ -834,7 +964,7 @@ class APIService: ObservableObject {
       let value: [TransferDirectoryConf]
     }
     let data = try await makeRequest(endpoint: "/system/setting/Directories")
-    let config = try decodeOrUnwrap(ConfigValue.self, from: data)
+    let config = try await decodeOrUnwrap(ConfigValue.self, from: data)
     return config.value
   }
 
@@ -846,7 +976,7 @@ class APIService: ObservableObject {
       let value: [FilterRuleGroup]
     }
     let data = try await makeRequest(endpoint: "/system/setting/UserFilterRuleGroups")
-    let config = try decodeOrUnwrap(ConfigValue.self, from: data)
+    let config = try await decodeOrUnwrap(ConfigValue.self, from: data)
     return config.value
   }
 
@@ -857,7 +987,7 @@ class APIService: ObservableObject {
     let endpoint = "/media/groups/\(tmdbId)"
     if let cached = await episodeGroupsCache.get(endpoint) { return cached }
     let data = try await makeRequest(endpoint: endpoint)
-    let result = try decodeOrUnwrap([EpisodeGroup].self, from: data)
+    let result = try await decodeOrUnwrap([EpisodeGroup].self, from: data)
     await episodeGroupsCache.set(endpoint, value: result)
     return result
   }
@@ -879,7 +1009,7 @@ class APIService: ObservableObject {
     let endpoint = try buildEndpoint(path: "/media/seasons", params: params)
     if let cached = await mediaSeasonsCache.get(endpoint) { return cached }
     let data = try await makeRequest(endpoint: endpoint)
-    let result = try decodeOrUnwrap([TmdbSeason].self, from: data)
+    let result = try await decodeOrUnwrap([TmdbSeason].self, from: data)
     await mediaSeasonsCache.set(endpoint, value: result)
     return result
   }
@@ -891,7 +1021,7 @@ class APIService: ObservableObject {
     let endpoint = "/media/group/seasons/\(groupId)"
     if let cached = await groupSeasonsCache.get(endpoint) { return cached }
     let data = try await makeRequest(endpoint: endpoint)
-    let result = try decodeOrUnwrap([TmdbSeason].self, from: data)
+    let result = try await decodeOrUnwrap([TmdbSeason].self, from: data)
     await groupSeasonsCache.set(endpoint, value: result)
     return result
   }
@@ -905,7 +1035,7 @@ class APIService: ObservableObject {
     let cacheKey = hash.compactMap { String(format: "%02x", $0) }.joined()
     if let cached = await seasonsNotExistsCache.get(cacheKey) { return cached }
     let data = try await makeRequest(endpoint: "/mediaserver/notexists", method: "POST", body: body)
-    let result = try decodeOrUnwrap([NotExistMediaInfo].self, from: data)
+    let result = try await decodeOrUnwrap([NotExistMediaInfo].self, from: data)
     await seasonsNotExistsCache.set(cacheKey, value: result)
     return result
   }
@@ -1047,7 +1177,7 @@ class APIService: ObservableObject {
   /// - 应用场景: 编辑订阅前获取完整订阅配置
   func fetchSubscription(id: Int) async throws -> Subscribe {
     let data = try await makeRequest(endpoint: "/subscribe/\(id)")
-    return try decodeOrUnwrap(Subscribe.self, from: data)
+    return try await decodeOrUnwrap(Subscribe.self, from: data)
   }
 
   /// 检查特定媒体（及特定季）是否已在用户的订阅列表中
@@ -1074,7 +1204,7 @@ class APIService: ObservableObject {
           "title": media.title,
         ])
       let data = try await makeRequest(endpoint: endpoint)
-      let resp = try decodeOrUnwrap(SubscribeResp.self, from: data)
+      let resp = try await decodeOrUnwrap(SubscribeResp.self, from: data)
       let isSubscribed = resp.id != nil
       await subscriptionStatusCache.set(cacheKey, value: isSubscribed)
       return isSubscribed
@@ -1088,7 +1218,7 @@ class APIService: ObservableObject {
   /// - 应用场景: 1. **订阅列表页面** (`SubscribeListView`) 的核心数据源。 2. **日历视图** (`FullCalendarView`) 的数据源。 (注: 全局搜索栏不直接调用此API)
   func fetchSubscriptions() async throws -> [Subscribe] {
     let data = try await makeRequest(endpoint: "/subscribe/")
-    return try decodeOrUnwrap([Subscribe].self, from: data)
+    return try await decodeOrUnwrap([Subscribe].self, from: data)
   }
 
   /// 添加下载任务

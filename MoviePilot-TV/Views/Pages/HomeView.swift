@@ -23,10 +23,12 @@ struct HomeView: View {
               .frame(maxWidth: .infinity, minHeight: 200)
           } else {
             // 第1节：最近添加
-            if !viewModel.latestMedia.isEmpty {
+            if !viewModel.latestMediaServers.isEmpty {
               MediaSectionView(
                 title: "最近添加",
                 items: viewModel.latestMedia,
+                servers: viewModel.latestMediaServers,
+                selectedServer: $viewModel.selectedLatestMediaServer,
                 isFirstRow: true,
                 viewModel: viewModel
               )
@@ -37,7 +39,7 @@ struct HomeView: View {
               SubscribeSectionView(
                 title: "电影订阅",
                 items: viewModel.movieSubscriptions,
-                isFirstRow: viewModel.latestMedia.isEmpty,
+                isFirstRow: viewModel.latestMediaServers.isEmpty,
                 viewModel: viewModel,
                 onEdit: presentEditSheet,
                 onViewDetail: navigateToDetail
@@ -49,14 +51,15 @@ struct HomeView: View {
               SubscribeSectionView(
                 title: "电视剧订阅",
                 items: viewModel.tvSubscriptions,
-                isFirstRow: viewModel.latestMedia.isEmpty && viewModel.movieSubscriptions.isEmpty,
+                isFirstRow: viewModel.latestMediaServers.isEmpty
+                  && viewModel.movieSubscriptions.isEmpty,
                 viewModel: viewModel,
                 onEdit: presentEditSheet,
                 onViewDetail: navigateToDetail
               )
             }
 
-            if viewModel.latestMedia.isEmpty && viewModel.movieSubscriptions.isEmpty
+            if viewModel.latestMediaServers.isEmpty && viewModel.movieSubscriptions.isEmpty
               && viewModel.tvSubscriptions.isEmpty
             {
               Text("暂无内容")
@@ -153,6 +156,8 @@ struct HomeView: View {
 private struct MediaSectionView: View {
   let title: String
   let items: [MediaServerPlayItem]
+  let servers: [String]
+  @Binding var selectedServer: String
   var isFirstRow: Bool = false
   @ObservedObject var viewModel: HomeViewModel
 
@@ -163,11 +168,24 @@ private struct MediaSectionView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      Text(title)
-        .font(.callout)
-        .fontWeight(.bold)
-        .foregroundStyle(.secondary)
-        .padding(.leading, 8)
+      HStack(spacing: 12) {
+        Text(title)
+          .font(.callout)
+          .fontWeight(.bold)
+          .foregroundStyle(.secondary)
+
+        Spacer()
+
+        if servers.count > 1 {
+          Picker("服务器", selection: $selectedServer) {
+            ForEach(servers, id: \.self) { server in
+              Text(server).tag(server)
+            }
+          }
+          .pickerStyle(.menu)
+        }
+      }
+      .padding(.horizontal, 8)
 
       if isFirstRow {
         // 顶部焦点重定向器：确保在首次加载时来自标签栏的焦点进入第一个项目，然后禁用自身。
@@ -184,29 +202,37 @@ private struct MediaSectionView: View {
           }
       }
 
-      ScrollView(.horizontal, showsIndicators: false) {
-        LazyHStack(spacing: 40) {
-          ForEach(items) { item in
-            MediaCard(
-              title: item.title,
-              posterUrl: item.imageURLs.image,
-              typeText: item.type,
-              ratingText: nil,
-              bottomLeftText: item.server_type?.rawValue.capitalized,
-              bottomLeftSecondaryText: nil,
-              source: nil,
-              action: {
-                viewModel.openMediaItem(item, using: openURL)
-              }
-            )
-            .focused($focusedItemId, equals: item.id)
+      if items.isEmpty {
+        Text("该服务器暂无最近内容")
+          .font(.headline)
+          .foregroundColor(.secondary)
+          .frame(maxWidth: .infinity, minHeight: 120)
+          .padding(.top, 25)
+      } else {
+        ScrollView(.horizontal, showsIndicators: false) {
+          LazyHStack(spacing: 40) {
+            ForEach(items) { item in
+              MediaCard(
+                title: item.title,
+                posterUrl: item.imageURLs.image,
+                typeText: item.type,
+                ratingText: nil,
+                bottomLeftText: nil,
+                bottomLeftSecondaryText: nil,
+                source: nil,
+                action: {
+                  viewModel.openMediaItem(item, using: openURL)
+                }
+              )
+              .focused($focusedItemId, equals: item.id)
+            }
           }
+          .padding(.top, 25)
+          .padding(.bottom, 30)
         }
-        .padding(.top, 25)
-        .padding(.bottom, 30)
+        .scrollClipDisabled()
+        .focusSection()
       }
-      .scrollClipDisabled()
-      .focusSection()
     }
   }
 }

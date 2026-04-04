@@ -6,6 +6,16 @@ import SwiftUI
 class HomeViewModel: ObservableObject {
   /// 媒体服务器最近播放/新增的项目
   @Published var latestMedia: [MediaServerPlayItem] = []
+  /// 可选的媒体服务器（用于首页最近添加筛选）
+  @Published var latestMediaServers: [String] = []
+  /// 当前选中的媒体服务器
+  @Published var selectedLatestMediaServer: String = "" {
+    didSet {
+      guard oldValue != selectedLatestMediaServer else { return }
+      persistSelectedLatestMediaServer()
+      applyLatestMediaSelection()
+    }
+  }
   /// 电影订阅列表
   @Published var movieSubscriptions: [Subscribe] = []
   /// 电视剧订阅列表
@@ -14,9 +24,14 @@ class HomeViewModel: ObservableObject {
   @Published var isLoading = true
 
   private let apiService: APIService
+  private let latestMediaSelectedServerKey = "home.latestMedia.selectedServer.v1"
+  private var latestMediaByServer: [String: [MediaServerPlayItem]] = [:]
 
   init(apiService: APIService? = nil) {
     self.apiService = apiService ?? APIService.shared
+    self.selectedLatestMediaServer = UserDefaults.standard.string(
+      forKey: latestMediaSelectedServerKey
+    ) ?? ""
   }
 
   /// 初始或刷新加载数据
@@ -48,21 +63,63 @@ class HomeViewModel: ObservableObject {
     do {
       // 1. 获取所有配置的媒体服务器（如 Jellyfin/Emby/Plex）
       let servers = try await apiService.fetchMediaServers()
-      var allItems: [MediaServerPlayItem] = []
 
-      // 2. 遍历并获取已启用服务器的“最近新增/播放”列表
-      for server in servers where server.enabled?.value ?? false {
-        let items = try await apiService.fetchMediaServerLatest(server: server.name)
-        allItems.append(contentsOf: items)
+      // 只保留启用服务器（保持后端返回顺序）
+      let enabledServers = servers.filter { $0.enabled?.value ?? false }
+
+      // 2. 使用 TaskGroup 并发获取已启用服务器的“最近新增/播放”列表
+      let latestByServer = await withTaskGroup(of: (String, [MediaServerPlayItem]).self) { group in
+        for server in enabledServers {
+          group.addTask {
+            do {
+              let items = try await self.apiService.fetchMediaServerLatest(server: server.name)
+              return (server.name, items)
+            } catch {
+              print("加载服务器 \(server.name) 最新媒体失败: \(error)")
+              return (server.name, [])
+            }
+          }
+        }
+
+        // 收集各服务器结果
+        var byServer: [String: [MediaServerPlayItem]] = [:]
+        for await (serverName, items) in group {
+          byServer[serverName] = items
+        }
+        return byServer
       }
 
-      // 注意：由于后端 API 缺少跨服务器统一的 date_added 时间戳字段，目前无法实现全局严格排序。
-      // 当前逻辑是将各服务器返回的结果简单聚合展示。
-      self.latestMedia = allItems
+      // 3. 更新筛选器和当前展示列表
+      self.latestMediaByServer = latestByServer
+      self.latestMediaServers = enabledServers.map(\.name)
+
+      if latestMediaServers.isEmpty {
+        selectedLatestMediaServer = ""
+        latestMedia = []
+      } else {
+        if selectedLatestMediaServer.isEmpty || !latestMediaServers.contains(selectedLatestMediaServer) {
+          selectedLatestMediaServer = latestMediaServers[0]
+        }
+        applyLatestMediaSelection()
+      }
     } catch {
       print("加载最新媒体失败: \(error)")
-      self.latestMedia = []
+      latestMedia = []
+      latestMediaServers = []
+      selectedLatestMediaServer = ""
     }
+  }
+
+  private func applyLatestMediaSelection() {
+    guard !selectedLatestMediaServer.isEmpty else {
+      latestMedia = []
+      return
+    }
+    latestMedia = latestMediaByServer[selectedLatestMediaServer] ?? []
+  }
+
+  private func persistSelectedLatestMediaServer() {
+    UserDefaults.standard.set(selectedLatestMediaServer, forKey: latestMediaSelectedServerKey)
   }
 
   /// 加载所有订阅并按电影/电视剧分类，且按 ID 倒序排列，也就是最新的在最前面
@@ -158,7 +215,9 @@ class HomeViewModel: ObservableObject {
       // 如果是 Emby 服务器，则尝试构建深度链接，目前 Emby 2.0.3(2) 还不支持跳转到媒体
       // 后端链接格式: https://your-emby-server/web/index.html#!/item?id=xxxx&serverId=...
       // emby://items?serverId={your_server_id}&itemId={your_item_id}
-      if let fragment = cleanFragment, let components = URLComponents(string: "https://dummy.com" + fragment) {
+      if let fragment = cleanFragment,
+        let components = URLComponents(string: "https://dummy.com" + fragment)
+      {
         let queryItems = components.queryItems ?? []
         let itemId = queryItems.first { $0.name == "id" }?.value
         let serverId = queryItems.first { $0.name == "serverId" }?.value
@@ -177,7 +236,9 @@ class HomeViewModel: ObservableObject {
     case .plex:
       // 后端链接格式: http://ip:port/web/index.html#!/media/{server_id}/com.plexapp.plugins.library?source={library.key}&X-Plex-Token={token}
       // plex://preplay/?metadataKey={metadataKey}&server={serverId}
-      if let fragment = cleanFragment, let components = URLComponents(string: "https://dummy.com" + fragment) {
+      if let fragment = cleanFragment,
+        let components = URLComponents(string: "https://dummy.com" + fragment)
+      {
         let pathParts = components.path.split(separator: "/")
         if pathParts.count >= 2, pathParts[0] == "media", let rawId = item.raw_id?.value {
           let serverId = String(pathParts[1])
