@@ -39,7 +39,11 @@ class CollectionDetailViewModel: ObservableObject {
       .store(in: &cancellables)
   }
 
+  private var hasLoaded = false
+
   func loadInitialData() async {
+    guard !hasLoaded else { return }
+    hasLoaded = true
     await paginator.refresh()
   }
 }

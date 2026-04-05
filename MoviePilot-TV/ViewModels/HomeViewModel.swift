@@ -34,8 +34,13 @@ class HomeViewModel: ObservableObject {
     ) ?? ""
   }
 
+  private var hasLoaded = false
+
   /// 初始或刷新加载数据
   func loadData() async {
+    guard !hasLoaded else { return }
+    hasLoaded = true
+
     // 仅在首次加载（无数据时）显示全屏 Loading
     let isFirstLoad = latestMedia.isEmpty && movieSubscriptions.isEmpty && tvSubscriptions.isEmpty
     if isFirstLoad {

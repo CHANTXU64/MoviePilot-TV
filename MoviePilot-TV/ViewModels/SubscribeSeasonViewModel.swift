@@ -22,6 +22,7 @@ class SubscribeSeasonViewModel: ObservableObject {
   @Published var showUnsubscribeConfirm: Int?  // 待取消订阅的季号
 
   private let initialSeason: Int?
+  private var hasLoaded = false
 
   init(mediaInfo: MediaInfo, initialSeason: Int? = nil) {
     self.mediaInfo = mediaInfo
@@ -29,6 +30,8 @@ class SubscribeSeasonViewModel: ObservableObject {
   }
 
   func loadData(checkSubscriptionLimit: Int? = nil) async {
+    guard !hasLoaded else { return }
+    hasLoaded = true
     isLoading = true
     defer { isLoading = false }
 

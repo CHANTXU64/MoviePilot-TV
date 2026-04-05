@@ -12,6 +12,7 @@ struct MediaDetailView: View {
   @Binding var isContentReady: Bool
   @State private var showSiteSelection = false
   @State private var showContentPage = false
+  @State private var hasAppeared = false
 
   // 订阅相关 UI 状态（弹窗开关，纯 UI 逻辑）
   @State private var sheetSubscribe: Subscribe?
@@ -218,7 +219,10 @@ struct MediaDetailView: View {
       similarPreloadDebounce?.cancel()
     }
     .task {
-      focusedButton = .subscribe
+      if !hasAppeared {
+        focusedButton = .subscribe
+        hasAppeared = true
+      }
       // 如果 fullDetail 已经就绪（预加载命中），立即应用（网络加载自动在后台启动）
       if let fullDetail = preloadTask.fullDetail {
         viewModel.applyFullDetail(fullDetail)

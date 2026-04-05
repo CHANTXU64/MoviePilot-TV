@@ -131,6 +131,8 @@ class MediaDetailViewModel: ObservableObject {
       .store(in: &cancellables)
   }
 
+  private var hasAppliedFullDetail = false
+
   /// 应用完整的媒体详情数据并加载辅助内容。
   /// 在 fullDetail 加载完成后调用，负责：
   /// 1. 设置 detail、更新背景图、派生演职员等所有依赖属性（同步，立即生效）
@@ -140,6 +142,9 @@ class MediaDetailViewModel: ObservableObject {
     self.detail = fullDetail
     detailBox.value = fullDetail  // 同步更新引用盒子，让 Paginator 闭包读取最新数据
     setBackground()
+
+    guard !hasAppliedFullDetail else { return }
+    hasAppliedFullDetail = true
 
     // 从完整详情中派生演职员数据，作为 API 加载前的快速初始显示
     uniqueDirectors = StaffManager.processCrew(persons: fullDetail.directors ?? [])

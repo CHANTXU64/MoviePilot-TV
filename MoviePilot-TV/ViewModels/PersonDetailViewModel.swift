@@ -104,7 +104,11 @@ class PersonDetailViewModel: ObservableObject {
     }
   }
 
+  private var hasLoaded = false
+
   func loadInitialData() async {
+    guard !hasLoaded else { return }
+    hasLoaded = true
     // 并行执行：获取人物详情 和 加载第一页作品
     _ = await (
       loadDetails(),
