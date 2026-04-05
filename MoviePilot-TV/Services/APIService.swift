@@ -17,7 +17,6 @@ nonisolated struct ApiResponse<T: Decodable>: Decodable {
   let message: String?
 }
 
-
 nonisolated struct MediaImageURLConfig: Sendable {
   let baseURL: String
   let useImageCache: Bool
@@ -73,7 +72,9 @@ nonisolated private func decodeOrUnwrapSync<T: Decodable>(from data: Data) throw
   return try JSONDecoder().decode(T.self, from: data)
 }
 
-nonisolated private func decodeActionResponseSync(from data: Data) throws -> (success: Bool, message: String?) {
+nonisolated private func decodeActionResponseSync(from data: Data) throws -> (
+  success: Bool, message: String?
+) {
   struct ActionResponse: Decodable { let success: Bool?, message: String? }
   if let resp = try? JSONDecoder().decode(ActionResponse.self, from: data) {
     return (resp.success ?? false, resp.message)
@@ -118,7 +119,9 @@ nonisolated private func posterImageURL(posterPath: String?, config: MediaImageU
   return nil
 }
 
-nonisolated private func backdropImageURL(backdropPath: String?, config: MediaImageURLConfig) -> URL? {
+nonisolated private func backdropImageURL(backdropPath: String?, config: MediaImageURLConfig)
+  -> URL?
+{
   guard let url = backdropPath, !url.isEmpty else { return nil }
 
   if config.useImageCache {
@@ -383,10 +386,12 @@ class APIService: ObservableObject {
       let config = currentMediaImageURLConfig()
       let mappedMedia = try await decodeMediaInfoInBackground(from: data, config: config)
       guard let mapped = mappedMedia as? T else {
-        throw APIError.decodingError(DecodingError.typeMismatch(
-          T.self,
-          DecodingError.Context(codingPath: [], debugDescription: "Failed to map MediaInfoJSON to \(T.self)")
-        ))
+        throw APIError.decodingError(
+          DecodingError.typeMismatch(
+            T.self,
+            DecodingError.Context(
+              codingPath: [], debugDescription: "Failed to map MediaInfoJSON to \(T.self)")
+          ))
       }
       return mapped
     }
@@ -394,10 +399,12 @@ class APIService: ObservableObject {
       let config = currentMediaImageURLConfig()
       let mappedMedia = try await decodeMediaInfoArrayInBackground(from: data, config: config)
       guard let mapped = mappedMedia as? T else {
-        throw APIError.decodingError(DecodingError.typeMismatch(
-          T.self,
-          DecodingError.Context(codingPath: [], debugDescription: "Failed to map [MediaInfoJSON] to \(T.self)")
-        ))
+        throw APIError.decodingError(
+          DecodingError.typeMismatch(
+            T.self,
+            DecodingError.Context(
+              codingPath: [], debugDescription: "Failed to map [MediaInfoJSON] to \(T.self)")
+          ))
       }
       return mapped
     }
@@ -409,8 +416,11 @@ class APIService: ObservableObject {
   }
 
   /// 仅对 MediaInfo 热路径做后台解码，避免主线程解析大 JSON。
-  private func decodeMediaInfoInBackground(from data: Data, config: MediaImageURLConfig) async throws -> MediaInfo {
-    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<MediaInfo, Error>) in
+  private func decodeMediaInfoInBackground(from data: Data, config: MediaImageURLConfig)
+    async throws -> MediaInfo
+  {
+    try await withCheckedThrowingContinuation {
+      (continuation: CheckedContinuation<MediaInfo, Error>) in
       DispatchQueue.global(qos: .userInitiated).async {
         do {
           let raw: MediaInfoJSON = try decodeOrUnwrapSync(from: data)
@@ -427,7 +437,9 @@ class APIService: ObservableObject {
   }
 
   /// 仅对 MediaInfo 列表热路径做后台解码，缓解分页加载时的主线程压力。
-  private func decodeMediaInfoArrayInBackground(from data: Data, config: MediaImageURLConfig) async throws -> [MediaInfo] {
+  private func decodeMediaInfoArrayInBackground(from data: Data, config: MediaImageURLConfig)
+    async throws -> [MediaInfo]
+  {
     try await withCheckedThrowingContinuation {
       (continuation: CheckedContinuation<[MediaInfo], Error>) in
       DispatchQueue.global(qos: .userInitiated).async {
@@ -453,7 +465,7 @@ class APIService: ObservableObject {
   /// 如果 Token 失效且有保存凭证，makeRequest 会自动触发重连并更新 Cookie。
   func validateTokenSilently() {
     guard isLoggedIn else { return }
-    
+
     Task {
       do {
         // 请求一个极其轻量的接口来验证 Token 和更新 Cookie
@@ -545,6 +557,155 @@ class APIService: ObservableObject {
     return try await decodeOrUnwrap([MediaInfo].self, from: data)
   }
 
+  /// 归一化媒体类型名称，统一转换为 API 识别的 'movie' 或 'tv'
+  private func normalizeMediaType(_ type: String) -> String {
+    let t = type.lowercased()
+    if t == "电影" || t == "movie" { return "movie" }
+    if t == "电视剧" || t == "剧集" || t == "tv" { return "tv" }
+    return t
+  }
+
+  /// 优化后的 TMDB ID 识别逻辑 (移植并增强自 MediaIdSelector.vue)
+  /// 结合了 searchMedia (基于影视数据库的精确搜索) 和 recognizeMedia (基于名称规则的模糊猜测)
+  /// 旨在提升 Douban、Bangumi、媒体库项目的识别准确率。
+  func recognizeTmdbId(title: String, year: String? = nil, type: String? = nil) async -> Int? {
+    var queryTitle = title.trimmingCharacters(in: .whitespaces)
+    let searchYear = year?.trimmingCharacters(in: .whitespaces)
+
+    guard !queryTitle.isEmpty else { return nil }
+
+    // 1. 媒体库标题清洗逻辑：如果标题包含年份（常见于 Emby/Plex），则剥离年份以提高搜索准度
+    if let sy = searchYear, sy.count == 4, queryTitle.contains(sy) {
+      // 包含半角、全角及空格的年份后缀模式
+      let patterns = [
+        "(\(sy))", "[\(sy)]", " \(sy)",
+        "（\(sy)）", "【\(sy)】", "　\(sy)"
+      ]
+      for pattern in patterns {
+        queryTitle = queryTitle.replacingOccurrences(of: pattern, with: "")
+      }
+    }
+
+    // 1.5 电视剧季数清洗逻辑：移除 "第二季"、"Season 2"、"S02" 等后缀，以便匹配 TMDB 原始系列标题
+    let seasonPatterns = ["\\s*第[一二三四五六七八九十\\d]+季$", "\\s*Season\\s*\\d+$", "\\s*S\\d+$"]
+    for pattern in seasonPatterns {
+      if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+        let range = NSRange(queryTitle.startIndex..., in: queryTitle)
+        queryTitle = regex.stringByReplacingMatches(in: queryTitle, options: [], range: range, withTemplate: "")
+      }
+    }
+    queryTitle = queryTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    guard !queryTitle.isEmpty else { return nil }
+
+    // 2. 尝试使用 searchMedia 进行精确搜索
+    do {
+      Logger.debug("[APIService] 开始 TMDB 搜索识别: '\(title)' -> 清洗后: '\(queryTitle)'", metadata: ["year": searchYear ?? "n/a", "type": type ?? "n/a"])
+      
+      // 恢复原始调用：API 不带 type 参数，保持与 SearchBarDialog.vue 一致
+      let results = try await searchMedia(query: queryTitle)
+      let targetTitle = queryTitle.lowercased().trimmingCharacters(in: .whitespaces)
+
+      let normalizedTargetType = type.map { normalizeMediaType($0) }
+
+      // 第一轮：最严格匹配（标题 + 类型 + 年份完全一致）
+      for result in results {
+        let rTitle = (result.title ?? "").lowercased().trimmingCharacters(in: .whitespaces)
+        let rOrigTitle = (result.original_title ?? "").lowercased().trimmingCharacters(
+          in: .whitespaces)
+        let rOrigName = (result.original_name ?? "").lowercased().trimmingCharacters(
+          in: .whitespaces)
+
+        let titleMatch =
+          (rTitle == targetTitle || rOrigTitle == targetTitle || rOrigName == targetTitle)
+
+        let typeMatch: Bool = {
+          guard let targetT = normalizedTargetType, let resultT = result.type else { return true }
+          return targetT == normalizeMediaType(resultT)
+        }()
+
+        // 年份必须完全一致（如果都有年份的话）
+        let yearMatch = (searchYear == nil || result.year == nil || searchYear == result.year)
+
+        if titleMatch && typeMatch && yearMatch {
+          if let tmdbId = result.tmdb_id {
+            Logger.info("[APIService] Search 识别成功 (严格匹配): \(rTitle), TMDB: \(tmdbId)")
+            return tmdbId
+          }
+        }
+      }
+
+      // 第二轮：允许1年误差的匹配（标题 + 类型 + 年份误差1年）
+      for result in results {
+        let rTitle = (result.title ?? "").lowercased().trimmingCharacters(in: .whitespaces)
+        let rOrigTitle = (result.original_title ?? "").lowercased().trimmingCharacters(
+          in: .whitespaces)
+        let rOrigName = (result.original_name ?? "").lowercased().trimmingCharacters(
+          in: .whitespaces)
+
+        let titleMatch =
+          (rTitle == targetTitle || rOrigTitle == targetTitle || rOrigName == targetTitle)
+
+        let typeMatch: Bool = {
+          guard let targetT = normalizedTargetType, let resultT = result.type else { return true }
+          return targetT == normalizeMediaType(resultT)
+        }()
+
+        // 允许年份有 1 年的误差（上映 vs 制作）
+        let yearMatch: Bool = {
+          guard let sy = searchYear, let ry = result.year else { return true }
+          if sy == ry { return true }
+          if let siy = Int(sy), let riy = Int(ry) {
+            return abs(siy - riy) <= 1
+          }
+          return false
+        }()
+
+        if titleMatch && typeMatch && yearMatch {
+          if let tmdbId = result.tmdb_id {
+            Logger.info("[APIService] Search 识别成功 (年份误差匹配): \(rTitle), TMDB: \(tmdbId)")
+            return tmdbId
+          }
+        }
+      }
+    } catch {
+      Logger.error("[APIService] searchMedia during recognition failed: \(error)")
+    }
+
+    // 3. Fallback 到 recognizeMedia
+    // 适用于包含季、集、制作组信息的原始文件名字符串
+    do {
+      Logger.debug("[APIService] Search 未命中，尝试 Fallback 到后端 Recognize 接口: \(title)")
+      let recognizeQuery =
+        (searchYear != nil && !title.contains(searchYear!)) ? "\(title) \(searchYear!)" : title
+      let result = try await recognizeMedia(title: recognizeQuery)
+
+      // 检查识别出的类型是否匹配（如果已知 type）
+      if let targetType = type, let recognizedType = result.media_info?.type {
+        if normalizeMediaType(targetType) == normalizeMediaType(recognizedType) {
+          if let tmdbId = result.media_info?.tmdb_id {
+             Logger.info("[APIService] Recognize 识别成功: \(result.media_info?.title ?? ""), TMDB: \(tmdbId)")
+             return tmdbId
+          }
+        } else {
+          // 识别出的类型不符，属于误报，拒绝该结果
+          Logger.warning("[APIService] recognizeMedia 类型不匹配: 期望 \(targetType), 实际 \(recognizedType)")
+          return nil
+        }
+      }
+
+      if let tmdbId = result.media_info?.tmdb_id {
+        Logger.info("[APIService] Recognize 识别成功: \(result.media_info?.title ?? ""), TMDB: \(tmdbId)")
+        return tmdbId
+      }
+    } catch {
+      Logger.error("[APIService] recognizeMedia fallback failed: \(error)")
+    }
+
+    Logger.info("[APIService] 识别失败: \(title)")
+    return nil
+  }
+
   /// 搜索合集
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SearchBarDialog.vue (searchMedia('collection'))
   /// - 应用场景: 聚合搜索页面的“合集”分类。用户在搜索框输入关键词并选择“合集”时调用，用于搜索 TMDB 系列电影。
@@ -612,7 +773,7 @@ class APIService: ObservableObject {
       params: [
         "name": query,
         "page": String(page),
-        "count": "20"
+        "count": "20",
       ])
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([SubscribeShare].self, from: data)

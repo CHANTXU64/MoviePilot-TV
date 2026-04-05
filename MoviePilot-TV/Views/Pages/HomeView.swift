@@ -239,9 +239,9 @@ private struct MediaSectionView: View {
                 }
                 Button {
                   Task {
-                    // douban_id: "0" 用于强制触发 title 的 TMDB ID 识别逻辑
-                    let dummyInfo = MediaInfo(douban_id: "0", title: item.title, type: item.type)
-                    if let target = await mediaActionHandler.getTMDBJumpTarget(for: dummyInfo) {
+                    // 使用实际的标题、年份和类型进行识别
+                    let info = MediaInfo(title: item.title, type: item.type, year: item.subtitle)
+                    if let target = await mediaActionHandler.getTMDBJumpTarget(for: info) {
                       onTMDBDetail?(target)
                     }
                   }

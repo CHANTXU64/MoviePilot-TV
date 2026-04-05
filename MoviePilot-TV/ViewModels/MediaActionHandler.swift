@@ -26,18 +26,14 @@ class MediaActionHandler: ObservableObject {
   ) async -> MediaInfo? {
     var tmdbIdToUse: Int? = targetTmdbId ?? item.tmdb_id
 
-    if tmdbIdToUse == nil && (item.douban_id != nil || item.bangumi_id != nil) {
-      let queryTitle = item.year != nil ? "\(item.title ?? "") \(item.year!)" : (item.title ?? "")
-      if !queryTitle.trimmingCharacters(in: .whitespaces).isEmpty {
-        isRecognizingTmdb = true
-        do {
-          let recognizeResult = try await APIService.shared.recognizeMedia(title: queryTitle)
-          tmdbIdToUse = recognizeResult.media_info?.tmdb_id
-        } catch {
-          print("Error recognizing tmdb_id: \(error)")
-        }
-        isRecognizingTmdb = false
-      }
+    if tmdbIdToUse == nil {
+      isRecognizingTmdb = true
+      tmdbIdToUse = await APIService.shared.recognizeTmdbId(
+        title: item.title ?? "",
+        year: item.year,
+        type: item.type
+      )
+      isRecognizingTmdb = false
     }
 
     guard let tmdbId = tmdbIdToUse else {

@@ -178,19 +178,13 @@ class MediaPreloadTask: ObservableObject {
   // MARK: - ⑤ TMDB 识别
 
   private func recognizeTmdb() async {
-    let queryTitle =
-      partialMedia.year != nil
-      ? "\(partialMedia.title ?? "") \(partialMedia.year!)"
-      : (partialMedia.title ?? "")
-    guard !queryTitle.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-
-    do {
-      let result = try await APIService.shared.recognizeMedia(title: queryTitle)
-      if let tmdbId = result.media_info?.tmdb_id {
-        self.tmdbId = tmdbId
-      }
-    } catch {
-      print("[MediaPreloadTask] TMDB 识别失败: \(error)")
+    let result = await APIService.shared.recognizeTmdbId(
+      title: partialMedia.title ?? "",
+      year: partialMedia.year,
+      type: partialMedia.type
+    )
+    if let tmdbId = result {
+      self.tmdbId = tmdbId
     }
   }
 }
