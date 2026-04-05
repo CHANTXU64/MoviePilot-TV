@@ -30,7 +30,9 @@ struct HomeView: View {
                 servers: viewModel.latestMediaServers,
                 selectedServer: $viewModel.selectedLatestMediaServer,
                 isFirstRow: true,
-                viewModel: viewModel
+                viewModel: viewModel,
+                onTMDBDetail: { mediaInfo in path.append(mediaInfo) },
+                onSearchResource: { request in path.append(request) }
               )
             }
 
@@ -160,8 +162,11 @@ private struct MediaSectionView: View {
   @Binding var selectedServer: String
   var isFirstRow: Bool = false
   @ObservedObject var viewModel: HomeViewModel
+  var onTMDBDetail: ((MediaInfo) -> Void)? = nil
+  var onSearchResource: ((ResourceSearchRequest) -> Void)? = nil
 
   @Environment(\.openURL) private var openURL
+  @EnvironmentObject private var mediaActionHandler: MediaActionHandler
   @FocusState private var focusedItemId: String?
   @FocusState private var isTopRedirectorFocused: Bool
   @State private var hasRedirectedFocus: Bool = false
@@ -225,6 +230,33 @@ private struct MediaSectionView: View {
                 }
               )
               .focused($focusedItemId, equals: item.id)
+              .compositingGroup()
+              .contextMenu {
+                Button {
+                  viewModel.openMediaItem(item, using: openURL)
+                } label: {
+                  Label("跳转媒体库", systemImage: "arrow.up.right.square")
+                }
+                Button {
+                  Task {
+                    // douban_id: "0" 用于强制触发 title 的 TMDB ID 识别逻辑
+                    let dummyInfo = MediaInfo(douban_id: "0", title: item.title, type: item.type)
+                    if let target = await mediaActionHandler.getTMDBJumpTarget(for: dummyInfo) {
+                      onTMDBDetail?(target)
+                    }
+                  }
+                } label: {
+                  Label("TMDB详情页", systemImage: "link")
+                }
+                Button {
+                  let request = ResourceSearchRequest(
+                    keyword: item.title, type: item.type, area: nil, title: nil, year: nil,
+                    season: nil, mediaInfo: nil, sites: nil)
+                  onSearchResource?(request)
+                } label: {
+                  Label("搜索资源", systemImage: "magnifyingglass")
+                }
+              }
             }
           }
           .padding(.top, 25)
