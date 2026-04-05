@@ -23,7 +23,7 @@ struct ReorganizeSheet: View {
     NavigationStack {
       Group {
         if viewModel.isLoading {
-          ProgressView("正在加载配置...")
+          ProgressView("加载配置中...")
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
           VStack {
@@ -301,7 +301,7 @@ struct ReorganizeSheet: View {
           if viewModel.isSubmitting {
             ProgressView()
           }
-          Text(viewModel.isSubmitting ? "正在处理..." : "开始整理")
+          Text("开始整理")
         }
         .frame(maxWidth: .infinity)
       }

@@ -20,9 +20,6 @@ struct AddDownloadSheet: View {
         if viewModel.isLoading {
           ProgressView("加载配置中...")
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if viewModel.isSubmitting {
-          ProgressView("提交下载任务中...")
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
           VStack {
             Text("添加下载")

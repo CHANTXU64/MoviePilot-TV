@@ -265,7 +265,6 @@ struct SubscribeSheet: View {
               .applySheetStyles()
             }
           }
-          .opacity(viewModel.isLoading ? 0 : 1)
           .onAppear {
             guard !hasAppeared else { return }
             hasAppeared = true
