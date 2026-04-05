@@ -87,21 +87,35 @@ class MediaPreloadTask: ObservableObject {
   // MARK: - ① 加载完整媒体详情
 
   private func loadDetail() async {
-    do {
-      let fetched = try await APIService.shared.fetchMediaDetail(media: partialMedia)
-      // 校验返回数据有效性：API 可能返回 200 但 body 是空/残缺 JSON
-      // 此时 Codable 解码成功但所有字段为 nil，导致详情页显示 "Unknown" 空白页
-      guard fetched.title != nil || fetched.tmdb_id != nil || fetched.douban_id != nil else {
-        print("[MediaPreloadTask] API 返回空数据，视为失败")
-        self.isDetailFailed = true
-        return
+    let maxRetries = 2
+    for attempt in 0...maxRetries {
+      if Task.isCancelled { return }
+      do {
+        let fetched = try await APIService.shared.fetchMediaDetail(media: partialMedia)
+        // 校验返回数据有效性：API 可能返回 200 但 body 是空/残缺 JSON
+        // 此时 Codable 解码成功但所有字段为 nil，导致详情页显示 "Unknown" 空白页
+        if fetched.title != nil || fetched.tmdb_id != nil || fetched.douban_id != nil {
+          self.fullDetail = fetched
+          self.isDetailLoaded = true
+          return
+        } else {
+          print("[MediaPreloadTask] 第 \(attempt + 1) 次请求 API 返回空数据...")
+          if attempt < maxRetries {
+            try await Task.sleep(nanoseconds: 1_500_000_000)  // 等待 1.5 秒后重试
+          }
+        }
+      } catch {
+        print("[MediaPreloadTask] 加载详情失败(attempt \(attempt + 1)): \(error)")
+        if attempt < maxRetries {
+          try? await Task.sleep(nanoseconds: 1_500_000_000)
+        } else {
+          self.isDetailFailed = true
+          return
+        }
       }
-      self.fullDetail = fetched
-      self.isDetailLoaded = true
-    } catch {
-      print("[MediaPreloadTask] 加载详情失败: \(error)")
-      self.isDetailFailed = true
     }
+    print("[MediaPreloadTask] API 重试后仍返回空数据，视为失败")
+    self.isDetailFailed = true
   }
 
   // MARK: - ② 预取背景图（Kingfisher）
