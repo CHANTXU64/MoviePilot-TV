@@ -121,6 +121,14 @@ class SubscribeSeasonViewModel: ObservableObject {
       let result = try await APIService.shared.checkSeasonsNotExists(mediaInfo: checkMedia)
 
       var newStatus: [Int: Int] = [:]
+
+      // 预先将总集数为 0 的季标记为缺失 (2)，避免 fallback 到默认已入库
+      for season in seasonInfos {
+        if let seasonNumber = season.season_number, (season.episode_count ?? 0) == 0 {
+          newStatus[seasonNumber] = 2
+        }
+      }
+
       for item in result {
         // 状态定义映射：
         // 0 -> 已完整入库 (Exists)
