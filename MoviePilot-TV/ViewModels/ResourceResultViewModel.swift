@@ -6,6 +6,7 @@ import SwiftUI
 class ResourceResultViewModel: ObservableObject {
   @Published var results: [Context] = []
   @Published var isLoading = true
+  private var hasSearched = false
 
   let keyword: String
   let type: String?
@@ -31,6 +32,8 @@ class ResourceResultViewModel: ObservableObject {
   }
 
   func search() async {
+    guard !hasSearched else { return }
+    hasSearched = true
     isLoading = true
     do {
       results = try await apiService.searchResources(
