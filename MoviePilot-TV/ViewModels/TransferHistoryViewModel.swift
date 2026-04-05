@@ -17,7 +17,6 @@ class TransferHistoryViewModel: ObservableObject {
   // MARK: - Private State
 
   private var paginator: Paginator<TransferHistory>!
-  private var pollingTimer: AnyCancellable?
   private var fetcher: (Int) async throws -> TransferHistoryResponse
   private var cancellables = Set<AnyCancellable>()
   private let apiService = APIService.shared
@@ -231,25 +230,9 @@ class TransferHistoryViewModel: ObservableObject {
     }
   }
 
-  func startPolling(interval: TimeInterval) {
-    stopPolling()
-    pollingTimer = Timer.publish(every: interval, on: .main, in: .common)
-      .autoconnect()
-      .sink { [weak self] _ in
-        Task { [weak self] in
-          await self?.fetchLatest()
-        }
-      }
-  }
-
-  func stopPolling() {
-    pollingTimer?.cancel()
-    pollingTimer = nil
-  }
-
   // MARK: - Polling Helpers
 
-  private func fetchLatest() async {
+  func fetchLatest() async {
     do {
       var allNewItems: [TransferHistory] = []
       var currentPage = 1

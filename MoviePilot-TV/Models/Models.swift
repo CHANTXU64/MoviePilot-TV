@@ -1002,7 +1002,7 @@ struct MediaServerType: RawRepresentable, Codable, Hashable, Equatable {
 }
 
 /// 媒体服务器最近播放/新增项
-struct MediaServerPlayItem: Codable, Identifiable {
+struct MediaServerPlayItem: Codable, Identifiable, Equatable {
   struct ImageURLs: Hashable {
     let image: URL?
   }

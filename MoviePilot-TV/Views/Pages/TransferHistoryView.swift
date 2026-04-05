@@ -133,12 +133,13 @@ struct TransferHistoryView: View {
       if viewModel.items.isEmpty {
         await viewModel.refresh()
       }
-      // 每次视图出现时都启动或重启轮询
-      viewModel.startPolling(interval: 10)
-    }
-    .onDisappear {
-      // 视图消失时停止轮询, 避免后台资源消耗
-      viewModel.stopPolling()
+
+      // 定期拉取最新数据，替代旧版 Timer.publish，避免后台挂起恢复后的调度失效问题
+      while !Task.isCancelled {
+        try? await Task.sleep(nanoseconds: 10 * 1_000_000_000)
+        guard !Task.isCancelled else { break }
+        await viewModel.fetchLatest()
+      }
     }
     .sheet(item: $itemForInfoSheet) { item in
       TransferHistoryDetailSheet(item: item, storageDict: viewModel.storageDict)

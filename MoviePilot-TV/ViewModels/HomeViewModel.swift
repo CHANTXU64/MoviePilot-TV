@@ -29,9 +29,10 @@ class HomeViewModel: ObservableObject {
 
   init(apiService: APIService? = nil) {
     self.apiService = apiService ?? APIService.shared
-    self.selectedLatestMediaServer = UserDefaults.standard.string(
-      forKey: latestMediaSelectedServerKey
-    ) ?? ""
+    self.selectedLatestMediaServer =
+      UserDefaults.standard.string(
+        forKey: latestMediaSelectedServerKey
+      ) ?? ""
   }
 
   private var hasLoaded = false
@@ -96,31 +97,40 @@ class HomeViewModel: ObservableObject {
 
       // 3. 更新筛选器和当前展示列表
       self.latestMediaByServer = latestByServer
-      self.latestMediaServers = enabledServers.map(\.name)
+      let newServerNames = enabledServers.map(\.name)
+      if self.latestMediaServers != newServerNames {
+        self.latestMediaServers = newServerNames
+      }
 
       if latestMediaServers.isEmpty {
-        selectedLatestMediaServer = ""
-        latestMedia = []
+        if self.selectedLatestMediaServer != "" { self.selectedLatestMediaServer = "" }
+        if !self.latestMedia.isEmpty { self.latestMedia = [] }
       } else {
-        if selectedLatestMediaServer.isEmpty || !latestMediaServers.contains(selectedLatestMediaServer) {
-          selectedLatestMediaServer = latestMediaServers[0]
+        if selectedLatestMediaServer.isEmpty
+          || !latestMediaServers.contains(selectedLatestMediaServer)
+        {
+          self.selectedLatestMediaServer = latestMediaServers[0]
         }
         applyLatestMediaSelection()
       }
     } catch {
-      print("加载最新媒体失败: \(error)")
-      latestMedia = []
-      latestMediaServers = []
-      selectedLatestMediaServer = ""
+      if error is CancellationError {
+        print("加载最新媒体被取消")
+      } else {
+        print("加载最新媒体失败: \(error)")
+      }
     }
   }
 
   private func applyLatestMediaSelection() {
     guard !selectedLatestMediaServer.isEmpty else {
-      latestMedia = []
+      if !self.latestMedia.isEmpty { self.latestMedia = [] }
       return
     }
-    latestMedia = latestMediaByServer[selectedLatestMediaServer] ?? []
+    let newMedia = latestMediaByServer[selectedLatestMediaServer] ?? []
+    if self.latestMedia != newMedia {
+      self.latestMedia = newMedia
+    }
   }
 
   private func persistSelectedLatestMediaServer() {
@@ -132,15 +142,23 @@ class HomeViewModel: ObservableObject {
     do {
       let subs = try await apiService.fetchSubscriptions()
 
-      self.movieSubscriptions = subs.filter { $0.type == "电影" }
+      let newMovies = subs.filter { $0.type == "电影" }
         .sorted { ($0.id ?? 0) > ($1.id ?? 0) }
+      if self.movieSubscriptions != newMovies {
+        self.movieSubscriptions = newMovies
+      }
 
-      self.tvSubscriptions = subs.filter { $0.type == "电视剧" }
+      let newTVs = subs.filter { $0.type == "电视剧" }
         .sorted { ($0.id ?? 0) > ($1.id ?? 0) }
+      if self.tvSubscriptions != newTVs {
+        self.tvSubscriptions = newTVs
+      }
     } catch {
-      print("加载订阅失败: \(error)")
-      self.movieSubscriptions = []
-      self.tvSubscriptions = []
+      if error is CancellationError {
+        print("加载订阅被取消")
+      } else {
+        print("加载订阅失败: \(error)")
+      }
     }
   }
 

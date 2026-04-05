@@ -73,9 +73,15 @@ struct HomeView: View {
         }
       }
       .task {
-        // TODO: 考虑增加刷新频率限制或检查数据新鲜度，避免频繁进入退出详情页时重复请求首页数据
-        // 每次页面出现时都请求刷新，ViewModel 内部会决定是否需要显示全屏 Loading（避免重建视图树导致焦点丢失）
+        // 每次页面出现时都会先加载一次（内部有 hasLoaded 控制全屏 Loading）
         await viewModel.loadData()
+
+        // 定期刷新数据（类似 Status 页面的下载器/整理信息）
+        while !Task.isCancelled {
+          try? await Task.sleep(nanoseconds: 10 * 1_000_000_000)
+          guard !Task.isCancelled else { break }
+          await viewModel.refreshData()
+        }
       }
       // 编辑订阅 Sheet
       .sheet(item: $selectedSubscribe) { subscribe in
