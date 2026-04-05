@@ -40,7 +40,7 @@ struct TorrentsResultView<Header: View>: View {
         header
 
         if result.isEmpty {
-          EmptyDataView( // TODO 对于整页的加个按钮吧
+          EmptyDataView(  // TODO 对于整页的加个按钮吧
             title: "未找到相关资源",
             systemImage: "magnifyingglass"
           )
@@ -57,6 +57,7 @@ struct TorrentsResultView<Header: View>: View {
             onFilterClick: { key in
               // 打开 sheet 时初始化临时选择
               tempFilterSelection = filterForm[key] ?? []
+              return computeDisabledOptions(for: key)
             },
             onSortChange: {
               updateFilteredResults()
@@ -92,7 +93,9 @@ struct TorrentsResultView<Header: View>: View {
         options: config.options,
         id: \.self,
         selected: $tempFilterSelection,
-        label: { $0 }
+        label: { $0 },
+        disabledOptions: config.disabledOptions,
+        disabledOptionsTitle: "已被其他条件筛选"
       )
       .onDisappear {
         // 当 sheet 消失时提交选择
@@ -126,28 +129,116 @@ struct TorrentsResultView<Header: View>: View {
     var freeStates = Set<String>()
 
     for context in result {
-      if let site = context.torrent_info?.site_name, !site.isEmpty { sites.insert(site) }
-      if let seasonEpisode = context.meta_info?.season_episode, !seasonEpisode.isEmpty {
-        seasons.insert(seasonEpisode)
-      }
-      if let res = context.meta_info?.resource_pix, !res.isEmpty { resolutions.insert(res) }
-      if let code = context.meta_info?.video_encode, !code.isEmpty { videoCodes.insert(code) }
-      if let edition = context.meta_info?.edition, !edition.isEmpty { editions.insert(edition) }
-      if let group = context.meta_info?.resource_team, !group.isEmpty {
-        releaseGroups.insert(group)
-      }
+      let site = context.torrent_info?.site_name ?? ""
+      sites.insert(site.isEmpty ? "无" : site)
+
+      let seasonEpisode = context.meta_info?.season_episode ?? ""
+      seasons.insert(seasonEpisode.isEmpty ? "无" : seasonEpisode)
+
+      let res = context.meta_info?.resource_pix ?? ""
+      resolutions.insert(res.isEmpty ? "无" : res)
+
+      let code = context.meta_info?.video_encode ?? ""
+      videoCodes.insert(code.isEmpty ? "无" : code)
+
+      let edition = context.meta_info?.edition ?? ""
+      editions.insert(edition.isEmpty ? "无" : edition)
+
+      let group = context.meta_info?.resource_team ?? ""
+      releaseGroups.insert(group.isEmpty ? "无" : group)
+
       freeStates.insert(getFreeState(context))
     }
 
+    // 辅助排序方法：将"无"放在最后
+    let sortWithNoneLast: (Set<String>) -> [String] = { set in
+      set.sorted { a, b in
+        if a == "无" { return false }
+        if b == "无" { return true }
+        return a < b
+      }
+    }
+
     filterOptions = [
-      "site": sites.sorted(),
-      "season": ParsedSeason.sortSeasonOptions(Array(seasons)),
-      "resolution": resolutions.sorted(),
-      "videoCode": videoCodes.sorted(),
-      "edition": editions.sorted(),
-      "releaseGroup": releaseGroups.sorted(),
-      "freeState": freeStates.sorted(),
+      "site": sortWithNoneLast(sites),
+      "season": ParsedSeason.sortSeasonOptions(Array(seasons)),  // "无" 会被解析为 season 0 放最后
+      "resolution": sortWithNoneLast(resolutions),
+      "videoCode": sortWithNoneLast(videoCodes),
+      "edition": sortWithNoneLast(editions),
+      "releaseGroup": sortWithNoneLast(releaseGroups),
+      "freeState": sortWithNoneLast(freeStates),
     ]
+  }
+
+  private func contextMatches(_ context: Context, key: String, values: Set<String>) -> Bool {
+    switch key {
+    case "site":
+      let val = context.torrent_info?.site_name ?? ""
+      return values.contains(val.isEmpty ? "无" : val)
+    case "season":
+      let val = context.meta_info?.season_episode ?? ""
+      return values.contains(val.isEmpty ? "无" : val)
+    case "resolution":
+      let val = context.meta_info?.resource_pix ?? ""
+      return values.contains(val.isEmpty ? "无" : val)
+    case "videoCode":
+      let val = context.meta_info?.video_encode ?? ""
+      return values.contains(val.isEmpty ? "无" : val)
+    case "edition":
+      let val = context.meta_info?.edition ?? ""
+      return values.contains(val.isEmpty ? "无" : val)
+    case "releaseGroup":
+      let val = context.meta_info?.resource_team ?? ""
+      return values.contains(val.isEmpty ? "无" : val)
+    case "freeState":
+      return values.contains(getFreeState(context))
+    default:
+      return true
+    }
+  }
+
+  private func computeDisabledOptions(for targetKey: String) -> Set<String> {
+    // 1. 过滤 result，但忽略 targetKey 的筛选条件
+    let partiallyFiltered = result.filter { context in
+      for (key, values) in filterForm where key != targetKey {
+        if values.isEmpty { continue }
+        if !contextMatches(context, key: key, values: values) { return false }
+      }
+      return true
+    }
+
+    // 2. 从 partiallyFiltered 中收集 targetKey 的所有可用选项
+    var availableOptions = Set<String>()
+    for context in partiallyFiltered {
+      switch targetKey {
+      case "site":
+        let val = context.torrent_info?.site_name ?? ""
+        availableOptions.insert(val.isEmpty ? "无" : val)
+      case "season":
+        let val = context.meta_info?.season_episode ?? ""
+        availableOptions.insert(val.isEmpty ? "无" : val)
+      case "resolution":
+        let val = context.meta_info?.resource_pix ?? ""
+        availableOptions.insert(val.isEmpty ? "无" : val)
+      case "videoCode":
+        let val = context.meta_info?.video_encode ?? ""
+        availableOptions.insert(val.isEmpty ? "无" : val)
+      case "edition":
+        let val = context.meta_info?.edition ?? ""
+        availableOptions.insert(val.isEmpty ? "无" : val)
+      case "releaseGroup":
+        let val = context.meta_info?.resource_team ?? ""
+        availableOptions.insert(val.isEmpty ? "无" : val)
+      case "freeState":
+        availableOptions.insert(getFreeState(context))
+      default:
+        break
+      }
+    }
+
+    // 3. 所有 targetKey 的选项中，不属于 availableOptions 的即为 disabledOptions
+    let allOptions = Set(filterOptions[targetKey] ?? [])
+    return allOptions.subtracting(availableOptions)
   }
 
   private func updateFilteredResults() {
@@ -158,27 +249,7 @@ struct TorrentsResultView<Header: View>: View {
       results = results.filter { context in
         for (key, values) in filterForm {
           if values.isEmpty { continue }
-
-          let match: Bool
-          switch key {
-          case "site":
-            match = values.contains(context.torrent_info?.site_name ?? "")
-          case "season":
-            match = values.contains(context.meta_info?.season_episode ?? "")
-          case "resolution":
-            match = values.contains(context.meta_info?.resource_pix ?? "")
-          case "videoCode":
-            match = values.contains(context.meta_info?.video_encode ?? "")
-          case "edition":
-            match = values.contains(context.meta_info?.edition ?? "")
-          case "releaseGroup":
-            match = values.contains(context.meta_info?.resource_team ?? "")
-          case "freeState":
-            match = values.contains(getFreeState(context))
-          default:
-            match = true
-          }
-          if !match { return false }
+          if !contextMatches(context, key: key, values: values) { return false }
         }
         return true
       }
@@ -247,6 +318,7 @@ struct FilterConfig: Identifiable {
   let id: String
   let title: String
   let options: [String]
+  let disabledOptions: Set<String>
 }
 
 // MARK: - 枚举
@@ -277,7 +349,7 @@ struct TorrentFilterBar: View {
   @Binding var activeFilter: FilterConfig?
   let totalCount: Int
 
-  var onFilterClick: (String) -> Void
+  var onFilterClick: (String) -> Set<String>
   var onSortChange: () -> Void
 
   var body: some View {
@@ -325,11 +397,12 @@ struct TorrentFilterBar: View {
         ForEach(filterKeys, id: \.self) { key in
           if let options = filterOptions[key], !options.isEmpty {
             Button {
-              onFilterClick(key)
+              let disabled = onFilterClick(key)
               activeFilter = FilterConfig(
                 id: key,
                 title: filterTitles[key] ?? key,
-                options: options
+                options: options,
+                disabledOptions: disabled
               )
             } label: {
               HStack(spacing: 4) {
