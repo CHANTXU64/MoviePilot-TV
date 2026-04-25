@@ -36,12 +36,41 @@ class ResourceResultViewModel: ObservableObject {
     hasSearched = true
     isLoading = true
     do {
-      results = try await apiService.searchResources(
+      var searchResults = try await apiService.searchResources(
         keyword: keyword, type: type, area: area, title: title, year: year, season: season,
         sites: sites)
+
+      // 应用自定义过滤规则
+      searchResults = await applyCustomFilter(to: searchResults)
+
+      results = searchResults
     } catch {
       print("Search error: \(error)")
     }
     isLoading = false
+  }
+
+  /// 应用自定义过滤规则
+  private func applyCustomFilter(to contexts: [Context]) async -> [Context] {
+    guard let ruleId = SystemViewModel.currentSelectedFilterRuleId() else {
+      return contexts
+    }
+
+    // 从 API 获取规则详情
+    do {
+      let rules = try await apiService.fetchCustomFilterRules()
+      guard let rule = rules.first(where: { $0.id == ruleId }) else {
+        print("⚠️ [ResourceResultVM] 选中的规则 \(ruleId) 不存在")
+        return contexts
+      }
+
+      let originalCount = contexts.count
+      let filtered = CustomFilterService.filter(contexts: contexts, with: rule)
+      print("🔍 [ResourceResultVM] 应用过滤规则「\(rule.name)」: \(originalCount) → \(filtered.count) 个资源")
+      return filtered
+    } catch {
+      print("❌ [ResourceResultVM] 加载过滤规则失败: \(error)")
+      return contexts
+    }
   }
 }

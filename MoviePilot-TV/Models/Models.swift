@@ -896,6 +896,8 @@ struct TorrentInfo: Codable {
   let downloadvolumefactor: Double
   /// 种子优先级
   let pri_order: Int?
+  /// 种子标签
+  let labels: [String]?
   /// 促销描述
   let volume_factor: String?
 }
@@ -922,6 +924,10 @@ struct MetaInfo: Codable {
   let web_source: String?
   /// 资源类型+特效
   let edition: String?
+  /// 总季数
+  let total_season: Int?
+  /// 总集数
+  let total_episode: Int?
 }
 
 /// 站点配置信息
@@ -1875,4 +1881,31 @@ struct ReorganizeForm: Codable {
   var library_type_folder: Bool?
   // 媒体库类别子目录
   var library_category_folder: Bool?
+}
+
+// MARK: - 自定义过滤规则
+
+/// 自定义过滤规则
+/// - 对应后端: CustomFilterRules 配置项
+/// - 应用场景: 在搜索资源后，根据用户在设置中选择的规则对结果进行前端过滤。
+struct CustomRule: Codable, Identifiable, Hashable {
+  /// 规则ID
+  let id: String
+  /// 名称
+  var name: String
+  /// 包含 (正则表达式)
+  var include: String?
+  /// 排除 (正则表达式)
+  var exclude: String?
+  /// 大小 (MB)，格式: "min" 或 "min-max"
+  var size_range: String?
+  /// 做种人数，格式: "min" 或 "min-max"
+  var seeders: String?
+  /// 发布时间 (分钟)，格式: "min" 或 "min-max"
+  var publish_time: String?
+}
+
+/// 对应 API 的返回格式：{ "data": { "value": [...] } }
+struct CustomFilterRulesResponse: Codable {
+  let value: [CustomRule]
 }

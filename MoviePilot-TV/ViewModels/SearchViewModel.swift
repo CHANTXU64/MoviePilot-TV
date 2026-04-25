@@ -198,6 +198,7 @@ class SearchViewModel: ObservableObject {
   @Published var searchType: SearchType = .unified
 
   @Published var resourceResults: [Context] = []
+  @Published var appliedFilterRuleName: String?
   @Published var siteFilter = SiteFilterViewModel()
 
   private let apiService = APIService.shared
@@ -222,7 +223,11 @@ class SearchViewModel: ObservableObject {
       case .resource:
         // 资源搜索：查询站点种子信息
         let sitesStr = siteFilter.sitesString
-        let results = try await apiService.searchResources(keyword: query, sites: sitesStr)
+        var results = try await apiService.searchResources(keyword: query, sites: sitesStr)
+
+        // 应用自定义过滤规则
+        results = await applyCustomFilter(to: results)
+
         self.resourceResults = results
 
       case .unified:
@@ -243,7 +248,8 @@ class SearchViewModel: ObservableObject {
         let personTask = Task { @MainActor in await personPag.refresh() }
         let shareTask = Task { @MainActor in await sharePag.refresh() }
         _ = await (
-          movieTask.value, tvTask.value, collectionTask.value, personTask.value, shareTask.value)
+          movieTask.value, tvTask.value, collectionTask.value, personTask.value, shareTask.value
+        )
 
         // 基于第一页的结果计算"最佳结果"
         // 由于 media 是电影+电视剧的混合，我们需要把它们组合起来传递
@@ -422,6 +428,35 @@ class SearchViewModel: ObservableObject {
       filter_groups: nil,
       custom_words: nil
     )
+  }
+
+  // MARK: - 自定义过滤规则
+
+  /// 应用自定义过滤规则
+  private func applyCustomFilter(to contexts: [Context]) async -> [Context] {
+    guard let ruleId = SystemViewModel.currentSelectedFilterRuleId() else {
+      appliedFilterRuleName = nil
+      return contexts
+    }
+
+    do {
+      let rules = try await apiService.fetchCustomFilterRules()
+      guard let rule = rules.first(where: { $0.id == ruleId }) else {
+        print("⚠️ [SearchVM] 选中的规则 \(ruleId) 不存在")
+        appliedFilterRuleName = nil
+        return contexts
+      }
+
+      let originalCount = contexts.count
+      let filtered = CustomFilterService.filter(contexts: contexts, with: rule)
+      print("🔍 [SearchVM] 应用过滤规则「\(rule.name)」: \(originalCount) → \(filtered.count) 个资源")
+      appliedFilterRuleName = rule.name
+      return filtered
+    } catch {
+      print("❌ [SearchVM] 加载过滤规则失败: \(error)")
+      appliedFilterRuleName = nil
+      return contexts
+    }
   }
 }
 

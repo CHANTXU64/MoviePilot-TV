@@ -1141,6 +1141,15 @@ class APIService: ObservableObject {
     return config.value
   }
 
+  /// 获取自定义过滤规则列表
+  /// - 对应后端: CustomFilterRules 配置项
+  /// - 应用场景: 在设置页面加载可用的自定义规则列表，供用户选择后用于前端资源搜索结果的过滤。
+  func fetchCustomFilterRules() async throws -> [CustomRule] {
+    let data = try await makeRequest(endpoint: "/system/setting/CustomFilterRules")
+    let config = try await decodeOrUnwrap(CustomFilterRulesResponse.self, from: data)
+    return config.value
+  }
+
   /// 获取剧集分组信息（针对部分长篇动漫）
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeSeasonDialog.vue, MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue
   /// - 应用场景: 在前端，有两个地方会用到：1. **季订阅弹窗**中，用于展示所有可供选择的剧集组（如“司法岛篇”）。 2. **订阅配置编辑弹窗**中，当编辑一个电视剧订阅时，作为“剧集组”下拉框的数据源，允许用户修改该订阅所属的剧集组。
