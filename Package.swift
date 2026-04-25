@@ -15,7 +15,7 @@ let package = Package(
   dependencies: [
     .package(url: "https://github.com/tevelee/SwiftUI-Flow.git", from: "3.1.1"),
     .package(url: "https://github.com/malcommac/SwiftDate.git", from: "7.0.0"),
-    .package(url: "https://github.com/onevcat/Kingfisher.git", from: "8.8.0"),
+    .package(url: "https://github.com/onevcat/Kingfisher.git", from: "8.8.1"),
   ],
   targets: [
     .target(
