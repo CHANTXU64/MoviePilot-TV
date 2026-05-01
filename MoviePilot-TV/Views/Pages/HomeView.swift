@@ -255,10 +255,17 @@ private struct MediaSectionView: View {
                   Label("TMDB详情页", systemImage: "link")
                 }
                 Button {
-                  let request = ResourceSearchRequest(
-                    keyword: item.title, type: item.type, area: nil, title: nil, year: nil,
-                    season: nil, mediaInfo: nil, sites: nil)
-                  onSearchResource?(request)
+                  Task {
+                    let info = MediaInfo(title: item.title, type: item.type, year: item.subtitle)
+                    if let target = await mediaActionHandler.getTMDBJumpTarget(for: info) {
+                      onSearchResource?(mediaActionHandler.searchResourcesTarget(for: target))
+                    } else {
+                      let request = ResourceSearchRequest(
+                        keyword: item.title, type: item.type, area: nil, title: nil, year: nil,
+                        season: nil, mediaInfo: nil, sites: nil)
+                      onSearchResource?(request)
+                    }
+                  }
                 } label: {
                   Label("搜索资源", systemImage: "magnifyingglass")
                 }
