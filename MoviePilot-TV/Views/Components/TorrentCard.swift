@@ -35,126 +35,148 @@ struct TorrentCard: View {
 
   var body: some View {
     if let meta = meta, let torrent = torrent {
-      Button(action: {
-        showDownload = true
-      }) {
-        VStack(alignment: .leading, spacing: 8) {
-          // 媒体标题
-          HStack(alignment: .top, spacing: 12) {
+      VStack(alignment: .leading, spacing: 8) {
+        // 媒体标题
+        HStack(alignment: .top, spacing: 12) {
+          HStack(spacing: 8) {
+            if context.isFilteredOut {
+              Image(systemName: "line.3.horizontal.decrease.circle")
+                .font(.caption)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                  RoundedRectangle(cornerRadius: 16)
+                    .fill(Color.white.opacity(0.2))
+                )
+                .foregroundColor(.white)
+            }
             Text(media?.title ?? meta.name)
               .font(.headline)
               .fontWeight(.bold)
               .lineLimit(2)
               .multilineTextAlignment(.leading)
-            Spacer(minLength: 0)
-            if !meta.season_episode.isEmpty {
-              Text(meta.season_episode)
-                .font(.caption2)
-                .fontWeight(.semibold)
+          }
+          Spacer(minLength: 0)
+          if !meta.season_episode.isEmpty {
+            Text(meta.season_episode.formattedSeasonEpisode())
+              .font(.caption2)
+              .fontWeight(.semibold)
+              .padding(.horizontal, 8)
+              .padding(.vertical, 4)
+              .background(
+                RoundedRectangle(cornerRadius: 6)
+                  .fill(.secondary.opacity(0.2))
+              )
+          }
+        }
+
+        let descriptionText = meta.subtitle ?? torrent.description
+        let shouldShowDescription = (descriptionText?.isEmpty == false)
+
+        // 种子内容
+        if let title = torrent.title {
+          Text(title)
+            .font(.caption)
+            .foregroundColor(.secondary)
+            .lineLimit(shouldShowDescription ? 2 : 4)
+        }
+
+        // 种子描述
+        if shouldShowDescription {
+          Text(descriptionText!)
+            .font(.caption2)
+            .foregroundColor(.secondary)
+            .lineLimit(2)
+        }
+
+        Spacer().frame(height: 4)
+
+        // 信息条
+        HStack {
+          HStack(spacing: 15) {
+            Text(torrent.size.formattedBytes())
+            if let pubdate = torrent.pubdate {
+              Text("•")
+              Text(pubdate.toRelativeDateString())
+            }
+          }
+          Spacer()
+          HStack(spacing: 5) {
+            if torrent.downloadvolumefactor != 1 || torrent.uploadvolumefactor != 1 {
+              Text(torrent.volume_factor ?? "")
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(
                   RoundedRectangle(cornerRadius: 6)
-                    .fill(.secondary.opacity(0.5))
+                    .fill(volumeFactorColor)
                 )
+                .padding(.horizontal, 8)
             }
-          }
-
-          let descriptionText = meta.subtitle ?? torrent.description
-          let shouldShowDescription = (descriptionText?.isEmpty == false)
-
-          // 种子内容
-          if let title = torrent.title {
-            Text(title)
-              .font(.caption)
-              .foregroundColor(.secondary)
-              .lineLimit(shouldShowDescription ? 2 : 4)
-          }
-
-          // 种子描述
-          if shouldShowDescription {
-            Text(descriptionText!)
-              .font(.caption2)
-              .foregroundColor(.secondary)
-              .lineLimit(2)
-          }
-
-          Spacer().frame(height: 4)
-
-          // 信息条
-          HStack {
-            HStack(spacing: 15) {
-              Text(torrent.size.formattedBytes())
-              if let pubdate = torrent.pubdate {
-                Text("•")
-                Text(pubdate.toRelativeDateString())
-              }
-            }
-            Spacer()
-            HStack(spacing: 5) {
-              if torrent.downloadvolumefactor != 1 || torrent.uploadvolumefactor != 1 {
-                Text(torrent.volume_factor ?? "")
-                  .padding(.horizontal, 8)
-                  .padding(.vertical, 4)
-                  .background(
-                    RoundedRectangle(cornerRadius: 6)
-                      .fill(volumeFactorColor)
-                  )
-                  .padding(.horizontal, 8)
-              }
-              if let seeders = torrent.seeders {
-                if seeders > 0 {
-                  Image(systemName: "arrow.up")
-                    .foregroundColor(seeders <= 5 ? .orange : .green)
-                  Text("\(seeders)")
-                    .foregroundColor(seeders <= 5 ? .orange : .green)
-                }
+            if let seeders = torrent.seeders {
+              if seeders > 0 {
+                Image(systemName: "arrow.up")
+                  .foregroundColor(seeders <= 5 ? .orange : .green)
+                Text("\(seeders)")
+                  .foregroundColor(seeders <= 5 ? .orange : .green)
               }
             }
           }
-          .font(.caption2)
-          .foregroundColor(.secondary)
-
-          Divider()
-            .background(Color.primary)
-            .padding(.vertical, 4)
-
-          // 资源标签区
-          HFlow(itemSpacing: 20, rowSpacing: 8) {
-            // 站点
-            if let site_name = torrent.site_name {
-              TorrentCardTag(text: site_name)
-            }
-            // 流媒体平台
-            if meta.web_source != nil && !meta.web_source!.isEmpty {
-              TorrentCardTag(text: meta.web_source!)
-            }
-            // <!-- 版本标签 -->
-            if meta.edition != nil && !meta.edition!.isEmpty {
-              TorrentCardTag(text: meta.edition!)
-            }
-            // <!-- 分辨率标签 -->
-            if let resource_pix = meta.resource_pix {
-              TorrentCardTag(text: resource_pix)
-            }
-            // <!-- 编码标签 -->
-            if let video_encode = meta.video_encode {
-              TorrentCardTag(text: video_encode)
-            }
-            // <!-- 制作组标签 -->
-            if meta.resource_team != nil && !meta.resource_team!.isEmpty {
-              TorrentCardTag(text: meta.resource_team!)
-            }
-          }
-          .font(.caption2)
-          .foregroundColor(.secondary)
         }
-        .padding(20)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .font(.caption2)
+        .foregroundColor(.secondary)
+
+        Divider()
+          .background(Color.primary)
+          .padding(.vertical, 4)
+
+        // 资源标签区
+        HFlow(itemSpacing: 20, rowSpacing: 8) {
+          // 站点
+          if let site_name = torrent.site_name {
+            TorrentCardTag(text: site_name)
+          }
+          // 流媒体平台
+          if meta.web_source != nil && !meta.web_source!.isEmpty {
+            TorrentCardTag(text: meta.web_source!)
+          }
+          // <!-- 版本标签 -->
+          if meta.edition != nil && !meta.edition!.isEmpty {
+            TorrentCardTag(text: meta.edition!)
+          }
+          // <!-- 分辨率标签 -->
+          if let resource_pix = meta.resource_pix {
+            TorrentCardTag(text: resource_pix)
+          }
+          // <!-- 编码标签 -->
+          if let video_encode = meta.video_encode {
+            TorrentCardTag(text: video_encode)
+          }
+          // <!-- 制作组标签 -->
+          if meta.resource_team != nil && !meta.resource_team!.isEmpty {
+            TorrentCardTag(text: meta.resource_team!)
+          }
+        }
+        .font(.caption2)
+        .foregroundColor(.secondary)
       }
-      .buttonStyle(.card)
+      .padding(20)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(.ultraThinMaterial)
+      .clipShape(RoundedRectangle(cornerRadius: 20))
+      .shadow(
+        color: .black.opacity(isButtonFocused ? 0.5 : 0),
+        radius: 20,
+        y: 10
+      )
+      .scaleEffect(isButtonFocused ? 1.08 : 1.0)
+      .animation(.easeInOut(duration: 0.2), value: isButtonFocused)
+      .opacity(context.isFilteredOut ? 0.6 : 1.0)
+      .grayscale(context.isFilteredOut ? 0.7 : 0.0)
+      .focusable(true)
       .focused($isButtonFocused)
-      .compositingGroup()
+      .onTapGesture {
+        showDownload = true
+      }
       .contextMenu {
         Button {
           showDownload = true
@@ -190,7 +212,7 @@ struct TorrentCardTag: View {
       .padding(.vertical, 4)
       .background(
         RoundedRectangle(cornerRadius: 6)
-          .fill(.secondary.opacity(0.5))
+          .fill(.secondary.opacity(0.2))
       )
   }
 }

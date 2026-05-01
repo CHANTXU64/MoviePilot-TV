@@ -127,22 +127,9 @@ class ResourceResultViewModel: ObservableObject {
 
   /// 应用自定义过滤规则
   private func applyCustomFilter(to contexts: [Context]) async -> [Context] {
-    guard let ruleId = SystemViewModel.currentSelectedFilterRuleId() else {
-      return contexts
-    }
-
-    // 从 API 获取规则详情
     do {
-      let rules = try await apiService.fetchCustomFilterRules()
-      guard let rule = rules.first(where: { $0.id == ruleId }) else {
-        print("⚠️ [ResourceResultVM] 选中的规则 \(ruleId) 不存在")
-        return contexts
-      }
-
-      let originalCount = contexts.count
-      let filtered = CustomFilterService.filter(contexts: contexts, with: rule)
-      print("🔍 [ResourceResultVM] 应用过滤规则「\(rule.name)」: \(originalCount) → \(filtered.count) 个资源")
-      return filtered
+      return try await CustomFilterService.applyHardAndSoftFilter(
+        to: contexts, using: apiService, caller: "ResourceResultVM")
     } catch {
       print("❌ [ResourceResultVM] 加载过滤规则失败: \(error)")
       return contexts

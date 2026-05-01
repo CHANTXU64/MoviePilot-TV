@@ -521,27 +521,11 @@ class SearchViewModel: ObservableObject {
 
   /// 应用自定义过滤规则
   private func applyCustomFilter(to contexts: [Context]) async -> [Context] {
-    guard let ruleId = SystemViewModel.currentSelectedFilterRuleId() else {
-      appliedFilterRuleName = nil
-      return contexts
-    }
-
     do {
-      let rules = try await apiService.fetchCustomFilterRules()
-      guard let rule = rules.first(where: { $0.id == ruleId }) else {
-        print("⚠️ [SearchVM] 选中的规则 \(ruleId) 不存在")
-        appliedFilterRuleName = nil
-        return contexts
-      }
-
-      let originalCount = contexts.count
-      let filtered = CustomFilterService.filter(contexts: contexts, with: rule)
-      print("🔍 [SearchVM] 应用过滤规则「\(rule.name)」: \(originalCount) → \(filtered.count) 个资源")
-      appliedFilterRuleName = rule.name
-      return filtered
+      return try await CustomFilterService.applyHardAndSoftFilter(
+        to: contexts, using: apiService, caller: "SearchVM")
     } catch {
       print("❌ [SearchVM] 加载过滤规则失败: \(error)")
-      appliedFilterRuleName = nil
       return contexts
     }
   }

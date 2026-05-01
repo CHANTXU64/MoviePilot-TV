@@ -954,6 +954,8 @@ struct Context: Codable, Identifiable {
   let torrent_info: TorrentInfo?
   /// 元信息
   let meta_info: MetaInfo?
+  /// 是否被软筛选过滤掉
+  var isFilteredOut: Bool = false
 
   let id: String
 

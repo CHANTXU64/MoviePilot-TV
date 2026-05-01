@@ -16,9 +16,56 @@ enum CustomFilterService {
     }
   }
 
+  /// 应用硬过滤+软过滤组合规则
+  /// - Parameters:
+  ///   - contexts: 原始搜索结果
+  ///   - apiService: API 服务实例，用于获取规则详情
+  ///   - caller: 调用方标识，用于日志区分
+  /// - Returns: 过滤后的搜索结果（软过滤的不匹配项标记为 isFilteredOut 并置尾）
+  static func applyHardAndSoftFilter(
+    to contexts: [Context],
+    using apiService: APIService,
+    caller: String = ""
+  ) async throws -> [Context] {
+    let hardRuleId = SystemViewModel.currentSelectedHardFilterRuleId()
+    let softRuleId = SystemViewModel.currentSelectedSoftFilterRuleId()
+
+    guard hardRuleId != nil || softRuleId != nil else {
+      return contexts
+    }
+
+    let rules = try await apiService.fetchCustomFilterRules()
+    var finalContexts = contexts
+
+    // 1. 应用硬过滤 (完全排除)
+    if let hardId = hardRuleId, let hardRule = rules.first(where: { $0.id == hardId }) {
+      let originalCount = finalContexts.count
+      finalContexts = filter(contexts: finalContexts, with: hardRule)
+      print("🔍 [\(caller)] 应用硬过滤规则「\(hardRule.name)」: \(originalCount) → \(finalContexts.count) 个资源")
+    }
+
+    // 2. 应用软过滤 (置尾变灰)
+    if let softId = softRuleId, let softRule = rules.first(where: { $0.id == softId }) {
+      var matched: [Context] = []
+      var unmatched: [Context] = []
+      for var ctx in finalContexts {
+        if matchRule(context: ctx, rule: softRule) {
+          matched.append(ctx)
+        } else {
+          ctx.isFilteredOut = true
+          unmatched.append(ctx)
+        }
+      }
+      print("🔍 [\(caller)] 应用软过滤规则「\(softRule.name)」: 命中 \(matched.count) 个资源，排除 \(unmatched.count) 个资源（置尾）")
+      finalContexts = matched + unmatched
+    }
+
+    return finalContexts
+  }
+
   /// 判断单个搜索结果是否匹配规则
   /// - 对应后端: filter.py __match_rule 方法
-  private static func matchRule(context: Context, rule: CustomRule) -> Bool {
+  static func matchRule(context: Context, rule: CustomRule) -> Bool {
     let torrent = context.torrent_info
 
     // 匹配项：标题 + 副标题 + 标签（与后端 content 逻辑一致）

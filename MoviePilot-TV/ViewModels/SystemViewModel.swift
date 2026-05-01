@@ -27,35 +27,66 @@ class SystemViewModel: ObservableObject {
   @Published var customFilterRules: [CustomRule] = []
   @Published var isLoadingRules: Bool = false
 
-  /// 当前选中的过滤规则 ID（绑定 URL + 用户名）
-  var selectedCustomFilterRuleId: String? {
+  /// 当前选中的硬过滤规则 ID（绑定 URL + 用户名）
+  var selectedHardFilterRuleId: String? {
     get {
-      UserDefaults.standard.string(forKey: filterRuleUserDefaultsKey)
+      UserDefaults.standard.string(forKey: hardFilterRuleUserDefaultsKey)
     }
     set {
       if let value = newValue {
-        UserDefaults.standard.set(value, forKey: filterRuleUserDefaultsKey)
+        UserDefaults.standard.set(value, forKey: hardFilterRuleUserDefaultsKey)
       } else {
-        UserDefaults.standard.removeObject(forKey: filterRuleUserDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: hardFilterRuleUserDefaultsKey)
       }
       objectWillChange.send()
     }
   }
 
-  /// 当前选中的自定义过滤规则
-  var selectedCustomFilterRule: CustomRule? {
-    guard let ruleId = selectedCustomFilterRuleId else { return nil }
+  /// 当前选中的软过滤规则 ID（绑定 URL + 用户名）
+  var selectedSoftFilterRuleId: String? {
+    get {
+      UserDefaults.standard.string(forKey: softFilterRuleUserDefaultsKey)
+    }
+    set {
+      if let value = newValue {
+        UserDefaults.standard.set(value, forKey: softFilterRuleUserDefaultsKey)
+      } else {
+        UserDefaults.standard.removeObject(forKey: softFilterRuleUserDefaultsKey)
+      }
+      objectWillChange.send()
+    }
+  }
+
+  /// 当前选中的自定义硬过滤规则
+  var selectedHardFilterRule: CustomRule? {
+    guard let ruleId = selectedHardFilterRuleId else { return nil }
+    return customFilterRules.first { $0.id == ruleId }
+  }
+
+  /// 当前选中的自定义软过滤规则
+  var selectedSoftFilterRule: CustomRule? {
+    guard let ruleId = selectedSoftFilterRuleId else { return nil }
     return customFilterRules.first { $0.id == ruleId }
   }
 
   /// 持久化 key，绑定 baseURL + 用户名
-  private var filterRuleUserDefaultsKey: String {
+  private var hardFilterRuleUserDefaultsKey: String {
     let baseURL = APIService.shared.baseURL
     let username =
       KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username")
       ?? UserDefaults.standard.string(forKey: "username")
       ?? "default"
     return "selectedCustomFilterRuleId_\(baseURL)_\(username)"
+  }
+
+  /// 持久化 key，绑定 baseURL + 用户名
+  private var softFilterRuleUserDefaultsKey: String {
+    let baseURL = APIService.shared.baseURL
+    let username =
+      KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username")
+      ?? UserDefaults.standard.string(forKey: "username")
+      ?? "default"
+    return "selectedSoftFilterRuleId_\(baseURL)_\(username)"
   }
 
   init() {
@@ -149,11 +180,17 @@ class SystemViewModel: ObservableObject {
       customFilterRules = try await APIService.shared.fetchCustomFilterRules()
       print("✅ [SystemViewModel] 加载到 \(customFilterRules.count) 个自定义过滤规则")
       // 如果选中的规则 ID 不在列表中，清除选择
-      if let selectedId = selectedCustomFilterRuleId,
-        !customFilterRules.contains(where: { $0.id == selectedId })
+      if let selectedHardId = selectedHardFilterRuleId,
+        !customFilterRules.contains(where: { $0.id == selectedHardId })
       {
-        print("⚠️ [SystemViewModel] 选中的规则 \(selectedId) 已不存在，清除选择")
-        selectedCustomFilterRuleId = nil
+        print("⚠️ [SystemViewModel] 选中的硬规则 \(selectedHardId) 已不存在，清除选择")
+        selectedHardFilterRuleId = nil
+      }
+      if let selectedSoftId = selectedSoftFilterRuleId,
+        !customFilterRules.contains(where: { $0.id == selectedSoftId })
+      {
+        print("⚠️ [SystemViewModel] 选中的软规则 \(selectedSoftId) 已不存在，清除选择")
+        selectedSoftFilterRuleId = nil
       }
     } catch {
       print("❌ [SystemViewModel] 加载自定义过滤规则失败: \(error)")
@@ -163,14 +200,25 @@ class SystemViewModel: ObservableObject {
 
   // MARK: - 静态方法：供 ViewModel 层读取当前选中规则
 
-  /// 获取当前用户+服务器绑定的过滤规则 ID
-  static func currentSelectedFilterRuleId() -> String? {
+  /// 获取当前用户+服务器绑定的硬过滤规则 ID
+  static func currentSelectedHardFilterRuleId() -> String? {
     let baseURL = APIService.shared.baseURL
     let username =
       KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username")
       ?? UserDefaults.standard.string(forKey: "username")
       ?? "default"
     let key = "selectedCustomFilterRuleId_\(baseURL)_\(username)"
+    return UserDefaults.standard.string(forKey: key)
+  }
+
+  /// 获取当前用户+服务器绑定的软过滤规则 ID
+  static func currentSelectedSoftFilterRuleId() -> String? {
+    let baseURL = APIService.shared.baseURL
+    let username =
+      KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username")
+      ?? UserDefaults.standard.string(forKey: "username")
+      ?? "default"
+    let key = "selectedSoftFilterRuleId_\(baseURL)_\(username)"
     return UserDefaults.standard.string(forKey: key)
   }
 }

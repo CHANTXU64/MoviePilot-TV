@@ -38,7 +38,8 @@ struct SystemView: View {
           }
         }
 
-        Section(header: Text("搜索过滤"), footer: Text("选择一个自定义过滤规则后，资源搜索结果将自动按此规则过滤")) {
+        Section(header: Text("搜索过滤"), footer: Text("搜索结果将先经过硬过滤去除不符合条件的资源，再经过软过滤将剩余不符合条件的资源灰置于末尾。"))
+        {
           if viewModel.isLoadingRules {
             HStack {
               ProgressView()
@@ -51,15 +52,15 @@ struct SystemView: View {
             Text("暂无自定义过滤规则")
               .foregroundColor(.secondary)
           } else {
-            // 使用 Binding 包装 selectedCustomFilterRuleId
-            let ruleBinding = Binding<String>(
-              get: { viewModel.selectedCustomFilterRuleId ?? "__none__" },
+            // 硬过滤规则
+            let hardRuleBinding = Binding<String>(
+              get: { viewModel.selectedHardFilterRuleId ?? "__none__" },
               set: { newValue in
-                viewModel.selectedCustomFilterRuleId = (newValue == "__none__") ? nil : newValue
+                viewModel.selectedHardFilterRuleId = (newValue == "__none__") ? nil : newValue
               }
             )
 
-            Picker("过滤规则", selection: ruleBinding) {
+            Picker(selection: hardRuleBinding) {
               Text("不过滤")
                 .tag("__none__")
 
@@ -67,8 +68,43 @@ struct SystemView: View {
                 ruleLabel(rule)
                   .tag(rule.id)
               }
+            } label: {
+              VStack(alignment: .leading, spacing: 4) {
+                Text("硬过滤")
+                Text("完全排除不符合条件的资源")
+                  .font(.caption)
+                  .foregroundColor(.secondary)
+              }
+              .padding(.vertical, 4)
             }
-            .pickerStyle(.menu)
+            .pickerStyle(.navigationLink)
+
+            // 软过滤规则
+            let softRuleBinding = Binding<String>(
+              get: { viewModel.selectedSoftFilterRuleId ?? "__none__" },
+              set: { newValue in
+                viewModel.selectedSoftFilterRuleId = (newValue == "__none__") ? nil : newValue
+              }
+            )
+
+            Picker(selection: softRuleBinding) {
+              Text("不过滤")
+                .tag("__none__")
+
+              ForEach(viewModel.customFilterRules) { rule in
+                ruleLabel(rule)
+                  .tag(rule.id)
+              }
+            } label: {
+              VStack(alignment: .leading, spacing: 4) {
+                Text("软过滤")
+                Text("将不符合条件的资源灰置于列表末尾")
+                  .font(.caption)
+                  .foregroundColor(.secondary)
+              }
+              .padding(.vertical, 4)
+            }
+            .pickerStyle(.navigationLink)
           }
 
           Button(action: {
