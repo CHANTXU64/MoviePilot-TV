@@ -86,6 +86,26 @@ class SearchViewModel: ObservableObject {
       return nil
     }()
 
+    // 当搜索词包含年份时，生成去掉年份的纯标题查询词
+    // 用于双重匹配：既匹配完整搜索词，也匹配纯标题，取最高分
+    // 这确保了即使结果缺少 year 字段（如合集），标题仍能获得合理匹配分
+    let queryWithoutYear: String? = queryYear.map {
+      submittedQuery.replacingOccurrences(of: $0, with: "")
+        .trimmingCharacters(in: .whitespaces)
+    }
+
+    // 计算候选标题集合的最佳匹配分值
+    // allowYearFallback: 仅在年份匹配或无年份时，才允许使用无年份搜索词进行回退匹配
+    // 避免年份不匹配的媒体项通过回退获得虚假高分
+    let query = submittedQuery
+    let bestScore: (Set<String>, Bool) -> Int = { candidates, allowYearFallback in
+      candidates.map { candidate in
+        let s1 = fuzzyMatchScore(text: candidate, query: query)
+        guard allowYearFallback, let qNoYear = queryWithoutYear else { return s1 }
+        return max(s1, fuzzyMatchScore(text: candidate, query: qNoYear))
+      }.max() ?? -1
+    }
+
     var scoredItems: [(item: BestResultItem, score: Int, popularity: Double)] = []
 
     // 1. 处理媒体搜索结果 (电影/电视剧)
@@ -97,13 +117,17 @@ class SearchViewModel: ObservableObject {
         .filter { !$0.isEmpty }
 
       var candidates = titles
+      let yearMatches: Bool = {
+        guard let qYear = queryYear else { return true }
+        guard let mYear = mediaItem.year else { return true }
+        return mYear.contains(qYear)
+      }()
       if let qYear = queryYear, let mYear = mediaItem.year, mYear.contains(qYear) {
         let withYear = titles.map { "\($0) \(qYear)" }
         candidates.append(contentsOf: withYear)
       }
 
-      let maxS =
-        Set(candidates).map { fuzzyMatchScore(text: $0, query: submittedQuery) }.max() ?? -1
+      let maxS = bestScore(Set(candidates), yearMatches)
       let pop = mediaItem.popularity ?? 0
       let hasNoPoster = mediaItem.poster_path == nil || mediaItem.poster_path?.isEmpty == true
 
@@ -122,13 +146,17 @@ class SearchViewModel: ObservableObject {
         .filter { !$0.isEmpty }
 
       var candidates = titles
+      let yearMatches: Bool = {
+        guard let qYear = queryYear else { return true }
+        guard let mYear = mediaItem.year else { return true }
+        return mYear.contains(qYear)
+      }()
       if let qYear = queryYear, let mYear = mediaItem.year, mYear.contains(qYear) {
         let withYear = titles.map { "\($0) \(qYear)" }
         candidates.append(contentsOf: withYear)
       }
 
-      let maxS =
-        Set(candidates).map { fuzzyMatchScore(text: $0, query: submittedQuery) }.max() ?? -1
+      let maxS = bestScore(Set(candidates), yearMatches)
       let pop = mediaItem.popularity ?? 0
       let hasNoPoster = mediaItem.poster_path == nil || mediaItem.poster_path?.isEmpty == true
 
@@ -137,7 +165,7 @@ class SearchViewModel: ObservableObject {
       }
     }
 
-    // 3. 处理人物/演职员结果
+    // 3. 处理人物/演职员结果（人物无年份概念，始终允许回退）
     for personItem in persons {
       let candidates =
         ([personItem.name, personItem.latin_name, personItem.original_name]
@@ -145,8 +173,7 @@ class SearchViewModel: ObservableObject {
         .compactMap { $0 }
         .filter { !$0.isEmpty }
 
-      let maxS =
-        Set(candidates).map { fuzzyMatchScore(text: $0, query: submittedQuery) }.max() ?? -1
+      let maxS = bestScore(Set(candidates), true)
       let pop = personItem.popularity ?? 0
       let hasNoPoster = personItem.profile_path == nil || personItem.profile_path?.isEmpty == true
 
@@ -155,14 +182,14 @@ class SearchViewModel: ObservableObject {
       }
     }
 
-    // 4. 处理订阅分享结果
+    // 4. 处理订阅分享结果（分享无年份概念，始终允许回退）
     for shareItem in shares {
       // share_title 已经映射到 title, count 映射到 popularity
       // comment 和 user 已经组合在 overview 中，这里暂不参与评分
       let titles = [shareItem.title, shareItem.original_title].compactMap { $0 }.filter {
         !$0.isEmpty
       }
-      let maxS = Set(titles).map { fuzzyMatchScore(text: $0, query: submittedQuery) }.max() ?? -1
+      let maxS = bestScore(Set(titles), true)
       let pop = shareItem.popularity ?? 0  // 复用次数
       let hasNoPoster = shareItem.poster_path == nil || shareItem.poster_path?.isEmpty == true
 
