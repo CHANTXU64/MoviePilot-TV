@@ -1615,6 +1615,7 @@ struct GlobalSettings: Codable {
   var RECOGNIZE_SOURCE: String?
   var USER_UNIQUE_ID: String?
   var SUBSCRIBE_SHARE_MANAGE: FlexibleBool?
+  var AI_AGENT_ENABLE: FlexibleBool?
 
   enum CodingKeys: String, CodingKey {
     case TMDB_IMAGE_DOMAIN
@@ -1622,6 +1623,7 @@ struct GlobalSettings: Codable {
     case RECOGNIZE_SOURCE
     case USER_UNIQUE_ID
     case SUBSCRIBE_SHARE_MANAGE
+    case AI_AGENT_ENABLE
   }
 }
 
@@ -1881,6 +1883,24 @@ struct ReorganizeForm: Codable {
   var library_type_folder: Bool?
   // 媒体库类别子目录
   var library_category_folder: Bool?
+}
+
+/// 资源搜索的流式响应事件 (SSE)
+struct SearchStreamEvent: Codable {
+  let type: String? // "append", "replace", "done", "error"
+  let text: String?
+  let value: Double?
+  let enable: Bool?
+  let total_items: Int?
+  let items: [Context]?
+  let message: String?
+  
+  // AI 重新整理进度使用的结构也类似，可以在需要时复用
+  struct AiRedoData: Codable {
+    let success: Bool?
+    let error: String?
+  }
+  let data: AiRedoData?
 }
 
 // MARK: - 自定义过滤规则

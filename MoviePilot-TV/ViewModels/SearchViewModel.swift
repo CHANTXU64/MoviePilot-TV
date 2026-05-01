@@ -210,58 +210,118 @@ class SearchViewModel: ObservableObject {
   private var subscriptionSharePaginatorCancellable: AnyCancellable?
 
   private var sharedMediaFetcher: SharedMediaFetcher?
+  private var searchStreamTask: Task<Void, Never>?
+  
+  @Published var searchProgressText: String = ""
+  @Published var searchProgress: Double = 0.0
 
   /// 执行初始搜索：根据 searchType 决定是资源搜索还是聚合元数据搜索
   func autoSearch() async {
     guard !query.isEmpty else { return }
+    
+    searchStreamTask?.cancel()
+    
     isLoading = true
     hasSearched = false
     submittedQuery = query
 
-    do {
-      switch searchType {
-      case .resource:
-        // 资源搜索：查询站点种子信息
-        let sitesStr = siteFilter.sitesString
-        var results = try await apiService.searchResources(keyword: query, sites: sitesStr)
-
-        // 应用自定义过滤规则
-        results = await applyCustomFilter(to: results)
-
-        self.resourceResults = results
-
-      case .unified:
-        // 聚合搜索：创建代理 Fetcher 和 Paginators
-        setupPaginators(query: submittedQuery)
-
-        guard let moviePag = moviePaginator,
-          let tvPag = tvPaginator,
-          let collectionPag = collectionPaginator,
-          let personPag = personPaginator,
-          let sharePag = subscriptionSharePaginator
-        else { break }
-
-        // 并发刷新所有分页器
-        let movieTask = Task { @MainActor in await moviePag.refresh() }
-        let tvTask = Task { @MainActor in await tvPag.refresh() }
-        let collectionTask = Task { @MainActor in await collectionPag.refresh() }
-        let personTask = Task { @MainActor in await personPag.refresh() }
-        let shareTask = Task { @MainActor in await sharePag.refresh() }
-        _ = await (
-          movieTask.value, tvTask.value, collectionTask.value, personTask.value, shareTask.value
-        )
-
-        // 基于第一页的结果计算"最佳结果"
-        // 由于 media 是电影+电视剧的混合，我们需要把它们组合起来传递
-        self.bestResults = calculateBestResults(
-          media: moviePag.items + tvPag.items,
-          collections: collectionPag.items,
-          persons: personPag.items,
-          shares: sharePag.items
-        )
+    switch searchType {
+    case .resource:
+      // 资源搜索：查询站点种子信息
+      let sitesStr = siteFilter.sitesString
+      searchProgressText = "正在搜索..."
+      searchProgress = 0.0
+      
+      searchStreamTask = Task { @MainActor in
+        var accumulatedResults: [Context] = []
+        
+        do {
+          let stream = APIService.shared.searchTitleStream(keyword: submittedQuery, sites: sitesStr)
+          
+          for try await event in stream {
+            if Task.isCancelled { break }
+            
+            if let text = event.text {
+              self.searchProgressText = text
+            }
+            if let value = event.value {
+              self.searchProgress = value
+            }
+            
+            if let items = event.items {
+              if event.type == "append" {
+                accumulatedResults.append(contentsOf: items)
+              } else if event.type == "replace" || event.type == "done" {
+                accumulatedResults = items
+              }
+            }
+            
+            if event.type == "error" {
+              print("Search Stream Error: \(event.message ?? "未知错误")")
+              break
+            }
+            
+            if event.type == "done" {
+              break
+            }
+          }
+          
+          if !Task.isCancelled {
+            // 应用自定义过滤规则
+            let filteredResults = await self.applyCustomFilter(to: accumulatedResults)
+            self.resourceResults = filteredResults
+            self.isLoading = false
+            self.hasSearched = true
+          }
+        } catch {
+          print("Stream Search error: \(error)")
+          if !Task.isCancelled {
+            do {
+              var fallbackResults = try await self.apiService.searchResources(
+                keyword: self.submittedQuery,
+                sites: sitesStr
+              )
+              fallbackResults = await self.applyCustomFilter(to: fallbackResults)
+              self.resourceResults = fallbackResults
+            } catch {
+              print("Fallback Search error: \(error)")
+            }
+            self.isLoading = false
+            self.hasSearched = true
+          }
+        }
       }
-    } catch {
-      print("搜索请求失败: \(error)")
+      return
+
+    case .unified:
+      // 聚合搜索：创建代理 Fetcher 和 Paginators
+      setupPaginators(query: submittedQuery)
+
+      guard let moviePag = moviePaginator,
+        let tvPag = tvPaginator,
+        let collectionPag = collectionPaginator,
+        let personPag = personPaginator,
+        let sharePag = subscriptionSharePaginator
+      else { break }
+
+      // 并发刷新所有分页器
+      let movieTask = Task { @MainActor in await moviePag.refresh() }
+      let tvTask = Task { @MainActor in await tvPag.refresh() }
+      let collectionTask = Task { @MainActor in await collectionPag.refresh() }
+      let personTask = Task { @MainActor in await personPag.refresh() }
+      let shareTask = Task { @MainActor in await sharePag.refresh() }
+      _ = await (
+        movieTask.value, tvTask.value, collectionTask.value, personTask.value, shareTask.value
+      )
+
+      // 基于第一页的结果计算"最佳结果"
+      // 由于 media 是电影+电视剧的混合，我们需要把它们组合起来传递
+      self.bestResults = calculateBestResults(
+        media: moviePag.items + tvPag.items,
+        collections: collectionPag.items,
+        persons: personPag.items,
+        shares: sharePag.items
+      )
     }
     isLoading = false
     hasSearched = true

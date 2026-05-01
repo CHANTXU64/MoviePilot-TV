@@ -23,14 +23,14 @@ class ReorganizeViewModel: ObservableObject {
     return !logIds.isEmpty
   }
 
-  init(logIds: [Int] = [], fileItem: FileItem?) {
+  init(logIds: [Int] = [], fileItem: FileItem?, targetStorage: String? = nil) {
     self.logIds = logIds
 
     // 在 init() 中初始化 form，为必须的属性提供默认值
     self.form = ReorganizeForm(
       fileitem: fileItem ?? FileItem(name: "", path: "", type: "", size: nil),
       logid: logIds.first ?? 0,
-      target_storage: "local",
+      target_storage: targetStorage ?? "local",
       transfer_type: "",
       target_path: "",
       min_filesize: 0,

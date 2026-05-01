@@ -140,8 +140,20 @@ struct SearchView: View {
         if viewModel.isLoading {
           VStack {
             searchHeader
-            ProgressView()
-              .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Spacer()
+            if viewModel.searchType == .resource {
+              VStack(spacing: 20) {
+                ProgressView(viewModel.searchProgressText)
+                if viewModel.searchProgress > 0 {
+                  ProgressView(value: viewModel.searchProgress, total: 100)
+                    .progressViewStyle(.linear)
+                    .frame(width: 300)
+                }
+              }
+            } else {
+              ProgressView()
+            }
+            Spacer()
           }
         } else {
           switch viewModel.searchType {

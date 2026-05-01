@@ -49,7 +49,14 @@ struct ResourceResultView: View {
       VStack(spacing: 0) {
         if viewModel.isLoading {
           VStack(spacing: 20) {
-            ProgressView("正在搜索资源...")
+            ProgressView(viewModel.searchProgressText)
+            
+            if viewModel.searchProgress > 0 {
+              ProgressView(value: viewModel.searchProgress, total: 100)
+                .progressViewStyle(.linear)
+                .frame(width: 300)
+            }
+            
             Button("取消") {
               dismiss()
             }

@@ -15,6 +15,7 @@ struct ActionDescriptor {
   let id: String
   let title: String
   let icon: String
+  var isEnabled: Bool = true
   var role: ActionRole = .normal
   let action: () -> Void
 }
@@ -36,6 +37,7 @@ private struct NakedButtonStyle: ButtonStyle {
 struct ActionButton: View {
   let title: String
   let icon: String
+  let isEnabled: Bool
   let role: ActionRole
   let isFocused: Bool
   let action: () -> Void
@@ -43,6 +45,7 @@ struct ActionButton: View {
   init(descriptor: ActionDescriptor, isFocused: Bool = false) {
     self.title = descriptor.title
     self.icon = descriptor.icon
+    self.isEnabled = descriptor.isEnabled
     self.role = descriptor.role
     self.isFocused = isFocused
     self.action = descriptor.action
@@ -72,6 +75,8 @@ struct ActionButton: View {
       .animation(.easeInOut(duration: 0.2), value: title)
     }
     .buttonStyle(NakedButtonStyle())
+    .disabled(!isEnabled)
+    .opacity(isEnabled ? 1 : 0.35)
   }
 
   /// 根据角色和焦点状态计算前景颜色（文本和图标）。

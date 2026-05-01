@@ -14,6 +14,16 @@ class TransferHistoryViewModel: ObservableObject {
   @Published var searchText: String = ""
   @Published var storageDict: [String: String] = [:]
 
+  // AI 重新整理相关状态
+  @Published var aiRedoingIds: Set<Int> = []
+  @Published var aiRedoProgressText: String = ""
+  @Published var isAiRedoing: Bool = false
+  private var aiRedoTask: Task<Void, Never>?
+
+  var isAiRedoEnabled: Bool {
+    apiService.settings?.AI_AGENT_ENABLE?.value != false
+  }
+
   // MARK: - Private State
 
   private var paginator: Paginator<TransferHistory>!
@@ -395,6 +405,58 @@ class TransferHistoryViewModel: ObservableObject {
     selectedIds.formIntersection(visibleIds)
     if selectedIds.isEmpty {
       isSelectionMode = false
+    }
+  }
+
+  // MARK: - AI Reorganize
+
+  func triggerAiRedo(for item: TransferHistory) async {
+    guard !aiRedoingIds.contains(item.id) else { return }
+    guard isAiRedoEnabled else {
+      errorMessage = "AI 助手未启用"
+      return
+    }
+
+    aiRedoingIds.insert(item.id)
+    isAiRedoing = true
+    aiRedoProgressText = "正在启动 AI 整理..."
+
+    aiRedoTask?.cancel()
+    aiRedoTask = Task { @MainActor in
+      do {
+        if let progressKey = try await apiService.aiRedoTransferHistory(id: item.id) {
+          let stream = apiService.progressStream(progressKey: progressKey)
+          for try await event in stream {
+            if Task.isCancelled { break }
+            if let text = event.text {
+              self.aiRedoProgressText = text
+            }
+            if let enable = event.enable, !enable {
+              if let success = event.data?.success, !success {
+                print("AI整理失败: \(event.data?.error ?? "未知错误")")
+              } else {
+                print("AI整理成功")
+              }
+              break
+            }
+            if event.type == "done" || event.type == "error" {
+              break
+            }
+          }
+        }
+
+        if !Task.isCancelled {
+          self.aiRedoingIds.remove(item.id)
+          self.isAiRedoing = false
+          await self.refresh()
+        }
+      } catch {
+        print("AI Redo failed: \(error)")
+        if !Task.isCancelled {
+          self.aiRedoingIds.remove(item.id)
+          self.isAiRedoing = false
+        }
+      }
     }
   }
 }

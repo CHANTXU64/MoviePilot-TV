@@ -934,6 +934,26 @@ class APIService: ObservableObject {
     return try await decodeActionResponse(from: data).success
   }
 
+  /// AI重新整理历史记录
+  /// - 对应前端: `MoviePilot-Frontend/src/views/reorganize/TransferHistoryView.vue`
+  func aiRedoTransferHistory(id: Int) async throws -> String? {
+    let endpoint = try buildEndpoint(path: "/history/transfer/\(id)/ai-redo")
+    let data = try await makeRequest(endpoint: endpoint, method: "POST")
+    struct AiRedoResponse: Codable {
+      let success: Bool?
+      let message: String?
+      let data: AiRedoResponseData?
+    }
+    struct AiRedoResponseData: Codable {
+      let progress_key: String?
+    }
+    let res = try JSONDecoder().decode(AiRedoResponse.self, from: data)
+    guard res.success == true else {
+      throw APIError.serverMessage(res.message ?? "未知错误")
+    }
+    return res.data?.progress_key
+  }
+
   /// 手动整理
   /// - 对应前端: `MoviePilot-Frontend/src/components/dialog/ReorganizeDialog.vue`
   /// - 应用场景: 执行手动文件整理或重新整理。
@@ -985,6 +1005,110 @@ class APIService: ObservableObject {
   }
 
   // MARK: - 资源搜索
+
+  // MARK: - Server-Sent Events (SSE) Streaming
+
+  /// 通用 SSE 流式请求
+  private func streamSSE(endpoint: String) -> AsyncThrowingStream<SearchStreamEvent, Error> {
+    let serviceBaseURL = baseURL
+    let authToken = token
+
+    return AsyncThrowingStream { continuation in
+      let task = Task {
+        do {
+          guard let url = URL(string: "\(serviceBaseURL)/api/v1\(endpoint)") else {
+            throw APIError.invalidURL
+          }
+          var request = URLRequest(url: url)
+          request.timeoutInterval = 300 // 长连接
+          request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+
+          if let authToken {
+            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+          }
+
+          let (result, response) = try await URLSession.shared.bytes(for: request)
+
+          guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverMessage("无效响应")
+          }
+
+          if httpResponse.statusCode != 200 {
+            if httpResponse.statusCode == 401 {
+              throw APIError.unauthorized
+            }
+            throw APIError.serverMessage("HTTP Error \(httpResponse.statusCode)")
+          }
+
+          for try await line in result.lines {
+            if line.hasPrefix("data:") {
+              let jsonString = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+              if let data = jsonString.data(using: .utf8) {
+                do {
+                  let event = try JSONDecoder().decode(SearchStreamEvent.self, from: data)
+                  continuation.yield(event)
+                } catch {
+                  print("SSE Decoding Error: \(error), raw string: \(jsonString)")
+                }
+              }
+            }
+          }
+          continuation.finish()
+        } catch {
+          if Task.isCancelled {
+            continuation.finish()
+          } else {
+            continuation.finish(throwing: error)
+          }
+        }
+      }
+      continuation.onTermination = { @Sendable _ in
+        task.cancel()
+      }
+    }
+  }
+
+  /// 流式标题搜索 (SSE)
+  func searchTitleStream(keyword: String, sites: String?) -> AsyncThrowingStream<SearchStreamEvent, Error> {
+    do {
+      let endpoint = try buildEndpoint(
+        path: "/search/title/stream",
+        params: [
+          "keyword": keyword,
+          "sites": sites,
+        ]
+      )
+      return streamSSE(endpoint: endpoint)
+    } catch {
+      return AsyncThrowingStream { $0.finish(throwing: error) }
+    }
+  }
+
+  /// 流式聚合媒体搜索 (SSE)
+  func searchMediaStream(
+    keyword: String, type: String?, area: String?, title: String?, year: String?, season: Int?, sites: String?
+  ) -> AsyncThrowingStream<SearchStreamEvent, Error> {
+    do {
+      let endpoint = try buildEndpoint(
+        path: "/search/media/\(keyword)/stream",
+        params: [
+          "mtype": type,
+          "area": area,
+          "title": title,
+          "year": year,
+          "season": season.map(String.init),
+          "sites": sites,
+        ])
+      return streamSSE(endpoint: endpoint)
+    } catch {
+      return AsyncThrowingStream { $0.finish(throwing: error) }
+    }
+  }
+
+  /// 进度监听 (SSE)
+  func progressStream(progressKey: String) -> AsyncThrowingStream<SearchStreamEvent, Error> {
+    return streamSSE(endpoint: "/system/progress/\(progressKey)")
+  }
 
   /// 搜索资源
   /// - 对应前端: MoviePilot-Frontend/src/pages/resource.vue

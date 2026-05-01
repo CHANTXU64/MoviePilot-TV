@@ -4,6 +4,8 @@ struct TransferHistoryView: View {
   @ObservedObject var viewModel: TransferHistoryViewModel
   @State private var itemToDelete: TransferHistory? = nil
   @State private var itemToReorganize: TransferHistory? = nil
+  @State private var historyIdToRestoreFocus: Int? = nil
+  @State private var isRefreshingAfterReorganize = false
   @State private var itemForInfoSheet: TransferHistory? = nil
   @State private var showBatchDeleteAlert = false
   @State private var showBatchRedoSheet = false
@@ -54,33 +56,7 @@ struct TransferHistoryView: View {
         LazyVStack {
           ForEach(viewModel.items) { item in
             ActionRow(
-              actions: [
-                ActionDescriptor(
-                  id: "redo",
-                  title: viewModel.selectedIds.isEmpty
-                    ? "重新整理" : "重新批量整理(\(viewModel.selectedIds.count))",
-                  icon: "arrow.clockwise",
-                  action: {
-                    if viewModel.selectedIds.isEmpty {
-                      itemToReorganize = item
-                    } else {
-                      showBatchRedoSheet = true
-                    }
-                  }),
-                ActionDescriptor(
-                  id: "delete",
-                  title: viewModel.selectedIds.isEmpty
-                    ? "删除" : "批量删除(\(viewModel.selectedIds.count))",
-                  icon: "trash",
-                  role: .destructive,
-                  action: {
-                    if viewModel.selectedIds.isEmpty {
-                      itemToDelete = item
-                    } else {
-                      showBatchDeleteAlert = true
-                    }
-                  }),
-              ],
+              actions: actionDescriptors(for: item),
               onTap: {
                 viewModel.toggleSelection(id: item.id)
               },
@@ -141,13 +117,35 @@ struct TransferHistoryView: View {
         await viewModel.fetchLatest()
       }
     }
+    .overlay(
+      Group {
+        if viewModel.isAiRedoing {
+          VStack(spacing: 20) {
+            ProgressView(viewModel.aiRedoProgressText)
+          }
+          .padding()
+          .background(.ultraThinMaterial)
+          .cornerRadius(12)
+        }
+      },
+      alignment: .center
+    )
     .sheet(item: $itemForInfoSheet) { item in
       TransferHistoryDetailSheet(item: item, storageDict: viewModel.storageDict)
     }
-    .sheet(item: $itemToReorganize) { item in
-      ReorganizeSheet(logIds: [item.id], fileItem: item.src_fileitem) {
+    .sheet(
+      item: $itemToReorganize,
+      onDismiss: restoreHistoryFocus
+    ) { item in
+      ReorganizeSheet(
+        logIds: [item.id],
+        fileItem: item.src_fileitem,
+        targetStorage: item.dest_storage
+      ) {
+        isRefreshingAfterReorganize = true
         Task {
           await viewModel.refresh()
+          isRefreshingAfterReorganize = false
         }
       }
     }
@@ -220,6 +218,73 @@ struct TransferHistoryView: View {
       message: {
         Text("确定要删除选中的 \(viewModel.selectedIds.count) 条记录吗？此操作不可撤销。")
       })
+  }
+
+  private func restoreHistoryFocus() {
+    guard !isRefreshingAfterReorganize else { return }
+    guard let id = historyIdToRestoreFocus else { return }
+
+    focusedHistoryId = id
+    DispatchQueue.main.async {
+      focusedHistoryId = id
+      historyIdToRestoreFocus = nil
+    }
+  }
+
+  private func actionDescriptors(for item: TransferHistory) -> [ActionDescriptor] {
+    var actions: [ActionDescriptor] = []
+
+    if viewModel.selectedIds.isEmpty && viewModel.isAiRedoEnabled {
+      actions.append(
+        ActionDescriptor(
+          id: "ai-redo",
+          title: viewModel.aiRedoingIds.contains(item.id) ? "AI 整理中" : "AI 自动整理",
+          icon: "sparkles",
+          isEnabled: !viewModel.isAiRedoing || viewModel.aiRedoingIds.contains(item.id),
+          action: {
+            Task {
+              await viewModel.triggerAiRedo(for: item)
+            }
+          }
+        )
+      )
+    }
+
+    actions.append(
+      ActionDescriptor(
+        id: "redo",
+        title: viewModel.selectedIds.isEmpty
+          ? "重新整理" : "重新批量整理(\(viewModel.selectedIds.count))",
+        icon: "arrow.clockwise",
+        action: {
+          if viewModel.selectedIds.isEmpty {
+            historyIdToRestoreFocus = item.id
+            itemToReorganize = item
+          } else {
+            showBatchRedoSheet = true
+          }
+        }
+      )
+    )
+
+    actions.append(
+      ActionDescriptor(
+        id: "delete",
+        title: viewModel.selectedIds.isEmpty
+          ? "删除" : "批量删除(\(viewModel.selectedIds.count))",
+        icon: "trash",
+        role: .destructive,
+        action: {
+          if viewModel.selectedIds.isEmpty {
+            itemToDelete = item
+          } else {
+            showBatchDeleteAlert = true
+          }
+        }
+      )
+    )
+
+    return actions
   }
 }
 

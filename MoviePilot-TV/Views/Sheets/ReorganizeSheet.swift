@@ -12,9 +12,18 @@ struct ReorganizeSheet: View {
   // 从 APIService 获取全局设置
   private let recognizeSource = APIService.shared.settings?.RECOGNIZE_SOURCE ?? "themoviedb"
 
-  init(logIds: [Int] = [], fileItem: FileItem? = nil, onDone: @escaping () -> Void) {
+  init(
+    logIds: [Int] = [],
+    fileItem: FileItem? = nil,
+    targetStorage: String? = nil,
+    onDone: @escaping () -> Void
+  ) {
     _viewModel = StateObject(
-      wrappedValue: ReorganizeViewModel(logIds: logIds, fileItem: fileItem)
+      wrappedValue: ReorganizeViewModel(
+        logIds: logIds,
+        fileItem: fileItem,
+        targetStorage: targetStorage
+      )
     )
     self.onDone = onDone
   }
@@ -26,29 +35,7 @@ struct ReorganizeSheet: View {
           ProgressView("加载配置中...")
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-          VStack {
-            Text("手动整理")
-              .font(.headline)
-              .foregroundColor(.secondary)
-              .padding(.top, 28)
-              .padding(.bottom, 0)
-
-            ScrollView {
-              VStack {
-                basicSettings
-                recognitionInfo
-                if viewModel.form.type_name == "电视剧" {
-                  seriesInfo
-                }
-                advancedSection
-                actionButtons
-              }
-              .padding(.horizontal, 28)
-              .padding(.top, 10)
-              .padding(.bottom, 28)
-              .applySheetStyles()
-            }
-          }
+          manualFormView
         }
       }
       .task {
@@ -59,6 +46,32 @@ struct ReorganizeSheet: View {
           notificationManager.show(message: message, type: .error)
           viewModel.errorMessage = nil
         }
+      }
+    }
+  }
+
+  private var manualFormView: some View {
+    VStack {
+      Text(viewModel.isFromHistory ? "重新整理" : "手动整理")
+        .font(.headline)
+        .foregroundColor(.secondary)
+        .padding(.top, 28)
+        .padding(.bottom, 0)
+
+      ScrollView {
+        VStack {
+          basicSettings
+          recognitionInfo
+          if viewModel.form.type_name == "电视剧" {
+            seriesInfo
+          }
+          advancedSection
+          actionButtons
+        }
+        .padding(.horizontal, 28)
+        .padding(.top, 10)
+        .padding(.bottom, 28)
+        .applySheetStyles()
       }
     }
   }

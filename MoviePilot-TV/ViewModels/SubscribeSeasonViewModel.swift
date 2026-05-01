@@ -71,7 +71,7 @@ class SubscribeSeasonViewModel: ObservableObject {
       self.seasonInfos = try await APIService.shared.getMediaSeasons(media: mediaInfo)
     }
 
-    // 按季号升序排列 (S01, S02...)
+    // 按季号升序排列 (S00, S01, S02...)
     self.seasonInfos.sort { ($0.season_number ?? 0) < ($1.season_number ?? 0) }
 
     // 加载完成后，立即检查每季在媒体服务器中的入库状态

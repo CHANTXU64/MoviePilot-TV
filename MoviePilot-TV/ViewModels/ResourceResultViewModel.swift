@@ -5,7 +5,7 @@ import SwiftUI
 @MainActor
 class ResourceResultViewModel: ObservableObject {
   @Published var results: [Context] = []
-  @Published var isLoading = true
+  @Published var isLoading = false
   private var hasSearched = false
 
   let keyword: String
@@ -15,6 +15,11 @@ class ResourceResultViewModel: ObservableObject {
   let year: String?
   let season: Int?
   let sites: String?
+
+  @Published var searchProgressText: String = ""
+  @Published var searchProgress: Double = 0.0
+
+  private var searchStreamTask: Task<Void, Never>?
 
   private let apiService = APIService.shared
 
@@ -35,19 +40,89 @@ class ResourceResultViewModel: ObservableObject {
     guard !hasSearched else { return }
     hasSearched = true
     isLoading = true
-    do {
-      var searchResults = try await apiService.searchResources(
-        keyword: keyword, type: type, area: area, title: title, year: year, season: season,
-        sites: sites)
 
-      // 应用自定义过滤规则
-      searchResults = await applyCustomFilter(to: searchResults)
+    // 取消可能正在进行的流式搜索
+    searchStreamTask?.cancel()
+    searchProgressText = "正在搜索..."
+    searchProgress = 0.0
 
-      results = searchResults
-    } catch {
-      print("Search error: \(error)")
+    searchStreamTask = Task { @MainActor in
+      var accumulatedResults: [Context] = []
+
+      do {
+        let stream: AsyncThrowingStream<SearchStreamEvent, Error>
+
+        // 判断是否为媒体搜索（如 "tmdb:1234"）
+        if keyword.contains(":") && keyword.prefix(while: { $0.isLetter }).count > 0 {
+          stream = APIService.shared.searchMediaStream(
+            keyword: keyword,
+            type: type,
+            area: area,
+            title: title,
+            year: year,
+            season: season,
+            sites: sites
+          )
+        } else {
+          stream = APIService.shared.searchTitleStream(keyword: keyword, sites: sites)
+        }
+
+        for try await event in stream {
+          if Task.isCancelled { break }
+
+          if let text = event.text {
+            self.searchProgressText = text
+          }
+          if let value = event.value {
+            self.searchProgress = value
+          }
+
+          if let items = event.items {
+            if event.type == "append" {
+              accumulatedResults.append(contentsOf: items)
+            } else if event.type == "replace" || event.type == "done" {
+              accumulatedResults = items
+            }
+          }
+
+          if event.type == "error" {
+            print("Search Stream Error: \(event.message ?? "未知错误")")
+            break
+          }
+
+          if event.type == "done" {
+            break
+          }
+        }
+
+        if !Task.isCancelled {
+          // 应用自定义过滤规则
+          let filteredResults = await self.applyCustomFilter(to: accumulatedResults)
+          self.results = filteredResults
+          self.isLoading = false
+        }
+      } catch {
+        print("Search Stream error: \(error)")
+        if !Task.isCancelled {
+          do {
+            var searchResults = try await self.apiService.searchResources(
+              keyword: self.keyword,
+              type: self.type,
+              area: self.area,
+              title: self.title,
+              year: self.year,
+              season: self.season,
+              sites: self.sites
+            )
+            searchResults = await self.applyCustomFilter(to: searchResults)
+            self.results = searchResults
+          } catch {
+            print("Search fallback error: \(error)")
+          }
+          self.isLoading = false
+        }
+      }
     }
-    isLoading = false
   }
 
   /// 应用自定义过滤规则
