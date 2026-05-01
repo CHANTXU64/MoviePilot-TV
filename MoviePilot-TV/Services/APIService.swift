@@ -936,9 +936,10 @@ class APIService: ObservableObject {
 
   /// AI重新整理历史记录
   /// - 对应前端: `MoviePilot-Frontend/src/views/reorganize/TransferHistoryView.vue`
-  func aiRedoTransferHistory(id: Int) async throws -> String? {
-    let endpoint = try buildEndpoint(path: "/history/transfer/\(id)/ai-redo")
-    let data = try await makeRequest(endpoint: endpoint, method: "POST")
+  func aiRedoTransferHistory(ids: [Int]) async throws -> (progressKey: String, acceptedIds: [Int])? {
+    let endpoint = try buildEndpoint(path: "/history/transfer/ai-redo")
+    let body = try JSONEncoder().encode(["history_ids": ids])
+    let data = try await makeRequest(endpoint: endpoint, method: "POST", body: body)
     struct AiRedoResponse: Codable {
       let success: Bool?
       let message: String?
@@ -946,12 +947,16 @@ class APIService: ObservableObject {
     }
     struct AiRedoResponseData: Codable {
       let progress_key: String?
+      let history_ids: [Int]?
     }
     let res = try JSONDecoder().decode(AiRedoResponse.self, from: data)
     guard res.success == true else {
       throw APIError.serverMessage(res.message ?? "未知错误")
     }
-    return res.data?.progress_key
+    if let key = res.data?.progress_key {
+      return (progressKey: key, acceptedIds: res.data?.history_ids ?? ids)
+    }
+    return nil
   }
 
   /// 手动整理

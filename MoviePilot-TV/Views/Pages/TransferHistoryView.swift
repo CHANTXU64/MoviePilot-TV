@@ -234,16 +234,27 @@ struct TransferHistoryView: View {
   private func actionDescriptors(for item: TransferHistory) -> [ActionDescriptor] {
     var actions: [ActionDescriptor] = []
 
-    if viewModel.selectedIds.isEmpty && viewModel.isAiRedoEnabled {
+    if viewModel.isAiRedoEnabled {
+      let isSingleItemPending = viewModel.aiRedoingIds.contains(item.id)
+      let title = viewModel.selectedIds.isEmpty
+        ? (isSingleItemPending ? "AI 整理中" : "AI 自动整理")
+        : "批量 AI 整理(\(viewModel.selectedIds.count))"
+      
       actions.append(
         ActionDescriptor(
           id: "ai-redo",
-          title: viewModel.aiRedoingIds.contains(item.id) ? "AI 整理中" : "AI 自动整理",
+          title: title,
           icon: "sparkles",
-          isEnabled: !viewModel.isAiRedoing || viewModel.aiRedoingIds.contains(item.id),
+          isEnabled: !viewModel.isAiRedoing || isSingleItemPending,
           action: {
             Task {
-              await viewModel.triggerAiRedo(for: item)
+              if viewModel.selectedIds.isEmpty {
+                await viewModel.triggerAiRedo(for: [item.id])
+              } else {
+                let ids = Array(viewModel.selectedIds)
+                viewModel.deselectAll()
+                await viewModel.triggerAiRedo(for: ids)
+              }
             }
           }
         )

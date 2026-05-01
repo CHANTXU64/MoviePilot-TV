@@ -410,22 +410,31 @@ class TransferHistoryViewModel: ObservableObject {
 
   // MARK: - AI Reorganize
 
-  func triggerAiRedo(for item: TransferHistory) async {
-    guard !aiRedoingIds.contains(item.id) else { return }
+  func triggerAiRedo(for ids: [Int]) async {
+    let pendingIds = ids.filter { !aiRedoingIds.contains($0) }
+    guard !pendingIds.isEmpty else { return }
     guard isAiRedoEnabled else {
       errorMessage = "AI 助手未启用"
       return
     }
 
-    aiRedoingIds.insert(item.id)
+    for id in pendingIds {
+      aiRedoingIds.insert(id)
+    }
     isAiRedoing = true
     aiRedoProgressText = "正在启动 AI 整理..."
 
     aiRedoTask?.cancel()
     aiRedoTask = Task { @MainActor in
       do {
-        if let progressKey = try await apiService.aiRedoTransferHistory(id: item.id) {
-          let stream = apiService.progressStream(progressKey: progressKey)
+        if let result = try await apiService.aiRedoTransferHistory(ids: pendingIds) {
+          let acceptedIds = result.acceptedIds
+          let rejectedIds = Set(pendingIds).subtracting(acceptedIds)
+          for id in rejectedIds {
+             self.aiRedoingIds.remove(id)
+          }
+
+          let stream = apiService.progressStream(progressKey: result.progressKey)
           for try await event in stream {
             if Task.isCancelled { break }
             if let text = event.text {
@@ -443,17 +452,26 @@ class TransferHistoryViewModel: ObservableObject {
               break
             }
           }
-        }
 
-        if !Task.isCancelled {
-          self.aiRedoingIds.remove(item.id)
+          if !Task.isCancelled {
+            for id in acceptedIds {
+              self.aiRedoingIds.remove(id)
+            }
+            self.isAiRedoing = false
+            await self.refresh()
+          }
+        } else {
+          for id in pendingIds {
+            self.aiRedoingIds.remove(id)
+          }
           self.isAiRedoing = false
-          await self.refresh()
         }
       } catch {
         print("AI Redo failed: \(error)")
         if !Task.isCancelled {
-          self.aiRedoingIds.remove(item.id)
+          for id in pendingIds {
+            self.aiRedoingIds.remove(id)
+          }
           self.isAiRedoing = false
         }
       }
