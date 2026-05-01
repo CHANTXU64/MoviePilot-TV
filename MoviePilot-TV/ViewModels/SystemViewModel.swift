@@ -18,6 +18,11 @@ class SystemViewModel: ObservableObject {
   @Published var isRefreshing: Bool = false
   @Published var refreshMessage: String? = nil
 
+  // MARK: - 系统信息
+  @Published var serverURL: String = ""
+  @Published var username: String = ""
+  @Published var backendVersion: String? = nil
+
   // MARK: - 自定义过滤规则
   @Published var customFilterRules: [CustomRule] = []
   @Published var isLoadingRules: Bool = false
@@ -113,6 +118,24 @@ class SystemViewModel: ObservableObject {
       // 这说明程序已降级到使用 UserDefaults。
       self.storageMechanism = .userDefaults
       self.storageDescription = "已登录 (非安全模式)"
+    }
+  }
+
+  // MARK: - 系统信息加载
+
+  /// 从后端加载系统环境和用户信息
+  func loadSystemInfo() async {
+    self.serverURL = APIService.shared.baseURL
+    self.username =
+      KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username")
+      ?? UserDefaults.standard.string(forKey: "username")
+      ?? "未知"
+
+    do {
+      let env = try await APIService.shared.fetchSystemEnv()
+      self.backendVersion = env.VERSION
+    } catch {
+      print("❌ [SystemViewModel] 获取后端版本号失败: \(error)")
     }
   }
 

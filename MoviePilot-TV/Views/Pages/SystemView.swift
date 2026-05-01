@@ -13,6 +13,29 @@ struct SystemView: View {
               .foregroundStyle(statusColor)
               .animation(.default, value: viewModel.storageMechanism)
           }
+
+          if !viewModel.serverURL.isEmpty {
+            LabeledContent("连接信息") {
+              VStack(alignment: .trailing, spacing: 2) {
+                Text(viewModel.serverURL)
+
+                HStack(spacing: 4) {
+                  if !viewModel.username.isEmpty {
+                    Image(systemName: "person.fill")
+                    Text(viewModel.username)
+                  }
+                  if let version = viewModel.backendVersion {
+                    if !viewModel.username.isEmpty {
+                      Text("·")
+                    }
+                    Text("\(version)")
+                  }
+                }
+                .font(.caption)
+              }
+              .foregroundColor(.secondary)
+            }
+          }
         }
 
         Section(header: Text("搜索过滤"), footer: Text("选择一个自定义过滤规则后，资源搜索结果将自动按此规则过滤")) {
@@ -106,6 +129,8 @@ struct SystemView: View {
         viewModel.checkKeychainStatus()
       }
       .task {
+        // 加载系统环境信息
+        await viewModel.loadSystemInfo()
         // 加载自定义过滤规则
         await viewModel.loadCustomFilterRules()
       }

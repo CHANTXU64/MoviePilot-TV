@@ -1604,6 +1604,11 @@ struct NotExistMediaInfo: Codable {
   let start_episode: Int
 }
 
+/// 系统环境变量
+struct SystemEnv: Codable {
+  let VERSION: String?
+}
+
 /// 全局应用设置
 struct GlobalSettings: Codable {
   var TMDB_IMAGE_DOMAIN: String?

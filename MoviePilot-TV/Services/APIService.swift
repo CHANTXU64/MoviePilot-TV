@@ -543,6 +543,12 @@ class APIService: ObservableObject {
     }
   }
 
+  /// 获取系统环境变量
+  func fetchSystemEnv() async throws -> SystemEnv {
+    let data = try await makeRequest(endpoint: "/system/env")
+    return try await decodeOrUnwrap(SystemEnv.self, from: data)
+  }
+
   /// 搜索通用媒体信息
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SearchBarDialog.vue (path: '/browse/media/search')
   /// - 应用场景: 聚合搜索页面的“电影”和“电视剧”分类结果展示。前端路由 /browse/ 后接的部分即为 API 路径。
