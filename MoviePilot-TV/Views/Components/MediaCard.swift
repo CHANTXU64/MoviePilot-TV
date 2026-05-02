@@ -379,8 +379,7 @@ struct MediaCard: View {
       }
       .lineLimit(1)
       .compositingGroup()
-      .frame(maxWidth: width, alignment: .center)
-      // .frame(maxWidth: isFocused ? width + 30 : width, alignment: .center)
+      .frame(maxWidth: isFocused ? width + 30 : width, alignment: .center)
     }
     .frame(width: width + 30)
     .padding(.horizontal, -15)
