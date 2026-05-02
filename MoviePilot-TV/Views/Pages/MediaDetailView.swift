@@ -232,7 +232,7 @@ struct MediaDetailView: View {
     // 焦点恢复关键：当 fullDetail 加载完成后，应用完整详情。
     // MediaDetailView 从第一帧就存在于视图树中（用 partialMedia 初始化），
     // 在 fullDetail 就绪前不配置任何内容，仅由 Loading 遮罩覆盖。
-    .onChange(of: preloadTask.isDetailLoaded) { _, isLoaded in
+    .onChange(of: preloadTask.isDetailReady) { _, isLoaded in
       if isLoaded, let fullDetail = preloadTask.fullDetail {
         viewModel.applyFullDetail(fullDetail)
       }

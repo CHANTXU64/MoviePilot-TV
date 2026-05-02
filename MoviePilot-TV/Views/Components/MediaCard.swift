@@ -305,11 +305,17 @@ struct MediaCard: View {
     self.onFocus = onFocus
   }
 
+  /// 海报在屏幕上的布局 frame（用于过渡动画）。
+  /// 通过 UIViewRepresentable 持有底层 UIView 弱引用，tap 时才读取实时 frame，
+  /// 避免滚动期间 GeometryReader + onChange 的高频 CGRect diff 导致 CPU 飙升。
+  @State private var posterFrameBox = PosterFrameBox()
+
   var body: some View {
     VStack(spacing: 10) {
       // 海报图片
       posterContent
         .frame(width: width, height: height)
+        .background(FrameAnchorView(box: posterFrameBox))
         .clipShape(RoundedRectangle(cornerRadius: 20))
         .shadow(
           color: .black.opacity(isFocused ? 0.5 : 0),
@@ -321,6 +327,17 @@ struct MediaCard: View {
         .focusable(true)
         .focused($isFocused)
         .onTapGesture {
+          // 记录点击时卡片的视觉 frame（含焦点缩放），供详情页加载动画使用
+          let posterFrame = posterFrameBox.frame
+          let scale: CGFloat = isFocused ? 1.1 : 1.0
+          let scaledW = posterFrame.width * scale
+          let scaledH = posterFrame.height * scale
+          MediaCardTransition.sourceFrame = CGRect(
+            x: posterFrame.midX - scaledW / 2,
+            y: posterFrame.midY - scaledH / 2,
+            width: scaledW,
+            height: scaledH
+          )
           action?()
         }
 
@@ -408,6 +425,37 @@ struct MediaCard: View {
 
 }
 
+/// 海报 frame 的引用盒子。通过 UIView 弱引用实时读取屏幕坐标，
+/// 不产生任何滚动期间的 SwiftUI 值追踪开销。
+private final class PosterFrameBox: @unchecked Sendable {
+  weak var anchorView: UIView?
+
+  /// 从 UIKit 读取实时屏幕 frame（tap/长按时调用）
+  var frame: CGRect {
+    guard let view = anchorView else { return .zero }
+    return view.convert(view.bounds, to: nil)
+  }
+}
+
+/// 零开销的 UIView 锚点，用于在需要时读取屏幕坐标。
+private struct FrameAnchorView: UIViewRepresentable {
+  typealias UIViewType = UIView
+  let box: PosterFrameBox
+
+  func makeUIView(context: UIViewRepresentableContext<FrameAnchorView>) -> UIView {
+    let view = UIView()
+    view.isUserInteractionEnabled = false
+    view.backgroundColor = .clear
+    box.anchorView = view
+    return view
+  }
+
+  func updateUIView(_ uiView: UIView, context: UIViewRepresentableContext<FrameAnchorView>) {
+    // anchorView 可能因 LazyVGrid 复用而变化，保持引用最新
+    box.anchorView = uiView
+  }
+}
+
 // MARK: - EquatableView 包装器（用于详情页推荐/类似横向列表）
 
 /// 将 MediaCard 包装在 Equatable 视图中，用于详情页的推荐/类似区域。
@@ -434,4 +482,14 @@ struct DetailCardView: View, Equatable {
       action: onTap
     )
   }
+}
+
+// MARK: - 卡片过渡动画状态（详情页加载动画的数据源）
+
+/// 存储最后一次点击的 MediaCard 海报在屏幕上的 frame，
+/// 供 MediaDetailContainerView 的加载动画作为起始位置使用。
+@MainActor
+enum MediaCardTransition {
+  /// 最后一次点击的卡片海报在屏幕坐标系中的 frame（已包含焦点缩放）
+  static var sourceFrame: CGRect = .zero
 }

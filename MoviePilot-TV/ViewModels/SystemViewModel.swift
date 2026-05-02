@@ -23,6 +23,19 @@ class SystemViewModel: ObservableObject {
   @Published var username: String = ""
   @Published var backendVersion: String? = nil
 
+  // MARK: - 详情页设置
+
+  private static let waitMediaDetailBackgroundImageKey = "waitMediaDetailBackgroundImage"
+
+  /// 是否在 MediaDetail 首屏等待背景/海报预加载完成。默认开启。
+  var waitMediaDetailBackgroundImage: Bool {
+    get { Self.shouldWaitMediaDetailBackgroundImage }
+    set {
+      UserDefaults.standard.set(newValue, forKey: Self.waitMediaDetailBackgroundImageKey)
+      objectWillChange.send()
+    }
+  }
+
   // MARK: - 站点设置
   @Published var availableSites: [Site] = []
   @Published var isLoadingSites: Bool = false
@@ -258,5 +271,13 @@ class SystemViewModel: ObservableObject {
   static var defaultSearchSitesString: String? {
     let sites = currentDefaultSearchSites()
     return sites.isEmpty ? nil : sites.map { String($0) }.joined(separator: ",")
+  }
+
+  /// 当前是否等待 MediaDetail 背景/海报预加载完成。
+  static var shouldWaitMediaDetailBackgroundImage: Bool {
+    guard UserDefaults.standard.object(forKey: waitMediaDetailBackgroundImageKey) != nil else {
+      return true
+    }
+    return UserDefaults.standard.bool(forKey: waitMediaDetailBackgroundImageKey)
   }
 }

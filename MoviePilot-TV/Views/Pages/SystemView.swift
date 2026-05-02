@@ -55,6 +55,17 @@ struct SystemView: View {
           .foregroundColor(.primary)
         }
 
+        Section(header: Text("详情加载页")) {
+          Toggle(
+            isOn: Binding(
+              get: { viewModel.waitMediaDetailBackgroundImage },
+              set: { viewModel.waitMediaDetailBackgroundImage = $0 }
+            )
+          ) {
+            Text("等待背景海报加载")
+          }
+        }
+
         Section(header: Text("搜索过滤"), footer: Text("搜索结果将先经过硬过滤去除不符合条件的资源，再经过软过滤将剩余不符合条件的资源灰置于末尾。"))
         {
           if viewModel.isLoadingRules {
@@ -207,7 +218,9 @@ struct SystemView: View {
     if viewModel.defaultSearchSites.isEmpty {
       return "全部站点"
     } else if viewModel.defaultSearchSites.count == 1 {
-      if let site = viewModel.availableSites.first(where: { viewModel.defaultSearchSites.contains($0.id) }) {
+      if let site = viewModel.availableSites.first(where: {
+        viewModel.defaultSearchSites.contains($0.id)
+      }) {
         return site.name
       }
       return "1 个站点"

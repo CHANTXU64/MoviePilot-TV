@@ -11,9 +11,9 @@ import SwiftUI
 class MediaPreloadTask: ObservableObject {
   let partialMedia: MediaInfo
 
-  // ⭐ 必须加载完才能打开 DetailView
+  // ⭐ 首屏可展示状态：完整详情已加载，且背景/海报已预取或等待超时
   @Published var fullDetail: MediaInfo?
-  @Published var isDetailLoaded = false
+  @Published var isDetailReady = false
   @Published var isDetailFailed = false
 
   // 可选预加载数据（持久存在，加载完直接显示）
@@ -65,8 +65,6 @@ class MediaPreloadTask: ObservableObject {
         // 无论成功还是失败，都尝试加载依赖任务（失败时用 partialMedia 做 fallback）
         let mediaForDeps = fullDetail ?? partialMedia
         await withTaskGroup(of: Void.self) { group in
-          // ② 预取背景图
-          group.addTask { await self.prefetchBackgroundImage(for: mediaForDeps) }
           // ③ 分季信息（仅电视剧）
           group.addTask { await self.loadSeasonData(for: mediaForDeps) }
           // ④ 订阅状态（此时 self.tmdbId 已就绪，可正确执行 fallback 查询）
@@ -96,7 +94,10 @@ class MediaPreloadTask: ObservableObject {
         // 此时 Codable 解码成功但所有字段为 nil，导致详情页显示 "Unknown" 空白页
         if fetched.title != nil || fetched.tmdb_id != nil || fetched.douban_id != nil {
           self.fullDetail = fetched
-          self.isDetailLoaded = true
+          let backgroundImageTimeout: Duration =
+            SystemViewModel.shouldWaitMediaDetailBackgroundImage ? .seconds(3) : .milliseconds(100)
+          await self.prefetchBackgroundImage(for: fetched, timeout: backgroundImageTimeout)
+          self.isDetailReady = true
           return
         } else {
           print("[MediaPreloadTask] 第 \(attempt + 1) 次请求 API 返回空数据...")
@@ -120,7 +121,7 @@ class MediaPreloadTask: ObservableObject {
 
   // MARK: - ② 预取背景图（Kingfisher）
 
-  private func prefetchBackgroundImage(for detail: MediaInfo) async {
+  private func prefetchBackgroundImage(for detail: MediaInfo, timeout: Duration? = nil) async {
     // 避免为已取消（LRU 淘汰）的任务发起无意义的图片请求
     guard !Task.isCancelled else { return }
     // 逻辑同 MediaDetailViewModel.updateBackground()：backdrop 优先，无则 poster
@@ -129,23 +130,46 @@ class MediaPreloadTask: ObservableObject {
     let targetUrl = backdropUrl ?? posterUrl
     guard let url = targetUrl else { return }
 
+    if let timeout {
+      await withTaskGroup(of: Void.self) { group in
+        group.addTask {
+          await self.retrieveHeroImage(url)
+        }
+        group.addTask {
+          try? await Task.sleep(for: timeout)
+        }
+
+        await group.next()
+        group.cancelAll()
+      }
+    } else {
+      await retrieveHeroImage(url)
+    }
+
+    // 下载完成后清理引用
+    activeImageDownload = nil
+  }
+
+  private func retrieveHeroImage(_ url: URL) async {
+    let continuationBox = ImageRetrieveContinuationBox()
+
     // 使用 withTaskCancellationHandler 确保 Swift Task 取消时能中断 Kingfisher 的 HTTP 下载
     await withTaskCancellationHandler {
       await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        continuationBox.set(continuation)
         let modifier = AnyModifier.cookieModifier
         self.activeImageDownload = KingfisherManager.shared.retrieveImage(
           with: .network(url),
           options: [.requestModifier(modifier), .cacheOriginalImage]
         ) { _ in
-          continuation.resume()
+          continuationBox.resume()
         }
       }
     } onCancel: {
       // 此闭包可能在任意线程执行，直接取消 Kingfisher 下载任务
       self.activeImageDownload?.cancel()
+      continuationBox.resume()
     }
-    // 下载完成后清理引用
-    activeImageDownload = nil
   }
 
   // MARK: - ③ 分季信息
@@ -185,6 +209,48 @@ class MediaPreloadTask: ObservableObject {
     )
     if let tmdbId = result {
       self.tmdbId = tmdbId
+    }
+  }
+}
+
+private final class ImageRetrieveContinuationBox: @unchecked Sendable {
+  private let lock = NSLock()
+  nonisolated(unsafe) private var continuation: CheckedContinuation<Void, Never>?
+  nonisolated(unsafe) private var shouldResumeOnSet = false
+  nonisolated(unsafe) private var hasResumed = false
+
+  nonisolated func set(_ continuation: CheckedContinuation<Void, Never>) {
+    lock.lock()
+    if hasResumed {
+      lock.unlock()
+      continuation.resume()
+      return
+    }
+
+    self.continuation = continuation
+    let shouldResume = shouldResumeOnSet
+    lock.unlock()
+
+    if shouldResume {
+      resume()
+    }
+  }
+
+  nonisolated func resume() {
+    lock.lock()
+    guard !hasResumed else {
+      lock.unlock()
+      return
+    }
+
+    if let continuation {
+      hasResumed = true
+      self.continuation = nil
+      lock.unlock()
+      continuation.resume()
+    } else {
+      shouldResumeOnSet = true
+      lock.unlock()
     }
   }
 }
