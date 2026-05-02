@@ -531,7 +531,9 @@ struct TranslationHelper {
   // MARK: - 类型翻译
 
   private static let genreTranslations: [String: [AppLanguage: String]] = [
-    "Sci-Fi & Fantasy": [.zhHans: "科幻 & 奇幻", .en: "Sci-Fi & Fantasy", .zhHant: "科幻 & 奇幻"]
+    "Sci-Fi & Fantasy": [.zhHans: "科幻 & 奇幻", .en: "Sci-Fi & Fantasy", .zhHant: "科幻 & 奇幻"],
+    "War & Politics": [.zhHans: "战争 & 政治", .en: "War & Politics", .zhHant: "戰爭 & 政治"],
+    "Action & Adventure": [.zhHans: "动作 & 冒险", .en: "Action & Adventure", .zhHant: "動作 & 冒險"],
   ]
 
   static func translateGenre(for genreName: String) -> String {
