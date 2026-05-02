@@ -4,7 +4,7 @@ import SwiftUI
 
 @MainActor
 class SiteFilterViewModel: ObservableObject {
-  @Published var selectedSites: Set<Int> = []
+  @Published var selectedSites: Set<Int> = SystemViewModel.currentDefaultSearchSites()
   @Published var availableSites: [Site] = []
 
   private let apiService = APIService.shared

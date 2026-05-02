@@ -3,6 +3,7 @@ import SwiftUI
 struct SystemView: View {
 
   @StateObject private var viewModel = SystemViewModel()
+  @State private var showSiteSelection = false
 
   var body: some View {
     NavigationStack {
@@ -36,6 +37,22 @@ struct SystemView: View {
               .foregroundColor(.secondary)
             }
           }
+        }
+
+        Section(header: Text("资源搜索")) {
+          Button(action: {
+            showSiteSelection = true
+          }) {
+            LabeledContent("默认搜索站点") {
+              if viewModel.isLoadingSites {
+                ProgressView()
+                  .controlSize(.small)
+              } else {
+                Text(siteButtonLabel)
+              }
+            }
+          }
+          .foregroundColor(.primary)
         }
 
         Section(header: Text("搜索过滤"), footer: Text("搜索结果将先经过硬过滤去除不符合条件的资源，再经过软过滤将剩余不符合条件的资源灰置于末尾。"))
@@ -169,7 +186,33 @@ struct SystemView: View {
         await viewModel.loadSystemInfo()
         // 加载自定义过滤规则
         await viewModel.loadCustomFilterRules()
+        // 加载站点列表
+        await viewModel.loadSites()
       }
+      .sheet(isPresented: $showSiteSelection) {
+        MultiSelectionSheet(
+          options: viewModel.availableSites,
+          id: \.id,
+          selected: Binding(
+            get: { viewModel.defaultSearchSites },
+            set: { viewModel.defaultSearchSites = $0 }
+          ),
+          label: { $0.name }
+        )
+      }
+    }
+  }
+
+  private var siteButtonLabel: String {
+    if viewModel.defaultSearchSites.isEmpty {
+      return "全部站点"
+    } else if viewModel.defaultSearchSites.count == 1 {
+      if let site = viewModel.availableSites.first(where: { viewModel.defaultSearchSites.contains($0.id) }) {
+        return site.name
+      }
+      return "1 个站点"
+    } else {
+      return "\(viewModel.defaultSearchSites.count) 个站点"
     }
   }
 

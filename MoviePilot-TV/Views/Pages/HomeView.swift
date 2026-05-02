@@ -258,11 +258,11 @@ private struct MediaSectionView: View {
                   Task {
                     let info = MediaInfo(title: item.title, type: item.type, year: item.subtitle)
                     if let target = await mediaActionHandler.getTMDBJumpTarget(for: info) {
-                      onSearchResource?(mediaActionHandler.searchResourcesTarget(for: target))
+                      onSearchResource?(mediaActionHandler.searchResourcesTarget(for: target, sites: SystemViewModel.defaultSearchSitesString))
                     } else {
                       let request = ResourceSearchRequest(
                         keyword: item.title, type: item.type, area: nil, title: nil, year: nil,
-                        season: nil, mediaInfo: nil, sites: nil)
+                        season: nil, mediaInfo: nil, sites: SystemViewModel.defaultSearchSitesString)
                       onSearchResource?(request)
                     }
                   }

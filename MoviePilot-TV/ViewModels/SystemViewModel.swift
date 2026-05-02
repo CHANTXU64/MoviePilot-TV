@@ -23,6 +23,27 @@ class SystemViewModel: ObservableObject {
   @Published var username: String = ""
   @Published var backendVersion: String? = nil
 
+  // MARK: - 站点设置
+  @Published var availableSites: [Site] = []
+  @Published var isLoadingSites: Bool = false
+
+  /// 默认搜索站点（绑定 URL + 用户名）
+  var defaultSearchSites: Set<Int> {
+    get {
+      let array = UserDefaults.standard.array(forKey: defaultSearchSitesUserDefaultsKey) as? [Int] ?? []
+      return Set(array)
+    }
+    set {
+      let array = Array(newValue)
+      if array.isEmpty {
+        UserDefaults.standard.removeObject(forKey: defaultSearchSitesUserDefaultsKey)
+      } else {
+        UserDefaults.standard.set(array, forKey: defaultSearchSitesUserDefaultsKey)
+      }
+      objectWillChange.send()
+    }
+  }
+
   // MARK: - 自定义过滤规则
   @Published var customFilterRules: [CustomRule] = []
   @Published var isLoadingRules: Bool = false
@@ -69,24 +90,26 @@ class SystemViewModel: ObservableObject {
     return customFilterRules.first { $0.id == ruleId }
   }
 
-  /// 持久化 key，绑定 baseURL + 用户名
-  private var hardFilterRuleUserDefaultsKey: String {
+  /// 构建绑定 baseURL + 用户名的 UserDefaults key
+  private static func userDefaultsKey(_ prefix: String) -> String {
     let baseURL = APIService.shared.baseURL
     let username =
       KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username")
       ?? UserDefaults.standard.string(forKey: "username")
       ?? "default"
-    return "selectedCustomFilterRuleId_\(baseURL)_\(username)"
+    return "\(prefix)_\(baseURL)_\(username)"
   }
 
-  /// 持久化 key，绑定 baseURL + 用户名
+  private var hardFilterRuleUserDefaultsKey: String {
+    Self.userDefaultsKey("selectedCustomFilterRuleId")
+  }
+
   private var softFilterRuleUserDefaultsKey: String {
-    let baseURL = APIService.shared.baseURL
-    let username =
-      KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username")
-      ?? UserDefaults.standard.string(forKey: "username")
-      ?? "default"
-    return "selectedSoftFilterRuleId_\(baseURL)_\(username)"
+    Self.userDefaultsKey("selectedSoftFilterRuleId")
+  }
+
+  private var defaultSearchSitesUserDefaultsKey: String {
+    Self.userDefaultsKey("defaultSearchSites")
   }
 
   init() {
@@ -170,6 +193,21 @@ class SystemViewModel: ObservableObject {
     }
   }
 
+  // MARK: - 站点加载
+
+  /// 从后端加载站点列表
+  func loadSites() async {
+    guard !isLoadingSites else { return }
+    isLoadingSites = true
+    do {
+      availableSites = try await APIService.shared.fetchSites()
+      print("✅ [SystemViewModel] 加载到 \(availableSites.count) 个站点")
+    } catch {
+      print("❌ [SystemViewModel] 加载站点失败: \(error)")
+    }
+    isLoadingSites = false
+  }
+
   // MARK: - 自定义过滤规则加载
 
   /// 从后端加载自定义过滤规则
@@ -202,23 +240,23 @@ class SystemViewModel: ObservableObject {
 
   /// 获取当前用户+服务器绑定的硬过滤规则 ID
   static func currentSelectedHardFilterRuleId() -> String? {
-    let baseURL = APIService.shared.baseURL
-    let username =
-      KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username")
-      ?? UserDefaults.standard.string(forKey: "username")
-      ?? "default"
-    let key = "selectedCustomFilterRuleId_\(baseURL)_\(username)"
-    return UserDefaults.standard.string(forKey: key)
+    UserDefaults.standard.string(forKey: userDefaultsKey("selectedCustomFilterRuleId"))
   }
 
   /// 获取当前用户+服务器绑定的软过滤规则 ID
   static func currentSelectedSoftFilterRuleId() -> String? {
-    let baseURL = APIService.shared.baseURL
-    let username =
-      KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username")
-      ?? UserDefaults.standard.string(forKey: "username")
-      ?? "default"
-    let key = "selectedSoftFilterRuleId_\(baseURL)_\(username)"
-    return UserDefaults.standard.string(forKey: key)
+    UserDefaults.standard.string(forKey: userDefaultsKey("selectedSoftFilterRuleId"))
+  }
+
+  /// 获取当前用户+服务器绑定的默认搜索站点
+  static func currentDefaultSearchSites() -> Set<Int> {
+    let array = UserDefaults.standard.array(forKey: userDefaultsKey("defaultSearchSites")) as? [Int] ?? []
+    return Set(array)
+  }
+
+  /// 获取默认搜索站点的逗号分隔字符串
+  static var defaultSearchSitesString: String? {
+    let sites = currentDefaultSearchSites()
+    return sites.isEmpty ? nil : sites.map { String($0) }.joined(separator: ",")
   }
 }

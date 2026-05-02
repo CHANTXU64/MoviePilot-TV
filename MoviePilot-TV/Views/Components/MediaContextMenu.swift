@@ -68,7 +68,10 @@ struct MediaContextMenuItems: View {
       }
 
       Button {
-        let request = mediaActionHandler.searchResourcesTarget(for: item)
+        let request = mediaActionHandler.searchResourcesTarget(
+          for: item,
+          sites: SystemViewModel.defaultSearchSitesString
+        )
         navigationPath.append(request)
       } label: {
         Label("搜索资源", systemImage: "magnifyingglass")
