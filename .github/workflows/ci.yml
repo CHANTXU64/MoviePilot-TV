@@ -15,10 +15,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build tvOS app
+  test:
+    name: Build and test tvOS app
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -31,6 +31,9 @@ jobs:
 
       - name: List project schemes
         run: xcodebuild -list -project "MoviePilot-TV.xcodeproj"
+
+      - name: List available tvOS simulators
+        run: xcrun simctl list devices tvOS available
 
       - name: Resolve Swift packages
         run: |
@@ -46,6 +49,18 @@ jobs:
             -scheme "MoviePilot-TV" \
             -configuration Debug \
             -destination "generic/platform=tvOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            -skipPackagePluginValidation
+
+      - name: Test
+        run: |
+          xcodebuild test \
+            -project "MoviePilot-TV.xcodeproj" \
+            -scheme "MoviePilot-TV" \
+            -configuration Debug \
+            -destination "platform=tvOS Simulator,name=Apple TV" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
