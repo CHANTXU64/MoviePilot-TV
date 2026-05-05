@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unsigned-ipa:
+    name: Build unsigned tvOS IPA
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks
+
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project "MoviePilot-TV.xcodeproj" \
+            -scheme "MoviePilot-TV" \
+            -skipPackagePluginValidation
+
+      - name: Build unsigned app
+        run: |
+          xcodebuild clean build \
+            -project "MoviePilot-TV.xcodeproj" \
+            -scheme "MoviePilot-TV" \
+            -configuration Release \
+            -destination "generic/platform=tvOS" \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            -skipPackagePluginValidation
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          APP_PATH="build/DerivedData/Build/Products/Release-appletvos/MoviePilot-TV.app"
+          IPA_PATH="build/MoviePilot-TV-unsigned.ipa"
+
+          if [ ! -d "$APP_PATH" ]; then
+            echo "App bundle not found: $APP_PATH"
+            find build/DerivedData/Build/Products -maxdepth 3 -type d -name "*.app" -print
+            exit 1
+          fi
+
+          rm -rf build/Payload "$IPA_PATH"
+          mkdir -p build/Payload
+          cp -R "$APP_PATH" build/Payload/
+          (cd build && zip -qry "MoviePilot-TV-unsigned.ipa" Payload)
+          ls -lh "$IPA_PATH"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MoviePilot-TV-unsigned-ipa
+          path: build/MoviePilot-TV-unsigned.ipa
+          if-no-files-found: error
+
+      - name: Upload IPA to GitHub Release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" build/MoviePilot-TV-unsigned.ipa --clobber
