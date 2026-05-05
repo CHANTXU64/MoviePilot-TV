@@ -21,6 +21,20 @@
                ReferencedContainer = "container:MoviePilot-TV.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "A1B2C3D42F41000100000006"
+               BuildableName = "MoviePilot-TV-Tests.xctest"
+               BlueprintName = "MoviePilot-TV-Tests"
+               ReferencedContainer = "container:MoviePilot-TV.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -29,6 +43,19 @@
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "YES"
       shouldAutocreateTestPlan = "YES">
+      <Testables>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "A1B2C3D42F41000100000006"
+               BuildableName = "MoviePilot-TV-Tests.xctest"
+               BlueprintName = "MoviePilot-TV-Tests"
+               ReferencedContainer = "container:MoviePilot-TV.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+      </Testables>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"

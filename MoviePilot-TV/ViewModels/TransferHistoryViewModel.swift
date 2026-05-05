@@ -59,6 +59,8 @@ class TransferHistoryViewModel: ObservableObject {
   }
 
   private func configurePaginator() {
+    paginator?.cancel()
+
     // 初始化 Paginator
     self.paginator = Paginator<TransferHistory>(
       threshold: loadMoreThreshold,

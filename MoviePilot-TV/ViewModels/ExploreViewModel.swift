@@ -446,6 +446,7 @@ class ExploreViewModel: ObservableObject {
   // MARK: - 数据加载
 
   private func setupPaginator(for path: String) {
+    paginator?.cancel()
     paginatorCancellable?.cancel()
 
     var seenKeys = Set<String>()

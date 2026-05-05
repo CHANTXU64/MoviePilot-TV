@@ -106,6 +106,9 @@ class RecommendViewModel: ObservableObject {
   }
 
   private func setupPaginator(for shelf: RecommendShelf) {
+    paginator?.cancel()
+    paginatorCancellable?.cancel()
+
     var seenKeys = Set<String>()
 
     let newPaginator = Paginator<MediaInfo>(

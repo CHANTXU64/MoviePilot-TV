@@ -11,3 +11,4 @@
 .swiftpm/xcode/xcuserdata
 .swiftpm/configuration/user.settings
 .build/
+/build

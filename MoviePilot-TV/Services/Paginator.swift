@@ -5,7 +5,9 @@ import Kingfisher
 @MainActor
 public class Paginator<ItemType: Identifiable>: ObservableObject {
   deinit {
-    // 显式声明 deinit，改变 SIL 生成路径以避开优化器 Bug
+    // 保留显式 deinit，维持既有 SIL 生成路径；同时清理未完成的加载和预取任务。
+    inFlightLoadTask?.cancel()
+    activePrefetcher?.stop()
   }
 
   // MARK: - 公开状态
@@ -25,6 +27,12 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   /// 一个布尔值，指示是否还有更多内容要加载。
   @Published public private(set) var hasMore: Bool = true
 
+  /// 一个布尔值，指示当前是否处于加载出错状态。
+  @Published public private(set) var hasError: Bool = false
+
+  /// 记录最后一次发生的错误，用于向用户展示或日志排查。
+  @Published public private(set) var lastError: Error?
+
   // MARK: - 私有状态
 
   private var page: Int = 1
@@ -33,7 +41,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   private var generation: Int = 0
   private var inFlightLoadTask: Task<Void, Never>?
   private var inFlightLoadTaskToken: Int = 0
-  private var shouldRestartAfterCancellation: Bool = false
+  private var pendingRestartLoadTaskToken: Int?
   private let maxRestartRoundsPerSequence: Int = 5
 
   /// 获取一页项目的函数。
@@ -109,7 +117,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
         if itemIndex + prefetchMargin >= maxPrefetchedIndex {
           let start = max(itemIndex + 1, maxPrefetchedIndex + 1)
           let end = min(start + prefetchThreshold, items.count)
-          
+
           if start < end {
             let urlsToPrefetch = items[start..<end].flatMap { provider($0) }
             if !urlsToPrefetch.isEmpty {
@@ -130,6 +138,19 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     await runLoadSequence()
   }
 
+  /// 取消当前加载和图片预取，并让已恢复的旧请求结果失效。
+  public func cancel() {
+    generation += 1
+    pendingRestartLoadTaskToken = nil
+    inFlightLoadTask?.cancel()
+    inFlightLoadTask = nil
+    isLoading = false
+    isFirstLoading = false
+    isLoadingMore = false
+    activePrefetcher?.stop()
+    activePrefetcher = nil
+  }
+
   /// 将下一次加载的页游标向后推进指定页数。
   /// 适用于外部已通过其它方式消费了最新若干页的场景（如增量轮询）。
   /// 仅调整游标，不触发实际请求。
@@ -137,8 +158,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   public func advancePageCursor(by pages: Int) {
     guard pages > 0 else { return }
     if isLoading {
-      shouldRestartAfterCancellation = true
-      inFlightLoadTask?.cancel()
+      requestRestartAfterInFlightCancellation()
     }
     page += pages
   }
@@ -150,20 +170,21 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   public func rewindPageCursor(by pages: Int) {
     guard pages > 0 else { return }
     if isLoading {
-      shouldRestartAfterCancellation = true
-      inFlightLoadTask?.cancel()
+      requestRestartAfterInFlightCancellation()
     }
     page = max(1, page - pages)
     hasMore = true
   }
 
-  private func startLoadTask() -> Task<Void, Never> {
+  private func requestRestartAfterInFlightCancellation() {
+    guard let runningTask = inFlightLoadTask else { return }
+    pendingRestartLoadTaskToken = inFlightLoadTaskToken
+    runningTask.cancel()
+  }
+
+  private func startLoadTask() -> (task: Task<Void, Never>, token: Int) {
     if let runningTask = inFlightLoadTask {
-      if runningTask.isCancelled {
-        inFlightLoadTask = nil
-      } else {
-        return runningTask
-      }
+      return (runningTask, inFlightLoadTaskToken)
     }
 
     inFlightLoadTaskToken += 1
@@ -176,22 +197,22 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
       }
     }
     inFlightLoadTask = task
-    return task
+    return (task, token)
   }
 
   private func runLoadSequence() async {
     var restartRounds = 0
 
     while hasMore {
-      let task = startLoadTask()
+      let (task, token) = startLoadTask()
       await task.value
 
-      let shouldRestart = consumeRestartAfterCancellationIfNeeded()
+      let shouldRestart = consumeRestartAfterCancellationIfNeeded(for: token)
       guard shouldRestart else { break }
 
       restartRounds += 1
       if restartRounds >= maxRestartRoundsPerSequence {
-        print(
+        Logger.warning(
           "[Paginator] 达到单次加载序列最大重启次数 (\(maxRestartRoundsPerSequence))，停止继续重启"
         )
         break
@@ -223,19 +244,23 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
       }
     }
 
-    let maxAttempts = 2
-    var attempts = 0
+    // 不是错误重试次数；用于跳过少量只包含已知项目的页面，继续向后寻找新内容。
+    let maxPagesToScanForNewContent = 2
+    var pagesScannedForNewContent = 0
     var hasNewContent = false
-    var hasError = false
+    var currentError: Error? = nil
 
-    while attempts < maxAttempts, hasMore, !hasNewContent {
-      attempts += 1
+    while pagesScannedForNewContent < maxPagesToScanForNewContent, hasMore, !hasNewContent {
+      pagesScannedForNewContent += 1
 
       do {
         let newItems = try await fetcher(page)
 
         // 挂起恢复后检查：generation 变化说明已被 reset，丢弃结果
         guard currentGeneration == generation, !Task.isCancelled else { return }
+
+        consecutiveErrorCount = 0
+        clearErrorState()
 
         if newItems.isEmpty {
           hasMore = false
@@ -247,37 +272,52 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
         }
 
         page += 1
-        consecutiveErrorCount = 0  // 重置错误计数
+        currentError = nil
       } catch {
         if Task.isCancelled || error is CancellationError {
           return
         }
         guard currentGeneration == generation, !Task.isCancelled else { return }
-        print("[Paginator] Failed to load page \(page): \(error)")
-        hasError = true
+        Logger.error("Failed to load page \(page): \(error)")
+        currentError = error
         consecutiveErrorCount += 1
         break
       }
     }
 
-    if !hasNewContent && !hasError {
+    if !hasNewContent && currentError == nil {
       hasMore = false
-    } else if hasError && consecutiveErrorCount >= maxConsecutiveErrors {
-      print("[Paginator] 连续发生 \(consecutiveErrorCount) 次错误，停止后续加载")
-      hasMore = false
+    } else if let error = currentError {
+      if !hasError {
+        hasError = true
+      }
+      lastError = error
+      if consecutiveErrorCount >= maxConsecutiveErrors {
+        Logger.error("连续发生 \(consecutiveErrorCount) 次错误，停止后续加载")
+        hasMore = false
+      }
     }
-
   }
 
-  private func consumeRestartAfterCancellationIfNeeded() -> Bool {
-    defer { shouldRestartAfterCancellation = false }
-    return shouldRestartAfterCancellation && hasMore
+  private func clearErrorState() {
+    if hasError {
+      hasError = false
+    }
+    if lastError != nil {
+      lastError = nil
+    }
+  }
+
+  private func consumeRestartAfterCancellationIfNeeded(for completedTaskToken: Int) -> Bool {
+    guard pendingRestartLoadTaskToken == completedTaskToken else { return false }
+    pendingRestartLoadTaskToken = nil
+    return hasMore
   }
 
   /// 重置分页器的状态，清除所有项目并重置标志。
   private func reset() {
     generation += 1
-    shouldRestartAfterCancellation = false
+    pendingRestartLoadTaskToken = nil
     inFlightLoadTask?.cancel()
     inFlightLoadTask = nil
     items = []
@@ -285,6 +325,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     isFirstLoading = false
     isLoadingMore = false
     hasMore = true
+    clearErrorState()
     page = 1
     consecutiveErrorCount = 0
     maxPrefetchedIndex = -1

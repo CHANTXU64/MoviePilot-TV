@@ -358,6 +358,18 @@ class SearchViewModel: ObservableObject {
 
   /// 为当前搜索词创建代理和各个 Paginator
   private func setupPaginators(query: String) {
+    moviePaginator?.cancel()
+    tvPaginator?.cancel()
+    collectionPaginator?.cancel()
+    personPaginator?.cancel()
+    subscriptionSharePaginator?.cancel()
+
+    moviePaginatorCancellable?.cancel()
+    tvPaginatorCancellable?.cancel()
+    collectionPaginatorCancellable?.cancel()
+    personPaginatorCancellable?.cancel()
+    subscriptionSharePaginatorCancellable?.cancel()
+
     let fetcher = SharedMediaFetcher(query: query, apiService: apiService)
     self.sharedMediaFetcher = fetcher
 
