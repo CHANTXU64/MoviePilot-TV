@@ -1264,6 +1264,16 @@ class APIService: ObservableObject {
     return config.value
   }
 
+  /// 获取配置的搜索站点 (IndexerSites)
+  func fetchIndexerSites() async throws -> [Int] {
+    struct ConfigValue: Decodable {
+      let value: [Int]?
+    }
+    let data = try await makeRequest(endpoint: "/system/setting/IndexerSites")
+    let config = try await decodeOrUnwrap(ConfigValue.self, from: data)
+    return config.value ?? []
+  }
+
   /// 获取用户定义的搜索过滤规则组
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue
   /// - 应用场景: 这是一个通用接口，Vue在多个场景中被调用以获取过滤规则组下拉选项：1. **订阅编辑对话框**中的“过滤规则组”。

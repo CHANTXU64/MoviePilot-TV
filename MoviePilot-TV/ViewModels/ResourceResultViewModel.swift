@@ -96,8 +96,55 @@ class ResourceResultViewModel: ObservableObject {
         }
 
         if !Task.isCancelled {
+          // 获取所有本次搜索的目标站点
+          var targetSites: Set<Int> = []
+          if let specificSites = self.sites, !specificSites.isEmpty {
+            let siteIds = specificSites.split(separator: ",").compactMap { Int($0) }
+            targetSites = Set(siteIds)
+          } else {
+            do {
+              let allSites = try await self.apiService.fetchIndexerSites()
+              if Task.isCancelled { return }
+              targetSites = Set(allSites)
+            } catch {
+              print("Fetch indexer sites error: \(error)")
+            }
+          }
+
+          // 收集实际返回了数据的站点
+          let respondedSites = Set(accumulatedResults.compactMap { $0.torrent_info?.site })
+          
+          // 找出没有返回数据的站点
+          let missingSites = targetSites.subtracting(respondedSites)
+
+          // 自动静默重试机制：对那些没有返回数据的站点在后台统一发起一次重试
+          if !missingSites.isEmpty && !Task.isCancelled {
+            let missingSitesString = missingSites.map { String($0) }.joined(separator: ",")
+            do {
+              let retryResults = try await self.apiService.searchResources(
+                keyword: self.keyword,
+                type: self.type,
+                area: self.area,
+                title: self.title,
+                year: self.year,
+                season: self.season,
+                sites: missingSitesString
+              )
+              if Task.isCancelled { return }
+              // 追加到原结果后面
+              accumulatedResults.append(contentsOf: retryResults)
+            } catch {
+              print("Search missing sites retry error: \(error)")
+            }
+          }
+
+          if Task.isCancelled { return }
+
           // 应用自定义过滤规则
           let filteredResults = await self.applyCustomFilter(to: accumulatedResults)
+          
+          if Task.isCancelled { return }
+
           self.results = filteredResults
           self.isLoading = false
         }
