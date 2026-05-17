@@ -1007,6 +1007,7 @@ struct MediaServerType: RawRepresentable, Codable, Hashable, Equatable {
   static let plex = MediaServerType(rawValue: "plex")
   static let trimemedia = MediaServerType(rawValue: "trimemedia")
   static let ugreen = MediaServerType(rawValue: "ugreen")
+  static let zspace = MediaServerType(rawValue: "zspace")
 }
 
 /// 媒体服务器最近播放/新增项
@@ -1134,6 +1135,8 @@ struct SubscribeRequest: Codable {
   let season: Int?
   /// 是否洗版，数字或者boolean
   let best_version: Int
+  /// 是否仅洗全集，数字或者boolean
+  let best_version_full: Int?
   /// 剧集组
   let episode_group: String?
 }
@@ -1194,6 +1197,8 @@ struct Subscribe: Codable, Identifiable, Hashable {
   var save_path: String?
   /// 是否洗版 (后端返回 0/1 整数作为布尔值使用)
   var best_version: Int?
+  /// 是否仅洗全集 (后端返回 0/1 整数作为布尔值使用)
+  var best_version_full: Int?
   /// 过滤规则组
   var filter_groups: [String]?
   /// 自定义识别词
@@ -1216,7 +1221,7 @@ struct Subscribe: Codable, Identifiable, Hashable {
   enum CodingKeys: String, CodingKey {
     case id, name, year, type, keyword, season, poster, backdrop, state, last_update,
       total_episode, start_episode, lack_episode, tmdbid, doubanid, bangumiid, quality, resolution,
-      effect, include, exclude, sites, downloader, save_path, best_version, filter_groups,
+      effect, include, exclude, sites, downloader, save_path, best_version, best_version_full, filter_groups,
       custom_words, description, episode_group, search_imdbid, media_category, mediaid
   }
 
@@ -1247,6 +1252,7 @@ struct Subscribe: Codable, Identifiable, Hashable {
     downloader = try container.decodeIfPresent(String.self, forKey: .downloader)
     save_path = try container.decodeIfPresent(String.self, forKey: .save_path)
     best_version = try container.decodeIfPresent(Int.self, forKey: .best_version)
+    best_version_full = try container.decodeIfPresent(Int.self, forKey: .best_version_full)
     filter_groups = try container.decodeIfPresent([String].self, forKey: .filter_groups)
     custom_words = try container.decodeIfPresent(String.self, forKey: .custom_words)
     description = try container.decodeIfPresent(String.self, forKey: .description)
@@ -1264,7 +1270,7 @@ struct Subscribe: Codable, Identifiable, Hashable {
     id: Int? = nil, name: String, year: String? = nil, type: String, season: Int? = nil,
     poster: String? = nil, state: String? = nil, last_update: String? = nil,
     tmdbid: Int? = nil, doubanid: String? = nil, bangumiid: Int? = nil,
-    best_version: Int? = nil, episode_group: String? = nil,
+    best_version: Int? = nil, best_version_full: Int? = nil, episode_group: String? = nil,
     backdrop: String? = nil, keyword: String? = nil, total_episode: Int? = nil,
     start_episode: Int? = nil, lack_episode: Int? = nil, quality: String? = nil,
     resolution: String? = nil, effect: String? = nil, include: String? = nil,
@@ -1285,6 +1291,7 @@ struct Subscribe: Codable, Identifiable, Hashable {
     self.doubanid = doubanid
     self.bangumiid = bangumiid
     self.best_version = best_version
+    self.best_version_full = best_version_full
     self.episode_group = episode_group
     self.backdrop = backdrop
     self.keyword = keyword

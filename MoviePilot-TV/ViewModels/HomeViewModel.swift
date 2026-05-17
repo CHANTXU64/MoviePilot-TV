@@ -287,6 +287,8 @@ class HomeViewModel: ObservableObject {
       print("飞牛 Nas 暂不支持在 tvOS 打开媒体")
     case .ugreen:
       print("绿联 Nas 暂不支持在 tvOS 打开媒体")
+    case .zspace:
+      print("极空间 Nas 暂不支持在 tvOS 打开媒体")
     default:
       // 处理未来未知的服务器类型（item.server_type.rawValue）
       print("未知的媒体服务器类型: \(item.server_type?.rawValue ?? "未知")，且 tvOS 无法直接打开网页")

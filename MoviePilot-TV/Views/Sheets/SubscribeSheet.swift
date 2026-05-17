@@ -126,8 +126,23 @@ struct SubscribeSheet: View {
                   "洗版",
                   isOn: Binding(
                     get: { (viewModel.subscribe.best_version ?? 0) == 1 },
-                    set: { viewModel.subscribe.best_version = $0 ? 1 : 0 }
+                    set: {
+                      let newValue = $0 ? 1 : 0
+                      viewModel.subscribe.best_version = newValue
+                      if newValue == 0 {
+                        viewModel.subscribe.best_version_full = 0
+                      }
+                    }
                   ))
+
+                if viewModel.subscribe.type == "电视剧" && (viewModel.subscribe.best_version ?? 0) == 1 {
+                  Toggle(
+                    "仅洗全集",
+                    isOn: Binding(
+                      get: { (viewModel.subscribe.best_version_full ?? 0) == 1 },
+                      set: { viewModel.subscribe.best_version_full = $0 ? 1 : 0 }
+                    ))
+                }
 
                 Toggle(
                   "使用IMDB搜索",
