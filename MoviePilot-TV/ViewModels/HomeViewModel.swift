@@ -36,7 +36,7 @@ class HomeViewModel: ObservableObject {
       ) ?? ""
 
     // 监听订阅变更通知，从其他页面订阅后首页立即刷新
-    NotificationCenter.default.publisher(for: Notification.Name("subscriptionDidUpdate"))
+    NotificationCenter.default.publisher(for: .subscriptionDidUpdate)
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in
         Task { [weak self] in
@@ -226,7 +226,7 @@ class HomeViewModel: ObservableObject {
       if success {
         await loadSubscriptions()
         // 通知其他页面（如详情页 preloadTask）订阅已变更
-        NotificationCenter.default.post(name: Notification.Name("subscriptionDidUpdate"), object: nil)
+        NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
       }
       return success
     } catch {

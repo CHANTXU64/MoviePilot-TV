@@ -305,7 +305,7 @@ class MediaPreloader: ObservableObject {
 
   private init() {
     // 监听订阅变更通知，刷新所有缓存 task 的订阅状态
-    NotificationCenter.default.publisher(for: Notification.Name("subscriptionDidUpdate"))
+    NotificationCenter.default.publisher(for: .subscriptionDidUpdate)
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in
         Task { [weak self] in

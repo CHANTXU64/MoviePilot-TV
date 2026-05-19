@@ -277,7 +277,7 @@ class MediaDetailViewModel: ObservableObject {
     await refreshSubscriptionStatus()
 
     // 通知首页刷新订阅列表
-    NotificationCenter.default.post(name: Notification.Name("subscriptionDidUpdate"), object: nil)
+    NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
   }
 
   /// 刷新订阅状态：同时更新全局订阅和分季订阅（preloadTask 是唯一数据源）
@@ -288,7 +288,12 @@ class MediaDetailViewModel: ObservableObject {
       if detail.canDirectlySubscribe {
         group.addTask {
           do {
-            let isSubscribed = try await self.apiService.checkSubscription(media: self.detail)
+            var isSubscribed = try await self.apiService.checkSubscription(media: self.detail)
+            // 豆瓣/Bangumi 来源：用识别到的 tmdbId 补查
+            if !isSubscribed, self.detail.tmdb_id == nil, let tmdbId = self.preloadTask?.tmdbId {
+              let tmdbMedia = MediaInfo(tmdb_id: tmdbId, type: self.detail.type)
+              isSubscribed = try await self.apiService.checkSubscription(media: tmdbMedia)
+            }
             await MainActor.run {
               self.preloadTask?.isSubscribed = isSubscribed
             }

@@ -1,6 +1,13 @@
 import Combine
 import Foundation
 
+// MARK: - 通知名常量
+
+extension Notification.Name {
+  /// 订阅状态变更通知（新增/删除/编辑订阅后发送，首页和预加载缓存监听刷新）
+  static let subscriptionDidUpdate = Notification.Name("subscriptionDidUpdate")
+}
+
 /// 包装类型，用于处理 API 响应中多种格式的布尔值
 /// 从 Bool、Int 或 String 解码，始终编码为 Bool
 struct FlexibleBool: Codable, Hashable {

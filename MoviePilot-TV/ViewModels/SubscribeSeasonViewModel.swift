@@ -215,7 +215,7 @@ class SubscribeSeasonViewModel: ObservableObject {
         media: mediaInfo, season: seasonNumber)
       subscribedSeasons.remove(seasonNumber)
       // 通知首页刷新订阅列表
-      NotificationCenter.default.post(name: Notification.Name("subscriptionDidUpdate"), object: nil)
+      NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
     } catch {
       errorMessage = error.localizedDescription
     }
