@@ -36,6 +36,7 @@
 
 - `.agents/prompts/code-review.md`：深度代码审查 Prompt。
 - `.agents/prompts/frontend-update.md`：上游前端更新影响分析 Prompt。
+- `.agents/prompts/release.md`：新版本发布 Prompt。
 
 ## 任务路由表
 
@@ -43,6 +44,7 @@
 | --- | --- | --- |
 | 审查某个 Swift / SwiftUI / tvOS 文件、组件或最近提交；要求“认真检查”“深度审查”“有没有问题” | `.agents/prompts/code-review.md` | 进入深度代码审查模式。先读 `ReviewPlan.md`，必要时对齐 `../MoviePilot-Frontend`，首次报告只列问题不直接改。 |
 | 分析 MoviePilot-Frontend 上游版本更新、检查前端最新变更对 TV 端影响、做版本兼容评估 | `.agents/prompts/frontend-update.md` | 进入前端更新影响分析模式。先确认 `../MoviePilot-Frontend`，再对比当前兼容版本与最新前端版本，输出结构化影响报告和行动计划。 |
+| 发布新版本、生成 Release Notes、创建 GitHub Release、构建 unsigned IPA | `.agents/prompts/release.md` | 进入发布流程。版本号必须由用户提供，Release Notes 必须先给用户确认，确认后才允许提交到 GitHub。 |
 | 用户要求实现、修复、重构 tvOS 功能，但没有明确说只分析 | 先按任务性质读取 `.agents/prompts/code-review.md`，如涉及上游前端逻辑再补充 `.agents/prompts/frontend-update.md` | 先理解现有代码与跨端逻辑，再修改。修改前必须基于最新 `main` 创建 `ai/...` 分支。 |
 | 用户要求整理、更新项目文档、Prompt、工作流说明 | 本文件 + 相关专项 Prompt | 只整理入口或文档时，不要改变专项 Prompt 原意；应尽量通过引用/路由保留单一事实来源。 |
 | 用户任务无法归类 | 先读本文件，不急着读专项 Prompt | 简要说明不确定点，优先做只读调查；一旦判断任务类型，再加载对应专项 Prompt。 |
@@ -82,7 +84,24 @@
 4. 必须结合 `ReviewPlan.md` 理解 TV 端当前架构状态。
 5. 输出应包含版本跨度、API/模型影响、TV 端适配建议、行动计划和文档更新建议。
 
-### 3. 实现与修复类任务
+### 3. 发布类任务
+
+命中示例：
+
+- “准备发布新版本”
+- “生成 Release Notes”
+- “发布 vX.Y.Z”
+- “创建 GitHub Release”
+
+执行规则：
+
+1. 必须读取 `.agents/prompts/release.md`。
+2. 版本号必须由用户明确提供，AI 不得自行推断或递增版本号。
+3. Release Notes 必须使用固定格式，并先作为草稿发给用户确认。
+4. 用户确认 Release Notes 前，不得创建 GitHub Release。
+5. 正式发布前必须满足发布 Prompt 中的 CI/测试门禁。
+
+### 4. 实现与修复类任务
 
 当用户要求实际改代码时：
 
