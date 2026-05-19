@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本文件是 `MoviePilot-TV` 仓库的统一 AI 工作入口。它不替代 `.agents/prompts/` 下的专项 Prompt，而是负责先判断任务类型，再路由到对应 Prompt，避免每次都把所有规则一次性塞进上下文。
+本文件是 `MoviePilot-TV` 仓库的统一 AI 工作入口。它只负责说明通用约束、任务路由、运行验证和 Git 工作流；具体任务规则放在 `.agents/prompts/` 下的专项 Prompt 中。
 
 ## 项目背景
 
@@ -14,129 +14,33 @@
 
 如果任务涉及 Web 前端与 TV 端逻辑对齐，必须优先确认该目录存在且是合法 Git 仓库。
 
-## 总体使用原则
+## 通用执行约束
 
 1. 全程使用中文与用户沟通。
-2. 先判断任务类型，再读取对应 `.agents/prompts/` Prompt。
-3. 不要无脑同时读取所有专项 Prompt；只有任务需要时才加载对应文件。
-4. 专项 Prompt 中的规则优先级高于本文件的泛化说明。
-5. 如果任务同时命中多个类型，先读取最核心的专项 Prompt，再按需补充读取其他 Prompt。
-6. 如果用户明确要求“只分析”“先检查”“不要修改”，只能审查、解释、提出建议，不要改代码、不要提交、不要开 PR。
-7. 如果需要修改代码、配置、文档或工作流，必须遵守本文件的 Git 工作流。
+2. 不要无脑同时读取所有专项 Prompt；只读取当前任务需要的文件。
+3. 专项 Prompt 是具体任务规则的单一事实来源，`AGENTS.md` 不重复解释专项 Prompt 内容。
+4. 如果任务同时命中多个场景，先读取最核心的专项 Prompt，再按需补充读取其他文件。
+5. 如果用户明确要求“只分析”“先检查”“不要修改”，只能审查、解释、提出建议，不要改代码、不要提交、不要开 PR。
+6. 如果需要修改代码、配置、文档或工作流，必须遵守本文件的 Git 工作流。
 
-## Prompt 与审查计划目录
+## 任务路由
 
-专项 Prompt 统一放在：
+本节只决定“当前任务需要读取哪些文件”。不要为了保险一次性读取所有 Prompt。
 
-```text
-.agents/prompts/
-```
+| 用户意图 | 读取文件 |
+| --- | --- |
+| 最终联合审查、AI + 人工收尾审查、按 ReviewPlan 继续、继续审查下一个文件 | `.agents/prompts/final-review.md` + `.agents/ReviewPlan.md` |
+| 普通 PR Review、检查最近提交、检查分支、临时检查某个文件 | 不读取专项 Prompt；直接查看对应 diff / 提交 / 源码 |
+| 检查 `MoviePilot-Frontend` 上游更新对 TV 端影响 | `.agents/prompts/frontend-update.md` + `.agents/ReviewPlan.md` |
+| 准备发布、生成 Release Notes、创建 GitHub Release | `.agents/prompts/release.md` |
+| 整理 Prompt、文档、工作流 | 读取被修改的相关文件；如新增专项 Prompt，同步更新本路由表 |
 
-AI + 人工收尾联合审查计划放在：
+## 路由边界
 
-```text
-.agents/ReviewPlan.md
-```
-
-当前包含：
-
-- `.agents/prompts/final-review.md`：AI 大量编码后的收尾联合审查 Prompt。
-- `.agents/prompts/frontend-update.md`：上游前端更新影响分析 Prompt。
-- `.agents/prompts/release.md`：新版本发布 Prompt。
-- `.agents/ReviewPlan.md`：全量收尾联合审查计划与跨文件副作用记录。
-
-## 任务路由表
-
-| 用户任务特征 | 必读 Prompt | 处理方式 |
-| --- | --- | --- |
-| AI 写了大量代码后，要求做全量收尾审查、人工 + AI 联合审查、按 ReviewPlan 继续审查、继续审查下一个文件 | `.agents/prompts/final-review.md` | 进入收尾联合审查模式。先读 `.agents/ReviewPlan.md`，按计划单文件推进；首次报告只列问题不直接改。 |
-| 普通检查最近提交、普通看分支有没有问题、普通 PR Review、临时检查某个文件 | 无固定专项 Prompt，先读本文件并按用户范围做只读调查 | 不要默认套用 `.agents/prompts/final-review.md`。直接围绕用户指定的提交/分支/文件检查，必要时再读取相关源码、CI、测试或上游前端实现。 |
-| 分析 MoviePilot-Frontend 上游版本更新、检查前端最新变更对 TV 端影响、做版本兼容评估 | `.agents/prompts/frontend-update.md` | 进入前端更新影响分析模式。先确认 `../MoviePilot-Frontend`，再对比当前兼容版本与最新前端版本，输出结构化影响报告和行动计划。 |
-| 发布新版本、生成 Release Notes、创建 GitHub Release、构建 unsigned IPA | `.agents/prompts/release.md` | 进入发布流程。版本号必须由用户提供，Release Notes 必须先给用户确认，确认后才允许提交到 GitHub。 |
-| 用户要求实现、修复、重构 tvOS 功能，但没有明确说只分析 | 本文件 + 与任务直接相关的源码；仅在涉及上游前端差异时补充 `.agents/prompts/frontend-update.md` | 先理解现有代码与跨端逻辑，再修改。修改前必须基于最新 `main` 创建 `ai/...` 分支。不要把实现任务误路由到收尾联合审查 Prompt。 |
-| 用户要求整理、更新项目文档、Prompt、工作流说明 | 本文件 + 相关专项 Prompt | 只整理入口或文档时，不要改变专项 Prompt 原意；应尽量通过引用/路由保留单一事实来源。 |
-| 用户任务无法归类 | 先读本文件，不急着读专项 Prompt | 简要说明不确定点，优先做只读调查；一旦判断任务类型，再加载对应专项 Prompt。 |
-
-## 路由细则
-
-### 1. 收尾联合审查任务
-
-命中示例：
-
-- “AI 写了很多代码，最后一起审查一下”
-- “按 ReviewPlan 继续审查”
-- “人工和 AI 一起做最终审查”
-- “全量代码审查 / 收尾审查 / 批量修改后复核”
-- “继续审查下一个文件”
-
-执行规则：
-
-1. 必须读取 `.agents/prompts/final-review.md`。
-2. 必须优先读取 `.agents/ReviewPlan.md`，同步审查进度和跨文件副作用。
-3. 该 Prompt 只用于 AI 大量编码后的收尾联合审查，不用于普通提交检查或普通 PR Review。
-4. 如果审查对象依赖 `.agents/ReviewPlan.md` 中记录过副作用的组件，必须打开对应源码核对，不能只凭备注判断。
-5. 对核心业务逻辑、网络请求、模型解析等内容，必须按专项 Prompt 要求检索 `../MoviePilot-Frontend` 的对应实现。
-6. 初次报告只列问题、风险和位置，不要直接给修改代码，除非用户明确要求修复。
-7. 只有用户明确表示当前文件审查结束或要求归档时，才更新 `.agents/ReviewPlan.md`。
-
-### 2. 普通检查 / 普通 PR Review 任务
-
-命中示例：
-
-- “检查最近一次提交”
-- “认真看这个分支有没有问题”
-- “看一下这个 PR”
-- “临时检查这个文件”
-
-执行规则：
-
-1. 不要默认读取 `.agents/prompts/final-review.md`。
-2. 按用户给定范围直接检查提交、diff、分支或文件。
-3. 需要跨端对齐时可以读取 `../MoviePilot-Frontend` 对应实现，但不要强行按 `.agents/ReviewPlan.md` 的全量计划推进。
-4. 如果用户明确说“按 ReviewPlan”或“收尾联合审查”，再切换到 `.agents/prompts/final-review.md`。
-
-### 3. 前端上游更新影响分析任务
-
-命中示例：
-
-- “看看前端最新版本 TV 端要不要跟”
-- “MoviePilot-Frontend 更新了什么，TV 端有没有影响”
-- “检查 README 里的兼容版本是不是要更新”
-
-执行规则：
-
-1. 必须读取 `.agents/prompts/frontend-update.md`。
-2. 必须确认 `../MoviePilot-Frontend` 存在且是合法 Git 仓库；不存在时停止并提示用户补齐。
-3. 必须读取当前项目 `README.md` 中的兼容版本说明。
-4. 必须结合 `.agents/ReviewPlan.md` 理解 TV 端当前架构状态。
-5. 输出应包含版本跨度、API/模型影响、TV 端适配建议、行动计划和文档更新建议。
-
-### 4. 发布类任务
-
-命中示例：
-
-- “准备发布新版本”
-- “生成 Release Notes”
-- “发布 vX.Y.Z”
-- “创建 GitHub Release”
-
-执行规则：
-
-1. 必须读取 `.agents/prompts/release.md`。
-2. 版本号必须由用户明确提供，AI 不得自行推断或递增版本号。
-3. Release Notes 必须使用固定格式，并先作为草稿发给用户确认。
-4. 用户确认 Release Notes 前，不得创建 GitHub Release。
-5. 正式发布前必须满足发布 Prompt 中的 CI/测试门禁。
-
-### 5. 实现与修复类任务
-
-当用户要求实际改代码时：
-
-1. 先根据任务类型读取对应专项 Prompt。
-2. 先做最小必要调查，明确变更范围。
-3. 优先保持实现简单，避免把小功能过度工程化。
-4. 涉及后端或官方前端尚不存在的能力时，不要擅自扩展成复杂跨端架构；应尊重当前 TV 端的小范围功能定位。
-5. 修改完成后必须按下方【运行环境与测试策略】执行验证；若当前环境无法运行测试，必须如实说明，并确保合并前由真实环境或 GitHub 测试流程补齐。
+1. `.agents/prompts/final-review.md` 只用于明确的最终联合审查；普通 PR Review、最近提交检查、分支检查不要读取它。
+2. 如果用户意图不明确，先按普通只读调查处理；确认任务类型后再读取对应专项 Prompt。
+3. 前端上游更新分析必须确认 `../MoviePilot-Frontend` 存在且是合法 Git 仓库。
+4. 发布类任务必须读取 `.agents/prompts/release.md`；版本号必须由用户提供，Release Notes 必须先给用户确认。
 
 ## 运行环境与测试策略
 
