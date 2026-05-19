@@ -275,6 +275,9 @@ class MediaDetailViewModel: ObservableObject {
 
     // 刷新所有订阅状态（包括全局和分季）
     await refreshSubscriptionStatus()
+
+    // 通知首页刷新订阅列表
+    NotificationCenter.default.post(name: Notification.Name("subscriptionDidUpdate"), object: nil)
   }
 
   /// 刷新订阅状态：同时更新全局订阅和分季订阅（preloadTask 是唯一数据源）

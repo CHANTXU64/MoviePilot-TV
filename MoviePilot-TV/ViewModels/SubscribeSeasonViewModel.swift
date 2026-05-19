@@ -214,6 +214,8 @@ class SubscribeSeasonViewModel: ObservableObject {
       _ = try await APIService.shared.deleteSubscription(
         media: mediaInfo, season: seasonNumber)
       subscribedSeasons.remove(seasonNumber)
+      // 通知首页刷新订阅列表
+      NotificationCenter.default.post(name: Notification.Name("subscriptionDidUpdate"), object: nil)
     } catch {
       errorMessage = error.localizedDescription
     }

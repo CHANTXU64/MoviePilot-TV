@@ -9,10 +9,13 @@ struct SubscribeSheet: View {
   @State private var showAdvanced = false
   @FocusState private var isAdvancedButtonFocused: Bool
 
-  init(subscribe: Subscribe, isNewSubscription: Bool = false) {
+  var onSave: (() -> Void)?
+
+  init(subscribe: Subscribe, isNewSubscription: Bool = false, onSave: (() -> Void)? = nil) {
     _viewModel = StateObject(
       wrappedValue: SubscribeSheetViewModel(
         subscribe: subscribe, isNewSubscription: isNewSubscription))
+    self.onSave = onSave
   }
 
   var body: some View {
@@ -253,6 +256,7 @@ struct SubscribeSheet: View {
                 Button(action: {
                   Task {
                     if await viewModel.save() {
+                      onSave?()
                       dismiss()
                     }
                   }

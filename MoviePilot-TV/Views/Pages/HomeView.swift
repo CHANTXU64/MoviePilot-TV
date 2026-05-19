@@ -86,12 +86,6 @@ struct HomeView: View {
       // 编辑订阅 Sheet
       .sheet(item: $selectedSubscribe) { subscribe in
         SubscribeSheet(subscribe: subscribe)
-          .onDisappear {
-            // 刷新数据在编辑之后
-            Task {
-              await viewModel.refreshData()
-            }
-          }
       }
       // 导航目的地
       .navigationDestination(for: MediaInfo.self) { mediaInfo in

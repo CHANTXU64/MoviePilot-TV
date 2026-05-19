@@ -138,6 +138,7 @@ class SubscribeSheetViewModel: ObservableObject {
           _ = try await apiService.searchSubscription(id: id)
         }
         self.isSaved = true
+        NotificationCenter.default.post(name: Notification.Name("subscriptionDidUpdate"), object: nil)
       }
       return success
     } catch {

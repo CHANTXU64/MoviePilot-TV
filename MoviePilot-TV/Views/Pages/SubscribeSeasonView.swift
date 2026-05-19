@@ -145,13 +145,12 @@ struct SubscribeSeasonContentView: View {
       SeasonDetailSheet(season: season, mediaInfo: viewModel.mediaInfo)
     }
     .sheet(item: $viewModel.sheetSubscribe) { subscribe in
-      SubscribeSheet(subscribe: subscribe, isNewSubscription: true)
-        .onDisappear {
-          Task {
-            await viewModel.checkSeasonsStatus()
-            await viewModel.checkSubscriptionStatus()
-          }
+      SubscribeSheet(subscribe: subscribe, isNewSubscription: true) {
+        Task {
+          await viewModel.checkSeasonsStatus()
+          await viewModel.checkSubscriptionStatus()
         }
+      }
     }
     .alert(
       "取消订阅",

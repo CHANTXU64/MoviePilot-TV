@@ -253,13 +253,12 @@ struct MediaDetailView: View {
       }
     }
     .sheet(item: $sheetSubscribe) { subscribe in
-      SubscribeSheet(subscribe: subscribe, isNewSubscription: true)
-        .onDisappear {
-          // 订阅完成后刷新订阅状态（通过 ViewModel 代理到 preloadTask）
-          Task {
-            await viewModel.refreshSubscriptionStatus()
-          }
+      SubscribeSheet(subscribe: subscribe, isNewSubscription: true) {
+        // 订阅完成后刷新订阅状态（通过 ViewModel 代理到 preloadTask）
+        Task {
+          await viewModel.refreshSubscriptionStatus()
         }
+      }
     }
     .alert("取消订阅", isPresented: $showUnsubscribeConfirm) {
       Button("取消", role: .cancel) {}

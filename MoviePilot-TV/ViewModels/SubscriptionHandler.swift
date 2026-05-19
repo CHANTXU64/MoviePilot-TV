@@ -17,7 +17,14 @@ class SubscriptionHandler: ObservableObject {
   func handleSubscribe(_ item: MediaInfo) {
     if item.canDirectlySubscribe {
       Task {
-        let isSubscribed = try? await apiService.checkSubscription(media: item)
+        var isSubscribed = try? await apiService.checkSubscription(media: item)
+        // 豆瓣/Bangumi 来源：后端可能用 TMDB ID 存储订阅，用预加载识别的 tmdbId 补查
+        if isSubscribed != true, item.tmdb_id == nil,
+          let tmdbId = MediaPreloader.shared.peekTask(for: item)?.tmdbId
+        {
+          let tmdbMedia = MediaInfo(tmdb_id: tmdbId, type: item.type)
+          isSubscribed = try? await apiService.checkSubscription(media: tmdbMedia)
+        }
         if isSubscribed == true {
           self.showAlert(title: item.title ?? "", message: "已订阅，请勿重复操作")
         } else {

@@ -26,6 +26,7 @@ class HomeViewModel: ObservableObject {
   private let apiService: APIService
   private let latestMediaSelectedServerKey = "home.latestMedia.selectedServer.v1"
   private var latestMediaByServer: [String: [MediaServerPlayItem]] = [:]
+  private var cancellables = Set<AnyCancellable>()
 
   init(apiService: APIService? = nil) {
     self.apiService = apiService ?? APIService.shared
@@ -33,6 +34,16 @@ class HomeViewModel: ObservableObject {
       UserDefaults.standard.string(
         forKey: latestMediaSelectedServerKey
       ) ?? ""
+
+    // 监听订阅变更通知，从其他页面订阅后首页立即刷新
+    NotificationCenter.default.publisher(for: Notification.Name("subscriptionDidUpdate"))
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in
+        Task { [weak self] in
+          await self?.loadSubscriptions()
+        }
+      }
+      .store(in: &cancellables)
   }
 
   private var hasLoaded = false
@@ -214,6 +225,8 @@ class HomeViewModel: ObservableObject {
       let success = try await apiService.deleteSubscription(id: id)
       if success {
         await loadSubscriptions()
+        // 通知其他页面（如详情页 preloadTask）订阅已变更
+        NotificationCenter.default.post(name: Notification.Name("subscriptionDidUpdate"), object: nil)
       }
       return success
     } catch {
