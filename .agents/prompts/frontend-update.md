@@ -10,7 +10,7 @@
 - 读取当前项目 (`MoviePilot-TV`) 的 `README.md` 文件。
 - 寻找表明当前兼容的前端版本的文本或徽章（通常格式类似 `MoviePilot-vX.Y.Z` 或包含相关版本号说明）。
 - 将提取到的版本号记录为 `<当前兼容版本>`。
-- 简要查阅 `ReviewPlan.md`，了解当前 TV 应用的架构现状和待办事项，以便在后续分析中结合上下文。
+- 简要查阅 `.agents/ReviewPlan.md`，了解当前 TV 应用的架构现状和待办事项，以便在后续分析中结合上下文。
 
 ### 2. 探测前端最新版本
 - 在 `../MoviePilot-Frontend` 目录下执行 Git 操作以获取最新标签（例如：`git fetch --tags --force` 然后列出符合语义化版本的最新 tag）。
