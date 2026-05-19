@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本文件是 `MoviePilot-TV` 仓库的统一 AI 工作入口。它不替代 `.gemini/` 下的专项 Prompt，而是负责先判断任务类型，再路由到对应 Prompt，避免每次都把所有规则一次性塞进上下文。
+本文件是 `MoviePilot-TV` 仓库的统一 AI 工作入口。它不替代 `.agents/prompts/` 下的专项 Prompt，而是负责先判断任务类型，再路由到对应 Prompt，避免每次都把所有规则一次性塞进上下文。
 
 ## 项目背景
 
@@ -17,22 +17,35 @@
 ## 总体使用原则
 
 1. 全程使用中文与用户沟通。
-2. 先判断任务类型，再读取对应 `.gemini/` Prompt。
-3. 不要无脑同时读取所有 `.gemini/` Prompt；只有任务需要时才加载对应文件。
+2. 先判断任务类型，再读取对应 `.agents/prompts/` Prompt。
+3. 不要无脑同时读取所有专项 Prompt；只有任务需要时才加载对应文件。
 4. 专项 Prompt 中的规则优先级高于本文件的泛化说明。
 5. 如果任务同时命中多个类型，先读取最核心的专项 Prompt，再按需补充读取其他 Prompt。
 6. 如果用户明确要求“只分析”“先检查”“不要修改”，只能审查、解释、提出建议，不要改代码、不要提交、不要开 PR。
 7. 如果需要修改代码、配置、文档或工作流，必须遵守本文件的 Git 工作流。
 
+## Prompt 目录
+
+专项 Prompt 统一放在：
+
+```text
+.agents/prompts/
+```
+
+当前包含：
+
+- `.agents/prompts/code-review.md`：深度代码审查 Prompt。
+- `.agents/prompts/frontend-update.md`：上游前端更新影响分析 Prompt。
+
 ## 任务路由表
 
 | 用户任务特征 | 必读 Prompt | 处理方式 |
 | --- | --- | --- |
-| 审查某个 Swift / SwiftUI / tvOS 文件、组件或最近提交；要求“认真检查”“深度审查”“有没有问题” | `.gemini/GEMINI.md.review` | 进入深度代码审查模式。先读 `ReviewPlan.md`，必要时对齐 `../MoviePilot-Frontend`，首次报告只列问题不直接改。 |
-| 分析 MoviePilot-Frontend 上游版本更新、检查前端最新变更对 TV 端影响、做版本兼容评估 | `.gemini/GEMINI.md.frontend-update` | 进入前端更新影响分析模式。先确认 `../MoviePilot-Frontend`，再对比当前兼容版本与最新前端版本，输出结构化影响报告和行动计划。 |
-| 用户要求实现、修复、重构 tvOS 功能，但没有明确说只分析 | 先按任务性质读取 `.gemini/GEMINI.md.review`，如涉及上游前端逻辑再补充 `.gemini/GEMINI.md.frontend-update` | 先理解现有代码与跨端逻辑，再修改。修改前必须基于最新 `main` 创建 `ai/...` 分支。 |
-| 用户要求整理、更新项目文档、Prompt、工作流说明 | 本文件 + 相关 `.gemini/` Prompt | 只整理入口或文档时，不要改变专项 Prompt 原意；应尽量通过引用/路由保留单一事实来源。 |
-| 用户任务无法归类 | 先读本文件，不急着读 `.gemini/` | 简要说明不确定点，优先做只读调查；一旦判断任务类型，再加载对应专项 Prompt。 |
+| 审查某个 Swift / SwiftUI / tvOS 文件、组件或最近提交；要求“认真检查”“深度审查”“有没有问题” | `.agents/prompts/code-review.md` | 进入深度代码审查模式。先读 `ReviewPlan.md`，必要时对齐 `../MoviePilot-Frontend`，首次报告只列问题不直接改。 |
+| 分析 MoviePilot-Frontend 上游版本更新、检查前端最新变更对 TV 端影响、做版本兼容评估 | `.agents/prompts/frontend-update.md` | 进入前端更新影响分析模式。先确认 `../MoviePilot-Frontend`，再对比当前兼容版本与最新前端版本，输出结构化影响报告和行动计划。 |
+| 用户要求实现、修复、重构 tvOS 功能，但没有明确说只分析 | 先按任务性质读取 `.agents/prompts/code-review.md`，如涉及上游前端逻辑再补充 `.agents/prompts/frontend-update.md` | 先理解现有代码与跨端逻辑，再修改。修改前必须基于最新 `main` 创建 `ai/...` 分支。 |
+| 用户要求整理、更新项目文档、Prompt、工作流说明 | 本文件 + 相关专项 Prompt | 只整理入口或文档时，不要改变专项 Prompt 原意；应尽量通过引用/路由保留单一事实来源。 |
+| 用户任务无法归类 | 先读本文件，不急着读专项 Prompt | 简要说明不确定点，优先做只读调查；一旦判断任务类型，再加载对应专项 Prompt。 |
 
 ## 路由细则
 
@@ -47,7 +60,7 @@
 
 执行规则：
 
-1. 必须读取 `.gemini/GEMINI.md.review`。
+1. 必须读取 `.agents/prompts/code-review.md`。
 2. 必须优先读取 `ReviewPlan.md`，同步历史审查进度和跨文件副作用。
 3. 如果审查对象依赖 `ReviewPlan.md` 中记录过副作用的组件，必须打开对应源码核对，不能只凭备注判断。
 4. 对核心业务逻辑、网络请求、模型解析等内容，必须按专项 Prompt 要求检索 `../MoviePilot-Frontend` 的对应实现。
@@ -63,7 +76,7 @@
 
 执行规则：
 
-1. 必须读取 `.gemini/GEMINI.md.frontend-update`。
+1. 必须读取 `.agents/prompts/frontend-update.md`。
 2. 必须确认 `../MoviePilot-Frontend` 存在且是合法 Git 仓库；不存在时停止并提示用户补齐。
 3. 必须读取当前项目 `README.md` 中的兼容版本说明。
 4. 必须结合 `ReviewPlan.md` 理解 TV 端当前架构状态。
@@ -117,7 +130,7 @@
 
 ## 文档维护规则
 
-1. `.gemini/` 下的专项 Prompt 是具体任务的单一事实来源。
+1. `.agents/prompts/` 下的专项 Prompt 是具体任务的单一事实来源。
 2. `AGENTS.md` 只维护入口、路由、通用项目约束和 Git 工作流。
 3. 如果新增专项 Prompt，应同步更新本文件的任务路由表。
-4. 如果修改专项 Prompt 的行为规则，应优先修改 `.gemini/` 对应文件，再检查本文件是否需要更新路由描述。
+4. 如果修改专项 Prompt 的行为规则，应优先修改 `.agents/prompts/` 对应文件，再检查本文件是否需要更新路由描述。
