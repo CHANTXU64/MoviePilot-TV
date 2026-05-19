@@ -24,7 +24,7 @@
 6. 如果用户明确要求“只分析”“先检查”“不要修改”，只能审查、解释、提出建议，不要改代码、不要提交、不要开 PR。
 7. 如果需要修改代码、配置、文档或工作流，必须遵守本文件的 Git 工作流。
 
-## Prompt 目录
+## Prompt 与审查计划目录
 
 专项 Prompt 统一放在：
 
@@ -32,43 +32,70 @@
 .agents/prompts/
 ```
 
+AI + 人工收尾联合审查计划放在：
+
+```text
+.agents/ReviewPlan.md
+```
+
 当前包含：
 
-- `.agents/prompts/code-review.md`：深度代码审查 Prompt。
+- `.agents/prompts/final-review.md`：AI 大量编码后的收尾联合审查 Prompt。
 - `.agents/prompts/frontend-update.md`：上游前端更新影响分析 Prompt。
 - `.agents/prompts/release.md`：新版本发布 Prompt。
+- `.agents/ReviewPlan.md`：全量收尾联合审查计划与跨文件副作用记录。
 
 ## 任务路由表
 
 | 用户任务特征 | 必读 Prompt | 处理方式 |
 | --- | --- | --- |
-| 审查某个 Swift / SwiftUI / tvOS 文件、组件或最近提交；要求“认真检查”“深度审查”“有没有问题” | `.agents/prompts/code-review.md` | 进入深度代码审查模式。先读 `ReviewPlan.md`，必要时对齐 `../MoviePilot-Frontend`，首次报告只列问题不直接改。 |
+| AI 写了大量代码后，要求做全量收尾审查、人工 + AI 联合审查、按 ReviewPlan 继续审查、继续审查下一个文件 | `.agents/prompts/final-review.md` | 进入收尾联合审查模式。先读 `.agents/ReviewPlan.md`，按计划单文件推进；首次报告只列问题不直接改。 |
+| 普通检查最近提交、普通看分支有没有问题、普通 PR Review、临时检查某个文件 | 无固定专项 Prompt，先读本文件并按用户范围做只读调查 | 不要默认套用 `.agents/prompts/final-review.md`。直接围绕用户指定的提交/分支/文件检查，必要时再读取相关源码、CI、测试或上游前端实现。 |
 | 分析 MoviePilot-Frontend 上游版本更新、检查前端最新变更对 TV 端影响、做版本兼容评估 | `.agents/prompts/frontend-update.md` | 进入前端更新影响分析模式。先确认 `../MoviePilot-Frontend`，再对比当前兼容版本与最新前端版本，输出结构化影响报告和行动计划。 |
 | 发布新版本、生成 Release Notes、创建 GitHub Release、构建 unsigned IPA | `.agents/prompts/release.md` | 进入发布流程。版本号必须由用户提供，Release Notes 必须先给用户确认，确认后才允许提交到 GitHub。 |
-| 用户要求实现、修复、重构 tvOS 功能，但没有明确说只分析 | 先按任务性质读取 `.agents/prompts/code-review.md`，如涉及上游前端逻辑再补充 `.agents/prompts/frontend-update.md` | 先理解现有代码与跨端逻辑，再修改。修改前必须基于最新 `main` 创建 `ai/...` 分支。 |
+| 用户要求实现、修复、重构 tvOS 功能，但没有明确说只分析 | 本文件 + 与任务直接相关的源码；仅在涉及上游前端差异时补充 `.agents/prompts/frontend-update.md` | 先理解现有代码与跨端逻辑，再修改。修改前必须基于最新 `main` 创建 `ai/...` 分支。不要把实现任务误路由到收尾联合审查 Prompt。 |
 | 用户要求整理、更新项目文档、Prompt、工作流说明 | 本文件 + 相关专项 Prompt | 只整理入口或文档时，不要改变专项 Prompt 原意；应尽量通过引用/路由保留单一事实来源。 |
 | 用户任务无法归类 | 先读本文件，不急着读专项 Prompt | 简要说明不确定点，优先做只读调查；一旦判断任务类型，再加载对应专项 Prompt。 |
 
 ## 路由细则
 
-### 1. 代码审查类任务
+### 1. 收尾联合审查任务
 
 命中示例：
 
-- “检查这个文件”
-- “认真看最近一次提交”
-- “这个分支有没有问题”
-- “深度审查某个 ViewModel / Service / SwiftUI View”
+- “AI 写了很多代码，最后一起审查一下”
+- “按 ReviewPlan 继续审查”
+- “人工和 AI 一起做最终审查”
+- “全量代码审查 / 收尾审查 / 批量修改后复核”
+- “继续审查下一个文件”
 
 执行规则：
 
-1. 必须读取 `.agents/prompts/code-review.md`。
-2. 必须优先读取 `ReviewPlan.md`，同步历史审查进度和跨文件副作用。
-3. 如果审查对象依赖 `ReviewPlan.md` 中记录过副作用的组件，必须打开对应源码核对，不能只凭备注判断。
-4. 对核心业务逻辑、网络请求、模型解析等内容，必须按专项 Prompt 要求检索 `../MoviePilot-Frontend` 的对应实现。
-5. 初次报告只列问题、风险和位置，不要直接给修改代码，除非用户明确要求修复。
+1. 必须读取 `.agents/prompts/final-review.md`。
+2. 必须优先读取 `.agents/ReviewPlan.md`，同步审查进度和跨文件副作用。
+3. 该 Prompt 只用于 AI 大量编码后的收尾联合审查，不用于普通提交检查或普通 PR Review。
+4. 如果审查对象依赖 `.agents/ReviewPlan.md` 中记录过副作用的组件，必须打开对应源码核对，不能只凭备注判断。
+5. 对核心业务逻辑、网络请求、模型解析等内容，必须按专项 Prompt 要求检索 `../MoviePilot-Frontend` 的对应实现。
+6. 初次报告只列问题、风险和位置，不要直接给修改代码，除非用户明确要求修复。
+7. 只有用户明确表示当前文件审查结束或要求归档时，才更新 `.agents/ReviewPlan.md`。
 
-### 2. 前端上游更新影响分析任务
+### 2. 普通检查 / 普通 PR Review 任务
+
+命中示例：
+
+- “检查最近一次提交”
+- “认真看这个分支有没有问题”
+- “看一下这个 PR”
+- “临时检查这个文件”
+
+执行规则：
+
+1. 不要默认读取 `.agents/prompts/final-review.md`。
+2. 按用户给定范围直接检查提交、diff、分支或文件。
+3. 需要跨端对齐时可以读取 `../MoviePilot-Frontend` 对应实现，但不要强行按 `.agents/ReviewPlan.md` 的全量计划推进。
+4. 如果用户明确说“按 ReviewPlan”或“收尾联合审查”，再切换到 `.agents/prompts/final-review.md`。
+
+### 3. 前端上游更新影响分析任务
 
 命中示例：
 
@@ -81,10 +108,10 @@
 1. 必须读取 `.agents/prompts/frontend-update.md`。
 2. 必须确认 `../MoviePilot-Frontend` 存在且是合法 Git 仓库；不存在时停止并提示用户补齐。
 3. 必须读取当前项目 `README.md` 中的兼容版本说明。
-4. 必须结合 `ReviewPlan.md` 理解 TV 端当前架构状态。
+4. 必须结合 `.agents/ReviewPlan.md` 理解 TV 端当前架构状态。
 5. 输出应包含版本跨度、API/模型影响、TV 端适配建议、行动计划和文档更新建议。
 
-### 3. 发布类任务
+### 4. 发布类任务
 
 命中示例：
 
@@ -101,7 +128,7 @@
 4. 用户确认 Release Notes 前，不得创建 GitHub Release。
 5. 正式发布前必须满足发布 Prompt 中的 CI/测试门禁。
 
-### 4. 实现与修复类任务
+### 5. 实现与修复类任务
 
 当用户要求实际改代码时：
 
@@ -268,6 +295,7 @@ xcrun simctl list devices tvOS available
 ## 文档维护规则
 
 1. `.agents/prompts/` 下的专项 Prompt 是具体任务的单一事实来源。
-2. `AGENTS.md` 只维护入口、路由、通用项目约束和 Git 工作流。
-3. 如果新增专项 Prompt，应同步更新本文件的任务路由表。
-4. 如果修改专项 Prompt 的行为规则，应优先修改 `.agents/prompts/` 对应文件，再检查本文件是否需要更新路由描述。
+2. `.agents/ReviewPlan.md` 是收尾联合审查的进度与跨文件副作用记录。
+3. `AGENTS.md` 只维护入口、路由、通用项目约束和 Git 工作流。
+4. 如果新增专项 Prompt，应同步更新本文件的任务路由表。
+5. 如果修改专项 Prompt 的行为规则，应优先修改 `.agents/prompts/` 对应文件，再检查本文件是否需要更新路由描述。
