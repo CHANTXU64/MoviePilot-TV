@@ -286,12 +286,17 @@ class MediaDetailViewModel: ObservableObject {
     await withTaskGroup(of: Void.self) { group in
       // 刷新全局订阅状态
       if detail.canDirectlySubscribe {
+        let detail = self.detail
+        let preloadTmdbId = self.preloadTask?.tmdbId
+        let tmdbMedia: MediaInfo? = {
+          guard detail.tmdb_id == nil, let tmdbId = preloadTmdbId else { return nil }
+          return MediaInfo(tmdb_id: tmdbId, type: detail.type)
+        }()
         group.addTask {
           do {
-            var isSubscribed = try await self.apiService.checkSubscription(media: self.detail)
+            var isSubscribed = try await self.apiService.checkSubscription(media: detail)
             // 豆瓣/Bangumi 来源：用识别到的 tmdbId 补查
-            if !isSubscribed, self.detail.tmdb_id == nil, let tmdbId = self.preloadTask?.tmdbId {
-              let tmdbMedia = MediaInfo(tmdb_id: tmdbId, type: self.detail.type)
+            if !isSubscribed, let tmdbMedia {
               isSubscribed = try await self.apiService.checkSubscription(media: tmdbMedia)
             }
             await MainActor.run {
