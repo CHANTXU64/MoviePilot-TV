@@ -47,7 +47,8 @@ class SystemViewModel: ObservableObject {
       return Set(array)
     }
     set {
-      let array = Array(newValue)
+      let normalizedSites = normalizeDefaultSearchSites(newValue)
+      let array = normalizedSites.sorted()
       if array.isEmpty {
         UserDefaults.standard.removeObject(forKey: defaultSearchSitesUserDefaultsKey)
       } else {
@@ -214,6 +215,7 @@ class SystemViewModel: ObservableObject {
     isLoadingSites = true
     do {
       availableSites = try await APIService.shared.fetchSites()
+      defaultSearchSites = defaultSearchSites
       print("✅ [SystemViewModel] 加载到 \(availableSites.count) 个站点")
     } catch {
       print("❌ [SystemViewModel] 加载站点失败: \(error)")
@@ -270,7 +272,7 @@ class SystemViewModel: ObservableObject {
   /// 获取默认搜索站点的逗号分隔字符串
   static var defaultSearchSitesString: String? {
     let sites = currentDefaultSearchSites()
-    return sites.isEmpty ? nil : sites.map { String($0) }.joined(separator: ",")
+    return sites.isEmpty ? nil : sites.sorted().map { String($0) }.joined(separator: ",")
   }
 
   /// 当前是否等待 MediaDetail 背景/海报预加载完成。
@@ -279,5 +281,12 @@ class SystemViewModel: ObservableObject {
       return true
     }
     return UserDefaults.standard.bool(forKey: waitMediaDetailBackgroundImageKey)
+  }
+
+  private func normalizeDefaultSearchSites(_ sites: Set<Int>) -> Set<Int> {
+    guard !availableSites.isEmpty else { return sites }
+
+    let availableSiteIds = Set(availableSites.map(\.id))
+    return sites.intersection(availableSiteIds)
   }
 }

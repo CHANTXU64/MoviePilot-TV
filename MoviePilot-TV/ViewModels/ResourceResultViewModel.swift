@@ -20,6 +20,7 @@ class ResourceResultViewModel: ObservableObject {
   @Published var searchProgress: Double = 0.0
 
   private var searchStreamTask: Task<Void, Never>?
+  private let searchStreamDoneCloseDelay: UInt64 = 1_500_000_000
 
   private let apiService = APIService.shared
 
@@ -91,6 +92,7 @@ class ResourceResultViewModel: ObservableObject {
           }
 
           if event.type == "done" {
+            try? await Task.sleep(nanoseconds: searchStreamDoneCloseDelay)
             break
           }
         }

@@ -1867,7 +1867,9 @@ struct SubscribeShare: Codable, Identifiable, Hashable {
 
 struct ReorganizeForm: Codable {
   // 文件项
-  var fileitem: FileItem
+  var fileitem: FileItem?
+  // 批量文件项
+  var fileitems: [FileItem]?
   // 历史ID
   var logid: Int
   // 目标存储
@@ -1904,6 +1906,53 @@ struct ReorganizeForm: Codable {
   var library_type_folder: Bool?
   // 媒体库类别子目录
   var library_category_folder: Bool?
+
+  enum CodingKeys: String, CodingKey {
+    case fileitem, fileitems, logid, target_storage, transfer_type, target_path, min_filesize, scrape, from_history,
+      type_name, tmdbid, doubanid, episode_group, season, episode_detail, episode_format, episode_offset,
+      episode_part, library_type_folder, library_category_folder
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+
+    if let fileitems, !fileitems.isEmpty {
+      try container.encode(fileitems, forKey: .fileitems)
+    } else if let fileitem {
+      try container.encode(fileitem, forKey: .fileitem)
+    }
+
+    try container.encode(logid, forKey: .logid)
+    try container.encode(target_storage, forKey: .target_storage)
+    try container.encode(transfer_type, forKey: .transfer_type)
+
+    if target_path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      try container.encodeNil(forKey: .target_path)
+    } else {
+      try container.encode(target_path, forKey: .target_path)
+    }
+
+    try container.encode(min_filesize, forKey: .min_filesize)
+    try container.encode(scrape, forKey: .scrape)
+    try container.encode(from_history, forKey: .from_history)
+    try container.encodeIfPresent(type_name, forKey: .type_name)
+    try container.encodeIfPresent(tmdbid, forKey: .tmdbid)
+    try container.encodeIfPresent(doubanid, forKey: .doubanid)
+
+    if let episodeGroup = episode_group?.trimmingCharacters(in: .whitespacesAndNewlines), !episodeGroup.isEmpty {
+      try container.encode(episodeGroup, forKey: .episode_group)
+    } else {
+      try container.encodeNil(forKey: .episode_group)
+    }
+
+    try container.encodeIfPresent(season, forKey: .season)
+    try container.encodeIfPresent(episode_detail, forKey: .episode_detail)
+    try container.encodeIfPresent(episode_format, forKey: .episode_format)
+    try container.encodeIfPresent(episode_offset, forKey: .episode_offset)
+    try container.encodeIfPresent(episode_part, forKey: .episode_part)
+    try container.encodeIfPresent(library_type_folder, forKey: .library_type_folder)
+    try container.encodeIfPresent(library_category_folder, forKey: .library_category_folder)
+  }
 }
 
 /// 资源搜索的流式响应事件 (SSE)

@@ -13,6 +13,7 @@ class SiteFilterViewModel: ObservableObject {
     do {
       let sites = try await apiService.fetchSites()
       self.availableSites = sites
+      normalizeSelectedSites()
     } catch {
       print("Failed to load sites: \(error)")
     }
@@ -32,6 +33,16 @@ class SiteFilterViewModel: ObservableObject {
   }
 
   var sitesString: String? {
-    selectedSites.isEmpty ? nil : selectedSites.map { String($0) }.joined(separator: ",")
+    selectedSites.isEmpty ? nil : selectedSites.sorted().map { String($0) }.joined(separator: ",")
+  }
+
+  private func normalizeSelectedSites() {
+    guard !availableSites.isEmpty else { return }
+
+    let availableSiteIds = Set(availableSites.map(\.id))
+    let normalizedSites = selectedSites.intersection(availableSiteIds)
+    if normalizedSites != selectedSites {
+      selectedSites = normalizedSites
+    }
   }
 }
