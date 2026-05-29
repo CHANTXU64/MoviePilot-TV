@@ -38,6 +38,12 @@ nonisolated private func firstNonWhitespaceByte(in data: Data) -> UInt8? {
   }
 }
 
+nonisolated private func encodeURIComponent(_ value: String) -> String? {
+  let allowed = CharacterSet(
+    charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
+  return value.addingPercentEncoding(withAllowedCharacters: allowed)
+}
+
 nonisolated private func decodeOrUnwrapSync<T: Decodable>(from data: Data) throws -> T {
   let firstByte = firstNonWhitespaceByte(in: data)
 
@@ -97,7 +103,7 @@ nonisolated private func posterImageURL(posterPath: String?, config: MediaImageU
 
   if let currentUrl = url, currentUrl.contains("doubanio.com") {
     guard
-      let encodedUrl = currentUrl.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+      let encodedUrl = encodeURIComponent(currentUrl)
     else {
       return nil
     }
@@ -106,7 +112,7 @@ nonisolated private func posterImageURL(posterPath: String?, config: MediaImageU
 
   if config.useImageCache, let currentUrl = url {
     guard
-      let encodedUrl = currentUrl.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+      let encodedUrl = encodeURIComponent(currentUrl)
     else {
       return nil
     }
@@ -125,7 +131,7 @@ nonisolated private func backdropImageURL(backdropPath: String?, config: MediaIm
   guard let url = backdropPath, !url.isEmpty else { return nil }
 
   if config.useImageCache {
-    guard let encodedUrl = url.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+    guard let encodedUrl = encodeURIComponent(url)
     else {
       return nil
     }
@@ -1575,7 +1581,7 @@ class APIService: ObservableObject {
     guard let url = poster, !url.isEmpty else { return nil }
 
     if useImageCache {
-      guard let encodedUrl = url.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+      guard let encodedUrl = encodeURIComponent(url)
       else {
         return nil
       }
@@ -1608,7 +1614,7 @@ class APIService: ObservableObject {
     // 2. 如果地址中包含 douban 则使用中转代理 (豆瓣必须中转)
     if let currentUrl = url, currentUrl.contains("doubanio.com") {
       guard
-        let encodedUrl = currentUrl.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+        let encodedUrl = encodeURIComponent(currentUrl)
       else {
         return nil
       }
@@ -1618,7 +1624,7 @@ class APIService: ObservableObject {
     // 2. 否则根据设置判断是否使用图片缓存
     if useImageCache, let currentUrl = url {
       guard
-        let encodedUrl = currentUrl.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+        let encodedUrl = encodeURIComponent(currentUrl)
       else {
         return nil
       }
@@ -1641,7 +1647,7 @@ class APIService: ObservableObject {
 
     // 使用图片缓存
     if useImageCache {
-      guard let encodedUrl = url.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+      guard let encodedUrl = encodeURIComponent(url)
       else {
         return nil
       }
@@ -1663,7 +1669,7 @@ class APIService: ObservableObject {
 
   func getMediaServerPosterImageURL(image: String?, useCookies: Bool?) -> URL? {
     guard let path = image, !path.isEmpty else { return nil }
-    guard let encodedUrl = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+    guard let encodedUrl = encodeURIComponent(path)
     else {
       return nil
     }
@@ -1762,7 +1768,7 @@ class APIService: ObservableObject {
     }
 
     if useImageCache {
-      guard let encodedUrl = url.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+      guard let encodedUrl = encodeURIComponent(url)
       else {
         return nil
       }
