@@ -269,10 +269,34 @@ class SystemViewModel: ObservableObject {
     return Set(array)
   }
 
+  /// 获取已按当前可用站点清理后的默认搜索站点。
+  static func normalizedCurrentDefaultSearchSites() async -> Set<Int> {
+    let storedSites = currentDefaultSearchSites()
+    guard !storedSites.isEmpty else { return [] }
+
+    do {
+      let availableSites = try await APIService.shared.fetchSites()
+      let availableSiteIds = Set(availableSites.map(\.id))
+      let normalizedSites = storedSites.intersection(availableSiteIds)
+      if normalizedSites != storedSites {
+        persistDefaultSearchSites(normalizedSites)
+      }
+      return normalizedSites
+    } catch {
+      print("❌ [SystemViewModel] 默认搜索站点归一化失败: \(error)")
+      return storedSites
+    }
+  }
+
+  /// 获取已按当前可用站点清理后的默认搜索站点字符串。
+  static func normalizedDefaultSearchSitesString() async -> String? {
+    siteIdsString(from: await normalizedCurrentDefaultSearchSites())
+  }
+
   /// 获取默认搜索站点的逗号分隔字符串
+  @available(*, deprecated, message: "搜索前请使用 normalizedDefaultSearchSitesString()，避免发送已删除站点。")
   static var defaultSearchSitesString: String? {
-    let sites = currentDefaultSearchSites()
-    return sites.isEmpty ? nil : sites.sorted().map { String($0) }.joined(separator: ",")
+    siteIdsString(from: currentDefaultSearchSites())
   }
 
   /// 当前是否等待 MediaDetail 背景/海报预加载完成。
@@ -288,5 +312,18 @@ class SystemViewModel: ObservableObject {
 
     let availableSiteIds = Set(availableSites.map(\.id))
     return sites.intersection(availableSiteIds)
+  }
+
+  private static func persistDefaultSearchSites(_ sites: Set<Int>) {
+    let array = sites.sorted()
+    if array.isEmpty {
+      UserDefaults.standard.removeObject(forKey: userDefaultsKey("defaultSearchSites"))
+    } else {
+      UserDefaults.standard.set(array, forKey: userDefaultsKey("defaultSearchSites"))
+    }
+  }
+
+  private static func siteIdsString(from sites: Set<Int>) -> String? {
+    sites.isEmpty ? nil : sites.sorted().map { String($0) }.joined(separator: ",")
   }
 }

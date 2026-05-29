@@ -92,6 +92,7 @@ class ResourceResultViewModel: ObservableObject {
           }
 
           if event.type == "done" {
+            // 与 Web v2.13.2 保持一致：给后端搜索结果缓存写入留出收尾时间。
             try? await Task.sleep(nanoseconds: searchStreamDoneCloseDelay)
             break
           }

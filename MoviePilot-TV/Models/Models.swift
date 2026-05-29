@@ -1868,7 +1868,7 @@ struct SubscribeShare: Codable, Identifiable, Hashable {
 struct ReorganizeForm: Codable {
   // 文件项
   var fileitem: FileItem?
-  // 批量文件项
+  // 批量文件项；仅在调用方实际提供多文件上下文时编码，并优先于 fileitem。
   var fileitems: [FileItem]?
   // 历史ID
   var logid: Int
@@ -1876,7 +1876,7 @@ struct ReorganizeForm: Codable {
   var target_storage: String
   // 整理方式
   var transfer_type: String
-  // 目标路径
+  // 目标路径；空白值编码为 null，以匹配 v2.13.2 手动整理接口语义。
   var target_path: String
   // 最小文件大小
   var min_filesize: Int
@@ -1890,7 +1890,7 @@ struct ReorganizeForm: Codable {
   var tmdbid: Int?
   // 豆瓣 ID
   var doubanid: String?
-  // 剧集组编号
+  // 剧集组编号；空白值编码为 null。
   var episode_group: String?
   // 季号
   var season: Int?

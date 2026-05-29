@@ -21,6 +21,11 @@ class MediaActionHandler: ObservableObject {
     )
   }
 
+  func searchResourcesTargetUsingDefaultSites(for item: MediaInfo) async -> ResourceSearchRequest {
+    let sites = await SystemViewModel.normalizedDefaultSearchSitesString()
+    return searchResourcesTarget(for: item, sites: sites)
+  }
+
   func getTMDBJumpTarget(
     for item: MediaInfo, targetTmdbId: Int? = nil
   ) async -> MediaInfo? {
