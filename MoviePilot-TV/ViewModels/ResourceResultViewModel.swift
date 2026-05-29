@@ -20,6 +20,7 @@ class ResourceResultViewModel: ObservableObject {
   @Published var searchProgress: Double = 0.0
 
   private var searchStreamTask: Task<Void, Never>?
+  private let searchStreamDoneCloseDelay: UInt64 = 1_500_000_000
 
   private let apiService = APIService.shared
 
@@ -91,6 +92,8 @@ class ResourceResultViewModel: ObservableObject {
           }
 
           if event.type == "done" {
+            // 与 Web v2.13.2 保持一致：给后端搜索结果缓存写入留出收尾时间。
+            try? await Task.sleep(nanoseconds: searchStreamDoneCloseDelay)
             break
           }
         }

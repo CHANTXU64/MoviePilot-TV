@@ -28,7 +28,7 @@ class ReorganizeViewModel: ObservableObject {
 
     // 在 init() 中初始化 form，为必须的属性提供默认值
     self.form = ReorganizeForm(
-      fileitem: fileItem ?? FileItem(name: "", path: "", type: "", size: nil),
+      fileitem: fileItem,
       logid: logIds.first ?? 0,
       target_storage: targetStorage ?? "local",
       transfer_type: "",
@@ -95,8 +95,8 @@ class ReorganizeViewModel: ObservableObject {
         for id in logIds {
           var batchForm = form
           batchForm.logid = id
-          // 历史重做不需要 fileitem，但为满足非可选属性，提供一个空对象
-          batchForm.fileitem = FileItem(name: "", path: "", type: "", size: nil)
+          batchForm.fileitem = nil
+          batchForm.fileitems = nil
           let success = try await apiService.manualTransfer(form: batchForm, background: background)
           if !success {
             allSuccess = false
@@ -159,6 +159,6 @@ class ReorganizeViewModel: ObservableObject {
       return
     }
     // 对于文件整理模式，如果是文件夹类型，则禁用此功能
-    isEpisodeDetailDisabled = (form.fileitem.type == "dir")
+    isEpisodeDetailDisabled = (form.fileitem?.type == "dir")
   }
 }
