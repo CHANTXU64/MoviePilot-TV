@@ -51,6 +51,38 @@
   - **临时方案**: 在 tvOS 17.x 系统上，App 会自动禁用后端的图片代理/缓存功能以尝试规避部分问题。
   - **建议**: 升级至 **tvOS 18.0+** 可解决所有 WEBP 图片加载问题，获得最佳体验。
 
+## 后端兼容性测试
+
+默认测试不会访问真实后端。若需要在升级 MoviePilot 后端后验证 TV 端兼容性，可复制 `.env.compatibility.example` 为 `.env.compatibility`，填写后端地址、用户名和密码，然后运行 Xcode 测试。
+
+```sh
+xcodebuild test \
+  -project "MoviePilot-TV.xcodeproj" \
+  -scheme "MoviePilot-TV" \
+  -configuration Debug \
+  -destination "platform=tvOS Simulator,name=Apple TV" \
+  CODE_SIGNING_ALLOWED=NO \
+  CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGN_IDENTITY="" \
+  -skipPackagePluginValidation
+```
+
+### 真实后端只读套件
+
+`.env.compatibility` 只用于真实 MoviePilot 后端的只读兼容性检查。已配置时，测试会登录后端并按 TV 端真实页面入口巡检：系统配置、仪表盘、站点/下载器/目录配置、订阅读取、媒体服务器最近添加、下载中任务、推荐货架、发现页、搜索、详情页、演员/人物和分季数据。未配置时，这组测试会自动跳过。
+
+巡检采集到的海报、背景图、头像和媒体服务器图片都会实际下载，并在 tvOS XCTest 运行环境中用系统图片解码能力验证；如果后端改成 Apple TV 不支持的图片格式，即使 API 返回正常也会失败。测试也会检查图片代理 URL 是否把内层 query/fragment 正确保留，避免图片地址被外层参数截断。
+
+这组测试不会新增订阅、删除订阅、添加下载、暂停/恢复下载、重置订阅、触发订阅搜索或执行手动整理。可选的 `MOVIEPILOT_COMPAT_METADATA_QUERY` / `MOVIEPILOT_COMPAT_METADATA_QUERIES` 只会调用元数据搜索和详情读取，不会调用资源搜索或下载相关接口。
+
+如果在独立 worktree 中运行测试，可以用 `MOVIEPILOT_COMPAT_ENV_FILE=/absolute/path/.env.compatibility` 指向已有配置文件；命令行环境变量会覆盖配置文件中的同名值。
+
+### 破坏性测试策略
+
+会改变真实数据或触发后台任务的兼容性检查，不应使用个人正在使用的 `.env.compatibility` 后端执行。后续应单独做一套隔离测试，例如基于 MoviePilot 源码、一次性测试数据库和测试媒体目录启动临时后端，再对新增/删除订阅、下载任务、整理任务等写操作做验证。
+
+MoviePilot 源码本身有认证、插件和环境依赖，部分代码在本地可能无法完整运行；这类测试需要把认证、数据库、下载器和媒体服务器都放在可丢弃环境里，不能复用个人生产后端。
+
 ## 安装指南
 
 > [!IMPORTANT]

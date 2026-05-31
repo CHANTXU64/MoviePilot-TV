@@ -12,3 +12,7 @@
 .swiftpm/configuration/user.settings
 .build/
 /build
+.env
+.env.*
+!.env.example
+!.env.compatibility.example
