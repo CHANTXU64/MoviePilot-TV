@@ -1079,6 +1079,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     XCTAssertFalse(result.timedOut, "\(label) timed out before producing a terminal event", file: file, line: line)
     XCTAssertNil(result.errorMessage, "\(label) returned stream error: \(result.errorMessage ?? "")", file: file, line: line)
     XCTAssertGreaterThan(result.eventCount, 0, "\(label) produced no decodable SSE events", file: file, line: line)
+    XCTAssertTrue(result.sawTerminalEvent, "\(label) produced events but no terminal SSE event", file: file, line: line)
   }
 
   @MainActor

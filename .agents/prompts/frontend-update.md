@@ -140,6 +140,8 @@
 
 ## ✅ 真实后端兼容验证
 - [ ] 若存在 `.env.compatibility` 或用户提供了 `MOVIEPILOT_COMPAT_ENV_FILE`，必须运行真实后端兼容测试，至少覆盖 `BackendCompatibilityReadOnlyTests`。
+- [ ] 运行真实后端兼容测试时，必须使用串行 XCTest 参数：`-parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1`。如果看到多个 `Clone N of Apple TV`，说明测试被并行分发到了多个模拟器，应重新按串行方式运行，尤其不要并行执行副作用套件。
+- [ ] `xcodebuild test` 在 `Testing started` 后数分钟没有增量输出不等于卡死；真实后端图片巡检会扫描多个 TV 页面入口、下载图片并等待 tvOS 解码。必须等待合理超时窗口，或查看 `.xcresult` 摘要后再判断是否卡住。
 - [ ] 订阅搜索、原参数更新订阅、暂停正在订阅项后恢复、重置订阅后立即搜索、手动重新整理、AI 重新整理属于真实后端副作用套件；运行 `BackendCompatibilitySideEffectTests` 时默认执行，除非 `.env.compatibility` 中把 `MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS` 或对应测试开关显式设为 `false`。
 - [ ] 若未配置真实后端，必须确认测试按预期跳过，并在最终回复中说明缺少真实后端配置。
 - [ ] 如果真实后端兼容测试失败，必须区分失败原因：TV 端 API/模型兼容问题、MoviePilot 后端问题、第三方数据源/图片源问题、或本地环境问题。不要只写“测试失败”。
