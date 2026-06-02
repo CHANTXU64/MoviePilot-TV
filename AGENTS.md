@@ -6,13 +6,14 @@
 
 `MoviePilot-TV` 是基于 MoviePilot 前端（Web/Vue）架构向 Apple TV / tvOS 平台迁移的原生客户端项目，主要技术栈为 Swift、SwiftUI、tvOS Focus Engine 与 Apple 平台网络/状态管理体系。
 
-与本项目相关的上游前端仓库默认位于同级目录：
+与本项目相关的上游仓库默认位于同级目录：
 
 ```text
 ../MoviePilot-Frontend
+../MoviePilot
 ```
 
-如果任务涉及 Web 前端与 TV 端逻辑对齐，必须优先确认该目录存在且是合法 Git 仓库。
+如果任务涉及上游 Web 前端、后端接口或 TV 端逻辑对齐，必须优先确认相关目录存在且是合法 Git 仓库。
 
 ## 通用执行约束
 
@@ -31,7 +32,7 @@
 | --- | --- |
 | 最终联合审查、AI + 人工收尾审查、按 ReviewPlan 继续、继续审查下一个文件 | `.agents/prompts/final-review.md` + `.agents/ReviewPlan.md` |
 | 普通 PR Review、检查最近提交、检查分支、临时检查某个文件 | 不读取专项 Prompt；直接查看对应 diff / 提交 / 源码 |
-| 检查 `MoviePilot-Frontend` 上游更新对 TV 端影响 | `.agents/prompts/frontend-update.md` + `.agents/ReviewPlan.md` |
+| 检查 `MoviePilot-Frontend` / `MoviePilot` 上游更新对 TV 端影响 | `.agents/prompts/frontend-update.md` + `.agents/ReviewPlan.md` |
 | 准备发布、生成 Release Notes、创建 GitHub Release | `.agents/prompts/release.md` |
 | 整理 Prompt、文档、工作流 | 读取被修改的相关文件；如新增专项 Prompt，同步更新本路由表 |
 
@@ -39,7 +40,7 @@
 
 1. `.agents/prompts/final-review.md` 只用于明确的最终联合审查；普通 PR Review、最近提交检查、分支检查不要读取它。
 2. 如果用户意图不明确，先按普通只读调查处理；确认任务类型后再读取对应专项 Prompt。
-3. 前端上游更新分析必须确认 `../MoviePilot-Frontend` 存在且是合法 Git 仓库。
+3. 上游兼容更新分析必须确认 `../MoviePilot-Frontend` 和 `../MoviePilot` 存在且是合法 Git 仓库；如果用户只是临时排查某个运行 Bug，可以说明缺失仓库会降低判断完整性后继续分析。
 4. 发布类任务必须读取 `.agents/prompts/release.md`；版本号必须由用户提供，Release Notes 必须先给用户确认。
 
 ## 运行环境与测试策略
