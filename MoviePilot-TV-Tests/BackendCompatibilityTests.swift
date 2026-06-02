@@ -12,6 +12,24 @@ private struct BackendCompatibilityConfig {
   let requireMediaServer: Bool
   let requireLatestMedia: Bool
   let metadataQueries: [String]
+  let recognitionTitles: [String]
+  let resourceQueries: [String]
+  let resourceMediaIDs: [String]
+  let resourceSites: String?
+  let requireResourceResults: Bool
+  let checkSeasonAvailability: Bool
+  let collectionIDs: [Int]
+  let testResourceSearchStreams: Bool
+  let enableSideEffects: Bool
+  let testSubscriptionSearch: Bool
+  let testSubscriptionUpdate: Bool
+  let testSubscriptionPauseResume: Bool
+  let testSubscriptionResetSearch: Bool
+  let sideEffectSubscriptionLimit: Int
+  let testManualReorganize: Bool
+  let testAIReorganize: Bool
+  let reorganizeHistoryLimit: Int
+  let reorganizeConcurrentCount: Int
 
   static func loadOrSkip(file: StaticString = #filePath) throws -> BackendCompatibilityConfig {
     let values = loadEnvironment(file: file)
@@ -31,6 +49,23 @@ private struct BackendCompatibilityConfig {
       explicitQueries = [query]
     }
 
+    let recognitionTitles =
+      values["MOVIEPILOT_COMPAT_RECOGNITION_TITLES"]?.listValue
+      ?? values["MOVIEPILOT_COMPAT_RECOGNITION_TITLE"]?.nilIfBlank.map { [$0] }
+      ?? ["流浪地球.2023.2160p.WEB-DL.x265"]
+    let resourceQueries =
+      values["MOVIEPILOT_COMPAT_RESOURCE_QUERIES"]?.listValue
+      ?? values["MOVIEPILOT_COMPAT_RESOURCE_QUERY"]?.nilIfBlank.map { [$0] }
+      ?? []
+    let resourceMediaIDs =
+      values["MOVIEPILOT_COMPAT_RESOURCE_MEDIA_IDS"]?.listValue
+      ?? values["MOVIEPILOT_COMPAT_RESOURCE_MEDIA_ID"]?.nilIfBlank.map { [$0] }
+      ?? []
+    let collectionIDs =
+      values["MOVIEPILOT_COMPAT_COLLECTION_IDS"]?.intListValue
+      ?? values["MOVIEPILOT_COMPAT_COLLECTION_ID"]?.intValue.map { [$0] }
+      ?? []
+
     return BackendCompatibilityConfig(
       baseURL: baseURL.trimmingTrailingSlashes,
       username: username,
@@ -40,7 +75,38 @@ private struct BackendCompatibilityConfig {
         fallback: false) ?? false,
       requireLatestMedia: values["MOVIEPILOT_COMPAT_REQUIRE_LATEST_MEDIA"]?.boolValue(
         fallback: false) ?? false,
-      metadataQueries: explicitQueries
+      metadataQueries: explicitQueries,
+      recognitionTitles: recognitionTitles,
+      resourceQueries: resourceQueries,
+      resourceMediaIDs: resourceMediaIDs,
+      resourceSites: values["MOVIEPILOT_COMPAT_RESOURCE_SITES"]?.nilIfBlank,
+      requireResourceResults: values["MOVIEPILOT_COMPAT_REQUIRE_RESOURCE_RESULTS"]?.boolValue(
+        fallback: false) ?? false,
+      checkSeasonAvailability: values["MOVIEPILOT_COMPAT_CHECK_SEASON_AVAILABILITY"]?.boolValue(
+        fallback: false) ?? false,
+      collectionIDs: collectionIDs,
+      testResourceSearchStreams: values["MOVIEPILOT_COMPAT_TEST_RESOURCE_SEARCH_STREAMS"]?
+        .boolValue(fallback: false) ?? false,
+      enableSideEffects: values["MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS"]?.boolValue(
+        fallback: true) ?? true,
+      testSubscriptionSearch: values["MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_SEARCH"]?.boolValue(
+        fallback: true) ?? true,
+      testSubscriptionUpdate: values["MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_UPDATE"]?.boolValue(
+        fallback: true) ?? true,
+      testSubscriptionPauseResume: values["MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_PAUSE_RESUME"]?
+        .boolValue(fallback: true) ?? true,
+      testSubscriptionResetSearch: values["MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_RESET_SEARCH"]?
+        .boolValue(fallback: true) ?? true,
+      sideEffectSubscriptionLimit: values["MOVIEPILOT_COMPAT_SIDE_EFFECT_SUBSCRIPTION_LIMIT"]?
+        .clampedIntValue(minimum: 1, maximum: 10) ?? 3,
+      testManualReorganize: values["MOVIEPILOT_COMPAT_TEST_MANUAL_REORGANIZE"]?.boolValue(
+        fallback: true) ?? true,
+      testAIReorganize: values["MOVIEPILOT_COMPAT_TEST_AI_REORGANIZE"]?.boolValue(
+        fallback: true) ?? true,
+      reorganizeHistoryLimit: values["MOVIEPILOT_COMPAT_REORGANIZE_HISTORY_LIMIT"]?
+        .clampedIntValue(minimum: 1, maximum: 10) ?? 2,
+      reorganizeConcurrentCount: values["MOVIEPILOT_COMPAT_REORGANIZE_CONCURRENT_COUNT"]?
+        .clampedIntValue(minimum: 1, maximum: 10) ?? 2
     )
   }
 
@@ -208,6 +274,48 @@ private struct BackendResponseEnvelope<T: Decodable>: Decodable {
   let success: Bool?
   let data: T?
   let message: String?
+}
+
+private struct BackendActionResponse: Decodable {
+  let success: Bool?
+  let message: String?
+}
+
+private struct BackendManualTransferResult: Sendable {
+  let label: String
+  let success: Bool
+  let message: String?
+  let diagnostic: String
+}
+
+private struct BackendManualTransferRequest: Sendable {
+  let label: String
+  let url: URL
+  let token: String?
+  let body: Data
+}
+
+private struct BackendStreamProbeResult: Sendable {
+  let eventCount: Int
+  let itemCount: Int
+  let sawTerminalEvent: Bool
+  let errorMessage: String?
+  let timedOut: Bool
+}
+
+private struct BackendSSEEventProbe: Decodable, Sendable {
+  struct DataPayload: Decodable, Sendable {
+    let success: Bool?
+    let error: String?
+  }
+
+  struct ItemPayload: Decodable, Sendable {}
+
+  let type: String?
+  let enable: Bool?
+  let items: [ItemPayload]?
+  let message: String?
+  let data: DataPayload?
 }
 
 private enum BackendCompatibilityProbeError: Error, CustomStringConvertible {
@@ -409,6 +517,78 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   }
 
   @MainActor
+  func testReadOnlyOperationalStateCompatibility() async throws {
+    try await withReadOnlyBackend { service, config in
+      for title in config.recognitionTitles {
+        do {
+          _ = try await service.recognizeMedia(title: title)
+        } catch {
+          XCTFail("Failed to recognize read-only title sample \(title): \(error)")
+        }
+
+        let tmdbID = await service.recognizeTmdbId(title: title)
+        XCTAssertGreaterThanOrEqual(
+          tmdbID ?? 0,
+          0,
+          "TMDB recognition should return a non-negative ID or nil for \(title)"
+        )
+      }
+
+      do {
+        let history = try await service.fetchTransferHistory(page: 1, count: 20, title: nil)
+        XCTAssertGreaterThanOrEqual(history.total, 0)
+        XCTAssertLessThanOrEqual(history.list.count, 20)
+      } catch {
+        XCTFail("Failed to read transfer history: \(error)")
+      }
+    }
+  }
+
+  @MainActor
+  func testReadOnlyResourceSearchCompatibility() async throws {
+    try await withReadOnlyBackend { service, config in
+      let titleQueries = uniqueStrings(config.resourceQueries)
+      let mediaIDs = uniqueStrings(config.resourceMediaIDs)
+
+      guard !titleQueries.isEmpty || !mediaIDs.isEmpty else {
+        throw XCTSkip(
+          "Set MOVIEPILOT_COMPAT_RESOURCE_QUERY or MOVIEPILOT_COMPAT_RESOURCE_MEDIA_ID to run read-only resource search compatibility checks."
+        )
+      }
+
+      for query in titleQueries {
+        do {
+          let results = try await service.searchResources(keyword: query, sites: config.resourceSites)
+          assertResourceSearchResults(
+            results,
+            label: "resource title search \(query)",
+            requireResults: config.requireResourceResults
+          )
+        } catch {
+          XCTFail("Failed to run read-only resource title search \(query): \(error)")
+        }
+      }
+
+      for mediaID in mediaIDs {
+        do {
+          let results = try await service.searchResources(keyword: mediaID, sites: config.resourceSites)
+          assertResourceSearchResults(
+            results,
+            label: "resource media-id search \(mediaID)",
+            requireResults: config.requireResourceResults
+          )
+        } catch {
+          XCTFail("Failed to run read-only resource media-id search \(mediaID): \(error)")
+        }
+      }
+
+      if config.testResourceSearchStreams {
+        await assertResourceSearchStreamsReadable(service: service, config: config)
+      }
+    }
+  }
+
+  @MainActor
   func testReadOnlyTVSurfaceCompatibilityAndImageRendering() async throws {
     try await withReadOnlyBackend { service, config in
       _ = try await service.fetchSettings()
@@ -421,7 +601,9 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       await scanRecommendShelves(service: service, collector: &collector)
       await scanExploreSurfaces(service: service, collector: &collector)
       await scanMetadataSearches(service: service, config: config, collector: &collector)
+      await scanConfiguredCollectionDetails(service: service, config: config, collector: &collector)
       await scanMediaDetailSurfaces(service: service, collector: &collector)
+      await scanSeasonAvailabilityStatus(service: service, config: config, collector: collector)
       await scanPersonDetailSurfaces(service: service, collector: &collector)
 
       await assertImagesRenderable(collector.imageCandidates, service: service)
@@ -589,6 +771,11 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       do {
         let collections = try await service.searchCollection(query: query, page: 1)
         collector.addMedia(collections, surface: "collection search \(query)")
+        await scanCollectionDetails(
+          service: service,
+          collections: collections,
+          collector: &collector
+        )
       } catch {
         XCTFail("Failed to read collection search \(query): \(error)")
       }
@@ -610,6 +797,56 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   }
 
   @MainActor
+  private func scanConfiguredCollectionDetails(
+    service: APIService,
+    config: BackendCompatibilityConfig,
+    collector: inout BackendCompatibilityCollector
+  ) async {
+    for collectionID in uniqueInts(config.collectionIDs).prefix(8) {
+      do {
+        let items = try await service.fetchCollection(
+          collectionId: collectionID,
+          page: 1,
+          title: String(collectionID)
+        )
+        collector.addMedia(items, surface: "configured collection \(collectionID)")
+      } catch {
+        XCTFail("Failed to read configured collection \(collectionID): \(error)")
+      }
+    }
+  }
+
+  @MainActor
+  private func scanCollectionDetails(
+    service: APIService,
+    collections: [MediaInfo],
+    collector: inout BackendCompatibilityCollector
+  ) async {
+    var seenIDs = Set<Int>()
+    let candidates = collections
+      .compactMap { item -> (id: Int, title: String)? in
+        guard let collectionID = item.collection_id, seenIDs.insert(collectionID).inserted else {
+          return nil
+        }
+        return (collectionID, item.compatibilityTitle)
+      }
+      .prefix(8)
+
+    for candidate in candidates {
+      do {
+        let items = try await service.fetchCollection(
+          collectionId: candidate.id,
+          page: 1,
+          title: candidate.title
+        )
+        collector.addMedia(items, surface: "collection detail \(candidate.title)")
+      } catch {
+        XCTFail("Failed to read collection detail \(candidate.title): \(error)")
+      }
+    }
+  }
+
+  @MainActor
   private func scanMediaDetailSurfaces(
     service: APIService,
     collector: inout BackendCompatibilityCollector
@@ -623,6 +860,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
 
         do {
           try await assertSubscriptionStatusReadable(service: service, media: detail)
+          _ = try await service.checkSubscription(media: detail)
         } catch {
           XCTFail("Failed to read subscription status for \(detail.compatibilityTitle): \(error)")
         }
@@ -693,6 +931,39 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   }
 
   @MainActor
+  private func scanSeasonAvailabilityStatus(
+    service: APIService,
+    config: BackendCompatibilityConfig,
+    collector: BackendCompatibilityCollector
+  ) async {
+    guard config.checkSeasonAvailability else { return }
+
+    let series = representativeMediaForDetail(from: Array(collector.mediaByID.values))
+      .filter { $0.type == "电视剧" }
+      .prefix(8)
+
+    for media in series {
+      do {
+        let missingItems = try await service.checkSeasonsNotExists(mediaInfo: media)
+        for item in missingItems {
+          XCTAssertGreaterThanOrEqual(
+            item.season,
+            0,
+            "Invalid season availability status for \(media.compatibilityTitle)"
+          )
+          XCTAssertGreaterThanOrEqual(
+            item.total_episode,
+            0,
+            "Invalid total episode count for \(media.compatibilityTitle)"
+          )
+        }
+      } catch {
+        XCTFail("Failed to read season availability status for \(media.compatibilityTitle): \(error)")
+      }
+    }
+  }
+
+  @MainActor
   private func scanPersonDetailSurfaces(
     service: APIService,
     collector: inout BackendCompatibilityCollector
@@ -725,6 +996,89 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         XCTFail("Failed to read person credits \(person.compatibilityName): \(error)")
       }
     }
+  }
+
+  @MainActor
+  private func assertResourceSearchResults(
+    _ results: [Context],
+    label: String,
+    requireResults: Bool,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    if requireResults {
+      XCTAssertFalse(results.isEmpty, "Expected at least one result for \(label)", file: file, line: line)
+    }
+
+    for result in results.prefix(50) {
+      XCTAssertTrue(
+        result.media_info != nil || result.torrent_info != nil || result.meta_info != nil,
+        "Resource result must include media_info, torrent_info, or meta_info for \(label)",
+        file: file,
+        line: line
+      )
+
+      if let torrent = result.torrent_info {
+        XCTAssertGreaterThanOrEqual(
+          torrent.size,
+          0,
+          "Torrent size must be non-negative for \(label)",
+          file: file,
+          line: line
+        )
+      }
+    }
+  }
+
+  @MainActor
+  private func assertResourceSearchStreamsReadable(
+    service: APIService,
+    config: BackendCompatibilityConfig
+  ) async {
+    let titleQueries = uniqueStrings(config.resourceQueries).prefix(3)
+    let mediaIDs = uniqueStrings(config.resourceMediaIDs).prefix(3)
+
+    for query in titleQueries {
+      do {
+        let url = try compatibilityAPIURL(
+          service: service,
+          path: "/search/title/stream",
+          params: [
+            "keyword": query,
+            "sites": config.resourceSites,
+          ])
+        let result = await Self.probeSSEStream(url: url, token: service.token)
+        assertSSEProbe(result, label: "resource title stream \(query)")
+      } catch {
+        XCTFail("Failed to build resource title stream request \(query): \(error)")
+      }
+    }
+
+    for mediaID in mediaIDs {
+      do {
+        let url = try compatibilityAPIURL(
+          service: service,
+          path: "/search/media/\(mediaID)/stream",
+          params: [
+            "sites": config.resourceSites,
+          ])
+        let result = await Self.probeSSEStream(url: url, token: service.token)
+        assertSSEProbe(result, label: "resource media stream \(mediaID)")
+      } catch {
+        XCTFail("Failed to build resource media stream request \(mediaID): \(error)")
+      }
+    }
+  }
+
+  private func assertSSEProbe(
+    _ result: BackendStreamProbeResult,
+    label: String,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    XCTAssertFalse(result.timedOut, "\(label) timed out before producing a terminal event", file: file, line: line)
+    XCTAssertNil(result.errorMessage, "\(label) returned stream error: \(result.errorMessage ?? "")", file: file, line: line)
+    XCTAssertGreaterThan(result.eventCount, 0, "\(label) produced no decodable SSE events", file: file, line: line)
   }
 
   @MainActor
@@ -848,6 +1202,125 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         data: nil,
         bodyPreview: nil,
         errorDescription: String(describing: error)
+      )
+    }
+  }
+
+  fileprivate static func probeSSEStream(
+    url: URL,
+    token: String?,
+    timeoutSeconds: UInt64 = 45
+  ) async -> BackendStreamProbeResult {
+    await withTaskGroup(of: BackendStreamProbeResult.self) { group in
+      group.addTask {
+        await readSSEStream(url: url, token: token, maxEvents: 40)
+      }
+      group.addTask {
+        try? await Task.sleep(nanoseconds: timeoutSeconds * 1_000_000_000)
+        return BackendStreamProbeResult(
+          eventCount: 0,
+          itemCount: 0,
+          sawTerminalEvent: false,
+          errorMessage: nil,
+          timedOut: true
+        )
+      }
+
+      let result = await group.next()
+        ?? BackendStreamProbeResult(
+          eventCount: 0,
+          itemCount: 0,
+          sawTerminalEvent: false,
+          errorMessage: "Stream probe finished without a result.",
+          timedOut: false
+        )
+      group.cancelAll()
+      return result
+    }
+  }
+
+  private static func readSSEStream(
+    url: URL,
+    token: String?,
+    maxEvents: Int
+  ) async -> BackendStreamProbeResult {
+    var eventCount = 0
+    var itemCount = 0
+    var sawTerminalEvent = false
+    var streamError: String?
+
+    do {
+      var request = URLRequest(url: url)
+      request.timeoutInterval = 300
+      request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+      if let token {
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+      }
+
+      let (bytes, response) = try await URLSession.shared.bytes(for: request)
+      guard let httpResponse = response as? HTTPURLResponse else {
+        return BackendStreamProbeResult(
+          eventCount: eventCount,
+          itemCount: itemCount,
+          sawTerminalEvent: false,
+          errorMessage: "SSE response is not HTTP.",
+          timedOut: false
+        )
+      }
+      guard httpResponse.statusCode == 200 else {
+        return BackendStreamProbeResult(
+          eventCount: eventCount,
+          itemCount: itemCount,
+          sawTerminalEvent: false,
+          errorMessage: "HTTP \(httpResponse.statusCode), content-type: \(httpResponse.contentTypeDescription)",
+          timedOut: false
+        )
+      }
+
+      for try await line in bytes.lines {
+        if Task.isCancelled { break }
+        guard line.hasPrefix("data:") else { continue }
+
+        let jsonString = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+        guard let data = jsonString.data(using: .utf8) else { continue }
+
+        let event = try JSONDecoder().decode(BackendSSEEventProbe.self, from: data)
+        eventCount += 1
+        itemCount += event.items?.count ?? 0
+
+        if event.type == "error" {
+          streamError = event.message ?? event.data?.error ?? "Unknown SSE error event."
+          sawTerminalEvent = true
+          break
+        }
+
+        if event.type == "done" || event.enable == false {
+          if let success = event.data?.success, success == false {
+            streamError = event.data?.error ?? event.message ?? "SSE terminal event reported failure."
+          }
+          sawTerminalEvent = true
+          break
+        }
+
+        if eventCount >= maxEvents {
+          break
+        }
+      }
+
+      return BackendStreamProbeResult(
+        eventCount: eventCount,
+        itemCount: itemCount,
+        sawTerminalEvent: sawTerminalEvent,
+        errorMessage: streamError,
+        timedOut: false
+      )
+    } catch {
+      return BackendStreamProbeResult(
+        eventCount: eventCount,
+        itemCount: itemCount,
+        sawTerminalEvent: sawTerminalEvent,
+        errorMessage: String(describing: error),
+        timedOut: false
       )
     }
   }
@@ -1144,6 +1617,406 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     }
     return result
   }
+
+  private func uniqueInts(_ ints: [Int]) -> [Int] {
+    var seen = Set<Int>()
+    var result: [Int] = []
+    for int in ints where seen.insert(int).inserted {
+      result.append(int)
+    }
+    return result
+  }
+}
+
+final class BackendCompatibilitySideEffectTests: XCTestCase {
+  @MainActor
+  func testSubscriptionSearchCompatibility() async throws {
+    try await withSideEffectBackend(
+      flagName: "MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_SEARCH",
+      isEnabled: { $0.testSubscriptionSearch }
+    ) { service, config in
+      let ids = try await recentSubscriptionIDs(service: service, limit: config.sideEffectSubscriptionLimit)
+      guard !ids.isEmpty else {
+        XCTFail("Subscription search side-effect test ran, but the backend has no subscriptions.")
+        return
+      }
+
+      for id in ids {
+        do {
+          let success = try await service.searchSubscription(id: id)
+          XCTAssertTrue(success, "Subscription search request was rejected for subscription \(id).")
+        } catch {
+          XCTFail("Failed to trigger subscription search \(id): \(error)")
+        }
+      }
+    }
+  }
+
+  @MainActor
+  func testSubscriptionUpdateCompatibility() async throws {
+    try await withSideEffectBackend(
+      flagName: "MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_UPDATE",
+      isEnabled: { $0.testSubscriptionUpdate }
+    ) { service, config in
+      let ids = try await recentSubscriptionIDs(service: service, limit: config.sideEffectSubscriptionLimit)
+      guard !ids.isEmpty else {
+        XCTFail("Subscription update side-effect test ran, but the backend has no subscriptions.")
+        return
+      }
+
+      for id in ids {
+        do {
+          let detail = try await service.fetchSubscription(id: id)
+          XCTAssertEqual(detail.id, id, "Subscription detail ID changed before unchanged update.")
+          let success = try await service.saveSubscription(detail)
+          XCTAssertTrue(success, "Unchanged subscription update was rejected for subscription \(id).")
+        } catch {
+          XCTFail("Failed to update subscription \(id) with its original parameters: \(error)")
+        }
+      }
+    }
+  }
+
+  @MainActor
+  func testSubscriptionPauseResumeCompatibility() async throws {
+    try await withSideEffectBackend(
+      flagName: "MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_PAUSE_RESUME",
+      isEnabled: { $0.testSubscriptionPauseResume }
+    ) { service, config in
+      let subscriptions = try await recentSubscriptions(
+        service: service,
+        limit: config.sideEffectSubscriptionLimit
+      )
+      let candidates = subscriptions.filter { subscription in
+        subscription.id != nil && subscription.state == "R"
+      }
+
+      guard !candidates.isEmpty else {
+        XCTFail(
+          "Subscription pause/resume side-effect test ran, but no recent subscriptions were actively subscribing with state R."
+        )
+        return
+      }
+
+      for subscription in candidates {
+        guard let id = subscription.id, let originalState = subscription.state else { continue }
+        var needsRestore = false
+
+        do {
+          let toggleSuccess = try await service.updateSubscriptionStatus(id: id, state: "S")
+          XCTAssertTrue(
+            toggleSuccess,
+            "Subscription pause R -> S was rejected for subscription \(id)."
+          )
+          needsRestore = toggleSuccess
+
+          let restoreSuccess = try await service.updateSubscriptionStatus(id: id, state: originalState)
+          needsRestore = false
+          XCTAssertTrue(
+            restoreSuccess,
+            "Subscription status restore S -> \(originalState) was rejected for subscription \(id)."
+          )
+        } catch {
+          if needsRestore {
+            do {
+              _ = try await service.updateSubscriptionStatus(id: id, state: originalState)
+            } catch {
+              XCTFail(
+                "Failed to restore subscription \(id) to original state \(originalState): \(error)"
+              )
+            }
+          }
+          XCTFail(
+            "Failed to pause active subscription \(id) and restore it to \(originalState): \(error)"
+          )
+        }
+      }
+    }
+  }
+
+  @MainActor
+  func testSubscriptionResetThenSearchCompatibility() async throws {
+    try await withSideEffectBackend(
+      flagName: "MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_RESET_SEARCH",
+      isEnabled: { $0.testSubscriptionResetSearch }
+    ) { service, config in
+      let ids = try await recentSubscriptionIDs(service: service, limit: config.sideEffectSubscriptionLimit)
+      guard !ids.isEmpty else {
+        XCTFail("Subscription reset/search side-effect test ran, but the backend has no subscriptions.")
+        return
+      }
+
+      for id in ids {
+        do {
+          let resetSuccess = try await service.resetSubscription(id: id)
+          XCTAssertTrue(resetSuccess, "Subscription reset request was rejected for subscription \(id).")
+
+          let searchSuccess = try await service.searchSubscription(id: id)
+          XCTAssertTrue(searchSuccess, "Subscription search after reset was rejected for subscription \(id).")
+        } catch {
+          XCTFail("Failed to reset and immediately search subscription \(id): \(error)")
+        }
+      }
+    }
+  }
+
+  @MainActor
+  func testManualReorganizeCompatibility() async throws {
+    try await withSideEffectBackend(
+      flagName: "MOVIEPILOT_COMPAT_TEST_MANUAL_REORGANIZE",
+      isEnabled: { $0.testManualReorganize }
+    ) { service, config in
+      let histories = try await recentTransferHistories(
+        service: service,
+        limit: Swift.max(config.reorganizeHistoryLimit, config.reorganizeConcurrentCount)
+      )
+      guard !histories.isEmpty else {
+        XCTFail("Manual reorganize side-effect test ran, but the backend has no transfer history.")
+        return
+      }
+
+      let concurrentCount = Swift.min(config.reorganizeConcurrentCount, histories.count)
+      let targets = Array(histories.prefix(concurrentCount))
+      let requests = try targets.map { history in
+        try manualTransferRequest(service: service, history: history)
+      }
+
+      let results = await Self.performManualTransfers(requests)
+      for result in results {
+        XCTAssertTrue(
+          result.success,
+          "Manual reorganize failed for \(result.label): \(result.diagnostic)"
+        )
+      }
+    }
+  }
+
+  @MainActor
+  func testAIReorganizeCompatibility() async throws {
+    try await withSideEffectBackend(
+      flagName: "MOVIEPILOT_COMPAT_TEST_AI_REORGANIZE",
+      isEnabled: { $0.testAIReorganize }
+    ) { service, config in
+      let settings = try await service.fetchSettings()
+      guard settings.AI_AGENT_ENABLE?.value ?? false else {
+        throw XCTSkip("AI reorganize side-effect test ran, but the backend AI agent is disabled.")
+      }
+
+      let histories = try await recentTransferHistories(
+        service: service,
+        limit: config.reorganizeHistoryLimit
+      )
+      let ids = histories.map(\.id)
+      guard !ids.isEmpty else {
+        XCTFail("AI reorganize side-effect test ran, but the backend has no transfer history.")
+        return
+      }
+
+      do {
+        guard let result = try await service.aiRedoTransferHistory(ids: ids) else {
+          XCTFail("AI reorganize did not return a progress key for history IDs \(ids).")
+          return
+        }
+
+        XCTAssertFalse(result.progressKey.isEmpty, "AI reorganize returned an empty progress key.")
+        XCTAssertFalse(result.acceptedIds.isEmpty, "AI reorganize accepted no history IDs.")
+
+        let progressURL = try compatibilityAPIURL(
+          service: service,
+          path: "/system/progress/\(result.progressKey)"
+        )
+        let progress = await BackendCompatibilityReadOnlyTests.probeSSEStream(
+          url: progressURL,
+          token: service.token,
+          timeoutSeconds: 60
+        )
+        XCTAssertFalse(progress.timedOut, "AI reorganize progress stream timed out.")
+        XCTAssertGreaterThan(
+          progress.eventCount,
+          0,
+          "AI reorganize progress stream produced no decodable events."
+        )
+        XCTAssertNil(
+          progress.errorMessage,
+          "AI reorganize progress stream reported error: \(progress.errorMessage ?? "")"
+        )
+      } catch {
+        XCTFail("Failed to trigger AI reorganize for history IDs \(ids): \(error)")
+      }
+    }
+  }
+
+  @MainActor
+  private func withSideEffectBackend(
+    flagName: String,
+    isEnabled: (BackendCompatibilityConfig) -> Bool,
+    _ operation: @MainActor (APIService, BackendCompatibilityConfig) async throws -> Void
+  ) async throws {
+    let config = try BackendCompatibilityConfig.loadOrSkip()
+    guard config.enableSideEffects else {
+      throw XCTSkip(
+        "Side-effect backend compatibility tests are disabled by MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS=false. Remove the false value or set it to true to run them."
+      )
+    }
+    guard isEnabled(config) else {
+      throw XCTSkip(
+        "This side-effect backend compatibility test is disabled by \(flagName)=false. Remove the false value or set it to true to run it."
+      )
+    }
+
+    let service = APIService.shared
+    let snapshot = BackendServiceSnapshot.capture(service: service)
+
+    defer {
+      snapshot.restore(to: service)
+    }
+
+    service.baseURL = config.baseURL
+    service.token = nil
+
+    _ = try await service.login(username: config.username, password: config.password)
+    try await operation(service, config)
+  }
+
+  @MainActor
+  private func recentSubscriptionIDs(service: APIService, limit: Int) async throws -> [Int] {
+    let subscriptions = try await recentSubscriptions(service: service, limit: limit)
+    return Array(subscriptions.compactMap(\.id).prefix(limit))
+  }
+
+  @MainActor
+  private func recentSubscriptions(service: APIService, limit: Int) async throws -> [Subscribe] {
+    let subscriptions = try await service.fetchSubscriptions()
+    return Array(subscriptions.prefix(limit))
+  }
+
+  @MainActor
+  private func recentTransferHistories(service: APIService, limit: Int) async throws -> [TransferHistory] {
+    let pageSize = Swift.max(limit, 20)
+    let history = try await service.fetchTransferHistory(page: 1, count: pageSize, title: nil)
+    return Array(history.list.prefix(limit))
+  }
+
+  @MainActor
+  private func manualTransferRequest(
+    service: APIService,
+    history: TransferHistory
+  ) throws -> BackendManualTransferRequest {
+    let form = ReorganizeForm(
+      fileitem: history.src_fileitem,
+      logid: history.id,
+      target_storage: history.dest_storage?.nilIfBlank ?? "local",
+      transfer_type: "",
+      target_path: "",
+      min_filesize: 0,
+      scrape: false,
+      from_history: false
+    )
+    let body = try JSONEncoder().encode(form)
+    let url = try compatibilityAPIURL(
+      service: service,
+      path: "/transfer/manual",
+      params: ["background": "true"]
+    )
+
+    return BackendManualTransferRequest(
+      label: "\(history.id) \(history.title ?? "")",
+      url: url,
+      token: service.token,
+      body: body
+    )
+  }
+
+  private static func performManualTransfers(
+    _ requests: [BackendManualTransferRequest]
+  ) async -> [BackendManualTransferResult] {
+    await withTaskGroup(of: BackendManualTransferResult.self) { group in
+      for request in requests {
+        group.addTask {
+          await performManualTransfer(request)
+        }
+      }
+
+      var results: [BackendManualTransferResult] = []
+      for await result in group {
+        results.append(result)
+      }
+      return results
+    }
+  }
+
+  private static func performManualTransfer(
+    _ requestInfo: BackendManualTransferRequest
+  ) async -> BackendManualTransferResult {
+    do {
+      var request = URLRequest(url: requestInfo.url)
+      request.httpMethod = "POST"
+      request.timeoutInterval = 60
+      request.httpBody = requestInfo.body
+      request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+      if let token = requestInfo.token {
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+      }
+
+      let (data, response) = try await URLSession.shared.data(for: request)
+      guard let httpResponse = response as? HTTPURLResponse else {
+        return BackendManualTransferResult(
+          label: requestInfo.label,
+          success: false,
+          message: nil,
+          diagnostic: "Non-HTTP response."
+        )
+      }
+
+      let action = try? JSONDecoder().decode(BackendActionResponse.self, from: data)
+      let success = (200...299).contains(httpResponse.statusCode) && (action?.success ?? true)
+      return BackendManualTransferResult(
+        label: requestInfo.label,
+        success: success,
+        message: action?.message,
+        diagnostic:
+          "HTTP \(httpResponse.statusCode), content-type: \(httpResponse.contentTypeDescription), bytes: \(data.count), message: \(action?.message ?? "n/a"), body: \(Self.responseSnippet(from: data))"
+      )
+    } catch {
+      return BackendManualTransferResult(
+        label: requestInfo.label,
+        success: false,
+        message: nil,
+        diagnostic: String(describing: error)
+      )
+    }
+  }
+
+  @MainActor
+  private func compatibilityAPIURL(
+    service: APIService,
+    path: String,
+    params: [String: String?] = [:]
+  ) throws -> URL {
+    let endpoint = "\(service.baseURL)/api/v1\(path)"
+    guard var components = URLComponents(string: endpoint) else {
+      throw BackendCompatibilityProbeError.invalidURL(endpoint)
+    }
+
+    var queryItems = components.queryItems ?? []
+    for (name, value) in params.sorted(by: { $0.key < $1.key }) {
+      if let value {
+        queryItems.append(URLQueryItem(name: name, value: value))
+      }
+    }
+    components.queryItems = queryItems.isEmpty ? nil : queryItems
+
+    guard let url = components.url else {
+      throw BackendCompatibilityProbeError.invalidURL(endpoint)
+    }
+    return url
+  }
+
+  private static func responseSnippet(from data: Data, maxLength: Int = 256) -> String {
+    String(decoding: data.prefix(maxLength), as: UTF8.self)
+      .replacingOccurrences(of: "\n", with: "\\n")
+      .replacingOccurrences(of: "\r", with: "\\r")
+  }
 }
 
 private extension MediaInfo {
@@ -1235,6 +2108,21 @@ private extension String {
       .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
       .filter { !$0.isEmpty }
     return items.isEmpty ? nil : items
+  }
+
+  var intValue: Int? {
+    Int(trimmingCharacters(in: .whitespacesAndNewlines))
+  }
+
+  var intListValue: [Int]? {
+    let items = split(separator: ",")
+      .compactMap { Int(String($0).trimmingCharacters(in: .whitespacesAndNewlines)) }
+    return items.isEmpty ? nil : items
+  }
+
+  func clampedIntValue(minimum: Int, maximum: Int) -> Int? {
+    guard let value = intValue else { return nil }
+    return Swift.min(Swift.max(value, minimum), maximum)
   }
 
   func boolValue(fallback: Bool) -> Bool {
