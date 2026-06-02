@@ -1837,6 +1837,10 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
           0,
           "AI reorganize progress stream produced no decodable events."
         )
+        XCTAssertTrue(
+          progress.sawTerminalEvent,
+          "AI reorganize progress stream produced events but no terminal SSE event."
+        )
         XCTAssertNil(
           progress.errorMessage,
           "AI reorganize progress stream reported error: \(progress.errorMessage ?? "")"

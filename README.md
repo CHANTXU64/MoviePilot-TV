@@ -87,6 +87,24 @@
 6. 自动续签 (可选): 免费账号签名的应用有效期为 7 天，可使用 [Sideloadly](https://sideloadly.io/) 等工具自动续签。
 
 
+## 后端兼容性测试（可选）
+
+如果需要用自己的 MoviePilot 后端验证 TV 端兼容性，可以复制 `.env.compatibility.example` 为 `.env.compatibility`，填写后端地址、用户名和密码：
+
+```sh
+MOVIEPILOT_COMPAT_BASE_URL=http://127.0.0.1:3000
+MOVIEPILOT_COMPAT_USERNAME=admin
+MOVIEPILOT_COMPAT_PASSWORD=your-password
+```
+
+真实后端兼容测试分为只读套件和副作用套件。只读套件会登录后端并读取 TV 端依赖的 API、图片和媒体数据；副作用套件默认开启，会触发订阅搜索、原参数保存订阅、暂停/恢复订阅、重置订阅、手动重新整理和 AI 重新整理等真实后台动作。如果只想跑只读检查，请在 `.env.compatibility` 中设置：
+
+```sh
+MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS=false
+```
+
+`.env.compatibility` 会被 Git 忽略，不要提交真实账号密码。完整命令、可选开关和 GitHub CI 行为见 [后端兼容性测试文档](docs/backend-compatibility-tests.md)。
+
 ## 反馈与贡献
 
 - **提交 Bug**：请务必提供 MoviePilot 版本号、相关截图和复现步骤。
