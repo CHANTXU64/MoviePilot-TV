@@ -171,14 +171,15 @@ xcrun simctl list devices tvOS available
 
 对本仓库进行任何代码、配置、文档或工作流修改时，必须遵守：
 
-1. 禁止直接向 `main` 分支提交任何修改。
-2. 每次开始修改前，必须基于最新 `main` 创建独立分支。
-3. AI 创建的分支名必须使用 `ai/xxx` 格式，例如：
+1. 禁止在未获得用户明确允许的情况下执行 `git commit`、`git push` 或创建 Pull Request；其中私自创建 PR 属于严重违规。用户要求“写好”“整理好”“提交到 GitHub”不足以自动推导为允许 commit/push/开 PR，必须先单独确认。
+2. 禁止直接向 `main` 分支提交任何修改。
+3. 每次开始修改前，必须基于最新 `main` 创建独立分支。
+4. AI 创建的分支名必须使用 `ai/xxx` 格式，例如：
    - `ai/add-github-actions-ci`
    - `ai/fix-paginator-loading-state`
    - `ai/refactor-media-preloader`
    - `ai/update-readme`
-4. Commit Message 必须使用以下格式：
+5. Commit Message 必须使用以下格式：
 
 ```text
 [AI] <type>/<scope>: <summary>
@@ -200,8 +201,8 @@ xcrun simctl list devices tvOS available
 [AI] docs/readme: update installation instructions
 ```
 
-5. 修改完成后，优先创建 Pull Request 让用户审查。
-6. 除非用户明确要求合并，并且相关构建/测试已经通过，否则不要直接合并 PR。
+6. 用户明确允许创建 PR 时，修改完成后再创建 Pull Request 让用户审查。
+7. 除非用户明确要求合并，并且相关构建/测试已经通过，否则不要直接合并 PR。
 
 ## 文档维护规则
 
