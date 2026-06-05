@@ -84,12 +84,17 @@
 3. 选择你的真实 Apple TV 设备（需在同一局域网并已配对）。
 4. 在 **Signing & Capabilities** 中选择你的开发者账号，修改 `Bundle Identifier` 为一个唯一的名称（例如 `com.yourname.MoviePilot-TV`）。
 5. 点击 **Run** (或 `Cmd + R`) 编译并安装。
-6. 自动续签 (可选): 免费账号签名的应用有效期为 7 天，可使用 [Sideloadly](https://sideloadly.io/) 或项目内的 `scripts/apple-tv-renew.sh` 续签。脚本默认在签名未过期时跳过，适合放进 crontab 定时运行；如需强制续签可加 `--force`：
+6. 自动续签 (可选): 免费账号签名的应用有效期通常为 7 天，可使用 [Sideloadly](https://sideloadly.io/) 或项目内的 `scripts/apple-tv-renew.sh` 续签：
    ```sh
-   BUNDLE_ID="com.yourname.MoviePilotTV" ./scripts/apple-tv-renew.sh
-   BUNDLE_ID="com.yourname.MoviePilotTV" ./scripts/apple-tv-renew.sh --force
+   BUNDLE_ID="com.yourname.MoviePilotTV" bash scripts/apple-tv-renew.sh
+   BUNDLE_ID="com.yourname.MoviePilotTV" bash scripts/apple-tv-renew.sh --force
+   RENEW_THRESHOLD_SECONDS=86400 BUNDLE_ID="com.yourname.MoviePilotTV" bash scripts/apple-tv-renew.sh
    ```
 
+   > [!NOTE]
+   > 脚本默认只检查本机 DerivedData 中构建产物的 `embedded.mobileprovision`，不会确认 Apple TV 设备端是否仍安装成功；如果本机构建产物里的签名配置仍未过期，脚本会直接跳过。放进 crontab 定时保活时，更稳妥的是定期加 `--force` 重新构建并安装。
+   >
+   > `RENEW_THRESHOLD_SECONDS` 可以尝试在剩余时间低于阈值时重新构建/安装，但 Xcode 自动签名不保证一定会在旧的 Xcode-managed provisioning profile 过期前生成新的 profile。因此“提前续签”可以作为尝试，不能当成确定的续期机制。
 
 ## 后端兼容性测试（可选）
 
