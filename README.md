@@ -84,7 +84,15 @@
 3. 选择你的真实 Apple TV 设备（需在同一局域网并已配对）。
 4. 在 **Signing & Capabilities** 中选择你的开发者账号，修改 `Bundle Identifier` 为一个唯一的名称（例如 `com.yourname.MoviePilot-TV`）。
 5. 点击 **Run** (或 `Cmd + R`) 编译并安装。
-6. 自动续签 (可选): 免费账号签名的应用有效期为 7 天，可使用 [Sideloadly](https://sideloadly.io/) 等工具自动续签。
+6. 自动续签 (可选): 免费账号签名的应用有效期为 7 天。可以使用项目内脚本构建、签名、安装并验证新的 provisioning profile：
+   ```sh
+   PROJECT_DIR="$PWD" \
+   PROJECT_FILE="MoviePilot-TV.xcodeproj" \
+   SCHEME="MoviePilot-TV" \
+   BUNDLE_ID="com.yourname.MoviePilotTV" \
+   ./scripts/apple-tv-renew.sh
+   ```
+   可选环境变量：`DEVELOPMENT_TEAM` 指定 Team ID，`DEVICE_ID` 指定 Apple TV 设备，`CLEAR_PROFILE_CACHE=1` 在构建前备份并移走本地 Xcode profile 缓存。脚本会在安装后检查 `embedded.mobileprovision`，默认要求剩余有效期至少 5 天。
 
 
 ## 后端兼容性测试（可选）
