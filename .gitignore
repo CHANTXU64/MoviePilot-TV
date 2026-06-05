@@ -12,6 +12,7 @@
 .swiftpm/configuration/user.settings
 .build/
 /build
+/renew.log
 .env
 .env.*
 !.env.example

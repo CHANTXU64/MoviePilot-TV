@@ -84,7 +84,11 @@
 3. 选择你的真实 Apple TV 设备（需在同一局域网并已配对）。
 4. 在 **Signing & Capabilities** 中选择你的开发者账号，修改 `Bundle Identifier` 为一个唯一的名称（例如 `com.yourname.MoviePilot-TV`）。
 5. 点击 **Run** (或 `Cmd + R`) 编译并安装。
-6. 自动续签 (可选): 免费账号签名的应用有效期为 7 天，可使用 [Sideloadly](https://sideloadly.io/) 等工具自动续签。
+6. 自动续签 (可选): 免费账号签名的应用有效期为 7 天，可使用 [Sideloadly](https://sideloadly.io/) 或项目内的 `scripts/apple-tv-renew.sh` 续签。脚本默认在签名未过期时跳过，适合放进 crontab 定时运行；如需强制续签可加 `--force`：
+   ```sh
+   BUNDLE_ID="com.yourname.MoviePilotTV" ./scripts/apple-tv-renew.sh
+   BUNDLE_ID="com.yourname.MoviePilotTV" ./scripts/apple-tv-renew.sh --force
+   ```
 
 
 ## 后端兼容性测试（可选）
