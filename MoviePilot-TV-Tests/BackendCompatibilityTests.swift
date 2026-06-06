@@ -240,6 +240,10 @@ private struct BackendImageCandidate: Sendable {
   var label: String {
     "\(surface) -> \(record) -> \(field)"
   }
+
+  var diagnosticLabel: String {
+    "\(label), url: \(url.absoluteString), raw: \(rawURLString ?? "<none>")"
+  }
 }
 
 private struct BackendImageFetchResult: Sendable {
@@ -462,10 +466,10 @@ private struct BackendCompatibilityCollector {
     file: StaticString = #filePath,
     line: UInt = #line
   ) {
-    let rawURLString = rawURLString?.nilIfBlank
     guard let url else {
       return
     }
+    let rawURLString = Self.effectiveRawImageURL(from: url, fallback: rawURLString?.nilIfBlank)
     imageCandidates.append(
       BackendImageCandidate(
         surface: surface,
@@ -474,6 +478,26 @@ private struct BackendCompatibilityCollector {
         rawURLString: rawURLString,
         url: url
       ))
+  }
+
+  private static func effectiveRawImageURL(from url: URL, fallback: String?) -> String? {
+    guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+      return fallback
+    }
+
+    var queryItems: [String: String] = [:]
+    for item in components.queryItems ?? [] where queryItems[item.name] == nil {
+      queryItems[item.name] = item.value ?? ""
+    }
+
+    switch components.path {
+    case "/api/v1/system/img/0", "/api/v1/system/img/1":
+      return queryItems["imgurl"]?.nilIfBlank ?? fallback
+    case "/api/v1/system/cache/image":
+      return queryItems["url"]?.nilIfBlank ?? fallback
+    default:
+      return fallback ?? url.absoluteString
+    }
   }
 
   func derivedSearchQueries(limit: Int) -> [String] {
@@ -1090,6 +1114,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     var seenURLs = Set<String>()
     var uniqueCandidates: [BackendImageCandidate] = []
     var checkedImages = 0
+    var webAlignedFailures = 0
 
     for candidate in candidates {
       let urlString = candidate.url.absoluteString
@@ -1108,42 +1133,35 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
 
       for result in results {
         let candidate = result.candidate
-        if let errorDescription = result.errorDescription {
-          XCTFail("Failed to fetch/decode image for \(candidate.label): \(errorDescription)")
-          continue
-        }
+        if let failureReason = Self.imageFailureReason(result, requireTVDecode: true) {
+          guard
+            let webCandidate = Self.webEquivalentImageCandidate(
+              for: candidate,
+              baseURL: service.baseURL,
+              useImageCache: service.useImageCache
+            )
+          else {
+            webAlignedFailures += 1
+            continue
+          }
 
-        guard let statusCode = result.statusCode else {
-          XCTFail("Image response is not HTTP for \(candidate.label)")
-          continue
-        }
+          let webResult = await Self.fetchImage(webCandidate, token: service.token)
+          if Self.imageFailureReason(webResult, requireTVDecode: false) != nil {
+            webAlignedFailures += 1
+            continue
+          }
 
-        XCTAssertTrue(
-          (200...299).contains(statusCode),
-          "Image HTTP \(statusCode) for \(candidate.label), content-type: \(result.contentType)\(result.previewSuffix)"
-        )
-
-        guard let data = result.data, !data.isEmpty else {
-          XCTFail("Image data is empty for \(candidate.label)")
-          continue
-        }
-
-        if result.isNonImagePayload {
           XCTFail(
-            "Image endpoint returned non-image payload for \(candidate.label), content-type: \(result.contentType), bytes: \(data.count)\(result.previewSuffix)"
+            "TV image failed but MP Web equivalent succeeds for \(candidate.diagnosticLabel): \(failureReason), web url: \(webCandidate.url.absoluteString)"
           )
           continue
         }
 
-        guard let image = UIImage(data: data) else {
-          XCTFail(
-            "tvOS cannot decode image for \(candidate.label), content-type: \(result.contentType), bytes: \(data.count)\(result.previewSuffix)"
-          )
-          continue
-        }
-
-        XCTAssertGreaterThan(image.size.width, 0, "Decoded image width is zero for \(candidate.label)")
-        XCTAssertGreaterThan(image.size.height, 0, "Decoded image height is zero for \(candidate.label)")
+        let image = UIImage(data: result.data ?? Data())
+        XCTAssertGreaterThan(
+          image?.size.width ?? 0, 0, "Decoded image width is zero for \(candidate.diagnosticLabel)")
+        XCTAssertGreaterThan(
+          image?.size.height ?? 0, 0, "Decoded image height is zero for \(candidate.diagnosticLabel)")
         checkedImages += 1
       }
 
@@ -1151,8 +1169,139 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     }
 
     print(
-      "Backend compatibility checked \(checkedImages) tvOS-decodable images from \(uniqueCandidates.count) unique image URLs."
+      "Backend compatibility checked \(checkedImages) tvOS-decodable images from \(uniqueCandidates.count) unique image URLs. MP Web-aligned image failures: \(webAlignedFailures)."
     )
+  }
+
+  private static func imageFailureReason(
+    _ result: BackendImageFetchResult,
+    requireTVDecode: Bool
+  ) -> String? {
+    let candidate = result.candidate
+    if let errorDescription = result.errorDescription {
+      return "Failed to fetch/decode image for \(candidate.diagnosticLabel): \(errorDescription)"
+    }
+
+    guard let statusCode = result.statusCode else {
+      return "Image response is not HTTP for \(candidate.diagnosticLabel)"
+    }
+
+    guard (200...299).contains(statusCode) else {
+      return "Image HTTP \(statusCode) for \(candidate.diagnosticLabel), content-type: \(result.contentType)\(result.previewSuffix)"
+    }
+
+    guard let data = result.data, !data.isEmpty else {
+      return "Image data is empty for \(candidate.diagnosticLabel)"
+    }
+
+    if result.isNonImagePayload {
+      return
+        "Image endpoint returned non-image payload for \(candidate.diagnosticLabel), content-type: \(result.contentType), bytes: \(data.count)\(result.previewSuffix)"
+    }
+
+    if requireTVDecode, UIImage(data: data) == nil {
+      return
+        "tvOS cannot decode image for \(candidate.diagnosticLabel), content-type: \(result.contentType), bytes: \(data.count)\(result.previewSuffix)"
+    }
+
+    return nil
+  }
+
+  private static func webEquivalentImageCandidate(
+    for candidate: BackendImageCandidate,
+    baseURL: String,
+    useImageCache: Bool
+  ) -> BackendImageCandidate? {
+    guard let rawURLString = candidate.rawURLString?.nilIfBlank else {
+      return nil
+    }
+    guard
+      let webURL = webDisplayImageURL(
+        rawURLString,
+        baseURL: baseURL,
+        useImageCache: useImageCache
+      )
+    else {
+      return nil
+    }
+
+    return BackendImageCandidate(
+      surface: "\(candidate.surface) [MP Web]",
+      record: candidate.record,
+      field: candidate.field,
+      rawURLString: rawURLString,
+      url: webURL
+    )
+  }
+
+  private static func webDisplayImageURL(
+    _ rawURLString: String,
+    baseURL: String,
+    useImageCache: Bool
+  ) -> URL? {
+    let value = rawURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !value.isEmpty else { return nil }
+
+    guard isHTTPURLString(value) else {
+      return URL(string: value, relativeTo: URL(string: baseURL))?.absoluteURL
+    }
+
+    if isBangumiImageURL(value) {
+      return proxiedWebImageURL(value, baseURL: baseURL, proxy: true, cache: useImageCache)
+    }
+
+    if useImageCache {
+      return cachedWebImageURL(value, baseURL: baseURL)
+    }
+
+    if isDoubanImageURL(value) {
+      return proxiedWebImageURL(value, baseURL: baseURL, proxy: false)
+    }
+
+    return URL(string: value)
+  }
+
+  private static func proxiedWebImageURL(
+    _ rawURLString: String,
+    baseURL: String,
+    proxy: Bool,
+    cache: Bool = false
+  ) -> URL? {
+    guard let encodedURL = encodeURIComponent(rawURLString) else { return nil }
+    var urlString = "\(baseURL)/api/v1/system/img/\(proxy ? 1 : 0)?imgurl=\(encodedURL)"
+    if cache {
+      urlString += "&cache=true"
+    }
+    return URL(string: urlString)
+  }
+
+  private static func cachedWebImageURL(_ rawURLString: String, baseURL: String) -> URL? {
+    guard let encodedURL = encodeURIComponent(rawURLString) else { return nil }
+    return URL(string: "\(baseURL)/api/v1/system/cache/image?url=\(encodedURL)")
+  }
+
+  private static func isBangumiImageURL(_ rawURLString: String) -> Bool {
+    if let host = URLComponents(string: rawURLString)?.host?.lowercased() {
+      return host == "lain.bgm.tv" || host.hasSuffix(".lain.bgm.tv")
+    }
+    return rawURLString.contains("lain.bgm.tv")
+  }
+
+  private static func isDoubanImageURL(_ rawURLString: String) -> Bool {
+    rawURLString.contains("doubanio.com")
+  }
+
+  private static func isHTTPURLString(_ rawURLString: String) -> Bool {
+    guard let scheme = URLComponents(string: rawURLString)?.scheme?.lowercased() else {
+      return false
+    }
+    return scheme == "http" || scheme == "https"
+  }
+
+  private static func encodeURIComponent(_ value: String) -> String? {
+    let allowed = CharacterSet(
+      charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
+    return value.addingPercentEncoding(withAllowedCharacters: allowed)
   }
 
   private static func fetchImageBatch(
@@ -1532,7 +1681,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
 
     let proxyQueryName: String?
     switch components.path {
-    case "/api/v1/system/img/0":
+    case "/api/v1/system/img/0", "/api/v1/system/img/1":
       proxyQueryName = "imgurl"
     case "/api/v1/system/cache/image":
       proxyQueryName = "url"

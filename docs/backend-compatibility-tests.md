@@ -20,6 +20,12 @@ xcodebuild test \
 
 真实后端巡检在 `Testing started` 后可能数分钟没有增量输出。图片巡检会扫描多个 TV 页面入口、实际下载海报/背景图/头像并等待 tvOS 解码；不要只因为短时间无输出就判断卡死，应等待用例结束或查看 `.xcresult` 中的测试摘要和失败详情。
 
+## 兼容判定原则
+
+真实后端兼容测试只验证 TV 端是否与 MoviePilot Web 前端和 MoviePilot 后端当前行为对齐，不用于替 MoviePilot 官方后端、Web 前端或第三方数据源兜底修 Bug。测试失败后应先判断 MP Web 等价行为：如果 MP Web 同样失败、同样不展示、或按前端逻辑本来就不会发起对应请求，则该问题应记录为上游对齐问题，不应要求 TV 端新增差异化容错。
+
+图片巡检尤其要遵守这一点。TV 图片请求失败时，测试应按 MP Web 的图片 URL 规则生成等价请求；若 Web 等价请求也失败，或原始图片值为空、非可请求 URL，导致 Web 本来也没有可下载图片，则应计入 Web 对齐失败并继续。只有 MP Web 等价图片能正常获取，而 TV 端图片失败，才应判定为 TV 端兼容问题。
+
 GitHub CI 没有真实后端账号，`ci.yml` 会显式跳过 `BackendCompatibilityReadOnlyTests` 和 `BackendCompatibilitySideEffectTests`。真实后端兼容测试应在本机或用户指定的带后端配置环境中运行。
 
 ## 真实后端只读套件

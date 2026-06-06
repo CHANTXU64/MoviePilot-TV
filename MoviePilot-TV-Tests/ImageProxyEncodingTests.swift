@@ -35,6 +35,7 @@ final class ImageProxyEncodingTests: XCTestCase {
     defer { snapshot.restore(to: service) }
 
     service.baseURL = "http://moviepilot.local"
+    service.useImageCache = false
 
     let rawImage =
       "https://img1.doubanio.com/view/photo/s_ratio_poster/public/p123.jpg?size=w500&token=abc#cover"
@@ -44,6 +45,28 @@ final class ImageProxyEncodingTests: XCTestCase {
       url,
       path: "/api/v1/system/img/0",
       queryName: "imgurl",
+      rawImage: rawImage,
+      leakedKeys: ["token"],
+      encodedTail: "%26token%3Dabc%23cover"
+    )
+  }
+
+  func testDoubanPosterUsesCacheWhenGlobalImageCacheIsEnabled() throws {
+    let service = APIService.shared
+    let snapshot = ImageProxyServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURL = "http://moviepilot.local"
+    service.useImageCache = true
+
+    let rawImage =
+      "https://img1.doubanio.com/view/photo/s_ratio_poster/public/p123.jpg?size=w500&token=abc#cover"
+    let url = try XCTUnwrap(service.getPosterImageUrl(posterPath: rawImage))
+
+    _ = try assertProxyURL(
+      url,
+      path: "/api/v1/system/cache/image",
+      queryName: "url",
       rawImage: rawImage,
       leakedKeys: ["token"],
       encodedTail: "%26token%3Dabc%23cover"
