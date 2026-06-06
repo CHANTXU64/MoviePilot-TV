@@ -1284,14 +1284,11 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     if let host = URLComponents(string: rawURLString)?.host?.lowercased() {
       return host == "lain.bgm.tv" || host.hasSuffix(".lain.bgm.tv")
     }
-    return rawURLString.localizedCaseInsensitiveContains("lain.bgm.tv")
+    return rawURLString.contains("lain.bgm.tv")
   }
 
   private static func isDoubanImageURL(_ rawURLString: String) -> Bool {
-    if let host = URLComponents(string: rawURLString)?.host?.lowercased() {
-      return host == "doubanio.com" || host.hasSuffix(".doubanio.com")
-    }
-    return rawURLString.localizedCaseInsensitiveContains("doubanio.com")
+    rawURLString.contains("doubanio.com")
   }
 
   private static func isHTTPURLString(_ rawURLString: String) -> Bool {
