@@ -235,8 +235,18 @@ class HomeViewModel: ObservableObject {
     }
   }
 
+  private func validLinkValue(_ value: String?) -> String? {
+    guard let value else { return nil }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    if ["none", "null", "undefined"].contains(trimmed.lowercased()) {
+      return nil
+    }
+    return trimmed
+  }
+
   func openMediaItem(_ item: MediaServerPlayItem, using openURL: OpenURLAction) {
-    guard let link = item.link, let originalUrl = URL(string: link) else { return }
+    guard let link = validLinkValue(item.link), let originalUrl = URL(string: link) else { return }
 
     var finalUrl: URL? = nil
 
@@ -251,22 +261,34 @@ class HomeViewModel: ObservableObject {
       // 如果是 Emby 服务器，则尝试构建深度链接，目前 Emby 2.0.3(2) 还不支持跳转到媒体
       // 后端链接格式: https://your-emby-server/web/index.html#!/item?id=xxxx&serverId=...
       // emby://items?serverId={your_server_id}&itemId={your_item_id}
+      var itemId = validLinkValue(item.item_id?.value)
+      var serverId = validLinkValue(item.server_id?.value)
       if let fragment = cleanFragment,
         let components = URLComponents(string: "https://dummy.com" + fragment)
       {
         let queryItems = components.queryItems ?? []
-        let itemId = queryItems.first { $0.name == "id" }?.value
-        let serverId = queryItems.first { $0.name == "serverId" }?.value
-        if let itemId = itemId, let serverId = serverId {
-          var deepLinkComponents = URLComponents()
-          deepLinkComponents.scheme = "emby"
-          deepLinkComponents.host = "items"
-          deepLinkComponents.queryItems = [
-            URLQueryItem(name: "serverId", value: serverId),
-            URLQueryItem(name: "itemId", value: itemId),
-          ]
-          finalUrl = deepLinkComponents.url
+        if itemId == nil {
+          itemId =
+            validLinkValue(queryItems.first { $0.name == "id" }?.value)
+            ?? validLinkValue(queryItems.first { $0.name == "parentId" }?.value)
         }
+        if serverId == nil {
+          serverId = validLinkValue(queryItems.first { $0.name == "serverId" }?.value)
+        }
+      }
+
+      if let itemId {
+        var queryItems = [URLQueryItem]()
+        if let serverId {
+          queryItems.append(URLQueryItem(name: "serverId", value: serverId))
+        }
+        queryItems.append(URLQueryItem(name: "itemId", value: itemId))
+
+        var deepLinkComponents = URLComponents()
+        deepLinkComponents.scheme = "emby"
+        deepLinkComponents.host = "items"
+        deepLinkComponents.queryItems = queryItems
+        finalUrl = deepLinkComponents.url
       }
 
     case .plex:
@@ -276,7 +298,9 @@ class HomeViewModel: ObservableObject {
         let components = URLComponents(string: "https://dummy.com" + fragment)
       {
         let pathParts = components.path.split(separator: "/")
-        if pathParts.count >= 2, pathParts[0] == "media", let rawId = item.raw_id?.value {
+        if pathParts.count >= 2, pathParts[0] == "media",
+          let rawId = validLinkValue(item.raw_id?.value)
+        {
           let serverId = String(pathParts[1])
           let metadataKey = "/library/metadata/\(rawId)"
 
