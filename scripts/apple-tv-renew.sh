@@ -39,7 +39,6 @@ Configure with environment variables:
   PROJECT_DIR, PROJECT_FILE, WORKSPACE, SCHEME, CONFIGURATION
   BUNDLE_ID, DEVELOPMENT_TEAM, DEVICE_ID, DEVICE_NAME_CONTAINS
   CLEAR_PROFILE_CACHE=1, MIN_VALID_SECONDS=432000
-  RENEW_THRESHOLD_SECONDS=0
 
 Example:
   BUNDLE_ID="com.example.MoviePilotTV" ./scripts/apple-tv-renew.sh
@@ -76,7 +75,6 @@ DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-}"
 ALLOW_PROVISIONING_DEVICE_REGISTRATION="${ALLOW_PROVISIONING_DEVICE_REGISTRATION:-1}"
 CLEAR_PROFILE_CACHE="${CLEAR_PROFILE_CACHE:-0}"
 MIN_VALID_SECONDS="${MIN_VALID_SECONDS:-432000}" # 5 days
-RENEW_THRESHOLD_SECONDS="${RENEW_THRESHOLD_SECONDS:-0}" # default: renew only when expired
 LOG_FILE="${LOG_FILE:-$PROJECT_DIR/renew.log}"
 
 log() {
@@ -200,8 +198,12 @@ profile = app / 'embedded.mobileprovision'
 if not profile.exists():
     print(json.dumps({'ok': False, 'error': 'embedded.mobileprovision not found', 'path': str(profile)}))
     sys.exit(0)
-data = subprocess.check_output(['security', 'cms', '-D', '-i', str(profile)], stderr=subprocess.DEVNULL)
-p = plistlib.loads(data)
+try:
+    data = subprocess.check_output(['security', 'cms', '-D', '-i', str(profile)], stderr=subprocess.DEVNULL)
+    p = plistlib.loads(data)
+except Exception as exc:
+    print(json.dumps({'ok': False, 'error': str(exc), 'path': str(profile)}, ensure_ascii=False))
+    sys.exit(0)
 ent = p.get('Entitlements') or {}
 exp = p.get('ExpirationDate')
 if exp and exp.tzinfo is None:
@@ -277,19 +279,18 @@ log "Configuration: $CONFIGURATION"
 log "Development team: ${DEVELOPMENT_TEAM:-<project/default>}"
 log "Bundle ID override: ${BUNDLE_ID:-<project default>}"
 log "Force renew: $FORCE_RENEW"
-log "Renew threshold seconds: $RENEW_THRESHOLD_SECONDS"
 
 if [ "$FORCE_RENEW" != "1" ]; then
   if APP_PATH="$(app_path_from_build_settings 2>/dev/null)" && [ -d "$APP_PATH" ]; then
     profile_json="$(profile_info_for_app "$APP_PATH")"
     if [ "$(profile_ok "$profile_json")" = "yes" ]; then
       remaining="$(profile_seconds_remaining "$profile_json")"
-      if [ "$remaining" -gt "$RENEW_THRESHOLD_SECONDS" ]; then
+      if [ "$remaining" -gt 0 ]; then
         log "Existing profile is still valid (${remaining}s remaining); skipping. Use --force to build/install anyway."
         printf '%s\n' "$profile_json"
         exit 0
       fi
-      log "Existing profile is within renewal window (${remaining}s remaining); renewing."
+      log "Existing profile is expired or has no valid expiration (${remaining}s remaining); renewing."
     else
       log "Existing app profile is missing or unreadable; renewing."
     fi
@@ -331,6 +332,7 @@ xcrun devicectl device install app --device "$DEVICE_ID" "$APP_PATH" 2>&1 | tee 
 log "=== Validate embedded provisioning profile ==="
 profile_json=$(profile_info_for_app "$APP_PATH")
 log "Profile: $profile_json"
+[ "$(profile_ok "$profile_json")" = "yes" ] || fail "profile validation failed: $profile_json"
 remaining=$(python3 - "$profile_json" <<'PY'
 import json, sys
 print(json.loads(sys.argv[1]).get('secondsRemaining') or -1)

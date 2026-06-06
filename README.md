@@ -88,12 +88,11 @@
    ```sh
    BUNDLE_ID="com.yourname.MoviePilotTV" bash scripts/apple-tv-renew.sh
    BUNDLE_ID="com.yourname.MoviePilotTV" bash scripts/apple-tv-renew.sh --force
-   RENEW_THRESHOLD_SECONDS=86400 BUNDLE_ID="com.yourname.MoviePilotTV" bash scripts/apple-tv-renew.sh
    ```
 
-   **注意：** 脚本默认只检查本机 DerivedData 中构建产物的 `embedded.mobileprovision`，不会确认 Apple TV 设备端是否仍安装成功；如果本机构建产物里的签名配置仍未过期，脚本会直接跳过。放进 crontab 定时保活时，更稳妥的是定期加 `--force` 重新构建并安装。
+   **注意：** 脚本默认只检查本机 DerivedData 中构建产物的 `embedded.mobileprovision`，不会确认 Apple TV 设备端是否仍安装成功；如果本机构建产物里的签名配置仍未过期，脚本会直接跳过。`--force` 会忽略这个本地未过期检查，直接重新构建并安装到已配对的 Apple TV，适合放进 crontab 定时保活或怀疑设备端安装状态异常时使用。
 
-   `RENEW_THRESHOLD_SECONDS` 可以尝试在剩余时间低于阈值时重新构建/安装，但 Xcode 自动签名不保证一定会在旧的 Xcode-managed provisioning profile 过期前生成新的 profile。因此“提前续签”可以作为尝试，不能当成确定的续期机制。
+   `--force` 只强制执行构建和安装流程，不代表 Xcode/Apple 一定会在旧的 Xcode-managed provisioning profile 过期前签发新的 profile；如果 Apple 仍复用未过期的 profile，应用的实际到期时间不会被提前延长。
 
 ## 后端兼容性测试（可选）
 
