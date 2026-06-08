@@ -44,6 +44,50 @@ nonisolated private func encodeURIComponent(_ value: String) -> String? {
   return value.addingPercentEncoding(withAllowedCharacters: allowed)
 }
 
+nonisolated private func isBangumiImageURL(_ value: String) -> Bool {
+  if let host = URLComponents(string: value)?.host?.lowercased() {
+    return host == "lain.bgm.tv" || host.hasSuffix(".lain.bgm.tv")
+  }
+  return value.contains("lain.bgm.tv")
+}
+
+nonisolated private func displayImageURL(
+  _ value: String?,
+  baseURL: String,
+  useImageCache: Bool
+) -> URL? {
+  guard let value, !value.isEmpty else {
+    return nil
+  }
+
+  let lowercasedValue = value.lowercased()
+  guard lowercasedValue.hasPrefix("http://") || lowercasedValue.hasPrefix("https://") else {
+    return URL(string: value)
+  }
+
+  guard let encodedUrl = encodeURIComponent(value) else {
+    return nil
+  }
+
+  if isBangumiImageURL(value) {
+    var urlString = "\(baseURL)/api/v1/system/img/1?imgurl=\(encodedUrl)"
+    if useImageCache {
+      urlString += "&cache=true"
+    }
+    return URL(string: urlString)
+  }
+
+  if useImageCache {
+    return URL(string: "\(baseURL)/api/v1/system/cache/image?url=\(encodedUrl)")
+  }
+
+  if value.contains("doubanio.com") {
+    return URL(string: "\(baseURL)/api/v1/system/img/0?imgurl=\(encodedUrl)")
+  }
+
+  return URL(string: value)
+}
+
 nonisolated private func decodeOrUnwrapSync<T: Decodable>(from data: Data) throws -> T {
   let firstByte = firstNonWhitespaceByte(in: data)
 
@@ -101,44 +145,14 @@ nonisolated private func posterImageURL(posterPath: String?, config: MediaImageU
     }
   }
 
-  if let currentUrl = url, currentUrl.contains("doubanio.com") {
-    guard
-      let encodedUrl = encodeURIComponent(currentUrl)
-    else {
-      return nil
-    }
-    return URL(string: "\(config.baseURL)/api/v1/system/img/0?imgurl=\(encodedUrl)")
-  }
-
-  if config.useImageCache, let currentUrl = url {
-    guard
-      let encodedUrl = encodeURIComponent(currentUrl)
-    else {
-      return nil
-    }
-    return URL(string: "\(config.baseURL)/api/v1/system/cache/image?url=\(encodedUrl)")
-  }
-
-  if let finalUrl = url {
-    return URL(string: finalUrl)
-  }
-  return nil
+  return displayImageURL(url, baseURL: config.baseURL, useImageCache: config.useImageCache)
 }
 
 nonisolated private func backdropImageURL(backdropPath: String?, config: MediaImageURLConfig)
   -> URL?
 {
   guard let url = backdropPath, !url.isEmpty else { return nil }
-
-  if config.useImageCache {
-    guard let encodedUrl = encodeURIComponent(url)
-    else {
-      return nil
-    }
-    return URL(string: "\(config.baseURL)/api/v1/system/cache/image?url=\(encodedUrl)")
-  }
-
-  return URL(string: url)
+  return displayImageURL(url, baseURL: config.baseURL, useImageCache: config.useImageCache)
 }
 
 /// 泛型轻量级接口缓存，带过期及淘汰策略
@@ -1578,17 +1592,7 @@ class APIService: ObservableObject {
   }
 
   func getSubscribePosterImageUrl(poster: String?) -> URL? {
-    guard let url = poster, !url.isEmpty else { return nil }
-
-    if useImageCache {
-      guard let encodedUrl = encodeURIComponent(url)
-      else {
-        return nil
-      }
-      return URL(string: "\(baseURL)/api/v1/system/cache/image?url=\(encodedUrl)")
-    }
-
-    return URL(string: url)
+    return displayImageURL(poster, baseURL: baseURL, useImageCache: useImageCache)
   }
 
   /// 获取订阅分享的海报图片 URL
@@ -1611,30 +1615,7 @@ class APIService: ObservableObject {
       }
     }
 
-    // 2. 如果地址中包含 douban 则使用中转代理 (豆瓣必须中转)
-    if let currentUrl = url, currentUrl.contains("doubanio.com") {
-      guard
-        let encodedUrl = encodeURIComponent(currentUrl)
-      else {
-        return nil
-      }
-      return URL(string: "\(baseURL)/api/v1/system/img/0?imgurl=\(encodedUrl)")
-    }
-
-    // 2. 否则根据设置判断是否使用图片缓存
-    if useImageCache, let currentUrl = url {
-      guard
-        let encodedUrl = encodeURIComponent(currentUrl)
-      else {
-        return nil
-      }
-      return URL(string: "\(baseURL)/api/v1/system/cache/image?url=\(encodedUrl)")
-    }
-
-    if let finalUrl = url {
-      return URL(string: finalUrl)
-    }
-    return nil
+    return displayImageURL(url, baseURL: baseURL, useImageCache: useImageCache)
   }
 
   /// 获取媒体背景图片 URL
@@ -1643,18 +1624,7 @@ class APIService: ObservableObject {
   }
 
   func getBackdropImageUrl(backdropPath: String?) -> URL? {
-    guard let url = backdropPath, !url.isEmpty else { return nil }
-
-    // 使用图片缓存
-    if useImageCache {
-      guard let encodedUrl = encodeURIComponent(url)
-      else {
-        return nil
-      }
-      return URL(string: "\(baseURL)/api/v1/system/cache/image?url=\(encodedUrl)")
-    }
-
-    return URL(string: url)
+    return displayImageURL(backdropPath, baseURL: baseURL, useImageCache: useImageCache)
   }
 
   /// 获取下载 Card 中的背景图片
@@ -1767,14 +1737,6 @@ class APIService: ObservableObject {
       return nil
     }
 
-    if useImageCache {
-      guard let encodedUrl = encodeURIComponent(url)
-      else {
-        return nil
-      }
-      return URL(string: "\(baseURL)/api/v1/system/cache/image?url=\(encodedUrl)")
-    }
-
-    return URL(string: url)
+    return displayImageURL(url, baseURL: baseURL, useImageCache: useImageCache)
   }
 }

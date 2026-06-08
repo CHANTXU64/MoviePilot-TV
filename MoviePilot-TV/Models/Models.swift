@@ -1025,6 +1025,10 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
 
   /// 真实接口返回的原始 ID（保留，以便未来跳转或 API 请求使用）
   let raw_id: FlexibleString?
+  /// 媒体服务器项目 ID
+  let item_id: FlexibleString?
+  /// 媒体服务器 ID
+  let server_id: FlexibleString?
   /// SwiftUI 需要的稳定唯一表示符（组合原始 id 和 link）
   let id: String
   /// 标题
@@ -1047,12 +1051,14 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
 
   enum CodingKeys: String, CodingKey {
     case raw_id = "id"
-    case title, subtitle, type, image, link, use_cookies, server_type
+    case item_id, server_id, title, subtitle, type, image, link, use_cookies, server_type
   }
 
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     raw_id = try container.decodeIfPresent(FlexibleString.self, forKey: .raw_id)
+    item_id = try container.decodeIfPresent(FlexibleString.self, forKey: .item_id)
+    server_id = try container.decodeIfPresent(FlexibleString.self, forKey: .server_id)
     title = try container.decode(String.self, forKey: .title)
     subtitle = try container.decodeIfPresent(String.self, forKey: .subtitle)
     type = try container.decodeIfPresent(String.self, forKey: .type)
@@ -1082,6 +1088,8 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
     link: String? = nil, use_cookies: FlexibleBool? = nil, server_type: MediaServerType? = nil
   ) {
     self.raw_id = FlexibleString(id)
+    self.item_id = nil
+    self.server_id = nil
     self.id = "playitem-\(id)-\(link ?? "")"
     self.title = title
     self.subtitle = subtitle
