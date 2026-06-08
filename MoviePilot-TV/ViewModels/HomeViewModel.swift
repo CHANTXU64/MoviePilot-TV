@@ -246,19 +246,20 @@ class HomeViewModel: ObservableObject {
   }
 
   func openMediaItem(_ item: MediaServerPlayItem, using openURL: OpenURLAction) {
-    guard let link = validLinkValue(item.link), let originalUrl = URL(string: link) else { return }
+    let originalUrl = validLinkValue(item.link).flatMap { URL(string: $0) }
+    guard originalUrl != nil || item.server_type == .emby else { return }
 
     var finalUrl: URL? = nil
 
     // 统一处理 Fragment 解析：有些后端返回 #!/item... 有些返回 #/item...
     let cleanFragment: String? = {
-      guard let fragment = originalUrl.fragment else { return nil }
+      guard let fragment = originalUrl?.fragment else { return nil }
       return fragment.starts(with: "!") ? String(fragment.dropFirst(1)) : fragment
     }()
 
     switch item.server_type {
     case .emby:
-      // 如果是 Emby 服务器，则尝试构建深度链接，目前 Emby 2.0.3(2) 还不支持跳转到媒体
+      // Emby for Apple TV 2.0.6+ 开始支持跳转到媒体项目。
       // 后端链接格式: https://your-emby-server/web/index.html#!/item?id=xxxx&serverId=...
       // emby://items?serverId={your_server_id}&itemId={your_item_id}
       var itemId = validLinkValue(item.item_id?.value)
@@ -336,7 +337,8 @@ class HomeViewModel: ObservableObject {
         print(accepted ? "成功打开深度链接: \(finalUrl)" : "无法打开深度链接: \(finalUrl)")
       }
     } else if let serverType = item.server_type {
-      print("未能生成 \(serverType.rawValue) 的有效深度链接: \(originalUrl)")
+      let source = originalUrl?.absoluteString ?? item.link ?? "<无链接>"
+      print("未能生成 \(serverType.rawValue) 的有效深度链接: \(source)")
     }
   }
 }
