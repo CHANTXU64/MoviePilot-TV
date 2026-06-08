@@ -49,6 +49,20 @@ final class HomeViewModelMediaServerLinkTests: XCTestCase {
     XCTAssertEqual(queryItems["itemId"], "emby-item-2")
   }
 
+  func testPlexDoesNotOpenFallbackWhenLinkIsInvalid() throws {
+    let item = try decodePlayItem(
+      """
+      {
+        "id": "plex-raw-1",
+        "title": "Plex Item",
+        "link": "none",
+        "server_type": "plex"
+      }
+      """)
+
+    XCTAssertNil(openMediaItem(item))
+  }
+
   private func openMediaItem(_ item: MediaServerPlayItem) -> URL? {
     var openedURL: URL?
     let action = OpenURLAction { url in

@@ -247,6 +247,7 @@ class HomeViewModel: ObservableObject {
 
   func openMediaItem(_ item: MediaServerPlayItem, using openURL: OpenURLAction) {
     let originalUrl = validLinkValue(item.link).flatMap { URL(string: $0) }
+    guard originalUrl != nil || item.server_type == .emby else { return }
 
     var finalUrl: URL? = nil
 
