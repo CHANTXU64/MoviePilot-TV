@@ -214,6 +214,7 @@ class APIService: ObservableObject {
   static let shared = APIService()
 
   private var loginTask: Task<Void, Error>?
+  private var credentialStore: CredentialStore = KeychainHelper.shared
 
   @Published var baseURL: String =
     UserDefaults.standard.string(forKey: "serverURL") ?? "http://192.168.1.1:3000"
@@ -229,11 +230,11 @@ class APIService: ObservableObject {
   {
     didSet {
       if let token = token {
-        if !KeychainHelper.shared.save(token, service: "MoviePilot-TV", account: "accessToken") {
-          UserDefaults.standard.set(token, forKey: "accessToken")
+        if credentialStore.save(token, service: "MoviePilot-TV", account: "accessToken") {
+          UserDefaults.standard.removeObject(forKey: "accessToken")
         }
       } else {
-        if !KeychainHelper.shared.delete(service: "MoviePilot-TV", account: "accessToken") {
+        if !credentialStore.delete(service: "MoviePilot-TV", account: "accessToken") {
           print("Failed to delete keychain item for account: accessToken")
         }
         UserDefaults.standard.removeObject(forKey: "accessToken")
@@ -270,16 +271,16 @@ class APIService: ObservableObject {
   // MARK: - 用于自动登录的凭据
   private var storedUsername: String? {
     get {
-      KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username")
+      credentialStore.read(service: "MoviePilot-TV", account: "username")
         ?? UserDefaults.standard.string(forKey: "username")
     }
     set {
       if let value = newValue {
-        if !KeychainHelper.shared.save(value, service: "MoviePilot-TV", account: "username") {
+        if !credentialStore.save(value, service: "MoviePilot-TV", account: "username") {
           UserDefaults.standard.set(value, forKey: "username")
         }
       } else {
-        if !KeychainHelper.shared.delete(service: "MoviePilot-TV", account: "username") {
+        if !credentialStore.delete(service: "MoviePilot-TV", account: "username") {
           print("Failed to delete keychain item for account: username")
         }
         UserDefaults.standard.removeObject(forKey: "username")
@@ -289,16 +290,16 @@ class APIService: ObservableObject {
 
   private var storedPassword: String? {
     get {
-      KeychainHelper.shared.read(service: "MoviePilot-TV", account: "password")
+      credentialStore.read(service: "MoviePilot-TV", account: "password")
         ?? UserDefaults.standard.string(forKey: "password")
     }
     set {
       if let value = newValue {
-        if !KeychainHelper.shared.save(value, service: "MoviePilot-TV", account: "password") {
+        if !credentialStore.save(value, service: "MoviePilot-TV", account: "password") {
           UserDefaults.standard.set(value, forKey: "password")
         }
       } else {
-        if !KeychainHelper.shared.delete(service: "MoviePilot-TV", account: "password") {
+        if !credentialStore.delete(service: "MoviePilot-TV", account: "password") {
           print("Failed to delete keychain item for account: password")
         }
         UserDefaults.standard.removeObject(forKey: "password")
@@ -307,6 +308,15 @@ class APIService: ObservableObject {
   }
 
   private init() {}
+
+  #if DEBUG
+  @discardableResult
+  func replaceCredentialStoreForTesting(_ store: CredentialStore) -> CredentialStore {
+    let originalStore = credentialStore
+    credentialStore = store
+    return originalStore
+  }
+  #endif
 
   var isLoggedIn: Bool {
     return token != nil
