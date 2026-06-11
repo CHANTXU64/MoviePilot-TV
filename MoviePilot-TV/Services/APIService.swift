@@ -276,8 +276,8 @@ class APIService: ObservableObject {
     }
     set {
       if let value = newValue {
-        if !credentialStore.save(value, service: "MoviePilot-TV", account: "username") {
-          UserDefaults.standard.set(value, forKey: "username")
+        if credentialStore.save(value, service: "MoviePilot-TV", account: "username") {
+          UserDefaults.standard.removeObject(forKey: "username")
         }
       } else {
         if !credentialStore.delete(service: "MoviePilot-TV", account: "username") {
@@ -295,8 +295,8 @@ class APIService: ObservableObject {
     }
     set {
       if let value = newValue {
-        if !credentialStore.save(value, service: "MoviePilot-TV", account: "password") {
-          UserDefaults.standard.set(value, forKey: "password")
+        if credentialStore.save(value, service: "MoviePilot-TV", account: "password") {
+          UserDefaults.standard.removeObject(forKey: "password")
         }
       } else {
         if !credentialStore.delete(service: "MoviePilot-TV", account: "password") {
@@ -315,6 +315,11 @@ class APIService: ObservableObject {
     let originalStore = credentialStore
     credentialStore = store
     return originalStore
+  }
+
+  func setStoredCredentialsForTesting(username: String?, password: String?) {
+    storedUsername = username
+    storedPassword = password
   }
   #endif
 
