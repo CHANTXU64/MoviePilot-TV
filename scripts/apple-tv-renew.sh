@@ -39,6 +39,7 @@ Configure with environment variables:
   PROJECT_DIR, PROJECT_FILE, WORKSPACE, SCHEME, CONFIGURATION
   BUNDLE_ID, DEVELOPMENT_TEAM, DEVICE_ID, DEVICE_NAME_CONTAINS
   CLEAR_PROFILE_CACHE=1, MIN_VALID_SECONDS=432000
+  CODESIGN_ENV_REPORT=1, KEYCHAIN_PATH
 
 Example:
   BUNDLE_ID="com.example.MoviePilotTV" ./scripts/apple-tv-renew.sh
@@ -75,6 +76,8 @@ DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-}"
 ALLOW_PROVISIONING_DEVICE_REGISTRATION="${ALLOW_PROVISIONING_DEVICE_REGISTRATION:-1}"
 CLEAR_PROFILE_CACHE="${CLEAR_PROFILE_CACHE:-0}"
 MIN_VALID_SECONDS="${MIN_VALID_SECONDS:-432000}" # 5 days
+CODESIGN_ENV_REPORT="${CODESIGN_ENV_REPORT:-1}"
+KEYCHAIN_PATH="${KEYCHAIN_PATH:-$HOME/Library/Keychains/login.keychain-db}"
 LOG_FILE="${LOG_FILE:-$PROJECT_DIR/renew.log}"
 
 log() {
@@ -91,6 +94,23 @@ fail() {
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "missing command: $1"
+}
+
+codesign_environment_report() {
+  [ "$CODESIGN_ENV_REPORT" = "1" ] || return 0
+  local identities keychain_status
+  identities="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" 2>&1 || true)"
+  keychain_status="$(security show-keychain-info "$KEYCHAIN_PATH" 2>&1 || true)"
+  log "Codesign environment report (report-only; does not verify private-key ACL or run codesign):"
+  printf '%s\n' "$identities" | while read -r line; do log "  identity: $line"; done
+  log "  keychain: $KEYCHAIN_PATH"
+  log "  keychain status: $keychain_status"
+  if ! printf '%s\n' "$identities" | grep -q 'Apple Development:'; then
+    log "WARNING: no Apple Development signing identity found in $KEYCHAIN_PATH; xcodebuild signing may fail. Run: security find-identity -v -p codesigning '$KEYCHAIN_PATH'"
+  fi
+  if printf '%s\n' "$keychain_status" | grep -q 'User interaction is not allowed'; then
+    log "WARNING: security show-keychain-info reported user interaction is not allowed for $KEYCHAIN_PATH. If xcodebuild later fails with errSecInternalComponent, unlock the keychain and run: security set-key-partition-list -S apple-tool:,apple:,codesign: -s -t private -k '<Mac login password>' '$KEYCHAIN_PATH'"
+  fi
 }
 
 find_project_file() {
@@ -279,6 +299,7 @@ log "Configuration: $CONFIGURATION"
 log "Development team: ${DEVELOPMENT_TEAM:-<project/default>}"
 log "Bundle ID override: ${BUNDLE_ID:-<project default>}"
 log "Force renew: $FORCE_RENEW"
+codesign_environment_report
 
 if [ "$FORCE_RENEW" != "1" ]; then
   if APP_PATH="$(app_path_from_build_settings 2>/dev/null)" && [ -d "$APP_PATH" ]; then
