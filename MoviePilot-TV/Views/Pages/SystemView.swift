@@ -66,92 +66,96 @@ struct SystemView: View {
           }
         }
 
-        Section(header: Text("搜索过滤"), footer: Text("搜索结果将先经过硬过滤去除不符合条件的资源，再经过软过滤将剩余不符合条件的资源灰置于末尾。"))
-        {
-          if viewModel.isLoadingRules {
-            HStack {
-              ProgressView()
-                .controlSize(.small)
-                .padding(.trailing, 8)
-              Text("正在加载规则...")
-                .foregroundColor(.secondary)
-            }
-          } else if viewModel.customFilterRules.isEmpty {
-            Text("暂无自定义过滤规则")
-              .foregroundColor(.secondary)
-          } else {
-            // 硬过滤规则
-            let hardRuleBinding = Binding<String>(
-              get: { viewModel.selectedHardFilterRuleId ?? "__none__" },
-              set: { newValue in
-                viewModel.selectedHardFilterRuleId = (newValue == "__none__") ? nil : newValue
-              }
-            )
-
-            Picker(selection: hardRuleBinding) {
-              Text("不过滤")
-                .tag("__none__")
-
-              ForEach(viewModel.customFilterRules) { rule in
-                ruleLabel(rule)
-                  .tag(rule.id)
-              }
-            } label: {
-              VStack(alignment: .leading, spacing: 4) {
-                Text("硬过滤")
-                Text("完全排除不符合条件的资源")
-                  .font(.caption)
-                  .foregroundColor(.secondary)
-              }
-              .padding(.vertical, 4)
-            }
-            .pickerStyle(.navigationLink)
-
-            // 软过滤规则
-            let softRuleBinding = Binding<String>(
-              get: { viewModel.selectedSoftFilterRuleId ?? "__none__" },
-              set: { newValue in
-                viewModel.selectedSoftFilterRuleId = (newValue == "__none__") ? nil : newValue
-              }
-            )
-
-            Picker(selection: softRuleBinding) {
-              Text("不过滤")
-                .tag("__none__")
-
-              ForEach(viewModel.customFilterRules) { rule in
-                ruleLabel(rule)
-                  .tag(rule.id)
-              }
-            } label: {
-              VStack(alignment: .leading, spacing: 4) {
-                Text("软过滤")
-                Text("将不符合条件的资源灰置于列表末尾")
-                  .font(.caption)
-                  .foregroundColor(.secondary)
-              }
-              .padding(.vertical, 4)
-            }
-            .pickerStyle(.navigationLink)
-          }
-
-          Button(action: {
-            Task {
-              await viewModel.loadCustomFilterRules()
-            }
-          }) {
-            HStack {
-              if viewModel.isLoadingRules {
+        if viewModel.canAccessAdminSettings {
+          Section(
+            header: Text("搜索过滤"),
+            footer: Text("搜索结果将先经过硬过滤去除不符合条件的资源，再经过软过滤将剩余不符合条件的资源灰置于末尾。")
+          ) {
+            if viewModel.isLoadingRules {
+              HStack {
                 ProgressView()
                   .controlSize(.small)
                   .padding(.trailing, 8)
+                Text("正在加载规则...")
+                  .foregroundColor(.secondary)
               }
-              Text("刷新规则列表")
-              Spacer()
-              Image(systemName: "arrow.clockwise")
+            } else if viewModel.customFilterRules.isEmpty {
+              Text("暂无自定义过滤规则")
+                .foregroundColor(.secondary)
+            } else {
+              // 硬过滤规则
+              let hardRuleBinding = Binding<String>(
+                get: { viewModel.selectedHardFilterRuleId ?? "__none__" },
+                set: { newValue in
+                  viewModel.selectedHardFilterRuleId = (newValue == "__none__") ? nil : newValue
+                }
+              )
+
+              Picker(selection: hardRuleBinding) {
+                Text("不过滤")
+                  .tag("__none__")
+
+                ForEach(viewModel.customFilterRules) { rule in
+                  ruleLabel(rule)
+                    .tag(rule.id)
+                }
+              } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                  Text("硬过滤")
+                  Text("完全排除不符合条件的资源")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 4)
+              }
+              .pickerStyle(.navigationLink)
+
+              // 软过滤规则
+              let softRuleBinding = Binding<String>(
+                get: { viewModel.selectedSoftFilterRuleId ?? "__none__" },
+                set: { newValue in
+                  viewModel.selectedSoftFilterRuleId = (newValue == "__none__") ? nil : newValue
+                }
+              )
+
+              Picker(selection: softRuleBinding) {
+                Text("不过滤")
+                  .tag("__none__")
+
+                ForEach(viewModel.customFilterRules) { rule in
+                  ruleLabel(rule)
+                    .tag(rule.id)
+                }
+              } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                  Text("软过滤")
+                  Text("将不符合条件的资源灰置于列表末尾")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 4)
+              }
+              .pickerStyle(.navigationLink)
             }
+
+            Button(action: {
+              Task {
+                await viewModel.loadCustomFilterRules()
+              }
+            }) {
+              HStack {
+                if viewModel.isLoadingRules {
+                  ProgressView()
+                    .controlSize(.small)
+                    .padding(.trailing, 8)
+                }
+                Text("刷新规则列表")
+                Spacer()
+                Image(systemName: "arrow.clockwise")
+              }
+            }
+            .disabled(viewModel.isLoadingRules)
           }
-          .disabled(viewModel.isLoadingRules)
         }
 
         Section(header: Text("账户"), footer: Text(viewModel.refreshMessage ?? "")) {
@@ -196,7 +200,9 @@ struct SystemView: View {
         // 加载系统环境信息
         await viewModel.loadSystemInfo()
         // 加载自定义过滤规则
-        await viewModel.loadCustomFilterRules()
+        if viewModel.canAccessAdminSettings {
+          await viewModel.loadCustomFilterRules()
+        }
         // 加载站点列表
         await viewModel.loadSites()
       }

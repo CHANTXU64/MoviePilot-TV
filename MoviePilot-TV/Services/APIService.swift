@@ -212,8 +212,26 @@ actor APICache<Key: Hashable, Value> {
 @MainActor
 class APIService: ObservableObject {
   static let shared = APIService()
+  static let sessionValidationEndpoint = "/system/ping"
+  static let currentUserEndpoint = "/user/current"
+
+  private static let userPermissionsDefaultsKey = "currentUserPermissions"
+  private static let isSuperUserDefaultsKey = "currentUserIsSuperUser"
 
   private var loginTask: Task<Void, Error>?
+
+  static func publicSettingEndpoint(for key: String) -> String {
+    "/system/setting/public/\(key)"
+  }
+
+  private static func loadStoredUserPermissions() -> UserPermissions {
+    guard let data = UserDefaults.standard.data(forKey: userPermissionsDefaultsKey),
+      let permissions = try? JSONDecoder().decode(UserPermissions.self, from: data)
+    else {
+      return .default
+    }
+    return permissions
+  }
 
   @Published var baseURL: String =
     UserDefaults.standard.string(forKey: "serverURL") ?? "http://192.168.1.1:3000"
@@ -258,6 +276,20 @@ class APIService: ObservableObject {
     }
   }
   @Published var useImageCache: Bool = false
+  @Published var currentUserPermissions: UserPermissions = APIService.loadStoredUserPermissions() {
+    didSet {
+      if let data = try? JSONEncoder().encode(currentUserPermissions) {
+        UserDefaults.standard.set(data, forKey: Self.userPermissionsDefaultsKey)
+      }
+    }
+  }
+  @Published var isSuperUser: Bool = UserDefaults.standard.bool(
+    forKey: APIService.isSuperUserDefaultsKey
+  ) {
+    didSet {
+      UserDefaults.standard.set(isSuperUser, forKey: Self.isSuperUserDefaultsKey)
+    }
+  }
 
   // MARK: - 短暂内存缓存 (提升二级页面和分季组件流畅度)
   private let episodeGroupsCache = APICache<String, [EpisodeGroup]>(defaultTTL: 120, size: 20)
@@ -314,8 +346,30 @@ class APIService: ObservableObject {
 
   func logout() {
     token = nil
+    clearCurrentUserAccess()
     storedUsername = nil
     storedPassword = nil
+  }
+
+  func canAccess(_ permission: UserPermissionKey) -> Bool {
+    currentUserPermissions.allows(permission, isSuperUser: isSuperUser)
+  }
+
+  private func updateCurrentUserAccess(from token: Token) {
+    currentUserPermissions = token.permissions
+    isSuperUser = token.super_user?.value ?? false
+  }
+
+  private func updateCurrentUserAccess(from user: CurrentUser) {
+    currentUserPermissions = user.permissions
+    isSuperUser = user.is_superuser.value
+  }
+
+  private func clearCurrentUserAccess() {
+    currentUserPermissions = .default
+    isSuperUser = false
+    UserDefaults.standard.removeObject(forKey: Self.userPermissionsDefaultsKey)
+    UserDefaults.standard.removeObject(forKey: Self.isSuperUserDefaultsKey)
   }
 
   private func makeRequest(
@@ -488,13 +542,22 @@ class APIService: ObservableObject {
 
     Task {
       do {
-        // 请求一个极其轻量的接口来验证 Token 和更新 Cookie
-        _ = try await makeRequest(endpoint: "/dashboard/statistic", retryOn401: true)
+        try await validateToken()
         print("Token/Session validation successful.")
       } catch {
         print("Silent token validation background process handled: \(error)")
       }
     }
+  }
+
+  func validateToken() async throws {
+    _ = try await makeRequest(endpoint: Self.sessionValidationEndpoint, retryOn401: true)
+  }
+
+  func refreshCurrentUserAccess() async throws {
+    let data = try await makeRequest(endpoint: Self.currentUserEndpoint)
+    let user = try await decodeOrUnwrap(CurrentUser.self, from: data)
+    updateCurrentUserAccess(from: user)
   }
 
   /// 登录获取 Token
@@ -517,6 +580,7 @@ class APIService: ObservableObject {
     let tokenResponse = try JSONDecoder().decode(Token.self, from: data)
 
     self.token = tokenResponse.access_token
+    self.updateCurrentUserAccess(from: tokenResponse)
     // 成功时保存凭据
     self.storedUsername = username
     self.storedPassword = password
@@ -1006,7 +1070,7 @@ class APIService: ObservableObject {
     struct ConfigValue: Decodable {
       let value: [StorageConf]
     }
-    let data = try await makeRequest(endpoint: "/system/setting/Storages")
+    let data = try await makeRequest(endpoint: Self.publicSettingEndpoint(for: "Storages"))
     let config = try await decodeOrUnwrap(ConfigValue.self, from: data)
     return config.value
   }
@@ -1279,7 +1343,7 @@ class APIService: ObservableObject {
     struct ConfigValue: Decodable {
       let value: [TransferDirectoryConf]
     }
-    let data = try await makeRequest(endpoint: "/system/setting/Directories")
+    let data = try await makeRequest(endpoint: Self.publicSettingEndpoint(for: "Directories"))
     let config = try await decodeOrUnwrap(ConfigValue.self, from: data)
     return config.value
   }
@@ -1289,7 +1353,7 @@ class APIService: ObservableObject {
     struct ConfigValue: Decodable {
       let value: [Int]?
     }
-    let data = try await makeRequest(endpoint: "/system/setting/IndexerSites")
+    let data = try await makeRequest(endpoint: Self.publicSettingEndpoint(for: "IndexerSites"))
     let config = try await decodeOrUnwrap(ConfigValue.self, from: data)
     return config.value ?? []
   }

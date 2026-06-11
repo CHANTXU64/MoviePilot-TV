@@ -17,29 +17,35 @@ struct ContentView: View {
             }
             .tag(0)
 
-          RecommendView()
-            .tabItem {
-              Label("推荐", systemImage: "sparkles.tv")
-            }
-            .tag(1)
+          if viewModel.canAccess(.discovery) {
+            RecommendView()
+              .tabItem {
+                Label("推荐", systemImage: "sparkles.tv")
+              }
+              .tag(1)
 
-          ExploreView()
-            .tabItem {
-              Label("探索", systemImage: "safari")
-            }
-            .tag(2)
+            ExploreView()
+              .tabItem {
+                Label("探索", systemImage: "safari")
+              }
+              .tag(2)
+          }
 
-          SearchView()
-            .tabItem {
-              Label("搜索", systemImage: "magnifyingglass")
-            }
-            .tag(3)
+          if viewModel.canAccess(.search) {
+            SearchView()
+              .tabItem {
+                Label("搜索", systemImage: "magnifyingglass")
+              }
+              .tag(3)
+          }
 
-          StatusView()
-            .tabItem {
-              Label("状态", systemImage: "slider.horizontal.3")
-            }
-            .tag(4)
+          if viewModel.canAccess(.admin) {
+            StatusView()
+              .tabItem {
+                Label("状态", systemImage: "slider.horizontal.3")
+              }
+              .tag(4)
+          }
 
           SystemView()
             .tabItem {

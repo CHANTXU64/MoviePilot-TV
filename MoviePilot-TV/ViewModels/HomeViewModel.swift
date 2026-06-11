@@ -77,6 +77,14 @@ class HomeViewModel: ObservableObject {
 
   /// 从已启用的媒体服务器加载最近媒体
   private func loadLatestMedia() async {
+    guard apiService.canAccess(.admin) else {
+      latestMediaByServer = [:]
+      if !latestMediaServers.isEmpty { latestMediaServers = [] }
+      if selectedLatestMediaServer != "" { selectedLatestMediaServer = "" }
+      if !latestMedia.isEmpty { latestMedia = [] }
+      return
+    }
+
     do {
       // 1. 获取所有配置的媒体服务器（如 Jellyfin/Emby/Plex）
       let servers = try await apiService.fetchMediaServers()
@@ -150,6 +158,12 @@ class HomeViewModel: ObservableObject {
 
   /// 加载所有订阅并按电影/电视剧分类，且按 ID 倒序排列，也就是最新的在最前面
   private func loadSubscriptions() async {
+    guard apiService.canAccess(.subscribe) else {
+      if !movieSubscriptions.isEmpty { movieSubscriptions = [] }
+      if !tvSubscriptions.isEmpty { tvSubscriptions = [] }
+      return
+    }
+
     do {
       let subs = try await apiService.fetchSubscriptions()
 

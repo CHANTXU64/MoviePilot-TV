@@ -196,12 +196,14 @@ struct SubscribeSheet: View {
                       set: { viewModel.subscribe.exclude = $0.isEmpty ? nil : $0 }
                     ))
 
-                  Button(action: { showingFilterGroupSelection = true }) {
-                    LabeledContent("优先级规则组") {
-                      Text(filterGroupButtonLabel)
-                    }
-                    .if(SheetStyleFix.shouldApply) { view in
-                      view.padding(.horizontal)
+                  if viewModel.canAccessAdminSettings {
+                    Button(action: { showingFilterGroupSelection = true }) {
+                      LabeledContent("优先级规则组") {
+                        Text(filterGroupButtonLabel)
+                      }
+                      .if(SheetStyleFix.shouldApply) { view in
+                        view.padding(.horizontal)
+                      }
                     }
                   }
 

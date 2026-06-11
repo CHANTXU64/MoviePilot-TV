@@ -35,6 +35,7 @@ struct MediaDetailView: View {
   @State private var lastFocusedButton: ButtonField?
 
   private var shouldShowSiteFilter: Bool {
+    guard canSearchResources else { return false }
     if focusedButton == .search || focusedButton == .sites {
       return true
     }
@@ -42,6 +43,14 @@ struct MediaDetailView: View {
       return true
     }
     return false
+  }
+
+  private var canSearchResources: Bool {
+    APIService.shared.canAccess(.search)
+  }
+
+  private var canSubscribeMedia: Bool {
+    APIService.shared.canAccess(.subscribe)
   }
 
   private var firstVisibleRow: String {
@@ -211,7 +220,7 @@ struct MediaDetailView: View {
       }
     }
     .environmentObject(subscriptionHandler)
-    .defaultFocus($focusedButton, .subscribe)
+    .defaultFocus($focusedButton, canSubscribeMedia ? .subscribe : (canSearchResources ? .search : .tmdbJump))
     .ignoresSafeArea()
     .onDisappear {
       // 取消防抖任务，防止视图消失后仍发起无意义的预加载请求
@@ -220,14 +229,16 @@ struct MediaDetailView: View {
     }
     .task {
       if !hasAppeared {
-        focusedButton = .subscribe
+        focusedButton = canSubscribeMedia ? .subscribe : (canSearchResources ? .search : .tmdbJump)
         hasAppeared = true
       }
       // 如果 fullDetail 已经就绪（预加载命中），立即应用（网络加载自动在后台启动）
       if let fullDetail = preloadTask.fullDetail {
         viewModel.applyFullDetail(fullDetail)
       }
-      await viewModel.siteFilter.loadSites()
+      if canSearchResources {
+        await viewModel.siteFilter.loadSites()
+      }
     }
     // 焦点恢复关键：当 fullDetail 加载完成后，应用完整详情。
     // MediaDetailView 从第一帧就存在于视图树中（用 partialMedia 初始化），
@@ -425,43 +436,47 @@ struct MediaDetailView: View {
               .disabled(isButtonLoading)
             }
 
-            // Primary subscribe button — 使用预加载的订阅状态
-            Button(action: {
-              if detail.canDirectlySubscribe {
-                handleHeaderSubscribe()
-              } else if detail.type == "电视剧" && detail.tmdb_id != nil {
-                isContentFocused = true
-              }
-            }) {
-              if viewModel.isUnsubscribing {
-                ProgressView()
-              } else {
-                let isDirect = detail.canDirectlySubscribe
-                let label = isDirect ? (isSubscribed ? "已订阅" : "订阅") : "分季订阅"
-                let icon =
-                  isDirect
-                  ? (isSubscribed ? "checkmark.circle.fill" : "plus.circle")
-                  : "list.bullet.circle"
+            if canSubscribeMedia {
+              // Primary subscribe button — 使用预加载的订阅状态
+              Button(action: {
+                if detail.canDirectlySubscribe {
+                  handleHeaderSubscribe()
+                } else if detail.type == "电视剧" && detail.tmdb_id != nil {
+                  isContentFocused = true
+                }
+              }) {
+                if viewModel.isUnsubscribing {
+                  ProgressView()
+                } else {
+                  let isDirect = detail.canDirectlySubscribe
+                  let label = isDirect ? (isSubscribed ? "已订阅" : "订阅") : "分季订阅"
+                  let icon =
+                    isDirect
+                    ? (isSubscribed ? "checkmark.circle.fill" : "plus.circle")
+                    : "list.bullet.circle"
 
-                Label(label, systemImage: icon)
+                  Label(label, systemImage: icon)
+                    .foregroundColor(.primary)
+                }
+              }
+              .focused($focusedButton, equals: .subscribe)
+              .disabled(viewModel.isUnsubscribing)
+            }
+
+            if canSearchResources {
+              // Search resources icon button
+              Button(action: {
+                let request = mediaActionHandler.searchResourcesTarget(
+                  for: viewModel.detail,
+                  sites: viewModel.siteFilter.sitesString
+                )
+                navigationPath.append(request)
+              }) {
+                Label("搜索资源", systemImage: "magnifyingglass")
                   .foregroundColor(.primary)
               }
+              .focused($focusedButton, equals: .search)
             }
-            .focused($focusedButton, equals: .subscribe)
-            .disabled(viewModel.isUnsubscribing)
-
-            // Search resources icon button
-            Button(action: {
-              let request = mediaActionHandler.searchResourcesTarget(
-                for: viewModel.detail,
-                sites: viewModel.siteFilter.sitesString
-              )
-              navigationPath.append(request)
-            }) {
-              Label("搜索资源", systemImage: "magnifyingglass")
-                .foregroundColor(.primary)
-            }
-            .focused($focusedButton, equals: .search)
 
             // Site selection button
             if shouldShowSiteFilter {

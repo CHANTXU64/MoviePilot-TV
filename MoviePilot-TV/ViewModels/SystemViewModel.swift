@@ -22,6 +22,7 @@ class SystemViewModel: ObservableObject {
   @Published var serverURL: String = ""
   @Published var username: String = ""
   @Published var backendVersion: String? = nil
+  @Published var canAccessAdminSettings: Bool = APIService.shared.canAccess(.admin)
 
   // MARK: - 详情页设置
 
@@ -128,6 +129,13 @@ class SystemViewModel: ObservableObject {
 
   init() {
     checkKeychainStatus()
+
+    APIService.shared.$isSuperUser
+      .combineLatest(APIService.shared.$currentUserPermissions)
+      .map { isSuperUser, permissions in
+        permissions.allows(.admin, isSuperUser: isSuperUser)
+      }
+      .assign(to: &$canAccessAdminSettings)
   }
 
   /// 手动刷新登录凭据（解决服务器重启或 Token 失效问题）
@@ -199,6 +207,11 @@ class SystemViewModel: ObservableObject {
       ?? UserDefaults.standard.string(forKey: "username")
       ?? "未知"
 
+    guard canAccessAdminSettings else {
+      backendVersion = nil
+      return
+    }
+
     do {
       let env = try await APIService.shared.fetchSystemEnv()
       self.backendVersion = env.VERSION
@@ -228,6 +241,10 @@ class SystemViewModel: ObservableObject {
   /// 从后端加载自定义过滤规则
   func loadCustomFilterRules() async {
     guard !isLoadingRules else { return }
+    guard canAccessAdminSettings else {
+      customFilterRules = []
+      return
+    }
     isLoadingRules = true
     do {
       customFilterRules = try await APIService.shared.fetchCustomFilterRules()

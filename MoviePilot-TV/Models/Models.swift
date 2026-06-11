@@ -95,6 +95,64 @@ struct FlexibleString: Codable, Hashable, ExpressibleByStringLiteral {
   }
 }
 
+enum UserPermissionKey: String, Codable {
+  case discovery
+  case search
+  case subscribe
+  case manage
+  case admin
+}
+
+struct UserPermissions: Codable, Equatable {
+  var discovery: Bool
+  var search: Bool
+  var subscribe: Bool
+  var manage: Bool
+  var admin: Bool
+
+  static let `default` = UserPermissions()
+
+  init(
+    discovery: Bool = true,
+    search: Bool = true,
+    subscribe: Bool = true,
+    manage: Bool = false,
+    admin: Bool = false
+  ) {
+    self.discovery = discovery
+    self.search = search
+    self.subscribe = subscribe
+    self.manage = manage
+    self.admin = admin
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    discovery = try container.decodeIfPresent(Bool.self, forKey: .discovery) ?? true
+    search = try container.decodeIfPresent(Bool.self, forKey: .search) ?? true
+    subscribe = try container.decodeIfPresent(Bool.self, forKey: .subscribe) ?? true
+    manage = try container.decodeIfPresent(Bool.self, forKey: .manage) ?? false
+    admin = try container.decodeIfPresent(Bool.self, forKey: .admin) ?? false
+  }
+
+  func allows(_ permission: UserPermissionKey, isSuperUser: Bool) -> Bool {
+    if isSuperUser { return true }
+
+    switch permission {
+    case .discovery:
+      return discovery
+    case .search:
+      return search
+    case .subscribe:
+      return subscribe
+    case .manage:
+      return manage
+    case .admin:
+      return false
+    }
+  }
+}
+
 /// 登录认证令牌
 struct Token: Codable {
   /// 用户令牌
@@ -102,10 +160,57 @@ struct Token: Codable {
   let token_type: String
   /// 是否属于超级管理员
   let super_user: FlexibleBool?
+  /// 用户ID
+  let user_id: Int
   /// 用户名
   let user_name: String
   /// 头像
   let avatar: String?
+  /// 权限级别
+  let level: Int
+  /// 详细权限
+  let permissions: UserPermissions
+  /// 是否显示配置向导
+  let wizard: FlexibleBool?
+
+  enum CodingKeys: String, CodingKey {
+    case access_token, token_type, super_user, user_id, user_name, avatar, level, permissions, wizard
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    access_token = try container.decode(String.self, forKey: .access_token)
+    token_type = try container.decode(String.self, forKey: .token_type)
+    super_user = try container.decodeIfPresent(FlexibleBool.self, forKey: .super_user)
+    user_id = try container.decodeIfPresent(Int.self, forKey: .user_id) ?? 0
+    user_name = try container.decode(String.self, forKey: .user_name)
+    avatar = try container.decodeIfPresent(String.self, forKey: .avatar)
+    level = try container.decodeIfPresent(Int.self, forKey: .level) ?? 1
+    permissions =
+      try container.decodeIfPresent(UserPermissions.self, forKey: .permissions) ?? .default
+    wizard = try container.decodeIfPresent(FlexibleBool.self, forKey: .wizard)
+  }
+}
+
+struct CurrentUser: Codable {
+  let id: Int?
+  let name: String
+  let is_superuser: FlexibleBool
+  let permissions: UserPermissions
+
+  enum CodingKeys: String, CodingKey {
+    case id, name, is_superuser, permissions
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decodeIfPresent(Int.self, forKey: .id)
+    name = try container.decode(String.self, forKey: .name)
+    is_superuser =
+      try container.decodeIfPresent(FlexibleBool.self, forKey: .is_superuser) ?? FlexibleBool(false)
+    permissions =
+      try container.decodeIfPresent(UserPermissions.self, forKey: .permissions) ?? .default
+  }
 }
 
 /// 媒体库统计概览

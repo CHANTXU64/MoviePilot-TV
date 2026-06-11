@@ -12,6 +12,7 @@ class SubscribeSheetViewModel: ObservableObject {
   @Published var isLoading = false
   @Published var isSaving = false
   @Published var isSaved = false
+  @Published var canAccessAdminSettings = APIService.shared.canAccess(.admin)
 
   // 标记我们是否正在创建一个新的订阅
   let isNewSubscription: Bool
@@ -105,9 +106,9 @@ class SubscribeSheetViewModel: ObservableObject {
       async let sitesTask = apiService.fetchSites()
       async let downloadersTask = apiService.fetchDownloadClients()
       async let directoriesTask = apiService.fetchDirectories()
-      async let filtersTask = apiService.fetchFilterRuleGroups()
 
-      let (s, d, dir, f) = try await (sitesTask, downloadersTask, directoriesTask, filtersTask)
+      let (s, d, dir) = try await (sitesTask, downloadersTask, directoriesTask)
+      let f = canAccessAdminSettings ? try await apiService.fetchFilterRuleGroups() : []
       self.sites = s
       self.downloaders = d
       self.directories = dir
