@@ -25,9 +25,12 @@ class DownloadTaskViewModel: ObservableObject {
   }
 
   func loadDownloads() async {
-    guard !selectedClient.isEmpty else { return }
+    let clientName = selectedClient
+    guard !clientName.isEmpty else { return }
     do {
-      let newDownloads = try await apiService.fetchDownloading(clientName: selectedClient)
+      let newDownloads = try await apiService.fetchDownloading(clientName: clientName)
+      guard selectedClient == clientName else { return }
+
       let newDownloadIds = Set(newDownloads.map { $0.id })
       let existingDownloadsById = Dictionary(uniqueKeysWithValues: downloads.map { ($0.id, $0) })
 
