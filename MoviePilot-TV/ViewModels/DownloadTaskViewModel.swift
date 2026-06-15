@@ -86,10 +86,13 @@ class DownloadTaskViewModel: ObservableObject {
 
   @MainActor
   func deleteDownload(hash: String) async {
-    guard !selectedClient.isEmpty else { return }
+    let clientName = selectedClient
+    guard !clientName.isEmpty else { return }
     do {
       let (success, message) = try await apiService.deleteDownload(
-        clientName: selectedClient, hash: hash)
+        clientName: clientName, hash: hash)
+      guard selectedClient == clientName else { return }
+
       if success, let index = downloads.firstIndex(where: { $0.hash == hash }) {
         downloads.remove(at: index)
       } else {

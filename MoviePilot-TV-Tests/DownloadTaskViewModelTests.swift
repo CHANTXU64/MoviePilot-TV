@@ -192,6 +192,62 @@ final class DownloadTaskViewModelTests: XCTestCase {
     )
   }
 
+  func testOlderClientDeleteThatCompletesLaterDoesNotRemoveCurrentClientDownloadWithSameHash()
+    async throws
+  {
+    XCTAssertTrue(URLProtocol.registerClass(DownloadTaskURLProtocol.self))
+    defer { URLProtocol.unregisterClass(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    let deleteGate = DownloadTaskAsyncGate()
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON(
+      #"{"success": true, "message": "ok"}"#,
+      forClient: "old",
+      waitFor: deleteGate
+    )
+
+    service.baseURL = "http://download-tests.local"
+
+    let viewModel = DownloadTaskViewModel()
+    viewModel.selectedClient = "old"
+    viewModel.downloads = try decodeDownloads(
+      downloadPayload(
+        hash: "shared-hash", title: "Old Client Task", username: "old-user", progress: 10)
+    )
+
+    let deleteTask = Task { @MainActor in
+      await viewModel.deleteDownload(hash: "shared-hash")
+    }
+    defer { deleteTask.cancel() }
+
+    try await withTimeout("old client delete request to start") {
+      await DownloadTaskURLProtocol.stub.waitForRequest(clientName: "old")
+    }
+
+    viewModel.selectedClient = "new"
+    viewModel.downloads = try decodeDownloads(
+      downloadPayload(
+        hash: "shared-hash", title: "New Client Task", username: "new-user", progress: 80)
+    )
+
+    await deleteGate.open()
+    try await withTimeout("old client delete to finish") {
+      await deleteTask.value
+    }
+
+    XCTAssertEqual(viewModel.selectedClient, "new")
+    XCTAssertEqual(
+      viewModel.downloads.map(\.hash),
+      ["shared-hash"],
+      "A delete response for an older downloader must not remove the current downloader row."
+    )
+    XCTAssertEqual(viewModel.downloads.first?.username, "new-user")
+  }
+
   private func downloadPayload(
     hash: String,
     title: String,
@@ -211,6 +267,10 @@ final class DownloadTaskViewModelTests: XCTestCase {
       }
     ]
     """
+  }
+
+  private func decodeDownloads(_ json: String) throws -> [DownloadingInfo] {
+    try JSONDecoder().decode([DownloadingInfo].self, from: Data(json.utf8))
   }
 }
 
