@@ -40,6 +40,26 @@ struct SubscribeSeasonContentView: View {
   @FocusState private var isTopRedirectorFocused: Bool
   @FocusState private var isBottomRedirectorFocused: Bool
 
+  static func performSeasonPrimaryAction(
+    season: TmdbSeason,
+    isSubscribed: Bool,
+    onSeasonTap: ((TmdbSeason) -> Void)?,
+    showUnsubscribeConfirm: (Int) -> Void,
+    prepareSubscription: (Int) -> Void
+  ) {
+    if let onSeasonTap {
+      onSeasonTap(season)
+      return
+    }
+
+    let seasonNumber = season.season_number ?? 0
+    if isSubscribed {
+      showUnsubscribeConfirm(seasonNumber)
+    } else {
+      prepareSubscription(seasonNumber)
+    }
+  }
+
   var body: some View {
     VStack(spacing: 0) {
       // Error Banner
@@ -259,11 +279,13 @@ struct SubscribeSeasonContentView: View {
         text: isSubscribed ? "取消订阅" : "订阅"
       ),
       action: {
-        if isSubscribed {
-          viewModel.showUnsubscribeConfirm = seasonNumber
-        } else {
-          viewModel.prepareSubscription(seasonNumber: seasonNumber)
-        }
+        Self.performSeasonPrimaryAction(
+          season: season,
+          isSubscribed: isSubscribed,
+          onSeasonTap: onSeasonTap,
+          showUnsubscribeConfirm: { viewModel.showUnsubscribeConfirm = $0 },
+          prepareSubscription: { viewModel.prepareSubscription(seasonNumber: $0) }
+        )
       }
     )
     .compositingGroup()
