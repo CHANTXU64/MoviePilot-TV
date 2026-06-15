@@ -43,7 +43,7 @@ class MediaPreloadTask: ObservableObject {
 
     // 合集(Collection)没有 media detail 详情页，走的是 CollectionDetailView，
     // fetchMediaDetail / checkSubscription / recognizeTmdb 等全部无意义且会失败，直接跳过
-    guard partialMedia.collection_id == nil else { return }
+    guard partialMedia.shouldPreloadDetail else { return }
 
     internalTasks.append(
       Task {

@@ -49,7 +49,7 @@ private struct GridCardView: View, Equatable {
     MediaCard(
       title: item.title ?? "",
       posterUrl: item.imageURLs.poster,
-      typeText: item.collection_id != nil ? "合集" : item.type,
+      typeText: item.displayTypeText,
       ratingText: item.vote_average.map { String(format: "%.1f", $0) },
       bottomLeftText: nil,
       bottomLeftSecondaryText: nil,
@@ -74,7 +74,7 @@ private struct GridCardViewWithMenu<MenuContent: View>: View, Equatable {
     MediaCard(
       title: item.title ?? "",
       posterUrl: item.imageURLs.poster,
-      typeText: item.collection_id != nil ? "合集" : item.type,
+      typeText: item.displayTypeText,
       ratingText: item.vote_average.map { String(format: "%.1f", $0) },
       bottomLeftText: nil,
       bottomLeftSecondaryText: nil,
@@ -232,7 +232,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     }
 
     preloadDebouncer.cancel(id: item.id)
-    if item.collection_id == nil {
+    if item.shouldPreloadDetail {
       preloadDebouncer.schedule(for: item)
     }
 

@@ -397,6 +397,14 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   nonisolated private static let collectionSuffixRegex = try? NSRegularExpression(
     pattern: "(（系列）|\\(系列\\)|\\s+collection)$", options: .caseInsensitive)
 
+  var displayTypeText: String? {
+    isCollection ? "合集" : type
+  }
+
+  var shouldPreloadDetail: Bool {
+    !isCollection
+  }
+
   enum CodingKeys: String, CodingKey {
     case tmdb_id, douban_id, bangumi_id, imdb_id, tvdb_id, source, mediaid_prefix, media_id, title,
       original_title, original_name, names,
