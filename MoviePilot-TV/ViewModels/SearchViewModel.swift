@@ -472,8 +472,10 @@ class SearchViewModel: ObservableObject {
         return shareItems.map { $0.toMediaInfo() }
       },
       processor: { @MainActor currentItems, newItems in
-        // 使用 MediaInfo 的去重逻辑
-        let uniqueNewItems = MediaInfo.deduplicate(newItems, existingKeys: &shareSeenKeys)
+        let uniqueNewItems = MediaInfo.deduplicateSubscriptionShareMedia(
+          newItems,
+          existingKeys: &shareSeenKeys
+        )
         if uniqueNewItems.isEmpty { return false }
         currentItems.append(contentsOf: uniqueNewItems)
         return true

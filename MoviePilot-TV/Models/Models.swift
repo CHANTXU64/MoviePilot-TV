@@ -716,6 +716,20 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     }
   }
 
+  static func deduplicateSubscriptionShareMedia(
+    _ items: [MediaInfo],
+    existingKeys: inout Set<String>
+  ) -> [MediaInfo] {
+    return items.filter { item in
+      let key = item.subscribeShare?.id ?? item.id
+      if existingKeys.contains(key) {
+        return false
+      }
+      existingKeys.insert(key)
+      return true
+    }
+  }
+
   /// 判断媒体是否可以直接订阅，无需选择季。
   /// - 对应前端: `MoviePilot-Frontend/src/views/discover/MediaDetailView.vue`
   /// - 应用场景: 在前端详情页中，此逻辑用于决定是否在页面主操作区显示一个全局的“订阅”按钮。如果一个媒体项目是“电影”，或者它拥有 `douban_id` / `bangumi_id`（通常意味着它是单季动画或有明确的整季订阅单元），则会显示该按钮，允许用户一键订阅整个媒体项目，从而跳过繁琐的季选择环节。

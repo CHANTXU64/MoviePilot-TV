@@ -464,7 +464,10 @@ class ExploreViewModel: ObservableObject {
         }
       },
       processor: { @MainActor currentItems, newItems in
-        let uniqueNewItems = MediaInfo.deduplicate(newItems, existingKeys: &seenKeys)
+        let uniqueNewItems =
+          source == .subscriptionShare
+          ? MediaInfo.deduplicateSubscriptionShareMedia(newItems, existingKeys: &seenKeys)
+          : MediaInfo.deduplicate(newItems, existingKeys: &seenKeys)
         if uniqueNewItems.isEmpty {
           return false
         }
