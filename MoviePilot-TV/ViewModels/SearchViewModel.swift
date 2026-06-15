@@ -238,6 +238,7 @@ class SearchViewModel: ObservableObject {
 
   private var sharedMediaFetcher: SharedMediaFetcher?
   private var searchStreamTask: Task<Void, Never>?
+  private var searchGeneration: Int = 0
   private let searchStreamDoneCloseDelay: UInt64 = 1_500_000_000
   
   @Published var searchProgressText: String = ""
@@ -246,6 +247,8 @@ class SearchViewModel: ObservableObject {
   /// 执行初始搜索：根据 searchType 决定是资源搜索还是聚合元数据搜索
   func autoSearch() async {
     guard !query.isEmpty else { return }
+    searchGeneration += 1
+    let currentSearchGeneration = searchGeneration
     
     searchStreamTask?.cancel()
     
@@ -343,6 +346,7 @@ class SearchViewModel: ObservableObject {
       _ = await (
         movieTask.value, tvTask.value, collectionTask.value, personTask.value, shareTask.value
       )
+      guard searchGeneration == currentSearchGeneration else { return }
 
       // 基于第一页的结果计算"最佳结果"
       // 由于 media 是电影+电视剧的混合，我们需要把它们组合起来传递
@@ -353,6 +357,7 @@ class SearchViewModel: ObservableObject {
         shares: sharePag.items
       )
     }
+    guard searchGeneration == currentSearchGeneration else { return }
     isLoading = false
     hasSearched = true
   }
