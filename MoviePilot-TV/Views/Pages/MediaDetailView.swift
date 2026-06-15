@@ -17,7 +17,6 @@ struct MediaDetailView: View {
   // 订阅相关 UI 状态（弹窗开关，纯 UI 逻辑）
   @State private var sheetSubscribe: Subscribe?
   @State private var showUnsubscribeConfirm = false
-  @State private var showSubscribedAlert = false
   /// 推荐区预加载防抖任务
   @State private var recommendPreloadDebounce: Task<Void, Never>?
   /// 相似区预加载防抖任务
@@ -270,11 +269,6 @@ struct MediaDetailView: View {
     } message: {
       Text("确定要取消订阅「\(viewModel.detail.title ?? "")」吗？")
     }
-    .alert("提示", isPresented: $showSubscribedAlert) {
-      Button("确定", role: .cancel) {}
-    } message: {
-      Text("该内容已在订阅中")
-    }
     .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $navigationPath)
     .sheet(isPresented: $showSiteSelection) {
       MultiSelectionSheet(
@@ -293,12 +287,28 @@ struct MediaDetailView: View {
 
   // MARK: - 订阅 UI 操作（业务逻辑委托给 ViewModel）
 
-  private func handleHeaderSubscribe() {
+  static func performHeaderSubscribeAction(
+    isSubscribed: Bool,
+    showUnsubscribeConfirm: () -> Void,
+    startSubscribe: () -> Void
+  ) {
     if isSubscribed {
-      showSubscribedAlert = true
+      showUnsubscribeConfirm()
     } else {
-      sheetSubscribe = viewModel.buildSubscribeRequest()
+      startSubscribe()
     }
+  }
+
+  private func handleHeaderSubscribe() {
+    Self.performHeaderSubscribeAction(
+      isSubscribed: isSubscribed,
+      showUnsubscribeConfirm: {
+        showUnsubscribeConfirm = true
+      },
+      startSubscribe: {
+        sheetSubscribe = viewModel.buildSubscribeRequest()
+      }
+    )
   }
 
   @ViewBuilder
