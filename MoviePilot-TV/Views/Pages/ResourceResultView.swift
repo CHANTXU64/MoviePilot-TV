@@ -34,6 +34,7 @@ struct ResourceResultView: View {
               .frame(width: 300)
           }
           Button("取消") {
+            viewModel.cancelSearch()
             dismiss()
           }
         }
@@ -72,6 +73,9 @@ struct ResourceResultView: View {
     }
     .task {
       await viewModel.search()
+    }
+    .onDisappear {
+      viewModel.cancelSearch()
     }
   }
 }

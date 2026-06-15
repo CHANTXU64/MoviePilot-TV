@@ -37,6 +37,16 @@ class ResourceResultViewModel: ObservableObject {
     self.sites = sites
   }
 
+  deinit {
+    searchStreamTask?.cancel()
+  }
+
+  func cancelSearch() {
+    searchStreamTask?.cancel()
+    searchStreamTask = nil
+    isLoading = false
+  }
+
   func search() async {
     guard !hasSearched else { return }
     hasSearched = true
@@ -47,7 +57,17 @@ class ResourceResultViewModel: ObservableObject {
     searchProgressText = "正在搜索..."
     searchProgress = 0.0
 
-    searchStreamTask = Task { @MainActor in
+    let keyword = self.keyword
+    let type = self.type
+    let area = self.area
+    let title = self.title
+    let year = self.year
+    let season = self.season
+    let sites = self.sites
+    let apiService = self.apiService
+    let doneCloseDelay = searchStreamDoneCloseDelay
+
+    searchStreamTask = Task { @MainActor [weak self] in
       var accumulatedResults: [Context] = []
 
       do {
@@ -55,7 +75,7 @@ class ResourceResultViewModel: ObservableObject {
 
         // 判断是否为媒体搜索（如 "tmdb:1234"）
         if keyword.contains(":") && keyword.prefix(while: { $0.isLetter }).count > 0 {
-          stream = APIService.shared.searchMediaStream(
+          stream = apiService.searchMediaStream(
             keyword: keyword,
             type: type,
             area: area,
@@ -65,17 +85,17 @@ class ResourceResultViewModel: ObservableObject {
             sites: sites
           )
         } else {
-          stream = APIService.shared.searchTitleStream(keyword: keyword, sites: sites)
+          stream = apiService.searchTitleStream(keyword: keyword, sites: sites)
         }
 
         for try await event in stream {
           if Task.isCancelled { break }
 
           if let text = event.text {
-            self.searchProgressText = text
+            self?.searchProgressText = text
           }
           if let value = event.value {
-            self.searchProgress = value
+            self?.searchProgress = value
           }
 
           if let items = event.items {
@@ -93,7 +113,7 @@ class ResourceResultViewModel: ObservableObject {
 
           if event.type == "done" {
             // 与 Web v2.13.2 保持一致：给后端搜索结果缓存写入留出收尾时间。
-            try? await Task.sleep(nanoseconds: searchStreamDoneCloseDelay)
+            try? await Task.sleep(nanoseconds: doneCloseDelay)
             break
           }
         }
@@ -101,12 +121,12 @@ class ResourceResultViewModel: ObservableObject {
         if !Task.isCancelled {
           // 获取所有本次搜索的目标站点
           var targetSites: Set<Int> = []
-          if let specificSites = self.sites, !specificSites.isEmpty {
+          if let specificSites = sites, !specificSites.isEmpty {
             let siteIds = specificSites.split(separator: ",").compactMap { Int($0) }
             targetSites = Set(siteIds)
           } else {
             do {
-              let allSites = try await self.apiService.fetchIndexerSites()
+              let allSites = try await apiService.fetchIndexerSites()
               if Task.isCancelled { return }
               targetSites = Set(allSites)
             } catch {
@@ -124,13 +144,13 @@ class ResourceResultViewModel: ObservableObject {
           if !missingSites.isEmpty && !Task.isCancelled {
             let missingSitesString = missingSites.map { String($0) }.joined(separator: ",")
             do {
-              let retryResults = try await self.apiService.searchResources(
-                keyword: self.keyword,
-                type: self.type,
-                area: self.area,
-                title: self.title,
-                year: self.year,
-                season: self.season,
+              let retryResults = try await apiService.searchResources(
+                keyword: keyword,
+                type: type,
+                area: area,
+                title: title,
+                year: year,
+                season: season,
                 sites: missingSitesString
               )
               if Task.isCancelled { return }
@@ -144,6 +164,7 @@ class ResourceResultViewModel: ObservableObject {
           if Task.isCancelled { return }
 
           // 应用自定义过滤规则
+          guard let self else { return }
           let filteredResults = await self.applyCustomFilter(to: accumulatedResults)
           
           if Task.isCancelled { return }
@@ -155,21 +176,22 @@ class ResourceResultViewModel: ObservableObject {
         print("Search Stream error: \(error)")
         if !Task.isCancelled {
           do {
-            var searchResults = try await self.apiService.searchResources(
-              keyword: self.keyword,
-              type: self.type,
-              area: self.area,
-              title: self.title,
-              year: self.year,
-              season: self.season,
-              sites: self.sites
+            var searchResults = try await apiService.searchResources(
+              keyword: keyword,
+              type: type,
+              area: area,
+              title: title,
+              year: year,
+              season: season,
+              sites: sites
             )
+            guard let self else { return }
             searchResults = await self.applyCustomFilter(to: searchResults)
             self.results = searchResults
           } catch {
             print("Search fallback error: \(error)")
           }
-          self.isLoading = false
+          self?.isLoading = false
         }
       }
     }
