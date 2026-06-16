@@ -19,55 +19,9 @@
 - Do not push, open PRs, or merge unless the user explicitly asks later.
 - User requested: "先写测试吧" and "改完一个 Commit 一个".
 
-Completed commits on this branch:
-
-```text
-082aed9 [AI] fix/credentials: prevent access token plaintext fallback
-3afbb31 [AI] fix/credentials: prevent login credential plaintext fallback
-```
-
-Completed behavior:
-
-- `APIService.token` no longer writes `accessToken` to `UserDefaults` when secure storage rejects a save.
-- `storedUsername` and `storedPassword` no longer write plaintext fallback values to `UserDefaults` when secure storage rejects a save.
-- Successful secure saves still remove old `UserDefaults` migration residue.
-- `nil` assignment still deletes secure items and removes related `UserDefaults` keys.
-- Added `CredentialStore` protocol and made `KeychainHelper` conform.
-- Added DEBUG-only `APIService.replaceCredentialStoreForTesting(_:)` and `APIService.setStoredCredentialsForTesting(username:password:)`.
-- Added `MoviePilot-TV-Tests/CredentialPersistenceTests.swift` with explicit failing-store tests, avoiding dependence on real Keychain availability.
-
-Verification already run after commit `3afbb31`:
-
-```bash
-xcodebuild -resolvePackageDependencies \
-  -project MoviePilot-TV.xcodeproj \
-  -scheme MoviePilot-TV \
-  -skipPackagePluginValidation
-
-xcodebuild clean build \
-  -project MoviePilot-TV.xcodeproj \
-  -scheme MoviePilot-TV \
-  -configuration Debug \
-  -destination "platform=tvOS Simulator,name=Apple TV" \
-  CODE_SIGNING_ALLOWED=NO \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY="" \
-  -skipPackagePluginValidation
-
-xcodebuild test \
-  -project MoviePilot-TV.xcodeproj \
-  -scheme MoviePilot-TV \
-  -configuration Debug \
-  -destination "platform=tvOS Simulator,name=Apple TV" \
-  -parallel-testing-enabled NO \
-  -maximum-concurrent-test-simulator-destinations 1 \
-  CODE_SIGNING_ALLOWED=NO \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY="" \
-  -skipPackagePluginValidation
-```
-
-Latest full test result: `Executed 48 tests, with 10 tests skipped and 0 failures`.
+Credential plaintext fallback is an accepted product risk for this branch. Do not continue the OCR
+credential-security cleanup unless the user explicitly reopens that scope. Keep the legacy
+`UserDefaults` fallback behavior as-is.
 
 ## Required Context To Read First
 
@@ -83,14 +37,13 @@ Read only the OCR report needed for the current slice. Do not bulk-load every re
 Priority OCR slices already identified from the previous review pass:
 
 ```text
-1. APIService / KeychainHelper credential security
-2. Models decoding / avatar fallback
-3. SubscribeSheet mistaken rollback behavior
-4. ResourceResultViewModel SSE lifecycle and error handling
-5. DownloadTaskViewModel crash or stale request overwrite
+1. Models decoding / avatar fallback
+2. SubscribeSheet mistaken rollback behavior
+3. ResourceResultViewModel SSE lifecycle and error handling
+4. DownloadTaskViewModel crash or stale request overwrite
 ```
 
-Credential plaintext fallback is now handled by commits `082aed9` and `3afbb31`. Continue by checking whether the credential-security slice still has a separate verified issue, such as Keychain query correctness or status UI/logging, before moving to Models.
+Credential plaintext fallback is intentionally skipped.
 
 ## Global Rules For The Next AI
 
@@ -110,79 +63,10 @@ Credential plaintext fallback is now handled by commits `082aed9` and `3afbb31`.
 - Do not add TV-only backend compatibility behavior unless MoviePilot Web differs and the TV code is clearly wrong.
 - If a command fails because Git metadata is outside the sandbox, rerun the same Git command with escalation. Do not work around it by editing `.git` manually.
 
-## Task 1: Finish Credential-Security Slice Triage
+## Task 1: Credential-Security Slice
 
-**Files likely involved:**
-- Read: `/private/tmp/MoviePilot-TV-ocr-zero-review-reports/docs/ocr-zero-review/batch01-api-service.raw.md`
-- Read: `MoviePilot-TV/Services/APIService.swift`
-- Read: `MoviePilot-TV/Services/KeychainHelper.swift`
-- Read if UI status is mentioned: `MoviePilot-TV/ViewModels/SystemViewModel.swift`
-- Test: `MoviePilot-TV-Tests/CredentialPersistenceTests.swift`
-
-- [ ] **Step 1: Read only the relevant OCR report**
-
-```bash
-sed -n '1,260p' /private/tmp/MoviePilot-TV-ocr-zero-review-reports/docs/ocr-zero-review/batch01-api-service.raw.md
-```
-
-- [ ] **Step 2: Verify whether a real unfixed credential bug remains**
-
-Check current code, not memory:
-
-```bash
-rg -n "accessToken|username|password|KeychainHelper|UserDefaults|CredentialStore|print\\(" MoviePilot-TV/Services/APIService.swift MoviePilot-TV/Services/KeychainHelper.swift MoviePilot-TV/ViewModels/SystemViewModel.swift MoviePilot-TV-Tests/CredentialPersistenceTests.swift
-```
-
-Expected after commits `082aed9` and `3afbb31`: no save-failure plaintext fallback remains in `APIService`.
-
-- [ ] **Step 3: If the remaining issue is real, write a focused RED test**
-
-Use a fake `CredentialStore` where possible. Do not depend on the tvOS test process being unable to access Keychain, because that can vary by environment.
-
-- [ ] **Step 4: Run only the focused test**
-
-```bash
-xcodebuild test \
-  -project MoviePilot-TV.xcodeproj \
-  -scheme MoviePilot-TV \
-  -configuration Debug \
-  -destination "platform=tvOS Simulator,name=Apple TV" \
-  -only-testing:MoviePilot-TV-Tests/CredentialPersistenceTests \
-  CODE_SIGNING_ALLOWED=NO \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY="" \
-  -parallel-testing-enabled NO \
-  -maximum-concurrent-test-simulator-destinations 1 \
-  -skipPackagePluginValidation
-```
-
-Expected for a new behavior test before implementation: FAIL for the behavior under test, not a syntax or entitlement error.
-
-- [ ] **Step 5: Implement the minimal fix and rerun the focused test**
-
-Use the same focused `xcodebuild test -only-testing:MoviePilot-TV-Tests/CredentialPersistenceTests` command.
-
-- [ ] **Step 6: Ask a subagent for read-only review**
-
-Prompt shape:
-
-```text
-请只读复核本小步，不要修改文件。当前工作区 /private/tmp/MoviePilot-TV-fix-ocr-phase1-safety。目标是 <one-sentence issue>. 已新增/修改测试 <test name>，生产改动在 <files>. 请重点检查测试是否真实覆盖目标行为、是否污染全局状态、生产改动是否过窄或漏掉同一 commit 必须修的问题。中文 findings，按严重程度排列，带文件/行号。
-```
-
-- [ ] **Step 7: Run standard verification**
-
-Run dependency resolution, clean build, and full test with the commands from "Current State".
-
-- [ ] **Step 8: Commit the slice**
-
-```bash
-git status --short --branch
-git diff --cached --stat
-git commit -m "[AI] fix/credentials: <specific remaining credential fix>"
-```
-
-Only commit after staging the exact files for this slice.
+Skipped by product decision. Do not modify credential plaintext fallback behavior unless the user
+explicitly asks to reopen this risk.
 
 ## Task 2: Models Decoding / Avatar Fallback
 
@@ -319,7 +203,7 @@ Suggested commit message:
 ## Common Pitfalls
 
 - OCR has false positives. Do not fix a report unless you can explain the concrete bug path.
-- Do not rely on Keychain failing in unit tests; use `CredentialStore` injection.
+- Do not reopen credential plaintext fallback work unless explicitly requested.
 - Do not add broad fallback behavior that MoviePilot Web does not have.
 - Do not replace `xcodebuild` validation with `swift build` or `swift test`.
 - Do not update `.agents/ReviewPlan.md` as part of implementation commits unless the user asks to archive review progress.

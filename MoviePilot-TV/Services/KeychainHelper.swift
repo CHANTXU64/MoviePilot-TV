@@ -1,13 +1,7 @@
 import Foundation
 import Security
 
-protocol CredentialStore: AnyObject {
-  func save(_ value: String, service: String, account: String) -> Bool
-  func read(service: String, account: String) -> String?
-  func delete(service: String, account: String) -> Bool
-}
-
-class KeychainHelper: CredentialStore {
+class KeychainHelper {
   static let shared = KeychainHelper()
   private init() {}
 
