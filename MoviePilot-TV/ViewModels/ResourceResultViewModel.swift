@@ -44,6 +44,7 @@ class ResourceResultViewModel: ObservableObject {
   func cancelSearch() {
     searchStreamTask?.cancel()
     searchStreamTask = nil
+    hasSearched = false
     isLoading = false
   }
 
@@ -185,12 +186,18 @@ class ResourceResultViewModel: ObservableObject {
               season: season,
               sites: sites
             )
+            if Task.isCancelled { return }
+
             guard let self else { return }
             searchResults = await self.applyCustomFilter(to: searchResults)
+            if Task.isCancelled { return }
+
             self.results = searchResults
           } catch {
             print("Search fallback error: \(error)")
           }
+          if Task.isCancelled { return }
+
           self?.isLoading = false
         }
       }

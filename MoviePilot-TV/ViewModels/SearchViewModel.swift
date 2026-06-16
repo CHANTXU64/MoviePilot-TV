@@ -249,12 +249,13 @@ class SearchViewModel: ObservableObject {
     guard !query.isEmpty else { return }
     searchGeneration += 1
     let currentSearchGeneration = searchGeneration
+    let searchQuery = query
     
     searchStreamTask?.cancel()
     
     isLoading = true
     hasSearched = false
-    submittedQuery = query
+    submittedQuery = searchQuery
 
     switch searchType {
     case .resource:
@@ -267,10 +268,12 @@ class SearchViewModel: ObservableObject {
         var accumulatedResults: [Context] = []
         
         do {
-          let stream = APIService.shared.searchTitleStream(keyword: submittedQuery, sites: sitesStr)
+          guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+
+          let stream = APIService.shared.searchTitleStream(keyword: searchQuery, sites: sitesStr)
           
           for try await event in stream {
-            if Task.isCancelled { break }
+            guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
             
             if let text = event.text {
               self.searchProgressText = text
@@ -295,33 +298,42 @@ class SearchViewModel: ObservableObject {
             if event.type == "done" {
               // 与 Web v2.13.2 保持一致：给后端搜索结果缓存写入留出收尾时间。
               try? await Task.sleep(nanoseconds: searchStreamDoneCloseDelay)
+              guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
               break
             }
           }
           
-          if !Task.isCancelled {
-            // 应用自定义过滤规则
-            let filteredResults = await self.applyCustomFilter(to: accumulatedResults)
-            self.resourceResults = filteredResults
-            self.isLoading = false
-            self.hasSearched = true
-          }
+          guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+
+          // 应用自定义过滤规则
+          let filteredResults = await self.applyCustomFilter(to: accumulatedResults)
+          guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+
+          self.resourceResults = filteredResults
+          self.isLoading = false
+          self.hasSearched = true
         } catch {
           print("Stream Search error: \(error)")
-          if !Task.isCancelled {
-            do {
-              var fallbackResults = try await self.apiService.searchResources(
-                keyword: self.submittedQuery,
-                sites: sitesStr
-              )
-              fallbackResults = await self.applyCustomFilter(to: fallbackResults)
-              self.resourceResults = fallbackResults
-            } catch {
-              print("Fallback Search error: \(error)")
-            }
-            self.isLoading = false
-            self.hasSearched = true
+          guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+
+          do {
+            var fallbackResults = try await self.apiService.searchResources(
+              keyword: searchQuery,
+              sites: sitesStr
+            )
+            guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+
+            fallbackResults = await self.applyCustomFilter(to: fallbackResults)
+            guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+
+            self.resourceResults = fallbackResults
+          } catch {
+            print("Fallback Search error: \(error)")
           }
+          guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+
+          self.isLoading = false
+          self.hasSearched = true
         }
       }
       return

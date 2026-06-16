@@ -120,6 +120,69 @@ final class SearchViewModelTests: XCTestCase {
     }
     XCTAssertEqual(bestResultTitles, ["New Result"])
   }
+
+  func testCancelledResourceSearchFilteringDoesNotPublishOldResultsOrClearNewLoading()
+    async throws
+  {
+    XCTAssertTrue(URLProtocol.registerClass(SearchViewModelURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURL = "http://search-tests.local"
+    let filterSnapshot = SearchViewModelFilterSelectionSnapshot.selectHardRule(
+      "allow-all", baseURL: service.baseURL)
+    defer { filterSnapshot.restore() }
+
+    let oldFilterGate = SearchAsyncGate()
+    let newStreamGate = SearchAsyncGate()
+    await SearchViewModelURLProtocol.stub.setCustomFilterGate(oldFilterGate)
+    await SearchViewModelURLProtocol.stub.setGate(newStreamGate, forQuery: "new")
+
+    let viewModel = SearchViewModel()
+    viewModel.searchType = .resource
+    viewModel.query = "old"
+
+    await viewModel.autoSearch()
+
+    try await withTimeout("old resource stream request to start") {
+      await SearchViewModelURLProtocol.stub.waitForRequest(
+        path: "/api/v1/search/title/stream", query: "old")
+    }
+    try await withTimeout("old resource search to enter async filtering") {
+      await SearchViewModelURLProtocol.stub.waitForRequest(
+        path: "/api/v1/system/setting/CustomFilterRules")
+    }
+
+    viewModel.query = "new"
+    await viewModel.autoSearch()
+
+    try await withTimeout("new resource stream request to start") {
+      await SearchViewModelURLProtocol.stub.waitForRequest(
+        path: "/api/v1/search/title/stream", query: "new")
+    }
+    try await withTimeout("old resource filtering request cancellation") {
+      await SearchViewModelURLProtocol.stub.waitForCancellation(
+        path: "/api/v1/system/setting/CustomFilterRules")
+    }
+    await Task.yield()
+
+    XCTAssertEqual(viewModel.submittedQuery, "new")
+    XCTAssertTrue(
+      viewModel.isLoading,
+      "A cancelled older resource search must not clear the loading state for the newer search."
+    )
+    XCTAssertTrue(
+      viewModel.resourceResults.isEmpty,
+      "A cancelled older resource search must not publish stale resource results while a newer search is in flight."
+    )
+
+    await oldFilterGate.open()
+    await newStreamGate.open()
+  }
 }
 
 @MainActor
@@ -160,15 +223,23 @@ private struct SearchViewModelHTTPStubResponse: Sendable {
 
 private actor SearchViewModelURLProtocolStub {
   private var gatesByQuery: [String: SearchAsyncGate] = [:]
-  private var requestedQueries: [String] = []
+  private var customFilterGate: SearchAsyncGate?
+  private var requestedRequests: [SearchRecordedRequest] = []
+  private var cancelledRequests: [SearchRecordedRequest] = []
 
   func reset() {
     gatesByQuery.removeAll()
-    requestedQueries.removeAll()
+    customFilterGate = nil
+    requestedRequests.removeAll()
+    cancelledRequests.removeAll()
   }
 
   func setGate(_ gate: SearchAsyncGate, forQuery query: String) {
     gatesByQuery[query] = gate
+  }
+
+  func setCustomFilterGate(_ gate: SearchAsyncGate) {
+    customFilterGate = gate
   }
 
   func response(for request: URLRequest) async throws -> SearchViewModelHTTPStubResponse {
@@ -182,10 +253,15 @@ private actor SearchViewModelURLProtocolStub {
     let queryItems = components.queryItems ?? []
     let query = queryItems.first(where: { $0.name == "title" })?.value
       ?? queryItems.first(where: { $0.name == "name" })?.value
+      ?? queryItems.first(where: { $0.name == "keyword" })?.value
       ?? ""
-    recordRequest(for: query)
+    recordRequest(path: components.path, query: query)
 
-    if let gate = gatesByQuery[query] {
+    if components.path == "/api/v1/system/setting/CustomFilterRules",
+      let gate = customFilterGate
+    {
+      await gate.wait()
+    } else if let gate = gatesByQuery[query] {
       await gate.wait()
     }
 
@@ -196,17 +272,59 @@ private actor SearchViewModelURLProtocolStub {
   }
 
   func waitForRequest(query: String) async {
-    while !requestedQueries.contains(query) {
+    while !requestedRequests.contains(where: { $0.query == query }) {
       if Task.isCancelled { return }
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
   }
 
-  private func recordRequest(for query: String) {
-    requestedQueries.append(query)
+  func waitForRequest(path: String, query: String? = nil) async {
+    while !requestedRequests.contains(where: { request in
+      request.path == path && (query == nil || request.query == query)
+    }) {
+      if Task.isCancelled { return }
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+  }
+
+  func recordCancellation(for request: URLRequest) {
+    guard
+      let url = request.url,
+      let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    else { return }
+    let queryItems = components.queryItems ?? []
+    let query = queryItems.first(where: { $0.name == "title" })?.value
+      ?? queryItems.first(where: { $0.name == "name" })?.value
+      ?? queryItems.first(where: { $0.name == "keyword" })?.value
+      ?? ""
+    cancelledRequests.append(SearchRecordedRequest(path: components.path, query: query))
+  }
+
+  func waitForCancellation(path: String, query: String? = nil) async {
+    while !cancelledRequests.contains(where: { request in
+      request.path == path && (query == nil || request.query == query)
+    }) {
+      if Task.isCancelled { return }
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+  }
+
+  private func recordRequest(path: String, query: String) {
+    requestedRequests.append(SearchRecordedRequest(path: path, query: query))
   }
 
   private func responseData(path: String, queryItems: [URLQueryItem], query: String) -> Data {
+    if path == "/api/v1/search/title/stream" {
+      return resourceSearchStreamData(title: query == "new" ? "New Resource" : "Old Resource")
+    }
+
+    if path == "/api/v1/system/setting/CustomFilterRules" {
+      return Data(
+        """
+        {"data":{"value":[{"id":"allow-all","name":"Allow All"}]}}
+        """.utf8)
+    }
+
     if path == "/api/v1/subscribe/shares" {
       return Data("[]".utf8)
     }
@@ -236,6 +354,66 @@ private actor SearchViewModelURLProtocolStub {
         }
       ]
       """.utf8)
+  }
+
+  private func resourceSearchStreamData(title: String) -> Data {
+    let event =
+      "data: {\"type\":\"append\",\"text\":\"Searching\",\"value\":50,\"items\":["
+      + resourceContextJSON(title: title)
+      + "]}\n\n"
+    return Data(event.utf8)
+  }
+
+  private func resourceContextJSON(title: String) -> String {
+    let slug = title.replacingOccurrences(of: " ", with: "-")
+    return #"{"torrent_info":{"site":1,"site_name":"Test Site","site_order":1,"title":"\#(title)","description":"","enclosure":"https://example.test/\#(slug)","page_url":"https://example.test/\#(slug)","size":1024,"seeders":10,"peers":1,"pubdate":"2026-06-16 10:00:00","uploadvolumefactor":1.0,"downloadvolumefactor":1.0,"pri_order":1,"labels":[],"volume_factor":"1x"}}"#
+  }
+}
+
+private struct SearchRecordedRequest: Equatable {
+  let path: String
+  let query: String
+}
+
+@MainActor
+private struct SearchViewModelFilterSelectionSnapshot {
+  let hardKey: String
+  let softKey: String
+  let hardValue: String?
+  let softValue: String?
+
+  static func selectHardRule(_ ruleId: String, baseURL: String)
+    -> SearchViewModelFilterSelectionSnapshot
+  {
+    let username =
+      KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username")
+      ?? UserDefaults.standard.string(forKey: "username")
+      ?? "default"
+    let hardKey = "selectedCustomFilterRuleId_\(baseURL)_\(username)"
+    let softKey = "selectedSoftFilterRuleId_\(baseURL)_\(username)"
+    let snapshot = SearchViewModelFilterSelectionSnapshot(
+      hardKey: hardKey,
+      softKey: softKey,
+      hardValue: UserDefaults.standard.string(forKey: hardKey),
+      softValue: UserDefaults.standard.string(forKey: softKey)
+    )
+    UserDefaults.standard.set(ruleId, forKey: hardKey)
+    UserDefaults.standard.removeObject(forKey: softKey)
+    return snapshot
+  }
+
+  func restore() {
+    if let hardValue {
+      UserDefaults.standard.set(hardValue, forKey: hardKey)
+    } else {
+      UserDefaults.standard.removeObject(forKey: hardKey)
+    }
+
+    if let softValue {
+      UserDefaults.standard.set(softValue, forKey: softKey)
+    } else {
+      UserDefaults.standard.removeObject(forKey: softKey)
+    }
   }
 }
 
@@ -277,6 +455,10 @@ private final class SearchViewModelURLProtocol: URLProtocol, @unchecked Sendable
   }
 
   override func stopLoading() {
+    let requestToCancel = request
+    Task {
+      await SearchViewModelURLProtocol.stub.recordCancellation(for: requestToCancel)
+    }
     loadingTask?.cancel()
     loadingTask = nil
   }
