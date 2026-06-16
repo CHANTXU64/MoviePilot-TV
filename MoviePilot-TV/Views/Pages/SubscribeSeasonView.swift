@@ -43,15 +43,10 @@ struct SubscribeSeasonContentView: View {
   static func performSeasonPrimaryAction(
     season: TmdbSeason,
     isSubscribed: Bool,
-    onSeasonTap: ((TmdbSeason) -> Void)?,
+    onSeasonTap _: ((TmdbSeason) -> Void)?,
     showUnsubscribeConfirm: (Int) -> Void,
     prepareSubscription: (Int) -> Void
   ) {
-    if let onSeasonTap {
-      onSeasonTap(season)
-      return
-    }
-
     let seasonNumber = season.season_number ?? 0
     if isSubscribed {
       showUnsubscribeConfirm(seasonNumber)

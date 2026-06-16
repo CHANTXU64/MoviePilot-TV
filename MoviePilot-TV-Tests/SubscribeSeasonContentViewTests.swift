@@ -4,8 +4,27 @@ import XCTest
 
 @MainActor
 final class SubscribeSeasonContentViewTests: XCTestCase {
-  func testSeasonPrimaryActionPrefersNavigationHandlerWhenProvided() throws {
+  func testSeasonPrimaryActionSubscribesSeasonWhenNavigationHandlerIsProvided() throws {
     let season = try makeSeason(number: 2)
+    var tappedSeason: TmdbSeason?
+    var unsubscribedSeason: Int?
+    var preparedSeason: Int?
+
+    SubscribeSeasonContentView.performSeasonPrimaryAction(
+      season: season,
+      isSubscribed: false,
+      onSeasonTap: { tappedSeason = $0 },
+      showUnsubscribeConfirm: { unsubscribedSeason = $0 },
+      prepareSubscription: { preparedSeason = $0 }
+    )
+
+    XCTAssertNil(tappedSeason)
+    XCTAssertNil(unsubscribedSeason)
+    XCTAssertEqual(preparedSeason, 2)
+  }
+
+  func testSeasonPrimaryActionUnsubscribesSeasonWhenNavigationHandlerIsProvided() throws {
+    let season = try makeSeason(number: 4)
     var tappedSeason: TmdbSeason?
     var unsubscribedSeason: Int?
     var preparedSeason: Int?
@@ -18,8 +37,8 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
       prepareSubscription: { preparedSeason = $0 }
     )
 
-    XCTAssertEqual(tappedSeason?.season_number, 2)
-    XCTAssertNil(unsubscribedSeason)
+    XCTAssertNil(tappedSeason)
+    XCTAssertEqual(unsubscribedSeason, 4)
     XCTAssertNil(preparedSeason)
   }
 
