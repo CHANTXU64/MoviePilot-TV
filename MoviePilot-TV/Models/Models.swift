@@ -1591,6 +1591,48 @@ struct BangumiImages: Codable, Hashable {
   let medium: String?
   let small: String?
   let grid: String?
+
+  enum CodingKeys: String, CodingKey {
+    case large
+    case common
+    case medium
+    case small
+    case grid
+  }
+
+  init(large: String?, common: String?, medium: String?, small: String?, grid: String?) {
+    self.large = large
+    self.common = common
+    self.medium = medium
+    self.small = small
+    self.grid = grid
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.large = try Self.decodeImageURL(from: container, forKey: .large)
+    self.common = try Self.decodeImageURL(from: container, forKey: .common)
+    self.medium = try Self.decodeImageURL(from: container, forKey: .medium)
+    self.small = try Self.decodeImageURL(from: container, forKey: .small)
+    self.grid = try Self.decodeImageURL(from: container, forKey: .grid)
+  }
+
+  private static func decodeImageURL(
+    from container: KeyedDecodingContainer<CodingKeys>,
+    forKey key: CodingKeys
+  ) throws -> String? {
+    if let stringValue = try? container.decodeIfPresent(String.self, forKey: key) {
+      return stringValue
+    }
+    if let objectValue = try? container.decodeIfPresent(ImageObject.self, forKey: key) {
+      return objectValue.url
+    }
+    return nil
+  }
+
+  private struct ImageObject: Codable, Hashable {
+    let url: String?
+  }
 }
 
 /// 演职人员头像数据源

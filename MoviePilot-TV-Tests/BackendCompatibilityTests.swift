@@ -613,6 +613,23 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   }
 
   @MainActor
+  func testReadOnlyPersonSearchDecodesKnownDoubanImagePayloads() async throws {
+    try await withReadOnlyBackend { service, _ in
+      let query = "易中天"
+
+      do {
+        let people = try await service.searchPerson(query: query, page: 1)
+        XCTAssertTrue(
+          people.contains { $0.name == query },
+          "Person search should decode and include \(query), matching the MP Web person search surface."
+        )
+      } catch {
+        XCTFail("Failed to decode read-only person search \(query): \(error)")
+      }
+    }
+  }
+
+  @MainActor
   func testReadOnlyTVSurfaceCompatibilityAndImageRendering() async throws {
     try await withReadOnlyBackend { service, config in
       _ = try await service.fetchSettings()
