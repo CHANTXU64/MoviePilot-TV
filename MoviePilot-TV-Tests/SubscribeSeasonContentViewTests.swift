@@ -324,8 +324,10 @@ private actor SubscriptionSnapshotURLProtocolStub {
   }
 }
 
-private final class SubscriptionSnapshotURLProtocol: URLProtocol, @unchecked Sendable {
+private final class SubscriptionSnapshotURLProtocol: URLProtocol {
   static let stub = SubscriptionSnapshotURLProtocolStub()
+
+  private var loadingTask: Task<Void, Never>?
 
   override class func canInit(with request: URLRequest) -> Bool {
     request.url?.host == "subscription-snapshot-tests.local"
@@ -336,23 +338,78 @@ private final class SubscriptionSnapshotURLProtocol: URLProtocol, @unchecked Sen
   }
 
   override func startLoading() {
+    let context = SubscriptionSnapshotURLProtocolTaskContext(
+      request: request,
+      clientBox: SubscriptionSnapshotURLProtocolClientBox(protocolInstance: self, client: client)
+    )
+
+    loadingTask = SubscriptionSnapshotURLProtocol.makeLoadingTask(for: context)
+  }
+
+  private static func makeLoadingTask(for context: SubscriptionSnapshotURLProtocolTaskContext)
+    -> Task<Void, Never>
+  {
     Task {
       do {
-        let stubResponse = try await SubscriptionSnapshotURLProtocol.stub.response(for: request)
-        let response = HTTPURLResponse(
-          url: request.url!,
-          statusCode: stubResponse.statusCode,
-          httpVersion: nil,
-          headerFields: nil
-        )!
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: stubResponse.data)
-        client?.urlProtocolDidFinishLoading(self)
+        let stubResponse = try await SubscriptionSnapshotURLProtocol.stub.response(
+          for: context.request)
+        guard !Task.isCancelled else { return }
+        context.clientBox.succeed(request: context.request, stubResponse: stubResponse)
       } catch {
-        client?.urlProtocol(self, didFailWithError: error)
+        guard !Task.isCancelled else { return }
+        context.clientBox.fail(error)
       }
     }
   }
 
-  override func stopLoading() {}
+  override func stopLoading() {
+    loadingTask?.cancel()
+    loadingTask = nil
+  }
+}
+
+private final class SubscriptionSnapshotURLProtocolTaskContext: @unchecked Sendable {
+  let request: URLRequest
+  let clientBox: SubscriptionSnapshotURLProtocolClientBox
+
+  init(request: URLRequest, clientBox: SubscriptionSnapshotURLProtocolClientBox) {
+    self.request = request
+    self.clientBox = clientBox
+  }
+}
+
+private final class SubscriptionSnapshotURLProtocolClientBox: @unchecked Sendable {
+  private let protocolInstance: URLProtocol
+  private let client: URLProtocolClient?
+
+  init(protocolInstance: URLProtocol, client: URLProtocolClient?) {
+    self.protocolInstance = protocolInstance
+    self.client = client
+  }
+
+  func succeed(request: URLRequest, stubResponse: SubscriptionSnapshotStubResponse) {
+    guard let url = request.url else {
+      fail(URLError(.badURL))
+      return
+    }
+    guard
+      let response = HTTPURLResponse(
+        url: url,
+        statusCode: stubResponse.statusCode,
+        httpVersion: nil,
+        headerFields: nil
+      )
+    else {
+      fail(URLError(.badServerResponse))
+      return
+    }
+
+    client?.urlProtocol(protocolInstance, didReceive: response, cacheStoragePolicy: .notAllowed)
+    client?.urlProtocol(protocolInstance, didLoad: stubResponse.data)
+    client?.urlProtocolDidFinishLoading(protocolInstance)
+  }
+
+  func fail(_ error: Error) {
+    client?.urlProtocol(protocolInstance, didFailWithError: error)
+  }
 }
