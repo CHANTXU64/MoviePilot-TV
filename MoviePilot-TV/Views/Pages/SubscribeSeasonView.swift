@@ -35,6 +35,7 @@ struct SubscribeSeasonContentView: View {
   var onSeasonTap: ((TmdbSeason) -> Void)? = nil
   var onMoreTapped: (() -> Void)? = nil
 
+  @Environment(\.scenePhase) private var scenePhase
   @State private var selectedSeasonDetail: TmdbSeason?
   @FocusState private var focusedSeasonId: Int?
   @FocusState private var isTopRedirectorFocused: Bool
@@ -163,7 +164,7 @@ struct SubscribeSeasonContentView: View {
       SubscribeSheet(subscribe: subscribe, isNewSubscription: true) {
         Task {
           await viewModel.checkSeasonsStatus()
-          await viewModel.checkSubscriptionStatus()
+          await viewModel.checkSubscriptionStatus(forceRefresh: true)
         }
       }
     }
@@ -182,7 +183,18 @@ struct SubscribeSeasonContentView: View {
       }
     } message: {
       if let season = viewModel.showUnsubscribeConfirm {
-        Text("确定要取消第 \(season) 季的订阅吗？")
+        Text(viewModel.unsubscribeConfirmationMessage(for: season))
+      }
+    }
+    .onChange(of: scenePhase) { _, phase in
+      guard phase == .active else { return }
+      Task {
+        await viewModel.checkSubscriptionStatus(forceRefresh: true)
+      }
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .subscriptionDidUpdate)) { _ in
+      Task {
+        await viewModel.checkSubscriptionStatus(forceRefresh: true)
       }
     }
   }
@@ -255,6 +267,8 @@ struct SubscribeSeasonContentView: View {
     let statusText = viewModel.getStatusText(season: seasonNumber)
     let episodeCount = season.episode_count ?? 0
     let bottomLeft = "\(episodeCount) 集 · \(statusText)"
+    let footerText =
+      isSubscribed ? (viewModel.subscriptionStatusText(for: seasonNumber) ?? "已订阅") : "订阅"
 
     MediaCard(
       title: title,
@@ -271,7 +285,7 @@ struct SubscribeSeasonContentView: View {
       showBadges: showBadges,
       footerLabel: (
         icon: isSubscribed ? "minus.circle" : "plus.circle",
-        text: isSubscribed ? "取消订阅" : "订阅"
+        text: footerText
       ),
       action: {
         Self.performSeasonPrimaryAction(

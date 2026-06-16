@@ -221,6 +221,7 @@ class APIService: ObservableObject {
   {
     didSet {
       UserDefaults.standard.set(baseURL, forKey: "serverURL")
+      invalidateSubscriptionCachesAfterSessionChange()
     }
   }
 
@@ -229,6 +230,7 @@ class APIService: ObservableObject {
     ?? UserDefaults.standard.string(forKey: "accessToken")
   {
     didSet {
+      invalidateSubscriptionCachesAfterSessionChange()
       if let token = token {
         if credentialStore.save(token, service: "MoviePilot-TV", account: "accessToken") {
           UserDefaults.standard.removeObject(forKey: "accessToken")
@@ -267,6 +269,24 @@ class APIService: ObservableObject {
   private let seasonsNotExistsCache = APICache<String, [NotExistMediaInfo]>(
     defaultTTL: 120, size: 20)
   private let subscriptionStatusCache = APICache<String, Bool>(defaultTTL: 120, size: 100)
+  private let subscriptionSnapshotCache = APICache<String, [Subscribe]>(defaultTTL: 30, size: 1)
+  private var subscriptionCacheGeneration = 0
+
+  private func invalidateSubscriptionCaches() async {
+    subscriptionCacheGeneration &+= 1
+    await subscriptionStatusCache.clear()
+    await subscriptionSnapshotCache.clear()
+  }
+
+  private func invalidateSubscriptionCachesAfterSessionChange() {
+    subscriptionCacheGeneration &+= 1
+    let statusCache = subscriptionStatusCache
+    let snapshotCache = subscriptionSnapshotCache
+    Task {
+      await statusCache.clear()
+      await snapshotCache.clear()
+    }
+  }
 
   // MARK: - 用于自动登录的凭据
   private var storedUsername: String? {
@@ -1402,17 +1422,25 @@ class APIService: ObservableObject {
     let method = (subscribe.id != nil && subscribe.id != 0) ? "PUT" : "POST"
 
     let data = try await makeRequest(endpoint: endpoint, method: method, body: body)
+    let success: Bool
     if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      return response.success ?? false
+      success = response.success ?? false
+    } else {
+      struct SimpleResp: Decodable {
+        let success: Bool?
+        let message: String?
+      }
+      if let resp = try? JSONDecoder().decode(SimpleResp.self, from: data) {
+        success = resp.success ?? true
+      } else {
+        success = true
+      }
     }
-    struct SimpleResp: Decodable {
-      let success: Bool?
-      let message: String?
+
+    if success {
+      await invalidateSubscriptionCaches()
     }
-    if let resp = try? JSONDecoder().decode(SimpleResp.self, from: data) {
-      return resp.success ?? true
-    }
-    return true
+    return success
   }
 
   /// 新增订阅（简单模式）
@@ -1432,10 +1460,7 @@ class APIService: ObservableObject {
     if let response = try? JSONDecoder().decode(ApiResponse<SubscribeAddResp>.self, from: data),
       let id = response.data?.id
     {
-      if let mediaId = subscribe.apiMediaId {
-        let cacheKey = "\(mediaId):\(subscribe.season.map(String.init) ?? "")"
-        await subscriptionStatusCache.remove(cacheKey)
-      }
+      await invalidateSubscriptionCaches()
       return id
     }
     return nil
@@ -1446,11 +1471,16 @@ class APIService: ObservableObject {
   /// - 应用场景: 1. 在订阅编辑弹窗中点击“取消订阅”按钮。 2. 在订阅列表页进行批量删除操作时并发调用。
   func deleteSubscription(id: Int) async throws -> Bool {
     let data = try await makeRequest(endpoint: "/subscribe/\(id)", method: "DELETE")
-    await subscriptionStatusCache.clear()
+    let success: Bool
     if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      return response.success ?? false
+      success = response.success ?? false
+    } else {
+      success = true
     }
-    return true
+    if success {
+      await invalidateSubscriptionCaches()
+    }
+    return success
   }
 
   /// 通过媒体 ID 和季数删除订阅
@@ -1465,12 +1495,16 @@ class APIService: ObservableObject {
       path: "/subscribe/media/\(mediaId)",
       params: ["season": season.map(String.init)])
     let data = try await makeRequest(endpoint: endpoint, method: "DELETE")
-    let cacheKey = "\(mediaId):\(season.map(String.init) ?? "")"
-    await subscriptionStatusCache.remove(cacheKey)
+    let success: Bool
     if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      return response.success ?? false
+      success = response.success ?? false
+    } else {
+      success = true
     }
-    return true
+    if success {
+      await invalidateSubscriptionCaches()
+    }
+    return success
   }
 
   /// 复用（Fork）一个订阅分享
@@ -1483,7 +1517,10 @@ class APIService: ObservableObject {
       let id: Int?
     }
     if let response = try? JSONDecoder().decode(ApiResponse<ForkResponse>.self, from: data) {
-      return response.data?.id
+      if let id = response.data?.id {
+        await invalidateSubscriptionCaches()
+        return id
+      }
     }
     return nil
   }
@@ -1494,10 +1531,16 @@ class APIService: ObservableObject {
   func updateSubscriptionStatus(id: Int, state: String) async throws -> Bool {
     let endpoint = try buildEndpoint(path: "/subscribe/status/\(id)", params: ["state": state])
     let data = try await makeRequest(endpoint: endpoint, method: "PUT")
+    let success: Bool
     if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      return response.success ?? false
+      success = response.success ?? false
+    } else {
+      success = true
     }
-    return true
+    if success {
+      await invalidateSubscriptionCaches()
+    }
+    return success
   }
 
   /// 立即触发订阅搜索
@@ -1516,10 +1559,16 @@ class APIService: ObservableObject {
   /// - 应用场景: 清除该条目的已下载/已入库记录，使其状态回到初始，通常用于重新洗版或出错后重试。
   func resetSubscription(id: Int) async throws -> Bool {
     let data = try await makeRequest(endpoint: "/subscribe/reset/\(id)")
+    let success: Bool
     if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      return response.success ?? false
+      success = response.success ?? false
+    } else {
+      success = true
     }
-    return true
+    if success {
+      await invalidateSubscriptionCaches()
+    }
+    return success
   }
 
   /// 获取单条订阅详情
@@ -1543,7 +1592,8 @@ class APIService: ObservableObject {
       return false
     }
     do {
-      let cacheKey = "\(mediaId):\(season.map(String.init) ?? "")"
+      let generation = subscriptionCacheGeneration
+      let cacheKey = "\(generation):\(mediaId):\(season.map(String.init) ?? "")"
       if let cached = await subscriptionStatusCache.get(cacheKey) {
         return cached
       }
@@ -1556,7 +1606,9 @@ class APIService: ObservableObject {
       let data = try await makeRequest(endpoint: endpoint)
       let resp = try await decodeOrUnwrap(SubscribeResp.self, from: data)
       let isSubscribed = resp.id != nil
-      await subscriptionStatusCache.set(cacheKey, value: isSubscribed)
+      if generation == subscriptionCacheGeneration {
+        await subscriptionStatusCache.set(cacheKey, value: isSubscribed)
+      }
       return isSubscribed
     } catch {
       return false
@@ -1566,9 +1618,19 @@ class APIService: ObservableObject {
   /// 拉取当前用户的所有订阅列表
   /// - 对应前端: `MoviePilot-Frontend/src/views/subscribe/SubscribeListView.vue`, `MoviePilot-Frontend/src/views/subscribe/FullCalendarView.swift`
   /// - 应用场景: 1. **订阅列表页面** (`SubscribeListView`) 的核心数据源。 2. **日历视图** (`FullCalendarView`) 的数据源。 (注: 全局搜索栏不直接调用此API)
-  func fetchSubscriptions() async throws -> [Subscribe] {
+  func fetchSubscriptions(forceRefresh: Bool = false) async throws -> [Subscribe] {
+    let generation = subscriptionCacheGeneration
+    let cacheKey = "subscriptions:\(generation)"
+    if !forceRefresh, let cached = await subscriptionSnapshotCache.get(cacheKey) {
+      return cached
+    }
+
     let data = try await makeRequest(endpoint: "/subscribe/")
-    return try await decodeOrUnwrap([Subscribe].self, from: data)
+    let subscriptions = try await decodeOrUnwrap([Subscribe].self, from: data)
+    if generation == subscriptionCacheGeneration {
+      await subscriptionSnapshotCache.set(cacheKey, value: subscriptions)
+    }
+    return subscriptions
   }
 
   /// 添加下载任务

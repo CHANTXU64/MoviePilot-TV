@@ -207,7 +207,7 @@ class MediaPreloadTask: ObservableObject {
   }
 
   /// 外部触发刷新订阅状态（收到订阅变更通知时调用）
-  func refreshSubscriptionStatus() async {
+  func refreshSubscriptionStatus(forceRefreshSeasonSnapshot: Bool = true) async {
     let detail = fullDetail ?? partialMedia
     if detail.canDirectlySubscribe {
       // 电影等可直接订阅的类型：重新查询全局订阅状态
@@ -225,7 +225,7 @@ class MediaPreloadTask: ObservableObject {
       }
     } else if let seasonVM = seasonViewModel {
       // 电视剧：刷新分季订阅状态
-      await seasonVM.checkSubscriptionStatus()
+      await seasonVM.checkSubscriptionStatus(forceRefresh: forceRefreshSeasonSnapshot)
     }
   }
 
@@ -415,10 +415,14 @@ class MediaPreloader: ObservableObject {
     let tasks = Array(cache.values)
     guard !tasks.isEmpty else { return }
 
+    if tasks.contains(where: { $0.seasonViewModel != nil }) {
+      _ = try? await APIService.shared.fetchSubscriptions(forceRefresh: true)
+    }
+
     await withTaskGroup(of: Void.self) { group in
       for task in tasks {
         group.addTask {
-          await task.refreshSubscriptionStatus()
+          await task.refreshSubscriptionStatus(forceRefreshSeasonSnapshot: false)
         }
       }
     }

@@ -40,7 +40,7 @@ class HomeViewModel: ObservableObject {
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in
         Task { [weak self] in
-          await self?.loadSubscriptions()
+          await self?.refreshSubscriptions(forceRefresh: true)
         }
       }
       .store(in: &cancellables)
@@ -71,7 +71,7 @@ class HomeViewModel: ObservableObject {
     // 采用 TaskGroup 并发加载首页的两大板块：最近播放和我的订阅，提升首屏响应速度
     await withTaskGroup(of: Void.self) { group in
       group.addTask { await self.loadLatestMedia() }
-      group.addTask { await self.loadSubscriptions() }
+      group.addTask { await self.refreshSubscriptions(forceRefresh: true) }
     }
   }
 
@@ -149,9 +149,9 @@ class HomeViewModel: ObservableObject {
   }
 
   /// 加载所有订阅并按电影/电视剧分类，且按 ID 倒序排列，也就是最新的在最前面
-  private func loadSubscriptions() async {
+  func refreshSubscriptions(forceRefresh: Bool = false) async {
     do {
-      let subs = try await apiService.fetchSubscriptions()
+      let subs = try await apiService.fetchSubscriptions(forceRefresh: forceRefresh)
 
       let newMovies = subs.filter { $0.type == "电影" }
         .sorted { ($0.id ?? 0) > ($1.id ?? 0) }
@@ -183,7 +183,7 @@ class HomeViewModel: ObservableObject {
     do {
       let success = try await apiService.updateSubscriptionStatus(id: id, state: newState)
       if success {
-        await loadSubscriptions()
+        await refreshSubscriptions(forceRefresh: true)
       }
       return success
     } catch {
@@ -198,7 +198,7 @@ class HomeViewModel: ObservableObject {
     do {
       let success = try await apiService.resetSubscription(id: id)
       if success {
-        await loadSubscriptions()
+        await refreshSubscriptions(forceRefresh: true)
       }
       return success
     } catch {
@@ -224,7 +224,7 @@ class HomeViewModel: ObservableObject {
     do {
       let success = try await apiService.deleteSubscription(id: id)
       if success {
-        await loadSubscriptions()
+        await refreshSubscriptions(forceRefresh: true)
         // 通知其他页面（如详情页 preloadTask）订阅已变更
         NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
       }
