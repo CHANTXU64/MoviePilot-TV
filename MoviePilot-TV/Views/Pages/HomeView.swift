@@ -153,6 +153,12 @@ struct HomeView: View {
   }
 }
 
+enum HomeSubscribeFocusID {
+  static func value(for id: Int?) -> String? {
+    id.map(String.init)
+  }
+}
+
 // MARK: - 子视图
 
 private struct MediaSectionView: View {
@@ -307,7 +313,7 @@ private struct SubscribeSectionView: View {
           .focused($isTopRedirectorFocused)
           .onChange(of: isTopRedirectorFocused) { _, isFocused in
             if isFocused {
-              focusedItemId = items.first?.id.map { String($0) }
+              focusedItemId = HomeSubscribeFocusID.value(for: items.first?.id)
               hasRedirectedFocus = true
               isTopRedirectorFocused = false
             }
@@ -323,7 +329,7 @@ private struct SubscribeSectionView: View {
               onEdit: { onEdit(item) },
               onViewDetail: { onViewDetail(item) }
             )
-            .focused($focusedItemId, equals: String(describing: item.id))
+            .focused($focusedItemId, equals: HomeSubscribeFocusID.value(for: item.id))
           }
         }
         .padding(.top, 25)
