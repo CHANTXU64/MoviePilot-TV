@@ -48,6 +48,12 @@ class ResourceResultViewModel: ObservableObject {
     isLoading = false
   }
 
+  func cancelInFlightSearch() {
+    searchStreamTask?.cancel()
+    searchStreamTask = nil
+    isLoading = false
+  }
+
   func search() async {
     guard !hasSearched else { return }
     hasSearched = true

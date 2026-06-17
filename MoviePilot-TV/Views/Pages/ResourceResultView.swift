@@ -75,7 +75,7 @@ struct ResourceResultView: View {
       await viewModel.search()
     }
     .onDisappear {
-      viewModel.cancelSearch()
+      viewModel.cancelInFlightSearch()
     }
   }
 }

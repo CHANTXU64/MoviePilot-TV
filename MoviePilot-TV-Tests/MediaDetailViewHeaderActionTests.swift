@@ -287,6 +287,46 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
+  func testCheckSubscriptionRetriesWhenGenerationChangesAfterStatusCacheStore() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    await DetailHeaderSubscriptionURLProtocol.stub.enqueueResolvedSubscription(
+      tmdbId: 775_544,
+      id: 9201
+    )
+    await DetailHeaderSubscriptionURLProtocol.stub.setResolvedSubscription(
+      tmdbId: 775_544,
+      id: nil
+    )
+    service.baseURL = "http://detail-header-subscription-tests.local"
+
+    var didInvalidate = false
+    service.subscriptionCacheTestHooks.afterSubscriptionStatusCacheStore = {
+      guard !didInvalidate else { return }
+      didInvalidate = true
+      _ = try? await service.deleteSubscription(id: 9201)
+    }
+    defer { service.subscriptionCacheTestHooks = .init() }
+
+    let status = try await service.checkSubscription(
+      media: MediaInfo(tmdb_id: 775_544, type: "电影")
+    )
+    let lookupCount = await DetailHeaderSubscriptionURLProtocol.stub.lookupRequestCount(
+      tmdbId: 775_544
+    )
+
+    XCTAssertTrue(didInvalidate)
+    XCTAssertFalse(status)
+    XCTAssertEqual(lookupCount, 2)
+  }
+
+  @MainActor
   func testDeleteSubscriptionEncodesMediaIdAsSinglePathSegment() async throws {
     XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
     defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }

@@ -224,6 +224,54 @@ final class ResourceResultViewModelTests: XCTestCase {
       "After onDisappear cancellation, appearing again and calling search() should start a new resource stream request."
     )
   }
+
+  func testCompletedSearchDoesNotRestartAfterInFlightDisappearCancellation() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(ResourceResultViewModelURLProtocol.self))
+    defer { URLProtocol.unregisterClass(ResourceResultViewModelURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await ResourceResultViewModelURLProtocol.stub.reset()
+    service.baseURL = "http://resource-result-tests.local"
+    let filterSnapshot = ResourceResultViewModelFilterSelectionSnapshot.selectHardRule(
+      "allow-all", baseURL: service.baseURL)
+    defer { filterSnapshot.restore() }
+
+    await ResourceResultViewModelURLProtocol.stub.setStreamFailure(forKeyword: "finished")
+    await ResourceResultViewModelURLProtocol.stub.setFallbackResults(
+      [resourceContextJSON(title: "Finished Result")],
+      forKeyword: "finished"
+    )
+
+    let viewModel = ResourceResultViewModel(keyword: "finished")
+    await viewModel.search()
+
+    try await withTimeout("fallback resource search to complete") {
+      await ResourceResultViewModelURLProtocol.stub.waitForRequest(
+        path: "/api/v1/search/title", keyword: "finished")
+    }
+
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try await Task.sleep(nanoseconds: 20_000_000)
+    }
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertEqual(viewModel.results.count, 1)
+
+    viewModel.cancelInFlightSearch()
+    await viewModel.search()
+
+    let didStartSecondSearch = await completesWithin(seconds: 0.2) {
+      await ResourceResultViewModelURLProtocol.stub.waitForRequest(
+        path: "/api/v1/search/title/stream", keyword: "finished", count: 2)
+    }
+    XCTAssertFalse(
+      didStartSecondSearch,
+      "A completed resource search should keep hasSearched true when the view only cancels in-flight work on disappear."
+    )
+  }
 }
 
 @MainActor

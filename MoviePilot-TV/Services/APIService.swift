@@ -28,6 +28,15 @@ nonisolated struct MediaImageURLConfig: Sendable {
   let useImageCache: Bool
 }
 
+#if DEBUG
+struct SubscriptionCacheTestHooks {
+  var afterSubscriptionSnapshotCacheHit: (() async -> Void)?
+  var afterSubscriptionSnapshotFetchValue: (() async -> Void)?
+  var afterSubscriptionSnapshotCacheStore: (() async -> Void)?
+  var afterSubscriptionStatusCacheStore: (() async -> Void)?
+}
+#endif
+
 nonisolated private func decodingContext(from error: DecodingError) -> DecodingError.Context? {
   switch error {
   case .typeMismatch(_, let context), .valueNotFound(_, let context),
@@ -298,15 +307,26 @@ class APIService: ObservableObject {
     renewsTTLOnAccess: false
   )
   private var subscriptionCacheGeneration = 0
+  private var subscriptionSnapshotFetchGeneration: Int?
+  private var subscriptionSnapshotFetchTask: Task<[Subscribe], Error>?
+  #if DEBUG
+  var subscriptionCacheTestHooks = SubscriptionCacheTestHooks()
+  #endif
 
   private func invalidateSubscriptionCaches() async {
     subscriptionCacheGeneration &+= 1
+    subscriptionSnapshotFetchTask?.cancel()
+    subscriptionSnapshotFetchGeneration = nil
+    subscriptionSnapshotFetchTask = nil
     await subscriptionStatusCache.clear()
     await subscriptionSnapshotCache.clear()
   }
 
   private func invalidateSubscriptionCachesAfterSessionChange() {
     subscriptionCacheGeneration &+= 1
+    subscriptionSnapshotFetchTask?.cancel()
+    subscriptionSnapshotFetchGeneration = nil
+    subscriptionSnapshotFetchTask = nil
     let statusCache = subscriptionStatusCache
     let snapshotCache = subscriptionSnapshotCache
     Task {
@@ -1698,6 +1718,12 @@ class APIService: ObservableObject {
           continue
         }
         await subscriptionStatusCache.set(cacheKey, value: isSubscribed)
+        #if DEBUG
+        await subscriptionCacheTestHooks.afterSubscriptionStatusCacheStore?()
+        #endif
+        guard generation == subscriptionCacheGeneration else {
+          continue
+        }
         return isSubscribed
       } catch is CancellationError {
         throw CancellationError()
@@ -1711,19 +1737,83 @@ class APIService: ObservableObject {
   /// - 对应前端: `MoviePilot-Frontend/src/views/subscribe/SubscribeListView.vue`, `MoviePilot-Frontend/src/views/subscribe/FullCalendarView.swift`
   /// - 应用场景: 1. **订阅列表页面** (`SubscribeListView`) 的核心数据源。 2. **日历视图** (`FullCalendarView`) 的数据源。 (注: 全局搜索栏不直接调用此API)
   func fetchSubscriptions(forceRefresh: Bool = false) async throws -> [Subscribe] {
-    let generation = subscriptionCacheGeneration
-    let cacheKey = "subscriptions:\(generation)"
-    if !forceRefresh, let cached = await subscriptionSnapshotCache.get(cacheKey) {
-      return cached
+    var canReadCache = !forceRefresh
+    while true {
+      try Task.checkCancellation()
+      let generation = subscriptionCacheGeneration
+      let cacheKey = "subscriptions:\(generation)"
+      if canReadCache, let cached = await subscriptionSnapshotCache.get(cacheKey) {
+        #if DEBUG
+        await subscriptionCacheTestHooks.afterSubscriptionSnapshotCacheHit?()
+        #endif
+        guard generation == subscriptionCacheGeneration else {
+          canReadCache = true
+          continue
+        }
+        return cached
+      }
+
+      let fetchTask = subscriptionSnapshotFetchTask(for: generation)
+      do {
+        let subscriptions = try await fetchTask.value
+        #if DEBUG
+        await subscriptionCacheTestHooks.afterSubscriptionSnapshotFetchValue?()
+        #endif
+        guard generation == subscriptionCacheGeneration else {
+          clearSubscriptionSnapshotFetchTaskIfCurrent(generation: generation)
+          canReadCache = true
+          continue
+        }
+        await subscriptionSnapshotCache.set(cacheKey, value: subscriptions)
+        #if DEBUG
+        await subscriptionCacheTestHooks.afterSubscriptionSnapshotCacheStore?()
+        #endif
+        guard generation == subscriptionCacheGeneration else {
+          clearSubscriptionSnapshotFetchTaskIfCurrent(generation: generation)
+          canReadCache = true
+          continue
+        }
+        clearSubscriptionSnapshotFetchTaskIfCurrent(generation: generation)
+        return subscriptions
+      } catch is CancellationError {
+        clearSubscriptionSnapshotFetchTaskIfCurrent(generation: generation)
+        guard generation == subscriptionCacheGeneration else {
+          canReadCache = true
+          continue
+        }
+        throw CancellationError()
+      } catch {
+        clearSubscriptionSnapshotFetchTaskIfCurrent(generation: generation)
+        guard generation == subscriptionCacheGeneration else {
+          canReadCache = true
+          continue
+        }
+        throw error
+      }
+    }
+  }
+
+  private func subscriptionSnapshotFetchTask(for generation: Int) -> Task<[Subscribe], Error> {
+    if let task = subscriptionSnapshotFetchTask,
+      subscriptionSnapshotFetchGeneration == generation
+    {
+      return task
     }
 
-    let data = try await makeRequest(endpoint: "/subscribe/")
-    let subscriptions = try await decodeOrUnwrap([Subscribe].self, from: data)
-    guard generation == subscriptionCacheGeneration else {
-      throw CancellationError()
+    let task = Task { [weak self] in
+      guard let self else { throw CancellationError() }
+      let data = try await self.makeRequest(endpoint: "/subscribe/")
+      return try await self.decodeOrUnwrap([Subscribe].self, from: data)
     }
-    await subscriptionSnapshotCache.set(cacheKey, value: subscriptions)
-    return subscriptions
+    subscriptionSnapshotFetchGeneration = generation
+    subscriptionSnapshotFetchTask = task
+    return task
+  }
+
+  private func clearSubscriptionSnapshotFetchTaskIfCurrent(generation: Int) {
+    guard subscriptionSnapshotFetchGeneration == generation else { return }
+    subscriptionSnapshotFetchGeneration = nil
+    subscriptionSnapshotFetchTask = nil
   }
 
   /// 添加下载任务
