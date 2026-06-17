@@ -165,23 +165,35 @@ actor APICache<Key: Hashable, Value> {
   private var cache: [Key: CacheEntry] = [:]
   private let defaultTTL: TimeInterval
   private let size: Int
+  private let renewsTTLOnAccess: Bool
+  private let now: @Sendable () -> Date
 
-  init(defaultTTL: TimeInterval = 60, size: Int = 50) {
+  init(
+    defaultTTL: TimeInterval = 60,
+    size: Int = 50,
+    renewsTTLOnAccess: Bool = true,
+    now: @escaping @Sendable () -> Date = Date.init
+  ) {
     self.defaultTTL = defaultTTL
     self.size = size
+    self.renewsTTLOnAccess = renewsTTLOnAccess
+    self.now = now
   }
 
   func get(_ key: Key) -> Value? {
     guard var entry = cache[key] else { return nil }
 
-    if Date() > entry.expiresAt {
+    let currentDate = now()
+    if currentDate > entry.expiresAt {
       cache.removeValue(forKey: key)
       return nil
     }
 
-    // 访问时“续期”，变相实现了 LRU
-    entry.expiresAt = Date().addingTimeInterval(defaultTTL)
-    cache[key] = entry
+    if renewsTTLOnAccess {
+      // 访问时“续期”，变相实现了 LRU
+      entry.expiresAt = currentDate.addingTimeInterval(defaultTTL)
+      cache[key] = entry
+    }
 
     return entry.value
   }
@@ -195,7 +207,7 @@ actor APICache<Key: Hashable, Value> {
       }
     }
 
-    let expiresAt = Date().addingTimeInterval(ttl ?? defaultTTL)
+    let expiresAt = now().addingTimeInterval(ttl ?? defaultTTL)
     let newEntry = CacheEntry(value: value, expiresAt: expiresAt)
     cache[key] = newEntry
   }
@@ -268,7 +280,11 @@ class APIService: ObservableObject {
   private let seasonsNotExistsCache = APICache<String, [NotExistMediaInfo]>(
     defaultTTL: 120, size: 20)
   private let subscriptionStatusCache = APICache<String, Bool>(defaultTTL: 120, size: 100)
-  private let subscriptionSnapshotCache = APICache<String, [Subscribe]>(defaultTTL: 30, size: 1)
+  private let subscriptionSnapshotCache = APICache<String, [Subscribe]>(
+    defaultTTL: 30,
+    size: 1,
+    renewsTTLOnAccess: false
+  )
   private var subscriptionCacheGeneration = 0
 
   private func invalidateSubscriptionCaches() async {

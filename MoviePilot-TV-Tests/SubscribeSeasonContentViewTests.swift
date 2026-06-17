@@ -55,6 +55,81 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     }
   }
 
+  func testPreloadedSeasonDataReusesCachedSubscriptionSnapshot() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    let preloader = MediaPreloader.shared
+    preloader.clearAll()
+    defer { preloader.clearAll() }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions([
+      Subscribe(id: 201, name: "预加载剧集", type: "电视剧", season: 1, tmdbid: 810001)
+    ])
+    service.baseURL = "http://subscription-snapshot-tests.local"
+
+    let firstTask = preloader.preload(
+      for: MediaInfo(tmdb_id: 810001, title: "预加载剧集 A", type: "电视剧"))
+    try await waitUntil {
+      firstTask.isSeasonDataLoaded
+    }
+    let firstSubscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(firstSubscribeRequestCount, 1)
+
+    let secondTask = preloader.preload(
+      for: MediaInfo(tmdb_id: 810002, title: "预加载剧集 B", type: "电视剧"))
+    try await waitUntil {
+      secondTask.isSeasonDataLoaded
+    }
+
+    let secondSubscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(secondSubscribeRequestCount, 1)
+  }
+
+  func testSubscriptionSnapshotCacheCanExpireWithoutRenewingOnRead() async {
+    let clock = APICacheTestClock(start: Date(timeIntervalSince1970: 0))
+    let cache = APICache<String, Int>(
+      defaultTTL: 10,
+      size: 1,
+      renewsTTLOnAccess: false,
+      now: clock.now
+    )
+
+    await cache.set("subscriptions", value: 1)
+
+    clock.advance(by: 9)
+    let cachedValueBeforeOriginalExpiry = await cache.get("subscriptions")
+    XCTAssertEqual(cachedValueBeforeOriginalExpiry, 1)
+
+    clock.advance(by: 2)
+    let cachedValueAfterOriginalExpiry = await cache.get("subscriptions")
+    XCTAssertNil(cachedValueAfterOriginalExpiry)
+  }
+
+  func testAPICacheRenewsTTLOnReadByDefault() async {
+    let clock = APICacheTestClock(start: Date(timeIntervalSince1970: 0))
+    let cache = APICache<String, Int>(
+      defaultTTL: 10,
+      size: 1,
+      now: clock.now
+    )
+
+    await cache.set("media-seasons", value: 1)
+
+    clock.advance(by: 9)
+    let cachedValueBeforeOriginalExpiry = await cache.get("media-seasons")
+    XCTAssertEqual(cachedValueBeforeOriginalExpiry, 1)
+
+    clock.advance(by: 2)
+    let cachedValueAfterOriginalExpiry = await cache.get("media-seasons")
+    XCTAssertEqual(cachedValueAfterOriginalExpiry, 1)
+  }
+
   func testSeasonSubscriptionSummaryIndexesMatchingMediaBySeason() {
     let media = MediaInfo(tmdb_id: 12345, type: "电视剧")
     let subscriptions = [
@@ -298,6 +373,27 @@ private struct SubscriptionSnapshotServiceSnapshot {
   }
 }
 
+private final class APICacheTestClock: @unchecked Sendable {
+  private let lock = NSLock()
+  private var currentDate: Date
+
+  init(start: Date) {
+    self.currentDate = start
+  }
+
+  func now() -> Date {
+    lock.lock()
+    defer { lock.unlock() }
+    return currentDate
+  }
+
+  func advance(by interval: TimeInterval) {
+    lock.lock()
+    currentDate = currentDate.addingTimeInterval(interval)
+    lock.unlock()
+  }
+}
+
 private struct SubscriptionSnapshotStubResponse: Sendable {
   let statusCode: Int
   let data: Data
@@ -305,9 +401,13 @@ private struct SubscriptionSnapshotStubResponse: Sendable {
 
 private actor SubscriptionSnapshotURLProtocolStub {
   private var queuedResponses: [Data] = []
+  private var defaultSubscriptionsData: Data?
+  private var requestCounts: [String: Int] = [:]
 
   func reset() {
     queuedResponses.removeAll()
+    defaultSubscriptionsData = nil
+    requestCounts.removeAll()
   }
 
   func enqueueSubscriptions(_ subscriptions: [Subscribe]) throws {
@@ -315,13 +415,80 @@ private actor SubscriptionSnapshotURLProtocolStub {
     queuedResponses.append(data)
   }
 
+  func setDefaultSubscriptions(_ subscriptions: [Subscribe]) throws {
+    defaultSubscriptionsData = try JSONEncoder().encode(subscriptions)
+  }
+
+  func subscribeRequestCount() -> Int {
+    requestCounts["/api/v1/subscribe", default: 0] + requestCounts["/api/v1/subscribe/", default: 0]
+  }
+
   func response(for request: URLRequest) throws -> SubscriptionSnapshotStubResponse {
-    guard !queuedResponses.isEmpty else {
+    let path = request.url?.path ?? ""
+    requestCounts[path, default: 0] += 1
+
+    if path == "/api/v1/subscribe" || path == "/api/v1/subscribe/" {
+      if !queuedResponses.isEmpty {
+        return SubscriptionSnapshotStubResponse(statusCode: 200, data: queuedResponses.removeFirst())
+      }
+      if let defaultSubscriptionsData {
+        return SubscriptionSnapshotStubResponse(statusCode: 200, data: defaultSubscriptionsData)
+      }
       throw URLError(.badServerResponse)
     }
 
-    return SubscriptionSnapshotStubResponse(statusCode: 200, data: queuedResponses.removeFirst())
+    if path.hasPrefix("/api/v1/media/groups/") {
+      return try jsonResponse("[]")
+    }
+
+    if path == "/api/v1/media/seasons" {
+      return try jsonResponse(Self.seasonsJSON)
+    }
+
+    if path == "/api/v1/mediaserver/notexists" {
+      return try jsonResponse("[]")
+    }
+
+    if path.hasPrefix("/api/v1/media/tmdb:") {
+      let tmdbId = request.url?.lastPathComponent.split(separator: ":").last.flatMap { Int($0) }
+      return try mediaDetailResponse(tmdbId: tmdbId)
+    }
+
+    throw URLError(.badServerResponse)
   }
+
+  private func jsonResponse(_ json: String) throws -> SubscriptionSnapshotStubResponse {
+    guard let data = json.data(using: .utf8) else {
+      throw URLError(.badServerResponse)
+    }
+    return SubscriptionSnapshotStubResponse(statusCode: 200, data: data)
+  }
+
+  private func mediaDetailResponse(tmdbId: Int?) throws -> SubscriptionSnapshotStubResponse {
+    try jsonResponse(
+      """
+      {
+        "tmdb_id": \(tmdbId ?? 0),
+        "title": "预加载剧集 \(tmdbId ?? 0)",
+        "type": "电视剧"
+      }
+      """
+    )
+  }
+
+  private static let seasonsJSON = """
+    [
+      {
+        "air_date": "2024-01-01",
+        "episode_count": 8,
+        "name": "Season 1",
+        "overview": "",
+        "poster_path": null,
+        "season_number": 1,
+        "vote_average": 8.0
+      }
+    ]
+    """
 }
 
 private final class SubscriptionSnapshotURLProtocol: URLProtocol {

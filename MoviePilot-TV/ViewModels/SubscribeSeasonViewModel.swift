@@ -124,7 +124,10 @@ class SubscribeSeasonViewModel: ObservableObject {
     self.initialSeason = initialSeason
   }
 
-  func loadData(checkSubscriptionLimit: Int? = nil) async {
+  func loadData(
+    checkSubscriptionLimit: Int? = nil,
+    forceRefreshSubscriptions: Bool = true
+  ) async {
     guard !hasLoaded else { return }
     hasLoaded = true
     isLoading = true
@@ -139,7 +142,7 @@ class SubscribeSeasonViewModel: ObservableObject {
       // 执行初始分季数据获取
       try await fetchSeasonsInternal(
         checkSubscriptionLimit: checkSubscriptionLimit,
-        forceRefreshSubscriptions: true
+        forceRefreshSubscriptions: forceRefreshSubscriptions
       )
     } catch {
       errorMessage = error.localizedDescription
