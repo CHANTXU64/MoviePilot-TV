@@ -14,6 +14,45 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
+  func testHeaderUnsubscribeConfirmationWarnsWhenFallbackTMDBDeleteAffectsMultipleSeasons()
+    async throws
+  {
+    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    await DetailHeaderSubscriptionURLProtocol.stub.setSubscriptionSnapshot([
+      Subscribe(id: 7001, name: "详情页取消订阅", type: "电视剧", season: 1, tmdbid: 998_877),
+      Subscribe(id: 7002, name: "详情页取消订阅", type: "电视剧", season: 2, tmdbid: 998_877),
+    ])
+    service.baseURL = "http://detail-header-subscription-tests.local"
+
+    let detail = MediaInfo(
+      douban_id: "detail-header-douban",
+      title: "详情页取消订阅",
+      type: "电视剧",
+      season: 1
+    )
+    let preloadTask = MediaPreloadTask(partialMedia: detail)
+    preloadTask.tmdbId = 998_877
+    preloadTask.isSubscribed = true
+
+    let viewModel = MediaDetailViewModel(detail: detail)
+    viewModel.preloadTask = preloadTask
+
+    let message = await viewModel.headerUnsubscribeConfirmationMessage()
+
+    XCTAssertEqual(
+      message,
+      "是否取消《详情页取消订阅》订阅？\n\n当前内容匹配到 TMDB 下多个分季订阅：第 1、2 季。确认后会一并取消。"
+    )
+  }
+
+  @MainActor
   func testCancelSubscriptionDeletesResolvedFallbackMediaWithoutSeason() async throws {
     XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
     defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
@@ -540,6 +579,7 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
   private var minimalPayloadTMDBIDs: Set<Int> = []
   private var deletedIDs: [Int] = []
   private var mediaDeleteRequests: [DetailHeaderSubscriptionMediaDeleteRequest] = []
+  private var subscriptionSnapshot: [Subscribe] = []
 
   func reset() {
     resolvedSubscriptionsByTMDBID = [
@@ -551,6 +591,7 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
     minimalPayloadTMDBIDs.removeAll()
     deletedIDs.removeAll()
     mediaDeleteRequests.removeAll()
+    subscriptionSnapshot.removeAll()
   }
 
   func setMinimalSubscriptionPayload(tmdbId: Int) {
@@ -560,6 +601,10 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
 
   func setResolvedSubscription(tmdbId: Int, id: Int?) {
     resolvedSubscriptionsByTMDBID[tmdbId] = id
+  }
+
+  func setSubscriptionSnapshot(_ subscriptions: [Subscribe]) {
+    subscriptionSnapshot = subscriptions
   }
 
   func enqueueResolvedSubscription(
@@ -588,6 +633,10 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
     guard let url = request.url else { throw URLError(.badURL) }
     let path = url.path
     let method = request.httpMethod ?? "GET"
+
+    if method == "GET", path == "/api/v1/subscribe/" || path == "/api/v1/subscribe" {
+      return try jsonResponse(subscriptionSnapshot)
+    }
 
     if method == "GET",
       path.hasPrefix("/api/v1/subscribe/media/douban:")
@@ -675,6 +724,11 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
     guard let data = json.data(using: .utf8) else {
       throw URLError(.badServerResponse)
     }
+    return DetailHeaderSubscriptionStubResponse(statusCode: 200, data: data)
+  }
+
+  private func jsonResponse<T: Encodable>(_ value: T) throws -> DetailHeaderSubscriptionStubResponse {
+    let data = try JSONEncoder().encode(value)
     return DetailHeaderSubscriptionStubResponse(statusCode: 200, data: data)
   }
 }

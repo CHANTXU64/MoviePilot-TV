@@ -17,6 +17,7 @@ struct MediaDetailView: View {
   // 订阅相关 UI 状态（弹窗开关，纯 UI 逻辑）
   @State private var sheetSubscribe: Subscribe?
   @State private var showUnsubscribeConfirm = false
+  @State private var unsubscribeConfirmationMessage = ""
   /// 推荐区预加载防抖任务
   @State private var recommendPreloadDebounce: Task<Void, Never>?
   /// 相似区预加载防抖任务
@@ -267,7 +268,11 @@ struct MediaDetailView: View {
         }
       }
     } message: {
-      Text(SubscriptionCancelConfirmation.headerMessage(for: viewModel.detail))
+      Text(
+        unsubscribeConfirmationMessage.isEmpty
+          ? SubscriptionCancelConfirmation.headerMessage(for: viewModel.detail)
+          : unsubscribeConfirmationMessage
+      )
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $navigationPath)
     .sheet(isPresented: $showSiteSelection) {
@@ -303,7 +308,11 @@ struct MediaDetailView: View {
     Self.performHeaderSubscribeAction(
       isSubscribed: isSubscribed,
       showUnsubscribeConfirm: {
-        showUnsubscribeConfirm = true
+        unsubscribeConfirmationMessage = SubscriptionCancelConfirmation.headerMessage(for: viewModel.detail)
+        Task { @MainActor in
+          unsubscribeConfirmationMessage = await viewModel.headerUnsubscribeConfirmationMessage()
+          showUnsubscribeConfirm = true
+        }
       },
       startSubscribe: {
         sheetSubscribe = viewModel.buildSubscribeRequest()

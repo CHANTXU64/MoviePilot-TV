@@ -352,6 +352,67 @@ class MediaDetailViewModel: ObservableObject {
     return false
   }
 
+  func headerUnsubscribeConfirmationMessage() async -> String {
+    let baseMessage = SubscriptionCancelConfirmation.headerMessage(for: detail)
+    guard let warning = await resolvedTMDBMultiSeasonCancellationWarning() else {
+      return baseMessage
+    }
+    return "\(baseMessage)\n\n\(warning)"
+  }
+
+  private func resolvedTMDBMultiSeasonCancellationWarning() async -> String? {
+    guard detail.tmdb_id == nil, detail.douban_id != nil || detail.bangumi_id != nil else {
+      return nil
+    }
+    guard let mediaId = await resolvedMediaDeleteTargetForHeaderUnsubscribe(),
+      mediaId.hasPrefix("tmdb:"),
+      let tmdbId = Int(mediaId.dropFirst("tmdb:".count))
+    else {
+      return nil
+    }
+
+    do {
+      let subscriptions = try await apiService.fetchSubscriptions(forceRefresh: true)
+      let matchingSubscriptions = subscriptions.filter {
+        $0.tmdbid == tmdbId && $0.type == "电视剧"
+      }
+      guard matchingSubscriptions.count > 1 else { return nil }
+      let seasons = Array(Set(matchingSubscriptions.compactMap(\.season))).sorted()
+      guard seasons.count > 1 else {
+        return "当前内容匹配到 TMDB 下 \(matchingSubscriptions.count) 条订阅，确认后会一并取消。"
+      }
+      return "当前内容匹配到 TMDB 下多个分季订阅：\(seasonListText(seasons))。确认后会一并取消。"
+    } catch {
+      print("[MediaDetailViewModel] 读取订阅取消影响范围失败: \(error)")
+      return nil
+    }
+  }
+
+  private func resolvedMediaDeleteTargetForHeaderUnsubscribe() async -> String? {
+    for media in subscriptionLookupCandidates() {
+      do {
+        guard let subscription = try await apiService.fetchSubscriptionLookup(media: media) else {
+          continue
+        }
+        if canDeleteByMediaId(subscription.mediaId),
+          subscription.isResolvedMediaId || media.apiMediaId?.hasPrefix("tmdb:") == true
+        {
+          return subscription.mediaId
+        }
+      } catch {
+        print("[MediaDetailViewModel] 读取订阅取消目标失败: \(error)")
+      }
+    }
+    return nil
+  }
+
+  private func seasonListText(_ seasons: [Int]) -> String {
+    guard seasons.allSatisfy({ $0 > 0 }) else {
+      return seasons.map { $0 == 0 ? "特别篇" : "第 \($0) 季" }.joined(separator: "、")
+    }
+    return "第 \(seasons.map(String.init).joined(separator: "、")) 季"
+  }
+
   private func canDeleteByMediaId(_ mediaId: String) -> Bool {
     !mediaId.hasPrefix("bangumi:")
   }
