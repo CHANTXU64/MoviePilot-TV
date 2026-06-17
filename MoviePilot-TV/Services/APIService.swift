@@ -33,6 +33,7 @@ struct SubscriptionCacheTestHooks {
   var afterSubscriptionSnapshotCacheHit: (() async -> Void)?
   var afterSubscriptionSnapshotFetchValue: (() async -> Void)?
   var afterSubscriptionSnapshotCacheStore: (() async -> Void)?
+  var afterSubscriptionStatusCacheHit: (() async -> Void)?
   var afterSubscriptionStatusCacheStore: (() async -> Void)?
 }
 #endif
@@ -1706,6 +1707,10 @@ class APIService: ObservableObject {
       let generation = subscriptionCacheGeneration
       let cacheKey = "\(generation):\(mediaId):\(season.map(String.init) ?? "")"
       if !forceRefresh, let cached = await subscriptionStatusCache.get(cacheKey) {
+        #if DEBUG
+        await subscriptionCacheTestHooks.afterSubscriptionStatusCacheHit?()
+        #endif
+        try Task.checkCancellation()
         if generation == subscriptionCacheGeneration {
           return cached
         }
@@ -1721,6 +1726,7 @@ class APIService: ObservableObject {
         #if DEBUG
         await subscriptionCacheTestHooks.afterSubscriptionStatusCacheStore?()
         #endif
+        try Task.checkCancellation()
         guard generation == subscriptionCacheGeneration else {
           continue
         }
@@ -1746,6 +1752,7 @@ class APIService: ObservableObject {
         #if DEBUG
         await subscriptionCacheTestHooks.afterSubscriptionSnapshotCacheHit?()
         #endif
+        try Task.checkCancellation()
         guard generation == subscriptionCacheGeneration else {
           canReadCache = true
           continue
@@ -1754,27 +1761,9 @@ class APIService: ObservableObject {
       }
 
       let fetchTask = subscriptionSnapshotFetchTask(for: generation)
+      let subscriptions: [Subscribe]
       do {
-        let subscriptions = try await fetchTask.value
-        #if DEBUG
-        await subscriptionCacheTestHooks.afterSubscriptionSnapshotFetchValue?()
-        #endif
-        guard generation == subscriptionCacheGeneration else {
-          clearSubscriptionSnapshotFetchTaskIfCurrent(generation: generation)
-          canReadCache = true
-          continue
-        }
-        await subscriptionSnapshotCache.set(cacheKey, value: subscriptions)
-        #if DEBUG
-        await subscriptionCacheTestHooks.afterSubscriptionSnapshotCacheStore?()
-        #endif
-        guard generation == subscriptionCacheGeneration else {
-          clearSubscriptionSnapshotFetchTaskIfCurrent(generation: generation)
-          canReadCache = true
-          continue
-        }
-        clearSubscriptionSnapshotFetchTaskIfCurrent(generation: generation)
-        return subscriptions
+        subscriptions = try await fetchTask.value
       } catch is CancellationError {
         clearSubscriptionSnapshotFetchTaskIfCurrent(generation: generation)
         guard generation == subscriptionCacheGeneration else {
@@ -1790,6 +1779,28 @@ class APIService: ObservableObject {
         }
         throw error
       }
+
+      #if DEBUG
+      await subscriptionCacheTestHooks.afterSubscriptionSnapshotFetchValue?()
+      #endif
+      try Task.checkCancellation()
+      guard generation == subscriptionCacheGeneration else {
+        clearSubscriptionSnapshotFetchTaskIfCurrent(generation: generation)
+        canReadCache = true
+        continue
+      }
+      await subscriptionSnapshotCache.set(cacheKey, value: subscriptions)
+      #if DEBUG
+      await subscriptionCacheTestHooks.afterSubscriptionSnapshotCacheStore?()
+      #endif
+      try Task.checkCancellation()
+      guard generation == subscriptionCacheGeneration else {
+        clearSubscriptionSnapshotFetchTaskIfCurrent(generation: generation)
+        canReadCache = true
+        continue
+      }
+      clearSubscriptionSnapshotFetchTaskIfCurrent(generation: generation)
+      return subscriptions
     }
   }
 

@@ -225,6 +225,44 @@ final class ResourceResultViewModelTests: XCTestCase {
     )
   }
 
+  func testInFlightDisappearCancellationAllowsSearchToRestart() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(ResourceResultViewModelURLProtocol.self))
+    defer { URLProtocol.unregisterClass(ResourceResultViewModelURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await ResourceResultViewModelURLProtocol.stub.reset()
+    service.baseURL = "http://resource-result-tests.local"
+
+    let viewModel = ResourceResultViewModel(keyword: "tab-switch")
+    await viewModel.search()
+
+    try await withTimeout("first resource search request to start") {
+      await ResourceResultViewModelURLProtocol.stub.waitForRequest(
+        path: "/api/v1/search/title/stream", keyword: "tab-switch")
+    }
+
+    viewModel.cancelInFlightSearch()
+
+    try await withTimeout("first resource search cancellation") {
+      await ResourceResultViewModelURLProtocol.stub.waitForCancellation(
+        path: "/api/v1/search/title/stream", keyword: "tab-switch")
+    }
+
+    await viewModel.search()
+
+    let didStartSecondSearch = await completesWithin {
+      await ResourceResultViewModelURLProtocol.stub.waitForRequest(
+        path: "/api/v1/search/title/stream", keyword: "tab-switch", count: 2)
+    }
+    XCTAssertTrue(
+      didStartSecondSearch,
+      "An in-flight search cancelled by view disappearance should restart when the view appears again."
+    )
+  }
+
   func testCompletedSearchDoesNotRestartAfterInFlightDisappearCancellation() async throws {
     XCTAssertTrue(URLProtocol.registerClass(ResourceResultViewModelURLProtocol.self))
     defer { URLProtocol.unregisterClass(ResourceResultViewModelURLProtocol.self) }

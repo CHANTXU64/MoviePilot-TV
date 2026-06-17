@@ -327,6 +327,87 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
+  func testCheckSubscriptionThrowsWhenCancelledAfterStatusCacheHit() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    service.baseURL = "http://detail-header-subscription-tests.local"
+
+    let media = MediaInfo(tmdb_id: 776_655, type: "电影")
+    let cachedStatus = try await service.checkSubscription(media: media)
+    XCTAssertTrue(cachedStatus)
+
+    let gate = DetailHeaderSubscriptionAsyncGate()
+    service.subscriptionCacheTestHooks.afterSubscriptionStatusCacheHit = {
+      await gate.wait()
+    }
+    defer { service.subscriptionCacheTestHooks = .init() }
+
+    let cancelledCheck = Task {
+      try await service.checkSubscription(media: media)
+    }
+    await gate.waitForWaiter()
+
+    cancelledCheck.cancel()
+    await gate.open()
+
+    do {
+      _ = try await cancelledCheck.value
+      XCTFail("A caller cancelled after reading cached subscription status must not receive it.")
+    } catch is CancellationError {
+      // Expected.
+    }
+  }
+
+  @MainActor
+  func testCheckSubscriptionThrowsWhenCancelledAfterStatusCacheStore() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    await DetailHeaderSubscriptionURLProtocol.stub.setResolvedSubscription(
+      tmdbId: 885_544,
+      id: 9301
+    )
+    service.baseURL = "http://detail-header-subscription-tests.local"
+
+    let gate = DetailHeaderSubscriptionAsyncGate()
+    service.subscriptionCacheTestHooks.afterSubscriptionStatusCacheStore = {
+      await gate.wait()
+    }
+    defer { service.subscriptionCacheTestHooks = .init() }
+
+    let cancelledCheck = Task {
+      try await service.checkSubscription(media: MediaInfo(tmdb_id: 885_544, type: "电影"))
+    }
+    await gate.waitForWaiter()
+
+    cancelledCheck.cancel()
+    await gate.open()
+
+    do {
+      _ = try await cancelledCheck.value
+      XCTFail("A caller cancelled after storing subscription status must not receive it.")
+    } catch is CancellationError {
+      // Expected.
+    }
+
+    let lookupCount = await DetailHeaderSubscriptionURLProtocol.stub.lookupRequestCount(
+      tmdbId: 885_544
+    )
+    XCTAssertEqual(lookupCount, 1)
+  }
+
+  @MainActor
   func testDeleteSubscriptionEncodesMediaIdAsSinglePathSegment() async throws {
     XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
     defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }

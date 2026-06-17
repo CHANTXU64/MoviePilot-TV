@@ -294,6 +294,131 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(subscribeRequestCount, 1)
   }
 
+  func testFetchSubscriptionsThrowsWhenCancelledAfterCachedSnapshotIsRead() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
+      Subscribe(id: 801, name: "缓存取消", type: "电视剧", season: 1, tmdbid: 816001)
+    ])
+    service.baseURL = "http://subscription-snapshot-tests.local"
+
+    let cachedSubscriptions = try await service.fetchSubscriptions(forceRefresh: true)
+    XCTAssertEqual(cachedSubscriptions.map(\.id), [801])
+
+    let cacheHitGate = SubscriptionSnapshotAsyncGate()
+    service.subscriptionCacheTestHooks.afterSubscriptionSnapshotCacheHit = {
+      await cacheHitGate.wait()
+    }
+    defer { service.subscriptionCacheTestHooks = .init() }
+
+    let cancelledRefresh = Task {
+      try await service.fetchSubscriptions()
+    }
+    await cacheHitGate.waitForWaiter()
+
+    cancelledRefresh.cancel()
+    await cacheHitGate.open()
+
+    do {
+      _ = try await cancelledRefresh.value
+      XCTFail("A caller cancelled after reading a cached snapshot must not receive that snapshot.")
+    } catch is CancellationError {
+      // Expected.
+    }
+  }
+
+  func testFetchSubscriptionsThrowsForCancelledSharedSnapshotWaiterAfterResponse() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    let requestGate = SubscriptionSnapshotAsyncGate()
+    let responseGate = SubscriptionSnapshotAsyncGate()
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions(
+      [Subscribe(id: 802, name: "共享取消", type: "电视剧", season: 1, tmdbid: 816002)],
+      waitFor: requestGate
+    )
+    service.baseURL = "http://subscription-snapshot-tests.local"
+
+    service.subscriptionCacheTestHooks.afterSubscriptionSnapshotFetchValue = {
+      await responseGate.wait()
+    }
+    defer { service.subscriptionCacheTestHooks = .init() }
+
+    let cancelledRefresh = Task {
+      try await service.fetchSubscriptions(forceRefresh: true)
+    }
+    await requestGate.waitForWaiter()
+
+    let activeRefresh = Task {
+      try await service.fetchSubscriptions(forceRefresh: true)
+    }
+    await Task.yield()
+    await requestGate.open()
+    await responseGate.waitForWaiterCount(2)
+
+    cancelledRefresh.cancel()
+    await responseGate.open()
+
+    do {
+      _ = try await cancelledRefresh.value
+      XCTFail("A cancelled waiter must not receive a shared subscription snapshot response.")
+    } catch is CancellationError {
+      // Expected.
+    }
+
+    let activeSubscriptions = try await activeRefresh.value
+    XCTAssertEqual(activeSubscriptions.map(\.id), [802])
+    let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(subscribeRequestCount, 1)
+  }
+
+  func testFetchSubscriptionsThrowsWhenCancelledAfterSnapshotCacheStore() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    let storeGate = SubscriptionSnapshotAsyncGate()
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
+      Subscribe(id: 803, name: "写缓存取消", type: "电视剧", season: 1, tmdbid: 816003)
+    ])
+    service.baseURL = "http://subscription-snapshot-tests.local"
+
+    service.subscriptionCacheTestHooks.afterSubscriptionSnapshotCacheStore = {
+      await storeGate.wait()
+    }
+    defer { service.subscriptionCacheTestHooks = .init() }
+
+    let cancelledRefresh = Task {
+      try await service.fetchSubscriptions(forceRefresh: true)
+    }
+    await storeGate.waitForWaiter()
+
+    cancelledRefresh.cancel()
+    await storeGate.open()
+
+    do {
+      _ = try await cancelledRefresh.value
+      XCTFail("A caller cancelled after storing a snapshot must not receive that snapshot.")
+    } catch is CancellationError {
+      // Expected.
+    }
+  }
+
   func testPreloadedSeasonDataReusesCachedSubscriptionSnapshot() async throws {
     XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
     defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
@@ -706,6 +831,13 @@ private actor SubscriptionSnapshotAsyncGate {
     guard waiterCount == 0 else { return }
     await withCheckedContinuation { continuation in
       waiterContinuations.append(continuation)
+    }
+  }
+
+  func waitForWaiterCount(_ count: Int) async {
+    while waiterCount < count {
+      if Task.isCancelled { return }
+      try? await Task.sleep(nanoseconds: 1_000_000)
     }
   }
 
