@@ -1681,19 +1681,29 @@ class APIService: ObservableObject {
       // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求，返回 false
       return false
     }
-    do {
+    while true {
+      try Task.checkCancellation()
       let generation = subscriptionCacheGeneration
       let cacheKey = "\(generation):\(mediaId):\(season.map(String.init) ?? "")"
       if !forceRefresh, let cached = await subscriptionStatusCache.get(cacheKey) {
-        return cached
+        if generation == subscriptionCacheGeneration {
+          return cached
+        }
+        continue
       }
-      let isSubscribed = try await fetchSubscriptionID(media: media, season: season) != nil
-      if generation == subscriptionCacheGeneration {
+
+      do {
+        let isSubscribed = try await fetchSubscriptionID(media: media, season: season) != nil
+        guard generation == subscriptionCacheGeneration else {
+          continue
+        }
         await subscriptionStatusCache.set(cacheKey, value: isSubscribed)
+        return isSubscribed
+      } catch is CancellationError {
+        throw CancellationError()
+      } catch {
+        return false
       }
-      return isSubscribed
-    } catch {
-      return false
     }
   }
 

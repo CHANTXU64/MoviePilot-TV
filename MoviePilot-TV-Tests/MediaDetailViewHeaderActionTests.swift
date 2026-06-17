@@ -247,6 +247,46 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
+  func testCheckSubscriptionRetriesWhenGenerationChangesBeforeResponseReturns() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    let gate = DetailHeaderSubscriptionAsyncGate()
+    await DetailHeaderSubscriptionURLProtocol.stub.enqueueResolvedSubscription(
+      tmdbId: 665_544,
+      id: 9101,
+      waitFor: gate
+    )
+    await DetailHeaderSubscriptionURLProtocol.stub.setResolvedSubscription(
+      tmdbId: 665_544,
+      id: nil
+    )
+    service.baseURL = "http://detail-header-subscription-tests.local"
+
+    let media = MediaInfo(tmdb_id: 665_544, type: "电影")
+    let staleCheck = Task {
+      try await service.checkSubscription(media: media)
+    }
+    await gate.waitForWaiter()
+
+    _ = try await service.deleteSubscription(id: 9101)
+    await gate.open()
+
+    let status = try await staleCheck.value
+    let lookupCount = await DetailHeaderSubscriptionURLProtocol.stub.lookupRequestCount(
+      tmdbId: 665_544
+    )
+
+    XCTAssertFalse(status)
+    XCTAssertEqual(lookupCount, 2)
+  }
+
+  @MainActor
   func testDeleteSubscriptionEncodesMediaIdAsSinglePathSegment() async throws {
     XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
     defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
@@ -333,8 +373,49 @@ private struct DetailHeaderSubscriptionServiceSnapshot {
   }
 }
 
+private struct DetailHeaderSubscriptionQueuedStatus: Sendable {
+  let tmdbId: Int
+  let id: Int?
+  let gate: DetailHeaderSubscriptionAsyncGate?
+}
+
+private actor DetailHeaderSubscriptionAsyncGate {
+  private var isOpen = false
+  private var waiterCount = 0
+  private var waitContinuations: [CheckedContinuation<Void, Never>] = []
+  private var waiterContinuations: [CheckedContinuation<Void, Never>] = []
+
+  func wait() async {
+    waiterCount += 1
+    waiterContinuations.forEach { $0.resume() }
+    waiterContinuations.removeAll()
+
+    guard !isOpen else { return }
+    await withCheckedContinuation { continuation in
+      waitContinuations.append(continuation)
+    }
+  }
+
+  func waitForWaiter() async {
+    guard waiterCount == 0 else { return }
+    await withCheckedContinuation { continuation in
+      waiterContinuations.append(continuation)
+    }
+  }
+
+  func open() {
+    isOpen = true
+    waitContinuations.forEach { $0.resume() }
+    waitContinuations.removeAll()
+    waiterContinuations.forEach { $0.resume() }
+    waiterContinuations.removeAll()
+  }
+}
+
 private actor DetailHeaderSubscriptionURLProtocolStub {
   private var resolvedSubscriptionsByTMDBID: [Int: Int?] = [:]
+  private var queuedStatusesByTMDBID: [Int: [DetailHeaderSubscriptionQueuedStatus]] = [:]
+  private var lookupCountsByTMDBID: [Int: Int] = [:]
   private var minimalPayloadTMDBIDs: Set<Int> = []
   private var deletedIDs: [Int] = []
   private var mediaDeleteRequests: [DetailHeaderSubscriptionMediaDeleteRequest] = []
@@ -344,6 +425,8 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
       776_655: 7002,
       998_877: 7001,
     ]
+    queuedStatusesByTMDBID.removeAll()
+    lookupCountsByTMDBID.removeAll()
     minimalPayloadTMDBIDs.removeAll()
     deletedIDs.removeAll()
     mediaDeleteRequests.removeAll()
@@ -358,6 +441,20 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
     resolvedSubscriptionsByTMDBID[tmdbId] = id
   }
 
+  func enqueueResolvedSubscription(
+    tmdbId: Int,
+    id: Int?,
+    waitFor gate: DetailHeaderSubscriptionAsyncGate? = nil
+  ) {
+    queuedStatusesByTMDBID[tmdbId, default: []].append(
+      DetailHeaderSubscriptionQueuedStatus(tmdbId: tmdbId, id: id, gate: gate)
+    )
+  }
+
+  func lookupRequestCount(tmdbId: Int) -> Int {
+    lookupCountsByTMDBID[tmdbId, default: 0]
+  }
+
   func deletedSubscriptionIDs() -> [Int] {
     deletedIDs
   }
@@ -366,7 +463,7 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
     mediaDeleteRequests
   }
 
-  func response(for request: URLRequest) throws -> DetailHeaderSubscriptionStubResponse {
+  func response(for request: URLRequest) async throws -> DetailHeaderSubscriptionStubResponse {
     guard let url = request.url else { throw URLError(.badURL) }
     let path = url.path
     let method = request.httpMethod ?? "GET"
@@ -400,6 +497,22 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
 
     if method == "GET", path.hasPrefix("/api/v1/subscribe/media/tmdb:") {
       let tmdbId = path.split(separator: ":").last.flatMap { Int($0) }
+      if let tmdbId {
+        lookupCountsByTMDBID[tmdbId, default: 0] += 1
+        if var queuedStatuses = queuedStatusesByTMDBID[tmdbId],
+          !queuedStatuses.isEmpty
+        {
+          let queuedStatus = queuedStatuses.removeFirst()
+          queuedStatusesByTMDBID[tmdbId] = queuedStatuses
+          if let gate = queuedStatus.gate {
+            await gate.wait()
+          }
+          if let id = queuedStatus.id {
+            return try jsonResponse(#"{"id":\#(id),"name":"详情页取消订阅","type":"电视剧","season":1,"tmdbid":\#(queuedStatus.tmdbId)}"#)
+          }
+          return try jsonResponse("{}")
+        }
+      }
       if let tmdbId, let id = resolvedSubscriptionsByTMDBID[tmdbId] ?? nil {
         if minimalPayloadTMDBIDs.contains(tmdbId) {
           return try jsonResponse(#"{"id":\#(id)}"#)
