@@ -263,6 +263,9 @@ class SubscribeSeasonViewModel: ObservableObject {
     do {
       try await refreshSubscriptionSummaries(forceRefresh: forceRefresh)
     } catch {
+      if error is CancellationError {
+        return
+      }
       print("检查季订阅状态失败: \(error)")
       errorMessage = error.localizedDescription
     }

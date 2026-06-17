@@ -55,6 +55,80 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     }
   }
 
+  func testHomeSubscriptionRefreshIgnoresStaleSnapshotReturnedAfterMutation() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    let staleGate = SubscriptionSnapshotAsyncGate()
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions(
+      [Subscribe(id: 301, name: "旧订阅", type: "电视剧", season: 1, tmdbid: 811001)],
+      waitFor: staleGate
+    )
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
+      Subscribe(id: 302, name: "新订阅", type: "电视剧", season: 2, tmdbid: 811001)
+    ])
+    service.baseURL = "http://subscription-snapshot-tests.local"
+
+    let viewModel = HomeViewModel(apiService: service)
+    let staleRefresh = Task {
+      await viewModel.refreshSubscriptions(forceRefresh: true)
+    }
+    await staleGate.waitForWaiter()
+
+    _ = try await service.deleteSubscription(id: 301)
+    await viewModel.refreshSubscriptions(forceRefresh: true)
+    XCTAssertEqual(viewModel.tvSubscriptions.map(\.id), [302])
+
+    await staleGate.open()
+    await staleRefresh.value
+
+    XCTAssertEqual(viewModel.tvSubscriptions.map(\.id), [302])
+  }
+
+  func testSeasonSubscriptionStatusIgnoresStaleSnapshotReturnedAfterMutation() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    let staleGate = SubscriptionSnapshotAsyncGate()
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions(
+      [Subscribe(id: 401, name: "旧分季", type: "电视剧", season: 1, tmdbid: 812001)],
+      waitFor: staleGate
+    )
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
+      Subscribe(id: 402, name: "新分季", type: "电视剧", season: 2, tmdbid: 812001)
+    ])
+    service.baseURL = "http://subscription-snapshot-tests.local"
+
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(tmdb_id: 812001, title: "分季状态", type: "电视剧")
+    )
+    let staleRefresh = Task {
+      await viewModel.checkSubscriptionStatus(forceRefresh: true)
+    }
+    await staleGate.waitForWaiter()
+
+    _ = try await service.deleteSubscription(id: 401)
+    await viewModel.checkSubscriptionStatus(forceRefresh: true)
+    XCTAssertEqual(viewModel.subscribedSeasons, [2])
+
+    await staleGate.open()
+    await staleRefresh.value
+
+    XCTAssertEqual(viewModel.subscribedSeasons, [2])
+    XCTAssertEqual(viewModel.seasonSubscriptions[2]?.id, 402)
+    XCTAssertNil(viewModel.errorMessage)
+  }
+
   func testPreloadedSeasonDataReusesCachedSubscriptionSnapshot() async throws {
     XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
     defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
@@ -437,10 +511,50 @@ private final class APICacheTestClock: @unchecked Sendable {
 private struct SubscriptionSnapshotStubResponse: Sendable {
   let statusCode: Int
   let data: Data
+  let gate: SubscriptionSnapshotAsyncGate?
+
+  init(statusCode: Int, data: Data, gate: SubscriptionSnapshotAsyncGate? = nil) {
+    self.statusCode = statusCode
+    self.data = data
+    self.gate = gate
+  }
+}
+
+private actor SubscriptionSnapshotAsyncGate {
+  private var isOpen = false
+  private var waiterCount = 0
+  private var waitContinuations: [CheckedContinuation<Void, Never>] = []
+  private var waiterContinuations: [CheckedContinuation<Void, Never>] = []
+
+  func wait() async {
+    waiterCount += 1
+    waiterContinuations.forEach { $0.resume() }
+    waiterContinuations.removeAll()
+
+    guard !isOpen else { return }
+    await withCheckedContinuation { continuation in
+      waitContinuations.append(continuation)
+    }
+  }
+
+  func waitForWaiter() async {
+    guard waiterCount == 0 else { return }
+    await withCheckedContinuation { continuation in
+      waiterContinuations.append(continuation)
+    }
+  }
+
+  func open() {
+    isOpen = true
+    waitContinuations.forEach { $0.resume() }
+    waitContinuations.removeAll()
+    waiterContinuations.forEach { $0.resume() }
+    waiterContinuations.removeAll()
+  }
 }
 
 private actor SubscriptionSnapshotURLProtocolStub {
-  private var queuedResponses: [Data] = []
+  private var queuedResponses: [SubscriptionSnapshotStubResponse] = []
   private var defaultSubscriptionsData: Data?
   private var requestCounts: [String: Int] = [:]
 
@@ -450,9 +564,12 @@ private actor SubscriptionSnapshotURLProtocolStub {
     requestCounts.removeAll()
   }
 
-  func enqueueSubscriptions(_ subscriptions: [Subscribe]) throws {
+  func enqueueSubscriptions(
+    _ subscriptions: [Subscribe],
+    waitFor gate: SubscriptionSnapshotAsyncGate? = nil
+  ) throws {
     let data = try JSONEncoder().encode(subscriptions)
-    queuedResponses.append(data)
+    queuedResponses.append(SubscriptionSnapshotStubResponse(statusCode: 200, data: data, gate: gate))
   }
 
   func setDefaultSubscriptions(_ subscriptions: [Subscribe]) throws {
@@ -463,13 +580,21 @@ private actor SubscriptionSnapshotURLProtocolStub {
     requestCounts["/api/v1/subscribe", default: 0] + requestCounts["/api/v1/subscribe/", default: 0]
   }
 
-  func response(for request: URLRequest) throws -> SubscriptionSnapshotStubResponse {
+  func response(for request: URLRequest) async throws -> SubscriptionSnapshotStubResponse {
     let path = request.url?.path ?? ""
     requestCounts[path, default: 0] += 1
 
+    if request.httpMethod == "DELETE", path.hasPrefix("/api/v1/subscribe/") {
+      return try jsonResponse(#"{"success":true}"#)
+    }
+
     if path == "/api/v1/subscribe" || path == "/api/v1/subscribe/" {
       if !queuedResponses.isEmpty {
-        return SubscriptionSnapshotStubResponse(statusCode: 200, data: queuedResponses.removeFirst())
+        let response = queuedResponses.removeFirst()
+        if let gate = response.gate {
+          await gate.wait()
+        }
+        return response
       }
       if let defaultSubscriptionsData {
         return SubscriptionSnapshotStubResponse(statusCode: 200, data: defaultSubscriptionsData)

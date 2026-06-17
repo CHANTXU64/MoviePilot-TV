@@ -1709,9 +1709,10 @@ class APIService: ObservableObject {
 
     let data = try await makeRequest(endpoint: "/subscribe/")
     let subscriptions = try await decodeOrUnwrap([Subscribe].self, from: data)
-    if generation == subscriptionCacheGeneration {
-      await subscriptionSnapshotCache.set(cacheKey, value: subscriptions)
+    guard generation == subscriptionCacheGeneration else {
+      throw CancellationError()
     }
+    await subscriptionSnapshotCache.set(cacheKey, value: subscriptions)
     return subscriptions
   }
 

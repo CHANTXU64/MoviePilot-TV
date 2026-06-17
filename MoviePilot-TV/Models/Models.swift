@@ -398,7 +398,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     pattern: "(（系列）|\\(系列\\)|\\s+collection)$", options: .caseInsensitive)
 
   var displayTypeText: String? {
-    isCollection ? "合集" : type
+    isCollection || Self.checkDisplaysAsCollection(type: type) ? "合集" : type
   }
 
   var shouldPreloadDetail: Bool {
@@ -467,7 +467,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     self.id = Self.generateUniqueKey(
       source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
       tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id,
-      mediaid_prefix: mediaid_prefix, media_id: media_id)
+      mediaid_prefix: mediaid_prefix, media_id: media_id, subscribeShare: subscribeShare)
 
     self.isCollection = Self.checkIsCollection(type: type, collection_id: collection_id)
 
@@ -560,7 +560,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     self.id = Self.generateUniqueKey(
       source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
       tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id,
-      mediaid_prefix: mediaid_prefix, media_id: media_id)
+      mediaid_prefix: mediaid_prefix, media_id: media_id, subscribeShare: subscribeShare)
 
     self.isCollection = Self.checkIsCollection(type: type, collection_id: collection_id)
 
@@ -614,7 +614,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     self.id = Self.generateUniqueKey(
       source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
       tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id,
-      mediaid_prefix: mediaid_prefix, media_id: media_id)
+      mediaid_prefix: mediaid_prefix, media_id: media_id, subscribeShare: subscribeShare)
 
     self.isCollection = Self.checkIsCollection(type: type, collection_id: collection_id)
 
@@ -673,8 +673,13 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   nonisolated private static func generateUniqueKey(
     source: String?, type: String?, season: Int?, tmdb_id: Int?,
     imdb_id: String?, tvdb_id: Int?, douban_id: String?, bangumi_id: Int?,
-    mediaid_prefix: String?, media_id: String?
+    mediaid_prefix: String?, media_id: String?, subscribeShare: SubscribeShare? = nil
   ) -> String {
+    if let subscribeShare {
+      let shareId = subscribeShare.raw_id.map(String.init) ?? subscribeShare.id
+      return "share:\(shareId)"
+    }
+
     let parts: [String] = [
       source ?? "",
       type ?? "",
@@ -692,7 +697,11 @@ struct MediaInfo: Codable, Identifiable, Hashable {
 
   /// 判断当前媒体项是否为合集/系列
   nonisolated static func checkIsCollection(type: String?, collection_id: Int?) -> Bool {
-    return type == "合集" || type == "collection" || type == "系列" || collection_id != nil
+    return collection_id != nil
+  }
+
+  nonisolated private static func checkDisplaysAsCollection(type: String?) -> Bool {
+    type == "合集" || type == "collection" || type == "系列"
   }
 
   /// 生成用于 API 请求的媒体 ID 字符串，严格遵循前端拼接逻辑。

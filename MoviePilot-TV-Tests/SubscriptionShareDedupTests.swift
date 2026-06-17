@@ -17,6 +17,8 @@ final class SubscriptionShareDedupTests: XCTestCase {
     )
 
     XCTAssertEqual(uniqueItems.compactMap { $0.subscribeShare?.raw_id }, [101, 102])
+    XCTAssertEqual(uniqueItems.map(\.id), ["share:101", "share:102"])
+    XCTAssertNotEqual(uniqueItems[0].id, uniqueItems[1].id)
   }
 
   func testSubscriptionShareDedupFiltersSameShareAcrossPages() throws {
