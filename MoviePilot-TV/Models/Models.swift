@@ -695,7 +695,8 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     return parts.joined(separator: "~")
   }
 
-  /// 判断当前媒体项是否为合集/系列
+  /// 判断当前媒体项是否具备合集行为。
+  /// 官方 Web 也以 collection_id 作为跳转合集页的依据；type 只参与展示文案。
   nonisolated static func checkIsCollection(type: String?, collection_id: Int?) -> Bool {
     return collection_id != nil
   }

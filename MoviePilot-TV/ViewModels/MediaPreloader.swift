@@ -41,8 +41,8 @@ class MediaPreloadTask: ObservableObject {
     guard !isStarted else { return }
     isStarted = true
 
-    // 合集(Collection)没有 media detail 详情页，走的是 CollectionDetailView，
-    // fetchMediaDetail / checkSubscription / recognizeTmdb 等全部无意义且会失败，直接跳过
+    // 只有带 collection_id 的合集走 CollectionDetailView，没有普通 media detail。
+    // type 显示为合集但缺少 collection_id 时仍按普通媒体预加载，避免空合集 ID 卡住。
     guard partialMedia.shouldPreloadDetail else { return }
 
     internalTasks.append(

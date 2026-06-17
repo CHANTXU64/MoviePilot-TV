@@ -286,6 +286,55 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
+  func testSubscriptionMutationClearsCachedStatusAndSnapshot() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    let tmdbId = 884_422
+    let subscriptionId = 9301
+    let media = MediaInfo(tmdb_id: tmdbId, type: "电视剧")
+
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    await DetailHeaderSubscriptionURLProtocol.stub.setResolvedSubscription(
+      tmdbId: tmdbId,
+      id: subscriptionId
+    )
+    await DetailHeaderSubscriptionURLProtocol.stub.setSubscriptionSnapshot([
+      Subscribe(id: subscriptionId, name: "缓存失效订阅", type: "电视剧", season: 1, tmdbid: tmdbId)
+    ])
+    service.baseURL = "http://detail-header-subscription-tests.local"
+
+    let cachedStatus = try await service.checkSubscription(media: media)
+    let cachedSubscriptions = try await service.fetchSubscriptions(forceRefresh: true)
+
+    XCTAssertTrue(cachedStatus)
+    XCTAssertEqual(cachedSubscriptions.map(\.id), [subscriptionId])
+
+    await DetailHeaderSubscriptionURLProtocol.stub.setResolvedSubscription(tmdbId: tmdbId, id: nil)
+    await DetailHeaderSubscriptionURLProtocol.stub.setSubscriptionSnapshot([])
+
+    let didDelete = try await service.deleteSubscription(id: subscriptionId)
+
+    XCTAssertTrue(didDelete)
+    let deletedSubscriptionIDs = await DetailHeaderSubscriptionURLProtocol.stub.deletedSubscriptionIDs()
+    XCTAssertEqual(deletedSubscriptionIDs, [subscriptionId])
+
+    let refreshedStatus = try await service.checkSubscription(media: media)
+    let refreshedSubscriptions = try await service.fetchSubscriptions()
+    let lookupRequestCount = await DetailHeaderSubscriptionURLProtocol.stub.lookupRequestCount(
+      tmdbId: tmdbId
+    )
+
+    XCTAssertFalse(refreshedStatus)
+    XCTAssertTrue(refreshedSubscriptions.isEmpty)
+    XCTAssertEqual(lookupRequestCount, 2)
+  }
+
+  @MainActor
   func testCheckSubscriptionRetriesWhenGenerationChangesBeforeResponseReturns() async throws {
     XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
     defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
