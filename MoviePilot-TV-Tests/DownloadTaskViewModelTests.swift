@@ -271,6 +271,38 @@ final class DownloadTaskViewModelTests: XCTestCase {
     )
   }
 
+  func testDownloadsJSONSequenceFailsAfterConfiguredResponsesAreConsumed()
+    async throws
+  {
+    await DownloadTaskURLProtocol.stub.reset()
+    let firstPayload = downloadPayload(
+      hash: "first-hash", title: "First Task", username: "user", progress: 10)
+    let secondPayload = downloadPayload(
+      hash: "second-hash", title: "Second Task", username: "user", progress: 80)
+    await DownloadTaskURLProtocol.stub.setDownloadsJSONSequence(
+      [
+        (firstPayload, nil),
+        (secondPayload, nil),
+      ],
+      forClient: "same"
+    )
+
+    let request = try XCTUnwrap(
+      URL(string: "http://download-tests.local/api/v1/download/?name=same")
+    ).absoluteURL
+    let urlRequest = URLRequest(url: request)
+
+    _ = try await DownloadTaskURLProtocol.stub.response(for: urlRequest)
+    _ = try await DownloadTaskURLProtocol.stub.response(for: urlRequest)
+
+    do {
+      _ = try await DownloadTaskURLProtocol.stub.response(for: urlRequest)
+      XCTFail("Expected the sequence stub to fail after all configured responses are consumed.")
+    } catch let error as URLError {
+      XCTAssertEqual(error.code, .unsupportedURL)
+    }
+  }
+
   func testOlderClientDeleteThatCompletesLaterDoesNotRemoveCurrentClientDownloadWithSameHash()
     async throws
   {
@@ -442,8 +474,10 @@ private actor DownloadTaskURLProtocolStub {
     guard var responses = responsesByClient[clientName], let response = responses.first else {
       throw URLError(.unsupportedURL)
     }
-    if responses.count > 1 {
-      responses.removeFirst()
+    responses.removeFirst()
+    if responses.isEmpty {
+      responsesByClient.removeValue(forKey: clientName)
+    } else {
       responsesByClient[clientName] = responses
     }
 
