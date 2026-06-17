@@ -169,14 +169,14 @@ struct SubscribeSeasonContentView: View {
       }
     }
     .alert(
-      "取消订阅",
+      SubscriptionCancelConfirmation.title,
       isPresented: Binding(
         get: { viewModel.showUnsubscribeConfirm != nil },
         set: { if !$0 { viewModel.showUnsubscribeConfirm = nil } }
       )
     ) {
       Button("取消", role: .cancel) {}
-      Button("确认取消订阅", role: .destructive) {
+      Button(SubscriptionCancelConfirmation.confirmButtonTitle, role: .destructive) {
         if let season = viewModel.showUnsubscribeConfirm {
           Task { await viewModel.unsubscribeSeason(season) }
         }

@@ -33,11 +33,10 @@ struct SeasonSubscriptionSummary: Equatable, Hashable {
   }
 
   func groupDisplayName(episodeGroups: [EpisodeGroup]) -> String {
-    guard let episodeGroup else { return "默认剧集组" }
-    if let group = episodeGroups.first(where: { $0.id == episodeGroup }) {
-      return group.name
-    }
-    return "剧集组：\(episodeGroup)"
+    SubscriptionCancelConfirmation.episodeGroupDisplayName(
+      episodeGroup,
+      episodeGroups: episodeGroups
+    )
   }
 
   func statusDisplayText(episodeGroups: [EpisodeGroup]) -> String {
@@ -367,6 +366,10 @@ class SubscribeSeasonViewModel: ObservableObject {
 
   func unsubscribeConfirmationMessage(for seasonNumber: Int) -> String {
     let title = mediaInfo.cleanedTitle ?? mediaInfo.title ?? ""
-    return "是否取消《\(title)》第 \(seasonNumber) 季订阅？\n当前订阅使用：\(subscriptionGroupText(for: seasonNumber))"
+    return SubscriptionCancelConfirmation.message(
+      title: title,
+      season: seasonNumber,
+      episodeGroupText: subscriptionGroupText(for: seasonNumber)
+    )
   }
 }

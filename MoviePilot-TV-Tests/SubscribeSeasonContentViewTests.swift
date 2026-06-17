@@ -237,6 +237,46 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     )
   }
 
+  func testHomeSubscriptionUnsubscribeConfirmationUsesSubscribeEpisodeGroup() {
+    let subscribe = Subscribe(
+      id: 81,
+      name: "葬送的芙莉莲",
+      type: "电视剧",
+      season: 1,
+      episode_group: "group-a"
+    )
+
+    XCTAssertEqual(
+      SubscriptionCancelConfirmation.message(for: subscribe),
+      "是否取消《葬送的芙莉莲》第 1 季订阅？\n当前订阅使用：剧集组：group-a"
+    )
+  }
+
+  func testHomeSubscriptionUnsubscribeConfirmationUsesDefaultEpisodeGroup() {
+    let subscribe = Subscribe(
+      id: 82,
+      name: "迷宫饭",
+      type: "电视剧",
+      season: 1
+    )
+
+    XCTAssertEqual(
+      SubscriptionCancelConfirmation.message(for: subscribe),
+      "是否取消《迷宫饭》第 1 季订阅？\n当前订阅使用：默认剧集组"
+    )
+  }
+
+  func testUnsubscribeConfirmationMessageUsesSpecialsNameForSeasonZero() {
+    XCTAssertEqual(
+      SubscriptionCancelConfirmation.message(
+        title: "夏日重现",
+        season: 0,
+        episodeGroupText: "默认剧集组"
+      ),
+      "是否取消《夏日重现》特别篇订阅？\n当前订阅使用：默认剧集组"
+    )
+  }
+
   func testPrepareSubscriptionUsesSelectedPickerGroupForNewSubscriptionOnly() {
     let media = MediaInfo(tmdb_id: 12345, title: "航海王", type: "电视剧")
     let viewModel = SubscribeSeasonViewModel(mediaInfo: media)

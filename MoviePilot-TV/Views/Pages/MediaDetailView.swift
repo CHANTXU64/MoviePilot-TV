@@ -259,15 +259,15 @@ struct MediaDetailView: View {
         }
       }
     }
-    .alert("取消订阅", isPresented: $showUnsubscribeConfirm) {
+    .alert(SubscriptionCancelConfirmation.title, isPresented: $showUnsubscribeConfirm) {
       Button("取消", role: .cancel) {}
-      Button("确认取消订阅", role: .destructive) {
+      Button(SubscriptionCancelConfirmation.confirmButtonTitle, role: .destructive) {
         Task {
           await viewModel.cancelSubscription()
         }
       }
     } message: {
-      Text("确定要取消订阅「\(viewModel.detail.title ?? "")」吗？")
+      Text(SubscriptionCancelConfirmation.headerMessage(for: viewModel.detail))
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $navigationPath)
     .sheet(isPresented: $showSiteSelection) {

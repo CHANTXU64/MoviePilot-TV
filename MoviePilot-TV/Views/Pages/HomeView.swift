@@ -346,6 +346,7 @@ private struct SubscribeItemView: View {
   @ObservedObject var viewModel: HomeViewModel
   let onEdit: () -> Void
   let onViewDetail: () -> Void
+  @State private var showUnsubscribeConfirm = false
 
   var body: some View {
     MediaCard(
@@ -411,12 +412,20 @@ private struct SubscribeItemView: View {
 
       // 6. 取消订阅
       Button(role: .destructive) {
-        Task {
-          _ = await viewModel.deleteSubscribe(subscribe: item)
-        }
+        showUnsubscribeConfirm = true
       } label: {
         Label("取消订阅", systemImage: "trash")
       }
+    }
+    .alert(SubscriptionCancelConfirmation.title, isPresented: $showUnsubscribeConfirm) {
+      Button("取消", role: .cancel) {}
+      Button(SubscriptionCancelConfirmation.confirmButtonTitle, role: .destructive) {
+        Task {
+          _ = await viewModel.deleteSubscribe(subscribe: item)
+        }
+      }
+    } message: {
+      Text(SubscriptionCancelConfirmation.message(for: item))
     }
   }
 
