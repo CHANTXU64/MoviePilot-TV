@@ -303,6 +303,69 @@ final class DownloadTaskViewModelTests: XCTestCase {
     }
   }
 
+  func testSameDownloadRefreshUpdatesLatestMetadataForExistingRow() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(DownloadTaskURLProtocol.self))
+    defer { URLProtocol.unregisterClass(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setDownloadsJSONSequence(
+      [
+        (
+          downloadPayload(
+            hash: "shared-hash",
+            title: "Old Torrent Title",
+            name: "Old Recognized Name",
+            mediaTitle: "Old Media Title",
+            mediaImage: "/old-backdrop.jpg",
+            seasonEpisode: "S01E01",
+            username: "same-user",
+            progress: 10
+          ),
+          nil
+        ),
+        (
+          downloadPayload(
+            hash: "shared-hash",
+            title: "New Torrent Title",
+            name: "New Recognized Name",
+            mediaTitle: "New Media Title",
+            mediaImage: "/new-backdrop.jpg",
+            seasonEpisode: "S01E02",
+            username: "same-user",
+            progress: 80
+          ),
+          nil
+        ),
+      ],
+      forClient: "same"
+    )
+
+    service.baseURL = "http://download-tests.local"
+
+    let viewModel = DownloadTaskViewModel()
+    viewModel.selectedClient = "same"
+
+    await viewModel.loadDownloads()
+    let firstRow = try XCTUnwrap(viewModel.downloads.first)
+    XCTAssertEqual(firstRow.title, "Old Torrent Title")
+    XCTAssertEqual(firstRow.media?.title, "Old Media Title")
+
+    await viewModel.loadDownloads()
+
+    let refreshedRow = try XCTUnwrap(viewModel.downloads.first)
+    XCTAssertTrue(firstRow === refreshedRow)
+    XCTAssertEqual(refreshedRow.title, "New Torrent Title")
+    XCTAssertEqual(refreshedRow.name, "New Recognized Name")
+    XCTAssertEqual(refreshedRow.media?.title, "New Media Title")
+    XCTAssertEqual(refreshedRow.media?.image, "/new-backdrop.jpg")
+    XCTAssertEqual(refreshedRow.season_episode, "S01E02")
+    XCTAssertEqual(refreshedRow.progress, 80)
+  }
+
   func testOlderClientDeleteThatCompletesLaterDoesNotRemoveCurrentClientDownloadWithSameHash()
     async throws
   {
@@ -362,18 +425,33 @@ final class DownloadTaskViewModelTests: XCTestCase {
   private func downloadPayload(
     hash: String,
     title: String,
+    name: String? = nil,
+    mediaTitle: String? = nil,
+    mediaImage: String? = nil,
+    seasonEpisode: String? = nil,
     username: String,
     state: String = "downloading",
     progress: Int
   ) -> String {
-    """
+    let recognizedName = name ?? title
+    let mediaTitle = mediaTitle ?? title
+    let mediaImage = mediaImage ?? "/download-backdrop.jpg"
+    let seasonEpisode = seasonEpisode ?? "S01E01"
+    return """
     [
       {
         "hash": "\(hash)",
         "title": "\(title)",
-        "name": "\(title)",
+        "name": "\(recognizedName)",
         "state": "\(state)",
         "progress": \(progress),
+        "season_episode": "\(seasonEpisode)",
+        "media": {
+          "title": "\(mediaTitle)",
+          "image": "\(mediaImage)",
+          "season": "S01",
+          "episode": "E01"
+        },
         "username": "\(username)"
       }
     ]

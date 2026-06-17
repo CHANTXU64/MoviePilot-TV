@@ -35,17 +35,36 @@ final class SubscriptionShareDedupTests: XCTestCase {
     )
   }
 
-  private func makeShare(rawId: Int, user: String) throws -> SubscribeShare {
+  func testSubscriptionShareDedupUsesRawShareIdWhenTitleOrUserChanges() throws {
+    let firstPage = try [
+      makeShare(rawId: 101, title: "Shared Show", user: "alice")
+    ].map { $0.toMediaInfo() }
+    let secondPage = try [
+      makeShare(rawId: 101, title: "Shared Show Renamed", user: "alice-renamed")
+    ].map { $0.toMediaInfo() }
+
+    var seenKeys = Set<String>()
+    XCTAssertEqual(
+      MediaInfo.deduplicateSubscriptionShareMedia(firstPage, existingKeys: &seenKeys).map(\.id),
+      ["share:101"]
+    )
+    XCTAssertTrue(
+      MediaInfo.deduplicateSubscriptionShareMedia(secondPage, existingKeys: &seenKeys).isEmpty,
+      "Subscription share pagination should deduplicate by the backend raw share id used by Web."
+    )
+  }
+
+  private func makeShare(rawId: Int, title: String = "Shared Show", user: String) throws -> SubscribeShare {
     let data = """
       {
         "id": \(rawId),
         "subscribe_id": 200,
-        "share_title": "Shared Show",
+        "share_title": "\(title)",
         "share_user": "\(user)",
-        "name": "Shared Show",
+        "name": "\(title)",
         "year": "2024",
         "type": "电视剧",
-        "keyword": "Shared Show",
+        "keyword": "\(title)",
         "tmdbid": 9001,
         "season": 1,
         "poster": "/shared-show.jpg",

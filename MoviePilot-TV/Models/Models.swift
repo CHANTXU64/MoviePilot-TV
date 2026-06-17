@@ -738,7 +738,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     existingKeys: inout Set<String>
   ) -> [MediaInfo] {
     return items.filter { item in
-      let key = item.subscribeShare?.id ?? item.id
+      let key = item.id
       if existingKeys.contains(key) {
         return false
       }
@@ -809,22 +809,24 @@ class DownloadingInfo: Codable, Identifiable, ObservableObject, Equatable {
     lhs.id == rhs.id
   }
 
-  // --- 不可变属性 ---
+  // --- 身份属性 ---
   let id: String
   /// 哈希值
   let hash: String?
-  /// 种子名称
-  let title: String?
-  /// 识别后的名称
-  let name: String?
-  /// 大小
-  let size: Int64?
-  /// 关联的媒体信息
-  let media: DownloadingMediaInfo?
-  // 季集格式 (如 S01E01)
-  let season_episode: String?
   // 下载用户名称
   let username: String?
+
+  // --- 接口快照字段，为 UI 更新发布 ---
+  /// 种子名称
+  @Published var title: String?
+  /// 识别后的名称
+  @Published var name: String?
+  /// 大小
+  @Published var size: Int64?
+  /// 关联的媒体信息
+  @Published var media: DownloadingMediaInfo?
+  // 季集格式 (如 S01E01)
+  @Published var season_episode: String?
 
   // --- 易变属性，为 UI 更新发布 ---
   /// 状态
@@ -846,14 +848,22 @@ class DownloadingInfo: Codable, Identifiable, ObservableObject, Equatable {
   required init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
 
-    // 解码不可变属性
-    hash = try container.decodeIfPresent(String.self, forKey: .hash)
-    title = try container.decodeIfPresent(String.self, forKey: .title)
-    name = try container.decodeIfPresent(String.self, forKey: .name)
-    size = try container.decodeIfPresent(Int64.self, forKey: .size)
-    media = try container.decodeIfPresent(DownloadingMediaInfo.self, forKey: .media)
-    season_episode = try container.decodeIfPresent(String.self, forKey: .season_episode)
-    username = try container.decodeIfPresent(String.self, forKey: .username)
+    let decodedHash = try container.decodeIfPresent(String.self, forKey: .hash)
+    let decodedTitle = try container.decodeIfPresent(String.self, forKey: .title)
+    let decodedName = try container.decodeIfPresent(String.self, forKey: .name)
+    let decodedSize = try container.decodeIfPresent(Int64.self, forKey: .size)
+    let decodedMedia = try container.decodeIfPresent(DownloadingMediaInfo.self, forKey: .media)
+    let decodedSeasonEpisode = try container.decodeIfPresent(String.self, forKey: .season_episode)
+    let decodedUsername = try container.decodeIfPresent(String.self, forKey: .username)
+
+    // 解码身份和接口快照属性
+    hash = decodedHash
+    title = decodedTitle
+    name = decodedName
+    size = decodedSize
+    media = decodedMedia
+    season_episode = decodedSeasonEpisode
+    username = decodedUsername
 
     // 解码可变的、@Published 的属性
     state = try container.decodeIfPresent(String.self, forKey: .state)
@@ -863,12 +873,13 @@ class DownloadingInfo: Codable, Identifiable, ObservableObject, Equatable {
     left_time = try container.decodeIfPresent(String.self, forKey: .left_time)
 
     // 优先使用 hash 作为稳定标识符
-    if let _hash = hash, !_hash.isEmpty {
-      id = "DownloadingInfo-\(_hash)-\(username ?? "")"
+    if let _hash = decodedHash, !_hash.isEmpty {
+      id = "DownloadingInfo-\(_hash)-\(decodedUsername ?? "")"
     } else {
       // 备用方案：组合其他信息，确保稳定性
       let fallbackId =
-        (name ?? "") + (title ?? "") + (username ?? "") + (size.map { String($0) } ?? "")
+        (decodedName ?? "") + (decodedTitle ?? "") + (decodedUsername ?? "")
+        + (decodedSize.map { String($0) } ?? "")
       if !fallbackId.isEmpty {
         id = "DownloadingInfo-\(fallbackId)"
       } else {
@@ -894,8 +905,13 @@ class DownloadingInfo: Codable, Identifiable, ObservableObject, Equatable {
     try container.encode(username, forKey: .username)
   }
 
-  /// 仅更新下载任务的易变属性。
+  /// 更新同一下载任务的最新接口快照。
   func update(with other: DownloadingInfo) {
+    if title != other.title { title = other.title }
+    if name != other.name { name = other.name }
+    if size != other.size { size = other.size }
+    if media != other.media { media = other.media }
+    if season_episode != other.season_episode { season_episode = other.season_episode }
     if state != other.state { state = other.state }
     if progress != other.progress { progress = other.progress }
     if dlspeed != other.dlspeed { dlspeed = other.dlspeed }
