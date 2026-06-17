@@ -192,6 +192,85 @@ final class DownloadTaskViewModelTests: XCTestCase {
     )
   }
 
+  func testOlderLoadForSameClientThatCompletesLaterDoesNotMutateCurrentDownload()
+    async throws
+  {
+    XCTAssertTrue(URLProtocol.registerClass(DownloadTaskURLProtocol.self))
+    defer { URLProtocol.unregisterClass(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    let olderRequestGate = DownloadTaskAsyncGate()
+    await DownloadTaskURLProtocol.stub.setDownloadsJSONSequence(
+      [
+        (
+          downloadPayload(
+            hash: "shared-hash", title: "Shared Task", username: "same-user", state: "paused",
+            progress: 10),
+          olderRequestGate
+        ),
+        (
+          downloadPayload(
+            hash: "shared-hash", title: "Shared Task", username: "same-user",
+            state: "downloading", progress: 80),
+          nil
+        ),
+      ],
+      forClient: "same"
+    )
+
+    service.baseURL = "http://download-tests.local"
+
+    let viewModel = DownloadTaskViewModel()
+    viewModel.selectedClient = "same"
+
+    let olderLoadTask = Task { @MainActor in
+      await viewModel.loadDownloads()
+    }
+    defer { olderLoadTask.cancel() }
+
+    try await withTimeout("first same-client request to start") {
+      await DownloadTaskURLProtocol.stub.waitForRequest(clientName: "same", count: 1)
+    }
+
+    let newerLoadTask = Task { @MainActor in
+      await viewModel.loadDownloads()
+    }
+
+    try await withTimeout("second same-client request to start") {
+      await DownloadTaskURLProtocol.stub.waitForRequest(clientName: "same", count: 2)
+    }
+    try await withTimeout("second same-client load to finish") {
+      await newerLoadTask.value
+    }
+
+    XCTAssertEqual(viewModel.selectedClient, "same")
+    XCTAssertEqual(viewModel.downloads.map(\.hash), ["shared-hash"])
+    XCTAssertEqual(viewModel.downloads.first?.state, "downloading")
+    XCTAssertEqual(viewModel.downloads.first?.progress, 80)
+
+    await olderRequestGate.open()
+    try await withTimeout("first same-client load to finish") {
+      await olderLoadTask.value
+    }
+
+    XCTAssertEqual(viewModel.selectedClient, "same")
+    XCTAssertEqual(viewModel.downloads.map(\.hash), ["shared-hash"])
+    XCTAssertEqual(
+      viewModel.downloads.first?.state,
+      "downloading",
+      "Late responses for an older request from the same downloader must not mutate current row state."
+    )
+    XCTAssertEqual(
+      viewModel.downloads.first?.progress,
+      80,
+      "Late responses for an older request from the same downloader must not mutate current row progress."
+    )
+  }
+
   func testOlderClientDeleteThatCompletesLaterDoesNotRemoveCurrentClientDownloadWithSameHash()
     async throws
   {
@@ -312,7 +391,7 @@ private struct DownloadTaskHTTPStubResponse: Sendable {
 }
 
 private actor DownloadTaskURLProtocolStub {
-  private var responsesByClient: [String: DownloadTaskHTTPStubResponse] = [:]
+  private var responsesByClient: [String: [DownloadTaskHTTPStubResponse]] = [:]
   private var requestedClients: [String] = []
 
   func reset() {
@@ -326,11 +405,27 @@ private actor DownloadTaskURLProtocolStub {
     statusCode: Int = 200,
     waitFor gate: DownloadTaskAsyncGate? = nil
   ) {
-    responsesByClient[clientName] = DownloadTaskHTTPStubResponse(
-      statusCode: statusCode,
-      data: Data(json.utf8),
-      gate: gate
-    )
+    responsesByClient[clientName] = [
+      DownloadTaskHTTPStubResponse(
+        statusCode: statusCode,
+        data: Data(json.utf8),
+        gate: gate
+      )
+    ]
+  }
+
+  func setDownloadsJSONSequence(
+    _ sequence: [(json: String, gate: DownloadTaskAsyncGate?)],
+    forClient clientName: String,
+    statusCode: Int = 200
+  ) {
+    responsesByClient[clientName] = sequence.map { item in
+      DownloadTaskHTTPStubResponse(
+        statusCode: statusCode,
+        data: Data(item.json.utf8),
+        gate: item.gate
+      )
+    }
   }
 
   func response(for request: URLRequest) async throws -> DownloadTaskHTTPStubResponse {
@@ -344,8 +439,12 @@ private actor DownloadTaskURLProtocolStub {
 
     recordRequest(for: clientName)
 
-    guard let response = responsesByClient[clientName] else {
+    guard var responses = responsesByClient[clientName], let response = responses.first else {
       throw URLError(.unsupportedURL)
+    }
+    if responses.count > 1 {
+      responses.removeFirst()
+      responsesByClient[clientName] = responses
     }
 
     if let gate = response.gate {
@@ -356,7 +455,11 @@ private actor DownloadTaskURLProtocolStub {
   }
 
   func waitForRequest(clientName: String) async {
-    while !requestedClients.contains(clientName) {
+    await waitForRequest(clientName: clientName, count: 1)
+  }
+
+  func waitForRequest(clientName: String, count: Int) async {
+    while requestedClients.filter({ $0 == clientName }).count < count {
       if Task.isCancelled { return }
       try? await Task.sleep(nanoseconds: 1_000_000)
     }

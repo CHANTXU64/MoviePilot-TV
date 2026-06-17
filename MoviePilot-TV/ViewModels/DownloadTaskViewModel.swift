@@ -9,6 +9,7 @@ class DownloadTaskViewModel: ObservableObject {
   @Published var downloads: [DownloadingInfo] = []
 
   private let apiService = APIService.shared
+  private var downloadLoadGeneration = 0
 
   func initialLoad() async {
     if clients.isEmpty {
@@ -25,11 +26,15 @@ class DownloadTaskViewModel: ObservableObject {
   }
 
   func loadDownloads() async {
+    downloadLoadGeneration += 1
+    let currentGeneration = downloadLoadGeneration
     let clientName = selectedClient
     guard !clientName.isEmpty else { return }
     do {
       let newDownloads = try await apiService.fetchDownloading(clientName: clientName)
-      guard selectedClient == clientName else { return }
+      guard selectedClient == clientName, currentGeneration == downloadLoadGeneration else {
+        return
+      }
 
       let newDownloadIds = Set(newDownloads.map { $0.id })
       let existingDownloadsById = Dictionary(uniqueKeysWithValues: downloads.map { ($0.id, $0) })
