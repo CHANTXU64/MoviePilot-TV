@@ -556,6 +556,103 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(summaries[1]?.id, 31)
   }
 
+  func testSeasonSubscriptionSummaryFallsBackToMediaIdWhenSnapshotIdentifiersAreInvalid() {
+    let media = MediaInfo(mediaid_prefix: "tmdb", media_id: "12345", type: "电视剧")
+    let subscriptions = [
+      Subscribe(id: 33, name: "Zero TMDB", type: "电视剧", season: 1, tmdbid: 0, mediaid: "tmdb:12345"),
+      Subscribe(id: 34, name: "Zero Bangumi", type: "电视剧", season: 2, bangumiid: 0, mediaid: "tmdb:12345"),
+      Subscribe(id: 35, name: "Blank Douban", type: "电视剧", season: 3, doubanid: "  ", mediaid: "tmdb:12345"),
+      Subscribe(id: 36, name: "Invalid Fallback", type: "电视剧", season: 4, tmdbid: 0, mediaid: "tmdb:0"),
+    ]
+
+    let summaries = SeasonSubscriptionSummary.indexBySeason(
+      from: subscriptions,
+      matching: media
+    )
+
+    XCTAssertEqual(summaries[1]?.id, 33)
+    XCTAssertEqual(summaries[2]?.id, 34)
+    XCTAssertEqual(summaries[3]?.id, 35)
+    XCTAssertNil(summaries[4])
+  }
+
+  func testSeasonSubscriptionSummaryFallsBackToMediaIdWhenMediaIdentifiersAreInvalid() {
+    let media = MediaInfo(
+      tmdb_id: 0,
+      douban_id: "  ",
+      bangumi_id: 0,
+      mediaid_prefix: "tmdb",
+      media_id: "12345",
+      type: "电视剧"
+    )
+    let subscriptions = [
+      Subscribe(id: 37, name: "Target", type: "电视剧", season: 1, mediaid: "tmdb:12345")
+    ]
+
+    let summaries = SeasonSubscriptionSummary.indexBySeason(
+      from: subscriptions,
+      matching: media
+    )
+
+    XCTAssertEqual(summaries[1]?.id, 37)
+  }
+
+  func testSubscribeApiMediaIdFallsBackWhenPrimaryIdentifiersAreInvalid() {
+    let subscribe = Subscribe(
+      id: 38,
+      name: "Target",
+      type: "电视剧",
+      season: 1,
+      tmdbid: 0,
+      doubanid: "  ",
+      bangumiid: 0,
+      mediaid: "tmdb:12345"
+    )
+
+    XCTAssertEqual(subscribe.apiMediaId, "tmdb:12345")
+  }
+
+  func testSubscribeApiMediaIdRejectsMalformedNumericFallbackIdentifiers() {
+    let invalidMediaIds = ["tmdb:-1", "tmdb:abc", "bangumi:-1", "bangumi:abc"]
+
+    for (offset, mediaId) in invalidMediaIds.enumerated() {
+      let subscribe = Subscribe(
+        id: 90 + offset,
+        name: "Invalid",
+        type: "电视剧",
+        season: 1,
+        mediaid: mediaId
+      )
+
+      XCTAssertNil(subscribe.apiMediaId, "Expected \(mediaId) to be rejected")
+    }
+  }
+
+  func testSubscribeNavigationMediaInfoPreservesFallbackMediaIdWhenPrimaryIdentifiersAreInvalid() {
+    let subscribe = Subscribe(
+      id: 39,
+      name: "Target",
+      year: "2024",
+      type: "电视剧",
+      season: 1,
+      tmdbid: 0,
+      doubanid: "  ",
+      bangumiid: 0,
+      episode_group: "group-a",
+      description: "简介",
+      mediaid: "tmdb:12345"
+    )
+
+    let media = subscribe.navigationMediaInfo()
+
+    XCTAssertEqual(media.apiMediaId, "tmdb:12345")
+    XCTAssertEqual(media.title, "Target")
+    XCTAssertEqual(media.year, "2024")
+    XCTAssertEqual(media.season, 1)
+    XCTAssertEqual(media.episode_group, "group-a")
+    XCTAssertEqual(media.overview, "简介")
+  }
+
   func testSeasonSubscriptionSummaryIgnoresBlankAndZeroIdentifiers() {
     let media = MediaInfo(
       tmdb_id: 0,

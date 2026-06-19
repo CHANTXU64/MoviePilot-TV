@@ -373,8 +373,10 @@ class MediaDetailViewModel: ObservableObject {
 
     do {
       let subscriptions = try await apiService.fetchSubscriptions(forceRefresh: true)
+      let targetMediaId = "tmdb:\(tmdbId)"
       let matchingSubscriptions = subscriptions.filter {
-        $0.tmdbid == tmdbId && $0.type == "电视剧"
+        $0.type == "电视剧"
+          && MediaIdentifier.normalizedMediaIdentifier($0.apiMediaId) == targetMediaId
       }
       guard matchingSubscriptions.count > 1 else { return nil }
       let seasons = Array(Set(matchingSubscriptions.compactMap(\.season))).sorted()

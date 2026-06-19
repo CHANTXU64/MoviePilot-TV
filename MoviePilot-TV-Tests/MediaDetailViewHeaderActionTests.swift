@@ -53,6 +53,52 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
+  func testHeaderUnsubscribeConfirmationCountsSubscriptionsMatchedByFallbackMediaId()
+    async throws
+  {
+    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    await DetailHeaderSubscriptionURLProtocol.stub.setSubscriptionSnapshot([
+      Subscribe(id: 7101, name: "详情页取消订阅", type: "电视剧", season: 1, tmdbid: 998_877),
+      Subscribe(
+        id: 7102,
+        name: "详情页取消订阅",
+        type: "电视剧",
+        season: 2,
+        tmdbid: 0,
+        mediaid: "tmdb:998877"
+      ),
+    ])
+    service.baseURL = "http://detail-header-subscription-tests.local"
+
+    let detail = MediaInfo(
+      douban_id: "detail-header-douban",
+      title: "详情页取消订阅",
+      type: "电视剧",
+      season: 1
+    )
+    let preloadTask = MediaPreloadTask(partialMedia: detail)
+    preloadTask.tmdbId = 998_877
+    preloadTask.isSubscribed = true
+
+    let viewModel = MediaDetailViewModel(detail: detail)
+    viewModel.preloadTask = preloadTask
+
+    let message = await viewModel.headerUnsubscribeConfirmationMessage()
+
+    XCTAssertEqual(
+      message,
+      "是否取消《详情页取消订阅》订阅？\n\n当前内容匹配到 TMDB 下多个分季订阅：第 1、2 季。确认后会一并取消。"
+    )
+  }
+
+  @MainActor
   func testCancelSubscriptionDeletesResolvedFallbackMediaWithoutSeason() async throws {
     XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
     defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
@@ -154,6 +200,31 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     XCTAssertEqual(deletedSubscriptionIDs, [])
     XCTAssertEqual(deletedMediaRequests.map(\.path), ["/api/v1/subscribe/media/tmdb:998877"])
     XCTAssertEqual(preloadTask.isSubscribed, false)
+  }
+
+  @MainActor
+  func testFetchSubscriptionLookupIgnoresInvalidResolvedFallbackMediaId() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    await DetailHeaderSubscriptionURLProtocol.stub.setCustomLookupPayload(
+      tmdbId: 112_233,
+      json: #"{"id":7201,"name":"Invalid lookup","type":"电视剧","season":1,"tmdbid":0,"mediaid":"tmdb:0"}"#
+    )
+    service.baseURL = "http://detail-header-subscription-tests.local"
+
+    let lookup = try await service.fetchSubscriptionLookup(
+      media: MediaInfo(tmdb_id: 112_233, type: "电视剧")
+    )
+
+    XCTAssertEqual(lookup?.id, 7201)
+    XCTAssertEqual(lookup?.mediaId, "tmdb:112233")
+    XCTAssertEqual(lookup?.isResolvedMediaId, false)
   }
 
   @MainActor
@@ -626,6 +697,7 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
   private var queuedStatusesByTMDBID: [Int: [DetailHeaderSubscriptionQueuedStatus]] = [:]
   private var lookupCountsByTMDBID: [Int: Int] = [:]
   private var minimalPayloadTMDBIDs: Set<Int> = []
+  private var customLookupPayloadsByTMDBID: [Int: String] = [:]
   private var deletedIDs: [Int] = []
   private var mediaDeleteRequests: [DetailHeaderSubscriptionMediaDeleteRequest] = []
   private var subscriptionSnapshot: [Subscribe] = []
@@ -638,6 +710,7 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
     queuedStatusesByTMDBID.removeAll()
     lookupCountsByTMDBID.removeAll()
     minimalPayloadTMDBIDs.removeAll()
+    customLookupPayloadsByTMDBID.removeAll()
     deletedIDs.removeAll()
     mediaDeleteRequests.removeAll()
     subscriptionSnapshot.removeAll()
@@ -650,6 +723,10 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
 
   func setResolvedSubscription(tmdbId: Int, id: Int?) {
     resolvedSubscriptionsByTMDBID[tmdbId] = id
+  }
+
+  func setCustomLookupPayload(tmdbId: Int, json: String) {
+    customLookupPayloadsByTMDBID[tmdbId] = json
   }
 
   func setSubscriptionSnapshot(_ subscriptions: [Subscribe]) {
@@ -718,6 +795,9 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
       let tmdbId = path.split(separator: ":").last.flatMap { Int($0) }
       if let tmdbId {
         lookupCountsByTMDBID[tmdbId, default: 0] += 1
+        if let customPayload = customLookupPayloadsByTMDBID[tmdbId] {
+          return try jsonResponse(customPayload)
+        }
         if var queuedStatuses = queuedStatusesByTMDBID[tmdbId],
           !queuedStatuses.isEmpty
         {

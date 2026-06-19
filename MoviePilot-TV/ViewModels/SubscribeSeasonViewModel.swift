@@ -45,46 +45,25 @@ struct SeasonSubscriptionSummary: Equatable, Hashable {
 
   private static func matches(_ subscription: Subscribe, media: MediaInfo) -> Bool {
     guard subscription.type == "电视剧" else { return false }
-    if let tmdbId = validNumericIdentifier(media.tmdb_id), subscription.tmdbid == tmdbId { return true }
-    if let doubanId = normalizedIdentifier(media.douban_id),
-      normalizedIdentifier(subscription.doubanid) == doubanId
+    if let tmdbId = MediaIdentifier.validNumericIdentifier(media.tmdb_id), subscription.tmdbid == tmdbId {
+      return true
+    }
+    if let doubanId = MediaIdentifier.normalizedString(media.douban_id),
+      MediaIdentifier.normalizedString(subscription.doubanid) == doubanId
     {
       return true
     }
-    if let bangumiId = validNumericIdentifier(media.bangumi_id), subscription.bangumiid == bangumiId {
+    if let bangumiId = MediaIdentifier.validNumericIdentifier(media.bangumi_id),
+      subscription.bangumiid == bangumiId
+    {
       return true
     }
-    if let mediaId = normalizedMediaIdentifier(media.apiMediaId),
-      normalizedMediaIdentifier(subscription.apiMediaId) == mediaId
+    if let mediaId = MediaIdentifier.normalizedMediaIdentifier(media.apiMediaId),
+      MediaIdentifier.normalizedMediaIdentifier(subscription.apiMediaId) == mediaId
     {
       return true
     }
     return false
-  }
-
-  private static func validNumericIdentifier(_ id: Int?) -> Int? {
-    guard let id, id > 0 else { return nil }
-    return id
-  }
-
-  private static func normalizedIdentifier(_ identifier: String?) -> String? {
-    guard let identifier else { return nil }
-    let trimmed = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmed.isEmpty ? nil : trimmed
-  }
-
-  private static func normalizedMediaIdentifier(_ mediaId: String?) -> String? {
-    guard let mediaId = normalizedIdentifier(mediaId), !mediaId.hasSuffix(":") else { return nil }
-
-    let parts = mediaId.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
-    if parts.count == 2 {
-      let prefix = parts[0]
-      let value = parts[1]
-      if value.isEmpty { return nil }
-      if (prefix == "tmdb" || prefix == "bangumi"), Int(value) == 0 { return nil }
-    }
-
-    return mediaId
   }
 
   private static func normalizedEpisodeGroup(_ episodeGroup: String?) -> String? {

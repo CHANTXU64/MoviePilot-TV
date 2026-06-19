@@ -113,43 +113,7 @@ struct HomeView: View {
   }
 
   private func navigateToDetail(for subscribe: Subscribe) {
-    let mediaInfo = MediaInfo(
-      tmdb_id: subscribe.tmdbid,
-      douban_id: subscribe.doubanid,
-      bangumi_id: subscribe.bangumiid,
-      imdb_id: nil,
-      tvdb_id: nil,
-      source: nil,
-      mediaid_prefix: nil,
-      media_id: nil,
-      title: subscribe.name,
-      original_title: nil,
-      original_name: nil,
-      names: nil,
-      type: subscribe.type,
-      year: subscribe.year,
-      season: subscribe.season,
-      // 必须将图像路径设为 nil，以确保导航对象是“干净”的。
-      // 如果携带了 poster_path，详情页会先用它作为背景，
-      // 然后在加载完完整的 backdrop_path 后再切换，导致闪烁。
-      poster_path: nil,
-      backdrop_path: nil,
-      overview: subscribe.description,
-      vote_average: nil,
-      popularity: nil,
-      season_info: nil,
-      collection_id: nil,
-      directors: nil,
-      actors: nil,
-      episode_group: subscribe.episode_group,
-      runtime: nil,
-      release_date: nil,
-      original_language: nil,
-      production_countries: nil,
-      genres: nil,
-      category: nil
-    )
-    path.append(mediaInfo)
+    path.append(subscribe.navigationMediaInfo())
   }
 }
 

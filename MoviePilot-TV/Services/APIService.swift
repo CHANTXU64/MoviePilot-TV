@@ -1639,16 +1639,12 @@ class APIService: ObservableObject {
       let mediaid: String?
 
       var apiMediaId: String? {
-        if let tmdbid, tmdbid > 0 { return "tmdb:\(tmdbid)" }
-        if let doubanid = normalizedString(doubanid) { return "douban:\(doubanid)" }
-        if let bangumiid, bangumiid > 0 { return "bangumi:\(bangumiid)" }
-        return normalizedString(mediaid)
-      }
-
-      private func normalizedString(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        MediaIdentifier.apiMediaId(
+          tmdbId: tmdbid,
+          doubanId: doubanid,
+          bangumiId: bangumiid,
+          fallbackMediaId: mediaid
+        )
       }
     }
     guard let mediaId = media.apiMediaId else {

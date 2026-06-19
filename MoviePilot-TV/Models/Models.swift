@@ -8,6 +8,74 @@ extension Notification.Name {
   static let subscriptionDidUpdate = Notification.Name("subscriptionDidUpdate")
 }
 
+enum MediaIdentifier {
+  static func apiMediaId(
+    tmdbId: Int?,
+    doubanId: String?,
+    bangumiId: Int?,
+    mediaIdPrefix: String?,
+    mediaId: String?
+  ) -> String? {
+    apiMediaId(
+      tmdbId: tmdbId,
+      doubanId: doubanId,
+      bangumiId: bangumiId,
+      fallbackMediaId: joinedMediaId(prefix: mediaIdPrefix, id: mediaId)
+    )
+  }
+
+  static func apiMediaId(
+    tmdbId: Int?,
+    doubanId: String?,
+    bangumiId: Int?,
+    fallbackMediaId: String?
+  ) -> String? {
+    if let tmdbId = validNumericIdentifier(tmdbId) { return "tmdb:\(tmdbId)" }
+    if let doubanId = normalizedString(doubanId) { return "douban:\(doubanId)" }
+    if let bangumiId = validNumericIdentifier(bangumiId) { return "bangumi:\(bangumiId)" }
+    return normalizedMediaIdentifier(fallbackMediaId)
+  }
+
+  static func validNumericIdentifier(_ id: Int?) -> Int? {
+    guard let id, id > 0 else { return nil }
+    return id
+  }
+
+  static func normalizedString(_ value: String?) -> String? {
+    guard let value else { return nil }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
+
+  static func normalizedMediaIdentifier(_ mediaId: String?) -> String? {
+    guard let mediaId = normalizedString(mediaId), !mediaId.hasSuffix(":") else { return nil }
+
+    let parts = mediaId.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+    if parts.count == 2 {
+      let prefix = parts[0]
+      let value = parts[1]
+      if value.isEmpty { return nil }
+      if prefix == "tmdb" || prefix == "bangumi" {
+        guard let numericValue = Int(value), numericValue > 0 else { return nil }
+      }
+    }
+
+    return mediaId
+  }
+
+  static func mediaIdComponents(_ mediaId: String?) -> (prefix: String, id: String)? {
+    guard let mediaId = normalizedMediaIdentifier(mediaId) else { return nil }
+    let parts = mediaId.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+    guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { return nil }
+    return (String(parts[0]), String(parts[1]))
+  }
+
+  private static func joinedMediaId(prefix: String?, id: String?) -> String? {
+    guard let prefix = normalizedString(prefix), let id = normalizedString(id) else { return nil }
+    return "\(prefix):\(id)"
+  }
+}
+
 /// 包装类型，用于处理 API 响应中多种格式的布尔值
 /// 从 Bool、Int 或 String 解码，始终编码为 Bool
 struct FlexibleBool: Codable, Hashable {
@@ -709,16 +777,13 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   /// - 对应前端: `getMediaId()` in `MediaDetailView.vue` & `SubscribeSeasonDialog.vue`
   /// - 拼接规则: 优先使用 `tmdb_id`, `douban_id`, `bangumi_id`。如果都没有，则使用 `mediaid_prefix` 和 `media_id` 作为备用。
   var apiMediaId: String? {
-    if let tmdbId = tmdb_id {
-      return "tmdb:\(tmdbId)"
-    } else if let doubanId = douban_id {
-      return "douban:\(doubanId)"
-    } else if let bangumiId = bangumi_id {
-      return "bangumi:\(bangumiId)"
-    } else if let prefix = mediaid_prefix, let id = media_id {
-      return "\(prefix):\(id)"
-    }
-    return nil
+    MediaIdentifier.apiMediaId(
+      tmdbId: tmdb_id,
+      doubanId: douban_id,
+      bangumiId: bangumi_id,
+      mediaIdPrefix: mediaid_prefix,
+      mediaId: media_id
+    )
   }
 
   /// 对 MediaInfo 数组去重，保留首次出现的元素
@@ -1384,10 +1449,49 @@ struct Subscribe: Codable, Identifiable, Hashable {
   /// - 对应前端: MoviePilot-Frontend/src/components/cards/SubscribeCard.vue (getMediaId)
   /// - 拼接规则: 优先使用原始ID（tmdbid, doubanid, bangumiid）拼接，如果都没有，则直接使用接口返回的 `mediaid` 字段作为备用。
   var apiMediaId: String? {
-    if let tmdbid = self.tmdbid { return "tmdb:\(tmdbid)" }
-    if let doubanid = self.doubanid { return "douban:\(doubanid)" }
-    if let bangumiid = self.bangumiid { return "bangumi:\(bangumiid)" }
-    return mediaid
+    MediaIdentifier.apiMediaId(
+      tmdbId: tmdbid,
+      doubanId: doubanid,
+      bangumiId: bangumiid,
+      fallbackMediaId: mediaid
+    )
+  }
+
+  func navigationMediaInfo() -> MediaInfo {
+    let fallbackMediaId = MediaIdentifier.mediaIdComponents(mediaid)
+    return MediaInfo(
+      tmdb_id: MediaIdentifier.validNumericIdentifier(tmdbid),
+      douban_id: MediaIdentifier.normalizedString(doubanid),
+      bangumi_id: MediaIdentifier.validNumericIdentifier(bangumiid),
+      imdb_id: nil,
+      tvdb_id: nil,
+      source: nil,
+      mediaid_prefix: fallbackMediaId?.prefix,
+      media_id: fallbackMediaId?.id,
+      title: name,
+      original_title: nil,
+      original_name: nil,
+      names: nil,
+      type: type,
+      year: year,
+      season: season,
+      poster_path: nil,
+      backdrop_path: nil,
+      overview: description,
+      vote_average: nil,
+      popularity: nil,
+      season_info: nil,
+      collection_id: nil,
+      directors: nil,
+      actors: nil,
+      episode_group: episode_group,
+      runtime: nil,
+      release_date: nil,
+      original_language: nil,
+      production_countries: nil,
+      genres: nil,
+      category: nil
+    )
   }
 }
 
