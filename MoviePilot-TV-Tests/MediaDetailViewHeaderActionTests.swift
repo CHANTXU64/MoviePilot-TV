@@ -337,6 +337,153 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
+  func testPreloadRefreshBypassesStaleFallbackStatusCacheAfterRemoteCompletion() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    service.baseURL = "http://detail-header-subscription-tests.local"
+
+    let tmdbMedia = MediaInfo(tmdb_id: 776_655, type: "电视剧")
+    let cachedSubscriptionStatus = try await service.checkSubscription(media: tmdbMedia)
+    XCTAssertTrue(cachedSubscriptionStatus)
+
+    await DetailHeaderSubscriptionURLProtocol.stub.setResolvedSubscription(tmdbId: 776_655, id: nil)
+
+    let preloadTask = MediaPreloadTask(
+      partialMedia: MediaInfo(
+        douban_id: "detail-header-remote-complete-douban",
+        title: "详情页远端完成",
+        type: "电视剧"
+      )
+    )
+    preloadTask.tmdbId = 776_655
+    preloadTask.isSubscribed = true
+
+    await preloadTask.refreshSubscriptionStatus()
+
+    let lookupCount = await DetailHeaderSubscriptionURLProtocol.stub.lookupRequestCount(
+      tmdbId: 776_655
+    )
+
+    XCTAssertEqual(preloadTask.isSubscribed, false)
+    XCTAssertEqual(lookupCount, 2)
+  }
+
+  @MainActor
+  func testDetailReadyHandlerRefreshesSubscriptionWhenPreloadCompletesAfterViewAppears()
+    async throws
+  {
+    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    await DetailHeaderSubscriptionURLProtocol.stub.setResolvedSubscription(tmdbId: 776_656, id: 7004)
+    service.baseURL = "http://detail-header-subscription-tests.local"
+
+    let tmdbMedia = MediaInfo(tmdb_id: 776_656, type: "电视剧")
+    let cachedSubscriptionStatus = try await service.checkSubscription(media: tmdbMedia)
+    XCTAssertTrue(cachedSubscriptionStatus)
+
+    await DetailHeaderSubscriptionURLProtocol.stub.setResolvedSubscription(tmdbId: 776_656, id: nil)
+
+    let fullDetail = MediaInfo(
+      douban_id: "detail-ready-remote-complete-douban",
+      title: "详情页后完成",
+      type: "电视剧"
+    )
+    let preloadTask = MediaPreloadTask(partialMedia: fullDetail)
+    preloadTask.tmdbId = 776_656
+    preloadTask.fullDetail = fullDetail
+    preloadTask.isSubscribed = true
+
+    let viewModel = MediaDetailViewModel(detail: MediaInfo(title: "占位详情", type: "电视剧"))
+    viewModel.preloadTask = preloadTask
+
+    let didRefreshSubscription = await MediaDetailView.applyReadyPreloadedDetail(
+      from: preloadTask,
+      to: viewModel,
+      hasRefreshedSubscription: false
+    )
+
+    let lookupCount = await DetailHeaderSubscriptionURLProtocol.stub.lookupRequestCount(
+      tmdbId: 776_656
+    )
+
+    XCTAssertTrue(didRefreshSubscription)
+    XCTAssertEqual(viewModel.detail.title, "详情页后完成")
+    XCTAssertEqual(preloadTask.isSubscribed, false)
+    XCTAssertEqual(lookupCount, 2)
+  }
+
+  @MainActor
+  func testSubscriptionUpdateRefreshesPinnedPreloadTaskWithoutRefreshingPosterWallCache()
+    async throws
+  {
+    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    let preloader = MediaPreloader.shared
+    preloader.clearAll()
+    defer { preloader.clearAll() }
+
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    service.baseURL = "http://detail-header-subscription-tests.local"
+
+    let pinnedGate = DetailHeaderSubscriptionAsyncGate()
+    await DetailHeaderSubscriptionURLProtocol.stub.enqueueResolvedSubscription(
+      tmdbId: 661_001,
+      id: nil,
+      waitFor: pinnedGate
+    )
+
+    let pinnedMedia = MediaInfo(
+      tmdb_id: 661_001,
+      title: "当前详情页",
+      type: "电影",
+      collection_id: 1
+    )
+    let posterWallMedia = MediaInfo(
+      tmdb_id: 661_002,
+      title: "海报墙缓存",
+      type: "电影",
+      collection_id: 2
+    )
+
+    _ = preloader.preload(for: pinnedMedia)
+    _ = preloader.preload(for: posterWallMedia)
+    preloader.pin(key: pinnedMedia.id)
+
+    NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
+
+    await pinnedGate.waitForWaiter()
+    try await Task.sleep(nanoseconds: 50_000_000)
+    await pinnedGate.open()
+
+    let pinnedLookupCount = await DetailHeaderSubscriptionURLProtocol.stub.lookupRequestCount(
+      tmdbId: 661_001
+    )
+    let posterWallLookupCount = await DetailHeaderSubscriptionURLProtocol.stub.lookupRequestCount(
+      tmdbId: 661_002
+    )
+
+    XCTAssertEqual(pinnedLookupCount, 1)
+    XCTAssertEqual(posterWallLookupCount, 0)
+  }
+
+  @MainActor
   func testCheckSubscriptionAcceptsMinimalSubscriptionPayload() async throws {
     XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
     defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
@@ -606,6 +753,33 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     )
 
     XCTAssertTrue(didShowUnsubscribeConfirm)
+    XCTAssertFalse(didStartSubscribe)
+  }
+
+  @MainActor
+  func testSubscribedHeaderActionSkipsUnsubscribeConfirmationWhenRefreshFindsRemoteCompletion()
+    async
+  {
+    var didRefresh = false
+    var didShowUnsubscribeConfirm = false
+    var didStartSubscribe = false
+
+    await MediaDetailView.performHeaderSubscribeAction(
+      isSubscribed: true,
+      refreshSubscribedState: {
+        didRefresh = true
+        return false
+      },
+      showUnsubscribeConfirm: {
+        didShowUnsubscribeConfirm = true
+      },
+      startSubscribe: {
+        didStartSubscribe = true
+      }
+    )
+
+    XCTAssertTrue(didRefresh)
+    XCTAssertFalse(didShowUnsubscribeConfirm)
     XCTAssertFalse(didStartSubscribe)
   }
 

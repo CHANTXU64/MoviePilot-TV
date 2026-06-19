@@ -13,6 +13,7 @@ struct MediaDetailView: View {
   @State private var showSiteSelection = false
   @State private var showContentPage = false
   @State private var hasAppeared = false
+  @State private var hasRefreshedSubscriptionAfterFullDetail = false
 
   // 订阅相关 UI 状态（弹窗开关，纯 UI 逻辑）
   @State private var sheetSubscribe: Subscribe?
@@ -224,17 +225,25 @@ struct MediaDetailView: View {
         hasAppeared = true
       }
       // 如果 fullDetail 已经就绪（预加载命中），立即应用（网络加载自动在后台启动）
-      if let fullDetail = preloadTask.fullDetail {
-        viewModel.applyFullDetail(fullDetail)
-      }
+      hasRefreshedSubscriptionAfterFullDetail = await Self.applyReadyPreloadedDetail(
+        from: preloadTask,
+        to: viewModel,
+        hasRefreshedSubscription: hasRefreshedSubscriptionAfterFullDetail
+      )
       await viewModel.siteFilter.loadSites()
     }
     // 焦点恢复关键：当 fullDetail 加载完成后，应用完整详情。
     // MediaDetailView 从第一帧就存在于视图树中（用 partialMedia 初始化），
     // 在 fullDetail 就绪前不配置任何内容，仅由 Loading 遮罩覆盖。
     .onChange(of: preloadTask.isDetailReady) { _, isLoaded in
-      if isLoaded, let fullDetail = preloadTask.fullDetail {
-        viewModel.applyFullDetail(fullDetail)
+      if isLoaded {
+        Task { @MainActor in
+          hasRefreshedSubscriptionAfterFullDetail = await Self.applyReadyPreloadedDetail(
+            from: preloadTask,
+            to: viewModel,
+            hasRefreshedSubscription: hasRefreshedSubscriptionAfterFullDetail
+          )
+        }
       }
     }
     // 当 ViewModel 的 isFirstRowReady 变为 true 时，回写给 ContainerView 控制 Loading 遮罩
@@ -250,6 +259,9 @@ struct MediaDetailView: View {
         && viewModel.detail.type == "电视剧" && viewModel.detail.tmdb_id != nil
       {
         viewModel.isFirstRowReady = true
+        Task { @MainActor in
+          await viewModel.refreshSubscriptionStatus()
+        }
       }
     }
     .sheet(item: $sheetSubscribe) { subscribe in
@@ -292,6 +304,27 @@ struct MediaDetailView: View {
 
   // MARK: - 订阅 UI 操作（业务逻辑委托给 ViewModel）
 
+  @MainActor
+  @discardableResult
+  static func applyReadyPreloadedDetail(
+    from preloadTask: MediaPreloadTask,
+    to viewModel: MediaDetailViewModel,
+    hasRefreshedSubscription: Bool
+  ) async -> Bool {
+    guard let fullDetail = preloadTask.fullDetail else {
+      return hasRefreshedSubscription
+    }
+
+    viewModel.applyFullDetail(fullDetail)
+
+    guard !hasRefreshedSubscription else {
+      return true
+    }
+
+    await viewModel.refreshSubscriptionStatus()
+    return true
+  }
+
   static func performHeaderSubscribeAction(
     isSubscribed: Bool,
     showUnsubscribeConfirm: () -> Void,
@@ -304,20 +337,42 @@ struct MediaDetailView: View {
     }
   }
 
-  private func handleHeaderSubscribe() {
-    Self.performHeaderSubscribeAction(
-      isSubscribed: isSubscribed,
-      showUnsubscribeConfirm: {
-        unsubscribeConfirmationMessage = SubscriptionCancelConfirmation.headerMessage(for: viewModel.detail)
-        Task { @MainActor in
-          unsubscribeConfirmationMessage = await viewModel.headerUnsubscribeConfirmationMessage()
-          showUnsubscribeConfirm = true
-        }
-      },
-      startSubscribe: {
-        sheetSubscribe = viewModel.buildSubscribeRequest()
+  static func performHeaderSubscribeAction(
+    isSubscribed: Bool,
+    refreshSubscribedState: () async -> Bool,
+    showUnsubscribeConfirm: () -> Void,
+    startSubscribe: () -> Void
+  ) async {
+    if isSubscribed {
+      let latestSubscribedState = await refreshSubscribedState()
+      if latestSubscribedState {
+        showUnsubscribeConfirm()
       }
-    )
+    } else {
+      startSubscribe()
+    }
+  }
+
+  private func handleHeaderSubscribe() {
+    Task { @MainActor in
+      await Self.performHeaderSubscribeAction(
+        isSubscribed: isSubscribed,
+        refreshSubscribedState: {
+          await viewModel.refreshSubscriptionStatus()
+          return viewModel.isSubscribed
+        },
+        showUnsubscribeConfirm: {
+          unsubscribeConfirmationMessage = SubscriptionCancelConfirmation.headerMessage(for: viewModel.detail)
+          Task { @MainActor in
+            unsubscribeConfirmationMessage = await viewModel.headerUnsubscribeConfirmationMessage()
+            showUnsubscribeConfirm = true
+          }
+        },
+        startSubscribe: {
+          sheetSubscribe = viewModel.buildSubscribeRequest()
+        }
+      )
+    }
   }
 
   @ViewBuilder

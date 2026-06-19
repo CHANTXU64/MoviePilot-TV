@@ -212,12 +212,18 @@ class MediaPreloadTask: ObservableObject {
     if detail.canDirectlySubscribe {
       // 电影等可直接订阅的类型：重新查询全局订阅状态
       do {
-        var subscribed = try await APIService.shared.checkSubscription(media: detail)
+        var subscribed = try await APIService.shared.checkSubscription(
+          media: detail,
+          forceRefresh: true
+        )
         // 豆瓣/Bangumi 来源：后端通常用 TMDB ID 存储订阅，
         // 当用原始 mediaId（如 douban:xxx）查不到时，用识别到的 tmdbId 补查一次
         if !subscribed, detail.tmdb_id == nil, let tmdbId = self.tmdbId {
           let tmdbMedia = MediaInfo(tmdb_id: tmdbId, type: detail.type)
-          subscribed = try await APIService.shared.checkSubscription(media: tmdbMedia)
+          subscribed = try await APIService.shared.checkSubscription(
+            media: tmdbMedia,
+            forceRefresh: true
+          )
         }
         self.isSubscribed = subscribed
       } catch {
@@ -304,7 +310,7 @@ class MediaPreloader: ObservableObject {
   private var cancellables = Set<AnyCancellable>()
 
   private init() {
-    // 监听订阅变更通知，刷新所有缓存 task 的订阅状态
+    // 监听订阅变更通知，刷新活跃详情页持有的 task 的订阅状态
     NotificationCenter.default.publisher(for: .subscriptionDidUpdate)
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in
@@ -410,9 +416,10 @@ class MediaPreloader: ObservableObject {
 
   // MARK: - 订阅状态批量刷新
 
-  /// 收到订阅变更通知后，并发刷新所有缓存 task 的订阅状态
+  /// 收到订阅变更通知后，并发刷新活跃详情页持有的 task 的订阅状态。
+  /// 普通海报墙预加载缓存不主动强刷，避免浏览海报墙后一次通知触发大量订阅查询。
   private func refreshAllSubscriptionStatus() async {
-    let tasks = Array(cache.values)
+    let tasks = pinnedKeys.compactMap { cache[$0] }
     guard !tasks.isEmpty else { return }
 
     if tasks.contains(where: { $0.seasonViewModel != nil }) {
