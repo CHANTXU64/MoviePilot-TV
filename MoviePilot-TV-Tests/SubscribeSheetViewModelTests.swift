@@ -81,6 +81,38 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(searchRequestCount, 1)
   }
 
+  func testSaveExistingSubscriptionSearchesWhenNewSubscriptionAutoSearchIsDisabled() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    let originalValue = UserDefaults.standard.object(forKey: autoSearchKey)
+    defer {
+      snapshot.restore(to: service)
+      restoreUserDefaultsValue(originalValue, forKey: autoSearchKey)
+    }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    service.baseURL = "http://subscribe-sheet-tests.local"
+    UserDefaults.standard.set(false, forKey: autoSearchKey)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(id: 779, name: "已有订阅", type: "电影", tmdbid: 123458),
+      isNewSubscription: false
+    )
+
+    let didSave = await viewModel.save()
+
+    XCTAssertTrue(didSave)
+    let statusRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "PUT", path: "/api/v1/subscribe/status/779")
+    let searchRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "GET", path: "/api/v1/subscribe/search/779")
+    XCTAssertEqual(statusRequestCount, 0)
+    XCTAssertEqual(searchRequestCount, 1)
+  }
+
   private func restoreUserDefaultsValue(_ value: Any?, forKey key: String) {
     if let value {
       UserDefaults.standard.set(value, forKey: key)
