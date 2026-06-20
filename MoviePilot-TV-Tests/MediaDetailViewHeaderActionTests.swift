@@ -838,6 +838,33 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
+  func testHeaderActionSkipsActionWhenRefreshFails()
+    async
+  {
+    var didRefresh = false
+    var didShowUnsubscribeConfirm = false
+    var didStartSubscribe = false
+
+    await MediaDetailView.performHeaderSubscribeAction(
+      isSubscribed: true,
+      refreshSubscribedState: {
+        didRefresh = true
+        return nil
+      },
+      showUnsubscribeConfirm: {
+        didShowUnsubscribeConfirm = true
+      },
+      startSubscribe: {
+        didStartSubscribe = true
+      }
+    )
+
+    XCTAssertTrue(didRefresh)
+    XCTAssertFalse(didShowUnsubscribeConfirm)
+    XCTAssertFalse(didStartSubscribe)
+  }
+
+  @MainActor
   func testUnsubscribedHeaderActionStartsSubscribeFlow() {
     var didShowUnsubscribeConfirm = false
     var didStartSubscribe = false

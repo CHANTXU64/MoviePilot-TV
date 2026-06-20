@@ -283,9 +283,12 @@ class MediaDetailViewModel: ObservableObject {
   }
 
   /// 刷新订阅状态：同时更新全局订阅和分季订阅（preloadTask 是唯一数据源）
-  func refreshSubscriptionStatus(forceRefresh: Bool = true) async {
+  @discardableResult
+  func refreshSubscriptionStatus(forceRefresh: Bool = true) async -> Bool {
     // 使用 TaskGroup 或并发 Task 同时刷新全局和分季订阅
-    await withTaskGroup(of: Void.self) { group in
+    var resultCount = 0
+    var didRefreshAll = true
+    await withTaskGroup(of: Bool.self) { group in
       // 刷新全局订阅状态
       if detail.canDirectlySubscribe {
         let detail = self.detail
@@ -310,8 +313,10 @@ class MediaDetailViewModel: ObservableObject {
             await MainActor.run {
               self.preloadTask?.isSubscribed = isSubscribed
             }
+            return true
           } catch {
             print("[MediaDetailViewModel] 刷新订阅状态失败: \(error)")
+            return false
           }
         }
       }
@@ -322,7 +327,13 @@ class MediaDetailViewModel: ObservableObject {
           await seasonVM.checkSubscriptionStatus(limit: 10, forceRefresh: true)
         }
       }
+
+      for await didRefresh in group {
+        resultCount += 1
+        didRefreshAll = didRefreshAll && didRefresh
+      }
     }
+    return resultCount == 0 || didRefreshAll
   }
 
   private func deleteResolvedSubscription() async -> Bool {

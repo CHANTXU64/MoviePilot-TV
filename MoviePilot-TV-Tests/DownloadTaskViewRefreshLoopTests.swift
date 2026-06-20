@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 
 @testable import MoviePilot_TV
 
@@ -47,5 +48,62 @@ final class DownloadTaskViewRefreshLoopTests: XCTestCase {
     )
 
     XCTAssertEqual(events, ["sleep", "refresh"])
+  }
+
+  func testActiveDetailSubscriptionRefreshesWhenSceneBecomesActive() async {
+    var didCheckState = false
+    var refreshCount = 0
+
+    await MediaDetailView.refreshActiveSubscriptionStatusOnSceneActivation(
+      scenePhase: .active,
+      shouldRefresh: {
+        didCheckState = true
+        return true
+      },
+      refresh: {
+        refreshCount += 1
+      }
+    )
+
+    XCTAssertTrue(didCheckState)
+    XCTAssertEqual(refreshCount, 1)
+  }
+
+  func testActiveDetailSubscriptionSceneActivationSkipsWhenNoActiveSubscriptionState() async {
+    var didCheckState = false
+    var refreshCount = 0
+
+    await MediaDetailView.refreshActiveSubscriptionStatusOnSceneActivation(
+      scenePhase: .active,
+      shouldRefresh: {
+        didCheckState = true
+        return false
+      },
+      refresh: {
+        refreshCount += 1
+      }
+    )
+
+    XCTAssertTrue(didCheckState)
+    XCTAssertEqual(refreshCount, 0)
+  }
+
+  func testActiveDetailSubscriptionSceneActivationIgnoresInactivePhase() async {
+    var didCheckState = false
+    var refreshCount = 0
+
+    await MediaDetailView.refreshActiveSubscriptionStatusOnSceneActivation(
+      scenePhase: .inactive,
+      shouldRefresh: {
+        didCheckState = true
+        return true
+      },
+      refresh: {
+        refreshCount += 1
+      }
+    )
+
+    XCTAssertFalse(didCheckState)
+    XCTAssertEqual(refreshCount, 0)
   }
 }

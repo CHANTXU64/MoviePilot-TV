@@ -198,7 +198,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(subscribeRequestCount, 2)
   }
 
-  func testConcurrentForcedSubscriptionRefreshesShareInFlightSnapshotRequest() async throws {
+  func testConcurrentForcedSubscriptionRefreshStartsNewSnapshotRequest() async throws {
     XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
     defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
 
@@ -209,11 +209,11 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     await SubscriptionSnapshotURLProtocol.stub.reset()
     let gate = SubscriptionSnapshotAsyncGate()
     try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions(
-      [Subscribe(id: 701, name: "共享强刷", type: "电视剧", season: 1, tmdbid: 815001)],
+      [Subscribe(id: 701, name: "旧强刷", type: "电视剧", season: 1, tmdbid: 815001)],
       waitFor: gate
     )
-    try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions([
-      Subscribe(id: 701, name: "共享强刷", type: "电视剧", season: 1, tmdbid: 815001)
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
+      Subscribe(id: 702, name: "新强刷", type: "电视剧", season: 2, tmdbid: 815001)
     ])
     service.baseURL = "http://subscription-snapshot-tests.local"
 
@@ -225,19 +225,20 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     let secondRefresh = Task {
       try await service.fetchSubscriptions(forceRefresh: true)
     }
-    await Task.yield()
+    let secondSubscriptions = try await secondRefresh.value
     await gate.open()
 
     let firstSubscriptions = try await firstRefresh.value
-    let secondSubscriptions = try await secondRefresh.value
 
-    XCTAssertEqual(firstSubscriptions.map(\.id), [701])
-    XCTAssertEqual(secondSubscriptions.map(\.id), [701])
+    XCTAssertEqual(firstSubscriptions.map(\.id), [702])
+    XCTAssertEqual(secondSubscriptions.map(\.id), [702])
     let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
-    XCTAssertEqual(subscribeRequestCount, 1)
+    XCTAssertEqual(subscribeRequestCount, 2)
   }
 
-  func testForcedSubscriptionRefreshSharesRequestUntilSnapshotIsStored() async throws {
+  func testOlderForcedSubscriptionRefreshCannotStoreSnapshotAfterNewerRefreshStarts()
+    async throws
+  {
     XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
     defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
 
@@ -246,19 +247,18 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     defer { snapshot.restore(to: service) }
 
     await SubscriptionSnapshotURLProtocol.stub.reset()
-    let requestGate = SubscriptionSnapshotAsyncGate()
     let storeGate = SubscriptionSnapshotAsyncGate()
-    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions(
-      [Subscribe(id: 702, name: "写缓存前共享", type: "电视剧", season: 1, tmdbid: 815002)],
-      waitFor: requestGate
-    )
-    try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions([
-      Subscribe(id: 703, name: "重复请求", type: "电视剧", season: 2, tmdbid: 815002)
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
+      Subscribe(id: 703, name: "旧写缓存", type: "电视剧", season: 1, tmdbid: 815002)
+    ])
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
+      Subscribe(id: 704, name: "新写缓存", type: "电视剧", season: 2, tmdbid: 815002)
     ])
     service.baseURL = "http://subscription-snapshot-tests.local"
 
     var didPauseBeforeStore = false
     service.subscriptionCacheTestHooks.afterSubscriptionSnapshotFetchValue = {
+      guard !didPauseBeforeStore else { return }
       didPauseBeforeStore = true
       await storeGate.wait()
     }
@@ -267,31 +267,98 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     let firstRefresh = Task {
       try await service.fetchSubscriptions(forceRefresh: true)
     }
-    await requestGate.waitForWaiter()
+    await storeGate.waitForWaiter()
 
     let secondRefresh = Task {
       try await service.fetchSubscriptions(forceRefresh: true)
     }
-    await Task.yield()
-    await requestGate.open()
-    await storeGate.waitForWaiter()
+    let secondSubscriptions = try await secondRefresh.value
 
-    let thirdRefresh = Task {
-      try await service.fetchSubscriptions(forceRefresh: true)
-    }
-    await Task.yield()
+    let cachedSubscriptions = try await service.fetchSubscriptions()
     await storeGate.open()
 
     let firstSubscriptions = try await firstRefresh.value
-    let secondSubscriptions = try await secondRefresh.value
-    let thirdSubscriptions = try await thirdRefresh.value
 
     XCTAssertTrue(didPauseBeforeStore)
-    XCTAssertEqual(firstSubscriptions.map(\.id), [702])
-    XCTAssertEqual(secondSubscriptions.map(\.id), [702])
-    XCTAssertEqual(thirdSubscriptions.map(\.id), [702])
+    XCTAssertEqual(firstSubscriptions.map(\.id), [704])
+    XCTAssertEqual(secondSubscriptions.map(\.id), [704])
+    XCTAssertEqual(cachedSubscriptions.map(\.id), [704])
     let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
-    XCTAssertEqual(subscribeRequestCount, 1)
+    XCTAssertEqual(subscribeRequestCount, 2)
+  }
+
+  func testForcedSubscriptionRefreshDoesNotReuseInFlightSnapshotAfterOutOfBandRemoteChange()
+    async throws
+  {
+    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    let staleGate = SubscriptionSnapshotAsyncGate()
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions(
+      [Subscribe(id: 704, name: "远端完成前", type: "电视剧", season: 1, tmdbid: 815003)],
+      waitFor: staleGate
+    )
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([])
+    service.baseURL = "http://subscription-snapshot-tests.local"
+
+    let staleRefresh = Task {
+      try await service.fetchSubscriptions(forceRefresh: true)
+    }
+    await staleGate.waitForWaiter()
+
+    let latestRefresh = Task {
+      try await service.fetchSubscriptions(forceRefresh: true)
+    }
+    await Task.yield()
+    await staleGate.open()
+
+    let staleSubscriptions = try await staleRefresh.value
+    let latestSubscriptions = try await latestRefresh.value
+
+    XCTAssertEqual(staleSubscriptions.map(\.id), [])
+    XCTAssertEqual(latestSubscriptions.map(\.id), [])
+    let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(subscribeRequestCount, 2)
+  }
+
+  func testOlderForcedSubscriptionRefreshErrorDoesNotOverrideNewerSnapshot()
+    async throws
+  {
+    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    let staleErrorGate = SubscriptionSnapshotAsyncGate()
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueServerError(waitFor: staleErrorGate)
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([])
+    service.baseURL = "http://subscription-snapshot-tests.local"
+
+    let staleRefresh = Task {
+      try await service.fetchSubscriptions(forceRefresh: true)
+    }
+    await staleErrorGate.waitForWaiter()
+
+    let latestRefresh = Task {
+      try await service.fetchSubscriptions(forceRefresh: true)
+    }
+    let latestSubscriptions = try await latestRefresh.value
+    await staleErrorGate.open()
+
+    let staleSubscriptions = try await staleRefresh.value
+
+    XCTAssertEqual(staleSubscriptions.map(\.id), [])
+    XCTAssertEqual(latestSubscriptions.map(\.id), [])
+    let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(subscribeRequestCount, 2)
   }
 
   func testFetchSubscriptionsThrowsWhenCancelledAfterCachedSnapshotIsRead() async throws {
@@ -333,7 +400,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     }
   }
 
-  func testFetchSubscriptionsThrowsForCancelledSharedSnapshotWaiterAfterResponse() async throws {
+  func testFetchSubscriptionsThrowsWhenCancelledAfterForcedSnapshotResponse() async throws {
     XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
     defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
 
@@ -342,12 +409,10 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     defer { snapshot.restore(to: service) }
 
     await SubscriptionSnapshotURLProtocol.stub.reset()
-    let requestGate = SubscriptionSnapshotAsyncGate()
     let responseGate = SubscriptionSnapshotAsyncGate()
-    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions(
-      [Subscribe(id: 802, name: "共享取消", type: "电视剧", season: 1, tmdbid: 816002)],
-      waitFor: requestGate
-    )
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
+      Subscribe(id: 802, name: "强刷取消", type: "电视剧", season: 1, tmdbid: 816002)
+    ])
     service.baseURL = "http://subscription-snapshot-tests.local"
 
     service.subscriptionCacheTestHooks.afterSubscriptionSnapshotFetchValue = {
@@ -358,14 +423,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     let cancelledRefresh = Task {
       try await service.fetchSubscriptions(forceRefresh: true)
     }
-    await requestGate.waitForWaiter()
-
-    let activeRefresh = Task {
-      try await service.fetchSubscriptions(forceRefresh: true)
-    }
-    await Task.yield()
-    await requestGate.open()
-    await responseGate.waitForWaiterCount(2)
+    await responseGate.waitForWaiter()
 
     cancelledRefresh.cancel()
     await responseGate.open()
@@ -376,9 +434,6 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     } catch is CancellationError {
       // Expected.
     }
-
-    let activeSubscriptions = try await activeRefresh.value
-    XCTAssertEqual(activeSubscriptions.map(\.id), [802])
     let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
     XCTAssertEqual(subscribeRequestCount, 1)
   }
@@ -791,7 +846,33 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertNil(preparedSeason)
   }
 
-  func testSubscribedSeasonPrimaryActionRefreshesBeforeUnsubscribeConfirmation() async throws {
+  func testSubscribedSeasonPrimaryActionShowsUnsubscribeConfirmationAfterRefreshConfirmsSubscription()
+    async throws
+  {
+    let season = try makeSeason(number: 4)
+    var refreshedSeason: Int?
+    var unsubscribedSeason: Int?
+    var preparedSeason: Int?
+
+    await SubscribeSeasonContentView.performSeasonPrimaryAction(
+      season: season,
+      isSubscribed: true,
+      refreshSubscribedState: { seasonNumber in
+        refreshedSeason = seasonNumber
+        return true
+      },
+      showUnsubscribeConfirm: { unsubscribedSeason = $0 },
+      prepareSubscription: { preparedSeason = $0 }
+    )
+
+    XCTAssertEqual(refreshedSeason, 4)
+    XCTAssertEqual(unsubscribedSeason, 4)
+    XCTAssertNil(preparedSeason)
+  }
+
+  func testSubscribedSeasonPrimaryActionSkipsUnsubscribeWhenRefreshFindsMissingSubscription()
+    async throws
+  {
     let season = try makeSeason(number: 4)
     var refreshedSeason: Int?
     var unsubscribedSeason: Int?
@@ -859,6 +940,28 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(refreshedSeason, 5)
     XCTAssertNil(unsubscribedSeason)
     XCTAssertEqual(preparedSeason, 5)
+  }
+
+  func testSeasonPrimaryActionSkipsActionWhenRefreshFails() async throws {
+    let season = try makeSeason(number: 6)
+    var refreshedSeason: Int?
+    var unsubscribedSeason: Int?
+    var preparedSeason: Int?
+
+    await SubscribeSeasonContentView.performSeasonPrimaryAction(
+      season: season,
+      isSubscribed: false,
+      refreshSubscribedState: { seasonNumber in
+        refreshedSeason = seasonNumber
+        return nil
+      },
+      showUnsubscribeConfirm: { unsubscribedSeason = $0 },
+      prepareSubscription: { preparedSeason = $0 }
+    )
+
+    XCTAssertEqual(refreshedSeason, 6)
+    XCTAssertNil(unsubscribedSeason)
+    XCTAssertNil(preparedSeason)
   }
 
   func testSeasonPrimaryActionKeepsSubscribeFallbackWithoutNavigationHandler() throws {
@@ -1034,6 +1137,15 @@ private actor SubscriptionSnapshotURLProtocolStub {
   ) throws {
     let data = try JSONEncoder().encode(subscriptions)
     queuedResponses.append(SubscriptionSnapshotStubResponse(statusCode: 200, data: data, gate: gate))
+  }
+
+  func enqueueServerError(
+    waitFor gate: SubscriptionSnapshotAsyncGate? = nil
+  ) throws {
+    guard let data = #"{"detail":"stale subscription snapshot"}"#.data(using: .utf8) else {
+      throw URLError(.badServerResponse)
+    }
+    queuedResponses.append(SubscriptionSnapshotStubResponse(statusCode: 500, data: data, gate: gate))
   }
 
   func setDefaultSubscriptions(_ subscriptions: [Subscribe]) throws {

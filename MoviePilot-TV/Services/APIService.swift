@@ -309,6 +309,8 @@ class APIService: ObservableObject {
   )
   private var subscriptionCacheGeneration = 0
   private var subscriptionSnapshotFetchGeneration: Int?
+  private var subscriptionSnapshotFetchRevision = 0
+  private var subscriptionSnapshotFetchTaskRevision: Int?
   private var subscriptionSnapshotFetchTask: Task<[Subscribe], Error>?
   #if DEBUG
   var subscriptionCacheTestHooks = SubscriptionCacheTestHooks()
@@ -319,6 +321,7 @@ class APIService: ObservableObject {
     subscriptionCacheGeneration &+= 1
     subscriptionSnapshotFetchTask?.cancel()
     subscriptionSnapshotFetchGeneration = nil
+    subscriptionSnapshotFetchTaskRevision = nil
     subscriptionSnapshotFetchTask = nil
     await subscriptionStatusCache.clear()
     await subscriptionSnapshotCache.clear()
@@ -328,6 +331,7 @@ class APIService: ObservableObject {
     subscriptionCacheGeneration &+= 1
     subscriptionSnapshotFetchTask?.cancel()
     subscriptionSnapshotFetchGeneration = nil
+    subscriptionSnapshotFetchTaskRevision = nil
     subscriptionSnapshotFetchTask = nil
     let statusCache = subscriptionStatusCache
     let snapshotCache = subscriptionSnapshotCache
@@ -1766,20 +1770,38 @@ class APIService: ObservableObject {
         return cached
       }
 
-      let fetchTask = subscriptionSnapshotFetchTask(for: generation)
+      let fetch = subscriptionSnapshotFetchTask(
+        for: generation,
+        reuseInFlight: canReadCache
+      )
       let subscriptions: [Subscribe]
       do {
-        subscriptions = try await fetchTask.value
+        subscriptions = try await fetch.task.value
       } catch is CancellationError {
-        clearSubscriptionSnapshotFetchTaskIfCurrent(generation: generation)
+        clearSubscriptionSnapshotFetchTaskIfCurrent(
+          generation: generation,
+          revision: fetch.revision
+        )
+        try Task.checkCancellation()
         guard generation == subscriptionCacheGeneration else {
+          canReadCache = true
+          continue
+        }
+        guard fetch.revision == subscriptionSnapshotFetchTaskRevision else {
           canReadCache = true
           continue
         }
         throw CancellationError()
       } catch {
-        clearSubscriptionSnapshotFetchTaskIfCurrent(generation: generation)
+        clearSubscriptionSnapshotFetchTaskIfCurrent(
+          generation: generation,
+          revision: fetch.revision
+        )
         guard generation == subscriptionCacheGeneration else {
+          canReadCache = true
+          continue
+        }
+        guard fetch.revision == subscriptionSnapshotFetchTaskRevision else {
           canReadCache = true
           continue
         }
@@ -1791,7 +1813,14 @@ class APIService: ObservableObject {
       #endif
       try Task.checkCancellation()
       guard generation == subscriptionCacheGeneration else {
-        clearSubscriptionSnapshotFetchTaskIfCurrent(generation: generation)
+        clearSubscriptionSnapshotFetchTaskIfCurrent(
+          generation: generation,
+          revision: fetch.revision
+        )
+        canReadCache = true
+        continue
+      }
+      guard fetch.revision == subscriptionSnapshotFetchTaskRevision else {
         canReadCache = true
         continue
       }
@@ -1801,35 +1830,55 @@ class APIService: ObservableObject {
       #endif
       try Task.checkCancellation()
       guard generation == subscriptionCacheGeneration else {
-        clearSubscriptionSnapshotFetchTaskIfCurrent(generation: generation)
+        clearSubscriptionSnapshotFetchTaskIfCurrent(
+          generation: generation,
+          revision: fetch.revision
+        )
         canReadCache = true
         continue
       }
-      clearSubscriptionSnapshotFetchTaskIfCurrent(generation: generation)
+      guard fetch.revision == subscriptionSnapshotFetchTaskRevision else {
+        canReadCache = true
+        continue
+      }
+      clearSubscriptionSnapshotFetchTaskIfCurrent(
+        generation: generation,
+        revision: fetch.revision
+      )
       return subscriptions
     }
   }
 
-  private func subscriptionSnapshotFetchTask(for generation: Int) -> Task<[Subscribe], Error> {
-    if let task = subscriptionSnapshotFetchTask,
+  private func subscriptionSnapshotFetchTask(
+    for generation: Int,
+    reuseInFlight: Bool
+  ) -> (revision: Int, task: Task<[Subscribe], Error>) {
+    if reuseInFlight,
+      let task = subscriptionSnapshotFetchTask,
+      let revision = subscriptionSnapshotFetchTaskRevision,
       subscriptionSnapshotFetchGeneration == generation
     {
-      return task
+      return (revision, task)
     }
 
+    subscriptionSnapshotFetchRevision &+= 1
+    let revision = subscriptionSnapshotFetchRevision
     let task = Task { [weak self] in
       guard let self else { throw CancellationError() }
       let data = try await self.makeRequest(endpoint: "/subscribe/")
       return try await self.decodeOrUnwrap([Subscribe].self, from: data)
     }
     subscriptionSnapshotFetchGeneration = generation
+    subscriptionSnapshotFetchTaskRevision = revision
     subscriptionSnapshotFetchTask = task
-    return task
+    return (revision, task)
   }
 
-  private func clearSubscriptionSnapshotFetchTaskIfCurrent(generation: Int) {
+  private func clearSubscriptionSnapshotFetchTaskIfCurrent(generation: Int, revision: Int) {
     guard subscriptionSnapshotFetchGeneration == generation else { return }
+    guard subscriptionSnapshotFetchTaskRevision == revision else { return }
     subscriptionSnapshotFetchGeneration = nil
+    subscriptionSnapshotFetchTaskRevision = nil
     subscriptionSnapshotFetchTask = nil
   }
 

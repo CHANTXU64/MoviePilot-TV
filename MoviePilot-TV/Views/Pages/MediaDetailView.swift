@@ -5,6 +5,7 @@ struct MediaDetailView: View {
   @StateObject private var viewModel: MediaDetailViewModel
   @Binding var navigationPath: NavigationPath
   @StateObject private var subscriptionHandler = SubscriptionHandler()
+  @Environment(\.scenePhase) private var scenePhase
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
   /// 预加载任务：订阅状态、TMDB 识别、分季信息的唯一数据源
   @ObservedObject var preloadTask: MediaPreloadTask
@@ -243,6 +244,22 @@ struct MediaDetailView: View {
         await viewModel.refreshSubscriptionStatus()
       }
     }
+    .onChange(of: scenePhase) { _, phase in
+      Task { @MainActor in
+        await Self.refreshActiveSubscriptionStatusOnSceneActivation(
+          scenePhase: phase,
+          shouldRefresh: {
+            Self.shouldRefreshActiveSubscriptionStatus(
+              preloadTask: preloadTask,
+              viewModel: viewModel
+            )
+          },
+          refresh: {
+            await viewModel.refreshSubscriptionStatus()
+          }
+        )
+      }
+    }
     // 焦点恢复关键：当 fullDetail 加载完成后，应用完整详情。
     // MediaDetailView 从第一帧就存在于视图树中（用 partialMedia 初始化），
     // 在 fullDetail 就绪前不配置任何内容，仅由 Loading 遮罩覆盖。
@@ -367,6 +384,17 @@ struct MediaDetailView: View {
     return false
   }
 
+  @MainActor
+  static func refreshActiveSubscriptionStatusOnSceneActivation(
+    scenePhase: ScenePhase,
+    shouldRefresh: () -> Bool,
+    refresh: () async -> Void
+  ) async {
+    guard scenePhase == .active else { return }
+    guard shouldRefresh() else { return }
+    await refresh()
+  }
+
   static func performHeaderSubscribeAction(
     isSubscribed: Bool,
     showUnsubscribeConfirm: () -> Void,
@@ -381,11 +409,13 @@ struct MediaDetailView: View {
 
   static func performHeaderSubscribeAction(
     isSubscribed: Bool,
-    refreshSubscribedState: () async -> Bool,
+    refreshSubscribedState: () async -> Bool?,
     showUnsubscribeConfirm: () -> Void,
     startSubscribe: () -> Void
   ) async {
-    let latestSubscribedState = await refreshSubscribedState()
+    guard let latestSubscribedState = await refreshSubscribedState() else {
+      return
+    }
     performHeaderSubscribeAction(
       isSubscribed: isSubscribed,
       latestSubscribedState: latestSubscribedState,
@@ -415,7 +445,8 @@ struct MediaDetailView: View {
       await Self.performHeaderSubscribeAction(
         isSubscribed: isSubscribed,
         refreshSubscribedState: {
-          await viewModel.refreshSubscriptionStatus()
+          let didRefresh = await viewModel.refreshSubscriptionStatus()
+          guard didRefresh else { return nil }
           return viewModel.isSubscribed
         },
         showUnsubscribeConfirm: {

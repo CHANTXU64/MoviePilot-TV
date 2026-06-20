@@ -238,15 +238,18 @@ class SubscribeSeasonViewModel: ObservableObject {
   }
 
   /// 查询当前媒体所有分季订阅摘要，填充 seasonSubscriptions 和 subscribedSeasons
-  func checkSubscriptionStatus(limit _: Int? = nil, forceRefresh: Bool = false) async {
+  @discardableResult
+  func checkSubscriptionStatus(limit _: Int? = nil, forceRefresh: Bool = false) async -> Bool {
     do {
       try await refreshSubscriptionSummaries(forceRefresh: forceRefresh)
+      return true
     } catch {
       if error is CancellationError {
-        return
+        return false
       }
       print("检查季订阅状态失败: \(error)")
       errorMessage = error.localizedDescription
+      return false
     }
   }
 

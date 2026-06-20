@@ -59,12 +59,14 @@ struct SubscribeSeasonContentView: View {
   static func performSeasonPrimaryAction(
     season: TmdbSeason,
     isSubscribed: Bool,
-    refreshSubscribedState: (Int) async -> Bool,
+    refreshSubscribedState: (Int) async -> Bool?,
     showUnsubscribeConfirm: (Int) -> Void,
     prepareSubscription: (Int) -> Void
   ) async {
     let seasonNumber = season.season_number ?? 0
-    let latestSubscribedState = await refreshSubscribedState(seasonNumber)
+    guard let latestSubscribedState = await refreshSubscribedState(seasonNumber) else {
+      return
+    }
     performSeasonPrimaryAction(
       seasonNumber: seasonNumber,
       isSubscribed: isSubscribed,
@@ -328,7 +330,8 @@ struct SubscribeSeasonContentView: View {
             season: season,
             isSubscribed: isSubscribed,
             refreshSubscribedState: { seasonNumber in
-              await viewModel.checkSubscriptionStatus(forceRefresh: true)
+              let didRefresh = await viewModel.checkSubscriptionStatus(forceRefresh: true)
+              guard didRefresh else { return nil }
               return viewModel.isSeasonSubscribed(seasonNumber)
             },
             showUnsubscribeConfirm: { viewModel.showUnsubscribeConfirm = $0 },
@@ -346,7 +349,8 @@ struct SubscribeSeasonContentView: View {
               season: season,
               isSubscribed: true,
               refreshSubscribedState: { seasonNumber in
-                await viewModel.checkSubscriptionStatus(forceRefresh: true)
+                let didRefresh = await viewModel.checkSubscriptionStatus(forceRefresh: true)
+                guard didRefresh else { return nil }
                 return viewModel.isSeasonSubscribed(seasonNumber)
               },
               showUnsubscribeConfirm: { viewModel.showUnsubscribeConfirm = $0 },
@@ -363,7 +367,8 @@ struct SubscribeSeasonContentView: View {
               season: season,
               isSubscribed: false,
               refreshSubscribedState: { seasonNumber in
-                await viewModel.checkSubscriptionStatus(forceRefresh: true)
+                let didRefresh = await viewModel.checkSubscriptionStatus(forceRefresh: true)
+                guard didRefresh else { return nil }
                 return viewModel.isSeasonSubscribed(seasonNumber)
               },
               showUnsubscribeConfirm: { viewModel.showUnsubscribeConfirm = $0 },
