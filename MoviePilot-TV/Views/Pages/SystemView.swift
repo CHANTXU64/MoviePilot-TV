@@ -55,6 +55,17 @@ struct SystemView: View {
           .foregroundColor(.primary)
         }
 
+        Section(header: Text("订阅")) {
+          Toggle(
+            isOn: Binding(
+              get: { viewModel.autoSearchNewSubscriptions },
+              set: { viewModel.autoSearchNewSubscriptions = $0 }
+            )
+          ) {
+            Text("新增订阅后立即搜索")
+          }
+        }
+
         Section(header: Text("详情加载页")) {
           Toggle(
             isOn: Binding(

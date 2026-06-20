@@ -134,8 +134,9 @@ class SubscribeSheetViewModel: ObservableObject {
           if isNewSubscription {
             _ = try await apiService.updateSubscriptionStatus(id: id, state: "R")
           }
-          // 立即触发对该订阅的搜索
-          _ = try await apiService.searchSubscription(id: id)
+          if !isNewSubscription || SystemViewModel.shouldAutoSearchNewSubscriptions {
+            _ = try await apiService.searchSubscription(id: id)
+          }
         }
         self.isSaved = true
         NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
