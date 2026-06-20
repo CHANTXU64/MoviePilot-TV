@@ -68,6 +68,8 @@
 7. **审查结束后再更新计划**
    - 必须等用户明确表示当前文件“审查结束”或发出归档指令后，才更新 `.agents/ReviewPlan.md`。
    - 更新内容应包括审查状态、关键副作用、后续必须注意的约束。
+   - 如果本轮发现或确认了订阅相关的跨端契约、缓存/刷新时机、媒体 ID、`episode_group`、Header 取消订阅或其他后续 MP 前后端更新容易遗漏的问题，应在报告中明确说明是否需要同步更新 `docs/subscription-compatibility-checklist.md`。
+   - 只有在用户确认审查结束、要求归档或明确要求更新文档后，才把可复用的订阅契约沉淀到 `docs/subscription-compatibility-checklist.md`；不要把一次性实现细节、临时修复过程或未确认的问题写入该文档。
    - 在用户确认审查结束前，不要提前写入进度。
 
 ## 深度审查清单
@@ -103,6 +105,7 @@
 - 是否存在名字相似 API 混用。
 - `Codable` 是否能承受后端脏数据、缺字段、`null`、类型变化。
 - 空状态、错误状态、重试策略是否与 tvOS 体验匹配。
+- 如果审查订阅、媒体详情、首页订阅列表、分季订阅或相关 Service/ViewModel，必须对照 `docs/subscription-compatibility-checklist.md` 检查已知订阅契约是否被破坏，并判断是否有新的可复用契约需要补充。
 
 ## 审查报告格式
 
