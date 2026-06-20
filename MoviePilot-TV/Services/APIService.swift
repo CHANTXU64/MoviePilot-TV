@@ -17,10 +17,26 @@ nonisolated struct ApiResponse<T: Decodable>: Decodable {
   let message: String?
 }
 
+nonisolated struct SubscriptionLookupResult: Equatable, Sendable {
+  let id: Int
+  let mediaId: String
+  let isResolvedMediaId: Bool
+}
+
 nonisolated struct MediaImageURLConfig: Sendable {
   let baseURL: String
   let useImageCache: Bool
 }
+
+#if DEBUG
+struct SubscriptionCacheTestHooks {
+  var afterSubscriptionSnapshotCacheHit: (() async -> Void)?
+  var afterSubscriptionSnapshotFetchValue: (() async -> Void)?
+  var afterSubscriptionSnapshotCacheStore: (() async -> Void)?
+  var afterSubscriptionStatusCacheHit: (() async -> Void)?
+  var afterSubscriptionStatusCacheStore: (() async -> Void)?
+}
+#endif
 
 nonisolated private func decodingContext(from error: DecodingError) -> DecodingError.Context? {
   switch error {
@@ -41,6 +57,12 @@ nonisolated private func firstNonWhitespaceByte(in data: Data) -> UInt8? {
 nonisolated private func encodeURIComponent(_ value: String) -> String? {
   let allowed = CharacterSet(
     charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
+  return value.addingPercentEncoding(withAllowedCharacters: allowed)
+}
+
+nonisolated private func encodeMediaIDPathSegment(_ value: String) -> String? {
+  let allowed = CharacterSet(
+    charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~:")
   return value.addingPercentEncoding(withAllowedCharacters: allowed)
 }
 
@@ -165,23 +187,35 @@ actor APICache<Key: Hashable, Value> {
   private var cache: [Key: CacheEntry] = [:]
   private let defaultTTL: TimeInterval
   private let size: Int
+  private let renewsTTLOnAccess: Bool
+  private let now: @Sendable () -> Date
 
-  init(defaultTTL: TimeInterval = 60, size: Int = 50) {
+  init(
+    defaultTTL: TimeInterval = 60,
+    size: Int = 50,
+    renewsTTLOnAccess: Bool = true,
+    now: @escaping @Sendable () -> Date = Date.init
+  ) {
     self.defaultTTL = defaultTTL
     self.size = size
+    self.renewsTTLOnAccess = renewsTTLOnAccess
+    self.now = now
   }
 
   func get(_ key: Key) -> Value? {
     guard var entry = cache[key] else { return nil }
 
-    if Date() > entry.expiresAt {
+    let currentDate = now()
+    if currentDate > entry.expiresAt {
       cache.removeValue(forKey: key)
       return nil
     }
 
-    // 访问时“续期”，变相实现了 LRU
-    entry.expiresAt = Date().addingTimeInterval(defaultTTL)
-    cache[key] = entry
+    if renewsTTLOnAccess {
+      // 访问时“续期”，变相实现了 LRU
+      entry.expiresAt = currentDate.addingTimeInterval(defaultTTL)
+      cache[key] = entry
+    }
 
     return entry.value
   }
@@ -195,7 +229,7 @@ actor APICache<Key: Hashable, Value> {
       }
     }
 
-    let expiresAt = Date().addingTimeInterval(ttl ?? defaultTTL)
+    let expiresAt = now().addingTimeInterval(ttl ?? defaultTTL)
     let newEntry = CacheEntry(value: value, expiresAt: expiresAt)
     cache[key] = newEntry
   }
@@ -220,6 +254,7 @@ class APIService: ObservableObject {
   {
     didSet {
       UserDefaults.standard.set(baseURL, forKey: "serverURL")
+      invalidateSubscriptionCachesAfterSessionChange()
     }
   }
 
@@ -228,6 +263,7 @@ class APIService: ObservableObject {
     ?? UserDefaults.standard.string(forKey: "accessToken")
   {
     didSet {
+      invalidateSubscriptionCachesAfterSessionChange()
       if let token = token {
         if !KeychainHelper.shared.save(token, service: "MoviePilot-TV", account: "accessToken") {
           UserDefaults.standard.set(token, forKey: "accessToken")
@@ -266,6 +302,44 @@ class APIService: ObservableObject {
   private let seasonsNotExistsCache = APICache<String, [NotExistMediaInfo]>(
     defaultTTL: 120, size: 20)
   private let subscriptionStatusCache = APICache<String, Bool>(defaultTTL: 120, size: 100)
+  private let subscriptionSnapshotCache = APICache<String, [Subscribe]>(
+    defaultTTL: 30,
+    size: 1,
+    renewsTTLOnAccess: false
+  )
+  private var subscriptionCacheGeneration = 0
+  private var subscriptionSnapshotFetchGeneration: Int?
+  private var subscriptionSnapshotFetchRevision = 0
+  private var subscriptionSnapshotFetchTaskRevision: Int?
+  private var subscriptionSnapshotFetchTask: Task<[Subscribe], Error>?
+  #if DEBUG
+  var subscriptionCacheTestHooks = SubscriptionCacheTestHooks()
+  private var subscriptionDebugRequestCount = 0
+  #endif
+
+  private func invalidateSubscriptionCaches() async {
+    subscriptionCacheGeneration &+= 1
+    subscriptionSnapshotFetchTask?.cancel()
+    subscriptionSnapshotFetchGeneration = nil
+    subscriptionSnapshotFetchTaskRevision = nil
+    subscriptionSnapshotFetchTask = nil
+    await subscriptionStatusCache.clear()
+    await subscriptionSnapshotCache.clear()
+  }
+
+  private func invalidateSubscriptionCachesAfterSessionChange() {
+    subscriptionCacheGeneration &+= 1
+    subscriptionSnapshotFetchTask?.cancel()
+    subscriptionSnapshotFetchGeneration = nil
+    subscriptionSnapshotFetchTaskRevision = nil
+    subscriptionSnapshotFetchTask = nil
+    let statusCache = subscriptionStatusCache
+    let snapshotCache = subscriptionSnapshotCache
+    Task {
+      await statusCache.clear()
+      await snapshotCache.clear()
+    }
+  }
 
   // MARK: - 用于自动登录的凭据
   private var storedUsername: String? {
@@ -336,6 +410,7 @@ class APIService: ObservableObject {
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     }
     request.httpBody = body
+    logSubscriptionRequestIfNeeded(endpoint: endpoint, method: method)
     let (data, response) = try await URLSession.shared.data(for: request)
     if let httpResponse = response as? HTTPURLResponse {
       if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
@@ -373,6 +448,14 @@ class APIService: ObservableObject {
       }
     }
     return data
+  }
+
+  private func logSubscriptionRequestIfNeeded(endpoint: String, method: String) {
+    #if DEBUG
+      guard endpoint.hasPrefix("/subscribe") else { return }
+      subscriptionDebugRequestCount += 1
+      Logger.debug("[SubscriptionRequest] #\(subscriptionDebugRequestCount) \(method) \(endpoint)")
+    #endif
   }
 
   private func buildEndpoint(path: String, params: [String: String?] = [:]) throws -> String {
@@ -1387,17 +1470,25 @@ class APIService: ObservableObject {
     let method = (subscribe.id != nil && subscribe.id != 0) ? "PUT" : "POST"
 
     let data = try await makeRequest(endpoint: endpoint, method: method, body: body)
+    let success: Bool
     if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      return response.success ?? false
+      success = response.success ?? false
+    } else {
+      struct SimpleResp: Decodable {
+        let success: Bool?
+        let message: String?
+      }
+      if let resp = try? JSONDecoder().decode(SimpleResp.self, from: data) {
+        success = resp.success ?? true
+      } else {
+        success = true
+      }
     }
-    struct SimpleResp: Decodable {
-      let success: Bool?
-      let message: String?
+
+    if success {
+      await invalidateSubscriptionCaches()
     }
-    if let resp = try? JSONDecoder().decode(SimpleResp.self, from: data) {
-      return resp.success ?? true
-    }
-    return true
+    return success
   }
 
   /// 新增订阅（简单模式）
@@ -1417,10 +1508,7 @@ class APIService: ObservableObject {
     if let response = try? JSONDecoder().decode(ApiResponse<SubscribeAddResp>.self, from: data),
       let id = response.data?.id
     {
-      if let mediaId = subscribe.apiMediaId {
-        let cacheKey = "\(mediaId):\(subscribe.season.map(String.init) ?? "")"
-        await subscriptionStatusCache.remove(cacheKey)
-      }
+      await invalidateSubscriptionCaches()
       return id
     }
     return nil
@@ -1431,11 +1519,16 @@ class APIService: ObservableObject {
   /// - 应用场景: 1. 在订阅编辑弹窗中点击“取消订阅”按钮。 2. 在订阅列表页进行批量删除操作时并发调用。
   func deleteSubscription(id: Int) async throws -> Bool {
     let data = try await makeRequest(endpoint: "/subscribe/\(id)", method: "DELETE")
-    await subscriptionStatusCache.clear()
+    let success: Bool
     if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      return response.success ?? false
+      success = response.success ?? false
+    } else {
+      success = true
     }
-    return true
+    if success {
+      await invalidateSubscriptionCaches()
+    }
+    return success
   }
 
   /// 通过媒体 ID 和季数删除订阅
@@ -1446,16 +1539,30 @@ class APIService: ObservableObject {
       // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求，返回失败
       return false
     }
+    return try await deleteSubscription(mediaId: mediaId, season: season)
+  }
+
+  /// 通过已解析的媒体 ID 和季数删除订阅
+  /// - 对应前端: `MoviePilot-Frontend/src/views/discover/MediaDetailView.vue` 的 `removeSubscribe`
+  /// - 应用场景: 详情页 Header 取消订阅时，先解析真实订阅归属的 `mediaId`，再保持 Web 的媒体级删除语义。
+  func deleteSubscription(mediaId: String, season: Int?) async throws -> Bool {
+    guard let encodedMediaId = encodeMediaIDPathSegment(mediaId), !encodedMediaId.isEmpty else {
+      throw APIError.invalidURL
+    }
     let endpoint = try buildEndpoint(
-      path: "/subscribe/media/\(mediaId)",
+      path: "/subscribe/media/\(encodedMediaId)",
       params: ["season": season.map(String.init)])
     let data = try await makeRequest(endpoint: endpoint, method: "DELETE")
-    let cacheKey = "\(mediaId):\(season.map(String.init) ?? "")"
-    await subscriptionStatusCache.remove(cacheKey)
+    let success: Bool
     if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      return response.success ?? false
+      success = response.success ?? false
+    } else {
+      success = true
     }
-    return true
+    if success {
+      await invalidateSubscriptionCaches()
+    }
+    return success
   }
 
   /// 复用（Fork）一个订阅分享
@@ -1468,7 +1575,10 @@ class APIService: ObservableObject {
       let id: Int?
     }
     if let response = try? JSONDecoder().decode(ApiResponse<ForkResponse>.self, from: data) {
-      return response.data?.id
+      if let id = response.data?.id {
+        await invalidateSubscriptionCaches()
+        return id
+      }
     }
     return nil
   }
@@ -1479,10 +1589,16 @@ class APIService: ObservableObject {
   func updateSubscriptionStatus(id: Int, state: String) async throws -> Bool {
     let endpoint = try buildEndpoint(path: "/subscribe/status/\(id)", params: ["state": state])
     let data = try await makeRequest(endpoint: endpoint, method: "PUT")
+    let success: Bool
     if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      return response.success ?? false
+      success = response.success ?? false
+    } else {
+      success = true
     }
-    return true
+    if success {
+      await invalidateSubscriptionCaches()
+    }
+    return success
   }
 
   /// 立即触发订阅搜索
@@ -1490,10 +1606,16 @@ class APIService: ObservableObject {
   /// - 应用场景: 用户在订阅列表手动点击“搜索”按钮，强制后端立即针对该条目执行一次资源检索。
   func searchSubscription(id: Int) async throws -> Bool {
     let data = try await makeRequest(endpoint: "/subscribe/search/\(id)")
+    let success: Bool
     if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      return response.success ?? false
+      success = response.success ?? false
+    } else {
+      success = true
     }
-    return true
+    if success {
+      await invalidateSubscriptionCaches()
+    }
+    return success
   }
 
   /// 重置订阅状态（重新开始）
@@ -1501,10 +1623,16 @@ class APIService: ObservableObject {
   /// - 应用场景: 清除该条目的已下载/已入库记录，使其状态回到初始，通常用于重新洗版或出错后重试。
   func resetSubscription(id: Int) async throws -> Bool {
     let data = try await makeRequest(endpoint: "/subscribe/reset/\(id)")
+    let success: Bool
     if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      return response.success ?? false
+      success = response.success ?? false
+    } else {
+      success = true
     }
-    return true
+    if success {
+      await invalidateSubscriptionCaches()
+    }
+    return success
   }
 
   /// 获取单条订阅详情
@@ -1515,45 +1643,249 @@ class APIService: ObservableObject {
     return try await decodeOrUnwrap(Subscribe.self, from: data)
   }
 
+  /// 查询特定媒体（及特定季）命中的订阅摘要
+  /// - 对应前端: `MoviePilot-Frontend/src/components/cards/MediaCard.vue` 和 `MoviePilot-Frontend/src/views/discover/MediaDetailView.vue` 的 `checkSubscribe`
+  /// - 应用场景: 详情页 Header 取消订阅前，先复用查询结果解析出真实订阅归属的媒体 ID。
+  /// - 备注: 这里只查询传入 `media.apiMediaId` 对应的订阅；原始 ID + fallback TMDB 的解析顺序由调用方控制。
+  func fetchSubscriptionLookup(
+    media: MediaInfo,
+    season: Int? = nil
+  ) async throws -> SubscriptionLookupResult? {
+    struct SubscribeLookupResp: Codable {
+      let id: Int?
+      let tmdbid: Int?
+      let doubanid: String?
+      let bangumiid: Int?
+      let mediaid: String?
+
+      var apiMediaId: String? {
+        MediaIdentifier.apiMediaId(
+          tmdbId: tmdbid,
+          doubanId: doubanid,
+          bangumiId: bangumiid,
+          fallbackMediaId: mediaid
+        )
+      }
+    }
+    guard let mediaId = media.apiMediaId else {
+      // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求
+      return nil
+    }
+    guard let encodedMediaId = encodeMediaIDPathSegment(mediaId), !encodedMediaId.isEmpty else {
+      throw APIError.invalidURL
+    }
+    let endpoint = try buildEndpoint(
+      path: "/subscribe/media/\(encodedMediaId)",
+      params: [
+        "season": season.map(String.init),
+        "title": media.title,
+      ])
+    let data = try await makeRequest(endpoint: endpoint)
+    let resp = try await decodeOrUnwrap(SubscribeLookupResp.self, from: data)
+    guard let id = resp.id else { return nil }
+    if let resolvedMediaId = resp.apiMediaId {
+      return SubscriptionLookupResult(
+        id: id,
+        mediaId: resolvedMediaId,
+        isResolvedMediaId: true
+      )
+    }
+    return SubscriptionLookupResult(
+      id: id,
+      mediaId: mediaId,
+      isResolvedMediaId: false
+    )
+  }
+
+  /// 查询特定媒体（及特定季）命中的订阅 ID
+  /// - 对应前端: `MoviePilot-Frontend/src/components/cards/MediaCard.vue` 和 `MoviePilot-Frontend/src/views/discover/MediaDetailView.vue` 的 `checkSubscribe`
+  /// - 应用场景: 媒体卡片和详情页 Header 查询订阅状态。
+  /// - 备注: 默认状态检查只需要 ID；需要真实媒体归属时请使用 `fetchSubscriptionLookup(media:season:)`。
+  func fetchSubscriptionID(media: MediaInfo, season: Int? = nil) async throws -> Int? {
+    try await fetchSubscriptionLookup(media: media, season: season)?.id
+  }
+
   /// 检查特定媒体（及特定季）是否已在用户的订阅列表中
   /// - 对应前端: `MoviePilot-Frontend/src/components/cards/MediaCard.vue` (主要实现), `MoviePilot-Frontend/src/views/discover/MediaDetailView.vue`
   /// - 应用场景: 进入详情页或媒体卡片进入视窗时懒加载调用，用于实时检查并更新“心形”订阅按钮的状态。
-  /// - 备注: 创建订阅使用的是原始 ID，请勿混淆。
-  func checkSubscription(media: MediaInfo, season: Int? = nil) async throws -> Bool {
-    struct SubscribeResp: Codable {
-      let id: Int?
-    }
+  /// - 备注: 默认复用短 TTL Bool 缓存；取消订阅后的状态校准等实时场景应传入 `forceRefresh: true`。
+  func checkSubscription(
+    media: MediaInfo,
+    season: Int? = nil,
+    forceRefresh: Bool = false
+  ) async throws -> Bool {
     guard let mediaId = media.apiMediaId else {
       // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求，返回 false
       return false
     }
-    do {
-      let cacheKey = "\(mediaId):\(season.map(String.init) ?? "")"
-      if let cached = await subscriptionStatusCache.get(cacheKey) {
-        return cached
+    while true {
+      try Task.checkCancellation()
+      let generation = subscriptionCacheGeneration
+      let cacheKey = "\(generation):\(mediaId):\(season.map(String.init) ?? "")"
+      if !forceRefresh, let cached = await subscriptionStatusCache.get(cacheKey) {
+        #if DEBUG
+        await subscriptionCacheTestHooks.afterSubscriptionStatusCacheHit?()
+        #endif
+        try Task.checkCancellation()
+        if generation == subscriptionCacheGeneration {
+          return cached
+        }
+        continue
       }
-      let endpoint = try buildEndpoint(
-        path: "/subscribe/media/\(mediaId)",
-        params: [
-          "season": season.map(String.init),
-          "title": media.title,
-        ])
-      let data = try await makeRequest(endpoint: endpoint)
-      let resp = try await decodeOrUnwrap(SubscribeResp.self, from: data)
-      let isSubscribed = resp.id != nil
-      await subscriptionStatusCache.set(cacheKey, value: isSubscribed)
-      return isSubscribed
-    } catch {
-      return false
+
+      do {
+        let isSubscribed = try await fetchSubscriptionID(media: media, season: season) != nil
+        guard generation == subscriptionCacheGeneration else {
+          continue
+        }
+        await subscriptionStatusCache.set(cacheKey, value: isSubscribed)
+        #if DEBUG
+        await subscriptionCacheTestHooks.afterSubscriptionStatusCacheStore?()
+        #endif
+        try Task.checkCancellation()
+        guard generation == subscriptionCacheGeneration else {
+          continue
+        }
+        return isSubscribed
+      } catch is CancellationError {
+        throw CancellationError()
+      } catch {
+        return false
+      }
     }
   }
 
   /// 拉取当前用户的所有订阅列表
   /// - 对应前端: `MoviePilot-Frontend/src/views/subscribe/SubscribeListView.vue`, `MoviePilot-Frontend/src/views/subscribe/FullCalendarView.swift`
   /// - 应用场景: 1. **订阅列表页面** (`SubscribeListView`) 的核心数据源。 2. **日历视图** (`FullCalendarView`) 的数据源。 (注: 全局搜索栏不直接调用此API)
-  func fetchSubscriptions() async throws -> [Subscribe] {
-    let data = try await makeRequest(endpoint: "/subscribe/")
-    return try await decodeOrUnwrap([Subscribe].self, from: data)
+  func fetchSubscriptions(forceRefresh: Bool = false) async throws -> [Subscribe] {
+    var canReadCache = !forceRefresh
+    while true {
+      try Task.checkCancellation()
+      let generation = subscriptionCacheGeneration
+      let cacheKey = "subscriptions:\(generation)"
+      if canReadCache, let cached = await subscriptionSnapshotCache.get(cacheKey) {
+        #if DEBUG
+        await subscriptionCacheTestHooks.afterSubscriptionSnapshotCacheHit?()
+        #endif
+        try Task.checkCancellation()
+        guard generation == subscriptionCacheGeneration else {
+          canReadCache = true
+          continue
+        }
+        return cached
+      }
+
+      let fetch = subscriptionSnapshotFetchTask(
+        for: generation,
+        reuseInFlight: canReadCache
+      )
+      let subscriptions: [Subscribe]
+      do {
+        subscriptions = try await fetch.task.value
+      } catch is CancellationError {
+        clearSubscriptionSnapshotFetchTaskIfCurrent(
+          generation: generation,
+          revision: fetch.revision
+        )
+        try Task.checkCancellation()
+        guard generation == subscriptionCacheGeneration else {
+          canReadCache = true
+          continue
+        }
+        guard fetch.revision == subscriptionSnapshotFetchTaskRevision else {
+          canReadCache = true
+          continue
+        }
+        throw CancellationError()
+      } catch {
+        clearSubscriptionSnapshotFetchTaskIfCurrent(
+          generation: generation,
+          revision: fetch.revision
+        )
+        guard generation == subscriptionCacheGeneration else {
+          canReadCache = true
+          continue
+        }
+        guard fetch.revision == subscriptionSnapshotFetchTaskRevision else {
+          canReadCache = true
+          continue
+        }
+        throw error
+      }
+
+      #if DEBUG
+      await subscriptionCacheTestHooks.afterSubscriptionSnapshotFetchValue?()
+      #endif
+      try Task.checkCancellation()
+      guard generation == subscriptionCacheGeneration else {
+        clearSubscriptionSnapshotFetchTaskIfCurrent(
+          generation: generation,
+          revision: fetch.revision
+        )
+        canReadCache = true
+        continue
+      }
+      guard fetch.revision == subscriptionSnapshotFetchTaskRevision else {
+        canReadCache = true
+        continue
+      }
+      await subscriptionSnapshotCache.set(cacheKey, value: subscriptions)
+      #if DEBUG
+      await subscriptionCacheTestHooks.afterSubscriptionSnapshotCacheStore?()
+      #endif
+      try Task.checkCancellation()
+      guard generation == subscriptionCacheGeneration else {
+        clearSubscriptionSnapshotFetchTaskIfCurrent(
+          generation: generation,
+          revision: fetch.revision
+        )
+        canReadCache = true
+        continue
+      }
+      guard fetch.revision == subscriptionSnapshotFetchTaskRevision else {
+        canReadCache = true
+        continue
+      }
+      clearSubscriptionSnapshotFetchTaskIfCurrent(
+        generation: generation,
+        revision: fetch.revision
+      )
+      return subscriptions
+    }
+  }
+
+  private func subscriptionSnapshotFetchTask(
+    for generation: Int,
+    reuseInFlight: Bool
+  ) -> (revision: Int, task: Task<[Subscribe], Error>) {
+    if reuseInFlight,
+      let task = subscriptionSnapshotFetchTask,
+      let revision = subscriptionSnapshotFetchTaskRevision,
+      subscriptionSnapshotFetchGeneration == generation
+    {
+      return (revision, task)
+    }
+
+    subscriptionSnapshotFetchRevision &+= 1
+    let revision = subscriptionSnapshotFetchRevision
+    let task = Task { [weak self] in
+      guard let self else { throw CancellationError() }
+      let data = try await self.makeRequest(endpoint: "/subscribe/")
+      return try await self.decodeOrUnwrap([Subscribe].self, from: data)
+    }
+    subscriptionSnapshotFetchGeneration = generation
+    subscriptionSnapshotFetchTaskRevision = revision
+    subscriptionSnapshotFetchTask = task
+    return (revision, task)
+  }
+
+  private func clearSubscriptionSnapshotFetchTaskIfCurrent(generation: Int, revision: Int) {
+    guard subscriptionSnapshotFetchGeneration == generation else { return }
+    guard subscriptionSnapshotFetchTaskRevision == revision else { return }
+    subscriptionSnapshotFetchGeneration = nil
+    subscriptionSnapshotFetchTaskRevision = nil
+    subscriptionSnapshotFetchTask = nil
   }
 
   /// 添加下载任务

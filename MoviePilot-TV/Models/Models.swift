@@ -8,6 +8,74 @@ extension Notification.Name {
   static let subscriptionDidUpdate = Notification.Name("subscriptionDidUpdate")
 }
 
+enum MediaIdentifier {
+  static func apiMediaId(
+    tmdbId: Int?,
+    doubanId: String?,
+    bangumiId: Int?,
+    mediaIdPrefix: String?,
+    mediaId: String?
+  ) -> String? {
+    apiMediaId(
+      tmdbId: tmdbId,
+      doubanId: doubanId,
+      bangumiId: bangumiId,
+      fallbackMediaId: joinedMediaId(prefix: mediaIdPrefix, id: mediaId)
+    )
+  }
+
+  static func apiMediaId(
+    tmdbId: Int?,
+    doubanId: String?,
+    bangumiId: Int?,
+    fallbackMediaId: String?
+  ) -> String? {
+    if let tmdbId = validNumericIdentifier(tmdbId) { return "tmdb:\(tmdbId)" }
+    if let doubanId = normalizedString(doubanId) { return "douban:\(doubanId)" }
+    if let bangumiId = validNumericIdentifier(bangumiId) { return "bangumi:\(bangumiId)" }
+    return normalizedMediaIdentifier(fallbackMediaId)
+  }
+
+  static func validNumericIdentifier(_ id: Int?) -> Int? {
+    guard let id, id > 0 else { return nil }
+    return id
+  }
+
+  static func normalizedString(_ value: String?) -> String? {
+    guard let value else { return nil }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
+
+  static func normalizedMediaIdentifier(_ mediaId: String?) -> String? {
+    guard let mediaId = normalizedString(mediaId), !mediaId.hasSuffix(":") else { return nil }
+
+    let parts = mediaId.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+    if parts.count == 2 {
+      let prefix = parts[0]
+      let value = parts[1]
+      if value.isEmpty { return nil }
+      if prefix == "tmdb" || prefix == "bangumi" {
+        guard let numericValue = Int(value), numericValue > 0 else { return nil }
+      }
+    }
+
+    return mediaId
+  }
+
+  static func mediaIdComponents(_ mediaId: String?) -> (prefix: String, id: String)? {
+    guard let mediaId = normalizedMediaIdentifier(mediaId) else { return nil }
+    let parts = mediaId.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+    guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { return nil }
+    return (String(parts[0]), String(parts[1]))
+  }
+
+  private static func joinedMediaId(prefix: String?, id: String?) -> String? {
+    guard let prefix = normalizedString(prefix), let id = normalizedString(id) else { return nil }
+    return "\(prefix):\(id)"
+  }
+}
+
 /// 包装类型，用于处理 API 响应中多种格式的布尔值
 /// 从 Bool、Int 或 String 解码，始终编码为 Bool
 struct FlexibleBool: Codable, Hashable {
@@ -397,6 +465,14 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   nonisolated private static let collectionSuffixRegex = try? NSRegularExpression(
     pattern: "(（系列）|\\(系列\\)|\\s+collection)$", options: .caseInsensitive)
 
+  var displayTypeText: String? {
+    isCollection || Self.checkDisplaysAsCollection(type: type) ? "合集" : type
+  }
+
+  var shouldPreloadDetail: Bool {
+    !isCollection
+  }
+
   enum CodingKeys: String, CodingKey {
     case tmdb_id, douban_id, bangumi_id, imdb_id, tvdb_id, source, mediaid_prefix, media_id, title,
       original_title, original_name, names,
@@ -459,7 +535,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     self.id = Self.generateUniqueKey(
       source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
       tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id,
-      mediaid_prefix: mediaid_prefix, media_id: media_id)
+      mediaid_prefix: mediaid_prefix, media_id: media_id, subscribeShare: subscribeShare)
 
     self.isCollection = Self.checkIsCollection(type: type, collection_id: collection_id)
 
@@ -552,7 +628,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     self.id = Self.generateUniqueKey(
       source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
       tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id,
-      mediaid_prefix: mediaid_prefix, media_id: media_id)
+      mediaid_prefix: mediaid_prefix, media_id: media_id, subscribeShare: subscribeShare)
 
     self.isCollection = Self.checkIsCollection(type: type, collection_id: collection_id)
 
@@ -606,7 +682,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     self.id = Self.generateUniqueKey(
       source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
       tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id,
-      mediaid_prefix: mediaid_prefix, media_id: media_id)
+      mediaid_prefix: mediaid_prefix, media_id: media_id, subscribeShare: subscribeShare)
 
     self.isCollection = Self.checkIsCollection(type: type, collection_id: collection_id)
 
@@ -665,8 +741,13 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   nonisolated private static func generateUniqueKey(
     source: String?, type: String?, season: Int?, tmdb_id: Int?,
     imdb_id: String?, tvdb_id: Int?, douban_id: String?, bangumi_id: Int?,
-    mediaid_prefix: String?, media_id: String?
+    mediaid_prefix: String?, media_id: String?, subscribeShare: SubscribeShare? = nil
   ) -> String {
+    if let subscribeShare {
+      let shareId = subscribeShare.raw_id.map(String.init) ?? subscribeShare.id
+      return "share:\(shareId)"
+    }
+
     let parts: [String] = [
       source ?? "",
       type ?? "",
@@ -682,25 +763,27 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     return parts.joined(separator: "~")
   }
 
-  /// 判断当前媒体项是否为合集/系列
+  /// 判断当前媒体项是否具备合集行为。
+  /// 官方 Web 也以 collection_id 作为跳转合集页的依据；type 只参与展示文案。
   nonisolated static func checkIsCollection(type: String?, collection_id: Int?) -> Bool {
-    return type == "合集" || type == "collection" || type == "系列" || collection_id != nil
+    return collection_id != nil
+  }
+
+  nonisolated private static func checkDisplaysAsCollection(type: String?) -> Bool {
+    type == "合集" || type == "collection" || type == "系列"
   }
 
   /// 生成用于 API 请求的媒体 ID 字符串，严格遵循前端拼接逻辑。
   /// - 对应前端: `getMediaId()` in `MediaDetailView.vue` & `SubscribeSeasonDialog.vue`
   /// - 拼接规则: 优先使用 `tmdb_id`, `douban_id`, `bangumi_id`。如果都没有，则使用 `mediaid_prefix` 和 `media_id` 作为备用。
   var apiMediaId: String? {
-    if let tmdbId = tmdb_id {
-      return "tmdb:\(tmdbId)"
-    } else if let doubanId = douban_id {
-      return "douban:\(doubanId)"
-    } else if let bangumiId = bangumi_id {
-      return "bangumi:\(bangumiId)"
-    } else if let prefix = mediaid_prefix, let id = media_id {
-      return "\(prefix):\(id)"
-    }
-    return nil
+    MediaIdentifier.apiMediaId(
+      tmdbId: tmdb_id,
+      doubanId: douban_id,
+      bangumiId: bangumi_id,
+      mediaIdPrefix: mediaid_prefix,
+      mediaId: media_id
+    )
   }
 
   /// 对 MediaInfo 数组去重，保留首次出现的元素
@@ -712,6 +795,20 @@ struct MediaInfo: Codable, Identifiable, Hashable {
         return false  // 如果 key 已存在，则过滤掉
       }
       existingKeys.insert(key)  // 否则记录该 key 并保留元素
+      return true
+    }
+  }
+
+  static func deduplicateSubscriptionShareMedia(
+    _ items: [MediaInfo],
+    existingKeys: inout Set<String>
+  ) -> [MediaInfo] {
+    return items.filter { item in
+      let key = item.id
+      if existingKeys.contains(key) {
+        return false
+      }
+      existingKeys.insert(key)
       return true
     }
   }
@@ -778,22 +875,24 @@ class DownloadingInfo: Codable, Identifiable, ObservableObject, Equatable {
     lhs.id == rhs.id
   }
 
-  // --- 不可变属性 ---
+  // --- 身份属性 ---
   let id: String
   /// 哈希值
   let hash: String?
-  /// 种子名称
-  let title: String?
-  /// 识别后的名称
-  let name: String?
-  /// 大小
-  let size: Int64?
-  /// 关联的媒体信息
-  let media: DownloadingMediaInfo?
-  // 季集格式 (如 S01E01)
-  let season_episode: String?
   // 下载用户名称
   let username: String?
+
+  // --- 接口快照字段，为 UI 更新发布 ---
+  /// 种子名称
+  @Published var title: String?
+  /// 识别后的名称
+  @Published var name: String?
+  /// 大小
+  @Published var size: Int64?
+  /// 关联的媒体信息
+  @Published var media: DownloadingMediaInfo?
+  // 季集格式 (如 S01E01)
+  @Published var season_episode: String?
 
   // --- 易变属性，为 UI 更新发布 ---
   /// 状态
@@ -815,14 +914,22 @@ class DownloadingInfo: Codable, Identifiable, ObservableObject, Equatable {
   required init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
 
-    // 解码不可变属性
-    hash = try container.decodeIfPresent(String.self, forKey: .hash)
-    title = try container.decodeIfPresent(String.self, forKey: .title)
-    name = try container.decodeIfPresent(String.self, forKey: .name)
-    size = try container.decodeIfPresent(Int64.self, forKey: .size)
-    media = try container.decodeIfPresent(DownloadingMediaInfo.self, forKey: .media)
-    season_episode = try container.decodeIfPresent(String.self, forKey: .season_episode)
-    username = try container.decodeIfPresent(String.self, forKey: .username)
+    let decodedHash = try container.decodeIfPresent(String.self, forKey: .hash)
+    let decodedTitle = try container.decodeIfPresent(String.self, forKey: .title)
+    let decodedName = try container.decodeIfPresent(String.self, forKey: .name)
+    let decodedSize = try container.decodeIfPresent(Int64.self, forKey: .size)
+    let decodedMedia = try container.decodeIfPresent(DownloadingMediaInfo.self, forKey: .media)
+    let decodedSeasonEpisode = try container.decodeIfPresent(String.self, forKey: .season_episode)
+    let decodedUsername = try container.decodeIfPresent(String.self, forKey: .username)
+
+    // 解码身份和接口快照属性
+    hash = decodedHash
+    title = decodedTitle
+    name = decodedName
+    size = decodedSize
+    media = decodedMedia
+    season_episode = decodedSeasonEpisode
+    username = decodedUsername
 
     // 解码可变的、@Published 的属性
     state = try container.decodeIfPresent(String.self, forKey: .state)
@@ -832,12 +939,13 @@ class DownloadingInfo: Codable, Identifiable, ObservableObject, Equatable {
     left_time = try container.decodeIfPresent(String.self, forKey: .left_time)
 
     // 优先使用 hash 作为稳定标识符
-    if let _hash = hash, !_hash.isEmpty {
-      id = "DownloadingInfo-\(_hash)-\(username ?? "")"
+    if let _hash = decodedHash, !_hash.isEmpty {
+      id = "DownloadingInfo-\(_hash)-\(decodedUsername ?? "")"
     } else {
       // 备用方案：组合其他信息，确保稳定性
       let fallbackId =
-        (name ?? "") + (title ?? "") + (username ?? "") + (size.map { String($0) } ?? "")
+        (decodedName ?? "") + (decodedTitle ?? "") + (decodedUsername ?? "")
+        + (decodedSize.map { String($0) } ?? "")
       if !fallbackId.isEmpty {
         id = "DownloadingInfo-\(fallbackId)"
       } else {
@@ -863,8 +971,13 @@ class DownloadingInfo: Codable, Identifiable, ObservableObject, Equatable {
     try container.encode(username, forKey: .username)
   }
 
-  /// 仅更新下载任务的易变属性。
+  /// 更新同一下载任务的最新接口快照。
   func update(with other: DownloadingInfo) {
+    if title != other.title { title = other.title }
+    if name != other.name { name = other.name }
+    if size != other.size { size = other.size }
+    if media != other.media { media = other.media }
+    if season_episode != other.season_episode { season_episode = other.season_episode }
     if state != other.state { state = other.state }
     if progress != other.progress { progress = other.progress }
     if dlspeed != other.dlspeed { dlspeed = other.dlspeed }
@@ -1336,10 +1449,49 @@ struct Subscribe: Codable, Identifiable, Hashable {
   /// - 对应前端: MoviePilot-Frontend/src/components/cards/SubscribeCard.vue (getMediaId)
   /// - 拼接规则: 优先使用原始ID（tmdbid, doubanid, bangumiid）拼接，如果都没有，则直接使用接口返回的 `mediaid` 字段作为备用。
   var apiMediaId: String? {
-    if let tmdbid = self.tmdbid { return "tmdb:\(tmdbid)" }
-    if let doubanid = self.doubanid { return "douban:\(doubanid)" }
-    if let bangumiid = self.bangumiid { return "bangumi:\(bangumiid)" }
-    return mediaid
+    MediaIdentifier.apiMediaId(
+      tmdbId: tmdbid,
+      doubanId: doubanid,
+      bangumiId: bangumiid,
+      fallbackMediaId: mediaid
+    )
+  }
+
+  func navigationMediaInfo() -> MediaInfo {
+    let fallbackMediaId = MediaIdentifier.mediaIdComponents(mediaid)
+    return MediaInfo(
+      tmdb_id: MediaIdentifier.validNumericIdentifier(tmdbid),
+      douban_id: MediaIdentifier.normalizedString(doubanid),
+      bangumi_id: MediaIdentifier.validNumericIdentifier(bangumiid),
+      imdb_id: nil,
+      tvdb_id: nil,
+      source: nil,
+      mediaid_prefix: fallbackMediaId?.prefix,
+      media_id: fallbackMediaId?.id,
+      title: name,
+      original_title: nil,
+      original_name: nil,
+      names: nil,
+      type: type,
+      year: year,
+      season: season,
+      poster_path: nil,
+      backdrop_path: nil,
+      overview: description,
+      vote_average: nil,
+      popularity: nil,
+      season_info: nil,
+      collection_id: nil,
+      directors: nil,
+      actors: nil,
+      episode_group: episode_group,
+      runtime: nil,
+      release_date: nil,
+      original_language: nil,
+      production_countries: nil,
+      genres: nil,
+      category: nil
+    )
   }
 }
 
@@ -1569,6 +1721,48 @@ struct BangumiImages: Codable, Hashable {
   let medium: String?
   let small: String?
   let grid: String?
+
+  enum CodingKeys: String, CodingKey {
+    case large
+    case common
+    case medium
+    case small
+    case grid
+  }
+
+  init(large: String?, common: String?, medium: String?, small: String?, grid: String?) {
+    self.large = large
+    self.common = common
+    self.medium = medium
+    self.small = small
+    self.grid = grid
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.large = try Self.decodeImageURL(from: container, forKey: .large)
+    self.common = try Self.decodeImageURL(from: container, forKey: .common)
+    self.medium = try Self.decodeImageURL(from: container, forKey: .medium)
+    self.small = try Self.decodeImageURL(from: container, forKey: .small)
+    self.grid = try Self.decodeImageURL(from: container, forKey: .grid)
+  }
+
+  private static func decodeImageURL(
+    from container: KeyedDecodingContainer<CodingKeys>,
+    forKey key: CodingKeys
+  ) throws -> String? {
+    if let stringValue = try? container.decodeIfPresent(String.self, forKey: key) {
+      return stringValue
+    }
+    if let objectValue = try? container.decodeIfPresent(ImageObject.self, forKey: key) {
+      return objectValue.url
+    }
+    return nil
+  }
+
+  private struct ImageObject: Codable, Hashable {
+    let url: String?
+  }
 }
 
 /// 演职人员头像数据源

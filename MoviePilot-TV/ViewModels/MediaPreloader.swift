@@ -41,9 +41,9 @@ class MediaPreloadTask: ObservableObject {
     guard !isStarted else { return }
     isStarted = true
 
-    // 合集(Collection)没有 media detail 详情页，走的是 CollectionDetailView，
-    // fetchMediaDetail / checkSubscription / recognizeTmdb 等全部无意义且会失败，直接跳过
-    guard partialMedia.collection_id == nil else { return }
+    // 只有带 collection_id 的合集走 CollectionDetailView，没有普通 media detail。
+    // type 显示为合集但缺少 collection_id 时仍按普通媒体预加载，避免空合集 ID 卡住。
+    guard partialMedia.shouldPreloadDetail else { return }
 
     internalTasks.append(
       Task {
@@ -181,7 +181,7 @@ class MediaPreloadTask: ObservableObject {
 
     let vm = SubscribeSeasonViewModel(mediaInfo: detail)
     self.seasonViewModel = vm
-    await vm.loadData(checkSubscriptionLimit: 10)
+    await vm.loadData(forceRefreshSubscriptions: false)
     self.isSeasonDataLoaded = true
   }
 
@@ -207,17 +207,23 @@ class MediaPreloadTask: ObservableObject {
   }
 
   /// 外部触发刷新订阅状态（收到订阅变更通知时调用）
-  func refreshSubscriptionStatus() async {
+  func refreshSubscriptionStatus(forceRefreshSeasonSnapshot: Bool = true) async {
     let detail = fullDetail ?? partialMedia
     if detail.canDirectlySubscribe {
       // 电影等可直接订阅的类型：重新查询全局订阅状态
       do {
-        var subscribed = try await APIService.shared.checkSubscription(media: detail)
+        var subscribed = try await APIService.shared.checkSubscription(
+          media: detail,
+          forceRefresh: true
+        )
         // 豆瓣/Bangumi 来源：后端通常用 TMDB ID 存储订阅，
         // 当用原始 mediaId（如 douban:xxx）查不到时，用识别到的 tmdbId 补查一次
         if !subscribed, detail.tmdb_id == nil, let tmdbId = self.tmdbId {
           let tmdbMedia = MediaInfo(tmdb_id: tmdbId, type: detail.type)
-          subscribed = try await APIService.shared.checkSubscription(media: tmdbMedia)
+          subscribed = try await APIService.shared.checkSubscription(
+            media: tmdbMedia,
+            forceRefresh: true
+          )
         }
         self.isSubscribed = subscribed
       } catch {
@@ -225,7 +231,7 @@ class MediaPreloadTask: ObservableObject {
       }
     } else if let seasonVM = seasonViewModel {
       // 电视剧：刷新分季订阅状态
-      await seasonVM.checkSubscriptionStatus()
+      await seasonVM.checkSubscriptionStatus(forceRefresh: forceRefreshSeasonSnapshot)
     }
   }
 
@@ -304,7 +310,7 @@ class MediaPreloader: ObservableObject {
   private var cancellables = Set<AnyCancellable>()
 
   private init() {
-    // 监听订阅变更通知，刷新所有缓存 task 的订阅状态
+    // 监听订阅变更通知，刷新活跃详情页持有的 task 的订阅状态
     NotificationCenter.default.publisher(for: .subscriptionDidUpdate)
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in
@@ -410,15 +416,20 @@ class MediaPreloader: ObservableObject {
 
   // MARK: - 订阅状态批量刷新
 
-  /// 收到订阅变更通知后，并发刷新所有缓存 task 的订阅状态
+  /// 收到订阅变更通知后，并发刷新活跃详情页持有的 task 的订阅状态。
+  /// 普通海报墙预加载缓存不主动强刷，避免浏览海报墙后一次通知触发大量订阅查询。
   private func refreshAllSubscriptionStatus() async {
-    let tasks = Array(cache.values)
+    let tasks = pinnedKeys.compactMap { cache[$0] }
     guard !tasks.isEmpty else { return }
+
+    if tasks.contains(where: { $0.seasonViewModel != nil }) {
+      _ = try? await APIService.shared.fetchSubscriptions(forceRefresh: true)
+    }
 
     await withTaskGroup(of: Void.self) { group in
       for task in tasks {
         group.addTask {
-          await task.refreshSubscriptionStatus()
+          await task.refreshSubscriptionStatus(forceRefreshSeasonSnapshot: false)
         }
       }
     }

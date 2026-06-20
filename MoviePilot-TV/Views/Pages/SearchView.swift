@@ -400,7 +400,7 @@ private struct ResultRow: View {
             MediaCard(
               title: item.cleanedTitle ?? "",
               posterUrl: item.imageURLs.poster,
-              typeText: item.collection_id != nil ? "合集" : item.type,
+              typeText: item.displayTypeText,
               ratingText: item.vote_average.map { String(format: "%.1f", $0) },
               bottomLeftText: nil,
               bottomLeftSecondaryText: nil,
@@ -433,8 +433,9 @@ private struct ResultRow: View {
           // 预加载触发：聚焦后延迟 ~300ms，防止快速滚动时浪费请求
           preloadDebounceTask?.cancel()
           if let newId = newId, let item = items.first(where: { $0.id == newId }) {
-            // 合集无需预加载（无详情页）
-            if item.collection_id == nil {
+            // 只有带 collection_id 的合集走 CollectionDetailView，不预加载普通详情。
+            // collection-like type 但缺少 collection_id 时仍按普通媒体处理，和 Web 保持一致。
+            if item.shouldPreloadDetail {
               preloadDebounceTask = Task {
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
@@ -617,7 +618,7 @@ private struct BestResultRow: View {
         preloadDebounceTask?.cancel()
         if let newId = newId, let item = items.first(where: { $0.id == newId }) {
           // 仅对媒体类型预加载，人物类型走 PersonDetailView，不需要 MediaPreloader
-          if case .media(let media) = item, media.collection_id == nil {
+          if case .media(let media) = item, media.shouldPreloadDetail {
             preloadDebounceTask = Task {
               try? await Task.sleep(for: .milliseconds(300))
               guard !Task.isCancelled else { return }

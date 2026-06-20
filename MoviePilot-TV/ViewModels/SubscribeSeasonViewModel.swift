@@ -1,6 +1,78 @@
 import Combine
 import Foundation
 
+struct SeasonSubscriptionSummary: Equatable, Hashable {
+  let id: Int
+  let season: Int
+  let episodeGroup: String?
+
+  init(id: Int, season: Int, episodeGroup: String?) {
+    self.id = id
+    self.season = season
+    self.episodeGroup = Self.normalizedEpisodeGroup(episodeGroup)
+  }
+
+  init?(subscribe: Subscribe) {
+    guard let id = subscribe.id, let season = subscribe.season else { return nil }
+    self.init(id: id, season: season, episodeGroup: subscribe.episode_group)
+  }
+
+  static func indexBySeason(from subscriptions: [Subscribe], matching media: MediaInfo)
+    -> [Int: SeasonSubscriptionSummary]
+  {
+    var summaries: [Int: SeasonSubscriptionSummary] = [:]
+
+    for subscription in subscriptions where matches(subscription, media: media) {
+      guard let summary = SeasonSubscriptionSummary(subscribe: subscription) else { continue }
+      if summaries[summary.season] == nil {
+        summaries[summary.season] = summary
+      }
+    }
+
+    return summaries
+  }
+
+  func groupDisplayName(episodeGroups: [EpisodeGroup]) -> String {
+    SubscriptionCancelConfirmation.episodeGroupDisplayName(
+      episodeGroup,
+      episodeGroups: episodeGroups
+    )
+  }
+
+  func statusDisplayText(episodeGroups: [EpisodeGroup]) -> String {
+    "已订阅 · \(groupDisplayName(episodeGroups: episodeGroups))"
+  }
+
+  private static func matches(_ subscription: Subscribe, media: MediaInfo) -> Bool {
+    guard subscription.type == "电视剧" else { return false }
+    if let tmdbId = MediaIdentifier.validNumericIdentifier(media.tmdb_id), subscription.tmdbid == tmdbId {
+      return true
+    }
+    if let doubanId = MediaIdentifier.normalizedString(media.douban_id),
+      MediaIdentifier.normalizedString(subscription.doubanid) == doubanId
+    {
+      return true
+    }
+    if let bangumiId = MediaIdentifier.validNumericIdentifier(media.bangumi_id),
+      subscription.bangumiid == bangumiId
+    {
+      return true
+    }
+    if let mediaId = MediaIdentifier.normalizedMediaIdentifier(media.apiMediaId),
+      MediaIdentifier.normalizedMediaIdentifier(subscription.apiMediaId) == mediaId
+    {
+      return true
+    }
+    return false
+  }
+
+  private static func normalizedEpisodeGroup(_ episodeGroup: String?) -> String? {
+    guard let episodeGroup else { return nil }
+    let trimmed = episodeGroup.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
+}
+
 @MainActor
 class SubscribeSeasonViewModel: ObservableObject {
   let mediaInfo: MediaInfo
@@ -14,6 +86,7 @@ class SubscribeSeasonViewModel: ObservableObject {
   @Published var errorMessage: String?
 
   // 各季的订阅状态
+  @Published var seasonSubscriptions: [Int: SeasonSubscriptionSummary] = [:]
   @Published var subscribedSeasons: Set<Int> = []
   @Published var subscribingSeasons: Set<Int> = []
 
@@ -29,7 +102,7 @@ class SubscribeSeasonViewModel: ObservableObject {
     self.initialSeason = initialSeason
   }
 
-  func loadData(checkSubscriptionLimit: Int? = nil) async {
+  func loadData(forceRefreshSubscriptions: Bool = true) async {
     guard !hasLoaded else { return }
     hasLoaded = true
     isLoading = true
@@ -42,7 +115,9 @@ class SubscribeSeasonViewModel: ObservableObject {
       }
 
       // 执行初始分季数据获取
-      try await fetchSeasonsInternal(checkSubscriptionLimit: checkSubscriptionLimit)
+      try await fetchSeasonsInternal(
+        forceRefreshSubscriptions: forceRefreshSubscriptions
+      )
     } catch {
       errorMessage = error.localizedDescription
     }
@@ -61,7 +136,9 @@ class SubscribeSeasonViewModel: ObservableObject {
   }
 
   /// 内部核心加载方法：获取分季详情并排序，随后检查入库和订阅状态
-  private func fetchSeasonsInternal(checkSubscriptionLimit: Int? = nil) async throws {
+  private func fetchSeasonsInternal(
+    forceRefreshSubscriptions: Bool = false
+  ) async throws {
     if !selectedGroupId.isEmpty {
       // 逻辑 A：如果选择了剧集组，则按组获取分季
       self.seasonInfos = try await APIService.shared.getGroupSeasons(
@@ -78,7 +155,7 @@ class SubscribeSeasonViewModel: ObservableObject {
     await checkSeasonsStatus()
 
     // 同时检查各季当前的订阅状态
-    await checkSubscriptionStatus(limit: checkSubscriptionLimit)
+    await checkSubscriptionStatus(forceRefresh: forceRefreshSubscriptions)
   }
 
   /// 调用后端接口，比对媒体库中已有的集数，确定每一季的完整性
@@ -152,35 +229,27 @@ class SubscribeSeasonViewModel: ObservableObject {
     }
   }
 
-  /// 查询每个季是否已经订阅，填充 subscribedSeasons
-  func checkSubscriptionStatus(limit: Int? = nil) async {
-    let seasonsToCheck = limit != nil ? Array(seasonInfos.prefix(limit!)) : seasonInfos
-
-    let newSubscribed = await withTaskGroup(of: Int?.self) { group in
-      for season in seasonsToCheck {
-        guard let seasonNumber = season.season_number else { continue }
-        group.addTask {
-          do {
-            // 遍历所有季并检查订阅状态，失败则静默跳过
-            let isSubscribed = try await APIService.shared.checkSubscription(
-              media: self.mediaInfo, season: seasonNumber)
-            return isSubscribed ? seasonNumber : nil
-          } catch {
-            // 静默处理错误
-            return nil
-          }
-        }
+  /// 查询当前媒体所有分季订阅摘要，填充 seasonSubscriptions 和 subscribedSeasons
+  @discardableResult
+  func checkSubscriptionStatus(forceRefresh: Bool = false) async -> Bool {
+    do {
+      try await refreshSubscriptionSummaries(forceRefresh: forceRefresh)
+      return true
+    } catch {
+      if error is CancellationError {
+        return false
       }
-
-      var results = Set<Int>()
-      for await result in group {
-        if let seasonNumber = result {
-          results.insert(seasonNumber)
-        }
-      }
-      return results
+      print("检查季订阅状态失败: \(error)")
+      errorMessage = error.localizedDescription
+      return false
     }
-    self.subscribedSeasons = newSubscribed
+  }
+
+  private func refreshSubscriptionSummaries(forceRefresh: Bool) async throws {
+    let subscriptions = try await APIService.shared.fetchSubscriptions(forceRefresh: forceRefresh)
+    let summaries = SeasonSubscriptionSummary.indexBySeason(from: subscriptions, matching: mediaInfo)
+    self.seasonSubscriptions = summaries
+    self.subscribedSeasons = Set(summaries.keys)
   }
 
   func prepareSubscription(seasonNumber: Int) {
@@ -211,11 +280,21 @@ class SubscribeSeasonViewModel: ObservableObject {
     defer { subscribingSeasons.remove(seasonNumber) }
 
     do {
-      _ = try await APIService.shared.deleteSubscription(
-        media: mediaInfo, season: seasonNumber)
-      subscribedSeasons.remove(seasonNumber)
-      // 通知首页刷新订阅列表
-      NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
+      try await refreshSubscriptionSummaries(forceRefresh: true)
+      guard let summary = seasonSubscriptions[seasonNumber] else {
+        showUnsubscribeConfirm = nil
+        return
+      }
+
+      let success = try await APIService.shared.deleteSubscription(id: summary.id)
+      if success {
+        try await refreshSubscriptionSummaries(forceRefresh: true)
+        showUnsubscribeConfirm = nil
+        // 通知首页刷新订阅列表
+        NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
+      } else {
+        errorMessage = "取消订阅失败"
+      }
     } catch {
       errorMessage = error.localizedDescription
     }
@@ -243,10 +322,31 @@ class SubscribeSeasonViewModel: ObservableObject {
   }
 
   func isSeasonSubscribed(_ seasonNumber: Int) -> Bool {
-    subscribedSeasons.contains(seasonNumber)
+    seasonSubscriptions[seasonNumber] != nil
   }
 
   func isSeasonSubscribing(_ seasonNumber: Int) -> Bool {
     subscribingSeasons.contains(seasonNumber)
+  }
+
+  func subscriptionSummary(for seasonNumber: Int) -> SeasonSubscriptionSummary? {
+    seasonSubscriptions[seasonNumber]
+  }
+
+  func subscriptionGroupText(for seasonNumber: Int) -> String {
+    seasonSubscriptions[seasonNumber]?.groupDisplayName(episodeGroups: episodeGroups) ?? "默认剧集组"
+  }
+
+  func subscriptionStatusText(for seasonNumber: Int) -> String? {
+    seasonSubscriptions[seasonNumber]?.statusDisplayText(episodeGroups: episodeGroups)
+  }
+
+  func unsubscribeConfirmationMessage(for seasonNumber: Int) -> String {
+    let title = mediaInfo.cleanedTitle ?? mediaInfo.title ?? ""
+    return SubscriptionCancelConfirmation.message(
+      title: title,
+      season: seasonNumber,
+      episodeGroupText: subscriptionGroupText(for: seasonNumber)
+    )
   }
 }

@@ -113,43 +113,13 @@ struct HomeView: View {
   }
 
   private func navigateToDetail(for subscribe: Subscribe) {
-    let mediaInfo = MediaInfo(
-      tmdb_id: subscribe.tmdbid,
-      douban_id: subscribe.doubanid,
-      bangumi_id: subscribe.bangumiid,
-      imdb_id: nil,
-      tvdb_id: nil,
-      source: nil,
-      mediaid_prefix: nil,
-      media_id: nil,
-      title: subscribe.name,
-      original_title: nil,
-      original_name: nil,
-      names: nil,
-      type: subscribe.type,
-      year: subscribe.year,
-      season: subscribe.season,
-      // 必须将图像路径设为 nil，以确保导航对象是“干净”的。
-      // 如果携带了 poster_path，详情页会先用它作为背景，
-      // 然后在加载完完整的 backdrop_path 后再切换，导致闪烁。
-      poster_path: nil,
-      backdrop_path: nil,
-      overview: subscribe.description,
-      vote_average: nil,
-      popularity: nil,
-      season_info: nil,
-      collection_id: nil,
-      directors: nil,
-      actors: nil,
-      episode_group: subscribe.episode_group,
-      runtime: nil,
-      release_date: nil,
-      original_language: nil,
-      production_countries: nil,
-      genres: nil,
-      category: nil
-    )
-    path.append(mediaInfo)
+    path.append(subscribe.navigationMediaInfo())
+  }
+}
+
+enum HomeSubscribeFocusID {
+  static func value(for id: Int?) -> String? {
+    id.map(String.init)
   }
 }
 
@@ -307,7 +277,7 @@ private struct SubscribeSectionView: View {
           .focused($isTopRedirectorFocused)
           .onChange(of: isTopRedirectorFocused) { _, isFocused in
             if isFocused {
-              focusedItemId = items.first?.id.map { String($0) }
+              focusedItemId = HomeSubscribeFocusID.value(for: items.first?.id)
               hasRedirectedFocus = true
               isTopRedirectorFocused = false
             }
@@ -323,7 +293,7 @@ private struct SubscribeSectionView: View {
               onEdit: { onEdit(item) },
               onViewDetail: { onViewDetail(item) }
             )
-            .focused($focusedItemId, equals: String(describing: item.id))
+            .focused($focusedItemId, equals: HomeSubscribeFocusID.value(for: item.id))
           }
         }
         .padding(.top, 25)
@@ -340,6 +310,7 @@ private struct SubscribeItemView: View {
   @ObservedObject var viewModel: HomeViewModel
   let onEdit: () -> Void
   let onViewDetail: () -> Void
+  @State private var showUnsubscribeConfirm = false
 
   var body: some View {
     MediaCard(
@@ -405,12 +376,20 @@ private struct SubscribeItemView: View {
 
       // 6. 取消订阅
       Button(role: .destructive) {
-        Task {
-          _ = await viewModel.deleteSubscribe(subscribe: item)
-        }
+        showUnsubscribeConfirm = true
       } label: {
         Label("取消订阅", systemImage: "trash")
       }
+    }
+    .alert(SubscriptionCancelConfirmation.title, isPresented: $showUnsubscribeConfirm) {
+      Button("取消", role: .cancel) {}
+      Button(SubscriptionCancelConfirmation.confirmButtonTitle, role: .destructive) {
+        Task {
+          _ = await viewModel.deleteSubscribe(subscribe: item)
+        }
+      }
+    } message: {
+      Text(SubscriptionCancelConfirmation.message(for: item))
     }
   }
 

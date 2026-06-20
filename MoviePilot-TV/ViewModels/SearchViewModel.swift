@@ -238,6 +238,7 @@ class SearchViewModel: ObservableObject {
 
   private var sharedMediaFetcher: SharedMediaFetcher?
   private var searchStreamTask: Task<Void, Never>?
+  private var searchGeneration: Int = 0
   private let searchStreamDoneCloseDelay: UInt64 = 1_500_000_000
   
   @Published var searchProgressText: String = ""
@@ -246,12 +247,15 @@ class SearchViewModel: ObservableObject {
   /// 执行初始搜索：根据 searchType 决定是资源搜索还是聚合元数据搜索
   func autoSearch() async {
     guard !query.isEmpty else { return }
+    searchGeneration += 1
+    let currentSearchGeneration = searchGeneration
+    let searchQuery = query
     
     searchStreamTask?.cancel()
     
     isLoading = true
     hasSearched = false
-    submittedQuery = query
+    submittedQuery = searchQuery
 
     switch searchType {
     case .resource:
@@ -264,10 +268,12 @@ class SearchViewModel: ObservableObject {
         var accumulatedResults: [Context] = []
         
         do {
-          let stream = APIService.shared.searchTitleStream(keyword: submittedQuery, sites: sitesStr)
+          guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+
+          let stream = APIService.shared.searchTitleStream(keyword: searchQuery, sites: sitesStr)
           
           for try await event in stream {
-            if Task.isCancelled { break }
+            guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
             
             if let text = event.text {
               self.searchProgressText = text
@@ -292,33 +298,42 @@ class SearchViewModel: ObservableObject {
             if event.type == "done" {
               // 与 Web v2.13.2 保持一致：给后端搜索结果缓存写入留出收尾时间。
               try? await Task.sleep(nanoseconds: searchStreamDoneCloseDelay)
+              guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
               break
             }
           }
           
-          if !Task.isCancelled {
-            // 应用自定义过滤规则
-            let filteredResults = await self.applyCustomFilter(to: accumulatedResults)
-            self.resourceResults = filteredResults
-            self.isLoading = false
-            self.hasSearched = true
-          }
+          guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+
+          // 应用自定义过滤规则
+          let filteredResults = await self.applyCustomFilter(to: accumulatedResults)
+          guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+
+          self.resourceResults = filteredResults
+          self.isLoading = false
+          self.hasSearched = true
         } catch {
           print("Stream Search error: \(error)")
-          if !Task.isCancelled {
-            do {
-              var fallbackResults = try await self.apiService.searchResources(
-                keyword: self.submittedQuery,
-                sites: sitesStr
-              )
-              fallbackResults = await self.applyCustomFilter(to: fallbackResults)
-              self.resourceResults = fallbackResults
-            } catch {
-              print("Fallback Search error: \(error)")
-            }
-            self.isLoading = false
-            self.hasSearched = true
+          guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+
+          do {
+            var fallbackResults = try await self.apiService.searchResources(
+              keyword: searchQuery,
+              sites: sitesStr
+            )
+            guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+
+            fallbackResults = await self.applyCustomFilter(to: fallbackResults)
+            guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+
+            self.resourceResults = fallbackResults
+          } catch {
+            print("Fallback Search error: \(error)")
           }
+          guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+
+          self.isLoading = false
+          self.hasSearched = true
         }
       }
       return
@@ -343,6 +358,7 @@ class SearchViewModel: ObservableObject {
       _ = await (
         movieTask.value, tvTask.value, collectionTask.value, personTask.value, shareTask.value
       )
+      guard searchGeneration == currentSearchGeneration else { return }
 
       // 基于第一页的结果计算"最佳结果"
       // 由于 media 是电影+电视剧的混合，我们需要把它们组合起来传递
@@ -353,6 +369,7 @@ class SearchViewModel: ObservableObject {
         shares: sharePag.items
       )
     }
+    guard searchGeneration == currentSearchGeneration else { return }
     isLoading = false
     hasSearched = true
   }
@@ -467,8 +484,10 @@ class SearchViewModel: ObservableObject {
         return shareItems.map { $0.toMediaInfo() }
       },
       processor: { @MainActor currentItems, newItems in
-        // 使用 MediaInfo 的去重逻辑
-        let uniqueNewItems = MediaInfo.deduplicate(newItems, existingKeys: &shareSeenKeys)
+        let uniqueNewItems = MediaInfo.deduplicateSubscriptionShareMedia(
+          newItems,
+          existingKeys: &shareSeenKeys
+        )
         if uniqueNewItems.isEmpty { return false }
         currentItems.append(contentsOf: uniqueNewItems)
         return true

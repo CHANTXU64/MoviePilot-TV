@@ -9,6 +9,7 @@ class DownloadTaskViewModel: ObservableObject {
   @Published var downloads: [DownloadingInfo] = []
 
   private let apiService = APIService.shared
+  private var downloadLoadGeneration = 0
 
   func initialLoad() async {
     if clients.isEmpty {
@@ -25,9 +26,16 @@ class DownloadTaskViewModel: ObservableObject {
   }
 
   func loadDownloads() async {
-    guard !selectedClient.isEmpty else { return }
+    downloadLoadGeneration += 1
+    let currentGeneration = downloadLoadGeneration
+    let clientName = selectedClient
+    guard !clientName.isEmpty else { return }
     do {
-      let newDownloads = try await apiService.fetchDownloading(clientName: selectedClient)
+      let newDownloads = try await apiService.fetchDownloading(clientName: clientName)
+      guard selectedClient == clientName, currentGeneration == downloadLoadGeneration else {
+        return
+      }
+
       let newDownloadIds = Set(newDownloads.map { $0.id })
       let existingDownloadsById = Dictionary(uniqueKeysWithValues: downloads.map { ($0.id, $0) })
 
@@ -83,10 +91,13 @@ class DownloadTaskViewModel: ObservableObject {
 
   @MainActor
   func deleteDownload(hash: String) async {
-    guard !selectedClient.isEmpty else { return }
+    let clientName = selectedClient
+    guard !clientName.isEmpty else { return }
     do {
       let (success, message) = try await apiService.deleteDownload(
-        clientName: selectedClient, hash: hash)
+        clientName: clientName, hash: hash)
+      guard selectedClient == clientName else { return }
+
       if success, let index = downloads.firstIndex(where: { $0.hash == hash }) {
         downloads.remove(at: index)
       } else {

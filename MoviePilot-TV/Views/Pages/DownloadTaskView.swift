@@ -53,11 +53,26 @@ struct DownloadTaskView: View {
       }
     }
     .task {
-      await viewModel.initialLoad()
-      while !Task.isCancelled {
-        await viewModel.loadDownloads()
-        try? await Task.sleep(nanoseconds: 3 * 1_000_000_000)  // 3 seconds
-      }
+      await DownloadTaskView.runAutoRefresh(
+        initialLoad: { await viewModel.initialLoad() },
+        loadDownloads: { await viewModel.loadDownloads() }
+      )
+    }
+  }
+
+  static let autoRefreshIntervalNanoseconds: UInt64 = 3 * 1_000_000_000
+
+  static func runAutoRefresh(
+    initialLoad: () async -> Void,
+    loadDownloads: () async -> Void,
+    sleep: (UInt64) async -> Void = { try? await Task.sleep(nanoseconds: $0) },
+    isCancelled: () -> Bool = { Task.isCancelled }
+  ) async {
+    await initialLoad()
+    while !isCancelled() {
+      await sleep(autoRefreshIntervalNanoseconds)
+      guard !isCancelled() else { break }
+      await loadDownloads()
     }
   }
 }

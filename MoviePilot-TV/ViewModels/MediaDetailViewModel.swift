@@ -271,19 +271,24 @@ class MediaDetailViewModel: ObservableObject {
     isUnsubscribing = true
     defer { isUnsubscribing = false }
 
-    let _ = try? await apiService.deleteSubscription(media: detail, season: detail.season)
+    let didCancel = await deleteResolvedSubscription()
 
     // 刷新所有订阅状态（包括全局和分季）
-    await refreshSubscriptionStatus()
+    await refreshSubscriptionStatus(forceRefresh: true)
 
-    // 通知首页刷新订阅列表
-    NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
+    if didCancel {
+      // 通知首页刷新订阅列表
+      NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
+    }
   }
 
   /// 刷新订阅状态：同时更新全局订阅和分季订阅（preloadTask 是唯一数据源）
-  func refreshSubscriptionStatus() async {
+  @discardableResult
+  func refreshSubscriptionStatus(forceRefresh: Bool = true) async -> Bool {
     // 使用 TaskGroup 或并发 Task 同时刷新全局和分季订阅
-    await withTaskGroup(of: Void.self) { group in
+    var resultCount = 0
+    var didRefreshAll = true
+    await withTaskGroup(of: Bool.self) { group in
       // 刷新全局订阅状态
       if detail.canDirectlySubscribe {
         let detail = self.detail
@@ -294,16 +299,24 @@ class MediaDetailViewModel: ObservableObject {
         }()
         group.addTask {
           do {
-            var isSubscribed = try await self.apiService.checkSubscription(media: detail)
+            var isSubscribed = try await self.apiService.checkSubscription(
+              media: detail,
+              forceRefresh: forceRefresh
+            )
             // 豆瓣/Bangumi 来源：用识别到的 tmdbId 补查
             if !isSubscribed, let tmdbMedia {
-              isSubscribed = try await self.apiService.checkSubscription(media: tmdbMedia)
+              isSubscribed = try await self.apiService.checkSubscription(
+                media: tmdbMedia,
+                forceRefresh: forceRefresh
+              )
             }
             await MainActor.run {
               self.preloadTask?.isSubscribed = isSubscribed
             }
+            return true
           } catch {
             print("[MediaDetailViewModel] 刷新订阅状态失败: \(error)")
+            return false
           }
         }
       }
@@ -311,9 +324,117 @@ class MediaDetailViewModel: ObservableObject {
       // 刷新分季订阅状态
       if let seasonVM = preloadTask?.seasonViewModel {
         group.addTask {
-          await seasonVM.checkSubscriptionStatus(limit: 10)
+          await seasonVM.checkSubscriptionStatus(forceRefresh: true)
         }
       }
+
+      for await didRefresh in group {
+        resultCount += 1
+        didRefreshAll = didRefreshAll && didRefresh
+      }
     }
+    return resultCount == 0 || didRefreshAll
+  }
+
+  private func deleteResolvedSubscription() async -> Bool {
+    var fallbackSubscriptionId: Int?
+    for media in subscriptionLookupCandidates() {
+      do {
+        guard let subscription = try await apiService.fetchSubscriptionLookup(media: media) else {
+          continue
+        }
+        if canDeleteByMediaId(subscription.mediaId),
+          subscription.isResolvedMediaId || media.apiMediaId?.hasPrefix("tmdb:") == true
+        {
+          return try await apiService.deleteSubscription(mediaId: subscription.mediaId, season: nil)
+        }
+        fallbackSubscriptionId = subscription.id
+      } catch {
+        print("[MediaDetailViewModel] 取消订阅失败: \(error)")
+      }
+    }
+    if let fallbackSubscriptionId {
+      do {
+        return try await apiService.deleteSubscription(id: fallbackSubscriptionId)
+      } catch {
+        print("[MediaDetailViewModel] 取消订阅失败: \(error)")
+      }
+    }
+    return false
+  }
+
+  func headerUnsubscribeConfirmationMessage() async -> String {
+    let baseMessage = SubscriptionCancelConfirmation.headerMessage(for: detail)
+    guard let warning = await resolvedTMDBMultiSeasonCancellationWarning() else {
+      return baseMessage
+    }
+    return "\(baseMessage)\n\n\(warning)"
+  }
+
+  private func resolvedTMDBMultiSeasonCancellationWarning() async -> String? {
+    guard detail.tmdb_id == nil, detail.douban_id != nil || detail.bangumi_id != nil else {
+      return nil
+    }
+    guard let mediaId = await resolvedMediaDeleteTargetForHeaderUnsubscribe(),
+      mediaId.hasPrefix("tmdb:"),
+      let tmdbId = Int(mediaId.dropFirst("tmdb:".count))
+    else {
+      return nil
+    }
+
+    do {
+      let subscriptions = try await apiService.fetchSubscriptions(forceRefresh: true)
+      let targetMediaId = "tmdb:\(tmdbId)"
+      let matchingSubscriptions = subscriptions.filter {
+        $0.type == "电视剧"
+          && MediaIdentifier.normalizedMediaIdentifier($0.apiMediaId) == targetMediaId
+      }
+      guard matchingSubscriptions.count > 1 else { return nil }
+      let seasons = Array(Set(matchingSubscriptions.compactMap(\.season))).sorted()
+      guard seasons.count > 1 else {
+        return "当前内容匹配到 TMDB 下 \(matchingSubscriptions.count) 条订阅，确认后会一并取消。"
+      }
+      return "当前内容匹配到 TMDB 下多个分季订阅：\(seasonListText(seasons))。确认后会一并取消。"
+    } catch {
+      print("[MediaDetailViewModel] 读取订阅取消影响范围失败: \(error)")
+      return nil
+    }
+  }
+
+  private func resolvedMediaDeleteTargetForHeaderUnsubscribe() async -> String? {
+    for media in subscriptionLookupCandidates() {
+      do {
+        guard let subscription = try await apiService.fetchSubscriptionLookup(media: media) else {
+          continue
+        }
+        if canDeleteByMediaId(subscription.mediaId),
+          subscription.isResolvedMediaId || media.apiMediaId?.hasPrefix("tmdb:") == true
+        {
+          return subscription.mediaId
+        }
+      } catch {
+        print("[MediaDetailViewModel] 读取订阅取消目标失败: \(error)")
+      }
+    }
+    return nil
+  }
+
+  private func seasonListText(_ seasons: [Int]) -> String {
+    guard seasons.allSatisfy({ $0 > 0 }) else {
+      return seasons.map { $0 == 0 ? "特别篇" : "第 \($0) 季" }.joined(separator: "、")
+    }
+    return "第 \(seasons.map(String.init).joined(separator: "、")) 季"
+  }
+
+  private func canDeleteByMediaId(_ mediaId: String) -> Bool {
+    !mediaId.hasPrefix("bangumi:")
+  }
+
+  private func subscriptionLookupCandidates() -> [MediaInfo] {
+    var candidates = [detail]
+    if detail.tmdb_id == nil, let tmdbId = preloadTask?.tmdbId {
+      candidates.append(MediaInfo(tmdb_id: tmdbId, type: detail.type))
+    }
+    return candidates
   }
 }
