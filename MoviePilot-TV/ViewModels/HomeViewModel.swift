@@ -211,7 +211,13 @@ class HomeViewModel: ObservableObject {
   func searchSubscribe(subscribe: Subscribe) async -> Bool {
     guard let id = subscribe.id else { return false }
     do {
-      return try await apiService.searchSubscription(id: id)
+      let success = try await apiService.searchSubscription(id: id)
+      if success {
+        await refreshSubscriptions(forceRefresh: true)
+        // 通知其他页面（如详情页 preloadTask）订阅搜索已触发，远端状态可能变化
+        NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
+      }
+      return success
     } catch {
       print("搜索订阅失败: \(error)")
       return false

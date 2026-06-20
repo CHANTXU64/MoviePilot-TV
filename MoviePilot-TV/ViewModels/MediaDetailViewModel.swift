@@ -324,7 +324,7 @@ class MediaDetailViewModel: ObservableObject {
       // 刷新分季订阅状态
       if let seasonVM = preloadTask?.seasonViewModel {
         group.addTask {
-          await seasonVM.checkSubscriptionStatus(limit: 10, forceRefresh: true)
+          await seasonVM.checkSubscriptionStatus(forceRefresh: true)
         }
       }
 

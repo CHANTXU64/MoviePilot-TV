@@ -165,6 +165,35 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(subscribeRequestCount, 2)
   }
 
+  func testSearchSubscriptionClearsCachedSubscriptionSnapshot() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
+      Subscribe(id: 901, name: "搜索前订阅", type: "电视剧", season: 1, tmdbid: 817001)
+    ])
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
+      Subscribe(id: 902, name: "搜索后订阅", type: "电视剧", season: 2, tmdbid: 817001)
+    ])
+    service.baseURL = "http://subscription-snapshot-tests.local"
+
+    let cachedSubscriptions = try await service.fetchSubscriptions(forceRefresh: true)
+    XCTAssertEqual(cachedSubscriptions.map(\.id), [901])
+
+    let searchSuccess = try await service.searchSubscription(id: 901)
+    XCTAssertTrue(searchSuccess)
+    let subscriptions = try await service.fetchSubscriptions()
+
+    XCTAssertEqual(subscriptions.map(\.id), [902])
+    let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(subscribeRequestCount, 2)
+  }
+
   func testFetchSubscriptionsRetriesWhenGenerationChangesAfterSnapshotCacheStore() async throws {
     XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
     defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
@@ -1161,6 +1190,10 @@ private actor SubscriptionSnapshotURLProtocolStub {
     requestCounts[path, default: 0] += 1
 
     if request.httpMethod == "DELETE", path.hasPrefix("/api/v1/subscribe/") {
+      return try jsonResponse(#"{"success":true}"#)
+    }
+
+    if request.httpMethod == "GET", path.hasPrefix("/api/v1/subscribe/search/") {
       return try jsonResponse(#"{"success":true}"#)
     }
 

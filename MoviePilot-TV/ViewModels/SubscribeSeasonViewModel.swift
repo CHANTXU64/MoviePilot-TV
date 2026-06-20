@@ -102,10 +102,7 @@ class SubscribeSeasonViewModel: ObservableObject {
     self.initialSeason = initialSeason
   }
 
-  func loadData(
-    checkSubscriptionLimit: Int? = nil,
-    forceRefreshSubscriptions: Bool = true
-  ) async {
+  func loadData(forceRefreshSubscriptions: Bool = true) async {
     guard !hasLoaded else { return }
     hasLoaded = true
     isLoading = true
@@ -119,7 +116,6 @@ class SubscribeSeasonViewModel: ObservableObject {
 
       // 执行初始分季数据获取
       try await fetchSeasonsInternal(
-        checkSubscriptionLimit: checkSubscriptionLimit,
         forceRefreshSubscriptions: forceRefreshSubscriptions
       )
     } catch {
@@ -141,7 +137,6 @@ class SubscribeSeasonViewModel: ObservableObject {
 
   /// 内部核心加载方法：获取分季详情并排序，随后检查入库和订阅状态
   private func fetchSeasonsInternal(
-    checkSubscriptionLimit: Int? = nil,
     forceRefreshSubscriptions: Bool = false
   ) async throws {
     if !selectedGroupId.isEmpty {
@@ -160,10 +155,7 @@ class SubscribeSeasonViewModel: ObservableObject {
     await checkSeasonsStatus()
 
     // 同时检查各季当前的订阅状态
-    await checkSubscriptionStatus(
-      limit: checkSubscriptionLimit,
-      forceRefresh: forceRefreshSubscriptions
-    )
+    await checkSubscriptionStatus(forceRefresh: forceRefreshSubscriptions)
   }
 
   /// 调用后端接口，比对媒体库中已有的集数，确定每一季的完整性
@@ -239,7 +231,7 @@ class SubscribeSeasonViewModel: ObservableObject {
 
   /// 查询当前媒体所有分季订阅摘要，填充 seasonSubscriptions 和 subscribedSeasons
   @discardableResult
-  func checkSubscriptionStatus(limit _: Int? = nil, forceRefresh: Bool = false) async -> Bool {
+  func checkSubscriptionStatus(forceRefresh: Bool = false) async -> Bool {
     do {
       try await refreshSubscriptionSummaries(forceRefresh: forceRefresh)
       return true
