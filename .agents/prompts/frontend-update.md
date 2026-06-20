@@ -43,6 +43,7 @@
 - 寻找表明当前兼容的 MoviePilot 版本的文本或徽章（通常格式类似 `MoviePilot-vX.Y.Z` 或包含相关版本号说明）。
 - 将提取到的版本号记录为 `<当前兼容版本>`。
 - 简要查阅 `.agents/ReviewPlan.md`，了解当前 TV 应用的架构现状和待办事项，以便在后续分析中结合上下文。
+- 读取 `docs/subscription-compatibility-checklist.md`，后续只要上游变更涉及订阅管理、媒体 ID、详情页 Header 订阅按钮、分季订阅、`episode_group`、`/subscribe/` 缓存或刷新语义，必须按该文档逐项复核。
 
 ### 2. 探测上游最新版本
 
@@ -62,6 +63,7 @@
   - **新增特性**：新增 API 端点或响应模型字段。
 - **核心业务逻辑 (`src/views/`, `src/pages/`, `src/components/`)**：
   - 重点排查：搜索流程、渐进式搜索、媒体详情展示、订阅管理、认证流程、图片代理 URL 构造。
+  - **订阅专项检查**：若变更涉及订阅卡片、详情页订阅按钮、分季订阅弹窗、`getMediaId()`、`episodeGroup`、订阅列表刷新或缓存策略，必须按 `docs/subscription-compatibility-checklist.md` 复核 TV 端是否仍与 Web/后端契约一致。
   - 提炼出前端在业务逻辑或用户交互上做了哪些实质性改变。
 
 ### 4. 深度分析后端变更
@@ -88,6 +90,8 @@
   - TV 端是否可能过早关闭连接。
 - **认证、Session 与 Cookie**：
   - Token、Cookie、登录状态刷新、图片防盗链和媒体服务器 cookie 代理。
+- **订阅专项契约**：
+  - 对照 `docs/subscription-compatibility-checklist.md` 检查 `/subscribe/`、`/subscribe/media/{mediaid}`、`/subscribe/{id}`、订阅搜索、暂停/恢复、重置、复用订阅、`episode_group`、`mediaid` fallback、缓存和刷新语义是否变化。
 
 ### 5. TV 端适配评估
 
@@ -138,6 +142,7 @@
 
 - [ ] 必须确认并更新 `README.md` 中所有兼容版本号为 `<前端最新版本>` / `<后端最新版本>` 对应目标版本，包括顶部徽章、兼容性说明和其他版本文本。只要本次适配目标版本变化，README 更新就是任务的一部分，不能等用户提醒。
 - [ ] 如果真实后端兼容测试流程、环境变量或覆盖范围发生变化，必须同步更新 `docs/backend-compatibility-tests.md`；不要把测试说明写回 `README.md`。
+- [ ] 如果订阅契约、媒体 ID、`episode_group`、Header 取消、订阅缓存或刷新时机发生变化，必须同步更新 `docs/subscription-compatibility-checklist.md`，并在报告中说明本次是否触发订阅专项风险。
 
 ## ✅ 真实后端兼容验证
 - [ ] 若存在 `.env.compatibility` 或用户提供了 `MOVIEPILOT_COMPAT_ENV_FILE`，必须运行真实后端兼容测试，至少覆盖 `BackendCompatibilityReadOnlyTests`。
@@ -158,5 +163,6 @@
   - 哪些后端变化判断为可继续沿用或暂不跟进。
   - README 是否已同步更新。
   - `docs/backend-compatibility-tests.md` 是否需要同步更新。
+  - `docs/subscription-compatibility-checklist.md` 是否需要同步更新；如果不需要，说明订阅专项契约未变化。
   - 真实后端兼容测试是否运行；如未运行，说明具体原因。
   - 实际运行过的验证命令和结果。
