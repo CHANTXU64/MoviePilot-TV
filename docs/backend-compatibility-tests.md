@@ -44,15 +44,21 @@ GitHub CI 没有真实后端账号，`ci.yml` 会显式跳过 `BackendCompatibil
 
 副作用测试默认开启。运行 `BackendCompatibilitySideEffectTests` 时，已配置真实后端的情况下会默认执行下面这些流程；如果某次兼容性检查不想跑某一项，可在 `.env.compatibility` 中把对应开关设为 `false`。
 
-- `MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_SEARCH=true`：取现有订阅列表最近几条，触发订阅搜索。
+- `MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_SEARCH=true`：取现有订阅列表中有 ID 和原始状态的条目，触发订阅搜索；执行后会把订阅恢复为原始状态，包括原本已暂停的 `state=S`。
 - `MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_UPDATE=true`：读取现有订阅详情，然后用原详情原样保存一次，不修改参数。
 - `MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_PAUSE_RESUME=true`：只取正在订阅的 `state=R` 条目，先暂停为 `S`，再恢复为 `R`；不会把原本已暂停的 `S` 条目恢复。
-- `MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_RESET_SEARCH=true`：取现有订阅列表最近几条，重置订阅后立即触发同一条订阅搜索。
+- `MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_RESET_SEARCH=true`：取现有订阅列表中有 ID 和原始状态的条目，重置订阅后立即触发同一条订阅搜索；执行后会把订阅恢复为原始状态，包括原本已暂停的 `state=S`。
 - `MOVIEPILOT_COMPAT_TEST_MANUAL_REORGANIZE=true`：取整理历史第一页最近几条，按 TV 端 `ReorganizeForm` 编码后并发触发后台手动重新整理。
 - `MOVIEPILOT_COMPAT_TEST_AI_REORGANIZE=true`：取整理历史第一页最近几条，批量触发 AI 重新整理，并检查返回的进度流。
 
 这些测试不会新增订阅、删除订阅、添加下载、删除下载或删除整理历史。订阅重置、订阅搜索、暂停/恢复订阅、手动/AI 重新整理都会触发真实后台动作；只应在你接受这些影响的后端上运行副作用套件。
 
 `MOVIEPILOT_COMPAT_SIDE_EFFECT_SUBSCRIPTION_LIMIT` 控制订阅测试取几条现有订阅，默认 `3`。`MOVIEPILOT_COMPAT_REORGANIZE_HISTORY_LIMIT` 控制整理测试取几条最近历史，默认 `2`。`MOVIEPILOT_COMPAT_REORGANIZE_CONCURRENT_COUNT` 控制手动重新整理的并发数量，默认 `2`。
+
+## 新增测试的副作用规则
+
+新增或修改真实后端兼容测试前，必须先判断它是否会改变真实后端状态或触发后台任务。只读套件只能读取、搜索并解码数据，不能调用订阅搜索、订阅 reset、订阅 update/delete、暂停/恢复、添加/删除下载、手动整理、AI 整理等接口。
+
+如果确实需要覆盖有副作用的接口，必须放进 `BackendCompatibilitySideEffectTests` 或等价的显式副作用套件，并满足以下条件：提供独立环境变量开关；限制目标数量和选择条件；保存目标原始状态并在成功、失败和取消路径中尽力恢复；在本文件说明真实影响。不要把会改变用户个人后端状态的检查混进“只读”或普通全量测试说明里。
 
 新增/删除订阅、下载任务增删改、删除整理历史等更强破坏性流程仍不在个人后端兼容套件内；如果后续要测，应使用可丢弃数据库、测试下载器和测试媒体目录的隔离 MoviePilot 后端。

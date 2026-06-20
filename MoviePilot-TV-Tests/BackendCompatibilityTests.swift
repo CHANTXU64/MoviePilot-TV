@@ -1795,25 +1795,60 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   }
 }
 
+private struct SubscriptionSideEffectTarget: Equatable {
+  let id: Int
+  let originalState: String
+}
+
 final class BackendCompatibilitySideEffectTests: XCTestCase {
+  @MainActor
+  func testSubscriptionSideEffectTargetsIncludePausedSubscriptionsAndKeepOriginalState() {
+    let targets = Self.subscriptionSideEffectTargets(
+      from: [
+        Subscribe(id: 101, name: "Paused", type: "电视剧", season: 1, state: "S"),
+        Subscribe(id: 102, name: "Running", type: "电视剧", season: 1, state: "R"),
+        Subscribe(name: "Missing ID", type: "电视剧", season: 1, state: "S"),
+      ],
+      limit: 3
+    )
+
+    XCTAssertEqual(
+      targets,
+      [
+        SubscriptionSideEffectTarget(id: 101, originalState: "S"),
+        SubscriptionSideEffectTarget(id: 102, originalState: "R"),
+      ]
+    )
+  }
+
   @MainActor
   func testSubscriptionSearchCompatibility() async throws {
     try await withSideEffectBackend(
       flagName: "MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_SEARCH",
       isEnabled: { $0.testSubscriptionSearch }
     ) { service, config in
-      let ids = try await recentSubscriptionIDs(service: service, limit: config.sideEffectSubscriptionLimit)
-      guard !ids.isEmpty else {
-        XCTFail("Subscription search side-effect test ran, but the backend has no subscriptions.")
+      let targets = try await recentSubscriptionSideEffectTargets(
+        service: service,
+        limit: config.sideEffectSubscriptionLimit
+      )
+      guard !targets.isEmpty else {
+        XCTFail(
+          "Subscription search side-effect test ran, but the backend has no subscriptions with IDs and states."
+        )
         return
       }
 
-      for id in ids {
-        do {
-          let success = try await service.searchSubscription(id: id)
-          XCTAssertTrue(success, "Subscription search request was rejected for subscription \(id).")
-        } catch {
-          XCTFail("Failed to trigger subscription search \(id): \(error)")
+      for target in targets {
+        await withRestoredSubscriptionState(
+          service: service,
+          target: target,
+          operationDescription: "trigger subscription search \(target.id)"
+        ) {
+          let success = try await service.searchSubscription(id: target.id)
+          XCTAssertTrue(
+            success,
+            "Subscription search request was rejected for subscription \(target.id)."
+          )
         }
       }
     }
@@ -1907,21 +1942,34 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
       flagName: "MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_RESET_SEARCH",
       isEnabled: { $0.testSubscriptionResetSearch }
     ) { service, config in
-      let ids = try await recentSubscriptionIDs(service: service, limit: config.sideEffectSubscriptionLimit)
-      guard !ids.isEmpty else {
-        XCTFail("Subscription reset/search side-effect test ran, but the backend has no subscriptions.")
+      let targets = try await recentSubscriptionSideEffectTargets(
+        service: service,
+        limit: config.sideEffectSubscriptionLimit
+      )
+      guard !targets.isEmpty else {
+        XCTFail(
+          "Subscription reset/search side-effect test ran, but the backend has no subscriptions with IDs and states."
+        )
         return
       }
 
-      for id in ids {
-        do {
-          let resetSuccess = try await service.resetSubscription(id: id)
-          XCTAssertTrue(resetSuccess, "Subscription reset request was rejected for subscription \(id).")
+      for target in targets {
+        await withRestoredSubscriptionState(
+          service: service,
+          target: target,
+          operationDescription: "reset and search subscription \(target.id)"
+        ) {
+          let resetSuccess = try await service.resetSubscription(id: target.id)
+          XCTAssertTrue(
+            resetSuccess,
+            "Subscription reset request was rejected for subscription \(target.id)."
+          )
 
-          let searchSuccess = try await service.searchSubscription(id: id)
-          XCTAssertTrue(searchSuccess, "Subscription search after reset was rejected for subscription \(id).")
-        } catch {
-          XCTFail("Failed to reset and immediately search subscription \(id): \(error)")
+          let searchSuccess = try await service.searchSubscription(id: target.id)
+          XCTAssertTrue(
+            searchSuccess,
+            "Subscription search after reset was rejected for subscription \(target.id)."
+          )
         }
       }
     }
@@ -2053,6 +2101,59 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
   private func recentSubscriptionIDs(service: APIService, limit: Int) async throws -> [Int] {
     let subscriptions = try await recentSubscriptions(service: service, limit: limit)
     return Array(subscriptions.compactMap(\.id).prefix(limit))
+  }
+
+  @MainActor
+  private func recentSubscriptionSideEffectTargets(
+    service: APIService,
+    limit: Int
+  ) async throws -> [SubscriptionSideEffectTarget] {
+    let subscriptions = try await service.fetchSubscriptions()
+    return Self.subscriptionSideEffectTargets(from: subscriptions, limit: limit)
+  }
+
+  @MainActor
+  private static func subscriptionSideEffectTargets(
+    from subscriptions: [Subscribe],
+    limit: Int
+  ) -> [SubscriptionSideEffectTarget] {
+    Array(
+      subscriptions.compactMap { subscription in
+        guard let id = subscription.id, let state = subscription.state else {
+          return nil
+        }
+        return SubscriptionSideEffectTarget(id: id, originalState: state)
+      }.prefix(limit)
+    )
+  }
+
+  @MainActor
+  private func withRestoredSubscriptionState(
+    service: APIService,
+    target: SubscriptionSideEffectTarget,
+    operationDescription: String,
+    operation: () async throws -> Void
+  ) async {
+    do {
+      try await operation()
+    } catch {
+      XCTFail("Failed to \(operationDescription): \(error)")
+    }
+
+    do {
+      let restored = try await service.updateSubscriptionStatus(
+        id: target.id,
+        state: target.originalState
+      )
+      XCTAssertTrue(
+        restored,
+        "Subscription \(target.id) state restore to \(target.originalState) was rejected."
+      )
+    } catch {
+      XCTFail(
+        "Failed to restore subscription \(target.id) to original state \(target.originalState): \(error)"
+      )
+    }
   }
 
   @MainActor
