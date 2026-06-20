@@ -26,12 +26,22 @@ class SystemViewModel: ObservableObject {
   // MARK: - 详情页设置
 
   private static let waitMediaDetailBackgroundImageKey = "waitMediaDetailBackgroundImage"
+  private static let autoSearchNewSubscriptionsKey = "autoSearchNewSubscriptions"
 
   /// 是否在 MediaDetail 首屏等待背景/海报预加载完成。默认开启。
   var waitMediaDetailBackgroundImage: Bool {
     get { Self.shouldWaitMediaDetailBackgroundImage }
     set {
       UserDefaults.standard.set(newValue, forKey: Self.waitMediaDetailBackgroundImageKey)
+      objectWillChange.send()
+    }
+  }
+
+  /// 新增订阅保存后是否立即触发一次手动搜索。默认开启，保持现有 TV 行为。
+  var autoSearchNewSubscriptions: Bool {
+    get { Self.shouldAutoSearchNewSubscriptions }
+    set {
+      UserDefaults.standard.set(newValue, forKey: Self.autoSearchNewSubscriptionsKey)
       objectWillChange.send()
     }
   }
@@ -305,6 +315,13 @@ class SystemViewModel: ObservableObject {
       return true
     }
     return UserDefaults.standard.bool(forKey: waitMediaDetailBackgroundImageKey)
+  }
+
+  static var shouldAutoSearchNewSubscriptions: Bool {
+    guard UserDefaults.standard.object(forKey: autoSearchNewSubscriptionsKey) != nil else {
+      return true
+    }
+    return UserDefaults.standard.bool(forKey: autoSearchNewSubscriptionsKey)
   }
 
   private func normalizeDefaultSearchSites(_ sites: Set<Int>) -> Set<Int> {
