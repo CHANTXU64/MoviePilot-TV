@@ -27,4 +27,25 @@ final class DownloadTaskViewRefreshLoopTests: XCTestCase {
 
     XCTAssertEqual(events, ["initialLoad", "sleep", "loadDownloads"])
   }
+
+  func testActiveDetailSubscriptionRefreshWaitsBeforeFirstRefresh() async {
+    var events: [String] = []
+    var refreshCount = 0
+
+    await MediaDetailView.runActiveSubscriptionRefreshLoop(
+      refreshIfNeeded: {
+        events.append("refresh")
+        refreshCount += 1
+      },
+      sleep: { interval in
+        XCTAssertEqual(interval, MediaDetailView.activeSubscriptionRefreshIntervalNanoseconds)
+        events.append("sleep")
+      },
+      isCancelled: {
+        refreshCount >= 1
+      }
+    )
+
+    XCTAssertEqual(events, ["sleep", "refresh"])
+  }
 }

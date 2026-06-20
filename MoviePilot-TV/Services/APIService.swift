@@ -312,6 +312,7 @@ class APIService: ObservableObject {
   private var subscriptionSnapshotFetchTask: Task<[Subscribe], Error>?
   #if DEBUG
   var subscriptionCacheTestHooks = SubscriptionCacheTestHooks()
+  private var subscriptionDebugRequestCount = 0
   #endif
 
   private func invalidateSubscriptionCaches() async {
@@ -405,6 +406,7 @@ class APIService: ObservableObject {
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     }
     request.httpBody = body
+    logSubscriptionRequestIfNeeded(endpoint: endpoint, method: method)
     let (data, response) = try await URLSession.shared.data(for: request)
     if let httpResponse = response as? HTTPURLResponse {
       if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
@@ -442,6 +444,14 @@ class APIService: ObservableObject {
       }
     }
     return data
+  }
+
+  private func logSubscriptionRequestIfNeeded(endpoint: String, method: String) {
+    #if DEBUG
+      guard endpoint.hasPrefix("/subscribe") else { return }
+      subscriptionDebugRequestCount += 1
+      Logger.debug("[SubscriptionRequest] #\(subscriptionDebugRequestCount) \(method) \(endpoint)")
+    #endif
   }
 
   private func buildEndpoint(path: String, params: [String: String?] = [:]) throws -> String {

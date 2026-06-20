@@ -791,6 +791,76 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertNil(preparedSeason)
   }
 
+  func testSubscribedSeasonPrimaryActionRefreshesBeforeUnsubscribeConfirmation() async throws {
+    let season = try makeSeason(number: 4)
+    var refreshedSeason: Int?
+    var unsubscribedSeason: Int?
+    var preparedSeason: Int?
+
+    await SubscribeSeasonContentView.performSeasonPrimaryAction(
+      season: season,
+      isSubscribed: true,
+      refreshSubscribedState: { seasonNumber in
+        refreshedSeason = seasonNumber
+        return false
+      },
+      showUnsubscribeConfirm: { unsubscribedSeason = $0 },
+      prepareSubscription: { preparedSeason = $0 }
+    )
+
+    XCTAssertEqual(refreshedSeason, 4)
+    XCTAssertNil(unsubscribedSeason)
+    XCTAssertNil(preparedSeason)
+  }
+
+  func testUnsubscribedSeasonPrimaryActionSkipsActionWhenRefreshFindsExistingSubscription()
+    async throws
+  {
+    let season = try makeSeason(number: 5)
+    var refreshedSeason: Int?
+    var unsubscribedSeason: Int?
+    var preparedSeason: Int?
+
+    await SubscribeSeasonContentView.performSeasonPrimaryAction(
+      season: season,
+      isSubscribed: false,
+      refreshSubscribedState: { seasonNumber in
+        refreshedSeason = seasonNumber
+        return true
+      },
+      showUnsubscribeConfirm: { unsubscribedSeason = $0 },
+      prepareSubscription: { preparedSeason = $0 }
+    )
+
+    XCTAssertEqual(refreshedSeason, 5)
+    XCTAssertNil(unsubscribedSeason)
+    XCTAssertNil(preparedSeason)
+  }
+
+  func testUnsubscribedSeasonPrimaryActionPreparesSubscribeAfterRefreshConfirmsMissingSubscription()
+    async throws
+  {
+    let season = try makeSeason(number: 5)
+    var refreshedSeason: Int?
+    var unsubscribedSeason: Int?
+    var preparedSeason: Int?
+
+    await SubscribeSeasonContentView.performSeasonPrimaryAction(
+      season: season,
+      isSubscribed: false,
+      refreshSubscribedState: { seasonNumber in
+        refreshedSeason = seasonNumber
+        return false
+      },
+      showUnsubscribeConfirm: { unsubscribedSeason = $0 },
+      prepareSubscription: { preparedSeason = $0 }
+    )
+
+    XCTAssertEqual(refreshedSeason, 5)
+    XCTAssertNil(unsubscribedSeason)
+    XCTAssertEqual(preparedSeason, 5)
+  }
+
   func testSeasonPrimaryActionKeepsSubscribeFallbackWithoutNavigationHandler() throws {
     let season = try makeSeason(number: 3)
     var preparedSeason: Int?

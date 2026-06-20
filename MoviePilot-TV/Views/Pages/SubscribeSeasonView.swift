@@ -56,6 +56,41 @@ struct SubscribeSeasonContentView: View {
     }
   }
 
+  static func performSeasonPrimaryAction(
+    season: TmdbSeason,
+    isSubscribed: Bool,
+    refreshSubscribedState: (Int) async -> Bool,
+    showUnsubscribeConfirm: (Int) -> Void,
+    prepareSubscription: (Int) -> Void
+  ) async {
+    let seasonNumber = season.season_number ?? 0
+    let latestSubscribedState = await refreshSubscribedState(seasonNumber)
+    performSeasonPrimaryAction(
+      seasonNumber: seasonNumber,
+      isSubscribed: isSubscribed,
+      latestSubscribedState: latestSubscribedState,
+      showUnsubscribeConfirm: showUnsubscribeConfirm,
+      prepareSubscription: prepareSubscription
+    )
+  }
+
+  static func performSeasonPrimaryAction(
+    seasonNumber: Int,
+    isSubscribed: Bool,
+    latestSubscribedState: Bool,
+    showUnsubscribeConfirm: (Int) -> Void,
+    prepareSubscription: (Int) -> Void
+  ) {
+    guard latestSubscribedState == isSubscribed else {
+      return
+    }
+    if latestSubscribedState {
+      showUnsubscribeConfirm(seasonNumber)
+    } else {
+      prepareSubscription(seasonNumber)
+    }
+  }
+
   var body: some View {
     VStack(spacing: 0) {
       // Error Banner
@@ -288,26 +323,53 @@ struct SubscribeSeasonContentView: View {
         text: footerText
       ),
       action: {
-        Self.performSeasonPrimaryAction(
-          season: season,
-          isSubscribed: isSubscribed,
-          onSeasonTap: onSeasonTap,
-          showUnsubscribeConfirm: { viewModel.showUnsubscribeConfirm = $0 },
-          prepareSubscription: { viewModel.prepareSubscription(seasonNumber: $0) }
-        )
+        Task { @MainActor in
+          await Self.performSeasonPrimaryAction(
+            season: season,
+            isSubscribed: isSubscribed,
+            refreshSubscribedState: { seasonNumber in
+              await viewModel.checkSubscriptionStatus(forceRefresh: true)
+              return viewModel.isSeasonSubscribed(seasonNumber)
+            },
+            showUnsubscribeConfirm: { viewModel.showUnsubscribeConfirm = $0 },
+            prepareSubscription: { viewModel.prepareSubscription(seasonNumber: $0) }
+          )
+        }
       }
     )
     .compositingGroup()
     .contextMenu {
       if isSubscribed {
         Button(role: .destructive) {
-          viewModel.showUnsubscribeConfirm = seasonNumber
+          Task { @MainActor in
+            await Self.performSeasonPrimaryAction(
+              season: season,
+              isSubscribed: true,
+              refreshSubscribedState: { seasonNumber in
+                await viewModel.checkSubscriptionStatus(forceRefresh: true)
+                return viewModel.isSeasonSubscribed(seasonNumber)
+              },
+              showUnsubscribeConfirm: { viewModel.showUnsubscribeConfirm = $0 },
+              prepareSubscription: { viewModel.prepareSubscription(seasonNumber: $0) }
+            )
+          }
         } label: {
           Label("取消订阅", systemImage: "minus.circle")
         }
       } else {
         Button {
-          viewModel.prepareSubscription(seasonNumber: seasonNumber)
+          Task { @MainActor in
+            await Self.performSeasonPrimaryAction(
+              season: season,
+              isSubscribed: false,
+              refreshSubscribedState: { seasonNumber in
+                await viewModel.checkSubscriptionStatus(forceRefresh: true)
+                return viewModel.isSeasonSubscribed(seasonNumber)
+              },
+              showUnsubscribeConfirm: { viewModel.showUnsubscribeConfirm = $0 },
+              prepareSubscription: { viewModel.prepareSubscription(seasonNumber: $0) }
+            )
+          }
         } label: {
           Label("订阅", systemImage: "plus.circle")
         }

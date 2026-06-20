@@ -232,6 +232,17 @@ struct MediaDetailView: View {
       )
       await viewModel.siteFilter.loadSites()
     }
+    .task(id: preloadTask.partialMedia.id) {
+      await Self.runActiveSubscriptionRefreshLoop {
+        guard Self.shouldRefreshActiveSubscriptionStatus(
+          preloadTask: preloadTask,
+          viewModel: viewModel
+        ) else {
+          return
+        }
+        await viewModel.refreshSubscriptionStatus()
+      }
+    }
     // 焦点恢复关键：当 fullDetail 加载完成后，应用完整详情。
     // MediaDetailView 从第一帧就存在于视图树中（用 partialMedia 初始化），
     // 在 fullDetail 就绪前不配置任何内容，仅由 Loading 遮罩覆盖。
@@ -325,6 +336,37 @@ struct MediaDetailView: View {
     return true
   }
 
+  static let activeSubscriptionRefreshIntervalNanoseconds: UInt64 = 60 * 1_000_000_000
+
+  @MainActor
+  static func runActiveSubscriptionRefreshLoop(
+    refreshIfNeeded: () async -> Void,
+    sleep: (UInt64) async -> Void = { try? await Task.sleep(nanoseconds: $0) },
+    isCancelled: () -> Bool = { Task.isCancelled }
+  ) async {
+    while !isCancelled() {
+      await sleep(activeSubscriptionRefreshIntervalNanoseconds)
+      guard !isCancelled() else { break }
+      await refreshIfNeeded()
+    }
+  }
+
+  @MainActor
+  static func shouldRefreshActiveSubscriptionStatus(
+    preloadTask: MediaPreloadTask,
+    viewModel: MediaDetailViewModel
+  ) -> Bool {
+    if viewModel.isSubscribed {
+      return true
+    }
+    if let seasonViewModel = preloadTask.seasonViewModel,
+      !seasonViewModel.subscribedSeasons.isEmpty
+    {
+      return true
+    }
+    return false
+  }
+
   static func performHeaderSubscribeAction(
     isSubscribed: Bool,
     showUnsubscribeConfirm: () -> Void,
@@ -343,11 +385,26 @@ struct MediaDetailView: View {
     showUnsubscribeConfirm: () -> Void,
     startSubscribe: () -> Void
   ) async {
-    if isSubscribed {
-      let latestSubscribedState = await refreshSubscribedState()
-      if latestSubscribedState {
-        showUnsubscribeConfirm()
-      }
+    let latestSubscribedState = await refreshSubscribedState()
+    performHeaderSubscribeAction(
+      isSubscribed: isSubscribed,
+      latestSubscribedState: latestSubscribedState,
+      showUnsubscribeConfirm: showUnsubscribeConfirm,
+      startSubscribe: startSubscribe
+    )
+  }
+
+  static func performHeaderSubscribeAction(
+    isSubscribed: Bool,
+    latestSubscribedState: Bool,
+    showUnsubscribeConfirm: () -> Void,
+    startSubscribe: () -> Void
+  ) {
+    guard latestSubscribedState == isSubscribed else {
+      return
+    }
+    if latestSubscribedState {
+      showUnsubscribeConfirm()
     } else {
       startSubscribe()
     }

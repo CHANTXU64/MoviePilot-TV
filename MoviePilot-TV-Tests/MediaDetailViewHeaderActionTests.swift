@@ -784,6 +784,60 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
+  func testUnsubscribedHeaderActionSkipsActionWhenRefreshFindsExistingSubscription()
+    async
+  {
+    var didRefresh = false
+    var didShowUnsubscribeConfirm = false
+    var didStartSubscribe = false
+
+    await MediaDetailView.performHeaderSubscribeAction(
+      isSubscribed: false,
+      refreshSubscribedState: {
+        didRefresh = true
+        return true
+      },
+      showUnsubscribeConfirm: {
+        didShowUnsubscribeConfirm = true
+      },
+      startSubscribe: {
+        didStartSubscribe = true
+      }
+    )
+
+    XCTAssertTrue(didRefresh)
+    XCTAssertFalse(didShowUnsubscribeConfirm)
+    XCTAssertFalse(didStartSubscribe)
+  }
+
+  @MainActor
+  func testUnsubscribedHeaderActionStartsSubscribeFlowAfterRefreshConfirmsMissingSubscription()
+    async
+  {
+    var didRefresh = false
+    var didShowUnsubscribeConfirm = false
+    var didStartSubscribe = false
+
+    await MediaDetailView.performHeaderSubscribeAction(
+      isSubscribed: false,
+      refreshSubscribedState: {
+        didRefresh = true
+        return false
+      },
+      showUnsubscribeConfirm: {
+        didShowUnsubscribeConfirm = true
+      },
+      startSubscribe: {
+        didStartSubscribe = true
+      }
+    )
+
+    XCTAssertTrue(didRefresh)
+    XCTAssertFalse(didShowUnsubscribeConfirm)
+    XCTAssertTrue(didStartSubscribe)
+  }
+
+  @MainActor
   func testUnsubscribedHeaderActionStartsSubscribeFlow() {
     var didShowUnsubscribeConfirm = false
     var didStartSubscribe = false
