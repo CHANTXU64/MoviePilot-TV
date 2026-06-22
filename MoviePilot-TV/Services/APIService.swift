@@ -390,6 +390,7 @@ class APIService: ObservableObject {
     token = nil
     storedUsername = nil
     storedPassword = nil
+    NotificationCenter.default.post(name: .sessionDidLogout, object: nil)
   }
 
   private func makeRequest(

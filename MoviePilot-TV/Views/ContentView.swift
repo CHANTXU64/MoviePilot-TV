@@ -41,9 +41,9 @@ struct ContentView: View {
             }
             .tag(4)
 
-          SystemView()
+          SystemView(isSelected: selectedTab == 5)
             .tabItem {
-              Label("系统", systemImage: "gear")
+              Label("设置", systemImage: "gear")
             }
             .tag(5)
         }

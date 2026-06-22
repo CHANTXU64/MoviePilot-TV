@@ -319,6 +319,15 @@ class MediaPreloader: ObservableObject {
         }
       }
       .store(in: &cancellables)
+
+    NotificationCenter.default.publisher(for: .sessionDidLogout)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in
+        Task { @MainActor [weak self] in
+          self?.clearAll()
+        }
+      }
+      .store(in: &cancellables)
   }
 
   /// 获取已有预加载任务，或创建并启动新任务
