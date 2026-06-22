@@ -178,6 +178,11 @@ class SystemViewModel: ObservableObject {
     }
   }
 
+  func logout() {
+    APIService.shared.logout()
+    checkKeychainStatus()
+  }
+
   /// 检查凭证的实际存储方式 (Keychain 或降级的 UserDefaults)
   func checkKeychainStatus() {
     // 从单一事实来源 APIService 获取当前 App 生效的 token

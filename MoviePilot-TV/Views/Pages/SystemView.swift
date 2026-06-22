@@ -5,9 +5,9 @@ struct SystemView: View {
   private static let pageAnimationDuration: TimeInterval = 0.42
   private static let topAnchorID = "SystemSettingsTopAnchor"
   private static let listWidth: CGFloat = 780
-  private static let previewWidth: CGFloat = 540
+  private static let previewWidth: CGFloat = 600
   private static let pageSpacing: CGFloat = 44
-  private static let columnSpacing: CGFloat = 270
+  private static let columnSpacing: CGFloat = 210
   private static let horizontalPadding: CGFloat = 240
   private static let previewTopPadding: CGFloat = 160
   private static let contentBottomPadding: CGFloat = 80
@@ -104,7 +104,7 @@ struct SystemView: View {
         Text(description)
           .foregroundStyle(.secondary)
           .multilineTextAlignment(.center)
-          .lineLimit(4)
+          .lineLimit(5)
           .frame(maxWidth: 600)
       }
     }
@@ -282,8 +282,7 @@ struct SystemView: View {
     .alert("退出登录", isPresented: $showLogoutConfirmation) {
       Button("取消", role: .cancel) {}
       Button("确认退出登录", role: .destructive) {
-        APIService.shared.logout()
-        viewModel.checkKeychainStatus()
+        viewModel.logout()
       }
     } message: {
       Text("确定要退出当前账号吗？")
@@ -584,6 +583,17 @@ struct SystemView: View {
       }
     }
 
+    switch (page, focusedItem) {
+    case (.hardFilter, .hardFilterRule(let ruleId)), (.softFilter, .softFilterRule(let ruleId)):
+      return filterRulePreviewDescription(for: ruleId)
+    case (.hardFilter, .hardFilterNone):
+      return "不对资源搜索结果应用硬过滤。（只影响 TV 端）"
+    case (.softFilter, .softFilterNone):
+      return "不对资源搜索结果应用软过滤。（只影响 TV 端）"
+    default:
+      break
+    }
+
     switch page {
     case .root:
       return nil
@@ -596,6 +606,14 @@ struct SystemView: View {
     case .softFilter:
       return "在资源搜索结果中，将不符合要求的资源灰置于结果末尾。（只影响 TV 端）"
     }
+  }
+
+  private func filterRulePreviewDescription(for ruleId: String) -> String {
+    guard let rule = viewModel.customFilterRules.first(where: { $0.id == ruleId }) else {
+      return "规则未加载"
+    }
+
+    return SystemFilterRulePreview.summary(for: rule) ?? "该规则没有附加过滤条件。"
   }
 
   private var selectedHardFilterTitle: String {
@@ -755,5 +773,44 @@ private struct SystemSettingsRootBackObserver: UIViewRepresentable {
       guard recognizer.state == .ended, isEnabled else { return }
       onExitPress?()
     }
+  }
+}
+
+enum SystemFilterRulePreview {
+  nonisolated static func summary(for rule: CustomRule) -> String? {
+    let parts = summaryParts(for: rule)
+    guard !parts.isEmpty else { return nil }
+    return parts.joined(separator: " · ")
+  }
+
+  nonisolated private static func summaryParts(for rule: CustomRule) -> [String] {
+    var parts: [String] = []
+
+    if let include = normalized(rule.include) {
+      parts.append("包含: \(include)")
+    }
+    if let exclude = normalized(rule.exclude) {
+      parts.append("排除: \(exclude)")
+    }
+    if let sizeRange = normalized(rule.size_range) {
+      parts.append("大小: \(sizeRange) MB")
+    }
+    if let seeders = normalized(rule.seeders) {
+      parts.append("做种≥\(seeders)")
+    }
+    if let publishTime = normalized(rule.publish_time) {
+      parts.append("发布: \(publishTime)分钟")
+    }
+
+    return parts
+  }
+
+  nonisolated private static func normalized(_ value: String?) -> String? {
+    guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !trimmed.isEmpty
+    else {
+      return nil
+    }
+    return trimmed
   }
 }

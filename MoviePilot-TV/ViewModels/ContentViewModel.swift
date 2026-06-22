@@ -45,8 +45,6 @@ class ContentViewModel: ObservableObject {
   }
 
   func logout() {
-    // 清理预加载缓存，避免残留旧 Cookie 的图片 URL、旧订阅状态等脏数据
-    MediaPreloader.shared.clearAll()
     apiService.logout()
   }
 }

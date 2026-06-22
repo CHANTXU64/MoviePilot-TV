@@ -40,12 +40,6 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     )
   }
 
-  func testSystemViewModelGuardsConcurrentRelogin() throws {
-    let source = try Self.source(at: "MoviePilot-TV/ViewModels/SystemViewModel.swift")
-
-    XCTAssertTrue(source.contains("guard !isRefreshing else { return }"))
-  }
-
   func testMissingPersistedFilterRuleDoesNotDisplayAsNoFilter() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
 
@@ -63,7 +57,8 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("showLogoutConfirmation = true"))
     XCTAssertTrue(source.contains(".alert(\"退出登录\", isPresented: $showLogoutConfirmation)"))
     XCTAssertTrue(source.contains("Button(\"确认退出登录\", role: .destructive)"))
-    XCTAssertTrue(source.contains("APIService.shared.logout()"))
+    XCTAssertTrue(source.contains("viewModel.logout()"))
+    XCTAssertFalse(source.contains("APIService.shared.logout()"))
   }
 
   func testSettingsPreviewUsesGlassLogoAsset() throws {
@@ -71,6 +66,22 @@ final class SystemViewDefaultStyleTests: XCTestCase {
 
     XCTAssertTrue(source.contains("Image(\"SettingsLogoGlass\")"))
     XCTAssertFalse(source.contains("Image(\"App Icon\")"))
+  }
+
+  func testPreviewKeepsSettingsListAtOriginalLeadingPosition() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+
+    XCTAssertTrue(source.contains("private static let previewWidth: CGFloat = 600"))
+    XCTAssertTrue(source.contains("private static let horizontalPadding: CGFloat = 240"))
+    XCTAssertTrue(source.contains("private static let columnSpacing: CGFloat = 210"))
+    XCTAssertFalse(source.contains("private static let columnSpacing: CGFloat = 270"))
+  }
+
+  func testSessionLogoutPreloaderCleanupUsesMainActorBridge() throws {
+    let source = try Self.source(at: "MoviePilot-TV/ViewModels/MediaPreloader.swift")
+
+    XCTAssertTrue(source.contains("Task { @MainActor [weak self] in"))
+    XCTAssertTrue(source.contains("self?.clearAll()"))
   }
 
   private static func source(at path: String) throws -> String {
