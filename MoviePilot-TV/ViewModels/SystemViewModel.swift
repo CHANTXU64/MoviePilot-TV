@@ -23,26 +23,30 @@ class SystemViewModel: ObservableObject {
   @Published var username: String = ""
   @Published var backendVersion: String? = nil
 
+  var appVersion: String {
+    AppVersionInfo.currentAppVersion()
+  }
+
+  var compatibleMoviePilotVersion: String {
+    AppVersionInfo.compatibleMoviePilotVersion
+  }
+
   // MARK: - 详情页设置
 
   private static let waitMediaDetailBackgroundImageKey = "waitMediaDetailBackgroundImage"
   private static let autoSearchNewSubscriptionsKey = "autoSearchNewSubscriptions"
 
   /// 是否在 MediaDetail 首屏等待背景/海报预加载完成。默认开启。
-  var waitMediaDetailBackgroundImage: Bool {
-    get { Self.shouldWaitMediaDetailBackgroundImage }
-    set {
-      UserDefaults.standard.set(newValue, forKey: Self.waitMediaDetailBackgroundImageKey)
-      objectWillChange.send()
+  @Published var waitMediaDetailBackgroundImage: Bool = true {
+    didSet {
+      UserDefaults.standard.set(waitMediaDetailBackgroundImage, forKey: Self.waitMediaDetailBackgroundImageKey)
     }
   }
 
   /// 新增订阅保存后是否立即触发一次手动搜索。默认开启，保持现有 TV 行为。
-  var autoSearchNewSubscriptions: Bool {
-    get { Self.shouldAutoSearchNewSubscriptions }
-    set {
-      UserDefaults.standard.set(newValue, forKey: Self.autoSearchNewSubscriptionsKey)
-      objectWillChange.send()
+  @Published var autoSearchNewSubscriptions: Bool = true {
+    didSet {
+      UserDefaults.standard.set(autoSearchNewSubscriptions, forKey: Self.autoSearchNewSubscriptionsKey)
     }
   }
 
@@ -137,13 +141,20 @@ class SystemViewModel: ObservableObject {
   }
 
   init() {
+    waitMediaDetailBackgroundImage = Self.shouldWaitMediaDetailBackgroundImage
+    autoSearchNewSubscriptions = Self.shouldAutoSearchNewSubscriptions
     checkKeychainStatus()
   }
 
   /// 手动刷新登录凭据（解决服务器重启或 Token 失效问题）
   func relogin() async {
+    guard !isRefreshing else { return }
+
     isRefreshing = true
     refreshMessage = nil
+    defer {
+      isRefreshing = false
+    }
 
     // 从 Keychain 获取保存的用户名密码
     let username =
@@ -155,7 +166,6 @@ class SystemViewModel: ObservableObject {
 
     guard let u = username, let p = password, !u.isEmpty, !p.isEmpty else {
       refreshMessage = "未找到保存的凭据，请重新登录"
-      isRefreshing = false
       return
     }
 
@@ -166,8 +176,6 @@ class SystemViewModel: ObservableObject {
     } catch {
       refreshMessage = "刷新失败: \(error.localizedDescription)"
     }
-
-    isRefreshing = false
   }
 
   /// 检查凭证的实际存储方式 (Keychain 或降级的 UserDefaults)
