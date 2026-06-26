@@ -57,12 +57,13 @@ enum AppVersionInfo {
     let core = normalized.split(whereSeparator: { $0 == "-" || $0 == "+" || $0 == " " }).first
     guard let core else { return nil }
 
-    let components = core.split(separator: ".").compactMap { part -> Int? in
-      let numericPrefix = part.prefix { $0.isNumber }
-      guard !numericPrefix.isEmpty else { return nil }
-      return Int(numericPrefix)
+    let components = core.split(separator: ".", omittingEmptySubsequences: false).map { part -> Int? in
+      guard !part.isEmpty, part.allSatisfy(\.isNumber) else { return nil }
+      return Int(part)
     }
-    return components.isEmpty ? nil : components
+    guard components.allSatisfy({ $0 != nil }) else { return nil }
+    let numericComponents = components.compactMap { $0 }
+    return numericComponents.isEmpty ? nil : numericComponents
   }
 }
 

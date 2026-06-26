@@ -32,6 +32,12 @@ final class SystemVersionInfoTests: XCTestCase {
     )
   }
 
+  func testMoviePilotVersionComparisonRejectsMalformedVersions() {
+    XCTAssertNil(AppVersionInfo.compareMoviePilotVersion("v2.beta.14", to: "v2.13.14"))
+    XCTAssertNil(AppVersionInfo.compareMoviePilotVersion("v2.13beta.14", to: "v2.13.14"))
+    XCTAssertNil(AppVersionInfo.compareMoviePilotVersion("release-2.13.14", to: "v2.13.14"))
+  }
+
   func testUnsupportedMoviePilotVersionBuildsWarningMessage() {
     let warning = BackendVersionWarning(
       backendVersion: "v2.13.13",

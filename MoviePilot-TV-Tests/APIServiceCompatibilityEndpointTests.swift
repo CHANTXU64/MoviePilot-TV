@@ -134,21 +134,62 @@ private struct CompatibilityEndpointServiceSnapshot {
   let token: String?
   let currentUser: Token?
   let settings: GlobalSettings?
+  let useImageCache: Bool
+  let serverURLDefaults: String?
+  let tokenKeychain: String?
+  let tokenDefaults: String?
+  let currentUserKeychain: String?
+  let currentUserDefaults: String?
 
+  @MainActor
   static func capture(service: APIService) -> CompatibilityEndpointServiceSnapshot {
     CompatibilityEndpointServiceSnapshot(
       baseURL: service.baseURL,
       token: service.token,
       currentUser: service.currentUser,
-      settings: service.settings
+      settings: service.settings,
+      useImageCache: service.useImageCache,
+      serverURLDefaults: UserDefaults.standard.string(forKey: "serverURL"),
+      tokenKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "accessToken"),
+      tokenDefaults: UserDefaults.standard.string(forKey: "accessToken"),
+      currentUserKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "currentUser"),
+      currentUserDefaults: UserDefaults.standard.string(forKey: "currentUser")
     )
   }
 
+  @MainActor
   func restore(to service: APIService) {
     service.baseURL = baseURL
     service.token = token
     service.currentUser = currentUser
     service.settings = settings
+    service.useImageCache = useImageCache
+    restoreDefaults(value: serverURLDefaults, forKey: "serverURL")
+    restoreCredential(account: "accessToken", keychainValue: tokenKeychain, defaultsValue: tokenDefaults)
+    restoreCredential(
+      account: "currentUser",
+      keychainValue: currentUserKeychain,
+      defaultsValue: currentUserDefaults
+    )
+  }
+
+  @MainActor
+  private func restoreDefaults(value: String?, forKey key: String) {
+    if let value {
+      UserDefaults.standard.set(value, forKey: key)
+    } else {
+      UserDefaults.standard.removeObject(forKey: key)
+    }
+  }
+
+  @MainActor
+  private func restoreCredential(account: String, keychainValue: String?, defaultsValue: String?) {
+    if let keychainValue {
+      _ = KeychainHelper.shared.save(keychainValue, service: "MoviePilot-TV", account: account)
+    } else {
+      _ = KeychainHelper.shared.delete(service: "MoviePilot-TV", account: account)
+    }
+    restoreDefaults(value: defaultsValue, forKey: account)
   }
 }
 

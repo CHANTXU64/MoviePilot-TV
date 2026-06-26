@@ -30,4 +30,23 @@ final class SubscribeModelCompatibilityTests: XCTestCase {
     XCTAssertEqual(episodePriority, ["1": 100, "2": 80])
     XCTAssertFalse(json.keys.contains("completed_episode"))
   }
+
+  func testExplicitNullNoteIsPreservedWhenSavingSubscription() throws {
+    let payload = """
+      {
+        "id": 43,
+        "name": "空 note 订阅",
+        "type": "电视剧",
+        "season": 1,
+        "note": null
+      }
+      """.data(using: .utf8)!
+
+    let subscribe = try JSONDecoder().decode(Subscribe.self, from: payload)
+    let encoded = try JSONEncoder().encode(subscribe)
+    let json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+
+    XCTAssertTrue(json.keys.contains("note"))
+    XCTAssertTrue(json["note"] is NSNull)
+  }
 }

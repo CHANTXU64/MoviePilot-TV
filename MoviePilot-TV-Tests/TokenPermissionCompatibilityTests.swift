@@ -39,7 +39,7 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     XCTAssertFalse(token.canAccess(.admin))
   }
 
-  func testStandardUserWithEmptyPermissionsCannotAccessFeaturePermissions() {
+  func testStandardUserWithEmptyPermissionsUsesWebDefaultPermissions() {
     let token = Token(
       access_token: "token",
       token_type: "bearer",
@@ -49,9 +49,9 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
       avatar: nil
     )
 
-    XCTAssertFalse(token.canAccess(.discovery))
-    XCTAssertFalse(token.canAccess(.search))
-    XCTAssertFalse(token.canAccess(.subscribe))
+    XCTAssertTrue(token.canAccess(.discovery))
+    XCTAssertTrue(token.canAccess(.search))
+    XCTAssertTrue(token.canAccess(.subscribe))
     XCTAssertFalse(token.canAccess(.manage))
     XCTAssertFalse(token.canAccess(.admin))
   }
@@ -88,8 +88,15 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     XCTAssertTrue(token.canAccess(.discovery))
     XCTAssertTrue(token.canAccess(.search))
     XCTAssertTrue(token.canAccess(.subscribe))
-    XCTAssertTrue(token.canAccess(.manage))
+    XCTAssertFalse(token.canAccess(.manage))
     XCTAssertFalse(token.canAccess(.admin))
+  }
+
+  func testMissingCurrentUserUsesWebDefaultTabsWithoutAdminEntry() {
+    XCTAssertEqual(
+      ContentViewModel.visibleTabs(for: nil),
+      [.home, .recommend, .explore, .search, .system]
+    )
   }
 
   func testSettingsConnectionEntryExplainsLimitedUserPermissions() {
@@ -126,7 +133,7 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
       access_token: "token",
       token_type: "bearer",
       super_user: FlexibleBool(false),
-      permissions: ["search": true],
+      permissions: ["discovery": false, "search": true],
       user_name: "searcher",
       avatar: nil
     )

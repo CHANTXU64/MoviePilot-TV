@@ -325,7 +325,7 @@ private extension Error {
       case .serverMessage(let message):
         return message.contains("权限") || message.localizedCaseInsensitiveContains("permission")
       case .unknown:
-        return true
+        return false
       case .invalidURL, .networkError, .decodingError:
         return false
       }

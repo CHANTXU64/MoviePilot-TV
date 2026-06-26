@@ -49,6 +49,49 @@ final class SystemSessionBehaviorTests: XCTestCase {
     )
   }
 
+  func testRefreshStoredSessionKeepsExistingSessionAndRetryMarkerWhenReloginFails() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SessionRefreshURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SessionRefreshURLProtocol.self) }
+
+    await SessionRefreshURLProtocol.stub.reset()
+    await SessionRefreshURLProtocol.stub.setLoginFailure(statusCode: 401)
+    let service = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    let markerKey = "lastSessionRefreshAppVersion"
+    let originalMarker = UserDefaults.standard.string(forKey: markerKey)
+    defer {
+      snapshot.restore(to: service)
+      restoreUserDefaultsString(originalMarker, forKey: markerKey)
+    }
+
+    service.baseURL = "https://session-refresh-tests.local"
+    service.token = "stale-token"
+    service.currentUser = Token(
+      access_token: "stale-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: ["discovery": true],
+      user_name: "stale-user",
+      avatar: nil
+    )
+    UserDefaults.standard.removeObject(forKey: markerKey)
+    _ = KeychainHelper.shared.save("test-user", service: "MoviePilot-TV", account: "username")
+    _ = KeychainHelper.shared.save("test-password", service: "MoviePilot-TV", account: "password")
+    UserDefaults.standard.set("test-user", forKey: "username")
+    UserDefaults.standard.set("test-password", forKey: "password")
+
+    let result = await service.refreshStoredSessionAfterAppUpdateIfNeeded(
+      appVersion: "v0.4.1"
+    )
+
+    XCTAssertEqual(result, .refreshFailed)
+    XCTAssertEqual(service.token, "stale-token")
+    XCTAssertEqual(service.currentUser?.user_name, "stale-user")
+    XCTAssertNil(UserDefaults.standard.string(forKey: markerKey))
+    XCTAssertEqual(effectiveCredential(account: "username"), "test-user")
+    XCTAssertEqual(effectiveCredential(account: "password"), "test-password")
+  }
+
   func testRefreshStoredSessionRestoresUserContextWhenVersionAlreadyRefreshed() async throws {
     let service = APIService.shared
     let snapshot = SystemSessionServiceSnapshot.capture(service: service)
@@ -298,9 +341,15 @@ private struct SystemSessionServiceSnapshot {
 
 private actor SessionRefreshURLProtocolStub {
   private var requests: [URLRequest] = []
+  private var loginFailureStatusCode: Int?
 
   func reset() {
     requests.removeAll()
+    loginFailureStatusCode = nil
+  }
+
+  func setLoginFailure(statusCode: Int?) {
+    loginFailureStatusCode = statusCode
   }
 
   func requestPaths() -> [String] {
@@ -313,15 +362,22 @@ private actor SessionRefreshURLProtocolStub {
       throw URLError(.badURL)
     }
 
+    let statusCode = loginFailureStatusCode ?? 200
     let response = HTTPURLResponse(
       url: url,
-      statusCode: 200,
+      statusCode: statusCode,
       httpVersion: nil,
       headerFields: ["Content-Type": "application/json"]
     )!
-    let data =
-      #"{"access_token":"fresh-token","token_type":"bearer","super_user":false,"permissions":{"discovery":true,"search":true,"subscribe":true,"manage":true},"user_name":"test-user","avatar":null}"#
-      .data(using: .utf8)!
+    let data: Data
+    if let loginFailureStatusCode {
+      data = #"{"success":false,"message":"login failed","status":\#(loginFailureStatusCode)}"#
+        .data(using: .utf8)!
+    } else {
+      data =
+        #"{"access_token":"fresh-token","token_type":"bearer","super_user":false,"permissions":{"discovery":true,"search":true,"subscribe":true,"manage":true},"user_name":"test-user","avatar":null}"#
+        .data(using: .utf8)!
+    }
     return (response, data)
   }
 }

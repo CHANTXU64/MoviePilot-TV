@@ -75,7 +75,7 @@ class ContentViewModel: ObservableObject {
   static func visibleTabs(for token: Token?) -> [Tab] {
     var tabs: [Tab] = [.home]
     let canAccess: (UserPermissionKey) -> Bool = { permission in
-      token?.canAccess(permission) ?? true
+      token?.canAccess(permission) ?? Token.defaultCanAccess(permission)
     }
 
     if canAccess(.discovery) {

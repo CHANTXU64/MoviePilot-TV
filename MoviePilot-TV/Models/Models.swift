@@ -236,6 +236,15 @@ struct Token: Codable {
   /// 头像
   let avatar: String?
 
+  static func defaultCanAccess(_ permission: UserPermissionKey) -> Bool {
+    switch permission {
+    case .discovery, .search, .subscribe:
+      return true
+    case .manage, .admin:
+      return false
+    }
+  }
+
   var canRequestSuperUserEndpoints: Bool {
     super_user?.value == true
   }
@@ -243,8 +252,7 @@ struct Token: Codable {
   func canAccess(_ permission: UserPermissionKey) -> Bool {
     if super_user?.value == true { return true }
     guard permission != .admin else { return false }
-    guard let permissions else { return true }
-    return permissions[permission.rawValue] == true
+    return permissions?[permission.rawValue] ?? Self.defaultCanAccess(permission)
   }
 }
 
@@ -1448,7 +1456,14 @@ struct Subscribe: Codable, Identifiable, Hashable {
     start_episode = try container.decodeIfPresent(Int.self, forKey: .start_episode)
     lack_episode = try container.decodeIfPresent(Int.self, forKey: .lack_episode)
     completed_episode = try container.decodeIfPresent(Int.self, forKey: .completed_episode)
-    note = try container.decodeIfPresent(JSONValue.self, forKey: .note)
+    if container.contains(.note) {
+      note =
+        try container.decodeNil(forKey: .note)
+        ? .null
+        : container.decode(JSONValue.self, forKey: .note)
+    } else {
+      note = nil
+    }
     tmdbid = try container.decodeIfPresent(Int.self, forKey: .tmdbid)
     doubanid = try container.decodeIfPresent(String.self, forKey: .doubanid)
     bangumiid = try container.decodeIfPresent(Int.self, forKey: .bangumiid)

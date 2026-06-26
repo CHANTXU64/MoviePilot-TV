@@ -478,7 +478,7 @@ class APIService: ObservableObject {
   }
 
   func canAccess(_ permission: UserPermissionKey) -> Bool {
-    currentUser?.canAccess(permission) ?? true
+    currentUser?.canAccess(permission) ?? Token.defaultCanAccess(permission)
   }
 
   func refreshStoredSessionAfterAppUpdateIfNeeded(
@@ -504,19 +504,24 @@ class APIService: ObservableObject {
 
     let username = storedUsername
     let password = storedPassword
-    token = nil
-    currentUser = nil
-    NotificationCenter.default.post(name: .sessionDidLogout, object: nil)
-    defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
 
     guard let username, let password, !username.isEmpty, !password.isEmpty else {
+      token = nil
+      currentUser = nil
+      NotificationCenter.default.post(name: .sessionDidLogout, object: nil)
+      defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
       return .clearedWithoutCredentials
     }
 
+    let previousToken = token
+    let previousCurrentUser = currentUser
     do {
       _ = try await login(username: username, password: password)
+      defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
       return .refreshed
     } catch {
+      token = previousToken
+      currentUser = previousCurrentUser
       storedUsername = username
       storedPassword = password
       return .refreshFailed
@@ -575,7 +580,18 @@ class APIService: ObservableObject {
       }
       guard (200...299).contains(httpResponse.statusCode) else {
         print("DEBUG: [makeRequest] HTTP Error: \(httpResponse.statusCode) for \(endpoint)")
-        throw APIError.unknown
+        struct ErrorPayload: Decodable {
+          let message: String?
+          let detail: String?
+        }
+        let payload = try? JSONDecoder().decode(ErrorPayload.self, from: data)
+        let message = payload?.message ?? payload?.detail
+        throw APIError.serverMessage(
+          [String(httpResponse.statusCode), message]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: ": ")
+        )
       }
     }
     return data
