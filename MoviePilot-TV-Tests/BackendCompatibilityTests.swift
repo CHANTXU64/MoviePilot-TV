@@ -4,10 +4,33 @@ import XCTest
 
 @testable import MoviePilot_TV
 
+private struct BackendCompatibilityAccount {
+  let label: String
+  let username: String
+  let password: String
+}
+
+private struct BackendCompatibilityAccountSnapshot {
+  let account: BackendCompatibilityAccount
+  let token: Token
+
+  @MainActor
+  var diagnostic: String {
+    let superUser = token.super_user?.value == true
+    let permissions = token.permissions?
+      .sorted { $0.key < $1.key }
+      .map { "\($0.key)=\($0.value)" }
+      .joined(separator: ", ") ?? "n/a"
+    return "account=\(account.username), label=\(account.label), super_user=\(superUser), permissions={\(permissions)}"
+  }
+}
+
 private struct BackendCompatibilityConfig {
   let baseURL: String
   let username: String
   let password: String
+  let accounts: [BackendCompatibilityAccount]
+  var activeAccount: BackendCompatibilityAccountSnapshot?
   let mediaServer: String?
   let requireMediaServer: Bool
   let requireLatestMedia: Bool
@@ -65,11 +88,19 @@ private struct BackendCompatibilityConfig {
       values["MOVIEPILOT_COMPAT_COLLECTION_IDS"]?.intListValue
       ?? values["MOVIEPILOT_COMPAT_COLLECTION_ID"]?.intValue.map { [$0] }
       ?? []
+    let accounts = configuredAccounts(
+      username: username,
+      password: password,
+      additionalUsernames: values["MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES"]?.listValue ?? [],
+      additionalPasswords: values["MOVIEPILOT_COMPAT_ADDITIONAL_PASSWORDS"]?.listValue ?? []
+    )
 
     return BackendCompatibilityConfig(
       baseURL: baseURL.trimmingTrailingSlashes,
       username: username,
       password: password,
+      accounts: accounts,
+      activeAccount: nil,
       mediaServer: values["MOVIEPILOT_COMPAT_MEDIA_SERVER"]?.nilIfBlank,
       requireMediaServer: values["MOVIEPILOT_COMPAT_REQUIRE_MEDIA_SERVER"]?.boolValue(
         fallback: false) ?? false,
@@ -164,11 +195,101 @@ private struct BackendCompatibilityConfig {
 
     return nil
   }
+
+  private static func configuredAccounts(
+    username: String,
+    password: String,
+    additionalUsernames: [String],
+    additionalPasswords: [String]
+  ) -> [BackendCompatibilityAccount] {
+    var seen = Set<String>()
+    var accounts: [BackendCompatibilityAccount] = []
+
+    func append(label: String, username: String, password: String) {
+      guard seen.insert(username).inserted else { return }
+      accounts.append(
+        BackendCompatibilityAccount(label: label, username: username, password: password)
+      )
+    }
+
+    append(label: "primary", username: username, password: password)
+    for (index, additionalUsername) in additionalUsernames.enumerated() {
+      let additionalPassword = additionalPasswords[safe: index]?.nilIfBlank ?? password
+      append(
+        label: "additional-\(index + 1)",
+        username: additionalUsername,
+        password: additionalPassword
+      )
+    }
+
+    return accounts
+  }
+
+  func activating(account: BackendCompatibilityAccount, token: Token) -> BackendCompatibilityConfig {
+    var config = self
+    config.activeAccount = BackendCompatibilityAccountSnapshot(account: account, token: token)
+    return config
+  }
+
+  @MainActor
+  var activeAccountDiagnostic: String {
+    activeAccount?.diagnostic ?? "account=\(username), label=primary, permissions=n/a"
+  }
+}
+
+extension Collection {
+  fileprivate subscript(safe index: Index) -> Element? {
+    indices.contains(index) ? self[index] : nil
+  }
+}
+
+final class BackendCompatibilityEnvironmentParsingTests: XCTestCase {
+  func testListValueKeepsEscapedCommasInsideItems() {
+    let value = #"ordinary-password,pa\,ss\,word,another-password"#
+
+    XCTAssertEqual(
+      value.listValue,
+      ["ordinary-password", "pa,ss,word", "another-password"]
+    )
+  }
+}
+
+@MainActor
+private func runBackendCompatibilityAccounts(
+  config: BackendCompatibilityConfig,
+  service: APIService,
+  operation: @MainActor (APIService, BackendCompatibilityConfig) async throws -> Void
+) async throws {
+  for account in config.accounts {
+    service.baseURL = config.baseURL
+    service.token = nil
+
+    let token: Token
+    do {
+      token = try await service.login(username: account.username, password: account.password)
+    } catch {
+      XCTFail("Failed to log in backend compatibility \(account.label) account \(account.username): \(error)")
+      continue
+    }
+
+    let scopedConfig = config.activating(account: account, token: token)
+    let diagnostic = scopedConfig.activeAccountDiagnostic
+    print("Backend compatibility running with \(diagnostic)")
+
+    do {
+      try await operation(service, scopedConfig)
+    } catch let skip as XCTSkip {
+      throw skip
+    } catch {
+      XCTFail("Backend compatibility failed for \(diagnostic): \(error)")
+    }
+  }
 }
 
 private struct BackendServiceSnapshot {
   let baseURL: String
   let token: String?
+  let currentUser: Token?
   let settings: GlobalSettings?
   let useImageCache: Bool
   let usernameKeychain: String?
@@ -181,6 +302,7 @@ private struct BackendServiceSnapshot {
     BackendServiceSnapshot(
       baseURL: service.baseURL,
       token: service.token,
+      currentUser: service.currentUser,
       settings: service.settings,
       useImageCache: service.useImageCache,
       usernameKeychain: KeychainHelper.shared.read(
@@ -200,6 +322,7 @@ private struct BackendServiceSnapshot {
   func restore(to service: APIService) {
     service.baseURL = baseURL
     service.token = token
+    service.currentUser = currentUser
     service.settings = settings
     service.useImageCache = useImageCache
     restoreCredential(
@@ -520,23 +643,36 @@ private struct BackendCompatibilityCollector {
 
 final class BackendCompatibilityReadOnlyTests: XCTestCase {
   @MainActor
-  func testReadOnlySystemAndConfigurationCompatibility() async throws {
+  func testReadOnlySystemEnvCompatibility() async throws {
     try await withReadOnlyBackend { service, _ in
-      _ = try await service.fetchSettings()
       _ = try await service.fetchSystemEnv()
+    }
+  }
+
+  @MainActor
+  func testReadOnlyDashboardCompatibility() async throws {
+    try await withReadOnlyBackend { service, _ in
       _ = try await service.fetchStatistic()
       let storage = try await service.fetchStorage()
       _ = try await service.fetchDownloaderInfo()
+
+      XCTAssertGreaterThanOrEqual(storage.total_storage, 0)
+      XCTAssertGreaterThanOrEqual(storage.used_storage, 0)
+    }
+  }
+
+  @MainActor
+  func testReadOnlySystemAndConfigurationCompatibility() async throws {
+    try await withReadOnlyBackend { service, _ in
+      _ = try await service.fetchSettings()
       _ = try await service.fetchSites()
+      _ = try await service.fetchMediaServers()
       _ = try await service.fetchIndexerSites()
       _ = try await service.fetchFilterRuleGroups()
       _ = try await service.fetchCustomFilterRules()
       _ = try await service.fetchStorages()
       _ = try await service.fetchDirectories()
       _ = try await service.fetchDownloadClients()
-
-      XCTAssertGreaterThanOrEqual(storage.total_storage, 0)
-      XCTAssertGreaterThanOrEqual(storage.used_storage, 0)
     }
   }
 
@@ -1760,11 +1896,11 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       snapshot.restore(to: service)
     }
 
-    service.baseURL = config.baseURL
-    service.token = nil
-
-    _ = try await service.login(username: config.username, password: config.password)
-    try await operation(service, config)
+    try await runBackendCompatibilityAccounts(
+      config: config,
+      service: service,
+      operation: operation
+    )
   }
 
   private func queryItemMap(from components: URLComponents) -> [String: String] {
@@ -2090,11 +2226,11 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
       snapshot.restore(to: service)
     }
 
-    service.baseURL = config.baseURL
-    service.token = nil
-
-    _ = try await service.login(username: config.username, password: config.password)
-    try await operation(service, config)
+    try await runBackendCompatibilityAccounts(
+      config: config,
+      service: service,
+      operation: operation
+    )
   }
 
   @MainActor
@@ -2177,11 +2313,11 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
     let form = ReorganizeForm(
       fileitem: history.src_fileitem,
       logid: history.id,
-      target_storage: history.dest_storage?.nilIfBlank ?? "local",
-      transfer_type: "",
+      target_storage: history.dest_storage?.nilIfBlank,
+      transfer_type: nil,
       target_path: "",
       min_filesize: 0,
-      scrape: false,
+      scrape: nil,
       from_history: false
     )
     let body = try JSONEncoder().encode(form)
@@ -2376,9 +2512,41 @@ private extension String {
   }
 
   var listValue: [String]? {
-    let items = split(separator: ",")
-      .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-      .filter { !$0.isEmpty }
+    var items: [String] = []
+    var current = ""
+    var isEscaping = false
+
+    for character in self {
+      if isEscaping {
+        if character == "," || character == "\\" {
+          current.append(character)
+        } else {
+          current.append("\\")
+          current.append(character)
+        }
+        isEscaping = false
+      } else if character == "\\" {
+        isEscaping = true
+      } else if character == "," {
+        let item = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !item.isEmpty {
+          items.append(item)
+        }
+        current = ""
+      } else {
+        current.append(character)
+      }
+    }
+
+    if isEscaping {
+      current.append("\\")
+    }
+
+    let item = current.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !item.isEmpty {
+      items.append(item)
+    }
+
     return items.isEmpty ? nil : items
   }
 

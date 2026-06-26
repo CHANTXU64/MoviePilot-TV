@@ -77,6 +77,14 @@ class HomeViewModel: ObservableObject {
 
   /// 从已启用的媒体服务器加载最近媒体
   private func loadLatestMedia() async {
+    guard apiService.canRequestSuperUserEndpoints else {
+      latestMediaByServer = [:]
+      latestMediaServers = []
+      if selectedLatestMediaServer != "" { selectedLatestMediaServer = "" }
+      if !latestMedia.isEmpty { latestMedia = [] }
+      return
+    }
+
     do {
       // 1. 获取所有配置的媒体服务器（如 Jellyfin/Emby/Plex）
       let servers = try await apiService.fetchMediaServers()

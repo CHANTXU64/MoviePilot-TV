@@ -30,11 +30,11 @@ class ReorganizeViewModel: ObservableObject {
     self.form = ReorganizeForm(
       fileitem: fileItem,
       logid: logIds.first ?? 0,
-      target_storage: targetStorage ?? "local",
-      transfer_type: "",
+      target_storage: targetStorage,
+      transfer_type: nil,
       target_path: "",
       min_filesize: 0,
-      scrape: false,
+      scrape: nil,
       from_history: false
     )
 
@@ -122,22 +122,24 @@ class ReorganizeViewModel: ObservableObject {
   private func updateForm(for newPath: String?) {
     guard let newPath = newPath, !newPath.isEmpty else {
       // 路径为空时, 恢复到`自动`条件
-      form.transfer_type = ""
+      form.target_storage = nil
+      form.transfer_type = nil
+      form.scrape = nil
       form.library_type_folder = nil
       form.library_category_folder = nil
       return
     }
 
     if let directory = directories.first(where: { $0.library_path == newPath }) {
-      form.target_storage = directory.library_storage ?? "local"
-      if form.transfer_type.isEmpty {
+      form.target_storage = directory.library_storage
+      if (form.transfer_type ?? "").isEmpty {
         form.transfer_type = directory.transfer_type
       }
       form.scrape = directory.scraping?.value ?? false
       form.library_category_folder = directory.library_category_folder?.value ?? false
       form.library_type_folder = directory.library_type_folder?.value ?? false
     } else {
-      if form.transfer_type.isEmpty {
+      if (form.transfer_type ?? "").isEmpty {
         form.transfer_type = "copy"
       }
       form.scrape = false

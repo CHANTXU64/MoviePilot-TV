@@ -248,12 +248,14 @@ class APIService: ObservableObject {
   static let shared = APIService()
 
   private var loginTask: Task<Void, Error>?
+  @Published var currentUser: Token?
 
   @Published var baseURL: String =
     UserDefaults.standard.string(forKey: "serverURL") ?? "http://192.168.1.1:3000"
   {
     didSet {
       UserDefaults.standard.set(baseURL, forKey: "serverURL")
+      currentUser = nil
       invalidateSubscriptionCachesAfterSessionChange()
     }
   }
@@ -269,6 +271,7 @@ class APIService: ObservableObject {
           UserDefaults.standard.set(token, forKey: "accessToken")
         }
       } else {
+        currentUser = nil
         if !KeychainHelper.shared.delete(service: "MoviePilot-TV", account: "accessToken") {
           print("Failed to delete keychain item for account: accessToken")
         }
@@ -388,9 +391,14 @@ class APIService: ObservableObject {
 
   func logout() {
     token = nil
+    currentUser = nil
     storedUsername = nil
     storedPassword = nil
     NotificationCenter.default.post(name: .sessionDidLogout, object: nil)
+  }
+
+  var canRequestSuperUserEndpoints: Bool {
+    currentUser?.canRequestSuperUserEndpoints ?? true
   }
 
   private func makeRequest(
@@ -569,6 +577,7 @@ class APIService: ObservableObject {
   /// 如果 Token 失效且有保存凭证，makeRequest 会自动触发重连并更新 Cookie。
   func validateTokenSilently() {
     guard isLoggedIn else { return }
+    guard canRequestSuperUserEndpoints else { return }
 
     Task {
       do {
@@ -601,6 +610,7 @@ class APIService: ObservableObject {
     let tokenResponse = try JSONDecoder().decode(Token.self, from: data)
 
     self.token = tokenResponse.access_token
+    self.currentUser = tokenResponse
     // 成功时保存凭据
     self.storedUsername = username
     self.storedPassword = password
@@ -1090,7 +1100,7 @@ class APIService: ObservableObject {
     struct ConfigValue: Decodable {
       let value: [StorageConf]
     }
-    let data = try await makeRequest(endpoint: "/system/setting/Storages")
+    let data = try await makeRequest(endpoint: "/system/setting/public/Storages")
     let config = try await decodeOrUnwrap(ConfigValue.self, from: data)
     return config.value
   }
@@ -1363,7 +1373,7 @@ class APIService: ObservableObject {
     struct ConfigValue: Decodable {
       let value: [TransferDirectoryConf]
     }
-    let data = try await makeRequest(endpoint: "/system/setting/Directories")
+    let data = try await makeRequest(endpoint: "/system/setting/public/Directories")
     let config = try await decodeOrUnwrap(ConfigValue.self, from: data)
     return config.value
   }
@@ -1373,7 +1383,7 @@ class APIService: ObservableObject {
     struct ConfigValue: Decodable {
       let value: [Int]?
     }
-    let data = try await makeRequest(endpoint: "/system/setting/IndexerSites")
+    let data = try await makeRequest(endpoint: "/system/setting/public/IndexerSites")
     let config = try await decodeOrUnwrap(ConfigValue.self, from: data)
     return config.value ?? []
   }

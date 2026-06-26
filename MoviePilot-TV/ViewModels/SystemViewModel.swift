@@ -222,6 +222,11 @@ class SystemViewModel: ObservableObject {
       ?? UserDefaults.standard.string(forKey: "username")
       ?? "未知"
 
+    guard APIService.shared.canRequestSuperUserEndpoints else {
+      self.backendVersion = nil
+      return
+    }
+
     do {
       let env = try await APIService.shared.fetchSystemEnv()
       self.backendVersion = env.VERSION
