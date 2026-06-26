@@ -11,6 +11,14 @@ enum APIError: Error {
   case unknown
 }
 
+enum SessionRefreshResult: Equatable {
+  case alreadyRefreshed
+  case noStoredSession
+  case clearedWithoutCredentials
+  case refreshed
+  case refreshFailed
+}
+
 nonisolated struct ApiResponse<T: Decodable>: Decodable {
   let success: Bool?
   let data: T?
@@ -246,9 +254,17 @@ actor APICache<Key: Hashable, Value> {
 @MainActor
 class APIService: ObservableObject {
   static let shared = APIService()
+  static let sessionRefreshAppVersionKey = "lastSessionRefreshAppVersion"
+  private static let keychainService = "MoviePilot-TV"
+  private static let accessTokenAccount = "accessToken"
+  private static let currentUserAccount = "currentUser"
 
   private var loginTask: Task<Void, Error>?
-  @Published var currentUser: Token?
+  @Published var currentUser: Token? = APIService.loadStoredCurrentUserIfTokenExists() {
+    didSet {
+      persistCurrentUser()
+    }
+  }
 
   @Published var baseURL: String =
     UserDefaults.standard.string(forKey: "serverURL") ?? "http://192.168.1.1:3000"
@@ -261,21 +277,28 @@ class APIService: ObservableObject {
   }
 
   @Published var token: String? =
-    KeychainHelper.shared.read(service: "MoviePilot-TV", account: "accessToken")
-    ?? UserDefaults.standard.string(forKey: "accessToken")
+    KeychainHelper.shared.read(service: keychainService, account: accessTokenAccount)
+    ?? UserDefaults.standard.string(forKey: accessTokenAccount)
   {
     didSet {
       invalidateSubscriptionCachesAfterSessionChange()
       if let token = token {
-        if !KeychainHelper.shared.save(token, service: "MoviePilot-TV", account: "accessToken") {
-          UserDefaults.standard.set(token, forKey: "accessToken")
+        if !KeychainHelper.shared.save(
+          token,
+          service: Self.keychainService,
+          account: Self.accessTokenAccount
+        ) {
+          UserDefaults.standard.set(token, forKey: Self.accessTokenAccount)
         }
       } else {
         currentUser = nil
-        if !KeychainHelper.shared.delete(service: "MoviePilot-TV", account: "accessToken") {
+        if !KeychainHelper.shared.delete(
+          service: Self.keychainService,
+          account: Self.accessTokenAccount
+        ) {
           print("Failed to delete keychain item for account: accessToken")
         }
-        UserDefaults.standard.removeObject(forKey: "accessToken")
+        UserDefaults.standard.removeObject(forKey: Self.accessTokenAccount)
       }
     }
   }
@@ -383,6 +406,59 @@ class APIService: ObservableObject {
     }
   }
 
+  private static func loadStoredCurrentUserIfTokenExists() -> Token? {
+    guard let storedToken = storedAccessToken else { return nil }
+    guard let currentUser = loadStoredCurrentUser() else { return nil }
+    guard currentUser.access_token == storedToken else { return nil }
+    return currentUser
+  }
+
+  private static var storedAccessToken: String? {
+    KeychainHelper.shared.read(service: keychainService, account: accessTokenAccount)
+      ?? UserDefaults.standard.string(forKey: accessTokenAccount)
+  }
+
+  private static func loadStoredCurrentUser() -> Token? {
+    guard
+      let json = KeychainHelper.shared.read(service: keychainService, account: currentUserAccount)
+        ?? UserDefaults.standard.string(forKey: currentUserAccount),
+      let data = json.data(using: .utf8)
+    else {
+      return nil
+    }
+    return try? JSONDecoder().decode(Token.self, from: data)
+  }
+
+  private func restoreCurrentUserFromStorage() -> Bool {
+    guard let storedToken = token else { return false }
+    guard let storedUser = Self.loadStoredCurrentUser() else { return false }
+    guard storedUser.access_token == storedToken else { return false }
+    currentUser = storedUser
+    return true
+  }
+
+  private func persistCurrentUser() {
+    guard let currentUser else {
+      if !KeychainHelper.shared.delete(service: Self.keychainService, account: Self.currentUserAccount)
+      {
+        print("Failed to delete keychain item for account: currentUser")
+      }
+      UserDefaults.standard.removeObject(forKey: Self.currentUserAccount)
+      return
+    }
+
+    guard
+      let data = try? JSONEncoder().encode(currentUser),
+      let json = String(data: data, encoding: .utf8)
+    else {
+      return
+    }
+
+    if !KeychainHelper.shared.save(json, service: Self.keychainService, account: Self.currentUserAccount) {
+      UserDefaults.standard.set(json, forKey: Self.currentUserAccount)
+    }
+  }
+
   private init() {}
 
   var isLoggedIn: Bool {
@@ -398,7 +474,53 @@ class APIService: ObservableObject {
   }
 
   var canRequestSuperUserEndpoints: Bool {
-    currentUser?.canRequestSuperUserEndpoints ?? true
+    currentUser?.canRequestSuperUserEndpoints == true
+  }
+
+  func canAccess(_ permission: UserPermissionKey) -> Bool {
+    currentUser?.canAccess(permission) ?? true
+  }
+
+  func refreshStoredSessionAfterAppUpdateIfNeeded(
+    appVersion: String = AppVersionInfo.currentAppVersion()
+  ) async -> SessionRefreshResult {
+    let normalizedAppVersion = appVersion.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalizedAppVersion.isEmpty, normalizedAppVersion != "未知" else {
+      return .noStoredSession
+    }
+
+    let defaults = UserDefaults.standard
+    if defaults.string(forKey: Self.sessionRefreshAppVersionKey) == normalizedAppVersion {
+      if token != nil, currentUser == nil {
+        _ = restoreCurrentUserFromStorage()
+      }
+      return .alreadyRefreshed
+    }
+
+    guard token != nil else {
+      defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
+      return .noStoredSession
+    }
+
+    let username = storedUsername
+    let password = storedPassword
+    token = nil
+    currentUser = nil
+    NotificationCenter.default.post(name: .sessionDidLogout, object: nil)
+    defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
+
+    guard let username, let password, !username.isEmpty, !password.isEmpty else {
+      return .clearedWithoutCredentials
+    }
+
+    do {
+      _ = try await login(username: username, password: password)
+      return .refreshed
+    } catch {
+      storedUsername = username
+      storedPassword = password
+      return .refreshFailed
+    }
   }
 
   private func makeRequest(
@@ -648,7 +770,16 @@ class APIService: ObservableObject {
   func fetchSettings() async throws -> GlobalSettings {
     do {
       let data = try await makeRequest(endpoint: "/system/global?token=moviepilot")
-      let response = try await decodeOrUnwrap(GlobalSettings.self, from: data)
+      var response = try await decodeOrUnwrap(GlobalSettings.self, from: data)
+      if token != nil {
+        do {
+          let userData = try await makeRequest(endpoint: "/system/global/user")
+          let userSettings = try await decodeOrUnwrap(GlobalSettings.self, from: userData)
+          response.mergeUserSettings(userSettings)
+        } catch {
+          print("DEBUG: [fetchSettings] Failed to fetch user settings: \(error)")
+        }
+      }
       self.settings = response
       return response
     } catch {

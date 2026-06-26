@@ -113,6 +113,44 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(searchRequestCount, 1)
   }
 
+  func testLoadDataSkipsFilterGroupsForStandardUserWithSubscribePermission() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer {
+      snapshot.restore(to: service)
+    }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    service.baseURL = "http://subscribe-sheet-tests.local"
+    service.currentUser = Token(
+      access_token: "standard-user",
+      token_type: "Bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        UserPermissionKey.discovery.rawValue: false,
+        UserPermissionKey.search.rawValue: false,
+        UserPermissionKey.subscribe.rawValue: true,
+        UserPermissionKey.manage.rawValue: false,
+      ],
+      user_name: "standard",
+      avatar: nil)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(id: 780, name: "普通订阅账号", type: "电影", tmdbid: 123459),
+      isNewSubscription: false
+    )
+
+    await viewModel.loadData()
+
+    XCTAssertEqual(viewModel.filterGroups.map(\.name), [])
+    let filterGroupsRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "GET", path: "/api/v1/system/setting/UserFilterRuleGroups")
+    XCTAssertEqual(filterGroupsRequestCount, 0)
+  }
+
   private func restoreUserDefaultsValue(_ value: Any?, forKey key: String) {
     if let value {
       UserDefaults.standard.set(value, forKey: key)
@@ -125,18 +163,21 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 private struct SubscribeSheetServiceSnapshot {
   let baseURL: String
   let serverURLDefaults: String?
+  let currentUser: Token?
 
   @MainActor
   static func capture(service: APIService) -> SubscribeSheetServiceSnapshot {
     SubscribeSheetServiceSnapshot(
       baseURL: service.baseURL,
-      serverURLDefaults: UserDefaults.standard.string(forKey: "serverURL")
+      serverURLDefaults: UserDefaults.standard.string(forKey: "serverURL"),
+      currentUser: service.currentUser
     )
   }
 
   @MainActor
   func restore(to service: APIService) {
     service.baseURL = baseURL
+    service.currentUser = currentUser
 
     if let serverURLDefaults {
       UserDefaults.standard.set(serverURLDefaults, forKey: "serverURL")
@@ -162,11 +203,22 @@ private actor SubscribeSheetURLProtocolStub {
     let path = request.url?.path ?? ""
     requestCounts["\(method) \(path)", default: 0] += 1
 
-    guard path.hasPrefix("/api/v1/subscribe") else {
+    let data: Data
+    switch (method, path) {
+    case ("GET", "/api/v1/site/rss"):
+      data = #"[]"#.data(using: .utf8)!
+    case ("GET", "/api/v1/download/clients"):
+      data = #"[]"#.data(using: .utf8)!
+    case ("GET", "/api/v1/system/setting/public/Directories"):
+      data = #"{"value":[]}"#.data(using: .utf8)!
+    case ("GET", "/api/v1/system/setting/UserFilterRuleGroups"):
+      data = #"{"value":[{"name":"普通规则组"}]}"#.data(using: .utf8)!
+    case let (_, path) where path.hasPrefix("/api/v1/subscribe"):
+      data = #"{"success":true}"#.data(using: .utf8)!
+    default:
       throw URLError(.badServerResponse)
     }
 
-    let data = #"{"success":true}"#.data(using: .utf8)!
     let response = HTTPURLResponse(
       url: request.url!,
       statusCode: 200,

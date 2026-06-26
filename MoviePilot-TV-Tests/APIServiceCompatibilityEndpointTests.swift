@@ -4,6 +4,84 @@ import XCTest
 
 @MainActor
 final class APIServiceCompatibilityEndpointTests: XCTestCase {
+  func testFetchSettingsReadsPublicBackendVersion() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
+    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.shared
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURL = "https://compatibility-endpoint-tests.local"
+    service.token = nil
+
+    let settings = try await service.fetchSettings()
+
+    XCTAssertEqual(settings.BACKEND_VERSION, "v2.13.14")
+    XCTAssertEqual(settings.FRONTEND_VERSION, "v2.13.15")
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    XCTAssertEqual(paths.filter { $0 == "/api/v1/system/global" }, ["/api/v1/system/global"])
+    let queries = await CompatibilityEndpointURLProtocol.stub.requestQueries()
+    XCTAssertEqual(
+      queries.compactMap { $0 }.filter { $0 == "token=moviepilot" },
+      ["token=moviepilot"]
+    )
+  }
+
+  func testFetchSettingsMergesLoggedInUserSettings() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
+    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.shared
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURL = "https://compatibility-endpoint-tests.local"
+    service.token = "token"
+
+    let settings = try await service.fetchSettings()
+
+    XCTAssertEqual(settings.BACKEND_VERSION, "v2.13.14")
+    XCTAssertEqual(settings.RECOGNIZE_SOURCE, "douban")
+    XCTAssertEqual(settings.USER_UNIQUE_ID, "compat-user")
+    XCTAssertEqual(settings.AI_AGENT_ENABLE?.value, true)
+    XCTAssertEqual(settings.SUBSCRIBE_SHARE_MANAGE?.value, true)
+
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    assertContainsSubsequence(
+      ["/api/v1/system/global", "/api/v1/system/global/user"],
+      in: paths
+    )
+  }
+
+  func testFetchSettingsKeepsPublicSettingsWhenLoggedInUserSettingsFails() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
+    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    await CompatibilityEndpointURLProtocol.stub.setUserSettingsFailure(statusCode: 404)
+    let service = APIService.shared
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURL = "https://compatibility-endpoint-tests.local"
+    service.token = "token"
+
+    let settings = try await service.fetchSettings()
+
+    XCTAssertEqual(settings.BACKEND_VERSION, "v2.13.14")
+    XCTAssertEqual(settings.FRONTEND_VERSION, "v2.13.15")
+    XCTAssertNil(settings.AI_AGENT_ENABLE)
+
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    assertContainsSubsequence(
+      ["/api/v1/system/global", "/api/v1/system/global/user"],
+      in: paths
+    )
+  }
+
   func testSystemConfigReadersUsePublicSettingEndpoints() async throws {
     XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
     defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
@@ -76,13 +154,23 @@ private struct CompatibilityEndpointServiceSnapshot {
 
 private actor CompatibilityEndpointURLProtocolStub {
   private var requests: [URLRequest] = []
+  private var userSettingsFailureStatusCode: Int?
 
   func reset() {
     requests.removeAll()
+    userSettingsFailureStatusCode = nil
+  }
+
+  func setUserSettingsFailure(statusCode: Int?) {
+    userSettingsFailureStatusCode = statusCode
   }
 
   func requestPaths() -> [String] {
     requests.map { $0.url?.path ?? "" }
+  }
+
+  func requestQueries() -> [String?] {
+    requests.map { $0.url?.query }
   }
 
   func response(for request: URLRequest) throws -> (HTTPURLResponse, Data) {
@@ -91,10 +179,30 @@ private actor CompatibilityEndpointURLProtocolStub {
       throw URLError(.badURL)
     }
 
-    let data = #"{"success":true,"data":{"value":[]}}"#.data(using: .utf8)!
+    let data: Data
+    let statusCode: Int
+    if url.path == "/api/v1/system/global" {
+      statusCode = 200
+      data =
+        #"{"success":true,"data":{"TMDB_IMAGE_DOMAIN":"image.tmdb.org","GLOBAL_IMAGE_CACHE":true,"BACKEND_VERSION":"v2.13.14","FRONTEND_VERSION":"v2.13.15"}}"#
+        .data(using: .utf8)!
+    } else if url.path == "/api/v1/system/global/user" {
+      if let userSettingsFailureStatusCode {
+        statusCode = userSettingsFailureStatusCode
+        data = #"{"success":false,"message":"not found"}"#.data(using: .utf8)!
+      } else {
+        statusCode = 200
+        data =
+          #"{"success":true,"data":{"AI_AGENT_ENABLE":true,"RECOGNIZE_SOURCE":"douban","USER_UNIQUE_ID":"compat-user","SUBSCRIBE_SHARE_MANAGE":true}}"#
+          .data(using: .utf8)!
+      }
+    } else {
+      statusCode = 200
+      data = #"{"success":true,"data":{"value":[]}}"#.data(using: .utf8)!
+    }
     let response = HTTPURLResponse(
       url: url,
-      statusCode: 200,
+      statusCode: statusCode,
       httpVersion: nil,
       headerFields: ["Content-Type": "application/json"]
     )!

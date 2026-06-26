@@ -19,9 +19,19 @@ class SystemViewModel: ObservableObject {
   @Published var refreshMessage: String? = nil
 
   // MARK: - 系统信息
+  static let limitedPermissionConnectionDescription = "当前用户权限不够，部分不可用功能已自动隐藏"
+
   @Published var serverURL: String = ""
   @Published var username: String = ""
   @Published var backendVersion: String? = nil
+
+  var connectionEntryDescription: String {
+    Self.connectionEntryDescription(
+      storageDescription: storageDescription,
+      isLoggedIn: APIService.shared.isLoggedIn,
+      canRequestSuperUserEndpoints: APIService.shared.canRequestSuperUserEndpoints
+    )
+  }
 
   var appVersion: String {
     AppVersionInfo.currentAppVersion()
@@ -29,6 +39,16 @@ class SystemViewModel: ObservableObject {
 
   var compatibleMoviePilotVersion: String {
     AppVersionInfo.compatibleMoviePilotVersion
+  }
+
+  static func connectionEntryDescription(
+    storageDescription: String,
+    isLoggedIn: Bool,
+    canRequestSuperUserEndpoints: Bool
+  ) -> String {
+    guard isLoggedIn else { return storageDescription }
+    guard !canRequestSuperUserEndpoints else { return storageDescription }
+    return limitedPermissionConnectionDescription
   }
 
   // MARK: - 详情页设置
@@ -221,18 +241,35 @@ class SystemViewModel: ObservableObject {
       KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username")
       ?? UserDefaults.standard.string(forKey: "username")
       ?? "未知"
+    self.backendVersion = normalizedBackendVersion(APIService.shared.settings?.BACKEND_VERSION)
 
-    guard APIService.shared.canRequestSuperUserEndpoints else {
-      self.backendVersion = nil
-      return
+    if APIService.shared.canRequestSuperUserEndpoints {
+      do {
+        let env = try await APIService.shared.fetchSystemEnv()
+        self.backendVersion = normalizedBackendVersion(env.VERSION) ?? backendVersion
+        return
+      } catch {
+        print("❌ [SystemViewModel] 获取后端版本号失败: \(error)")
+      }
     }
+
+    guard backendVersion == nil else { return }
 
     do {
-      let env = try await APIService.shared.fetchSystemEnv()
-      self.backendVersion = env.VERSION
+      let settings = try await APIService.shared.fetchSettings()
+      self.backendVersion = normalizedBackendVersion(settings.BACKEND_VERSION)
     } catch {
-      print("❌ [SystemViewModel] 获取后端版本号失败: \(error)")
+      print("❌ [SystemViewModel] 获取公开后端版本号失败: \(error)")
     }
+  }
+
+  private func normalizedBackendVersion(_ version: String?) -> String? {
+    guard let trimmed = version?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !trimmed.isEmpty
+    else {
+      return nil
+    }
+    return trimmed
   }
 
   // MARK: - 站点加载
@@ -255,6 +292,10 @@ class SystemViewModel: ObservableObject {
 
   /// 从后端加载自定义过滤规则
   func loadCustomFilterRules() async {
+    guard APIService.shared.canRequestSuperUserEndpoints else {
+      customFilterRules = []
+      return
+    }
     guard !isLoadingRules else { return }
     isLoadingRules = true
     do {

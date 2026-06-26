@@ -285,6 +285,11 @@ class MediaDetailViewModel: ObservableObject {
   /// 刷新订阅状态：同时更新全局订阅和分季订阅（preloadTask 是唯一数据源）
   @discardableResult
   func refreshSubscriptionStatus(forceRefresh: Bool = true) async -> Bool {
+    guard apiService.canAccess(.subscribe) else {
+      preloadTask?.isSubscribed = false
+      return true
+    }
+
     // 使用 TaskGroup 或并发 Task 同时刷新全局和分季订阅
     var resultCount = 0
     var didRefreshAll = true

@@ -174,6 +174,14 @@ enum JSONValue: Codable, Hashable {
   }
 }
 
+enum UserPermissionKey: String, Codable, CaseIterable {
+  case discovery
+  case search
+  case subscribe
+  case manage
+  case admin
+}
+
 /// 包装类型，用于处理 API 响应中可能是 String 或 Int 的字段，统一转为 String。
 /// 常见于 Plex 服务器中 ID 可能为数字的情况。如果是 nil 则保持为 nil。
 struct FlexibleString: Codable, Hashable, ExpressibleByStringLiteral {
@@ -221,7 +229,7 @@ struct Token: Codable {
   let token_type: String
   /// 是否属于超级管理员
   let super_user: FlexibleBool?
-  /// 普通用户功能权限；兼容测试用来记录失败账号上下文，业务逻辑暂不依赖它分支。
+  /// 普通用户功能权限；空字典表示未授予普通功能权限，nil 表示低版本/未知权限状态。
   let permissions: [String: Bool]?
   /// 用户名
   let user_name: String
@@ -229,7 +237,14 @@ struct Token: Codable {
   let avatar: String?
 
   var canRequestSuperUserEndpoints: Bool {
-    super_user?.value != false
+    super_user?.value == true
+  }
+
+  func canAccess(_ permission: UserPermissionKey) -> Bool {
+    if super_user?.value == true { return true }
+    guard permission != .admin else { return false }
+    guard let permissions else { return true }
+    return permissions[permission.rawValue] == true
   }
 }
 
@@ -1941,6 +1956,9 @@ struct SystemEnv: Codable {
 /// 全局应用设置
 struct GlobalSettings: Codable {
   var TMDB_IMAGE_DOMAIN: String?
+  var BACKEND_VERSION: String?
+  var FRONTEND_VERSION: String?
+  var BACKEND_DEV: Bool?
   /// ⚠️ **注意：请勿直接使用此值！**
   /// 由于 tvOS 17.x 及更早版本存在 WEBP 图片解码的兼容性问题，
   /// 关于图片缓存是否真实启用，应始终通过 `APIService.shared.useImageCache` 获取。
@@ -1953,11 +1971,21 @@ struct GlobalSettings: Codable {
 
   enum CodingKeys: String, CodingKey {
     case TMDB_IMAGE_DOMAIN
+    case BACKEND_VERSION
+    case FRONTEND_VERSION
+    case BACKEND_DEV
     case GLOBAL_IMAGE_CACHE
     case RECOGNIZE_SOURCE
     case USER_UNIQUE_ID
     case SUBSCRIBE_SHARE_MANAGE
     case AI_AGENT_ENABLE
+  }
+
+  mutating func mergeUserSettings(_ userSettings: GlobalSettings) {
+    RECOGNIZE_SOURCE = userSettings.RECOGNIZE_SOURCE ?? RECOGNIZE_SOURCE
+    USER_UNIQUE_ID = userSettings.USER_UNIQUE_ID ?? USER_UNIQUE_ID
+    SUBSCRIBE_SHARE_MANAGE = userSettings.SUBSCRIBE_SHARE_MANAGE ?? SUBSCRIBE_SHARE_MANAGE
+    AI_AGENT_ENABLE = userSettings.AI_AGENT_ENABLE ?? AI_AGENT_ENABLE
   }
 }
 

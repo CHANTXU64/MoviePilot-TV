@@ -14,7 +14,11 @@ final class SystemViewDefaultStyleTests: XCTestCase {
   func testContentViewLabelsSystemTabAsSettings() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/ContentView.swift")
 
-    XCTAssertTrue(source.contains("SystemView(isSelected: selectedTab == 5)"))
+    XCTAssertTrue(
+      source.contains(
+        "SystemView(isSelected: selectedTab == ContentViewModel.Tab.system.rawValue)"
+      )
+    )
     XCTAssertTrue(source.contains("Label(\"设置\", systemImage: \"gear\")"))
     XCTAssertFalse(source.contains("Label(\"系统\", systemImage: \"gear\")"))
   }
@@ -27,6 +31,15 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("\"APP 信息\""))
     XCTAssertTrue(source.contains("\"MoviePilot TV APP\""))
     XCTAssertFalse(source.contains("\"连接与版本\""))
+  }
+
+  func testSubscriptionCompatibilityChecklistTracksPermissionContractRisk() throws {
+    let source = try Self.source(at: "docs/subscription-compatibility-checklist.md")
+
+    XCTAssertTrue(source.contains("用户权限契约风险"))
+    XCTAssertTrue(source.contains("权限契约仍不稳定"))
+    XCTAssertTrue(source.contains("Token.super_user"))
+    XCTAssertTrue(source.contains("permissions.subscribe"))
   }
 
   func testSystemViewExitHandlersOnlyRunWhenSettingsTabIsActive() throws {

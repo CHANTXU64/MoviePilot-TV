@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://github.com/CHANTXU64/MoviePilot-TV/releases"><img src="https://img.shields.io/badge/Release-v0.3.1-blue?style=flat-square" alt="release"></a>
-  <a href="https://github.com/jxxghp/MoviePilot"><img src="https://img.shields.io/badge/MoviePilot-v2.13.6-darkviolet?style=flat-square" alt="MoviePilot Backend Version"></a>
+  <a href="https://github.com/jxxghp/MoviePilot"><img src="https://img.shields.io/badge/MoviePilot-v2.13.14-darkviolet?style=flat-square" alt="MoviePilot Backend Version"></a>
   <img src="https://img.shields.io/badge/platform-tvOS_17%2B-lightgrey.svg" alt="Platform">
   <img src="https://img.shields.io/badge/language-Swift-orange.svg?style=flat-square" alt="Language">
   <img src="https://img.shields.io/badge/UI-SwiftUI-blue.svg?style=flat-square" alt="UI Framework">
@@ -43,7 +43,7 @@
 ## ⚠️ 兼容性与已知问题
 
 - **tvOS 版本**: 支持 **tvOS 17.0+**。本项目主要在 **tvOS 26.0+** 环境下开发，UI 效果在该版本上表现最佳。
-- **后端版本**: 当前测试兼容的 MoviePilot 版本限定为：`v2.13.6`。由于 API 可能发生破坏性变更，其他版本后端可能出现功能异常或闪退。
+- **后端版本**: 当前测试兼容的 MoviePilot 版本限定为：`v2.13.14`。由于 API 可能发生破坏性变更，低于该版本的后端可能出现严重功能异常、数据丢失或闪退；App 启动时会提示风险，但用户仍可选择继续使用。
 - **版本维护**: 发布应用新版本或调整兼容 MoviePilot 版本时，请同步更新本文件顶部徽章、兼容性说明，以及设置页使用的 `AppVersionInfo.compatibleMoviePilotVersion`。
 - **账号登录**: **不支持**已开启双因素认证 (MFA/2FA) 的账号，请在关闭双因素认证后再登录。
 - **应用更新**: 本应用不对旧版 API 或已知 Bug 进行向下兼容修复。更新频率可能低于 MoviePilot 原版。

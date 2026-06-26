@@ -222,7 +222,12 @@ struct SystemView: View {
         Button {
           push(.connection)
         } label: {
-          row("连接", value: viewModel.storageDescription, showsDisclosure: true)
+          row(
+            "连接",
+            value: viewModel.connectionEntryDescription,
+            valueLineLimit: 2,
+            showsDisclosure: true
+          )
         }
         .focused($focusedItem, equals: .connection)
 
@@ -388,6 +393,7 @@ struct SystemView: View {
   private func row(
     _ title: String,
     value: String? = nil,
+    valueLineLimit: Int = 1,
     showsProgress: Bool = false,
     showsDisclosure: Bool = false
   ) -> some View {
@@ -407,7 +413,8 @@ struct SystemView: View {
           Text(value)
             .font(.body.weight(.semibold))
             .foregroundStyle(.secondary)
-            .lineLimit(1)
+            .lineLimit(valueLineLimit)
+            .multilineTextAlignment(.trailing)
             .truncationMode(.middle)
         }
 

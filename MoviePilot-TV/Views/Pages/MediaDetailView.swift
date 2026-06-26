@@ -36,7 +36,22 @@ struct MediaDetailView: View {
   @FocusState private var focusedButton: ButtonField?
   @State private var lastFocusedButton: ButtonField?
 
+  private var canSubscribeMedia: Bool {
+    APIService.shared.canAccess(.subscribe)
+  }
+
+  private var canSearchResources: Bool {
+    APIService.shared.canAccess(.search)
+  }
+
+  private var preferredHeaderFocus: ButtonField {
+    if canSubscribeMedia { return .subscribe }
+    if canSearchResources { return .search }
+    return .tmdbJump
+  }
+
   private var shouldShowSiteFilter: Bool {
+    guard canSearchResources else { return false }
     if focusedButton == .search || focusedButton == .sites {
       return true
     }
@@ -47,7 +62,7 @@ struct MediaDetailView: View {
   }
 
   private var firstVisibleRow: String {
-    if viewModel.detail.type == "电视剧" && viewModel.detail.tmdb_id != nil {
+    if canSubscribeMedia && viewModel.detail.type == "电视剧" && viewModel.detail.tmdb_id != nil {
       return "season"
     }
     if !viewModel.actorsPaginator.items.isEmpty {
@@ -213,7 +228,7 @@ struct MediaDetailView: View {
       }
     }
     .environmentObject(subscriptionHandler)
-    .defaultFocus($focusedButton, .subscribe)
+    .defaultFocus($focusedButton, preferredHeaderFocus)
     .ignoresSafeArea()
     .onDisappear {
       // 取消防抖任务，防止视图消失后仍发起无意义的预加载请求
@@ -222,7 +237,7 @@ struct MediaDetailView: View {
     }
     .task {
       if !hasAppeared {
-        focusedButton = .subscribe
+        focusedButton = preferredHeaderFocus
         hasAppeared = true
       }
       // 如果 fullDetail 已经就绪（预加载命中），立即应用（网络加载自动在后台启动）
@@ -231,7 +246,9 @@ struct MediaDetailView: View {
         to: viewModel,
         hasRefreshedSubscription: hasRefreshedSubscriptionAfterFullDetail
       )
-      await viewModel.siteFilter.loadSites()
+      if canSearchResources {
+        await viewModel.siteFilter.loadSites()
+      }
     }
     .task(id: preloadTask.partialMedia.id) {
       await Self.runActiveSubscriptionRefreshLoop {
@@ -283,7 +300,7 @@ struct MediaDetailView: View {
     // 电视剧首行是 season，由 preloadTask 异步加载，
     // 当分季数据实际加载完毕时通知 ViewModel（applyFullDetail 时可能尚未就绪）
     .onChange(of: preloadTask.isSeasonDataLoaded) { _, isLoaded in
-      if isLoaded && !viewModel.isFirstRowReady
+      if isLoaded && canSubscribeMedia && !viewModel.isFirstRowReady
         && viewModel.detail.type == "电视剧" && viewModel.detail.tmdb_id != nil
       {
         viewModel.isFirstRowReady = true
@@ -587,46 +604,50 @@ struct MediaDetailView: View {
               .disabled(isButtonLoading)
             }
 
-            // Primary subscribe button — 使用预加载的订阅状态
-            Button(action: {
-              if detail.canDirectlySubscribe {
-                handleHeaderSubscribe()
-              } else if detail.type == "电视剧" && detail.tmdb_id != nil {
-                isContentFocused = true
-              }
-            }) {
-              if viewModel.isUnsubscribing {
-                ProgressView()
-              } else {
-                let isDirect = detail.canDirectlySubscribe
-                let label = isDirect ? (isSubscribed ? "已订阅" : "订阅") : "分季订阅"
-                let icon =
-                  isDirect
-                  ? (isSubscribed ? "checkmark.circle.fill" : "plus.circle")
-                  : "list.bullet.circle"
+            if canSubscribeMedia {
+              // Primary subscribe button — 使用预加载的订阅状态
+              Button(action: {
+                if detail.canDirectlySubscribe {
+                  handleHeaderSubscribe()
+                } else if detail.type == "电视剧" && detail.tmdb_id != nil {
+                  isContentFocused = true
+                }
+              }) {
+                if viewModel.isUnsubscribing {
+                  ProgressView()
+                } else {
+                  let isDirect = detail.canDirectlySubscribe
+                  let label = isDirect ? (isSubscribed ? "已订阅" : "订阅") : "分季订阅"
+                  let icon =
+                    isDirect
+                    ? (isSubscribed ? "checkmark.circle.fill" : "plus.circle")
+                    : "list.bullet.circle"
 
-                Label(label, systemImage: icon)
+                  Label(label, systemImage: icon)
+                    .foregroundColor(.primary)
+                }
+              }
+              .focused($focusedButton, equals: .subscribe)
+              .disabled(viewModel.isUnsubscribing)
+            }
+
+            if canSearchResources {
+              // Search resources icon button
+              Button(action: {
+                let request = mediaActionHandler.searchResourcesTarget(
+                  for: viewModel.detail,
+                  sites: viewModel.siteFilter.sitesString
+                )
+                navigationPath.append(request)
+              }) {
+                Label("搜索资源", systemImage: "magnifyingglass")
                   .foregroundColor(.primary)
               }
+              .focused($focusedButton, equals: .search)
             }
-            .focused($focusedButton, equals: .subscribe)
-            .disabled(viewModel.isUnsubscribing)
-
-            // Search resources icon button
-            Button(action: {
-              let request = mediaActionHandler.searchResourcesTarget(
-                for: viewModel.detail,
-                sites: viewModel.siteFilter.sitesString
-              )
-              navigationPath.append(request)
-            }) {
-              Label("搜索资源", systemImage: "magnifyingglass")
-                .foregroundColor(.primary)
-            }
-            .focused($focusedButton, equals: .search)
 
             // Site selection button
-            if shouldShowSiteFilter {
+            if canSearchResources && shouldShowSiteFilter {
               Button(action: {
                 showSiteSelection = true
               }) {
@@ -689,7 +710,7 @@ struct MediaDetailView: View {
 
   @ViewBuilder
   private var seasonSubscriptionSection: some View {
-    if viewModel.detail.type == "电视剧" && viewModel.detail.tmdb_id != nil {
+    if canSubscribeMedia && viewModel.detail.type == "电视剧" && viewModel.detail.tmdb_id != nil {
       VStack(alignment: .leading, spacing: 0) {
         if let seasonVM = preloadTask.seasonViewModel {
           // 使用预加载的 SubscribeSeasonViewModel

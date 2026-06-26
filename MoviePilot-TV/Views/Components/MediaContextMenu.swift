@@ -9,8 +9,16 @@ struct MediaContextMenuItems: View {
   // 可选的自定义订阅操作
   var onSubscribe: ((MediaInfo) -> Void)? = nil
 
+  private var canSubscribeMedia: Bool {
+    APIService.shared.canAccess(.subscribe)
+  }
+
+  private var canSearchResources: Bool {
+    APIService.shared.canAccess(.search)
+  }
+
   var body: some View {
-    if let share = item.subscribeShare {
+    if canSubscribeMedia, let share = item.subscribeShare {
       // 订阅分享的专属菜单
       Button {
         subscriptionHandler.forkSheetRequest = share
@@ -51,29 +59,33 @@ struct MediaContextMenuItems: View {
       // ⚠️ 使用 peekTask（纯读取），避免在 body 渲染期间修改最近使用 (LRU) 状态
       let preloadedSubscribed = MediaPreloader.shared.peekTask(for: item)?.isSubscribed
 
-      Button {
-        if let onSubscribe = onSubscribe {
-          onSubscribe(item)
-        } else {
-          subscriptionHandler.handleSubscribe(item)
-        }
-      } label: {
-        if item.canDirectlySubscribe, let subscribed = preloadedSubscribed, subscribed {
-          Label("已订阅", systemImage: "checkmark.circle.fill")
-        } else {
-          Label(
-            item.canDirectlySubscribe ? "订阅" : "分季订阅",
-            systemImage: item.canDirectlySubscribe ? "plus.circle" : "list.bullet.circle")
+      if canSubscribeMedia {
+        Button {
+          if let onSubscribe = onSubscribe {
+            onSubscribe(item)
+          } else {
+            subscriptionHandler.handleSubscribe(item)
+          }
+        } label: {
+          if item.canDirectlySubscribe, let subscribed = preloadedSubscribed, subscribed {
+            Label("已订阅", systemImage: "checkmark.circle.fill")
+          } else {
+            Label(
+              item.canDirectlySubscribe ? "订阅" : "分季订阅",
+              systemImage: item.canDirectlySubscribe ? "plus.circle" : "list.bullet.circle")
+          }
         }
       }
 
-      Button {
-        Task { @MainActor in
-          let request = await mediaActionHandler.searchResourcesTargetUsingDefaultSites(for: item)
-          navigationPath.append(request)
+      if canSearchResources {
+        Button {
+          Task { @MainActor in
+            let request = await mediaActionHandler.searchResourcesTargetUsingDefaultSites(for: item)
+            navigationPath.append(request)
+          }
+        } label: {
+          Label("搜索资源", systemImage: "magnifyingglass")
         }
-      } label: {
-        Label("搜索资源", systemImage: "magnifyingglass")
       }
     }
   }

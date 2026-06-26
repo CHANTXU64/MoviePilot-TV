@@ -9,43 +9,53 @@ struct ContentView: View {
 
   var body: some View {
     Group {
-      if viewModel.isLoggedIn {
+      if viewModel.isPreparingStartupSession {
+        ProgressView("正在准备会话...")
+      } else if viewModel.isLoggedIn {
         TabView(selection: $selectedTab) {
           HomeView()
             .tabItem {
               Label("媒体库", systemImage: "play.tv")
             }
-            .tag(0)
+            .tag(ContentViewModel.Tab.home.rawValue)
 
-          RecommendView()
-            .tabItem {
-              Label("推荐", systemImage: "sparkles.tv")
-            }
-            .tag(1)
+          if viewModel.visibleTabs.contains(.recommend) {
+            RecommendView()
+              .tabItem {
+                Label("推荐", systemImage: "sparkles.tv")
+              }
+              .tag(ContentViewModel.Tab.recommend.rawValue)
+          }
 
-          ExploreView()
-            .tabItem {
-              Label("探索", systemImage: "safari")
-            }
-            .tag(2)
+          if viewModel.visibleTabs.contains(.explore) {
+            ExploreView()
+              .tabItem {
+                Label("探索", systemImage: "safari")
+              }
+              .tag(ContentViewModel.Tab.explore.rawValue)
+          }
 
-          SearchView()
-            .tabItem {
-              Label("搜索", systemImage: "magnifyingglass")
-            }
-            .tag(3)
+          if viewModel.visibleTabs.contains(.search) {
+            SearchView()
+              .tabItem {
+                Label("搜索", systemImage: "magnifyingglass")
+              }
+              .tag(ContentViewModel.Tab.search.rawValue)
+          }
 
-          StatusView()
-            .tabItem {
-              Label("状态", systemImage: "slider.horizontal.3")
-            }
-            .tag(4)
+          if viewModel.visibleTabs.contains(.status) {
+            StatusView()
+              .tabItem {
+                Label("状态", systemImage: "slider.horizontal.3")
+              }
+              .tag(ContentViewModel.Tab.status.rawValue)
+          }
 
-          SystemView(isSelected: selectedTab == 5)
+          SystemView(isSelected: selectedTab == ContentViewModel.Tab.system.rawValue)
             .tabItem {
               Label("设置", systemImage: "gear")
             }
-            .tag(5)
+            .tag(ContentViewModel.Tab.system.rawValue)
         }
         .foregroundColor(.primary)
         .onChange(of: selectedTab) { _, _ in
@@ -67,6 +77,16 @@ struct ContentView: View {
       } else {
         LoginView()
       }
+    }
+    .task {
+      await viewModel.prepareStartupIfNeeded()
+    }
+    .alert(item: $viewModel.backendVersionWarning) { warning in
+      Alert(
+        title: Text(warning.title),
+        message: Text(warning.message),
+        dismissButton: .default(Text("继续使用"))
+      )
     }
     .mediaActionAlerts()
     .environmentObject(mediaActionHandler)

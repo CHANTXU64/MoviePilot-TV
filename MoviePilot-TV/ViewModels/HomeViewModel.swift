@@ -158,6 +158,12 @@ class HomeViewModel: ObservableObject {
 
   /// 加载所有订阅并按电影/电视剧分类，且按 ID 倒序排列，也就是最新的在最前面
   func refreshSubscriptions(forceRefresh: Bool = false) async {
+    guard apiService.canAccess(.subscribe) else {
+      if !movieSubscriptions.isEmpty { movieSubscriptions = [] }
+      if !tvSubscriptions.isEmpty { tvSubscriptions = [] }
+      return
+    }
+
     do {
       let subs = try await apiService.fetchSubscriptions(forceRefresh: forceRefresh)
 
@@ -185,6 +191,7 @@ class HomeViewModel: ObservableObject {
 
   /// 切换订阅状态（运行/停止）
   func toggleSubscribeStatus(subscribe: Subscribe) async -> Bool {
+    guard apiService.canAccess(.subscribe) else { return false }
     guard let id = subscribe.id else { return false }
     // 前端逻辑：如果是 'S' (已停止) -> 切换到 'R' (运行)，否则 -> 'S' (停止)
     let newState = subscribe.state == "S" ? "R" : "S"
@@ -202,6 +209,7 @@ class HomeViewModel: ObservableObject {
 
   /// 重置订阅历史
   func resetSubscribe(subscribe: Subscribe) async -> Bool {
+    guard apiService.canAccess(.subscribe) else { return false }
     guard let id = subscribe.id else { return false }
     do {
       let success = try await apiService.resetSubscription(id: id)
@@ -217,6 +225,7 @@ class HomeViewModel: ObservableObject {
 
   /// 立即触发订阅搜索
   func searchSubscribe(subscribe: Subscribe) async -> Bool {
+    guard apiService.canAccess(.subscribe) else { return false }
     guard let id = subscribe.id else { return false }
     do {
       let success = try await apiService.searchSubscription(id: id)
@@ -234,6 +243,7 @@ class HomeViewModel: ObservableObject {
 
   /// 删除订阅
   func deleteSubscribe(subscribe: Subscribe) async -> Bool {
+    guard apiService.canAccess(.subscribe) else { return false }
     guard let id = subscribe.id else { return false }
     do {
       let success = try await apiService.deleteSubscription(id: id)
