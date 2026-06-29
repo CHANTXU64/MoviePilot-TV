@@ -7,6 +7,7 @@ struct MediaDetailView: View {
   @StateObject private var subscriptionHandler = SubscriptionHandler()
   @Environment(\.scenePhase) private var scenePhase
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
+  @ObservedObject private var apiService = APIService.shared
   /// 预加载任务：订阅状态、TMDB 识别、分季信息的唯一数据源
   @ObservedObject var preloadTask: MediaPreloadTask
   /// 由 ContainerView 传入，当第二页首行内容就绪时回写 true，控制 Loading 遮罩显隐
@@ -37,17 +38,22 @@ struct MediaDetailView: View {
   @State private var lastFocusedButton: ButtonField?
 
   private var canSubscribeMedia: Bool {
-    APIService.shared.canAccess(.subscribe)
+    apiService.canAccess(.subscribe)
   }
 
   private var canSearchResources: Bool {
-    APIService.shared.canAccess(.search)
+    apiService.canAccess(.search)
   }
 
-  private var preferredHeaderFocus: ButtonField {
+  private var canJumpToTMDB: Bool {
+    viewModel.detail.douban_id != nil || viewModel.detail.bangumi_id != nil
+  }
+
+  private var preferredHeaderFocus: ButtonField? {
     if canSubscribeMedia { return .subscribe }
     if canSearchResources { return .search }
-    return .tmdbJump
+    if canJumpToTMDB { return .tmdbJump }
+    return nil
   }
 
   private var shouldShowSiteFilter: Bool {
@@ -228,7 +234,6 @@ struct MediaDetailView: View {
       }
     }
     .environmentObject(subscriptionHandler)
-    .defaultFocus($focusedButton, preferredHeaderFocus)
     .ignoresSafeArea()
     .onDisappear {
       // 取消防抖任务，防止视图消失后仍发起无意义的预加载请求
@@ -236,8 +241,10 @@ struct MediaDetailView: View {
       similarPreloadDebounce?.cancel()
     }
     .task {
-      if !hasAppeared {
+      if !hasAppeared, let preferredHeaderFocus {
         focusedButton = preferredHeaderFocus
+        hasAppeared = true
+      } else if !hasAppeared {
         hasAppeared = true
       }
       // 如果 fullDetail 已经就绪（预加载命中），立即应用（网络加载自动在后台启动）
@@ -575,7 +582,7 @@ struct MediaDetailView: View {
           // Action Buttons — Apple TV style: primary + icon buttons
           HStack(spacing: 20) {
             // TMDB Jump Button — 复用 MediaActionHandler 逻辑，传入预加载的 tmdbId
-            if viewModel.detail.douban_id != nil || viewModel.detail.bangumi_id != nil {
+            if canJumpToTMDB {
               let targetTmdbId = preloadTask.tmdbId ?? viewModel.detail.tmdb_id
               let isButtonLoading = targetTmdbId == nil
 

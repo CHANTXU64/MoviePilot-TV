@@ -97,6 +97,43 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("self?.clearAll()"))
   }
 
+  func testContentViewNormalizesHiddenSelectedTabOnAppear() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/ContentView.swift")
+
+    XCTAssertTrue(source.contains(".onAppear {"))
+    XCTAssertTrue(
+      source.contains(
+        "selectedTab = ContentViewModel.resolvedSelectedTab(selectedTab, visibleTabs: viewModel.visibleTabs)"
+      )
+    )
+  }
+
+  func testMediaDetailHeaderFocusOnlyTargetsVisiblePermittedActions() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
+
+    XCTAssertTrue(source.contains("@ObservedObject private var apiService = APIService.shared"))
+    XCTAssertTrue(source.contains("private var canJumpToTMDB: Bool"))
+    XCTAssertTrue(source.contains("private var preferredHeaderFocus: ButtonField?"))
+    XCTAssertTrue(source.contains("if !hasAppeared, let preferredHeaderFocus"))
+    XCTAssertFalse(source.contains(".defaultFocus($focusedButton, preferredHeaderFocus)"))
+  }
+
+  func testSystemViewModelRechecksPermissionBeforePublishingCustomRules() throws {
+    let source = try Self.source(at: "MoviePilot-TV/ViewModels/SystemViewModel.swift")
+
+    XCTAssertTrue(source.contains("let rules = try await APIService.shared.fetchCustomFilterRules()"))
+    XCTAssertTrue(source.contains("guard APIService.shared.canRequestSuperUserEndpoints else {"))
+    XCTAssertTrue(source.contains("customFilterRules = rules"))
+  }
+
+  func testRecommendBackendCompatibilityScansShelvesIndependently() throws {
+    let source = try Self.source(at: "MoviePilot-TV-Tests/BackendCompatibilityTests.swift")
+
+    XCTAssertTrue(source.contains("for shelf in RecommendViewModel.allShelves {"))
+    XCTAssertTrue(source.contains("\"recommend shelf \\(shelf.title)\""))
+    XCTAssertFalse(source.contains("\"recommend shelves\""))
+  }
+
   private static func source(at path: String) throws -> String {
     let testFileURL = URL(fileURLWithPath: #filePath)
     let repositoryRoot = testFileURL.deletingLastPathComponent().deletingLastPathComponent()

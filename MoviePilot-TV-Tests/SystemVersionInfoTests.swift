@@ -50,4 +50,16 @@ final class SystemVersionInfoTests: XCTestCase {
     XCTAssertTrue(warning.message.contains("严重功能异常或数据丢失"))
     XCTAssertTrue(warning.message.contains("仍可继续使用"))
   }
+
+  func testUnknownMoviePilotVersionBuildsUnconfirmedWarningMessage() {
+    let warning = BackendVersionWarning(
+      backendVersion: "未知",
+      requiredVersion: "v2.13.14"
+    )
+
+    XCTAssertEqual(warning.id, "unknown|v2.13.14")
+    XCTAssertEqual(warning.title, "无法确认 MoviePilot 后端版本")
+    XCTAssertTrue(warning.message.contains("当前后端版本：无法确认"))
+    XCTAssertFalse(warning.title.contains("版本过低"))
+  }
 }

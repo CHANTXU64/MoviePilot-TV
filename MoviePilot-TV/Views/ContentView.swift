@@ -58,6 +58,9 @@ struct ContentView: View {
             .tag(ContentViewModel.Tab.system)
         }
         .foregroundColor(.primary)
+        .onAppear {
+          selectedTab = ContentViewModel.resolvedSelectedTab(selectedTab, visibleTabs: viewModel.visibleTabs)
+        }
         .onChange(of: viewModel.visibleTabs) { _, visibleTabs in
           selectedTab = ContentViewModel.resolvedSelectedTab(selectedTab, visibleTabs: visibleTabs)
         }

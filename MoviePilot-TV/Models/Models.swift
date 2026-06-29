@@ -254,6 +254,30 @@ struct Token: Codable {
     guard permission != .admin else { return false }
     return permissions?[permission.rawValue] ?? Self.defaultCanAccess(permission)
   }
+
+  func withoutPersistedAccessToken() -> Token {
+    Token(
+      access_token: "",
+      token_type: token_type,
+      super_user: super_user,
+      permissions: permissions,
+      user_name: user_name,
+      avatar: avatar
+    )
+  }
+
+  func withRestoredAccessToken(_ storedToken: String) -> Token? {
+    guard access_token == storedToken || access_token.isEmpty else { return nil }
+    guard access_token.isEmpty else { return self }
+    return Token(
+      access_token: storedToken,
+      token_type: token_type,
+      super_user: super_user,
+      permissions: permissions,
+      user_name: user_name,
+      avatar: avatar
+    )
+  }
 }
 
 /// 媒体库统计概览

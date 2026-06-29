@@ -241,7 +241,8 @@ class SystemViewModel: ObservableObject {
       KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username")
       ?? UserDefaults.standard.string(forKey: "username")
       ?? "未知"
-    self.backendVersion = normalizedBackendVersion(APIService.shared.settings?.BACKEND_VERSION)
+    let cachedBackendVersion = normalizedBackendVersion(APIService.shared.settings?.BACKEND_VERSION)
+    self.backendVersion = cachedBackendVersion
 
     if APIService.shared.canRequestSuperUserEndpoints {
       do {
@@ -253,11 +254,9 @@ class SystemViewModel: ObservableObject {
       }
     }
 
-    guard backendVersion == nil else { return }
-
     do {
       let settings = try await APIService.shared.fetchSettings()
-      self.backendVersion = normalizedBackendVersion(settings.BACKEND_VERSION)
+      self.backendVersion = normalizedBackendVersion(settings.BACKEND_VERSION) ?? backendVersion
     } catch {
       print("❌ [SystemViewModel] 获取公开后端版本号失败: \(error)")
     }
@@ -298,8 +297,16 @@ class SystemViewModel: ObservableObject {
     }
     guard !isLoadingRules else { return }
     isLoadingRules = true
+    defer {
+      isLoadingRules = false
+    }
     do {
-      customFilterRules = try await APIService.shared.fetchCustomFilterRules()
+      let rules = try await APIService.shared.fetchCustomFilterRules()
+      guard APIService.shared.canRequestSuperUserEndpoints else {
+        customFilterRules = []
+        return
+      }
+      customFilterRules = rules
       print("✅ [SystemViewModel] 加载到 \(customFilterRules.count) 个自定义过滤规则")
       // 如果选中的规则 ID 不在列表中，清除选择
       if let selectedHardId = selectedHardFilterRuleId,
@@ -317,7 +324,6 @@ class SystemViewModel: ObservableObject {
     } catch {
       print("❌ [SystemViewModel] 加载自定义过滤规则失败: \(error)")
     }
-    isLoadingRules = false
   }
 
   // MARK: - 静态方法：供 ViewModel 层读取当前选中规则

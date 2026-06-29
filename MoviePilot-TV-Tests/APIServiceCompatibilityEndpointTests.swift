@@ -102,8 +102,8 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
       user_name: "limited-user",
       avatar: nil
     )
-    clearCredential(account: "username")
-    clearCredential(account: "password")
+    setCredential(account: "username", value: "limited-user")
+    setCredential(account: "password", value: "stale-password")
 
     let settings = try await service.fetchSettings()
 
@@ -118,6 +118,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
       ["/api/v1/system/global", "/api/v1/system/global/user"],
       in: paths
     )
+    XCTAssertFalse(paths.contains("/api/v1/login/access-token"))
   }
 
   func testSystemConfigReadersUsePublicSettingEndpoints() async throws {
@@ -168,6 +169,12 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
   private func clearCredential(account: String) {
     _ = KeychainHelper.shared.delete(service: "MoviePilot-TV", account: account)
     UserDefaults.standard.removeObject(forKey: account)
+  }
+
+  private func setCredential(account: String, value: String) {
+    if !KeychainHelper.shared.save(value, service: "MoviePilot-TV", account: account) {
+      UserDefaults.standard.set(value, forKey: account)
+    }
   }
 }
 

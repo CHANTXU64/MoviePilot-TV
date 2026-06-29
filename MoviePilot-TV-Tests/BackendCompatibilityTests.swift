@@ -1166,13 +1166,13 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     config: BackendCompatibilityConfig,
     collector: inout BackendCompatibilityCollector
   ) async {
-    await runBackendCompatibilityStep(
-      "recommend shelves",
-      service: service,
-      config: config,
-      requirement: .permission(.discovery)
-    ) {
-      for shelf in RecommendViewModel.allShelves {
+    for shelf in RecommendViewModel.allShelves {
+      await runBackendCompatibilityStep(
+        "recommend shelf \(shelf.title)",
+        service: service,
+        config: config,
+        requirement: .permission(.discovery)
+      ) {
         let items = try await service.fetchRecommend(path: shelf.id, page: 1)
         collector.addMedia(items, surface: "recommend shelf \(shelf.title)")
       }

@@ -71,19 +71,29 @@ nonisolated struct BackendVersionWarning: Identifiable, Equatable {
   let backendVersion: String?
   let requiredVersion: String
 
+  private var normalizedBackendVersion: String? {
+    guard let trimmed = backendVersion?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !trimmed.isEmpty,
+      trimmed != "未知"
+    else {
+      return nil
+    }
+    return trimmed
+  }
+
   var id: String {
-    "\(backendVersion ?? "unknown")|\(requiredVersion)"
+    "\(normalizedBackendVersion ?? "unknown")|\(requiredVersion)"
   }
 
   var title: String {
-    if backendVersion == nil {
+    if normalizedBackendVersion == nil {
       return "无法确认 MoviePilot 后端版本"
     }
     return "MoviePilot 后端版本过低"
   }
 
   var message: String {
-    let currentVersion = backendVersion ?? "无法确认"
+    let currentVersion = normalizedBackendVersion ?? "无法确认"
     return
       "当前后端版本：\(currentVersion)\nMoviePilot-TV 需要 \(requiredVersion) 或更高版本。低版本后端可能带来严重功能异常或数据丢失，请尽快升级后端。如仍需临时使用，仍可继续使用。"
   }

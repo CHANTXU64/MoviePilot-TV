@@ -14,7 +14,7 @@ enum APIError: Error {
 enum SessionRefreshResult: Equatable {
   case alreadyRefreshed
   case noStoredSession
-  case clearedWithoutCredentials
+  case skippedWithoutCredentials
   case refreshed
   case refreshFailed
 }
@@ -409,8 +409,7 @@ class APIService: ObservableObject {
   private static func loadStoredCurrentUserIfTokenExists() -> Token? {
     guard let storedToken = storedAccessToken else { return nil }
     guard let currentUser = loadStoredCurrentUser() else { return nil }
-    guard currentUser.access_token == storedToken else { return nil }
-    return currentUser
+    return currentUser.withRestoredAccessToken(storedToken)
   }
 
   private static var storedAccessToken: String? {
@@ -432,8 +431,8 @@ class APIService: ObservableObject {
   private func restoreCurrentUserFromStorage() -> Bool {
     guard let storedToken = token else { return false }
     guard let storedUser = Self.loadStoredCurrentUser() else { return false }
-    guard storedUser.access_token == storedToken else { return false }
-    currentUser = storedUser
+    guard let restoredUser = storedUser.withRestoredAccessToken(storedToken) else { return false }
+    currentUser = restoredUser
     return true
   }
 
@@ -454,9 +453,23 @@ class APIService: ObservableObject {
       return
     }
 
-    if !KeychainHelper.shared.save(json, service: Self.keychainService, account: Self.currentUserAccount) {
-      UserDefaults.standard.set(json, forKey: Self.currentUserAccount)
+    if KeychainHelper.shared.save(json, service: Self.keychainService, account: Self.currentUserAccount) {
+      UserDefaults.standard.removeObject(forKey: Self.currentUserAccount)
+    } else {
+      print("Failed to save keychain item for account: currentUser")
+      persistCurrentUserDefaultsFallback(currentUser)
     }
+  }
+
+  private func persistCurrentUserDefaultsFallback(_ currentUser: Token) {
+    let fallbackUser = currentUser.withoutPersistedAccessToken()
+    guard
+      let data = try? JSONEncoder().encode(fallbackUser),
+      let json = String(data: data, encoding: .utf8)
+    else {
+      return
+    }
+    UserDefaults.standard.set(json, forKey: Self.currentUserAccount)
   }
 
   private init() {}
@@ -506,11 +519,8 @@ class APIService: ObservableObject {
     let password = storedPassword
 
     guard let username, let password, !username.isEmpty, !password.isEmpty else {
-      token = nil
-      currentUser = nil
-      NotificationCenter.default.post(name: .sessionDidLogout, object: nil)
       defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
-      return .clearedWithoutCredentials
+      return .skippedWithoutCredentials
     }
 
     let previousToken = token
@@ -816,6 +826,7 @@ class APIService: ObservableObject {
         do {
           let userData = try await makeRequest(
             endpoint: "/system/global/user",
+            retryOn401: false,
             logoutOnUnauthorized: false
           )
           let userSettings = try await decodeOrUnwrap(GlobalSettings.self, from: userData)

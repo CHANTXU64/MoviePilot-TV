@@ -11,21 +11,29 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     await ContentViewModelURLProtocol.stub.reset()
     let service = APIService.shared
     let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
-    defer { snapshot.restore(to: service) }
+    let markerKey = APIService.sessionRefreshAppVersionKey
+    let originalMarker = UserDefaults.standard.string(forKey: markerKey)
+    var viewModel: ContentViewModel?
+    defer {
+      viewModel = nil
+      snapshot.restore(to: service)
+      restoreUserDefaultsString(originalMarker, forKey: markerKey)
+    }
 
     clearCredential(account: "username")
     clearCredential(account: "password")
+    UserDefaults.standard.set(AppVersionInfo.currentAppVersion(), forKey: markerKey)
     service.baseURL = "https://compatible.content-view-model-tests.local"
     service.token = "token-a"
     service.currentUser = token("token-a", userName: "first-user")
     service.settings = nil
 
-    let viewModel = ContentViewModel()
+    viewModel = ContentViewModel()
 
-    await viewModel.prepareStartupIfNeeded()
+    await viewModel?.prepareStartupIfNeeded()
 
     XCTAssertEqual(service.settings?.BACKEND_VERSION, "v2.13.14")
-    XCTAssertNil(viewModel.backendVersionWarning)
+    XCTAssertNil(viewModel?.backendVersionWarning)
 
     service.baseURL = "https://old.content-view-model-tests.local"
     service.token = "token-b"
@@ -35,9 +43,9 @@ final class ContentViewModelBehaviorTests: XCTestCase {
       service.settings?.BACKEND_VERSION == "v2.13.13"
     }
 
-    XCTAssertEqual(viewModel.backendVersionWarning?.backendVersion, "v2.13.13")
+    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v2.13.13")
     XCTAssertEqual(
-      viewModel.backendVersionWarning?.requiredVersion,
+      viewModel?.backendVersionWarning?.requiredVersion,
       AppVersionInfo.compatibleMoviePilotVersion
     )
   }
@@ -56,6 +64,14 @@ final class ContentViewModelBehaviorTests: XCTestCase {
   private func clearCredential(account: String) {
     _ = KeychainHelper.shared.delete(service: "MoviePilot-TV", account: account)
     UserDefaults.standard.removeObject(forKey: account)
+  }
+
+  private func restoreUserDefaultsString(_ value: String?, forKey key: String) {
+    if let value {
+      UserDefaults.standard.set(value, forKey: key)
+    } else {
+      UserDefaults.standard.removeObject(forKey: key)
+    }
   }
 
   private func waitUntil(

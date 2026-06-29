@@ -104,6 +104,51 @@ final class SystemSessionBehaviorTests: XCTestCase {
     XCTAssertEqual(effectiveCredential(account: "password"), "test-password")
   }
 
+  func testRefreshStoredSessionKeepsExistingSessionWhenStoredCredentialsAreMissing() async throws {
+    let service = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    let markerKey = "lastSessionRefreshAppVersion"
+    let originalMarker = UserDefaults.standard.string(forKey: markerKey)
+    defer {
+      snapshot.restore(to: service)
+      restoreUserDefaultsString(originalMarker, forKey: markerKey)
+    }
+
+    service.baseURL = "https://session-refresh-tests.local"
+    service.token = "existing-token"
+    service.currentUser = Token(
+      access_token: "existing-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: ["discovery": true],
+      user_name: "existing-user",
+      avatar: nil
+    )
+    UserDefaults.standard.removeObject(forKey: markerKey)
+    clearCredential(account: "username")
+    clearCredential(account: "password")
+
+    let logoutNotifications = NotificationCounter()
+    let observer = NotificationCenter.default.addObserver(
+      forName: .sessionDidLogout,
+      object: nil,
+      queue: nil
+    ) { _ in
+      logoutNotifications.increment()
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
+    let result = await service.refreshStoredSessionAfterAppUpdateIfNeeded(
+      appVersion: "v0.4.2"
+    )
+
+    XCTAssertEqual(result, .skippedWithoutCredentials)
+    XCTAssertEqual(service.token, "existing-token")
+    XCTAssertEqual(service.currentUser?.user_name, "existing-user")
+    XCTAssertEqual(logoutNotifications.count(), 0)
+    XCTAssertEqual(UserDefaults.standard.string(forKey: markerKey), "v0.4.2")
+  }
+
   func testRefreshStoredSessionRestoresUserContextWhenVersionAlreadyRefreshed() async throws {
     let service = APIService.shared
     let snapshot = SystemSessionServiceSnapshot.capture(service: service)
@@ -134,6 +179,53 @@ final class SystemSessionBehaviorTests: XCTestCase {
     XCTAssertFalse(service.canAccess(.subscribe))
     XCTAssertFalse(service.canAccess(.manage))
     XCTAssertFalse(service.canRequestSuperUserEndpoints)
+  }
+
+  func testRefreshStoredSessionRestoresUserContextFromTokenlessDefaultsFallback() async throws {
+    let service = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    let markerKey = "lastSessionRefreshAppVersion"
+    let originalMarker = UserDefaults.standard.string(forKey: markerKey)
+    defer {
+      snapshot.restore(to: service)
+      restoreUserDefaultsString(originalMarker, forKey: markerKey)
+    }
+
+    service.baseURL = "https://session-refresh-tests.local"
+    service.token = "stored-token"
+    service.currentUser = nil
+    UserDefaults.standard.set("v0.4.0", forKey: markerKey)
+    _ = KeychainHelper.shared.delete(service: "MoviePilot-TV", account: "currentUser")
+    UserDefaults.standard.set(
+      #"{"access_token":"","token_type":"bearer","super_user":false,"permissions":{"discovery":false,"search":false,"subscribe":false,"manage":false},"user_name":"limited","avatar":null}"#,
+      forKey: "currentUser"
+    )
+
+    let result = await service.refreshStoredSessionAfterAppUpdateIfNeeded(
+      appVersion: "v0.4.0"
+    )
+
+    XCTAssertEqual(result, .alreadyRefreshed)
+    XCTAssertEqual(service.currentUser?.access_token, "stored-token")
+    XCTAssertEqual(service.currentUser?.user_name, "limited")
+    XCTAssertFalse(service.canAccess(.subscribe))
+  }
+
+  func testPersistedCurrentUserDefaultsFallbackDoesNotDuplicateAccessToken() {
+    let service = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.currentUser = Token(
+      access_token: "sensitive-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: ["discovery": true],
+      user_name: "fallback-user",
+      avatar: nil
+    )
+
+    XCTAssertFalse(UserDefaults.standard.string(forKey: "currentUser")?.contains("sensitive-token") ?? false)
   }
 
   private func persistStoredCurrentUserJSON(_ json: String) {
@@ -175,6 +267,10 @@ final class SystemSessionBehaviorTests: XCTestCase {
   }
 
   func testLoadSystemInfoUsesPublicBackendVersionForLimitedUser() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SystemInfoURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SystemInfoURLProtocol.self) }
+
+    await SystemInfoURLProtocol.stub.reset()
     let service = APIService.shared
     let snapshot = SystemSessionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
@@ -194,6 +290,9 @@ final class SystemSessionBehaviorTests: XCTestCase {
     await viewModel.loadSystemInfo()
 
     XCTAssertEqual(viewModel.backendVersion, "v2.13.14")
+    let paths = await SystemInfoURLProtocol.stub.requestPaths()
+    XCTAssertTrue(paths.contains("/api/v1/system/global"))
+    XCTAssertFalse(paths.contains("/api/v1/system/env"))
   }
 
   func testLoadSystemInfoFetchesPublicBackendVersionForLimitedUserWhenCacheIsEmpty()
@@ -211,6 +310,35 @@ final class SystemSessionBehaviorTests: XCTestCase {
     service.token = "limited-token"
     service.currentUser = limitedToken()
     service.settings = nil
+
+    let viewModel = SystemViewModel()
+
+    await viewModel.loadSystemInfo()
+
+    XCTAssertEqual(viewModel.backendVersion, "v2.13.14")
+    let paths = await SystemInfoURLProtocol.stub.requestPaths()
+    XCTAssertTrue(paths.contains("/api/v1/system/global"))
+    XCTAssertFalse(paths.contains("/api/v1/system/env"))
+  }
+
+  func testLoadSystemInfoRefreshesStalePublicBackendVersionForLimitedUser() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SystemInfoURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SystemInfoURLProtocol.self) }
+
+    await SystemInfoURLProtocol.stub.reset()
+    let service = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURL = "https://system-info-tests.local"
+    service.token = "limited-token"
+    service.currentUser = limitedToken()
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from:
+        #"{"BACKEND_VERSION":"v2.13.13","FRONTEND_VERSION":"v2.13.15","TMDB_IMAGE_DOMAIN":"image.tmdb.org"}"#
+        .data(using: .utf8)!
+    )
 
     let viewModel = SystemViewModel()
 
@@ -266,6 +394,11 @@ final class SystemSessionBehaviorTests: XCTestCase {
   private func effectiveCredential(account: String) -> String? {
     KeychainHelper.shared.read(service: "MoviePilot-TV", account: account)
       ?? UserDefaults.standard.string(forKey: account)
+  }
+
+  private func clearCredential(account: String) {
+    _ = KeychainHelper.shared.delete(service: "MoviePilot-TV", account: account)
+    UserDefaults.standard.removeObject(forKey: account)
   }
 }
 

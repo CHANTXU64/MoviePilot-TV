@@ -125,6 +125,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     await SubscribeSheetURLProtocol.stub.reset()
     service.baseURL = "http://subscribe-sheet-tests.local"
+    service.token = "standard-user"
     service.currentUser = Token(
       access_token: "standard-user",
       token_type: "Bearer",
