@@ -43,6 +43,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
       Subscribe(id: 102, name: "航海王", type: "电视剧", season: 1, tmdbid: 12345)
     ])
     try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([])
+    try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions([])
     service.baseURL = "http://subscription-snapshot-tests.local"
 
     let viewModel = HomeViewModel(apiService: service)
@@ -50,7 +51,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(viewModel.tvSubscriptions.map(\.id), [102])
 
     NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
-    try await waitUntil {
+    try await waitUntil(timeout: 2) {
       viewModel.tvSubscriptions.isEmpty
     }
   }
