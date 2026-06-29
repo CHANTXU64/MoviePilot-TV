@@ -516,7 +516,11 @@ class APIService: ObservableObject {
     let previousToken = token
     let previousCurrentUser = currentUser
     do {
-      _ = try await login(username: username, password: password)
+      _ = try await login(
+        username: username,
+        password: password,
+        preserveExistingSessionOnFailure: true
+      )
       defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
       return .refreshed
     } catch {
@@ -530,7 +534,8 @@ class APIService: ObservableObject {
 
   private func makeRequest(
     endpoint: String, method: String = "GET", body: Data? = nil, isForm: Bool = false,
-    retryOn401: Bool = true
+    retryOn401: Bool = true,
+    logoutOnUnauthorized: Bool = true
   ) async throws -> Data {
     guard let url = URL(string: "\(baseURL)/api/v1\(endpoint)") else {
       throw APIError.invalidURL
@@ -560,7 +565,11 @@ class APIService: ObservableObject {
             task = Task { [weak self] in
               guard let self = self else { return }
               defer { self.loginTask = nil }
-              _ = try await self.login(username: u, password: p)
+              _ = try await self.login(
+                username: u,
+                password: p,
+                preserveExistingSessionOnFailure: true
+              )
             }
             self.loginTask = task
           }
@@ -568,14 +577,24 @@ class APIService: ObservableObject {
             try await task.value
             // 使用新令牌递归调用
             return try await makeRequest(
-              endpoint: endpoint, method: method, body: body, isForm: isForm, retryOn401: false)
+              endpoint: endpoint,
+              method: method,
+              body: body,
+              isForm: isForm,
+              retryOn401: false,
+              logoutOnUnauthorized: logoutOnUnauthorized
+            )
           } catch {
             print("Auto-login failed: \(error)")
-            self.logout()
+            if logoutOnUnauthorized {
+              self.logout()
+            }
             throw APIError.unauthorized
           }
         }
-        self.logout()
+        if logoutOnUnauthorized {
+          self.logout()
+        }
         throw APIError.unauthorized
       }
       guard (200...299).contains(httpResponse.statusCode) else {
@@ -731,7 +750,11 @@ class APIService: ObservableObject {
   /// 登录获取 Token
   /// - 对应前端: MoviePilot-Frontend/src/pages/login.vue
   /// - 应用场景: 用户登录验证并获取访问令牌。
-  func login(username: String, password: String) async throws -> Token {
+  func login(
+    username: String,
+    password: String,
+    preserveExistingSessionOnFailure: Bool = false
+  ) async throws -> Token {
     var components = URLComponents()
     components.queryItems = [
       URLQueryItem(name: "username", value: username),
@@ -744,7 +767,9 @@ class APIService: ObservableObject {
     // 传递 retryOn401: false 以防止凭据错误时出现无限循环
     let data = try await makeRequest(
       endpoint: "/login/access-token", method: "POST", body: bodyData, isForm: true,
-      retryOn401: false)
+      retryOn401: false,
+      logoutOnUnauthorized: !preserveExistingSessionOnFailure
+    )
     let tokenResponse = try JSONDecoder().decode(Token.self, from: data)
 
     self.token = tokenResponse.access_token

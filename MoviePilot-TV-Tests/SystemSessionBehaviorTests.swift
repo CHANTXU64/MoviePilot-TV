@@ -80,6 +80,16 @@ final class SystemSessionBehaviorTests: XCTestCase {
     UserDefaults.standard.set("test-user", forKey: "username")
     UserDefaults.standard.set("test-password", forKey: "password")
 
+    let logoutNotifications = NotificationCounter()
+    let observer = NotificationCenter.default.addObserver(
+      forName: .sessionDidLogout,
+      object: nil,
+      queue: nil
+    ) { _ in
+      logoutNotifications.increment()
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
     let result = await service.refreshStoredSessionAfterAppUpdateIfNeeded(
       appVersion: "v0.4.1"
     )
@@ -87,6 +97,8 @@ final class SystemSessionBehaviorTests: XCTestCase {
     XCTAssertEqual(result, .refreshFailed)
     XCTAssertEqual(service.token, "stale-token")
     XCTAssertEqual(service.currentUser?.user_name, "stale-user")
+    let logoutNotificationCount = logoutNotifications.count()
+    XCTAssertEqual(logoutNotificationCount, 0)
     XCTAssertNil(UserDefaults.standard.string(forKey: markerKey))
     XCTAssertEqual(effectiveCredential(account: "username"), "test-user")
     XCTAssertEqual(effectiveCredential(account: "password"), "test-password")
@@ -254,6 +266,23 @@ final class SystemSessionBehaviorTests: XCTestCase {
   private func effectiveCredential(account: String) -> String? {
     KeychainHelper.shared.read(service: "MoviePilot-TV", account: account)
       ?? UserDefaults.standard.string(forKey: account)
+  }
+}
+
+private final class NotificationCounter: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value = 0
+
+  func count() -> Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return value
+  }
+
+  func increment() {
+    lock.lock()
+    defer { lock.unlock() }
+    value += 1
   }
 }
 
