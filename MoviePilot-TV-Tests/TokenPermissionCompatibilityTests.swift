@@ -159,4 +159,22 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
       [.home, .recommend, .explore, .search, .status, .system]
     )
   }
+
+  func testSelectedTabFallsBackWhenCurrentTabBecomesHidden() {
+    XCTAssertEqual(
+      ContentViewModel.resolvedSelectedTab(
+        .status,
+        visibleTabs: [.home, .search, .system]
+      ),
+      .home
+    )
+
+    XCTAssertEqual(
+      ContentViewModel.resolvedSelectedTab(
+        .system,
+        visibleTabs: [.home, .search, .system]
+      ),
+      .system
+    )
+  }
 }

@@ -16,7 +16,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
 
     XCTAssertTrue(
       source.contains(
-        "SystemView(isSelected: selectedTab == ContentViewModel.Tab.system.rawValue)"
+        "SystemView(isSelected: selectedTab == .system)"
       )
     )
     XCTAssertTrue(source.contains("Label(\"设置\", systemImage: \"gear\")"))

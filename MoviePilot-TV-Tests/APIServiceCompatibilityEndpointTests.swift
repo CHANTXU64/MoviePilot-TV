@@ -82,6 +82,44 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     )
   }
 
+  func testFetchSettingsKeepsSessionWhenOptionalUserSettingsIsForbidden() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
+    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    await CompatibilityEndpointURLProtocol.stub.setUserSettingsFailure(statusCode: 403)
+    let service = APIService.shared
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURL = "https://compatibility-endpoint-tests.local"
+    service.token = "token"
+    service.currentUser = Token(
+      access_token: "token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: ["discovery": true],
+      user_name: "limited-user",
+      avatar: nil
+    )
+    clearCredential(account: "username")
+    clearCredential(account: "password")
+
+    let settings = try await service.fetchSettings()
+
+    XCTAssertEqual(settings.BACKEND_VERSION, "v2.13.14")
+    XCTAssertEqual(settings.FRONTEND_VERSION, "v2.13.15")
+    XCTAssertNil(settings.AI_AGENT_ENABLE)
+    XCTAssertEqual(service.token, "token")
+    XCTAssertEqual(service.currentUser?.user_name, "limited-user")
+
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    assertContainsSubsequence(
+      ["/api/v1/system/global", "/api/v1/system/global/user"],
+      in: paths
+    )
+  }
+
   func testSystemConfigReadersUsePublicSettingEndpoints() async throws {
     XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
     defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
@@ -126,6 +164,11 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
       line: line
     )
   }
+
+  private func clearCredential(account: String) {
+    _ = KeychainHelper.shared.delete(service: "MoviePilot-TV", account: account)
+    UserDefaults.standard.removeObject(forKey: account)
+  }
 }
 
 @MainActor
@@ -140,6 +183,10 @@ private struct CompatibilityEndpointServiceSnapshot {
   let tokenDefaults: String?
   let currentUserKeychain: String?
   let currentUserDefaults: String?
+  let usernameKeychain: String?
+  let usernameDefaults: String?
+  let passwordKeychain: String?
+  let passwordDefaults: String?
 
   @MainActor
   static func capture(service: APIService) -> CompatibilityEndpointServiceSnapshot {
@@ -153,7 +200,11 @@ private struct CompatibilityEndpointServiceSnapshot {
       tokenKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "accessToken"),
       tokenDefaults: UserDefaults.standard.string(forKey: "accessToken"),
       currentUserKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "currentUser"),
-      currentUserDefaults: UserDefaults.standard.string(forKey: "currentUser")
+      currentUserDefaults: UserDefaults.standard.string(forKey: "currentUser"),
+      usernameKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username"),
+      usernameDefaults: UserDefaults.standard.string(forKey: "username"),
+      passwordKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "password"),
+      passwordDefaults: UserDefaults.standard.string(forKey: "password")
     )
   }
 
@@ -171,6 +222,8 @@ private struct CompatibilityEndpointServiceSnapshot {
       keychainValue: currentUserKeychain,
       defaultsValue: currentUserDefaults
     )
+    restoreCredential(account: "username", keychainValue: usernameKeychain, defaultsValue: usernameDefaults)
+    restoreCredential(account: "password", keychainValue: passwordKeychain, defaultsValue: passwordDefaults)
   }
 
   @MainActor

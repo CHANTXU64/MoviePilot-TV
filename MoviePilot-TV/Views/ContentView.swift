@@ -3,7 +3,7 @@ import SwiftUI
 struct ContentView: View {
   @StateObject private var viewModel = ContentViewModel()
   @StateObject private var mediaActionHandler = MediaActionHandler()
-  @State private var selectedTab = 0
+  @State private var selectedTab = ContentViewModel.Tab.home
   @State private var checkTask: Task<Void, Never>? = nil
   @Environment(\.scenePhase) private var scenePhase
 
@@ -17,14 +17,14 @@ struct ContentView: View {
             .tabItem {
               Label("媒体库", systemImage: "play.tv")
             }
-            .tag(ContentViewModel.Tab.home.rawValue)
+            .tag(ContentViewModel.Tab.home)
 
           if viewModel.visibleTabs.contains(.recommend) {
             RecommendView()
               .tabItem {
                 Label("推荐", systemImage: "sparkles.tv")
               }
-              .tag(ContentViewModel.Tab.recommend.rawValue)
+              .tag(ContentViewModel.Tab.recommend)
           }
 
           if viewModel.visibleTabs.contains(.explore) {
@@ -32,7 +32,7 @@ struct ContentView: View {
               .tabItem {
                 Label("探索", systemImage: "safari")
               }
-              .tag(ContentViewModel.Tab.explore.rawValue)
+              .tag(ContentViewModel.Tab.explore)
           }
 
           if viewModel.visibleTabs.contains(.search) {
@@ -40,7 +40,7 @@ struct ContentView: View {
               .tabItem {
                 Label("搜索", systemImage: "magnifyingglass")
               }
-              .tag(ContentViewModel.Tab.search.rawValue)
+              .tag(ContentViewModel.Tab.search)
           }
 
           if viewModel.visibleTabs.contains(.status) {
@@ -48,16 +48,19 @@ struct ContentView: View {
               .tabItem {
                 Label("状态", systemImage: "slider.horizontal.3")
               }
-              .tag(ContentViewModel.Tab.status.rawValue)
+              .tag(ContentViewModel.Tab.status)
           }
 
-          SystemView(isSelected: selectedTab == ContentViewModel.Tab.system.rawValue)
+          SystemView(isSelected: selectedTab == .system)
             .tabItem {
               Label("设置", systemImage: "gear")
             }
-            .tag(ContentViewModel.Tab.system.rawValue)
+            .tag(ContentViewModel.Tab.system)
         }
         .foregroundColor(.primary)
+        .onChange(of: viewModel.visibleTabs) { _, visibleTabs in
+          selectedTab = ContentViewModel.resolvedSelectedTab(selectedTab, visibleTabs: visibleTabs)
+        }
         .onChange(of: selectedTab) { _, _ in
           // 防抖逻辑：取消之前的任务，重新计时
           checkTask?.cancel()

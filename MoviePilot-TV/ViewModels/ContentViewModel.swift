@@ -4,7 +4,7 @@ import SwiftUI
 
 @MainActor
 class ContentViewModel: ObservableObject {
-  enum Tab: Int, Equatable {
+  enum Tab: Int, Equatable, Hashable {
     case home = 0
     case recommend = 1
     case explore = 2
@@ -21,7 +21,7 @@ class ContentViewModel: ObservableObject {
   private let apiService = APIService.shared
   private var cancellables = Set<AnyCancellable>()
   private var didPrepareStartup = false
-  private var didCheckBackendVersion = false
+  private var backendVersionCheckKey: BackendVersionCheckKey?
 
   init() {
     // 初始状态
@@ -32,7 +32,11 @@ class ContentViewModel: ObservableObject {
     apiService.$token
       .receive(on: RunLoop.main)
       .sink { [weak self] token in
-        self?.isLoggedIn = (token != nil)
+        guard let self else { return }
+        self.isLoggedIn = (token != nil)
+        if token == nil {
+          self.resetBackendVersionCheck()
+        }
         if token != nil {
           Task { [weak self] in
             guard let self else { return }
@@ -46,6 +50,13 @@ class ContentViewModel: ObservableObject {
       .receive(on: RunLoop.main)
       .sink { [weak self] user in
         self?.currentUser = user
+      }
+      .store(in: &cancellables)
+
+    apiService.$baseURL
+      .receive(on: RunLoop.main)
+      .sink { [weak self] _ in
+        self?.resetBackendVersionCheck()
       }
       .store(in: &cancellables)
 
@@ -92,6 +103,10 @@ class ContentViewModel: ObservableObject {
     return tabs
   }
 
+  static func resolvedSelectedTab(_ selectedTab: Tab, visibleTabs: [Tab]) -> Tab {
+    visibleTabs.contains(selectedTab) ? selectedTab : (visibleTabs.first ?? .home)
+  }
+
   func prepareStartupIfNeeded() async {
     guard !didPrepareStartup else { return }
     didPrepareStartup = true
@@ -109,19 +124,39 @@ class ContentViewModel: ObservableObject {
   }
 
   private func loadGlobalSettings(checkBackendVersion: Bool) async {
+    let checkKey = currentBackendVersionCheckKey()
+    if checkBackendVersion, backendVersionCheckKey != checkKey {
+      backendVersionWarning = nil
+    }
+
     do {
       let settings = try await apiService.fetchSettings()
-      guard checkBackendVersion, !didCheckBackendVersion else { return }
-      didCheckBackendVersion = true
+      guard checkBackendVersion, backendVersionCheckKey != checkKey else { return }
+      guard currentBackendVersionCheckKey() == checkKey else { return }
+      backendVersionCheckKey = checkKey
       backendVersionWarning = Self.backendVersionWarning(for: settings.BACKEND_VERSION)
     } catch {
-      guard checkBackendVersion, !didCheckBackendVersion else { return }
-      didCheckBackendVersion = true
+      guard checkBackendVersion, backendVersionCheckKey != checkKey else { return }
+      guard currentBackendVersionCheckKey() == checkKey else { return }
+      backendVersionCheckKey = checkKey
       backendVersionWarning = BackendVersionWarning(
         backendVersion: nil,
         requiredVersion: AppVersionInfo.compatibleMoviePilotVersion
       )
     }
+  }
+
+  private func resetBackendVersionCheck() {
+    backendVersionCheckKey = nil
+    backendVersionWarning = nil
+  }
+
+  private func currentBackendVersionCheckKey() -> BackendVersionCheckKey {
+    BackendVersionCheckKey(
+      baseURL: apiService.baseURL,
+      token: apiService.token,
+      appVersion: AppVersionInfo.currentAppVersion()
+    )
   }
 
   private static func backendVersionWarning(for backendVersion: String?) -> BackendVersionWarning? {
@@ -135,4 +170,10 @@ class ContentViewModel: ObservableObject {
       )
     }
   }
+}
+
+private struct BackendVersionCheckKey: Equatable {
+  let baseURL: String
+  let token: String?
+  let appVersion: String
 }

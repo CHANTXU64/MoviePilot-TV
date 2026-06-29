@@ -814,7 +814,10 @@ class APIService: ObservableObject {
       var response = try await decodeOrUnwrap(GlobalSettings.self, from: data)
       if token != nil {
         do {
-          let userData = try await makeRequest(endpoint: "/system/global/user")
+          let userData = try await makeRequest(
+            endpoint: "/system/global/user",
+            logoutOnUnauthorized: false
+          )
           let userSettings = try await decodeOrUnwrap(GlobalSettings.self, from: userData)
           response.mergeUserSettings(userSettings)
         } catch {
