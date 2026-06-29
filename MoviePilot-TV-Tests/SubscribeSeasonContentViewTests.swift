@@ -853,6 +853,31 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(viewModel.subscriptionGroupText(for: 1), "剧集组：group-b")
   }
 
+  func testUnknownSeasonAvailabilityDoesNotDisplayBadgeOrDefaultToBestVersion() {
+    let media = MediaInfo(tmdb_id: 12345, title: "航海王", type: "电视剧")
+    let viewModel = SubscribeSeasonViewModel(mediaInfo: media)
+
+    XCTAssertNil(viewModel.getStatusText(season: 2))
+    XCTAssertEqual(viewModel.getStatusColor(season: 2), "gray")
+
+    viewModel.prepareSubscription(seasonNumber: 2)
+
+    XCTAssertEqual(viewModel.sheetSubscribe?.best_version, 0)
+  }
+
+  func testLoadedEmptySeasonAvailabilityStillDisplaysAsAvailableAndDefaultsToBestVersion() {
+    let media = MediaInfo(tmdb_id: 12345, title: "航海王", type: "电视剧")
+    let viewModel = SubscribeSeasonViewModel(mediaInfo: media)
+    viewModel.isSeasonAvailabilityLoaded = true
+
+    XCTAssertEqual(viewModel.getStatusText(season: 2), "已入库")
+    XCTAssertEqual(viewModel.getStatusColor(season: 2), "green")
+
+    viewModel.prepareSubscription(seasonNumber: 2)
+
+    XCTAssertEqual(viewModel.sheetSubscribe?.best_version, 1)
+  }
+
   func testSeasonPrimaryActionSubscribesSeasonWhenNavigationHandlerIsProvided() throws {
     let season = try makeSeason(number: 2)
     var tappedSeason: TmdbSeason?

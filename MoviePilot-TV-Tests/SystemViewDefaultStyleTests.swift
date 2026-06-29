@@ -42,6 +42,15 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("permissions.subscribe"))
     XCTAssertTrue(source.contains("/mediaserver/notexists"))
     XCTAssertTrue(source.contains("canRequestSuperUserEndpoints"))
+    XCTAssertTrue(source.contains("不显示入库状态徽章"))
+    XCTAssertTrue(source.contains("best_version"))
+  }
+
+  func testSubscribeSeasonViewHidesAvailabilityBadgeWhenStatusTextIsNil() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SubscribeSeasonView.swift")
+
+    XCTAssertTrue(source.contains("let bottomLeft = statusText.map"))
+    XCTAssertTrue(source.contains("bottomLeftText: bottomLeft"))
   }
 
   func testSystemViewExitHandlersOnlyRunWhenSettingsTabIsActive() throws {
