@@ -18,6 +18,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     ])
     try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([])
     service.baseURL = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
 
     let viewModel = HomeViewModel(apiService: service)
     await viewModel.refreshSubscriptions(forceRefresh: true)
@@ -45,6 +46,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([])
     try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions([])
     service.baseURL = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
 
     let viewModel = HomeViewModel(apiService: service)
     await viewModel.refreshSubscriptions(forceRefresh: true)
@@ -74,6 +76,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
       Subscribe(id: 302, name: "新订阅", type: "电视剧", season: 2, tmdbid: 811001)
     ])
     service.baseURL = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
 
     let viewModel = HomeViewModel(apiService: service)
     let staleRefresh = Task {
@@ -109,6 +112,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
       Subscribe(id: 402, name: "新分季", type: "电视剧", season: 2, tmdbid: 812001)
     ])
     service.baseURL = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
 
     let viewModel = SubscribeSeasonViewModel(
       mediaInfo: MediaInfo(tmdb_id: 812001, title: "分季状态", type: "电视剧")
@@ -146,6 +150,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
       Subscribe(id: 502, name: "缓存后新订阅", type: "电视剧", season: 2, tmdbid: 813001)
     ])
     service.baseURL = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
 
     let cachedSubscriptions = try await service.fetchSubscriptions(forceRefresh: true)
     XCTAssertEqual(cachedSubscriptions.map(\.id), [501])
@@ -182,6 +187,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
       Subscribe(id: 902, name: "搜索后订阅", type: "电视剧", season: 2, tmdbid: 817001)
     ])
     service.baseURL = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
 
     let cachedSubscriptions = try await service.fetchSubscriptions(forceRefresh: true)
     XCTAssertEqual(cachedSubscriptions.map(\.id), [901])
@@ -211,6 +217,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
       Subscribe(id: 602, name: "写缓存后新订阅", type: "电视剧", season: 2, tmdbid: 814001)
     ])
     service.baseURL = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
 
     var didInvalidate = false
     service.subscriptionCacheTestHooks.afterSubscriptionSnapshotCacheStore = {
@@ -246,6 +253,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
       Subscribe(id: 702, name: "新强刷", type: "电视剧", season: 2, tmdbid: 815001)
     ])
     service.baseURL = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
 
     let firstRefresh = Task {
       try await service.fetchSubscriptions(forceRefresh: true)
@@ -285,6 +293,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
       Subscribe(id: 704, name: "新写缓存", type: "电视剧", season: 2, tmdbid: 815002)
     ])
     service.baseURL = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
 
     var didPauseBeforeStore = false
     service.subscriptionCacheTestHooks.afterSubscriptionSnapshotFetchValue = {
@@ -335,6 +344,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     )
     try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([])
     service.baseURL = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
 
     let staleRefresh = Task {
       try await service.fetchSubscriptions(forceRefresh: true)
@@ -371,6 +381,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     try await SubscriptionSnapshotURLProtocol.stub.enqueueServerError(waitFor: staleErrorGate)
     try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([])
     service.baseURL = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
 
     let staleRefresh = Task {
       try await service.fetchSubscriptions(forceRefresh: true)
@@ -404,6 +415,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
       Subscribe(id: 801, name: "缓存取消", type: "电视剧", season: 1, tmdbid: 816001)
     ])
     service.baseURL = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
 
     let cachedSubscriptions = try await service.fetchSubscriptions(forceRefresh: true)
     XCTAssertEqual(cachedSubscriptions.map(\.id), [801])
@@ -444,6 +456,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
       Subscribe(id: 802, name: "强刷取消", type: "电视剧", season: 1, tmdbid: 816002)
     ])
     service.baseURL = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
 
     service.subscriptionCacheTestHooks.afterSubscriptionSnapshotFetchValue = {
       await responseGate.wait()
@@ -482,6 +495,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
       Subscribe(id: 803, name: "写缓存取消", type: "电视剧", season: 1, tmdbid: 816003)
     ])
     service.baseURL = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
 
     service.subscriptionCacheTestHooks.afterSubscriptionSnapshotCacheStore = {
       await storeGate.wait()
@@ -521,6 +535,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
       Subscribe(id: 201, name: "预加载剧集", type: "电视剧", season: 1, tmdbid: 810001)
     ])
     service.baseURL = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
 
     let firstTask = preloader.preload(
       for: MediaInfo(tmdb_id: 810001, title: "预加载剧集 A", type: "电视剧"))
@@ -1051,28 +1066,83 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     }
     XCTFail("Condition was not satisfied before timeout")
   }
+
+  @MainActor
+  private func configureSubscriptionSnapshotAccess(_ service: APIService) {
+    service.currentUser = Token(
+      access_token: "subscription-snapshot-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        UserPermissionKey.discovery.rawValue: true,
+        UserPermissionKey.search.rawValue: true,
+        UserPermissionKey.subscribe.rawValue: true,
+        UserPermissionKey.manage.rawValue: false,
+      ],
+      user_name: "subscription-snapshot",
+      avatar: nil
+    )
+  }
 }
 
 private struct SubscriptionSnapshotServiceSnapshot {
   let baseURL: String
+  let token: String?
+  let currentUser: Token?
   let serverURLDefaults: String?
+  let tokenKeychain: String?
+  let tokenDefaults: String?
+  let currentUserKeychain: String?
+  let currentUserDefaults: String?
 
   @MainActor
   static func capture(service: APIService) -> SubscriptionSnapshotServiceSnapshot {
     SubscriptionSnapshotServiceSnapshot(
       baseURL: service.baseURL,
-      serverURLDefaults: UserDefaults.standard.string(forKey: "serverURL")
+      token: service.token,
+      currentUser: service.currentUser,
+      serverURLDefaults: UserDefaults.standard.string(forKey: "serverURL"),
+      tokenKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "accessToken"),
+      tokenDefaults: UserDefaults.standard.string(forKey: "accessToken"),
+      currentUserKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "currentUser"),
+      currentUserDefaults: UserDefaults.standard.string(forKey: "currentUser")
     )
   }
 
   @MainActor
   func restore(to service: APIService) {
     service.baseURL = baseURL
+    service.token = token
+    service.currentUser = currentUser
 
     if let serverURLDefaults {
       UserDefaults.standard.set(serverURLDefaults, forKey: "serverURL")
     } else {
       UserDefaults.standard.removeObject(forKey: "serverURL")
+    }
+    restoreCredential(account: "accessToken", keychainValue: tokenKeychain, defaultsValue: tokenDefaults)
+    restoreCredential(
+      account: "currentUser",
+      keychainValue: currentUserKeychain,
+      defaultsValue: currentUserDefaults
+    )
+  }
+
+  @MainActor
+  private func restoreCredential(account: String, keychainValue: String?, defaultsValue: String?) {
+    if let keychainValue {
+      _ = KeychainHelper.shared.save(
+        keychainValue,
+        service: "MoviePilot-TV",
+        account: account
+      )
+    } else {
+      _ = KeychainHelper.shared.delete(service: "MoviePilot-TV", account: account)
+    }
+    if let defaultsValue {
+      UserDefaults.standard.set(defaultsValue, forKey: account)
+    } else {
+      UserDefaults.standard.removeObject(forKey: account)
     }
   }
 }

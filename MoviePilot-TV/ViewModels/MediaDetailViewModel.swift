@@ -154,7 +154,8 @@ class MediaDetailViewModel: ObservableObject {
 
     // ── 判断第二页首行类型 ──
     // 电视剧首行固定是 season（由 preloadTask 异步加载，在 View 层通过 onChange 监听）
-    let isSeasonFirst = fullDetail.type == "电视剧" && fullDetail.tmdb_id != nil
+    let isSeasonFirst =
+      apiService.canAccess(.subscribe) && fullDetail.type == "电视剧" && fullDetail.tmdb_id != nil
 
     if isSeasonFirst {
       // season 由 preloadTask 管理，检查数据是否已实际加载完毕

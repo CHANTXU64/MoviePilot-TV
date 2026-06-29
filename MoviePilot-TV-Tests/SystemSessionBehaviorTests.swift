@@ -149,6 +149,107 @@ final class SystemSessionBehaviorTests: XCTestCase {
     XCTAssertEqual(UserDefaults.standard.string(forKey: markerKey), "v0.4.2")
   }
 
+  func testRefreshStoredSessionClearsActiveUserWithoutAccessibleFeature() async throws {
+    let service = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    let markerKey = "lastSessionRefreshAppVersion"
+    let originalMarker = UserDefaults.standard.string(forKey: markerKey)
+    defer {
+      snapshot.restore(to: service)
+      restoreUserDefaultsString(originalMarker, forKey: markerKey)
+    }
+
+    service.baseURL = "https://session-refresh-tests.local"
+    service.token = "stored-token"
+    service.currentUser = noFeatureToken(accessToken: "stored-token")
+    UserDefaults.standard.removeObject(forKey: markerKey)
+    clearCredential(account: "username")
+    clearCredential(account: "password")
+
+    let result = await service.refreshStoredSessionAfterAppUpdateIfNeeded(
+      appVersion: "v0.4.3"
+    )
+
+    XCTAssertEqual(result, .noStoredSession)
+    XCTAssertNil(service.token)
+    XCTAssertNil(service.currentUser)
+    XCTAssertNil(effectiveCredential(account: "accessToken"))
+    XCTAssertNil(effectiveCredential(account: "currentUser"))
+  }
+
+  func testRefreshStoredSessionClearsStoredUserWithoutAccessibleFeatureWhenVersionAlreadyRefreshed()
+    async throws
+  {
+    let service = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    let markerKey = "lastSessionRefreshAppVersion"
+    let originalMarker = UserDefaults.standard.string(forKey: markerKey)
+    defer {
+      snapshot.restore(to: service)
+      restoreUserDefaultsString(originalMarker, forKey: markerKey)
+    }
+
+    service.baseURL = "https://session-refresh-tests.local"
+    service.token = "stored-token"
+    service.currentUser = nil
+    UserDefaults.standard.set("v0.4.0", forKey: markerKey)
+    persistStoredCurrentUserJSON(noFeatureUserJSON(accessToken: "stored-token"))
+
+    let result = await service.refreshStoredSessionAfterAppUpdateIfNeeded(
+      appVersion: "v0.4.0"
+    )
+
+    XCTAssertEqual(result, .noStoredSession)
+    XCTAssertNil(service.token)
+    XCTAssertNil(service.currentUser)
+    XCTAssertNil(effectiveCredential(account: "accessToken"))
+    XCTAssertNil(effectiveCredential(account: "currentUser"))
+  }
+
+  func testRefreshStoredSessionClearsExistingSessionWhenReloginReturnsNoAccessibleFeature()
+    async throws
+  {
+    XCTAssertTrue(URLProtocol.registerClass(SessionRefreshURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SessionRefreshURLProtocol.self) }
+
+    await SessionRefreshURLProtocol.stub.reset()
+    await SessionRefreshURLProtocol.stub.setLoginNoAccessibleFeatureResponse(true)
+    let service = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    let markerKey = "lastSessionRefreshAppVersion"
+    let originalMarker = UserDefaults.standard.string(forKey: markerKey)
+    defer {
+      snapshot.restore(to: service)
+      restoreUserDefaultsString(originalMarker, forKey: markerKey)
+    }
+
+    service.baseURL = "https://session-refresh-tests.local"
+    service.token = "stale-token"
+    service.currentUser = Token(
+      access_token: "stale-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: ["discovery": true],
+      user_name: "stale-user",
+      avatar: nil
+    )
+    UserDefaults.standard.removeObject(forKey: markerKey)
+    _ = KeychainHelper.shared.save("test-user", service: "MoviePilot-TV", account: "username")
+    _ = KeychainHelper.shared.save("test-password", service: "MoviePilot-TV", account: "password")
+    UserDefaults.standard.set("test-user", forKey: "username")
+    UserDefaults.standard.set("test-password", forKey: "password")
+
+    let result = await service.refreshStoredSessionAfterAppUpdateIfNeeded(
+      appVersion: "v0.4.4"
+    )
+
+    XCTAssertEqual(result, .noStoredSession)
+    XCTAssertNil(service.token)
+    XCTAssertNil(service.currentUser)
+    XCTAssertNil(effectiveCredential(account: "accessToken"))
+    XCTAssertNil(effectiveCredential(account: "currentUser"))
+  }
+
   func testRefreshStoredSessionRestoresUserContextWhenVersionAlreadyRefreshed() async throws {
     let service = APIService.shared
     let snapshot = SystemSessionServiceSnapshot.capture(service: service)
@@ -164,7 +265,7 @@ final class SystemSessionBehaviorTests: XCTestCase {
     service.currentUser = nil
     UserDefaults.standard.set("v0.4.0", forKey: markerKey)
     persistStoredCurrentUserJSON(
-      #"{"access_token":"stored-token","token_type":"bearer","super_user":false,"permissions":{"discovery":false,"search":false,"subscribe":false,"manage":false},"user_name":"limited","avatar":null}"#
+      #"{"access_token":"stored-token","token_type":"bearer","super_user":false,"permissions":{"discovery":true,"search":false,"subscribe":false,"manage":false},"user_name":"limited","avatar":null}"#
     )
 
     let result = await service.refreshStoredSessionAfterAppUpdateIfNeeded(
@@ -174,7 +275,7 @@ final class SystemSessionBehaviorTests: XCTestCase {
     XCTAssertEqual(result, .alreadyRefreshed)
     XCTAssertEqual(service.token, "stored-token")
     XCTAssertEqual(service.currentUser?.user_name, "limited")
-    XCTAssertFalse(service.canAccess(.discovery))
+    XCTAssertTrue(service.canAccess(.discovery))
     XCTAssertFalse(service.canAccess(.search))
     XCTAssertFalse(service.canAccess(.subscribe))
     XCTAssertFalse(service.canAccess(.manage))
@@ -197,7 +298,7 @@ final class SystemSessionBehaviorTests: XCTestCase {
     UserDefaults.standard.set("v0.4.0", forKey: markerKey)
     _ = KeychainHelper.shared.delete(service: "MoviePilot-TV", account: "currentUser")
     UserDefaults.standard.set(
-      #"{"access_token":"","token_type":"bearer","super_user":false,"permissions":{"discovery":false,"search":false,"subscribe":false,"manage":false},"user_name":"limited","avatar":null}"#,
+      #"{"access_token":"","token_type":"bearer","super_user":false,"permissions":{"discovery":true,"search":false,"subscribe":false,"manage":false},"user_name":"limited","avatar":null}"#,
       forKey: "currentUser"
     )
 
@@ -208,6 +309,7 @@ final class SystemSessionBehaviorTests: XCTestCase {
     XCTAssertEqual(result, .alreadyRefreshed)
     XCTAssertEqual(service.currentUser?.access_token, "stored-token")
     XCTAssertEqual(service.currentUser?.user_name, "limited")
+    XCTAssertTrue(service.canAccess(.discovery))
     XCTAssertFalse(service.canAccess(.subscribe))
   }
 
@@ -232,6 +334,28 @@ final class SystemSessionBehaviorTests: XCTestCase {
     if !KeychainHelper.shared.save(json, service: "MoviePilot-TV", account: "currentUser") {
       UserDefaults.standard.set(json, forKey: "currentUser")
     }
+  }
+
+  private func noFeatureToken(accessToken: String) -> Token {
+    Token(
+      access_token: accessToken,
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        "discovery": false,
+        "search": false,
+        "subscribe": false,
+        "manage": false,
+      ],
+      user_name: "limited",
+      avatar: nil
+    )
+  }
+
+  private func noFeatureUserJSON(accessToken: String) -> String {
+    """
+    {"access_token":"\(accessToken)","token_type":"bearer","super_user":false,"permissions":{"discovery":false,"search":false,"subscribe":false,"manage":false},"user_name":"limited","avatar":null}
+    """
   }
 
   func testAPIServiceLogoutClearsMediaPreloaderCache() async throws {
@@ -504,14 +628,20 @@ private struct SystemSessionServiceSnapshot {
 private actor SessionRefreshURLProtocolStub {
   private var requests: [URLRequest] = []
   private var loginFailureStatusCode: Int?
+  private var loginNoAccessibleFeatureResponse = false
 
   func reset() {
     requests.removeAll()
     loginFailureStatusCode = nil
+    loginNoAccessibleFeatureResponse = false
   }
 
   func setLoginFailure(statusCode: Int?) {
     loginFailureStatusCode = statusCode
+  }
+
+  func setLoginNoAccessibleFeatureResponse(_ enabled: Bool) {
+    loginNoAccessibleFeatureResponse = enabled
   }
 
   func requestPaths() -> [String] {
@@ -534,6 +664,10 @@ private actor SessionRefreshURLProtocolStub {
     let data: Data
     if let loginFailureStatusCode {
       data = #"{"success":false,"message":"login failed","status":\#(loginFailureStatusCode)}"#
+        .data(using: .utf8)!
+    } else if loginNoAccessibleFeatureResponse {
+      data =
+        #"{"access_token":"fresh-token","token_type":"bearer","super_user":false,"permissions":{"discovery":false,"search":false,"subscribe":false,"manage":false},"user_name":"locked","avatar":null}"#
         .data(using: .utf8)!
     } else {
       data =

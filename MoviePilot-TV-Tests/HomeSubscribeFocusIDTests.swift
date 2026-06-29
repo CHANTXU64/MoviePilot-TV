@@ -4,7 +4,7 @@ import XCTest
 
 @MainActor
 final class HomeSubscribeFocusIDTests: XCTestCase {
-  func testRefreshDataRequestsSubscribeForStandardUserWithDefaultPermissions()
+  func testRefreshDataDoesNotRequestSubscribeForStandardUserWithEmptyPermissions()
     async throws
   {
     try await withHomePermissionViewModel(permissions: [:]) { viewModel in
@@ -14,7 +14,7 @@ final class HomeSubscribeFocusIDTests: XCTestCase {
       XCTAssertTrue(viewModel.tvSubscriptions.isEmpty)
       XCTAssertTrue(viewModel.latestMedia.isEmpty)
       let paths = await HomePermissionURLProtocol.stub.requestPaths()
-      XCTAssertTrue(paths.containsSubscribeListPath)
+      XCTAssertFalse(paths.containsSubscribeListPath)
       XCTAssertFalse(paths.contains("/api/v1/system/setting/MediaServers"))
     }
   }

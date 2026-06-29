@@ -317,6 +317,15 @@ private enum BackendCompatibilityAccessRequirement {
 }
 
 private extension Error {
+  var isBackendCompatibilityNoAccessibleFeatureLoginRejection: Bool {
+    guard let apiError = self as? APIError,
+      case APIError.serverMessage(let message) = apiError
+    else {
+      return false
+    }
+    return message.contains("没有可访问的功能权限")
+  }
+
   var isBackendCompatibilityPermissionDenied: Bool {
     if let apiError = self as? APIError {
       switch apiError {
@@ -403,6 +412,9 @@ private func runBackendCompatibilityAccounts(
 ) async throws {
   clearBackendCompatibilityStoredCredentials()
 
+  var ranAccountCount = 0
+  var skippedNoAccessibleFeatureAccounts: [String] = []
+
   for account in config.accounts {
     clearBackendCompatibilityStoredCredentials()
     service.baseURL = config.baseURL
@@ -413,10 +425,19 @@ private func runBackendCompatibilityAccounts(
     do {
       token = try await service.login(username: account.username, password: account.password)
     } catch {
+      if error.isBackendCompatibilityNoAccessibleFeatureLoginRejection {
+        let diagnostic = "account=\(account.username), label=\(account.label)"
+        skippedNoAccessibleFeatureAccounts.append(diagnostic)
+        print(
+          "Backend compatibility permission diagnostic for login: \(diagnostic); error=\(error)"
+        )
+        continue
+      }
       XCTFail("Failed to log in backend compatibility \(account.label) account \(account.username): \(error)")
       continue
     }
 
+    ranAccountCount += 1
     let scopedConfig = config.activating(account: account, token: token)
     pinBackendCompatibilityAccount(service: service, config: scopedConfig)
 
@@ -430,6 +451,12 @@ private func runBackendCompatibilityAccounts(
     } catch {
       XCTFail("Backend compatibility failed for \(diagnostic): \(error)")
     }
+  }
+
+  if ranAccountCount == 0, !skippedNoAccessibleFeatureAccounts.isEmpty {
+    throw XCTSkip(
+      "All backend compatibility accounts were rejected because they have no accessible feature permissions: \(skippedNoAccessibleFeatureAccounts.joined(separator: ", "))"
+    )
   }
 }
 

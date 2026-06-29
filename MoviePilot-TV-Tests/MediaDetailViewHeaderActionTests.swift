@@ -30,6 +30,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       Subscribe(id: 7002, name: "详情页取消订阅", type: "电视剧", season: 2, tmdbid: 998_877),
     ])
     service.baseURL = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
 
     let detail = MediaInfo(
       douban_id: "detail-header-douban",
@@ -76,6 +77,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       ),
     ])
     service.baseURL = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
 
     let detail = MediaInfo(
       douban_id: "detail-header-douban",
@@ -110,6 +112,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     await DetailHeaderSubscriptionURLProtocol.stub.setMinimalSubscriptionPayload(tmdbId: 998_877)
     service.baseURL = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
 
     let detail = MediaInfo(
       douban_id: "detail-header-douban",
@@ -146,6 +149,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     service.baseURL = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
 
     let detail = MediaInfo(
       douban_id: "detail-header-title-fallback-douban",
@@ -179,6 +183,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     service.baseURL = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
 
     let detail = MediaInfo(
       douban_id: "detail-header-minimal-alias-douban",
@@ -217,6 +222,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       json: #"{"id":7201,"name":"Invalid lookup","type":"电视剧","season":1,"tmdbid":0,"mediaid":"tmdb:0"}"#
     )
     service.baseURL = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
 
     let lookup = try await service.fetchSubscriptionLookup(
       media: MediaInfo(tmdb_id: 112_233, type: "电视剧")
@@ -240,6 +246,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     service.baseURL = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
 
     let detail = MediaInfo(
       bangumi_id: 12_345,
@@ -274,6 +281,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     service.baseURL = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
 
     let detail = MediaInfo(
       bangumi_id: 12_345,
@@ -307,6 +315,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     service.baseURL = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
 
     let tmdbMedia = MediaInfo(tmdb_id: 776_655, type: "电视剧")
     let cachedSubscriptionStatus = try await service.checkSubscription(media: tmdbMedia)
@@ -347,6 +356,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     service.baseURL = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
 
     let tmdbMedia = MediaInfo(tmdb_id: 776_655, type: "电视剧")
     let cachedSubscriptionStatus = try await service.checkSubscription(media: tmdbMedia)
@@ -388,6 +398,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     await DetailHeaderSubscriptionURLProtocol.stub.setResolvedSubscription(tmdbId: 776_656, id: 7004)
     service.baseURL = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
 
     let tmdbMedia = MediaInfo(tmdb_id: 776_656, type: "电视剧")
     let cachedSubscriptionStatus = try await service.checkSubscription(media: tmdbMedia)
@@ -441,6 +452,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     service.baseURL = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
 
     let pinnedGate = DetailHeaderSubscriptionAsyncGate()
     await DetailHeaderSubscriptionURLProtocol.stub.enqueueResolvedSubscription(
@@ -495,6 +507,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     await DetailHeaderSubscriptionURLProtocol.stub.setMinimalSubscriptionPayload(tmdbId: 554_433)
     service.baseURL = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
 
     let status = try await service.checkSubscription(
       media: MediaInfo(tmdb_id: 554_433, type: "电视剧")
@@ -525,6 +538,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       Subscribe(id: subscriptionId, name: "缓存失效订阅", type: "电视剧", season: 1, tmdbid: tmdbId)
     ])
     service.baseURL = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
 
     let cachedStatus = try await service.checkSubscription(media: media)
     let cachedSubscriptions = try await service.fetchSubscriptions(forceRefresh: true)
@@ -573,6 +587,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       id: nil
     )
     service.baseURL = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
 
     let media = MediaInfo(tmdb_id: 665_544, type: "电影")
     let staleCheck = Task {
@@ -611,6 +626,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       id: nil
     )
     service.baseURL = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
 
     var didInvalidate = false
     service.subscriptionCacheTestHooks.afterSubscriptionStatusCacheStore = {
@@ -643,6 +659,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     service.baseURL = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
 
     let media = MediaInfo(tmdb_id: 776_655, type: "电影")
     let cachedStatus = try await service.checkSubscription(media: media)
@@ -685,6 +702,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       id: 9301
     )
     service.baseURL = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
 
     let gate = DetailHeaderSubscriptionAsyncGate()
     service.subscriptionCacheTestHooks.afterSubscriptionStatusCacheStore = {
@@ -724,6 +742,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     service.baseURL = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
 
     let success = try await service.deleteSubscription(
       mediaId: "custom:abc/def value",
@@ -882,28 +901,83 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     XCTAssertFalse(didShowUnsubscribeConfirm)
     XCTAssertTrue(didStartSubscribe)
   }
+
+  @MainActor
+  private func configureDetailHeaderSubscriptionAccess(_ service: APIService) {
+    service.currentUser = Token(
+      access_token: "detail-header-subscription-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        UserPermissionKey.discovery.rawValue: true,
+        UserPermissionKey.search.rawValue: true,
+        UserPermissionKey.subscribe.rawValue: true,
+        UserPermissionKey.manage.rawValue: false,
+      ],
+      user_name: "detail-header",
+      avatar: nil
+    )
+  }
 }
 
 private struct DetailHeaderSubscriptionServiceSnapshot {
   let baseURL: String
+  let token: String?
+  let currentUser: Token?
   let serverURLDefaults: String?
+  let tokenKeychain: String?
+  let tokenDefaults: String?
+  let currentUserKeychain: String?
+  let currentUserDefaults: String?
 
   @MainActor
   static func capture(service: APIService) -> DetailHeaderSubscriptionServiceSnapshot {
     DetailHeaderSubscriptionServiceSnapshot(
       baseURL: service.baseURL,
-      serverURLDefaults: UserDefaults.standard.string(forKey: "serverURL")
+      token: service.token,
+      currentUser: service.currentUser,
+      serverURLDefaults: UserDefaults.standard.string(forKey: "serverURL"),
+      tokenKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "accessToken"),
+      tokenDefaults: UserDefaults.standard.string(forKey: "accessToken"),
+      currentUserKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "currentUser"),
+      currentUserDefaults: UserDefaults.standard.string(forKey: "currentUser")
     )
   }
 
   @MainActor
   func restore(to service: APIService) {
     service.baseURL = baseURL
+    service.token = token
+    service.currentUser = currentUser
 
     if let serverURLDefaults {
       UserDefaults.standard.set(serverURLDefaults, forKey: "serverURL")
     } else {
       UserDefaults.standard.removeObject(forKey: "serverURL")
+    }
+    restoreCredential(account: "accessToken", keychainValue: tokenKeychain, defaultsValue: tokenDefaults)
+    restoreCredential(
+      account: "currentUser",
+      keychainValue: currentUserKeychain,
+      defaultsValue: currentUserDefaults
+    )
+  }
+
+  @MainActor
+  private func restoreCredential(account: String, keychainValue: String?, defaultsValue: String?) {
+    if let keychainValue {
+      _ = KeychainHelper.shared.save(
+        keychainValue,
+        service: "MoviePilot-TV",
+        account: account
+      )
+    } else {
+      _ = KeychainHelper.shared.delete(service: "MoviePilot-TV", account: account)
+    }
+    if let defaultsValue {
+      UserDefaults.standard.set(defaultsValue, forKey: account)
+    } else {
+      UserDefaults.standard.removeObject(forKey: account)
     }
   }
 }

@@ -175,6 +175,7 @@ class MediaPreloadTask: ObservableObject {
   // MARK: - ③ 分季信息
 
   private func loadSeasonData(for detail: MediaInfo) async {
+    guard APIService.shared.canAccess(.subscribe) else { return }
     guard detail.type == "电视剧" else { return }
     // tmdb_id 是分季加载的前提（与 DetailView 中逻辑一致）
     guard detail.tmdb_id != nil else { return }
@@ -188,6 +189,10 @@ class MediaPreloadTask: ObservableObject {
   // MARK: - ④ 订阅状态
 
   private func checkSubscription(for detail: MediaInfo) async {
+    guard APIService.shared.canAccess(.subscribe) else {
+      self.isSubscribed = false
+      return
+    }
     // 电视剧的订阅是分季维度，由 seasonViewModel 内部处理，预加载阶段不查全局订阅
     guard detail.canDirectlySubscribe else { return }
 
@@ -208,6 +213,10 @@ class MediaPreloadTask: ObservableObject {
 
   /// 外部触发刷新订阅状态（收到订阅变更通知时调用）
   func refreshSubscriptionStatus(forceRefreshSeasonSnapshot: Bool = true) async {
+    guard APIService.shared.canAccess(.subscribe) else {
+      self.isSubscribed = false
+      return
+    }
     let detail = fullDetail ?? partialMedia
     if detail.canDirectlySubscribe {
       // 电影等可直接订阅的类型：重新查询全局订阅状态
