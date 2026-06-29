@@ -2222,6 +2222,14 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
 private struct SubscriptionSideEffectTarget: Equatable {
   let id: Int
   let originalState: String
+
+  var toggledState: String {
+    originalState == "R" ? "S" : "R"
+  }
+
+  var isToggleable: Bool {
+    originalState == "R" || originalState == "S"
+  }
 }
 
 final class BackendCompatibilitySideEffectTests: XCTestCase {
@@ -2231,6 +2239,7 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
       from: [
         Subscribe(id: 101, name: "Paused", type: "电视剧", season: 1, state: "S"),
         Subscribe(id: 102, name: "Running", type: "电视剧", season: 1, state: "R"),
+        Subscribe(id: 103, name: "Unknown", type: "电视剧", season: 1, state: "X"),
         Subscribe(name: "Missing ID", type: "电视剧", season: 1, state: "S"),
       ],
       limit: 3
@@ -2326,50 +2335,32 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
         config: config,
         requirement: .permission(.subscribe)
       ) {
-        let subscriptions = try await recentSubscriptions(
+        let targets = try await recentSubscriptionSideEffectTargets(
           service: service,
           limit: config.sideEffectSubscriptionLimit
         )
-        let candidates = subscriptions.filter { subscription in
-          subscription.id != nil && subscription.state == "R"
-        }
-
-        guard !candidates.isEmpty else {
+        guard !targets.isEmpty else {
           XCTFail(
-            "Subscription pause/resume side-effect test ran, but no recent subscriptions were actively subscribing with state R."
+            "Subscription pause/resume side-effect test ran, but the backend has no subscriptions with IDs and S/R states."
           )
           return
         }
 
-        for subscription in candidates {
-          guard let id = subscription.id, let originalState = subscription.state else { continue }
-          var needsRestore = false
-
-          do {
-            let toggleSuccess = try await service.updateSubscriptionStatus(id: id, state: "S")
+        for target in targets {
+          await withRestoredSubscriptionState(
+            service: service,
+            config: config,
+            target: target,
+            operationDescription: "pause/resume subscription \(target.id)"
+          ) {
+            let toggleSuccess = try await service.updateSubscriptionStatus(
+              id: target.id,
+              state: target.toggledState
+            )
             XCTAssertTrue(
               toggleSuccess,
-              "Subscription pause R -> S was rejected for subscription \(id)."
+              "Subscription status toggle \(target.originalState) -> \(target.toggledState) was rejected for subscription \(target.id)."
             )
-            needsRestore = toggleSuccess
-
-            let restoreSuccess = try await service.updateSubscriptionStatus(id: id, state: originalState)
-            needsRestore = false
-            XCTAssertTrue(
-              restoreSuccess,
-              "Subscription status restore S -> \(originalState) was rejected for subscription \(id)."
-            )
-          } catch {
-            if needsRestore {
-              do {
-                _ = try await service.updateSubscriptionStatus(id: id, state: originalState)
-              } catch {
-                XCTFail(
-                  "Failed to restore subscription \(id) to original state \(originalState): \(error)"
-                )
-              }
-            }
-            throw error
           }
         }
       }
@@ -2593,7 +2584,8 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
         guard let id = subscription.id, let state = subscription.state else {
           return nil
         }
-        return SubscriptionSideEffectTarget(id: id, originalState: state)
+        let target = SubscriptionSideEffectTarget(id: id, originalState: state)
+        return target.isToggleable ? target : nil
       }.prefix(limit)
     )
   }

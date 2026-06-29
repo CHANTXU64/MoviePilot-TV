@@ -4,9 +4,42 @@ import XCTest
 
 @MainActor
 final class HomeSubscribeFocusIDTests: XCTestCase {
-  func testRefreshDataDoesNotRequestRestrictedHomeSectionsForStandardUserWithoutPermissions()
+  func testRefreshDataRequestsSubscribeForStandardUserWithDefaultPermissions()
     async throws
   {
+    try await withHomePermissionViewModel(permissions: [:]) { viewModel in
+      await viewModel.refreshData()
+
+      XCTAssertTrue(viewModel.movieSubscriptions.isEmpty)
+      XCTAssertTrue(viewModel.tvSubscriptions.isEmpty)
+      XCTAssertTrue(viewModel.latestMedia.isEmpty)
+      let paths = await HomePermissionURLProtocol.stub.requestPaths()
+      XCTAssertTrue(paths.containsSubscribeListPath)
+      XCTAssertFalse(paths.contains("/api/v1/system/setting/MediaServers"))
+    }
+  }
+
+  func testRefreshDataDoesNotRequestSubscribeWhenPermissionIsExplicitlyDenied()
+    async throws
+  {
+    try await withHomePermissionViewModel(
+      permissions: [UserPermissionKey.subscribe.rawValue: false]
+    ) { viewModel in
+      await viewModel.refreshData()
+
+      XCTAssertTrue(viewModel.movieSubscriptions.isEmpty)
+      XCTAssertTrue(viewModel.tvSubscriptions.isEmpty)
+      XCTAssertTrue(viewModel.latestMedia.isEmpty)
+      let paths = await HomePermissionURLProtocol.stub.requestPaths()
+      XCTAssertFalse(paths.containsSubscribeListPath)
+      XCTAssertFalse(paths.contains("/api/v1/system/setting/MediaServers"))
+    }
+  }
+
+  private func withHomePermissionViewModel(
+    permissions: [String: Bool],
+    operation: (HomeViewModel) async throws -> Void
+  ) async throws {
     XCTAssertTrue(URLProtocol.registerClass(HomePermissionURLProtocol.self))
     defer { URLProtocol.unregisterClass(HomePermissionURLProtocol.self) }
 
@@ -21,21 +54,12 @@ final class HomeSubscribeFocusIDTests: XCTestCase {
       access_token: "token",
       token_type: "bearer",
       super_user: FlexibleBool(false),
-      permissions: [:],
+      permissions: permissions,
       user_name: "test",
       avatar: nil
     )
 
-    let viewModel = HomeViewModel(apiService: service)
-
-    await viewModel.refreshData()
-
-    XCTAssertTrue(viewModel.movieSubscriptions.isEmpty)
-    XCTAssertTrue(viewModel.tvSubscriptions.isEmpty)
-    XCTAssertTrue(viewModel.latestMedia.isEmpty)
-    let paths = await HomePermissionURLProtocol.stub.requestPaths()
-    XCTAssertFalse(paths.contains("/api/v1/subscribe/"))
-    XCTAssertFalse(paths.contains("/api/v1/system/setting/MediaServers"))
+    try await operation(HomeViewModel(apiService: service))
   }
 
   func testSubscribeFocusIDMatchesBetweenRedirectorAndCardBinding() {
@@ -47,6 +71,12 @@ final class HomeSubscribeFocusIDTests: XCTestCase {
 
   func testSubscribeFocusIDIsNilWhenSubscribeIDIsMissing() {
     XCTAssertNil(HomeSubscribeFocusID.value(for: Optional<Int>.none))
+  }
+}
+
+private extension Array where Element == String {
+  var containsSubscribeListPath: Bool {
+    contains { $0 == "/api/v1/subscribe" || $0 == "/api/v1/subscribe/" }
   }
 }
 

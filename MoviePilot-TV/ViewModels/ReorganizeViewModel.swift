@@ -121,8 +121,7 @@ class ReorganizeViewModel: ObservableObject {
 
   private func updateForm(for newPath: String?) {
     guard let newPath = newPath, !newPath.isEmpty else {
-      // 路径为空时, 恢复到`自动`条件
-      form.target_storage = nil
+      // 路径为空时, 恢复到`自动`整理条件, 但保留历史记录或用户选择的目标存储。
       form.transfer_type = nil
       form.scrape = nil
       form.library_type_folder = nil
