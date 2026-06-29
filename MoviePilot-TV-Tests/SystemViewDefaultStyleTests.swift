@@ -40,6 +40,8 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("权限契约仍不稳定"))
     XCTAssertTrue(source.contains("Token.super_user"))
     XCTAssertTrue(source.contains("permissions.subscribe"))
+    XCTAssertTrue(source.contains("/mediaserver/notexists"))
+    XCTAssertTrue(source.contains("canRequestSuperUserEndpoints"))
   }
 
   func testSystemViewExitHandlersOnlyRunWhenSettingsTabIsActive() throws {

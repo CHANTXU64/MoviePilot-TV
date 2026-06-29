@@ -85,6 +85,33 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertFalse(paths.contains { $0.hasPrefix("/api/v1/subscribe/media/") })
   }
 
+  func testStandardSubscriberTvPreloadDoesNotRequestSuperUserSeasonAvailability() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    MediaPreloadPermissionURLProtocol.stub.reset()
+    configureStandardSubscriber(service)
+
+    let task = MediaPreloadTask(
+      partialMedia: MediaInfo(tmdb_id: 123, title: "Subscriber Show", type: "电视剧")
+    )
+    task.start()
+
+    try await waitUntil("season data ready") {
+      task.isSeasonDataLoaded
+    }
+    try await Task.sleep(nanoseconds: 300_000_000)
+
+    let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
+    XCTAssertFalse(paths.contains("/api/v1/mediaserver/notexists"))
+    XCTAssertTrue(paths.containsSubscribeListPath)
+    XCTAssertNotNil(task.seasonViewModel)
+  }
+
   private func configureLimitedUser(_ service: APIService) {
     service.baseURL = "https://preload-permission-tests.local"
     service.token = "limited-token"
@@ -99,6 +126,24 @@ final class MediaPreloadPermissionTests: XCTestCase {
         UserPermissionKey.manage.rawValue: false,
       ],
       user_name: "limited",
+      avatar: nil
+    )
+  }
+
+  private func configureStandardSubscriber(_ service: APIService) {
+    service.baseURL = "https://preload-permission-tests.local"
+    service.token = "subscriber-token"
+    service.currentUser = Token(
+      access_token: "subscriber-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        UserPermissionKey.discovery.rawValue: true,
+        UserPermissionKey.search.rawValue: true,
+        UserPermissionKey.subscribe.rawValue: true,
+        UserPermissionKey.manage.rawValue: false,
+      ],
+      user_name: "subscriber",
       avatar: nil
     )
   }

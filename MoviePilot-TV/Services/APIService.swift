@@ -1751,7 +1751,7 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeSeasonDialog.vue
   /// - 应用场景: 在前端的 **分季订阅弹窗** 中，实时标记哪些季“已入库”、“部分缺失”或“完全缺失”。
   func checkSeasonsNotExists(mediaInfo: MediaInfo) async throws -> [NotExistMediaInfo] {
-    guard canAccess(.subscribe) else { return [] }
+    guard canRequestSuperUserEndpoints else { return [] }
     let body = try JSONEncoder().encode(mediaInfo)
     let hash = SHA256.hash(data: body)
     let cacheKey = hash.compactMap { String(format: "%02x", $0) }.joined()
