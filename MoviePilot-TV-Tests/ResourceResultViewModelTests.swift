@@ -146,6 +146,7 @@ final class ResourceResultViewModelTests: XCTestCase {
 
     await ResourceResultViewModelURLProtocol.stub.reset()
     service.baseURL = "http://resource-result-tests.local"
+    configureResourceResultSuperUserSession(service)
     let filterSnapshot = ResourceResultViewModelFilterSelectionSnapshot.selectHardRule(
       "allow-all", baseURL: service.baseURL)
     defer { filterSnapshot.restore() }
@@ -273,6 +274,7 @@ final class ResourceResultViewModelTests: XCTestCase {
 
     await ResourceResultViewModelURLProtocol.stub.reset()
     service.baseURL = "http://resource-result-tests.local"
+    configureResourceResultSuperUserSession(service)
     let filterSnapshot = ResourceResultViewModelFilterSelectionSnapshot.selectHardRule(
       "allow-all", baseURL: service.baseURL)
     defer { filterSnapshot.restore() }
@@ -315,12 +317,16 @@ final class ResourceResultViewModelTests: XCTestCase {
 @MainActor
 private struct ResourceResultViewModelServiceSnapshot {
   let baseURL: String
+  let token: String?
+  let currentUser: Token?
   let serverURLDefaults: String?
   let accessTokenDefaults: String?
 
   static func capture(service: APIService) -> ResourceResultViewModelServiceSnapshot {
     ResourceResultViewModelServiceSnapshot(
       baseURL: service.baseURL,
+      token: service.token,
+      currentUser: service.currentUser,
       serverURLDefaults: UserDefaults.standard.string(forKey: "serverURL"),
       accessTokenDefaults: UserDefaults.standard.string(forKey: "accessToken")
     )
@@ -328,6 +334,8 @@ private struct ResourceResultViewModelServiceSnapshot {
 
   func restore(to service: APIService) {
     service.baseURL = baseURL
+    service.token = token
+    service.currentUser = currentUser
 
     if let serverURLDefaults {
       UserDefaults.standard.set(serverURLDefaults, forKey: "serverURL")
@@ -516,6 +524,19 @@ private struct ResourceResultHTTPStubResponse: Sendable {
 private struct ResourceResultRecordedRequest: Equatable {
   let path: String
   let keyword: String
+}
+
+@MainActor
+private func configureResourceResultSuperUserSession(_ service: APIService) {
+  service.token = "resource-result-super-token"
+  service.currentUser = Token(
+    access_token: "resource-result-super-token",
+    token_type: "bearer",
+    super_user: FlexibleBool(true),
+    permissions: nil,
+    user_name: "admin",
+    avatar: nil
+  )
 }
 
 @MainActor
