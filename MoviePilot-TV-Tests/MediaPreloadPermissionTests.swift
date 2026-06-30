@@ -85,7 +85,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertFalse(paths.contains { $0.hasPrefix("/api/v1/subscribe/media/") })
   }
 
-  func testStandardSubscriberTvPreloadDoesNotRequestSuperUserSeasonAvailability() async throws {
+  func testStandardSubscriberTvPreloadRequestsSeasonAvailabilityWithoutSuperUser() async throws {
     XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
     defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
 
@@ -107,9 +107,33 @@ final class MediaPreloadPermissionTests: XCTestCase {
     try await Task.sleep(nanoseconds: 300_000_000)
 
     let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
-    XCTAssertFalse(paths.contains("/api/v1/mediaserver/notexists"))
+    XCTAssertTrue(paths.contains("/api/v1/mediaserver/notexists"))
     XCTAssertTrue(paths.containsSubscribeListPath)
     XCTAssertNotNil(task.seasonViewModel)
+  }
+
+  func testSeasonAvailabilityPermissionFailureDoesNotLogoutSubscriber() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    MediaPreloadPermissionURLProtocol.stub.reset()
+    MediaPreloadPermissionURLProtocol.stub.setSeasonAvailabilityStatusCode(403)
+    configureStandardSubscriber(service)
+
+    let result = try await service.checkSeasonsNotExists(
+      mediaInfo: MediaInfo(tmdb_id: 123, title: "Subscriber Show", type: "电视剧")
+    )
+
+    XCTAssertTrue(result.isEmpty)
+    XCTAssertEqual(service.token, "subscriber-token")
+    XCTAssertEqual(service.currentUser?.user_name, "subscriber")
+
+    let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
+    XCTAssertTrue(paths.contains("/api/v1/mediaserver/notexists"))
   }
 
   func testRestrictedUserSubscriptionActionsDoNotRequestSubscribeEndpoints() async throws {
@@ -174,6 +198,195 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertFalse(paths.contains { $0.hasPrefix("/api/v1/subscribe") })
   }
 
+  func testStandardUserReorganizeActionsDoNotRequestSuperUserEndpoints() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    MediaPreloadPermissionURLProtocol.stub.reset()
+    configureStandardSubscriber(service)
+
+    let history = TransferHistory(
+      id: 77,
+      title: "Subscriber History",
+      type: "电影",
+      seasons: nil,
+      episodes: nil,
+      category: nil,
+      src: "/downloads/movie.mkv",
+      dest: nil,
+      src_storage: "local",
+      dest_storage: nil,
+      mode: "move",
+      status: FlexibleBool(false),
+      errmsg: nil,
+      src_fileitem: FileItem(name: "movie.mkv", path: "/downloads/movie.mkv", type: "file", size: nil),
+      date: nil
+    )
+    let form = ReorganizeForm(
+      fileitem: nil,
+      logid: history.id,
+      target_storage: nil,
+      transfer_type: nil,
+      target_path: "",
+      min_filesize: 0,
+      scrape: nil,
+      from_history: true
+    )
+
+    let didDelete = (try? await service.deleteTransferHistory(
+      item: history,
+      deleteSource: false,
+      deleteDest: false
+    )) ?? false
+    let aiRedo = try? await service.aiRedoTransferHistory(ids: [history.id])
+    let didManualTransfer = (try? await service.manualTransfer(
+      form: form,
+      background: false
+    )) ?? false
+
+    XCTAssertFalse(didDelete)
+    XCTAssertNil(aiRedo)
+    XCTAssertFalse(didManualTransfer)
+
+    let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
+    XCTAssertFalse(paths.contains("/api/v1/history/transfer"))
+    XCTAssertFalse(paths.contains("/api/v1/history/transfer/ai-redo"))
+    XCTAssertFalse(paths.contains("/api/v1/transfer/manual"))
+  }
+
+  func testStandardUserHiddenAdminSurfacesDoNotRequestSuperUserEndpoints() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    MediaPreloadPermissionURLProtocol.stub.reset()
+    configureStandardSubscriber(service)
+
+    let statistic = try await service.fetchStatistic()
+    let storage = try await service.fetchStorage()
+    let downloader = try await service.fetchDownloaderInfo()
+    let env = try await service.fetchSystemEnv()
+    let mediaServers = try await service.fetchMediaServers()
+    let latest = try await service.fetchMediaServerLatest(server: "emby")
+    let filterGroups = try await service.fetchFilterRuleGroups()
+    let customRules = try await service.fetchCustomFilterRules()
+    let history = try await service.fetchTransferHistory(page: 1, count: 20, title: nil)
+    let downloading = try await service.fetchDownloading(clientName: "qbittorrent")
+    let stopped = try await service.stopDownload(clientName: "qbittorrent", hash: "hash")
+    let started = try await service.startDownload(clientName: "qbittorrent", hash: "hash")
+    let deleted = try await service.deleteDownload(clientName: "qbittorrent", hash: "hash")
+
+    XCTAssertEqual(statistic.movie_count, 0)
+    XCTAssertEqual(statistic.tv_count, 0)
+    XCTAssertEqual(storage.total_storage, 0)
+    XCTAssertEqual(storage.used_storage, 0)
+    XCTAssertEqual(downloader.download_speed, 0)
+    XCTAssertEqual(env.VERSION, "v2.13.14")
+    XCTAssertTrue(mediaServers.isEmpty)
+    XCTAssertTrue(latest.isEmpty)
+    XCTAssertEqual(filterGroups.map(\.name), ["普通规则组"])
+    XCTAssertTrue(customRules.isEmpty)
+    XCTAssertTrue(history.list.isEmpty)
+    XCTAssertEqual(history.total, 0)
+    XCTAssertTrue(downloading.isEmpty)
+    XCTAssertFalse(stopped.success)
+    XCTAssertFalse(started.success)
+    XCTAssertFalse(deleted.success)
+
+    let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
+    XCTAssertFalse(paths.contains { $0.hasPrefix("/api/v1/dashboard/") })
+    XCTAssertTrue(paths.contains("/api/v1/system/env"))
+    XCTAssertFalse(paths.contains("/api/v1/system/setting/MediaServers"))
+    XCTAssertFalse(paths.contains("/api/v1/mediaserver/latest"))
+    XCTAssertTrue(paths.contains("/api/v1/system/setting/UserFilterRuleGroups"))
+    XCTAssertFalse(paths.contains("/api/v1/system/setting/CustomFilterRules"))
+    XCTAssertFalse(paths.contains("/api/v1/history/transfer"))
+    XCTAssertFalse(paths.contains { $0.hasPrefix("/api/v1/download/") })
+  }
+
+  func testNoSearchUserResourceActionsDoNotRequestSearchOrDownloadEndpoints() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    MediaPreloadPermissionURLProtocol.stub.reset()
+    configureNoSearchUser(service)
+
+    let settingsViewModel = SystemViewModel()
+    settingsViewModel.defaultSearchSites = [1, 2]
+    defer { settingsViewModel.defaultSearchSites = [] }
+
+    do {
+      for try await _ in service.searchTitleStream(keyword: "Blocked", sites: nil) {}
+    } catch {
+    }
+    do {
+      for try await _ in service.searchMediaStream(
+        keyword: "tmdb:123",
+        type: "电影",
+        area: "title",
+        title: "Blocked",
+        year: "2026",
+        season: nil,
+        sites: nil
+      ) {}
+    } catch {
+    }
+
+    let resources = (try? await service.searchResources(keyword: "Blocked")) ?? []
+    let indexerSites = (try? await service.fetchIndexerSites()) ?? []
+    let normalizedSites = await SystemViewModel.normalizedDefaultSearchSitesString()
+    let addDownloadResult = (try? await service.addDownload(
+      payload: AddDownloadRequest(
+        torrent_in: TorrentInfo(
+          site: nil,
+          site_name: nil,
+          site_order: nil,
+          title: "blocked.torrent",
+          description: nil,
+          enclosure: nil,
+          page_url: nil,
+          size: 1,
+          seeders: nil,
+          peers: nil,
+          pubdate: nil,
+          uploadvolumefactor: 1,
+          downloadvolumefactor: 1,
+          pri_order: nil,
+          labels: nil,
+          volume_factor: nil
+        ),
+        downloader: nil,
+        save_path: nil,
+        media_in: nil,
+        tmdbid: nil,
+        doubanid: nil
+      ),
+      endpoint: "/download/add"
+    )) ?? (success: false, message: nil)
+
+    XCTAssertTrue(resources.isEmpty)
+    XCTAssertTrue(indexerSites.isEmpty)
+    XCTAssertNil(normalizedSites)
+    XCTAssertFalse(addDownloadResult.success)
+
+    let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
+    XCTAssertFalse(paths.contains { $0.hasPrefix("/api/v1/search/") })
+    XCTAssertFalse(paths.contains("/api/v1/system/setting/IndexerSites"))
+    XCTAssertFalse(paths.contains("/api/v1/site/rss"))
+    XCTAssertFalse(paths.contains { $0.hasPrefix("/api/v1/download") })
+  }
+
   private func configureLimitedUser(_ service: APIService) {
     service.baseURL = "https://preload-permission-tests.local"
     service.token = "limited-token"
@@ -206,6 +419,24 @@ final class MediaPreloadPermissionTests: XCTestCase {
         UserPermissionKey.manage.rawValue: false,
       ],
       user_name: "subscriber",
+      avatar: nil
+    )
+  }
+
+  private func configureNoSearchUser(_ service: APIService) {
+    service.baseURL = "https://preload-permission-tests.local"
+    service.token = "no-search-token"
+    service.currentUser = Token(
+      access_token: "no-search-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        UserPermissionKey.discovery.rawValue: true,
+        UserPermissionKey.search.rawValue: false,
+        UserPermissionKey.subscribe.rawValue: false,
+        UserPermissionKey.manage.rawValue: false,
+      ],
+      user_name: "no-search",
       avatar: nil
     )
   }
@@ -297,11 +528,19 @@ private struct MediaPreloadPermissionServiceSnapshot {
 private final class MediaPreloadPermissionURLProtocolStub: @unchecked Sendable {
   private let lock = NSLock()
   private var paths: [String] = []
+  private var seasonAvailabilityStatusCode = 200
 
   func reset() {
     lock.lock()
     defer { lock.unlock() }
     paths = []
+    seasonAvailabilityStatusCode = 200
+  }
+
+  func setSeasonAvailabilityStatusCode(_ statusCode: Int) {
+    lock.lock()
+    defer { lock.unlock() }
+    seasonAvailabilityStatusCode = statusCode
   }
 
   func requestPaths() -> [String] {
@@ -323,9 +562,17 @@ private final class MediaPreloadPermissionURLProtocolStub: @unchecked Sendable {
       return (200, jsonData(#"{"tmdb_id":456,"title":"Limited Movie","type":"电影"}"#))
     case "/api/v1/media/groups/123",
       "/api/v1/media/seasons",
-      "/api/v1/mediaserver/notexists",
       "/api/v1/subscribe/":
       return (200, jsonData("[]"))
+    case "/api/v1/mediaserver/notexists":
+      lock.lock()
+      let statusCode = seasonAvailabilityStatusCode
+      lock.unlock()
+      return (statusCode, jsonData("[]"))
+    case "/api/v1/system/env":
+      return (200, jsonData(#"{"VERSION":"v2.13.14"}"#))
+    case "/api/v1/system/setting/UserFilterRuleGroups":
+      return (200, jsonData(#"{"value":[{"name":"普通规则组"}]}"#))
     default:
       if path.hasPrefix("/api/v1/tmdb/credits/")
         || path.hasPrefix("/api/v1/tmdb/recommend/")

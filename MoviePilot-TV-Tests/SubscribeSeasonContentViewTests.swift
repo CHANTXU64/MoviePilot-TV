@@ -171,6 +171,35 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(subscribeRequestCount, 2)
   }
 
+  func testChangingCurrentUserClearsCachedSubscriptionSnapshot() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
+      Subscribe(id: 601, name: "旧账号订阅", type: "电视剧", season: 1, tmdbid: 814001)
+    ])
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
+      Subscribe(id: 602, name: "新账号订阅", type: "电视剧", season: 2, tmdbid: 814001)
+    ])
+    service.baseURL = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service, userName: "first-user")
+
+    let cachedSubscriptions = try await service.fetchSubscriptions(forceRefresh: true)
+    XCTAssertEqual(cachedSubscriptions.map(\.id), [601])
+
+    configureSubscriptionSnapshotAccess(service, userName: "second-user")
+    let refreshedSubscriptions = try await service.fetchSubscriptions()
+
+    XCTAssertEqual(refreshedSubscriptions.map(\.id), [602])
+    let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(subscribeRequestCount, 2)
+  }
+
   func testSearchSubscriptionClearsCachedSubscriptionSnapshot() async throws {
     XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
     defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
@@ -1093,8 +1122,15 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
   }
 
   @MainActor
-  private func configureSubscriptionSnapshotAccess(_ service: APIService) {
-    service.currentUser = Token(
+  private func configureSubscriptionSnapshotAccess(
+    _ service: APIService,
+    userName: String = "subscription-snapshot"
+  ) {
+    service.currentUser = subscriptionSnapshotToken(userName: userName)
+  }
+
+  private func subscriptionSnapshotToken(userName: String) -> Token {
+    Token(
       access_token: "subscription-snapshot-token",
       token_type: "bearer",
       super_user: FlexibleBool(false),
@@ -1104,7 +1140,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
         UserPermissionKey.subscribe.rawValue: true,
         UserPermissionKey.manage.rawValue: false,
       ],
-      user_name: "subscription-snapshot",
+      user_name: userName,
       avatar: nil
     )
   }

@@ -436,6 +436,47 @@ final class BackendCompatibilityEnvironmentParsingTests: XCTestCase {
       )
     )
   }
+
+  @MainActor
+  func testBackendCompatibilityStepSkipsOperationWhenAccountLacksRequiredAccess() async {
+    let service = APIService.shared
+    let snapshot = BackendServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    let account = BackendCompatibilityAccount(
+      label: "additional-1",
+      username: "readonly",
+      password: "password"
+    )
+    let token = Token(
+      access_token: "readonly-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        "discovery": true,
+        "search": true,
+        "subscribe": false,
+        "manage": false,
+      ],
+      user_name: "readonly",
+      avatar: nil
+    )
+    let config = BackendCompatibilityConfig.testValue().activating(account: account, token: token)
+
+    var didRunOperation = false
+    let result: [Subscribe]? = await runBackendCompatibilityStep(
+      "subscriptions",
+      service: service,
+      config: config,
+      requirement: .permission(.subscribe)
+    ) {
+      didRunOperation = true
+      return []
+    }
+
+    XCTAssertNil(result)
+    XCTAssertFalse(didRunOperation)
+  }
 }
 
 @MainActor
@@ -527,6 +568,13 @@ private func runBackendCompatibilityStep<T>(
   pinBackendCompatibilityAccount(service: service, config: config)
   defer {
     pinBackendCompatibilityAccount(service: service, config: config)
+  }
+
+  guard config.allows(requirement) else {
+    print(
+      "Backend compatibility permission diagnostic for \(label): \(config.activeAccountDiagnostic); required=\(requirement.diagnosticDescription); skipped before request"
+    )
+    return nil
   }
 
   do {
@@ -919,7 +967,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         "/system/env",
         service: service,
         config: config,
-        requirement: .superUser
+        requirement: .none
       ) {
         _ = try await service.fetchSystemEnv()
       }
@@ -982,7 +1030,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         "filter-rule groups",
         service: service,
         config: config,
-        requirement: .superUser
+        requirement: .permission(.subscribe)
       ) {
         _ = try await service.fetchFilterRuleGroups()
       }
@@ -994,7 +1042,12 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       ) {
         _ = try await service.fetchCustomFilterRules()
       }
-      await runBackendCompatibilityStep("indexer sites", service: service, config: config) {
+      await runBackendCompatibilityStep(
+        "indexer sites",
+        service: service,
+        config: config,
+        requirement: .permission(.search)
+      ) {
         _ = try await service.fetchIndexerSites()
       }
       await runBackendCompatibilityStep("storages", service: service, config: config) {
@@ -1027,12 +1080,15 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         )
       }
 
-      do {
+      await runBackendCompatibilityStep(
+        "transfer history",
+        service: service,
+        config: config,
+        requirement: .superUser
+      ) {
         let history = try await service.fetchTransferHistory(page: 1, count: 20, title: nil)
         XCTAssertGreaterThanOrEqual(history.total, 0)
         XCTAssertLessThanOrEqual(history.list.count, 20)
-      } catch {
-        XCTFail("Failed to read transfer history: \(error)")
       }
     }
   }
@@ -1107,7 +1163,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       await scanMediaServerLatest(service: service, config: config, collector: &collector)
       await scanSubscriptions(service: service, config: config, collector: &collector)
 
-      await scanDownloading(service: service, collector: &collector)
+      await scanDownloading(service: service, config: config, collector: &collector)
 
       await scanRecommendShelves(service: service, config: config, collector: &collector)
       await scanExploreSurfaces(service: service, config: config, collector: &collector)
@@ -1204,9 +1260,15 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   @MainActor
   private func scanDownloading(
     service: APIService,
+    config: BackendCompatibilityConfig,
     collector: inout BackendCompatibilityCollector
   ) async {
-    do {
+    await runBackendCompatibilityStep(
+      "downloading surface",
+      service: service,
+      config: config,
+      requirement: .superUser
+    ) {
       let clients = try await service.fetchDownloadClients()
       for client in clients where client.enabled?.value ?? true {
         do {
@@ -1216,8 +1278,6 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
           XCTFail("Failed to read downloading list for \(client.name): \(error)")
         }
       }
-    } catch {
-      XCTFail("Failed to scan downloading surface: \(error)")
     }
   }
 
@@ -1468,7 +1528,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       "season availability status",
       service: service,
       config: config,
-      requirement: .superUser
+      requirement: .permission(.subscribe)
     ) {
       for media in series {
         let missingItems = try await service.checkSeasonsNotExists(mediaInfo: media)

@@ -236,6 +236,7 @@ class SystemViewModel: ObservableObject {
 
   /// 从后端加载系统环境和用户信息
   func loadSystemInfo() async {
+    let sessionSnapshot = APIService.shared.sessionSnapshot()
     self.serverURL = APIService.shared.baseURL
     self.username =
       KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username")
@@ -244,11 +245,14 @@ class SystemViewModel: ObservableObject {
     let cachedBackendVersion = normalizedBackendVersion(APIService.shared.settings?.BACKEND_VERSION)
     self.backendVersion = cachedBackendVersion
 
-    if APIService.shared.canRequestSuperUserEndpoints {
+    if APIService.shared.isLoggedIn {
       do {
         let env = try await APIService.shared.fetchSystemEnv()
-        self.backendVersion = normalizedBackendVersion(env.VERSION) ?? backendVersion
-        return
+        guard APIService.shared.isSessionUnchanged(from: sessionSnapshot) else { return }
+        if let envVersion = normalizedBackendVersion(env.VERSION) {
+          self.backendVersion = envVersion
+          return
+        }
       } catch {
         print("❌ [SystemViewModel] 获取后端版本号失败: \(error)")
       }
@@ -256,6 +260,7 @@ class SystemViewModel: ObservableObject {
 
     do {
       let settings = try await APIService.shared.fetchSettings()
+      guard APIService.shared.isSessionUnchanged(from: sessionSnapshot) else { return }
       self.backendVersion = normalizedBackendVersion(settings.BACKEND_VERSION) ?? backendVersion
     } catch {
       print("❌ [SystemViewModel] 获取公开后端版本号失败: \(error)")
@@ -275,16 +280,30 @@ class SystemViewModel: ObservableObject {
 
   /// 从后端加载站点列表
   func loadSites() async {
+    guard APIService.shared.canAccess(.search) else {
+      availableSites = []
+      return
+    }
     guard !isLoadingSites else { return }
+    let sessionSnapshot = APIService.shared.sessionSnapshot()
     isLoadingSites = true
+    defer {
+      isLoadingSites = false
+    }
     do {
-      availableSites = try await APIService.shared.fetchSites()
+      let sites = try await APIService.shared.fetchSites()
+      guard APIService.shared.isSessionUnchanged(from: sessionSnapshot),
+        APIService.shared.canAccess(.search)
+      else {
+        availableSites = []
+        return
+      }
+      availableSites = sites
       defaultSearchSites = defaultSearchSites
       print("✅ [SystemViewModel] 加载到 \(availableSites.count) 个站点")
     } catch {
       print("❌ [SystemViewModel] 加载站点失败: \(error)")
     }
-    isLoadingSites = false
   }
 
   // MARK: - 自定义过滤规则加载
@@ -296,13 +315,16 @@ class SystemViewModel: ObservableObject {
       return
     }
     guard !isLoadingRules else { return }
+    let sessionSnapshot = APIService.shared.sessionSnapshot()
     isLoadingRules = true
     defer {
       isLoadingRules = false
     }
     do {
       let rules = try await APIService.shared.fetchCustomFilterRules()
-      guard APIService.shared.canRequestSuperUserEndpoints else {
+      guard APIService.shared.isSessionUnchanged(from: sessionSnapshot),
+        APIService.shared.canRequestSuperUserEndpoints
+      else {
         customFilterRules = []
         return
       }
@@ -348,6 +370,7 @@ class SystemViewModel: ObservableObject {
   static func normalizedCurrentDefaultSearchSites() async -> Set<Int> {
     let storedSites = currentDefaultSearchSites()
     guard !storedSites.isEmpty else { return [] }
+    guard APIService.shared.canAccess(.search) else { return [] }
 
     do {
       let availableSites = try await APIService.shared.fetchSites()

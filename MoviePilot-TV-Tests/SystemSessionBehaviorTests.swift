@@ -390,7 +390,7 @@ final class SystemSessionBehaviorTests: XCTestCase {
     XCTAssertEqual(viewModel.refreshMessage, "保持现有状态")
   }
 
-  func testLoadSystemInfoUsesPublicBackendVersionForLimitedUser() async throws {
+  func testLoadSystemInfoUsesSystemEnvBackendVersionForLimitedUser() async throws {
     XCTAssertTrue(URLProtocol.registerClass(SystemInfoURLProtocol.self))
     defer { URLProtocol.unregisterClass(SystemInfoURLProtocol.self) }
 
@@ -415,11 +415,11 @@ final class SystemSessionBehaviorTests: XCTestCase {
 
     XCTAssertEqual(viewModel.backendVersion, "v2.13.14")
     let paths = await SystemInfoURLProtocol.stub.requestPaths()
-    XCTAssertTrue(paths.contains("/api/v1/system/global"))
-    XCTAssertFalse(paths.contains("/api/v1/system/env"))
+    XCTAssertTrue(paths.contains("/api/v1/system/env"))
+    XCTAssertFalse(paths.contains("/api/v1/system/global"))
   }
 
-  func testLoadSystemInfoFetchesPublicBackendVersionForLimitedUserWhenCacheIsEmpty()
+  func testLoadSystemInfoFetchesSystemEnvBackendVersionForLimitedUserWhenCacheIsEmpty()
     async throws
   {
     XCTAssertTrue(URLProtocol.registerClass(SystemInfoURLProtocol.self))
@@ -441,8 +441,8 @@ final class SystemSessionBehaviorTests: XCTestCase {
 
     XCTAssertEqual(viewModel.backendVersion, "v2.13.14")
     let paths = await SystemInfoURLProtocol.stub.requestPaths()
-    XCTAssertTrue(paths.contains("/api/v1/system/global"))
-    XCTAssertFalse(paths.contains("/api/v1/system/env"))
+    XCTAssertTrue(paths.contains("/api/v1/system/env"))
+    XCTAssertFalse(paths.contains("/api/v1/system/global"))
   }
 
   func testLoadSystemInfoRefreshesStalePublicBackendVersionForLimitedUser() async throws {
@@ -470,8 +470,8 @@ final class SystemSessionBehaviorTests: XCTestCase {
 
     XCTAssertEqual(viewModel.backendVersion, "v2.13.14")
     let paths = await SystemInfoURLProtocol.stub.requestPaths()
-    XCTAssertTrue(paths.contains("/api/v1/system/global"))
-    XCTAssertFalse(paths.contains("/api/v1/system/env"))
+    XCTAssertTrue(paths.contains("/api/v1/system/env"))
+    XCTAssertFalse(paths.contains("/api/v1/system/global"))
   }
 
   private func limitedToken() -> Token {
@@ -778,8 +778,8 @@ private actor SystemInfoURLProtocolStub {
       statusCode = 200
       data = #"{"success":true,"data":{}}"#.data(using: .utf8)!
     case "/api/v1/system/env":
-      statusCode = 403
-      data = #"{"success":false,"message":"forbidden"}"#.data(using: .utf8)!
+      statusCode = 200
+      data = #"{"success":true,"data":{"VERSION":"v2.13.14"}}"#.data(using: .utf8)!
     default:
       statusCode = 404
       data = #"{"success":false,"message":"not found"}"#.data(using: .utf8)!

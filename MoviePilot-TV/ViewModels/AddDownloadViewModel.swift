@@ -37,6 +37,12 @@ class AddDownloadViewModel: ObservableObject {
   }
 
   func loadData() async {
+    guard APIService.shared.canAccess(.search) else {
+      clearLoadedOptions()
+      return
+    }
+
+    let sessionSnapshot = APIService.shared.sessionSnapshot()
     isLoading = true
     defer { isLoading = false }
 
@@ -45,6 +51,12 @@ class AddDownloadViewModel: ObservableObject {
       async let directoriesTask = APIService.shared.fetchDirectories()
 
       let (fetchedDownloaders, fetchedDirectories) = try await (downloadersTask, directoriesTask)
+      guard APIService.shared.isSessionUnchanged(from: sessionSnapshot),
+        APIService.shared.canAccess(.search)
+      else {
+        clearLoadedOptions()
+        return
+      }
 
       self.downloaders = fetchedDownloaders
       self.directories = fetchedDirectories
@@ -60,7 +72,15 @@ class AddDownloadViewModel: ObservableObject {
     }
   }
 
+  private func clearLoadedOptions() {
+    downloaders = []
+    directories = []
+    selectedDownloader = nil
+    selectedDirectory = nil
+  }
+
   func addDownload() async {
+    guard APIService.shared.canAccess(.search) else { return }
     isSubmitting = true
     defer { isSubmitting = false }
 

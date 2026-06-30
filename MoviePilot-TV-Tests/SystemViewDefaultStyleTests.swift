@@ -41,7 +41,8 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("Token.super_user"))
     XCTAssertTrue(source.contains("permissions.subscribe"))
     XCTAssertTrue(source.contains("/mediaserver/notexists"))
-    XCTAssertTrue(source.contains("canRequestSuperUserEndpoints"))
+    XCTAssertTrue(source.contains("不得要求 `Token.super_user`"))
+    XCTAssertTrue(source.contains("canAccess(.subscribe)"))
     XCTAssertTrue(source.contains("不显示入库状态徽章"))
     XCTAssertTrue(source.contains("best_version"))
   }
@@ -137,12 +138,37 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("customFilterRules = rules"))
   }
 
+  func testSystemViewScopesLocalFeatureSettingsByPermission() throws {
+    let viewSource = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+    let viewModelSource = try Self.source(at: "MoviePilot-TV/ViewModels/SystemViewModel.swift")
+
+    XCTAssertTrue(viewSource.contains("@ObservedObject private var apiService = APIService.shared"))
+    XCTAssertTrue(viewSource.contains("private var canConfigureSubscriptions: Bool"))
+    XCTAssertTrue(viewSource.contains("private var canConfigureSearch: Bool"))
+    XCTAssertTrue(viewSource.contains("private var canConfigureSearchFilters: Bool"))
+    XCTAssertTrue(viewSource.contains("apiService.canRequestSuperUserEndpoints"))
+    XCTAssertTrue(viewSource.contains("if canConfigureSubscriptions {"))
+    XCTAssertTrue(viewSource.contains("if canConfigureSearch {"))
+    XCTAssertTrue(viewSource.contains("if canConfigureSearchFilters {"))
+    XCTAssertTrue(viewModelSource.contains("guard APIService.shared.canAccess(.search) else {"))
+  }
+
   func testRecommendBackendCompatibilityScansShelvesIndependently() throws {
     let source = try Self.source(at: "MoviePilot-TV-Tests/BackendCompatibilityTests.swift")
 
     XCTAssertTrue(source.contains("for shelf in RecommendViewModel.allShelves {"))
     XCTAssertTrue(source.contains("\"recommend shelf \\(shelf.title)\""))
     XCTAssertFalse(source.contains("\"recommend shelves\""))
+  }
+
+  func testFilterRuleGroupsCompatibilityProbeUsesSubscribePermission() throws {
+    let source = try Self.source(at: "MoviePilot-TV-Tests/BackendCompatibilityTests.swift")
+    let start = try XCTUnwrap(source.range(of: "\"filter-rule groups\""))
+    let end = try XCTUnwrap(source.range(of: "\"custom filter rules\"", range: start.upperBound..<source.endIndex))
+    let probe = String(source[start.lowerBound..<end.lowerBound])
+
+    XCTAssertTrue(probe.contains("requirement: .permission(.subscribe)"))
+    XCTAssertFalse(probe.contains("requirement: .superUser"))
   }
 
   private static func source(at path: String) throws -> String {

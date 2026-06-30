@@ -162,7 +162,7 @@ class SubscribeSeasonViewModel: ObservableObject {
   /// 调用后端接口，比对媒体库中已有的集数，确定每一季的完整性
   func checkSeasonsStatus() async {
     isSeasonAvailabilityLoaded = false
-    guard APIService.shared.canRequestSuperUserEndpoints else {
+    guard APIService.shared.canAccess(.subscribe) else {
       seasonsNotExisted = [:]
       return
     }

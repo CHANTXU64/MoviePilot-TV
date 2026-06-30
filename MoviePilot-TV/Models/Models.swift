@@ -229,7 +229,7 @@ struct Token: Codable {
   let token_type: String
   /// 是否属于超级管理员
   let super_user: FlexibleBool?
-  /// 普通用户功能权限；空字典表示未授予普通功能权限，nil 表示低版本/未知权限状态。
+  /// 普通用户功能权限；nil 或缺失字段按 Web 默认权限补齐，显式 false 才关闭对应功能。
   let permissions: [String: Bool]?
   /// 用户名
   let user_name: String
@@ -252,10 +252,8 @@ struct Token: Codable {
   func canAccess(_ permission: UserPermissionKey) -> Bool {
     if super_user?.value == true { return true }
     guard permission != .admin else { return false }
-    guard let permissions else {
-      return Self.defaultCanAccess(permission)
-    }
-    return permissions[permission.rawValue] == true
+    guard let permissions else { return Self.defaultCanAccess(permission) }
+    return permissions[permission.rawValue] ?? Self.defaultCanAccess(permission)
   }
 
   var hasLoginAccessibleFeature: Bool {
@@ -264,7 +262,6 @@ struct Token: Codable {
       UserPermissionKey.discovery,
       .search,
       .subscribe,
-      .manage,
     ].contains { canAccess($0) }
   }
 

@@ -116,7 +116,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(searchRequestCount, 1)
   }
 
-  func testLoadDataSkipsFilterGroupsForStandardUserWithSubscribePermission() async throws {
+  func testLoadDataLoadsFilterGroupsForStandardUserWithSubscribePermission() async throws {
     XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
     defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
 
@@ -149,10 +149,95 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     await viewModel.loadData()
 
-    XCTAssertEqual(viewModel.filterGroups.map(\.name), [])
+    XCTAssertEqual(viewModel.filterGroups.map(\.name), ["普通规则组"])
     let filterGroupsRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
       method: "GET", path: "/api/v1/system/setting/UserFilterRuleGroups")
-    XCTAssertEqual(filterGroupsRequestCount, 0)
+    XCTAssertEqual(filterGroupsRequestCount, 1)
+  }
+
+  func testPendingLoadDataDoesNotPublishOptionsAfterSubscribePermissionIsRestricted()
+    async throws
+  {
+    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer {
+      snapshot.restore(to: service)
+    }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.suspend(path: "/api/v1/system/setting/UserFilterRuleGroups")
+    service.baseURL = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(id: 782, name: "权限降级", type: "电影", tmdbid: 123461),
+      isNewSubscription: false
+    )
+
+    let loadTask = Task { await viewModel.loadData() }
+    try await waitUntil("filter groups request started") {
+      await SubscribeSheetURLProtocol.stub.requestCount(
+        method: "GET", path: "/api/v1/system/setting/UserFilterRuleGroups") == 1
+    }
+
+    configureNoSubscribeUser(service)
+    await SubscribeSheetURLProtocol.stub.release(path: "/api/v1/system/setting/UserFilterRuleGroups")
+    await loadTask.value
+
+    XCTAssertTrue(viewModel.sites.isEmpty)
+    XCTAssertTrue(viewModel.downloaders.isEmpty)
+    XCTAssertTrue(viewModel.directories.isEmpty)
+    XCTAssertTrue(viewModel.filterGroups.isEmpty)
+  }
+
+  func testSubscribeSheetAndHandlerDoNotRequestSubscribeEndpointsWithoutPermission() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer {
+      snapshot.restore(to: service)
+    }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    service.baseURL = "http://subscribe-sheet-tests.local"
+    configureNoSubscribeUser(service)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(id: 781, name: "无订阅权限", type: "电影", tmdbid: 123460),
+      isNewSubscription: false
+    )
+    await viewModel.loadData()
+    let didSave = await viewModel.save()
+    await viewModel.cancel()
+
+    XCTAssertTrue(viewModel.sites.isEmpty)
+    XCTAssertTrue(viewModel.downloaders.isEmpty)
+    XCTAssertTrue(viewModel.directories.isEmpty)
+    XCTAssertTrue(viewModel.filterGroups.isEmpty)
+    XCTAssertFalse(didSave)
+
+    let handler = SubscriptionHandler()
+    handler.handleSubscribe(MediaInfo(tmdb_id: 123460, title: "无订阅权限", type: "电影"))
+    let share = try JSONDecoder().decode(
+      SubscribeShare.self,
+      from: Data(#"{"id":88,"share_title":"No Permission Share"}"#.utf8)
+    )
+    let forkedId = await handler.fork(share: share)
+    await handler.fetchSubscriptionAndShowEditor(subId: 781)
+
+    XCTAssertNil(handler.sheetSubscribe)
+    XCTAssertNil(handler.tvSubscribeRequest)
+    XCTAssertNil(handler.forkSheetRequest)
+    XCTAssertNil(forkedId)
+    XCTAssertFalse(handler.showAlert)
+
+    let requestCount = await SubscribeSheetURLProtocol.stub.totalRequestCount()
+    XCTAssertEqual(requestCount, 0)
   }
 
   private func restoreUserDefaultsValue(_ value: Any?, forKey key: String) {
@@ -161,6 +246,19 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     } else {
       UserDefaults.standard.removeObject(forKey: key)
     }
+  }
+
+  private func waitUntil(
+    _ description: String,
+    timeout: TimeInterval = 2,
+    condition: @escaping () async -> Bool
+  ) async throws {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+      if await condition() { return }
+      try await Task.sleep(nanoseconds: 10_000_000)
+    }
+    XCTFail("Timed out waiting for \(description)")
   }
 
   private func configureSubscriber(_ service: APIService) {
@@ -176,6 +274,23 @@ final class SubscribeSheetViewModelTests: XCTestCase {
         UserPermissionKey.manage.rawValue: false,
       ],
       user_name: "subscribe-sheet",
+      avatar: nil
+    )
+  }
+
+  private func configureNoSubscribeUser(_ service: APIService) {
+    service.token = "subscribe-sheet-no-subscribe"
+    service.currentUser = Token(
+      access_token: "subscribe-sheet-no-subscribe",
+      token_type: "Bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        UserPermissionKey.discovery.rawValue: true,
+        UserPermissionKey.search.rawValue: true,
+        UserPermissionKey.subscribe.rawValue: false,
+        UserPermissionKey.manage.rawValue: false,
+      ],
+      user_name: "subscribe-sheet-no-subscribe",
       avatar: nil
     )
   }
@@ -248,19 +363,44 @@ private struct SubscribeSheetServiceSnapshot {
 
 private actor SubscribeSheetURLProtocolStub {
   private var requestCounts: [String: Int] = [:]
+  private var suspendedPaths: Set<String> = []
+  private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
 
   func reset() {
     requestCounts.removeAll()
+    suspendedPaths.removeAll()
+    let pendingWaiters = waiters.values.flatMap { $0 }
+    waiters.removeAll()
+    pendingWaiters.forEach { $0.resume() }
+  }
+
+  func suspend(path: String) {
+    suspendedPaths.insert(path)
+  }
+
+  func release(path: String) {
+    suspendedPaths.remove(path)
+    let pendingWaiters = waiters.removeValue(forKey: path) ?? []
+    pendingWaiters.forEach { $0.resume() }
   }
 
   func requestCount(method: String, path: String) -> Int {
     requestCounts["\(method) \(path)", default: 0]
   }
 
-  func response(for request: URLRequest) throws -> (HTTPURLResponse, Data) {
+  func totalRequestCount() -> Int {
+    requestCounts.values.reduce(0, +)
+  }
+
+  func response(for request: URLRequest) async throws -> (HTTPURLResponse, Data) {
     let method = request.httpMethod ?? "GET"
     let path = request.url?.path ?? ""
     requestCounts["\(method) \(path)", default: 0] += 1
+    if suspendedPaths.contains(path) {
+      await withCheckedContinuation { continuation in
+        waiters[path, default: []].append(continuation)
+      }
+    }
 
     let data: Data
     switch (method, path) {
@@ -268,7 +408,7 @@ private actor SubscribeSheetURLProtocolStub {
       data = #"[]"#.data(using: .utf8)!
     case ("GET", "/api/v1/download/clients"):
       data = #"[]"#.data(using: .utf8)!
-    case ("GET", "/api/v1/system/setting/public/Directories"):
+    case ("GET", "/api/v1/system/setting/Directories"):
       data = #"{"value":[]}"#.data(using: .utf8)!
     case ("GET", "/api/v1/system/setting/UserFilterRuleGroups"):
       data = #"{"value":[{"name":"普通规则组"}]}"#.data(using: .utf8)!

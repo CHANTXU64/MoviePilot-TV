@@ -36,7 +36,7 @@ GitHub CI 没有真实后端账号，`ci.yml` 会显式跳过 `BackendCompatibil
 
 - `testReadOnlySystemEnvCompatibility` 单独验证 `/system/env`。
 - `testReadOnlyDashboardCompatibility` 单独验证 `/dashboard/statistic`、`/dashboard/storage`、`/dashboard/downloader`。
-- `testReadOnlySystemAndConfigurationCompatibility` 验证配置读取、站点、下载器和目录等 TV 页面入口；其中 `Storages`、`Directories`、`IndexerSites` 必须通过 `/system/setting/public/{key}` 读取，避免普通账号继续命中管理员配置接口。`MediaServers` 在当前 2.13.14 后端没有 public setting endpoint，仍按上游现有接口读取。
+- `testReadOnlySystemAndConfigurationCompatibility` 验证配置读取、站点、下载器和目录等 TV 页面入口；`Storages`、`Directories`、`IndexerSites` 与 Web 保持一致，通过登录用户可读的 `/system/setting/{key}` 读取，写配置仍由后端限制为超管。`MediaServers` 仍按上游现有接口读取。
 
 巡检采集到的海报、背景图、头像和媒体服务器图片都会实际下载，并在 tvOS XCTest 运行环境中用系统图片解码能力验证；如果后端改成 Apple TV 不支持的图片格式，即使 API 返回正常也会失败。测试也会检查图片代理 URL 是否把内层 query/fragment 正确保留，避免图片地址被外层参数截断。
 

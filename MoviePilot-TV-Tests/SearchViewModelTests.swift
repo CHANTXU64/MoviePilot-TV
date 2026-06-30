@@ -66,6 +66,7 @@ final class SearchViewModelTests: XCTestCase {
     await SearchViewModelURLProtocol.stub.setGate(newSearchGate, forQuery: "new")
 
     service.baseURL = "http://search-tests.local"
+    configureSearchPermissionSession(service)
 
     let viewModel = SearchViewModel()
     viewModel.searchType = .unified
@@ -450,6 +451,25 @@ private actor SearchViewModelURLProtocolStub {
 private struct SearchRecordedRequest: Equatable {
   let path: String
   let query: String
+}
+
+@MainActor
+private func configureSearchPermissionSession(_ service: APIService) {
+  service.token = "search-permission-token"
+  service.currentUser = Token(
+    access_token: "search-permission-token",
+    token_type: "bearer",
+    super_user: FlexibleBool(false),
+    permissions: [
+      "discovery": false,
+      "search": true,
+      "subscribe": false,
+      "manage": false,
+      "admin": false,
+    ],
+    user_name: "search-user",
+    avatar: nil
+  )
 }
 
 @MainActor

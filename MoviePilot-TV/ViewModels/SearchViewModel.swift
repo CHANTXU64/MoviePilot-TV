@@ -247,9 +247,11 @@ class SearchViewModel: ObservableObject {
   /// 执行初始搜索：根据 searchType 决定是资源搜索还是聚合元数据搜索
   func autoSearch() async {
     guard !query.isEmpty else { return }
+    guard apiService.canAccess(.search) else { return }
     searchGeneration += 1
     let currentSearchGeneration = searchGeneration
     let searchQuery = query
+    let sessionSnapshot = apiService.sessionSnapshot()
     
     searchStreamTask?.cancel()
     
@@ -268,12 +270,16 @@ class SearchViewModel: ObservableObject {
         var accumulatedResults: [Context] = []
         
         do {
-          guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+          guard canPublishSearchResult(
+            generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+          else { return }
 
           let stream = APIService.shared.searchTitleStream(keyword: searchQuery, sites: sitesStr)
           
           for try await event in stream {
-            guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+            guard canPublishSearchResult(
+              generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+            else { return }
             
             if let text = event.text {
               self.searchProgressText = text
@@ -298,39 +304,53 @@ class SearchViewModel: ObservableObject {
             if event.type == "done" {
               // 与 Web v2.13.2 保持一致：给后端搜索结果缓存写入留出收尾时间。
               try? await Task.sleep(nanoseconds: searchStreamDoneCloseDelay)
-              guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+              guard canPublishSearchResult(
+                generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+              else { return }
               break
             }
           }
           
-          guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+          guard canPublishSearchResult(
+            generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+          else { return }
 
           // 应用自定义过滤规则
           let filteredResults = await self.applyCustomFilter(to: accumulatedResults)
-          guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+          guard canPublishSearchResult(
+            generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+          else { return }
 
           self.resourceResults = filteredResults
           self.isLoading = false
           self.hasSearched = true
         } catch {
           print("Stream Search error: \(error)")
-          guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+          guard canPublishSearchResult(
+            generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+          else { return }
 
           do {
             var fallbackResults = try await self.apiService.searchResources(
               keyword: searchQuery,
               sites: sitesStr
             )
-            guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+            guard canPublishSearchResult(
+              generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+            else { return }
 
             fallbackResults = await self.applyCustomFilter(to: fallbackResults)
-            guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+            guard canPublishSearchResult(
+              generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+            else { return }
 
             self.resourceResults = fallbackResults
           } catch {
             print("Fallback Search error: \(error)")
           }
-          guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+          guard canPublishSearchResult(
+            generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+          else { return }
 
           self.isLoading = false
           self.hasSearched = true
@@ -358,7 +378,9 @@ class SearchViewModel: ObservableObject {
       _ = await (
         movieTask.value, tvTask.value, collectionTask.value, personTask.value, shareTask.value
       )
-      guard searchGeneration == currentSearchGeneration else { return }
+      guard canPublishSearchResult(
+        generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+      else { return }
 
       // 基于第一页的结果计算"最佳结果"
       // 由于 media 是电影+电视剧的混合，我们需要把它们组合起来传递
@@ -369,9 +391,21 @@ class SearchViewModel: ObservableObject {
         shares: sharePag.items
       )
     }
-    guard searchGeneration == currentSearchGeneration else { return }
+    guard canPublishSearchResult(
+      generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+    else { return }
     isLoading = false
     hasSearched = true
+  }
+
+  private func canPublishSearchResult(
+    generation: Int,
+    sessionSnapshot: APIServiceSessionSnapshot
+  ) -> Bool {
+    searchGeneration == generation
+      && !Task.isCancelled
+      && apiService.isSessionUnchanged(from: sessionSnapshot)
+      && apiService.canAccess(.search)
   }
 
   // MARK: - Paginator 创建

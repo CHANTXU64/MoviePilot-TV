@@ -39,7 +39,7 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     XCTAssertFalse(token.canAccess(.admin))
   }
 
-  func testStandardUserWithEmptyPermissionsCannotAccessFeatureMenus() {
+  func testStandardUserWithEmptyPermissionsUsesWebDefaultFeatureAccess() {
     let token = Token(
       access_token: "token",
       token_type: "bearer",
@@ -49,25 +49,68 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
       avatar: nil
     )
 
-    XCTAssertFalse(token.canAccess(.discovery))
-    XCTAssertFalse(token.canAccess(.search))
-    XCTAssertFalse(token.canAccess(.subscribe))
+    XCTAssertTrue(token.canAccess(.discovery))
+    XCTAssertTrue(token.canAccess(.search))
+    XCTAssertTrue(token.canAccess(.subscribe))
     XCTAssertFalse(token.canAccess(.manage))
     XCTAssertFalse(token.canAccess(.admin))
-    XCTAssertFalse(token.hasLoginAccessibleFeature)
+    XCTAssertTrue(token.hasLoginAccessibleFeature)
   }
 
-  func testAdminOnlyPermissionWithoutSuperUserDoesNotAllowLogin() {
+  func testStandardUserWithPartialPermissionsFallsBackToWebDefaultsForMissingKeys() {
     let token = Token(
       access_token: "token",
       token_type: "bearer",
       super_user: FlexibleBool(false),
-      permissions: ["admin": true],
+      permissions: ["discovery": false],
+      user_name: "partial",
+      avatar: nil
+    )
+
+    XCTAssertFalse(token.canAccess(.discovery))
+    XCTAssertTrue(token.canAccess(.search))
+    XCTAssertTrue(token.canAccess(.subscribe))
+    XCTAssertFalse(token.canAccess(.manage))
+    XCTAssertFalse(token.canAccess(.admin))
+    XCTAssertTrue(token.hasLoginAccessibleFeature)
+  }
+
+  func testAdminPermissionWithoutVisibleTVFeatureDoesNotAllowLogin() {
+    let token = Token(
+      access_token: "token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        "admin": true,
+        "discovery": false,
+        "search": false,
+        "subscribe": false,
+        "manage": false,
+      ],
       user_name: "admin-only",
       avatar: nil
     )
 
     XCTAssertFalse(token.canAccess(.admin))
+    XCTAssertFalse(token.hasLoginAccessibleFeature)
+  }
+
+  func testManageOnlyPermissionWithoutVisibleTVFeatureDoesNotAllowLogin() {
+    let token = Token(
+      access_token: "token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        "discovery": false,
+        "search": false,
+        "subscribe": false,
+        "manage": true,
+      ],
+      user_name: "manage-only",
+      avatar: nil
+    )
+
+    XCTAssertTrue(token.canAccess(.manage))
     XCTAssertFalse(token.hasLoginAccessibleFeature)
   }
 
@@ -216,6 +259,31 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     }
   }
 
+  func testLoginAcceptsStandardUserWithEmptyPermissionsPayload() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(LoginPermissionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(LoginPermissionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = LoginPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    LoginPermissionURLProtocol.stub.reset()
+    LoginPermissionURLProtocol.stub.permissionsPayload = "{}"
+    service.baseURL = "https://login-permission-tests.local"
+    service.token = nil
+    service.currentUser = nil
+
+    let token = try await service.login(username: "default-user", password: "password")
+
+    XCTAssertEqual(token.access_token, "limited-token")
+    XCTAssertTrue(token.canAccess(.discovery))
+    XCTAssertTrue(token.canAccess(.search))
+    XCTAssertTrue(token.canAccess(.subscribe))
+    XCTAssertFalse(token.canAccess(.manage))
+    XCTAssertNotNil(service.token)
+    XCTAssertNotNil(service.currentUser)
+  }
+
   func testSuperUserSeesAllContentTabs() {
     let token = Token(
       access_token: "token",
@@ -324,7 +392,25 @@ private struct LoginPermissionServiceSnapshot {
 }
 
 private final class LoginPermissionURLProtocolStub: @unchecked Sendable {
-  func reset() {}
+  var permissionsPayload = """
+    {
+      "discovery": false,
+      "search": false,
+      "subscribe": false,
+      "manage": false
+    }
+    """
+
+  func reset() {
+    permissionsPayload = """
+      {
+        "discovery": false,
+        "search": false,
+        "subscribe": false,
+        "manage": false
+      }
+      """
+  }
 
   func response(for request: URLRequest) -> (Int, Data) {
     guard request.url?.path == "/api/v1/login/access-token" else {
@@ -336,12 +422,7 @@ private final class LoginPermissionURLProtocolStub: @unchecked Sendable {
         "access_token": "limited-token",
         "token_type": "bearer",
         "super_user": false,
-        "permissions": {
-          "discovery": false,
-          "search": false,
-          "subscribe": false,
-          "manage": false
-        },
+        "permissions": \(permissionsPayload),
         "user_name": "locked",
         "avatar": null
       }
