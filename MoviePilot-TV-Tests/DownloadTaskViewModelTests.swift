@@ -162,7 +162,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
 
     XCTAssertTrue(
       viewModel.downloads.isEmpty,
-      "Late download responses must not repopulate state after the user loses superuser access."
+      "Late download responses must not repopulate state after the user loses manage access."
     )
   }
 

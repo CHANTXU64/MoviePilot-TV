@@ -981,7 +981,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         "dashboard endpoints",
         service: service,
         config: config,
-        requirement: .superUser
+        requirement: .permission(.manage)
       ) {
         _ = try await service.fetchStatistic()
         let storage = try await service.fetchStorage()
@@ -1022,7 +1022,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         "media-server settings",
         service: service,
         config: config,
-        requirement: .superUser
+        requirement: .permission(.manage)
       ) {
         _ = try await service.fetchMediaServers()
       }
@@ -1084,7 +1084,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         "transfer history",
         service: service,
         config: config,
-        requirement: .superUser
+        requirement: .permission(.manage)
       ) {
         let history = try await service.fetchTransferHistory(page: 1, count: 20, title: nil)
         XCTAssertGreaterThanOrEqual(history.total, 0)
@@ -1189,7 +1189,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       "media-server latest surface",
       service: service,
       config: config,
-      requirement: .superUser
+      requirement: .permission(.manage)
     ) {
       let servers = try await service.fetchMediaServers()
       let enabledServers = servers.filter { $0.enabled?.value ?? false }
@@ -1267,7 +1267,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       "downloading surface",
       service: service,
       config: config,
-      requirement: .superUser
+      requirement: .permission(.manage)
     ) {
       let clients = try await service.fetchDownloadClients()
       for client in clients where client.enabled?.value ?? true {

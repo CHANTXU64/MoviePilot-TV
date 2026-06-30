@@ -374,6 +374,51 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertFalse(paths.contains { $0.hasPrefix("/api/v1/download/") })
   }
 
+  func testManageUserCanRequestDashboardDownloadAndLatestMediaEndpoints() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    MediaPreloadPermissionURLProtocol.stub.reset()
+    configureManageUser(service)
+
+    let statistic = try await service.fetchStatistic()
+    let storage = try await service.fetchStorage()
+    let downloader = try await service.fetchDownloaderInfo()
+    let mediaServers = try await service.fetchMediaServers()
+    let latest = try await service.fetchMediaServerLatest(server: "emby")
+    let downloading = try await service.fetchDownloading(clientName: "qbittorrent")
+    let stopped = try await service.stopDownload(clientName: "qbittorrent", hash: "hash")
+    let started = try await service.startDownload(clientName: "qbittorrent", hash: "hash")
+    let deleted = try await service.deleteDownload(clientName: "qbittorrent", hash: "hash")
+
+    XCTAssertEqual(statistic.movie_count, 2)
+    XCTAssertEqual(statistic.tv_count, 3)
+    XCTAssertEqual(storage.total_storage, 100)
+    XCTAssertEqual(storage.used_storage, 40)
+    XCTAssertEqual(downloader.download_speed, 7)
+    XCTAssertEqual(mediaServers.map(\.name), ["emby"])
+    XCTAssertEqual(latest.map(\.title), ["Latest Movie"])
+    XCTAssertEqual(downloading.map(\.hash), ["hash"])
+    XCTAssertTrue(stopped.success)
+    XCTAssertTrue(started.success)
+    XCTAssertTrue(deleted.success)
+
+    let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
+    XCTAssertTrue(paths.contains("/api/v1/dashboard/statistic"))
+    XCTAssertTrue(paths.contains("/api/v1/dashboard/storage"))
+    XCTAssertTrue(paths.contains("/api/v1/dashboard/downloader"))
+    XCTAssertTrue(paths.contains("/api/v1/system/setting/MediaServers"))
+    XCTAssertTrue(paths.contains("/api/v1/mediaserver/latest"))
+    XCTAssertTrue(paths.contains { $0 == "/api/v1/download" || $0 == "/api/v1/download/" })
+    XCTAssertTrue(paths.contains("/api/v1/download/stop/hash"))
+    XCTAssertTrue(paths.contains("/api/v1/download/start/hash"))
+    XCTAssertTrue(paths.contains("/api/v1/download/hash"))
+  }
+
   func testNoSearchUserResourceActionsDoNotRequestSearchOrDownloadEndpoints() async throws {
     XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
     defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
@@ -482,6 +527,24 @@ final class MediaPreloadPermissionTests: XCTestCase {
         UserPermissionKey.manage.rawValue: false,
       ],
       user_name: "subscriber",
+      avatar: nil
+    )
+  }
+
+  private func configureManageUser(_ service: APIService) {
+    service.baseURL = "https://preload-permission-tests.local"
+    service.token = "manage-token"
+    service.currentUser = Token(
+      access_token: "manage-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        UserPermissionKey.discovery.rawValue: false,
+        UserPermissionKey.search.rawValue: false,
+        UserPermissionKey.subscribe.rawValue: false,
+        UserPermissionKey.manage.rawValue: true,
+      ],
+      user_name: "manager",
       avatar: nil
     )
   }
@@ -660,6 +723,42 @@ private final class MediaPreloadPermissionURLProtocolStub: @unchecked Sendable {
       return (statusCode, jsonData("[]"))
     case "/api/v1/system/env":
       return (200, jsonData(#"{"VERSION":"v2.13.14"}"#))
+    case "/api/v1/dashboard/statistic":
+      return (200, jsonData(#"{"movie_count":2,"tv_count":3,"episode_count":4}"#))
+    case "/api/v1/dashboard/storage":
+      return (200, jsonData(#"{"total_storage":100,"used_storage":40}"#))
+    case "/api/v1/dashboard/downloader":
+      return (
+        200,
+        jsonData(
+          #"{"download_speed":7,"upload_speed":1,"download_size":20,"upload_size":2,"free_space":60}"#)
+      )
+    case "/api/v1/system/setting/MediaServers":
+      return (200, jsonData(#"{"value":[{"name":"emby","type":"emby","enabled":true}]}"#))
+    case "/api/v1/mediaserver/latest":
+      return (
+        200,
+        jsonData(
+          #"""
+          [
+            {"id":"latest-1","item_id":"latest-1","server_id":"server-1","title":"Latest Movie","subtitle":null,"type":"电影","image":null,"link":null,"use_cookies":false,"server_type":"emby"}
+          ]
+          """#)
+      )
+    case "/api/v1/download", "/api/v1/download/":
+      return (
+        200,
+        jsonData(
+          #"""
+          [
+            {"hash":"hash","title":"Download Task","state":"downloading","progress":10,"username":"manager"}
+          ]
+          """#)
+      )
+    case "/api/v1/download/stop/hash",
+      "/api/v1/download/start/hash",
+      "/api/v1/download/hash":
+      return (200, jsonData(#"{"success":true,"message":"ok"}"#))
     case "/api/v1/system/setting/UserFilterRuleGroups":
       return (200, jsonData(#"{"value":[{"name":"普通规则组"}]}"#))
     default:

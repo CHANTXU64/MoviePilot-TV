@@ -63,7 +63,7 @@ final class TransferHistoryViewModelTests: XCTestCase {
     await TransferHistoryURLProtocol.stub.setHistoryGate(historyGate)
 
     service.baseURL = "http://transfer-history-tests.local"
-    configureSuperUser(service)
+    configureManageUser(service)
 
     let viewModel = TransferHistoryViewModel()
     let refreshTask = Task { @MainActor in
@@ -87,8 +87,29 @@ final class TransferHistoryViewModelTests: XCTestCase {
 
     XCTAssertTrue(
       viewModel.items.isEmpty,
-      "Late transfer-history responses must not repopulate state after the user loses superuser access."
+      "Late transfer-history responses must not repopulate state after the user loses manage access."
     )
+  }
+
+  func testManageUserCanRefreshTransferHistory() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(TransferHistoryURLProtocol.self))
+    defer { URLProtocol.unregisterClass(TransferHistoryURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await TransferHistoryURLProtocol.stub.reset()
+
+    service.baseURL = "http://transfer-history-tests.local"
+    configureManageUser(service)
+
+    let viewModel = TransferHistoryViewModel()
+    await viewModel.refresh()
+
+    XCTAssertEqual(viewModel.items.map(\.id), [10])
+    let paths = await TransferHistoryURLProtocol.stub.requestPaths()
+    XCTAssertTrue(paths.contains("/api/v1/history/transfer"))
   }
 
   private func configureSuperUser(_ service: APIService) {
@@ -98,6 +119,22 @@ final class TransferHistoryViewModelTests: XCTestCase {
       super_user: FlexibleBool(true),
       permissions: [:],
       user_name: "transfer-admin",
+      avatar: nil
+    )
+  }
+
+  private func configureManageUser(_ service: APIService) {
+    service.currentUser = Token(
+      access_token: "transfer-history-manager-tests",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        UserPermissionKey.discovery.rawValue: false,
+        UserPermissionKey.search.rawValue: false,
+        UserPermissionKey.subscribe.rawValue: false,
+        UserPermissionKey.manage.rawValue: true,
+      ],
+      user_name: "transfer-manager",
       avatar: nil
     )
   }
@@ -221,6 +258,10 @@ private actor TransferHistoryURLProtocolStub {
       if Task.isCancelled { return }
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
+  }
+
+  func requestPaths() -> [String] {
+    paths
   }
 }
 

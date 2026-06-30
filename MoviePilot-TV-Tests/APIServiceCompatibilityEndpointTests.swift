@@ -132,6 +132,14 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
 
     service.baseURL = "https://compatibility-endpoint-tests.local"
     service.token = "token"
+    service.currentUser = Token(
+      access_token: "token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: ["search": true],
+      user_name: "search-user",
+      avatar: nil
+    )
 
     _ = try await service.fetchStorages()
     _ = try await service.fetchDirectories()

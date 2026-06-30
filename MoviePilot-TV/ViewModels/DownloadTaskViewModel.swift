@@ -12,7 +12,7 @@ class DownloadTaskViewModel: ObservableObject {
   private var downloadLoadGeneration = 0
 
   func initialLoad() async {
-    guard apiService.canRequestSuperUserEndpoints else {
+    guard apiService.canRequestManageEndpoints else {
       clearForRestrictedUser()
       return
     }
@@ -30,7 +30,7 @@ class DownloadTaskViewModel: ObservableObject {
   }
 
   func loadDownloads() async {
-    guard apiService.canRequestSuperUserEndpoints else {
+    guard apiService.canRequestManageEndpoints else {
       clearForRestrictedUser()
       return
     }
@@ -75,7 +75,7 @@ class DownloadTaskViewModel: ObservableObject {
   }
 
   func stopDownload(hash: String) async -> Bool {
-    guard apiService.canRequestSuperUserEndpoints else { return false }
+    guard apiService.canRequestManageEndpoints else { return false }
     guard !selectedClient.isEmpty else { return false }
     do {
       let (success, message) = try await apiService.stopDownload(
@@ -91,7 +91,7 @@ class DownloadTaskViewModel: ObservableObject {
   }
 
   func startDownload(hash: String) async -> Bool {
-    guard apiService.canRequestSuperUserEndpoints else { return false }
+    guard apiService.canRequestManageEndpoints else { return false }
     guard !selectedClient.isEmpty else { return false }
     do {
       let (success, message) = try await apiService.startDownload(
@@ -108,7 +108,7 @@ class DownloadTaskViewModel: ObservableObject {
 
   @MainActor
   func deleteDownload(hash: String) async {
-    guard apiService.canRequestSuperUserEndpoints else { return }
+    guard apiService.canRequestManageEndpoints else { return }
     let clientName = selectedClient
     guard !clientName.isEmpty else { return }
     do {

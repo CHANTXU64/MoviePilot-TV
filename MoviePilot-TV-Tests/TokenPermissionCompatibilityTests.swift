@@ -39,7 +39,7 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     XCTAssertFalse(token.canAccess(.admin))
   }
 
-  func testStandardUserWithEmptyPermissionsUsesWebDefaultFeatureAccess() {
+  func testStandardUserWithEmptyPermissionsHasNoFeatureAccess() {
     let token = Token(
       access_token: "token",
       token_type: "bearer",
@@ -49,15 +49,15 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
       avatar: nil
     )
 
-    XCTAssertTrue(token.canAccess(.discovery))
-    XCTAssertTrue(token.canAccess(.search))
-    XCTAssertTrue(token.canAccess(.subscribe))
+    XCTAssertFalse(token.canAccess(.discovery))
+    XCTAssertFalse(token.canAccess(.search))
+    XCTAssertFalse(token.canAccess(.subscribe))
     XCTAssertFalse(token.canAccess(.manage))
     XCTAssertFalse(token.canAccess(.admin))
-    XCTAssertTrue(token.hasLoginAccessibleFeature)
+    XCTAssertFalse(token.hasLoginAccessibleFeature)
   }
 
-  func testStandardUserWithPartialPermissionsFallsBackToWebDefaultsForMissingKeys() {
+  func testStandardUserWithPartialPermissionsDoesNotFallbackForMissingKeys() {
     let token = Token(
       access_token: "token",
       token_type: "bearer",
@@ -68,11 +68,11 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     )
 
     XCTAssertFalse(token.canAccess(.discovery))
-    XCTAssertTrue(token.canAccess(.search))
-    XCTAssertTrue(token.canAccess(.subscribe))
+    XCTAssertFalse(token.canAccess(.search))
+    XCTAssertFalse(token.canAccess(.subscribe))
     XCTAssertFalse(token.canAccess(.manage))
     XCTAssertFalse(token.canAccess(.admin))
-    XCTAssertTrue(token.hasLoginAccessibleFeature)
+    XCTAssertFalse(token.hasLoginAccessibleFeature)
   }
 
   func testAdminPermissionWithoutVisibleTVFeatureDoesNotAllowLogin() {
@@ -95,7 +95,7 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     XCTAssertFalse(token.hasLoginAccessibleFeature)
   }
 
-  func testManageOnlyPermissionWithoutVisibleTVFeatureDoesNotAllowLogin() {
+  func testManageOnlyPermissionAllowsLogin() {
     let token = Token(
       access_token: "token",
       token_type: "bearer",
@@ -111,7 +111,7 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     )
 
     XCTAssertTrue(token.canAccess(.manage))
-    XCTAssertFalse(token.hasLoginAccessibleFeature)
+    XCTAssertTrue(token.hasLoginAccessibleFeature)
   }
 
   func testSuperUserCanRequestSuperUserEndpoints() {
@@ -133,7 +133,7 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     XCTAssertTrue(token.hasLoginAccessibleFeature)
   }
 
-  func testUnknownPermissionPayloadKeepsFeatureAccessButNotAdminAccess() {
+  func testMissingPermissionPayloadHasNoFeatureAccess() {
     let token = Token(
       access_token: "token",
       token_type: "bearer",
@@ -144,18 +144,18 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     )
 
     XCTAssertFalse(token.canRequestSuperUserEndpoints)
-    XCTAssertTrue(token.canAccess(.discovery))
-    XCTAssertTrue(token.canAccess(.search))
-    XCTAssertTrue(token.canAccess(.subscribe))
+    XCTAssertFalse(token.canAccess(.discovery))
+    XCTAssertFalse(token.canAccess(.search))
+    XCTAssertFalse(token.canAccess(.subscribe))
     XCTAssertFalse(token.canAccess(.manage))
     XCTAssertFalse(token.canAccess(.admin))
-    XCTAssertTrue(token.hasLoginAccessibleFeature)
+    XCTAssertFalse(token.hasLoginAccessibleFeature)
   }
 
-  func testMissingCurrentUserUsesWebDefaultTabsWithoutAdminEntry() {
+  func testMissingCurrentUserShowsOnlyUngatedTabs() {
     XCTAssertEqual(
       ContentViewModel.visibleTabs(for: nil),
-      [.home, .recommend, .explore, .search, .system]
+      [.home, .system]
     )
   }
 
@@ -237,6 +237,27 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     )
   }
 
+  func testManagePermissionShowsStatusTab() {
+    let token = Token(
+      access_token: "token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        "discovery": false,
+        "search": false,
+        "subscribe": false,
+        "manage": true,
+      ],
+      user_name: "manager",
+      avatar: nil
+    )
+
+    XCTAssertEqual(
+      ContentViewModel.visibleTabs(for: token),
+      [.home, .status, .system]
+    )
+  }
+
   func testLoginRejectsStandardUserWithoutAnyFunctionalPermission() async throws {
     XCTAssertTrue(URLProtocol.registerClass(LoginPermissionURLProtocol.self))
     defer { URLProtocol.unregisterClass(LoginPermissionURLProtocol.self) }
@@ -259,7 +280,7 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     }
   }
 
-  func testLoginAcceptsStandardUserWithEmptyPermissionsPayload() async throws {
+  func testLoginRejectsStandardUserWithEmptyPermissionsPayload() async throws {
     XCTAssertTrue(URLProtocol.registerClass(LoginPermissionURLProtocol.self))
     defer { URLProtocol.unregisterClass(LoginPermissionURLProtocol.self) }
 
@@ -273,13 +294,43 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     service.token = nil
     service.currentUser = nil
 
-    let token = try await service.login(username: "default-user", password: "password")
+    do {
+      _ = try await service.login(username: "default-user", password: "password")
+      XCTFail("Expected empty permissions to be rejected like the Web login menu filter.")
+    } catch {
+      XCTAssertNil(service.token)
+      XCTAssertNil(service.currentUser)
+    }
+  }
+
+  func testLoginAcceptsManageOnlyUser() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(LoginPermissionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(LoginPermissionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = LoginPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    LoginPermissionURLProtocol.stub.reset()
+    LoginPermissionURLProtocol.stub.permissionsPayload = """
+      {
+        "discovery": false,
+        "search": false,
+        "subscribe": false,
+        "manage": true
+      }
+      """
+    service.baseURL = "https://login-permission-tests.local"
+    service.token = nil
+    service.currentUser = nil
+
+    let token = try await service.login(username: "manage-user", password: "password")
 
     XCTAssertEqual(token.access_token, "limited-token")
-    XCTAssertTrue(token.canAccess(.discovery))
-    XCTAssertTrue(token.canAccess(.search))
-    XCTAssertTrue(token.canAccess(.subscribe))
-    XCTAssertFalse(token.canAccess(.manage))
+    XCTAssertFalse(token.canAccess(.discovery))
+    XCTAssertFalse(token.canAccess(.search))
+    XCTAssertFalse(token.canAccess(.subscribe))
+    XCTAssertTrue(token.canAccess(.manage))
     XCTAssertNotNil(service.token)
     XCTAssertNotNil(service.currentUser)
   }

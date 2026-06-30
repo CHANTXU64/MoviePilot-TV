@@ -96,7 +96,7 @@ class ContentViewModel: ObservableObject {
     if canAccess(.search) {
       tabs.append(.search)
     }
-    if canAccess(.admin) {
+    if canAccess(.manage) {
       tabs.append(.status)
     }
     tabs.append(.system)

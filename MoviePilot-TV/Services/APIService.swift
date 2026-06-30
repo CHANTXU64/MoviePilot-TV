@@ -568,6 +568,10 @@ class APIService: ObservableObject {
     currentUser?.canRequestSuperUserEndpoints == true
   }
 
+  var canRequestManageEndpoints: Bool {
+    canAccess(.manage)
+  }
+
   func canAccess(_ permission: UserPermissionKey) -> Bool {
     if let currentUser {
       return currentUser.canAccess(permission)
@@ -871,7 +875,7 @@ class APIService: ObservableObject {
   /// 如果 Token 失效且有保存凭证，makeRequest 会自动触发重连并更新 Cookie。
   func validateTokenSilently() {
     guard isLoggedIn else { return }
-    guard canRequestSuperUserEndpoints else { return }
+    guard canRequestManageEndpoints else { return }
 
     Task {
       do {
@@ -930,7 +934,7 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/dashboard/AnalyticsMediaStatistic.vue
   /// - 应用场景: 首页仪表盘展示各类媒体的数量统计。
   func fetchStatistic() async throws -> Statistic {
-    guard canRequestSuperUserEndpoints else { return Statistic() }
+    guard canRequestManageEndpoints else { return Statistic() }
     let data = try await makeRequest(endpoint: "/dashboard/statistic")
     return try await decodeOrUnwrap(Statistic.self, from: data)
   }
@@ -939,7 +943,7 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/dashboard/AnalyticsStorage.vue
   /// - 应用场景: 首页仪表盘展示磁盘/网盘的存储使用情况。
   func fetchStorage() async throws -> Storage {
-    guard canRequestSuperUserEndpoints else { return Storage(total_storage: 0, used_storage: 0) }
+    guard canRequestManageEndpoints else { return Storage(total_storage: 0, used_storage: 0) }
     let data = try await makeRequest(endpoint: "/dashboard/storage")
     return try await decodeOrUnwrap(Storage.self, from: data)
   }
@@ -948,7 +952,7 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/dashboard/AnalyticsSpeed.vue
   /// - 应用场景: 首页仪表盘展示当前下载速度与任务信息。
   func fetchDownloaderInfo() async throws -> DownloaderInfo {
-    guard canRequestSuperUserEndpoints else { return DownloaderInfo() }
+    guard canRequestManageEndpoints else { return DownloaderInfo() }
     let data = try await makeRequest(endpoint: "/dashboard/downloader")
     return try await decodeOrUnwrap(DownloaderInfo.self, from: data)
   }
@@ -1288,7 +1292,7 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/reorganize/DownloadingListView.vue (通过 apipath)
   /// - 应用场景: 获取特定下载器当前的下载任务列表
   func fetchDownloading(clientName: String) async throws -> [DownloadingInfo] {
-    guard canRequestSuperUserEndpoints else { return [] }
+    guard canRequestManageEndpoints else { return [] }
     let endpoint = try buildEndpoint(path: "/download/", params: ["name": clientName])
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([DownloadingInfo].self, from: data)
@@ -1300,7 +1304,7 @@ class APIService: ObservableObject {
   func stopDownload(clientName: String, hash: String) async throws -> (
     success: Bool, message: String?
   ) {
-    guard canRequestSuperUserEndpoints else { return (false, nil) }
+    guard canRequestManageEndpoints else { return (false, nil) }
     let endpoint = try buildEndpoint(path: "/download/stop/\(hash)", params: ["name": clientName])
     let data = try await makeRequest(endpoint: endpoint, method: "GET")
     return try await decodeActionResponse(from: data)
@@ -1312,7 +1316,7 @@ class APIService: ObservableObject {
   func startDownload(clientName: String, hash: String) async throws -> (
     success: Bool, message: String?
   ) {
-    guard canRequestSuperUserEndpoints else { return (false, nil) }
+    guard canRequestManageEndpoints else { return (false, nil) }
     let endpoint = try buildEndpoint(path: "/download/start/\(hash)", params: ["name": clientName])
     let data = try await makeRequest(endpoint: endpoint, method: "GET")
     return try await decodeActionResponse(from: data)
@@ -1324,7 +1328,7 @@ class APIService: ObservableObject {
   func deleteDownload(clientName: String, hash: String) async throws -> (
     success: Bool, message: String?
   ) {
-    guard canRequestSuperUserEndpoints else { return (false, nil) }
+    guard canRequestManageEndpoints else { return (false, nil) }
     let endpoint = try buildEndpoint(
       path: "/download/\(hash)",
       params: ["name": clientName]
@@ -1353,7 +1357,7 @@ class APIService: ObservableObject {
   func fetchTransferHistory(page: Int, count: Int, title: String?) async throws
     -> TransferHistoryResponse
   {
-    guard canRequestSuperUserEndpoints else { return TransferHistoryResponse(list: [], total: 0) }
+    guard canRequestManageEndpoints else { return TransferHistoryResponse(list: [], total: 0) }
     let endpoint = try buildEndpoint(
       path: "/history/transfer",
       params: [
@@ -1448,7 +1452,7 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/setting/AccountSettingSystem.vue, src/views/dashboard/MediaServerLatest.vue 等
   /// - 应用场景: 获取已配置的媒体服务器（Emby/Jellyfin/Plex）列表。该接口是首页仪表盘展示“最新入库”、“正在播放”及“媒体库统计”的基础数据源。
   func fetchMediaServers() async throws -> [MediaServerConf] {
-    guard canRequestSuperUserEndpoints else { return [] }
+    guard canRequestManageEndpoints else { return [] }
     // API returns { data: { value: [...] } }
     struct ConfigValue: Decodable {
       let value: [MediaServerConf]
@@ -1462,7 +1466,7 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/dashboard/MediaServerLatest.vue
   /// - 应用场景: 首页仪表盘展示最近添加的影片
   func fetchMediaServerLatest(server: String) async throws -> [MediaServerPlayItem] {
-    guard canRequestSuperUserEndpoints else { return [] }
+    guard canRequestManageEndpoints else { return [] }
     let endpoint = try buildEndpoint(path: "/mediaserver/latest", params: ["server": server])
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([MediaServerPlayItem].self, from: data)

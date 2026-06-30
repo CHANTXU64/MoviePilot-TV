@@ -100,7 +100,7 @@ class TransferHistoryViewModel: ObservableObject {
   }
 
   func search(with text: String) {
-    guard apiService.canRequestSuperUserEndpoints else {
+    guard apiService.canRequestManageEndpoints else {
       searchText = text
       clearForRestrictedUser()
       return
@@ -133,7 +133,7 @@ class TransferHistoryViewModel: ObservableObject {
   func refresh() async {
     errorMessage = nil
     isLoadingMore = false
-    guard apiService.canRequestSuperUserEndpoints else {
+    guard apiService.canRequestManageEndpoints else {
       clearForRestrictedUser()
       return
     }
@@ -173,7 +173,7 @@ class TransferHistoryViewModel: ObservableObject {
 
   func loadMore(currentItemId: TransferHistory.ID) async {
     errorMessage = nil
-    guard apiService.canRequestSuperUserEndpoints else { return }
+    guard apiService.canRequestManageEndpoints else { return }
     guard !isLoadingMore else { return }
 
     // 以“展示层”位置判断是否触底，避免 focus 落在 prependedItems 时被 Paginator 忽略。
@@ -268,7 +268,7 @@ class TransferHistoryViewModel: ObservableObject {
   // MARK: - Polling Helpers
 
   func fetchLatest() async {
-    guard apiService.canRequestSuperUserEndpoints else { return }
+    guard apiService.canRequestManageEndpoints else { return }
     do {
       var allNewItems: [TransferHistory] = []
       var currentPage = 1
