@@ -124,7 +124,8 @@ private struct BackendCompatibilityConfig {
       username: username,
       password: password,
       additionalUsernames: values["MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES"]?.listValue ?? [],
-      additionalPasswords: values["MOVIEPILOT_COMPAT_ADDITIONAL_PASSWORDS"]?.listValue ?? []
+      additionalPasswords: values["MOVIEPILOT_COMPAT_ADDITIONAL_PASSWORDS"]?.listValue(
+        preservingEmptyItems: true) ?? []
     )
 
     return BackendCompatibilityConfig(
@@ -228,7 +229,7 @@ private struct BackendCompatibilityConfig {
     return nil
   }
 
-  private static func configuredAccounts(
+  static func configuredAccounts(
     username: String,
     password: String,
     additionalUsernames: [String],
@@ -364,6 +365,39 @@ final class BackendCompatibilityEnvironmentParsingTests: XCTestCase {
       value.listValue,
       ["ordinary-password", "pa,ss,word", "another-password"]
     )
+  }
+
+  func testAdditionalPasswordListPreservesEmptyPlaceholdersAndEscapedCommas() {
+    XCTAssertEqual(
+      ",readonly-password".listValue(preservingEmptyItems: true),
+      ["", "readonly-password"]
+    )
+    XCTAssertEqual(
+      "primary-password,".listValue(preservingEmptyItems: true),
+      ["primary-password", ""]
+    )
+    XCTAssertEqual(
+      #"primary-password,,pa\,ssword"#.listValue(preservingEmptyItems: true),
+      ["primary-password", "", "pa,ssword"]
+    )
+    XCTAssertEqual(
+      "search,,subscribe".listValue,
+      ["search", "subscribe"]
+    )
+  }
+
+  func testAdditionalPasswordPlaceholdersKeepAccountPasswordAlignment() {
+    let accounts = BackendCompatibilityConfig.configuredAccounts(
+      username: "admin",
+      password: "primary-password",
+      additionalUsernames: "standard,readonly".listValue ?? [],
+      additionalPasswords: ",readonly-password".listValue(preservingEmptyItems: true) ?? []
+    )
+
+    XCTAssertEqual(accounts.map(\.username), ["admin", "standard", "readonly"])
+    XCTAssertEqual(accounts.map(\.password), [
+      "primary-password", "primary-password", "readonly-password",
+    ])
   }
 
   @MainActor
@@ -2874,9 +2908,21 @@ private extension String {
   }
 
   var listValue: [String]? {
+    listValue(preservingEmptyItems: false)
+  }
+
+  func listValue(preservingEmptyItems: Bool) -> [String]? {
     var items: [String] = []
     var current = ""
     var isEscaping = false
+
+    func appendCurrentItem() {
+      let item = current.trimmingCharacters(in: .whitespacesAndNewlines)
+      if preservingEmptyItems || !item.isEmpty {
+        items.append(item)
+      }
+      current = ""
+    }
 
     for character in self {
       if isEscaping {
@@ -2890,11 +2936,7 @@ private extension String {
       } else if character == "\\" {
         isEscaping = true
       } else if character == "," {
-        let item = current.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !item.isEmpty {
-          items.append(item)
-        }
-        current = ""
+        appendCurrentItem()
       } else {
         current.append(character)
       }
@@ -2904,10 +2946,7 @@ private extension String {
       current.append("\\")
     }
 
-    let item = current.trimmingCharacters(in: .whitespacesAndNewlines)
-    if !item.isEmpty {
-      items.append(item)
-    }
+    appendCurrentItem()
 
     return items.isEmpty ? nil : items
   }

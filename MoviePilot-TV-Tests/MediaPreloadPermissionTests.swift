@@ -112,6 +112,68 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertNotNil(task.seasonViewModel)
   }
 
+  func testRestrictedUserSubscriptionActionsDoNotRequestSubscribeEndpoints() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    MediaPreloadPermissionURLProtocol.stub.reset()
+    configureLimitedUser(service)
+
+    let subscribe = Subscribe(id: 901, name: "Limited Movie", type: "电影", tmdbid: 456)
+    let request = SubscribeRequest(
+      name: "Limited Movie",
+      type: "电影",
+      year: nil,
+      tmdbid: 456,
+      doubanid: nil,
+      bangumiid: nil,
+      season: nil,
+      best_version: 0,
+      best_version_full: nil,
+      episode_group: nil
+    )
+    let share = try JSONDecoder().decode(
+      SubscribeShare.self,
+      from: Data(#"{"id":88,"share_title":"Limited Share"}"#.utf8)
+    )
+
+    let didSave = (try? await service.saveSubscription(subscribe)) ?? false
+    let addedId = try? await service.addSubscription(request: request, subscribe: subscribe)
+    let didDeleteById = (try? await service.deleteSubscription(id: 901)) ?? false
+    let didDeleteByMedia = (try? await service.deleteSubscription(mediaId: "tmdb:456", season: nil)) ?? false
+    let forkedId = try? await service.forkSubscription(share: share)
+    let didUpdate = (try? await service.updateSubscriptionStatus(id: 901, state: "S")) ?? false
+    let didSearch = (try? await service.searchSubscription(id: 901)) ?? false
+    let didReset = (try? await service.resetSubscription(id: 901)) ?? false
+    let shares = try await service.fetchSubscriptionShares(path: "/subscribe/shares")
+    let searchedShares = try await service.searchSubscriptionShares(query: "Limited")
+
+    XCTAssertFalse(didSave)
+    XCTAssertNil(addedId)
+    XCTAssertFalse(didDeleteById)
+    XCTAssertFalse(didDeleteByMedia)
+    XCTAssertNil(forkedId)
+    XCTAssertFalse(didUpdate)
+    XCTAssertFalse(didSearch)
+    XCTAssertFalse(didReset)
+    XCTAssertTrue(shares.isEmpty)
+    XCTAssertTrue(searchedShares.isEmpty)
+
+    do {
+      _ = try await service.fetchSubscription(id: 901)
+      XCTFail("Restricted user should not fetch subscription detail")
+    } catch {
+      // Local permission failure is expected; the important part is that no request is sent.
+    }
+
+    let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
+    XCTAssertFalse(paths.contains { $0.hasPrefix("/api/v1/subscribe") })
+  }
+
   private func configureLimitedUser(_ service: APIService) {
     service.baseURL = "https://preload-permission-tests.local"
     service.token = "limited-token"

@@ -31,6 +31,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     await SubscribeSheetURLProtocol.stub.reset()
     service.baseURL = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
     UserDefaults.standard.set(false, forKey: autoSearchKey)
 
     let viewModel = SubscribeSheetViewModel(
@@ -63,6 +64,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     await SubscribeSheetURLProtocol.stub.reset()
     service.baseURL = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
     UserDefaults.standard.removeObject(forKey: autoSearchKey)
 
     let viewModel = SubscribeSheetViewModel(
@@ -95,6 +97,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     await SubscribeSheetURLProtocol.stub.reset()
     service.baseURL = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
     UserDefaults.standard.set(false, forKey: autoSearchKey)
 
     let viewModel = SubscribeSheetViewModel(
@@ -158,6 +161,23 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     } else {
       UserDefaults.standard.removeObject(forKey: key)
     }
+  }
+
+  private func configureSubscriber(_ service: APIService) {
+    service.token = "subscribe-sheet-user"
+    service.currentUser = Token(
+      access_token: "subscribe-sheet-user",
+      token_type: "Bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        UserPermissionKey.discovery.rawValue: true,
+        UserPermissionKey.search.rawValue: true,
+        UserPermissionKey.subscribe.rawValue: true,
+        UserPermissionKey.manage.rawValue: false,
+      ],
+      user_name: "subscribe-sheet",
+      avatar: nil
+    )
   }
 }
 

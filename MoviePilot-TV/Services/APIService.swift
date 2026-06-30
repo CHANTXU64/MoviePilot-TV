@@ -275,6 +275,7 @@ class APIService: ObservableObject {
   static let shared = APIService()
   static let sessionRefreshAppVersionKey = "lastSessionRefreshAppVersion"
   private static let noAccessibleFeatureMessage = "当前用户没有可访问的功能权限"
+  private static let noSubscribePermissionMessage = "当前用户没有订阅权限"
   private static let keychainService = "MoviePilot-TV"
   private static let accessTokenAccount = "accessToken"
   private static let currentUserAccount = "currentUser"
@@ -1170,6 +1171,7 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/subscribe/SubscribeShareView.vue (fetchData)
   /// - 应用场景: "探索"页面的"订阅分享"板块，分页加载用户分享的订阅规则。
   func fetchSubscriptionShares(path: String, page: Int = 1) async throws -> [SubscribeShare] {
+    guard canAccess(.subscribe) else { return [] }
     let absolutePath = path.hasPrefix("/") ? path : "/\(path)"
     let endpoint = try buildEndpoint(path: absolutePath, params: ["page": String(page)])
     let data = try await makeRequest(endpoint: endpoint)
@@ -1180,6 +1182,7 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/subscribe/SubscribeShareView.vue (但增加了搜索功能)
   /// - 应用场景: 聚合搜索页面，与电影、电视剧、人物等结果一同展示。
   func searchSubscriptionShares(query: String, page: Int = 1) async throws -> [SubscribeShare] {
+    guard canAccess(.subscribe) else { return [] }
     let endpoint = try buildEndpoint(
       path: "/subscribe/shares",
       params: [
@@ -1766,6 +1769,7 @@ class APIService: ObservableObject {
   /// - 对应前端: 1. `MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue` (更新) 2. `MoviePilot-Frontend/src/components/cards/MediaCard.vue` (新增)
   /// - 应用场景: 1. 在订阅编辑弹窗中点击“保存”，对现有订阅进行修改 (PUT)。 2. 在媒体卡片或详情页上点击订阅，创建新的订阅记录 (POST)。
   func saveSubscription(_ subscribe: Subscribe) async throws -> Bool {
+    guard canAccess(.subscribe) else { return false }
     let body = try JSONEncoder().encode(subscribe)
     let endpoint = "/subscribe/"
     // 如果存在 ID，则很可能是更新 (PUT)，但 API 可能同时处理 POST 或有其他逻辑。
@@ -1802,6 +1806,7 @@ class APIService: ObservableObject {
   ///   - **订阅电视剧分季时**: 会先弹出 `SubscribeSeasonDialog.vue` 分季选择框。用户确认后，前端遍历所选的每一季，并为每一季都单独调用一次此 API，每次传入对应的 `season` 编号。
   /// - 备注：Subscribe 参数用于更新订阅状态缓存
   func addSubscription(request: SubscribeRequest, subscribe: Subscribe) async throws -> Int? {
+    guard canAccess(.subscribe) else { return nil }
     let body = try JSONEncoder().encode(request)
     let data = try await makeRequest(endpoint: "/subscribe/", method: "POST", body: body)
 
@@ -1822,6 +1827,7 @@ class APIService: ObservableObject {
   /// - 对应前端: 1. `MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue` 2. `MoviePilot-Frontend/src/views/subscribe/SubscribeListView.vue`
   /// - 应用场景: 1. 在订阅编辑弹窗中点击“取消订阅”按钮。 2. 在订阅列表页进行批量删除操作时并发调用。
   func deleteSubscription(id: Int) async throws -> Bool {
+    guard canAccess(.subscribe) else { return false }
     let data = try await makeRequest(endpoint: "/subscribe/\(id)", method: "DELETE")
     let success: Bool
     if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
@@ -1839,6 +1845,7 @@ class APIService: ObservableObject {
   /// - 对应前端: `MoviePilot-Frontend/src/components/cards/MediaCard.vue` (主要实现), `MoviePilot-Frontend/src/views/discover/MediaDetailView.vue`
   /// - 应用场景: 在详情页或媒体卡片上，取消对该媒体的订阅（点击已激活的心形图标）。
   func deleteSubscription(media: MediaInfo, season: Int?) async throws -> Bool {
+    guard canAccess(.subscribe) else { return false }
     guard let mediaId = media.apiMediaId else {
       // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求，返回失败
       return false
@@ -1850,6 +1857,7 @@ class APIService: ObservableObject {
   /// - 对应前端: `MoviePilot-Frontend/src/views/discover/MediaDetailView.vue` 的 `removeSubscribe`
   /// - 应用场景: 详情页 Header 取消订阅时，先解析真实订阅归属的 `mediaId`，再保持 Web 的媒体级删除语义。
   func deleteSubscription(mediaId: String, season: Int?) async throws -> Bool {
+    guard canAccess(.subscribe) else { return false }
     guard let encodedMediaId = encodeMediaIDPathSegment(mediaId), !encodedMediaId.isEmpty else {
       throw APIError.invalidURL
     }
@@ -1873,6 +1881,7 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/ForkSubscribeDialog.vue (doFork)
   /// - 应用场景: 在"订阅分享"中，点击"复用"按钮，基于分享的配置创建一个新的个人订阅。
   func forkSubscription(share: SubscribeShare) async throws -> Int? {
+    guard canAccess(.subscribe) else { return nil }
     let body = try JSONEncoder().encode(share)
     let data = try await makeRequest(endpoint: "/subscribe/fork", method: "POST", body: body)
     struct ForkResponse: Decodable {
@@ -1891,6 +1900,7 @@ class APIService: ObservableObject {
   /// - 对应前端: 1. `MoviePilot-Frontend/src/components/cards/SubscribeCard.vue` 2. `MoviePilot-Frontend/src/views/subscribe/SubscribeListView.vue`
   /// - 应用场景: 1. 在订阅列表页对单个卡片进行“暂停/恢复”切换。 2. 在订阅列表页进行批量暂停/恢复操作时并发调用。
   func updateSubscriptionStatus(id: Int, state: String) async throws -> Bool {
+    guard canAccess(.subscribe) else { return false }
     let endpoint = try buildEndpoint(path: "/subscribe/status/\(id)", params: ["state": state])
     let data = try await makeRequest(endpoint: endpoint, method: "PUT")
     let success: Bool
@@ -1909,6 +1919,7 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/cards/SubscribeCard.vue (searchSubscribe)
   /// - 应用场景: 用户在订阅列表手动点击“搜索”按钮，强制后端立即针对该条目执行一次资源检索。
   func searchSubscription(id: Int) async throws -> Bool {
+    guard canAccess(.subscribe) else { return false }
     let data = try await makeRequest(endpoint: "/subscribe/search/\(id)")
     let success: Bool
     if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
@@ -1926,6 +1937,7 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/cards/SubscribeCard.vue (resetSubscribe)
   /// - 应用场景: 清除该条目的已下载/已入库记录，使其状态回到初始，通常用于重新洗版或出错后重试。
   func resetSubscription(id: Int) async throws -> Bool {
+    guard canAccess(.subscribe) else { return false }
     let data = try await makeRequest(endpoint: "/subscribe/reset/\(id)")
     let success: Bool
     if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
@@ -1943,6 +1955,9 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue
   /// - 应用场景: 编辑订阅前获取完整订阅配置
   func fetchSubscription(id: Int) async throws -> Subscribe {
+    guard canAccess(.subscribe) else {
+      throw APIError.serverMessage(Self.noSubscribePermissionMessage)
+    }
     let data = try await makeRequest(endpoint: "/subscribe/\(id)")
     return try await decodeOrUnwrap(Subscribe.self, from: data)
   }
