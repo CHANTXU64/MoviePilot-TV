@@ -36,6 +36,8 @@ private struct BackendCompatibilityConfig {
   let password: String
   let accounts: [BackendCompatibilityAccount]
   let permissionBehaviorAccounts: [BackendPermissionBehaviorAccountSpec]
+  let permissionBehaviorAccountsConfigured: Bool
+  let permissionBehaviorPasswords: [String]
   var activeAccount: BackendCompatibilityAccountSnapshot?
   let mediaServer: String?
   let requireMediaServer: Bool
@@ -60,6 +62,13 @@ private struct BackendCompatibilityConfig {
   let reorganizeHistoryLimit: Int
   let reorganizeConcurrentCount: Int
 
+  static let defaultPermissionBehaviorAccounts = [
+    BackendPermissionBehaviorAccountSpec(username: "test_discovery", permission: .discovery),
+    BackendPermissionBehaviorAccountSpec(username: "test_search", permission: .search),
+    BackendPermissionBehaviorAccountSpec(username: "test_subscribe", permission: .subscribe),
+    BackendPermissionBehaviorAccountSpec(username: "test_manage", permission: .manage),
+  ]
+
   static func testValue() -> BackendCompatibilityConfig {
     BackendCompatibilityConfig(
       baseURL: "https://backend-compatibility-tests.local",
@@ -67,6 +76,8 @@ private struct BackendCompatibilityConfig {
       password: "password",
       accounts: [],
       permissionBehaviorAccounts: [],
+      permissionBehaviorAccountsConfigured: false,
+      permissionBehaviorPasswords: [],
       activeAccount: nil,
       mediaServer: nil,
       requireMediaServer: false,
@@ -127,15 +138,20 @@ private struct BackendCompatibilityConfig {
       values["MOVIEPILOT_COMPAT_COLLECTION_IDS"]?.intListValue
       ?? values["MOVIEPILOT_COMPAT_COLLECTION_ID"]?.intValue.map { [$0] }
       ?? []
+    let permissionBehaviorAccountsValue =
+      values["MOVIEPILOT_COMPAT_PERMISSION_BEHAVIOR_ACCOUNTS"]?.nilIfBlank
+    let permissionBehaviorAccounts = parsePermissionBehaviorAccounts(permissionBehaviorAccountsValue)
+    let permissionBehaviorSpecs =
+      permissionBehaviorAccounts.isEmpty
+      ? Self.defaultPermissionBehaviorAccounts
+      : permissionBehaviorAccounts
     let accounts = configuredAccounts(
       username: username,
       password: password,
       additionalUsernames: values["MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES"]?.listValue ?? [],
       additionalPasswords: values["MOVIEPILOT_COMPAT_ADDITIONAL_PASSWORDS"]?.listValue(
-        preservingEmptyItems: true) ?? []
-    )
-    let permissionBehaviorAccounts = parsePermissionBehaviorAccounts(
-      values["MOVIEPILOT_COMPAT_PERMISSION_BEHAVIOR_ACCOUNTS"]?.nilIfBlank
+        preservingEmptyItems: true) ?? [],
+      excludedAdditionalUsernames: Set(permissionBehaviorSpecs.map(\.username))
     )
 
     return BackendCompatibilityConfig(
@@ -144,6 +160,10 @@ private struct BackendCompatibilityConfig {
       password: password,
       accounts: accounts,
       permissionBehaviorAccounts: permissionBehaviorAccounts,
+      permissionBehaviorAccountsConfigured: permissionBehaviorAccountsValue != nil
+        || values["MOVIEPILOT_COMPAT_PERMISSION_PASSWORDS"]?.nilIfBlank != nil,
+      permissionBehaviorPasswords: values["MOVIEPILOT_COMPAT_PERMISSION_PASSWORDS"]?.listValue(
+        preservingEmptyItems: true) ?? [],
       activeAccount: nil,
       mediaServer: values["MOVIEPILOT_COMPAT_MEDIA_SERVER"]?.nilIfBlank,
       requireMediaServer: values["MOVIEPILOT_COMPAT_REQUIRE_MEDIA_SERVER"]?.boolValue(
@@ -244,7 +264,8 @@ private struct BackendCompatibilityConfig {
     username: String,
     password: String,
     additionalUsernames: [String],
-    additionalPasswords: [String]
+    additionalPasswords: [String],
+    excludedAdditionalUsernames: Set<String> = []
   ) -> [BackendCompatibilityAccount] {
     var seen = Set<String>()
     var accounts: [BackendCompatibilityAccount] = []
@@ -258,6 +279,7 @@ private struct BackendCompatibilityConfig {
 
     append(label: "primary", username: username, password: password)
     for (index, additionalUsername) in additionalUsernames.enumerated() {
+      guard !excludedAdditionalUsernames.contains(additionalUsername) else { continue }
       let additionalPassword = additionalPasswords[safe: index]?.nilIfBlank ?? password
       append(
         label: "additional-\(index + 1)",
@@ -435,6 +457,19 @@ final class BackendCompatibilityEnvironmentParsingTests: XCTestCase {
     ])
   }
 
+  func testPermissionBehaviorAccountsAreExcludedFromCompatibilityMatrix() {
+    let accounts = BackendCompatibilityConfig.configuredAccounts(
+      username: "admin",
+      password: "primary-password",
+      additionalUsernames: "ordinary,test_discovery,test_search".listValue ?? [],
+      additionalPasswords: "ordinary-password,discovery-password,search-password".listValue ?? [],
+      excludedAdditionalUsernames: ["test_discovery", "test_search"]
+    )
+
+    XCTAssertEqual(accounts.map(\.username), ["admin", "ordinary"])
+    XCTAssertEqual(accounts.map(\.password), ["primary-password", "ordinary-password"])
+  }
+
   func testPermissionBehaviorAccountMappingParsesUsernamesAndExpectedPermissions() {
     let specs = BackendCompatibilityConfig.parsePermissionBehaviorAccounts(
       "discovery_user=discovery,search_user:search,subscribe_user=subscribe,manage_user=manage"
@@ -562,13 +597,6 @@ private struct BackendPermissionBehaviorAccount {
 }
 
 final class BackendCompatibilityPermissionBehaviorTests: XCTestCase {
-  private static let defaultPermissionBehaviorAccounts = [
-    BackendPermissionBehaviorAccountSpec(username: "test_discovery", permission: .discovery),
-    BackendPermissionBehaviorAccountSpec(username: "test_search", permission: .search),
-    BackendPermissionBehaviorAccountSpec(username: "test_subscribe", permission: .subscribe),
-    BackendPermissionBehaviorAccountSpec(username: "test_manage", permission: .manage),
-  ]
-
   @MainActor
   func testDedicatedPermissionAccountsExposeOnlySinglePermissionAndTVBehavior() async throws {
     let config = try BackendCompatibilityConfig.loadOrSkip()
@@ -607,25 +635,22 @@ final class BackendCompatibilityPermissionBehaviorTests: XCTestCase {
     config: BackendCompatibilityConfig,
     service: APIService
   ) async throws -> [BackendPermissionBehaviorAccount] {
-    let expectedAccountPermissions = expectedPermissionBehaviorAccounts(config: config)
-    let configuredAccounts = Dictionary(uniqueKeysWithValues: config.accounts.map { ($0.username, $0) })
-    let missingUsernames = expectedAccountPermissions.keys.sorted()
-      .filter { configuredAccounts[$0] == nil }
-    guard missingUsernames.isEmpty else {
+    guard config.permissionBehaviorAccountsConfigured else {
       throw XCTSkip(
-        "Set MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES to include \(expectedAccountPermissions.keys.sorted().joined(separator: ",")) before running dedicated permission behavior compatibility tests. To override the default account names, set MOVIEPILOT_COMPAT_PERMISSION_BEHAVIOR_ACCOUNTS=username=permission,... Missing: \(missingUsernames.joined(separator: ","))"
+        "Set MOVIEPILOT_COMPAT_PERMISSION_BEHAVIOR_ACCOUNTS=username=permission,... and MOVIEPILOT_COMPAT_PERMISSION_PASSWORDS before running dedicated permission behavior compatibility tests."
       )
     }
 
+    let specs = expectedPermissionBehaviorAccountSpecs(config: config)
     clearBackendCompatibilityStoredCredentials()
     var accounts: [BackendPermissionBehaviorAccount] = []
 
-    for username in expectedAccountPermissions.keys.sorted() {
-      guard let account = configuredAccounts[username],
-        let expectedPermission = expectedAccountPermissions[username]
-      else {
-        continue
-      }
+    for (index, spec) in specs.enumerated() {
+      let account = BackendCompatibilityAccount(
+        label: "permission-\(spec.permission.rawValue)",
+        username: spec.username,
+        password: config.permissionBehaviorPasswords[safe: index]?.nilIfBlank ?? config.password
+      )
 
       clearBackendCompatibilityStoredCredentials()
       service.baseURL = config.baseURL
@@ -636,7 +661,7 @@ final class BackendCompatibilityPermissionBehaviorTests: XCTestCase {
       accounts.append(
         BackendPermissionBehaviorAccount(
           account: account,
-          expectedPermission: expectedPermission,
+          expectedPermission: spec.permission,
           token: token
         )
       )
@@ -672,14 +697,12 @@ final class BackendCompatibilityPermissionBehaviorTests: XCTestCase {
     XCTAssertEqual(canManage, account.expectedPermission == .manage)
   }
 
-  private func expectedPermissionBehaviorAccounts(config: BackendCompatibilityConfig)
-    -> [String: UserPermissionKey]
+  private func expectedPermissionBehaviorAccountSpecs(config: BackendCompatibilityConfig)
+    -> [BackendPermissionBehaviorAccountSpec]
   {
-    let specs =
-      config.permissionBehaviorAccounts.isEmpty
-      ? Self.defaultPermissionBehaviorAccounts
+    config.permissionBehaviorAccounts.isEmpty
+      ? BackendCompatibilityConfig.defaultPermissionBehaviorAccounts
       : config.permissionBehaviorAccounts
-    return Dictionary(uniqueKeysWithValues: specs.map { ($0.username, $0.permission) })
   }
 
   private func expectedVisibleTabs(for permission: UserPermissionKey) -> [ContentViewModel.Tab] {

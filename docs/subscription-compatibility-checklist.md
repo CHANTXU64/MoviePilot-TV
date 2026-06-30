@@ -18,6 +18,7 @@ MoviePilot 后端普通用户权限契约仍不稳定，后续版本可能有较
 - 普通用户在 Web 端能看到哪些入口，不能访问时 Web 是隐藏、禁用还是报错。
 - TV 端是否仍应自动隐藏发现、搜索、状态、管理类入口；不要用笼统的“非超管权限不足”文案替代具体入口隐藏。
 - Web 端 `filterMenusByPermission` / `hasPermission` 是否仍按原始权限对象判断 `permissions[key] === true`；TV 端的 `Token.canAccess(_:)`、入口隐藏和对应测试必须同步更新，不能只改其中一层。
+- 四个单权限真实后端账号必须通过 `MOVIEPILOT_COMPAT_PERMISSION_BEHAVIOR_ACCOUNTS` / `MOVIEPILOT_COMPAT_PERMISSION_PASSWORDS` 只跑 `BackendCompatibilityPermissionBehaviorTests`；不要把它们放进普通 `MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES` 兼容矩阵里反复巡检 read-only / side-effect 接口。
 
 如果后端新增更细的权限项、改名、调整返回结构，或把现有普通用户权限改成可访问更多/更少订阅能力，不能只改 UI 文案；需要同步更新 Token 解码、权限判断、真实后端兼容测试和订阅副作用测试。
 

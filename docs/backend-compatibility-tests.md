@@ -52,6 +52,30 @@ GitHub CI 没有真实后端账号，`ci.yml` 会显式跳过 `BackendCompatibil
 
 `MOVIEPILOT_COMPAT_ADDITIONAL_PASSWORDS` 与额外用户名按顺序对应；本地确实共用密码时可以留空，测试会回退使用 `MOVIEPILOT_COMPAT_PASSWORD`。如果某个密码本身包含逗号，在同一行中把该逗号写成 `\,`，例如 `first-password,pa\,ssword` 会解析为两个密码 `first-password` 和 `pa,ssword`。模板文件中应填写自己的测试账号用户名和密码，不要复用示例值。
 
+四个单权限账号不要放进 `MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES`。它们使用下面的专用配置，只运行 `BackendCompatibilityPermissionBehaviorTests`，不会参加只读巡检或副作用套件；即使用户名误留在 `MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES` 中，也会从普通兼容矩阵里排除：
+
+```sh
+MOVIEPILOT_COMPAT_PERMISSION_BEHAVIOR_ACCOUNTS=test_discovery=discovery,test_search=search,test_subscribe=subscribe,test_manage=manage
+MOVIEPILOT_COMPAT_PERMISSION_PASSWORDS=discovery-password,search-password,subscribe-password,manage-password
+```
+
+`MOVIEPILOT_COMPAT_PERMISSION_PASSWORDS` 按 `MOVIEPILOT_COMPAT_PERMISSION_BEHAVIOR_ACCOUNTS` 的顺序对应；留空项会回退使用 `MOVIEPILOT_COMPAT_PASSWORD`。只想验证权限行为时，直接跑这一小组即可：
+
+```sh
+xcodebuild test \
+  -project "MoviePilot-TV.xcodeproj" \
+  -scheme "MoviePilot-TV" \
+  -configuration Debug \
+  -destination "platform=tvOS Simulator,name=Apple TV" \
+  -parallel-testing-enabled NO \
+  -maximum-concurrent-test-simulator-destinations 1 \
+  CODE_SIGNING_ALLOWED=NO \
+  CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGN_IDENTITY="" \
+  -skipPackagePluginValidation \
+  -only-testing:MoviePilot-TV-Tests/BackendCompatibilityPermissionBehaviorTests
+```
+
 ## 副作用套件
 
 副作用测试默认开启。运行 `BackendCompatibilitySideEffectTests` 时，已配置真实后端的情况下会默认执行下面这些流程；如果某次兼容性检查不想跑某一项，可在 `.env.compatibility` 中把对应开关设为 `false`。
