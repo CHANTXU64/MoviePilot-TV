@@ -3,7 +3,7 @@
 <p align="center">
   <a href="https://github.com/CHANTXU64/MoviePilot-TV/releases"><img src="https://img.shields.io/badge/Release-v0.3.1-blue?style=flat-square" alt="release"></a>
   <a href="https://github.com/jxxghp/MoviePilot"><img src="https://img.shields.io/badge/MoviePilot-v2.13.6-darkviolet?style=flat-square" alt="MoviePilot Backend Version"></a>
-  <img src="https://img.shields.io/badge/platform-tvOS_17%2B-lightgrey.svg" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-tvOS_18%2B-lightgrey.svg" alt="Platform">
   <img src="https://img.shields.io/badge/language-Swift-orange.svg?style=flat-square" alt="Language">
   <img src="https://img.shields.io/badge/UI-SwiftUI-blue.svg?style=flat-square" alt="UI Framework">
   <a href="https://github.com/CHANTXU64/MoviePilot-TV/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-CC0--1.0-blue.svg?style=flat-square" alt="License"></a>
@@ -42,16 +42,11 @@
 
 ## ⚠️ 兼容性与已知问题
 
-- **tvOS 版本**: 支持 **tvOS 17.0+**。本项目主要在 **tvOS 26.0+** 环境下开发，UI 效果在该版本上表现最佳。
-- **后端版本**: 当前测试兼容的 MoviePilot 版本限定为：`v2.13.6`。由于 API 可能发生破坏性变更，其他版本后端可能出现功能异常或闪退。
-- **版本维护**: 发布应用新版本或调整兼容 MoviePilot 版本时，请同步更新本文件顶部徽章、兼容性说明，以及设置页使用的 `AppVersionInfo.compatibleMoviePilotVersion`。
+- **tvOS 版本**: 支持 **tvOS 18.0+**。本项目主要在 **tvOS 26.0+** 环境下开发，建议使用最新的 tvOS 系统获得最佳体验。
+- **MoviePilot 版本**: 当前测试兼容的后端版本为 `v2.13.6`。其他版本可能因 API 变更导致功能异常或闪退。
+- **兼容原则**: TV 端以 MoviePilot Web 前端和 MoviePilot 后端当前行为为准；如果 Web 本来也不显示，或后端/第三方数据源同样异常，本项目通常不会在 TV 端额外兜底修复。
+- **更新节奏**: 本应用更新频率可能低于 MoviePilot 原版，不保证长期兼容旧版 API 或旧版后端已知问题。
 - **账号登录**: **不支持**已开启双因素认证 (MFA/2FA) 的账号，请在关闭双因素认证后再登录。
-- **应用更新**: 本应用不对旧版 API 或已知 Bug 进行向下兼容修复。更新频率可能低于 MoviePilot 原版。
-- **兼容原则**: TV 端以 MoviePilot Web 前端和 MoviePilot 后端当前行为为准；如果 Web 本来也不显示或后端/第三方数据源同样异常，本项目不会在 TV 端额外兜底修复。
-- **图片加载问题**:
-  - **原因**: MoviePilot 图片缓存以及部分数据源（如豆瓣、Bangumi）的原始图片会返回 **WEBP** 格式图片，而 tvOS 17.x 及更早版本原生不支持解码。
-  - **临时方案**: 在 tvOS 17.x 系统上，App 会自动禁用后端的图片代理/缓存功能以尝试规避部分问题。
-  - **建议**: 升级至 **tvOS 18.0+** 可解决所有 WEBP 图片加载问题，获得最佳体验。
 
 ## 安装指南
 
@@ -96,23 +91,9 @@
 
    `--force` 只强制执行构建和安装流程，不代表 Xcode/Apple 一定会在旧的 Xcode-managed provisioning profile 过期前签发新的 profile；如果 Apple 仍复用未过期的 profile，应用的实际到期时间不会被提前延长。
 
-## 后端兼容性测试（可选）
+## 后端兼容性测试
 
-如果需要用自己的 MoviePilot 后端验证 TV 端兼容性，可以复制 `.env.compatibility.example` 为 `.env.compatibility`，填写后端地址、用户名和密码：
-
-```sh
-MOVIEPILOT_COMPAT_BASE_URL=http://127.0.0.1:3000
-MOVIEPILOT_COMPAT_USERNAME=admin
-MOVIEPILOT_COMPAT_PASSWORD=your-password
-```
-
-真实后端兼容测试分为只读套件和副作用套件。只读套件会登录后端并读取 TV 端依赖的 API、图片和媒体数据；副作用套件默认开启，会触发订阅搜索、原参数保存订阅、暂停/恢复订阅、重置订阅、手动重新整理和 AI 重新整理等真实后台动作。如果只想跑只读检查，请在 `.env.compatibility` 中设置：
-
-```sh
-MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS=false
-```
-
-`.env.compatibility` 会被 Git 忽略，不要提交真实账号密码。完整命令、可选开关和 GitHub CI 行为见 [后端兼容性测试文档](docs/backend-compatibility-tests.md)。
+如需使用自己的 MoviePilot 后端验证 TV 端接口、图片和功能兼容性，请先阅读 [后端兼容性测试文档](docs/backend-compatibility-tests.md)。真实后端测试可能包含副作用套件，运行前请确认测试范围。
 
 ## 反馈与贡献
 
