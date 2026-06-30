@@ -80,7 +80,6 @@ class AddDownloadViewModel: ObservableObject {
   }
 
   func addDownload() async {
-    guard APIService.shared.canAccess(.search) else { return }
     isSubmitting = true
     defer { isSubmitting = false }
 

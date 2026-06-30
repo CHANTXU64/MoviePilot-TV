@@ -283,7 +283,6 @@ class APIService: ObservableObject {
   static let shared = APIService()
   static let sessionRefreshAppVersionKey = "lastSessionRefreshAppVersion"
   private static let noAccessibleFeatureMessage = "当前用户没有可访问的功能权限"
-  private static let noSubscribePermissionMessage = "当前用户没有订阅权限"
   private static let keychainService = "MoviePilot-TV"
   private static let accessTokenAccount = "accessToken"
   private static let currentUserAccount = "currentUser"
@@ -564,14 +563,6 @@ class APIService: ObservableObject {
     NotificationCenter.default.post(name: .sessionDidLogout, object: nil)
   }
 
-  var canRequestSuperUserEndpoints: Bool {
-    currentUser?.canRequestSuperUserEndpoints == true
-  }
-
-  var canRequestManageEndpoints: Bool {
-    canAccess(.manage)
-  }
-
   func canAccess(_ permission: UserPermissionKey) -> Bool {
     if let currentUser {
       return currentUser.canAccess(permission)
@@ -585,7 +576,7 @@ class APIService: ObservableObject {
     case .missing:
       break
     }
-    return Token.defaultCanAccess(permission)
+    return false
   }
 
   func sessionSnapshot() -> APIServiceSessionSnapshot {
@@ -695,6 +686,21 @@ class APIService: ObservableObject {
     logSubscriptionRequestIfNeeded(endpoint: endpoint, method: method)
     let (data, response) = try await URLSession.shared.data(for: request)
     if let httpResponse = response as? HTTPURLResponse {
+      func serverMessageError() -> APIError {
+        struct ErrorPayload: Decodable {
+          let message: String?
+          let detail: String?
+        }
+        let payload = try? JSONDecoder().decode(ErrorPayload.self, from: data)
+        let message = payload?.message ?? payload?.detail
+        return APIError.serverMessage(
+          [String(httpResponse.statusCode), message]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: ": ")
+        )
+      }
+
       if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
         // 如果允许重试，则尝试自动登录
         if retryOn401, let u = storedUsername, let p = storedPassword, !u.isEmpty, !p.isEmpty {
@@ -735,23 +741,13 @@ class APIService: ObservableObject {
         }
         if logoutOnUnauthorized {
           self.logout()
+          throw APIError.unauthorized
         }
-        throw APIError.unauthorized
+        throw serverMessageError()
       }
       guard (200...299).contains(httpResponse.statusCode) else {
         print("DEBUG: [makeRequest] HTTP Error: \(httpResponse.statusCode) for \(endpoint)")
-        struct ErrorPayload: Decodable {
-          let message: String?
-          let detail: String?
-        }
-        let payload = try? JSONDecoder().decode(ErrorPayload.self, from: data)
-        let message = payload?.message ?? payload?.detail
-        throw APIError.serverMessage(
-          [String(httpResponse.statusCode), message]
-            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .joined(separator: ": ")
-        )
+        throw serverMessageError()
       }
     }
     return data
@@ -875,12 +871,10 @@ class APIService: ObservableObject {
   /// 如果 Token 失效且有保存凭证，makeRequest 会自动触发重连并更新 Cookie。
   func validateTokenSilently() {
     guard isLoggedIn else { return }
-    guard canRequestManageEndpoints else { return }
 
     Task {
       do {
-        // 请求一个极其轻量的接口来验证 Token 和更新 Cookie
-        _ = try await makeRequest(endpoint: "/dashboard/statistic", retryOn401: true)
+        _ = try await makeRequest(endpoint: "/user/current", retryOn401: true)
         print("Token/Session validation successful.")
       } catch {
         print("Silent token validation background process handled: \(error)")
@@ -934,7 +928,6 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/dashboard/AnalyticsMediaStatistic.vue
   /// - 应用场景: 首页仪表盘展示各类媒体的数量统计。
   func fetchStatistic() async throws -> Statistic {
-    guard canRequestManageEndpoints else { return Statistic() }
     let data = try await makeRequest(endpoint: "/dashboard/statistic")
     return try await decodeOrUnwrap(Statistic.self, from: data)
   }
@@ -943,7 +936,6 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/dashboard/AnalyticsStorage.vue
   /// - 应用场景: 首页仪表盘展示磁盘/网盘的存储使用情况。
   func fetchStorage() async throws -> Storage {
-    guard canRequestManageEndpoints else { return Storage(total_storage: 0, used_storage: 0) }
     let data = try await makeRequest(endpoint: "/dashboard/storage")
     return try await decodeOrUnwrap(Storage.self, from: data)
   }
@@ -952,7 +944,6 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/dashboard/AnalyticsSpeed.vue
   /// - 应用场景: 首页仪表盘展示当前下载速度与任务信息。
   func fetchDownloaderInfo() async throws -> DownloaderInfo {
-    guard canRequestManageEndpoints else { return DownloaderInfo() }
     let data = try await makeRequest(endpoint: "/dashboard/downloader")
     return try await decodeOrUnwrap(DownloaderInfo.self, from: data)
   }
@@ -987,7 +978,6 @@ class APIService: ObservableObject {
 
   /// 获取系统环境变量
   func fetchSystemEnv() async throws -> SystemEnv {
-    guard isLoggedIn else { return SystemEnv(VERSION: nil) }
     let data = try await makeRequest(endpoint: "/system/env")
     return try await decodeOrUnwrap(SystemEnv.self, from: data)
   }
@@ -1207,7 +1197,6 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/subscribe/SubscribeShareView.vue (fetchData)
   /// - 应用场景: "探索"页面的"订阅分享"板块，分页加载用户分享的订阅规则。
   func fetchSubscriptionShares(path: String, page: Int = 1) async throws -> [SubscribeShare] {
-    guard canAccess(.subscribe) else { return [] }
     let absolutePath = path.hasPrefix("/") ? path : "/\(path)"
     let endpoint = try buildEndpoint(path: absolutePath, params: ["page": String(page)])
     let data = try await makeRequest(endpoint: endpoint)
@@ -1218,7 +1207,6 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/subscribe/SubscribeShareView.vue (但增加了搜索功能)
   /// - 应用场景: 聚合搜索页面，与电影、电视剧、人物等结果一同展示。
   func searchSubscriptionShares(query: String, page: Int = 1) async throws -> [SubscribeShare] {
-    guard canAccess(.subscribe) else { return [] }
     let endpoint = try buildEndpoint(
       path: "/subscribe/shares",
       params: [
@@ -1283,7 +1271,6 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/pages/downloading.vue, src/components/dialog/SiteAddEditDialog.vue, src/components/dialog/AddDownloadDialog.vue, src/components/dialog/SubscribeEditDialog.vue
   /// - 应用场景: 获取系统配置的所有下载器实例，用于切换下载器视图或在站点/订阅配置中选择下载目标
   func fetchDownloadClients() async throws -> [DownloaderConf] {
-    guard isLoggedIn else { return [] }
     let data = try await makeRequest(endpoint: "/download/clients")
     return try await decodeOrUnwrap([DownloaderConf].self, from: data)
   }
@@ -1292,7 +1279,6 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/reorganize/DownloadingListView.vue (通过 apipath)
   /// - 应用场景: 获取特定下载器当前的下载任务列表
   func fetchDownloading(clientName: String) async throws -> [DownloadingInfo] {
-    guard canRequestManageEndpoints else { return [] }
     let endpoint = try buildEndpoint(path: "/download/", params: ["name": clientName])
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([DownloadingInfo].self, from: data)
@@ -1304,7 +1290,6 @@ class APIService: ObservableObject {
   func stopDownload(clientName: String, hash: String) async throws -> (
     success: Bool, message: String?
   ) {
-    guard canRequestManageEndpoints else { return (false, nil) }
     let endpoint = try buildEndpoint(path: "/download/stop/\(hash)", params: ["name": clientName])
     let data = try await makeRequest(endpoint: endpoint, method: "GET")
     return try await decodeActionResponse(from: data)
@@ -1316,7 +1301,6 @@ class APIService: ObservableObject {
   func startDownload(clientName: String, hash: String) async throws -> (
     success: Bool, message: String?
   ) {
-    guard canRequestManageEndpoints else { return (false, nil) }
     let endpoint = try buildEndpoint(path: "/download/start/\(hash)", params: ["name": clientName])
     let data = try await makeRequest(endpoint: endpoint, method: "GET")
     return try await decodeActionResponse(from: data)
@@ -1328,7 +1312,6 @@ class APIService: ObservableObject {
   func deleteDownload(clientName: String, hash: String) async throws -> (
     success: Bool, message: String?
   ) {
-    guard canRequestManageEndpoints else { return (false, nil) }
     let endpoint = try buildEndpoint(
       path: "/download/\(hash)",
       params: ["name": clientName]
@@ -1357,7 +1340,6 @@ class APIService: ObservableObject {
   func fetchTransferHistory(page: Int, count: Int, title: String?) async throws
     -> TransferHistoryResponse
   {
-    guard canRequestManageEndpoints else { return TransferHistoryResponse(list: [], total: 0) }
     let endpoint = try buildEndpoint(
       path: "/history/transfer",
       params: [
@@ -1380,7 +1362,6 @@ class APIService: ObservableObject {
     async throws
     -> Bool
   {
-    guard canRequestSuperUserEndpoints else { return false }
     let body = try JSONEncoder().encode(item)
     let endpoint = try buildEndpoint(
       path: "/history/transfer",
@@ -1395,7 +1376,6 @@ class APIService: ObservableObject {
   /// AI重新整理历史记录
   /// - 对应前端: `MoviePilot-Frontend/src/views/reorganize/TransferHistoryView.vue`
   func aiRedoTransferHistory(ids: [Int]) async throws -> (progressKey: String, acceptedIds: [Int])? {
-    guard canRequestSuperUserEndpoints else { return nil }
     let endpoint = try buildEndpoint(path: "/history/transfer/ai-redo")
     let body = try JSONEncoder().encode(["history_ids": ids])
     let data = try await makeRequest(endpoint: endpoint, method: "POST", body: body)
@@ -1425,7 +1405,6 @@ class APIService: ObservableObject {
   ///   - form: 包含整理所需全部信息的表单。
   ///   - background: 是否在后台执行整理任务。`true`为后台执行，会立即返回；`false`为前台执行，会等待任务完成。
   func manualTransfer(form: ReorganizeForm, background: Bool) async throws -> Bool {
-    guard canRequestSuperUserEndpoints else { return false }
     let body = try JSONEncoder().encode(form)
     let endpoint = try buildEndpoint(
       path: "/transfer/manual", params: ["background": String(background)])
@@ -1437,7 +1416,6 @@ class APIService: ObservableObject {
   /// - 对应前端: `MoviePilot-Frontend/src/components/dialog/ReorganizeDialog.vue` (loadStorages)
   /// - 应用场景: 在手动整理弹窗中，加载可用的目标存储（如 local, alipan, rclone 等）列表。
   func fetchStorages() async throws -> [StorageConf] {
-    guard isLoggedIn else { return [] }
     struct ConfigValue: Decodable {
       let value: [StorageConf]
     }
@@ -1452,7 +1430,6 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/setting/AccountSettingSystem.vue, src/views/dashboard/MediaServerLatest.vue 等
   /// - 应用场景: 获取已配置的媒体服务器（Emby/Jellyfin/Plex）列表。该接口是首页仪表盘展示“最新入库”、“正在播放”及“媒体库统计”的基础数据源。
   func fetchMediaServers() async throws -> [MediaServerConf] {
-    guard canRequestManageEndpoints else { return [] }
     // API returns { data: { value: [...] } }
     struct ConfigValue: Decodable {
       let value: [MediaServerConf]
@@ -1466,7 +1443,6 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/dashboard/MediaServerLatest.vue
   /// - 应用场景: 首页仪表盘展示最近添加的影片
   func fetchMediaServerLatest(server: String) async throws -> [MediaServerPlayItem] {
-    guard canRequestManageEndpoints else { return [] }
     let endpoint = try buildEndpoint(path: "/mediaserver/latest", params: ["server": server])
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([MediaServerPlayItem].self, from: data)
@@ -1538,7 +1514,6 @@ class APIService: ObservableObject {
 
   /// 流式标题搜索 (SSE)
   func searchTitleStream(keyword: String, sites: String?) -> AsyncThrowingStream<SearchStreamEvent, Error> {
-    guard canAccess(.search) else { return emptySearchStream() }
     do {
       let endpoint = try buildEndpoint(
         path: "/search/title/stream",
@@ -1557,7 +1532,6 @@ class APIService: ObservableObject {
   func searchMediaStream(
     keyword: String, type: String?, area: String?, title: String?, year: String?, season: Int?, sites: String?
   ) -> AsyncThrowingStream<SearchStreamEvent, Error> {
-    guard canAccess(.search) else { return emptySearchStream() }
     do {
       let endpoint = try buildEndpoint(
         path: "/search/media/\(keyword)/stream",
@@ -1572,12 +1546,6 @@ class APIService: ObservableObject {
       return streamSSE(endpoint: endpoint)
     } catch {
       return AsyncThrowingStream { $0.finish(throwing: error) }
-    }
-  }
-
-  private func emptySearchStream() -> AsyncThrowingStream<SearchStreamEvent, Error> {
-    AsyncThrowingStream { continuation in
-      continuation.finish()
     }
   }
 
@@ -1596,7 +1564,6 @@ class APIService: ObservableObject {
     keyword: String, type: String? = nil, area: String? = nil, title: String? = nil,
     year: String? = nil, season: Int? = nil, sites: String? = nil
   ) async throws -> [Context] {
-    guard canAccess(.search) else { return [] }
     // 匹配 Vue 端逻辑：如果 keyword 的格式是 xxxx:xxxxx 且 : 前面的 xxxx 为字符，则按照媒体 ID 格式搜索
     let isIdSearch = keyword.range(of: "^[a-zA-Z]+:", options: .regularExpression) != nil
 
@@ -1714,7 +1681,6 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue
   /// - 应用场景: 在 **订阅编辑对话框** 中，作为“订阅站点”下拉菜单的数据源。
   func fetchSites() async throws -> [Site] {
-    guard isLoggedIn else { return [] }
     let data = try await makeRequest(endpoint: "/site/rss")
     return try await decodeOrUnwrap([Site].self, from: data)
   }
@@ -1723,7 +1689,6 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/setting/AccountSettingDirectory.vue
   /// - 应用场景: 添加下载时选择目标存储目录
   func fetchDirectories() async throws -> [TransferDirectoryConf] {
-    guard isLoggedIn else { return [] }
     struct ConfigValue: Decodable {
       let value: [TransferDirectoryConf]
     }
@@ -1734,7 +1699,6 @@ class APIService: ObservableObject {
 
   /// 获取配置的搜索站点 (IndexerSites)
   func fetchIndexerSites() async throws -> [Int] {
-    guard canAccess(.search) else { return [] }
     struct ConfigValue: Decodable {
       let value: [Int]?
     }
@@ -1747,7 +1711,6 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue
   /// - 应用场景: 这是一个通用接口，Vue在多个场景中被调用以获取过滤规则组下拉选项：1. **订阅编辑对话框**中的“过滤规则组”。
   func fetchFilterRuleGroups() async throws -> [FilterRuleGroup] {
-    guard canAccess(.subscribe) else { return [] }
     struct ConfigValue: Decodable {
       let value: [FilterRuleGroup]
     }
@@ -1760,7 +1723,6 @@ class APIService: ObservableObject {
   /// - 对应后端: CustomFilterRules 配置项
   /// - 应用场景: 在设置页面加载可用的自定义规则列表，供用户选择后用于前端资源搜索结果的过滤。
   func fetchCustomFilterRules() async throws -> [CustomRule] {
-    guard canRequestSuperUserEndpoints else { return [] }
     let data = try await makeRequest(endpoint: "/system/setting/CustomFilterRules")
     let config = try await decodeOrUnwrap(CustomFilterRulesResponse.self, from: data)
     return config.value
@@ -1816,7 +1778,6 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeSeasonDialog.vue
   /// - 应用场景: 在前端的 **分季订阅弹窗** 中，实时标记哪些季“已入库”、“部分缺失”或“完全缺失”。
   func checkSeasonsNotExists(mediaInfo: MediaInfo) async throws -> [NotExistMediaInfo] {
-    guard canAccess(.subscribe) else { return [] }
     let body = try JSONEncoder().encode(mediaInfo)
     let hash = SHA256.hash(data: body)
     let cacheKey = hash.compactMap { String(format: "%02x", $0) }.joined()
@@ -1837,7 +1798,6 @@ class APIService: ObservableObject {
   /// - 对应前端: 1. `MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue` (更新) 2. `MoviePilot-Frontend/src/components/cards/MediaCard.vue` (新增)
   /// - 应用场景: 1. 在订阅编辑弹窗中点击“保存”，对现有订阅进行修改 (PUT)。 2. 在媒体卡片或详情页上点击订阅，创建新的订阅记录 (POST)。
   func saveSubscription(_ subscribe: Subscribe) async throws -> Bool {
-    guard canAccess(.subscribe) else { return false }
     let body = try JSONEncoder().encode(subscribe)
     let endpoint = "/subscribe/"
     // 如果存在 ID，则很可能是更新 (PUT)，但 API 可能同时处理 POST 或有其他逻辑。
@@ -1874,7 +1834,6 @@ class APIService: ObservableObject {
   ///   - **订阅电视剧分季时**: 会先弹出 `SubscribeSeasonDialog.vue` 分季选择框。用户确认后，前端遍历所选的每一季，并为每一季都单独调用一次此 API，每次传入对应的 `season` 编号。
   /// - 备注：Subscribe 参数用于更新订阅状态缓存
   func addSubscription(request: SubscribeRequest, subscribe: Subscribe) async throws -> Int? {
-    guard canAccess(.subscribe) else { return nil }
     let body = try JSONEncoder().encode(request)
     let data = try await makeRequest(endpoint: "/subscribe/", method: "POST", body: body)
 
@@ -1895,7 +1854,6 @@ class APIService: ObservableObject {
   /// - 对应前端: 1. `MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue` 2. `MoviePilot-Frontend/src/views/subscribe/SubscribeListView.vue`
   /// - 应用场景: 1. 在订阅编辑弹窗中点击“取消订阅”按钮。 2. 在订阅列表页进行批量删除操作时并发调用。
   func deleteSubscription(id: Int) async throws -> Bool {
-    guard canAccess(.subscribe) else { return false }
     let data = try await makeRequest(endpoint: "/subscribe/\(id)", method: "DELETE")
     let success: Bool
     if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
@@ -1913,7 +1871,6 @@ class APIService: ObservableObject {
   /// - 对应前端: `MoviePilot-Frontend/src/components/cards/MediaCard.vue` (主要实现), `MoviePilot-Frontend/src/views/discover/MediaDetailView.vue`
   /// - 应用场景: 在详情页或媒体卡片上，取消对该媒体的订阅（点击已激活的心形图标）。
   func deleteSubscription(media: MediaInfo, season: Int?) async throws -> Bool {
-    guard canAccess(.subscribe) else { return false }
     guard let mediaId = media.apiMediaId else {
       // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求，返回失败
       return false
@@ -1925,7 +1882,6 @@ class APIService: ObservableObject {
   /// - 对应前端: `MoviePilot-Frontend/src/views/discover/MediaDetailView.vue` 的 `removeSubscribe`
   /// - 应用场景: 详情页 Header 取消订阅时，先解析真实订阅归属的 `mediaId`，再保持 Web 的媒体级删除语义。
   func deleteSubscription(mediaId: String, season: Int?) async throws -> Bool {
-    guard canAccess(.subscribe) else { return false }
     guard let encodedMediaId = encodeMediaIDPathSegment(mediaId), !encodedMediaId.isEmpty else {
       throw APIError.invalidURL
     }
@@ -1949,7 +1905,6 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/ForkSubscribeDialog.vue (doFork)
   /// - 应用场景: 在"订阅分享"中，点击"复用"按钮，基于分享的配置创建一个新的个人订阅。
   func forkSubscription(share: SubscribeShare) async throws -> Int? {
-    guard canAccess(.subscribe) else { return nil }
     let body = try JSONEncoder().encode(share)
     let data = try await makeRequest(endpoint: "/subscribe/fork", method: "POST", body: body)
     struct ForkResponse: Decodable {
@@ -1968,7 +1923,6 @@ class APIService: ObservableObject {
   /// - 对应前端: 1. `MoviePilot-Frontend/src/components/cards/SubscribeCard.vue` 2. `MoviePilot-Frontend/src/views/subscribe/SubscribeListView.vue`
   /// - 应用场景: 1. 在订阅列表页对单个卡片进行“暂停/恢复”切换。 2. 在订阅列表页进行批量暂停/恢复操作时并发调用。
   func updateSubscriptionStatus(id: Int, state: String) async throws -> Bool {
-    guard canAccess(.subscribe) else { return false }
     let endpoint = try buildEndpoint(path: "/subscribe/status/\(id)", params: ["state": state])
     let data = try await makeRequest(endpoint: endpoint, method: "PUT")
     let success: Bool
@@ -1987,7 +1941,6 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/cards/SubscribeCard.vue (searchSubscribe)
   /// - 应用场景: 用户在订阅列表手动点击“搜索”按钮，强制后端立即针对该条目执行一次资源检索。
   func searchSubscription(id: Int) async throws -> Bool {
-    guard canAccess(.subscribe) else { return false }
     let data = try await makeRequest(endpoint: "/subscribe/search/\(id)")
     let success: Bool
     if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
@@ -2005,7 +1958,6 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/cards/SubscribeCard.vue (resetSubscribe)
   /// - 应用场景: 清除该条目的已下载/已入库记录，使其状态回到初始，通常用于重新洗版或出错后重试。
   func resetSubscription(id: Int) async throws -> Bool {
-    guard canAccess(.subscribe) else { return false }
     let data = try await makeRequest(endpoint: "/subscribe/reset/\(id)")
     let success: Bool
     if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
@@ -2023,9 +1975,6 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue
   /// - 应用场景: 编辑订阅前获取完整订阅配置
   func fetchSubscription(id: Int) async throws -> Subscribe {
-    guard canAccess(.subscribe) else {
-      throw APIError.serverMessage(Self.noSubscribePermissionMessage)
-    }
     let data = try await makeRequest(endpoint: "/subscribe/\(id)")
     return try await decodeOrUnwrap(Subscribe.self, from: data)
   }
@@ -2039,7 +1988,6 @@ class APIService: ObservableObject {
     season: Int? = nil,
     allowSessionRefreshOnUnauthorized: Bool = true
   ) async throws -> SubscriptionLookupResult? {
-    guard canAccess(.subscribe) else { return nil }
     struct SubscribeLookupResp: Codable {
       let id: Int?
       let tmdbid: Int?
@@ -2111,7 +2059,6 @@ class APIService: ObservableObject {
     season: Int? = nil,
     forceRefresh: Bool = false
   ) async throws -> Bool {
-    guard canAccess(.subscribe) else { return false }
     guard let mediaId = media.apiMediaId else {
       // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求，返回 false
       return false
@@ -2152,8 +2099,6 @@ class APIService: ObservableObject {
         return isSubscribed
       } catch is CancellationError {
         throw CancellationError()
-      } catch {
-        return false
       }
     }
   }
@@ -2162,7 +2107,6 @@ class APIService: ObservableObject {
   /// - 对应前端: `MoviePilot-Frontend/src/views/subscribe/SubscribeListView.vue`, `MoviePilot-Frontend/src/views/subscribe/FullCalendarView.swift`
   /// - 应用场景: 1. **订阅列表页面** (`SubscribeListView`) 的核心数据源。 2. **日历视图** (`FullCalendarView`) 的数据源。 (注: 全局搜索栏不直接调用此API)
   func fetchSubscriptions(forceRefresh: Bool = false) async throws -> [Subscribe] {
-    guard canAccess(.subscribe) else { return [] }
     var canReadCache = !forceRefresh
     while true {
       try Task.checkCancellation()
@@ -2298,7 +2242,6 @@ class APIService: ObservableObject {
   func addDownload(payload: AddDownloadRequest, endpoint: String) async throws -> (
     success: Bool, message: String?
   ) {
-    guard canAccess(.search) else { return (false, nil) }
     let encoder = JSONEncoder()
     encoder.outputFormatting = .prettyPrinted
     let body = try encoder.encode(payload)

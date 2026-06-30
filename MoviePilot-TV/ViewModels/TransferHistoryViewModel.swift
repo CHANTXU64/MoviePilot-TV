@@ -100,7 +100,7 @@ class TransferHistoryViewModel: ObservableObject {
   }
 
   func search(with text: String) {
-    guard apiService.canRequestManageEndpoints else {
+    guard apiService.canAccess(.manage) else {
       searchText = text
       clearForRestrictedUser()
       return
@@ -133,7 +133,7 @@ class TransferHistoryViewModel: ObservableObject {
   func refresh() async {
     errorMessage = nil
     isLoadingMore = false
-    guard apiService.canRequestManageEndpoints else {
+    guard apiService.canAccess(.manage) else {
       clearForRestrictedUser()
       return
     }
@@ -148,12 +148,16 @@ class TransferHistoryViewModel: ObservableObject {
   }
 
   private func loadStorages() async {
-    guard apiService.canRequestSuperUserEndpoints else {
+    guard apiService.canAccess(.manage) else {
       storageDict = [:]
       return
     }
     do {
       let storages = try await apiService.fetchStorages()
+      guard apiService.canAccess(.manage) else {
+        storageDict = [:]
+        return
+      }
       var dict = [String: String]()
       for storage in storages {
         dict[storage.type] = storage.name
@@ -173,7 +177,7 @@ class TransferHistoryViewModel: ObservableObject {
 
   func loadMore(currentItemId: TransferHistory.ID) async {
     errorMessage = nil
-    guard apiService.canRequestManageEndpoints else { return }
+    guard apiService.canAccess(.manage) else { return }
     guard !isLoadingMore else { return }
 
     // 以“展示层”位置判断是否触底，避免 focus 落在 prependedItems 时被 Paginator 忽略。
@@ -192,7 +196,7 @@ class TransferHistoryViewModel: ObservableObject {
 
   func deleteHistory(item: TransferHistory, deleteSource: Bool, deleteDest: Bool) async {
     errorMessage = nil
-    guard apiService.canRequestSuperUserEndpoints else { return }
+    guard apiService.canAccess(.manage) else { return }
     do {
       let success = try await apiService.deleteTransferHistory(
         item: item,
@@ -230,7 +234,7 @@ class TransferHistoryViewModel: ObservableObject {
 
   func deleteSelected(deleteSource: Bool, deleteDest: Bool) async {
     errorMessage = nil
-    guard apiService.canRequestSuperUserEndpoints else { return }
+    guard apiService.canAccess(.manage) else { return }
     let idsToDelete = Array(selectedIds)
     var deletedCount = 0
 
@@ -268,7 +272,7 @@ class TransferHistoryViewModel: ObservableObject {
   // MARK: - Polling Helpers
 
   func fetchLatest() async {
-    guard apiService.canRequestManageEndpoints else { return }
+    guard apiService.canAccess(.manage) else { return }
     do {
       var allNewItems: [TransferHistory] = []
       var currentPage = 1
@@ -437,7 +441,7 @@ class TransferHistoryViewModel: ObservableObject {
   // MARK: - AI Reorganize
 
   func triggerAiRedo(for ids: [Int]) async {
-    guard apiService.canRequestSuperUserEndpoints else { return }
+    guard apiService.canAccess(.manage) else { return }
     let pendingIds = ids.filter { !aiRedoingIds.contains($0) }
     guard !pendingIds.isEmpty else { return }
     guard isAiRedoEnabled else {

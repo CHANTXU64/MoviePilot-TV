@@ -11,7 +11,7 @@ class StatusViewModel: ObservableObject {
   private let apiService = APIService.shared
 
   func refreshAllData() async {
-    guard apiService.canRequestManageEndpoints else {
+    guard apiService.canAccess(.manage) else {
       statistic = nil
       storage = nil
       downloader = nil

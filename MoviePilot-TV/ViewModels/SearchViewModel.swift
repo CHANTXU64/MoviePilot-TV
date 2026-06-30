@@ -365,19 +365,22 @@ class SearchViewModel: ObservableObject {
       guard let moviePag = moviePaginator,
         let tvPag = tvPaginator,
         let collectionPag = collectionPaginator,
-        let personPag = personPaginator,
-        let sharePag = subscriptionSharePaginator
+        let personPag = personPaginator
       else { break }
+      let sharePag = subscriptionSharePaginator
 
       // 并发刷新所有分页器
       let movieTask = Task { @MainActor in await moviePag.refresh() }
       let tvTask = Task { @MainActor in await tvPag.refresh() }
       let collectionTask = Task { @MainActor in await collectionPag.refresh() }
       let personTask = Task { @MainActor in await personPag.refresh() }
-      let shareTask = Task { @MainActor in await sharePag.refresh() }
+      let shareTask = sharePag.map { paginator in
+        Task { @MainActor in await paginator.refresh() }
+      }
       _ = await (
-        movieTask.value, tvTask.value, collectionTask.value, personTask.value, shareTask.value
+        movieTask.value, tvTask.value, collectionTask.value, personTask.value
       )
+      await shareTask?.value
       guard canPublishSearchResult(
         generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
       else { return }
@@ -388,7 +391,7 @@ class SearchViewModel: ObservableObject {
         media: moviePag.items + tvPag.items,
         collections: collectionPag.items,
         persons: personPag.items,
-        shares: sharePag.items
+        shares: sharePag?.items ?? []
       )
     }
     guard canPublishSearchResult(
@@ -507,32 +510,32 @@ class SearchViewModel: ObservableObject {
       }
     )
 
-    // --- Subscription Share Paginator ---
-    var shareSeenKeys = Set<String>()
-    let newSubscriptionSharePaginator = Paginator<MediaInfo>(
-      threshold: 10,
-      fetcher: { @MainActor [apiService] page in
-        // 获取原始数据
-        let shareItems = try await apiService.searchSubscriptionShares(query: query, page: page)
-        // 转换为 MediaInfo
-        return shareItems.map { $0.toMediaInfo() }
-      },
-      processor: { @MainActor currentItems, newItems in
-        let uniqueNewItems = MediaInfo.deduplicateSubscriptionShareMedia(
-          newItems,
-          existingKeys: &shareSeenKeys
-        )
-        if uniqueNewItems.isEmpty { return false }
-        currentItems.append(contentsOf: uniqueNewItems)
-        return true
-      },
-      imageURLsProvider: { item in
-        [item.imageURLs.poster].compactMap(\.self)
-      },
-      onReset: { @MainActor in
-        shareSeenKeys.removeAll()
-      }
-    )
+    var newSubscriptionSharePaginator: Paginator<MediaInfo>?
+    if apiService.canAccess(.subscribe) {
+      var shareSeenKeys = Set<String>()
+      newSubscriptionSharePaginator = Paginator<MediaInfo>(
+        threshold: 10,
+        fetcher: { @MainActor [apiService] page in
+          let shareItems = try await apiService.searchSubscriptionShares(query: query, page: page)
+          return shareItems.map { $0.toMediaInfo() }
+        },
+        processor: { @MainActor currentItems, newItems in
+          let uniqueNewItems = MediaInfo.deduplicateSubscriptionShareMedia(
+            newItems,
+            existingKeys: &shareSeenKeys
+          )
+          if uniqueNewItems.isEmpty { return false }
+          currentItems.append(contentsOf: uniqueNewItems)
+          return true
+        },
+        imageURLsProvider: { item in
+          [item.imageURLs.poster].compactMap(\.self)
+        },
+        onReset: { @MainActor in
+          shareSeenKeys.removeAll()
+        }
+      )
+    }
 
     // 设置 Paginator 实例
     self.moviePaginator = newMoviePaginator
@@ -550,7 +553,7 @@ class SearchViewModel: ObservableObject {
       .sink { [weak self] _ in self?.objectWillChange.send() }
     personPaginatorCancellable = newPersonPaginator.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
-    subscriptionSharePaginatorCancellable = newSubscriptionSharePaginator.objectWillChange
+    subscriptionSharePaginatorCancellable = newSubscriptionSharePaginator?.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
   }
 

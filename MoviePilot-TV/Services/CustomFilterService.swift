@@ -34,7 +34,7 @@ enum CustomFilterService {
       return contexts
     }
 
-    guard apiService.canRequestSuperUserEndpoints else {
+    guard apiService.canAccess(.search) else {
       return contexts
     }
 

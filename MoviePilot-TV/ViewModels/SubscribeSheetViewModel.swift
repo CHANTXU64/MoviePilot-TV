@@ -161,7 +161,6 @@ class SubscribeSheetViewModel: ObservableObject {
   }
 
   func save() async -> Bool {
-    guard apiService.canAccess(.subscribe) else { return false }
     isSaving = true
     defer { isSaving = false }
     do {
@@ -189,7 +188,6 @@ class SubscribeSheetViewModel: ObservableObject {
   }
 
   func cancel() async {
-    guard apiService.canAccess(.subscribe) else { return }
     // 如果我们创建了一个新订阅但用户取消了，我们必须回滚（删除）它
     if isNewSubscription, let id = subscribe.id {
       do {

@@ -36,7 +36,6 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     XCTAssertTrue(token.canAccess(.search))
     XCTAssertFalse(token.canAccess(.subscribe))
     XCTAssertFalse(token.canAccess(.manage))
-    XCTAssertFalse(token.canAccess(.admin))
   }
 
   func testStandardUserWithEmptyPermissionsHasNoFeatureAccess() {
@@ -53,7 +52,6 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     XCTAssertFalse(token.canAccess(.search))
     XCTAssertFalse(token.canAccess(.subscribe))
     XCTAssertFalse(token.canAccess(.manage))
-    XCTAssertFalse(token.canAccess(.admin))
     XCTAssertFalse(token.hasLoginAccessibleFeature)
   }
 
@@ -71,11 +69,10 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     XCTAssertFalse(token.canAccess(.search))
     XCTAssertFalse(token.canAccess(.subscribe))
     XCTAssertFalse(token.canAccess(.manage))
-    XCTAssertFalse(token.canAccess(.admin))
     XCTAssertFalse(token.hasLoginAccessibleFeature)
   }
 
-  func testAdminPermissionWithoutVisibleTVFeatureDoesNotAllowLogin() {
+  func testUnknownPermissionWithoutVisibleTVFeatureDoesNotAllowLogin() {
     let token = Token(
       access_token: "token",
       token_type: "bearer",
@@ -91,7 +88,6 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
       avatar: nil
     )
 
-    XCTAssertFalse(token.canAccess(.admin))
     XCTAssertFalse(token.hasLoginAccessibleFeature)
   }
 
@@ -129,7 +125,6 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     XCTAssertTrue(token.canAccess(.search))
     XCTAssertTrue(token.canAccess(.subscribe))
     XCTAssertTrue(token.canAccess(.manage))
-    XCTAssertTrue(token.canAccess(.admin))
     XCTAssertTrue(token.hasLoginAccessibleFeature)
   }
 
@@ -148,7 +143,6 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     XCTAssertFalse(token.canAccess(.search))
     XCTAssertFalse(token.canAccess(.subscribe))
     XCTAssertFalse(token.canAccess(.manage))
-    XCTAssertFalse(token.canAccess(.admin))
     XCTAssertFalse(token.hasLoginAccessibleFeature)
   }
 
@@ -169,7 +163,6 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
 
     XCTAssertFalse(service.canAccess(.subscribe))
     XCTAssertFalse(service.canAccess(.manage))
-    XCTAssertFalse(service.canAccess(.admin))
   }
 
   func testStoredUserWithoutAccessibleFeatureDoesNotDefaultAllowBeforeSessionRefresh() {
@@ -189,36 +182,6 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     XCTAssertFalse(service.canAccess(.search))
     XCTAssertFalse(service.canAccess(.subscribe))
     XCTAssertFalse(service.canAccess(.manage))
-    XCTAssertFalse(service.canAccess(.admin))
-  }
-
-  func testSettingsConnectionEntryExplainsLimitedUserPermissions() {
-    XCTAssertEqual(
-      SystemViewModel.connectionEntryDescription(
-        storageDescription: "已登录 (安全存储)",
-        isLoggedIn: true,
-        canRequestSuperUserEndpoints: false
-      ),
-      "当前用户权限不够，部分不可用功能已自动隐藏"
-    )
-
-    XCTAssertEqual(
-      SystemViewModel.connectionEntryDescription(
-        storageDescription: "已登录 (安全存储)",
-        isLoggedIn: true,
-        canRequestSuperUserEndpoints: true
-      ),
-      "已登录 (安全存储)"
-    )
-
-    XCTAssertEqual(
-      SystemViewModel.connectionEntryDescription(
-        storageDescription: "未登录",
-        isLoggedIn: false,
-        canRequestSuperUserEndpoints: false
-      ),
-      "未登录"
-    )
   }
 
   func testContentTabsFollowGrantedPermissions() {

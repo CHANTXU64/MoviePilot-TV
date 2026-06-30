@@ -69,7 +69,7 @@ final class PermissionScopedLoadViewModelTests: XCTestCase {
     XCTAssertTrue(viewModel.selectedSites.isEmpty)
   }
 
-  func testReorganizePendingLoadDoesNotPublishConfigAfterSuperUserPermissionIsRestricted()
+  func testReorganizePendingLoadDoesNotPublishConfigAfterManagePermissionIsRestricted()
     async throws
   {
     XCTAssertTrue(URLProtocol.registerClass(PermissionScopedLoadURLProtocol.self))
@@ -83,7 +83,7 @@ final class PermissionScopedLoadViewModelTests: XCTestCase {
     await PermissionScopedLoadURLProtocol.stub.suspend(
       path: "/api/v1/system/setting/Storages")
     service.baseURL = "http://permission-scoped-load.local"
-    configureSuperUser(service)
+    configureManageUser(service)
 
     let viewModel = ReorganizeViewModel(logIds: [], fileItem: nil)
     let loadTask = Task { await viewModel.loadConfig() }
@@ -136,14 +136,19 @@ final class PermissionScopedLoadViewModelTests: XCTestCase {
     )
   }
 
-  private func configureSuperUser(_ service: APIService) {
-    service.token = "super-user"
+  private func configureManageUser(_ service: APIService) {
+    service.token = "manage-user"
     service.currentUser = Token(
-      access_token: "super-user",
+      access_token: "manage-user",
       token_type: "Bearer",
-      super_user: FlexibleBool(true),
-      permissions: [:],
-      user_name: "super-user",
+      super_user: FlexibleBool(false),
+      permissions: [
+        UserPermissionKey.discovery.rawValue: false,
+        UserPermissionKey.search.rawValue: false,
+        UserPermissionKey.subscribe.rawValue: false,
+        UserPermissionKey.manage.rawValue: true,
+      ],
+      user_name: "manage-user",
       avatar: nil
     )
   }

@@ -39,10 +39,6 @@ struct SystemView: View {
     apiService.canAccess(.search)
   }
 
-  private var canConfigureSearchFilters: Bool {
-    apiService.canRequestSuperUserEndpoints
-  }
-
   var body: some View {
     let activePage = route.last ?? .root
     let pages = [.root] + displayedRoute
@@ -147,14 +143,14 @@ struct SystemView: View {
           case .siteSelection:
             siteSelectionPage
           case .hardFilter:
-            if canConfigureSearchFilters {
+            if canConfigureSearch {
               filterPage(
                 selectedRuleId: viewModel.selectedHardFilterRuleId,
                 onSelect: { viewModel.selectedHardFilterRuleId = $0 }
               )
             }
           case .softFilter:
-            if canConfigureSearchFilters {
+            if canConfigureSearch {
               filterPage(
                 selectedRuleId: viewModel.selectedSoftFilterRuleId,
                 onSelect: { viewModel.selectedSoftFilterRuleId = $0 }
@@ -215,28 +211,26 @@ struct SystemView: View {
           }
           .focused($focusedItem, equals: .siteSelection)
 
-          if canConfigureSearchFilters {
-            Button {
-              push(.hardFilter)
-            } label: {
-              row("硬过滤", value: selectedHardFilterTitle, showsDisclosure: true)
-            }
-            .focused($focusedItem, equals: .hardFilter)
+          Button {
+            push(.hardFilter)
+          } label: {
+            row("硬过滤", value: selectedHardFilterTitle, showsDisclosure: true)
+          }
+          .focused($focusedItem, equals: .hardFilter)
 
-            Button {
-              push(.softFilter)
-            } label: {
-              row("软过滤", value: selectedSoftFilterTitle, showsDisclosure: true)
-            }
-            .focused($focusedItem, equals: .softFilter)
+          Button {
+            push(.softFilter)
+          } label: {
+            row("软过滤", value: selectedSoftFilterTitle, showsDisclosure: true)
+          }
+          .focused($focusedItem, equals: .softFilter)
 
-            if viewModel.isLoadingRules {
-              row("规则状态", value: "正在加载")
-                .foregroundStyle(.secondary)
-            } else if viewModel.customFilterRules.isEmpty {
-              row("规则状态", value: "暂无自定义过滤规则")
-                .foregroundStyle(.secondary)
-            }
+          if viewModel.isLoadingRules {
+            row("规则状态", value: "正在加载")
+              .foregroundStyle(.secondary)
+          } else if viewModel.customFilterRules.isEmpty {
+            row("规则状态", value: "暂无自定义过滤规则")
+              .foregroundStyle(.secondary)
           }
         }
       }
@@ -245,12 +239,7 @@ struct SystemView: View {
         Button {
           push(.connection)
         } label: {
-          row(
-            "连接",
-            value: viewModel.connectionEntryDescription,
-            valueLineLimit: 2,
-            showsDisclosure: true
-          )
+          row("连接", value: viewModel.storageDescription, showsDisclosure: true)
         }
         .focused($focusedItem, equals: .connection)
 
@@ -416,7 +405,6 @@ struct SystemView: View {
   private func row(
     _ title: String,
     value: String? = nil,
-    valueLineLimit: Int = 1,
     showsProgress: Bool = false,
     showsDisclosure: Bool = false
   ) -> some View {
@@ -436,7 +424,7 @@ struct SystemView: View {
           Text(value)
             .font(.body.weight(.semibold))
             .foregroundStyle(.secondary)
-            .lineLimit(valueLineLimit)
+            .lineLimit(1)
             .multilineTextAlignment(.trailing)
             .truncationMode(.middle)
         }
@@ -567,7 +555,7 @@ struct SystemView: View {
 
   private func refreshFilterRulesForEntryIfNeeded() {
     guard isSelected else { return }
-    guard canConfigureSearchFilters else { return }
+    guard canConfigureSearch else { return }
 
     Task {
       await viewModel.loadCustomFilterRules()

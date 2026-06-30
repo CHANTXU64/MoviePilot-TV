@@ -76,7 +76,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     )
 
     service.baseURL = "http://download-tests.local"
-    configureSuperUser(service)
+    configureManageUser(service)
 
     let viewModel = DownloadTaskViewModel()
     viewModel.selectedClient = "old"
@@ -136,7 +136,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     )
 
     service.baseURL = "http://download-tests.local"
-    configureSuperUser(service)
+    configureManageUser(service)
 
     let viewModel = DownloadTaskViewModel()
     viewModel.selectedClient = "old"
@@ -193,7 +193,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     )
 
     service.baseURL = "http://download-tests.local"
-    configureSuperUser(service)
+    configureManageUser(service)
 
     let viewModel = DownloadTaskViewModel()
     viewModel.selectedClient = "old"
@@ -273,7 +273,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     )
 
     service.baseURL = "http://download-tests.local"
-    configureSuperUser(service)
+    configureManageUser(service)
 
     let viewModel = DownloadTaskViewModel()
     viewModel.selectedClient = "same"
@@ -396,7 +396,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     )
 
     service.baseURL = "http://download-tests.local"
-    configureSuperUser(service)
+    configureManageUser(service)
 
     let viewModel = DownloadTaskViewModel()
     viewModel.selectedClient = "same"
@@ -437,7 +437,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     )
 
     service.baseURL = "http://download-tests.local"
-    configureSuperUser(service)
+    configureManageUser(service)
 
     let viewModel = DownloadTaskViewModel()
     viewModel.selectedClient = "old"
@@ -515,13 +515,18 @@ final class DownloadTaskViewModelTests: XCTestCase {
     try JSONDecoder().decode([DownloadingInfo].self, from: Data(json.utf8))
   }
 
-  private func configureSuperUser(_ service: APIService) {
+  private func configureManageUser(_ service: APIService) {
     service.currentUser = Token(
       access_token: "download-task-tests",
       token_type: "bearer",
-      super_user: FlexibleBool(true),
-      permissions: [:],
-      user_name: "download-admin",
+      super_user: FlexibleBool(false),
+      permissions: [
+        UserPermissionKey.discovery.rawValue: false,
+        UserPermissionKey.search.rawValue: false,
+        UserPermissionKey.subscribe.rawValue: false,
+        UserPermissionKey.manage.rawValue: true,
+      ],
+      user_name: "download-manager",
       avatar: nil
     )
   }

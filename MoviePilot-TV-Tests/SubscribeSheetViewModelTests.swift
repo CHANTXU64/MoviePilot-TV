@@ -193,7 +193,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(viewModel.filterGroups.isEmpty)
   }
 
-  func testSubscribeSheetAndHandlerDoNotRequestSubscribeEndpointsWithoutPermission() async throws {
+  func testSubscribeSheetLoadDoesNotRequestOptionsWithoutPermission() async throws {
     XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
     defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
 
@@ -212,29 +212,11 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       isNewSubscription: false
     )
     await viewModel.loadData()
-    let didSave = await viewModel.save()
-    await viewModel.cancel()
 
     XCTAssertTrue(viewModel.sites.isEmpty)
     XCTAssertTrue(viewModel.downloaders.isEmpty)
     XCTAssertTrue(viewModel.directories.isEmpty)
     XCTAssertTrue(viewModel.filterGroups.isEmpty)
-    XCTAssertFalse(didSave)
-
-    let handler = SubscriptionHandler()
-    handler.handleSubscribe(MediaInfo(tmdb_id: 123460, title: "无订阅权限", type: "电影"))
-    let share = try JSONDecoder().decode(
-      SubscribeShare.self,
-      from: Data(#"{"id":88,"share_title":"No Permission Share"}"#.utf8)
-    )
-    let forkedId = await handler.fork(share: share)
-    await handler.fetchSubscriptionAndShowEditor(subId: 781)
-
-    XCTAssertNil(handler.sheetSubscribe)
-    XCTAssertNil(handler.tvSubscribeRequest)
-    XCTAssertNil(handler.forkSheetRequest)
-    XCTAssertNil(forkedId)
-    XCTAssertFalse(handler.showAlert)
 
     let requestCount = await SubscribeSheetURLProtocol.stub.totalRequestCount()
     XCTAssertEqual(requestCount, 0)

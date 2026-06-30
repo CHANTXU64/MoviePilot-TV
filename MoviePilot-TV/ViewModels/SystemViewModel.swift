@@ -19,19 +19,9 @@ class SystemViewModel: ObservableObject {
   @Published var refreshMessage: String? = nil
 
   // MARK: - 系统信息
-  static let limitedPermissionConnectionDescription = "当前用户权限不够，部分不可用功能已自动隐藏"
-
   @Published var serverURL: String = ""
   @Published var username: String = ""
   @Published var backendVersion: String? = nil
-
-  var connectionEntryDescription: String {
-    Self.connectionEntryDescription(
-      storageDescription: storageDescription,
-      isLoggedIn: APIService.shared.isLoggedIn,
-      canRequestSuperUserEndpoints: APIService.shared.canRequestSuperUserEndpoints
-    )
-  }
 
   var appVersion: String {
     AppVersionInfo.currentAppVersion()
@@ -39,16 +29,6 @@ class SystemViewModel: ObservableObject {
 
   var compatibleMoviePilotVersion: String {
     AppVersionInfo.compatibleMoviePilotVersion
-  }
-
-  static func connectionEntryDescription(
-    storageDescription: String,
-    isLoggedIn: Bool,
-    canRequestSuperUserEndpoints: Bool
-  ) -> String {
-    guard isLoggedIn else { return storageDescription }
-    guard !canRequestSuperUserEndpoints else { return storageDescription }
-    return limitedPermissionConnectionDescription
   }
 
   // MARK: - 详情页设置
@@ -310,7 +290,7 @@ class SystemViewModel: ObservableObject {
 
   /// 从后端加载自定义过滤规则
   func loadCustomFilterRules() async {
-    guard APIService.shared.canRequestSuperUserEndpoints else {
+    guard APIService.shared.canAccess(.search) else {
       customFilterRules = []
       return
     }
@@ -323,7 +303,7 @@ class SystemViewModel: ObservableObject {
     do {
       let rules = try await APIService.shared.fetchCustomFilterRules()
       guard APIService.shared.isSessionUnchanged(from: sessionSnapshot),
-        APIService.shared.canRequestSuperUserEndpoints
+        APIService.shared.canAccess(.search)
       else {
         customFilterRules = []
         return

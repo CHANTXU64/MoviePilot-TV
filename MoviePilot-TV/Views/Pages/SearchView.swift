@@ -172,6 +172,7 @@ struct SearchView: View {
               navigationPath: $path,
               header: { searchHeader },
               onShareTapped: { share in
+                guard APIService.shared.canAccess(.subscribe) else { return }
                 subscriptionHandler.forkSheetRequest = share
               }
             )

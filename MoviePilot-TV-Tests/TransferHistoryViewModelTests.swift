@@ -108,19 +108,10 @@ final class TransferHistoryViewModelTests: XCTestCase {
     await viewModel.refresh()
 
     XCTAssertEqual(viewModel.items.map(\.id), [10])
+    XCTAssertEqual(viewModel.storageDict["local"], "本地")
     let paths = await TransferHistoryURLProtocol.stub.requestPaths()
     XCTAssertTrue(paths.contains("/api/v1/history/transfer"))
-  }
-
-  private func configureSuperUser(_ service: APIService) {
-    service.currentUser = Token(
-      access_token: "transfer-history-tests",
-      token_type: "bearer",
-      super_user: FlexibleBool(true),
-      permissions: [:],
-      user_name: "transfer-admin",
-      avatar: nil
-    )
+    XCTAssertTrue(paths.contains("/api/v1/system/setting/Storages"))
   }
 
   private func configureManageUser(_ service: APIService) {

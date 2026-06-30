@@ -67,7 +67,7 @@ class ReorganizeViewModel: ObservableObject {
   }
 
   func loadConfig() async {
-    guard apiService.canRequestSuperUserEndpoints else {
+    guard apiService.canAccess(.manage) else {
       clearLoadedConfig()
       isLoading = false
       return
@@ -81,7 +81,7 @@ class ReorganizeViewModel: ObservableObject {
 
       let (loadedDirectories, loadedStorages) = try await (dirsTask, storagesTask)
       guard apiService.isSessionUnchanged(from: sessionSnapshot),
-        apiService.canRequestSuperUserEndpoints
+        apiService.canAccess(.manage)
       else {
         clearLoadedConfig()
         return
@@ -110,7 +110,7 @@ class ReorganizeViewModel: ObservableObject {
   }
 
   func submit(background: Bool) async -> Bool {
-    guard apiService.canRequestSuperUserEndpoints else { return false }
+    guard apiService.canAccess(.manage) else { return false }
     isSubmitting = true
     defer { isSubmitting = false }
     do {

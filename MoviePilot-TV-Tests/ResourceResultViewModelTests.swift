@@ -148,7 +148,7 @@ final class ResourceResultViewModelTests: XCTestCase {
 
     await ResourceResultViewModelURLProtocol.stub.reset()
     service.baseURL = "http://resource-result-tests.local"
-    configureResourceResultSuperUserSession(service)
+    configureResourceResultSearchSession(service)
     let filterSnapshot = ResourceResultViewModelFilterSelectionSnapshot.selectHardRule(
       "allow-all", baseURL: service.baseURL)
     defer { filterSnapshot.restore() }
@@ -278,7 +278,7 @@ final class ResourceResultViewModelTests: XCTestCase {
 
     await ResourceResultViewModelURLProtocol.stub.reset()
     service.baseURL = "http://resource-result-tests.local"
-    configureResourceResultSuperUserSession(service)
+    configureResourceResultSearchSession(service)
     let filterSnapshot = ResourceResultViewModelFilterSelectionSnapshot.selectHardRule(
       "allow-all", baseURL: service.baseURL)
     defer { filterSnapshot.restore() }
@@ -545,19 +545,6 @@ private func configureResourceResultSearchSession(_ service: APIService) {
       "admin": false,
     ],
     user_name: "search-user",
-    avatar: nil
-  )
-}
-
-@MainActor
-private func configureResourceResultSuperUserSession(_ service: APIService) {
-  service.token = "resource-result-super-token"
-  service.currentUser = Token(
-    access_token: "resource-result-super-token",
-    token_type: "bearer",
-    super_user: FlexibleBool(true),
-    permissions: nil,
-    user_name: "admin",
     avatar: nil
   )
 }

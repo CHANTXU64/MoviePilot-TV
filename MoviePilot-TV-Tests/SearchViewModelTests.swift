@@ -120,6 +120,14 @@ final class SearchViewModelTests: XCTestCase {
       return nil
     }
     XCTAssertEqual(bestResultTitles, ["New Result"])
+    let shareRequestCount = await SearchViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/subscribe/shares"
+    )
+    XCTAssertEqual(
+      shareRequestCount,
+      0,
+      "Unified search should not auto-load subscription shares for a user without subscribe permission."
+    )
   }
 
   func testCancelledResourceSearchFilteringDoesNotPublishOldResultsOrClearNewLoading()
@@ -134,7 +142,7 @@ final class SearchViewModelTests: XCTestCase {
 
     await SearchViewModelURLProtocol.stub.reset()
     service.baseURL = "http://search-tests.local"
-    configureSearchSuperUserSession(service)
+    configureSearchPermissionSession(service)
     let filterSnapshot = SearchViewModelFilterSelectionSnapshot.selectHardRule(
       "allow-all", baseURL: service.baseURL)
     defer { filterSnapshot.restore() }
@@ -186,7 +194,7 @@ final class SearchViewModelTests: XCTestCase {
     await newStreamGate.open()
   }
 
-  func testCustomFilterSkipsAdminRuleFetchForLimitedUserWithPersistedRuleSelection()
+  func testCustomFilterFetchesRulesForSearchUserWithPersistedRuleSelection()
     async throws
   {
     XCTAssertTrue(URLProtocol.registerClass(SearchViewModelURLProtocol.self))
@@ -247,8 +255,8 @@ final class SearchViewModelTests: XCTestCase {
     )
     XCTAssertEqual(
       customFilterRequestCount,
-      0,
-      "A limited user with stale local filter selection must not request the superuser-only custom filter rules endpoint."
+      1,
+      "Search users may read CustomFilterRules; GET /system/setting/{key} is not a superuser endpoint."
     )
   }
 }
@@ -468,19 +476,6 @@ private func configureSearchPermissionSession(_ service: APIService) {
       "admin": false,
     ],
     user_name: "search-user",
-    avatar: nil
-  )
-}
-
-@MainActor
-private func configureSearchSuperUserSession(_ service: APIService) {
-  service.token = "search-super-token"
-  service.currentUser = Token(
-    access_token: "search-super-token",
-    token_type: "bearer",
-    super_user: FlexibleBool(true),
-    permissions: nil,
-    user_name: "admin",
     avatar: nil
   )
 }

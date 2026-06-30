@@ -241,6 +241,12 @@ class SubscribeSeasonViewModel: ObservableObject {
   /// 查询当前媒体所有分季订阅摘要，填充 seasonSubscriptions 和 subscribedSeasons
   @discardableResult
   func checkSubscriptionStatus(forceRefresh: Bool = false) async -> Bool {
+    guard APIService.shared.canAccess(.subscribe) else {
+      seasonSubscriptions = [:]
+      subscribedSeasons = []
+      return false
+    }
+
     do {
       try await refreshSubscriptionSummaries(forceRefresh: forceRefresh)
       return true

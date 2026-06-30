@@ -42,6 +42,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("permissions.subscribe"))
     XCTAssertTrue(source.contains("/mediaserver/notexists"))
     XCTAssertTrue(source.contains("不得要求 `Token.super_user`"))
+    XCTAssertTrue(source.contains("真实错误交给后端返回"))
     XCTAssertTrue(source.contains("canAccess(.subscribe)"))
     XCTAssertTrue(source.contains("不显示入库状态徽章"))
     XCTAssertTrue(source.contains("best_version"))
@@ -134,7 +135,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let source = try Self.source(at: "MoviePilot-TV/ViewModels/SystemViewModel.swift")
 
     XCTAssertTrue(source.contains("let rules = try await APIService.shared.fetchCustomFilterRules()"))
-    XCTAssertTrue(source.contains("guard APIService.shared.canRequestSuperUserEndpoints else {"))
+    XCTAssertTrue(source.contains("guard APIService.shared.canAccess(.search) else {"))
     XCTAssertTrue(source.contains("customFilterRules = rules"))
   }
 
@@ -145,11 +146,8 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(viewSource.contains("@ObservedObject private var apiService = APIService.shared"))
     XCTAssertTrue(viewSource.contains("private var canConfigureSubscriptions: Bool"))
     XCTAssertTrue(viewSource.contains("private var canConfigureSearch: Bool"))
-    XCTAssertTrue(viewSource.contains("private var canConfigureSearchFilters: Bool"))
-    XCTAssertTrue(viewSource.contains("apiService.canRequestSuperUserEndpoints"))
     XCTAssertTrue(viewSource.contains("if canConfigureSubscriptions {"))
     XCTAssertTrue(viewSource.contains("if canConfigureSearch {"))
-    XCTAssertTrue(viewSource.contains("if canConfigureSearchFilters {"))
     XCTAssertTrue(viewModelSource.contains("guard APIService.shared.canAccess(.search) else {"))
   }
 

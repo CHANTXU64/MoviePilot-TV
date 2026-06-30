@@ -1038,7 +1038,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         "custom filter rules",
         service: service,
         config: config,
-        requirement: .superUser
+        requirement: .permission(.search)
       ) {
         _ = try await service.fetchCustomFilterRules()
       }

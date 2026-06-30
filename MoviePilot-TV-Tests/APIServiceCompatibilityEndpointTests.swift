@@ -155,35 +155,6 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     )
   }
 
-  func testLoggedOutSystemConfigReadersDoNotRequestProtectedSettingEndpoints() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
-    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
-
-    await CompatibilityEndpointURLProtocol.stub.reset()
-    let service = APIService.shared
-    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
-    defer { snapshot.restore(to: service) }
-
-    service.baseURL = "https://compatibility-endpoint-tests.local"
-    service.token = nil
-    service.currentUser = nil
-
-    let downloadClients = try await service.fetchDownloadClients()
-    let storages = try await service.fetchStorages()
-    let sites = try await service.fetchSites()
-    let directories = try await service.fetchDirectories()
-    let indexerSites = try await service.fetchIndexerSites()
-
-    XCTAssertTrue(downloadClients.isEmpty)
-    XCTAssertTrue(storages.isEmpty)
-    XCTAssertTrue(sites.isEmpty)
-    XCTAssertTrue(directories.isEmpty)
-    XCTAssertTrue(indexerSites.isEmpty)
-
-    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
-    XCTAssertTrue(paths.isEmpty)
-  }
-
   private func assertContainsSubsequence(
     _ expected: [String],
     in actual: [String],

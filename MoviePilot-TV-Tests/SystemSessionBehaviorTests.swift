@@ -279,7 +279,7 @@ final class SystemSessionBehaviorTests: XCTestCase {
     XCTAssertFalse(service.canAccess(.search))
     XCTAssertFalse(service.canAccess(.subscribe))
     XCTAssertFalse(service.canAccess(.manage))
-    XCTAssertFalse(service.canRequestSuperUserEndpoints)
+    XCTAssertFalse(service.currentUser?.canRequestSuperUserEndpoints ?? false)
   }
 
   func testRefreshStoredSessionRestoresUserContextFromTokenlessDefaultsFallback() async throws {
@@ -410,13 +410,13 @@ final class SystemSessionBehaviorTests: XCTestCase {
     )
 
     let viewModel = SystemViewModel()
+    await SystemInfoURLProtocol.stub.reset()
 
     await viewModel.loadSystemInfo()
 
     XCTAssertEqual(viewModel.backendVersion, "v2.13.14")
     let paths = await SystemInfoURLProtocol.stub.requestPaths()
     XCTAssertTrue(paths.contains("/api/v1/system/env"))
-    XCTAssertFalse(paths.contains("/api/v1/system/global"))
   }
 
   func testLoadSystemInfoFetchesSystemEnvBackendVersionForLimitedUserWhenCacheIsEmpty()
@@ -436,13 +436,13 @@ final class SystemSessionBehaviorTests: XCTestCase {
     service.settings = nil
 
     let viewModel = SystemViewModel()
+    await SystemInfoURLProtocol.stub.reset()
 
     await viewModel.loadSystemInfo()
 
     XCTAssertEqual(viewModel.backendVersion, "v2.13.14")
     let paths = await SystemInfoURLProtocol.stub.requestPaths()
     XCTAssertTrue(paths.contains("/api/v1/system/env"))
-    XCTAssertFalse(paths.contains("/api/v1/system/global"))
   }
 
   func testLoadSystemInfoRefreshesStalePublicBackendVersionForLimitedUser() async throws {
@@ -465,13 +465,13 @@ final class SystemSessionBehaviorTests: XCTestCase {
     )
 
     let viewModel = SystemViewModel()
+    await SystemInfoURLProtocol.stub.reset()
 
     await viewModel.loadSystemInfo()
 
     XCTAssertEqual(viewModel.backendVersion, "v2.13.14")
     let paths = await SystemInfoURLProtocol.stub.requestPaths()
     XCTAssertTrue(paths.contains("/api/v1/system/env"))
-    XCTAssertFalse(paths.contains("/api/v1/system/global"))
   }
 
   private func limitedToken() -> Token {
@@ -772,7 +772,7 @@ private actor SystemInfoURLProtocolStub {
     case "/api/v1/system/global":
       statusCode = 200
       data =
-        #"{"success":true,"data":{"BACKEND_VERSION":"v2.13.14","FRONTEND_VERSION":"v2.13.15","TMDB_IMAGE_DOMAIN":"image.tmdb.org"}}"#
+        #"{"success":true,"data":{"BACKEND_VERSION":"v9.9.9","FRONTEND_VERSION":"v2.13.15","TMDB_IMAGE_DOMAIN":"image.tmdb.org"}}"#
         .data(using: .utf8)!
     case "/api/v1/system/global/user":
       statusCode = 200
