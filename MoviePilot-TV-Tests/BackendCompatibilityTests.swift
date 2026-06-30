@@ -10,6 +10,11 @@ private struct BackendCompatibilityAccount {
   let password: String
 }
 
+private struct BackendPermissionBehaviorAccountSpec: Equatable {
+  let username: String
+  let permission: UserPermissionKey
+}
+
 private struct BackendCompatibilityAccountSnapshot {
   let account: BackendCompatibilityAccount
   let token: Token
@@ -30,6 +35,7 @@ private struct BackendCompatibilityConfig {
   let username: String
   let password: String
   let accounts: [BackendCompatibilityAccount]
+  let permissionBehaviorAccounts: [BackendPermissionBehaviorAccountSpec]
   var activeAccount: BackendCompatibilityAccountSnapshot?
   let mediaServer: String?
   let requireMediaServer: Bool
@@ -60,6 +66,7 @@ private struct BackendCompatibilityConfig {
       username: "primary",
       password: "password",
       accounts: [],
+      permissionBehaviorAccounts: [],
       activeAccount: nil,
       mediaServer: nil,
       requireMediaServer: false,
@@ -127,12 +134,16 @@ private struct BackendCompatibilityConfig {
       additionalPasswords: values["MOVIEPILOT_COMPAT_ADDITIONAL_PASSWORDS"]?.listValue(
         preservingEmptyItems: true) ?? []
     )
+    let permissionBehaviorAccounts = parsePermissionBehaviorAccounts(
+      values["MOVIEPILOT_COMPAT_PERMISSION_BEHAVIOR_ACCOUNTS"]?.nilIfBlank
+    )
 
     return BackendCompatibilityConfig(
       baseURL: baseURL.trimmingTrailingSlashes,
       username: username,
       password: password,
       accounts: accounts,
+      permissionBehaviorAccounts: permissionBehaviorAccounts,
       activeAccount: nil,
       mediaServer: values["MOVIEPILOT_COMPAT_MEDIA_SERVER"]?.nilIfBlank,
       requireMediaServer: values["MOVIEPILOT_COMPAT_REQUIRE_MEDIA_SERVER"]?.boolValue(
@@ -258,6 +269,28 @@ private struct BackendCompatibilityConfig {
     return accounts
   }
 
+  static func parsePermissionBehaviorAccounts(_ value: String?)
+    -> [BackendPermissionBehaviorAccountSpec]
+  {
+    guard let value else { return [] }
+
+    return (value.listValue ?? []).compactMap { item in
+      let separators = ["=", ":"]
+      guard let separator = separators.compactMap({ item.firstIndex(of: Character($0)) }).min()
+      else {
+        return nil
+      }
+
+      let username = String(item[..<separator]).trimmingCharacters(in: .whitespacesAndNewlines)
+      let permissionValue = String(item[item.index(after: separator)...])
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !username.isEmpty, let permission = UserPermissionKey(rawValue: permissionValue) else {
+        return nil
+      }
+      return BackendPermissionBehaviorAccountSpec(username: username, permission: permission)
+    }
+  }
+
   func activating(account: BackendCompatibilityAccount, token: Token) -> BackendCompatibilityConfig {
     var config = self
     config.activeAccount = BackendCompatibilityAccountSnapshot(account: account, token: token)
@@ -334,6 +367,8 @@ private extension Error {
         return true
       case .serverMessage(let message):
         return message.contains("权限") || message.localizedCaseInsensitiveContains("permission")
+          || message.localizedCaseInsensitiveContains("forbidden")
+          || message.localizedCaseInsensitiveContains("unauthorized")
       case .unknown:
         return false
       case .invalidURL, .networkError, .decodingError:
@@ -400,6 +435,22 @@ final class BackendCompatibilityEnvironmentParsingTests: XCTestCase {
     ])
   }
 
+  func testPermissionBehaviorAccountMappingParsesUsernamesAndExpectedPermissions() {
+    let specs = BackendCompatibilityConfig.parsePermissionBehaviorAccounts(
+      "discovery_user=discovery,search_user:search,subscribe_user=subscribe,manage_user=manage"
+    )
+
+    XCTAssertEqual(
+      specs,
+      [
+        BackendPermissionBehaviorAccountSpec(username: "discovery_user", permission: .discovery),
+        BackendPermissionBehaviorAccountSpec(username: "search_user", permission: .search),
+        BackendPermissionBehaviorAccountSpec(username: "subscribe_user", permission: .subscribe),
+        BackendPermissionBehaviorAccountSpec(username: "manage_user", permission: .manage),
+      ]
+    )
+  }
+
   @MainActor
   func testPermissionDeniedIsDiagnosticWhenAccountLacksRequiredAccess() {
     let account = BackendCompatibilityAccount(
@@ -433,6 +484,31 @@ final class BackendCompatibilityEnvironmentParsingTests: XCTestCase {
       config.isExpectedPermissionDiagnostic(
         APIError.unauthorized,
         requirement: .none
+      )
+    )
+  }
+
+  @MainActor
+  func testForbiddenServerMessageIsPermissionDiagnosticWhenAccessIsMissing() {
+    let account = BackendCompatibilityAccount(
+      label: "additional-1",
+      username: "test",
+      password: "password"
+    )
+    let token = Token(
+      access_token: "limited-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: ["manage": false],
+      user_name: "test",
+      avatar: nil
+    )
+    let config = BackendCompatibilityConfig.testValue().activating(account: account, token: token)
+
+    XCTAssertTrue(
+      config.isExpectedPermissionDiagnostic(
+        APIError.serverMessage("403: Forbidden"),
+        requirement: .permission(.manage)
       )
     )
   }
@@ -477,6 +553,157 @@ final class BackendCompatibilityEnvironmentParsingTests: XCTestCase {
     XCTAssertNil(result)
     XCTAssertFalse(didRunOperation)
   }
+}
+
+private struct BackendPermissionBehaviorAccount {
+  let account: BackendCompatibilityAccount
+  let expectedPermission: UserPermissionKey
+  let token: Token
+}
+
+final class BackendCompatibilityPermissionBehaviorTests: XCTestCase {
+  private static let defaultPermissionBehaviorAccounts = [
+    BackendPermissionBehaviorAccountSpec(username: "test_discovery", permission: .discovery),
+    BackendPermissionBehaviorAccountSpec(username: "test_search", permission: .search),
+    BackendPermissionBehaviorAccountSpec(username: "test_subscribe", permission: .subscribe),
+    BackendPermissionBehaviorAccountSpec(username: "test_manage", permission: .manage),
+  ]
+
+  @MainActor
+  func testDedicatedPermissionAccountsExposeOnlySinglePermissionAndTVBehavior() async throws {
+    let config = try BackendCompatibilityConfig.loadOrSkip()
+    let service = APIService.shared
+    let snapshot = BackendServiceSnapshot.capture(service: service)
+    defer {
+      snapshot.restore(to: service)
+    }
+
+    let accounts = try await loginPermissionBehaviorAccounts(config: config, service: service)
+
+    for account in accounts {
+      XCTAssertFalse(
+        account.token.canRequestSuperUserEndpoints,
+        "\(account.account.username) must be a standard user, not a super user."
+      )
+
+      for permission in UserPermissionKey.allCases {
+        XCTAssertEqual(
+          account.token.canAccess(permission),
+          permission == account.expectedPermission,
+          "\(account.account.username) should expose only \(account.expectedPermission.rawValue), token permissions: \(account.token.permissions ?? [:])"
+        )
+      }
+
+      pinBackendCompatibilityAccount(
+        service: service,
+        config: config.activating(account: account.account, token: account.token)
+      )
+      await assertTVPermissionBehavior(for: account)
+    }
+  }
+
+  @MainActor
+  private func loginPermissionBehaviorAccounts(
+    config: BackendCompatibilityConfig,
+    service: APIService
+  ) async throws -> [BackendPermissionBehaviorAccount] {
+    let expectedAccountPermissions = expectedPermissionBehaviorAccounts(config: config)
+    let configuredAccounts = Dictionary(uniqueKeysWithValues: config.accounts.map { ($0.username, $0) })
+    let missingUsernames = expectedAccountPermissions.keys.sorted()
+      .filter { configuredAccounts[$0] == nil }
+    guard missingUsernames.isEmpty else {
+      throw XCTSkip(
+        "Set MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES to include \(expectedAccountPermissions.keys.sorted().joined(separator: ",")) before running dedicated permission behavior compatibility tests. To override the default account names, set MOVIEPILOT_COMPAT_PERMISSION_BEHAVIOR_ACCOUNTS=username=permission,... Missing: \(missingUsernames.joined(separator: ","))"
+      )
+    }
+
+    clearBackendCompatibilityStoredCredentials()
+    var accounts: [BackendPermissionBehaviorAccount] = []
+
+    for username in expectedAccountPermissions.keys.sorted() {
+      guard let account = configuredAccounts[username],
+        let expectedPermission = expectedAccountPermissions[username]
+      else {
+        continue
+      }
+
+      clearBackendCompatibilityStoredCredentials()
+      service.baseURL = config.baseURL
+      service.token = nil
+      service.currentUser = nil
+
+      let token = try await service.login(username: account.username, password: account.password)
+      accounts.append(
+        BackendPermissionBehaviorAccount(
+          account: account,
+          expectedPermission: expectedPermission,
+          token: token
+        )
+      )
+    }
+
+    return accounts
+  }
+
+  @MainActor
+  private func assertTVPermissionBehavior(for account: BackendPermissionBehaviorAccount) async {
+    let token = account.token
+    let canDiscover = token.canAccess(.discovery)
+    let canSubscribe = token.canAccess(.subscribe)
+    let canManage = token.canAccess(.manage)
+
+    XCTAssertEqual(
+      ContentViewModel.visibleTabs(for: token),
+      expectedVisibleTabs(for: account.expectedPermission),
+      "\(account.account.username) should only see tabs for \(account.expectedPermission.rawValue)"
+    )
+
+    let explore = ExploreViewModel()
+    XCTAssertEqual(
+      explore.availableSources,
+      expectedExploreSources(canDiscover: canDiscover, canSubscribe: canSubscribe)
+    )
+    if !canDiscover {
+      let recommend = RecommendViewModel()
+      try? await Task.sleep(nanoseconds: 200_000_000)
+      XCTAssertNil(recommend.paginator, "\(account.account.username) without discovery should not create recommendation pagination.")
+      XCTAssertNil(explore.paginator, "\(account.account.username) without discovery should not create exploration pagination.")
+    }
+    XCTAssertEqual(canManage, account.expectedPermission == .manage)
+  }
+
+  private func expectedPermissionBehaviorAccounts(config: BackendCompatibilityConfig)
+    -> [String: UserPermissionKey]
+  {
+    let specs =
+      config.permissionBehaviorAccounts.isEmpty
+      ? Self.defaultPermissionBehaviorAccounts
+      : config.permissionBehaviorAccounts
+    return Dictionary(uniqueKeysWithValues: specs.map { ($0.username, $0.permission) })
+  }
+
+  private func expectedVisibleTabs(for permission: UserPermissionKey) -> [ContentViewModel.Tab] {
+    switch permission {
+    case .discovery:
+      return [.home, .recommend, .explore, .system]
+    case .search:
+      return [.home, .search, .system]
+    case .subscribe:
+      return [.home, .system]
+    case .manage:
+      return [.home, .status, .system]
+    }
+  }
+
+  private func expectedExploreSources(
+    canDiscover: Bool,
+    canSubscribe: Bool
+  ) -> [DiscoverSource] {
+    guard canDiscover else { return [] }
+    if canSubscribe { return DiscoverSource.allCases }
+    return DiscoverSource.allCases.filter { $0 != .subscriptionShare }
+  }
+
 }
 
 @MainActor
