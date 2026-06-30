@@ -260,14 +260,12 @@ struct Token: Codable {
 
   var hasLoginAccessibleFeature: Bool {
     if super_user?.value == true { return true }
-    guard let permissions else { return true }
     return [
       UserPermissionKey.discovery,
       .search,
       .subscribe,
       .manage,
-      .admin,
-    ].contains { permissions[$0.rawValue] == true }
+    ].contains { canAccess($0) }
   }
 
   func withoutPersistedAccessToken() -> Token {

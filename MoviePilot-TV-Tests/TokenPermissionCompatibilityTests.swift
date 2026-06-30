@@ -57,6 +57,20 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     XCTAssertFalse(token.hasLoginAccessibleFeature)
   }
 
+  func testAdminOnlyPermissionWithoutSuperUserDoesNotAllowLogin() {
+    let token = Token(
+      access_token: "token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: ["admin": true],
+      user_name: "admin-only",
+      avatar: nil
+    )
+
+    XCTAssertFalse(token.canAccess(.admin))
+    XCTAssertFalse(token.hasLoginAccessibleFeature)
+  }
+
   func testSuperUserCanRequestSuperUserEndpoints() {
     let token = Token(
       access_token: "token",
