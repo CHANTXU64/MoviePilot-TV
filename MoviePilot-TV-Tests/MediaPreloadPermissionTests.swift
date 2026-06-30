@@ -85,6 +85,33 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertFalse(paths.contains { $0.hasPrefix("/api/v1/subscribe/media/") })
   }
 
+  func testSubscriptionStatusPermissionFailureDoesNotLogoutOrRetryLogin() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    MediaPreloadPermissionURLProtocol.stub.reset()
+    MediaPreloadPermissionURLProtocol.stub.setSubscriptionLookupStatusCode(403)
+    configureStandardSubscriber(service)
+    setStoredCredential(account: "username", value: "subscriber")
+    setStoredCredential(account: "password", value: "stale-password")
+
+    let isSubscribed = try await service.checkSubscription(
+      media: MediaInfo(tmdb_id: 456, title: "Subscriber Movie", type: "电影")
+    )
+
+    XCTAssertFalse(isSubscribed)
+    XCTAssertEqual(service.token, "subscriber-token")
+    XCTAssertEqual(service.currentUser?.user_name, "subscriber")
+
+    let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
+    XCTAssertTrue(paths.contains { $0.hasPrefix("/api/v1/subscribe/media/") })
+    XCTAssertFalse(paths.contains("/api/v1/login/access-token"))
+  }
+
   func testStandardSubscriberTvPreloadRequestsSeasonAvailabilityWithoutSuperUser() async throws {
     XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
     defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
@@ -124,13 +151,49 @@ final class MediaPreloadPermissionTests: XCTestCase {
     MediaPreloadPermissionURLProtocol.stub.setSeasonAvailabilityStatusCode(403)
     configureStandardSubscriber(service)
 
-    let result = try await service.checkSeasonsNotExists(
+    do {
+      _ = try await service.checkSeasonsNotExists(
+        mediaInfo: MediaInfo(tmdb_id: 123, title: "Subscriber Show", type: "电视剧")
+      )
+      XCTFail("Expected season availability permission failure to surface as unauthorized")
+    } catch APIError.unauthorized {
+      // Expected: optional status probe must not trigger logout.
+    } catch {
+      XCTFail("Unexpected error: \(error)")
+    }
+
+    XCTAssertEqual(service.token, "subscriber-token")
+    XCTAssertEqual(service.currentUser?.user_name, "subscriber")
+
+    let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
+    XCTAssertTrue(paths.contains("/api/v1/mediaserver/notexists"))
+  }
+
+  func testSeasonAvailabilityPermissionFailureKeepsStatusUnknownAndDoesNotDefaultBestVersion()
+    async throws
+  {
+    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    MediaPreloadPermissionURLProtocol.stub.reset()
+    MediaPreloadPermissionURLProtocol.stub.setSeasonAvailabilityStatusCode(403)
+    configureStandardSubscriber(service)
+
+    let viewModel = SubscribeSeasonViewModel(
       mediaInfo: MediaInfo(tmdb_id: 123, title: "Subscriber Show", type: "电视剧")
     )
 
-    XCTAssertTrue(result.isEmpty)
-    XCTAssertEqual(service.token, "subscriber-token")
-    XCTAssertEqual(service.currentUser?.user_name, "subscriber")
+    await viewModel.checkSeasonsStatus()
+    viewModel.prepareSubscription(seasonNumber: 1)
+
+    XCTAssertFalse(viewModel.isSeasonAvailabilityLoaded)
+    XCTAssertTrue(viewModel.seasonsNotExisted.isEmpty)
+    XCTAssertNil(viewModel.getStatusText(season: 1))
+    XCTAssertEqual(viewModel.sheetSubscribe?.best_version, 0)
 
     let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
     XCTAssertTrue(paths.contains("/api/v1/mediaserver/notexists"))
@@ -455,6 +518,14 @@ final class MediaPreloadPermissionTests: XCTestCase {
       try await Task.sleep(nanoseconds: 20_000_000)
     }
   }
+
+  private func setStoredCredential(account: String, value: String) {
+    if KeychainHelper.shared.save(value, service: "MoviePilot-TV", account: account) {
+      UserDefaults.standard.removeObject(forKey: account)
+    } else {
+      UserDefaults.standard.set(value, forKey: account)
+    }
+  }
 }
 
 private extension Array where Element == String {
@@ -472,6 +543,10 @@ private struct MediaPreloadPermissionServiceSnapshot {
   let tokenDefaults: String?
   let currentUserKeychain: String?
   let currentUserDefaults: String?
+  let usernameKeychain: String?
+  let usernameDefaults: String?
+  let passwordKeychain: String?
+  let passwordDefaults: String?
 
   @MainActor
   static func capture(service: APIService) -> MediaPreloadPermissionServiceSnapshot {
@@ -483,7 +558,11 @@ private struct MediaPreloadPermissionServiceSnapshot {
       tokenKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "accessToken"),
       tokenDefaults: UserDefaults.standard.string(forKey: "accessToken"),
       currentUserKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "currentUser"),
-      currentUserDefaults: UserDefaults.standard.string(forKey: "currentUser")
+      currentUserDefaults: UserDefaults.standard.string(forKey: "currentUser"),
+      usernameKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username"),
+      usernameDefaults: UserDefaults.standard.string(forKey: "username"),
+      passwordKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "password"),
+      passwordDefaults: UserDefaults.standard.string(forKey: "password")
     )
   }
 
@@ -499,6 +578,8 @@ private struct MediaPreloadPermissionServiceSnapshot {
       keychainValue: currentUserKeychain,
       defaultsValue: currentUserDefaults
     )
+    restoreCredential(account: "username", keychainValue: usernameKeychain, defaultsValue: usernameDefaults)
+    restoreCredential(account: "password", keychainValue: passwordKeychain, defaultsValue: passwordDefaults)
   }
 
   @MainActor
@@ -529,18 +610,26 @@ private final class MediaPreloadPermissionURLProtocolStub: @unchecked Sendable {
   private let lock = NSLock()
   private var paths: [String] = []
   private var seasonAvailabilityStatusCode = 200
+  private var subscriptionLookupStatusCode = 200
 
   func reset() {
     lock.lock()
     defer { lock.unlock() }
     paths = []
     seasonAvailabilityStatusCode = 200
+    subscriptionLookupStatusCode = 200
   }
 
   func setSeasonAvailabilityStatusCode(_ statusCode: Int) {
     lock.lock()
     defer { lock.unlock() }
     seasonAvailabilityStatusCode = statusCode
+  }
+
+  func setSubscriptionLookupStatusCode(_ statusCode: Int) {
+    lock.lock()
+    defer { lock.unlock() }
+    subscriptionLookupStatusCode = statusCode
   }
 
   func requestPaths() -> [String] {
@@ -581,7 +670,10 @@ private final class MediaPreloadPermissionURLProtocolStub: @unchecked Sendable {
         return (200, jsonData("[]"))
       }
       if path.hasPrefix("/api/v1/subscribe/media/") {
-        return (200, jsonData(#"{"id":null}"#))
+        lock.lock()
+        let statusCode = subscriptionLookupStatusCode
+        lock.unlock()
+        return (statusCode, jsonData(#"{"id":null}"#))
       }
       return (200, jsonData("[]"))
     }

@@ -1817,18 +1817,13 @@ class APIService: ObservableObject {
     let hash = SHA256.hash(data: body)
     let cacheKey = hash.compactMap { String(format: "%02x", $0) }.joined()
     if let cached = await seasonsNotExistsCache.get(cacheKey) { return cached }
-    let data: Data
-    do {
-      data = try await makeRequest(
-        endpoint: "/mediaserver/notexists",
-        method: "POST",
-        body: body,
-        retryOn401: false,
-        logoutOnUnauthorized: false
-      )
-    } catch APIError.unauthorized {
-      return []
-    }
+    let data = try await makeRequest(
+      endpoint: "/mediaserver/notexists",
+      method: "POST",
+      body: body,
+      retryOn401: false,
+      logoutOnUnauthorized: false
+    )
     let result = try await decodeOrUnwrap([NotExistMediaInfo].self, from: data)
     await seasonsNotExistsCache.set(cacheKey, value: result)
     return result
@@ -2037,7 +2032,8 @@ class APIService: ObservableObject {
   /// - 备注: 这里只查询传入 `media.apiMediaId` 对应的订阅；原始 ID + fallback TMDB 的解析顺序由调用方控制。
   func fetchSubscriptionLookup(
     media: MediaInfo,
-    season: Int? = nil
+    season: Int? = nil,
+    allowSessionRefreshOnUnauthorized: Bool = true
   ) async throws -> SubscriptionLookupResult? {
     guard canAccess(.subscribe) else { return nil }
     struct SubscribeLookupResp: Codable {
@@ -2069,7 +2065,11 @@ class APIService: ObservableObject {
         "season": season.map(String.init),
         "title": media.title,
       ])
-    let data = try await makeRequest(endpoint: endpoint)
+    let data = try await makeRequest(
+      endpoint: endpoint,
+      retryOn401: allowSessionRefreshOnUnauthorized,
+      logoutOnUnauthorized: allowSessionRefreshOnUnauthorized
+    )
     let resp = try await decodeOrUnwrap(SubscribeLookupResp.self, from: data)
     guard let id = resp.id else { return nil }
     if let resolvedMediaId = resp.apiMediaId {
@@ -2091,7 +2091,11 @@ class APIService: ObservableObject {
   /// - 应用场景: 媒体卡片和详情页 Header 查询订阅状态。
   /// - 备注: 默认状态检查只需要 ID；需要真实媒体归属时请使用 `fetchSubscriptionLookup(media:season:)`。
   func fetchSubscriptionID(media: MediaInfo, season: Int? = nil) async throws -> Int? {
-    try await fetchSubscriptionLookup(media: media, season: season)?.id
+    try await fetchSubscriptionLookup(
+      media: media,
+      season: season,
+      allowSessionRefreshOnUnauthorized: true
+    )?.id
   }
 
   /// 检查特定媒体（及特定季）是否已在用户的订阅列表中
@@ -2124,7 +2128,12 @@ class APIService: ObservableObject {
       }
 
       do {
-        let isSubscribed = try await fetchSubscriptionID(media: media, season: season) != nil
+        let isSubscribed =
+          try await fetchSubscriptionLookup(
+            media: media,
+            season: season,
+            allowSessionRefreshOnUnauthorized: false
+          ) != nil
         guard generation == subscriptionCacheGeneration else {
           continue
         }
