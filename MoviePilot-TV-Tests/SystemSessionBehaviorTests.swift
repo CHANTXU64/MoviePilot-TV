@@ -206,6 +206,75 @@ final class SystemSessionBehaviorTests: XCTestCase {
     XCTAssertNil(effectiveCredential(account: "currentUser"))
   }
 
+  func testRefreshStoredSessionReloginsStoredLegacyUserWithoutPermissions() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SessionRefreshURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SessionRefreshURLProtocol.self) }
+
+    await SessionRefreshURLProtocol.stub.reset()
+    let service = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    let markerKey = "lastSessionRefreshAppVersion"
+    let originalMarker = UserDefaults.standard.string(forKey: markerKey)
+    defer {
+      snapshot.restore(to: service)
+      restoreUserDefaultsString(originalMarker, forKey: markerKey)
+    }
+
+    service.baseURL = "https://session-refresh-tests.local"
+    service.token = "stored-token"
+    service.currentUser = nil
+    UserDefaults.standard.removeObject(forKey: markerKey)
+    persistStoredCurrentUserJSON(legacyUserJSON(accessToken: "stored-token"))
+    _ = KeychainHelper.shared.save("test-user", service: "MoviePilot-TV", account: "username")
+    _ = KeychainHelper.shared.save("test-password", service: "MoviePilot-TV", account: "password")
+    UserDefaults.standard.set("test-user", forKey: "username")
+    UserDefaults.standard.set("test-password", forKey: "password")
+
+    let result = await service.refreshStoredSessionAfterAppUpdateIfNeeded(
+      appVersion: "v0.4.5"
+    )
+
+    XCTAssertEqual(result, .refreshed)
+    XCTAssertEqual(service.token, "fresh-token")
+    XCTAssertEqual(service.currentUser?.user_name, "test-user")
+    XCTAssertEqual(effectiveCredential(account: "username"), "test-user")
+    XCTAssertEqual(effectiveCredential(account: "password"), "test-password")
+  }
+
+  func testRefreshStoredSessionReloginsActiveLegacyUserWithoutPermissions() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SessionRefreshURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SessionRefreshURLProtocol.self) }
+
+    await SessionRefreshURLProtocol.stub.reset()
+    let service = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    let markerKey = "lastSessionRefreshAppVersion"
+    let originalMarker = UserDefaults.standard.string(forKey: markerKey)
+    defer {
+      snapshot.restore(to: service)
+      restoreUserDefaultsString(originalMarker, forKey: markerKey)
+    }
+
+    service.baseURL = "https://session-refresh-tests.local"
+    service.token = "stored-token"
+    service.currentUser = legacyToken(accessToken: "stored-token")
+    UserDefaults.standard.removeObject(forKey: markerKey)
+    _ = KeychainHelper.shared.save("test-user", service: "MoviePilot-TV", account: "username")
+    _ = KeychainHelper.shared.save("test-password", service: "MoviePilot-TV", account: "password")
+    UserDefaults.standard.set("test-user", forKey: "username")
+    UserDefaults.standard.set("test-password", forKey: "password")
+
+    let result = await service.refreshStoredSessionAfterAppUpdateIfNeeded(
+      appVersion: "v0.4.6"
+    )
+
+    XCTAssertEqual(result, .refreshed)
+    XCTAssertEqual(service.token, "fresh-token")
+    XCTAssertEqual(service.currentUser?.user_name, "test-user")
+    XCTAssertEqual(effectiveCredential(account: "username"), "test-user")
+    XCTAssertEqual(effectiveCredential(account: "password"), "test-password")
+  }
+
   func testRefreshStoredSessionClearsExistingSessionWhenReloginReturnsNoAccessibleFeature()
     async throws
   {
@@ -355,6 +424,23 @@ final class SystemSessionBehaviorTests: XCTestCase {
   private func noFeatureUserJSON(accessToken: String) -> String {
     """
     {"access_token":"\(accessToken)","token_type":"bearer","super_user":false,"permissions":{"discovery":false,"search":false,"subscribe":false,"manage":false},"user_name":"limited","avatar":null}
+    """
+  }
+
+  private func legacyToken(accessToken: String) -> Token {
+    Token(
+      access_token: accessToken,
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: nil,
+      user_name: "legacy",
+      avatar: nil
+    )
+  }
+
+  private func legacyUserJSON(accessToken: String) -> String {
+    """
+    {"access_token":"\(accessToken)","token_type":"bearer","super_user":false,"user_name":"legacy","avatar":null}
     """
   }
 

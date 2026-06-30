@@ -492,6 +492,7 @@ class APIService: ObservableObject {
 
   private static func storedCurrentUserState(storedToken: String) -> StoredCurrentUserState {
     guard let storedUser = loadStoredCurrentUser() else { return .missing }
+    guard storedUser.hasKnownFeaturePermissions else { return .missing }
     guard storedUser.hasLoginAccessibleFeature else { return .noAccessibleFeature }
     guard let restoredUser = storedUser.withRestoredAccessToken(storedToken) else {
       return .invalidToken
@@ -602,7 +603,9 @@ class APIService: ObservableObject {
     }
 
     let defaults = UserDefaults.standard
-    if currentUser?.hasLoginAccessibleFeature == false {
+    if let currentUser, currentUser.hasKnownFeaturePermissions,
+      !currentUser.hasLoginAccessibleFeature
+    {
       logout()
       defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
       return .noStoredSession

@@ -25,6 +25,10 @@ struct Token: Codable {
     super_user?.value == true
   }
 
+  var hasKnownFeaturePermissions: Bool {
+    super_user?.value == true || permissions != nil
+  }
+
   func canAccess(_ permission: UserPermissionKey) -> Bool {
     if super_user?.value == true { return true }
     guard let permissions else { return false }
