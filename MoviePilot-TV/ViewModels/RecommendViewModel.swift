@@ -108,6 +108,10 @@ class RecommendViewModel: ObservableObject {
   private func setupPaginator(for shelf: RecommendShelf) {
     paginator?.cancel()
     paginatorCancellable?.cancel()
+    guard apiService.canAccess(.discovery) else {
+      paginator = nil
+      return
+    }
 
     var seenKeys = Set<String>()
 

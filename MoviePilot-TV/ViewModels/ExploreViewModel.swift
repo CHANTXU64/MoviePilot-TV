@@ -313,6 +313,7 @@ class ExploreViewModel: ObservableObject {
   // MARK: - 计算属性
 
   var availableSources: [DiscoverSource] {
+    guard apiService.canAccess(.discovery) else { return [] }
     if apiService.canAccess(.subscribe) { return DiscoverSource.allCases }
     return DiscoverSource.allCases.filter { $0 != .subscriptionShare }
   }
@@ -453,6 +454,10 @@ class ExploreViewModel: ObservableObject {
   private func setupPaginator(for path: String) {
     paginator?.cancel()
     paginatorCancellable?.cancel()
+    guard apiService.canAccess(.discovery) else {
+      paginator = nil
+      return
+    }
 
     var seenKeys = Set<String>()
     let source = selectedSource

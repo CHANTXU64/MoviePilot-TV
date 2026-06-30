@@ -115,7 +115,7 @@ final class PermissionDirectGuardTests: XCTestCase {
     }
   }
 
-  func testSubscribeSeasonPrepareDoesNotOpenSheetWithoutSubscribePermission()
+  func testSubscribeSeasonActionDoesNotOpenSheetWithoutSubscribePermission()
     async throws
   {
     try await withPermissionBehaviorBackend { service in
@@ -129,10 +129,25 @@ final class PermissionDirectGuardTests: XCTestCase {
       ]
       viewModel.subscribedSeasons = [1]
 
-      viewModel.prepareSubscription(seasonNumber: 1)
+      await SubscribeSeasonContentView.performSeasonPrimaryAction(
+        season: try permissionBehaviorSeason(number: 1),
+        isSubscribed: false,
+        refreshSubscribedState: { seasonNumber in
+          let didRefresh = await viewModel.checkSubscriptionStatus(forceRefresh: true)
+          guard didRefresh else { return nil }
+          return viewModel.isSeasonSubscribed(seasonNumber)
+        },
+        showUnsubscribeConfirm: { _ in XCTFail("Should not show unsubscribe confirmation") },
+        prepareSubscription: { viewModel.prepareSubscription(seasonNumber: $0) }
+      )
 
       XCTAssertNil(viewModel.sheetSubscribe)
-      XCTAssertEqual(viewModel.subscribedSeasons, [1])
+      XCTAssertTrue(viewModel.subscribedSeasons.isEmpty)
+      let subscriptionListCount = await PermissionBehaviorURLProtocol.stub.requestCount(
+        method: "GET",
+        path: "/api/v1/subscribe/"
+      )
+      XCTAssertEqual(subscriptionListCount, 0)
     }
   }
 
@@ -230,6 +245,20 @@ private func permissionBehaviorSource(_ relativePath: String) throws -> String {
     .deletingLastPathComponent()
   let url = repoRoot.appendingPathComponent(relativePath)
   return try String(contentsOf: url)
+}
+
+@MainActor
+private func permissionBehaviorSeason(number: Int) throws -> TmdbSeason {
+  let data = """
+    {
+      "episode_count": 12,
+      "name": "Season \(number)",
+      "overview": "",
+      "season_number": \(number),
+      "vote_average": 0
+    }
+    """.data(using: .utf8)!
+  return try JSONDecoder().decode(TmdbSeason.self, from: data)
 }
 
 @MainActor
