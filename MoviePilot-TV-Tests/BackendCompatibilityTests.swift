@@ -1217,7 +1217,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         "/system/env",
         service: service,
         config: config,
-        requirement: .none
+        requirement: .superUser
       ) {
         _ = try await service.fetchSystemEnv()
       }
@@ -1231,7 +1231,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         "dashboard endpoints",
         service: service,
         config: config,
-        requirement: .permission(.manage)
+        requirement: .superUser
       ) {
         _ = try await service.fetchStatistic()
         let storage = try await service.fetchStorage()
@@ -1272,7 +1272,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         "media-server settings",
         service: service,
         config: config,
-        requirement: .permission(.manage)
+        requirement: .superUser
       ) {
         _ = try await service.fetchMediaServers()
       }
@@ -1280,7 +1280,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         "filter-rule groups",
         service: service,
         config: config,
-        requirement: .permission(.subscribe)
+        requirement: .superUser
       ) {
         _ = try await service.fetchFilterRuleGroups()
       }
@@ -1288,7 +1288,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         "custom filter rules",
         service: service,
         config: config,
-        requirement: .permission(.search)
+        requirement: .superUser
       ) {
         _ = try await service.fetchCustomFilterRules()
       }
@@ -1439,7 +1439,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       "media-server latest surface",
       service: service,
       config: config,
-      requirement: .permission(.manage)
+      requirement: .superUser
     ) {
       let servers = try await service.fetchMediaServers()
       let enabledServers = servers.filter { $0.enabled?.value ?? false }

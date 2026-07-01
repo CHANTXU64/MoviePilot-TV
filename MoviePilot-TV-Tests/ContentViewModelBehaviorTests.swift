@@ -78,8 +78,9 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     service.token = "token-b"
     service.currentUser = token("token-b", userName: "second-user")
 
-    try await waitUntil("expected settings to reload from old backend") {
+    try await waitUntil("expected backend warning to reload from old backend") {
       service.settings?.BACKEND_VERSION == "v2.13.13"
+        && viewModel?.backendVersionWarning?.backendVersion == "v2.13.13"
     }
 
     XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v2.13.13")

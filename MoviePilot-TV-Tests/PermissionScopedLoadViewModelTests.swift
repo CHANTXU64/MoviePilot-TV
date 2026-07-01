@@ -16,7 +16,7 @@ final class PermissionScopedLoadViewModelTests: XCTestCase {
 
     await PermissionScopedLoadURLProtocol.stub.reset()
     await PermissionScopedLoadURLProtocol.stub.suspend(
-      path: "/api/v1/system/setting/Directories")
+      path: "/api/v1/system/setting/public/Directories")
     service.baseURL = "http://permission-scoped-load.local"
     configureSearchUser(service)
 
@@ -24,12 +24,12 @@ final class PermissionScopedLoadViewModelTests: XCTestCase {
     let loadTask = Task { await viewModel.loadData() }
     try await waitUntil("directories request started") {
       await PermissionScopedLoadURLProtocol.stub.requestCount(
-        method: "GET", path: "/api/v1/system/setting/Directories") == 1
+        method: "GET", path: "/api/v1/system/setting/public/Directories") == 1
     }
 
     configureNoSearchUser(service)
     await PermissionScopedLoadURLProtocol.stub.release(
-      path: "/api/v1/system/setting/Directories")
+      path: "/api/v1/system/setting/public/Directories")
     await loadTask.value
 
     XCTAssertTrue(viewModel.downloaders.isEmpty)
@@ -81,7 +81,7 @@ final class PermissionScopedLoadViewModelTests: XCTestCase {
 
     await PermissionScopedLoadURLProtocol.stub.reset()
     await PermissionScopedLoadURLProtocol.stub.suspend(
-      path: "/api/v1/system/setting/Storages")
+      path: "/api/v1/system/setting/public/Storages")
     service.baseURL = "http://permission-scoped-load.local"
     configureManageUser(service)
 
@@ -89,12 +89,12 @@ final class PermissionScopedLoadViewModelTests: XCTestCase {
     let loadTask = Task { await viewModel.loadConfig() }
     try await waitUntil("storages request started") {
       await PermissionScopedLoadURLProtocol.stub.requestCount(
-        method: "GET", path: "/api/v1/system/setting/Storages") == 1
+        method: "GET", path: "/api/v1/system/setting/public/Storages") == 1
     }
 
     configureSearchUser(service)
     await PermissionScopedLoadURLProtocol.stub.release(
-      path: "/api/v1/system/setting/Storages")
+      path: "/api/v1/system/setting/public/Storages")
     await loadTask.value
 
     XCTAssertTrue(viewModel.directories.isEmpty)
@@ -291,10 +291,10 @@ private actor PermissionScopedLoadURLProtocolStub {
     case ("GET", "/api/v1/download/clients"):
       data = #"[{"name":"qbittorrent","type":"qbittorrent","enabled":true}]"#
         .data(using: .utf8)!
-    case ("GET", "/api/v1/system/setting/Directories"):
+    case ("GET", "/api/v1/system/setting/public/Directories"):
       data = #"{"value":[{"name":"电影","storage":"local","download_path":"/downloads","library_path":"/media/movie","library_storage":"local","transfer_type":"move","scraping":true,"library_category_folder":false,"library_type_folder":false}]}"#
         .data(using: .utf8)!
-    case ("GET", "/api/v1/system/setting/Storages"):
+    case ("GET", "/api/v1/system/setting/public/Storages"):
       data = #"{"value":[{"name":"local","type":"local"}]}"#.data(using: .utf8)!
     default:
       throw URLError(.badServerResponse)

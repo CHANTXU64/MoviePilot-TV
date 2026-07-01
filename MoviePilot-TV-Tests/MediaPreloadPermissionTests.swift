@@ -324,7 +324,9 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertFalse(paths.contains { $0.hasPrefix("/api/v1/download/") })
   }
 
-  func testManageUserEntrypointsRequestDashboardDownloadAndLatestMediaEndpoints() async throws {
+  func testManageUserEntrypointsRequestDownloadButNotDashboardOrLatestMediaEndpoints()
+    async throws
+  {
     XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
     defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
 
@@ -334,6 +336,42 @@ final class MediaPreloadPermissionTests: XCTestCase {
 
     MediaPreloadPermissionURLProtocol.stub.reset()
     configureManageUser(service)
+
+    let statusViewModel = StatusViewModel()
+    await statusViewModel.refreshAllData()
+
+    let homeViewModel = HomeViewModel(apiService: service)
+    await homeViewModel.refreshData()
+
+    let downloadViewModel = DownloadTaskViewModel()
+    await downloadViewModel.initialLoad()
+
+    XCTAssertNil(statusViewModel.statistic)
+    XCTAssertNil(statusViewModel.storage)
+    XCTAssertNil(statusViewModel.downloader)
+    XCTAssertTrue(homeViewModel.latestMediaServers.isEmpty)
+    XCTAssertTrue(homeViewModel.latestMedia.isEmpty)
+    XCTAssertEqual(downloadViewModel.clients.map(\.name), ["qbittorrent"])
+    XCTAssertEqual(downloadViewModel.selectedClient, "qbittorrent")
+
+    let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
+    XCTAssertFalse(paths.contains { $0.hasPrefix("/api/v1/dashboard/") })
+    XCTAssertFalse(paths.contains("/api/v1/system/setting/MediaServers"))
+    XCTAssertFalse(paths.contains("/api/v1/mediaserver/latest"))
+    XCTAssertTrue(paths.contains("/api/v1/download/clients"))
+    XCTAssertTrue(paths.contains { $0 == "/api/v1/download" || $0 == "/api/v1/download/" })
+  }
+
+  func testSuperUserEntrypointsRequestDashboardDownloadAndLatestMediaEndpoints() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    MediaPreloadPermissionURLProtocol.stub.reset()
+    configureSuperUser(service)
 
     let statusViewModel = StatusViewModel()
     await statusViewModel.refreshAllData()
@@ -417,7 +455,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
 
     let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
     XCTAssertFalse(paths.contains { $0.hasPrefix("/api/v1/search/") })
-    XCTAssertFalse(paths.contains("/api/v1/system/setting/IndexerSites"))
+    XCTAssertFalse(paths.contains("/api/v1/system/setting/public/IndexerSites"))
     XCTAssertFalse(paths.contains("/api/v1/site/rss"))
     XCTAssertFalse(paths.contains { $0.hasPrefix("/api/v1/download") })
   }
@@ -472,6 +510,24 @@ final class MediaPreloadPermissionTests: XCTestCase {
         UserPermissionKey.manage.rawValue: true,
       ],
       user_name: "manager",
+      avatar: nil
+    )
+  }
+
+  private func configureSuperUser(_ service: APIService) {
+    service.baseURL = "https://preload-permission-tests.local"
+    service.token = "super-token"
+    service.currentUser = Token(
+      access_token: "super-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(true),
+      permissions: [
+        UserPermissionKey.discovery.rawValue: true,
+        UserPermissionKey.search.rawValue: true,
+        UserPermissionKey.subscribe.rawValue: true,
+        UserPermissionKey.manage.rawValue: true,
+      ],
+      user_name: "admin",
       avatar: nil
     )
   }

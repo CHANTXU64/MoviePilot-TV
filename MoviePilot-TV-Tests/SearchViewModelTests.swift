@@ -142,7 +142,7 @@ final class SearchViewModelTests: XCTestCase {
 
     await SearchViewModelURLProtocol.stub.reset()
     service.baseURL = "http://search-tests.local"
-    configureSearchPermissionSession(service)
+    configureSuperUserSearchSession(service)
     let filterSnapshot = SearchViewModelFilterSelectionSnapshot.selectHardRule(
       "allow-all", baseURL: service.baseURL)
     defer { filterSnapshot.restore() }
@@ -194,7 +194,7 @@ final class SearchViewModelTests: XCTestCase {
     await newStreamGate.open()
   }
 
-  func testCustomFilterFetchesRulesForSearchUserWithPersistedRuleSelection()
+  func testCustomFilterSkipsRulesForNonSuperuserSearchUserWithPersistedRuleSelection()
     async throws
   {
     XCTAssertTrue(URLProtocol.registerClass(SearchViewModelURLProtocol.self))
@@ -255,8 +255,8 @@ final class SearchViewModelTests: XCTestCase {
     )
     XCTAssertEqual(
       customFilterRequestCount,
-      1,
-      "Search users may read CustomFilterRules; GET /system/setting/{key} is not a superuser endpoint."
+      0,
+      "Search users may keep using search results, but CustomFilterRules is a superuser-only setting."
     )
   }
 }
@@ -476,6 +476,24 @@ private func configureSearchPermissionSession(_ service: APIService) {
       "admin": false,
     ],
     user_name: "search-user",
+    avatar: nil
+  )
+}
+
+@MainActor
+private func configureSuperUserSearchSession(_ service: APIService) {
+  service.token = "super-user-search-token"
+  service.currentUser = Token(
+    access_token: "super-user-search-token",
+    token_type: "bearer",
+    super_user: FlexibleBool(true),
+    permissions: [
+      "discovery": true,
+      "search": true,
+      "subscribe": true,
+      "manage": true,
+    ],
+    user_name: "admin",
     avatar: nil
   )
 }

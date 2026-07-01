@@ -111,7 +111,7 @@ final class TransferHistoryViewModelTests: XCTestCase {
     XCTAssertEqual(viewModel.storageDict["local"], "本地")
     let paths = await TransferHistoryURLProtocol.stub.requestPaths()
     XCTAssertTrue(paths.contains("/api/v1/history/transfer"))
-    XCTAssertTrue(paths.contains("/api/v1/system/setting/Storages"))
+    XCTAssertTrue(paths.contains("/api/v1/system/setting/public/Storages"))
   }
 
   private func configureManageUser(_ service: APIService) {
@@ -220,7 +220,7 @@ private actor TransferHistoryURLProtocolStub {
     paths.append(url.path)
 
     switch url.path {
-    case "/api/v1/system/setting/Storages":
+    case "/api/v1/system/setting/public/Storages":
       return TransferHistoryHTTPStubResponse(
         statusCode: 200,
         data: Data(#"{"value":[{"name":"本地","type":"local"}]}"#.utf8),

@@ -106,7 +106,7 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
       XCTAssertEqual(handler.sheetSubscribe?.type, "电影")
       let subscriptionLookupCount = await PermissionBehaviorURLProtocol.stub.requestCount(
         method: "GET",
-        pathPrefix: "/api/v1/subscribe/media/"
+        path: "/api/v1/subscribe/media/tmdb:901"
       )
       XCTAssertEqual(subscriptionLookupCount, 1)
 
@@ -624,7 +624,7 @@ private actor PermissionBehaviorURLProtocolStub {
     case ("GET", "/api/v1/system/setting/CustomFilterRules"):
       data = #"{"data":{"value":[{"id":"allow-all","name":"Allow All"}]}}"#.data(using: .utf8)!
     case ("GET", "/api/v1/system/global"), ("GET", "/api/v1/system/global/user"):
-      data = #"{"BACKEND_VERSION":"v2.13.6","TMDB_IMAGE_DOMAIN":"image.tmdb.org"}"#.data(using: .utf8)!
+      data = #"{"TMDB_IMAGE_DOMAIN":"image.tmdb.org"}"#.data(using: .utf8)!
     case let (_, path) where path.hasPrefix("/api/v1/subscribe"):
       data = #"{"success":true}"#.data(using: .utf8)!
     case let (_, path) where path.hasPrefix("/api/v1/download"):
