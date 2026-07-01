@@ -4,6 +4,25 @@ import XCTest
 
 @MainActor
 final class PermissionVisibleEntryTests: XCTestCase {
+  func testVisibleTabsExposeEntryForEachGrantedPermission() {
+    XCTAssertEqual(
+      ContentViewModel.visibleTabs(for: permissionBehaviorToken(granted: [.discovery])),
+      [.home, .recommend, .explore, .system]
+    )
+    XCTAssertEqual(
+      ContentViewModel.visibleTabs(for: permissionBehaviorToken(granted: [.search])),
+      [.home, .search, .system]
+    )
+    XCTAssertEqual(
+      ContentViewModel.visibleTabs(for: permissionBehaviorToken(granted: [.subscribe])),
+      [.home, .system]
+    )
+    XCTAssertEqual(
+      ContentViewModel.visibleTabs(for: permissionBehaviorToken(granted: [.manage])),
+      [.home, .status, .system]
+    )
+  }
+
   func testMediaContextMenuSubscribeAndSearchEntriesArePermissionGuardedInSource() throws {
     let source = try permissionBehaviorSource("MoviePilot-TV/Views/Components/MediaContextMenu.swift")
 
@@ -65,6 +84,157 @@ final class PermissionVisibleEntryTests: XCTestCase {
       source.contains(".onTapGesture {\n        guard canAddDownload else { return }"),
       "种子卡片点击打开下载弹窗前必须再次检查 search 权限。"
     )
+  }
+}
+
+@MainActor
+final class PermissionGrantedBehaviorTests: XCTestCase {
+  func testSubscriptionHandlerOpensMovieSheetAndTVSeasonFlowWithSubscribePermission()
+    async throws
+  {
+    try await withPermissionBehaviorBackend { service in
+      configurePermissionBehaviorUser(service, granted: [.subscribe])
+
+      let handler = SubscriptionHandler()
+
+      handler.handleSubscribe(MediaInfo(tmdb_id: 901, title: "可订阅电影", type: "电影"))
+      try await permissionBehaviorWaitUntil("movie subscribe sheet opens") {
+        handler.sheetSubscribe != nil
+      }
+
+      XCTAssertEqual(handler.sheetSubscribe?.name, "可订阅电影")
+      XCTAssertEqual(handler.sheetSubscribe?.type, "电影")
+      let subscriptionLookupCount = await PermissionBehaviorURLProtocol.stub.requestCount(
+        method: "GET",
+        pathPrefix: "/api/v1/subscribe/media/"
+      )
+      XCTAssertEqual(subscriptionLookupCount, 1)
+
+      handler.handleSubscribe(MediaInfo(tmdb_id: 902, title: "可分季订阅剧集", type: "电视剧"))
+
+      XCTAssertEqual(handler.tvSubscribeRequest?.mediaInfo.title, "可分季订阅剧集")
+    }
+  }
+
+  func testSubscriptionHandlerForksAndFetchesEditorWithSubscribePermission()
+    async throws
+  {
+    try await withPermissionBehaviorBackend { service in
+      configurePermissionBehaviorUser(service, granted: [.subscribe])
+
+      let handler = SubscriptionHandler()
+      let forkedId = await handler.fork(share: try PermissionBehaviorFixtures.subscribeShare())
+      await handler.fetchSubscriptionAndShowEditor(subId: 7001)
+
+      XCTAssertEqual(forkedId, 7001)
+      XCTAssertEqual(handler.sheetSubscribe?.id, 7001)
+      XCTAssertEqual(handler.sheetSubscribe?.name, "订阅")
+      let forkRequestCount = await PermissionBehaviorURLProtocol.stub.requestCount(
+        method: "POST",
+        path: "/api/v1/subscribe/fork"
+      )
+      let fetchRequestCount = await PermissionBehaviorURLProtocol.stub.requestCount(
+        method: "GET",
+        path: "/api/v1/subscribe/7001"
+      )
+      XCTAssertEqual(forkRequestCount, 1)
+      XCTAssertEqual(fetchRequestCount, 1)
+    }
+  }
+
+  func testSubscribeSeasonActionPreparesSubscriptionWithSubscribePermission()
+    async throws
+  {
+    try await withPermissionBehaviorBackend { service in
+      configurePermissionBehaviorUser(service, granted: [.subscribe])
+
+      let viewModel = SubscribeSeasonViewModel(
+        mediaInfo: MediaInfo(tmdb_id: 7003, title: "可分季订阅", type: "电视剧")
+      )
+
+      await SubscribeSeasonContentView.performSeasonPrimaryAction(
+        season: try permissionBehaviorSeason(number: 1),
+        isSubscribed: false,
+        refreshSubscribedState: { _ in false },
+        showUnsubscribeConfirm: { _ in XCTFail("Unsubscribed an unsubscribed season") },
+        prepareSubscription: { viewModel.prepareSubscription(seasonNumber: $0) }
+      )
+
+      XCTAssertEqual(viewModel.sheetSubscribe?.name, "可分季订阅")
+      XCTAssertEqual(viewModel.sheetSubscribe?.type, "电视剧")
+      XCTAssertEqual(viewModel.sheetSubscribe?.season, 1)
+    }
+  }
+
+  func testRecommendAndExploreLoadWithDiscoveryPermission() async throws {
+    try await withPermissionBehaviorBackend { service in
+      configurePermissionBehaviorUser(service, granted: [.discovery])
+
+      let recommend = RecommendViewModel()
+      let explore = ExploreViewModel()
+
+      try await permissionBehaviorWaitUntil("recommend request starts") {
+        await PermissionBehaviorURLProtocol.stub.requestCount(
+          method: "GET",
+          pathPrefix: "/api/v1/recommend/"
+        ) > 0
+      }
+      try await permissionBehaviorWaitUntil("discover request starts") {
+        await PermissionBehaviorURLProtocol.stub.requestCount(
+          method: "GET",
+          pathPrefix: "/api/v1/discover/"
+        ) > 0
+      }
+
+      XCTAssertNotNil(recommend.paginator)
+      XCTAssertNotNil(explore.paginator)
+      XCTAssertEqual(
+        explore.availableSources,
+        DiscoverSource.allCases.filter { $0 != .subscriptionShare }
+      )
+    }
+  }
+
+  func testExploreSubscriptionShareLoadsWithDiscoveryAndSubscribePermissions()
+    async throws
+  {
+    try await withPermissionBehaviorBackend { service in
+      configurePermissionBehaviorUser(service, granted: [.discovery, .subscribe])
+
+      let explore = ExploreViewModel()
+      XCTAssertTrue(explore.availableSources.contains(.subscriptionShare))
+
+      explore.selectedSource = .subscriptionShare
+
+      try await permissionBehaviorWaitUntil("subscription share request starts") {
+        await PermissionBehaviorURLProtocol.stub.requestCount(
+          method: "GET",
+          path: "/api/v1/subscribe/shares"
+        ) > 0
+      }
+
+      XCTAssertNotNil(explore.paginator)
+    }
+  }
+
+  func testResourceSearchPublishesResultsWithSearchPermission() async throws {
+    try await withPermissionBehaviorBackend { service in
+      configurePermissionBehaviorUser(service, granted: [.search])
+
+      let resourceViewModel = ResourceResultViewModel(keyword: "有搜索权限", sites: "1")
+      await resourceViewModel.search()
+
+      try await permissionBehaviorWaitUntil("resource search result publishes") {
+        !resourceViewModel.isLoading && resourceViewModel.results.count == 1
+      }
+
+      XCTAssertEqual(resourceViewModel.results.first?.torrent_info?.title, "有搜索权限结果")
+      let streamRequestCount = await PermissionBehaviorURLProtocol.stub.requestCount(
+        method: "GET",
+        path: "/api/v1/search/title/stream"
+      )
+      XCTAssertEqual(streamRequestCount, 1)
+    }
   }
 }
 
@@ -271,14 +441,46 @@ private func configurePermissionBehaviorUser(
     access_token: "permission-behavior-token",
     token_type: "bearer",
     super_user: FlexibleBool(false),
-    permissions: Dictionary(
-      uniqueKeysWithValues: UserPermissionKey.allCases.map {
-        ($0.rawValue, permissions.contains($0))
-      }
-    ),
+    permissions: permissionBehaviorPermissions(permissions),
     user_name: "permission-behavior",
     avatar: nil
   )
+}
+
+@MainActor
+private func permissionBehaviorToken(granted permissions: Set<UserPermissionKey>) -> Token {
+  Token(
+    access_token: "permission-behavior-token",
+    token_type: "bearer",
+    super_user: FlexibleBool(false),
+    permissions: permissionBehaviorPermissions(permissions),
+    user_name: "permission-behavior",
+    avatar: nil
+  )
+}
+
+private func permissionBehaviorPermissions(_ granted: Set<UserPermissionKey>) -> [String: Bool] {
+  Dictionary(
+    uniqueKeysWithValues: UserPermissionKey.allCases.map {
+      ($0.rawValue, granted.contains($0))
+    }
+  )
+}
+
+@MainActor
+private func permissionBehaviorWaitUntil(
+  _ description: String,
+  timeout: TimeInterval = 2,
+  condition: @escaping () async -> Bool
+) async throws {
+  let deadline = Date().addingTimeInterval(timeout)
+  while Date() < deadline {
+    if await condition() {
+      return
+    }
+    try await Task.sleep(nanoseconds: 20_000_000)
+  }
+  XCTFail("Timed out waiting for \(description)")
 }
 
 @MainActor
@@ -338,6 +540,42 @@ private enum PermissionBehaviorFixtures {
     )
     return try JSONDecoder().decode(SubscribeShare.self, from: data)
   }
+
+  static func subscriptionSharesData() -> Data {
+    Data(
+      """
+      [
+        {
+          "id": 88,
+          "subscribe_id": 7008,
+          "share_title": "可见订阅分享",
+          "share_user": "tester",
+          "name": "可见订阅分享",
+          "year": "2026",
+          "type": "电视剧",
+          "tmdbid": 7008,
+          "count": 3
+        }
+      ]
+      """.utf8
+    )
+  }
+
+  static func resourceSearchStreamData(title: String) -> Data {
+    let event =
+      "data: {\"type\":\"append\",\"text\":\"Searching\",\"value\":50,\"items\":["
+      + resourceContextJSON(title: title)
+      + "]}\n\n"
+    return Data(event.utf8)
+  }
+
+  static func resourceSearchData(title: String) -> Data {
+    Data("[\(resourceContextJSON(title: title))]".utf8)
+  }
+
+  private static func resourceContextJSON(title: String) -> String {
+    #"{"torrent_info":{"site":1,"site_name":"Test Site","site_order":1,"title":"\#(title)","description":"","enclosure":"https://example.test/search-result.torrent","page_url":"https://example.test/search-result","size":1024,"seeders":10,"peers":1,"pubdate":"2026-06-16 10:00:00","uploadvolumefactor":1.0,"downloadvolumefactor":1.0,"pri_order":1,"labels":[],"volume_factor":"1x"}}"#
+  }
 }
 
 private actor PermissionBehaviorURLProtocolStub {
@@ -373,8 +611,20 @@ private actor PermissionBehaviorURLProtocolStub {
     switch (method, path) {
     case ("GET", "/api/v1/subscribe/7001"):
       data = #"{"id":7001,"name":"订阅","type":"电影","tmdbid":7001}"#.data(using: .utf8)!
+    case ("GET", "/api/v1/subscribe/"):
+      data = #"[]"#.data(using: .utf8)!
+    case ("GET", "/api/v1/subscribe/shares"):
+      data = PermissionBehaviorFixtures.subscriptionSharesData()
     case ("POST", "/api/v1/subscribe/fork"):
       data = #"{"success":true,"data":{"id":7001}}"#.data(using: .utf8)!
+    case ("GET", "/api/v1/search/title/stream"):
+      data = PermissionBehaviorFixtures.resourceSearchStreamData(title: "有搜索权限结果")
+    case ("GET", "/api/v1/search/title"):
+      data = PermissionBehaviorFixtures.resourceSearchData(title: "有搜索权限结果")
+    case ("GET", "/api/v1/system/setting/CustomFilterRules"):
+      data = #"{"data":{"value":[{"id":"allow-all","name":"Allow All"}]}}"#.data(using: .utf8)!
+    case ("GET", "/api/v1/system/global"), ("GET", "/api/v1/system/global/user"):
+      data = #"{"BACKEND_VERSION":"v2.13.6","TMDB_IMAGE_DOMAIN":"image.tmdb.org"}"#.data(using: .utf8)!
     case let (_, path) where path.hasPrefix("/api/v1/subscribe"):
       data = #"{"success":true}"#.data(using: .utf8)!
     case let (_, path) where path.hasPrefix("/api/v1/download"):
