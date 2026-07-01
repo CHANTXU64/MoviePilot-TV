@@ -116,7 +116,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(searchRequestCount, 1)
   }
 
-  func testLoadDataLoadsFilterGroupsForStandardUserWithSubscribePermission() async throws {
+  func testLoadDataSkipsFilterGroupsForStandardUserWithSubscribePermission() async throws {
     XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
     defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
 
@@ -149,6 +149,33 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     await viewModel.loadData()
 
+    XCTAssertTrue(viewModel.filterGroups.isEmpty)
+    let filterGroupsRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "GET", path: "/api/v1/system/setting/UserFilterRuleGroups")
+    XCTAssertEqual(filterGroupsRequestCount, 0)
+  }
+
+  func testLoadDataLoadsFilterGroupsForSuperUserWithSubscribePermission() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer {
+      snapshot.restore(to: service)
+    }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    service.baseURL = "http://subscribe-sheet-tests.local"
+    configureSuperSubscriber(service)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(id: 783, name: "超管订阅账号", type: "电影", tmdbid: 123462),
+      isNewSubscription: false
+    )
+
+    await viewModel.loadData()
+
     XCTAssertEqual(viewModel.filterGroups.map(\.name), ["普通规则组"])
     let filterGroupsRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
       method: "GET", path: "/api/v1/system/setting/UserFilterRuleGroups")
@@ -170,7 +197,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     await SubscribeSheetURLProtocol.stub.reset()
     await SubscribeSheetURLProtocol.stub.suspend(path: "/api/v1/system/setting/UserFilterRuleGroups")
     service.baseURL = "http://subscribe-sheet-tests.local"
-    configureSubscriber(service)
+    configureSuperSubscriber(service)
 
     let viewModel = SubscribeSheetViewModel(
       subscribe: Subscribe(id: 782, name: "权限降级", type: "电影", tmdbid: 123461),
@@ -256,6 +283,23 @@ final class SubscribeSheetViewModelTests: XCTestCase {
         UserPermissionKey.manage.rawValue: false,
       ],
       user_name: "subscribe-sheet",
+      avatar: nil
+    )
+  }
+
+  private func configureSuperSubscriber(_ service: APIService) {
+    service.token = "subscribe-sheet-super-user"
+    service.currentUser = Token(
+      access_token: "subscribe-sheet-super-user",
+      token_type: "Bearer",
+      super_user: FlexibleBool(true),
+      permissions: [
+        UserPermissionKey.discovery.rawValue: true,
+        UserPermissionKey.search.rawValue: true,
+        UserPermissionKey.subscribe.rawValue: true,
+        UserPermissionKey.manage.rawValue: true,
+      ],
+      user_name: "subscribe-sheet-admin",
       avatar: nil
     )
   }
@@ -390,7 +434,7 @@ private actor SubscribeSheetURLProtocolStub {
       data = #"[]"#.data(using: .utf8)!
     case ("GET", "/api/v1/download/clients"):
       data = #"[]"#.data(using: .utf8)!
-    case ("GET", "/api/v1/system/setting/Directories"):
+    case ("GET", "/api/v1/system/setting/public/Directories"):
       data = #"{"value":[]}"#.data(using: .utf8)!
     case ("GET", "/api/v1/system/setting/UserFilterRuleGroups"):
       data = #"{"value":[{"name":"普通规则组"}]}"#.data(using: .utf8)!

@@ -225,7 +225,7 @@ class SystemViewModel: ObservableObject {
     let cachedBackendVersion = normalizedBackendVersion(APIService.shared.settings?.BACKEND_VERSION)
     self.backendVersion = cachedBackendVersion
 
-    if APIService.shared.isLoggedIn && APIService.shared.canAccess(.manage) {
+    if APIService.shared.isLoggedIn && APIService.shared.canRequestSuperUserEndpoints {
       do {
         let env = try await APIService.shared.fetchSystemEnv()
         guard APIService.shared.isSessionUnchanged(from: sessionSnapshot) else { return }
@@ -290,7 +290,7 @@ class SystemViewModel: ObservableObject {
 
   /// 从后端加载自定义过滤规则
   func loadCustomFilterRules() async {
-    guard APIService.shared.canAccess(.search) else {
+    guard APIService.shared.canRequestSuperUserEndpoints else {
       customFilterRules = []
       return
     }
@@ -303,7 +303,7 @@ class SystemViewModel: ObservableObject {
     do {
       let rules = try await APIService.shared.fetchCustomFilterRules()
       guard APIService.shared.isSessionUnchanged(from: sessionSnapshot),
-        APIService.shared.canAccess(.search)
+        APIService.shared.canRequestSuperUserEndpoints
       else {
         customFilterRules = []
         return

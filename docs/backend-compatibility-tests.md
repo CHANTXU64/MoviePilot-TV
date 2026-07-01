@@ -42,9 +42,9 @@ GitHub CI 没有真实后端账号，`ci.yml` 会显式跳过 `BackendCompatibil
 
 只读套件会把权限敏感接口拆成独立用例，避免一个管理员账号全通过后掩盖普通账号失败：
 
-- `testReadOnlySystemEnvCompatibility` 单独验证 `/system/env`。
-- `testReadOnlyDashboardCompatibility` 单独验证 `/dashboard/statistic`、`/dashboard/storage`、`/dashboard/downloader`。
-- `testReadOnlySystemAndConfigurationCompatibility` 验证配置读取、站点、下载器和目录等 TV 页面入口；`Storages`、`Directories`、`IndexerSites` 与 Web 保持一致，通过登录用户可读的 `/system/setting/{key}` 读取，写配置仍由后端限制为超管。`MediaServers` 仍按上游现有接口读取。
+- `testReadOnlySystemEnvCompatibility` 单独验证 `/system/env`；MoviePilot v2.13.14 起该接口只由超管账号巡检。
+- `testReadOnlyDashboardCompatibility` 单独验证 `/dashboard/statistic`、`/dashboard/storage`、`/dashboard/downloader`；这些接口按 Web `admin` 入口语义只由超管账号巡检。
+- `testReadOnlySystemAndConfigurationCompatibility` 验证配置读取、站点、下载器和目录等 TV 页面入口；`Storages`、`Directories`、`IndexerSites` 通过登录用户可读的 `/system/setting/public/{key}` 读取，写配置仍由后端限制为超管。`MediaServers`、`UserFilterRuleGroups`、`CustomFilterRules` 仍按上游现有接口读取，只由超管账号巡检，非超管 TV 端不预加载这些自定义规则配置。
 
 巡检采集到的海报、背景图、头像和媒体服务器图片都会实际下载，并在 tvOS XCTest 运行环境中用系统图片解码能力验证；如果后端改成 Apple TV 不支持的图片格式，即使 API 返回正常也会失败。测试也会检查图片代理 URL 是否把内层 query/fragment 正确保留，避免图片地址被外层参数截断。
 

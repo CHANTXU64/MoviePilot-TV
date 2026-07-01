@@ -562,7 +562,6 @@ final class SystemSessionBehaviorTests: XCTestCase {
     let paths = await SystemInfoURLProtocol.stub.requestPaths()
     XCTAssertFalse(paths.contains("/api/v1/system/env"))
     XCTAssertTrue(paths.contains("/api/v1/system/global"))
-    XCTAssertTrue(paths.contains("/api/v1/system/global/user"))
   }
 
   func testLoadSystemInfoFetchesPublicBackendVersionForNonManageUserWhenCacheIsEmpty()
@@ -591,15 +590,42 @@ final class SystemSessionBehaviorTests: XCTestCase {
     await viewModel.loadSystemInfo()
 
     XCTAssertEqual(viewModel.backendVersion, "v9.9.9")
-    XCTAssertEqual(service.token, "limited-token")
-    XCTAssertEqual(service.currentUser?.user_name, "limited")
+    let paths = await SystemInfoURLProtocol.stub.requestPaths()
+    XCTAssertFalse(paths.contains("/api/v1/system/env"))
+    XCTAssertTrue(paths.contains("/api/v1/system/global"))
+  }
+
+  func testLoadSystemInfoUsesPublicBackendVersionForManageNonSuperuser() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SystemInfoURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SystemInfoURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURL = "https://system-info-tests.local"
+    service.token = "manage-token"
+    service.currentUser = manageToken()
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from:
+        #"{"BACKEND_VERSION":"v2.13.13","FRONTEND_VERSION":"v2.13.15","TMDB_IMAGE_DOMAIN":"image.tmdb.org"}"#
+        .data(using: .utf8)!
+    )
+
+    let viewModel = SystemViewModel()
+    await SystemInfoURLProtocol.stub.reset()
+
+    await viewModel.loadSystemInfo()
+
+    XCTAssertEqual(viewModel.backendVersion, "v9.9.9")
     let paths = await SystemInfoURLProtocol.stub.requestPaths()
     XCTAssertFalse(paths.contains("/api/v1/system/env"))
     XCTAssertTrue(paths.contains("/api/v1/system/global"))
     XCTAssertTrue(paths.contains("/api/v1/system/global/user"))
   }
 
-  func testLoadSystemInfoUsesSystemEnvBackendVersionForManageUser() async throws {
+  func testLoadSystemInfoUsesSystemEnvBackendVersionForSuperUser() async throws {
     XCTAssertTrue(URLProtocol.registerClass(SystemInfoURLProtocol.self))
     defer { URLProtocol.unregisterClass(SystemInfoURLProtocol.self) }
 
@@ -609,8 +635,8 @@ final class SystemSessionBehaviorTests: XCTestCase {
     defer { snapshot.restore(to: service) }
 
     service.baseURL = "https://system-info-tests.local"
-    service.token = "manage-token"
-    service.currentUser = manageToken()
+    service.token = "super-token"
+    service.currentUser = superUserToken()
     service.settings = try JSONDecoder().decode(
       GlobalSettings.self,
       from:
@@ -656,6 +682,22 @@ final class SystemSessionBehaviorTests: XCTestCase {
         "manage": true,
       ],
       user_name: "manager",
+      avatar: nil
+    )
+  }
+
+  private func superUserToken() -> Token {
+    Token(
+      access_token: "super-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(true),
+      permissions: [
+        "discovery": true,
+        "search": true,
+        "subscribe": true,
+        "manage": true,
+      ],
+      user_name: "admin",
       avatar: nil
     )
   }

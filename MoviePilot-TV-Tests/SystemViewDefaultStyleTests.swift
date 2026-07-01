@@ -42,7 +42,12 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("permissions.subscribe"))
     XCTAssertTrue(source.contains("/mediaserver/notexists"))
     XCTAssertTrue(source.contains("不得要求 `Token.super_user`"))
-    XCTAssertTrue(source.contains("真实错误交给后端返回"))
+    XCTAssertTrue(source.contains("/dashboard/*"))
+    XCTAssertTrue(source.contains("ViewModel 入口跳过"))
+    XCTAssertTrue(source.contains("下载与整理等 manage 功能请求继续交给后端鉴权"))
+    XCTAssertTrue(source.contains("CustomFilterRules"))
+    XCTAssertTrue(source.contains("UserFilterRuleGroups"))
+    XCTAssertTrue(source.contains("/system/setting/public/{key}"))
     XCTAssertTrue(source.contains("canAccess(.subscribe)"))
     XCTAssertTrue(source.contains("不显示入库状态徽章"))
     XCTAssertTrue(source.contains("best_version"))
@@ -141,7 +146,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let source = try Self.source(at: "MoviePilot-TV/ViewModels/SystemViewModel.swift")
 
     XCTAssertTrue(source.contains("let rules = try await APIService.shared.fetchCustomFilterRules()"))
-    XCTAssertTrue(source.contains("guard APIService.shared.canAccess(.search) else {"))
+    XCTAssertTrue(source.contains("guard APIService.shared.canRequestSuperUserEndpoints else {"))
     XCTAssertTrue(source.contains("customFilterRules = rules"))
   }
 
@@ -165,14 +170,14 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("\"recommend shelves\""))
   }
 
-  func testFilterRuleGroupsCompatibilityProbeUsesSubscribePermission() throws {
+  func testFilterRuleGroupsCompatibilityProbeUsesSuperUserRequirement() throws {
     let source = try Self.source(at: "MoviePilot-TV-Tests/BackendCompatibilityTests.swift")
     let start = try XCTUnwrap(source.range(of: "\"filter-rule groups\""))
     let end = try XCTUnwrap(source.range(of: "\"custom filter rules\"", range: start.upperBound..<source.endIndex))
     let probe = String(source[start.lowerBound..<end.lowerBound])
 
-    XCTAssertTrue(probe.contains("requirement: .permission(.subscribe)"))
-    XCTAssertFalse(probe.contains("requirement: .superUser"))
+    XCTAssertTrue(probe.contains("requirement: .superUser"))
+    XCTAssertFalse(probe.contains("requirement: .permission(.subscribe)"))
   }
 
   private static func source(at path: String) throws -> String {

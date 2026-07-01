@@ -121,7 +121,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     XCTAssertFalse(paths.contains("/api/v1/login/access-token"))
   }
 
-  func testSystemConfigReadersUseBackendSettingEndpoints() async throws {
+  func testPublicSystemConfigReadersUsePublicSettingEndpoints() async throws {
     XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
     defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
 
@@ -147,9 +147,9 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
     assertContainsSubsequence(
       [
-        "/api/v1/system/setting/Storages",
-        "/api/v1/system/setting/Directories",
-        "/api/v1/system/setting/IndexerSites",
+        "/api/v1/system/setting/public/Storages",
+        "/api/v1/system/setting/public/Directories",
+        "/api/v1/system/setting/public/IndexerSites",
       ],
       in: paths
     )

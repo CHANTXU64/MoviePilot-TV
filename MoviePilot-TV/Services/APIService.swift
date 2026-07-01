@@ -582,20 +582,25 @@ class APIService: ObservableObject {
     NotificationCenter.default.post(name: .sessionDidLogout, object: nil)
   }
 
-  func canAccess(_ permission: UserPermissionKey) -> Bool {
+  private var currentOrStoredUser: Token? {
     if let currentUser {
-      return currentUser.canAccess(permission)
+      return currentUser
     }
-    guard let token, !token.isEmpty else { return false }
+    guard let token, !token.isEmpty else { return nil }
     switch Self.storedCurrentUserState(storedToken: token) {
     case .restored(let storedUser):
-      return storedUser.canAccess(permission)
-    case .noAccessibleFeature, .invalidToken:
-      return false
-    case .missing:
-      break
+      return storedUser
+    case .noAccessibleFeature, .invalidToken, .missing:
+      return nil
     }
-    return false
+  }
+
+  var canRequestSuperUserEndpoints: Bool {
+    currentOrStoredUser?.canRequestSuperUserEndpoints == true
+  }
+
+  func canAccess(_ permission: UserPermissionKey) -> Bool {
+    currentOrStoredUser?.canAccess(permission) == true
   }
 
   func sessionSnapshot() -> APIServiceSessionSnapshot {
@@ -1478,7 +1483,7 @@ class APIService: ObservableObject {
     struct ConfigValue: Decodable {
       let value: [StorageConf]
     }
-    let data = try await makeRequest(endpoint: "/system/setting/Storages")
+    let data = try await makeRequest(endpoint: "/system/setting/public/Storages")
     let config = try await decodeOrUnwrap(ConfigValue.self, from: data)
     return config.value
   }
@@ -1751,7 +1756,7 @@ class APIService: ObservableObject {
     struct ConfigValue: Decodable {
       let value: [TransferDirectoryConf]
     }
-    let data = try await makeRequest(endpoint: "/system/setting/Directories")
+    let data = try await makeRequest(endpoint: "/system/setting/public/Directories")
     let config = try await decodeOrUnwrap(ConfigValue.self, from: data)
     return config.value
   }
@@ -1761,7 +1766,7 @@ class APIService: ObservableObject {
     struct ConfigValue: Decodable {
       let value: [Int]?
     }
-    let data = try await makeRequest(endpoint: "/system/setting/IndexerSites")
+    let data = try await makeRequest(endpoint: "/system/setting/public/IndexerSites")
     let config = try await decodeOrUnwrap(ConfigValue.self, from: data)
     return config.value ?? []
   }

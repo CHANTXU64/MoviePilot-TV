@@ -77,7 +77,7 @@ class HomeViewModel: ObservableObject {
 
   /// 从已启用的媒体服务器加载最近媒体
   private func loadLatestMedia() async {
-    guard apiService.canAccess(.manage) else {
+    guard apiService.canRequestSuperUserEndpoints else {
       latestMediaByServer = [:]
       latestMediaServers = []
       if selectedLatestMediaServer != "" { selectedLatestMediaServer = "" }

@@ -125,7 +125,9 @@ class SubscribeSheetViewModel: ObservableObject {
       async let directoriesTask = apiService.fetchDirectories()
 
       let (s, d, dir) = try await (sitesTask, downloadersTask, directoriesTask)
-      let f = try await apiService.fetchFilterRuleGroups()
+      let f = apiService.canRequestSuperUserEndpoints
+        ? try await apiService.fetchFilterRuleGroups()
+        : []
       guard canPublishLoadResult(from: sessionSnapshot) else {
         clearLoadedOptions()
         return
