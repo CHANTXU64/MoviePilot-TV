@@ -283,9 +283,10 @@ class HomeViewModel: ObservableObject {
 
     switch item.server_type {
     case .emby:
-      // Emby for Apple TV 2.0.6+ 开始支持跳转到媒体项目。
+      // 保留 Emby 社区提到的深度链接格式，但 tvOS 端仍受 Emby App 自身支持限制。
+      // 2026-06-29 使用 Emby for Apple TV 2.0.7 实机测试：该 URL 只能打开 Emby，尚不能跳转到具体媒体详情。
       // 后端链接格式: https://your-emby-server/web/index.html#!/item?id=xxxx&serverId=...
-      // emby://items?serverId={your_server_id}&itemId={your_item_id}
+      // 尝试的深度链接格式: emby://items?serverId={your_server_id}&itemId={your_item_id}
       var itemId = validLinkValue(item.item_id?.value)
       var serverId = validLinkValue(item.server_id?.value)
       if let fragment = cleanFragment,

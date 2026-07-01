@@ -2,6 +2,14 @@
 
 本文档说明如何用真实 MoviePilot 后端验证 TV 端兼容性。默认测试不会访问真实后端；需要运行真实后端兼容测试时，复制 `.env.compatibility.example` 为 `.env.compatibility`，填写后端地址、用户名和密码，然后运行 Xcode 测试。
 
+## 快速配置
+
+`.env.compatibility` 会被 Git 忽略，不要提交真实账号密码。复制 `.env.compatibility.example` 为 `.env.compatibility` 后，填写后端地址、用户名和密码；媒体服务器、元数据、资源搜索、分季状态、副作用套件等可选开关按 `.env.compatibility.example` 中的注释调整。
+
+真实后端兼容测试分为只读套件和副作用套件。副作用套件默认开启，会触发订阅搜索、原参数保存订阅、暂停/恢复订阅、重置订阅、手动重新整理和 AI 重新整理等真实后台动作；如果只想跑只读检查，请参考 `.env.compatibility.example` 关闭副作用开关。
+
+配置完成后运行 Xcode 测试：
+
 ```sh
 xcodebuild test \
   -project "MoviePilot-TV.xcodeproj" \
