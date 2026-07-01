@@ -45,6 +45,14 @@ struct Token: Codable {
     ].contains { canAccess($0) }
   }
 
+  var missingRecommendedContentPermissions: [UserPermissionKey] {
+    [
+      UserPermissionKey.discovery,
+      .search,
+      .subscribe,
+    ].filter { !canAccess($0) }
+  }
+
   func withoutPersistedAccessToken() -> Token {
     Token(
       access_token: "",

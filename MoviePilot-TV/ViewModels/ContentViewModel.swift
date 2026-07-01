@@ -16,12 +16,14 @@ class ContentViewModel: ObservableObject {
   @Published var isLoggedIn = false
   @Published var isPreparingStartupSession = false
   @Published var backendVersionWarning: BackendVersionWarning?
+  @Published var accountPermissionWarning: AccountPermissionWarning?
   @Published private(set) var currentUser: Token?
 
   private let apiService = APIService.shared
   private var cancellables = Set<AnyCancellable>()
   private var didPrepareStartup = false
   private var backendVersionCheckKey: BackendVersionCheckKey?
+  private var lastAccountPermissionWarningKey: AccountPermissionWarningKey?
 
   init() {
     // 初始状态
@@ -47,9 +49,12 @@ class ContentViewModel: ObservableObject {
       .store(in: &cancellables)
 
     apiService.$currentUser
+      .dropFirst()
       .receive(on: RunLoop.main)
       .sink { [weak self] user in
-        self?.currentUser = user
+        guard let self else { return }
+        self.currentUser = user
+        self.updateAccountPermissionWarning(for: user)
       }
       .store(in: &cancellables)
 
@@ -147,6 +152,24 @@ class ContentViewModel: ObservableObject {
     backendVersionWarning = nil
   }
 
+  private func updateAccountPermissionWarning(for token: Token?) {
+    guard let token else {
+      lastAccountPermissionWarningKey = nil
+      accountPermissionWarning = nil
+      return
+    }
+    guard let warning = AccountPermissionWarning.warning(for: token) else { return }
+
+    let warningKey = AccountPermissionWarningKey(
+      baseURL: apiService.baseURL,
+      userName: token.user_name,
+      missingPermissions: warning.missingPermissions
+    )
+    guard warningKey != lastAccountPermissionWarningKey else { return }
+    lastAccountPermissionWarningKey = warningKey
+    accountPermissionWarning = warning
+  }
+
   private func currentBackendVersionCheckKey() -> BackendVersionCheckKey {
     BackendVersionCheckKey(
       baseURL: apiService.baseURL,
@@ -172,4 +195,44 @@ private struct BackendVersionCheckKey: Equatable {
   let baseURL: String
   let token: String?
   let appVersion: String
+}
+
+struct AccountPermissionWarning: Identifiable, Equatable {
+  let id: String
+  let title: String
+  let message: String
+  let missingPermissions: [UserPermissionKey]
+
+  static func warning(for token: Token) -> AccountPermissionWarning? {
+    let missingPermissions = token.missingRecommendedContentPermissions
+    guard !missingPermissions.isEmpty else { return nil }
+    let missingText = missingPermissions.map(\.displayName).joined(separator: "、")
+    return AccountPermissionWarning(
+      id: "account-permission-\(token.user_name)-\(missingPermissions.map(\.rawValue).joined(separator: "-"))",
+      title: "账号权限不足",
+      message: "当前账号缺少\(missingText)权限。MoviePilot-TV 兼容验证至少要求账号具备探索、搜索和订阅权限；继续使用时部分入口会隐藏，页面布局或焦点可能不完整。",
+      missingPermissions: missingPermissions
+    )
+  }
+}
+
+private struct AccountPermissionWarningKey: Equatable {
+  let baseURL: String
+  let userName: String
+  let missingPermissions: [UserPermissionKey]
+}
+
+private extension UserPermissionKey {
+  var displayName: String {
+    switch self {
+    case .discovery:
+      return "探索"
+    case .search:
+      return "搜索"
+    case .subscribe:
+      return "订阅"
+    case .manage:
+      return "管理"
+    }
+  }
 }

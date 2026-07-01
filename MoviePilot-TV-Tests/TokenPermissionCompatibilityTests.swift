@@ -110,6 +110,47 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     XCTAssertTrue(token.hasLoginAccessibleFeature)
   }
 
+  func testManageOnlyPermissionShowsRecommendedContentPermissionWarning() {
+    let token = Token(
+      access_token: "token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        "discovery": false,
+        "search": false,
+        "subscribe": false,
+        "manage": true,
+      ],
+      user_name: "manage-only",
+      avatar: nil
+    )
+
+    XCTAssertEqual(token.missingRecommendedContentPermissions, [.discovery, .search, .subscribe])
+
+    let warning = AccountPermissionWarning.warning(for: token)
+    XCTAssertEqual(warning?.missingPermissions, [.discovery, .search, .subscribe])
+    XCTAssertTrue(warning?.message.contains("页面布局或焦点可能不完整") == true)
+  }
+
+  func testRecommendedContentPermissionsDoNotShowWarning() {
+    let token = Token(
+      access_token: "token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        "discovery": true,
+        "search": true,
+        "subscribe": true,
+        "manage": false,
+      ],
+      user_name: "content-user",
+      avatar: nil
+    )
+
+    XCTAssertTrue(token.missingRecommendedContentPermissions.isEmpty)
+    XCTAssertNil(AccountPermissionWarning.warning(for: token))
+  }
+
   func testSuperUserCanRequestSuperUserEndpoints() {
     let token = Token(
       access_token: "token",

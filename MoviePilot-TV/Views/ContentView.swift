@@ -94,6 +94,13 @@ struct ContentView: View {
         dismissButton: .default(Text("继续使用"))
       )
     }
+    .alert(item: $viewModel.accountPermissionWarning) { warning in
+      Alert(
+        title: Text(warning.title),
+        message: Text(warning.message),
+        dismissButton: .default(Text("继续使用"))
+      )
+    }
     .mediaActionAlerts()
     .environmentObject(mediaActionHandler)
     .withNotification()
