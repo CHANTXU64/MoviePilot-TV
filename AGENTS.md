@@ -175,8 +175,8 @@ xcrun simctl list devices tvOS available
 对本仓库进行任何代码、配置、文档或工作流修改时，必须遵守：
 
 1. 禁止在未获得用户明确允许的情况下执行 `git commit`、`git push` 或创建 Pull Request；其中私自创建 PR 属于严重违规。用户要求“写好”“整理好”“提交到 GitHub”不足以自动推导为允许 commit/push/开 PR，必须先单独确认。
-2. 禁止直接向 `main` 分支提交任何修改。
-3. 每次开始修改前，必须基于最新 `main` 创建独立分支。
+2. 禁止直接向 `main` 分支提交任何修改。唯一例外是 `.agents/prompts/release.md` 定义的正式发布流程：用户确认 Release Notes 并明确允许 commit、Push 后，可以直接提交并推送最新 `main`。
+3. 除上述正式发布例外外，每次开始修改前，必须基于最新 `main` 创建独立分支。
 4. AI 创建的分支名必须使用 `ai/xxx` 格式，例如：
    - `ai/add-github-actions-ci`
    - `ai/fix-paginator-loading-state`
