@@ -46,6 +46,12 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("canAccess(.subscribe)"))
     XCTAssertTrue(source.contains("不显示入库状态徽章"))
     XCTAssertTrue(source.contains("best_version"))
+    XCTAssertTrue(source.contains("不要只按 HTTP 状态码"))
+    XCTAssertTrue(source.contains("app/core/security.py"))
+    XCTAssertTrue(source.contains("app/db/user_oper.py"))
+    XCTAssertTrue(source.contains("app/api/endpoints/login.py"))
+    XCTAssertTrue(source.contains("token校验不通过"))
+    XCTAssertTrue(source.contains("400 用户权限不足"))
   }
 
   func testSubscribeSeasonViewHidesAvailabilityBadgeWhenStatusTextIsNil() throws {
