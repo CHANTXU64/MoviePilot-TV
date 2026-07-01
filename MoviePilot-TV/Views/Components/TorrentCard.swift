@@ -30,6 +30,10 @@ struct TorrentCard: View {
     }
   }
 
+  private var canAddDownload: Bool {
+    apiService.canAccess(.search)
+  }
+
   @State private var showDownload = false
   @FocusState private var isButtonFocused: Bool
 
@@ -175,13 +179,16 @@ struct TorrentCard: View {
       .focusable(true)
       .focused($isButtonFocused)
       .onTapGesture {
+        guard canAddDownload else { return }
         showDownload = true
       }
       .contextMenu {
-        Button {
-          showDownload = true
-        } label: {
-          Label("下载", systemImage: "arrow.down.circle")
+        if canAddDownload {
+          Button {
+            showDownload = true
+          } label: {
+            Label("下载", systemImage: "arrow.down.circle")
+          }
         }
       }
       .sheet(

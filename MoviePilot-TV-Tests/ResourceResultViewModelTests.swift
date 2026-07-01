@@ -89,6 +89,7 @@ final class ResourceResultViewModelTests: XCTestCase {
 
     await ResourceResultViewModelURLProtocol.stub.reset()
     service.baseURL = "http://resource-result-tests.local"
+    configureResourceResultSearchSession(service)
 
     var viewModel: ResourceResultViewModel? = ResourceResultViewModel(keyword: "stale")
     let releasedViewModel = WeakBox(viewModel)
@@ -120,6 +121,7 @@ final class ResourceResultViewModelTests: XCTestCase {
 
     await ResourceResultViewModelURLProtocol.stub.reset()
     service.baseURL = "http://resource-result-tests.local"
+    configureResourceResultSearchSession(service)
 
     let viewModel = ResourceResultViewModel(keyword: "stale")
     await viewModel.search()
@@ -146,6 +148,7 @@ final class ResourceResultViewModelTests: XCTestCase {
 
     await ResourceResultViewModelURLProtocol.stub.reset()
     service.baseURL = "http://resource-result-tests.local"
+    configureResourceResultSearchSession(service)
     let filterSnapshot = ResourceResultViewModelFilterSelectionSnapshot.selectHardRule(
       "allow-all", baseURL: service.baseURL)
     defer { filterSnapshot.restore() }
@@ -197,6 +200,7 @@ final class ResourceResultViewModelTests: XCTestCase {
 
     await ResourceResultViewModelURLProtocol.stub.reset()
     service.baseURL = "http://resource-result-tests.local"
+    configureResourceResultSearchSession(service)
 
     let viewModel = ResourceResultViewModel(keyword: "repeat")
     await viewModel.search()
@@ -235,6 +239,7 @@ final class ResourceResultViewModelTests: XCTestCase {
 
     await ResourceResultViewModelURLProtocol.stub.reset()
     service.baseURL = "http://resource-result-tests.local"
+    configureResourceResultSearchSession(service)
 
     let viewModel = ResourceResultViewModel(keyword: "tab-switch")
     await viewModel.search()
@@ -273,6 +278,7 @@ final class ResourceResultViewModelTests: XCTestCase {
 
     await ResourceResultViewModelURLProtocol.stub.reset()
     service.baseURL = "http://resource-result-tests.local"
+    configureResourceResultSearchSession(service)
     let filterSnapshot = ResourceResultViewModelFilterSelectionSnapshot.selectHardRule(
       "allow-all", baseURL: service.baseURL)
     defer { filterSnapshot.restore() }
@@ -315,12 +321,16 @@ final class ResourceResultViewModelTests: XCTestCase {
 @MainActor
 private struct ResourceResultViewModelServiceSnapshot {
   let baseURL: String
+  let token: String?
+  let currentUser: Token?
   let serverURLDefaults: String?
   let accessTokenDefaults: String?
 
   static func capture(service: APIService) -> ResourceResultViewModelServiceSnapshot {
     ResourceResultViewModelServiceSnapshot(
       baseURL: service.baseURL,
+      token: service.token,
+      currentUser: service.currentUser,
       serverURLDefaults: UserDefaults.standard.string(forKey: "serverURL"),
       accessTokenDefaults: UserDefaults.standard.string(forKey: "accessToken")
     )
@@ -328,6 +338,8 @@ private struct ResourceResultViewModelServiceSnapshot {
 
   func restore(to service: APIService) {
     service.baseURL = baseURL
+    service.token = token
+    service.currentUser = currentUser
 
     if let serverURLDefaults {
       UserDefaults.standard.set(serverURLDefaults, forKey: "serverURL")
@@ -516,6 +528,25 @@ private struct ResourceResultHTTPStubResponse: Sendable {
 private struct ResourceResultRecordedRequest: Equatable {
   let path: String
   let keyword: String
+}
+
+@MainActor
+private func configureResourceResultSearchSession(_ service: APIService) {
+  service.token = "resource-result-search-token"
+  service.currentUser = Token(
+    access_token: "resource-result-search-token",
+    token_type: "bearer",
+    super_user: FlexibleBool(false),
+    permissions: [
+      "discovery": false,
+      "search": true,
+      "subscribe": false,
+      "manage": false,
+      "admin": false,
+    ],
+    user_name: "search-user",
+    avatar: nil
+  )
 }
 
 @MainActor

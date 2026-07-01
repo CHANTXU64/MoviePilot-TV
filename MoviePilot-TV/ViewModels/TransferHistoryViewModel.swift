@@ -100,6 +100,11 @@ class TransferHistoryViewModel: ObservableObject {
   }
 
   func search(with text: String) {
+    guard apiService.canAccess(.manage) else {
+      searchText = text
+      clearForRestrictedUser()
+      return
+    }
     searchText = text
     let api = APIService.shared
     let effectiveText = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -128,6 +133,10 @@ class TransferHistoryViewModel: ObservableObject {
   func refresh() async {
     errorMessage = nil
     isLoadingMore = false
+    guard apiService.canAccess(.manage) else {
+      clearForRestrictedUser()
+      return
+    }
     isFirstLoading = true
     defer {
       isFirstLoading = false
@@ -139,8 +148,16 @@ class TransferHistoryViewModel: ObservableObject {
   }
 
   private func loadStorages() async {
+    guard apiService.canAccess(.manage) else {
+      storageDict = [:]
+      return
+    }
     do {
       let storages = try await apiService.fetchStorages()
+      guard apiService.canAccess(.manage) else {
+        storageDict = [:]
+        return
+      }
       var dict = [String: String]()
       for storage in storages {
         dict[storage.type] = storage.name
@@ -151,8 +168,16 @@ class TransferHistoryViewModel: ObservableObject {
     }
   }
 
+  private func clearForRestrictedUser() {
+    paginator.cancel()
+    storageDict = [:]
+    paginatorItems = []
+    resetDynamicState(clearDeletedIds: true)
+  }
+
   func loadMore(currentItemId: TransferHistory.ID) async {
     errorMessage = nil
+    guard apiService.canAccess(.manage) else { return }
     guard !isLoadingMore else { return }
 
     // 以“展示层”位置判断是否触底，避免 focus 落在 prependedItems 时被 Paginator 忽略。
@@ -171,6 +196,7 @@ class TransferHistoryViewModel: ObservableObject {
 
   func deleteHistory(item: TransferHistory, deleteSource: Bool, deleteDest: Bool) async {
     errorMessage = nil
+    guard apiService.canAccess(.manage) else { return }
     do {
       let success = try await apiService.deleteTransferHistory(
         item: item,
@@ -208,6 +234,7 @@ class TransferHistoryViewModel: ObservableObject {
 
   func deleteSelected(deleteSource: Bool, deleteDest: Bool) async {
     errorMessage = nil
+    guard apiService.canAccess(.manage) else { return }
     let idsToDelete = Array(selectedIds)
     var deletedCount = 0
 
@@ -245,6 +272,7 @@ class TransferHistoryViewModel: ObservableObject {
   // MARK: - Polling Helpers
 
   func fetchLatest() async {
+    guard apiService.canAccess(.manage) else { return }
     do {
       var allNewItems: [TransferHistory] = []
       var currentPage = 1
@@ -413,6 +441,7 @@ class TransferHistoryViewModel: ObservableObject {
   // MARK: - AI Reorganize
 
   func triggerAiRedo(for ids: [Int]) async {
+    guard apiService.canAccess(.manage) else { return }
     let pendingIds = ids.filter { !aiRedoingIds.contains($0) }
     guard !pendingIds.isEmpty else { return }
     guard isAiRedoEnabled else {

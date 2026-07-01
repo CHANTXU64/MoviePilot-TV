@@ -4,10 +4,41 @@ import XCTest
 
 @testable import MoviePilot_TV
 
+private struct BackendCompatibilityAccount {
+  let label: String
+  let username: String
+  let password: String
+}
+
+private struct BackendPermissionBehaviorAccountSpec: Equatable {
+  let username: String
+  let permission: UserPermissionKey
+}
+
+private struct BackendCompatibilityAccountSnapshot {
+  let account: BackendCompatibilityAccount
+  let token: Token
+
+  @MainActor
+  var diagnostic: String {
+    let superUser = token.super_user?.value == true
+    let permissions = token.permissions?
+      .sorted { $0.key < $1.key }
+      .map { "\($0.key)=\($0.value)" }
+      .joined(separator: ", ") ?? "n/a"
+    return "account=\(account.username), label=\(account.label), super_user=\(superUser), permissions={\(permissions)}"
+  }
+}
+
 private struct BackendCompatibilityConfig {
   let baseURL: String
   let username: String
   let password: String
+  let accounts: [BackendCompatibilityAccount]
+  let permissionBehaviorAccounts: [BackendPermissionBehaviorAccountSpec]
+  let permissionBehaviorAccountsConfigured: Bool
+  let permissionBehaviorPasswords: [String]
+  var activeAccount: BackendCompatibilityAccountSnapshot?
   let mediaServer: String?
   let requireMediaServer: Bool
   let requireLatestMedia: Bool
@@ -30,6 +61,48 @@ private struct BackendCompatibilityConfig {
   let testAIReorganize: Bool
   let reorganizeHistoryLimit: Int
   let reorganizeConcurrentCount: Int
+
+  static let defaultPermissionBehaviorAccounts = [
+    BackendPermissionBehaviorAccountSpec(username: "test_discovery", permission: .discovery),
+    BackendPermissionBehaviorAccountSpec(username: "test_search", permission: .search),
+    BackendPermissionBehaviorAccountSpec(username: "test_subscribe", permission: .subscribe),
+    BackendPermissionBehaviorAccountSpec(username: "test_manage", permission: .manage),
+  ]
+
+  static func testValue() -> BackendCompatibilityConfig {
+    BackendCompatibilityConfig(
+      baseURL: "https://backend-compatibility-tests.local",
+      username: "primary",
+      password: "password",
+      accounts: [],
+      permissionBehaviorAccounts: [],
+      permissionBehaviorAccountsConfigured: false,
+      permissionBehaviorPasswords: [],
+      activeAccount: nil,
+      mediaServer: nil,
+      requireMediaServer: false,
+      requireLatestMedia: false,
+      metadataQueries: [],
+      recognitionTitles: [],
+      resourceQueries: [],
+      resourceMediaIDs: [],
+      resourceSites: nil,
+      requireResourceResults: false,
+      checkSeasonAvailability: false,
+      collectionIDs: [],
+      testResourceSearchStreams: false,
+      enableSideEffects: true,
+      testSubscriptionSearch: true,
+      testSubscriptionUpdate: true,
+      testSubscriptionPauseResume: true,
+      testSubscriptionResetSearch: true,
+      sideEffectSubscriptionLimit: 3,
+      testManualReorganize: true,
+      testAIReorganize: true,
+      reorganizeHistoryLimit: 2,
+      reorganizeConcurrentCount: 2
+    )
+  }
 
   static func loadOrSkip(file: StaticString = #filePath) throws -> BackendCompatibilityConfig {
     let values = loadEnvironment(file: file)
@@ -65,11 +138,33 @@ private struct BackendCompatibilityConfig {
       values["MOVIEPILOT_COMPAT_COLLECTION_IDS"]?.intListValue
       ?? values["MOVIEPILOT_COMPAT_COLLECTION_ID"]?.intValue.map { [$0] }
       ?? []
+    let permissionBehaviorAccountsValue =
+      values["MOVIEPILOT_COMPAT_PERMISSION_BEHAVIOR_ACCOUNTS"]?.nilIfBlank
+    let permissionBehaviorAccounts = parsePermissionBehaviorAccounts(permissionBehaviorAccountsValue)
+    let permissionBehaviorSpecs =
+      permissionBehaviorAccounts.isEmpty
+      ? Self.defaultPermissionBehaviorAccounts
+      : permissionBehaviorAccounts
+    let accounts = configuredAccounts(
+      username: username,
+      password: password,
+      additionalUsernames: values["MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES"]?.listValue ?? [],
+      additionalPasswords: values["MOVIEPILOT_COMPAT_ADDITIONAL_PASSWORDS"]?.listValue(
+        preservingEmptyItems: true) ?? [],
+      excludedAdditionalUsernames: Set(permissionBehaviorSpecs.map(\.username))
+    )
 
     return BackendCompatibilityConfig(
       baseURL: baseURL.trimmingTrailingSlashes,
       username: username,
       password: password,
+      accounts: accounts,
+      permissionBehaviorAccounts: permissionBehaviorAccounts,
+      permissionBehaviorAccountsConfigured: permissionBehaviorAccountsValue != nil
+        || values["MOVIEPILOT_COMPAT_PERMISSION_PASSWORDS"]?.nilIfBlank != nil,
+      permissionBehaviorPasswords: values["MOVIEPILOT_COMPAT_PERMISSION_PASSWORDS"]?.listValue(
+        preservingEmptyItems: true) ?? [],
+      activeAccount: nil,
       mediaServer: values["MOVIEPILOT_COMPAT_MEDIA_SERVER"]?.nilIfBlank,
       requireMediaServer: values["MOVIEPILOT_COMPAT_REQUIRE_MEDIA_SERVER"]?.boolValue(
         fallback: false) ?? false,
@@ -164,11 +259,597 @@ private struct BackendCompatibilityConfig {
 
     return nil
   }
+
+  static func configuredAccounts(
+    username: String,
+    password: String,
+    additionalUsernames: [String],
+    additionalPasswords: [String],
+    excludedAdditionalUsernames: Set<String> = []
+  ) -> [BackendCompatibilityAccount] {
+    var seen = Set<String>()
+    var accounts: [BackendCompatibilityAccount] = []
+
+    func append(label: String, username: String, password: String) {
+      guard seen.insert(username).inserted else { return }
+      accounts.append(
+        BackendCompatibilityAccount(label: label, username: username, password: password)
+      )
+    }
+
+    append(label: "primary", username: username, password: password)
+    for (index, additionalUsername) in additionalUsernames.enumerated() {
+      guard !excludedAdditionalUsernames.contains(additionalUsername) else { continue }
+      let additionalPassword = additionalPasswords[safe: index]?.nilIfBlank ?? password
+      append(
+        label: "additional-\(index + 1)",
+        username: additionalUsername,
+        password: additionalPassword
+      )
+    }
+
+    return accounts
+  }
+
+  static func parsePermissionBehaviorAccounts(_ value: String?)
+    -> [BackendPermissionBehaviorAccountSpec]
+  {
+    guard let value else { return [] }
+
+    return (value.listValue ?? []).compactMap { item in
+      let separators = ["=", ":"]
+      guard let separator = separators.compactMap({ item.firstIndex(of: Character($0)) }).min()
+      else {
+        return nil
+      }
+
+      let username = String(item[..<separator]).trimmingCharacters(in: .whitespacesAndNewlines)
+      let permissionValue = String(item[item.index(after: separator)...])
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !username.isEmpty, let permission = UserPermissionKey(rawValue: permissionValue) else {
+        return nil
+      }
+      return BackendPermissionBehaviorAccountSpec(username: username, permission: permission)
+    }
+  }
+
+  func activating(account: BackendCompatibilityAccount, token: Token) -> BackendCompatibilityConfig {
+    var config = self
+    config.activeAccount = BackendCompatibilityAccountSnapshot(account: account, token: token)
+    return config
+  }
+
+  @MainActor
+  var activeAccountDiagnostic: String {
+    activeAccount?.diagnostic ?? "account=\(username), label=primary, permissions=n/a"
+  }
+
+  @MainActor
+  var canRequestSuperUserEndpoints: Bool {
+    activeAccount?.token.canRequestSuperUserEndpoints == true
+  }
+
+  @MainActor
+  func canAccess(_ permission: UserPermissionKey) -> Bool {
+    activeAccount?.token.canAccess(permission) ?? true
+  }
+
+  @MainActor
+  func allows(_ requirement: BackendCompatibilityAccessRequirement) -> Bool {
+    switch requirement {
+    case .none:
+      return true
+    case .superUser:
+      return canRequestSuperUserEndpoints
+    case .permission(let permission):
+      return canAccess(permission)
+    }
+  }
+
+  @MainActor
+  func isExpectedPermissionDiagnostic(
+    _ error: Error,
+    requirement: BackendCompatibilityAccessRequirement
+  ) -> Bool {
+    !allows(requirement) && error.isBackendCompatibilityPermissionDenied
+  }
+}
+
+private enum BackendCompatibilityAccessRequirement {
+  case none
+  case superUser
+  case permission(UserPermissionKey)
+
+  var diagnosticDescription: String {
+    switch self {
+    case .none:
+      return "authenticated user"
+    case .superUser:
+      return "superuser"
+    case .permission(let permission):
+      return "permission \(permission.rawValue)"
+    }
+  }
+}
+
+private extension Error {
+  var isBackendCompatibilityNoAccessibleFeatureLoginRejection: Bool {
+    guard let apiError = self as? APIError,
+      case APIError.serverMessage(let message) = apiError
+    else {
+      return false
+    }
+    return message.contains("没有可访问的功能权限")
+  }
+
+  var isBackendCompatibilityPermissionDenied: Bool {
+    if let apiError = self as? APIError {
+      switch apiError {
+      case .unauthorized:
+        return true
+      case .serverMessage(let message):
+        return message.contains("权限") || message.localizedCaseInsensitiveContains("permission")
+          || message.localizedCaseInsensitiveContains("forbidden")
+          || message.localizedCaseInsensitiveContains("unauthorized")
+      case .unknown:
+        return false
+      case .invalidURL, .networkError, .decodingError:
+        return false
+      }
+    }
+
+    let description = String(describing: self)
+    return description.contains("401")
+      || description.contains("403")
+      || description.contains("权限")
+      || description.localizedCaseInsensitiveContains("permission")
+      || description.localizedCaseInsensitiveContains("unauthorized")
+      || description.localizedCaseInsensitiveContains("forbidden")
+  }
+}
+
+extension Collection {
+  fileprivate subscript(safe index: Index) -> Element? {
+    indices.contains(index) ? self[index] : nil
+  }
+}
+
+final class BackendCompatibilityEnvironmentParsingTests: XCTestCase {
+  func testListValueKeepsEscapedCommasInsideItems() {
+    let value = #"ordinary-password,pa\,ss\,word,another-password"#
+
+    XCTAssertEqual(
+      value.listValue,
+      ["ordinary-password", "pa,ss,word", "another-password"]
+    )
+  }
+
+  func testAdditionalPasswordListPreservesEmptyPlaceholdersAndEscapedCommas() {
+    XCTAssertEqual(
+      ",readonly-password".listValue(preservingEmptyItems: true),
+      ["", "readonly-password"]
+    )
+    XCTAssertEqual(
+      "primary-password,".listValue(preservingEmptyItems: true),
+      ["primary-password", ""]
+    )
+    XCTAssertEqual(
+      #"primary-password,,pa\,ssword"#.listValue(preservingEmptyItems: true),
+      ["primary-password", "", "pa,ssword"]
+    )
+    XCTAssertEqual(
+      "search,,subscribe".listValue,
+      ["search", "subscribe"]
+    )
+  }
+
+  func testAdditionalPasswordPlaceholdersKeepAccountPasswordAlignment() {
+    let accounts = BackendCompatibilityConfig.configuredAccounts(
+      username: "admin",
+      password: "primary-password",
+      additionalUsernames: "standard,readonly".listValue ?? [],
+      additionalPasswords: ",readonly-password".listValue(preservingEmptyItems: true) ?? []
+    )
+
+    XCTAssertEqual(accounts.map(\.username), ["admin", "standard", "readonly"])
+    XCTAssertEqual(accounts.map(\.password), [
+      "primary-password", "primary-password", "readonly-password",
+    ])
+  }
+
+  func testPermissionBehaviorAccountsAreExcludedFromCompatibilityMatrix() {
+    let accounts = BackendCompatibilityConfig.configuredAccounts(
+      username: "admin",
+      password: "primary-password",
+      additionalUsernames: "ordinary,test_discovery,test_search".listValue ?? [],
+      additionalPasswords: "ordinary-password,discovery-password,search-password".listValue ?? [],
+      excludedAdditionalUsernames: ["test_discovery", "test_search"]
+    )
+
+    XCTAssertEqual(accounts.map(\.username), ["admin", "ordinary"])
+    XCTAssertEqual(accounts.map(\.password), ["primary-password", "ordinary-password"])
+  }
+
+  func testPermissionBehaviorAccountMappingParsesUsernamesAndExpectedPermissions() {
+    let specs = BackendCompatibilityConfig.parsePermissionBehaviorAccounts(
+      "discovery_user=discovery,search_user:search,subscribe_user=subscribe,manage_user=manage"
+    )
+
+    XCTAssertEqual(
+      specs,
+      [
+        BackendPermissionBehaviorAccountSpec(username: "discovery_user", permission: .discovery),
+        BackendPermissionBehaviorAccountSpec(username: "search_user", permission: .search),
+        BackendPermissionBehaviorAccountSpec(username: "subscribe_user", permission: .subscribe),
+        BackendPermissionBehaviorAccountSpec(username: "manage_user", permission: .manage),
+      ]
+    )
+  }
+
+  @MainActor
+  func testPermissionDeniedIsDiagnosticWhenAccountLacksRequiredAccess() {
+    let account = BackendCompatibilityAccount(
+      label: "additional-1",
+      username: "test",
+      password: "password"
+    )
+    let token = Token(
+      access_token: "limited-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: ["search": false],
+      user_name: "test",
+      avatar: nil
+    )
+    let config = BackendCompatibilityConfig.testValue().activating(account: account, token: token)
+
+    XCTAssertTrue(
+      config.isExpectedPermissionDiagnostic(
+        APIError.unauthorized,
+        requirement: .permission(.search)
+      )
+    )
+    XCTAssertTrue(
+      config.isExpectedPermissionDiagnostic(
+        APIError.unauthorized,
+        requirement: .superUser
+      )
+    )
+    XCTAssertFalse(
+      config.isExpectedPermissionDiagnostic(
+        APIError.unauthorized,
+        requirement: .none
+      )
+    )
+  }
+
+  @MainActor
+  func testForbiddenServerMessageIsPermissionDiagnosticWhenAccessIsMissing() {
+    let account = BackendCompatibilityAccount(
+      label: "additional-1",
+      username: "test",
+      password: "password"
+    )
+    let token = Token(
+      access_token: "limited-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: ["manage": false],
+      user_name: "test",
+      avatar: nil
+    )
+    let config = BackendCompatibilityConfig.testValue().activating(account: account, token: token)
+
+    XCTAssertTrue(
+      config.isExpectedPermissionDiagnostic(
+        APIError.serverMessage("403: Forbidden"),
+        requirement: .permission(.manage)
+      )
+    )
+  }
+
+  @MainActor
+  func testBackendCompatibilityStepSkipsOperationWhenAccountLacksRequiredAccess() async {
+    let service = APIService.shared
+    let snapshot = BackendServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    let account = BackendCompatibilityAccount(
+      label: "additional-1",
+      username: "readonly",
+      password: "password"
+    )
+    let token = Token(
+      access_token: "readonly-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        "discovery": true,
+        "search": true,
+        "subscribe": false,
+        "manage": false,
+      ],
+      user_name: "readonly",
+      avatar: nil
+    )
+    let config = BackendCompatibilityConfig.testValue().activating(account: account, token: token)
+
+    var didRunOperation = false
+    let result: [Subscribe]? = await runBackendCompatibilityStep(
+      "subscriptions",
+      service: service,
+      config: config,
+      requirement: .permission(.subscribe)
+    ) {
+      didRunOperation = true
+      return []
+    }
+
+    XCTAssertNil(result)
+    XCTAssertFalse(didRunOperation)
+  }
+}
+
+private struct BackendPermissionBehaviorAccount {
+  let account: BackendCompatibilityAccount
+  let expectedPermission: UserPermissionKey
+  let token: Token
+}
+
+final class BackendCompatibilityPermissionBehaviorTests: XCTestCase {
+  @MainActor
+  func testDedicatedPermissionAccountsExposeOnlySinglePermissionAndTVBehavior() async throws {
+    let config = try BackendCompatibilityConfig.loadOrSkip()
+    let service = APIService.shared
+    let snapshot = BackendServiceSnapshot.capture(service: service)
+    defer {
+      snapshot.restore(to: service)
+    }
+
+    let accounts = try await loginPermissionBehaviorAccounts(config: config, service: service)
+
+    for account in accounts {
+      XCTAssertFalse(
+        account.token.canRequestSuperUserEndpoints,
+        "\(account.account.username) must be a standard user, not a super user."
+      )
+
+      for permission in UserPermissionKey.allCases {
+        XCTAssertEqual(
+          account.token.canAccess(permission),
+          permission == account.expectedPermission,
+          "\(account.account.username) should expose only \(account.expectedPermission.rawValue), token permissions: \(account.token.permissions ?? [:])"
+        )
+      }
+
+      pinBackendCompatibilityAccount(
+        service: service,
+        config: config.activating(account: account.account, token: account.token)
+      )
+      await assertTVPermissionBehavior(for: account)
+    }
+  }
+
+  @MainActor
+  private func loginPermissionBehaviorAccounts(
+    config: BackendCompatibilityConfig,
+    service: APIService
+  ) async throws -> [BackendPermissionBehaviorAccount] {
+    guard config.permissionBehaviorAccountsConfigured else {
+      throw XCTSkip(
+        "Set MOVIEPILOT_COMPAT_PERMISSION_BEHAVIOR_ACCOUNTS=username=permission,... and MOVIEPILOT_COMPAT_PERMISSION_PASSWORDS before running dedicated permission behavior compatibility tests."
+      )
+    }
+
+    let specs = expectedPermissionBehaviorAccountSpecs(config: config)
+    clearBackendCompatibilityStoredCredentials()
+    var accounts: [BackendPermissionBehaviorAccount] = []
+
+    for (index, spec) in specs.enumerated() {
+      let account = BackendCompatibilityAccount(
+        label: "permission-\(spec.permission.rawValue)",
+        username: spec.username,
+        password: config.permissionBehaviorPasswords[safe: index]?.nilIfBlank ?? config.password
+      )
+
+      clearBackendCompatibilityStoredCredentials()
+      service.baseURL = config.baseURL
+      service.token = nil
+      service.currentUser = nil
+
+      let token = try await service.login(username: account.username, password: account.password)
+      accounts.append(
+        BackendPermissionBehaviorAccount(
+          account: account,
+          expectedPermission: spec.permission,
+          token: token
+        )
+      )
+    }
+
+    return accounts
+  }
+
+  @MainActor
+  private func assertTVPermissionBehavior(for account: BackendPermissionBehaviorAccount) async {
+    let token = account.token
+    let canDiscover = token.canAccess(.discovery)
+    let canSubscribe = token.canAccess(.subscribe)
+    let canManage = token.canAccess(.manage)
+
+    XCTAssertEqual(
+      ContentViewModel.visibleTabs(for: token),
+      expectedVisibleTabs(for: account.expectedPermission),
+      "\(account.account.username) should only see tabs for \(account.expectedPermission.rawValue)"
+    )
+
+    let explore = ExploreViewModel()
+    XCTAssertEqual(
+      explore.availableSources,
+      expectedExploreSources(canDiscover: canDiscover, canSubscribe: canSubscribe)
+    )
+    if !canDiscover {
+      let recommend = RecommendViewModel()
+      try? await Task.sleep(nanoseconds: 200_000_000)
+      XCTAssertNil(recommend.paginator, "\(account.account.username) without discovery should not create recommendation pagination.")
+      XCTAssertNil(explore.paginator, "\(account.account.username) without discovery should not create exploration pagination.")
+    }
+    XCTAssertEqual(canManage, account.expectedPermission == .manage)
+  }
+
+  private func expectedPermissionBehaviorAccountSpecs(config: BackendCompatibilityConfig)
+    -> [BackendPermissionBehaviorAccountSpec]
+  {
+    config.permissionBehaviorAccounts.isEmpty
+      ? BackendCompatibilityConfig.defaultPermissionBehaviorAccounts
+      : config.permissionBehaviorAccounts
+  }
+
+  private func expectedVisibleTabs(for permission: UserPermissionKey) -> [ContentViewModel.Tab] {
+    switch permission {
+    case .discovery:
+      return [.home, .recommend, .explore, .system]
+    case .search:
+      return [.home, .search, .system]
+    case .subscribe:
+      return [.home, .system]
+    case .manage:
+      return [.home, .status, .system]
+    }
+  }
+
+  private func expectedExploreSources(
+    canDiscover: Bool,
+    canSubscribe: Bool
+  ) -> [DiscoverSource] {
+    guard canDiscover else { return [] }
+    if canSubscribe { return DiscoverSource.allCases }
+    return DiscoverSource.allCases.filter { $0 != .subscriptionShare }
+  }
+
+}
+
+@MainActor
+private func runBackendCompatibilityAccounts(
+  config: BackendCompatibilityConfig,
+  service: APIService,
+  operation: @MainActor (APIService, BackendCompatibilityConfig) async throws -> Void
+) async throws {
+  clearBackendCompatibilityStoredCredentials()
+
+  var ranAccountCount = 0
+  var skippedNoAccessibleFeatureAccounts: [String] = []
+
+  for account in config.accounts {
+    clearBackendCompatibilityStoredCredentials()
+    service.baseURL = config.baseURL
+    service.token = nil
+    service.currentUser = nil
+
+    let token: Token
+    do {
+      token = try await service.login(username: account.username, password: account.password)
+    } catch {
+      if error.isBackendCompatibilityNoAccessibleFeatureLoginRejection {
+        let diagnostic = "account=\(account.username), label=\(account.label)"
+        skippedNoAccessibleFeatureAccounts.append(diagnostic)
+        print(
+          "Backend compatibility permission diagnostic for login: \(diagnostic); error=\(error)"
+        )
+        continue
+      }
+      XCTFail("Failed to log in backend compatibility \(account.label) account \(account.username): \(error)")
+      continue
+    }
+
+    ranAccountCount += 1
+    let scopedConfig = config.activating(account: account, token: token)
+    pinBackendCompatibilityAccount(service: service, config: scopedConfig)
+
+    let diagnostic = scopedConfig.activeAccountDiagnostic
+    print("Backend compatibility running with \(diagnostic)")
+
+    do {
+      try await operation(service, scopedConfig)
+    } catch let skip as XCTSkip {
+      throw skip
+    } catch {
+      XCTFail("Backend compatibility failed for \(diagnostic): \(error)")
+    }
+  }
+
+  if ranAccountCount == 0, !skippedNoAccessibleFeatureAccounts.isEmpty {
+    throw XCTSkip(
+      "All backend compatibility accounts were rejected because they have no accessible feature permissions: \(skippedNoAccessibleFeatureAccounts.joined(separator: ", "))"
+    )
+  }
+}
+
+@MainActor
+private func clearBackendCompatibilityStoredCredentials() {
+  _ = KeychainHelper.shared.delete(service: "MoviePilot-TV", account: "username")
+  _ = KeychainHelper.shared.delete(service: "MoviePilot-TV", account: "password")
+  UserDefaults.standard.removeObject(forKey: "username")
+  UserDefaults.standard.removeObject(forKey: "password")
+}
+
+@MainActor
+private func pinBackendCompatibilityAccount(
+  service: APIService,
+  config: BackendCompatibilityConfig
+) {
+  guard let token = config.activeAccount?.token else { return }
+  clearBackendCompatibilityStoredCredentials()
+  service.token = token.access_token
+  service.currentUser = token
+}
+
+@discardableResult
+@MainActor
+private func runBackendCompatibilityStep<T>(
+  _ label: String,
+  service: APIService,
+  config: BackendCompatibilityConfig,
+  requirement: BackendCompatibilityAccessRequirement = .none,
+  file: StaticString = #filePath,
+  line: UInt = #line,
+  operation: @MainActor () async throws -> T
+) async -> T? {
+  pinBackendCompatibilityAccount(service: service, config: config)
+  defer {
+    pinBackendCompatibilityAccount(service: service, config: config)
+  }
+
+  guard config.allows(requirement) else {
+    print(
+      "Backend compatibility permission diagnostic for \(label): \(config.activeAccountDiagnostic); required=\(requirement.diagnosticDescription); skipped before request"
+    )
+    return nil
+  }
+
+  do {
+    return try await operation()
+  } catch {
+    if config.isExpectedPermissionDiagnostic(error, requirement: requirement) {
+      print(
+        "Backend compatibility permission diagnostic for \(label): \(config.activeAccountDiagnostic); required=\(requirement.diagnosticDescription); error=\(error)"
+      )
+      return nil
+    }
+
+    XCTFail(
+      "Backend compatibility failed for \(label) with \(config.activeAccountDiagnostic): \(error)",
+      file: file,
+      line: line
+    )
+    return nil
+  }
 }
 
 private struct BackendServiceSnapshot {
   let baseURL: String
   let token: String?
+  let currentUser: Token?
   let settings: GlobalSettings?
   let useImageCache: Bool
   let usernameKeychain: String?
@@ -181,6 +862,7 @@ private struct BackendServiceSnapshot {
     BackendServiceSnapshot(
       baseURL: service.baseURL,
       token: service.token,
+      currentUser: service.currentUser,
       settings: service.settings,
       useImageCache: service.useImageCache,
       usernameKeychain: KeychainHelper.shared.read(
@@ -200,6 +882,7 @@ private struct BackendServiceSnapshot {
   func restore(to service: APIService) {
     service.baseURL = baseURL
     service.token = token
+    service.currentUser = currentUser
     service.settings = settings
     service.useImageCache = useImageCache
     restoreCredential(
@@ -297,6 +980,14 @@ private struct BackendManualTransferRequest: Sendable {
   let url: URL
   let token: String?
   let body: Data
+}
+
+private struct BackendManualTransferError: Error, CustomStringConvertible {
+  let result: BackendManualTransferResult
+
+  var description: String {
+    result.diagnostic
+  }
 }
 
 private struct BackendStreamProbeResult: Sendable {
@@ -520,23 +1211,104 @@ private struct BackendCompatibilityCollector {
 
 final class BackendCompatibilityReadOnlyTests: XCTestCase {
   @MainActor
-  func testReadOnlySystemAndConfigurationCompatibility() async throws {
-    try await withReadOnlyBackend { service, _ in
-      _ = try await service.fetchSettings()
-      _ = try await service.fetchSystemEnv()
-      _ = try await service.fetchStatistic()
-      let storage = try await service.fetchStorage()
-      _ = try await service.fetchDownloaderInfo()
-      _ = try await service.fetchSites()
-      _ = try await service.fetchIndexerSites()
-      _ = try await service.fetchFilterRuleGroups()
-      _ = try await service.fetchCustomFilterRules()
-      _ = try await service.fetchStorages()
-      _ = try await service.fetchDirectories()
-      _ = try await service.fetchDownloadClients()
+  func testReadOnlySystemEnvCompatibility() async throws {
+    try await withReadOnlyBackend { service, config in
+      await runBackendCompatibilityStep(
+        "/system/env",
+        service: service,
+        config: config,
+        requirement: .none
+      ) {
+        _ = try await service.fetchSystemEnv()
+      }
+    }
+  }
 
-      XCTAssertGreaterThanOrEqual(storage.total_storage, 0)
-      XCTAssertGreaterThanOrEqual(storage.used_storage, 0)
+  @MainActor
+  func testReadOnlyDashboardCompatibility() async throws {
+    try await withReadOnlyBackend { service, config in
+      await runBackendCompatibilityStep(
+        "dashboard endpoints",
+        service: service,
+        config: config,
+        requirement: .permission(.manage)
+      ) {
+        _ = try await service.fetchStatistic()
+        let storage = try await service.fetchStorage()
+        _ = try await service.fetchDownloaderInfo()
+
+        XCTAssertGreaterThanOrEqual(storage.total_storage, 0)
+        XCTAssertGreaterThanOrEqual(storage.used_storage, 0)
+      }
+    }
+  }
+
+  @MainActor
+  func testReadOnlySystemAndConfigurationCompatibility() async throws {
+    try await withReadOnlyBackend { service, config in
+      await runBackendCompatibilityStep("global settings", service: service, config: config) {
+        let settings = try await service.fetchSettings()
+        XCTAssertNotNil(
+          settings.BACKEND_VERSION?.nilIfBlank,
+          "Global settings should expose BACKEND_VERSION for \(config.activeAccountDiagnostic)."
+        )
+      }
+      await runBackendCompatibilityStep(
+        "settings page backend version",
+        service: service,
+        config: config
+      ) {
+        let viewModel = SystemViewModel()
+        await viewModel.loadSystemInfo()
+        XCTAssertNotNil(
+          viewModel.backendVersion?.nilIfBlank,
+          "Settings page should display MoviePilot version for \(config.activeAccountDiagnostic)."
+        )
+      }
+      await runBackendCompatibilityStep("sites", service: service, config: config) {
+        _ = try await service.fetchSites()
+      }
+      await runBackendCompatibilityStep(
+        "media-server settings",
+        service: service,
+        config: config,
+        requirement: .permission(.manage)
+      ) {
+        _ = try await service.fetchMediaServers()
+      }
+      await runBackendCompatibilityStep(
+        "filter-rule groups",
+        service: service,
+        config: config,
+        requirement: .permission(.subscribe)
+      ) {
+        _ = try await service.fetchFilterRuleGroups()
+      }
+      await runBackendCompatibilityStep(
+        "custom filter rules",
+        service: service,
+        config: config,
+        requirement: .permission(.search)
+      ) {
+        _ = try await service.fetchCustomFilterRules()
+      }
+      await runBackendCompatibilityStep(
+        "indexer sites",
+        service: service,
+        config: config,
+        requirement: .permission(.search)
+      ) {
+        _ = try await service.fetchIndexerSites()
+      }
+      await runBackendCompatibilityStep("storages", service: service, config: config) {
+        _ = try await service.fetchStorages()
+      }
+      await runBackendCompatibilityStep("directories", service: service, config: config) {
+        _ = try await service.fetchDirectories()
+      }
+      await runBackendCompatibilityStep("download clients", service: service, config: config) {
+        _ = try await service.fetchDownloadClients()
+      }
     }
   }
 
@@ -558,12 +1330,15 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         )
       }
 
-      do {
+      await runBackendCompatibilityStep(
+        "transfer history",
+        service: service,
+        config: config,
+        requirement: .permission(.manage)
+      ) {
         let history = try await service.fetchTransferHistory(page: 1, count: 20, title: nil)
         XCTAssertGreaterThanOrEqual(history.total, 0)
         XCTAssertLessThanOrEqual(history.list.count, 20)
-      } catch {
-        XCTFail("Failed to read transfer history: \(error)")
       }
     }
   }
@@ -580,34 +1355,33 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         )
       }
 
-      for query in titleQueries {
-        do {
+      await runBackendCompatibilityStep(
+        "resource search",
+        service: service,
+        config: config,
+        requirement: .permission(.search)
+      ) {
+        for query in titleQueries {
           let results = try await service.searchResources(keyword: query, sites: config.resourceSites)
           assertResourceSearchResults(
             results,
             label: "resource title search \(query)",
             requireResults: config.requireResourceResults
           )
-        } catch {
-          XCTFail("Failed to run read-only resource title search \(query): \(error)")
         }
-      }
 
-      for mediaID in mediaIDs {
-        do {
+        for mediaID in mediaIDs {
           let results = try await service.searchResources(keyword: mediaID, sites: config.resourceSites)
           assertResourceSearchResults(
             results,
             label: "resource media-id search \(mediaID)",
             requireResults: config.requireResourceResults
           )
-        } catch {
-          XCTFail("Failed to run read-only resource media-id search \(mediaID): \(error)")
         }
-      }
 
-      if config.testResourceSearchStreams {
-        await assertResourceSearchStreamsReadable(service: service, config: config)
+        if config.testResourceSearchStreams {
+          await assertResourceSearchStreamsReadable(service: service, config: config)
+        }
       }
     }
   }
@@ -637,13 +1411,17 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       var collector = BackendCompatibilityCollector()
 
       await scanMediaServerLatest(service: service, config: config, collector: &collector)
-      await scanSubscriptions(service: service, collector: &collector)
-      await scanDownloading(service: service, collector: &collector)
-      await scanRecommendShelves(service: service, collector: &collector)
-      await scanExploreSurfaces(service: service, collector: &collector)
+      await scanSubscriptions(service: service, config: config, collector: &collector)
+
+      await scanDownloading(service: service, config: config, collector: &collector)
+
+      await scanRecommendShelves(service: service, config: config, collector: &collector)
+      await scanExploreSurfaces(service: service, config: config, collector: &collector)
+
       await scanMetadataSearches(service: service, config: config, collector: &collector)
       await scanConfiguredCollectionDetails(service: service, config: config, collector: &collector)
-      await scanMediaDetailSurfaces(service: service, collector: &collector)
+
+      await scanMediaDetailSurfaces(service: service, config: config, collector: &collector)
       await scanSeasonAvailabilityStatus(service: service, config: config, collector: collector)
       await scanPersonDetailSurfaces(service: service, collector: &collector)
 
@@ -657,7 +1435,12 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     config: BackendCompatibilityConfig,
     collector: inout BackendCompatibilityCollector
   ) async {
-    do {
+    await runBackendCompatibilityStep(
+      "media-server latest surface",
+      service: service,
+      config: config,
+      requirement: .permission(.manage)
+    ) {
       let servers = try await service.fetchMediaServers()
       let enabledServers = servers.filter { $0.enabled?.value ?? false }
 
@@ -693,17 +1476,21 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       if checkedLatestItems == 0 && config.requireLatestMedia {
         XCTFail("Enabled media servers returned no latest media.")
       }
-    } catch {
-      XCTFail("Failed to scan media server latest surface: \(error)")
     }
   }
 
   @MainActor
   private func scanSubscriptions(
     service: APIService,
+    config: BackendCompatibilityConfig,
     collector: inout BackendCompatibilityCollector
   ) async {
-    do {
+    await runBackendCompatibilityStep(
+      "subscriptions surface",
+      service: service,
+      config: config,
+      requirement: .permission(.subscribe)
+    ) {
       let subscriptions = try await service.fetchSubscriptions()
       collector.addSubscriptions(subscriptions, surface: "subscriptions list")
 
@@ -717,17 +1504,21 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
           XCTFail("Failed to read subscription detail \(id): \(error)")
         }
       }
-    } catch {
-      XCTFail("Failed to scan subscriptions surface: \(error)")
     }
   }
 
   @MainActor
   private func scanDownloading(
     service: APIService,
+    config: BackendCompatibilityConfig,
     collector: inout BackendCompatibilityCollector
   ) async {
-    do {
+    await runBackendCompatibilityStep(
+      "downloading surface",
+      service: service,
+      config: config,
+      requirement: .permission(.manage)
+    ) {
       let clients = try await service.fetchDownloadClients()
       for client in clients where client.enabled?.value ?? true {
         do {
@@ -737,22 +1528,24 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
           XCTFail("Failed to read downloading list for \(client.name): \(error)")
         }
       }
-    } catch {
-      XCTFail("Failed to scan downloading surface: \(error)")
     }
   }
 
   @MainActor
   private func scanRecommendShelves(
     service: APIService,
+    config: BackendCompatibilityConfig,
     collector: inout BackendCompatibilityCollector
   ) async {
     for shelf in RecommendViewModel.allShelves {
-      do {
+      await runBackendCompatibilityStep(
+        "recommend shelf \(shelf.title)",
+        service: service,
+        config: config,
+        requirement: .permission(.discovery)
+      ) {
         let items = try await service.fetchRecommend(path: shelf.id, page: 1)
         collector.addMedia(items, surface: "recommend shelf \(shelf.title)")
-      } catch {
-        XCTFail("Failed to read recommend shelf \(shelf.title) at \(shelf.id): \(error)")
       }
     }
   }
@@ -760,6 +1553,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   @MainActor
   private func scanExploreSurfaces(
     service: APIService,
+    config: BackendCompatibilityConfig,
     collector: inout BackendCompatibilityCollector
   ) async {
     let mediaPaths = [
@@ -772,21 +1566,20 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       "subscribe/popular?stype=电视剧&sort_type=count",
     ]
 
-    for path in mediaPaths {
-      do {
+    await runBackendCompatibilityStep(
+      "explore surfaces",
+      service: service,
+      config: config,
+      requirement: .permission(.discovery)
+    ) {
+      for path in mediaPaths {
         let items = try await service.fetchRecommend(path: path, page: 1)
         collector.addMedia(items, surface: "explore \(path)")
-      } catch {
-        XCTFail("Failed to read explore surface \(path): \(error)")
       }
-    }
 
-    let sharePath = "subscribe/shares?stype=电视剧&sort_type=count"
-    do {
+      let sharePath = "subscribe/shares?stype=电视剧&sort_type=count"
       let shares = try await service.fetchSubscriptionShares(path: sharePath, page: 1)
       collector.addSubscriptionShares(shares, surface: "explore \(sharePath)")
-    } catch {
-      XCTFail("Failed to read subscription share surface \(sharePath): \(error)")
     }
   }
 
@@ -799,17 +1592,18 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     let queries = uniqueStrings(config.metadataQueries + collector.derivedSearchQueries(limit: 5))
     guard !queries.isEmpty else { return }
 
-    for query in queries {
-      for page in 1...2 {
-        do {
+    await runBackendCompatibilityStep(
+      "metadata search surfaces",
+      service: service,
+      config: config,
+      requirement: .permission(.search)
+    ) {
+      for query in queries {
+        for page in 1...2 {
           let items = try await service.searchMedia(query: query, page: page)
           collector.addMedia(items, surface: "metadata search \(query) page \(page)")
-        } catch {
-          XCTFail("Failed to read metadata search \(query) page \(page): \(error)")
         }
-      }
 
-      do {
         let collections = try await service.searchCollection(query: query, page: 1)
         collector.addMedia(collections, surface: "collection search \(query)")
         await scanCollectionDetails(
@@ -817,22 +1611,12 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
           collections: collections,
           collector: &collector
         )
-      } catch {
-        XCTFail("Failed to read collection search \(query): \(error)")
-      }
 
-      do {
         let people = try await service.searchPerson(query: query, page: 1)
         collector.addPeople(people, surface: "person search \(query)")
-      } catch {
-        XCTFail("Failed to read person search \(query): \(error)")
-      }
 
-      do {
         let shares = try await service.searchSubscriptionShares(query: query, page: 1)
         collector.addSubscriptionShares(shares, surface: "subscription share search \(query)")
-      } catch {
-        XCTFail("Failed to read subscription share search \(query): \(error)")
       }
     }
   }
@@ -843,16 +1627,19 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     config: BackendCompatibilityConfig,
     collector: inout BackendCompatibilityCollector
   ) async {
-    for collectionID in uniqueInts(config.collectionIDs).prefix(8) {
-      do {
+    await runBackendCompatibilityStep(
+      "configured collection details",
+      service: service,
+      config: config,
+      requirement: .permission(.search)
+    ) {
+      for collectionID in uniqueInts(config.collectionIDs).prefix(8) {
         let items = try await service.fetchCollection(
           collectionId: collectionID,
           page: 1,
           title: String(collectionID)
         )
         collector.addMedia(items, surface: "configured collection \(collectionID)")
-      } catch {
-        XCTFail("Failed to read configured collection \(collectionID): \(error)")
       }
     }
   }
@@ -890,6 +1677,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   @MainActor
   private func scanMediaDetailSurfaces(
     service: APIService,
+    config: BackendCompatibilityConfig,
     collector: inout BackendCompatibilityCollector
   ) async {
     let mediaForDetail = representativeMediaForDetail(from: Array(collector.mediaByID.values))
@@ -899,11 +1687,14 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         let detail = try await service.fetchMediaDetail(media: media)
         collector.addMedia(detail, surface: "media detail \(media.compatibilityTitle)")
 
-        do {
-          try await assertSubscriptionStatusReadable(service: service, media: detail)
-          _ = try await service.checkSubscription(media: detail)
-        } catch {
-          XCTFail("Failed to read subscription status for \(detail.compatibilityTitle): \(error)")
+        await runBackendCompatibilityStep(
+          "subscription status for \(detail.compatibilityTitle)",
+          service: service,
+          config: config,
+          requirement: .permission(.subscribe)
+        ) {
+            try await assertSubscriptionStatusReadable(service: service, media: detail)
+            _ = try await service.checkSubscription(media: detail)
         }
 
         do {
@@ -983,8 +1774,13 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       .filter { $0.type == "电视剧" }
       .prefix(8)
 
-    for media in series {
-      do {
+    await runBackendCompatibilityStep(
+      "season availability status",
+      service: service,
+      config: config,
+      requirement: .permission(.subscribe)
+    ) {
+      for media in series {
         let missingItems = try await service.checkSeasonsNotExists(mediaInfo: media)
         for item in missingItems {
           XCTAssertGreaterThanOrEqual(
@@ -998,8 +1794,6 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
             "Invalid total episode count for \(media.compatibilityTitle)"
           )
         }
-      } catch {
-        XCTFail("Failed to read season availability status for \(media.compatibilityTitle): \(error)")
       }
     }
   }
@@ -1376,11 +2170,12 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   fileprivate static func probeSSEStream(
     url: URL,
     token: String?,
-    timeoutSeconds: UInt64 = 45
+    timeoutSeconds: UInt64 = 45,
+    maxEvents: Int? = 40
   ) async -> BackendStreamProbeResult {
     await withTaskGroup(of: BackendStreamProbeResult.self) { group in
       group.addTask {
-        await readSSEStream(url: url, token: token, maxEvents: 40)
+        await readSSEStream(url: url, token: token, maxEvents: maxEvents)
       }
       group.addTask {
         try? await Task.sleep(nanoseconds: timeoutSeconds * 1_000_000_000)
@@ -1409,7 +2204,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   private static func readSSEStream(
     url: URL,
     token: String?,
-    maxEvents: Int
+    maxEvents: Int?
   ) async -> BackendStreamProbeResult {
     var eventCount = 0
     var itemCount = 0
@@ -1469,7 +2264,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
           break
         }
 
-        if eventCount >= maxEvents {
+        if let maxEvents, eventCount >= maxEvents {
           break
         }
       }
@@ -1760,11 +2555,11 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       snapshot.restore(to: service)
     }
 
-    service.baseURL = config.baseURL
-    service.token = nil
-
-    _ = try await service.login(username: config.username, password: config.password)
-    try await operation(service, config)
+    try await runBackendCompatibilityAccounts(
+      config: config,
+      service: service,
+      operation: operation
+    )
   }
 
   private func queryItemMap(from components: URLComponents) -> [String: String] {
@@ -1798,6 +2593,14 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
 private struct SubscriptionSideEffectTarget: Equatable {
   let id: Int
   let originalState: String
+
+  var toggledState: String {
+    originalState == "R" ? "S" : "R"
+  }
+
+  var isToggleable: Bool {
+    originalState == "R" || originalState == "S"
+  }
 }
 
 final class BackendCompatibilitySideEffectTests: XCTestCase {
@@ -1807,6 +2610,7 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
       from: [
         Subscribe(id: 101, name: "Paused", type: "电视剧", season: 1, state: "S"),
         Subscribe(id: 102, name: "Running", type: "电视剧", season: 1, state: "R"),
+        Subscribe(id: 103, name: "Unknown", type: "电视剧", season: 1, state: "X"),
         Subscribe(name: "Missing ID", type: "电视剧", season: 1, state: "S"),
       ],
       limit: 3
@@ -1827,28 +2631,36 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
       flagName: "MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_SEARCH",
       isEnabled: { $0.testSubscriptionSearch }
     ) { service, config in
-      let targets = try await recentSubscriptionSideEffectTargets(
+      await runBackendCompatibilityStep(
+        "subscription search side-effect",
         service: service,
-        limit: config.sideEffectSubscriptionLimit
-      )
-      guard !targets.isEmpty else {
-        XCTFail(
-          "Subscription search side-effect test ran, but the backend has no subscriptions with IDs and states."
-        )
-        return
-      }
-
-      for target in targets {
-        await withRestoredSubscriptionState(
+        config: config,
+        requirement: .permission(.subscribe)
+      ) {
+        let targets = try await recentSubscriptionSideEffectTargets(
           service: service,
-          target: target,
-          operationDescription: "trigger subscription search \(target.id)"
-        ) {
-          let success = try await service.searchSubscription(id: target.id)
-          XCTAssertTrue(
-            success,
-            "Subscription search request was rejected for subscription \(target.id)."
+          limit: config.sideEffectSubscriptionLimit
+        )
+        guard !targets.isEmpty else {
+          XCTFail(
+            "Subscription search side-effect test ran, but the backend has no subscriptions with IDs and states."
           )
+          return
+        }
+
+        for target in targets {
+          await withRestoredSubscriptionState(
+            service: service,
+            config: config,
+            target: target,
+            operationDescription: "trigger subscription search \(target.id)"
+          ) {
+            let success = try await service.searchSubscription(id: target.id)
+            XCTAssertTrue(
+              success,
+              "Subscription search request was rejected for subscription \(target.id)."
+            )
+          }
         }
       }
     }
@@ -1860,20 +2672,23 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
       flagName: "MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_UPDATE",
       isEnabled: { $0.testSubscriptionUpdate }
     ) { service, config in
-      let ids = try await recentSubscriptionIDs(service: service, limit: config.sideEffectSubscriptionLimit)
-      guard !ids.isEmpty else {
-        XCTFail("Subscription update side-effect test ran, but the backend has no subscriptions.")
-        return
-      }
+      await runBackendCompatibilityStep(
+        "subscription update side-effect",
+        service: service,
+        config: config,
+        requirement: .permission(.subscribe)
+      ) {
+        let ids = try await recentSubscriptionIDs(service: service, limit: config.sideEffectSubscriptionLimit)
+        guard !ids.isEmpty else {
+          XCTFail("Subscription update side-effect test ran, but the backend has no subscriptions.")
+          return
+        }
 
-      for id in ids {
-        do {
+        for id in ids {
           let detail = try await service.fetchSubscription(id: id)
           XCTAssertEqual(detail.id, id, "Subscription detail ID changed before unchanged update.")
           let success = try await service.saveSubscription(detail)
           XCTAssertTrue(success, "Unchanged subscription update was rejected for subscription \(id).")
-        } catch {
-          XCTFail("Failed to update subscription \(id) with its original parameters: \(error)")
         }
       }
     }
@@ -1885,52 +2700,39 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
       flagName: "MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_PAUSE_RESUME",
       isEnabled: { $0.testSubscriptionPauseResume }
     ) { service, config in
-      let subscriptions = try await recentSubscriptions(
+      await runBackendCompatibilityStep(
+        "subscription pause/resume side-effect",
         service: service,
-        limit: config.sideEffectSubscriptionLimit
-      )
-      let candidates = subscriptions.filter { subscription in
-        subscription.id != nil && subscription.state == "R"
-      }
-
-      guard !candidates.isEmpty else {
-        XCTFail(
-          "Subscription pause/resume side-effect test ran, but no recent subscriptions were actively subscribing with state R."
+        config: config,
+        requirement: .permission(.subscribe)
+      ) {
+        let targets = try await recentSubscriptionSideEffectTargets(
+          service: service,
+          limit: config.sideEffectSubscriptionLimit
         )
-        return
-      }
-
-      for subscription in candidates {
-        guard let id = subscription.id, let originalState = subscription.state else { continue }
-        var needsRestore = false
-
-        do {
-          let toggleSuccess = try await service.updateSubscriptionStatus(id: id, state: "S")
-          XCTAssertTrue(
-            toggleSuccess,
-            "Subscription pause R -> S was rejected for subscription \(id)."
-          )
-          needsRestore = toggleSuccess
-
-          let restoreSuccess = try await service.updateSubscriptionStatus(id: id, state: originalState)
-          needsRestore = false
-          XCTAssertTrue(
-            restoreSuccess,
-            "Subscription status restore S -> \(originalState) was rejected for subscription \(id)."
-          )
-        } catch {
-          if needsRestore {
-            do {
-              _ = try await service.updateSubscriptionStatus(id: id, state: originalState)
-            } catch {
-              XCTFail(
-                "Failed to restore subscription \(id) to original state \(originalState): \(error)"
-              )
-            }
-          }
+        guard !targets.isEmpty else {
           XCTFail(
-            "Failed to pause active subscription \(id) and restore it to \(originalState): \(error)"
+            "Subscription pause/resume side-effect test ran, but the backend has no subscriptions with IDs and S/R states."
           )
+          return
+        }
+
+        for target in targets {
+          await withRestoredSubscriptionState(
+            service: service,
+            config: config,
+            target: target,
+            operationDescription: "pause/resume subscription \(target.id)"
+          ) {
+            let toggleSuccess = try await service.updateSubscriptionStatus(
+              id: target.id,
+              state: target.toggledState
+            )
+            XCTAssertTrue(
+              toggleSuccess,
+              "Subscription status toggle \(target.originalState) -> \(target.toggledState) was rejected for subscription \(target.id)."
+            )
+          }
         }
       }
     }
@@ -1942,34 +2744,42 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
       flagName: "MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_RESET_SEARCH",
       isEnabled: { $0.testSubscriptionResetSearch }
     ) { service, config in
-      let targets = try await recentSubscriptionSideEffectTargets(
+      await runBackendCompatibilityStep(
+        "subscription reset/search side-effect",
         service: service,
-        limit: config.sideEffectSubscriptionLimit
-      )
-      guard !targets.isEmpty else {
-        XCTFail(
-          "Subscription reset/search side-effect test ran, but the backend has no subscriptions with IDs and states."
-        )
-        return
-      }
-
-      for target in targets {
-        await withRestoredSubscriptionState(
+        config: config,
+        requirement: .permission(.subscribe)
+      ) {
+        let targets = try await recentSubscriptionSideEffectTargets(
           service: service,
-          target: target,
-          operationDescription: "reset and search subscription \(target.id)"
-        ) {
-          let resetSuccess = try await service.resetSubscription(id: target.id)
-          XCTAssertTrue(
-            resetSuccess,
-            "Subscription reset request was rejected for subscription \(target.id)."
+          limit: config.sideEffectSubscriptionLimit
+        )
+        guard !targets.isEmpty else {
+          XCTFail(
+            "Subscription reset/search side-effect test ran, but the backend has no subscriptions with IDs and states."
           )
+          return
+        }
 
-          let searchSuccess = try await service.searchSubscription(id: target.id)
-          XCTAssertTrue(
-            searchSuccess,
-            "Subscription search after reset was rejected for subscription \(target.id)."
-          )
+        for target in targets {
+          await withRestoredSubscriptionState(
+            service: service,
+            config: config,
+            target: target,
+            operationDescription: "reset and search subscription \(target.id)"
+          ) {
+            let resetSuccess = try await service.resetSubscription(id: target.id)
+            XCTAssertTrue(
+              resetSuccess,
+              "Subscription reset request was rejected for subscription \(target.id)."
+            )
+
+            let searchSuccess = try await service.searchSubscription(id: target.id)
+            XCTAssertTrue(
+              searchSuccess,
+              "Subscription search after reset was rejected for subscription \(target.id)."
+            )
+          }
         }
       }
     }
@@ -1981,27 +2791,46 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
       flagName: "MOVIEPILOT_COMPAT_TEST_MANUAL_REORGANIZE",
       isEnabled: { $0.testManualReorganize }
     ) { service, config in
-      let histories = try await recentTransferHistories(
+      await runBackendCompatibilityStep(
+        "manual reorganize side-effect",
         service: service,
-        limit: Swift.max(config.reorganizeHistoryLimit, config.reorganizeConcurrentCount)
-      )
-      guard !histories.isEmpty else {
-        XCTFail("Manual reorganize side-effect test ran, but the backend has no transfer history.")
-        return
-      }
-
-      let concurrentCount = Swift.min(config.reorganizeConcurrentCount, histories.count)
-      let targets = Array(histories.prefix(concurrentCount))
-      let requests = try targets.map { history in
-        try manualTransferRequest(service: service, history: history)
-      }
-
-      let results = await Self.performManualTransfers(requests)
-      for result in results {
-        XCTAssertTrue(
-          result.success,
-          "Manual reorganize failed for \(result.label): \(result.diagnostic)"
+        config: config,
+        requirement: .superUser
+      ) {
+        let histories = try await recentTransferHistories(
+          service: service,
+          limit: Swift.max(config.reorganizeHistoryLimit, config.reorganizeConcurrentCount)
         )
+        guard !histories.isEmpty else {
+          XCTFail("Manual reorganize side-effect test ran, but the backend has no transfer history.")
+          return
+        }
+
+        let concurrentCount = Swift.min(config.reorganizeConcurrentCount, histories.count)
+        let targets = Array(histories.prefix(concurrentCount))
+        let requests = try targets.map { history in
+          try manualTransferRequest(service: service, history: history)
+        }
+
+        let results = await Self.performManualTransfers(requests)
+        for result in results {
+          if result.success {
+            continue
+          }
+          if config.isExpectedPermissionDiagnostic(
+            BackendManualTransferError(result: result),
+            requirement: .superUser
+          ) {
+            print(
+              "Backend compatibility permission diagnostic for manual reorganize \(result.label): \(config.activeAccountDiagnostic); required=superuser; \(result.diagnostic)"
+            )
+            continue
+          }
+          XCTAssertTrue(
+            result.success,
+            "Manual reorganize failed for \(result.label): \(result.diagnostic)"
+          )
+        }
       }
     }
   }
@@ -2017,17 +2846,22 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
         throw XCTSkip("AI reorganize side-effect test ran, but the backend AI agent is disabled.")
       }
 
-      let histories = try await recentTransferHistories(
+      await runBackendCompatibilityStep(
+        "AI reorganize side-effect",
         service: service,
-        limit: config.reorganizeHistoryLimit
-      )
-      let ids = histories.map(\.id)
-      guard !ids.isEmpty else {
-        XCTFail("AI reorganize side-effect test ran, but the backend has no transfer history.")
-        return
-      }
+        config: config,
+        requirement: .superUser
+      ) {
+        let histories = try await recentTransferHistories(
+          service: service,
+          limit: config.reorganizeHistoryLimit
+        )
+        let ids = histories.map(\.id)
+        guard !ids.isEmpty else {
+          XCTFail("AI reorganize side-effect test ran, but the backend has no transfer history.")
+          return
+        }
 
-      do {
         guard let result = try await service.aiRedoTransferHistory(ids: ids) else {
           XCTFail("AI reorganize did not return a progress key for history IDs \(ids).")
           return
@@ -2043,7 +2877,8 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
         let progress = await BackendCompatibilityReadOnlyTests.probeSSEStream(
           url: progressURL,
           token: service.token,
-          timeoutSeconds: 60
+          timeoutSeconds: 180,
+          maxEvents: nil
         )
         XCTAssertFalse(progress.timedOut, "AI reorganize progress stream timed out.")
         XCTAssertGreaterThan(
@@ -2059,8 +2894,6 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
           progress.errorMessage,
           "AI reorganize progress stream reported error: \(progress.errorMessage ?? "")"
         )
-      } catch {
-        XCTFail("Failed to trigger AI reorganize for history IDs \(ids): \(error)")
       }
     }
   }
@@ -2090,11 +2923,11 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
       snapshot.restore(to: service)
     }
 
-    service.baseURL = config.baseURL
-    service.token = nil
-
-    _ = try await service.login(username: config.username, password: config.password)
-    try await operation(service, config)
+    try await runBackendCompatibilityAccounts(
+      config: config,
+      service: service,
+      operation: operation
+    )
   }
 
   @MainActor
@@ -2122,7 +2955,8 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
         guard let id = subscription.id, let state = subscription.state else {
           return nil
         }
-        return SubscriptionSideEffectTarget(id: id, originalState: state)
+        let target = SubscriptionSideEffectTarget(id: id, originalState: state)
+        return target.isToggleable ? target : nil
       }.prefix(limit)
     )
   }
@@ -2130,6 +2964,7 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
   @MainActor
   private func withRestoredSubscriptionState(
     service: APIService,
+    config: BackendCompatibilityConfig,
     target: SubscriptionSideEffectTarget,
     operationDescription: String,
     operation: () async throws -> Void
@@ -2137,6 +2972,13 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
     do {
       try await operation()
     } catch {
+      if config.isExpectedPermissionDiagnostic(error, requirement: .permission(.subscribe)) {
+        print(
+          "Backend compatibility permission diagnostic for \(operationDescription): \(config.activeAccountDiagnostic); required=permission subscribe; error=\(error)"
+        )
+        pinBackendCompatibilityAccount(service: service, config: config)
+        return
+      }
       XCTFail("Failed to \(operationDescription): \(error)")
     }
 
@@ -2177,11 +3019,11 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
     let form = ReorganizeForm(
       fileitem: history.src_fileitem,
       logid: history.id,
-      target_storage: history.dest_storage?.nilIfBlank ?? "local",
-      transfer_type: "",
+      target_storage: history.dest_storage?.nilIfBlank,
+      transfer_type: nil,
       target_path: "",
       min_filesize: 0,
-      scrape: false,
+      scrape: nil,
       from_history: false
     )
     let body = try JSONEncoder().encode(form)
@@ -2376,9 +3218,46 @@ private extension String {
   }
 
   var listValue: [String]? {
-    let items = split(separator: ",")
-      .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-      .filter { !$0.isEmpty }
+    listValue(preservingEmptyItems: false)
+  }
+
+  func listValue(preservingEmptyItems: Bool) -> [String]? {
+    var items: [String] = []
+    var current = ""
+    var isEscaping = false
+
+    func appendCurrentItem() {
+      let item = current.trimmingCharacters(in: .whitespacesAndNewlines)
+      if preservingEmptyItems || !item.isEmpty {
+        items.append(item)
+      }
+      current = ""
+    }
+
+    for character in self {
+      if isEscaping {
+        if character == "," || character == "\\" {
+          current.append(character)
+        } else {
+          current.append("\\")
+          current.append(character)
+        }
+        isEscaping = false
+      } else if character == "\\" {
+        isEscaping = true
+      } else if character == "," {
+        appendCurrentItem()
+      } else {
+        current.append(character)
+      }
+    }
+
+    if isEscaping {
+      current.append("\\")
+    }
+
+    appendCurrentItem()
+
     return items.isEmpty ? nil : items
   }
 

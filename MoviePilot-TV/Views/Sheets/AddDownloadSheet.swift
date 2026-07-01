@@ -3,6 +3,7 @@ import SwiftUI
 struct AddDownloadSheet: View {
   @Environment(\.dismiss) var dismiss
   @EnvironmentObject var notificationManager: NotificationManager
+  @ObservedObject private var apiService = APIService.shared
   @StateObject private var viewModel: AddDownloadViewModel
   @State private var showAdvanced = false
   @FocusState private var isInfoSectionFocused: Bool
@@ -116,6 +117,7 @@ struct AddDownloadSheet: View {
               }
 
               Button(action: {
+                guard apiService.canAccess(.search) else { return }
                 Task {
                   await viewModel.addDownload()
                 }
@@ -128,7 +130,7 @@ struct AddDownloadSheet: View {
                 }
                 .frame(maxWidth: .infinity)
               }
-              .disabled(viewModel.isLoading || viewModel.isSubmitting)
+              .disabled(viewModel.isLoading || viewModel.isSubmitting || !apiService.canAccess(.search))
 
               Button {
                 dismiss()

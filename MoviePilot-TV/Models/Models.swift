@@ -125,6 +125,55 @@ struct FlexibleBool: Codable, Hashable {
   }
 }
 
+enum JSONValue: Codable, Hashable {
+  case null
+  case bool(Bool)
+  case int(Int)
+  case double(Double)
+  case string(String)
+  case array([JSONValue])
+  case object([String: JSONValue])
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.singleValueContainer()
+    if container.decodeNil() {
+      self = .null
+    } else if let value = try? container.decode(Bool.self) {
+      self = .bool(value)
+    } else if let value = try? container.decode(Int.self) {
+      self = .int(value)
+    } else if let value = try? container.decode(Double.self) {
+      self = .double(value)
+    } else if let value = try? container.decode(String.self) {
+      self = .string(value)
+    } else if let value = try? container.decode([JSONValue].self) {
+      self = .array(value)
+    } else {
+      self = .object(try container.decode([String: JSONValue].self))
+    }
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.singleValueContainer()
+    switch self {
+    case .null:
+      try container.encodeNil()
+    case .bool(let value):
+      try container.encode(value)
+    case .int(let value):
+      try container.encode(value)
+    case .double(let value):
+      try container.encode(value)
+    case .string(let value):
+      try container.encode(value)
+    case .array(let value):
+      try container.encode(value)
+    case .object(let value):
+      try container.encode(value)
+    }
+  }
+}
+
 /// 包装类型，用于处理 API 响应中可能是 String 或 Int 的字段，统一转为 String。
 /// 常见于 Plex 服务器中 ID 可能为数字的情况。如果是 nil 则保持为 nil。
 struct FlexibleString: Codable, Hashable, ExpressibleByStringLiteral {
@@ -163,19 +212,6 @@ struct FlexibleString: Codable, Hashable, ExpressibleByStringLiteral {
     var container = encoder.singleValueContainer()
     try container.encode(value)
   }
-}
-
-/// 登录认证令牌
-struct Token: Codable {
-  /// 用户令牌
-  let access_token: String
-  let token_type: String
-  /// 是否属于超级管理员
-  let super_user: FlexibleBool?
-  /// 用户名
-  let user_name: String
-  /// 头像
-  let avatar: String?
 }
 
 /// 媒体库统计概览
@@ -1303,6 +1339,10 @@ struct Subscribe: Codable, Identifiable, Hashable {
   var start_episode: Int?
   /// 缺失集数
   var lack_episode: Int?
+  /// 已完成集数，后端响应派生字段，保存订阅时不写回。
+  var completed_episode: Int?
+  /// 后端维护的已下载/状态附加信息，保存原详情时需要原样保留。
+  var note: JSONValue?
   /// TMDB ID
   var tmdbid: Int?
   /// 豆瓣ID
@@ -1344,15 +1384,18 @@ struct Subscribe: Codable, Identifiable, Hashable {
 
   /// 媒体ID标识 (如 tmdb:1234)
   var mediaid: String?
+  /// 洗版订阅的剧集优先级状态，保存原详情时需要原样保留。
+  var episode_priority: [String: Int]?
 
   /// 预计算的图片 URL
   let imageURLs: ImageURLs
 
   enum CodingKeys: String, CodingKey {
     case id, name, year, type, keyword, season, poster, backdrop, state, last_update,
-      total_episode, start_episode, lack_episode, tmdbid, doubanid, bangumiid, quality, resolution,
-      effect, include, exclude, sites, downloader, save_path, best_version, best_version_full, filter_groups,
-      custom_words, description, episode_group, search_imdbid, media_category, mediaid
+      total_episode, start_episode, lack_episode, completed_episode, note, tmdbid, doubanid, bangumiid,
+      quality, resolution, effect, include, exclude, sites, downloader, save_path, best_version,
+      best_version_full, filter_groups, custom_words, description, episode_group, search_imdbid,
+      media_category, mediaid, episode_priority
   }
 
   init(from decoder: Decoder) throws {
@@ -1370,6 +1413,15 @@ struct Subscribe: Codable, Identifiable, Hashable {
     total_episode = try container.decodeIfPresent(Int.self, forKey: .total_episode)
     start_episode = try container.decodeIfPresent(Int.self, forKey: .start_episode)
     lack_episode = try container.decodeIfPresent(Int.self, forKey: .lack_episode)
+    completed_episode = try container.decodeIfPresent(Int.self, forKey: .completed_episode)
+    if container.contains(.note) {
+      note =
+        try container.decodeNil(forKey: .note)
+        ? .null
+        : container.decode(JSONValue.self, forKey: .note)
+    } else {
+      note = nil
+    }
     tmdbid = try container.decodeIfPresent(Int.self, forKey: .tmdbid)
     doubanid = try container.decodeIfPresent(String.self, forKey: .doubanid)
     bangumiid = try container.decodeIfPresent(Int.self, forKey: .bangumiid)
@@ -1390,15 +1442,56 @@ struct Subscribe: Codable, Identifiable, Hashable {
     search_imdbid = try container.decodeIfPresent(Int.self, forKey: .search_imdbid)
     media_category = try container.decodeIfPresent(String.self, forKey: .media_category)
     mediaid = try container.decodeIfPresent(String.self, forKey: .mediaid)
+    episode_priority = try container.decodeIfPresent([String: Int].self, forKey: .episode_priority)
 
     // 计算图片 URL
     self.imageURLs = ImageURLs(poster: APIService.shared.getSubscribePosterImageUrl(poster: poster))
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encodeIfPresent(id, forKey: .id)
+    try container.encode(name, forKey: .name)
+    try container.encodeIfPresent(year, forKey: .year)
+    try container.encode(type, forKey: .type)
+    try container.encodeIfPresent(keyword, forKey: .keyword)
+    try container.encodeIfPresent(season, forKey: .season)
+    try container.encodeIfPresent(poster, forKey: .poster)
+    try container.encodeIfPresent(backdrop, forKey: .backdrop)
+    try container.encodeIfPresent(state, forKey: .state)
+    try container.encodeIfPresent(last_update, forKey: .last_update)
+    try container.encodeIfPresent(total_episode, forKey: .total_episode)
+    try container.encodeIfPresent(start_episode, forKey: .start_episode)
+    try container.encodeIfPresent(lack_episode, forKey: .lack_episode)
+    try container.encodeIfPresent(note, forKey: .note)
+    try container.encodeIfPresent(tmdbid, forKey: .tmdbid)
+    try container.encodeIfPresent(doubanid, forKey: .doubanid)
+    try container.encodeIfPresent(bangumiid, forKey: .bangumiid)
+    try container.encodeIfPresent(quality, forKey: .quality)
+    try container.encodeIfPresent(resolution, forKey: .resolution)
+    try container.encodeIfPresent(effect, forKey: .effect)
+    try container.encodeIfPresent(include, forKey: .include)
+    try container.encodeIfPresent(exclude, forKey: .exclude)
+    try container.encodeIfPresent(sites, forKey: .sites)
+    try container.encodeIfPresent(downloader, forKey: .downloader)
+    try container.encodeIfPresent(save_path, forKey: .save_path)
+    try container.encodeIfPresent(best_version, forKey: .best_version)
+    try container.encodeIfPresent(best_version_full, forKey: .best_version_full)
+    try container.encodeIfPresent(filter_groups, forKey: .filter_groups)
+    try container.encodeIfPresent(custom_words, forKey: .custom_words)
+    try container.encodeIfPresent(description, forKey: .description)
+    try container.encodeIfPresent(episode_group, forKey: .episode_group)
+    try container.encodeIfPresent(search_imdbid, forKey: .search_imdbid)
+    try container.encodeIfPresent(media_category, forKey: .media_category)
+    try container.encodeIfPresent(mediaid, forKey: .mediaid)
+    try container.encodeIfPresent(episode_priority, forKey: .episode_priority)
   }
 
   /// 成员初始化器，用于手动创建订阅。
   init(
     id: Int? = nil, name: String, year: String? = nil, type: String, season: Int? = nil,
     poster: String? = nil, state: String? = nil, last_update: String? = nil,
+    completed_episode: Int? = nil, note: JSONValue? = nil,
     tmdbid: Int? = nil, doubanid: String? = nil, bangumiid: Int? = nil,
     best_version: Int? = nil, best_version_full: Int? = nil, episode_group: String? = nil,
     backdrop: String? = nil, keyword: String? = nil, total_episode: Int? = nil,
@@ -1407,7 +1500,8 @@ struct Subscribe: Codable, Identifiable, Hashable {
     exclude: String? = nil, sites: [Int]? = nil, downloader: String? = nil,
     save_path: String? = nil, filter_groups: [String]? = nil,
     custom_words: String? = nil, description: String? = nil,
-    search_imdbid: Int? = nil, media_category: String? = nil, mediaid: String? = nil
+    search_imdbid: Int? = nil, media_category: String? = nil, mediaid: String? = nil,
+    episode_priority: [String: Int]? = nil
   ) {
     self.id = id
     self.name = name
@@ -1417,6 +1511,8 @@ struct Subscribe: Codable, Identifiable, Hashable {
     self.poster = poster
     self.state = state
     self.last_update = last_update
+    self.completed_episode = completed_episode
+    self.note = note
     self.tmdbid = tmdbid
     self.doubanid = doubanid
     self.bangumiid = bangumiid
@@ -1442,6 +1538,7 @@ struct Subscribe: Codable, Identifiable, Hashable {
     self.search_imdbid = search_imdbid
     self.media_category = media_category
     self.mediaid = mediaid
+    self.episode_priority = episode_priority
 
     // 计算图片 URL
     self.imageURLs = ImageURLs(poster: APIService.shared.getSubscribePosterImageUrl(poster: poster))
@@ -1832,6 +1929,9 @@ struct SystemEnv: Codable {
 /// 全局应用设置
 struct GlobalSettings: Codable {
   var TMDB_IMAGE_DOMAIN: String?
+  var BACKEND_VERSION: String?
+  var FRONTEND_VERSION: String?
+  var BACKEND_DEV: Bool?
   /// ⚠️ **注意：请勿直接使用此值！**
   /// 由于 tvOS 17.x 及更早版本存在 WEBP 图片解码的兼容性问题，
   /// 关于图片缓存是否真实启用，应始终通过 `APIService.shared.useImageCache` 获取。
@@ -1844,11 +1944,21 @@ struct GlobalSettings: Codable {
 
   enum CodingKeys: String, CodingKey {
     case TMDB_IMAGE_DOMAIN
+    case BACKEND_VERSION
+    case FRONTEND_VERSION
+    case BACKEND_DEV
     case GLOBAL_IMAGE_CACHE
     case RECOGNIZE_SOURCE
     case USER_UNIQUE_ID
     case SUBSCRIBE_SHARE_MANAGE
     case AI_AGENT_ENABLE
+  }
+
+  mutating func mergeUserSettings(_ userSettings: GlobalSettings) {
+    RECOGNIZE_SOURCE = userSettings.RECOGNIZE_SOURCE ?? RECOGNIZE_SOURCE
+    USER_UNIQUE_ID = userSettings.USER_UNIQUE_ID ?? USER_UNIQUE_ID
+    SUBSCRIBE_SHARE_MANAGE = userSettings.SUBSCRIBE_SHARE_MANAGE ?? SUBSCRIBE_SHARE_MANAGE
+    AI_AGENT_ENABLE = userSettings.AI_AGENT_ENABLE ?? AI_AGENT_ENABLE
   }
 }
 
@@ -2076,16 +2186,16 @@ struct ReorganizeForm: Codable {
   var fileitems: [FileItem]?
   // 历史ID
   var logid: Int
-  // 目标存储
-  var target_storage: String
-  // 整理方式
-  var transfer_type: String
+  // 目标存储；nil 表示由后端自动决定。
+  var target_storage: String?
+  // 整理方式；nil 表示由后端自动决定。
+  var transfer_type: String?
   // 目标路径；空白值编码为 null，以匹配 v2.13.2 手动整理接口语义。
   var target_path: String
   // 最小文件大小
   var min_filesize: Int
-  // 刮削
-  var scrape: Bool
+  // 刮削；nil 表示由后端自动决定。
+  var scrape: Bool?
   // 复用历史识别信息
   var from_history: Bool
   // 类型
@@ -2127,8 +2237,21 @@ struct ReorganizeForm: Codable {
     }
 
     try container.encode(logid, forKey: .logid)
-    try container.encode(target_storage, forKey: .target_storage)
-    try container.encode(transfer_type, forKey: .transfer_type)
+    if let targetStorage = target_storage?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !targetStorage.isEmpty
+    {
+      try container.encode(targetStorage, forKey: .target_storage)
+    } else {
+      try container.encodeNil(forKey: .target_storage)
+    }
+
+    if let transferType = transfer_type?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !transferType.isEmpty
+    {
+      try container.encode(transferType, forKey: .transfer_type)
+    } else {
+      try container.encodeNil(forKey: .transfer_type)
+    }
 
     if target_path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       try container.encodeNil(forKey: .target_path)
@@ -2137,7 +2260,11 @@ struct ReorganizeForm: Codable {
     }
 
     try container.encode(min_filesize, forKey: .min_filesize)
-    try container.encode(scrape, forKey: .scrape)
+    if let scrape {
+      try container.encode(scrape, forKey: .scrape)
+    } else {
+      try container.encodeNil(forKey: .scrape)
+    }
     try container.encode(from_history, forKey: .from_history)
     try container.encodeIfPresent(type_name, forKey: .type_name)
     try container.encodeIfPresent(tmdbid, forKey: .tmdbid)

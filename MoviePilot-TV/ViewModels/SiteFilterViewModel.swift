@@ -10,8 +10,19 @@ class SiteFilterViewModel: ObservableObject {
   private let apiService = APIService.shared
 
   func loadSites() async {
+    guard apiService.canAccess(.search) else {
+      clearLoadedSites()
+      return
+    }
+    let sessionSnapshot = apiService.sessionSnapshot()
     do {
       let sites = try await apiService.fetchSites()
+      guard apiService.isSessionUnchanged(from: sessionSnapshot),
+        apiService.canAccess(.search)
+      else {
+        clearLoadedSites()
+        return
+      }
       self.availableSites = sites
       normalizeSelectedSites()
     } catch {
@@ -44,5 +55,10 @@ class SiteFilterViewModel: ObservableObject {
     if normalizedSites != selectedSites {
       selectedSites = normalizedSites
     }
+  }
+
+  private func clearLoadedSites() {
+    availableSites = []
+    selectedSites = []
   }
 }

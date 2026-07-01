@@ -29,6 +29,7 @@ struct ExploreView: View {
               )
             },
             onShareTapped: { share in
+              guard APIService.shared.canAccess(.subscribe) else { return }
               subscriptionHandler.forkSheetRequest = share
             }
           )
@@ -68,7 +69,10 @@ struct ExploreView: View {
   private var headerView: some View {
     VStack(alignment: .leading, spacing: 20) {
       // 第一行：数据源选择器
-      SourcePickerView(selectedSource: $viewModel.selectedSource)
+      SourcePickerView(
+        selectedSource: $viewModel.selectedSource,
+        sources: viewModel.availableSources
+      )
         .onChange(of: viewModel.selectedSource) { _, _ in
           viewModel.onSourceChanged()
         }
@@ -85,10 +89,11 @@ struct ExploreView: View {
 // MARK: - 数据源选择器
 struct SourcePickerView: View {
   @Binding var selectedSource: DiscoverSource
+  let sources: [DiscoverSource]
 
   var body: some View {
     Picker("数据源", selection: $selectedSource) {
-      ForEach(DiscoverSource.allCases) { source in
+      ForEach(sources) { source in
         Text(source.rawValue).tag(source)
       }
     }

@@ -59,6 +59,7 @@ class ResourceResultViewModel: ObservableObject {
   }
 
   func search() async {
+    guard apiService.canAccess(.search) else { return }
     guard !hasSearched else { return }
     hasSearched = true
     isLoading = true
@@ -77,9 +78,16 @@ class ResourceResultViewModel: ObservableObject {
     let sites = self.sites
     let apiService = self.apiService
     let doneCloseDelay = searchStreamDoneCloseDelay
+    let sessionSnapshot = apiService.sessionSnapshot()
 
     searchStreamTask = Task { @MainActor [weak self] in
       var accumulatedResults: [Context] = []
+
+      let canContinue: @MainActor () -> Bool = {
+        apiService.isSessionUnchanged(from: sessionSnapshot)
+          && apiService.canAccess(.search)
+          && !Task.isCancelled
+      }
 
       do {
         let stream: AsyncThrowingStream<SearchStreamEvent, Error>
@@ -100,7 +108,7 @@ class ResourceResultViewModel: ObservableObject {
         }
 
         for try await event in stream {
-          if Task.isCancelled { break }
+          guard canContinue() else { return }
 
           if let text = event.text {
             self?.searchProgressText = text
@@ -125,11 +133,12 @@ class ResourceResultViewModel: ObservableObject {
           if event.type == "done" {
             // 与 Web v2.13.2 保持一致：给后端搜索结果缓存写入留出收尾时间。
             try? await Task.sleep(nanoseconds: doneCloseDelay)
+            guard canContinue() else { return }
             break
           }
         }
 
-        if !Task.isCancelled {
+        if canContinue() {
           // 获取所有本次搜索的目标站点
           var targetSites: Set<Int> = []
           if let specificSites = sites, !specificSites.isEmpty {
@@ -138,7 +147,7 @@ class ResourceResultViewModel: ObservableObject {
           } else {
             do {
               let allSites = try await apiService.fetchIndexerSites()
-              if Task.isCancelled { return }
+              guard canContinue() else { return }
               targetSites = Set(allSites)
             } catch {
               print("Fetch indexer sites error: \(error)")
@@ -164,7 +173,7 @@ class ResourceResultViewModel: ObservableObject {
                 season: season,
                 sites: missingSitesString
               )
-              if Task.isCancelled { return }
+              guard canContinue() else { return }
               // 追加到原结果后面
               accumulatedResults.append(contentsOf: retryResults)
             } catch {
@@ -172,20 +181,20 @@ class ResourceResultViewModel: ObservableObject {
             }
           }
 
-          if Task.isCancelled { return }
+          guard canContinue() else { return }
 
           // 应用自定义过滤规则
           guard let self else { return }
           let filteredResults = await self.applyCustomFilter(to: accumulatedResults)
           
-          if Task.isCancelled { return }
+          guard canContinue() else { return }
 
           self.results = filteredResults
           self.isLoading = false
         }
       } catch {
         print("Search Stream error: \(error)")
-        if !Task.isCancelled {
+        if canContinue() {
           do {
             var searchResults = try await apiService.searchResources(
               keyword: keyword,
@@ -196,17 +205,17 @@ class ResourceResultViewModel: ObservableObject {
               season: season,
               sites: sites
             )
-            if Task.isCancelled { return }
+            guard canContinue() else { return }
 
             guard let self else { return }
             searchResults = await self.applyCustomFilter(to: searchResults)
-            if Task.isCancelled { return }
+            guard canContinue() else { return }
 
             self.results = searchResults
           } catch {
             print("Search fallback error: \(error)")
           }
-          if Task.isCancelled { return }
+          guard canContinue() else { return }
 
           self?.isLoading = false
         }

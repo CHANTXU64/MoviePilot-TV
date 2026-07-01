@@ -17,6 +17,8 @@ class ReorganizeViewModel: ObservableObject {
   private var cancellables = Set<AnyCancellable>()
 
   private var logIds: [Int] = []
+  private let explicitTargetStorage: String?
+  private var directoryInferredTargetStorage: String?
 
   // 用于视图判断当前是否是对历史记录发起整理
   var isFromHistory: Bool {
@@ -25,16 +27,18 @@ class ReorganizeViewModel: ObservableObject {
 
   init(logIds: [Int] = [], fileItem: FileItem?, targetStorage: String? = nil) {
     self.logIds = logIds
+    self.explicitTargetStorage = targetStorage?.trimmingCharacters(in: .whitespacesAndNewlines)
+      .nonEmpty
 
     // 在 init() 中初始化 form，为必须的属性提供默认值
     self.form = ReorganizeForm(
       fileitem: fileItem,
       logid: logIds.first ?? 0,
-      target_storage: targetStorage ?? "local",
-      transfer_type: "",
+      target_storage: explicitTargetStorage,
+      transfer_type: nil,
       target_path: "",
       min_filesize: 0,
-      scrape: false,
+      scrape: nil,
       from_history: false
     )
 
@@ -63,14 +67,28 @@ class ReorganizeViewModel: ObservableObject {
   }
 
   func loadConfig() async {
+    guard apiService.canAccess(.manage) else {
+      clearLoadedConfig()
+      isLoading = false
+      return
+    }
+    let sessionSnapshot = apiService.sessionSnapshot()
     isLoading = true
     defer { isLoading = false }
     do {
       async let dirsTask = apiService.fetchDirectories()
       async let storagesTask = apiService.fetchStorages()
 
-      self.directories = try await dirsTask
-      self.storages = try await storagesTask
+      let (loadedDirectories, loadedStorages) = try await (dirsTask, storagesTask)
+      guard apiService.isSessionUnchanged(from: sessionSnapshot),
+        apiService.canAccess(.manage)
+      else {
+        clearLoadedConfig()
+        return
+      }
+
+      self.directories = loadedDirectories
+      self.storages = loadedStorages
 
       self.targetDirectoryOptions =
         [PickerOption(title: "自动", value: "")]
@@ -85,7 +103,14 @@ class ReorganizeViewModel: ObservableObject {
     }
   }
 
+  private func clearLoadedConfig() {
+    directories = []
+    storages = []
+    targetDirectoryOptions = [PickerOption(title: "自动", value: "")]
+  }
+
   func submit(background: Bool) async -> Bool {
+    guard apiService.canAccess(.manage) else { return false }
     isSubmitting = true
     defer { isSubmitting = false }
     do {
@@ -121,23 +146,31 @@ class ReorganizeViewModel: ObservableObject {
 
   private func updateForm(for newPath: String?) {
     guard let newPath = newPath, !newPath.isEmpty else {
-      // 路径为空时, 恢复到`自动`条件
-      form.transfer_type = ""
+      // 路径为空时, 恢复到`自动`整理条件；只保留历史记录或用户显式传入的目标存储。
+      form.target_storage = explicitTargetStorage
+      directoryInferredTargetStorage = nil
+      form.transfer_type = nil
+      form.scrape = nil
       form.library_type_folder = nil
       form.library_category_folder = nil
       return
     }
 
     if let directory = directories.first(where: { $0.library_path == newPath }) {
-      form.target_storage = directory.library_storage ?? "local"
-      if form.transfer_type.isEmpty {
+      form.target_storage = directory.library_storage
+      directoryInferredTargetStorage = directory.library_storage
+      if (form.transfer_type ?? "").isEmpty {
         form.transfer_type = directory.transfer_type
       }
       form.scrape = directory.scraping?.value ?? false
       form.library_category_folder = directory.library_category_folder?.value ?? false
       form.library_type_folder = directory.library_type_folder?.value ?? false
     } else {
-      if form.transfer_type.isEmpty {
+      if form.target_storage == directoryInferredTargetStorage {
+        form.target_storage = explicitTargetStorage
+      }
+      directoryInferredTargetStorage = nil
+      if (form.transfer_type ?? "").isEmpty {
         form.transfer_type = "copy"
       }
       form.scrape = false
@@ -160,5 +193,11 @@ class ReorganizeViewModel: ObservableObject {
     }
     // 对于文件整理模式，如果是文件夹类型，则禁用此功能
     isEpisodeDetailDisabled = (form.fileitem?.type == "dir")
+  }
+}
+
+private extension String {
+  var nonEmpty: String? {
+    isEmpty ? nil : self
   }
 }

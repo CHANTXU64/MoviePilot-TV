@@ -303,7 +303,7 @@ struct SubscribeSeasonContentView: View {
       "\(seasonName)\(season.air_date != nil ? " · " + (season.air_date?.prefix(4) ?? "") : "")"
     let statusText = viewModel.getStatusText(season: seasonNumber)
     let episodeCount = season.episode_count ?? 0
-    let bottomLeft = "\(episodeCount) 集 · \(statusText)"
+    let bottomLeft = statusText.map { "\(episodeCount) 集 · \($0)" }
     let footerText =
       isSubscribed ? (viewModel.subscriptionStatusText(for: seasonNumber) ?? "已订阅") : "订阅"
 

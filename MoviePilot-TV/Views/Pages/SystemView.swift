@@ -18,6 +18,7 @@ struct SystemView: View {
   private let isSelected: Bool
 
   @StateObject private var viewModel = SystemViewModel()
+  @ObservedObject private var apiService = APIService.shared
   @State private var showAppInfo = false
   @State private var showLogoutConfirmation = false
   @State private var route: [SystemSettingsPage] = []
@@ -28,6 +29,14 @@ struct SystemView: View {
 
   init(isSelected: Bool = true) {
     self.isSelected = isSelected
+  }
+
+  private var canConfigureSubscriptions: Bool {
+    apiService.canAccess(.subscribe)
+  }
+
+  private var canConfigureSearch: Bool {
+    apiService.canAccess(.search)
   }
 
   var body: some View {
@@ -134,15 +143,19 @@ struct SystemView: View {
           case .siteSelection:
             siteSelectionPage
           case .hardFilter:
-            filterPage(
-              selectedRuleId: viewModel.selectedHardFilterRuleId,
-              onSelect: { viewModel.selectedHardFilterRuleId = $0 }
-            )
+            if canConfigureSearch {
+              filterPage(
+                selectedRuleId: viewModel.selectedHardFilterRuleId,
+                onSelect: { viewModel.selectedHardFilterRuleId = $0 }
+              )
+            }
           case .softFilter:
-            filterPage(
-              selectedRuleId: viewModel.selectedSoftFilterRuleId,
-              onSelect: { viewModel.selectedSoftFilterRuleId = $0 }
-            )
+            if canConfigureSearch {
+              filterPage(
+                selectedRuleId: viewModel.selectedSoftFilterRuleId,
+                onSelect: { viewModel.selectedSoftFilterRuleId = $0 }
+              )
+            }
           }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -163,16 +176,18 @@ struct SystemView: View {
 
   private var rootPage: some View {
     VStack(spacing: 38) {
-      section("订阅") {
-        Toggle(
-          "新增订阅后立即搜索",
-          isOn: Binding(
-            get: { viewModel.autoSearchNewSubscriptions },
-            set: { viewModel.autoSearchNewSubscriptions = $0 }
+      if canConfigureSubscriptions {
+        section("订阅") {
+          Toggle(
+            "新增订阅后立即搜索",
+            isOn: Binding(
+              get: { viewModel.autoSearchNewSubscriptions },
+              set: { viewModel.autoSearchNewSubscriptions = $0 }
+            )
           )
-        )
-        .font(.body.weight(.semibold))
-        .focused($focusedItem, equals: .autoSearch)
+          .font(.body.weight(.semibold))
+          .focused($focusedItem, equals: .autoSearch)
+        }
       }
 
       section("详情页") {
@@ -187,34 +202,36 @@ struct SystemView: View {
         .focused($focusedItem, equals: .waitBackgroundImage)
       }
 
-      section("资源搜索") {
-        Button {
-          push(.siteSelection)
-        } label: {
-          row("默认搜索站点", value: siteButtonLabel, showsDisclosure: true)
-        }
-        .focused($focusedItem, equals: .siteSelection)
+      if canConfigureSearch {
+        section("资源搜索") {
+          Button {
+            push(.siteSelection)
+          } label: {
+            row("默认搜索站点", value: siteButtonLabel, showsDisclosure: true)
+          }
+          .focused($focusedItem, equals: .siteSelection)
 
-        Button {
-          push(.hardFilter)
-        } label: {
-          row("硬过滤", value: selectedHardFilterTitle, showsDisclosure: true)
-        }
-        .focused($focusedItem, equals: .hardFilter)
+          Button {
+            push(.hardFilter)
+          } label: {
+            row("硬过滤", value: selectedHardFilterTitle, showsDisclosure: true)
+          }
+          .focused($focusedItem, equals: .hardFilter)
 
-        Button {
-          push(.softFilter)
-        } label: {
-          row("软过滤", value: selectedSoftFilterTitle, showsDisclosure: true)
-        }
-        .focused($focusedItem, equals: .softFilter)
+          Button {
+            push(.softFilter)
+          } label: {
+            row("软过滤", value: selectedSoftFilterTitle, showsDisclosure: true)
+          }
+          .focused($focusedItem, equals: .softFilter)
 
-        if viewModel.isLoadingRules {
-          row("规则状态", value: "正在加载")
-            .foregroundStyle(.secondary)
-        } else if viewModel.customFilterRules.isEmpty {
-          row("规则状态", value: "暂无自定义过滤规则")
-            .foregroundStyle(.secondary)
+          if viewModel.isLoadingRules {
+            row("规则状态", value: "正在加载")
+              .foregroundStyle(.secondary)
+          } else if viewModel.customFilterRules.isEmpty {
+            row("规则状态", value: "暂无自定义过滤规则")
+              .foregroundStyle(.secondary)
+          }
         }
       }
 
@@ -408,6 +425,7 @@ struct SystemView: View {
             .font(.body.weight(.semibold))
             .foregroundStyle(.secondary)
             .lineLimit(1)
+            .multilineTextAlignment(.trailing)
             .truncationMode(.middle)
         }
 
@@ -537,6 +555,7 @@ struct SystemView: View {
 
   private func refreshFilterRulesForEntryIfNeeded() {
     guard isSelected else { return }
+    guard canConfigureSearch else { return }
 
     Task {
       await viewModel.loadCustomFilterRules()

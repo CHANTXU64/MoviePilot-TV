@@ -11,6 +11,33 @@ enum APIError: Error {
   case unknown
 }
 
+extension APIError: LocalizedError {
+  var errorDescription: String? {
+    switch self {
+    case .invalidURL:
+      return "无效的请求地址"
+    case .networkError(let error):
+      return error.localizedDescription
+    case .decodingError:
+      return "响应解析失败"
+    case .serverMessage(let message):
+      return message
+    case .unauthorized:
+      return "登录已失效"
+    case .unknown:
+      return "未知错误"
+    }
+  }
+}
+
+enum SessionRefreshResult: Equatable {
+  case alreadyRefreshed
+  case noStoredSession
+  case skippedWithoutCredentials
+  case refreshed
+  case refreshFailed
+}
+
 nonisolated struct ApiResponse<T: Decodable>: Decodable {
   let success: Bool?
   let data: T?
@@ -21,6 +48,32 @@ nonisolated struct SubscriptionLookupResult: Equatable, Sendable {
   let id: Int
   let mediaId: String
   let isResolvedMediaId: Bool
+}
+
+struct APIServiceSessionSnapshot: Equatable {
+  let baseURL: String
+  let token: String?
+  let userName: String?
+  let superUser: Bool?
+  let permissions: [String: Bool]?
+}
+
+private struct CurrentUserResponse: Decodable {
+  let name: String
+  let is_superuser: FlexibleBool?
+  let avatar: String?
+  let permissions: [String: Bool]?
+
+  func token(accessToken: String) -> Token {
+    Token(
+      access_token: accessToken,
+      token_type: "bearer",
+      super_user: is_superuser,
+      permissions: permissions ?? [:],
+      user_name: name,
+      avatar: avatar
+    )
+  }
 }
 
 nonisolated struct MediaImageURLConfig: Sendable {
@@ -246,33 +299,58 @@ actor APICache<Key: Hashable, Value> {
 @MainActor
 class APIService: ObservableObject {
   static let shared = APIService()
+  static let sessionRefreshAppVersionKey = "lastSessionRefreshAppVersion"
+  private static let noAccessibleFeatureMessage = "当前用户没有可访问的功能权限"
+  private static let keychainService = "MoviePilot-TV"
+  private static let accessTokenAccount = "accessToken"
+  private static let currentUserAccount = "currentUser"
 
   private var loginTask: Task<Void, Error>?
+  @Published var currentUser: Token? = APIService.loadStoredCurrentUserIfTokenExists() {
+    didSet {
+      if oldValue?.user_name != currentUser?.user_name
+        || oldValue?.super_user?.value != currentUser?.super_user?.value
+        || oldValue?.permissions != currentUser?.permissions
+      {
+        invalidateSubscriptionCachesAfterSessionChange()
+      }
+      persistCurrentUser()
+    }
+  }
 
   @Published var baseURL: String =
     UserDefaults.standard.string(forKey: "serverURL") ?? "http://192.168.1.1:3000"
   {
     didSet {
       UserDefaults.standard.set(baseURL, forKey: "serverURL")
+      currentUser = nil
       invalidateSubscriptionCachesAfterSessionChange()
     }
   }
 
   @Published var token: String? =
-    KeychainHelper.shared.read(service: "MoviePilot-TV", account: "accessToken")
-    ?? UserDefaults.standard.string(forKey: "accessToken")
+    KeychainHelper.shared.read(service: keychainService, account: accessTokenAccount)
+    ?? UserDefaults.standard.string(forKey: accessTokenAccount)
   {
     didSet {
       invalidateSubscriptionCachesAfterSessionChange()
       if let token = token {
-        if !KeychainHelper.shared.save(token, service: "MoviePilot-TV", account: "accessToken") {
-          UserDefaults.standard.set(token, forKey: "accessToken")
+        if !KeychainHelper.shared.save(
+          token,
+          service: Self.keychainService,
+          account: Self.accessTokenAccount
+        ) {
+          UserDefaults.standard.set(token, forKey: Self.accessTokenAccount)
         }
       } else {
-        if !KeychainHelper.shared.delete(service: "MoviePilot-TV", account: "accessToken") {
+        currentUser = nil
+        if !KeychainHelper.shared.delete(
+          service: Self.keychainService,
+          account: Self.accessTokenAccount
+        ) {
           print("Failed to delete keychain item for account: accessToken")
         }
-        UserDefaults.standard.removeObject(forKey: "accessToken")
+        UserDefaults.standard.removeObject(forKey: Self.accessTokenAccount)
       }
     }
   }
@@ -380,6 +458,116 @@ class APIService: ObservableObject {
     }
   }
 
+  private enum StoredCurrentUserState {
+    case missing
+    case noAccessibleFeature
+    case invalidToken
+    case restored(Token)
+  }
+
+  private static func loadStoredCurrentUserIfTokenExists() -> Token? {
+    guard let storedToken = storedAccessToken else { return nil }
+    switch storedCurrentUserState(storedToken: storedToken) {
+    case .restored(let currentUser):
+      return currentUser
+    case .noAccessibleFeature:
+      clearStoredSessionCredentials()
+      return nil
+    case .missing, .invalidToken:
+      return nil
+    }
+  }
+
+  private static var storedAccessToken: String? {
+    KeychainHelper.shared.read(service: keychainService, account: accessTokenAccount)
+      ?? UserDefaults.standard.string(forKey: accessTokenAccount)
+  }
+
+  private static func loadStoredCurrentUser() -> Token? {
+    guard
+      let json = KeychainHelper.shared.read(service: keychainService, account: currentUserAccount)
+        ?? UserDefaults.standard.string(forKey: currentUserAccount),
+      let data = json.data(using: .utf8)
+    else {
+      return nil
+    }
+    return try? JSONDecoder().decode(Token.self, from: data)
+  }
+
+  private static func clearStoredSessionCredentials() {
+    [
+      accessTokenAccount,
+      currentUserAccount,
+      "username",
+      "password",
+    ].forEach { account in
+      if !KeychainHelper.shared.delete(service: keychainService, account: account) {
+        print("Failed to delete keychain item for account: \(account)")
+      }
+      UserDefaults.standard.removeObject(forKey: account)
+    }
+  }
+
+  private static func storedCurrentUserState(storedToken: String) -> StoredCurrentUserState {
+    guard let storedUser = loadStoredCurrentUser() else { return .missing }
+    guard storedUser.hasKnownFeaturePermissions else { return .missing }
+    guard storedUser.hasLoginAccessibleFeature else { return .noAccessibleFeature }
+    guard let restoredUser = storedUser.withRestoredAccessToken(storedToken) else {
+      return .invalidToken
+    }
+    return .restored(restoredUser)
+  }
+
+  private func restoreCurrentUserFromStorage() -> Bool {
+    guard let storedToken = token else { return false }
+    switch Self.storedCurrentUserState(storedToken: storedToken) {
+    case .restored(let restoredUser):
+      currentUser = restoredUser
+      return true
+    case .noAccessibleFeature:
+      logout()
+      return false
+    case .missing, .invalidToken:
+      return false
+    }
+  }
+
+  private func persistCurrentUser() {
+    guard let currentUser else {
+      if !KeychainHelper.shared.delete(service: Self.keychainService, account: Self.currentUserAccount)
+      {
+        print("Failed to delete keychain item for account: currentUser")
+      }
+      UserDefaults.standard.removeObject(forKey: Self.currentUserAccount)
+      return
+    }
+
+    guard
+      let data = try? JSONEncoder().encode(currentUser),
+      let json = String(data: data, encoding: .utf8)
+    else {
+      return
+    }
+
+    if KeychainHelper.shared.save(json, service: Self.keychainService, account: Self.currentUserAccount) {
+      UserDefaults.standard.removeObject(forKey: Self.currentUserAccount)
+    } else {
+      print("Failed to save keychain item for account: currentUser")
+      persistCurrentUserDefaultsFallback(currentUser)
+    }
+  }
+
+  private func persistCurrentUserDefaultsFallback(_ currentUser: Token) {
+    let fallbackUser = currentUser.withoutPersistedAccessToken()
+    guard
+      let data = try? JSONEncoder().encode(fallbackUser),
+      let json = String(data: data, encoding: .utf8)
+    else {
+      return
+    }
+    UserDefaults.standard.set(json, forKey: Self.currentUserAccount)
+  }
+
   private init() {}
 
   var isLoggedIn: Bool {
@@ -388,14 +576,157 @@ class APIService: ObservableObject {
 
   func logout() {
     token = nil
+    currentUser = nil
     storedUsername = nil
     storedPassword = nil
     NotificationCenter.default.post(name: .sessionDidLogout, object: nil)
   }
 
+  func canAccess(_ permission: UserPermissionKey) -> Bool {
+    if let currentUser {
+      return currentUser.canAccess(permission)
+    }
+    guard let token, !token.isEmpty else { return false }
+    switch Self.storedCurrentUserState(storedToken: token) {
+    case .restored(let storedUser):
+      return storedUser.canAccess(permission)
+    case .noAccessibleFeature, .invalidToken:
+      return false
+    case .missing:
+      break
+    }
+    return false
+  }
+
+  func sessionSnapshot() -> APIServiceSessionSnapshot {
+    APIServiceSessionSnapshot(
+      baseURL: baseURL,
+      token: token,
+      userName: currentUser?.user_name,
+      superUser: currentUser?.super_user?.value,
+      permissions: currentUser?.permissions
+    )
+  }
+
+  func isSessionUnchanged(from snapshot: APIServiceSessionSnapshot) -> Bool {
+    sessionSnapshot() == snapshot
+  }
+
+  func refreshStoredSessionAfterAppUpdateIfNeeded(
+    appVersion: String = AppVersionInfo.currentAppVersion()
+  ) async -> SessionRefreshResult {
+    let normalizedAppVersion = appVersion.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalizedAppVersion.isEmpty, normalizedAppVersion != "未知" else {
+      return .noStoredSession
+    }
+
+    let defaults = UserDefaults.standard
+    if let currentUser, currentUser.hasKnownFeaturePermissions,
+      !currentUser.hasLoginAccessibleFeature
+    {
+      logout()
+      defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
+      return .noStoredSession
+    }
+
+    if defaults.string(forKey: Self.sessionRefreshAppVersionKey) == normalizedAppVersion {
+      if token != nil, currentUser == nil {
+        _ = restoreCurrentUserFromStorage()
+        if token == nil {
+          defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
+          return .noStoredSession
+        }
+        if currentUser == nil {
+          _ = await recoverCurrentUserFromCurrentUserEndpoint()
+          if token == nil {
+            defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
+            return .noStoredSession
+          }
+        }
+      }
+      return .alreadyRefreshed
+    }
+
+    guard token != nil else {
+      defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
+      return .noStoredSession
+    }
+
+    if currentUser == nil {
+      _ = restoreCurrentUserFromStorage()
+      if token == nil {
+        defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
+        return .noStoredSession
+      }
+    }
+
+    let username = storedUsername
+    let password = storedPassword
+
+    guard let username, let password, !username.isEmpty, !password.isEmpty else {
+      if currentUser == nil {
+        if await recoverCurrentUserFromCurrentUserEndpoint() {
+          defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
+          return .refreshed
+        }
+        if token == nil {
+          defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
+          return .noStoredSession
+        }
+      }
+      defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
+      return .skippedWithoutCredentials
+    }
+
+    let previousToken = token
+    let previousCurrentUser = currentUser
+    do {
+      _ = try await login(
+        username: username,
+        password: password,
+        preserveExistingSessionOnFailure: true
+      )
+      defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
+      return .refreshed
+    } catch {
+      if Self.isNoAccessibleFeatureError(error) {
+        logout()
+        defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
+        return .noStoredSession
+      }
+      token = previousToken
+      currentUser = previousCurrentUser
+      storedUsername = username
+      storedPassword = password
+      return .refreshFailed
+    }
+  }
+
+  private func recoverCurrentUserFromCurrentUserEndpoint() async -> Bool {
+    guard let accessToken = token, !accessToken.isEmpty else { return false }
+    do {
+      let data = try await makeRequest(
+        endpoint: "/user/current",
+        retryOn401: false,
+        logoutOnUnauthorized: false
+      )
+      let user = try JSONDecoder().decode(CurrentUserResponse.self, from: data)
+      let recoveredUser = user.token(accessToken: accessToken)
+      guard recoveredUser.hasLoginAccessibleFeature else {
+        logout()
+        return false
+      }
+      currentUser = recoveredUser
+      return true
+    } catch {
+      return false
+    }
+  }
+
   private func makeRequest(
     endpoint: String, method: String = "GET", body: Data? = nil, isForm: Bool = false,
-    retryOn401: Bool = true
+    retryOn401: Bool = true,
+    logoutOnUnauthorized: Bool = true
   ) async throws -> Data {
     guard let url = URL(string: "\(baseURL)/api/v1\(endpoint)") else {
       throw APIError.invalidURL
@@ -414,6 +745,21 @@ class APIService: ObservableObject {
     logSubscriptionRequestIfNeeded(endpoint: endpoint, method: method)
     let (data, response) = try await URLSession.shared.data(for: request)
     if let httpResponse = response as? HTTPURLResponse {
+      func serverMessageError() -> APIError {
+        struct ErrorPayload: Decodable {
+          let message: String?
+          let detail: String?
+        }
+        let payload = try? JSONDecoder().decode(ErrorPayload.self, from: data)
+        let message = payload?.message ?? payload?.detail
+        return APIError.serverMessage(
+          [String(httpResponse.statusCode), message]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: ": ")
+        )
+      }
+
       if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
         // 如果允许重试，则尝试自动登录
         if retryOn401, let u = storedUsername, let p = storedPassword, !u.isEmpty, !p.isEmpty {
@@ -425,7 +771,11 @@ class APIService: ObservableObject {
             task = Task { [weak self] in
               guard let self = self else { return }
               defer { self.loginTask = nil }
-              _ = try await self.login(username: u, password: p)
+              _ = try await self.login(
+                username: u,
+                password: p,
+                preserveExistingSessionOnFailure: true
+              )
             }
             self.loginTask = task
           }
@@ -433,19 +783,30 @@ class APIService: ObservableObject {
             try await task.value
             // 使用新令牌递归调用
             return try await makeRequest(
-              endpoint: endpoint, method: method, body: body, isForm: isForm, retryOn401: false)
+              endpoint: endpoint,
+              method: method,
+              body: body,
+              isForm: isForm,
+              retryOn401: false,
+              logoutOnUnauthorized: logoutOnUnauthorized
+            )
           } catch {
             print("Auto-login failed: \(error)")
-            self.logout()
+            if logoutOnUnauthorized {
+              self.logout()
+            }
             throw APIError.unauthorized
           }
         }
-        self.logout()
-        throw APIError.unauthorized
+        if logoutOnUnauthorized {
+          self.logout()
+          throw APIError.unauthorized
+        }
+        throw serverMessageError()
       }
       guard (200...299).contains(httpResponse.statusCode) else {
         print("DEBUG: [makeRequest] HTTP Error: \(httpResponse.statusCode) for \(endpoint)")
-        throw APIError.unknown
+        throw serverMessageError()
       }
     }
     return data
@@ -572,8 +933,7 @@ class APIService: ObservableObject {
 
     Task {
       do {
-        // 请求一个极其轻量的接口来验证 Token 和更新 Cookie
-        _ = try await makeRequest(endpoint: "/dashboard/statistic", retryOn401: true)
+        _ = try await makeRequest(endpoint: "/user/current", retryOn401: true)
         print("Token/Session validation successful.")
       } catch {
         print("Silent token validation background process handled: \(error)")
@@ -584,7 +944,11 @@ class APIService: ObservableObject {
   /// 登录获取 Token
   /// - 对应前端: MoviePilot-Frontend/src/pages/login.vue
   /// - 应用场景: 用户登录验证并获取访问令牌。
-  func login(username: String, password: String) async throws -> Token {
+  func login(
+    username: String,
+    password: String,
+    preserveExistingSessionOnFailure: Bool = false
+  ) async throws -> Token {
     var components = URLComponents()
     components.queryItems = [
       URLQueryItem(name: "username", value: username),
@@ -597,15 +961,26 @@ class APIService: ObservableObject {
     // 传递 retryOn401: false 以防止凭据错误时出现无限循环
     let data = try await makeRequest(
       endpoint: "/login/access-token", method: "POST", body: bodyData, isForm: true,
-      retryOn401: false)
+      retryOn401: false,
+      logoutOnUnauthorized: !preserveExistingSessionOnFailure
+    )
     let tokenResponse = try JSONDecoder().decode(Token.self, from: data)
+    guard tokenResponse.hasLoginAccessibleFeature else {
+      throw APIError.serverMessage(Self.noAccessibleFeatureMessage)
+    }
 
     self.token = tokenResponse.access_token
+    self.currentUser = tokenResponse
     // 成功时保存凭据
     self.storedUsername = username
     self.storedPassword = password
 
     return tokenResponse
+  }
+
+  private static func isNoAccessibleFeatureError(_ error: Error) -> Bool {
+    guard case APIError.serverMessage(let message) = error else { return false }
+    return message.contains(noAccessibleFeatureMessage)
   }
 
   /// 获取媒体统计数据
@@ -638,7 +1013,20 @@ class APIService: ObservableObject {
   func fetchSettings() async throws -> GlobalSettings {
     do {
       let data = try await makeRequest(endpoint: "/system/global?token=moviepilot")
-      let response = try await decodeOrUnwrap(GlobalSettings.self, from: data)
+      var response = try await decodeOrUnwrap(GlobalSettings.self, from: data)
+      if token != nil {
+        do {
+          let userData = try await makeRequest(
+            endpoint: "/system/global/user",
+            retryOn401: false,
+            logoutOnUnauthorized: false
+          )
+          let userSettings = try await decodeOrUnwrap(GlobalSettings.self, from: userData)
+          response.mergeUserSettings(userSettings)
+        } catch {
+          print("DEBUG: [fetchSettings] Failed to fetch user settings: \(error)")
+        }
+      }
       self.settings = response
       return response
     } catch {
@@ -1453,7 +1841,13 @@ class APIService: ObservableObject {
     let hash = SHA256.hash(data: body)
     let cacheKey = hash.compactMap { String(format: "%02x", $0) }.joined()
     if let cached = await seasonsNotExistsCache.get(cacheKey) { return cached }
-    let data = try await makeRequest(endpoint: "/mediaserver/notexists", method: "POST", body: body)
+    let data = try await makeRequest(
+      endpoint: "/mediaserver/notexists",
+      method: "POST",
+      body: body,
+      retryOn401: false,
+      logoutOnUnauthorized: false
+    )
     let result = try await decodeOrUnwrap([NotExistMediaInfo].self, from: data)
     await seasonsNotExistsCache.set(cacheKey, value: result)
     return result
@@ -1650,7 +2044,8 @@ class APIService: ObservableObject {
   /// - 备注: 这里只查询传入 `media.apiMediaId` 对应的订阅；原始 ID + fallback TMDB 的解析顺序由调用方控制。
   func fetchSubscriptionLookup(
     media: MediaInfo,
-    season: Int? = nil
+    season: Int? = nil,
+    allowSessionRefreshOnUnauthorized: Bool = true
   ) async throws -> SubscriptionLookupResult? {
     struct SubscribeLookupResp: Codable {
       let id: Int?
@@ -1681,7 +2076,11 @@ class APIService: ObservableObject {
         "season": season.map(String.init),
         "title": media.title,
       ])
-    let data = try await makeRequest(endpoint: endpoint)
+    let data = try await makeRequest(
+      endpoint: endpoint,
+      retryOn401: allowSessionRefreshOnUnauthorized,
+      logoutOnUnauthorized: allowSessionRefreshOnUnauthorized
+    )
     let resp = try await decodeOrUnwrap(SubscribeLookupResp.self, from: data)
     guard let id = resp.id else { return nil }
     if let resolvedMediaId = resp.apiMediaId {
@@ -1703,7 +2102,11 @@ class APIService: ObservableObject {
   /// - 应用场景: 媒体卡片和详情页 Header 查询订阅状态。
   /// - 备注: 默认状态检查只需要 ID；需要真实媒体归属时请使用 `fetchSubscriptionLookup(media:season:)`。
   func fetchSubscriptionID(media: MediaInfo, season: Int? = nil) async throws -> Int? {
-    try await fetchSubscriptionLookup(media: media, season: season)?.id
+    try await fetchSubscriptionLookup(
+      media: media,
+      season: season,
+      allowSessionRefreshOnUnauthorized: true
+    )?.id
   }
 
   /// 检查特定媒体（及特定季）是否已在用户的订阅列表中
@@ -1735,7 +2138,12 @@ class APIService: ObservableObject {
       }
 
       do {
-        let isSubscribed = try await fetchSubscriptionID(media: media, season: season) != nil
+        let isSubscribed =
+          try await fetchSubscriptionLookup(
+            media: media,
+            season: season,
+            allowSessionRefreshOnUnauthorized: false
+          ) != nil
         guard generation == subscriptionCacheGeneration else {
           continue
         }
@@ -1750,8 +2158,6 @@ class APIService: ObservableObject {
         return isSubscribed
       } catch is CancellationError {
         throw CancellationError()
-      } catch {
-        return false
       }
     }
   }

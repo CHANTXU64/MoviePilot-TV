@@ -154,7 +154,8 @@ class MediaDetailViewModel: ObservableObject {
 
     // ── 判断第二页首行类型 ──
     // 电视剧首行固定是 season（由 preloadTask 异步加载，在 View 层通过 onChange 监听）
-    let isSeasonFirst = fullDetail.type == "电视剧" && fullDetail.tmdb_id != nil
+    let isSeasonFirst =
+      apiService.canAccess(.subscribe) && fullDetail.type == "电视剧" && fullDetail.tmdb_id != nil
 
     if isSeasonFirst {
       // season 由 preloadTask 管理，检查数据是否已实际加载完毕
@@ -285,6 +286,11 @@ class MediaDetailViewModel: ObservableObject {
   /// 刷新订阅状态：同时更新全局订阅和分季订阅（preloadTask 是唯一数据源）
   @discardableResult
   func refreshSubscriptionStatus(forceRefresh: Bool = true) async -> Bool {
+    guard apiService.canAccess(.subscribe) else {
+      preloadTask?.isSubscribed = false
+      return true
+    }
+
     // 使用 TaskGroup 或并发 Task 同时刷新全局和分季订阅
     var resultCount = 0
     var didRefreshAll = true

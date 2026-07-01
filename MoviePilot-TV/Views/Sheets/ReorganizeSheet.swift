@@ -81,17 +81,18 @@ struct ReorganizeSheet: View {
       SheetPicker(
         title: "目的存储",
         selection: Binding(
-          get: { viewModel.form.target_storage },
-          set: { viewModel.form.target_storage = $0 }
+          get: { viewModel.form.target_storage ?? "" },
+          set: { viewModel.form.target_storage = $0.isEmpty ? nil : $0 }
         ),
-        options: viewModel.storages.map { PickerOption(title: $0.name, value: $0.type) }
+        options: [PickerOption(title: "自动", value: "")]
+          + viewModel.storages.map { PickerOption(title: $0.name, value: $0.type) }
       )
 
       SheetPicker(
         title: "整理方式",
         selection: Binding(
-          get: { viewModel.form.transfer_type },
-          set: { viewModel.form.transfer_type = $0 }
+          get: { viewModel.form.transfer_type ?? "" },
+          set: { viewModel.form.transfer_type = $0.isEmpty ? nil : $0 }
         ),
         options: [
           PickerOption(title: "自动", value: ""),
@@ -265,7 +266,7 @@ struct ReorganizeSheet: View {
         Toggle(
           "刮削元数据",
           isOn: Binding(
-            get: { viewModel.form.scrape },
+            get: { viewModel.form.scrape ?? false },
             set: { viewModel.form.scrape = $0 }
           )
         )

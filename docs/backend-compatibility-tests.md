@@ -40,6 +40,12 @@ GitHub CI 没有真实后端账号，`ci.yml` 会显式跳过 `BackendCompatibil
 
 `.env.compatibility` 只用于真实 MoviePilot 后端的只读兼容性检查。已配置时，测试会登录后端并按 TV 端真实页面入口巡检：系统配置、仪表盘、站点/下载器/目录配置、订阅读取、媒体服务器最近添加、下载中任务、推荐货架、发现页、搜索、详情页、演员/人物和分季数据。未配置时，这组测试会自动跳过。
 
+只读套件会把权限敏感接口拆成独立用例，避免一个管理员账号全通过后掩盖普通账号失败：
+
+- `testReadOnlySystemEnvCompatibility` 单独验证 `/system/env`。
+- `testReadOnlyDashboardCompatibility` 单独验证 `/dashboard/statistic`、`/dashboard/storage`、`/dashboard/downloader`。
+- `testReadOnlySystemAndConfigurationCompatibility` 验证配置读取、站点、下载器和目录等 TV 页面入口；`Storages`、`Directories`、`IndexerSites` 与 Web 保持一致，通过登录用户可读的 `/system/setting/{key}` 读取，写配置仍由后端限制为超管。`MediaServers` 仍按上游现有接口读取。
+
 巡检采集到的海报、背景图、头像和媒体服务器图片都会实际下载，并在 tvOS XCTest 运行环境中用系统图片解码能力验证；如果后端改成 Apple TV 不支持的图片格式，即使 API 返回正常也会失败。测试也会检查图片代理 URL 是否把内层 query/fragment 正确保留，避免图片地址被外层参数截断。
 
 这组测试不会新增订阅、删除订阅、添加下载、暂停/恢复下载、重置订阅、触发订阅搜索或执行整理任务。可选的 `MOVIEPILOT_COMPAT_METADATA_QUERY` / `MOVIEPILOT_COMPAT_METADATA_QUERIES` 只会调用元数据搜索和详情读取；如果搜索结果包含合集，还会继续读取合集详情。也可以用 `MOVIEPILOT_COMPAT_COLLECTION_ID` / `MOVIEPILOT_COMPAT_COLLECTION_IDS` 直接指定合集 ID。
@@ -48,9 +54,41 @@ GitHub CI 没有真实后端账号，`ci.yml` 会显式跳过 `BackendCompatibil
 
 如果在独立 worktree 中运行测试，可以用 `MOVIEPILOT_COMPAT_ENV_FILE=/absolute/path/.env.compatibility` 指向已有配置文件；命令行环境变量会覆盖配置文件中的同名值。
 
+## 多账号兼容矩阵
+
+如果配置了 `MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES`，真实后端兼容套件会在主账号之外，用额外账号重新执行同一套 `APIService` 调用路径。测试不会根据账号权限改走不同函数；普通账号失败时，日志会记录该账号的 `super_user` 和 `permissions`，用于判断失败是否来自后端权限收紧或 TV 端未适配。
+
+`MOVIEPILOT_COMPAT_ADDITIONAL_PASSWORDS` 与额外用户名按顺序对应；本地确实共用密码时可以留空，测试会回退使用 `MOVIEPILOT_COMPAT_PASSWORD`。如果某个密码本身包含逗号，在同一行中把该逗号写成 `\,`，例如 `first-password,pa\,ssword` 会解析为两个密码 `first-password` 和 `pa,ssword`。模板文件中应填写自己的测试账号用户名和密码，不要复用示例值。
+
+四个单权限账号不要放进 `MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES`。它们使用下面的专用配置，只运行 `BackendCompatibilityPermissionBehaviorTests`，不会参加只读巡检或副作用套件；即使用户名误留在 `MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES` 中，也会从普通兼容矩阵里排除：
+
+```sh
+MOVIEPILOT_COMPAT_PERMISSION_BEHAVIOR_ACCOUNTS=test_discovery=discovery,test_search=search,test_subscribe=subscribe,test_manage=manage
+MOVIEPILOT_COMPAT_PERMISSION_PASSWORDS=discovery-password,search-password,subscribe-password,manage-password
+```
+
+`MOVIEPILOT_COMPAT_PERMISSION_PASSWORDS` 按 `MOVIEPILOT_COMPAT_PERMISSION_BEHAVIOR_ACCOUNTS` 的顺序对应；留空项会回退使用 `MOVIEPILOT_COMPAT_PASSWORD`。只想验证权限行为时，直接跑这一小组即可：
+
+```sh
+xcodebuild test \
+  -project "MoviePilot-TV.xcodeproj" \
+  -scheme "MoviePilot-TV" \
+  -configuration Debug \
+  -destination "platform=tvOS Simulator,name=Apple TV" \
+  -parallel-testing-enabled NO \
+  -maximum-concurrent-test-simulator-destinations 1 \
+  CODE_SIGNING_ALLOWED=NO \
+  CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGN_IDENTITY="" \
+  -skipPackagePluginValidation \
+  -only-testing:MoviePilot-TV-Tests/BackendCompatibilityPermissionBehaviorTests
+```
+
 ## 副作用套件
 
 副作用测试默认开启。运行 `BackendCompatibilitySideEffectTests` 时，已配置真实后端的情况下会默认执行下面这些流程；如果某次兼容性检查不想跑某一项，可在 `.env.compatibility` 中把对应开关设为 `false`。
+
+如果配置了额外账号，副作用套件也会用每个账号执行同一批流程；这会按账号重复触发真实后台动作。
 
 - `MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_SEARCH=true`：取现有订阅列表中有 ID 和原始状态的条目，触发订阅搜索；执行后会把订阅恢复为原始状态，包括原本已暂停的 `state=S`。
 - `MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_UPDATE=true`：读取现有订阅详情，然后用原详情原样保存一次，不修改参数。

@@ -247,9 +247,11 @@ class SearchViewModel: ObservableObject {
   /// 执行初始搜索：根据 searchType 决定是资源搜索还是聚合元数据搜索
   func autoSearch() async {
     guard !query.isEmpty else { return }
+    guard apiService.canAccess(.search) else { return }
     searchGeneration += 1
     let currentSearchGeneration = searchGeneration
     let searchQuery = query
+    let sessionSnapshot = apiService.sessionSnapshot()
     
     searchStreamTask?.cancel()
     
@@ -268,12 +270,16 @@ class SearchViewModel: ObservableObject {
         var accumulatedResults: [Context] = []
         
         do {
-          guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+          guard canPublishSearchResult(
+            generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+          else { return }
 
           let stream = APIService.shared.searchTitleStream(keyword: searchQuery, sites: sitesStr)
           
           for try await event in stream {
-            guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+            guard canPublishSearchResult(
+              generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+            else { return }
             
             if let text = event.text {
               self.searchProgressText = text
@@ -298,39 +304,53 @@ class SearchViewModel: ObservableObject {
             if event.type == "done" {
               // 与 Web v2.13.2 保持一致：给后端搜索结果缓存写入留出收尾时间。
               try? await Task.sleep(nanoseconds: searchStreamDoneCloseDelay)
-              guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+              guard canPublishSearchResult(
+                generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+              else { return }
               break
             }
           }
           
-          guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+          guard canPublishSearchResult(
+            generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+          else { return }
 
           // 应用自定义过滤规则
           let filteredResults = await self.applyCustomFilter(to: accumulatedResults)
-          guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+          guard canPublishSearchResult(
+            generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+          else { return }
 
           self.resourceResults = filteredResults
           self.isLoading = false
           self.hasSearched = true
         } catch {
           print("Stream Search error: \(error)")
-          guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+          guard canPublishSearchResult(
+            generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+          else { return }
 
           do {
             var fallbackResults = try await self.apiService.searchResources(
               keyword: searchQuery,
               sites: sitesStr
             )
-            guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+            guard canPublishSearchResult(
+              generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+            else { return }
 
             fallbackResults = await self.applyCustomFilter(to: fallbackResults)
-            guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+            guard canPublishSearchResult(
+              generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+            else { return }
 
             self.resourceResults = fallbackResults
           } catch {
             print("Fallback Search error: \(error)")
           }
-          guard searchGeneration == currentSearchGeneration, !Task.isCancelled else { return }
+          guard canPublishSearchResult(
+            generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+          else { return }
 
           self.isLoading = false
           self.hasSearched = true
@@ -345,20 +365,25 @@ class SearchViewModel: ObservableObject {
       guard let moviePag = moviePaginator,
         let tvPag = tvPaginator,
         let collectionPag = collectionPaginator,
-        let personPag = personPaginator,
-        let sharePag = subscriptionSharePaginator
+        let personPag = personPaginator
       else { break }
+      let sharePag = subscriptionSharePaginator
 
       // 并发刷新所有分页器
       let movieTask = Task { @MainActor in await moviePag.refresh() }
       let tvTask = Task { @MainActor in await tvPag.refresh() }
       let collectionTask = Task { @MainActor in await collectionPag.refresh() }
       let personTask = Task { @MainActor in await personPag.refresh() }
-      let shareTask = Task { @MainActor in await sharePag.refresh() }
+      let shareTask = sharePag.map { paginator in
+        Task { @MainActor in await paginator.refresh() }
+      }
       _ = await (
-        movieTask.value, tvTask.value, collectionTask.value, personTask.value, shareTask.value
+        movieTask.value, tvTask.value, collectionTask.value, personTask.value
       )
-      guard searchGeneration == currentSearchGeneration else { return }
+      await shareTask?.value
+      guard canPublishSearchResult(
+        generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+      else { return }
 
       // 基于第一页的结果计算"最佳结果"
       // 由于 media 是电影+电视剧的混合，我们需要把它们组合起来传递
@@ -366,12 +391,24 @@ class SearchViewModel: ObservableObject {
         media: moviePag.items + tvPag.items,
         collections: collectionPag.items,
         persons: personPag.items,
-        shares: sharePag.items
+        shares: sharePag?.items ?? []
       )
     }
-    guard searchGeneration == currentSearchGeneration else { return }
+    guard canPublishSearchResult(
+      generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+    else { return }
     isLoading = false
     hasSearched = true
+  }
+
+  private func canPublishSearchResult(
+    generation: Int,
+    sessionSnapshot: APIServiceSessionSnapshot
+  ) -> Bool {
+    searchGeneration == generation
+      && !Task.isCancelled
+      && apiService.isSessionUnchanged(from: sessionSnapshot)
+      && apiService.canAccess(.search)
   }
 
   // MARK: - Paginator 创建
@@ -473,32 +510,32 @@ class SearchViewModel: ObservableObject {
       }
     )
 
-    // --- Subscription Share Paginator ---
-    var shareSeenKeys = Set<String>()
-    let newSubscriptionSharePaginator = Paginator<MediaInfo>(
-      threshold: 10,
-      fetcher: { @MainActor [apiService] page in
-        // 获取原始数据
-        let shareItems = try await apiService.searchSubscriptionShares(query: query, page: page)
-        // 转换为 MediaInfo
-        return shareItems.map { $0.toMediaInfo() }
-      },
-      processor: { @MainActor currentItems, newItems in
-        let uniqueNewItems = MediaInfo.deduplicateSubscriptionShareMedia(
-          newItems,
-          existingKeys: &shareSeenKeys
-        )
-        if uniqueNewItems.isEmpty { return false }
-        currentItems.append(contentsOf: uniqueNewItems)
-        return true
-      },
-      imageURLsProvider: { item in
-        [item.imageURLs.poster].compactMap(\.self)
-      },
-      onReset: { @MainActor in
-        shareSeenKeys.removeAll()
-      }
-    )
+    var newSubscriptionSharePaginator: Paginator<MediaInfo>?
+    if apiService.canAccess(.subscribe) {
+      var shareSeenKeys = Set<String>()
+      newSubscriptionSharePaginator = Paginator<MediaInfo>(
+        threshold: 10,
+        fetcher: { @MainActor [apiService] page in
+          let shareItems = try await apiService.searchSubscriptionShares(query: query, page: page)
+          return shareItems.map { $0.toMediaInfo() }
+        },
+        processor: { @MainActor currentItems, newItems in
+          let uniqueNewItems = MediaInfo.deduplicateSubscriptionShareMedia(
+            newItems,
+            existingKeys: &shareSeenKeys
+          )
+          if uniqueNewItems.isEmpty { return false }
+          currentItems.append(contentsOf: uniqueNewItems)
+          return true
+        },
+        imageURLsProvider: { item in
+          [item.imageURLs.poster].compactMap(\.self)
+        },
+        onReset: { @MainActor in
+          shareSeenKeys.removeAll()
+        }
+      )
+    }
 
     // 设置 Paginator 实例
     self.moviePaginator = newMoviePaginator
@@ -516,7 +553,7 @@ class SearchViewModel: ObservableObject {
       .sink { [weak self] _ in self?.objectWillChange.send() }
     personPaginatorCancellable = newPersonPaginator.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
-    subscriptionSharePaginatorCancellable = newSubscriptionSharePaginator.objectWillChange
+    subscriptionSharePaginatorCancellable = newSubscriptionSharePaginator?.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
   }
 

@@ -14,7 +14,11 @@ final class SystemViewDefaultStyleTests: XCTestCase {
   func testContentViewLabelsSystemTabAsSettings() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/ContentView.swift")
 
-    XCTAssertTrue(source.contains("SystemView(isSelected: selectedTab == 5)"))
+    XCTAssertTrue(
+      source.contains(
+        "SystemView(isSelected: selectedTab == .system)"
+      )
+    )
     XCTAssertTrue(source.contains("Label(\"设置\", systemImage: \"gear\")"))
     XCTAssertFalse(source.contains("Label(\"系统\", systemImage: \"gear\")"))
   }
@@ -27,6 +31,34 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("\"APP 信息\""))
     XCTAssertTrue(source.contains("\"MoviePilot TV APP\""))
     XCTAssertFalse(source.contains("\"连接与版本\""))
+  }
+
+  func testSubscriptionCompatibilityChecklistTracksPermissionContractRisk() throws {
+    let source = try Self.source(at: "docs/subscription-compatibility-checklist.md")
+
+    XCTAssertTrue(source.contains("用户权限契约风险"))
+    XCTAssertTrue(source.contains("权限契约仍不稳定"))
+    XCTAssertTrue(source.contains("Token.super_user"))
+    XCTAssertTrue(source.contains("permissions.subscribe"))
+    XCTAssertTrue(source.contains("/mediaserver/notexists"))
+    XCTAssertTrue(source.contains("不得要求 `Token.super_user`"))
+    XCTAssertTrue(source.contains("真实错误交给后端返回"))
+    XCTAssertTrue(source.contains("canAccess(.subscribe)"))
+    XCTAssertTrue(source.contains("不显示入库状态徽章"))
+    XCTAssertTrue(source.contains("best_version"))
+    XCTAssertTrue(source.contains("不要只按 HTTP 状态码"))
+    XCTAssertTrue(source.contains("app/core/security.py"))
+    XCTAssertTrue(source.contains("app/db/user_oper.py"))
+    XCTAssertTrue(source.contains("app/api/endpoints/login.py"))
+    XCTAssertTrue(source.contains("token校验不通过"))
+    XCTAssertTrue(source.contains("400 用户权限不足"))
+  }
+
+  func testSubscribeSeasonViewHidesAvailabilityBadgeWhenStatusTextIsNil() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SubscribeSeasonView.swift")
+
+    XCTAssertTrue(source.contains("let bottomLeft = statusText.map"))
+    XCTAssertTrue(source.contains("bottomLeftText: bottomLeft"))
   }
 
   func testSystemViewExitHandlersOnlyRunWhenSettingsTabIsActive() throws {
@@ -82,6 +114,65 @@ final class SystemViewDefaultStyleTests: XCTestCase {
 
     XCTAssertTrue(source.contains("Task { @MainActor [weak self] in"))
     XCTAssertTrue(source.contains("self?.clearAll()"))
+  }
+
+  func testContentViewNormalizesHiddenSelectedTabOnAppear() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/ContentView.swift")
+
+    XCTAssertTrue(source.contains(".onAppear {"))
+    XCTAssertTrue(
+      source.contains(
+        "selectedTab = ContentViewModel.resolvedSelectedTab(selectedTab, visibleTabs: viewModel.visibleTabs)"
+      )
+    )
+  }
+
+  func testMediaDetailHeaderFocusOnlyTargetsVisiblePermittedActions() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
+
+    XCTAssertTrue(source.contains("@ObservedObject private var apiService = APIService.shared"))
+    XCTAssertTrue(source.contains("private var canJumpToTMDB: Bool"))
+    XCTAssertTrue(source.contains("private var preferredHeaderFocus: ButtonField?"))
+    XCTAssertTrue(source.contains("if !hasAppeared, let preferredHeaderFocus"))
+    XCTAssertFalse(source.contains(".defaultFocus($focusedButton, preferredHeaderFocus)"))
+  }
+
+  func testSystemViewModelRechecksPermissionBeforePublishingCustomRules() throws {
+    let source = try Self.source(at: "MoviePilot-TV/ViewModels/SystemViewModel.swift")
+
+    XCTAssertTrue(source.contains("let rules = try await APIService.shared.fetchCustomFilterRules()"))
+    XCTAssertTrue(source.contains("guard APIService.shared.canAccess(.search) else {"))
+    XCTAssertTrue(source.contains("customFilterRules = rules"))
+  }
+
+  func testSystemViewScopesLocalFeatureSettingsByPermission() throws {
+    let viewSource = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+    let viewModelSource = try Self.source(at: "MoviePilot-TV/ViewModels/SystemViewModel.swift")
+
+    XCTAssertTrue(viewSource.contains("@ObservedObject private var apiService = APIService.shared"))
+    XCTAssertTrue(viewSource.contains("private var canConfigureSubscriptions: Bool"))
+    XCTAssertTrue(viewSource.contains("private var canConfigureSearch: Bool"))
+    XCTAssertTrue(viewSource.contains("if canConfigureSubscriptions {"))
+    XCTAssertTrue(viewSource.contains("if canConfigureSearch {"))
+    XCTAssertTrue(viewModelSource.contains("guard APIService.shared.canAccess(.search) else {"))
+  }
+
+  func testRecommendBackendCompatibilityScansShelvesIndependently() throws {
+    let source = try Self.source(at: "MoviePilot-TV-Tests/BackendCompatibilityTests.swift")
+
+    XCTAssertTrue(source.contains("for shelf in RecommendViewModel.allShelves {"))
+    XCTAssertTrue(source.contains("\"recommend shelf \\(shelf.title)\""))
+    XCTAssertFalse(source.contains("\"recommend shelves\""))
+  }
+
+  func testFilterRuleGroupsCompatibilityProbeUsesSubscribePermission() throws {
+    let source = try Self.source(at: "MoviePilot-TV-Tests/BackendCompatibilityTests.swift")
+    let start = try XCTUnwrap(source.range(of: "\"filter-rule groups\""))
+    let end = try XCTUnwrap(source.range(of: "\"custom filter rules\"", range: start.upperBound..<source.endIndex))
+    let probe = String(source[start.lowerBound..<end.lowerBound])
+
+    XCTAssertTrue(probe.contains("requirement: .permission(.subscribe)"))
+    XCTAssertFalse(probe.contains("requirement: .superUser"))
   }
 
   private static func source(at path: String) throws -> String {

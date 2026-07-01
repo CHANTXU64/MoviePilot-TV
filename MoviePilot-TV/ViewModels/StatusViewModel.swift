@@ -11,6 +11,13 @@ class StatusViewModel: ObservableObject {
   private let apiService = APIService.shared
 
   func refreshAllData() async {
+    guard apiService.canAccess(.manage) else {
+      statistic = nil
+      storage = nil
+      downloader = nil
+      return
+    }
+
     // 刷新统计信息
     do {
       async let stat = apiService.fetchStatistic()

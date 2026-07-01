@@ -82,6 +82,7 @@ class SubscribeSeasonViewModel: ObservableObject {
   @Published var selectedGroupId: String = ""
   // 季库状态映射：0-已入库 (Available), 1-部分缺失 (Partial), 2-完全缺失 (Missing)
   @Published var seasonsNotExisted: [Int: Int] = [:]
+  @Published var isSeasonAvailabilityLoaded: Bool = false
   @Published var isLoading: Bool = false
   @Published var errorMessage: String?
 
@@ -160,6 +161,12 @@ class SubscribeSeasonViewModel: ObservableObject {
 
   /// 调用后端接口，比对媒体库中已有的集数，确定每一季的完整性
   func checkSeasonsStatus() async {
+    isSeasonAvailabilityLoaded = false
+    guard APIService.shared.canAccess(.subscribe) else {
+      seasonsNotExisted = [:]
+      return
+    }
+
     do {
       // 构建临时的 MediaInfo 结构用于状态查询，需手动注入选中的剧集组 (episode_group)
       // 逻辑参考 Vue 前端实现，确保后端能正确识别分组后的集数
@@ -223,8 +230,10 @@ class SubscribeSeasonViewModel: ObservableObject {
         newStatus[item.season] = state
       }
       self.seasonsNotExisted = newStatus
+      self.isSeasonAvailabilityLoaded = true
 
     } catch {
+      self.seasonsNotExisted = [:]
       print("检查季入库状态失败: \(error)")
     }
   }
@@ -232,6 +241,12 @@ class SubscribeSeasonViewModel: ObservableObject {
   /// 查询当前媒体所有分季订阅摘要，填充 seasonSubscriptions 和 subscribedSeasons
   @discardableResult
   func checkSubscriptionStatus(forceRefresh: Bool = false) async -> Bool {
+    guard APIService.shared.canAccess(.subscribe) else {
+      seasonSubscriptions = [:]
+      subscribedSeasons = []
+      return false
+    }
+
     do {
       try await refreshSubscriptionSummaries(forceRefresh: forceRefresh)
       return true
@@ -253,9 +268,10 @@ class SubscribeSeasonViewModel: ObservableObject {
   }
 
   func prepareSubscription(seasonNumber: Int) {
-    // 逻辑参考 Vue：如果该季已经完整入库 (state 为 0 或不在字典中)，默认开启“洗版”模式 (best_version = 1)
+    // 如果已确认该季完整入库，默认开启“洗版”模式；未知状态不默认洗版。
     let best_version =
-      (seasonsNotExisted[seasonNumber] == nil || seasonsNotExisted[seasonNumber] == 0)
+      (isSeasonAvailabilityLoaded
+        && (seasonsNotExisted[seasonNumber] == nil || seasonsNotExisted[seasonNumber] == 0))
       ? 1 : 0
 
     self.sheetSubscribe = Subscribe(
@@ -304,7 +320,8 @@ class SubscribeSeasonViewModel: ObservableObject {
 
   /// 根据入库状态返回对应的资产颜色名称
   func getStatusColor(season: Int) -> String {
-    guard let state = seasonsNotExisted[season] else { return "green" }  // 默认已入库
+    guard isSeasonAvailabilityLoaded else { return "gray" }
+    guard let state = seasonsNotExisted[season] else { return "green" }
     switch state {
     case 1: return "orange"  // 部分缺失
     case 2: return "red"  // 完全缺失
@@ -312,7 +329,8 @@ class SubscribeSeasonViewModel: ObservableObject {
     }
   }
 
-  func getStatusText(season: Int) -> String {
+  func getStatusText(season: Int) -> String? {
+    guard isSeasonAvailabilityLoaded else { return nil }
     guard let state = seasonsNotExisted[season] else { return "已入库" }
     switch state {
     case 1: return "部分缺失"

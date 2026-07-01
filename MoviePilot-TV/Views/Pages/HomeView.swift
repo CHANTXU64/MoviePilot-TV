@@ -141,6 +141,10 @@ private struct MediaSectionView: View {
   @FocusState private var isTopRedirectorFocused: Bool
   @State private var hasRedirectedFocus: Bool = false
 
+  private var canSearchResources: Bool {
+    APIService.shared.canAccess(.search)
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       HStack(spacing: 12) {
@@ -218,23 +222,27 @@ private struct MediaSectionView: View {
                 } label: {
                   Label("TMDB详情页", systemImage: "link")
                 }
-                Button {
-                  Task {
-                    let info = MediaInfo(title: item.title, type: item.type, year: item.subtitle)
-                    if let target = await mediaActionHandler.getTMDBJumpTarget(for: info) {
-                      let request = await mediaActionHandler.searchResourcesTargetUsingDefaultSites(
-                        for: target)
-                      onSearchResource?(request)
-                    } else {
-                      let sites = await SystemViewModel.normalizedDefaultSearchSitesString()
-                      let request = ResourceSearchRequest(
-                        keyword: item.title, type: item.type, area: nil, title: nil, year: nil,
-                        season: nil, mediaInfo: nil, sites: sites)
-                      onSearchResource?(request)
+                if canSearchResources {
+                  Button {
+                    Task {
+                      guard APIService.shared.canAccess(.search) else { return }
+                      let info = MediaInfo(title: item.title, type: item.type, year: item.subtitle)
+                      if let target = await mediaActionHandler.getTMDBJumpTarget(for: info) {
+                        let request =
+                          await mediaActionHandler.searchResourcesTargetUsingDefaultSites(
+                            for: target)
+                        onSearchResource?(request)
+                      } else {
+                        let sites = await SystemViewModel.normalizedDefaultSearchSitesString()
+                        let request = ResourceSearchRequest(
+                          keyword: item.title, type: item.type, area: nil, title: nil, year: nil,
+                          season: nil, mediaInfo: nil, sites: sites)
+                        onSearchResource?(request)
+                      }
                     }
+                  } label: {
+                    Label("搜索资源", systemImage: "magnifyingglass")
                   }
-                } label: {
-                  Label("搜索资源", systemImage: "magnifyingglass")
                 }
               }
             }

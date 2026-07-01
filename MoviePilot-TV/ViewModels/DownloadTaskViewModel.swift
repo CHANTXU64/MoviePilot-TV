@@ -12,6 +12,10 @@ class DownloadTaskViewModel: ObservableObject {
   private var downloadLoadGeneration = 0
 
   func initialLoad() async {
+    guard apiService.canAccess(.manage) else {
+      clearForRestrictedUser()
+      return
+    }
     if clients.isEmpty {
       do {
         clients = try await apiService.fetchDownloadClients()
@@ -26,6 +30,10 @@ class DownloadTaskViewModel: ObservableObject {
   }
 
   func loadDownloads() async {
+    guard apiService.canAccess(.manage) else {
+      clearForRestrictedUser()
+      return
+    }
     downloadLoadGeneration += 1
     let currentGeneration = downloadLoadGeneration
     let clientName = selectedClient
@@ -59,7 +67,15 @@ class DownloadTaskViewModel: ObservableObject {
     }
   }
 
+  private func clearForRestrictedUser() {
+    downloadLoadGeneration += 1
+    clients = []
+    selectedClient = ""
+    downloads = []
+  }
+
   func stopDownload(hash: String) async -> Bool {
+    guard apiService.canAccess(.manage) else { return false }
     guard !selectedClient.isEmpty else { return false }
     do {
       let (success, message) = try await apiService.stopDownload(
@@ -75,6 +91,7 @@ class DownloadTaskViewModel: ObservableObject {
   }
 
   func startDownload(hash: String) async -> Bool {
+    guard apiService.canAccess(.manage) else { return false }
     guard !selectedClient.isEmpty else { return false }
     do {
       let (success, message) = try await apiService.startDownload(
@@ -91,6 +108,7 @@ class DownloadTaskViewModel: ObservableObject {
 
   @MainActor
   func deleteDownload(hash: String) async {
+    guard apiService.canAccess(.manage) else { return }
     let clientName = selectedClient
     guard !clientName.isEmpty else { return }
     do {

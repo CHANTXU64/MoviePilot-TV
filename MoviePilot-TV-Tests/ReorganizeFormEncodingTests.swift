@@ -55,6 +55,27 @@ final class ReorganizeFormEncodingTests: XCTestCase {
     XCTAssertTrue(json["target_path"] is NSNull)
   }
 
+  func testAutomaticOptionsEncodeAsNull() throws {
+    let form = ReorganizeForm(
+      fileitem: nil,
+      fileitems: nil,
+      logid: 42,
+      target_storage: nil,
+      transfer_type: nil,
+      target_path: "",
+      min_filesize: 0,
+      scrape: nil,
+      from_history: true
+    )
+
+    let json = try encodedJSONObject(form)
+
+    XCTAssertTrue(json["target_storage"] is NSNull)
+    XCTAssertTrue(json["transfer_type"] is NSNull)
+    XCTAssertTrue(json["target_path"] is NSNull)
+    XCTAssertTrue(json["scrape"] is NSNull)
+  }
+
   private func encodedJSONObject(_ form: ReorganizeForm) throws -> [String: Any] {
     let data = try JSONEncoder().encode(form)
     return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])

@@ -34,6 +34,10 @@ enum CustomFilterService {
       return contexts
     }
 
+    guard apiService.canAccess(.search) else {
+      return contexts
+    }
+
     let rules = try await apiService.fetchCustomFilterRules()
     var finalContexts = contexts
 

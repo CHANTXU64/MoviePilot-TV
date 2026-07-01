@@ -57,6 +57,12 @@ class SubscribeSheetViewModel: ObservableObject {
   }
 
   func loadData() async {
+    guard apiService.canAccess(.subscribe) else {
+      clearLoadedOptions()
+      return
+    }
+
+    let sessionSnapshot = apiService.sessionSnapshot()
     isLoading = true
     defer { isLoading = false }
 
@@ -82,15 +88,27 @@ class SubscribeSheetViewModel: ObservableObject {
           print("Failed to create subscription")
           return  // TODO: 处理错误状态（例如，关闭页面或显示警报）
         }
+        guard canPublishLoadResult(from: sessionSnapshot) else {
+          clearLoadedOptions()
+          return
+        }
 
         // 更新本地 ID
         self.subscribe.id = newId
 
         // 立即暂停
         _ = try await apiService.updateSubscriptionStatus(id: newId, state: "S")
+        guard canPublishLoadResult(from: sessionSnapshot) else {
+          clearLoadedOptions()
+          return
+        }
 
         // 获取完整的订阅详情（以获得服务器端的默认值）
         let fullSubscribe = try await apiService.fetchSubscription(id: newId)
+        guard canPublishLoadResult(from: sessionSnapshot) else {
+          clearLoadedOptions()
+          return
+        }
         self.subscribe = fullSubscribe
 
         isCreatedAndPaused = true
@@ -105,20 +123,41 @@ class SubscribeSheetViewModel: ObservableObject {
       async let sitesTask = apiService.fetchSites()
       async let downloadersTask = apiService.fetchDownloadClients()
       async let directoriesTask = apiService.fetchDirectories()
-      async let filtersTask = apiService.fetchFilterRuleGroups()
 
-      let (s, d, dir, f) = try await (sitesTask, downloadersTask, directoriesTask, filtersTask)
+      let (s, d, dir) = try await (sitesTask, downloadersTask, directoriesTask)
+      let f = try await apiService.fetchFilterRuleGroups()
+      guard canPublishLoadResult(from: sessionSnapshot) else {
+        clearLoadedOptions()
+        return
+      }
       self.sites = s
       self.downloaders = d
       self.directories = dir
       self.filterGroups = f
 
       if subscribe.type == "电视剧", let tmdbId = subscribe.tmdbid {
-        self.episodeGroups = try await apiService.fetchEpisodeGroups(tmdbId: tmdbId)
+        let groups = try await apiService.fetchEpisodeGroups(tmdbId: tmdbId)
+        guard canPublishLoadResult(from: sessionSnapshot) else {
+          clearLoadedOptions()
+          return
+        }
+        self.episodeGroups = groups
       }
     } catch {
       print("Failed to load subscribe options: \(error)")
     }
+  }
+
+  private func canPublishLoadResult(from snapshot: APIServiceSessionSnapshot) -> Bool {
+    apiService.isSessionUnchanged(from: snapshot) && apiService.canAccess(.subscribe)
+  }
+
+  private func clearLoadedOptions() {
+    sites = []
+    downloaders = []
+    directories = []
+    filterGroups = []
+    episodeGroups = []
   }
 
   func save() async -> Bool {

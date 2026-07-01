@@ -216,44 +216,99 @@ class SystemViewModel: ObservableObject {
 
   /// 从后端加载系统环境和用户信息
   func loadSystemInfo() async {
+    let sessionSnapshot = APIService.shared.sessionSnapshot()
     self.serverURL = APIService.shared.baseURL
     self.username =
       KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username")
       ?? UserDefaults.standard.string(forKey: "username")
       ?? "未知"
+    let cachedBackendVersion = normalizedBackendVersion(APIService.shared.settings?.BACKEND_VERSION)
+    self.backendVersion = cachedBackendVersion
+
+    if APIService.shared.isLoggedIn && APIService.shared.canAccess(.manage) {
+      do {
+        let env = try await APIService.shared.fetchSystemEnv()
+        guard APIService.shared.isSessionUnchanged(from: sessionSnapshot) else { return }
+        if let envVersion = normalizedBackendVersion(env.VERSION) {
+          self.backendVersion = envVersion
+          return
+        }
+      } catch {
+        print("❌ [SystemViewModel] 获取后端版本号失败: \(error)")
+      }
+    }
 
     do {
-      let env = try await APIService.shared.fetchSystemEnv()
-      self.backendVersion = env.VERSION
+      let settings = try await APIService.shared.fetchSettings()
+      guard APIService.shared.isSessionUnchanged(from: sessionSnapshot) else { return }
+      self.backendVersion = normalizedBackendVersion(settings.BACKEND_VERSION) ?? backendVersion
     } catch {
-      print("❌ [SystemViewModel] 获取后端版本号失败: \(error)")
+      print("❌ [SystemViewModel] 获取公开后端版本号失败: \(error)")
     }
+  }
+
+  private func normalizedBackendVersion(_ version: String?) -> String? {
+    guard let trimmed = version?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !trimmed.isEmpty
+    else {
+      return nil
+    }
+    return trimmed
   }
 
   // MARK: - 站点加载
 
   /// 从后端加载站点列表
   func loadSites() async {
+    guard APIService.shared.canAccess(.search) else {
+      availableSites = []
+      return
+    }
     guard !isLoadingSites else { return }
+    let sessionSnapshot = APIService.shared.sessionSnapshot()
     isLoadingSites = true
+    defer {
+      isLoadingSites = false
+    }
     do {
-      availableSites = try await APIService.shared.fetchSites()
+      let sites = try await APIService.shared.fetchSites()
+      guard APIService.shared.isSessionUnchanged(from: sessionSnapshot),
+        APIService.shared.canAccess(.search)
+      else {
+        availableSites = []
+        return
+      }
+      availableSites = sites
       defaultSearchSites = defaultSearchSites
       print("✅ [SystemViewModel] 加载到 \(availableSites.count) 个站点")
     } catch {
       print("❌ [SystemViewModel] 加载站点失败: \(error)")
     }
-    isLoadingSites = false
   }
 
   // MARK: - 自定义过滤规则加载
 
   /// 从后端加载自定义过滤规则
   func loadCustomFilterRules() async {
+    guard APIService.shared.canAccess(.search) else {
+      customFilterRules = []
+      return
+    }
     guard !isLoadingRules else { return }
+    let sessionSnapshot = APIService.shared.sessionSnapshot()
     isLoadingRules = true
+    defer {
+      isLoadingRules = false
+    }
     do {
-      customFilterRules = try await APIService.shared.fetchCustomFilterRules()
+      let rules = try await APIService.shared.fetchCustomFilterRules()
+      guard APIService.shared.isSessionUnchanged(from: sessionSnapshot),
+        APIService.shared.canAccess(.search)
+      else {
+        customFilterRules = []
+        return
+      }
+      customFilterRules = rules
       print("✅ [SystemViewModel] 加载到 \(customFilterRules.count) 个自定义过滤规则")
       // 如果选中的规则 ID 不在列表中，清除选择
       if let selectedHardId = selectedHardFilterRuleId,
@@ -271,7 +326,6 @@ class SystemViewModel: ObservableObject {
     } catch {
       print("❌ [SystemViewModel] 加载自定义过滤规则失败: \(error)")
     }
-    isLoadingRules = false
   }
 
   // MARK: - 静态方法：供 ViewModel 层读取当前选中规则
@@ -296,6 +350,7 @@ class SystemViewModel: ObservableObject {
   static func normalizedCurrentDefaultSearchSites() async -> Set<Int> {
     let storedSites = currentDefaultSearchSites()
     guard !storedSites.isEmpty else { return [] }
+    guard APIService.shared.canAccess(.search) else { return [] }
 
     do {
       let availableSites = try await APIService.shared.fetchSites()

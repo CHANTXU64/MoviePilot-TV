@@ -76,6 +76,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     )
 
     service.baseURL = "http://download-tests.local"
+    configureManageUser(service)
 
     let viewModel = DownloadTaskViewModel()
     viewModel.selectedClient = "old"
@@ -117,6 +118,54 @@ final class DownloadTaskViewModelTests: XCTestCase {
     )
   }
 
+  func testPendingDownloadLoadDoesNotPublishAfterPermissionIsRestricted() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(DownloadTaskURLProtocol.self))
+    defer { URLProtocol.unregisterClass(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    let requestGate = DownloadTaskAsyncGate()
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON(
+      downloadPayload(
+        hash: "stale-hash", title: "Stale Task", username: "old-user", progress: 10),
+      forClient: "old",
+      waitFor: requestGate
+    )
+
+    service.baseURL = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel()
+    viewModel.selectedClient = "old"
+
+    let oldLoadTask = Task { @MainActor in
+      await viewModel.loadDownloads()
+    }
+    defer { oldLoadTask.cancel() }
+
+    try await withTimeout("old client request to start") {
+      await DownloadTaskURLProtocol.stub.waitForRequest(clientName: "old")
+    }
+
+    configureRestrictedUser(service)
+    await viewModel.loadDownloads()
+
+    XCTAssertTrue(viewModel.downloads.isEmpty)
+
+    await requestGate.open()
+    try await withTimeout("old client load to finish") {
+      await oldLoadTask.value
+    }
+
+    XCTAssertTrue(
+      viewModel.downloads.isEmpty,
+      "Late download responses must not repopulate state after the user loses manage access."
+    )
+  }
+
   func testOlderClientLoadThatCompletesLaterDoesNotMutateCurrentClientDownloadWithSameId()
     async throws
   {
@@ -144,6 +193,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     )
 
     service.baseURL = "http://download-tests.local"
+    configureManageUser(service)
 
     let viewModel = DownloadTaskViewModel()
     viewModel.selectedClient = "old"
@@ -223,6 +273,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     )
 
     service.baseURL = "http://download-tests.local"
+    configureManageUser(service)
 
     let viewModel = DownloadTaskViewModel()
     viewModel.selectedClient = "same"
@@ -345,6 +396,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     )
 
     service.baseURL = "http://download-tests.local"
+    configureManageUser(service)
 
     let viewModel = DownloadTaskViewModel()
     viewModel.selectedClient = "same"
@@ -385,6 +437,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     )
 
     service.baseURL = "http://download-tests.local"
+    configureManageUser(service)
 
     let viewModel = DownloadTaskViewModel()
     viewModel.selectedClient = "old"
@@ -461,6 +514,38 @@ final class DownloadTaskViewModelTests: XCTestCase {
   private func decodeDownloads(_ json: String) throws -> [DownloadingInfo] {
     try JSONDecoder().decode([DownloadingInfo].self, from: Data(json.utf8))
   }
+
+  private func configureManageUser(_ service: APIService) {
+    service.currentUser = Token(
+      access_token: "download-task-tests",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        UserPermissionKey.discovery.rawValue: false,
+        UserPermissionKey.search.rawValue: false,
+        UserPermissionKey.subscribe.rawValue: false,
+        UserPermissionKey.manage.rawValue: true,
+      ],
+      user_name: "download-manager",
+      avatar: nil
+    )
+  }
+
+  private func configureRestrictedUser(_ service: APIService) {
+    service.currentUser = Token(
+      access_token: "download-task-restricted-tests",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        UserPermissionKey.discovery.rawValue: true,
+        UserPermissionKey.search.rawValue: true,
+        UserPermissionKey.subscribe.rawValue: false,
+        UserPermissionKey.manage.rawValue: false,
+      ],
+      user_name: "download-restricted",
+      avatar: nil
+    )
+  }
 }
 
 @MainActor
@@ -468,17 +553,24 @@ private struct DownloadTaskServiceSnapshot {
   let baseURL: String
   let serverURLDefaults: String?
   let accessTokenDefaults: String?
+  let currentUser: Token?
+  let currentUserKeychain: String?
+  let currentUserDefaults: String?
 
   static func capture(service: APIService) -> DownloadTaskServiceSnapshot {
     DownloadTaskServiceSnapshot(
       baseURL: service.baseURL,
       serverURLDefaults: UserDefaults.standard.string(forKey: "serverURL"),
-      accessTokenDefaults: UserDefaults.standard.string(forKey: "accessToken")
+      accessTokenDefaults: UserDefaults.standard.string(forKey: "accessToken"),
+      currentUser: service.currentUser,
+      currentUserKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "currentUser"),
+      currentUserDefaults: UserDefaults.standard.string(forKey: "currentUser")
     )
   }
 
   func restore(to service: APIService) {
     service.baseURL = baseURL
+    service.currentUser = currentUser
 
     if let serverURLDefaults {
       UserDefaults.standard.set(serverURLDefaults, forKey: "serverURL")
@@ -490,6 +582,30 @@ private struct DownloadTaskServiceSnapshot {
       UserDefaults.standard.set(accessTokenDefaults, forKey: "accessToken")
     } else {
       UserDefaults.standard.removeObject(forKey: "accessToken")
+    }
+
+    restoreCredential(
+      account: "currentUser",
+      keychainValue: currentUserKeychain,
+      defaultsValue: currentUserDefaults
+    )
+  }
+
+  private func restoreCredential(account: String, keychainValue: String?, defaultsValue: String?) {
+    if let keychainValue {
+      _ = KeychainHelper.shared.save(
+        keychainValue,
+        service: "MoviePilot-TV",
+        account: account
+      )
+    } else {
+      _ = KeychainHelper.shared.delete(service: "MoviePilot-TV", account: account)
+    }
+
+    if let defaultsValue {
+      UserDefaults.standard.set(defaultsValue, forKey: account)
+    } else {
+      UserDefaults.standard.removeObject(forKey: account)
     }
   }
 }

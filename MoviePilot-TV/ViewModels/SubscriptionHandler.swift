@@ -15,6 +15,8 @@ class SubscriptionHandler: ObservableObject {
   private let apiService = APIService.shared
 
   func handleSubscribe(_ item: MediaInfo) {
+    guard apiService.canAccess(.subscribe) else { return }
+
     if item.canDirectlySubscribe {
       Task {
         var isSubscribed = try? await apiService.checkSubscription(media: item)
@@ -39,8 +41,12 @@ class SubscriptionHandler: ObservableObject {
   }
 
   func fork(share: SubscribeShare) async -> Int? {
+    guard apiService.canAccess(.subscribe) else { return nil }
+
     do {
-      let newSubId = try await apiService.forkSubscription(share: share)
+      guard let newSubId = try await apiService.forkSubscription(share: share) else {
+        return nil
+      }
       showAlert(title: share.share_title ?? "", message: "复用订阅成功！")
       return newSubId
     } catch {
@@ -50,6 +56,8 @@ class SubscriptionHandler: ObservableObject {
   }
 
   func fetchSubscriptionAndShowEditor(subId: Int) async {
+    guard apiService.canAccess(.subscribe) else { return }
+
     do {
       let subscription = try await apiService.fetchSubscription(id: subId)
       self.sheetSubscribe = subscription
