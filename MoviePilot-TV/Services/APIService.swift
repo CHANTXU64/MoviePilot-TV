@@ -58,6 +58,24 @@ struct APIServiceSessionSnapshot: Equatable {
   let permissions: [String: Bool]?
 }
 
+private struct CurrentUserResponse: Decodable {
+  let name: String
+  let is_superuser: FlexibleBool?
+  let avatar: String?
+  let permissions: [String: Bool]?
+
+  func token(accessToken: String) -> Token {
+    Token(
+      access_token: accessToken,
+      token_type: "bearer",
+      super_user: is_superuser,
+      permissions: permissions ?? [:],
+      user_name: name,
+      avatar: avatar
+    )
+  }
+}
+
 nonisolated struct MediaImageURLConfig: Sendable {
   let baseURL: String
   let useImageCache: Bool
@@ -618,6 +636,13 @@ class APIService: ObservableObject {
           defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
           return .noStoredSession
         }
+        if currentUser == nil {
+          _ = await recoverCurrentUserFromCurrentUserEndpoint()
+          if token == nil {
+            defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
+            return .noStoredSession
+          }
+        }
       }
       return .alreadyRefreshed
     }
@@ -639,6 +664,16 @@ class APIService: ObservableObject {
     let password = storedPassword
 
     guard let username, let password, !username.isEmpty, !password.isEmpty else {
+      if currentUser == nil {
+        if await recoverCurrentUserFromCurrentUserEndpoint() {
+          defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
+          return .refreshed
+        }
+        if token == nil {
+          defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
+          return .noStoredSession
+        }
+      }
       defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
       return .skippedWithoutCredentials
     }
@@ -664,6 +699,27 @@ class APIService: ObservableObject {
       storedUsername = username
       storedPassword = password
       return .refreshFailed
+    }
+  }
+
+  private func recoverCurrentUserFromCurrentUserEndpoint() async -> Bool {
+    guard let accessToken = token, !accessToken.isEmpty else { return false }
+    do {
+      let data = try await makeRequest(
+        endpoint: "/user/current",
+        retryOn401: false,
+        logoutOnUnauthorized: false
+      )
+      let user = try JSONDecoder().decode(CurrentUserResponse.self, from: data)
+      let recoveredUser = user.token(accessToken: accessToken)
+      guard recoveredUser.hasLoginAccessibleFeature else {
+        logout()
+        return false
+      }
+      currentUser = recoveredUser
+      return true
+    } catch {
+      return false
     }
   }
 

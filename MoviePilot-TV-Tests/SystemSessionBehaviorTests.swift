@@ -382,6 +382,45 @@ final class SystemSessionBehaviorTests: XCTestCase {
     XCTAssertFalse(service.canAccess(.subscribe))
   }
 
+  func testRefreshStoredSessionRecoversTokenOnlySessionFromCurrentUserEndpoint() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SessionRefreshURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SessionRefreshURLProtocol.self) }
+
+    await SessionRefreshURLProtocol.stub.reset()
+    let service = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    let markerKey = "lastSessionRefreshAppVersion"
+    let originalMarker = UserDefaults.standard.string(forKey: markerKey)
+    defer {
+      snapshot.restore(to: service)
+      restoreUserDefaultsString(originalMarker, forKey: markerKey)
+    }
+
+    service.baseURL = "https://session-refresh-tests.local"
+    service.token = "token-only"
+    service.currentUser = nil
+    UserDefaults.standard.removeObject(forKey: markerKey)
+    clearCredential(account: "currentUser")
+    clearCredential(account: "username")
+    clearCredential(account: "password")
+
+    let result = await service.refreshStoredSessionAfterAppUpdateIfNeeded(
+      appVersion: "v0.4.7"
+    )
+
+    XCTAssertEqual(result, .refreshed)
+    XCTAssertEqual(service.token, "token-only")
+    XCTAssertEqual(service.currentUser?.access_token, "token-only")
+    XCTAssertEqual(service.currentUser?.user_name, "token-only-user")
+    XCTAssertTrue(service.canAccess(.discovery))
+    XCTAssertTrue(service.canAccess(.search))
+    XCTAssertFalse(service.canAccess(.subscribe))
+    let paths = await SessionRefreshURLProtocol.stub.requestPaths()
+    XCTAssertEqual(paths.filter { $0 == "/api/v1/user/current" }, ["/api/v1/user/current"])
+    XCTAssertFalse(paths.contains("/api/v1/login/access-token"))
+    XCTAssertEqual(UserDefaults.standard.string(forKey: markerKey), "v0.4.7")
+  }
+
   func testPersistedCurrentUserDefaultsFallbackDoesNotDuplicateAccessToken() {
     let service = APIService.shared
     let snapshot = SystemSessionServiceSnapshot.capture(service: service)
@@ -793,7 +832,11 @@ private actor SessionRefreshURLProtocolStub {
       headerFields: ["Content-Type": "application/json"]
     )!
     let data: Data
-    if let loginFailureStatusCode {
+    if url.path == "/api/v1/user/current" {
+      data =
+        #"{"id":1,"name":"token-only-user","email":null,"is_active":true,"is_superuser":false,"avatar":null,"is_otp":false,"permissions":{"discovery":true,"search":true,"subscribe":false,"manage":false},"settings":{}}"#
+        .data(using: .utf8)!
+    } else if let loginFailureStatusCode {
       data = #"{"success":false,"message":"login failed","status":\#(loginFailureStatusCode)}"#
         .data(using: .utf8)!
     } else if loginNoAccessibleFeatureResponse {

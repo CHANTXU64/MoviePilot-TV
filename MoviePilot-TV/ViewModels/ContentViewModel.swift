@@ -158,7 +158,11 @@ class ContentViewModel: ObservableObject {
       accountPermissionWarning = nil
       return
     }
-    guard let warning = AccountPermissionWarning.warning(for: token) else { return }
+    guard let warning = AccountPermissionWarning.warning(for: token) else {
+      lastAccountPermissionWarningKey = nil
+      accountPermissionWarning = nil
+      return
+    }
 
     let warningKey = AccountPermissionWarningKey(
       baseURL: apiService.baseURL,

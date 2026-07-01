@@ -4,6 +4,45 @@ import XCTest
 
 @MainActor
 final class ContentViewModelBehaviorTests: XCTestCase {
+  func testAccountPermissionWarningClearsWhenCurrentUserRegainsRecommendedPermissions() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(ContentViewModelURLProtocol.self))
+    defer { URLProtocol.unregisterClass(ContentViewModelURLProtocol.self) }
+
+    await ContentViewModelURLProtocol.stub.reset()
+    let service = APIService.shared
+    let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
+    var viewModel: ContentViewModel?
+    defer {
+      viewModel = nil
+      snapshot.restore(to: service)
+    }
+
+    service.baseURL = "https://permission-warning.content-view-model-tests.local"
+    service.token = "limited-token"
+    service.currentUser = nil
+
+    viewModel = ContentViewModel()
+    service.currentUser = token(
+      "limited-token",
+      userName: "limited-user",
+      permissions: ["discovery": false, "search": false, "subscribe": false, "manage": true]
+    )
+
+    try await waitUntil("expected limited user to show account permission warning") {
+      viewModel?.accountPermissionWarning != nil
+    }
+
+    service.currentUser = token(
+      "full-token",
+      userName: "full-user",
+      permissions: ["discovery": true, "search": true, "subscribe": true, "manage": false]
+    )
+
+    try await waitUntil("expected full permission user to clear account permission warning") {
+      viewModel?.accountPermissionWarning == nil
+    }
+  }
+
   func testBackendVersionWarningRechecksAfterServerAndTokenChange() async throws {
     XCTAssertTrue(URLProtocol.registerClass(ContentViewModelURLProtocol.self))
     defer { URLProtocol.unregisterClass(ContentViewModelURLProtocol.self) }
@@ -50,12 +89,16 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     )
   }
 
-  private func token(_ value: String, userName: String) -> Token {
+  private func token(
+    _ value: String,
+    userName: String,
+    permissions: [String: Bool] = ["discovery": true]
+  ) -> Token {
     Token(
       access_token: value,
       token_type: "bearer",
       super_user: FlexibleBool(false),
-      permissions: ["discovery": true],
+      permissions: permissions,
       user_name: userName,
       avatar: nil
     )
