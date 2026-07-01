@@ -225,7 +225,7 @@ class SystemViewModel: ObservableObject {
     let cachedBackendVersion = normalizedBackendVersion(APIService.shared.settings?.BACKEND_VERSION)
     self.backendVersion = cachedBackendVersion
 
-    if APIService.shared.isLoggedIn {
+    if APIService.shared.isLoggedIn && APIService.shared.canAccess(.manage) {
       do {
         let env = try await APIService.shared.fetchSystemEnv()
         guard APIService.shared.isSessionUnchanged(from: sessionSnapshot) else { return }

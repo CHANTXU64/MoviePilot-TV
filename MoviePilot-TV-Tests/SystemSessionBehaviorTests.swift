@@ -476,62 +476,91 @@ final class SystemSessionBehaviorTests: XCTestCase {
     XCTAssertEqual(viewModel.refreshMessage, "保持现有状态")
   }
 
-  func testLoadSystemInfoUsesSystemEnvBackendVersionForLimitedUser() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SystemInfoURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SystemInfoURLProtocol.self) }
-
-    await SystemInfoURLProtocol.stub.reset()
-    let service = APIService.shared
-    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
-    defer { snapshot.restore(to: service) }
-
-    service.baseURL = "https://system-info-tests.local"
-    service.token = "limited-token"
-    service.currentUser = limitedToken()
-    service.settings = try JSONDecoder().decode(
-      GlobalSettings.self,
-      from:
-        #"{"BACKEND_VERSION":"v2.13.14","FRONTEND_VERSION":"v2.13.15","TMDB_IMAGE_DOMAIN":"image.tmdb.org"}"#
-        .data(using: .utf8)!
-    )
-
-    let viewModel = SystemViewModel()
-    await SystemInfoURLProtocol.stub.reset()
-
-    await viewModel.loadSystemInfo()
-
-    XCTAssertEqual(viewModel.backendVersion, "v2.13.14")
-    let paths = await SystemInfoURLProtocol.stub.requestPaths()
-    XCTAssertTrue(paths.contains("/api/v1/system/env"))
-  }
-
-  func testLoadSystemInfoFetchesSystemEnvBackendVersionForLimitedUserWhenCacheIsEmpty()
+  func testLoadSystemInfoUsesPublicSettingsForNonManageUserWithoutRequestingSystemEnv()
     async throws
   {
     XCTAssertTrue(URLProtocol.registerClass(SystemInfoURLProtocol.self))
     defer { URLProtocol.unregisterClass(SystemInfoURLProtocol.self) }
 
     await SystemInfoURLProtocol.stub.reset()
+    await SystemInfoURLProtocol.stub.setSystemEnvStatusCode(403)
     let service = APIService.shared
     let snapshot = SystemSessionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     service.baseURL = "https://system-info-tests.local"
     service.token = "limited-token"
-    service.currentUser = limitedToken()
-    service.settings = nil
+    service.currentUser = nonManageToken()
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from:
+        #"{"BACKEND_VERSION":"v2.13.13","FRONTEND_VERSION":"v2.13.15","TMDB_IMAGE_DOMAIN":"image.tmdb.org"}"#
+        .data(using: .utf8)!
+    )
+    clearCredential(account: "username")
+    clearCredential(account: "password")
+
+    let logoutNotifications = NotificationCounter()
+    let observer = NotificationCenter.default.addObserver(
+      forName: .sessionDidLogout,
+      object: nil,
+      queue: nil
+    ) { _ in
+      logoutNotifications.increment()
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
 
     let viewModel = SystemViewModel()
     await SystemInfoURLProtocol.stub.reset()
+    await SystemInfoURLProtocol.stub.setSystemEnvStatusCode(403)
 
     await viewModel.loadSystemInfo()
 
-    XCTAssertEqual(viewModel.backendVersion, "v2.13.14")
+    XCTAssertEqual(viewModel.backendVersion, "v9.9.9")
+    XCTAssertEqual(service.token, "limited-token")
+    XCTAssertEqual(service.currentUser?.user_name, "limited")
+    XCTAssertEqual(logoutNotifications.count(), 0)
     let paths = await SystemInfoURLProtocol.stub.requestPaths()
-    XCTAssertTrue(paths.contains("/api/v1/system/env"))
+    XCTAssertFalse(paths.contains("/api/v1/system/env"))
+    XCTAssertTrue(paths.contains("/api/v1/system/global"))
+    XCTAssertTrue(paths.contains("/api/v1/system/global/user"))
   }
 
-  func testLoadSystemInfoRefreshesStalePublicBackendVersionForLimitedUser() async throws {
+  func testLoadSystemInfoFetchesPublicBackendVersionForNonManageUserWhenCacheIsEmpty()
+    async throws
+  {
+    XCTAssertTrue(URLProtocol.registerClass(SystemInfoURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SystemInfoURLProtocol.self) }
+
+    await SystemInfoURLProtocol.stub.reset()
+    await SystemInfoURLProtocol.stub.setSystemEnvStatusCode(403)
+    let service = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURL = "https://system-info-tests.local"
+    service.token = "limited-token"
+    service.currentUser = nonManageToken()
+    service.settings = nil
+    clearCredential(account: "username")
+    clearCredential(account: "password")
+
+    let viewModel = SystemViewModel()
+    await SystemInfoURLProtocol.stub.reset()
+    await SystemInfoURLProtocol.stub.setSystemEnvStatusCode(403)
+
+    await viewModel.loadSystemInfo()
+
+    XCTAssertEqual(viewModel.backendVersion, "v9.9.9")
+    XCTAssertEqual(service.token, "limited-token")
+    XCTAssertEqual(service.currentUser?.user_name, "limited")
+    let paths = await SystemInfoURLProtocol.stub.requestPaths()
+    XCTAssertFalse(paths.contains("/api/v1/system/env"))
+    XCTAssertTrue(paths.contains("/api/v1/system/global"))
+    XCTAssertTrue(paths.contains("/api/v1/system/global/user"))
+  }
+
+  func testLoadSystemInfoUsesSystemEnvBackendVersionForManageUser() async throws {
     XCTAssertTrue(URLProtocol.registerClass(SystemInfoURLProtocol.self))
     defer { URLProtocol.unregisterClass(SystemInfoURLProtocol.self) }
 
@@ -541,8 +570,8 @@ final class SystemSessionBehaviorTests: XCTestCase {
     defer { snapshot.restore(to: service) }
 
     service.baseURL = "https://system-info-tests.local"
-    service.token = "limited-token"
-    service.currentUser = limitedToken()
+    service.token = "manage-token"
+    service.currentUser = manageToken()
     service.settings = try JSONDecoder().decode(
       GlobalSettings.self,
       from:
@@ -560,18 +589,34 @@ final class SystemSessionBehaviorTests: XCTestCase {
     XCTAssertTrue(paths.contains("/api/v1/system/env"))
   }
 
-  private func limitedToken() -> Token {
+  private func nonManageToken() -> Token {
     Token(
       access_token: "limited-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        "discovery": true,
+        "search": false,
+        "subscribe": false,
+        "manage": false,
+      ],
+      user_name: "limited",
+      avatar: nil
+    )
+  }
+
+  private func manageToken() -> Token {
+    Token(
+      access_token: "manage-token",
       token_type: "bearer",
       super_user: FlexibleBool(false),
       permissions: [
         "discovery": false,
         "search": false,
         "subscribe": false,
-        "manage": false,
+        "manage": true,
       ],
-      user_name: "test",
+      user_name: "manager",
       avatar: nil
     )
   }
@@ -837,9 +882,15 @@ private final class SessionRefreshURLProtocolClientBox: @unchecked Sendable {
 
 private actor SystemInfoURLProtocolStub {
   private var requests: [URLRequest] = []
+  private var systemEnvStatusCode = 200
 
   func reset() {
     requests.removeAll()
+    systemEnvStatusCode = 200
+  }
+
+  func setSystemEnvStatusCode(_ statusCode: Int) {
+    systemEnvStatusCode = statusCode
   }
 
   func requestPaths() -> [String] {
@@ -864,8 +915,12 @@ private actor SystemInfoURLProtocolStub {
       statusCode = 200
       data = #"{"success":true,"data":{}}"#.data(using: .utf8)!
     case "/api/v1/system/env":
-      statusCode = 200
-      data = #"{"success":true,"data":{"VERSION":"v2.13.14"}}"#.data(using: .utf8)!
+      statusCode = systemEnvStatusCode
+      if systemEnvStatusCode == 200 {
+        data = #"{"success":true,"data":{"VERSION":"v2.13.14"}}"#.data(using: .utf8)!
+      } else {
+        data = #"{"success":false,"message":"forbidden"}"#.data(using: .utf8)!
+      }
     default:
       statusCode = 404
       data = #"{"success":false,"message":"not found"}"#.data(using: .utf8)!
