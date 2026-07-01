@@ -157,8 +157,13 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(viewSource.contains("@ObservedObject private var apiService = APIService.shared"))
     XCTAssertTrue(viewSource.contains("private var canConfigureSubscriptions: Bool"))
     XCTAssertTrue(viewSource.contains("private var canConfigureSearch: Bool"))
+    XCTAssertTrue(viewSource.contains("private var canConfigureCustomFilters: Bool"))
+    XCTAssertTrue(viewSource.contains("apiService.canRequestSuperUserEndpoints"))
     XCTAssertTrue(viewSource.contains("if canConfigureSubscriptions {"))
     XCTAssertTrue(viewSource.contains("if canConfigureSearch {"))
+    XCTAssertTrue(viewSource.contains("if canConfigureCustomFilters {"))
+    XCTAssertFalse(viewSource.contains("guard canConfigureSearch else { return }"))
+    XCTAssertTrue(viewSource.contains("guard canConfigureCustomFilters else { return }"))
     XCTAssertTrue(viewModelSource.contains("guard APIService.shared.canAccess(.search) else {"))
   }
 
