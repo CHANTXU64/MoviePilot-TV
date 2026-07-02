@@ -68,7 +68,7 @@ struct MediaDetailView: View {
   }
 
   private var firstVisibleRow: String {
-    if canSubscribeMedia && viewModel.detail.type == "电视剧" && viewModel.detail.tmdb_id != nil {
+    if canSubscribeMedia && viewModel.detail.type == "电视剧" {
       return "season"
     }
     if !viewModel.actorsPaginator.items.isEmpty {
@@ -308,7 +308,7 @@ struct MediaDetailView: View {
     // 当分季数据实际加载完毕时通知 ViewModel（applyFullDetail 时可能尚未就绪）
     .onChange(of: preloadTask.isSeasonDataLoaded) { _, isLoaded in
       if isLoaded && canSubscribeMedia && !viewModel.isFirstRowReady
-        && viewModel.detail.type == "电视剧" && viewModel.detail.tmdb_id != nil
+        && viewModel.detail.type == "电视剧"
       {
         viewModel.isFirstRowReady = true
         Task { @MainActor in
@@ -616,7 +616,7 @@ struct MediaDetailView: View {
               Button(action: {
                 if detail.canDirectlySubscribe {
                   handleHeaderSubscribe()
-                } else if detail.type == "电视剧" && detail.tmdb_id != nil {
+                } else if detail.type == "电视剧" {
                   isContentFocused = true
                 }
               }) {
@@ -717,7 +717,7 @@ struct MediaDetailView: View {
 
   @ViewBuilder
   private var seasonSubscriptionSection: some View {
-    if canSubscribeMedia && viewModel.detail.type == "电视剧" && viewModel.detail.tmdb_id != nil {
+    if canSubscribeMedia && viewModel.detail.type == "电视剧" {
       VStack(alignment: .leading, spacing: 0) {
         if let seasonVM = preloadTask.seasonViewModel {
           // 使用预加载的 SubscribeSeasonViewModel

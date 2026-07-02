@@ -891,10 +891,11 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
 
     viewModel.prepareSubscription(seasonNumber: 2)
 
-    XCTAssertEqual(viewModel.sheetSubscribe?.best_version, 0)
+    XCTAssertNil(viewModel.sheetSubscribe?.best_version)
+    XCTAssertNil(viewModel.sheetSubscribe?.best_version_full)
   }
 
-  func testLoadedEmptySeasonAvailabilityStillDisplaysAsAvailableAndDefaultsToBestVersion() {
+  func testLoadedEmptySeasonAvailabilityStillDisplaysAsAvailableAndDefaultsToFullBestVersion() {
     let media = MediaInfo(tmdb_id: 12345, title: "航海王", type: "电视剧")
     let viewModel = SubscribeSeasonViewModel(mediaInfo: media)
     viewModel.isSeasonAvailabilityLoaded = true
@@ -905,6 +906,26 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     viewModel.prepareSubscription(seasonNumber: 2)
 
     XCTAssertEqual(viewModel.sheetSubscribe?.best_version, 1)
+    XCTAssertEqual(viewModel.sheetSubscribe?.best_version_full, 1)
+  }
+
+  func testPartialSeasonAvailabilityUsesBackendDefaultSubscribeMode() {
+    let media = MediaInfo(tmdb_id: 12345, title: "航海王", type: "电视剧")
+    let viewModel = SubscribeSeasonViewModel(mediaInfo: media)
+    viewModel.isSeasonAvailabilityLoaded = true
+    viewModel.seasonsNotExisted[2] = 1
+
+    viewModel.prepareSubscription(seasonNumber: 2)
+
+    XCTAssertNil(viewModel.sheetSubscribe?.best_version)
+    XCTAssertNil(viewModel.sheetSubscribe?.best_version_full)
+  }
+
+  func testOnlyMoviesCanDirectlySubscribe() {
+    XCTAssertTrue(MediaInfo(tmdb_id: 1, title: "电影", type: "电影").canDirectlySubscribe)
+    XCTAssertFalse(MediaInfo(tmdb_id: 2, title: "TMDB 剧", type: "电视剧").canDirectlySubscribe)
+    XCTAssertFalse(MediaInfo(douban_id: "douban-1", title: "豆瓣剧", type: "电视剧").canDirectlySubscribe)
+    XCTAssertFalse(MediaInfo(bangumi_id: 3, title: "Bangumi 剧", type: "电视剧").canDirectlySubscribe)
   }
 
   func testSeasonPrimaryActionSubscribesSeasonWhenNavigationHandlerIsProvided() throws {

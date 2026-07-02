@@ -117,8 +117,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let detail = MediaInfo(
       douban_id: "detail-header-douban",
       title: "详情页取消订阅",
-      type: "电视剧",
-      season: 1
+      type: "电影"
     )
     let preloadTask = MediaPreloadTask(partialMedia: detail)
     preloadTask.tmdbId = 998_877
@@ -154,7 +153,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let detail = MediaInfo(
       douban_id: "detail-header-title-fallback-douban",
       title: "标题兜底订阅",
-      type: "电视剧"
+      type: "电影"
     )
     let preloadTask = MediaPreloadTask(partialMedia: detail)
     preloadTask.isSubscribed = true
@@ -188,7 +187,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let detail = MediaInfo(
       douban_id: "detail-header-minimal-alias-douban",
       title: "原始 ID 最小响应",
-      type: "电视剧"
+      type: "电影"
     )
     let preloadTask = MediaPreloadTask(partialMedia: detail)
     preloadTask.tmdbId = 998_877
@@ -251,7 +250,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let detail = MediaInfo(
       bangumi_id: 12_345,
       title: "Bangumi 详情页取消订阅",
-      type: "电视剧"
+      type: "电影"
     )
     let preloadTask = MediaPreloadTask(partialMedia: detail)
     preloadTask.tmdbId = 998_877
@@ -286,7 +285,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let detail = MediaInfo(
       bangumi_id: 12_345,
       title: "Bangumi 详情页取消订阅",
-      type: "电视剧"
+      type: "电影"
     )
     let preloadTask = MediaPreloadTask(partialMedia: detail)
     preloadTask.isSubscribed = true
@@ -317,7 +316,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     service.baseURL = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
 
-    let tmdbMedia = MediaInfo(tmdb_id: 776_655, type: "电视剧")
+    let tmdbMedia = MediaInfo(tmdb_id: 776_655, type: "电影")
     let cachedSubscriptionStatus = try await service.checkSubscription(media: tmdbMedia)
     XCTAssertTrue(cachedSubscriptionStatus)
     await DetailHeaderSubscriptionURLProtocol.stub.setResolvedSubscription(tmdbId: 776_655, id: nil)
@@ -325,7 +324,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let detail = MediaInfo(
       douban_id: "detail-header-stale-douban",
       title: "详情页远端取消",
-      type: "电视剧",
+      type: "电影",
       season: 1
     )
     let preloadTask = MediaPreloadTask(partialMedia: detail)
@@ -358,7 +357,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     service.baseURL = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
 
-    let tmdbMedia = MediaInfo(tmdb_id: 776_655, type: "电视剧")
+    let tmdbMedia = MediaInfo(tmdb_id: 776_655, type: "电影")
     let cachedSubscriptionStatus = try await service.checkSubscription(media: tmdbMedia)
     XCTAssertTrue(cachedSubscriptionStatus)
 
@@ -368,7 +367,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       partialMedia: MediaInfo(
         douban_id: "detail-header-remote-complete-douban",
         title: "详情页远端完成",
-        type: "电视剧"
+        type: "电影"
       )
     )
     preloadTask.tmdbId = 776_655
@@ -400,7 +399,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     service.baseURL = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
 
-    let tmdbMedia = MediaInfo(tmdb_id: 776_656, type: "电视剧")
+    let tmdbMedia = MediaInfo(tmdb_id: 776_656, type: "电影")
     let cachedSubscriptionStatus = try await service.checkSubscription(media: tmdbMedia)
     XCTAssertTrue(cachedSubscriptionStatus)
 
@@ -409,14 +408,14 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let fullDetail = MediaInfo(
       douban_id: "detail-ready-remote-complete-douban",
       title: "详情页后完成",
-      type: "电视剧"
+      type: "电影"
     )
     let preloadTask = MediaPreloadTask(partialMedia: fullDetail)
     preloadTask.tmdbId = 776_656
     preloadTask.fullDetail = fullDetail
     preloadTask.isSubscribed = true
 
-    let viewModel = MediaDetailViewModel(detail: MediaInfo(title: "占位详情", type: "电视剧"))
+    let viewModel = MediaDetailViewModel(detail: MediaInfo(title: "占位详情", type: "电影"))
     viewModel.preloadTask = preloadTask
 
     let didRefreshSubscription = await MediaDetailView.applyReadyPreloadedDetail(

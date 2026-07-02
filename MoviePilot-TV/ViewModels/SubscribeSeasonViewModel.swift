@@ -268,11 +268,10 @@ class SubscribeSeasonViewModel: ObservableObject {
   }
 
   func prepareSubscription(seasonNumber: Int) {
-    // 如果已确认该季完整入库，默认开启“洗版”模式；未知状态不默认洗版。
-    let best_version =
-      (isSeasonAvailabilityLoaded
-        && (seasonsNotExisted[seasonNumber] == nil || seasonsNotExisted[seasonNumber] == 0))
-      ? 1 : 0
+    // 已完整入库的季显式全集洗版；其他情况不传洗版字段，让后端应用默认配置。
+    let isFullyAvailable =
+      isSeasonAvailabilityLoaded
+      && (seasonsNotExisted[seasonNumber] == nil || seasonsNotExisted[seasonNumber] == 0)
 
     self.sheetSubscribe = Subscribe(
       id: nil,
@@ -286,8 +285,16 @@ class SubscribeSeasonViewModel: ObservableObject {
       tmdbid: mediaInfo.tmdb_id,
       doubanid: mediaInfo.douban_id,
       bangumiid: mediaInfo.bangumi_id,
-      best_version: best_version,
-      episode_group: selectedGroupId.isEmpty ? nil : selectedGroupId
+      best_version: isFullyAvailable ? 1 : nil,
+      best_version_full: isFullyAvailable ? 1 : nil,
+      episode_group: selectedGroupId.isEmpty ? nil : selectedGroupId,
+      mediaid: MediaIdentifier.apiMediaId(
+        tmdbId: nil,
+        doubanId: nil,
+        bangumiId: nil,
+        mediaIdPrefix: mediaInfo.mediaid_prefix,
+        mediaId: mediaInfo.media_id
+      )
     )
   }
 

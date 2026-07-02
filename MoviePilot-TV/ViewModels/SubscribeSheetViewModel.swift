@@ -77,8 +77,9 @@ class SubscribeSheetViewModel: ObservableObject {
           tmdbid: subscribe.tmdbid,
           doubanid: subscribe.doubanid,
           bangumiid: subscribe.bangumiid,
+          mediaid: subscribe.mediaid,
           season: subscribe.season,
-          best_version: subscribe.best_version ?? 0,
+          best_version: subscribe.best_version,
           best_version_full: subscribe.best_version_full,
           episode_group: subscribe.episode_group
         )

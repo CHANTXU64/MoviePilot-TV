@@ -80,7 +80,14 @@ class SubscriptionHandler: ObservableObject {
       last_update: nil,
       tmdbid: item.tmdb_id,
       doubanid: item.douban_id,
-      bangumiid: item.bangumi_id
+      bangumiid: item.bangumi_id,
+      mediaid: MediaIdentifier.apiMediaId(
+        tmdbId: nil,
+        doubanId: nil,
+        bangumiId: nil,
+        mediaIdPrefix: item.mediaid_prefix,
+        mediaId: item.media_id
+      )
     )
   }
 

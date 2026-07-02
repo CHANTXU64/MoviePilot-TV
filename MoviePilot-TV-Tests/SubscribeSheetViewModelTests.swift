@@ -182,6 +182,60 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(filterGroupsRequestCount, 1)
   }
 
+  func testLoadDataForNewSubscriptionDoesNotForceUnsetBestVersionToZero() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer {
+      snapshot.restore(to: service)
+    }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    service.baseURL = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(
+        id: nil,
+        name: "默认配置新订阅",
+        type: "电视剧",
+        season: 1,
+        doubanid: "douban-new",
+        mediaid: "douban:douban-new"
+      ),
+      isNewSubscription: true
+    )
+
+    await viewModel.loadData()
+
+    var capturedBody = await SubscribeSheetURLProtocol.stub.requestBody(
+      method: "POST",
+      path: "/api/v1/subscribe/"
+    )
+    if capturedBody == nil {
+      capturedBody = await SubscribeSheetURLProtocol.stub.requestBody(
+        method: "POST",
+        path: "/api/v1/subscribe"
+      )
+    }
+    let body = try XCTUnwrap(capturedBody)
+    let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+    let postCountWithSlash = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "POST",
+      path: "/api/v1/subscribe/"
+    )
+    let postCountWithoutSlash = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "POST",
+      path: "/api/v1/subscribe"
+    )
+    XCTAssertEqual(postCountWithSlash + postCountWithoutSlash, 1)
+    XCTAssertFalse(json.keys.contains("best_version"))
+    XCTAssertFalse(json.keys.contains("best_version_full"))
+    XCTAssertEqual(json["mediaid"] as? String, "douban:douban-new")
+  }
+
   func testPendingLoadDataDoesNotPublishOptionsAfterSubscribePermissionIsRestricted()
     async throws
   {
@@ -389,11 +443,13 @@ private struct SubscribeSheetServiceSnapshot {
 
 private actor SubscribeSheetURLProtocolStub {
   private var requestCounts: [String: Int] = [:]
+  private var requestBodies: [String: Data] = [:]
   private var suspendedPaths: Set<String> = []
   private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
 
   func reset() {
     requestCounts.removeAll()
+    requestBodies.removeAll()
     suspendedPaths.removeAll()
     let pendingWaiters = waiters.values.flatMap { $0 }
     waiters.removeAll()
@@ -418,10 +474,17 @@ private actor SubscribeSheetURLProtocolStub {
     requestCounts.values.reduce(0, +)
   }
 
+  func requestBody(method: String, path: String) -> Data? {
+    requestBodies["\(method) \(path)"]
+  }
+
   func response(for request: URLRequest) async throws -> (HTTPURLResponse, Data) {
     let method = request.httpMethod ?? "GET"
     let path = request.url?.path ?? ""
     requestCounts["\(method) \(path)", default: 0] += 1
+    if let body = requestBodyData(from: request) {
+      requestBodies["\(method) \(path)"] = body
+    }
     if suspendedPaths.contains(path) {
       await withCheckedContinuation { continuation in
         waiters[path, default: []].append(continuation)
@@ -438,6 +501,10 @@ private actor SubscribeSheetURLProtocolStub {
       data = #"{"value":[]}"#.data(using: .utf8)!
     case ("GET", "/api/v1/system/setting/UserFilterRuleGroups"):
       data = #"{"value":[{"name":"普通规则组"}]}"#.data(using: .utf8)!
+    case ("POST", "/api/v1/subscribe/"), ("POST", "/api/v1/subscribe"):
+      data = #"{"success":true,"data":{"id":801}}"#.data(using: .utf8)!
+    case ("GET", "/api/v1/subscribe/801"):
+      data = #"{"id":801,"name":"默认配置新订阅","type":"电视剧","season":1,"doubanid":"douban-new","mediaid":"douban:douban-new","state":"S"}"#.data(using: .utf8)!
     case let (_, path) where path.hasPrefix("/api/v1/subscribe"):
       data = #"{"success":true}"#.data(using: .utf8)!
     default:
@@ -451,6 +518,34 @@ private actor SubscribeSheetURLProtocolStub {
       headerFields: ["Content-Type": "application/json"]
     )!
     return (response, data)
+  }
+
+  private func requestBodyData(from request: URLRequest) -> Data? {
+    if let body = request.httpBody {
+      return body
+    }
+
+    guard let stream = request.httpBodyStream else {
+      return nil
+    }
+
+    stream.open()
+    defer { stream.close() }
+
+    let bufferSize = 4096
+    let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+    defer { buffer.deallocate() }
+
+    var data = Data()
+    while true {
+      let count = stream.read(buffer, maxLength: bufferSize)
+      if count > 0 {
+        data.append(buffer, count: count)
+      } else {
+        break
+      }
+    }
+    return data.isEmpty ? nil : data
   }
 }
 
