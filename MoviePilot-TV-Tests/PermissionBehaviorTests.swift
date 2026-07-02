@@ -69,6 +69,29 @@ final class PermissionVisibleEntryTests: XCTestCase {
     )
   }
 
+  func testTvSeasonSubscriptionEntryDoesNotRequireTMDBInSource() throws {
+    let detailSource = try permissionBehaviorSource("MoviePilot-TV/Views/Pages/MediaDetailView.swift")
+    let preloaderSource = try permissionBehaviorSource("MoviePilot-TV/ViewModels/MediaPreloader.swift")
+    let viewModelSource = try permissionBehaviorSource("MoviePilot-TV/ViewModels/MediaDetailViewModel.swift")
+
+    XCTAssertFalse(
+      detailSource.contains(#"type == "电视剧" && viewModel.detail.tmdb_id != nil"#),
+      "电视剧分季订阅入口不应只对 TMDB 详情开放。"
+    )
+    XCTAssertFalse(
+      detailSource.contains(#"detail.type == "电视剧" && detail.tmdb_id != nil"#),
+      "详情页 Header 的分季订阅动作不应只对 TMDB 详情开放。"
+    )
+    XCTAssertFalse(
+      preloaderSource.contains(#"guard detail.tmdb_id != nil else { return }"#),
+      "预加载分季订阅数据不应只对 TMDB 详情开放。"
+    )
+    XCTAssertFalse(
+      viewModelSource.contains(#"fullDetail.type == "电视剧" && fullDetail.tmdb_id != nil"#),
+      "详情页首行就绪判断不应只对 TMDB 详情开放。"
+    )
+  }
+
   func testTorrentDownloadEntryRequiresSearchPermissionInSource() throws {
     let source = try permissionBehaviorSource("MoviePilot-TV/Views/Components/TorrentCard.swift")
 

@@ -852,10 +852,9 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   }
 
   /// 判断媒体是否可以直接订阅，无需选择季。
-  /// - 对应前端: `MoviePilot-Frontend/src/views/discover/MediaDetailView.vue`
-  /// - 应用场景: 在前端详情页中，此逻辑用于决定是否在页面主操作区显示一个全局的“订阅”按钮。如果一个媒体项目是“电影”，或者它拥有 `douban_id` / `bangumi_id`（通常意味着它是单季动画或有明确的整季订阅单元），则会显示该按钮，允许用户一键订阅整个媒体项目，从而跳过繁琐的季选择环节。
+  /// v2.14.0 起 Web 前端将所有电视剧统一放入分季订阅流程。
   var canDirectlySubscribe: Bool {
-    type == "电影" || douban_id != nil || bangumi_id != nil
+    type == "电影"
   }
 
   static func == (lhs: MediaInfo, rhs: MediaInfo) -> Bool {
@@ -1297,10 +1296,12 @@ struct SubscribeRequest: Codable {
   let doubanid: String?
   /// Bangumi ID
   let bangumiid: Int?
+  /// 媒体 ID fallback
+  let mediaid: String?
   /// 季号
   let season: Int?
   /// 是否洗版，数字或者boolean
-  let best_version: Int
+  let best_version: Int?
   /// 是否仅洗全集，数字或者boolean
   let best_version_full: Int?
   /// 剧集组
@@ -1329,10 +1330,16 @@ struct Subscribe: Codable, Identifiable, Hashable {
   var poster: String?
   // 背景图
   var backdrop: String?
+  /// 评分
+  var vote: Double?
   /// 状态：N-新建 R-订阅中 P-待定 S-暂停
   var state: String?
   // 最后更新时间
   var last_update: String?
+  /// 订阅用户
+  var username: String?
+  /// 创建时间
+  var date: String?
   /// 总集数
   var total_episode: Int?
   /// 开始集数
@@ -1369,12 +1376,16 @@ struct Subscribe: Codable, Identifiable, Hashable {
   var best_version: Int?
   /// 是否仅洗全集 (后端返回 0/1 整数作为布尔值使用)
   var best_version_full: Int?
+  /// 当前洗版优先级，后端维护，保存订阅时需要原样保留。
+  var current_priority: Int?
   /// 过滤规则组
   var filter_groups: [String]?
   /// 自定义识别词
   var custom_words: String?
   /// 描述
   var description: String?
+  /// 过滤规则，后端维护字段，保存订阅时需要原样保留。
+  var filter: String?
   /// 自定义剧集组
   var episode_group: String?
   /// 使用 imdbid 搜索
@@ -1392,10 +1403,10 @@ struct Subscribe: Codable, Identifiable, Hashable {
 
   enum CodingKeys: String, CodingKey {
     case id, name, year, type, keyword, season, poster, backdrop, state, last_update,
-      total_episode, start_episode, lack_episode, completed_episode, note, tmdbid, doubanid, bangumiid,
+      vote, total_episode, start_episode, lack_episode, completed_episode, note, tmdbid, doubanid, bangumiid,
       quality, resolution, effect, include, exclude, sites, downloader, save_path, best_version,
-      best_version_full, filter_groups, custom_words, description, episode_group, search_imdbid,
-      media_category, mediaid, episode_priority
+      best_version_full, current_priority, filter_groups, custom_words, description, filter,
+      episode_group, search_imdbid, media_category, mediaid, episode_priority, username, date
   }
 
   init(from decoder: Decoder) throws {
@@ -1408,8 +1419,11 @@ struct Subscribe: Codable, Identifiable, Hashable {
     season = try container.decodeIfPresent(Int.self, forKey: .season)
     poster = try container.decodeIfPresent(String.self, forKey: .poster)
     backdrop = try container.decodeIfPresent(String.self, forKey: .backdrop)
+    vote = try container.decodeIfPresent(Double.self, forKey: .vote)
     state = try container.decodeIfPresent(String.self, forKey: .state)
     last_update = try container.decodeIfPresent(String.self, forKey: .last_update)
+    username = try container.decodeIfPresent(String.self, forKey: .username)
+    date = try container.decodeIfPresent(String.self, forKey: .date)
     total_episode = try container.decodeIfPresent(Int.self, forKey: .total_episode)
     start_episode = try container.decodeIfPresent(Int.self, forKey: .start_episode)
     lack_episode = try container.decodeIfPresent(Int.self, forKey: .lack_episode)
@@ -1435,9 +1449,11 @@ struct Subscribe: Codable, Identifiable, Hashable {
     save_path = try container.decodeIfPresent(String.self, forKey: .save_path)
     best_version = try container.decodeIfPresent(Int.self, forKey: .best_version)
     best_version_full = try container.decodeIfPresent(Int.self, forKey: .best_version_full)
+    current_priority = try container.decodeIfPresent(Int.self, forKey: .current_priority)
     filter_groups = try container.decodeIfPresent([String].self, forKey: .filter_groups)
     custom_words = try container.decodeIfPresent(String.self, forKey: .custom_words)
     description = try container.decodeIfPresent(String.self, forKey: .description)
+    filter = try container.decodeIfPresent(String.self, forKey: .filter)
     episode_group = try container.decodeIfPresent(String.self, forKey: .episode_group)
     search_imdbid = try container.decodeIfPresent(Int.self, forKey: .search_imdbid)
     media_category = try container.decodeIfPresent(String.self, forKey: .media_category)
@@ -1458,8 +1474,11 @@ struct Subscribe: Codable, Identifiable, Hashable {
     try container.encodeIfPresent(season, forKey: .season)
     try container.encodeIfPresent(poster, forKey: .poster)
     try container.encodeIfPresent(backdrop, forKey: .backdrop)
+    try container.encodeIfPresent(vote, forKey: .vote)
     try container.encodeIfPresent(state, forKey: .state)
     try container.encodeIfPresent(last_update, forKey: .last_update)
+    try container.encodeIfPresent(username, forKey: .username)
+    try container.encodeIfPresent(date, forKey: .date)
     try container.encodeIfPresent(total_episode, forKey: .total_episode)
     try container.encodeIfPresent(start_episode, forKey: .start_episode)
     try container.encodeIfPresent(lack_episode, forKey: .lack_episode)
@@ -1477,9 +1496,11 @@ struct Subscribe: Codable, Identifiable, Hashable {
     try container.encodeIfPresent(save_path, forKey: .save_path)
     try container.encodeIfPresent(best_version, forKey: .best_version)
     try container.encodeIfPresent(best_version_full, forKey: .best_version_full)
+    try container.encodeIfPresent(current_priority, forKey: .current_priority)
     try container.encodeIfPresent(filter_groups, forKey: .filter_groups)
     try container.encodeIfPresent(custom_words, forKey: .custom_words)
     try container.encodeIfPresent(description, forKey: .description)
+    try container.encodeIfPresent(filter, forKey: .filter)
     try container.encodeIfPresent(episode_group, forKey: .episode_group)
     try container.encodeIfPresent(search_imdbid, forKey: .search_imdbid)
     try container.encodeIfPresent(media_category, forKey: .media_category)
@@ -1490,7 +1511,8 @@ struct Subscribe: Codable, Identifiable, Hashable {
   /// 成员初始化器，用于手动创建订阅。
   init(
     id: Int? = nil, name: String, year: String? = nil, type: String, season: Int? = nil,
-    poster: String? = nil, state: String? = nil, last_update: String? = nil,
+    poster: String? = nil, vote: Double? = nil, state: String? = nil, last_update: String? = nil,
+    username: String? = nil, date: String? = nil,
     completed_episode: Int? = nil, note: JSONValue? = nil,
     tmdbid: Int? = nil, doubanid: String? = nil, bangumiid: Int? = nil,
     best_version: Int? = nil, best_version_full: Int? = nil, episode_group: String? = nil,
@@ -1501,7 +1523,7 @@ struct Subscribe: Codable, Identifiable, Hashable {
     save_path: String? = nil, filter_groups: [String]? = nil,
     custom_words: String? = nil, description: String? = nil,
     search_imdbid: Int? = nil, media_category: String? = nil, mediaid: String? = nil,
-    episode_priority: [String: Int]? = nil
+    episode_priority: [String: Int]? = nil, current_priority: Int? = nil, filter: String? = nil
   ) {
     self.id = id
     self.name = name
@@ -1509,8 +1531,11 @@ struct Subscribe: Codable, Identifiable, Hashable {
     self.type = type
     self.season = season
     self.poster = poster
+    self.vote = vote
     self.state = state
     self.last_update = last_update
+    self.username = username
+    self.date = date
     self.completed_episode = completed_episode
     self.note = note
     self.tmdbid = tmdbid
@@ -1518,6 +1543,7 @@ struct Subscribe: Codable, Identifiable, Hashable {
     self.bangumiid = bangumiid
     self.best_version = best_version
     self.best_version_full = best_version_full
+    self.current_priority = current_priority
     self.episode_group = episode_group
     self.backdrop = backdrop
     self.keyword = keyword
@@ -1535,6 +1561,7 @@ struct Subscribe: Codable, Identifiable, Hashable {
     self.filter_groups = filter_groups
     self.custom_words = custom_words
     self.description = description
+    self.filter = filter
     self.search_imdbid = search_imdbid
     self.media_category = media_category
     self.mediaid = mediaid

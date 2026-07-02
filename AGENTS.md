@@ -192,16 +192,22 @@ xcrun simctl list devices tvOS available
 
 - `<type>` 使用 `feat`、`fix`、`chore`、`refactor`、`test`、`docs` 等常见类型。
 - `<scope>` 简短描述修改范围，例如 `ci`、`paginator`、`preloader`、`tests`、`readme`。
-- `<summary>` 简洁说明本次修改内容，中文或英文均可。
+- `<summary>` 用中文简洁说明本次修改内容。
+- 除纯格式调整、拼写修正等极小变更外，Commit Message 必须包含中文正文。正文用 2-4 条简短项目符号说明：改了什么、为什么改、影响哪些用户可见行为或兼容边界、跑过哪些验证。不要只写单行标题，避免发布整理时必须重新阅读源码。
 
 示例：
 
 ```text
-[AI] feat/ci: add GitHub Actions build and test workflow
-[AI] fix/paginator: prevent stale load result from updating items
-[AI] chore/tests: add paginator lifecycle test coverage
-[AI] refactor/preloader: start detail tasks before image prefetch timeout
-[AI] docs/readme: update installation instructions
+[AI] fix/paginator: 防止过期加载结果覆盖列表
+
+- 取消或切换页面后，旧分页请求返回时不再写回当前列表。
+- 保留现有分页 API，只在结果发布前增加请求代际校验。
+- 已补充分页生命周期回归测试，并通过 tvOS Simulator 测试。
+
+[AI] docs/readme: 更新安装说明
+
+- 同步 README 中的安装命令和当前发布版本。
+- 仅修改文档内容，无可运行测试。
 ```
 
 6. 用户明确允许创建 PR 时，修改完成后再创建 Pull Request 让用户审查。

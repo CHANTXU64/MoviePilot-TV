@@ -85,6 +85,7 @@ class SubscribeSeasonViewModel: ObservableObject {
   @Published var isSeasonAvailabilityLoaded: Bool = false
   @Published var isLoading: Bool = false
   @Published var errorMessage: String?
+  @Published var hasSeasonLoadError = false
 
   // 各季的订阅状态
   @Published var seasonSubscriptions: [Int: SeasonSubscriptionSummary] = [:]
@@ -107,6 +108,7 @@ class SubscribeSeasonViewModel: ObservableObject {
     guard !hasLoaded else { return }
     hasLoaded = true
     isLoading = true
+    hasSeasonLoadError = false
     defer { isLoading = false }
 
     do {
@@ -120,6 +122,7 @@ class SubscribeSeasonViewModel: ObservableObject {
         forceRefreshSubscriptions: forceRefreshSubscriptions
       )
     } catch {
+      hasSeasonLoadError = true
       errorMessage = error.localizedDescription
     }
   }
@@ -127,11 +130,13 @@ class SubscribeSeasonViewModel: ObservableObject {
   /// 当用户在界面切换剧集组时触发重新加载
   func fetchSeasons() async {
     isLoading = true
+    hasSeasonLoadError = false
     defer { isLoading = false }
 
     do {
       try await fetchSeasonsInternal()
     } catch {
+      hasSeasonLoadError = true
       errorMessage = error.localizedDescription
     }
   }
@@ -268,11 +273,10 @@ class SubscribeSeasonViewModel: ObservableObject {
   }
 
   func prepareSubscription(seasonNumber: Int) {
-    // 如果已确认该季完整入库，默认开启“洗版”模式；未知状态不默认洗版。
-    let best_version =
-      (isSeasonAvailabilityLoaded
-        && (seasonsNotExisted[seasonNumber] == nil || seasonsNotExisted[seasonNumber] == 0))
-      ? 1 : 0
+    // 已完整入库的季显式全集洗版；其他情况不传洗版字段，让后端应用默认配置。
+    let isFullyAvailable =
+      isSeasonAvailabilityLoaded
+      && (seasonsNotExisted[seasonNumber] == nil || seasonsNotExisted[seasonNumber] == 0)
 
     self.sheetSubscribe = Subscribe(
       id: nil,
@@ -286,8 +290,16 @@ class SubscribeSeasonViewModel: ObservableObject {
       tmdbid: mediaInfo.tmdb_id,
       doubanid: mediaInfo.douban_id,
       bangumiid: mediaInfo.bangumi_id,
-      best_version: best_version,
-      episode_group: selectedGroupId.isEmpty ? nil : selectedGroupId
+      best_version: isFullyAvailable ? 1 : nil,
+      best_version_full: isFullyAvailable ? 1 : nil,
+      episode_group: selectedGroupId.isEmpty ? nil : selectedGroupId,
+      mediaid: MediaIdentifier.apiMediaId(
+        tmdbId: nil,
+        doubanId: nil,
+        bangumiId: nil,
+        mediaIdPrefix: mediaInfo.mediaid_prefix,
+        mediaId: mediaInfo.media_id
+      )
     )
   }
 

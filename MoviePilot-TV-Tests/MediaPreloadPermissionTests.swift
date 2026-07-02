@@ -222,7 +222,9 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertFalse(viewModel.isSeasonAvailabilityLoaded)
     XCTAssertTrue(viewModel.seasonsNotExisted.isEmpty)
     XCTAssertNil(viewModel.getStatusText(season: 1))
-    XCTAssertEqual(viewModel.sheetSubscribe?.best_version, 0)
+    let sheetSubscribe = try XCTUnwrap(viewModel.sheetSubscribe)
+    XCTAssertNil(sheetSubscribe.best_version)
+    XCTAssertNil(sheetSubscribe.best_version_full)
 
     let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
     XCTAssertTrue(paths.contains("/api/v1/mediaserver/notexists"))

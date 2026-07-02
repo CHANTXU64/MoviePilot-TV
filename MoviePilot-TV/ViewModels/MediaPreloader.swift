@@ -177,8 +177,6 @@ class MediaPreloadTask: ObservableObject {
   private func loadSeasonData(for detail: MediaInfo) async {
     guard APIService.shared.canAccess(.subscribe) else { return }
     guard detail.type == "电视剧" else { return }
-    // tmdb_id 是分季加载的前提（与 DetailView 中逻辑一致）
-    guard detail.tmdb_id != nil else { return }
 
     let vm = SubscribeSeasonViewModel(mediaInfo: detail)
     self.seasonViewModel = vm
