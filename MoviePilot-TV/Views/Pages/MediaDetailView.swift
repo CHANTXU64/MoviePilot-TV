@@ -90,12 +90,17 @@ struct MediaDetailView: View {
     preloadTask.seasonViewModel?.seasonInfos.count
   }
 
+  private var hasSeasonLoadError: Bool {
+    preloadTask.seasonViewModel?.hasSeasonLoadError == true
+  }
+
   private var shouldShowSeasonSubscriptionSection: Bool {
     Self.shouldShowSeasonSubscriptionSection(
       canSubscribeMedia: canSubscribeMedia,
       detail: viewModel.detail,
       isSeasonDataLoaded: preloadTask.isSeasonDataLoaded,
-      seasonCount: seasonInfoCount
+      seasonCount: seasonInfoCount,
+      hasSeasonLoadError: hasSeasonLoadError
     )
   }
 
@@ -104,7 +109,8 @@ struct MediaDetailView: View {
       canSubscribeMedia: canSubscribeMedia,
       detail: viewModel.detail,
       isSeasonDataLoaded: preloadTask.isSeasonDataLoaded,
-      seasonCount: seasonInfoCount
+      seasonCount: seasonInfoCount,
+      hasSeasonLoadError: hasSeasonLoadError
     )
   }
 
@@ -491,11 +497,13 @@ struct MediaDetailView: View {
     canSubscribeMedia: Bool,
     detail: MediaInfo,
     isSeasonDataLoaded: Bool,
-    seasonCount: Int?
+    seasonCount: Int?,
+    hasSeasonLoadError: Bool
   ) -> Bool {
     guard canSubscribeMedia && detail.type == "电视剧" && !detail.canDirectlySubscribe else {
       return false
     }
+    if hasSeasonLoadError { return true }
     return !isSeasonDataLoaded || (seasonCount ?? 0) > 0
   }
 
@@ -503,10 +511,11 @@ struct MediaDetailView: View {
     canSubscribeMedia: Bool,
     detail: MediaInfo,
     isSeasonDataLoaded: Bool,
-    seasonCount: Int?
+    seasonCount: Int?,
+    hasSeasonLoadError: Bool
   ) -> Bool {
     canSubscribeMedia && detail.type == "电视剧" && !detail.canDirectlySubscribe
-      && isSeasonDataLoaded && (seasonCount ?? 0) == 0
+      && isSeasonDataLoaded && (seasonCount ?? 0) == 0 && !hasSeasonLoadError
   }
 
   static func headerSubscribeButtonTitle(

@@ -85,6 +85,7 @@ class SubscribeSeasonViewModel: ObservableObject {
   @Published var isSeasonAvailabilityLoaded: Bool = false
   @Published var isLoading: Bool = false
   @Published var errorMessage: String?
+  @Published var hasSeasonLoadError = false
 
   // 各季的订阅状态
   @Published var seasonSubscriptions: [Int: SeasonSubscriptionSummary] = [:]
@@ -107,6 +108,7 @@ class SubscribeSeasonViewModel: ObservableObject {
     guard !hasLoaded else { return }
     hasLoaded = true
     isLoading = true
+    hasSeasonLoadError = false
     defer { isLoading = false }
 
     do {
@@ -120,6 +122,7 @@ class SubscribeSeasonViewModel: ObservableObject {
         forceRefreshSubscriptions: forceRefreshSubscriptions
       )
     } catch {
+      hasSeasonLoadError = true
       errorMessage = error.localizedDescription
     }
   }
@@ -127,11 +130,13 @@ class SubscribeSeasonViewModel: ObservableObject {
   /// 当用户在界面切换剧集组时触发重新加载
   func fetchSeasons() async {
     isLoading = true
+    hasSeasonLoadError = false
     defer { isLoading = false }
 
     do {
       try await fetchSeasonsInternal()
     } catch {
+      hasSeasonLoadError = true
       errorMessage = error.localizedDescription
     }
   }
