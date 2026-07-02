@@ -50,7 +50,7 @@ struct MediaDetailView: View {
   }
 
   private var preferredHeaderFocus: ButtonField? {
-    if canSubscribeMedia { return .subscribe }
+    if canSubscribeMedia && !isSeasonInformationUnavailable { return .subscribe }
     if canSearchResources { return .search }
     if canJumpToTMDB { return .tmdbJump }
     return nil
@@ -68,7 +68,7 @@ struct MediaDetailView: View {
   }
 
   private var firstVisibleRow: String {
-    if canSubscribeMedia && viewModel.detail.type == "电视剧" {
+    if shouldShowSeasonSubscriptionSection {
       return "season"
     }
     if !viewModel.actorsPaginator.items.isEmpty {
@@ -84,6 +84,28 @@ struct MediaDetailView: View {
       return "similar"
     }
     return ""
+  }
+
+  private var seasonInfoCount: Int? {
+    preloadTask.seasonViewModel?.seasonInfos.count
+  }
+
+  private var shouldShowSeasonSubscriptionSection: Bool {
+    Self.shouldShowSeasonSubscriptionSection(
+      canSubscribeMedia: canSubscribeMedia,
+      detail: viewModel.detail,
+      isSeasonDataLoaded: preloadTask.isSeasonDataLoaded,
+      seasonCount: seasonInfoCount
+    )
+  }
+
+  private var isSeasonInformationUnavailable: Bool {
+    Self.isSeasonInformationUnavailable(
+      canSubscribeMedia: canSubscribeMedia,
+      detail: viewModel.detail,
+      isSeasonDataLoaded: preloadTask.isSeasonDataLoaded,
+      seasonCount: seasonInfoCount
+    )
   }
 
   /// 从 ViewModel 读取的订阅状态（ViewModel 代理到 preloadTask）
@@ -211,9 +233,10 @@ struct MediaDetailView: View {
               recommendationsSection
               similarSection
             }
-            .id("contentTop")
             .padding(.top, showContentPage ? 60 : 0)
             .padding(.bottom, 80)
+            .frame(minHeight: UIScreen.main.bounds.height, alignment: .top)
+            .id("contentTop")
             .focused($isContentFocused)
             .animation(.easeInOut(duration: 0.6), value: showContentPage)
             .onChange(of: isHeroFocused) { _, focused in
@@ -464,6 +487,39 @@ struct MediaDetailView: View {
     }
   }
 
+  static func shouldShowSeasonSubscriptionSection(
+    canSubscribeMedia: Bool,
+    detail: MediaInfo,
+    isSeasonDataLoaded: Bool,
+    seasonCount: Int?
+  ) -> Bool {
+    guard canSubscribeMedia && detail.type == "电视剧" && !detail.canDirectlySubscribe else {
+      return false
+    }
+    return !isSeasonDataLoaded || (seasonCount ?? 0) > 0
+  }
+
+  static func isSeasonInformationUnavailable(
+    canSubscribeMedia: Bool,
+    detail: MediaInfo,
+    isSeasonDataLoaded: Bool,
+    seasonCount: Int?
+  ) -> Bool {
+    canSubscribeMedia && detail.type == "电视剧" && !detail.canDirectlySubscribe
+      && isSeasonDataLoaded && (seasonCount ?? 0) == 0
+  }
+
+  static func headerSubscribeButtonTitle(
+    isSubscribed: Bool,
+    detail: MediaInfo,
+    isSeasonInformationUnavailable: Bool
+  ) -> String {
+    if detail.canDirectlySubscribe {
+      return isSubscribed ? "已订阅" : "订阅"
+    }
+    return isSeasonInformationUnavailable ? "无分季信息" : "分季订阅"
+  }
+
   private func handleHeaderSubscribe() {
     Task { @MainActor in
       await Self.performHeaderSubscribeAction(
@@ -616,7 +672,7 @@ struct MediaDetailView: View {
               Button(action: {
                 if detail.canDirectlySubscribe {
                   handleHeaderSubscribe()
-                } else if detail.type == "电视剧" {
+                } else if detail.type == "电视剧" && !isSeasonInformationUnavailable {
                   isContentFocused = true
                 }
               }) {
@@ -624,18 +680,26 @@ struct MediaDetailView: View {
                   ProgressView()
                 } else {
                   let isDirect = detail.canDirectlySubscribe
-                  let label = isDirect ? (isSubscribed ? "已订阅" : "订阅") : "分季订阅"
+                  let label = Self.headerSubscribeButtonTitle(
+                    isSubscribed: isSubscribed,
+                    detail: detail,
+                    isSeasonInformationUnavailable: isSeasonInformationUnavailable
+                  )
                   let icon =
                     isDirect
                     ? (isSubscribed ? "checkmark.circle.fill" : "plus.circle")
-                    : "list.bullet.circle"
+                    : (
+                      isSeasonInformationUnavailable
+                        ? "exclamationmark.circle" : "list.bullet.circle"
+                    )
 
                   Label(label, systemImage: icon)
                     .foregroundColor(.primary)
                 }
               }
               .focused($focusedButton, equals: .subscribe)
-              .disabled(viewModel.isUnsubscribing)
+              .disabled(viewModel.isUnsubscribing || isSeasonInformationUnavailable)
+              .opacity(isSeasonInformationUnavailable ? 0.35 : 1)
             }
 
             if canSearchResources {
@@ -717,7 +781,7 @@ struct MediaDetailView: View {
 
   @ViewBuilder
   private var seasonSubscriptionSection: some View {
-    if canSubscribeMedia && viewModel.detail.type == "电视剧" {
+    if shouldShowSeasonSubscriptionSection {
       VStack(alignment: .leading, spacing: 0) {
         if let seasonVM = preloadTask.seasonViewModel {
           // 使用预加载的 SubscribeSeasonViewModel

@@ -883,6 +883,58 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
+  func testSeasonSubscribeHeaderShowsUnavailableStateWhenLoadedWithoutSeasons() {
+    let detail = MediaInfo(title: "无分季剧集", type: "电视剧")
+
+    XCTAssertTrue(
+      MediaDetailView.isSeasonInformationUnavailable(
+        canSubscribeMedia: true,
+        detail: detail,
+        isSeasonDataLoaded: true,
+        seasonCount: 0
+      )
+    )
+    XCTAssertFalse(
+      MediaDetailView.shouldShowSeasonSubscriptionSection(
+        canSubscribeMedia: true,
+        detail: detail,
+        isSeasonDataLoaded: true,
+        seasonCount: 0
+      )
+    )
+    XCTAssertEqual(
+      MediaDetailView.headerSubscribeButtonTitle(
+        isSubscribed: false,
+        detail: detail,
+        isSeasonInformationUnavailable: true
+      ),
+      "无分季信息"
+    )
+  }
+
+  @MainActor
+  func testSeasonSubscribeSectionStaysVisibleWhileLoadingOrWhenSeasonsExist() {
+    let detail = MediaInfo(title: "有分季剧集", type: "电视剧")
+
+    XCTAssertTrue(
+      MediaDetailView.shouldShowSeasonSubscriptionSection(
+        canSubscribeMedia: true,
+        detail: detail,
+        isSeasonDataLoaded: false,
+        seasonCount: nil
+      )
+    )
+    XCTAssertTrue(
+      MediaDetailView.shouldShowSeasonSubscriptionSection(
+        canSubscribeMedia: true,
+        detail: detail,
+        isSeasonDataLoaded: true,
+        seasonCount: 1
+      )
+    )
+  }
+
+  @MainActor
   func testUnsubscribedHeaderActionStartsSubscribeFlow() {
     var didShowUnsubscribeConfirm = false
     var didStartSubscribe = false

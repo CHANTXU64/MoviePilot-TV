@@ -142,6 +142,13 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains(".defaultFocus($focusedButton, preferredHeaderFocus)"))
   }
 
+  func testMediaDetailUnavailableSeasonSubscribeButtonUsesDisabledOpacity() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
+
+    XCTAssertTrue(source.contains(".disabled(viewModel.isUnsubscribing || isSeasonInformationUnavailable)"))
+    XCTAssertTrue(source.contains(".opacity(isSeasonInformationUnavailable ? 0.35 : 1)"))
+  }
+
   func testSystemViewModelRechecksPermissionBeforePublishingCustomRules() throws {
     let source = try Self.source(at: "MoviePilot-TV/ViewModels/SystemViewModel.swift")
 
