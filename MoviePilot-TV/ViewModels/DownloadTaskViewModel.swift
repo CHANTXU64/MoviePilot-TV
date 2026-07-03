@@ -11,7 +11,23 @@ class DownloadTaskViewModel: ObservableObject {
   private let apiService = APIService.shared
   private var downloadLoadGeneration = 0
 
+  #if DEBUG
+  func installUIPreviewData(
+    clients: [DownloaderConf],
+    selectedClient: String,
+    downloads: [DownloadingInfo]
+  ) {
+    self.clients = clients
+    self.selectedClient = selectedClient
+    self.downloads = downloads
+  }
+  #endif
+
   func initialLoad() async {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return }
+    #endif
+
     guard apiService.canAccess(.manage) else {
       clearForRestrictedUser()
       return
@@ -30,6 +46,10 @@ class DownloadTaskViewModel: ObservableObject {
   }
 
   func loadDownloads() async {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return }
+    #endif
+
     guard apiService.canAccess(.manage) else {
       clearForRestrictedUser()
       return
@@ -75,6 +95,10 @@ class DownloadTaskViewModel: ObservableObject {
   }
 
   func stopDownload(hash: String) async -> Bool {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return true }
+    #endif
+
     guard apiService.canAccess(.manage) else { return false }
     guard !selectedClient.isEmpty else { return false }
     do {
@@ -91,6 +115,10 @@ class DownloadTaskViewModel: ObservableObject {
   }
 
   func startDownload(hash: String) async -> Bool {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return true }
+    #endif
+
     guard apiService.canAccess(.manage) else { return false }
     guard !selectedClient.isEmpty else { return false }
     do {
@@ -108,6 +136,10 @@ class DownloadTaskViewModel: ObservableObject {
 
   @MainActor
   func deleteDownload(hash: String) async {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return }
+    #endif
+
     guard apiService.canAccess(.manage) else { return }
     let clientName = selectedClient
     guard !clientName.isEmpty else { return }

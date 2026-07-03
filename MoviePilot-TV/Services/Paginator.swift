@@ -334,3 +334,27 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     onReset?()
   }
 }
+
+#if DEBUG
+extension Paginator {
+  static func uiPreview(
+    items: [ItemType] = [],
+    isFirstLoading: Bool = false,
+    isLoadingMore: Bool = false,
+    hasError: Bool = false
+  ) -> Paginator<ItemType> {
+    let paginator = Paginator<ItemType>(
+      threshold: 24,
+      fetcher: { _ in [] },
+      processor: { _, _ in false }
+    )
+    paginator.items = items
+    paginator.isFirstLoading = isFirstLoading
+    paginator.isLoading = isFirstLoading || isLoadingMore
+    paginator.isLoadingMore = isLoadingMore
+    paginator.hasError = hasError
+    paginator.hasMore = isLoadingMore
+    return paginator
+  }
+}
+#endif

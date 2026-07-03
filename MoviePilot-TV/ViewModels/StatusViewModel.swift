@@ -10,6 +10,14 @@ class StatusViewModel: ObservableObject {
 
   private let apiService = APIService.shared
 
+  #if DEBUG
+  func installUIPreviewData(statistic: Statistic?, storage: Storage?, downloader: DownloaderInfo?) {
+    self.statistic = statistic
+    self.storage = storage
+    self.downloader = downloader
+  }
+  #endif
+
   func refreshAllData() async {
     guard apiService.canRequestSuperUserEndpoints else {
       statistic = nil

@@ -1,10 +1,20 @@
 import SwiftUI
 
 struct RecommendView: View {
-  @StateObject private var viewModel = RecommendViewModel()
+  @StateObject private var viewModel: RecommendViewModel
   @State private var path = NavigationPath()
   @StateObject private var subscriptionHandler = SubscriptionHandler()
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
+
+  init() {
+    _viewModel = StateObject(wrappedValue: RecommendViewModel())
+  }
+
+  #if DEBUG
+  init(viewModel: RecommendViewModel) {
+    _viewModel = StateObject(wrappedValue: viewModel)
+  }
+  #endif
 
   var body: some View {
     NavigationStack(path: $path) {

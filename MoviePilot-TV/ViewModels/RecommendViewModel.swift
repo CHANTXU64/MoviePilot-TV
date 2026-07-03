@@ -89,6 +89,17 @@ class RecommendViewModel: ObservableObject {
   }
 
   init() {
+    configureAutomaticLoading()
+  }
+
+  #if DEBUG
+  init(loadsAutomatically: Bool) {
+    guard loadsAutomatically else { return }
+    configureAutomaticLoading()
+  }
+  #endif
+
+  private func configureAutomaticLoading() {
     // 默认选中流行趋势
     // 当 selectedShelf 改变时，自动创建一个新的 Paginator 实例
     // sink 会因为 selectedShelf 的初始值而立即触发，所以无需手动调用 setupPaginator
@@ -104,6 +115,18 @@ class RecommendViewModel: ObservableObject {
     // 设置初始货架，这将触发上面的 sink
     onCategoryChanged()
   }
+
+  #if DEBUG
+  func installUIPreviewPaginator(_ previewPaginator: Paginator<MediaInfo>?) {
+    paginator?.cancel()
+    paginatorCancellable?.cancel()
+    paginator = previewPaginator
+    paginatorCancellable = previewPaginator?.objectWillChange
+      .sink { [weak self] _ in
+        self?.objectWillChange.send()
+      }
+  }
+  #endif
 
   private func setupPaginator(for shelf: RecommendShelf) {
     paginator?.cancel()

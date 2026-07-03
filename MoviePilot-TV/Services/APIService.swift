@@ -393,6 +393,8 @@ class APIService: ObservableObject {
   #if DEBUG
   var subscriptionCacheTestHooks = SubscriptionCacheTestHooks()
   private var subscriptionDebugRequestCount = 0
+  var uiPreviewPermissions: Set<UserPermissionKey>?
+  var uiPreviewCanRequestSuperUserEndpoints: Bool?
   #endif
 
   private func invalidateSubscriptionCaches() async {
@@ -596,11 +598,21 @@ class APIService: ObservableObject {
   }
 
   var canRequestSuperUserEndpoints: Bool {
-    currentOrStoredUser?.canRequestSuperUserEndpoints == true
+    #if DEBUG
+    if UIPreviewMode.isEnabled(), let uiPreviewCanRequestSuperUserEndpoints {
+      return uiPreviewCanRequestSuperUserEndpoints
+    }
+    #endif
+    return currentOrStoredUser?.canRequestSuperUserEndpoints == true
   }
 
   func canAccess(_ permission: UserPermissionKey) -> Bool {
-    currentOrStoredUser?.canAccess(permission) == true
+    #if DEBUG
+    if UIPreviewMode.isEnabled(), let uiPreviewPermissions {
+      return uiPreviewPermissions.contains(permission)
+    }
+    #endif
+    return currentOrStoredUser?.canAccess(permission) == true
   }
 
   func sessionSnapshot() -> APIServiceSessionSnapshot {

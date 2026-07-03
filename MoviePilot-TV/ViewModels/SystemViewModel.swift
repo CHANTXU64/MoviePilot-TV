@@ -146,6 +146,32 @@ class SystemViewModel: ObservableObject {
     checkKeychainStatus()
   }
 
+  #if DEBUG
+  func installUIPreviewData(
+    storageDescription: String,
+    serverURL: String,
+    username: String,
+    backendVersion: String?,
+    availableSites: [Site],
+    customFilterRules: [CustomRule],
+    isRefreshing: Bool = false,
+    refreshMessage: String? = nil,
+    isLoadingSites: Bool = false,
+    isLoadingRules: Bool = false
+  ) {
+    self.storageDescription = storageDescription
+    self.serverURL = serverURL
+    self.username = username
+    self.backendVersion = backendVersion
+    self.availableSites = availableSites
+    self.customFilterRules = customFilterRules
+    self.isRefreshing = isRefreshing
+    self.refreshMessage = refreshMessage
+    self.isLoadingSites = isLoadingSites
+    self.isLoadingRules = isLoadingRules
+  }
+  #endif
+
   /// 手动刷新登录凭据（解决服务器重启或 Token 失效问题）
   func relogin() async {
     guard !isRefreshing else { return }

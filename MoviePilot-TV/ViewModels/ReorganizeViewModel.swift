@@ -66,7 +66,25 @@ class ReorganizeViewModel: ObservableObject {
     updateEpisodeDetailDisabledState()
   }
 
+  #if DEBUG
+  func installUIPreviewConfig(
+    directories: [TransferDirectoryConf],
+    storages: [StorageConf],
+    targetDirectoryOptions: [PickerOption<String>],
+    isLoading: Bool = false
+  ) {
+    self.directories = directories
+    self.storages = storages
+    self.targetDirectoryOptions = targetDirectoryOptions
+    self.isLoading = isLoading
+  }
+  #endif
+
   func loadConfig() async {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return }
+    #endif
+
     guard apiService.canAccess(.manage) else {
       clearLoadedConfig()
       isLoading = false
@@ -110,6 +128,10 @@ class ReorganizeViewModel: ObservableObject {
   }
 
   func submit(background: Bool) async -> Bool {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return true }
+    #endif
+
     guard apiService.canAccess(.manage) else { return false }
     isSubmitting = true
     defer { isSubmitting = false }

@@ -37,6 +37,24 @@ class ResourceResultViewModel: ObservableObject {
     self.sites = sites
   }
 
+  #if DEBUG
+  convenience init(
+    previewTitle: String,
+    mediaInfo _: MediaInfo?,
+    results: [Context],
+    isLoading: Bool,
+    progressText: String = "",
+    progress: Double = 0
+  ) {
+    self.init(keyword: previewTitle, title: previewTitle)
+    self.results = results
+    self.isLoading = isLoading
+    self.hasSearched = true
+    self.searchProgressText = progressText
+    self.searchProgress = progress
+  }
+  #endif
+
   deinit {
     searchStreamTask?.cancel()
   }

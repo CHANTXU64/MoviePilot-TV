@@ -17,6 +17,17 @@ class SubscriptionHandler: ObservableObject {
   func handleSubscribe(_ item: MediaInfo) {
     guard apiService.canAccess(.subscribe) else { return }
 
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      if item.canDirectlySubscribe {
+        sheetSubscribe = mediaInfoToSubscribeRequest(item)
+      } else {
+        tvSubscribeRequest = SubscribeSeasonRequest(mediaInfo: item, initialSeason: nil)
+      }
+      return
+    }
+    #endif
+
     if item.canDirectlySubscribe {
       Task {
         var isSubscribed = try? await apiService.checkSubscription(media: item)
@@ -43,6 +54,13 @@ class SubscriptionHandler: ObservableObject {
   func fork(share: SubscribeShare) async -> Int? {
     guard apiService.canAccess(.subscribe) else { return nil }
 
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      showAlert(title: share.share_title ?? "", message: "复用订阅成功！")
+      return 1
+    }
+    #endif
+
     do {
       guard let newSubId = try await apiService.forkSubscription(share: share) else {
         return nil
@@ -57,6 +75,10 @@ class SubscriptionHandler: ObservableObject {
 
   func fetchSubscriptionAndShowEditor(subId: Int) async {
     guard apiService.canAccess(.subscribe) else { return }
+
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return }
+    #endif
 
     do {
       let subscription = try await apiService.fetchSubscription(id: subId)

@@ -52,6 +52,19 @@ class PersonDetailViewModel: ObservableObject {
       .store(in: &cancellables)
   }
 
+  #if DEBUG
+  init(person: Person, previewPaginator: Paginator<MediaInfo>, isLoadingDetails: Bool) {
+    self.person = person
+    self.isLoadingDetails = isLoadingDetails
+    self.paginator = previewPaginator
+    self.paginator.objectWillChange
+      .sink { [weak self] _ in
+        self?.objectWillChange.send()
+      }
+      .store(in: &cancellables)
+  }
+  #endif
+
   func loadDetails() async {
     // 如果缺少 raw_id，则不获取详情数据。
     guard let personId = person.raw_id, !personId.isEmpty else {

@@ -58,6 +58,29 @@ class TransferHistoryViewModel: ObservableObject {
     configurePaginator()
   }
 
+  #if DEBUG
+  func installUIPreviewData(
+    items: [TransferHistory],
+    storageDict: [String: String] = [:],
+    selectedIds: Set<Int> = [],
+    isFirstLoading: Bool = false,
+    isLoadingMore: Bool = false,
+    isAiRedoing: Bool = false,
+    aiRedoingIds: Set<Int> = [],
+    aiRedoProgressText: String = ""
+  ) {
+    paginator.cancel()
+    self.items = items
+    self.storageDict = storageDict
+    self.selectedIds = selectedIds
+    self.isFirstLoading = isFirstLoading
+    self.isLoadingMore = isLoadingMore
+    self.isAiRedoing = isAiRedoing
+    self.aiRedoingIds = aiRedoingIds
+    self.aiRedoProgressText = aiRedoProgressText
+  }
+  #endif
+
   private func configurePaginator() {
     paginator?.cancel()
 
@@ -131,6 +154,10 @@ class TransferHistoryViewModel: ObservableObject {
   }
 
   func refresh() async {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return }
+    #endif
+
     errorMessage = nil
     isLoadingMore = false
     guard apiService.canAccess(.manage) else {
@@ -176,6 +203,10 @@ class TransferHistoryViewModel: ObservableObject {
   }
 
   func loadMore(currentItemId: TransferHistory.ID) async {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return }
+    #endif
+
     errorMessage = nil
     guard apiService.canAccess(.manage) else { return }
     guard !isLoadingMore else { return }
@@ -195,6 +226,10 @@ class TransferHistoryViewModel: ObservableObject {
   }
 
   func deleteHistory(item: TransferHistory, deleteSource: Bool, deleteDest: Bool) async {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return }
+    #endif
+
     errorMessage = nil
     guard apiService.canAccess(.manage) else { return }
     do {
@@ -233,6 +268,10 @@ class TransferHistoryViewModel: ObservableObject {
   }
 
   func deleteSelected(deleteSource: Bool, deleteDest: Bool) async {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return }
+    #endif
+
     errorMessage = nil
     guard apiService.canAccess(.manage) else { return }
     let idsToDelete = Array(selectedIds)
@@ -272,6 +311,10 @@ class TransferHistoryViewModel: ObservableObject {
   // MARK: - Polling Helpers
 
   func fetchLatest() async {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return }
+    #endif
+
     guard apiService.canAccess(.manage) else { return }
     do {
       var allNewItems: [TransferHistory] = []
@@ -441,6 +484,10 @@ class TransferHistoryViewModel: ObservableObject {
   // MARK: - AI Reorganize
 
   func triggerAiRedo(for ids: [Int]) async {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return }
+    #endif
+
     guard apiService.canAccess(.manage) else { return }
     let pendingIds = ids.filter { !aiRedoingIds.contains($0) }
     guard !pendingIds.isEmpty else { return }

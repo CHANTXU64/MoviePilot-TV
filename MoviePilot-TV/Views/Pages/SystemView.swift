@@ -1,6 +1,13 @@
 import SwiftUI
 import UIKit
 
+#if DEBUG
+enum SystemViewUIPreviewPresentation {
+  case appInfo
+  case logoutConfirmation
+}
+#endif
+
 struct SystemView: View {
   private static let pageAnimationDuration: TimeInterval = 0.42
   private static let topAnchorID = "SystemSettingsTopAnchor"
@@ -17,7 +24,11 @@ struct SystemView: View {
 
   private let isSelected: Bool
 
-  @StateObject private var viewModel = SystemViewModel()
+  #if DEBUG
+  private let loadsDataOnAppear: Bool
+  #endif
+
+  @StateObject private var viewModel: SystemViewModel
   @ObservedObject private var apiService = APIService.shared
   @State private var showAppInfo = false
   @State private var showLogoutConfirmation = false
@@ -29,7 +40,27 @@ struct SystemView: View {
 
   init(isSelected: Bool = true) {
     self.isSelected = isSelected
+    #if DEBUG
+    loadsDataOnAppear = true
+    #endif
+    _viewModel = StateObject(wrappedValue: SystemViewModel())
   }
+
+  #if DEBUG
+  init(isSelected: Bool, viewModel: SystemViewModel, loadsDataOnAppear: Bool) {
+    self.isSelected = isSelected
+    self.loadsDataOnAppear = loadsDataOnAppear
+    _viewModel = StateObject(wrappedValue: viewModel)
+  }
+
+  init(uiPreviewPresentation: SystemViewUIPreviewPresentation, viewModel: SystemViewModel? = nil) {
+    self.isSelected = true
+    self.loadsDataOnAppear = false
+    _viewModel = StateObject(wrappedValue: viewModel ?? SystemViewModel())
+    _showAppInfo = State(initialValue: uiPreviewPresentation == .appInfo)
+    _showLogoutConfirmation = State(initialValue: uiPreviewPresentation == .logoutConfirmation)
+  }
+  #endif
 
   private var canConfigureSubscriptions: Bool {
     apiService.canAccess(.subscribe)
@@ -90,14 +121,23 @@ struct SystemView: View {
     .onAppear {
       displayedRoute = route
       pageOffsetDepth = route.count
+      #if DEBUG
+      guard loadsDataOnAppear else { return }
+      #endif
       viewModel.checkKeychainStatus()
       refreshFilterRulesForEntryIfNeeded()
     }
     .onChange(of: isSelected) { _, selected in
       guard selected else { return }
+      #if DEBUG
+      guard loadsDataOnAppear else { return }
+      #endif
       refreshFilterRulesForEntryIfNeeded()
     }
     .task {
+      #if DEBUG
+      guard loadsDataOnAppear else { return }
+      #endif
       await viewModel.loadSystemInfo()
       await viewModel.loadSites()
     }

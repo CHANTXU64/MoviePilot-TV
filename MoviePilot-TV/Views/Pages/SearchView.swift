@@ -1,7 +1,21 @@
 import SwiftUI
 
+#if DEBUG
+struct SearchViewUIPreviewDestinations {
+  var collectionViewModel: CollectionDetailViewModel? = nil
+  var personViewModel: PersonDetailViewModel? = nil
+  var resourceResultViewModel: ResourceResultViewModel? = nil
+  var seasonViewModel: SubscribeSeasonViewModel? = nil
+}
+#endif
+
 struct SearchView: View {
-  @StateObject private var viewModel = SearchViewModel()
+  @StateObject private var viewModel: SearchViewModel
+
+  #if DEBUG
+  private let loadsSitesOnAppear: Bool
+  private let uiPreviewDestinations: SearchViewUIPreviewDestinations?
+  #endif
   @State private var path = NavigationPath()
   @StateObject private var subscriptionHandler = SubscriptionHandler()
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
@@ -18,6 +32,28 @@ struct SearchView: View {
   // TV 端特有的焦点重定向器：用于在原生搜索栏和自定义内容之间平滑过渡焦点
   @FocusState private var isTopRedirectorFocused: Bool
   @FocusState private var isBottomRedirectorFocused: Bool
+
+  init() {
+    _viewModel = StateObject(wrappedValue: SearchViewModel())
+    #if DEBUG
+    loadsSitesOnAppear = true
+    uiPreviewDestinations = nil
+    #endif
+  }
+
+  #if DEBUG
+  init(
+    viewModel: SearchViewModel,
+    loadsSitesOnAppear: Bool,
+    initialPath: NavigationPath = NavigationPath(),
+    uiPreviewDestinations: SearchViewUIPreviewDestinations? = nil
+  ) {
+    _viewModel = StateObject(wrappedValue: viewModel)
+    self.loadsSitesOnAppear = loadsSitesOnAppear
+    self.uiPreviewDestinations = uiPreviewDestinations
+    _path = State(initialValue: initialPath)
+  }
+  #endif
 
   /// MARK: - 站点过滤器显示逻辑
   /// 此逻辑非常关键，用于处理 TV 端遥控器操作时的焦点“粘性”。
@@ -180,24 +216,16 @@ struct SearchView: View {
         }
       }
       .navigationDestination(for: MediaInfo.self) { detail in
-        if let collectionId = detail.collection_id {
-          CollectionDetailView(
-            title: detail.title ?? "合集详情",
-            collectionId: collectionId,
-            navigationPath: $path
-          )
-        } else {
-          MediaDetailContainerView(media: detail, navigationPath: $path)
-        }
+        mediaDestination(for: detail)
       }
       .navigationDestination(for: Person.self) { person in
-        PersonDetailView(person: person, navigationPath: $path)
+        personDestination(for: person)
       }
       .navigationDestination(for: ResourceSearchRequest.self) { request in
-        ResourceResultView(request: request)
+        resourceDestination(for: request)
       }
       .navigationDestination(for: SubscribeSeasonRequest.self) { request in
-        SubscribeSeasonView(mediaInfo: request.mediaInfo, initialSeason: request.initialSeason)
+        seasonDestination(for: request)
       }
       .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $path)
       .sheet(item: $subscriptionHandler.forkSheetRequest) { share in
@@ -222,6 +250,9 @@ struct SearchView: View {
       // 使用原生搜索栏
       .searchable(text: $viewModel.query, placement: .automatic, prompt: "电影、节目、演职人员等")
       .task {
+        #if DEBUG
+        guard loadsSitesOnAppear else { return }
+        #endif
         // 当视图出现时加载站点
         await viewModel.siteFilter.loadSites()
       }
@@ -232,6 +263,79 @@ struct SearchView: View {
       }
     }
     .environmentObject(subscriptionHandler)
+  }
+
+  @ViewBuilder
+  private func mediaDestination(for detail: MediaInfo) -> some View {
+    if let collectionId = detail.collection_id {
+      #if DEBUG
+      if let previewViewModel = uiPreviewDestinations?.collectionViewModel {
+        CollectionDetailView(
+          title: detail.title ?? "合集详情",
+          collectionId: collectionId,
+          navigationPath: $path,
+          previewViewModel: previewViewModel
+        )
+      } else {
+        CollectionDetailView(
+          title: detail.title ?? "合集详情",
+          collectionId: collectionId,
+          navigationPath: $path
+        )
+      }
+      #else
+      CollectionDetailView(
+        title: detail.title ?? "合集详情",
+        collectionId: collectionId,
+        navigationPath: $path
+      )
+      #endif
+    } else {
+      MediaDetailContainerView(media: detail, navigationPath: $path)
+    }
+  }
+
+  @ViewBuilder
+  private func personDestination(for person: Person) -> some View {
+    #if DEBUG
+    if let previewViewModel = uiPreviewDestinations?.personViewModel {
+      PersonDetailView(previewViewModel: previewViewModel, navigationPath: $path)
+    } else {
+      PersonDetailView(person: person, navigationPath: $path)
+    }
+    #else
+    PersonDetailView(person: person, navigationPath: $path)
+    #endif
+  }
+
+  @ViewBuilder
+  private func resourceDestination(for request: ResourceSearchRequest) -> some View {
+    #if DEBUG
+    if let previewViewModel = uiPreviewDestinations?.resourceResultViewModel {
+      ResourceResultView(
+        title: request.title ?? "资源搜索",
+        mediaInfo: request.mediaInfo,
+        previewViewModel: previewViewModel
+      )
+    } else {
+      ResourceResultView(request: request)
+    }
+    #else
+    ResourceResultView(request: request)
+    #endif
+  }
+
+  @ViewBuilder
+  private func seasonDestination(for request: SubscribeSeasonRequest) -> some View {
+    #if DEBUG
+    if let previewViewModel = uiPreviewDestinations?.seasonViewModel {
+      SubscribeSeasonView(previewViewModel: previewViewModel)
+    } else {
+      SubscribeSeasonView(mediaInfo: request.mediaInfo, initialSeason: request.initialSeason)
+    }
+    #else
+    SubscribeSeasonView(mediaInfo: request.mediaInfo, initialSeason: request.initialSeason)
+    #endif
   }
 }
 

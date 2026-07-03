@@ -6,6 +6,10 @@ struct ReorganizeSheet: View {
   let onDone: () -> Void
 
   @StateObject private var viewModel: ReorganizeViewModel
+
+  #if DEBUG
+  private let loadsConfigOnAppear: Bool
+  #endif
   @State private var showAdvanced = false
   @FocusState private var isAdvancedButtonFocused: Bool
 
@@ -26,7 +30,18 @@ struct ReorganizeSheet: View {
       )
     )
     self.onDone = onDone
+    #if DEBUG
+    self.loadsConfigOnAppear = true
+    #endif
   }
+
+  #if DEBUG
+  init(previewViewModel: ReorganizeViewModel, onDone: @escaping () -> Void) {
+    _viewModel = StateObject(wrappedValue: previewViewModel)
+    self.onDone = onDone
+    self.loadsConfigOnAppear = false
+  }
+  #endif
 
   var body: some View {
     NavigationStack {
@@ -39,6 +54,9 @@ struct ReorganizeSheet: View {
         }
       }
       .task {
+        #if DEBUG
+        guard loadsConfigOnAppear else { return }
+        #endif
         await viewModel.loadConfig()
       }
       .onChange(of: viewModel.errorMessage) { _, newValue in

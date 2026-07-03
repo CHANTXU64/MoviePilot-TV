@@ -129,6 +129,10 @@ class SubscribeSeasonViewModel: ObservableObject {
 
   /// 当用户在界面切换剧集组时触发重新加载
   func fetchSeasons() async {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return }
+    #endif
+
     isLoading = true
     hasSeasonLoadError = false
     defer { isLoading = false }
@@ -166,6 +170,10 @@ class SubscribeSeasonViewModel: ObservableObject {
 
   /// 调用后端接口，比对媒体库中已有的集数，确定每一季的完整性
   func checkSeasonsStatus() async {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return }
+    #endif
+
     isSeasonAvailabilityLoaded = false
     guard APIService.shared.canAccess(.subscribe) else {
       seasonsNotExisted = [:]
@@ -246,6 +254,10 @@ class SubscribeSeasonViewModel: ObservableObject {
   /// 查询当前媒体所有分季订阅摘要，填充 seasonSubscriptions 和 subscribedSeasons
   @discardableResult
   func checkSubscriptionStatus(forceRefresh: Bool = false) async -> Bool {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return true }
+    #endif
+
     guard APIService.shared.canAccess(.subscribe) else {
       seasonSubscriptions = [:]
       subscribedSeasons = []
@@ -304,6 +316,13 @@ class SubscribeSeasonViewModel: ObservableObject {
   }
 
   func unsubscribeSeason(_ seasonNumber: Int) async {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      showUnsubscribeConfirm = nil
+      return
+    }
+    #endif
+
     subscribingSeasons.insert(seasonNumber)
     defer { subscribingSeasons.remove(seasonNumber) }
 

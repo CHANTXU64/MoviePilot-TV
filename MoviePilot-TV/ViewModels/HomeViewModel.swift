@@ -46,6 +46,25 @@ class HomeViewModel: ObservableObject {
       .store(in: &cancellables)
   }
 
+  #if DEBUG
+  func installUIPreviewData(
+    latestMediaByServer: [String: [MediaServerPlayItem]],
+    selectedServer: String,
+    movieSubscriptions: [Subscribe],
+    tvSubscriptions: [Subscribe],
+    isLoading: Bool = false
+  ) {
+    self.latestMediaByServer = latestMediaByServer
+    self.latestMediaServers = Array(latestMediaByServer.keys).sorted()
+    self.selectedLatestMediaServer = selectedServer
+    self.latestMedia = latestMediaByServer[selectedServer] ?? []
+    self.movieSubscriptions = movieSubscriptions
+    self.tvSubscriptions = tvSubscriptions
+    self.isLoading = isLoading
+    self.hasLoaded = true
+  }
+  #endif
+
   private var hasLoaded = false
 
   /// 初始或刷新加载数据
@@ -191,6 +210,10 @@ class HomeViewModel: ObservableObject {
 
   /// 切换订阅状态（运行/停止）
   func toggleSubscribeStatus(subscribe: Subscribe) async -> Bool {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return true }
+    #endif
+
     guard apiService.canAccess(.subscribe) else { return false }
     guard let id = subscribe.id else { return false }
     // 前端逻辑：如果是 'S' (已停止) -> 切换到 'R' (运行)，否则 -> 'S' (停止)
@@ -209,6 +232,10 @@ class HomeViewModel: ObservableObject {
 
   /// 重置订阅历史
   func resetSubscribe(subscribe: Subscribe) async -> Bool {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return true }
+    #endif
+
     guard apiService.canAccess(.subscribe) else { return false }
     guard let id = subscribe.id else { return false }
     do {
@@ -225,6 +252,10 @@ class HomeViewModel: ObservableObject {
 
   /// 立即触发订阅搜索
   func searchSubscribe(subscribe: Subscribe) async -> Bool {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return true }
+    #endif
+
     guard apiService.canAccess(.subscribe) else { return false }
     guard let id = subscribe.id else { return false }
     do {
@@ -243,6 +274,10 @@ class HomeViewModel: ObservableObject {
 
   /// 删除订阅
   func deleteSubscribe(subscribe: Subscribe) async -> Bool {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return true }
+    #endif
+
     guard apiService.canAccess(.subscribe) else { return false }
     guard let id = subscribe.id else { return false }
     do {

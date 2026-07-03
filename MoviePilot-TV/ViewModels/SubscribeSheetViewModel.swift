@@ -56,7 +56,28 @@ class SubscribeSheetViewModel: ObservableObject {
     self.isNewSubscription = isNewSubscription
   }
 
+  #if DEBUG
+  func installUIPreviewOptions(
+    sites: [Site],
+    downloaders: [DownloaderConf],
+    directories: [TransferDirectoryConf],
+    filterGroups: [FilterRuleGroup],
+    episodeGroups: [EpisodeGroup]
+  ) {
+    self.sites = sites
+    self.downloaders = downloaders
+    self.directories = directories
+    self.filterGroups = filterGroups
+    self.episodeGroups = episodeGroups
+    isLoading = false
+  }
+  #endif
+
   func loadData() async {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return }
+    #endif
+
     guard apiService.canAccess(.subscribe) else {
       clearLoadedOptions()
       return
@@ -164,6 +185,13 @@ class SubscribeSheetViewModel: ObservableObject {
   }
 
   func save() async -> Bool {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      isSaved = true
+      return true
+    }
+    #endif
+
     isSaving = true
     defer { isSaving = false }
     do {
@@ -191,6 +219,10 @@ class SubscribeSheetViewModel: ObservableObject {
   }
 
   func cancel() async {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return }
+    #endif
+
     // 如果我们创建了一个新订阅但用户取消了，我们必须回滚（删除）它
     if isNewSubscription, let id = subscribe.id {
       do {

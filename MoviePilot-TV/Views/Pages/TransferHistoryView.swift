@@ -1,7 +1,17 @@
 import SwiftUI
 
+#if DEBUG
+enum TransferHistoryUIPreviewPresentation {
+  case detail
+}
+#endif
+
 struct TransferHistoryView: View {
   @ObservedObject var viewModel: TransferHistoryViewModel
+
+  #if DEBUG
+  private let refreshesOnAppear: Bool
+  #endif
   @State private var itemToDelete: TransferHistory? = nil
   @State private var itemToReorganize: TransferHistory? = nil
   @State private var historyIdToRestoreFocus: Int? = nil
@@ -14,7 +24,26 @@ struct TransferHistoryView: View {
 
   init(viewModel: TransferHistoryViewModel) {
     self.viewModel = viewModel
+    #if DEBUG
+    refreshesOnAppear = true
+    #endif
   }
+
+  #if DEBUG
+  init(viewModel: TransferHistoryViewModel, refreshesOnAppear: Bool) {
+    self.viewModel = viewModel
+    self.refreshesOnAppear = refreshesOnAppear
+  }
+
+  init(viewModel: TransferHistoryViewModel, uiPreviewPresentation: TransferHistoryUIPreviewPresentation) {
+    self.viewModel = viewModel
+    self.refreshesOnAppear = false
+    switch uiPreviewPresentation {
+    case .detail:
+      _itemForInfoSheet = State(initialValue: viewModel.items.first)
+    }
+  }
+  #endif
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -105,6 +134,9 @@ struct TransferHistoryView: View {
       }
     }
     .task {
+      #if DEBUG
+      guard refreshesOnAppear else { return }
+      #endif
       // 仅在数据为空时执行首次加载, 避免视图切换时重载
       if viewModel.items.isEmpty {
         await viewModel.refresh()

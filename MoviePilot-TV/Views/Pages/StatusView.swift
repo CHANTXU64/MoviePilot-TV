@@ -2,8 +2,40 @@ import SwiftUI
 
 /// 系统状态视图：展示媒体库统计、服务器存储空间以及实时下载器状态
 struct StatusView: View {
-  @StateObject private var viewModel = StatusViewModel()
-  @StateObject private var transferHistoryViewModel = TransferHistoryViewModel()
+  @StateObject private var viewModel: StatusViewModel
+  @StateObject private var transferHistoryViewModel: TransferHistoryViewModel
+
+  #if DEBUG
+  @StateObject private var downloadTaskViewModel: DownloadTaskViewModel
+  private let refreshesOnAppear: Bool
+  private let transferPresentation: TransferHistoryUIPreviewPresentation?
+  #endif
+
+  init() {
+    _viewModel = StateObject(wrappedValue: StatusViewModel())
+    _transferHistoryViewModel = StateObject(wrappedValue: TransferHistoryViewModel())
+    #if DEBUG
+    _downloadTaskViewModel = StateObject(wrappedValue: DownloadTaskViewModel())
+    refreshesOnAppear = true
+    transferPresentation = nil
+    #endif
+  }
+
+  #if DEBUG
+  init(
+    viewModel: StatusViewModel,
+    downloadTaskViewModel: DownloadTaskViewModel,
+    transferHistoryViewModel: TransferHistoryViewModel,
+    refreshesOnAppear: Bool,
+    transferPresentation: TransferHistoryUIPreviewPresentation? = nil
+  ) {
+    _viewModel = StateObject(wrappedValue: viewModel)
+    _downloadTaskViewModel = StateObject(wrappedValue: downloadTaskViewModel)
+    _transferHistoryViewModel = StateObject(wrappedValue: transferHistoryViewModel)
+    self.refreshesOnAppear = refreshesOnAppear
+    self.transferPresentation = transferPresentation
+  }
+  #endif
 
   var body: some View {
     ScrollView {
@@ -36,18 +68,35 @@ struct StatusView: View {
 
         Divider()
 
-        DownloadTaskView()
+        #if DEBUG
+        let downloadTaskView = DownloadTaskView(
+          viewModel: downloadTaskViewModel,
+          refreshesOnAppear: refreshesOnAppear
+        )
+        #else
+        let downloadTaskView = DownloadTaskView()
+        #endif
+
+        downloadTaskView
           .padding(.vertical, 20)
 
         Divider()
 
         // --- 4. 媒体整理历史 ---
+        #if DEBUG
+        transferHistoryContent
+          .padding(.vertical, 20)
+        #else
         TransferHistoryView(viewModel: transferHistoryViewModel)
           .padding(.vertical, 20)
+        #endif
 
       }
     }
     .task {
+      #if DEBUG
+      guard refreshesOnAppear else { return }
+      #endif
       /// 核心异步刷新逻辑：
       /// 1. 初始加载全部数据。
       /// 2. 进入 while 循环，每隔 3 秒调用一次后端接口刷新状态。
@@ -58,6 +107,23 @@ struct StatusView: View {
       }
     }
   }
+
+  #if DEBUG
+  @ViewBuilder
+  private var transferHistoryContent: some View {
+    if let transferPresentation {
+      TransferHistoryView(
+        viewModel: transferHistoryViewModel,
+        uiPreviewPresentation: transferPresentation
+      )
+    } else {
+      TransferHistoryView(
+        viewModel: transferHistoryViewModel,
+        refreshesOnAppear: refreshesOnAppear
+      )
+    }
+  }
+  #endif
 }
 
 private struct MiniStat: View {

@@ -340,6 +340,12 @@ class MediaPreloader: ObservableObject {
   /// 获取已有预加载任务，或创建并启动新任务
   @discardableResult
   func preload(for media: MediaInfo) -> MediaPreloadTask {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return uiPreviewTask(for: media)
+    }
+    #endif
+
     let key = media.id
     if let existing = cache[key] {
       // 失败的任务不缓存：移除后重新创建，允许自动重试
@@ -366,6 +372,34 @@ class MediaPreloader: ObservableObject {
 
     return task
   }
+
+  #if DEBUG
+  private func uiPreviewTask(for media: MediaInfo) -> MediaPreloadTask {
+    let key = media.id
+    if let existing = cache[key] {
+      touchLRU(key: key)
+      return existing
+    }
+
+    let task = MediaPreloadTask(partialMedia: media)
+    task.fullDetail = media
+    task.isDetailReady = true
+    task.tmdbId = media.tmdb_id
+    task.isSubscribed = false
+    cache[key] = task
+    accessOrder.append(key)
+    evictIfNeeded()
+    return task
+  }
+
+  func installPreviewTask(_ task: MediaPreloadTask, for media: MediaInfo) {
+    let key = media.id
+    cache[key]?.cancel()
+    cache[key] = task
+    accessOrder.removeAll { $0 == key }
+    accessOrder.append(key)
+  }
+  #endif
 
   /// 仅获取已有的预加载任务（不创建新的），并更新 LRU 顺序。
   /// ⚠️ 不要在 SwiftUI body 中使用此方法（会修改状态），请用 peekTask。

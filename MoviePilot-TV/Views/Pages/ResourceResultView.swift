@@ -7,9 +7,16 @@ struct ResourceResultView: View {
   let title: String
   let mediaInfo: MediaInfo?
 
+  #if DEBUG
+  private let searchesOnAppear: Bool
+  #endif
+
   init(request: ResourceSearchRequest) {
     self.title = request.title ?? "资源搜索"
     self.mediaInfo = request.mediaInfo
+    #if DEBUG
+    self.searchesOnAppear = true
+    #endif
     _viewModel = StateObject(
       wrappedValue: ResourceResultViewModel(
         keyword: request.keyword,
@@ -22,6 +29,15 @@ struct ResourceResultView: View {
       )
     )
   }
+
+  #if DEBUG
+  init(title: String, mediaInfo: MediaInfo?, previewViewModel: ResourceResultViewModel) {
+    self.title = title
+    self.mediaInfo = mediaInfo
+    self.searchesOnAppear = false
+    _viewModel = StateObject(wrappedValue: previewViewModel)
+  }
+  #endif
 
   var body: some View {
     Group {
@@ -72,6 +88,9 @@ struct ResourceResultView: View {
       }
     }
     .task {
+      #if DEBUG
+      guard searchesOnAppear else { return }
+      #endif
       await viewModel.search()
     }
     .onDisappear {

@@ -4,6 +4,10 @@ import SwiftUI
 struct HomeView: View {
   @StateObject private var viewModel: HomeViewModel
 
+  #if DEBUG
+  private let loadsDataOnAppear: Bool
+  #endif
+
   // Sheet 状态
   @State private var selectedSubscribe: Subscribe?
 
@@ -12,7 +16,22 @@ struct HomeView: View {
 
   init(viewModel: HomeViewModel? = nil) {
     _viewModel = StateObject(wrappedValue: viewModel ?? HomeViewModel())
+    #if DEBUG
+    loadsDataOnAppear = true
+    #endif
   }
+
+  #if DEBUG
+  init(
+    viewModel: HomeViewModel,
+    loadsDataOnAppear: Bool,
+    initialPath: NavigationPath = NavigationPath()
+  ) {
+    _viewModel = StateObject(wrappedValue: viewModel)
+    self.loadsDataOnAppear = loadsDataOnAppear
+    _path = State(initialValue: initialPath)
+  }
+  #endif
 
   var body: some View {
     NavigationStack(path: $path) {
@@ -73,6 +92,9 @@ struct HomeView: View {
         }
       }
       .task {
+        #if DEBUG
+        guard loadsDataOnAppear else { return }
+        #endif
         // 每次页面出现时都会先加载一次（内部有 hasLoaded 控制全屏 Loading）
         await viewModel.loadData()
 

@@ -4,11 +4,25 @@ import SwiftUI
 struct SubscribeSeasonView: View {
   @StateObject private var viewModel: SubscribeSeasonViewModel
 
+  #if DEBUG
+  private let loadsDataOnAppear: Bool
+  #endif
+
   init(mediaInfo: MediaInfo, initialSeason: Int? = nil) {
     _viewModel = StateObject(
       wrappedValue: SubscribeSeasonViewModel(
         mediaInfo: mediaInfo, initialSeason: initialSeason))
+    #if DEBUG
+    loadsDataOnAppear = true
+    #endif
   }
+
+  #if DEBUG
+  init(previewViewModel: SubscribeSeasonViewModel) {
+    _viewModel = StateObject(wrappedValue: previewViewModel)
+    loadsDataOnAppear = false
+  }
+  #endif
 
   var body: some View {
     ScrollView {
@@ -16,6 +30,9 @@ struct SubscribeSeasonView: View {
     }
     .focusSection()
     .task {
+      #if DEBUG
+      guard loadsDataOnAppear else { return }
+      #endif
       await viewModel.loadData()
     }
   }

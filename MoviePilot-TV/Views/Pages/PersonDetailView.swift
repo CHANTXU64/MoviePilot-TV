@@ -11,6 +11,13 @@ struct PersonDetailView: View {
     _navigationPath = navigationPath
   }
 
+  #if DEBUG
+  init(previewViewModel: PersonDetailViewModel, navigationPath: Binding<NavigationPath>) {
+    _viewModel = StateObject(wrappedValue: previewViewModel)
+    _navigationPath = navigationPath
+  }
+  #endif
+
   @State private var showFullBio = false
   @State private var isImageFailed: Bool = false
   @StateObject private var subscriptionHandler = SubscriptionHandler()
@@ -156,6 +163,9 @@ struct PersonDetailView: View {
       }
     )
     .task {
+      #if DEBUG
+      if UIPreviewMode.isEnabled() { return }
+      #endif
       await viewModel.loadInitialData()
     }
     .defaultFocus($focusedElement, .biography)

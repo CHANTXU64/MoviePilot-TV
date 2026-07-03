@@ -600,6 +600,63 @@ class SearchViewModel: ObservableObject {
       return contexts
     }
   }
+
+  #if DEBUG
+  func installUIPreviewUnifiedResults(
+    query: String,
+    movies: [MediaInfo],
+    tvShows: [MediaInfo],
+    collections: [MediaInfo],
+    persons: [Person],
+    shares: [MediaInfo],
+    bestResults: [BestResultItem]
+  ) {
+    searchStreamTask?.cancel()
+    searchStreamTask = nil
+    self.query = query
+    submittedQuery = query
+    searchType = .unified
+    hasSearched = true
+    isLoading = false
+    moviePaginator = .uiPreview(items: movies)
+    tvPaginator = .uiPreview(items: tvShows)
+    collectionPaginator = .uiPreview(items: collections)
+    personPaginator = .uiPreview(items: persons)
+    subscriptionSharePaginator = .uiPreview(items: shares)
+    self.bestResults = bestResults
+  }
+
+  func installUIPreviewUnifiedEmpty(query: String) {
+    installUIPreviewUnifiedResults(
+      query: query,
+      movies: [],
+      tvShows: [],
+      collections: [],
+      persons: [],
+      shares: [],
+      bestResults: []
+    )
+  }
+
+  func installUIPreviewResourceResults(
+    query: String,
+    results: [Context],
+    isLoading: Bool = false,
+    progressText: String = "",
+    progress: Double = 0
+  ) {
+    searchStreamTask?.cancel()
+    searchStreamTask = nil
+    self.query = query
+    submittedQuery = query
+    searchType = .resource
+    hasSearched = !isLoading
+    self.isLoading = isLoading
+    resourceResults = results
+    searchProgressText = progressText
+    searchProgress = progress
+  }
+  #endif
 }
 
 // MARK: - 共享分页抓取代理

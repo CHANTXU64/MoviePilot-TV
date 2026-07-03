@@ -2,10 +2,20 @@ import Combine
 import SwiftUI
 
 struct ExploreView: View {
-  @StateObject private var viewModel = ExploreViewModel()
+  @StateObject private var viewModel: ExploreViewModel
   @State private var path = NavigationPath()
   @StateObject private var subscriptionHandler = SubscriptionHandler()
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
+
+  init() {
+    _viewModel = StateObject(wrappedValue: ExploreViewModel())
+  }
+
+  #if DEBUG
+  init(viewModel: ExploreViewModel) {
+    _viewModel = StateObject(wrappedValue: viewModel)
+  }
+  #endif
 
   var body: some View {
     NavigationStack(path: $path) {

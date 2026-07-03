@@ -11,12 +11,27 @@ struct SubscribeSheet: View {
 
   var onSave: (() -> Void)?
 
+  #if DEBUG
+  private let loadsDataOnAppear: Bool
+  #endif
+
   init(subscribe: Subscribe, isNewSubscription: Bool = false, onSave: (() -> Void)? = nil) {
     _viewModel = StateObject(
       wrappedValue: SubscribeSheetViewModel(
         subscribe: subscribe, isNewSubscription: isNewSubscription))
     self.onSave = onSave
+    #if DEBUG
+    self.loadsDataOnAppear = true
+    #endif
   }
+
+  #if DEBUG
+  init(previewViewModel: SubscribeSheetViewModel, onSave: (() -> Void)? = nil) {
+    _viewModel = StateObject(wrappedValue: previewViewModel)
+    self.onSave = onSave
+    self.loadsDataOnAppear = false
+  }
+  #endif
 
   var body: some View {
     NavigationStack {
@@ -285,6 +300,9 @@ struct SubscribeSheet: View {
             }
           }
           .onAppear {
+            #if DEBUG
+            guard loadsDataOnAppear else { return }
+            #endif
             guard !hasAppeared else { return }
             hasAppeared = true
             Task {
@@ -292,6 +310,9 @@ struct SubscribeSheet: View {
             }
           }
           .onDisappear {
+            #if DEBUG
+            guard loadsDataOnAppear else { return }
+            #endif
             if !viewModel.isSaved {
               Task {
                 await viewModel.cancel()

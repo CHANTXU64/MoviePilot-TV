@@ -5,6 +5,10 @@ struct AddDownloadSheet: View {
   @EnvironmentObject var notificationManager: NotificationManager
   @ObservedObject private var apiService = APIService.shared
   @StateObject private var viewModel: AddDownloadViewModel
+
+  #if DEBUG
+  private let loadsDataOnAppear: Bool
+  #endif
   @State private var showAdvanced = false
   @FocusState private var isInfoSectionFocused: Bool
   @FocusState private var isAdvancedButtonFocused: Bool
@@ -13,7 +17,17 @@ struct AddDownloadSheet: View {
     _viewModel = StateObject(
       wrappedValue: AddDownloadViewModel(torrent: torrent, media: media, onSuccess: onSuccess)
     )
+    #if DEBUG
+    self.loadsDataOnAppear = true
+    #endif
   }
+
+  #if DEBUG
+  init(previewViewModel: AddDownloadViewModel) {
+    _viewModel = StateObject(wrappedValue: previewViewModel)
+    self.loadsDataOnAppear = false
+  }
+  #endif
 
   var body: some View {
     Group {
@@ -148,6 +162,9 @@ struct AddDownloadSheet: View {
       }
     }
     .task {
+      #if DEBUG
+      guard loadsDataOnAppear else { return }
+      #endif
       await viewModel.loadData()
     }
     .onChange(of: viewModel.errorMessage) { _, newValue in

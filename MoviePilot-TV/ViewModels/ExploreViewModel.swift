@@ -78,6 +78,17 @@ class ExploreViewModel: ObservableObject {
   private var paginatorCancellable: AnyCancellable?
 
   init() {
+    configureAutomaticLoading()
+  }
+
+  #if DEBUG
+  init(loadsAutomatically: Bool) {
+    guard loadsAutomatically else { return }
+    configureAutomaticLoading()
+  }
+  #endif
+
+  private func configureAutomaticLoading() {
     // 将所有筛选器的 Publisher 转换为 AnyPublisher<Void, Never>
     let filterPublishers: [AnyPublisher<Void, Never>] = [
       $selectedSource.map { _ in }.eraseToAnyPublisher(),
@@ -116,6 +127,18 @@ class ExploreViewModel: ObservableObject {
       }
       .store(in: &cancellables)
   }
+
+  #if DEBUG
+  func installUIPreviewPaginator(_ previewPaginator: Paginator<MediaInfo>?) {
+    paginator?.cancel()
+    paginatorCancellable?.cancel()
+    paginator = previewPaginator
+    paginatorCancellable = previewPaginator?.objectWillChange
+      .sink { [weak self] _ in
+        self?.objectWillChange.send()
+      }
+  }
+  #endif
 
   // MARK: - TheMovieDb 字典
 

@@ -24,6 +24,23 @@ class AddDownloadViewModel: ObservableObject {
     self.onSuccess = onSuccess
   }
 
+  #if DEBUG
+  func installUIPreviewOptions(
+    downloaders: [DownloaderConf],
+    directories: [TransferDirectoryConf],
+    selectedDownloader: String?,
+    selectedDirectory: String?,
+    tmdbId: String = ""
+  ) {
+    self.downloaders = downloaders
+    self.directories = directories
+    self.selectedDownloader = selectedDownloader
+    self.selectedDirectory = selectedDirectory
+    self.tmdbId = tmdbId
+    isLoading = false
+  }
+  #endif
+
   // 目标目录的计算属性（URI 格式）
   var targetDirectories: [String] {
     let uris = directories.compactMap { item -> String? in
@@ -37,6 +54,10 @@ class AddDownloadViewModel: ObservableObject {
   }
 
   func loadData() async {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return }
+    #endif
+
     guard APIService.shared.canAccess(.search) else {
       clearLoadedOptions()
       return
@@ -80,6 +101,13 @@ class AddDownloadViewModel: ObservableObject {
   }
 
   func addDownload() async {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      onSuccess?()
+      return
+    }
+    #endif
+
     isSubmitting = true
     defer { isSubmitting = false }
 

@@ -2,8 +2,26 @@ import Kingfisher
 import SwiftUI
 
 struct DownloadTaskView: View {
-  @StateObject private var viewModel = DownloadTaskViewModel()
+  @StateObject private var viewModel: DownloadTaskViewModel
+
+  #if DEBUG
+  private let refreshesOnAppear: Bool
+  #endif
   @State private var isExpanded = true
+
+  init() {
+    _viewModel = StateObject(wrappedValue: DownloadTaskViewModel())
+    #if DEBUG
+    refreshesOnAppear = true
+    #endif
+  }
+
+  #if DEBUG
+  init(viewModel: DownloadTaskViewModel, refreshesOnAppear: Bool) {
+    _viewModel = StateObject(wrappedValue: viewModel)
+    self.refreshesOnAppear = refreshesOnAppear
+  }
+  #endif
 
   var body: some View {
     VStack(alignment: .leading, spacing: 20) {
@@ -53,6 +71,9 @@ struct DownloadTaskView: View {
       }
     }
     .task {
+      #if DEBUG
+      guard refreshesOnAppear else { return }
+      #endif
       await DownloadTaskView.runAutoRefresh(
         initialLoad: { await viewModel.initialLoad() },
         loadDownloads: { await viewModel.loadDownloads() }

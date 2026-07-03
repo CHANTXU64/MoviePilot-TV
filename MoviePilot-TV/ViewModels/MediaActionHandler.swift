@@ -22,6 +22,12 @@ class MediaActionHandler: ObservableObject {
   }
 
   func searchResourcesTargetUsingDefaultSites(for item: MediaInfo) async -> ResourceSearchRequest {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return searchResourcesTarget(for: item)
+    }
+    #endif
+
     let sites = await SystemViewModel.normalizedDefaultSearchSitesString()
     return searchResourcesTarget(for: item, sites: sites)
   }
@@ -30,6 +36,12 @@ class MediaActionHandler: ObservableObject {
     for item: MediaInfo, targetTmdbId: Int? = nil
   ) async -> MediaInfo? {
     var tmdbIdToUse: Int? = targetTmdbId ?? item.tmdb_id
+
+    #if DEBUG
+    if UIPreviewMode.isEnabled(), tmdbIdToUse == nil {
+      tmdbIdToUse = 900_000 + Int(UInt(bitPattern: item.id.hashValue) % 100_000)
+    }
+    #endif
 
     if tmdbIdToUse == nil {
       isRecognizingTmdb = true

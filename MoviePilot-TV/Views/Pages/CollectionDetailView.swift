@@ -17,6 +17,20 @@ struct CollectionDetailView: View {
       wrappedValue: CollectionDetailViewModel(collectionId: collectionId, title: title))
   }
 
+  #if DEBUG
+  init(
+    title: String,
+    collectionId: Int,
+    navigationPath: Binding<NavigationPath>,
+    previewViewModel: CollectionDetailViewModel
+  ) {
+    self.title = title
+    self.collectionId = collectionId
+    self._navigationPath = navigationPath
+    self._viewModel = StateObject(wrappedValue: previewViewModel)
+  }
+  #endif
+
   var body: some View {
     MediaGridView(
       items: viewModel.paginator.items,
@@ -43,6 +57,9 @@ struct CollectionDetailView: View {
     )
     .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $navigationPath)
     .task {
+      #if DEBUG
+      if UIPreviewMode.isEnabled() { return }
+      #endif
       await viewModel.loadInitialData()
     }
   }

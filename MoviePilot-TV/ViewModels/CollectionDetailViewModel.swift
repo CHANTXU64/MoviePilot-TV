@@ -39,6 +39,17 @@ class CollectionDetailViewModel: ObservableObject {
       .store(in: &cancellables)
   }
 
+  #if DEBUG
+  init(previewPaginator: Paginator<MediaInfo>) {
+    self.paginator = previewPaginator
+    self.paginator.objectWillChange
+      .sink { [weak self] _ in
+        self?.objectWillChange.send()
+      }
+      .store(in: &cancellables)
+  }
+  #endif
+
   private var hasLoaded = false
 
   func loadInitialData() async {
