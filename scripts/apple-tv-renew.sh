@@ -59,7 +59,7 @@ PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 PROJECT_FILE="${PROJECT_FILE:-}"
 WORKSPACE="${WORKSPACE:-}"
 SCHEME="${SCHEME:-}"
-CONFIGURATION="${CONFIGURATION:-Debug}"
+CONFIGURATION="${CONFIGURATION:-Release}"
 BUNDLE_ID="${BUNDLE_ID:-}"
 [ -n "$BUNDLE_ID" ] || {
   cat >&2 <<'EOF'
