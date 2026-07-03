@@ -405,6 +405,21 @@ final class UIPreviewModeTests: XCTestCase {
     let apiSource = try String(contentsOf: repoFile("MoviePilot-TV/Services/APIService.swift"))
     XCTAssertTrue(apiSource.contains("return uiPreviewCanRequestSuperUserEndpoints ?? false"))
     XCTAssertTrue(apiSource.contains("return uiPreviewPermissions?.contains(permission) ?? false"))
+
+    let sheetStart = try XCTUnwrap(previewSource.range(of: "private struct UIPreviewSheetSceneView: View"))
+    let sheetEnd = try XCTUnwrap(
+      previewSource.range(of: "\n@MainActor\nprivate struct UIPreviewMultiSelectionSheet", range: sheetStart.upperBound..<previewSource.endIndex)
+    )
+    let sheetSource = String(previewSource[sheetStart.lowerBound..<sheetEnd.lowerBound])
+    let sheetInitRange = try XCTUnwrap(sheetSource.range(of: "init(sheetCase: UIPreviewSheetCase)"))
+    let sheetBodyRange = try XCTUnwrap(sheetSource.range(of: "\n  var body: some View"))
+    let sheetApplyRange = try XCTUnwrap(
+      sheetSource.range(of: "UIPreviewFixtures.applyPermissions(", range: sheetInitRange.lowerBound..<sheetBodyRange.lowerBound)
+    )
+    let addDownloadRange = try XCTUnwrap(sheetSource.range(of: "AddDownloadSheet("))
+
+    XCTAssertLessThan(sheetApplyRange.lowerBound, addDownloadRange.lowerBound)
+    XCTAssertFalse(sheetSource.contains(".onAppear { UIPreviewFixtures.applyPermissions("))
   }
 
   private func repoFile(_ path: String) -> URL {

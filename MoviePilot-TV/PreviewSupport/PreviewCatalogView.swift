@@ -505,27 +505,28 @@ private struct UIPreviewSettingsSceneView: View {
 private struct UIPreviewSheetSceneView: View {
   let sheetCase: UIPreviewSheetCase
 
+  init(sheetCase: UIPreviewSheetCase) {
+    self.sheetCase = sheetCase
+    UIPreviewFixtures.applyPermissions(.allPreviewPermissions, canRequestSuperUserEndpoints: true)
+  }
+
   var body: some View {
     switch sheetCase {
     case .subscribe:
       SubscribeSheet(previewViewModel: UIPreviewFixtures.subscribeSheetViewModel())
         .previewRoot(sheetCase.title)
-        .onAppear { UIPreviewFixtures.applyPermissions(.allPreviewPermissions, canRequestSuperUserEndpoints: true) }
     case .addDownload:
       AddDownloadSheet(previewViewModel: UIPreviewFixtures.addDownloadViewModel())
         .environmentObject(NotificationManager())
         .previewRoot(sheetCase.title)
-        .onAppear { UIPreviewFixtures.applyPermissions(.allPreviewPermissions, canRequestSuperUserEndpoints: true) }
     case .reorganize:
       ReorganizeSheet(previewViewModel: UIPreviewFixtures.reorganizeViewModel()) {}
         .environmentObject(NotificationManager())
         .previewRoot(sheetCase.title)
-        .onAppear { UIPreviewFixtures.applyPermissions(.allPreviewPermissions, canRequestSuperUserEndpoints: true) }
     case .reorganizeBatch:
       ReorganizeSheet(previewViewModel: UIPreviewFixtures.reorganizeBatchViewModel()) {}
         .environmentObject(NotificationManager())
         .previewRoot(sheetCase.title)
-        .onAppear { UIPreviewFixtures.applyPermissions(.allPreviewPermissions, canRequestSuperUserEndpoints: true) }
     case .forkSubscribe:
       ForkSubscribeSheet(
         share: UIPreviewFixtures.previewSubscribeShare,
@@ -533,18 +534,15 @@ private struct UIPreviewSheetSceneView: View {
         subscriptionHandler: SubscriptionHandler()
       )
       .previewRoot(sheetCase.title)
-      .onAppear { UIPreviewFixtures.applyPermissions(.allPreviewPermissions, canRequestSuperUserEndpoints: true) }
     case .seasonDetail:
       SeasonDetailSheet(
         season: UIPreviewFixtures.previewSeasonDetail,
         mediaInfo: UIPreviewFixtures.baseTVMedia(id: 45_301, title: "边境信号")
       )
       .previewRoot(sheetCase.title)
-      .onAppear { UIPreviewFixtures.applyPermissions(.allPreviewPermissions, canRequestSuperUserEndpoints: true) }
     case .multiSelection:
       UIPreviewMultiSelectionSheet()
         .previewRoot(sheetCase.title)
-        .onAppear { UIPreviewFixtures.applyPermissions(.allPreviewPermissions, canRequestSuperUserEndpoints: true) }
     }
   }
 }
