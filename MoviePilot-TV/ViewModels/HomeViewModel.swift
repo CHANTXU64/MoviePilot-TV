@@ -172,6 +172,10 @@ class HomeViewModel: ObservableObject {
   }
 
   private func persistSelectedLatestMediaServer() {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return }
+    #endif
+
     UserDefaults.standard.set(selectedLatestMediaServer, forKey: latestMediaSelectedServerKey)
   }
 

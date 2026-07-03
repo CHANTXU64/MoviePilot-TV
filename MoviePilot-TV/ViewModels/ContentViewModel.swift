@@ -30,6 +30,10 @@ class ContentViewModel: ObservableObject {
     isLoggedIn = apiService.isLoggedIn
     currentUser = apiService.currentUser
 
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return }
+    #endif
+
     // 监听令牌变化 -> 在登录或令牌更新时触发设置获取
     apiService.$token
       .receive(on: RunLoop.main)

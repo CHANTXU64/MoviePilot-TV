@@ -317,6 +317,11 @@ final class UIPreviewModeTests: XCTestCase {
 
   func testPreviewModeShortCircuitsBackendActions() throws {
     let requiredSnippetsByFile = [
+      "MoviePilot-TV/ViewModels/ContentViewModel.swift": [
+        "if UIPreviewMode.isEnabled() { return }",
+        "apiService.$token",
+        "UIApplication.willEnterForegroundNotification",
+      ],
       "MoviePilot-TV/ViewModels/MediaPreloader.swift": [
         "return uiPreviewTask(for: media)",
       ],
@@ -325,6 +330,7 @@ final class UIPreviewModeTests: XCTestCase {
         "tmdbIdToUse = 900_000",
       ],
       "MoviePilot-TV/ViewModels/HomeViewModel.swift": [
+        "private func persistSelectedLatestMediaServer()",
         "func toggleSubscribeStatus(subscribe: Subscribe) async -> Bool",
         "func resetSubscribe(subscribe: Subscribe) async -> Bool",
         "func searchSubscribe(subscribe: Subscribe) async -> Bool",
@@ -367,6 +373,21 @@ final class UIPreviewModeTests: XCTestCase {
         XCTAssertTrue(source.contains(snippet), "\(file) missing preview action guard near \(snippet)")
       }
     }
+  }
+
+  func testPreviewModeSkipsStartupSettingsAndHomePersistence() throws {
+    let contentSource = try String(contentsOf: repoFile("MoviePilot-TV/ViewModels/ContentViewModel.swift"))
+    let previewGuardRange = try XCTUnwrap(contentSource.range(of: "if UIPreviewMode.isEnabled() { return }"))
+    let tokenSinkRange = try XCTUnwrap(contentSource.range(of: "apiService.$token"))
+    let foregroundRange = try XCTUnwrap(contentSource.range(of: "UIApplication.willEnterForegroundNotification"))
+    XCTAssertLessThan(previewGuardRange.lowerBound, tokenSinkRange.lowerBound)
+    XCTAssertLessThan(previewGuardRange.lowerBound, foregroundRange.lowerBound)
+
+    let homeSource = try String(contentsOf: repoFile("MoviePilot-TV/ViewModels/HomeViewModel.swift"))
+    let persistRange = try XCTUnwrap(homeSource.range(of: "private func persistSelectedLatestMediaServer()"))
+    let persistSource = String(homeSource[persistRange.lowerBound...]).prefix(220)
+    XCTAssertTrue(persistSource.contains("if UIPreviewMode.isEnabled() { return }"))
+    XCTAssertTrue(persistSource.contains("UserDefaults.standard.set"))
   }
 
   private func repoFile(_ path: String) -> URL {
