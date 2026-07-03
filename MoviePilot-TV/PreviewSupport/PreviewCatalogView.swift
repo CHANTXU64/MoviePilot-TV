@@ -194,6 +194,10 @@ private struct UIPreviewLoggedInRootView: View {
     searchInitialPath: NavigationPath = NavigationPath(),
     searchPreviewDestinations: SearchViewUIPreviewDestinations? = nil
   ) {
+    UIPreviewFixtures.applyPermissions(
+      permissions,
+      canRequestSuperUserEndpoints: canRequestSuperUserEndpoints
+    )
     _homeViewModel = StateObject(wrappedValue: UIPreviewFixtures.homeViewModel(homeMode))
     _recommendViewModel = StateObject(wrappedValue: UIPreviewFixtures.recommendViewModel(recommendMode))
     _exploreViewModel = StateObject(wrappedValue: UIPreviewFixtures.exploreViewModel(exploreMode))

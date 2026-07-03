@@ -390,6 +390,23 @@ final class UIPreviewModeTests: XCTestCase {
     XCTAssertTrue(persistSource.contains("UserDefaults.standard.set"))
   }
 
+  func testPreviewPermissionsAreInstalledBeforeFirstPreviewFrame() throws {
+    let previewSource = try String(contentsOf: repoFile("MoviePilot-TV/PreviewSupport/PreviewCatalogView.swift"))
+    let initStart = try XCTUnwrap(
+      previewSource.range(of: "init(\n    selectedTab: ContentViewModel.Tab = .home")
+    )
+    let bodyStart = try XCTUnwrap(previewSource.range(of: "\n  var body: some View", range: initStart.upperBound..<previewSource.endIndex))
+    let initSource = String(previewSource[initStart.lowerBound..<bodyStart.lowerBound])
+    let applyRange = try XCTUnwrap(initSource.range(of: "UIPreviewFixtures.applyPermissions("))
+    let firstStateObjectRange = try XCTUnwrap(initSource.range(of: "_homeViewModel = StateObject"))
+
+    XCTAssertLessThan(applyRange.lowerBound, firstStateObjectRange.lowerBound)
+
+    let apiSource = try String(contentsOf: repoFile("MoviePilot-TV/Services/APIService.swift"))
+    XCTAssertTrue(apiSource.contains("return uiPreviewCanRequestSuperUserEndpoints ?? false"))
+    XCTAssertTrue(apiSource.contains("return uiPreviewPermissions?.contains(permission) ?? false"))
+  }
+
   private func repoFile(_ path: String) -> URL {
     URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent()

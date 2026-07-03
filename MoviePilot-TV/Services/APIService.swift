@@ -599,8 +599,8 @@ class APIService: ObservableObject {
 
   var canRequestSuperUserEndpoints: Bool {
     #if DEBUG
-    if UIPreviewMode.isEnabled(), let uiPreviewCanRequestSuperUserEndpoints {
-      return uiPreviewCanRequestSuperUserEndpoints
+    if UIPreviewMode.isEnabled() {
+      return uiPreviewCanRequestSuperUserEndpoints ?? false
     }
     #endif
     return currentOrStoredUser?.canRequestSuperUserEndpoints == true
@@ -608,8 +608,8 @@ class APIService: ObservableObject {
 
   func canAccess(_ permission: UserPermissionKey) -> Bool {
     #if DEBUG
-    if UIPreviewMode.isEnabled(), let uiPreviewPermissions {
-      return uiPreviewPermissions.contains(permission)
+    if UIPreviewMode.isEnabled() {
+      return uiPreviewPermissions?.contains(permission) ?? false
     }
     #endif
     return currentOrStoredUser?.canAccess(permission) == true
