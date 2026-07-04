@@ -21,6 +21,24 @@ final class UIPreviewModeTests: XCTestCase {
     XCTAssertTrue(source.contains("PreviewCatalogView()"))
   }
 
+  func testPreviewEntryDoesNotInstantiateRealRootStateBeforePreviewBranch() throws {
+    let source = try String(contentsOf: repoFile("MoviePilot-TV/Views/ContentView.swift"))
+
+    XCTAssertTrue(source.contains("private struct RealAppContentView: View"))
+
+    let contentViewSource = try sourceSlice(
+      source,
+      from: "struct ContentView: View",
+      to: "private struct RealAppContentView: View"
+    )
+    XCTAssertFalse(contentViewSource.contains("@StateObject private var viewModel = ContentViewModel()"))
+    XCTAssertFalse(contentViewSource.contains("@StateObject private var mediaActionHandler = MediaActionHandler()"))
+
+    let realRootSource = try sourceSlice(source, from: "private struct RealAppContentView: View")
+    XCTAssertTrue(realRootSource.contains("@StateObject private var viewModel = ContentViewModel()"))
+    XCTAssertTrue(realRootSource.contains("@StateObject private var mediaActionHandler = MediaActionHandler()"))
+  }
+
   func testPreviewSupportFilesAreDebugWrapped() throws {
     let fileManager = FileManager.default
     let directory = repoFile("MoviePilot-TV/PreviewSupport")
@@ -327,7 +345,7 @@ final class UIPreviewModeTests: XCTestCase {
       ],
       "MoviePilot-TV/ViewModels/MediaActionHandler.swift": [
         "return searchResourcesTarget(for: item)",
-        "tmdbIdToUse = 900_000",
+        "tmdbIdToUse = deterministicUIPreviewTMDBId(for: item.id)",
       ],
       "MoviePilot-TV/ViewModels/HomeViewModel.swift": [
         "private func persistSelectedLatestMediaServer()",
@@ -386,8 +404,136 @@ final class UIPreviewModeTests: XCTestCase {
     let homeSource = try String(contentsOf: repoFile("MoviePilot-TV/ViewModels/HomeViewModel.swift"))
     let persistRange = try XCTUnwrap(homeSource.range(of: "private func persistSelectedLatestMediaServer()"))
     let persistSource = String(homeSource[persistRange.lowerBound...]).prefix(220)
-    XCTAssertTrue(persistSource.contains("if UIPreviewMode.isEnabled() { return }"))
-    XCTAssertTrue(persistSource.contains("UserDefaults.standard.set"))
+    let homeGuardRange = try XCTUnwrap(persistSource.range(of: "if UIPreviewMode.isEnabled() { return }"))
+    let homeWriteRange = try XCTUnwrap(persistSource.range(of: "UserDefaults.standard.set"))
+    XCTAssertLessThan(homeGuardRange.lowerBound, homeWriteRange.lowerBound)
+  }
+
+  func testSystemPreviewActionsAndPreferencesAreSandboxed() throws {
+    let source = try String(contentsOf: repoFile("MoviePilot-TV/ViewModels/SystemViewModel.swift"))
+
+    try assertPreviewGuard(
+      in: source,
+      function: "func relogin() async",
+      before: "APIService.shared.login"
+    )
+    try assertPreviewGuard(
+      in: source,
+      function: "func logout()",
+      before: "APIService.shared.logout"
+    )
+
+    try assertPreviewGuard(
+      in: source,
+      function: "@Published var waitMediaDetailBackgroundImage",
+      before: "UserDefaults.standard.set(waitMediaDetailBackgroundImage"
+    )
+    try assertPreviewGuard(
+      in: source,
+      function: "@Published var autoSearchNewSubscriptions",
+      before: "UserDefaults.standard.set(autoSearchNewSubscriptions"
+    )
+
+    XCTAssertTrue(source.contains("private var uiPreviewDefaultSearchSites: Set<Int> = []"))
+    XCTAssertTrue(source.contains("private var uiPreviewHardFilterRuleId: String?"))
+    XCTAssertTrue(source.contains("private var uiPreviewSoftFilterRuleId: String?"))
+    XCTAssertTrue(source.contains("if Self.isUIPreviewMode { return uiPreviewDefaultSearchSites }"))
+    XCTAssertTrue(source.contains("if Self.isUIPreviewMode { return uiPreviewHardFilterRuleId }"))
+    XCTAssertTrue(source.contains("if Self.isUIPreviewMode { return uiPreviewSoftFilterRuleId }"))
+
+    let systemViewSource = try String(contentsOf: repoFile("MoviePilot-TV/Views/Pages/SystemView.swift"))
+    let previewInitSource = try sourceSlice(
+      systemViewSource,
+      from: "init(uiPreviewPresentation: SystemViewUIPreviewPresentation",
+      to: "#endif"
+    )
+    XCTAssertTrue(previewInitSource.contains("if uiPreviewPresentation == .logoutConfirmation"))
+    XCTAssertTrue(previewInitSource.contains("State(initialValue: [.connection])"))
+  }
+
+  func testDetailPreviewDoesNotRefreshBackendOrDeleteSubscription() throws {
+    let source = try String(contentsOf: repoFile("MoviePilot-TV/ViewModels/MediaDetailViewModel.swift"))
+
+    try assertPreviewGuard(
+      in: source,
+      function: "func applyFullDetail(_ fullDetail: MediaInfo)",
+      before: "Task {"
+    )
+    try assertPreviewGuard(
+      in: source,
+      function: "func refreshSubscriptionStatus(forceRefresh: Bool = true) async -> Bool",
+      before: "withTaskGroup"
+    )
+    try assertPreviewGuard(
+      in: source,
+      function: "func cancelSubscription() async",
+      before: "deleteResolvedSubscription()"
+    )
+    try assertPreviewGuard(
+      in: source,
+      function: "private func deleteResolvedSubscription() async -> Bool",
+      before: "fetchSubscriptionLookup"
+    )
+  }
+
+  func testSearchPreviewDoesNotEscapeToProductionResourceSearch() throws {
+    let viewModelSource = try String(contentsOf: repoFile("MoviePilot-TV/ViewModels/SearchViewModel.swift"))
+    try assertPreviewGuard(
+      in: viewModelSource,
+      function: "func autoSearch() async",
+      before: "searchGeneration += 1"
+    )
+
+    let searchViewSource = try String(contentsOf: repoFile("MoviePilot-TV/Views/Pages/SearchView.swift"))
+    let resourceDestinationSource = try sourceSlice(
+      searchViewSource,
+      from: "private func resourceDestination(for request: ResourceSearchRequest) -> some View",
+      to: "private func seasonDestination"
+    )
+    XCTAssertTrue(resourceDestinationSource.contains("} else if UIPreviewMode.isEnabled() {"))
+
+    let previewSource = try String(contentsOf: repoFile("MoviePilot-TV/PreviewSupport/PreviewCatalogView.swift"))
+    let previewDestinationsSource = try sourceSlice(
+      previewSource,
+      from: "func uiPreviewNavigationDestinations(path: Binding<NavigationPath>) -> some View",
+      to: "func previewNavigationPath() -> NavigationPath"
+    )
+    XCTAssertFalse(previewDestinationsSource.contains("ResourceResultView(request: request)"))
+
+    let resourceResultSource = try String(contentsOf: repoFile("MoviePilot-TV/Views/Pages/ResourceResultView.swift"))
+    let onDisappearSource = try sourceSlice(resourceResultSource, from: ".onDisappear {")
+    let guardRange = try XCTUnwrap(onDisappearSource.range(of: "guard searchesOnAppear else { return }"))
+    let cancelRange = try XCTUnwrap(onDisappearSource.range(of: "viewModel.cancelInFlightSearch()"))
+    XCTAssertLessThan(guardRange.lowerBound, cancelRange.lowerBound)
+  }
+
+  func testComponentPreviewsInstallPermissionsBeforeBodyAndPreviewStateIsStable() throws {
+    let previewSource = try String(contentsOf: repoFile("MoviePilot-TV/PreviewSupport/PreviewCatalogView.swift"))
+    let componentSource = try sourceSlice(
+      previewSource,
+      from: "private struct UIPreviewComponentSceneView: View",
+      to: "private struct UIPreviewMediaCards: View"
+    )
+    let initRange = try XCTUnwrap(componentSource.range(of: "init(componentCase: UIPreviewComponentCase"))
+    let applyRange = try XCTUnwrap(componentSource.range(of: "UIPreviewFixtures.applyPermissions("))
+    let bodyRange = try XCTUnwrap(componentSource.range(of: "var body: some View"))
+    XCTAssertLessThan(initRange.lowerBound, bodyRange.lowerBound)
+    XCTAssertLessThan(applyRange.lowerBound, bodyRange.lowerBound)
+    XCTAssertFalse(componentSource.contains(".onAppear { UIPreviewFixtures.applyPermissions("))
+
+    let preloaderSource = try String(contentsOf: repoFile("MoviePilot-TV/ViewModels/MediaPreloader.swift"))
+    let previewTaskSource = try sourceSlice(preloaderSource, from: "private func uiPreviewTask(for media: MediaInfo)")
+    XCTAssertTrue(previewTaskSource.contains("task.isSeasonDataLoaded = media.type == \"电视剧\""))
+
+    let actionSource = try String(contentsOf: repoFile("MoviePilot-TV/ViewModels/MediaActionHandler.swift"))
+    XCTAssertFalse(actionSource.contains(".hashValue"))
+    XCTAssertTrue(actionSource.contains("deterministicUIPreviewTMDBId(for: item.id)"))
+
+    let transferSource = try String(contentsOf: repoFile("MoviePilot-TV/ViewModels/TransferHistoryViewModel.swift"))
+    let installSource = try sourceSlice(transferSource, from: "func installUIPreviewData(")
+    XCTAssertTrue(installSource.contains("paginatorItems = items"))
+    XCTAssertTrue(installSource.contains("prependedItems.removeAll()"))
+    XCTAssertTrue(installSource.contains("deletedIds.removeAll()"))
   }
 
   func testPreviewPermissionsAreInstalledBeforeFirstPreviewFrame() throws {
@@ -419,7 +565,39 @@ final class UIPreviewModeTests: XCTestCase {
     let addDownloadRange = try XCTUnwrap(sheetSource.range(of: "AddDownloadSheet("))
 
     XCTAssertLessThan(sheetApplyRange.lowerBound, addDownloadRange.lowerBound)
-    XCTAssertFalse(sheetSource.contains(".onAppear { UIPreviewFixtures.applyPermissions("))
+    XCTAssertNil(
+      sheetSource.range(
+        of: #"\\.onAppear\\s*\\{[^}]*UIPreviewFixtures\\.applyPermissions"#,
+        options: .regularExpression
+      )
+    )
+  }
+
+  private func assertPreviewGuard(
+    in source: String,
+    function: String,
+    before guardedMarker: String
+  ) throws {
+    let functionSource = try sourceSlice(source, from: function)
+    let guardRange = try XCTUnwrap(
+      functionSource.range(of: "UIPreviewMode.isEnabled()")
+        ?? functionSource.range(of: "Self.isUIPreviewMode")
+    )
+    let markerRange = try XCTUnwrap(functionSource.range(of: guardedMarker))
+    XCTAssertLessThan(guardRange.lowerBound, markerRange.lowerBound)
+  }
+
+  private func sourceSlice(
+    _ source: String,
+    from startMarker: String,
+    to endMarker: String? = nil
+  ) throws -> Substring {
+    let start = try XCTUnwrap(source.range(of: startMarker))
+    if let endMarker {
+      let end = try XCTUnwrap(source.range(of: endMarker, range: start.upperBound..<source.endIndex))
+      return source[start.lowerBound..<end.lowerBound]
+    }
+    return source[start.lowerBound...]
   }
 
   private func repoFile(_ path: String) -> URL {

@@ -248,6 +248,9 @@ class SearchViewModel: ObservableObject {
   func autoSearch() async {
     guard !query.isEmpty else { return }
     guard apiService.canAccess(.search) else { return }
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return }
+    #endif
     searchGeneration += 1
     let currentSearchGeneration = searchGeneration
     let searchQuery = query

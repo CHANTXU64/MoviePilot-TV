@@ -94,6 +94,9 @@ struct ResourceResultView: View {
       await viewModel.search()
     }
     .onDisappear {
+      #if DEBUG
+      guard searchesOnAppear else { return }
+      #endif
       viewModel.cancelInFlightSearch()
     }
   }

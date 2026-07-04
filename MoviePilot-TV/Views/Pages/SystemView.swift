@@ -59,6 +59,11 @@ struct SystemView: View {
     _viewModel = StateObject(wrappedValue: viewModel ?? SystemViewModel())
     _showAppInfo = State(initialValue: uiPreviewPresentation == .appInfo)
     _showLogoutConfirmation = State(initialValue: uiPreviewPresentation == .logoutConfirmation)
+    if uiPreviewPresentation == .logoutConfirmation {
+      _route = State(initialValue: [.connection])
+      _displayedRoute = State(initialValue: [.connection])
+      _pageOffsetDepth = State(initialValue: 1)
+    }
   }
   #endif
 

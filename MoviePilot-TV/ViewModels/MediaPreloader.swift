@@ -386,6 +386,7 @@ class MediaPreloader: ObservableObject {
     task.isDetailReady = true
     task.tmdbId = media.tmdb_id
     task.isSubscribed = false
+    task.isSeasonDataLoaded = media.type == "电视剧"
     cache[key] = task
     accessOrder.append(key)
     evictIfNeeded()

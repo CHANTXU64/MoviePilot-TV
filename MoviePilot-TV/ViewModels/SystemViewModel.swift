@@ -36,9 +36,22 @@ class SystemViewModel: ObservableObject {
   private static let waitMediaDetailBackgroundImageKey = "waitMediaDetailBackgroundImage"
   private static let autoSearchNewSubscriptionsKey = "autoSearchNewSubscriptions"
 
+  #if DEBUG
+  private static var isUIPreviewMode: Bool {
+    UIPreviewMode.isEnabled()
+  }
+
+  private var uiPreviewDefaultSearchSites: Set<Int> = []
+  private var uiPreviewHardFilterRuleId: String?
+  private var uiPreviewSoftFilterRuleId: String?
+  #endif
+
   /// 是否在 MediaDetail 首屏等待背景/海报预加载完成。默认开启。
   @Published var waitMediaDetailBackgroundImage: Bool = true {
     didSet {
+      #if DEBUG
+      guard !Self.isUIPreviewMode else { return }
+      #endif
       UserDefaults.standard.set(waitMediaDetailBackgroundImage, forKey: Self.waitMediaDetailBackgroundImageKey)
     }
   }
@@ -46,6 +59,9 @@ class SystemViewModel: ObservableObject {
   /// 新增订阅保存后是否立即触发一次手动搜索。默认开启，保持现有 TV 行为。
   @Published var autoSearchNewSubscriptions: Bool = true {
     didSet {
+      #if DEBUG
+      guard !Self.isUIPreviewMode else { return }
+      #endif
       UserDefaults.standard.set(autoSearchNewSubscriptions, forKey: Self.autoSearchNewSubscriptionsKey)
     }
   }
@@ -57,11 +73,21 @@ class SystemViewModel: ObservableObject {
   /// 默认搜索站点（绑定 URL + 用户名）
   var defaultSearchSites: Set<Int> {
     get {
+      #if DEBUG
+      if Self.isUIPreviewMode { return uiPreviewDefaultSearchSites }
+      #endif
       let array = UserDefaults.standard.array(forKey: defaultSearchSitesUserDefaultsKey) as? [Int] ?? []
       return Set(array)
     }
     set {
       let normalizedSites = normalizeDefaultSearchSites(newValue)
+      #if DEBUG
+      if Self.isUIPreviewMode {
+        uiPreviewDefaultSearchSites = normalizedSites
+        objectWillChange.send()
+        return
+      }
+      #endif
       let array = normalizedSites.sorted()
       if array.isEmpty {
         UserDefaults.standard.removeObject(forKey: defaultSearchSitesUserDefaultsKey)
@@ -79,9 +105,19 @@ class SystemViewModel: ObservableObject {
   /// 当前选中的硬过滤规则 ID（绑定 URL + 用户名）
   var selectedHardFilterRuleId: String? {
     get {
-      UserDefaults.standard.string(forKey: hardFilterRuleUserDefaultsKey)
+      #if DEBUG
+      if Self.isUIPreviewMode { return uiPreviewHardFilterRuleId }
+      #endif
+      return UserDefaults.standard.string(forKey: hardFilterRuleUserDefaultsKey)
     }
     set {
+      #if DEBUG
+      if Self.isUIPreviewMode {
+        uiPreviewHardFilterRuleId = newValue
+        objectWillChange.send()
+        return
+      }
+      #endif
       if let value = newValue {
         UserDefaults.standard.set(value, forKey: hardFilterRuleUserDefaultsKey)
       } else {
@@ -94,9 +130,19 @@ class SystemViewModel: ObservableObject {
   /// 当前选中的软过滤规则 ID（绑定 URL + 用户名）
   var selectedSoftFilterRuleId: String? {
     get {
-      UserDefaults.standard.string(forKey: softFilterRuleUserDefaultsKey)
+      #if DEBUG
+      if Self.isUIPreviewMode { return uiPreviewSoftFilterRuleId }
+      #endif
+      return UserDefaults.standard.string(forKey: softFilterRuleUserDefaultsKey)
     }
     set {
+      #if DEBUG
+      if Self.isUIPreviewMode {
+        uiPreviewSoftFilterRuleId = newValue
+        objectWillChange.send()
+        return
+      }
+      #endif
       if let value = newValue {
         UserDefaults.standard.set(value, forKey: softFilterRuleUserDefaultsKey)
       } else {
@@ -169,12 +215,23 @@ class SystemViewModel: ObservableObject {
     self.refreshMessage = refreshMessage
     self.isLoadingSites = isLoadingSites
     self.isLoadingRules = isLoadingRules
+    uiPreviewDefaultSearchSites = []
+    uiPreviewHardFilterRuleId = customFilterRules.first?.id
+    uiPreviewSoftFilterRuleId = customFilterRules.dropFirst().first?.id ?? customFilterRules.first?.id
   }
   #endif
 
   /// 手动刷新登录凭据（解决服务器重启或 Token 失效问题）
   func relogin() async {
     guard !isRefreshing else { return }
+
+    #if DEBUG
+    if Self.isUIPreviewMode {
+      refreshMessage = "刷新成功"
+      storageDescription = "已登录 (安全存储)"
+      return
+    }
+    #endif
 
     isRefreshing = true
     refreshMessage = nil
@@ -205,6 +262,14 @@ class SystemViewModel: ObservableObject {
   }
 
   func logout() {
+    #if DEBUG
+    if Self.isUIPreviewMode {
+      storageMechanism = .none
+      storageDescription = "未登录"
+      refreshMessage = nil
+      return
+    }
+    #endif
     APIService.shared.logout()
     checkKeychainStatus()
   }

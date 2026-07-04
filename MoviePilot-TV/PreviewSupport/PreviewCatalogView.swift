@@ -568,6 +568,12 @@ private struct UIPreviewComponentSceneView: View {
   let componentCase: UIPreviewComponentCase
   @Binding var navigationPath: NavigationPath
 
+  init(componentCase: UIPreviewComponentCase, navigationPath: Binding<NavigationPath>) {
+    self.componentCase = componentCase
+    _navigationPath = navigationPath
+    UIPreviewFixtures.applyPermissions(.allPreviewPermissions, canRequestSuperUserEndpoints: true)
+  }
+
   var body: some View {
     switch componentCase {
     case .mediaCards:
@@ -578,7 +584,6 @@ private struct UIPreviewComponentSceneView: View {
     case .torrentCards:
       UIPreviewTorrentCards()
         .previewRoot(componentCase.title)
-        .onAppear { UIPreviewFixtures.applyPermissions(.allPreviewPermissions, canRequestSuperUserEndpoints: true) }
     case .pickers:
       UIPreviewPickerComponents()
         .previewRoot(componentCase.title)
@@ -718,7 +723,11 @@ private extension View {
         PersonDetailView(person: person, navigationPath: path)
       }
       .navigationDestination(for: ResourceSearchRequest.self) { request in
-        ResourceResultView(request: request)
+        ResourceResultView(
+          title: request.title ?? "资源搜索",
+          mediaInfo: request.mediaInfo,
+          previewViewModel: UIPreviewFixtures.resourceResultViewModel(.results)
+        )
       }
       .navigationDestination(for: SubscribeSeasonRequest.self) { request in
         SubscribeSeasonView(

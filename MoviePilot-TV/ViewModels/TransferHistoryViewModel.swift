@@ -70,6 +70,11 @@ class TransferHistoryViewModel: ObservableObject {
     aiRedoProgressText: String = ""
   ) {
     paginator.cancel()
+    paginatorItems = items
+    prependedItems.removeAll()
+    deletedIds.removeAll()
+    pendingInsertionShiftCount = 0
+    pendingDeletionShiftCount = 0
     self.items = items
     self.storageDict = storageDict
     self.selectedIds = selectedIds

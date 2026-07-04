@@ -39,7 +39,7 @@ class MediaActionHandler: ObservableObject {
 
     #if DEBUG
     if UIPreviewMode.isEnabled(), tmdbIdToUse == nil {
-      tmdbIdToUse = 900_000 + Int(UInt(bitPattern: item.id.hashValue) % 100_000)
+      tmdbIdToUse = deterministicUIPreviewTMDBId(for: item.id)
     }
     #endif
 
@@ -96,4 +96,13 @@ class MediaActionHandler: ObservableObject {
       category: item.category
     )
   }
+
+  #if DEBUG
+  private func deterministicUIPreviewTMDBId(for id: String) -> Int {
+    let seed = id.unicodeScalars.reduce(0) { partial, scalar in
+      (partial * 31 + Int(scalar.value)) % 100_000
+    }
+    return 900_000 + seed
+  }
+  #endif
 }

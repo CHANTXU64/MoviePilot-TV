@@ -165,6 +165,15 @@ class MediaDetailViewModel: ObservableObject {
       // 否则：View 层通过 onChange(of: preloadTask.isSeasonDataLoaded) 设置
     }
 
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      if !isSeasonFirst {
+        isFirstRowReady = true
+      }
+      return
+    }
+    #endif
+
     // 异步加载网络数据（不阻塞调用方返回，数据到达后渐进显示）
     Task {
       // 1. 并发启动演职员、推荐和相似内容加载
@@ -279,6 +288,13 @@ class MediaDetailViewModel: ObservableObject {
     isUnsubscribing = true
     defer { isUnsubscribing = false }
 
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      preloadTask?.isSubscribed = false
+      return
+    }
+    #endif
+
     let didCancel = await deleteResolvedSubscription()
 
     // 刷新所有订阅状态（包括全局和分季）
@@ -297,6 +313,12 @@ class MediaDetailViewModel: ObservableObject {
       preloadTask?.isSubscribed = false
       return true
     }
+
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return true
+    }
+    #endif
 
     // 使用 TaskGroup 或并发 Task 同时刷新全局和分季订阅
     var resultCount = 0
@@ -350,6 +372,10 @@ class MediaDetailViewModel: ObservableObject {
   }
 
   private func deleteResolvedSubscription() async -> Bool {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return true }
+    #endif
+
     var fallbackSubscriptionId: Int?
     for media in subscriptionLookupCandidates() {
       do {
@@ -378,6 +404,9 @@ class MediaDetailViewModel: ObservableObject {
 
   func headerUnsubscribeConfirmationMessage() async -> String {
     let baseMessage = SubscriptionCancelConfirmation.headerMessage(for: detail)
+    #if DEBUG
+    if UIPreviewMode.isEnabled() { return baseMessage }
+    #endif
     guard let warning = await resolvedTMDBMultiSeasonCancellationWarning() else {
       return baseMessage
     }

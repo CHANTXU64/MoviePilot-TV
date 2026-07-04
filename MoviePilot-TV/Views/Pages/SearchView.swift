@@ -317,6 +317,17 @@ struct SearchView: View {
         mediaInfo: request.mediaInfo,
         previewViewModel: previewViewModel
       )
+    } else if UIPreviewMode.isEnabled() {
+      ResourceResultView(
+        title: request.title ?? "资源搜索",
+        mediaInfo: request.mediaInfo,
+        previewViewModel: ResourceResultViewModel(
+          previewTitle: request.title ?? request.keyword,
+          mediaInfo: request.mediaInfo,
+          results: [],
+          isLoading: false
+        )
+      )
     } else {
       ResourceResultView(request: request)
     }

@@ -1,6 +1,20 @@
 import SwiftUI
 
 struct ContentView: View {
+  var body: some View {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      PreviewCatalogView()
+    } else {
+      RealAppContentView()
+    }
+    #else
+    RealAppContentView()
+    #endif
+  }
+}
+
+private struct RealAppContentView: View {
   @StateObject private var viewModel = ContentViewModel()
   @StateObject private var mediaActionHandler = MediaActionHandler()
   @State private var selectedTab = ContentViewModel.Tab.home
@@ -8,18 +22,6 @@ struct ContentView: View {
   @Environment(\.scenePhase) private var scenePhase
 
   var body: some View {
-    #if DEBUG
-    if UIPreviewMode.isEnabled() {
-      PreviewCatalogView()
-    } else {
-      appContent
-    }
-    #else
-    appContent
-    #endif
-  }
-
-  private var appContent: some View {
     Group {
       if viewModel.isPreparingStartupSession {
         ProgressView("正在准备会话...")
