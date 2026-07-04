@@ -96,6 +96,11 @@
 
 如需使用自己的 MoviePilot 后端验证 TV 端接口、图片和功能兼容性，请先阅读 [后端兼容性测试文档](docs/backend-compatibility-tests.md)。真实后端测试可能包含副作用套件，运行前请确认测试范围。
 
+## UI 检查模式
+
+Debug 构建可通过启动参数 `-uiPreviewMode` 打开 UI 检查目录，用于检查主要页面、详情页、弹窗和常见状态。
+在 Xcode 的 **Run > Arguments** 添加该参数即可；模拟器也可用 `xcrun simctl launch booted <bundle-id> -uiPreviewMode`，该入口只在 Debug 生效，合并或发布时会检查 Release 产物不包含它。
+
 ## 反馈与贡献
 
 - **提交 Bug**：请务必提供 MoviePilot 版本号、相关截图和复现步骤。

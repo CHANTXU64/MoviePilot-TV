@@ -1,0 +1,64 @@
+name: Release Preview Guard
+
+on:
+  push:
+    branches:
+      - main
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-preview-guard:
+    name: Verify Release app excludes preview UI
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project "MoviePilot-TV.xcodeproj" \
+            -scheme "MoviePilot-TV" \
+            -skipPackagePluginValidation
+
+      - name: Build Release
+        run: |
+          xcodebuild clean build \
+            -project "MoviePilot-TV.xcodeproj" \
+            -scheme "MoviePilot-TV" \
+            -configuration Release \
+            -destination "generic/platform=tvOS" \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            -skipPackagePluginValidation
+
+      - name: Scan Release app for preview UI
+        run: |
+          set -euo pipefail
+          APP_PATH="build/DerivedData/Build/Products/Release-appletvos/MoviePilot-TV.app"
+
+          if [ ! -d "$APP_PATH" ]; then
+            echo "App bundle not found: $APP_PATH"
+            find build/DerivedData/Build/Products -maxdepth 3 -type d -name "*.app" -print
+            exit 1
+          fi
+
+          if find "$APP_PATH" -type f -print0 | xargs -0 strings -a | grep -E -- "UIPreview|uiPreview|PreviewCatalog|PreviewSupport|-uiPreviewMode"; then
+            echo "Preview UI symbols found in Release app product"
+            exit 1
+          fi
+
+          echo "No preview UI symbols found in Release app product"
