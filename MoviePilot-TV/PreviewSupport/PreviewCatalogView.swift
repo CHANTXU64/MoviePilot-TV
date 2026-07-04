@@ -7,20 +7,22 @@ struct PreviewCatalogView: View {
   @State private var didResetPreviewState = false
 
   var body: some View {
-    Group {
+    ZStack {
+      NavigationStack {
+        UIPreviewCatalogHomeView(isActive: selectedScene == nil) { scene in
+          selectedScene = scene
+        }
+        .navigationTitle("UI 预览")
+      }
+      .opacity(selectedScene == nil ? 1 : 0)
+      .disabled(selectedScene != nil)
+
       if let selectedScene {
         UIPreviewSceneDestination(scene: selectedScene)
           .id(selectedScene.id)
           .onExitCommand {
             self.selectedScene = nil
           }
-      } else {
-        NavigationStack {
-          UIPreviewCatalogHomeView { scene in
-            selectedScene = scene
-          }
-          .navigationTitle("UI 预览")
-        }
       }
     }
     .mediaActionAlerts()
@@ -35,72 +37,69 @@ struct PreviewCatalogView: View {
 }
 
 private struct UIPreviewCatalogHomeView: View {
+  let isActive: Bool
   let selectScene: (UIPreviewScene) -> Void
-  @FocusState private var focusedSceneID: String?
+  @State private var expandedSectionIDs: Set<String> = []
+  @State private var lastFocusedControlID: String?
+  @FocusState private var focusedControlID: String?
 
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 34) {
         ForEach(UIPreviewCatalog.sections) { section in
           VStack(alignment: .leading, spacing: 14) {
-            Text(section.title)
-              .font(.title3.bold())
-              .foregroundStyle(.secondary)
+            Button {
+              toggleSection(section.id)
+            } label: {
+              Label(section.title, systemImage: expandedSectionIDs.contains(section.id) ? "chevron.down" : "chevron.right")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .focused($focusedControlID, equals: section.id)
 
-            VStack(spacing: 10) {
-              ForEach(section.scenes) { scene in
-                let isFocused = focusedSceneID == scene.id
-
-                Button {
-                  selectScene(scene)
-                } label: {
-                  VStack(alignment: .leading, spacing: 8) {
-                    Text(scene.title)
-                      .font(.headline)
-                      .foregroundStyle(isFocused ? .black : .primary)
-                    Text(scene.note)
-                      .font(.caption)
-                      .foregroundStyle(isFocused ? .black.opacity(0.65) : .secondary)
+            if expandedSectionIDs.contains(section.id) {
+              VStack(spacing: 10) {
+                ForEach(section.scenes) { scene in
+                  Button {
+                    lastFocusedControlID = scene.id
+                    selectScene(scene)
+                  } label: {
+                    VStack(alignment: .leading) {
+                      Text(scene.title)
+                      Text(scene.note)
+                        .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                   }
-                  .frame(maxWidth: .infinity, alignment: .leading)
+                  .focused($focusedControlID, equals: scene.id)
                 }
-                .buttonStyle(UIPreviewCatalogButtonStyle())
-                .focused($focusedSceneID, equals: scene.id)
               }
             }
           }
         }
       }
-      .padding(.horizontal, 96)
+      .frame(width: 760, alignment: .leading)
       .padding(.vertical, 60)
+      .frame(maxWidth: .infinity, alignment: .center)
     }
     .onAppear {
-      focusedSceneID = focusedSceneID ?? UIPreviewCatalog.firstSceneID
+      focusedControlID = focusedControlID ?? UIPreviewCatalog.firstSectionID
+      lastFocusedControlID = lastFocusedControlID ?? focusedControlID
+    }
+    .onChange(of: focusedControlID) { _, newValue in
+      lastFocusedControlID = newValue ?? lastFocusedControlID
+    }
+    .onChange(of: isActive) { _, isActive in
+      guard isActive else { return }
+      focusedControlID = lastFocusedControlID ?? focusedControlID ?? UIPreviewCatalog.firstSectionID
     }
   }
-}
 
-private struct UIPreviewCatalogButtonStyle: ButtonStyle {
-  @Environment(\.isFocused) private var isFocused
-
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .padding(.horizontal, 26)
-      .padding(.vertical, 18)
-      .background {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .fill(backgroundColor(isPressed: configuration.isPressed))
-      }
-      .scaleEffect(isFocused && !configuration.isPressed ? 1.02 : 1.0)
-      .animation(.easeOut(duration: 0.18), value: isFocused)
-      .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
-  }
-
-  private func backgroundColor(isPressed: Bool) -> Color {
-    if isFocused {
-      return .white
+  private func toggleSection(_ sectionID: String) {
+    if expandedSectionIDs.contains(sectionID) {
+      expandedSectionIDs.remove(sectionID)
+    } else {
+      expandedSectionIDs.insert(sectionID)
     }
-    return .white.opacity(isPressed ? 0.12 : 0.04)
   }
 }
 
@@ -504,6 +503,7 @@ private struct UIPreviewSettingsSceneView: View {
 @MainActor
 private struct UIPreviewSheetSceneView: View {
   let sheetCase: UIPreviewSheetCase
+  @State private var isSheetPresented = true
 
   init(sheetCase: UIPreviewSheetCase) {
     self.sheetCase = sheetCase
@@ -511,6 +511,21 @@ private struct UIPreviewSheetSceneView: View {
   }
 
   var body: some View {
+    VStack(spacing: 24) {
+      Text(sheetCase.title)
+        .font(.title)
+      Button("打开弹窗") {
+        isSheetPresented = true
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .sheet(isPresented: $isSheetPresented) {
+      sheetContent
+    }
+  }
+
+  @ViewBuilder
+  private var sheetContent: some View {
     switch sheetCase {
     case .subscribe:
       SubscribeSheet(previewViewModel: UIPreviewFixtures.subscribeSheetViewModel())
@@ -671,6 +686,7 @@ private struct UIPreviewPickerComponents: View {
 
 private struct UIPreviewNotificationComponents: View {
   @StateObject private var manager = NotificationManager()
+  @FocusState private var isReturnAnchorFocused: Bool
 
   var body: some View {
     ZStack(alignment: .topTrailing) {
@@ -685,8 +701,15 @@ private struct UIPreviewNotificationComponents: View {
       Color.clear
         .withNotification()
         .environmentObject(manager)
+
+      Color.clear
+        .frame(width: 1, height: 1)
+        .focusable()
+        .focused($isReturnAnchorFocused)
+        .accessibilityHidden(true)
     }
     .onAppear {
+      isReturnAnchorFocused = true
       manager.show(message: "悬浮通知预览", type: .success, duration: 20)
     }
   }
@@ -799,8 +822,8 @@ private extension UIPreviewSceneKind {
 }
 
 private enum UIPreviewCatalog {
-  static var firstSceneID: String? {
-    sections.first?.scenes.first?.id
+  static var firstSectionID: String? {
+    sections.first?.id
   }
 
   static let sections: [UIPreviewSection] = [

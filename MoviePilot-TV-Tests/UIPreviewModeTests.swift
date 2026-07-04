@@ -176,14 +176,24 @@ final class UIPreviewModeTests: XCTestCase {
 
   func testPreviewCatalogPresentsScenesAsRootViews() throws {
     let source = try String(contentsOf: repoFile("MoviePilot-TV/PreviewSupport/PreviewCatalogView.swift"))
+    let rootSource = try sourceSlice(source, from: "struct PreviewCatalogView: View", to: "private struct UIPreviewCatalogHomeView")
 
     XCTAssertTrue(source.contains("@State private var selectedScene: UIPreviewScene?"))
+    XCTAssertTrue(source.contains("ZStack {"))
     XCTAssertTrue(source.contains("if let selectedScene"))
-    XCTAssertTrue(source.contains("UIPreviewCatalogHomeView { scene in"))
+    XCTAssertTrue(source.contains("UIPreviewCatalogHomeView(isActive: selectedScene == nil) { scene in"))
     XCTAssertTrue(source.contains("selectedScene = scene"))
     XCTAssertTrue(source.contains("UIPreviewSceneDestination(scene: selectedScene)"))
-    XCTAssertTrue(source.contains(".onExitCommand"))
+    XCTAssertTrue(rootSource.contains(".onExitCommand"))
+    XCTAssertTrue(rootSource.contains("selectedScene = nil"))
+    XCTAssertFalse(rootSource.contains("UIPreviewBackObserver"))
+    XCTAssertFalse(source.contains("import UIKit"))
+    XCTAssertFalse(source.contains("UIPress.PressType.menu.rawValue"))
+    XCTAssertFalse(source.contains("recognizer.cancelsTouchesInView"))
+    XCTAssertFalse(source.contains("shouldRecognizeSimultaneouslyWith otherGestureRecognizer"))
     XCTAssertTrue(source.contains(".navigationTitle(\"UI 预览\")"))
+    XCTAssertTrue(rootSource.contains(".opacity(selectedScene == nil ? 1 : 0)"))
+    XCTAssertTrue(rootSource.contains(".disabled(selectedScene != nil)"))
     XCTAssertEqual(source.components(separatedBy: ".navigationTitle(").count - 1, 1)
     XCTAssertTrue(source.contains("ScrollView {"))
     XCTAssertTrue(source.contains("Button {"))
@@ -193,6 +203,50 @@ final class UIPreviewModeTests: XCTestCase {
     XCTAssertFalse(source.contains("path.append(scene)"))
     XCTAssertFalse(source.contains("ToolbarItem(placement: .navigationBarLeading)"))
     XCTAssertFalse(source.contains("返回目录"))
+  }
+
+  func testPreviewCatalogKeepsFocusAndSectionsCollapsedByDefault() throws {
+    let source = try String(contentsOf: repoFile("MoviePilot-TV/PreviewSupport/PreviewCatalogView.swift"))
+    let rootSource = try sourceSlice(source, from: "struct PreviewCatalogView: View", to: "private struct UIPreviewCatalogHomeView")
+    let homeSource = try sourceSlice(source, from: "private struct UIPreviewCatalogHomeView", to: "private enum UIPreviewCatalog")
+
+    XCTAssertTrue(rootSource.contains("ZStack {"))
+    XCTAssertFalse(rootSource.contains("focusedCatalogItemID"))
+    XCTAssertTrue(homeSource.contains("let isActive: Bool"))
+    XCTAssertTrue(homeSource.contains("@State private var lastFocusedControlID: String?"))
+    XCTAssertTrue(homeSource.contains("@State private var expandedSectionIDs: Set<String> = []"))
+    XCTAssertFalse(homeSource.contains("@Binding var focusedItemID"))
+    XCTAssertTrue(homeSource.contains("focusedControlID = focusedControlID ?? UIPreviewCatalog.firstSectionID"))
+    XCTAssertFalse(homeSource.contains(".defaultFocus("))
+    XCTAssertFalse(source.contains("focusedItemID = newValue"))
+    XCTAssertTrue(homeSource.contains("lastFocusedControlID = newValue ?? lastFocusedControlID"))
+    XCTAssertTrue(homeSource.contains(".onChange(of: isActive)"))
+    XCTAssertTrue(homeSource.contains("focusedControlID = lastFocusedControlID ?? focusedControlID ?? UIPreviewCatalog.firstSectionID"))
+    XCTAssertTrue(homeSource.contains(".frame(width: 760, alignment: .leading)"))
+    XCTAssertTrue(homeSource.contains(".frame(maxWidth: .infinity, alignment: .center)"))
+    XCTAssertGreaterThanOrEqual(homeSource.components(separatedBy: ".frame(maxWidth: .infinity, alignment: .leading)").count - 1, 2)
+    XCTAssertTrue(homeSource.contains("if expandedSectionIDs.contains(section.id)"))
+    XCTAssertTrue(homeSource.contains("expandedSectionIDs.remove(sectionID)"))
+    XCTAssertTrue(homeSource.contains("expandedSectionIDs.insert(sectionID)"))
+    XCTAssertFalse(homeSource.contains(".buttonStyle("))
+    XCTAssertFalse(homeSource.contains("UIPreviewCatalogButtonStyle"))
+  }
+
+  func testNotificationPreviewHasLocalFocusAnchorForExitCommand() throws {
+    let source = try String(contentsOf: repoFile("MoviePilot-TV/PreviewSupport/PreviewCatalogView.swift"))
+    let notificationSource = try sourceSlice(
+      source,
+      from: "private struct UIPreviewNotificationComponents",
+      to: "private struct UIPreviewPushedMediaDetailView"
+    )
+
+    XCTAssertTrue(notificationSource.contains("@FocusState private var isReturnAnchorFocused: Bool"))
+    XCTAssertTrue(notificationSource.contains(".focusable()"))
+    XCTAssertTrue(notificationSource.contains(".focused($isReturnAnchorFocused)"))
+    XCTAssertTrue(notificationSource.contains("isReturnAnchorFocused = true"))
+    XCTAssertTrue(notificationSource.contains(".accessibilityHidden(true)"))
+    XCTAssertFalse(notificationSource.contains("UIPreviewBackObserver"))
+    XCTAssertFalse(notificationSource.contains("返回目录"))
   }
 
   func testTopLevelPreviewScenesPreserveRealTabRoot() throws {
@@ -265,6 +319,20 @@ final class UIPreviewModeTests: XCTestCase {
 
     XCTAssertFalse(functionSource.contains("NavigationStack"))
     XCTAssertFalse(functionSource.contains(".navigationTitle(title)"))
+  }
+
+  func testSheetPreviewsUseNativeSheetPresentation() throws {
+    let source = try String(contentsOf: repoFile("MoviePilot-TV/PreviewSupport/PreviewCatalogView.swift"))
+    let sheetSource = try sourceSlice(
+      source,
+      from: "private struct UIPreviewSheetSceneView: View",
+      to: "\n@MainActor\nprivate struct UIPreviewMultiSelectionSheet"
+    )
+
+    XCTAssertTrue(sheetSource.contains("@State private var isSheetPresented = true"))
+    XCTAssertTrue(sheetSource.contains(".sheet(isPresented: $isSheetPresented)"))
+    XCTAssertTrue(sheetSource.contains("private var sheetContent: some View"))
+    XCTAssertTrue(sheetSource.contains("Button(\"打开弹窗\")"))
   }
 
   func testDetailPreviewStartsAsNativeNavigationDestination() throws {
