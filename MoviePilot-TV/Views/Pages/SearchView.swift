@@ -4,8 +4,12 @@ import SwiftUI
 struct SearchViewUIPreviewDestinations {
   var collectionViewModel: CollectionDetailViewModel? = nil
   var personViewModel: PersonDetailViewModel? = nil
+  var personShowsBiographySheet = false
   var resourceResultViewModel: ResourceResultViewModel? = nil
+  var resourceTorrentsPresentation: TorrentsResultUIPreviewPresentation? = nil
   var seasonViewModel: SubscribeSeasonViewModel? = nil
+  var seasonPresentation: SubscribeSeasonUIPreviewPresentation? = nil
+  var forkShare: SubscribeShare? = nil
 }
 #endif
 
@@ -15,6 +19,7 @@ struct SearchView: View {
   #if DEBUG
   private let loadsSitesOnAppear: Bool
   private let uiPreviewDestinations: SearchViewUIPreviewDestinations?
+  private let presentsSiteSelectionOnAppear: Bool
   #endif
   @State private var path = NavigationPath()
   @StateObject private var subscriptionHandler = SubscriptionHandler()
@@ -38,6 +43,7 @@ struct SearchView: View {
     #if DEBUG
     loadsSitesOnAppear = true
     uiPreviewDestinations = nil
+    presentsSiteSelectionOnAppear = false
     #endif
   }
 
@@ -46,12 +52,15 @@ struct SearchView: View {
     viewModel: SearchViewModel,
     loadsSitesOnAppear: Bool,
     initialPath: NavigationPath = NavigationPath(),
-    uiPreviewDestinations: SearchViewUIPreviewDestinations? = nil
+    uiPreviewDestinations: SearchViewUIPreviewDestinations? = nil,
+    showsSiteSelection: Bool = false
   ) {
     _viewModel = StateObject(wrappedValue: viewModel)
     self.loadsSitesOnAppear = loadsSitesOnAppear
     self.uiPreviewDestinations = uiPreviewDestinations
+    presentsSiteSelectionOnAppear = showsSiteSelection
     _path = State(initialValue: initialPath)
+    _showSiteSelection = State(initialValue: false)
   }
   #endif
 
@@ -256,6 +265,22 @@ struct SearchView: View {
         // 当视图出现时加载站点
         await viewModel.siteFilter.loadSites()
       }
+      #if DEBUG
+      .onAppear {
+        guard presentsSiteSelectionOnAppear else { return }
+        Task { @MainActor in
+          await Task.yield()
+          showSiteSelection = true
+        }
+      }
+      .onAppear {
+        guard let forkShare = uiPreviewDestinations?.forkShare else { return }
+        Task { @MainActor in
+          await Task.yield()
+          subscriptionHandler.forkSheetRequest = forkShare
+        }
+      }
+      #endif
       .onChange(of: focusedField) { _, newValue in
         if let newValue = newValue {
           lastFocusedField = newValue
@@ -299,7 +324,11 @@ struct SearchView: View {
   private func personDestination(for person: Person) -> some View {
     #if DEBUG
     if let previewViewModel = uiPreviewDestinations?.personViewModel {
-      PersonDetailView(previewViewModel: previewViewModel, navigationPath: $path)
+      PersonDetailView(
+        previewViewModel: previewViewModel,
+        navigationPath: $path,
+        showsBiographySheet: uiPreviewDestinations?.personShowsBiographySheet == true
+      )
     } else {
       PersonDetailView(person: person, navigationPath: $path)
     }
@@ -315,7 +344,8 @@ struct SearchView: View {
       ResourceResultView(
         title: request.title ?? "资源搜索",
         mediaInfo: request.mediaInfo,
-        previewViewModel: previewViewModel
+        previewViewModel: previewViewModel,
+        torrentsPresentation: uiPreviewDestinations?.resourceTorrentsPresentation
       )
     } else if UIPreviewMode.isEnabled() {
       ResourceResultView(
@@ -340,7 +370,10 @@ struct SearchView: View {
   private func seasonDestination(for request: SubscribeSeasonRequest) -> some View {
     #if DEBUG
     if let previewViewModel = uiPreviewDestinations?.seasonViewModel {
-      SubscribeSeasonView(previewViewModel: previewViewModel)
+      SubscribeSeasonView(
+        previewViewModel: previewViewModel,
+        uiPreviewPresentation: uiPreviewDestinations?.seasonPresentation
+      )
     } else {
       SubscribeSeasonView(mediaInfo: request.mediaInfo, initialSeason: request.initialSeason)
     }

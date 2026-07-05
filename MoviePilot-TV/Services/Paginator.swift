@@ -337,6 +337,20 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
 
 #if DEBUG
 extension Paginator {
+  func installUIPreviewItems(
+    _ items: [ItemType],
+    isFirstLoading: Bool = false,
+    isLoadingMore: Bool = false,
+    hasError: Bool = false
+  ) {
+    self.items = items
+    self.isFirstLoading = isFirstLoading
+    self.isLoading = isFirstLoading || isLoadingMore
+    self.isLoadingMore = isLoadingMore
+    self.hasError = hasError
+    self.hasMore = isLoadingMore
+  }
+
   static func uiPreview(
     items: [ItemType] = [],
     isFirstLoading: Bool = false,

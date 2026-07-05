@@ -9,6 +9,7 @@ struct ResourceResultView: View {
 
   #if DEBUG
   private let searchesOnAppear: Bool
+  private let torrentsPresentation: TorrentsResultUIPreviewPresentation?
   #endif
 
   init(request: ResourceSearchRequest) {
@@ -16,6 +17,7 @@ struct ResourceResultView: View {
     self.mediaInfo = request.mediaInfo
     #if DEBUG
     self.searchesOnAppear = true
+    self.torrentsPresentation = nil
     #endif
     _viewModel = StateObject(
       wrappedValue: ResourceResultViewModel(
@@ -31,10 +33,16 @@ struct ResourceResultView: View {
   }
 
   #if DEBUG
-  init(title: String, mediaInfo: MediaInfo?, previewViewModel: ResourceResultViewModel) {
+  init(
+    title: String,
+    mediaInfo: MediaInfo?,
+    previewViewModel: ResourceResultViewModel,
+    torrentsPresentation: TorrentsResultUIPreviewPresentation? = nil
+  ) {
     self.title = title
     self.mediaInfo = mediaInfo
     self.searchesOnAppear = false
+    self.torrentsPresentation = torrentsPresentation
     _viewModel = StateObject(wrappedValue: previewViewModel)
   }
   #endif
@@ -56,17 +64,20 @@ struct ResourceResultView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
+        #if DEBUG
         TorrentsResultView(
           result: viewModel.results,
           overrideMediaInfo: mediaInfo,
-          header: {
-            if mediaInfo != nil {
-              Text(title)
-                .font(.largeTitle.bold())
-                .foregroundColor(.secondary)
-            }
-          }
+          uiPreviewPresentation: torrentsPresentation,
+          header: { resultHeader }
         )
+        #else
+        TorrentsResultView(
+          result: viewModel.results,
+          overrideMediaInfo: mediaInfo,
+          header: { resultHeader }
+        )
+        #endif
       }
     }
     .background {
@@ -98,6 +109,15 @@ struct ResourceResultView: View {
       guard searchesOnAppear else { return }
       #endif
       viewModel.cancelInFlightSearch()
+    }
+  }
+
+  @ViewBuilder
+  private var resultHeader: some View {
+    if mediaInfo != nil {
+      Text(title)
+        .font(.largeTitle.bold())
+        .foregroundColor(.secondary)
     }
   }
 }

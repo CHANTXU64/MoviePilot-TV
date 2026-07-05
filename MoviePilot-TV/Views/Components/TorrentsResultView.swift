@@ -1,5 +1,11 @@
 import SwiftUI
 
+#if DEBUG
+enum TorrentsResultUIPreviewPresentation {
+  case filterSelection
+}
+#endif
+
 struct TorrentsResultView<Header: View>: View {
   let result: [Context]
   var overrideMediaInfo: MediaInfo? = nil
@@ -17,6 +23,10 @@ struct TorrentsResultView<Header: View>: View {
   // 计算/缓存状态
   @State private var filterOptions: [String: [String]] = [:]
   @State private var filteredResults: [Context] = []
+  #if DEBUG
+  @State private var didPresentPreviewFilter = false
+  private let uiPreviewPresentation: TorrentsResultUIPreviewPresentation?
+  #endif
 
   // 底部重定向器的焦点管理
   @FocusState private var focusedItemId: Context.ID?
@@ -32,7 +42,24 @@ struct TorrentsResultView<Header: View>: View {
     self.result = result
     self.overrideMediaInfo = overrideMediaInfo
     self.header = header()
+    #if DEBUG
+    self.uiPreviewPresentation = nil
+    #endif
   }
+
+  #if DEBUG
+  init(
+    result: [Context],
+    overrideMediaInfo: MediaInfo? = nil,
+    uiPreviewPresentation: TorrentsResultUIPreviewPresentation?,
+    @ViewBuilder header: () -> Header
+  ) {
+    self.result = result
+    self.overrideMediaInfo = overrideMediaInfo
+    self.header = header()
+    self.uiPreviewPresentation = uiPreviewPresentation
+  }
+  #endif
 
   var body: some View {
     ScrollView(.vertical) {
@@ -114,6 +141,9 @@ struct TorrentsResultView<Header: View>: View {
     .onAppear {
       updateFilterOptions()
       updateFilteredResults()
+      #if DEBUG
+      presentUIPreviewFilterIfNeeded()
+      #endif
     }
   }
 
@@ -304,6 +334,23 @@ struct TorrentsResultView<Header: View>: View {
     return "Normal"
   }
 
+  #if DEBUG
+  private func presentUIPreviewFilterIfNeeded() {
+    guard uiPreviewPresentation == .filterSelection, !didPresentPreviewFilter else { return }
+    didPresentPreviewFilter = true
+
+    Task { @MainActor in
+      await Task.yield()
+      let key = "site"
+      activeFilter = FilterConfig(
+        id: key,
+        title: "站点",
+        options: filterOptions[key] ?? [],
+        disabledOptions: computeDisabledOptions(for: key)
+      )
+    }
+  }
+  #endif
 }
 
 extension TorrentsResultView where Header == EmptyView {

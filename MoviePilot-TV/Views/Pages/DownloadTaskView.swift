@@ -1,11 +1,19 @@
 import Kingfisher
 import SwiftUI
 
+#if DEBUG
+enum DownloadTaskUIPreviewPresentation {
+  case collapsed
+  case deleteConfirmation
+}
+#endif
+
 struct DownloadTaskView: View {
   @StateObject private var viewModel: DownloadTaskViewModel
 
   #if DEBUG
   private let refreshesOnAppear: Bool
+  private let uiPreviewPresentation: DownloadTaskUIPreviewPresentation?
   #endif
   @State private var isExpanded = true
 
@@ -13,13 +21,20 @@ struct DownloadTaskView: View {
     _viewModel = StateObject(wrappedValue: DownloadTaskViewModel())
     #if DEBUG
     refreshesOnAppear = true
+    uiPreviewPresentation = nil
     #endif
   }
 
   #if DEBUG
-  init(viewModel: DownloadTaskViewModel, refreshesOnAppear: Bool) {
+  init(
+    viewModel: DownloadTaskViewModel,
+    refreshesOnAppear: Bool,
+    uiPreviewPresentation: DownloadTaskUIPreviewPresentation? = nil
+  ) {
     _viewModel = StateObject(wrappedValue: viewModel)
     self.refreshesOnAppear = refreshesOnAppear
+    self.uiPreviewPresentation = uiPreviewPresentation
+    _isExpanded = State(initialValue: uiPreviewPresentation != .collapsed)
   }
   #endif
 
@@ -64,7 +79,15 @@ struct DownloadTaskView: View {
         } else {
           LazyVStack(spacing: 15) {
             ForEach(viewModel.downloads) { item in
+              #if DEBUG
+              DownloadTaskRow(
+                item: item,
+                viewModel: viewModel,
+                showsDeleteConfirmation: uiPreviewPresentation == .deleteConfirmation && item.id == viewModel.downloads.first?.id
+              )
+              #else
               DownloadTaskRow(item: item, viewModel: viewModel)
+              #endif
             }
           }
         }
@@ -102,6 +125,7 @@ struct DownloadTaskView: View {
 private struct DownloadTaskRow: View {
   @ObservedObject var item: DownloadingInfo
   let viewModel: DownloadTaskViewModel
+  let presentsDeleteConfirmationOnAppear: Bool
 
   @State private var showingDeleteConfirm = false
 
@@ -109,9 +133,15 @@ private struct DownloadTaskRow: View {
   // 仅当 state 为 "downloading" 时为 true，用于控制“暂停/继续”按钮的状态。
   @State private var isDownloading: Bool
 
-  init(item: DownloadingInfo, viewModel: DownloadTaskViewModel) {
+  init(
+    item: DownloadingInfo,
+    viewModel: DownloadTaskViewModel,
+    showsDeleteConfirmation: Bool = false
+  ) {
     self.item = item
     self.viewModel = viewModel
+    self.presentsDeleteConfirmationOnAppear = showsDeleteConfirmation
+    _showingDeleteConfirm = State(initialValue: false)
     _isDownloading = State(initialValue: item.state?.lowercased() == "downloading")
   }
 
@@ -223,6 +253,13 @@ private struct DownloadTaskRow: View {
         }
       }
       Button("取消", role: .cancel) {}
+    }
+    .onAppear {
+      guard presentsDeleteConfirmationOnAppear else { return }
+      Task { @MainActor in
+        await Task.yield()
+        showingDeleteConfirm = true
+      }
     }
     .onChange(of: item.state) { _, newState in
       // 实时同步来自服务器的状态变更

@@ -1,5 +1,13 @@
 import SwiftUI
 
+#if DEBUG
+enum SubscribeSheetUIPreviewPresentation {
+  case advanced
+  case siteSelection
+  case filterGroupSelection
+}
+#endif
+
 struct SubscribeSheet: View {
   @Environment(\.dismiss) var dismiss
   @StateObject private var viewModel: SubscribeSheetViewModel
@@ -13,6 +21,8 @@ struct SubscribeSheet: View {
 
   #if DEBUG
   private let loadsDataOnAppear: Bool
+  private let presentsSiteSelectionOnAppear: Bool
+  private let presentsFilterGroupSelectionOnAppear: Bool
   #endif
 
   init(subscribe: Subscribe, isNewSubscription: Bool = false, onSave: (() -> Void)? = nil) {
@@ -22,14 +32,24 @@ struct SubscribeSheet: View {
     self.onSave = onSave
     #if DEBUG
     self.loadsDataOnAppear = true
+    self.presentsSiteSelectionOnAppear = false
+    self.presentsFilterGroupSelectionOnAppear = false
     #endif
   }
 
   #if DEBUG
-  init(previewViewModel: SubscribeSheetViewModel, onSave: (() -> Void)? = nil) {
+  init(
+    previewViewModel: SubscribeSheetViewModel,
+    presentation: SubscribeSheetUIPreviewPresentation? = nil,
+    onSave: (() -> Void)? = nil
+  ) {
     _viewModel = StateObject(wrappedValue: previewViewModel)
     self.onSave = onSave
     self.loadsDataOnAppear = false
+    self.presentsSiteSelectionOnAppear = presentation == .siteSelection
+    self.presentsFilterGroupSelectionOnAppear = presentation == .filterGroupSelection
+    _showAdvanced = State(initialValue: presentation == .advanced || presentation == .filterGroupSelection)
+    _showingSiteSelection = State(initialValue: false)
   }
   #endif
 
@@ -344,6 +364,22 @@ struct SubscribeSheet: View {
         label: { $0.name }
       )
     }
+    #if DEBUG
+    .onAppear {
+      guard presentsSiteSelectionOnAppear else { return }
+      Task { @MainActor in
+        await Task.yield()
+        showingSiteSelection = true
+      }
+    }
+    .onAppear {
+      guard presentsFilterGroupSelectionOnAppear else { return }
+      Task { @MainActor in
+        await Task.yield()
+        showingFilterGroupSelection = true
+      }
+    }
+    #endif
   }
 
   /// Site selection button label

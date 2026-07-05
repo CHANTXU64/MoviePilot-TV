@@ -82,7 +82,10 @@ class ReorganizeViewModel: ObservableObject {
 
   func loadConfig() async {
     #if DEBUG
-    if UIPreviewMode.isEnabled() { return }
+    if UIPreviewMode.isEnabled() {
+      isLoading = false
+      return
+    }
     #endif
 
     guard apiService.canAccess(.manage) else {

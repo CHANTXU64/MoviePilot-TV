@@ -8,6 +8,7 @@ struct StatusView: View {
   #if DEBUG
   @StateObject private var downloadTaskViewModel: DownloadTaskViewModel
   private let refreshesOnAppear: Bool
+  private let downloadPresentation: DownloadTaskUIPreviewPresentation?
   private let transferPresentation: TransferHistoryUIPreviewPresentation?
   #endif
 
@@ -17,6 +18,7 @@ struct StatusView: View {
     #if DEBUG
     _downloadTaskViewModel = StateObject(wrappedValue: DownloadTaskViewModel())
     refreshesOnAppear = true
+    downloadPresentation = nil
     transferPresentation = nil
     #endif
   }
@@ -27,12 +29,14 @@ struct StatusView: View {
     downloadTaskViewModel: DownloadTaskViewModel,
     transferHistoryViewModel: TransferHistoryViewModel,
     refreshesOnAppear: Bool,
+    downloadPresentation: DownloadTaskUIPreviewPresentation? = nil,
     transferPresentation: TransferHistoryUIPreviewPresentation? = nil
   ) {
     _viewModel = StateObject(wrappedValue: viewModel)
     _downloadTaskViewModel = StateObject(wrappedValue: downloadTaskViewModel)
     _transferHistoryViewModel = StateObject(wrappedValue: transferHistoryViewModel)
     self.refreshesOnAppear = refreshesOnAppear
+    self.downloadPresentation = downloadPresentation
     self.transferPresentation = transferPresentation
   }
   #endif
@@ -71,7 +75,8 @@ struct StatusView: View {
         #if DEBUG
         let downloadTaskView = DownloadTaskView(
           viewModel: downloadTaskViewModel,
-          refreshesOnAppear: refreshesOnAppear
+          refreshesOnAppear: refreshesOnAppear,
+          uiPreviewPresentation: downloadPresentation
         )
         #else
         let downloadTaskView = DownloadTaskView()

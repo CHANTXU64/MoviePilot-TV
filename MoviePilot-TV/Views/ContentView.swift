@@ -4,7 +4,7 @@ struct ContentView: View {
   var body: some View {
     #if DEBUG
     if UIPreviewMode.isEnabled() {
-      PreviewCatalogView()
+      PreviewCatalogView(initialSceneID: UIPreviewMode.sceneID())
     } else {
       RealAppContentView()
     }

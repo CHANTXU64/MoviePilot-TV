@@ -4,17 +4,29 @@ import SwiftUI
 struct PersonDetailView: View {
   @StateObject private var viewModel: PersonDetailViewModel
   @Binding var navigationPath: NavigationPath
+  #if DEBUG
+  private let presentsBiographySheetOnAppear: Bool
+  #endif
 
   init(person: Person, navigationPath: Binding<NavigationPath>) {
     _viewModel = StateObject(
       wrappedValue: PersonDetailViewModel(person: person))
     _navigationPath = navigationPath
+    #if DEBUG
+    presentsBiographySheetOnAppear = false
+    #endif
   }
 
   #if DEBUG
-  init(previewViewModel: PersonDetailViewModel, navigationPath: Binding<NavigationPath>) {
+  init(
+    previewViewModel: PersonDetailViewModel,
+    navigationPath: Binding<NavigationPath>,
+    showsBiographySheet: Bool = false
+  ) {
     _viewModel = StateObject(wrappedValue: previewViewModel)
     _navigationPath = navigationPath
+    presentsBiographySheetOnAppear = showsBiographySheet
+    _showFullBio = State(initialValue: false)
   }
   #endif
 
@@ -183,6 +195,15 @@ struct PersonDetailView: View {
         .frame(width: 1600)
       }
     }
+    #if DEBUG
+    .onAppear {
+      guard presentsBiographySheetOnAppear else { return }
+      Task { @MainActor in
+        await Task.yield()
+        showFullBio = true
+      }
+    }
+    #endif
     .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $navigationPath)
   }
 }

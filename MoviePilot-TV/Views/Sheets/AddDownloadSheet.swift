@@ -1,5 +1,12 @@
 import SwiftUI
 
+#if DEBUG
+enum AddDownloadSheetUIPreviewPresentation {
+  case advanced
+  case errorNotification
+}
+#endif
+
 struct AddDownloadSheet: View {
   @Environment(\.dismiss) var dismiss
   @EnvironmentObject var notificationManager: NotificationManager
@@ -8,6 +15,7 @@ struct AddDownloadSheet: View {
 
   #if DEBUG
   private let loadsDataOnAppear: Bool
+  private let previewErrorMessage: String?
   #endif
   @State private var showAdvanced = false
   @FocusState private var isInfoSectionFocused: Bool
@@ -19,13 +27,20 @@ struct AddDownloadSheet: View {
     )
     #if DEBUG
     self.loadsDataOnAppear = true
+    self.previewErrorMessage = nil
     #endif
   }
 
   #if DEBUG
-  init(previewViewModel: AddDownloadViewModel) {
+  init(
+    previewViewModel: AddDownloadViewModel,
+    presentation: AddDownloadSheetUIPreviewPresentation? = nil
+  ) {
     _viewModel = StateObject(wrappedValue: previewViewModel)
     self.loadsDataOnAppear = false
+    _showAdvanced = State(initialValue: presentation == .advanced)
+    self.previewErrorMessage =
+      presentation == .errorNotification ? "预览：添加下载失败，站点返回错误" : nil
   }
   #endif
 
@@ -163,17 +178,28 @@ struct AddDownloadSheet: View {
     }
     .task {
       #if DEBUG
+      if let previewErrorMessage {
+        await Task.yield()
+        presentError(previewErrorMessage)
+        return
+      }
       guard loadsDataOnAppear else { return }
       #endif
       await viewModel.loadData()
     }
     .onChange(of: viewModel.errorMessage) { _, newValue in
       if let message = newValue {
-        notificationManager.show(message: message, type: .error)
-        viewModel.errorMessage = nil
-        dismiss()
+        presentError(message)
       }
     }
     .frame(width: 1200)
+  }
+
+  private func presentError(_ message: String) {
+    viewModel.errorMessage = nil
+    dismiss()
+    DispatchQueue.main.async {
+      notificationManager.show(message: message, type: .error)
+    }
   }
 }

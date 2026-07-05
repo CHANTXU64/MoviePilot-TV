@@ -131,6 +131,26 @@ class MediaDetailViewModel: ObservableObject {
       .store(in: &cancellables)
   }
 
+  #if DEBUG
+  func installUIPreviewRows(
+    actors: [Person],
+    recommendations: [MediaInfo],
+    similar: [MediaInfo],
+    isLoadingMore: Bool = false
+  ) {
+    actorsPaginator.installUIPreviewItems(actors, isLoadingMore: isLoadingMore)
+    recommendPaginator.installUIPreviewItems(recommendations, isLoadingMore: isLoadingMore)
+    similarPaginator.installUIPreviewItems(similar, isLoadingMore: isLoadingMore)
+
+    if heroTopActors.isEmpty {
+      heroTopActors = Array(actors.prefix(4))
+    }
+    if !actors.isEmpty || !uniqueDirectors.isEmpty || !recommendations.isEmpty || !similar.isEmpty {
+      isFirstRowReady = true
+    }
+  }
+  #endif
+
   private var hasAppliedFullDetail = false
 
   /// 应用完整的媒体详情数据并加载辅助内容。

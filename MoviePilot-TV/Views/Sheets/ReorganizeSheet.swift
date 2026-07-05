@@ -1,20 +1,27 @@
 import SwiftUI
 
+#if DEBUG
+enum ReorganizeSheetUIPreviewPresentation {
+  case advanced
+  case doubanRecognition
+  case errorNotification
+}
+#endif
+
 struct ReorganizeSheet: View {
   @Environment(\.dismiss) var dismiss
   @EnvironmentObject var notificationManager: NotificationManager
   let onDone: () -> Void
 
   @StateObject private var viewModel: ReorganizeViewModel
+  private let recognizeSource: String
 
   #if DEBUG
   private let loadsConfigOnAppear: Bool
+  private let previewErrorMessage: String?
   #endif
   @State private var showAdvanced = false
   @FocusState private var isAdvancedButtonFocused: Bool
-
-  // 从 APIService 获取全局设置
-  private let recognizeSource = APIService.shared.settings?.RECOGNIZE_SOURCE ?? "themoviedb"
 
   init(
     logIds: [Int] = [],
@@ -30,16 +37,28 @@ struct ReorganizeSheet: View {
       )
     )
     self.onDone = onDone
+    self.recognizeSource = APIService.shared.settings?.RECOGNIZE_SOURCE ?? "themoviedb"
     #if DEBUG
     self.loadsConfigOnAppear = true
+    self.previewErrorMessage = nil
     #endif
   }
 
   #if DEBUG
-  init(previewViewModel: ReorganizeViewModel, onDone: @escaping () -> Void) {
+  init(
+    previewViewModel: ReorganizeViewModel,
+    presentation: ReorganizeSheetUIPreviewPresentation? = nil,
+    onDone: @escaping () -> Void
+  ) {
     _viewModel = StateObject(wrappedValue: previewViewModel)
     self.onDone = onDone
+    self.recognizeSource =
+      presentation == .doubanRecognition
+      ? "douban" : (APIService.shared.settings?.RECOGNIZE_SOURCE ?? "themoviedb")
     self.loadsConfigOnAppear = false
+    _showAdvanced = State(initialValue: presentation == .advanced)
+    self.previewErrorMessage =
+      presentation == .errorNotification ? "预览：重新整理失败，请检查规则和目标目录" : nil
   }
   #endif
 
@@ -55,17 +74,26 @@ struct ReorganizeSheet: View {
       }
       .task {
         #if DEBUG
+        if let previewErrorMessage {
+          await Task.yield()
+          presentError(previewErrorMessage)
+          return
+        }
         guard loadsConfigOnAppear else { return }
         #endif
         await viewModel.loadConfig()
       }
       .onChange(of: viewModel.errorMessage) { _, newValue in
         if let message = newValue {
-          notificationManager.show(message: message, type: .error)
-          viewModel.errorMessage = nil
+          presentError(message)
         }
       }
     }
+  }
+
+  private func presentError(_ message: String) {
+    notificationManager.show(message: message, type: .error)
+    viewModel.errorMessage = nil
   }
 
   private var manualFormView: some View {

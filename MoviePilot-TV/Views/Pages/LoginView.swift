@@ -1,7 +1,17 @@
 import SwiftUI
 
 struct LoginView: View {
-  @StateObject private var viewModel = LoginViewModel()
+  @StateObject private var viewModel: LoginViewModel
+
+  init() {
+    _viewModel = StateObject(wrappedValue: LoginViewModel())
+  }
+
+  #if DEBUG
+  init(previewViewModel: LoginViewModel) {
+    _viewModel = StateObject(wrappedValue: previewViewModel)
+  }
+  #endif
 
   var body: some View {
     HStack {

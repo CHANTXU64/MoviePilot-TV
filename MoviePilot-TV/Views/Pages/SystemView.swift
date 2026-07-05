@@ -3,6 +3,10 @@ import UIKit
 
 #if DEBUG
 enum SystemViewUIPreviewPresentation {
+  case connection
+  case siteSelection
+  case hardFilter
+  case softFilter
   case appInfo
   case logoutConfirmation
 }
@@ -26,6 +30,7 @@ struct SystemView: View {
 
   #if DEBUG
   private let loadsDataOnAppear: Bool
+  private let uiPreviewPresentation: SystemViewUIPreviewPresentation?
   #endif
 
   @StateObject private var viewModel: SystemViewModel
@@ -42,6 +47,7 @@ struct SystemView: View {
     self.isSelected = isSelected
     #if DEBUG
     loadsDataOnAppear = true
+    uiPreviewPresentation = nil
     #endif
     _viewModel = StateObject(wrappedValue: SystemViewModel())
   }
@@ -50,19 +56,22 @@ struct SystemView: View {
   init(isSelected: Bool, viewModel: SystemViewModel, loadsDataOnAppear: Bool) {
     self.isSelected = isSelected
     self.loadsDataOnAppear = loadsDataOnAppear
+    self.uiPreviewPresentation = nil
     _viewModel = StateObject(wrappedValue: viewModel)
   }
 
   init(uiPreviewPresentation: SystemViewUIPreviewPresentation, viewModel: SystemViewModel? = nil) {
     self.isSelected = true
     self.loadsDataOnAppear = false
+    self.uiPreviewPresentation = uiPreviewPresentation
     _viewModel = StateObject(wrappedValue: viewModel ?? SystemViewModel())
-    _showAppInfo = State(initialValue: uiPreviewPresentation == .appInfo)
-    _showLogoutConfirmation = State(initialValue: uiPreviewPresentation == .logoutConfirmation)
-    if uiPreviewPresentation == .logoutConfirmation {
-      _route = State(initialValue: [.connection])
-      _displayedRoute = State(initialValue: [.connection])
-      _pageOffsetDepth = State(initialValue: 1)
+    _showAppInfo = State(initialValue: false)
+    _showLogoutConfirmation = State(initialValue: false)
+    let route = uiPreviewPresentation.initialRoute
+    if !route.isEmpty {
+      _route = State(initialValue: route)
+      _displayedRoute = State(initialValue: route)
+      _pageOffsetDepth = State(initialValue: route.count)
     }
   }
   #endif
@@ -149,6 +158,22 @@ struct SystemView: View {
     .sheet(isPresented: $showAppInfo) {
       appInfoSheet
     }
+    #if DEBUG
+    .onAppear {
+      guard let uiPreviewPresentation else { return }
+      Task { @MainActor in
+        await Task.yield()
+        switch uiPreviewPresentation {
+        case .appInfo:
+          showAppInfo = true
+        case .logoutConfirmation:
+          showLogoutConfirmation = true
+        case .connection, .siteSelection, .hardFilter, .softFilter:
+          break
+        }
+      }
+    }
+    #endif
   }
 
   private func preview(for page: SystemSettingsPage, focusedItem: SystemSettingsFocus?) -> some View {
@@ -424,13 +449,21 @@ struct SystemView: View {
       }
       .focused($focusedItem, equals: filterNoneFocusTarget)
 
-      ForEach(viewModel.customFilterRules, id: \.id) { rule in
-        Button {
-          onSelect(rule.id)
-        } label: {
-          row(rule.name, value: selectedRuleId == rule.id ? "已选择" : nil)
+      if viewModel.isLoadingRules {
+        row("规则状态", value: "正在加载")
+          .foregroundStyle(.secondary)
+      } else if viewModel.customFilterRules.isEmpty {
+        row("规则状态", value: "暂无自定义过滤规则")
+          .foregroundStyle(.secondary)
+      } else {
+        ForEach(viewModel.customFilterRules, id: \.id) { rule in
+          Button {
+            onSelect(rule.id)
+          } label: {
+            row(rule.name, value: selectedRuleId == rule.id ? "已选择" : nil)
+          }
+          .focused($focusedItem, equals: filterRuleFocusTarget(rule.id))
         }
-        .focused($focusedItem, equals: filterRuleFocusTarget(rule.id))
       }
     }
   }
@@ -722,6 +755,25 @@ private enum SystemSettingsPage: Hashable {
   case hardFilter
   case softFilter
 }
+
+#if DEBUG
+private extension SystemViewUIPreviewPresentation {
+  var initialRoute: [SystemSettingsPage] {
+    switch self {
+    case .connection, .logoutConfirmation:
+      return [.connection]
+    case .siteSelection:
+      return [.siteSelection]
+    case .hardFilter:
+      return [.hardFilter]
+    case .softFilter:
+      return [.softFilter]
+    case .appInfo:
+      return []
+    }
+  }
+}
+#endif
 
 private enum SystemSettingsFocus: Hashable {
   case connection

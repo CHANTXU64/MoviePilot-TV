@@ -3,6 +3,9 @@ import SwiftUI
 #if DEBUG
 enum TransferHistoryUIPreviewPresentation {
   case detail
+  case singleDelete
+  case batchDelete
+  case batchReorganize
 }
 #endif
 
@@ -11,6 +14,7 @@ struct TransferHistoryView: View {
 
   #if DEBUG
   private let refreshesOnAppear: Bool
+  private let uiPreviewPresentation: TransferHistoryUIPreviewPresentation?
   #endif
   @State private var itemToDelete: TransferHistory? = nil
   @State private var itemToReorganize: TransferHistory? = nil
@@ -26,6 +30,7 @@ struct TransferHistoryView: View {
     self.viewModel = viewModel
     #if DEBUG
     refreshesOnAppear = true
+    uiPreviewPresentation = nil
     #endif
   }
 
@@ -33,15 +38,13 @@ struct TransferHistoryView: View {
   init(viewModel: TransferHistoryViewModel, refreshesOnAppear: Bool) {
     self.viewModel = viewModel
     self.refreshesOnAppear = refreshesOnAppear
+    self.uiPreviewPresentation = nil
   }
 
   init(viewModel: TransferHistoryViewModel, uiPreviewPresentation: TransferHistoryUIPreviewPresentation) {
     self.viewModel = viewModel
     self.refreshesOnAppear = false
-    switch uiPreviewPresentation {
-    case .detail:
-      _itemForInfoSheet = State(initialValue: viewModel.items.first)
-    }
+    self.uiPreviewPresentation = uiPreviewPresentation
   }
   #endif
 
@@ -250,6 +253,24 @@ struct TransferHistoryView: View {
       message: {
         Text("确定要删除选中的 \(viewModel.selectedIds.count) 条记录吗？此操作不可撤销。")
       })
+    #if DEBUG
+    .onAppear {
+      guard let uiPreviewPresentation else { return }
+      Task { @MainActor in
+        await Task.yield()
+        switch uiPreviewPresentation {
+        case .detail:
+          itemForInfoSheet = viewModel.items.first
+        case .singleDelete:
+          itemToDelete = viewModel.items.first
+        case .batchDelete:
+          showBatchDeleteAlert = true
+        case .batchReorganize:
+          showBatchRedoSheet = true
+        }
+      }
+    }
+    #endif
   }
 
   private func restoreHistoryFocus() {

@@ -1,6 +1,24 @@
 import Kingfisher
 import SwiftUI
 
+#if DEBUG
+enum MediaDetailUIPreviewPresentation {
+  case contentPage
+  case tmdbJumpLoading
+  case siteSelection
+  case subscribeSheet
+  case unsubscribeConfirmation
+  case unsubscribing
+}
+
+struct MediaDetailUIPreviewRows {
+  var actors: [Person] = []
+  var recommendations: [MediaInfo] = []
+  var similar: [MediaInfo] = []
+  var isLoadingMore = false
+}
+#endif
+
 struct MediaDetailView: View {
   @StateObject private var viewModel: MediaDetailViewModel
   @Binding var navigationPath: NavigationPath
@@ -25,6 +43,11 @@ struct MediaDetailView: View {
   @State private var recommendPreloadDebounce: Task<Void, Never>?
   /// 相似区预加载防抖任务
   @State private var similarPreloadDebounce: Task<Void, Never>?
+
+  #if DEBUG
+  private let uiPreviewPresentation: MediaDetailUIPreviewPresentation?
+  @State private var didScrollToUIPreviewContentPage = false
+  #endif
 
   @FocusState private var focusedRecommendId: MediaInfo.ID?
   @FocusState private var focusedSimilarId: MediaInfo.ID?
@@ -129,7 +152,50 @@ struct MediaDetailView: View {
     _navigationPath = navigationPath
     self.preloadTask = preloadTask
     _isContentReady = isContentReady
+    #if DEBUG
+    uiPreviewPresentation = nil
+    #endif
   }
+
+  #if DEBUG
+  init(
+    detail: MediaInfo,
+    navigationPath: Binding<NavigationPath>,
+    preloadTask: MediaPreloadTask,
+    isContentReady: Binding<Bool>,
+    uiPreviewPresentation: MediaDetailUIPreviewPresentation?,
+    uiPreviewSites: [Site] = [],
+    uiPreviewRows: MediaDetailUIPreviewRows? = nil
+  ) {
+    let vm = MediaDetailViewModel(detail: detail)
+    vm.preloadTask = preloadTask
+    vm.siteFilter.availableSites = uiPreviewSites
+    vm.siteFilter.selectedSites = Set(uiPreviewSites.prefix(2).map(\.id))
+    vm.isUnsubscribing = uiPreviewPresentation == .unsubscribing
+    if let uiPreviewRows {
+      vm.installUIPreviewRows(
+        actors: uiPreviewRows.actors,
+        recommendations: uiPreviewRows.recommendations,
+        similar: uiPreviewRows.similar,
+        isLoadingMore: uiPreviewRows.isLoadingMore
+      )
+    }
+    _viewModel = StateObject(wrappedValue: vm)
+    _navigationPath = navigationPath
+    self.preloadTask = preloadTask
+    _isContentReady = isContentReady
+    self.uiPreviewPresentation = uiPreviewPresentation
+    _showContentPage = State(initialValue: uiPreviewPresentation == .contentPage)
+    _showSiteSelection = State(initialValue: false)
+    _sheetSubscribe = State(initialValue: nil)
+    _showUnsubscribeConfirm = State(initialValue: false)
+    _unsubscribeConfirmationMessage = State(
+      initialValue: uiPreviewPresentation == .unsubscribeConfirmation
+        ? SubscriptionCancelConfirmation.headerMessage(for: detail)
+        : ""
+    )
+  }
+  #endif
 
   var body: some View {
     ZStack {
@@ -260,6 +326,11 @@ struct MediaDetailView: View {
             }
           }
         }
+        #if DEBUG
+        .onAppear {
+          scrollToUIPreviewContentPage(proxy)
+        }
+        #endif
       }
     }
     .environmentObject(subscriptionHandler)
@@ -283,6 +354,9 @@ struct MediaDetailView: View {
         hasRefreshedSubscription: hasRefreshedSubscriptionAfterFullDetail
       )
       if canSearchResources {
+        #if DEBUG
+        guard !UIPreviewMode.isEnabled() else { return }
+        #endif
         await viewModel.siteFilter.loadSites()
       }
     }
@@ -376,12 +450,47 @@ struct MediaDetailView: View {
         label: { $0.name }
       )
     }
+    #if DEBUG
+    .onAppear {
+      guard let uiPreviewPresentation else { return }
+      Task { @MainActor in
+        await Task.yield()
+        switch uiPreviewPresentation {
+        case .siteSelection:
+          showSiteSelection = true
+        case .subscribeSheet:
+          sheetSubscribe = viewModel.buildSubscribeRequest()
+        case .unsubscribeConfirmation:
+          showUnsubscribeConfirm = true
+        case .contentPage, .tmdbJumpLoading, .unsubscribing:
+          break
+        }
+      }
+    }
+    #endif
     .onChange(of: focusedButton) { _, newValue in
       if let newValue = newValue {
         lastFocusedButton = newValue
       }
     }
   }
+
+  #if DEBUG
+  private func scrollToUIPreviewContentPage(_ proxy: ScrollViewProxy) {
+    guard uiPreviewPresentation == .contentPage, !didScrollToUIPreviewContentPage else { return }
+    didScrollToUIPreviewContentPage = true
+    showContentPage = true
+    Task { @MainActor in
+      await Task.yield()
+      try? await Task.sleep(for: .milliseconds(600))
+      showContentPage = true
+      isHeroFocused = false
+      withAnimation(.easeInOut(duration: 0.6)) {
+        proxy.scrollTo("contentTop", anchor: .top)
+      }
+    }
+  }
+  #endif
 
   // MARK: - 订阅 UI 操作（业务逻辑委托给 ViewModel）
 

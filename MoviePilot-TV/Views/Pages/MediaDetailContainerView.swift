@@ -195,6 +195,11 @@ private struct MediaLoadingView: View {
 struct MediaDetailContainerView: View {
   let media: MediaInfo
   @Binding var navigationPath: NavigationPath
+  #if DEBUG
+  private let uiPreviewPresentation: MediaDetailUIPreviewPresentation?
+  private let uiPreviewSites: [Site]
+  private let uiPreviewRows: MediaDetailUIPreviewRows?
+  #endif
 
   /// 预加载任务：在 init 中立即获取/创建，确保首帧就有数据
   /// 非 Optional，消除 if let 条件分支导致的视图结构变化
@@ -203,17 +208,52 @@ struct MediaDetailContainerView: View {
   init(media: MediaInfo, navigationPath: Binding<NavigationPath>) {
     self.media = media
     _navigationPath = navigationPath
+    #if DEBUG
+    self.uiPreviewPresentation = nil
+    self.uiPreviewSites = []
+    self.uiPreviewRows = nil
+    #endif
     // 在 init 中立即获取预加载任务，避免首帧出现条件分支
     _preloadTask = State(wrappedValue: MediaPreloader.shared.preload(for: media))
   }
 
+  #if DEBUG
+  init(
+    media: MediaInfo,
+    navigationPath: Binding<NavigationPath>,
+    uiPreviewPresentation: MediaDetailUIPreviewPresentation?,
+    uiPreviewSites: [Site] = [],
+    uiPreviewRows: MediaDetailUIPreviewRows? = nil
+  ) {
+    self.media = media
+    _navigationPath = navigationPath
+    self.uiPreviewPresentation = uiPreviewPresentation
+    self.uiPreviewSites = uiPreviewSites
+    self.uiPreviewRows = uiPreviewRows
+    _preloadTask = State(wrappedValue: MediaPreloader.shared.preload(for: media))
+  }
+  #endif
+
   var body: some View {
     // 直接传入 preloadTask（非 Optional，无条件分支）
-    MediaDetailContainerContent(
-      media: media,
-      navigationPath: $navigationPath,
-      preloadTask: preloadTask
-    )
+    Group {
+      #if DEBUG
+      MediaDetailContainerContent(
+        media: media,
+        navigationPath: $navigationPath,
+        preloadTask: preloadTask,
+        uiPreviewPresentation: uiPreviewPresentation,
+        uiPreviewSites: uiPreviewSites,
+        uiPreviewRows: uiPreviewRows
+      )
+      #else
+      MediaDetailContainerContent(
+        media: media,
+        navigationPath: $navigationPath,
+        preloadTask: preloadTask
+      )
+      #endif
+    }
     .task(id: media.id) {
       // 确保当前任务被锁定，防止用户在子页面浏览时被最近最少使用算法 (LRU) 淘汰
       MediaPreloader.shared.pin(key: media.id)
@@ -230,6 +270,11 @@ private struct MediaDetailContainerContent: View {
   let media: MediaInfo
   @Binding var navigationPath: NavigationPath
   @ObservedObject var preloadTask: MediaPreloadTask
+  #if DEBUG
+  let uiPreviewPresentation: MediaDetailUIPreviewPresentation?
+  let uiPreviewSites: [Site]
+  let uiPreviewRows: MediaDetailUIPreviewRows?
+  #endif
 
   /// 第二页首行内容是否已就绪（由 MediaDetailView 回写）
   @State private var isContentReady = false
@@ -238,13 +283,41 @@ private struct MediaDetailContainerContent: View {
   /// 最短展示时间是否已过（防止加载太快导致动画闪烁）
   @State private var minTimeElapsed = false
 
-  init(media: MediaInfo, navigationPath: Binding<NavigationPath>, preloadTask: MediaPreloadTask) {
+  init(
+    media: MediaInfo,
+    navigationPath: Binding<NavigationPath>,
+    preloadTask: MediaPreloadTask
+  ) {
     self.media = media
     _navigationPath = navigationPath
     self.preloadTask = preloadTask
+    #if DEBUG
+    self.uiPreviewPresentation = nil
+    self.uiPreviewSites = []
+    self.uiPreviewRows = nil
+    #endif
     // 在 init 中判断，确保第一帧 isReady 就正确
     _wasPreloaded = State(initialValue: preloadTask.isDetailReady)
   }
+
+  #if DEBUG
+  init(
+    media: MediaInfo,
+    navigationPath: Binding<NavigationPath>,
+    preloadTask: MediaPreloadTask,
+    uiPreviewPresentation: MediaDetailUIPreviewPresentation? = nil,
+    uiPreviewSites: [Site] = [],
+    uiPreviewRows: MediaDetailUIPreviewRows? = nil
+  ) {
+    self.media = media
+    _navigationPath = navigationPath
+    self.preloadTask = preloadTask
+    self.uiPreviewPresentation = uiPreviewPresentation
+    self.uiPreviewSites = uiPreviewSites
+    self.uiPreviewRows = uiPreviewRows
+    _wasPreloaded = State(initialValue: preloadTask.isDetailReady)
+  }
+  #endif
 
   /// 数据是否就绪（加载成功或失败均算就绪，且首行内容已加载）
   /// 如果数据在进入时已预加载完毕，直接视为就绪
@@ -263,12 +336,26 @@ private struct MediaDetailContainerContent: View {
 
     ZStack {
       // Detail 层 — 无条件渲染，从第一帧就存在于视图树中
-      MediaDetailView(
-        detail: detail,
-        navigationPath: $navigationPath,
-        preloadTask: preloadTask,
-        isContentReady: $isContentReady
-      )
+      Group {
+        #if DEBUG
+        MediaDetailView(
+          detail: detail,
+          navigationPath: $navigationPath,
+          preloadTask: preloadTask,
+          isContentReady: $isContentReady,
+          uiPreviewPresentation: uiPreviewPresentation,
+          uiPreviewSites: uiPreviewSites,
+          uiPreviewRows: uiPreviewRows
+        )
+        #else
+        MediaDetailView(
+          detail: detail,
+          navigationPath: $navigationPath,
+          preloadTask: preloadTask,
+          isContentReady: $isContentReady
+        )
+        #endif
+      }
       // 加载未完成时隐藏详情，防止 NavigationStack 过渡动画透出内容
       .opacity(isReady ? 1 : 0)
 

@@ -612,7 +612,8 @@ class SearchViewModel: ObservableObject {
     collections: [MediaInfo],
     persons: [Person],
     shares: [MediaInfo],
-    bestResults: [BestResultItem]
+    bestResults: [BestResultItem],
+    isLoadingMore: Bool = false
   ) {
     searchStreamTask?.cancel()
     searchStreamTask = nil
@@ -621,11 +622,11 @@ class SearchViewModel: ObservableObject {
     searchType = .unified
     hasSearched = true
     isLoading = false
-    moviePaginator = .uiPreview(items: movies)
-    tvPaginator = .uiPreview(items: tvShows)
-    collectionPaginator = .uiPreview(items: collections)
-    personPaginator = .uiPreview(items: persons)
-    subscriptionSharePaginator = .uiPreview(items: shares)
+    moviePaginator = .uiPreview(items: movies, isLoadingMore: isLoadingMore)
+    tvPaginator = .uiPreview(items: tvShows, isLoadingMore: isLoadingMore)
+    collectionPaginator = .uiPreview(items: collections, isLoadingMore: isLoadingMore)
+    personPaginator = .uiPreview(items: persons, isLoadingMore: isLoadingMore)
+    subscriptionSharePaginator = .uiPreview(items: shares, isLoadingMore: isLoadingMore)
     self.bestResults = bestResults
   }
 

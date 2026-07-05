@@ -1,6 +1,12 @@
 import Combine
 import SwiftUI
 
+#if DEBUG
+enum SheetPickerUIPreviewPresentation {
+  case options
+}
+#endif
+
 struct PickerOption<Value: Hashable>: Identifiable {
   let id: Value
   let title: String
@@ -17,8 +23,38 @@ struct SheetPicker<Value: Hashable>: View {
   let title: String
   @Binding var selection: Value
   let options: [PickerOption<Value>]
+  #if DEBUG
+  private let presentsPickerOnAppear: Bool
+  #endif
 
   @State private var showingPicker = false
+
+  init(
+    title: String,
+    selection: Binding<Value>,
+    options: [PickerOption<Value>]
+  ) {
+    self.title = title
+    _selection = selection
+    self.options = options
+    #if DEBUG
+    self.presentsPickerOnAppear = false
+    #endif
+  }
+
+  #if DEBUG
+  init(
+    title: String,
+    selection: Binding<Value>,
+    options: [PickerOption<Value>],
+    uiPreviewPresentation: SheetPickerUIPreviewPresentation?
+  ) {
+    self.title = title
+    _selection = selection
+    self.options = options
+    self.presentsPickerOnAppear = uiPreviewPresentation == .options
+  }
+  #endif
 
   var body: some View {
     // 所有版本都使用嵌套 Sheet 模式，避免 NavigationLink 导致的 dismiss 问题
@@ -42,6 +78,15 @@ struct SheetPicker<Value: Hashable>: View {
         isPresented: $showingPicker
       )
     }
+    #if DEBUG
+    .onAppear {
+      guard presentsPickerOnAppear else { return }
+      Task { @MainActor in
+        await Task.yield()
+        showingPicker = true
+      }
+    }
+    #endif
   }
 }
 
@@ -79,4 +124,3 @@ private struct SheetPickerDetailView<Value: Hashable>: View {
     }
   }
 }
-

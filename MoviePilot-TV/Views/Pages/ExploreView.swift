@@ -6,14 +6,21 @@ struct ExploreView: View {
   @State private var path = NavigationPath()
   @StateObject private var subscriptionHandler = SubscriptionHandler()
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
+  #if DEBUG
+  private let uiPreviewForkShare: SubscribeShare?
+  #endif
 
   init() {
     _viewModel = StateObject(wrappedValue: ExploreViewModel())
+    #if DEBUG
+    uiPreviewForkShare = nil
+    #endif
   }
 
   #if DEBUG
-  init(viewModel: ExploreViewModel) {
+  init(viewModel: ExploreViewModel, uiPreviewForkShare: SubscribeShare? = nil) {
     _viewModel = StateObject(wrappedValue: viewModel)
+    self.uiPreviewForkShare = uiPreviewForkShare
   }
   #endif
 
@@ -74,6 +81,15 @@ struct ExploreView: View {
         subscriptionHandler: subscriptionHandler
       )
     }
+    #if DEBUG
+    .onAppear {
+      guard let uiPreviewForkShare else { return }
+      Task { @MainActor in
+        await Task.yield()
+        subscriptionHandler.forkSheetRequest = uiPreviewForkShare
+      }
+    }
+    #endif
   }
 
   private var headerView: some View {

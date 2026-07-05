@@ -1,11 +1,36 @@
 import SwiftUI
 
+#if DEBUG
+enum HomeViewUIPreviewPresentation {
+  case subscribeSheet
+  case unsubscribeConfirmation
+}
+
+struct HomeViewUIPreviewDestinations {
+  var mediaDetailPresentation: MediaDetailUIPreviewPresentation? = nil
+  var mediaDetailSites: [Site] = []
+  var mediaDetailRows: MediaDetailUIPreviewRows? = nil
+  var homePresentation: HomeViewUIPreviewPresentation? = nil
+}
+#endif
+
 @MainActor
 struct HomeView: View {
   @StateObject private var viewModel: HomeViewModel
 
   #if DEBUG
   private let loadsDataOnAppear: Bool
+  private let uiPreviewDestinations: HomeViewUIPreviewDestinations?
+  private var previewSubscriptionID: Int? {
+    switch uiPreviewDestinations?.homePresentation {
+    case .unsubscribeConfirmation:
+      return viewModel.movieSubscriptions.first?.id ?? viewModel.tvSubscriptions.first?.id
+    case .subscribeSheet, .none:
+      return nil
+    }
+  }
+  #else
+  private var previewSubscriptionID: Int? { nil }
   #endif
 
   // Sheet 状态
@@ -18,6 +43,7 @@ struct HomeView: View {
     _viewModel = StateObject(wrappedValue: viewModel ?? HomeViewModel())
     #if DEBUG
     loadsDataOnAppear = true
+    uiPreviewDestinations = nil
     #endif
   }
 
@@ -25,10 +51,12 @@ struct HomeView: View {
   init(
     viewModel: HomeViewModel,
     loadsDataOnAppear: Bool,
-    initialPath: NavigationPath = NavigationPath()
+    initialPath: NavigationPath = NavigationPath(),
+    uiPreviewDestinations: HomeViewUIPreviewDestinations? = nil
   ) {
     _viewModel = StateObject(wrappedValue: viewModel)
     self.loadsDataOnAppear = loadsDataOnAppear
+    self.uiPreviewDestinations = uiPreviewDestinations
     _path = State(initialValue: initialPath)
   }
   #endif
@@ -63,7 +91,8 @@ struct HomeView: View {
                 isFirstRow: viewModel.latestMediaServers.isEmpty,
                 viewModel: viewModel,
                 onEdit: presentEditSheet,
-                onViewDetail: navigateToDetail
+                onViewDetail: navigateToDetail,
+                previewUnsubscribeID: previewSubscriptionID
               )
             }
 
@@ -76,7 +105,8 @@ struct HomeView: View {
                   && viewModel.movieSubscriptions.isEmpty,
                 viewModel: viewModel,
                 onEdit: presentEditSheet,
-                onViewDetail: navigateToDetail
+                onViewDetail: navigateToDetail,
+                previewUnsubscribeID: previewSubscriptionID
               )
             }
 
@@ -109,9 +139,32 @@ struct HomeView: View {
       .sheet(item: $selectedSubscribe) { subscribe in
         SubscribeSheet(subscribe: subscribe)
       }
+      #if DEBUG
+      .onAppear {
+        guard uiPreviewDestinations?.homePresentation == .subscribeSheet else { return }
+        Task { @MainActor in
+          await Task.yield()
+          selectedSubscribe = viewModel.movieSubscriptions.first ?? viewModel.tvSubscriptions.first
+        }
+      }
+      #endif
       // 导航目的地
       .navigationDestination(for: MediaInfo.self) { mediaInfo in
+        #if DEBUG
+        if let presentation = uiPreviewDestinations?.mediaDetailPresentation {
+          MediaDetailContainerView(
+            media: mediaInfo,
+            navigationPath: $path,
+            uiPreviewPresentation: presentation,
+            uiPreviewSites: uiPreviewDestinations?.mediaDetailSites ?? [],
+            uiPreviewRows: uiPreviewDestinations?.mediaDetailRows
+          )
+        } else {
+          MediaDetailContainerView(media: mediaInfo, navigationPath: $path)
+        }
+        #else
         MediaDetailContainerView(media: mediaInfo, navigationPath: $path)
+        #endif
       }
       .navigationDestination(for: Person.self) { person in
         PersonDetailView(
@@ -286,6 +339,7 @@ private struct SubscribeSectionView: View {
   @ObservedObject var viewModel: HomeViewModel
   let onEdit: (Subscribe) -> Void
   let onViewDetail: (Subscribe) -> Void
+  var previewUnsubscribeID: Int? = nil
 
   @FocusState private var focusedItemId: String?
   @FocusState private var isTopRedirectorFocused: Bool
@@ -321,7 +375,8 @@ private struct SubscribeSectionView: View {
               item: item,
               viewModel: viewModel,
               onEdit: { onEdit(item) },
-              onViewDetail: { onViewDetail(item) }
+              onViewDetail: { onViewDetail(item) },
+              presentsUnsubscribeConfirmationOnAppear: item.id == previewUnsubscribeID
             )
             .focused($focusedItemId, equals: HomeSubscribeFocusID.value(for: item.id))
           }
@@ -340,6 +395,7 @@ private struct SubscribeItemView: View {
   @ObservedObject var viewModel: HomeViewModel
   let onEdit: () -> Void
   let onViewDetail: () -> Void
+  let presentsUnsubscribeConfirmationOnAppear: Bool
   @State private var showUnsubscribeConfirm = false
 
   var body: some View {
@@ -420,6 +476,13 @@ private struct SubscribeItemView: View {
       }
     } message: {
       Text(SubscriptionCancelConfirmation.message(for: item))
+    }
+    .onAppear {
+      guard presentsUnsubscribeConfirmationOnAppear else { return }
+      Task { @MainActor in
+        await Task.yield()
+        showUnsubscribeConfirm = true
+      }
     }
   }
 
