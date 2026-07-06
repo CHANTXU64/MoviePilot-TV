@@ -92,9 +92,15 @@
 
    `--force` 只强制执行构建和安装流程，不代表 Xcode/Apple 一定会在旧的 Xcode-managed provisioning profile 过期前签发新的 profile；如果 Apple 仍复用未过期的 profile，应用的实际到期时间不会被提前延长。
 
-## 后端兼容性测试
+## 开发与测试
+
+### 后端兼容性测试
 
 如需使用自己的 MoviePilot 后端验证 TV 端接口、图片和功能兼容性，请先阅读 [后端兼容性测试文档](docs/backend-compatibility-tests.md)。真实后端测试可能包含副作用套件，运行前请确认测试范围。
+
+### UI 预览测试分支
+
+UI 预览测试请切到 `ai/ui-preview-mode` 分支，该分支不计划合并到 `main`。Debug 构建运行时添加启动参数 `-uiPreviewMode`。
 
 ## 反馈与贡献
 
