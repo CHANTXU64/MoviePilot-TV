@@ -127,6 +127,11 @@ class SubscribeSeasonViewModel: ObservableObject {
     }
   }
 
+  func retryLoadData(forceRefreshSubscriptions: Bool = true) async {
+    hasLoaded = false
+    await loadData(forceRefreshSubscriptions: forceRefreshSubscriptions)
+  }
+
   /// 当用户在界面切换剧集组时触发重新加载
   func fetchSeasons() async {
     isLoading = true

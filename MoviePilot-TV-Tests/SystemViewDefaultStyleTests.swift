@@ -149,6 +149,72 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains(".opacity(isSeasonInformationUnavailable ? 0.35 : 1)"))
   }
 
+  func testLoginViewUsesSettingsLogoNotificationAndStableLoadingLabel() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/LoginView.swift")
+
+    XCTAssertTrue(source.contains("@EnvironmentObject private var notificationManager: NotificationManager"))
+    XCTAssertTrue(source.contains("Image(\"SettingsLogoGlass\")"))
+    XCTAssertTrue(source.contains("ProgressView()"))
+    XCTAssertTrue(source.contains("Text(viewModel.isLoading ? \"登录中\" : \"登录\")"))
+    XCTAssertTrue(source.contains("notificationManager.show(message: message, type: .error)"))
+    XCTAssertFalse(source.contains("Image(systemName: \"film.stack.fill\")"))
+    XCTAssertFalse(source.contains("Text(errorMessage)"))
+    XCTAssertFalse(source.contains(".foregroundColor(.red)"))
+  }
+
+  func testHomeMediaHeaderPickerRowIsFocusSection() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/HomeView.swift")
+    let start = try XCTUnwrap(source.range(of: "private struct MediaSectionView"))
+    let end = try XCTUnwrap(source.range(of: "private struct SubscribeSectionView", range: start.upperBound..<source.endIndex))
+    let mediaSection = String(source[start.lowerBound..<end.lowerBound])
+
+    XCTAssertTrue(mediaSection.contains("Picker(\"服务器\", selection: $selectedServer)"))
+    XCTAssertTrue(mediaSection.contains(".padding(.horizontal, 8)\n      .focusSection()"))
+  }
+
+  func testNotificationAndLoadingStateUseSharedPatterns() throws {
+    let subscribeSheetSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/SubscribeSheet.swift")
+    let transferSource = try Self.source(at: "MoviePilot-TV/Views/Pages/TransferHistoryView.swift")
+    let subscriptionModifierSource = try Self.source(at: "MoviePilot-TV/Views/Components/SubscriptionModifier.swift")
+    let forkSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/ForkSubscribeSheet.swift")
+
+    XCTAssertTrue(subscribeSheetSource.contains("notificationManager.show(message: message, type: .error)"))
+    XCTAssertTrue(transferSource.contains("notificationManager.show(message: message, type: .error)"))
+    XCTAssertTrue(subscriptionModifierSource.contains("notificationManager.show(message: handler.notificationMessage, type: handler.notificationType)"))
+    XCTAssertFalse(subscriptionModifierSource.contains(".alert(alertTitle, isPresented: $showAlert)"))
+    XCTAssertTrue(forkSource.contains("Text(isForking ? \"复用中\" : \"复用订阅\")"))
+    XCTAssertTrue(forkSource.contains(".disabled(isForking)"))
+  }
+
+  func testHorizontalLoadMoreIndicatorsAlignToPosterArea() throws {
+    let detailSource = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
+    let searchSource = try Self.source(at: "MoviePilot-TV/Views/Pages/SearchView.swift")
+
+    XCTAssertTrue(detailSource.contains("posterCenteredLoadingIndicator(width: 210, height: 315)"))
+    XCTAssertTrue(detailSource.contains("posterCenteredLoadingIndicator(width: 256, height: 384)"))
+    XCTAssertTrue(searchSource.contains("posterCenteredLoadingIndicator(width: 256, height: 384)"))
+    XCTAssertTrue(searchSource.contains("posterCenteredLoadingIndicator(width: 210, height: 315)"))
+  }
+
+  func testSeasonLoadFailureUsesRetryAndGlobalNotification() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SubscribeSeasonView.swift")
+
+    XCTAssertTrue(source.contains("@EnvironmentObject private var notificationManager: NotificationManager"))
+    XCTAssertTrue(source.contains("viewModel.hasSeasonLoadError"))
+    XCTAssertTrue(source.contains("Button"))
+    XCTAssertTrue(source.contains("重试"))
+    XCTAssertTrue(source.contains("await viewModel.retryLoadData()"))
+    XCTAssertTrue(source.contains("notificationManager.show(message: message, type: .error)"))
+    XCTAssertFalse(source.contains("// Error Banner"))
+  }
+
+  func testMediaDetailBottomScrollSpaceIsAppliedAfterMinimumHeight() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
+
+    XCTAssertTrue(source.contains(".frame(minHeight: UIScreen.main.bounds.height, alignment: .top)\n            .padding(.bottom, 220)"))
+    XCTAssertFalse(source.contains(".padding(.bottom, 80)\n            .frame(minHeight: UIScreen.main.bounds.height, alignment: .top)"))
+  }
+
   func testSystemViewModelRechecksPermissionBeforePublishingCustomRules() throws {
     let source = try Self.source(at: "MoviePilot-TV/ViewModels/SystemViewModel.swift")
 

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SubscribeSheet: View {
   @Environment(\.dismiss) var dismiss
+  @EnvironmentObject var notificationManager: NotificationManager
   @StateObject private var viewModel: SubscribeSheetViewModel
   @State private var hasAppeared = false
   @State private var showingSiteSelection = false
@@ -265,7 +266,11 @@ struct SubscribeSheet: View {
                     if viewModel.isSaving {
                       ProgressView()
                     }
-                    Text(viewModel.isNewSubscription ? "确定" : "保存")
+                    Text(
+                      viewModel.isSaving
+                        ? (viewModel.isNewSubscription ? "确定中" : "保存中")
+                        : (viewModel.isNewSubscription ? "确定" : "保存")
+                    )
                   }
                   .frame(maxWidth: .infinity)
                 }
@@ -322,6 +327,12 @@ struct SubscribeSheet: View {
         ),
         label: { $0.name }
       )
+    }
+    .onChange(of: viewModel.errorMessage) { _, newValue in
+      if let message = newValue {
+        notificationManager.show(message: message, type: .error)
+        viewModel.errorMessage = nil
+      }
     }
   }
 

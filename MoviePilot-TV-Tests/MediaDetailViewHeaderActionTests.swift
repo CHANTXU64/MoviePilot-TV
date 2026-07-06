@@ -1001,6 +1001,32 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
+  func testSeasonSubscribeSectionStaysVisibleWhileRetryingAfterLoadError() {
+    let detail = MediaInfo(title: "重试分季剧集", type: "电视剧")
+
+    XCTAssertTrue(
+      MediaDetailView.shouldShowSeasonSubscriptionSection(
+        canSubscribeMedia: true,
+        detail: detail,
+        isSeasonDataLoaded: true,
+        seasonCount: 0,
+        hasSeasonLoadError: false,
+        isSeasonLoading: true
+      )
+    )
+    XCTAssertFalse(
+      MediaDetailView.isSeasonInformationUnavailable(
+        canSubscribeMedia: true,
+        detail: detail,
+        isSeasonDataLoaded: true,
+        seasonCount: 0,
+        hasSeasonLoadError: false,
+        isSeasonLoading: true
+      )
+    )
+  }
+
+  @MainActor
   func testUnsubscribedHeaderActionStartsSubscribeFlow() {
     var didShowUnsubscribeConfirm = false
     var didStartSubscribe = false

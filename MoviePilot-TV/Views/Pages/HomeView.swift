@@ -165,6 +165,7 @@ private struct MediaSectionView: View {
         }
       }
       .padding(.horizontal, 8)
+      .focusSection()
 
       if isFirstRow {
         // 顶部焦点重定向器：确保在首次加载时来自标签栏的焦点进入第一个项目，然后禁用自身。

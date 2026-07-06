@@ -35,6 +35,7 @@ struct SubscribeSeasonContentView: View {
   var onSeasonTap: ((TmdbSeason) -> Void)? = nil
   var onMoreTapped: (() -> Void)? = nil
 
+  @EnvironmentObject private var notificationManager: NotificationManager
   @Environment(\.scenePhase) private var scenePhase
   @State private var selectedSeasonDetail: TmdbSeason?
   @FocusState private var focusedSeasonId: Int?
@@ -95,23 +96,6 @@ struct SubscribeSeasonContentView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      // Error Banner
-      if let error = viewModel.errorMessage {
-        HStack {
-          Image(systemName: "exclamationmark.triangle.fill")
-          Text(error)
-          Spacer()
-          Button {
-            viewModel.errorMessage = nil
-          } label: {
-            Image(systemName: "xmark")
-          }
-        }
-        .padding()
-        .background(Color.red.opacity(0.1))
-        .foregroundColor(.red)
-      }
-
       // Header Section (Title + Picker)
       VStack(spacing: 0) {
         if layout == .grid {
@@ -126,6 +110,25 @@ struct SubscribeSeasonContentView: View {
       if viewModel.isLoading {
         ProgressView("加载中...")
           .frame(maxWidth: .infinity, minHeight: 200)
+      } else if viewModel.hasSeasonLoadError {
+        VStack(spacing: 16) {
+          Image(systemName: "exclamationmark.triangle.fill")
+            .font(.system(size: 48))
+            .foregroundColor(.secondary)
+          Text("分季信息加载失败")
+            .foregroundColor(.secondary)
+          Button {
+            Task {
+              await viewModel.retryLoadData()
+            }
+          } label: {
+            HStack(spacing: 8) {
+              Image(systemName: "arrow.clockwise")
+              Text("重试")
+            }
+          }
+        }
+        .frame(maxWidth: .infinity, minHeight: 200)
       } else if viewModel.seasonInfos.isEmpty {
         VStack(spacing: 16) {
           Image(systemName: "doc.text.magnifyingglass")
@@ -234,6 +237,12 @@ struct SubscribeSeasonContentView: View {
         await viewModel.checkSubscriptionStatus(forceRefresh: true)
       }
     }
+    .onChange(of: viewModel.errorMessage) { _, newValue in
+      if let message = newValue {
+        notificationManager.show(message: message, type: .error)
+        viewModel.errorMessage = nil
+      }
+    }
   }
 
   @ViewBuilder
@@ -295,6 +304,7 @@ struct SubscribeSeasonContentView: View {
   private func seasonCard(_ season: TmdbSeason) -> some View {
     let seasonNumber = season.season_number ?? 0
     let isSubscribed = viewModel.isSeasonSubscribed(seasonNumber)
+    let isProcessing = viewModel.isSeasonSubscribing(seasonNumber)
 
     let seasonName =
       (seasonNumber == 0 && !(season.name?.isEmpty ?? true))
@@ -305,7 +315,9 @@ struct SubscribeSeasonContentView: View {
     let episodeCount = season.episode_count ?? 0
     let bottomLeft = statusText.map { "\(episodeCount) 集 · \($0)" }
     let footerText =
-      isSubscribed ? (viewModel.subscriptionStatusText(for: seasonNumber) ?? "已订阅") : "订阅"
+      isProcessing
+        ? "取消订阅中"
+        : (isSubscribed ? (viewModel.subscriptionStatusText(for: seasonNumber) ?? "已订阅") : "订阅")
 
     MediaCard(
       title: title,
@@ -325,6 +337,7 @@ struct SubscribeSeasonContentView: View {
         text: footerText
       ),
       action: {
+        guard !isProcessing else { return }
         Task { @MainActor in
           await Self.performSeasonPrimaryAction(
             season: season,
@@ -344,6 +357,7 @@ struct SubscribeSeasonContentView: View {
     .contextMenu {
       if isSubscribed {
         Button(role: .destructive) {
+          guard !isProcessing else { return }
           Task { @MainActor in
             await Self.performSeasonPrimaryAction(
               season: season,
