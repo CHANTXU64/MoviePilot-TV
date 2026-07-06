@@ -873,6 +873,18 @@ final class UIPreviewModeTests: XCTestCase {
     XCTAssertTrue(detailViewModelSource.contains("similarPaginator.installUIPreviewItems(similar, isLoadingMore: isLoadingMore)"))
   }
 
+  func testLastPermissionDetailPreviewsInstallSecondPageRows() throws {
+    let catalogSource = try String(contentsOf: repoFile("MoviePilot-TV/PreviewSupport/PreviewCatalogView.swift"))
+    let detailRowsSource = try sourceSlice(
+      catalogSource,
+      from: "static func detailRows(for detailCase: UIPreviewDetailCase)",
+      to: "\n  private static func detailMedia"
+    )
+
+    XCTAssertTrue(detailRowsSource.contains(".tvWithoutSeasonsNoSearchPermission"))
+    XCTAssertTrue(detailRowsSource.contains(".noSearchAndNoSubscribePermission"))
+  }
+
   func testDetailPreviewCoversUnsubscribingButtonLoadingState() throws {
     let catalogSource = try String(contentsOf: repoFile("MoviePilot-TV/PreviewSupport/PreviewCatalogView.swift"))
     let detailViewSource = try String(contentsOf: repoFile("MoviePilot-TV/Views/Pages/MediaDetailView.swift"))

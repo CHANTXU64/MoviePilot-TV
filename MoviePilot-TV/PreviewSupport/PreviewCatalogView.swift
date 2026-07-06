@@ -3209,7 +3209,7 @@ private enum UIPreviewFixtures {
   static func detailRows(for detailCase: UIPreviewDetailCase) -> MediaDetailUIPreviewRows? {
     switch detailCase {
     case .contentPage, .contentPageNoSearchAndNoSubscribePermission, .contentPageSingleEpisodeGroup,
-      .contentPageManySeasons:
+      .contentPageManySeasons, .tvWithoutSeasonsNoSearchPermission, .noSearchAndNoSubscribePermission:
       return previewDetailRows
     case .contentPageRowsLoadingMore:
       return previewDetailRowsLoadingMore
