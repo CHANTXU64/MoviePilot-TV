@@ -215,6 +215,10 @@ xcrun simctl list devices tvOS available
 6. 用户明确允许创建 PR 时，修改完成后再创建 Pull Request 让用户审查。
 7. 除非用户明确要求合并，并且相关构建/测试已经通过，否则不要直接合并 PR。
 
+### 长期保留分支
+
+保留 `ai/ui-preview-mode` 及远程 `origin/ai/ui-preview-mode`。这是 UI 预览测试分支，不计划合并到 `main`；清理分支时不要删除它。
+
 ## 文档维护规则
 
 1. `.agents/prompts/` 下的专项 Prompt 是具体任务的单一事实来源。
