@@ -94,13 +94,18 @@ struct MediaDetailView: View {
     preloadTask.seasonViewModel?.hasSeasonLoadError == true
   }
 
+  private var isSeasonLoading: Bool {
+    preloadTask.seasonViewModel?.isLoading == true
+  }
+
   private var shouldShowSeasonSubscriptionSection: Bool {
     Self.shouldShowSeasonSubscriptionSection(
       canSubscribeMedia: canSubscribeMedia,
       detail: viewModel.detail,
       isSeasonDataLoaded: preloadTask.isSeasonDataLoaded,
       seasonCount: seasonInfoCount,
-      hasSeasonLoadError: hasSeasonLoadError
+      hasSeasonLoadError: hasSeasonLoadError,
+      isSeasonLoading: isSeasonLoading
     )
   }
 
@@ -110,7 +115,8 @@ struct MediaDetailView: View {
       detail: viewModel.detail,
       isSeasonDataLoaded: preloadTask.isSeasonDataLoaded,
       seasonCount: seasonInfoCount,
-      hasSeasonLoadError: hasSeasonLoadError
+      hasSeasonLoadError: hasSeasonLoadError,
+      isSeasonLoading: isSeasonLoading
     )
   }
 
@@ -240,8 +246,8 @@ struct MediaDetailView: View {
               similarSection
             }
             .padding(.top, showContentPage ? 60 : 0)
-            .padding(.bottom, 80)
             .frame(minHeight: UIScreen.main.bounds.height, alignment: .top)
+            .padding(.bottom, 220)
             .id("contentTop")
             .focused($isContentFocused)
             .animation(.easeInOut(duration: 0.6), value: showContentPage)
@@ -498,11 +504,13 @@ struct MediaDetailView: View {
     detail: MediaInfo,
     isSeasonDataLoaded: Bool,
     seasonCount: Int?,
-    hasSeasonLoadError: Bool
+    hasSeasonLoadError: Bool,
+    isSeasonLoading: Bool = false
   ) -> Bool {
     guard canSubscribeMedia && detail.type == "电视剧" && !detail.canDirectlySubscribe else {
       return false
     }
+    if isSeasonLoading { return true }
     if hasSeasonLoadError { return true }
     return !isSeasonDataLoaded || (seasonCount ?? 0) > 0
   }
@@ -512,10 +520,11 @@ struct MediaDetailView: View {
     detail: MediaInfo,
     isSeasonDataLoaded: Bool,
     seasonCount: Int?,
-    hasSeasonLoadError: Bool
+    hasSeasonLoadError: Bool,
+    isSeasonLoading: Bool = false
   ) -> Bool {
     canSubscribeMedia && detail.type == "电视剧" && !detail.canDirectlySubscribe
-      && isSeasonDataLoaded && (seasonCount ?? 0) == 0 && !hasSeasonLoadError
+      && isSeasonDataLoaded && (seasonCount ?? 0) == 0 && !hasSeasonLoadError && !isSeasonLoading
   }
 
   static func headerSubscribeButtonTitle(
@@ -686,7 +695,11 @@ struct MediaDetailView: View {
                 }
               }) {
                 if viewModel.isUnsubscribing {
-                  ProgressView()
+                  HStack(spacing: 8) {
+                    ProgressView()
+                    Text("取消订阅中")
+                  }
+                  .foregroundColor(.primary)
                 } else {
                   let isDirect = detail.canDirectlySubscribe
                   let label = Self.headerSubscribeButtonTitle(
@@ -902,8 +915,7 @@ struct MediaDetailView: View {
               }
             }
             if viewModel.actorsPaginator.isLoadingMore {
-              ProgressView()
-                .padding(.horizontal)
+              posterCenteredLoadingIndicator(width: 210, height: 315)
             }
           }
           .padding(.horizontal, 81)
@@ -954,8 +966,7 @@ struct MediaDetailView: View {
               )
             }
             if viewModel.recommendPaginator.isLoadingMore {
-              ProgressView()
-                .padding(.horizontal)
+              posterCenteredLoadingIndicator(width: 256, height: 384)
             }
           }
           .padding(.horizontal, 81)
@@ -1018,8 +1029,7 @@ struct MediaDetailView: View {
               )
             }
             if viewModel.similarPaginator.isLoadingMore {
-              ProgressView()
-                .padding(.horizontal)
+              posterCenteredLoadingIndicator(width: 256, height: 384)
             }
           }
           .padding(.horizontal, 81)
@@ -1046,6 +1056,15 @@ struct MediaDetailView: View {
         .scrollClipDisabled()
         .focusSection()
       }
+    }
+  }
+
+  private func posterCenteredLoadingIndicator(width: CGFloat, height: CGFloat) -> some View {
+    VStack(spacing: 10) {
+      ProgressView()
+        .frame(width: width, height: height)
+      Color.clear
+        .frame(width: width, height: 44)
     }
   }
 }

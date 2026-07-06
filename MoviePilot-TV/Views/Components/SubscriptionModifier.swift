@@ -3,10 +3,9 @@ import SwiftUI
 struct MediaSubscriptionModifier: ViewModifier {
   @Binding var sheetSubscribe: Subscribe?
   @Binding var tvSubscribeRequest: SubscribeSeasonRequest?
-  @Binding var showAlert: Bool
-  let alertTitle: String
-  let alertMessage: String
   @Binding var navigationPath: NavigationPath
+  @ObservedObject var handler: SubscriptionHandler
+  @EnvironmentObject private var notificationManager: NotificationManager
 
   func body(content: Content) -> some View {
     content
@@ -29,16 +28,15 @@ struct MediaSubscriptionModifier: ViewModifier {
           }
         }
       }
-      .alert(alertTitle, isPresented: $showAlert) {
-        Button("确定", role: .cancel) {}
-      } message: {
-        Text(alertMessage)
-      }
       .onChange(of: tvSubscribeRequest) { _, newValue in
         if let request = newValue {
           navigationPath.append(request)
           tvSubscribeRequest = nil
         }
+      }
+      .onChange(of: handler.notificationSerial) { _, _ in
+        guard !handler.notificationMessage.isEmpty else { return }
+        notificationManager.show(message: handler.notificationMessage, type: handler.notificationType)
       }
   }
 }
@@ -58,13 +56,8 @@ extension View {
           get: { handler.tvSubscribeRequest },
           set: { handler.tvSubscribeRequest = $0 }
         ),
-        showAlert: Binding(
-          get: { handler.showAlert },
-          set: { handler.showAlert = $0 }
-        ),
-        alertTitle: handler.alertTitle,
-        alertMessage: handler.alertMessage,
-        navigationPath: navigationPath
+        navigationPath: navigationPath,
+        handler: handler
       ))
   }
 }
