@@ -422,6 +422,49 @@ final class UIPreviewModeTests: XCTestCase {
     XCTAssertFalse(notificationSource.contains("返回目录"))
   }
 
+  func testStartupPreparingPreviewHasLocalFocusAnchorForExitCommand() throws {
+    let source = try String(contentsOf: repoFile("MoviePilot-TV/PreviewSupport/PreviewCatalogView.swift"))
+    let startupSource = try sourceSlice(
+      source,
+      from: "private struct UIPreviewStartupPreparingView",
+      to: "private enum UIPreviewLoggedInRootAlertCase"
+    )
+
+    XCTAssertTrue(startupSource.contains("@FocusState private var isReturnAnchorFocused: Bool"))
+    XCTAssertTrue(startupSource.contains(".focusable()"))
+    XCTAssertTrue(startupSource.contains(".focused($isReturnAnchorFocused)"))
+    XCTAssertTrue(startupSource.contains("isReturnAnchorFocused = true"))
+    XCTAssertTrue(startupSource.contains(".accessibilityHidden(true)"))
+    XCTAssertFalse(startupSource.contains("UIPreviewBackObserver"))
+    XCTAssertFalse(startupSource.contains("返回目录"))
+  }
+
+  func testAlertOnlyComponentPreviewsHaveLocalFocusAnchorForExitCommand() throws {
+    let source = try String(contentsOf: repoFile("MoviePilot-TV/PreviewSupport/PreviewCatalogView.swift"))
+    let componentSources = [
+      try sourceSlice(
+        source,
+        from: "private struct UIPreviewSubscriptionAlert",
+        to: "\n@MainActor\nprivate struct UIPreviewMediaActionComponents"
+      ),
+      try sourceSlice(
+        source,
+        from: "private struct UIPreviewMediaActionComponents",
+        to: "private struct UIPreviewNotificationComponents"
+      ),
+    ]
+
+    for componentSource in componentSources {
+      XCTAssertTrue(componentSource.contains("@FocusState private var isReturnAnchorFocused: Bool"))
+      XCTAssertTrue(componentSource.contains(".focusable()"))
+      XCTAssertTrue(componentSource.contains(".focused($isReturnAnchorFocused)"))
+      XCTAssertTrue(componentSource.contains("isReturnAnchorFocused = true"))
+      XCTAssertTrue(componentSource.contains(".accessibilityHidden(true)"))
+      XCTAssertFalse(componentSource.contains("UIPreviewBackObserver"))
+      XCTAssertFalse(componentSource.contains("返回目录"))
+    }
+  }
+
   func testTopLevelPreviewScenesPreserveRealTabRoot() throws {
     let source = try String(contentsOf: repoFile("MoviePilot-TV/PreviewSupport/PreviewCatalogView.swift"))
 

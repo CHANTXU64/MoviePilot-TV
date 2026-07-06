@@ -175,9 +175,22 @@ private struct UIPreviewAppSceneView: View {
 }
 
 private struct UIPreviewStartupPreparingView: View {
+  @FocusState private var isReturnAnchorFocused: Bool
+
   var body: some View {
-    ProgressView("正在准备会话...")
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
+    ZStack {
+      ProgressView("正在准备会话...")
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+      Color.clear
+        .frame(width: 1, height: 1)
+        .focusable()
+        .focused($isReturnAnchorFocused)
+        .accessibilityHidden(true)
+    }
+    .onAppear {
+      isReturnAnchorFocused = true
+    }
   }
 }
 
@@ -1055,20 +1068,30 @@ private struct UIPreviewSheetPickerSelection: View {
 private struct UIPreviewSubscriptionAlert: View {
   @StateObject private var handler = SubscriptionHandler()
   @State private var navigationPath = NavigationPath()
+  @FocusState private var isReturnAnchorFocused: Bool
 
   var body: some View {
-    VStack(spacing: 24) {
-      Image(systemName: "bell.badge")
-        .font(.system(size: 90, weight: .semibold))
-      Text("组件 · 订阅结果提示")
-        .font(.largeTitle.bold())
-      Text("全局订阅动作 Alert")
-        .font(.title3)
-        .foregroundStyle(.secondary)
+    ZStack {
+      VStack(spacing: 24) {
+        Image(systemName: "bell.badge")
+          .font(.system(size: 90, weight: .semibold))
+        Text("组件 · 订阅结果提示")
+          .font(.largeTitle.bold())
+        Text("全局订阅动作 Alert")
+          .font(.title3)
+          .foregroundStyle(.secondary)
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+      Color.clear
+        .frame(width: 1, height: 1)
+        .focusable()
+        .focused($isReturnAnchorFocused)
+        .accessibilityHidden(true)
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
     .mediaSubscriptionAlerts(using: handler, navigationPath: $navigationPath)
     .onAppear {
+      isReturnAnchorFocused = true
       Task { @MainActor in
         await Task.yield()
         handler.showAlert(title: "边境信号", message: "已订阅，请勿重复操作")
@@ -1081,21 +1104,31 @@ private struct UIPreviewSubscriptionAlert: View {
 private struct UIPreviewMediaActionComponents: View {
   let componentCase: UIPreviewComponentCase
   @StateObject private var handler = MediaActionHandler()
+  @FocusState private var isReturnAnchorFocused: Bool
 
   var body: some View {
-    VStack(spacing: 24) {
-      Image(systemName: "film.stack")
-        .font(.system(size: 90, weight: .semibold))
-      Text(componentCase.title)
-        .font(.largeTitle.bold())
-      Text(componentCase.note)
-        .font(.title3)
-        .foregroundStyle(.secondary)
+    ZStack {
+      VStack(spacing: 24) {
+        Image(systemName: "film.stack")
+          .font(.system(size: 90, weight: .semibold))
+        Text(componentCase.title)
+          .font(.largeTitle.bold())
+        Text(componentCase.note)
+          .font(.title3)
+          .foregroundStyle(.secondary)
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+      Color.clear
+        .frame(width: 1, height: 1)
+        .focusable()
+        .focused($isReturnAnchorFocused)
+        .accessibilityHidden(true)
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
     .mediaActionAlerts()
     .environmentObject(handler)
     .onAppear {
+      isReturnAnchorFocused = true
       Task { @MainActor in
         await Task.yield()
         switch componentCase {
