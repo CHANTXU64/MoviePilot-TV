@@ -2,6 +2,7 @@ import SwiftUI
 
 struct LoginView: View {
   @StateObject private var viewModel: LoginViewModel
+  @EnvironmentObject private var notificationManager: NotificationManager
 
   init() {
     _viewModel = StateObject(wrappedValue: LoginViewModel())
@@ -16,11 +17,10 @@ struct LoginView: View {
   var body: some View {
     HStack {
       VStack(spacing: 40) {
-        Image(systemName: "film.stack.fill")
+        Image("SettingsLogoGlass")
           .resizable()
-          .aspectRatio(contentMode: .fit)
-          .frame(width: 200, height: 200)
-          .foregroundColor(.accentColor)
+          .scaledToFit()
+          .frame(width: 300, height: 200)
 
         Text("MoviePilot")
           .font(.largeTitle)
@@ -36,26 +36,28 @@ struct LoginView: View {
           SecureField("密码", text: $viewModel.password)
             .textContentType(.password)
 
-          if let errorMessage = viewModel.errorMessage {
-            Text(errorMessage)
-              .foregroundColor(.red)
-          }
-
           Button(action: {
             Task {
               await viewModel.login()
             }
           }) {
-            if viewModel.isLoading {
-              ProgressView()
-            } else {
-              Text("登录")
-                .frame(maxWidth: .infinity)
+            HStack(spacing: 8) {
+              if viewModel.isLoading {
+                ProgressView()
+              }
+              Text(viewModel.isLoading ? "登录中" : "登录")
             }
+            .frame(maxWidth: .infinity)
           }
           .disabled(viewModel.isLoading || viewModel.serverURL.isEmpty || viewModel.username.isEmpty || viewModel.password.isEmpty)
         }
         .frame(width: 600)
+      }
+    }
+    .onChange(of: viewModel.errorMessage) { _, newValue in
+      if let message = newValue {
+        notificationManager.show(message: message, type: .error)
+        viewModel.errorMessage = nil
       }
     }
   }

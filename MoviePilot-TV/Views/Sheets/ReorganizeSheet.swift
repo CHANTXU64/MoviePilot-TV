@@ -361,7 +361,7 @@ struct ReorganizeSheet: View {
           if viewModel.isSubmitting {
             ProgressView()
           }
-          Text("开始整理")
+          Text(viewModel.isSubmitting ? "整理中" : "开始整理")
         }
         .frame(maxWidth: .infinity)
       }

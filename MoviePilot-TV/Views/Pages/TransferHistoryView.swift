@@ -11,6 +11,7 @@ enum TransferHistoryUIPreviewPresentation {
 
 struct TransferHistoryView: View {
   @ObservedObject var viewModel: TransferHistoryViewModel
+  @EnvironmentObject private var notificationManager: NotificationManager
 
   #if DEBUG
   private let refreshesOnAppear: Bool
@@ -150,6 +151,12 @@ struct TransferHistoryView: View {
         try? await Task.sleep(nanoseconds: 10 * 1_000_000_000)
         guard !Task.isCancelled else { break }
         await viewModel.fetchLatest()
+      }
+    }
+    .onChange(of: viewModel.errorMessage) { _, newValue in
+      if let message = newValue {
+        notificationManager.show(message: message, type: .error)
+        viewModel.errorMessage = nil
       }
     }
     .overlay(

@@ -1077,7 +1077,7 @@ private struct UIPreviewSubscriptionAlert: View {
           .font(.system(size: 90, weight: .semibold))
         Text("组件 · 订阅结果提示")
           .font(.largeTitle.bold())
-        Text("全局订阅动作 Alert")
+        Text("全局订阅动作通知")
           .font(.title3)
           .foregroundStyle(.secondary)
       }
@@ -1094,7 +1094,7 @@ private struct UIPreviewSubscriptionAlert: View {
       isReturnAnchorFocused = true
       Task { @MainActor in
         await Task.yield()
-        handler.showAlert(title: "边境信号", message: "已订阅，请勿重复操作")
+        handler.showNotification(message: "已订阅，请勿重复操作", type: .warning)
       }
     }
   }
@@ -2569,7 +2569,7 @@ private enum UIPreviewComponentCase: String, UIPreviewCase {
     case .torrentCardsNoSearchPermission: return "缺少搜索权限时，种子卡片不能打开添加下载弹窗，菜单不显示下载入口。"
     case .torrentDownloadSheet: return "从种子卡片入口进入添加下载 Sheet。"
     case .sheetPickerSelection: return "SheetPicker 单选列表 Sheet。"
-    case .subscriptionAlert: return "全局订阅动作 Alert，覆盖重复订阅/复用结果提示样式。"
+    case .subscriptionAlert: return "全局订阅动作通知，覆盖重复订阅/复用结果提示样式。"
     case .pickers: return "Segmented Picker、ShelfPicker、SheetPicker、SheetTextField。"
     case .mediaActionLoading: return "全局媒体动作遮罩，检查识别中 ProgressView。"
     case .mediaActionNotFound: return "全局媒体动作 Alert，检查 TMDB 未识别提示。"

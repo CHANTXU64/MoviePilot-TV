@@ -12,6 +12,7 @@ class SubscribeSheetViewModel: ObservableObject {
   @Published var isLoading = false
   @Published var isSaving = false
   @Published var isSaved = false
+  @Published var errorMessage: String?
 
   // 标记我们是否正在创建一个新的订阅
   let isNewSubscription: Bool
@@ -107,8 +108,8 @@ class SubscribeSheetViewModel: ObservableObject {
 
         guard let newId = try await apiService.addSubscription(request: req, subscribe: subscribe)
         else {
-          print("Failed to create subscription")
-          return  // TODO: 处理错误状态（例如，关闭页面或显示警报）
+          errorMessage = "创建订阅失败"
+          return
         }
         guard canPublishLoadResult(from: sessionSnapshot) else {
           clearLoadedOptions()
@@ -136,6 +137,7 @@ class SubscribeSheetViewModel: ObservableObject {
         isCreatedAndPaused = true
       } catch {
         print("Error during new subscription initialization: \(error)")
+        errorMessage = "初始化订阅失败: \(error.localizedDescription)"
         return
       }
     }
@@ -169,6 +171,7 @@ class SubscribeSheetViewModel: ObservableObject {
       }
     } catch {
       print("Failed to load subscribe options: \(error)")
+      errorMessage = "加载订阅配置失败: \(error.localizedDescription)"
     }
   }
 
@@ -211,9 +214,13 @@ class SubscribeSheetViewModel: ObservableObject {
         self.isSaved = true
         NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
       }
+      if !success {
+        errorMessage = "保存订阅失败"
+      }
       return success
     } catch {
       print("Save error: \(error)")
+      errorMessage = "保存订阅失败: \(error.localizedDescription)"
       return false
     }
   }

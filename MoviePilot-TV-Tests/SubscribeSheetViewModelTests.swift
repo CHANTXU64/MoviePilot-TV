@@ -303,6 +303,61 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(requestCount, 0)
   }
 
+  func testSaveFailurePublishesErrorMessage() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer {
+      snapshot.restore(to: service)
+    }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.fail(path: "/api/v1/subscribe")
+    service.baseURL = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(id: 784, name: "保存失败", type: "电影", tmdbid: 123463),
+      isNewSubscription: false
+    )
+
+    let didSave = await viewModel.save()
+
+    XCTAssertFalse(didSave)
+    let message = try XCTUnwrap(viewModel.errorMessage)
+    XCTAssertTrue(message.hasPrefix("保存订阅失败:"))
+    XCTAssertGreaterThan(message.count, "保存订阅失败:".count)
+  }
+
+  func testLoadDataFailurePublishesErrorMessage() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer {
+      snapshot.restore(to: service)
+    }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.fail(path: "/api/v1/site/rss")
+    service.baseURL = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(id: 785, name: "配置失败", type: "电影", tmdbid: 123464),
+      isNewSubscription: false
+    )
+
+    await viewModel.loadData()
+
+    let message = try XCTUnwrap(viewModel.errorMessage)
+    XCTAssertTrue(message.hasPrefix("加载订阅配置失败:"))
+    XCTAssertGreaterThan(message.count, "加载订阅配置失败:".count)
+  }
+
   private func restoreUserDefaultsValue(_ value: Any?, forKey key: String) {
     if let value {
       UserDefaults.standard.set(value, forKey: key)
@@ -445,12 +500,14 @@ private actor SubscribeSheetURLProtocolStub {
   private var requestCounts: [String: Int] = [:]
   private var requestBodies: [String: Data] = [:]
   private var suspendedPaths: Set<String> = []
+  private var failedPaths: Set<String> = []
   private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
 
   func reset() {
     requestCounts.removeAll()
     requestBodies.removeAll()
     suspendedPaths.removeAll()
+    failedPaths.removeAll()
     let pendingWaiters = waiters.values.flatMap { $0 }
     waiters.removeAll()
     pendingWaiters.forEach { $0.resume() }
@@ -464,6 +521,10 @@ private actor SubscribeSheetURLProtocolStub {
     suspendedPaths.remove(path)
     let pendingWaiters = waiters.removeValue(forKey: path) ?? []
     pendingWaiters.forEach { $0.resume() }
+  }
+
+  func fail(path: String) {
+    failedPaths.insert(path)
   }
 
   func requestCount(method: String, path: String) -> Int {
@@ -484,6 +545,9 @@ private actor SubscribeSheetURLProtocolStub {
     requestCounts["\(method) \(path)", default: 0] += 1
     if let body = requestBodyData(from: request) {
       requestBodies["\(method) \(path)"] = body
+    }
+    if failedPaths.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) {
+      throw APIError.serverMessage("请求失败")
     }
     if suspendedPaths.contains(path) {
       await withCheckedContinuation { continuation in

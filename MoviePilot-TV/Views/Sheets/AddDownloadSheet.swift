@@ -155,7 +155,7 @@ struct AddDownloadSheet: View {
                   if viewModel.isSubmitting {
                     ProgressView()
                   }
-                  Text("确定")
+                  Text(viewModel.isSubmitting ? "添加中" : "确定")
                 }
                 .frame(maxWidth: .infinity)
               }
