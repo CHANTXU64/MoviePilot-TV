@@ -129,6 +129,7 @@ struct SubscribeSeasonContentView: View {
           }
         }
         .frame(maxWidth: .infinity, minHeight: 200)
+        .focusSection()
       } else if viewModel.seasonInfos.isEmpty {
         VStack(spacing: 16) {
           Image(systemName: "doc.text.magnifyingglass")

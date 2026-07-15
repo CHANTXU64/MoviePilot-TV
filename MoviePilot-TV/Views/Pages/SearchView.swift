@@ -424,7 +424,7 @@ private struct ResultRow: View {
           }
 
           if isLoadingMore {
-            posterCenteredLoadingIndicator(width: 256, height: 384)
+            posterCenteredLoadingIndicator(height: 384)
           }
         }
         .padding(.top, 25)
@@ -453,12 +453,12 @@ private struct ResultRow: View {
     }
   }
 
-  private func posterCenteredLoadingIndicator(width: CGFloat, height: CGFloat) -> some View {
+  private func posterCenteredLoadingIndicator(height: CGFloat) -> some View {
     VStack(spacing: 10) {
       ProgressView()
-        .frame(width: width, height: height)
+        .frame(width: 100, height: height)
       Color.clear
-        .frame(width: width, height: 44)
+        .frame(width: 100, height: 44)
     }
   }
 }
@@ -501,7 +501,7 @@ private struct PersonResultRow: View {
           }
 
           if isLoadingMore {
-            posterCenteredLoadingIndicator(width: 210, height: 315)
+            posterCenteredLoadingIndicator(height: 315)
           }
         }
         .padding(.top, 25)
@@ -518,12 +518,12 @@ private struct PersonResultRow: View {
     }
   }
 
-  private func posterCenteredLoadingIndicator(width: CGFloat, height: CGFloat) -> some View {
+  private func posterCenteredLoadingIndicator(height: CGFloat) -> some View {
     VStack(spacing: 10) {
       ProgressView()
-        .frame(width: width, height: height)
+        .frame(width: 100, height: height)
       Color.clear
-        .frame(width: width, height: 44)
+        .frame(width: 100, height: 44)
     }
   }
 }

@@ -10,7 +10,7 @@ struct LoginView: View {
         Image("SettingsLogoGlass")
           .resizable()
           .scaledToFit()
-          .frame(width: 300, height: 200)
+          .frame(width: 500, height: 300)
 
         Text("MoviePilot")
           .font(.largeTitle)

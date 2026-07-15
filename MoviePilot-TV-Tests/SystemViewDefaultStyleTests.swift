@@ -140,6 +140,9 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("private var preferredHeaderFocus: ButtonField?"))
     XCTAssertTrue(source.contains("if !hasAppeared, let preferredHeaderFocus"))
     XCTAssertFalse(source.contains(".defaultFocus($focusedButton, preferredHeaderFocus)"))
+    XCTAssertTrue(source.contains("private var hasNoActionButtons: Bool"))
+    XCTAssertTrue(source.contains("case subscribe, search, sites, tmdbJump, otherInfo"))
+    XCTAssertTrue(source.contains(".focused($focusedButton, equals: .otherInfo)"))
   }
 
   func testMediaDetailUnavailableSeasonSubscribeButtonUsesDisabledOpacity() throws {
@@ -190,10 +193,10 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let detailSource = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
     let searchSource = try Self.source(at: "MoviePilot-TV/Views/Pages/SearchView.swift")
 
-    XCTAssertTrue(detailSource.contains("posterCenteredLoadingIndicator(width: 210, height: 315)"))
-    XCTAssertTrue(detailSource.contains("posterCenteredLoadingIndicator(width: 256, height: 384)"))
-    XCTAssertTrue(searchSource.contains("posterCenteredLoadingIndicator(width: 256, height: 384)"))
-    XCTAssertTrue(searchSource.contains("posterCenteredLoadingIndicator(width: 210, height: 315)"))
+    XCTAssertTrue(detailSource.contains("posterCenteredLoadingIndicator(height: 315)"))
+    XCTAssertTrue(detailSource.contains("posterCenteredLoadingIndicator(height: 384)"))
+    XCTAssertTrue(searchSource.contains("posterCenteredLoadingIndicator(height: 384)"))
+    XCTAssertTrue(searchSource.contains("posterCenteredLoadingIndicator(height: 315)"))
   }
 
   func testSeasonLoadFailureUsesRetryAndGlobalNotification() throws {
@@ -208,11 +211,12 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("// Error Banner"))
   }
 
-  func testMediaDetailBottomScrollSpaceIsAppliedAfterMinimumHeight() throws {
+  func testMediaDetailKeepsFirstRowPeekAndShortContentScrollRange() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
 
-    XCTAssertTrue(source.contains(".frame(minHeight: UIScreen.main.bounds.height, alignment: .top)\n            .padding(.bottom, 220)"))
-    XCTAssertFalse(source.contains(".padding(.bottom, 80)\n            .frame(minHeight: UIScreen.main.bounds.height, alignment: .top)"))
+    XCTAssertTrue(source.contains(".frame(height: UIScreen.main.bounds.height * 0.94)"))
+    XCTAssertTrue(source.contains("Color.clear\n              .frame(height: UIScreen.main.bounds.height)"))
+    XCTAssertFalse(source.contains(".frame(minHeight: UIScreen.main.bounds.height, alignment: .top)"))
   }
 
   func testSystemViewModelRechecksPermissionBeforePublishingCustomRules() throws {
