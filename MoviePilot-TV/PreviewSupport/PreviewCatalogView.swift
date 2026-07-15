@@ -1534,7 +1534,7 @@ private enum UIPreviewCatalog {
         scene(.sheet(.reorganizeDouban), id: "sheet-reorganizeDouban", title: "整理弹窗 · 豆瓣识别源"),
         scene(.sheet(.reorganizeAdvanced), id: "sheet-reorganizeAdvanced", title: "整理弹窗 · 高级配置"),
         scene(.sheet(.reorganizeSubmitting), id: "sheet-reorganizeSubmitting", title: "整理弹窗 · 提交中"),
-        scene(.sheet(.reorganizeError), id: "sheet-reorganizeError", title: "整理弹窗 · 错误通知"),
+        scene(.sheet(.reorganizeError), id: "sheet-reorganizeError", title: "整理弹窗 · 失败反馈"),
         scene(.sheet(.seasonDetail), id: "sheet-seasonDetail", title: "分季详情弹窗"),
         scene(.sheet(.multiSelection), id: "sheet-multiSelection", title: "多选弹窗 · 站点选择"),
       ]
@@ -1903,8 +1903,8 @@ private enum UIPreviewDetailCase: String, UIPreviewCase {
     case .movieSubscribed: return "电影已订阅 Header，检查已订阅按钮和取消确认入口。"
     case .tvWithSeasons: return "Header 分季订阅 + 第二页分季横向 Shelf。"
     case .tvWithSeasonsNoSubscribePermission: return "有分季数据但无订阅权限，检查 Header 和分季行不出现订阅入口。"
-    case .tvWithoutSeasons: return "分季加载完成但为空，Header 显示不可用状态。"
-    case .seasonLoadFailed: return "分季区域保留错误 Banner，可关闭错误提示。"
+    case .tvWithoutSeasons: return "分季加载完成但为空，Header 显示“暂无分季信息”，按钮仍可进入第二页。"
+    case .seasonLoadFailed: return "分季加载失败时，Header 按钮仍可进入第二页，分季区域保留错误说明。"
     case .noArtwork: return "背景和海报都为空，验证占位背景与文字可读性。"
     case .contentPage: return "详情页第二页内容，检查分季/演职员/推荐行和背景模糊。"
     case .contentPageRowsLoadingMore:
@@ -1923,8 +1923,8 @@ private enum UIPreviewDetailCase: String, UIPreviewCase {
     case .noSubscribePermission: return "隐藏订阅入口，只保留搜索和 TMDB 跳转。"
     case .noSearchPermission: return "隐藏搜索和站点筛选，只保留分季订阅。"
     case .tvWithoutSeasonsNoSubscribePermission: return "无分季数据同时无订阅权限，检查 Header 不出现不可用订阅按钮。"
-    case .tvWithoutSeasonsNoSearchPermission: return "无分季数据同时无搜索权限，检查 Header 只保留不可用订阅状态。"
-    case .noSearchAndNoSubscribePermission: return "隐藏订阅和资源搜索入口，检查 Header 只保留基础信息。"
+    case .tvWithoutSeasonsNoSearchPermission: return "无分季数据同时无搜索权限，检查“暂无分季信息”仍可进入第二页。"
+    case .noSearchAndNoSubscribePermission: return "隐藏订阅和资源搜索入口，检查“其他信息”成为首选操作。"
     }
   }
 
@@ -2433,7 +2433,7 @@ private enum UIPreviewSheetCase: String, UIPreviewCase {
     case .reorganizeDouban: return "整理弹窗 · 豆瓣识别源"
     case .reorganizeAdvanced: return "整理弹窗 · 高级配置"
     case .reorganizeSubmitting: return "整理弹窗 · 提交中"
-    case .reorganizeError: return "整理弹窗 · 错误通知"
+    case .reorganizeError: return "整理弹窗 · 失败反馈"
     case .seasonDetail: return "分季详情弹窗"
     case .multiSelection: return "多选弹窗 · 站点选择"
     }
@@ -2461,7 +2461,7 @@ private enum UIPreviewSheetCase: String, UIPreviewCase {
     case .reorganizeDouban: return "后端识别源为 Douban 时显示豆瓣 ID 字段。"
     case .reorganizeAdvanced: return "整理弹窗高级配置展开。"
     case .reorganizeSubmitting: return "整理弹窗提交中按钮进度。"
-    case .reorganizeError: return "整理失败后，表单保留并显示错误通知。"
+    case .reorganizeError: return "整理失败后，按钮变为重试并在下方显示一行说明。"
     case .seasonDetail: return "分季详情弹窗，检查海报、播出日期、评分和简介。"
     case .multiSelection: return "多选 Sheet、禁用项说明和确认按钮焦点。"
     }
@@ -2521,8 +2521,6 @@ private enum UIPreviewSheetCase: String, UIPreviewCase {
     switch self {
     case .addDownloadError:
       return "预览：添加下载失败，站点返回错误"
-    case .reorganizeError:
-      return "预览：重新整理失败，请检查规则和目标目录"
     default:
       return nil
     }

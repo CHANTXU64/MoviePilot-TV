@@ -245,7 +245,7 @@ final class UIPreviewModeTests: XCTestCase {
       "整理弹窗 · 豆瓣识别源",
       "整理弹窗 · 高级配置",
       "整理弹窗 · 提交中",
-      "整理弹窗 · 错误通知",
+      "整理弹窗 · 失败反馈",
       "分季详情弹窗",
       "多选弹窗 · 站点选择",
       "组件 · 媒体卡片",
@@ -907,7 +907,12 @@ final class UIPreviewModeTests: XCTestCase {
 
     XCTAssertTrue(detailViewSource.contains("case unsubscribing"))
     XCTAssertTrue(detailViewSource.contains("vm.isUnsubscribing = uiPreviewPresentation == .unsubscribing"))
-    XCTAssertTrue(detailViewSource.contains("if viewModel.isUnsubscribing"))
+    XCTAssertTrue(
+      detailViewSource.contains("if detail.canDirectlySubscribe && viewModel.isUnsubscribing")
+    )
+    XCTAssertTrue(
+      detailViewSource.contains(".disabled(detail.canDirectlySubscribe && viewModel.isUnsubscribing)")
+    )
     XCTAssertTrue(detailViewModelSource.contains("@Published var isUnsubscribing = false"))
   }
 
@@ -954,6 +959,15 @@ final class UIPreviewModeTests: XCTestCase {
     XCTAssertTrue(sheetSource.contains("isSheetPresented = true"))
     XCTAssertTrue(sheetSource.contains("private var sheetContent: some View"))
     XCTAssertTrue(sheetSource.contains("Button(\"打开弹窗\")"))
+  }
+
+  func testReorganizeFailurePreviewUsesSheetLocalFeedback() throws {
+    let previewSource = try String(contentsOf: repoFile("MoviePilot-TV/PreviewSupport/PreviewCatalogView.swift"))
+    let sheetSource = try String(contentsOf: repoFile("MoviePilot-TV/Views/Sheets/ReorganizeSheet.swift"))
+
+    XCTAssertTrue(previewSource.contains("整理弹窗 · 失败反馈"))
+    XCTAssertTrue(sheetSource.contains("viewModel.errorMessage = previewErrorMessage"))
+    XCTAssertFalse(sheetSource.contains("presentError("))
   }
 
   func testDetailPreviewStartsAsNativeNavigationDestination() throws {
