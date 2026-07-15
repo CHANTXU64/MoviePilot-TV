@@ -13,6 +13,8 @@ class SubscribeSheetViewModel: ObservableObject {
   @Published var isSaving = false
   @Published var isSaved = false
   @Published var errorMessage: String?
+  @Published var loadErrorMessage: String?
+  @Published var canRetryLoad = false
 
   // 标记我们是否正在创建一个新的订阅
   let isNewSubscription: Bool
@@ -84,6 +86,8 @@ class SubscribeSheetViewModel: ObservableObject {
       return
     }
 
+    loadErrorMessage = nil
+    canRetryLoad = false
     let sessionSnapshot = apiService.sessionSnapshot()
     isLoading = true
     defer { isLoading = false }
@@ -108,7 +112,8 @@ class SubscribeSheetViewModel: ObservableObject {
 
         guard let newId = try await apiService.addSubscription(request: req, subscribe: subscribe)
         else {
-          errorMessage = "创建订阅失败"
+          canRetryLoad = true
+          loadErrorMessage = "暂时无法创建订阅，请重试。"
           return
         }
         guard canPublishLoadResult(from: sessionSnapshot) else {
@@ -136,8 +141,11 @@ class SubscribeSheetViewModel: ObservableObject {
 
         isCreatedAndPaused = true
       } catch {
-        print("Error during new subscription initialization: \(error)")
-        errorMessage = "初始化订阅失败: \(error.localizedDescription)"
+        Logger.error("Failed to prepare a new subscription: \(error)")
+        canRetryLoad = subscribe.id == nil
+        loadErrorMessage = canRetryLoad
+          ? "订阅准备失败，请重试。"
+          : "订阅没有准备完成，请关闭后重新打开。"
         return
       }
     }
@@ -170,8 +178,10 @@ class SubscribeSheetViewModel: ObservableObject {
         self.episodeGroups = groups
       }
     } catch {
-      print("Failed to load subscribe options: \(error)")
-      errorMessage = "加载订阅配置失败: \(error.localizedDescription)"
+      Logger.error("Failed to load subscription options: \(error)")
+      clearLoadedOptions()
+      canRetryLoad = true
+      loadErrorMessage = "订阅设置没有加载完整，请重试。"
     }
   }
 
@@ -197,32 +207,54 @@ class SubscribeSheetViewModel: ObservableObject {
 
     isSaving = true
     defer { isSaving = false }
-    do {
-      // 保存更改
-      let success = try await apiService.saveSubscription(subscribe)
+    errorMessage = nil
 
-      if success {
-        if let id = subscribe.id {
-          // 如果是新订阅，在搜索前恢复（取消暂停）该订阅
-          if isNewSubscription {
-            _ = try await apiService.updateSubscriptionStatus(id: id, state: "R")
-          }
-          if !isNewSubscription || SystemViewModel.shouldAutoSearchNewSubscriptions {
-            _ = try await apiService.searchSubscription(id: id)
-          }
-        }
-        self.isSaved = true
-        NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
+    do {
+      let success = try await apiService.saveSubscription(subscribe)
+      guard success else {
+        errorMessage = "暂时无法保存订阅，请稍后重试。"
+        return false
       }
-      if !success {
-        errorMessage = "保存订阅失败"
-      }
-      return success
+
+      isSaved = true
+      NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
     } catch {
-      print("Save error: \(error)")
-      errorMessage = "保存订阅失败: \(error.localizedDescription)"
+      Logger.error("Failed to save subscription: \(error)")
+      errorMessage = "暂时无法保存订阅，请稍后重试。"
       return false
     }
+
+    guard let id = subscribe.id else { return true }
+
+    if isNewSubscription {
+      do {
+        guard try await apiService.updateSubscriptionStatus(id: id, state: "R") else {
+          Logger.error("Resuming saved subscription \(id) returned false")
+          errorMessage = "订阅已保存，但暂时未能启用。你可以稍后在订阅页面重试。"
+          return true
+        }
+      } catch {
+        Logger.error("Failed to resume saved subscription \(id): \(error)")
+        errorMessage = "订阅已保存，但暂时未能启用。你可以稍后在订阅页面重试。"
+        return true
+      }
+    }
+
+    guard !isNewSubscription || SystemViewModel.shouldAutoSearchNewSubscriptions else {
+      return true
+    }
+
+    do {
+      guard try await apiService.searchSubscription(id: id) else {
+        Logger.error("Searching saved subscription \(id) returned false")
+        errorMessage = "订阅已保存，但没有开始搜索。你可以稍后手动搜索。"
+        return true
+      }
+    } catch {
+      Logger.error("Failed to search saved subscription \(id): \(error)")
+      errorMessage = "订阅已保存，但没有开始搜索。你可以稍后手动搜索。"
+    }
+    return true
   }
 
   func cancel() async {
@@ -230,13 +262,13 @@ class SubscribeSheetViewModel: ObservableObject {
     if UIPreviewMode.isEnabled() { return }
     #endif
 
+    guard !isSaved else { return }
     // 如果我们创建了一个新订阅但用户取消了，我们必须回滚（删除）它
     if isNewSubscription, let id = subscribe.id {
       do {
         _ = try await apiService.deleteSubscription(id: id)
-        print("Rolled back new subscription \(id)")
       } catch {
-        print("Failed to rollback subscription \(id): \(error)")
+        Logger.error("Failed to roll back subscription \(id): \(error)")
       }
     }
   }

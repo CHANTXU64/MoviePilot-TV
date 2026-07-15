@@ -150,6 +150,8 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
       await handler.fetchSubscriptionAndShowEditor(subId: 7001)
 
       XCTAssertEqual(forkedId, 7001)
+      XCTAssertNil(handler.forkErrorMessage)
+      XCTAssertEqual(handler.notificationSerial, 0)
       XCTAssertEqual(handler.sheetSubscribe?.id, 7001)
       XCTAssertEqual(handler.sheetSubscribe?.name, "订阅")
       let forkRequestCount = await PermissionBehaviorURLProtocol.stub.requestCount(
@@ -162,6 +164,38 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
       )
       XCTAssertEqual(forkRequestCount, 1)
       XCTAssertEqual(fetchRequestCount, 1)
+    }
+  }
+
+  func testSubscriptionHandlerShowsSimpleFeedbackWhenForkBusinessFails() async throws {
+    try await withPermissionBehaviorBackend { service in
+      configurePermissionBehaviorUser(service, granted: [.subscribe])
+      await PermissionBehaviorURLProtocol.stub.setForkResponse(
+        #"{"success":false,"message":"数据库约束失败"}"#
+      )
+
+      let handler = SubscriptionHandler()
+      let forkedId = await handler.fork(share: try PermissionBehaviorFixtures.subscribeShare())
+
+      XCTAssertNil(forkedId)
+      XCTAssertEqual(handler.forkErrorMessage, "暂时无法复用订阅，请稍后重试。")
+      XCTAssertEqual(handler.notificationSerial, 0)
+    }
+  }
+
+  func testSubscriptionHandlerShowsSimpleFeedbackWhenForkResponseHasNoId() async throws {
+    try await withPermissionBehaviorBackend { service in
+      configurePermissionBehaviorUser(service, granted: [.subscribe])
+      await PermissionBehaviorURLProtocol.stub.setForkResponse(
+        #"{"success":true,"data":{}}"#
+      )
+
+      let handler = SubscriptionHandler()
+      let forkedId = await handler.fork(share: try PermissionBehaviorFixtures.subscribeShare())
+
+      XCTAssertNil(forkedId)
+      XCTAssertEqual(handler.forkErrorMessage, "暂时无法复用订阅，请稍后重试。")
+      XCTAssertEqual(handler.notificationSerial, 0)
     }
   }
 
@@ -603,9 +637,15 @@ private enum PermissionBehaviorFixtures {
 
 private actor PermissionBehaviorURLProtocolStub {
   private var requestCounts: [String: Int] = [:]
+  private var forkResponse = #"{"success":true,"data":{"id":7001}}"#.data(using: .utf8)!
 
   func reset() {
     requestCounts.removeAll()
+    forkResponse = #"{"success":true,"data":{"id":7001}}"#.data(using: .utf8)!
+  }
+
+  func setForkResponse(_ json: String) {
+    forkResponse = Data(json.utf8)
   }
 
   func totalRequestCount() -> Int {
@@ -639,7 +679,7 @@ private actor PermissionBehaviorURLProtocolStub {
     case ("GET", "/api/v1/subscribe/shares"):
       data = PermissionBehaviorFixtures.subscriptionSharesData()
     case ("POST", "/api/v1/subscribe/fork"):
-      data = #"{"success":true,"data":{"id":7001}}"#.data(using: .utf8)!
+      data = forkResponse
     case ("GET", "/api/v1/search/title/stream"):
       data = PermissionBehaviorFixtures.resourceSearchStreamData(title: "有搜索权限结果")
     case ("GET", "/api/v1/search/title"):

@@ -10,7 +10,6 @@ enum ReorganizeSheetUIPreviewPresentation {
 
 struct ReorganizeSheet: View {
   @Environment(\.dismiss) var dismiss
-  @EnvironmentObject var notificationManager: NotificationManager
   let onDone: () -> Void
 
   @StateObject private var viewModel: ReorganizeViewModel
@@ -58,7 +57,7 @@ struct ReorganizeSheet: View {
     self.loadsConfigOnAppear = false
     _showAdvanced = State(initialValue: presentation == .advanced)
     self.previewErrorMessage =
-      presentation == .errorNotification ? "预览：重新整理失败，请检查规则和目标目录" : nil
+      presentation == .errorNotification ? "整理没有开始，请稍后重试。" : nil
   }
   #endif
 
@@ -76,24 +75,14 @@ struct ReorganizeSheet: View {
         #if DEBUG
         if let previewErrorMessage {
           await Task.yield()
-          presentError(previewErrorMessage)
+          viewModel.errorMessage = previewErrorMessage
           return
         }
         guard loadsConfigOnAppear else { return }
         #endif
         await viewModel.loadConfig()
       }
-      .onChange(of: viewModel.errorMessage, initial: true) { _, newValue in
-        if let message = newValue {
-          presentError(message)
-        }
-      }
     }
-  }
-
-  private func presentError(_ message: String) {
-    notificationManager.show(message: message, type: .error)
-    viewModel.errorMessage = nil
   }
 
   private var manualFormView: some View {
@@ -106,6 +95,14 @@ struct ReorganizeSheet: View {
 
       ScrollView {
         VStack {
+          if let message = viewModel.loadErrorMessage {
+            SheetFeedbackView(message: message, actionTitle: "重新加载") {
+              Task {
+                await viewModel.loadConfig()
+              }
+            }
+          }
+
           basicSettings
           recognitionInfo
           if viewModel.form.type_name == "电视剧" {
@@ -349,23 +346,20 @@ struct ReorganizeSheet: View {
 
   private var actionButtons: some View {
     Group {
-      Button(action: {
+      SheetActionButton(
+        title: viewModel.errorMessage == nil ? "开始整理" : "整理失败，重试",
+        loadingTitle: "整理中",
+        isLoading: viewModel.isSubmitting,
+        isDisabled: viewModel.loadErrorMessage != nil,
+        feedbackMessage: viewModel.errorMessage
+      ) {
         Task {
           if await viewModel.submit(background: true) {
             onDone()
             dismiss()
           }
         }
-      }) {
-        HStack(spacing: 8) {
-          if viewModel.isSubmitting {
-            ProgressView()
-          }
-          Text(viewModel.isSubmitting ? "整理中" : "开始整理")
-        }
-        .frame(maxWidth: .infinity)
       }
-      .disabled(viewModel.isSubmitting)
 
       Button {
         dismiss()
