@@ -85,8 +85,12 @@ struct ForkSubscribeSheet: View {
 
         HStack {
           Spacer()
-          Button(action: {
-            // Fork a subscription
+          SheetActionButton(
+            title: subscriptionHandler.forkErrorMessage == nil ? "复用订阅" : "复用失败，重试",
+            loadingTitle: "复用中",
+            isLoading: isForking,
+            feedbackMessage: subscriptionHandler.forkErrorMessage
+          ) {
             Task {
               guard !isForking else { return }
               isForking = true
@@ -97,15 +101,8 @@ struct ForkSubscribeSheet: View {
                 dismiss()
               }
             }
-          }) {
-            HStack(spacing: 8) {
-              if isForking {
-                ProgressView()
-              }
-              Text(isForking ? "复用中" : "复用订阅")
-            }
           }
-          .disabled(isForking)
+          .frame(width: 520)
           Spacer()
         }
       }

@@ -326,9 +326,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     let didSave = await viewModel.save()
 
     XCTAssertFalse(didSave)
-    let message = try XCTUnwrap(viewModel.errorMessage)
-    XCTAssertTrue(message.hasPrefix("保存订阅失败:"))
-    XCTAssertGreaterThan(message.count, "保存订阅失败:".count)
+    XCTAssertFalse(viewModel.isSaved)
+    XCTAssertEqual(viewModel.errorMessage, "暂时无法保存订阅，请稍后重试。")
   }
 
   func testLoadDataFailurePublishesErrorMessage() async throws {
@@ -353,9 +352,86 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     await viewModel.loadData()
 
-    let message = try XCTUnwrap(viewModel.errorMessage)
-    XCTAssertTrue(message.hasPrefix("加载订阅配置失败:"))
-    XCTAssertGreaterThan(message.count, "加载订阅配置失败:".count)
+    XCTAssertEqual(viewModel.loadErrorMessage, "订阅设置没有加载完整，请重试。")
+    XCTAssertTrue(viewModel.canRetryLoad)
+  }
+
+  func testSavedSubscriptionIsNotRolledBackWhenResumeReturnsFalse() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "PUT",
+      path: "/api/v1/subscribe/status/786",
+      json: #"{"success":false}"#
+    )
+    service.baseURL = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(id: 786, name: "启用失败", type: "电影", tmdbid: 123465),
+      isNewSubscription: true
+    )
+
+    let didSave = await viewModel.save()
+    XCTAssertTrue(didSave)
+    XCTAssertTrue(viewModel.isSaved)
+    XCTAssertEqual(
+      viewModel.errorMessage,
+      "订阅已保存，但暂时未能启用。你可以稍后在订阅页面重试。"
+    )
+    let searchRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "GET", path: "/api/v1/subscribe/search/786")
+    XCTAssertEqual(searchRequestCount, 0)
+
+    await viewModel.cancel()
+
+    let deleteRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "DELETE", path: "/api/v1/subscribe/786")
+    XCTAssertEqual(deleteRequestCount, 0)
+  }
+
+  func testSavedSubscriptionIsNotRolledBackWhenSearchThrows() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    let originalValue = UserDefaults.standard.object(forKey: autoSearchKey)
+    defer {
+      snapshot.restore(to: service)
+      restoreUserDefaultsValue(originalValue, forKey: autoSearchKey)
+    }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.fail(path: "/api/v1/subscribe/search/787")
+    service.baseURL = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+    UserDefaults.standard.set(true, forKey: autoSearchKey)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(id: 787, name: "搜索失败", type: "电影", tmdbid: 123466),
+      isNewSubscription: true
+    )
+
+    let didSave = await viewModel.save()
+    XCTAssertTrue(didSave)
+    XCTAssertTrue(viewModel.isSaved)
+    XCTAssertEqual(
+      viewModel.errorMessage,
+      "订阅已保存，但没有开始搜索。你可以稍后手动搜索。"
+    )
+
+    await viewModel.cancel()
+
+    let deleteRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "DELETE", path: "/api/v1/subscribe/787")
+    XCTAssertEqual(deleteRequestCount, 0)
   }
 
   private func restoreUserDefaultsValue(_ value: Any?, forKey key: String) {
@@ -499,6 +575,7 @@ private struct SubscribeSheetServiceSnapshot {
 private actor SubscribeSheetURLProtocolStub {
   private var requestCounts: [String: Int] = [:]
   private var requestBodies: [String: Data] = [:]
+  private var responseOverrides: [String: Data] = [:]
   private var suspendedPaths: Set<String> = []
   private var failedPaths: Set<String> = []
   private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
@@ -506,6 +583,7 @@ private actor SubscribeSheetURLProtocolStub {
   func reset() {
     requestCounts.removeAll()
     requestBodies.removeAll()
+    responseOverrides.removeAll()
     suspendedPaths.removeAll()
     failedPaths.removeAll()
     let pendingWaiters = waiters.values.flatMap { $0 }
@@ -525,6 +603,10 @@ private actor SubscribeSheetURLProtocolStub {
 
   func fail(path: String) {
     failedPaths.insert(path)
+  }
+
+  func respond(method: String, path: String, json: String) {
+    responseOverrides["\(method) \(path)"] = Data(json.utf8)
   }
 
   func requestCount(method: String, path: String) -> Int {
@@ -556,23 +638,27 @@ private actor SubscribeSheetURLProtocolStub {
     }
 
     let data: Data
-    switch (method, path) {
-    case ("GET", "/api/v1/site/rss"):
-      data = #"[]"#.data(using: .utf8)!
-    case ("GET", "/api/v1/download/clients"):
-      data = #"[]"#.data(using: .utf8)!
-    case ("GET", "/api/v1/system/setting/public/Directories"):
-      data = #"{"value":[]}"#.data(using: .utf8)!
-    case ("GET", "/api/v1/system/setting/UserFilterRuleGroups"):
-      data = #"{"value":[{"name":"普通规则组"}]}"#.data(using: .utf8)!
-    case ("POST", "/api/v1/subscribe/"), ("POST", "/api/v1/subscribe"):
-      data = #"{"success":true,"data":{"id":801}}"#.data(using: .utf8)!
-    case ("GET", "/api/v1/subscribe/801"):
-      data = #"{"id":801,"name":"默认配置新订阅","type":"电视剧","season":1,"doubanid":"douban-new","mediaid":"douban:douban-new","state":"S"}"#.data(using: .utf8)!
-    case let (_, path) where path.hasPrefix("/api/v1/subscribe"):
-      data = #"{"success":true}"#.data(using: .utf8)!
-    default:
-      throw URLError(.badServerResponse)
+    if let responseOverride = responseOverrides["\(method) \(path)"] {
+      data = responseOverride
+    } else {
+      switch (method, path) {
+      case ("GET", "/api/v1/site/rss"):
+        data = #"[]"#.data(using: .utf8)!
+      case ("GET", "/api/v1/download/clients"):
+        data = #"[]"#.data(using: .utf8)!
+      case ("GET", "/api/v1/system/setting/public/Directories"):
+        data = #"{"value":[]}"#.data(using: .utf8)!
+      case ("GET", "/api/v1/system/setting/UserFilterRuleGroups"):
+        data = #"{"value":[{"name":"普通规则组"}]}"#.data(using: .utf8)!
+      case ("POST", "/api/v1/subscribe/"), ("POST", "/api/v1/subscribe"):
+        data = #"{"success":true,"data":{"id":801}}"#.data(using: .utf8)!
+      case ("GET", "/api/v1/subscribe/801"):
+        data = #"{"id":801,"name":"默认配置新订阅","type":"电视剧","season":1,"doubanid":"douban-new","mediaid":"douban:douban-new","state":"S"}"#.data(using: .utf8)!
+      case let (_, path) where path.hasPrefix("/api/v1/subscribe"):
+        data = #"{"success":true}"#.data(using: .utf8)!
+      default:
+        throw URLError(.badServerResponse)
+      }
     }
 
     let response = HTTPURLResponse(

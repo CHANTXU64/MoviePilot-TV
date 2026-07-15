@@ -140,16 +140,25 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("private var preferredHeaderFocus: ButtonField?"))
     XCTAssertTrue(source.contains("if !hasAppeared, let preferredHeaderFocus"))
     XCTAssertFalse(source.contains(".defaultFocus($focusedButton, preferredHeaderFocus)"))
-    XCTAssertTrue(source.contains("private var hasNoActionButtons: Bool"))
-    XCTAssertTrue(source.contains("case subscribe, search, sites, tmdbJump, otherInfo"))
+    XCTAssertTrue(source.contains("private var shouldShowOtherInfo: Bool"))
+    XCTAssertTrue(source.contains("case subscribe, search, sites, otherInfo"))
+    XCTAssertFalse(source.contains("equals: .tmdbJump"))
     XCTAssertTrue(source.contains(".focused($focusedButton, equals: .otherInfo)"))
   }
 
-  func testMediaDetailUnavailableSeasonSubscribeButtonUsesDisabledOpacity() throws {
+  func testMediaDetailSeasonInformationButtonStaysEnabled() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
 
-    XCTAssertTrue(source.contains(".disabled(viewModel.isUnsubscribing || isSeasonInformationUnavailable)"))
-    XCTAssertTrue(source.contains(".opacity(isSeasonInformationUnavailable ? 0.35 : 1)"))
+    XCTAssertTrue(
+      source.contains(".disabled(detail.canDirectlySubscribe && viewModel.isUnsubscribing)")
+    )
+    XCTAssertTrue(
+      source.contains("if detail.canDirectlySubscribe && viewModel.isUnsubscribing")
+    )
+    XCTAssertFalse(source.contains("|| isSeasonInformationUnavailable"))
+    XCTAssertFalse(source.contains(".opacity(isSeasonInformationUnavailable"))
+    XCTAssertTrue(source.contains("分季信息加载失败"))
+    XCTAssertTrue(source.contains("暂无分季信息"))
   }
 
   func testLoginViewUsesSettingsLogoNotificationAndStableLoadingLabel() throws {
@@ -175,18 +184,25 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(mediaSection.contains(".padding(.horizontal, 8)\n      .focusSection()"))
   }
 
-  func testNotificationAndLoadingStateUseSharedPatterns() throws {
+  func testSheetFeedbackAndLoadingStateUseSharedPatterns() throws {
+    let sheetStyleSource = try Self.source(at: "MoviePilot-TV/Views/Components/SheetStyles.swift")
     let subscribeSheetSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/SubscribeSheet.swift")
+    let reorganizeSheetSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/ReorganizeSheet.swift")
     let transferSource = try Self.source(at: "MoviePilot-TV/Views/Pages/TransferHistoryView.swift")
     let subscriptionModifierSource = try Self.source(at: "MoviePilot-TV/Views/Components/SubscriptionModifier.swift")
     let forkSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/ForkSubscribeSheet.swift")
 
-    XCTAssertTrue(subscribeSheetSource.contains("notificationManager.show(message: message, type: .error)"))
+    XCTAssertTrue(sheetStyleSource.contains("struct SheetFeedbackView: View"))
+    XCTAssertTrue(sheetStyleSource.contains("struct SheetActionButton: View"))
+    XCTAssertTrue(subscribeSheetSource.contains("SheetActionButton("))
+    XCTAssertTrue(reorganizeSheetSource.contains("SheetActionButton("))
+    XCTAssertTrue(forkSource.contains("SheetActionButton("))
+    XCTAssertFalse(subscribeSheetSource.contains("NotificationManager"))
+    XCTAssertFalse(reorganizeSheetSource.contains("NotificationManager"))
     XCTAssertTrue(transferSource.contains("notificationManager.show(message: message, type: .error)"))
     XCTAssertTrue(subscriptionModifierSource.contains("notificationManager.show(message: handler.notificationMessage, type: handler.notificationType)"))
     XCTAssertFalse(subscriptionModifierSource.contains(".alert(alertTitle, isPresented: $showAlert)"))
-    XCTAssertTrue(forkSource.contains("Text(isForking ? \"复用中\" : \"复用订阅\")"))
-    XCTAssertTrue(forkSource.contains(".disabled(isForking)"))
+    XCTAssertTrue(forkSource.contains("subscriptionHandler.forkErrorMessage"))
   }
 
   func testHorizontalLoadMoreIndicatorsAlignToPosterArea() throws {

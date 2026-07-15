@@ -10,6 +10,7 @@ class SubscriptionHandler: ObservableObject {
   @Published var notificationMessage = ""
   @Published var notificationType: NotificationType = .info
   @Published var notificationSerial = 0
+  @Published private(set) var forkErrorMessage: String?
 
   private let apiService = APIService.shared
 
@@ -40,16 +41,14 @@ class SubscriptionHandler: ObservableObject {
   }
 
   func fork(share: SubscribeShare) async -> Int? {
+    forkErrorMessage = nil
     guard apiService.canAccess(.subscribe) else { return nil }
 
     do {
-      guard let newSubId = try await apiService.forkSubscription(share: share) else {
-        return nil
-      }
-      showNotification(message: "复用订阅成功", type: .success)
-      return newSubId
+      return try await apiService.forkSubscription(share: share)
     } catch {
-      showNotification(message: "复用失败: \(error.localizedDescription)", type: .error)
+      Logger.error("Failed to fork subscription: \(error)")
+      forkErrorMessage = "暂时无法复用订阅，请稍后重试。"
       return nil
     }
   }

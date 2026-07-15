@@ -12,6 +12,7 @@ class ReorganizeViewModel: ObservableObject {
   @Published var isEpisodeDetailDisabled = false  // 视图绑定，表示“指定集数”是否禁用
 
   @Published var errorMessage: String?
+  @Published var loadErrorMessage: String?
 
   private let apiService = APIService.shared
   private var cancellables = Set<AnyCancellable>()
@@ -73,6 +74,7 @@ class ReorganizeViewModel: ObservableObject {
       return
     }
     let sessionSnapshot = apiService.sessionSnapshot()
+    loadErrorMessage = nil
     isLoading = true
     defer { isLoading = false }
     do {
@@ -99,7 +101,9 @@ class ReorganizeViewModel: ObservableObject {
         }
 
     } catch {
-      self.errorMessage = "加载配置失败: \(error.localizedDescription)"
+      Logger.error("Failed to load reorganize options: \(error)")
+      clearLoadedConfig()
+      loadErrorMessage = "整理设置加载失败，请重试。"
     }
   }
 
@@ -111,6 +115,7 @@ class ReorganizeViewModel: ObservableObject {
 
   func submit(background: Bool) async -> Bool {
     guard apiService.canAccess(.manage) else { return false }
+    errorMessage = nil
     isSubmitting = true
     defer { isSubmitting = false }
     do {
@@ -135,11 +140,15 @@ class ReorganizeViewModel: ObservableObject {
       if allSuccess {
         return true
       } else {
-        self.errorMessage = "部分或全部操作失败，请查看日志"
+        Logger.error("Reorganize request returned false")
+        errorMessage = logIds.count > 1
+          ? "部分文件没有开始整理，请稍后重试。"
+          : "整理没有开始，请检查设置后重试。"
         return false
       }
     } catch {
-      self.errorMessage = "请求出错: \(error.localizedDescription)"
+      Logger.error("Failed to reorganize: \(error)")
+      errorMessage = "整理没有开始，请稍后重试。"
       return false
     }
   }

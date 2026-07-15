@@ -32,7 +32,7 @@ struct MediaDetailView: View {
   @FocusState private var isHeroFocused: Bool
   @FocusState private var isContentFocused: Bool
   enum ButtonField {
-    case subscribe, search, sites, tmdbJump, otherInfo
+    case subscribe, search, sites, otherInfo
   }
   @FocusState private var focusedButton: ButtonField?
   @State private var lastFocusedButton: ButtonField?
@@ -49,16 +49,17 @@ struct MediaDetailView: View {
     viewModel.detail.douban_id != nil || viewModel.detail.bangumi_id != nil
   }
 
-  /// 无任何操作按钮（订阅、搜索、TMDB 跳转）时为 true，用于显示「其他信息」兜底按钮
-  private var hasNoActionButtons: Bool {
-    !canSubscribeMedia && !canSearchResources && !canJumpToTMDB
+  private var shouldShowOtherInfo: Bool {
+    Self.shouldShowOtherInfo(
+      canSubscribeMedia: canSubscribeMedia,
+      canSearchResources: canSearchResources
+    )
   }
 
   private var preferredHeaderFocus: ButtonField? {
-    if canSubscribeMedia && !isSeasonInformationUnavailable { return .subscribe }
+    if canSubscribeMedia { return .subscribe }
     if canSearchResources { return .search }
-    if canJumpToTMDB { return .tmdbJump }
-    if hasNoActionButtons { return .otherInfo }
+    if shouldShowOtherInfo { return .otherInfo }
     return nil
   }
 
@@ -523,6 +524,13 @@ struct MediaDetailView: View {
     return !isSeasonDataLoaded || (seasonCount ?? 0) > 0
   }
 
+  static func shouldShowOtherInfo(
+    canSubscribeMedia: Bool,
+    canSearchResources: Bool
+  ) -> Bool {
+    !canSubscribeMedia && !canSearchResources
+  }
+
   static func isSeasonInformationUnavailable(
     canSubscribeMedia: Bool,
     detail: MediaInfo,
@@ -538,12 +546,16 @@ struct MediaDetailView: View {
   static func headerSubscribeButtonTitle(
     isSubscribed: Bool,
     detail: MediaInfo,
-    isSeasonInformationUnavailable: Bool
+    isSeasonInformationUnavailable: Bool,
+    hasSeasonLoadError: Bool,
+    isSeasonLoading: Bool
   ) -> String {
     if detail.canDirectlySubscribe {
       return isSubscribed ? "已订阅" : "订阅"
     }
-    return isSeasonInformationUnavailable ? "无分季信息" : "分季订阅"
+    if isSeasonLoading { return "分季信息加载中" }
+    if hasSeasonLoadError { return "分季信息加载失败" }
+    return isSeasonInformationUnavailable ? "暂无分季信息" : "分季信息"
   }
 
   private func handleHeaderSubscribe() {
@@ -689,7 +701,6 @@ struct MediaDetailView: View {
                 )
                 .foregroundColor(.primary)
               }
-              .focused($focusedButton, equals: .tmdbJump)
               .disabled(isButtonLoading)
             }
 
@@ -698,11 +709,11 @@ struct MediaDetailView: View {
               Button(action: {
                 if detail.canDirectlySubscribe {
                   handleHeaderSubscribe()
-                } else if detail.type == "电视剧" && !isSeasonInformationUnavailable {
+                } else if detail.type == "电视剧" {
                   isContentFocused = true
                 }
               }) {
-                if viewModel.isUnsubscribing {
+                if detail.canDirectlySubscribe && viewModel.isUnsubscribing {
                   HStack(spacing: 8) {
                     ProgressView()
                     Text("取消订阅中")
@@ -713,14 +724,21 @@ struct MediaDetailView: View {
                   let label = Self.headerSubscribeButtonTitle(
                     isSubscribed: isSubscribed,
                     detail: detail,
-                    isSeasonInformationUnavailable: isSeasonInformationUnavailable
+                    isSeasonInformationUnavailable: isSeasonInformationUnavailable,
+                    hasSeasonLoadError: hasSeasonLoadError,
+                    isSeasonLoading: isSeasonLoading
                   )
                   let icon =
                     isDirect
                     ? (isSubscribed ? "checkmark.circle.fill" : "plus.circle")
                     : (
-                      isSeasonInformationUnavailable
-                        ? "exclamationmark.circle" : "list.bullet.circle"
+                      isSeasonLoading
+                        ? "arrow.triangle.2.circlepath"
+                        : (
+                          hasSeasonLoadError
+                            ? "exclamationmark.circle"
+                            : (isSeasonInformationUnavailable ? "info.circle" : "list.bullet.circle")
+                        )
                     )
 
                   Label(label, systemImage: icon)
@@ -728,8 +746,7 @@ struct MediaDetailView: View {
                 }
               }
               .focused($focusedButton, equals: .subscribe)
-              .disabled(viewModel.isUnsubscribing || isSeasonInformationUnavailable)
-              .opacity(isSeasonInformationUnavailable ? 0.35 : 1)
+              .disabled(detail.canDirectlySubscribe && viewModel.isUnsubscribing)
             }
 
             if canSearchResources {
@@ -764,8 +781,8 @@ struct MediaDetailView: View {
               .transition(.move(edge: .leading).combined(with: .opacity))
             }
 
-            // 无操作按钮时的兜底入口：跳转到第二页查看演职员、推荐等信息
-            if hasNoActionButtons {
+            // 没有订阅和搜索权限时始终提供第二页入口；TMDB 跳转不参与兜底判断。
+            if shouldShowOtherInfo {
               Button(action: {
                 isContentFocused = true
               }) {
