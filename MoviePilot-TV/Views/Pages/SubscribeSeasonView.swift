@@ -213,6 +213,7 @@ struct SubscribeSeasonContentView: View {
           }
         }
         .frame(maxWidth: .infinity, minHeight: 200)
+        .focusSection()
       } else if viewModel.seasonInfos.isEmpty {
         VStack(spacing: 16) {
           Image(systemName: "doc.text.magnifyingglass")
@@ -340,7 +341,7 @@ struct SubscribeSeasonContentView: View {
       }
     }
     #endif
-    .onChange(of: viewModel.errorMessage) { _, newValue in
+    .onChange(of: viewModel.errorMessage, initial: true) { _, newValue in
       if let message = newValue {
         notificationManager.show(message: message, type: .error)
         viewModel.errorMessage = nil

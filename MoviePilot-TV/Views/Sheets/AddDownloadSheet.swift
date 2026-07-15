@@ -187,7 +187,7 @@ struct AddDownloadSheet: View {
       #endif
       await viewModel.loadData()
     }
-    .onChange(of: viewModel.errorMessage) { _, newValue in
+    .onChange(of: viewModel.errorMessage, initial: true) { _, newValue in
       if let message = newValue {
         presentError(message)
       }

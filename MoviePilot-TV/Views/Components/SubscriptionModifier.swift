@@ -34,7 +34,7 @@ struct MediaSubscriptionModifier: ViewModifier {
           tvSubscribeRequest = nil
         }
       }
-      .onChange(of: handler.notificationSerial) { _, _ in
+      .onChange(of: handler.notificationSerial, initial: true) { _, _ in
         guard !handler.notificationMessage.isEmpty else { return }
         notificationManager.show(message: handler.notificationMessage, type: handler.notificationType)
       }

@@ -55,7 +55,7 @@ struct MediaDetailView: View {
   @FocusState private var isHeroFocused: Bool
   @FocusState private var isContentFocused: Bool
   enum ButtonField {
-    case subscribe, search, sites, tmdbJump
+    case subscribe, search, sites, tmdbJump, otherInfo
   }
   @FocusState private var focusedButton: ButtonField?
   @State private var lastFocusedButton: ButtonField?
@@ -72,10 +72,16 @@ struct MediaDetailView: View {
     viewModel.detail.douban_id != nil || viewModel.detail.bangumi_id != nil
   }
 
+  /// 无任何操作按钮（订阅、搜索、TMDB 跳转）时为 true，用于显示「其他信息」兜底按钮
+  private var hasNoActionButtons: Bool {
+    !canSubscribeMedia && !canSearchResources && !canJumpToTMDB
+  }
+
   private var preferredHeaderFocus: ButtonField? {
     if canSubscribeMedia && !isSeasonInformationUnavailable { return .subscribe }
     if canSearchResources { return .search }
     if canJumpToTMDB { return .tmdbJump }
+    if hasNoActionButtons { return .otherInfo }
     return nil
   }
 
@@ -311,10 +317,9 @@ struct MediaDetailView: View {
               recommendationsSection
               similarSection
             }
-            .padding(.top, showContentPage ? 60 : 0)
-            .frame(minHeight: UIScreen.main.bounds.height, alignment: .top)
-            .padding(.bottom, 220)
             .id("contentTop")
+            .padding(.top, showContentPage ? 60 : 0)
+            .padding(.bottom, 80)
             .focused($isContentFocused)
             .animation(.easeInOut(duration: 0.6), value: showContentPage)
             .onChange(of: isHeroFocused) { _, focused in
@@ -330,6 +335,9 @@ struct MediaDetailView: View {
                 }
               }
             }
+
+            Color.clear
+              .frame(height: UIScreen.main.bounds.height)
           }
         }
         #if DEBUG
@@ -864,6 +872,17 @@ struct MediaDetailView: View {
               .focused($focusedButton, equals: .sites)
               .transition(.move(edge: .leading).combined(with: .opacity))
             }
+
+            // 无操作按钮时的兜底入口：跳转到第二页查看演职员、推荐等信息
+            if hasNoActionButtons {
+              Button(action: {
+                isContentFocused = true
+              }) {
+                Label("其他信息", systemImage: "info.circle")
+                  .foregroundColor(.primary)
+              }
+              .focused($focusedButton, equals: .otherInfo)
+            }
           }
           .animation(.snappy, value: shouldShowSiteFilter)
         }
@@ -1024,7 +1043,7 @@ struct MediaDetailView: View {
               }
             }
             if viewModel.actorsPaginator.isLoadingMore {
-              posterCenteredLoadingIndicator(width: 210, height: 315)
+              posterCenteredLoadingIndicator(height: 315)
             }
           }
           .padding(.horizontal, 81)
@@ -1075,7 +1094,7 @@ struct MediaDetailView: View {
               )
             }
             if viewModel.recommendPaginator.isLoadingMore {
-              posterCenteredLoadingIndicator(width: 256, height: 384)
+              posterCenteredLoadingIndicator(height: 384)
             }
           }
           .padding(.horizontal, 81)
@@ -1138,7 +1157,7 @@ struct MediaDetailView: View {
               )
             }
             if viewModel.similarPaginator.isLoadingMore {
-              posterCenteredLoadingIndicator(width: 256, height: 384)
+              posterCenteredLoadingIndicator(height: 384)
             }
           }
           .padding(.horizontal, 81)
@@ -1168,12 +1187,12 @@ struct MediaDetailView: View {
     }
   }
 
-  private func posterCenteredLoadingIndicator(width: CGFloat, height: CGFloat) -> some View {
+  private func posterCenteredLoadingIndicator(height: CGFloat) -> some View {
     VStack(spacing: 10) {
       ProgressView()
-        .frame(width: width, height: height)
+        .frame(width: 100, height: height)
       Color.clear
-        .frame(width: width, height: 44)
+        .frame(width: 100, height: 44)
     }
   }
 }

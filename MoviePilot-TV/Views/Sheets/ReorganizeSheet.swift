@@ -83,7 +83,7 @@ struct ReorganizeSheet: View {
         #endif
         await viewModel.loadConfig()
       }
-      .onChange(of: viewModel.errorMessage) { _, newValue in
+      .onChange(of: viewModel.errorMessage, initial: true) { _, newValue in
         if let message = newValue {
           presentError(message)
         }

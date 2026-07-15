@@ -385,7 +385,7 @@ struct SubscribeSheet: View {
       }
     }
     #endif
-    .onChange(of: viewModel.errorMessage) { _, newValue in
+    .onChange(of: viewModel.errorMessage, initial: true) { _, newValue in
       if let message = newValue {
         notificationManager.show(message: message, type: .error)
         viewModel.errorMessage = nil

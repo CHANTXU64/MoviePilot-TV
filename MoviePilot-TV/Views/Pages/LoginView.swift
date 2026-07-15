@@ -20,7 +20,7 @@ struct LoginView: View {
         Image("SettingsLogoGlass")
           .resizable()
           .scaledToFit()
-          .frame(width: 300, height: 200)
+          .frame(width: 500, height: 300)
 
         Text("MoviePilot")
           .font(.largeTitle)
@@ -54,7 +54,7 @@ struct LoginView: View {
         .frame(width: 600)
       }
     }
-    .onChange(of: viewModel.errorMessage) { _, newValue in
+    .onChange(of: viewModel.errorMessage, initial: true) { _, newValue in
       if let message = newValue {
         notificationManager.show(message: message, type: .error)
         viewModel.errorMessage = nil
