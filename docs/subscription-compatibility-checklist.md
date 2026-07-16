@@ -30,9 +30,10 @@ MoviePilot 后端普通用户权限契约仍不稳定，后续版本可能有较
 - `episode_group` 是订阅配置，不是订阅身份的一部分。
 - 创建订阅时可以带 `episode_group`。
 - 查询某媒体某季是否已订阅时，只按媒体和季判断，不按 `episode_group` 判断。
-- 取消某媒体某季订阅时，后端媒体删除接口也是媒体和季语义，不按 `episode_group` 删除。
+- 取消某媒体某季订阅时，Web 统一按媒体标识调用删除接口并传入 `season`，不按 `episode_group` 删除；v2.14.4 后端只在 TMDB 分支使用该季号过滤。
 - TV 分季页展示的已订阅状态必须来自真实订阅记录上的 `episode_group`，不能来自当前 Picker 选择。
-- TV 分季页取消已订阅季时，应优先按订阅 `id` 删除当前匹配记录。
+- TV 分季页取消已订阅季时，与 Web v2.14.4 保持一致，调用 `DELETE /subscribe/media/{mediaid}` 并传入 `season`。
+- **已知上游风险（跟随 Web）**：超级用户可访问全局订阅，TMDB 删除会命中其可访问范围内同媒体、同季的全部记录；Douban 和其他 `mediaid` 分支还会忽略季号，可能跨季、跨用户删除。另外，若快照只能通过 `mediaid` fallback 匹配，但结构化 ID 为 `0` 或空，后端可能返回成功却未删除记录。TV 端不单独兜底；每次同步 Web 更新时复核该路径，Web 若修复，TV 同步跟进。
 - `/subscribe/` 快照是首页订阅列表、详情页订阅状态和分季订阅状态的共享数据源；普通用户由后端过滤为本人订阅，超级用户获得全局订阅，TV 不再重复按用户名过滤。几十或上百季电视剧不能退回逐季调用 `/subscribe/media/{mediaid}`。
 - `POST /subscribe/` 创建订阅时必须保留 `mediaid` fallback；当 `tmdbid`、`doubanid`、`bangumiid` 不足以标识媒体时，后端仍可用 `mediaid` 识别来源。
 - MoviePilot v2.14.0 起，`best_version` 和 `best_version_full` 的空值语义变为“使用后端默认订阅配置”。TV 端未明确选择普通/洗版/全集洗版时必须省略这两个字段，不能用 `0` 代替；显式发送 `0` 才表示普通订阅或关闭洗版。
@@ -80,7 +81,7 @@ MoviePilot Web v2.14.0 起，详情页订阅入口按媒体类型区分：
 - 电视剧详情页顶部按钮只作为“分季订阅”入口，不直接创建整条目订阅，也不因为存在 `douban_id` 或 `bangumi_id` 改走一键订阅。
 - 电视剧分季入口和预加载不能依赖 `tmdb_id != nil` 才显示或启动；Douban/Bangumi 详情也应能进入分季订阅流程。
 - 剧集组数据仍只能在有 TMDB ID 时加载；缺少 TMDB ID 时不应阻断分季订阅入口本身。
-- 分季页取消订阅仍优先按真实订阅 `id` 删除单条订阅，不把 Header 行为改造成媒体级批量删除。
+- 分季页取消订阅保持 Web 的请求形式：媒体级删除并传入季号，不单独改成按订阅 `id` 删除；后端是否按季过滤取决于媒体标识分支。
 
 如果以后 Web 或后端重新引入电视剧顶部直接订阅/取消，不能只改按钮文案；需要重新确认 TV 端是否应恢复媒体级删除、是否需要多季影响确认，以及分季页和 Header 的状态来源是否仍一致。
 
@@ -226,7 +227,7 @@ MoviePilot Web v2.14.0 起，详情页订阅入口按媒体类型区分：
   - 未明确选择洗版模式时是否省略 `best_version` / `best_version_full`；已完整入库季是否显式设置 `best_version: 1` 和 `best_version_full: 1`。
   - 已订阅状态显示是否来自订阅记录上的 `episode_group`。
   - 取消订阅前是否强制刷新订阅摘要。
-  - 取消订阅是否优先使用订阅 `id`。
+  - 取消订阅的请求形式是否仍与 Web 一致：使用媒体级删除并传入当前季号。
 - `MoviePilot-TV/Views/Pages/SubscribeSeasonView.swift`
   - 已订阅卡片是否显示真实订阅配置，例如 `已订阅 · 默认剧集组` 或 `已订阅 · 剧集组 A`。
   - 取消确认框是否明确剧名、季号和当前订阅使用的剧集组。
@@ -281,7 +282,7 @@ xcodebuild test \
 - 新建订阅未设置洗版模式时，payload 省略 `best_version` / `best_version_full`；显式 `0` 仍应保留。
 - 已完整入库季创建分季订阅时，payload 同时包含 `best_version: 1` 和 `best_version_full: 1`。
 - 部分缺失或未知入库状态的季创建订阅时，payload 省略洗版字段，由后端默认配置决定。
-- 订阅快照里 `tmdbid: 0 + mediaid: "tmdb:<有效 ID>"` 时，分季页仍显示已订阅并能按订阅 `id` 取消。
+- 订阅快照里 `tmdbid: 0 + mediaid: "tmdb:<有效 ID>"` 时，分季页仍显示已订阅；取消时保持 Web 请求形式，已知后端可能返回成功却不删除记录，TV 暂不兜底。
 - 订阅快照里 `bangumiid: 0 + mediaid: "tmdb:<有效 ID>"` 时，分季页仍能通过 fallback 匹配。
 - 订阅快照里空白 `doubanid + mediaid: "tmdb:<有效 ID>"` 时，分季页仍能通过 fallback 匹配。
 - 媒体详情 payload 里 `tmdb_id: 0` / 空白 `douban_id` / `bangumi_id: 0` 时，仍能 fallback 到 `mediaid_prefix + media_id`。
