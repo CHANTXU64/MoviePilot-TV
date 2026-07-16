@@ -347,7 +347,7 @@ struct ReorganizeSheet: View {
   private var actionButtons: some View {
     Group {
       SheetActionButton(
-        title: viewModel.errorMessage == nil ? "开始整理" : "整理失败，重试",
+        title: "开始整理",
         loadingTitle: "整理中",
         isLoading: viewModel.isSubmitting,
         isDisabled: viewModel.loadErrorMessage != nil,

@@ -153,7 +153,7 @@ struct AddDownloadSheet: View {
               }
 
               SheetActionButton(
-                title: viewModel.errorMessage == nil ? "确定" : "添加失败，重试",
+                title: "确定",
                 loadingTitle: "添加中",
                 isLoading: viewModel.isSubmitting,
                 isDisabled: viewModel.loadErrorMessage != nil || !apiService.canAccess(.search),

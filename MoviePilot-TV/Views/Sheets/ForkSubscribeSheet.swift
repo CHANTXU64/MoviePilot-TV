@@ -86,7 +86,7 @@ struct ForkSubscribeSheet: View {
         HStack {
           Spacer()
           SheetActionButton(
-            title: subscriptionHandler.forkErrorMessage == nil ? "复用订阅" : "复用失败，重试",
+            title: "复用订阅",
             loadingTitle: "复用中",
             isLoading: isForking,
             feedbackMessage: subscriptionHandler.forkErrorMessage
