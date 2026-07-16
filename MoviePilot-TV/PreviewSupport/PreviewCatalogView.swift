@@ -660,10 +660,7 @@ private struct UIPreviewSettingsSceneView: View {
 @MainActor
 private struct UIPreviewSheetSceneView: View {
   let sheetCase: UIPreviewSheetCase
-  @StateObject private var notificationManager = NotificationManager()
   @State private var isSheetPresented = false
-  @State private var didShowPreviewErrorNotification = false
-  @State private var previewErrorNotificationMessage: String?
 
   init(sheetCase: UIPreviewSheetCase) {
     self.sheetCase = sheetCase
@@ -681,33 +678,12 @@ private struct UIPreviewSheetSceneView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .sheet(isPresented: $isSheetPresented) {
       sheetContent
-        .environmentObject(notificationManager)
-        .overlay(alignment: .topTrailing) {
-          notificationOverlay
-        }
     }
     .onAppear {
       Task { @MainActor in
         await Task.yield()
         isSheetPresented = true
-        showPreviewErrorNotificationIfNeeded()
       }
-    }
-    .overlay(alignment: .topTrailing) {
-      notificationOverlay
-    }
-    .environmentObject(notificationManager)
-  }
-
-  private func showPreviewErrorNotificationIfNeeded() {
-    guard !didShowPreviewErrorNotification else { return }
-    guard let message = sheetCase.previewErrorNotificationMessage else { return }
-    didShowPreviewErrorNotification = true
-
-    Task { @MainActor in
-      try? await Task.sleep(nanoseconds: 700_000_000)
-      previewErrorNotificationMessage = message
-      notificationManager.show(message: message, type: .error)
     }
   }
 
@@ -773,26 +749,6 @@ private struct UIPreviewSheetSceneView: View {
     }
   }
 
-  @ViewBuilder
-  private var notificationOverlay: some View {
-    if let previewErrorNotificationMessage {
-      NotificationView(
-        message: previewErrorNotificationMessage,
-        type: .error
-      )
-      .padding(.top, 60)
-      .padding(.trailing, 60)
-      .transition(.move(edge: .top).combined(with: .opacity))
-    } else if notificationManager.isShowing {
-      NotificationView(
-        message: notificationManager.message,
-        type: notificationManager.type
-      )
-      .padding(.top, 60)
-      .padding(.trailing, 60)
-      .transition(.move(edge: .top).combined(with: .opacity))
-    }
-  }
 }
 
 @MainActor
@@ -1527,7 +1483,7 @@ private enum UIPreviewCatalog {
           id: "sheet-addDownloadNoSearchPermission",
           title: "下载弹窗 · 无搜索权限"
         ),
-        scene(.sheet(.addDownloadError), id: "sheet-addDownloadError", title: "下载弹窗 · 错误通知"),
+        scene(.sheet(.addDownloadError), id: "sheet-addDownloadError", title: "下载弹窗 · 失败反馈"),
         scene(.sheet(.reorganizeLoading), id: "sheet-reorganizeLoading", title: "整理弹窗 · 加载中"),
         scene(.sheet(.reorganize), id: "sheet-reorganize", title: "整理弹窗 · 单项重整"),
         scene(.sheet(.reorganizeBatch), id: "sheet-reorganizeBatch", title: "整理弹窗 · 批量重整"),
@@ -2426,7 +2382,7 @@ private enum UIPreviewSheetCase: String, UIPreviewCase {
     case .addDownloadAdvanced: return "下载弹窗 · 高级配置"
     case .addDownloadSubmitting: return "下载弹窗 · 提交中"
     case .addDownloadNoSearchPermission: return "下载弹窗 · 无搜索权限"
-    case .addDownloadError: return "下载弹窗 · 错误通知"
+    case .addDownloadError: return "下载弹窗 · 失败反馈"
     case .reorganizeLoading: return "整理弹窗 · 加载中"
     case .reorganize: return "整理弹窗 · 单项重整"
     case .reorganizeBatch: return "整理弹窗 · 批量重整"
@@ -2454,7 +2410,7 @@ private enum UIPreviewSheetCase: String, UIPreviewCase {
     case .addDownloadAdvanced: return "添加下载高级配置展开。"
     case .addDownloadSubmitting: return "添加下载提交中按钮进度。"
     case .addDownloadNoSearchPermission: return "搜索权限缺失时，添加下载确认按钮禁用。"
-    case .addDownloadError: return "添加下载失败后，Sheet 关闭并显示错误通知。"
+    case .addDownloadError: return "添加下载失败后，按钮变为重试并在下方显示一行说明。"
     case .reorganizeLoading: return "整理弹窗配置加载中，检查 NavigationStack 内 Loading。"
     case .reorganize: return "重新整理表单、目的存储、整理方式、剧集定位和高级配置。"
     case .reorganizeBatch: return "整理历史批量重整表单，检查无单文件时的字段状态。"
@@ -2485,7 +2441,7 @@ private enum UIPreviewSheetCase: String, UIPreviewCase {
     case .addDownloadAdvanced:
       return .advanced
     case .addDownloadError:
-      return .errorNotification
+      return .errorFeedback
     default:
       return nil
     }
@@ -2517,14 +2473,6 @@ private enum UIPreviewSheetCase: String, UIPreviewCase {
     }
   }
 
-  var previewErrorNotificationMessage: String? {
-    switch self {
-    case .addDownloadError:
-      return "预览：添加下载失败，站点返回错误"
-    default:
-      return nil
-    }
-  }
 }
 
 private enum UIPreviewComponentCase: String, UIPreviewCase {

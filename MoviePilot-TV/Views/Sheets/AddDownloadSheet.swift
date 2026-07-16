@@ -3,7 +3,7 @@ import SwiftUI
 #if DEBUG
 enum AddDownloadSheetUIPreviewPresentation {
   case advanced
-  case errorNotification
+  case errorFeedback
 }
 #endif
 
@@ -39,7 +39,7 @@ struct AddDownloadSheet: View {
     self.loadsDataOnAppear = false
     _showAdvanced = State(initialValue: presentation == .advanced)
     self.previewErrorMessage =
-      presentation == .errorNotification ? "预览：添加下载失败，站点返回错误" : nil
+      presentation == .errorFeedback ? "暂时无法添加下载，请稍后重试。" : nil
   }
   #endif
 

@@ -238,7 +238,7 @@ final class UIPreviewModeTests: XCTestCase {
       "下载弹窗 · 高级配置",
       "下载弹窗 · 提交中",
       "下载弹窗 · 无搜索权限",
-      "下载弹窗 · 错误通知",
+      "下载弹窗 · 失败反馈",
       "整理弹窗 · 加载中",
       "整理弹窗 · 单项重整",
       "整理弹窗 · 批量重整",
@@ -966,6 +966,15 @@ final class UIPreviewModeTests: XCTestCase {
     let sheetSource = try String(contentsOf: repoFile("MoviePilot-TV/Views/Sheets/ReorganizeSheet.swift"))
 
     XCTAssertTrue(previewSource.contains("整理弹窗 · 失败反馈"))
+    XCTAssertTrue(sheetSource.contains("viewModel.errorMessage = previewErrorMessage"))
+    XCTAssertFalse(sheetSource.contains("presentError("))
+  }
+
+  func testAddDownloadFailurePreviewUsesSheetLocalFeedback() throws {
+    let previewSource = try String(contentsOf: repoFile("MoviePilot-TV/PreviewSupport/PreviewCatalogView.swift"))
+    let sheetSource = try String(contentsOf: repoFile("MoviePilot-TV/Views/Sheets/AddDownloadSheet.swift"))
+
+    XCTAssertTrue(previewSource.contains("下载弹窗 · 失败反馈"))
     XCTAssertTrue(sheetSource.contains("viewModel.errorMessage = previewErrorMessage"))
     XCTAssertFalse(sheetSource.contains("presentError("))
   }
