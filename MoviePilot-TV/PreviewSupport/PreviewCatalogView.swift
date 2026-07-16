@@ -696,10 +696,12 @@ private struct UIPreviewSheetSceneView: View {
     case .subscribeMovie:
       SubscribeSheet(previewViewModel: UIPreviewFixtures.subscribeSheetViewModel(type: "电影"))
         .previewRoot(sheetCase.title)
-    case .subscribe, .subscribeAdvanced, .subscribeSiteSelection, .subscribeFilterGroupSelection, .subscribeSaving:
+    case .subscribe, .subscribeAdvanced, .subscribeSiteSelection, .subscribeFilterGroupSelection, .subscribeSaving,
+      .subscribeError:
       SubscribeSheet(
         previewViewModel: UIPreviewFixtures.subscribeSheetViewModel(
-          isSaving: sheetCase == .subscribeSaving
+          isSaving: sheetCase == .subscribeSaving,
+          errorMessage: sheetCase == .subscribeError ? "暂时无法保存订阅，请稍后重试。" : nil
         ),
         presentation: sheetCase.subscribePresentation
       )
@@ -1473,6 +1475,7 @@ private enum UIPreviewCatalog {
           title: "订阅弹窗 · 过滤组选择"
         ),
         scene(.sheet(.subscribeSaving), id: "sheet-subscribeSaving", title: "订阅弹窗 · 保存中"),
+        scene(.sheet(.subscribeError), id: "sheet-subscribeError", title: "订阅弹窗 · 失败反馈"),
         scene(.sheet(.forkSubscribe), id: "sheet-forkSubscribe", title: "订阅分享弹窗 · 复用"),
         scene(.sheet(.addDownloadLoading), id: "sheet-addDownloadLoading", title: "下载弹窗 · 加载中"),
         scene(.sheet(.addDownload), id: "sheet-addDownload", title: "下载弹窗 · 添加下载"),
@@ -2350,6 +2353,7 @@ private enum UIPreviewSheetCase: String, UIPreviewCase {
   case subscribeSiteSelection
   case subscribeFilterGroupSelection
   case subscribeSaving
+  case subscribeError
   case forkSubscribe
   case addDownloadLoading
   case addDownload
@@ -2376,6 +2380,7 @@ private enum UIPreviewSheetCase: String, UIPreviewCase {
     case .subscribeSiteSelection: return "订阅弹窗 · 站点选择"
     case .subscribeFilterGroupSelection: return "订阅弹窗 · 过滤组选择"
     case .subscribeSaving: return "订阅弹窗 · 保存中"
+    case .subscribeError: return "订阅弹窗 · 失败反馈"
     case .forkSubscribe: return "订阅分享弹窗 · 复用"
     case .addDownloadLoading: return "下载弹窗 · 加载中"
     case .addDownload: return "下载弹窗 · 添加下载"
@@ -2404,6 +2409,7 @@ private enum UIPreviewSheetCase: String, UIPreviewCase {
     case .subscribeSiteSelection: return "新增订阅站点选择 Sheet。"
     case .subscribeFilterGroupSelection: return "高级配置中的优先级规则组选择 Sheet。"
     case .subscribeSaving: return "新增订阅保存中按钮进度。"
+    case .subscribeError: return "订阅保存失败后，按钮保持“确定”并在下方显示一行说明。"
     case .forkSubscribe: return "订阅分享复用入口，检查海报、分享人和复用按钮焦点。"
     case .addDownloadLoading: return "下载弹窗配置加载中，检查 Loading 居中和 Sheet 尺寸。"
     case .addDownload: return "添加下载表单、种子信息、下载器、保存路径和 TMDB ID。"
@@ -2452,7 +2458,7 @@ private enum UIPreviewSheetCase: String, UIPreviewCase {
     case .addDownloadNoSearchPermission:
       return [.discovery, .subscribe, .manage]
     case .subscribeLoading, .subscribe, .subscribeMovie, .subscribeAdvanced, .subscribeSiteSelection,
-      .subscribeFilterGroupSelection, .subscribeSaving, .forkSubscribe, .addDownloadLoading,
+      .subscribeFilterGroupSelection, .subscribeSaving, .subscribeError, .forkSubscribe, .addDownloadLoading,
       .addDownload, .addDownloadAdvanced, .addDownloadSubmitting, .addDownloadError,
       .reorganizeLoading, .reorganize, .reorganizeBatch, .reorganizeDouban, .reorganizeAdvanced,
       .reorganizeSubmitting, .reorganizeError, .seasonDetail, .multiSelection:
@@ -3006,7 +3012,8 @@ private enum UIPreviewFixtures {
   static func subscribeSheetViewModel(
     type: String = "电视剧",
     isLoading: Bool = false,
-    isSaving: Bool = false
+    isSaving: Bool = false,
+    errorMessage: String? = nil
   ) -> SubscribeSheetViewModel {
     let viewModel = SubscribeSheetViewModel(
       subscribe: subscribe(id: 45_001, name: type == "电视剧" ? "边境信号" : "边境信号：序章", type: type, state: "S", lack: type == "电视剧" ? 6 : nil),
@@ -3027,6 +3034,7 @@ private enum UIPreviewFixtures {
       ]
     )
     viewModel.isSaving = isSaving
+    viewModel.errorMessage = errorMessage
     return viewModel
   }
 

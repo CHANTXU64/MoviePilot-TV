@@ -232,6 +232,7 @@ final class UIPreviewModeTests: XCTestCase {
       "订阅弹窗 · 站点选择",
       "订阅弹窗 · 过滤组选择",
       "订阅弹窗 · 保存中",
+      "订阅弹窗 · 失败反馈",
       "订阅分享弹窗 · 复用",
       "下载弹窗 · 加载中",
       "下载弹窗 · 添加下载",
@@ -977,6 +978,15 @@ final class UIPreviewModeTests: XCTestCase {
     XCTAssertTrue(previewSource.contains("下载弹窗 · 失败反馈"))
     XCTAssertTrue(sheetSource.contains("viewModel.errorMessage = previewErrorMessage"))
     XCTAssertFalse(sheetSource.contains("presentError("))
+  }
+
+  func testSubscribeFailurePreviewUsesSheetLocalFeedback() throws {
+    let previewSource = try String(contentsOf: repoFile("MoviePilot-TV/PreviewSupport/PreviewCatalogView.swift"))
+    let sheetSource = try String(contentsOf: repoFile("MoviePilot-TV/Views/Sheets/SubscribeSheet.swift"))
+
+    XCTAssertTrue(previewSource.contains("订阅弹窗 · 失败反馈"))
+    XCTAssertTrue(previewSource.contains("errorMessage: sheetCase == .subscribeError"))
+    XCTAssertTrue(sheetSource.contains("feedbackMessage: viewModel.errorMessage"))
   }
 
   func testDetailPreviewStartsAsNativeNavigationDestination() throws {
