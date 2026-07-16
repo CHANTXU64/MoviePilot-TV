@@ -2,7 +2,6 @@ import SwiftUI
 
 struct AddDownloadSheet: View {
   @Environment(\.dismiss) var dismiss
-  @EnvironmentObject var notificationManager: NotificationManager
   @ObservedObject private var apiService = APIService.shared
   @StateObject private var viewModel: AddDownloadViewModel
   @State private var showAdvanced = false
@@ -31,6 +30,14 @@ struct AddDownloadSheet: View {
 
           ScrollView {
             VStack {
+              if let message = viewModel.loadErrorMessage {
+                SheetFeedbackView(message: message, actionTitle: "重新加载") {
+                  Task {
+                    await viewModel.loadData()
+                  }
+                }
+              }
+
               LabeledContent("标题") {
                 Text(viewModel.torrent.title ?? "未知")
                   .foregroundColor(.secondary)
@@ -116,21 +123,18 @@ struct AddDownloadSheet: View {
                 )
               }
 
-              Button(action: {
+              SheetActionButton(
+                title: viewModel.errorMessage == nil ? "确定" : "添加失败，重试",
+                loadingTitle: "添加中",
+                isLoading: viewModel.isSubmitting,
+                isDisabled: viewModel.loadErrorMessage != nil || !apiService.canAccess(.search),
+                feedbackMessage: viewModel.errorMessage
+              ) {
                 guard apiService.canAccess(.search) else { return }
                 Task {
                   await viewModel.addDownload()
                 }
-              }) {
-                HStack(spacing: 8) {
-                  if viewModel.isSubmitting {
-                    ProgressView()
-                  }
-                  Text(viewModel.isSubmitting ? "添加中" : "确定")
-                }
-                .frame(maxWidth: .infinity)
               }
-              .disabled(viewModel.isLoading || viewModel.isSubmitting || !apiService.canAccess(.search))
 
               Button {
                 dismiss()
@@ -149,13 +153,6 @@ struct AddDownloadSheet: View {
     }
     .task {
       await viewModel.loadData()
-    }
-    .onChange(of: viewModel.errorMessage) { _, newValue in
-      if let message = newValue {
-        notificationManager.show(message: message, type: .error)
-        viewModel.errorMessage = nil
-        dismiss()
-      }
     }
     .frame(width: 1200)
   }
