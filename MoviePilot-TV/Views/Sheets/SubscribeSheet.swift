@@ -276,7 +276,7 @@ struct SubscribeSheet: View {
                   }
                 } else {
                   SheetActionButton(
-                    title: saveButtonTitle,
+                    title: viewModel.isNewSubscription ? "确定" : "保存",
                     loadingTitle: viewModel.isNewSubscription ? "确定中" : "保存中",
                     isLoading: viewModel.isSaving,
                     isDisabled: viewModel.loadErrorMessage != nil,
@@ -345,16 +345,6 @@ struct SubscribeSheet: View {
         label: { $0.name }
       )
     }
-  }
-
-  private var saveButtonTitle: String {
-    if viewModel.loadErrorMessage != nil {
-      return viewModel.isNewSubscription ? "暂时无法继续" : "暂时无法保存"
-    }
-    if viewModel.errorMessage != nil {
-      return viewModel.isNewSubscription ? "确定失败，重试" : "保存失败，重试"
-    }
-    return viewModel.isNewSubscription ? "确定" : "保存"
   }
 
   /// Site selection button label
