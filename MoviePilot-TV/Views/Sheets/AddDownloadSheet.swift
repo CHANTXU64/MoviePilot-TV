@@ -9,7 +9,6 @@ enum AddDownloadSheetUIPreviewPresentation {
 
 struct AddDownloadSheet: View {
   @Environment(\.dismiss) var dismiss
-  @EnvironmentObject var notificationManager: NotificationManager
   @ObservedObject private var apiService = APIService.shared
   @StateObject private var viewModel: AddDownloadViewModel
 
@@ -60,6 +59,14 @@ struct AddDownloadSheet: View {
 
           ScrollView {
             VStack {
+              if let message = viewModel.loadErrorMessage {
+                SheetFeedbackView(message: message, actionTitle: "重新加载") {
+                  Task {
+                    await viewModel.loadData()
+                  }
+                }
+              }
+
               LabeledContent("标题") {
                 Text(viewModel.torrent.title ?? "未知")
                   .foregroundColor(.secondary)
@@ -145,21 +152,18 @@ struct AddDownloadSheet: View {
                 )
               }
 
-              Button(action: {
+              SheetActionButton(
+                title: viewModel.errorMessage == nil ? "确定" : "添加失败，重试",
+                loadingTitle: "添加中",
+                isLoading: viewModel.isSubmitting,
+                isDisabled: viewModel.loadErrorMessage != nil || !apiService.canAccess(.search),
+                feedbackMessage: viewModel.errorMessage
+              ) {
                 guard apiService.canAccess(.search) else { return }
                 Task {
                   await viewModel.addDownload()
                 }
-              }) {
-                HStack(spacing: 8) {
-                  if viewModel.isSubmitting {
-                    ProgressView()
-                  }
-                  Text(viewModel.isSubmitting ? "添加中" : "确定")
-                }
-                .frame(maxWidth: .infinity)
               }
-              .disabled(viewModel.isLoading || viewModel.isSubmitting || !apiService.canAccess(.search))
 
               Button {
                 dismiss()
@@ -180,26 +184,13 @@ struct AddDownloadSheet: View {
       #if DEBUG
       if let previewErrorMessage {
         await Task.yield()
-        presentError(previewErrorMessage)
+        viewModel.errorMessage = previewErrorMessage
         return
       }
       guard loadsDataOnAppear else { return }
       #endif
       await viewModel.loadData()
     }
-    .onChange(of: viewModel.errorMessage, initial: true) { _, newValue in
-      if let message = newValue {
-        presentError(message)
-      }
-    }
     .frame(width: 1200)
-  }
-
-  private func presentError(_ message: String) {
-    viewModel.errorMessage = nil
-    dismiss()
-    DispatchQueue.main.async {
-      notificationManager.show(message: message, type: .error)
-    }
   }
 }

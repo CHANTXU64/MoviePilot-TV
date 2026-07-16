@@ -9,7 +9,8 @@ class AddDownloadViewModel: ObservableObject {
   @Published var selectedDirectory: String?
   @Published var isLoading = false
   @Published var isSubmitting = false
-  @Published var errorMessage: String? // TODO 
+  @Published var loadErrorMessage: String?
+  @Published var errorMessage: String?
 
   // 高级选项
   @Published var tmdbId: String = ""
@@ -54,6 +55,7 @@ class AddDownloadViewModel: ObservableObject {
   }
 
   func loadData() async {
+    loadErrorMessage = nil
     #if DEBUG
     if UIPreviewMode.isEnabled() { return }
     #endif
@@ -89,7 +91,8 @@ class AddDownloadViewModel: ObservableObject {
 
       // 如果目录为空，则尝试智能选择一个（可选，如果用户手动选择则可能不需要）
     } catch {
-      self.errorMessage = "加载配置失败: \(error.localizedDescription)"
+      Logger.error("Failed to load add-download options: \(error)")
+      loadErrorMessage = "下载设置没有加载完成，请重试。"
     }
   }
 
@@ -101,6 +104,7 @@ class AddDownloadViewModel: ObservableObject {
   }
 
   func addDownload() async {
+    errorMessage = nil
     #if DEBUG
     if UIPreviewMode.isEnabled() {
       onSuccess?()
@@ -136,10 +140,12 @@ class AddDownloadViewModel: ObservableObject {
       if success {
         onSuccess?()
       } else {
-        errorMessage = message ?? "添加下载失败"
+        Logger.error("Add-download request returned false: \(message ?? "no backend message")")
+        errorMessage = "暂时无法添加下载，请稍后重试。"
       }
     } catch {
-      errorMessage = "发生错误: \(error.localizedDescription)"
+      Logger.error("Failed to add download: \(error)")
+      errorMessage = "暂时无法添加下载，请稍后重试。"
     }
   }
 }
