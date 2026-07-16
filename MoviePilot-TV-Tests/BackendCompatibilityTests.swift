@@ -1494,6 +1494,13 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       let subscriptions = try await service.fetchSubscriptions()
       collector.addSubscriptions(subscriptions, surface: "subscriptions list")
 
+      if let account = config.activeAccount, account.token.super_user?.value != true {
+        XCTAssertTrue(
+          subscriptions.allSatisfy { $0.username == account.account.username },
+          "Ordinary account subscription list must be owner-scoped for \(config.activeAccountDiagnostic)."
+        )
+      }
+
       for subscription in subscriptions {
         guard let id = subscription.id else { continue }
         do {

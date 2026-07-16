@@ -16,16 +16,35 @@
 
 ### 字幕搜索与下载
 
-- 来源：MoviePilot Web / Backend `v2.13.6 -> v2.13.14` 新增字幕搜索、字幕结果展示和字幕下载相关能力。
+- 来源：MoviePilot Web / Backend `v2.13.6 -> v2.13.14` 新增字幕搜索、字幕结果展示和字幕下载相关能力；Backend `v2.14.0 -> v2.14.4` 要求字幕下载使用搜索结果返回的签名链接。
 - 当前判断：不是现有 TV 核心兼容必修项；TV 当前没有字幕搜索/下载入口。
 - 可评估方向：
   - 是否在媒体详情页提供字幕搜索入口。
   - 是否在资源搜索结果页增加“字幕”模式或筛选。
   - 是否需要支持字幕下载保存路径选择。
+  - 下载时必须原样保留搜索结果 `enclosure` 中的签名 fragment；后端重启或密钥轮换导致签名失效时，应重新搜索获取链接，不要由客户端自行拼接站点凭据或签名。
   - 字幕下载属于副作用操作，若实现必须加入显式副作用兼容测试开关。
 - 相关上游接口/路径：
   - Backend：`/search/subtitle/title`、`/search/subtitle/title/stream`、`/search/subtitle/media/{mediaid}`、`/download/subtitle`
   - Frontend：`SubtitleCard.vue`、`SubtitleItem.vue`、`AddSubtitleDownloadDialog.vue`
+
+### 后端扩展推荐源
+
+- 来源：MoviePilot Web 推荐页会读取 `/recommend/source`，把后端或插件提供的扩展推荐源与内置来源合并；`v2.14.4` 继续保留并整理了这套加载逻辑。
+- 当前判断：TV 推荐页已有内置分类、货架和分页浏览，但 `RecommendViewModel` 仍使用固定来源列表，不会显示后端扩展推荐源。
+- 可评估方向：
+  - 是否在现有推荐页加载扩展推荐源，并复用当前 `fetchRecommend(path:page:)` 和媒体网格。
+  - 按 `api_path` 去重，接口失败时继续显示内置推荐源。
+  - 评估后端 `type` 到 TV 推荐分类的映射，避免为扩展源新增独立页面或复杂配置界面。
+
+### 后端连接状态与自动重连
+
+- 来源：MoviePilot Web `v2.14.0 -> v2.14.4` 增加 `system/ping` 服务探测、在线/检查中/离线状态、退避重试和手动重试提示。
+- 当前判断：TV 已有服务器信息、登录凭据刷新和请求失败提示，但没有全局后端连接状态或统一重连入口。
+- 可评估方向：
+  - 是否在现有通知层增加非阻塞连接提示，而不是新增独立离线页面。
+  - 区分设备断网、请求超时、后端不可达和登录失效，避免把鉴权失败当成离线。
+  - 使用有限频率的 `system/ping` 与退避重试，并在应用进入后台或退出登录后停止探测。
 
 ### Agent Assistant / Web Agent
 

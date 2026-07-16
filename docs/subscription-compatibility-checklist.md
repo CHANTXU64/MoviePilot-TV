@@ -26,14 +26,14 @@ MoviePilot 后端普通用户权限契约仍不稳定，后续版本可能有较
 
 ## 当前契约
 
-- 同一媒体同一季只有一条订阅。
+- MoviePilot v2.14.2 起，普通用户的订阅按 `username` 隔离；同一用户的同一媒体同一季只有一条订阅。超级用户仍可查看和管理全局订阅，因此快照中可能出现不同用户对同一媒体同一季的多条记录。
 - `episode_group` 是订阅配置，不是订阅身份的一部分。
 - 创建订阅时可以带 `episode_group`。
 - 查询某媒体某季是否已订阅时，只按媒体和季判断，不按 `episode_group` 判断。
 - 取消某媒体某季订阅时，后端媒体删除接口也是媒体和季语义，不按 `episode_group` 删除。
 - TV 分季页展示的已订阅状态必须来自真实订阅记录上的 `episode_group`，不能来自当前 Picker 选择。
-- TV 分季页取消已订阅季时，应优先按订阅 `id` 删除这条唯一订阅。
-- `/subscribe/` 快照是首页订阅列表、详情页订阅状态和分季订阅状态的共享数据源；几十或上百季电视剧不能退回逐季调用 `/subscribe/media/{mediaid}`。
+- TV 分季页取消已订阅季时，应优先按订阅 `id` 删除当前匹配记录。
+- `/subscribe/` 快照是首页订阅列表、详情页订阅状态和分季订阅状态的共享数据源；普通用户由后端过滤为本人订阅，超级用户获得全局订阅，TV 不再重复按用户名过滤。几十或上百季电视剧不能退回逐季调用 `/subscribe/media/{mediaid}`。
 - `POST /subscribe/` 创建订阅时必须保留 `mediaid` fallback；当 `tmdbid`、`doubanid`、`bangumiid` 不足以标识媒体时，后端仍可用 `mediaid` 识别来源。
 - MoviePilot v2.14.0 起，`best_version` 和 `best_version_full` 的空值语义变为“使用后端默认订阅配置”。TV 端未明确选择普通/洗版/全集洗版时必须省略这两个字段，不能用 `0` 代替；显式发送 `0` 才表示普通订阅或关闭洗版。
 - TV 分季页只有在已确认某季完整入库时，才显式发送 `best_version: 1` 和 `best_version_full: 1`，表示全集洗版；未知入库状态或仍有缺失集时应省略洗版字段，让后端应用默认配置。
@@ -113,11 +113,12 @@ MoviePilot Web v2.14.0 起，详情页订阅入口按媒体类型区分：
 - `app/api/endpoints/system.py`
   - `/system/env`、`GET /system/setting/{key}`、`POST /system/setting/{key}` 等端点实际依赖的是 active user 还是 active superuser；以 `Depends(...)` 为准，不能只看 summary 或注释里的“仅管理员”。
 - `app/db/subscribe_oper.py`
-  - `SubscribeOper.async_add` 是否仍用 `tmdbid` / `doubanid` + `season` 查重。
+  - `SubscribeOper.async_add` 是否仍用 `tmdbid` / `doubanid` + `season` 查重，并对普通用户同时限定 `username`。
   - 如果查重条件新增 `episode_group`，说明后端开始支持同一媒体同一季多剧集组订阅，TV 分季状态模型需要重做。
 - `app/db/models/subscribe.py`
   - `Subscribe.episode_group` 字段是否仍存在，类型和含义是否变化。
   - `Subscribe.async_exists` 是否仍不包含 `episode_group`。
+  - 普通用户的存在性查询和媒体查询是否仍限定当前 `username`，超级用户是否仍可查询全局订阅。
   - `Subscribe.async_get_by_tmdbid` 是否仍按 `tmdbid + season` 返回订阅。
   - `Subscribe.async_get_by_tmdbid` 在未传 `season` 时是否仍返回该 TMDB 下全部订阅。
 - `app/schemas/subscribe.py`
@@ -127,7 +128,9 @@ MoviePilot Web v2.14.0 起，详情页订阅入口按媒体类型区分：
   - `best_version` 和 `best_version_full` 是否仍是可空字段；如果后端再次改变空值和 `0` 的语义，TV 新建订阅 payload 必须重新评估。
   - 如果字段改名、嵌套、分页或拆分，需要同步更新 TV 解码和快照缓存。
 - `app/api/endpoints/subscribe.py`
-  - `GET /subscribe/` 是否仍返回当前用户完整订阅列表。
+  - `GET /subscribe/` 是否仍向普通用户返回本人完整订阅列表、向超级用户返回全局订阅列表。
+  - 普通用户的详情、更新、状态、重置、搜索和删除是否仍校验订阅归属；更新 payload 是否仍不能把订阅转移给其他用户。
+  - 无 `username` 的旧订阅是否仍只对超级用户可见。
   - `GET /subscribe/` 返回的订阅快照中，`tmdbid: 0` / `bangumiid: 0` / 空 `doubanid` 是否仍只代表缺失 ID，而不是有效 ID。
   - `POST /subscribe/` 是否仍用 `episode_group` 和 `mediaid` 创建或更新订阅配置。
   - `POST /subscribe/` 是否仍把省略 `best_version` / `best_version_full` 理解为使用后端默认配置，把显式 `0` 理解为普通订阅或关闭洗版。
@@ -284,6 +287,7 @@ xcodebuild test \
 - 媒体详情 payload 里 `tmdb_id: 0` / 空白 `douban_id` / `bangumi_id: 0` 时，仍能 fallback 到 `mediaid_prefix + media_id`。
 - 电视剧详情页和预加载不再因为原始 `tmdb_id == nil` 隐藏或跳过分季订阅入口；剧集组加载仍只在有 TMDB ID 时执行。
 - 订阅编辑保存时保留 `note`、`episode_priority`、`vote`、`filter`、`username`、`current_priority`、`date`，但不回传 `completed_episode`。
+- 普通用户执行真实后端只读巡检时，`/subscribe/` 返回的每条记录都属于当前登录用户名；超级用户仍可读取全局订阅。
 - 首页订阅卡片跳详情时，`Subscribe` 重建出的 `MediaInfo` 仍保留有效 fallback `mediaid`。
 - 取消前如果订阅已被其他设备删除，本机刷新为未订阅，不继续发起错误取消。
 - 首页订阅列表通知刷新、页面回前台刷新、手动搜索订阅后的刷新都能绕过缓存。

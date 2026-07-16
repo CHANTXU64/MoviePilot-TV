@@ -10,7 +10,7 @@ final class SystemVersionInfoTests: XCTestCase {
     XCTAssertEqual(AppVersionInfo.displayAppVersion(shortVersion: ""), "未知")
     XCTAssertEqual(AppVersionInfo.displayAppVersion(shortVersion: "   "), "未知")
     XCTAssertEqual(AppVersionInfo.displayAppVersion(shortVersion: nil), "未知")
-    XCTAssertEqual(AppVersionInfo.compatibleMoviePilotVersion, "v2.13.14")
+    XCTAssertEqual(AppVersionInfo.compatibleMoviePilotVersion, "v2.14.4")
   }
 
   func testMoviePilotVersionComparisonIgnoresPrefixAndReleaseSuffix() {
