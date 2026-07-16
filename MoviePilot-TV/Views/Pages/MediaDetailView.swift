@@ -32,7 +32,7 @@ struct MediaDetailView: View {
   @FocusState private var isHeroFocused: Bool
   @FocusState private var isContentFocused: Bool
   enum ButtonField {
-    case subscribe, search, sites, tmdbJump
+    case subscribe, search, sites, otherInfo
   }
   @FocusState private var focusedButton: ButtonField?
   @State private var lastFocusedButton: ButtonField?
@@ -49,10 +49,17 @@ struct MediaDetailView: View {
     viewModel.detail.douban_id != nil || viewModel.detail.bangumi_id != nil
   }
 
+  private var shouldShowOtherInfo: Bool {
+    Self.shouldShowOtherInfo(
+      canSubscribeMedia: canSubscribeMedia,
+      canSearchResources: canSearchResources
+    )
+  }
+
   private var preferredHeaderFocus: ButtonField? {
-    if canSubscribeMedia && !isSeasonInformationUnavailable { return .subscribe }
+    if canSubscribeMedia { return .subscribe }
     if canSearchResources { return .search }
-    if canJumpToTMDB { return .tmdbJump }
+    if shouldShowOtherInfo { return .otherInfo }
     return nil
   }
 
@@ -94,13 +101,18 @@ struct MediaDetailView: View {
     preloadTask.seasonViewModel?.hasSeasonLoadError == true
   }
 
+  private var isSeasonLoading: Bool {
+    preloadTask.seasonViewModel?.isLoading == true
+  }
+
   private var shouldShowSeasonSubscriptionSection: Bool {
     Self.shouldShowSeasonSubscriptionSection(
       canSubscribeMedia: canSubscribeMedia,
       detail: viewModel.detail,
       isSeasonDataLoaded: preloadTask.isSeasonDataLoaded,
       seasonCount: seasonInfoCount,
-      hasSeasonLoadError: hasSeasonLoadError
+      hasSeasonLoadError: hasSeasonLoadError,
+      isSeasonLoading: isSeasonLoading
     )
   }
 
@@ -110,7 +122,8 @@ struct MediaDetailView: View {
       detail: viewModel.detail,
       isSeasonDataLoaded: preloadTask.isSeasonDataLoaded,
       seasonCount: seasonInfoCount,
-      hasSeasonLoadError: hasSeasonLoadError
+      hasSeasonLoadError: hasSeasonLoadError,
+      isSeasonLoading: isSeasonLoading
     )
   }
 
@@ -239,10 +252,9 @@ struct MediaDetailView: View {
               recommendationsSection
               similarSection
             }
+            .id("contentTop")
             .padding(.top, showContentPage ? 60 : 0)
             .padding(.bottom, 80)
-            .frame(minHeight: UIScreen.main.bounds.height, alignment: .top)
-            .id("contentTop")
             .focused($isContentFocused)
             .animation(.easeInOut(duration: 0.6), value: showContentPage)
             .onChange(of: isHeroFocused) { _, focused in
@@ -258,6 +270,9 @@ struct MediaDetailView: View {
                 }
               }
             }
+
+            Color.clear
+              .frame(height: UIScreen.main.bounds.height)
           }
         }
       }
@@ -498,13 +513,22 @@ struct MediaDetailView: View {
     detail: MediaInfo,
     isSeasonDataLoaded: Bool,
     seasonCount: Int?,
-    hasSeasonLoadError: Bool
+    hasSeasonLoadError: Bool,
+    isSeasonLoading: Bool = false
   ) -> Bool {
     guard canSubscribeMedia && detail.type == "电视剧" && !detail.canDirectlySubscribe else {
       return false
     }
+    if isSeasonLoading { return true }
     if hasSeasonLoadError { return true }
     return !isSeasonDataLoaded || (seasonCount ?? 0) > 0
+  }
+
+  static func shouldShowOtherInfo(
+    canSubscribeMedia: Bool,
+    canSearchResources: Bool
+  ) -> Bool {
+    !canSubscribeMedia && !canSearchResources
   }
 
   static func isSeasonInformationUnavailable(
@@ -512,21 +536,26 @@ struct MediaDetailView: View {
     detail: MediaInfo,
     isSeasonDataLoaded: Bool,
     seasonCount: Int?,
-    hasSeasonLoadError: Bool
+    hasSeasonLoadError: Bool,
+    isSeasonLoading: Bool = false
   ) -> Bool {
     canSubscribeMedia && detail.type == "电视剧" && !detail.canDirectlySubscribe
-      && isSeasonDataLoaded && (seasonCount ?? 0) == 0 && !hasSeasonLoadError
+      && isSeasonDataLoaded && (seasonCount ?? 0) == 0 && !hasSeasonLoadError && !isSeasonLoading
   }
 
   static func headerSubscribeButtonTitle(
     isSubscribed: Bool,
     detail: MediaInfo,
-    isSeasonInformationUnavailable: Bool
+    isSeasonInformationUnavailable: Bool,
+    hasSeasonLoadError: Bool,
+    isSeasonLoading: Bool
   ) -> String {
     if detail.canDirectlySubscribe {
       return isSubscribed ? "已订阅" : "订阅"
     }
-    return isSeasonInformationUnavailable ? "无分季信息" : "分季订阅"
+    if isSeasonLoading { return "分季信息加载中" }
+    if hasSeasonLoadError { return "分季信息加载失败" }
+    return isSeasonInformationUnavailable ? "暂无分季信息" : "分季信息"
   }
 
   private func handleHeaderSubscribe() {
@@ -672,7 +701,6 @@ struct MediaDetailView: View {
                 )
                 .foregroundColor(.primary)
               }
-              .focused($focusedButton, equals: .tmdbJump)
               .disabled(isButtonLoading)
             }
 
@@ -681,25 +709,36 @@ struct MediaDetailView: View {
               Button(action: {
                 if detail.canDirectlySubscribe {
                   handleHeaderSubscribe()
-                } else if detail.type == "电视剧" && !isSeasonInformationUnavailable {
+                } else if detail.type == "电视剧" {
                   isContentFocused = true
                 }
               }) {
-                if viewModel.isUnsubscribing {
-                  ProgressView()
+                if detail.canDirectlySubscribe && viewModel.isUnsubscribing {
+                  HStack(spacing: 8) {
+                    ProgressView()
+                    Text("取消订阅中")
+                  }
+                  .foregroundColor(.primary)
                 } else {
                   let isDirect = detail.canDirectlySubscribe
                   let label = Self.headerSubscribeButtonTitle(
                     isSubscribed: isSubscribed,
                     detail: detail,
-                    isSeasonInformationUnavailable: isSeasonInformationUnavailable
+                    isSeasonInformationUnavailable: isSeasonInformationUnavailable,
+                    hasSeasonLoadError: hasSeasonLoadError,
+                    isSeasonLoading: isSeasonLoading
                   )
                   let icon =
                     isDirect
                     ? (isSubscribed ? "checkmark.circle.fill" : "plus.circle")
                     : (
-                      isSeasonInformationUnavailable
-                        ? "exclamationmark.circle" : "list.bullet.circle"
+                      isSeasonLoading
+                        ? "arrow.triangle.2.circlepath"
+                        : (
+                          hasSeasonLoadError
+                            ? "exclamationmark.circle"
+                            : (isSeasonInformationUnavailable ? "info.circle" : "list.bullet.circle")
+                        )
                     )
 
                   Label(label, systemImage: icon)
@@ -707,8 +746,7 @@ struct MediaDetailView: View {
                 }
               }
               .focused($focusedButton, equals: .subscribe)
-              .disabled(viewModel.isUnsubscribing || isSeasonInformationUnavailable)
-              .opacity(isSeasonInformationUnavailable ? 0.35 : 1)
+              .disabled(detail.canDirectlySubscribe && viewModel.isUnsubscribing)
             }
 
             if canSearchResources {
@@ -741,6 +779,17 @@ struct MediaDetailView: View {
               .controlSize(.small)
               .focused($focusedButton, equals: .sites)
               .transition(.move(edge: .leading).combined(with: .opacity))
+            }
+
+            // 没有订阅和搜索权限时始终提供第二页入口；TMDB 跳转不参与兜底判断。
+            if shouldShowOtherInfo {
+              Button(action: {
+                isContentFocused = true
+              }) {
+                Label("其他信息", systemImage: "info.circle")
+                  .foregroundColor(.primary)
+              }
+              .focused($focusedButton, equals: .otherInfo)
             }
           }
           .animation(.snappy, value: shouldShowSiteFilter)
@@ -902,8 +951,7 @@ struct MediaDetailView: View {
               }
             }
             if viewModel.actorsPaginator.isLoadingMore {
-              ProgressView()
-                .padding(.horizontal)
+              posterCenteredLoadingIndicator(height: 315)
             }
           }
           .padding(.horizontal, 81)
@@ -954,8 +1002,7 @@ struct MediaDetailView: View {
               )
             }
             if viewModel.recommendPaginator.isLoadingMore {
-              ProgressView()
-                .padding(.horizontal)
+              posterCenteredLoadingIndicator(height: 384)
             }
           }
           .padding(.horizontal, 81)
@@ -1018,8 +1065,7 @@ struct MediaDetailView: View {
               )
             }
             if viewModel.similarPaginator.isLoadingMore {
-              ProgressView()
-                .padding(.horizontal)
+              posterCenteredLoadingIndicator(height: 384)
             }
           }
           .padding(.horizontal, 81)
@@ -1046,6 +1092,15 @@ struct MediaDetailView: View {
         .scrollClipDisabled()
         .focusSection()
       }
+    }
+  }
+
+  private func posterCenteredLoadingIndicator(height: CGFloat) -> some View {
+    VStack(spacing: 10) {
+      ProgressView()
+        .frame(width: 100, height: height)
+      Color.clear
+        .frame(width: 100, height: 44)
     }
   }
 }

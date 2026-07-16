@@ -37,6 +37,18 @@ struct SubscribeSheet: View {
 
             ScrollView {
               VStack {
+                if let message = viewModel.loadErrorMessage {
+                  if viewModel.canRetryLoad {
+                    SheetFeedbackView(message: message, actionTitle: "重新加载") {
+                      Task {
+                        await viewModel.loadData()
+                      }
+                    }
+                  } else {
+                    SheetFeedbackView(message: message)
+                  }
+                }
+
                 if viewModel.subscribe.type == "电视剧" {
                   SheetTextField(
                     title: "电视剧总集数",
@@ -253,29 +265,39 @@ struct SubscribeSheet: View {
                     ))
                 }
 
-                Button(action: {
-                  Task {
-                    if await viewModel.save() {
-                      onSave?()
-                      dismiss()
+                if viewModel.isSaved {
+                  SheetActionButton(
+                    title: "关闭",
+                    loadingTitle: "关闭",
+                    isLoading: false,
+                    feedbackMessage: viewModel.errorMessage
+                  ) {
+                    dismiss()
+                  }
+                } else {
+                  SheetActionButton(
+                    title: viewModel.isNewSubscription ? "确定" : "保存",
+                    loadingTitle: viewModel.isNewSubscription ? "确定中" : "保存中",
+                    isLoading: viewModel.isSaving,
+                    isDisabled: viewModel.loadErrorMessage != nil,
+                    feedbackMessage: viewModel.errorMessage
+                  ) {
+                    Task {
+                      if await viewModel.save() {
+                        onSave?()
+                        if viewModel.errorMessage == nil {
+                          dismiss()
+                        }
+                      }
                     }
                   }
-                }) {
-                  HStack(spacing: 8) {
-                    if viewModel.isSaving {
-                      ProgressView()
-                    }
-                    Text(viewModel.isNewSubscription ? "确定" : "保存")
-                  }
-                  .frame(maxWidth: .infinity)
-                }
-                .disabled(viewModel.isSaving)
 
-                Button {
-                  dismiss()
-                } label: {
-                  Text(viewModel.isNewSubscription ? "取消订阅" : "取消修改")
-                    .frame(maxWidth: .infinity)
+                  Button {
+                    dismiss()
+                  } label: {
+                    Text(viewModel.isNewSubscription ? "取消订阅" : "取消修改")
+                      .frame(maxWidth: .infinity)
+                  }
                 }
               }
               .padding(.horizontal, 28)

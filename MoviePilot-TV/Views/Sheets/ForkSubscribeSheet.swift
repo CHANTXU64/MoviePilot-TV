@@ -10,6 +10,7 @@ struct ForkSubscribeSheet: View {
   @Environment(\.dismiss) private var dismiss
   @ObservedObject var subscriptionHandler: SubscriptionHandler
   @State private var isImageFailed = false
+  @State private var isForking = false
 
   var body: some View {
     HStack(alignment: .top, spacing: 60) {
@@ -84,18 +85,24 @@ struct ForkSubscribeSheet: View {
 
         HStack {
           Spacer()
-          Button(action: {
-            // Fork a subscription
+          SheetActionButton(
+            title: "复用订阅",
+            loadingTitle: "复用中",
+            isLoading: isForking,
+            feedbackMessage: subscriptionHandler.forkErrorMessage
+          ) {
             Task {
+              guard !isForking else { return }
+              isForking = true
+              defer { isForking = false }
               let newSubId = await subscriptionHandler.fork(share: share)
               if let newSubId = newSubId {
                 onFork(newSubId)
                 dismiss()
               }
             }
-          }) {
-            Text("复用订阅")
           }
+          .frame(width: 520)
           Spacer()
         }
       }

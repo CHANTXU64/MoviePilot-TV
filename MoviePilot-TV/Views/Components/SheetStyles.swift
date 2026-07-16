@@ -8,6 +8,56 @@ enum SheetStyleFix {
   }
 }
 
+struct SheetFeedbackView: View {
+  let message: String
+  var actionTitle: String?
+  var action: (() -> Void)?
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Label(message, systemImage: "exclamationmark.circle.fill")
+        .font(.callout)
+        .foregroundStyle(.orange)
+        .lineLimit(1)
+        .minimumScaleFactor(0.75)
+
+      if let actionTitle, let action {
+        Button(actionTitle, action: action)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(.horizontal)
+  }
+}
+
+struct SheetActionButton: View {
+  let title: String
+  let loadingTitle: String
+  let isLoading: Bool
+  var isDisabled = false
+  var feedbackMessage: String?
+  let action: () -> Void
+
+  var body: some View {
+    VStack(spacing: 10) {
+      Button(action: action) {
+        HStack(spacing: 8) {
+          if isLoading {
+            ProgressView()
+          }
+          Text(isLoading ? loadingTitle : title)
+        }
+        .frame(maxWidth: .infinity)
+      }
+      .disabled(isLoading || isDisabled)
+
+      if let feedbackMessage {
+        SheetFeedbackView(message: feedbackMessage)
+      }
+    }
+  }
+}
+
 // 复用用户的按钮样式
 struct SheetButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {

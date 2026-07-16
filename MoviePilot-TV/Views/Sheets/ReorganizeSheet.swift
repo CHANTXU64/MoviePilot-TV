@@ -2,7 +2,6 @@ import SwiftUI
 
 struct ReorganizeSheet: View {
   @Environment(\.dismiss) var dismiss
-  @EnvironmentObject var notificationManager: NotificationManager
   let onDone: () -> Void
 
   @StateObject private var viewModel: ReorganizeViewModel
@@ -41,12 +40,6 @@ struct ReorganizeSheet: View {
       .task {
         await viewModel.loadConfig()
       }
-      .onChange(of: viewModel.errorMessage) { _, newValue in
-        if let message = newValue {
-          notificationManager.show(message: message, type: .error)
-          viewModel.errorMessage = nil
-        }
-      }
     }
   }
 
@@ -60,6 +53,14 @@ struct ReorganizeSheet: View {
 
       ScrollView {
         VStack {
+          if let message = viewModel.loadErrorMessage {
+            SheetFeedbackView(message: message, actionTitle: "重新加载") {
+              Task {
+                await viewModel.loadConfig()
+              }
+            }
+          }
+
           basicSettings
           recognitionInfo
           if viewModel.form.type_name == "电视剧" {
@@ -303,23 +304,20 @@ struct ReorganizeSheet: View {
 
   private var actionButtons: some View {
     Group {
-      Button(action: {
+      SheetActionButton(
+        title: "开始整理",
+        loadingTitle: "整理中",
+        isLoading: viewModel.isSubmitting,
+        isDisabled: viewModel.loadErrorMessage != nil,
+        feedbackMessage: viewModel.errorMessage
+      ) {
         Task {
           if await viewModel.submit(background: true) {
             onDone()
             dismiss()
           }
         }
-      }) {
-        HStack(spacing: 8) {
-          if viewModel.isSubmitting {
-            ProgressView()
-          }
-          Text("开始整理")
-        }
-        .frame(maxWidth: .infinity)
       }
-      .disabled(viewModel.isSubmitting)
 
       Button {
         dismiss()

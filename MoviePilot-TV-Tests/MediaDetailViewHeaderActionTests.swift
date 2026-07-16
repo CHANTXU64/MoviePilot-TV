@@ -908,9 +908,11 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       MediaDetailView.headerSubscribeButtonTitle(
         isSubscribed: false,
         detail: detail,
-        isSeasonInformationUnavailable: true
+        isSeasonInformationUnavailable: true,
+        hasSeasonLoadError: false,
+        isSeasonLoading: false
       ),
-      "无分季信息"
+      "暂无分季信息"
     )
   }
 
@@ -940,9 +942,11 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       MediaDetailView.headerSubscribeButtonTitle(
         isSubscribed: false,
         detail: detail,
-        isSeasonInformationUnavailable: false
+        isSeasonInformationUnavailable: false,
+        hasSeasonLoadError: true,
+        isSeasonLoading: false
       ),
-      "分季订阅"
+      "分季信息加载失败"
     )
   }
 
@@ -996,6 +1000,63 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
         isSeasonDataLoaded: true,
         seasonCount: 1,
         hasSeasonLoadError: false
+      )
+    )
+    XCTAssertEqual(
+      MediaDetailView.headerSubscribeButtonTitle(
+        isSubscribed: false,
+        detail: detail,
+        isSeasonInformationUnavailable: false,
+        hasSeasonLoadError: false,
+        isSeasonLoading: true
+      ),
+      "分季信息加载中"
+    )
+  }
+
+  func testOtherInfoOnlyDependsOnSubscribeAndSearchActions() {
+    XCTAssertTrue(
+      MediaDetailView.shouldShowOtherInfo(
+        canSubscribeMedia: false,
+        canSearchResources: false
+      )
+    )
+    XCTAssertFalse(
+      MediaDetailView.shouldShowOtherInfo(
+        canSubscribeMedia: true,
+        canSearchResources: false
+      )
+    )
+    XCTAssertFalse(
+      MediaDetailView.shouldShowOtherInfo(
+        canSubscribeMedia: false,
+        canSearchResources: true
+      )
+    )
+  }
+
+  @MainActor
+  func testSeasonSubscribeSectionStaysVisibleWhileRetryingAfterLoadError() {
+    let detail = MediaInfo(title: "重试分季剧集", type: "电视剧")
+
+    XCTAssertTrue(
+      MediaDetailView.shouldShowSeasonSubscriptionSection(
+        canSubscribeMedia: true,
+        detail: detail,
+        isSeasonDataLoaded: true,
+        seasonCount: 0,
+        hasSeasonLoadError: false,
+        isSeasonLoading: true
+      )
+    )
+    XCTAssertFalse(
+      MediaDetailView.isSeasonInformationUnavailable(
+        canSubscribeMedia: true,
+        detail: detail,
+        isSeasonDataLoaded: true,
+        seasonCount: 0,
+        hasSeasonLoadError: false,
+        isSeasonLoading: true
       )
     )
   }

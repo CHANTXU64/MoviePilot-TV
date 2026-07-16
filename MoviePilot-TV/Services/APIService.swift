@@ -1968,19 +1968,26 @@ class APIService: ObservableObject {
   /// 复用（Fork）一个订阅分享
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/ForkSubscribeDialog.vue (doFork)
   /// - 应用场景: 在"订阅分享"中，点击"复用"按钮，基于分享的配置创建一个新的个人订阅。
-  func forkSubscription(share: SubscribeShare) async throws -> Int? {
+  func forkSubscription(share: SubscribeShare) async throws -> Int {
     let body = try JSONEncoder().encode(share)
     let data = try await makeRequest(endpoint: "/subscribe/fork", method: "POST", body: body)
     struct ForkResponse: Decodable {
       let id: Int?
     }
-    if let response = try? JSONDecoder().decode(ApiResponse<ForkResponse>.self, from: data) {
-      if let id = response.data?.id {
-        await invalidateSubscriptionCaches()
-        return id
-      }
+    let response: ApiResponse<ForkResponse>
+    do {
+      response = try JSONDecoder().decode(ApiResponse<ForkResponse>.self, from: data)
+    } catch {
+      throw APIError.decodingError(error)
     }
-    return nil
+    guard response.success != false else {
+      throw APIError.serverMessage(response.message ?? "复用订阅失败")
+    }
+    guard let id = response.data?.id else {
+      throw APIError.serverMessage("复用订阅响应缺少 ID")
+    }
+    await invalidateSubscriptionCaches()
+    return id
   }
 
   /// 暂停或恢复订阅状态

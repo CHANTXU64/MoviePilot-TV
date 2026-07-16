@@ -7,10 +7,10 @@ class SubscriptionHandler: ObservableObject {
   @Published var tvSubscribeRequest: SubscribeSeasonRequest?
   @Published var forkSheetRequest: SubscribeShare?
 
-  // Alert properties
-  @Published var showAlert = false
-  @Published var alertTitle = ""
-  @Published var alertMessage = ""
+  @Published var notificationMessage = ""
+  @Published var notificationType: NotificationType = .info
+  @Published var notificationSerial = 0
+  @Published private(set) var forkErrorMessage: String?
 
   private let apiService = APIService.shared
 
@@ -28,7 +28,7 @@ class SubscriptionHandler: ObservableObject {
           isSubscribed = try? await apiService.checkSubscription(media: tmdbMedia)
         }
         if isSubscribed == true {
-          self.showAlert(title: item.title ?? "", message: "已订阅，请勿重复操作")
+          self.showNotification(message: "已订阅，请勿重复操作", type: .warning)
         } else {
           // For movies or direct-subscribable TV, show edit sheet
           self.sheetSubscribe = mediaInfoToSubscribeRequest(item)
@@ -41,16 +41,14 @@ class SubscriptionHandler: ObservableObject {
   }
 
   func fork(share: SubscribeShare) async -> Int? {
+    forkErrorMessage = nil
     guard apiService.canAccess(.subscribe) else { return nil }
 
     do {
-      guard let newSubId = try await apiService.forkSubscription(share: share) else {
-        return nil
-      }
-      showAlert(title: share.share_title ?? "", message: "复用订阅成功！")
-      return newSubId
+      return try await apiService.forkSubscription(share: share)
     } catch {
-      showAlert(title: "复用失败", message: error.localizedDescription)
+      Logger.error("Failed to fork subscription: \(error)")
+      forkErrorMessage = "暂时无法复用订阅，请稍后重试。"
       return nil
     }
   }
@@ -62,7 +60,7 @@ class SubscriptionHandler: ObservableObject {
       let subscription = try await apiService.fetchSubscription(id: subId)
       self.sheetSubscribe = subscription
     } catch {
-      showAlert(title: "加载订阅失败", message: error.localizedDescription)
+      showNotification(message: "加载订阅失败: \(error.localizedDescription)", type: .error)
     }
   }
 
@@ -92,9 +90,9 @@ class SubscriptionHandler: ObservableObject {
   }
 
   /// 通用消息提示
-  func showAlert(title: String, message: String) {
-    self.alertTitle = title
-    self.alertMessage = message
-    self.showAlert = true
+  func showNotification(message: String, type: NotificationType) {
+    notificationMessage = message
+    notificationType = type
+    notificationSerial += 1
   }
 }
