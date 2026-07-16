@@ -314,12 +314,15 @@ class SubscribeSeasonViewModel: ObservableObject {
 
     do {
       try await refreshSubscriptionSummaries(forceRefresh: true)
-      guard let summary = seasonSubscriptions[seasonNumber] else {
+      guard seasonSubscriptions[seasonNumber] != nil else {
         showUnsubscribeConfirm = nil
         return
       }
 
-      let success = try await APIService.shared.deleteSubscription(id: summary.id)
+      let success = try await APIService.shared.deleteSubscription(
+        media: mediaInfo,
+        season: seasonNumber
+      )
       if success {
         try await refreshSubscriptionSummaries(forceRefresh: true)
         showUnsubscribeConfirm = nil

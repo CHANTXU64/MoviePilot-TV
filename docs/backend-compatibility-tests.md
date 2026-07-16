@@ -40,6 +40,8 @@ GitHub CI 没有真实后端账号，`ci.yml` 会显式跳过 `BackendCompatibil
 
 `.env.compatibility` 只用于真实 MoviePilot 后端的只读兼容性检查。已配置时，测试会登录后端并按 TV 端真实页面入口巡检：系统配置、仪表盘、站点/下载器/目录配置、订阅读取、媒体服务器最近添加、下载中任务、推荐货架、发现页、搜索、详情页、演员/人物和分季数据。未配置时，这组测试会自动跳过。
 
+使用普通账号巡检订阅时，测试还会断言 `/subscribe/` 返回记录的 `username` 都属于当前账号，以覆盖 MoviePilot v2.14.2 起的订阅所有权隔离；超级用户仍按后端契约读取全局订阅。
+
 只读套件会把权限敏感接口拆成独立用例，避免一个管理员账号全通过后掩盖普通账号失败：
 
 - `testReadOnlySystemEnvCompatibility` 单独验证 `/system/env`；MoviePilot v2.13.14 起该接口只由超管账号巡检。
