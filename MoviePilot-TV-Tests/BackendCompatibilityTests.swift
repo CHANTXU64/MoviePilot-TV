@@ -2600,11 +2600,11 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
 private enum SubscriptionStateRestoreResult: Equatable, Sendable {
   case restored(Bool)
   case failed(String)
-  case timedOut
+  case deadlineExceeded
 }
 
 private func restoreSubscriptionState(
-  timeoutNanoseconds: UInt64 = 15 * 1_000_000_000,
+  deadlineNanoseconds: UInt64 = 15 * 1_000_000_000,
   operation: @escaping @MainActor @Sendable () async throws -> Bool
 ) async -> SubscriptionStateRestoreResult {
   await Task.detached {
@@ -2618,8 +2618,8 @@ private func restoreSubscriptionState(
       }
 
       group.addTask {
-        try? await Task.sleep(nanoseconds: timeoutNanoseconds)
-        return .timedOut
+        try? await Task.sleep(nanoseconds: deadlineNanoseconds)
+        return .deadlineExceeded
       }
 
       let result = await group.next()
@@ -2647,7 +2647,7 @@ final class BackendCompatibilityCleanupTests: XCTestCase {
   func testSubscriptionStateRestoreDoesNotInheritCallerCancellation() async {
     let cleanupTask = Task {
       try? await Task.sleep(nanoseconds: 1_000_000)
-      return await restoreSubscriptionState(timeoutNanoseconds: 1_000_000_000) {
+      return await restoreSubscriptionState(deadlineNanoseconds: 1_000_000_000) {
         try Task.checkCancellation()
         return true
       }
@@ -2659,11 +2659,11 @@ final class BackendCompatibilityCleanupTests: XCTestCase {
   }
 
   @MainActor
-  func testSubscriptionStateRestoreWaitsForTimedOutOperationToFinish() async {
+  func testSubscriptionStateRestoreWaitsForOperationAfterDeadlineExceeded() async {
     let start = ContinuousClock.now
     var didFinishRestore = false
 
-    let result = await restoreSubscriptionState(timeoutNanoseconds: 20_000_000) {
+    let result = await restoreSubscriptionState(deadlineNanoseconds: 20_000_000) {
       await withCheckedContinuation { continuation in
         _ = Task.detached {
           try? await Task.sleep(nanoseconds: 300_000_000)
@@ -2674,7 +2674,7 @@ final class BackendCompatibilityCleanupTests: XCTestCase {
       return true
     }
 
-    XCTAssertEqual(result, .timedOut)
+    XCTAssertEqual(result, .deadlineExceeded)
     XCTAssertTrue(didFinishRestore)
     XCTAssertGreaterThanOrEqual(start.duration(to: .now), .milliseconds(250))
   }
@@ -3076,9 +3076,9 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
       XCTFail(
         "Failed to restore subscription \(target.id) to original state \(target.originalState): \(diagnostic)"
       )
-    case .timedOut:
+    case .deadlineExceeded:
       XCTFail(
-        "Timed out restoring subscription \(target.id) to original state \(target.originalState)."
+        "Restoring subscription \(target.id) to original state \(target.originalState) exceeded the 15-second cleanup deadline; cleanup finished before the suite continued."
       )
     }
   }

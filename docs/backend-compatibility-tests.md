@@ -103,6 +103,8 @@ xcodebuild test \
 
 `MOVIEPILOT_COMPAT_SIDE_EFFECT_SUBSCRIPTION_LIMIT` 控制订阅测试取几条现有订阅，默认 `3`。`MOVIEPILOT_COMPAT_REORGANIZE_HISTORY_LIMIT` 控制整理测试取几条最近历史，默认 `2`。`MOVIEPILOT_COMPAT_REORGANIZE_CONCURRENT_COUNT` 控制手动重新整理的并发数量，默认 `2`。
 
+订阅状态恢复使用 15 秒清理时限：超过时限后会请求取消，待恢复操作真正结束后报告超期，避免未完成清理与后续副作用步骤或账号切换并发修改状态；这不是强制终止请求的硬超时。
+
 ## 新增测试的副作用规则
 
 新增或修改真实后端兼容测试前，必须先判断它是否会改变真实后端状态或触发后台任务。只读套件只能读取、搜索并解码数据，不能调用订阅搜索、订阅 reset、订阅 update/delete、暂停/恢复、添加/删除下载、手动整理、AI 整理等接口。
