@@ -2203,6 +2203,9 @@ class APIService: ObservableObject {
       do {
         subscriptions = try await fetch.task.value
       } catch is CancellationError {
+        let isCurrent =
+          subscriptionSnapshotFetchGeneration == generation
+          && subscriptionSnapshotFetchTaskRevision == fetch.revision
         clearSubscriptionSnapshotFetchTaskIfCurrent(
           generation: generation,
           revision: fetch.revision
@@ -2212,12 +2215,15 @@ class APIService: ObservableObject {
           canReadCache = true
           continue
         }
-        guard fetch.revision == subscriptionSnapshotFetchTaskRevision else {
+        guard isCurrent else {
           canReadCache = true
           continue
         }
         throw CancellationError()
       } catch {
+        let isCurrent =
+          subscriptionSnapshotFetchGeneration == generation
+          && subscriptionSnapshotFetchTaskRevision == fetch.revision
         clearSubscriptionSnapshotFetchTaskIfCurrent(
           generation: generation,
           revision: fetch.revision
@@ -2226,7 +2232,7 @@ class APIService: ObservableObject {
           canReadCache = true
           continue
         }
-        guard fetch.revision == subscriptionSnapshotFetchTaskRevision else {
+        guard isCurrent else {
           canReadCache = true
           continue
         }

@@ -435,6 +435,43 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
+  func testDetailReadyHandlerKeepsRetryPendingWhenSubscriptionRefreshFails() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    let tmdbId = 776_657
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    await DetailHeaderSubscriptionURLProtocol.stub.failLookup(tmdbId: tmdbId)
+    service.baseURL = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
+
+    let fullDetail = MediaInfo(tmdb_id: tmdbId, title: "订阅查询失败", type: "电影")
+    let preloadTask = MediaPreloadTask(partialMedia: fullDetail)
+    preloadTask.fullDetail = fullDetail
+    preloadTask.isSubscribed = true
+
+    let viewModel = MediaDetailViewModel(detail: MediaInfo(title: "占位详情", type: "电影"))
+    viewModel.preloadTask = preloadTask
+
+    let didRefreshSubscription = await MediaDetailView.applyReadyPreloadedDetail(
+      from: preloadTask,
+      to: viewModel,
+      hasRefreshedSubscription: false
+    )
+
+    let lookupCount = await DetailHeaderSubscriptionURLProtocol.stub.lookupRequestCount(
+      tmdbId: tmdbId
+    )
+    XCTAssertFalse(didRefreshSubscription)
+    XCTAssertEqual(preloadTask.isSubscribed, true)
+    XCTAssertEqual(lookupCount, 1)
+  }
+
+  @MainActor
   func testSubscriptionUpdateRefreshesPinnedPreloadTaskWithoutRefreshingPosterWallCache()
     async throws
   {
@@ -1203,6 +1240,7 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
   private var resolvedSubscriptionsByTMDBID: [Int: Int?] = [:]
   private var queuedStatusesByTMDBID: [Int: [DetailHeaderSubscriptionQueuedStatus]] = [:]
   private var lookupCountsByTMDBID: [Int: Int] = [:]
+  private var failedLookupTMDBIDs: Set<Int> = []
   private var minimalPayloadTMDBIDs: Set<Int> = []
   private var customLookupPayloadsByTMDBID: [Int: String] = [:]
   private var deletedIDs: [Int] = []
@@ -1216,6 +1254,7 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
     ]
     queuedStatusesByTMDBID.removeAll()
     lookupCountsByTMDBID.removeAll()
+    failedLookupTMDBIDs.removeAll()
     minimalPayloadTMDBIDs.removeAll()
     customLookupPayloadsByTMDBID.removeAll()
     deletedIDs.removeAll()
@@ -1230,6 +1269,10 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
 
   func setResolvedSubscription(tmdbId: Int, id: Int?) {
     resolvedSubscriptionsByTMDBID[tmdbId] = id
+  }
+
+  func failLookup(tmdbId: Int) {
+    failedLookupTMDBIDs.insert(tmdbId)
   }
 
   func setCustomLookupPayload(tmdbId: Int, json: String) {
@@ -1302,6 +1345,9 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
       let tmdbId = path.split(separator: ":").last.flatMap { Int($0) }
       if let tmdbId {
         lookupCountsByTMDBID[tmdbId, default: 0] += 1
+        if failedLookupTMDBIDs.contains(tmdbId) {
+          throw URLError(.notConnectedToInternet)
+        }
         if let customPayload = customLookupPayloadsByTMDBID[tmdbId] {
           return try jsonResponse(customPayload)
         }

@@ -2597,7 +2597,44 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   }
 }
 
-private struct SubscriptionSideEffectTarget: Equatable {
+private enum SubscriptionStateRestoreResult: Equatable, Sendable {
+  case restored(Bool)
+  case failed(String)
+  case timedOut
+}
+
+private func restoreSubscriptionState(
+  timeoutNanoseconds: UInt64 = 15 * 1_000_000_000,
+  operation: @escaping @MainActor @Sendable () async throws -> Bool
+) async -> SubscriptionStateRestoreResult {
+  await Task.detached {
+    let (stream, continuation) = AsyncStream<SubscriptionStateRestoreResult>.makeStream()
+    let restoreTask = Task.detached {
+      do {
+        continuation.yield(.restored(try await operation()))
+      } catch {
+        continuation.yield(.failed(String(describing: error)))
+      }
+    }
+    let timeoutTask = Task.detached {
+      do {
+        try await Task.sleep(nanoseconds: timeoutNanoseconds)
+        continuation.yield(.timedOut)
+      } catch {
+        // The restore completed first.
+      }
+    }
+
+    var iterator = stream.makeAsyncIterator()
+    let result = await iterator.next()
+    restoreTask.cancel()
+    timeoutTask.cancel()
+    continuation.finish()
+    return result ?? .failed("Subscription state restore produced no result.")
+  }.value
+}
+
+private struct SubscriptionSideEffectTarget: Equatable, Sendable {
   let id: Int
   let originalState: String
 
@@ -2607,6 +2644,41 @@ private struct SubscriptionSideEffectTarget: Equatable {
 
   var isToggleable: Bool {
     originalState == "R" || originalState == "S"
+  }
+}
+
+final class BackendCompatibilityCleanupTests: XCTestCase {
+  @MainActor
+  func testSubscriptionStateRestoreDoesNotInheritCallerCancellation() async {
+    let cleanupTask = Task {
+      try? await Task.sleep(nanoseconds: 1_000_000)
+      return await restoreSubscriptionState(timeoutNanoseconds: 1_000_000_000) {
+        try Task.checkCancellation()
+        return true
+      }
+    }
+    cleanupTask.cancel()
+
+    let result = await cleanupTask.value
+    XCTAssertEqual(result, .restored(true))
+  }
+
+  @MainActor
+  func testSubscriptionStateRestoreReturnsAtTimeoutWhenOperationIgnoresCancellation() async {
+    let start = ContinuousClock.now
+
+    let result = await restoreSubscriptionState(timeoutNanoseconds: 20_000_000) {
+      await withCheckedContinuation { continuation in
+        _ = Task.detached {
+          try? await Task.sleep(nanoseconds: 300_000_000)
+          continuation.resume()
+        }
+      }
+      return true
+    }
+
+    XCTAssertEqual(result, .timedOut)
+    XCTAssertLessThan(start.duration(to: .now), .milliseconds(150))
   }
 }
 
@@ -2989,18 +3061,26 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
       XCTFail("Failed to \(operationDescription): \(error)")
     }
 
-    do {
-      let restored = try await service.updateSubscriptionStatus(
+    let restoreResult = await restoreSubscriptionState {
+      try await service.updateSubscriptionStatus(
         id: target.id,
         state: target.originalState
       )
-      XCTAssertTrue(
-        restored,
+    }
+    switch restoreResult {
+    case .restored(true):
+      break
+    case .restored(false):
+      XCTFail(
         "Subscription \(target.id) state restore to \(target.originalState) was rejected."
       )
-    } catch {
+    case .failed(let diagnostic):
       XCTFail(
-        "Failed to restore subscription \(target.id) to original state \(target.originalState): \(error)"
+        "Failed to restore subscription \(target.id) to original state \(target.originalState): \(diagnostic)"
+      )
+    case .timedOut:
+      XCTFail(
+        "Timed out restoring subscription \(target.id) to original state \(target.originalState)."
       )
     }
   }
