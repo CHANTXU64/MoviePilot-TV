@@ -20,6 +20,7 @@ class ResourceResultViewModel: ObservableObject {
   @Published var searchProgress: Double = 0.0
 
   private var searchStreamTask: Task<Void, Never>?
+  private var searchGeneration = 0
   private let searchStreamDoneCloseDelay: UInt64 = 1_500_000_000
 
   private let apiService = APIService.shared
@@ -42,6 +43,7 @@ class ResourceResultViewModel: ObservableObject {
   }
 
   func cancelSearch() {
+    searchGeneration += 1
     searchStreamTask?.cancel()
     searchStreamTask = nil
     hasSearched = false
@@ -50,6 +52,7 @@ class ResourceResultViewModel: ObservableObject {
 
   func cancelInFlightSearch() {
     let wasInFlight = isLoading
+    searchGeneration += 1
     searchStreamTask?.cancel()
     searchStreamTask = nil
     isLoading = false
@@ -63,6 +66,8 @@ class ResourceResultViewModel: ObservableObject {
     guard !hasSearched else { return }
     hasSearched = true
     isLoading = true
+    searchGeneration += 1
+    let currentSearchGeneration = searchGeneration
 
     // 取消可能正在进行的流式搜索
     searchStreamTask?.cancel()
@@ -82,9 +87,17 @@ class ResourceResultViewModel: ObservableObject {
 
     searchStreamTask = Task { @MainActor [weak self] in
       var accumulatedResults: [Context] = []
+      defer {
+        self?.finishSearchIfCurrent(
+          generation: currentSearchGeneration,
+          sessionSnapshot: sessionSnapshot
+        )
+      }
 
-      let canContinue: @MainActor () -> Bool = {
-        apiService.isSessionUnchanged(from: sessionSnapshot)
+      let canContinue: @MainActor () -> Bool = { [weak self] in
+        guard let self else { return false }
+        return self.searchGeneration == currentSearchGeneration
+          && apiService.isSessionUnchanged(from: sessionSnapshot)
           && apiService.canAccess(.search)
           && !Task.isCancelled
       }
@@ -190,7 +203,6 @@ class ResourceResultViewModel: ObservableObject {
           guard canContinue() else { return }
 
           self.results = filteredResults
-          self.isLoading = false
         }
       } catch {
         print("Search Stream error: \(error)")
@@ -216,10 +228,23 @@ class ResourceResultViewModel: ObservableObject {
             print("Search fallback error: \(error)")
           }
           guard canContinue() else { return }
-
-          self?.isLoading = false
         }
       }
+    }
+  }
+
+  private func finishSearchIfCurrent(
+    generation: Int,
+    sessionSnapshot: APIServiceSessionSnapshot
+  ) {
+    guard searchGeneration == generation else { return }
+    isLoading = false
+    searchStreamTask = nil
+    if Task.isCancelled
+      || !apiService.isSessionUnchanged(from: sessionSnapshot)
+      || !apiService.canAccess(.search)
+    {
+      hasSearched = false
     }
   }
 

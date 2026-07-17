@@ -130,6 +130,78 @@ final class SearchViewModelTests: XCTestCase {
     )
   }
 
+  func testUnifiedSearchSessionChangeEndsLoading() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SearchViewModelURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    let gate = SearchAsyncGate()
+    await SearchViewModelURLProtocol.stub.setGate(gate, forQuery: "session-change")
+    service.baseURL = "http://search-tests.local"
+    configureSearchPermissionSession(service)
+
+    let viewModel = SearchViewModel()
+    viewModel.searchType = .unified
+    viewModel.query = "session-change"
+
+    let searchTask = Task { @MainActor in
+      await viewModel.autoSearch()
+    }
+    defer { searchTask.cancel() }
+
+    try await withTimeout("unified search request to start") {
+      await SearchViewModelURLProtocol.stub.waitForRequest(query: "session-change")
+    }
+
+    configureChangedSearchPermissionSession(service)
+    await gate.open()
+    try await withTimeout("unified search to stop after session change") {
+      await searchTask.value
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertFalse(viewModel.hasSearched)
+  }
+
+  func testResourceSearchSessionChangeEndsLoading() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SearchViewModelURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    let gate = SearchAsyncGate()
+    await SearchViewModelURLProtocol.stub.setGate(gate, forQuery: "resource-session-change")
+    service.baseURL = "http://search-tests.local"
+    configureSearchPermissionSession(service)
+
+    let viewModel = SearchViewModel()
+    viewModel.searchType = .resource
+    viewModel.query = "resource-session-change"
+    await viewModel.autoSearch()
+
+    try await withTimeout("resource search request to start") {
+      await SearchViewModelURLProtocol.stub.waitForRequest(
+        path: "/api/v1/search/title/stream", query: "resource-session-change")
+    }
+
+    configureChangedSearchPermissionSession(service)
+    await gate.open()
+
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try await Task.sleep(nanoseconds: 10_000_000)
+    }
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertFalse(viewModel.hasSearched)
+  }
+
   func testCancelledResourceSearchFilteringDoesNotPublishOldResultsOrClearNewLoading()
     async throws
   {
@@ -476,6 +548,24 @@ private func configureSearchPermissionSession(_ service: APIService) {
       "admin": false,
     ],
     user_name: "search-user",
+    avatar: nil
+  )
+}
+
+@MainActor
+private func configureChangedSearchPermissionSession(_ service: APIService) {
+  service.currentUser = Token(
+    access_token: service.token ?? "search-permission-token",
+    token_type: "bearer",
+    super_user: FlexibleBool(false),
+    permissions: [
+      "discovery": false,
+      "search": true,
+      "subscribe": false,
+      "manage": false,
+      "admin": false,
+    ],
+    user_name: "changed-search-user",
     avatar: nil
   )
 }

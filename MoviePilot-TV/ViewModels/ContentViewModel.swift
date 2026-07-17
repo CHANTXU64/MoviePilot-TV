@@ -29,6 +29,7 @@ class ContentViewModel: ObservableObject {
     // 初始状态
     isLoggedIn = apiService.isLoggedIn
     currentUser = apiService.currentUser
+    updateAccountPermissionWarning(for: currentUser)
 
     // 监听令牌变化 -> 在登录或令牌更新时触发设置获取
     apiService.$token
@@ -114,7 +115,14 @@ class ContentViewModel: ObservableObject {
 
     if apiService.isLoggedIn {
       isPreparingStartupSession = true
-      _ = await apiService.refreshStoredSessionAfterAppUpdateIfNeeded()
+      let hadRestoredCurrentUser = apiService.currentUser != nil
+      let refreshResult = await apiService.refreshStoredSessionAfterAppUpdateIfNeeded()
+      if refreshResult != .refreshed,
+        apiService.isLoggedIn,
+        hadRestoredCurrentUser || apiService.currentUser == nil
+      {
+        await apiService.refreshCurrentUserForStartup()
+      }
       isPreparingStartupSession = false
       isLoggedIn = apiService.isLoggedIn
     }
