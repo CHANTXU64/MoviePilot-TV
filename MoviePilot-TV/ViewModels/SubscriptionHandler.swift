@@ -41,7 +41,11 @@ class SubscriptionHandler: ObservableObject {
       }
     } else {
       // 多季电视剧：导航到 SubscribeSeasonView
-      self.tvSubscribeRequest = SubscribeSeasonRequest(mediaInfo: item, initialSeason: nil)
+      self.tvSubscribeRequest = SubscribeSeasonRequest(
+        mediaInfo: item,
+        initialSeason: nil,
+        initialEpisodeGroup: nil
+      )
     }
   }
 

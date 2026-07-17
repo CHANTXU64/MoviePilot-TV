@@ -99,9 +99,14 @@ class SubscribeSeasonViewModel: ObservableObject {
   private let initialSeason: Int?
   private var hasLoaded = false
 
-  init(mediaInfo: MediaInfo, initialSeason: Int? = nil) {
+  init(
+    mediaInfo: MediaInfo,
+    initialSeason: Int? = nil,
+    initialEpisodeGroup: String? = nil
+  ) {
     self.mediaInfo = mediaInfo
     self.initialSeason = initialSeason
+    self.selectedGroupId = initialEpisodeGroup ?? ""
   }
 
   func loadData(forceRefreshSubscriptions: Bool = true) async {

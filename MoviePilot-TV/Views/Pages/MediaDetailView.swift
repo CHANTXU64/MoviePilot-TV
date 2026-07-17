@@ -302,18 +302,7 @@ struct MediaDetailView: View {
       }
     }
     .task(id: preloadTask.partialMedia.id) {
-      // 初次查询失败时借用已有循环最多补偿两次；未订阅内容不会进入常驻轮询。
-      var remainingInitialSubscriptionRefreshAttempts = 2
       await Self.runActiveSubscriptionRefreshLoop {
-        if !hasRefreshedSubscriptionAfterFullDetail,
-          preloadTask.fullDetail != nil,
-          remainingInitialSubscriptionRefreshAttempts > 0
-        {
-          remainingInitialSubscriptionRefreshAttempts -= 1
-          hasRefreshedSubscriptionAfterFullDetail = await viewModel.refreshSubscriptionStatus()
-          return
-        }
-
         guard Self.shouldRefreshActiveSubscriptionStatus(
           preloadTask: preloadTask,
           viewModel: viewModel
@@ -863,14 +852,16 @@ struct MediaDetailView: View {
             onSeasonTap: { season in
               let request = SubscribeSeasonRequest(
                 mediaInfo: viewModel.detail,
-                initialSeason: season.season_number
+                initialSeason: season.season_number,
+                initialEpisodeGroup: seasonVM.selectedGroupId
               )
               navigationPath.append(request)
             },
             onMoreTapped: {
               let request = SubscribeSeasonRequest(
                 mediaInfo: viewModel.detail,
-                initialSeason: nil
+                initialSeason: nil,
+                initialEpisodeGroup: seasonVM.selectedGroupId
               )
               navigationPath.append(request)
             }

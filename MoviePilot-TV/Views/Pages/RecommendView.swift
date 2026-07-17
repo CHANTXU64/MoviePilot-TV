@@ -60,7 +60,11 @@ struct RecommendView: View {
         ResourceResultView(request: request)
       }
       .navigationDestination(for: SubscribeSeasonRequest.self) { request in
-        SubscribeSeasonView(mediaInfo: request.mediaInfo, initialSeason: request.initialSeason)
+        SubscribeSeasonView(
+          mediaInfo: request.mediaInfo,
+          initialSeason: request.initialSeason,
+          initialEpisodeGroup: request.initialEpisodeGroup
+        )
       }
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $path)

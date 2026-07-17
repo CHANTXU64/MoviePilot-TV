@@ -503,7 +503,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(subscribeRequestCount, 1)
   }
 
-  func testMultiSeasonDetailRetriesAfterSeasonSubscriptionRefreshFailure() async throws {
+  func testMultiSeasonDetailCanRefreshAfterSeasonSubscriptionFailure() async throws {
     XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
     defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
 
@@ -546,6 +546,15 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     let requestCountAfterSeasonRefreshes =
       await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
     XCTAssertEqual(requestCountAfterSeasonRefreshes, 2)
+  }
+
+  func testInitialEpisodeGroupSeedsSeasonSelection() {
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(tmdb_id: 817_002, title: "剧集组导航", type: "电视剧"),
+      initialEpisodeGroup: "group-a"
+    )
+
+    XCTAssertEqual(viewModel.selectedGroupId, "group-a")
   }
 
   func testFetchSubscriptionsThrowsWhenCancelledAfterCachedSnapshotIsRead() async throws {
