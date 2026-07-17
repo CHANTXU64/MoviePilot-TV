@@ -268,6 +268,67 @@ final class ResourceResultViewModelTests: XCTestCase {
     )
   }
 
+  func testSessionChangeEndsLoadingAndAllowsSearchToRestart() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(ResourceResultViewModelURLProtocol.self))
+    defer { URLProtocol.unregisterClass(ResourceResultViewModelURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await ResourceResultViewModelURLProtocol.stub.reset()
+    service.baseURL = "http://resource-result-tests.local"
+    configureResourceResultSearchSession(service)
+
+    let fallbackGate = ResourceResultAsyncGate()
+    await ResourceResultViewModelURLProtocol.stub.setStreamFailure(forKeyword: "session-change")
+    await ResourceResultViewModelURLProtocol.stub.setFallbackResults(
+      [resourceContextJSON(title: "Stale Result")],
+      forKeyword: "session-change"
+    )
+    await ResourceResultViewModelURLProtocol.stub.setFallbackGate(
+      fallbackGate, forKeyword: "session-change")
+
+    let viewModel = ResourceResultViewModel(keyword: "session-change")
+    defer { viewModel.cancelSearch() }
+    await viewModel.search()
+
+    try await withTimeout("resource search to enter fallback request") {
+      await ResourceResultViewModelURLProtocol.stub.waitForRequest(
+        path: "/api/v1/search/title", keyword: "session-change")
+    }
+
+    service.currentUser = Token(
+      access_token: service.token ?? "resource-result-search-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        "discovery": false,
+        "search": true,
+        "subscribe": false,
+        "manage": false,
+        "admin": false,
+      ],
+      user_name: "changed-resource-user",
+      avatar: nil
+    )
+    await fallbackGate.open()
+
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try await Task.sleep(nanoseconds: 10_000_000)
+    }
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertTrue(viewModel.results.isEmpty)
+
+    await viewModel.search()
+    let didRestart = await completesWithin {
+      await ResourceResultViewModelURLProtocol.stub.waitForRequest(
+        path: "/api/v1/search/title/stream", keyword: "session-change", count: 2)
+    }
+    XCTAssertTrue(didRestart)
+  }
+
   func testCompletedSearchDoesNotRestartAfterInFlightDisappearCancellation() async throws {
     XCTAssertTrue(URLProtocol.registerClass(ResourceResultViewModelURLProtocol.self))
     defer { URLProtocol.unregisterClass(ResourceResultViewModelURLProtocol.self) }
@@ -360,6 +421,7 @@ private actor ResourceResultViewModelURLProtocolStub {
   private var cancelledRequests: [ResourceResultRecordedRequest] = []
   private var streamFailureKeywords: Set<String> = []
   private var fallbackResultsByKeyword: [String: [String]] = [:]
+  private var fallbackGatesByKeyword: [String: ResourceResultAsyncGate] = [:]
   private var customFilterGate: ResourceResultAsyncGate?
 
   func reset() {
@@ -367,6 +429,7 @@ private actor ResourceResultViewModelURLProtocolStub {
     cancelledRequests.removeAll()
     streamFailureKeywords.removeAll()
     fallbackResultsByKeyword.removeAll()
+    fallbackGatesByKeyword.removeAll()
     customFilterGate = nil
   }
 
@@ -376,6 +439,10 @@ private actor ResourceResultViewModelURLProtocolStub {
 
   func setFallbackResults(_ results: [String], forKeyword keyword: String) {
     fallbackResultsByKeyword[keyword] = results
+  }
+
+  func setFallbackGate(_ gate: ResourceResultAsyncGate, forKeyword keyword: String) {
+    fallbackGatesByKeyword[keyword] = gate
   }
 
   func setCustomFilterGate(_ gate: ResourceResultAsyncGate) {
@@ -402,6 +469,9 @@ private actor ResourceResultViewModelURLProtocolStub {
     }
 
     if components.path == "/api/v1/search/title" {
+      if let gate = fallbackGatesByKeyword[keyword] {
+        await gate.wait()
+      }
       return ResourceResultHTTPStubResponse(
         statusCode: 200,
         data: Data("[\((fallbackResultsByKeyword[keyword] ?? []).joined(separator: ","))]".utf8)

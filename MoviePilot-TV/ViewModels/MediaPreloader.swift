@@ -205,7 +205,6 @@ class MediaPreloadTask: ObservableObject {
       self.isSubscribed = subscribed
     } catch {
       print("[MediaPreloadTask] 检查订阅状态失败: \(error)")
-      self.isSubscribed = false
     }
   }
 

@@ -268,6 +268,12 @@ class SearchViewModel: ObservableObject {
       
       searchStreamTask = Task { @MainActor in
         var accumulatedResults: [Context] = []
+        defer {
+          self.finishSearchIfCurrent(
+            generation: currentSearchGeneration,
+            sessionSnapshot: sessionSnapshot
+          )
+        }
         
         do {
           guard canPublishSearchResult(
@@ -322,8 +328,6 @@ class SearchViewModel: ObservableObject {
           else { return }
 
           self.resourceResults = filteredResults
-          self.isLoading = false
-          self.hasSearched = true
         } catch {
           print("Stream Search error: \(error)")
           guard canPublishSearchResult(
@@ -351,14 +355,17 @@ class SearchViewModel: ObservableObject {
           guard canPublishSearchResult(
             generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
           else { return }
-
-          self.isLoading = false
-          self.hasSearched = true
         }
       }
       return
 
     case .unified:
+      defer {
+        finishSearchIfCurrent(
+          generation: currentSearchGeneration,
+          sessionSnapshot: sessionSnapshot
+        )
+      }
       // 聚合搜索：创建代理 Fetcher 和 Paginators
       setupPaginators(query: submittedQuery)
 
@@ -394,11 +401,18 @@ class SearchViewModel: ObservableObject {
         shares: sharePag?.items ?? []
       )
     }
-    guard canPublishSearchResult(
-      generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
-    else { return }
+  }
+
+  private func finishSearchIfCurrent(
+    generation: Int,
+    sessionSnapshot: APIServiceSessionSnapshot
+  ) {
+    guard searchGeneration == generation else { return }
     isLoading = false
-    hasSearched = true
+    searchStreamTask = nil
+    hasSearched = !Task.isCancelled
+      && apiService.isSessionUnchanged(from: sessionSnapshot)
+      && apiService.canAccess(.search)
   }
 
   private func canPublishSearchResult(

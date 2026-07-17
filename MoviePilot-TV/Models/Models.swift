@@ -1993,6 +1993,7 @@ struct GlobalSettings: Codable {
 struct SubscribeSeasonRequest: Hashable, Codable {
   let mediaInfo: MediaInfo
   let initialSeason: Int?
+  let initialEpisodeGroup: String?
 }
 
 // MARK: - Transfer History Models

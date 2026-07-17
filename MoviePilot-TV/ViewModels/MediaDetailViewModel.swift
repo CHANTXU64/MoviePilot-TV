@@ -346,7 +346,7 @@ class MediaDetailViewModel: ObservableObject {
         didRefreshAll = didRefreshAll && didRefresh
       }
     }
-    return resultCount == 0 || didRefreshAll
+    return resultCount > 0 && didRefreshAll
   }
 
   private func deleteResolvedSubscription() async -> Bool {

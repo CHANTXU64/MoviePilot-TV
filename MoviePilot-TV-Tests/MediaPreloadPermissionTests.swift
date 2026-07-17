@@ -109,6 +109,57 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertFalse(paths.contains { $0.hasPrefix("/api/v1/subscribe/media/") })
   }
 
+  func testSubscriptionHandlerDoesNotOpenSheetWhenLookupFails() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    MediaPreloadPermissionURLProtocol.stub.reset()
+    MediaPreloadPermissionURLProtocol.stub.setSubscriptionLookupStatusCode(500)
+    configureStandardSubscriber(service)
+
+    let handler = SubscriptionHandler()
+    handler.handleSubscribe(MediaInfo(tmdb_id: 456, title: "查询失败", type: "电影"))
+
+    try await waitUntil("subscription handler finishes lookup") {
+      handler.sheetSubscribe != nil || handler.notificationSerial > 0
+    }
+    XCTAssertNil(handler.sheetSubscribe)
+    XCTAssertEqual(handler.notificationMessage, "暂时无法确认订阅状态，请稍后重试。")
+  }
+
+  func testMoviePreloadKeepsKnownSubscriptionStateWhenLookupFails() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    MediaPreloadPermissionURLProtocol.stub.reset()
+    MediaPreloadPermissionURLProtocol.stub.setSubscriptionLookupStatusCode(500)
+    configureStandardSubscriber(service)
+
+    let task = MediaPreloadTask(
+      partialMedia: MediaInfo(tmdb_id: 456, title: "查询失败", type: "电影")
+    )
+    task.isSubscribed = true
+    task.start()
+    defer { task.cancel() }
+
+    try await waitUntil("subscription lookup is requested") {
+      MediaPreloadPermissionURLProtocol.stub.requestPaths().contains {
+        $0.hasPrefix("/api/v1/subscribe/media/")
+      }
+    }
+    try await Task.sleep(nanoseconds: 50_000_000)
+
+    XCTAssertEqual(task.isSubscribed, true)
+  }
+
   func testSubscriptionStatusPermissionFailureSurfacesAndDoesNotLogoutOrRetryLogin() async throws {
     XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
     defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }

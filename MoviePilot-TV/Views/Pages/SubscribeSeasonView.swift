@@ -4,10 +4,17 @@ import SwiftUI
 struct SubscribeSeasonView: View {
   @StateObject private var viewModel: SubscribeSeasonViewModel
 
-  init(mediaInfo: MediaInfo, initialSeason: Int? = nil) {
+  init(
+    mediaInfo: MediaInfo,
+    initialSeason: Int? = nil,
+    initialEpisodeGroup: String? = nil
+  ) {
     _viewModel = StateObject(
       wrappedValue: SubscribeSeasonViewModel(
-        mediaInfo: mediaInfo, initialSeason: initialSeason))
+        mediaInfo: mediaInfo,
+        initialSeason: initialSeason,
+        initialEpisodeGroup: initialEpisodeGroup
+      ))
   }
 
   var body: some View {

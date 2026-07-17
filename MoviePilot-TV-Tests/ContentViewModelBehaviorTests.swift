@@ -4,6 +4,101 @@ import XCTest
 
 @MainActor
 final class ContentViewModelBehaviorTests: XCTestCase {
+  func testAccountPermissionWarningUsesPersistedUserOnInitialization() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(ContentViewModelURLProtocol.self))
+    defer { URLProtocol.unregisterClass(ContentViewModelURLProtocol.self) }
+
+    await ContentViewModelURLProtocol.stub.reset()
+    let service = APIService.shared
+    let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
+    var viewModel: ContentViewModel?
+    defer {
+      viewModel = nil
+      snapshot.restore(to: service)
+    }
+
+    service.baseURL = "https://permission-warning.content-view-model-tests.local"
+    service.token = "limited-token"
+    service.currentUser = token(
+      "limited-token",
+      userName: "limited-user",
+      permissions: ["discovery": false, "search": false, "subscribe": false, "manage": true]
+    )
+
+    viewModel = ContentViewModel()
+
+    XCTAssertNotNil(viewModel?.accountPermissionWarning)
+  }
+
+  func testPrepareStartupRefreshesPersistedPermissionsOnSameAppVersion() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(ContentViewModelURLProtocol.self))
+    defer { URLProtocol.unregisterClass(ContentViewModelURLProtocol.self) }
+
+    await ContentViewModelURLProtocol.stub.reset()
+    let service = APIService.shared
+    let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
+    let markerKey = APIService.sessionRefreshAppVersionKey
+    let originalMarker = UserDefaults.standard.string(forKey: markerKey)
+    var viewModel: ContentViewModel?
+    defer {
+      viewModel = nil
+      snapshot.restore(to: service)
+      restoreUserDefaultsString(originalMarker, forKey: markerKey)
+    }
+
+    clearCredential(account: "username")
+    clearCredential(account: "password")
+    UserDefaults.standard.set(AppVersionInfo.currentAppVersion(), forKey: markerKey)
+    service.baseURL = "https://startup-permission.content-view-model-tests.local"
+    service.token = "persisted-token"
+    service.currentUser = token(
+      "persisted-token",
+      userName: "stale-user",
+      permissions: ["discovery": true, "search": false, "subscribe": false, "manage": false]
+    )
+
+    viewModel = ContentViewModel()
+    await viewModel?.prepareStartupIfNeeded()
+
+    XCTAssertEqual(service.currentUser?.user_name, "refreshed-user")
+    XCTAssertFalse(service.canAccess(.discovery))
+    XCTAssertTrue(service.canAccess(.search))
+    let paths = await ContentViewModelURLProtocol.stub.requestPaths()
+    XCTAssertEqual(paths.filter { $0 == "/api/v1/user/current" }.count, 1)
+  }
+
+  func testPrepareStartupLogsOutUnauthorizedTokenOnlySession() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(ContentViewModelURLProtocol.self))
+    defer { URLProtocol.unregisterClass(ContentViewModelURLProtocol.self) }
+
+    await ContentViewModelURLProtocol.stub.reset()
+    await ContentViewModelURLProtocol.stub.setCurrentUserStatusCode(401)
+    let service = APIService.shared
+    let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
+    let markerKey = APIService.sessionRefreshAppVersionKey
+    let originalMarker = UserDefaults.standard.string(forKey: markerKey)
+    var viewModel: ContentViewModel?
+    defer {
+      viewModel = nil
+      snapshot.restore(to: service)
+      restoreUserDefaultsString(originalMarker, forKey: markerKey)
+    }
+
+    clearCredential(account: "username")
+    clearCredential(account: "password")
+    UserDefaults.standard.set(AppVersionInfo.currentAppVersion(), forKey: markerKey)
+    service.baseURL = "https://startup-token-only.content-view-model-tests.local"
+    service.token = "expired-token"
+    service.currentUser = nil
+
+    viewModel = ContentViewModel()
+    await viewModel?.prepareStartupIfNeeded()
+
+    XCTAssertNil(service.token)
+    XCTAssertNil(service.currentUser)
+    XCTAssertFalse(viewModel?.isLoggedIn == true)
+  }
+
   func testAccountPermissionWarningClearsWhenCurrentUserRegainsRecommendedPermissions() async throws {
     XCTAssertTrue(URLProtocol.registerClass(ContentViewModelURLProtocol.self))
     defer { URLProtocol.unregisterClass(ContentViewModelURLProtocol.self) }
@@ -206,9 +301,19 @@ private struct ContentViewModelServiceSnapshot {
 
 private actor ContentViewModelURLProtocolStub {
   private var requests: [URLRequest] = []
+  private var currentUserStatusCode = 200
 
   func reset() {
     requests.removeAll()
+    currentUserStatusCode = 200
+  }
+
+  func setCurrentUserStatusCode(_ statusCode: Int) {
+    currentUserStatusCode = statusCode
+  }
+
+  func requestPaths() -> [String] {
+    requests.compactMap { $0.url?.path }
   }
 
   func response(for request: URLRequest) throws -> (HTTPURLResponse, Data) {
@@ -226,7 +331,11 @@ private actor ContentViewModelURLProtocolStub {
     }
 
     let data: Data
-    if url.path == "/api/v1/system/global" {
+    if url.path == "/api/v1/user/current" {
+      data =
+        #"{"id":1,"name":"refreshed-user","email":null,"is_active":true,"is_superuser":false,"avatar":null,"is_otp":false,"permissions":{"discovery":false,"search":true,"subscribe":false,"manage":false},"settings":{}}"#
+        .data(using: .utf8)!
+    } else if url.path == "/api/v1/system/global" {
       data =
         #"{"success":true,"data":{"TMDB_IMAGE_DOMAIN":"image.tmdb.org","GLOBAL_IMAGE_CACHE":true,"BACKEND_VERSION":"\#(backendVersion)","FRONTEND_VERSION":"v2.13.15"}}"#
         .data(using: .utf8)!
@@ -240,7 +349,7 @@ private actor ContentViewModelURLProtocolStub {
 
     let response = HTTPURLResponse(
       url: url,
-      statusCode: 200,
+      statusCode: url.path == "/api/v1/user/current" ? currentUserStatusCode : 200,
       httpVersion: nil,
       headerFields: ["Content-Type": "application/json"]
     )!

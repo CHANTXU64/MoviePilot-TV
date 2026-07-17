@@ -707,15 +707,26 @@ class APIService: ObservableObject {
     }
   }
 
-  private func recoverCurrentUserFromCurrentUserEndpoint() async -> Bool {
-    guard let accessToken = token, !accessToken.isEmpty else { return false }
+  func refreshCurrentUserForStartup() async {
+    _ = await recoverCurrentUserFromCurrentUserEndpoint(
+      retryOn401: true,
+      logoutOnUnauthorized: true
+    )
+  }
+
+  private func recoverCurrentUserFromCurrentUserEndpoint(
+    retryOn401: Bool = false,
+    logoutOnUnauthorized: Bool = false
+  ) async -> Bool {
+    guard token?.isEmpty == false else { return false }
     do {
       let data = try await makeRequest(
         endpoint: "/user/current",
-        retryOn401: false,
-        logoutOnUnauthorized: false
+        retryOn401: retryOn401,
+        logoutOnUnauthorized: logoutOnUnauthorized
       )
       let user = try JSONDecoder().decode(CurrentUserResponse.self, from: data)
+      guard let accessToken = token, !accessToken.isEmpty else { return false }
       let recoveredUser = user.token(accessToken: accessToken)
       guard recoveredUser.hasLoginAccessibleFeature else {
         logout()
@@ -2203,6 +2214,7 @@ class APIService: ObservableObject {
       do {
         subscriptions = try await fetch.task.value
       } catch is CancellationError {
+        let wasSuperseded = subscriptionSnapshotFetchRevision != fetch.revision
         clearSubscriptionSnapshotFetchTaskIfCurrent(
           generation: generation,
           revision: fetch.revision
@@ -2212,12 +2224,13 @@ class APIService: ObservableObject {
           canReadCache = true
           continue
         }
-        guard fetch.revision == subscriptionSnapshotFetchTaskRevision else {
+        guard !wasSuperseded else {
           canReadCache = true
           continue
         }
         throw CancellationError()
       } catch {
+        let wasSuperseded = subscriptionSnapshotFetchRevision != fetch.revision
         clearSubscriptionSnapshotFetchTaskIfCurrent(
           generation: generation,
           revision: fetch.revision
@@ -2226,7 +2239,7 @@ class APIService: ObservableObject {
           canReadCache = true
           continue
         }
-        guard fetch.revision == subscriptionSnapshotFetchTaskRevision else {
+        guard !wasSuperseded else {
           canReadCache = true
           continue
         }

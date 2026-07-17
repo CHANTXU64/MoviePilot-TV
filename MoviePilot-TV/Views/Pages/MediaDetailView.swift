@@ -356,7 +356,9 @@ struct MediaDetailView: View {
       {
         viewModel.isFirstRowReady = true
         Task { @MainActor in
-          await viewModel.refreshSubscriptionStatus()
+          let didRefresh = await viewModel.refreshSubscriptionStatus()
+          hasRefreshedSubscriptionAfterFullDetail =
+            didRefresh || hasRefreshedSubscriptionAfterFullDetail
         }
       }
     }
@@ -417,8 +419,7 @@ struct MediaDetailView: View {
       return true
     }
 
-    await viewModel.refreshSubscriptionStatus()
-    return true
+    return await viewModel.refreshSubscriptionStatus()
   }
 
   static let activeSubscriptionRefreshIntervalNanoseconds: UInt64 = 60 * 1_000_000_000
@@ -851,14 +852,16 @@ struct MediaDetailView: View {
             onSeasonTap: { season in
               let request = SubscribeSeasonRequest(
                 mediaInfo: viewModel.detail,
-                initialSeason: season.season_number
+                initialSeason: season.season_number,
+                initialEpisodeGroup: seasonVM.selectedGroupId
               )
               navigationPath.append(request)
             },
             onMoreTapped: {
               let request = SubscribeSeasonRequest(
                 mediaInfo: viewModel.detail,
-                initialSeason: nil
+                initialSeason: nil,
+                initialEpisodeGroup: seasonVM.selectedGroupId
               )
               navigationPath.append(request)
             }
