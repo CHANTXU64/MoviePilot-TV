@@ -2084,6 +2084,8 @@ struct SubscribeShare: Codable, Identifiable, Hashable {
   let tmdbid: Int?
   // 豆瓣ID
   let doubanid: String?
+  // Bangumi ID
+  let bangumiid: Int?
   // 季号
   let season: Int?
   // 海报
@@ -2126,7 +2128,8 @@ struct SubscribeShare: Codable, Identifiable, Hashable {
     case raw_id = "id"
     case subscribe_id, share_title, share_comment, share_user, share_uid, name, year, type, keyword,
       tmdbid,
-      doubanid, season, poster, backdrop, vote, description, filter, include, exclude, quality,
+      doubanid, bangumiid, season, poster, backdrop, vote, description, filter, include, exclude,
+      quality,
       resolution, effect, total_episode, date, custom_words, media_category, count,
       episode_group
   }
@@ -2145,6 +2148,7 @@ struct SubscribeShare: Codable, Identifiable, Hashable {
     keyword = try container.decodeIfPresent(String.self, forKey: .keyword)
     tmdbid = try container.decodeIfPresent(Int.self, forKey: .tmdbid)
     doubanid = try container.decodeIfPresent(String.self, forKey: .doubanid)
+    bangumiid = try container.decodeIfPresent(Int.self, forKey: .bangumiid)
     season = try container.decodeIfPresent(Int.self, forKey: .season)
     poster = try container.decodeIfPresent(String.self, forKey: .poster)
     backdrop = try container.decodeIfPresent(String.self, forKey: .backdrop)

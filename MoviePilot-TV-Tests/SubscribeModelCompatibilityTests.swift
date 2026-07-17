@@ -4,6 +4,17 @@ import XCTest
 
 @MainActor
 final class SubscribeModelCompatibilityTests: XCTestCase {
+  func testSubscribeShareRoundTripPreservesBangumiID() throws {
+    let payload = #"{"id":88,"name":"Bangumi 分享","type":"电视剧","bangumiid":12345}"#.data(
+      using: .utf8)!
+
+    let share = try JSONDecoder().decode(SubscribeShare.self, from: payload)
+    let json = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: JSONEncoder().encode(share)) as? [String: Any])
+
+    XCTAssertEqual(json["bangumiid"] as? Int, 12345)
+  }
+
   func testSubscribeRequestOmitsUnsetBestVersionFieldsAndPreservesExplicitZero() throws {
     let unset = SubscribeRequest(
       name: "默认配置订阅",
