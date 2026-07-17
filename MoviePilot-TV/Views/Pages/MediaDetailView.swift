@@ -367,7 +367,9 @@ struct MediaDetailView: View {
       {
         viewModel.isFirstRowReady = true
         Task { @MainActor in
-          await viewModel.refreshSubscriptionStatus()
+          let didRefresh = await viewModel.refreshSubscriptionStatus()
+          hasRefreshedSubscriptionAfterFullDetail =
+            didRefresh || hasRefreshedSubscriptionAfterFullDetail
         }
       }
     }

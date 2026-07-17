@@ -2608,29 +2608,24 @@ private func restoreSubscriptionState(
   operation: @escaping @MainActor @Sendable () async throws -> Bool
 ) async -> SubscriptionStateRestoreResult {
   await Task.detached {
-    let (stream, continuation) = AsyncStream<SubscriptionStateRestoreResult>.makeStream()
-    let restoreTask = Task.detached {
-      do {
-        continuation.yield(.restored(try await operation()))
-      } catch {
-        continuation.yield(.failed(String(describing: error)))
+    await withTaskGroup(of: SubscriptionStateRestoreResult.self) { group in
+      group.addTask {
+        do {
+          return .restored(try await operation())
+        } catch {
+          return .failed(String(describing: error))
+        }
       }
-    }
-    let timeoutTask = Task.detached {
-      do {
-        try await Task.sleep(nanoseconds: timeoutNanoseconds)
-        continuation.yield(.timedOut)
-      } catch {
-        // The restore completed first.
-      }
-    }
 
-    var iterator = stream.makeAsyncIterator()
-    let result = await iterator.next()
-    restoreTask.cancel()
-    timeoutTask.cancel()
-    continuation.finish()
-    return result ?? .failed("Subscription state restore produced no result.")
+      group.addTask {
+        try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+        return .timedOut
+      }
+
+      let result = await group.next()
+      group.cancelAll()
+      return result ?? .failed("Subscription state restore produced no result.")
+    }
   }.value
 }
 
@@ -2664,8 +2659,9 @@ final class BackendCompatibilityCleanupTests: XCTestCase {
   }
 
   @MainActor
-  func testSubscriptionStateRestoreReturnsAtTimeoutWhenOperationIgnoresCancellation() async {
+  func testSubscriptionStateRestoreWaitsForTimedOutOperationToFinish() async {
     let start = ContinuousClock.now
+    var didFinishRestore = false
 
     let result = await restoreSubscriptionState(timeoutNanoseconds: 20_000_000) {
       await withCheckedContinuation { continuation in
@@ -2674,11 +2670,13 @@ final class BackendCompatibilityCleanupTests: XCTestCase {
           continuation.resume()
         }
       }
+      didFinishRestore = true
       return true
     }
 
     XCTAssertEqual(result, .timedOut)
-    XCTAssertLessThan(start.duration(to: .now), .milliseconds(150))
+    XCTAssertTrue(didFinishRestore)
+    XCTAssertGreaterThanOrEqual(start.duration(to: .now), .milliseconds(250))
   }
 }
 
