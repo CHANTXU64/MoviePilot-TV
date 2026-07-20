@@ -487,8 +487,11 @@ struct DetailCardView: View, Equatable {
 
 /// 存储最后一次点击的 MediaCard 海报在屏幕上的 frame，
 /// 供 MediaDetailContainerView 的加载动画作为起始位置使用。
+/// 同时保存本次 TMDB 跳转加载动画需要复用的源海报 URL。
 @MainActor
 enum MediaCardTransition {
   /// 最后一次点击的卡片海报在屏幕坐标系中的 frame（已包含焦点缩放）
   static var sourceFrame: CGRect = .zero
+  /// 仅供本次详情页加载动画使用的源海报
+  static var loadingPosterURL: URL?
 }
