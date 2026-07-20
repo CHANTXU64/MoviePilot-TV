@@ -210,19 +210,22 @@ struct MediaDetailContainerView: View {
 
   @MainActor
   static func tmdbPreloadTarget(
-    for media: MediaInfo,
-    tmdbId: Int?,
+    for sourceMedia: MediaInfo,
+    fullDetail: MediaInfo?,
+    recognizedTmdbId: Int?,
+    didFailToLoadDetail: Bool,
     isEnabled: Bool = SystemViewModel.shouldPreloadTMDBDetails
   ) -> MediaInfo? {
     guard isEnabled,
-      media.tmdb_id == nil,
-      media.douban_id != nil || media.bangumi_id != nil,
-      let tmdbId
+      sourceMedia.tmdb_id == nil,
+      sourceMedia.douban_id != nil || sourceMedia.bangumi_id != nil,
+      let jumpSource = fullDetail ?? (didFailToLoadDetail ? sourceMedia : nil),
+      let tmdbId = recognizedTmdbId ?? fullDetail?.tmdb_id
     else {
       return nil
     }
 
-    return MediaActionHandler.tmdbJumpTarget(for: media, tmdbId: tmdbId)
+    return MediaActionHandler.tmdbJumpTarget(for: jumpSource, tmdbId: tmdbId)
   }
 
   var body: some View {
@@ -277,6 +280,15 @@ private struct MediaDetailContainerContent: View {
       || preloadTask.isDetailFailed
   }
 
+  private var tmdbPreloadTarget: MediaInfo? {
+    MediaDetailContainerView.tmdbPreloadTarget(
+      for: media,
+      fullDetail: preloadTask.fullDetail,
+      recognizedTmdbId: preloadTask.tmdbId,
+      didFailToLoadDetail: preloadTask.isDetailFailed
+    )
+  }
+
   var body: some View {
     // ⚠️ 焦点恢复核心设计：
     // MediaDetailView 无条件渲染（从第一帧就存在），用 partialMedia 初始化。
@@ -321,14 +333,8 @@ private struct MediaDetailContainerContent: View {
         }
       }
     }
-    .task(id: preloadTask.tmdbId) {
-      guard
-        let target = MediaDetailContainerView.tmdbPreloadTarget(
-          for: media,
-          tmdbId: preloadTask.tmdbId
-        )
-      else { return }
-
+    .task(id: tmdbPreloadTarget?.id) {
+      guard let target = tmdbPreloadTarget else { return }
       MediaPreloader.shared.preload(for: target)
     }
   }

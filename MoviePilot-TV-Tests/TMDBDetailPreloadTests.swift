@@ -48,7 +48,7 @@ final class TMDBDetailPreloadTests: XCTestCase {
   }
 
   @MainActor
-  func testTMDBPreloadTargetRequiresSettingSourceAndRecognizedID() {
+  func testTMDBPreloadTargetRequiresSettingSourceAndSettledDetail() {
     let douban = MediaInfo(
       douban_id: "1295644",
       title: "这个杀手不太冷",
@@ -59,32 +59,30 @@ final class TMDBDetailPreloadTests: XCTestCase {
     XCTAssertNil(
       MediaDetailContainerView.tmdbPreloadTarget(
         for: douban,
-        tmdbId: 101,
+        fullDetail: douban,
+        recognizedTmdbId: 101,
+        didFailToLoadDetail: false,
         isEnabled: false
       )
     )
     XCTAssertNil(
       MediaDetailContainerView.tmdbPreloadTarget(
         for: douban,
-        tmdbId: nil,
+        fullDetail: nil,
+        recognizedTmdbId: 101,
+        didFailToLoadDetail: false,
         isEnabled: true
       )
     )
     XCTAssertNil(
       MediaDetailContainerView.tmdbPreloadTarget(
         for: MediaInfo(tmdb_id: 101, title: "TMDB", type: "电影"),
-        tmdbId: 101,
+        fullDetail: MediaInfo(tmdb_id: 101, title: "TMDB", type: "电影"),
+        recognizedTmdbId: 101,
+        didFailToLoadDetail: false,
         isEnabled: true
       )
     )
-
-    let target = MediaDetailContainerView.tmdbPreloadTarget(
-      for: douban,
-      tmdbId: 101,
-      isEnabled: true
-    )
-    XCTAssertEqual(target?.tmdb_id, 101)
-    XCTAssertNil(target?.poster_path)
 
     let bangumi = MediaInfo(
       bangumi_id: 265,
@@ -94,11 +92,45 @@ final class TMDBDetailPreloadTests: XCTestCase {
     )
     let bangumiTarget = MediaDetailContainerView.tmdbPreloadTarget(
       for: bangumi,
-      tmdbId: 890,
+      fullDetail: nil,
+      recognizedTmdbId: 890,
+      didFailToLoadDetail: true,
       isEnabled: true
     )
     XCTAssertEqual(bangumiTarget?.tmdb_id, 890)
     XCTAssertNil(bangumiTarget?.poster_path)
+  }
+
+  @MainActor
+  func testTMDBPreloadUsesFullDetailIDAndMatchesJumpTarget() {
+    let source = MediaInfo(
+      douban_id: "1295644",
+      title: "旧标题",
+      year: "2023"
+    )
+    let fullDetail = MediaInfo(
+      tmdb_id: 101,
+      douban_id: "1295644",
+      title: "完整标题",
+      type: "电视剧",
+      year: "2024",
+      season: 1
+    )
+
+    let preloadTarget = MediaDetailContainerView.tmdbPreloadTarget(
+      for: source,
+      fullDetail: fullDetail,
+      recognizedTmdbId: nil,
+      didFailToLoadDetail: false,
+      isEnabled: true
+    )
+    let jumpTarget = MediaActionHandler.tmdbJumpTarget(for: fullDetail, tmdbId: 101)
+
+    XCTAssertEqual(preloadTarget?.id, jumpTarget.id)
+    XCTAssertEqual(preloadTarget?.title, jumpTarget.title)
+    XCTAssertEqual(preloadTarget?.type, jumpTarget.type)
+    XCTAssertEqual(preloadTarget?.year, jumpTarget.year)
+    XCTAssertEqual(preloadTarget?.season, jumpTarget.season)
   }
 
   func testSystemViewExposesTMDBPreloadToggleAndDescription() throws {
