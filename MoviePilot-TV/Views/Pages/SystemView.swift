@@ -196,6 +196,16 @@ struct SystemView: View {
 
       section("详情页") {
         Toggle(
+          "预加载 TMDB 详情",
+          isOn: Binding(
+            get: { viewModel.preloadTMDBDetails },
+            set: { viewModel.preloadTMDBDetails = $0 }
+          )
+        )
+        .font(.body.weight(.semibold))
+        .focused($focusedItem, equals: .preloadTMDBDetails)
+
+        Toggle(
           "等待背景海报加载",
           isOn: Binding(
             get: { viewModel.waitMediaDetailBackgroundImage },
@@ -592,6 +602,8 @@ struct SystemView: View {
         return "新增订阅后立即开始搜索，无需等待 MoviePilot 稍后自动处理。（只影响 TV 端）"
       case .waitBackgroundImage:
         return "进入媒体详情页前的加载动画会等待背景海报就绪实现平滑过渡，网络较慢时可关闭以更快进入详情页。（只影响 TV 端）"
+      case .preloadTMDBDetails:
+        return "进入豆瓣或 Bangumi 详情页并识别到对应 TMDB 条目后，提前加载其详情，以缩短后续跳转等待时间。（只影响 TV 端）"
       case .siteSelection:
         return "设置资源搜索默认使用的站点。（只影响 TV 端）"
       case .hardFilter:
@@ -685,6 +697,7 @@ private enum SystemSettingsFocus: Hashable {
   case site(Int)
   case appInfo
   case autoSearch
+  case preloadTMDBDetails
   case waitBackgroundImage
   case hardFilter
   case softFilter

@@ -34,12 +34,20 @@ class SystemViewModel: ObservableObject {
   // MARK: - 详情页设置
 
   private static let waitMediaDetailBackgroundImageKey = "waitMediaDetailBackgroundImage"
+  private static let preloadTMDBDetailsKey = "preloadTMDBDetails"
   private static let autoSearchNewSubscriptionsKey = "autoSearchNewSubscriptions"
 
   /// 是否在 MediaDetail 首屏等待背景/海报预加载完成。默认开启。
   @Published var waitMediaDetailBackgroundImage: Bool = true {
     didSet {
       UserDefaults.standard.set(waitMediaDetailBackgroundImage, forKey: Self.waitMediaDetailBackgroundImageKey)
+    }
+  }
+
+  /// 是否在豆瓣/Bangumi 详情识别完成后预加载对应 TMDB 详情。默认开启。
+  @Published var preloadTMDBDetails: Bool = true {
+    didSet {
+      UserDefaults.standard.set(preloadTMDBDetails, forKey: Self.preloadTMDBDetailsKey)
     }
   }
 
@@ -142,6 +150,7 @@ class SystemViewModel: ObservableObject {
 
   init() {
     waitMediaDetailBackgroundImage = Self.shouldWaitMediaDetailBackgroundImage
+    preloadTMDBDetails = Self.shouldPreloadTMDBDetails
     autoSearchNewSubscriptions = Self.shouldAutoSearchNewSubscriptions
     checkKeychainStatus()
   }
@@ -383,6 +392,13 @@ class SystemViewModel: ObservableObject {
       return true
     }
     return UserDefaults.standard.bool(forKey: waitMediaDetailBackgroundImageKey)
+  }
+
+  static var shouldPreloadTMDBDetails: Bool {
+    guard UserDefaults.standard.object(forKey: preloadTMDBDetailsKey) != nil else {
+      return true
+    }
+    return UserDefaults.standard.bool(forKey: preloadTMDBDetailsKey)
   }
 
   static var shouldAutoSearchNewSubscriptions: Bool {

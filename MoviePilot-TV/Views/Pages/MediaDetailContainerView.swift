@@ -125,8 +125,9 @@ private struct MediaLoadingView: View {
       hasAnimated = true
 
       let source = MediaCardTransition.sourceFrame
-      // 清除源 frame，防止预加载命中或后续入口复用脏数据
+      // 清除本次过渡数据，防止预加载命中或后续入口复用脏数据
       MediaCardTransition.sourceFrame = .zero
+      MediaCardTransition.loadingPosterURL = nil
 
       // 数据已预加载完毕，跳过所有动画
       guard !isAlreadyLoaded else {
@@ -207,6 +208,26 @@ struct MediaDetailContainerView: View {
     _preloadTask = State(wrappedValue: MediaPreloader.shared.preload(for: media))
   }
 
+  @MainActor
+  static func tmdbPreloadTarget(
+    for sourceMedia: MediaInfo,
+    fullDetail: MediaInfo?,
+    recognizedTmdbId: Int?,
+    didFailToLoadDetail: Bool,
+    isEnabled: Bool = SystemViewModel.shouldPreloadTMDBDetails
+  ) -> MediaInfo? {
+    guard isEnabled,
+      sourceMedia.tmdb_id == nil,
+      sourceMedia.douban_id != nil || sourceMedia.bangumi_id != nil,
+      let jumpSource = fullDetail ?? (didFailToLoadDetail ? sourceMedia : nil),
+      let tmdbId = recognizedTmdbId ?? fullDetail?.tmdb_id
+    else {
+      return nil
+    }
+
+    return MediaActionHandler.tmdbJumpTarget(for: jumpSource, tmdbId: tmdbId)
+  }
+
   var body: some View {
     // 直接传入 preloadTask（非 Optional，无条件分支）
     MediaDetailContainerContent(
@@ -235,6 +256,8 @@ private struct MediaDetailContainerContent: View {
   @State private var isContentReady = false
   /// 记录首次出现时数据是否已预加载完毕（在 init 中设置，确保第一帧就生效）
   @State private var wasPreloaded: Bool
+  /// 记录进入页面时的加载海报，避免清除全局过渡状态后图片消失
+  @State private var loadingPosterURL: URL?
   /// 最短展示时间是否已过（防止加载太快导致动画闪烁）
   @State private var minTimeElapsed = false
 
@@ -244,6 +267,9 @@ private struct MediaDetailContainerContent: View {
     self.preloadTask = preloadTask
     // 在 init 中判断，确保第一帧 isReady 就正确
     _wasPreloaded = State(initialValue: preloadTask.isDetailReady)
+    _loadingPosterURL = State(
+      initialValue: MediaCardTransition.loadingPosterURL ?? media.imageURLs.poster
+    )
   }
 
   /// 数据是否就绪（加载成功或失败均算就绪，且首行内容已加载）
@@ -252,6 +278,15 @@ private struct MediaDetailContainerContent: View {
     wasPreloaded
       || ((preloadTask.isDetailReady && isContentReady) && minTimeElapsed)
       || preloadTask.isDetailFailed
+  }
+
+  private var tmdbPreloadTarget: MediaInfo? {
+    MediaDetailContainerView.tmdbPreloadTarget(
+      for: media,
+      fullDetail: preloadTask.fullDetail,
+      recognizedTmdbId: preloadTask.tmdbId,
+      didFailToLoadDetail: preloadTask.isDetailFailed
+    )
   }
 
   var body: some View {
@@ -275,7 +310,7 @@ private struct MediaDetailContainerContent: View {
       // Loading 遮罩层 — 始终存在于视图树中，通过 opacity 控制显隐
       MediaLoadingView(
         title: media.cleanedTitle ?? media.title,
-        posterUrl: media.imageURLs.poster,
+        posterUrl: loadingPosterURL,
         type: media.type,
         year: media.year,
         rating: media.vote_average,
@@ -297,6 +332,10 @@ private struct MediaDetailContainerContent: View {
           }
         }
       }
+    }
+    .task(id: tmdbPreloadTarget?.id) {
+      guard let target = tmdbPreloadTarget else { return }
+      MediaPreloader.shared.preload(for: target)
     }
   }
 }

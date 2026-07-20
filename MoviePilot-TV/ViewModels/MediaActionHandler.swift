@@ -46,6 +46,12 @@ class MediaActionHandler: ObservableObject {
       return nil
     }
 
+    // 海报只供本次加载过渡使用，不写入 TMDB 导航用的部分对象。
+    MediaCardTransition.loadingPosterURL = item.imageURLs.poster
+    return Self.tmdbJumpTarget(for: item, tmdbId: tmdbId)
+  }
+
+  static func tmdbJumpTarget(for item: MediaInfo, tmdbId: Int) -> MediaInfo {
     return MediaInfo(
       tmdb_id: tmdbId,
       douban_id: nil,
@@ -66,6 +72,8 @@ class MediaActionHandler: ObservableObject {
       // 此处创建的 MediaInfo 是一个用于导航的“部分对象”。
       // 如果保留旧的 poster/backdrop 路径，新页面在加载完成前会短暂显示旧页面的图像，导致闪烁。
       // 将其设为 nil 可确保新页面在获取到自己的完整详情前不显示任何背景。
+      // 加载动画需要复用源海报时，必须通过 MediaCardTransition.loadingPosterURL 单独传递。
+      // 禁止为复用加载海报而修改这里的 nil，否则会重新引入旧图闪烁。
       poster_path: nil,
       backdrop_path: nil,
       overview: item.overview,
