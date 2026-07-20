@@ -109,6 +109,34 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertFalse(paths.contains { $0.hasPrefix("/api/v1/subscribe/media/") })
   }
 
+  func testFailedTMDBRecognitionFinishesLoadingState() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    MediaPreloadPermissionURLProtocol.stub.reset()
+    configureLimitedUser(service)
+
+    let task = MediaPreloadTask(
+      partialMedia: MediaInfo(
+        bangumi_id: 987,
+        title: "无法识别的 Bangumi 条目",
+        type: "电视剧"
+      )
+    )
+    task.start()
+    defer { task.cancel() }
+
+    try await waitUntil("TMDB recognition finishes") {
+      task.isTmdbRecognitionFinished
+    }
+
+    XCTAssertNil(task.tmdbId)
+  }
+
   func testSubscriptionHandlerDoesNotOpenSheetWhenLookupFails() async throws {
     XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
     defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
