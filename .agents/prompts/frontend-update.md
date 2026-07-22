@@ -45,9 +45,9 @@
 - 更新适配完成后，必须使用真实后端兼容测试作为后端/API 适配校验；具体说明见 `docs/backend-compatibility-tests.md`。如果本地没有 `.env.compatibility` 或用户未提供真实后端配置，必须在最终回复中明确说明未运行真实后端兼容测试，不能把普通构建/单元测试说成已验证真实后端兼容。
 
 ### 1. 确认当前兼容版本
-- 读取当前项目 (`MoviePilot-TV`) 的 `README.md` 文件。
-- 寻找表明当前兼容的 MoviePilot 版本的文本或徽章（通常格式类似 `MoviePilot-vX.Y.Z` 或包含相关版本号说明）。
-- 将提取到的版本号记录为 `<当前兼容版本>`。
+- 读取 `MoviePilot-TV/Models/AppVersionInfo.swift` 中的 `AppVersionInfo.compatibleMoviePilotVersion`，将其记录为 `<当前兼容版本>`。该常量决定 App 的版本过低警告和设置页显示，是运行时兼容基线的单一事实来源。
+- 读取 `README.md` 中的 MoviePilot 版本徽章和兼容性说明，确认它们与 `<当前兼容版本>` 一致；README 只用于展示，不能反向覆盖运行时基线。
+- 检查 `SystemVersionInfoTests` 和 `ContentViewModelBehaviorTests` 是否覆盖同一兼容版本及紧邻的过低版本。常量、README 或测试不一致时，必须先列为 **必须修**，不能继续得出“兼容版本已更新”的结论。
 - 简要查阅 `.agents/ReviewPlan.md`，了解当前 TV 应用的架构现状和待办事项，以便在后续分析中结合上下文。
 - 读取 `docs/subscription-compatibility-checklist.md`，后续只要上游变更涉及订阅管理、媒体 ID、详情页 Header 订阅按钮、分季订阅、`episode_group`、`/subscribe/` 缓存或刷新语义，必须按该文档逐项复核。
 - 读取 `docs/frontend-update-todo.md`，了解此前记录的后续功能候选。若本次上游更新让其中某项变成必须修、已不再适合 TV、或出现新的可评估功能，只能先在报告中提出 TODO 更新建议；未经用户明确同意，不要修改该文件。
@@ -159,7 +159,7 @@
 
 ## 📝 文档更新
 
-- [ ] 必须确认并更新 `README.md` 中所有兼容版本号为 `<后端最新版本>`；如果 README 单独记录配套前端版本，则使用 `<目标前端版本>`。只要本次适配目标版本变化，README 更新就是任务的一部分，不能等用户提醒。
+- [ ] 只要兼容目标版本变化，必须同步更新 `AppVersionInfo.compatibleMoviePilotVersion`、`README.md` 中的版本徽章和兼容性说明、`SystemVersionInfoTests` 的常量断言，以及 `ContentViewModelBehaviorTests` 的兼容/过低版本边界场景；不得只更新 README。若 README 单独记录配套前端版本，则使用 `<目标前端版本>`。
 - [ ] 如果真实后端兼容测试流程、环境变量或覆盖范围发生变化，必须同步更新 `docs/backend-compatibility-tests.md`；不要把测试说明写回 `README.md`。
 - [ ] 如果订阅契约、媒体 ID、`episode_group`、Header 取消、订阅缓存或刷新时机发生变化，必须同步更新 `docs/subscription-compatibility-checklist.md`，并在报告中说明本次是否触发订阅专项风险。
 - [ ] 如果后续功能候选发生变化，必须先向用户说明建议如何更新 `docs/frontend-update-todo.md`；只有得到用户明确同意后，才可以修改该文件。
@@ -182,6 +182,7 @@
   - 哪些前端变化判断为可继续沿用或暂不跟进。
   - 哪些后端变化判断为可继续沿用或暂不跟进。
   - README 是否已同步更新。
+  - `AppVersionInfo.compatibleMoviePilotVersion` 及对应版本边界测试是否已同步更新。
   - `docs/backend-compatibility-tests.md` 是否需要同步更新。
   - `docs/subscription-compatibility-checklist.md` 是否需要同步更新；如果不需要，说明订阅专项契约未变化。
   - `docs/frontend-update-todo.md` 是否有建议更新、是否已获得用户同意、是否实际更新。
