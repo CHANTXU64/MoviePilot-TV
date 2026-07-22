@@ -166,7 +166,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
 
     await viewModel?.prepareStartupIfNeeded()
 
-    XCTAssertEqual(service.settings?.BACKEND_VERSION, "v2.14.4")
+    XCTAssertEqual(service.settings?.BACKEND_VERSION, "v2.14.6")
     XCTAssertNil(viewModel?.backendVersionWarning)
 
     service.baseURL = "https://old.content-view-model-tests.local"
@@ -174,11 +174,11 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     service.currentUser = token("token-b", userName: "second-user")
 
     try await waitUntil("expected backend warning to reload from old backend") {
-      service.settings?.BACKEND_VERSION == "v2.14.3"
-        && viewModel?.backendVersionWarning?.backendVersion == "v2.14.3"
+      service.settings?.BACKEND_VERSION == "v2.14.5"
+        && viewModel?.backendVersionWarning?.backendVersion == "v2.14.5"
     }
 
-    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v2.14.3")
+    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v2.14.5")
     XCTAssertEqual(
       viewModel?.backendVersionWarning?.requiredVersion,
       AppVersionInfo.compatibleMoviePilotVersion
@@ -325,9 +325,9 @@ private actor ContentViewModelURLProtocolStub {
     let backendVersion: String
     switch url.host {
     case "old.content-view-model-tests.local":
-      backendVersion = "v2.14.3"
+      backendVersion = "v2.14.5"
     default:
-      backendVersion = "v2.14.4"
+      backendVersion = "v2.14.6"
     }
 
     let data: Data

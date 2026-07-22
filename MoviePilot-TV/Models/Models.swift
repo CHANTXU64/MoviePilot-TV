@@ -1384,7 +1384,7 @@ struct Subscribe: Codable, Identifiable, Hashable {
   var custom_words: String?
   /// 描述
   var description: String?
-  /// 过滤规则，后端维护字段，保存订阅时需要原样保留。
+  /// 用户可编辑的过滤规则配置；编辑保存时保留或更新。
   var filter: String?
   /// 自定义剧集组
   var episode_group: String?
