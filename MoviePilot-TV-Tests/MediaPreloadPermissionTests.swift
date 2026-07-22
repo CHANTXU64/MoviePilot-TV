@@ -109,6 +109,36 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertFalse(paths.contains { $0.hasPrefix("/api/v1/subscribe/media/") })
   }
 
+  func testFailedTMDBRecognitionFromFallbackSourceFinishesLoadingState() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
+    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    MediaPreloadPermissionURLProtocol.stub.reset()
+    configureLimitedUser(service)
+
+    let task = MediaPreloadTask(
+      partialMedia: MediaInfo(
+        mediaid_prefix: "bangumi",
+        media_id: "987",
+        title: "无法识别的 Bangumi 条目",
+        type: "电视剧"
+      )
+    )
+    task.start()
+    defer { task.cancel() }
+
+    try await waitUntil("TMDB recognition finishes") {
+      task.isTmdbRecognitionFinished && task.isDetailReady
+    }
+
+    XCTAssertNil(task.tmdbId)
+    XCTAssertEqual(task.fullDetail?.bangumi_id, 987)
+  }
+
   func testSubscriptionHandlerDoesNotOpenSheetWhenLookupFails() async throws {
     XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
     defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
@@ -748,6 +778,8 @@ private final class MediaPreloadPermissionURLProtocolStub: @unchecked Sendable {
       return (200, jsonData(#"{"tmdb_id":123,"title":"Limited Show","type":"电视剧"}"#))
     case "/api/v1/media/tmdb:456":
       return (200, jsonData(#"{"tmdb_id":456,"title":"Limited Movie","type":"电影"}"#))
+    case "/api/v1/media/bangumi:987":
+      return (200, jsonData(#"{"bangumi_id":987,"title":"无法识别的 Bangumi 条目","type":"电视剧"}"#))
     case "/api/v1/media/groups/123",
       "/api/v1/media/seasons",
       "/api/v1/subscribe/":

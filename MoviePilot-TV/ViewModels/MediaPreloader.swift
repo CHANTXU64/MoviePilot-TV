@@ -18,6 +18,7 @@ class MediaPreloadTask: ObservableObject {
 
   // 可选预加载数据（持久存在，加载完直接显示）
   @Published var tmdbId: Int?
+  @Published var isTmdbRecognitionFinished = false
   @Published var isSubscribed: Bool?
   @Published var seasonViewModel: SubscribeSeasonViewModel?
   /// 分季数据是否已实际加载完毕（seasonViewModel 创建时 isLoading=true，loadData 完成后才设为 true）
@@ -49,9 +50,10 @@ class MediaPreloadTask: ObservableObject {
       Task {
         // ⑤ TMDB 识别 — 必须先于 checkSubscription 完成，否则 fallback 查询会因 tmdbId 为 nil 而跳过
         // 与 loadDetail 并发启动（两者互不依赖），但都在依赖任务之前完成
+        let sourcePrefix = MediaIdentifier.mediaIdComponents(self.partialMedia.apiMediaId)?.prefix
         async let tmdbRecognition: Void = {
           if self.partialMedia.tmdb_id == nil
-            && (self.partialMedia.douban_id != nil || self.partialMedia.bangumi_id != nil)
+            && (sourcePrefix == "douban" || sourcePrefix == "bangumi")
           {
             await self.recognizeTmdb()
           }
@@ -244,6 +246,7 @@ class MediaPreloadTask: ObservableObject {
   // MARK: - ⑤ TMDB 识别
 
   private func recognizeTmdb() async {
+    defer { isTmdbRecognitionFinished = true }
     let result = await APIService.shared.recognizeTmdbId(
       title: partialMedia.title ?? "",
       year: partialMedia.year,

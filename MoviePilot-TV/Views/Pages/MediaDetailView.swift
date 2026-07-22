@@ -679,7 +679,8 @@ struct MediaDetailView: View {
             // TMDB Jump Button — 复用 MediaActionHandler 逻辑，传入预加载的 tmdbId
             if canJumpToTMDB {
               let targetTmdbId = preloadTask.tmdbId ?? viewModel.detail.tmdb_id
-              let isButtonLoading = targetTmdbId == nil
+              let isButtonLoading =
+                targetTmdbId == nil && !preloadTask.isTmdbRecognitionFinished
 
               Button(action: {
                 Task {
