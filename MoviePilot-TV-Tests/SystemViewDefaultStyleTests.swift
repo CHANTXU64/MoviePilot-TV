@@ -13,6 +13,40 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("_TSK"))
   }
 
+  func testMemoryOptimizationUsesExistingSettingsSubpageStyle() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+
+    XCTAssertTrue(source.contains("push(.memoryOptimization)"))
+    XCTAssertTrue(source.contains("private var memoryOptimizationPage: some View"))
+    XCTAssertFalse(source.contains("Picker(\n          \"内存优化\""))
+  }
+
+  func testMemoryOptimizationOnlyRunsForAppEntryNotTokenUpdates() throws {
+    let source = try Self.source(at: "MoviePilot-TV/ViewModels/ContentViewModel.swift")
+    let tokenPublisher = try XCTUnwrap(source.range(of: "apiService.$token"))
+    let receiveOn = try XCTUnwrap(
+      source.range(of: ".receive(on: RunLoop.main)", range: tokenPublisher.upperBound..<source.endIndex)
+    )
+    let store = try XCTUnwrap(
+      source.range(of: ".store(in: &cancellables)", range: receiveOn.upperBound..<source.endIndex)
+    )
+    let subscription = source[tokenPublisher.lowerBound..<store.upperBound]
+
+    XCTAssertTrue(subscription.contains(".dropFirst()"))
+    XCTAssertFalse(subscription.contains("evaluateMemoryOptimization: true"))
+  }
+
+  func testBackendVersionObserverIgnoresInitialServerReplay() throws {
+    let source = try Self.source(at: "MoviePilot-TV/ViewModels/ContentViewModel.swift")
+    let baseURLPublisher = try XCTUnwrap(source.range(of: "apiService.$baseURL"))
+    let receiveOn = try XCTUnwrap(
+      source.range(of: ".receive(on: RunLoop.main)", range: baseURLPublisher.upperBound..<source.endIndex)
+    )
+    let subscription = source[baseURLPublisher.lowerBound..<receiveOn.upperBound]
+
+    XCTAssertTrue(subscription.contains(".dropFirst()"))
+  }
+
   func testContentViewLabelsSystemTabAsSettings() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/ContentView.swift")
 
