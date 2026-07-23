@@ -19,6 +19,7 @@ struct SystemView: View {
 
   @StateObject private var viewModel = SystemViewModel()
   @ObservedObject private var apiService = APIService.shared
+  @ObservedObject private var memoryOptimizationPolicy = MemoryOptimizationPolicy.shared
   @State private var showAppInfo = false
   @State private var showLogoutConfirmation = false
   @State private var route: [SystemSettingsPage] = []
@@ -144,6 +145,8 @@ struct SystemView: View {
             rootPage
           case .connection:
             connectionPage
+          case .memoryOptimization:
+            memoryOptimizationPage
           case .siteSelection:
             siteSelectionPage
           case .hardFilter:
@@ -214,6 +217,19 @@ struct SystemView: View {
         )
         .font(.body.weight(.semibold))
         .focused($focusedItem, equals: .waitBackgroundImage)
+      }
+
+      section("性能") {
+        Button {
+          push(.memoryOptimization)
+        } label: {
+          row(
+            "内存优化",
+            value: memoryOptimizationTitle(for: memoryOptimizationPolicy.mode),
+            showsDisclosure: true
+          )
+        }
+        .focused($focusedItem, equals: .memoryOptimization)
       }
 
       if canConfigureSearch {
@@ -377,6 +393,22 @@ struct SystemView: View {
     }
   }
 
+  private var memoryOptimizationPage: some View {
+    section(nil) {
+      ForEach(MemoryOptimizationMode.allCases) { mode in
+        Button {
+          memoryOptimizationPolicy.mode = mode
+        } label: {
+          row(
+            memoryOptimizationTitle(for: mode),
+            value: memoryOptimizationPolicy.mode == mode ? "已选择" : nil
+          )
+        }
+        .focused($focusedItem, equals: .memoryOptimizationMode(mode))
+      }
+    }
+  }
+
   private func filterPage(
     selectedRuleId: String?,
     onSelect: @escaping (String?) -> Void
@@ -506,6 +538,8 @@ struct SystemView: View {
     switch poppedPage {
     case .connection, .root:
       target = .connection
+    case .memoryOptimization:
+      target = .memoryOptimization
     case .siteSelection:
       target = .siteSelection
     case .hardFilter:
@@ -526,6 +560,8 @@ struct SystemView: View {
       target = .autoSearch
     case .connection:
       target = .relogin
+    case .memoryOptimization:
+      target = .memoryOptimizationMode(.automatic)
     case .siteSelection:
       target = .allSites
     case .hardFilter:
@@ -543,7 +579,7 @@ struct SystemView: View {
     switch route.last {
     case .softFilter:
       return .softFilterNone
-    case .root, .connection, .siteSelection, .hardFilter, .none:
+    case .root, .connection, .memoryOptimization, .siteSelection, .hardFilter, .none:
       return .hardFilterNone
     }
   }
@@ -552,7 +588,7 @@ struct SystemView: View {
     switch route.last {
     case .softFilter:
       return .softFilterRule(ruleId)
-    case .root, .connection, .siteSelection, .hardFilter, .none:
+    case .root, .connection, .memoryOptimization, .siteSelection, .hardFilter, .none:
       return .hardFilterRule(ruleId)
     }
   }
@@ -604,6 +640,8 @@ struct SystemView: View {
         return "进入媒体详情页前的加载动画会等待背景海报就绪实现平滑过渡，网络较慢时可关闭以更快进入详情页。（只影响 TV 端）"
       case .preloadTMDBDetails:
         return "进入豆瓣或 Bangumi 详情页并识别到对应 TMDB 条目后，提前加载其详情，以缩短后续跳转等待时间。（只影响 TV 端）"
+      case .memoryOptimization:
+        return "开启后会减少图片预加载和解码以降低内存占用，进入详情页或向下浏览时图片可能稍后显示；不确定时请选择自动。（只影响 TV 端）"
       case .siteSelection:
         return "设置资源搜索默认使用的站点。（只影响 TV 端）"
       case .hardFilter:
@@ -614,8 +652,8 @@ struct SystemView: View {
         return "查看当前登录状态、服务器地址和后端连接状态。"
       case .appInfo:
         return nil
-      case .allSites, .site, .relogin, .logout, .hardFilterNone, .softFilterNone,
-        .hardFilterRule, .softFilterRule:
+      case .allSites, .site, .memoryOptimizationMode, .relogin, .logout, .hardFilterNone,
+        .softFilterNone, .hardFilterRule, .softFilterRule:
         break
       }
     }
@@ -636,6 +674,8 @@ struct SystemView: View {
       return nil
     case .connection:
       return "查看当前登录状态、服务器地址和后端连接状态。"
+    case .memoryOptimization:
+      return "开启后会减少图片预加载和解码以降低内存占用，进入详情页或向下浏览时图片可能稍后显示；不确定时请选择自动。（只影响 TV 端）"
     case .siteSelection:
       return "设置资源搜索默认使用的站点。（只影响 TV 端）"
     case .hardFilter:
@@ -680,11 +720,18 @@ struct SystemView: View {
       return "\(viewModel.defaultSearchSites.count) 个站点"
     }
   }
+
+  private func memoryOptimizationTitle(for mode: MemoryOptimizationMode) -> String {
+    mode == .automatic
+      ? "自动（\(memoryOptimizationPolicy.automaticEnabled ? "开启" : "关闭")）"
+      : mode.title
+  }
 }
 
 private enum SystemSettingsPage: Hashable {
   case root
   case connection
+  case memoryOptimization
   case siteSelection
   case hardFilter
   case softFilter
@@ -699,6 +746,8 @@ private enum SystemSettingsFocus: Hashable {
   case autoSearch
   case preloadTMDBDetails
   case waitBackgroundImage
+  case memoryOptimization
+  case memoryOptimizationMode(MemoryOptimizationMode)
   case hardFilter
   case softFilter
   case relogin

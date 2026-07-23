@@ -33,6 +33,7 @@ class ContentViewModel: ObservableObject {
 
     // 监听令牌变化 -> 在登录或令牌更新时触发设置获取
     apiService.$token
+      .dropFirst()
       .receive(on: RunLoop.main)
       .sink { [weak self] token in
         guard let self else { return }
@@ -41,9 +42,10 @@ class ContentViewModel: ObservableObject {
           self.resetBackendVersionCheck()
         }
         if token != nil {
+          let shouldCheckBackendVersion = self.didPrepareStartup
           Task { [weak self] in
             guard let self else { return }
-            await self.loadGlobalSettings(checkBackendVersion: self.didPrepareStartup)
+            await self.loadGlobalSettings(checkBackendVersion: shouldCheckBackendVersion)
           }
         }
       }
@@ -60,6 +62,7 @@ class ContentViewModel: ObservableObject {
       .store(in: &cancellables)
 
     apiService.$baseURL
+      .dropFirst()
       .receive(on: RunLoop.main)
       .sink { [weak self] _ in
         self?.resetBackendVersionCheck()
@@ -71,7 +74,10 @@ class ContentViewModel: ObservableObject {
       .sink { [weak self] _ in
         guard let self = self, self.isLoggedIn else { return }
         Task { [weak self] in
-          await self?.loadGlobalSettings(checkBackendVersion: false)
+          await self?.loadGlobalSettings(
+            checkBackendVersion: false,
+            evaluateMemoryOptimization: true
+          )
         }
       }
       .store(in: &cancellables)
@@ -128,11 +134,17 @@ class ContentViewModel: ObservableObject {
     }
 
     if isLoggedIn {
-      await loadGlobalSettings(checkBackendVersion: true)
+      await loadGlobalSettings(
+        checkBackendVersion: true,
+        evaluateMemoryOptimization: true
+      )
     }
   }
 
-  private func loadGlobalSettings(checkBackendVersion: Bool) async {
+  private func loadGlobalSettings(
+    checkBackendVersion: Bool,
+    evaluateMemoryOptimization: Bool = false
+  ) async {
     let checkKey = currentBackendVersionCheckKey()
     if checkBackendVersion, backendVersionCheckKey != checkKey {
       backendVersionWarning = nil
@@ -140,18 +152,41 @@ class ContentViewModel: ObservableObject {
 
     do {
       let settings = try await apiService.fetchSettings()
-      guard checkBackendVersion, backendVersionCheckKey != checkKey else { return }
-      guard currentBackendVersionCheckKey() == checkKey else { return }
-      backendVersionCheckKey = checkKey
-      backendVersionWarning = Self.backendVersionWarning(for: settings.BACKEND_VERSION)
+      let sessionIsCurrent = currentBackendVersionCheckKey() == checkKey
+      if checkBackendVersion, backendVersionCheckKey != checkKey, sessionIsCurrent {
+        backendVersionCheckKey = checkKey
+        backendVersionWarning = Self.backendVersionWarning(for: settings.BACKEND_VERSION)
+      }
+      if evaluateMemoryOptimization, sessionIsCurrent {
+        let baseURL = checkKey.baseURL
+        let imageCacheAvailable = apiService.useImageCache
+        Task {
+          await MemoryOptimizationPolicy.shared.evaluateAutomatically(
+            baseURL: baseURL,
+            settingsLoaded: true,
+            imageCacheAvailable: imageCacheAvailable
+          )
+        }
+      }
     } catch {
-      guard checkBackendVersion, backendVersionCheckKey != checkKey else { return }
-      guard currentBackendVersionCheckKey() == checkKey else { return }
-      backendVersionCheckKey = checkKey
-      backendVersionWarning = BackendVersionWarning(
-        backendVersion: nil,
-        requiredVersion: AppVersionInfo.compatibleMoviePilotVersion
-      )
+      let sessionIsCurrent = currentBackendVersionCheckKey() == checkKey
+      if checkBackendVersion, backendVersionCheckKey != checkKey, sessionIsCurrent {
+        backendVersionCheckKey = checkKey
+        backendVersionWarning = BackendVersionWarning(
+          backendVersion: nil,
+          requiredVersion: AppVersionInfo.compatibleMoviePilotVersion
+        )
+      }
+      if evaluateMemoryOptimization, sessionIsCurrent {
+        let baseURL = checkKey.baseURL
+        Task {
+          await MemoryOptimizationPolicy.shared.evaluateAutomatically(
+            baseURL: baseURL,
+            settingsLoaded: false,
+            imageCacheAvailable: false
+          )
+        }
+      }
     }
   }
 
