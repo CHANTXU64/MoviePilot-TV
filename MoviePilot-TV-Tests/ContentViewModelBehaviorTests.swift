@@ -309,6 +309,56 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     XCTAssertFalse(warning?.message.contains("低版本后端") == true)
   }
 
+  func testServerChangeInvalidatesOldMemoryDecisionAndNewLoginReevaluates() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ContentViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ContentViewModelURLProtocol.self) }
+
+    await ContentViewModelURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
+    var viewModel: ContentViewModel?
+    defer {
+      viewModel = nil
+      snapshot.restore(to: service)
+    }
+
+    let firstUser = token("token-a", userName: "first-user")
+    service.replaceSessionForTesting(
+      baseURL: "https://first.content-view-model-tests.local",
+      token: firstUser.access_token,
+      currentUser: firstUser
+    )
+    let policy = MemoryOptimizationPolicy(
+      testingMode: .automatic,
+      automaticEnabled: true,
+      latencyProbe: { _ in (0.005, "192.168.1.20") },
+      sessionIsCurrent: { service.isSessionUnchanged(from: $0) }
+    )
+    viewModel = ContentViewModel(apiService: service, memoryOptimizationPolicy: policy)
+    await viewModel?.prepareStartupIfNeeded()
+
+    service.replaceSessionForTesting(
+      baseURL: "https://second.content-view-model-tests.local",
+      token: nil,
+      currentUser: nil
+    )
+    try await waitUntil("expected server change to invalidate old memory decision") {
+      !policy.automaticEnabled
+    }
+
+    let secondUser = token("token-b", userName: "second-user")
+    service.replaceSessionForTesting(
+      baseURL: "https://second.content-view-model-tests.local",
+      token: secondUser.access_token,
+      currentUser: secondUser
+    )
+    try await waitUntil("expected new server login to reevaluate memory optimization") {
+      policy.automaticEnabled
+    }
+
+    XCTAssertTrue(policy.isEnabled)
+  }
+
   private func token(
     _ value: String,
     userID: Int? = nil,

@@ -21,7 +21,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("Picker(\n          \"内存优化\""))
   }
 
-  func testMemoryOptimizationOnlyRunsForAppEntryNotTokenUpdates() throws {
+  func testMemoryOptimizationOnlyRechecksTokenAfterSessionInvalidation() throws {
     let source = try Self.source(at: "MoviePilot-TV/ViewModels/ContentViewModel.swift")
     let tokenPublisher = try XCTUnwrap(source.range(of: "apiService.$token"))
     let receiveOn = try XCTUnwrap(
@@ -34,6 +34,8 @@ final class SystemViewDefaultStyleTests: XCTestCase {
 
     XCTAssertTrue(subscription.contains(".dropFirst()"))
     XCTAssertFalse(subscription.contains("evaluateMemoryOptimization: true"))
+    XCTAssertTrue(subscription.contains("shouldEvaluateMemoryOptimizationAfterSessionChange"))
+    XCTAssertTrue(subscription.contains("invalidateAutomaticDecision()"))
   }
 
   func testBackendVersionObserverIgnoresInitialServerReplay() throws {
