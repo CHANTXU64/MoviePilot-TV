@@ -1,5 +1,4 @@
 import Combine
-import Darwin
 import Foundation
 
 enum MemoryOptimizationMode: String, CaseIterable, Hashable, Identifiable {
@@ -21,6 +20,40 @@ enum MemoryOptimizationMode: String, CaseIterable, Hashable, Identifiable {
   }
 }
 
+private final class MemoryOptimizationProbeMetrics: NSObject, URLSessionTaskDelegate,
+  @unchecked Sendable
+{
+  private let lock = NSLock()
+  private var storedResult: (latency: TimeInterval, remoteAddress: String)?
+
+  var result: (latency: TimeInterval, remoteAddress: String)? {
+    lock.lock()
+    defer { lock.unlock() }
+    return storedResult
+  }
+
+  func urlSession(
+    _ session: URLSession,
+    task: URLSessionTask,
+    didFinishCollecting metrics: URLSessionTaskMetrics
+  ) {
+    guard let transaction = metrics.transactionMetrics.last,
+      let requestStartDate = transaction.requestStartDate,
+      let responseStartDate = transaction.responseStartDate,
+      let remoteAddress = transaction.remoteAddress
+    else {
+      return
+    }
+
+    lock.lock()
+    storedResult = (
+      latency: responseStartDate.timeIntervalSince(requestStartDate),
+      remoteAddress: remoteAddress
+    )
+    lock.unlock()
+  }
+}
+
 /// 为所有内存优化提供单一开关。自动模式在每次进入 App 及切回自动时重新判断。
 @MainActor
 final class MemoryOptimizationPolicy: ObservableObject {
@@ -30,9 +63,10 @@ final class MemoryOptimizationPolicy: ObservableObject {
     didSet {
       guard mode != oldValue else { return }
       UserDefaults.standard.set(mode.rawValue, forKey: Self.modeKey)
+      cancelAutomaticEvaluation()
       applyCurrentMode()
       if mode == .automatic {
-        Task { await refreshAutomaticDecision() }
+        refreshAutomaticDecision()
       }
     }
   }
@@ -42,50 +76,98 @@ final class MemoryOptimizationPolicy: ObservableObject {
 
   private static let modeKey = "memoryOptimizationMode"
   private nonisolated static let maximumAutomaticLatency: TimeInterval = 0.010
+  private var automaticEvaluationGeneration = 0
+  private var automaticEvaluationTask: Task<Void, Never>?
 
   private init() {
-    let storedMode = UserDefaults.standard.string(forKey: Self.modeKey)
+    let storedMode =
+      UserDefaults.standard.string(forKey: Self.modeKey)
       .flatMap(MemoryOptimizationMode.init(rawValue:)) ?? .automatic
     mode = storedMode
     isEnabled = storedMode == .enabled
   }
 
   /// 从手动模式切回自动时刷新服务器设置，再重新判断一次。
-  private func refreshAutomaticDecision() async {
+  private func refreshAutomaticDecision() {
     let apiService = APIService.shared
     let sessionSnapshot = apiService.sessionSnapshot()
-    do {
-      _ = try await apiService.fetchSettings()
-      guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
-      await evaluateAutomatically(
-        baseURL: sessionSnapshot.baseURL,
-        settingsLoaded: true,
-        imageCacheAvailable: apiService.useImageCache
-      )
-    } catch {
-      guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
-      await evaluateAutomatically(
-        baseURL: sessionSnapshot.baseURL,
-        settingsLoaded: false,
-        imageCacheAvailable: false
-      )
+    let generation = automaticEvaluationGeneration
+    automaticEvaluationTask = Task { [weak self] in
+      guard let self else { return }
+      do {
+        _ = try await apiService.fetchSettings()
+        await performAutomaticEvaluation(
+          sessionSnapshot: sessionSnapshot,
+          settingsLoaded: true,
+          imageCacheAvailable: apiService.useImageCache,
+          generation: generation
+        )
+      } catch {
+        await performAutomaticEvaluation(
+          sessionSnapshot: sessionSnapshot,
+          settingsLoaded: false,
+          imageCacheAvailable: false,
+          generation: generation
+        )
+      }
     }
   }
 
   /// 使用本次进入 App 时获取的服务器设置重新判断。
   func evaluateAutomatically(
-    baseURL: String,
+    sessionSnapshot: APIServiceSessionSnapshot,
     settingsLoaded: Bool,
     imageCacheAvailable: Bool
+  ) {
+    guard mode == .automatic,
+      APIService.shared.isSessionUnchanged(from: sessionSnapshot)
+    else {
+      return
+    }
+
+    cancelAutomaticEvaluation()
+    let generation = automaticEvaluationGeneration
+    automaticEvaluationTask = Task { [weak self] in
+      await self?.performAutomaticEvaluation(
+        sessionSnapshot: sessionSnapshot,
+        settingsLoaded: settingsLoaded,
+        imageCacheAvailable: imageCacheAvailable,
+        generation: generation
+      )
+    }
+  }
+
+  private func performAutomaticEvaluation(
+    sessionSnapshot: APIServiceSessionSnapshot,
+    settingsLoaded: Bool,
+    imageCacheAvailable: Bool,
+    generation: Int
   ) async {
-    guard mode == .automatic else { return }
+    guard
+      canPublishAutomaticResult(
+        generation: generation,
+        sessionSnapshot: sessionSnapshot
+      )
+    else {
+      return
+    }
+
+    func finish(_ result: Bool, reason: String, isError: Bool = false) {
+      finishAutomaticEvaluation(
+        result,
+        reason: reason,
+        isError: isError,
+        generation: generation,
+        sessionSnapshot: sessionSnapshot
+      )
+    }
 
     Logger.debug(
       "[MemoryOptimization] 自动检查：服务器设置=\(settingsLoaded ? "已读取" : "读取失败")，图片缓存=\(imageCacheAvailable ? "可用" : "不可用")"
     )
 
     guard settingsLoaded else {
-      finishAutomaticEvaluation(
+      finish(
         false,
         reason: "服务器设置读取失败",
         isError: true
@@ -93,11 +175,11 @@ final class MemoryOptimizationPolicy: ObservableObject {
       return
     }
     guard imageCacheAvailable else {
-      finishAutomaticEvaluation(false, reason: "MP 图片缓存不可用")
+      finish(false, reason: "MP 图片缓存不可用")
       return
     }
-    guard let host = URL(string: baseURL)?.host, !host.isEmpty else {
-      finishAutomaticEvaluation(
+    guard URL(string: sessionSnapshot.baseURL)?.host?.isEmpty == false else {
+      finish(
         false,
         reason: "服务器地址无效",
         isError: true
@@ -105,52 +187,43 @@ final class MemoryOptimizationPolicy: ObservableObject {
       return
     }
 
-    let addresses = await Task.detached(priority: .utility) {
-      Self.resolvedAddresses(for: host)
-    }.value
-    Logger.debug(
-      "[MemoryOptimization] DNS 解析：\(host) -> \(addresses.sorted().joined(separator: ", "))"
-    )
-    guard !addresses.isEmpty else {
-      finishAutomaticEvaluation(
-        false,
-        reason: "服务器地址解析失败",
-        isError: true
-      )
-      return
+    var probes: [(latency: TimeInterval, remoteAddress: String)] = []
+    for _ in 0..<3 {
+      guard
+        let probe = await Self.measureServerLatency(baseURL: sessionSnapshot.baseURL)
+      else {
+        finish(false, reason: "服务器延迟测试失败", isError: true)
+        return
+      }
+      probes.append(probe)
     }
-    let addressesAreLocal = addresses.allSatisfy(Self.isLocalAddress)
-    Logger.debug("[MemoryOptimization] IP 类型：\(addressesAreLocal ? "全部为内网地址" : "包含公网地址")")
-    guard addressesAreLocal else {
-      finishAutomaticEvaluation(false, reason: "服务器不是内网地址")
-      return
-    }
+    let probeDescription = probes.map {
+      String(format: "%@ %.1fms", $0.remoteAddress, $0.latency * 1_000)
+    }.joined(separator: "，")
+    Logger.debug("[MemoryOptimization] 实际连接：\(probeDescription)")
 
-    guard let latency = await Self.measureServerLatency(baseURL: baseURL) else {
-      finishAutomaticEvaluation(
-        false,
-        reason: "服务器延迟测试失败",
-        isError: true
-      )
+    guard probes.allSatisfy({ Self.isLocalAddress($0.remoteAddress) }) else {
+      finish(false, reason: "实际连接的服务器不是内网地址")
       return
     }
+    guard let latency = Self.medianLatency(probes.map(\.latency)) else { return }
     let latencyInMilliseconds = latency * 1_000
     Logger.debug(
       String(
-        format: "[MemoryOptimization] HTTP 往返延迟：%.1fms（自动开启阈值 < %.1fms）",
+        format: "[MemoryOptimization] HTTP 首包延迟中位数：%.1fms（自动开启阈值 < %.1fms）",
         latencyInMilliseconds,
         Self.maximumAutomaticLatency * 1_000
       )
     )
     guard Self.isAutomaticLatencyAcceptable(latency) else {
-      finishAutomaticEvaluation(
+      finish(
         false,
         reason: String(format: "服务器延迟 %.1fms，不启用", latencyInMilliseconds)
       )
       return
     }
 
-    finishAutomaticEvaluation(
+    finish(
       true,
       reason: String(format: "服务器延迟 %.1fms，启用", latencyInMilliseconds)
     )
@@ -159,8 +232,20 @@ final class MemoryOptimizationPolicy: ObservableObject {
   private func finishAutomaticEvaluation(
     _ result: Bool,
     reason: String,
-    isError: Bool = false
+    isError: Bool,
+    generation: Int,
+    sessionSnapshot: APIServiceSessionSnapshot
   ) {
+    guard
+      canPublishAutomaticResult(
+        generation: generation,
+        sessionSnapshot: sessionSnapshot
+      )
+    else {
+      Logger.debug("[MemoryOptimization] 忽略过期的自动检查结果")
+      return
+    }
+
     automaticEnabled = result
     applyCurrentMode()
     if isError {
@@ -170,49 +255,32 @@ final class MemoryOptimizationPolicy: ObservableObject {
     }
   }
 
+  private func canPublishAutomaticResult(
+    generation: Int,
+    sessionSnapshot: APIServiceSessionSnapshot
+  ) -> Bool {
+    Self.canPublishAutomaticResult(
+      mode: mode,
+      generation: generation,
+      currentGeneration: automaticEvaluationGeneration,
+      sessionIsCurrent: APIService.shared.isSessionUnchanged(from: sessionSnapshot)
+    )
+  }
+
+  private func cancelAutomaticEvaluation() {
+    automaticEvaluationTask?.cancel()
+    automaticEvaluationTask = nil
+    automaticEvaluationGeneration &+= 1
+  }
+
   private func applyCurrentMode() {
     isEnabled = Self.resolvedEnabledState(mode: mode, automaticEnabled: automaticEnabled)
   }
 
-  private nonisolated static func resolvedAddresses(for host: String) -> [String] {
-    var hints = addrinfo()
-    hints.ai_flags = AI_ADDRCONFIG
-    hints.ai_family = AF_UNSPEC
-    hints.ai_socktype = SOCK_STREAM
-
-    var result: UnsafeMutablePointer<addrinfo>?
-    guard getaddrinfo(host, nil, &hints, &result) == 0, let first = result else {
-      return []
-    }
-    defer { freeaddrinfo(first) }
-
-    var addresses = Set<String>()
-    var current: UnsafeMutablePointer<addrinfo>? = first
-    while let info = current {
-      var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-      if getnameinfo(
-        info.pointee.ai_addr,
-        info.pointee.ai_addrlen,
-        &buffer,
-        socklen_t(buffer.count),
-        nil,
-        0,
-        NI_NUMERICHOST
-      ) == 0 {
-        addresses.insert(
-          String(
-            decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) },
-            as: UTF8.self
-          )
-        )
-      }
-      current = info.pointee.ai_next
-    }
-    return Array(addresses)
-  }
-
-  /// 禁用 URLCache 请求 MP 公开设置接口，用单调时钟测量一次完整 HTTP 往返；不是 ICMP Ping。
-  private nonisolated static func measureServerLatency(baseURL: String) async -> TimeInterval? {
+  /// 禁用 URLCache 请求 MP 公开设置接口，用 URLSession 指标测量请求发出到响应首字节；不是 ICMP Ping。
+  private nonisolated static func measureServerLatency(
+    baseURL: String
+  ) async -> (latency: TimeInterval, remoteAddress: String)? {
     let normalizedBaseURL = baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL
     guard let url = URL(string: "\(normalizedBaseURL)/api/v1/system/global?token=moviepilot") else {
       return nil
@@ -221,20 +289,37 @@ final class MemoryOptimizationPolicy: ObservableObject {
     request.cachePolicy = .reloadIgnoringLocalCacheData
     request.timeoutInterval = 2
 
-    let start = ContinuousClock.now
+    let metrics = MemoryOptimizationProbeMetrics()
     do {
-      let (_, response) = try await URLSession.shared.data(for: request)
+      let (_, response) = try await URLSession.shared.data(for: request, delegate: metrics)
       guard let response = response as? HTTPURLResponse,
         (200...299).contains(response.statusCode)
       else {
         return nil
       }
-      let components = start.duration(to: .now).components
-      return TimeInterval(components.seconds)
-        + TimeInterval(components.attoseconds) / 1_000_000_000_000_000_000
+      return metrics.result
     } catch {
       return nil
     }
+  }
+
+  nonisolated static func medianLatency(_ values: [TimeInterval]) -> TimeInterval? {
+    guard !values.isEmpty else { return nil }
+    let sortedValues = values.sorted()
+    let middle = sortedValues.count / 2
+    if sortedValues.count.isMultiple(of: 2) {
+      return (sortedValues[middle - 1] + sortedValues[middle]) / 2
+    }
+    return sortedValues[middle]
+  }
+
+  nonisolated static func canPublishAutomaticResult(
+    mode: MemoryOptimizationMode,
+    generation: Int,
+    currentGeneration: Int,
+    sessionIsCurrent: Bool
+  ) -> Bool {
+    mode == .automatic && generation == currentGeneration && sessionIsCurrent
   }
 
   nonisolated static func isAutomaticLatencyAcceptable(_ latency: TimeInterval) -> Bool {
@@ -259,7 +344,8 @@ final class MemoryOptimizationPolicy: ObservableObject {
     let addressWithoutScope = String(address.split(separator: "%", maxSplits: 1)[0]).lowercased()
 
     if addressWithoutScope.contains(".") {
-      let ipv4 = addressWithoutScope.split(separator: ":").last.map(String.init) ?? addressWithoutScope
+      let ipv4 =
+        addressWithoutScope.split(separator: ":").last.map(String.init) ?? addressWithoutScope
       let parts = ipv4.split(separator: ".").compactMap { UInt8($0) }
       guard parts.count == 4 else { return false }
 

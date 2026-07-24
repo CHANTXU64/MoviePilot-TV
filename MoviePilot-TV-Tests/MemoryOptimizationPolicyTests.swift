@@ -38,6 +38,37 @@ final class MemoryOptimizationPolicyTests: XCTestCase {
     XCTAssertTrue(MemoryOptimizationPolicy.isAutomaticLatencyAcceptable(0.009_999))
     XCTAssertFalse(MemoryOptimizationPolicy.isAutomaticLatencyAcceptable(0.010))
     XCTAssertFalse(MemoryOptimizationPolicy.isAutomaticLatencyAcceptable(0.011))
+    XCTAssertEqual(
+      MemoryOptimizationPolicy.medianLatency([0.008, 0.030, 0.009]),
+      0.009
+    )
+  }
+
+  func testOnlyLatestAutomaticEvaluationCanPublish() {
+    XCTAssertTrue(
+      MemoryOptimizationPolicy.canPublishAutomaticResult(
+        mode: .automatic,
+        generation: 2,
+        currentGeneration: 2,
+        sessionIsCurrent: true
+      )
+    )
+    XCTAssertFalse(
+      MemoryOptimizationPolicy.canPublishAutomaticResult(
+        mode: .automatic,
+        generation: 1,
+        currentGeneration: 2,
+        sessionIsCurrent: true
+      )
+    )
+    XCTAssertFalse(
+      MemoryOptimizationPolicy.canPublishAutomaticResult(
+        mode: .automatic,
+        generation: 2,
+        currentGeneration: 2,
+        sessionIsCurrent: false
+      )
+    )
   }
 
   func testModeResolvesFinalEnabledState() {
