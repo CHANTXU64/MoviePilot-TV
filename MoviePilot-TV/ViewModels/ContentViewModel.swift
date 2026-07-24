@@ -155,15 +155,13 @@ class ContentViewModel: ObservableObject {
         backendVersionWarning = Self.backendVersionWarning(for: settings.BACKEND_VERSION)
       }
       if evaluateMemoryOptimization, sessionIsCurrent {
-        let baseURL = checkKey.baseURL
+        let sessionSnapshot = apiService.sessionSnapshot()
         let imageCacheAvailable = apiService.useImageCache
-        Task {
-          await MemoryOptimizationPolicy.shared.evaluateAutomatically(
-            baseURL: baseURL,
-            settingsLoaded: true,
-            imageCacheAvailable: imageCacheAvailable
-          )
-        }
+        MemoryOptimizationPolicy.shared.evaluateAutomatically(
+          sessionSnapshot: sessionSnapshot,
+          settingsLoaded: true,
+          imageCacheAvailable: imageCacheAvailable
+        )
       }
     } catch is CancellationError {
       return
@@ -177,14 +175,11 @@ class ContentViewModel: ObservableObject {
         )
       }
       if evaluateMemoryOptimization, sessionIsCurrent {
-        let baseURL = checkKey.baseURL
-        Task {
-          await MemoryOptimizationPolicy.shared.evaluateAutomatically(
-            baseURL: baseURL,
-            settingsLoaded: false,
-            imageCacheAvailable: false
-          )
-        }
+        MemoryOptimizationPolicy.shared.evaluateAutomatically(
+          sessionSnapshot: apiService.sessionSnapshot(),
+          settingsLoaded: false,
+          imageCacheAvailable: false
+        )
       }
     }
   }
