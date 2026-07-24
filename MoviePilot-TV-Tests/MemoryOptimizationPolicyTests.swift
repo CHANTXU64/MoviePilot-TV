@@ -2,6 +2,7 @@ import XCTest
 
 @testable import MoviePilot_TV
 
+@MainActor
 final class MemoryOptimizationPolicyTests: XCTestCase {
   func testRecognizesLocalAndPublicAddresses() {
     let localAddresses = [
@@ -34,14 +35,10 @@ final class MemoryOptimizationPolicyTests: XCTestCase {
     }
   }
 
-  func testAutomaticLatencyMustBeBelowTenMilliseconds() {
-    XCTAssertTrue(MemoryOptimizationPolicy.isAutomaticLatencyAcceptable(0.009_999))
-    XCTAssertFalse(MemoryOptimizationPolicy.isAutomaticLatencyAcceptable(0.010))
-    XCTAssertFalse(MemoryOptimizationPolicy.isAutomaticLatencyAcceptable(0.011))
-    XCTAssertEqual(
-      MemoryOptimizationPolicy.medianLatency([0.008, 0.030, 0.009]),
-      0.009
-    )
+  func testAutomaticLatencyMustBeBelowThirtyMilliseconds() {
+    XCTAssertTrue(MemoryOptimizationPolicy.isAutomaticLatencyAcceptable(0.029_999))
+    XCTAssertFalse(MemoryOptimizationPolicy.isAutomaticLatencyAcceptable(0.030))
+    XCTAssertFalse(MemoryOptimizationPolicy.isAutomaticLatencyAcceptable(0.031))
   }
 
   func testOnlyLatestAutomaticEvaluationCanPublish() {
@@ -84,5 +81,148 @@ final class MemoryOptimizationPolicyTests: XCTestCase {
     XCTAssertFalse(
       MemoryOptimizationPolicy.resolvedEnabledState(mode: .disabled, automaticEnabled: true)
     )
+  }
+
+  func testOlderEvaluationCannotOverwriteNewSession() async throws {
+    let firstSession = session("http://192.168.1.10:3000", token: "first")
+    let secondSession = session("http://192.168.1.20:3000", token: "second")
+    var currentSession = firstSession
+    let probe = ControlledMemoryOptimizationProbe()
+    let policy = MemoryOptimizationPolicy(
+      testingMode: .automatic,
+      latencyProbe: { await probe.call(baseURL: $0) },
+      sessionIsCurrent: { $0 == currentSession }
+    )
+
+    policy.evaluateAutomatically(
+      sessionSnapshot: firstSession,
+      settingsLoaded: true,
+      imageCacheAvailable: true
+    )
+    try await waitUntil("第一轮探测未开始") {
+      await probe.pendingCount(baseURL: firstSession.baseURL) == 1
+    }
+
+    currentSession = secondSession
+    policy.evaluateAutomatically(
+      sessionSnapshot: secondSession,
+      settingsLoaded: true,
+      imageCacheAvailable: true
+    )
+    for _ in 0..<3 {
+      try await waitUntil("第二轮探测未继续") {
+        await probe.pendingCount(baseURL: secondSession.baseURL) == 1
+      }
+      await probe.resumeNext(
+        baseURL: secondSession.baseURL,
+        result: (0.005, "192.168.1.20")
+      )
+    }
+    try await waitUntil("第二轮结果未发布") {
+      policy.automaticEnabled
+    }
+
+    await probe.resumeNext(
+      baseURL: firstSession.baseURL,
+      result: (0.050, "8.8.8.8")
+    )
+    await Task.yield()
+
+    XCTAssertTrue(policy.automaticEnabled)
+    XCTAssertTrue(policy.isEnabled)
+  }
+
+  func testInvalidationDisablesOldDecisionAndAllowsOneFailedProbe() async throws {
+    let currentSession = session("http://192.168.1.30:3000", token: "current")
+    let probe = MemoryOptimizationProbeSequence([
+      nil,
+      (0.040, "192.168.1.30"),
+      (0.029, "192.168.1.30"),
+    ])
+    let policy = MemoryOptimizationPolicy(
+      testingMode: .disabled,
+      automaticEnabled: true,
+      latencyProbe: { _ in await probe.next() },
+      sessionIsCurrent: { $0 == currentSession }
+    )
+
+    policy.mode = .automatic
+    XCTAssertFalse(policy.automaticEnabled)
+    XCTAssertFalse(policy.isEnabled)
+
+    policy.invalidateAutomaticDecision()
+    XCTAssertFalse(policy.automaticEnabled)
+    XCTAssertFalse(policy.isEnabled)
+
+    policy.evaluateAutomatically(
+      sessionSnapshot: currentSession,
+      settingsLoaded: true,
+      imageCacheAvailable: true
+    )
+    try await waitUntil("两个有效探测结果未启用自动优化") {
+      policy.automaticEnabled
+    }
+
+    XCTAssertTrue(policy.isEnabled)
+  }
+
+  private func session(_ baseURL: String, token: String) -> APIServiceSessionSnapshot {
+    APIServiceSessionSnapshot(
+      baseURL: baseURL,
+      token: token,
+      userName: "tester",
+      superUser: false,
+      permissions: ["discovery": true]
+    )
+  }
+
+  private func waitUntil(
+    _ failureMessage: String,
+    timeout: TimeInterval = 2,
+    condition: @escaping () async -> Bool
+  ) async throws {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+      if await condition() { return }
+      try await Task.sleep(nanoseconds: 10_000_000)
+    }
+    XCTFail(failureMessage)
+  }
+}
+
+private actor ControlledMemoryOptimizationProbe {
+  typealias Result = (latency: TimeInterval, remoteAddress: String)
+
+  private var continuations: [String: [CheckedContinuation<Result?, Never>]] = [:]
+
+  func call(baseURL: String) async -> Result? {
+    await withCheckedContinuation { continuation in
+      continuations[baseURL, default: []].append(continuation)
+    }
+  }
+
+  func pendingCount(baseURL: String) -> Int {
+    continuations[baseURL]?.count ?? 0
+  }
+
+  func resumeNext(baseURL: String, result: Result?) {
+    guard var pending = continuations[baseURL], !pending.isEmpty else { return }
+    let continuation = pending.removeFirst()
+    continuations[baseURL] = pending
+    continuation.resume(returning: result)
+  }
+}
+
+private actor MemoryOptimizationProbeSequence {
+  typealias Result = (latency: TimeInterval, remoteAddress: String)
+
+  private var results: [Result?]
+
+  init(_ results: [Result?]) {
+    self.results = results
+  }
+
+  func next() -> Result? {
+    results.isEmpty ? nil : results.removeFirst()
   }
 }

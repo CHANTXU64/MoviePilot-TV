@@ -20,12 +20,16 @@ class ContentViewModel: ObservableObject {
   @Published private(set) var currentUser: Token?
 
   private let apiService = APIService.shared
+  private let memoryOptimizationPolicy: MemoryOptimizationPolicy
   private var cancellables = Set<AnyCancellable>()
   private var didPrepareStartup = false
   private var backendVersionCheckKey: BackendVersionCheckKey?
   private var lastAccountPermissionWarningKey: AccountPermissionWarningKey?
+  private var shouldEvaluateMemoryOptimizationAfterSessionChange = false
 
-  init() {
+  init(memoryOptimizationPolicy: MemoryOptimizationPolicy = .shared) {
+    self.memoryOptimizationPolicy = memoryOptimizationPolicy
+
     // 初始状态
     isLoggedIn = apiService.isLoggedIn
     currentUser = apiService.currentUser
@@ -40,12 +44,20 @@ class ContentViewModel: ObservableObject {
         self.isLoggedIn = (token != nil)
         if token == nil {
           self.resetBackendVersionCheck()
+          self.memoryOptimizationPolicy.invalidateAutomaticDecision()
+          self.shouldEvaluateMemoryOptimizationAfterSessionChange = true
         }
         if token != nil {
           let shouldCheckBackendVersion = self.didPrepareStartup
+          let shouldEvaluateMemoryOptimization =
+            self.shouldEvaluateMemoryOptimizationAfterSessionChange
+          self.shouldEvaluateMemoryOptimizationAfterSessionChange = false
           Task { [weak self] in
             guard let self else { return }
-            await self.loadGlobalSettings(checkBackendVersion: shouldCheckBackendVersion)
+            await self.loadGlobalSettings(
+              checkBackendVersion: shouldCheckBackendVersion,
+              evaluateMemoryOptimization: shouldEvaluateMemoryOptimization
+            )
           }
         }
       }
@@ -65,7 +77,10 @@ class ContentViewModel: ObservableObject {
       .dropFirst()
       .receive(on: RunLoop.main)
       .sink { [weak self] _ in
-        self?.resetBackendVersionCheck()
+        guard let self else { return }
+        self.resetBackendVersionCheck()
+        self.memoryOptimizationPolicy.invalidateAutomaticDecision()
+        self.shouldEvaluateMemoryOptimizationAfterSessionChange = true
       }
       .store(in: &cancellables)
 
@@ -160,7 +175,7 @@ class ContentViewModel: ObservableObject {
       if evaluateMemoryOptimization, sessionIsCurrent {
         let sessionSnapshot = apiService.sessionSnapshot()
         let imageCacheAvailable = apiService.useImageCache
-        MemoryOptimizationPolicy.shared.evaluateAutomatically(
+        memoryOptimizationPolicy.evaluateAutomatically(
           sessionSnapshot: sessionSnapshot,
           settingsLoaded: true,
           imageCacheAvailable: imageCacheAvailable
@@ -176,7 +191,7 @@ class ContentViewModel: ObservableObject {
         )
       }
       if evaluateMemoryOptimization, sessionIsCurrent {
-        MemoryOptimizationPolicy.shared.evaluateAutomatically(
+        memoryOptimizationPolicy.evaluateAutomatically(
           sessionSnapshot: apiService.sessionSnapshot(),
           settingsLoaded: false,
           imageCacheAvailable: false

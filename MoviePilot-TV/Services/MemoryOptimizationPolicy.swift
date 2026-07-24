@@ -57,15 +57,25 @@ private final class MemoryOptimizationProbeMetrics: NSObject, URLSessionTaskDele
 /// 为所有内存优化提供单一开关。自动模式在每次进入 App 及切回自动时重新判断。
 @MainActor
 final class MemoryOptimizationPolicy: ObservableObject {
+  typealias LatencyProbe =
+    @Sendable (String) async -> (
+      latency: TimeInterval, remoteAddress: String
+    )?
+
   static let shared = MemoryOptimizationPolicy()
 
   @Published var mode: MemoryOptimizationMode {
     didSet {
       guard mode != oldValue else { return }
-      UserDefaults.standard.set(mode.rawValue, forKey: Self.modeKey)
+      if isProductionInstance {
+        UserDefaults.standard.set(mode.rawValue, forKey: Self.modeKey)
+      }
       cancelAutomaticEvaluation()
-      applyCurrentMode()
       if mode == .automatic {
+        automaticEnabled = false
+      }
+      applyCurrentMode()
+      if mode == .automatic, isProductionInstance {
         refreshAutomaticDecision()
       }
     }
@@ -75,16 +85,46 @@ final class MemoryOptimizationPolicy: ObservableObject {
   @Published private(set) var automaticEnabled = false
 
   private static let modeKey = "memoryOptimizationMode"
-  private nonisolated static let maximumAutomaticLatency: TimeInterval = 0.010
+  private nonisolated static let maximumAutomaticLatency: TimeInterval = 0.030
+  private let latencyProbe: LatencyProbe
+  private let sessionIsCurrent: @MainActor (APIServiceSessionSnapshot) -> Bool
+  private let isProductionInstance: Bool
   private var automaticEvaluationGeneration = 0
   private var automaticEvaluationTask: Task<Void, Never>?
 
   private init() {
+    latencyProbe = Self.measureServerLatency
+    sessionIsCurrent = { APIService.shared.isSessionUnchanged(from: $0) }
+    isProductionInstance = true
     let storedMode =
       UserDefaults.standard.string(forKey: Self.modeKey)
       .flatMap(MemoryOptimizationMode.init(rawValue:)) ?? .automatic
     mode = storedMode
     isEnabled = storedMode == .enabled
+  }
+
+  init(
+    testingMode: MemoryOptimizationMode,
+    automaticEnabled: Bool = false,
+    latencyProbe: @escaping LatencyProbe,
+    sessionIsCurrent: @escaping @MainActor (APIServiceSessionSnapshot) -> Bool
+  ) {
+    self.latencyProbe = latencyProbe
+    self.sessionIsCurrent = sessionIsCurrent
+    isProductionInstance = false
+    mode = testingMode
+    self.automaticEnabled = automaticEnabled
+    isEnabled = Self.resolvedEnabledState(
+      mode: testingMode,
+      automaticEnabled: automaticEnabled
+    )
+  }
+
+  /// 服务器或登录会话改变后，立即停用旧的自动判断，等待当前会话重新检查。
+  func invalidateAutomaticDecision() {
+    cancelAutomaticEvaluation()
+    automaticEnabled = false
+    applyCurrentMode()
   }
 
   /// 从手动模式切回自动时刷新服务器设置，再重新判断一次。
@@ -120,7 +160,7 @@ final class MemoryOptimizationPolicy: ObservableObject {
     imageCacheAvailable: Bool
   ) {
     guard mode == .automatic,
-      APIService.shared.isSessionUnchanged(from: sessionSnapshot)
+      sessionIsCurrent(sessionSnapshot)
     else {
       return
     }
@@ -189,28 +229,29 @@ final class MemoryOptimizationPolicy: ObservableObject {
 
     var probes: [(latency: TimeInterval, remoteAddress: String)] = []
     for _ in 0..<3 {
-      guard
-        let probe = await Self.measureServerLatency(baseURL: sessionSnapshot.baseURL)
-      else {
-        finish(false, reason: "服务器延迟测试失败", isError: true)
-        return
+      guard !Task.isCancelled else { return }
+      if let probe = await latencyProbe(sessionSnapshot.baseURL) {
+        probes.append(probe)
       }
-      probes.append(probe)
     }
     let probeDescription = probes.map {
       String(format: "%@ %.1fms", $0.remoteAddress, $0.latency * 1_000)
     }.joined(separator: "，")
-    Logger.debug("[MemoryOptimization] 实际连接：\(probeDescription)")
+    Logger.debug("[MemoryOptimization] 有效探测 \(probes.count)/3：\(probeDescription)")
 
     guard probes.allSatisfy({ Self.isLocalAddress($0.remoteAddress) }) else {
       finish(false, reason: "实际连接的服务器不是内网地址")
       return
     }
-    guard let latency = Self.medianLatency(probes.map(\.latency)) else { return }
+    guard probes.count >= 2 else {
+      finish(false, reason: "服务器延迟测试有效结果不足", isError: true)
+      return
+    }
+    guard let latency = probes.map(\.latency).min() else { return }
     let latencyInMilliseconds = latency * 1_000
     Logger.debug(
       String(
-        format: "[MemoryOptimization] HTTP 首包延迟中位数：%.1fms（自动开启阈值 < %.1fms）",
+        format: "[MemoryOptimization] HTTP 首包延迟最小值：%.1fms（自动开启阈值 < %.1fms）",
         latencyInMilliseconds,
         Self.maximumAutomaticLatency * 1_000
       )
@@ -263,7 +304,7 @@ final class MemoryOptimizationPolicy: ObservableObject {
       mode: mode,
       generation: generation,
       currentGeneration: automaticEvaluationGeneration,
-      sessionIsCurrent: APIService.shared.isSessionUnchanged(from: sessionSnapshot)
+      sessionIsCurrent: sessionIsCurrent(sessionSnapshot)
     )
   }
 
@@ -301,16 +342,6 @@ final class MemoryOptimizationPolicy: ObservableObject {
     } catch {
       return nil
     }
-  }
-
-  nonisolated static func medianLatency(_ values: [TimeInterval]) -> TimeInterval? {
-    guard !values.isEmpty else { return nil }
-    let sortedValues = values.sorted()
-    let middle = sortedValues.count / 2
-    if sortedValues.count.isMultiple(of: 2) {
-      return (sortedValues[middle - 1] + sortedValues[middle]) / 2
-    }
-    return sortedValues[middle]
   }
 
   nonisolated static func canPublishAutomaticResult(

@@ -185,6 +185,44 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     )
   }
 
+  func testServerChangeInvalidatesOldMemoryDecisionAndNewLoginReevaluates() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(ContentViewModelURLProtocol.self))
+    defer { URLProtocol.unregisterClass(ContentViewModelURLProtocol.self) }
+
+    await ContentViewModelURLProtocol.stub.reset()
+    let service = APIService.shared
+    let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
+    var viewModel: ContentViewModel?
+    defer {
+      viewModel = nil
+      snapshot.restore(to: service)
+    }
+
+    service.baseURL = "https://first.content-view-model-tests.local"
+    service.token = "token-a"
+    service.currentUser = token("token-a", userName: "first-user")
+    let policy = MemoryOptimizationPolicy(
+      testingMode: .automatic,
+      automaticEnabled: true,
+      latencyProbe: { _ in (0.005, "192.168.1.20") },
+      sessionIsCurrent: { service.isSessionUnchanged(from: $0) }
+    )
+    viewModel = ContentViewModel(memoryOptimizationPolicy: policy)
+
+    service.baseURL = "https://second.content-view-model-tests.local"
+    try await waitUntil("expected server change to invalidate old memory decision") {
+      !policy.automaticEnabled
+    }
+
+    service.token = "token-b"
+    service.currentUser = token("token-b", userName: "second-user")
+    try await waitUntil("expected new server login to reevaluate memory optimization") {
+      policy.automaticEnabled
+    }
+
+    XCTAssertTrue(policy.isEnabled)
+  }
+
   private func token(
     _ value: String,
     userName: String,
