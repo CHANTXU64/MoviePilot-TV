@@ -3,6 +3,73 @@ import Foundation
 import Kingfisher
 import SwiftUI
 
+enum MediaDetailBackgroundImage {
+  nonisolated static let blurRadius: CGFloat = 60
+
+  nonisolated static func heroProcessor(
+    for size: CGSize,
+    usingPosterAsBackdrop: Bool
+  ) -> any ImageProcessor {
+    usingPosterAsBackdrop
+      ? secondPageProcessor(for: size)
+      : DownsamplingImageProcessor(size: size)
+  }
+
+  nonisolated static func secondPageProcessor(for size: CGSize) -> any ImageProcessor {
+    DownsamplingImageProcessor(size: size)
+      |> BlurImageProcessor(blurRadius: blurRadius)
+  }
+
+  static func heroOptions(
+    for size: CGSize,
+    scaleFactor: CGFloat,
+    usingPosterAsBackdrop: Bool
+  ) -> KingfisherOptionsInfo {
+    [
+      .processor(
+        heroProcessor(
+          for: size,
+          usingPosterAsBackdrop: usingPosterAsBackdrop
+        )
+      ),
+      .scaleFactor(scaleFactor),
+    ]
+  }
+
+  @discardableResult
+  nonisolated static func cacheSecondPageImage(
+    from firstPageImage: KFCrossPlatformImage,
+    for url: URL,
+    size: CGSize,
+    scaleFactor: CGFloat,
+    cacheKey: String? = nil,
+    cache: ImageCache = .default
+  ) -> Bool {
+    guard !Task.isCancelled else { return false }
+    let processor = secondPageProcessor(for: size)
+    let cacheKey = cacheKey ?? url.cacheKey
+    guard !cache.isCached(forKey: cacheKey, processorIdentifier: processor.identifier)
+    else {
+      return true
+    }
+
+    let options = KingfisherParsedOptionsInfo([.scaleFactor(scaleFactor)])
+    guard
+      let image = BlurImageProcessor(blurRadius: blurRadius).process(
+        item: .image(firstPageImage),
+        options: options
+      )
+    else {
+      return false
+    }
+    guard !Task.isCancelled else { return false }
+
+    // firstPageImage 已按目标尺寸下采样；这里只补 Blur，并按完整处理链的缓存键保存。
+    cache.store(image, forKey: cacheKey, processorIdentifier: processor.identifier)
+    return true
+  }
+}
+
 // MARK: - 单个媒体的预加载任务
 
 /// 管理单个媒体项的所有预加载数据。
@@ -33,6 +100,8 @@ class MediaPreloadTask: ObservableObject {
   /// nonisolated(unsafe) 因为需要在 withTaskCancellationHandler 的 onCancel 闭包中访问，
   /// 该闭包可能在任意线程执行。实际写入只在 @MainActor 隔离的方法中进行，读取仅在取消时（单次），无竞争风险。
   nonisolated(unsafe) private var activeImageDownload: DownloadTask?
+  private var activeImageWarmHandle: MPImageWarmer.Handle?
+  private var allowsImageWarm = true
 
   init(partialMedia: MediaInfo, apiService: APIService = .shared) {
     self.partialMedia = partialMedia
@@ -74,13 +143,27 @@ class MediaPreloadTask: ObservableObject {
       })
   }
 
-  /// 取消所有预加载任务（包括正在进行的 Kingfisher 图片下载）
+  /// 取消所有预加载任务（包括正在进行的 Kingfisher 图片下载和 MP 图片预热）
   func cancel() {
     internalTasks.forEach { $0.cancel() }
     internalTasks.removeAll()
     // 主动中断 Kingfisher 下载，释放网络资源和内存
     activeImageDownload?.cancel()
     activeImageDownload = nil
+    cancelImageWarm()
+  }
+
+  /// 当前媒体即将真正显示时，停止仅用于服务器缓存的后台请求。
+  func cancelImageWarm() {
+    allowsImageWarm = false
+    if let activeImageWarmHandle {
+      MPImageWarmer.shared.cancel(activeImageWarmHandle)
+      self.activeImageWarmHandle = nil
+    }
+  }
+
+  func shouldWarmBackgroundImage(memoryOptimizationEnabled: Bool) -> Bool {
+    memoryOptimizationEnabled && allowsImageWarm
   }
 
   // MARK: - ① 加载完整媒体详情
@@ -120,7 +203,7 @@ class MediaPreloadTask: ObservableObject {
     self.isDetailFailed = true
   }
 
-  // MARK: - ② 预取背景图（Kingfisher）
+  // MARK: - ② 预热背景图
 
   private func prefetchBackgroundImage(for detail: MediaInfo, timeout: Duration? = nil) async {
     // 避免为已取消（LRU 淘汰）的任务发起无意义的图片请求
@@ -130,11 +213,31 @@ class MediaPreloadTask: ObservableObject {
     let posterUrl = detail.imageURLs.poster
     let targetUrl = backdropUrl ?? posterUrl
     guard let url = targetUrl else { return }
+    let isUsingPosterAsBackdrop = backdropUrl == nil
+
+    if shouldWarmBackgroundImage(
+      memoryOptimizationEnabled: MemoryOptimizationPolicy.shared.isEnabled
+    ) {
+      let handle = await MPImageWarmer.shared.warm(url)
+      guard !Task.isCancelled,
+        shouldWarmBackgroundImage(memoryOptimizationEnabled: true)
+      else {
+        if let handle {
+          MPImageWarmer.shared.cancel(handle)
+        }
+        return
+      }
+      activeImageWarmHandle = handle
+      return
+    }
 
     if let timeout {
       await withTaskGroup(of: Void.self) { group in
         group.addTask {
-          await self.retrieveHeroImage(url)
+          await self.retrieveHeroImage(
+            url,
+            isUsingPosterAsBackdrop: isUsingPosterAsBackdrop
+          )
         }
         group.addTask {
           try? await Task.sleep(for: timeout)
@@ -144,23 +247,33 @@ class MediaPreloadTask: ObservableObject {
         group.cancelAll()
       }
     } else {
-      await retrieveHeroImage(url)
+      await retrieveHeroImage(
+        url,
+        isUsingPosterAsBackdrop: isUsingPosterAsBackdrop
+      )
     }
 
     // 下载完成后清理引用
     activeImageDownload = nil
   }
 
-  private func retrieveHeroImage(_ url: URL) async {
+  private func retrieveHeroImage(
+    _ url: URL,
+    isUsingPosterAsBackdrop: Bool
+  ) async {
     let continuationBox = ImageRetrieveContinuationBox()
+    var options = MediaDetailBackgroundImage.heroOptions(
+      for: UIScreen.main.bounds.size,
+      scaleFactor: UIScreen.main.scale,
+      usingPosterAsBackdrop: isUsingPosterAsBackdrop
+    )
+    let service = apiService
+    options.append(contentsOf: service.imageOptions(for: url))
 
     // 使用 withTaskCancellationHandler 确保 Swift Task 取消时能中断 Kingfisher 的 HTTP 下载
     await withTaskCancellationHandler {
       await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
         continuationBox.set(continuation)
-        let service = apiService
-        var options = service.imageOptions(for: url)
-        options.append(.cacheOriginalImage)
         self.activeImageDownload = KingfisherManager.shared.retrieveImage(
           with: service.imageSource(for: url),
           options: options
@@ -447,6 +560,7 @@ class MediaPreloader: ObservableObject {
     for task in cache.values {
       task.cancel()
     }
+    MPImageWarmer.shared.clear()
     cache.removeAll()
     accessOrder.removeAll()
     pinnedKeys.removeAll()

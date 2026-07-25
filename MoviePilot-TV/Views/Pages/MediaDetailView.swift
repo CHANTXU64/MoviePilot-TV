@@ -16,6 +16,9 @@ struct MediaDetailView: View {
   @State private var showContentPage = false
   @State private var hasAppeared = false
   @State private var hasRefreshedSubscriptionAfterFullDetail = false
+  @State private var preparedSecondPageBackgroundURL: URL?
+  @State private var firstPageBackgroundSource: (url: URL, image: KFCrossPlatformImage)?
+  @State private var secondPageBackgroundTask: Task<Void, Never>?
 
   // 订阅相关 UI 状态（弹窗开关，纯 UI 逻辑）
   @State private var sheetSubscribe: Subscribe?
@@ -148,33 +151,47 @@ struct MediaDetailView: View {
     ZStack {
       // 固定背景图
       if let url = viewModel.backgroundUrl {
-        let blurRadius =
-          viewModel.isUsingPosterAsBackdrop ? 60 : (showContentPage ? 60 : 0)
-        let processor: ImageProcessor =
-          blurRadius > 0
-          ? BlurImageProcessor(blurRadius: CGFloat(blurRadius))
-          : DefaultImageProcessor.default
+        let size = UIScreen.main.bounds.size
+        let secondPageProcessor = MediaDetailBackgroundImage.secondPageProcessor(for: size)
+        let isSecondPageBackgroundPrepared = preparedSecondPageBackgroundURL == url
 
-        KFImage.sessionImage(url)
-          .placeholder {
-            EmptyView()
+        if viewModel.isUsingPosterAsBackdrop {
+          backgroundImage(
+            url,
+            processor: secondPageProcessor,
+            alignment: .top
+          )
+        } else {
+          ZStack {
+            backgroundImage(
+              url,
+              processor: MediaDetailBackgroundImage.heroProcessor(
+                for: size,
+                usingPosterAsBackdrop: false
+              ),
+              alignment: .center,
+              onSuccess: { result in
+                firstPageBackgroundSource = (url, result.image)
+                prepareSecondPageBackground(
+                  from: result.image,
+                  for: url,
+                  size: size
+                )
+              }
+            )
+            .opacity(showContentPage ? 0 : 1)
+
+            if isSecondPageBackgroundPrepared {
+              backgroundImage(
+                url,
+                processor: secondPageProcessor,
+                alignment: .center
+              )
+              .opacity(showContentPage ? 1 : 0)
+            }
           }
-          .setProcessor(processor)
-          .resizing(
-            referenceSize: UIScreen.main.bounds.size,
-            mode: .aspectFill
-          )
-          .resizable()
-          .aspectRatio(contentMode: .fill)
-          .frame(
-            width: UIScreen.main.bounds.width,
-            height: UIScreen.main.bounds.height,
-            alignment: viewModel.isUsingPosterAsBackdrop ? .top : .center
-          )
           .animation(.easeInOut(duration: 0.5), value: showContentPage)
-          .id("\(url.absoluteString)-\(blurRadius)")
-          .transition(.opacity)
-          .ignoresSafeArea()
+        }
       } else {
         Color.gray.opacity(0.3)
           .ignoresSafeArea()
@@ -183,18 +200,16 @@ struct MediaDetailView: View {
       // Apple TV Style 动态阴影
       ZStack {
         // 1. 顶部很淡的阴影（左边长一点，右边短一点）
-        ZStack {
-          LinearGradient(
-            gradient: Gradient(colors: [.black.opacity(0.2), .black.opacity(0.05), .clear]),
-            startPoint: .top,
-            endPoint: UnitPoint(x: 0.5, y: 0.1)
-          )
-          LinearGradient(
-            gradient: Gradient(colors: [.black.opacity(0.2), .black.opacity(0.15), .clear]),
-            startPoint: .topLeading,
-            endPoint: UnitPoint(x: 0.4, y: 0.4)
-          )
-        }
+        LinearGradient(
+          gradient: Gradient(colors: [.black.opacity(0.2), .black.opacity(0.05), .clear]),
+          startPoint: .top,
+          endPoint: UnitPoint(x: 0.5, y: 0.1)
+        )
+        LinearGradient(
+          gradient: Gradient(colors: [.black.opacity(0.2), .black.opacity(0.15), .clear]),
+          startPoint: .topLeading,
+          endPoint: UnitPoint(x: 0.4, y: 0.4)
+        )
 
         // 2. 左下角 1/4 圆形的阴影
         RadialGradient(
@@ -282,6 +297,28 @@ struct MediaDetailView: View {
       // 取消防抖任务，防止视图消失后仍发起无意义的预加载请求
       recommendPreloadDebounce?.cancel()
       similarPreloadDebounce?.cancel()
+      secondPageBackgroundTask?.cancel()
+      secondPageBackgroundTask = nil
+    }
+    .onAppear {
+      guard
+        let source = firstPageBackgroundSource,
+        source.url == viewModel.backgroundUrl
+      else {
+        return
+      }
+      prepareSecondPageBackground(
+        from: source.image,
+        for: source.url,
+        size: UIScreen.main.bounds.size
+      )
+    }
+    .onChange(of: viewModel.backgroundUrl) { _, url in
+      guard firstPageBackgroundSource?.url != url else { return }
+      secondPageBackgroundTask?.cancel()
+      secondPageBackgroundTask = nil
+      firstPageBackgroundSource = nil
+      preparedSecondPageBackgroundURL = nil
     }
     .task {
       if !hasAppeared, let preferredHeaderFocus {
@@ -395,6 +432,57 @@ struct MediaDetailView: View {
     .onChange(of: focusedButton) { _, newValue in
       if let newValue = newValue {
         lastFocusedButton = newValue
+      }
+    }
+  }
+
+  private func backgroundImage(
+    _ url: URL,
+    processor: any ImageProcessor,
+    alignment: Alignment,
+    onSuccess: @escaping (RetrieveImageResult) -> Void = { _ in }
+  ) -> some View {
+    KFImage.sessionImage(url)
+      .placeholder {
+        EmptyView()
+      }
+      .setProcessor(processor)
+      .scaleFactor(UIScreen.main.scale)
+      .onSuccess(onSuccess)
+      .resizable()
+      .aspectRatio(contentMode: .fill)
+      .frame(
+        width: UIScreen.main.bounds.width,
+        height: UIScreen.main.bounds.height,
+        alignment: alignment
+      )
+      .id("\(url.absoluteString)-\(processor.identifier)")
+      .ignoresSafeArea()
+  }
+
+  private func prepareSecondPageBackground(
+    from firstPageImage: KFCrossPlatformImage,
+    for url: URL,
+    size: CGSize
+  ) {
+    guard preparedSecondPageBackgroundURL != url else { return }
+    secondPageBackgroundTask?.cancel()
+
+    let scaleFactor = UIScreen.main.scale
+    let cacheKey = APIService.shared.imageSource(for: url).cacheKey
+    secondPageBackgroundTask = Task.detached(priority: .utility) {
+      let didPrepare = MediaDetailBackgroundImage.cacheSecondPageImage(
+        from: firstPageImage,
+        for: url,
+        size: size,
+        scaleFactor: scaleFactor,
+        cacheKey: cacheKey
+      )
+      guard didPrepare, !Task.isCancelled else { return }
+      await MainActor.run {
+        guard !Task.isCancelled else { return }
+        preparedSecondPageBackgroundURL = url
+        secondPageBackgroundTask = nil
       }
     }
   }

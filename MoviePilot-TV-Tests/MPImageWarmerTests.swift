@@ -1,3 +1,5 @@
+import Kingfisher
+import UIKit
 import XCTest
 
 @testable import MoviePilot_TV
@@ -188,6 +190,144 @@ final class MPImageWarmerTests: XCTestCase {
     try await waitUntil("expired URL warms again") {
       MPImageWarmURLProtocol.requestCount(for: url) == 2
     }
+  }
+
+  func testBackgroundProcessorsKeepFocusPreloadOutOfSecondPageBlur() {
+    let size = CGSize(width: 1920, height: 1080)
+    let firstPage = MediaDetailBackgroundImage.heroProcessor(
+      for: size,
+      usingPosterAsBackdrop: false
+    )
+    let secondPage = MediaDetailBackgroundImage.secondPageProcessor(for: size)
+    let posterFallback = MediaDetailBackgroundImage.heroProcessor(
+      for: size,
+      usingPosterAsBackdrop: true
+    )
+
+    XCTAssertTrue(firstPage.identifier.contains("DownsamplingImageProcessor"))
+    XCTAssertFalse(firstPage.identifier.contains("BlurImageProcessor"))
+    XCTAssertNotEqual(firstPage.identifier, secondPage.identifier)
+    XCTAssertEqual(posterFallback.identifier, secondPage.identifier)
+
+    let downsamplingRange = try? XCTUnwrap(
+      secondPage.identifier.range(of: "DownsamplingImageProcessor")
+    )
+    let blurRange = try? XCTUnwrap(secondPage.identifier.range(of: "BlurImageProcessor"))
+    XCTAssertNotNil(downsamplingRange)
+    XCTAssertNotNil(blurRange)
+    if let downsamplingRange, let blurRange {
+      XCTAssertLessThan(downsamplingRange.lowerBound, blurRange.lowerBound)
+    }
+
+    let heroOptions = KingfisherParsedOptionsInfo(
+      MediaDetailBackgroundImage.heroOptions(
+        for: size,
+        scaleFactor: 1,
+        usingPosterAsBackdrop: false
+      )
+    )
+    XCTAssertEqual(heroOptions.processor.identifier, firstPage.identifier)
+    XCTAssertFalse(heroOptions.cacheOriginalImage)
+  }
+
+  func testSecondPageBlurReusesDownsampledHeroWithoutOriginalCache() throws {
+    let cache = ImageCache(name: "second-page-background-\(UUID().uuidString)")
+    defer {
+      cache.clearMemoryCache()
+      cache.clearDiskCache()
+    }
+    let url = try XCTUnwrap(URL(string: "https://example.com/backdrop.jpg"))
+    let size = CGSize(width: 32, height: 18)
+    let firstPageProcessor = MediaDetailBackgroundImage.heroProcessor(
+      for: size,
+      usingPosterAsBackdrop: false
+    )
+    let secondPageProcessor = MediaDetailBackgroundImage.secondPageProcessor(for: size)
+    let image = UIGraphicsImageRenderer(size: size).image { context in
+      UIColor.blue.setFill()
+      context.cgContext.fill(CGRect(origin: .zero, size: size))
+    }
+    cache.store(
+      image,
+      forKey: url.cacheKey,
+      processorIdentifier: firstPageProcessor.identifier,
+      toDisk: false
+    )
+
+    XCTAssertTrue(
+      MediaDetailBackgroundImage.cacheSecondPageImage(
+        from: image,
+        for: url,
+        size: size,
+        scaleFactor: 1,
+        cache: cache
+      )
+    )
+
+    XCTAssertTrue(
+      cache.isCached(
+        forKey: url.cacheKey,
+        processorIdentifier: firstPageProcessor.identifier
+      )
+    )
+    XCTAssertTrue(
+      cache.isCached(
+        forKey: url.cacheKey,
+        processorIdentifier: secondPageProcessor.identifier
+      )
+    )
+    XCTAssertFalse(
+      cache.isCached(
+        forKey: url.cacheKey,
+        processorIdentifier: DefaultImageProcessor.default.identifier
+      )
+    )
+  }
+
+  func testCancelledSecondPageBlurIsNotCached() async throws {
+    let cache = ImageCache(name: "cancelled-second-page-background-\(UUID().uuidString)")
+    defer {
+      cache.clearMemoryCache()
+      cache.clearDiskCache()
+    }
+    let url = try XCTUnwrap(URL(string: "https://example.com/cancelled-backdrop.jpg"))
+    let size = CGSize(width: 32, height: 18)
+    let image = UIGraphicsImageRenderer(size: size).image { context in
+      UIColor.blue.setFill()
+      context.cgContext.fill(CGRect(origin: .zero, size: size))
+    }
+
+    let task = Task.detached {
+      try? await Task.sleep(for: .seconds(1))
+      return MediaDetailBackgroundImage.cacheSecondPageImage(
+        from: image,
+        for: url,
+        size: size,
+        scaleFactor: 1,
+        cache: cache
+      )
+    }
+    task.cancel()
+
+    let didCache = await task.value
+    XCTAssertFalse(didCache)
+    XCTAssertFalse(
+      cache.isCached(
+        forKey: url.cacheKey,
+        processorIdentifier: MediaDetailBackgroundImage.secondPageProcessor(for: size).identifier
+      )
+    )
+  }
+
+  func testOpeningDetailDisablesFutureBackgroundWarm() {
+    let task = MediaPreloadTask(partialMedia: MediaInfo(tmdb_id: 1, type: "电影"))
+
+    XCTAssertTrue(task.shouldWarmBackgroundImage(memoryOptimizationEnabled: true))
+    XCTAssertFalse(task.shouldWarmBackgroundImage(memoryOptimizationEnabled: false))
+
+    task.cancelImageWarm()
+
+    XCTAssertFalse(task.shouldWarmBackgroundImage(memoryOptimizationEnabled: true))
   }
 
   private func waitUntil(

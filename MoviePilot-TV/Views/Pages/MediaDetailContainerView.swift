@@ -204,7 +204,9 @@ struct MediaDetailContainerView: View {
     self.media = media
     _navigationPath = navigationPath
     // 在 init 中立即获取预加载任务，避免首帧出现条件分支
-    _preloadTask = State(wrappedValue: MediaPreloader.shared.preload(for: media))
+    let preloadTask = MediaPreloader.shared.preload(for: media)
+    preloadTask.cancelImageWarm()
+    _preloadTask = State(wrappedValue: preloadTask)
   }
 
   @MainActor
