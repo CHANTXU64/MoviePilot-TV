@@ -272,16 +272,17 @@ struct MediaDetailView: View {
             .focused($isContentFocused)
             .animation(.easeInOut(duration: 0.6), value: showContentPage)
             .onChange(of: isHeroFocused) { _, focused in
-              if focused {
-                withAnimation(.easeInOut(duration: 0.6)) {
-                  showContentPage = false
-                  proxy.scrollTo("top", anchor: .top)
-                }
-              } else if isContentFocused {
-                withAnimation(.easeInOut(duration: 0.6)) {
-                  showContentPage = true
-                  proxy.scrollTo("contentTop", anchor: .top)
-                }
+              guard focused else { return }
+              withAnimation(.easeInOut(duration: 0.6)) {
+                showContentPage = false
+                proxy.scrollTo("top", anchor: .top)
+              }
+            }
+            .onChange(of: isContentFocused) { _, focused in
+              guard focused else { return }
+              withAnimation(.easeInOut(duration: 0.6)) {
+                showContentPage = true
+                proxy.scrollTo("contentTop", anchor: .top)
               }
             }
 
