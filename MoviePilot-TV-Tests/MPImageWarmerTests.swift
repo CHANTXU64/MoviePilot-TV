@@ -250,6 +250,25 @@ final class MPImageWarmerTests: XCTestCase {
     }
   }
 
+  func testBackgroundAppearanceRefreshesUnmountedOrCancelledPreparation() {
+    let cases = [
+      (isMounted: false, wasCancelled: false, expected: true),
+      (isMounted: false, wasCancelled: true, expected: true),
+      (isMounted: true, wasCancelled: true, expected: true),
+      (isMounted: true, wasCancelled: false, expected: false),
+    ]
+
+    for item in cases {
+      XCTAssertEqual(
+        MediaDetailView.shouldRefreshBackground(
+          isMounted: item.isMounted,
+          preparationWasCancelled: item.wasCancelled
+        ),
+        item.expected
+      )
+    }
+  }
+
   func testReleasingDetailBackgroundsKeepsBothOnDisk() async throws {
     let cache = ImageCache(name: "released-detail-backgrounds-\(UUID().uuidString)")
     defer {

@@ -86,6 +86,7 @@ struct MediaDetailView: View {
   @State private var secondPageBackgroundTask: Task<Void, Never>?
   @State private var isBackgroundMounted = true
   @State private var backgroundGeneration = 0
+  @State private var backgroundPreparationWasCancelled = false
 
   // 订阅相关 UI 状态（弹窗开关，纯 UI 逻辑）
   @State private var sheetSubscribe: Subscribe?
@@ -214,6 +215,13 @@ struct MediaDetailView: View {
     _isContentReady = isContentReady
   }
 
+  static func shouldRefreshBackground(
+    isMounted: Bool,
+    preparationWasCancelled: Bool
+  ) -> Bool {
+    !isMounted || preparationWasCancelled
+  }
+
   var body: some View {
     ZStack {
       Color.black
@@ -339,11 +347,18 @@ struct MediaDetailView: View {
       // 取消防抖任务，防止视图消失后仍发起无意义的预加载请求
       recommendPreloadDebounce?.cancel()
       similarPreloadDebounce?.cancel()
+      backgroundPreparationWasCancelled =
+        backgroundPreparationWasCancelled || secondPageBackgroundTask != nil
       secondPageBackgroundTask?.cancel()
       secondPageBackgroundTask = nil
     }
     .onAppear {
-      if !isBackgroundMounted {
+      let shouldRefresh = Self.shouldRefreshBackground(
+        isMounted: isBackgroundMounted,
+        preparationWasCancelled: backgroundPreparationWasCancelled
+      )
+      backgroundPreparationWasCancelled = false
+      if shouldRefresh {
         backgroundGeneration &+= 1
         isBackgroundMounted = true
       }
@@ -823,6 +838,7 @@ struct MediaDetailView: View {
                     for: viewModel.detail, targetTmdbId: targetTmdbId)
                   {
                     navigationPath.append(target)
+                    scheduleBackgroundReleaseAfterNavigationStarts()
                   }
                 }
               }) {
