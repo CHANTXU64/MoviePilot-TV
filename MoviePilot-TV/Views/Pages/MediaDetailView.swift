@@ -1,6 +1,73 @@
 import Kingfisher
 import SwiftUI
 
+private struct MediaDetailBackgroundLayer: View {
+  let url: URL?
+  let usingPosterAsBackdrop: Bool
+  let showContentPage: Bool
+  let isSecondPageBackgroundPrepared: Bool
+  let onHeroLoaded: (URL, RetrieveImageResult) -> Void
+
+  @ViewBuilder
+  var body: some View {
+    if let url {
+      let size = UIScreen.main.bounds.size
+      let secondPageProcessor = MediaDetailBackgroundImage.secondPageProcessor(for: size)
+
+      if usingPosterAsBackdrop {
+        backgroundImage(url, processor: secondPageProcessor, alignment: .top)
+      } else {
+        ZStack {
+          backgroundImage(
+            url,
+            processor: MediaDetailBackgroundImage.heroProcessor(
+              for: size,
+              usingPosterAsBackdrop: false
+            ),
+            alignment: .center,
+            onSuccess: { onHeroLoaded(url, $0) }
+          )
+          .opacity(showContentPage ? 0 : 1)
+
+          if isSecondPageBackgroundPrepared {
+            backgroundImage(url, processor: secondPageProcessor, alignment: .center)
+              .opacity(showContentPage ? 1 : 0)
+          }
+        }
+        .animation(.easeInOut(duration: 0.5), value: showContentPage)
+      }
+    } else {
+      Color.gray.opacity(0.3)
+        .ignoresSafeArea()
+    }
+  }
+
+  private func backgroundImage(
+    _ url: URL,
+    processor: any ImageProcessor,
+    alignment: Alignment,
+    onSuccess: @escaping (RetrieveImageResult) -> Void = { _ in }
+  ) -> some View {
+    KFImage(url)
+      .requestModifier(AnyModifier.cookieModifier)
+      .placeholder {
+        EmptyView()
+      }
+      .setProcessor(processor)
+      .scaleFactor(UIScreen.main.scale)
+      .onSuccess(onSuccess)
+      .resizable()
+      .aspectRatio(contentMode: .fill)
+      .frame(
+        width: UIScreen.main.bounds.width,
+        height: UIScreen.main.bounds.height,
+        alignment: alignment
+      )
+      .id("\(url.absoluteString)-\(processor.identifier)")
+      .ignoresSafeArea()
+  }
+}
+
 struct MediaDetailView: View {
   @StateObject private var viewModel: MediaDetailViewModel
   @Binding var navigationPath: NavigationPath
@@ -17,8 +84,9 @@ struct MediaDetailView: View {
   @State private var hasAppeared = false
   @State private var hasRefreshedSubscriptionAfterFullDetail = false
   @State private var preparedSecondPageBackgroundURL: URL?
-  @State private var firstPageBackgroundSource: (url: URL, image: KFCrossPlatformImage)?
   @State private var secondPageBackgroundTask: Task<Void, Never>?
+  @State private var isBackgroundMounted = true
+  @State private var backgroundGeneration = 0
 
   // 订阅相关 UI 状态（弹窗开关，纯 UI 逻辑）
   @State private var sheetSubscribe: Subscribe?
@@ -149,52 +217,26 @@ struct MediaDetailView: View {
 
   var body: some View {
     ZStack {
-      // 固定背景图
-      if let url = viewModel.backgroundUrl {
-        let size = UIScreen.main.bounds.size
-        let secondPageProcessor = MediaDetailBackgroundImage.secondPageProcessor(for: size)
-        let isSecondPageBackgroundPrepared = preparedSecondPageBackgroundURL == url
+      Color.black
+        .ignoresSafeArea()
 
-        if viewModel.isUsingPosterAsBackdrop {
-          backgroundImage(
-            url,
-            processor: secondPageProcessor,
-            alignment: .top
-          )
-        } else {
-          ZStack {
-            backgroundImage(
-              url,
-              processor: MediaDetailBackgroundImage.heroProcessor(
-                for: size,
-                usingPosterAsBackdrop: false
-              ),
-              alignment: .center,
-              onSuccess: { result in
-                firstPageBackgroundSource = (url, result.image)
-                prepareSecondPageBackground(
-                  from: result.image,
-                  for: url,
-                  size: size
-                )
-              }
+      if isBackgroundMounted {
+        MediaDetailBackgroundLayer(
+          url: viewModel.backgroundUrl,
+          usingPosterAsBackdrop: viewModel.isUsingPosterAsBackdrop,
+          showContentPage: showContentPage,
+          isSecondPageBackgroundPrepared:
+            preparedSecondPageBackgroundURL == viewModel.backgroundUrl,
+          onHeroLoaded: { url, result in
+            guard url == viewModel.backgroundUrl else { return }
+            prepareSecondPageBackground(
+              from: result.image,
+              for: url,
+              size: UIScreen.main.bounds.size
             )
-            .opacity(showContentPage ? 0 : 1)
-
-            if isSecondPageBackgroundPrepared {
-              backgroundImage(
-                url,
-                processor: secondPageProcessor,
-                alignment: .center
-              )
-              .opacity(showContentPage ? 1 : 0)
-            }
           }
-          .animation(.easeInOut(duration: 0.5), value: showContentPage)
-        }
-      } else {
-        Color.gray.opacity(0.3)
-          .ignoresSafeArea()
+        )
+        .id(backgroundGeneration)
       }
 
       // Apple TV Style 动态阴影
@@ -279,7 +321,7 @@ struct MediaDetailView: View {
               }
             }
             .onChange(of: isContentFocused) { _, focused in
-              guard focused else { return }
+              guard focused, !showContentPage else { return }
               withAnimation(.easeInOut(duration: 0.6)) {
                 showContentPage = true
                 proxy.scrollTo("contentTop", anchor: .top)
@@ -302,23 +344,14 @@ struct MediaDetailView: View {
       secondPageBackgroundTask = nil
     }
     .onAppear {
-      guard
-        let source = firstPageBackgroundSource,
-        source.url == viewModel.backgroundUrl
-      else {
-        return
+      if !isBackgroundMounted {
+        backgroundGeneration &+= 1
+        isBackgroundMounted = true
       }
-      prepareSecondPageBackground(
-        from: source.image,
-        for: source.url,
-        size: UIScreen.main.bounds.size
-      )
     }
-    .onChange(of: viewModel.backgroundUrl) { _, url in
-      guard firstPageBackgroundSource?.url != url else { return }
+    .onChange(of: viewModel.backgroundUrl) { _, _ in
       secondPageBackgroundTask?.cancel()
       secondPageBackgroundTask = nil
-      firstPageBackgroundSource = nil
       preparedSecondPageBackgroundURL = nil
     }
     .task {
@@ -437,31 +470,6 @@ struct MediaDetailView: View {
     }
   }
 
-  private func backgroundImage(
-    _ url: URL,
-    processor: any ImageProcessor,
-    alignment: Alignment,
-    onSuccess: @escaping (RetrieveImageResult) -> Void = { _ in }
-  ) -> some View {
-    KFImage(url)
-      .requestModifier(AnyModifier.cookieModifier)
-      .placeholder {
-        EmptyView()
-      }
-      .setProcessor(processor)
-      .scaleFactor(UIScreen.main.scale)
-      .onSuccess(onSuccess)
-      .resizable()
-      .aspectRatio(contentMode: .fill)
-      .frame(
-        width: UIScreen.main.bounds.width,
-        height: UIScreen.main.bounds.height,
-        alignment: alignment
-      )
-      .id("\(url.absoluteString)-\(processor.identifier)")
-      .ignoresSafeArea()
-  }
-
   private func prepareSecondPageBackground(
     from firstPageImage: KFCrossPlatformImage,
     for url: URL,
@@ -485,6 +493,40 @@ struct MediaDetailView: View {
         secondPageBackgroundTask = nil
       }
     }
+  }
+
+  private func navigateFromSecondPage<Destination: Hashable>(to destination: Destination) {
+    navigationPath.append(destination)
+    scheduleBackgroundReleaseAfterNavigationStarts()
+  }
+
+  private func scheduleBackgroundReleaseAfterNavigationStarts() {
+    guard
+      let url = viewModel.backgroundUrl,
+      MediaDetailBackgroundImage.shouldReleaseForNavigation(
+        memoryOptimizationEnabled: MemoryOptimizationPolicy.shared.isEnabled,
+        usingPosterAsBackdrop: viewModel.isUsingPosterAsBackdrop,
+        secondPageBackgroundPrepared: preparedSecondPageBackgroundURL == url
+      )
+    else {
+      return
+    }
+    DispatchQueue.main.async {
+      releaseBackground(for: url)
+    }
+  }
+
+  private func releaseBackground(for url: URL) {
+    guard isBackgroundMounted else { return }
+    isBackgroundMounted = false
+    MediaDetailBackgroundImage.removeFirstPageBackgroundFromMemory(
+      for: url,
+      size: UIScreen.main.bounds.size
+    )
+    MediaDetailBackgroundImage.removeSecondPageBackgroundFromMemory(
+      for: url,
+      size: UIScreen.main.bounds.size
+    )
   }
 
   // MARK: - 订阅 UI 操作（业务逻辑委托给 ViewModel）
@@ -943,7 +985,7 @@ struct MediaDetailView: View {
                 initialSeason: season.season_number,
                 initialEpisodeGroup: seasonVM.selectedGroupId
               )
-              navigationPath.append(request)
+              navigateFromSecondPage(to: request)
             },
             onMoreTapped: {
               let request = SubscribeSeasonRequest(
@@ -951,7 +993,7 @@ struct MediaDetailView: View {
                 initialSeason: nil,
                 initialEpisodeGroup: seasonVM.selectedGroupId
               )
-              navigationPath.append(request)
+              navigateFromSecondPage(to: request)
             }
           )
         } else {
@@ -989,12 +1031,12 @@ struct MediaDetailView: View {
                 person: director,
                 staffImageUrl: director.imageURLs.profile
               ) {
-                navigationPath.append(director)
+                navigateFromSecondPage(to: director)
               }
               .compositingGroup()
               .contextMenu {
                 Button {
-                  navigationPath.append(director)
+                  navigateFromSecondPage(to: director)
                 } label: {
                   Label("详情", systemImage: "info.circle")
                 }
@@ -1029,13 +1071,13 @@ struct MediaDetailView: View {
           LazyHStack(spacing: 40) {
             ForEach(actors) { actor in
               PersonCard(person: actor) {
-                navigationPath.append(actor)
+                navigateFromSecondPage(to: actor)
               }
               .focused($focusedActorId, equals: actor.id)
               .compositingGroup()
               .contextMenu {
                 Button {
-                  navigationPath.append(actor)
+                  navigateFromSecondPage(to: actor)
                 } label: {
                   Label("详情", systemImage: "info.circle")
                 }
@@ -1082,14 +1124,15 @@ struct MediaDetailView: View {
                 showBadges: badges,
                 onTap: {
                   MediaPreloader.shared.preload(for: media)
-                  navigationPath.append(media)
+                  navigateFromSecondPage(to: media)
                 }
               )
               .equatable()
               .focused($focusedRecommendId, equals: media.id)
               .mediaContextMenu(
                 item: media,
-                navigationPath: $navigationPath
+                navigationPath: $navigationPath,
+                onDidNavigate: scheduleBackgroundReleaseAfterNavigationStarts
               )
             }
             if viewModel.recommendPaginator.isLoadingMore {
@@ -1145,14 +1188,15 @@ struct MediaDetailView: View {
                 showBadges: badges,
                 onTap: {
                   MediaPreloader.shared.preload(for: media)
-                  navigationPath.append(media)
+                  navigateFromSecondPage(to: media)
                 }
               )
               .equatable()
               .focused($focusedSimilarId, equals: media.id)
               .mediaContextMenu(
                 item: media,
-                navigationPath: $navigationPath
+                navigationPath: $navigationPath,
+                onDidNavigate: scheduleBackgroundReleaseAfterNavigationStarts
               )
             }
             if viewModel.similarPaginator.isLoadingMore {

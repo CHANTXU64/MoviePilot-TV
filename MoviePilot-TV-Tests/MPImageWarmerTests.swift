@@ -230,6 +230,88 @@ final class MPImageWarmerTests: XCTestCase {
     XCTAssertFalse(heroOptions.cacheOriginalImage)
   }
 
+  func testOnlyPreparedSecondPageBackgroundIsEligibleForNavigationRelease() {
+    let cases: [(Bool, Bool, Bool, Bool)] = [
+      (true, false, true, true),
+      (false, false, true, false),
+      (true, true, true, false),
+      (true, false, false, false),
+    ]
+
+    for (enabled, usesPoster, prepared, expected) in cases {
+      XCTAssertEqual(
+        MediaDetailBackgroundImage.shouldReleaseForNavigation(
+          memoryOptimizationEnabled: enabled,
+          usingPosterAsBackdrop: usesPoster,
+          secondPageBackgroundPrepared: prepared
+        ),
+        expected
+      )
+    }
+  }
+
+  func testReleasingDetailBackgroundsKeepsBothOnDisk() async throws {
+    let cache = ImageCache(name: "released-detail-backgrounds-\(UUID().uuidString)")
+    defer {
+      cache.clearMemoryCache()
+      cache.clearDiskCache()
+    }
+    let url = try XCTUnwrap(URL(string: "https://example.com/released-backdrop.jpg"))
+    let size = CGSize(width: 32, height: 18)
+    let processors = [
+      MediaDetailBackgroundImage.heroProcessor(
+        for: size,
+        usingPosterAsBackdrop: false
+      ),
+      MediaDetailBackgroundImage.secondPageProcessor(for: size),
+    ]
+    let image = UIGraphicsImageRenderer(size: size).image { context in
+      UIColor.blue.setFill()
+      context.cgContext.fill(CGRect(origin: .zero, size: size))
+    }
+
+    for processor in processors {
+      try await cache.store(
+        image,
+        forKey: url.cacheKey,
+        processorIdentifier: processor.identifier
+      )
+      XCTAssertEqual(
+        cache.imageCachedType(
+          forKey: url.cacheKey,
+          processorIdentifier: processor.identifier
+        ),
+        .memory
+      )
+    }
+
+    MediaDetailBackgroundImage.removeFirstPageBackgroundFromMemory(
+      for: url,
+      size: size,
+      cache: cache
+    )
+    MediaDetailBackgroundImage.removeSecondPageBackgroundFromMemory(
+      for: url,
+      size: size,
+      cache: cache
+    )
+
+    XCTAssertEqual(
+      cache.imageCachedType(
+        forKey: url.cacheKey,
+        processorIdentifier: processors[0].identifier
+      ),
+      .disk
+    )
+    XCTAssertEqual(
+      cache.imageCachedType(
+        forKey: url.cacheKey,
+        processorIdentifier: processors[1].identifier
+      ),
+      .disk
+    )
+  }
+
   func testSecondPageBlurReusesDownsampledHeroWithoutOriginalCache() throws {
     let cache = ImageCache(name: "second-page-background-\(UUID().uuidString)")
     defer {

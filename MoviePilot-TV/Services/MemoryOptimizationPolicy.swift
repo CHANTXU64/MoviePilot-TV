@@ -54,7 +54,7 @@ private final class MemoryOptimizationProbeMetrics: NSObject, URLSessionTaskDele
   }
 }
 
-/// 为所有内存优化提供单一开关。自动模式在每次进入 App 及切回自动时重新判断。
+/// 控制允许以少量网络或重新渲染成本换取更低内存的优化。自动模式会按当前会话判断。
 @MainActor
 final class MemoryOptimizationPolicy: ObservableObject {
   typealias LatencyProbe =

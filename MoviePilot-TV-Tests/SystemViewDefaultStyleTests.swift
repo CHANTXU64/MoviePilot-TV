@@ -13,10 +13,20 @@ final class SystemViewDefaultStyleTests: XCTestCase {
 
   func testMemoryOptimizationUsesExistingSettingsSubpageStyle() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+    let policySource = try Self.source(
+      at: "MoviePilot-TV/Services/MemoryOptimizationPolicy.swift"
+    )
 
     XCTAssertTrue(source.contains("push(.memoryOptimization)"))
     XCTAssertTrue(source.contains("private var memoryOptimizationPage: some View"))
     XCTAssertFalse(source.contains("Picker(\n          \"内存优化\""))
+    XCTAssertTrue(
+      source.contains(
+        "允许通过少量网络请求、重新解码或重新渲染降低内存占用；常规优化始终生效"
+      )
+    )
+    XCTAssertFalse(source.contains("开启后会减少图片预加载和解码"))
+    XCTAssertFalse(policySource.contains("为所有内存优化提供单一开关"))
   }
 
   func testMemoryOptimizationOnlyRechecksTokenAfterSessionInvalidation() throws {
@@ -283,6 +293,41 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains(".frame(height: UIScreen.main.bounds.height * 0.94)"))
     XCTAssertTrue(source.contains("Color.clear\n              .frame(height: UIScreen.main.bounds.height)"))
     XCTAssertFalse(source.contains(".frame(minHeight: UIScreen.main.bounds.height, alignment: .top)"))
+  }
+
+  func testMediaDetailReleasesBackgroundAfterNavigationStartsWithoutDelay() throws {
+    let detailSource = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
+    let menuSource = try Self.source(at: "MoviePilot-TV/Views/Components/MediaContextMenu.swift")
+    let releaseStart = try XCTUnwrap(
+      detailSource.range(of: "private func scheduleBackgroundReleaseAfterNavigationStarts()")
+    )
+    let releaseEnd = try XCTUnwrap(
+      detailSource.range(
+        of: "private func releaseBackground(for url: URL)",
+        range: releaseStart.upperBound..<detailSource.endIndex
+      )
+    )
+    let release = detailSource[releaseStart.lowerBound..<releaseEnd.lowerBound]
+
+    XCTAssertTrue(
+      detailSource.contains(
+        "navigationPath.append(destination)\n    scheduleBackgroundReleaseAfterNavigationStarts()"
+      )
+    )
+    XCTAssertTrue(
+      menuSource.contains("navigationPath.append(item)\n      onDidNavigate?()")
+    )
+    XCTAssertFalse(menuSource.contains("onWillNavigate"))
+    XCTAssertFalse(detailSource.contains("scheduleBackgroundReleaseOnDisappear"))
+    XCTAssertTrue(release.contains("DispatchQueue.main.async"))
+    XCTAssertFalse(release.contains("Task.sleep"))
+    XCTAssertFalse(release.contains("asyncAfter"))
+  }
+
+  func testMediaDetailRestoredContentFocusDoesNotScrollToTopAgain() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
+
+    XCTAssertTrue(source.contains("guard focused, !showContentPage else { return }"))
   }
 
   func testSystemViewModelRechecksPermissionBeforePublishingCustomRules() throws {

@@ -8,6 +8,7 @@ struct MediaContextMenuItems: View {
 
   // 可选的自定义订阅操作
   var onSubscribe: ((MediaInfo) -> Void)? = nil
+  var onDidNavigate: (() -> Void)? = nil
 
   private var canSubscribeMedia: Bool {
     APIService.shared.canAccess(.subscribe)
@@ -31,6 +32,7 @@ struct MediaContextMenuItems: View {
       // 点击"详情"时立即触发预加载
       MediaPreloader.shared.preload(for: item)
       navigationPath.append(item)
+      onDidNavigate?()
     } label: {
       Label("详情", systemImage: "info.circle")
     }
@@ -48,6 +50,7 @@ struct MediaContextMenuItems: View {
               for: item, targetTmdbId: preloadedTmdbId)
             {
               navigationPath.append(target)
+              onDidNavigate?()
             }
           }
         } label: {
@@ -82,6 +85,7 @@ struct MediaContextMenuItems: View {
           Task { @MainActor in
             let request = await mediaActionHandler.searchResourcesTargetUsingDefaultSites(for: item)
             navigationPath.append(request)
+            onDidNavigate?()
           }
         } label: {
           Label("搜索资源", systemImage: "magnifyingglass")
@@ -98,6 +102,7 @@ struct MediaContextMenu: ViewModifier {
 
   // 可选的自定义订阅操作
   var onSubscribe: ((MediaInfo) -> Void)? = nil
+  var onDidNavigate: (() -> Void)? = nil
 
   func body(content: Content) -> some View {
     content
@@ -107,7 +112,8 @@ struct MediaContextMenu: ViewModifier {
           item: item,
           navigationPath: $navigationPath,
           subscriptionHandler: subscriptionHandler,
-          onSubscribe: onSubscribe
+          onSubscribe: onSubscribe,
+          onDidNavigate: onDidNavigate
         )
       }
   }
@@ -117,13 +123,15 @@ extension View {
   func mediaContextMenu(
     item: MediaInfo,
     navigationPath: Binding<NavigationPath>,
-    onSubscribe: ((MediaInfo) -> Void)? = nil
+    onSubscribe: ((MediaInfo) -> Void)? = nil,
+    onDidNavigate: (() -> Void)? = nil
   ) -> some View {
     self.modifier(
       MediaContextMenu(
         item: item,
         navigationPath: navigationPath,
-        onSubscribe: onSubscribe
+        onSubscribe: onSubscribe,
+        onDidNavigate: onDidNavigate
       )
     )
   }
