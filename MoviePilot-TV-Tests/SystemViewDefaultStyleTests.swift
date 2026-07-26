@@ -315,6 +315,11 @@ final class SystemViewDefaultStyleTests: XCTestCase {
       )
     )
     XCTAssertTrue(
+      detailSource.contains(
+        "navigationPath.append(target)\n                    scheduleBackgroundReleaseAfterNavigationStarts()"
+      )
+    )
+    XCTAssertTrue(
       menuSource.contains("navigationPath.append(item)\n      onDidNavigate?()")
     )
     XCTAssertFalse(menuSource.contains("onWillNavigate"))
