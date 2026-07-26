@@ -56,7 +56,8 @@ final class MPImageWarmer {
     return await warm(
       url,
       baseURL: apiService.baseURL,
-      imageCacheEnabled: apiService.useImageCache
+      imageCacheEnabled: apiService.useImageCache,
+      requestModifier: apiService.imageRequestModifier(for: url)
     )
   }
 
@@ -78,6 +79,20 @@ final class MPImageWarmer {
     _ url: URL,
     baseURL: String,
     imageCacheEnabled: Bool
+  ) async -> Handle? {
+    await warm(
+      url,
+      baseURL: baseURL,
+      imageCacheEnabled: imageCacheEnabled,
+      requestModifier: nil
+    )
+  }
+
+  private func warm(
+    _ url: URL,
+    baseURL: String,
+    imageCacheEnabled: Bool,
+    requestModifier: AnyModifier?
   ) async -> Handle? {
     guard
       Self.isWarmable(
@@ -108,10 +123,12 @@ final class MPImageWarmer {
     }
 
     var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
-    guard let requestWithCookies = AnyModifier.cookieModifier.modified(for: request) else {
-      return nil
+    if let requestModifier {
+      guard let modifiedRequest = requestModifier.modified(for: request) else {
+        return nil
+      }
+      request = modifiedRequest
     }
-    request = requestWithCookies
 
     let requestID = UUID()
     let task = session.dataTask(with: request)

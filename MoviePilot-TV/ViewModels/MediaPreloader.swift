@@ -36,6 +36,47 @@ enum MediaDetailBackgroundImage {
     ]
   }
 
+  nonisolated static func shouldReleaseForNavigation(
+    memoryOptimizationEnabled: Bool,
+    usingPosterAsBackdrop: Bool,
+    secondPageBackgroundPrepared: Bool
+  ) -> Bool {
+    memoryOptimizationEnabled
+      && !usingPosterAsBackdrop
+      && secondPageBackgroundPrepared
+  }
+
+  nonisolated static func removeSecondPageBackgroundFromMemory(
+    for url: URL,
+    size: CGSize,
+    cacheKey: String? = nil,
+    cache: ImageCache = .default
+  ) {
+    cache.removeImage(
+      forKey: cacheKey ?? url.cacheKey,
+      processorIdentifier: secondPageProcessor(for: size).identifier,
+      fromMemory: true,
+      fromDisk: false
+    )
+  }
+
+  nonisolated static func removeFirstPageBackgroundFromMemory(
+    for url: URL,
+    size: CGSize,
+    cacheKey: String? = nil,
+    cache: ImageCache = .default
+  ) {
+    cache.removeImage(
+      forKey: cacheKey ?? url.cacheKey,
+      processorIdentifier: heroProcessor(
+        for: size,
+        usingPosterAsBackdrop: false
+      ).identifier,
+      fromMemory: true,
+      fromDisk: false
+    )
+  }
+
   @discardableResult
   nonisolated static func cacheSecondPageImage(
     from firstPageImage: KFCrossPlatformImage,

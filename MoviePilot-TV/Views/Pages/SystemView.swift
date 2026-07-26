@@ -838,7 +838,7 @@ struct SystemView: View {
       case .mediaSourceSelection:
         return "设置聚合搜索默认使用的媒体来源；未选择时沿用 MoviePilot 后端搜索设置。（只影响 TV 端）"
       case .memoryOptimization:
-        return "开启后会减少图片预加载和解码以降低内存占用，进入详情页或向下浏览时图片可能稍后显示；不确定时请选择自动。（只影响 TV 端）"
+        return "允许通过少量网络请求、重新解码或重新渲染降低内存占用；常规优化始终生效。不确定时请选择自动。（只影响 TV 端）"
       case .siteSelection:
         return "设置资源搜索默认使用的站点。（只影响 TV 端）"
       case .hardFilter:
@@ -881,7 +881,7 @@ struct SystemView: View {
     case .mediaSourceSelection:
       return "设置聚合搜索默认使用的媒体来源。（只影响 TV 端）"
     case .memoryOptimization:
-      return "开启后会减少图片预加载和解码以降低内存占用，进入详情页或向下浏览时图片可能稍后显示；不确定时请选择自动。（只影响 TV 端）"
+      return "允许通过少量网络请求、重新解码或重新渲染降低内存占用；常规优化始终生效。不确定时请选择自动。（只影响 TV 端）"
     case .siteSelection:
       return "设置资源搜索默认使用的站点。（只影响 TV 端）"
     case .hardFilter:
