@@ -166,7 +166,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
 
     await viewModel?.prepareStartupIfNeeded()
 
-    XCTAssertEqual(service.settings?.BACKEND_VERSION, "v2.14.6")
+    XCTAssertEqual(service.settings?.BACKEND_VERSION, "v2.15.1")
     XCTAssertNil(viewModel?.backendVersionWarning)
 
     service.baseURL = "https://old.content-view-model-tests.local"
@@ -174,11 +174,11 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     service.currentUser = token("token-b", userName: "second-user")
 
     try await waitUntil("expected backend warning to reload from old backend") {
-      service.settings?.BACKEND_VERSION == "v2.14.5"
-        && viewModel?.backendVersionWarning?.backendVersion == "v2.14.5"
+      service.settings?.BACKEND_VERSION == "v2.14.9"
+        && viewModel?.backendVersionWarning?.backendVersion == "v2.14.9"
     }
 
-    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v2.14.5")
+    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v2.14.9")
     XCTAssertEqual(
       viewModel?.backendVersionWarning?.requiredVersion,
       AppVersionInfo.compatibleMoviePilotVersion
@@ -325,9 +325,9 @@ private actor ContentViewModelURLProtocolStub {
     let backendVersion: String
     switch url.host {
     case "old.content-view-model-tests.local":
-      backendVersion = "v2.14.5"
+      backendVersion = "v2.14.9"
     default:
-      backendVersion = "v2.14.6"
+      backendVersion = "v2.15.1"
     }
 
     let data: Data
@@ -337,7 +337,7 @@ private actor ContentViewModelURLProtocolStub {
         .data(using: .utf8)!
     } else if url.path == "/api/v1/system/global" {
       data =
-        #"{"success":true,"data":{"TMDB_IMAGE_DOMAIN":"image.tmdb.org","GLOBAL_IMAGE_CACHE":true,"BACKEND_VERSION":"\#(backendVersion)","FRONTEND_VERSION":"v2.13.15"}}"#
+        #"{"success":true,"data":{"TMDB_IMAGE_DOMAIN":"image.tmdb.org","GLOBAL_IMAGE_CACHE":true,"BACKEND_VERSION":"\#(backendVersion)","FRONTEND_VERSION":"v2.15.1"}}"#
         .data(using: .utf8)!
     } else if url.path == "/api/v1/system/global/user" {
       data =
