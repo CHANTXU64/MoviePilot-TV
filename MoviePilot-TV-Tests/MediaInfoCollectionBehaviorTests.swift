@@ -54,4 +54,26 @@ final class MediaInfoCollectionBehaviorTests: XCTestCase {
       XCTAssertNil(media.apiMediaId, "Expected \(prefix):\(id) to be rejected")
     }
   }
+
+  func testMediaCardSourceUsesSourceOnly() throws {
+    let anilist = MediaInfo(tmdb_id: 42, source: "anilist")
+    let tvdb = MediaInfo(tmdb_id: 42, mediaid_prefix: "tvdb", media_id: "99")
+    let share = try JSONDecoder().decode(
+      SubscribeShare.self,
+      from:
+        #"{"id":7,"name":"AniList 分享","type":"电视剧","media_source":"anilist","media_id":"154587"}"#
+        .data(using: .utf8)!
+    )
+    XCTAssertEqual(MediaSource.from(mediaInfo: anilist), .anilist)
+    XCTAssertNil(MediaSource.from(mediaInfo: tvdb))
+    XCTAssertNil(MediaSource.from(mediaInfo: share.toMediaInfo()))
+    XCTAssertNil(MediaSource.from(source: "tmdb"))
+    XCTAssertEqual(MediaSource.from(source: "themoviedb"), .tmdb)
+    XCTAssertEqual(MediaSource.from(source: "douban"), .douban)
+    XCTAssertEqual(MediaSource.from(source: "bangumi"), .bangumi)
+    XCTAssertEqual(MediaSource.anilist.assetName, "anilist")
+    XCTAssertEqual(MediaSource.tmdb.assetName, "tmdb")
+    XCTAssertEqual(MediaSource.douban.assetName, "douban")
+    XCTAssertEqual(MediaSource.bangumi.assetName, "bangumi")
+  }
 }
