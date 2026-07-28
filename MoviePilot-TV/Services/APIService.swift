@@ -1706,8 +1706,7 @@ class APIService: ObservableObject {
   /// - ⚠️ 参数说明:
   ///   - `source`: **数据源，决定API的路由**。前端直接将其作为路径的一部分。
   func fetchPersonDetail(personId: String, source: String?) async throws -> Person {
-    var sourcePath = source ?? "tmdb"
-    if sourcePath == "themoviedb" { sourcePath = "tmdb" }
+    let sourcePath = try personSourcePath(source)
     let endpoint = "/\(sourcePath)/person/\(personId)"
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap(Person.self, from: data)
@@ -1721,13 +1720,24 @@ class APIService: ObservableObject {
   func fetchPersonCredits(personId: String, source: String?, page: Int = 1) async throws
     -> [MediaInfo]
   {
-    var sourcePath = source ?? "tmdb"
-    if sourcePath == "themoviedb" { sourcePath = "tmdb" }
+    let sourcePath = try personSourcePath(source)
     let endpoint = try buildEndpoint(
       path: "/\(sourcePath)/person/credits/\(personId)",
       params: ["page": String(page)])
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([MediaInfo].self, from: data)
+  }
+
+  private func personSourcePath(_ source: String?) throws -> String {
+    guard let source else { throw APIError.invalidURL }
+    switch source {
+    case "themoviedb":
+      return "tmdb"
+    case "douban", "bangumi", "anilist":
+      return source
+    default:
+      throw APIError.invalidURL
+    }
   }
 
   /// 获取媒体演员
@@ -2448,49 +2458,22 @@ class APIService: ObservableObject {
   func getPersonImageURL(
     source: String?, profilePath: String?, avatar: PersonAvatar?, images: BangumiImages?
   ) -> URL? {
-    var url = ""
-    var effectiveSource = source
-
-    // 自动推断来源
-    if effectiveSource == nil || (effectiveSource?.isEmpty ?? true) {
-      if let path = profilePath, path.hasPrefix("/") {
-        effectiveSource = "themoviedb"
-      } else if avatar != nil {
-        effectiveSource = "douban"
-      } else if images != nil {
-        effectiveSource = "bangumi"
-      } else if let path = profilePath, path.hasPrefix("http") {
-        url = path
-      }
-    }
-
-    if effectiveSource == "themoviedb" {
-      if profilePath == nil && url.isEmpty {
-        return nil
-      }
+    let url: String
+    switch source {
+    case "themoviedb":
+      guard let profilePath else { return nil }
       let domain = settings?.TMDB_IMAGE_DOMAIN ?? "image.tmdb.org"
-      let path = profilePath ?? ""
-      if url.isEmpty {
-        url = "https://\(domain)/t/p/w600_and_h900_bestv2\(path)"
-      }
-    } else if effectiveSource == "douban" {
-      guard let avatar = avatar else {
-        return nil
-      }
-      switch avatar {
-      case .object(let normal):
-        url = normal
-      case .url(let link):
-        url = link
-      }
-    } else if effectiveSource == "bangumi" {
-      guard let medium = images?.medium else {
-        return nil
-      }
-      url = medium
-    }
-
-    if url.isEmpty {
+      url = "https://\(domain)/t/p/w600_and_h900_bestv2\(profilePath)"
+    case "douban":
+      guard let avatarURL = avatar?.urlValue else { return nil }
+      url = avatarURL
+    case "bangumi":
+      guard let image = images?.medium else { return nil }
+      url = image
+    case "anilist":
+      guard let image = images?.large ?? images?.medium else { return nil }
+      url = image
+    default:
       return nil
     }
 

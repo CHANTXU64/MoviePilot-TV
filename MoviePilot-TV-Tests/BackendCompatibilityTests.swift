@@ -1425,6 +1425,10 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       await scanSeasonAvailabilityStatus(service: service, config: config, collector: collector)
       await scanPersonDetailSurfaces(service: service, collector: &collector)
 
+      assertPersonImagesMatchWebSelection(
+        Array(collector.peopleByID.values),
+        service: service
+      )
       await assertImagesRenderable(collector.imageCandidates, service: service)
     }
   }
@@ -1989,6 +1993,49 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     print(
       "Backend compatibility checked \(checkedImages) tvOS-decodable images from \(uniqueCandidates.count) unique image URLs. MP Web-aligned image failures: \(webAlignedFailures)."
     )
+  }
+
+  @MainActor
+  private func assertPersonImagesMatchWebSelection(
+    _ people: [Person],
+    service: APIService,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    let supportedSources = Set(["themoviedb", "douban", "bangumi", "anilist"])
+    let supportedPeople = people.filter { $0.source.map(supportedSources.contains) == true }
+    XCTAssertFalse(
+      supportedPeople.isEmpty,
+      "Person image compatibility collected no Web-supported people.",
+      file: file,
+      line: line
+    )
+
+    for person in supportedPeople {
+      let rawURL = person.compatibilityRawImageURL
+      let isFilteredDoubanDefault =
+        rawURL?.contains("doubanio.com") == true
+        && (rawURL?.contains("personage-default") == true
+          || rawURL?.contains("celebrity-default") == true)
+      let expectedURL =
+        isFilteredDoubanDefault
+        ? nil
+        : rawURL.flatMap {
+          Self.webDisplayImageURL(
+            $0,
+            baseURL: service.baseURL,
+            useImageCache: service.useImageCache
+          )
+        }
+
+      XCTAssertEqual(
+        person.imageURLs.profile?.absoluteString,
+        expectedURL?.absoluteString,
+        "Person image selection differs from MP Web for \(person.compatibilityName) [\(person.source ?? "unknown")]",
+        file: file,
+        line: line
+      )
+    }
   }
 
   private static func imageFailureReason(
@@ -3233,29 +3280,22 @@ private extension Person {
 
   @MainActor
   var compatibilityRawImageURL: String? {
-    if let profilePath = profile_path, profilePath.hasPrefix("http") {
-      return profilePath
-    }
-
-    if source == "themoviedb" || (source == nil && profile_path?.hasPrefix("/") == true) {
+    if source == "themoviedb" {
       guard let profilePath = profile_path else { return nil }
       let domain = APIService.shared.settings?.TMDB_IMAGE_DOMAIN ?? "image.tmdb.org"
       return "https://\(domain)/t/p/w600_and_h900_bestv2\(profilePath)"
     }
 
     if source == "douban" {
-      switch avatar {
-      case .object(let normal):
-        return normal
-      case .url(let link):
-        return link
-      case .none:
-        return nil
-      }
+      return avatar?.urlValue
     }
 
     if source == "bangumi" {
       return images?.medium
+    }
+
+    if source == "anilist" {
+      return images?.large ?? images?.medium
     }
 
     return nil

@@ -1660,7 +1660,7 @@ struct Person: Codable, Identifiable, Hashable {
     let profile: URL?
   }
 
-  /// 来源：themoviedb、douban、bangumi
+  /// 来源：themoviedb、douban、bangumi、anilist
   let source: String?
   /// ID
   let raw_id: String?
@@ -1896,20 +1896,27 @@ enum PersonAvatar: Codable, Hashable {
   case url(String)
   case object(normal: String)
 
+  var urlValue: String {
+    switch self {
+    case .url(let url), .object(let url):
+      return url
+    }
+  }
+
   init(from decoder: Decoder) throws {
     let container = try decoder.singleValueContainer()
     if let urlString = try? container.decode(String.self) {
       self = .url(urlString)
     } else if let dict = try? container.decode([String: String].self),
-      let normal = dict["normal"]
+      let url = dict["normal"] ?? dict["large"] ?? dict["medium"] ?? dict["small"] ?? dict["url"]
     {
-      self = .object(normal: normal)
+      self = .object(normal: url)
     } else {
       throw DecodingError.typeMismatch(
         PersonAvatar.self,
         DecodingError.Context(
           codingPath: decoder.codingPath,
-          debugDescription: "期望字符串或带有 normal 键的对象"))
+          debugDescription: "期望字符串或带有图片 URL 的对象"))
     }
   }
 

@@ -108,7 +108,7 @@ struct PersonDetailView: View {
                     Text("个人简介")
                       .font(.callout.bold())
 
-                    Text(biography)
+                    Text(Self.biographyText(biography, source: person.source))
                       .font(.caption)
                       .multilineTextAlignment(.leading)
                   }
@@ -166,7 +166,7 @@ struct PersonDetailView: View {
           Text(person.name ?? "个人简介")
             .font(.title2.bold())
 
-          Text(biography)
+          Text(Self.biographyText(biography, source: person.source))
             .font(.footnote)
         }
         .padding(50)
@@ -174,6 +174,18 @@ struct PersonDetailView: View {
       }
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $navigationPath)
+  }
+
+  static func biographyText(_ biography: String, source: String?) -> AttributedString {
+    guard source == "anilist",
+      let attributed = try? AttributedString(
+        markdown: biography,
+        options: .init(interpretedSyntax: .full)
+      )
+    else {
+      return AttributedString(biography)
+    }
+    return attributed
   }
 }
 

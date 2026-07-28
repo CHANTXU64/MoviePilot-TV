@@ -129,10 +129,16 @@ final class ImageProxyEncodingTests: XCTestCase {
       "https://people.local/avatar.jpg?size=large&token=person#headshot"
     let url = try XCTUnwrap(
       service.getPersonImageURL(
-        source: nil,
-        profilePath: rawImage,
+        source: "anilist",
+        profilePath: nil,
         avatar: nil,
-        images: nil
+        images: BangumiImages(
+          large: rawImage,
+          common: nil,
+          medium: nil,
+          small: nil,
+          grid: nil
+        )
       )
     )
 
@@ -144,6 +150,42 @@ final class ImageProxyEncodingTests: XCTestCase {
       leakedKeys: ["token"],
       encodedTail: "%26token%3Dperson%23headshot"
     )
+  }
+
+  func testBangumiPersonImageUsesBangumiProxyBeforeGlobalCache() throws {
+    let service = APIService.shared
+    let snapshot = ImageProxyServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURL = "http://moviepilot.local"
+    service.useImageCache = true
+
+    let rawImage =
+      "https://lain.bgm.tv/pic/crt/m/person.jpg?size=medium&token=person#headshot"
+    let url = try XCTUnwrap(
+      service.getPersonImageURL(
+        source: "bangumi",
+        profilePath: nil,
+        avatar: nil,
+        images: BangumiImages(
+          large: nil,
+          common: nil,
+          medium: rawImage,
+          small: nil,
+          grid: nil
+        )
+      )
+    )
+
+    let queryItems = try assertProxyURL(
+      url,
+      path: "/api/v1/system/img/1",
+      queryName: "imgurl",
+      rawImage: rawImage,
+      leakedKeys: ["token"],
+      encodedTail: "%26token%3Dperson%23headshot"
+    )
+    XCTAssertEqual(queryItems["cache"], "true")
   }
 
   func testModelComputedImageURLsPreserveNestedQueryAndFragment() throws {

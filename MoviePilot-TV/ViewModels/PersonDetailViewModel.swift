@@ -40,7 +40,7 @@ class PersonDetailViewModel: ObservableObject {
       imageURLsProvider: { item in
         [item.imageURLs.poster].compactMap(\.self)
       },
-      onReset: { @MainActor in
+      onReset: {
         seenKeys.removeAll()  // 重置时清空 seenKeys
       }
     )
