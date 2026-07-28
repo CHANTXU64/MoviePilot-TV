@@ -43,6 +43,7 @@ struct ResourceResultView: View {
         TorrentsResultView(
           result: viewModel.results,
           overrideMediaInfo: mediaInfo,
+          emptyDescription: viewModel.errorMessage,
           header: {
             if mediaInfo != nil {
               Text(title)

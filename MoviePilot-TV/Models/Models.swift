@@ -2419,8 +2419,12 @@ struct ReorganizeForm: Codable {
   }
 }
 
+nonisolated func isResourceMediaSearchKeyword(_ keyword: String) -> Bool {
+  keyword.range(of: "^[a-zA-Z]+:", options: .regularExpression) != nil
+}
+
 /// 资源搜索的流式响应事件 (SSE)
-struct SearchStreamEvent: Codable {
+nonisolated struct SearchStreamEvent: Codable, @unchecked Sendable {
   let type: String? // "append", "replace", "done", "error"
   let text: String?
   let text_i18n: String?
@@ -2438,6 +2442,25 @@ struct SearchStreamEvent: Codable {
     let error_i18n: String?
   }
   let data: AiRedoData?
+
+  func applyResourceItems(
+    to results: inout [Context],
+    finalResultApplied: inout Bool
+  ) {
+    guard let items else { return }
+    switch type {
+    case "append" where !finalResultApplied:
+      results.insert(contentsOf: items, at: 0)
+    case "replace":
+      results = items
+      finalResultApplied = true
+    case "done" where !items.isEmpty && !finalResultApplied:
+      results = items
+      finalResultApplied = true
+    default:
+      break
+    }
+  }
 }
 
 // MARK: - 自定义过滤规则

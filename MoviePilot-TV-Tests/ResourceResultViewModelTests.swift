@@ -79,6 +79,42 @@ private actor ResourceResultAsyncGate {
 
 @MainActor
 final class ResourceResultViewModelTests: XCTestCase {
+  func testSearchStreamAggregationMatchesWebOrderingAndFinalResultRules() throws {
+    func event(_ type: String, title: String?) throws -> SearchStreamEvent {
+      let items = title.map { "[\(resourceContextJSON(title: $0))]" } ?? "[]"
+      let batchMetadata =
+        type == "replace"
+        ? #","replace_batch":true,"batch_index":0,"batch_count":2"#
+        : ""
+      return try JSONDecoder().decode(
+        SearchStreamEvent.self,
+        from: Data(#"{"type":"\#(type)","items":\#(items)\#(batchMetadata)}"#.utf8)
+      )
+    }
+
+    var preview: [Context] = []
+    var previewFinalApplied = false
+    try event("append", title: "Older").applyResourceItems(
+      to: &preview, finalResultApplied: &previewFinalApplied)
+    try event("append", title: "Newer").applyResourceItems(
+      to: &preview, finalResultApplied: &previewFinalApplied)
+    try event("done", title: nil).applyResourceItems(
+      to: &preview, finalResultApplied: &previewFinalApplied)
+    XCTAssertEqual(preview.compactMap(\.torrent_info?.title), ["Newer", "Older"])
+
+    var final: [Context] = []
+    var finalApplied = false
+    try event("replace", title: "Final").applyResourceItems(
+      to: &final, finalResultApplied: &finalApplied)
+    try event("append", title: "Post Replace").applyResourceItems(
+      to: &final, finalResultApplied: &finalApplied)
+    try event("heartbeat", title: nil).applyResourceItems(
+      to: &final, finalResultApplied: &finalApplied)
+    try event("done", title: "Stale Done").applyResourceItems(
+      to: &final, finalResultApplied: &finalApplied)
+    XCTAssertEqual(final.compactMap(\.torrent_info?.title), ["Final"])
+  }
+
   func testDeinitCancelsInFlightSearchStream() async throws {
     XCTAssertTrue(URLProtocol.registerClass(ResourceResultViewModelURLProtocol.self))
     defer { URLProtocol.unregisterClass(ResourceResultViewModelURLProtocol.self) }
@@ -329,6 +365,61 @@ final class ResourceResultViewModelTests: XCTestCase {
     XCTAssertTrue(didRestart)
   }
 
+  func testSessionChangeDoesNotPublishStaleFallbackError() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(ResourceResultViewModelURLProtocol.self))
+    defer { URLProtocol.unregisterClass(ResourceResultViewModelURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await ResourceResultViewModelURLProtocol.stub.reset()
+    service.baseURL = "http://resource-result-tests.local"
+    configureResourceResultSearchSession(service)
+
+    let fallbackGate = ResourceResultAsyncGate()
+    await ResourceResultViewModelURLProtocol.stub.setStreamFailure(forKeyword: "stale-error")
+    await ResourceResultViewModelURLProtocol.stub.setFallbackFailure(forKeyword: "stale-error")
+    await ResourceResultViewModelURLProtocol.stub.setFallbackGate(
+      fallbackGate, forKeyword: "stale-error")
+
+    let viewModel = ResourceResultViewModel(keyword: "stale-error")
+    defer { viewModel.cancelSearch() }
+    await viewModel.search()
+
+    try await withTimeout("resource search to enter failing fallback request") {
+      await ResourceResultViewModelURLProtocol.stub.waitForRequest(
+        path: "/api/v1/search/title", keyword: "stale-error")
+    }
+
+    service.currentUser = Token(
+      access_token: service.token ?? "resource-result-search-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        "discovery": false,
+        "search": true,
+        "subscribe": false,
+        "manage": false,
+        "admin": false,
+      ],
+      user_name: "changed-resource-user",
+      avatar: nil
+    )
+    await fallbackGate.open()
+
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertNil(
+      viewModel.errorMessage,
+      "A fallback failure from an obsolete session must not overwrite the current error state."
+    )
+  }
+
   func testCompletedSearchDoesNotRestartAfterInFlightDisappearCancellation() async throws {
     XCTAssertTrue(URLProtocol.registerClass(ResourceResultViewModelURLProtocol.self))
     defer { URLProtocol.unregisterClass(ResourceResultViewModelURLProtocol.self) }
@@ -377,6 +468,74 @@ final class ResourceResultViewModelTests: XCTestCase {
       "A completed resource search should keep hasSearched true when the view only cancels in-flight work on disappear."
     )
   }
+
+  func testMalformedStreamFallsBackToRequestSearch() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(ResourceResultViewModelURLProtocol.self))
+    defer { URLProtocol.unregisterClass(ResourceResultViewModelURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await ResourceResultViewModelURLProtocol.stub.reset()
+    await ResourceResultViewModelURLProtocol.stub.setStreamBody(
+      "data: not-json\n\n",
+      forKeyword: "malformed"
+    )
+    await ResourceResultViewModelURLProtocol.stub.setFallbackResults(
+      [resourceContextJSON(title: "Fallback Result")],
+      forKeyword: "malformed"
+    )
+    service.baseURL = "http://resource-result-tests.local"
+    configureResourceResultSearchSession(service)
+
+    let viewModel = ResourceResultViewModel(keyword: "malformed")
+    await viewModel.search()
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertEqual(viewModel.results.count, 1)
+    let fallbackRequestCount = await ResourceResultViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/search/title",
+      keyword: "malformed"
+    )
+    XCTAssertEqual(fallbackRequestCount, 1)
+  }
+
+  func testBusinessStreamErrorShowsLocalizedReasonWithoutRequestFallback() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(ResourceResultViewModelURLProtocol.self))
+    defer { URLProtocol.unregisterClass(ResourceResultViewModelURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await ResourceResultViewModelURLProtocol.stub.reset()
+    await ResourceResultViewModelURLProtocol.stub.setStreamBody(
+      "data: {\"type\":\"error\",\"message\":\"Search failed\",\"message_i18n\":\"搜索失败\"}\n\n",
+      forKeyword: "business-error"
+    )
+    service.baseURL = "http://resource-result-tests.local"
+    configureResourceResultSearchSession(service)
+
+    let viewModel = ResourceResultViewModel(keyword: "business-error")
+    await viewModel.search()
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertEqual(viewModel.errorMessage, "搜索失败")
+    let fallbackRequestCount = await ResourceResultViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/search/title",
+      keyword: "business-error"
+    )
+    XCTAssertEqual(fallbackRequestCount, 0)
+  }
 }
 
 @MainActor
@@ -420,7 +579,9 @@ private actor ResourceResultViewModelURLProtocolStub {
   private var requestedRequests: [ResourceResultRecordedRequest] = []
   private var cancelledRequests: [ResourceResultRecordedRequest] = []
   private var streamFailureKeywords: Set<String> = []
+  private var streamBodiesByKeyword: [String: Data] = [:]
   private var fallbackResultsByKeyword: [String: [String]] = [:]
+  private var fallbackFailureKeywords: Set<String> = []
   private var fallbackGatesByKeyword: [String: ResourceResultAsyncGate] = [:]
   private var customFilterGate: ResourceResultAsyncGate?
 
@@ -428,7 +589,9 @@ private actor ResourceResultViewModelURLProtocolStub {
     requestedRequests.removeAll()
     cancelledRequests.removeAll()
     streamFailureKeywords.removeAll()
+    streamBodiesByKeyword.removeAll()
     fallbackResultsByKeyword.removeAll()
+    fallbackFailureKeywords.removeAll()
     fallbackGatesByKeyword.removeAll()
     customFilterGate = nil
   }
@@ -437,8 +600,16 @@ private actor ResourceResultViewModelURLProtocolStub {
     streamFailureKeywords.insert(keyword)
   }
 
+  func setStreamBody(_ body: String, forKeyword keyword: String) {
+    streamBodiesByKeyword[keyword] = Data(body.utf8)
+  }
+
   func setFallbackResults(_ results: [String], forKeyword keyword: String) {
     fallbackResultsByKeyword[keyword] = results
+  }
+
+  func setFallbackFailure(forKeyword keyword: String) {
+    fallbackFailureKeywords.insert(keyword)
   }
 
   func setFallbackGate(_ gate: ResourceResultAsyncGate, forKeyword keyword: String) {
@@ -465,12 +636,21 @@ private actor ResourceResultViewModelURLProtocolStub {
       if streamFailureKeywords.contains(keyword) {
         return ResourceResultHTTPStubResponse(statusCode: 500, data: Data())
       }
+      if let body = streamBodiesByKeyword[keyword] {
+        return ResourceResultHTTPStubResponse(statusCode: 200, data: body)
+      }
       try await waitUntilCancelled()
     }
 
     if components.path == "/api/v1/search/title" {
       if let gate = fallbackGatesByKeyword[keyword] {
         await gate.wait()
+      }
+      if fallbackFailureKeywords.contains(keyword) {
+        return ResourceResultHTTPStubResponse(
+          statusCode: 500,
+          data: Data(#"{"detail":"Fallback failed"}"#.utf8)
+        )
       }
       return ResourceResultHTTPStubResponse(
         statusCode: 200,
@@ -514,6 +694,12 @@ private actor ResourceResultViewModelURLProtocolStub {
       if Task.isCancelled { return }
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
+  }
+
+  func requestCount(path: String, keyword: String? = nil) -> Int {
+    requestedRequests.filter { request in
+      request.path == path && (keyword == nil || request.keyword == keyword)
+    }.count
   }
 
   func waitForCancellation() async {

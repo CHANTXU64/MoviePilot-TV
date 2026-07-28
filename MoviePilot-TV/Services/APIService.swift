@@ -1615,7 +1615,10 @@ class APIService: ObservableObject {
   // MARK: - Server-Sent Events (SSE) Streaming
 
   /// 通用 SSE 流式请求
-  private func streamSSE(endpoint: String) -> AsyncThrowingStream<SearchStreamEvent, Error> {
+  private func streamSSE<Event: Decodable & Sendable>(
+    endpoint: String,
+    as _: Event.Type
+  ) -> AsyncThrowingStream<Event, Error> {
     let serviceBaseURL = baseURL
     let authToken = token
 
@@ -1632,6 +1635,8 @@ class APIService: ObservableObject {
           if let authToken {
             request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
           }
+          request.setValue("zh-CN", forHTTPHeaderField: "X-MoviePilot-Locale")
+          request.setValue("zh-CN", forHTTPHeaderField: "Accept-Language")
 
           let (result, response) = try await URLSession.shared.bytes(for: request)
 
@@ -1650,12 +1655,8 @@ class APIService: ObservableObject {
             if line.hasPrefix("data:") {
               let jsonString = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
               if let data = jsonString.data(using: .utf8) {
-                do {
-                  let event = try JSONDecoder().decode(SearchStreamEvent.self, from: data)
-                  continuation.yield(event)
-                } catch {
-                  print("SSE Decoding Error: \(error), raw string: \(jsonString)")
-                }
+                let event = try JSONDecoder().decode(Event.self, from: data)
+                continuation.yield(event)
               }
             }
           }
@@ -1684,7 +1685,7 @@ class APIService: ObservableObject {
           "sites": sites,
         ]
       )
-      return streamSSE(endpoint: endpoint)
+      return streamSSE(endpoint: endpoint, as: SearchStreamEvent.self)
     } catch {
       return AsyncThrowingStream { $0.finish(throwing: error) }
     }
@@ -1695,8 +1696,11 @@ class APIService: ObservableObject {
     keyword: String, type: String?, area: String?, title: String?, year: String?, season: Int?, sites: String?
   ) -> AsyncThrowingStream<SearchStreamEvent, Error> {
     do {
+      guard let mediaId = encodeMediaIDPathSegment(keyword) else {
+        throw APIError.invalidURL
+      }
       let endpoint = try buildEndpoint(
-        path: "/search/media/\(keyword)/stream",
+        path: "/search/media/\(mediaId)/stream",
         params: [
           "mtype": type,
           "area": area,
@@ -1705,7 +1709,7 @@ class APIService: ObservableObject {
           "season": season.map(String.init),
           "sites": sites,
         ])
-      return streamSSE(endpoint: endpoint)
+      return streamSSE(endpoint: endpoint, as: SearchStreamEvent.self)
     } catch {
       return AsyncThrowingStream { $0.finish(throwing: error) }
     }
@@ -1713,7 +1717,7 @@ class APIService: ObservableObject {
 
   /// 进度监听 (SSE)
   func progressStream(progressKey: String) -> AsyncThrowingStream<SearchStreamEvent, Error> {
-    return streamSSE(endpoint: "/system/progress/\(progressKey)")
+    return streamSSE(endpoint: "/system/progress/\(progressKey)", as: SearchStreamEvent.self)
   }
 
   /// 搜索资源
@@ -1727,13 +1731,15 @@ class APIService: ObservableObject {
     year: String? = nil, season: Int? = nil, sites: String? = nil
   ) async throws -> [Context] {
     // 匹配 Vue 端逻辑：如果 keyword 的格式是 xxxx:xxxxx 且 : 前面的 xxxx 为字符，则按照媒体 ID 格式搜索
-    let isIdSearch = keyword.range(of: "^[a-zA-Z]+:", options: .regularExpression) != nil
+    let isIdSearch = isResourceMediaSearchKeyword(keyword)
 
     let endpoint: String
     if isIdSearch {
-      // ID 搜索时，ID 作为路径的一部分，不需要对包含 “:” 的 mediaId 进行编码
+      guard let mediaId = encodeMediaIDPathSegment(keyword) else {
+        throw APIError.invalidURL
+      }
       endpoint = try buildEndpoint(
-        path: "/search/media/\(keyword)",
+        path: "/search/media/\(mediaId)",
         params: [
           "mtype": type,
           "area": area,

@@ -115,6 +115,8 @@ MoviePilot Web v2.14.0 起，详情页订阅入口按媒体类型区分：
   - 登录 token payload 是否仍返回 `permissions=user_or_message.permissions or {}`，且 Web/TV 仍以该对象作为功能入口可见性的来源。
 - `app/api/endpoints/system.py`
   - `/system/env`、`GET /system/setting/{key}`、`POST /system/setting/{key}` 等端点实际依赖的是 active user 还是 active superuser；以 `Depends(...)` 为准，不能只看 summary 或注释里的“仅管理员”。
+- `app/api/endpoints/search.py`、`app/chain/search.py` 与 `app/modules/indexer/__init__.py`
+  - 当前单站点搜索异常会被记录后按空结果返回，SSE 不提供可与正常零结果区分的失败标志，因此 TV 保留对未产出结果站点的一次静默重试。后端以后若能在 SSE 中明确返回单站点搜索错误及对应 `site_id`，应删除 `ResourceResultViewModel` 的 `missingSites` 额外重试，改用明确的错误事件。
 - `app/db/subscribe_oper.py`
   - `SubscribeOper.async_add` 是否仍用 `tmdbid` / `doubanid` + `season` 查重，并对普通用户同时限定 `username`。
   - 如果查重条件新增 `episode_group`，说明后端开始支持同一媒体同一季多剧集组订阅，TV 分季状态模型需要重做。
