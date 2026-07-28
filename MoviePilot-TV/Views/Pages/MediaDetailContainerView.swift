@@ -218,7 +218,7 @@ struct MediaDetailContainerView: View {
   ) -> MediaInfo? {
     guard isEnabled,
       sourceMedia.tmdb_id == nil,
-      sourceMedia.douban_id != nil || sourceMedia.bangumi_id != nil,
+      sourceMedia.canJumpToTMDB,
       let jumpSource = fullDetail ?? (didFailToLoadDetail ? sourceMedia : nil),
       let tmdbId = recognizedTmdbId ?? fullDetail?.tmdb_id
     else {

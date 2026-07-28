@@ -15,6 +15,7 @@ enum MediaIdentifier {
     tmdbId: Int?,
     doubanId: String?,
     bangumiId: Int?,
+    anilistId: Int? = nil,
     mediaIdPrefix: String?,
     mediaId: String?
   ) -> String? {
@@ -22,6 +23,7 @@ enum MediaIdentifier {
       tmdbId: tmdbId,
       doubanId: doubanId,
       bangumiId: bangumiId,
+      anilistId: anilistId,
       fallbackMediaId: joinedMediaId(prefix: mediaIdPrefix, id: mediaId)
     )
   }
@@ -30,11 +32,13 @@ enum MediaIdentifier {
     tmdbId: Int?,
     doubanId: String?,
     bangumiId: Int?,
+    anilistId: Int? = nil,
     fallbackMediaId: String?
   ) -> String? {
     if let tmdbId = validNumericIdentifier(tmdbId) { return "tmdb:\(tmdbId)" }
     if let doubanId = normalizedString(doubanId) { return "douban:\(doubanId)" }
     if let bangumiId = validNumericIdentifier(bangumiId) { return "bangumi:\(bangumiId)" }
+    if let anilistId = validNumericIdentifier(anilistId) { return "anilist:\(anilistId)" }
     return normalizedMediaIdentifier(fallbackMediaId)
   }
 
@@ -476,6 +480,7 @@ nonisolated struct MediaInfoJSON: Codable {
   let tmdb_id: Int?
   let douban_id: String?
   let bangumi_id: Int?
+  let anilist_id: Int?
   let imdb_id: String?
   let tvdb_id: Int?
   let source: String?
@@ -519,6 +524,8 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   let douban_id: String?
   /// Bangumi ID
   let bangumi_id: Int?
+  /// AniList ID
+  let anilist_id: Int?
   /// IMDB ID
   let imdb_id: String?
   /// TVDB ID
@@ -606,8 +613,8 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   }
 
   enum CodingKeys: String, CodingKey {
-    case tmdb_id, douban_id, bangumi_id, imdb_id, tvdb_id, source, mediaid_prefix, media_id, title,
-      original_title, original_name, names,
+    case tmdb_id, douban_id, bangumi_id, anilist_id, imdb_id, tvdb_id, source, mediaid_prefix,
+      media_id, title, original_title, original_name, names,
       type, year, season, poster_path, backdrop_path,
       overview, vote_average, popularity, season_info, collection_id, directors, actors,
       episode_group, runtime, release_date, original_language, production_countries, genres,
@@ -615,8 +622,9 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   }
 
   init(
-    tmdb_id: Int? = nil, douban_id: String? = nil, bangumi_id: Int? = nil, imdb_id: String? = nil,
-    tvdb_id: Int? = nil, source: String? = nil, mediaid_prefix: String? = nil,
+    tmdb_id: Int? = nil, douban_id: String? = nil, bangumi_id: Int? = nil,
+    anilist_id: Int? = nil, imdb_id: String? = nil, tvdb_id: Int? = nil, source: String? = nil,
+    mediaid_prefix: String? = nil,
     media_id: String? = nil,
     title: String? = nil, original_title: String? = nil, original_name: String? = nil,
     names: [String]? = nil,
@@ -634,6 +642,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     self.tmdb_id = tmdb_id
     self.douban_id = douban_id
     self.bangumi_id = bangumi_id
+    self.anilist_id = anilist_id
     self.imdb_id = imdb_id
     self.tvdb_id = tvdb_id
     self.source = source
@@ -666,7 +675,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
 
     self.id = Self.generateUniqueKey(
       source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
-      tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id,
+      tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id, anilist_id: anilist_id,
       mediaid_prefix: mediaid_prefix, media_id: media_id, subscribeShare: subscribeShare)
 
     self.isCollection = Self.checkIsCollection(type: type, collection_id: collection_id)
@@ -691,6 +700,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
       tmdb_id: json.tmdb_id,
       douban_id: json.douban_id,
       bangumi_id: json.bangumi_id,
+      anilist_id: json.anilist_id,
       imdb_id: json.imdb_id,
       tvdb_id: json.tvdb_id,
       source: json.source,
@@ -727,6 +737,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     self.tmdb_id = json.tmdb_id
     self.douban_id = json.douban_id
     self.bangumi_id = json.bangumi_id
+    self.anilist_id = json.anilist_id
     self.imdb_id = json.imdb_id
     self.tvdb_id = json.tvdb_id
     self.source = json.source
@@ -759,7 +770,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
 
     self.id = Self.generateUniqueKey(
       source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
-      tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id,
+      tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id, anilist_id: anilist_id,
       mediaid_prefix: mediaid_prefix, media_id: media_id, subscribeShare: subscribeShare)
 
     self.isCollection = Self.checkIsCollection(type: type, collection_id: collection_id)
@@ -780,6 +791,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     tmdb_id = try container.decodeIfPresent(Int.self, forKey: .tmdb_id)
     douban_id = try container.decodeIfPresent(String.self, forKey: .douban_id)
     bangumi_id = try container.decodeIfPresent(Int.self, forKey: .bangumi_id)
+    anilist_id = try container.decodeIfPresent(Int.self, forKey: .anilist_id)
     imdb_id = try container.decodeIfPresent(String.self, forKey: .imdb_id)
     tvdb_id = try container.decodeIfPresent(Int.self, forKey: .tvdb_id)
     source = try container.decodeIfPresent(String.self, forKey: .source)
@@ -813,7 +825,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
 
     self.id = Self.generateUniqueKey(
       source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
-      tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id,
+      tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id, anilist_id: anilist_id,
       mediaid_prefix: mediaid_prefix, media_id: media_id, subscribeShare: subscribeShare)
 
     self.isCollection = Self.checkIsCollection(type: type, collection_id: collection_id)
@@ -872,7 +884,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   /// 用于在 UI 渲染前过滤重复项与生成 ID
   nonisolated private static func generateUniqueKey(
     source: String?, type: String?, season: Int?, tmdb_id: Int?,
-    imdb_id: String?, tvdb_id: Int?, douban_id: String?, bangumi_id: Int?,
+    imdb_id: String?, tvdb_id: Int?, douban_id: String?, bangumi_id: Int?, anilist_id: Int?,
     mediaid_prefix: String?, media_id: String?, subscribeShare: SubscribeShare? = nil
   ) -> String {
     if let subscribeShare {
@@ -889,6 +901,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
       tvdb_id.map { String($0) } ?? "",
       douban_id ?? "",
       bangumi_id.map { String($0) } ?? "",
+      anilist_id.map { String($0) } ?? "",
       mediaid_prefix ?? "",
       media_id ?? "",
     ]
@@ -913,9 +926,28 @@ struct MediaInfo: Codable, Identifiable, Hashable {
       tmdbId: tmdb_id,
       doubanId: douban_id,
       bangumiId: bangumi_id,
+      anilistId: anilist_id,
       mediaIdPrefix: mediaid_prefix,
       mediaId: media_id
     )
+  }
+
+  nonisolated var canJumpToTMDB: Bool {
+    if douban_id?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+      || (bangumi_id ?? 0) > 0
+      || (anilist_id ?? 0) > 0
+    {
+      return true
+    }
+
+    let fallbackSource = (mediaid_prefix ?? source)?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased()
+    let fallbackId = media_id?.trimmingCharacters(in: .whitespacesAndNewlines)
+    return fallbackId?.isEmpty == false
+      && (fallbackSource == "douban"
+        || fallbackSource == "bangumi"
+        || fallbackSource == "anilist")
   }
 
   /// 对 MediaInfo 数组去重，保留首次出现的元素

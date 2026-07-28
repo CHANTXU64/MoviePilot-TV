@@ -46,7 +46,7 @@ struct MediaDetailView: View {
   }
 
   private var canJumpToTMDB: Bool {
-    viewModel.detail.douban_id != nil || viewModel.detail.bangumi_id != nil
+    viewModel.detail.canJumpToTMDB
   }
 
   private var shouldShowOtherInfo: Bool {

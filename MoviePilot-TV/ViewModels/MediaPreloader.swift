@@ -50,11 +50,8 @@ class MediaPreloadTask: ObservableObject {
       Task {
         // ⑤ TMDB 识别 — 必须先于 checkSubscription 完成，否则 fallback 查询会因 tmdbId 为 nil 而跳过
         // 与 loadDetail 并发启动（两者互不依赖），但都在依赖任务之前完成
-        let sourcePrefix = MediaIdentifier.mediaIdComponents(self.partialMedia.apiMediaId)?.prefix
         async let tmdbRecognition: Void = {
-          if self.partialMedia.tmdb_id == nil
-            && (sourcePrefix == "douban" || sourcePrefix == "bangumi")
-          {
+          if self.partialMedia.tmdb_id == nil && self.partialMedia.canJumpToTMDB {
             await self.recognizeTmdb()
           }
         }()
