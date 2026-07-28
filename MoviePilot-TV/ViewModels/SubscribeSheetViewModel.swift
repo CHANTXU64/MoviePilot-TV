@@ -200,7 +200,8 @@ class SubscribeSheetViewModel: ObservableObject {
 
     if isNewSubscription {
       do {
-        guard try await apiService.updateSubscriptionStatus(id: id, state: "R") else {
+        let result = try await apiService.updateSubscriptionStatus(id: id, state: "R")
+        guard result.success else {
           Logger.error("Resuming saved subscription \(id) returned false")
           errorMessage = "订阅已保存，但暂时未能启用。你可以稍后在订阅页面重试。"
           return true

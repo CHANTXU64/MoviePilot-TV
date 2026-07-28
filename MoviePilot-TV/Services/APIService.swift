@@ -119,6 +119,39 @@ nonisolated private func encodeMediaIDPathSegment(_ value: String) -> String? {
   return value.addingPercentEncoding(withAllowedCharacters: allowed)
 }
 
+nonisolated func redactedEndpointForLogging(_ endpoint: String) -> String {
+  String(endpoint.split(separator: "?", maxSplits: 1).first ?? "")
+    .split(separator: "#", maxSplits: 1)
+    .first
+    .map(String.init) ?? ""
+}
+
+nonisolated func relativeBackendEndpoint(
+  path: String,
+  params: [String: String?] = [:]
+) throws -> String {
+  guard var components = URLComponents(string: path),
+    components.scheme == nil,
+    components.host == nil,
+    !path.hasPrefix("//"),
+    !components.path.split(separator: "/").contains("..")
+  else {
+    throw APIError.invalidURL
+  }
+  components.path = "/" + components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+  guard !components.path.isEmpty, components.path != "/" else {
+    throw APIError.invalidURL
+  }
+  var items = components.queryItems ?? []
+  items.append(
+    contentsOf: params.compactMap { name, value in
+      value.map { URLQueryItem(name: name, value: $0) }
+    })
+  components.queryItems = items.isEmpty ? nil : items
+  guard let endpoint = components.string else { throw APIError.invalidURL }
+  return endpoint
+}
+
 nonisolated private func isBangumiImageURL(_ value: String) -> Bool {
   if let host = URLComponents(string: value)?.host?.lowercased() {
     return host == "lain.bgm.tv" || host.hasSuffix(".lain.bgm.tv")
@@ -583,6 +616,10 @@ class APIService: ObservableObject {
     UserDefaults.standard.set(json, forKey: Self.currentUserAccount)
   }
 
+  #if DEBUG
+    static func testingInstance() -> APIService { APIService() }
+  #endif
+
   private init() {}
 
   var isLoggedIn: Bool {
@@ -836,7 +873,9 @@ class APIService: ObservableObject {
         throw serverMessageError()
       }
       guard (200...299).contains(httpResponse.statusCode) else {
-        print("DEBUG: [makeRequest] HTTP Error: \(httpResponse.statusCode) for \(endpoint)")
+        Logger.error(
+          "HTTP \(httpResponse.statusCode): \(redactedEndpointForLogging(endpoint))"
+        )
         throw serverMessageError()
       }
     }
@@ -1277,10 +1316,19 @@ class APIService: ObservableObject {
   ///   2. 发现页面 (ExploreViewModel)：按数据源分类加载列表。
   ///   3. 详情页面逻辑支撑：作为 fetchMediaRecommendations 和 fetchMediaSimilar 的底层实现，详情页不能直接调用。
   func fetchRecommend(path: String, page: Int = 1) async throws -> [MediaInfo] {
-    let absolutePath = path.hasPrefix("/") ? path : "/\(path)"
-    let endpoint = try buildEndpoint(path: absolutePath, params: ["page": String(page)])
+    let endpoint = try relativeBackendEndpoint(path: path, params: ["page": String(page)])
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([MediaInfo].self, from: data)
+  }
+
+  func fetchDiscoverSources() async throws -> [DiscoverSourceDescriptor] {
+    let data = try await makeRequest(endpoint: "/discover/source")
+    return try await decodeOrUnwrap([DiscoverSourceDescriptor].self, from: data)
+  }
+
+  func fetchRecommendSources() async throws -> [RecommendSourceDescriptor] {
+    let data = try await makeRequest(endpoint: "/recommend/source")
+    return try await decodeOrUnwrap([RecommendSourceDescriptor].self, from: data)
   }
 
   /// 获取订阅分享列表
@@ -1288,7 +1336,13 @@ class APIService: ObservableObject {
   /// - 应用场景: "探索"页面的"订阅分享"板块，分页加载用户分享的订阅规则。
   func fetchSubscriptionShares(path: String, page: Int = 1) async throws -> [SubscribeShare] {
     let absolutePath = path.hasPrefix("/") ? path : "/\(path)"
-    let endpoint = try buildEndpoint(path: absolutePath, params: ["page": String(page)])
+    let endpoint = try buildEndpoint(
+      path: absolutePath,
+      params: [
+        "page": String(page),
+        "count": "30",
+      ]
+    )
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([SubscribeShare].self, from: data)
   }

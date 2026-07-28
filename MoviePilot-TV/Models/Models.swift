@@ -125,7 +125,7 @@ struct FlexibleBool: Codable, Hashable {
   }
 }
 
-enum JSONValue: Codable, Hashable {
+nonisolated enum JSONValue: Codable, Hashable, Sendable {
   case null
   case bool(Bool)
   case int(Int)
@@ -172,6 +172,100 @@ enum JSONValue: Codable, Hashable {
       try container.encode(value)
     }
   }
+
+  var queryString: String? {
+    switch self {
+    case .null:
+      return nil
+    case .bool(let value):
+      return value ? "true" : "false"
+    case .int(let value):
+      return String(value)
+    case .double(let value):
+      return String(value)
+    case .string(let value):
+      return value
+    case .array, .object:
+      guard let data = try? JSONEncoder().encode(self) else { return nil }
+      return String(data: data, encoding: .utf8)
+    }
+  }
+
+  var objectValue: [String: JSONValue]? {
+    guard case .object(let value) = self else { return nil }
+    return value
+  }
+
+  var arrayValue: [JSONValue]? {
+    guard case .array(let value) = self else { return nil }
+    return value
+  }
+
+  var stringValue: String? {
+    guard case .string(let value) = self else { return nil }
+    return value
+  }
+
+  var isTruthy: Bool {
+    switch self {
+    case .null:
+      return false
+    case .bool(let value):
+      return value
+    case .int(let value):
+      return value != 0
+    case .double(let value):
+      return value != 0 && !value.isNaN
+    case .string(let value):
+      return !value.isEmpty
+    case .array, .object:
+      return true
+    }
+  }
+}
+
+nonisolated struct DiscoverSourceDescriptor: Codable, Hashable, Identifiable, Sendable {
+  let name: String
+  let mediaid_prefix: String
+  let api_path: String
+  let filter_params: [String: JSONValue]
+  let filter_ui: [JSONValue]
+  let depends: [String: [String]]?
+
+  var id: String { mediaid_prefix }
+
+  init(
+    name: String,
+    mediaid_prefix: String,
+    api_path: String,
+    filter_params: [String: JSONValue],
+    filter_ui: [JSONValue],
+    depends: [String: [String]]?
+  ) {
+    self.name = name
+    self.mediaid_prefix = mediaid_prefix
+    self.api_path = api_path
+    self.filter_params = filter_params
+    self.filter_ui = filter_ui
+    self.depends = depends
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    name = try container.decode(String.self, forKey: .name)
+    mediaid_prefix = try container.decode(String.self, forKey: .mediaid_prefix)
+    api_path = try container.decode(String.self, forKey: .api_path)
+    filter_params =
+      try container.decodeIfPresent([String: JSONValue].self, forKey: .filter_params) ?? [:]
+    filter_ui = try container.decodeIfPresent([JSONValue].self, forKey: .filter_ui) ?? []
+    depends = try container.decodeIfPresent([String: [String]].self, forKey: .depends)
+  }
+}
+
+nonisolated struct RecommendSourceDescriptor: Codable, Hashable, Sendable {
+  let name: String
+  let api_path: String
+  let type: String
 }
 
 /// 包装类型，用于处理 API 响应中可能是 String 或 Int 的字段，统一转为 String。

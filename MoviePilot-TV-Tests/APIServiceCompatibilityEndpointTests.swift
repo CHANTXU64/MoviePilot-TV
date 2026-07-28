@@ -9,7 +9,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
 
     await CompatibilityEndpointURLProtocol.stub.reset()
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -34,7 +34,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
 
     await CompatibilityEndpointURLProtocol.stub.reset()
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -62,7 +62,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
 
     await CompatibilityEndpointURLProtocol.stub.reset()
     await CompatibilityEndpointURLProtocol.stub.setUserSettingsFailure(statusCode: 404)
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -88,7 +88,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
 
     await CompatibilityEndpointURLProtocol.stub.reset()
     await CompatibilityEndpointURLProtocol.stub.setUserSettingsFailure(statusCode: 403)
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -126,7 +126,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
 
     await CompatibilityEndpointURLProtocol.stub.reset()
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -161,7 +161,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
 
     await CompatibilityEndpointURLProtocol.stub.reset()
     await CompatibilityEndpointURLProtocol.stub.setSubscriptionActionsFail(false)
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
     service.baseURL = "https://compatibility-endpoint-tests.local"
@@ -197,7 +197,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
 
     await CompatibilityEndpointURLProtocol.stub.reset()
     await CompatibilityEndpointURLProtocol.stub.setSubscriptionActionsFail(true)
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
     service.baseURL = "https://compatibility-endpoint-tests.local"
