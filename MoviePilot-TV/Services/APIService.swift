@@ -2047,19 +2047,16 @@ class APIService: ObservableObject {
   /// 暂停或恢复订阅状态
   /// - 对应前端: 1. `MoviePilot-Frontend/src/components/cards/SubscribeCard.vue` 2. `MoviePilot-Frontend/src/views/subscribe/SubscribeListView.vue`
   /// - 应用场景: 1. 在订阅列表页对单个卡片进行“暂停/恢复”切换。 2. 在订阅列表页进行批量暂停/恢复操作时并发调用。
-  func updateSubscriptionStatus(id: Int, state: String) async throws -> Bool {
+  func updateSubscriptionStatus(id: Int, state: String) async throws -> (
+    success: Bool, message: String?
+  ) {
     let endpoint = try buildEndpoint(path: "/subscribe/status/\(id)", params: ["state": state])
     let data = try await makeRequest(endpoint: endpoint, method: "PUT")
-    let success: Bool
-    if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      success = response.success ?? false
-    } else {
-      success = true
-    }
-    if success {
+    let result = try decodeStrictActionResponseSync(from: data)
+    if result.success {
       await invalidateSubscriptionCaches()
     }
-    return success
+    return result
   }
 
   /// 立即触发订阅搜索
@@ -2067,33 +2064,21 @@ class APIService: ObservableObject {
   /// - 应用场景: 用户在订阅列表手动点击“搜索”按钮，强制后端立即针对该条目执行一次资源检索。
   func searchSubscription(id: Int) async throws -> Bool {
     let data = try await makeRequest(endpoint: "/subscribe/search/\(id)")
-    let success: Bool
-    if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      success = response.success ?? false
-    } else {
-      success = true
-    }
-    if success {
-      await invalidateSubscriptionCaches()
-    }
-    return success
+    return try decodeStrictActionResponseSync(from: data).success
   }
 
   /// 重置订阅状态（重新开始）
   /// - 对应前端: MoviePilot-Frontend/src/components/cards/SubscribeCard.vue (resetSubscribe)
   /// - 应用场景: 清除该条目的已下载/已入库记录，使其状态回到初始，通常用于重新洗版或出错后重试。
-  func resetSubscription(id: Int) async throws -> Bool {
+  func resetSubscription(id: Int) async throws -> (
+    success: Bool, message: String?
+  ) {
     let data = try await makeRequest(endpoint: "/subscribe/reset/\(id)")
-    let success: Bool
-    if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      success = response.success ?? false
-    } else {
-      success = true
-    }
-    if success {
+    let result = try decodeStrictActionResponseSync(from: data)
+    if result.success {
       await invalidateSubscriptionCaches()
     }
-    return success
+    return result
   }
 
   /// 获取单条订阅详情

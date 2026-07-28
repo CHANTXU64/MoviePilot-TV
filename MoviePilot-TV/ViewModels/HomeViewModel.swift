@@ -190,73 +190,51 @@ class HomeViewModel: ObservableObject {
   // MARK: - 订阅操作
 
   /// 切换订阅状态（运行/停止）
-  func toggleSubscribeStatus(subscribe: Subscribe) async -> Bool {
-    guard apiService.canAccess(.subscribe) else { return false }
-    guard let id = subscribe.id else { return false }
+  func toggleSubscribeStatus(subscribe: Subscribe) async throws -> (
+    success: Bool, message: String?
+  ) {
+    guard apiService.canAccess(.subscribe) else { return (false, nil) }
+    guard let id = subscribe.id else { return (false, nil) }
     // 前端逻辑：如果是 'S' (已停止) -> 切换到 'R' (运行)，否则 -> 'S' (停止)
     let newState = subscribe.state == "S" ? "R" : "S"
-    do {
-      let success = try await apiService.updateSubscriptionStatus(id: id, state: newState)
-      if success {
-        await refreshSubscriptions(forceRefresh: true)
-      }
-      return success
-    } catch {
-      print("切换订阅状态失败: \(error)")
-      return false
+    let result = try await apiService.updateSubscriptionStatus(id: id, state: newState)
+    if result.success {
+      await refreshSubscriptions(forceRefresh: true)
     }
+    return result
   }
 
   /// 重置订阅历史
-  func resetSubscribe(subscribe: Subscribe) async -> Bool {
-    guard apiService.canAccess(.subscribe) else { return false }
-    guard let id = subscribe.id else { return false }
-    do {
-      let success = try await apiService.resetSubscription(id: id)
-      if success {
-        await refreshSubscriptions(forceRefresh: true)
-      }
-      return success
-    } catch {
-      print("重置订阅失败: \(error)")
-      return false
+  func resetSubscribe(subscribe: Subscribe) async throws -> (
+    success: Bool, message: String?
+  ) {
+    guard apiService.canAccess(.subscribe) else { return (false, nil) }
+    guard let id = subscribe.id else { return (false, nil) }
+    let result = try await apiService.resetSubscription(id: id)
+    if result.success {
+      await refreshSubscriptions(forceRefresh: true)
     }
+    return result
   }
 
   /// 立即触发订阅搜索
-  func searchSubscribe(subscribe: Subscribe) async -> Bool {
+  func searchSubscribe(subscribe: Subscribe) async throws -> Bool {
     guard apiService.canAccess(.subscribe) else { return false }
     guard let id = subscribe.id else { return false }
-    do {
-      let success = try await apiService.searchSubscription(id: id)
-      if success {
-        await refreshSubscriptions(forceRefresh: true)
-        // 通知其他页面（如详情页 preloadTask）订阅搜索已触发，远端状态可能变化
-        NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
-      }
-      return success
-    } catch {
-      print("搜索订阅失败: \(error)")
-      return false
-    }
+    return try await apiService.searchSubscription(id: id)
   }
 
   /// 删除订阅
-  func deleteSubscribe(subscribe: Subscribe) async -> Bool {
+  func deleteSubscribe(subscribe: Subscribe) async throws -> Bool {
     guard apiService.canAccess(.subscribe) else { return false }
     guard let id = subscribe.id else { return false }
-    do {
-      let success = try await apiService.deleteSubscription(id: id)
-      if success {
-        await refreshSubscriptions(forceRefresh: true)
-        // 通知其他页面（如详情页 preloadTask）订阅已变更
-        NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
-      }
-      return success
-    } catch {
-      print("删除订阅失败: \(error)")
-      return false
+    let success = try await apiService.deleteSubscription(id: id)
+    if success {
+      await refreshSubscriptions(forceRefresh: true)
+      // 通知其他页面（如详情页 preloadTask）订阅已变更
+      NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
     }
+    return success
   }
 
   private func validLinkValue(_ value: String?) -> String? {

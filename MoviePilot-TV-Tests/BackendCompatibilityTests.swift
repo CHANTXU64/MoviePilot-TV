@@ -95,7 +95,7 @@ private struct BackendCompatibilityConfig {
       testSubscriptionSearch: true,
       testSubscriptionUpdate: true,
       testSubscriptionPauseResume: true,
-      testSubscriptionResetSearch: true,
+      testSubscriptionResetSearch: false,
       sideEffectSubscriptionLimit: 3,
       testManualReorganize: true,
       testAIReorganize: true,
@@ -191,7 +191,7 @@ private struct BackendCompatibilityConfig {
       testSubscriptionPauseResume: values["MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_PAUSE_RESUME"]?
         .boolValue(fallback: true) ?? true,
       testSubscriptionResetSearch: values["MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_RESET_SEARCH"]?
-        .boolValue(fallback: true) ?? true,
+        .boolValue(fallback: false) ?? false,
       sideEffectSubscriptionLimit: values["MOVIEPILOT_COMPAT_SIDE_EFFECT_SUBSCRIPTION_LIMIT"]?
         .clampedIntValue(minimum: 1, maximum: 10) ?? 3,
       testManualReorganize: values["MOVIEPILOT_COMPAT_TEST_MANUAL_REORGANIZE"]?.boolValue(
@@ -2848,12 +2848,12 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
             target: target,
             operationDescription: "pause/resume subscription \(target.id)"
           ) {
-            let toggleSuccess = try await service.updateSubscriptionStatus(
+            let toggleResult = try await service.updateSubscriptionStatus(
               id: target.id,
               state: target.toggledState
             )
             XCTAssertTrue(
-              toggleSuccess,
+              toggleResult.success,
               "Subscription status toggle \(target.originalState) -> \(target.toggledState) was rejected for subscription \(target.id)."
             )
           }
@@ -2892,9 +2892,9 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
             target: target,
             operationDescription: "reset and search subscription \(target.id)"
           ) {
-            let resetSuccess = try await service.resetSubscription(id: target.id)
+            let resetResult = try await service.resetSubscription(id: target.id)
             XCTAssertTrue(
-              resetSuccess,
+              resetResult.success,
               "Subscription reset request was rejected for subscription \(target.id)."
             )
 
@@ -3107,7 +3107,7 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
       try await service.updateSubscriptionStatus(
         id: target.id,
         state: target.originalState
-      )
+      ).success
     }
     switch restoreResult {
     case .restored(true):

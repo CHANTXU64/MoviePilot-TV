@@ -155,6 +155,63 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     )
   }
 
+  func testSubscriptionActionsMatchBackendSuccessResponseContract() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
+    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    await CompatibilityEndpointURLProtocol.stub.setSubscriptionActionsFail(false)
+    let service = APIService.shared
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURL = "https://compatibility-endpoint-tests.local"
+
+    let statusResult = try await service.updateSubscriptionStatus(id: 41, state: "S")
+    let searchSucceeded = try await service.searchSubscription(id: 41)
+    let resetResult = try await service.resetSubscription(id: 41)
+    XCTAssertTrue(statusResult.success)
+    XCTAssertNil(statusResult.message)
+    XCTAssertTrue(searchSucceeded)
+    XCTAssertTrue(resetResult.success)
+    XCTAssertNil(resetResult.message)
+
+    let methods = await CompatibilityEndpointURLProtocol.stub.requestMethods()
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    let queries = await CompatibilityEndpointURLProtocol.stub.requestQueries()
+    let actionIndexes = paths.indices.filter { paths[$0].hasPrefix("/api/v1/subscribe/") }
+    XCTAssertEqual(actionIndexes.map { methods[$0] }, ["PUT", "GET", "GET"])
+    XCTAssertEqual(
+      actionIndexes.map { paths[$0] },
+      [
+        "/api/v1/subscribe/status/41",
+        "/api/v1/subscribe/search/41",
+        "/api/v1/subscribe/reset/41",
+      ]
+    )
+    XCTAssertEqual(actionIndexes.map { queries[$0] }, ["state=S", nil, nil])
+  }
+
+  func testSubscriptionActionsMatchBackendFailureResponseContract() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
+    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    await CompatibilityEndpointURLProtocol.stub.setSubscriptionActionsFail(true)
+    let service = APIService.shared
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURL = "https://compatibility-endpoint-tests.local"
+
+    let statusResult = try await service.updateSubscriptionStatus(id: 41, state: "S")
+    let searchSucceeded = try await service.searchSubscription(id: 41)
+    let resetResult = try await service.resetSubscription(id: 41)
+    XCTAssertFalse(statusResult.success)
+    XCTAssertEqual(statusResult.message, "订阅不存在")
+    XCTAssertFalse(searchSucceeded)
+    XCTAssertFalse(resetResult.success)
+    XCTAssertEqual(resetResult.message, "订阅不存在")
+  }
+
   private func assertContainsSubsequence(
     _ expected: [String],
     in actual: [String],
@@ -264,18 +321,28 @@ private struct CompatibilityEndpointServiceSnapshot {
 private actor CompatibilityEndpointURLProtocolStub {
   private var requests: [URLRequest] = []
   private var userSettingsFailureStatusCode: Int?
+  private var subscriptionActionsFail: Bool?
 
   func reset() {
     requests.removeAll()
     userSettingsFailureStatusCode = nil
+    subscriptionActionsFail = nil
   }
 
   func setUserSettingsFailure(statusCode: Int?) {
     userSettingsFailureStatusCode = statusCode
   }
 
+  func setSubscriptionActionsFail(_ fail: Bool) {
+    subscriptionActionsFail = fail
+  }
+
   func requestPaths() -> [String] {
     requests.map { $0.url?.path ?? "" }
+  }
+
+  func requestMethods() -> [String] {
+    requests.map { $0.httpMethod ?? "" }
   }
 
   func requestQueries() -> [String?] {
@@ -305,6 +372,18 @@ private actor CompatibilityEndpointURLProtocolStub {
           #"{"success":true,"data":{"AI_AGENT_ENABLE":true,"RECOGNIZE_SOURCE":"douban","USER_UNIQUE_ID":"compat-user","SUBSCRIBE_SHARE_MANAGE":true}}"#
           .data(using: .utf8)!
       }
+    } else if let subscriptionActionsFail,
+      url.path.hasPrefix("/api/v1/subscribe/status/")
+        || url.path.hasPrefix("/api/v1/subscribe/search/")
+        || url.path.hasPrefix("/api/v1/subscribe/reset/")
+    {
+      statusCode = 200
+      data =
+        subscriptionActionsFail
+        ? #"{"success":false,"message":"raw subscription error","message_i18n":"订阅不存在","data":{}}"#
+          .data(using: .utf8)!
+        : #"{"success":true,"message":null,"message_i18n":null,"data":{}}"#
+          .data(using: .utf8)!
     } else {
       statusCode = 200
       data = #"{"success":true,"data":{"value":[]}}"#.data(using: .utf8)!

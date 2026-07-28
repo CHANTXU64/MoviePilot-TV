@@ -323,6 +323,7 @@ private struct SubscribeItemView: View {
   @ObservedObject var viewModel: HomeViewModel
   let onEdit: () -> Void
   let onViewDetail: () -> Void
+  @EnvironmentObject private var notificationManager: NotificationManager
   @State private var showUnsubscribeConfirm = false
 
   var body: some View {
@@ -356,18 +357,14 @@ private struct SubscribeItemView: View {
 
       // 3. 搜索订阅
       Button {
-        Task {
-          _ = await viewModel.searchSubscribe(subscribe: item)
-        }
+        searchSubscribe()
       } label: {
         Label("搜索订阅", systemImage: "magnifyingglass")
       }
 
       // 4. 启用/暂停
       Button {
-        Task {
-          _ = await viewModel.toggleSubscribeStatus(subscribe: item)
-        }
+        toggleSubscribeStatus()
       } label: {
         if item.state == "S" {
           Label("启用订阅", systemImage: "play.fill")
@@ -378,9 +375,7 @@ private struct SubscribeItemView: View {
 
       // 5. 重置订阅
       Button {
-        Task {
-          _ = await viewModel.resetSubscribe(subscribe: item)
-        }
+        resetSubscribe()
       } label: {
         Label("重置订阅", systemImage: "arrow.counterclockwise")
       }
@@ -397,13 +392,77 @@ private struct SubscribeItemView: View {
     .alert(SubscriptionCancelConfirmation.title, isPresented: $showUnsubscribeConfirm) {
       Button("取消", role: .cancel) {}
       Button(SubscriptionCancelConfirmation.confirmButtonTitle, role: .destructive) {
-        Task {
-          _ = await viewModel.deleteSubscribe(subscribe: item)
-        }
+        deleteSubscribe()
       }
     } message: {
       Text(SubscriptionCancelConfirmation.message(for: item))
     }
+  }
+
+  private func searchSubscribe() {
+    Task {
+      do {
+        guard try await viewModel.searchSubscribe(subscribe: item) else {
+          showRequestFailure()
+          return
+        }
+      } catch {
+        showRequestFailure()
+      }
+    }
+  }
+
+  private func toggleSubscribeStatus() {
+    Task {
+      do {
+        let result = try await viewModel.toggleSubscribeStatus(subscribe: item)
+        guard result.success else {
+          showActionFailure(
+            "\(item.state == "S" ? "启用" : "暂停")订阅失败",
+            detail: result.message
+          )
+          return
+        }
+      } catch {
+        showRequestFailure()
+      }
+    }
+  }
+
+  private func resetSubscribe() {
+    Task {
+      do {
+        let result = try await viewModel.resetSubscribe(subscribe: item)
+        guard result.success else {
+          showActionFailure("重置订阅失败", detail: result.message)
+          return
+        }
+      } catch {
+        showRequestFailure()
+      }
+    }
+  }
+
+  private func deleteSubscribe() {
+    Task {
+      do {
+        _ = try await viewModel.deleteSubscribe(subscribe: item)
+      } catch {
+        showRequestFailure()
+      }
+    }
+  }
+
+  private func showActionFailure(_ action: String, detail: String?) {
+    let message = "《\(item.name)》\(action)"
+    notificationManager.show(
+      message: MediaIdentifier.normalizedString(detail).map { "\(message)：\($0)" } ?? "\(message)。",
+      type: .error
+    )
+  }
+
+  private func showRequestFailure() {
+    notificationManager.show(message: "订阅请求失败，请稍后重试。", type: .error)
   }
 
   // 辅助格式化函数
