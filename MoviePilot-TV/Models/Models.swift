@@ -2329,16 +2329,19 @@ struct ReorganizeForm: Codable {
 struct SearchStreamEvent: Codable {
   let type: String? // "append", "replace", "done", "error"
   let text: String?
+  let text_i18n: String?
   let value: Double?
   let enable: Bool?
   let total_items: Int?
   let items: [Context]?
   let message: String?
+  let message_i18n: String?
   
   // AI 重新整理进度使用的结构也类似，可以在需要时复用
   struct AiRedoData: Codable {
     let success: Bool?
     let error: String?
+    let error_i18n: String?
   }
   let data: AiRedoData?
 }

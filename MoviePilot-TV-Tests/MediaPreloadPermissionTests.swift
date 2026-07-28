@@ -355,7 +355,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
       deleteSource: false,
       deleteDest: false
     )
-    _ = try? await service.aiRedoTransferHistory(ids: [history.id])
+    _ = try? await service.aiRedoTransferHistory(id: history.id)
     _ = try? await service.manualTransfer(
       form: form,
       background: false
@@ -363,7 +363,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
 
     let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
     XCTAssertTrue(paths.contains("/api/v1/history/transfer"))
-    XCTAssertTrue(paths.contains("/api/v1/history/transfer/ai-redo"))
+    XCTAssertTrue(paths.contains("/api/v1/history/transfer/\(history.id)/ai-redo"))
     XCTAssertTrue(paths.contains("/api/v1/transfer/manual"))
   }
 

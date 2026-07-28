@@ -114,6 +114,153 @@ final class TransferHistoryViewModelTests: XCTestCase {
     XCTAssertTrue(paths.contains("/api/v1/system/setting/public/Storages"))
   }
 
+  func testDeleteTransferHistoryRequiresExplicitSuccess() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(TransferHistoryURLProtocol.self))
+    defer { URLProtocol.unregisterClass(TransferHistoryURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await TransferHistoryURLProtocol.stub.reset()
+    service.baseURL = "http://transfer-history-tests.local"
+    configureManageUser(service)
+    let history = try JSONDecoder().decode(
+      TransferHistory.self,
+      from: Data(#"{"id":10,"title":"History","type":"电影","status":true}"#.utf8)
+    )
+
+    let result = try await service.deleteTransferHistory(
+      item: history,
+      deleteSource: false,
+      deleteDest: false
+    )
+
+    XCTAssertFalse(result.success)
+  }
+
+  func testTransferHistoryDeleteCannotStartTwiceWhileRequestIsRunning() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(TransferHistoryURLProtocol.self))
+    defer { URLProtocol.unregisterClass(TransferHistoryURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await TransferHistoryURLProtocol.stub.reset()
+    let gate = TransferHistoryAsyncGate()
+    await TransferHistoryURLProtocol.stub.setHistoryGate(gate)
+    service.baseURL = "http://transfer-history-tests.local"
+    configureManageUser(service)
+    let history = try JSONDecoder().decode(
+      TransferHistory.self,
+      from: Data(#"{"id":10,"title":"History","type":"电影","status":true}"#.utf8)
+    )
+    let viewModel = TransferHistoryViewModel()
+
+    let firstDelete = Task { @MainActor in
+      await viewModel.deleteHistory(
+        item: history,
+        deleteSource: true,
+        deleteDest: true
+      )
+    }
+    defer { firstDelete.cancel() }
+    try await withTransferHistoryTimeout("first delete request to start") {
+      await TransferHistoryURLProtocol.stub.waitForRequest(path: "/api/v1/history/transfer")
+    }
+    XCTAssertTrue(viewModel.isDeleting)
+
+    await viewModel.deleteHistory(
+      item: history,
+      deleteSource: true,
+      deleteDest: true
+    )
+    await viewModel.triggerAiRedo(for: history.id)
+    let pendingPaths = await TransferHistoryURLProtocol.stub.requestPaths()
+    XCTAssertEqual(pendingPaths.filter { $0 == "/api/v1/history/transfer" }.count, 1)
+    XCTAssertFalse(pendingPaths.contains("/api/v1/history/transfer/10/ai-redo"))
+
+    await gate.open()
+    try await withTransferHistoryTimeout("first delete request to finish") {
+      await firstDelete.value
+    }
+    XCTAssertFalse(viewModel.isDeleting)
+  }
+
+  func testAIRedoUsesWebSingleAndBatchRoutesAndShowsFailures() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(TransferHistoryURLProtocol.self))
+    defer { URLProtocol.unregisterClass(TransferHistoryURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await TransferHistoryURLProtocol.stub.reset()
+    service.baseURL = "http://transfer-history-tests.local"
+    configureManageUser(service)
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(#"{"AI_AGENT_ENABLE":true}"#.utf8)
+    )
+
+    let singleResult = try await service.aiRedoTransferHistory(id: 10)
+    let batchResult = try await service.aiRedoTransferHistories(ids: [10, 11])
+    XCTAssertEqual(singleResult.progressKey, "single-progress")
+    XCTAssertEqual(singleResult.acceptedIds, [10])
+    XCTAssertEqual(batchResult.progressKey, "batch-progress")
+    XCTAssertEqual(batchResult.acceptedIds, [10, 11])
+
+    let paths = await TransferHistoryURLProtocol.stub.requestPaths()
+    XCTAssertTrue(paths.contains("/api/v1/history/transfer/10/ai-redo"))
+    XCTAssertTrue(paths.contains("/api/v1/history/transfer/ai-redo"))
+
+    let viewModel = TransferHistoryViewModel()
+    await viewModel.triggerAiRedo(for: 10)
+    let progressFailureDeadline = Date().addingTimeInterval(2)
+    while viewModel.errorMessage != "AI 整理业务失败",
+      Date() < progressFailureDeadline
+    {
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTAssertEqual(viewModel.errorMessage, "AI 整理业务失败")
+    XCTAssertFalse(viewModel.isAiRedoing)
+
+    viewModel.errorMessage = nil
+    await viewModel.triggerAiRedo(for: 11)
+    let startFailureDeadline = Date().addingTimeInterval(2)
+    while viewModel.errorMessage != "AI 整理启动失败",
+      Date() < startFailureDeadline
+    {
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTAssertEqual(viewModel.errorMessage, "AI 整理启动失败")
+    XCTAssertFalse(viewModel.isAiRedoing)
+
+    await TransferHistoryURLProtocol.stub.reset()
+    let guardedViewModel = TransferHistoryViewModel()
+    guardedViewModel.isAiRedoing = true
+    await guardedViewModel.triggerBatchAiRedo(for: [10, 11])
+    let guardedHistory = try JSONDecoder().decode(
+      TransferHistory.self,
+      from: Data(#"{"id":10,"title":"History","type":"电影","status":true}"#.utf8)
+    )
+    await guardedViewModel.deleteHistory(
+      item: guardedHistory,
+      deleteSource: false,
+      deleteDest: false
+    )
+    let guardedPaths = await TransferHistoryURLProtocol.stub.requestPaths()
+    XCTAssertFalse(
+      guardedPaths.contains("/api/v1/history/transfer/ai-redo"),
+      "固定 Web 在任一 AI 重整运行时全局阻止再次启动。"
+    )
+    XCTAssertFalse(
+      guardedPaths.contains("/api/v1/history/transfer"),
+      "AI 重整运行时不得并发删除同一整理历史。"
+    )
+  }
+
   private func configureManageUser(_ service: APIService) {
     service.currentUser = Token(
       access_token: "transfer-history-manager-tests",
@@ -151,6 +298,7 @@ final class TransferHistoryViewModelTests: XCTestCase {
 private struct TransferHistoryServiceSnapshot {
   let baseURL: String
   let currentUser: Token?
+  let settings: GlobalSettings?
   let serverURLDefaults: String?
   let currentUserKeychain: String?
   let currentUserDefaults: String?
@@ -159,6 +307,7 @@ private struct TransferHistoryServiceSnapshot {
     TransferHistoryServiceSnapshot(
       baseURL: service.baseURL,
       currentUser: service.currentUser,
+      settings: service.settings,
       serverURLDefaults: UserDefaults.standard.string(forKey: "serverURL"),
       currentUserKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "currentUser"),
       currentUserDefaults: UserDefaults.standard.string(forKey: "currentUser")
@@ -168,6 +317,7 @@ private struct TransferHistoryServiceSnapshot {
   func restore(to service: APIService) {
     service.baseURL = baseURL
     service.currentUser = currentUser
+    service.settings = settings
 
     if let serverURLDefaults {
       UserDefaults.standard.set(serverURLDefaults, forKey: "serverURL")
@@ -239,6 +389,40 @@ private actor TransferHistoryURLProtocolStub {
         await gate.wait()
       }
       return response
+    case "/api/v1/history/transfer/10/ai-redo":
+      return TransferHistoryHTTPStubResponse(
+        statusCode: 200,
+        data: Data(#"{"success":true,"data":{"progress_key":"single-progress"}}"#.utf8),
+        gate: nil
+      )
+    case "/api/v1/history/transfer/11/ai-redo":
+      return TransferHistoryHTTPStubResponse(
+        statusCode: 200,
+        data: Data(
+          #"{"success":false,"message":"AI redo failed","message_i18n":"AI 整理启动失败"}"#
+            .utf8
+        ),
+        gate: nil
+      )
+    case "/api/v1/history/transfer/ai-redo":
+      return TransferHistoryHTTPStubResponse(
+        statusCode: 200,
+        data: Data(
+          #"{"success":true,"data":{"progress_key":"batch-progress","history_ids":[10,11]}}"#
+            .utf8
+        ),
+        gate: nil
+      )
+    case "/api/v1/system/progress/single-progress":
+      return TransferHistoryHTTPStubResponse(
+        statusCode: 200,
+        data: Data(
+          #"data: {"enable":false,"data":{"success":false,"error_i18n":"AI 整理业务失败"}}"#
+            .appending("\n\n")
+            .utf8
+        ),
+        gate: nil
+      )
     default:
       throw URLError(.unsupportedURL)
     }

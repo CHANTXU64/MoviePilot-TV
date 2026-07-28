@@ -126,9 +126,11 @@ struct TransferHistoryView: View {
     }
     .overlay(
       Group {
-        if viewModel.isAiRedoing {
+        if viewModel.isMutatingHistory {
           VStack(spacing: 20) {
-            ProgressView(viewModel.aiRedoProgressText)
+            ProgressView(
+              viewModel.isDeleting ? "正在删除整理记录..." : viewModel.aiRedoProgressText
+            )
           }
           .padding()
           .background(.ultraThinMaterial)
@@ -252,15 +254,14 @@ struct TransferHistoryView: View {
           id: "ai-redo",
           title: title,
           icon: "sparkles",
-          isEnabled: !viewModel.isAiRedoing || isSingleItemPending,
+          isEnabled: !viewModel.isMutatingHistory,
           action: {
             Task {
               if viewModel.selectedIds.isEmpty {
-                await viewModel.triggerAiRedo(for: [item.id])
+                await viewModel.triggerAiRedo(for: item.id)
               } else {
                 let ids = Array(viewModel.selectedIds)
-                viewModel.deselectAll()
-                await viewModel.triggerAiRedo(for: ids)
+                await viewModel.triggerBatchAiRedo(for: ids)
               }
             }
           }
@@ -274,6 +275,7 @@ struct TransferHistoryView: View {
         title: viewModel.selectedIds.isEmpty
           ? "重新整理" : "重新批量整理(\(viewModel.selectedIds.count))",
         icon: "arrow.clockwise",
+        isEnabled: !viewModel.isMutatingHistory,
         action: {
           if viewModel.selectedIds.isEmpty {
             historyIdToRestoreFocus = item.id
@@ -291,6 +293,7 @@ struct TransferHistoryView: View {
         title: viewModel.selectedIds.isEmpty
           ? "删除" : "批量删除(\(viewModel.selectedIds.count))",
         icon: "trash",
+        isEnabled: !viewModel.isMutatingHistory,
         role: .destructive,
         action: {
           if viewModel.selectedIds.isEmpty {

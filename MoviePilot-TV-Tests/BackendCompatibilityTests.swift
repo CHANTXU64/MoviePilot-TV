@@ -2986,10 +2986,7 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
           return
         }
 
-        guard let result = try await service.aiRedoTransferHistory(ids: ids) else {
-          XCTFail("AI reorganize did not return a progress key for history IDs \(ids).")
-          return
-        }
+        let result = try await service.aiRedoTransferHistories(ids: ids)
 
         XCTAssertFalse(result.progressKey.isEmpty, "AI reorganize returned an empty progress key.")
         XCTAssertFalse(result.acceptedIds.isEmpty, "AI reorganize accepted no history IDs.")

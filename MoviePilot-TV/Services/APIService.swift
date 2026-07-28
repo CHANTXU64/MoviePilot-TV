@@ -211,6 +211,21 @@ nonisolated private func decodeActionResponseSync(from data: Data) throws -> (
   return (true, nil)
 }
 
+nonisolated private func decodeStrictActionResponseSync(from data: Data) throws -> (
+  success: Bool, message: String?
+) {
+  struct ActionResponse: Decodable {
+    let success: Bool?
+    let message: String?
+    let message_i18n: String?
+  }
+  let response = try JSONDecoder().decode(ActionResponse.self, from: data)
+  return (
+    response.success ?? false,
+    response.message_i18n?.isEmpty == false ? response.message_i18n : response.message
+  )
+}
+
 nonisolated private func posterImageURL(posterPath: String?, config: MediaImageURLConfig) -> URL? {
   let url = posterPath?.replacingOccurrences(of: "original", with: "w500")
 
@@ -1435,7 +1450,7 @@ class APIService: ObservableObject {
   ///   - deleteDest: 是否同时删除目标文件。
   func deleteTransferHistory(item: TransferHistory, deleteSource: Bool, deleteDest: Bool)
     async throws
-    -> Bool
+    -> (success: Bool, message: String?)
   {
     let body = try JSONEncoder().encode(item)
     let endpoint = try buildEndpoint(
@@ -1445,18 +1460,35 @@ class APIService: ObservableObject {
         "deletedest": String(deleteDest),
       ])
     let data = try await makeRequest(endpoint: endpoint, method: "DELETE", body: body)
-    return try await decodeActionResponse(from: data).success
+    return try decodeStrictActionResponseSync(from: data)
   }
 
-  /// AI重新整理历史记录
+  /// 单条 AI 重新整理历史记录
   /// - 对应前端: `MoviePilot-Frontend/src/views/reorganize/TransferHistoryView.vue`
-  func aiRedoTransferHistory(ids: [Int]) async throws -> (progressKey: String, acceptedIds: [Int])? {
+  func aiRedoTransferHistory(id: Int) async throws -> (progressKey: String, acceptedIds: [Int]) {
+    let endpoint = try buildEndpoint(path: "/history/transfer/\(id)/ai-redo")
+    let data = try await makeRequest(endpoint: endpoint, method: "POST")
+    return try decodeAiRedoResponse(data, fallbackIds: [id])
+  }
+
+  /// 批量 AI 重新整理历史记录
+  /// - 对应前端: `MoviePilot-Frontend/src/views/reorganize/TransferHistoryView.vue`
+  func aiRedoTransferHistories(ids: [Int]) async throws -> (
+    progressKey: String, acceptedIds: [Int]
+  ) {
     let endpoint = try buildEndpoint(path: "/history/transfer/ai-redo")
     let body = try JSONEncoder().encode(["history_ids": ids])
     let data = try await makeRequest(endpoint: endpoint, method: "POST", body: body)
+    return try decodeAiRedoResponse(data, fallbackIds: ids)
+  }
+
+  private func decodeAiRedoResponse(_ data: Data, fallbackIds: [Int]) throws -> (
+    progressKey: String, acceptedIds: [Int]
+  ) {
     struct AiRedoResponse: Codable {
       let success: Bool?
       let message: String?
+      let message_i18n: String?
       let data: AiRedoResponseData?
     }
     struct AiRedoResponseData: Codable {
@@ -1464,13 +1496,14 @@ class APIService: ObservableObject {
       let history_ids: [Int]?
     }
     let res = try JSONDecoder().decode(AiRedoResponse.self, from: data)
+    let message = res.message_i18n?.isEmpty == false ? res.message_i18n : res.message
     guard res.success == true else {
-      throw APIError.serverMessage(res.message ?? "未知错误")
+      throw APIError.serverMessage(message ?? "未知错误")
     }
-    if let key = res.data?.progress_key {
-      return (progressKey: key, acceptedIds: res.data?.history_ids ?? ids)
+    guard let key = res.data?.progress_key, !key.isEmpty else {
+      throw APIError.serverMessage(message ?? "AI 整理失败")
     }
-    return nil
+    return (progressKey: key, acceptedIds: res.data?.history_ids ?? fallbackIds)
   }
 
   /// 手动整理

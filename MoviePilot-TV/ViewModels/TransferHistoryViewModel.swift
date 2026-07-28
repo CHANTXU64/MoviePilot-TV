@@ -8,6 +8,7 @@ class TransferHistoryViewModel: ObservableObject {
   @Published var items: [TransferHistory] = []
   @Published var isFirstLoading: Bool = false
   @Published var isLoadingMore: Bool = false
+  @Published private(set) var isDeleting = false
   @Published var errorMessage: String?  // TODO
   @Published var isSelectionMode: Bool = false
   @Published var selectedIds: Set<Int> = []
@@ -22,6 +23,10 @@ class TransferHistoryViewModel: ObservableObject {
 
   var isAiRedoEnabled: Bool {
     apiService.settings?.AI_AGENT_ENABLE?.value != false
+  }
+
+  var isMutatingHistory: Bool {
+    isDeleting || isAiRedoing
   }
 
   // MARK: - Private State
@@ -196,20 +201,20 @@ class TransferHistoryViewModel: ObservableObject {
 
   func deleteHistory(item: TransferHistory, deleteSource: Bool, deleteDest: Bool) async {
     errorMessage = nil
-    guard apiService.canAccess(.manage) else { return }
+    guard apiService.canAccess(.manage), !isMutatingHistory else { return }
+    isDeleting = true
+    defer { isDeleting = false }
     do {
-      let success = try await apiService.deleteTransferHistory(
+      let result = try await apiService.deleteTransferHistory(
         item: item,
         deleteSource: deleteSource,
         deleteDest: deleteDest)
 
-      if success {
+      if result.success {
         markDeleted(id: item.id)
         pendingDeletionShiftCount += 1
       } else {
-        let errorDescription = "删除失败 (id: \(item.id))，请检查后端日志。"
-        print(errorDescription)
-        errorMessage = errorDescription
+        errorMessage = result.message ?? "删除失败 (id: \(item.id))"
       }
     } catch {
       handle(error: error)
@@ -234,32 +239,37 @@ class TransferHistoryViewModel: ObservableObject {
 
   func deleteSelected(deleteSource: Bool, deleteDest: Bool) async {
     errorMessage = nil
-    guard apiService.canAccess(.manage) else { return }
+    guard apiService.canAccess(.manage), !isMutatingHistory else { return }
+    isDeleting = true
+    defer { isDeleting = false }
     let idsToDelete = Array(selectedIds)
     var deletedCount = 0
+    var failures: [String] = []
 
     for id in idsToDelete {
       if let item = items.first(where: { $0.id == id }) {
         do {
-          let success = try await apiService.deleteTransferHistory(
+          let result = try await apiService.deleteTransferHistory(
             item: item,
             deleteSource: deleteSource,
             deleteDest: deleteDest)
 
-          if success {
+          if result.success {
             markDeleted(id: id)
             deletedCount += 1
+          } else {
+            failures.append(result.message ?? "id: \(id)")
           }
         } catch {
-          print("Failed to delete history item \(id): \(error.localizedDescription)")
+          failures.append("id: \(id)，\(error.localizedDescription)")
         }
       } else {
         selectedIds.remove(id)
       }
     }
 
-    if deletedCount == 0 && !idsToDelete.isEmpty {
-      errorMessage = "批量删除失败，请检查后端日志。"
+    if !failures.isEmpty {
+      errorMessage = "部分记录删除失败：\(failures.joined(separator: "；"))"
     }
 
     pendingDeletionShiftCount += deletedCount
@@ -440,9 +450,22 @@ class TransferHistoryViewModel: ObservableObject {
 
   // MARK: - AI Reorganize
 
-  func triggerAiRedo(for ids: [Int]) async {
+  func triggerAiRedo(for id: Int) async {
+    await triggerAiRedo(for: [id], useBatchEndpoint: false)
+  }
+
+  func triggerBatchAiRedo(for ids: [Int]) async {
+    await triggerAiRedo(for: ids, useBatchEndpoint: true)
+  }
+
+  private func triggerAiRedo(for ids: [Int], useBatchEndpoint: Bool) async {
+    errorMessage = nil
     guard apiService.canAccess(.manage) else { return }
-    let pendingIds = ids.filter { !aiRedoingIds.contains($0) }
+    guard !isMutatingHistory else { return }
+    var seenIds = Set<Int>()
+    let pendingIds = ids.filter {
+      seenIds.insert($0).inserted && !aiRedoingIds.contains($0)
+    }
     guard !pendingIds.isEmpty else { return }
     guard isAiRedoEnabled else {
       errorMessage = "AI 助手未启用"
@@ -458,48 +481,65 @@ class TransferHistoryViewModel: ObservableObject {
     aiRedoTask?.cancel()
     aiRedoTask = Task { @MainActor in
       do {
-        if let result = try await apiService.aiRedoTransferHistory(ids: pendingIds) {
-          let acceptedIds = result.acceptedIds
-          let rejectedIds = Set(pendingIds).subtracting(acceptedIds)
-          for id in rejectedIds {
-             self.aiRedoingIds.remove(id)
-          }
-
-          let stream = apiService.progressStream(progressKey: result.progressKey)
-          for try await event in stream {
-            if Task.isCancelled { break }
-            if let text = event.text {
-              self.aiRedoProgressText = text
-            }
-            if let enable = event.enable, !enable {
-              if let success = event.data?.success, !success {
-                print("AI整理失败: \(event.data?.error ?? "未知错误")")
-              } else {
-                print("AI整理成功")
-              }
-              break
-            }
-            if event.type == "done" || event.type == "error" {
-              break
-            }
-          }
-
-          if !Task.isCancelled {
-            for id in acceptedIds {
-              self.aiRedoingIds.remove(id)
-            }
-            self.isAiRedoing = false
-            await self.refresh()
-          }
+        let result: (progressKey: String, acceptedIds: [Int])
+        if useBatchEndpoint {
+          result = try await apiService.aiRedoTransferHistories(ids: pendingIds)
         } else {
-          for id in pendingIds {
+          result = try await apiService.aiRedoTransferHistory(id: pendingIds[0])
+        }
+
+        let acceptedIds = result.acceptedIds
+        let rejectedIds = Set(pendingIds).subtracting(acceptedIds)
+        for id in rejectedIds {
+          self.aiRedoingIds.remove(id)
+        }
+        if useBatchEndpoint {
+          self.selectedIds.subtract(acceptedIds)
+          if self.selectedIds.isEmpty {
+            self.isSelectionMode = false
+          }
+        }
+
+        var terminalError: String?
+        let stream = apiService.progressStream(progressKey: result.progressKey)
+        for try await event in stream {
+          if Task.isCancelled { break }
+          if let text = event.text_i18n ?? event.text {
+            self.aiRedoProgressText = text
+          }
+          if event.enable == false {
+            if event.data?.success == false {
+              terminalError =
+                event.data?.error_i18n ?? event.data?.error ?? "AI 整理失败"
+            }
+            break
+          }
+          if event.type == "error" {
+            terminalError = event.message_i18n ?? event.message ?? "AI 整理失败"
+            break
+          }
+          if event.type == "done" {
+            break
+          }
+        }
+
+        if !Task.isCancelled {
+          for id in acceptedIds {
             self.aiRedoingIds.remove(id)
           }
           self.isAiRedoing = false
+          await self.refresh()
+          if let terminalError {
+            self.errorMessage = terminalError
+          }
         }
       } catch {
-        print("AI Redo failed: \(error)")
         if !Task.isCancelled {
+          if case APIError.serverMessage(let message) = error {
+            self.errorMessage = message
+          } else {
+            self.errorMessage = "AI 整理失败"
+          }
           for id in pendingIds {
             self.aiRedoingIds.remove(id)
           }
