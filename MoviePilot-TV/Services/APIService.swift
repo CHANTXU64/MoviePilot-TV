@@ -42,6 +42,11 @@ nonisolated struct ApiResponse<T: Decodable>: Decodable {
   let success: Bool?
   let data: T?
   let message: String?
+  let message_i18n: String?
+
+  var localizedMessage: String? {
+    message_i18n?.isEmpty == false ? message_i18n : message
+  }
 }
 
 nonisolated struct SubscriptionLookupResult: Equatable, Sendable {
@@ -1274,6 +1279,23 @@ class APIService: ObservableObject {
     return nil
   }
 
+  /// 手动写入表单的媒体 ID 选择器，与 Web MediaIdSelector 请求保持一致。
+  func searchManualMedia(
+    title: String,
+    source: MediaSearchSource
+  ) async throws -> [MediaInfo] {
+    let endpoint = try buildEndpoint(
+      path: "/media/search",
+      params: [
+        "title": title,
+        "page": "1",
+        "count": "20",
+        "source": source.rawValue,
+      ])
+    let data = try await makeRequest(endpoint: endpoint)
+    return try await decodeOrUnwrap([MediaInfo].self, from: data)
+  }
+
   /// 搜索合集
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SearchBarDialog.vue (searchMedia('collection'))
   /// - 应用场景: 聚合搜索页面的“合集”分类。用户在搜索框输入关键词并选择“合集”时调用，用于搜索 TMDB 系列电影。
@@ -1566,12 +1588,35 @@ class APIService: ObservableObject {
   /// - Parameters:
   ///   - form: 包含整理所需全部信息的表单。
   ///   - background: 是否在后台执行整理任务。`true`为后台执行，会立即返回；`false`为前台执行，会等待任务完成。
-  func manualTransfer(form: ReorganizeForm, background: Bool) async throws -> Bool {
+  func manualTransfer(form: ReorganizeForm, background: Bool) async throws -> (
+    success: Bool, message: String?
+  ) {
     let body = try JSONEncoder().encode(form)
     let endpoint = try buildEndpoint(
       path: "/transfer/manual", params: ["background": String(background)])
     let data = try await makeRequest(endpoint: endpoint, method: "POST", body: body)
-    return try await decodeActionResponse(from: data).success
+    return try decodeStrictActionResponseSync(from: data)
+  }
+
+  func previewManualTransfer(form: ReorganizeForm) async throws -> ManualTransferPreviewData {
+    var previewForm = form
+    previewForm.preview = true
+    let body = try JSONEncoder().encode(previewForm)
+    let endpoint = try buildEndpoint(
+      path: "/transfer/manual",
+      params: ["background": "false"]
+    )
+    let data = try await makeRequest(endpoint: endpoint, method: "POST", body: body)
+    let response = try JSONDecoder().decode(
+      ApiResponse<ManualTransferPreviewData>.self,
+      from: data
+    )
+    guard response.success == true else {
+      throw APIError.serverMessage(response.localizedMessage ?? "整理预览失败")
+    }
+    var preview = response.data ?? .empty
+    preview.message = response.localizedMessage ?? preview.message
+    return preview
   }
 
   /// 获取存储配置

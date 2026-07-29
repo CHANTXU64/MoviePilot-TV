@@ -8,6 +8,38 @@ enum SearchType: String, CaseIterable, Identifiable {
   var id: String { self.rawValue }
 }
 
+nonisolated enum MetadataSearchKind: Sendable {
+  case media
+  case collection
+  case person
+}
+
+nonisolated enum MediaSearchSource: String, CaseIterable, Identifiable, Sendable {
+  case themoviedb
+  case douban
+  case bangumi
+  case anilist
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .themoviedb: "TMDB"
+    case .douban: "豆瓣"
+    case .bangumi: "Bangumi"
+    case .anilist: "AniList"
+    }
+  }
+
+  static func allowed(for kind: MetadataSearchKind) -> [MediaSearchSource] {
+    switch kind {
+    case .media: [.themoviedb, .douban, .bangumi, .anilist]
+    case .collection: [.themoviedb]
+    case .person: [.themoviedb, .douban]
+    }
+  }
+}
+
 enum BestResultItem: Identifiable, Hashable {
   case media(MediaInfo)
   case person(Person)

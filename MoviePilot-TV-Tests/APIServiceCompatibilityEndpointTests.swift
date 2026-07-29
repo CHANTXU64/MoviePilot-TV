@@ -212,6 +212,209 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     XCTAssertEqual(resetResult.message, "订阅不存在")
   }
 
+  func testManualMediaSearchMatchesWebSelectorContractAndKeepsAniListNativeID()
+    async throws
+  {
+    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
+    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.testingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURL = "https://compatibility-endpoint-tests.local"
+
+    let items = try await service.searchManualMedia(
+      title: "葬送的芙莉莲",
+      source: .anilist
+    )
+
+    let item = try XCTUnwrap(items.first)
+    XCTAssertEqual(item.source, "anilist")
+    XCTAssertEqual(ManualMediaSelection.mediaId(for: item, source: .anilist), "154587")
+    let query = Self.queryValues(
+      await CompatibilityEndpointURLProtocol.stub.requestQuery(suffix: "/media/search")
+    )
+    XCTAssertEqual(
+      query,
+      [
+        "title": "葬送的芙莉莲",
+        "page": "1",
+        "count": "20",
+        "source": "anilist",
+      ]
+    )
+    XCTAssertNil(query["type"])
+  }
+
+  func testManualTransferPreviewUsesBackgroundFalseAndPreservesAniListIdentity() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
+    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.testingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURL = "https://compatibility-endpoint-tests.local"
+
+    let form = ReorganizeForm(
+      fileitem: FileItem(
+        name: "episode.mkv",
+        path: "/downloads/episode.mkv",
+        type: "file",
+        size: 1
+      ),
+      logid: 0,
+      target_storage: "local",
+      transfer_type: "copy",
+      target_path: "/library",
+      min_filesize: 0,
+      scrape: true,
+      from_history: false,
+      type_name: "电视剧",
+      anilistid: 154_587,
+      media_source: "anilist",
+      media_id: "154587",
+      season: 1
+    )
+
+    let preview = try await service.previewManualTransfer(form: form)
+    XCTAssertEqual(preview.summary, ManualTransferPreviewSummary(total: 1, success: 1, failed: 0))
+    XCTAssertEqual(preview.items.first?.target, "/library/Show/S01E01.mkv")
+    XCTAssertEqual(preview.message, "本地化预览完成")
+
+    let previewQuery = Self.queryValues(
+      await CompatibilityEndpointURLProtocol.stub.requestQuery(suffix: "/transfer/manual")
+    )
+    let body = try Self.jsonObject(
+      await CompatibilityEndpointURLProtocol.stub.requestBody(suffix: "/transfer/manual")
+    )
+    XCTAssertEqual(previewQuery, ["background": "false"])
+    XCTAssertEqual(body["preview"] as? Bool, true)
+    XCTAssertEqual(body["media_source"] as? String, "anilist")
+    XCTAssertEqual(body["media_id"] as? String, "154587")
+
+    let queued = try await service.manualTransfer(form: form, background: true)
+    let submittedImmediately = try await service.manualTransfer(form: form, background: false)
+    XCTAssertTrue(queued.success)
+    XCTAssertTrue(submittedImmediately.success)
+    let queries =
+      await CompatibilityEndpointURLProtocol.stub.matchingQueries(suffix: "/transfer/manual")
+        .map(Self.queryValues)
+    XCTAssertEqual(
+      queries,
+      [["background": "false"], ["background": "true"], ["background": "false"]]
+    )
+    let bodies =
+      await CompatibilityEndpointURLProtocol.stub.matchingBodies(suffix: "/transfer/manual")
+    let submitBody = try Self.jsonObject(XCTUnwrap(bodies.dropFirst().first.flatMap { $0 }))
+    XCTAssertFalse(submitBody.keys.contains("preview"))
+
+    await CompatibilityEndpointURLProtocol.stub.setManualTransferOmitsSuccess(true)
+    do {
+      _ = try await service.previewManualTransfer(form: form)
+      XCTFail("整理预览响应缺少 success 时必须按 Web 契约判定失败")
+    } catch {}
+  }
+
+  func testReorganizePreviewMergesHistoryResponsesAndDeduplicatesItems() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
+    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    await CompatibilityEndpointURLProtocol.stub.setManualTransferResponses([
+      Data(
+        """
+        {
+          "success": true,
+          "message_i18n": "第一批预览完成",
+          "data": {
+            "summary": {"total": 2, "success": 2, "failed": 0},
+            "items": [
+              {"source": "/downloads/a.mkv", "target": "/library/a.mkv", "success": true},
+              {"source": "/downloads/a.mkv", "target": "/library/a.mkv", "success": true}
+            ]
+          }
+        }
+        """.utf8
+      ),
+      Data(#"{"success":false,"message_i18n":"第二批预览失败"}"#.utf8),
+    ])
+
+    let service = APIService.testingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    configureManageUser(service)
+    let viewModel = ReorganizeViewModel(
+      logIds: [81, 82],
+      fileItem: nil,
+      apiService: service
+    )
+
+    let previewSucceeded = await viewModel.preview()
+    XCTAssertFalse(previewSucceeded)
+
+    let preview = try XCTUnwrap(viewModel.previewData)
+    XCTAssertEqual(preview.summary, ManualTransferPreviewSummary(total: 2, success: 1, failed: 1))
+    XCTAssertEqual(preview.items.map(\.source), ["/downloads/a.mkv", "历史记录 82"])
+    XCTAssertEqual(preview.items.last?.message, "第二批预览失败")
+    XCTAssertEqual(viewModel.errorMessage, "预览完成，其中 1 项无法整理。")
+
+    let queries =
+      await CompatibilityEndpointURLProtocol.stub.matchingQueries(suffix: "/transfer/manual")
+        .map(Self.queryValues)
+    XCTAssertEqual(queries, [["background": "false"], ["background": "false"]])
+    let bodies =
+      await CompatibilityEndpointURLProtocol.stub.matchingBodies(suffix: "/transfer/manual")
+    let previewLogIds = try bodies.map {
+      try XCTUnwrap(Self.jsonObject($0)["logid"] as? Int)
+    }
+    XCTAssertEqual(previewLogIds, [81, 82])
+    let allPreviewBodies = try bodies.allSatisfy {
+      try Self.jsonObject($0)["preview"] as? Bool == true
+    }
+    XCTAssertTrue(allPreviewBodies)
+  }
+
+  func testReorganizeSubmitUsesBackgroundRequestsForEveryHistory() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
+    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    await CompatibilityEndpointURLProtocol.stub.setManualTransferResponses([
+      Data(#"{"success":true,"message_i18n":"已开始整理"}"#.utf8),
+      Data(#"{"success":true,"message_i18n":"已开始整理"}"#.utf8),
+    ])
+
+    let service = APIService.testingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    configureManageUser(service)
+    let viewModel = ReorganizeViewModel(
+      logIds: [81, 82],
+      fileItem: nil,
+      apiService: service
+    )
+
+    let submitted = await viewModel.submit(background: true)
+    XCTAssertTrue(submitted)
+
+    let queries =
+      await CompatibilityEndpointURLProtocol.stub.matchingQueries(suffix: "/transfer/manual")
+        .map(Self.queryValues)
+    XCTAssertEqual(queries, [["background": "true"], ["background": "true"]])
+    let bodies =
+      await CompatibilityEndpointURLProtocol.stub.matchingBodies(suffix: "/transfer/manual")
+    let submittedLogIds = try bodies.map {
+      try XCTUnwrap(Self.jsonObject($0)["logid"] as? Int)
+    }
+    XCTAssertEqual(submittedLogIds, [81, 82])
+    let allBodiesOmitPreview = try bodies.allSatisfy {
+      try !Self.jsonObject($0).keys.contains("preview")
+    }
+    XCTAssertTrue(allBodiesOmitPreview)
+  }
+
   private func assertContainsSubsequence(
     _ expected: [String],
     in actual: [String],
@@ -240,6 +443,41 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     if !KeychainHelper.shared.save(value, service: "MoviePilot-TV", account: account) {
       UserDefaults.standard.set(value, forKey: account)
     }
+  }
+
+  private func configureManageUser(_ service: APIService) {
+    service.baseURL = "https://compatibility-endpoint-tests.local"
+    service.token = "manage-user"
+    service.currentUser = Token(
+      access_token: "manage-user",
+      token_type: "Bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        UserPermissionKey.discovery.rawValue: false,
+        UserPermissionKey.search.rawValue: false,
+        UserPermissionKey.subscribe.rawValue: false,
+        UserPermissionKey.manage.rawValue: true,
+      ],
+      user_name: "manage-user",
+      avatar: nil
+    )
+  }
+
+  private static func jsonObject(_ data: Data?) throws -> [String: Any] {
+    try XCTUnwrap(
+      JSONSerialization.jsonObject(with: XCTUnwrap(data)) as? [String: Any]
+    )
+  }
+
+  private static func queryValues(_ query: String?) -> [String: String] {
+    guard let query,
+      let components = URLComponents(string: "https://query.local/?\(query)")
+    else { return [:] }
+    return Dictionary(
+      uniqueKeysWithValues: (components.queryItems ?? []).compactMap { item in
+        item.value.map { (item.name, $0) }
+      }
+    )
   }
 }
 
@@ -320,17 +558,31 @@ private struct CompatibilityEndpointServiceSnapshot {
 
 private actor CompatibilityEndpointURLProtocolStub {
   private var requests: [URLRequest] = []
+  private var requestBodies: [Data?] = []
+  private var manualTransferResponses: [Data] = []
   private var userSettingsFailureStatusCode: Int?
+  private var manualTransferOmitsSuccess = false
   private var subscriptionActionsFail: Bool?
 
   func reset() {
     requests.removeAll()
+    requestBodies.removeAll()
+    manualTransferResponses.removeAll()
     userSettingsFailureStatusCode = nil
+    manualTransferOmitsSuccess = false
     subscriptionActionsFail = nil
   }
 
   func setUserSettingsFailure(statusCode: Int?) {
     userSettingsFailureStatusCode = statusCode
+  }
+
+  func setManualTransferOmitsSuccess(_ enabled: Bool) {
+    manualTransferOmitsSuccess = enabled
+  }
+
+  func setManualTransferResponses(_ responses: [Data]) {
+    manualTransferResponses = responses
   }
 
   func setSubscriptionActionsFail(_ fail: Bool) {
@@ -349,8 +601,53 @@ private actor CompatibilityEndpointURLProtocolStub {
     requests.map { $0.url?.query }
   }
 
+  func matchingQueries(suffix: String) -> [String?] {
+    requests.indices.compactMap {
+      requests[$0].url?.path.hasSuffix(suffix) == true
+        ? .some(requests[$0].url?.query)
+        : nil
+    }
+  }
+
+  func matchingBodies(suffix: String) -> [Data?] {
+    requests.indices.compactMap {
+      requests[$0].url?.path.hasSuffix(suffix) == true
+        ? .some(requestBodies[$0])
+        : nil
+    }
+  }
+
+  func requestBody(suffix: String) -> Data? {
+    guard let index = requests.indices.last(where: {
+      requests[$0].url?.path.hasSuffix(suffix) == true
+    }) else { return nil }
+    return requestBodies[index]
+  }
+
+  func requestQuery(suffix: String) -> String? {
+    requests.last(where: { $0.url?.path.hasSuffix(suffix) == true })?.url?.query
+  }
+
+  private func bodyData(from request: URLRequest) -> Data? {
+    if let body = request.httpBody {
+      return body
+    }
+    guard let stream = request.httpBodyStream else { return nil }
+    stream.open()
+    defer { stream.close() }
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while true {
+      let count = stream.read(&buffer, maxLength: buffer.count)
+      if count <= 0 { break }
+      data.append(buffer, count: count)
+    }
+    return data.isEmpty ? nil : data
+  }
+
   func response(for request: URLRequest) throws -> (HTTPURLResponse, Data) {
     requests.append(request)
+    requestBodies.append(bodyData(from: request))
     guard let url = request.url else {
       throw URLError(.badURL)
     }
@@ -371,6 +668,23 @@ private actor CompatibilityEndpointURLProtocolStub {
         data =
           #"{"success":true,"data":{"AI_AGENT_ENABLE":true,"RECOGNIZE_SOURCE":"douban","USER_UNIQUE_ID":"compat-user","SUBSCRIBE_SHARE_MANAGE":true}}"#
           .data(using: .utf8)!
+      }
+    } else if url.path == "/api/v1/media/search" {
+      statusCode = 200
+      data =
+        #"[{"source":"anilist","media_id":"154587","tmdb_id":42,"anilist_id":154587,"title":"葬送的芙莉莲","type":"电视剧","year":"2023"}]"#
+        .data(using: .utf8)!
+    } else if url.path == "/api/v1/transfer/manual" {
+      statusCode = 200
+      if manualTransferResponses.isEmpty {
+        let successField = manualTransferOmitsSuccess ? "" : #""success":true,"#
+        data = Data(
+          """
+          {\(successField)"message_i18n":"本地化预览完成","data":{"summary":{"total":1,"success":1,"failed":0},"items":[{"source":"/downloads/episode.mkv","target":"/library/Show/S01E01.mkv","success":true,"season":1,"episode":1}],"message":"预览完成"}}
+          """.utf8
+        )
+      } else {
+        data = manualTransferResponses.removeFirst()
       }
     } else if let subscriptionActionsFail,
       url.path.hasPrefix("/api/v1/subscribe/status/")

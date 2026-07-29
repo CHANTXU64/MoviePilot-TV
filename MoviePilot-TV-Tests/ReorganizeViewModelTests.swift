@@ -66,6 +66,112 @@ final class ReorganizeViewModelTests: XCTestCase {
     XCTAssertEqual(viewModel.form.transfer_type, "move")
   }
 
+  func testHistoryRedoKeepsManualIdentityEmptyUntilSubmission() {
+    let viewModel = ReorganizeViewModel(logIds: [81], fileItem: nil)
+
+    XCTAssertEqual(viewModel.form.logid, 81)
+    XCTAssertFalse(viewModel.form.from_history)
+    XCTAssertEqual(viewModel.mediaId, "")
+    XCTAssertNil(viewModel.form.media_id)
+    XCTAssertNil(viewModel.form.tmdbid)
+    XCTAssertNil(viewModel.form.doubanid)
+    XCTAssertNil(viewModel.form.bangumiid)
+    XCTAssertNil(viewModel.form.anilistid)
+
+    viewModel.form.from_history = true
+    let submitted = viewModel.preparedSingleSubmissionForm()
+
+    XCTAssertTrue(submitted.from_history)
+    XCTAssertNil(submitted.media_id)
+  }
+
+  func testChangingSourceClearsOldIdentityAndEpisodeGroup() {
+    let viewModel = ReorganizeViewModel(fileItem: nil)
+    viewModel.mediaId = "42"
+    viewModel.form.tmdbid = 42
+    viewModel.form.media_source = "themoviedb"
+    viewModel.form.media_id = "42"
+    viewModel.form.episode_group = "group-a"
+
+    viewModel.selectMediaSource(.anilist)
+
+    XCTAssertEqual(viewModel.mediaSource, .anilist)
+    XCTAssertEqual(viewModel.mediaId, "")
+    XCTAssertNil(viewModel.form.tmdbid)
+    XCTAssertNil(viewModel.form.doubanid)
+    XCTAssertNil(viewModel.form.bangumiid)
+    XCTAssertNil(viewModel.form.anilistid)
+    XCTAssertEqual(viewModel.form.media_source, "anilist")
+    XCTAssertNil(viewModel.form.media_id)
+    XCTAssertNil(viewModel.form.episode_group)
+  }
+
+  func testChangingAwayFromTVClearsEpisodeGroupBeforeSubmission() {
+    let viewModel = ReorganizeViewModel(fileItem: nil)
+    viewModel.selectMediaSource(.themoviedb)
+    viewModel.selectMediaType("电视剧")
+    viewModel.mediaId = "42"
+    viewModel.form.episode_group = "group-a"
+
+    viewModel.selectMediaType("电影")
+
+    XCTAssertNil(viewModel.form.episode_group)
+    XCTAssertNil(viewModel.preparedSingleSubmissionForm().episode_group)
+  }
+
+  func testManualAniListSelectionUsesNativeIDAndUpdatesRecognizedType() {
+    let media = MediaInfo(
+      tmdb_id: 42,
+      anilist_id: 154_587,
+      source: "anilist",
+      media_id: "154587",
+      title: "葬送的芙莉莲",
+      type: "tv"
+    )
+    let viewModel = ReorganizeViewModel(fileItem: nil)
+    viewModel.selectMediaSource(.anilist)
+
+    let selectedID = ManualMediaSelection.mediaId(for: media, source: .anilist)
+    viewModel.selectManualMedia(media, mediaId: selectedID ?? "")
+
+    XCTAssertEqual(selectedID, "154587")
+    XCTAssertEqual(viewModel.mediaId, "154587")
+    XCTAssertEqual(viewModel.form.type_name, "电视剧")
+    let submitted = viewModel.preparedSingleSubmissionForm()
+    XCTAssertEqual(submitted.media_source, "anilist")
+    XCTAssertEqual(submitted.media_id, "154587")
+    XCTAssertNil(submitted.episode_group)
+  }
+
+  func testManualTMDBSelectionPrefersNativeIDOverPrefixedMediaID() {
+    let media = MediaInfo(
+      tmdb_id: 42,
+      source: "themoviedb",
+      media_id: "tmdb:999",
+      title: "测试电影",
+      type: "movie"
+    )
+    let viewModel = ReorganizeViewModel(fileItem: nil)
+
+    let selectedID = ManualMediaSelection.mediaId(for: media, source: .themoviedb)
+    viewModel.selectManualMedia(media, mediaId: selectedID ?? "")
+
+    XCTAssertEqual(selectedID, "42")
+    XCTAssertEqual(viewModel.mediaId, "42")
+  }
+
+  func testPreviewFileNameMatchesWebPathPresentation() {
+    XCTAssertEqual(
+      manualTransferPreviewFileName(from: "/media/电影名称.2025.2160p.mkv"),
+      "电影名称.2025.2160p.mkv"
+    )
+    XCTAssertEqual(
+      manualTransferPreviewFileName(from: #"D:\Media\Movie.2025.1080p.mkv"#),
+      "Movie.2025.1080p.mkv"
+    )
+    XCTAssertNil(manualTransferPreviewFileName(from: nil))
+  }
+
   private func waitForFormDebounce() async throws {
     try await Task.sleep(nanoseconds: 250_000_000)
   }

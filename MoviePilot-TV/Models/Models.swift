@@ -53,6 +53,11 @@ enum MediaIdentifier {
     return trimmed.isEmpty ? nil : trimmed
   }
 
+  static func isValidManualMediaId(_ mediaId: String?) -> Bool {
+    guard let mediaId = normalizedString(mediaId) else { return true }
+    return mediaId.unicodeScalars.allSatisfy { (48...57).contains(Int($0.value)) }
+  }
+
   static func normalizedMediaIdentifier(_ mediaId: String?) -> String? {
     guard let mediaId = normalizedString(mediaId), !mediaId.hasSuffix(":") else { return nil }
 
@@ -2369,6 +2374,14 @@ struct ReorganizeForm: Codable {
   var tmdbid: Int?
   // 豆瓣 ID
   var doubanid: String?
+  // Bangumi ID
+  var bangumiid: Int? = nil
+  // AniList ID
+  var anilistid: Int? = nil
+  // 统一媒体来源
+  var media_source: String? = nil
+  // 来源原生 ID
+  var media_id: String? = nil
   // 剧集组编号；空白值编码为 null。
   var episode_group: String?
   // 季号
@@ -2385,11 +2398,14 @@ struct ReorganizeForm: Codable {
   var library_type_folder: Bool?
   // 媒体库类别子目录
   var library_category_folder: Bool?
+  // 仅预览整理结果，不执行文件写入。
+  var preview: Bool = false
 
   enum CodingKeys: String, CodingKey {
     case fileitem, fileitems, logid, target_storage, transfer_type, target_path, min_filesize, scrape, from_history,
-      type_name, tmdbid, doubanid, episode_group, season, episode_detail, episode_format, episode_offset,
-      episode_part, library_type_folder, library_category_folder
+      type_name, tmdbid, doubanid, bangumiid, anilistid, media_source, media_id, episode_group,
+      season, episode_detail, episode_format, episode_offset,
+      episode_part, library_type_folder, library_category_folder, preview
   }
 
   func encode(to encoder: Encoder) throws {
@@ -2434,6 +2450,10 @@ struct ReorganizeForm: Codable {
     try container.encodeIfPresent(type_name, forKey: .type_name)
     try container.encodeIfPresent(tmdbid, forKey: .tmdbid)
     try container.encodeIfPresent(doubanid, forKey: .doubanid)
+    try container.encodeIfPresent(bangumiid, forKey: .bangumiid)
+    try container.encodeIfPresent(anilistid, forKey: .anilistid)
+    try container.encodeIfPresent(media_source, forKey: .media_source)
+    try container.encodeIfPresent(media_id, forKey: .media_id)
 
     if let episodeGroup = episode_group?.trimmingCharacters(in: .whitespacesAndNewlines), !episodeGroup.isEmpty {
       try container.encode(episodeGroup, forKey: .episode_group)
@@ -2448,7 +2468,46 @@ struct ReorganizeForm: Codable {
     try container.encodeIfPresent(episode_part, forKey: .episode_part)
     try container.encodeIfPresent(library_type_folder, forKey: .library_type_folder)
     try container.encodeIfPresent(library_category_folder, forKey: .library_category_folder)
+    if preview {
+      try container.encode(true, forKey: .preview)
+    }
   }
+}
+
+nonisolated struct ManualTransferPreviewSummary: Codable, Hashable {
+  let total: Int
+  let success: Int
+  let failed: Int
+}
+
+nonisolated struct ManualTransferPreviewItem: Codable, Hashable {
+  let source: String?
+  let target: String?
+  let target_dir: String?
+  let success: Bool?
+  let message: String?
+  let type: String?
+  let title: String?
+  let season: JSONValue?
+  let episode: JSONValue?
+  let episode_end: JSONValue?
+  let part: String?
+  let org_string: String?
+  let apply_words: [String]?
+  let resource_team: String?
+  let customization: String?
+}
+
+nonisolated struct ManualTransferPreviewData: Codable, Hashable {
+  var summary: ManualTransferPreviewSummary
+  var items: [ManualTransferPreviewItem]
+  var message: String?
+
+  static let empty = ManualTransferPreviewData(
+    summary: ManualTransferPreviewSummary(total: 0, success: 0, failed: 0),
+    items: [],
+    message: nil
+  )
 }
 
 nonisolated func isResourceMediaSearchKeyword(_ keyword: String) -> Bool {
