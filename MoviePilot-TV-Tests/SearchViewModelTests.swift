@@ -498,6 +498,25 @@ final class SearchViewModelTests: XCTestCase {
       "Search users may keep using search results, but CustomFilterRules is a superuser-only setting."
     )
   }
+
+  func testMapMediaToSubscribePreservesUnifiedIdentity() {
+    let subscribe = SearchViewModel().mapMediaToSubscribe(
+      MediaInfo(
+        tmdb_id: 42,
+        anilist_id: 154_587,
+        source: "anilist",
+        mediaid_prefix: "anilist",
+        media_id: "154587",
+        title: "搜索结果",
+        type: "电影"
+      )
+    )
+
+    XCTAssertEqual(subscribe.anilistid, 154_587)
+    XCTAssertEqual(subscribe.media_source, "anilist")
+    XCTAssertEqual(subscribe.media_id, "154587")
+    XCTAssertEqual(subscribe.mediaid, "anilist:154587")
+  }
 }
 
 @MainActor

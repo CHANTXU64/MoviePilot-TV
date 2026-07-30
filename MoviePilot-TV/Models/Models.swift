@@ -63,6 +63,23 @@ nonisolated enum MediaIdentifier {
     return identity(from: legacyMediaId)
   }
 
+  static func resolveAuxiliaryContent(
+    tmdbId: Int?,
+    doubanId: String?,
+    bangumiId: Int?
+  ) -> MediaIdentity? {
+    if let id = truthyNumericIdentifier(tmdbId) {
+      return MediaIdentity(source: "themoviedb", mediaId: String(id))
+    }
+    if let id = normalizedString(doubanId) {
+      return MediaIdentity(source: "douban", mediaId: id)
+    }
+    if let id = truthyNumericIdentifier(bangumiId) {
+      return MediaIdentity(source: "bangumi", mediaId: String(id))
+    }
+    return nil
+  }
+
   static func identity(from mediaKey: String?) -> MediaIdentity? {
     guard let components = mediaIdComponents(mediaKey),
       let source = normalizeSource(components.prefix)
@@ -453,7 +470,7 @@ struct RecognizeResponse: Codable {
 /// MARK: - 媒体详情相关模型
 
 /// TMDB 单季基础元数据
-struct TmdbSeason: Codable, Identifiable, Hashable {
+nonisolated struct TmdbSeason: Codable, Identifiable, Hashable {
   struct ImageURLs: Hashable {
     let poster: URL?
   }
@@ -473,8 +490,15 @@ struct TmdbSeason: Codable, Identifiable, Hashable {
   /// 评分
   let vote_average: Double?
 
-  /// 预计算的图片 URL
-  let imageURLs: ImageURLs
+  /// 图片 URL 在主线程按当前图片设置计算，避免后台 JSON 解码访问主线程 APIService。
+  @MainActor var imageURLs: ImageURLs {
+    ImageURLs(
+      poster: APIService.shared.getSeasonPosterURL(
+        posterPath: poster_path,
+        mediaPosterPath: nil
+      )
+    )
+  }
 
   var id: Int { season_number ?? 0 }
 
@@ -491,14 +515,6 @@ struct TmdbSeason: Codable, Identifiable, Hashable {
     poster_path = try container.decodeIfPresent(String.self, forKey: .poster_path)
     season_number = try container.decodeIfPresent(Int.self, forKey: .season_number)
     vote_average = try container.decodeIfPresent(Double.self, forKey: .vote_average)
-
-    // 计算图片 URL
-    self.imageURLs = ImageURLs(
-      poster: APIService.shared.getSeasonPosterURL(
-        posterPath: poster_path,
-        mediaPosterPath: nil
-      )
-    )
   }
 }
 
@@ -1117,6 +1133,16 @@ struct MediaInfo: Codable, Identifiable, Hashable {
       doubanId: douban_id,
       bangumiId: bangumi_id,
       anilistId: anilist_id
+    )
+  }
+
+  /// Web 详情页的演职员、推荐和相似内容按 TMDB、豆瓣、Bangumi 字段顺序选择接口，
+  /// 与订阅使用的主身份是两条独立规则。
+  var auxiliaryContentIdentity: MediaIdentity? {
+    MediaIdentifier.resolveAuxiliaryContent(
+      tmdbId: tmdb_id,
+      doubanId: douban_id,
+      bangumiId: bangumi_id
     )
   }
 

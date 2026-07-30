@@ -707,6 +707,9 @@ class SearchViewModel: ObservableObject {
       tmdbid: media.tmdb_id,
       doubanid: media.douban_id,
       bangumiid: media.bangumi_id,
+      anilistid: media.anilist_id,
+      media_source: media.identity?.source,
+      media_id: media.identity?.mediaId,
       best_version: nil,
       keyword: nil,
       total_episode: nil,
@@ -721,7 +724,8 @@ class SearchViewModel: ObservableObject {
       downloader: nil,
       save_path: nil,
       filter_groups: nil,
-      custom_words: nil
+      custom_words: nil,
+      mediaid: media.apiMediaId
     )
   }
 

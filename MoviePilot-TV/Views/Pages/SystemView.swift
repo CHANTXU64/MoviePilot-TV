@@ -613,7 +613,7 @@ struct SystemView: View {
     let target: SystemSettingsFocus
     switch page {
     case .root:
-      target = .autoSearch
+      target = .waitBackgroundImage
     case .connection:
       target = .relogin
     case .mediaSourceSelection:
@@ -699,7 +699,7 @@ struct SystemView: View {
       case .waitBackgroundImage:
         return "进入媒体详情页前的加载动画会等待背景海报就绪实现平滑过渡，网络较慢时可关闭以更快进入详情页。（只影响 TV 端）"
       case .preloadTMDBDetails:
-        return "进入豆瓣或 Bangumi 详情页并识别到对应 TMDB 条目后，提前加载其详情，以缩短后续跳转等待时间。（只影响 TV 端）"
+        return "进入豆瓣、Bangumi 或 AniList 详情页并识别到对应 TMDB 条目后，提前加载其详情，以缩短后续跳转等待时间。（只影响 TV 端）"
       case .mediaSourceSelection:
         return "设置聚合搜索默认使用的媒体来源；未选择时沿用 MoviePilot 后端搜索设置。（只影响 TV 端）"
       case .siteSelection:

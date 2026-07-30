@@ -742,6 +742,8 @@ class ExploreViewModel: ObservableObject {
       mediaID = "douban:\(id)"
     } else if let id = item.bangumi_id, id != 0 {
       mediaID = "bangumi:\(id)"
+    } else if let id = item.anilist_id, id != 0 {
+      mediaID = "anilist:\(id)"
     } else {
       mediaID = "\(item.mediaid_prefix ?? "media"):\(item.title ?? "")"
     }

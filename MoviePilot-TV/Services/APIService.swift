@@ -1,5 +1,4 @@
 import Combine
-import CryptoKit
 import Foundation
 
 enum APIError: Error {
@@ -216,9 +215,9 @@ nonisolated private func decodeOrUnwrapSync<T: Decodable>(from data: Data) throw
         return wrappedData
       }
       if response.success == false {
-        throw APIError.serverMessage(response.message ?? "Request failed")
+        throw APIError.serverMessage(response.localizedMessage ?? "Request failed")
       }
-      if let message = response.message, !message.isEmpty {
+      if let message = response.localizedMessage, !message.isEmpty {
         throw APIError.serverMessage(message)
       }
     } catch let error as APIError {
@@ -239,13 +238,12 @@ nonisolated private func decodeActionResponseSync(from data: Data) throws -> (
   success: Bool, message: String?
 ) {
   struct ActionResponse: Decodable { let success: Bool?, message: String? }
-  if let resp = try? JSONDecoder().decode(ActionResponse.self, from: data) {
-    return (resp.success ?? false, resp.message)
+  if let response = try? JSONDecoder().decode(ActionResponse.self, from: data) {
+    return (response.success ?? false, response.message)
   }
-  if let apiResp = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-    return (apiResp.success ?? false, apiResp.message)
+  if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
+    return (response.success ?? false, response.localizedMessage)
   }
-  // 默认返回成功，因为某些API成功时可能不返回body
   return (true, nil)
 }
 
@@ -430,8 +428,6 @@ class APIService: ObservableObject {
   private let episodeGroupsCache = APICache<String, [EpisodeGroup]>(defaultTTL: 120, size: 20)
   private let mediaSeasonsCache = APICache<String, [TmdbSeason]>(defaultTTL: 120, size: 20)
   private let groupSeasonsCache = APICache<String, [TmdbSeason]>(defaultTTL: 120, size: 20)
-  private let seasonsNotExistsCache = APICache<String, [NotExistMediaInfo]>(
-    defaultTTL: 120, size: 20)
   private let subscriptionStatusCache = APICache<String, Bool>(defaultTTL: 120, size: 100)
   private let subscriptionSnapshotCache = APICache<String, [Subscribe]>(
     defaultTTL: 30,
@@ -809,6 +805,8 @@ class APIService: ObservableObject {
     if let token = token {
       request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     }
+    request.setValue("zh-CN", forHTTPHeaderField: "X-MoviePilot-Locale")
+    request.setValue("zh-CN", forHTTPHeaderField: "Accept-Language")
     if isForm {
       request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
     } else {
@@ -821,10 +819,17 @@ class APIService: ObservableObject {
       func serverMessageError() -> APIError {
         struct ErrorPayload: Decodable {
           let message: String?
+          let message_i18n: String?
           let detail: String?
+          let detail_i18n: String?
         }
         let payload = try? JSONDecoder().decode(ErrorPayload.self, from: data)
-        let message = payload?.message ?? payload?.detail
+        let message = [
+          payload?.message_i18n,
+          payload?.detail_i18n,
+          payload?.message,
+          payload?.detail,
+        ].compactMap(\.self).first { !$0.isEmpty }
         return APIError.serverMessage(
           [String(httpResponse.statusCode), message]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -891,7 +896,10 @@ class APIService: ObservableObject {
     #if DEBUG
       guard endpoint.hasPrefix("/subscribe") else { return }
       subscriptionDebugRequestCount += 1
-      Logger.debug("[SubscriptionRequest] #\(subscriptionDebugRequestCount) \(method) \(endpoint)")
+      Logger.debug(
+        "[SubscriptionRequest] #\(subscriptionDebugRequestCount) \(method) "
+          + redactedEndpointForLogging(endpoint)
+      )
     #endif
   }
 
@@ -1407,22 +1415,22 @@ class APIService: ObservableObject {
   }
 
   /// 获取推荐媒体
-  /// - 对应前端: MoviePilot-Frontend/src/views/discover/MediaDetailView.vue (构造 tmdb|douban|bangumi/recommend/* 系列路径)
-  /// - 应用场景: 在媒体详情页底部，根据当前的 tmdb/douban/bangumi ID 获取“推荐”列表。
+  /// - 对应前端: MoviePilot-Frontend/src/views/discover/MediaDetailView.vue (按 TMDB、豆瓣、Bangumi 字段顺序构造 recommend 路径)
+  /// - 应用场景: 在媒体详情页底部，根据 Web 支持的辅助内容来源获取“推荐”列表。
   /// - ⚠️ 注意: Bangumi 的推荐接口不需要传 type。
   func fetchMediaRecommendations(detail: MediaInfo, page: Int = 1) async throws -> [MediaInfo] {
+    guard let identity = detail.auxiliaryContentIdentity else { return [] }
     var path: String?
-
-    if let tmdbId = detail.tmdb_id {
+    if identity.source == "themoviedb" {
       guard let type = detail.type?.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
       else { return [] }
-      path = "tmdb/recommend/\(tmdbId)/\(type)"
-    } else if let doubanId = detail.douban_id {
+      path = "tmdb/recommend/\(identity.mediaId)/\(type)"
+    } else if identity.source == "douban" {
       guard let type = detail.type?.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
       else { return [] }
-      path = "douban/recommend/\(doubanId)/\(type)"
-    } else if let bangumiId = detail.bangumi_id {
-      path = "bangumi/recommend/\(bangumiId)"
+      path = "douban/recommend/\(identity.mediaId)/\(type)"
+    } else if identity.source == "bangumi" {
+      path = "bangumi/recommend/\(identity.mediaId)"
     }
 
     guard let finalPath = path else { return [] }
@@ -1432,12 +1440,14 @@ class APIService: ObservableObject {
   /// 获取类似媒体
   /// - 对应前端: MoviePilot-Frontend/src/views/discover/MediaDetailView.vue (构造 tmdb/similar/* 系列路径)
   /// - 应用场景: 媒体详情页获取相似推荐内容。
-  /// - ⚠️ 注意: 仅有 TMDB_ID 的才支持获取相似媒体。
+  /// - ⚠️ 注意: Web 只要详情包含有效 TMDB ID 就显示相似内容，不要求主身份为 TMDB。
   func fetchMediaSimilar(detail: MediaInfo, page: Int = 1) async throws -> [MediaInfo] {
-    guard let tmdbId = detail.tmdb_id else { return [] }
+    guard let identity = detail.auxiliaryContentIdentity, identity.source == "themoviedb" else {
+      return []
+    }
     guard let type = detail.type?.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
     else { return [] }
-    let path = "tmdb/similar/\(tmdbId)/\(type)"
+    let path = "tmdb/similar/\(identity.mediaId)/\(type)"
     return try await fetchRecommend(path: path, page: page)
   }
 
@@ -1919,17 +1929,18 @@ class APIService: ObservableObject {
 
   /// 获取媒体演员
   /// - 对应前端: `MoviePilot-Frontend/src/pages/credits.vue` (调用 `PersonCardListView.vue` 进行分页加载)
-  /// - 应用场景: 影视详情页展示的演员横向列表，支持 TMDB/豆瓣/Bangumi 来源。支持分页加载。
+  /// - 应用场景: 影视详情页按 Web 的 TMDB、豆瓣、Bangumi 字段顺序展示演员，支持分页加载。
   func fetchMediaActors(detail: MediaInfo, page: Int) async throws -> [Person] {
-    var path = ""
-    if let tmdbId = detail.tmdb_id {
+    guard let identity = detail.auxiliaryContentIdentity else { return [] }
+    let path: String
+    if identity.source == "themoviedb" {
       let type = detail.type ?? ""
-      path = "tmdb/credits/\(tmdbId)/\(type)"
-    } else if let doubanId = detail.douban_id {
+      path = "tmdb/credits/\(identity.mediaId)/\(type)"
+    } else if identity.source == "douban" {
       let type = detail.type ?? ""
-      path = "douban/credits/\(doubanId)/\(type)"
-    } else if let bangumiId = detail.bangumi_id {
-      path = "bangumi/credits/\(bangumiId)"
+      path = "douban/credits/\(identity.mediaId)/\(type)"
+    } else if identity.source == "bangumi" {
+      path = "bangumi/credits/\(identity.mediaId)"
     } else {
       return []
     }
@@ -2041,9 +2052,6 @@ class APIService: ObservableObject {
   /// - 应用场景: 在前端的 **分季订阅弹窗** 中，实时标记哪些季“已入库”、“部分缺失”或“完全缺失”。
   func checkSeasonsNotExists(mediaInfo: MediaInfo) async throws -> [NotExistMediaInfo] {
     let body = try JSONEncoder().encode(mediaInfo)
-    let hash = SHA256.hash(data: body)
-    let cacheKey = hash.compactMap { String(format: "%02x", $0) }.joined()
-    if let cached = await seasonsNotExistsCache.get(cacheKey) { return cached }
     let data = try await makeRequest(
       endpoint: "/mediaserver/notexists",
       method: "POST",
@@ -2051,9 +2059,7 @@ class APIService: ObservableObject {
       retryOn401: false,
       logoutOnUnauthorized: false
     )
-    let result = try await decodeOrUnwrap([NotExistMediaInfo].self, from: data)
-    await seasonsNotExistsCache.set(cacheKey, value: result)
-    return result
+    return try await decodeOrUnwrap([NotExistMediaInfo].self, from: data)
   }
 
   /// 保存（更新）订阅配置

@@ -69,6 +69,79 @@ final class MediaInfoCollectionBehaviorTests: XCTestCase {
     XCTAssertEqual(media.apiMediaId, "anilist:154587")
   }
 
+  func testDetailAuxiliaryContentUsesWebBuiltInFieldOrderWithoutChangingPrimaryIdentity() {
+    let media = MediaInfo(
+      tmdb_id: 42,
+      anilist_id: 154_587,
+      source: "anilist",
+      mediaid_prefix: "anilist",
+      media_id: "154587"
+    )
+
+    XCTAssertEqual(media.identity, MediaIdentity(source: "anilist", mediaId: "154587"))
+    XCTAssertEqual(
+      media.auxiliaryContentIdentity,
+      MediaIdentity(source: "themoviedb", mediaId: "42")
+    )
+  }
+
+  func testDetailAuxiliaryContentSkipsUnsupportedAndZeroIdentifiers() {
+    let media = MediaInfo(
+      tmdb_id: 0,
+      douban_id: "  ",
+      bangumi_id: 0,
+      anilist_id: 154_587
+    )
+
+    XCTAssertNil(media.auxiliaryContentIdentity)
+  }
+
+  func testPopularSubscriptionKeyKeepsAniListPrimaryIdentity() {
+    let anilistWithAuxiliaryTMDB = MediaInfo(
+      tmdb_id: 42,
+      source: "anilist",
+      mediaid_prefix: "anilist",
+      media_id: "154587",
+      title: "作品",
+      season: 1
+    )
+    let sameAniListSeason = MediaInfo(
+      source: "anilist",
+      mediaid_prefix: "anilist",
+      media_id: "154587",
+      title: "另一标题",
+      season: 1
+    )
+    let otherSeason = MediaInfo(
+      source: "anilist",
+      mediaid_prefix: "anilist",
+      media_id: "154587",
+      season: 2
+    )
+
+    XCTAssertEqual(
+      ExploreViewModel.popularSubscriptionKey(anilistWithAuxiliaryTMDB),
+      ExploreViewModel.popularSubscriptionKey(sameAniListSeason)
+    )
+    XCTAssertNotEqual(
+      ExploreViewModel.popularSubscriptionKey(anilistWithAuxiliaryTMDB),
+      ExploreViewModel.popularSubscriptionKey(otherSeason)
+    )
+  }
+
+  func testTmdbSeasonDecodesOffMainActor() async throws {
+    let seasonNumber = try await Task.detached {
+      try JSONDecoder().decode(
+        TmdbSeason.self,
+        from: Data(
+          #"{"season_number":1,"poster_path":"/season.jpg"}"#.utf8
+        )
+      ).season_number
+    }.value
+
+    XCTAssertEqual(seasonNumber, 1)
+  }
+
   func testMediaIdPrefixWinsOverSourceAndNormalizesTMDBAlias() {
     let custom = MediaInfo(
       tmdb_id: 42,
