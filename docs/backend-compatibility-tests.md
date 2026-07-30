@@ -38,7 +38,7 @@ GitHub CI 没有真实后端账号，`ci.yml` 会显式跳过 `BackendCompatibil
 
 ## 真实后端只读套件
 
-`.env.compatibility` 只用于真实 MoviePilot 后端的只读兼容性检查。已配置时，测试会登录后端并按 TV 端真实页面入口巡检：系统配置、仪表盘、站点/下载器/目录配置、订阅读取、媒体服务器最近添加、下载中任务、推荐货架、发现页、搜索、详情页、演员/人物和分季数据。未配置时，这组测试会自动跳过。
+`.env.compatibility` 用于真实 MoviePilot 后端的兼容性检查。已配置时，只读套件会登录后端并按 TV 端真实页面入口巡检：系统配置、仪表盘、站点/下载器/目录配置、订阅读取、媒体服务器最近添加、下载中任务、推荐货架、发现页、搜索、详情页、演员/人物和分季数据。未配置时，这组测试会自动跳过。
 
 使用普通账号巡检订阅时，测试还会断言 `/subscribe/` 返回记录的 `username` 都属于当前账号，以覆盖 MoviePilot v2.14.2 起的订阅所有权隔离；超级用户仍按后端契约读取全局订阅。
 
@@ -53,6 +53,13 @@ GitHub CI 没有真实后端账号，`ci.yml` 会显式跳过 `BackendCompatibil
 这组测试不会新增订阅、删除订阅、添加下载、暂停/恢复下载、重置订阅、触发订阅搜索或执行整理任务。可选的 `MOVIEPILOT_COMPAT_METADATA_QUERY` / `MOVIEPILOT_COMPAT_METADATA_QUERIES` 只会调用元数据搜索和详情读取；如果搜索结果包含合集，还会继续读取合集详情。也可以用 `MOVIEPILOT_COMPAT_COLLECTION_ID` / `MOVIEPILOT_COMPAT_COLLECTION_IDS` 直接指定合集 ID。
 
 默认还会检查标题识别、TMDB ID 识别、整理历史读取和订阅状态读取，以覆盖 TV 端现有后台能力。若要额外检查资源搜索兼容性，可配置 `MOVIEPILOT_COMPAT_RESOURCE_QUERY` / `MOVIEPILOT_COMPAT_RESOURCE_QUERIES` 或 `MOVIEPILOT_COMPAT_RESOURCE_MEDIA_ID` / `MOVIEPILOT_COMPAT_RESOURCE_MEDIA_IDS`；这只会调用资源搜索并解码结果，不会添加下载。`MOVIEPILOT_COMPAT_TEST_RESOURCE_SEARCH_STREAMS=true` 会额外检查资源搜索 SSE 流式接口，耗时更长，默认关闭。若要检查分季已入库状态，可设置 `MOVIEPILOT_COMPAT_CHECK_SEASON_AVAILABILITY=true`；该检查只读取媒体服务器状态，不会创建订阅。
+
+MoviePilot v2.15.1 媒体业务只读巡检还会覆盖：
+
+- TMDB、豆瓣、Bangumi、AniList 四来源媒体搜索，TMDB 合集搜索，以及 TMDB/豆瓣人物搜索。
+- AniList 推荐货架、发现、详情与统一分季接口。
+- `/discover/source`、`/recommend/source` 动态来源；已安装 TheTVDB 插件时检查筛选默认值、两页分页结果和 `tvdb:<id>` 身份。
+- 资源搜索 SSE 的事件解码与终止语义；该项仍由显式开关控制。
 
 如果在独立 worktree 中运行测试，可以用 `MOVIEPILOT_COMPAT_ENV_FILE=/absolute/path/.env.compatibility` 指向已有配置文件；命令行环境变量会覆盖配置文件中的同名值。
 

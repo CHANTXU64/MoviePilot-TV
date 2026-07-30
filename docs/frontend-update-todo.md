@@ -28,15 +28,6 @@
   - Backend：`/search/subtitle/title`、`/search/subtitle/title/stream`、`/search/subtitle/media/{mediaid}`、`/download/subtitle`
   - Frontend：`SubtitleCard.vue`、`SubtitleItem.vue`、`AddSubtitleDownloadDialog.vue`
 
-### 后端扩展推荐源
-
-- 来源：MoviePilot Web 推荐页会读取 `/recommend/source`，把后端或插件提供的扩展推荐源与内置来源合并；`v2.14.4` 继续保留并整理了这套加载逻辑。
-- 当前判断：TV 推荐页已有内置分类、货架和分页浏览，但 `RecommendViewModel` 仍使用固定来源列表，不会显示后端扩展推荐源。
-- 可评估方向：
-  - 是否在现有推荐页加载扩展推荐源，并复用当前 `fetchRecommend(path:page:)` 和媒体网格。
-  - 按 `api_path` 去重，接口失败时继续显示内置推荐源。
-  - 评估后端 `type` 到 TV 推荐分类的映射，避免为扩展源新增独立页面或复杂配置界面。
-
 ### 后端连接状态与自动重连
 
 - 来源：MoviePilot Web `v2.14.0 -> v2.14.4` 增加 `system/ping` 服务探测、在线/检查中/离线状态、退避重试和手动重试提示。

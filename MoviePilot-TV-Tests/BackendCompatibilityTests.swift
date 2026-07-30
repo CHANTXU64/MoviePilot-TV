@@ -1248,9 +1248,14 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     try await withReadOnlyBackend { service, config in
       await runBackendCompatibilityStep("global settings", service: service, config: config) {
         let settings = try await service.fetchSettings()
-        XCTAssertNotNil(
+        let backendVersion = try XCTUnwrap(
           settings.BACKEND_VERSION?.nilIfBlank,
           "Global settings should expose BACKEND_VERSION for \(config.activeAccountDiagnostic)."
+        )
+        XCTAssertEqual(
+          AppVersionInfo.supportsMoviePilotVersion(backendVersion),
+          true,
+          "Backend \(backendVersion) is older than \(AppVersionInfo.compatibleMoviePilotVersion) for \(config.activeAccountDiagnostic)."
         )
       }
       await runBackendCompatibilityStep(
@@ -1582,6 +1587,20 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         collector.addMedia(items, surface: "recommend shelf \(shelf.title)")
       }
     }
+
+    await runBackendCompatibilityStep(
+      "dynamic recommend shelves",
+      service: service,
+      config: config,
+      requirement: .permission(.discovery)
+    ) {
+      var seenPaths = Set(RecommendViewModel.allShelves.map(\.id))
+      for source in try await service.fetchRecommendSources()
+      where seenPaths.insert(source.api_path).inserted {
+        let items = try await service.fetchRecommend(path: source.api_path, page: 1)
+        collector.addMedia(items, surface: "dynamic recommend \(source.name)")
+      }
+    }
   }
 
   @MainActor
@@ -1591,11 +1610,12 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     collector: inout BackendCompatibilityCollector
   ) async {
     let mediaPaths = [
-      "discover/tmdb_movies?sort_by=popularity.desc",
-      "discover/tmdb_tvs?sort_by=popularity.desc",
+      "discover/tmdb_movies?sort_by=popularity.desc&vote_average=0&vote_count=10",
+      "discover/tmdb_tvs?sort_by=popularity.desc&vote_average=0&vote_count=10",
       "discover/douban_movies?sort=U",
       "discover/douban_tvs?sort=U",
       "discover/bangumi?type=2&sort=rank",
+      "anilist/discover?sort=POPULARITY_DESC",
       "subscribe/popular?stype=电影&sort_type=count",
       "subscribe/popular?stype=电视剧&sort_type=count",
     ]
@@ -1609,6 +1629,30 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       for path in mediaPaths {
         let items = try await service.fetchRecommend(path: path, page: 1)
         collector.addMedia(items, surface: "explore \(path)")
+      }
+
+      let dynamicSources = ExploreViewModel.updatedExtraSourceSnapshot(
+        previous: [],
+        response: try await service.fetchDiscoverSources()
+      )
+      for source in dynamicSources {
+        for control in PluginFilterControlParser.parse(source.filter_ui) {
+          XCTAssertNotNil(
+            source.filter_params[control.field],
+            "\(source.name) filter \(control.field) must have a default value."
+          )
+        }
+        let path = ExploreViewModel.appendingQuery(
+          to: source.api_path,
+          values: source.filter_params
+        )
+        for page in 1...2 {
+          let items = try await service.fetchRecommend(path: path, page: page)
+          collector.addMedia(items, surface: "dynamic explore \(source.name) page \(page)")
+          if source.mediaid_prefix.lowercased() == "tvdb" {
+            XCTAssertTrue(items.allSatisfy { $0.identity?.source == "tvdb" })
+          }
+        }
       }
 
       let sharePath = "subscribe/shares?stype=电视剧&sort_type=count"
@@ -1630,15 +1674,24 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       "metadata search surfaces",
       service: service,
       config: config,
-      requirement: .permission(.search)
+      requirement: .permission(.discovery)
     ) {
       for query in queries {
-        for page in 1...2 {
-          let items = try await service.searchMedia(query: query, page: page)
-          collector.addMedia(items, surface: "metadata search \(query) page \(page)")
+        for source in MediaSearchSource.allowed(for: .media) {
+          for page in 1...2 {
+            let items = try await service.searchMedia(query: query, page: page, source: source)
+            collector.addMedia(
+              items,
+              surface: "\(source.title) metadata search \(query) page \(page)"
+            )
+          }
         }
 
-        let collections = try await service.searchCollection(query: query, page: 1)
+        let collections = try await service.searchCollection(
+          query: query,
+          page: 1,
+          source: .themoviedb
+        )
         collector.addMedia(collections, surface: "collection search \(query)")
         await scanCollectionDetails(
           service: service,
@@ -1646,8 +1699,10 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
           collector: &collector
         )
 
-        let people = try await service.searchPerson(query: query, page: 1)
-        collector.addPeople(people, surface: "person search \(query)")
+        for source in MediaSearchSource.allowed(for: .person) {
+          let people = try await service.searchPerson(query: query, page: 1, source: source)
+          collector.addPeople(people, surface: "\(source.title) person search \(query)")
+        }
 
         let shares = try await service.searchSubscriptionShares(query: query, page: 1)
         collector.addSubscriptionShares(shares, surface: "subscription share search \(query)")
@@ -1665,7 +1720,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       "configured collection details",
       service: service,
       config: config,
-      requirement: .permission(.search)
+      requirement: .permission(.discovery)
     ) {
       for collectionID in uniqueInts(config.collectionIDs).prefix(8) {
         let items = try await service.fetchCollection(
@@ -1777,7 +1832,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       XCTFail("Failed to read seasons for \(media.compatibilityTitle): \(error)")
     }
 
-    guard let tmdbID = media.tmdb_id else { return }
+    guard media.identity?.source == "themoviedb", let tmdbID = media.tmdb_id else { return }
     do {
       let groups = try await service.fetchEpisodeGroups(tmdbId: tmdbID)
       for group in groups {
@@ -1840,14 +1895,19 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     let peopleForDetail = representativePeopleForDetail(from: Array(collector.peopleByID.values))
 
     for person in peopleForDetail {
-      guard let personID = person.raw_id else { continue }
+      guard let personID = person.raw_id,
+        let source = person.source,
+        ["themoviedb", "douban", "bangumi", "anilist"].contains(source)
+      else {
+        continue
+      }
       do {
-        let detail = try await service.fetchPersonDetail(personId: personID, source: person.source)
+        let detail = try await service.fetchPersonDetail(personId: personID, source: source)
         collector.addPerson(detail, surface: "person detail \(person.compatibilityName)")
       } catch {
         let diagnostic = await readOnlyGETDiagnostic(
           service: service,
-          path: "/\(personSourcePath(person.source))/person/\(personID)"
+          path: "/\(personSourcePath(source))/person/\(personID)"
         )
         XCTFail(
           "Failed to read person detail \(person.compatibilityName): \(error). \(diagnostic)"
@@ -1857,7 +1917,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       do {
         let credits = try await service.fetchPersonCredits(
           personId: personID,
-          source: person.source,
+          source: source,
           page: 1
         )
         collector.addMedia(credits, surface: "person credits \(person.compatibilityName)")
