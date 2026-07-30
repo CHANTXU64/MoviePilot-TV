@@ -708,7 +708,7 @@ final class BackendCompatibilityPermissionBehaviorTests: XCTestCase {
   private func expectedVisibleTabs(for permission: UserPermissionKey) -> [ContentViewModel.Tab] {
     switch permission {
     case .discovery:
-      return [.home, .recommend, .explore, .system]
+      return [.home, .recommend, .explore, .search, .system]
     case .search:
       return [.home, .search, .system]
     case .subscribe:
@@ -1382,6 +1382,29 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         if config.testResourceSearchStreams {
           await assertResourceSearchStreamsReadable(service: service, config: config)
         }
+      }
+    }
+  }
+
+  @MainActor
+  func testReadOnlyMediaInfoRequestContractCompatibility() async throws {
+    try await withReadOnlyBackend { service, config in
+      await runBackendCompatibilityStep(
+        "media info request contract",
+        service: service,
+        config: config,
+        requirement: .permission(.discovery)
+      ) {
+        let items = try await service.fetchRecommend(
+          path: "recommend/tmdb_tvs?with_original_language=zh|en|ja|ko",
+          page: 1
+        )
+        let media = try XCTUnwrap(
+          items.first { $0.type == "电视剧" && $0.identity != nil },
+          "TMDB TV recommendations should return a TV media item with a backend identity."
+        )
+
+        _ = try await service.checkSeasonsNotExists(mediaInfo: media)
       }
     }
   }

@@ -1119,13 +1119,21 @@ class APIService: ObservableObject {
   /// 搜索通用媒体信息
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SearchBarDialog.vue (path: '/browse/media/search')
   /// - 应用场景: 聚合搜索页面的“电影”和“电视剧”分类结果展示。前端路由 /browse/ 后接的部分即为 API 路径。
-  func searchMedia(query: String, page: Int = 1) async throws -> [MediaInfo] {
+  func searchMedia(
+    query: String,
+    page: Int = 1,
+    source: MediaSearchSource? = nil
+  ) async throws -> [MediaInfo] {
+    var params = [
+      "type": "media",
+      "title": query,
+      "page": String(page),
+    ]
+    params["source"] = source?.rawValue
     let endpoint = try buildEndpoint(
       path: "/media/search",
-      params: [
-        "title": query,
-        "page": String(page),
-      ])
+      params: params
+    )
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([MediaInfo].self, from: data)
   }
@@ -1299,14 +1307,21 @@ class APIService: ObservableObject {
   /// 搜索合集
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SearchBarDialog.vue (searchMedia('collection'))
   /// - 应用场景: 聚合搜索页面的“合集”分类。用户在搜索框输入关键词并选择“合集”时调用，用于搜索 TMDB 系列电影。
-  func searchCollection(query: String, page: Int = 1) async throws -> [MediaInfo] {
+  func searchCollection(
+    query: String,
+    page: Int = 1,
+    source: MediaSearchSource? = nil
+  ) async throws -> [MediaInfo] {
+    var params = [
+      "type": "collection",
+      "title": query,
+      "page": String(page),
+    ]
+    params["source"] = source?.rawValue
     let endpoint = try buildEndpoint(
       path: "/media/search",
-      params: [
-        "type": "collection",
-        "title": query,
-        "page": String(page),
-      ])
+      params: params
+    )
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([MediaInfo].self, from: data)
   }
@@ -1314,14 +1329,21 @@ class APIService: ObservableObject {
   /// 搜索人物
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SearchBarDialog.vue (searchMedia('person'))
   /// - 应用场景: 聚合搜索页面的“演职员”分类。用户在搜索框输入关键词并选择“人物”时调用，用于搜索导演、演员等资料。
-  func searchPerson(query: String, page: Int = 1) async throws -> [Person] {
+  func searchPerson(
+    query: String,
+    page: Int = 1,
+    source: MediaSearchSource? = nil
+  ) async throws -> [Person] {
+    var params = [
+      "type": "person",
+      "title": query,
+      "page": String(page),
+    ]
+    params["source"] = source?.rawValue
     let endpoint = try buildEndpoint(
       path: "/media/search",
-      params: [
-        "type": "person",
-        "title": query,
-        "page": String(page),
-      ])
+      params: params
+    )
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([Person].self, from: data)
   }

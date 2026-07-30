@@ -80,6 +80,22 @@ class SystemViewModel: ObservableObject {
     }
   }
 
+  /// 聚合搜索默认来源（绑定 URL + 用户名）；nil 表示沿用后端设置。
+  var defaultMediaSearchSource: MediaSearchSource? {
+    get {
+      UserDefaults.standard.string(forKey: defaultMediaSearchSourceUserDefaultsKey)
+        .flatMap(MediaSearchSource.init(rawValue:))
+    }
+    set {
+      if let newValue {
+        UserDefaults.standard.set(newValue.rawValue, forKey: defaultMediaSearchSourceUserDefaultsKey)
+      } else {
+        UserDefaults.standard.removeObject(forKey: defaultMediaSearchSourceUserDefaultsKey)
+      }
+      objectWillChange.send()
+    }
+  }
+
   // MARK: - 自定义过滤规则
   @Published var customFilterRules: [CustomRule] = []
   @Published var isLoadingRules: Bool = false
@@ -146,6 +162,10 @@ class SystemViewModel: ObservableObject {
 
   private var defaultSearchSitesUserDefaultsKey: String {
     Self.userDefaultsKey("defaultSearchSites")
+  }
+
+  private var defaultMediaSearchSourceUserDefaultsKey: String {
+    Self.userDefaultsKey("defaultMediaSearchSource")
   }
 
   init() {
@@ -353,6 +373,12 @@ class SystemViewModel: ObservableObject {
   static func currentDefaultSearchSites() -> Set<Int> {
     let array = UserDefaults.standard.array(forKey: userDefaultsKey("defaultSearchSites")) as? [Int] ?? []
     return Set(array)
+  }
+
+  /// 获取当前用户+服务器绑定的聚合搜索默认来源；nil 表示沿用后端设置。
+  static func currentDefaultMediaSearchSource() -> MediaSearchSource? {
+    UserDefaults.standard.string(forKey: userDefaultsKey("defaultMediaSearchSource"))
+      .flatMap(MediaSearchSource.init(rawValue:))
   }
 
   /// 获取已按当前可用站点清理后的默认搜索站点。

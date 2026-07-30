@@ -95,7 +95,7 @@ class ContentViewModel: ObservableObject {
       tabs.append(.recommend)
       tabs.append(.explore)
     }
-    if canAccess(.search) {
+    if canAccess(.discovery) || canAccess(.search) {
       tabs.append(.search)
     }
     if canAccess(.manage) {

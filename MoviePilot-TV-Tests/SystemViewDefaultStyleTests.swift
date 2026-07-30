@@ -33,6 +33,29 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("\"连接与版本\""))
   }
 
+  func testSearchSettingsAndHeaderKeepPermissionAndLayoutContract() throws {
+    let systemSource = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+    let searchSource = try Self.source(at: "MoviePilot-TV/Views/Pages/SearchView.swift")
+
+    XCTAssertTrue(
+      systemSource.contains("case .mediaSourceSelection:\n            if canConfigureRecommendations {")
+    )
+    XCTAssertTrue(systemSource.contains("case .siteSelection:\n            if canConfigureSearch {"))
+    XCTAssertTrue(
+      systemSource.contains("if canConfigureRecommendations {\n        section(\"聚合搜索\")")
+    )
+    XCTAssertTrue(searchSource.contains("ZStack(alignment: .trailing)"))
+    XCTAssertTrue(searchSource.contains("ZStack(alignment: .leading)"))
+    XCTAssertTrue(searchSource.contains(".frame(width: 300, alignment: .trailing)"))
+    XCTAssertTrue(searchSource.contains(".frame(width: 300, alignment: .leading)"))
+    XCTAssertTrue(searchSource.contains("private var visibleFilterSearchType: SearchType"))
+    XCTAssertTrue(searchSource.contains("visibleFilterSearchType == .resource"))
+    XCTAssertTrue(searchSource.contains("visibleFilterSearchType == .unified"))
+    XCTAssertTrue(
+      searchSource.contains("Text(\"搜索来源：\\(viewModel.mediaSourceButtonLabel)\")")
+    )
+  }
+
   func testSubscriptionCompatibilityChecklistTracksPermissionContractRisk() throws {
     let source = try Self.source(at: "docs/subscription-compatibility-checklist.md")
 

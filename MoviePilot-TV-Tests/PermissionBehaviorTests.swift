@@ -7,7 +7,7 @@ final class PermissionVisibleEntryTests: XCTestCase {
   func testVisibleTabsExposeEntryForEachGrantedPermission() {
     XCTAssertEqual(
       ContentViewModel.visibleTabs(for: permissionBehaviorToken(granted: [.discovery])),
-      [.home, .recommend, .explore, .system]
+      [.home, .recommend, .explore, .search, .system]
     )
     XCTAssertEqual(
       ContentViewModel.visibleTabs(for: permissionBehaviorToken(granted: [.search])),

@@ -149,8 +149,14 @@ struct SystemView: View {
             rootPage
           case .connection:
             connectionPage
+          case .mediaSourceSelection:
+            if canConfigureRecommendations {
+              mediaSourceSelectionPage
+            }
           case .siteSelection:
-            siteSelectionPage
+            if canConfigureSearch {
+              siteSelectionPage
+            }
           case .hardFilter:
             if canConfigureCustomFilters {
               filterPage(
@@ -211,6 +217,17 @@ struct SystemView: View {
             row("推荐货架", showsDisclosure: true)
           }
           .focused($focusedItem, equals: .recommendation)
+        }
+      }
+
+      if canConfigureRecommendations {
+        section("聚合搜索") {
+          Button {
+            push(.mediaSourceSelection)
+          } label: {
+            row("默认搜索来源", value: mediaSourceButtonLabel, showsDisclosure: true)
+          }
+          .focused($focusedItem, equals: .mediaSourceSelection)
         }
       }
 
@@ -420,6 +437,32 @@ struct SystemView: View {
     }
   }
 
+  private var mediaSourceSelectionPage: some View {
+    section(nil) {
+      Button {
+        viewModel.defaultMediaSearchSource = nil
+      } label: {
+        row(
+          "默认",
+          value: viewModel.defaultMediaSearchSource == nil ? "已选择" : nil
+        )
+      }
+      .focused($focusedItem, equals: .defaultMediaSource)
+
+      ForEach(MediaSearchSource.allowed(for: .media)) { source in
+        Button {
+          viewModel.defaultMediaSearchSource = source
+        } label: {
+          row(
+            source.title,
+            value: viewModel.defaultMediaSearchSource == source ? "已选择" : nil
+          )
+        }
+        .focused($focusedItem, equals: .mediaSource(source))
+      }
+    }
+  }
+
   private func filterPage(
     selectedRuleId: String?,
     onSelect: @escaping (String?) -> Void
@@ -549,6 +592,8 @@ struct SystemView: View {
     switch poppedPage {
     case .connection, .root:
       target = .connection
+    case .mediaSourceSelection:
+      target = .mediaSourceSelection
     case .siteSelection:
       target = .siteSelection
     case .hardFilter:
@@ -571,6 +616,8 @@ struct SystemView: View {
       target = .autoSearch
     case .connection:
       target = .relogin
+    case .mediaSourceSelection:
+      target = .defaultMediaSource
     case .siteSelection:
       target = .allSites
     case .hardFilter:
@@ -590,7 +637,8 @@ struct SystemView: View {
     switch route.last {
     case .softFilter:
       return .softFilterNone
-    case .root, .connection, .siteSelection, .hardFilter, .recommendation, .none:
+    case .root, .connection, .mediaSourceSelection, .siteSelection, .hardFilter,
+      .recommendation, .none:
       return .hardFilterNone
     }
   }
@@ -599,7 +647,8 @@ struct SystemView: View {
     switch route.last {
     case .softFilter:
       return .softFilterRule(ruleId)
-    case .root, .connection, .siteSelection, .hardFilter, .recommendation, .none:
+    case .root, .connection, .mediaSourceSelection, .siteSelection, .hardFilter,
+      .recommendation, .none:
       return .hardFilterRule(ruleId)
     }
   }
@@ -651,6 +700,8 @@ struct SystemView: View {
         return "进入媒体详情页前的加载动画会等待背景海报就绪实现平滑过渡，网络较慢时可关闭以更快进入详情页。（只影响 TV 端）"
       case .preloadTMDBDetails:
         return "进入豆瓣或 Bangumi 详情页并识别到对应 TMDB 条目后，提前加载其详情，以缩短后续跳转等待时间。（只影响 TV 端）"
+      case .mediaSourceSelection:
+        return "设置聚合搜索默认使用的媒体来源；未选择时沿用 MoviePilot 后端搜索设置。（只影响 TV 端）"
       case .siteSelection:
         return "设置资源搜索默认使用的站点。（只影响 TV 端）"
       case .hardFilter:
@@ -663,8 +714,9 @@ struct SystemView: View {
         return "查看当前登录状态、服务器地址和后端连接状态。"
       case .appInfo:
         return nil
-      case .allSites, .site, .relogin, .logout, .hardFilterNone, .softFilterNone,
-        .hardFilterRule, .softFilterRule, .recommendationShelf:
+      case .allSites, .site, .defaultMediaSource, .mediaSource, .relogin, .logout,
+        .hardFilterNone, .softFilterNone, .hardFilterRule, .softFilterRule,
+        .recommendationShelf:
         break
       }
     }
@@ -685,6 +737,8 @@ struct SystemView: View {
       return nil
     case .connection:
       return "查看当前登录状态、服务器地址和后端连接状态。"
+    case .mediaSourceSelection:
+      return "设置聚合搜索默认使用的媒体来源。（只影响 TV 端）"
     case .siteSelection:
       return "设置资源搜索默认使用的站点。（只影响 TV 端）"
     case .hardFilter:
@@ -731,11 +785,16 @@ struct SystemView: View {
       return "\(viewModel.defaultSearchSites.count) 个站点"
     }
   }
+
+  private var mediaSourceButtonLabel: String {
+    viewModel.defaultMediaSearchSource?.title ?? "默认"
+  }
 }
 
 private enum SystemSettingsPage: Hashable {
   case root
   case connection
+  case mediaSourceSelection
   case siteSelection
   case hardFilter
   case softFilter
@@ -744,6 +803,9 @@ private enum SystemSettingsPage: Hashable {
 
 private enum SystemSettingsFocus: Hashable {
   case connection
+  case mediaSourceSelection
+  case defaultMediaSource
+  case mediaSource(MediaSearchSource)
   case siteSelection
   case allSites
   case site(Int)

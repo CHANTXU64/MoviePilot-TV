@@ -14,7 +14,7 @@ nonisolated enum MetadataSearchKind: Sendable {
   case person
 }
 
-nonisolated enum MediaSearchSource: String, CaseIterable, Identifiable, Sendable {
+nonisolated enum MediaSearchSource: String, CaseIterable, Identifiable, Hashable, Sendable {
   case themoviedb
   case douban
   case bangumi
@@ -80,6 +80,11 @@ class SearchViewModel: ObservableObject {
   @Published var query: String = ""
   @Published var submittedQuery: String = ""  // 记录点击搜索时的关键词，用于分页请求
   @Published var hasSearched: Bool = false
+  @Published var mediaSearchSource = SystemViewModel.currentDefaultMediaSearchSource()
+
+  var mediaSourceButtonLabel: String {
+    mediaSearchSource?.title ?? "默认"
+  }
 
   // MARK: - Paginator 实例
 
@@ -256,6 +261,10 @@ class SearchViewModel: ObservableObject {
   @Published var isLoading = false
   @Published var searchType: SearchType = .unified
 
+  var availableSearchTypes: [SearchType] {
+    SearchType.allCases.filter(canAccess)
+  }
+
   @Published var resourceResults: [Context] = []
   @Published var appliedFilterRuleName: String?
   @Published var siteFilter = SiteFilterViewModel()
@@ -275,11 +284,13 @@ class SearchViewModel: ObservableObject {
   
   @Published var searchProgressText: String = ""
   @Published var searchProgress: Double = 0.0
+  @Published var resourceErrorMessage: String?
 
   /// 执行初始搜索：根据 searchType 决定是资源搜索还是聚合元数据搜索
   func autoSearch() async {
     guard !query.isEmpty else { return }
-    guard apiService.canAccess(.search) else { return }
+    let currentSearchType = searchType
+    guard canAccess(currentSearchType) else { return }
     searchGeneration += 1
     let currentSearchGeneration = searchGeneration
     let searchQuery = query
@@ -291,51 +302,56 @@ class SearchViewModel: ObservableObject {
     hasSearched = false
     submittedQuery = searchQuery
 
-    switch searchType {
+    switch currentSearchType {
     case .resource:
       // 资源搜索：查询站点种子信息
       let sitesStr = siteFilter.sitesString
       searchProgressText = "正在搜索..."
       searchProgress = 0.0
+      resourceErrorMessage = nil
       
       searchStreamTask = Task { @MainActor in
         var accumulatedResults: [Context] = []
+        var finalResultApplied = false
         defer {
           self.finishSearchIfCurrent(
             generation: currentSearchGeneration,
-            sessionSnapshot: sessionSnapshot
+            sessionSnapshot: sessionSnapshot,
+            searchType: currentSearchType
           )
         }
         
         do {
           guard canPublishSearchResult(
-            generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+            generation: currentSearchGeneration,
+            sessionSnapshot: sessionSnapshot,
+            searchType: currentSearchType)
           else { return }
 
           let stream = APIService.shared.searchTitleStream(keyword: searchQuery, sites: sitesStr)
           
           for try await event in stream {
             guard canPublishSearchResult(
-              generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+              generation: currentSearchGeneration,
+              sessionSnapshot: sessionSnapshot,
+              searchType: currentSearchType)
             else { return }
             
-            if let text = event.text {
+            if let text = event.text_i18n ?? event.text {
               self.searchProgressText = text
             }
             if let value = event.value {
               self.searchProgress = value
             }
             
-            if let items = event.items {
-              if event.type == "append" {
-                accumulatedResults.append(contentsOf: items)
-              } else if event.type == "replace" || event.type == "done" {
-                accumulatedResults = items
-              }
-            }
+            event.applyResourceItems(
+              to: &accumulatedResults,
+              finalResultApplied: &finalResultApplied
+            )
             
             if event.type == "error" {
-              print("Search Stream Error: \(event.message ?? "未知错误")")
+              self.resourceErrorMessage =
+                event.message_i18n ?? event.message ?? "未找到相关资源"
               break
             }
             
@@ -343,27 +359,35 @@ class SearchViewModel: ObservableObject {
               // 与 Web v2.13.2 保持一致：给后端搜索结果缓存写入留出收尾时间。
               try? await Task.sleep(nanoseconds: searchStreamDoneCloseDelay)
               guard canPublishSearchResult(
-                generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+                generation: currentSearchGeneration,
+                sessionSnapshot: sessionSnapshot,
+                searchType: currentSearchType)
               else { return }
               break
             }
           }
           
           guard canPublishSearchResult(
-            generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+            generation: currentSearchGeneration,
+            sessionSnapshot: sessionSnapshot,
+            searchType: currentSearchType)
           else { return }
 
           // 应用自定义过滤规则
           let filteredResults = await self.applyCustomFilter(to: accumulatedResults)
           guard canPublishSearchResult(
-            generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+            generation: currentSearchGeneration,
+            sessionSnapshot: sessionSnapshot,
+            searchType: currentSearchType)
           else { return }
 
           self.resourceResults = filteredResults
         } catch {
           print("Stream Search error: \(error)")
           guard canPublishSearchResult(
-            generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+            generation: currentSearchGeneration,
+            sessionSnapshot: sessionSnapshot,
+            searchType: currentSearchType)
           else { return }
 
           do {
@@ -372,20 +396,27 @@ class SearchViewModel: ObservableObject {
               sites: sitesStr
             )
             guard canPublishSearchResult(
-              generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+              generation: currentSearchGeneration,
+              sessionSnapshot: sessionSnapshot,
+              searchType: currentSearchType)
             else { return }
 
             fallbackResults = await self.applyCustomFilter(to: fallbackResults)
             guard canPublishSearchResult(
-              generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+              generation: currentSearchGeneration,
+              sessionSnapshot: sessionSnapshot,
+              searchType: currentSearchType)
             else { return }
 
             self.resourceResults = fallbackResults
           } catch {
             print("Fallback Search error: \(error)")
+            self.resourceErrorMessage = error.localizedDescription
           }
           guard canPublishSearchResult(
-            generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+            generation: currentSearchGeneration,
+            sessionSnapshot: sessionSnapshot,
+            searchType: currentSearchType)
           else { return }
         }
       }
@@ -395,7 +426,8 @@ class SearchViewModel: ObservableObject {
       defer {
         finishSearchIfCurrent(
           generation: currentSearchGeneration,
-          sessionSnapshot: sessionSnapshot
+          sessionSnapshot: sessionSnapshot,
+          searchType: currentSearchType
         )
       }
       // 聚合搜索：创建代理 Fetcher 和 Paginators
@@ -421,7 +453,9 @@ class SearchViewModel: ObservableObject {
       )
       await shareTask?.value
       guard canPublishSearchResult(
-        generation: currentSearchGeneration, sessionSnapshot: sessionSnapshot)
+        generation: currentSearchGeneration,
+        sessionSnapshot: sessionSnapshot,
+        searchType: currentSearchType)
       else { return }
 
       // 基于第一页的结果计算"最佳结果"
@@ -437,43 +471,56 @@ class SearchViewModel: ObservableObject {
 
   private func finishSearchIfCurrent(
     generation: Int,
-    sessionSnapshot: APIServiceSessionSnapshot
+    sessionSnapshot: APIServiceSessionSnapshot,
+    searchType: SearchType
   ) {
     guard searchGeneration == generation else { return }
     isLoading = false
     searchStreamTask = nil
     hasSearched = !Task.isCancelled
       && apiService.isSessionUnchanged(from: sessionSnapshot)
-      && apiService.canAccess(.search)
+      && self.searchType == searchType
+      && canAccess(searchType)
   }
 
   private func canPublishSearchResult(
     generation: Int,
-    sessionSnapshot: APIServiceSessionSnapshot
+    sessionSnapshot: APIServiceSessionSnapshot,
+    searchType: SearchType
   ) -> Bool {
     searchGeneration == generation
       && !Task.isCancelled
       && apiService.isSessionUnchanged(from: sessionSnapshot)
-      && apiService.canAccess(.search)
+      && self.searchType == searchType
+      && canAccess(searchType)
+  }
+
+  func normalizeSearchTypeForPermissions() {
+    guard !canAccess(searchType), let firstAvailable = availableSearchTypes.first else { return }
+    searchType = firstAvailable
+  }
+
+  private func canAccess(_ searchType: SearchType) -> Bool {
+    switch searchType {
+    case .unified:
+      apiService.canAccess(.discovery)
+    case .resource:
+      apiService.canAccess(.search)
+    }
   }
 
   // MARK: - Paginator 创建
 
   /// 为当前搜索词创建代理和各个 Paginator
   private func setupPaginators(query: String) {
-    moviePaginator?.cancel()
-    tvPaginator?.cancel()
-    collectionPaginator?.cancel()
-    personPaginator?.cancel()
-    subscriptionSharePaginator?.cancel()
+    resetPaginators()
 
-    moviePaginatorCancellable?.cancel()
-    tvPaginatorCancellable?.cancel()
-    collectionPaginatorCancellable?.cancel()
-    personPaginatorCancellable?.cancel()
-    subscriptionSharePaginatorCancellable?.cancel()
-
-    let fetcher = SharedMediaFetcher(query: query, apiService: apiService)
+    let selectedSource = mediaSearchSource
+    let fetcher = SharedMediaFetcher(
+      query: query,
+      source: selectedSource,
+      apiService: apiService
+    )
     self.sharedMediaFetcher = fetcher
 
     // --- Movie Paginator ---
@@ -519,7 +566,16 @@ class SearchViewModel: ObservableObject {
     let newCollectionPaginator = Paginator<MediaInfo>(
       threshold: 10,
       fetcher: { @MainActor [apiService] page in
-        try await apiService.searchCollection(query: query, page: page)
+        if let selectedSource,
+          !MediaSearchSource.allowed(for: .collection).contains(selectedSource)
+        {
+          return []
+        }
+        return try await apiService.searchCollection(
+          query: query,
+          page: page,
+          source: selectedSource
+        )
       },
       processor: { @MainActor currentItems, newItems in
         let uniqueNewItems = MediaInfo.deduplicate(newItems, existingKeys: &collectionSeenKeys)
@@ -539,7 +595,16 @@ class SearchViewModel: ObservableObject {
     let newPersonPaginator = Paginator<Person>(
       threshold: 10,
       fetcher: { @MainActor [apiService] page in
-        try await apiService.searchPerson(query: query, page: page)
+        if let selectedSource,
+          !MediaSearchSource.allowed(for: .person).contains(selectedSource)
+        {
+          return []
+        }
+        return try await apiService.searchPerson(
+          query: query,
+          page: page,
+          source: selectedSource
+        )
       },
       processor: { @MainActor currentItems, newItems in
         // 基于 raw_id 去重
@@ -603,6 +668,32 @@ class SearchViewModel: ObservableObject {
       .sink { [weak self] _ in self?.objectWillChange.send() }
   }
 
+  private func resetPaginators() {
+    moviePaginator?.cancel()
+    tvPaginator?.cancel()
+    collectionPaginator?.cancel()
+    personPaginator?.cancel()
+    subscriptionSharePaginator?.cancel()
+
+    moviePaginatorCancellable?.cancel()
+    tvPaginatorCancellable?.cancel()
+    collectionPaginatorCancellable?.cancel()
+    personPaginatorCancellable?.cancel()
+    subscriptionSharePaginatorCancellable?.cancel()
+
+    sharedMediaFetcher = nil
+    moviePaginator = nil
+    tvPaginator = nil
+    collectionPaginator = nil
+    personPaginator = nil
+    subscriptionSharePaginator = nil
+    moviePaginatorCancellable = nil
+    tvPaginatorCancellable = nil
+    collectionPaginatorCancellable = nil
+    personPaginatorCancellable = nil
+    subscriptionSharePaginatorCancellable = nil
+  }
+
   func mapMediaToSubscribe(_ media: MediaInfo) -> Subscribe {
     return Subscribe(
       id: nil,
@@ -653,6 +744,7 @@ class SearchViewModel: ObservableObject {
 /// 负责统筹抓取 `searchMedia` API，并按需拆分给各自分页器
 actor SharedMediaFetcher {
   private let query: String
+  private let source: MediaSearchSource?
   private let apiService: APIService
 
   private var apiPage: Int = 0
@@ -662,8 +754,9 @@ actor SharedMediaFetcher {
 
   private var currentFetchTask: Task<Void, Error>?
 
-  init(query: String, apiService: APIService) {
+  init(query: String, source: MediaSearchSource?, apiService: APIService) {
     self.query = query
+    self.source = source
     self.apiService = apiService
   }
 
@@ -723,8 +816,8 @@ actor SharedMediaFetcher {
     let task = Task {
       if isInitialFetch {
         // 首次搜索时，并发获取前两页，大幅度提升混排首屏加载速度
-        async let fetchPage1 = apiService.searchMedia(query: query, page: 1)
-        async let fetchPage2 = apiService.searchMedia(query: query, page: 2)
+        async let fetchPage1 = apiService.searchMedia(query: query, page: 1, source: source)
+        async let fetchPage2 = apiService.searchMedia(query: query, page: 2, source: source)
 
         let (page1Items, page2Items) = try await (fetchPage1, fetchPage2)
         let allItems = page1Items + page2Items
@@ -736,7 +829,11 @@ actor SharedMediaFetcher {
           self.hasMore = false
         }
       } else {
-        let newItems = try await apiService.searchMedia(query: query, page: localPage)
+        let newItems = try await apiService.searchMedia(
+          query: query,
+          page: localPage,
+          source: source
+        )
 
         if newItems.isEmpty {
           self.hasMore = false
