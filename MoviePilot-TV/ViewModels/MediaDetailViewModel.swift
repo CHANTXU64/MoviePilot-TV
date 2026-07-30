@@ -29,6 +29,8 @@ class MediaDetailViewModel: ObservableObject {
   @Published var heroTopStaff: [GroupedStaff] = []
   @Published var uniqueDirectors: [Person] = []
 
+  @Published private(set) var isInLibrary = false
+
   /// 第二页首行数据是否已就绪。
   /// 用于控制 Loading 遮罩的显隐——必须等首行数据加载完才能移除遮罩，
   /// 否则首行 Card 顶部露出在第一页底部时，非首行先加载会导致闪烁。
@@ -152,6 +154,10 @@ class MediaDetailViewModel: ObservableObject {
     heroTopActors = StaffManager.processActors(
       persons: Array((fullDetail.actors ?? []).prefix(4)))
 
+    Task {
+      await loadMediaServerExists()
+    }
+
     // ── 判断第二页首行类型 ──
     // 电视剧首行固定是 season（由 preloadTask 异步加载，在 View 层通过 onChange 监听）
     let isSeasonFirst =
@@ -199,6 +205,17 @@ class MediaDetailViewModel: ObservableObject {
       if !isSeasonFirst && !isFirstRowReady {
         isFirstRowReady = true
       }
+    }
+  }
+
+  private func loadMediaServerExists() async {
+    guard apiService.canAccess(.subscribe), detail.type == "电影", detail.identity != nil else {
+      return
+    }
+    do {
+      isInLibrary = try await apiService.fetchMediaServerExists(media: detail)
+    } catch {
+      Logger.error("检查媒体入库状态失败: \(error)")
     }
   }
 

@@ -812,6 +812,34 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
+  func testMovieHeaderAppendsLibraryStatusToSubscribeTitle() {
+    let detail = MediaInfo(title: "已入库电影", type: "电影")
+
+    XCTAssertEqual(
+      MediaDetailView.headerSubscribeButtonTitle(
+        isSubscribed: false,
+        detail: detail,
+        isSeasonInformationUnavailable: false,
+        hasSeasonLoadError: false,
+        isSeasonLoading: false,
+        isInLibrary: true
+      ),
+      "订阅（已入库）"
+    )
+    XCTAssertEqual(
+      MediaDetailView.headerSubscribeButtonTitle(
+        isSubscribed: true,
+        detail: detail,
+        isSeasonInformationUnavailable: false,
+        hasSeasonLoadError: false,
+        isSeasonLoading: false,
+        isInLibrary: true
+      ),
+      "已订阅（已入库）"
+    )
+  }
+
+  @MainActor
   func testSubscribedHeaderActionSkipsUnsubscribeConfirmationWhenRefreshFindsRemoteCompletion()
     async
   {

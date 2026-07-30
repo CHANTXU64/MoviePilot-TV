@@ -1677,6 +1677,23 @@ class APIService: ObservableObject {
     return try await decodeOrUnwrap([MediaServerPlayItem].self, from: data)
   }
 
+  /// 查询媒体是否已入库
+  /// - 对应前端: MoviePilot-Frontend/src/components/cards/MediaCard.vue (handleCheckExists)
+  /// - 应用场景: 电影详情页订阅按钮展示入库状态
+  func fetchMediaServerExists(media: MediaInfo) async throws -> Bool {
+    let endpoint = try buildEndpoint(
+      path: "/mediaserver/exists",
+      params: [
+        "tmdbid": media.tmdb_id.map(String.init),
+        "title": media.title,
+        "year": media.year,
+        "season": media.season.map(String.init),
+        "mtype": media.type,
+      ])
+    let data = try await makeRequest(endpoint: endpoint)
+    return try decodeStrictActionResponseSync(from: data).success
+  }
+
   // MARK: - 资源搜索
 
   // MARK: - Server-Sent Events (SSE) Streaming

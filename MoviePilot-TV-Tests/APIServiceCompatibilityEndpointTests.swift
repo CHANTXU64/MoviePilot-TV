@@ -212,6 +212,35 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     XCTAssertEqual(resetResult.message, "订阅不存在")
   }
 
+  func testMediaDetailLibraryEndpointMatchesWebContract() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
+    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.testingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURL = "https://compatibility-endpoint-tests.local"
+
+    let media = try JSONDecoder().decode(
+      MediaInfo.self,
+      from:
+        #"{"tmdb_id":42,"title":"电影","year":"2026","type":"电影"}"#
+        .data(using: .utf8)!
+    )
+
+    let exists = try await service.fetchMediaServerExists(media: media)
+    XCTAssertTrue(exists)
+
+    let capturedExistsQuery =
+      await CompatibilityEndpointURLProtocol.stub.requestQuery(suffix: "/mediaserver/exists")
+    let existsQuery = try XCTUnwrap(capturedExistsQuery)
+    XCTAssertEqual(
+      Set(existsQuery.split(separator: "&").map(String.init)),
+      Set(["tmdbid=42", "title=%E7%94%B5%E5%BD%B1", "year=2026", "mtype=%E7%94%B5%E5%BD%B1"])
+    )
+  }
+
   func testManualMediaSearchMatchesWebSelectorContractAndKeepsAniListNativeID()
     async throws
   {
@@ -669,6 +698,9 @@ private actor CompatibilityEndpointURLProtocolStub {
           #"{"success":true,"data":{"AI_AGENT_ENABLE":true,"RECOGNIZE_SOURCE":"douban","USER_UNIQUE_ID":"compat-user","SUBSCRIBE_SHARE_MANAGE":true}}"#
           .data(using: .utf8)!
       }
+    } else if url.path == "/api/v1/mediaserver/exists" {
+      statusCode = 200
+      data = #"{"success":true,"data":{"item":{"id":"library/42"}}}"#.data(using: .utf8)!
     } else if url.path == "/api/v1/media/search" {
       statusCode = 200
       data =

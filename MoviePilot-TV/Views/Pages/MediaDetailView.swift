@@ -549,10 +549,12 @@ struct MediaDetailView: View {
     detail: MediaInfo,
     isSeasonInformationUnavailable: Bool,
     hasSeasonLoadError: Bool,
-    isSeasonLoading: Bool
+    isSeasonLoading: Bool,
+    isInLibrary: Bool = false
   ) -> String {
     if detail.canDirectlySubscribe {
-      return isSubscribed ? "已订阅" : "订阅"
+      let title = isSubscribed ? "已订阅" : "订阅"
+      return isInLibrary ? "\(title)（已入库）" : title
     }
     if isSeasonLoading { return "分季信息加载中" }
     if hasSeasonLoadError { return "分季信息加载失败" }
@@ -728,7 +730,8 @@ struct MediaDetailView: View {
                     detail: detail,
                     isSeasonInformationUnavailable: isSeasonInformationUnavailable,
                     hasSeasonLoadError: hasSeasonLoadError,
-                    isSeasonLoading: isSeasonLoading
+                    isSeasonLoading: isSeasonLoading,
+                    isInLibrary: viewModel.isInLibrary
                   )
                   let icon =
                     isDirect
