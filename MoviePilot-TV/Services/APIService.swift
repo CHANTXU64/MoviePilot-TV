@@ -2207,7 +2207,11 @@ class APIService: ObservableObject {
   /// - 应用场景: 用户在订阅列表手动点击“搜索”按钮，强制后端立即针对该条目执行一次资源检索。
   func searchSubscription(id: Int) async throws -> Bool {
     let data = try await makeRequest(endpoint: "/subscribe/search/\(id)")
-    return try decodeStrictActionResponseSync(from: data).success
+    let success = try decodeStrictActionResponseSync(from: data).success
+    if success {
+      await invalidateSubscriptionCaches()
+    }
+    return success
   }
 
   /// 重置订阅状态（重新开始）

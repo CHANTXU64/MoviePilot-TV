@@ -207,7 +207,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
-  func testFetchSubscriptionLookupIgnoresInvalidResolvedFallbackMediaId() async throws {
+  func testFetchSubscriptionLookupKeepsOpaqueLegacyMediaIdLikeWeb() async throws {
     XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
     defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
 
@@ -228,8 +228,8 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     )
 
     XCTAssertEqual(lookup?.id, 7201)
-    XCTAssertEqual(lookup?.mediaId, "tmdb:112233")
-    XCTAssertEqual(lookup?.isResolvedMediaId, false)
+    XCTAssertEqual(lookup?.mediaId, "tmdb:0")
+    XCTAssertEqual(lookup?.isResolvedMediaId, true)
   }
 
   @MainActor

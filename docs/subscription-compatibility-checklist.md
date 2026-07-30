@@ -201,7 +201,7 @@ MoviePilot Web v2.14.0 起，详情页订阅入口按媒体类型区分：
   - `MediaInfo.canDirectlySubscribe` 是否仍只允许电影直接订阅；所有电视剧应进入分季订阅。
   - `SubscribeRequest` 是否仍能省略 `best_version` / `best_version_full`，并保留 `mediaid` fallback。
   - `tmdbid: 0`、`bangumiid: 0` 和空白 `doubanid` 是否仍会 fallback 到有效 `mediaid`。
-  - `tmdb:0` / `bangumi:0` 是否仍被视为无效 fallback，不参与订阅匹配。
+  - raw 数值 `0` 是否仍会跳过；遗留 `mediaid` 是否仍按 Web 行为作为不透明 fallback。
   - `Subscribe` 是否仍解码后端维护的 `note`、`episode_priority`、`vote`、`username`、`current_priority`、`date` 等字段，并保留可编辑的 `filter`；编辑保存继续使用与 Web 等价的完整模型，但不得回传派生字段 `completed_episode`。
   - 首页从订阅卡片进入详情页时，是否仍保留订阅记录里的 fallback `mediaid`，避免把 `tmdbid: 0 + mediaid` 重建成不可匹配的详情媒体。
 - `MoviePilot-TV/ViewModels/HomeViewModel.swift`
@@ -294,7 +294,7 @@ xcodebuild test \
 
 看到下面任一变化，不要只做小修：
 
-- 后端或 Web 开始把 `tmdbid: 0`、`bangumiid: 0` 或 `tmdb:0` 当成有效媒体身份。
+- 后端或 Web 改变 raw 数值 `0` 与遗留 `mediaid` 的优先级或真假值规则。
 - 后端订阅快照不再返回 `mediaid` fallback，或 `mediaid` 格式不再是 `<source>:<id>`。
 - Web 的 `getMediaId()` 不再使用当前 fallback 顺序，或开始优先使用不同字段作为订阅身份。
 - 后端订阅唯一性加入 `episode_group`。

@@ -9,6 +9,7 @@ class AddDownloadViewModel: ObservableObject {
   @Published var selectedDirectory: String?
   @Published var isLoading = false
   @Published var isSubmitting = false
+  @Published var loadErrorMessage: String?
   @Published var errorMessage: String?
 
   // 高级选项
@@ -47,6 +48,7 @@ class AddDownloadViewModel: ObservableObject {
   }
 
   func loadData() async {
+    loadErrorMessage = nil
     guard APIService.shared.canAccess(.search) else {
       clearLoadedOptions()
       return
@@ -56,18 +58,25 @@ class AddDownloadViewModel: ObservableObject {
     isLoading = true
     defer { isLoading = false }
 
-    async let downloadersTask = try? APIService.shared.fetchDownloadClients()
-    async let directoriesTask = try? APIService.shared.fetchDirectories()
-    let (fetchedDownloaders, fetchedDirectories) = await (downloadersTask, directoriesTask)
-    guard APIService.shared.isSessionUnchanged(from: sessionSnapshot),
-      APIService.shared.canAccess(.search)
-    else {
-      clearLoadedOptions()
-      return
-    }
+    do {
+      async let downloadersTask = APIService.shared.fetchDownloadClients()
+      async let directoriesTask = APIService.shared.fetchDirectories()
+      let (fetchedDownloaders, fetchedDirectories) = try await (
+        downloadersTask, directoriesTask
+      )
+      guard APIService.shared.isSessionUnchanged(from: sessionSnapshot),
+        APIService.shared.canAccess(.search)
+      else {
+        clearLoadedOptions()
+        return
+      }
 
-    downloaders = fetchedDownloaders ?? []
-    directories = fetchedDirectories ?? []
+      downloaders = fetchedDownloaders
+      directories = fetchedDirectories
+    } catch {
+      Logger.error("Failed to load add-download options: \(error)")
+      loadErrorMessage = "下载设置没有加载完成，请重试。"
+    }
   }
 
   private func clearLoadedOptions() {

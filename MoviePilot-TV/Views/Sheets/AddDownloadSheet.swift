@@ -31,6 +31,14 @@ struct AddDownloadSheet: View {
 
           ScrollView {
             VStack {
+              if let message = viewModel.loadErrorMessage {
+                SheetFeedbackView(message: message, actionTitle: "重新加载") {
+                  Task {
+                    await viewModel.loadData()
+                  }
+                }
+              }
+
               LabeledContent("标题") {
                 Text(viewModel.torrent.title ?? "未知")
                   .foregroundColor(.secondary)
@@ -133,7 +141,8 @@ struct AddDownloadSheet: View {
                 title: "确定",
                 loadingTitle: "添加中",
                 isLoading: viewModel.isSubmitting,
-                isDisabled: !apiService.canAccess(.search) || !viewModel.isMediaIdValid,
+                isDisabled: viewModel.loadErrorMessage != nil || !apiService.canAccess(.search)
+                  || !viewModel.isMediaIdValid,
                 feedbackMessage: viewModel.errorMessage
               ) {
                 guard apiService.canAccess(.search) else { return }
