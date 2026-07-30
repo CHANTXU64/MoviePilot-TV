@@ -2478,31 +2478,17 @@ class APIService: ObservableObject {
   /// 添加下载任务
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/AddDownloadDialog.vue
   /// - 应用场景: 在资源搜索结果中选择特定条目后，将其推送到后端下载器执行下载。
-  func addDownload(payload: AddDownloadRequest, endpoint: String) async throws -> (
+  func addDownload(payload: AddDownloadRequest) async throws -> (
     success: Bool, message: String?
   ) {
     let encoder = JSONEncoder()
     encoder.outputFormatting = .prettyPrinted
     let body = try encoder.encode(payload)
 
+    let endpoint = payload.media_in == nil ? "/download/add" : "/download/"
     let data = try await makeRequest(endpoint: endpoint, method: "POST", body: body)
 
-    struct DownloadResp: Decodable {
-      let success: Bool?
-      let message: String?
-    }
-
-    // 尝试解码简单的成功/消息响应
-    if let resp = try? JSONDecoder().decode(DownloadResp.self, from: data) {
-      return (resp.success ?? false, resp.message)
-    }
-
-    // 尝试解码标准的 ApiResponse 包装器
-    if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      return (response.success ?? false, response.message)
-    }
-
-    return (true, nil)
+    return try decodeStrictActionResponseSync(from: data)
   }
 
   /// 获取订阅的海报图片 URL

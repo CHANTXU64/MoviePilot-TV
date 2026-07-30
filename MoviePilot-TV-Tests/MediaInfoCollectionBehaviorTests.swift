@@ -208,6 +208,24 @@ final class MediaInfoCollectionBehaviorTests: XCTestCase {
     XCTAssertEqual(payload["category"], .string("动画"))
   }
 
+  func testMediaInfoEncodingPreservesLocallyConstructedSubscribeShare() throws {
+    let share = try JSONDecoder().decode(
+      SubscribeShare.self,
+      from: Data(
+        #"{"id":7,"name":"AniList 分享","type":"电视剧","media_source":"anilist","media_id":"154587"}"#
+          .utf8
+      )
+    )
+    let media = MediaInfo(title: "测试媒体", subscribeShare: share)
+
+    let decoded = try JSONDecoder().decode(
+      MediaInfo.self,
+      from: JSONEncoder().encode(media)
+    )
+
+    XCTAssertEqual(decoded.subscribeShare, share)
+  }
+
   func testMediaCardSourceUsesSourceOnly() throws {
     let anilist = MediaInfo(tmdb_id: 42, source: "anilist")
     let tvdb = MediaInfo(tmdb_id: 42, mediaid_prefix: "tvdb", media_id: "99")

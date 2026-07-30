@@ -289,6 +289,23 @@ nonisolated enum JSONValue: Codable, Hashable, Sendable {
   }
 }
 
+nonisolated private struct JSONCodingKey: CodingKey {
+  let stringValue: String
+  let intValue: Int? = nil
+
+  init(_ stringValue: String) {
+    self.stringValue = stringValue
+  }
+
+  init?(stringValue: String) {
+    self.init(stringValue)
+  }
+
+  init?(intValue: Int) {
+    return nil
+  }
+}
+
 nonisolated struct DiscoverSourceDescriptor: Codable, Hashable, Identifiable, Sendable {
   let name: String
   let mediaid_prefix: String
@@ -537,7 +554,7 @@ struct ProductionCountry: Codable, Hashable {
 }
 
 /// 核心媒体详情模型：汇聚多源元数据
-nonisolated struct MediaInfoJSON: Codable {
+nonisolated struct MediaInfoJSON: Decodable {
   let tmdb_id: Int?
   let douban_id: String?
   let bangumi_id: Int?
@@ -571,6 +588,47 @@ nonisolated struct MediaInfoJSON: Codable {
   let genres: [MediaGenre]?
   let category: String?
   let subscribeShare: SubscribeShare?
+  let rawPayload: [String: JSONValue]
+
+  init(from decoder: Decoder) throws {
+    rawPayload =
+      (try? decoder.singleValueContainer().decode([String: JSONValue].self)) ?? [:]
+    let container = try decoder.container(keyedBy: MediaInfo.CodingKeys.self)
+    tmdb_id = try container.decodeIfPresent(Int.self, forKey: .tmdb_id)
+    douban_id = try container.decodeIfPresent(String.self, forKey: .douban_id)
+    bangumi_id = try container.decodeIfPresent(Int.self, forKey: .bangumi_id)
+    anilist_id = try container.decodeIfPresent(Int.self, forKey: .anilist_id)
+    imdb_id = try container.decodeIfPresent(String.self, forKey: .imdb_id)
+    tvdb_id = try container.decodeIfPresent(Int.self, forKey: .tvdb_id)
+    source = try container.decodeIfPresent(String.self, forKey: .source)
+    mediaid_prefix = try container.decodeIfPresent(String.self, forKey: .mediaid_prefix)
+    media_id = try container.decodeIfPresent(String.self, forKey: .media_id)
+    title = try container.decodeIfPresent(String.self, forKey: .title)
+    original_title = try container.decodeIfPresent(String.self, forKey: .original_title)
+    original_name = try container.decodeIfPresent(String.self, forKey: .original_name)
+    names = try container.decodeIfPresent([String].self, forKey: .names)
+    type = try container.decodeIfPresent(String.self, forKey: .type)
+    year = try container.decodeIfPresent(String.self, forKey: .year)
+    season = try container.decodeIfPresent(Int.self, forKey: .season)
+    poster_path = try container.decodeIfPresent(String.self, forKey: .poster_path)
+    backdrop_path = try container.decodeIfPresent(String.self, forKey: .backdrop_path)
+    overview = try container.decodeIfPresent(String.self, forKey: .overview)
+    vote_average = try container.decodeIfPresent(Double.self, forKey: .vote_average)
+    popularity = try container.decodeIfPresent(Double.self, forKey: .popularity)
+    season_info = try container.decodeIfPresent([TmdbSeason].self, forKey: .season_info)
+    collection_id = try container.decodeIfPresent(Int.self, forKey: .collection_id)
+    directors = try container.decodeIfPresent([Person].self, forKey: .directors)
+    actors = try container.decodeIfPresent([Person].self, forKey: .actors)
+    episode_group = try container.decodeIfPresent(String.self, forKey: .episode_group)
+    runtime = try container.decodeIfPresent(Int.self, forKey: .runtime)
+    release_date = try container.decodeIfPresent(String.self, forKey: .release_date)
+    original_language = try container.decodeIfPresent(String.self, forKey: .original_language)
+    production_countries = try container.decodeIfPresent(
+      [ProductionCountry].self, forKey: .production_countries)
+    genres = try container.decodeIfPresent([MediaGenre].self, forKey: .genres)
+    category = try container.decodeIfPresent(String.self, forKey: .category)
+    subscribeShare = try container.decodeIfPresent(SubscribeShare.self, forKey: .subscribeShare)
+  }
 }
 
 struct MediaInfo: Codable, Identifiable, Hashable {
@@ -645,6 +703,8 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   let category: String?
   /// 关联的原始订阅分享对象（如果适用）
   let subscribeShare: SubscribeShare?
+  /// Web 会把插件媒体对象直接作为 `media_in` 回传；保留未建模字段以免丢失插件契约。
+  private let rawPayload: [String: JSONValue]?
 
   /// 稳定的内部标识符，在初始化时生成
   let id: String
@@ -699,7 +759,8 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     original_language: String? = nil,
     production_countries: [ProductionCountry]? = nil, genres: [MediaGenre]? = nil,
     category: String? = nil,
-    subscribeShare: SubscribeShare? = nil
+    subscribeShare: SubscribeShare? = nil,
+    rawPayload: [String: JSONValue]? = nil
   ) {
     self.tmdb_id = tmdb_id
     self.douban_id = douban_id
@@ -734,6 +795,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     self.genres = genres
     self.category = category
     self.subscribeShare = subscribeShare
+    self.rawPayload = rawPayload
 
     self.id = Self.generateUniqueKey(
       source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
@@ -792,7 +854,8 @@ struct MediaInfo: Codable, Identifiable, Hashable {
       production_countries: json.production_countries,
       genres: json.genres,
       category: json.category,
-      subscribeShare: json.subscribeShare
+      subscribeShare: json.subscribeShare,
+      rawPayload: json.rawPayload
     )
   }
 
@@ -830,6 +893,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     self.genres = json.genres
     self.category = json.category
     self.subscribeShare = json.subscribeShare
+    self.rawPayload = json.rawPayload
 
     self.id = Self.generateUniqueKey(
       source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
@@ -886,6 +950,8 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     genres = try container.decodeIfPresent([MediaGenre].self, forKey: .genres)
     category = try container.decodeIfPresent(String.self, forKey: .category)
     subscribeShare = try container.decodeIfPresent(SubscribeShare.self, forKey: .subscribeShare)
+    rawPayload =
+      (try? decoder.singleValueContainer().decode([String: JSONValue].self)) ?? [:]
 
     self.id = Self.generateUniqueKey(
       source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
@@ -908,6 +974,52 @@ struct MediaInfo: Codable, Identifiable, Hashable {
       poster: APIService.shared.getPosterImageUrl(posterPath: poster_path),
       backdrop: APIService.shared.getBackdropImageUrl(backdropPath: backdrop_path)
     )
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: JSONCodingKey.self)
+    for (key, value) in rawPayload ?? [:] {
+      try container.encode(value, forKey: JSONCodingKey(key))
+    }
+
+    func encode<T: Encodable>(_ value: T?, _ key: CodingKeys) throws {
+      guard let value else { return }
+      try container.encode(value, forKey: JSONCodingKey(key.stringValue))
+    }
+
+    try encode(tmdb_id, .tmdb_id)
+    try encode(douban_id, .douban_id)
+    try encode(bangumi_id, .bangumi_id)
+    try encode(anilist_id, .anilist_id)
+    try encode(imdb_id, .imdb_id)
+    try encode(tvdb_id, .tvdb_id)
+    try encode(source, .source)
+    try encode(mediaid_prefix, .mediaid_prefix)
+    try encode(media_id, .media_id)
+    try encode(title, .title)
+    try encode(original_title, .original_title)
+    try encode(original_name, .original_name)
+    try encode(names, .names)
+    try encode(type, .type)
+    try encode(year, .year)
+    try encode(season, .season)
+    try encode(poster_path, .poster_path)
+    try encode(backdrop_path, .backdrop_path)
+    try encode(overview, .overview)
+    try encode(vote_average, .vote_average)
+    try encode(popularity, .popularity)
+    try encode(season_info, .season_info)
+    try encode(collection_id, .collection_id)
+    try encode(directors, .directors)
+    try encode(actors, .actors)
+    try encode(episode_group, .episode_group)
+    try encode(runtime, .runtime)
+    try encode(release_date, .release_date)
+    try encode(original_language, .original_language)
+    try encode(production_countries, .production_countries)
+    try encode(genres, .genres)
+    try encode(category, .category)
+    try encode(subscribeShare, .subscribeShare)
   }
 
   nonisolated private static func parseCleanedNames(
@@ -1854,6 +1966,10 @@ struct AddDownloadRequest: Codable {
   let media_in: MediaInfo?
   let tmdbid: Int?
   let doubanid: String?
+  let bangumiid: Int?
+  let anilistid: Int?
+  let media_source: String?
+  let media_id: String?
 }
 
 /// 演职人员模型
