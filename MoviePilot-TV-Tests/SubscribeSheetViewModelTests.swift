@@ -54,6 +54,107 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(handler.sheetSubscribe?.id, 998_902)
   }
 
+  func testSubscriptionHandlerDeletesResolvedFallbackSubscription() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    let preloader = MediaPreloader.shared
+    preloader.clearAll()
+    defer {
+      preloader.clearAll()
+      snapshot.restore(to: service)
+    }
+
+    let media = MediaInfo(
+      douban_id: "fallback-douban",
+      title: "回退取消订阅",
+      type: "电影",
+      collection_id: 1
+    )
+    let preloadTask = preloader.preload(for: media)
+    preloadTask.tmdbId = 998_903
+    preloadTask.isSubscribed = true
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/subscribe/media/douban:fallback-douban",
+      json: "{}"
+    )
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/subscribe/media/tmdb:998903",
+      json: #"{"id":998903,"name":"回退取消订阅","type":"电影","tmdbid":998903}"#
+    )
+    service.baseURL = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let handler = SubscriptionHandler()
+    handler.handleSubscribe(media)
+    try await waitUntil("subscription state updates after deletion") {
+      preloadTask.isSubscribed == false
+    }
+
+    let tmdbDeleteCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "DELETE",
+      path: "/api/v1/subscribe/media/tmdb:998903"
+    )
+    let doubanDeleteCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "DELETE",
+      path: "/api/v1/subscribe/media/douban:fallback-douban"
+    )
+    XCTAssertEqual(tmdbDeleteCount, 1)
+    XCTAssertEqual(doubanDeleteCount, 0)
+  }
+
+  func testSubscriptionHandlerKeepsCachedStateWhenDeleteFails() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    let preloader = MediaPreloader.shared
+    preloader.clearAll()
+    defer {
+      preloader.clearAll()
+      snapshot.restore(to: service)
+    }
+
+    let media = MediaInfo(
+      tmdb_id: 998_904,
+      title: "取消失败",
+      type: "电影",
+      collection_id: 1
+    )
+    let preloadTask = preloader.preload(for: media)
+    preloadTask.isSubscribed = true
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/subscribe/media/tmdb:998904",
+      json: #"{"id":998904,"name":"取消失败","type":"电影","tmdbid":998904}"#
+    )
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "DELETE",
+      path: "/api/v1/subscribe/media/tmdb:998904",
+      json: #"{"success":false,"message":"后端拒绝取消"}"#
+    )
+    service.baseURL = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let handler = SubscriptionHandler()
+    handler.handleSubscribe(media)
+    try await waitUntil("unsubscribe failure appears") {
+      handler.notificationType == .error
+        && handler.notificationMessage == "《取消失败》取消订阅失败：后端拒绝取消"
+    }
+
+    XCTAssertEqual(preloadTask.isSubscribed, true)
+  }
+
   func testSavePathOptionsRemoveEmptyAndDuplicatePaths() {
     let viewModel = SubscribeSheetViewModel(
       subscribe: Subscribe(id: 1, name: "目录测试", type: "电影")

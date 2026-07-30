@@ -38,7 +38,7 @@ struct MediaContextMenuItems: View {
     if item.collection_id == nil {
       // TMDB 详情页：复用 MediaActionHandler 逻辑，点击时实时获取/识别 TMDB ID
       // 不依赖预加载状态，按钮永远可点，避免菜单状态不刷新的问题
-      if item.douban_id != nil || item.bangumi_id != nil {
+      if item.canJumpToTMDB {
         Button {
           Task {
             // 优先传入预加载的 tmdbId，避免重复网络请求
@@ -55,7 +55,7 @@ struct MediaContextMenuItems: View {
         }
       }
 
-      // 订阅按钮：读取预加载的订阅状态来决定显示文本
+      // 订阅按钮：预加载状态只控制显示；点击后由 Handler 向后端复查
       // ⚠️ 使用 peekTask（纯读取），避免在 body 渲染期间修改最近使用 (LRU) 状态
       let preloadedSubscribed = MediaPreloader.shared.peekTask(for: item)?.isSubscribed
 

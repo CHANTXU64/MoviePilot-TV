@@ -7,6 +7,7 @@ class SubscriptionHandler: ObservableObject {
   @Published var sheetIsNewSubscription = false
   @Published var tvSubscribeRequest: SubscribeSeasonRequest?
   @Published var forkSheetRequest: SubscribeShare?
+  @Published private(set) var isUnsubscribing = false
 
   @Published var notificationMessage = ""
   @Published var notificationType: NotificationType = .info
@@ -14,23 +15,19 @@ class SubscriptionHandler: ObservableObject {
   @Published private(set) var forkErrorMessage: String?
 
   private let apiService = APIService.shared
+  private var isCheckingSubscription = false
 
   func handleSubscribe(_ item: MediaInfo) {
     guard apiService.canAccess(.subscribe) else { return }
 
     if item.canDirectlySubscribe {
+      guard !isCheckingSubscription, !isUnsubscribing else { return }
+      isCheckingSubscription = true
       Task {
+        defer { isCheckingSubscription = false }
         do {
-          var isSubscribed = try await apiService.checkSubscription(media: item)
-          // 豆瓣/Bangumi 来源：后端可能用 TMDB ID 存储订阅，用预加载识别的 tmdbId 补查
-          if !isSubscribed, item.tmdb_id == nil,
-            let tmdbId = MediaPreloader.shared.peekTask(for: item)?.tmdbId
-          {
-            let tmdbMedia = MediaInfo(tmdb_id: tmdbId, type: item.type)
-            isSubscribed = try await apiService.checkSubscription(media: tmdbMedia)
-          }
-          if isSubscribed {
-            self.showNotification(message: "已订阅，请勿重复操作", type: .warning)
+          if let subscription = try await subscriptionLookup(for: item) {
+            await unsubscribe(item, mediaId: subscription.mediaId)
           } else {
             // For movies or direct-subscribable TV, show edit sheet
             self.sheetIsNewSubscription = true
@@ -48,6 +45,28 @@ class SubscriptionHandler: ObservableObject {
         initialSeason: nil,
         initialEpisodeGroup: nil
       )
+    }
+  }
+
+  private func unsubscribe(_ item: MediaInfo, mediaId: String) async {
+    guard !isUnsubscribing else { return }
+    isUnsubscribing = true
+    defer { isUnsubscribing = false }
+
+    do {
+      let result = try await apiService.deleteSubscriptionResult(
+        mediaId: mediaId,
+        season: item.season
+      )
+      guard result.success else {
+        showUnsubscribeFailure(for: item, message: result.message)
+        return
+      }
+      MediaPreloader.shared.findTask(byMediaId: mediaId)?.isSubscribed = false
+      NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
+    } catch {
+      Logger.error("Failed to remove subscription: \(error)")
+      showUnsubscribeFailure(for: item, message: error.localizedDescription)
     }
   }
 
@@ -95,6 +114,40 @@ class SubscriptionHandler: ObservableObject {
       media_source: item.identity?.source,
       media_id: item.identity?.mediaId,
       mediaid: item.apiMediaId
+    )
+  }
+
+  private func subscriptionLookup(for item: MediaInfo) async throws
+    -> SubscriptionLookupResult?
+  {
+    if let subscription = try await apiService.fetchSubscriptionLookup(
+      media: item,
+      season: item.season
+    ) {
+      return subscription
+    }
+    guard item.tmdb_id == nil,
+      let tmdbId = MediaPreloader.shared.peekTask(for: item)?.tmdbId
+    else {
+      return nil
+    }
+    return try await apiService.fetchSubscriptionLookup(
+      media: MediaInfo(
+        tmdb_id: tmdbId,
+        title: item.title,
+        type: item.type,
+        season: item.season
+      ),
+      season: item.season
+    )
+  }
+
+  private func showUnsubscribeFailure(for item: MediaInfo, message: String?) {
+    let title = item.cleanedTitle ?? item.title ?? ""
+    let reason = MediaIdentifier.normalizedString(message)
+    showNotification(
+      message: reason.map { "《\(title)》取消订阅失败：\($0)" } ?? "《\(title)》取消订阅失败。",
+      type: .error
     )
   }
 
