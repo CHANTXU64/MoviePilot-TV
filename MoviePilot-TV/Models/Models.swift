@@ -117,6 +117,11 @@ nonisolated enum MediaIdentifier {
     return id
   }
 
+  static func truthyNumericIdentifier(_ id: Int?) -> Int? {
+    guard let id, id != 0 else { return nil }
+    return id
+  }
+
   static func normalizedString(_ value: String?) -> String? {
     guard let value else { return nil }
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1670,6 +1675,12 @@ struct Subscribe: Codable, Identifiable, Hashable {
   var doubanid: String?
   /// Bangumi ID
   var bangumiid: Int?
+  /// AniList ID
+  var anilistid: Int?
+  /// 统一媒体来源
+  var media_source: String?
+  /// 来源原生 ID
+  var media_id: String?
   /// 质量
   var quality: String?
   /// 分辨率
@@ -1717,7 +1728,8 @@ struct Subscribe: Codable, Identifiable, Hashable {
 
   enum CodingKeys: String, CodingKey {
     case id, name, year, type, keyword, season, poster, backdrop, state, last_update,
-      vote, total_episode, start_episode, lack_episode, completed_episode, note, tmdbid, doubanid, bangumiid,
+      vote, total_episode, start_episode, lack_episode, completed_episode, note, tmdbid, doubanid,
+      bangumiid, anilistid, media_source, media_id,
       quality, resolution, effect, include, exclude, sites, downloader, save_path, best_version,
       best_version_full, current_priority, filter_groups, custom_words, description, filter,
       episode_group, search_imdbid, media_category, mediaid, episode_priority, username, date
@@ -1753,6 +1765,9 @@ struct Subscribe: Codable, Identifiable, Hashable {
     tmdbid = try container.decodeIfPresent(Int.self, forKey: .tmdbid)
     doubanid = try container.decodeIfPresent(String.self, forKey: .doubanid)
     bangumiid = try container.decodeIfPresent(Int.self, forKey: .bangumiid)
+    anilistid = try container.decodeIfPresent(Int.self, forKey: .anilistid)
+    media_source = try container.decodeIfPresent(String.self, forKey: .media_source)
+    media_id = try container.decodeIfPresent(String.self, forKey: .media_id)
     quality = try container.decodeIfPresent(String.self, forKey: .quality)
     resolution = try container.decodeIfPresent(String.self, forKey: .resolution)
     effect = try container.decodeIfPresent(String.self, forKey: .effect)
@@ -1800,6 +1815,9 @@ struct Subscribe: Codable, Identifiable, Hashable {
     try container.encodeIfPresent(tmdbid, forKey: .tmdbid)
     try container.encodeIfPresent(doubanid, forKey: .doubanid)
     try container.encodeIfPresent(bangumiid, forKey: .bangumiid)
+    try container.encodeIfPresent(anilistid, forKey: .anilistid)
+    try container.encodeIfPresent(media_source, forKey: .media_source)
+    try container.encodeIfPresent(media_id, forKey: .media_id)
     try container.encodeIfPresent(quality, forKey: .quality)
     try container.encodeIfPresent(resolution, forKey: .resolution)
     try container.encodeIfPresent(effect, forKey: .effect)
@@ -1829,6 +1847,7 @@ struct Subscribe: Codable, Identifiable, Hashable {
     username: String? = nil, date: String? = nil,
     completed_episode: Int? = nil, note: JSONValue? = nil,
     tmdbid: Int? = nil, doubanid: String? = nil, bangumiid: Int? = nil,
+    anilistid: Int? = nil, media_source: String? = nil, media_id: String? = nil,
     best_version: Int? = nil, best_version_full: Int? = nil, episode_group: String? = nil,
     backdrop: String? = nil, keyword: String? = nil, total_episode: Int? = nil,
     start_episode: Int? = nil, lack_episode: Int? = nil, quality: String? = nil,
@@ -1855,6 +1874,9 @@ struct Subscribe: Codable, Identifiable, Hashable {
     self.tmdbid = tmdbid
     self.doubanid = doubanid
     self.bangumiid = bangumiid
+    self.anilistid = anilistid
+    self.media_source = media_source
+    self.media_id = media_id
     self.best_version = best_version
     self.best_version_full = best_version_full
     self.current_priority = current_priority
@@ -1885,16 +1907,24 @@ struct Subscribe: Codable, Identifiable, Hashable {
     self.imageURLs = ImageURLs(poster: APIService.shared.getSubscribePosterImageUrl(poster: poster))
   }
 
-  /// 动态计算媒体ID，确保与前端逻辑一致
-  /// - 对应前端: MoviePilot-Frontend/src/components/cards/SubscribeCard.vue (getMediaId)
-  /// - 拼接规则: 优先使用原始ID（tmdbid, doubanid, bangumiid）拼接，如果都没有，则直接使用接口返回的 `mediaid` 字段作为备用。
-  var apiMediaId: String? {
-    MediaIdentifier.apiMediaId(
-      tmdbId: tmdbid,
+  /// 解析订阅记录的主媒体身份，严格遵循 Web 订阅卡片的来源优先级。
+  /// - 对应前端: `getMediaId()` in `SubscribeCard.vue`
+  /// - 选择规则: 优先 `media_source`/`media_id`，其次 TMDB、豆瓣、Bangumi、AniList，最后回退 `mediaid`。
+  var identity: MediaIdentity? {
+    MediaIdentifier.resolve(
+      source: media_source,
+      mediaId: media_id,
+      tmdbId: MediaIdentifier.truthyNumericIdentifier(tmdbid),
       doubanId: doubanid,
-      bangumiId: bangumiid,
-      fallbackMediaId: mediaid
+      bangumiId: MediaIdentifier.truthyNumericIdentifier(bangumiid),
+      anilistId: MediaIdentifier.truthyNumericIdentifier(anilistid),
+      legacyMediaId: mediaid
     )
+  }
+
+  /// 生成用于订阅查询、取消和详情跳转的统一媒体键。
+  var apiMediaId: String? {
+    identity?.mediaKey
   }
 
   func navigationMediaInfo() -> MediaInfo {

@@ -2116,17 +2116,29 @@ class APIService: ObservableObject {
   /// - 对应前端: `MoviePilot-Frontend/src/components/cards/MediaCard.vue` (主要实现), `MoviePilot-Frontend/src/views/discover/MediaDetailView.vue`
   /// - 应用场景: 在详情页或媒体卡片上，取消对该媒体的订阅（点击已激活的心形图标）。
   func deleteSubscription(media: MediaInfo, season: Int?) async throws -> Bool {
-    guard let mediaId = media.apiMediaId else {
-      // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求，返回失败
-      return false
-    }
-    return try await deleteSubscription(mediaId: mediaId, season: season)
+    try await deleteSubscriptionResult(media: media, season: season).success
   }
 
-  /// 通过已解析的媒体 ID 和季数删除订阅
+  func deleteSubscriptionResult(media: MediaInfo, season: Int?) async throws -> (
+    success: Bool, message: String?
+  ) {
+    guard let mediaId = media.apiMediaId else {
+      // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求，返回失败
+      return (false, "媒体身份不完整")
+    }
+    return try await deleteSubscriptionResult(mediaId: mediaId, season: season)
+  }
+
+  /// 通过已归一化的主媒体 ID 和季数删除订阅
   /// - 对应前端: `MoviePilot-Frontend/src/views/discover/MediaDetailView.vue` 的 `removeSubscribe`
-  /// - 应用场景: 详情页 Header 取消订阅时，先解析真实订阅归属的 `mediaId`，再保持 Web 的媒体级删除语义。
+  /// - 应用场景: 保持 Web 的媒体级删除语义，使用共享身份解析结果。
   func deleteSubscription(mediaId: String, season: Int?) async throws -> Bool {
+    try await deleteSubscriptionResult(mediaId: mediaId, season: season).success
+  }
+
+  func deleteSubscriptionResult(mediaId: String, season: Int?) async throws -> (
+    success: Bool, message: String?
+  ) {
     guard let encodedMediaId = encodeMediaIDPathSegment(mediaId), !encodedMediaId.isEmpty else {
       throw APIError.invalidURL
     }
@@ -2134,16 +2146,11 @@ class APIService: ObservableObject {
       path: "/subscribe/media/\(encodedMediaId)",
       params: ["season": season.map(String.init)])
     let data = try await makeRequest(endpoint: endpoint, method: "DELETE")
-    let success: Bool
-    if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      success = response.success ?? false
-    } else {
-      success = true
-    }
-    if success {
+    let result = try decodeStrictActionResponseSync(from: data)
+    if result.success {
       await invalidateSubscriptionCaches()
     }
-    return success
+    return result
   }
 
   /// 复用（Fork）一个订阅分享
@@ -2560,15 +2567,24 @@ class APIService: ObservableObject {
 
   /// 获取季海报 URL，严格参照 Vue 逻辑
   func getSeasonPosterURL(posterPath: String?, mediaPosterPath: String?) -> URL? {
-    // Vue: if (!posterPath) return props.media?.poster_path
-    guard let posterPath = posterPath, !posterPath.isEmpty else {
-      guard let mediaPosterPath = mediaPosterPath, !mediaPosterPath.isEmpty else { return nil }
-      return URL(string: mediaPosterPath)
-    }
+    let resolvedPath = posterPath?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let fallbackPath = mediaPosterPath?.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let path = [resolvedPath, fallbackPath].compactMap({ $0 }).first(where: { !$0.isEmpty })
+    else { return nil }
 
-    // Vue: return `https://${globalSettings.TMDB_IMAGE_DOMAIN}/t/p/w500${posterPath}`
-    let domain = settings?.TMDB_IMAGE_DOMAIN ?? "image.tmdb.org"
-    return URL(string: "https://\(domain)/t/p/w500\(posterPath)")
+    if path.hasPrefix("/") {
+      let domain = settings?.TMDB_IMAGE_DOMAIN ?? "image.tmdb.org"
+      return displayImageURL(
+        "https://\(domain)/t/p/w500\(path)",
+        baseURL: baseURL,
+        useImageCache: useImageCache
+      )
+    }
+    return displayImageURL(
+      path.replacingOccurrences(of: "/t/p/original/", with: "/t/p/w500/"),
+      baseURL: baseURL,
+      useImageCache: useImageCache
+    )
   }
 
   /// 获取人物图片 URL

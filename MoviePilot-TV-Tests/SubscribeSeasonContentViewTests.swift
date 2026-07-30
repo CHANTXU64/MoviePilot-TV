@@ -557,6 +557,60 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(viewModel.selectedGroupId, "group-a")
   }
 
+  func testAniListPrimaryIdentityRejectsAuxiliaryTMDBEpisodeGroup() throws {
+    let media = MediaInfo(
+      tmdb_id: 817_002,
+      anilist_id: 154_587,
+      source: "anilist",
+      mediaid_prefix: "anilist",
+      media_id: "154587",
+      title: "葬送的芙莉莲",
+      type: "电视剧"
+    )
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: media,
+      initialEpisodeGroup: "group-a"
+    )
+
+    XCTAssertEqual(media.identity?.source, "anilist")
+    XCTAssertEqual(viewModel.selectedGroupId, "")
+    viewModel.selectedGroupId = "group-b"
+    viewModel.prepareSubscription(seasonNumber: 1)
+    XCTAssertNil(viewModel.sheetSubscribe?.episode_group)
+    XCTAssertEqual(try viewModel.seasonAvailabilityMedia().episode_group, "")
+  }
+
+  func testEpisodeGroupFailureDoesNotBlockSeasonManagementData() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    await SubscriptionSnapshotURLProtocol.stub.setEpisodeGroupsStatusCode(500)
+    try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions([])
+    service.baseURL = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service, userName: "episode-group-failure")
+
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(
+        tmdb_id: 987_654,
+        source: "themoviedb",
+        media_id: "987654",
+        title: "剧集组失败",
+        type: "电视剧"
+      )
+    )
+
+    await viewModel.loadSeasonManagementData()
+
+    XCTAssertFalse(viewModel.hasSeasonLoadError)
+    XCTAssertFalse(viewModel.seasonInfos.isEmpty)
+    XCTAssertTrue(viewModel.episodeGroups.isEmpty)
+  }
+
   func testFetchSubscriptionsThrowsWhenCancelledAfterCachedSnapshotIsRead() async throws {
     XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
     defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
@@ -752,7 +806,14 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
   func testSeasonSubscriptionSummaryIndexesMatchingMediaBySeason() {
     let media = MediaInfo(tmdb_id: 12345, type: "电视剧")
     let subscriptions = [
-      Subscribe(id: 11, name: "Target", type: "电视剧", season: 1, tmdbid: 12345, episode_group: "group-a"),
+      Subscribe(
+        id: 11,
+        name: "Target",
+        type: "电视剧",
+        season: 1,
+        tmdbid: 12345,
+        episode_group: "group-a"
+      ),
       Subscribe(id: 12, name: "Other Season", type: "电视剧", season: 2, tmdbid: 12345),
       Subscribe(id: 13, name: "Other Media", type: "电视剧", season: 3, tmdbid: 54321, episode_group: "group-b"),
       Subscribe(id: 14, name: "Movie", type: "电影", season: 4, tmdbid: 12345),
@@ -867,10 +928,10 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(subscribe.apiMediaId, "tmdb:12345")
   }
 
-  func testSubscribeApiMediaIdRejectsMalformedNumericFallbackIdentifiers() {
-    let invalidMediaIds = ["tmdb:-1", "tmdb:abc", "bangumi:-1", "bangumi:abc"]
+  func testSubscribeApiMediaIdKeepsOpaqueLegacyIdentifiersLikeWeb() {
+    let mediaIds = ["tmdb:-1", "tmdb:abc", "bangumi:-1", "bangumi:abc"]
 
-    for (offset, mediaId) in invalidMediaIds.enumerated() {
+    for (offset, mediaId) in mediaIds.enumerated() {
       let subscribe = Subscribe(
         id: 90 + offset,
         name: "Invalid",
@@ -879,7 +940,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
         mediaid: mediaId
       )
 
-      XCTAssertNil(subscribe.apiMediaId, "Expected \(mediaId) to be rejected")
+      XCTAssertEqual(subscribe.apiMediaId, mediaId)
     }
   }
 
@@ -908,7 +969,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(media.overview, "简介")
   }
 
-  func testSeasonSubscriptionSummaryIgnoresBlankAndZeroIdentifiers() {
+  func testSeasonSubscriptionSummaryMatchesLegacyZeroButSkipsRawZeroIdentifiers() {
     let media = MediaInfo(
       tmdb_id: 0,
       douban_id: "  ",
@@ -929,7 +990,8 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
       matching: media
     )
 
-    XCTAssertTrue(summaries.isEmpty)
+    XCTAssertEqual(summaries.count, 1)
+    XCTAssertEqual(summaries[4]?.id, 44)
   }
 
   func testSeasonSubscriptionSummaryTreatsBlankEpisodeGroupAsDefault() {
@@ -951,6 +1013,39 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
       viewModel.unsubscribeConfirmationMessage(for: 3),
       "是否取消《航海王》第 3 季订阅？\n当前订阅使用：司法岛篇"
     )
+  }
+
+  func testSingleSeasonUnsubscribeKeepsBusinessFailureMessage() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
+      Subscribe(id: 61, name: "航海王", type: "电视剧", season: 3, tmdbid: 12_345)
+    ])
+    await SubscriptionSnapshotURLProtocol.stub.setMediaDeleteResponse(
+      #"{"success":false,"message":"该季订阅正在处理"}"#
+    )
+    service.baseURL = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(tmdb_id: 12_345, title: "航海王", type: "电视剧")
+    )
+    viewModel.seasonSubscriptions = [
+      3: SeasonSubscriptionSummary(id: 61, season: 3, episodeGroup: nil)
+    ]
+    viewModel.subscribedSeasons = [3]
+
+    await viewModel.unsubscribeSeason(3)
+
+    XCTAssertEqual(viewModel.errorMessage, "该季订阅正在处理")
+    XCTAssertNotNil(viewModel.seasonSubscriptions[3])
+    XCTAssertTrue(viewModel.subscribedSeasons.contains(3))
   }
 
   func testHomeSubscriptionUnsubscribeConfirmationUsesSubscribeEpisodeGroup() {
@@ -1225,6 +1320,69 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(preparedSeason, 3)
   }
 
+  func testSeasonAvailabilityPayloadPreservesRawMediaFieldsWhenOverridingEpisodeGroup()
+    throws
+  {
+    let media = try JSONDecoder().decode(
+      MediaInfo.self,
+      from: Data(
+        """
+        {
+          "tmdb_id": 12345,
+          "source": "themoviedb",
+          "title": "插件扩展媒体",
+          "type": "电视剧",
+          "episode_group": "old-group",
+          "plugin_context": {
+            "provider": "custom",
+            "opaque_id": "keep-me"
+          }
+        }
+        """.utf8
+      )
+    )
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: media,
+      initialEpisodeGroup: "new-group"
+    )
+
+    let payload = try JSONDecoder().decode(
+      [String: JSONValue].self,
+      from: JSONEncoder().encode(viewModel.seasonAvailabilityMedia())
+    )
+
+    XCTAssertEqual(payload["episode_group"], .string("new-group"))
+    XCTAssertEqual(
+      payload["plugin_context"],
+      .object([
+        "provider": .string("custom"),
+        "opaque_id": .string("keep-me"),
+      ])
+    )
+  }
+
+  func testSeasonPosterUsesAbsoluteURLAndFallsBackToMainPoster() {
+    let service = APIService.shared
+    let previous = service.useImageCache
+    service.useImageCache = false
+    defer { service.useImageCache = previous }
+
+    XCTAssertEqual(
+      service.getSeasonPosterURL(
+        posterPath: "https://images.example/season.jpg",
+        mediaPosterPath: "https://images.example/main.jpg"
+      )?.absoluteString,
+      "https://images.example/season.jpg"
+    )
+    XCTAssertEqual(
+      service.getSeasonPosterURL(
+        posterPath: " ",
+        mediaPosterPath: "https://images.example/main.jpg"
+      )?.absoluteString,
+      "https://images.example/main.jpg"
+    )
+  }
+
   private func makeSeason(number: Int) throws -> TmdbSeason {
     let data = """
       {
@@ -1431,12 +1589,16 @@ private actor SubscriptionSnapshotAsyncGate {
 private actor SubscriptionSnapshotURLProtocolStub {
   private var queuedResponses: [SubscriptionSnapshotStubResponse] = []
   private var defaultSubscriptionsData: Data?
+  private var mediaDeleteResponseData: Data?
   private var requestCounts: [String: Int] = [:]
+  private var episodeGroupsStatusCode = 200
 
   func reset() {
     queuedResponses.removeAll()
     defaultSubscriptionsData = nil
+    mediaDeleteResponseData = nil
     requestCounts.removeAll()
+    episodeGroupsStatusCode = 200
   }
 
   func enqueueSubscriptions(
@@ -1460,6 +1622,14 @@ private actor SubscriptionSnapshotURLProtocolStub {
     defaultSubscriptionsData = try JSONEncoder().encode(subscriptions)
   }
 
+  func setMediaDeleteResponse(_ json: String) {
+    mediaDeleteResponseData = Data(json.utf8)
+  }
+
+  func setEpisodeGroupsStatusCode(_ statusCode: Int) {
+    episodeGroupsStatusCode = statusCode
+  }
+
   func subscribeRequestCount() -> Int {
     requestCounts["/api/v1/subscribe", default: 0] + requestCounts["/api/v1/subscribe/", default: 0]
   }
@@ -1467,6 +1637,12 @@ private actor SubscriptionSnapshotURLProtocolStub {
   func response(for request: URLRequest) async throws -> SubscriptionSnapshotStubResponse {
     let path = request.url?.path ?? ""
     requestCounts[path, default: 0] += 1
+
+    if request.httpMethod == "DELETE", path.hasPrefix("/api/v1/subscribe/media/"),
+      let mediaDeleteResponseData
+    {
+      return SubscriptionSnapshotStubResponse(statusCode: 200, data: mediaDeleteResponseData)
+    }
 
     if request.httpMethod == "DELETE", path.hasPrefix("/api/v1/subscribe/") {
       return try jsonResponse(#"{"success":true}"#)
@@ -1491,7 +1667,10 @@ private actor SubscriptionSnapshotURLProtocolStub {
     }
 
     if path.hasPrefix("/api/v1/media/groups/") {
-      return try jsonResponse("[]")
+      return SubscriptionSnapshotStubResponse(
+        statusCode: episodeGroupsStatusCode,
+        data: Data("[]".utf8)
+      )
     }
 
     if path == "/api/v1/media/seasons" {

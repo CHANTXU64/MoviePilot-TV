@@ -44,26 +44,9 @@ struct SeasonSubscriptionSummary: Equatable, Hashable {
   }
 
   private static func matches(_ subscription: Subscribe, media: MediaInfo) -> Bool {
-    guard subscription.type == "电视剧" else { return false }
-    if let tmdbId = MediaIdentifier.validNumericIdentifier(media.tmdb_id), subscription.tmdbid == tmdbId {
-      return true
-    }
-    if let doubanId = MediaIdentifier.normalizedString(media.douban_id),
-      MediaIdentifier.normalizedString(subscription.doubanid) == doubanId
-    {
-      return true
-    }
-    if let bangumiId = MediaIdentifier.validNumericIdentifier(media.bangumi_id),
-      subscription.bangumiid == bangumiId
-    {
-      return true
-    }
-    if let mediaId = MediaIdentifier.normalizedMediaIdentifier(media.apiMediaId),
-      MediaIdentifier.normalizedMediaIdentifier(subscription.apiMediaId) == mediaId
-    {
-      return true
-    }
-    return false
+    subscription.type == "电视剧"
+      && subscription.identity != nil
+      && subscription.identity == media.identity
   }
 
   private static func normalizedEpisodeGroup(_ episodeGroup: String?) -> String? {
@@ -98,6 +81,7 @@ class SubscribeSeasonViewModel: ObservableObject {
 
   private let initialSeason: Int?
   private var hasLoaded = false
+  private var isSeasonManagementContext = false
 
   init(
     mediaInfo: MediaInfo,
@@ -106,10 +90,47 @@ class SubscribeSeasonViewModel: ObservableObject {
   ) {
     self.mediaInfo = mediaInfo
     self.initialSeason = initialSeason
-    self.selectedGroupId = initialEpisodeGroup ?? ""
+    self.seasonInfos = mediaInfo.season_info ?? []
+    self.selectedGroupId =
+      Self.episodeGroupTMDBID(for: mediaInfo) != nil
+      ? (initialEpisodeGroup ?? "")
+      : ""
+  }
+
+  private static func episodeGroupTMDBID(for mediaInfo: MediaInfo) -> Int? {
+    guard mediaInfo.identity?.source == "themoviedb" else { return nil }
+    return MediaIdentifier.truthyNumericIdentifier(mediaInfo.tmdb_id)
+  }
+
+  private var effectiveEpisodeGroup: String? {
+    guard Self.episodeGroupTMDBID(for: mediaInfo) != nil, !selectedGroupId.isEmpty else {
+      return nil
+    }
+    return selectedGroupId
   }
 
   func loadData(forceRefreshSubscriptions: Bool = true) async {
+    await loadData(
+      forceRefreshSubscriptions: forceRefreshSubscriptions,
+      seasonManagement: false
+    )
+  }
+
+  func loadSeasonManagementData(forceRefreshSubscriptions: Bool = true) async {
+    await loadData(
+      forceRefreshSubscriptions: forceRefreshSubscriptions,
+      seasonManagement: true
+    )
+  }
+
+  private func loadData(
+    forceRefreshSubscriptions: Bool,
+    seasonManagement: Bool
+  ) async {
+    if isSeasonManagementContext != seasonManagement {
+      hasLoaded = false
+    }
+    isSeasonManagementContext = seasonManagement
     guard !hasLoaded else { return }
     hasLoaded = true
     isLoading = true
@@ -117,9 +138,13 @@ class SubscribeSeasonViewModel: ObservableObject {
     defer { isLoading = false }
 
     do {
-      // 如果有 TMDB ID，加载该剧集关联的剧集组 (Episode Groups)
-      if let tmdbId = mediaInfo.tmdb_id {
-        self.episodeGroups = try await APIService.shared.fetchEpisodeGroups(tmdbId: tmdbId)
+      if let tmdbId = Self.episodeGroupTMDBID(for: mediaInfo) {
+        do {
+          episodeGroups = try await APIService.shared.fetchEpisodeGroups(tmdbId: tmdbId)
+        } catch {
+          episodeGroups = []
+          Logger.error("加载剧集组失败: \(error)")
+        }
       }
 
       // 执行初始分季数据获取
@@ -134,7 +159,10 @@ class SubscribeSeasonViewModel: ObservableObject {
 
   func retryLoadData(forceRefreshSubscriptions: Bool = true) async {
     hasLoaded = false
-    await loadData(forceRefreshSubscriptions: forceRefreshSubscriptions)
+    await loadData(
+      forceRefreshSubscriptions: forceRefreshSubscriptions,
+      seasonManagement: isSeasonManagementContext
+    )
   }
 
   /// 当用户在界面切换剧集组时触发重新加载
@@ -155,13 +183,16 @@ class SubscribeSeasonViewModel: ObservableObject {
   private func fetchSeasonsInternal(
     forceRefreshSubscriptions: Bool = false
   ) async throws {
-    if !selectedGroupId.isEmpty {
+    if let effectiveEpisodeGroup {
       // 逻辑 A：如果选择了剧集组，则按组获取分季
       self.seasonInfos = try await APIService.shared.getGroupSeasons(
-        groupId: selectedGroupId)
-    } else {
-      // 逻辑 B：按媒体 ID 获取原始分季
+        groupId: effectiveEpisodeGroup)
+    } else if isSeasonManagementContext {
+      // 逻辑 B：分季管理页进入后请求最新的统一媒体季接口。
       self.seasonInfos = try await APIService.shared.getMediaSeasons(media: mediaInfo)
+    } else {
+      // 逻辑 C：详情货架直接使用详情响应中的 season_info。
+      self.seasonInfos = mediaInfo.season_info ?? []
     }
 
     // 按季号升序排列 (S00, S01, S02...)
@@ -183,53 +214,11 @@ class SubscribeSeasonViewModel: ObservableObject {
     }
 
     do {
-      // 构建临时的 MediaInfo 结构用于状态查询，需手动注入选中的剧集组 (episode_group)
-      // 逻辑参考 Vue 前端实现，确保后端能正确识别分组后的集数
-      // 通过完整复制 mediaInfo 属性并仅修改 episode_group，确保用于状态检查的 checkMedia 哈希值稳定
-      let checkMedia = MediaInfo(
-        tmdb_id: mediaInfo.tmdb_id,
-        douban_id: mediaInfo.douban_id,
-        bangumi_id: mediaInfo.bangumi_id,
-        imdb_id: mediaInfo.imdb_id,
-        tvdb_id: mediaInfo.tvdb_id,
-        source: mediaInfo.source,
-        mediaid_prefix: mediaInfo.mediaid_prefix,
-        media_id: mediaInfo.media_id,
-        title: mediaInfo.title,
-        original_title: mediaInfo.original_title,
-        original_name: mediaInfo.original_name,
-        names: mediaInfo.names,
-        type: mediaInfo.type,
-        year: mediaInfo.year,
-        season: mediaInfo.season,
-        poster_path: mediaInfo.poster_path,
-        backdrop_path: mediaInfo.backdrop_path,
-        overview: mediaInfo.overview,
-        vote_average: mediaInfo.vote_average,
-        popularity: mediaInfo.popularity,
-        season_info: mediaInfo.season_info,
-        collection_id: mediaInfo.collection_id,
-        directors: mediaInfo.directors,
-        actors: mediaInfo.actors,
-        episode_group: selectedGroupId.isEmpty ? nil : selectedGroupId,
-        runtime: mediaInfo.runtime,
-        release_date: mediaInfo.release_date,
-        original_language: mediaInfo.original_language,
-        production_countries: mediaInfo.production_countries,
-        genres: mediaInfo.genres,
-        category: mediaInfo.category
+      let result = try await APIService.shared.checkSeasonsNotExists(
+        mediaInfo: seasonAvailabilityMedia()
       )
 
-      let result = try await APIService.shared.checkSeasonsNotExists(mediaInfo: checkMedia)
-
       var newStatus: [Int: Int] = [:]
-
-      // 预先将总集数为 0 的季标记为缺失 (2)，避免 fallback 到默认已入库
-      for season in seasonInfos {
-        if let seasonNumber = season.season_number, (season.episode_count ?? 0) == 0 {
-          newStatus[seasonNumber] = 2
-        }
-      }
 
       for item in result {
         // 状态定义映射：
@@ -251,6 +240,16 @@ class SubscribeSeasonViewModel: ObservableObject {
       self.seasonsNotExisted = [:]
       print("检查季入库状态失败: \(error)")
     }
+  }
+
+  func seasonAvailabilityMedia() throws -> MediaInfo {
+    let encoder = JSONEncoder()
+    var payload = try JSONDecoder().decode(
+      [String: JSONValue].self,
+      from: encoder.encode(mediaInfo)
+    )
+    payload["episode_group"] = .string(effectiveEpisodeGroup ?? "")
+    return try JSONDecoder().decode(MediaInfo.self, from: encoder.encode(payload))
   }
 
   /// 查询当前媒体所有分季订阅摘要，填充 seasonSubscriptions 和 subscribedSeasons
@@ -300,16 +299,13 @@ class SubscribeSeasonViewModel: ObservableObject {
       tmdbid: mediaInfo.tmdb_id,
       doubanid: mediaInfo.douban_id,
       bangumiid: mediaInfo.bangumi_id,
+      anilistid: mediaInfo.anilist_id,
+      media_source: mediaInfo.identity?.source,
+      media_id: mediaInfo.identity?.mediaId,
       best_version: isFullyAvailable ? 1 : nil,
       best_version_full: isFullyAvailable ? 1 : nil,
-      episode_group: selectedGroupId.isEmpty ? nil : selectedGroupId,
-      mediaid: MediaIdentifier.apiMediaId(
-        tmdbId: nil,
-        doubanId: nil,
-        bangumiId: nil,
-        mediaIdPrefix: mediaInfo.mediaid_prefix,
-        mediaId: mediaInfo.media_id
-      )
+      episode_group: effectiveEpisodeGroup,
+      mediaid: mediaInfo.apiMediaId
     )
   }
 
@@ -324,17 +320,19 @@ class SubscribeSeasonViewModel: ObservableObject {
         return
       }
 
-      let success = try await APIService.shared.deleteSubscription(
+      let result = try await APIService.shared.deleteSubscriptionResult(
         media: mediaInfo,
         season: seasonNumber
       )
-      if success {
+      if result.success {
         try await refreshSubscriptionSummaries(forceRefresh: true)
         showUnsubscribeConfirm = nil
         // 通知首页刷新订阅列表
         NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
       } else {
-        errorMessage = "取消订阅失败"
+        errorMessage =
+          MediaIdentifier.normalizedString(result.message)
+          ?? "取消订阅失败"
       }
     } catch {
       errorMessage = error.localizedDescription
