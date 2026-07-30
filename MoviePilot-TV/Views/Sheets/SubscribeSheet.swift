@@ -9,13 +9,32 @@ struct SubscribeSheet: View {
   @State private var showAdvanced = false
   @FocusState private var isAdvancedButtonFocused: Bool
 
-  var onSave: (() -> Void)?
+  var onSave: ((Subscribe) -> Void)?
 
-  init(subscribe: Subscribe, isNewSubscription: Bool = false, onSave: (() -> Void)? = nil) {
+  init(
+    subscribe: Subscribe,
+    isNewSubscription: Bool = false,
+    onSave: ((Subscribe) -> Void)? = nil
+  ) {
     _viewModel = StateObject(
       wrappedValue: SubscribeSheetViewModel(
-        subscribe: subscribe, isNewSubscription: isNewSubscription))
+        subscribe: subscribe,
+        isNewSubscription: isNewSubscription
+      ))
     self.onSave = onSave
+  }
+
+  init(
+    subscribe: Subscribe,
+    isNewSubscription: Bool = false,
+    onSave: @escaping () -> Void
+  ) {
+    _viewModel = StateObject(
+      wrappedValue: SubscribeSheetViewModel(
+        subscribe: subscribe,
+        isNewSubscription: isNewSubscription
+      ))
+    self.onSave = { _ in onSave() }
   }
 
   var body: some View {
@@ -129,11 +148,11 @@ struct SubscribeSheet: View {
                   title: "保存路径",
                   selection: Binding(
                     get: { viewModel.subscribe.save_path ?? "" },
-                    set: { viewModel.subscribe.save_path = $0 }
+                    set: { viewModel.subscribe.save_path = $0.isEmpty ? nil : $0 }
                   ),
                   options: [PickerOption(title: "自动", value: "")]
-                    + viewModel.directories.map {
-                      PickerOption(title: $0.name, value: $0.download_path ?? "")
+                    + viewModel.savePathOptions.map {
+                      PickerOption(title: $0, value: $0)
                     }
                 )
 
@@ -284,7 +303,7 @@ struct SubscribeSheet: View {
                   ) {
                     Task {
                       if await viewModel.save() {
-                        onSave?()
+                        onSave?(viewModel.subscribe)
                         if viewModel.errorMessage == nil {
                           dismiss()
                         }

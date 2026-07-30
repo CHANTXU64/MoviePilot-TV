@@ -2059,7 +2059,9 @@ class APIService: ObservableObject {
   /// 保存（更新）订阅配置
   /// - 对应前端: 1. `MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue` (更新) 2. `MoviePilot-Frontend/src/components/cards/MediaCard.vue` (新增)
   /// - 应用场景: 1. 在订阅编辑弹窗中点击“保存”，对现有订阅进行修改 (PUT)。 2. 在媒体卡片或详情页上点击订阅，创建新的订阅记录 (POST)。
-  func saveSubscription(_ subscribe: Subscribe) async throws -> Bool {
+  func saveSubscription(_ subscribe: Subscribe) async throws -> (
+    success: Bool, message: String?
+  ) {
     let body = try JSONEncoder().encode(subscribe)
     let endpoint = "/subscribe/"
     // 如果存在 ID，则很可能是更新 (PUT)，但 API 可能同时处理 POST 或有其他逻辑。
@@ -2068,25 +2070,12 @@ class APIService: ObservableObject {
     let method = (subscribe.id != nil && subscribe.id != 0) ? "PUT" : "POST"
 
     let data = try await makeRequest(endpoint: endpoint, method: method, body: body)
-    let success: Bool
-    if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      success = response.success ?? false
-    } else {
-      struct SimpleResp: Decodable {
-        let success: Bool?
-        let message: String?
-      }
-      if let resp = try? JSONDecoder().decode(SimpleResp.self, from: data) {
-        success = resp.success ?? true
-      } else {
-        success = true
-      }
-    }
+    let result = try decodeStrictActionResponseSync(from: data)
 
-    if success {
+    if result.success {
       await invalidateSubscriptionCaches()
     }
-    return success
+    return result
   }
 
   /// 新增订阅（简单模式）
@@ -2103,9 +2092,11 @@ class APIService: ObservableObject {
       let id: Int?
     }
 
-    if let response = try? JSONDecoder().decode(ApiResponse<SubscribeAddResp>.self, from: data),
-      let id = response.data?.id
-    {
+    let response = try JSONDecoder().decode(ApiResponse<SubscribeAddResp>.self, from: data)
+    guard response.success == true else {
+      throw APIError.serverMessage(response.localizedMessage ?? "新增订阅失败")
+    }
+    if let id = response.data?.id {
       await invalidateSubscriptionCaches()
       return id
     }
@@ -2117,16 +2108,11 @@ class APIService: ObservableObject {
   /// - 应用场景: 1. 在订阅编辑弹窗中点击“取消订阅”按钮。 2. 在订阅列表页进行批量删除操作时并发调用。
   func deleteSubscription(id: Int) async throws -> Bool {
     let data = try await makeRequest(endpoint: "/subscribe/\(id)", method: "DELETE")
-    let success: Bool
-    if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-      success = response.success ?? false
-    } else {
-      success = true
-    }
-    if success {
+    let result = try decodeStrictActionResponseSync(from: data)
+    if result.success {
       await invalidateSubscriptionCaches()
     }
-    return success
+    return result.success
   }
 
   /// 通过媒体 ID 和季数删除订阅

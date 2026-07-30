@@ -4,6 +4,7 @@ import SwiftUI
 @MainActor
 class SubscriptionHandler: ObservableObject {
   @Published var sheetSubscribe: Subscribe?
+  @Published var sheetIsNewSubscription = false
   @Published var tvSubscribeRequest: SubscribeSeasonRequest?
   @Published var forkSheetRequest: SubscribeShare?
 
@@ -32,6 +33,7 @@ class SubscriptionHandler: ObservableObject {
             self.showNotification(message: "已订阅，请勿重复操作", type: .warning)
           } else {
             // For movies or direct-subscribable TV, show edit sheet
+            self.sheetIsNewSubscription = true
             self.sheetSubscribe = mediaInfoToSubscribeRequest(item)
           }
         } catch {
@@ -67,6 +69,7 @@ class SubscriptionHandler: ObservableObject {
 
     do {
       let subscription = try await apiService.fetchSubscription(id: subId)
+      sheetIsNewSubscription = false
       self.sheetSubscribe = subscription
     } catch {
       showNotification(message: "加载订阅失败: \(error.localizedDescription)", type: .error)
@@ -88,13 +91,10 @@ class SubscriptionHandler: ObservableObject {
       tmdbid: item.tmdb_id,
       doubanid: item.douban_id,
       bangumiid: item.bangumi_id,
-      mediaid: MediaIdentifier.apiMediaId(
-        tmdbId: nil,
-        doubanId: nil,
-        bangumiId: nil,
-        mediaIdPrefix: item.mediaid_prefix,
-        mediaId: item.media_id
-      )
+      anilistid: item.anilist_id,
+      media_source: item.identity?.source,
+      media_id: item.identity?.mediaId,
+      mediaid: item.apiMediaId
     )
   }
 

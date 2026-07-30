@@ -17,6 +17,124 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(SystemViewModel.shouldAutoSearchNewSubscriptions)
   }
 
+  func testSubscriptionHandlerDistinguishesNewAndExistingEditors() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/subscribe/media/tmdb:998901",
+      json: "{}"
+    )
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/subscribe/998902",
+      json: #"{"id":998902,"name":"已有订阅","type":"电影","tmdbid":998902}"#
+    )
+    service.baseURL = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let handler = SubscriptionHandler()
+    handler.handleSubscribe(
+      MediaInfo(tmdb_id: 998_901, title: "新增订阅", type: "电影")
+    )
+    try await waitUntil("new subscription editor opens") {
+      handler.sheetSubscribe != nil
+    }
+    XCTAssertTrue(handler.sheetIsNewSubscription)
+    XCTAssertEqual(handler.sheetSubscribe?.apiMediaId, "tmdb:998901")
+
+    await handler.fetchSubscriptionAndShowEditor(subId: 998_902)
+    XCTAssertFalse(handler.sheetIsNewSubscription)
+    XCTAssertEqual(handler.sheetSubscribe?.id, 998_902)
+  }
+
+  func testSavePathOptionsRemoveEmptyAndDuplicatePaths() {
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(id: 1, name: "目录测试", type: "电影")
+    )
+    viewModel.directories = [
+      TransferDirectoryConf(
+        name: "目录 A",
+        storage: "local",
+        download_path: "/downloads",
+        library_path: nil,
+        library_storage: nil,
+        transfer_type: "copy",
+        scraping: nil,
+        library_category_folder: nil,
+        library_type_folder: nil
+      ),
+      TransferDirectoryConf(
+        name: "目录 A 重复",
+        storage: "local",
+        download_path: "/downloads",
+        library_path: nil,
+        library_storage: nil,
+        transfer_type: "copy",
+        scraping: nil,
+        library_category_folder: nil,
+        library_type_folder: nil
+      ),
+      TransferDirectoryConf(
+        name: "空目录",
+        storage: "local",
+        download_path: "",
+        library_path: nil,
+        library_storage: nil,
+        transfer_type: "copy",
+        scraping: nil,
+        library_category_folder: nil,
+        library_type_folder: nil
+      ),
+      TransferDirectoryConf(
+        name: "目录 B",
+        storage: "local",
+        download_path: "/media",
+        library_path: nil,
+        library_storage: nil,
+        transfer_type: "copy",
+        scraping: nil,
+        library_category_folder: nil,
+        library_type_folder: nil
+      ),
+    ]
+
+    XCTAssertEqual(viewModel.savePathOptions, ["/downloads", "/media"])
+  }
+
+  func testSavedSubscriptionUpdatesMatchingPreloadedTask() {
+    let preloader = MediaPreloader.shared
+    preloader.clearAll()
+    defer { preloader.clearAll() }
+
+    let media = MediaInfo(
+      tmdb_id: 991_001,
+      title: "预加载同步",
+      type: "电影",
+      collection_id: 1
+    )
+    let task = preloader.preload(for: media)
+
+    XCTAssertNil(task.isSubscribed)
+    XCTAssertTrue(
+      MediaSubscriptionModifier.updatePreloadedSubscription(
+        afterSaving: Subscribe(
+          name: "预加载同步",
+          type: "电影",
+          tmdbid: 991_001,
+          mediaid: "tmdb:991001"
+        )
+      )
+    )
+    XCTAssertEqual(task.isSubscribed, true)
+  }
+
   func testSaveNewSubscriptionSkipsSearchWhenAutoSearchSettingIsDisabled() async throws {
     XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
     defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
@@ -182,6 +300,32 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(filterGroupsRequestCount, 1)
   }
 
+  func testLoadDataShowsOnlyActiveSites() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/site/rss",
+      json:
+        #"[{"id":1,"name":"启用站点","is_active":true},{"id":2,"name":"停用站点","is_active":false}]"#
+    )
+    service.baseURL = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(id: 780, name: "站点过滤", type: "电影", tmdbid: 123459)
+    )
+    await viewModel.loadData()
+
+    XCTAssertEqual(viewModel.sites.map(\.name), ["启用站点"])
+  }
+
   func testLoadDataForNewSubscriptionDoesNotForceUnsetBestVersionToZero() async throws {
     XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
     defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
@@ -234,6 +378,39 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertFalse(json.keys.contains("best_version"))
     XCTAssertFalse(json.keys.contains("best_version_full"))
     XCTAssertEqual(json["mediaid"] as? String, "douban:douban-new")
+  }
+
+  func testNewSubscriptionLoadStopsWhenPauseFails() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "PUT",
+      path: "/api/v1/subscribe/status/801",
+      json: #"{"success":false,"message":"暂停订阅失败"}"#
+    )
+    service.baseURL = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(name: "暂停失败", type: "电影", tmdbid: 8801),
+      isNewSubscription: true
+    )
+    await viewModel.loadData()
+
+    XCTAssertEqual(viewModel.subscribe.id, 801)
+    XCTAssertEqual(viewModel.loadErrorMessage, "暂停订阅失败")
+    let detailRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "GET", path: "/api/v1/subscribe/801")
+    let siteRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "GET", path: "/api/v1/site/rss")
+    XCTAssertEqual(detailRequestCount, 0)
+    XCTAssertEqual(siteRequestCount, 0)
   }
 
   func testPendingLoadDataDoesNotPublishOptionsAfterSubscribePermissionIsRestricted()
@@ -328,6 +505,33 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertFalse(didSave)
     XCTAssertFalse(viewModel.isSaved)
     XCTAssertEqual(viewModel.errorMessage, "暂时无法保存订阅，请稍后重试。")
+  }
+
+  func testSaveBusinessFailurePublishesBackendMessage() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "PUT",
+      path: "/api/v1/subscribe",
+      json: #"{"success":false,"message":"订阅参数冲突"}"#
+    )
+    service.baseURL = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(id: 779, name: "保存业务失败", type: "电影", tmdbid: 123458)
+    )
+
+    let didSave = await viewModel.save()
+    XCTAssertFalse(didSave)
+    XCTAssertFalse(viewModel.isSaved)
+    XCTAssertEqual(viewModel.errorMessage, "订阅参数冲突")
   }
 
   func testLoadDataFailurePublishesErrorMessage() async throws {

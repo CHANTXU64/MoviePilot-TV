@@ -1625,6 +1625,32 @@ struct SubscribeRequest: Codable {
   let best_version_full: Int?
   /// 剧集组
   let episode_group: String?
+
+  init(
+    name: String,
+    type: String,
+    year: String? = nil,
+    tmdbid: Int? = nil,
+    doubanid: String? = nil,
+    bangumiid: Int? = nil,
+    mediaid: String? = nil,
+    season: Int? = nil,
+    best_version: Int? = nil,
+    best_version_full: Int? = nil,
+    episode_group: String? = nil
+  ) {
+    self.name = name
+    self.type = type
+    self.year = year
+    self.tmdbid = tmdbid
+    self.doubanid = doubanid
+    self.bangumiid = bangumiid
+    self.mediaid = mediaid
+    self.season = season
+    self.best_version = best_version
+    self.best_version_full = best_version_full
+    self.episode_group = episode_group
+  }
 }
 
 /// 订阅详细配置数据
@@ -1925,6 +1951,23 @@ struct Subscribe: Codable, Identifiable, Hashable {
   /// 生成用于订阅查询、取消和详情跳转的统一媒体键。
   var apiMediaId: String? {
     identity?.mediaKey
+  }
+
+  /// 生成新增订阅请求，完整保留当前订阅的来源身份与洗版设置。
+  var addRequest: SubscribeRequest {
+    SubscribeRequest(
+      name: name,
+      type: type,
+      year: year,
+      tmdbid: tmdbid,
+      doubanid: doubanid,
+      bangumiid: bangumiid,
+      mediaid: mediaid,
+      season: season,
+      best_version: best_version,
+      best_version_full: best_version_full,
+      episode_group: episode_group
+    )
   }
 
   func navigationMediaInfo() -> MediaInfo {

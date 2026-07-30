@@ -15,6 +15,32 @@ final class SubscribeModelCompatibilityTests: XCTestCase {
     XCTAssertEqual(json["bangumiid"] as? Int, 12345)
   }
 
+  func testAddRequestUsesWebSubscriptionFields() throws {
+    let subscribe = Subscribe(
+      name: "AniList 新订阅",
+      type: "电视剧",
+      season: 2,
+      anilistid: 154_587,
+      media_source: "anilist",
+      media_id: "154587",
+      best_version: 1,
+      best_version_full: 1,
+      mediaid: "anilist:154587"
+    )
+
+    let json = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: JSONEncoder().encode(subscribe.addRequest))
+        as? [String: Any]
+    )
+
+    XCTAssertNil(json["anilistid"])
+    XCTAssertNil(json["media_source"])
+    XCTAssertNil(json["media_id"])
+    XCTAssertEqual(json["mediaid"] as? String, "anilist:154587")
+    XCTAssertEqual(json["best_version"] as? Int, 1)
+    XCTAssertEqual(json["best_version_full"] as? Int, 1)
+  }
+
   func testSubscribeRequestOmitsUnsetBestVersionFieldsAndPreservesExplicitZero() throws {
     let unset = SubscribeRequest(
       name: "默认配置订阅",

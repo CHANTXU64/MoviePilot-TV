@@ -54,6 +54,13 @@ class SubscribeSheetViewModel: ObservableObject {
     Array(0...100)
   }
 
+  var savePathOptions: [String] {
+    var seen = Set<String>()
+    return directories.compactMap(\.download_path).filter {
+      !$0.isEmpty && seen.insert($0).inserted
+    }
+  }
+
   init(subscribe: Subscribe, isNewSubscription: Bool = false) {
     self.subscribe = subscribe
     self.isNewSubscription = isNewSubscription
@@ -75,21 +82,11 @@ class SubscribeSheetViewModel: ObservableObject {
     if isNewSubscription && !isCreatedAndPaused {
       do {
         // 创建
-        let req = SubscribeRequest(
-          name: subscribe.name,
-          type: subscribe.type,
-          year: subscribe.year,
-          tmdbid: subscribe.tmdbid,
-          doubanid: subscribe.doubanid,
-          bangumiid: subscribe.bangumiid,
-          mediaid: subscribe.mediaid,
-          season: subscribe.season,
-          best_version: subscribe.best_version,
-          best_version_full: subscribe.best_version_full,
-          episode_group: subscribe.episode_group
-        )
-
-        guard let newId = try await apiService.addSubscription(request: req, subscribe: subscribe)
+        guard
+          let newId = try await apiService.addSubscription(
+            request: subscribe.addRequest,
+            subscribe: subscribe
+          )
         else {
           canRetryLoad = true
           loadErrorMessage = "暂时无法创建订阅，请重试。"
@@ -104,7 +101,13 @@ class SubscribeSheetViewModel: ObservableObject {
         self.subscribe.id = newId
 
         // 立即暂停
-        _ = try await apiService.updateSubscriptionStatus(id: newId, state: "S")
+        let pauseResult = try await apiService.updateSubscriptionStatus(id: newId, state: "S")
+        guard pauseResult.success else {
+          loadErrorMessage =
+            MediaIdentifier.normalizedString(pauseResult.message)
+            ?? "订阅没有准备完成，请关闭后重新打开。"
+          return
+        }
         guard canPublishLoadResult(from: sessionSnapshot) else {
           clearLoadedOptions()
           return
@@ -143,7 +146,7 @@ class SubscribeSheetViewModel: ObservableObject {
         clearLoadedOptions()
         return
       }
-      self.sites = s
+      self.sites = s.filter { $0.is_active?.value == true }
       self.downloaders = d
       self.directories = dir
       self.filterGroups = f
@@ -177,14 +180,20 @@ class SubscribeSheetViewModel: ObservableObject {
   }
 
   func save() async -> Bool {
+    guard (subscribe.id ?? 0) > 0 else {
+      errorMessage = "订阅信息不完整，无法保存。"
+      return false
+    }
     isSaving = true
     defer { isSaving = false }
     errorMessage = nil
 
     do {
-      let success = try await apiService.saveSubscription(subscribe)
-      guard success else {
-        errorMessage = "暂时无法保存订阅，请稍后重试。"
+      let result = try await apiService.saveSubscription(subscribe)
+      guard result.success else {
+        errorMessage =
+          MediaIdentifier.normalizedString(result.message)
+          ?? "暂时无法保存订阅，请稍后重试。"
         return false
       }
 
@@ -202,8 +211,9 @@ class SubscribeSheetViewModel: ObservableObject {
       do {
         let result = try await apiService.updateSubscriptionStatus(id: id, state: "R")
         guard result.success else {
-          Logger.error("Resuming saved subscription \(id) returned false")
-          errorMessage = "订阅已保存，但暂时未能启用。你可以稍后在订阅页面重试。"
+          errorMessage =
+            MediaIdentifier.normalizedString(result.message)
+            ?? "订阅已保存，但暂时未能启用。你可以稍后在订阅页面重试。"
           return true
         }
       } catch {
@@ -219,7 +229,6 @@ class SubscribeSheetViewModel: ObservableObject {
 
     do {
       guard try await apiService.searchSubscription(id: id) else {
-        Logger.error("Searching saved subscription \(id) returned false")
         errorMessage = "订阅已保存，但没有开始搜索。你可以稍后手动搜索。"
         return true
       }
