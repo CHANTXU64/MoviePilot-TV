@@ -4,6 +4,33 @@ import XCTest
 
 final class MediaDetailViewHeaderActionTests: XCTestCase {
   @MainActor
+  func testHeaderSubscribeKeepsAniListIdentityAndPrefersFullDetailTMDB() throws {
+    let detail = MediaInfo(
+      tmdb_id: 209_867,
+      anilist_id: 154_587,
+      source: "anilist",
+      title: "葬送的芙莉莲",
+      type: "电视剧"
+    )
+    let preloadTask = MediaPreloadTask(partialMedia: detail)
+    preloadTask.tmdbId = 999_999
+
+    let viewModel = MediaDetailViewModel(detail: detail)
+    viewModel.preloadTask = preloadTask
+
+    let request = viewModel.buildSubscribeRequest(season: 1).addRequest
+    let json = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any]
+    )
+
+    XCTAssertEqual(json["tmdbid"] as? Int, 209_867)
+    XCTAssertEqual(json["anilistid"] as? Int, 154_587)
+    XCTAssertEqual(json["media_source"] as? String, "anilist")
+    XCTAssertEqual(json["media_id"] as? String, "154587")
+    XCTAssertEqual(json["mediaid"] as? String, "anilist:154587")
+  }
+
+  @MainActor
   func testHeaderUnsubscribeConfirmationUsesSharedFormatWithoutSeasonOrEpisodeGroup() {
     let detail = MediaInfo(title: "孤独摇滚", type: "电视剧", season: 1)
 

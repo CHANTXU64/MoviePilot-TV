@@ -33,9 +33,9 @@ final class SubscribeModelCompatibilityTests: XCTestCase {
         as? [String: Any]
     )
 
-    XCTAssertNil(json["anilistid"])
-    XCTAssertNil(json["media_source"])
-    XCTAssertNil(json["media_id"])
+    XCTAssertEqual(json["anilistid"] as? Int, 154_587)
+    XCTAssertEqual(json["media_source"] as? String, "anilist")
+    XCTAssertEqual(json["media_id"] as? String, "154587")
     XCTAssertEqual(json["mediaid"] as? String, "anilist:154587")
     XCTAssertEqual(json["best_version"] as? Int, 1)
     XCTAssertEqual(json["best_version_full"] as? Int, 1)

@@ -268,7 +268,8 @@ class MediaDetailViewModel: ObservableObject {
 
   /// 构建订阅请求对象（用于弹出 SubscribeSheet）
   func buildSubscribeRequest(season: Int? = nil) -> Subscribe {
-    Subscribe(
+    let identity = detail.identity
+    return Subscribe(
       id: nil,
       name: detail.title ?? "",
       year: detail.year,
@@ -277,17 +278,14 @@ class MediaDetailViewModel: ObservableObject {
       poster: detail.poster_path,
       state: "N",
       last_update: nil,
-      // 优先使用预加载识别到的 TMDB ID（豆瓣/Bangumi 来源可能在预加载阶段才拿到）
-      tmdbid: preloadTask?.tmdbId ?? detail.tmdb_id,
+      // 完整详情是当前页面的权威身份；预识别 TMDB 仅在详情未提供时兜底。
+      tmdbid: detail.tmdb_id ?? preloadTask?.tmdbId,
       doubanid: detail.douban_id,
       bangumiid: detail.bangumi_id,
-      mediaid: MediaIdentifier.apiMediaId(
-        tmdbId: nil,
-        doubanId: nil,
-        bangumiId: nil,
-        mediaIdPrefix: detail.mediaid_prefix,
-        mediaId: detail.media_id
-      )
+      anilistid: detail.anilist_id,
+      media_source: identity?.source,
+      media_id: identity?.mediaId,
+      mediaid: detail.apiMediaId
     )
   }
 

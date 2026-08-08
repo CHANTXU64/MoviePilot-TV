@@ -1641,6 +1641,12 @@ struct SubscribeRequest: Codable {
   let doubanid: String?
   /// Bangumi ID
   let bangumiid: Int?
+  /// AniList ID
+  let anilistid: Int?
+  /// 统一媒体来源
+  let media_source: String?
+  /// 来源原生 ID
+  let media_id: String?
   /// 媒体 ID fallback
   let mediaid: String?
   /// 季号
@@ -1659,6 +1665,9 @@ struct SubscribeRequest: Codable {
     tmdbid: Int? = nil,
     doubanid: String? = nil,
     bangumiid: Int? = nil,
+    anilistid: Int? = nil,
+    media_source: String? = nil,
+    media_id: String? = nil,
     mediaid: String? = nil,
     season: Int? = nil,
     best_version: Int? = nil,
@@ -1671,6 +1680,9 @@ struct SubscribeRequest: Codable {
     self.tmdbid = tmdbid
     self.doubanid = doubanid
     self.bangumiid = bangumiid
+    self.anilistid = anilistid
+    self.media_source = media_source
+    self.media_id = media_id
     self.mediaid = mediaid
     self.season = season
     self.best_version = best_version
@@ -1988,6 +2000,9 @@ struct Subscribe: Codable, Identifiable, Hashable {
       tmdbid: tmdbid,
       doubanid: doubanid,
       bangumiid: bangumiid,
+      anilistid: anilistid,
+      media_source: media_source,
+      media_id: media_id,
       mediaid: mediaid,
       season: season,
       best_version: best_version,
