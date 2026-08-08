@@ -346,6 +346,108 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     } catch {}
   }
 
+  func testAddDownloadPreservesSiteTransportFieldsAcrossBothProductionEndpoints() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
+    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.testingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURL = "https://compatibility-endpoint-tests.local"
+
+    let context = try JSONDecoder().decode(
+      Context.self,
+      from: Data(
+        #"""
+        {
+          "media_info": {"tmdb_id": 42, "title": "测试媒体", "type": "电影"},
+          "torrent_info": {
+            "site": 1,
+            "site_name": "测试站点",
+            "site_cookie": "session=search-result",
+            "site_ua": "MoviePilot-Site-UA",
+            "site_proxy": true,
+            "site_order": 1,
+            "site_downloader": "site-downloader",
+            "title": "测试资源",
+            "enclosure": "https://example.test/resource.torrent",
+            "size": 1024,
+            "uploadvolumefactor": 1.0,
+            "downloadvolumefactor": 0.0
+          }
+        }
+        """#.utf8
+      )
+    )
+    let torrent = try XCTUnwrap(context.torrent_info)
+    let media = try XCTUnwrap(context.media_info)
+
+    let withoutMedia = AddDownloadRequest(
+      torrent_in: torrent,
+      downloader: nil,
+      save_path: nil,
+      media_in: nil,
+      tmdbid: nil,
+      doubanid: nil,
+      bangumiid: nil,
+      anilistid: nil,
+      media_source: nil,
+      media_id: nil
+    )
+    let withMedia = AddDownloadRequest(
+      torrent_in: torrent,
+      downloader: "manual-downloader",
+      save_path: nil,
+      media_in: media,
+      tmdbid: nil,
+      doubanid: nil,
+      bangumiid: nil,
+      anilistid: nil,
+      media_source: nil,
+      media_id: nil
+    )
+
+    let withoutMediaResult = try await service.addDownload(payload: withoutMedia)
+    let withMediaResult = try await service.addDownload(payload: withMedia)
+    XCTAssertTrue(withoutMediaResult.success)
+    XCTAssertTrue(withMediaResult.success)
+
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    let downloadPaths = paths.filter {
+      $0 == "/api/v1/download/add" ||
+        $0 == "/api/v1/download" ||
+        $0 == "/api/v1/download/"
+    }
+    XCTAssertEqual(downloadPaths.first, "/api/v1/download/add")
+    XCTAssertTrue(["/api/v1/download", "/api/v1/download/"].contains(downloadPaths.last ?? ""))
+    XCTAssertEqual(downloadPaths.count, 2)
+    let withoutMediaBodies =
+      await CompatibilityEndpointURLProtocol.stub.matchingBodies(suffix: "/download/add")
+    let withMediaBodies =
+      await CompatibilityEndpointURLProtocol.stub.matchingBodies(suffix: "/download")
+    let bodies = withoutMediaBodies + withMediaBodies
+    XCTAssertEqual(bodies.count, 2)
+
+    for bodyData in bodies {
+      let body = try Self.jsonObject(bodyData)
+      let torrentBody = try XCTUnwrap(body["torrent_in"] as? [String: Any])
+      XCTAssertEqual(torrentBody["site_cookie"] as? String, "session=search-result")
+      XCTAssertEqual(torrentBody["site_ua"] as? String, "MoviePilot-Site-UA")
+      XCTAssertEqual(torrentBody["site_proxy"] as? Bool, true)
+      XCTAssertEqual(torrentBody["site_downloader"] as? String, "site-downloader")
+    }
+
+    let withoutMediaBody = try Self.jsonObject(bodies[0])
+    let withMediaBody = try Self.jsonObject(bodies[1])
+    XCTAssertNil(withoutMediaBody["downloader"])
+    XCTAssertEqual(withMediaBody["downloader"] as? String, "manual-downloader")
+    XCTAssertNotEqual(
+      withMediaBody["downloader"] as? String,
+      (withMediaBody["torrent_in"] as? [String: Any])?["site_downloader"] as? String
+    )
+  }
+
   func testReorganizePreviewMergesHistoryResponsesAndDeduplicatesItems() async throws {
     XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
     defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }

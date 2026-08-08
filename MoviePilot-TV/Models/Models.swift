@@ -1374,8 +1374,16 @@ struct TorrentInfo: Codable {
   let site: Int?
   /// 站点名称
   let site_name: String?
+  /// 站点 Cookie
+  var site_cookie: String? = nil
+  /// 站点 User-Agent
+  var site_ua: String? = nil
+  /// 站点是否使用代理
+  var site_proxy: Bool? = nil
   /// 站点优先级
   let site_order: Int?
+  /// 站点指定的下载器
+  var site_downloader: String? = nil
   /// 种子名称
   let title: String?
   /// 种子副标题
