@@ -20,10 +20,13 @@ extension Int64 {
 }
 
 extension String {
+  private static let seasonEpisodeRegex = try? NSRegularExpression(
+    pattern: #"^(?:S(\d+)(?:-S?(\d+))?\s*)?(?:E(\d+)(?:-E?(\d+))?)?$"#,
+    options: .caseInsensitive)
+
   /// 将季集字符串 (如 "S01", "S01E01", "S01 E28-E32", "E01-E05") 格式化为中文 (如 "1季", "1季 1集", "1季 28-32集", "1-5集")
   func formattedSeasonEpisode() -> String {
-    let pattern = "^(?:S(\\d+)(?:-S?(\\d+))?\\s*)?(?:E(\\d+)(?:-E?(\\d+))?)?$"
-    guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
+    guard let regex = String.seasonEpisodeRegex else {
       return self
     }
 
