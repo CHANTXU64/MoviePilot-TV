@@ -67,17 +67,12 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       snapshot.restore(to: service)
     }
 
-    let media = MediaInfo(
-      douban_id: "fallback-douban",
-      title: "回退取消订阅",
-      type: "电影",
-      collection_id: 1
-    )
-    let preloadTask = preloader.preload(for: media)
-    preloadTask.tmdbId = 998_903
-    preloadTask.isSubscribed = true
-
     await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/media/douban:fallback-douban",
+      json: #"{"douban_id":"fallback-douban","title":"回退取消订阅","type":"电影"}"#
+    )
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET",
       path: "/api/v1/subscribe/media/douban:fallback-douban",
@@ -90,6 +85,17 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     )
     service.baseURL = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
+
+    let media = MediaInfo(
+      douban_id: "fallback-douban",
+      title: "回退取消订阅",
+      type: "电影"
+    )
+    let preloadTask = preloader.preload(for: media)
+    preloadTask.tmdbId = 998_903
+    try await waitUntil("preloaded fallback subscription state is ready") {
+      preloadTask.isSubscribed == true
+    }
 
     let handler = SubscriptionHandler()
     handler.handleSubscribe(media)
@@ -122,16 +128,12 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       snapshot.restore(to: service)
     }
 
-    let media = MediaInfo(
-      tmdb_id: 998_904,
-      title: "取消失败",
-      type: "电影",
-      collection_id: 1
-    )
-    let preloadTask = preloader.preload(for: media)
-    preloadTask.isSubscribed = true
-
     await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/media/tmdb:998904",
+      json: #"{"tmdb_id":998904,"title":"取消失败","type":"电影"}"#
+    )
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET",
       path: "/api/v1/subscribe/media/tmdb:998904",
@@ -144,6 +146,14 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     )
     service.baseURL = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
+
+    let media = MediaInfo(
+      tmdb_id: 998_904,
+      title: "取消失败",
+      type: "电影"
+    )
+    let preloadTask = preloader.preload(for: media)
+    preloadTask.isSubscribed = true
 
     let handler = SubscriptionHandler()
     handler.handleSubscribe(media)

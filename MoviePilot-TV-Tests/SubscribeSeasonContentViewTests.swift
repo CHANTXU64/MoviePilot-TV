@@ -1288,11 +1288,17 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertNil(viewModel.sheetSubscribe?.best_version_full)
   }
 
-  func testOnlyMoviesCanDirectlySubscribe() {
+  func testOnlyTVUsesSeasonSubscriptionAndCollectionsCannotSubscribe() {
     XCTAssertTrue(MediaInfo(tmdb_id: 1, title: "电影", type: "电影").canDirectlySubscribe)
     XCTAssertFalse(MediaInfo(tmdb_id: 2, title: "TMDB 剧", type: "电视剧").canDirectlySubscribe)
     XCTAssertFalse(MediaInfo(douban_id: "douban-1", title: "豆瓣剧", type: "电视剧").canDirectlySubscribe)
     XCTAssertFalse(MediaInfo(bangumi_id: 3, title: "Bangumi 剧", type: "电视剧").canDirectlySubscribe)
+    XCTAssertFalse(
+      MediaInfo(tmdb_id: 4, title: "合集", type: "系列", collection_id: 40)
+        .canDirectlySubscribe
+    )
+    XCTAssertTrue(MediaInfo(tmdb_id: 5, title: "未知", type: "未知").canDirectlySubscribe)
+    XCTAssertTrue(MediaInfo(tmdb_id: 6, title: "无合集 ID 的系列", type: "系列").canDirectlySubscribe)
   }
 
   func testSeasonPrimaryActionSubscribesSeasonWhenNavigationHandlerIsProvided() throws {

@@ -38,7 +38,7 @@ struct MediaDetailView: View {
   @State private var lastFocusedButton: ButtonField?
 
   private var canSubscribeMedia: Bool {
-    apiService.canAccess(.subscribe)
+    apiService.canAccess(.subscribe) && !viewModel.detail.isCollection
   }
 
   private var canSearchResources: Bool {

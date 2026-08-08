@@ -527,18 +527,16 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let pinnedMedia = MediaInfo(
       tmdb_id: 661_001,
       title: "当前详情页",
-      type: "电影",
-      collection_id: 1
+      type: "电影"
     )
     let posterWallMedia = MediaInfo(
       tmdb_id: 661_002,
       title: "海报墙缓存",
-      type: "电影",
-      collection_id: 2
+      type: "电影"
     )
 
-    _ = preloader.preload(for: pinnedMedia)
-    _ = preloader.preload(for: posterWallMedia)
+    preloader.preload(for: pinnedMedia).cancel()
+    preloader.preload(for: posterWallMedia).cancel()
     preloader.pin(key: pinnedMedia.id)
 
     NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)

@@ -27,9 +27,10 @@ final class PermissionVisibleEntryTests: XCTestCase {
     let source = try permissionBehaviorSource("MoviePilot-TV/Views/Components/MediaContextMenu.swift")
 
     XCTAssertTrue(
-      source.contains("if canSubscribeMedia, let share = item.subscribeShare"),
-      "长按菜单“复用订阅”必须在 subscribe 权限门之后。"
+      source.contains("if canSubscribeMedia, !item.isCollection, let share = item.subscribeShare"),
+      "长按菜单“复用订阅”必须同时在 subscribe 权限和合集门之后。"
     )
+    XCTAssertTrue(source.contains("if !item.isCollection {"), "合集不应显示订阅或搜索入口。")
     XCTAssertTrue(
       source.contains("if canSubscribeMedia {\n        Button"),
       "长按菜单“订阅/分季订阅”必须在 subscribe 权限门之后。"
@@ -58,6 +59,10 @@ final class PermissionVisibleEntryTests: XCTestCase {
     XCTAssertTrue(
       source.contains("if canSubscribeMedia {"),
       "详情页 Header 的订阅/分季订阅按钮必须在 subscribe 权限门之后。"
+    )
+    XCTAssertTrue(
+      source.contains("apiService.canAccess(.subscribe) && !viewModel.detail.isCollection"),
+      "合集详情不应显示订阅入口。"
     )
     XCTAssertTrue(
       source.contains("if canSearchResources {"),
@@ -136,6 +141,47 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
       handler.handleSubscribe(MediaInfo(tmdb_id: 902, title: "可分季订阅剧集", type: "电视剧"))
 
       XCTAssertEqual(handler.tvSubscribeRequest?.mediaInfo.title, "可分季订阅剧集")
+    }
+  }
+
+  func testSubscriptionHandlerDirectlySubscribesUnknownAndRejectsCollection() async throws {
+    try await withPermissionBehaviorBackend { service in
+      configurePermissionBehaviorUser(service, granted: [.subscribe])
+
+      let unknownHandler = SubscriptionHandler()
+      unknownHandler.handleSubscribe(
+        MediaInfo(tmdb_id: 903, title: "可直接订阅的未知类型", type: "未知")
+      )
+      try await permissionBehaviorWaitUntil("unknown subscribe sheet opens") {
+        unknownHandler.sheetSubscribe != nil
+      }
+
+      XCTAssertEqual(unknownHandler.sheetSubscribe?.type, "未知")
+      XCTAssertNil(unknownHandler.tvSubscribeRequest)
+      let unknownLookupCount = await PermissionBehaviorURLProtocol.stub.requestCount(
+        method: "GET",
+        path: "/api/v1/subscribe/media/tmdb:903"
+      )
+      XCTAssertEqual(unknownLookupCount, 1)
+
+      let collectionHandler = SubscriptionHandler()
+      collectionHandler.handleSubscribe(
+        MediaInfo(
+          tmdb_id: 904,
+          title: "不可订阅的合集",
+          type: "系列",
+          collection_id: 90
+        )
+      )
+      try await Task.sleep(nanoseconds: 100_000_000)
+
+      XCTAssertNil(collectionHandler.sheetSubscribe)
+      XCTAssertNil(collectionHandler.tvSubscribeRequest)
+      let collectionLookupCount = await PermissionBehaviorURLProtocol.stub.requestCount(
+        method: "GET",
+        path: "/api/v1/subscribe/media/tmdb:904"
+      )
+      XCTAssertEqual(collectionLookupCount, 0)
     }
   }
 

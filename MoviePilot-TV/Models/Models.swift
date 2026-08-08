@@ -1197,9 +1197,9 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   }
 
   /// 判断媒体是否可以直接订阅，无需选择季。
-  /// v2.14.0 起 Web 前端将所有电视剧统一放入分季订阅流程。
+  /// Web 只将明确的电视剧放入分季流程，合集不提供订阅入口。
   var canDirectlySubscribe: Bool {
-    type == "电影"
+    !isCollection && type != "电视剧"
   }
 
   static func == (lhs: MediaInfo, rhs: MediaInfo) -> Bool {

@@ -19,6 +19,7 @@ class SubscriptionHandler: ObservableObject {
 
   func handleSubscribe(_ item: MediaInfo) {
     guard apiService.canAccess(.subscribe) else { return }
+    guard !item.isCollection else { return }
 
     if item.canDirectlySubscribe {
       guard !isCheckingSubscription, !isUnsubscribing else { return }
@@ -29,7 +30,7 @@ class SubscriptionHandler: ObservableObject {
           if let subscription = try await subscriptionLookup(for: item) {
             await unsubscribe(item, mediaId: subscription.mediaId)
           } else {
-            // For movies or direct-subscribable TV, show edit sheet
+            // For directly subscribable non-TV media, show edit sheet
             self.sheetIsNewSubscription = true
             self.sheetSubscribe = mediaInfoToSubscribeRequest(item)
           }

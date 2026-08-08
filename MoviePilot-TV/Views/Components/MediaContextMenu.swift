@@ -18,7 +18,7 @@ struct MediaContextMenuItems: View {
   }
 
   var body: some View {
-    if canSubscribeMedia, let share = item.subscribeShare {
+    if canSubscribeMedia, !item.isCollection, let share = item.subscribeShare {
       // 订阅分享的专属菜单
       Button {
         subscriptionHandler.forkSheetRequest = share
@@ -35,7 +35,7 @@ struct MediaContextMenuItems: View {
       Label("详情", systemImage: "info.circle")
     }
 
-    if item.collection_id == nil {
+    if !item.isCollection {
       // TMDB 详情页：复用 MediaActionHandler 逻辑，点击时实时获取/识别 TMDB ID
       // 不依赖预加载状态，按钮永远可点，避免菜单状态不刷新的问题
       if item.canJumpToTMDB {
