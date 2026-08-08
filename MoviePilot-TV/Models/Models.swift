@@ -2020,16 +2020,37 @@ struct Subscribe: Codable, Identifiable, Hashable {
   }
 
   func navigationMediaInfo() -> MediaInfo {
-    let fallbackMediaId = MediaIdentifier.mediaIdComponents(mediaid)
+    let tmdbId = MediaIdentifier.validNumericIdentifier(tmdbid)
+    let doubanId = MediaIdentifier.normalizedString(doubanid)
+    let bangumiId = MediaIdentifier.validNumericIdentifier(bangumiid)
+    let anilistId = MediaIdentifier.validNumericIdentifier(anilistid)
+    let canonicalSource = MediaIdentifier.normalizeSource(media_source).flatMap {
+      $0 == "0" ? nil : $0
+    }
+    let canonicalMediaId = MediaIdentifier.normalizedString(media_id).flatMap { id -> String? in
+      guard Int(id).map({ $0 > 0 }) ?? true else { return nil }
+      return id
+    }
+    let hasCanonicalIdentity = canonicalSource != nil && canonicalMediaId != nil
+    let resolvedIdentity = MediaIdentifier.resolve(
+      source: hasCanonicalIdentity ? canonicalSource : nil,
+      mediaId: hasCanonicalIdentity ? canonicalMediaId : nil,
+      tmdbId: tmdbId,
+      doubanId: doubanId,
+      bangumiId: bangumiId,
+      anilistId: anilistId,
+      legacyMediaId: mediaid
+    )
     return MediaInfo(
-      tmdb_id: MediaIdentifier.validNumericIdentifier(tmdbid),
-      douban_id: MediaIdentifier.normalizedString(doubanid),
-      bangumi_id: MediaIdentifier.validNumericIdentifier(bangumiid),
+      tmdb_id: tmdbId,
+      douban_id: doubanId,
+      bangumi_id: bangumiId,
+      anilist_id: anilistId,
       imdb_id: nil,
       tvdb_id: nil,
-      source: nil,
-      mediaid_prefix: fallbackMediaId?.prefix,
-      media_id: fallbackMediaId?.id,
+      source: resolvedIdentity?.source,
+      mediaid_prefix: nil,
+      media_id: resolvedIdentity?.mediaId,
       title: name,
       original_title: nil,
       original_name: nil,
@@ -2533,6 +2554,12 @@ struct SubscribeShare: Codable, Identifiable, Hashable {
   let doubanid: String?
   // Bangumi ID
   let bangumiid: Int?
+  // AniList ID
+  let anilistid: Int?
+  // 统一媒体来源
+  let media_source: String?
+  // 来源原生 ID
+  let media_id: String?
   // 季号
   let season: Int?
   // 海报
@@ -2575,7 +2602,8 @@ struct SubscribeShare: Codable, Identifiable, Hashable {
     case raw_id = "id"
     case subscribe_id, share_title, share_comment, share_user, share_uid, name, year, type, keyword,
       tmdbid,
-      doubanid, bangumiid, season, poster, backdrop, vote, description, filter, include, exclude,
+      doubanid, bangumiid, anilistid, media_source, media_id, season, poster, backdrop, vote,
+      description, filter, include, exclude,
       quality,
       resolution, effect, total_episode, date, custom_words, media_category, count,
       episode_group
@@ -2596,6 +2624,9 @@ struct SubscribeShare: Codable, Identifiable, Hashable {
     tmdbid = try container.decodeIfPresent(Int.self, forKey: .tmdbid)
     doubanid = try container.decodeIfPresent(String.self, forKey: .doubanid)
     bangumiid = try container.decodeIfPresent(Int.self, forKey: .bangumiid)
+    anilistid = try container.decodeIfPresent(Int.self, forKey: .anilistid)
+    media_source = try container.decodeIfPresent(String.self, forKey: .media_source)
+    media_id = try container.decodeIfPresent(String.self, forKey: .media_id)
     season = try container.decodeIfPresent(Int.self, forKey: .season)
     poster = try container.decodeIfPresent(String.self, forKey: .poster)
     backdrop = try container.decodeIfPresent(String.self, forKey: .backdrop)
@@ -2641,9 +2672,22 @@ struct SubscribeShare: Codable, Identifiable, Hashable {
       combinedOverview += "👤 @\(user)"
     }
 
+    let canonicalSource = MediaIdentifier.normalizeSource(media_source).flatMap {
+      $0 == "0" ? nil : $0
+    }
+    let canonicalMediaId = MediaIdentifier.normalizedString(media_id).flatMap { id -> String? in
+      guard Int(id).map({ $0 > 0 }) ?? true else { return nil }
+      return id
+    }
+    let hasCanonicalIdentity = canonicalSource != nil && canonicalMediaId != nil
+
     return MediaInfo(
       tmdb_id: tmdbid,
       douban_id: doubanid,
+      bangumi_id: bangumiid,
+      anilist_id: anilistid,
+      source: hasCanonicalIdentity ? canonicalSource : nil,
+      media_id: hasCanonicalIdentity ? canonicalMediaId : nil,
       title: share_title ?? name,
       type: type,
       year: year,

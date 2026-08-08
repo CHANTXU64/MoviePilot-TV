@@ -276,6 +276,69 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     XCTAssertNil(query["type"])
   }
 
+  func testSubscribeNavigationMediaInfoUsesCanonicalMediaDetailRequestID() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
+    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.testingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURL = "https://compatibility-endpoint-tests.local"
+
+    let media = Subscribe(
+      name: "Canonical",
+      type: "电影",
+      tmdbid: 42,
+      anilistid: 154_587,
+      media_source: "custom",
+      media_id: "native-9",
+      mediaid: "legacy:7"
+    ).navigationMediaInfo()
+
+    _ = try await service.fetchMediaDetail(media: media)
+
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    XCTAssertEqual(paths.filter { $0.hasPrefix("/api/v1/media/") }, [
+      "/api/v1/media/custom:native-9"
+    ])
+  }
+
+  func testSubscriptionShareGETThenForkPreservesCurrentIdentitySchema() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
+    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.testingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURL = "https://compatibility-endpoint-tests.local"
+
+    let shares = try await service.fetchSubscriptionShares(path: "/subscribe/shares")
+    let share = try XCTUnwrap(shares.first)
+    let stableId = share.id
+
+    XCTAssertEqual(share.raw_id, 88)
+    XCTAssertEqual(share.bangumiid, 404_804)
+    XCTAssertEqual(share.anilistid, 154_587)
+    XCTAssertEqual(share.media_source, "anilist")
+    XCTAssertEqual(share.media_id, "154587")
+    XCTAssertEqual(share.toMediaInfo().apiMediaId, "anilist:154587")
+
+    let subscriptionId = try await service.forkSubscription(share: share)
+
+    XCTAssertEqual(subscriptionId, 901)
+    XCTAssertEqual(share.id, stableId)
+    let body = try Self.jsonObject(
+      await CompatibilityEndpointURLProtocol.stub.requestBody(suffix: "/subscribe/fork")
+    )
+    XCTAssertEqual(body["id"] as? Int, 88)
+    XCTAssertEqual(body["bangumiid"] as? Int, 404_804)
+    XCTAssertEqual(body["anilistid"] as? Int, 154_587)
+    XCTAssertEqual(body["media_source"] as? String, "anilist")
+    XCTAssertEqual(body["media_id"] as? String, "154587")
+  }
+
   func testManualTransferPreviewUsesBackgroundFalseAndPreservesAniListIdentity() async throws {
     XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
     defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
@@ -808,6 +871,14 @@ private actor CompatibilityEndpointURLProtocolStub {
       data =
         #"[{"source":"anilist","media_id":"154587","tmdb_id":42,"anilist_id":154587,"title":"葬送的芙莉莲","type":"电视剧","year":"2023"}]"#
         .data(using: .utf8)!
+    } else if url.path == "/api/v1/subscribe/shares" && request.httpMethod == "GET" {
+      statusCode = 200
+      data =
+        #"[{"id":88,"share_title":"官方分享","type":"电视剧","tmdbid":42,"bangumiid":404804,"anilistid":154587,"media_source":"anilist","media_id":"154587"}]"#
+        .data(using: .utf8)!
+    } else if url.path == "/api/v1/subscribe/fork" && request.httpMethod == "POST" {
+      statusCode = 200
+      data = #"{"success":true,"data":{"id":901}}"#.data(using: .utf8)!
     } else if url.path == "/api/v1/transfer/manual" {
       statusCode = 200
       if manualTransferResponses.isEmpty {
