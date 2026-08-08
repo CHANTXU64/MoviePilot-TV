@@ -1252,11 +1252,18 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
           settings.BACKEND_VERSION?.nilIfBlank,
           "Global settings should expose BACKEND_VERSION for \(config.activeAccountDiagnostic)."
         )
-        XCTAssertEqual(
-          AppVersionInfo.supportsMoviePilotVersion(backendVersion),
-          true,
-          "Backend \(backendVersion) is older than \(AppVersionInfo.compatibleMoviePilotVersion) for \(config.activeAccountDiagnostic)."
-        )
+        switch AppVersionInfo.moviePilotVersionCompatibility(backendVersion) {
+        case .supported:
+          break
+        case .unsupported:
+          XCTFail(
+            "Backend \(backendVersion) is older than \(AppVersionInfo.compatibleMoviePilotVersion) for \(config.activeAccountDiagnostic)."
+          )
+        case .unparseable:
+          XCTFail(
+            "Backend version \(backendVersion) cannot be parsed for \(config.activeAccountDiagnostic)."
+          )
+        }
       }
       await runBackendCompatibilityStep(
         "settings page backend version",

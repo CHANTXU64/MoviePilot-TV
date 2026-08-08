@@ -190,16 +190,11 @@ class ContentViewModel: ObservableObject {
     )
   }
 
-  private static func backendVersionWarning(for backendVersion: String?) -> BackendVersionWarning? {
-    switch AppVersionInfo.supportsMoviePilotVersion(backendVersion) {
-    case .some(true):
-      return nil
-    case .some(false), .none:
-      return BackendVersionWarning(
-        backendVersion: backendVersion,
-        requiredVersion: AppVersionInfo.compatibleMoviePilotVersion
-      )
-    }
+  static func backendVersionWarning(for backendVersion: String?) -> BackendVersionWarning? {
+    BackendVersionWarning(
+      backendVersion: backendVersion,
+      requiredVersion: AppVersionInfo.compatibleMoviePilotVersion
+    )
   }
 }
 

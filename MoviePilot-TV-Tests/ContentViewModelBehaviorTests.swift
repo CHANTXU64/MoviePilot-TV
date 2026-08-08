@@ -185,6 +185,14 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     )
   }
 
+  func testMalformedBackendVersionBuildsUnconfirmedWarning() {
+    let warning = ContentViewModel.backendVersionWarning(for: "v2.beta.14")
+
+    XCTAssertEqual(warning?.title, "无法确认 MoviePilot 后端版本")
+    XCTAssertTrue(warning?.message.contains("无法解析该版本号") == true)
+    XCTAssertFalse(warning?.message.contains("低版本后端") == true)
+  }
+
   private func token(
     _ value: String,
     userName: String,
