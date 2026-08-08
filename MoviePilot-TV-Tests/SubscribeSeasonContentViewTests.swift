@@ -218,16 +218,112 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     service.baseURL = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
+    let notifications = SubscribeSeasonNotificationCounter()
+    let observer = NotificationCenter.default.addObserver(
+      forName: .subscriptionDidUpdate,
+      object: nil,
+      queue: nil
+    ) { _ in
+      notifications.increment()
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
     let cachedSubscriptions = try await service.fetchSubscriptions(forceRefresh: true)
     XCTAssertEqual(cachedSubscriptions.map(\.id), [901])
 
     let searchSuccess = try await service.searchSubscription(id: 901)
     XCTAssertTrue(searchSuccess)
+    XCTAssertEqual(notifications.count(), 0)
     let subscriptions = try await service.fetchSubscriptions()
 
     XCTAssertEqual(subscriptions.map(\.id), [902])
     let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
     XCTAssertEqual(subscribeRequestCount, 2)
+  }
+
+  func testHomeSearchRefreshesItsListAndPublishesOneSubscriptionUpdate() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    let refreshedSubscriptions = [
+      Subscribe(id: 902, name: "搜索后订阅", type: "电视剧", season: 2, tmdbid: 817_001)
+    ]
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions(refreshedSubscriptions)
+    try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions(refreshedSubscriptions)
+    service.baseURL = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+
+    let notifications = SubscribeSeasonNotificationCounter()
+    let observer = NotificationCenter.default.addObserver(
+      forName: .subscriptionDidUpdate,
+      object: nil,
+      queue: nil
+    ) { _ in
+      notifications.increment()
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
+    let viewModel = HomeViewModel(apiService: service)
+    let success = try await viewModel.searchSubscribe(
+      subscribe: Subscribe(id: 901, name: "搜索前订阅", type: "电视剧")
+    )
+
+    XCTAssertTrue(success)
+    XCTAssertEqual(viewModel.tvSubscriptions.map(\.id), [902])
+    XCTAssertEqual(notifications.count(), 1)
+    let searchRequestCount = await SubscriptionSnapshotURLProtocol.stub.requestCount(
+      path: "/api/v1/subscribe/search/901")
+    XCTAssertEqual(searchRequestCount, 1)
+    await SubscriptionSnapshotURLProtocol.stub.waitForSubscribeRequestCount(2)
+    let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(subscribeRequestCount, 2)
+  }
+
+  func testHomeStatusAndResetEachPublishOneSubscriptionUpdate() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    let subscriptions = [
+      Subscribe(id: 903, name: "状态订阅", type: "电视剧", season: 1, state: "R", tmdbid: 817_002)
+    ]
+    try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions(subscriptions)
+    service.baseURL = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+
+    let notifications = SubscribeSeasonNotificationCounter()
+    let observer = NotificationCenter.default.addObserver(
+      forName: .subscriptionDidUpdate,
+      object: nil,
+      queue: nil
+    ) { _ in
+      notifications.increment()
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
+    let viewModel = HomeViewModel(apiService: service)
+    let statusResult = try await viewModel.toggleSubscribeStatus(subscribe: subscriptions[0])
+    XCTAssertTrue(statusResult.success)
+    XCTAssertEqual(notifications.count(), 1)
+    await SubscriptionSnapshotURLProtocol.stub.waitForSubscribeRequestCount(2)
+    let statusRefreshCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(statusRefreshCount, 2)
+
+    let resetResult = try await viewModel.resetSubscribe(subscribe: subscriptions[0])
+    XCTAssertTrue(resetResult.success)
+    XCTAssertEqual(notifications.count(), 2)
+    await SubscriptionSnapshotURLProtocol.stub.waitForSubscribeRequestCount(4)
+    let resetRefreshCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(resetRefreshCount, 4)
   }
 
   func testFetchSubscriptionsRetriesWhenGenerationChangesAfterSnapshotCacheStore() async throws {
@@ -1048,6 +1144,56 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertTrue(viewModel.subscribedSeasons.contains(3))
   }
 
+  func testSingleSeasonDeletePublishesBeforeFollowUpRefreshFails() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscriptionSnapshotURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    let preloader = MediaPreloader.shared
+    preloader.clearAll()
+    defer {
+      preloader.clearAll()
+      snapshot.restore(to: service)
+    }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
+      Subscribe(id: 62, name: "航海王", type: "电视剧", season: 3, tmdbid: 12_345)
+    ])
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueServerError()
+    await SubscriptionSnapshotURLProtocol.stub.setMediaDeleteResponse(
+      #"{"success":true}"#
+    )
+    service.baseURL = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+
+    let notifications = SubscribeSeasonNotificationCounter()
+    let observer = NotificationCenter.default.addObserver(
+      forName: .subscriptionDidUpdate,
+      object: nil,
+      queue: nil
+    ) { _ in
+      notifications.increment()
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
+    let viewModel = SubscribeSeasonViewModel(
+      mediaInfo: MediaInfo(tmdb_id: 12_345, title: "航海王", type: "电视剧")
+    )
+    viewModel.seasonSubscriptions = [
+      3: SeasonSubscriptionSummary(id: 62, season: 3, episodeGroup: nil)
+    ]
+    viewModel.subscribedSeasons = [3]
+
+    await viewModel.unsubscribeSeason(3)
+
+    XCTAssertEqual(notifications.count(), 1)
+    XCTAssertNotNil(viewModel.errorMessage)
+    let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(subscribeRequestCount, 2)
+  }
+
   func testHomeSubscriptionUnsubscribeConfirmationUsesSubscribeEpisodeGroup() {
     let subscribe = Subscribe(
       id: 81,
@@ -1546,6 +1692,23 @@ private struct SubscriptionSnapshotStubResponse: Sendable {
   }
 }
 
+private final class SubscribeSeasonNotificationCounter: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value = 0
+
+  func count() -> Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return value
+  }
+
+  func increment() {
+    lock.lock()
+    defer { lock.unlock() }
+    value += 1
+  }
+}
+
 private actor SubscriptionSnapshotAsyncGate {
   private var isOpen = false
   private var waiterCount = 0
@@ -1634,6 +1797,18 @@ private actor SubscriptionSnapshotURLProtocolStub {
     requestCounts["/api/v1/subscribe", default: 0] + requestCounts["/api/v1/subscribe/", default: 0]
   }
 
+  func waitForSubscribeRequestCount(_ expectedCount: Int) async {
+    for _ in 0..<2_000 {
+      if subscribeRequestCount() >= expectedCount { return }
+      if Task.isCancelled { return }
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+  }
+
+  func requestCount(path: String) -> Int {
+    requestCounts[path, default: 0]
+  }
+
   func response(for request: URLRequest) async throws -> SubscriptionSnapshotStubResponse {
     let path = request.url?.path ?? ""
     requestCounts[path, default: 0] += 1
@@ -1649,6 +1824,14 @@ private actor SubscriptionSnapshotURLProtocolStub {
     }
 
     if request.httpMethod == "GET", path.hasPrefix("/api/v1/subscribe/search/") {
+      return try jsonResponse(#"{"success":true}"#)
+    }
+
+    if request.httpMethod == "PUT", path.hasPrefix("/api/v1/subscribe/status/") {
+      return try jsonResponse(#"{"success":true}"#)
+    }
+
+    if request.httpMethod == "GET", path.hasPrefix("/api/v1/subscribe/reset/") {
       return try jsonResponse(#"{"success":true}"#)
     }
 

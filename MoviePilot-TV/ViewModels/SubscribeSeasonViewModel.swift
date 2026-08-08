@@ -325,10 +325,10 @@ class SubscribeSeasonViewModel: ObservableObject {
         season: seasonNumber
       )
       if result.success {
+        // 删除已经落到远端；后续列表刷新失败也不能吞掉订阅变更通知。
+        NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
         try await refreshSubscriptionSummaries(forceRefresh: true)
         showUnsubscribeConfirm = nil
-        // 通知首页刷新订阅列表
-        NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
       } else {
         errorMessage =
           MediaIdentifier.normalizedString(result.message)

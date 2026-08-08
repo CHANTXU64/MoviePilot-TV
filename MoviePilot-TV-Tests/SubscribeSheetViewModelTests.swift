@@ -335,6 +335,81 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(searchRequestCount, 1)
   }
 
+  func testSavePublishesSubscriptionUpdateOnceAfterFollowUpSearchFinishes() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.suspend(path: "/api/v1/subscribe/search/780")
+    service.baseURL = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let notifications = SubscribeSheetNotificationCounter()
+    let observer = NotificationCenter.default.addObserver(
+      forName: .subscriptionDidUpdate,
+      object: nil,
+      queue: nil
+    ) { _ in
+      notifications.increment()
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(id: 780, name: "等待搜索完成", type: "电影", tmdbid: 123_459)
+    )
+    let saveTask = Task { await viewModel.save() }
+    try await waitUntil("follow-up search starts") {
+      await SubscribeSheetURLProtocol.stub.requestCount(
+        method: "GET", path: "/api/v1/subscribe/search/780") == 1
+    }
+
+    XCTAssertEqual(notifications.count(), 0)
+
+    await SubscribeSheetURLProtocol.stub.release(path: "/api/v1/subscribe/search/780")
+    let didSave = await saveTask.value
+    XCTAssertTrue(didSave)
+    XCTAssertEqual(notifications.count(), 1)
+  }
+
+  func testCancelNewSubscriptionPublishesOnlyAfterRollbackDeleteSucceeds() async throws {
+    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
+    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.shared
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    service.baseURL = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let notifications = SubscribeSheetNotificationCounter()
+    let observer = NotificationCenter.default.addObserver(
+      forName: .subscriptionDidUpdate,
+      object: nil,
+      queue: nil
+    ) { _ in
+      notifications.increment()
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(id: 781, name: "取消新订阅", type: "电影", tmdbid: 123_460),
+      isNewSubscription: true
+    )
+
+    await viewModel.cancel()
+
+    let deleteRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "DELETE", path: "/api/v1/subscribe/781")
+    XCTAssertEqual(deleteRequestCount, 1)
+    XCTAssertEqual(notifications.count(), 1)
+  }
+
   func testLoadDataSkipsFilterGroupsForStandardUserWithSubscribePermission() async throws {
     XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
     defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
@@ -719,6 +794,16 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     configureSubscriber(service)
     UserDefaults.standard.set(true, forKey: autoSearchKey)
 
+    let notifications = SubscribeSheetNotificationCounter()
+    let observer = NotificationCenter.default.addObserver(
+      forName: .subscriptionDidUpdate,
+      object: nil,
+      queue: nil
+    ) { _ in
+      notifications.increment()
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
     let viewModel = SubscribeSheetViewModel(
       subscribe: Subscribe(id: 787, name: "搜索失败", type: "电影", tmdbid: 123466),
       isNewSubscription: true
@@ -731,6 +816,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       viewModel.errorMessage,
       "订阅已保存，但没有开始搜索。你可以稍后手动搜索。"
     )
+    XCTAssertEqual(notifications.count(), 1)
 
     await viewModel.cancel()
 
@@ -809,6 +895,23 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       user_name: "subscribe-sheet-no-subscribe",
       avatar: nil
     )
+  }
+}
+
+private final class SubscribeSheetNotificationCounter: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value = 0
+
+  func count() -> Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return value
+  }
+
+  func increment() {
+    lock.lock()
+    defer { lock.unlock() }
+    value += 1
   }
 }
 
@@ -955,6 +1058,8 @@ private actor SubscribeSheetURLProtocolStub {
         data = #"{"value":[]}"#.data(using: .utf8)!
       case ("GET", "/api/v1/system/setting/UserFilterRuleGroups"):
         data = #"{"value":[{"name":"普通规则组"}]}"#.data(using: .utf8)!
+      case ("GET", "/api/v1/subscribe/"), ("GET", "/api/v1/subscribe"):
+        data = #"[]"#.data(using: .utf8)!
       case ("POST", "/api/v1/subscribe/"), ("POST", "/api/v1/subscribe"):
         data = #"{"success":true,"data":{"id":801}}"#.data(using: .utf8)!
       case ("GET", "/api/v1/subscribe/801"):

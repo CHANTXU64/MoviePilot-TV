@@ -75,7 +75,9 @@ class SubscriptionHandler: ObservableObject {
     guard apiService.canAccess(.subscribe) else { return nil }
 
     do {
-      return try await apiService.forkSubscription(share: share)
+      let subscriptionId = try await apiService.forkSubscription(share: share)
+      NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
+      return subscriptionId
     } catch {
       Logger.error("Failed to fork subscription: \(error)")
       forkErrorMessage = "暂时无法复用订阅，请稍后重试。"

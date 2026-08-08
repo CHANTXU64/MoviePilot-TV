@@ -200,6 +200,7 @@ class HomeViewModel: ObservableObject {
     let result = try await apiService.updateSubscriptionStatus(id: id, state: newState)
     if result.success {
       await refreshSubscriptions(forceRefresh: true)
+      NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
     }
     return result
   }
@@ -213,6 +214,7 @@ class HomeViewModel: ObservableObject {
     let result = try await apiService.resetSubscription(id: id)
     if result.success {
       await refreshSubscriptions(forceRefresh: true)
+      NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
     }
     return result
   }
@@ -221,7 +223,12 @@ class HomeViewModel: ObservableObject {
   func searchSubscribe(subscribe: Subscribe) async throws -> Bool {
     guard apiService.canAccess(.subscribe) else { return false }
     guard let id = subscribe.id else { return false }
-    return try await apiService.searchSubscription(id: id)
+    let success = try await apiService.searchSubscription(id: id)
+    if success {
+      await refreshSubscriptions(forceRefresh: true)
+      NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
+    }
+    return success
   }
 
   /// 删除订阅

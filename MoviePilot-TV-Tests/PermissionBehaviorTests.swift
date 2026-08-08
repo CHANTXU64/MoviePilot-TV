@@ -146,7 +146,19 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
       configurePermissionBehaviorUser(service, granted: [.subscribe])
 
       let handler = SubscriptionHandler()
+      let notifications = PermissionNotificationCounter()
+      let observer = NotificationCenter.default.addObserver(
+        forName: .subscriptionDidUpdate,
+        object: nil,
+        queue: nil
+      ) { _ in
+        notifications.increment()
+      }
+      defer { NotificationCenter.default.removeObserver(observer) }
+
       let forkedId = await handler.fork(share: try PermissionBehaviorFixtures.subscribeShare())
+      XCTAssertEqual(notifications.count(), 1)
+
       await handler.fetchSubscriptionAndShowEditor(subId: 7001)
 
       XCTAssertEqual(forkedId, 7001)
@@ -164,6 +176,7 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
       )
       XCTAssertEqual(forkRequestCount, 1)
       XCTAssertEqual(fetchRequestCount, 1)
+      XCTAssertEqual(notifications.count(), 1)
     }
   }
 
@@ -175,11 +188,22 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
       )
 
       let handler = SubscriptionHandler()
+      let notifications = PermissionNotificationCounter()
+      let observer = NotificationCenter.default.addObserver(
+        forName: .subscriptionDidUpdate,
+        object: nil,
+        queue: nil
+      ) { _ in
+        notifications.increment()
+      }
+      defer { NotificationCenter.default.removeObserver(observer) }
+
       let forkedId = await handler.fork(share: try PermissionBehaviorFixtures.subscribeShare())
 
       XCTAssertNil(forkedId)
       XCTAssertEqual(handler.forkErrorMessage, "暂时无法复用订阅，请稍后重试。")
       XCTAssertEqual(handler.notificationSerial, 0)
+      XCTAssertEqual(notifications.count(), 0)
     }
   }
 
@@ -522,6 +546,23 @@ private func permissionBehaviorPermissions(_ granted: Set<UserPermissionKey>) ->
       ($0.rawValue, granted.contains($0))
     }
   )
+}
+
+private final class PermissionNotificationCounter: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value = 0
+
+  func count() -> Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return value
+  }
+
+  func increment() {
+    lock.lock()
+    defer { lock.unlock() }
+    value += 1
+  }
 }
 
 @MainActor

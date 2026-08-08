@@ -198,12 +198,14 @@ class SubscribeSheetViewModel: ObservableObject {
       }
 
       isSaved = true
-      NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
     } catch {
       Logger.error("Failed to save subscription: \(error)")
       errorMessage = "暂时无法保存订阅，请稍后重试。"
       return false
     }
+
+    // 保存链后续还可能启用并触发搜索；在最终出口统一发布，避免中间步骤重复通知。
+    defer { NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil) }
 
     guard let id = subscribe.id else { return true }
 
@@ -244,7 +246,9 @@ class SubscribeSheetViewModel: ObservableObject {
     // 如果我们创建了一个新订阅但用户取消了，我们必须回滚（删除）它
     if isNewSubscription, let id = subscribe.id {
       do {
-        _ = try await apiService.deleteSubscription(id: id)
+        if try await apiService.deleteSubscription(id: id) {
+          NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
+        }
       } catch {
         Logger.error("Failed to roll back subscription \(id): \(error)")
       }
