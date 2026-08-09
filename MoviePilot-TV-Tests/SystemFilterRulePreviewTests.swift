@@ -2,7 +2,33 @@ import XCTest
 
 @testable import MoviePilot_TV
 
+@MainActor
 final class SystemFilterRulePreviewTests: XCTestCase {
+  func testCustomRuleResponseSilentlyDropsMalformedAndDuplicateRules() throws {
+    let response = try JSONDecoder().decode(
+      CustomFilterRulesResponse.self,
+      from: Data(
+        """
+        {
+          "value": [
+            { "id": "valid-1", "name": "规则一", "include": "2160p" },
+            { "id": "missing-name" },
+            { "id": 123, "name": "错误类型" },
+            { "id": "valid-1", "name": "重复 ID" },
+            { "id": "valid-2", "name": "规则一" },
+            { "id": "valid-2", "name": "规则二" },
+            { "id": "   ", "name": "空 ID" },
+            { "id": "valid-3", "name": "规则三" }
+          ]
+        }
+        """.utf8
+      )
+    )
+
+    XCTAssertEqual(response.value.map(\.id), ["valid-1", "valid-2", "valid-3"])
+    XCTAssertEqual(response.value.map(\.name), ["规则一", "规则二", "规则三"])
+  }
+
   func testSummaryIncludesFilterRuleDetailsForPreview() {
     let rule = CustomRule(
       id: "rule-1",

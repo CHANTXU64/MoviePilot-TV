@@ -2577,6 +2577,33 @@ struct TransferHistory: Codable, Identifiable {
   let src_fileitem: FileItem?
   // 日期
   let date: String?
+
+  enum CodingKeys: String, CodingKey {
+    case id, title, type, seasons, episodes, category, src, dest
+    case src_storage, dest_storage, mode, status, errmsg, src_fileitem, date
+  }
+}
+
+extension TransferHistory {
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(Int.self, forKey: .id)
+    title = try container.decodeIfPresent(String.self, forKey: .title)
+    type = try container.decodeIfPresent(String.self, forKey: .type)
+    seasons = try container.decodeIfPresent(String.self, forKey: .seasons)
+    episodes = try container.decodeIfPresent(String.self, forKey: .episodes)
+    category = try container.decodeIfPresent(String.self, forKey: .category)
+    src = try container.decodeIfPresent(String.self, forKey: .src)
+    dest = try container.decodeIfPresent(String.self, forKey: .dest)
+    src_storage = try container.decodeIfPresent(String.self, forKey: .src_storage)
+    dest_storage = try container.decodeIfPresent(String.self, forKey: .dest_storage)
+    mode = try container.decodeIfPresent(String.self, forKey: .mode)
+    status = try container.decode(FlexibleBool.self, forKey: .status)
+    errmsg = try container.decodeIfPresent(String.self, forKey: .errmsg)
+    // Web 会保留稀疏历史行；嵌套文件项不可用时只降级该字段，不能拖垮整页。
+    src_fileitem = try? container.decodeIfPresent(FileItem.self, forKey: .src_fileitem)
+    date = try container.decodeIfPresent(String.self, forKey: .date)
+  }
 }
 
 struct FileItem: Codable {
@@ -3005,6 +3032,37 @@ struct CustomRule: Codable, Identifiable, Hashable {
 }
 
 /// 对应 API 的返回格式：{ "data": { "value": [...] } }
+private struct LossyCustomRule: Decodable {
+  let value: CustomRule?
+
+  init(from decoder: Decoder) throws {
+    value = try? CustomRule(from: decoder)
+  }
+}
+
 struct CustomFilterRulesResponse: Codable {
   let value: [CustomRule]
+
+  enum CodingKeys: String, CodingKey {
+    case value
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let decodedRules = try container.decodeIfPresent([LossyCustomRule].self, forKey: .value) ?? []
+    var ids = Set<String>()
+    var names = Set<String>()
+
+    // 官方 Web 保存时拒绝空或重复身份；读取旧配置时静默忽略坏项。
+    value = decodedRules.compactMap(\.value).filter { rule in
+      let id = rule.id.trimmingCharacters(in: .whitespacesAndNewlines)
+      let name = rule.name.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !id.isEmpty, !name.isEmpty, !ids.contains(id), !names.contains(name) else {
+        return false
+      }
+      ids.insert(id)
+      names.insert(name)
+      return true
+    }
+  }
 }

@@ -51,6 +51,56 @@ private func withTransferHistoryTimeout<T: Sendable>(
 
 @MainActor
 final class TransferHistoryViewModelTests: XCTestCase {
+  func testSparseFileItemDoesNotRejectTransferHistoryPage() throws {
+    let response = try JSONDecoder().decode(
+      TransferHistoryResponse.self,
+      from: Data(
+        """
+        {
+          "list": [
+            {
+              "id": 1,
+              "title": "完整记录",
+              "status": true,
+              "src_fileitem": {
+                "name": "movie.mkv",
+                "path": "/downloads/movie.mkv",
+                "type": "file",
+                "size": 1024
+              }
+            },
+            {
+              "id": 2,
+              "title": "稀疏记录",
+              "status": true,
+              "src_fileitem": { "path": "/downloads/sparse.mkv" }
+            },
+            {
+              "id": 3,
+              "title": "空文件项",
+              "status": false,
+              "src_fileitem": null
+            },
+            {
+              "id": 4,
+              "title": "空对象文件项",
+              "status": true,
+              "src_fileitem": {}
+            }
+          ],
+          "total": 4
+        }
+        """.utf8
+      )
+    )
+
+    XCTAssertEqual(response.list.map(\.id), [1, 2, 3, 4])
+    XCTAssertEqual(response.list[0].src_fileitem?.name, "movie.mkv")
+    XCTAssertNil(response.list[1].src_fileitem)
+    XCTAssertNil(response.list[2].src_fileitem)
+    XCTAssertNil(response.list[3].src_fileitem)
+  }
+
   func testPendingRefreshDoesNotPublishAfterPermissionIsRestricted() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
