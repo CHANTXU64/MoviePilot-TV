@@ -5,6 +5,22 @@ import XCTest
 
 @MainActor
 final class HomeViewModelMediaServerLinkTests: XCTestCase {
+  func testLatestBatchKeepsItemsWithMissingOrNullTitles() throws {
+    let data = Data(
+      """
+      [
+        {"id":"normal", "title":"正常标题"},
+        {"id":"null", "title":null},
+        {"id":"missing"}
+      ]
+      """.utf8
+    )
+
+    let items = try JSONDecoder().decode([MediaServerPlayItem].self, from: data)
+
+    XCTAssertEqual(items.map(\.title), ["正常标题", "", ""])
+  }
+
   func testEmbyDeepLinkUsesStructuredIdsWhenLinkIsInvalid() throws {
     let item = try decodePlayItem(
       """

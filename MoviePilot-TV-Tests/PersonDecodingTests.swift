@@ -160,6 +160,42 @@ final class PersonDecodingTests: XCTestCase {
     )
   }
 
+  func testMixedAvatarMetadataDoesNotDiscardPeople() throws {
+    let people = try JSONDecoder().decode(
+      [Person].self,
+      from: Data(
+        """
+        [
+          {
+            "source": "douban",
+            "id": 1,
+            "name": "有后备头像",
+            "avatar": {
+              "normal": "  ",
+              "large": "https://douban.local/large.jpg",
+              "width": 100,
+              "height": null
+            }
+          },
+          {
+            "source": "douban",
+            "id": 2,
+            "name": "无可用头像",
+            "avatar": {
+              "width": 100,
+              "height": null
+            }
+          }
+        ]
+        """.utf8
+      )
+    )
+
+    XCTAssertEqual(people.count, 2)
+    XCTAssertEqual(people[0].avatar?.urlValue, "https://douban.local/large.jpg")
+    XCTAssertNil(people[1].avatar)
+  }
+
   func testPersonImageSelectionMatchesWebForEverySourceAndFallback() throws {
     let service = APIService.shared
     let snapshot = PersonDecodingServiceSnapshot.capture(service: service)

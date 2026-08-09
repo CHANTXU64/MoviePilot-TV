@@ -1412,6 +1412,51 @@ struct TorrentInfo: Codable {
   let volume_factor: String?
 }
 
+/// 后端资源结果允许部分字段缺失或为 null；只在输入边界为本地非可空字段提供中性默认值。
+extension TorrentInfo {
+  private enum CodingKeys: String, CodingKey {
+    case site, site_name, site_cookie, site_ua, site_proxy, site_order, site_downloader
+    case title, description, enclosure, page_url, size, seeders, peers, pubdate
+    case uploadvolumefactor, downloadvolumefactor, pri_order, labels, volume_factor
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    site = try container.decodeIfPresent(Int.self, forKey: .site)
+    site_name = try container.decodeIfPresent(String.self, forKey: .site_name)
+    site_cookie = try container.decodeIfPresent(String.self, forKey: .site_cookie)
+    site_ua = try container.decodeIfPresent(String.self, forKey: .site_ua)
+    site_proxy = try container.decodeIfPresent(Bool.self, forKey: .site_proxy)
+    site_order = try container.decodeIfPresent(Int.self, forKey: .site_order)
+    site_downloader = try container.decodeIfPresent(String.self, forKey: .site_downloader)
+    title = try container.decodeIfPresent(String.self, forKey: .title)
+    description = try container.decodeIfPresent(String.self, forKey: .description)
+    enclosure = try container.decodeIfPresent(String.self, forKey: .enclosure)
+    page_url = try container.decodeIfPresent(String.self, forKey: .page_url)
+    // 后端大小字段是浮点数；仅保留能精确表示为字节整数的值，异常或超范围时回落为 0。
+    if let decodedSize = try? container.decode(Int64.self, forKey: .size) {
+      size = decodedSize
+    } else if let decodedSize = try? container.decode(Double.self, forKey: .size),
+      let exactSize = Int64(exactly: decodedSize)
+    {
+      size = exactSize
+    } else {
+      size = 0
+    }
+    seeders = try container.decodeIfPresent(Int.self, forKey: .seeders)
+    peers = try container.decodeIfPresent(Int.self, forKey: .peers)
+    pubdate = try container.decodeIfPresent(String.self, forKey: .pubdate)
+    // 缺失或异常的促销因子按无促销处理。
+    uploadvolumefactor =
+      (try? container.decodeIfPresent(Double.self, forKey: .uploadvolumefactor)) ?? 1
+    downloadvolumefactor =
+      (try? container.decodeIfPresent(Double.self, forKey: .downloadvolumefactor)) ?? 1
+    pri_order = try container.decodeIfPresent(Int.self, forKey: .pri_order)
+    labels = try container.decodeIfPresent([String].self, forKey: .labels)
+    volume_factor = try container.decodeIfPresent(String.self, forKey: .volume_factor)
+  }
+}
+
 /// 媒体元数据解析结果
 struct MetaInfo: Codable {
   /// 原标题（未经识别词转换）
@@ -1438,6 +1483,31 @@ struct MetaInfo: Codable {
   let total_season: Int?
   /// 总集数
   let total_episode: Int?
+}
+
+/// 保持现有调用方的非可空文本合同；缺失或异常文本在输入边界归一为空串。
+extension MetaInfo {
+  private enum CodingKeys: String, CodingKey {
+    case title, year, resource_team, video_encode, resource_pix, name, season_episode
+    case subtitle, web_source, edition, total_season, total_episode
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    title = try container.decodeIfPresent(String.self, forKey: .title)
+    year = try container.decodeIfPresent(String.self, forKey: .year)
+    resource_team = try container.decodeIfPresent(String.self, forKey: .resource_team)
+    video_encode = try container.decodeIfPresent(String.self, forKey: .video_encode)
+    resource_pix = try container.decodeIfPresent(String.self, forKey: .resource_pix)
+    name = (try? container.decodeIfPresent(String.self, forKey: .name)) ?? ""
+    season_episode =
+      (try? container.decodeIfPresent(String.self, forKey: .season_episode)) ?? ""
+    subtitle = try container.decodeIfPresent(String.self, forKey: .subtitle)
+    web_source = try container.decodeIfPresent(String.self, forKey: .web_source)
+    edition = try container.decodeIfPresent(String.self, forKey: .edition)
+    total_season = try container.decodeIfPresent(Int.self, forKey: .total_season)
+    total_episode = try container.decodeIfPresent(Int.self, forKey: .total_episode)
+  }
 }
 
 /// 站点配置信息
@@ -1562,7 +1632,8 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
     raw_id = try container.decodeIfPresent(FlexibleString.self, forKey: .raw_id)
     item_id = try container.decodeIfPresent(FlexibleString.self, forKey: .item_id)
     server_id = try container.decodeIfPresent(FlexibleString.self, forKey: .server_id)
-    title = try container.decode(String.self, forKey: .title)
+    // 后端允许最近媒体没有标题；单项缺值不应让整个服务器列表解码失败。
+    title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
     subtitle = try container.decodeIfPresent(String.self, forKey: .subtitle)
     type = try container.decodeIfPresent(String.self, forKey: .type)
     image = try container.decodeIfPresent(String.self, forKey: .image)
@@ -2236,7 +2307,8 @@ struct Person: Codable, Identifiable, Hashable {
     self.biography = try keyedContainer.decodeIfPresent(String.self, forKey: .biography)
     self.birthday = try keyedContainer.decodeIfPresent(String.self, forKey: .birthday)
     self.also_known_as = try keyedContainer.decodeIfPresent([String].self, forKey: .also_known_as)
-    self.avatar = try keyedContainer.decodeIfPresent(PersonAvatar.self, forKey: .avatar)
+    // 头像只是展示信息；无法识别的可选头像不能拖垮整个人物或媒体数组。
+    self.avatar = try? keyedContainer.decodeIfPresent(PersonAvatar.self, forKey: .avatar)
     self.images = try keyedContainer.decodeIfPresent(BangumiImages.self, forKey: .images)
 
     // 恢复稳定的内部标识符逻辑
@@ -2368,9 +2440,12 @@ enum PersonAvatar: Codable, Hashable {
     let container = try decoder.singleValueContainer()
     if let urlString = try? container.decode(String.self) {
       self = .url(urlString)
-    } else if let dict = try? container.decode([String: String].self),
-      let url = dict["normal"] ?? dict["large"] ?? dict["medium"] ?? dict["small"] ?? dict["url"]
+    } else if let dict = try? container.decode([String: JSONValue].self),
+      let url = ["normal", "large", "medium", "small", "url"]
+        .compactMap({ dict[$0]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) })
+        .first(where: { !$0.isEmpty })
     {
+      // 豆瓣等来源可能在图片对象中混入 width/height；这里只读取已知 URL 字段。
       self = .object(normal: url)
     } else {
       throw DecodingError.typeMismatch(
