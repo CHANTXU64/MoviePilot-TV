@@ -1602,7 +1602,7 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
   let item_id: FlexibleString?
   /// 媒体服务器 ID
   let server_id: FlexibleString?
-  /// SwiftUI 需要的稳定唯一表示符（组合原始 id 和 link）
+  /// SwiftUI 需要的稳定唯一表示符（按服务器类型和业务 ID 生成）
   let id: String
   /// 标题
   let title: String
@@ -1627,6 +1627,33 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
     case item_id, server_id, title, subtitle, type, image, link, use_cookies, server_type
   }
 
+  private static func stableID(
+    rawID: String?, itemID: String?, serverID: String?, link: String?,
+    serverType: MediaServerType?
+  ) -> String {
+    func normalized(_ value: String?) -> String? {
+      guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty
+      else { return nil }
+      return value
+    }
+
+    func encoded(_ value: String) -> String {
+      "\(value.utf8.count):\(value)"
+    }
+
+    let prefix = "playitem-\(encoded(normalized(serverType?.rawValue) ?? ""))"
+    if let rawID = normalized(rawID) {
+      return "\(prefix)-raw-\(encoded(rawID))"
+    }
+    if let serverID = normalized(serverID), let itemID = normalized(itemID) {
+      return "\(prefix)-pair-\(encoded(serverID))-\(encoded(itemID))"
+    }
+    if let link = normalized(link) {
+      return "\(prefix)-link-\(encoded(link))"
+    }
+    return "\(prefix)-uuid-\(UUID().uuidString)"
+  }
+
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     raw_id = try container.decodeIfPresent(FlexibleString.self, forKey: .raw_id)
@@ -1641,14 +1668,13 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
     use_cookies = try container.decodeIfPresent(FlexibleBool.self, forKey: .use_cookies)
     server_type = try container.decodeIfPresent(MediaServerType.self, forKey: .server_type)
 
-    // 组合原始ID和Link生成唯一的稳定标识符，防止 tvOS 焦点异常
-    let baseId = raw_id?.value ?? ""
-    let baseLink = link ?? ""
-    if !baseId.isEmpty || !baseLink.isEmpty {
-      self.id = "playitem-\(baseId)-\(baseLink)"
-    } else {
-      self.id = UUID().uuidString
-    }
+    self.id = Self.stableID(
+      rawID: raw_id?.value,
+      itemID: item_id?.value,
+      serverID: server_id?.value,
+      link: link,
+      serverType: server_type
+    )
 
     // 计算图片 URL
     self.imageURLs = ImageURLs(
@@ -1664,7 +1690,8 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
     self.raw_id = FlexibleString(id)
     self.item_id = nil
     self.server_id = nil
-    self.id = "playitem-\(id)-\(link ?? "")"
+    self.id = Self.stableID(
+      rawID: id, itemID: nil, serverID: nil, link: link, serverType: server_type)
     self.title = title
     self.subtitle = subtitle
     self.type = type
