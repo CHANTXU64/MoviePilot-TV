@@ -387,8 +387,7 @@ struct MediaCard: View {
   // 提取的海报内容 - Apple TV 风格设计
   private var posterContent: some View {
     let resolvedTypeIcon = Self.typeIconMap[typeText ?? ""] ?? "film"
-    return KFImage(posterUrl)
-      .requestModifier(AnyModifier.cookieModifier)
+    return KFImage.sessionImage(posterUrl)
       .placeholder {
         Rectangle()
           .fill(Color(white: 0.12))

@@ -48,8 +48,7 @@ struct PersonDetailView: View {
                 )
 
               if !isImageFailed, let validUrl = imageUrl {
-                KFImage(validUrl)
-                  .requestModifier(AnyModifier.cookieModifier)
+                KFImage.sessionImage(validUrl)
                   .onFailure { _ in
                     isImageFailed = true
                   }

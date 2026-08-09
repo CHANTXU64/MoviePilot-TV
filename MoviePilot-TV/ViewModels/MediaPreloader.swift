@@ -10,6 +10,7 @@ import SwiftUI
 @MainActor
 class MediaPreloadTask: ObservableObject {
   let partialMedia: MediaInfo
+  private let apiService: APIService
 
   // ⭐ 首屏可展示状态：完整详情已加载，且背景/海报已预取或等待超时
   @Published var fullDetail: MediaInfo?
@@ -33,8 +34,9 @@ class MediaPreloadTask: ObservableObject {
   /// 该闭包可能在任意线程执行。实际写入只在 @MainActor 隔离的方法中进行，读取仅在取消时（单次），无竞争风险。
   nonisolated(unsafe) private var activeImageDownload: DownloadTask?
 
-  init(partialMedia: MediaInfo) {
+  init(partialMedia: MediaInfo, apiService: APIService = .shared) {
     self.partialMedia = partialMedia
+    self.apiService = apiService
   }
 
   /// 启动所有预加载任务（幂等，多次调用不会重复启动）
@@ -88,7 +90,7 @@ class MediaPreloadTask: ObservableObject {
     for attempt in 0...maxRetries {
       if Task.isCancelled { return }
       do {
-        let fetched = try await APIService.shared.fetchMediaDetail(media: partialMedia)
+        let fetched = try await apiService.fetchMediaDetail(media: partialMedia)
         // 校验返回数据有效性：API 可能返回 200 但 body 是空/残缺 JSON
         // 此时 Codable 解码成功但所有字段为 nil，导致详情页显示 "Unknown" 空白页
         if fetched.title != nil || fetched.tmdb_id != nil || fetched.douban_id != nil {
@@ -156,10 +158,12 @@ class MediaPreloadTask: ObservableObject {
     await withTaskCancellationHandler {
       await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
         continuationBox.set(continuation)
-        let modifier = AnyModifier.cookieModifier
+        let service = apiService
+        var options = service.imageOptions(for: url)
+        options.append(.cacheOriginalImage)
         self.activeImageDownload = KingfisherManager.shared.retrieveImage(
-          with: .network(url),
-          options: [.requestModifier(modifier), .cacheOriginalImage]
+          with: service.imageSource(for: url),
+          options: options
         ) { _ in
           continuationBox.resume()
         }
@@ -174,10 +178,10 @@ class MediaPreloadTask: ObservableObject {
   // MARK: - ③ 分季信息
 
   private func loadSeasonData(for detail: MediaInfo) async {
-    guard APIService.shared.canAccess(.subscribe) else { return }
+    guard apiService.canAccess(.subscribe) else { return }
     guard detail.type == "电视剧" else { return }
 
-    let vm = SubscribeSeasonViewModel(mediaInfo: detail)
+    let vm = SubscribeSeasonViewModel(mediaInfo: detail, apiService: apiService)
     self.seasonViewModel = vm
     await vm.loadData(forceRefreshSubscriptions: false)
     self.isSeasonDataLoaded = true
@@ -186,7 +190,7 @@ class MediaPreloadTask: ObservableObject {
   // MARK: - ④ 订阅状态
 
   private func checkSubscription(for detail: MediaInfo) async {
-    guard APIService.shared.canAccess(.subscribe) else {
+    guard apiService.canAccess(.subscribe) else {
       self.isSubscribed = false
       return
     }
@@ -194,12 +198,12 @@ class MediaPreloadTask: ObservableObject {
     guard detail.canDirectlySubscribe else { return }
 
     do {
-      var subscribed = try await APIService.shared.checkSubscription(media: detail)
+      var subscribed = try await apiService.checkSubscription(media: detail)
       // 豆瓣/Bangumi 来源：后端通常用 TMDB ID 存储订阅，
       // 当用原始 mediaId（如 douban:xxx）查不到时，用识别到的 tmdbId 补查一次
       if !subscribed, detail.tmdb_id == nil, let tmdbId = self.tmdbId {
         let tmdbMedia = MediaInfo(tmdb_id: tmdbId, type: detail.type)
-        subscribed = try await APIService.shared.checkSubscription(media: tmdbMedia)
+        subscribed = try await apiService.checkSubscription(media: tmdbMedia)
       }
       self.isSubscribed = subscribed
     } catch {
@@ -209,7 +213,7 @@ class MediaPreloadTask: ObservableObject {
 
   /// 外部触发刷新订阅状态（收到订阅变更通知时调用）
   func refreshSubscriptionStatus(forceRefreshSeasonSnapshot: Bool = true) async {
-    guard APIService.shared.canAccess(.subscribe) else {
+    guard apiService.canAccess(.subscribe) else {
       self.isSubscribed = false
       return
     }
@@ -217,7 +221,7 @@ class MediaPreloadTask: ObservableObject {
     if detail.canDirectlySubscribe {
       // 电影等可直接订阅的类型：重新查询全局订阅状态
       do {
-        var subscribed = try await APIService.shared.checkSubscription(
+        var subscribed = try await apiService.checkSubscription(
           media: detail,
           forceRefresh: true
         )
@@ -225,7 +229,7 @@ class MediaPreloadTask: ObservableObject {
         // 当用原始 mediaId（如 douban:xxx）查不到时，用识别到的 tmdbId 补查一次
         if !subscribed, detail.tmdb_id == nil, let tmdbId = self.tmdbId {
           let tmdbMedia = MediaInfo(tmdb_id: tmdbId, type: detail.type)
-          subscribed = try await APIService.shared.checkSubscription(
+          subscribed = try await apiService.checkSubscription(
             media: tmdbMedia,
             forceRefresh: true
           )
@@ -244,7 +248,7 @@ class MediaPreloadTask: ObservableObject {
 
   private func recognizeTmdb() async {
     defer { isTmdbRecognitionFinished = true }
-    let result = await APIService.shared.recognizeTmdbId(
+    let result = await apiService.recognizeTmdbId(
       title: partialMedia.title ?? "",
       year: partialMedia.year,
       type: partialMedia.type
@@ -303,7 +307,7 @@ private final class ImageRetrieveContinuationBox: @unchecked Sendable {
 /// MediaCard 聚焦时触发预加载，ContainerView 和右键菜单读取预加载结果。
 @MainActor
 class MediaPreloader: ObservableObject {
-  static let shared = MediaPreloader()
+  static let shared = MediaPreloader(apiService: .shared)
 
   /// 预加载任务缓存，key = MediaInfo.id
   private var cache: [String: MediaPreloadTask] = [:]
@@ -314,24 +318,33 @@ class MediaPreloader: ObservableObject {
   /// 最大缓存数量（Apple TV 内存有限，但 20 太小容易淘汰活跃数据）
   private let maxCacheSize = 30
   private var cancellables = Set<AnyCancellable>()
+  private var subscriptionRefreshTask: Task<Void, Never>?
+  private var observedSessionUIIdentity: String
+  private let apiService: APIService
 
-  private init() {
+  init(apiService: APIService = .shared) {
+    self.apiService = apiService
+    observedSessionUIIdentity = apiService.uiIdentity
     // 监听订阅变更通知，刷新活跃详情页持有的 task 的订阅状态
     NotificationCenter.default.publisher(for: .subscriptionDidUpdate)
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in
-        Task { [weak self] in
+        guard let self else { return }
+        self.subscriptionRefreshTask?.cancel()
+        self.subscriptionRefreshTask = Task { [weak self] in
           await self?.refreshAllSubscriptionStatus()
         }
       }
       .store(in: &cancellables)
 
-    NotificationCenter.default.publisher(for: .sessionDidLogout)
-      .receive(on: DispatchQueue.main)
-      .sink { [weak self] _ in
-        Task { @MainActor [weak self] in
-          self?.clearAll()
-        }
+    apiService.$session
+      .dropFirst()
+      .sink { [weak self] session in
+        guard let self else { return }
+        let shouldClear = session.token == nil
+          || session.uiIdentity != self.observedSessionUIIdentity
+        self.observedSessionUIIdentity = session.uiIdentity
+        if shouldClear { self.clearAll() }
       }
       .store(in: &cancellables)
   }
@@ -355,7 +368,7 @@ class MediaPreloader: ObservableObject {
     }
 
     // 创建新任务
-    let task = MediaPreloadTask(partialMedia: media)
+    let task = MediaPreloadTask(partialMedia: media, apiService: apiService)
     cache[key] = task
     accessOrder.append(key)
     task.start()
@@ -421,6 +434,8 @@ class MediaPreloader: ObservableObject {
   /// 取消所有预加载任务并清空缓存。
   /// 用于用户退出登录或切换服务器时，避免残留旧 Cookie 的图片 URL、旧订阅状态等脏数据。
   func clearAll() {
+    subscriptionRefreshTask?.cancel()
+    subscriptionRefreshTask = nil
     for task in cache.values {
       task.cancel()
     }
@@ -431,22 +446,27 @@ class MediaPreloader: ObservableObject {
 
   // MARK: - 订阅状态批量刷新
 
-  /// 收到订阅变更通知后，并发刷新活跃详情页持有的 task 的订阅状态。
+  /// 收到订阅变更通知后，刷新活跃详情页持有的 task 的订阅状态。
   /// 普通海报墙预加载缓存不主动强刷，避免浏览海报墙后一次通知触发大量订阅查询。
   private func refreshAllSubscriptionStatus() async {
+    let snapshot = apiService.sessionSnapshot()
     let tasks = pinnedKeys.compactMap { cache[$0] }
     guard !tasks.isEmpty else { return }
 
     if tasks.contains(where: { $0.seasonViewModel != nil }) {
-      _ = try? await APIService.shared.fetchSubscriptions(forceRefresh: true)
-    }
-
-    await withTaskGroup(of: Void.self) { group in
-      for task in tasks {
-        group.addTask {
-          await task.refreshSubscriptionStatus(forceRefreshSeasonSnapshot: false)
-        }
+      do {
+        _ = try await apiService.fetchSubscriptions(forceRefresh: true)
+      } catch is CancellationError {
+        return
+      } catch {
+        // 单个 task 随后仍可各自刷新；这里只负责预热共享订阅快照。
       }
+    }
+    guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot) else { return }
+
+    for task in tasks {
+      guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot) else { return }
+      await task.refreshSubscriptionStatus(forceRefreshSeasonSnapshot: false)
     }
   }
 

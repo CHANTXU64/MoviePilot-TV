@@ -5,16 +5,16 @@ import XCTest
 @MainActor
 final class APIServiceCompatibilityEndpointTests: XCTestCase {
   func testFetchSettingsReadsPublicBackendVersion() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
-    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
 
     await CompatibilityEndpointURLProtocol.stub.reset()
     let service = APIService.testingInstance()
     let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "https://compatibility-endpoint-tests.local"
-    service.token = nil
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = nil
 
     let settings = try await service.fetchSettings()
 
@@ -30,16 +30,16 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
   }
 
   func testFetchSettingsMergesLoggedInUserSettings() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
-    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
 
     await CompatibilityEndpointURLProtocol.stub.reset()
     let service = APIService.testingInstance()
     let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "https://compatibility-endpoint-tests.local"
-    service.token = "token"
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = "token"
 
     let settings = try await service.fetchSettings()
 
@@ -57,8 +57,8 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
   }
 
   func testFetchSettingsKeepsPublicSettingsWhenLoggedInUserSettingsFails() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
-    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
 
     await CompatibilityEndpointURLProtocol.stub.reset()
     await CompatibilityEndpointURLProtocol.stub.setUserSettingsFailure(statusCode: 404)
@@ -66,8 +66,8 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "https://compatibility-endpoint-tests.local"
-    service.token = "token"
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = "token"
 
     let settings = try await service.fetchSettings()
 
@@ -82,9 +82,9 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     )
   }
 
-  func testFetchSettingsKeepsSessionWhenOptionalUserSettingsIsForbidden() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
-    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+  func testFetchSettingsLogsOutWhenUserSettingsIsForbidden() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
 
     await CompatibilityEndpointURLProtocol.stub.reset()
     await CompatibilityEndpointURLProtocol.stub.setUserSettingsFailure(statusCode: 403)
@@ -92,9 +92,9 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "https://compatibility-endpoint-tests.local"
-    service.token = "token"
-    service.currentUser = Token(
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = "token"
+    service.currentUserForTesting = Token(
       access_token: "token",
       token_type: "bearer",
       super_user: FlexibleBool(false),
@@ -105,13 +105,15 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     setCredential(account: "username", value: "limited-user")
     setCredential(account: "password", value: "stale-password")
 
-    let settings = try await service.fetchSettings()
+    do {
+      _ = try await service.fetchSettings()
+      XCTFail("Expected the forbidden authenticated settings request to cancel the operation")
+    } catch is CancellationError {
+      // Web 对任意 403 都会退出登录；TV 同样不保留或重放这条会话链。
+    }
 
-    XCTAssertEqual(settings.BACKEND_VERSION, "v2.13.14")
-    XCTAssertEqual(settings.FRONTEND_VERSION, "v2.13.15")
-    XCTAssertNil(settings.AI_AGENT_ENABLE)
-    XCTAssertEqual(service.token, "token")
-    XCTAssertEqual(service.currentUser?.user_name, "limited-user")
+    XCTAssertNil(service.token)
+    XCTAssertNil(service.currentUser)
 
     let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
     assertContainsSubsequence(
@@ -122,17 +124,17 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
   }
 
   func testPublicSystemConfigReadersUsePublicSettingEndpoints() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
-    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
 
     await CompatibilityEndpointURLProtocol.stub.reset()
     let service = APIService.testingInstance()
     let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "https://compatibility-endpoint-tests.local"
-    service.token = "token"
-    service.currentUser = Token(
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = "token"
+    service.currentUserForTesting = Token(
       access_token: "token",
       token_type: "bearer",
       super_user: FlexibleBool(false),
@@ -156,15 +158,15 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
   }
 
   func testSubscriptionActionsMatchBackendSuccessResponseContract() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
-    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
 
     await CompatibilityEndpointURLProtocol.stub.reset()
     await CompatibilityEndpointURLProtocol.stub.setSubscriptionActionsFail(false)
     let service = APIService.testingInstance()
     let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
-    service.baseURL = "https://compatibility-endpoint-tests.local"
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
 
     let statusResult = try await service.updateSubscriptionStatus(id: 41, state: "S")
     let searchSucceeded = try await service.searchSubscription(id: 41)
@@ -192,15 +194,15 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
   }
 
   func testSubscriptionActionsMatchBackendFailureResponseContract() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
-    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
 
     await CompatibilityEndpointURLProtocol.stub.reset()
     await CompatibilityEndpointURLProtocol.stub.setSubscriptionActionsFail(true)
     let service = APIService.testingInstance()
     let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
-    service.baseURL = "https://compatibility-endpoint-tests.local"
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
 
     let statusResult = try await service.updateSubscriptionStatus(id: 41, state: "S")
     let searchSucceeded = try await service.searchSubscription(id: 41)
@@ -213,14 +215,14 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
   }
 
   func testMediaDetailLibraryEndpointMatchesWebContract() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
-    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
 
     await CompatibilityEndpointURLProtocol.stub.reset()
     let service = APIService.testingInstance()
     let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
-    service.baseURL = "https://compatibility-endpoint-tests.local"
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
 
     let media = try JSONDecoder().decode(
       MediaInfo.self,
@@ -244,14 +246,14 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
   func testManualMediaSearchMatchesWebSelectorContractAndKeepsAniListNativeID()
     async throws
   {
-    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
-    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
 
     await CompatibilityEndpointURLProtocol.stub.reset()
     let service = APIService.testingInstance()
     let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
-    service.baseURL = "https://compatibility-endpoint-tests.local"
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
 
     let items = try await service.searchManualMedia(
       title: "葬送的芙莉莲",
@@ -277,14 +279,14 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
   }
 
   func testSubscribeNavigationMediaInfoUsesCanonicalMediaDetailRequestID() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
-    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
 
     await CompatibilityEndpointURLProtocol.stub.reset()
     let service = APIService.testingInstance()
     let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
-    service.baseURL = "https://compatibility-endpoint-tests.local"
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
 
     let media = Subscribe(
       name: "Canonical",
@@ -305,14 +307,14 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
   }
 
   func testSubscriptionShareGETThenForkPreservesCurrentIdentitySchema() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
-    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
 
     await CompatibilityEndpointURLProtocol.stub.reset()
     let service = APIService.testingInstance()
     let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
-    service.baseURL = "https://compatibility-endpoint-tests.local"
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
 
     let shares = try await service.fetchSubscriptionShares(path: "/subscribe/shares")
     let share = try XCTUnwrap(shares.first)
@@ -340,14 +342,14 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
   }
 
   func testManualTransferPreviewUsesBackgroundFalseAndPreservesAniListIdentity() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
-    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
 
     await CompatibilityEndpointURLProtocol.stub.reset()
     let service = APIService.testingInstance()
     let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
-    service.baseURL = "https://compatibility-endpoint-tests.local"
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
 
     let form = ReorganizeForm(
       fileitem: FileItem(
@@ -410,14 +412,14 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
   }
 
   func testAddDownloadPreservesSiteTransportFieldsAcrossBothProductionEndpoints() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
-    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
 
     await CompatibilityEndpointURLProtocol.stub.reset()
     let service = APIService.testingInstance()
     let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
-    service.baseURL = "https://compatibility-endpoint-tests.local"
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
 
     let context = try JSONDecoder().decode(
       Context.self,
@@ -512,8 +514,8 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
   }
 
   func testReorganizePreviewMergesHistoryResponsesAndDeduplicatesItems() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
-    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
 
     await CompatibilityEndpointURLProtocol.stub.reset()
     await CompatibilityEndpointURLProtocol.stub.setManualTransferResponses([
@@ -571,8 +573,8 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
   }
 
   func testReorganizeSubmitUsesBackgroundRequestsForEveryHistory() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(CompatibilityEndpointURLProtocol.self))
-    defer { URLProtocol.unregisterClass(CompatibilityEndpointURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
 
     await CompatibilityEndpointURLProtocol.stub.reset()
     await CompatibilityEndpointURLProtocol.stub.setManualTransferResponses([
@@ -640,9 +642,9 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
   }
 
   private func configureManageUser(_ service: APIService) {
-    service.baseURL = "https://compatibility-endpoint-tests.local"
-    service.token = "manage-user"
-    service.currentUser = Token(
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = "manage-user"
+    service.currentUserForTesting = Token(
       access_token: "manage-user",
       token_type: "Bearer",
       super_user: FlexibleBool(false),
@@ -691,6 +693,7 @@ private struct CompatibilityEndpointServiceSnapshot {
   let usernameDefaults: String?
   let passwordKeychain: String?
   let passwordDefaults: String?
+  let persistence: APIServicePersistenceSnapshot
 
   @MainActor
   static func capture(service: APIService) -> CompatibilityEndpointServiceSnapshot {
@@ -708,17 +711,21 @@ private struct CompatibilityEndpointServiceSnapshot {
       usernameKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username"),
       usernameDefaults: UserDefaults.standard.string(forKey: "username"),
       passwordKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "password"),
-      passwordDefaults: UserDefaults.standard.string(forKey: "password")
+      passwordDefaults: UserDefaults.standard.string(forKey: "password"),
+      persistence: service.persistenceSnapshotForTesting()
     )
   }
 
   @MainActor
   func restore(to service: APIService) {
-    service.baseURL = baseURL
-    service.token = token
-    service.currentUser = currentUser
+    service.replaceSessionForTesting(
+      baseURL: baseURL,
+      token: token,
+      currentUser: currentUser
+    )
     service.settings = settings
     service.useImageCache = useImageCache
+    service.restorePersistenceSnapshotForTesting(persistence)
     restoreDefaults(value: serverURLDefaults, forKey: "serverURL")
     restoreCredential(account: "accessToken", keychainValue: tokenKeychain, defaultsValue: tokenDefaults)
     restoreCredential(

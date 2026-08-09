@@ -15,8 +15,7 @@ struct MoreCard: View {
     VStack(spacing: 10) {
       // 海报图片及模糊背景
       ZStack {
-        KFImage(posterUrl)
-          .requestModifier(AnyModifier.cookieModifier)
+        KFImage.sessionImage(posterUrl)
           .placeholder {
             Color(white: 0.12)
           }

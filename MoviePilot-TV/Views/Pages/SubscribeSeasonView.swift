@@ -449,8 +449,7 @@ struct SeasonDetailSheet: View {
             mediaPosterPath: mediaInfo.poster_path
           )
         {
-          KFImage(posterUrl)
-            .requestModifier(AnyModifier.cookieModifier)
+          KFImage.sessionImage(posterUrl)
             .onFailure { _ in
               isImageFailed = true
             }

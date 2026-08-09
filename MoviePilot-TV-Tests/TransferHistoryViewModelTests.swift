@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 
 @testable import MoviePilot_TV
@@ -51,10 +52,10 @@ private func withTransferHistoryTimeout<T: Sendable>(
 @MainActor
 final class TransferHistoryViewModelTests: XCTestCase {
   func testPendingRefreshDoesNotPublishAfterPermissionIsRestricted() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(TransferHistoryURLProtocol.self))
-    defer { URLProtocol.unregisterClass(TransferHistoryURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -62,10 +63,10 @@ final class TransferHistoryViewModelTests: XCTestCase {
     let historyGate = TransferHistoryAsyncGate()
     await TransferHistoryURLProtocol.stub.setHistoryGate(historyGate)
 
-    service.baseURL = "http://transfer-history-tests.local"
+    service.baseURLForTesting = "http://transfer-history-tests.local"
     configureManageUser(service)
 
-    let viewModel = TransferHistoryViewModel()
+    let viewModel = TransferHistoryViewModel(apiService: service)
     let refreshTask = Task { @MainActor in
       await viewModel.refresh()
     }
@@ -92,19 +93,19 @@ final class TransferHistoryViewModelTests: XCTestCase {
   }
 
   func testManageUserCanRefreshTransferHistory() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(TransferHistoryURLProtocol.self))
-    defer { URLProtocol.unregisterClass(TransferHistoryURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await TransferHistoryURLProtocol.stub.reset()
 
-    service.baseURL = "http://transfer-history-tests.local"
+    service.baseURLForTesting = "http://transfer-history-tests.local"
     configureManageUser(service)
 
-    let viewModel = TransferHistoryViewModel()
+    let viewModel = TransferHistoryViewModel(apiService: service)
     await viewModel.refresh()
 
     XCTAssertEqual(viewModel.items.map(\.id), [10])
@@ -115,15 +116,15 @@ final class TransferHistoryViewModelTests: XCTestCase {
   }
 
   func testDeleteTransferHistoryRequiresExplicitSuccess() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(TransferHistoryURLProtocol.self))
-    defer { URLProtocol.unregisterClass(TransferHistoryURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await TransferHistoryURLProtocol.stub.reset()
-    service.baseURL = "http://transfer-history-tests.local"
+    service.baseURLForTesting = "http://transfer-history-tests.local"
     configureManageUser(service)
     let history = try JSONDecoder().decode(
       TransferHistory.self,
@@ -140,23 +141,23 @@ final class TransferHistoryViewModelTests: XCTestCase {
   }
 
   func testTransferHistoryDeleteCannotStartTwiceWhileRequestIsRunning() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(TransferHistoryURLProtocol.self))
-    defer { URLProtocol.unregisterClass(TransferHistoryURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await TransferHistoryURLProtocol.stub.reset()
     let gate = TransferHistoryAsyncGate()
     await TransferHistoryURLProtocol.stub.setHistoryGate(gate)
-    service.baseURL = "http://transfer-history-tests.local"
+    service.baseURLForTesting = "http://transfer-history-tests.local"
     configureManageUser(service)
     let history = try JSONDecoder().decode(
       TransferHistory.self,
       from: Data(#"{"id":10,"title":"History","type":"电影","status":true}"#.utf8)
     )
-    let viewModel = TransferHistoryViewModel()
+    let viewModel = TransferHistoryViewModel(apiService: service)
 
     let firstDelete = Task { @MainActor in
       await viewModel.deleteHistory(
@@ -189,15 +190,15 @@ final class TransferHistoryViewModelTests: XCTestCase {
   }
 
   func testAIRedoUsesWebSingleAndBatchRoutesAndShowsFailures() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(TransferHistoryURLProtocol.self))
-    defer { URLProtocol.unregisterClass(TransferHistoryURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await TransferHistoryURLProtocol.stub.reset()
-    service.baseURL = "http://transfer-history-tests.local"
+    service.baseURLForTesting = "http://transfer-history-tests.local"
     configureManageUser(service)
     service.settings = try JSONDecoder().decode(
       GlobalSettings.self,
@@ -215,7 +216,7 @@ final class TransferHistoryViewModelTests: XCTestCase {
     XCTAssertTrue(paths.contains("/api/v1/history/transfer/10/ai-redo"))
     XCTAssertTrue(paths.contains("/api/v1/history/transfer/ai-redo"))
 
-    let viewModel = TransferHistoryViewModel()
+    let viewModel = TransferHistoryViewModel(apiService: service)
     await viewModel.triggerAiRedo(for: 10)
     let progressFailureDeadline = Date().addingTimeInterval(2)
     while viewModel.errorMessage != "AI 整理业务失败",
@@ -238,7 +239,7 @@ final class TransferHistoryViewModelTests: XCTestCase {
     XCTAssertFalse(viewModel.isAiRedoing)
 
     await TransferHistoryURLProtocol.stub.reset()
-    let guardedViewModel = TransferHistoryViewModel()
+    let guardedViewModel = TransferHistoryViewModel(apiService: service)
     guardedViewModel.isAiRedoing = true
     await guardedViewModel.triggerBatchAiRedo(for: [10, 11])
     let guardedHistory = try JSONDecoder().decode(
@@ -261,8 +262,144 @@ final class TransferHistoryViewModelTests: XCTestCase {
     )
   }
 
+  func testAIRedoClearsPendingStateWhenSameProfileRefreshCancelsStream() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
+
+    let sharedService = APIService.shared
+    let persistenceSnapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { persistenceSnapshot.restore(to: sharedService) }
+    let service = APIService.testingInstance()
+
+    await TransferHistoryURLProtocol.stub.reset()
+    let progressGate = TransferHistoryAsyncGate()
+    await TransferHistoryURLProtocol.stub.setProgressGate(progressGate)
+    let accountA = Token(
+      access_token: "manager-a",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [UserPermissionKey.manage.rawValue: true],
+      user_id: 1,
+      user_name: "transfer-manager",
+      avatar: nil
+    )
+    service.replaceSessionForTesting(
+      baseURL: "http://transfer-history-tests.local",
+      token: accountA.access_token,
+      currentUser: accountA
+    )
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(#"{"AI_AGENT_ENABLE":true}"#.utf8)
+    )
+
+    let viewModel = TransferHistoryViewModel(apiService: service)
+    await viewModel.triggerAiRedo(for: 10)
+    try await withTransferHistoryTimeout("AI progress request to start") {
+      await TransferHistoryURLProtocol.stub.waitForRequest(
+        path: "/api/v1/system/progress/single-progress")
+    }
+    XCTAssertTrue(viewModel.isAiRedoing)
+    XCTAssertEqual(viewModel.aiRedoingIds, [10])
+
+    let refreshedAccountA = Token(
+      access_token: "manager-b",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [UserPermissionKey.manage.rawValue: true],
+      user_id: 1,
+      user_name: "transfer-manager",
+      avatar: nil
+    )
+    service.replaceSessionForTesting(
+      baseURL: "http://transfer-history-tests.local",
+      token: refreshedAccountA.access_token,
+      currentUser: refreshedAccountA
+    )
+    await progressGate.open()
+
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isAiRedoing, Date() < deadline {
+      try await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTAssertFalse(viewModel.isAiRedoing)
+    XCTAssertTrue(viewModel.aiRedoingIds.isEmpty)
+    XCTAssertNil(viewModel.errorMessage)
+    let paths = await TransferHistoryURLProtocol.stub.requestPaths()
+    XCTAssertFalse(paths.contains("/api/v1/system/setting/public/Storages"))
+    XCTAssertFalse(paths.contains("/api/v1/history/transfer"))
+  }
+
+  func testAIRedoDoesNotRefreshWhenSessionChangesAfterFinalProgressEvent() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
+
+    let sharedService = APIService.shared
+    let persistenceSnapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { persistenceSnapshot.restore(to: sharedService) }
+    let service = APIService.testingInstance()
+
+    await TransferHistoryURLProtocol.stub.reset()
+    await TransferHistoryURLProtocol.stub.setProgressResponseData(
+      Data(#"data: {"text":"切换会话"}"#.appending("\n\n").utf8)
+    )
+    let accountA = Token(
+      access_token: "manager-a",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [UserPermissionKey.manage.rawValue: true],
+      user_id: 1,
+      user_name: "transfer-manager",
+      avatar: nil
+    )
+    service.replaceSessionForTesting(
+      baseURL: "http://transfer-history-tests.local",
+      token: accountA.access_token,
+      currentUser: accountA
+    )
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(#"{"AI_AGENT_ENABLE":true}"#.utf8)
+    )
+
+    let viewModel = TransferHistoryViewModel(apiService: service)
+    var didSwitchSession = false
+    let progressCancellable = viewModel.$aiRedoProgressText.sink { text in
+      guard text == "切换会话", !didSwitchSession else { return }
+      didSwitchSession = true
+      let accountB = Token(
+        access_token: "manager-b",
+        token_type: "bearer",
+        super_user: FlexibleBool(false),
+        permissions: [UserPermissionKey.manage.rawValue: true],
+        user_id: 2,
+        user_name: "transfer-manager-b",
+        avatar: nil
+      )
+      service.replaceSessionForTesting(
+        baseURL: "http://transfer-history-tests.local",
+        token: accountB.access_token,
+        currentUser: accountB
+      )
+    }
+    defer { progressCancellable.cancel() }
+
+    await viewModel.triggerAiRedo(for: 10)
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isAiRedoing, Date() < deadline {
+      try await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertTrue(didSwitchSession)
+    XCTAssertFalse(viewModel.isAiRedoing)
+    XCTAssertTrue(viewModel.aiRedoingIds.isEmpty)
+    let paths = await TransferHistoryURLProtocol.stub.requestPaths()
+    XCTAssertFalse(paths.contains("/api/v1/system/setting/public/Storages"))
+    XCTAssertFalse(paths.contains("/api/v1/history/transfer"))
+  }
+
   private func configureManageUser(_ service: APIService) {
-    service.currentUser = Token(
+    service.currentUserForTesting = Token(
       access_token: "transfer-history-manager-tests",
       token_type: "bearer",
       super_user: FlexibleBool(false),
@@ -278,7 +415,7 @@ final class TransferHistoryViewModelTests: XCTestCase {
   }
 
   private func configureRestrictedUser(_ service: APIService) {
-    service.currentUser = Token(
+    service.currentUserForTesting = Token(
       access_token: "transfer-history-restricted-tests",
       token_type: "bearer",
       super_user: FlexibleBool(false),
@@ -297,6 +434,7 @@ final class TransferHistoryViewModelTests: XCTestCase {
 @MainActor
 private struct TransferHistoryServiceSnapshot {
   let baseURL: String
+  let token: String?
   let currentUser: Token?
   let settings: GlobalSettings?
   let serverURLDefaults: String?
@@ -306,6 +444,7 @@ private struct TransferHistoryServiceSnapshot {
   static func capture(service: APIService) -> TransferHistoryServiceSnapshot {
     TransferHistoryServiceSnapshot(
       baseURL: service.baseURL,
+      token: service.token,
       currentUser: service.currentUser,
       settings: service.settings,
       serverURLDefaults: UserDefaults.standard.string(forKey: "serverURL"),
@@ -315,8 +454,11 @@ private struct TransferHistoryServiceSnapshot {
   }
 
   func restore(to service: APIService) {
-    service.baseURL = baseURL
-    service.currentUser = currentUser
+    service.replaceSessionForTesting(
+      baseURL: baseURL,
+      token: token,
+      currentUser: currentUser
+    )
     service.settings = settings
 
     if let serverURLDefaults {
@@ -352,14 +494,32 @@ private struct TransferHistoryHTTPStubResponse: Sendable {
 private actor TransferHistoryURLProtocolStub {
   private var paths: [String] = []
   private var historyGate: TransferHistoryAsyncGate?
+  private var progressGate: TransferHistoryAsyncGate?
+  private var progressResponseData = Data(
+    #"data: {"enable":false,"data":{"success":false,"error_i18n":"AI 整理业务失败"}}"#
+      .appending("\n\n").utf8
+  )
 
   func reset() {
     paths.removeAll()
     historyGate = nil
+    progressGate = nil
+    progressResponseData = Data(
+      #"data: {"enable":false,"data":{"success":false,"error_i18n":"AI 整理业务失败"}}"#
+        .appending("\n\n").utf8
+    )
   }
 
   func setHistoryGate(_ gate: TransferHistoryAsyncGate?) {
     historyGate = gate
+  }
+
+  func setProgressGate(_ gate: TransferHistoryAsyncGate?) {
+    progressGate = gate
+  }
+
+  func setProgressResponseData(_ data: Data) {
+    progressResponseData = data
   }
 
   func response(for request: URLRequest) async throws -> TransferHistoryHTTPStubResponse {
@@ -414,15 +574,15 @@ private actor TransferHistoryURLProtocolStub {
         gate: nil
       )
     case "/api/v1/system/progress/single-progress":
-      return TransferHistoryHTTPStubResponse(
+      let response = TransferHistoryHTTPStubResponse(
         statusCode: 200,
-        data: Data(
-          #"data: {"enable":false,"data":{"success":false,"error_i18n":"AI 整理业务失败"}}"#
-            .appending("\n\n")
-            .utf8
-        ),
-        gate: nil
+        data: progressResponseData,
+        gate: progressGate
       )
+      if let gate = response.gate {
+        await gate.wait()
+      }
+      return response
     default:
       throw URLError(.unsupportedURL)
     }

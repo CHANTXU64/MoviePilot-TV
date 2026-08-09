@@ -231,14 +231,23 @@ private struct MediaSectionView: View {
                   Button {
                     Task {
                       guard APIService.shared.canAccess(.search) else { return }
+                      let sessionSnapshot = APIService.shared.sessionSnapshot()
                       let info = MediaInfo(title: item.title, type: item.type, year: item.subtitle)
                       if let target = await mediaActionHandler.getTMDBJumpTarget(for: info) {
-                        let request =
+                        if let request =
                           await mediaActionHandler.searchResourcesTargetUsingDefaultSites(
                             for: target)
-                        onSearchResource?(request)
+                        {
+                          onSearchResource?(request)
+                        }
                       } else {
+                        guard APIService.shared.isSessionUnchanged(from: sessionSnapshot) else {
+                          return
+                        }
                         let sites = await SystemViewModel.normalizedDefaultSearchSitesString()
+                        guard APIService.shared.isSessionUnchanged(from: sessionSnapshot) else {
+                          return
+                        }
                         let request = ResourceSearchRequest(
                           keyword: item.title, type: item.type, area: nil, title: nil, year: nil,
                           season: nil, mediaInfo: nil, sites: sites)

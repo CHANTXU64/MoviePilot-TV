@@ -50,8 +50,7 @@ private struct MediaLoadingView: View {
         Spacer()
 
         // 海报图片
-        KFImage(posterUrl)
-          .requestModifier(AnyModifier.cookieModifier)
+        KFImage.sessionImage(posterUrl)
           .loadDiskFileSynchronously()
           .fade(duration: 0)
           .placeholder {

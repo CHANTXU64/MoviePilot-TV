@@ -24,11 +24,12 @@ class ResourceResultViewModel: ObservableObject {
   private var searchGeneration = 0
   private let searchStreamDoneCloseDelay: UInt64 = 1_500_000_000
 
-  private let apiService = APIService.shared
+  private let apiService: APIService
 
   init(
     keyword: String, type: String? = nil, area: String? = nil, title: String? = nil,
-    year: String? = nil, season: Int? = nil, sites: String? = nil
+    year: String? = nil, season: Int? = nil, sites: String? = nil,
+    apiService: APIService = .shared
   ) {
     self.keyword = keyword
     self.type = type
@@ -37,6 +38,7 @@ class ResourceResultViewModel: ObservableObject {
     self.year = year
     self.season = season
     self.sites = sites
+    self.apiService = apiService
   }
 
   deinit {
@@ -106,6 +108,7 @@ class ResourceResultViewModel: ObservableObject {
       }
 
       do {
+        guard canContinue() else { return }
         let stream: AsyncThrowingStream<SearchStreamEvent, Error>
 
         // 判断是否为媒体搜索（如 "tmdb:1234"）

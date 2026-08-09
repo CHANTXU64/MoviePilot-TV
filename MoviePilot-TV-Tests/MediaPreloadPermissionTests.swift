@@ -5,10 +5,10 @@ import XCTest
 @MainActor
 final class MediaPreloadPermissionTests: XCTestCase {
   func testRestrictedUserTvDetailDoesNotWaitForHiddenSeasonRow() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -16,10 +16,12 @@ final class MediaPreloadPermissionTests: XCTestCase {
     configureLimitedUser(service)
 
     let preloadTask = MediaPreloadTask(
-      partialMedia: MediaInfo(tmdb_id: 123, title: "Limited Show", type: "电视剧")
+      partialMedia: MediaInfo(tmdb_id: 123, title: "Limited Show", type: "电视剧"),
+      apiService: service
     )
     let viewModel = MediaDetailViewModel(
-      detail: MediaInfo(tmdb_id: 123, title: "Limited Show", type: "电视剧")
+      detail: MediaInfo(tmdb_id: 123, title: "Limited Show", type: "电视剧"),
+      apiService: service
     )
     viewModel.preloadTask = preloadTask
 
@@ -33,10 +35,10 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   func testRestrictedUserTvPreloadDoesNotRequestSeasonSubscriptionState() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -44,7 +46,8 @@ final class MediaPreloadPermissionTests: XCTestCase {
     configureLimitedUser(service)
 
     let task = MediaPreloadTask(
-      partialMedia: MediaInfo(tmdb_id: 123, title: "Limited Show", type: "电视剧")
+      partialMedia: MediaInfo(tmdb_id: 123, title: "Limited Show", type: "电视剧"),
+      apiService: service
     )
     task.start()
 
@@ -61,10 +64,10 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   func testRestrictedSeasonStatusRefreshDoesNotRequestSubscribeSnapshot() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -72,7 +75,8 @@ final class MediaPreloadPermissionTests: XCTestCase {
     configureLimitedUser(service)
 
     let viewModel = SubscribeSeasonViewModel(
-      mediaInfo: MediaInfo(tmdb_id: 123, title: "Limited Show", type: "电视剧")
+      mediaInfo: MediaInfo(tmdb_id: 123, title: "Limited Show", type: "电视剧"),
+      apiService: service
     )
 
     let didRefresh = await viewModel.checkSubscriptionStatus(forceRefresh: true)
@@ -85,8 +89,8 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   func testRestrictedUserMoviePreloadDoesNotRequestSubscriptionLookup() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
     let service = APIService.shared
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
@@ -110,8 +114,8 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   func testFailedTMDBRecognitionFromFallbackSourceFinishesLoadingState() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
     let service = APIService.shared
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
@@ -140,8 +144,8 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   func testSubscriptionHandlerDoesNotOpenSheetWhenLookupFails() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
     let service = APIService.shared
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
@@ -162,8 +166,8 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   func testMoviePreloadKeepsKnownSubscriptionStateWhenLookupFails() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
     let service = APIService.shared
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
@@ -190,11 +194,11 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertEqual(task.isSubscribed, true)
   }
 
-  func testSubscriptionStatusPermissionFailureSurfacesAndDoesNotLogoutOrRetryLogin() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+  func testSubscriptionStatusPermissionFailureLogsOutWithoutRetryingLogin() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -209,21 +213,23 @@ final class MediaPreloadPermissionTests: XCTestCase {
         media: MediaInfo(tmdb_id: 456, title: "Subscriber Movie", type: "电影")
       )
       XCTFail("Expected subscription status permission failure to be surfaced.")
-    } catch APIError.serverMessage(let message) {
-      XCTAssertTrue(message.contains("403"))
+    } catch APIError.unauthorized {
+      // Expected: authenticated 403 follows the same logout contract as Web.
+    } catch {
+      XCTFail("Unexpected error: \(error)")
     }
 
-    XCTAssertEqual(service.token, "subscriber-token")
-    XCTAssertEqual(service.currentUser?.user_name, "subscriber")
+    XCTAssertNil(service.token)
+    XCTAssertNil(service.currentUser)
 
     let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
-    XCTAssertTrue(paths.contains { $0.hasPrefix("/api/v1/subscribe/media/") })
+    XCTAssertEqual(paths.filter { $0.hasPrefix("/api/v1/subscribe/media/") }.count, 1)
     XCTAssertFalse(paths.contains("/api/v1/login/access-token"))
   }
 
   func testStandardSubscriberTvPreloadRequestsSeasonAvailabilityWithoutSuperUser() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
     let service = APIService.shared
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
@@ -248,11 +254,11 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertNotNil(task.seasonViewModel)
   }
 
-  func testSeasonAvailabilityPermissionFailureDoesNotLogoutSubscriber() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+  func testSeasonAvailabilityPermissionFailureLogsOutWithoutReplay() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -265,27 +271,27 @@ final class MediaPreloadPermissionTests: XCTestCase {
         mediaInfo: MediaInfo(tmdb_id: 123, title: "Subscriber Show", type: "电视剧")
       )
       XCTFail("Expected season availability permission failure to surface as unauthorized")
-    } catch APIError.serverMessage(let message) {
-      XCTAssertTrue(message.contains("403"))
-      // Expected: optional status probe must not trigger logout.
+    } catch APIError.unauthorized {
+      // Expected: authenticated 403 follows the same logout contract as Web.
     } catch {
       XCTFail("Unexpected error: \(error)")
     }
 
-    XCTAssertEqual(service.token, "subscriber-token")
-    XCTAssertEqual(service.currentUser?.user_name, "subscriber")
+    XCTAssertNil(service.token)
+    XCTAssertNil(service.currentUser)
 
     let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
-    XCTAssertTrue(paths.contains("/api/v1/mediaserver/notexists"))
+    XCTAssertEqual(paths.filter { $0 == "/api/v1/mediaserver/notexists" }.count, 1)
+    XCTAssertFalse(paths.contains("/api/v1/login/access-token"))
   }
 
   func testSeasonAvailabilityPermissionFailureKeepsStatusUnknownAndDoesNotDefaultBestVersion()
     async throws
   {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -294,7 +300,8 @@ final class MediaPreloadPermissionTests: XCTestCase {
     configureStandardSubscriber(service)
 
     let viewModel = SubscribeSeasonViewModel(
-      mediaInfo: MediaInfo(tmdb_id: 123, title: "Subscriber Show", type: "电视剧")
+      mediaInfo: MediaInfo(tmdb_id: 123, title: "Subscriber Show", type: "电视剧"),
+      apiService: service
     )
 
     await viewModel.checkSeasonsStatus()
@@ -306,14 +313,17 @@ final class MediaPreloadPermissionTests: XCTestCase {
     let sheetSubscribe = try XCTUnwrap(viewModel.sheetSubscribe)
     XCTAssertNil(sheetSubscribe.best_version)
     XCTAssertNil(sheetSubscribe.best_version_full)
+    XCTAssertNil(service.token)
+    XCTAssertNil(service.currentUser)
 
     let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
-    XCTAssertTrue(paths.contains("/api/v1/mediaserver/notexists"))
+    XCTAssertEqual(paths.filter { $0 == "/api/v1/mediaserver/notexists" }.count, 1)
+    XCTAssertFalse(paths.contains("/api/v1/login/access-token"))
   }
 
   func testSuperUserActionAPIsDoNotApplyLocalPermissionGate() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
     let service = APIService.shared
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
@@ -368,8 +378,8 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   func testStandardUserHiddenAdminSurfacesDoNotRequestSuperUserEndpoints() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
     let service = APIService.shared
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
@@ -410,8 +420,8 @@ final class MediaPreloadPermissionTests: XCTestCase {
   func testManageUserEntrypointsRequestDownloadButNotDashboardOrLatestMediaEndpoints()
     async throws
   {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
     let service = APIService.shared
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
@@ -446,8 +456,8 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   func testSuperUserEntrypointsRequestDashboardDownloadAndLatestMediaEndpoints() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
     let service = APIService.shared
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
@@ -486,8 +496,8 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   func testNoSearchUserResourceActionsDoNotRequestSearchOrDownloadEndpoints() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(MediaPreloadPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(MediaPreloadPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
     let service = APIService.shared
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
@@ -544,9 +554,9 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   private func configureLimitedUser(_ service: APIService) {
-    service.baseURL = "https://preload-permission-tests.local"
-    service.token = "limited-token"
-    service.currentUser = Token(
+    service.baseURLForTesting = "https://preload-permission-tests.local"
+    service.tokenForTesting = "limited-token"
+    service.currentUserForTesting = Token(
       access_token: "limited-token",
       token_type: "bearer",
       super_user: FlexibleBool(false),
@@ -562,9 +572,9 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   private func configureStandardSubscriber(_ service: APIService) {
-    service.baseURL = "https://preload-permission-tests.local"
-    service.token = "subscriber-token"
-    service.currentUser = Token(
+    service.baseURLForTesting = "https://preload-permission-tests.local"
+    service.tokenForTesting = "subscriber-token"
+    service.currentUserForTesting = Token(
       access_token: "subscriber-token",
       token_type: "bearer",
       super_user: FlexibleBool(false),
@@ -580,9 +590,9 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   private func configureManageUser(_ service: APIService) {
-    service.baseURL = "https://preload-permission-tests.local"
-    service.token = "manage-token"
-    service.currentUser = Token(
+    service.baseURLForTesting = "https://preload-permission-tests.local"
+    service.tokenForTesting = "manage-token"
+    service.currentUserForTesting = Token(
       access_token: "manage-token",
       token_type: "bearer",
       super_user: FlexibleBool(false),
@@ -598,9 +608,9 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   private func configureSuperUser(_ service: APIService) {
-    service.baseURL = "https://preload-permission-tests.local"
-    service.token = "super-token"
-    service.currentUser = Token(
+    service.baseURLForTesting = "https://preload-permission-tests.local"
+    service.tokenForTesting = "super-token"
+    service.currentUserForTesting = Token(
       access_token: "super-token",
       token_type: "bearer",
       super_user: FlexibleBool(true),
@@ -616,9 +626,9 @@ final class MediaPreloadPermissionTests: XCTestCase {
   }
 
   private func configureNoSearchUser(_ service: APIService) {
-    service.baseURL = "https://preload-permission-tests.local"
-    service.token = "no-search-token"
-    service.currentUser = Token(
+    service.baseURLForTesting = "https://preload-permission-tests.local"
+    service.tokenForTesting = "no-search-token"
+    service.currentUserForTesting = Token(
       access_token: "no-search-token",
       token_type: "bearer",
       super_user: FlexibleBool(false),
@@ -676,6 +686,7 @@ private struct MediaPreloadPermissionServiceSnapshot {
   let usernameDefaults: String?
   let passwordKeychain: String?
   let passwordDefaults: String?
+  let persistence: APIServicePersistenceSnapshot
 
   @MainActor
   static func capture(service: APIService) -> MediaPreloadPermissionServiceSnapshot {
@@ -691,15 +702,19 @@ private struct MediaPreloadPermissionServiceSnapshot {
       usernameKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username"),
       usernameDefaults: UserDefaults.standard.string(forKey: "username"),
       passwordKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "password"),
-      passwordDefaults: UserDefaults.standard.string(forKey: "password")
+      passwordDefaults: UserDefaults.standard.string(forKey: "password"),
+      persistence: service.persistenceSnapshotForTesting()
     )
   }
 
   @MainActor
   func restore(to service: APIService) {
-    service.baseURL = baseURL
-    service.token = token
-    service.currentUser = currentUser
+    service.replaceSessionForTesting(
+      baseURL: baseURL,
+      token: token,
+      currentUser: currentUser
+    )
+    service.restorePersistenceSnapshotForTesting(persistence)
     restoreUserDefaultsString(serverURLDefaults, forKey: "serverURL")
     restoreCredential(account: "accessToken", keychainValue: tokenKeychain, defaultsValue: tokenDefaults)
     restoreCredential(

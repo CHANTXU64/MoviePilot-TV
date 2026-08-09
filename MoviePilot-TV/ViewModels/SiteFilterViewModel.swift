@@ -7,24 +7,26 @@ class SiteFilterViewModel: ObservableObject {
   @Published var selectedSites: Set<Int> = SystemViewModel.currentDefaultSearchSites()
   @Published var availableSites: [Site] = []
 
-  private let apiService = APIService.shared
+  private let apiService: APIService
+
+  init(apiService: APIService = .shared) {
+    self.apiService = apiService
+  }
 
   func loadSites() async {
     guard apiService.canAccess(.search) else {
       clearLoadedSites()
       return
     }
-    let sessionSnapshot = apiService.sessionSnapshot()
     do {
       let sites = try await apiService.fetchSites()
-      guard apiService.isSessionUnchanged(from: sessionSnapshot),
-        apiService.canAccess(.search)
-      else {
-        clearLoadedSites()
-        return
-      }
       self.availableSites = sites
       normalizeSelectedSites()
+    } catch is CancellationError {
+      if !apiService.canAccess(.search) {
+        clearLoadedSites()
+      }
+      return
     } catch {
       print("Failed to load sites: \(error)")
     }

@@ -10,7 +10,7 @@ final class ImageProxyEncodingTests: XCTestCase {
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
 
     let rawImage =
       "http://emby.local/Items/abc/Images/Primary?tag=main&quality=90#poster"
@@ -34,7 +34,7 @@ final class ImageProxyEncodingTests: XCTestCase {
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.useImageCache = false
 
     let rawImage =
@@ -56,7 +56,7 @@ final class ImageProxyEncodingTests: XCTestCase {
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.useImageCache = true
 
     let rawImage =
@@ -78,7 +78,7 @@ final class ImageProxyEncodingTests: XCTestCase {
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.useImageCache = true
 
     let rawImage =
@@ -100,7 +100,7 @@ final class ImageProxyEncodingTests: XCTestCase {
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.useImageCache = true
 
     let rawImage =
@@ -122,7 +122,7 @@ final class ImageProxyEncodingTests: XCTestCase {
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.useImageCache = true
 
     let rawImage =
@@ -157,7 +157,7 @@ final class ImageProxyEncodingTests: XCTestCase {
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.useImageCache = true
 
     let rawImage =
@@ -193,7 +193,7 @@ final class ImageProxyEncodingTests: XCTestCase {
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.useImageCache = true
 
     let rawPoster = "https://poster.local/movie.jpg?lang=zh&token=poster#cover"
@@ -258,7 +258,7 @@ private struct ImageProxyServiceSnapshot {
   }
 
   func restore(to service: APIService) {
-    service.baseURL = baseURL
+    service.baseURLForTesting = baseURL
     service.useImageCache = useImageCache
   }
 }

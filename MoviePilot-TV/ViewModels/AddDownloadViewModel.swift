@@ -110,7 +110,6 @@ class AddDownloadViewModel: ObservableObject {
       media_source: normalizedMediaId.isEmpty ? nil : mediaSource.rawValue,
       media_id: normalizedMediaId.isEmpty ? nil : normalizedMediaId
     )
-
     do {
       let (success, message) = try await APIService.shared.addDownload(payload: payload)
       if success {
@@ -125,6 +124,8 @@ class AddDownloadViewModel: ObservableObject {
           errorMessage = "暂时无法添加下载，请稍后重试。"
         }
       }
+    } catch is CancellationError {
+      return
     } catch {
       Logger.error("Failed to add download: \(error)")
       errorMessage = "暂时无法添加下载，请稍后重试。"

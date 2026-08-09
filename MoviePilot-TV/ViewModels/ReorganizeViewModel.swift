@@ -161,12 +161,19 @@ class ReorganizeViewModel: ObservableObject {
     isSubmitting = true
     defer { isSubmitting = false }
     do {
+      let snapshot = apiService.sessionSnapshot()
       var failureMessages: [String] = []
       for submittedForm in preparedSubmissionForms() {
+        guard apiService.isSessionUnchanged(from: snapshot) else {
+          throw CancellationError()
+        }
         let result = try await apiService.manualTransfer(
           form: submittedForm,
           background: background
         )
+        guard apiService.isSessionUnchanged(from: snapshot) else {
+          throw CancellationError()
+        }
         if !result.success, let message = result.message?.trimmingCharacters(
           in: .whitespacesAndNewlines
         ), !message.isEmpty {
@@ -191,6 +198,8 @@ class ReorganizeViewModel: ObservableObject {
           : backendMessages.joined(separator: "；")
         return false
       }
+    } catch is CancellationError {
+      return false
     } catch {
       Logger.error("Failed to reorganize: \(error)")
       errorMessage = "整理没有开始，请稍后重试。"
@@ -209,14 +218,19 @@ class ReorganizeViewModel: ObservableObject {
     isPreviewing = true
     defer { isPreviewing = false }
 
+    let snapshot = apiService.sessionSnapshot()
     var merged = ManualTransferPreviewData.empty
     for submittedForm in preparedSubmissionForms() {
       do {
+        guard apiService.isSessionUnchanged(from: snapshot) else { return false }
         let data = try await apiService.previewManualTransfer(form: submittedForm)
+        guard apiService.isSessionUnchanged(from: snapshot) else { return false }
         merged.items.append(contentsOf: data.items)
         if let message = data.message, !message.isEmpty {
           merged.message = [merged.message, message].compactMap(\.self).joined(separator: "；")
         }
+      } catch is CancellationError {
+        return false
       } catch {
         let batchItems = submittedForm.fileitems ?? []
         let batchSource =
@@ -258,6 +272,7 @@ class ReorganizeViewModel: ObservableObject {
       success: merged.items.count - failures,
       failed: failures
     )
+    guard apiService.isSessionUnchanged(from: snapshot) else { return false }
     previewData = merged
     if failures > 0 {
       errorMessage = "预览完成，其中 \(failures) 项无法整理。"

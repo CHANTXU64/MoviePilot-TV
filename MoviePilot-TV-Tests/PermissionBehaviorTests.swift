@@ -123,7 +123,7 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
     try await withPermissionBehaviorBackend { service in
       configurePermissionBehaviorUser(service, granted: [.subscribe])
 
-      let handler = SubscriptionHandler()
+      let handler = SubscriptionHandler(apiService: service)
 
       handler.handleSubscribe(MediaInfo(tmdb_id: 901, title: "可订阅电影", type: "电影"))
       try await permissionBehaviorWaitUntil("movie subscribe sheet opens") {
@@ -148,7 +148,7 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
     try await withPermissionBehaviorBackend { service in
       configurePermissionBehaviorUser(service, granted: [.subscribe])
 
-      let unknownHandler = SubscriptionHandler()
+      let unknownHandler = SubscriptionHandler(apiService: service)
       unknownHandler.handleSubscribe(
         MediaInfo(tmdb_id: 903, title: "可直接订阅的未知类型", type: "未知")
       )
@@ -164,7 +164,7 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
       )
       XCTAssertEqual(unknownLookupCount, 1)
 
-      let collectionHandler = SubscriptionHandler()
+      let collectionHandler = SubscriptionHandler(apiService: service)
       collectionHandler.handleSubscribe(
         MediaInfo(
           tmdb_id: 904,
@@ -191,7 +191,7 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
     try await withPermissionBehaviorBackend { service in
       configurePermissionBehaviorUser(service, granted: [.subscribe])
 
-      let handler = SubscriptionHandler()
+      let handler = SubscriptionHandler(apiService: service)
       let notifications = PermissionNotificationCounter()
       let observer = NotificationCenter.default.addObserver(
         forName: .subscriptionDidUpdate,
@@ -226,6 +226,51 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
     }
   }
 
+  func testForkedEditorDoesNotContinueUnderAnotherAccount() async throws {
+    try await withPermissionBehaviorBackend { service in
+      let accountA = Token(
+        access_token: "account-a-token",
+        token_type: "bearer",
+        super_user: FlexibleBool(false),
+        permissions: permissionBehaviorPermissions([.subscribe]),
+        user_id: 1,
+        user_name: "account-a",
+        avatar: nil
+      )
+      service.replaceSessionForTesting(
+        baseURL: "http://permission-behavior-tests.local",
+        token: accountA.access_token,
+        currentUser: accountA
+      )
+      let handler = SubscriptionHandler(apiService: service)
+      let forkResult = await handler.fork(share: try PermissionBehaviorFixtures.subscribeShare())
+      let forkedId = try XCTUnwrap(forkResult)
+
+      let accountB = Token(
+        access_token: "account-b-token",
+        token_type: "bearer",
+        super_user: FlexibleBool(false),
+        permissions: permissionBehaviorPermissions([.subscribe]),
+        user_id: 2,
+        user_name: "account-b",
+        avatar: nil
+      )
+      service.replaceSessionForTesting(
+        baseURL: "http://permission-behavior-tests.local",
+        token: accountB.access_token,
+        currentUser: accountB
+      )
+      await handler.fetchSubscriptionAndShowEditor(subId: forkedId)
+
+      XCTAssertNil(handler.sheetSubscribe)
+      let fetchRequestCount = await PermissionBehaviorURLProtocol.stub.requestCount(
+        method: "GET",
+        path: "/api/v1/subscribe/7001"
+      )
+      XCTAssertEqual(fetchRequestCount, 0)
+    }
+  }
+
   func testSubscriptionHandlerShowsSimpleFeedbackWhenForkBusinessFails() async throws {
     try await withPermissionBehaviorBackend { service in
       configurePermissionBehaviorUser(service, granted: [.subscribe])
@@ -233,7 +278,7 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
         #"{"success":false,"message":"数据库约束失败"}"#
       )
 
-      let handler = SubscriptionHandler()
+      let handler = SubscriptionHandler(apiService: service)
       let notifications = PermissionNotificationCounter()
       let observer = NotificationCenter.default.addObserver(
         forName: .subscriptionDidUpdate,
@@ -260,7 +305,7 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
         #"{"success":true,"data":{}}"#
       )
 
-      let handler = SubscriptionHandler()
+      let handler = SubscriptionHandler(apiService: service)
       let forkedId = await handler.fork(share: try PermissionBehaviorFixtures.subscribeShare())
 
       XCTAssertNil(forkedId)
@@ -348,7 +393,11 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
     try await withPermissionBehaviorBackend { service in
       configurePermissionBehaviorUser(service, granted: [.search])
 
-      let resourceViewModel = ResourceResultViewModel(keyword: "有搜索权限", sites: "1")
+      let resourceViewModel = ResourceResultViewModel(
+        keyword: "有搜索权限",
+        sites: "1",
+        apiService: service
+      )
       await resourceViewModel.search()
 
       try await permissionBehaviorWaitUntil("resource search result publishes") {
@@ -373,7 +422,7 @@ final class PermissionDirectGuardTests: XCTestCase {
     try await withPermissionBehaviorBackend { service in
       configurePermissionBehaviorUser(service, granted: [.search])
 
-      let handler = SubscriptionHandler()
+      let handler = SubscriptionHandler(apiService: service)
 
       handler.handleSubscribe(MediaInfo(tmdb_id: 901, title: "电影", type: "电影"))
       handler.handleSubscribe(MediaInfo(tmdb_id: 902, title: "剧集", type: "电视剧"))
@@ -393,7 +442,7 @@ final class PermissionDirectGuardTests: XCTestCase {
     try await withPermissionBehaviorBackend { service in
       configurePermissionBehaviorUser(service, granted: [.search])
 
-      let handler = SubscriptionHandler()
+      let handler = SubscriptionHandler(apiService: service)
       let forkedId = await handler.fork(share: try PermissionBehaviorFixtures.subscribeShare())
       await handler.fetchSubscriptionAndShowEditor(subId: 7001)
 
@@ -506,7 +555,7 @@ final class PermissionDirectGuardTests: XCTestCase {
     try await withPermissionBehaviorBackend { service in
       configurePermissionBehaviorUser(service, granted: [.discovery])
 
-      let resourceViewModel = ResourceResultViewModel(keyword: "无搜索权限")
+      let resourceViewModel = ResourceResultViewModel(keyword: "无搜索权限", apiService: service)
       await resourceViewModel.search()
 
       XCTAssertFalse(resourceViewModel.isLoading)
@@ -524,15 +573,15 @@ final class PermissionDirectGuardTests: XCTestCase {
 private func withPermissionBehaviorBackend(
   operation: (APIService) async throws -> Void
 ) async throws {
-  XCTAssertTrue(URLProtocol.registerClass(PermissionBehaviorURLProtocol.self))
-  defer { URLProtocol.unregisterClass(PermissionBehaviorURLProtocol.self) }
+  XCTAssertTrue(APIService.installURLProtocolForTesting(PermissionBehaviorURLProtocol.self))
+  defer { APIService.removeURLProtocolForTesting(PermissionBehaviorURLProtocol.self) }
 
-  let service = APIService.shared
+  let service = APIService.testingInstance()
   let snapshot = PermissionBehaviorServiceSnapshot.capture(service: service)
   defer { snapshot.restore(to: service) }
 
   await PermissionBehaviorURLProtocol.stub.reset()
-  service.baseURL = "http://permission-behavior-tests.local"
+  service.baseURLForTesting = "http://permission-behavior-tests.local"
   try await operation(service)
 }
 
@@ -563,12 +612,13 @@ private func configurePermissionBehaviorUser(
   _ service: APIService,
   granted permissions: Set<UserPermissionKey>
 ) {
-  service.token = "permission-behavior-token"
-  service.currentUser = Token(
+  service.tokenForTesting = "permission-behavior-token"
+  service.currentUserForTesting = Token(
     access_token: "permission-behavior-token",
     token_type: "bearer",
     super_user: FlexibleBool(false),
     permissions: permissionBehaviorPermissions(permissions),
+    user_id: 1,
     user_name: "permission-behavior",
     avatar: nil
   )
@@ -648,9 +698,9 @@ private struct PermissionBehaviorServiceSnapshot {
   }
 
   func restore(to service: APIService) {
-    service.baseURL = baseURL
-    service.token = token
-    service.currentUser = currentUser
+    service.baseURLForTesting = baseURL
+    service.tokenForTesting = token
+    service.currentUserForTesting = currentUser
     restoreDefaults(value: serverURLDefaults, forKey: "serverURL")
     restoreDefaults(value: accessTokenDefaults, forKey: "accessToken")
     restoreDefaults(value: currentUserDefaults, forKey: "currentUser")

@@ -5,11 +5,11 @@ import XCTest
 @MainActor
 final class ContentViewModelBehaviorTests: XCTestCase {
   func testAccountPermissionWarningUsesPersistedUserOnInitialization() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(ContentViewModelURLProtocol.self))
-    defer { URLProtocol.unregisterClass(ContentViewModelURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ContentViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ContentViewModelURLProtocol.self) }
 
     await ContentViewModelURLProtocol.stub.reset()
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
     var viewModel: ContentViewModel?
     defer {
@@ -17,22 +17,22 @@ final class ContentViewModelBehaviorTests: XCTestCase {
       snapshot.restore(to: service)
     }
 
-    service.baseURL = "https://permission-warning.content-view-model-tests.local"
-    service.token = "limited-token"
-    service.currentUser = token(
+    service.baseURLForTesting = "https://permission-warning.content-view-model-tests.local"
+    service.tokenForTesting = "limited-token"
+    service.currentUserForTesting = token(
       "limited-token",
       userName: "limited-user",
       permissions: ["discovery": false, "search": false, "subscribe": false, "manage": true]
     )
 
-    viewModel = ContentViewModel()
+    viewModel = ContentViewModel(apiService: service)
 
     XCTAssertNotNil(viewModel?.accountPermissionWarning)
   }
 
   func testPrepareStartupRefreshesPersistedPermissionsOnSameAppVersion() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(ContentViewModelURLProtocol.self))
-    defer { URLProtocol.unregisterClass(ContentViewModelURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ContentViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ContentViewModelURLProtocol.self) }
 
     await ContentViewModelURLProtocol.stub.reset()
     let service = APIService.shared
@@ -49,9 +49,9 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     clearCredential(account: "username")
     clearCredential(account: "password")
     UserDefaults.standard.set(AppVersionInfo.currentAppVersion(), forKey: markerKey)
-    service.baseURL = "https://startup-permission.content-view-model-tests.local"
-    service.token = "persisted-token"
-    service.currentUser = token(
+    service.baseURLForTesting = "https://startup-permission.content-view-model-tests.local"
+    service.tokenForTesting = "persisted-token"
+    service.currentUserForTesting = token(
       "persisted-token",
       userName: "stale-user",
       permissions: ["discovery": true, "search": false, "subscribe": false, "manage": false]
@@ -67,9 +67,80 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     XCTAssertEqual(paths.filter { $0 == "/api/v1/user/current" }.count, 1)
   }
 
+  func testStartupReloginFinishesBeforeAuthenticatedSettingsLoad() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ContentViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ContentViewModelURLProtocol.self) }
+
+    await ContentViewModelURLProtocol.stub.reset()
+    await ContentViewModelURLProtocol.stub.rejectSettingsToken("expired-token")
+    await ContentViewModelURLProtocol.stub.setHoldLoginResponses(true)
+    let service = APIService.testingInstance()
+    let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
+    let markerKey = APIService.sessionRefreshAppVersionKey
+    let originalMarker = UserDefaults.standard.string(forKey: markerKey)
+    var viewModel: ContentViewModel?
+    defer {
+      viewModel = nil
+      snapshot.restore(to: service)
+      restoreUserDefaultsString(originalMarker, forKey: markerKey)
+    }
+
+    clearCredential(account: "username")
+    clearCredential(account: "password")
+    _ = KeychainHelper.shared.save(
+      "startup-user", service: "MoviePilot-TV", account: "username")
+    _ = KeychainHelper.shared.save(
+      "startup-password", service: "MoviePilot-TV", account: "password")
+    UserDefaults.standard.removeObject(forKey: markerKey)
+    let expiredUser = token("expired-token", userName: "expired-user")
+    service.replaceSessionForTesting(
+      baseURL: "https://startup-order.content-view-model-tests.local",
+      token: expiredUser.access_token,
+      currentUser: expiredUser
+    )
+    service.setStoredCredentialsForTesting(
+      username: "startup-user", password: "startup-password")
+
+    viewModel = ContentViewModel(apiService: service)
+    NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+    for _ in 0..<50 { await Task.yield() }
+
+    var paths = await ContentViewModelURLProtocol.stub.requestPaths()
+    let expiredSettingsCount = await ContentViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/system/global",
+      authorization: "Bearer expired-token"
+    )
+    XCTAssertEqual(expiredSettingsCount, 0)
+    XCTAssertEqual(service.token, "expired-token")
+
+    let prepareTask = Task { @MainActor in
+      await viewModel?.prepareStartupIfNeeded()
+    }
+    await ContentViewModelURLProtocol.stub.waitForLoginRequest()
+    NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+    for _ in 0..<50 { await Task.yield() }
+    let preparingExpiredSettingsCount = await ContentViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/system/global",
+      authorization: "Bearer expired-token"
+    )
+    XCTAssertEqual(preparingExpiredSettingsCount, 0)
+    await ContentViewModelURLProtocol.stub.releaseLoginResponses()
+    await prepareTask.value
+
+    XCTAssertEqual(service.token, "fresh-startup-token")
+    XCTAssertEqual(service.currentUser?.user_name, "startup-user")
+    paths = await ContentViewModelURLProtocol.stub.requestPaths()
+    XCTAssertEqual(paths.filter { $0 == "/api/v1/login/access-token" }.count, 1)
+    let freshSettingsCount = await ContentViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/system/global",
+      authorization: "Bearer fresh-startup-token"
+    )
+    XCTAssertEqual(freshSettingsCount, 1)
+  }
+
   func testPrepareStartupLogsOutUnauthorizedTokenOnlySession() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(ContentViewModelURLProtocol.self))
-    defer { URLProtocol.unregisterClass(ContentViewModelURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ContentViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ContentViewModelURLProtocol.self) }
 
     await ContentViewModelURLProtocol.stub.reset()
     await ContentViewModelURLProtocol.stub.setCurrentUserStatusCode(401)
@@ -87,9 +158,9 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     clearCredential(account: "username")
     clearCredential(account: "password")
     UserDefaults.standard.set(AppVersionInfo.currentAppVersion(), forKey: markerKey)
-    service.baseURL = "https://startup-token-only.content-view-model-tests.local"
-    service.token = "expired-token"
-    service.currentUser = nil
+    service.baseURLForTesting = "https://startup-token-only.content-view-model-tests.local"
+    service.tokenForTesting = "expired-token"
+    service.currentUserForTesting = nil
 
     viewModel = ContentViewModel()
     await viewModel?.prepareStartupIfNeeded()
@@ -100,8 +171,8 @@ final class ContentViewModelBehaviorTests: XCTestCase {
   }
 
   func testAccountPermissionWarningClearsWhenCurrentUserRegainsRecommendedPermissions() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(ContentViewModelURLProtocol.self))
-    defer { URLProtocol.unregisterClass(ContentViewModelURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ContentViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ContentViewModelURLProtocol.self) }
 
     await ContentViewModelURLProtocol.stub.reset()
     let service = APIService.shared
@@ -112,12 +183,12 @@ final class ContentViewModelBehaviorTests: XCTestCase {
       snapshot.restore(to: service)
     }
 
-    service.baseURL = "https://permission-warning.content-view-model-tests.local"
-    service.token = "limited-token"
-    service.currentUser = nil
+    service.baseURLForTesting = "https://permission-warning.content-view-model-tests.local"
+    service.tokenForTesting = "limited-token"
+    service.currentUserForTesting = nil
 
     viewModel = ContentViewModel()
-    service.currentUser = token(
+    service.currentUserForTesting = token(
       "limited-token",
       userName: "limited-user",
       permissions: ["discovery": false, "search": false, "subscribe": false, "manage": true]
@@ -127,7 +198,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
       viewModel?.accountPermissionWarning != nil
     }
 
-    service.currentUser = token(
+    service.currentUserForTesting = token(
       "full-token",
       userName: "full-user",
       permissions: ["discovery": true, "search": true, "subscribe": true, "manage": false]
@@ -138,9 +209,54 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     }
   }
 
+  func testAccountPermissionWarningReappearsForDifferentStableUserID() async throws {
+    let service = APIService.testingInstance()
+    let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
+    var viewModel: ContentViewModel?
+    defer {
+      viewModel = nil
+      snapshot.restore(to: service)
+    }
+    let permissions = [
+      "discovery": false,
+      "search": false,
+      "subscribe": false,
+      "manage": true,
+    ]
+    let accountA = token(
+      "limited-a",
+      userID: 1,
+      userName: "same-name",
+      permissions: permissions
+    )
+    service.replaceSessionForTesting(
+      baseURL: "https://permission-profile.content-view-model-tests.local",
+      token: accountA.access_token,
+      currentUser: accountA
+    )
+    viewModel = ContentViewModel(apiService: service)
+    let accountAWarningID = try XCTUnwrap(viewModel?.accountPermissionWarning?.id)
+
+    viewModel?.accountPermissionWarning = nil
+    let accountB = token(
+      "limited-b",
+      userID: 2,
+      userName: "same-name",
+      permissions: permissions
+    )
+    service.replaceSessionForTesting(
+      baseURL: "https://permission-profile.content-view-model-tests.local",
+      token: accountB.access_token,
+      currentUser: accountB
+    )
+
+    let accountBWarning = try XCTUnwrap(viewModel?.accountPermissionWarning)
+    XCTAssertNotEqual(accountBWarning.id, accountAWarningID)
+  }
+
   func testBackendVersionWarningRechecksAfterServerAndTokenChange() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(ContentViewModelURLProtocol.self))
-    defer { URLProtocol.unregisterClass(ContentViewModelURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ContentViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ContentViewModelURLProtocol.self) }
 
     await ContentViewModelURLProtocol.stub.reset()
     let service = APIService.shared
@@ -157,9 +273,9 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     clearCredential(account: "username")
     clearCredential(account: "password")
     UserDefaults.standard.set(AppVersionInfo.currentAppVersion(), forKey: markerKey)
-    service.baseURL = "https://compatible.content-view-model-tests.local"
-    service.token = "token-a"
-    service.currentUser = token("token-a", userName: "first-user")
+    service.baseURLForTesting = "https://compatible.content-view-model-tests.local"
+    service.tokenForTesting = "token-a"
+    service.currentUserForTesting = token("token-a", userName: "first-user")
     service.settings = nil
 
     viewModel = ContentViewModel()
@@ -169,9 +285,9 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     XCTAssertEqual(service.settings?.BACKEND_VERSION, "v2.15.1")
     XCTAssertNil(viewModel?.backendVersionWarning)
 
-    service.baseURL = "https://old.content-view-model-tests.local"
-    service.token = "token-b"
-    service.currentUser = token("token-b", userName: "second-user")
+    service.baseURLForTesting = "https://old.content-view-model-tests.local"
+    service.tokenForTesting = "token-b"
+    service.currentUserForTesting = token("token-b", userName: "second-user")
 
     try await waitUntil("expected backend warning to reload from old backend") {
       service.settings?.BACKEND_VERSION == "v2.14.9"
@@ -195,6 +311,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
 
   private func token(
     _ value: String,
+    userID: Int? = nil,
     userName: String,
     permissions: [String: Bool] = ["discovery": true]
   ) -> Token {
@@ -203,6 +320,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
       token_type: "bearer",
       super_user: FlexibleBool(false),
       permissions: permissions,
+      user_id: userID,
       user_name: userName,
       avatar: nil
     )
@@ -250,6 +368,7 @@ private struct ContentViewModelServiceSnapshot {
   let usernameDefaults: String?
   let passwordKeychain: String?
   let passwordDefaults: String?
+  let persistence: APIServicePersistenceSnapshot
 
   @MainActor
   static func capture(service: APIService) -> ContentViewModelServiceSnapshot {
@@ -266,16 +385,20 @@ private struct ContentViewModelServiceSnapshot {
       usernameKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username"),
       usernameDefaults: UserDefaults.standard.string(forKey: "username"),
       passwordKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "password"),
-      passwordDefaults: UserDefaults.standard.string(forKey: "password")
+      passwordDefaults: UserDefaults.standard.string(forKey: "password"),
+      persistence: service.persistenceSnapshotForTesting()
     )
   }
 
   @MainActor
   func restore(to service: APIService) {
-    service.baseURL = baseURL
-    service.token = token
-    service.currentUser = currentUser
+    service.replaceSessionForTesting(
+      baseURL: baseURL,
+      token: token,
+      currentUser: currentUser
+    )
     service.settings = settings
+    service.restorePersistenceSnapshotForTesting(persistence)
     restoreDefaults(value: serverURLDefaults, forKey: "serverURL")
     restoreCredential(account: "accessToken", keychainValue: tokenKeychain, defaultsValue: tokenDefaults)
     restoreCredential(
@@ -310,24 +433,63 @@ private struct ContentViewModelServiceSnapshot {
 private actor ContentViewModelURLProtocolStub {
   private var requests: [URLRequest] = []
   private var currentUserStatusCode = 200
+  private var rejectedSettingsToken: String?
+  private var holdLoginResponses = false
+  private var loginWaiters: [CheckedContinuation<Void, Never>] = []
 
   func reset() {
     requests.removeAll()
     currentUserStatusCode = 200
+    rejectedSettingsToken = nil
+    holdLoginResponses = false
+    loginWaiters.forEach { $0.resume() }
+    loginWaiters.removeAll()
   }
 
   func setCurrentUserStatusCode(_ statusCode: Int) {
     currentUserStatusCode = statusCode
   }
 
+  func rejectSettingsToken(_ token: String?) {
+    rejectedSettingsToken = token
+  }
+
+  func setHoldLoginResponses(_ enabled: Bool) {
+    holdLoginResponses = enabled
+  }
+
+  func waitForLoginRequest() async {
+    while !requests.contains(where: { $0.url?.path == "/api/v1/login/access-token" }) {
+      await Task.yield()
+    }
+  }
+
+  func releaseLoginResponses() {
+    holdLoginResponses = false
+    loginWaiters.forEach { $0.resume() }
+    loginWaiters.removeAll()
+  }
+
   func requestPaths() -> [String] {
     requests.compactMap { $0.url?.path }
   }
 
-  func response(for request: URLRequest) throws -> (HTTPURLResponse, Data) {
+  func requestCount(path: String, authorization: String?) -> Int {
+    requests.filter {
+      $0.url?.path == path
+        && $0.value(forHTTPHeaderField: "Authorization") == authorization
+    }.count
+  }
+
+  func response(for request: URLRequest) async throws -> (HTTPURLResponse, Data) {
     requests.append(request)
     guard let url = request.url else {
       throw URLError(.badURL)
+    }
+    if url.path == "/api/v1/login/access-token", holdLoginResponses {
+      await withCheckedContinuation { continuation in
+        loginWaiters.append(continuation)
+      }
     }
 
     let backendVersion: String
@@ -338,8 +500,26 @@ private actor ContentViewModelURLProtocolStub {
       backendVersion = "v2.15.1"
     }
 
+    let rejectsSettings = url.path == "/api/v1/system/global"
+      && request.value(forHTTPHeaderField: "Authorization") == rejectedSettingsToken.map {
+        "Bearer \($0)"
+      }
+    let statusCode = if url.path == "/api/v1/user/current" {
+      currentUserStatusCode
+    } else if rejectsSettings {
+      403
+    } else {
+      200
+    }
+
     let data: Data
-    if url.path == "/api/v1/user/current" {
+    if statusCode == 403 {
+      data = #"{"success":false,"message":"forbidden"}"#.data(using: .utf8)!
+    } else if url.path == "/api/v1/login/access-token" {
+      data =
+        #"{"access_token":"fresh-startup-token","token_type":"bearer","super_user":false,"permissions":{"discovery":true,"search":true,"subscribe":true,"manage":false},"user_id":1,"user_name":"startup-user","avatar":null}"#
+        .data(using: .utf8)!
+    } else if url.path == "/api/v1/user/current" {
       data =
         #"{"id":1,"name":"refreshed-user","email":null,"is_active":true,"is_superuser":false,"avatar":null,"is_otp":false,"permissions":{"discovery":false,"search":true,"subscribe":false,"manage":false},"settings":{}}"#
         .data(using: .utf8)!
@@ -357,7 +537,7 @@ private actor ContentViewModelURLProtocolStub {
 
     let response = HTTPURLResponse(
       url: url,
-      statusCode: url.path == "/api/v1/user/current" ? currentUserStatusCode : 200,
+      statusCode: statusCode,
       httpVersion: nil,
       headerFields: ["Content-Type": "application/json"]
     )!

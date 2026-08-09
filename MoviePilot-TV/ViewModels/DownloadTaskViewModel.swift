@@ -16,16 +16,24 @@ class DownloadTaskViewModel: ObservableObject {
       clearForRestrictedUser()
       return
     }
+    let sessionSnapshot = apiService.sessionSnapshot()
     if clients.isEmpty {
       do {
-        clients = try await apiService.fetchDownloadClients()
-        if let first = clients.first(where: { $0.enabled?.value ?? false }) ?? clients.first {
+        let loadedClients = try await apiService.fetchDownloadClients()
+        guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
+        clients = loadedClients
+        if let first = loadedClients.first(where: { $0.enabled?.value ?? false })
+          ?? loadedClients.first
+        {
           selectedClient = first.name
         }
+      } catch is CancellationError {
+        return
       } catch {
         print("Error fetching clients: \(error)")
       }
     }
+    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
     await loadDownloads()
   }
 
@@ -40,7 +48,9 @@ class DownloadTaskViewModel: ObservableObject {
     guard !clientName.isEmpty else { return }
     do {
       let newDownloads = try await apiService.fetchDownloading(clientName: clientName)
-      guard selectedClient == clientName, currentGeneration == downloadLoadGeneration else {
+      guard selectedClient == clientName,
+        currentGeneration == downloadLoadGeneration
+      else {
         return
       }
 
@@ -62,6 +72,8 @@ class DownloadTaskViewModel: ObservableObject {
           downloads.insert(newDownload, at: 0)
         }
       }
+    } catch is CancellationError {
+      return
     } catch {
       print("Error loading downloads: \(error)")
     }
@@ -76,14 +88,18 @@ class DownloadTaskViewModel: ObservableObject {
 
   func stopDownload(hash: String) async -> Bool {
     guard apiService.canAccess(.manage) else { return false }
-    guard !selectedClient.isEmpty else { return false }
+    let clientName = selectedClient
+    guard !clientName.isEmpty else { return false }
     do {
       let (success, message) = try await apiService.stopDownload(
-        clientName: selectedClient, hash: hash)
+        clientName: clientName, hash: hash)
+      guard selectedClient == clientName else { return false }
       if !success {
         print("Failed to stop download: \(message ?? "Unknown error")")
       }
       return success
+    } catch is CancellationError {
+      return false
     } catch {
       print("Error stopping download: \(error)")
       return false
@@ -92,14 +108,18 @@ class DownloadTaskViewModel: ObservableObject {
 
   func startDownload(hash: String) async -> Bool {
     guard apiService.canAccess(.manage) else { return false }
-    guard !selectedClient.isEmpty else { return false }
+    let clientName = selectedClient
+    guard !clientName.isEmpty else { return false }
     do {
       let (success, message) = try await apiService.startDownload(
-        clientName: selectedClient, hash: hash)
+        clientName: clientName, hash: hash)
+      guard selectedClient == clientName else { return false }
       if !success {
         print("Failed to start download: \(message ?? "Unknown error")")
       }
       return success
+    } catch is CancellationError {
+      return false
     } catch {
       print("Error starting download: \(error)")
       return false
@@ -121,6 +141,8 @@ class DownloadTaskViewModel: ObservableObject {
       } else {
         print("Failed to delete download: \(message ?? "Unknown error")")
       }
+    } catch is CancellationError {
+      return
     } catch {
       print("Error deleting download: \(error)")
     }

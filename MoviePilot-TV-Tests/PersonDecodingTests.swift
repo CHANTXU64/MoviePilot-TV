@@ -10,7 +10,7 @@ final class PersonDecodingTests: XCTestCase {
     let snapshot = PersonDecodingServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.useImageCache = false
 
     let people = try JSONDecoder().decode(
@@ -86,7 +86,7 @@ final class PersonDecodingTests: XCTestCase {
     let snapshot = PersonDecodingServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.useImageCache = false
 
     let person = try JSONDecoder().decode(
@@ -126,7 +126,7 @@ final class PersonDecodingTests: XCTestCase {
     let snapshot = PersonDecodingServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.useImageCache = false
 
     let person = try JSONDecoder().decode(
@@ -165,7 +165,7 @@ final class PersonDecodingTests: XCTestCase {
     let snapshot = PersonDecodingServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.settings = try JSONDecoder().decode(
       GlobalSettings.self,
       from: Data(#"{"TMDB_IMAGE_DOMAIN":"tmdb-images.local"}"#.utf8)
@@ -302,7 +302,7 @@ private struct PersonDecodingServiceSnapshot {
   }
 
   func restore(to service: APIService) {
-    service.baseURL = baseURL
+    service.baseURLForTesting = baseURL
     service.settings = settings
     service.useImageCache = useImageCache
   }

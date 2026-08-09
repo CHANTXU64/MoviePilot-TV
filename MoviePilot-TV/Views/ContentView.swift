@@ -57,6 +57,7 @@ struct ContentView: View {
             }
             .tag(ContentViewModel.Tab.system)
         }
+        .id(viewModel.sessionUIIdentity)
         .foregroundColor(.primary)
         .onAppear {
           selectedTab = ContentViewModel.resolvedSelectedTab(selectedTab, visibleTabs: viewModel.visibleTabs)

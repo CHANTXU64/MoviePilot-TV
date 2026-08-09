@@ -653,9 +653,9 @@ final class BackendCompatibilityPermissionBehaviorTests: XCTestCase {
       )
 
       clearBackendCompatibilityStoredCredentials()
-      service.baseURL = config.baseURL
-      service.token = nil
-      service.currentUser = nil
+      service.baseURLForTesting = config.baseURL
+      service.tokenForTesting = nil
+      service.currentUserForTesting = nil
 
       let token = try await service.login(username: account.username, password: account.password)
       accounts.append(
@@ -742,9 +742,9 @@ private func runBackendCompatibilityAccounts(
 
   for account in config.accounts {
     clearBackendCompatibilityStoredCredentials()
-    service.baseURL = config.baseURL
-    service.token = nil
-    service.currentUser = nil
+    service.baseURLForTesting = config.baseURL
+    service.tokenForTesting = nil
+    service.currentUserForTesting = nil
 
     let token: Token
     do {
@@ -800,8 +800,8 @@ private func pinBackendCompatibilityAccount(
 ) {
   guard let token = config.activeAccount?.token else { return }
   clearBackendCompatibilityStoredCredentials()
-  service.token = token.access_token
-  service.currentUser = token
+  service.tokenForTesting = token.access_token
+  service.currentUserForTesting = token
 }
 
 @discardableResult
@@ -852,10 +852,12 @@ private struct BackendServiceSnapshot {
   let currentUser: Token?
   let settings: GlobalSettings?
   let useImageCache: Bool
+  let serverURLDefaults: String?
   let usernameKeychain: String?
   let passwordKeychain: String?
   let usernameDefaults: String?
   let passwordDefaults: String?
+  let persistence: APIServicePersistenceSnapshot
 
   @MainActor
   static func capture(service: APIService) -> BackendServiceSnapshot {
@@ -865,6 +867,7 @@ private struct BackendServiceSnapshot {
       currentUser: service.currentUser,
       settings: service.settings,
       useImageCache: service.useImageCache,
+      serverURLDefaults: UserDefaults.standard.string(forKey: "serverURL"),
       usernameKeychain: KeychainHelper.shared.read(
         service: "MoviePilot-TV",
         account: "username"
@@ -874,17 +877,26 @@ private struct BackendServiceSnapshot {
         account: "password"
       ),
       usernameDefaults: UserDefaults.standard.string(forKey: "username"),
-      passwordDefaults: UserDefaults.standard.string(forKey: "password")
+      passwordDefaults: UserDefaults.standard.string(forKey: "password"),
+      persistence: service.persistenceSnapshotForTesting()
     )
   }
 
   @MainActor
   func restore(to service: APIService) {
-    service.baseURL = baseURL
-    service.token = token
-    service.currentUser = currentUser
+    service.replaceSessionForTesting(
+      baseURL: baseURL,
+      token: token,
+      currentUser: currentUser
+    )
     service.settings = settings
     service.useImageCache = useImageCache
+    service.restorePersistenceSnapshotForTesting(persistence)
+    if let serverURLDefaults {
+      UserDefaults.standard.set(serverURLDefaults, forKey: "serverURL")
+    } else {
+      UserDefaults.standard.removeObject(forKey: "serverURL")
+    }
     restoreCredential(
       account: "username",
       keychainValue: usernameKeychain,

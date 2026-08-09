@@ -34,7 +34,7 @@ class TransferHistoryViewModel: ObservableObject {
   private var paginator: Paginator<TransferHistory>!
   private var fetcher: (Int) async throws -> TransferHistoryResponse
   private var cancellables = Set<AnyCancellable>()
-  private let apiService = APIService.shared
+  private let apiService: APIService
   // 后端固定每页条数，供轮询游标推进/回退统一计算。
   private let pageSize = 20
   // 与 Paginator threshold 保持一致，基于可见列表位置触发 loadMore。
@@ -50,10 +50,11 @@ class TransferHistoryViewModel: ObservableObject {
   // 删除累计计数器：每累计满一页，回退一次分页游标。
   private var pendingDeletionShiftCount: Int = 0
 
-  init() {
+  init(apiService: APIService = .shared) {
+    self.apiService = apiService
     // 使用局部变量 api 避免在初始化 dataManager 时捕获 self
     let pageSize = self.pageSize
-    let api = APIService.shared
+    let api = apiService
     self.fetcher = { page in
       try await api.fetchTransferHistory(
         page: page,
@@ -111,7 +112,7 @@ class TransferHistoryViewModel: ObservableObject {
       return
     }
     searchText = text
-    let api = APIService.shared
+    let api = apiService
     let effectiveText = text.trimmingCharacters(in: .whitespacesAndNewlines)
     let title = effectiveText.isEmpty ? nil : effectiveText
 
@@ -147,8 +148,10 @@ class TransferHistoryViewModel: ObservableObject {
       isFirstLoading = false
     }
 
+    let sessionSnapshot = apiService.sessionSnapshot()
     resetDynamicState(clearDeletedIds: true)
     await loadStorages()
+    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
     await paginator.refresh()
   }
 
@@ -159,15 +162,13 @@ class TransferHistoryViewModel: ObservableObject {
     }
     do {
       let storages = try await apiService.fetchStorages()
-      guard apiService.canAccess(.manage) else {
-        storageDict = [:]
-        return
-      }
       var dict = [String: String]()
       for storage in storages {
         dict[storage.type] = storage.name
       }
       storageDict = dict
+    } catch is CancellationError {
+      return
     } catch {
       print("[TransferHistoryViewModel] Failed to load storages: \(error.localizedDescription)")
     }
@@ -216,6 +217,8 @@ class TransferHistoryViewModel: ObservableObject {
       } else {
         errorMessage = result.message ?? "删除失败 (id: \(item.id))"
       }
+    } catch is CancellationError {
+      return
     } catch {
       handle(error: error)
     }
@@ -245,14 +248,17 @@ class TransferHistoryViewModel: ObservableObject {
     let idsToDelete = Array(selectedIds)
     var deletedCount = 0
     var failures: [String] = []
+    let snapshot = apiService.sessionSnapshot()
 
     for id in idsToDelete {
       if let item = items.first(where: { $0.id == id }) {
         do {
+          guard apiService.isSessionUnchanged(from: snapshot) else { return }
           let result = try await apiService.deleteTransferHistory(
             item: item,
             deleteSource: deleteSource,
             deleteDest: deleteDest)
+          guard apiService.isSessionUnchanged(from: snapshot) else { return }
 
           if result.success {
             markDeleted(id: id)
@@ -260,6 +266,8 @@ class TransferHistoryViewModel: ObservableObject {
           } else {
             failures.append(result.message ?? "id: \(id)")
           }
+        } catch is CancellationError {
+          return
         } catch {
           failures.append("id: \(id)，\(error.localizedDescription)")
         }
@@ -283,12 +291,14 @@ class TransferHistoryViewModel: ObservableObject {
 
   func fetchLatest() async {
     guard apiService.canAccess(.manage) else { return }
+    let sessionSnapshot = apiService.sessionSnapshot()
     do {
       var allNewItems: [TransferHistory] = []
       var currentPage = 1
       let maxPagesToFetch = 5  // Safeguard to prevent infinite loops
 
       let firstPageResponse = try await fetcher(1)
+      guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
       var fetchedItems = firstPageResponse.list
 
       let existingIds = Set(items.map { $0.id }).union(deletedIds)
@@ -316,10 +326,12 @@ class TransferHistoryViewModel: ObservableObject {
 
         currentPage += 1
         let nextPageResponse = try await fetcher(currentPage)
+        guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
         fetchedItems = nextPageResponse.list
       }
 
       if !allNewItems.isEmpty {
+        guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
         let knownIds = Set(prependedItems.map(\.id))
           .union(paginatorItems.map(\.id))
           .union(deletedIds)
@@ -481,12 +493,14 @@ class TransferHistoryViewModel: ObservableObject {
     aiRedoTask?.cancel()
     aiRedoTask = Task { @MainActor in
       do {
+        let snapshot = apiService.sessionSnapshot()
         let result: (progressKey: String, acceptedIds: [Int])
         if useBatchEndpoint {
           result = try await apiService.aiRedoTransferHistories(ids: pendingIds)
         } else {
           result = try await apiService.aiRedoTransferHistory(id: pendingIds[0])
         }
+        guard apiService.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
 
         let acceptedIds = result.acceptedIds
         let rejectedIds = Set(pendingIds).subtracting(acceptedIds)
@@ -522,6 +536,7 @@ class TransferHistoryViewModel: ObservableObject {
             break
           }
         }
+        guard apiService.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
 
         if !Task.isCancelled {
           for id in acceptedIds {
@@ -533,6 +548,12 @@ class TransferHistoryViewModel: ObservableObject {
             self.errorMessage = terminalError
           }
         }
+      } catch is CancellationError {
+        for id in pendingIds {
+          self.aiRedoingIds.remove(id)
+        }
+        self.isAiRedoing = !self.aiRedoingIds.isEmpty
+        return
       } catch {
         if !Task.isCancelled {
           if case APIError.serverMessage(let message) = error {

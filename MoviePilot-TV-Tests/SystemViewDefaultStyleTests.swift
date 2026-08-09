@@ -137,11 +137,13 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("private static let columnSpacing: CGFloat = 270"))
   }
 
-  func testSessionLogoutPreloaderCleanupUsesMainActorBridge() throws {
+  func testSessionChangePreloaderCleanupUsesUnifiedSessionState() throws {
     let source = try Self.source(at: "MoviePilot-TV/ViewModels/MediaPreloader.swift")
 
-    XCTAssertTrue(source.contains("Task { @MainActor [weak self] in"))
-    XCTAssertTrue(source.contains("self?.clearAll()"))
+    XCTAssertTrue(source.contains("apiService.$session"))
+    XCTAssertTrue(source.contains("session.token == nil"))
+    XCTAssertTrue(source.contains("session.uiIdentity != self.observedSessionUIIdentity"))
+    XCTAssertTrue(source.contains("if shouldClear { self.clearAll() }"))
   }
 
   func testContentViewNormalizesHiddenSelectedTabOnAppear() throws {
@@ -369,8 +371,8 @@ final class SystemViewDefaultStyleTests: XCTestCase {
   func testSystemViewModelRechecksPermissionBeforePublishingCustomRules() throws {
     let source = try Self.source(at: "MoviePilot-TV/ViewModels/SystemViewModel.swift")
 
-    XCTAssertTrue(source.contains("let rules = try await APIService.shared.fetchCustomFilterRules()"))
-    XCTAssertTrue(source.contains("guard APIService.shared.canRequestSuperUserEndpoints else {"))
+    XCTAssertTrue(source.contains("let rules = try await apiService.fetchCustomFilterRules()"))
+    XCTAssertTrue(source.contains("guard apiService.canRequestSuperUserEndpoints else {"))
     XCTAssertTrue(source.contains("customFilterRules = rules"))
   }
 
@@ -388,7 +390,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(viewSource.contains("if canConfigureCustomFilters {"))
     XCTAssertFalse(viewSource.contains("guard canConfigureSearch else { return }"))
     XCTAssertTrue(viewSource.contains("guard canConfigureCustomFilters else { return }"))
-    XCTAssertTrue(viewModelSource.contains("guard APIService.shared.canAccess(.search) else {"))
+    XCTAssertTrue(viewModelSource.contains("guard apiService.canAccess(.search) else {"))
   }
 
   func testRecommendBackendCompatibilityScansShelvesIndependently() throws {

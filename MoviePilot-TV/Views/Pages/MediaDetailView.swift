@@ -155,8 +155,7 @@ struct MediaDetailView: View {
           ? BlurImageProcessor(blurRadius: CGFloat(blurRadius))
           : DefaultImageProcessor.default
 
-        KFImage(url)
-          .requestModifier(AnyModifier.cookieModifier)
+        KFImage.sessionImage(url)
           .placeholder {
             EmptyView()
           }

@@ -8,7 +8,7 @@ enum UserPermissionKey: String, Codable, CaseIterable {
 }
 
 /// 登录认证令牌
-struct Token: Codable {
+struct Token: Codable, Equatable {
   /// 用户令牌
   let access_token: String
   let token_type: String
@@ -16,10 +16,30 @@ struct Token: Codable {
   let super_user: FlexibleBool?
   /// 普通用户功能权限；非超级用户只在后端明确返回 true 时获得对应功能。
   let permissions: [String: Bool]?
+  /// 后端稳定用户 ID；账号级缓存与偏好必须使用它，而不是可修改的用户名。
+  let user_id: Int?
   /// 用户名
   let user_name: String
   /// 头像
   let avatar: String?
+
+  init(
+    access_token: String,
+    token_type: String,
+    super_user: FlexibleBool?,
+    permissions: [String: Bool]?,
+    user_id: Int? = nil,
+    user_name: String,
+    avatar: String?
+  ) {
+    self.access_token = access_token
+    self.token_type = token_type
+    self.super_user = super_user
+    self.permissions = permissions
+    self.user_id = user_id
+    self.user_name = user_name
+    self.avatar = avatar
+  }
 
   var canRequestSuperUserEndpoints: Bool {
     super_user?.value == true
@@ -59,6 +79,7 @@ struct Token: Codable {
       token_type: token_type,
       super_user: super_user,
       permissions: permissions,
+      user_id: user_id,
       user_name: user_name,
       avatar: avatar
     )
@@ -72,6 +93,7 @@ struct Token: Codable {
       token_type: token_type,
       super_user: super_user,
       permissions: permissions,
+      user_id: user_id,
       user_name: user_name,
       avatar: avatar
     )

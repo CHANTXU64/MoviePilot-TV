@@ -7,8 +7,8 @@ final class PermissionScopedLoadViewModelTests: XCTestCase {
   func testAddDownloadPendingLoadDoesNotPublishOptionsAfterSearchPermissionIsRestricted()
     async throws
   {
-    XCTAssertTrue(URLProtocol.registerClass(PermissionScopedLoadURLProtocol.self))
-    defer { URLProtocol.unregisterClass(PermissionScopedLoadURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(PermissionScopedLoadURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(PermissionScopedLoadURLProtocol.self) }
 
     let service = APIService.shared
     let snapshot = PermissionScopedServiceSnapshot.capture(service: service)
@@ -17,7 +17,7 @@ final class PermissionScopedLoadViewModelTests: XCTestCase {
     await PermissionScopedLoadURLProtocol.stub.reset()
     await PermissionScopedLoadURLProtocol.stub.suspend(
       path: "/api/v1/system/setting/public/Directories")
-    service.baseURL = "http://permission-scoped-load.local"
+    service.baseURLForTesting = "http://permission-scoped-load.local"
     configureSearchUser(service)
 
     let viewModel = AddDownloadViewModel(torrent: Self.torrentFixture())
@@ -41,19 +41,19 @@ final class PermissionScopedLoadViewModelTests: XCTestCase {
   func testSiteFilterPendingLoadDoesNotPublishSitesAfterSearchPermissionIsRestricted()
     async throws
   {
-    XCTAssertTrue(URLProtocol.registerClass(PermissionScopedLoadURLProtocol.self))
-    defer { URLProtocol.unregisterClass(PermissionScopedLoadURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(PermissionScopedLoadURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(PermissionScopedLoadURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = PermissionScopedServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await PermissionScopedLoadURLProtocol.stub.reset()
     await PermissionScopedLoadURLProtocol.stub.suspend(path: "/api/v1/site/rss")
-    service.baseURL = "http://permission-scoped-load.local"
+    service.baseURLForTesting = "http://permission-scoped-load.local"
     configureSearchUser(service)
 
-    let viewModel = SiteFilterViewModel()
+    let viewModel = SiteFilterViewModel(apiService: service)
     viewModel.selectedSites = [1]
     let loadTask = Task { await viewModel.loadSites() }
     try await waitUntil("sites request started") {
@@ -69,11 +69,42 @@ final class PermissionScopedLoadViewModelTests: XCTestCase {
     XCTAssertTrue(viewModel.selectedSites.isEmpty)
   }
 
+  func testSiteFilterSessionRefreshCancellationKeepsSelectionWhenPermissionRemains()
+    async throws
+  {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(PermissionScopedLoadURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(PermissionScopedLoadURLProtocol.self) }
+
+    let sharedService = APIService.shared
+    let persistenceSnapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { persistenceSnapshot.restore(to: sharedService) }
+    let service = APIService.testingInstance()
+
+    await PermissionScopedLoadURLProtocol.stub.reset()
+    await PermissionScopedLoadURLProtocol.stub.suspend(path: "/api/v1/site/rss")
+    service.baseURLForTesting = "http://permission-scoped-load.local"
+    configureSearchUser(service)
+
+    let viewModel = SiteFilterViewModel(apiService: service)
+    viewModel.selectedSites = [1]
+    let loadTask = Task { await viewModel.loadSites() }
+    try await waitUntil("sites request started") {
+      await PermissionScopedLoadURLProtocol.stub.requestCount(
+        method: "GET", path: "/api/v1/site/rss") == 1
+    }
+
+    service.tokenForTesting = "search-user-refreshed"
+    await PermissionScopedLoadURLProtocol.stub.release(path: "/api/v1/site/rss")
+    await loadTask.value
+
+    XCTAssertEqual(viewModel.selectedSites, [1])
+  }
+
   func testReorganizePendingLoadDoesNotPublishConfigAfterManagePermissionIsRestricted()
     async throws
   {
-    XCTAssertTrue(URLProtocol.registerClass(PermissionScopedLoadURLProtocol.self))
-    defer { URLProtocol.unregisterClass(PermissionScopedLoadURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(PermissionScopedLoadURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(PermissionScopedLoadURLProtocol.self) }
 
     let service = APIService.shared
     let snapshot = PermissionScopedServiceSnapshot.capture(service: service)
@@ -82,7 +113,7 @@ final class PermissionScopedLoadViewModelTests: XCTestCase {
     await PermissionScopedLoadURLProtocol.stub.reset()
     await PermissionScopedLoadURLProtocol.stub.suspend(
       path: "/api/v1/system/setting/public/Storages")
-    service.baseURL = "http://permission-scoped-load.local"
+    service.baseURLForTesting = "http://permission-scoped-load.local"
     configureManageUser(service)
 
     let viewModel = ReorganizeViewModel(logIds: [], fileItem: nil)
@@ -103,8 +134,8 @@ final class PermissionScopedLoadViewModelTests: XCTestCase {
   }
 
   private func configureSearchUser(_ service: APIService) {
-    service.token = "search-user"
-    service.currentUser = Token(
+    service.tokenForTesting = "search-user"
+    service.currentUserForTesting = Token(
       access_token: "search-user",
       token_type: "Bearer",
       super_user: FlexibleBool(false),
@@ -120,8 +151,8 @@ final class PermissionScopedLoadViewModelTests: XCTestCase {
   }
 
   private func configureNoSearchUser(_ service: APIService) {
-    service.token = "no-search-user"
-    service.currentUser = Token(
+    service.tokenForTesting = "no-search-user"
+    service.currentUserForTesting = Token(
       access_token: "no-search-user",
       token_type: "Bearer",
       super_user: FlexibleBool(false),
@@ -137,8 +168,8 @@ final class PermissionScopedLoadViewModelTests: XCTestCase {
   }
 
   private func configureManageUser(_ service: APIService) {
-    service.token = "manage-user"
-    service.currentUser = Token(
+    service.tokenForTesting = "manage-user"
+    service.currentUserForTesting = Token(
       access_token: "manage-user",
       token_type: "Bearer",
       super_user: FlexibleBool(false),
@@ -214,9 +245,9 @@ private struct PermissionScopedServiceSnapshot {
 
   @MainActor
   func restore(to service: APIService) {
-    service.baseURL = baseURL
-    service.token = token
-    service.currentUser = currentUser
+    service.baseURLForTesting = baseURL
+    service.tokenForTesting = token
+    service.currentUserForTesting = currentUser
     restoreDefaults(value: serverURLDefaults, forKey: "serverURL")
     restoreCredential(account: "accessToken", keychainValue: tokenKeychain, defaultsValue: tokenDefaults)
     restoreCredential(

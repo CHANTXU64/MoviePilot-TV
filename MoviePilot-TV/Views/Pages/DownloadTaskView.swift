@@ -177,8 +177,7 @@ private struct DownloadTaskRow: View {
       // MARK: - 背景
       let backdropUrl = item.media?.imageURLs.image
       ZStack {
-        KFImage(backdropUrl)
-          .requestModifier(AnyModifier.cookieModifier)
+        KFImage.sessionImage(backdropUrl)
           .setProcessor(BlurImageProcessor(blurRadius: 2))
           .resizing(referenceSize: CGSize(width: 500, height: 180), mode: .aspectFill)
           .resizable()

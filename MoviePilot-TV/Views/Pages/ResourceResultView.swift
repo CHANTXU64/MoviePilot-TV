@@ -56,8 +56,7 @@ struct ResourceResultView: View {
     }
     .background {
       if let mediaInfo = mediaInfo, let url = mediaInfo.imageURLs.backdrop {
-        KFImage(url)
-          .requestModifier(AnyModifier.cookieModifier)
+        KFImage.sessionImage(url)
           .placeholder {
             EmptyView()
           }

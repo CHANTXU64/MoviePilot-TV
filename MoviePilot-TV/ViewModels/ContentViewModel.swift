@@ -18,58 +18,58 @@ class ContentViewModel: ObservableObject {
   @Published var backendVersionWarning: BackendVersionWarning?
   @Published var accountPermissionWarning: AccountPermissionWarning?
   @Published private(set) var currentUser: Token?
+  @Published private(set) var sessionUIIdentity: String
 
-  private let apiService = APIService.shared
+  private let apiService: APIService
   private var cancellables = Set<AnyCancellable>()
   private var didPrepareStartup = false
   private var backendVersionCheckKey: BackendVersionCheckKey?
   private var lastAccountPermissionWarningKey: AccountPermissionWarningKey?
 
-  init() {
+  init(apiService: APIService = .shared) {
+    self.apiService = apiService
     // 初始状态
     isLoggedIn = apiService.isLoggedIn
     currentUser = apiService.currentUser
+    sessionUIIdentity = apiService.uiIdentity
     updateAccountPermissionWarning(for: currentUser)
 
-    // 监听令牌变化 -> 在登录或令牌更新时触发设置获取
-    apiService.$token
-      .receive(on: RunLoop.main)
-      .sink { [weak self] token in
+    // 单一会话权威：登录、登出、换账号、切服与权限变化都从同一原子状态发布。
+    apiService.$session
+      .sink { [weak self] session in
         guard let self else { return }
-        self.isLoggedIn = (token != nil)
-        if token == nil {
+        self.isLoggedIn = session.token != nil
+        self.currentUser = session.currentUser
+        self.sessionUIIdentity = session.uiIdentity
+        let profileIdentity = session.currentUser.map {
+          Self.accountProfileIdentity(
+            for: $0,
+            baseURL: session.baseURL,
+            profileKey: session.profileKey
+          )
+        }
+        self.updateAccountPermissionWarning(
+          for: session.currentUser,
+          profileIdentity: profileIdentity
+        )
+        if session.token == nil {
           self.resetBackendVersionCheck()
         }
-        if token != nil {
+        if session.token != nil, self.didPrepareStartup, !self.isPreparingStartupSession {
           Task { [weak self] in
             guard let self else { return }
-            await self.loadGlobalSettings(checkBackendVersion: self.didPrepareStartup)
+            await self.loadGlobalSettings(checkBackendVersion: true)
           }
         }
-      }
-      .store(in: &cancellables)
-
-    apiService.$currentUser
-      .dropFirst()
-      .receive(on: RunLoop.main)
-      .sink { [weak self] user in
-        guard let self else { return }
-        self.currentUser = user
-        self.updateAccountPermissionWarning(for: user)
-      }
-      .store(in: &cancellables)
-
-    apiService.$baseURL
-      .receive(on: RunLoop.main)
-      .sink { [weak self] _ in
-        self?.resetBackendVersionCheck()
       }
       .store(in: &cancellables)
 
     // 监听应用进入前台 -> 如果已登录则刷新设置
     NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)
       .sink { [weak self] _ in
-        guard let self = self, self.isLoggedIn else { return }
+        guard let self, self.isLoggedIn, self.didPrepareStartup,
+          !self.isPreparingStartupSession
+        else { return }
         Task { [weak self] in
           await self?.loadGlobalSettings(checkBackendVersion: false)
         }
@@ -144,6 +144,8 @@ class ContentViewModel: ObservableObject {
       guard currentBackendVersionCheckKey() == checkKey else { return }
       backendVersionCheckKey = checkKey
       backendVersionWarning = Self.backendVersionWarning(for: settings.BACKEND_VERSION)
+    } catch is CancellationError {
+      return
     } catch {
       guard checkBackendVersion, backendVersionCheckKey != checkKey else { return }
       guard currentBackendVersionCheckKey() == checkKey else { return }
@@ -160,26 +162,47 @@ class ContentViewModel: ObservableObject {
     backendVersionWarning = nil
   }
 
-  private func updateAccountPermissionWarning(for token: Token?) {
+  private func updateAccountPermissionWarning(
+    for token: Token?,
+    profileIdentity: String? = nil
+  ) {
     guard let token else {
       lastAccountPermissionWarningKey = nil
       accountPermissionWarning = nil
       return
     }
-    guard let warning = AccountPermissionWarning.warning(for: token) else {
+    let profileIdentity = profileIdentity
+      ?? Self.accountProfileIdentity(
+        for: token,
+        baseURL: apiService.baseURL,
+        profileKey: apiService.profileKey
+      )
+    guard
+      let warning = AccountPermissionWarning.warning(
+        for: token,
+        profileIdentity: profileIdentity
+      )
+    else {
       lastAccountPermissionWarningKey = nil
       accountPermissionWarning = nil
       return
     }
 
     let warningKey = AccountPermissionWarningKey(
-      baseURL: apiService.baseURL,
-      userName: token.user_name,
+      profileIdentity: profileIdentity,
       missingPermissions: warning.missingPermissions
     )
     guard warningKey != lastAccountPermissionWarningKey else { return }
     lastAccountPermissionWarningKey = warningKey
     accountPermissionWarning = warning
+  }
+
+  private static func accountProfileIdentity(
+    for token: Token,
+    baseURL: String,
+    profileKey: String?
+  ) -> String {
+    profileKey ?? "pending:\(baseURL)|name:\(token.user_name)"
   }
 
   private func currentBackendVersionCheckKey() -> BackendVersionCheckKey {
@@ -210,12 +233,19 @@ struct AccountPermissionWarning: Identifiable, Equatable {
   let message: String
   let missingPermissions: [UserPermissionKey]
 
-  static func warning(for token: Token) -> AccountPermissionWarning? {
+  static func warning(
+    for token: Token,
+    profileIdentity: String? = nil
+  ) -> AccountPermissionWarning? {
     let missingPermissions = token.missingRecommendedContentPermissions
     guard !missingPermissions.isEmpty else { return nil }
     let missingText = missingPermissions.map(\.displayName).joined(separator: "、")
+    let warningIdentity = profileIdentity
+      ?? token.user_id.map { "user:\($0)" }
+      ?? "name:\(token.user_name)"
     return AccountPermissionWarning(
-      id: "account-permission-\(token.user_name)-\(missingPermissions.map(\.rawValue).joined(separator: "-"))",
+      id:
+        "account-permission-\(warningIdentity)-\(missingPermissions.map(\.rawValue).joined(separator: "-"))",
       title: "账号权限不足",
       message: "当前账号缺少\(missingText)权限。MoviePilot-TV 兼容验证至少要求账号具备探索、搜索和订阅权限；继续使用时部分入口会隐藏，页面布局或焦点可能不完整。",
       missingPermissions: missingPermissions
@@ -224,8 +254,7 @@ struct AccountPermissionWarning: Identifiable, Equatable {
 }
 
 private struct AccountPermissionWarningKey: Equatable {
-  let baseURL: String
-  let userName: String
+  let profileIdentity: String
   let missingPermissions: [UserPermissionKey]
 }
 

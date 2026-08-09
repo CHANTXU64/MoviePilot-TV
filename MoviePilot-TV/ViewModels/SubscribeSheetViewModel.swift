@@ -20,8 +20,10 @@ class SubscribeSheetViewModel: ObservableObject {
   let isNewSubscription: Bool
   // 标记初始的“创建并暂停”操作序列是否成功
   private var isCreatedAndPaused = false
+  // 绑定服务器返回的新订阅 ID 与创建它的账号，避免切号后回滚误删同号订阅。
+  private var createdSubscriptionOwnerProfileKey: String?
 
-  private let apiService = APIService.shared
+  private let apiService: APIService
 
   let qualityOptions = [
     (title: "全部", value: ""),
@@ -61,9 +63,17 @@ class SubscribeSheetViewModel: ObservableObject {
     }
   }
 
-  init(subscribe: Subscribe, isNewSubscription: Bool = false) {
+  init(
+    subscribe: Subscribe,
+    isNewSubscription: Bool = false,
+    apiService: APIService = .shared
+  ) {
     self.subscribe = subscribe
     self.isNewSubscription = isNewSubscription
+    self.apiService = apiService
+    if isNewSubscription, subscribe.id != nil, apiService.canAccess(.subscribe) {
+      createdSubscriptionOwnerProfileKey = apiService.profileKey
+    }
   }
 
   func loadData() async {
@@ -98,10 +108,14 @@ class SubscribeSheetViewModel: ObservableObject {
         }
 
         // 更新本地 ID
+        createdSubscriptionOwnerProfileKey = apiService.profileKey
         self.subscribe.id = newId
 
         // 立即暂停
-        let pauseResult = try await apiService.updateSubscriptionStatus(id: newId, state: "S")
+        let pauseResult = try await apiService.updateSubscriptionStatus(
+          id: newId,
+          state: "S"
+        )
         guard pauseResult.success else {
           loadErrorMessage =
             MediaIdentifier.normalizedString(pauseResult.message)
@@ -122,6 +136,9 @@ class SubscribeSheetViewModel: ObservableObject {
         self.subscribe = fullSubscribe
 
         isCreatedAndPaused = true
+      } catch is CancellationError {
+        clearLoadedOptions()
+        return
       } catch {
         Logger.error("Failed to prepare a new subscription: \(error)")
         canRetryLoad = subscribe.id == nil
@@ -189,7 +206,12 @@ class SubscribeSheetViewModel: ObservableObject {
     errorMessage = nil
 
     do {
+      guard apiService.canAccess(.subscribe), let ownerProfileKey = apiService.profileKey else {
+        return false
+      }
+      let snapshot = apiService.sessionSnapshot()
       let result = try await apiService.saveSubscription(subscribe)
+      guard apiService.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
       guard result.success else {
         errorMessage =
           MediaIdentifier.normalizedString(result.message)
@@ -198,57 +220,82 @@ class SubscribeSheetViewModel: ObservableObject {
       }
 
       isSaved = true
+      // 保存完成后只在同一账号内继续启用、搜索和刷新订阅状态。
+      defer {
+        if apiService.profileKey == ownerProfileKey {
+          NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
+        }
+      }
+
+      guard let id = subscribe.id else { return true }
+
+      if isNewSubscription {
+        do {
+          guard apiService.isSessionUnchanged(from: snapshot) else { return true }
+          let result = try await apiService.updateSubscriptionStatus(
+            id: id,
+            state: "R"
+          )
+          guard apiService.isSessionUnchanged(from: snapshot) else { return true }
+          guard result.success else {
+            errorMessage =
+              MediaIdentifier.normalizedString(result.message)
+              ?? "订阅已保存，但暂时未能启用。你可以稍后在订阅页面重试。"
+            return true
+          }
+        } catch is CancellationError {
+          return true
+        } catch {
+          Logger.error("Failed to resume saved subscription \(id): \(error)")
+          errorMessage = "订阅已保存，但暂时未能启用。你可以稍后在订阅页面重试。"
+          return true
+        }
+      }
+
+      guard !isNewSubscription || SystemViewModel.shouldAutoSearchNewSubscriptions else {
+        return true
+      }
+
+      do {
+        guard apiService.isSessionUnchanged(from: snapshot) else { return true }
+        guard try await apiService.searchSubscription(id: id) else {
+          errorMessage = "订阅已保存，但没有开始搜索。你可以稍后手动搜索。"
+          return true
+        }
+        guard apiService.isSessionUnchanged(from: snapshot) else { return true }
+      } catch is CancellationError {
+        return true
+      } catch {
+        Logger.error("Failed to search saved subscription \(id): \(error)")
+        errorMessage = "订阅已保存，但没有开始搜索。你可以稍后手动搜索。"
+      }
+      return true
+    } catch is CancellationError {
+      return false
     } catch {
       Logger.error("Failed to save subscription: \(error)")
       errorMessage = "暂时无法保存订阅，请稍后重试。"
       return false
     }
-
-    // 保存链后续还可能启用并触发搜索；在最终出口统一发布，避免中间步骤重复通知。
-    defer { NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil) }
-
-    guard let id = subscribe.id else { return true }
-
-    if isNewSubscription {
-      do {
-        let result = try await apiService.updateSubscriptionStatus(id: id, state: "R")
-        guard result.success else {
-          errorMessage =
-            MediaIdentifier.normalizedString(result.message)
-            ?? "订阅已保存，但暂时未能启用。你可以稍后在订阅页面重试。"
-          return true
-        }
-      } catch {
-        Logger.error("Failed to resume saved subscription \(id): \(error)")
-        errorMessage = "订阅已保存，但暂时未能启用。你可以稍后在订阅页面重试。"
-        return true
-      }
-    }
-
-    guard !isNewSubscription || SystemViewModel.shouldAutoSearchNewSubscriptions else {
-      return true
-    }
-
-    do {
-      guard try await apiService.searchSubscription(id: id) else {
-        errorMessage = "订阅已保存，但没有开始搜索。你可以稍后手动搜索。"
-        return true
-      }
-    } catch {
-      Logger.error("Failed to search saved subscription \(id): \(error)")
-      errorMessage = "订阅已保存，但没有开始搜索。你可以稍后手动搜索。"
-    }
-    return true
   }
 
   func cancel() async {
     guard !isSaved else { return }
     // 如果我们创建了一个新订阅但用户取消了，我们必须回滚（删除）它
-    if isNewSubscription, let id = subscribe.id {
+    if isNewSubscription, let id = subscribe.id,
+      let ownerProfileKey = createdSubscriptionOwnerProfileKey,
+      apiService.profileKey == ownerProfileKey,
+      apiService.canAccess(.subscribe)
+    {
       do {
-        if try await apiService.deleteSubscription(id: id) {
+        let snapshot = apiService.sessionSnapshot()
+        if try await apiService.deleteSubscription(id: id),
+          apiService.isSessionUnchanged(from: snapshot)
+        {
           NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
         }
+      } catch is CancellationError {
+        return
       } catch {
         Logger.error("Failed to roll back subscription \(id): \(error)")
       }

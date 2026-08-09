@@ -18,10 +18,10 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   }
 
   func testSubscriptionHandlerDistinguishesNewAndExistingEditors() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -36,10 +36,10 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       path: "/api/v1/subscribe/998902",
       json: #"{"id":998902,"name":"已有订阅","type":"电影","tmdbid":998902}"#
     )
-    service.baseURL = "http://subscribe-sheet-tests.local"
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
 
-    let handler = SubscriptionHandler()
+    let handler = SubscriptionHandler(apiService: service)
     handler.handleSubscribe(
       MediaInfo(tmdb_id: 998_901, title: "新增订阅", type: "电影")
     )
@@ -55,17 +55,13 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   }
 
   func testSubscriptionHandlerDeletesResolvedFallbackSubscription() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
-    let preloader = MediaPreloader.shared
-    preloader.clearAll()
-    defer {
-      preloader.clearAll()
-      snapshot.restore(to: service)
-    }
+    let preloader = MediaPreloader(apiService: service)
+    defer { snapshot.restore(to: service) }
 
     await SubscribeSheetURLProtocol.stub.reset()
     await SubscribeSheetURLProtocol.stub.respond(
@@ -83,7 +79,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       path: "/api/v1/subscribe/media/tmdb:998903",
       json: #"{"id":998903,"name":"回退取消订阅","type":"电影","tmdbid":998903}"#
     )
-    service.baseURL = "http://subscribe-sheet-tests.local"
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
 
     let media = MediaInfo(
@@ -97,7 +93,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       preloadTask.isSubscribed == true
     }
 
-    let handler = SubscriptionHandler()
+    let handler = SubscriptionHandler(apiService: service, mediaPreloader: preloader)
     handler.handleSubscribe(media)
     try await waitUntil("subscription state updates after deletion") {
       preloadTask.isSubscribed == false
@@ -116,17 +112,13 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   }
 
   func testSubscriptionHandlerKeepsCachedStateWhenDeleteFails() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
-    let preloader = MediaPreloader.shared
-    preloader.clearAll()
-    defer {
-      preloader.clearAll()
-      snapshot.restore(to: service)
-    }
+    let preloader = MediaPreloader(apiService: service)
+    defer { snapshot.restore(to: service) }
 
     await SubscribeSheetURLProtocol.stub.reset()
     await SubscribeSheetURLProtocol.stub.respond(
@@ -144,7 +136,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       path: "/api/v1/subscribe/media/tmdb:998904",
       json: #"{"success":false,"message":"后端拒绝取消"}"#
     )
-    service.baseURL = "http://subscribe-sheet-tests.local"
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
 
     let media = MediaInfo(
@@ -155,7 +147,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     let preloadTask = preloader.preload(for: media)
     preloadTask.isSubscribed = true
 
-    let handler = SubscriptionHandler()
+    let handler = SubscriptionHandler(apiService: service, mediaPreloader: preloader)
     handler.handleSubscribe(media)
     try await waitUntil("unsubscribe failure appears") {
       handler.notificationType == .error
@@ -247,10 +239,10 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   }
 
   func testSaveNewSubscriptionSkipsSearchWhenAutoSearchSettingIsDisabled() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     let originalValue = UserDefaults.standard.object(forKey: autoSearchKey)
     defer {
@@ -259,7 +251,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     }
 
     await SubscribeSheetURLProtocol.stub.reset()
-    service.baseURL = "http://subscribe-sheet-tests.local"
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
     UserDefaults.standard.set(false, forKey: autoSearchKey)
 
@@ -280,10 +272,10 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   }
 
   func testSaveNewSubscriptionSearchesByDefault() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     let originalValue = UserDefaults.standard.object(forKey: autoSearchKey)
     defer {
@@ -292,7 +284,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     }
 
     await SubscribeSheetURLProtocol.stub.reset()
-    service.baseURL = "http://subscribe-sheet-tests.local"
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
     UserDefaults.standard.removeObject(forKey: autoSearchKey)
 
@@ -313,10 +305,10 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   }
 
   func testSaveExistingSubscriptionSearchesWhenNewSubscriptionAutoSearchIsDisabled() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     let originalValue = UserDefaults.standard.object(forKey: autoSearchKey)
     defer {
@@ -325,7 +317,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     }
 
     await SubscribeSheetURLProtocol.stub.reset()
-    service.baseURL = "http://subscribe-sheet-tests.local"
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
     UserDefaults.standard.set(false, forKey: autoSearchKey)
 
@@ -346,16 +338,16 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   }
 
   func testSavePublishesSubscriptionUpdateOnceAfterFollowUpSearchFinishes() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await SubscribeSheetURLProtocol.stub.reset()
     await SubscribeSheetURLProtocol.stub.suspend(path: "/api/v1/subscribe/search/780")
-    service.baseURL = "http://subscribe-sheet-tests.local"
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
 
     let notifications = SubscribeSheetNotificationCounter()
@@ -369,7 +361,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     defer { NotificationCenter.default.removeObserver(observer) }
 
     let viewModel = SubscribeSheetViewModel(
-      subscribe: Subscribe(id: 780, name: "等待搜索完成", type: "电影", tmdbid: 123_459)
+      subscribe: Subscribe(id: 780, name: "等待搜索完成", type: "电影", tmdbid: 123_459),
+      apiService: service
     )
     let saveTask = Task { await viewModel.save() }
     try await waitUntil("follow-up search starts") {
@@ -386,15 +379,15 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   }
 
   func testCancelNewSubscriptionPublishesOnlyAfterRollbackDeleteSucceeds() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await SubscribeSheetURLProtocol.stub.reset()
-    service.baseURL = "http://subscribe-sheet-tests.local"
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
 
     let notifications = SubscribeSheetNotificationCounter()
@@ -409,7 +402,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     let viewModel = SubscribeSheetViewModel(
       subscribe: Subscribe(id: 781, name: "取消新订阅", type: "电影", tmdbid: 123_460),
-      isNewSubscription: true
+      isNewSubscription: true,
+      apiService: service
     )
 
     await viewModel.cancel()
@@ -420,20 +414,68 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(notifications.count(), 1)
   }
 
-  func testLoadDataSkipsFilterGroupsForStandardUserWithSubscribePermission() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+  func testCancelNewSubscriptionDoesNotRollbackAfterAccountSwitch() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.suspend(path: "/api/v1/subscribe/status/801")
+    let accountA = subscriberToken(userID: 1, accessToken: "account-a")
+    service.replaceSessionForTesting(
+      baseURL: "http://subscribe-sheet-tests.local",
+      token: accountA.access_token,
+      currentUser: accountA
+    )
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(
+        id: nil,
+        name: "跨账号取消",
+        type: "电影",
+        tmdbid: 123_461
+      ),
+      isNewSubscription: true,
+      apiService: service
+    )
+    let loadTask = Task { await viewModel.loadData() }
+    try await waitUntil("new subscription pause request starts") {
+      await SubscribeSheetURLProtocol.stub.requestCount(
+        method: "PUT", path: "/api/v1/subscribe/status/801") == 1
+    }
+
+    let accountB = subscriberToken(userID: 2, accessToken: "account-b")
+    service.replaceSessionForTesting(
+      baseURL: "http://subscribe-sheet-tests.local",
+      token: accountB.access_token,
+      currentUser: accountB
+    )
+    await SubscribeSheetURLProtocol.stub.release(path: "/api/v1/subscribe/status/801")
+    await loadTask.value
+    await viewModel.cancel()
+
+    let deleteRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "DELETE", path: "/api/v1/subscribe/801")
+    XCTAssertEqual(deleteRequestCount, 0)
+  }
+
+  func testLoadDataSkipsFilterGroupsForStandardUserWithSubscribePermission() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.testingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer {
       snapshot.restore(to: service)
     }
 
     await SubscribeSheetURLProtocol.stub.reset()
-    service.baseURL = "http://subscribe-sheet-tests.local"
-    service.token = "standard-user"
-    service.currentUser = Token(
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
+    service.tokenForTesting = "standard-user"
+    service.currentUserForTesting = Token(
       access_token: "standard-user",
       token_type: "Bearer",
       super_user: FlexibleBool(false),
@@ -460,17 +502,17 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   }
 
   func testLoadDataLoadsFilterGroupsForSuperUserWithSubscribePermission() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer {
       snapshot.restore(to: service)
     }
 
     await SubscribeSheetURLProtocol.stub.reset()
-    service.baseURL = "http://subscribe-sheet-tests.local"
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSuperSubscriber(service)
 
     let viewModel = SubscribeSheetViewModel(
@@ -487,10 +529,10 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   }
 
   func testLoadDataShowsOnlyActiveSites() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -501,7 +543,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       json:
         #"[{"id":1,"name":"启用站点","is_active":true},{"id":2,"name":"停用站点","is_active":false}]"#
     )
-    service.baseURL = "http://subscribe-sheet-tests.local"
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
 
     let viewModel = SubscribeSheetViewModel(
@@ -513,17 +555,17 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   }
 
   func testLoadDataForNewSubscriptionDoesNotForceUnsetBestVersionToZero() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer {
       snapshot.restore(to: service)
     }
 
     await SubscribeSheetURLProtocol.stub.reset()
-    service.baseURL = "http://subscribe-sheet-tests.local"
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
 
     let viewModel = SubscribeSheetViewModel(
@@ -567,10 +609,10 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   }
 
   func testNewSubscriptionLoadStopsWhenPauseFails() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -580,7 +622,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       path: "/api/v1/subscribe/status/801",
       json: #"{"success":false,"message":"暂停订阅失败"}"#
     )
-    service.baseURL = "http://subscribe-sheet-tests.local"
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
 
     let viewModel = SubscribeSheetViewModel(
@@ -602,10 +644,10 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   func testPendingLoadDataDoesNotPublishOptionsAfterSubscribePermissionIsRestricted()
     async throws
   {
-    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer {
       snapshot.restore(to: service)
@@ -613,7 +655,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     await SubscribeSheetURLProtocol.stub.reset()
     await SubscribeSheetURLProtocol.stub.suspend(path: "/api/v1/system/setting/UserFilterRuleGroups")
-    service.baseURL = "http://subscribe-sheet-tests.local"
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSuperSubscriber(service)
 
     let viewModel = SubscribeSheetViewModel(
@@ -638,17 +680,17 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   }
 
   func testSubscribeSheetLoadDoesNotRequestOptionsWithoutPermission() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer {
       snapshot.restore(to: service)
     }
 
     await SubscribeSheetURLProtocol.stub.reset()
-    service.baseURL = "http://subscribe-sheet-tests.local"
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureNoSubscribeUser(service)
 
     let viewModel = SubscribeSheetViewModel(
@@ -667,10 +709,10 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   }
 
   func testSaveFailurePublishesErrorMessage() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer {
       snapshot.restore(to: service)
@@ -678,7 +720,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     await SubscribeSheetURLProtocol.stub.reset()
     await SubscribeSheetURLProtocol.stub.fail(path: "/api/v1/subscribe")
-    service.baseURL = "http://subscribe-sheet-tests.local"
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
 
     let viewModel = SubscribeSheetViewModel(
@@ -694,10 +736,10 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   }
 
   func testSaveBusinessFailurePublishesBackendMessage() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -707,7 +749,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       path: "/api/v1/subscribe",
       json: #"{"success":false,"message":"订阅参数冲突"}"#
     )
-    service.baseURL = "http://subscribe-sheet-tests.local"
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
 
     let viewModel = SubscribeSheetViewModel(
@@ -721,10 +763,10 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   }
 
   func testLoadDataFailurePublishesErrorMessage() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer {
       snapshot.restore(to: service)
@@ -732,7 +774,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     await SubscribeSheetURLProtocol.stub.reset()
     await SubscribeSheetURLProtocol.stub.fail(path: "/api/v1/site/rss")
-    service.baseURL = "http://subscribe-sheet-tests.local"
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
 
     let viewModel = SubscribeSheetViewModel(
@@ -747,10 +789,10 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   }
 
   func testSavedSubscriptionIsNotRolledBackWhenResumeReturnsFalse() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -760,7 +802,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       path: "/api/v1/subscribe/status/786",
       json: #"{"success":false}"#
     )
-    service.baseURL = "http://subscribe-sheet-tests.local"
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
 
     let viewModel = SubscribeSheetViewModel(
@@ -787,10 +829,10 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   }
 
   func testSavedSubscriptionIsNotRolledBackWhenSearchThrows() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SubscribeSheetURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SubscribeSheetURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.testingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     let originalValue = UserDefaults.standard.object(forKey: autoSearchKey)
     defer {
@@ -800,7 +842,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     await SubscribeSheetURLProtocol.stub.reset()
     await SubscribeSheetURLProtocol.stub.fail(path: "/api/v1/subscribe/search/787")
-    service.baseURL = "http://subscribe-sheet-tests.local"
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
     UserDefaults.standard.set(true, forKey: autoSearchKey)
 
@@ -857,8 +899,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   }
 
   private func configureSubscriber(_ service: APIService) {
-    service.token = "subscribe-sheet-user"
-    service.currentUser = Token(
+    service.tokenForTesting = "subscribe-sheet-user"
+    service.currentUserForTesting = Token(
       access_token: "subscribe-sheet-user",
       token_type: "Bearer",
       super_user: FlexibleBool(false),
@@ -868,14 +910,15 @@ final class SubscribeSheetViewModelTests: XCTestCase {
         UserPermissionKey.subscribe.rawValue: true,
         UserPermissionKey.manage.rawValue: false,
       ],
+      user_id: 1,
       user_name: "subscribe-sheet",
       avatar: nil
     )
   }
 
   private func configureSuperSubscriber(_ service: APIService) {
-    service.token = "subscribe-sheet-super-user"
-    service.currentUser = Token(
+    service.tokenForTesting = "subscribe-sheet-super-user"
+    service.currentUserForTesting = Token(
       access_token: "subscribe-sheet-super-user",
       token_type: "Bearer",
       super_user: FlexibleBool(true),
@@ -891,8 +934,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   }
 
   private func configureNoSubscribeUser(_ service: APIService) {
-    service.token = "subscribe-sheet-no-subscribe"
-    service.currentUser = Token(
+    service.tokenForTesting = "subscribe-sheet-no-subscribe"
+    service.currentUserForTesting = Token(
       access_token: "subscribe-sheet-no-subscribe",
       token_type: "Bearer",
       super_user: FlexibleBool(false),
@@ -903,6 +946,18 @@ final class SubscribeSheetViewModelTests: XCTestCase {
         UserPermissionKey.manage.rawValue: false,
       ],
       user_name: "subscribe-sheet-no-subscribe",
+      avatar: nil
+    )
+  }
+
+  private func subscriberToken(userID: Int, accessToken: String) -> Token {
+    Token(
+      access_token: accessToken,
+      token_type: "Bearer",
+      super_user: FlexibleBool(false),
+      permissions: [UserPermissionKey.subscribe.rawValue: true],
+      user_id: userID,
+      user_name: "subscriber-\(userID)",
       avatar: nil
     )
   }
@@ -955,9 +1010,9 @@ private struct SubscribeSheetServiceSnapshot {
 
   @MainActor
   func restore(to service: APIService) {
-    service.baseURL = baseURL
-    service.token = token
-    service.currentUser = currentUser
+    service.baseURLForTesting = baseURL
+    service.tokenForTesting = token
+    service.currentUserForTesting = currentUser
     service.settings = settings
     service.useImageCache = useImageCache
 

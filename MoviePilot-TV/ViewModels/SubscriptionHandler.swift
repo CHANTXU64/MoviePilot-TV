@@ -14,8 +14,18 @@ class SubscriptionHandler: ObservableObject {
   @Published var notificationSerial = 0
   @Published private(set) var forkErrorMessage: String?
 
-  private let apiService = APIService.shared
+  private let apiService: APIService
+  private let mediaPreloader: MediaPreloader
   private var isCheckingSubscription = false
+  private var pendingForkOwner: (subscriptionId: Int, profileKey: String)?
+
+  init(
+    apiService: APIService = .shared,
+    mediaPreloader: MediaPreloader = .shared
+  ) {
+    self.apiService = apiService
+    self.mediaPreloader = mediaPreloader
+  }
 
   func handleSubscribe(_ item: MediaInfo) {
     guard apiService.canAccess(.subscribe) else { return }
@@ -27,13 +37,17 @@ class SubscriptionHandler: ObservableObject {
       Task {
         defer { isCheckingSubscription = false }
         do {
-          if let subscription = try await subscriptionLookup(for: item) {
-            await unsubscribe(item, mediaId: subscription.mediaId)
+          let snapshot = apiService.sessionSnapshot()
+          if let subscription = try await subscriptionLookup(for: item, snapshot: snapshot) {
+            await unsubscribe(item, mediaId: subscription.mediaId, snapshot: snapshot)
           } else {
+            guard apiService.isSessionUnchanged(from: snapshot) else { return }
             // For directly subscribable non-TV media, show edit sheet
             self.sheetIsNewSubscription = true
             self.sheetSubscribe = mediaInfoToSubscribeRequest(item)
           }
+        } catch is CancellationError {
+          return
         } catch {
           Logger.error("Failed to check subscription before opening editor: \(error)")
           self.showNotification(message: "暂时无法确认订阅状态，请稍后重试。", type: .error)
@@ -49,22 +63,30 @@ class SubscriptionHandler: ObservableObject {
     }
   }
 
-  private func unsubscribe(_ item: MediaInfo, mediaId: String) async {
+  private func unsubscribe(
+    _ item: MediaInfo,
+    mediaId: String,
+    snapshot: APIServiceSessionSnapshot
+  ) async {
     guard !isUnsubscribing else { return }
     isUnsubscribing = true
     defer { isUnsubscribing = false }
 
     do {
+      guard apiService.isSessionUnchanged(from: snapshot) else { return }
       let result = try await apiService.deleteSubscriptionResult(
         mediaId: mediaId,
         season: item.season
       )
+      guard apiService.isSessionUnchanged(from: snapshot) else { return }
       guard result.success else {
         showUnsubscribeFailure(for: item, message: result.message)
         return
       }
-      MediaPreloader.shared.findTask(byMediaId: mediaId)?.isSubscribed = false
+      mediaPreloader.findTask(byMediaId: mediaId)?.isSubscribed = false
       NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
+    } catch is CancellationError {
+      return
     } catch {
       Logger.error("Failed to remove subscription: \(error)")
       showUnsubscribeFailure(for: item, message: error.localizedDescription)
@@ -74,11 +96,18 @@ class SubscriptionHandler: ObservableObject {
   func fork(share: SubscribeShare) async -> Int? {
     forkErrorMessage = nil
     guard apiService.canAccess(.subscribe) else { return nil }
+    guard let profileKey = apiService.profileKey else { return nil }
+    let snapshot = apiService.sessionSnapshot()
 
     do {
       let subscriptionId = try await apiService.forkSubscription(share: share)
+      guard apiService.isSessionUnchanged(from: snapshot), apiService.profileKey == profileKey
+      else { return nil }
+      pendingForkOwner = (subscriptionId, profileKey)
       NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
       return subscriptionId
+    } catch is CancellationError {
+      return nil
     } catch {
       Logger.error("Failed to fork subscription: \(error)")
       forkErrorMessage = "暂时无法复用订阅，请稍后重试。"
@@ -90,9 +119,18 @@ class SubscriptionHandler: ObservableObject {
     guard apiService.canAccess(.subscribe) else { return }
 
     do {
+      let pendingProfileKey = pendingForkOwner.flatMap {
+        $0.subscriptionId == subId ? $0.profileKey : nil
+      }
+      pendingForkOwner = nil
+      guard pendingProfileKey == nil || pendingProfileKey == apiService.profileKey else {
+        throw CancellationError()
+      }
       let subscription = try await apiService.fetchSubscription(id: subId)
       sheetIsNewSubscription = false
       self.sheetSubscribe = subscription
+    } catch is CancellationError {
+      return
     } catch {
       showNotification(message: "加载订阅失败: \(error.localizedDescription)", type: .error)
     }
@@ -120,7 +158,10 @@ class SubscriptionHandler: ObservableObject {
     )
   }
 
-  private func subscriptionLookup(for item: MediaInfo) async throws
+  private func subscriptionLookup(
+    for item: MediaInfo,
+    snapshot: APIServiceSessionSnapshot
+  ) async throws
     -> SubscriptionLookupResult?
   {
     if let subscription = try await apiService.fetchSubscriptionLookup(
@@ -129,8 +170,9 @@ class SubscriptionHandler: ObservableObject {
     ) {
       return subscription
     }
+    guard apiService.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
     guard item.tmdb_id == nil,
-      let tmdbId = MediaPreloader.shared.peekTask(for: item)?.tmdbId
+      let tmdbId = mediaPreloader.peekTask(for: item)?.tmdbId
     else {
       return nil
     }
