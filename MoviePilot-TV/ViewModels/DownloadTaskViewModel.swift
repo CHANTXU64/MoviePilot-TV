@@ -8,8 +8,12 @@ class DownloadTaskViewModel: ObservableObject {
   @Published var selectedClient: String = ""
   @Published var downloads: [DownloadingInfo] = []
 
-  private let apiService = APIService.shared
+  private let apiService: APIService
   private var downloadLoadGeneration = 0
+
+  init(apiService: APIService = .shared) {
+    self.apiService = apiService
+  }
 
   func initialLoad() async {
     guard apiService.canAccess(.manage) else {

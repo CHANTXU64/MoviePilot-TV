@@ -342,8 +342,8 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
     try await withPermissionBehaviorBackend { service in
       configurePermissionBehaviorUser(service, granted: [.discovery])
 
-      let recommend = RecommendViewModel()
-      let explore = ExploreViewModel()
+      let recommend = RecommendViewModel(apiService: service)
+      let explore = ExploreViewModel(apiService: service)
 
       try await permissionBehaviorWaitUntil("recommend request starts") {
         await PermissionBehaviorURLProtocol.stub.requestCount(
@@ -373,7 +373,7 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
     try await withPermissionBehaviorBackend { service in
       configurePermissionBehaviorUser(service, granted: [.discovery, .subscribe])
 
-      let explore = ExploreViewModel()
+      let explore = ExploreViewModel(apiService: service)
       XCTAssertTrue(explore.availableSources.contains(.subscriptionShare))
 
       explore.selectedSource = .subscriptionShare
@@ -468,7 +468,8 @@ final class PermissionDirectGuardTests: XCTestCase {
       configurePermissionBehaviorUser(service, granted: [.search])
 
       let viewModel = SubscribeSeasonViewModel(
-        mediaInfo: MediaInfo(tmdb_id: 7003, title: "无权限分季", type: "电视剧")
+        mediaInfo: MediaInfo(tmdb_id: 7003, title: "无权限分季", type: "电视剧"),
+        apiService: service
       )
       viewModel.seasonSubscriptions = [
         1: SeasonSubscriptionSummary(id: 7101, season: 1, episodeGroup: nil)
@@ -503,8 +504,8 @@ final class PermissionDirectGuardTests: XCTestCase {
     try await withPermissionBehaviorBackend { service in
       configurePermissionBehaviorUser(service, granted: [.subscribe])
 
-      let recommend = RecommendViewModel()
-      let explore = ExploreViewModel()
+      let recommend = RecommendViewModel(apiService: service)
+      let explore = ExploreViewModel(apiService: service)
       try await Task.sleep(nanoseconds: 300_000_000)
 
       XCTAssertNil(recommend.paginator)
@@ -536,7 +537,7 @@ final class PermissionDirectGuardTests: XCTestCase {
     try await withPermissionBehaviorBackend { service in
       configurePermissionBehaviorUser(service, granted: [.discovery])
 
-      let explore = ExploreViewModel()
+      let explore = ExploreViewModel(apiService: service)
       XCTAssertFalse(explore.availableSources.contains(.subscriptionShare))
 
       explore.selectedSource = .subscriptionShare
@@ -576,7 +577,7 @@ private func withPermissionBehaviorBackend(
   XCTAssertTrue(APIService.installURLProtocolForTesting(PermissionBehaviorURLProtocol.self))
   defer { APIService.removeURLProtocolForTesting(PermissionBehaviorURLProtocol.self) }
 
-  let service = APIService.testingInstance()
+  let service = APIService.isolatedTestingInstance()
   let snapshot = PermissionBehaviorServiceSnapshot.capture(service: service)
   defer { snapshot.restore(to: service) }
 

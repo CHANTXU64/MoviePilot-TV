@@ -61,7 +61,7 @@ final class HomeSubscribeFocusIDTests: XCTestCase {
     defer { APIService.removeURLProtocolForTesting(HomePermissionURLProtocol.self) }
 
     await HomePermissionURLProtocol.stub.reset()
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = HomePermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 

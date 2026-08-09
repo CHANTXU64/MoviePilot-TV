@@ -12,7 +12,7 @@ extension SystemSessionBehaviorTests {
 
     await SystemInfoURLProtocol.stub.reset()
     await SystemInfoURLProtocol.stub.setSystemEnvStatusCode(403)
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SystemSessionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -38,7 +38,7 @@ extension SystemSessionBehaviorTests {
     }
     defer { NotificationCenter.default.removeObserver(observer) }
 
-    let viewModel = SystemViewModel()
+    let viewModel = SystemViewModel(apiService: service)
     await SystemInfoURLProtocol.stub.reset()
     await SystemInfoURLProtocol.stub.setSystemEnvStatusCode(403)
 
@@ -61,7 +61,7 @@ extension SystemSessionBehaviorTests {
 
     await SystemInfoURLProtocol.stub.reset()
     await SystemInfoURLProtocol.stub.setSystemEnvStatusCode(403)
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SystemSessionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -72,7 +72,7 @@ extension SystemSessionBehaviorTests {
     clearCredential(account: "username")
     clearCredential(account: "password")
 
-    let viewModel = SystemViewModel()
+    let viewModel = SystemViewModel(apiService: service)
     await SystemInfoURLProtocol.stub.reset()
     await SystemInfoURLProtocol.stub.setSystemEnvStatusCode(403)
 
@@ -88,7 +88,7 @@ extension SystemSessionBehaviorTests {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SystemInfoURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SystemInfoURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SystemSessionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -102,7 +102,7 @@ extension SystemSessionBehaviorTests {
         .data(using: .utf8)!
     )
 
-    let viewModel = SystemViewModel()
+    let viewModel = SystemViewModel(apiService: service)
     await SystemInfoURLProtocol.stub.reset()
 
     await viewModel.loadSystemInfo()
@@ -119,7 +119,7 @@ extension SystemSessionBehaviorTests {
     defer { APIService.removeURLProtocolForTesting(SystemInfoURLProtocol.self) }
 
     await SystemInfoURLProtocol.stub.reset()
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SystemSessionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -133,7 +133,7 @@ extension SystemSessionBehaviorTests {
         .data(using: .utf8)!
     )
 
-    let viewModel = SystemViewModel()
+    let viewModel = SystemViewModel(apiService: service)
     await SystemInfoURLProtocol.stub.reset()
 
     await viewModel.loadSystemInfo()

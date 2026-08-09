@@ -8,7 +8,11 @@ class StatusViewModel: ObservableObject {
   @Published var storage: Storage?
   @Published var downloader: DownloaderInfo?
 
-  private let apiService = APIService.shared
+  private let apiService: APIService
+
+  init(apiService: APIService = .shared) {
+    self.apiService = apiService
+  }
 
   func refreshAllData() async {
     guard apiService.canRequestSuperUserEndpoints else {

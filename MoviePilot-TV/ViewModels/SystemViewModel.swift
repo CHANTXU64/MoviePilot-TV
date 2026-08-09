@@ -147,8 +147,11 @@ class SystemViewModel: ObservableObject {
   }
 
   /// 构建绑定服务器与稳定用户 ID 的 UserDefaults key，并一次性迁移旧的用户名键。
-  private static func userDefaultsKey(_ prefix: String) -> String? {
-    let service = APIService.shared
+  private static func userDefaultsKey(
+    _ prefix: String,
+    apiService: APIService = .shared
+  ) -> String? {
+    let service = apiService
     guard let profileKey = service.profileKey else { return nil }
     let key = "\(prefix)_\(profileKey)"
     let defaults = UserDefaults.standard
@@ -166,19 +169,19 @@ class SystemViewModel: ObservableObject {
   }
 
   private var hardFilterRuleUserDefaultsKey: String? {
-    Self.userDefaultsKey("selectedCustomFilterRuleId")
+    Self.userDefaultsKey("selectedCustomFilterRuleId", apiService: apiService)
   }
 
   private var softFilterRuleUserDefaultsKey: String? {
-    Self.userDefaultsKey("selectedSoftFilterRuleId")
+    Self.userDefaultsKey("selectedSoftFilterRuleId", apiService: apiService)
   }
 
   private var defaultSearchSitesUserDefaultsKey: String? {
-    Self.userDefaultsKey("defaultSearchSites")
+    Self.userDefaultsKey("defaultSearchSites", apiService: apiService)
   }
 
   private var defaultMediaSearchSourceUserDefaultsKey: String? {
-    Self.userDefaultsKey("defaultMediaSearchSource")
+    Self.userDefaultsKey("defaultMediaSearchSource", apiService: apiService)
   }
 
   init(apiService: APIService = .shared) {
@@ -344,45 +347,47 @@ class SystemViewModel: ObservableObject {
   // MARK: - 静态方法：供 ViewModel 层读取当前选中规则
 
   /// 获取当前用户+服务器绑定的硬过滤规则 ID
-  static func currentSelectedHardFilterRuleId() -> String? {
-    userDefaultsKey("selectedCustomFilterRuleId")
+  static func currentSelectedHardFilterRuleId(apiService: APIService = .shared) -> String? {
+    userDefaultsKey("selectedCustomFilterRuleId", apiService: apiService)
       .flatMap { UserDefaults.standard.string(forKey: $0) }
   }
 
   /// 获取当前用户+服务器绑定的软过滤规则 ID
-  static func currentSelectedSoftFilterRuleId() -> String? {
-    userDefaultsKey("selectedSoftFilterRuleId")
+  static func currentSelectedSoftFilterRuleId(apiService: APIService = .shared) -> String? {
+    userDefaultsKey("selectedSoftFilterRuleId", apiService: apiService)
       .flatMap { UserDefaults.standard.string(forKey: $0) }
   }
 
   /// 获取当前用户+服务器绑定的默认搜索站点
-  static func currentDefaultSearchSites() -> Set<Int> {
-    guard let key = userDefaultsKey("defaultSearchSites") else { return [] }
+  static func currentDefaultSearchSites(apiService: APIService = .shared) -> Set<Int> {
+    guard let key = userDefaultsKey("defaultSearchSites", apiService: apiService) else { return [] }
     let array = UserDefaults.standard.array(forKey: key) as? [Int] ?? []
     return Set(array)
   }
 
   /// 获取当前用户+服务器绑定的聚合搜索默认来源；nil 表示沿用后端设置。
-  static func currentDefaultMediaSearchSource() -> MediaSearchSource? {
-    userDefaultsKey("defaultMediaSearchSource")
+  static func currentDefaultMediaSearchSource(apiService: APIService = .shared) -> MediaSearchSource? {
+    userDefaultsKey("defaultMediaSearchSource", apiService: apiService)
       .flatMap { UserDefaults.standard.string(forKey: $0) }
       .flatMap(MediaSearchSource.init(rawValue:))
   }
 
   /// 获取已按当前可用站点清理后的默认搜索站点。
-  static func normalizedCurrentDefaultSearchSites() async -> Set<Int> {
-    let storedSites = currentDefaultSearchSites()
+  static func normalizedCurrentDefaultSearchSites(
+    apiService: APIService = .shared
+  ) async -> Set<Int> {
+    let storedSites = currentDefaultSearchSites(apiService: apiService)
     guard !storedSites.isEmpty else { return [] }
-    guard APIService.shared.canAccess(.search) else { return [] }
-    let snapshot = APIService.shared.sessionSnapshot()
+    guard apiService.canAccess(.search) else { return [] }
+    let snapshot = apiService.sessionSnapshot()
 
     do {
-      let availableSites = try await APIService.shared.fetchSites()
-      guard APIService.shared.isSessionUnchanged(from: snapshot) else { return [] }
+      let availableSites = try await apiService.fetchSites()
+      guard apiService.isSessionUnchanged(from: snapshot) else { return [] }
       let availableSiteIds = Set(availableSites.map(\.id))
       let normalizedSites = storedSites.intersection(availableSiteIds)
       if normalizedSites != storedSites {
-        persistDefaultSearchSites(normalizedSites)
+        persistDefaultSearchSites(normalizedSites, apiService: apiService)
       }
       return normalizedSites
     } catch is CancellationError {
@@ -394,8 +399,10 @@ class SystemViewModel: ObservableObject {
   }
 
   /// 获取已按当前可用站点清理后的默认搜索站点字符串。
-  static func normalizedDefaultSearchSitesString() async -> String? {
-    siteIdsString(from: await normalizedCurrentDefaultSearchSites())
+  static func normalizedDefaultSearchSitesString(
+    apiService: APIService = .shared
+  ) async -> String? {
+    siteIdsString(from: await normalizedCurrentDefaultSearchSites(apiService: apiService))
   }
 
   /// 获取默认搜索站点的逗号分隔字符串
@@ -433,8 +440,11 @@ class SystemViewModel: ObservableObject {
     return sites.intersection(availableSiteIds)
   }
 
-  private static func persistDefaultSearchSites(_ sites: Set<Int>) {
-    guard let key = userDefaultsKey("defaultSearchSites") else { return }
+  private static func persistDefaultSearchSites(
+    _ sites: Set<Int>,
+    apiService: APIService = .shared
+  ) {
+    guard let key = userDefaultsKey("defaultSearchSites", apiService: apiService) else { return }
     let array = sites.sorted()
     if array.isEmpty {
       UserDefaults.standard.removeObject(forKey: key)

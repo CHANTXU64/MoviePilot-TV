@@ -719,11 +719,11 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    let preloader = MediaPreloader.shared
+    let preloader = MediaPreloader(apiService: service)
     preloader.clearAll()
     defer { preloader.clearAll() }
 

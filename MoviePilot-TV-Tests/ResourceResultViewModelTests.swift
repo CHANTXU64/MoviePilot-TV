@@ -119,7 +119,7 @@ final class ResourceResultViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -151,7 +151,7 @@ final class ResourceResultViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -178,14 +178,15 @@ final class ResourceResultViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await ResourceResultViewModelURLProtocol.stub.reset()
     service.baseURLForTesting = "http://resource-result-tests.local"
     configureResourceResultSuperUserSearchSession(service)
-    let filterSnapshot = ResourceResultViewModelFilterSelectionSnapshot.selectHardRule("allow-all")
+    let filterSnapshot = ResourceResultViewModelFilterSelectionSnapshot.selectHardRule(
+      "allow-all", apiService: service)
     defer { filterSnapshot.restore() }
 
     await ResourceResultViewModelURLProtocol.stub.setStreamFailure(forKeyword: "fallback")
@@ -229,7 +230,7 @@ final class ResourceResultViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -268,7 +269,7 @@ final class ResourceResultViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -307,7 +308,7 @@ final class ResourceResultViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -368,7 +369,7 @@ final class ResourceResultViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -423,7 +424,7 @@ final class ResourceResultViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -478,14 +479,15 @@ final class ResourceResultViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await ResourceResultViewModelURLProtocol.stub.reset()
     service.baseURLForTesting = "http://resource-result-tests.local"
     configureResourceResultSearchSession(service)
-    let filterSnapshot = ResourceResultViewModelFilterSelectionSnapshot.selectHardRule("allow-all")
+    let filterSnapshot = ResourceResultViewModelFilterSelectionSnapshot.selectHardRule(
+      "allow-all", apiService: service)
     defer { filterSnapshot.restore() }
 
     await ResourceResultViewModelURLProtocol.stub.setStreamFailure(forKeyword: "finished")
@@ -526,7 +528,7 @@ final class ResourceResultViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -562,7 +564,7 @@ final class ResourceResultViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -887,10 +889,10 @@ private struct ResourceResultViewModelFilterSelectionSnapshot {
   let hardValue: String?
   let softValue: String?
 
-  static func selectHardRule(_ ruleId: String)
+  static func selectHardRule(_ ruleId: String, apiService: APIService)
     -> ResourceResultViewModelFilterSelectionSnapshot
   {
-    let profileKey = APIService.shared.profileKey ?? "missing-profile"
+    let profileKey = apiService.profileKey ?? "missing-profile"
     let hardKey = "selectedCustomFilterRuleId_\(profileKey)"
     let softKey = "selectedSoftFilterRuleId_\(profileKey)"
     let snapshot = ResourceResultViewModelFilterSelectionSnapshot(

@@ -80,7 +80,7 @@ class SearchViewModel: ObservableObject {
   @Published var query: String = ""
   @Published var submittedQuery: String = ""  // 记录点击搜索时的关键词，用于分页请求
   @Published var hasSearched: Bool = false
-  @Published var mediaSearchSource = SystemViewModel.currentDefaultMediaSearchSource()
+  @Published var mediaSearchSource: MediaSearchSource?
 
   var mediaSourceButtonLabel: String {
     mediaSearchSource?.title ?? "默认"
@@ -267,9 +267,9 @@ class SearchViewModel: ObservableObject {
 
   @Published var resourceResults: [Context] = []
   @Published var appliedFilterRuleName: String?
-  @Published var siteFilter = SiteFilterViewModel()
+  @Published var siteFilter: SiteFilterViewModel
 
-  private let apiService = APIService.shared
+  private let apiService: APIService
   private var cancellables = Set<AnyCancellable>()
   private var moviePaginatorCancellable: AnyCancellable?
   private var tvPaginatorCancellable: AnyCancellable?
@@ -285,6 +285,12 @@ class SearchViewModel: ObservableObject {
   @Published var searchProgressText: String = ""
   @Published var searchProgress: Double = 0.0
   @Published var resourceErrorMessage: String?
+
+  init(apiService: APIService = .shared) {
+    self.apiService = apiService
+    self.siteFilter = SiteFilterViewModel(apiService: apiService)
+    self.mediaSearchSource = SystemViewModel.currentDefaultMediaSearchSource(apiService: apiService)
+  }
 
   /// 执行初始搜索：根据 searchType 决定是资源搜索还是聚合元数据搜索
   func autoSearch() async {
@@ -328,7 +334,7 @@ class SearchViewModel: ObservableObject {
             searchType: currentSearchType)
           else { return }
 
-          let stream = APIService.shared.searchTitleStream(keyword: searchQuery, sites: sitesStr)
+          let stream = apiService.searchTitleStream(keyword: searchQuery, sites: sitesStr)
           
           for try await event in stream {
             guard canPublishSearchResult(

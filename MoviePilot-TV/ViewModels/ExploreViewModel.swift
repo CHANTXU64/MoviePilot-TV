@@ -252,13 +252,14 @@ class ExploreViewModel: ObservableObject {
   @Published var selectedShare: SubscribeShare?
   @Published var forkToShow: Int?
 
-  private let apiService = APIService.shared
+  private let apiService: APIService
 
   private var cancellables = Set<AnyCancellable>()
   private var paginatorCancellable: AnyCancellable?
   private var extraSourceSnapshot: [DiscoverSourceDescriptor] = []
 
-  init() {
+  init(apiService: APIService = .shared) {
+    self.apiService = apiService
     applySources()
     // 将所有筛选器的 Publisher 转换为 AnyPublisher<Void, Never>
     let filterPublishers: [AnyPublisher<Void, Never>] = [

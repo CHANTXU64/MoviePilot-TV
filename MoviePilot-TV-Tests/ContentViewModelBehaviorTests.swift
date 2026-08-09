@@ -35,7 +35,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     defer { APIService.removeURLProtocolForTesting(ContentViewModelURLProtocol.self) }
 
     await ContentViewModelURLProtocol.stub.reset()
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
     let markerKey = APIService.sessionRefreshAppVersionKey
     let originalMarker = UserDefaults.standard.string(forKey: markerKey)
@@ -57,7 +57,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
       permissions: ["discovery": true, "search": false, "subscribe": false, "manage": false]
     )
 
-    viewModel = ContentViewModel()
+    viewModel = ContentViewModel(apiService: service)
     await viewModel?.prepareStartupIfNeeded()
 
     XCTAssertEqual(service.currentUser?.user_name, "refreshed-user")
@@ -144,7 +144,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
 
     await ContentViewModelURLProtocol.stub.reset()
     await ContentViewModelURLProtocol.stub.setCurrentUserStatusCode(401)
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
     let markerKey = APIService.sessionRefreshAppVersionKey
     let originalMarker = UserDefaults.standard.string(forKey: markerKey)
@@ -162,7 +162,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     service.tokenForTesting = "expired-token"
     service.currentUserForTesting = nil
 
-    viewModel = ContentViewModel()
+    viewModel = ContentViewModel(apiService: service)
     await viewModel?.prepareStartupIfNeeded()
 
     XCTAssertNil(service.token)
@@ -175,7 +175,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     defer { APIService.removeURLProtocolForTesting(ContentViewModelURLProtocol.self) }
 
     await ContentViewModelURLProtocol.stub.reset()
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
     var viewModel: ContentViewModel?
     defer {
@@ -187,7 +187,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     service.tokenForTesting = "limited-token"
     service.currentUserForTesting = nil
 
-    viewModel = ContentViewModel()
+    viewModel = ContentViewModel(apiService: service)
     service.currentUserForTesting = token(
       "limited-token",
       userName: "limited-user",
@@ -259,7 +259,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     defer { APIService.removeURLProtocolForTesting(ContentViewModelURLProtocol.self) }
 
     await ContentViewModelURLProtocol.stub.reset()
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
     let markerKey = APIService.sessionRefreshAppVersionKey
     let originalMarker = UserDefaults.standard.string(forKey: markerKey)
@@ -278,7 +278,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     service.currentUserForTesting = token("token-a", userName: "first-user")
     service.settings = nil
 
-    viewModel = ContentViewModel()
+    viewModel = ContentViewModel(apiService: service)
 
     await viewModel?.prepareStartupIfNeeded()
 

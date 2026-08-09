@@ -47,7 +47,7 @@ class RecommendViewModel: ObservableObject {
   @Published private(set) var shelves: [RecommendShelf] = []
   @Published private(set) var enableConfig: [String: Bool] = [:]
 
-  private let apiService = APIService.shared
+  private let apiService: APIService
 
   private var cancellables = Set<AnyCancellable>()
   private var paginatorCancellable: AnyCancellable?
@@ -112,7 +112,8 @@ class RecommendViewModel: ObservableObject {
     return RecommendCategory.allCases.filter { $0 == .all || categories.contains($0) }
   }
 
-  init(selectShelf: Bool = true) {
+  init(selectShelf: Bool = true, apiService: APIService = .shared) {
+    self.apiService = apiService
     shelves = Self.allShelves
     enableConfig = Dictionary(uniqueKeysWithValues: Self.allShelves.map { ($0.title, true) })
     loadConfig()

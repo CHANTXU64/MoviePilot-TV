@@ -19,14 +19,21 @@ class AddDownloadViewModel: ObservableObject {
   let torrent: TorrentInfo
   let media: MediaInfo?
   var onSuccess: (() -> Void)?
+  private let apiService: APIService
 
-  init(torrent: TorrentInfo, media: MediaInfo? = nil, onSuccess: (() -> Void)? = nil) {
+  init(
+    torrent: TorrentInfo,
+    media: MediaInfo? = nil,
+    onSuccess: (() -> Void)? = nil,
+    apiService: APIService = .shared
+  ) {
     self.torrent = torrent
     self.media = media
     self.onSuccess = onSuccess
+    self.apiService = apiService
     self.mediaSource =
       MediaSearchSource(
-        rawValue: APIService.shared.settings?.RECOGNIZE_SOURCE ?? ""
+        rawValue: apiService.settings?.RECOGNIZE_SOURCE ?? ""
       ) ?? .themoviedb
   }
 
@@ -49,23 +56,23 @@ class AddDownloadViewModel: ObservableObject {
 
   func loadData() async {
     loadErrorMessage = nil
-    guard APIService.shared.canAccess(.search) else {
+    guard apiService.canAccess(.search) else {
       clearLoadedOptions()
       return
     }
 
-    let sessionSnapshot = APIService.shared.sessionSnapshot()
+    let sessionSnapshot = apiService.sessionSnapshot()
     isLoading = true
     defer { isLoading = false }
 
     do {
-      async let downloadersTask = APIService.shared.fetchDownloadClients()
-      async let directoriesTask = APIService.shared.fetchDirectories()
+      async let downloadersTask = apiService.fetchDownloadClients()
+      async let directoriesTask = apiService.fetchDirectories()
       let (fetchedDownloaders, fetchedDirectories) = try await (
         downloadersTask, directoriesTask
       )
-      guard APIService.shared.isSessionUnchanged(from: sessionSnapshot),
-        APIService.shared.canAccess(.search)
+      guard apiService.isSessionUnchanged(from: sessionSnapshot),
+        apiService.canAccess(.search)
       else {
         clearLoadedOptions()
         return
@@ -111,7 +118,7 @@ class AddDownloadViewModel: ObservableObject {
       media_id: normalizedMediaId.isEmpty ? nil : normalizedMediaId
     )
     do {
-      let (success, message) = try await APIService.shared.addDownload(payload: payload)
+      let (success, message) = try await apiService.addDownload(payload: payload)
       if success {
         onSuccess?()
       } else {

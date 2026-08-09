@@ -57,7 +57,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -78,7 +78,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     service.baseURLForTesting = "http://download-tests.local"
     configureManageUser(service)
 
-    let viewModel = DownloadTaskViewModel()
+    let viewModel = DownloadTaskViewModel(apiService: service)
     viewModel.selectedClient = "old"
 
     let oldLoadTask = Task { @MainActor in
@@ -122,7 +122,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -138,7 +138,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     service.baseURLForTesting = "http://download-tests.local"
     configureManageUser(service)
 
-    let viewModel = DownloadTaskViewModel()
+    let viewModel = DownloadTaskViewModel(apiService: service)
     viewModel.selectedClient = "old"
 
     let oldLoadTask = Task { @MainActor in
@@ -172,7 +172,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -195,7 +195,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     service.baseURLForTesting = "http://download-tests.local"
     configureManageUser(service)
 
-    let viewModel = DownloadTaskViewModel()
+    let viewModel = DownloadTaskViewModel(apiService: service)
     viewModel.selectedClient = "old"
 
     let oldLoadTask = Task { @MainActor in
@@ -248,7 +248,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -275,7 +275,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     service.baseURLForTesting = "http://download-tests.local"
     configureManageUser(service)
 
-    let viewModel = DownloadTaskViewModel()
+    let viewModel = DownloadTaskViewModel(apiService: service)
     viewModel.selectedClient = "same"
 
     let olderLoadTask = Task { @MainActor in
@@ -358,7 +358,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -398,7 +398,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     service.baseURLForTesting = "http://download-tests.local"
     configureManageUser(service)
 
-    let viewModel = DownloadTaskViewModel()
+    let viewModel = DownloadTaskViewModel(apiService: service)
     viewModel.selectedClient = "same"
 
     await viewModel.loadDownloads()
@@ -424,7 +424,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -439,7 +439,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     service.baseURLForTesting = "http://download-tests.local"
     configureManageUser(service)
 
-    let viewModel = DownloadTaskViewModel()
+    let viewModel = DownloadTaskViewModel(apiService: service)
     viewModel.selectedClient = "old"
     viewModel.downloads = try decodeDownloads(
       downloadPayload(

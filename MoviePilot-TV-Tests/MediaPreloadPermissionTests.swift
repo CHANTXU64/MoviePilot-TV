@@ -8,7 +8,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -38,7 +38,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -67,7 +67,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -92,7 +92,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -100,7 +100,8 @@ final class MediaPreloadPermissionTests: XCTestCase {
     configureLimitedUser(service)
 
     let task = MediaPreloadTask(
-      partialMedia: MediaInfo(tmdb_id: 456, title: "Limited Movie", type: "电影")
+      partialMedia: MediaInfo(tmdb_id: 456, title: "Limited Movie", type: "电影"),
+      apiService: service
     )
     task.start()
 
@@ -117,7 +118,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -130,7 +131,8 @@ final class MediaPreloadPermissionTests: XCTestCase {
         media_id: "987",
         title: "无法识别的 Bangumi 条目",
         type: "电视剧"
-      )
+      ),
+      apiService: service
     )
     task.start()
     defer { task.cancel() }
@@ -147,7 +149,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -155,7 +157,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
     MediaPreloadPermissionURLProtocol.stub.setSubscriptionLookupStatusCode(500)
     configureStandardSubscriber(service)
 
-    let handler = SubscriptionHandler()
+    let handler = SubscriptionHandler(apiService: service)
     handler.handleSubscribe(MediaInfo(tmdb_id: 456, title: "查询失败", type: "电影"))
 
     try await waitUntil("subscription handler finishes lookup") {
@@ -169,7 +171,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -178,7 +180,8 @@ final class MediaPreloadPermissionTests: XCTestCase {
     configureStandardSubscriber(service)
 
     let task = MediaPreloadTask(
-      partialMedia: MediaInfo(tmdb_id: 456, title: "查询失败", type: "电影")
+      partialMedia: MediaInfo(tmdb_id: 456, title: "查询失败", type: "电影"),
+      apiService: service
     )
     task.isSubscribed = true
     task.start()
@@ -198,7 +201,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -231,7 +234,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -239,7 +242,8 @@ final class MediaPreloadPermissionTests: XCTestCase {
     configureStandardSubscriber(service)
 
     let task = MediaPreloadTask(
-      partialMedia: MediaInfo(tmdb_id: 123, title: "Subscriber Show", type: "电视剧")
+      partialMedia: MediaInfo(tmdb_id: 123, title: "Subscriber Show", type: "电视剧"),
+      apiService: service
     )
     task.start()
 
@@ -258,7 +262,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -291,7 +295,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -325,7 +329,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -381,23 +385,23 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     MediaPreloadPermissionURLProtocol.stub.reset()
     configureStandardSubscriber(service)
 
-    let statusViewModel = StatusViewModel()
+    let statusViewModel = StatusViewModel(apiService: service)
     await statusViewModel.refreshAllData()
 
     let homeViewModel = HomeViewModel(apiService: service)
     await homeViewModel.refreshData()
 
-    let downloadViewModel = DownloadTaskViewModel()
+    let downloadViewModel = DownloadTaskViewModel(apiService: service)
     await downloadViewModel.initialLoad()
 
-    let transferViewModel = TransferHistoryViewModel()
+    let transferViewModel = TransferHistoryViewModel(apiService: service)
     await transferViewModel.refresh()
 
     XCTAssertNil(statusViewModel.statistic)
@@ -423,20 +427,20 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     MediaPreloadPermissionURLProtocol.stub.reset()
     configureManageUser(service)
 
-    let statusViewModel = StatusViewModel()
+    let statusViewModel = StatusViewModel(apiService: service)
     await statusViewModel.refreshAllData()
 
     let homeViewModel = HomeViewModel(apiService: service)
     await homeViewModel.refreshData()
 
-    let downloadViewModel = DownloadTaskViewModel()
+    let downloadViewModel = DownloadTaskViewModel(apiService: service)
     await downloadViewModel.initialLoad()
 
     XCTAssertNil(statusViewModel.statistic)
@@ -459,20 +463,20 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     MediaPreloadPermissionURLProtocol.stub.reset()
     configureSuperUser(service)
 
-    let statusViewModel = StatusViewModel()
+    let statusViewModel = StatusViewModel(apiService: service)
     await statusViewModel.refreshAllData()
 
     let homeViewModel = HomeViewModel(apiService: service)
     await homeViewModel.refreshData()
 
-    let downloadViewModel = DownloadTaskViewModel()
+    let downloadViewModel = DownloadTaskViewModel(apiService: service)
     await downloadViewModel.initialLoad()
 
     XCTAssertEqual(statusViewModel.statistic?.movie_count, 2)
@@ -499,18 +503,18 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     MediaPreloadPermissionURLProtocol.stub.reset()
     configureNoSearchUser(service)
 
-    let settingsViewModel = SystemViewModel()
+    let settingsViewModel = SystemViewModel(apiService: service)
     settingsViewModel.defaultSearchSites = [1, 2]
     defer { settingsViewModel.defaultSearchSites = [] }
 
-    let resourceViewModel = ResourceResultViewModel(keyword: "Blocked")
+    let resourceViewModel = ResourceResultViewModel(keyword: "Blocked", apiService: service)
     await resourceViewModel.search()
 
     let addDownloadViewModel = AddDownloadViewModel(
@@ -531,14 +535,17 @@ final class MediaPreloadPermissionTests: XCTestCase {
         pri_order: nil,
         labels: nil,
         volume_factor: nil
-      )
+      ),
+      apiService: service
     )
     await addDownloadViewModel.loadData()
 
-    let siteFilterViewModel = SiteFilterViewModel()
+    let siteFilterViewModel = SiteFilterViewModel(apiService: service)
     await siteFilterViewModel.loadSites()
 
-    let normalizedSites = await SystemViewModel.normalizedDefaultSearchSitesString()
+    let normalizedSites = await SystemViewModel.normalizedDefaultSearchSitesString(
+      apiService: service
+    )
 
     XCTAssertTrue(resourceViewModel.results.isEmpty)
     XCTAssertTrue(addDownloadViewModel.downloaders.isEmpty)

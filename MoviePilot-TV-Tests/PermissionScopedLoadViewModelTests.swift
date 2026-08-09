@@ -10,7 +10,7 @@ final class PermissionScopedLoadViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(PermissionScopedLoadURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(PermissionScopedLoadURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = PermissionScopedServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -20,7 +20,7 @@ final class PermissionScopedLoadViewModelTests: XCTestCase {
     service.baseURLForTesting = "http://permission-scoped-load.local"
     configureSearchUser(service)
 
-    let viewModel = AddDownloadViewModel(torrent: Self.torrentFixture())
+    let viewModel = AddDownloadViewModel(torrent: Self.torrentFixture(), apiService: service)
     let loadTask = Task { await viewModel.loadData() }
     try await waitUntil("directories request started") {
       await PermissionScopedLoadURLProtocol.stub.requestCount(
@@ -44,7 +44,7 @@ final class PermissionScopedLoadViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(PermissionScopedLoadURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(PermissionScopedLoadURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = PermissionScopedServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -78,7 +78,7 @@ final class PermissionScopedLoadViewModelTests: XCTestCase {
     let sharedService = APIService.shared
     let persistenceSnapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
     defer { persistenceSnapshot.restore(to: sharedService) }
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
 
     await PermissionScopedLoadURLProtocol.stub.reset()
     await PermissionScopedLoadURLProtocol.stub.suspend(path: "/api/v1/site/rss")
@@ -106,7 +106,7 @@ final class PermissionScopedLoadViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(PermissionScopedLoadURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(PermissionScopedLoadURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = PermissionScopedServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -116,7 +116,7 @@ final class PermissionScopedLoadViewModelTests: XCTestCase {
     service.baseURLForTesting = "http://permission-scoped-load.local"
     configureManageUser(service)
 
-    let viewModel = ReorganizeViewModel(logIds: [], fileItem: nil)
+    let viewModel = ReorganizeViewModel(logIds: [], fileItem: nil, apiService: service)
     let loadTask = Task { await viewModel.loadConfig() }
     try await waitUntil("storages request started") {
       await PermissionScopedLoadURLProtocol.stub.requestCount(

@@ -47,7 +47,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -65,7 +65,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       type: "电视剧",
       season: 1
     )
-    let preloadTask = MediaPreloadTask(partialMedia: detail)
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
     preloadTask.tmdbId = 998_877
     preloadTask.isSubscribed = true
 
@@ -87,7 +87,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -112,7 +112,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       type: "电视剧",
       season: 1
     )
-    let preloadTask = MediaPreloadTask(partialMedia: detail)
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
     preloadTask.tmdbId = 998_877
     preloadTask.isSubscribed = true
 
@@ -132,7 +132,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -146,7 +146,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       title: "详情页取消订阅",
       type: "电影"
     )
-    let preloadTask = MediaPreloadTask(partialMedia: detail)
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
     preloadTask.tmdbId = 998_877
     preloadTask.isSubscribed = true
 
@@ -172,7 +172,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let sharedService = APIService.shared
     let persistenceSnapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
     defer { persistenceSnapshot.restore(to: sharedService) }
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     let gate = DetailHeaderSubscriptionAsyncGate()
@@ -223,7 +223,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let sharedService = APIService.shared
     let persistenceSnapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
     defer { persistenceSnapshot.restore(to: sharedService) }
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     await DetailHeaderSubscriptionURLProtocol.stub.setSubscriptionSnapshot([
@@ -272,7 +272,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -285,10 +285,10 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       title: "标题兜底订阅",
       type: "电影"
     )
-    let preloadTask = MediaPreloadTask(partialMedia: detail)
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
     preloadTask.isSubscribed = true
 
-    let viewModel = MediaDetailViewModel(detail: detail)
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
     viewModel.preloadTask = preloadTask
 
     await viewModel.cancelSubscription()
@@ -306,7 +306,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -319,11 +319,11 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       title: "原始 ID 最小响应",
       type: "电影"
     )
-    let preloadTask = MediaPreloadTask(partialMedia: detail)
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
     preloadTask.tmdbId = 998_877
     preloadTask.isSubscribed = true
 
-    let viewModel = MediaDetailViewModel(detail: detail)
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
     viewModel.preloadTask = preloadTask
 
     await viewModel.cancelSubscription()
@@ -341,7 +341,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -369,7 +369,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -382,11 +382,11 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       title: "Bangumi 详情页取消订阅",
       type: "电影"
     )
-    let preloadTask = MediaPreloadTask(partialMedia: detail)
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
     preloadTask.tmdbId = 998_877
     preloadTask.isSubscribed = true
 
-    let viewModel = MediaDetailViewModel(detail: detail)
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
     viewModel.preloadTask = preloadTask
 
     await viewModel.cancelSubscription()
@@ -404,7 +404,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -417,10 +417,10 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       title: "Bangumi 详情页取消订阅",
       type: "电影"
     )
-    let preloadTask = MediaPreloadTask(partialMedia: detail)
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
     preloadTask.isSubscribed = true
 
-    let viewModel = MediaDetailViewModel(detail: detail)
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
     viewModel.preloadTask = preloadTask
 
     await viewModel.cancelSubscription()
@@ -438,7 +438,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -457,11 +457,11 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       type: "电影",
       season: 1
     )
-    let preloadTask = MediaPreloadTask(partialMedia: detail)
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
     preloadTask.tmdbId = 776_655
     preloadTask.isSubscribed = true
 
-    let viewModel = MediaDetailViewModel(detail: detail)
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
     viewModel.preloadTask = preloadTask
 
     await viewModel.cancelSubscription()
@@ -479,7 +479,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -498,7 +498,8 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
         douban_id: "detail-header-remote-complete-douban",
         title: "详情页远端完成",
         type: "电影"
-      )
+      ),
+      apiService: service
     )
     preloadTask.tmdbId = 776_655
     preloadTask.isSubscribed = true
@@ -520,7 +521,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -540,12 +541,15 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       title: "详情页后完成",
       type: "电影"
     )
-    let preloadTask = MediaPreloadTask(partialMedia: fullDetail)
+    let preloadTask = MediaPreloadTask(partialMedia: fullDetail, apiService: service)
     preloadTask.tmdbId = 776_656
     preloadTask.fullDetail = fullDetail
     preloadTask.isSubscribed = true
 
-    let viewModel = MediaDetailViewModel(detail: MediaInfo(title: "占位详情", type: "电影"))
+    let viewModel = MediaDetailViewModel(
+      detail: MediaInfo(title: "占位详情", type: "电影"),
+      apiService: service
+    )
     viewModel.preloadTask = preloadTask
 
     let didRefreshSubscription = await MediaDetailView.applyReadyPreloadedDetail(
@@ -569,7 +573,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -580,11 +584,14 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     configureDetailHeaderSubscriptionAccess(service)
 
     let fullDetail = MediaInfo(tmdb_id: tmdbId, title: "订阅查询失败", type: "电影")
-    let preloadTask = MediaPreloadTask(partialMedia: fullDetail)
+    let preloadTask = MediaPreloadTask(partialMedia: fullDetail, apiService: service)
     preloadTask.fullDetail = fullDetail
     preloadTask.isSubscribed = true
 
-    let viewModel = MediaDetailViewModel(detail: MediaInfo(title: "占位详情", type: "电影"))
+    let viewModel = MediaDetailViewModel(
+      detail: MediaInfo(title: "占位详情", type: "电影"),
+      apiService: service
+    )
     viewModel.preloadTask = preloadTask
 
     let didRefreshSubscription = await MediaDetailView.applyReadyPreloadedDetail(
@@ -608,11 +615,11 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    let preloader = MediaPreloader.shared
+    let preloader = MediaPreloader(apiService: service)
     preloader.clearAll()
     defer { preloader.clearAll() }
 
@@ -664,7 +671,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -685,7 +692,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -735,7 +742,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -776,7 +783,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 

@@ -266,7 +266,7 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(LoginPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(LoginPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = LoginPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -288,7 +288,7 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(LoginPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(LoginPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = LoginPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -311,7 +311,7 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(LoginPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(LoginPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = LoginPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 

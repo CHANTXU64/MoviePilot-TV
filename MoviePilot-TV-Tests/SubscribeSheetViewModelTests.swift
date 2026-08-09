@@ -21,7 +21,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -58,7 +58,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     let preloader = MediaPreloader(apiService: service)
     defer { snapshot.restore(to: service) }
@@ -115,7 +115,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     let preloader = MediaPreloader(apiService: service)
     defer { snapshot.restore(to: service) }
@@ -242,7 +242,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     let originalValue = UserDefaults.standard.object(forKey: autoSearchKey)
     defer {
@@ -257,7 +257,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     let viewModel = SubscribeSheetViewModel(
       subscribe: Subscribe(id: 777, name: "关闭自动搜索", type: "电影", tmdbid: 123456),
-      isNewSubscription: true
+      isNewSubscription: true,
+      apiService: service
     )
 
     let didSave = await viewModel.save()
@@ -275,7 +276,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     let originalValue = UserDefaults.standard.object(forKey: autoSearchKey)
     defer {
@@ -290,7 +291,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     let viewModel = SubscribeSheetViewModel(
       subscribe: Subscribe(id: 778, name: "默认自动搜索", type: "电影", tmdbid: 123457),
-      isNewSubscription: true
+      isNewSubscription: true,
+      apiService: service
     )
 
     let didSave = await viewModel.save()
@@ -308,7 +310,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     let originalValue = UserDefaults.standard.object(forKey: autoSearchKey)
     defer {
@@ -323,7 +325,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     let viewModel = SubscribeSheetViewModel(
       subscribe: Subscribe(id: 779, name: "已有订阅", type: "电影", tmdbid: 123458),
-      isNewSubscription: false
+      isNewSubscription: false,
+      apiService: service
     )
 
     let didSave = await viewModel.save()
@@ -341,7 +344,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -382,7 +385,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -418,7 +421,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -466,7 +469,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer {
       snapshot.restore(to: service)
@@ -490,7 +493,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     let viewModel = SubscribeSheetViewModel(
       subscribe: Subscribe(id: 780, name: "普通订阅账号", type: "电影", tmdbid: 123459),
-      isNewSubscription: false
+      isNewSubscription: false,
+      apiService: service
     )
 
     await viewModel.loadData()
@@ -505,7 +509,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer {
       snapshot.restore(to: service)
@@ -517,7 +521,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     let viewModel = SubscribeSheetViewModel(
       subscribe: Subscribe(id: 783, name: "超管订阅账号", type: "电影", tmdbid: 123462),
-      isNewSubscription: false
+      isNewSubscription: false,
+      apiService: service
     )
 
     await viewModel.loadData()
@@ -532,7 +537,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -547,7 +552,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     configureSubscriber(service)
 
     let viewModel = SubscribeSheetViewModel(
-      subscribe: Subscribe(id: 780, name: "站点过滤", type: "电影", tmdbid: 123459)
+      subscribe: Subscribe(id: 780, name: "站点过滤", type: "电影", tmdbid: 123459),
+      apiService: service
     )
     await viewModel.loadData()
 
@@ -558,7 +564,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer {
       snapshot.restore(to: service)
@@ -577,7 +583,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
         doubanid: "douban-new",
         mediaid: "douban:douban-new"
       ),
-      isNewSubscription: true
+      isNewSubscription: true,
+      apiService: service
     )
 
     await viewModel.loadData()
@@ -612,7 +619,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -627,7 +634,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     let viewModel = SubscribeSheetViewModel(
       subscribe: Subscribe(name: "暂停失败", type: "电影", tmdbid: 8801),
-      isNewSubscription: true
+      isNewSubscription: true,
+      apiService: service
     )
     await viewModel.loadData()
 
@@ -647,7 +655,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer {
       snapshot.restore(to: service)
@@ -660,7 +668,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     let viewModel = SubscribeSheetViewModel(
       subscribe: Subscribe(id: 782, name: "权限降级", type: "电影", tmdbid: 123461),
-      isNewSubscription: false
+      isNewSubscription: false,
+      apiService: service
     )
 
     let loadTask = Task { await viewModel.loadData() }
@@ -683,7 +692,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer {
       snapshot.restore(to: service)
@@ -695,7 +704,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     let viewModel = SubscribeSheetViewModel(
       subscribe: Subscribe(id: 781, name: "无订阅权限", type: "电影", tmdbid: 123460),
-      isNewSubscription: false
+      isNewSubscription: false,
+      apiService: service
     )
     await viewModel.loadData()
 
@@ -712,7 +722,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer {
       snapshot.restore(to: service)
@@ -725,7 +735,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     let viewModel = SubscribeSheetViewModel(
       subscribe: Subscribe(id: 784, name: "保存失败", type: "电影", tmdbid: 123463),
-      isNewSubscription: false
+      isNewSubscription: false,
+      apiService: service
     )
 
     let didSave = await viewModel.save()
@@ -739,7 +750,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -753,7 +764,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     configureSubscriber(service)
 
     let viewModel = SubscribeSheetViewModel(
-      subscribe: Subscribe(id: 779, name: "保存业务失败", type: "电影", tmdbid: 123458)
+      subscribe: Subscribe(id: 779, name: "保存业务失败", type: "电影", tmdbid: 123458),
+      apiService: service
     )
 
     let didSave = await viewModel.save()
@@ -766,7 +778,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer {
       snapshot.restore(to: service)
@@ -779,7 +791,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     let viewModel = SubscribeSheetViewModel(
       subscribe: Subscribe(id: 785, name: "配置失败", type: "电影", tmdbid: 123464),
-      isNewSubscription: false
+      isNewSubscription: false,
+      apiService: service
     )
 
     await viewModel.loadData()
@@ -792,7 +805,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -807,7 +820,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     let viewModel = SubscribeSheetViewModel(
       subscribe: Subscribe(id: 786, name: "启用失败", type: "电影", tmdbid: 123465),
-      isNewSubscription: true
+      isNewSubscription: true,
+      apiService: service
     )
 
     let didSave = await viewModel.save()
@@ -832,7 +846,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
 
-    let service = APIService.testingInstance()
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
     let originalValue = UserDefaults.standard.object(forKey: autoSearchKey)
     defer {
@@ -858,7 +872,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     let viewModel = SubscribeSheetViewModel(
       subscribe: Subscribe(id: 787, name: "搜索失败", type: "电影", tmdbid: 123466),
-      isNewSubscription: true
+      isNewSubscription: true,
+      apiService: service
     )
 
     let didSave = await viewModel.save()

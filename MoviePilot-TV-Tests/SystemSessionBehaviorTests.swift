@@ -10,7 +10,7 @@ final class SystemSessionBehaviorTests: XCTestCase {
     defer { APIService.removeURLProtocolForTesting(SessionRefreshURLProtocol.self) }
 
     await SessionRefreshURLProtocol.stub.reset()
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SystemSessionServiceSnapshot.capture(service: service)
     let markerKey = "lastSessionRefreshAppVersion"
     let originalMarker = UserDefaults.standard.string(forKey: markerKey)
@@ -60,7 +60,7 @@ final class SystemSessionBehaviorTests: XCTestCase {
 
     await SessionRefreshURLProtocol.stub.reset()
     await SessionRefreshURLProtocol.stub.setLoginFailure(statusCode: 401)
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SystemSessionServiceSnapshot.capture(service: service)
     let markerKey = "lastSessionRefreshAppVersion"
     let originalMarker = UserDefaults.standard.string(forKey: markerKey)
@@ -188,20 +188,20 @@ final class SystemSessionBehaviorTests: XCTestCase {
   func testRefreshStoredSessionClearsStoredUserWithoutAccessibleFeatureWhenVersionAlreadyRefreshed()
     async throws
   {
-    let service = APIService.shared
-    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
     let markerKey = "lastSessionRefreshAppVersion"
     let originalMarker = UserDefaults.standard.string(forKey: markerKey)
     defer {
-      snapshot.restore(to: service)
+      snapshot.restore(to: sharedService)
       restoreUserDefaultsString(originalMarker, forKey: markerKey)
     }
 
-    service.baseURLForTesting = "https://session-refresh-tests.local"
-    service.tokenForTesting = "stored-token"
-    service.currentUserForTesting = nil
+    let service = makeStoredSessionService(
+      currentUserJSON:
+        #"{"access_token":"","token_type":"bearer","super_user":false,"permissions":{"discovery":false,"search":false,"subscribe":false,"manage":false},"user_name":"limited","avatar":null}"#
+    )
     UserDefaults.standard.set("v0.4.0", forKey: markerKey)
-    persistStoredCurrentUserJSON(noFeatureUserJSON(accessToken: "stored-token"))
 
     let result = await service.refreshStoredSessionAfterAppUpdateIfNeeded(
       appVersion: "v0.4.0"
@@ -219,7 +219,7 @@ final class SystemSessionBehaviorTests: XCTestCase {
     defer { APIService.removeURLProtocolForTesting(SessionRefreshURLProtocol.self) }
 
     await SessionRefreshURLProtocol.stub.reset()
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SystemSessionServiceSnapshot.capture(service: service)
     let markerKey = "lastSessionRefreshAppVersion"
     let originalMarker = UserDefaults.standard.string(forKey: markerKey)
@@ -258,7 +258,7 @@ final class SystemSessionBehaviorTests: XCTestCase {
     defer { APIService.removeURLProtocolForTesting(SessionRefreshURLProtocol.self) }
 
     await SessionRefreshURLProtocol.stub.reset()
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SystemSessionServiceSnapshot.capture(service: service)
     let markerKey = "lastSessionRefreshAppVersion"
     let originalMarker = UserDefaults.standard.string(forKey: markerKey)
@@ -299,7 +299,7 @@ final class SystemSessionBehaviorTests: XCTestCase {
 
     await SessionRefreshURLProtocol.stub.reset()
     await SessionRefreshURLProtocol.stub.setLoginNoAccessibleFeatureResponse(true)
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SystemSessionServiceSnapshot.capture(service: service)
     let markerKey = "lastSessionRefreshAppVersion"
     let originalMarker = UserDefaults.standard.string(forKey: markerKey)
@@ -337,22 +337,20 @@ final class SystemSessionBehaviorTests: XCTestCase {
   }
 
   func testRefreshStoredSessionRestoresUserContextWhenVersionAlreadyRefreshed() async throws {
-    let service = APIService.shared
-    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
     let markerKey = "lastSessionRefreshAppVersion"
     let originalMarker = UserDefaults.standard.string(forKey: markerKey)
     defer {
-      snapshot.restore(to: service)
+      snapshot.restore(to: sharedService)
       restoreUserDefaultsString(originalMarker, forKey: markerKey)
     }
 
-    service.baseURLForTesting = "https://session-refresh-tests.local"
-    service.tokenForTesting = "stored-token"
-    service.currentUserForTesting = nil
-    UserDefaults.standard.set("v0.4.0", forKey: markerKey)
-    persistStoredCurrentUserJSON(
-      #"{"access_token":"stored-token","token_type":"bearer","super_user":false,"permissions":{"discovery":true,"search":false,"subscribe":false,"manage":false},"user_name":"limited","avatar":null}"#
+    let service = makeStoredSessionService(
+      currentUserJSON:
+        #"{"access_token":"stored-token","token_type":"bearer","super_user":false,"permissions":{"discovery":true,"search":false,"subscribe":false,"manage":false},"user_name":"limited","avatar":null}"#
     )
+    UserDefaults.standard.set("v0.4.0", forKey: markerKey)
 
     let result = await service.refreshStoredSessionAfterAppUpdateIfNeeded(
       appVersion: "v0.4.0"
@@ -368,25 +366,21 @@ final class SystemSessionBehaviorTests: XCTestCase {
     XCTAssertFalse(service.currentUser?.canRequestSuperUserEndpoints ?? false)
   }
 
-  func testRefreshStoredSessionRestoresUserContextFromTokenlessDefaultsFallback() async throws {
-    let service = APIService.shared
-    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+  func testRefreshStoredSessionRestoresUserContextFromTokenlessUnifiedRecord() async throws {
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
     let markerKey = "lastSessionRefreshAppVersion"
     let originalMarker = UserDefaults.standard.string(forKey: markerKey)
     defer {
-      snapshot.restore(to: service)
+      snapshot.restore(to: sharedService)
       restoreUserDefaultsString(originalMarker, forKey: markerKey)
     }
 
-    service.baseURLForTesting = "https://session-refresh-tests.local"
-    service.tokenForTesting = "stored-token"
-    service.currentUserForTesting = nil
-    UserDefaults.standard.set("v0.4.0", forKey: markerKey)
-    _ = KeychainHelper.shared.delete(service: "MoviePilot-TV", account: "currentUser")
-    UserDefaults.standard.set(
-      #"{"access_token":"","token_type":"bearer","super_user":false,"permissions":{"discovery":true,"search":false,"subscribe":false,"manage":false},"user_name":"limited","avatar":null}"#,
-      forKey: "currentUser"
+    let service = makeStoredSessionService(
+      currentUserJSON:
+        #"{"access_token":"","token_type":"bearer","super_user":false,"permissions":{"discovery":true,"search":false,"subscribe":false,"manage":false},"user_name":"limited","avatar":null}"#
     )
+    UserDefaults.standard.set("v0.4.0", forKey: markerKey)
 
     let result = await service.refreshStoredSessionAfterAppUpdateIfNeeded(
       appVersion: "v0.4.0"
@@ -404,7 +398,7 @@ final class SystemSessionBehaviorTests: XCTestCase {
     defer { APIService.removeURLProtocolForTesting(SessionRefreshURLProtocol.self) }
 
     await SessionRefreshURLProtocol.stub.reset()
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SystemSessionServiceSnapshot.capture(service: service)
     let markerKey = "lastSessionRefreshAppVersion"
     let originalMarker = UserDefaults.standard.string(forKey: markerKey)
@@ -460,6 +454,20 @@ final class SystemSessionBehaviorTests: XCTestCase {
     if !KeychainHelper.shared.save(json, service: "MoviePilot-TV", account: "currentUser") {
       UserDefaults.standard.set(json, forKey: "currentUser")
     }
+  }
+
+  func makeStoredSessionService(currentUserJSON: String) -> APIService {
+    UserDefaults.standard.set(
+      Data(#"{"revision":7,"storage":"userDefaults"}"#.utf8),
+      forKey: "sessionMarker.v2"
+    )
+    UserDefaults.standard.set(
+      """
+      {"revision":7,"baseURL":"https://session-refresh-tests.local","token":"stored-token","currentUser":\(currentUserJSON),"username":null,"password":null,"imageNamespace":"stored-test"}
+      """,
+      forKey: "sessionRecord.v2"
+    )
+    return APIService.testingInstance()
   }
 
   func sessionToken(userId: Int, accessToken: String, userName: String) -> Token {
