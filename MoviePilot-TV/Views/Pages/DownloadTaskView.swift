@@ -213,7 +213,9 @@ private struct DownloadTaskRow: View {
     // 格式: {size} ↑ {upspeed}/s ↓ {dlspeed}/s {left_time}
     var parts: [String] = []
 
-    parts.append(item.size?.formattedBytes() ?? "0 B")
+    if let size = item.size {
+      parts.append(size.formattedBytes())
+    }
     parts.append("↑ \((item.upspeed ?? "0B"))/s")
     parts.append("↓ \((item.dlspeed ?? "0B"))/s")
 

@@ -378,9 +378,11 @@ private struct TransferHistoryRowView: View {
         Text(item.date ?? "")
           .font(.caption)
           .foregroundColor(.secondary)
-        Text((item.src_fileitem?.size ?? 0).formattedBytes())
-          .font(.caption)
-          .foregroundColor(.secondary)
+        if let size = item.src_fileitem?.size {
+          Text(size.formattedBytes())
+            .font(.caption)
+            .foregroundColor(.secondary)
+        }
       }
     }
   }
@@ -451,9 +453,11 @@ private struct TransferHistoryDetailSheet: View {
         Text("日期：")
           .fontWeight(.bold)
           + Text(item.date ?? "N/A")
-        Text("大小：")
-          .fontWeight(.bold)
-          + Text((item.src_fileitem?.size ?? 0).formattedBytes())
+        if let size = item.src_fileitem?.size {
+          Text("大小：")
+            .fontWeight(.bold)
+            + Text(size.formattedBytes())
+        }
       }
       .foregroundColor(.secondary)
       .font(.footnote)
