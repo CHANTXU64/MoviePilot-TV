@@ -248,6 +248,27 @@ final class MediaInfoCollectionBehaviorTests: XCTestCase {
     )
   }
 
+  func testStableMediaKeyUsesTitleOnlyWhenIdentifiersAreMissing() {
+    let first = MediaInfo(title: "媒体甲", type: "电影")
+    let second = MediaInfo(title: "媒体乙", type: "电影")
+
+    XCTAssertNotEqual(first.id, second.id)
+    XCTAssertEqual(
+      MediaInfo(title: "  媒体甲\n", type: "电影").id,
+      first.id
+    )
+    XCTAssertEqual(
+      MediaInfo(tmdb_id: 42, title: "媒体甲", type: "电影").id,
+      MediaInfo(tmdb_id: 42, title: "媒体乙", type: "电影").id
+    )
+
+    var seenKeys = Set<String>()
+    XCTAssertEqual(
+      MediaInfo.deduplicate([first, second], existingKeys: &seenKeys).count,
+      2
+    )
+  }
+
   func testMediaInfoEncodingPreservesBackendRequestContract() throws {
     let media = MediaInfo(
       json: try JSONDecoder().decode(

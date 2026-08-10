@@ -822,6 +822,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
       source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
       tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id,
       anilist_id: anilist_id, mediaid_prefix: mediaid_prefix, media_id: media_id,
+      title: title,
       subscribeShare: subscribeShare)
 
     self.isCollection = Self.checkIsCollection(type: type, collection_id: collection_id)
@@ -920,6 +921,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
       source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
       tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id,
       anilist_id: anilist_id, mediaid_prefix: mediaid_prefix, media_id: media_id,
+      title: title,
       subscribeShare: subscribeShare)
 
     self.isCollection = Self.checkIsCollection(type: type, collection_id: collection_id)
@@ -978,6 +980,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
       source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
       tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id,
       anilist_id: anilist_id, mediaid_prefix: mediaid_prefix, media_id: media_id,
+      title: title,
       subscribeShare: subscribeShare)
 
     self.isCollection = Self.checkIsCollection(type: type, collection_id: collection_id)
@@ -1078,13 +1081,14 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   }
 
   /// 参考 Vue 前端 dedupFields 去重 key
-  /// 通过拼接多个核心 ID 字段生成唯一标识
+  /// 通过拼接多个核心 ID 字段生成唯一标识；没有任何 ID 时使用标题区分不同媒体
   /// 长度前缀用于区分 nil、空字符串与字段边界
   /// 用于在 UI 渲染前过滤重复项与生成 ID
   nonisolated private static func generateUniqueKey(
     source: String?, type: String?, season: Int?, tmdb_id: Int?,
     imdb_id: String?, tvdb_id: Int?, douban_id: String?, bangumi_id: Int?,
     anilist_id: Int?, mediaid_prefix: String?, media_id: String?,
+    title: String?,
     subscribeShare: SubscribeShare? = nil
   ) -> String {
     if let subscribeShare {
@@ -1092,7 +1096,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
       return "share:\(shareId)"
     }
 
-    let parts: [String?] = [
+    var parts: [String?] = [
       source,
       type,
       season.map { String($0) },
@@ -1105,6 +1109,13 @@ struct MediaInfo: Codable, Identifiable, Hashable {
       mediaid_prefix,
       media_id,
     ]
+
+    let hasIdentifier = tmdb_id != nil || imdb_id != nil || tvdb_id != nil
+      || douban_id != nil || bangumi_id != nil || anilist_id != nil || media_id != nil
+    if !hasIdentifier, let title = MediaIdentifier.normalizedString(title) {
+      parts.append(title)
+    }
+
     return parts.map { value in
       guard let value else { return "n" }
       return "s\(value.utf8.count):\(value)"
