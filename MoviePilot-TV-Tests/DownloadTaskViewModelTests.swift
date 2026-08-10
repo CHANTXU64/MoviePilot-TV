@@ -418,6 +418,51 @@ final class DownloadTaskViewModelTests: XCTestCase {
     XCTAssertEqual(refreshedRow.progress, 80)
   }
 
+  func testOldRowsCannotSendActionsAfterDownloaderSelectionChanges() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON(
+      downloadPayload(
+        hash: "shared-hash", title: "Old Client Task", username: "old-user", progress: 10),
+      forClient: "old"
+    )
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    viewModel.selectedClient = "old"
+    await viewModel.loadDownloads()
+
+    XCTAssertEqual(viewModel.loadedClient, "old")
+    XCTAssertTrue(viewModel.canOperateDownloads)
+    let oldRequestCountBeforeSwitch = await DownloadTaskURLProtocol.stub.requestCount(
+      clientName: "old")
+    XCTAssertEqual(oldRequestCountBeforeSwitch, 1)
+
+    viewModel.selectedClient = "new"
+
+    XCTAssertFalse(viewModel.canOperateDownloads)
+    let didStop = await viewModel.stopDownload(clientName: "old", hash: "shared-hash")
+    let didStart = await viewModel.startDownload(clientName: "old", hash: "shared-hash")
+    await viewModel.deleteDownload(clientName: "old", hash: "shared-hash")
+
+    XCTAssertFalse(didStop)
+    XCTAssertFalse(didStart)
+    let oldRequestCountAfterActions = await DownloadTaskURLProtocol.stub.requestCount(
+      clientName: "old")
+    let newRequestCountAfterActions = await DownloadTaskURLProtocol.stub.requestCount(
+      clientName: "new")
+    XCTAssertEqual(oldRequestCountAfterActions, 1)
+    XCTAssertEqual(newRequestCountAfterActions, 0)
+  }
+
   func testOlderClientDeleteThatCompletesLaterDoesNotRemoveCurrentClientDownloadWithSameHash()
     async throws
   {
@@ -430,10 +475,16 @@ final class DownloadTaskViewModelTests: XCTestCase {
 
     await DownloadTaskURLProtocol.stub.reset()
     let deleteGate = DownloadTaskAsyncGate()
-    await DownloadTaskURLProtocol.stub.setDownloadsJSON(
-      #"{"success": true, "message": "ok"}"#,
-      forClient: "old",
-      waitFor: deleteGate
+    await DownloadTaskURLProtocol.stub.setDownloadsJSONSequence(
+      [
+        (
+          downloadPayload(
+            hash: "shared-hash", title: "Old Client Task", username: "old-user", progress: 10),
+          nil
+        ),
+        (#"{"success": true, "message": "ok"}"#, deleteGate),
+      ],
+      forClient: "old"
     )
 
     service.baseURLForTesting = "http://download-tests.local"
@@ -441,19 +492,18 @@ final class DownloadTaskViewModelTests: XCTestCase {
 
     let viewModel = DownloadTaskViewModel(apiService: service)
     viewModel.selectedClient = "old"
-    viewModel.downloads = try decodeDownloads(
-      downloadPayload(
-        hash: "shared-hash", title: "Old Client Task", username: "old-user", progress: 10)
-    )
+    await viewModel.loadDownloads()
 
     let deleteTask = Task { @MainActor in
-      await viewModel.deleteDownload(hash: "shared-hash")
+      await viewModel.deleteDownload(clientName: "old", hash: "shared-hash")
     }
     defer { deleteTask.cancel() }
 
     try await withTimeout("old client delete request to start") {
-      await DownloadTaskURLProtocol.stub.waitForRequest(clientName: "old")
+      await DownloadTaskURLProtocol.stub.waitForRequest(clientName: "old", count: 2)
     }
+    let oldRequestCount = await DownloadTaskURLProtocol.stub.requestCount(clientName: "old")
+    XCTAssertEqual(oldRequestCount, 2)
 
     viewModel.selectedClient = "new"
     viewModel.downloads = try decodeDownloads(
@@ -691,6 +741,10 @@ private actor DownloadTaskURLProtocolStub {
       if Task.isCancelled { return }
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
+  }
+
+  func requestCount(clientName: String) -> Int {
+    requestedClients.filter { $0 == clientName }.count
   }
 
   private func recordRequest(for clientName: String) {
