@@ -1,5 +1,7 @@
 import XCTest
 
+@testable import MoviePilot_TV
+
 final class SystemViewDefaultStyleTests: XCTestCase {
   func testSystemViewDoesNotUsePrivateSettingsImplementation() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
@@ -311,6 +313,12 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertEqual(source.components(separatedBy: "viewModel.search()").count - 1, 1)
     XCTAssertTrue(source.contains("Button {\n            Task { await viewModel.search() }"))
     XCTAssertTrue(source.contains(".disabled(viewModel.isLoading)"))
+    XCTAssertTrue(source.contains("items = []\n    guard !title.isEmpty else { return }"))
+    XCTAssertTrue(
+      source.contains(
+        "guard keyword.trimmingCharacters(in: .whitespacesAndNewlines) == title else { return }"
+      )
+    )
     XCTAssertFalse(
       source.contains(
         "viewModel.keyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty"
@@ -336,6 +344,18 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains(".frame(width: 1140, height: 820)"))
     XCTAssertFalse(source.contains(".frame(width: 1200, height: 820)"))
     XCTAssertFalse(source.contains(".frame(width: 1400, height: 820)"))
+  }
+
+  @MainActor
+  func testManualMediaSearchClearsExistingResultsForEmptySubmission() async {
+    let viewModel = ManualMediaSearchViewModel(source: .themoviedb)
+    viewModel.items = [MediaInfo(tmdb_id: 42, title: "旧结果")]
+    viewModel.keyword = "  "
+
+    await viewModel.search()
+
+    XCTAssertTrue(viewModel.items.isEmpty)
+    XCTAssertFalse(viewModel.isLoading)
   }
 
   func testHorizontalLoadMoreIndicatorsAlignToPosterArea() throws {
