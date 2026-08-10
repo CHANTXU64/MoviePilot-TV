@@ -203,6 +203,23 @@ private struct CurrentUserResponse: Decodable {
   let avatar: String?
   let permissions: [String: Bool]?
 
+  private enum CodingKeys: String, CodingKey {
+    case id
+    case name
+    case is_superuser
+    case avatar
+    case permissions
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(Int.self, forKey: .id)
+    name = try container.decode(String.self, forKey: .name)
+    is_superuser = try container.decodeIfPresent(FlexibleBool.self, forKey: .is_superuser)
+    avatar = try container.decodeIfPresent(String.self, forKey: .avatar)
+    permissions = try decodeUserPermissions(from: container, forKey: .permissions)
+  }
+
   func token(accessToken: String) -> Token {
     Token(
       access_token: accessToken,

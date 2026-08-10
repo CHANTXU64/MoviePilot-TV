@@ -7,6 +7,21 @@ enum UserPermissionKey: String, Codable, CaseIterable {
   case manage
 }
 
+/// 后端权限对象还可能包含 `features` 等嵌套字段；TV 只消费四个顶层 Bool 权限。
+func decodeUserPermissions<Key: CodingKey>(
+  from container: KeyedDecodingContainer<Key>,
+  forKey key: Key
+) throws -> [String: Bool]? {
+  guard container.contains(key), try !container.decodeNil(forKey: key) else { return nil }
+
+  let rawPermissions = try container.decode([String: JSONValue].self, forKey: key)
+  return UserPermissionKey.allCases.reduce(into: [:]) { permissions, permission in
+    guard let rawValue = rawPermissions[permission.rawValue], case .bool(let value) = rawValue
+    else { return }
+    permissions[permission.rawValue] = value
+  }
+}
+
 /// 登录认证令牌
 struct Token: Codable, Equatable {
   /// 用户令牌
@@ -39,6 +54,27 @@ struct Token: Codable, Equatable {
     self.user_id = user_id
     self.user_name = user_name
     self.avatar = avatar
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case access_token
+    case token_type
+    case super_user
+    case permissions
+    case user_id
+    case user_name
+    case avatar
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    access_token = try container.decode(String.self, forKey: .access_token)
+    token_type = try container.decode(String.self, forKey: .token_type)
+    super_user = try container.decodeIfPresent(FlexibleBool.self, forKey: .super_user)
+    permissions = try decodeUserPermissions(from: container, forKey: .permissions)
+    user_id = try container.decodeIfPresent(Int.self, forKey: .user_id)
+    user_name = try container.decode(String.self, forKey: .user_name)
+    avatar = try container.decodeIfPresent(String.self, forKey: .avatar)
   }
 
   var canRequestSuperUserEndpoints: Bool {
