@@ -6,6 +6,8 @@ import Foundation
 extension Notification.Name {
   /// 订阅状态变更通知（新增/删除/编辑订阅后发送，首页和预加载缓存监听刷新）
   static let subscriptionDidUpdate = Notification.Name("subscriptionDidUpdate")
+  /// 用户在保存订阅期间返回，保存最终成功后显示一次成功提示
+  static let subscriptionSaveDidComplete = Notification.Name("subscriptionSaveDidComplete")
   /// 会话登出通知（主动登出或自动重连失败后发送，用于清理会话相关缓存）
   static let sessionDidLogout = Notification.Name("sessionDidLogout")
 }

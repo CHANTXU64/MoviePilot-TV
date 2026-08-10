@@ -317,6 +317,7 @@ struct SubscribeSheet: View {
                     Text(viewModel.isNewSubscription ? "取消订阅" : "取消修改")
                       .frame(maxWidth: .infinity)
                   }
+                  .disabled(viewModel.isSaving)
                 }
               }
               .padding(.horizontal, 28)
@@ -333,10 +334,9 @@ struct SubscribeSheet: View {
             }
           }
           .onDisappear {
-            if !viewModel.isSaved {
-              Task {
-                await viewModel.cancel()
-              }
+            let wasSaving = viewModel.isSaving
+            Task {
+              await viewModel.cancel(wasSavingOnDismiss: wasSaving)
             }
           }
         }

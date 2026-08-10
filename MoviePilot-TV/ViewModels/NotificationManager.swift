@@ -58,6 +58,13 @@ class NotificationManager: ObservableObject {
         self.isShowing = false
       }
       .store(in: &cancellables)
+
+    NotificationCenter.default.publisher(for: .subscriptionSaveDidComplete)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in
+        self?.show(message: "订阅成功", type: .success)
+      }
+      .store(in: &cancellables)
   }
 
   func show(message: String, type: NotificationType = .info, duration: TimeInterval = 5) {

@@ -22,6 +22,8 @@ class SubscribeSheetViewModel: ObservableObject {
   private var isCreatedAndPaused = false
   // 绑定服务器返回的新订阅 ID 与创建它的账号，避免切号后回滚误删同号订阅。
   private var createdSubscriptionOwnerProfileKey: String?
+  // 用户在保存期间返回时，保存成功后只提示一次。
+  private var shouldNotifySaveSuccessAfterDismiss = false
 
   private let apiService: APIService
 
@@ -220,6 +222,7 @@ class SubscribeSheetViewModel: ObservableObject {
       }
 
       isSaved = true
+      publishDeferredSaveSuccessIfNeeded()
       // 保存完成后只在同一账号内继续启用、搜索和刷新订阅状态。
       defer {
         if apiService.profileKey == ownerProfileKey {
@@ -279,7 +282,14 @@ class SubscribeSheetViewModel: ObservableObject {
     }
   }
 
-  func cancel() async {
+  func cancel(wasSavingOnDismiss: Bool = false) async {
+    if wasSavingOnDismiss || isSaving {
+      shouldNotifySaveSuccessAfterDismiss = true
+      if isSaved {
+        publishDeferredSaveSuccessIfNeeded()
+      }
+      return
+    }
     guard !isSaved else { return }
     // 如果我们创建了一个新订阅但用户取消了，我们必须回滚（删除）它
     if isNewSubscription, let id = subscribe.id,
@@ -300,5 +310,11 @@ class SubscribeSheetViewModel: ObservableObject {
         Logger.error("Failed to roll back subscription \(id): \(error)")
       }
     }
+  }
+
+  private func publishDeferredSaveSuccessIfNeeded() {
+    guard shouldNotifySaveSuccessAfterDismiss else { return }
+    shouldNotifySaveSuccessAfterDismiss = false
+    NotificationCenter.default.post(name: .subscriptionSaveDidComplete, object: nil)
   }
 }

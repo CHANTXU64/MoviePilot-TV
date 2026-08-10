@@ -479,6 +479,62 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(notifications.count(), 1)
   }
 
+  func testReturningWhileSavingSkipsRollbackAndShowsSuccessAfterSave() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    let originalValue = UserDefaults.standard.object(forKey: autoSearchKey)
+    defer {
+      snapshot.restore(to: service)
+      restoreUserDefaultsValue(originalValue, forKey: autoSearchKey)
+    }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.suspend(path: "/api/v1/subscribe")
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+    UserDefaults.standard.set(false, forKey: autoSearchKey)
+
+    let notifications = SubscribeSheetNotificationCounter()
+    let observer = NotificationCenter.default.addObserver(
+      forName: .subscriptionSaveDidComplete,
+      object: nil,
+      queue: nil
+    ) { _ in
+      notifications.increment()
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(id: 788, name: "返回时保存", type: "电影", tmdbid: 123_467),
+      isNewSubscription: true,
+      apiService: service
+    )
+    let saveTask = Task { await viewModel.save() }
+    try await waitUntil("save request starts") {
+      await SubscribeSheetURLProtocol.stub.requestCount(
+        method: "PUT", path: "/api/v1/subscribe") == 1
+    }
+
+    XCTAssertTrue(viewModel.isSaving)
+    let wasSavingOnDismiss = viewModel.isSaving
+
+    await SubscribeSheetURLProtocol.stub.release(path: "/api/v1/subscribe")
+    let didSave = await saveTask.value
+    XCTAssertTrue(didSave)
+    XCTAssertTrue(viewModel.isSaved)
+    XCTAssertFalse(viewModel.isSaving)
+    XCTAssertEqual(notifications.count(), 0)
+
+    await viewModel.cancel(wasSavingOnDismiss: wasSavingOnDismiss)
+    let deleteRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "DELETE", path: "/api/v1/subscribe/788")
+    XCTAssertEqual(deleteRequestCount, 0)
+    XCTAssertEqual(notifications.count(), 1)
+  }
+
   func testCancelNewSubscriptionPublishesOnlyAfterRollbackDeleteSucceeds() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
