@@ -165,6 +165,44 @@ final class TransferHistoryViewModelTests: XCTestCase {
     XCTAssertTrue(paths.contains("/api/v1/system/setting/public/Storages"))
   }
 
+  func testPendingPollingDoesNotPublishAfterSearchChanges() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
+
+    let persistenceSnapshot = SystemSessionServiceSnapshot.capture(service: .shared)
+    defer { persistenceSnapshot.restore(to: .shared) }
+    let service = APIService.testingInstance()
+
+    await TransferHistoryURLProtocol.stub.reset()
+    let historyGate = TransferHistoryAsyncGate()
+    await TransferHistoryURLProtocol.stub.setHistoryGate(historyGate)
+    service.baseURLForTesting = "http://transfer-history-tests.local"
+    configureManageUser(service)
+
+    let viewModel = TransferHistoryViewModel(apiService: service)
+    let pollingTask = Task { @MainActor in
+      await viewModel.fetchLatest()
+    }
+    defer { pollingTask.cancel() }
+
+    try await withTransferHistoryTimeout("polling request to start") {
+      await TransferHistoryURLProtocol.stub.waitForRequest(path: "/api/v1/history/transfer")
+    }
+
+    viewModel.search(with: "新查询")
+    try await withTransferHistoryTimeout("new search results to publish") {
+      while await MainActor.run(body: { viewModel.items.map { $0.id } }) != [20] {
+        if Task.isCancelled { return }
+        try? await Task.sleep(nanoseconds: 1_000_000)
+      }
+    }
+
+    await historyGate.open()
+    await pollingTask.value
+
+    XCTAssertEqual(viewModel.items.map(\.id), [20])
+  }
+
   func testDeleteTransferHistoryRequiresExplicitSuccess() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
@@ -587,13 +625,17 @@ private actor TransferHistoryURLProtocolStub {
         gate: nil
       )
     case "/api/v1/history/transfer":
+      let title = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+        .queryItems?.first(where: { $0.name == "title" })?.value
       let response = TransferHistoryHTTPStubResponse(
         statusCode: 200,
         data: Data(
-          #"{"list":[{"id":10,"title":"Late History","type":"电影","status":true}],"total":1}"#
+          (title == "新查询"
+            ? #"{"list":[{"id":20,"title":"新查询结果","type":"电影","status":true}],"total":1}"#
+            : #"{"list":[{"id":10,"title":"Late History","type":"电影","status":true}],"total":1}"#)
             .utf8
         ),
-        gate: historyGate
+        gate: title == "新查询" ? nil : historyGate
       )
       if let gate = response.gate {
         await gate.wait()

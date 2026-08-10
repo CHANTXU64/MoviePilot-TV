@@ -33,6 +33,7 @@ class TransferHistoryViewModel: ObservableObject {
 
   private var paginator: Paginator<TransferHistory>!
   private var fetcher: (Int) async throws -> TransferHistoryResponse
+  private var queryGeneration = 0
   private var cancellables = Set<AnyCancellable>()
   private let apiService: APIService
   // 后端固定每页条数，供轮询游标推进/回退统一计算。
@@ -106,6 +107,7 @@ class TransferHistoryViewModel: ObservableObject {
   }
 
   func search(with text: String) {
+    queryGeneration += 1
     guard apiService.canAccess(.manage) else {
       searchText = text
       clearForRestrictedUser()
@@ -292,13 +294,17 @@ class TransferHistoryViewModel: ObservableObject {
   func fetchLatest() async {
     guard apiService.canAccess(.manage) else { return }
     let sessionSnapshot = apiService.sessionSnapshot()
+    let pollGeneration = queryGeneration
+    let pollFetcher = fetcher
     do {
       var allNewItems: [TransferHistory] = []
       var currentPage = 1
       let maxPagesToFetch = 5  // Safeguard to prevent infinite loops
 
-      let firstPageResponse = try await fetcher(1)
-      guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
+      let firstPageResponse = try await pollFetcher(1)
+      guard pollGeneration == queryGeneration,
+        apiService.isSessionUnchanged(from: sessionSnapshot)
+      else { return }
       var fetchedItems = firstPageResponse.list
 
       let existingIds = Set(items.map { $0.id }).union(deletedIds)
@@ -325,13 +331,17 @@ class TransferHistoryViewModel: ObservableObject {
         }
 
         currentPage += 1
-        let nextPageResponse = try await fetcher(currentPage)
-        guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
+        let nextPageResponse = try await pollFetcher(currentPage)
+        guard pollGeneration == queryGeneration,
+          apiService.isSessionUnchanged(from: sessionSnapshot)
+        else { return }
         fetchedItems = nextPageResponse.list
       }
 
       if !allNewItems.isEmpty {
-        guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
+        guard pollGeneration == queryGeneration,
+          apiService.isSessionUnchanged(from: sessionSnapshot)
+        else { return }
         let knownIds = Set(prependedItems.map(\.id))
           .union(paginatorItems.map(\.id))
           .union(deletedIds)
