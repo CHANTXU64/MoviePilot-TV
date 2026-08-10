@@ -354,11 +354,11 @@ nonisolated private func decodeOrUnwrapSync<T: Decodable>(from data: Data) throw
   if firstByte == UInt8(ascii: "{") {
     do {
       let response = try JSONDecoder().decode(ApiResponse<T>.self, from: data)
-      if let wrappedData = response.data {
-        return wrappedData
-      }
       if response.success == false {
         throw APIError.serverMessage(response.localizedMessage ?? "Request failed")
+      }
+      if let wrappedData = response.data {
+        return wrappedData
       }
       if let message = response.localizedMessage, !message.isEmpty {
         throw APIError.serverMessage(message)
@@ -366,6 +366,11 @@ nonisolated private func decodeOrUnwrapSync<T: Decodable>(from data: Data) throw
     } catch let error as APIError {
       throw error
     } catch let error as DecodingError {
+      if let response = try? JSONDecoder().decode(ApiResponse<JSONValue>.self, from: data),
+        response.success == false
+      {
+        throw APIError.serverMessage(response.localizedMessage ?? "Request failed")
+      }
       if let context = decodingContext(from: error), !context.codingPath.isEmpty {
         throw APIError.decodingError(error)
       }

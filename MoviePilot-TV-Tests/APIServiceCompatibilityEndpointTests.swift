@@ -29,6 +29,40 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     )
   }
 
+  func testFetchSettingsRejectsExplicitFailureBeforeDecodingWrappedData() async {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = nil
+
+    for wrappedData in ["{}", "[]"] {
+      await CompatibilityEndpointURLProtocol.stub.reset()
+      await CompatibilityEndpointURLProtocol.stub.setPublicSettingsResponse(
+        Data(
+          """
+          {"success":false,"message":"raw failure","message_i18n":"读取设置失败","data":\(wrappedData)}
+          """.utf8
+        )
+      )
+
+      do {
+        _ = try await service.fetchSettings()
+        XCTFail("Expected an explicit failure response for data: \(wrappedData)")
+      } catch {
+        guard case APIError.serverMessage(let message) = error else {
+          XCTFail("Expected serverMessage, got \(error)")
+          continue
+        }
+        XCTAssertEqual(message, "读取设置失败")
+      }
+    }
+  }
+
   func testFetchSettingsMergesLoggedInUserSettings() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
@@ -760,6 +794,7 @@ private struct CompatibilityEndpointServiceSnapshot {
 private actor CompatibilityEndpointURLProtocolStub {
   private var requests: [URLRequest] = []
   private var requestBodies: [Data?] = []
+  private var publicSettingsResponse: Data?
   private var manualTransferResponses: [Data] = []
   private var userSettingsFailureStatusCode: Int?
   private var manualTransferOmitsSuccess = false
@@ -768,6 +803,7 @@ private actor CompatibilityEndpointURLProtocolStub {
   func reset() {
     requests.removeAll()
     requestBodies.removeAll()
+    publicSettingsResponse = nil
     manualTransferResponses.removeAll()
     userSettingsFailureStatusCode = nil
     manualTransferOmitsSuccess = false
@@ -776,6 +812,10 @@ private actor CompatibilityEndpointURLProtocolStub {
 
   func setUserSettingsFailure(statusCode: Int?) {
     userSettingsFailureStatusCode = statusCode
+  }
+
+  func setPublicSettingsResponse(_ response: Data?) {
+    publicSettingsResponse = response
   }
 
   func setManualTransferOmitsSuccess(_ enabled: Bool) {
@@ -857,9 +897,9 @@ private actor CompatibilityEndpointURLProtocolStub {
     let statusCode: Int
     if url.path == "/api/v1/system/global" {
       statusCode = 200
-      data =
-        #"{"success":true,"data":{"TMDB_IMAGE_DOMAIN":"image.tmdb.org","GLOBAL_IMAGE_CACHE":true,"BACKEND_VERSION":"v2.13.14","FRONTEND_VERSION":"v2.13.15"}}"#
-        .data(using: .utf8)!
+      data = publicSettingsResponse
+        ?? #"{"success":true,"data":{"TMDB_IMAGE_DOMAIN":"image.tmdb.org","GLOBAL_IMAGE_CACHE":true,"BACKEND_VERSION":"v2.13.14","FRONTEND_VERSION":"v2.13.15"}}"#
+          .data(using: .utf8)!
     } else if url.path == "/api/v1/system/global/user" {
       if let userSettingsFailureStatusCode {
         statusCode = userSettingsFailureStatusCode
