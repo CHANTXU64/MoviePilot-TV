@@ -13,11 +13,15 @@ class SubscriptionHandler: ObservableObject {
   @Published var notificationType: NotificationType = .info
   @Published var notificationSerial = 0
   @Published private(set) var forkErrorMessage: String?
+  @Published private(set) var unsubscribeConfirmationMessage: String?
 
   private let apiService: APIService
   private let mediaPreloader: MediaPreloader
   private var isCheckingSubscription = false
   private var pendingForkOwner: (subscriptionId: Int, profileKey: String)?
+  private var pendingUnsubscribe: (
+    item: MediaInfo, mediaId: String, snapshot: APIServiceSessionSnapshot
+  )?
 
   init(
     apiService: APIService = .shared,
@@ -27,7 +31,7 @@ class SubscriptionHandler: ObservableObject {
     self.mediaPreloader = mediaPreloader
   }
 
-  func handleSubscribe(_ item: MediaInfo) {
+  func handleSubscribe(_ item: MediaInfo, expectedSubscribed: Bool) {
     guard apiService.canAccess(.subscribe) else { return }
     guard !item.isCollection else { return }
 
@@ -38,8 +42,22 @@ class SubscriptionHandler: ObservableObject {
         defer { isCheckingSubscription = false }
         do {
           let snapshot = apiService.sessionSnapshot()
-          if let subscription = try await subscriptionLookup(for: item, snapshot: snapshot) {
-            await unsubscribe(item, mediaId: subscription.mediaId, snapshot: snapshot)
+          let subscription = try await subscriptionLookup(for: item, snapshot: snapshot)
+          guard apiService.isSessionUnchanged(from: snapshot) else { return }
+          let latestSubscribed = subscription != nil
+
+          // 菜单显示意图与最新状态不一致时只刷新，不把“订阅”反转成取消操作。
+          guard latestSubscribed == expectedSubscribed else {
+            mediaPreloader.peekTask(for: item)?.isSubscribed = latestSubscribed
+            showNotification(message: "订阅状态已变化，请重新操作。", type: .info)
+            return
+          }
+
+          if let subscription {
+            pendingUnsubscribe = (item, subscription.mediaId, snapshot)
+            unsubscribeConfirmationMessage = SubscriptionCancelConfirmation.headerMessage(
+              for: item
+            )
           } else {
             guard apiService.isSessionUnchanged(from: snapshot) else { return }
             // For directly subscribable non-TV media, show edit sheet
@@ -61,6 +79,23 @@ class SubscriptionHandler: ObservableObject {
         initialEpisodeGroup: nil
       )
     }
+  }
+
+  func confirmUnsubscribe() {
+    guard let pendingUnsubscribe else { return }
+    dismissUnsubscribeConfirmation()
+    Task {
+      await unsubscribe(
+        pendingUnsubscribe.item,
+        mediaId: pendingUnsubscribe.mediaId,
+        snapshot: pendingUnsubscribe.snapshot
+      )
+    }
+  }
+
+  func dismissUnsubscribeConfirmation() {
+    pendingUnsubscribe = nil
+    unsubscribeConfirmationMessage = nil
   }
 
   private func unsubscribe(

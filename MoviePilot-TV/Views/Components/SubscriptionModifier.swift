@@ -29,6 +29,22 @@ struct MediaSubscriptionModifier: ViewModifier {
         guard !handler.notificationMessage.isEmpty else { return }
         notificationManager.show(message: handler.notificationMessage, type: handler.notificationType)
       }
+      .alert(
+        SubscriptionCancelConfirmation.title,
+        isPresented: Binding(
+          get: { handler.unsubscribeConfirmationMessage != nil },
+          set: { if !$0 { handler.dismissUnsubscribeConfirmation() } }
+        )
+      ) {
+        Button("取消", role: .cancel) {
+          handler.dismissUnsubscribeConfirmation()
+        }
+        Button(SubscriptionCancelConfirmation.confirmButtonTitle, role: .destructive) {
+          handler.confirmUnsubscribe()
+        }
+      } message: {
+        Text(handler.unsubscribeConfirmationMessage ?? "")
+      }
   }
 
   @discardableResult

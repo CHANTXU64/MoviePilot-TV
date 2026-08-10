@@ -158,7 +158,10 @@ final class MediaPreloadPermissionTests: XCTestCase {
     configureStandardSubscriber(service)
 
     let handler = SubscriptionHandler(apiService: service)
-    handler.handleSubscribe(MediaInfo(tmdb_id: 456, title: "查询失败", type: "电影"))
+    handler.handleSubscribe(
+      MediaInfo(tmdb_id: 456, title: "查询失败", type: "电影"),
+      expectedSubscribed: false
+    )
 
     try await waitUntil("subscription handler finishes lookup") {
       handler.sheetSubscribe != nil || handler.notificationSerial > 0

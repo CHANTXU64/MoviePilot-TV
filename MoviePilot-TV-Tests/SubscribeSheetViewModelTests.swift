@@ -41,7 +41,8 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     let handler = SubscriptionHandler(apiService: service)
     handler.handleSubscribe(
-      MediaInfo(tmdb_id: 998_901, title: "新增订阅", type: "电影")
+      MediaInfo(tmdb_id: 998_901, title: "新增订阅", type: "电影"),
+      expectedSubscribed: false
     )
     try await waitUntil("new subscription editor opens") {
       handler.sheetSubscribe != nil
@@ -94,7 +95,18 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     }
 
     let handler = SubscriptionHandler(apiService: service, mediaPreloader: preloader)
-    handler.handleSubscribe(media)
+    handler.handleSubscribe(media, expectedSubscribed: true)
+    try await waitUntil("unsubscribe confirmation appears") {
+      handler.unsubscribeConfirmationMessage != nil
+    }
+
+    let deleteCountBeforeConfirmation = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "DELETE",
+      path: "/api/v1/subscribe/media/tmdb:998903"
+    )
+    XCTAssertEqual(deleteCountBeforeConfirmation, 0)
+
+    handler.confirmUnsubscribe()
     try await waitUntil("subscription state updates after deletion") {
       preloadTask.isSubscribed == false
     }
@@ -148,13 +160,99 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     preloadTask.isSubscribed = true
 
     let handler = SubscriptionHandler(apiService: service, mediaPreloader: preloader)
-    handler.handleSubscribe(media)
+    handler.handleSubscribe(media, expectedSubscribed: true)
+    try await waitUntil("unsubscribe confirmation appears") {
+      handler.unsubscribeConfirmationMessage != nil
+    }
+    handler.confirmUnsubscribe()
     try await waitUntil("unsubscribe failure appears") {
       handler.notificationType == .error
         && handler.notificationMessage == "《取消失败》取消订阅失败：后端拒绝取消"
     }
 
     XCTAssertEqual(preloadTask.isSubscribed, true)
+  }
+
+  func testSubscriptionHandlerDoesNotTurnDisplayedSubscribeIntoDelete() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    let preloader = MediaPreloader(apiService: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/subscribe/media/tmdb:998905",
+      json: #"{"id":998905,"name":"远端已订阅","type":"电影","tmdbid":998905}"#
+    )
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let media = MediaInfo(tmdb_id: 998_905, title: "远端已订阅", type: "电影")
+    let preloadTask = preloader.preload(for: media)
+    preloadTask.cancel()
+    preloadTask.isSubscribed = false
+    // 菜单已显示“订阅”后，预加载状态在用户点击前更新为已订阅。
+    preloadTask.isSubscribed = true
+
+    let handler = SubscriptionHandler(apiService: service, mediaPreloader: preloader)
+    handler.handleSubscribe(media, expectedSubscribed: false)
+    try await waitUntil("changed subscription state is reported") {
+      handler.notificationMessage == "订阅状态已变化，请重新操作。"
+    }
+
+    XCTAssertEqual(preloadTask.isSubscribed, true)
+    XCTAssertNil(handler.sheetSubscribe)
+    XCTAssertNil(handler.unsubscribeConfirmationMessage)
+    let deleteRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "DELETE",
+      path: "/api/v1/subscribe/media/tmdb:998905"
+    )
+    XCTAssertEqual(deleteRequestCount, 0)
+  }
+
+  func testSubscriptionHandlerDoesNotTurnDisplayedSubscribedIntoAdd() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    let preloader = MediaPreloader(apiService: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/subscribe/media/tmdb:998906",
+      json: "{}"
+    )
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let media = MediaInfo(tmdb_id: 998_906, title: "远端已取消", type: "电影")
+    let preloadTask = preloader.preload(for: media)
+    preloadTask.cancel()
+    preloadTask.isSubscribed = true
+    // 菜单已显示“已订阅”后，预加载状态在用户点击前更新为未订阅。
+    preloadTask.isSubscribed = false
+
+    let handler = SubscriptionHandler(apiService: service, mediaPreloader: preloader)
+    handler.handleSubscribe(media, expectedSubscribed: true)
+    try await waitUntil("changed subscription state is reported") {
+      handler.notificationMessage == "订阅状态已变化，请重新操作。"
+    }
+
+    XCTAssertEqual(preloadTask.isSubscribed, false)
+    XCTAssertNil(handler.sheetSubscribe)
+    XCTAssertNil(handler.unsubscribeConfirmationMessage)
+    let deleteRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "DELETE",
+      path: "/api/v1/subscribe/media/tmdb:998906"
+    )
+    XCTAssertEqual(deleteRequestCount, 0)
   }
 
   func testSavePathOptionsRemoveEmptyAndDuplicatePaths() {

@@ -64,7 +64,10 @@ struct MediaContextMenuItems: View {
           if let onSubscribe = onSubscribe {
             onSubscribe(item)
           } else {
-            subscriptionHandler.handleSubscribe(item)
+            subscriptionHandler.handleSubscribe(
+              item,
+              expectedSubscribed: preloadedSubscribed == true
+            )
           }
         } label: {
           if item.canDirectlySubscribe, let subscribed = preloadedSubscribed, subscribed {

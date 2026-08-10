@@ -125,7 +125,10 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
 
       let handler = SubscriptionHandler(apiService: service)
 
-      handler.handleSubscribe(MediaInfo(tmdb_id: 901, title: "可订阅电影", type: "电影"))
+      handler.handleSubscribe(
+        MediaInfo(tmdb_id: 901, title: "可订阅电影", type: "电影"),
+        expectedSubscribed: false
+      )
       try await permissionBehaviorWaitUntil("movie subscribe sheet opens") {
         handler.sheetSubscribe != nil
       }
@@ -138,7 +141,10 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
       )
       XCTAssertEqual(subscriptionLookupCount, 1)
 
-      handler.handleSubscribe(MediaInfo(tmdb_id: 902, title: "可分季订阅剧集", type: "电视剧"))
+      handler.handleSubscribe(
+        MediaInfo(tmdb_id: 902, title: "可分季订阅剧集", type: "电视剧"),
+        expectedSubscribed: false
+      )
 
       XCTAssertEqual(handler.tvSubscribeRequest?.mediaInfo.title, "可分季订阅剧集")
     }
@@ -150,7 +156,8 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
 
       let unknownHandler = SubscriptionHandler(apiService: service)
       unknownHandler.handleSubscribe(
-        MediaInfo(tmdb_id: 903, title: "可直接订阅的未知类型", type: "未知")
+        MediaInfo(tmdb_id: 903, title: "可直接订阅的未知类型", type: "未知"),
+        expectedSubscribed: false
       )
       try await permissionBehaviorWaitUntil("unknown subscribe sheet opens") {
         unknownHandler.sheetSubscribe != nil
@@ -171,7 +178,8 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
           title: "不可订阅的合集",
           type: "系列",
           collection_id: 90
-        )
+        ),
+        expectedSubscribed: false
       )
       try await Task.sleep(nanoseconds: 100_000_000)
 
@@ -424,8 +432,14 @@ final class PermissionDirectGuardTests: XCTestCase {
 
       let handler = SubscriptionHandler(apiService: service)
 
-      handler.handleSubscribe(MediaInfo(tmdb_id: 901, title: "电影", type: "电影"))
-      handler.handleSubscribe(MediaInfo(tmdb_id: 902, title: "剧集", type: "电视剧"))
+      handler.handleSubscribe(
+        MediaInfo(tmdb_id: 901, title: "电影", type: "电影"),
+        expectedSubscribed: false
+      )
+      handler.handleSubscribe(
+        MediaInfo(tmdb_id: 902, title: "剧集", type: "电视剧"),
+        expectedSubscribed: false
+      )
       try await Task.sleep(nanoseconds: 100_000_000)
 
       XCTAssertNil(handler.sheetSubscribe)
