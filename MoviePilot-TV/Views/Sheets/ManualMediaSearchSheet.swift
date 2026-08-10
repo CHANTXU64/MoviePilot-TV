@@ -35,24 +35,37 @@ final class ManualMediaSearchViewModel: ObservableObject {
   @Published var isLoading = false
 
   let source: MediaSearchSource
+  private let apiService: APIService
+  private var searchRevision = 0
 
-  init(source: MediaSearchSource) {
+  init(source: MediaSearchSource, apiService: APIService = .shared) {
     self.source = source
+    self.apiService = apiService
   }
 
   func search() async {
+    searchRevision &+= 1
+    let revision = searchRevision
     let title = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
     items = []
-    guard !title.isEmpty else { return }
+    guard !title.isEmpty else {
+      isLoading = false
+      return
+    }
 
     isLoading = true
-    defer { isLoading = false }
+    defer {
+      if searchRevision == revision {
+        isLoading = false
+      }
+    }
     do {
-      let results = try await APIService.shared.searchManualMedia(title: title, source: source)
+      let results = try await apiService.searchManualMedia(title: title, source: source)
         .filter { ManualMediaSelection.mediaId(for: $0, source: source) != nil }
-      guard keyword.trimmingCharacters(in: .whitespacesAndNewlines) == title else { return }
+      guard searchRevision == revision else { return }
       items = results
     } catch {
+      guard searchRevision == revision else { return }
       Logger.error("Failed to search manual media ID: \(error)")
     }
   }

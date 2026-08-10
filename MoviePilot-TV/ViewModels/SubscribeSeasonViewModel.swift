@@ -83,6 +83,8 @@ class SubscribeSeasonViewModel: ObservableObject {
   private let initialSeason: Int?
   private var hasLoaded = false
   private var isSeasonManagementContext = false
+  private var seasonLoadRevision = 0
+  private var seasonAvailabilityRevision = 0
 
   init(
     mediaInfo: MediaInfo,
@@ -112,6 +114,33 @@ class SubscribeSeasonViewModel: ObservableObject {
     return selectedGroupId
   }
 
+  private func beginSeasonLoad() -> (revision: Int, episodeGroup: String?) {
+    seasonLoadRevision &+= 1
+    return (seasonLoadRevision, effectiveEpisodeGroup)
+  }
+
+  private func isSeasonLoadCurrent(
+    _ load: (revision: Int, episodeGroup: String?),
+    snapshot: APIServiceSessionSnapshot
+  ) -> Bool {
+    isSeasonLoadOwnerCurrent(load)
+      && apiService.isSessionUnchanged(from: snapshot)
+  }
+
+  private func isSeasonLoadOwnerCurrent(
+    _ load: (revision: Int, episodeGroup: String?)
+  ) -> Bool {
+    seasonLoadRevision == load.revision
+      && effectiveEpisodeGroup == load.episodeGroup
+  }
+
+  private func validateSeasonLoad(
+    _ load: (revision: Int, episodeGroup: String?),
+    snapshot: APIServiceSessionSnapshot
+  ) throws {
+    guard isSeasonLoadCurrent(load, snapshot: snapshot) else { throw CancellationError() }
+  }
+
   func loadData(forceRefreshSubscriptions: Bool = true) async {
     await loadData(
       forceRefreshSubscriptions: forceRefreshSubscriptions,
@@ -136,19 +165,26 @@ class SubscribeSeasonViewModel: ObservableObject {
     }
     isSeasonManagementContext = seasonManagement
     guard !hasLoaded else { return }
+    let load = beginSeasonLoad()
     hasLoaded = true
     isLoading = true
     hasSeasonLoadError = false
-    defer { isLoading = false }
+    defer {
+      if seasonLoadRevision == load.revision {
+        isLoading = false
+      }
+    }
 
     do {
       if let tmdbId = Self.episodeGroupTMDBID(for: mediaInfo) {
         do {
-          episodeGroups = try await apiService.fetchEpisodeGroups(tmdbId: tmdbId)
-          guard apiService.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
+          let loadedEpisodeGroups = try await apiService.fetchEpisodeGroups(tmdbId: tmdbId)
+          try validateSeasonLoad(load, snapshot: snapshot)
+          episodeGroups = loadedEpisodeGroups
         } catch is CancellationError {
           throw CancellationError()
         } catch {
+          try validateSeasonLoad(load, snapshot: snapshot)
           episodeGroups = []
           Logger.error("加载剧集组失败: \(error)")
         }
@@ -157,12 +193,16 @@ class SubscribeSeasonViewModel: ObservableObject {
       // 执行初始分季数据获取
       try await fetchSeasonsInternal(
         forceRefreshSubscriptions: forceRefreshSubscriptions,
-        snapshot: snapshot
+        snapshot: snapshot,
+        load: load
       )
     } catch is CancellationError {
-      hasLoaded = false
+      if seasonLoadRevision == load.revision {
+        hasLoaded = false
+      }
       return
     } catch {
+      guard isSeasonLoadCurrent(load, snapshot: snapshot) else { return }
       hasSeasonLoadError = true
       errorMessage = error.localizedDescription
     }
@@ -179,15 +219,21 @@ class SubscribeSeasonViewModel: ObservableObject {
   /// 当用户在界面切换剧集组时触发重新加载
   func fetchSeasons() async {
     let snapshot = apiService.sessionSnapshot()
+    let load = beginSeasonLoad()
     isLoading = true
     hasSeasonLoadError = false
-    defer { isLoading = false }
+    defer {
+      if seasonLoadRevision == load.revision {
+        isLoading = false
+      }
+    }
 
     do {
-      try await fetchSeasonsInternal(snapshot: snapshot)
+      try await fetchSeasonsInternal(snapshot: snapshot, load: load)
     } catch is CancellationError {
       return
     } catch {
+      guard isSeasonLoadCurrent(load, snapshot: snapshot) else { return }
       hasSeasonLoadError = true
       errorMessage = error.localizedDescription
     }
@@ -196,49 +242,96 @@ class SubscribeSeasonViewModel: ObservableObject {
   /// 内部核心加载方法：获取分季详情并排序，随后检查入库和订阅状态
   private func fetchSeasonsInternal(
     forceRefreshSubscriptions: Bool = false,
-    snapshot: APIServiceSessionSnapshot
+    snapshot: APIServiceSessionSnapshot,
+    load: (revision: Int, episodeGroup: String?)
   ) async throws {
-    guard apiService.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
-    if let effectiveEpisodeGroup {
+    try validateSeasonLoad(load, snapshot: snapshot)
+    let loadedSeasons: [TmdbSeason]
+    if let episodeGroup = load.episodeGroup {
       // 逻辑 A：如果选择了剧集组，则按组获取分季
-      self.seasonInfos = try await apiService.getGroupSeasons(
-        groupId: effectiveEpisodeGroup)
+      loadedSeasons = try await apiService.getGroupSeasons(groupId: episodeGroup)
     } else if isSeasonManagementContext {
       // 逻辑 B：分季管理页进入后请求最新的统一媒体季接口。
-      self.seasonInfos = try await apiService.getMediaSeasons(media: mediaInfo)
+      loadedSeasons = try await apiService.getMediaSeasons(media: mediaInfo)
     } else {
       // 逻辑 C：详情货架直接使用详情响应中的 season_info。
-      self.seasonInfos = mediaInfo.season_info ?? []
+      loadedSeasons = mediaInfo.season_info ?? []
     }
-    guard apiService.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
+    try validateSeasonLoad(load, snapshot: snapshot)
 
     // 按季号升序排列 (S00, S01, S02...)
-    self.seasonInfos.sort { ($0.season_number ?? 0) < ($1.season_number ?? 0) }
+    seasonInfos = loadedSeasons.sorted { ($0.season_number ?? 0) < ($1.season_number ?? 0) }
 
     // 加载完成后，立即检查每季在媒体服务器中的入库状态
-    try await checkSeasonsStatus(snapshot: snapshot)
-    guard apiService.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
+    seasonAvailabilityRevision &+= 1
+    let availabilityRevision = seasonAvailabilityRevision
+    try await checkSeasonsStatus(
+      snapshot: snapshot,
+      episodeGroup: load.episodeGroup,
+      isCurrent: {
+        self.seasonAvailabilityRevision == availabilityRevision
+          && self.isSeasonLoadOwnerCurrent(load)
+      }
+    )
+    try validateSeasonLoad(load, snapshot: snapshot)
 
     // 同时检查各季当前的订阅状态
-    await checkSubscriptionStatus(forceRefresh: forceRefreshSubscriptions)
-    guard apiService.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
+    if apiService.canAccess(.subscribe) {
+      do {
+        let summaries = try await loadSubscriptionSummaries(
+          forceRefresh: forceRefreshSubscriptions
+        )
+        try validateSeasonLoad(load, snapshot: snapshot)
+        applySubscriptionSummaries(summaries)
+      } catch is CancellationError {
+        throw CancellationError()
+      } catch {
+        try validateSeasonLoad(load, snapshot: snapshot)
+        print("检查季订阅状态失败: \(error)")
+        errorMessage = error.localizedDescription
+      }
+    } else {
+      try validateSeasonLoad(load, snapshot: snapshot)
+      applySubscriptionSummaries([:])
+    }
   }
 
   /// 调用后端接口，比对媒体库中已有的集数，确定每一季的完整性
   func checkSeasonsStatus() async {
     let snapshot = apiService.sessionSnapshot()
+    let episodeGroup = effectiveEpisodeGroup
+    seasonAvailabilityRevision &+= 1
+    let revision = seasonAvailabilityRevision
     do {
-      try await checkSeasonsStatus(snapshot: snapshot)
+      try await checkSeasonsStatus(
+        snapshot: snapshot,
+        episodeGroup: episodeGroup,
+        isCurrent: {
+          self.seasonAvailabilityRevision == revision
+            && self.effectiveEpisodeGroup == episodeGroup
+        }
+      )
     } catch is CancellationError {
       return
     } catch {
+      guard seasonAvailabilityRevision == revision,
+        effectiveEpisodeGroup == episodeGroup,
+        apiService.isSessionUnchanged(from: snapshot)
+      else { return }
       seasonsNotExisted = [:]
       print("检查季入库状态失败: \(error)")
     }
   }
 
-  private func checkSeasonsStatus(snapshot: APIServiceSessionSnapshot) async throws {
-    guard apiService.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
+  private func checkSeasonsStatus(
+    snapshot: APIServiceSessionSnapshot,
+    episodeGroup: String?,
+    isCurrent: () -> Bool
+  ) async throws {
+    guard apiService.isSessionUnchanged(from: snapshot), isCurrent() else {
+      throw CancellationError()
+    }
+    let availabilityUIIdentity = apiService.uiIdentity
     let wasAvailabilityLoaded = isSeasonAvailabilityLoaded
     isSeasonAvailabilityLoaded = false
     guard apiService.canAccess(.subscribe) else {
@@ -248,9 +341,11 @@ class SubscribeSeasonViewModel: ObservableObject {
 
     do {
       let result = try await apiService.checkSeasonsNotExists(
-        mediaInfo: seasonAvailabilityMedia()
+        mediaInfo: seasonAvailabilityMedia(episodeGroup: episodeGroup)
       )
-      guard apiService.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
+      guard apiService.isSessionUnchanged(from: snapshot), isCurrent() else {
+        throw CancellationError()
+      }
 
       var newStatus: [Int: Int] = [:]
 
@@ -267,25 +362,38 @@ class SubscribeSeasonViewModel: ObservableObject {
         }
         newStatus[item.season] = state
       }
-      self.seasonsNotExisted = newStatus
-      self.isSeasonAvailabilityLoaded = true
-
+      seasonsNotExisted = newStatus
+      isSeasonAvailabilityLoaded = true
     } catch is CancellationError {
-      isSeasonAvailabilityLoaded = wasAvailabilityLoaded
+      if isCurrent() {
+        if apiService.uiIdentity == availabilityUIIdentity {
+          isSeasonAvailabilityLoaded = wasAvailabilityLoaded
+        } else {
+          seasonsNotExisted = [:]
+          isSeasonAvailabilityLoaded = false
+        }
+      }
       throw CancellationError()
     } catch {
-      self.seasonsNotExisted = [:]
+      guard apiService.isSessionUnchanged(from: snapshot), isCurrent() else {
+        throw CancellationError()
+      }
+      seasonsNotExisted = [:]
       print("检查季入库状态失败: \(error)")
     }
   }
 
   func seasonAvailabilityMedia() throws -> MediaInfo {
+    try seasonAvailabilityMedia(episodeGroup: effectiveEpisodeGroup)
+  }
+
+  private func seasonAvailabilityMedia(episodeGroup: String?) throws -> MediaInfo {
     let encoder = JSONEncoder()
     var payload = try JSONDecoder().decode(
       [String: JSONValue].self,
       from: encoder.encode(mediaInfo)
     )
-    payload["episode_group"] = .string(effectiveEpisodeGroup ?? "")
+    payload["episode_group"] = .string(episodeGroup ?? "")
     return try JSONDecoder().decode(MediaInfo.self, from: encoder.encode(payload))
   }
 
@@ -299,7 +407,8 @@ class SubscribeSeasonViewModel: ObservableObject {
     }
 
     do {
-      try await refreshSubscriptionSummaries(forceRefresh: forceRefresh)
+      let summaries = try await loadSubscriptionSummaries(forceRefresh: forceRefresh)
+      applySubscriptionSummaries(summaries)
       return true
     } catch {
       if error is CancellationError {
@@ -312,10 +421,21 @@ class SubscribeSeasonViewModel: ObservableObject {
   }
 
   private func refreshSubscriptionSummaries(forceRefresh: Bool) async throws {
+    applySubscriptionSummaries(
+      try await loadSubscriptionSummaries(forceRefresh: forceRefresh)
+    )
+  }
+
+  private func loadSubscriptionSummaries(forceRefresh: Bool) async throws
+    -> [Int: SeasonSubscriptionSummary]
+  {
     let subscriptions = try await apiService.fetchSubscriptions(forceRefresh: forceRefresh)
-    let summaries = SeasonSubscriptionSummary.indexBySeason(from: subscriptions, matching: mediaInfo)
-    self.seasonSubscriptions = summaries
-    self.subscribedSeasons = Set(summaries.keys)
+    return SeasonSubscriptionSummary.indexBySeason(from: subscriptions, matching: mediaInfo)
+  }
+
+  private func applySubscriptionSummaries(_ summaries: [Int: SeasonSubscriptionSummary]) {
+    seasonSubscriptions = summaries
+    subscribedSeasons = Set(summaries.keys)
   }
 
   func prepareSubscription(seasonNumber: Int) {

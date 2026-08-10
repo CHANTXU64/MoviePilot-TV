@@ -312,6 +312,81 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     XCTAssertNil(query["type"])
   }
 
+  func testManualMediaSearchOlderSuccessCannotRestoreResultsAfterEmptySearch() async {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let oldGate = CompatibilityEndpointAsyncGate()
+    await CompatibilityEndpointURLProtocol.stub.setManualMediaResponse(
+      title: "旧搜索",
+      data: Data(#"[{"tmdb_id":100,"title":"旧结果","type":"电影"}]"#.utf8),
+      waitFor: oldGate
+    )
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+
+    let viewModel = ManualMediaSearchViewModel(source: .themoviedb, apiService: service)
+    viewModel.keyword = "旧搜索"
+    let oldSearch = Task { @MainActor in await viewModel.search() }
+    await oldGate.waitForWaiter()
+
+    viewModel.keyword = "  "
+    await viewModel.search()
+    await oldGate.open()
+    await oldSearch.value
+
+    XCTAssertTrue(viewModel.items.isEmpty)
+    XCTAssertFalse(viewModel.isLoading)
+  }
+
+  func testManualMediaSearchOlderFailureCannotStopNewerLoading() async {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let oldGate = CompatibilityEndpointAsyncGate()
+    let newGate = CompatibilityEndpointAsyncGate()
+    await CompatibilityEndpointURLProtocol.stub.setManualMediaResponse(
+      title: "失败搜索",
+      statusCode: 500,
+      data: Data(#"{"message":"old failed"}"#.utf8),
+      waitFor: oldGate
+    )
+    await CompatibilityEndpointURLProtocol.stub.setManualMediaResponse(
+      title: "新搜索",
+      data: Data(#"[{"tmdb_id":200,"title":"新结果","type":"电影"}]"#.utf8),
+      waitFor: newGate
+    )
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+
+    let viewModel = ManualMediaSearchViewModel(source: .themoviedb, apiService: service)
+    viewModel.keyword = "失败搜索"
+    let oldSearch = Task { @MainActor in await viewModel.search() }
+    await oldGate.waitForWaiter()
+
+    viewModel.keyword = "新搜索"
+    let newSearch = Task { @MainActor in await viewModel.search() }
+    await newGate.waitForWaiter()
+
+    await oldGate.open()
+    await oldSearch.value
+    XCTAssertTrue(viewModel.isLoading)
+    XCTAssertTrue(viewModel.items.isEmpty)
+
+    await newGate.open()
+    await newSearch.value
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertEqual(viewModel.items.map(\.title), ["新结果"])
+  }
+
   func testSubscribeNavigationMediaInfoUsesCanonicalMediaDetailRequestID() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
@@ -799,6 +874,7 @@ private actor CompatibilityEndpointURLProtocolStub {
   private var userSettingsFailureStatusCode: Int?
   private var manualTransferOmitsSuccess = false
   private var subscriptionActionsFail: Bool?
+  private var manualMediaResponses: [String: CompatibilityEndpointStubResponse] = [:]
 
   func reset() {
     requests.removeAll()
@@ -808,6 +884,7 @@ private actor CompatibilityEndpointURLProtocolStub {
     userSettingsFailureStatusCode = nil
     manualTransferOmitsSuccess = false
     subscriptionActionsFail = nil
+    manualMediaResponses.removeAll()
   }
 
   func setUserSettingsFailure(statusCode: Int?) {
@@ -828,6 +905,19 @@ private actor CompatibilityEndpointURLProtocolStub {
 
   func setSubscriptionActionsFail(_ fail: Bool) {
     subscriptionActionsFail = fail
+  }
+
+  func setManualMediaResponse(
+    title: String,
+    statusCode: Int = 200,
+    data: Data,
+    waitFor gate: CompatibilityEndpointAsyncGate? = nil
+  ) {
+    manualMediaResponses[title] = CompatibilityEndpointStubResponse(
+      statusCode: statusCode,
+      data: data,
+      gate: gate
+    )
   }
 
   func requestPaths() -> [String] {
@@ -886,7 +976,7 @@ private actor CompatibilityEndpointURLProtocolStub {
     return data.isEmpty ? nil : data
   }
 
-  func response(for request: URLRequest) throws -> (HTTPURLResponse, Data) {
+  func response(for request: URLRequest) async throws -> (HTTPURLResponse, Data) {
     requests.append(request)
     requestBodies.append(bodyData(from: request))
     guard let url = request.url else {
@@ -914,10 +1004,22 @@ private actor CompatibilityEndpointURLProtocolStub {
       statusCode = 200
       data = #"{"success":true,"data":{"item":{"id":"library/42"}}}"#.data(using: .utf8)!
     } else if url.path == "/api/v1/media/search" {
-      statusCode = 200
-      data =
-        #"[{"source":"anilist","media_id":"154587","tmdb_id":42,"anilist_id":154587,"title":"葬送的芙莉莲","type":"电视剧","year":"2023"}]"#
-        .data(using: .utf8)!
+      let title = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+        .queryItems?
+        .first(where: { $0.name == "title" })?
+        .value
+      if let title, let stubbed = manualMediaResponses[title] {
+        if let gate = stubbed.gate {
+          await gate.wait()
+        }
+        statusCode = stubbed.statusCode
+        data = stubbed.data
+      } else {
+        statusCode = 200
+        data =
+          #"[{"source":"anilist","media_id":"154587","tmdb_id":42,"anilist_id":154587,"title":"葬送的芙莉莲","type":"电视剧","year":"2023"}]"#
+          .data(using: .utf8)!
+      }
     } else if url.path == "/api/v1/subscribe/shares" && request.httpMethod == "GET" {
       statusCode = 200
       data =
@@ -961,6 +1063,37 @@ private actor CompatibilityEndpointURLProtocolStub {
       headerFields: ["Content-Type": "application/json"]
     )!
     return (response, data)
+  }
+}
+
+private struct CompatibilityEndpointStubResponse: Sendable {
+  let statusCode: Int
+  let data: Data
+  let gate: CompatibilityEndpointAsyncGate?
+}
+
+private actor CompatibilityEndpointAsyncGate {
+  private var isOpen = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+
+  func wait() async {
+    guard !isOpen else { return }
+    await withCheckedContinuation { continuation in
+      waiters.append(continuation)
+    }
+  }
+
+  func waitForWaiter() async {
+    while waiters.isEmpty {
+      await Task.yield()
+    }
+  }
+
+  func open() {
+    isOpen = true
+    let pending = waiters
+    waiters.removeAll()
+    pending.forEach { $0.resume() }
   }
 }
 

@@ -779,6 +779,126 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
+  func testForcedSubscriptionStatusRefreshPreventsOlderResponseFromReplacingCache() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    let staleGate = DetailHeaderSubscriptionAsyncGate()
+    await DetailHeaderSubscriptionURLProtocol.stub.enqueueResolvedSubscription(
+      tmdbId: 665_545,
+      id: nil,
+      waitFor: staleGate
+    )
+    await DetailHeaderSubscriptionURLProtocol.stub.enqueueResolvedSubscription(
+      tmdbId: 665_545,
+      id: 9102
+    )
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
+
+    let media = MediaInfo(tmdb_id: 665_545, type: "电影")
+    let staleCheck = Task {
+      try await service.checkSubscription(media: media)
+    }
+    await staleGate.waitForWaiter()
+
+    let refreshedStatus = try await service.checkSubscription(
+      media: media,
+      forceRefresh: true
+    )
+    await staleGate.open()
+
+    do {
+      _ = try await staleCheck.value
+      XCTFail("Older subscription status request should be superseded")
+    } catch is CancellationError {
+      // Expected: only the latest same-key request may publish or populate the cache.
+    }
+
+    let cachedStatus = try await service.checkSubscription(media: media)
+    let lookupCount = await DetailHeaderSubscriptionURLProtocol.stub.lookupRequestCount(
+      tmdbId: 665_545
+    )
+
+    XCTAssertTrue(refreshedStatus)
+    XCTAssertTrue(cachedStatus)
+    XCTAssertEqual(lookupCount, 2)
+  }
+
+  @MainActor
+  func testCachedSubscriptionReadDoesNotCancelForcedRefresh() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    let refreshGate = DetailHeaderSubscriptionAsyncGate()
+    await DetailHeaderSubscriptionURLProtocol.stub.setResolvedSubscription(
+      tmdbId: 665_546,
+      id: nil
+    )
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
+
+    let media = MediaInfo(tmdb_id: 665_546, type: "电影")
+    let initialStatus = try await service.checkSubscription(media: media)
+    XCTAssertFalse(initialStatus)
+
+    await DetailHeaderSubscriptionURLProtocol.stub.enqueueResolvedSubscription(
+      tmdbId: 665_546,
+      id: 9103,
+      waitFor: refreshGate
+    )
+    let forcedRefresh = Task {
+      try await service.checkSubscription(media: media, forceRefresh: true)
+    }
+    await refreshGate.waitForWaiter()
+
+    let statusDuringRefresh = try await service.checkSubscription(media: media)
+    XCTAssertFalse(statusDuringRefresh)
+    await refreshGate.open()
+    let refreshedStatus = try await forcedRefresh.value
+    let cachedStatus = try await service.checkSubscription(media: media)
+    XCTAssertTrue(refreshedStatus)
+    XCTAssertTrue(cachedStatus)
+
+    let lookupCount = await DetailHeaderSubscriptionURLProtocol.stub.lookupRequestCount(
+      tmdbId: 665_546
+    )
+    XCTAssertEqual(lookupCount, 2)
+  }
+
+  func testSubscriptionStatusCacheRejectsOlderRegistrationAfterNewerRevision() async {
+    let cache = APICache<String, Bool>()
+    let newerToken = await cache.beginLoad("same-key", revision: 2)
+    let olderToken = await cache.beginLoad("same-key", revision: 1)
+
+    let olderCommitted = await cache.setIfCurrent(
+      "same-key",
+      value: false,
+      token: olderToken
+    )
+    let newerCommitted = await cache.setIfCurrent(
+      "same-key",
+      value: true,
+      token: newerToken
+    )
+    let cachedValue = await cache.get("same-key")
+
+    XCTAssertFalse(olderCommitted)
+    XCTAssertTrue(newerCommitted)
+    XCTAssertEqual(cachedValue, true)
+  }
+
+  @MainActor
   func testDeleteSubscriptionEncodesMediaIdAsSinglePathSegment() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }

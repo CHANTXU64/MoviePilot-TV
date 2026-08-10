@@ -313,10 +313,19 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertEqual(source.components(separatedBy: "viewModel.search()").count - 1, 1)
     XCTAssertTrue(source.contains("Button {\n            Task { await viewModel.search() }"))
     XCTAssertTrue(source.contains(".disabled(viewModel.isLoading)"))
-    XCTAssertTrue(source.contains("items = []\n    guard !title.isEmpty else { return }"))
+    XCTAssertTrue(source.contains("private var searchRevision = 0"))
+    XCTAssertTrue(source.contains("searchRevision &+= 1"))
+    XCTAssertTrue(source.contains("items = []"))
+    XCTAssertTrue(source.contains("guard !title.isEmpty else {"))
+    XCTAssertTrue(source.contains("guard searchRevision == revision else { return }"))
     XCTAssertTrue(
       source.contains(
-        "guard keyword.trimmingCharacters(in: .whitespacesAndNewlines) == title else { return }"
+        "if searchRevision == revision {\n        isLoading = false"
+      )
+    )
+    XCTAssertFalse(
+      source.contains(
+        "keyword.trimmingCharacters(in: .whitespacesAndNewlines) == title"
       )
     )
     XCTAssertFalse(

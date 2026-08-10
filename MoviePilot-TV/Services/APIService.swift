@@ -431,12 +431,17 @@ nonisolated private func backdropImageURL(backdropPath: String?, config: MediaIm
 
 /// 泛型轻量级接口缓存，带过期及淘汰策略
 actor APICache<Key: Hashable, Value> {
+  struct LoadToken: Equatable, Sendable {
+    fileprivate let revision: UInt64
+  }
+
   private struct CacheEntry {
     let value: Value
     var expiresAt: Date
   }
 
   private var cache: [Key: CacheEntry] = [:]
+  private var activeLoadRevisions: [Key: UInt64] = [:]
   private let defaultTTL: TimeInterval
   private let size: Int
   private let renewsTTLOnAccess: Bool
@@ -470,6 +475,35 @@ actor APICache<Key: Hashable, Value> {
   }
 
   func set(_ key: Key, value: Value, ttl: TimeInterval? = nil) {
+    activeLoadRevisions.removeValue(forKey: key)
+    store(key, value: value, ttl: ttl)
+  }
+
+  func beginLoad(_ key: Key, revision: UInt64) -> LoadToken {
+    if revision > activeLoadRevisions[key, default: 0] {
+      activeLoadRevisions[key] = revision
+    }
+    return LoadToken(revision: revision)
+  }
+
+  func setIfCurrent(
+    _ key: Key,
+    value: Value,
+    token: LoadToken,
+    ttl: TimeInterval? = nil
+  ) -> Bool {
+    guard activeLoadRevisions[key] == token.revision else { return false }
+    activeLoadRevisions.removeValue(forKey: key)
+    store(key, value: value, ttl: ttl)
+    return true
+  }
+
+  func endLoadIfCurrent(_ key: Key, token: LoadToken) {
+    guard activeLoadRevisions[key] == token.revision else { return }
+    activeLoadRevisions.removeValue(forKey: key)
+  }
+
+  private func store(_ key: Key, value: Value, ttl: TimeInterval?) {
     // 如果缓存已满且要添加的是新 Key，则执行淘汰策略
     if cache.count >= size, cache[key] == nil {
       // 淘汰掉最接近过期的项
@@ -484,10 +518,12 @@ actor APICache<Key: Hashable, Value> {
   }
 
   func remove(_ key: Key) {
+    activeLoadRevisions.removeValue(forKey: key)
     cache.removeValue(forKey: key)
   }
 
   func clear() {
+    activeLoadRevisions.removeAll()
     cache.removeAll()
   }
 }
@@ -553,6 +589,8 @@ class APIService: ObservableObject {
     renewsTTLOnAccess: false
   )
   private var subscriptionCacheGeneration = 0
+  private var subscriptionStatusLoadRevision: UInt64 = 0
+  private var subscriptionStatusLoadOwners: [String: UInt64] = [:]
   private var subscriptionSnapshotFetchGeneration: Int?
   private var subscriptionSnapshotFetchRevision = 0
   private var subscriptionSnapshotFetchTaskRevision: Int?
@@ -564,10 +602,8 @@ class APIService: ObservableObject {
     subscriptionSnapshotFetchGeneration = nil
     subscriptionSnapshotFetchTaskRevision = nil
     subscriptionSnapshotFetchTask = nil
-    let statusCache = subscriptionStatusCache
     let snapshotCache = subscriptionSnapshotCache
     Task {
-      await statusCache.clear()
       await snapshotCache.clear()
     }
   }
@@ -2883,6 +2919,21 @@ class APIService: ObservableObject {
       // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求，返回 false
       return false
     }
+    subscriptionStatusLoadRevision &+= 1
+    let requestRevision = subscriptionStatusLoadRevision
+    let loadOwnerKey = "\(mediaId):\(season.map(String.init) ?? "")"
+    var ownsStatusLoad = false
+    if forceRefresh {
+      subscriptionStatusLoadOwners[loadOwnerKey] = requestRevision
+      ownsStatusLoad = true
+    }
+    defer {
+      if ownsStatusLoad,
+        subscriptionStatusLoadOwners[loadOwnerKey] == requestRevision
+      {
+        subscriptionStatusLoadOwners.removeValue(forKey: loadOwnerKey)
+      }
+    }
     let snapshot = sessionSnapshot()
     while true {
       try validateSubscriptionSnapshot(snapshot)
@@ -2890,13 +2941,38 @@ class APIService: ObservableObject {
       let cacheKey = "\(generation):\(mediaId):\(season.map(String.init) ?? "")"
       if !forceRefresh, let cached = await subscriptionStatusCache.get(cacheKey) {
         try validateSubscriptionSnapshot(snapshot)
-        if generation == subscriptionCacheGeneration {
-          return cached
+        guard generation == subscriptionCacheGeneration else { continue }
+        if ownsStatusLoad {
+          guard subscriptionStatusLoadOwners[loadOwnerKey] == requestRevision else {
+            throw CancellationError()
+          }
         }
+        return cached
+      }
+      if !ownsStatusLoad {
+        if let currentOwner = subscriptionStatusLoadOwners[loadOwnerKey],
+          currentOwner > requestRevision
+        {
+          throw CancellationError()
+        }
+        subscriptionStatusLoadOwners[loadOwnerKey] = requestRevision
+        ownsStatusLoad = true
+        // A newer load may have populated the cache while this caller was awaiting its first read.
         continue
       }
+      guard subscriptionStatusLoadOwners[loadOwnerKey] == requestRevision else {
+        throw CancellationError()
+      }
+      let loadToken = await subscriptionStatusCache.beginLoad(
+        cacheKey,
+        revision: requestRevision
+      )
 
       do {
+        guard subscriptionStatusLoadOwners[loadOwnerKey] == requestRevision else {
+          await subscriptionStatusCache.endLoadIfCurrent(cacheKey, token: loadToken)
+          throw CancellationError()
+        }
         try validateSubscriptionSnapshot(snapshot)
         let isSubscribed =
           try await fetchSubscriptionLookup(
@@ -2905,16 +2981,32 @@ class APIService: ObservableObject {
           ) != nil
         try validateSubscriptionSnapshot(snapshot)
         guard generation == subscriptionCacheGeneration else {
+          await subscriptionStatusCache.endLoadIfCurrent(cacheKey, token: loadToken)
           continue
         }
-        await subscriptionStatusCache.set(cacheKey, value: isSubscribed)
+        guard subscriptionStatusLoadOwners[loadOwnerKey] == requestRevision else {
+          await subscriptionStatusCache.endLoadIfCurrent(cacheKey, token: loadToken)
+          throw CancellationError()
+        }
+        guard await subscriptionStatusCache.setIfCurrent(
+          cacheKey,
+          value: isSubscribed,
+          token: loadToken
+        ) else {
+          throw CancellationError()
+        }
         try validateSubscriptionSnapshot(snapshot)
-        guard generation == subscriptionCacheGeneration else {
-          continue
+        guard generation == subscriptionCacheGeneration else { continue }
+        guard subscriptionStatusLoadOwners[loadOwnerKey] == requestRevision else {
+          throw CancellationError()
         }
         return isSubscribed
       } catch is CancellationError {
+        await subscriptionStatusCache.endLoadIfCurrent(cacheKey, token: loadToken)
         throw CancellationError()
+      } catch {
+        await subscriptionStatusCache.endLoadIfCurrent(cacheKey, token: loadToken)
+        throw error
       }
     }
   }
