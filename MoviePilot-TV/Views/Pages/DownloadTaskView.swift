@@ -201,7 +201,7 @@ private struct DownloadTaskRow: View {
           .padding(.bottom, -7)  // 微调使进度条紧贴底部
       }
     }
-    .alert("确认删除?", isPresented: $showingDeleteConfirm) {
+    .alert("将永久删除任务及已下载文件，确认继续？", isPresented: $showingDeleteConfirm) {
       Button("删除", role: .destructive) {
         if let hash = item.hash {
           Task { await viewModel.deleteDownload(clientName: clientName, hash: hash) }
