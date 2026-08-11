@@ -5,6 +5,32 @@ import XCTest
 
 @MainActor
 final class ResourceSearchDecodingTests: XCTestCase {
+  func testSiteProxyAcceptsBackendBooleanRepresentations() throws {
+    let cases: [(json: String, expected: Bool)] = [
+      ("true", true),
+      ("false", false),
+      ("1", true),
+      ("0", false),
+      (#""true""#, true),
+      (#""false""#, false),
+      (#""1""#, true),
+      (#""0""#, false),
+    ]
+
+    for item in cases {
+      let torrent = try JSONDecoder().decode(
+        TorrentInfo.self,
+        from: Data(#"{"site_proxy":\#(item.json)}"#.utf8)
+      )
+
+      XCTAssertEqual(torrent.site_proxy, item.expected, item.json)
+      let encoded = try XCTUnwrap(
+        JSONSerialization.jsonObject(with: JSONEncoder().encode(torrent)) as? [String: Any]
+      )
+      XCTAssertEqual(encoded["site_proxy"] as? Bool, item.expected, item.json)
+    }
+  }
+
   func testSparseResourceFieldsDoNotRejectSearchBatch() throws {
     let itemsJSON =
       """

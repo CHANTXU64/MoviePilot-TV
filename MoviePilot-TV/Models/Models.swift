@@ -1444,7 +1444,7 @@ extension TorrentInfo {
     site_name = try container.decodeIfPresent(String.self, forKey: .site_name)
     site_cookie = try container.decodeIfPresent(String.self, forKey: .site_cookie)
     site_ua = try container.decodeIfPresent(String.self, forKey: .site_ua)
-    site_proxy = try container.decodeIfPresent(Bool.self, forKey: .site_proxy)
+    site_proxy = try container.decodeIfPresent(FlexibleBool.self, forKey: .site_proxy)?.value
     site_order = try container.decodeIfPresent(Int.self, forKey: .site_order)
     site_downloader = try container.decodeIfPresent(String.self, forKey: .site_downloader)
     title = try container.decodeIfPresent(String.self, forKey: .title)
@@ -2475,7 +2475,7 @@ struct BangumiImages: Codable, Hashable {
 }
 
 /// 演职人员头像数据源
-enum PersonAvatar: Codable, Hashable {
+nonisolated enum PersonAvatar: Codable, Hashable {
   case url(String)
   case object(normal: String)
 

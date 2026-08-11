@@ -196,6 +196,25 @@ final class PersonDecodingTests: XCTestCase {
     XCTAssertNil(people[1].avatar)
   }
 
+  func testMixedAvatarMetadataDecodesOffMainActor() async throws {
+    let data = Data(
+      """
+      {
+        "normal": "  ",
+        "large": "https://douban.local/large.jpg",
+        "width": 100,
+        "height": null
+      }
+      """.utf8
+    )
+
+    let avatarURL = try await Task.detached {
+      try JSONDecoder().decode(PersonAvatar.self, from: data).urlValue
+    }.value
+
+    XCTAssertEqual(avatarURL, "https://douban.local/large.jpg")
+  }
+
   func testPersonImageSelectionMatchesWebForEverySourceAndFallback() throws {
     let service = APIService.shared
     let snapshot = PersonDecodingServiceSnapshot.capture(service: service)

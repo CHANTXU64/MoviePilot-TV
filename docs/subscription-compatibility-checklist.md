@@ -43,6 +43,7 @@ MoviePilot 后端普通用户权限契约仍不稳定，后续版本可能有较
 - MoviePilot v2.14.6 起，公共创建/更新接口通过 `Subscribe.to_public_write_payload()` 丢弃 `note`、`episode_priority`、`current_priority`、`lack_episode`、`state`、`username`、`date`、`vote` 等系统字段和运行事实，普通保存不能再覆盖这些状态；`filter` 仍是可编辑订阅配置。
 - 配套 Web 快速新增订阅时只发送媒体标识、季、洗版模式和剧集组等配置字段；编辑时先读取完整 `Subscribe`，再把完整 `subscribeForm` PUT 回后端，由 v2.14.6 后端统一裁剪运行态字段。
 - TV 与 Web 保持等价：新建使用精简 `SubscribeRequest`，编辑保存完整 `Subscribe`（不回传派生字段 `completed_episode`）。保留解码出的运行态原值既符合 Web 的完整表单行为，也兼容 v2.14.4 及更早后端；v2.14.6 会安全忽略这些字段。不要单独在 TV 端改成与 Web 不同的写入白名单。
+- 截至目标 v2.15.1，TV `Subscribe` 已覆盖后端全部公共可写字段，当前没有“未知可写字段被完整 PUT 丢失”的字段反例；这是一条上游升级检查，不是现行产品缺陷。
 - 所有类似“先 GET 对象、用户编辑、再完整 PUT/POST 对象”的接口都按完整更新契约审查，不能只检查订阅：每次同步 Web 或后端版本时，逐字段对照 Web 实际请求体、后端当前可写 schema/排除字段、TV `CodingKeys` 与最终编码 body。
 - 后端新增可写字段时，TV 必须明确选择同步建模、按端点 round-trip 契约保留原始值并只覆盖已编辑字段，或在适配前阻止可能破坏数据的完整更新；不得静默忽略新字段后继续保存。
 - 原始值保留只适用于后端允许回写的业务字段。派生字段、运行状态、owner、下载事实等必须遵守后端写入 allowlist；不得为了兼容而盲目透传整份原始 JSON。后端若正式提供 PATCH/dirty-field 契约，优先按其合同只提交实际编辑字段，TV 不自行假设 PATCH 语义。
@@ -92,6 +93,12 @@ MoviePilot Web v2.14.0 起，详情页订阅入口按媒体类型区分：
 - 活跃详情页持有的 `MediaPreloadTask` 收到订阅变更后需要刷新订阅状态；普通海报墙预加载缓存不要因为一次通知全量强刷，避免一次订阅操作触发大量请求。
 - 取消前如果订阅已被其他设备删除，本机刷新为未订阅，不继续发起错误取消。
 
+## 下载任务暂停状态对齐
+
+- 当前 MoviePilot v2.15.1 的 `/download/` 只返回 `TorrentStatus.DOWNLOADING`；qBittorrent 与 Transmission 的未完成任务暂停后会从 TV/Web 列表消失，失去“继续”入口。TV 端按当前 Web 行为不做本地缓存兜底。
+- 用户决定不做 TV 单端修复。以后同步 MoviePilot 官方后端或 Web 时，如果列表开始返回未完成的 `paused/stopped` 任务、增加状态查询参数或提供独立暂停任务入口，TV 必须在同次兼容更新中对齐。
+- 对齐时必须同时保证：未完成暂停任务仍可见并可继续；已完成的 `stopped`/seeding 任务不会混回下载中列表；任务身份继续绑定 downloader 与 hash。
+
 ## 后端更新时重点检查
 
 检查 `../MoviePilot` 中这些位置：
@@ -106,6 +113,9 @@ MoviePilot Web v2.14.0 起，详情页订阅入口按媒体类型区分：
   - 登录 token payload 是否仍返回 `permissions=user_or_message.permissions or {}`，且 Web/TV 仍以该对象作为功能入口可见性的来源。
 - `app/api/endpoints/system.py`
   - `/system/env`、`GET /system/setting/{key}`、`POST /system/setting/{key}` 等端点实际依赖的是 active user 还是 active superuser；以 `Depends(...)` 为准，不能只看 summary 或注释里的“仅管理员”。
+- `app/api/endpoints/download.py`、`app/chain/download.py` 与各下载器模块
+  - `/download/` 是否仍只查询 `TorrentStatus.DOWNLOADING`，还是已经返回所有未完成的 `paused/stopped` 任务或支持状态参数。
+  - qBittorrent、Transmission、rTorrent 等适配器是否把暂停状态统一映射为可恢复状态，并以完成度排除已完成任务；官方合同一旦变化，TV 与 Web 必须同时复核。
 - `app/api/endpoints/search.py`、`app/chain/search.py` 与 `app/modules/indexer/__init__.py`
   - 当前单站点搜索异常会被记录后按空结果返回，SSE 不提供可与正常零结果区分的失败标志，因此 TV 保留对未产出结果站点的一次静默重试。后端以后若能在 SSE 中明确返回单站点搜索错误及对应 `site_id`，应删除 `ResourceResultViewModel` 的 `missingSites` 额外重试，改用明确的错误事件。
 - `app/db/subscribe_oper.py`
@@ -154,6 +164,9 @@ MoviePilot Web v2.14.0 起，详情页订阅入口按媒体类型区分：
 
 检查 `../MoviePilot-Frontend` 中这些位置：
 
+- `src/views/reorganize/DownloadingListView.vue`、`src/components/cards/DownloadingCard.vue`
+  - 是否仍每三秒用 `/download/` 响应全量替换列表；暂停后任务是否仍消失。
+  - 如果 Web 开始保留暂停任务并提供“继续”入口，TV 必须对齐相同的后端状态与操作语义，不保留当前差异。
 - `src/views/discover/MediaDetailView.vue`
   - 顶部直接订阅/取消按钮是否仍只覆盖电影。
   - 所有电视剧是否仍通过分季列表和分季订阅入口处理，不因 Douban 或 Bangumi ID 改走直接订阅。
@@ -184,6 +197,7 @@ MoviePilot Web v2.14.0 起，详情页订阅入口按媒体类型区分：
 检查本仓库这些位置：
 
 - `MoviePilot-TV/Services/APIService.swift`
+  - MoviePilot 官方 `/download/` 开始返回未完成 `paused/stopped` 任务或新增状态查询参数时，`DownloadingInfo` 解码、`DownloadTaskViewModel`轮询替换与暂停/继续按钮必须同步对齐；当前不要用TV本地隐藏缓存伪造官方列表。
   - 任何读取强类型对象后再完整 PUT/POST 的 API，都要核对当前后端可写 schema、排除字段和 Web 实际 body；新增可写字段不得因 TV 解码后丢失，系统/运行字段也不得因原始值保留而被误写回。
   - 权限控制优先放在页面入口、按钮入口和自动预取根节点；`APIService` 不要批量伪造 `[]` / `false` / `nil`，真实调用应交给后端鉴权。
   - 修改 `makeRequest` 的 401/403 处理前，必须先按 `../MoviePilot` 后端代码确认这些状态码在当前版本的语义。当前不能只因 `403` 字面含义就把所有 403 改成非登出，也不能把 `400 用户权限不足` 当成需要刷新会话；只有后端确实把普通功能权限不足改成 403 时，才同步调整 TV 端受限请求策略和兼容测试。
@@ -298,6 +312,7 @@ xcodebuild test \
 - 首页订阅列表通知刷新、页面回前台刷新、手动搜索订阅后的刷新都能绕过缓存。
 - 并发强制刷新时，旧的订阅快照响应、错误或缓存写入不能覆盖更新后的快照。
 - 几十或上百季电视剧只触发一次订阅列表快照请求，不重新逐季调用 `/subscribe/media/{mediaid}`。
+- MoviePilot 官方支持暂停任务返回后，覆盖“未完成暂停→轮询后仍在→可继续”及“已完成 stopped→不回流”两组下载任务合同。
 
 ## 需要立即重新设计的信号
 
@@ -319,3 +334,4 @@ xcodebuild test \
 - 后端再次改变 `best_version` / `best_version_full` 的空值和 `0` 语义。
 - 订阅列表缓存、分页或增量同步改成后端正式契约。
 - 订阅修改在后端变成局部 patch，并且 `episode_group` 更新不再触发现有订阅刷新事件。
+- `/download/` 开始返回未完成的 `paused/stopped` 任务、增加状态筛选参数，或 Web 新增暂停任务列表/继续入口；必须立即复核并对齐 TV，不能继续沿用“暂停后消失”的旧行为。

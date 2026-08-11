@@ -1987,34 +1987,25 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     let mediaIDs = uniqueStrings(config.resourceMediaIDs).prefix(3)
 
     for query in titleQueries {
-      do {
-        let url = try compatibilityAPIURL(
-          service: service,
-          path: "/search/title/stream",
-          params: [
-            "keyword": query,
-            "sites": config.resourceSites,
-          ])
-        let result = await Self.probeSSEStream(url: url, token: service.token)
-        assertSSEProbe(result, label: "resource title stream \(query)")
-      } catch {
-        XCTFail("Failed to build resource title stream request \(query): \(error)")
-      }
+      let result = await Self.probeSearchStream(
+        service.searchTitleStream(keyword: query, sites: config.resourceSites)
+      )
+      assertSSEProbe(result, label: "resource title stream \(query)")
     }
 
     for mediaID in mediaIDs {
-      do {
-        let url = try compatibilityAPIURL(
-          service: service,
-          path: "/search/media/\(mediaID)/stream",
-          params: [
-            "sites": config.resourceSites,
-          ])
-        let result = await Self.probeSSEStream(url: url, token: service.token)
-        assertSSEProbe(result, label: "resource media stream \(mediaID)")
-      } catch {
-        XCTFail("Failed to build resource media stream request \(mediaID): \(error)")
-      }
+      let result = await Self.probeSearchStream(
+        service.searchMediaStream(
+          keyword: mediaID,
+          type: nil,
+          area: nil,
+          title: nil,
+          year: nil,
+          season: nil,
+          sites: config.resourceSites
+        )
+      )
+      assertSSEProbe(result, label: "resource media stream \(mediaID)")
     }
   }
 
@@ -2355,6 +2346,85 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       group.cancelAll()
       return result
     }
+  }
+
+  private static func probeSearchStream(
+    _ stream: AsyncThrowingStream<SearchStreamEvent, Error>,
+    timeoutSeconds: UInt64 = 45,
+    maxEvents: Int? = 40
+  ) async -> BackendStreamProbeResult {
+    await withTaskGroup(of: BackendStreamProbeResult.self) { group in
+      group.addTask {
+        await readSearchStream(stream, maxEvents: maxEvents)
+      }
+      group.addTask {
+        try? await Task.sleep(nanoseconds: timeoutSeconds * 1_000_000_000)
+        return BackendStreamProbeResult(
+          eventCount: 0,
+          itemCount: 0,
+          sawTerminalEvent: false,
+          errorMessage: nil,
+          timedOut: true
+        )
+      }
+
+      let result = await group.next()
+        ?? BackendStreamProbeResult(
+          eventCount: 0,
+          itemCount: 0,
+          sawTerminalEvent: false,
+          errorMessage: "Stream probe finished without a result.",
+          timedOut: false
+        )
+      group.cancelAll()
+      return result
+    }
+  }
+
+  private static func readSearchStream(
+    _ stream: AsyncThrowingStream<SearchStreamEvent, Error>,
+    maxEvents: Int?
+  ) async -> BackendStreamProbeResult {
+    var eventCount = 0
+    var itemCount = 0
+    var sawTerminalEvent = false
+    var streamError: String?
+
+    do {
+      for try await event in stream {
+        if Task.isCancelled { break }
+        eventCount += 1
+        itemCount += event.items?.count ?? 0
+
+        if event.type == "error" {
+          streamError = event.message ?? event.data?.error ?? "Unknown SSE error event."
+          sawTerminalEvent = true
+          break
+        }
+
+        if event.type == "done" || event.enable == false {
+          if event.data?.success == false {
+            streamError = event.data?.error ?? event.message ?? "SSE terminal event reported failure."
+          }
+          sawTerminalEvent = true
+          break
+        }
+
+        if let maxEvents, eventCount >= maxEvents {
+          break
+        }
+      }
+    } catch {
+      streamError = String(describing: error)
+    }
+
+    return BackendStreamProbeResult(
+      eventCount: eventCount,
+      itemCount: itemCount,
+      sawTerminalEvent: sawTerminalEvent,
+      errorMessage: streamError,
+      timedOut: false
+    )
   }
 
   private static func readSSEStream(
