@@ -1,6 +1,13 @@
 import Combine
 import Foundation
 
+private enum TransferHistoryMutationValidation: Equatable {
+  case valid
+  case changed
+  case unavailable(String)
+  case cancelled
+}
+
 @MainActor
 class TransferHistoryViewModel: ObservableObject {
   // MARK: - Published Properties
@@ -9,7 +16,9 @@ class TransferHistoryViewModel: ObservableObject {
   @Published var isFirstLoading: Bool = false
   @Published var isLoadingMore: Bool = false
   @Published private(set) var isDeleting = false
+  @Published private(set) var isValidatingMutation = false
   @Published var errorMessage: String?  // TODO
+  @Published var mutationRetryMessage: String?
   @Published var isSelectionMode: Bool = false
   @Published var selectedIds: Set<Int> = []
   @Published var searchText: String = ""
@@ -26,7 +35,7 @@ class TransferHistoryViewModel: ObservableObject {
   }
 
   var isMutatingHistory: Bool {
-    isDeleting || isAiRedoing
+    isDeleting || isAiRedoing || isValidatingMutation
   }
 
   // MARK: - Private State
@@ -140,8 +149,16 @@ class TransferHistoryViewModel: ObservableObject {
     errorMessage = errorDescription
   }
 
-  func refresh() async {
-    guard !isMutatingHistory else { return }
+  @discardableResult
+  func refresh() async -> Bool {
+    guard !isMutatingHistory else { return false }
+    await performAuthoritativeRefresh()
+    return true
+  }
+
+  private func performAuthoritativeRefresh() async {
+    // 与搜索切换相同：权威刷新开始后，之前已在途的增量结果一律失效。
+    queryGeneration += 1
     errorMessage = nil
     isLoadingMore = false
     guard apiService.canAccess(.manage) else {
@@ -156,8 +173,15 @@ class TransferHistoryViewModel: ObservableObject {
     let sessionSnapshot = apiService.sessionSnapshot()
     resetDynamicState(clearDeletedIds: true)
     await loadStorages()
-    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
+    guard !Task.isCancelled, apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
     await paginator.refresh()
+  }
+
+  func cancelRefresh() {
+    queryGeneration += 1
+    paginator.cancel()
+    isFirstLoading = false
+    isLoadingMore = false
   }
 
   private func loadStorages() async {
@@ -206,16 +230,41 @@ class TransferHistoryViewModel: ObservableObject {
     await paginator.loadMore(nil)
   }
 
-  func deleteHistory(item: TransferHistory, deleteSource: Bool, deleteDest: Bool) async {
+  func captureMutationSession() -> APIServiceSessionSnapshot {
+    apiService.sessionSnapshot()
+  }
+
+  func deleteHistory(
+    item: TransferHistory,
+    deleteSource: Bool,
+    deleteDest: Bool,
+    sourceSession: APIServiceSessionSnapshot
+  ) async {
     errorMessage = nil
-    guard apiService.canAccess(.manage), !isMutatingHistory else { return }
+    mutationRetryMessage = nil
+    guard apiService.isSessionUnchanged(from: sourceSession),
+      apiService.canAccess(.manage), !isMutatingHistory
+    else { return }
     isDeleting = true
     defer { isDeleting = false }
+
+    let validation = await validateMutationTargets([item], sourceSession: sourceSession)
+    guard validation == .valid else {
+      mutationRetryMessage = await validationFailureMessage(for: validation)
+      return
+    }
+
     do {
+      guard apiService.isSessionUnchanged(from: sourceSession) else {
+        throw CancellationError()
+      }
       let result = try await apiService.deleteTransferHistory(
         item: item,
         deleteSource: deleteSource,
         deleteDest: deleteDest)
+      guard apiService.isSessionUnchanged(from: sourceSession) else {
+        throw CancellationError()
+      }
 
       if result.success {
         markDeleted(id: item.id)
@@ -257,10 +306,13 @@ class TransferHistoryViewModel: ObservableObject {
   func deleteSelected(
     items itemsToDelete: [TransferHistory],
     deleteSource: Bool,
-    deleteDest: Bool
+    deleteDest: Bool,
+    sourceSession: APIServiceSessionSnapshot
   ) {
     errorMessage = nil
-    guard apiService.canAccess(.manage), !isMutatingHistory,
+    mutationRetryMessage = nil
+    guard apiService.isSessionUnchanged(from: sourceSession),
+      apiService.canAccess(.manage), !isMutatingHistory,
       batchDeleteTask == nil, !itemsToDelete.isEmpty
     else { return }
 
@@ -270,7 +322,8 @@ class TransferHistoryViewModel: ObservableObject {
       await performDeleteSelected(
         items: itemsToDelete,
         deleteSource: deleteSource,
-        deleteDest: deleteDest
+        deleteDest: deleteDest,
+        sourceSession: sourceSession
       )
     }
   }
@@ -278,25 +331,35 @@ class TransferHistoryViewModel: ObservableObject {
   private func performDeleteSelected(
     items itemsToDelete: [TransferHistory],
     deleteSource: Bool,
-    deleteDest: Bool
+    deleteDest: Bool,
+    sourceSession: APIServiceSessionSnapshot
   ) async {
     defer {
       isDeleting = false
       batchDeleteTask = nil
     }
+    guard apiService.isSessionUnchanged(from: sourceSession) else { return }
     var deletedCount = 0
     var failures: [String] = []
-    let snapshot = apiService.sessionSnapshot()
+
+    let validation = await validateMutationTargets(
+      itemsToDelete,
+      sourceSession: sourceSession
+    )
+    guard validation == .valid else {
+      mutationRetryMessage = await validationFailureMessage(for: validation)
+      return
+    }
 
     for item in itemsToDelete {
       let id = item.id
       do {
-        guard apiService.isSessionUnchanged(from: snapshot) else { return }
+        guard apiService.isSessionUnchanged(from: sourceSession) else { return }
         let result = try await apiService.deleteTransferHistory(
           item: item,
           deleteSource: deleteSource,
           deleteDest: deleteDest)
-        guard apiService.isSessionUnchanged(from: snapshot) else { return }
+        guard apiService.isSessionUnchanged(from: sourceSession) else { return }
 
         if result.success {
           markDeleted(id: id)
@@ -319,6 +382,74 @@ class TransferHistoryViewModel: ObservableObject {
 
     if selectedIds.isEmpty {
       isSelectionMode = false
+    }
+  }
+
+  /// 手动/批量整理在真正提交前复用同一校验；失败提示由当前 Sheet 呈现。
+  func validateBeforeReorganize(
+    items expectedItems: [TransferHistory],
+    sourceSession: APIServiceSessionSnapshot
+  ) async throws -> String? {
+    guard apiService.isSessionUnchanged(from: sourceSession),
+      apiService.canAccess(.manage), !isMutatingHistory, !expectedItems.isEmpty
+    else {
+      throw CancellationError()
+    }
+
+    isValidatingMutation = true
+    defer { isValidatingMutation = false }
+    let validation = await validateMutationTargets(
+      expectedItems,
+      sourceSession: sourceSession
+    )
+    if validation == .cancelled {
+      throw CancellationError()
+    }
+    return await validationFailureMessage(for: validation)
+  }
+
+  private func validateMutationTargets(
+    _ expectedItems: [TransferHistory],
+    sourceSession: APIServiceSessionSnapshot
+  ) async -> TransferHistoryMutationValidation {
+    guard !expectedItems.isEmpty,
+      apiService.isSessionUnchanged(from: sourceSession)
+    else { return .cancelled }
+    do {
+      // 后端自 v2.15.1 起约定负 count 返回全表；只在 mutation 前使用一次。
+      let response = try await apiService.fetchTransferHistory(page: 1, count: -1, title: nil)
+      guard apiService.isSessionUnchanged(from: sourceSession) else { return .cancelled }
+
+      var currentItemsByID: [Int: TransferHistory] = [:]
+      currentItemsByID.reserveCapacity(response.list.count)
+      for item in response.list {
+        currentItemsByID[item.id] = item
+      }
+
+      let allTargetsAreCurrent = expectedItems.allSatisfy { expectedItem in
+        guard let currentItem = currentItemsByID[expectedItem.id] else { return false }
+        return expectedItem.hasSameMutationFingerprint(as: currentItem)
+      }
+      return allTargetsAreCurrent ? .valid : .changed
+    } catch is CancellationError {
+      return .cancelled
+    } catch {
+      Logger.error("Failed to validate transfer history before mutation: \(error)")
+      return .unavailable("服务器记录有未知变化，请重试。")
+    }
+  }
+
+  private func validationFailureMessage(
+    for validation: TransferHistoryMutationValidation
+  ) async -> String? {
+    switch validation {
+    case .valid, .cancelled:
+      return nil
+    case .changed:
+      await performAuthoritativeRefresh()
+      return "服务器记录有未知变化，请重试。"
+    case .unavailable(let message):
+      return message
     }
   }
 
@@ -505,45 +636,81 @@ class TransferHistoryViewModel: ObservableObject {
 
   // MARK: - AI Reorganize
 
-  func triggerAiRedo(for id: Int) async {
-    await triggerAiRedo(for: [id], useBatchEndpoint: false)
+  func triggerAiRedo(
+    for item: TransferHistory,
+    sourceSession: APIServiceSessionSnapshot
+  ) async {
+    await triggerAiRedo(
+      for: [item],
+      useBatchEndpoint: false,
+      sourceSession: sourceSession
+    )
   }
 
-  func triggerBatchAiRedo(for ids: [Int]) async {
-    await triggerAiRedo(for: ids, useBatchEndpoint: true)
+  func triggerBatchAiRedo(
+    for items: [TransferHistory],
+    sourceSession: APIServiceSessionSnapshot
+  ) async {
+    await triggerAiRedo(
+      for: items,
+      useBatchEndpoint: true,
+      sourceSession: sourceSession
+    )
   }
 
-  private func triggerAiRedo(for ids: [Int], useBatchEndpoint: Bool) async {
+  private func triggerAiRedo(
+    for items: [TransferHistory],
+    useBatchEndpoint: Bool,
+    sourceSession: APIServiceSessionSnapshot
+  ) async {
     errorMessage = nil
-    guard apiService.canAccess(.manage) else { return }
+    mutationRetryMessage = nil
+    guard apiService.isSessionUnchanged(from: sourceSession),
+      apiService.canAccess(.manage)
+    else { return }
     guard !isMutatingHistory else { return }
     var seenIds = Set<Int>()
-    let pendingIds = ids.filter {
-      seenIds.insert($0).inserted && !aiRedoingIds.contains($0)
+    let pendingItems = items.filter {
+      seenIds.insert($0.id).inserted && !aiRedoingIds.contains($0.id)
     }
+    let pendingIds = pendingItems.map(\.id)
     guard !pendingIds.isEmpty else { return }
     guard isAiRedoEnabled else {
       errorMessage = "AI 助手未启用"
       return
     }
 
+    isAiRedoing = true
+    aiRedoProgressText = "正在确认整理记录..."
+    let validation = await validateMutationTargets(
+      pendingItems,
+      sourceSession: sourceSession
+    )
+    guard validation == .valid else {
+      mutationRetryMessage = await validationFailureMessage(for: validation)
+      isAiRedoing = false
+      return
+    }
     for id in pendingIds {
       aiRedoingIds.insert(id)
     }
-    isAiRedoing = true
     aiRedoProgressText = "正在启动 AI 整理..."
 
     aiRedoTask?.cancel()
     aiRedoTask = Task { @MainActor in
       do {
-        let snapshot = apiService.sessionSnapshot()
+        guard apiService.isSessionUnchanged(from: sourceSession) else {
+          throw CancellationError()
+        }
         let result: (progressKey: String, acceptedIds: [Int])
         if useBatchEndpoint {
           result = try await apiService.aiRedoTransferHistories(ids: pendingIds)
         } else {
           result = try await apiService.aiRedoTransferHistory(id: pendingIds[0])
         }
-        guard apiService.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
+        guard apiService.isSessionUnchanged(from: sourceSession) else {
+          throw CancellationError()
+        }
 
         let acceptedIds = result.acceptedIds
         let rejectedIds = Set(pendingIds).subtracting(acceptedIds)
@@ -579,7 +746,9 @@ class TransferHistoryViewModel: ObservableObject {
             break
           }
         }
-        guard apiService.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
+        guard apiService.isSessionUnchanged(from: sourceSession) else {
+          throw CancellationError()
+        }
 
         if !Task.isCancelled {
           for id in acceptedIds {

@@ -2,20 +2,21 @@ import SwiftUI
 
 struct TransferHistoryView: View {
   @ObservedObject var viewModel: TransferHistoryViewModel
+  private let isSelected: Bool
   @EnvironmentObject private var notificationManager: NotificationManager
-  @State private var itemToDelete: TransferHistory? = nil
-  @State private var itemToReorganize: TransferHistory? = nil
+  @State private var deleteIntent: TransferHistoryItemMutationIntent? = nil
+  @State private var reorganizeIntent: TransferHistoryItemMutationIntent? = nil
   @State private var historyIdToRestoreFocus: Int? = nil
   @State private var isRefreshingAfterReorganize = false
   @State private var itemForInfoSheet: TransferHistory? = nil
-  @State private var showBatchDeleteAlert = false
-  @State private var batchDeleteItems: [TransferHistory] = []
-  @State private var showBatchRedoSheet = false
+  @State private var batchDeleteIntent: TransferHistoryBatchMutationIntent? = nil
+  @State private var batchReorganizeIntent: TransferHistoryBatchMutationIntent? = nil
   @State private var localSearchText: String = ""
   @FocusState private var focusedHistoryId: Int?
 
-  init(viewModel: TransferHistoryViewModel) {
+  init(viewModel: TransferHistoryViewModel, isSelected: Bool = true) {
     self.viewModel = viewModel
+    self.isSelected = isSelected
   }
 
   var body: some View {
@@ -106,18 +107,14 @@ struct TransferHistoryView: View {
         }
       }
     }
-    .task {
-      // 仅在数据为空时执行首次加载, 避免视图切换时重载
-      if viewModel.items.isEmpty {
-        await viewModel.refresh()
-      }
-
-      // 定期拉取最新数据，替代旧版 Timer.publish，避免后台挂起恢复后的调度失效问题
-      while !Task.isCancelled {
-        try? await Task.sleep(nanoseconds: 10 * 1_000_000_000)
-        guard !Task.isCancelled else { break }
-        await viewModel.fetchLatest()
-      }
+    .task(id: isSelected) {
+      await Self.runAutoRefresh(
+        isSelected: isSelected,
+        cancelRefresh: { viewModel.cancelRefresh() },
+        canRefresh: { !viewModel.isMutatingHistory },
+        refresh: { await viewModel.refresh() },
+        fetchLatest: { await viewModel.fetchLatest() }
+      )
     }
     .onChange(of: viewModel.errorMessage) { _, newValue in
       if let message = newValue {
@@ -130,7 +127,9 @@ struct TransferHistoryView: View {
         if viewModel.isMutatingHistory {
           VStack(spacing: 20) {
             ProgressView(
-              viewModel.isDeleting ? "正在删除整理记录..." : viewModel.aiRedoProgressText
+              viewModel.isValidatingMutation
+                ? "正在确认整理记录..."
+                : (viewModel.isDeleting ? "正在删除整理记录..." : viewModel.aiRedoProgressText)
             )
           }
           .padding()
@@ -144,13 +143,20 @@ struct TransferHistoryView: View {
       TransferHistoryDetailSheet(item: item, storageDict: viewModel.storageDict)
     }
     .sheet(
-      item: $itemToReorganize,
+      item: $reorganizeIntent,
       onDismiss: restoreHistoryFocus
-    ) { item in
+    ) { intent in
       ReorganizeSheet(
-        logIds: [item.id],
-        fileItem: item.src_fileitem,
-        targetStorage: item.dest_storage
+        logIds: [intent.item.id],
+        fileItem: intent.item.src_fileitem,
+        targetStorage: intent.item.dest_storage,
+        sourceSession: intent.sourceSession,
+        validateBeforeSubmit: {
+          try await viewModel.validateBeforeReorganize(
+            items: [intent.item],
+            sourceSession: intent.sourceSession
+          )
+        }
       ) {
         isRefreshingAfterReorganize = true
         Task {
@@ -160,8 +166,20 @@ struct TransferHistoryView: View {
       }
     }
     // 批量重做弹窗
-    .sheet(isPresented: $showBatchRedoSheet) {
-      ReorganizeSheet(logIds: Array(viewModel.selectedIds), fileItem: nil) {
+    .sheet(
+      item: $batchReorganizeIntent
+    ) { intent in
+      ReorganizeSheet(
+        logIds: intent.items.map(\.id),
+        fileItem: nil,
+        sourceSession: intent.sourceSession,
+        validateBeforeSubmit: {
+          try await viewModel.validateBeforeReorganize(
+            items: intent.items,
+            sourceSession: intent.sourceSession
+          )
+        }
+      ) {
         Task {
           viewModel.deselectAll()
           await viewModel.refresh()
@@ -169,38 +187,43 @@ struct TransferHistoryView: View {
       }
     }
     .alert(
+      "操作未执行",
+      isPresented: Binding(
+        get: { viewModel.mutationRetryMessage != nil },
+        set: { if !$0 { viewModel.mutationRetryMessage = nil } }
+      ),
+      actions: {
+        Button("好") { viewModel.mutationRetryMessage = nil }
+      },
+      message: {
+        Text(viewModel.mutationRetryMessage ?? "")
+      }
+    )
+    .alert(
       "确认删除",
       isPresented: Binding(
-        get: { itemToDelete != nil },
-        set: { if !$0 { itemToDelete = nil } }
+        get: { deleteIntent != nil },
+        set: { if !$0 { deleteIntent = nil } }
       ),
       actions: {
         Button("仅删除记录", role: .destructive) {
-          guard let item = itemToDelete else { return }
-          Task { await viewModel.deleteHistory(item: item, deleteSource: false, deleteDest: false) }
-          itemToDelete = nil
+          startDelete(deleteSource: false, deleteDest: false)
         }
         Button("删除记录和源文件", role: .destructive) {
-          guard let item = itemToDelete else { return }
-          Task { await viewModel.deleteHistory(item: item, deleteSource: true, deleteDest: false) }
-          itemToDelete = nil
+          startDelete(deleteSource: true, deleteDest: false)
         }
         Button("删除记录和目标文件", role: .destructive) {
-          guard let item = itemToDelete else { return }
-          Task { await viewModel.deleteHistory(item: item, deleteSource: false, deleteDest: true) }
-          itemToDelete = nil
+          startDelete(deleteSource: false, deleteDest: true)
         }
         Button("全部删除", role: .destructive) {
-          guard let item = itemToDelete else { return }
-          Task { await viewModel.deleteHistory(item: item, deleteSource: true, deleteDest: true) }
-          itemToDelete = nil
+          startDelete(deleteSource: true, deleteDest: true)
         }
         Button("取消", role: .cancel) {
-          itemToDelete = nil
+          deleteIntent = nil
         }
       },
       message: {
-        if let title = itemToDelete?.title, !title.isEmpty {
+        if let title = deleteIntent?.item.title, !title.isEmpty {
           Text("确认删除《\(title)》的记录吗？此操作不可撤销。")
         } else {
           Text("确认删除该记录吗？此操作不可撤销。")
@@ -209,7 +232,11 @@ struct TransferHistoryView: View {
     )
     // 批量删除确认
     .alert(
-      "批量删除确认", isPresented: $showBatchDeleteAlert,
+      "批量删除确认",
+      isPresented: Binding(
+        get: { batchDeleteIntent != nil },
+        set: { if !$0 { batchDeleteIntent = nil } }
+      ),
       actions: {
         Button("仅删除记录", role: .destructive) {
           startBatchDelete(deleteSource: false, deleteDest: false)
@@ -224,22 +251,69 @@ struct TransferHistoryView: View {
           startBatchDelete(deleteSource: true, deleteDest: true)
         }
         Button("取消", role: .cancel) {
-          batchDeleteItems.removeAll()
+          batchDeleteIntent = nil
         }
       },
       message: {
-        Text("确定要删除选中的 \(batchDeleteItems.count) 条记录吗？此操作不可撤销。")
+        Text("确定要删除选中的 \(batchDeleteIntent?.items.count ?? 0) 条记录吗？此操作不可撤销。")
       })
   }
 
+  private func startDelete(deleteSource: Bool, deleteDest: Bool) {
+    guard let intent = deleteIntent else { return }
+    deleteIntent = nil
+    Task {
+      await viewModel.deleteHistory(
+        item: intent.item,
+        deleteSource: deleteSource,
+        deleteDest: deleteDest,
+        sourceSession: intent.sourceSession
+      )
+    }
+  }
+
   private func startBatchDelete(deleteSource: Bool, deleteDest: Bool) {
-    let items = batchDeleteItems
-    batchDeleteItems.removeAll()
+    guard let intent = batchDeleteIntent else { return }
+    batchDeleteIntent = nil
     viewModel.deleteSelected(
-      items: items,
+      items: intent.items,
       deleteSource: deleteSource,
-      deleteDest: deleteDest
+      deleteDest: deleteDest,
+      sourceSession: intent.sourceSession
     )
+  }
+
+  static let autoRefreshIntervalNanoseconds: UInt64 = 10 * 1_000_000_000
+  static let mutationRefreshRetryNanoseconds: UInt64 = 100_000_000
+
+  static func runAutoRefresh(
+    isSelected: Bool,
+    cancelRefresh: () -> Void = {},
+    canRefresh: () -> Bool = { true },
+    refresh: () async -> Bool,
+    fetchLatest: () async -> Void,
+    sleep: (UInt64) async -> Void = { try? await Task.sleep(nanoseconds: $0) },
+    isCancelled: () -> Bool = { Task.isCancelled }
+  ) async {
+    guard isSelected else {
+      cancelRefresh()
+      return
+    }
+    while !isCancelled() {
+      while !isCancelled(), !canRefresh() {
+        await sleep(mutationRefreshRetryNanoseconds)
+      }
+      guard !isCancelled() else { return }
+      if await refresh() {
+        break
+      }
+    }
+    guard !isCancelled() else { return }
+    while !isCancelled() {
+      await sleep(autoRefreshIntervalNanoseconds)
+      guard !isCancelled() else { break }
+      await fetchLatest()
+    }
   }
 
   private func restoreHistoryFocus() {
@@ -255,6 +329,8 @@ struct TransferHistoryView: View {
 
   private func actionDescriptors(for item: TransferHistory) -> [ActionDescriptor] {
     var actions: [ActionDescriptor] = []
+    // 卡片创建动作时就绑定来源会话，不能等异步 Task 真正启动后再取当前账号。
+    let sourceSession = viewModel.captureMutationSession()
 
     if viewModel.isAiRedoEnabled {
       let isSingleItemPending = viewModel.aiRedoingIds.contains(item.id)
@@ -269,12 +345,20 @@ struct TransferHistoryView: View {
           icon: "sparkles",
           isEnabled: !viewModel.isMutatingHistory,
           action: {
-            Task {
-              if viewModel.selectedIds.isEmpty {
-                await viewModel.triggerAiRedo(for: item.id)
-              } else {
-                let ids = Array(viewModel.selectedIds)
-                await viewModel.triggerBatchAiRedo(for: ids)
+            if viewModel.selectedIds.isEmpty {
+              Task {
+                await viewModel.triggerAiRedo(
+                  for: item,
+                  sourceSession: sourceSession
+                )
+              }
+            } else {
+              let items = viewModel.selectedItemsSnapshot()
+              Task {
+                await viewModel.triggerBatchAiRedo(
+                  for: items,
+                  sourceSession: sourceSession
+                )
               }
             }
           }
@@ -292,9 +376,17 @@ struct TransferHistoryView: View {
         action: {
           if viewModel.selectedIds.isEmpty {
             historyIdToRestoreFocus = item.id
-            itemToReorganize = item
+            reorganizeIntent = TransferHistoryItemMutationIntent(
+              item: item,
+              sourceSession: sourceSession
+            )
           } else {
-            showBatchRedoSheet = true
+            let items = viewModel.selectedItemsSnapshot()
+            guard !items.isEmpty else { return }
+            batchReorganizeIntent = TransferHistoryBatchMutationIntent(
+              items: items,
+              sourceSession: sourceSession
+            )
           }
         }
       )
@@ -310,11 +402,18 @@ struct TransferHistoryView: View {
         role: .destructive,
         action: {
           if viewModel.selectedIds.isEmpty {
-            itemToDelete = item
+            deleteIntent = TransferHistoryItemMutationIntent(
+              item: item,
+              sourceSession: sourceSession
+            )
           } else {
             // 弹窗文案与删除动作共享同一份完整记录快照，不再依赖后续实时列表。
-            batchDeleteItems = viewModel.selectedItemsSnapshot()
-            showBatchDeleteAlert = !batchDeleteItems.isEmpty
+            let items = viewModel.selectedItemsSnapshot()
+            guard !items.isEmpty else { return }
+            batchDeleteIntent = TransferHistoryBatchMutationIntent(
+              items: items,
+              sourceSession: sourceSession
+            )
           }
         }
       )
@@ -322,6 +421,19 @@ struct TransferHistoryView: View {
 
     return actions
   }
+}
+
+private struct TransferHistoryItemMutationIntent: Identifiable {
+  let item: TransferHistory
+  let sourceSession: APIServiceSessionSnapshot
+
+  var id: Int { item.id }
+}
+
+private struct TransferHistoryBatchMutationIntent: Identifiable {
+  let id = UUID()
+  let items: [TransferHistory]
+  let sourceSession: APIServiceSessionSnapshot
 }
 
 private func transferModeDisplayName(for mode: String) -> String {

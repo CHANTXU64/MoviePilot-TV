@@ -2625,12 +2625,14 @@ struct TransferHistory: Codable, Identifiable {
   let errmsg: String?
   // 源文件项
   let src_fileitem: FileItem?
+  // 目标文件项
+  let dest_fileitem: FileItem?
   // 日期
   let date: String?
 
   enum CodingKeys: String, CodingKey {
     case id, title, type, seasons, episodes, category, src, dest
-    case src_storage, dest_storage, mode, status, errmsg, src_fileitem, date
+    case src_storage, dest_storage, mode, status, errmsg, src_fileitem, dest_fileitem, date
   }
 }
 
@@ -2652,11 +2654,32 @@ extension TransferHistory {
     errmsg = try container.decodeIfPresent(String.self, forKey: .errmsg)
     // Web 会保留稀疏历史行；嵌套文件项不可用时只降级该字段，不能拖垮整页。
     src_fileitem = try? container.decodeIfPresent(FileItem.self, forKey: .src_fileitem)
+    dest_fileitem = try? container.decodeIfPresent(FileItem.self, forKey: .dest_fileitem)
     date = try container.decodeIfPresent(String.self, forKey: .date)
+  }
+
+  /// ID 可能被 SQLite 复用；执行破坏性操作前用稳定记录字段确认仍是同一条历史。
+  func hasSameMutationFingerprint(as other: TransferHistory) -> Bool {
+    id == other.id
+      && title == other.title
+      && type == other.type
+      && seasons == other.seasons
+      && episodes == other.episodes
+      && category == other.category
+      && src == other.src
+      && dest == other.dest
+      && src_storage == other.src_storage
+      && dest_storage == other.dest_storage
+      && mode == other.mode
+      && status == other.status
+      && errmsg == other.errmsg
+      && src_fileitem == other.src_fileitem
+      && dest_fileitem == other.dest_fileitem
+      && date == other.date
   }
 }
 
-struct FileItem: Codable {
+struct FileItem: Codable, Equatable {
   // 文件名
   let name: String
   // 文件路径

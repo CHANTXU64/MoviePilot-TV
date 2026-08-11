@@ -354,6 +354,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
       status: FlexibleBool(false),
       errmsg: nil,
       src_fileitem: FileItem(name: "movie.mkv", path: "/downloads/movie.mkv", type: "file", size: nil),
+      dest_fileitem: nil,
       date: nil
     )
     let form = ReorganizeForm(

@@ -19,8 +19,11 @@ class ReorganizeViewModel: ObservableObject {
 
   @Published var errorMessage: String?
   @Published var loadErrorMessage: String?
+  @Published var mutationRetryMessage: String?
 
   private let apiService: APIService
+  private let validateBeforeSubmit: (() async throws -> String?)?
+  private let sourceSession: APIServiceSessionSnapshot?
   private var cancellables = Set<AnyCancellable>()
 
   private var logIds: [Int] = []
@@ -40,9 +43,13 @@ class ReorganizeViewModel: ObservableObject {
     logIds: [Int] = [],
     fileItem: FileItem?,
     targetStorage: String? = nil,
+    validateBeforeSubmit: (() async throws -> String?)? = nil,
+    sourceSession: APIServiceSessionSnapshot? = nil,
     apiService: APIService = .shared
   ) {
     self.apiService = apiService
+    self.validateBeforeSubmit = validateBeforeSubmit
+    self.sourceSession = sourceSession
     self.logIds = logIds
     self.explicitTargetStorage = targetStorage?.trimmingCharacters(in: .whitespacesAndNewlines)
       .nonEmpty
@@ -152,8 +159,11 @@ class ReorganizeViewModel: ObservableObject {
   }
 
   func submit(background: Bool) async -> Bool {
-    guard apiService.canAccess(.manage) else { return false }
+    guard sourceSession.map({ apiService.isSessionUnchanged(from: $0) }) ?? true,
+      apiService.canAccess(.manage)
+    else { return false }
     errorMessage = nil
+    mutationRetryMessage = nil
     guard isMediaIdValid else {
       errorMessage = "媒体 ID 只能包含数字。"
       return false
@@ -161,7 +171,15 @@ class ReorganizeViewModel: ObservableObject {
     isSubmitting = true
     defer { isSubmitting = false }
     do {
-      let snapshot = apiService.sessionSnapshot()
+      if let message = try await validateBeforeSubmit?() {
+        mutationRetryMessage = message
+        return false
+      }
+
+      let snapshot = sourceSession ?? apiService.sessionSnapshot()
+      guard apiService.isSessionUnchanged(from: snapshot) else {
+        throw CancellationError()
+      }
       var failureMessages: [String] = []
       for submittedForm in preparedSubmissionForms() {
         guard apiService.isSessionUnchanged(from: snapshot) else {

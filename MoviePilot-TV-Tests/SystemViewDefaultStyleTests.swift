@@ -25,6 +25,35 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("Label(\"系统\", systemImage: \"gear\")"))
   }
 
+  func testStatusTabSelectionDrivesAuthoritativeTransferHistoryRefresh() throws {
+    let contentSource = try Self.source(at: "MoviePilot-TV/Views/ContentView.swift")
+    let statusSource = try Self.source(at: "MoviePilot-TV/Views/Pages/StatusView.swift")
+    let historySource = try Self.source(
+      at: "MoviePilot-TV/Views/Pages/TransferHistoryView.swift"
+    )
+
+    XCTAssertTrue(contentSource.contains("StatusView(isSelected: selectedTab == .status)"))
+    XCTAssertTrue(
+      statusSource.contains(
+        "TransferHistoryView(viewModel: transferHistoryViewModel, isSelected: isSelected)"
+      )
+    )
+    XCTAssertTrue(historySource.contains(".task(id: isSelected)"))
+    XCTAssertTrue(historySource.contains("await Self.runAutoRefresh("))
+  }
+
+  func testTransferHistoryMutationIntentsCarryTheirSourceSession() throws {
+    let source = try Self.source(
+      at: "MoviePilot-TV/Views/Pages/TransferHistoryView.swift"
+    )
+
+    XCTAssertTrue(source.contains("let sourceSession = viewModel.captureMutationSession()"))
+    XCTAssertTrue(source.contains("TransferHistoryItemMutationIntent("))
+    XCTAssertTrue(source.contains("TransferHistoryBatchMutationIntent("))
+    XCTAssertTrue(source.contains("sourceSession: intent.sourceSession"))
+    XCTAssertTrue(source.contains("sourceSession: sourceSession"))
+  }
+
   func testSystemViewKeepsConnectionAndAppInfoEntryPoints() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
 
@@ -260,6 +289,11 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains(".accessibilityLabel(\"搜索媒体\")"))
     XCTAssertFalse(source.contains("Label(\"搜索媒体\", systemImage: \"magnifyingglass\")"))
     XCTAssertTrue(source.contains(".sheet(isPresented: $showPreview)"))
+    XCTAssertTrue(
+      source.contains(
+        "viewModel.mutationRetryMessage = nil\n            dismiss()"
+      )
+    )
     XCTAssertTrue(source.contains("private struct ReorganizePreviewSheet: View"))
     XCTAssertFalse(source.contains("@FocusState private var focusedPreviewIndex: Int?"))
     XCTAssertFalse(source.contains(".focusable()"))

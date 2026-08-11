@@ -22,13 +22,17 @@ struct ReorganizeSheet: View {
     logIds: [Int] = [],
     fileItem: FileItem? = nil,
     targetStorage: String? = nil,
+    sourceSession: APIServiceSessionSnapshot,
+    validateBeforeSubmit: @escaping () async throws -> String?,
     onDone: @escaping () -> Void
   ) {
     _viewModel = StateObject(
       wrappedValue: ReorganizeViewModel(
         logIds: logIds,
         fileItem: fileItem,
-        targetStorage: targetStorage
+        targetStorage: targetStorage,
+        validateBeforeSubmit: validateBeforeSubmit,
+        sourceSession: sourceSession
       )
     )
     self.onDone = onDone
@@ -47,6 +51,22 @@ struct ReorganizeSheet: View {
       .task {
         await viewModel.loadConfig()
       }
+      .alert(
+        "操作未执行",
+        isPresented: Binding(
+          get: { viewModel.mutationRetryMessage != nil },
+          set: { if !$0 { viewModel.mutationRetryMessage = nil } }
+        ),
+        actions: {
+          Button("好") {
+            viewModel.mutationRetryMessage = nil
+            dismiss()
+          }
+        },
+        message: {
+          Text(viewModel.mutationRetryMessage ?? "")
+        }
+      )
     }
   }
 

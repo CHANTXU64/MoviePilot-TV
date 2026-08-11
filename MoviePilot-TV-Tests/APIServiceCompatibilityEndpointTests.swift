@@ -720,6 +720,41 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     XCTAssertTrue(allBodiesOmitPreview)
   }
 
+  func testReorganizeSubmitStopsBeforeFirstMutationWhenHistoryValidationRejects() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.testingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    configureManageUser(service)
+
+    var validationCount = 0
+    let viewModel = ReorganizeViewModel(
+      logIds: [81, 82],
+      fileItem: nil,
+      validateBeforeSubmit: {
+        validationCount += 1
+        return "服务器记录有未知变化，请重试。"
+      },
+      apiService: service
+    )
+
+    let submitted = await viewModel.submit(background: true)
+
+    XCTAssertFalse(submitted)
+    XCTAssertEqual(validationCount, 1)
+    XCTAssertEqual(
+      viewModel.mutationRetryMessage,
+      "服务器记录有未知变化，请重试。"
+    )
+    let bodies = await CompatibilityEndpointURLProtocol.stub.matchingBodies(
+      suffix: "/transfer/manual"
+    )
+    XCTAssertTrue(bodies.isEmpty)
+  }
+
   private func assertContainsSubsequence(
     _ expected: [String],
     in actual: [String],
