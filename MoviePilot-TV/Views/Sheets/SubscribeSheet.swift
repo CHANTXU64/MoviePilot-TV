@@ -4,6 +4,7 @@ struct SubscribeSheet: View {
   @Environment(\.dismiss) var dismiss
   @StateObject private var viewModel: SubscribeSheetViewModel
   @State private var hasAppeared = false
+  @State private var isRetryingLoad = false
   @State private var showingSiteSelection = false
   @State private var showingFilterGroupSelection = false
   @State private var showAdvanced = false
@@ -59,10 +60,14 @@ struct SubscribeSheet: View {
                 if let message = viewModel.loadErrorMessage {
                   if viewModel.canRetryLoad {
                     SheetFeedbackView(message: message, actionTitle: "重新加载") {
+                      guard !isRetryingLoad else { return }
+                      isRetryingLoad = true
                       Task {
                         await viewModel.loadData()
+                        isRetryingLoad = false
                       }
                     }
+                    .disabled(isRetryingLoad)
                   } else {
                     SheetFeedbackView(message: message)
                   }
@@ -326,20 +331,20 @@ struct SubscribeSheet: View {
               .applySheetStyles()
             }
           }
-          .onAppear {
-            guard !hasAppeared else { return }
-            hasAppeared = true
-            Task {
-              await viewModel.loadData()
-            }
-          }
-          .onDisappear {
-            let wasSaving = viewModel.isSaving
-            Task {
-              await viewModel.cancel(wasSavingOnDismiss: wasSaving)
-            }
-          }
         }
+      }
+    }
+    .onAppear {
+      guard !hasAppeared else { return }
+      hasAppeared = true
+      Task {
+        await viewModel.loadData()
+      }
+    }
+    .onDisappear {
+      let wasSaving = viewModel.isSaving
+      Task {
+        await viewModel.cancel(wasSavingOnDismiss: wasSaving)
       }
     }
     .sheet(isPresented: $showingSiteSelection) {

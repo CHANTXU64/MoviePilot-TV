@@ -16,12 +16,19 @@ class SubscribeSheetViewModel: ObservableObject {
   @Published var loadErrorMessage: String?
   @Published var canRetryLoad = false
 
-  // 标记我们是否正在创建一个新的订阅
-  let isNewSubscription: Bool
+  // 最后一次查询确认不存在时才保持为新订阅；查到既有记录后切换为编辑。
+  @Published private(set) var isNewSubscription: Bool
   // 标记初始的“创建并暂停”操作序列是否成功
   private var isCreatedAndPaused = false
-  // 绑定服务器返回的新订阅 ID 与创建它的账号，避免切号后回滚误删同号订阅。
-  private var createdSubscriptionOwnerProfileKey: String?
+  private struct CreatedSubscriptionReceipt {
+    let id: Int
+    let profileKey: String
+    let session: APIServiceSessionSnapshot
+  }
+  // 仅在最后一次查询明确不存在后，绑定本次 POST 返回的 ID、账号与会话。
+  private var createdSubscriptionReceipt: CreatedSubscriptionReceipt?
+  private var shouldRollbackCreatedSubscription = false
+  private var isRollingBackCreatedSubscription = false
   // 用户在保存期间返回时，保存成功后只提示一次。
   private var shouldNotifySaveSuccessAfterDismiss = false
 
@@ -71,14 +78,12 @@ class SubscribeSheetViewModel: ObservableObject {
     apiService: APIService = .shared
   ) {
     self.subscribe = subscribe
-    self.isNewSubscription = isNewSubscription
+    self.isNewSubscription = isNewSubscription && subscribe.id == nil
     self.apiService = apiService
-    if isNewSubscription, subscribe.id != nil, apiService.canAccess(.subscribe) {
-      createdSubscriptionOwnerProfileKey = apiService.profileKey
-    }
   }
 
   func loadData() async {
+    guard !isLoading else { return }
     guard apiService.canAccess(.subscribe) else {
       clearLoadedOptions()
       return
@@ -90,60 +95,88 @@ class SubscribeSheetViewModel: ObservableObject {
     isLoading = true
     defer { isLoading = false }
 
-    // 1. 如果是新订阅，执行“创建 -> 暂停 -> 获取”序列
+    // 1. 如果是新订阅，最后确认不存在后再执行“创建 -> 暂停 -> 获取”序列
     if isNewSubscription && !isCreatedAndPaused {
       do {
-        // 创建
-        guard
-          let newId = try await apiService.addSubscription(
-            request: subscribe.addRequest,
-            subscribe: subscribe
+        if let receipt = currentCreatedSubscriptionReceipt() {
+          if shouldRollbackCreatedSubscription {
+            await rollbackCreatedSubscriptionIfNeeded()
+            clearLoadedOptions()
+            return
+          }
+          guard try await prepareCreatedSubscription(id: receipt.id, from: sessionSnapshot) else {
+            return
+          }
+        } else {
+          let media = subscribe.navigationMediaInfo()
+          guard media.apiMediaId != nil else {
+            canRetryLoad = true
+            loadErrorMessage = "暂时无法确认订阅状态，请重试。"
+            return
+          }
+
+          // 该查询不读取状态缓存；查询与 POST 之间不再插入其他异步步骤。
+          let existing = try await apiService.fetchSubscriptionLookup(
+            media: media,
+            season: subscribe.season
           )
-        else {
-          canRetryLoad = true
-          loadErrorMessage = "暂时无法创建订阅，请重试。"
-          return
-        }
-        guard canPublishLoadResult(from: sessionSnapshot) else {
-          clearLoadedOptions()
-          return
-        }
+          guard canPublishLoadResult(from: sessionSnapshot) else {
+            clearLoadedOptions()
+            return
+          }
+          guard !shouldRollbackCreatedSubscription else {
+            clearLoadedOptions()
+            return
+          }
 
-        // 更新本地 ID
-        createdSubscriptionOwnerProfileKey = apiService.profileKey
-        self.subscribe.id = newId
+          if let existing {
+            let fullSubscribe = try await apiService.fetchSubscription(id: existing.id)
+            guard canPublishLoadResult(from: sessionSnapshot), !shouldRollbackCreatedSubscription
+            else {
+              clearLoadedOptions()
+              return
+            }
+            self.subscribe = fullSubscribe
+            isNewSubscription = false
+            isCreatedAndPaused = true
+          } else {
+            guard let profileKey = apiService.profileKey,
+              let newId = try await apiService.addSubscription(
+                request: subscribe.addRequest,
+                subscribe: subscribe
+              )
+            else {
+              canRetryLoad = true
+              loadErrorMessage = "暂时无法创建订阅，请重试。"
+              return
+            }
+            guard canPublishLoadResult(from: sessionSnapshot) else {
+              clearLoadedOptions()
+              return
+            }
 
-        // 立即暂停
-        let pauseResult = try await apiService.updateSubscriptionStatus(
-          id: newId,
-          state: "S"
-        )
-        guard pauseResult.success else {
-          loadErrorMessage =
-            MediaIdentifier.normalizedString(pauseResult.message)
-            ?? "订阅没有准备完成，请关闭后重新打开。"
-          return
+            self.subscribe.id = newId
+            createdSubscriptionReceipt = CreatedSubscriptionReceipt(
+              id: newId,
+              profileKey: profileKey,
+              session: sessionSnapshot
+            )
+            if shouldRollbackCreatedSubscription {
+              await rollbackCreatedSubscriptionIfNeeded()
+              clearLoadedOptions()
+              return
+            }
+            guard try await prepareCreatedSubscription(id: newId, from: sessionSnapshot) else {
+              return
+            }
+          }
         }
-        guard canPublishLoadResult(from: sessionSnapshot) else {
-          clearLoadedOptions()
-          return
-        }
-
-        // 获取完整的订阅详情（以获得服务器端的默认值）
-        let fullSubscribe = try await apiService.fetchSubscription(id: newId)
-        guard canPublishLoadResult(from: sessionSnapshot) else {
-          clearLoadedOptions()
-          return
-        }
-        self.subscribe = fullSubscribe
-
-        isCreatedAndPaused = true
       } catch is CancellationError {
         clearLoadedOptions()
         return
       } catch {
         Logger.error("Failed to prepare a new subscription: \(error)")
-        canRetryLoad = subscribe.id == nil
+        canRetryLoad = subscribe.id == nil || currentCreatedSubscriptionReceipt() != nil
         loadErrorMessage = canRetryLoad
           ? "订阅准备失败，请重试。"
           : "订阅没有准备完成，请关闭后重新打开。"
@@ -190,6 +223,54 @@ class SubscribeSheetViewModel: ObservableObject {
     apiService.isSessionUnchanged(from: snapshot) && apiService.canAccess(.subscribe)
   }
 
+  private func currentCreatedSubscriptionReceipt() -> CreatedSubscriptionReceipt? {
+    guard let receipt = createdSubscriptionReceipt,
+      subscribe.id == receipt.id,
+      apiService.profileKey == receipt.profileKey,
+      apiService.isSessionUnchanged(from: receipt.session)
+    else {
+      return nil
+    }
+    return receipt
+  }
+
+  private func prepareCreatedSubscription(
+    id: Int,
+    from snapshot: APIServiceSessionSnapshot
+  ) async throws -> Bool {
+    let pauseResult = try await apiService.updateSubscriptionStatus(id: id, state: "S")
+    guard pauseResult.success else {
+      canRetryLoad = true
+      loadErrorMessage =
+        MediaIdentifier.normalizedString(pauseResult.message)
+        ?? "订阅没有准备完成，请重试。"
+      return false
+    }
+    guard canPublishLoadResult(from: snapshot) else {
+      clearLoadedOptions()
+      return false
+    }
+    if shouldRollbackCreatedSubscription {
+      await rollbackCreatedSubscriptionIfNeeded()
+      clearLoadedOptions()
+      return false
+    }
+
+    let fullSubscribe = try await apiService.fetchSubscription(id: id)
+    guard canPublishLoadResult(from: snapshot) else {
+      clearLoadedOptions()
+      return false
+    }
+    if shouldRollbackCreatedSubscription {
+      await rollbackCreatedSubscriptionIfNeeded()
+      clearLoadedOptions()
+      return false
+    }
+    self.subscribe = fullSubscribe
+    isCreatedAndPaused = true
+    return true
+  }
+
   private func clearLoadedOptions() {
     sites = []
     downloaders = []
@@ -232,7 +313,8 @@ class SubscribeSheetViewModel: ObservableObject {
 
       guard let id = subscribe.id else { return true }
 
-      if isNewSubscription {
+      let ownsCreatedSubscription = currentCreatedSubscriptionReceipt() != nil
+      if ownsCreatedSubscription {
         do {
           guard apiService.isSessionUnchanged(from: snapshot) else { return true }
           let result = try await apiService.updateSubscriptionStatus(
@@ -255,7 +337,7 @@ class SubscribeSheetViewModel: ObservableObject {
         }
       }
 
-      guard !isNewSubscription || SystemViewModel.shouldAutoSearchNewSubscriptions else {
+      guard !ownsCreatedSubscription || SystemViewModel.shouldAutoSearchNewSubscriptions else {
         return true
       }
 
@@ -291,24 +373,33 @@ class SubscribeSheetViewModel: ObservableObject {
       return
     }
     guard !isSaved else { return }
-    // 如果我们创建了一个新订阅但用户取消了，我们必须回滚（删除）它
-    if isNewSubscription, let id = subscribe.id,
-      let ownerProfileKey = createdSubscriptionOwnerProfileKey,
-      apiService.profileKey == ownerProfileKey,
+    shouldRollbackCreatedSubscription = true
+    await rollbackCreatedSubscriptionIfNeeded()
+  }
+
+  private func rollbackCreatedSubscriptionIfNeeded() async {
+    guard !isRollingBackCreatedSubscription,
+      !isSaved,
+      let receipt = currentCreatedSubscriptionReceipt(),
       apiService.canAccess(.subscribe)
-    {
-      do {
-        let snapshot = apiService.sessionSnapshot()
-        if try await apiService.deleteSubscription(id: id),
-          apiService.isSessionUnchanged(from: snapshot)
-        {
-          NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
-        }
-      } catch is CancellationError {
+    else {
+      return
+    }
+    isRollingBackCreatedSubscription = true
+    defer { isRollingBackCreatedSubscription = false }
+
+    do {
+      guard try await apiService.deleteSubscription(id: receipt.id),
+        currentCreatedSubscriptionReceipt()?.id == receipt.id
+      else {
         return
-      } catch {
-        Logger.error("Failed to roll back subscription \(id): \(error)")
       }
+      createdSubscriptionReceipt = nil
+      NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
+    } catch is CancellationError {
+      return
+    } catch {
+      Logger.error("Failed to roll back subscription \(receipt.id): \(error)")
     }
   }
 
