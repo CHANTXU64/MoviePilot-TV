@@ -35,6 +35,7 @@ class TransferHistoryViewModel: ObservableObject {
   private var fetcher: (Int) async throws -> TransferHistoryResponse
   private var queryGeneration = 0
   private var cancellables = Set<AnyCancellable>()
+  private var batchDeleteTask: Task<Void, Never>?
   private let apiService: APIService
   // 后端固定每页条数，供轮询游标推进/回退统一计算。
   private let pageSize = 20
@@ -107,6 +108,7 @@ class TransferHistoryViewModel: ObservableObject {
   }
 
   func search(with text: String) {
+    guard !isMutatingHistory else { return }
     queryGeneration += 1
     guard apiService.canAccess(.manage) else {
       searchText = text
@@ -139,6 +141,7 @@ class TransferHistoryViewModel: ObservableObject {
   }
 
   func refresh() async {
+    guard !isMutatingHistory else { return }
     errorMessage = nil
     isLoadingMore = false
     guard apiService.canAccess(.manage) else {
@@ -184,6 +187,7 @@ class TransferHistoryViewModel: ObservableObject {
   }
 
   func loadMore(currentItemId: TransferHistory.ID) async {
+    guard !isMutatingHistory else { return }
     errorMessage = nil
     guard apiService.canAccess(.manage) else { return }
     guard !isLoadingMore else { return }
@@ -227,6 +231,7 @@ class TransferHistoryViewModel: ObservableObject {
   }
 
   func toggleSelection(id: Int) {
+    guard !isMutatingHistory else { return }
     if selectedIds.contains(id) {
       selectedIds.remove(id)
     } else {
@@ -235,46 +240,74 @@ class TransferHistoryViewModel: ObservableObject {
   }
 
   func selectAll() {
+    guard !isMutatingHistory else { return }
     selectedIds = Set(items.map { $0.id })
   }
 
   func deselectAll() {
+    guard !isMutatingHistory else { return }
     selectedIds.removeAll()
   }
 
-  func deleteSelected(deleteSource: Bool, deleteDest: Bool) async {
+  /// 在展示确认时冻结完整记录，确保确认数量和最终删除始终消费同一批次。
+  func selectedItemsSnapshot() -> [TransferHistory] {
+    items.filter { selectedIds.contains($0.id) }
+  }
+
+  func deleteSelected(
+    items itemsToDelete: [TransferHistory],
+    deleteSource: Bool,
+    deleteDest: Bool
+  ) {
     errorMessage = nil
-    guard apiService.canAccess(.manage), !isMutatingHistory else { return }
+    guard apiService.canAccess(.manage), !isMutatingHistory,
+      batchDeleteTask == nil, !itemsToDelete.isEmpty
+    else { return }
+
     isDeleting = true
-    defer { isDeleting = false }
-    let idsToDelete = Array(selectedIds)
+    // 批删任务由 ViewModel 持有；页面退出后仍按确认快照完成，不回读实时列表。
+    batchDeleteTask = Task { [self] in
+      await performDeleteSelected(
+        items: itemsToDelete,
+        deleteSource: deleteSource,
+        deleteDest: deleteDest
+      )
+    }
+  }
+
+  private func performDeleteSelected(
+    items itemsToDelete: [TransferHistory],
+    deleteSource: Bool,
+    deleteDest: Bool
+  ) async {
+    defer {
+      isDeleting = false
+      batchDeleteTask = nil
+    }
     var deletedCount = 0
     var failures: [String] = []
     let snapshot = apiService.sessionSnapshot()
 
-    for id in idsToDelete {
-      if let item = items.first(where: { $0.id == id }) {
-        do {
-          guard apiService.isSessionUnchanged(from: snapshot) else { return }
-          let result = try await apiService.deleteTransferHistory(
-            item: item,
-            deleteSource: deleteSource,
-            deleteDest: deleteDest)
-          guard apiService.isSessionUnchanged(from: snapshot) else { return }
+    for item in itemsToDelete {
+      let id = item.id
+      do {
+        guard apiService.isSessionUnchanged(from: snapshot) else { return }
+        let result = try await apiService.deleteTransferHistory(
+          item: item,
+          deleteSource: deleteSource,
+          deleteDest: deleteDest)
+        guard apiService.isSessionUnchanged(from: snapshot) else { return }
 
-          if result.success {
-            markDeleted(id: id)
-            deletedCount += 1
-          } else {
-            failures.append(result.message ?? "id: \(id)")
-          }
-        } catch is CancellationError {
-          return
-        } catch {
-          failures.append("id: \(id)，\(error.localizedDescription)")
+        if result.success {
+          markDeleted(id: id)
+          deletedCount += 1
+        } else {
+          failures.append(result.message ?? "id: \(id)")
         }
-      } else {
-        selectedIds.remove(id)
+      } catch is CancellationError {
+        return
+      } catch {
+        failures.append("id: \(id)，\(error.localizedDescription)")
       }
     }
 
@@ -292,7 +325,7 @@ class TransferHistoryViewModel: ObservableObject {
   // MARK: - Polling Helpers
 
   func fetchLatest() async {
-    guard apiService.canAccess(.manage) else { return }
+    guard apiService.canAccess(.manage), !isMutatingHistory else { return }
     let sessionSnapshot = apiService.sessionSnapshot()
     let pollGeneration = queryGeneration
     let pollFetcher = fetcher

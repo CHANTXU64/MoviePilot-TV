@@ -277,6 +277,105 @@ final class TransferHistoryViewModelTests: XCTestCase {
     XCTAssertFalse(viewModel.isDeleting)
   }
 
+  func testBatchDeleteKeepsConfirmedItemsAfterViewModelOwnerIsReleased() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let serviceSnapshot = TransferHistoryServiceSnapshot.capture(service: service)
+    defer { serviceSnapshot.restore(to: service) }
+
+    await TransferHistoryURLProtocol.stub.reset()
+    let deleteGate = TransferHistoryAsyncGate()
+    await TransferHistoryURLProtocol.stub.setDeleteResponse(
+      Data(#"{"success":true}"#.utf8),
+      gate: deleteGate
+    )
+    defer {
+      Task { await deleteGate.open() }
+    }
+    service.baseURLForTesting = "http://transfer-history-tests.local"
+    configureManageUser(service)
+
+    let confirmedItems = try JSONDecoder().decode(
+      [TransferHistory].self,
+      from: Data(
+        #"[{"id":10,"title":"A","type":"电影","status":true},{"id":11,"title":"B","type":"电影","status":true}]"#
+          .utf8
+      )
+    )
+    let replacementItem = try JSONDecoder().decode(
+      TransferHistory.self,
+      from: Data(#"{"id":20,"title":"新列表","type":"电影","status":true}"#.utf8)
+    )
+    weak var retainedViewModel: TransferHistoryViewModel?
+    do {
+      let viewModel = TransferHistoryViewModel(apiService: service)
+      retainedViewModel = viewModel
+      viewModel.items = confirmedItems
+      viewModel.selectedIds = [10, 11]
+
+      let snapshot = viewModel.selectedItemsSnapshot()
+      XCTAssertEqual(snapshot.map(\.id), [10, 11])
+
+      viewModel.deleteSelected(
+        items: snapshot,
+        deleteSource: false,
+        deleteDest: false
+      )
+      XCTAssertTrue(viewModel.isDeleting)
+
+      try await withTransferHistoryTimeout("first confirmed delete request to start") {
+        await TransferHistoryURLProtocol.stub.waitForDeleteRequestCount(1)
+      }
+
+      // 模拟列表迟到替换，并确认批删期间所有相邻入口均不能改变批次或启动新请求。
+      viewModel.items = [replacementItem]
+      viewModel.selectedIds.removeAll()
+      viewModel.search(with: "新查询")
+      await viewModel.refresh()
+      await viewModel.loadMore(currentItemId: replacementItem.id)
+      await viewModel.fetchLatest()
+      viewModel.toggleSelection(id: replacementItem.id)
+      XCTAssertTrue(viewModel.selectedIds.isEmpty)
+      viewModel.selectAll()
+      XCTAssertTrue(viewModel.selectedIds.isEmpty)
+      viewModel.deselectAll()
+      XCTAssertTrue(viewModel.selectedIds.isEmpty)
+      viewModel.deleteSelected(
+        items: snapshot,
+        deleteSource: false,
+        deleteDest: false
+      )
+      await viewModel.deleteHistory(
+        item: replacementItem,
+        deleteSource: false,
+        deleteDest: false
+      )
+      await viewModel.triggerAiRedo(for: replacementItem.id)
+
+      XCTAssertEqual(viewModel.searchText, "")
+      let blockedPaths = await TransferHistoryURLProtocol.stub.requestPaths()
+      XCTAssertEqual(blockedPaths, ["/api/v1/history/transfer"])
+    }
+
+    // 对应父 View 因 Back/Menu 销毁：外部 owner 已释放，只有运行中的批删 Task 保活 ViewModel。
+    XCTAssertNotNil(retainedViewModel)
+
+    await deleteGate.open()
+    try await withTransferHistoryTimeout("confirmed batch delete to finish") {
+      await TransferHistoryURLProtocol.stub.waitForDeleteRequestCount(2)
+    }
+
+    for _ in 0..<2_000 {
+      guard retainedViewModel != nil else { break }
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    let finishedDeleteRequestCount = await TransferHistoryURLProtocol.stub.deleteRequestCount()
+    XCTAssertEqual(finishedDeleteRequestCount, 2)
+    XCTAssertNil(retainedViewModel)
+  }
+
   func testAIRedoUsesWebSingleAndBatchRoutesAndShowsFailures() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
@@ -582,6 +681,9 @@ private struct TransferHistoryHTTPStubResponse: Sendable {
 private actor TransferHistoryURLProtocolStub {
   private var paths: [String] = []
   private var historyGate: TransferHistoryAsyncGate?
+  private var deleteGate: TransferHistoryAsyncGate?
+  private var deleteResponseData: Data?
+  private var recordedDeleteRequestCount = 0
   private var progressGate: TransferHistoryAsyncGate?
   private var progressResponseData = Data(
     #"data: {"enable":false,"data":{"success":false,"error_i18n":"AI 整理业务失败"}}"#
@@ -591,6 +693,9 @@ private actor TransferHistoryURLProtocolStub {
   func reset() {
     paths.removeAll()
     historyGate = nil
+    deleteGate = nil
+    deleteResponseData = nil
+    recordedDeleteRequestCount = 0
     progressGate = nil
     progressResponseData = Data(
       #"data: {"enable":false,"data":{"success":false,"error_i18n":"AI 整理业务失败"}}"#
@@ -600,6 +705,11 @@ private actor TransferHistoryURLProtocolStub {
 
   func setHistoryGate(_ gate: TransferHistoryAsyncGate?) {
     historyGate = gate
+  }
+
+  func setDeleteResponse(_ data: Data, gate: TransferHistoryAsyncGate?) {
+    deleteResponseData = data
+    deleteGate = gate
   }
 
   func setProgressGate(_ gate: TransferHistoryAsyncGate?) {
@@ -616,6 +726,19 @@ private actor TransferHistoryURLProtocolStub {
     }
 
     paths.append(url.path)
+
+    if request.httpMethod == "DELETE", let deleteResponseData {
+      recordedDeleteRequestCount += 1
+      let response = TransferHistoryHTTPStubResponse(
+        statusCode: 200,
+        data: deleteResponseData,
+        gate: deleteGate
+      )
+      if let gate = response.gate {
+        await gate.wait()
+      }
+      return response
+    }
 
     switch url.path {
     case "/api/v1/system/setting/public/Storages":
@@ -685,6 +808,17 @@ private actor TransferHistoryURLProtocolStub {
       if Task.isCancelled { return }
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
+  }
+
+  func waitForDeleteRequestCount(_ count: Int) async {
+    while recordedDeleteRequestCount < count {
+      if Task.isCancelled { return }
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+  }
+
+  func deleteRequestCount() -> Int {
+    recordedDeleteRequestCount
   }
 
   func requestPaths() -> [String] {

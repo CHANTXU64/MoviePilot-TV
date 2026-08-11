@@ -9,6 +9,7 @@ struct TransferHistoryView: View {
   @State private var isRefreshingAfterReorganize = false
   @State private var itemForInfoSheet: TransferHistory? = nil
   @State private var showBatchDeleteAlert = false
+  @State private var batchDeleteItems: [TransferHistory] = []
   @State private var showBatchRedoSheet = false
   @State private var localSearchText: String = ""
   @FocusState private var focusedHistoryId: Int?
@@ -211,22 +212,34 @@ struct TransferHistoryView: View {
       "批量删除确认", isPresented: $showBatchDeleteAlert,
       actions: {
         Button("仅删除记录", role: .destructive) {
-          Task { await viewModel.deleteSelected(deleteSource: false, deleteDest: false) }
+          startBatchDelete(deleteSource: false, deleteDest: false)
         }
         Button("删除记录和源文件", role: .destructive) {
-          Task { await viewModel.deleteSelected(deleteSource: true, deleteDest: false) }
+          startBatchDelete(deleteSource: true, deleteDest: false)
         }
         Button("删除记录和目标文件", role: .destructive) {
-          Task { await viewModel.deleteSelected(deleteSource: false, deleteDest: true) }
+          startBatchDelete(deleteSource: false, deleteDest: true)
         }
         Button("全部删除", role: .destructive) {
-          Task { await viewModel.deleteSelected(deleteSource: true, deleteDest: true) }
+          startBatchDelete(deleteSource: true, deleteDest: true)
         }
-        Button("取消", role: .cancel) {}
+        Button("取消", role: .cancel) {
+          batchDeleteItems.removeAll()
+        }
       },
       message: {
-        Text("确定要删除选中的 \(viewModel.selectedIds.count) 条记录吗？此操作不可撤销。")
+        Text("确定要删除选中的 \(batchDeleteItems.count) 条记录吗？此操作不可撤销。")
       })
+  }
+
+  private func startBatchDelete(deleteSource: Bool, deleteDest: Bool) {
+    let items = batchDeleteItems
+    batchDeleteItems.removeAll()
+    viewModel.deleteSelected(
+      items: items,
+      deleteSource: deleteSource,
+      deleteDest: deleteDest
+    )
   }
 
   private func restoreHistoryFocus() {
@@ -299,7 +312,9 @@ struct TransferHistoryView: View {
           if viewModel.selectedIds.isEmpty {
             itemToDelete = item
           } else {
-            showBatchDeleteAlert = true
+            // 弹窗文案与删除动作共享同一份完整记录快照，不再依赖后续实时列表。
+            batchDeleteItems = viewModel.selectedItemsSnapshot()
+            showBatchDeleteAlert = !batchDeleteItems.isEmpty
           }
         }
       )
