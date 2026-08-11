@@ -138,6 +138,50 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     )
   }
 
+  func testAllRootMediaDestinationsRouteCollectionsDefensively() throws {
+    for relativePath in [
+      "MoviePilot-TV/Views/Pages/HomeView.swift",
+      "MoviePilot-TV/Views/Pages/ExploreView.swift",
+      "MoviePilot-TV/Views/Pages/RecommendView.swift",
+      "MoviePilot-TV/Views/Pages/SearchView.swift",
+    ] {
+      let viewSource = try source(relativePath)
+      let collectionDestination = try XCTUnwrap(
+        viewSource.range(of: "CollectionDetailView(")
+      )
+      let mediaDestination = try XCTUnwrap(
+        viewSource.range(of: "MediaDetailContainerView(")
+      )
+
+      XCTAssertTrue(viewSource.contains("if let collectionId ="), relativePath)
+      XCTAssertLessThan(collectionDestination.lowerBound, mediaDestination.lowerBound, relativePath)
+    }
+  }
+
+  func testSharedMediaEntryPointsUseCollectionSafePreloadGate() throws {
+    for relativePath in [
+      "MoviePilot-TV/Views/Components/MediaGridView.swift",
+      "MoviePilot-TV/Views/Components/MediaContextMenu.swift",
+      "MoviePilot-TV/Views/Pages/SearchView.swift",
+      "MoviePilot-TV/Views/Pages/MediaDetailView.swift",
+    ] {
+      let viewSource = try source(relativePath)
+      XCTAssertTrue(
+        viewSource.contains("preloadIfNeeded(for:"),
+        relativePath
+      )
+      XCTAssertFalse(
+        viewSource.contains("MediaPreloader.shared.preload(for:"),
+        relativePath
+      )
+    }
+
+    XCTAssertTrue(
+      try source("MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift")
+        .contains("preloadIfNeeded(for:")
+    )
+  }
+
   private func descriptor(name: String, prefix: String, path: String)
     -> DiscoverSourceDescriptor
   {

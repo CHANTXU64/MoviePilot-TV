@@ -29,7 +29,7 @@ struct MediaContextMenuItems: View {
 
     Button {
       // 点击"详情"时立即触发预加载
-      MediaPreloader.shared.preload(for: item)
+      MediaPreloader.shared.preloadIfNeeded(for: item)
       navigationPath.append(item)
     } label: {
       Label("详情", systemImage: "info.circle")

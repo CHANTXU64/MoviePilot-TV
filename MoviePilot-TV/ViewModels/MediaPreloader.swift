@@ -379,6 +379,14 @@ class MediaPreloader: ObservableObject {
     return task
   }
 
+  /// 仅为需要普通媒体详情的对象创建预加载任务。
+  /// 合集由 CollectionDetailView 自己分页加载，不应进入普通详情预加载缓存。
+  @discardableResult
+  func preloadIfNeeded(for media: MediaInfo) -> MediaPreloadTask? {
+    guard media.shouldPreloadDetail else { return nil }
+    return preload(for: media)
+  }
+
   /// 仅获取已有的预加载任务（不创建新的），并更新 LRU 顺序。
   /// ⚠️ 不要在 SwiftUI body 中使用此方法（会修改状态），请用 peekTask。
   func getTask(for media: MediaInfo) -> MediaPreloadTask? {

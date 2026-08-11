@@ -996,7 +996,7 @@ struct MediaDetailView: View {
                 item: media,
                 showBadges: badges,
                 onTap: {
-                  MediaPreloader.shared.preload(for: media)
+                  MediaPreloader.shared.preloadIfNeeded(for: media)
                   navigationPath.append(media)
                 }
               )
@@ -1023,7 +1023,7 @@ struct MediaDetailView: View {
               recommendPreloadDebounce = Task {
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
-                MediaPreloader.shared.preload(for: item)
+                MediaPreloader.shared.preloadIfNeeded(for: item)
               }
             }
             // 分页加载
@@ -1059,7 +1059,7 @@ struct MediaDetailView: View {
                 item: media,
                 showBadges: badges,
                 onTap: {
-                  MediaPreloader.shared.preload(for: media)
+                  MediaPreloader.shared.preloadIfNeeded(for: media)
                   navigationPath.append(media)
                 }
               )
@@ -1086,7 +1086,7 @@ struct MediaDetailView: View {
               similarPreloadDebounce = Task {
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
-                MediaPreloader.shared.preload(for: item)
+                MediaPreloader.shared.preloadIfNeeded(for: item)
               }
             }
             // 分页加载

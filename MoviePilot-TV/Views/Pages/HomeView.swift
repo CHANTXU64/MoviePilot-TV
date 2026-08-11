@@ -89,7 +89,15 @@ struct HomeView: View {
       }
       // 导航目的地
       .navigationDestination(for: MediaInfo.self) { mediaInfo in
-        MediaDetailContainerView(media: mediaInfo, navigationPath: $path)
+        if let collectionId = mediaInfo.collection_id {
+          CollectionDetailView(
+            title: mediaInfo.title ?? "合集详情",
+            collectionId: collectionId,
+            navigationPath: $path
+          )
+        } else {
+          MediaDetailContainerView(media: mediaInfo, navigationPath: $path)
+        }
       }
       .navigationDestination(for: Person.self) { person in
         PersonDetailView(

@@ -334,7 +334,7 @@ private struct MediaDetailContainerContent: View {
     }
     .task(id: tmdbPreloadTarget?.id) {
       guard let target = tmdbPreloadTarget else { return }
-      MediaPreloader.shared.preload(for: target)
+      MediaPreloader.shared.preloadIfNeeded(for: target)
     }
   }
 }

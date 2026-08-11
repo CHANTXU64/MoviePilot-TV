@@ -27,6 +27,26 @@ final class MediaInfoCollectionBehaviorTests: XCTestCase {
     XCTAssertFalse(media.shouldPreloadDetail)
   }
 
+  func testPreloadIfNeededSkipsCollectionsAcrossMediaSources() {
+    let service = APIService.isolatedTestingInstance()
+    let preloader = MediaPreloader(apiService: service)
+
+    for source in ["themoviedb", "douban", "bangumi", "anilist", "plugin"] {
+      let media = MediaInfo(
+        source: source,
+        media_id: "collection-\(source)",
+        title: "合集 \(source)",
+        type: "合集",
+        collection_id: 42
+      )
+
+      XCTAssertNil(preloader.preloadIfNeeded(for: media), source)
+      XCTAssertNil(preloader.peekTask(for: media), source)
+    }
+
+    preloader.clearAll()
+  }
+
   func testMediaInfoApiMediaIdFallsBackWhenPrimaryIdentifiersAreInvalid() {
     let media = MediaInfo(
       tmdb_id: 0,

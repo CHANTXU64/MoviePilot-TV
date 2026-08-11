@@ -40,7 +40,15 @@ struct ExploreView: View {
         }
       }
       .navigationDestination(for: MediaInfo.self) { media in
-        MediaDetailContainerView(media: media, navigationPath: $path)
+        if let collectionId = media.collection_id {
+          CollectionDetailView(
+            title: media.title ?? "合集详情",
+            collectionId: collectionId,
+            navigationPath: $path
+          )
+        } else {
+          MediaDetailContainerView(media: media, navigationPath: $path)
+        }
       }
       .navigationDestination(for: Person.self) { person in
         PersonDetailView(person: person, navigationPath: $path)

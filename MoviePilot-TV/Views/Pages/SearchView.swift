@@ -472,7 +472,7 @@ private struct ResultRow: View {
                   onShareTapped(share)
                 } else {
                   preloadDebounceTask?.cancel()
-                  MediaPreloader.shared.preload(for: item)
+                  MediaPreloader.shared.preloadIfNeeded(for: item)
                   navigationPath.append(item)
                 }
               }
@@ -500,7 +500,7 @@ private struct ResultRow: View {
               preloadDebounceTask = Task {
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
-                MediaPreloader.shared.preload(for: item)
+                MediaPreloader.shared.preloadIfNeeded(for: item)
               }
             }
             // 分页加载
@@ -649,7 +649,7 @@ private struct BestResultRow: View {
                     onShareTapped(share)
                   } else {
                     preloadDebounceTask?.cancel()
-                    MediaPreloader.shared.preload(for: media)
+                    MediaPreloader.shared.preloadIfNeeded(for: media)
                     navigationPath.append(media)
                   }
                 }
@@ -701,7 +701,7 @@ private struct BestResultRow: View {
             preloadDebounceTask = Task {
               try? await Task.sleep(for: .milliseconds(300))
               guard !Task.isCancelled else { return }
-              MediaPreloader.shared.preload(for: media)
+              MediaPreloader.shared.preloadIfNeeded(for: media)
             }
           }
           scrollPosition = "best"

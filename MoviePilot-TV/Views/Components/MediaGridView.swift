@@ -12,7 +12,7 @@ private final class PreloadDebouncer {
       try? await Task.sleep(for: .milliseconds(delayMs))
       guard !Task.isCancelled else { return }
 
-      MediaPreloader.shared.preload(for: item)
+      MediaPreloader.shared.preloadIfNeeded(for: item)
       // 执行完后清理
       tasks.removeValue(forKey: id)
     }
@@ -219,7 +219,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
       onShareTapped?(share)
     } else {
       preloadDebouncer.cancel(id: item.id)
-      MediaPreloader.shared.preload(for: item)
+      MediaPreloader.shared.preloadIfNeeded(for: item)
       navigationPath.append(item)
     }
   }
