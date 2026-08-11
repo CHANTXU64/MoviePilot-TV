@@ -140,7 +140,7 @@ struct ReorganizeSheet: View {
         title: "目的目录",
         selection: Binding(
           get: { viewModel.form.target_path },
-          set: { viewModel.form.target_path = $0 }
+          set: { viewModel.selectTargetPath($0) }
         ),
         options: viewModel.targetDirectoryOptions
       )

@@ -72,16 +72,6 @@ class ReorganizeViewModel: ObservableObject {
       media_source: defaultMediaSource.rawValue
     )
 
-    // 监听 target_path 的变化
-    $form
-      .map(\.target_path)
-      .removeDuplicates()
-      .debounce(for: .milliseconds(100), scheduler: DispatchQueue.main)
-      .sink { [weak self] newPath in
-        self?.updateForm(for: newPath)
-      }
-      .store(in: &cancellables)
-
     $form
       .dropFirst()
       .sink { [weak self] _ in
@@ -296,6 +286,12 @@ class ReorganizeViewModel: ObservableObject {
       errorMessage = "预览完成，其中 \(failures) 项无法整理。"
     }
     return failures == 0
+  }
+
+  func selectTargetPath(_ path: String) {
+    guard form.target_path != path else { return }
+    form.target_path = path
+    updateForm(for: path)
   }
 
   func selectMediaSource(_ source: MediaSearchSource) {
