@@ -172,7 +172,6 @@
 | 上游可用性 | 启动时规定的同级目录不存在；后续确认 Web `/Users/chantxu/code/MoviePilot-Frontend` HEAD `19710a5f0fe0d795a92de904bacd3193bd8c8432`（tag `v2.13.6`）与后端 `/Users/chantxu/code/MoviePilot` HEAD `a0ee99aacc485259431ce5be10933559f4ceac42`（tag `v2.14.4`）为 clean Git 仓库并用于逐项静态核对；实际部署/运行仍未验证 |
 | 详细台账 | `.agents/audits/full-review-20260731-042646/ledger.md` |
 | 发现台账 | `.agents/audits/full-review-20260731-042646/findings.md` |
-| 清单建议 | `.agents/audits/full-review-20260731-042646/checklist-proposals.md` |
 | 最终报告 | `.agents/audits/full-review-20260731-042646/final-report.md` |
 
 两名启动代理独立枚举的 78 条生产路径逐项一致。本轮拆为 140 个正文审查单元；每个单元必须有主审及不同代理独立复核，另有 16 个拆分文件级集成复核。
@@ -583,8 +582,6 @@
 | CHK-018 | 已确认 | 资源搜索站点使用active searchable权威域并区分后端默认/全部/显式子集；第三裁确认共同长期验收F-209/F-210两条独立P2 |
 | CHK-019 | 已确认 | 媒体搜索source须由后端声明并真实执行，测试断言provider/返回来源语义而非只看query；第三裁确认与正式清单不重复 |
 | CHK-020 | 已确认 | manage-only资源的读取与mutation均须由后端校验active manage用户；客户端菜单/Tab/路由隐藏不是安全边界，低权限HTTP角色矩阵必须覆盖 |
-
-完整建议维护在 `.agents/audits/full-review-20260731-042646/checklist-proposals.md`。
 
 ### 最终回溯结论
 
