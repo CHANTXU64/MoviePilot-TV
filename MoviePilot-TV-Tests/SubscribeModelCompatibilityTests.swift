@@ -288,4 +288,21 @@ final class SubscribeModelCompatibilityTests: XCTestCase {
     XCTAssertTrue(json.keys.contains("note"))
     XCTAssertTrue(json["note"] is NSNull)
   }
+
+  func testExistingSubscribePreservesNullTotalEpisodeWhileNewSubscribeOmitsIt() throws {
+    let existing = Subscribe(id: 44, name: "自动集数", type: "电视剧", total_episode: nil)
+    let new = Subscribe(name: "新订阅", type: "电视剧", total_episode: nil)
+    let zero = Subscribe(id: 45, name: "零集", type: "电视剧", total_episode: 0)
+
+    let existingJSON = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: JSONEncoder().encode(existing)) as? [String: Any])
+    let newJSON = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: JSONEncoder().encode(new)) as? [String: Any])
+    let zeroJSON = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: JSONEncoder().encode(zero)) as? [String: Any])
+
+    XCTAssertTrue(existingJSON["total_episode"] is NSNull)
+    XCTAssertFalse(newJSON.keys.contains("total_episode"))
+    XCTAssertEqual(zeroJSON["total_episode"] as? Int, 0)
+  }
 }

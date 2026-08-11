@@ -65,6 +65,12 @@ class SubscribeSheetViewModel: ObservableObject {
     Array(0...100)
   }
 
+  var totalEpisodeText: String {
+    get { subscribe.total_episode.map(String.init) ?? "" }
+    // 总集数只接受非负整数；空白、非法文本和负数都恢复为后端的自动值 nil。
+    set { subscribe.total_episode = Int(newValue).flatMap { $0 >= 0 ? $0 : nil } }
+  }
+
   var savePathOptions: [String] {
     var seen = Set<String>()
     return directories.compactMap(\.download_path).filter {

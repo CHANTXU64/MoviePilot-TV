@@ -1996,7 +1996,12 @@ struct Subscribe: Codable, Identifiable, Hashable {
     try container.encodeIfPresent(last_update, forKey: .last_update)
     try container.encodeIfPresent(username, forKey: .username)
     try container.encodeIfPresent(date, forKey: .date)
-    try container.encodeIfPresent(total_episode, forKey: .total_episode)
+    if let totalEpisode = total_episode {
+      try container.encode(totalEpisode, forKey: .total_episode)
+    } else if (id ?? 0) > 0 {
+      // 现有订阅的 nil 必须显式写为 null；省略会被后端默认成 0 并误置人工集数。
+      try container.encodeNil(forKey: .total_episode)
+    }
     try container.encodeIfPresent(start_episode, forKey: .start_episode)
     try container.encodeIfPresent(lack_episode, forKey: .lack_episode)
     try container.encodeIfPresent(note, forKey: .note)

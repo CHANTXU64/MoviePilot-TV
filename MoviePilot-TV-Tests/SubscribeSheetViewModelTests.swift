@@ -6,6 +6,29 @@ import XCTest
 final class SubscribeSheetViewModelTests: XCTestCase {
   private let autoSearchKey = "autoSearchNewSubscriptions"
 
+  func testTotalEpisodeTextKeepsZeroAndTreatsNegativeAsNil() {
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(id: 44, name: "自动集数", type: "电视剧")
+    )
+
+    XCTAssertEqual(viewModel.totalEpisodeText, "")
+
+    viewModel.totalEpisodeText = "-1"
+    XCTAssertNil(viewModel.subscribe.total_episode)
+
+    viewModel.totalEpisodeText = "abc"
+    XCTAssertNil(viewModel.subscribe.total_episode)
+
+    viewModel.totalEpisodeText = "0"
+    XCTAssertEqual(viewModel.subscribe.total_episode, 0)
+
+    viewModel.totalEpisodeText = "12"
+    XCTAssertEqual(viewModel.subscribe.total_episode, 12)
+
+    viewModel.totalEpisodeText = ""
+    XCTAssertNil(viewModel.subscribe.total_episode)
+  }
+
   func testAutoSearchNewSubscriptionsDefaultsToEnabled() {
     let originalValue = UserDefaults.standard.object(forKey: autoSearchKey)
     UserDefaults.standard.removeObject(forKey: autoSearchKey)

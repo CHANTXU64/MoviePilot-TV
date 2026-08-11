@@ -78,8 +78,8 @@ struct SubscribeSheet: View {
                     title: "电视剧总集数",
                     placeholder: "0",
                     text: Binding(
-                      get: { String(viewModel.subscribe.total_episode ?? 0) },
-                      set: { viewModel.subscribe.total_episode = Int($0) }
+                      get: { viewModel.totalEpisodeText },
+                      set: { viewModel.totalEpisodeText = $0 }
                     ),
                     keyboardType: .numberPad
                   )
