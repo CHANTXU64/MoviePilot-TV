@@ -198,14 +198,14 @@ MoviePilot Web v2.14.0 起，详情页订阅入口按媒体类型区分：
   - 创建、保存、删除、暂停、恢复、重置、搜索、复用订阅成功后是否清空订阅快照缓存和旧的 Bool 状态缓存。
   - `baseURL` 和 token 变化后是否清空订阅缓存。
   - `checkSubscription(media:season:)` 可以继续服务电影、详情页或卡片场景，但分季页不要重新退回逐季调用。
-  - `fetchSubscriptionLookup(media:season:)` 是否仍能从 lookup 响应解析出真实 `tmdbid` / `doubanid` / `bangumiid` 归属。
+  - `fetchSubscriptionLookup(media:season:)` 是否仍能从 lookup 响应按 Web 顺序解析完整 `media_source + media_id`、`tmdbid`、`doubanid`、`bangumiid`、`anilistid` 与遗留 `mediaid`；取消订阅继续使用这次最终确认的响应身份，成功后优先回写用户点击项的预加载状态。
 - `MoviePilot-TV/Models/Models.swift`
   - `MediaInfo.apiMediaId` 和 `Subscribe.apiMediaId` 是否仍通过 `MediaIdentifier` 保持各自的字段优先级。
   - `anilist_id`、`anilistid`、`media_source`、`media_id` 和遗留 `mediaid` 是否仍完整编解码。
   - `MediaInfo.canDirectlySubscribe` 是否仍排除合集并只把明确的电视剧送入分季订阅；电影、未知及无 `collection_id` 的其他允许类型走直接订阅，不能再用“非电影即电视剧”二分。
   - `SubscribeRequest` 是否仍能省略 `best_version` / `best_version_full`，并保留 `mediaid` fallback。
   - `tmdbid: 0`、`bangumiid: 0` 和空白 `doubanid` 是否仍会 fallback 到有效 `mediaid`。
-  - raw 数值 `0` 是否仍会跳过；遗留 `mediaid` 是否仍按 Web 行为作为不透明 fallback。
+  - raw 数值 `0` 是否仍会按 Web 的 JavaScript truthy 语义跳过；raw 负数仍是 truthy，不得擅自当作 `nil`；遗留 `mediaid` 是否仍作为不透明 fallback。
   - `Subscribe` 是否仍解码后端维护的 `note`、`episode_priority`、`vote`、`username`、`current_priority`、`date` 等字段，并保留可编辑的 `filter`；编辑保存继续使用与 Web 等价的完整模型，但不得回传派生字段 `completed_episode`。后端新增公共可写字段时，必须同步更新模型或采用经端点合同确认的原值保留方案，不能让无关编辑清掉新字段。
   - 首页从订阅卡片进入详情页时，是否仍保留订阅记录里的 fallback `mediaid`，避免把 `tmdbid: 0 + mediaid` 重建成不可匹配的详情媒体。
 - `MoviePilot-TV/ViewModels/HomeViewModel.swift`
@@ -221,7 +221,7 @@ MoviePilot Web v2.14.0 起，详情页订阅入口按媒体类型区分：
   - `.subscriptionDidUpdate` 是否只刷新被详情页 pin 住的活跃任务，避免海报墙缓存全量强刷。
 - `MoviePilot-TV/ViewModels/SubscribeSeasonViewModel.swift`
   - 分季订阅状态是否仍按 `media + season` 从 `/subscribe/` 快照映射。
-  - 分季订阅快照匹配是否使用统一 ID 归一化规则，避免 `tmdbid: 0` 或 `bangumiid: 0` 遮蔽有效 `mediaid`。
+  - 分季订阅快照匹配是否严格保持 Web v2.15.1 的顺序：完整 `media_source + media_id` → 遗留 `mediaid` → raw `tmdbid` / `doubanid` / `bangumiid` / `anilistid`；较高优先级字段存在时必须立即返回比较结果，不能在不相等后继续用辅助 ID 误匹配。
   - `selectedGroupId` 是否只影响新建订阅的 `episode_group`。
   - 未明确选择洗版模式时是否省略 `best_version` / `best_version_full`；已完整入库季是否显式设置 `best_version: 1` 和 `best_version_full: 1`。
   - 已订阅状态显示是否来自订阅记录上的 `episode_group`。
@@ -284,6 +284,9 @@ xcodebuild test \
 - 订阅快照里 `tmdbid: 0 + mediaid: "tmdb:<有效 ID>"` 时，分季页仍显示已订阅；取消时保持 Web 请求形式，已知后端可能返回成功却不删除记录，TV 暂不兜底。
 - 订阅快照里 `bangumiid: 0 + mediaid: "tmdb:<有效 ID>"` 时，分季页仍能通过 fallback 匹配。
 - 订阅快照里空白 `doubanid + mediaid: "tmdb:<有效 ID>"` 时，分季页仍能通过 fallback 匹配。
+- 分季快照里 canonical 或遗留 `mediaid` 已存在但不匹配时，即使辅助 raw ID 相同也不能误标已订阅；raw Douban、Bangumi、AniList 的正向回退均需覆盖。
+- raw 数值 `0` 必须继续回退，raw 负数则按 Web truthy 语义参与匹配；不要用“非正数统一视为缺失”的 TV 特例替代官方规则。
+- lookup 响应同时含辅助 TMDB 与 custom/AniList canonical 身份时，取消请求必须使用响应中的 canonical 身份；成功后当前点击卡片的缓存状态也必须变为未订阅。
 - 媒体详情 payload 里 `tmdb_id: 0` / 空白 `douban_id` / `bangumi_id: 0` 时，仍能 fallback 到 `mediaid_prefix + media_id`。
 - 电视剧详情页和预加载不再因为原始 `tmdb_id == nil` 隐藏或跳过分季订阅入口；剧集组加载只在主媒体身份为 TMDB 且有有效 TMDB ID 时执行。
 - 订阅快速新增继续发送精简配置 payload；编辑保存与 Web 一样回传完整订阅模型，保留 `note`、`episode_priority`、`vote`、`filter`、`username`、`current_priority`、`date`，但不回传 `completed_episode`；v2.14.6 后端保存前必须丢弃运行态字段。

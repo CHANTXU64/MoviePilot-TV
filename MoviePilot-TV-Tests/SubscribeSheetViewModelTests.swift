@@ -146,6 +146,60 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(doubanDeleteCount, 0)
   }
 
+  func testSubscriptionHandlerDeletesCanonicalLookupIdentityInsteadOfAuxiliaryTMDB()
+    async throws
+  {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    let preloader = MediaPreloader(apiService: service)
+    defer { preloader.clearAll() }
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/media/tmdb:998907",
+      json: #"{"tmdb_id":998907,"title":"统一身份取消订阅","type":"电影"}"#
+    )
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/subscribe/media/tmdb:998907",
+      json: #"{"id":998907,"name":"统一身份取消订阅","type":"电影","tmdbid":998907,"media_source":"thetvdb","media_id":"778902"}"#
+    )
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let media = MediaInfo(tmdb_id: 998_907, title: "统一身份取消订阅", type: "电影")
+    let preloadTask = preloader.preload(for: media)
+    try await waitUntil("preloaded canonical subscription state is ready") {
+      preloadTask.isSubscribed == true
+    }
+
+    let handler = SubscriptionHandler(apiService: service, mediaPreloader: preloader)
+    handler.handleSubscribe(media, expectedSubscribed: true)
+    try await waitUntil("canonical unsubscribe confirmation appears") {
+      handler.unsubscribeConfirmationMessage != nil
+    }
+    handler.confirmUnsubscribe()
+    try await waitUntil("canonical subscription updates the queried media cache") {
+      preloadTask.isSubscribed == false
+    }
+
+    let canonicalDeleteCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "DELETE",
+      path: "/api/v1/subscribe/media/thetvdb:778902"
+    )
+    let tmdbDeleteCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "DELETE",
+      path: "/api/v1/subscribe/media/tmdb:998907"
+    )
+    XCTAssertEqual(canonicalDeleteCount, 1)
+    XCTAssertEqual(tmdbDeleteCount, 0)
+  }
+
   func testSubscriptionHandlerKeepsCachedStateWhenDeleteFails() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }

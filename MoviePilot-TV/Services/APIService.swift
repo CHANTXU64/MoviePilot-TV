@@ -2854,13 +2854,23 @@ class APIService: ObservableObject {
       let tmdbid: Int?
       let doubanid: String?
       let bangumiid: Int?
+      let anilistid: Int?
+      let media_source: String?
+      let media_id: String?
       let mediaid: String?
 
       var apiMediaId: String? {
-        MediaIdentifier.apiMediaId(
-          tmdbId: tmdbid,
+        if let source = media_source, !source.isEmpty,
+          let id = media_id, !id.isEmpty
+        {
+          let prefix = source == "themoviedb" ? "tmdb" : source
+          return "\(prefix):\(id)"
+        }
+        return MediaIdentifier.apiMediaId(
+          tmdbId: MediaIdentifier.truthyNumericIdentifier(tmdbid),
           doubanId: doubanid,
-          bangumiId: bangumiid,
+          bangumiId: MediaIdentifier.truthyNumericIdentifier(bangumiid),
+          anilistId: MediaIdentifier.truthyNumericIdentifier(anilistid),
           fallbackMediaId: mediaid
         )
       }

@@ -363,6 +363,62 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
+  func testFetchSubscriptionLookupUsesWebSubscribeIdentityOrder() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    let cases: [(queryId: Int, payload: String, expectedMediaId: String)] = [
+      (
+        112_234,
+        #"{"id":7202,"tmdbid":445566,"anilistid":778899,"media_source":"anilist","media_id":"778899","mediaid":"tmdb:445566"}"#,
+        "anilist:778899"
+      ),
+      (
+        112_235,
+        #"{"id":7203,"tmdbid":445567,"anilistid":778900,"media_source":"anilist","media_id":""}"#,
+        "tmdb:445567"
+      ),
+      (
+        112_236,
+        #"{"id":7204,"anilistid":778901}"#,
+        "anilist:778901"
+      ),
+      (
+        112_237,
+        #"{"id":7205,"tmdbid":0,"mediaid":"tmdb:445568"}"#,
+        "tmdb:445568"
+      ),
+      (
+        112_238,
+        #"{"id":7206,"tmdbid":-1,"mediaid":"tmdb:445569"}"#,
+        "tmdb:-1"
+      ),
+    ]
+
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    for testCase in cases {
+      await DetailHeaderSubscriptionURLProtocol.stub.setCustomLookupPayload(
+        tmdbId: testCase.queryId,
+        json: testCase.payload
+      )
+    }
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
+
+    for testCase in cases {
+      let lookup = try await service.fetchSubscriptionLookup(
+        media: MediaInfo(tmdb_id: testCase.queryId, type: "电视剧")
+      )
+      XCTAssertEqual(lookup?.mediaId, testCase.expectedMediaId)
+      XCTAssertEqual(lookup?.isResolvedMediaId, true)
+    }
+  }
+
+  @MainActor
   func testCancelSubscriptionContinuesFallbackWhenBangumiLookupReturnsUnsupportedMediaId()
     async throws
   {

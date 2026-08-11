@@ -44,9 +44,39 @@ struct SeasonSubscriptionSummary: Equatable, Hashable {
   }
 
   private static func matches(_ subscription: Subscribe, media: MediaInfo) -> Bool {
-    subscription.type == "电视剧"
-      && subscription.identity != nil
-      && subscription.identity == media.identity
+    guard subscription.type == "电视剧" else { return false }
+
+    let mediaId = media.apiMediaId
+    if let source = subscription.media_source, !source.isEmpty,
+      let subscriptionMediaId = subscription.media_id, !subscriptionMediaId.isEmpty
+    {
+      let prefix = source == "themoviedb" ? "tmdb" : source
+      return mediaId == "\(prefix):\(subscriptionMediaId)"
+    }
+    if let legacyMediaId = subscription.mediaid, !legacyMediaId.isEmpty {
+      return mediaId == legacyMediaId
+    }
+    if let mediaTMDBId = media.tmdb_id, mediaTMDBId != 0,
+      let subscriptionTMDBId = subscription.tmdbid, subscriptionTMDBId != 0
+    {
+      return mediaTMDBId == subscriptionTMDBId
+    }
+    if let mediaDoubanId = media.douban_id, !mediaDoubanId.isEmpty,
+      let subscriptionDoubanId = subscription.doubanid, !subscriptionDoubanId.isEmpty
+    {
+      return mediaDoubanId == subscriptionDoubanId
+    }
+    if let mediaBangumiId = media.bangumi_id, mediaBangumiId != 0,
+      let subscriptionBangumiId = subscription.bangumiid, subscriptionBangumiId != 0
+    {
+      return mediaBangumiId == subscriptionBangumiId
+    }
+    if let mediaAniListId = media.anilist_id, mediaAniListId != 0,
+      let subscriptionAniListId = subscription.anilistid, subscriptionAniListId != 0
+    {
+      return mediaAniListId == subscriptionAniListId
+    }
+    return false
   }
 
   private static func normalizedEpisodeGroup(_ episodeGroup: String?) -> String? {

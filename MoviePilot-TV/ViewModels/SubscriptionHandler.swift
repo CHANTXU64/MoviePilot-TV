@@ -118,7 +118,8 @@ class SubscriptionHandler: ObservableObject {
         showUnsubscribeFailure(for: item, message: result.message)
         return
       }
-      mediaPreloader.findTask(byMediaId: mediaId)?.isSubscribed = false
+      (mediaPreloader.peekTask(for: item) ?? mediaPreloader.findTask(byMediaId: mediaId))?
+        .isSubscribed = false
       NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
     } catch is CancellationError {
       return

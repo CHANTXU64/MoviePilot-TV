@@ -994,6 +994,89 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertNil(summaries[4])
   }
 
+  func testSeasonSubscriptionSummaryUsesWebIdentityFallbackOrder() {
+    let media = MediaInfo(
+      tmdb_id: 12_345,
+      douban_id: "douban-target",
+      bangumi_id: 13_579,
+      anilist_id: 24_680,
+      mediaid_prefix: "douban",
+      media_id: "douban-target",
+      type: "电视剧"
+    )
+    let subscriptions = [
+      Subscribe(id: 15, name: "Raw TMDB", type: "电视剧", season: 1, tmdbid: 12_345),
+      Subscribe(
+        id: 16,
+        name: "Canonical mismatch",
+        type: "电视剧",
+        season: 2,
+        tmdbid: 12_345,
+        media_source: "douban",
+        media_id: "douban-other"
+      ),
+      Subscribe(
+        id: 17,
+        name: "Legacy mismatch",
+        type: "电视剧",
+        season: 3,
+        tmdbid: 12_345,
+        mediaid: "tmdb:54321"
+      ),
+      Subscribe(
+        id: 18,
+        name: "Earlier raw mismatch",
+        type: "电视剧",
+        season: 4,
+        tmdbid: 54_321,
+        doubanid: "douban-target"
+      ),
+      Subscribe(
+        id: 19,
+        name: "Raw AniList",
+        type: "电视剧",
+        season: 5,
+        anilistid: 24_680
+      ),
+      Subscribe(
+        id: 20,
+        name: "Canonical match",
+        type: "电视剧",
+        season: 6,
+        media_source: "douban",
+        media_id: "douban-target"
+      ),
+      Subscribe(
+        id: 21,
+        name: "Raw Douban",
+        type: "电视剧",
+        season: 7,
+        doubanid: "douban-target"
+      ),
+      Subscribe(
+        id: 22,
+        name: "Raw Bangumi",
+        type: "电视剧",
+        season: 8,
+        bangumiid: 13_579
+      ),
+    ]
+
+    let summaries = SeasonSubscriptionSummary.indexBySeason(
+      from: subscriptions,
+      matching: media
+    )
+
+    XCTAssertEqual(summaries[1]?.id, 15)
+    XCTAssertNil(summaries[2])
+    XCTAssertNil(summaries[3])
+    XCTAssertNil(summaries[4])
+    XCTAssertEqual(summaries[5]?.id, 19)
+    XCTAssertEqual(summaries[6]?.id, 20)
+    XCTAssertEqual(summaries[7]?.id, 21)
+    XCTAssertEqual(summaries[8]?.id, 22)
+  }
+
   func testSeasonSubscriptionSummaryDisplaysRealEpisodeGroup() throws {
     let groups = [try makeEpisodeGroup(id: "group-a", name: "司法岛篇")]
     let defaultSummary = SeasonSubscriptionSummary(id: 1, season: 1, episodeGroup: nil)
@@ -1155,6 +1238,17 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
 
     XCTAssertEqual(summaries.count, 1)
     XCTAssertEqual(summaries[4]?.id, 44)
+  }
+
+  func testSeasonSubscriptionSummaryKeepsNegativeRawIdentifiersLikeWeb() {
+    let summaries = SeasonSubscriptionSummary.indexBySeason(
+      from: [
+        Subscribe(id: 45, name: "Negative TMDB", type: "电视剧", season: 1, tmdbid: -1)
+      ],
+      matching: MediaInfo(tmdb_id: -1, type: "电视剧")
+    )
+
+    XCTAssertEqual(summaries[1]?.id, 45)
   }
 
   func testSeasonSubscriptionSummaryTreatsBlankEpisodeGroupAsDefault() {
