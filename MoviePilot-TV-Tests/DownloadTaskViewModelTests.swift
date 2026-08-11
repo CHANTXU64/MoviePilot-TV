@@ -166,6 +166,46 @@ final class DownloadTaskViewModelTests: XCTestCase {
     )
   }
 
+  func testDownloadVisibilityMatchesWebOwnerFilter() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    let payload = """
+      [
+        {"hash":"userid-match","userid":"download-manager","username":"legacy-name"},
+        {"hash":"username-match","userid":"other-user","username":"download-manager"},
+        {"hash":"foreign","userid":"other-user","username":"other-user"},
+        {"hash":"ownerless"}
+      ]
+      """
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setDownloadsJSONSequence(
+      [(payload, nil), (payload, nil)],
+      forClient: "same"
+    )
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    viewModel.selectedClient = "same"
+    await viewModel.loadDownloads()
+
+    XCTAssertEqual(viewModel.downloads.compactMap(\.hash), ["userid-match", "username-match"])
+
+    configureManageUser(service, superUser: true)
+    await viewModel.loadDownloads()
+
+    XCTAssertEqual(
+      Set(viewModel.downloads.compactMap(\.hash)),
+      Set(["userid-match", "username-match", "foreign", "ownerless"])
+    )
+  }
+
   func testOlderClientLoadThatCompletesLaterDoesNotMutateCurrentClientDownloadWithSameId()
     async throws
   {
@@ -532,6 +572,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
     mediaTitle: String? = nil,
     mediaImage: String? = nil,
     seasonEpisode: String? = nil,
+    userid: String = "download-manager",
     username: String,
     state: String = "downloading",
     progress: Int
@@ -555,6 +596,7 @@ final class DownloadTaskViewModelTests: XCTestCase {
           "season": "S01",
           "episode": "E01"
         },
+        "userid": "\(userid)",
         "username": "\(username)"
       }
     ]
@@ -565,11 +607,11 @@ final class DownloadTaskViewModelTests: XCTestCase {
     try JSONDecoder().decode([DownloadingInfo].self, from: Data(json.utf8))
   }
 
-  private func configureManageUser(_ service: APIService) {
+  private func configureManageUser(_ service: APIService, superUser: Bool = false) {
     service.currentUserForTesting = Token(
       access_token: "download-task-tests",
       token_type: "bearer",
-      super_user: FlexibleBool(false),
+      super_user: FlexibleBool(superUser),
       permissions: [
         UserPermissionKey.discovery.rawValue: false,
         UserPermissionKey.search.rawValue: false,

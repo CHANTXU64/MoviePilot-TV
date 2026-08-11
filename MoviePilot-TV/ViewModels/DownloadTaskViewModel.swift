@@ -56,11 +56,21 @@ class DownloadTaskViewModel: ObservableObject {
     let clientName = selectedClient
     guard !clientName.isEmpty else { return }
     do {
-      let newDownloads = try await apiService.fetchDownloading(clientName: clientName)
+      var newDownloads = try await apiService.fetchDownloading(clientName: clientName)
       guard selectedClient == clientName,
         currentGeneration == downloadLoadGeneration
       else {
         return
+      }
+
+      if !apiService.canRequestSuperUserEndpoints {
+        if let userName = apiService.currentUser?.user_name {
+          newDownloads = newDownloads.filter {
+            $0.userid == userName || $0.username == userName
+          }
+        } else {
+          newDownloads = []
+        }
       }
 
       let newDownloadIds = Set(newDownloads.map { $0.id })

@@ -1274,6 +1274,8 @@ class DownloadingInfo: Codable, Identifiable, ObservableObject, Equatable {
   let id: String
   /// 哈希值
   let hash: String?
+  // 下载用户 ID（Web 兼容字段，部分历史记录以用户名写入）
+  let userid: String?
   // 下载用户名称
   let username: String?
 
@@ -1303,7 +1305,7 @@ class DownloadingInfo: Codable, Identifiable, ObservableObject, Equatable {
 
   enum CodingKeys: String, CodingKey {
     case hash, title, name, state, progress, dlspeed, upspeed, size, left_time, media,
-      season_episode, username
+      season_episode, userid, username
   }
 
   required init(from decoder: Decoder) throws {
@@ -1315,6 +1317,7 @@ class DownloadingInfo: Codable, Identifiable, ObservableObject, Equatable {
     let decodedSize = try container.decodeIfPresent(Int64.self, forKey: .size)
     let decodedMedia = try container.decodeIfPresent(DownloadingMediaInfo.self, forKey: .media)
     let decodedSeasonEpisode = try container.decodeIfPresent(String.self, forKey: .season_episode)
+    let decodedUserId = try container.decodeIfPresent(String.self, forKey: .userid)
     let decodedUsername = try container.decodeIfPresent(String.self, forKey: .username)
 
     // 解码身份和接口快照属性
@@ -1324,6 +1327,7 @@ class DownloadingInfo: Codable, Identifiable, ObservableObject, Equatable {
     size = decodedSize
     media = decodedMedia
     season_episode = decodedSeasonEpisode
+    userid = decodedUserId
     username = decodedUsername
 
     // 解码可变的、@Published 的属性
@@ -1363,6 +1367,7 @@ class DownloadingInfo: Codable, Identifiable, ObservableObject, Equatable {
     try container.encode(left_time, forKey: .left_time)
     try container.encode(media, forKey: .media)
     try container.encode(season_episode, forKey: .season_episode)
+    try container.encode(userid, forKey: .userid)
     try container.encode(username, forKey: .username)
   }
 
