@@ -47,24 +47,38 @@
 - **兼容原则**: TV 端以 MoviePilot Web 前端和 MoviePilot 后端当前行为为准；如果 Web 本来也不显示，或后端/第三方数据源同样异常，本项目通常不会在 TV 端额外兜底修复。
 - **更新节奏**: 本应用更新频率可能低于 MoviePilot 原版，不保证长期兼容旧版 API 或旧版后端已知问题。
 - **账号登录**: **不支持**已开启双因素认证 (MFA/2FA) 的账号，请在关闭双因素认证后再登录。
-- **账号权限**: 至少要求账号具备探索、搜索和订阅权限。
 
 ## 安装指南
 
-> [!IMPORTANT]
-> **关于通过官方渠道分发 (App Store / TestFlight)**
-> 
-> 本项目当前仅支持通过 Xcode 源码构建和安装。
-> 
-> 若计划通过 TestFlight 或 App Store 进行分发，贡献者需了解以下前提与风险：
-> 
-> 1.  **开发者计划费用**: 分发需要一个年费为 99 美元的 Apple Developer Program 成员资格。
-> 2.  **代码修改工作**: 为通过审查，需要投入精力对现有代码进行调整以满足 [App Store 审查指南](https://developer.apple.com/app-store/review/guidelines/) 的要求。
-> 3.  **审查与账号风险**: 提交的应用仍可能被 App Review 拒绝。在极端情况下，违规行为可能导致开发者账号被禁。
-> 
-> 欢迎有意协助推进官方分发的贡献者，在 Issues 发起讨论。
+### 方式一：下载 IPA 并自签侧载
 
-### Xcode 源码构建 (当前唯一方式)
+前往项目的 [Releases](https://github.com/CHANTXU64/MoviePilot-TV/releases)，下载最新版本中的：
+
+```text
+MoviePilot-TV-unsigned.ipa
+```
+
+该文件为未签名 IPA，不能直接安装，需要使用自己的 Apple 账号或证书重新签名后侧载到 Apple TV。
+
+可使用支持 tvOS 应用签名和侧载的工具进行安装，例如：
+
+- [ATVloadly](https://github.com/bitxeno/atvloadly)
+- 其他支持 tvOS IPA 重签名及侧载的工具
+
+[Issue#1](https://github.com/CHANTXU64/MoviePilot-TV/issues/1) 中已有用户确认，通过部署在 NAS 上的 ATVloadly，可以正常完成安装并使用。
+
+### 方式二：社区 TestFlight 苹果测试渠道
+
+社区用户 [EricCartman9969](https://github.com/EricCartman9969) 提供了个人 TestFlight，可通过以下链接加入：
+
+https://testflight.apple.com/join/UK3qEnVU
+
+> [!WARNING]
+> 该 TestFlight 由社区用户自行维护，并非本项目官方发布渠道。
+>
+> 不保证长期更新、持续可用或与最新源码版本保持一致；测试名额、构建有效期及后续维护均由提供者决定。
+
+### 方式三：通过 Xcode 源码构建
 
 #### 准备工作
 - macOS 26.0+
