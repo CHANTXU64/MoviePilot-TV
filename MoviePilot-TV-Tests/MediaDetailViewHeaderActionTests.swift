@@ -4,6 +4,33 @@ import XCTest
 
 final class MediaDetailViewHeaderActionTests: XCTestCase {
   @MainActor
+  func testHeaderSubscribeKeepsAniListIdentityAndPrefersFullDetailTMDB() throws {
+    let detail = MediaInfo(
+      tmdb_id: 209_867,
+      anilist_id: 154_587,
+      source: "anilist",
+      title: "葬送的芙莉莲",
+      type: "电视剧"
+    )
+    let preloadTask = MediaPreloadTask(partialMedia: detail)
+    preloadTask.tmdbId = 999_999
+
+    let viewModel = MediaDetailViewModel(detail: detail)
+    viewModel.preloadTask = preloadTask
+
+    let request = viewModel.buildSubscribeRequest(season: 1).addRequest
+    let json = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any]
+    )
+
+    XCTAssertEqual(json["tmdbid"] as? Int, 209_867)
+    XCTAssertEqual(json["anilistid"] as? Int, 154_587)
+    XCTAssertEqual(json["media_source"] as? String, "anilist")
+    XCTAssertEqual(json["media_id"] as? String, "154587")
+    XCTAssertEqual(json["mediaid"] as? String, "anilist:154587")
+  }
+
+  @MainActor
   func testHeaderUnsubscribeConfirmationUsesSharedFormatWithoutSeasonOrEpisodeGroup() {
     let detail = MediaInfo(title: "孤独摇滚", type: "电视剧", season: 1)
 
@@ -17,10 +44,10 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   func testHeaderUnsubscribeConfirmationWarnsWhenFallbackTMDBDeleteAffectsMultipleSeasons()
     async throws
   {
-    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -29,7 +56,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       Subscribe(id: 7001, name: "详情页取消订阅", type: "电视剧", season: 1, tmdbid: 998_877),
       Subscribe(id: 7002, name: "详情页取消订阅", type: "电视剧", season: 2, tmdbid: 998_877),
     ])
-    service.baseURL = "http://detail-header-subscription-tests.local"
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
 
     let detail = MediaInfo(
@@ -38,11 +65,11 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       type: "电视剧",
       season: 1
     )
-    let preloadTask = MediaPreloadTask(partialMedia: detail)
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
     preloadTask.tmdbId = 998_877
     preloadTask.isSubscribed = true
 
-    let viewModel = MediaDetailViewModel(detail: detail)
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
     viewModel.preloadTask = preloadTask
 
     let message = await viewModel.headerUnsubscribeConfirmationMessage()
@@ -57,10 +84,10 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   func testHeaderUnsubscribeConfirmationCountsSubscriptionsMatchedByFallbackMediaId()
     async throws
   {
-    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -76,7 +103,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
         mediaid: "tmdb:998877"
       ),
     ])
-    service.baseURL = "http://detail-header-subscription-tests.local"
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
 
     let detail = MediaInfo(
@@ -85,11 +112,11 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       type: "电视剧",
       season: 1
     )
-    let preloadTask = MediaPreloadTask(partialMedia: detail)
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
     preloadTask.tmdbId = 998_877
     preloadTask.isSubscribed = true
 
-    let viewModel = MediaDetailViewModel(detail: detail)
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
     viewModel.preloadTask = preloadTask
 
     let message = await viewModel.headerUnsubscribeConfirmationMessage()
@@ -102,16 +129,16 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
   @MainActor
   func testCancelSubscriptionDeletesResolvedFallbackMediaWithoutSeason() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     await DetailHeaderSubscriptionURLProtocol.stub.setMinimalSubscriptionPayload(tmdbId: 998_877)
-    service.baseURL = "http://detail-header-subscription-tests.local"
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
 
     let detail = MediaInfo(
@@ -119,11 +146,11 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       title: "详情页取消订阅",
       type: "电影"
     )
-    let preloadTask = MediaPreloadTask(partialMedia: detail)
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
     preloadTask.tmdbId = 998_877
     preloadTask.isSubscribed = true
 
-    let viewModel = MediaDetailViewModel(detail: detail)
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
     viewModel.preloadTask = preloadTask
 
     await viewModel.cancelSubscription()
@@ -138,16 +165,119 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
-  func testCancelSubscriptionUsesSubscriptionMediaIdFromOriginalLookupFallback() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+  func testCancelSubscriptionDoesNotRefreshUnderAnotherAccount() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.shared
+    let sharedService = APIService.shared
+    let persistenceSnapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { persistenceSnapshot.restore(to: sharedService) }
+    let service = APIService.isolatedTestingInstance()
+
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    let gate = DetailHeaderSubscriptionAsyncGate()
+    await DetailHeaderSubscriptionURLProtocol.stub.enqueueResolvedSubscription(
+      tmdbId: 998_878,
+      id: 7004,
+      waitFor: gate
+    )
+    service.replaceSessionForTesting(
+      baseURL: "http://detail-header-subscription-tests.local",
+      token: "account-a-token",
+      currentUser: detailHeaderSubscriptionToken(userID: 1, accessToken: "account-a-token")
+    )
+
+    let detail = MediaInfo(tmdb_id: 998_878, title: "切号取消订阅", type: "电影")
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
+    preloadTask.isSubscribed = true
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
+    viewModel.preloadTask = preloadTask
+
+    let cancelTask = Task { @MainActor in await viewModel.cancelSubscription() }
+    await gate.waitForWaiter()
+    service.replaceSessionForTesting(
+      baseURL: "http://detail-header-subscription-tests.local",
+      token: "account-b-token",
+      currentUser: detailHeaderSubscriptionToken(userID: 2, accessToken: "account-b-token")
+    )
+    await gate.open()
+    await cancelTask.value
+
+    let lookupCount = await DetailHeaderSubscriptionURLProtocol.stub.lookupRequestCount(
+      tmdbId: 998_878
+    )
+    let deletedSubscriptionIDs = await DetailHeaderSubscriptionURLProtocol.stub.deletedSubscriptionIDs()
+    let deletedMediaRequests = await DetailHeaderSubscriptionURLProtocol.stub.deletedMediaRequests()
+    XCTAssertEqual(lookupCount, 1)
+    XCTAssertTrue(deletedSubscriptionIDs.isEmpty)
+    XCTAssertTrue(deletedMediaRequests.isEmpty)
+  }
+
+  @MainActor
+  func testHeaderUnsubscribeWarningStopsAfterAccountSwitchDuringSubscriptionSnapshot()
+    async throws
+  {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let sharedService = APIService.shared
+    let persistenceSnapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { persistenceSnapshot.restore(to: sharedService) }
+    let service = APIService.isolatedTestingInstance()
+
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    await DetailHeaderSubscriptionURLProtocol.stub.setSubscriptionSnapshot([
+      Subscribe(id: 7001, name: "切号警告", type: "电视剧", season: 1, tmdbid: 998_877),
+      Subscribe(id: 7002, name: "切号警告", type: "电视剧", season: 2, tmdbid: 998_877),
+    ])
+    let gate = DetailHeaderSubscriptionAsyncGate()
+    await DetailHeaderSubscriptionURLProtocol.stub.setSubscriptionSnapshotGate(gate)
+    service.replaceSessionForTesting(
+      baseURL: "http://detail-header-subscription-tests.local",
+      token: "account-a-token",
+      currentUser: detailHeaderSubscriptionToken(userID: 1, accessToken: "account-a-token")
+    )
+
+    let detail = MediaInfo(
+      douban_id: "detail-header-douban",
+      title: "切号警告",
+      type: "电视剧",
+      season: 1
+    )
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
+    preloadTask.tmdbId = 998_877
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
+    viewModel.preloadTask = preloadTask
+
+    let warningTask = Task { @MainActor in
+      await viewModel.headerUnsubscribeConfirmationMessage()
+    }
+    await gate.waitForWaiter()
+    service.replaceSessionForTesting(
+      baseURL: "http://detail-header-subscription-tests.local",
+      token: "account-b-token",
+      currentUser: detailHeaderSubscriptionToken(userID: 2, accessToken: "account-b-token")
+    )
+    await gate.open()
+
+    let message = await warningTask.value
+    let snapshotRequestCount =
+      await DetailHeaderSubscriptionURLProtocol.stub.subscriptionSnapshotRequestCount()
+    XCTAssertEqual(message, "是否取消《切号警告》订阅？")
+    XCTAssertEqual(snapshotRequestCount, 1)
+  }
+
+  @MainActor
+  func testCancelSubscriptionUsesSubscriptionMediaIdFromOriginalLookupFallback() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
-    service.baseURL = "http://detail-header-subscription-tests.local"
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
 
     let detail = MediaInfo(
@@ -155,10 +285,10 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       title: "标题兜底订阅",
       type: "电影"
     )
-    let preloadTask = MediaPreloadTask(partialMedia: detail)
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
     preloadTask.isSubscribed = true
 
-    let viewModel = MediaDetailViewModel(detail: detail)
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
     viewModel.preloadTask = preloadTask
 
     await viewModel.cancelSubscription()
@@ -173,15 +303,15 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
   @MainActor
   func testCancelSubscriptionContinuesFallbackAfterUnresolvedOriginalLookup() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
-    service.baseURL = "http://detail-header-subscription-tests.local"
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
 
     let detail = MediaInfo(
@@ -189,11 +319,11 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       title: "原始 ID 最小响应",
       type: "电影"
     )
-    let preloadTask = MediaPreloadTask(partialMedia: detail)
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
     preloadTask.tmdbId = 998_877
     preloadTask.isSubscribed = true
 
-    let viewModel = MediaDetailViewModel(detail: detail)
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
     viewModel.preloadTask = preloadTask
 
     await viewModel.cancelSubscription()
@@ -207,11 +337,11 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
-  func testFetchSubscriptionLookupIgnoresInvalidResolvedFallbackMediaId() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+  func testFetchSubscriptionLookupKeepsOpaqueLegacyMediaIdLikeWeb() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -220,7 +350,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       tmdbId: 112_233,
       json: #"{"id":7201,"name":"Invalid lookup","type":"电视剧","season":1,"tmdbid":0,"mediaid":"tmdb:0"}"#
     )
-    service.baseURL = "http://detail-header-subscription-tests.local"
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
 
     let lookup = try await service.fetchSubscriptionLookup(
@@ -228,23 +358,79 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     )
 
     XCTAssertEqual(lookup?.id, 7201)
-    XCTAssertEqual(lookup?.mediaId, "tmdb:112233")
-    XCTAssertEqual(lookup?.isResolvedMediaId, false)
+    XCTAssertEqual(lookup?.mediaId, "tmdb:0")
+    XCTAssertEqual(lookup?.isResolvedMediaId, true)
+  }
+
+  @MainActor
+  func testFetchSubscriptionLookupUsesWebSubscribeIdentityOrder() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    let cases: [(queryId: Int, payload: String, expectedMediaId: String)] = [
+      (
+        112_234,
+        #"{"id":7202,"tmdbid":445566,"anilistid":778899,"media_source":"anilist","media_id":"778899","mediaid":"tmdb:445566"}"#,
+        "anilist:778899"
+      ),
+      (
+        112_235,
+        #"{"id":7203,"tmdbid":445567,"anilistid":778900,"media_source":"anilist","media_id":""}"#,
+        "tmdb:445567"
+      ),
+      (
+        112_236,
+        #"{"id":7204,"anilistid":778901}"#,
+        "anilist:778901"
+      ),
+      (
+        112_237,
+        #"{"id":7205,"tmdbid":0,"mediaid":"tmdb:445568"}"#,
+        "tmdb:445568"
+      ),
+      (
+        112_238,
+        #"{"id":7206,"tmdbid":-1,"mediaid":"tmdb:445569"}"#,
+        "tmdb:-1"
+      ),
+    ]
+
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    for testCase in cases {
+      await DetailHeaderSubscriptionURLProtocol.stub.setCustomLookupPayload(
+        tmdbId: testCase.queryId,
+        json: testCase.payload
+      )
+    }
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
+
+    for testCase in cases {
+      let lookup = try await service.fetchSubscriptionLookup(
+        media: MediaInfo(tmdb_id: testCase.queryId, type: "电视剧")
+      )
+      XCTAssertEqual(lookup?.mediaId, testCase.expectedMediaId)
+      XCTAssertEqual(lookup?.isResolvedMediaId, true)
+    }
   }
 
   @MainActor
   func testCancelSubscriptionContinuesFallbackWhenBangumiLookupReturnsUnsupportedMediaId()
     async throws
   {
-    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
-    service.baseURL = "http://detail-header-subscription-tests.local"
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
 
     let detail = MediaInfo(
@@ -252,11 +438,11 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       title: "Bangumi 详情页取消订阅",
       type: "电影"
     )
-    let preloadTask = MediaPreloadTask(partialMedia: detail)
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
     preloadTask.tmdbId = 998_877
     preloadTask.isSubscribed = true
 
-    let viewModel = MediaDetailViewModel(detail: detail)
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
     viewModel.preloadTask = preloadTask
 
     await viewModel.cancelSubscription()
@@ -271,15 +457,15 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
   @MainActor
   func testCancelSubscriptionDeletesBangumiLookupBySubscriptionIDWhenNoTMDBFallback() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
-    service.baseURL = "http://detail-header-subscription-tests.local"
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
 
     let detail = MediaInfo(
@@ -287,10 +473,10 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       title: "Bangumi 详情页取消订阅",
       type: "电影"
     )
-    let preloadTask = MediaPreloadTask(partialMedia: detail)
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
     preloadTask.isSubscribed = true
 
-    let viewModel = MediaDetailViewModel(detail: detail)
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
     viewModel.preloadTask = preloadTask
 
     await viewModel.cancelSubscription()
@@ -305,15 +491,15 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
   @MainActor
   func testCancelSubscriptionBypassesStaleFallbackStatusCacheWhenAlreadyRemoved() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
-    service.baseURL = "http://detail-header-subscription-tests.local"
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
 
     let tmdbMedia = MediaInfo(tmdb_id: 776_655, type: "电影")
@@ -327,11 +513,11 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       type: "电影",
       season: 1
     )
-    let preloadTask = MediaPreloadTask(partialMedia: detail)
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
     preloadTask.tmdbId = 776_655
     preloadTask.isSubscribed = true
 
-    let viewModel = MediaDetailViewModel(detail: detail)
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
     viewModel.preloadTask = preloadTask
 
     await viewModel.cancelSubscription()
@@ -346,15 +532,15 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
   @MainActor
   func testPreloadRefreshBypassesStaleFallbackStatusCacheAfterRemoteCompletion() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
-    service.baseURL = "http://detail-header-subscription-tests.local"
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
 
     let tmdbMedia = MediaInfo(tmdb_id: 776_655, type: "电影")
@@ -368,7 +554,8 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
         douban_id: "detail-header-remote-complete-douban",
         title: "详情页远端完成",
         type: "电影"
-      )
+      ),
+      apiService: service
     )
     preloadTask.tmdbId = 776_655
     preloadTask.isSubscribed = true
@@ -387,16 +574,16 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   func testDetailReadyHandlerRefreshesSubscriptionWhenPreloadCompletesAfterViewAppears()
     async throws
   {
-    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     await DetailHeaderSubscriptionURLProtocol.stub.setResolvedSubscription(tmdbId: 776_656, id: 7004)
-    service.baseURL = "http://detail-header-subscription-tests.local"
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
 
     let tmdbMedia = MediaInfo(tmdb_id: 776_656, type: "电影")
@@ -410,12 +597,15 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       title: "详情页后完成",
       type: "电影"
     )
-    let preloadTask = MediaPreloadTask(partialMedia: fullDetail)
+    let preloadTask = MediaPreloadTask(partialMedia: fullDetail, apiService: service)
     preloadTask.tmdbId = 776_656
     preloadTask.fullDetail = fullDetail
     preloadTask.isSubscribed = true
 
-    let viewModel = MediaDetailViewModel(detail: MediaInfo(title: "占位详情", type: "电影"))
+    let viewModel = MediaDetailViewModel(
+      detail: MediaInfo(title: "占位详情", type: "电影"),
+      apiService: service
+    )
     viewModel.preloadTask = preloadTask
 
     let didRefreshSubscription = await MediaDetailView.applyReadyPreloadedDetail(
@@ -436,25 +626,28 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
   @MainActor
   func testDetailReadyHandlerKeepsRetryPendingWhenSubscriptionRefreshFails() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     let tmdbId = 776_657
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     await DetailHeaderSubscriptionURLProtocol.stub.failLookup(tmdbId: tmdbId)
-    service.baseURL = "http://detail-header-subscription-tests.local"
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
 
     let fullDetail = MediaInfo(tmdb_id: tmdbId, title: "订阅查询失败", type: "电影")
-    let preloadTask = MediaPreloadTask(partialMedia: fullDetail)
+    let preloadTask = MediaPreloadTask(partialMedia: fullDetail, apiService: service)
     preloadTask.fullDetail = fullDetail
     preloadTask.isSubscribed = true
 
-    let viewModel = MediaDetailViewModel(detail: MediaInfo(title: "占位详情", type: "电影"))
+    let viewModel = MediaDetailViewModel(
+      detail: MediaInfo(title: "占位详情", type: "电影"),
+      apiService: service
+    )
     viewModel.preloadTask = preloadTask
 
     let didRefreshSubscription = await MediaDetailView.applyReadyPreloadedDetail(
@@ -475,19 +668,19 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   func testSubscriptionUpdateRefreshesPinnedPreloadTaskWithoutRefreshingPosterWallCache()
     async throws
   {
-    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    let preloader = MediaPreloader.shared
+    let preloader = MediaPreloader(apiService: service)
     preloader.clearAll()
     defer { preloader.clearAll() }
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
-    service.baseURL = "http://detail-header-subscription-tests.local"
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
 
     let pinnedGate = DetailHeaderSubscriptionAsyncGate()
@@ -500,18 +693,16 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let pinnedMedia = MediaInfo(
       tmdb_id: 661_001,
       title: "当前详情页",
-      type: "电影",
-      collection_id: 1
+      type: "电影"
     )
     let posterWallMedia = MediaInfo(
       tmdb_id: 661_002,
       title: "海报墙缓存",
-      type: "电影",
-      collection_id: 2
+      type: "电影"
     )
 
-    _ = preloader.preload(for: pinnedMedia)
-    _ = preloader.preload(for: posterWallMedia)
+    preloader.preload(for: pinnedMedia).cancel()
+    preloader.preload(for: posterWallMedia).cancel()
     preloader.pin(key: pinnedMedia.id)
 
     NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
@@ -533,16 +724,16 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
   @MainActor
   func testCheckSubscriptionAcceptsMinimalSubscriptionPayload() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
     await DetailHeaderSubscriptionURLProtocol.stub.setMinimalSubscriptionPayload(tmdbId: 554_433)
-    service.baseURL = "http://detail-header-subscription-tests.local"
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
 
     let status = try await service.checkSubscription(
@@ -554,10 +745,10 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
   @MainActor
   func testSubscriptionMutationClearsCachedStatusAndSnapshot() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -573,7 +764,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     await DetailHeaderSubscriptionURLProtocol.stub.setSubscriptionSnapshot([
       Subscribe(id: subscriptionId, name: "缓存失效订阅", type: "电视剧", season: 1, tmdbid: tmdbId)
     ])
-    service.baseURL = "http://detail-header-subscription-tests.local"
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
 
     let cachedStatus = try await service.checkSubscription(media: media)
@@ -604,10 +795,10 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
   @MainActor
   func testCheckSubscriptionRetriesWhenGenerationChangesBeforeResponseReturns() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -622,7 +813,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       tmdbId: 665_544,
       id: nil
     )
-    service.baseURL = "http://detail-header-subscription-tests.local"
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
 
     let media = MediaInfo(tmdb_id: 665_544, type: "电影")
@@ -644,140 +835,136 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
-  func testCheckSubscriptionRetriesWhenGenerationChangesAfterStatusCacheStore() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+  func testForcedSubscriptionStatusRefreshPreventsOlderResponseFromReplacingCache() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    let staleGate = DetailHeaderSubscriptionAsyncGate()
     await DetailHeaderSubscriptionURLProtocol.stub.enqueueResolvedSubscription(
-      tmdbId: 775_544,
-      id: 9201
+      tmdbId: 665_545,
+      id: nil,
+      waitFor: staleGate
     )
-    await DetailHeaderSubscriptionURLProtocol.stub.setResolvedSubscription(
-      tmdbId: 775_544,
-      id: nil
+    await DetailHeaderSubscriptionURLProtocol.stub.enqueueResolvedSubscription(
+      tmdbId: 665_545,
+      id: 9102
     )
-    service.baseURL = "http://detail-header-subscription-tests.local"
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
 
-    var didInvalidate = false
-    service.subscriptionCacheTestHooks.afterSubscriptionStatusCacheStore = {
-      guard !didInvalidate else { return }
-      didInvalidate = true
-      _ = try? await service.deleteSubscription(id: 9201)
+    let media = MediaInfo(tmdb_id: 665_545, type: "电影")
+    let staleCheck = Task {
+      try await service.checkSubscription(media: media)
     }
-    defer { service.subscriptionCacheTestHooks = .init() }
+    await staleGate.waitForWaiter()
 
-    let status = try await service.checkSubscription(
-      media: MediaInfo(tmdb_id: 775_544, type: "电影")
+    let refreshedStatus = try await service.checkSubscription(
+      media: media,
+      forceRefresh: true
     )
+    await staleGate.open()
+
+    do {
+      _ = try await staleCheck.value
+      XCTFail("Older subscription status request should be superseded")
+    } catch is CancellationError {
+      // Expected: only the latest same-key request may publish or populate the cache.
+    }
+
+    let cachedStatus = try await service.checkSubscription(media: media)
     let lookupCount = await DetailHeaderSubscriptionURLProtocol.stub.lookupRequestCount(
-      tmdbId: 775_544
+      tmdbId: 665_545
     )
 
-    XCTAssertTrue(didInvalidate)
-    XCTAssertFalse(status)
+    XCTAssertTrue(refreshedStatus)
+    XCTAssertTrue(cachedStatus)
     XCTAssertEqual(lookupCount, 2)
   }
 
   @MainActor
-  func testCheckSubscriptionThrowsWhenCancelledAfterStatusCacheHit() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+  func testCachedSubscriptionReadDoesNotCancelForcedRefresh() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
-    service.baseURL = "http://detail-header-subscription-tests.local"
+    let refreshGate = DetailHeaderSubscriptionAsyncGate()
+    await DetailHeaderSubscriptionURLProtocol.stub.setResolvedSubscription(
+      tmdbId: 665_546,
+      id: nil
+    )
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
 
-    let media = MediaInfo(tmdb_id: 776_655, type: "电影")
+    let media = MediaInfo(tmdb_id: 665_546, type: "电影")
+    let initialStatus = try await service.checkSubscription(media: media)
+    XCTAssertFalse(initialStatus)
+
+    await DetailHeaderSubscriptionURLProtocol.stub.enqueueResolvedSubscription(
+      tmdbId: 665_546,
+      id: 9103,
+      waitFor: refreshGate
+    )
+    let forcedRefresh = Task {
+      try await service.checkSubscription(media: media, forceRefresh: true)
+    }
+    await refreshGate.waitForWaiter()
+
+    let statusDuringRefresh = try await service.checkSubscription(media: media)
+    XCTAssertFalse(statusDuringRefresh)
+    await refreshGate.open()
+    let refreshedStatus = try await forcedRefresh.value
     let cachedStatus = try await service.checkSubscription(media: media)
+    XCTAssertTrue(refreshedStatus)
     XCTAssertTrue(cachedStatus)
 
-    let gate = DetailHeaderSubscriptionAsyncGate()
-    service.subscriptionCacheTestHooks.afterSubscriptionStatusCacheHit = {
-      await gate.wait()
-    }
-    defer { service.subscriptionCacheTestHooks = .init() }
-
-    let cancelledCheck = Task {
-      try await service.checkSubscription(media: media)
-    }
-    await gate.waitForWaiter()
-
-    cancelledCheck.cancel()
-    await gate.open()
-
-    do {
-      _ = try await cancelledCheck.value
-      XCTFail("A caller cancelled after reading cached subscription status must not receive it.")
-    } catch is CancellationError {
-      // Expected.
-    }
+    let lookupCount = await DetailHeaderSubscriptionURLProtocol.stub.lookupRequestCount(
+      tmdbId: 665_546
+    )
+    XCTAssertEqual(lookupCount, 2)
   }
 
-  @MainActor
-  func testCheckSubscriptionThrowsWhenCancelledAfterStatusCacheStore() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+  func testSubscriptionStatusCacheRejectsOlderRegistrationAfterNewerRevision() async {
+    let cache = APICache<String, Bool>()
+    let newerToken = await cache.beginLoad("same-key", revision: 2)
+    let olderToken = await cache.beginLoad("same-key", revision: 1)
 
-    let service = APIService.shared
-    let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
-    defer { snapshot.restore(to: service) }
-
-    await DetailHeaderSubscriptionURLProtocol.stub.reset()
-    await DetailHeaderSubscriptionURLProtocol.stub.setResolvedSubscription(
-      tmdbId: 885_544,
-      id: 9301
+    let olderCommitted = await cache.setIfCurrent(
+      "same-key",
+      value: false,
+      token: olderToken
     )
-    service.baseURL = "http://detail-header-subscription-tests.local"
-    configureDetailHeaderSubscriptionAccess(service)
-
-    let gate = DetailHeaderSubscriptionAsyncGate()
-    service.subscriptionCacheTestHooks.afterSubscriptionStatusCacheStore = {
-      await gate.wait()
-    }
-    defer { service.subscriptionCacheTestHooks = .init() }
-
-    let cancelledCheck = Task {
-      try await service.checkSubscription(media: MediaInfo(tmdb_id: 885_544, type: "电影"))
-    }
-    await gate.waitForWaiter()
-
-    cancelledCheck.cancel()
-    await gate.open()
-
-    do {
-      _ = try await cancelledCheck.value
-      XCTFail("A caller cancelled after storing subscription status must not receive it.")
-    } catch is CancellationError {
-      // Expected.
-    }
-
-    let lookupCount = await DetailHeaderSubscriptionURLProtocol.stub.lookupRequestCount(
-      tmdbId: 885_544
+    let newerCommitted = await cache.setIfCurrent(
+      "same-key",
+      value: true,
+      token: newerToken
     )
-    XCTAssertEqual(lookupCount, 1)
+    let cachedValue = await cache.get("same-key")
+
+    XCTAssertFalse(olderCommitted)
+    XCTAssertTrue(newerCommitted)
+    XCTAssertEqual(cachedValue, true)
   }
 
   @MainActor
   func testDeleteSubscriptionEncodesMediaIdAsSinglePathSegment() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(DetailHeaderSubscriptionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(DetailHeaderSubscriptionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await DetailHeaderSubscriptionURLProtocol.stub.reset()
-    service.baseURL = "http://detail-header-subscription-tests.local"
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
     configureDetailHeaderSubscriptionAccess(service)
 
     let success = try await service.deleteSubscription(
@@ -809,6 +996,34 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
     XCTAssertTrue(didShowUnsubscribeConfirm)
     XCTAssertFalse(didStartSubscribe)
+  }
+
+  @MainActor
+  func testMovieHeaderAppendsLibraryStatusToSubscribeTitle() {
+    let detail = MediaInfo(title: "已入库电影", type: "电影")
+
+    XCTAssertEqual(
+      MediaDetailView.headerSubscribeButtonTitle(
+        isSubscribed: false,
+        detail: detail,
+        isSeasonInformationUnavailable: false,
+        hasSeasonLoadError: false,
+        isSeasonLoading: false,
+        isInLibrary: true
+      ),
+      "订阅（已入库）"
+    )
+    XCTAssertEqual(
+      MediaDetailView.headerSubscribeButtonTitle(
+        isSubscribed: true,
+        detail: detail,
+        isSeasonInformationUnavailable: false,
+        hasSeasonLoadError: false,
+        isSeasonLoading: false,
+        isInLibrary: true
+      ),
+      "已订阅（已入库）"
+    )
   }
 
   @MainActor
@@ -1119,8 +1334,16 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
   @MainActor
   private func configureDetailHeaderSubscriptionAccess(_ service: APIService) {
-    service.currentUser = Token(
-      access_token: "detail-header-subscription-token",
+    service.currentUserForTesting = detailHeaderSubscriptionToken(
+      userID: 1,
+      accessToken: "detail-header-subscription-token"
+    )
+  }
+
+  @MainActor
+  private func detailHeaderSubscriptionToken(userID: Int, accessToken: String) -> Token {
+    Token(
+      access_token: accessToken,
       token_type: "bearer",
       super_user: FlexibleBool(false),
       permissions: [
@@ -1129,7 +1352,8 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
         UserPermissionKey.subscribe.rawValue: true,
         UserPermissionKey.manage.rawValue: false,
       ],
-      user_name: "detail-header",
+      user_id: userID,
+      user_name: "detail-header-\(userID)",
       avatar: nil
     )
   }
@@ -1161,9 +1385,9 @@ private struct DetailHeaderSubscriptionServiceSnapshot {
 
   @MainActor
   func restore(to service: APIService) {
-    service.baseURL = baseURL
-    service.token = token
-    service.currentUser = currentUser
+    service.baseURLForTesting = baseURL
+    service.tokenForTesting = token
+    service.currentUserForTesting = currentUser
 
     if let serverURLDefaults {
       UserDefaults.standard.set(serverURLDefaults, forKey: "serverURL")
@@ -1246,6 +1470,8 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
   private var deletedIDs: [Int] = []
   private var mediaDeleteRequests: [DetailHeaderSubscriptionMediaDeleteRequest] = []
   private var subscriptionSnapshot: [Subscribe] = []
+  private var subscriptionSnapshotGate: DetailHeaderSubscriptionAsyncGate?
+  private var subscriptionSnapshotRequests = 0
 
   func reset() {
     resolvedSubscriptionsByTMDBID = [
@@ -1260,6 +1486,8 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
     deletedIDs.removeAll()
     mediaDeleteRequests.removeAll()
     subscriptionSnapshot.removeAll()
+    subscriptionSnapshotGate = nil
+    subscriptionSnapshotRequests = 0
   }
 
   func setMinimalSubscriptionPayload(tmdbId: Int) {
@@ -1281,6 +1509,14 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
 
   func setSubscriptionSnapshot(_ subscriptions: [Subscribe]) {
     subscriptionSnapshot = subscriptions
+  }
+
+  func setSubscriptionSnapshotGate(_ gate: DetailHeaderSubscriptionAsyncGate?) {
+    subscriptionSnapshotGate = gate
+  }
+
+  func subscriptionSnapshotRequestCount() -> Int {
+    subscriptionSnapshotRequests
   }
 
   func enqueueResolvedSubscription(
@@ -1311,6 +1547,10 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
     let method = request.httpMethod ?? "GET"
 
     if method == "GET", path == "/api/v1/subscribe/" || path == "/api/v1/subscribe" {
+      subscriptionSnapshotRequests += 1
+      if let subscriptionSnapshotGate {
+        await subscriptionSnapshotGate.wait()
+      }
       return try jsonResponse(subscriptionSnapshot)
     }
 

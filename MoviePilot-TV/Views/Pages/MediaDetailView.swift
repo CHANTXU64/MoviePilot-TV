@@ -38,7 +38,7 @@ struct MediaDetailView: View {
   @State private var lastFocusedButton: ButtonField?
 
   private var canSubscribeMedia: Bool {
-    apiService.canAccess(.subscribe)
+    apiService.canAccess(.subscribe) && !viewModel.detail.isCollection
   }
 
   private var canSearchResources: Bool {
@@ -46,7 +46,7 @@ struct MediaDetailView: View {
   }
 
   private var canJumpToTMDB: Bool {
-    viewModel.detail.douban_id != nil || viewModel.detail.bangumi_id != nil
+    viewModel.detail.canJumpToTMDB
   }
 
   private var shouldShowOtherInfo: Bool {
@@ -155,8 +155,7 @@ struct MediaDetailView: View {
           ? BlurImageProcessor(blurRadius: CGFloat(blurRadius))
           : DefaultImageProcessor.default
 
-        KFImage(url)
-          .requestModifier(AnyModifier.cookieModifier)
+        KFImage.sessionImage(url)
           .placeholder {
             EmptyView()
           }
@@ -549,10 +548,12 @@ struct MediaDetailView: View {
     detail: MediaInfo,
     isSeasonInformationUnavailable: Bool,
     hasSeasonLoadError: Bool,
-    isSeasonLoading: Bool
+    isSeasonLoading: Bool,
+    isInLibrary: Bool = false
   ) -> String {
     if detail.canDirectlySubscribe {
-      return isSubscribed ? "已订阅" : "订阅"
+      let title = isSubscribed ? "已订阅" : "订阅"
+      return isInLibrary ? "\(title)（已入库）" : title
     }
     if isSeasonLoading { return "分季信息加载中" }
     if hasSeasonLoadError { return "分季信息加载失败" }
@@ -728,7 +729,8 @@ struct MediaDetailView: View {
                     detail: detail,
                     isSeasonInformationUnavailable: isSeasonInformationUnavailable,
                     hasSeasonLoadError: hasSeasonLoadError,
-                    isSeasonLoading: isSeasonLoading
+                    isSeasonLoading: isSeasonLoading,
+                    isInLibrary: viewModel.isInLibrary
                   )
                   let icon =
                     isDirect
@@ -994,7 +996,7 @@ struct MediaDetailView: View {
                 item: media,
                 showBadges: badges,
                 onTap: {
-                  MediaPreloader.shared.preload(for: media)
+                  MediaPreloader.shared.preloadIfNeeded(for: media)
                   navigationPath.append(media)
                 }
               )
@@ -1021,7 +1023,7 @@ struct MediaDetailView: View {
               recommendPreloadDebounce = Task {
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
-                MediaPreloader.shared.preload(for: item)
+                MediaPreloader.shared.preloadIfNeeded(for: item)
               }
             }
             // 分页加载
@@ -1057,7 +1059,7 @@ struct MediaDetailView: View {
                 item: media,
                 showBadges: badges,
                 onTap: {
-                  MediaPreloader.shared.preload(for: media)
+                  MediaPreloader.shared.preloadIfNeeded(for: media)
                   navigationPath.append(media)
                 }
               )
@@ -1084,7 +1086,7 @@ struct MediaDetailView: View {
               similarPreloadDebounce = Task {
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
-                MediaPreloader.shared.preload(for: item)
+                MediaPreloader.shared.preloadIfNeeded(for: item)
               }
             }
             // 分页加载

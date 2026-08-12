@@ -4,18 +4,38 @@ struct SubscribeSheet: View {
   @Environment(\.dismiss) var dismiss
   @StateObject private var viewModel: SubscribeSheetViewModel
   @State private var hasAppeared = false
+  @State private var isRetryingLoad = false
   @State private var showingSiteSelection = false
   @State private var showingFilterGroupSelection = false
   @State private var showAdvanced = false
   @FocusState private var isAdvancedButtonFocused: Bool
 
-  var onSave: (() -> Void)?
+  var onSave: ((Subscribe) -> Void)?
 
-  init(subscribe: Subscribe, isNewSubscription: Bool = false, onSave: (() -> Void)? = nil) {
+  init(
+    subscribe: Subscribe,
+    isNewSubscription: Bool = false,
+    onSave: ((Subscribe) -> Void)? = nil
+  ) {
     _viewModel = StateObject(
       wrappedValue: SubscribeSheetViewModel(
-        subscribe: subscribe, isNewSubscription: isNewSubscription))
+        subscribe: subscribe,
+        isNewSubscription: isNewSubscription
+      ))
     self.onSave = onSave
+  }
+
+  init(
+    subscribe: Subscribe,
+    isNewSubscription: Bool = false,
+    onSave: @escaping () -> Void
+  ) {
+    _viewModel = StateObject(
+      wrappedValue: SubscribeSheetViewModel(
+        subscribe: subscribe,
+        isNewSubscription: isNewSubscription
+      ))
+    self.onSave = { _ in onSave() }
   }
 
   var body: some View {
@@ -40,10 +60,14 @@ struct SubscribeSheet: View {
                 if let message = viewModel.loadErrorMessage {
                   if viewModel.canRetryLoad {
                     SheetFeedbackView(message: message, actionTitle: "重新加载") {
+                      guard !isRetryingLoad else { return }
+                      isRetryingLoad = true
                       Task {
                         await viewModel.loadData()
+                        isRetryingLoad = false
                       }
                     }
+                    .disabled(isRetryingLoad)
                   } else {
                     SheetFeedbackView(message: message)
                   }
@@ -54,8 +78,8 @@ struct SubscribeSheet: View {
                     title: "电视剧总集数",
                     placeholder: "0",
                     text: Binding(
-                      get: { String(viewModel.subscribe.total_episode ?? 0) },
-                      set: { viewModel.subscribe.total_episode = Int($0) }
+                      get: { viewModel.totalEpisodeText },
+                      set: { viewModel.totalEpisodeText = $0 }
                     ),
                     keyboardType: .numberPad
                   )
@@ -129,11 +153,11 @@ struct SubscribeSheet: View {
                   title: "保存路径",
                   selection: Binding(
                     get: { viewModel.subscribe.save_path ?? "" },
-                    set: { viewModel.subscribe.save_path = $0 }
+                    set: { viewModel.subscribe.save_path = $0.isEmpty ? nil : $0 }
                   ),
                   options: [PickerOption(title: "自动", value: "")]
-                    + viewModel.directories.map {
-                      PickerOption(title: $0.name, value: $0.download_path ?? "")
+                    + viewModel.savePathOptions.map {
+                      PickerOption(title: $0, value: $0)
                     }
                 )
 
@@ -284,7 +308,7 @@ struct SubscribeSheet: View {
                   ) {
                     Task {
                       if await viewModel.save() {
-                        onSave?()
+                        onSave?(viewModel.subscribe)
                         if viewModel.errorMessage == nil {
                           dismiss()
                         }
@@ -298,6 +322,7 @@ struct SubscribeSheet: View {
                     Text(viewModel.isNewSubscription ? "取消订阅" : "取消修改")
                       .frame(maxWidth: .infinity)
                   }
+                  .disabled(viewModel.isSaving)
                 }
               }
               .padding(.horizontal, 28)
@@ -306,21 +331,20 @@ struct SubscribeSheet: View {
               .applySheetStyles()
             }
           }
-          .onAppear {
-            guard !hasAppeared else { return }
-            hasAppeared = true
-            Task {
-              await viewModel.loadData()
-            }
-          }
-          .onDisappear {
-            if !viewModel.isSaved {
-              Task {
-                await viewModel.cancel()
-              }
-            }
-          }
         }
+      }
+    }
+    .onAppear {
+      guard !hasAppeared else { return }
+      hasAppeared = true
+      Task {
+        await viewModel.loadData()
+      }
+    }
+    .onDisappear {
+      let wasSaving = viewModel.isSaving
+      Task {
+        await viewModel.cancel(wasSavingOnDismiss: wasSaving)
       }
     }
     .sheet(isPresented: $showingSiteSelection) {

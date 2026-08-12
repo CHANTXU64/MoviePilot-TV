@@ -46,7 +46,12 @@ struct DownloadTaskView: View {
         } else {
           LazyVStack(spacing: 15) {
             ForEach(viewModel.downloads) { item in
-              DownloadTaskRow(item: item, viewModel: viewModel)
+              DownloadTaskRow(
+                item: item,
+                clientName: viewModel.loadedClient,
+                viewModel: viewModel
+              )
+              .disabled(!viewModel.canOperateDownloads)
             }
           }
         }
@@ -80,6 +85,7 @@ struct DownloadTaskView: View {
 /// 显示一个下载任务（种子）的行视图，包含封面、信息、进度和可交互的操作按钮。
 private struct DownloadTaskRow: View {
   @ObservedObject var item: DownloadingInfo
+  let clientName: String
   let viewModel: DownloadTaskViewModel
 
   @State private var showingDeleteConfirm = false
@@ -88,8 +94,9 @@ private struct DownloadTaskRow: View {
   // 仅当 state 为 "downloading" 时为 true，用于控制“暂停/继续”按钮的状态。
   @State private var isDownloading: Bool
 
-  init(item: DownloadingInfo, viewModel: DownloadTaskViewModel) {
+  init(item: DownloadingInfo, clientName: String, viewModel: DownloadTaskViewModel) {
     self.item = item
+    self.clientName = clientName
     self.viewModel = viewModel
     _isDownloading = State(initialValue: item.state?.lowercased() == "downloading")
   }
@@ -103,9 +110,9 @@ private struct DownloadTaskRow: View {
     Task {
       let operationSuccess: Bool
       if isDownloading {  // 停止
-        operationSuccess = await viewModel.stopDownload(hash: hash)
+        operationSuccess = await viewModel.stopDownload(clientName: clientName, hash: hash)
       } else {  // 开始
-        operationSuccess = await viewModel.startDownload(hash: hash)
+        operationSuccess = await viewModel.startDownload(clientName: clientName, hash: hash)
       }
 
       // API 调用成功，则翻转 UI 状态
@@ -177,8 +184,7 @@ private struct DownloadTaskRow: View {
       // MARK: - 背景
       let backdropUrl = item.media?.imageURLs.image
       ZStack {
-        KFImage(backdropUrl)
-          .requestModifier(AnyModifier.cookieModifier)
+        KFImage.sessionImage(backdropUrl)
           .setProcessor(BlurImageProcessor(blurRadius: 2))
           .resizing(referenceSize: CGSize(width: 500, height: 180), mode: .aspectFill)
           .resizable()
@@ -195,10 +201,10 @@ private struct DownloadTaskRow: View {
           .padding(.bottom, -7)  // 微调使进度条紧贴底部
       }
     }
-    .alert("确认删除?", isPresented: $showingDeleteConfirm) {
+    .alert("将永久删除任务及已下载文件，确认继续？", isPresented: $showingDeleteConfirm) {
       Button("删除", role: .destructive) {
         if let hash = item.hash {
-          Task { await viewModel.deleteDownload(hash: hash) }
+          Task { await viewModel.deleteDownload(clientName: clientName, hash: hash) }
         }
       }
       Button("取消", role: .cancel) {}
@@ -214,7 +220,9 @@ private struct DownloadTaskRow: View {
     // 格式: {size} ↑ {upspeed}/s ↓ {dlspeed}/s {left_time}
     var parts: [String] = []
 
-    parts.append(item.size?.formattedBytes() ?? "0 B")
+    if let size = item.size {
+      parts.append(size.formattedBytes())
+    }
     parts.append("↑ \((item.upspeed ?? "0B"))/s")
     parts.append("↓ \((item.dlspeed ?? "0B"))/s")
 

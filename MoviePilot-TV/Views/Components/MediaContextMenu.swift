@@ -18,7 +18,7 @@ struct MediaContextMenuItems: View {
   }
 
   var body: some View {
-    if canSubscribeMedia, let share = item.subscribeShare {
+    if canSubscribeMedia, !item.isCollection, let share = item.subscribeShare {
       // 订阅分享的专属菜单
       Button {
         subscriptionHandler.forkSheetRequest = share
@@ -29,16 +29,16 @@ struct MediaContextMenuItems: View {
 
     Button {
       // 点击"详情"时立即触发预加载
-      MediaPreloader.shared.preload(for: item)
+      MediaPreloader.shared.preloadIfNeeded(for: item)
       navigationPath.append(item)
     } label: {
       Label("详情", systemImage: "info.circle")
     }
 
-    if item.collection_id == nil {
+    if !item.isCollection {
       // TMDB 详情页：复用 MediaActionHandler 逻辑，点击时实时获取/识别 TMDB ID
       // 不依赖预加载状态，按钮永远可点，避免菜单状态不刷新的问题
-      if item.douban_id != nil || item.bangumi_id != nil {
+      if item.canJumpToTMDB {
         Button {
           Task {
             // 优先传入预加载的 tmdbId，避免重复网络请求
@@ -55,7 +55,7 @@ struct MediaContextMenuItems: View {
         }
       }
 
-      // 订阅按钮：读取预加载的订阅状态来决定显示文本
+      // 订阅按钮：预加载状态只控制显示；点击后由 Handler 向后端复查
       // ⚠️ 使用 peekTask（纯读取），避免在 body 渲染期间修改最近使用 (LRU) 状态
       let preloadedSubscribed = MediaPreloader.shared.peekTask(for: item)?.isSubscribed
 
@@ -64,7 +64,10 @@ struct MediaContextMenuItems: View {
           if let onSubscribe = onSubscribe {
             onSubscribe(item)
           } else {
-            subscriptionHandler.handleSubscribe(item)
+            subscriptionHandler.handleSubscribe(
+              item,
+              expectedSubscribed: preloadedSubscribed == true
+            )
           }
         } label: {
           if item.canDirectlySubscribe, let subscribed = preloadedSubscribed, subscribed {
@@ -80,8 +83,11 @@ struct MediaContextMenuItems: View {
       if canSearchResources {
         Button {
           Task { @MainActor in
-            let request = await mediaActionHandler.searchResourcesTargetUsingDefaultSites(for: item)
-            navigationPath.append(request)
+            if let request = await mediaActionHandler.searchResourcesTargetUsingDefaultSites(
+              for: item
+            ) {
+              navigationPath.append(request)
+            }
           }
         } label: {
           Label("搜索资源", systemImage: "magnifyingglass")

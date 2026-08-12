@@ -50,8 +50,7 @@ private struct MediaLoadingView: View {
         Spacer()
 
         // 海报图片
-        KFImage(posterUrl)
-          .requestModifier(AnyModifier.cookieModifier)
+        KFImage.sessionImage(posterUrl)
           .loadDiskFileSynchronously()
           .fade(duration: 0)
           .placeholder {
@@ -218,7 +217,7 @@ struct MediaDetailContainerView: View {
   ) -> MediaInfo? {
     guard isEnabled,
       sourceMedia.tmdb_id == nil,
-      sourceMedia.douban_id != nil || sourceMedia.bangumi_id != nil,
+      sourceMedia.canJumpToTMDB,
       let jumpSource = fullDetail ?? (didFailToLoadDetail ? sourceMedia : nil),
       let tmdbId = recognizedTmdbId ?? fullDetail?.tmdb_id
     else {
@@ -335,7 +334,7 @@ private struct MediaDetailContainerContent: View {
     }
     .task(id: tmdbPreloadTarget?.id) {
       guard let target = tmdbPreloadTarget else { return }
-      MediaPreloader.shared.preload(for: target)
+      MediaPreloader.shared.preloadIfNeeded(for: target)
     }
   }
 }

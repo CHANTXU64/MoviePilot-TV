@@ -23,7 +23,7 @@ struct SubscribeSeasonView: View {
     }
     .focusSection()
     .task {
-      await viewModel.loadData()
+      await viewModel.loadSeasonManagementData()
     }
   }
 }
@@ -315,8 +315,9 @@ struct SubscribeSeasonContentView: View {
     let isProcessing = viewModel.isSeasonSubscribing(seasonNumber)
 
     let seasonName =
-      (seasonNumber == 0 && !(season.name?.isEmpty ?? true))
-      ? season.name! : "第 \(seasonNumber) 季"
+      seasonNumber == 0
+      ? (season.name?.isEmpty == false ? season.name! : "特别篇")
+      : "第 \(seasonNumber) 季"
     let title =
       "\(seasonName)\(season.air_date != nil ? " · " + (season.air_date?.prefix(4) ?? "") : "")"
     let statusText = viewModel.getStatusText(season: seasonNumber)
@@ -448,8 +449,7 @@ struct SeasonDetailSheet: View {
             mediaPosterPath: mediaInfo.poster_path
           )
         {
-          KFImage(posterUrl)
-            .requestModifier(AnyModifier.cookieModifier)
+          KFImage.sessionImage(posterUrl)
             .onFailure { _ in
               isImageFailed = true
             }

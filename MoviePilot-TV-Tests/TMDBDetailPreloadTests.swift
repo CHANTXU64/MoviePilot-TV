@@ -102,6 +102,43 @@ final class TMDBDetailPreloadTests: XCTestCase {
   }
 
   @MainActor
+  func testAniListUsesExistingTMDBJumpAndPreloadFlow() async throws {
+    let anilist = try JSONDecoder().decode(
+      MediaInfo.self,
+      from: Data(
+        """
+        {
+          "anilist_id": 154587,
+          "source": "anilist",
+          "title": "葬送的芙莉莲",
+          "type": "电视剧",
+          "year": "2023"
+        }
+        """.utf8
+      )
+    )
+
+    XCTAssertEqual(anilist.apiMediaId, "anilist:154587")
+    XCTAssertTrue(anilist.canJumpToTMDB)
+
+    let preloadTarget = MediaDetailContainerView.tmdbPreloadTarget(
+      for: anilist,
+      fullDetail: nil,
+      recognizedTmdbId: 209867,
+      didFailToLoadDetail: true,
+      isEnabled: true
+    )
+    let jumpTarget = await MediaActionHandler().getTMDBJumpTarget(
+      for: anilist,
+      targetTmdbId: 209867
+    )
+
+    XCTAssertEqual(preloadTarget?.tmdb_id, 209867)
+    XCTAssertEqual(jumpTarget?.tmdb_id, 209867)
+    XCTAssertEqual(preloadTarget?.id, jumpTarget?.id)
+  }
+
+  @MainActor
   func testTMDBPreloadUsesFullDetailIDAndMatchesJumpTarget() {
     let source = MediaInfo(
       douban_id: "1295644",

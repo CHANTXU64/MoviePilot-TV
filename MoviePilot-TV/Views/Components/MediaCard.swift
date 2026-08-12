@@ -6,30 +6,27 @@ enum MediaSource: String {
   case tmdb = "themoviedb"
   case douban = "douban"
   case bangumi = "bangumi"
+  case anilist = "anilist"
 
-  var iconName: String {
+  var assetName: String {
     switch self {
     case .tmdb: return "tmdb"
     case .douban: return "douban"
     case .bangumi: return "bangumi"
+    case .anilist: return "anilist"
     }
   }
 
-  /// 根据存在的 ID 从 MediaInfo 推断来源
-  static func from(mediaInfo: MediaInfo) -> MediaSource? {
-    if mediaInfo.tmdb_id != nil { return .tmdb }
-    if mediaInfo.douban_id != nil { return .douban }
-    if mediaInfo.bangumi_id != nil { return .bangumi }
-    return nil
+  static func from(source: String?) -> MediaSource? {
+    source.flatMap(MediaSource.init(rawValue:))
   }
 
-  /// 根据存在的 ID 从订阅信息推断来源
-  static func from(subscribe: Subscribe) -> MediaSource? {
-    if subscribe.tmdbid != nil { return .tmdb }
-    if subscribe.doubanid != nil { return .douban }
-    if subscribe.bangumiid != nil { return .bangumi }
-    return nil
+  /// Web MediaCard 严格按 media.source 显示角标，不根据辅助 ID 猜测。
+  static func from(mediaInfo: MediaInfo) -> MediaSource? {
+    guard mediaInfo.subscribeShare == nil else { return nil }
+    return from(source: mediaInfo.source)
   }
+
 }
 
 private struct BadgeOverlay: View, Equatable {
@@ -209,11 +206,11 @@ private struct BadgeOverlay: View, Equatable {
       }
 
       if let source = source {
-        Image(source.iconName)
+        Image(source.assetName)
           .resizable()
           .aspectRatio(contentMode: .fit)
           .frame(width: 36, height: 36)
-          .padding(.horizontal, 6)  // 重新应用原始 SwiftUI 视图中的内边距
+          .padding(.horizontal, 2)
           .padding(.vertical, 2)
           .tag("sourceIcon")
       }
@@ -390,8 +387,7 @@ struct MediaCard: View {
   // 提取的海报内容 - Apple TV 风格设计
   private var posterContent: some View {
     let resolvedTypeIcon = Self.typeIconMap[typeText ?? ""] ?? "film"
-    return KFImage(posterUrl)
-      .requestModifier(AnyModifier.cookieModifier)
+    return KFImage.sessionImage(posterUrl)
       .placeholder {
         Rectangle()
           .fill(Color(white: 0.12))

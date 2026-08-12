@@ -1,27 +1,38 @@
 import SwiftUI
 
+nonisolated func manualTransferPreviewFileName(from path: String?) -> String? {
+  guard let path else { return nil }
+  let normalized = path
+    .replacingOccurrences(of: "\\", with: "/")
+    .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+  return normalized.split(separator: "/").last.map(String.init)
+}
+
 struct ReorganizeSheet: View {
   @Environment(\.dismiss) var dismiss
   let onDone: () -> Void
 
   @StateObject private var viewModel: ReorganizeViewModel
   @State private var showAdvanced = false
+  @State private var showMediaSearch = false
+  @State private var showPreview = false
   @FocusState private var isAdvancedButtonFocused: Bool
-
-  // 从 APIService 获取全局设置
-  private let recognizeSource = APIService.shared.settings?.RECOGNIZE_SOURCE ?? "themoviedb"
 
   init(
     logIds: [Int] = [],
     fileItem: FileItem? = nil,
     targetStorage: String? = nil,
+    sourceSession: APIServiceSessionSnapshot,
+    validateBeforeSubmit: @escaping () async throws -> String?,
     onDone: @escaping () -> Void
   ) {
     _viewModel = StateObject(
       wrappedValue: ReorganizeViewModel(
         logIds: logIds,
         fileItem: fileItem,
-        targetStorage: targetStorage
+        targetStorage: targetStorage,
+        validateBeforeSubmit: validateBeforeSubmit,
+        sourceSession: sourceSession
       )
     )
     self.onDone = onDone
@@ -40,6 +51,22 @@ struct ReorganizeSheet: View {
       .task {
         await viewModel.loadConfig()
       }
+      .alert(
+        "操作未执行",
+        isPresented: Binding(
+          get: { viewModel.mutationRetryMessage != nil },
+          set: { if !$0 { viewModel.mutationRetryMessage = nil } }
+        ),
+        actions: {
+          Button("好") {
+            viewModel.mutationRetryMessage = nil
+            dismiss()
+          }
+        },
+        message: {
+          Text(viewModel.mutationRetryMessage ?? "")
+        }
+      )
     }
   }
 
@@ -75,6 +102,11 @@ struct ReorganizeSheet: View {
         .applySheetStyles()
       }
     }
+    .sheet(isPresented: $showPreview) {
+      if let preview = viewModel.previewData {
+        ReorganizePreviewSheet(preview: preview)
+      }
+    }
   }
 
   private var basicSettings: some View {
@@ -99,8 +131,8 @@ struct ReorganizeSheet: View {
           PickerOption(title: "自动", value: ""),
           PickerOption(title: "复制", value: "copy"),
           PickerOption(title: "移动", value: "move"),
-          PickerOption(title: "硬链接", value: "hardlink"),
-          PickerOption(title: "软链接", value: "link"),
+          PickerOption(title: "硬链接", value: "link"),
+          PickerOption(title: "软链接", value: "softlink"),
         ]
       )
 
@@ -108,7 +140,7 @@ struct ReorganizeSheet: View {
         title: "目的目录",
         selection: Binding(
           get: { viewModel.form.target_path },
-          set: { viewModel.form.target_path = $0 }
+          set: { viewModel.selectTargetPath($0) }
         ),
         options: viewModel.targetDirectoryOptions
       )
@@ -121,7 +153,7 @@ struct ReorganizeSheet: View {
         title: "媒体类型",
         selection: Binding(
           get: { viewModel.form.type_name ?? "" },
-          set: { viewModel.form.type_name = $0.isEmpty ? nil : $0 }
+          set: { viewModel.selectMediaType($0.isEmpty ? nil : $0) }
         ),
         options: [
           PickerOption(title: "自动", value: ""),
@@ -130,51 +162,69 @@ struct ReorganizeSheet: View {
         ]
       )
 
-      if recognizeSource == "themoviedb" {
+      SheetPicker(
+        title: "媒体来源",
+        selection: Binding(
+          get: { viewModel.mediaSource },
+          set: { viewModel.selectMediaSource($0) }
+        ),
+        options: MediaSearchSource.allowed(for: .media).map {
+          PickerOption(title: $0.title, value: $0)
+        }
+      )
+
+      HStack(spacing: 20) {
         SheetTextField(
-          title: "TMDB ID",
-          placeholder: "留空自动识别",
-          text: Binding(
-            get: {
-              if let id = viewModel.form.tmdbid {
-                return String(id)
-              }
-              return ""
-            },
-            set: {
-              if $0.isEmpty {
-                viewModel.form.tmdbid = nil
-              } else if let id = Int($0) {
-                viewModel.form.tmdbid = id
-              }
-            }
-          ),
+          title: "\(viewModel.mediaSource.title) ID",
+          placeholder: "自动判断",
+          text: $viewModel.mediaId,
           keyboardType: .numberPad
         )
-      } else {
-        SheetTextField(
-          title: "豆瓣 ID",
-          placeholder: "留空自动识别",
-          text: Binding(
-            get: { viewModel.form.doubanid ?? "" },
-            set: { viewModel.form.doubanid = $0.isEmpty ? nil : $0 }
-          ),
-          keyboardType: .numberPad
-        )
+
+        Button {
+          showMediaSearch = true
+        } label: {
+          Image(systemName: "magnifyingglass")
+        }
+        .accessibilityLabel("搜索媒体")
+      }
+      if !viewModel.isMediaIdValid {
+        Text("媒体 ID 只能包含数字")
+          .foregroundStyle(.red)
+      }
+    }
+    .sheet(isPresented: $showMediaSearch) {
+      ManualMediaSearchSheet(source: viewModel.mediaSource) { mediaId, media in
+        viewModel.selectManualMedia(media, mediaId: mediaId)
+        showMediaSearch = false
       }
     }
   }
 
   private var seriesInfo: some View {
     Group {
-      SheetTextField(
-        title: "指定剧集",
-        placeholder: "剧集组编号",
-        text: Binding(
-          get: { viewModel.form.episode_group ?? "" },
-          set: { viewModel.form.episode_group = $0.isEmpty ? nil : $0 }
+      if viewModel.mediaSource == .themoviedb {
+        SheetPicker(
+          title: "指定剧集",
+          selection: Binding(
+            get: { viewModel.form.episode_group ?? "" },
+            set: { viewModel.form.episode_group = $0.isEmpty ? nil : $0 }
+          ),
+          options: viewModel.episodeGroupOptions
         )
-      )
+        .disabled(
+          viewModel.mediaId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || viewModel.isEpisodeGroupsLoading
+        )
+        .task(id: viewModel.episodeGroupQueryKey) {
+          try? await Task.sleep(nanoseconds: 400_000_000)
+          guard !Task.isCancelled else { return }
+          await viewModel.loadEpisodeGroups()
+        }
+        if viewModel.isEpisodeGroupsLoading {
+          ProgressView("正在加载剧集组")
+        }
+      }
 
       SheetTextField(
         title: "指定季数",
@@ -305,11 +355,26 @@ struct ReorganizeSheet: View {
   private var actionButtons: some View {
     Group {
       SheetActionButton(
+        title: "预览整理结果",
+        loadingTitle: "预览中",
+        isLoading: viewModel.isPreviewing,
+        isDisabled: viewModel.loadErrorMessage != nil || !viewModel.isMediaIdValid,
+        feedbackMessage: nil
+      ) {
+        Task {
+          await viewModel.preview()
+          if viewModel.previewData != nil {
+            showPreview = true
+          }
+        }
+      }
+
+      SheetActionButton(
         title: "开始整理",
         loadingTitle: "整理中",
         isLoading: viewModel.isSubmitting,
-        isDisabled: viewModel.loadErrorMessage != nil,
-        feedbackMessage: viewModel.errorMessage
+        isDisabled: viewModel.loadErrorMessage != nil || !viewModel.isMediaIdValid,
+        feedbackMessage: nil
       ) {
         Task {
           if await viewModel.submit(background: true) {
@@ -325,6 +390,151 @@ struct ReorganizeSheet: View {
         Text("取消")
           .frame(maxWidth: .infinity)
       }
+
+      if let message = viewModel.errorMessage {
+        SheetFeedbackView(message: message)
+      }
     }
   }
+}
+
+private struct ReorganizePreviewSheet: View {
+  let preview: ManualTransferPreviewData
+
+  var body: some View {
+    VStack(spacing: 24) {
+      Text("整理预览")
+        .font(.headline)
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 28)
+
+      HStack(spacing: 12) {
+        summaryCard(
+          title: "全部",
+          value: preview.summary.total,
+          icon: "doc.on.doc",
+          color: .blue
+        )
+        summaryCard(
+          title: "可整理",
+          value: preview.summary.success,
+          icon: "checkmark.circle.fill",
+          color: .green
+        )
+        summaryCard(
+          title: "失败",
+          value: preview.summary.failed,
+          icon: "exclamationmark.triangle.fill",
+          color: .red
+        )
+      }
+      .padding(.horizontal, 28)
+
+      if let message = preview.message, !message.isEmpty {
+        Label(message, systemImage: "info.circle")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, 28)
+      }
+
+      if preview.items.isEmpty {
+        EmptyDataView(title: "暂无预览结果")
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else {
+        ScrollView {
+          LazyVStack(spacing: 16) {
+            ForEach(Array(preview.items.enumerated()), id: \.offset) { _, item in
+              Button(action: {}) {
+                previewRow(item)
+              }
+              .buttonStyle(.card)
+            }
+          }
+        }
+        .contentMargins(28, for: .scrollContent)
+        .focusSection()
+      }
+    }
+    .padding(.top, 28)
+    .frame(width: 1400, height: 820)
+  }
+
+  private func summaryCard(
+    title: String,
+    value: Int,
+    icon: String,
+    color: Color
+  ) -> some View {
+    HStack(spacing: 16) {
+      Image(systemName: icon)
+        .foregroundStyle(color)
+      VStack(alignment: .leading, spacing: 1) {
+        Text(title)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        Text(value.formatted())
+      }
+      Spacer()
+    }
+    .padding(14)
+    .padding(.leading, 10)
+    .frame(maxWidth: .infinity)
+    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+  }
+
+  private func previewRow(_ item: ManualTransferPreviewItem) -> some View {
+    HStack(spacing: 20) {
+      pathCard(
+        title: "整理前",
+        name: manualTransferPreviewFileName(from: item.source) ?? item.title ?? "未知文件",
+        path: item.source ?? "未提供来源路径",
+        color: .primary
+      )
+
+      Image(systemName: "arrow.right")
+        .foregroundStyle(item.success == false ? .red : .secondary)
+
+      pathCard(
+        title: item.success == false ? "无法整理" : "整理后",
+        name: manualTransferPreviewFileName(from: item.target)
+          ?? (item.success == false ? "无法生成目标文件" : item.title ?? "未生成目标文件"),
+        path: item.target ?? "未生成目标路径",
+        color: item.success == false ? .red : .primary,
+        message: item.success == false ? item.message : nil
+      )
+    }
+    .padding(24)
+  }
+
+  private func pathCard(
+    title: String,
+    name: String,
+    path: String,
+    color: Color,
+    message: String? = nil
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text(title)
+        .font(.caption.bold())
+        .foregroundStyle(.secondary)
+      Text(name)
+        .foregroundStyle(color)
+        .lineLimit(2)
+      Text(path)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+      if let message, !message.isEmpty {
+        Text(message)
+          .font(.caption)
+          .foregroundStyle(.red)
+          .lineLimit(2)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
 }

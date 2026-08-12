@@ -25,8 +25,7 @@ struct ForkSubscribeSheet: View {
           )
 
         if !isImageFailed, let posterUrl = share.toMediaInfo().imageURLs.poster {
-          KFImage(posterUrl)
-            .requestModifier(AnyModifier.cookieModifier)
+          KFImage.sessionImage(posterUrl)
             .onFailure { _ in
               isImageFailed = true
             }

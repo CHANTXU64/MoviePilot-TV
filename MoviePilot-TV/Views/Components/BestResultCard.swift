@@ -63,8 +63,7 @@ struct BestResultCard: View {
         )
 
       if !isImageFailed, let url = posterUrl {
-        KFImage(url)
-          .requestModifier(AnyModifier.cookieModifier)
+        KFImage.sessionImage(url)
           .onFailure { _ in
             isImageFailed = true
           }

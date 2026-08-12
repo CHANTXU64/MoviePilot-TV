@@ -2,8 +2,13 @@ import SwiftUI
 
 /// 系统状态视图：展示媒体库统计、服务器存储空间以及实时下载器状态
 struct StatusView: View {
+  private let isSelected: Bool
   @StateObject private var viewModel = StatusViewModel()
   @StateObject private var transferHistoryViewModel = TransferHistoryViewModel()
+
+  init(isSelected: Bool = true) {
+    self.isSelected = isSelected
+  }
 
   var body: some View {
     ScrollView {
@@ -42,7 +47,7 @@ struct StatusView: View {
         Divider()
 
         // --- 4. 媒体整理历史 ---
-        TransferHistoryView(viewModel: transferHistoryViewModel)
+        TransferHistoryView(viewModel: transferHistoryViewModel, isSelected: isSelected)
           .padding(.vertical, 20)
 
       }

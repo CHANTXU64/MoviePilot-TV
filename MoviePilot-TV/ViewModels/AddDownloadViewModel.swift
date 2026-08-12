@@ -13,16 +13,28 @@ class AddDownloadViewModel: ObservableObject {
   @Published var errorMessage: String?
 
   // 高级选项
-  @Published var tmdbId: String = ""
+  @Published var mediaSource: MediaSearchSource
+  @Published var mediaId: String = ""
 
   let torrent: TorrentInfo
   let media: MediaInfo?
   var onSuccess: (() -> Void)?
+  private let apiService: APIService
 
-  init(torrent: TorrentInfo, media: MediaInfo? = nil, onSuccess: (() -> Void)? = nil) {
+  init(
+    torrent: TorrentInfo,
+    media: MediaInfo? = nil,
+    onSuccess: (() -> Void)? = nil,
+    apiService: APIService = .shared
+  ) {
     self.torrent = torrent
     self.media = media
     self.onSuccess = onSuccess
+    self.apiService = apiService
+    self.mediaSource =
+      MediaSearchSource(
+        rawValue: apiService.settings?.RECOGNIZE_SOURCE ?? ""
+      ) ?? .themoviedb
   }
 
   // 目标目录的计算属性（URI 格式）
@@ -34,41 +46,40 @@ class AddDownloadViewModel: ObservableObject {
       }
       return "\(item.storage):\(path)"
     }
-    return Array(Set(uris)).sorted()
+    var seen = Set<String>()
+    return uris.filter { seen.insert($0).inserted }
+  }
+
+  var isMediaIdValid: Bool {
+    MediaIdentifier.isValidManualMediaId(mediaId)
   }
 
   func loadData() async {
     loadErrorMessage = nil
-    guard APIService.shared.canAccess(.search) else {
+    guard apiService.canAccess(.search) else {
       clearLoadedOptions()
       return
     }
 
-    let sessionSnapshot = APIService.shared.sessionSnapshot()
+    let sessionSnapshot = apiService.sessionSnapshot()
     isLoading = true
     defer { isLoading = false }
 
     do {
-      async let downloadersTask = APIService.shared.fetchDownloadClients()
-      async let directoriesTask = APIService.shared.fetchDirectories()
-
-      let (fetchedDownloaders, fetchedDirectories) = try await (downloadersTask, directoriesTask)
-      guard APIService.shared.isSessionUnchanged(from: sessionSnapshot),
-        APIService.shared.canAccess(.search)
+      async let downloadersTask = apiService.fetchDownloadClients()
+      async let directoriesTask = apiService.fetchDirectories()
+      let (fetchedDownloaders, fetchedDirectories) = try await (
+        downloadersTask, directoriesTask
+      )
+      guard apiService.isSessionUnchanged(from: sessionSnapshot),
+        apiService.canAccess(.search)
       else {
         clearLoadedOptions()
         return
       }
 
-      self.downloaders = fetchedDownloaders
-      self.directories = fetchedDirectories
-
-      // 如果可用，则设置默认值
-      if self.selectedDownloader == nil {
-        self.selectedDownloader = self.downloaders.first?.name
-      }
-
-      // 如果目录为空，则尝试智能选择一个（可选，如果用户手动选择则可能不需要）
+      downloaders = fetchedDownloaders
+      directories = fetchedDirectories
     } catch {
       Logger.error("Failed to load add-download options: \(error)")
       loadErrorMessage = "下载设置没有加载完成，请重试。"
@@ -84,37 +95,44 @@ class AddDownloadViewModel: ObservableObject {
 
   func addDownload() async {
     errorMessage = nil
+    guard isMediaIdValid else {
+      errorMessage = "媒体 ID 只能包含数字。"
+      return
+    }
     isSubmitting = true
     defer { isSubmitting = false }
 
     // 构建请求体
-    let tmdbIdInt = Int(tmdbId)
+    let normalizedMediaId = mediaId.trimmingCharacters(in: .whitespacesAndNewlines)
 
     let payload = AddDownloadRequest(
       torrent_in: torrent,
       downloader: selectedDownloader,
       save_path: selectedDirectory,
       media_in: media,
-      tmdbid: tmdbIdInt,
-      doubanid: nil
+      tmdbid: nil,
+      doubanid: nil,
+      bangumiid: nil,
+      anilistid: nil,
+      media_source: normalizedMediaId.isEmpty ? nil : mediaSource.rawValue,
+      media_id: normalizedMediaId.isEmpty ? nil : normalizedMediaId
     )
-
     do {
-      let endpoint = media != nil ? "/download/" : "/download/add"
-      let _ = try JSONEncoder().encode(payload)
-
-      // APIService 目前还没有一个返回通用 JSON/Success 的通用 post 方法，
-      // 但如果我们可以直接使用 makeRequest（如果将其公开或添加一个辅助方法）。
-      // 由于 `makeRequest` 是私有的，我们应该向 APIService 添加一个特定的方法。
-      // 现在，我将假设我需要向 APIService 添加 `addDownload`。
-      let (success, message) = try await APIService.shared.addDownload(
-        payload: payload, endpoint: endpoint)
+      let (success, message) = try await apiService.addDownload(payload: payload)
       if success {
         onSuccess?()
       } else {
         Logger.error("Add-download request returned false: \(message ?? "no backend message")")
-        errorMessage = "暂时无法添加下载，请稍后重试。"
+        if let message = message?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !message.isEmpty
+        {
+          errorMessage = message
+        } else {
+          errorMessage = "暂时无法添加下载，请稍后重试。"
+        }
       }
+    } catch is CancellationError {
+      return
     } catch {
       Logger.error("Failed to add download: \(error)")
       errorMessage = "暂时无法添加下载，请稍后重试。"

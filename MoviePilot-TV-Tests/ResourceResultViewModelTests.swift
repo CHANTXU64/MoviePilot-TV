@@ -79,19 +79,55 @@ private actor ResourceResultAsyncGate {
 
 @MainActor
 final class ResourceResultViewModelTests: XCTestCase {
-  func testDeinitCancelsInFlightSearchStream() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(ResourceResultViewModelURLProtocol.self))
-    defer { URLProtocol.unregisterClass(ResourceResultViewModelURLProtocol.self) }
+  func testSearchStreamAggregationMatchesWebOrderingAndFinalResultRules() throws {
+    func event(_ type: String, title: String?) throws -> SearchStreamEvent {
+      let items = title.map { "[\(resourceContextJSON(title: $0))]" } ?? "[]"
+      let batchMetadata =
+        type == "replace"
+        ? #","replace_batch":true,"batch_index":0,"batch_count":2"#
+        : ""
+      return try JSONDecoder().decode(
+        SearchStreamEvent.self,
+        from: Data(#"{"type":"\#(type)","items":\#(items)\#(batchMetadata)}"#.utf8)
+      )
+    }
 
-    let service = APIService.shared
+    var preview: [Context] = []
+    var previewFinalApplied = false
+    try event("append", title: "Older").applyResourceItems(
+      to: &preview, finalResultApplied: &previewFinalApplied)
+    try event("append", title: "Newer").applyResourceItems(
+      to: &preview, finalResultApplied: &previewFinalApplied)
+    try event("done", title: nil).applyResourceItems(
+      to: &preview, finalResultApplied: &previewFinalApplied)
+    XCTAssertEqual(preview.compactMap(\.torrent_info?.title), ["Newer", "Older"])
+
+    var final: [Context] = []
+    var finalApplied = false
+    try event("replace", title: "Final").applyResourceItems(
+      to: &final, finalResultApplied: &finalApplied)
+    try event("append", title: "Post Replace").applyResourceItems(
+      to: &final, finalResultApplied: &finalApplied)
+    try event("heartbeat", title: nil).applyResourceItems(
+      to: &final, finalResultApplied: &finalApplied)
+    try event("done", title: "Stale Done").applyResourceItems(
+      to: &final, finalResultApplied: &finalApplied)
+    XCTAssertEqual(final.compactMap(\.torrent_info?.title), ["Final"])
+  }
+
+  func testDeinitCancelsInFlightSearchStream() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
     let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await ResourceResultViewModelURLProtocol.stub.reset()
-    service.baseURL = "http://resource-result-tests.local"
+    service.baseURLForTesting = "http://resource-result-tests.local"
     configureResourceResultSearchSession(service)
 
-    var viewModel: ResourceResultViewModel? = ResourceResultViewModel(keyword: "stale")
+    var viewModel: ResourceResultViewModel? = ResourceResultViewModel(keyword: "stale", apiService: service)
     let releasedViewModel = WeakBox(viewModel)
 
     await viewModel?.search()
@@ -112,18 +148,18 @@ final class ResourceResultViewModelTests: XCTestCase {
   }
 
   func testCancelSearchCancelsInFlightSearchStream() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(ResourceResultViewModelURLProtocol.self))
-    defer { URLProtocol.unregisterClass(ResourceResultViewModelURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await ResourceResultViewModelURLProtocol.stub.reset()
-    service.baseURL = "http://resource-result-tests.local"
+    service.baseURLForTesting = "http://resource-result-tests.local"
     configureResourceResultSearchSession(service)
 
-    let viewModel = ResourceResultViewModel(keyword: "stale")
+    let viewModel = ResourceResultViewModel(keyword: "stale", apiService: service)
     await viewModel.search()
 
     try await withTimeout("resource search stream request to start") {
@@ -139,18 +175,18 @@ final class ResourceResultViewModelTests: XCTestCase {
   }
 
   func testCancelledFallbackDoesNotPublishResultsAsCompletedSearch() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(ResourceResultViewModelURLProtocol.self))
-    defer { URLProtocol.unregisterClass(ResourceResultViewModelURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await ResourceResultViewModelURLProtocol.stub.reset()
-    service.baseURL = "http://resource-result-tests.local"
+    service.baseURLForTesting = "http://resource-result-tests.local"
     configureResourceResultSuperUserSearchSession(service)
     let filterSnapshot = ResourceResultViewModelFilterSelectionSnapshot.selectHardRule(
-      "allow-all", baseURL: service.baseURL)
+      "allow-all", apiService: service)
     defer { filterSnapshot.restore() }
 
     await ResourceResultViewModelURLProtocol.stub.setStreamFailure(forKeyword: "fallback")
@@ -160,7 +196,7 @@ final class ResourceResultViewModelTests: XCTestCase {
     )
     await ResourceResultViewModelURLProtocol.stub.setCustomFilterGate(ResourceResultAsyncGate())
 
-    let viewModel = ResourceResultViewModel(keyword: "fallback")
+    let viewModel = ResourceResultViewModel(keyword: "fallback", apiService: service)
     await viewModel.search()
 
     try await withTimeout("resource stream request to fail into fallback") {
@@ -191,18 +227,18 @@ final class ResourceResultViewModelTests: XCTestCase {
   }
 
   func testSearchCanRestartAfterDisappearCancellation() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(ResourceResultViewModelURLProtocol.self))
-    defer { URLProtocol.unregisterClass(ResourceResultViewModelURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await ResourceResultViewModelURLProtocol.stub.reset()
-    service.baseURL = "http://resource-result-tests.local"
+    service.baseURLForTesting = "http://resource-result-tests.local"
     configureResourceResultSearchSession(service)
 
-    let viewModel = ResourceResultViewModel(keyword: "repeat")
+    let viewModel = ResourceResultViewModel(keyword: "repeat", apiService: service)
     await viewModel.search()
 
     try await withTimeout("first resource search request to start") {
@@ -230,18 +266,18 @@ final class ResourceResultViewModelTests: XCTestCase {
   }
 
   func testInFlightDisappearCancellationAllowsSearchToRestart() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(ResourceResultViewModelURLProtocol.self))
-    defer { URLProtocol.unregisterClass(ResourceResultViewModelURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await ResourceResultViewModelURLProtocol.stub.reset()
-    service.baseURL = "http://resource-result-tests.local"
+    service.baseURLForTesting = "http://resource-result-tests.local"
     configureResourceResultSearchSession(service)
 
-    let viewModel = ResourceResultViewModel(keyword: "tab-switch")
+    let viewModel = ResourceResultViewModel(keyword: "tab-switch", apiService: service)
     await viewModel.search()
 
     try await withTimeout("first resource search request to start") {
@@ -269,15 +305,15 @@ final class ResourceResultViewModelTests: XCTestCase {
   }
 
   func testSessionChangeEndsLoadingAndAllowsSearchToRestart() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(ResourceResultViewModelURLProtocol.self))
-    defer { URLProtocol.unregisterClass(ResourceResultViewModelURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await ResourceResultViewModelURLProtocol.stub.reset()
-    service.baseURL = "http://resource-result-tests.local"
+    service.baseURLForTesting = "http://resource-result-tests.local"
     configureResourceResultSearchSession(service)
 
     let fallbackGate = ResourceResultAsyncGate()
@@ -289,7 +325,7 @@ final class ResourceResultViewModelTests: XCTestCase {
     await ResourceResultViewModelURLProtocol.stub.setFallbackGate(
       fallbackGate, forKeyword: "session-change")
 
-    let viewModel = ResourceResultViewModel(keyword: "session-change")
+    let viewModel = ResourceResultViewModel(keyword: "session-change", apiService: service)
     defer { viewModel.cancelSearch() }
     await viewModel.search()
 
@@ -298,7 +334,7 @@ final class ResourceResultViewModelTests: XCTestCase {
         path: "/api/v1/search/title", keyword: "session-change")
     }
 
-    service.currentUser = Token(
+    service.currentUserForTesting = Token(
       access_token: service.token ?? "resource-result-search-token",
       token_type: "bearer",
       super_user: FlexibleBool(false),
@@ -329,19 +365,129 @@ final class ResourceResultViewModelTests: XCTestCase {
     XCTAssertTrue(didRestart)
   }
 
-  func testCompletedSearchDoesNotRestartAfterInFlightDisappearCancellation() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(ResourceResultViewModelURLProtocol.self))
-    defer { URLProtocol.unregisterClass(ResourceResultViewModelURLProtocol.self) }
+  func testScheduledSearchDoesNotStartAfterAccountSwitch() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await ResourceResultViewModelURLProtocol.stub.reset()
-    service.baseURL = "http://resource-result-tests.local"
+    let accountA = Token(
+      access_token: "resource-account-a",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [UserPermissionKey.search.rawValue: true],
+      user_id: 301,
+      user_name: "resource-account-a",
+      avatar: nil
+    )
+    service.replaceSessionForTesting(
+      baseURL: "http://resource-result-tests.local",
+      token: accountA.access_token,
+      currentUser: accountA
+    )
+    let viewModel = ResourceResultViewModel(keyword: "scheduled-switch", apiService: service)
+
+    await viewModel.search()
+    let accountB = Token(
+      access_token: "resource-account-b",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [UserPermissionKey.search.rawValue: true],
+      user_id: 302,
+      user_name: "resource-account-b",
+      avatar: nil
+    )
+    service.replaceSessionForTesting(
+      baseURL: "http://resource-result-tests.local",
+      token: accountB.access_token,
+      currentUser: accountB
+    )
+    for _ in 0..<50 { await Task.yield() }
+
+    let streamCount = await ResourceResultViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/search/title/stream",
+      keyword: "scheduled-switch"
+    )
+    let fallbackCount = await ResourceResultViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/search/title",
+      keyword: "scheduled-switch"
+    )
+    XCTAssertEqual(streamCount, 0)
+    XCTAssertEqual(fallbackCount, 0)
+    XCTAssertFalse(viewModel.isLoading)
+  }
+
+  func testSessionChangeDoesNotPublishStaleFallbackError() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await ResourceResultViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://resource-result-tests.local"
+    configureResourceResultSearchSession(service)
+
+    let fallbackGate = ResourceResultAsyncGate()
+    await ResourceResultViewModelURLProtocol.stub.setStreamFailure(forKeyword: "stale-error")
+    await ResourceResultViewModelURLProtocol.stub.setFallbackFailure(forKeyword: "stale-error")
+    await ResourceResultViewModelURLProtocol.stub.setFallbackGate(
+      fallbackGate, forKeyword: "stale-error")
+
+    let viewModel = ResourceResultViewModel(keyword: "stale-error", apiService: service)
+    defer { viewModel.cancelSearch() }
+    await viewModel.search()
+
+    try await withTimeout("resource search to enter failing fallback request") {
+      await ResourceResultViewModelURLProtocol.stub.waitForRequest(
+        path: "/api/v1/search/title", keyword: "stale-error")
+    }
+
+    service.currentUserForTesting = Token(
+      access_token: service.token ?? "resource-result-search-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        "discovery": false,
+        "search": true,
+        "subscribe": false,
+        "manage": false,
+        "admin": false,
+      ],
+      user_name: "changed-resource-user",
+      avatar: nil
+    )
+    await fallbackGate.open()
+
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertNil(
+      viewModel.errorMessage,
+      "A fallback failure from an obsolete session must not overwrite the current error state."
+    )
+  }
+
+  func testCompletedSearchDoesNotRestartAfterInFlightDisappearCancellation() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await ResourceResultViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://resource-result-tests.local"
     configureResourceResultSearchSession(service)
     let filterSnapshot = ResourceResultViewModelFilterSelectionSnapshot.selectHardRule(
-      "allow-all", baseURL: service.baseURL)
+      "allow-all", apiService: service)
     defer { filterSnapshot.restore() }
 
     await ResourceResultViewModelURLProtocol.stub.setStreamFailure(forKeyword: "finished")
@@ -350,7 +496,7 @@ final class ResourceResultViewModelTests: XCTestCase {
       forKeyword: "finished"
     )
 
-    let viewModel = ResourceResultViewModel(keyword: "finished")
+    let viewModel = ResourceResultViewModel(keyword: "finished", apiService: service)
     await viewModel.search()
 
     try await withTimeout("fallback resource search to complete") {
@@ -377,6 +523,74 @@ final class ResourceResultViewModelTests: XCTestCase {
       "A completed resource search should keep hasSearched true when the view only cancels in-flight work on disappear."
     )
   }
+
+  func testMalformedStreamFallsBackToRequestSearch() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await ResourceResultViewModelURLProtocol.stub.reset()
+    await ResourceResultViewModelURLProtocol.stub.setStreamBody(
+      "data: not-json\n\n",
+      forKeyword: "malformed"
+    )
+    await ResourceResultViewModelURLProtocol.stub.setFallbackResults(
+      [resourceContextJSON(title: "Fallback Result")],
+      forKeyword: "malformed"
+    )
+    service.baseURLForTesting = "http://resource-result-tests.local"
+    configureResourceResultSearchSession(service)
+
+    let viewModel = ResourceResultViewModel(keyword: "malformed", apiService: service)
+    await viewModel.search()
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertEqual(viewModel.results.count, 1)
+    let fallbackRequestCount = await ResourceResultViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/search/title",
+      keyword: "malformed"
+    )
+    XCTAssertEqual(fallbackRequestCount, 1)
+  }
+
+  func testBusinessStreamErrorShowsLocalizedReasonWithoutRequestFallback() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await ResourceResultViewModelURLProtocol.stub.reset()
+    await ResourceResultViewModelURLProtocol.stub.setStreamBody(
+      "data: {\"type\":\"error\",\"message\":\"Search failed\",\"message_i18n\":\"搜索失败\"}\n\n",
+      forKeyword: "business-error"
+    )
+    service.baseURLForTesting = "http://resource-result-tests.local"
+    configureResourceResultSearchSession(service)
+
+    let viewModel = ResourceResultViewModel(keyword: "business-error", apiService: service)
+    await viewModel.search()
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertEqual(viewModel.errorMessage, "搜索失败")
+    let fallbackRequestCount = await ResourceResultViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/search/title",
+      keyword: "business-error"
+    )
+    XCTAssertEqual(fallbackRequestCount, 0)
+  }
 }
 
 @MainActor
@@ -398,9 +612,11 @@ private struct ResourceResultViewModelServiceSnapshot {
   }
 
   func restore(to service: APIService) {
-    service.baseURL = baseURL
-    service.token = token
-    service.currentUser = currentUser
+    service.replaceSessionForTesting(
+      baseURL: baseURL,
+      token: token,
+      currentUser: currentUser
+    )
 
     if let serverURLDefaults {
       UserDefaults.standard.set(serverURLDefaults, forKey: "serverURL")
@@ -420,7 +636,9 @@ private actor ResourceResultViewModelURLProtocolStub {
   private var requestedRequests: [ResourceResultRecordedRequest] = []
   private var cancelledRequests: [ResourceResultRecordedRequest] = []
   private var streamFailureKeywords: Set<String> = []
+  private var streamBodiesByKeyword: [String: Data] = [:]
   private var fallbackResultsByKeyword: [String: [String]] = [:]
+  private var fallbackFailureKeywords: Set<String> = []
   private var fallbackGatesByKeyword: [String: ResourceResultAsyncGate] = [:]
   private var customFilterGate: ResourceResultAsyncGate?
 
@@ -428,7 +646,9 @@ private actor ResourceResultViewModelURLProtocolStub {
     requestedRequests.removeAll()
     cancelledRequests.removeAll()
     streamFailureKeywords.removeAll()
+    streamBodiesByKeyword.removeAll()
     fallbackResultsByKeyword.removeAll()
+    fallbackFailureKeywords.removeAll()
     fallbackGatesByKeyword.removeAll()
     customFilterGate = nil
   }
@@ -437,8 +657,16 @@ private actor ResourceResultViewModelURLProtocolStub {
     streamFailureKeywords.insert(keyword)
   }
 
+  func setStreamBody(_ body: String, forKeyword keyword: String) {
+    streamBodiesByKeyword[keyword] = Data(body.utf8)
+  }
+
   func setFallbackResults(_ results: [String], forKeyword keyword: String) {
     fallbackResultsByKeyword[keyword] = results
+  }
+
+  func setFallbackFailure(forKeyword keyword: String) {
+    fallbackFailureKeywords.insert(keyword)
   }
 
   func setFallbackGate(_ gate: ResourceResultAsyncGate, forKeyword keyword: String) {
@@ -465,12 +693,21 @@ private actor ResourceResultViewModelURLProtocolStub {
       if streamFailureKeywords.contains(keyword) {
         return ResourceResultHTTPStubResponse(statusCode: 500, data: Data())
       }
+      if let body = streamBodiesByKeyword[keyword] {
+        return ResourceResultHTTPStubResponse(statusCode: 200, data: body)
+      }
       try await waitUntilCancelled()
     }
 
     if components.path == "/api/v1/search/title" {
       if let gate = fallbackGatesByKeyword[keyword] {
         await gate.wait()
+      }
+      if fallbackFailureKeywords.contains(keyword) {
+        return ResourceResultHTTPStubResponse(
+          statusCode: 500,
+          data: Data(#"{"detail":"Fallback failed"}"#.utf8)
+        )
       }
       return ResourceResultHTTPStubResponse(
         statusCode: 200,
@@ -514,6 +751,12 @@ private actor ResourceResultViewModelURLProtocolStub {
       if Task.isCancelled { return }
       try? await Task.sleep(nanoseconds: 1_000_000)
     }
+  }
+
+  func requestCount(path: String, keyword: String? = nil) -> Int {
+    requestedRequests.filter { request in
+      request.path == path && (keyword == nil || request.keyword == keyword)
+    }.count
   }
 
   func waitForCancellation() async {
@@ -602,8 +845,8 @@ private struct ResourceResultRecordedRequest: Equatable {
 
 @MainActor
 private func configureResourceResultSearchSession(_ service: APIService) {
-  service.token = "resource-result-search-token"
-  service.currentUser = Token(
+  service.tokenForTesting = "resource-result-search-token"
+  service.currentUserForTesting = Token(
     access_token: "resource-result-search-token",
     token_type: "bearer",
     super_user: FlexibleBool(false),
@@ -614,6 +857,7 @@ private func configureResourceResultSearchSession(_ service: APIService) {
       "manage": false,
       "admin": false,
     ],
+    user_id: 201,
     user_name: "search-user",
     avatar: nil
   )
@@ -621,8 +865,8 @@ private func configureResourceResultSearchSession(_ service: APIService) {
 
 @MainActor
 private func configureResourceResultSuperUserSearchSession(_ service: APIService) {
-  service.token = "resource-result-super-search-token"
-  service.currentUser = Token(
+  service.tokenForTesting = "resource-result-super-search-token"
+  service.currentUserForTesting = Token(
     access_token: "resource-result-super-search-token",
     token_type: "bearer",
     super_user: FlexibleBool(true),
@@ -632,6 +876,7 @@ private func configureResourceResultSuperUserSearchSession(_ service: APIService
       "subscribe": true,
       "manage": true,
     ],
+    user_id: 202,
     user_name: "admin",
     avatar: nil
   )
@@ -644,15 +889,12 @@ private struct ResourceResultViewModelFilterSelectionSnapshot {
   let hardValue: String?
   let softValue: String?
 
-  static func selectHardRule(_ ruleId: String, baseURL: String)
+  static func selectHardRule(_ ruleId: String, apiService: APIService)
     -> ResourceResultViewModelFilterSelectionSnapshot
   {
-    let username =
-      KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username")
-      ?? UserDefaults.standard.string(forKey: "username")
-      ?? "default"
-    let hardKey = "selectedCustomFilterRuleId_\(baseURL)_\(username)"
-    let softKey = "selectedSoftFilterRuleId_\(baseURL)_\(username)"
+    let profileKey = apiService.profileKey ?? "missing-profile"
+    let hardKey = "selectedCustomFilterRuleId_\(profileKey)"
+    let softKey = "selectedSoftFilterRuleId_\(profileKey)"
     let snapshot = ResourceResultViewModelFilterSelectionSnapshot(
       hardKey: hardKey,
       softKey: softKey,

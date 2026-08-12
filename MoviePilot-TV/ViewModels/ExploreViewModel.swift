@@ -2,15 +2,180 @@ import Combine
 import Foundation
 import SwiftUI
 
-// MARK: - 数据源枚举
-enum DiscoverSource: String, CaseIterable, Identifiable {
-  case themoviedb = "TheMovieDb"
-  case douban = "豆瓣"
-  case bangumi = "Bangumi"
-  case popular = "热门订阅"
-  case subscriptionShare = "订阅分享"
+// MARK: - 数据源
+nonisolated enum DiscoverSource: Hashable, Identifiable, Sendable {
+  case themoviedb
+  case douban
+  case bangumi
+  case anilist
+  case popular
+  case subscriptionShare
+  case custom(DiscoverSourceDescriptor)
 
-  var id: String { rawValue }
+  static let allCases: [DiscoverSource] = [
+    .themoviedb, .douban, .bangumi, .anilist, .popular, .subscriptionShare,
+  ]
+
+  var id: String {
+    switch self {
+    case .themoviedb: "themoviedb"
+    case .douban: "douban"
+    case .bangumi: "bangumi"
+    case .anilist: "anilist"
+    case .popular: "popular"
+    case .subscriptionShare: "subscriptionShare"
+    case .custom(let source): "custom:\(source.mediaid_prefix)"
+    }
+  }
+
+  var title: String {
+    switch self {
+    case .themoviedb: "TheMovieDb"
+    case .douban: "豆瓣"
+    case .bangumi: "Bangumi"
+    case .anilist: "AniList"
+    case .popular: "热门订阅"
+    case .subscriptionShare: "订阅分享"
+    case .custom(let source): source.name
+    }
+  }
+
+  var descriptor: DiscoverSourceDescriptor? {
+    guard case .custom(let source) = self else { return nil }
+    return source
+  }
+}
+
+nonisolated struct PluginFilterOption: Hashable, Identifiable {
+  let value: JSONValue
+  let title: String
+
+  var id: JSONValue { value }
+}
+
+nonisolated struct PluginFilterControl: Hashable, Identifiable {
+  enum Kind: Hashable {
+    case choice
+    case text
+    case number
+  }
+
+  let field: String
+  let label: String
+  let kind: Kind
+  let options: [PluginFilterOption]
+
+  var id: String { field }
+}
+
+nonisolated enum PluginFilterControlParser {
+  static func parse(_ nodes: [JSONValue]) -> [PluginFilterControl] {
+    var controls: [PluginFilterControl] = []
+    nodes.forEach {
+      collect($0, inheritedLabel: nil, controls: &controls)
+    }
+    var seenFields = Set<String>()
+    return controls.filter { seenFields.insert($0.field).inserted }
+  }
+
+  private static func collect(
+    _ node: JSONValue,
+    inheritedLabel: String?,
+    controls: inout [PluginFilterControl]
+  ) {
+    guard let object = node.objectValue else { return }
+    let component = object["component"]?.stringValue ?? ""
+    let props = object["props"]?.objectValue ?? [:]
+    let children = object["content"]?.arrayValue ?? []
+    let prop: ([String]) -> JSONValue? = { names in
+      names.lazy.compactMap { name in
+        props.first(where: { $0.key.lowercased() == name.lowercased() })?.value
+      }.first
+    }
+    let localLabel = prop(["label"])?.stringValue ?? inheritedLabel
+    let field =
+      prop(["model", "v-model", "modelvalue", "modelValue"])?.stringValue
+      ?? prop(["name"])?.stringValue
+      ?? object["model"]?.stringValue
+
+    if let field {
+      let lower = component.lowercased()
+      let options = collectOptions(
+        from: children + (prop(["items"])?.arrayValue ?? [])
+      )
+      let kind: PluginFilterControl.Kind
+      switch lower {
+      case "vchipgroup", "vradiogroup", "vselect", "vcombobox":
+        kind = options.isEmpty ? .text : .choice
+      case "vtextfield":
+        kind = props["type"]?.stringValue?.lowercased() == "number" ? .number : .text
+      case "vnumberinput":
+        kind = .number
+      default:
+        return
+      }
+      controls.append(
+        PluginFilterControl(
+          field: field,
+          label: localLabel ?? field,
+          kind: kind,
+          options: options
+        ))
+      return
+    }
+
+    var siblingLabel = localLabel
+    children.forEach {
+      if let label = firstLabel(in: $0) {
+        siblingLabel = label
+      }
+      collect($0, inheritedLabel: siblingLabel, controls: &controls)
+    }
+  }
+
+  private static func firstLabel(in node: JSONValue) -> String? {
+    guard let object = node.objectValue else { return nil }
+    if object["component"]?.stringValue?.lowercased() == "vlabel" {
+      return object["text"]?.stringValue
+    }
+    return (object["content"]?.arrayValue ?? []).lazy.compactMap { firstLabel(in: $0) }.first
+  }
+
+  private static func collectOptions(from nodes: [JSONValue]) -> [PluginFilterOption] {
+    nodes.flatMap { node -> [PluginFilterOption] in
+      guard let object = node.objectValue else {
+        switch node {
+        case .string, .int, .double, .bool:
+          return [PluginFilterOption(value: node, title: node.queryString ?? "")]
+        case .null, .array, .object:
+          return []
+        }
+      }
+      let component = object["component"]?.stringValue?.lowercased()
+      let props = object["props"]?.objectValue ?? [:]
+      if ["vchip", "vradio"].contains(component), let value = props["value"] {
+        return [
+          PluginFilterOption(
+            value: value,
+            title: object["text"]?.queryString
+              ?? props["label"]?.queryString
+              ?? value.queryString ?? ""
+          )
+        ]
+      }
+      if let value = object["value"] ?? props["value"] {
+        let title =
+          object["title"]?.queryString
+          ?? object["text"]?.queryString
+          ?? object["label"]?.queryString
+          ?? props["title"]?.queryString
+          ?? props["label"]?.queryString
+          ?? value.queryString ?? ""
+        return [PluginFilterOption(value: value, title: title)]
+      }
+      return collectOptions(from: object["content"]?.arrayValue ?? [])
+    }
+  }
 }
 
 // MARK: - 内容包装
@@ -22,7 +187,7 @@ enum ExploreContent {
 // MARK: - 类型枚举
 enum DiscoverMediaType: String, CaseIterable, Identifiable {
   case movies = "电影"
-  case tvs = "剧集"
+  case tvs = "电视剧"
 
   var id: String { rawValue }
 
@@ -39,12 +204,14 @@ enum DiscoverMediaType: String, CaseIterable, Identifiable {
 class ExploreViewModel: ObservableObject {
   @Published var selectedSource: DiscoverSource = .themoviedb
   @Published var selectedType: DiscoverMediaType = .movies
+  @Published private(set) var availableSources: [DiscoverSource] = []
 
   // TheMovieDb 筛选参数
   @Published var tmdbSortBy: String = "popularity.desc"
   @Published var tmdbGenre: String = ""
   @Published var tmdbLanguage: String = ""
   @Published var tmdbVoteAverage: Int = 0
+  @Published var tmdbVoteCount: Int = 10
 
   // 豆瓣筛选参数
   @Published var doubanSort: String = "U"
@@ -56,6 +223,19 @@ class ExploreViewModel: ObservableObject {
   @Published var bangumiCat: String = ""
   @Published var bangumiSort: String = "rank"
   @Published var bangumiYear: String = ""
+
+  // AniList 筛选参数
+  @Published var anilistSort: String = "POPULARITY_DESC"
+  @Published var anilistGenre: String = ""
+  @Published var anilistFormat: String = ""
+  @Published var anilistSeason: String = ""
+  @Published var anilistYear: Int = 0
+  @Published var anilistStatus: String = ""
+  @Published var anilistCountry: String = ""
+
+  // 插件筛选参数
+  @Published var pluginFilterValues: [String: JSONValue] = [:]
+  @Published private(set) var pluginFilterControls: [PluginFilterControl] = []
 
   // 热门订阅筛选参数
   @Published var popularSortBy: String = "count"
@@ -72,12 +252,15 @@ class ExploreViewModel: ObservableObject {
   @Published var selectedShare: SubscribeShare?
   @Published var forkToShow: Int?
 
-  private let apiService = APIService.shared
+  private let apiService: APIService
 
   private var cancellables = Set<AnyCancellable>()
   private var paginatorCancellable: AnyCancellable?
+  private var extraSourceSnapshot: [DiscoverSourceDescriptor] = []
 
-  init() {
+  init(apiService: APIService = .shared) {
+    self.apiService = apiService
+    applySources()
     // 将所有筛选器的 Publisher 转换为 AnyPublisher<Void, Never>
     let filterPublishers: [AnyPublisher<Void, Never>] = [
       $selectedSource.map { _ in }.eraseToAnyPublisher(),
@@ -86,6 +269,7 @@ class ExploreViewModel: ObservableObject {
       $tmdbGenre.map { _ in }.eraseToAnyPublisher(),
       $tmdbLanguage.map { _ in }.eraseToAnyPublisher(),
       $tmdbVoteAverage.map { _ in }.eraseToAnyPublisher(),
+      $tmdbVoteCount.map { _ in }.eraseToAnyPublisher(),
       $doubanSort.map { _ in }.eraseToAnyPublisher(),
       $doubanCategory.map { _ in }.eraseToAnyPublisher(),
       $doubanZone.map { _ in }.eraseToAnyPublisher(),
@@ -93,6 +277,14 @@ class ExploreViewModel: ObservableObject {
       $bangumiCat.map { _ in }.eraseToAnyPublisher(),
       $bangumiSort.map { _ in }.eraseToAnyPublisher(),
       $bangumiYear.map { _ in }.eraseToAnyPublisher(),
+      $anilistSort.map { _ in }.eraseToAnyPublisher(),
+      $anilistGenre.map { _ in }.eraseToAnyPublisher(),
+      $anilistFormat.map { _ in }.eraseToAnyPublisher(),
+      $anilistSeason.map { _ in }.eraseToAnyPublisher(),
+      $anilistYear.map { _ in }.eraseToAnyPublisher(),
+      $anilistStatus.map { _ in }.eraseToAnyPublisher(),
+      $anilistCountry.map { _ in }.eraseToAnyPublisher(),
+      $pluginFilterValues.map { _ in }.eraseToAnyPublisher(),
       $popularSortBy.map { _ in }.eraseToAnyPublisher(),
       $popularGenre.map { _ in }.eraseToAnyPublisher(),
       $popularMinRating.map { _ in }.eraseToAnyPublisher(),
@@ -115,13 +307,14 @@ class ExploreViewModel: ObservableObject {
         self.setupPaginator(for: path)
       }
       .store(in: &cancellables)
+
   }
 
   // MARK: - TheMovieDb 字典
 
   static let tmdbMovieSortDict: [(key: String, value: String)] = [
-    ("popularity.desc", "热门降序"),
-    ("popularity.asc", "热门升序"),
+    ("popularity.desc", "热度降序"),
+    ("popularity.asc", "热度升序"),
     ("release_date.desc", "上映日期降序"),
     ("release_date.asc", "上映日期升序"),
     ("vote_average.desc", "评分降序"),
@@ -129,8 +322,8 @@ class ExploreViewModel: ObservableObject {
   ]
 
   static let tmdbTvSortDict: [(key: String, value: String)] = [
-    ("popularity.desc", "热门降序"),
-    ("popularity.asc", "热门升序"),
+    ("popularity.desc", "热度降序"),
+    ("popularity.asc", "热度升序"),
     ("first_air_date.desc", "首播日期降序"),
     ("first_air_date.asc", "首播日期升序"),
     ("vote_average.desc", "评分降序"),
@@ -197,9 +390,9 @@ class ExploreViewModel: ObservableObject {
   // MARK: - 豆瓣字典
 
   static let doubanSortDict: [(key: String, value: String)] = [
-    ("U", "综合"),
-    ("R", "上映日期"),
-    ("T", "近期热门"),
+    ("U", "综合排序"),
+    ("R", "首播时间"),
+    ("T", "近期热度"),
     ("S", "高分优先"),
   ]
 
@@ -297,6 +490,62 @@ class ExploreViewModel: ObservableObject {
     }
   }
 
+  // MARK: - AniList 字典
+
+  static let anilistSortDict: [(key: String, value: String)] = [
+    ("POPULARITY_DESC", "热门优先"),
+    ("TRENDING_DESC", "趋势优先"),
+    ("SCORE_DESC", "评分优先"),
+    ("START_DATE_DESC", "最新开播"),
+  ]
+
+  static let anilistGenreDict: [(key: String, value: String)] = [
+    ("Action", "动作"),
+    ("Adventure", "冒险"),
+    ("Comedy", "喜剧"),
+    ("Drama", "剧情"),
+    ("Fantasy", "奇幻"),
+    ("Horror", "恐怖"),
+    ("Mahou Shoujo", "魔法少女"),
+    ("Mecha", "机甲"),
+    ("Music", "音乐"),
+    ("Mystery", "悬疑"),
+    ("Psychological", "心理"),
+    ("Romance", "爱情"),
+    ("Sci-Fi", "科幻"),
+    ("Slice of Life", "日常"),
+    ("Sports", "运动"),
+    ("Supernatural", "超自然"),
+    ("Thriller", "惊悚"),
+  ]
+
+  static let anilistFormatDict: [(key: String, value: String)] = [
+    ("TV", "TV"),
+    ("TV_SHORT", "短篇 TV"),
+    ("MOVIE", "剧场版"),
+    ("OVA", "OVA"),
+    ("ONA", "ONA"),
+    ("SPECIAL", "特别篇"),
+    ("MUSIC", "音乐"),
+  ]
+
+  static let anilistSeasonDict: [(key: String, value: String)] = [
+    ("WINTER", "冬季"), ("SPRING", "春季"), ("SUMMER", "夏季"), ("FALL", "秋季"),
+  ]
+
+  static var anilistYearDict: [(key: Int, value: String)] {
+    let currentYear = Calendar.current.component(.year, from: Date())
+    return (0..<15).map { (currentYear - $0, String(currentYear - $0)) }
+  }
+
+  static let anilistStatusDict: [(key: String, value: String)] = [
+    ("RELEASING", "连载中"), ("FINISHED", "已完结"), ("NOT_YET_RELEASED", "未播出"),
+  ]
+
+  static let anilistCountryDict: [(key: String, value: String)] = [
+    ("JP", "日本"), ("CN", "中国大陆"), ("KR", "韩国"), ("TW", "中国台湾"),
+  ]
+
   // MARK: - Popular & Share 字典
   static let popularSortDict: [(key: String, value: String)] = [
     ("count", "热度"),
@@ -312,12 +561,6 @@ class ExploreViewModel: ObservableObject {
 
   // MARK: - 计算属性
 
-  var availableSources: [DiscoverSource] {
-    guard apiService.canAccess(.discovery) else { return [] }
-    if apiService.canAccess(.subscribe) { return DiscoverSource.allCases }
-    return DiscoverSource.allCases.filter { $0 != .subscriptionShare }
-  }
-
   var currentSortDict: [(key: String, value: String)] {
     switch selectedSource {
     case .themoviedb:
@@ -326,10 +569,14 @@ class ExploreViewModel: ObservableObject {
       return Self.doubanSortDict
     case .bangumi:
       return Self.bangumiSortDict
+    case .anilist:
+      return Self.anilistSortDict
     case .popular:
       return Self.popularSortDict
     case .subscriptionShare:
       return Self.shareSortDict
+    case .custom:
+      return []
     }
   }
 
@@ -338,17 +585,24 @@ class ExploreViewModel: ObservableObject {
     case .themoviedb, .popular:
       return selectedType == .movies ? Self.tmdbMovieGenreDict : Self.tmdbTvGenreDict
     case .subscriptionShare:
-      return Self.tmdbTvGenreDict
+      var seen = Set<String>()
+      return (Self.tmdbMovieGenreDict + Self.tmdbTvGenreDict).filter {
+        seen.insert($0.key).inserted
+      }
     case .douban:
       return Self.doubanCategoryDict
     case .bangumi:
       return Self.bangumiCatDict
+    case .anilist:
+      return Self.anilistGenreDict
+    case .custom:
+      return []
     }
   }
 
   // MARK: - API 路径构建
 
-  private func buildApiPath() -> String {
+  func buildApiPath() -> String {
     switch selectedSource {
     case .themoviedb:
       var path = "discover/tmdb_\(selectedType.apiValue)"
@@ -363,10 +617,8 @@ class ExploreViewModel: ObservableObject {
       if !tmdbLanguage.isEmpty {
         params.append("with_original_language=\(tmdbLanguage)")
       }
-      if tmdbVoteAverage > 0 {
-        params.append("vote_average=\(tmdbVoteAverage)")
-        params.append("vote_count=10")
-      }
+      params.append("vote_average=\(tmdbVoteAverage)")
+      params.append("vote_count=\(tmdbVoteCount)")
 
       if !params.isEmpty {
         path += "?" + params.joined(separator: "&")
@@ -411,9 +663,22 @@ class ExploreViewModel: ObservableObject {
       path += "?" + params.joined(separator: "&")
       return path
 
+    case .anilist:
+      return Self.appendingQuery(
+        to: "anilist/discover",
+        values: [
+          "sort": .string(anilistSort),
+          "genre": anilistGenre.isEmpty ? .null : .string(anilistGenre),
+          "format": anilistFormat.isEmpty ? .null : .string(anilistFormat),
+          "season": anilistSeason.isEmpty ? .null : .string(anilistSeason),
+          "season_year": anilistYear == 0 ? .null : .int(anilistYear),
+          "status": anilistStatus.isEmpty ? .null : .string(anilistStatus),
+          "country": anilistCountry.isEmpty ? .null : .string(anilistCountry),
+        ])
+
     case .popular:
       var path = "subscribe/popular"
-      var params: [String] = []
+      var params: [String] = ["count=30"]
       params.append("stype=\(selectedType == .movies ? "电影" : "电视剧")")
       if !popularSortBy.isEmpty {
         params.append("sort_type=\(popularSortBy)")
@@ -432,7 +697,6 @@ class ExploreViewModel: ObservableObject {
     case .subscriptionShare:
       var path = "subscribe/shares"
       var params: [String] = []
-      params.append("stype=电视剧")
       if !shareSortBy.isEmpty {
         params.append("sort_type=\(shareSortBy)")
       }
@@ -446,7 +710,46 @@ class ExploreViewModel: ObservableObject {
         path += "?" + params.joined(separator: "&")
       }
       return path
+    case .custom(let source):
+      return Self.appendingQuery(to: source.api_path, values: pluginFilterValues)
     }
+  }
+
+  nonisolated static func appendingQuery(
+    to path: String,
+    values: [String: JSONValue]
+  ) -> String {
+    guard var components = URLComponents(string: path) else { return path }
+    var items = components.queryItems ?? []
+    items.append(
+      contentsOf: values.sorted(by: { $0.key < $1.key }).compactMap { key, value in
+        value.queryString.map { URLQueryItem(name: key, value: $0) }
+      })
+    components.queryItems = items.isEmpty ? nil : items
+    return components.string ?? path
+  }
+
+  nonisolated static func popularSubscriptionKey(_ item: MediaInfo) -> String {
+    let structuredPrefix =
+      item.mediaid_prefix.flatMap { $0.isEmpty ? nil : $0 }
+      ?? item.source.flatMap { $0.isEmpty ? nil : $0 }
+
+    let mediaID: String
+    if let id = item.media_id, !id.isEmpty, let prefix = structuredPrefix {
+      mediaID = "\(prefix == "themoviedb" ? "tmdb" : prefix):\(id)"
+    } else if let id = item.tmdb_id, id != 0 {
+      mediaID = "tmdb:\(id)"
+    } else if let id = item.douban_id, !id.isEmpty {
+      mediaID = "douban:\(id)"
+    } else if let id = item.bangumi_id, id != 0 {
+      mediaID = "bangumi:\(id)"
+    } else if let id = item.anilist_id, id != 0 {
+      mediaID = "anilist:\(id)"
+    } else {
+      mediaID = "\(item.mediaid_prefix ?? "media"):\(item.title ?? "")"
+    }
+
+    return "\(item.source ?? "unknown"):\(mediaID):season:\(item.season.map(String.init) ?? "all")"
   }
 
   // MARK: - 数据加载
@@ -473,15 +776,24 @@ class ExploreViewModel: ObservableObject {
         case .subscriptionShare:
           let shares = try await apiService.fetchSubscriptionShares(path: path, page: page)
           return shares.map { $0.toMediaInfo() }
-        default:
+        case .themoviedb, .douban, .bangumi, .anilist, .popular, .custom:
           return try await apiService.fetchRecommend(path: path, page: page)
         }
       },
       processor: { @MainActor currentItems, newItems in
-        let uniqueNewItems =
-          source == .subscriptionShare
-          ? MediaInfo.deduplicateSubscriptionShareMedia(newItems, existingKeys: &seenKeys)
-          : MediaInfo.deduplicate(newItems, existingKeys: &seenKeys)
+        let uniqueNewItems: [MediaInfo]
+        if source == .popular {
+          uniqueNewItems = newItems.filter {
+            seenKeys.insert(Self.popularSubscriptionKey($0)).inserted
+          }
+        } else if source == .subscriptionShare {
+          uniqueNewItems = MediaInfo.deduplicateSubscriptionShareMedia(
+            newItems,
+            existingKeys: &seenKeys
+          )
+        } else {
+          uniqueNewItems = MediaInfo.deduplicate(newItems, existingKeys: &seenKeys)
+        }
         if uniqueNewItems.isEmpty {
           return false
         }
@@ -509,13 +821,18 @@ class ExploreViewModel: ObservableObject {
 
   // MARK: - 重置筛选器
 
-  func onSourceChanged() {
+  func onSourceChanged(from previousSource: DiscoverSource? = nil) {
+    let preservesPluginValues =
+      previousSource?.id == selectedSource.id
+      && previousSource?.descriptor?.filter_params == selectedSource.descriptor?.filter_params
+
     // 重置所有筛选参数
     selectedType = .movies
     tmdbSortBy = "popularity.desc"
     tmdbGenre = ""
     tmdbLanguage = ""
     tmdbVoteAverage = 0
+    tmdbVoteCount = 10
     doubanSort = "U"
     doubanCategory = ""
     doubanZone = ""
@@ -523,12 +840,28 @@ class ExploreViewModel: ObservableObject {
     bangumiCat = ""
     bangumiSort = "rank"
     bangumiYear = ""
+    anilistSort = "POPULARITY_DESC"
+    anilistGenre = ""
+    anilistFormat = ""
+    anilistSeason = ""
+    anilistYear = 0
+    anilistStatus = ""
+    anilistCountry = ""
     popularSortBy = "count"
     popularGenre = ""
     popularMinRating = 0
     shareSortBy = "count"
     shareGenre = ""
     shareMinRating = 0
+    if let descriptor = selectedSource.descriptor {
+      if !preservesPluginValues {
+        pluginFilterValues = descriptor.filter_params
+      }
+      pluginFilterControls = PluginFilterControlParser.parse(descriptor.filter_ui)
+    } else {
+      pluginFilterValues = [:]
+      pluginFilterControls = []
+    }
   }
 
   func onTypeChanged() {
@@ -536,5 +869,90 @@ class ExploreViewModel: ObservableObject {
     tmdbGenre = ""
     doubanCategory = ""
     popularGenre = ""
+  }
+
+  func setPluginFilter(_ field: String, value: JSONValue) {
+    guard let source = selectedSource.descriptor else { return }
+    pluginFilterValues = Self.applyingPluginFilter(
+      field: field,
+      value: value,
+      to: pluginFilterValues,
+      defaults: source.filter_params,
+      depends: source.depends
+    )
+  }
+
+  nonisolated static func applyingPluginFilter(
+    field: String,
+    value: JSONValue,
+    to values: [String: JSONValue],
+    defaults: [String: JSONValue] = [:],
+    depends: [String: [String]]?
+  ) -> [String: JSONValue] {
+    var result = values
+    let oldValue = result[field]
+    let defaultValue = defaults[field]
+    let normalizedValue =
+      !value.isTruthy && defaultValue?.isTruthy == true
+      ? defaultValue ?? value
+      : value
+    result[field] = normalizedValue
+    guard oldValue != normalizedValue, let depends else { return result }
+    for (dependentField, prerequisites) in depends
+    where dependentField != field && prerequisites.contains(field) {
+      result[dependentField] = .null
+    }
+    return result
+  }
+
+  func refreshSources() async {
+    guard apiService.canAccess(.discovery) else {
+      applySources()
+      return
+    }
+    do {
+      let sources = try await apiService.fetchDiscoverSources()
+      extraSourceSnapshot = Self.updatedExtraSourceSnapshot(
+        previous: extraSourceSnapshot,
+        response: sources
+      )
+    } catch {
+      Logger.error("动态发现来源加载失败: \(error)")
+      extraSourceSnapshot = Self.updatedExtraSourceSnapshot(
+        previous: extraSourceSnapshot,
+        response: nil
+      )
+    }
+    applySources()
+  }
+
+  nonisolated static func updatedExtraSourceSnapshot(
+    previous: [DiscoverSourceDescriptor],
+    response sources: [DiscoverSourceDescriptor]?
+  ) -> [DiscoverSourceDescriptor] {
+    guard let sources else { return previous }
+    var prefixes = Set(["themoviedb", "douban", "bangumi", "anilist"])
+    return sources.filter {
+      !$0.mediaid_prefix.isEmpty && prefixes.insert($0.mediaid_prefix).inserted
+    }
+  }
+
+  private func applySources() {
+    guard apiService.canAccess(.discovery) else {
+      availableSources = []
+      return
+    }
+    var sources = DiscoverSource.allCases.filter {
+      $0 != .subscriptionShare || apiService.canAccess(.subscribe)
+    }
+    sources.append(contentsOf: extraSourceSnapshot.map(DiscoverSource.custom))
+    availableSources = sources
+    let previousSource = selectedSource
+    if let source = sources.first(where: { $0.id == previousSource.id }) ?? sources.first,
+      source != previousSource
+    {
+      selectedSource = source
+      onSourceChanged(from: previousSource)
+    }
   }
 }

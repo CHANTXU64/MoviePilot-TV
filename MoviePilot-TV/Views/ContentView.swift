@@ -44,7 +44,7 @@ struct ContentView: View {
           }
 
           if viewModel.visibleTabs.contains(.status) {
-            StatusView()
+            StatusView(isSelected: selectedTab == .status)
               .tabItem {
                 Label("状态", systemImage: "slider.horizontal.3")
               }
@@ -57,6 +57,7 @@ struct ContentView: View {
             }
             .tag(ContentViewModel.Tab.system)
         }
+        .id(viewModel.sessionUIIdentity)
         .foregroundColor(.primary)
         .onAppear {
           selectedTab = ContentViewModel.resolvedSelectedTab(selectedTab, visibleTabs: viewModel.visibleTabs)

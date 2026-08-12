@@ -199,8 +199,8 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     let snapshot = LoginPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.token = nil
-    service.currentUser = nil
+    service.tokenForTesting = nil
+    service.currentUserForTesting = nil
 
     XCTAssertFalse(service.canAccess(.subscribe))
     XCTAssertFalse(service.canAccess(.manage))
@@ -211,8 +211,8 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     let snapshot = LoginPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.currentUser = nil
-    service.token = "stored-token"
+    service.currentUserForTesting = nil
+    service.tokenForTesting = "stored-token"
     persistLoginPermissionStoredCurrentUser(
       """
       {"access_token":"stored-token","token_type":"bearer","super_user":false,"permissions":{"discovery":false,"search":false,"subscribe":false,"manage":false},"user_name":"locked","avatar":null}
@@ -263,17 +263,17 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
   }
 
   func testLoginRejectsStandardUserWithoutAnyFunctionalPermission() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(LoginPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(LoginPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(LoginPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(LoginPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = LoginPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     LoginPermissionURLProtocol.stub.reset()
-    service.baseURL = "https://login-permission-tests.local"
-    service.token = nil
-    service.currentUser = nil
+    service.baseURLForTesting = "https://login-permission-tests.local"
+    service.tokenForTesting = nil
+    service.currentUserForTesting = nil
 
     do {
       _ = try await service.login(username: "locked", password: "password")
@@ -285,18 +285,18 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
   }
 
   func testLoginRejectsStandardUserWithEmptyPermissionsPayload() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(LoginPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(LoginPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(LoginPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(LoginPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = LoginPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     LoginPermissionURLProtocol.stub.reset()
     LoginPermissionURLProtocol.stub.permissionsPayload = "{}"
-    service.baseURL = "https://login-permission-tests.local"
-    service.token = nil
-    service.currentUser = nil
+    service.baseURLForTesting = "https://login-permission-tests.local"
+    service.tokenForTesting = nil
+    service.currentUserForTesting = nil
 
     do {
       _ = try await service.login(username: "default-user", password: "password")
@@ -308,10 +308,10 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
   }
 
   func testLoginAcceptsManageOnlyUser() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(LoginPermissionURLProtocol.self))
-    defer { URLProtocol.unregisterClass(LoginPermissionURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(LoginPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(LoginPermissionURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = LoginPermissionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -324,9 +324,9 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
         "manage": true
       }
       """
-    service.baseURL = "https://login-permission-tests.local"
-    service.token = nil
-    service.currentUser = nil
+    service.baseURLForTesting = "https://login-permission-tests.local"
+    service.tokenForTesting = nil
+    service.currentUserForTesting = nil
 
     let token = try await service.login(username: "manage-user", password: "password")
 
@@ -337,6 +337,64 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     XCTAssertTrue(token.canAccess(.manage))
     XCTAssertNotNil(service.token)
     XCTAssertNotNil(service.currentUser)
+  }
+
+  func testLoginIgnoresNestedAndMalformedPermissionValues() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(LoginPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(LoginPermissionURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = LoginPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    LoginPermissionURLProtocol.stub.reset()
+    LoginPermissionURLProtocol.stub.permissionsPayload = """
+      {
+        "discovery": true,
+        "search": "true",
+        "subscribe": 1,
+        "manage": null,
+        "features": { "discovery.recommend": true },
+        "future_permission": [true]
+      }
+      """
+    service.baseURLForTesting = "https://login-permission-tests.local"
+    service.tokenForTesting = nil
+    service.currentUserForTesting = nil
+
+    let token = try await service.login(username: "web-user", password: "password")
+
+    XCTAssertEqual(token.permissions, ["discovery": true])
+    XCTAssertTrue(token.canAccess(.discovery))
+    XCTAssertFalse(token.canAccess(.search))
+    XCTAssertFalse(token.canAccess(.subscribe))
+    XCTAssertFalse(token.canAccess(.manage))
+  }
+
+  func testCurrentUserRecoveryIgnoresNestedFeaturePermissions() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(LoginPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(LoginPermissionURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = LoginPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    LoginPermissionURLProtocol.stub.reset()
+    LoginPermissionURLProtocol.stub.permissionsPayload = """
+      {
+        "discovery": true,
+        "search": false,
+        "features": { "discovery.recommend": true }
+      }
+      """
+    service.baseURLForTesting = "https://login-permission-tests.local"
+    service.tokenForTesting = "stored-token"
+    service.currentUserForTesting = nil
+
+    await service.refreshCurrentUserForStartup()
+
+    XCTAssertEqual(service.currentUser?.permissions, ["discovery": true, "search": false])
+    XCTAssertEqual(service.currentUser?.user_name, "refreshed-user")
   }
 
   func testSuperUserSeesAllContentTabs() {
@@ -393,6 +451,7 @@ private struct LoginPermissionServiceSnapshot {
   let tokenDefaults: String?
   let currentUserKeychain: String?
   let currentUserDefaults: String?
+  let persistence: APIServicePersistenceSnapshot
 
   @MainActor
   static func capture(service: APIService) -> LoginPermissionServiceSnapshot {
@@ -404,15 +463,17 @@ private struct LoginPermissionServiceSnapshot {
       tokenKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "accessToken"),
       tokenDefaults: UserDefaults.standard.string(forKey: "accessToken"),
       currentUserKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "currentUser"),
-      currentUserDefaults: UserDefaults.standard.string(forKey: "currentUser")
+      currentUserDefaults: UserDefaults.standard.string(forKey: "currentUser"),
+      persistence: service.persistenceSnapshotForTesting()
     )
   }
 
   @MainActor
   func restore(to service: APIService) {
-    service.baseURL = baseURL
-    service.token = token
-    service.currentUser = currentUser
+    service.baseURLForTesting = baseURL
+    service.tokenForTesting = token
+    service.currentUserForTesting = currentUser
+    service.restorePersistenceSnapshotForTesting(persistence)
     restoreUserDefaultsString(serverURLDefaults, forKey: "serverURL")
     restoreCredential(account: "accessToken", keychainValue: tokenKeychain, defaultsValue: tokenDefaults)
     restoreCredential(
@@ -468,21 +529,38 @@ private final class LoginPermissionURLProtocolStub: @unchecked Sendable {
   }
 
   func response(for request: URLRequest) -> (Int, Data) {
-    guard request.url?.path == "/api/v1/login/access-token" else {
+    guard let path = request.url?.path else {
       return (404, Data())
     }
 
-    let body = """
-      {
-        "access_token": "limited-token",
-        "token_type": "bearer",
-        "super_user": false,
-        "permissions": \(permissionsPayload),
-        "user_name": "locked",
-        "avatar": null
-      }
-      """
-    return (200, Data(body.utf8))
+    switch path {
+    case "/api/v1/login/access-token":
+      let body = """
+        {
+          "access_token": "limited-token",
+          "token_type": "bearer",
+          "super_user": false,
+          "permissions": \(permissionsPayload),
+          "user_id": 77,
+          "user_name": "locked",
+          "avatar": null
+        }
+        """
+      return (200, Data(body.utf8))
+    case "/api/v1/user/current":
+      let body = """
+        {
+          "id": 77,
+          "name": "refreshed-user",
+          "is_superuser": false,
+          "avatar": null,
+          "permissions": \(permissionsPayload)
+        }
+        """
+      return (200, Data(body.utf8))
+    default:
+      return (404, Data())
+    }
   }
 }
 

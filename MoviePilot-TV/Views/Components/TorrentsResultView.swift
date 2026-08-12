@@ -3,6 +3,7 @@ import SwiftUI
 struct TorrentsResultView<Header: View>: View {
   let result: [Context]
   var overrideMediaInfo: MediaInfo? = nil
+  var emptyDescription: String? = nil
   let header: Header
 
   // 筛选与排序状态
@@ -27,10 +28,12 @@ struct TorrentsResultView<Header: View>: View {
   init(
     result: [Context],
     overrideMediaInfo: MediaInfo? = nil,
+    emptyDescription: String? = nil,
     @ViewBuilder header: () -> Header
   ) {
     self.result = result
     self.overrideMediaInfo = overrideMediaInfo
+    self.emptyDescription = emptyDescription
     self.header = header()
   }
 
@@ -42,7 +45,8 @@ struct TorrentsResultView<Header: View>: View {
         if result.isEmpty {
           EmptyDataView(  // TODO 对于整页的加个按钮吧
             title: "未找到相关资源",
-            systemImage: "magnifyingglass"
+            systemImage: "magnifyingglass",
+            description: emptyDescription
           )
           .padding(.top, 50)
         } else {

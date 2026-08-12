@@ -24,11 +24,15 @@ struct SheetPicker<Value: Hashable>: View {
     // 所有版本都使用嵌套 Sheet 模式，避免 NavigationLink 导致的 dismiss 问题
     Button(action: { showingPicker = true }) {
       LabeledContent(title) {
-        if let selected = options.first(where: { $0.value == selection }) {
-          Text(selected.title)
-        } else {
-          Text(String(describing: selection).isEmpty ? "未选择" : String(describing: selection))
+        Group {
+          if let selected = options.first(where: { $0.value == selection }) {
+            Text(selected.title)
+          } else {
+            Text(String(describing: selection).isEmpty ? "未选择" : String(describing: selection))
+          }
         }
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
       }
       .if(SheetStyleFix.shouldApply) { view in
         view.padding(.horizontal)
@@ -62,6 +66,8 @@ private struct SheetPickerDetailView<Value: Hashable>: View {
             }) {
               HStack {
                 Text(option.title)
+                  .lineLimit(1)
+                  .minimumScaleFactor(0.7)
                 Spacer()
                 if option.value == selection {
                   Image(systemName: "checkmark")
@@ -79,4 +85,3 @@ private struct SheetPickerDetailView<Value: Hashable>: View {
     }
   }
 }
-

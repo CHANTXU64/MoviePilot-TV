@@ -7,7 +7,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   deinit {
     // 保留显式 deinit，维持既有 SIL 生成路径；同时清理未完成的加载和预取任务。
     inFlightLoadTask?.cancel()
-    activePrefetcher?.stop()
+    activePrefetchers.forEach { $0.stop() }
   }
 
   // MARK: - 公开状态
@@ -67,7 +67,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   private var maxPrefetchedIndex: Int = -1
 
   /// 当前正在执行的图片预取器实例，持有以便在 reset 或新批次时取消旧任务。
-  private var activePrefetcher: ImagePrefetcher?
+  private var activePrefetchers: [ImagePrefetcher] = []
 
   // MARK: - 初始化
 
@@ -122,10 +122,19 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
             let urlsToPrefetch = items[start..<end].flatMap { provider($0) }
             if !urlsToPrefetch.isEmpty {
               // 批量预取。由于只在跨越边界时触发，极大降低了 ImagePrefetcher() 实例的创建频率
-              activePrefetcher?.stop()
-              let prefetcher = ImagePrefetcher(urls: urlsToPrefetch)
-              activePrefetcher = prefetcher
-              prefetcher.start()
+              activePrefetchers.forEach { $0.stop() }
+              let service = APIService.shared
+              let grouped = Dictionary(grouping: urlsToPrefetch) {
+                service.isProtectedImageURL($0)
+              }
+              activePrefetchers = grouped.compactMap { protected, urls in
+                let sources = urls.map { service.imageSource(for: $0) }
+                return ImagePrefetcher(
+                  sources: sources,
+                  options: protected ? service.imageOptions(for: urls[0]) : []
+                )
+              }
+              activePrefetchers.forEach { $0.start() }
             }
             maxPrefetchedIndex = end - 1
           }
@@ -147,8 +156,8 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     isLoading = false
     isFirstLoading = false
     isLoadingMore = false
-    activePrefetcher?.stop()
-    activePrefetcher = nil
+    activePrefetchers.forEach { $0.stop() }
+    activePrefetchers.removeAll()
   }
 
   /// 将下一次加载的页游标向后推进指定页数。
@@ -329,8 +338,8 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     page = 1
     consecutiveErrorCount = 0
     maxPrefetchedIndex = -1
-    activePrefetcher?.stop()
-    activePrefetcher = nil
+    activePrefetchers.forEach { $0.stop() }
+    activePrefetchers.removeAll()
     onReset?()
   }
 }

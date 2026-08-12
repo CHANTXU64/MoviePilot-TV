@@ -24,16 +24,24 @@ class HomeViewModel: ObservableObject {
   @Published var isLoading = true
 
   private let apiService: APIService
-  private let latestMediaSelectedServerKey = "home.latestMedia.selectedServer.v1"
+  private var latestMediaSelectedServerKey: String? {
+    apiService.profileKey.map { "home.latestMedia.selectedServer.v2_\($0)" }
+  }
   private var latestMediaByServer: [String: [MediaServerPlayItem]] = [:]
   private var cancellables = Set<AnyCancellable>()
 
   init(apiService: APIService? = nil) {
     self.apiService = apiService ?? APIService.shared
-    self.selectedLatestMediaServer =
-      UserDefaults.standard.string(
-        forKey: latestMediaSelectedServerKey
-      ) ?? ""
+    if let key = latestMediaSelectedServerKey {
+      let defaults = UserDefaults.standard
+      if defaults.object(forKey: key) == nil,
+        let legacyValue = defaults.string(forKey: "home.latestMedia.selectedServer.v1")
+      {
+        defaults.set(legacyValue, forKey: key)
+        defaults.removeObject(forKey: "home.latestMedia.selectedServer.v1")
+      }
+      self.selectedLatestMediaServer = defaults.string(forKey: key) ?? ""
+    }
 
     // 监听订阅变更通知，从其他页面订阅后首页立即刷新
     NotificationCenter.default.publisher(for: .subscriptionDidUpdate)
@@ -84,10 +92,12 @@ class HomeViewModel: ObservableObject {
       if !latestMedia.isEmpty { latestMedia = [] }
       return
     }
+    let sessionSnapshot = apiService.sessionSnapshot()
 
     do {
       // 1. 获取所有配置的媒体服务器（如 Jellyfin/Emby/Plex）
       let servers = try await apiService.fetchMediaServers()
+      guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
 
       // 只保留启用服务器（保持后端返回顺序）
       let enabledServers = servers.filter { $0.enabled?.value ?? false }
@@ -113,6 +123,7 @@ class HomeViewModel: ObservableObject {
         }
         return byServer
       }
+      guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
 
       // 3. 更新筛选器和当前展示列表
       self.latestMediaByServer = latestByServer
@@ -153,7 +164,8 @@ class HomeViewModel: ObservableObject {
   }
 
   private func persistSelectedLatestMediaServer() {
-    UserDefaults.standard.set(selectedLatestMediaServer, forKey: latestMediaSelectedServerKey)
+    guard let key = latestMediaSelectedServerKey else { return }
+    UserDefaults.standard.set(selectedLatestMediaServer, forKey: key)
   }
 
   /// 加载所有订阅并按电影/电视剧分类，且按 ID 倒序排列，也就是最新的在最前面
@@ -163,10 +175,8 @@ class HomeViewModel: ObservableObject {
       if !tvSubscriptions.isEmpty { tvSubscriptions = [] }
       return
     }
-
     do {
       let subs = try await apiService.fetchSubscriptions(forceRefresh: forceRefresh)
-
       let newMovies = subs.filter { $0.type == "电影" }
         .sorted { ($0.id ?? 0) > ($1.id ?? 0) }
       if self.movieSubscriptions != newMovies {
@@ -190,73 +200,66 @@ class HomeViewModel: ObservableObject {
   // MARK: - 订阅操作
 
   /// 切换订阅状态（运行/停止）
-  func toggleSubscribeStatus(subscribe: Subscribe) async -> Bool {
-    guard apiService.canAccess(.subscribe) else { return false }
-    guard let id = subscribe.id else { return false }
+  func toggleSubscribeStatus(subscribe: Subscribe) async throws -> (
+    success: Bool, message: String?
+  ) {
+    guard apiService.canAccess(.subscribe) else { return (false, nil) }
+    guard let id = subscribe.id else { return (false, nil) }
+    let sessionSnapshot = apiService.sessionSnapshot()
     // 前端逻辑：如果是 'S' (已停止) -> 切换到 'R' (运行)，否则 -> 'S' (停止)
     let newState = subscribe.state == "S" ? "R" : "S"
-    do {
-      let success = try await apiService.updateSubscriptionStatus(id: id, state: newState)
-      if success {
-        await refreshSubscriptions(forceRefresh: true)
-      }
-      return success
-    } catch {
-      print("切换订阅状态失败: \(error)")
-      return false
+    let result = try await apiService.updateSubscriptionStatus(id: id, state: newState)
+    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return (false, nil) }
+    if result.success {
+      await refreshSubscriptions(forceRefresh: true)
+      NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
     }
+    return result
   }
 
   /// 重置订阅历史
-  func resetSubscribe(subscribe: Subscribe) async -> Bool {
-    guard apiService.canAccess(.subscribe) else { return false }
-    guard let id = subscribe.id else { return false }
-    do {
-      let success = try await apiService.resetSubscription(id: id)
-      if success {
-        await refreshSubscriptions(forceRefresh: true)
-      }
-      return success
-    } catch {
-      print("重置订阅失败: \(error)")
-      return false
+  func resetSubscribe(subscribe: Subscribe) async throws -> (
+    success: Bool, message: String?
+  ) {
+    guard apiService.canAccess(.subscribe) else { return (false, nil) }
+    guard let id = subscribe.id else { return (false, nil) }
+    let sessionSnapshot = apiService.sessionSnapshot()
+    let result = try await apiService.resetSubscription(id: id)
+    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return (false, nil) }
+    if result.success {
+      await refreshSubscriptions(forceRefresh: true)
+      NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
     }
+    return result
   }
 
   /// 立即触发订阅搜索
-  func searchSubscribe(subscribe: Subscribe) async -> Bool {
+  func searchSubscribe(subscribe: Subscribe) async throws -> Bool {
     guard apiService.canAccess(.subscribe) else { return false }
     guard let id = subscribe.id else { return false }
-    do {
-      let success = try await apiService.searchSubscription(id: id)
-      if success {
-        await refreshSubscriptions(forceRefresh: true)
-        // 通知其他页面（如详情页 preloadTask）订阅搜索已触发，远端状态可能变化
-        NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
-      }
-      return success
-    } catch {
-      print("搜索订阅失败: \(error)")
-      return false
+    let sessionSnapshot = apiService.sessionSnapshot()
+    let success = try await apiService.searchSubscription(id: id)
+    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return false }
+    if success {
+      await refreshSubscriptions(forceRefresh: true)
+      NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
     }
+    return success
   }
 
   /// 删除订阅
-  func deleteSubscribe(subscribe: Subscribe) async -> Bool {
+  func deleteSubscribe(subscribe: Subscribe) async throws -> Bool {
     guard apiService.canAccess(.subscribe) else { return false }
     guard let id = subscribe.id else { return false }
-    do {
-      let success = try await apiService.deleteSubscription(id: id)
-      if success {
-        await refreshSubscriptions(forceRefresh: true)
-        // 通知其他页面（如详情页 preloadTask）订阅已变更
-        NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
-      }
-      return success
-    } catch {
-      print("删除订阅失败: \(error)")
-      return false
+    let sessionSnapshot = apiService.sessionSnapshot()
+    let success = try await apiService.deleteSubscription(id: id)
+    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return false }
+    if success {
+      await refreshSubscriptions(forceRefresh: true)
+      // 通知其他页面（如详情页 preloadTask）订阅已变更
+      NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
     }
+    return success
   }
 
   private func validLinkValue(_ value: String?) -> String? {

@@ -52,10 +52,10 @@ private func withTimeout<T: Sendable>(
 @MainActor
 final class SearchViewModelTests: XCTestCase {
   func testOlderUnifiedSearchCompletionDoesNotClearLoadingForNewerSearch() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SearchViewModelURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SearchViewModelURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
@@ -65,10 +65,10 @@ final class SearchViewModelTests: XCTestCase {
     await SearchViewModelURLProtocol.stub.setGate(oldSearchGate, forQuery: "old")
     await SearchViewModelURLProtocol.stub.setGate(newSearchGate, forQuery: "new")
 
-    service.baseURL = "http://search-tests.local"
-    configureSearchPermissionSession(service)
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
 
-    let viewModel = SearchViewModel()
+    let viewModel = SearchViewModel(apiService: service)
     viewModel.searchType = .unified
     viewModel.query = "old"
 
@@ -131,20 +131,20 @@ final class SearchViewModelTests: XCTestCase {
   }
 
   func testUnifiedSearchSessionChangeEndsLoading() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SearchViewModelURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SearchViewModelURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await SearchViewModelURLProtocol.stub.reset()
     let gate = SearchAsyncGate()
     await SearchViewModelURLProtocol.stub.setGate(gate, forQuery: "session-change")
-    service.baseURL = "http://search-tests.local"
-    configureSearchPermissionSession(service)
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
 
-    let viewModel = SearchViewModel()
+    let viewModel = SearchViewModel(apiService: service)
     viewModel.searchType = .unified
     viewModel.query = "session-change"
 
@@ -157,7 +157,7 @@ final class SearchViewModelTests: XCTestCase {
       await SearchViewModelURLProtocol.stub.waitForRequest(query: "session-change")
     }
 
-    configureChangedSearchPermissionSession(service)
+    configureChangedDiscoveryPermissionSession(service)
     await gate.open()
     try await withTimeout("unified search to stop after session change") {
       await searchTask.value
@@ -168,20 +168,20 @@ final class SearchViewModelTests: XCTestCase {
   }
 
   func testResourceSearchSessionChangeEndsLoading() async throws {
-    XCTAssertTrue(URLProtocol.registerClass(SearchViewModelURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SearchViewModelURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await SearchViewModelURLProtocol.stub.reset()
     let gate = SearchAsyncGate()
     await SearchViewModelURLProtocol.stub.setGate(gate, forQuery: "resource-session-change")
-    service.baseURL = "http://search-tests.local"
+    service.baseURLForTesting = "http://search-tests.local"
     configureSearchPermissionSession(service)
 
-    let viewModel = SearchViewModel()
+    let viewModel = SearchViewModel(apiService: service)
     viewModel.searchType = .resource
     viewModel.query = "resource-session-change"
     await viewModel.autoSearch()
@@ -202,21 +202,193 @@ final class SearchViewModelTests: XCTestCase {
     XCTAssertFalse(viewModel.hasSearched)
   }
 
-  func testCancelledResourceSearchFilteringDoesNotPublishOldResultsOrClearNewLoading()
-    async throws
-  {
-    XCTAssertTrue(URLProtocol.registerClass(SearchViewModelURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SearchViewModelURLProtocol.self) }
+  func testResourceSearchTreatsMediaKeyAsTitleText() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await SearchViewModelURLProtocol.stub.reset()
-    service.baseURL = "http://search-tests.local"
+    service.baseURLForTesting = "http://search-tests.local"
+    configureSearchPermissionSession(service)
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .resource
+    viewModel.query = "anilist:154587"
+    await viewModel.autoSearch()
+
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    let mediaStreamRequestCount = await SearchViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/search/media/anilist:154587/stream"
+    )
+    let titleStreamRequestCount = await SearchViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/search/title/stream"
+    )
+    XCTAssertEqual(mediaStreamRequestCount, 0)
+    XCTAssertEqual(titleStreamRequestCount, 1)
+  }
+
+  func testSearchTypesAndExecutionUseWebPermissionSplit() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    let viewModel = SearchViewModel(apiService: service)
+    XCTAssertEqual(viewModel.availableSearchTypes, [.unified])
+
+    viewModel.searchType = .resource
+    viewModel.query = "forbidden-resource"
+    await viewModel.autoSearch()
+    let forbiddenResourceRequestCount =
+      await SearchViewModelURLProtocol.stub.requestCount(path: "/api/v1/search/title/stream")
+    XCTAssertEqual(forbiddenResourceRequestCount, 0)
+
+    configureSearchPermissionSession(service)
+    XCTAssertEqual(viewModel.availableSearchTypes, [.resource])
+    viewModel.normalizeSearchTypeForPermissions()
+    XCTAssertEqual(viewModel.searchType, .resource)
+
+    viewModel.searchType = .unified
+    viewModel.query = "forbidden-metadata"
+    await viewModel.autoSearch()
+    let forbiddenMetadataRequestCount =
+      await SearchViewModelURLProtocol.stub.requestCount(path: "/api/v1/media/search")
+    XCTAssertEqual(forbiddenMetadataRequestCount, 0)
+
+    await SearchViewModelURLProtocol.stub.reset()
+    configureSubscribePermissionSession(service)
+    let shareViewModel = SearchViewModel(apiService: service)
+    XCTAssertEqual(shareViewModel.availableSearchTypes, [])
+    shareViewModel.normalizeSearchTypeForPermissions()
+    XCTAssertEqual(shareViewModel.searchType, .unified)
+
+    shareViewModel.query = "科幻"
+    await shareViewModel.autoSearch()
+    let mediaRequestCount =
+      await SearchViewModelURLProtocol.stub.requestCount(path: "/api/v1/media/search")
+    let resourceRequestCount =
+      await SearchViewModelURLProtocol.stub.requestCount(path: "/api/v1/search/title/stream")
+    XCTAssertEqual(
+      mediaRequestCount,
+      0,
+      "只有 subscribe 权限时不应暴露搜索模式或启动媒体搜索。"
+    )
+    XCTAssertEqual(resourceRequestCount, 0)
+  }
+
+  func testMediaSourceSelectionOnlyAffectsNextUnifiedSearch() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.mediaSearchSource = .douban
+    await Task.yield()
+
+    let requestsBeforeSearch =
+      await SearchViewModelURLProtocol.stub.requestCount(path: "/api/v1/media/search")
+    XCTAssertEqual(requestsBeforeSearch, 0)
+
+    viewModel.query = "source-selection"
+    await viewModel.autoSearch()
+
+    let mediaSources = await SearchViewModelURLProtocol.stub.sourceValues(
+      path: "/api/v1/media/search",
+      type: "media"
+    )
+    let collectionRequestCount = await SearchViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/media/search",
+      type: "collection"
+    )
+    let personSources = await SearchViewModelURLProtocol.stub.sourceValues(
+      path: "/api/v1/media/search",
+      type: "person"
+    )
+
+    XCTAssertEqual(Set(mediaSources.compactMap { $0 }), ["douban"])
+    XCTAssertEqual(collectionRequestCount, 0)
+    XCTAssertEqual(Set(personSources.compactMap { $0 }), ["douban"])
+  }
+
+  func testDefaultMediaSourceSelectionUsesBackendDefaults() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.mediaSearchSource = nil
+    viewModel.query = "backend-default"
+    await viewModel.autoSearch()
+
+    let sourceValues = await SearchViewModelURLProtocol.stub.sourceValues(
+      path: "/api/v1/media/search"
+    )
+    XCTAssertFalse(sourceValues.isEmpty)
+    XCTAssertTrue(sourceValues.allSatisfy { $0 == nil })
+  }
+
+  func testTVMediaSourceDefaultsAreLoadedBySearchViewModel() {
+    let service = APIService.shared
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURLForTesting = "http://search-tests.local"
+    configureSearchPermissionSession(service)
+    let settingsViewModel = SystemViewModel()
+    let originalSource = settingsViewModel.defaultMediaSearchSource
+    defer { settingsViewModel.defaultMediaSearchSource = originalSource }
+
+    settingsViewModel.defaultMediaSearchSource = .douban
+    XCTAssertEqual(SearchViewModel().mediaSearchSource, .douban)
+
+    settingsViewModel.defaultMediaSearchSource = nil
+    XCTAssertNil(SearchViewModel().mediaSearchSource)
+  }
+
+  func testCancelledResourceSearchFilteringDoesNotPublishOldResultsOrClearNewLoading()
+    async throws
+  {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
     configureSuperUserSearchSession(service)
     let filterSnapshot = SearchViewModelFilterSelectionSnapshot.selectHardRule(
-      "allow-all", baseURL: service.baseURL)
+      "allow-all", apiService: service)
     defer { filterSnapshot.restore() }
 
     let oldFilterGate = SearchAsyncGate()
@@ -224,7 +396,7 @@ final class SearchViewModelTests: XCTestCase {
     await SearchViewModelURLProtocol.stub.setCustomFilterGate(oldFilterGate)
     await SearchViewModelURLProtocol.stub.setGate(newStreamGate, forQuery: "new")
 
-    let viewModel = SearchViewModel()
+    let viewModel = SearchViewModel(apiService: service)
     viewModel.searchType = .resource
     viewModel.query = "old"
 
@@ -269,26 +441,27 @@ final class SearchViewModelTests: XCTestCase {
   func testCustomFilterSkipsRulesForNonSuperuserSearchUserWithPersistedRuleSelection()
     async throws
   {
-    XCTAssertTrue(URLProtocol.registerClass(SearchViewModelURLProtocol.self))
-    defer { URLProtocol.unregisterClass(SearchViewModelURLProtocol.self) }
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
 
-    let service = APIService.shared
+    let service = APIService.isolatedTestingInstance()
     let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
     await SearchViewModelURLProtocol.stub.reset()
-    service.baseURL = "http://search-tests.local"
-    service.token = "limited-token"
-    service.currentUser = Token(
+    service.baseURLForTesting = "http://search-tests.local"
+    service.tokenForTesting = "limited-token"
+    service.currentUserForTesting = Token(
       access_token: "limited-token",
       token_type: "bearer",
       super_user: FlexibleBool(false),
       permissions: ["search": true],
+      user_id: 305,
       user_name: "limited",
       avatar: nil
     )
     let filterSnapshot = SearchViewModelFilterSelectionSnapshot.selectHardRule(
-      "allow-all", baseURL: service.baseURL)
+      "allow-all", apiService: service)
     defer { filterSnapshot.restore() }
 
     let contexts = [
@@ -331,6 +504,25 @@ final class SearchViewModelTests: XCTestCase {
       "Search users may keep using search results, but CustomFilterRules is a superuser-only setting."
     )
   }
+
+  func testMapMediaToSubscribePreservesUnifiedIdentity() {
+    let subscribe = SearchViewModel().mapMediaToSubscribe(
+      MediaInfo(
+        tmdb_id: 42,
+        anilist_id: 154_587,
+        source: "anilist",
+        mediaid_prefix: "anilist",
+        media_id: "154587",
+        title: "搜索结果",
+        type: "电影"
+      )
+    )
+
+    XCTAssertEqual(subscribe.anilistid, 154_587)
+    XCTAssertEqual(subscribe.media_source, "anilist")
+    XCTAssertEqual(subscribe.media_id, "154587")
+    XCTAssertEqual(subscribe.mediaid, "anilist:154587")
+  }
 }
 
 @MainActor
@@ -352,9 +544,9 @@ private struct SearchViewModelServiceSnapshot {
   }
 
   func restore(to service: APIService) {
-    service.baseURL = baseURL
-    service.token = token
-    service.currentUser = currentUser
+    service.baseURLForTesting = baseURL
+    service.tokenForTesting = token
+    service.currentUserForTesting = currentUser
 
     if let serverURLDefaults {
       UserDefaults.standard.set(serverURLDefaults, forKey: "serverURL")
@@ -409,7 +601,12 @@ private actor SearchViewModelURLProtocolStub {
       ?? queryItems.first(where: { $0.name == "name" })?.value
       ?? queryItems.first(where: { $0.name == "keyword" })?.value
       ?? ""
-    recordRequest(path: components.path, query: query)
+    recordRequest(
+      path: components.path,
+      query: query,
+      type: queryItems.first(where: { $0.name == "type" })?.value,
+      source: queryItems.first(where: { $0.name == "source" })?.value
+    )
 
     if components.path == "/api/v1/system/setting/CustomFilterRules",
       let gate = customFilterGate
@@ -451,7 +648,14 @@ private actor SearchViewModelURLProtocolStub {
       ?? queryItems.first(where: { $0.name == "name" })?.value
       ?? queryItems.first(where: { $0.name == "keyword" })?.value
       ?? ""
-    cancelledRequests.append(SearchRecordedRequest(path: components.path, query: query))
+    cancelledRequests.append(
+      SearchRecordedRequest(
+        path: components.path,
+        query: query,
+        type: queryItems.first(where: { $0.name == "type" })?.value,
+        source: queryItems.first(where: { $0.name == "source" })?.value
+      )
+    )
   }
 
   func waitForCancellation(path: String, query: String? = nil) async {
@@ -467,15 +671,26 @@ private actor SearchViewModelURLProtocolStub {
     requestedRequests.filter { $0.path == path }.count
   }
 
-  private func recordRequest(path: String, query: String) {
-    requestedRequests.append(SearchRecordedRequest(path: path, query: query))
+  func requestCount(path: String, type: String) -> Int {
+    requestedRequests.filter { $0.path == path && $0.type == type }.count
+  }
+
+  func sourceValues(path: String, type: String? = nil) -> [String?] {
+    requestedRequests
+      .filter { $0.path == path && (type == nil || $0.type == type) }
+      .map(\.source)
+  }
+
+  private func recordRequest(path: String, query: String, type: String?, source: String?) {
+    requestedRequests.append(
+      SearchRecordedRequest(path: path, query: query, type: type, source: source)
+    )
   }
 
   private func responseData(path: String, queryItems: [URLQueryItem], query: String) -> Data {
     if path == "/api/v1/search/title/stream" {
       return resourceSearchStreamData(title: query == "new" ? "New Resource" : "Old Resource")
     }
-
     if path == "/api/v1/system/setting/CustomFilterRules" {
       return Data(
         """
@@ -488,7 +703,7 @@ private actor SearchViewModelURLProtocolStub {
     }
 
     let type = queryItems.first(where: { $0.name == "type" })?.value
-    guard type == nil else {
+    guard type == nil || type == "media" else {
       return Data("[]".utf8)
     }
 
@@ -531,12 +746,14 @@ private actor SearchViewModelURLProtocolStub {
 private struct SearchRecordedRequest: Equatable {
   let path: String
   let query: String
+  let type: String?
+  let source: String?
 }
 
 @MainActor
 private func configureSearchPermissionSession(_ service: APIService) {
-  service.token = "search-permission-token"
-  service.currentUser = Token(
+  service.tokenForTesting = "search-permission-token"
+  service.currentUserForTesting = Token(
     access_token: "search-permission-token",
     token_type: "bearer",
     super_user: FlexibleBool(false),
@@ -547,14 +764,55 @@ private func configureSearchPermissionSession(_ service: APIService) {
       "manage": false,
       "admin": false,
     ],
+    user_id: 301,
     user_name: "search-user",
     avatar: nil
   )
 }
 
 @MainActor
+private func configureDiscoveryPermissionSession(_ service: APIService) {
+  service.tokenForTesting = "discovery-permission-token"
+  service.currentUserForTesting = Token(
+    access_token: "discovery-permission-token",
+    token_type: "bearer",
+    super_user: FlexibleBool(false),
+    permissions: [
+      "discovery": true,
+      "search": false,
+      "subscribe": false,
+      "manage": false,
+      "admin": false,
+    ],
+    user_id: 302,
+    user_name: "discovery-user",
+    avatar: nil
+  )
+}
+
+@MainActor
+private func configureSubscribePermissionSession(_ service: APIService) {
+  service.tokenForTesting = "subscribe-permission-token"
+  service.currentUserForTesting = Token(
+    access_token: "subscribe-permission-token",
+    token_type: "bearer",
+    super_user: FlexibleBool(false),
+    permissions: [
+      "discovery": false,
+      "search": false,
+      "subscribe": true,
+      "manage": false,
+      "admin": false,
+    ],
+    user_id: 303,
+    user_name: "subscribe-user",
+    avatar: nil
+  )
+}
+
+@MainActor
 private func configureChangedSearchPermissionSession(_ service: APIService) {
-  service.currentUser = Token(
+  service.currentUserForTesting = Token(
     access_token: service.token ?? "search-permission-token",
     token_type: "bearer",
     super_user: FlexibleBool(false),
@@ -565,15 +823,35 @@ private func configureChangedSearchPermissionSession(_ service: APIService) {
       "manage": false,
       "admin": false,
     ],
+    user_id: 301,
     user_name: "changed-search-user",
     avatar: nil
   )
 }
 
 @MainActor
+private func configureChangedDiscoveryPermissionSession(_ service: APIService) {
+  service.currentUserForTesting = Token(
+    access_token: service.token ?? "discovery-permission-token",
+    token_type: "bearer",
+    super_user: FlexibleBool(false),
+    permissions: [
+      "discovery": true,
+      "search": false,
+      "subscribe": false,
+      "manage": false,
+      "admin": false,
+    ],
+    user_id: 302,
+    user_name: "changed-discovery-user",
+    avatar: nil
+  )
+}
+
+@MainActor
 private func configureSuperUserSearchSession(_ service: APIService) {
-  service.token = "super-user-search-token"
-  service.currentUser = Token(
+  service.tokenForTesting = "super-user-search-token"
+  service.currentUserForTesting = Token(
     access_token: "super-user-search-token",
     token_type: "bearer",
     super_user: FlexibleBool(true),
@@ -583,6 +861,7 @@ private func configureSuperUserSearchSession(_ service: APIService) {
       "subscribe": true,
       "manage": true,
     ],
+    user_id: 304,
     user_name: "admin",
     avatar: nil
   )
@@ -595,15 +874,12 @@ private struct SearchViewModelFilterSelectionSnapshot {
   let hardValue: String?
   let softValue: String?
 
-  static func selectHardRule(_ ruleId: String, baseURL: String)
+  static func selectHardRule(_ ruleId: String, apiService: APIService)
     -> SearchViewModelFilterSelectionSnapshot
   {
-    let username =
-      KeychainHelper.shared.read(service: "MoviePilot-TV", account: "username")
-      ?? UserDefaults.standard.string(forKey: "username")
-      ?? "default"
-    let hardKey = "selectedCustomFilterRuleId_\(baseURL)_\(username)"
-    let softKey = "selectedSoftFilterRuleId_\(baseURL)_\(username)"
+    let profileKey = apiService.profileKey ?? "missing-profile"
+    let hardKey = "selectedCustomFilterRuleId_\(profileKey)"
+    let softKey = "selectedSoftFilterRuleId_\(profileKey)"
     let snapshot = SearchViewModelFilterSelectionSnapshot(
       hardKey: hardKey,
       softKey: softKey,

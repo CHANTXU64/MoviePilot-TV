@@ -10,7 +10,7 @@ final class ImageProxyEncodingTests: XCTestCase {
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
 
     let rawImage =
       "http://emby.local/Items/abc/Images/Primary?tag=main&quality=90#poster"
@@ -34,7 +34,7 @@ final class ImageProxyEncodingTests: XCTestCase {
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.useImageCache = false
 
     let rawImage =
@@ -56,7 +56,7 @@ final class ImageProxyEncodingTests: XCTestCase {
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.useImageCache = true
 
     let rawImage =
@@ -78,7 +78,7 @@ final class ImageProxyEncodingTests: XCTestCase {
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.useImageCache = true
 
     let rawImage =
@@ -100,7 +100,7 @@ final class ImageProxyEncodingTests: XCTestCase {
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.useImageCache = true
 
     let rawImage =
@@ -122,17 +122,23 @@ final class ImageProxyEncodingTests: XCTestCase {
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.useImageCache = true
 
     let rawImage =
       "https://people.local/avatar.jpg?size=large&token=person#headshot"
     let url = try XCTUnwrap(
       service.getPersonImageURL(
-        source: nil,
-        profilePath: rawImage,
+        source: "anilist",
+        profilePath: nil,
         avatar: nil,
-        images: nil
+        images: BangumiImages(
+          large: rawImage,
+          common: nil,
+          medium: nil,
+          small: nil,
+          grid: nil
+        )
       )
     )
 
@@ -146,12 +152,48 @@ final class ImageProxyEncodingTests: XCTestCase {
     )
   }
 
+  func testBangumiPersonImageUsesBangumiProxyBeforeGlobalCache() throws {
+    let service = APIService.shared
+    let snapshot = ImageProxyServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "http://moviepilot.local"
+    service.useImageCache = true
+
+    let rawImage =
+      "https://lain.bgm.tv/pic/crt/m/person.jpg?size=medium&token=person#headshot"
+    let url = try XCTUnwrap(
+      service.getPersonImageURL(
+        source: "bangumi",
+        profilePath: nil,
+        avatar: nil,
+        images: BangumiImages(
+          large: nil,
+          common: nil,
+          medium: rawImage,
+          small: nil,
+          grid: nil
+        )
+      )
+    )
+
+    let queryItems = try assertProxyURL(
+      url,
+      path: "/api/v1/system/img/1",
+      queryName: "imgurl",
+      rawImage: rawImage,
+      leakedKeys: ["token"],
+      encodedTail: "%26token%3Dperson%23headshot"
+    )
+    XCTAssertEqual(queryItems["cache"], "true")
+  }
+
   func testModelComputedImageURLsPreserveNestedQueryAndFragment() throws {
     let service = APIService.shared
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    service.baseURL = "http://moviepilot.local"
+    service.baseURLForTesting = "http://moviepilot.local"
     service.useImageCache = true
 
     let rawPoster = "https://poster.local/movie.jpg?lang=zh&token=poster#cover"
@@ -216,7 +258,7 @@ private struct ImageProxyServiceSnapshot {
   }
 
   func restore(to service: APIService) {
-    service.baseURL = baseURL
+    service.baseURLForTesting = baseURL
     service.useImageCache = useImageCache
   }
 }

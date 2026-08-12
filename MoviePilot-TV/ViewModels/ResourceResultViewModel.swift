@@ -18,16 +18,18 @@ class ResourceResultViewModel: ObservableObject {
 
   @Published var searchProgressText: String = ""
   @Published var searchProgress: Double = 0.0
+  @Published var errorMessage: String?
 
   private var searchStreamTask: Task<Void, Never>?
   private var searchGeneration = 0
   private let searchStreamDoneCloseDelay: UInt64 = 1_500_000_000
 
-  private let apiService = APIService.shared
+  private let apiService: APIService
 
   init(
     keyword: String, type: String? = nil, area: String? = nil, title: String? = nil,
-    year: String? = nil, season: Int? = nil, sites: String? = nil
+    year: String? = nil, season: Int? = nil, sites: String? = nil,
+    apiService: APIService = .shared
   ) {
     self.keyword = keyword
     self.type = type
@@ -36,6 +38,7 @@ class ResourceResultViewModel: ObservableObject {
     self.year = year
     self.season = season
     self.sites = sites
+    self.apiService = apiService
   }
 
   deinit {
@@ -73,6 +76,7 @@ class ResourceResultViewModel: ObservableObject {
     searchStreamTask?.cancel()
     searchProgressText = "正在搜索..."
     searchProgress = 0.0
+    errorMessage = nil
 
     let keyword = self.keyword
     let type = self.type
@@ -87,6 +91,7 @@ class ResourceResultViewModel: ObservableObject {
 
     searchStreamTask = Task { @MainActor [weak self] in
       var accumulatedResults: [Context] = []
+      var finalResultApplied = false
       defer {
         self?.finishSearchIfCurrent(
           generation: currentSearchGeneration,
@@ -103,10 +108,11 @@ class ResourceResultViewModel: ObservableObject {
       }
 
       do {
+        guard canContinue() else { return }
         let stream: AsyncThrowingStream<SearchStreamEvent, Error>
 
         // 判断是否为媒体搜索（如 "tmdb:1234"）
-        if keyword.contains(":") && keyword.prefix(while: { $0.isLetter }).count > 0 {
+        if isResourceMediaSearchKeyword(keyword) {
           stream = apiService.searchMediaStream(
             keyword: keyword,
             type: type,
@@ -123,23 +129,20 @@ class ResourceResultViewModel: ObservableObject {
         for try await event in stream {
           guard canContinue() else { return }
 
-          if let text = event.text {
+          if let text = event.text_i18n ?? event.text {
             self?.searchProgressText = text
           }
           if let value = event.value {
             self?.searchProgress = value
           }
 
-          if let items = event.items {
-            if event.type == "append" {
-              accumulatedResults.append(contentsOf: items)
-            } else if event.type == "replace" || event.type == "done" {
-              accumulatedResults = items
-            }
-          }
+          event.applyResourceItems(
+            to: &accumulatedResults,
+            finalResultApplied: &finalResultApplied
+          )
 
           if event.type == "error" {
-            print("Search Stream Error: \(event.message ?? "未知错误")")
+            self?.errorMessage = event.message_i18n ?? event.message ?? "未找到相关资源"
             break
           }
 
@@ -226,6 +229,8 @@ class ResourceResultViewModel: ObservableObject {
             self.results = searchResults
           } catch {
             print("Search fallback error: \(error)")
+            guard canContinue() else { return }
+            self?.errorMessage = error.localizedDescription
           }
           guard canContinue() else { return }
         }

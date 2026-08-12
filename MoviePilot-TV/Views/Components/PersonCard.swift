@@ -62,8 +62,7 @@ struct PersonCard: View {
 
   private var posterContent: some View {
     let url = staffImageUrl ?? person.imageURLs.profile
-    return KFImage(url)
-      .requestModifier(AnyModifier.cookieModifier)
+    return KFImage.sessionImage(url)
       .placeholder {
         Rectangle()
           .fill(Color(white: 0.12))

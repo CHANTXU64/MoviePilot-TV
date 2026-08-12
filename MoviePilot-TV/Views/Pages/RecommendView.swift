@@ -24,7 +24,10 @@ struct RecommendView: View {
             header: {
               VStack(spacing: 20) {
                 // 分类选择器 - 使用 Picker，带 Icon
-                CategoryPickerView(selectedCategory: $viewModel.selectedCategory)
+                CategoryPickerView(
+                  categories: viewModel.visibleCategories,
+                  selectedCategory: $viewModel.selectedCategory
+                )
                   .onChange(of: viewModel.selectedCategory) { _, _ in
                     viewModel.onCategoryChanged()
                   }
@@ -44,6 +47,22 @@ struct RecommendView: View {
               )
             }
           )
+        } else if viewModel.filteredShelves.isEmpty {
+          VStack(spacing: 24) {
+            if !viewModel.visibleCategories.isEmpty {
+              CategoryPickerView(
+                categories: viewModel.visibleCategories,
+                selectedCategory: $viewModel.selectedCategory
+              )
+              .onChange(of: viewModel.selectedCategory) { _, _ in
+                viewModel.onCategoryChanged()
+              }
+            }
+            Text("没有已启用的推荐货架")
+              .font(.headline)
+              .foregroundStyle(.secondary)
+          }
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
           // 在 Paginator 初始化完成前显示加载指示器
           ProgressView()
@@ -51,7 +70,15 @@ struct RecommendView: View {
         }
       }
       .navigationDestination(for: MediaInfo.self) { media in
-        MediaDetailContainerView(media: media, navigationPath: $path)
+        if let collectionId = media.collection_id {
+          CollectionDetailView(
+            title: media.title ?? "合集详情",
+            collectionId: collectionId,
+            navigationPath: $path
+          )
+        } else {
+          MediaDetailContainerView(media: media, navigationPath: $path)
+        }
       }
       .navigationDestination(for: Person.self) { person in
         PersonDetailView(person: person, navigationPath: $path)
@@ -68,16 +95,23 @@ struct RecommendView: View {
       }
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $path)
+    .onAppear {
+      viewModel.reloadLocalConfig()
+    }
+    .task {
+      await viewModel.refreshSources()
+    }
   }
 }
 
 // MARK: - 分类选择器（使用 Picker，带 Icon）
 struct CategoryPickerView: View {
+  let categories: [RecommendCategory]
   @Binding var selectedCategory: RecommendCategory
 
   var body: some View {
     Picker("分类", selection: $selectedCategory) {
-      ForEach(RecommendCategory.allCases) { category in
+      ForEach(categories) { category in
         Label(category.rawValue, systemImage: category.icon)
           .tag(category)
       }

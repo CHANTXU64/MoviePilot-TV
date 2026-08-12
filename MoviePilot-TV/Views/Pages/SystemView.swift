@@ -18,6 +18,7 @@ struct SystemView: View {
   private let isSelected: Bool
 
   @StateObject private var viewModel = SystemViewModel()
+  @StateObject private var recommendViewModel = RecommendViewModel(selectShelf: false)
   @ObservedObject private var apiService = APIService.shared
   @State private var showAppInfo = false
   @State private var showLogoutConfirmation = false
@@ -37,6 +38,10 @@ struct SystemView: View {
 
   private var canConfigureSearch: Bool {
     apiService.canAccess(.search)
+  }
+
+  private var canConfigureRecommendations: Bool {
+    apiService.canAccess(.discovery)
   }
 
   private var canConfigureCustomFilters: Bool {
@@ -144,8 +149,14 @@ struct SystemView: View {
             rootPage
           case .connection:
             connectionPage
+          case .mediaSourceSelection:
+            if canConfigureRecommendations {
+              mediaSourceSelectionPage
+            }
           case .siteSelection:
-            siteSelectionPage
+            if canConfigureSearch {
+              siteSelectionPage
+            }
           case .hardFilter:
             if canConfigureCustomFilters {
               filterPage(
@@ -159,6 +170,10 @@ struct SystemView: View {
                 selectedRuleId: viewModel.selectedSoftFilterRuleId,
                 onSelect: { viewModel.selectedSoftFilterRuleId = $0 }
               )
+            }
+          case .recommendation:
+            if canConfigureRecommendations {
+              recommendationPage
             }
           }
         }
@@ -191,6 +206,28 @@ struct SystemView: View {
           )
           .font(.body.weight(.semibold))
           .focused($focusedItem, equals: .autoSearch)
+        }
+      }
+
+      if canConfigureRecommendations {
+        section("推荐页") {
+          Button {
+            push(.recommendation)
+          } label: {
+            row("推荐货架", showsDisclosure: true)
+          }
+          .focused($focusedItem, equals: .recommendation)
+        }
+      }
+
+      if canConfigureRecommendations {
+        section("聚合搜索") {
+          Button {
+            push(.mediaSourceSelection)
+          } label: {
+            row("默认搜索来源", value: mediaSourceButtonLabel, showsDisclosure: true)
+          }
+          .focused($focusedItem, equals: .mediaSourceSelection)
         }
       }
 
@@ -349,6 +386,29 @@ struct SystemView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
   }
 
+  private var recommendationPage: some View {
+    section(nil) {
+      ForEach(recommendViewModel.shelves) { shelf in
+        Toggle(
+          shelf.title,
+          isOn: Binding(
+            get: { recommendViewModel.enableConfig[shelf.title] == true },
+            set: { enabled in
+              var config = recommendViewModel.enableConfig
+              config[shelf.title] = enabled
+              recommendViewModel.saveEnableConfig(config)
+            }
+          )
+        )
+        .font(.body.weight(.semibold))
+        .focused($focusedItem, equals: .recommendationShelf(shelf.id))
+      }
+    }
+    .task {
+      await recommendViewModel.refreshSources(selectShelf: false)
+    }
+  }
+
   private var siteSelectionPage: some View {
     section(nil) {
       Button {
@@ -373,6 +433,32 @@ struct SystemView: View {
           row(site.name, value: viewModel.defaultSearchSites.contains(site.id) ? "已选择" : nil)
         }
         .focused($focusedItem, equals: .site(site.id))
+      }
+    }
+  }
+
+  private var mediaSourceSelectionPage: some View {
+    section(nil) {
+      Button {
+        viewModel.defaultMediaSearchSource = nil
+      } label: {
+        row(
+          "默认",
+          value: viewModel.defaultMediaSearchSource == nil ? "已选择" : nil
+        )
+      }
+      .focused($focusedItem, equals: .defaultMediaSource)
+
+      ForEach(MediaSearchSource.allowed(for: .media)) { source in
+        Button {
+          viewModel.defaultMediaSearchSource = source
+        } label: {
+          row(
+            source.title,
+            value: viewModel.defaultMediaSearchSource == source ? "已选择" : nil
+          )
+        }
+        .focused($focusedItem, equals: .mediaSource(source))
       }
     }
   }
@@ -506,12 +592,16 @@ struct SystemView: View {
     switch poppedPage {
     case .connection, .root:
       target = .connection
+    case .mediaSourceSelection:
+      target = .mediaSourceSelection
     case .siteSelection:
       target = .siteSelection
     case .hardFilter:
       target = .hardFilter
     case .softFilter:
       target = .softFilter
+    case .recommendation:
+      target = .recommendation
     }
 
     DispatchQueue.main.async {
@@ -523,15 +613,19 @@ struct SystemView: View {
     let target: SystemSettingsFocus
     switch page {
     case .root:
-      target = .autoSearch
+      target = .waitBackgroundImage
     case .connection:
       target = .relogin
+    case .mediaSourceSelection:
+      target = .defaultMediaSource
     case .siteSelection:
       target = .allSites
     case .hardFilter:
       target = .hardFilterNone
     case .softFilter:
       target = .softFilterNone
+    case .recommendation:
+      target = .recommendationShelf(RecommendViewModel.allShelves[0].id)
     }
 
     DispatchQueue.main.async {
@@ -543,7 +637,8 @@ struct SystemView: View {
     switch route.last {
     case .softFilter:
       return .softFilterNone
-    case .root, .connection, .siteSelection, .hardFilter, .none:
+    case .root, .connection, .mediaSourceSelection, .siteSelection, .hardFilter,
+      .recommendation, .none:
       return .hardFilterNone
     }
   }
@@ -552,7 +647,8 @@ struct SystemView: View {
     switch route.last {
     case .softFilter:
       return .softFilterRule(ruleId)
-    case .root, .connection, .siteSelection, .hardFilter, .none:
+    case .root, .connection, .mediaSourceSelection, .siteSelection, .hardFilter,
+      .recommendation, .none:
       return .hardFilterRule(ruleId)
     }
   }
@@ -603,19 +699,24 @@ struct SystemView: View {
       case .waitBackgroundImage:
         return "进入媒体详情页前的加载动画会等待背景海报就绪实现平滑过渡，网络较慢时可关闭以更快进入详情页。（只影响 TV 端）"
       case .preloadTMDBDetails:
-        return "进入豆瓣或 Bangumi 详情页并识别到对应 TMDB 条目后，提前加载其详情，以缩短后续跳转等待时间。（只影响 TV 端）"
+        return "进入豆瓣、Bangumi 或 AniList 详情页并识别到对应 TMDB 条目后，提前加载其详情，以缩短后续跳转等待时间。（只影响 TV 端）"
+      case .mediaSourceSelection:
+        return "设置聚合搜索默认使用的媒体来源；未选择时沿用 MoviePilot 后端搜索设置。（只影响 TV 端）"
       case .siteSelection:
         return "设置资源搜索默认使用的站点。（只影响 TV 端）"
       case .hardFilter:
         return "在资源搜索结果中，隐藏不符合要求的资源。（只影响 TV 端）"
       case .softFilter:
         return "在资源搜索结果中，将不符合要求的资源灰置于结果末尾。（只影响 TV 端）"
+      case .recommendation:
+        return "设置推荐页面显示的内容。（只影响 TV 端）"
       case .connection:
         return "查看当前登录状态、服务器地址和后端连接状态。"
       case .appInfo:
         return nil
-      case .allSites, .site, .relogin, .logout, .hardFilterNone, .softFilterNone,
-        .hardFilterRule, .softFilterRule:
+      case .allSites, .site, .defaultMediaSource, .mediaSource, .relogin, .logout,
+        .hardFilterNone, .softFilterNone, .hardFilterRule, .softFilterRule,
+        .recommendationShelf:
         break
       }
     }
@@ -636,12 +737,16 @@ struct SystemView: View {
       return nil
     case .connection:
       return "查看当前登录状态、服务器地址和后端连接状态。"
+    case .mediaSourceSelection:
+      return "设置聚合搜索默认使用的媒体来源。（只影响 TV 端）"
     case .siteSelection:
       return "设置资源搜索默认使用的站点。（只影响 TV 端）"
     case .hardFilter:
       return "在资源搜索结果中，隐藏不符合要求的资源。（只影响 TV 端）"
     case .softFilter:
       return "在资源搜索结果中，将不符合要求的资源灰置于结果末尾。（只影响 TV 端）"
+    case .recommendation:
+      return "设置推荐页面显示的内容。（只影响 TV 端）"
     }
   }
 
@@ -680,18 +785,27 @@ struct SystemView: View {
       return "\(viewModel.defaultSearchSites.count) 个站点"
     }
   }
+
+  private var mediaSourceButtonLabel: String {
+    viewModel.defaultMediaSearchSource?.title ?? "默认"
+  }
 }
 
 private enum SystemSettingsPage: Hashable {
   case root
   case connection
+  case mediaSourceSelection
   case siteSelection
   case hardFilter
   case softFilter
+  case recommendation
 }
 
 private enum SystemSettingsFocus: Hashable {
   case connection
+  case mediaSourceSelection
+  case defaultMediaSource
+  case mediaSource(MediaSearchSource)
   case siteSelection
   case allSites
   case site(Int)
@@ -707,6 +821,8 @@ private enum SystemSettingsFocus: Hashable {
   case softFilterNone
   case hardFilterRule(String)
   case softFilterRule(String)
+  case recommendation
+  case recommendationShelf(String)
 }
 
 private extension View {

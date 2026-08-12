@@ -6,11 +6,13 @@ struct SearchView: View {
   @StateObject private var subscriptionHandler = SubscriptionHandler()
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
   @State private var showSiteSelection = false
+  @State private var showMediaSourceSelection = false
 
   // 焦点管理枚举：定义页面内可获得焦点的区域
   enum Field: Hashable {
     case searchType(SearchType)  // 搜索类型切换按钮（聚合/资源）
     case site(Int)  // 站点筛选按钮
+    case mediaSource
   }
   @FocusState private var focusedField: Field?
   @State private var lastFocusedField: Field?
@@ -19,45 +21,30 @@ struct SearchView: View {
   @FocusState private var isTopRedirectorFocused: Bool
   @FocusState private var isBottomRedirectorFocused: Bool
 
-  /// MARK: - 站点过滤器显示逻辑
-  /// 此逻辑非常关键，用于处理 TV 端遥控器操作时的焦点“粘性”。
-  /// 确保在用户从搜索类型切换到站点筛选，或者在站点筛选内部操作时，过滤器栏不会意外消失。
+  private var visibleFilterSearchType: SearchType {
+    switch focusedField ?? lastFocusedField {
+    case .searchType(let type):
+      return type
+    case .site:
+      return .resource
+    case .mediaSource:
+      return .unified
+    case nil:
+      return viewModel.searchType
+    }
+  }
+
   private var shouldShowSiteFilter: Bool {
-    // 1. 如果当前正聚焦在“资源”搜索按钮上，显示过滤器
-    if case .searchType(let type) = focusedField, type == .resource {
-      return true
-    }
+    visibleFilterSearchType == .resource
+  }
 
-    // 2. 如果当前正聚焦在站点过滤器本身（按钮或内部开关），显示它
-    if case .site = focusedField {
-      return true
-    }
-
-    // 3. 如果当前处于“资源搜索”模式...
-    if viewModel.searchType == .resource {
-      // ...且没有聚焦在“非资源”类的搜索类型按钮上，则保持显示
-      if case .searchType(let type) = focusedField, type != .resource {
-        return false
-      }
-      return true
-    }
-
-    // 4. “粘性”逻辑：当焦点处于切换间隙（nil）时，如果上一个焦点是资源或过滤器，允许短暂保留显示
-    if focusedField == nil {
-      if case .searchType(let type) = lastFocusedField, type == .resource {
-        return true
-      }
-      if case .site = lastFocusedField {
-        return true
-      }
-    }
-
-    return false
+  private var shouldShowMediaSourceFilter: Bool {
+    visibleFilterSearchType == .unified
   }
 
   /// 定义可用的搜索类型
   private var availableSearchTypes: [SearchType] {
-    return [.unified, .resource]
+    viewModel.availableSearchTypes
   }
 
   /// 搜索页眉：包含搜索类型切换组和站点过滤器
@@ -76,7 +63,27 @@ struct SearchView: View {
           }
         }
 
-      HStack(spacing: 20) {
+      HStack(spacing: 30) {
+        ZStack(alignment: .trailing) {
+          // 聚合搜索来源按钮放在左侧，不影响中间搜索类型按钮的位置。
+          if shouldShowMediaSourceFilter {
+            Button(action: {
+              showMediaSourceSelection = true
+            }) {
+              HStack(spacing: 8) {
+                Image(systemName: "server.rack")
+                Text("搜索来源：\(viewModel.mediaSourceButtonLabel)")
+              }
+              .font(.caption)
+              .foregroundColor(.primary)
+            }
+            .controlSize(.small)
+            .focused($focusedField, equals: .mediaSource)
+            .transition(.move(edge: .trailing).combined(with: .opacity))
+          }
+        }
+        .frame(width: 300, alignment: .trailing)
+
         // A. 搜索类型按钮组 (聚合 / 资源)
         HStack(spacing: 20) {
           ForEach(availableSearchTypes.indices, id: \.self) { index in
@@ -100,24 +107,29 @@ struct SearchView: View {
           }
         }
 
-        // B. 站点筛选按钮：仅在资源搜索模式且满足显示条件时可见
-        if shouldShowSiteFilter {
-          Button(action: {
-            showSiteSelection = true
-          }) {
-            HStack(spacing: 8) {
-              Image(systemName: "server.rack")
-              Text(viewModel.siteFilter.siteButtonLabel)
+        ZStack(alignment: .leading) {
+          // B. 站点筛选按钮：仅在资源搜索模式且满足显示条件时可见
+          if shouldShowSiteFilter {
+            Button(action: {
+              showSiteSelection = true
+            }) {
+              HStack(spacing: 8) {
+                Image(systemName: "server.rack")
+                Text(viewModel.siteFilter.siteButtonLabel)
+              }
+              .font(.caption)
+              .foregroundColor(.primary)
             }
-            .font(.caption)
-            .foregroundColor(.primary)
+            .controlSize(.small)
+            .focused($focusedField, equals: .site(0))
+            .transition(.move(edge: .leading).combined(with: .opacity))
           }
-          .controlSize(.small)
-          .focused($focusedField, equals: .site(0))
-          .transition(.move(edge: .leading).combined(with: .opacity))
         }
+        .frame(width: 300, alignment: .leading)
       }
+      .frame(maxWidth: .infinity)
       .animation(.snappy, value: shouldShowSiteFilter)
+      .animation(.snappy, value: shouldShowMediaSourceFilter)
       .padding(.vertical, 0)
 
       // 焦点重定向：捕获从下方结果列表向上的焦点
@@ -159,7 +171,11 @@ struct SearchView: View {
           switch viewModel.searchType {
           case .resource:
             if viewModel.hasSearched {
-              TorrentsResultView(result: viewModel.resourceResults, header: { searchHeader })
+              TorrentsResultView(
+                result: viewModel.resourceResults,
+                emptyDescription: viewModel.resourceErrorMessage,
+                header: { searchHeader }
+              )
             } else {
               VStack {
                 searchHeader
@@ -223,11 +239,16 @@ struct SearchView: View {
           label: { $0.name }
         )
       }
+      .sheet(isPresented: $showMediaSourceSelection) {
+        MediaSourceSelectionSheet(selected: $viewModel.mediaSearchSource)
+      }
       // 使用原生搜索栏
       .searchable(text: $viewModel.query, placement: .automatic, prompt: "电影、节目、演职人员等")
       .task {
-        // 当视图出现时加载站点
-        await viewModel.siteFilter.loadSites()
+        viewModel.normalizeSearchTypeForPermissions()
+        if viewModel.availableSearchTypes.contains(.resource) {
+          await viewModel.siteFilter.loadSites()
+        }
       }
       .onChange(of: focusedField) { _, newValue in
         if let newValue = newValue {
@@ -236,6 +257,42 @@ struct SearchView: View {
       }
     }
     .environmentObject(subscriptionHandler)
+  }
+
+}
+
+private struct MediaSourceSelectionSheet: View {
+  @Binding var selected: MediaSearchSource?
+  @Environment(\.dismiss) private var dismiss
+
+  var body: some View {
+    NavigationStack {
+      ScrollView {
+        VStack {
+          sourceButton("默认", source: nil)
+          ForEach(MediaSearchSource.allowed(for: .media)) { source in
+            sourceButton(source.title, source: source)
+          }
+        }
+        .applySheetStyles()
+        .padding(28)
+      }
+    }
+  }
+
+  private func sourceButton(_ title: String, source: MediaSearchSource?) -> some View {
+    Button {
+      selected = source
+      dismiss()
+    } label: {
+      HStack {
+        Text(title)
+        Spacer()
+        if selected == source {
+          Image(systemName: "checkmark")
+        }
+      }
+    }
   }
 }
 
@@ -415,7 +472,7 @@ private struct ResultRow: View {
                   onShareTapped(share)
                 } else {
                   preloadDebounceTask?.cancel()
-                  MediaPreloader.shared.preload(for: item)
+                  MediaPreloader.shared.preloadIfNeeded(for: item)
                   navigationPath.append(item)
                 }
               }
@@ -443,7 +500,7 @@ private struct ResultRow: View {
               preloadDebounceTask = Task {
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
-                MediaPreloader.shared.preload(for: item)
+                MediaPreloader.shared.preloadIfNeeded(for: item)
               }
             }
             // 分页加载
@@ -557,6 +614,7 @@ private struct BestResultRow: View {
     case "themoviedb": return "TMDB"
     case "douban": return "豆瓣"
     case "bangumi": return "Bangumi"
+    case "anilist": return "AniList"
     default: return source ?? ""
     }
   }
@@ -591,7 +649,7 @@ private struct BestResultRow: View {
                     onShareTapped(share)
                   } else {
                     preloadDebounceTask?.cancel()
-                    MediaPreloader.shared.preload(for: media)
+                    MediaPreloader.shared.preloadIfNeeded(for: media)
                     navigationPath.append(media)
                   }
                 }
@@ -643,7 +701,7 @@ private struct BestResultRow: View {
             preloadDebounceTask = Task {
               try? await Task.sleep(for: .milliseconds(300))
               guard !Task.isCancelled else { return }
-              MediaPreloader.shared.preload(for: media)
+              MediaPreloader.shared.preloadIfNeeded(for: media)
             }
           }
           scrollPosition = "best"

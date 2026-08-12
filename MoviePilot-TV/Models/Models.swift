@@ -6,40 +6,138 @@ import Foundation
 extension Notification.Name {
   /// 订阅状态变更通知（新增/删除/编辑订阅后发送，首页和预加载缓存监听刷新）
   static let subscriptionDidUpdate = Notification.Name("subscriptionDidUpdate")
+  /// 用户在保存订阅期间返回，保存最终成功后显示一次成功提示
+  static let subscriptionSaveDidComplete = Notification.Name("subscriptionSaveDidComplete")
   /// 会话登出通知（主动登出或自动重连失败后发送，用于清理会话相关缓存）
   static let sessionDidLogout = Notification.Name("sessionDidLogout")
 }
 
-enum MediaIdentifier {
-  static func apiMediaId(
+nonisolated struct MediaIdentity: Hashable {
+  let source: String
+  let mediaId: String
+
+  var mediaKey: String {
+    "\(source == "themoviedb" ? "tmdb" : source):\(mediaId)"
+  }
+}
+
+nonisolated enum MediaIdentifier {
+  private static let builtInSources = ["themoviedb", "douban", "bangumi", "anilist"]
+
+  static func normalizeSource(_ source: String?) -> String? {
+    guard let source = normalizedString(source)?.lowercased() else { return nil }
+    return source == "tmdb" ? "themoviedb" : source
+  }
+
+  static func resolve(
+    mediaIdPrefix: String? = nil,
+    source: String? = nil,
+    mediaId: String? = nil,
+    tmdbId: Int? = nil,
+    doubanId: String? = nil,
+    bangumiId: Int? = nil,
+    anilistId: Int? = nil,
+    legacyMediaId: String? = nil
+  ) -> MediaIdentity? {
+    var sourceIds: [String: String] = [:]
+    sourceIds["themoviedb"] = tmdbId.map(String.init)
+    sourceIds["douban"] = normalizedString(doubanId)
+    sourceIds["bangumi"] = bangumiId.map(String.init)
+    sourceIds["anilist"] = anilistId.map(String.init)
+
+    var declaredSources: [String] = []
+    for value in [mediaIdPrefix, source] {
+      if let normalized = normalizeSource(value), !declaredSources.contains(normalized) {
+        declaredSources.append(normalized)
+      }
+    }
+    for declaredSource in declaredSources {
+      let declaredId = mediaId == nil ? sourceIds[declaredSource] : normalizedString(mediaId)
+      if let sourceId = declaredId {
+        return MediaIdentity(source: declaredSource, mediaId: sourceId)
+      }
+    }
+    for fallbackSource in builtInSources {
+      if let fallbackId = sourceIds[fallbackSource] {
+        return MediaIdentity(source: fallbackSource, mediaId: fallbackId)
+      }
+    }
+    return identity(from: legacyMediaId)
+  }
+
+  static func resolveAuxiliaryContent(
     tmdbId: Int?,
     doubanId: String?,
-    bangumiId: Int?,
-    mediaIdPrefix: String?,
-    mediaId: String?
-  ) -> String? {
-    apiMediaId(
-      tmdbId: tmdbId,
-      doubanId: doubanId,
-      bangumiId: bangumiId,
-      fallbackMediaId: joinedMediaId(prefix: mediaIdPrefix, id: mediaId)
-    )
+    bangumiId: Int?
+  ) -> MediaIdentity? {
+    if let id = truthyNumericIdentifier(tmdbId) {
+      return MediaIdentity(source: "themoviedb", mediaId: String(id))
+    }
+    if let id = normalizedString(doubanId) {
+      return MediaIdentity(source: "douban", mediaId: id)
+    }
+    if let id = truthyNumericIdentifier(bangumiId) {
+      return MediaIdentity(source: "bangumi", mediaId: String(id))
+    }
+    return nil
+  }
+
+  static func identity(from mediaKey: String?) -> MediaIdentity? {
+    guard let components = mediaIdComponents(mediaKey),
+      let source = normalizeSource(components.prefix)
+    else {
+      return nil
+    }
+    return MediaIdentity(source: source, mediaId: components.id)
   }
 
   static func apiMediaId(
     tmdbId: Int?,
     doubanId: String?,
     bangumiId: Int?,
+    anilistId: Int? = nil,
+    source: String? = nil,
+    mediaIdPrefix: String?,
+    mediaId: String?
+  ) -> String? {
+    resolve(
+      mediaIdPrefix: mediaIdPrefix,
+      source: source,
+      mediaId: mediaId,
+      tmdbId: tmdbId,
+      doubanId: doubanId,
+      bangumiId: bangumiId,
+      anilistId: anilistId
+    )?.mediaKey
+  }
+
+  static func apiMediaId(
+    tmdbId: Int?,
+    doubanId: String?,
+    bangumiId: Int?,
+    anilistId: Int? = nil,
+    mediaSource: String? = nil,
+    mediaId: String? = nil,
     fallbackMediaId: String?
   ) -> String? {
-    if let tmdbId = validNumericIdentifier(tmdbId) { return "tmdb:\(tmdbId)" }
-    if let doubanId = normalizedString(doubanId) { return "douban:\(doubanId)" }
-    if let bangumiId = validNumericIdentifier(bangumiId) { return "bangumi:\(bangumiId)" }
-    return normalizedMediaIdentifier(fallbackMediaId)
+    resolve(
+      source: mediaSource,
+      mediaId: mediaId,
+      tmdbId: tmdbId,
+      doubanId: doubanId,
+      bangumiId: bangumiId,
+      anilistId: anilistId,
+      legacyMediaId: fallbackMediaId
+    )?.mediaKey
   }
 
   static func validNumericIdentifier(_ id: Int?) -> Int? {
     guard let id, id > 0 else { return nil }
+    return id
+  }
+
+  static func truthyNumericIdentifier(_ id: Int?) -> Int? {
+    guard let id, id != 0 else { return nil }
     return id
   }
 
@@ -49,18 +147,13 @@ enum MediaIdentifier {
     return trimmed.isEmpty ? nil : trimmed
   }
 
+  static func isValidManualMediaId(_ mediaId: String?) -> Bool {
+    guard let mediaId = normalizedString(mediaId) else { return true }
+    return mediaId.unicodeScalars.allSatisfy { (48...57).contains(Int($0.value)) }
+  }
+
   static func normalizedMediaIdentifier(_ mediaId: String?) -> String? {
     guard let mediaId = normalizedString(mediaId), !mediaId.hasSuffix(":") else { return nil }
-
-    let parts = mediaId.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
-    if parts.count == 2 {
-      let prefix = parts[0]
-      let value = parts[1]
-      if value.isEmpty { return nil }
-      if prefix == "tmdb" || prefix == "bangumi" {
-        guard let numericValue = Int(value), numericValue > 0 else { return nil }
-      }
-    }
 
     return mediaId
   }
@@ -72,10 +165,6 @@ enum MediaIdentifier {
     return (String(parts[0]), String(parts[1]))
   }
 
-  private static func joinedMediaId(prefix: String?, id: String?) -> String? {
-    guard let prefix = normalizedString(prefix), let id = normalizedString(id) else { return nil }
-    return "\(prefix):\(id)"
-  }
 }
 
 /// 包装类型，用于处理 API 响应中多种格式的布尔值
@@ -125,7 +214,7 @@ struct FlexibleBool: Codable, Hashable {
   }
 }
 
-enum JSONValue: Codable, Hashable {
+nonisolated enum JSONValue: Codable, Hashable, Sendable {
   case null
   case bool(Bool)
   case int(Int)
@@ -172,6 +261,117 @@ enum JSONValue: Codable, Hashable {
       try container.encode(value)
     }
   }
+
+  var queryString: String? {
+    switch self {
+    case .null:
+      return nil
+    case .bool(let value):
+      return value ? "true" : "false"
+    case .int(let value):
+      return String(value)
+    case .double(let value):
+      return String(value)
+    case .string(let value):
+      return value
+    case .array, .object:
+      guard let data = try? JSONEncoder().encode(self) else { return nil }
+      return String(data: data, encoding: .utf8)
+    }
+  }
+
+  var objectValue: [String: JSONValue]? {
+    guard case .object(let value) = self else { return nil }
+    return value
+  }
+
+  var arrayValue: [JSONValue]? {
+    guard case .array(let value) = self else { return nil }
+    return value
+  }
+
+  var stringValue: String? {
+    guard case .string(let value) = self else { return nil }
+    return value
+  }
+
+  var isTruthy: Bool {
+    switch self {
+    case .null:
+      return false
+    case .bool(let value):
+      return value
+    case .int(let value):
+      return value != 0
+    case .double(let value):
+      return value != 0 && !value.isNaN
+    case .string(let value):
+      return !value.isEmpty
+    case .array, .object:
+      return true
+    }
+  }
+}
+
+nonisolated private struct JSONCodingKey: CodingKey {
+  let stringValue: String
+  let intValue: Int? = nil
+
+  init(_ stringValue: String) {
+    self.stringValue = stringValue
+  }
+
+  init?(stringValue: String) {
+    self.init(stringValue)
+  }
+
+  init?(intValue: Int) {
+    return nil
+  }
+}
+
+nonisolated struct DiscoverSourceDescriptor: Codable, Hashable, Identifiable, Sendable {
+  let name: String
+  let mediaid_prefix: String
+  let api_path: String
+  let filter_params: [String: JSONValue]
+  let filter_ui: [JSONValue]
+  let depends: [String: [String]]?
+
+  var id: String { mediaid_prefix }
+
+  init(
+    name: String,
+    mediaid_prefix: String,
+    api_path: String,
+    filter_params: [String: JSONValue],
+    filter_ui: [JSONValue],
+    depends: [String: [String]]?
+  ) {
+    self.name = name
+    self.mediaid_prefix = mediaid_prefix
+    self.api_path = api_path
+    self.filter_params = filter_params
+    self.filter_ui = filter_ui
+    self.depends = depends
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    name = try container.decode(String.self, forKey: .name)
+    mediaid_prefix = try container.decode(String.self, forKey: .mediaid_prefix)
+    api_path = try container.decode(String.self, forKey: .api_path)
+    filter_params =
+      try container.decodeIfPresent([String: JSONValue].self, forKey: .filter_params) ?? [:]
+    filter_ui = try container.decodeIfPresent([JSONValue].self, forKey: .filter_ui) ?? []
+    depends = try container.decodeIfPresent([String: [String]].self, forKey: .depends)
+  }
+}
+
+nonisolated struct RecommendSourceDescriptor: Codable, Hashable, Sendable {
+  let name: String
+  let api_path: String
+  let type: String
 }
 
 /// 包装类型，用于处理 API 响应中可能是 String 或 Int 的字段，统一转为 String。
@@ -272,7 +472,7 @@ struct RecognizeResponse: Codable {
 /// MARK: - 媒体详情相关模型
 
 /// TMDB 单季基础元数据
-struct TmdbSeason: Codable, Identifiable, Hashable {
+nonisolated struct TmdbSeason: Codable, Identifiable, Hashable {
   struct ImageURLs: Hashable {
     let poster: URL?
   }
@@ -292,8 +492,15 @@ struct TmdbSeason: Codable, Identifiable, Hashable {
   /// 评分
   let vote_average: Double?
 
-  /// 预计算的图片 URL
-  let imageURLs: ImageURLs
+  /// 图片 URL 在主线程按当前图片设置计算，避免后台 JSON 解码访问主线程 APIService。
+  @MainActor var imageURLs: ImageURLs {
+    ImageURLs(
+      poster: APIService.shared.getSeasonPosterURL(
+        posterPath: poster_path,
+        mediaPosterPath: nil
+      )
+    )
+  }
 
   var id: Int { season_number ?? 0 }
 
@@ -310,14 +517,6 @@ struct TmdbSeason: Codable, Identifiable, Hashable {
     poster_path = try container.decodeIfPresent(String.self, forKey: .poster_path)
     season_number = try container.decodeIfPresent(Int.self, forKey: .season_number)
     vote_average = try container.decodeIfPresent(Double.self, forKey: .vote_average)
-
-    // 计算图片 URL
-    self.imageURLs = ImageURLs(
-      poster: APIService.shared.getSeasonPosterURL(
-        posterPath: poster_path,
-        mediaPosterPath: nil
-      )
-    )
   }
 }
 
@@ -378,10 +577,11 @@ struct ProductionCountry: Codable, Hashable {
 }
 
 /// 核心媒体详情模型：汇聚多源元数据
-nonisolated struct MediaInfoJSON: Codable {
+nonisolated struct MediaInfoJSON: Decodable {
   let tmdb_id: Int?
   let douban_id: String?
   let bangumi_id: Int?
+  let anilist_id: Int?
   let imdb_id: String?
   let tvdb_id: Int?
   let source: String?
@@ -411,6 +611,47 @@ nonisolated struct MediaInfoJSON: Codable {
   let genres: [MediaGenre]?
   let category: String?
   let subscribeShare: SubscribeShare?
+  let rawPayload: [String: JSONValue]
+
+  init(from decoder: Decoder) throws {
+    rawPayload =
+      (try? decoder.singleValueContainer().decode([String: JSONValue].self)) ?? [:]
+    let container = try decoder.container(keyedBy: MediaInfo.CodingKeys.self)
+    tmdb_id = try container.decodeIfPresent(Int.self, forKey: .tmdb_id)
+    douban_id = try container.decodeIfPresent(String.self, forKey: .douban_id)
+    bangumi_id = try container.decodeIfPresent(Int.self, forKey: .bangumi_id)
+    anilist_id = try container.decodeIfPresent(Int.self, forKey: .anilist_id)
+    imdb_id = try container.decodeIfPresent(String.self, forKey: .imdb_id)
+    tvdb_id = try container.decodeIfPresent(Int.self, forKey: .tvdb_id)
+    source = try container.decodeIfPresent(String.self, forKey: .source)
+    mediaid_prefix = try container.decodeIfPresent(String.self, forKey: .mediaid_prefix)
+    media_id = try container.decodeIfPresent(String.self, forKey: .media_id)
+    title = try container.decodeIfPresent(String.self, forKey: .title)
+    original_title = try container.decodeIfPresent(String.self, forKey: .original_title)
+    original_name = try container.decodeIfPresent(String.self, forKey: .original_name)
+    names = try container.decodeIfPresent([String].self, forKey: .names)
+    type = try container.decodeIfPresent(String.self, forKey: .type)
+    year = try container.decodeIfPresent(String.self, forKey: .year)
+    season = try container.decodeIfPresent(Int.self, forKey: .season)
+    poster_path = try container.decodeIfPresent(String.self, forKey: .poster_path)
+    backdrop_path = try container.decodeIfPresent(String.self, forKey: .backdrop_path)
+    overview = try container.decodeIfPresent(String.self, forKey: .overview)
+    vote_average = try container.decodeIfPresent(Double.self, forKey: .vote_average)
+    popularity = try container.decodeIfPresent(Double.self, forKey: .popularity)
+    season_info = try container.decodeIfPresent([TmdbSeason].self, forKey: .season_info)
+    collection_id = try container.decodeIfPresent(Int.self, forKey: .collection_id)
+    directors = try container.decodeIfPresent([Person].self, forKey: .directors)
+    actors = try container.decodeIfPresent([Person].self, forKey: .actors)
+    episode_group = try container.decodeIfPresent(String.self, forKey: .episode_group)
+    runtime = try container.decodeIfPresent(Int.self, forKey: .runtime)
+    release_date = try container.decodeIfPresent(String.self, forKey: .release_date)
+    original_language = try container.decodeIfPresent(String.self, forKey: .original_language)
+    production_countries = try container.decodeIfPresent(
+      [ProductionCountry].self, forKey: .production_countries)
+    genres = try container.decodeIfPresent([MediaGenre].self, forKey: .genres)
+    category = try container.decodeIfPresent(String.self, forKey: .category)
+    subscribeShare = try container.decodeIfPresent(SubscribeShare.self, forKey: .subscribeShare)
+  }
 }
 
 struct MediaInfo: Codable, Identifiable, Hashable {
@@ -425,11 +666,13 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   let douban_id: String?
   /// Bangumi ID
   let bangumi_id: Int?
+  /// AniList ID
+  let anilist_id: Int?
   /// IMDB ID
   let imdb_id: String?
   /// TVDB ID
   let tvdb_id: Int?
-  /// 来源：themoviedb、douban、bangumi
+  /// 来源：themoviedb、douban、bangumi、anilist 或插件来源
   let source: String?
   /// 其它媒体ID前缀
   let mediaid_prefix: String?
@@ -483,6 +726,8 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   let category: String?
   /// 关联的原始订阅分享对象（如果适用）
   let subscribeShare: SubscribeShare?
+  /// Web 会把插件媒体对象直接作为 `media_in` 回传；保留未建模字段以免丢失插件契约。
+  private let rawPayload: [String: JSONValue]?
 
   /// 稳定的内部标识符，在初始化时生成
   let id: String
@@ -512,7 +757,8 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   }
 
   enum CodingKeys: String, CodingKey {
-    case tmdb_id, douban_id, bangumi_id, imdb_id, tvdb_id, source, mediaid_prefix, media_id, title,
+    case tmdb_id, douban_id, bangumi_id, anilist_id, imdb_id, tvdb_id, source,
+      mediaid_prefix, media_id, title,
       original_title, original_name, names,
       type, year, season, poster_path, backdrop_path,
       overview, vote_average, popularity, season_info, collection_id, directors, actors,
@@ -521,7 +767,8 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   }
 
   init(
-    tmdb_id: Int? = nil, douban_id: String? = nil, bangumi_id: Int? = nil, imdb_id: String? = nil,
+    tmdb_id: Int? = nil, douban_id: String? = nil, bangumi_id: Int? = nil,
+    anilist_id: Int? = nil, imdb_id: String? = nil,
     tvdb_id: Int? = nil, source: String? = nil, mediaid_prefix: String? = nil,
     media_id: String? = nil,
     title: String? = nil, original_title: String? = nil, original_name: String? = nil,
@@ -535,11 +782,13 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     original_language: String? = nil,
     production_countries: [ProductionCountry]? = nil, genres: [MediaGenre]? = nil,
     category: String? = nil,
-    subscribeShare: SubscribeShare? = nil
+    subscribeShare: SubscribeShare? = nil,
+    rawPayload: [String: JSONValue]? = nil
   ) {
     self.tmdb_id = tmdb_id
     self.douban_id = douban_id
     self.bangumi_id = bangumi_id
+    self.anilist_id = anilist_id
     self.imdb_id = imdb_id
     self.tvdb_id = tvdb_id
     self.source = source
@@ -569,11 +818,14 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     self.genres = genres
     self.category = category
     self.subscribeShare = subscribeShare
+    self.rawPayload = rawPayload
 
     self.id = Self.generateUniqueKey(
       source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
       tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id,
-      mediaid_prefix: mediaid_prefix, media_id: media_id, subscribeShare: subscribeShare)
+      anilist_id: anilist_id, mediaid_prefix: mediaid_prefix, media_id: media_id,
+      title: title,
+      subscribeShare: subscribeShare)
 
     self.isCollection = Self.checkIsCollection(type: type, collection_id: collection_id)
 
@@ -597,6 +849,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
       tmdb_id: json.tmdb_id,
       douban_id: json.douban_id,
       bangumi_id: json.bangumi_id,
+      anilist_id: json.anilist_id,
       imdb_id: json.imdb_id,
       tvdb_id: json.tvdb_id,
       source: json.source,
@@ -625,7 +878,8 @@ struct MediaInfo: Codable, Identifiable, Hashable {
       production_countries: json.production_countries,
       genres: json.genres,
       category: json.category,
-      subscribeShare: json.subscribeShare
+      subscribeShare: json.subscribeShare,
+      rawPayload: json.rawPayload
     )
   }
 
@@ -633,6 +887,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     self.tmdb_id = json.tmdb_id
     self.douban_id = json.douban_id
     self.bangumi_id = json.bangumi_id
+    self.anilist_id = json.anilist_id
     self.imdb_id = json.imdb_id
     self.tvdb_id = json.tvdb_id
     self.source = json.source
@@ -662,11 +917,14 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     self.genres = json.genres
     self.category = json.category
     self.subscribeShare = json.subscribeShare
+    self.rawPayload = json.rawPayload
 
     self.id = Self.generateUniqueKey(
       source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
       tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id,
-      mediaid_prefix: mediaid_prefix, media_id: media_id, subscribeShare: subscribeShare)
+      anilist_id: anilist_id, mediaid_prefix: mediaid_prefix, media_id: media_id,
+      title: title,
+      subscribeShare: subscribeShare)
 
     self.isCollection = Self.checkIsCollection(type: type, collection_id: collection_id)
 
@@ -686,6 +944,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     tmdb_id = try container.decodeIfPresent(Int.self, forKey: .tmdb_id)
     douban_id = try container.decodeIfPresent(String.self, forKey: .douban_id)
     bangumi_id = try container.decodeIfPresent(Int.self, forKey: .bangumi_id)
+    anilist_id = try container.decodeIfPresent(Int.self, forKey: .anilist_id)
     imdb_id = try container.decodeIfPresent(String.self, forKey: .imdb_id)
     tvdb_id = try container.decodeIfPresent(Int.self, forKey: .tvdb_id)
     source = try container.decodeIfPresent(String.self, forKey: .source)
@@ -716,11 +975,15 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     genres = try container.decodeIfPresent([MediaGenre].self, forKey: .genres)
     category = try container.decodeIfPresent(String.self, forKey: .category)
     subscribeShare = try container.decodeIfPresent(SubscribeShare.self, forKey: .subscribeShare)
+    rawPayload =
+      (try? decoder.singleValueContainer().decode([String: JSONValue].self)) ?? [:]
 
     self.id = Self.generateUniqueKey(
       source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
       tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id,
-      mediaid_prefix: mediaid_prefix, media_id: media_id, subscribeShare: subscribeShare)
+      anilist_id: anilist_id, mediaid_prefix: mediaid_prefix, media_id: media_id,
+      title: title,
+      subscribeShare: subscribeShare)
 
     self.isCollection = Self.checkIsCollection(type: type, collection_id: collection_id)
 
@@ -737,6 +1000,52 @@ struct MediaInfo: Codable, Identifiable, Hashable {
       poster: APIService.shared.getPosterImageUrl(posterPath: poster_path),
       backdrop: APIService.shared.getBackdropImageUrl(backdropPath: backdrop_path)
     )
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: JSONCodingKey.self)
+    for (key, value) in rawPayload ?? [:] {
+      try container.encode(value, forKey: JSONCodingKey(key))
+    }
+
+    func encode<T: Encodable>(_ value: T?, _ key: CodingKeys) throws {
+      guard let value else { return }
+      try container.encode(value, forKey: JSONCodingKey(key.stringValue))
+    }
+
+    try encode(tmdb_id, .tmdb_id)
+    try encode(douban_id, .douban_id)
+    try encode(bangumi_id, .bangumi_id)
+    try encode(anilist_id, .anilist_id)
+    try encode(imdb_id, .imdb_id)
+    try encode(tvdb_id, .tvdb_id)
+    try encode(source, .source)
+    try encode(mediaid_prefix, .mediaid_prefix)
+    try encode(media_id, .media_id)
+    try encode(title, .title)
+    try encode(original_title, .original_title)
+    try encode(original_name, .original_name)
+    try encode(names, .names)
+    try encode(type, .type)
+    try encode(year, .year)
+    try encode(season, .season)
+    try encode(poster_path, .poster_path)
+    try encode(backdrop_path, .backdrop_path)
+    try encode(overview, .overview)
+    try encode(vote_average, .vote_average)
+    try encode(popularity, .popularity)
+    try encode(season_info, .season_info)
+    try encode(collection_id, .collection_id)
+    try encode(directors, .directors)
+    try encode(actors, .actors)
+    try encode(episode_group, .episode_group)
+    try encode(runtime, .runtime)
+    try encode(release_date, .release_date)
+    try encode(original_language, .original_language)
+    try encode(production_countries, .production_countries)
+    try encode(genres, .genres)
+    try encode(category, .category)
+    try encode(subscribeShare, .subscribeShare)
   }
 
   nonisolated private static func parseCleanedNames(
@@ -774,31 +1083,45 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   }
 
   /// 参考 Vue 前端 dedupFields 去重 key
-  /// 通过拼接多个核心 ID 字段生成唯一标识
+  /// 通过拼接多个核心 ID 字段生成唯一标识；没有任何 ID 时使用标题区分不同媒体
+  /// 长度前缀用于区分 nil、空字符串与字段边界
   /// 用于在 UI 渲染前过滤重复项与生成 ID
   nonisolated private static func generateUniqueKey(
     source: String?, type: String?, season: Int?, tmdb_id: Int?,
     imdb_id: String?, tvdb_id: Int?, douban_id: String?, bangumi_id: Int?,
-    mediaid_prefix: String?, media_id: String?, subscribeShare: SubscribeShare? = nil
+    anilist_id: Int?, mediaid_prefix: String?, media_id: String?,
+    title: String?,
+    subscribeShare: SubscribeShare? = nil
   ) -> String {
     if let subscribeShare {
       let shareId = subscribeShare.raw_id.map(String.init) ?? subscribeShare.id
       return "share:\(shareId)"
     }
 
-    let parts: [String] = [
-      source ?? "",
-      type ?? "",
-      season.map { String($0) } ?? "",
-      tmdb_id.map { String($0) } ?? "",
-      imdb_id ?? "",
-      tvdb_id.map { String($0) } ?? "",
-      douban_id ?? "",
-      bangumi_id.map { String($0) } ?? "",
-      mediaid_prefix ?? "",
-      media_id ?? "",
+    var parts: [String?] = [
+      source,
+      type,
+      season.map { String($0) },
+      tmdb_id.map { String($0) },
+      imdb_id,
+      tvdb_id.map { String($0) },
+      douban_id,
+      bangumi_id.map { String($0) },
+      anilist_id.map { String($0) },
+      mediaid_prefix,
+      media_id,
     ]
-    return parts.joined(separator: "~")
+
+    let hasIdentifier = tmdb_id != nil || imdb_id != nil || tvdb_id != nil
+      || douban_id != nil || bangumi_id != nil || anilist_id != nil || media_id != nil
+    if !hasIdentifier, let title = MediaIdentifier.normalizedString(title) {
+      parts.append(title)
+    }
+
+    return parts.map { value in
+      guard let value else { return "n" }
+      return "s\(value.utf8.count):\(value)"
+    }.joined(separator: "|")
   }
 
   /// 判断当前媒体项是否具备合集行为。
@@ -811,17 +1134,52 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     type == "合集" || type == "collection" || type == "系列"
   }
 
-  /// 生成用于 API 请求的媒体 ID 字符串，严格遵循前端拼接逻辑。
-  /// - 对应前端: `getMediaId()` in `MediaDetailView.vue` & `SubscribeSeasonDialog.vue`
-  /// - 拼接规则: 优先使用 `tmdb_id`, `douban_id`, `bangumi_id`。如果都没有，则使用 `mediaid_prefix` 和 `media_id` 作为备用。
-  var apiMediaId: String? {
-    MediaIdentifier.apiMediaId(
+  /// 解析用于 API 请求的主媒体身份，严格遵循 Web 的来源优先级。
+  /// - 对应前端: `getMediaSubscribeIdentity()` / `getMediaSubscribeId()` in `useMediaSubscribe.ts`
+  /// - 选择规则: 优先匹配声明来源，未匹配时依次回退 TMDB、豆瓣、Bangumi、AniList。
+  var identity: MediaIdentity? {
+    MediaIdentifier.resolve(
+      mediaIdPrefix: mediaid_prefix,
+      source: source,
+      mediaId: media_id,
       tmdbId: tmdb_id,
       doubanId: douban_id,
       bangumiId: bangumi_id,
-      mediaIdPrefix: mediaid_prefix,
-      mediaId: media_id
+      anilistId: anilist_id
     )
+  }
+
+  /// Web 详情页的演职员、推荐和相似内容按 TMDB、豆瓣、Bangumi 字段顺序选择接口，
+  /// 与订阅使用的主身份是两条独立规则。
+  var auxiliaryContentIdentity: MediaIdentity? {
+    MediaIdentifier.resolveAuxiliaryContent(
+      tmdbId: tmdb_id,
+      doubanId: douban_id,
+      bangumiId: bangumi_id
+    )
+  }
+
+  /// 生成用于 API 请求的统一媒体键。
+  var apiMediaId: String? {
+    identity?.mediaKey
+  }
+
+  nonisolated var canJumpToTMDB: Bool {
+    if douban_id?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+      || (bangumi_id ?? 0) > 0
+      || (anilist_id ?? 0) > 0
+    {
+      return true
+    }
+
+    let fallbackSource = (mediaid_prefix ?? source)?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased()
+    let fallbackId = media_id?.trimmingCharacters(in: .whitespacesAndNewlines)
+    return fallbackId?.isEmpty == false
+      && (fallbackSource == "douban"
+        || fallbackSource == "bangumi"
+        || fallbackSource == "anilist")
   }
 
   /// 对 MediaInfo 数组去重，保留首次出现的元素
@@ -852,9 +1210,9 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   }
 
   /// 判断媒体是否可以直接订阅，无需选择季。
-  /// v2.14.0 起 Web 前端将所有电视剧统一放入分季订阅流程。
+  /// Web 只将明确的电视剧放入分季流程，合集不提供订阅入口。
   var canDirectlySubscribe: Bool {
-    type == "电影"
+    !isCollection && type != "电视剧"
   }
 
   static func == (lhs: MediaInfo, rhs: MediaInfo) -> Bool {
@@ -916,6 +1274,8 @@ class DownloadingInfo: Codable, Identifiable, ObservableObject, Equatable {
   let id: String
   /// 哈希值
   let hash: String?
+  // 下载用户 ID（Web 兼容字段，部分历史记录以用户名写入）
+  let userid: String?
   // 下载用户名称
   let username: String?
 
@@ -945,7 +1305,7 @@ class DownloadingInfo: Codable, Identifiable, ObservableObject, Equatable {
 
   enum CodingKeys: String, CodingKey {
     case hash, title, name, state, progress, dlspeed, upspeed, size, left_time, media,
-      season_episode, username
+      season_episode, userid, username
   }
 
   required init(from decoder: Decoder) throws {
@@ -957,6 +1317,7 @@ class DownloadingInfo: Codable, Identifiable, ObservableObject, Equatable {
     let decodedSize = try container.decodeIfPresent(Int64.self, forKey: .size)
     let decodedMedia = try container.decodeIfPresent(DownloadingMediaInfo.self, forKey: .media)
     let decodedSeasonEpisode = try container.decodeIfPresent(String.self, forKey: .season_episode)
+    let decodedUserId = try container.decodeIfPresent(String.self, forKey: .userid)
     let decodedUsername = try container.decodeIfPresent(String.self, forKey: .username)
 
     // 解码身份和接口快照属性
@@ -966,6 +1327,7 @@ class DownloadingInfo: Codable, Identifiable, ObservableObject, Equatable {
     size = decodedSize
     media = decodedMedia
     season_episode = decodedSeasonEpisode
+    userid = decodedUserId
     username = decodedUsername
 
     // 解码可变的、@Published 的属性
@@ -1005,6 +1367,7 @@ class DownloadingInfo: Codable, Identifiable, ObservableObject, Equatable {
     try container.encode(left_time, forKey: .left_time)
     try container.encode(media, forKey: .media)
     try container.encode(season_episode, forKey: .season_episode)
+    try container.encode(userid, forKey: .userid)
     try container.encode(username, forKey: .username)
   }
 
@@ -1029,8 +1392,16 @@ struct TorrentInfo: Codable {
   let site: Int?
   /// 站点名称
   let site_name: String?
+  /// 站点 Cookie
+  var site_cookie: String? = nil
+  /// 站点 User-Agent
+  var site_ua: String? = nil
+  /// 站点是否使用代理
+  var site_proxy: Bool? = nil
   /// 站点优先级
   let site_order: Int?
+  /// 站点指定的下载器
+  var site_downloader: String? = nil
   /// 种子名称
   let title: String?
   /// 种子副标题
@@ -1059,6 +1430,51 @@ struct TorrentInfo: Codable {
   let volume_factor: String?
 }
 
+/// 后端资源结果允许部分字段缺失或为 null；只在输入边界为本地非可空字段提供中性默认值。
+extension TorrentInfo {
+  private enum CodingKeys: String, CodingKey {
+    case site, site_name, site_cookie, site_ua, site_proxy, site_order, site_downloader
+    case title, description, enclosure, page_url, size, seeders, peers, pubdate
+    case uploadvolumefactor, downloadvolumefactor, pri_order, labels, volume_factor
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    site = try container.decodeIfPresent(Int.self, forKey: .site)
+    site_name = try container.decodeIfPresent(String.self, forKey: .site_name)
+    site_cookie = try container.decodeIfPresent(String.self, forKey: .site_cookie)
+    site_ua = try container.decodeIfPresent(String.self, forKey: .site_ua)
+    site_proxy = try container.decodeIfPresent(FlexibleBool.self, forKey: .site_proxy)?.value
+    site_order = try container.decodeIfPresent(Int.self, forKey: .site_order)
+    site_downloader = try container.decodeIfPresent(String.self, forKey: .site_downloader)
+    title = try container.decodeIfPresent(String.self, forKey: .title)
+    description = try container.decodeIfPresent(String.self, forKey: .description)
+    enclosure = try container.decodeIfPresent(String.self, forKey: .enclosure)
+    page_url = try container.decodeIfPresent(String.self, forKey: .page_url)
+    // 后端大小字段是浮点数；仅保留能精确表示为字节整数的值，异常或超范围时回落为 0。
+    if let decodedSize = try? container.decode(Int64.self, forKey: .size) {
+      size = decodedSize
+    } else if let decodedSize = try? container.decode(Double.self, forKey: .size),
+      let exactSize = Int64(exactly: decodedSize)
+    {
+      size = exactSize
+    } else {
+      size = 0
+    }
+    seeders = try container.decodeIfPresent(Int.self, forKey: .seeders)
+    peers = try container.decodeIfPresent(Int.self, forKey: .peers)
+    pubdate = try container.decodeIfPresent(String.self, forKey: .pubdate)
+    // 缺失或异常的促销因子按无促销处理。
+    uploadvolumefactor =
+      (try? container.decodeIfPresent(Double.self, forKey: .uploadvolumefactor)) ?? 1
+    downloadvolumefactor =
+      (try? container.decodeIfPresent(Double.self, forKey: .downloadvolumefactor)) ?? 1
+    pri_order = try container.decodeIfPresent(Int.self, forKey: .pri_order)
+    labels = try container.decodeIfPresent([String].self, forKey: .labels)
+    volume_factor = try container.decodeIfPresent(String.self, forKey: .volume_factor)
+  }
+}
+
 /// 媒体元数据解析结果
 struct MetaInfo: Codable {
   /// 原标题（未经识别词转换）
@@ -1085,6 +1501,31 @@ struct MetaInfo: Codable {
   let total_season: Int?
   /// 总集数
   let total_episode: Int?
+}
+
+/// 保持现有调用方的非可空文本合同；缺失或异常文本在输入边界归一为空串。
+extension MetaInfo {
+  private enum CodingKeys: String, CodingKey {
+    case title, year, resource_team, video_encode, resource_pix, name, season_episode
+    case subtitle, web_source, edition, total_season, total_episode
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    title = try container.decodeIfPresent(String.self, forKey: .title)
+    year = try container.decodeIfPresent(String.self, forKey: .year)
+    resource_team = try container.decodeIfPresent(String.self, forKey: .resource_team)
+    video_encode = try container.decodeIfPresent(String.self, forKey: .video_encode)
+    resource_pix = try container.decodeIfPresent(String.self, forKey: .resource_pix)
+    name = (try? container.decodeIfPresent(String.self, forKey: .name)) ?? ""
+    season_episode =
+      (try? container.decodeIfPresent(String.self, forKey: .season_episode)) ?? ""
+    subtitle = try container.decodeIfPresent(String.self, forKey: .subtitle)
+    web_source = try container.decodeIfPresent(String.self, forKey: .web_source)
+    edition = try container.decodeIfPresent(String.self, forKey: .edition)
+    total_season = try container.decodeIfPresent(Int.self, forKey: .total_season)
+    total_episode = try container.decodeIfPresent(Int.self, forKey: .total_episode)
+  }
 }
 
 /// 站点配置信息
@@ -1179,7 +1620,7 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
   let item_id: FlexibleString?
   /// 媒体服务器 ID
   let server_id: FlexibleString?
-  /// SwiftUI 需要的稳定唯一表示符（组合原始 id 和 link）
+  /// SwiftUI 需要的稳定唯一表示符（按服务器类型和业务 ID 生成）
   let id: String
   /// 标题
   let title: String
@@ -1204,12 +1645,40 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
     case item_id, server_id, title, subtitle, type, image, link, use_cookies, server_type
   }
 
+  private static func stableID(
+    rawID: String?, itemID: String?, serverID: String?, link: String?,
+    serverType: MediaServerType?
+  ) -> String {
+    func normalized(_ value: String?) -> String? {
+      guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty
+      else { return nil }
+      return value
+    }
+
+    func encoded(_ value: String) -> String {
+      "\(value.utf8.count):\(value)"
+    }
+
+    let prefix = "playitem-\(encoded(normalized(serverType?.rawValue) ?? ""))"
+    if let rawID = normalized(rawID) {
+      return "\(prefix)-raw-\(encoded(rawID))"
+    }
+    if let serverID = normalized(serverID), let itemID = normalized(itemID) {
+      return "\(prefix)-pair-\(encoded(serverID))-\(encoded(itemID))"
+    }
+    if let link = normalized(link) {
+      return "\(prefix)-link-\(encoded(link))"
+    }
+    return "\(prefix)-uuid-\(UUID().uuidString)"
+  }
+
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     raw_id = try container.decodeIfPresent(FlexibleString.self, forKey: .raw_id)
     item_id = try container.decodeIfPresent(FlexibleString.self, forKey: .item_id)
     server_id = try container.decodeIfPresent(FlexibleString.self, forKey: .server_id)
-    title = try container.decode(String.self, forKey: .title)
+    // 后端允许最近媒体没有标题；单项缺值不应让整个服务器列表解码失败。
+    title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
     subtitle = try container.decodeIfPresent(String.self, forKey: .subtitle)
     type = try container.decodeIfPresent(String.self, forKey: .type)
     image = try container.decodeIfPresent(String.self, forKey: .image)
@@ -1217,14 +1686,13 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
     use_cookies = try container.decodeIfPresent(FlexibleBool.self, forKey: .use_cookies)
     server_type = try container.decodeIfPresent(MediaServerType.self, forKey: .server_type)
 
-    // 组合原始ID和Link生成唯一的稳定标识符，防止 tvOS 焦点异常
-    let baseId = raw_id?.value ?? ""
-    let baseLink = link ?? ""
-    if !baseId.isEmpty || !baseLink.isEmpty {
-      self.id = "playitem-\(baseId)-\(baseLink)"
-    } else {
-      self.id = UUID().uuidString
-    }
+    self.id = Self.stableID(
+      rawID: raw_id?.value,
+      itemID: item_id?.value,
+      serverID: server_id?.value,
+      link: link,
+      serverType: server_type
+    )
 
     // 计算图片 URL
     self.imageURLs = ImageURLs(
@@ -1240,7 +1708,8 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
     self.raw_id = FlexibleString(id)
     self.item_id = nil
     self.server_id = nil
-    self.id = "playitem-\(id)-\(link ?? "")"
+    self.id = Self.stableID(
+      rawID: id, itemID: nil, serverID: nil, link: link, serverType: server_type)
     self.title = title
     self.subtitle = subtitle
     self.type = type
@@ -1296,6 +1765,12 @@ struct SubscribeRequest: Codable {
   let doubanid: String?
   /// Bangumi ID
   let bangumiid: Int?
+  /// AniList ID
+  let anilistid: Int?
+  /// 统一媒体来源
+  let media_source: String?
+  /// 来源原生 ID
+  let media_id: String?
   /// 媒体 ID fallback
   let mediaid: String?
   /// 季号
@@ -1306,6 +1781,38 @@ struct SubscribeRequest: Codable {
   let best_version_full: Int?
   /// 剧集组
   let episode_group: String?
+
+  init(
+    name: String,
+    type: String,
+    year: String? = nil,
+    tmdbid: Int? = nil,
+    doubanid: String? = nil,
+    bangumiid: Int? = nil,
+    anilistid: Int? = nil,
+    media_source: String? = nil,
+    media_id: String? = nil,
+    mediaid: String? = nil,
+    season: Int? = nil,
+    best_version: Int? = nil,
+    best_version_full: Int? = nil,
+    episode_group: String? = nil
+  ) {
+    self.name = name
+    self.type = type
+    self.year = year
+    self.tmdbid = tmdbid
+    self.doubanid = doubanid
+    self.bangumiid = bangumiid
+    self.anilistid = anilistid
+    self.media_source = media_source
+    self.media_id = media_id
+    self.mediaid = mediaid
+    self.season = season
+    self.best_version = best_version
+    self.best_version_full = best_version_full
+    self.episode_group = episode_group
+  }
 }
 
 /// 订阅详细配置数据
@@ -1356,6 +1863,12 @@ struct Subscribe: Codable, Identifiable, Hashable {
   var doubanid: String?
   /// Bangumi ID
   var bangumiid: Int?
+  /// AniList ID
+  var anilistid: Int?
+  /// 统一媒体来源
+  var media_source: String?
+  /// 来源原生 ID
+  var media_id: String?
   /// 质量
   var quality: String?
   /// 分辨率
@@ -1403,7 +1916,8 @@ struct Subscribe: Codable, Identifiable, Hashable {
 
   enum CodingKeys: String, CodingKey {
     case id, name, year, type, keyword, season, poster, backdrop, state, last_update,
-      vote, total_episode, start_episode, lack_episode, completed_episode, note, tmdbid, doubanid, bangumiid,
+      vote, total_episode, start_episode, lack_episode, completed_episode, note, tmdbid, doubanid,
+      bangumiid, anilistid, media_source, media_id,
       quality, resolution, effect, include, exclude, sites, downloader, save_path, best_version,
       best_version_full, current_priority, filter_groups, custom_words, description, filter,
       episode_group, search_imdbid, media_category, mediaid, episode_priority, username, date
@@ -1439,6 +1953,9 @@ struct Subscribe: Codable, Identifiable, Hashable {
     tmdbid = try container.decodeIfPresent(Int.self, forKey: .tmdbid)
     doubanid = try container.decodeIfPresent(String.self, forKey: .doubanid)
     bangumiid = try container.decodeIfPresent(Int.self, forKey: .bangumiid)
+    anilistid = try container.decodeIfPresent(Int.self, forKey: .anilistid)
+    media_source = try container.decodeIfPresent(String.self, forKey: .media_source)
+    media_id = try container.decodeIfPresent(String.self, forKey: .media_id)
     quality = try container.decodeIfPresent(String.self, forKey: .quality)
     resolution = try container.decodeIfPresent(String.self, forKey: .resolution)
     effect = try container.decodeIfPresent(String.self, forKey: .effect)
@@ -1479,13 +1996,21 @@ struct Subscribe: Codable, Identifiable, Hashable {
     try container.encodeIfPresent(last_update, forKey: .last_update)
     try container.encodeIfPresent(username, forKey: .username)
     try container.encodeIfPresent(date, forKey: .date)
-    try container.encodeIfPresent(total_episode, forKey: .total_episode)
+    if let totalEpisode = total_episode {
+      try container.encode(totalEpisode, forKey: .total_episode)
+    } else if (id ?? 0) > 0 {
+      // 现有订阅的 nil 必须显式写为 null；省略会被后端默认成 0 并误置人工集数。
+      try container.encodeNil(forKey: .total_episode)
+    }
     try container.encodeIfPresent(start_episode, forKey: .start_episode)
     try container.encodeIfPresent(lack_episode, forKey: .lack_episode)
     try container.encodeIfPresent(note, forKey: .note)
     try container.encodeIfPresent(tmdbid, forKey: .tmdbid)
     try container.encodeIfPresent(doubanid, forKey: .doubanid)
     try container.encodeIfPresent(bangumiid, forKey: .bangumiid)
+    try container.encodeIfPresent(anilistid, forKey: .anilistid)
+    try container.encodeIfPresent(media_source, forKey: .media_source)
+    try container.encodeIfPresent(media_id, forKey: .media_id)
     try container.encodeIfPresent(quality, forKey: .quality)
     try container.encodeIfPresent(resolution, forKey: .resolution)
     try container.encodeIfPresent(effect, forKey: .effect)
@@ -1515,6 +2040,7 @@ struct Subscribe: Codable, Identifiable, Hashable {
     username: String? = nil, date: String? = nil,
     completed_episode: Int? = nil, note: JSONValue? = nil,
     tmdbid: Int? = nil, doubanid: String? = nil, bangumiid: Int? = nil,
+    anilistid: Int? = nil, media_source: String? = nil, media_id: String? = nil,
     best_version: Int? = nil, best_version_full: Int? = nil, episode_group: String? = nil,
     backdrop: String? = nil, keyword: String? = nil, total_episode: Int? = nil,
     start_episode: Int? = nil, lack_episode: Int? = nil, quality: String? = nil,
@@ -1541,6 +2067,9 @@ struct Subscribe: Codable, Identifiable, Hashable {
     self.tmdbid = tmdbid
     self.doubanid = doubanid
     self.bangumiid = bangumiid
+    self.anilistid = anilistid
+    self.media_source = media_source
+    self.media_id = media_id
     self.best_version = best_version
     self.best_version_full = best_version_full
     self.current_priority = current_priority
@@ -1571,29 +2100,78 @@ struct Subscribe: Codable, Identifiable, Hashable {
     self.imageURLs = ImageURLs(poster: APIService.shared.getSubscribePosterImageUrl(poster: poster))
   }
 
-  /// 动态计算媒体ID，确保与前端逻辑一致
-  /// - 对应前端: MoviePilot-Frontend/src/components/cards/SubscribeCard.vue (getMediaId)
-  /// - 拼接规则: 优先使用原始ID（tmdbid, doubanid, bangumiid）拼接，如果都没有，则直接使用接口返回的 `mediaid` 字段作为备用。
-  var apiMediaId: String? {
-    MediaIdentifier.apiMediaId(
-      tmdbId: tmdbid,
+  /// 解析订阅记录的主媒体身份，严格遵循 Web 订阅卡片的来源优先级。
+  /// - 对应前端: `getMediaId()` in `SubscribeCard.vue`
+  /// - 选择规则: 优先 `media_source`/`media_id`，其次 TMDB、豆瓣、Bangumi、AniList，最后回退 `mediaid`。
+  var identity: MediaIdentity? {
+    MediaIdentifier.resolve(
+      source: media_source,
+      mediaId: media_id,
+      tmdbId: MediaIdentifier.truthyNumericIdentifier(tmdbid),
       doubanId: doubanid,
-      bangumiId: bangumiid,
-      fallbackMediaId: mediaid
+      bangumiId: MediaIdentifier.truthyNumericIdentifier(bangumiid),
+      anilistId: MediaIdentifier.truthyNumericIdentifier(anilistid),
+      legacyMediaId: mediaid
+    )
+  }
+
+  /// 生成用于订阅查询、取消和详情跳转的统一媒体键。
+  var apiMediaId: String? {
+    identity?.mediaKey
+  }
+
+  /// 生成新增订阅请求，完整保留当前订阅的来源身份与洗版设置。
+  var addRequest: SubscribeRequest {
+    SubscribeRequest(
+      name: name,
+      type: type,
+      year: year,
+      tmdbid: tmdbid,
+      doubanid: doubanid,
+      bangumiid: bangumiid,
+      anilistid: anilistid,
+      media_source: media_source,
+      media_id: media_id,
+      mediaid: mediaid,
+      season: season,
+      best_version: best_version,
+      best_version_full: best_version_full,
+      episode_group: episode_group
     )
   }
 
   func navigationMediaInfo() -> MediaInfo {
-    let fallbackMediaId = MediaIdentifier.mediaIdComponents(mediaid)
+    let tmdbId = MediaIdentifier.validNumericIdentifier(tmdbid)
+    let doubanId = MediaIdentifier.normalizedString(doubanid)
+    let bangumiId = MediaIdentifier.validNumericIdentifier(bangumiid)
+    let anilistId = MediaIdentifier.validNumericIdentifier(anilistid)
+    let canonicalSource = MediaIdentifier.normalizeSource(media_source).flatMap {
+      $0 == "0" ? nil : $0
+    }
+    let canonicalMediaId = MediaIdentifier.normalizedString(media_id).flatMap { id -> String? in
+      guard Int(id).map({ $0 > 0 }) ?? true else { return nil }
+      return id
+    }
+    let hasCanonicalIdentity = canonicalSource != nil && canonicalMediaId != nil
+    let resolvedIdentity = MediaIdentifier.resolve(
+      source: hasCanonicalIdentity ? canonicalSource : nil,
+      mediaId: hasCanonicalIdentity ? canonicalMediaId : nil,
+      tmdbId: tmdbId,
+      doubanId: doubanId,
+      bangumiId: bangumiId,
+      anilistId: anilistId,
+      legacyMediaId: mediaid
+    )
     return MediaInfo(
-      tmdb_id: MediaIdentifier.validNumericIdentifier(tmdbid),
-      douban_id: MediaIdentifier.normalizedString(doubanid),
-      bangumi_id: MediaIdentifier.validNumericIdentifier(bangumiid),
+      tmdb_id: tmdbId,
+      douban_id: doubanId,
+      bangumi_id: bangumiId,
+      anilist_id: anilistId,
       imdb_id: nil,
       tvdb_id: nil,
-      source: nil,
-      mediaid_prefix: fallbackMediaId?.prefix,
-      media_id: fallbackMediaId?.id,
+      source: resolvedIdentity?.source,
+      mediaid_prefix: nil,
+      media_id: resolvedIdentity?.mediaId,
       title: name,
       original_title: nil,
       original_name: nil,
@@ -1652,6 +2230,10 @@ struct AddDownloadRequest: Codable {
   let media_in: MediaInfo?
   let tmdbid: Int?
   let doubanid: String?
+  let bangumiid: Int?
+  let anilistid: Int?
+  let media_source: String?
+  let media_id: String?
 }
 
 /// 演职人员模型
@@ -1660,7 +2242,7 @@ struct Person: Codable, Identifiable, Hashable {
     let profile: URL?
   }
 
-  /// 来源：themoviedb、douban、bangumi
+  /// 来源：themoviedb、douban、bangumi、anilist
   let source: String?
   /// ID
   let raw_id: String?
@@ -1775,7 +2357,8 @@ struct Person: Codable, Identifiable, Hashable {
     self.biography = try keyedContainer.decodeIfPresent(String.self, forKey: .biography)
     self.birthday = try keyedContainer.decodeIfPresent(String.self, forKey: .birthday)
     self.also_known_as = try keyedContainer.decodeIfPresent([String].self, forKey: .also_known_as)
-    self.avatar = try keyedContainer.decodeIfPresent(PersonAvatar.self, forKey: .avatar)
+    // 头像只是展示信息；无法识别的可选头像不能拖垮整个人物或媒体数组。
+    self.avatar = try? keyedContainer.decodeIfPresent(PersonAvatar.self, forKey: .avatar)
     self.images = try keyedContainer.decodeIfPresent(BangumiImages.self, forKey: .images)
 
     // 恢复稳定的内部标识符逻辑
@@ -1892,24 +2475,34 @@ struct BangumiImages: Codable, Hashable {
 }
 
 /// 演职人员头像数据源
-enum PersonAvatar: Codable, Hashable {
+nonisolated enum PersonAvatar: Codable, Hashable {
   case url(String)
   case object(normal: String)
+
+  var urlValue: String {
+    switch self {
+    case .url(let url), .object(let url):
+      return url
+    }
+  }
 
   init(from decoder: Decoder) throws {
     let container = try decoder.singleValueContainer()
     if let urlString = try? container.decode(String.self) {
       self = .url(urlString)
-    } else if let dict = try? container.decode([String: String].self),
-      let normal = dict["normal"]
+    } else if let dict = try? container.decode([String: JSONValue].self),
+      let url = ["normal", "large", "medium", "small", "url"]
+        .compactMap({ dict[$0]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) })
+        .first(where: { !$0.isEmpty })
     {
-      self = .object(normal: normal)
+      // 豆瓣等来源可能在图片对象中混入 width/height；这里只读取已知 URL 字段。
+      self = .object(normal: url)
     } else {
       throw DecodingError.typeMismatch(
         PersonAvatar.self,
         DecodingError.Context(
           codingPath: decoder.codingPath,
-          debugDescription: "期望字符串或带有 normal 键的对象"))
+          debugDescription: "期望字符串或带有图片 URL 的对象"))
     }
   }
 
@@ -2032,11 +2625,61 @@ struct TransferHistory: Codable, Identifiable {
   let errmsg: String?
   // 源文件项
   let src_fileitem: FileItem?
+  // 目标文件项
+  let dest_fileitem: FileItem?
   // 日期
   let date: String?
+
+  enum CodingKeys: String, CodingKey {
+    case id, title, type, seasons, episodes, category, src, dest
+    case src_storage, dest_storage, mode, status, errmsg, src_fileitem, dest_fileitem, date
+  }
 }
 
-struct FileItem: Codable {
+extension TransferHistory {
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(Int.self, forKey: .id)
+    title = try container.decodeIfPresent(String.self, forKey: .title)
+    type = try container.decodeIfPresent(String.self, forKey: .type)
+    seasons = try container.decodeIfPresent(String.self, forKey: .seasons)
+    episodes = try container.decodeIfPresent(String.self, forKey: .episodes)
+    category = try container.decodeIfPresent(String.self, forKey: .category)
+    src = try container.decodeIfPresent(String.self, forKey: .src)
+    dest = try container.decodeIfPresent(String.self, forKey: .dest)
+    src_storage = try container.decodeIfPresent(String.self, forKey: .src_storage)
+    dest_storage = try container.decodeIfPresent(String.self, forKey: .dest_storage)
+    mode = try container.decodeIfPresent(String.self, forKey: .mode)
+    status = try container.decode(FlexibleBool.self, forKey: .status)
+    errmsg = try container.decodeIfPresent(String.self, forKey: .errmsg)
+    // Web 会保留稀疏历史行；嵌套文件项不可用时只降级该字段，不能拖垮整页。
+    src_fileitem = try? container.decodeIfPresent(FileItem.self, forKey: .src_fileitem)
+    dest_fileitem = try? container.decodeIfPresent(FileItem.self, forKey: .dest_fileitem)
+    date = try container.decodeIfPresent(String.self, forKey: .date)
+  }
+
+  /// ID 可能被 SQLite 复用；执行破坏性操作前用稳定记录字段确认仍是同一条历史。
+  func hasSameMutationFingerprint(as other: TransferHistory) -> Bool {
+    id == other.id
+      && title == other.title
+      && type == other.type
+      && seasons == other.seasons
+      && episodes == other.episodes
+      && category == other.category
+      && src == other.src
+      && dest == other.dest
+      && src_storage == other.src_storage
+      && dest_storage == other.dest_storage
+      && mode == other.mode
+      && status == other.status
+      && errmsg == other.errmsg
+      && src_fileitem == other.src_fileitem
+      && dest_fileitem == other.dest_fileitem
+      && date == other.date
+  }
+}
+
+struct FileItem: Codable, Equatable {
   // 文件名
   let name: String
   // 文件路径
@@ -2086,6 +2729,12 @@ struct SubscribeShare: Codable, Identifiable, Hashable {
   let doubanid: String?
   // Bangumi ID
   let bangumiid: Int?
+  // AniList ID
+  let anilistid: Int?
+  // 统一媒体来源
+  let media_source: String?
+  // 来源原生 ID
+  let media_id: String?
   // 季号
   let season: Int?
   // 海报
@@ -2128,7 +2777,8 @@ struct SubscribeShare: Codable, Identifiable, Hashable {
     case raw_id = "id"
     case subscribe_id, share_title, share_comment, share_user, share_uid, name, year, type, keyword,
       tmdbid,
-      doubanid, bangumiid, season, poster, backdrop, vote, description, filter, include, exclude,
+      doubanid, bangumiid, anilistid, media_source, media_id, season, poster, backdrop, vote,
+      description, filter, include, exclude,
       quality,
       resolution, effect, total_episode, date, custom_words, media_category, count,
       episode_group
@@ -2149,6 +2799,9 @@ struct SubscribeShare: Codable, Identifiable, Hashable {
     tmdbid = try container.decodeIfPresent(Int.self, forKey: .tmdbid)
     doubanid = try container.decodeIfPresent(String.self, forKey: .doubanid)
     bangumiid = try container.decodeIfPresent(Int.self, forKey: .bangumiid)
+    anilistid = try container.decodeIfPresent(Int.self, forKey: .anilistid)
+    media_source = try container.decodeIfPresent(String.self, forKey: .media_source)
+    media_id = try container.decodeIfPresent(String.self, forKey: .media_id)
     season = try container.decodeIfPresent(Int.self, forKey: .season)
     poster = try container.decodeIfPresent(String.self, forKey: .poster)
     backdrop = try container.decodeIfPresent(String.self, forKey: .backdrop)
@@ -2194,9 +2847,22 @@ struct SubscribeShare: Codable, Identifiable, Hashable {
       combinedOverview += "👤 @\(user)"
     }
 
+    let canonicalSource = MediaIdentifier.normalizeSource(media_source).flatMap {
+      $0 == "0" ? nil : $0
+    }
+    let canonicalMediaId = MediaIdentifier.normalizedString(media_id).flatMap { id -> String? in
+      guard Int(id).map({ $0 > 0 }) ?? true else { return nil }
+      return id
+    }
+    let hasCanonicalIdentity = canonicalSource != nil && canonicalMediaId != nil
+
     return MediaInfo(
       tmdb_id: tmdbid,
       douban_id: doubanid,
+      bangumi_id: bangumiid,
+      anilist_id: anilistid,
+      source: hasCanonicalIdentity ? canonicalSource : nil,
+      media_id: hasCanonicalIdentity ? canonicalMediaId : nil,
       title: share_title ?? name,
       type: type,
       year: year,
@@ -2236,6 +2902,14 @@ struct ReorganizeForm: Codable {
   var tmdbid: Int?
   // 豆瓣 ID
   var doubanid: String?
+  // Bangumi ID
+  var bangumiid: Int? = nil
+  // AniList ID
+  var anilistid: Int? = nil
+  // 统一媒体来源
+  var media_source: String? = nil
+  // 来源原生 ID
+  var media_id: String? = nil
   // 剧集组编号；空白值编码为 null。
   var episode_group: String?
   // 季号
@@ -2252,11 +2926,14 @@ struct ReorganizeForm: Codable {
   var library_type_folder: Bool?
   // 媒体库类别子目录
   var library_category_folder: Bool?
+  // 仅预览整理结果，不执行文件写入。
+  var preview: Bool = false
 
   enum CodingKeys: String, CodingKey {
     case fileitem, fileitems, logid, target_storage, transfer_type, target_path, min_filesize, scrape, from_history,
-      type_name, tmdbid, doubanid, episode_group, season, episode_detail, episode_format, episode_offset,
-      episode_part, library_type_folder, library_category_folder
+      type_name, tmdbid, doubanid, bangumiid, anilistid, media_source, media_id, episode_group,
+      season, episode_detail, episode_format, episode_offset,
+      episode_part, library_type_folder, library_category_folder, preview
   }
 
   func encode(to encoder: Encoder) throws {
@@ -2301,6 +2978,10 @@ struct ReorganizeForm: Codable {
     try container.encodeIfPresent(type_name, forKey: .type_name)
     try container.encodeIfPresent(tmdbid, forKey: .tmdbid)
     try container.encodeIfPresent(doubanid, forKey: .doubanid)
+    try container.encodeIfPresent(bangumiid, forKey: .bangumiid)
+    try container.encodeIfPresent(anilistid, forKey: .anilistid)
+    try container.encodeIfPresent(media_source, forKey: .media_source)
+    try container.encodeIfPresent(media_id, forKey: .media_id)
 
     if let episodeGroup = episode_group?.trimmingCharacters(in: .whitespacesAndNewlines), !episodeGroup.isEmpty {
       try container.encode(episodeGroup, forKey: .episode_group)
@@ -2315,25 +2996,90 @@ struct ReorganizeForm: Codable {
     try container.encodeIfPresent(episode_part, forKey: .episode_part)
     try container.encodeIfPresent(library_type_folder, forKey: .library_type_folder)
     try container.encodeIfPresent(library_category_folder, forKey: .library_category_folder)
+    if preview {
+      try container.encode(true, forKey: .preview)
+    }
   }
 }
 
+nonisolated struct ManualTransferPreviewSummary: Codable, Hashable {
+  let total: Int
+  let success: Int
+  let failed: Int
+}
+
+nonisolated struct ManualTransferPreviewItem: Codable, Hashable {
+  let source: String?
+  let target: String?
+  let target_dir: String?
+  let success: Bool?
+  let message: String?
+  let type: String?
+  let title: String?
+  let season: JSONValue?
+  let episode: JSONValue?
+  let episode_end: JSONValue?
+  let part: String?
+  let org_string: String?
+  let apply_words: [String]?
+  let resource_team: String?
+  let customization: String?
+}
+
+nonisolated struct ManualTransferPreviewData: Codable, Hashable {
+  var summary: ManualTransferPreviewSummary
+  var items: [ManualTransferPreviewItem]
+  var message: String?
+
+  static let empty = ManualTransferPreviewData(
+    summary: ManualTransferPreviewSummary(total: 0, success: 0, failed: 0),
+    items: [],
+    message: nil
+  )
+}
+
+nonisolated func isResourceMediaSearchKeyword(_ keyword: String) -> Bool {
+  keyword.range(of: "^[a-zA-Z]+:", options: .regularExpression) != nil
+}
+
 /// 资源搜索的流式响应事件 (SSE)
-struct SearchStreamEvent: Codable {
+nonisolated struct SearchStreamEvent: Codable, @unchecked Sendable {
   let type: String? // "append", "replace", "done", "error"
   let text: String?
+  let text_i18n: String?
   let value: Double?
   let enable: Bool?
   let total_items: Int?
   let items: [Context]?
   let message: String?
+  let message_i18n: String?
   
   // AI 重新整理进度使用的结构也类似，可以在需要时复用
   struct AiRedoData: Codable {
     let success: Bool?
     let error: String?
+    let error_i18n: String?
   }
   let data: AiRedoData?
+
+  func applyResourceItems(
+    to results: inout [Context],
+    finalResultApplied: inout Bool
+  ) {
+    guard let items else { return }
+    switch type {
+    case "append" where !finalResultApplied:
+      results.insert(contentsOf: items, at: 0)
+    case "replace":
+      results = items
+      finalResultApplied = true
+    case "done" where !items.isEmpty && !finalResultApplied:
+      results = items
+      finalResultApplied = true
+    default:
+      break
+    }
+  }
 }
 
 // MARK: - 自定义过滤规则
@@ -2359,6 +3105,37 @@ struct CustomRule: Codable, Identifiable, Hashable {
 }
 
 /// 对应 API 的返回格式：{ "data": { "value": [...] } }
+private struct LossyCustomRule: Decodable {
+  let value: CustomRule?
+
+  init(from decoder: Decoder) throws {
+    value = try? CustomRule(from: decoder)
+  }
+}
+
 struct CustomFilterRulesResponse: Codable {
   let value: [CustomRule]
+
+  enum CodingKeys: String, CodingKey {
+    case value
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let decodedRules = try container.decodeIfPresent([LossyCustomRule].self, forKey: .value) ?? []
+    var ids = Set<String>()
+    var names = Set<String>()
+
+    // 官方 Web 保存时拒绝空或重复身份；读取旧配置时静默忽略坏项。
+    value = decodedRules.compactMap(\.value).filter { rule in
+      let id = rule.id.trimmingCharacters(in: .whitespacesAndNewlines)
+      let name = rule.name.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !id.isEmpty, !name.isEmpty, !ids.contains(id), !names.contains(name) else {
+        return false
+      }
+      ids.insert(id)
+      names.insert(name)
+      return true
+    }
+  }
 }

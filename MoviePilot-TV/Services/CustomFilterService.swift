@@ -27,8 +27,8 @@ enum CustomFilterService {
     using apiService: APIService,
     caller: String = ""
   ) async throws -> [Context] {
-    let hardRuleId = SystemViewModel.currentSelectedHardFilterRuleId()
-    let softRuleId = SystemViewModel.currentSelectedSoftFilterRuleId()
+    let hardRuleId = SystemViewModel.currentSelectedHardFilterRuleId(apiService: apiService)
+    let softRuleId = SystemViewModel.currentSelectedSoftFilterRuleId(apiService: apiService)
 
     guard hardRuleId != nil || softRuleId != nil else {
       return contexts

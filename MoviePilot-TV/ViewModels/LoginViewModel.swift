@@ -22,10 +22,12 @@ class LoginViewModel: ObservableObject {
     isLoading = true
     errorMessage = nil
 
-    apiService.baseURL = serverURL
-
     do {
-      _ = try await apiService.login(username: username, password: password)
+      _ = try await apiService.login(
+        username: username,
+        password: password,
+        serverURL: serverURL
+      )
       isLoading = false
       return true
     } catch {

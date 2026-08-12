@@ -29,14 +29,16 @@ class MediaDetailViewModel: ObservableObject {
   @Published var heroTopStaff: [GroupedStaff] = []
   @Published var uniqueDirectors: [Person] = []
 
+  @Published private(set) var isInLibrary = false
+
   /// 第二页首行数据是否已就绪。
   /// 用于控制 Loading 遮罩的显隐——必须等首行数据加载完才能移除遮罩，
   /// 否则首行 Card 顶部露出在第一页底部时，非首行先加载会导致闪烁。
   @Published var isFirstRowReady = false
 
   // 视图模型与服务
-  @Published var siteFilter = SiteFilterViewModel()
-  private let apiService = APIService.shared
+  @Published var siteFilter: SiteFilterViewModel
+  private let apiService: APIService
 
   /// 可变引用盒子：让 Paginator 闭包始终读取最新的 detail 值。
   /// init 时可能传入 partial data，applyFullDetail 会更新 box 内的值，
@@ -48,8 +50,10 @@ class MediaDetailViewModel: ObservableObject {
   private let detailBox: DetailBox
   private var cancellables = Set<AnyCancellable>()
 
-  init(detail: MediaInfo) {
+  init(detail: MediaInfo, apiService: APIService = .shared) {
     self.detail = detail
+    self.apiService = apiService
+    self.siteFilter = SiteFilterViewModel(apiService: apiService)
     let box = DetailBox(detail)
     self.detailBox = box
 
@@ -152,6 +156,10 @@ class MediaDetailViewModel: ObservableObject {
     heroTopActors = StaffManager.processActors(
       persons: Array((fullDetail.actors ?? []).prefix(4)))
 
+    Task {
+      await loadMediaServerExists()
+    }
+
     // ── 判断第二页首行类型 ──
     // 电视剧首行固定是 season（由 preloadTask 异步加载，在 View 层通过 onChange 监听）
     let isSeasonFirst =
@@ -199,6 +207,17 @@ class MediaDetailViewModel: ObservableObject {
       if !isSeasonFirst && !isFirstRowReady {
         isFirstRowReady = true
       }
+    }
+  }
+
+  private func loadMediaServerExists() async {
+    guard apiService.canAccess(.subscribe), detail.type == "电影", detail.identity != nil else {
+      return
+    }
+    do {
+      isInLibrary = try await apiService.fetchMediaServerExists(media: detail)
+    } catch {
+      Logger.error("检查媒体入库状态失败: \(error)")
     }
   }
 
@@ -251,7 +270,8 @@ class MediaDetailViewModel: ObservableObject {
 
   /// 构建订阅请求对象（用于弹出 SubscribeSheet）
   func buildSubscribeRequest(season: Int? = nil) -> Subscribe {
-    Subscribe(
+    let identity = detail.identity
+    return Subscribe(
       id: nil,
       name: detail.title ?? "",
       year: detail.year,
@@ -260,29 +280,29 @@ class MediaDetailViewModel: ObservableObject {
       poster: detail.poster_path,
       state: "N",
       last_update: nil,
-      // 优先使用预加载识别到的 TMDB ID（豆瓣/Bangumi 来源可能在预加载阶段才拿到）
-      tmdbid: preloadTask?.tmdbId ?? detail.tmdb_id,
+      // 完整详情是当前页面的权威身份；预识别 TMDB 仅在详情未提供时兜底。
+      tmdbid: detail.tmdb_id ?? preloadTask?.tmdbId,
       doubanid: detail.douban_id,
       bangumiid: detail.bangumi_id,
-      mediaid: MediaIdentifier.apiMediaId(
-        tmdbId: nil,
-        doubanId: nil,
-        bangumiId: nil,
-        mediaIdPrefix: detail.mediaid_prefix,
-        mediaId: detail.media_id
-      )
+      anilistid: detail.anilist_id,
+      media_source: identity?.source,
+      media_id: identity?.mediaId,
+      mediaid: detail.apiMediaId
     )
   }
 
   /// 取消当前媒体的订阅
   func cancelSubscription() async {
+    let snapshot = apiService.sessionSnapshot()
     isUnsubscribing = true
     defer { isUnsubscribing = false }
 
-    let didCancel = await deleteResolvedSubscription()
+    let didCancel = await deleteResolvedSubscription(snapshot: snapshot)
+    guard apiService.isSessionUnchanged(from: snapshot) else { return }
 
     // 刷新所有订阅状态（包括全局和分季）
     await refreshSubscriptionStatus(forceRefresh: true)
+    guard apiService.isSessionUnchanged(from: snapshot) else { return }
 
     if didCancel {
       // 通知首页刷新订阅列表
@@ -349,26 +369,41 @@ class MediaDetailViewModel: ObservableObject {
     return resultCount > 0 && didRefreshAll
   }
 
-  private func deleteResolvedSubscription() async -> Bool {
+  private func deleteResolvedSubscription(snapshot: APIServiceSessionSnapshot) async -> Bool {
+    guard apiService.canAccess(.subscribe) else { return false }
     var fallbackSubscriptionId: Int?
     for media in subscriptionLookupCandidates() {
       do {
-        guard let subscription = try await apiService.fetchSubscriptionLookup(media: media) else {
+        guard apiService.isSessionUnchanged(from: snapshot) else { return false }
+        guard
+          let subscription = try await apiService.fetchSubscriptionLookup(
+            media: media
+          )
+        else {
           continue
         }
+        guard apiService.isSessionUnchanged(from: snapshot) else { return false }
         if canDeleteByMediaId(subscription.mediaId),
           subscription.isResolvedMediaId || media.apiMediaId?.hasPrefix("tmdb:") == true
         {
-          return try await apiService.deleteSubscription(mediaId: subscription.mediaId, season: nil)
+          return try await apiService.deleteSubscriptionResult(
+            mediaId: subscription.mediaId,
+            season: nil
+          ).success
         }
         fallbackSubscriptionId = subscription.id
+      } catch is CancellationError {
+        return false
       } catch {
         print("[MediaDetailViewModel] 取消订阅失败: \(error)")
       }
     }
     if let fallbackSubscriptionId {
       do {
+        guard apiService.isSessionUnchanged(from: snapshot) else { return false }
         return try await apiService.deleteSubscription(id: fallbackSubscriptionId)
+      } catch is CancellationError {
+        return false
       } catch {
         print("[MediaDetailViewModel] 取消订阅失败: \(error)")
       }
@@ -378,17 +413,23 @@ class MediaDetailViewModel: ObservableObject {
 
   func headerUnsubscribeConfirmationMessage() async -> String {
     let baseMessage = SubscriptionCancelConfirmation.headerMessage(for: detail)
-    guard let warning = await resolvedTMDBMultiSeasonCancellationWarning() else {
+    let snapshot = apiService.sessionSnapshot()
+    guard let warning = await resolvedTMDBMultiSeasonCancellationWarning(snapshot: snapshot),
+      apiService.isSessionUnchanged(from: snapshot)
+    else {
       return baseMessage
     }
     return "\(baseMessage)\n\n\(warning)"
   }
 
-  private func resolvedTMDBMultiSeasonCancellationWarning() async -> String? {
+  private func resolvedTMDBMultiSeasonCancellationWarning(
+    snapshot: APIServiceSessionSnapshot
+  ) async -> String? {
     guard detail.tmdb_id == nil, detail.douban_id != nil || detail.bangumi_id != nil else {
       return nil
     }
-    guard let mediaId = await resolvedMediaDeleteTargetForHeaderUnsubscribe(),
+    guard let mediaId = await resolvedMediaDeleteTargetForHeaderUnsubscribe(snapshot: snapshot),
+      apiService.isSessionUnchanged(from: snapshot),
       mediaId.hasPrefix("tmdb:"),
       let tmdbId = Int(mediaId.dropFirst("tmdb:".count))
     else {
@@ -397,6 +438,7 @@ class MediaDetailViewModel: ObservableObject {
 
     do {
       let subscriptions = try await apiService.fetchSubscriptions(forceRefresh: true)
+      guard apiService.isSessionUnchanged(from: snapshot) else { return nil }
       let targetMediaId = "tmdb:\(tmdbId)"
       let matchingSubscriptions = subscriptions.filter {
         $0.type == "电视剧"
@@ -408,23 +450,31 @@ class MediaDetailViewModel: ObservableObject {
         return "当前内容匹配到 TMDB 下 \(matchingSubscriptions.count) 条订阅，确认后会一并取消。"
       }
       return "当前内容匹配到 TMDB 下多个分季订阅：\(seasonListText(seasons))。确认后会一并取消。"
+    } catch is CancellationError {
+      return nil
     } catch {
       print("[MediaDetailViewModel] 读取订阅取消影响范围失败: \(error)")
       return nil
     }
   }
 
-  private func resolvedMediaDeleteTargetForHeaderUnsubscribe() async -> String? {
+  private func resolvedMediaDeleteTargetForHeaderUnsubscribe(
+    snapshot: APIServiceSessionSnapshot
+  ) async -> String? {
     for media in subscriptionLookupCandidates() {
       do {
+        guard apiService.isSessionUnchanged(from: snapshot) else { return nil }
         guard let subscription = try await apiService.fetchSubscriptionLookup(media: media) else {
           continue
         }
+        guard apiService.isSessionUnchanged(from: snapshot) else { return nil }
         if canDeleteByMediaId(subscription.mediaId),
           subscription.isResolvedMediaId || media.apiMediaId?.hasPrefix("tmdb:") == true
         {
           return subscription.mediaId
         }
+      } catch is CancellationError {
+        return nil
       } catch {
         print("[MediaDetailViewModel] 读取订阅取消目标失败: \(error)")
       }

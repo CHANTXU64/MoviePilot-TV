@@ -9,12 +9,21 @@ class ReorganizeViewModel: ObservableObject {
   @Published var targetDirectoryOptions: [PickerOption<String>] = []
   @Published var isLoading = true
   @Published var isSubmitting = false
+  @Published var isPreviewing = false
+  @Published var previewData: ManualTransferPreviewData?
+  @Published var episodeGroups: [EpisodeGroup] = []
+  @Published var isEpisodeGroupsLoading = false
   @Published var isEpisodeDetailDisabled = false  // 视图绑定，表示“指定集数”是否禁用
+  @Published var mediaSource: MediaSearchSource
+  @Published var mediaId: String
 
   @Published var errorMessage: String?
   @Published var loadErrorMessage: String?
+  @Published var mutationRetryMessage: String?
 
-  private let apiService = APIService.shared
+  private let apiService: APIService
+  private let validateBeforeSubmit: (() async throws -> String?)?
+  private let sourceSession: APIServiceSessionSnapshot?
   private var cancellables = Set<AnyCancellable>()
 
   private var logIds: [Int] = []
@@ -26,10 +35,29 @@ class ReorganizeViewModel: ObservableObject {
     return !logIds.isEmpty
   }
 
-  init(logIds: [Int] = [], fileItem: FileItem?, targetStorage: String? = nil) {
+  var isMediaIdValid: Bool {
+    MediaIdentifier.isValidManualMediaId(mediaId)
+  }
+
+  init(
+    logIds: [Int] = [],
+    fileItem: FileItem?,
+    targetStorage: String? = nil,
+    validateBeforeSubmit: (() async throws -> String?)? = nil,
+    sourceSession: APIServiceSessionSnapshot? = nil,
+    apiService: APIService = .shared
+  ) {
+    self.apiService = apiService
+    self.validateBeforeSubmit = validateBeforeSubmit
+    self.sourceSession = sourceSession
     self.logIds = logIds
     self.explicitTargetStorage = targetStorage?.trimmingCharacters(in: .whitespacesAndNewlines)
       .nonEmpty
+    let defaultMediaSource =
+      MediaSearchSource(rawValue: apiService.settings?.RECOGNIZE_SOURCE ?? "")
+      ?? .themoviedb
+    self.mediaSource = defaultMediaSource
+    self.mediaId = ""
 
     // 在 init() 中初始化 form，为必须的属性提供默认值
     self.form = ReorganizeForm(
@@ -40,16 +68,23 @@ class ReorganizeViewModel: ObservableObject {
       target_path: "",
       min_filesize: 0,
       scrape: nil,
-      from_history: false
+      from_history: false,
+      media_source: defaultMediaSource.rawValue
     )
 
-    // 监听 target_path 的变化
     $form
-      .map(\.target_path)
-      .removeDuplicates()
-      .debounce(for: .milliseconds(100), scheduler: DispatchQueue.main)
-      .sink { [weak self] newPath in
-        self?.updateForm(for: newPath)
+      .dropFirst()
+      .sink { [weak self] _ in
+        self?.previewData = nil
+      }
+      .store(in: &cancellables)
+
+    $mediaId
+      .dropFirst()
+      .sink { [weak self] _ in
+        self?.previewData = nil
+        self?.form.episode_group = nil
+        self?.episodeGroups = []
       }
       .store(in: &cancellables)
 
@@ -114,42 +149,251 @@ class ReorganizeViewModel: ObservableObject {
   }
 
   func submit(background: Bool) async -> Bool {
-    guard apiService.canAccess(.manage) else { return false }
+    guard sourceSession.map({ apiService.isSessionUnchanged(from: $0) }) ?? true,
+      apiService.canAccess(.manage)
+    else { return false }
     errorMessage = nil
+    mutationRetryMessage = nil
+    guard isMediaIdValid else {
+      errorMessage = "媒体 ID 只能包含数字。"
+      return false
+    }
     isSubmitting = true
     defer { isSubmitting = false }
     do {
-      var allSuccess = true
-      if logIds.count > 1 {
-        // 批量重做
-        for id in logIds {
-          var batchForm = form
-          batchForm.logid = id
-          batchForm.fileitem = nil
-          batchForm.fileitems = nil
-          let success = try await apiService.manualTransfer(form: batchForm, background: background)
-          if !success {
-            allSuccess = false
-          }
-        }
-      } else {
-        let success = try await apiService.manualTransfer(form: form, background: background)
-        allSuccess = success
+      if let message = try await validateBeforeSubmit?() {
+        mutationRetryMessage = message
+        return false
       }
 
-      if allSuccess {
+      let snapshot = sourceSession ?? apiService.sessionSnapshot()
+      guard apiService.isSessionUnchanged(from: snapshot) else {
+        throw CancellationError()
+      }
+      var failureMessages: [String] = []
+      for submittedForm in preparedSubmissionForms() {
+        guard apiService.isSessionUnchanged(from: snapshot) else {
+          throw CancellationError()
+        }
+        let result = try await apiService.manualTransfer(
+          form: submittedForm,
+          background: background
+        )
+        guard apiService.isSessionUnchanged(from: snapshot) else {
+          throw CancellationError()
+        }
+        if !result.success, let message = result.message?.trimmingCharacters(
+          in: .whitespacesAndNewlines
+        ), !message.isEmpty {
+          failureMessages.append(message)
+        } else if !result.success {
+          failureMessages.append("")
+        }
+      }
+
+      if failureMessages.isEmpty {
         return true
       } else {
         Logger.error("Reorganize request returned false")
-        errorMessage = logIds.count > 1
-          ? "部分文件没有开始整理，请稍后重试。"
-          : "整理没有开始，请检查设置后重试。"
+        let backendMessages = failureMessages.filter { !$0.isEmpty }
+        errorMessage =
+          backendMessages.isEmpty
+          ? (
+            logIds.count > 1
+              ? "部分文件没有开始整理，请稍后重试。"
+              : "整理没有开始，请检查设置后重试。"
+          )
+          : backendMessages.joined(separator: "；")
         return false
       }
+    } catch is CancellationError {
+      return false
     } catch {
       Logger.error("Failed to reorganize: \(error)")
       errorMessage = "整理没有开始，请稍后重试。"
       return false
+    }
+  }
+
+  @discardableResult
+  func preview() async -> Bool {
+    guard apiService.canAccess(.manage) else { return false }
+    errorMessage = nil
+    guard isMediaIdValid else {
+      errorMessage = "媒体 ID 只能包含数字。"
+      return false
+    }
+    isPreviewing = true
+    defer { isPreviewing = false }
+
+    let snapshot = apiService.sessionSnapshot()
+    var merged = ManualTransferPreviewData.empty
+    for submittedForm in preparedSubmissionForms() {
+      do {
+        guard apiService.isSessionUnchanged(from: snapshot) else { return false }
+        let data = try await apiService.previewManualTransfer(form: submittedForm)
+        guard apiService.isSessionUnchanged(from: snapshot) else { return false }
+        merged.items.append(contentsOf: data.items)
+        if let message = data.message, !message.isEmpty {
+          merged.message = [merged.message, message].compactMap(\.self).joined(separator: "；")
+        }
+      } catch is CancellationError {
+        return false
+      } catch {
+        let batchItems = submittedForm.fileitems ?? []
+        let batchSource =
+          batchItems.count == 1
+          ? batchItems[0].path
+          : (batchItems.isEmpty ? nil : "共 \(batchItems.count) 个文件")
+        merged.items.append(
+          ManualTransferPreviewItem(
+            source: submittedForm.fileitem?.path ?? batchSource
+              ?? "历史记录 \(submittedForm.logid)",
+            target: nil,
+            target_dir: nil,
+            success: false,
+            message: error.localizedDescription,
+            type: submittedForm.fileitem?.type ?? batchItems.first?.type,
+            title: submittedForm.fileitem?.name
+              ?? (batchItems.count == 1 ? batchItems.first?.name : nil),
+            season: nil,
+            episode: nil,
+            episode_end: nil,
+            part: nil,
+            org_string: nil,
+            apply_words: nil,
+            resource_team: nil,
+            customization: nil
+          ))
+      }
+    }
+
+    var seenItems = Set<String>()
+    merged.items = merged.items.filter {
+      let key = [$0.source ?? "", $0.target ?? "", $0.success == false ? "failed" : "success"]
+        .joined(separator: "|")
+      return seenItems.insert(key).inserted
+    }
+    let failures = merged.items.filter { $0.success == false }.count
+    merged.summary = ManualTransferPreviewSummary(
+      total: merged.items.count,
+      success: merged.items.count - failures,
+      failed: failures
+    )
+    guard apiService.isSessionUnchanged(from: snapshot) else { return false }
+    previewData = merged
+    if failures > 0 {
+      errorMessage = "预览完成，其中 \(failures) 项无法整理。"
+    }
+    return failures == 0
+  }
+
+  func selectTargetPath(_ path: String) {
+    guard form.target_path != path else { return }
+    form.target_path = path
+    updateForm(for: path)
+  }
+
+  func selectMediaSource(_ source: MediaSearchSource) {
+    guard mediaSource != source else { return }
+    mediaSource = source
+    mediaId = ""
+    form.tmdbid = nil
+    form.doubanid = nil
+    form.bangumiid = nil
+    form.anilistid = nil
+    form.media_source = source.rawValue
+    form.media_id = nil
+    form.episode_group = nil
+    episodeGroups = []
+  }
+
+  func selectMediaType(_ type: String?) {
+    form.type_name = type
+    if type != "电视剧" {
+      form.episode_group = nil
+      episodeGroups = []
+    }
+  }
+
+  func selectManualMedia(_ media: MediaInfo, mediaId: String) {
+    self.mediaId = mediaId
+    if let typeName = ManualMediaSelection.typeName(for: media) {
+      selectMediaType(typeName)
+    }
+  }
+
+  var episodeGroupQueryKey: String {
+    "\(mediaSource.rawValue)|\(form.type_name ?? "")|\(mediaId)"
+  }
+
+  var episodeGroupOptions: [PickerOption<String>] {
+    [PickerOption(title: "默认剧集组", value: "")]
+      + episodeGroups.map {
+        PickerOption(
+          title: "\($0.name)（\($0.group_count) 季 · \($0.episode_count) 集）",
+          value: $0.id
+        )
+      }
+  }
+
+  func loadEpisodeGroups() async {
+    let requestedKey = episodeGroupQueryKey
+    let normalizedId = mediaId.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard mediaSource == .themoviedb,
+      form.type_name == "电视剧",
+      let tmdbId = Int(normalizedId),
+      tmdbId > 0
+    else {
+      episodeGroups = []
+      isEpisodeGroupsLoading = false
+      return
+    }
+
+    isEpisodeGroupsLoading = true
+    do {
+      let groups = try await apiService.fetchEpisodeGroups(tmdbId: tmdbId)
+      guard requestedKey == episodeGroupQueryKey else { return }
+      episodeGroups = groups
+    } catch {
+      guard requestedKey == episodeGroupQueryKey else { return }
+      episodeGroups = []
+    }
+    if requestedKey == episodeGroupQueryKey {
+      isEpisodeGroupsLoading = false
+    }
+  }
+
+  func preparedSingleSubmissionForm() -> ReorganizeForm {
+    var submittedForm = form
+    applyManualIdentity(to: &submittedForm)
+    return submittedForm
+  }
+
+  func preparedSubmissionForms() -> [ReorganizeForm] {
+    if logIds.count > 1 {
+      return logIds.map { id in
+        var batchForm = form
+        batchForm.logid = id
+        batchForm.fileitem = nil
+        batchForm.fileitems = nil
+        applyManualIdentity(to: &batchForm)
+        return batchForm
+      }
+    }
+    return [preparedSingleSubmissionForm()]
+  }
+
+  private func applyManualIdentity(to target: inout ReorganizeForm) {
+    let normalized = mediaId.trimmingCharacters(in: .whitespacesAndNewlines)
+    target.tmdbid = nil
+    target.doubanid = nil
+    target.bangumiid = nil
+    target.anilistid = nil
+    target.media_source = mediaSource.rawValue
+    target.media_id = normalized.isEmpty ? nil : normalized
+    if mediaSource != .themoviedb || target.type_name != "电视剧" {
+      target.episode_group = nil
     }
   }
 

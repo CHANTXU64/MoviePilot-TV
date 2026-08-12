@@ -5,6 +5,51 @@ import XCTest
 
 @MainActor
 final class HomeViewModelMediaServerLinkTests: XCTestCase {
+  func testLatestBatchKeepsItemsWithMissingOrNullTitles() throws {
+    let data = Data(
+      """
+      [
+        {"id":"normal", "title":"正常标题"},
+        {"id":"null", "title":null},
+        {"id":"missing"}
+      ]
+      """.utf8
+    )
+
+    let items = try JSONDecoder().decode([MediaServerPlayItem].self, from: data)
+
+    XCTAssertEqual(items.map(\.title), ["正常标题", "", ""])
+  }
+
+  func testLatestItemIdentityUsesStableServerScopedFields() throws {
+    let items = try JSONDecoder().decode(
+      [MediaServerPlayItem].self,
+      from: Data(
+        """
+        [
+          {"id":"item-1","title":"Emby","link":"https://emby/item-1?token=old","server_type":"emby"},
+          {"id":"item-1","title":"Emby","link":"https://emby/item-1?token=new","server_type":"emby"},
+          {"id":"item-1","title":"Plex","server_type":"plex"},
+          {"item_id":"item-1","server_id":"server-1","title":"Emby","server_type":"emby"},
+          {"item_id":"item-1","server_id":"server-1","title":"Emby","server_type":"emby"},
+          {"item_id":"item-2","server_id":"server-1","title":"Emby 2","server_type":"emby"},
+          {"item_id":"item-1","server_id":"server-2","title":"Other server","server_type":"emby"},
+          {"id":"server-1-item-1","title":"Raw collision case","server_type":"emby"}
+        ]
+        """.utf8
+      )
+    )
+
+    XCTAssertEqual(items[0].id, "playitem-4:emby-raw-6:item-1")
+    XCTAssertEqual(items[1].id, items[0].id)
+    XCTAssertNotEqual(items[2].id, items[0].id)
+    XCTAssertEqual(items[3].id, "playitem-4:emby-pair-8:server-1-6:item-1")
+    XCTAssertEqual(items[4].id, items[3].id)
+    XCTAssertNotEqual(items[5].id, items[3].id)
+    XCTAssertNotEqual(items[6].id, items[3].id)
+    XCTAssertNotEqual(items[7].id, items[3].id)
+  }
+
   func testEmbyDeepLinkUsesStructuredIdsWhenLinkIsInvalid() throws {
     let item = try decodePlayItem(
       """

@@ -21,14 +21,17 @@ class MediaActionHandler: ObservableObject {
     )
   }
 
-  func searchResourcesTargetUsingDefaultSites(for item: MediaInfo) async -> ResourceSearchRequest {
+  func searchResourcesTargetUsingDefaultSites(for item: MediaInfo) async -> ResourceSearchRequest? {
+    let snapshot = APIService.shared.sessionSnapshot()
     let sites = await SystemViewModel.normalizedDefaultSearchSitesString()
+    guard APIService.shared.isSessionUnchanged(from: snapshot) else { return nil }
     return searchResourcesTarget(for: item, sites: sites)
   }
 
   func getTMDBJumpTarget(
     for item: MediaInfo, targetTmdbId: Int? = nil
   ) async -> MediaInfo? {
+    let snapshot = APIService.shared.sessionSnapshot()
     var tmdbIdToUse: Int? = targetTmdbId ?? item.tmdb_id
 
     if tmdbIdToUse == nil {
@@ -40,6 +43,8 @@ class MediaActionHandler: ObservableObject {
       )
       isRecognizingTmdb = false
     }
+
+    guard APIService.shared.isSessionUnchanged(from: snapshot) else { return nil }
 
     guard let tmdbId = tmdbIdToUse else {
       showTMDBNotFoundAlert = true

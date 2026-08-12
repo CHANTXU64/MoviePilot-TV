@@ -5,6 +5,7 @@ struct AddDownloadSheet: View {
   @ObservedObject private var apiService = APIService.shared
   @StateObject private var viewModel: AddDownloadViewModel
   @State private var showAdvanced = false
+  @State private var showMediaSearch = false
   @FocusState private var isInfoSectionFocused: Bool
   @FocusState private var isAdvancedButtonFocused: Bool
 
@@ -115,19 +116,33 @@ struct AddDownloadSheet: View {
               .focused($isAdvancedButtonFocused)
 
               if showAdvanced {
-                SheetTextField(
-                  title: "TMDB ID",
-                  placeholder: "",
-                  text: $viewModel.tmdbId,
-                  keyboardType: .numberPad
-                )
+                HStack(spacing: 20) {
+                  SheetTextField(
+                    title: "\(viewModel.mediaSource.title) ID",
+                    placeholder: "自动判断",
+                    text: $viewModel.mediaId,
+                    keyboardType: .numberPad
+                  )
+
+                  Button {
+                    showMediaSearch = true
+                  } label: {
+                    Image(systemName: "magnifyingglass")
+                  }
+                  .accessibilityLabel("搜索媒体")
+                }
+                if !viewModel.isMediaIdValid {
+                  Text("媒体 ID 只能包含数字")
+                    .foregroundStyle(.red)
+                }
               }
 
               SheetActionButton(
                 title: "确定",
                 loadingTitle: "添加中",
                 isLoading: viewModel.isSubmitting,
-                isDisabled: viewModel.loadErrorMessage != nil || !apiService.canAccess(.search),
+                isDisabled: viewModel.loadErrorMessage != nil || !apiService.canAccess(.search)
+                  || !viewModel.isMediaIdValid,
                 feedbackMessage: viewModel.errorMessage
               ) {
                 guard apiService.canAccess(.search) else { return }
@@ -153,6 +168,12 @@ struct AddDownloadSheet: View {
     }
     .task {
       await viewModel.loadData()
+    }
+    .sheet(isPresented: $showMediaSearch) {
+      ManualMediaSearchSheet(source: viewModel.mediaSource) { mediaId, _ in
+        viewModel.mediaId = mediaId
+        showMediaSearch = false
+      }
     }
     .frame(width: 1200)
   }
