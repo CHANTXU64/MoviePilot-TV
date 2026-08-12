@@ -1,7 +1,7 @@
 # MoviePilot-TV
 
 <p align="center">
-  <a href="https://github.com/CHANTXU64/MoviePilot-TV/releases"><img src="https://img.shields.io/badge/Release-v0.3.5-blue?style=flat-square" alt="release"></a>
+  <a href="https://github.com/CHANTXU64/MoviePilot-TV/releases"><img src="https://img.shields.io/badge/Release-v0.3.6-blue?style=flat-square" alt="release"></a>
   <a href="https://github.com/jxxghp/MoviePilot"><img src="https://img.shields.io/badge/MoviePilot-v2.15.6-darkviolet?style=flat-square" alt="MoviePilot Backend Version"></a>
   <img src="https://img.shields.io/badge/platform-tvOS_18%2B-lightgrey.svg" alt="Platform">
   <img src="https://img.shields.io/badge/language-Swift-orange.svg?style=flat-square" alt="Language">
@@ -89,8 +89,8 @@ https://testflight.apple.com/join/UK3qEnVU
    ```sh
    git clone --filter=blob:none https://github.com/CHANTXU64/MoviePilot-TV.git
 
-   # 切到最新 tag (例如 v0.3.5)
-   git checkout tags/v0.3.5
+   # 切到最新 tag (例如 v0.3.6)
+   git checkout tags/v0.3.6
    ```
 2. 使用 Xcode 打开 `MoviePilot-TV.xcodeproj`。
 3. 选择你的真实 Apple TV 设备（需在同一局域网并已配对）。
