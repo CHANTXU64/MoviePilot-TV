@@ -17,6 +17,38 @@ nonisolated enum AppChangelog {
 
   static let entries: [AppChangelogEntry] = [
     AppChangelogEntry(
+      version: "v0.3.6",
+      releaseDate: "2026-08-12",
+      compatibleMoviePilotVersion: "v2.15.6",
+      highlights: [
+        "兼容 MoviePilot 后端 v2.15.6。",
+        "探索页兼容 MoviePilot 探索来源插件。",
+        "支持 AniList 媒体来源。",
+        "聚合搜索支持选择媒体来源并设置默认来源。",
+        "新增手动整理预览功能。",
+        "新增版本更新历史与升级提示。",
+      ],
+      updates: [
+        "探索页兼容 MoviePilot 动态探索来源插件，并支持插件自定义筛选项。",
+        "支持 AniList 媒体来源，并贯通探索、聚合搜索、详情跳转、人物详情和来源标识。",
+        "聚合搜索支持选择 TMDB、豆瓣、Bangumi 和 AniList，并可设置默认搜索来源。",
+        "手动整理支持预览整理前后的文件名和路径。",
+        "媒体卡片支持直接取消订阅，电影详情可显示入库状态。",
+        "人物详情支持多来源图片与简介。",
+        "设置页新增版本更新历史；版本升级后显示本次更新摘要。",
+      ],
+      fixes: [
+        "修复多来源订阅身份、状态刷新、菜单操作及保存返回流程中的异常。",
+        "修复资源搜索、手动搜索和页面切换时过期结果覆盖当前内容的问题。",
+        "修复下载器切换、任务删除、转移历史批量操作及 AI 重整可能操作错误对象的问题。",
+        "修复账号切换后旧请求、权限、图片及页面缓存可能残留的问题。",
+      ],
+      optimizations: [
+        "优化资源流式搜索进度、错误提示和普通请求回退。",
+        "增强稀疏接口数据、失败响应及多来源媒体身份的处理稳定性。",
+      ]
+    ),
+    AppChangelogEntry(
       version: "v0.3.5",
       releaseDate: "2026-07-22",
       compatibleMoviePilotVersion: "v2.14.6",
