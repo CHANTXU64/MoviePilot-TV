@@ -1,337 +1,129 @@
 # 订阅兼容契约与更新检查清单
 
-本文档记录 TV 端订阅状态、媒体 ID、`episode_group`、跨源详情页 Header 订阅按钮、订阅缓存与刷新时机的跨端对齐点。以后同步 MoviePilot 后端或 MoviePilot Web 前端时，必须检查本文件列出的契约是否仍成立；如果不成立，需要同步评估 TV 端实现、测试和用户交互。
+本文档只记录 MoviePilot 后端或配套 Web 前端发生变化时，可能让 TV 端现有订阅路径产生运行错误、状态误判或错误操作的跨端契约。通用 API、下载、资源搜索、客户端并发实现和测试组织由 `.agents/prompts/frontend-update.md`、`.agents/ReviewPlan.md` 与测试代码负责，不在这里重复。
 
-这不是完整兼容审查清单。常规接口、模型、图片、导航和 tvOS 行为仍要按正常流程检查；这里只列出订阅相关的重点风险，避免后续 MP 前后端更新时漏掉关键契约。
+当前 TV 端声明的最低兼容 MoviePilot 版本为 `v2.15.1`。每次更新必须以后端目标标签及其 `FRONTEND_VERSION` 指定的 Web 版本为准，重新核对实际调用链；本文记录的既有行为不是对未来版本的永久假设。
 
-当前 TV 端声明的最低兼容 MoviePilot 版本为 `v2.15.1`。下文保留具体契约首次出现的版本号；同步更新时仍应以目标版本的 Web、后端和 TV 实际调用链为准。
+## 使用原则
 
-## 用户权限契约风险
+- 只记录“上游什么字段、端点或业务语义发生变化，会影响 TV 哪条已使用路径”。单纯的 session epoch、请求乱序、缓存 namespace、SwiftUI 身份和测试矩阵属于客户端正确性，不作为上游契约条目。
+- 本清单只汇总历次已经发现的订阅风险，不是兼容审查的完整范围。每次更新仍须完整审阅目标后端及其配套 Web 的版本跨度、提交和 Diff，再逐项映射到 TV 已使用路径；不得因为清单条目未命中就提前结束审查。
+- Web 的实际请求与用户结果是 TV 对齐依据。若 Web 与后端本身共享同一问题，记录为上游风险并跟随官方变化，不在 TV 端发明差异化接口或兜底。
+- 测试用于证明已适配契约，不用于定义契约。不能因为兼容测试能够构造畸形数据，就把所有畸形输入都升级成后端更新要求。
+- 具体版本结论必须现场核对，不能把旧审查中使用的后端、Web `HEAD` 或更高版本行为写成当前兼容基线。
 
-MoviePilot 后端普通用户权限契约仍不稳定，后续版本可能有较大调整。当前不能把 `Token.super_user`、`permissions.discovery`、`permissions.search`、`permissions.subscribe`、`permissions.manage` 简单理解为所有接口的最终授权规则；真实后端仍可能对部分接口使用超管校验、内部业务校验，或返回 400/403 这类权限失败。
+## 订阅权限与快照
 
-后续同步 MoviePilot 后端或 Web 前端时，必须重新确认：
+- 重新核对登录响应中 `permissions.subscribe` 的字段、真假值和 Web 入口判断；TV 只同步配套 Web 实际采用的订阅权限规则。
+- 核对 `GET /subscribe/` 是否仍向普通用户返回本人订阅、向超级用户返回其可管理范围内的订阅，以及无 owner 旧记录的可见范围。
+- `/subscribe/` 仍是首页、详情页和分季页的共享状态来源。若后端改为分页、筛选、增量同步或默认排除某些状态，必须同步重做 TV 快照和刷新逻辑。
+- 持久订阅记录的业务 `id` 必须能稳定、唯一地定位编辑、搜索、暂停、重置和删除目标。若后端改变 ID 类型、可空性或唯一性，必须先适配 TV 模型和动作入口；不要把“过滤异常记录”当成长期契约。
+- 普通用户与超级用户的订阅归属、更新和删除范围以目标版本后端与配套 Web 为准。客户端入口隐藏不能替代后端当前实际授权，也不能据此要求 TV 单独修补上游授权设计。
 
-- `Token.super_user` 和 `permissions` 字段的含义是否变化。
-- `401`、`403`、`400` 的会话/权限语义必须对照后端代码确认，不要只按 HTTP 状态码推断是否应该刷新 token 或登出。当前 `app/core/security.py` 中无认证信息是 `401 Not authenticated`，缺少/错误用途/解码失败的 token 校验是 `403`（例如 `token校验不通过`）；`app/db/user_oper.py` 中用户不存在/未激活是 `403`，非超管是 `400 用户权限不足`。
-- 登录响应里的 `permissions` 是否仍来自 `app/api/endpoints/login.py` 的 `user_or_message.permissions or {}`，并且仍是 Web/TV 功能入口过滤依据；不要把 `permissions.discovery` / `permissions.search` / `permissions.subscribe` / `permissions.manage` 直接推断成后端每个接口都会按同一权限项授权。
-- 订阅相关接口是否真正与 `permissions.subscribe` 对齐。
-- 订阅页面、详情页或分季页里夹带的媒体服务器状态接口是否仍只是普通 token 权限；当前 `/mediaserver/notexists` 这类“已入库/缺失”状态只影响展示，不是订阅主流程，TV 端应在 `permissions.subscribe == true` 时探测，且不得要求 `Token.super_user`。
-- 对可选状态探测接口，即使 Web 端只是 `catch` 后忽略错误，TV 端也不能让 401/403 触发自动登出；这类 best-effort 探测应使用不会清理会话的请求路径，并补受限用户测试。
-- 未执行、失败或无权限执行媒体服务器状态探测时，TV 分季页必须不显示入库状态徽章，不能把未知当成“已入库”；创建分季订阅时也不能因此默认开启 `best_version` 洗版。
-- 普通用户在 Web 端能看到哪些入口，不能访问时 Web 是隐藏、禁用还是报错。
-- TV 端是否仍应自动隐藏发现、搜索、状态、管理类入口；不要用笼统的“非超管权限不足”文案替代具体入口隐藏。
-- Web 端 `filterMenusByPermission` / `hasPermission` 是否仍按原始权限对象判断 `permissions[key] === true`；TV 端的 `Token.canAccess(_:)`、入口隐藏和对应测试必须同步更新，不能只改其中一层。
-- 四个单权限真实后端账号必须通过 `MOVIEPILOT_COMPAT_PERMISSION_BEHAVIOR_ACCOUNTS` / `MOVIEPILOT_COMPAT_PERMISSION_PASSWORDS` 只跑 `BackendCompatibilityPermissionBehaviorTests`；不要把它们放进普通 `MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES` 兼容矩阵里反复巡检 read-only / side-effect 接口。
+## 媒体身份与季号
 
-如果后端新增更细的权限项、改名、调整返回结构，或把现有普通用户权限改成可访问更多/更少订阅能力，不能只改 UI 文案；需要同步更新 Token 解码、权限判断、真实后端兼容测试和订阅副作用测试。
+- 订阅记录用于列表操作时，配套 Web 当前按完整 `media_source + media_id` → truthy 的 `tmdbid` / `doubanid` / `bangumiid` / `anilistid` → 遗留 `mediaid` 生成媒体键；用于把订阅快照匹配到当前详情/分季媒体时，则按 `media_source + media_id` → 遗留 `mediaid` → raw 专用 ID 逐级比较。两条调用链不能混成一套顺序。
+- `MediaInfo` 的身份必须按目标版本 Web 的 `getMediaId()` 和后端响应 schema 现场核对。没有证据时，不得声称上游 `MediaInfo` 一定返回或支持遗留 `mediaid`。
+- raw 数值 ID 的 `0` 和空字符串按 Web 的 JavaScript truthy 语义视为缺失并继续回退；负数在 Web 中仍为 truthy，除非目标版本正式改变规则，TV 不得单独把负数归一化为 `nil`。
+- 遗留 `mediaid` 是后端返回的不透明媒体键；即使形如 `tmdb:0`，客户端也不能擅自拆解或改写。
+- 新增订阅的精简请求继续只发送目标版本 Web/后端接受的专用 ID、`mediaid`、季号、洗版模式和剧集组。若结构化身份字段正式进入创建契约，需同时修改 TV 请求、状态匹配和取消目标。
+- 分季来源中的 `season_number` 只有明确非负整数才能建立季身份；真实 `0` 表示 S00，缺失、`null` 或负值不能折叠成 S00。上游若改变季号值域或无效条目处理方式，需要重新评估 TV 分季列表和订阅目标。
 
-## 当前契约
+## 媒体类型与订阅入口
 
-- MoviePilot v2.14.2 起，普通用户的订阅按 `username` 隔离；同一用户的同一媒体同一季只有一条订阅。超级用户仍可查看和管理全局订阅，因此快照中可能出现不同用户对同一媒体同一季的多条记录。
-- `episode_group` 是订阅配置，不是订阅身份的一部分。
-- 创建订阅时可以带 `episode_group`。
-- 查询某媒体某季是否已订阅时，只按媒体和季判断，不按 `episode_group` 判断。
-- 取消某媒体某季订阅时，Web 统一按媒体标识调用删除接口并传入 `season`，不按 `episode_group` 删除；当前后端对 TMDB、Douban、Bangumi、AniList、canonical 及插件身份统一按该季号过滤。
-- TV 分季页展示的已订阅状态必须来自真实订阅记录上的 `episode_group`，不能来自当前 Picker 选择。
-- TV 分季页取消已订阅季时，与 Web v2.14.6 保持一致，调用 `DELETE /subscribe/media/{mediaid}` 并传入 `season`。
-- **已知上游风险（跟随 Web）**：媒体级删除会命中当前用户可访问范围内同媒体、同季的全部记录；同季存在不同剧集组或多个 owner 时，通用确认文案不会展示实际命中数。TV 端按当前产品决定不单独改成精确 ID 删除；每次同步 Web 更新时继续复核其删除目标、确认文案和后端命中范围，Web 若修复，TV 同步跟进。
-- `/subscribe/` 快照是首页订阅列表、详情页订阅状态和分季订阅状态的共享数据源；普通用户由后端过滤为本人订阅，超级用户获得全局订阅，TV 不再重复按用户名过滤。几十或上百季电视剧不能退回逐季调用 `/subscribe/media/{mediaid}`。
-- `POST /subscribe/` 创建订阅时必须保留 `mediaid` fallback；当 `tmdbid`、`doubanid`、`bangumiid` 不足以标识媒体时，后端仍可用 `mediaid` 识别来源。
-- MoviePilot v2.14.0 起，`best_version` 和 `best_version_full` 的空值语义变为“使用后端默认订阅配置”。TV 端未明确选择普通/洗版/全集洗版时必须省略这两个字段，不能用 `0` 代替；显式发送 `0` 才表示普通订阅或关闭洗版。
-- TV 分季页只有在已确认某季完整入库时，才显式发送 `best_version: 1` 和 `best_version_full: 1`，表示全集洗版；未知入库状态或仍有缺失集时应省略洗版字段，让后端应用默认配置。
-- MoviePilot v2.14.6 起，公共创建/更新接口通过 `Subscribe.to_public_write_payload()` 丢弃 `note`、`episode_priority`、`current_priority`、`lack_episode`、`state`、`username`、`date`、`vote` 等系统字段和运行事实，普通保存不能再覆盖这些状态；`filter` 仍是可编辑订阅配置。
-- 配套 Web 快速新增订阅时只发送媒体标识、季、洗版模式和剧集组等配置字段；编辑时先读取完整 `Subscribe`，再把完整 `subscribeForm` PUT 回后端，由 v2.14.6 后端统一裁剪运行态字段。
-- TV 与 Web 保持等价：新建使用精简 `SubscribeRequest`，编辑保存完整 `Subscribe`（不回传派生字段 `completed_episode`）。保留解码出的运行态原值既符合 Web 的完整表单行为，也兼容 v2.14.4 及更早后端；v2.14.6 会安全忽略这些字段。不要单独在 TV 端改成与 Web 不同的写入白名单。
-- 截至目标 v2.15.1，TV `Subscribe` 已覆盖后端全部公共可写字段，当前没有“未知可写字段被完整 PUT 丢失”的字段反例；这是一条上游升级检查，不是现行产品缺陷。
-- 所有类似“先 GET 对象、用户编辑、再完整 PUT/POST 对象”的接口都按完整更新契约审查，不能只检查订阅：每次同步 Web 或后端版本时，逐字段对照 Web 实际请求体、后端当前可写 schema/排除字段、TV `CodingKeys` 与最终编码 body。
-- 后端新增可写字段时，TV 必须明确选择同步建模、按端点 round-trip 契约保留原始值并只覆盖已编辑字段，或在适配前阻止可能破坏数据的完整更新；不得静默忽略新字段后继续保存。
-- 原始值保留只适用于后端允许回写的业务字段。派生字段、运行状态、owner、下载事实等必须遵守后端写入 allowlist；不得为了兼容而盲目透传整份原始 JSON。后端若正式提供 PATCH/dirty-field 契约，优先按其合同只提交实际编辑字段，TV 不自行假设 PATCH 语义。
+- 只有 Web 明确识别为电视剧的媒体进入分季订阅流程；不能用 `canDirectlySubscribe == false` 反推“必然是电视剧”。
+- 电影是否直接订阅、合集是否只进入合集页、未知或插件类型是隐藏还是允许直接订阅，都以目标版本 Web 的实际入口和后端可接受 payload 为准。
+- 电视剧分季入口不能依赖辅助 TMDB ID 才显示；剧集组加载可以继续只在主身份为 TMDB 且存在有效 TMDB ID 时执行。
+- Web 若改变类型名称、类型集合或直接订阅/分季路由，必须同时复核详情 Header、媒体卡片、预加载和分季页面，不能只改按钮文案。
 
-## 媒体 ID 归一化契约
+## 创建与编辑
 
-TV 端当前区分“媒体详情身份”和“订阅记录身份”，两者共用 `MediaIdentifier`，但字段优先级与零值语义不同：
+- `episode_group` 当前是订阅配置，不是订阅唯一身份的一部分；创建可以携带它，查重、状态匹配和媒体级取消仍按媒体与季处理。
+- 若后端唯一性、查询或删除正式加入 `episode_group`，说明同一媒体同一季可能存在多条剧集组订阅，TV 的状态索引、展示和取消范围必须重新设计。
+- `best_version` / `best_version_full` 的省略值当前表示使用后端默认配置，显式 `0` 表示普通订阅或关闭洗版。目标版本若改变空值、默认值或数值语义，TV 创建 payload 必须同步。
+- Web 快速新增当前发送精简配置；编辑当前先 GET 完整 `Subscribe`，再完整 PUT，并由后端裁剪不可写运行字段。每次 schema 更新都要逐字段对照 Web 请求体、后端公共可写/排除字段、TV `CodingKeys` 与最终编码，避免新可写字段在无关编辑后丢失，也不得盲目回传 owner、运行状态等不可写字段。
+- `total_episode` 需要保留 `null`、`0`、正数三态及后端的人工集数语义。未修改保存不应把 `null` 变为 `0` 或意外切换人工模式；若后端默认值、更新逻辑或 Web 表单行为变化，TV 编码需同步。
+- `save_path == nil` 当前表示自动目录；非空值是后端可直接消费的本地路径或带 storage 的远程 URI。编辑时保留既有合法值并允许清空；若目录接口、存储 URI 格式或后端允许范围变化，TV 选择器与请求值必须一起复核。
+- 订阅写入、状态修改、搜索、重置、删除和 Fork 是否成功，必须按各端点在目标版本声明的响应 envelope 判断，不能只用 HTTP 2xx 推断。只有端点明确改为 `204` 或无正文成功时，TV 才接受空响应。
 
-- `MediaInfo` 优先使用 `mediaid_prefix` / `source` 声明的来源和 `media_id`；声明来源无法组成身份时，依次回退 TMDB、豆瓣、Bangumi、AniList，最后才使用遗留 `mediaid`。
-- `Subscribe` 优先使用 `media_source + media_id`，再尝试 truthy 的 `tmdbid`、`doubanid`、`bangumiid`、`anilistid`，最后回退遗留 `mediaid`。
-- 订阅记录的 raw 数值 `0` 和空字符串必须跳过，但遗留 `mediaid` 是后端返回的不透明媒体键；`tmdb:0` 等值不能在客户端擅自改写。
-- 新增订阅的精简 `SubscribeRequest` 继续发送当前 Web/后端接受的专用 ID、`mediaid`、季、洗版模式和剧集组，不因为客户端模型能解码 `media_source/media_id/anilistid` 就额外扩展 POST 契约。
-- 详情页演职员、推荐和相似内容使用独立的辅助来源顺序：TMDB、豆瓣、Bangumi；辅助来源不能覆盖媒体主身份或订阅身份。
+## 订阅匹配与取消
 
-这条契约很容易因为 Swift、JavaScript 和 Python 的真假值差异出错。后续改动必须分别覆盖声明来源、raw ID、遗留媒体键和辅助 ID，不能再用一套简单的 `if let` 顺序替代。
+- 分季已订阅状态必须来自 `/subscribe/` 快照中的真实记录，并按目标 Web 的身份优先级匹配；较高优先级身份存在时，不相等后不能继续用辅助 ID 误匹配。
+- TV 分季页展示的剧集组来自已订阅记录，不来自当前 Picker；Picker 只影响新建订阅 payload。
+- 取消前的订阅查询响应如果仍返回 canonical 身份、专用 ID 和遗留 `mediaid`，必须核对它们各自是“确认状态”还是“删除键”。当前 Web 的删除键来自当前媒体的 `getMediaId()`；除非目标版本 Web/后端明确改变合同，lookup 只用于确认，不得让 TV 自行漂移成另一种删除目标。
+- 当前 Web 使用 `DELETE /subscribe/media/{mediaid}` 并传 `season` 进行媒体级取消，不按 `episode_group` 删除；TV 保持相同请求形式。
+- **已知上游风险（跟随 Web）**：媒体级删除可能命中当前用户可管理范围内同媒体、同季的多条记录。每次更新都要复核 Web 的确认信息、后端 owner/season 过滤和实际命中范围；官方若提供精确订阅 ID 删除或返回命中范围，TV 再同步对齐，不单独发明不同语义。
+- 若外部客户端已经删除或替换订阅，取消前的权威查询应决定是否继续。这里记录的是上游查询与删除契约，不把具体请求代际和按钮禁用实现写入本清单。
 
-如果 Web 改变声明来源优先级、后端不再返回 `mediaid` fallback，或结构化字段正式进入新增订阅 POST，这都不是小修范围；需要同步修改 TV 身份解析、订阅快照匹配、删除目标和对应测试。
+## 订阅分享与 Fork
 
-## 跨源详情页 Header 契约
+- `GET /subscribe/shares` 返回的业务标识必须稳定且能定位 `POST /subscribe/fork` 的来源；若 ID 类型、字段名或唯一性变化，需同步 TV 列表身份和 Fork 请求。
+- Share → Fork 当前需要保留后端 schema 中实际消费的 `tmdbid`、`doubanid`、`bangumiid`、`anilistid`、`media_source`、`media_id` 及订阅配置字段。字段新增、删除或改名时，按 Web 实际请求和后端消费逻辑更新 TV，不要求透传未声明的未知字段。
+- Share 转为媒体展示时，主身份仍按 canonical 后再按专用 ID 的目标版本规则投影；辅助 ID 不能覆盖已声明的主身份。
+- 确认页展示哪些配置属于产品交互，不作为后端更新契约；只有字段会影响用户确认后的实际写入且 Web 行为发生变化时，才评估 TV 是否跟进。
 
-MoviePilot Web v2.14.0 起，详情页订阅入口按媒体类型区分：
+## 订阅缓存与刷新
 
-- 电影可以在详情页顶部直接订阅或取消。
-- 所有电视剧，无论来自 TMDB、Douban、Bangumi、AniList 还是插件来源，都统一进入分季订阅流程。
-
-因此 TV 端当前保持这个行为：
-
-- `MediaInfo.canDirectlySubscribe` 只能对电影返回 `true`。
-- 电视剧详情页顶部按钮只作为“分季订阅”入口，不直接创建整条目订阅，也不因为存在辅助 TMDB ID 改走一键订阅。
-- 电视剧分季入口和预加载不能依赖 `tmdb_id != nil` 才显示或启动；非 TMDB 和插件详情也应能进入分季订阅流程。
-- 剧集组数据只在主媒体身份为 TMDB 且存在有效 `tmdb_id` 时加载；缺少 TMDB 主身份不应阻断分季订阅入口本身。
-- 分季页取消订阅保持 Web 的请求形式：媒体级删除并传入季号，不单独改成按订阅 `id` 删除；后端是否按季过滤取决于媒体标识分支。
-
-如果以后 Web 或后端重新引入电视剧顶部直接订阅/取消，不能只改按钮文案；需要重新确认 TV 端是否应恢复媒体级删除、是否需要多季影响确认，以及分季页和 Header 的状态来源是否仍一致。
-
-## 订阅缓存与刷新契约
-
-订阅状态在 TV 端同时服务首页、详情页、分季页和预加载任务。后续改订阅相关逻辑时，必须保持这些刷新边界：
-
-- `fetchSubscriptions(forceRefresh:)` 的普通读取可以复用短 TTL 快照；订阅快照缓存读取不续期，避免海报墙浏览不断延长旧订阅状态。
-- `forceRefresh: true` 必须绕过旧缓存和旧 in-flight 请求；如果有更新的强刷请求开始，旧请求返回后不能覆盖新快照。
-- `checkSubscription(media:season:)` 的 Bool 状态缓存只服务卡片、详情页 Header 和电影类轻量状态；分季页必须从 `/subscribe/` 快照映射，不能逐季查询。
-- 保存、创建、删除、暂停/恢复、重置、手动搜索订阅、复用订阅成功后，必须同时清空订阅快照缓存和旧的 Bool 状态缓存。
-- `baseURL`、token、登录会话变化时必须清空订阅缓存，避免跨服务器或跨账号污染。
-- `.subscriptionDidUpdate`、页面回前台、取消前二次确认、详情页预加载完成后，都要强制刷新相关订阅状态。
-- 手动“搜索订阅”也会改变远端订阅状态；成功后必须刷新首页订阅列表，并通知活跃详情页和分季页重新读取订阅状态。
-- 活跃详情页持有的 `MediaPreloadTask` 收到订阅变更后需要刷新订阅状态；普通海报墙预加载缓存不要因为一次通知全量强刷，避免一次订阅操作触发大量请求。
-- 取消前如果订阅已被其他设备删除，本机刷新为未订阅，不继续发起错误取消。
-
-## 下载任务暂停状态对齐
-
-- 当前 MoviePilot v2.15.1 的 `/download/` 只返回 `TorrentStatus.DOWNLOADING`；qBittorrent 与 Transmission 的未完成任务暂停后会从 TV/Web 列表消失，失去“继续”入口。TV 端按当前 Web 行为不做本地缓存兜底。
-- 用户决定不做 TV 单端修复。以后同步 MoviePilot 官方后端或 Web 时，如果列表开始返回未完成的 `paused/stopped` 任务、增加状态查询参数或提供独立暂停任务入口，TV 必须在同次兼容更新中对齐。
-- 对齐时必须同时保证：未完成暂停任务仍可见并可继续；已完成的 `stopped`/seeding 任务不会混回下载中列表；任务身份继续绑定 downloader 与 hash。
+- 普通读取可以复用短期快照；用户主动进入页面、保存、创建、删除、暂停/恢复、重置、手动搜索或 Fork 成功后，必须仍能获得权威订阅状态。
+- 分季页从一次 `/subscribe/` 快照映射状态，不能退回逐季查询。若 Web/后端把快照改成分页、增量、事件推送或新的默认过滤，必须同步重审 TV 的读取和刷新入口。
+- 具体 `forceRefresh`、请求代际、账号切换清理和预加载通知实现属于 TV 客户端正确性，留在代码、测试和 ReviewPlan，不在这里展开。
 
 ## 后端更新时重点检查
 
-检查 `../MoviePilot` 中这些位置：
+检查目标 `MoviePilot` 标签中与 TV 现有订阅调用链直接相关的位置：
 
-- `app/core/security.py`
-  - `verify_token` / `__verify_token` 对无认证信息、缺少 token、token 用途不匹配、token 解码失败返回的状态码和 detail 是否变化。
-  - 如果后端把普通功能权限不足也改成 `403`，需要同步重新评估 TV 端 `makeRequest` 的 401/403 会话处理策略和受限账号测试。
-- `app/db/user_oper.py`
-  - `get_current_active_user` / `get_current_active_user_async` 是否仍用 `403` 表示用户不存在或未激活。
-  - `get_current_active_superuser` / `get_current_active_superuser_async` 是否仍用 `400 用户权限不足` 表示非超管。
-- `app/api/endpoints/login.py`
-  - 登录 token payload 是否仍返回 `permissions=user_or_message.permissions or {}`，且 Web/TV 仍以该对象作为功能入口可见性的来源。
-- `app/api/endpoints/system.py`
-  - `/system/env`、`GET /system/setting/{key}`、`POST /system/setting/{key}` 等端点实际依赖的是 active user 还是 active superuser；以 `Depends(...)` 为准，不能只看 summary 或注释里的“仅管理员”。
-- `app/api/endpoints/download.py`、`app/chain/download.py` 与各下载器模块
-  - `/download/` 是否仍只查询 `TorrentStatus.DOWNLOADING`，还是已经返回所有未完成的 `paused/stopped` 任务或支持状态参数。
-  - qBittorrent、Transmission、rTorrent 等适配器是否把暂停状态统一映射为可恢复状态，并以完成度排除已完成任务；官方合同一旦变化，TV 与 Web 必须同时复核。
-- `app/api/endpoints/search.py`、`app/chain/search.py` 与 `app/modules/indexer/__init__.py`
-  - 当前单站点搜索异常会被记录后按空结果返回，SSE 不提供可与正常零结果区分的失败标志，因此 TV 保留对未产出结果站点的一次静默重试。后端以后若能在 SSE 中明确返回单站点搜索错误及对应 `site_id`，应删除 `ResourceResultViewModel` 的 `missingSites` 额外重试，改用明确的错误事件。
-- `app/db/subscribe_oper.py`
-  - `SubscribeOper.async_add` 是否仍用 `tmdbid` / `doubanid` + `season` 查重，并对普通用户同时限定 `username`。
-  - 如果查重条件新增 `episode_group`，说明后端开始支持同一媒体同一季多剧集组订阅，TV 分季状态模型需要重做。
-- `app/db/models/subscribe.py`
-  - `Subscribe.episode_group` 字段是否仍存在，类型和含义是否变化。
-  - `Subscribe.async_exists` 是否仍不包含 `episode_group`。
-  - 普通用户的存在性查询和媒体查询是否仍限定当前 `username`，超级用户是否仍可查询全局订阅。
-  - `Subscribe.async_get_by_tmdbid` 是否仍按 `tmdbid + season` 返回订阅。
-  - `Subscribe.async_get_by_tmdbid` 在未传 `season` 时是否仍返回该 TMDB 下全部订阅。
+- `app/db/subscribe_oper.py`、`app/db/models/subscribe.py`
+  - 普通用户/超级用户的数据范围、媒体+季查重、`episode_group`、season 和 owner 条件是否变化。
 - `app/schemas/subscribe.py`
-  - `Subscribe` schema 是否仍返回 `id`、`season`、`tmdbid`、`doubanid`、`bangumiid`、`anilistid`、`media_source`、`media_id`、`episode_group`。
-  - `Subscribe` schema 是否仍返回可 fallback 的 `mediaid`，并保持 `tmdb:<id>` / `douban:<id>` / `bangumi:<id>` 这类格式。
-  - `Subscribe` schema 是否仍返回 `vote`、`filter`、`username`、`current_priority`、`date`、`note`、`episode_priority` 等展示或旧版兼容所需字段。
-  - `Subscribe.PUBLIC_WRITE_EXCLUDED_FIELDS` / `to_public_write_payload()` 是否仍阻止公共创建和更新覆盖运行事实；`filter` 等用户可编辑配置不能误加入排除列表。
-  - `best_version` 和 `best_version_full` 是否仍是可空字段；如果后端再次改变空值和 `0` 的语义，TV 新建订阅 payload 必须重新评估。
-  - 如果字段改名、嵌套、分页或拆分，需要同步更新 TV 解码和快照缓存。
+  - `id`、媒体身份、season、`episode_group`、`total_episode`、`save_path`、洗版字段及其他公共可写字段的类型、可空性和默认值是否变化。
+  - 公共写入排除字段是否仍保护后端运行事实；Web 使用的可编辑字段是否仍允许写入。
 - `app/api/endpoints/subscribe.py`
-  - `GET /subscribe/` 是否仍向普通用户返回本人完整订阅列表、向超级用户返回全局订阅列表。
-  - 普通用户的详情、更新、状态、重置、搜索和删除是否仍校验订阅归属；更新 payload 是否仍不能把订阅转移给其他用户。
-  - 无 `username` 的旧订阅是否仍只对超级用户可见。
-  - `GET /subscribe/` 返回的订阅快照中，`tmdbid: 0` / `bangumiid: 0` / 空 `doubanid` 是否仍只代表缺失 ID，而不是有效 ID。
-  - `POST /subscribe/` 是否仍用 `episode_group` 和 `mediaid` 创建或更新订阅配置。
-  - `POST /subscribe/` 是否仍把省略 `best_version` / `best_version_full` 理解为使用后端默认配置，把显式 `0` 理解为普通订阅或关闭洗版。
-  - Web 快速新增是否仍发送精简配置 payload，编辑是否仍将 GET 返回的完整 `subscribeForm` PUT 回去；后端是否仍统一裁剪不可写运行态字段，并保留 `filter`、`custom_words` 等用户可编辑配置。若 schema 新增可写字段，必须同步核对 TV 是否建模或按正式 round-trip 契约保留，不能继续无损假设。
-  - `GET /subscribe/media/{mediaid}` 是否新增了 `episode_group` 参数。
-  - `DELETE /subscribe/media/{mediaid}` 是否新增了 `episode_group` 参数。
-  - `DELETE /subscribe/media/tmdb:<id>` 在未传 `season` 时是否仍会删除全部季。
-  - `DELETE /subscribe/media/<source:id>` 是否仍支持 TMDB、Douban、Bangumi、AniList、canonical 及插件身份，并对所有身份统一应用 `season` 过滤。
-  - `DELETE /subscribe/{subscribe_id}` 是否仍按订阅 id 删除单条订阅。
-  - `GET /subscribe/search/{id}`、`POST /subscribe/fork`、`PUT /subscribe/status/{id}`、`GET /subscribe/reset/{id}` 成功后，是否仍可能改变订阅快照或状态字段。
-- `app/core/context.py`
-  - Douban/Bangumi 识别信息是否仍只是跨源识别上下文，不代表 Web 详情页开始提供 TMDB 分季列表。
-  - 如果 Douban/Bangumi 详情开始正式携带 TMDB 分季数据，需要重新评估 TV 顶部取消订阅的交互。
+  - `/subscribe/` 快照、创建/更新、媒体查询、媒体级/精确删除、状态、搜索、重置及 Fork 的参数、owner 范围和响应 envelope 是否变化。
+  - `DELETE /subscribe/media/{mediaid}` 是否仍支持目标版本的各类身份，并统一应用 `season`；未传 season 时的范围是否变化。
+- 订阅分享和目录/存储相关 schema、端点
+  - Share → Fork 实际消费字段、业务 ID，以及 `save_path` 可用值是否变化。
 
-如果后端开始支持“同一媒体同一季多个 `episode_group` 订阅”，不要只改 UI 文案。需要重新设计：
-
-- 分季卡片是否显示多个订阅状态。
-- 取消按钮取消哪一个剧集组。
-- 当前 Picker 是否同时影响状态查询和取消。
-- `/subscribe/` 快照如何索引为 `media + season + episode_group`。
-- 首页、详情页、分季页和订阅编辑页如何同步这组状态。
+只记录能进入 TV 现有调用链的变化。服务端是否应增加新的权限校验属于上游安全/产品审查，不在本清单中替 MoviePilot 设计。
 
 ## Web 前端更新时重点检查
 
-检查 `../MoviePilot-Frontend` 中这些位置：
+检查后端目标版本绑定的 `MoviePilot-Frontend` 标签：
 
-- `src/views/reorganize/DownloadingListView.vue`、`src/components/cards/DownloadingCard.vue`
-  - 是否仍每三秒用 `/download/` 响应全量替换列表；暂停后任务是否仍消失。
-  - 如果 Web 开始保留暂停任务并提供“继续”入口，TV 必须对齐相同的后端状态与操作语义，不保留当前差异。
-- `src/views/discover/MediaDetailView.vue`
-  - 顶部直接订阅/取消按钮是否仍只覆盖电影。
-  - 所有电视剧是否仍通过分季列表和分季订阅入口处理，不因 Douban 或 Bangumi ID 改走直接订阅。
-  - `getMediaId()` 是否仍把 `tmdb_id: 0` / `bangumi_id: 0` / 空 `douban_id` 当成无效值，并 fallback 到 `mediaid_prefix + media_id`。
-  - 电影直接取消是否仍使用 `/subscribe/media/{mediaid}`，并且未传 `season` 时保持媒体级取消语义。
-  - 如果 Web 重新让电视剧详情页顶部执行直接取消，TV 需要同步评估多季影响提示和删除语义。
-- `src/components/cards/MediaCard.vue`
-  - `getMediaId()` 是否仍使用 truthy 判断选择 `tmdb_id` / `douban_id` / `bangumi_id`，并在这些 ID 无效时 fallback 到 `mediaid_prefix + media_id`。
-- `src/components/dialog/SubscribeSeasonDialog.vue`
-  - 分季弹窗是否仍只把选择的 `seasons` 和 `episodeGroup` 用于创建订阅。
-  - 创建分季订阅时传给后端的 `mediaid` 是否仍来自 Web 的 `getMediaId()` 规则。
-  - 未选择普通/洗版/全集洗版时，是否仍省略 `best_version` / `best_version_full`，由后端默认配置决定。
-  - 已完整入库季是否仍显式发送全集洗版字段。
-  - 是否新增了分季已订阅状态、取消订阅或按剧集组判断状态的 UI。
-- 订阅卡片和详情页相关组件
-  - 是否仍使用后端现有媒体级订阅状态。
-  - 订阅卡片上的 `getMediaId()` 是否仍把 `tmdbid: 0` / `bangumiid: 0` / 空 `doubanid` 当成无效值，并 fallback 到订阅记录的 `mediaid`。
-  - 手动搜索、暂停/恢复、重置、编辑、复用订阅后，Web 是否立即重新拉取订阅列表或依赖后端返回的新状态。
-  - 如果 Web 开始显示“已订阅 · 剧集组名”，TV 应对齐文案和交互。
-- 前端请求封装和缓存策略
-  - `/api/v1/subscribe/` 是否仍不被长期缓存。
-  - 如果 Web 增加订阅列表缓存、分页、筛选或增量同步，TV 的快照 TTL、强刷和刷新入口需要复核。
+- 详情页、媒体卡片与分季弹窗
+  - `getMediaId()` 的字段顺序和 `0`/空值规则、媒体类型路由、创建和取消请求是否变化。
+- 订阅列表与编辑弹窗
+  - GET → PUT 的字段、`total_episode` 人工语义、`save_path`、洗版默认值、成功响应判断和保存后的刷新方式是否变化。
+- 订阅分享与 Fork
+  - Share schema、Fork 请求体、身份字段和响应 ID 是否变化。
+- 缓存与状态刷新
+  - Web 是否改为分页、筛选、增量同步或事件驱动；操作后是否仍重新获取权威订阅状态。
 
-如果 Web 改成按剧集组精确订阅/取消，但后端接口没有对应变化，应先确认 Web 是否只是 UI 层误导，不能让 TV 单独发明不同语义。
+Web 若只是共享后端缺陷或根本不会发起对应请求，应记录为上游行为，不给 TV 增加差异化兜底。
 
-## TV 端更新时重点检查
+## TV 端映射位置
 
-检查本仓库这些位置：
+上游契约变化时，至少映射到这些现有位置：
 
-- `MoviePilot-TV/Services/APIService.swift`
-  - MoviePilot 官方 `/download/` 开始返回未完成 `paused/stopped` 任务或新增状态查询参数时，`DownloadingInfo` 解码、`DownloadTaskViewModel`轮询替换与暂停/继续按钮必须同步对齐；当前不要用TV本地隐藏缓存伪造官方列表。
-  - 任何读取强类型对象后再完整 PUT/POST 的 API，都要核对当前后端可写 schema、排除字段和 Web 实际 body；新增可写字段不得因 TV 解码后丢失，系统/运行字段也不得因原始值保留而被误写回。
-  - 权限控制优先放在页面入口、按钮入口和自动预取根节点；`APIService` 不要批量伪造 `[]` / `false` / `nil`，真实调用应交给后端鉴权。
-  - 修改 `makeRequest` 的 401/403 处理前，必须先按 `../MoviePilot` 后端代码确认这些状态码在当前版本的语义。当前不能只因 `403` 字面含义就把所有 403 改成非登出，也不能把 `400 用户权限不足` 当成需要刷新会话；只有后端确实把普通功能权限不足改成 403 时，才同步调整 TV 端受限请求策略和兼容测试。
-  - Dashboard、下载管理、首页最近入库、整理历史等 Web 菜单入口按 `permissions.manage` 对齐；但真实后端仍按超管限制 `/dashboard/*`、`/system/setting/MediaServers` 和首页媒体服务器最近入库预取，非超管 TV 端应在 ViewModel 入口跳过这些后台请求，下载与整理等 manage 功能请求继续交给后端鉴权。
-  - 搜索/订阅页面入口仍分别按 `permissions.search` / `permissions.subscribe` 控制；但 `CustomFilterRules`、`UserFilterRuleGroups` 当前没有可用 public 配置项，普通用户会收到 `400 用户权限不足`，TV 端只能在超管会话下预取并应用这些自定义规则。`Storages`、`Directories`、`IndexerSites` 这类已公开配置应改走 `/system/setting/public/{key}`。
-  - 自动预取根节点包括首页订阅列表、详情/卡片预加载订阅状态、分季页订阅状态、聚合搜索里的订阅分享分页器、探索页“订阅分享”来源。无 `permissions.subscribe` 时这些入口不能发起 `/subscribe` 请求；按钮入口可以按权限提前返回，但 `APIService` 订阅方法不要再各自加一层假返回。
-  - `Token.super_user == true` 时全部功能可见；普通用户只在 `permissions.<key> == true` 时获得对应功能，`permissions == nil` 或 `{}` 都不能按默认权限放行。这里对齐 Web 登录阶段用原始 `response.permissions` 过滤菜单的行为，不对齐登录后 store merge `DEFAULT_PERMISSIONS` 的持久化默认值；同步 Web 登录逻辑时必须复核这条规则。
-  - `checkSeasonsNotExists(mediaInfo:)` 只能作为可选的媒体服务器状态查询；当前后端和 Web 只要求登录即可读取 `/mediaserver/notexists`，`APIService` 不要为它伪造空结果。TV 端如需避免隐藏的分季订阅 UI 自动预取，只能在对应 ViewModel 入口用 `canAccess(.subscribe)` 停掉这一条后台加载，并保证权限失败时返回空状态、保留订阅主流程、不能触发会话登出。
-  - `fetchSubscriptions(forceRefresh:)` 是否仍能一次拉取订阅列表快照。
-  - 订阅快照缓存是否仍是短 TTL，且读取不续期。
-  - `forceRefresh: true` 是否仍绕过缓存和旧 in-flight 请求。
-  - 创建、保存、删除、暂停、恢复、重置、搜索、复用订阅成功后是否清空订阅快照缓存和旧的 Bool 状态缓存。
-  - `baseURL` 和 token 变化后是否清空订阅缓存。
-  - `checkSubscription(media:season:)` 可以继续服务电影、详情页或卡片场景，但分季页不要重新退回逐季调用。
-  - `fetchSubscriptionLookup(media:season:)` 是否仍能从 lookup 响应按 Web 顺序解析完整 `media_source + media_id`、`tmdbid`、`doubanid`、`bangumiid`、`anilistid` 与遗留 `mediaid`；取消订阅继续使用这次最终确认的响应身份，成功后优先回写用户点击项的预加载状态。
-- `MoviePilot-TV/Models/Models.swift`
-  - `MediaInfo.apiMediaId` 和 `Subscribe.apiMediaId` 是否仍通过 `MediaIdentifier` 保持各自的字段优先级。
-  - `anilist_id`、`anilistid`、`media_source`、`media_id` 和遗留 `mediaid` 是否仍完整编解码。
-  - `MediaInfo.canDirectlySubscribe` 是否仍排除合集并只把明确的电视剧送入分季订阅；电影、未知及无 `collection_id` 的其他允许类型走直接订阅，不能再用“非电影即电视剧”二分。
-  - `SubscribeRequest` 是否仍能省略 `best_version` / `best_version_full`，并保留 `mediaid` fallback。
-  - `tmdbid: 0`、`bangumiid: 0` 和空白 `doubanid` 是否仍会 fallback 到有效 `mediaid`。
-  - raw 数值 `0` 是否仍会按 Web 的 JavaScript truthy 语义跳过；raw 负数仍是 truthy，不得擅自当作 `nil`；遗留 `mediaid` 是否仍作为不透明 fallback。
-  - `Subscribe` 是否仍解码后端维护的 `note`、`episode_priority`、`vote`、`username`、`current_priority`、`date` 等字段，并保留可编辑的 `filter`；编辑保存继续使用与 Web 等价的完整模型，但不得回传派生字段 `completed_episode`。后端新增公共可写字段时，必须同步更新模型或采用经端点合同确认的原值保留方案，不能让无关编辑清掉新字段。
-  - 首页从订阅卡片进入详情页时，是否仍保留订阅记录里的 fallback `mediaid`，避免把 `tmdbid: 0 + mediaid` 重建成不可匹配的详情媒体。
-- `MoviePilot-TV/ViewModels/HomeViewModel.swift`
-  - 首页订阅列表刷新是否能用 `forceRefresh: true` 绕过旧快照。
-  - 手动搜索订阅成功后，是否刷新首页订阅列表并发送 `.subscriptionDidUpdate`。
-  - 暂停/恢复、重置、删除订阅成功后，是否重新拉取最新订阅列表。
-- `MoviePilot-TV/ViewModels/MediaDetailViewModel.swift`
-  - 电视剧详情是否仍启用分季订阅入口，且不要求原始详情 payload 必须带 `tmdb_id`。
-  - 电影直接订阅/取消后是否用 `forceRefresh: true` 刷新 Header 和相关订阅状态。
-  - 如果保留历史媒体级取消路径，是否只在电影或明确兼容场景使用，不能让电视剧绕过分季订阅。
-- `MoviePilot-TV/ViewModels/MediaPreloader.swift`
-  - 详情页预加载完成后，是否刷新已有活跃详情页的订阅状态。
-  - `.subscriptionDidUpdate` 是否只刷新被详情页 pin 住的活跃任务，避免海报墙缓存全量强刷。
-- `MoviePilot-TV/ViewModels/SubscribeSeasonViewModel.swift`
-  - 分季订阅状态是否仍按 `media + season` 从 `/subscribe/` 快照映射。
-  - 分季订阅快照匹配是否严格保持 Web v2.15.1 的顺序：完整 `media_source + media_id` → 遗留 `mediaid` → raw `tmdbid` / `doubanid` / `bangumiid` / `anilistid`；较高优先级字段存在时必须立即返回比较结果，不能在不相等后继续用辅助 ID 误匹配。
-  - `selectedGroupId` 是否只影响新建订阅的 `episode_group`。
-  - 未明确选择洗版模式时是否省略 `best_version` / `best_version_full`；已完整入库季是否显式设置 `best_version: 1` 和 `best_version_full: 1`。
-  - 已订阅状态显示是否来自订阅记录上的 `episode_group`。
-  - 取消订阅前是否强制刷新订阅摘要。
-  - 取消订阅的请求形式是否仍与 Web 一致：使用媒体级删除并传入当前季号。
-- `MoviePilot-TV/Views/Pages/SubscribeSeasonView.swift`
-  - 已订阅卡片是否显示真实订阅配置，例如 `已订阅 · 默认剧集组` 或 `已订阅 · 剧集组 A`。
-  - 取消确认框是否明确剧名、季号和当前订阅使用的剧集组。
-  - 页面回前台或收到 `.subscriptionDidUpdate` 后是否强制刷新订阅状态。
-- 首页和详情页刷新入口
-  - 首页编辑订阅剧集组后，相关页面是否能收到通知或重新拉取状态。
-  - 其他设备修改订阅后，进入分季页、回到前台、取消前二次确认是否不会使用旧状态误删。
+- `MoviePilot-TV/Models/Models.swift`：`MediaIdentifier`、`MediaInfo`、`Subscribe`、`SubscribeRequest`、`SubscribeShare`。
+- `MoviePilot-TV/Services/APIService.swift`：订阅快照、创建/更新、查询、取消、状态、搜索、重置、Fork 与缓存失效。
+- `MoviePilot-TV/ViewModels/HomeViewModel.swift`、`MediaDetailViewModel.swift`、`SubscribeSeasonViewModel.swift`、`MediaPreloader.swift`：状态来源与刷新入口。
+- `MoviePilot-TV/Views/Pages/SubscribeSeasonView.swift` 及订阅编辑/Fork Sheet：用户入口与目标版本 Web 行为。
 
-## 必跑测试
+## 需要重新设计的上游信号
 
-分季订阅逻辑改动后，至少运行：
+看到下面任一变化，不要只改字段名或补一个测试：
 
-```sh
-xcodebuild test \
-  -project "MoviePilot-TV.xcodeproj" \
-  -scheme "MoviePilot-TV" \
-  -configuration Debug \
-  -destination "platform=tvOS Simulator,name=Apple TV" \
-  -only-testing:MoviePilot-TV-Tests/SubscribeSeasonContentViewTests \
-  CODE_SIGNING_ALLOWED=NO \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY="" \
-  -skipPackagePluginValidation
-```
+- `/subscribe/` 不再返回完整快照，改为分页、筛选、增量同步或事件流。
+- 后端订阅唯一性加入 `episode_group`，或新增按剧集组查询/删除的正式 API。
+- 媒体身份优先级、raw `0`/负数规则、遗留 `mediaid` 格式或创建请求身份字段发生变化。
+- season 值域变化，或 S00 不再由数值 `0` 表示。
+- Web 改变电影/电视剧/合集/插件类型的订阅入口模型。
+- 编辑从完整 PUT 改为 PATCH，公共可写/排除字段变化，或 `total_episode`、`save_path`、洗版字段的空值/default 语义变化。
+- 媒体级删除的 owner、season 或命中范围变化，或官方改为精确订阅 ID 删除。
+- Share/Fork 的业务 ID、身份字段、请求体或成功响应结构变化。
 
-如果改动涉及详情页 Header 的订阅/取消订阅行为，还应至少运行：
+## 验证与文档边界
 
-```sh
-xcodebuild test \
-  -project "MoviePilot-TV.xcodeproj" \
-  -scheme "MoviePilot-TV" \
-  -configuration Debug \
-  -destination "platform=tvOS Simulator,name=Apple TV" \
-  -only-testing:MoviePilot-TV-Tests/MediaDetailViewHeaderActionTests \
-  -parallel-testing-enabled NO \
-  -maximum-concurrent-test-simulator-destinations 1 \
-  CODE_SIGNING_ALLOWED=NO \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY="" \
-  -skipPackagePluginValidation
-```
-
-完整验证仍按 `AGENTS.md` 执行依赖解析、Simulator build 和完整 test。涉及真实后端契约时，还应按 `docs/backend-compatibility-tests.md` 运行真实后端兼容测试。
-
-重点保留或补充这些用例：
-
-- 默认分组订阅第 1 季后，切到其他剧集组，第 1 季仍显示 `已订阅 · 默认剧集组`。
-- 剧集组 A 订阅第 1 季后，切到默认或剧集组 B，第 1 季仍显示 `已订阅 · 剧集组 A`。
-- 当前 Picker 的 `episode_group` 不参与已订阅身份判断。
-- 已订阅卡片点击取消时，确认框显示真实剧名、季号和剧集组。
-- 电影仍可直接订阅，电视剧即使来自 TMDB、Douban、Bangumi、AniList 或插件来源也不能直接订阅，必须进入分季订阅。
-- 新建订阅未设置洗版模式时，payload 省略 `best_version` / `best_version_full`；显式 `0` 仍应保留。
-- 已完整入库季创建分季订阅时，payload 同时包含 `best_version: 1` 和 `best_version_full: 1`。
-- 部分缺失或未知入库状态的季创建订阅时，payload 省略洗版字段，由后端默认配置决定。
-- 订阅快照里 `tmdbid: 0 + mediaid: "tmdb:<有效 ID>"` 时，分季页仍显示已订阅；取消时保持 Web 请求形式，已知后端可能返回成功却不删除记录，TV 暂不兜底。
-- 订阅快照里 `bangumiid: 0 + mediaid: "tmdb:<有效 ID>"` 时，分季页仍能通过 fallback 匹配。
-- 订阅快照里空白 `doubanid + mediaid: "tmdb:<有效 ID>"` 时，分季页仍能通过 fallback 匹配。
-- 分季快照里 canonical 或遗留 `mediaid` 已存在但不匹配时，即使辅助 raw ID 相同也不能误标已订阅；raw Douban、Bangumi、AniList 的正向回退均需覆盖。
-- raw 数值 `0` 必须继续回退，raw 负数则按 Web truthy 语义参与匹配；不要用“非正数统一视为缺失”的 TV 特例替代官方规则。
-- lookup 响应同时含辅助 TMDB 与 custom/AniList canonical 身份时，取消请求必须使用响应中的 canonical 身份；成功后当前点击卡片的缓存状态也必须变为未订阅。
-- 媒体详情 payload 里 `tmdb_id: 0` / 空白 `douban_id` / `bangumi_id: 0` 时，仍能 fallback 到 `mediaid_prefix + media_id`。
-- 电视剧详情页和预加载不再因为原始 `tmdb_id == nil` 隐藏或跳过分季订阅入口；剧集组加载只在主媒体身份为 TMDB 且有有效 TMDB ID 时执行。
-- 订阅快速新增继续发送精简配置 payload；编辑保存与 Web 一样回传完整订阅模型，保留 `note`、`episode_priority`、`vote`、`filter`、`username`、`current_priority`、`date`，但不回传 `completed_episode`；v2.14.6 后端保存前必须丢弃运行态字段。
-- 完整对象更新的聚焦测试至少覆盖：后端新增的可写字段在无关编辑后仍保留；后端排除的运行字段不会被写回；字段的 absent/null/default 不会因 TV 解码再编码而意外互换。
-- 新增上述测试前先确认目标端点确实承诺 round-trip；不为没有回写合同的所有未知字段建立通用动态模型。
-- 普通用户执行真实后端只读巡检时，`/subscribe/` 返回的每条记录都属于当前登录用户名；超级用户仍可读取全局订阅。
-- 首页订阅卡片跳详情时，`Subscribe` 重建出的 `MediaInfo` 仍保留有效 fallback `mediaid`。
-- 取消前如果订阅已被其他设备删除，本机刷新为未订阅，不继续发起错误取消。
-- 首页订阅列表通知刷新、页面回前台刷新、手动搜索订阅后的刷新都能绕过缓存。
-- 并发强制刷新时，旧的订阅快照响应、错误或缓存写入不能覆盖更新后的快照。
-- 几十或上百季电视剧只触发一次订阅列表快照请求，不重新逐季调用 `/subscribe/media/{mediaid}`。
-- MoviePilot 官方支持暂停任务返回后，覆盖“未完成暂停→轮询后仍在→可继续”及“已完成 stopped→不回流”两组下载任务合同。
-
-## 需要立即重新设计的信号
-
-看到下面任一变化，不要只做小修：
-
-- 后端或 Web 改变 raw 数值 `0` 与遗留 `mediaid` 的优先级或真假值规则。
-- 后端订阅快照不再返回 `mediaid` fallback，或 `mediaid` 格式不再是 `<source>:<id>`。
-- Web 的 `getMediaId()` 不再使用当前 fallback 顺序，或开始优先使用不同字段作为订阅身份。
-- 后端订阅唯一性加入 `episode_group`。
-- 后端新增按 `episode_group` 查询或删除订阅的正式 API。
-- `GET /subscribe/` 改成分页、筛选、按状态默认过滤或不再返回完整订阅。
-- `GET /subscribe/media/{mediaid}` 返回不再包含可解析的订阅归属 ID。
-- `DELETE /subscribe/media/tmdb:<id>` 未传 `season` 时不再删除全部季，或新增了明确的批量取消确认契约。
-- 后端正式支持或要求 `DELETE /subscribe/media/bangumi:<id>`，导致当前 fallback 到订阅 `id` 删除的策略需要重审。
-- `episode_group` 从字符串改成对象、数组或其他结构。
-- Web 分季弹窗开始支持同一季多个剧集组订阅状态。
-- Web 分季弹窗开始提供按剧集组取消订阅。
-- Web 详情页顶部订阅按钮重新开始覆盖电视剧，或 Douban/Bangumi 详情页开始使用不同于当前分季入口的订阅模型。
-- 后端再次改变 `best_version` / `best_version_full` 的空值和 `0` 语义。
-- 订阅列表缓存、分页或增量同步改成后端正式契约。
-- 订阅修改在后端变成局部 patch，并且 `episode_group` 更新不再触发现有订阅刷新事件。
-- `/download/` 开始返回未完成的 `paused/stopped` 任务、增加状态筛选参数，或 Web 新增暂停任务列表/继续入口；必须立即复核并对齐 TV，不能继续沿用“暂停后消失”的旧行为。
+- 修改订阅契约后，按 `AGENTS.md` 运行标准 tvOS Simulator 构建和完整测试；涉及真实后端时，按 `docs/backend-compatibility-tests.md` 执行相应只读或显式副作用套件。
+- 只为实际变化的契约补聚焦回归测试。畸形数据矩阵、请求代际、会话切换和缓存竞态继续由对应单元测试与 ReviewPlan 管理，不在本清单逐项展开。
+- 如果本次变化属于下载、资源搜索、SSE、通用权限或其他非订阅路径，更新 `.agents/prompts/frontend-update.md` 或相应专项文档，不继续扩张本文件。
