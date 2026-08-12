@@ -1378,19 +1378,23 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
 
   @MainActor
   func testReadOnlyReorganizePreviewCompatibility() async throws {
+    var didRunPreview = false
     try await withReadOnlyBackend { service, config in
-      await runBackendCompatibilityStep(
+      let didRunForAccount = await runBackendCompatibilityStep(
         "manual reorganize preview",
         service: service,
         config: config,
         requirement: .permission(.manage)
       ) {
         let historyResponse = try await service.fetchTransferHistory(page: 1, count: 20, title: nil)
-        guard let history = historyResponse.list.first, let sourceFileItem = history.src_fileitem else {
+        guard
+          let history = historyResponse.list.first(where: { $0.src_fileitem != nil }),
+          let sourceFileItem = history.src_fileitem
+        else {
           print(
             "Skipping manual reorganize preview for \(config.activeAccountDiagnostic): no transfer history with a source file item."
           )
-          return
+          return false
         }
 
         let form = ReorganizeForm(
@@ -1417,21 +1421,24 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
           preview.summary.total,
           "Preview success and failure counts must cover every returned item."
         )
-        XCTAssertTrue(
-          preview.items.allSatisfy { $0.success != nil },
-          "Every preview item must report an explicit success value."
-        )
         XCTAssertEqual(
-          preview.items.filter { $0.success == true }.count,
+          preview.items.filter(\.success).count,
           preview.summary.success,
           "Preview successful-item count must match the response summary."
         )
         XCTAssertEqual(
-          preview.items.filter { $0.success == false }.count,
+          preview.items.filter { !$0.success }.count,
           preview.summary.failed,
           "Preview failed-item count must match the response summary."
         )
+        return true
       }
+      didRunPreview = didRunPreview || didRunForAccount == true
+    }
+    if !didRunPreview {
+      throw XCTSkip(
+        "No accessible backend compatibility account has transfer history with a source file item."
+      )
     }
   }
 

@@ -3012,7 +3012,7 @@ nonisolated struct ManualTransferPreviewItem: Codable, Hashable {
   let source: String?
   let target: String?
   let target_dir: String?
-  let success: Bool?
+  let success: Bool
   let message: String?
   let type: String?
   let title: String?

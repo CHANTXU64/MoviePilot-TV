@@ -98,6 +98,9 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("best_version"))
     XCTAssertTrue(source.contains("完整 PUT"))
     XCTAssertTrue(source.contains("订阅写入、状态修改、搜索、重置、删除和 Fork"))
+    XCTAssertTrue(source.contains("MoviePilot v2.15.3 起"))
+    XCTAssertTrue(source.contains("同一媒体同一季可以存在不同剧集组的订阅"))
+    XCTAssertTrue(source.contains("这与后端已按剧集组区分查重/存在性的行为并不对称"))
   }
 
   func testSubscribeSeasonViewHidesAvailabilityBadgeWhenStatusTextIsNil() throws {
