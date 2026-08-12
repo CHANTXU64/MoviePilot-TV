@@ -2,7 +2,7 @@
 
 本文档只记录 MoviePilot 后端或配套 Web 前端发生变化时，可能让 TV 端现有订阅路径产生运行错误、状态误判或错误操作的跨端契约。通用 API、下载、资源搜索、客户端并发实现和测试组织由 `.agents/prompts/frontend-update.md`、`.agents/ReviewPlan.md` 与测试代码负责，不在这里重复。
 
-当前 TV 端声明的最低兼容 MoviePilot 版本为 `v2.15.1`。每次更新必须以后端目标标签及其 `FRONTEND_VERSION` 指定的 Web 版本为准，重新核对实际调用链；本文记录的既有行为不是对未来版本的永久假设。
+当前 TV 端声明的最低兼容 MoviePilot 版本为 `v2.15.6`。每次更新必须以后端目标标签及其 `FRONTEND_VERSION` 指定的 Web 版本为准，重新核对实际调用链；本文记录的既有行为不是对未来版本的永久假设。
 
 ## 使用原则
 
