@@ -54,14 +54,48 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("sourceSession: sourceSession"))
   }
 
-  func testSystemViewKeepsConnectionAndAppInfoEntryPoints() throws {
+  func testSystemViewKeepsConnectionAppInfoAndChangelogEntryPoints() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
 
     XCTAssertTrue(source.contains("\"连接与APP信息\""))
     XCTAssertTrue(source.contains("\"连接\""))
     XCTAssertTrue(source.contains("\"APP 信息\""))
+    XCTAssertTrue(source.contains("\"版本更新历史\""))
+    XCTAssertTrue(source.contains("row(\"版本更新历史\", showsDisclosure: true)"))
+    XCTAssertTrue(source.contains("push(.changelog)"))
     XCTAssertTrue(source.contains("\"MoviePilot TV APP\""))
     XCTAssertFalse(source.contains("\"连接与版本\""))
+  }
+
+  func testUpdateNoticeOnlyChecksWhenSettingsTabIsSelected() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+
+    XCTAssertTrue(source.contains(".onChange(of: isSelected)"))
+    XCTAssertTrue(source.contains("guard isSelected, updateNotice == nil else { return }"))
+    XCTAssertTrue(source.contains("AppChangelog.markPresented(entry)"))
+    XCTAssertTrue(source.contains(".alert(item: $updateNotice)"))
+  }
+
+  func testChangelogSheetUsesReadableTvOSLayout() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+
+    XCTAssertTrue(source.contains(".frame(width: 1_440, height: 1_025)"))
+    XCTAssertTrue(source.contains(".font(.callout)"))
+    XCTAssertTrue(source.contains(".font(isPrimary ? .headline.bold() : .subheadline.bold())"))
+    XCTAssertTrue(source.contains("Text(entry.releaseDate)"))
+    XCTAssertTrue(source.contains("value: \"\\(entry.releaseDate) · MoviePilot \\(entry.compatibleMoviePilotVersion)\""))
+  }
+
+  func testReleaseWorkflowUsesMergedChangelogAsReleaseNotesSource() throws {
+    let source = try Self.source(at: ".agents/prompts/release.md")
+
+    XCTAssertTrue(source.contains("## 更新内容"))
+    XCTAssertTrue(source.contains("### 新增功能"))
+    XCTAssertFalse(source.contains("## 主要更新"))
+    XCTAssertTrue(source.contains("只有兼容 MoviePilot 后端基线相对上一发布版本发生变化时"))
+    XCTAssertTrue(source.contains("`highlights` → `更新内容` 标题下最前面的摘要条目"))
+    XCTAssertTrue(source.contains("Changelog 改动未合并到 `main` 前，不得进入正式发布"))
+    XCTAssertTrue(source.contains("保持文字和顺序一致"))
   }
 
   func testSearchSettingsAndHeaderKeepPermissionAndLayoutContract() throws {

@@ -12,10 +12,11 @@
 2. Release Notes 必须先给用户确认。用户确认前，禁止创建 GitHub Release。
 3. 禁止用 `swift build`、`swift test` 或 `swift package resolve` 冒充本项目验证。
 4. 禁止把未完成、未合并、未验证的内容写进 Release Notes。
-5. Release Notes 必须使用本文固定格式，不要临场模仿其他格式。
-6. AI 不得为了“完成任务”而跳过 Release Notes 用户确认；发布动作必须是用户确认 Release Notes 之后的第二步。
+5. Release Notes 必须使用本文固定格式，并与代码内对应版本的 Changelog 内容一致，不要临场模仿或二次改写。
+6. AI 不得为了“完成任务”而跳过 Changelog 内容确认、代码合并和正式发布确认；GitHub 发布动作必须发生在对应条目已合并且用户再次明确确认正式发布之后。
 7. 发布版本号必须同时同步 README 与 Xcode 工程版本号，不能只改其中一个。
 8. 正式发布是 `AGENTS.md` Git 工作流的唯一例外：用户确认 Release Notes 并明确允许 commit、Push 后，必须确认本地 `main` 与远端 `main` 一致，然后直接提交并推送 `main`，不要创建发布分支或 Pull Request。该例外不适用于其他任务。
+9. `MoviePilot-TV/Models/AppChangelog.swift` 是版本说明的单一事实来源。新版本必须先在普通功能分支写入并经用户确认、验证、推送和合并，之后才能进入正式发布；这些 Git 动作仍分别需要用户明确授权。
 
 ## 发布模式判断
 
@@ -27,8 +28,11 @@
 2. 检查版本号格式。
 3. 检查现有版本记录是否已有同名版本。
 4. 收集从上一个版本到当前发布目标分支的变更。
-5. 按本文固定格式生成 Release Notes 草稿。
+5. 按本文固定格式生成 Changelog 草稿；`更新内容` 标题下最前面的摘要条目用于弹窗，后续小节是完整说明。
 6. 将草稿发给用户确认。
+7. 用户确认内容后，在普通 `ai/xxx` 分支把该版本作为 `AppChangelog.entries` 的第一项写入代码，并补充或更新测试。
+8. 按 `AGENTS.md` 完成验证；commit、Push、创建 PR 和合并都必须分别取得用户明确授权。
+9. Changelog 改动未合并到 `main` 前，不得进入正式发布。
 
 准备发布阶段不得创建 GitHub Release。
 
@@ -55,6 +59,11 @@
    - 两处 `MARKETING_VERSION` 必须改为不带 `v` 的版本号，例如发布 `v0.3.1` 时写 `0.3.1`。
    - 默认不要修改 `CURRENT_PROJECT_VERSION`，除非用户明确要求递增 build number。
    - 不要修改 `MoviePilot-TV-Tests` test target 的 `MARKETING_VERSION = 1.0`。
+3. `MoviePilot-TV/Models/AppChangelog.swift`
+   - 对应版本条目必须已经作为第一项合并到 `main`。
+   - `version` 必须与发布版本号完全一致，`releaseDate` 使用发布日期。
+   - `compatibleMoviePilotVersion` 必须与该版本实际兼容基线一致。
+   - 不要在正式发布阶段临时改写已确认的 `highlights`、`updates`、`fixes` 或 `optimizations`。
 
 ## Release Notes 固定格式
 
@@ -65,30 +74,45 @@ Release Notes 必须使用下面的固定 Markdown 格式。不得自行更改�
 
 - ...
 
-## 修复
+### 新增功能
 
 - ...
 
-## 优化
+### 修复
+
+- ...
+
+### 优化
 
 - ...
 ```
 
+代码字段与 Markdown 内容固定对应：`highlights` → `更新内容` 标题下最前面的摘要条目、`updates` → `新增功能`、`fixes` → `修复`、`optimizations` → `优化`。GitHub Release Notes 必须从已合并的对应 `AppChangelogEntry` 逐项复制，保持文字和顺序一致。
+
 ## 小节写法
 
-### `## 更新内容`
+### `## 更新内容` 下的摘要
+
+这是新版本首次进入设置页时弹窗显示的唯一内容，必须简短并满足：
+
+1. 只有兼容 MoviePilot 后端基线相对上一发布版本发生变化时，才写一条 `兼容 MoviePilot 后端 vX.Y.Z。`；基线未变化时省略。首个版本的初始兼容基线只保留在版本信息中，不作为摘要更新。
+2. 只写用户容易感知的新功能、重大体验或性能优化、重大 Bug 修复。
+3. 不写小角标、小范围样式调整、内部重构、测试、Prompt、工作流等细节。
+4. 每条只概括结果，具体行为和修复范围写在后面的完整小节。
+
+### `### 新增功能`
 
 写用户可感知的新功能、新页面、新交互或重要能力。
 
 不要把内部 Prompt、Agent 工作流、代码审查规则等包装成普通用户功能。如果本次只是内部维护、文档、CI 或发布流程调整，没有用户可感知新能力，可以省略本节。
 
-### `## 修复`
+### `### 修复`
 
 写明确修复的 Bug、崩溃、状态错误、接口异常、焦点问题、订阅状态错误等。
 
 必须基于已经合并到发布目标分支的提交，不得写待办或猜测。
 
-### `## 优化`
+### `### 优化`
 
 写性能优化、体验优化、代码结构优化、稳定性增强等。
 
@@ -96,9 +120,10 @@ Release Notes 必须使用下面的固定 Markdown 格式。不得自行更改�
 
 ## 空小节规则
 
-1. `## 更新内容`、`## 修复`、`## 优化` 如果确实没有内容，可以省略整个小节。
-2. 不允许保留空标题。
-3. 不要写“无”。
+1. `## 更新内容` 不得省略；标题下最前面的摘要不得为空。兼容基线未变化时，不要为了满足格式添加兼容说明。
+2. `### 新增功能`、`### 修复`、`### 优化` 如果确实没有内容，可以省略整个小节。
+3. 不允许保留空标题。
+4. 不要写“无”。
 
 ## 草稿确认规则
 
@@ -118,9 +143,11 @@ Release Notes 必须使用下面的固定 Markdown 格式。不得自行更改�
 5. CI 是否通过。
 6. README Release 徽章和安装示例 tag 是否已经同步到用户提供的版本号。
 7. `MoviePilot-TV` App target 的 Debug / Release `MARKETING_VERSION` 是否已经同步到用户提供的不带 `v` 版本号。
-8. 如果运行在真实 Mac/Xcode 环境，必须按 `AGENTS.md` 的标准 `xcodebuild` 命令完成本地构建/测试。
-9. 如果运行在非真实开发环境，必须说明无法本地测试，并确认 GitHub Actions 或真实 Mac/Xcode 环境已经完成验证。
-10. 如果检查失败，必须停止发布，并向用户列出阻塞项。
+8. `main` 中是否已有版本号、发布日期和兼容后端版本一致的 `AppChangelogEntry`，且更新摘要和完整小节已经用户确认。
+9. GitHub Release Notes 草稿是否逐项复用了该条目，而不是重新从提交记录生成。
+10. 如果运行在真实 Mac/Xcode 环境，必须按 `AGENTS.md` 的标准 `xcodebuild` 命令完成本地构建/测试。
+11. 如果运行在非真实开发环境，必须说明无法本地测试，并确认 GitHub Actions 或真实 Mac/Xcode 环境已经完成验证。
+12. 如果检查失败，必须停止发布，并向用户列出阻塞项。
 
 ## 本项目发布事实
 
@@ -140,11 +167,12 @@ Release Notes 必须使用下面的固定 Markdown 格式。不得自行更改�
 ## 正式发布步骤
 
 1. 确认用户已提供版本号。
-2. 确认 README 与 Xcode 工程版本号已同步。
-3. 确认用户已审核并批准 Release Notes。
-4. 确认测试/CI 状态满足发布门禁。
-5. 确认本地 `main` 与远端 `main` 一致，将版本同步和本次发布相关改动直接提交并推送 `main`。
-6. 创建 GitHub Release。
-7. 等待 GitHub Actions 发布流程。
-8. 检查 `MoviePilot-TV-unsigned.ipa` 是否成功上传到 Release。
-9. 向用户报告：Release 链接、版本号、workflow 状态、产物名称、是否 unsigned。
+2. 确认对应 `AppChangelogEntry` 已经按普通分支/PR 流程合并到 `main`。
+3. 确认 README 与 Xcode 工程版本号已同步。
+4. 确认用户已审核并批准从该条目生成的 Release Notes。
+5. 确认测试/CI 状态满足发布门禁。
+6. 确认本地 `main` 与远端 `main` 一致，将版本同步和本次发布相关改动直接提交并推送 `main`。
+7. 使用已合并 Changelog 的对应内容创建 GitHub Release。
+8. 等待 GitHub Actions 发布流程。
+9. 检查 `MoviePilot-TV-unsigned.ipa` 是否成功上传到 Release。
+10. 向用户报告：Release 链接、版本号、workflow 状态、产物名称、是否 unsigned。
