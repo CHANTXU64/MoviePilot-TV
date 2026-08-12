@@ -21,6 +21,8 @@ struct SystemView: View {
   @StateObject private var recommendViewModel = RecommendViewModel(selectShelf: false)
   @ObservedObject private var apiService = APIService.shared
   @State private var showAppInfo = false
+  @State private var selectedChangelogEntry: AppChangelogEntry?
+  @State private var updateNotice: AppChangelogEntry?
   @State private var showLogoutConfirmation = false
   @State private var route: [SystemSettingsPage] = []
   @State private var displayedRoute: [SystemSettingsPage] = []
@@ -97,10 +99,12 @@ struct SystemView: View {
       pageOffsetDepth = route.count
       viewModel.checkKeychainStatus()
       refreshFilterRulesForEntryIfNeeded()
+      presentUpdateNoticeIfNeeded()
     }
     .onChange(of: isSelected) { _, selected in
       guard selected else { return }
       refreshFilterRulesForEntryIfNeeded()
+      presentUpdateNoticeIfNeeded()
     }
     .task {
       await viewModel.loadSystemInfo()
@@ -108,6 +112,19 @@ struct SystemView: View {
     }
     .sheet(isPresented: $showAppInfo) {
       appInfoSheet
+    }
+    .sheet(item: $selectedChangelogEntry) { entry in
+      changelogDetailSheet(entry)
+    }
+    .alert(item: $updateNotice) { entry in
+      Alert(
+        title: Text("已更新到 \(entry.version)"),
+        message: Text(AppChangelog.updateNoticeMessage(for: entry))
+          .font(.callout),
+        dismissButton: .default(Text("知道了")) {
+          AppChangelog.markPresented(entry)
+        }
+      )
     }
   }
 
@@ -175,6 +192,8 @@ struct SystemView: View {
             if canConfigureRecommendations {
               recommendationPage
             }
+          case .changelog:
+            changelogPage
           }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -302,6 +321,13 @@ struct SystemView: View {
           row("APP 信息", value: viewModel.appVersion)
         }
         .focused($focusedItem, equals: .appInfo)
+
+        Button {
+          push(.changelog)
+        } label: {
+          row("版本更新历史", showsDisclosure: true)
+        }
+        .focused($focusedItem, equals: .changelog)
       }
     }
   }
@@ -384,6 +410,69 @@ struct SystemView: View {
       .padding(.bottom, 46)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+  }
+
+  private var changelogPage: some View {
+    section(nil) {
+      ForEach(AppChangelog.entries) { entry in
+        Button {
+          selectedChangelogEntry = entry
+        } label: {
+          row(
+            entry.version,
+            value: "\(entry.releaseDate) · MoviePilot \(entry.compatibleMoviePilotVersion)",
+            showsDisclosure: true
+          )
+        }
+        .focused($focusedItem, equals: .changelogVersion(entry.version))
+      }
+    }
+  }
+
+  private func changelogDetailSheet(_ entry: AppChangelogEntry) -> some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 28) {
+        VStack(alignment: .leading, spacing: 10) {
+          Text(entry.version)
+            .font(.title2.bold())
+          Text(entry.releaseDate)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+
+        Divider()
+
+        changelogSection("更新内容", items: entry.highlights, isPrimary: true)
+        changelogSection("新增功能", items: entry.updates)
+        changelogSection("修复", items: entry.fixes)
+        changelogSection("优化", items: entry.optimizations)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.horizontal, 72)
+      .padding(.vertical, 54)
+    }
+    .frame(width: 1_440, height: 1_025)
+  }
+
+  @ViewBuilder
+  private func changelogSection(
+    _ title: String,
+    items: [String],
+    isPrimary: Bool = false
+  ) -> some View {
+    if !items.isEmpty {
+      VStack(alignment: .leading, spacing: 16) {
+        Text(title)
+          .font(isPrimary ? .headline.bold() : .subheadline.bold())
+
+        ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+          Text("• \(item)")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+    }
   }
 
   private var recommendationPage: some View {
@@ -592,6 +681,8 @@ struct SystemView: View {
     switch poppedPage {
     case .connection, .root:
       target = .connection
+    case .changelog:
+      target = .changelog
     case .mediaSourceSelection:
       target = .mediaSourceSelection
     case .siteSelection:
@@ -616,6 +707,8 @@ struct SystemView: View {
       target = .waitBackgroundImage
     case .connection:
       target = .relogin
+    case .changelog:
+      target = AppChangelog.latest.map { .changelogVersion($0.version) } ?? .changelog
     case .mediaSourceSelection:
       target = .defaultMediaSource
     case .siteSelection:
@@ -637,7 +730,7 @@ struct SystemView: View {
     switch route.last {
     case .softFilter:
       return .softFilterNone
-    case .root, .connection, .mediaSourceSelection, .siteSelection, .hardFilter,
+    case .root, .connection, .changelog, .mediaSourceSelection, .siteSelection, .hardFilter,
       .recommendation, .none:
       return .hardFilterNone
     }
@@ -647,7 +740,7 @@ struct SystemView: View {
     switch route.last {
     case .softFilter:
       return .softFilterRule(ruleId)
-    case .root, .connection, .mediaSourceSelection, .siteSelection, .hardFilter,
+    case .root, .connection, .changelog, .mediaSourceSelection, .siteSelection, .hardFilter,
       .recommendation, .none:
       return .hardFilterRule(ruleId)
     }
@@ -672,6 +765,12 @@ struct SystemView: View {
     Task {
       await viewModel.loadCustomFilterRules()
     }
+  }
+
+  private func presentUpdateNoticeIfNeeded() {
+    guard isSelected, updateNotice == nil else { return }
+    guard let entry = AppChangelog.pendingUpdate(appVersion: viewModel.appVersion) else { return }
+    updateNotice = entry
   }
 
   private func toggleDefaultSearchSite(_ siteId: Int) {
@@ -714,9 +813,11 @@ struct SystemView: View {
         return "查看当前登录状态、服务器地址和后端连接状态。"
       case .appInfo:
         return nil
+      case .changelog:
+        return "查看 MoviePilot TV 各版本的更新摘要、完整改动和后端兼容版本。"
       case .allSites, .site, .defaultMediaSource, .mediaSource, .relogin, .logout,
         .hardFilterNone, .softFilterNone, .hardFilterRule, .softFilterRule,
-        .recommendationShelf:
+        .recommendationShelf, .changelogVersion:
         break
       }
     }
@@ -737,6 +838,8 @@ struct SystemView: View {
       return nil
     case .connection:
       return "查看当前登录状态、服务器地址和后端连接状态。"
+    case .changelog:
+      return "查看 MoviePilot TV 各版本的更新摘要、完整改动和后端兼容版本。"
     case .mediaSourceSelection:
       return "设置聚合搜索默认使用的媒体来源。（只影响 TV 端）"
     case .siteSelection:
@@ -794,6 +897,7 @@ struct SystemView: View {
 private enum SystemSettingsPage: Hashable {
   case root
   case connection
+  case changelog
   case mediaSourceSelection
   case siteSelection
   case hardFilter
@@ -803,6 +907,8 @@ private enum SystemSettingsPage: Hashable {
 
 private enum SystemSettingsFocus: Hashable {
   case connection
+  case changelog
+  case changelogVersion(String)
   case mediaSourceSelection
   case defaultMediaSource
   case mediaSource(MediaSearchSource)
