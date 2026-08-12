@@ -233,7 +233,7 @@ struct SystemView: View {
           Button {
             push(.recommendation)
           } label: {
-            row("推荐货架", showsDisclosure: true)
+            row("推荐页显示内容", showsDisclosure: true)
           }
           .focused($focusedItem, equals: .recommendation)
         }
