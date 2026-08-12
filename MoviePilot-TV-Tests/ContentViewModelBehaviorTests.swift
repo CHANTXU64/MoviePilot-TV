@@ -282,7 +282,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
 
     await viewModel?.prepareStartupIfNeeded()
 
-    XCTAssertEqual(service.settings?.BACKEND_VERSION, "v2.15.1")
+    XCTAssertEqual(service.settings?.BACKEND_VERSION, "v2.15.6")
     XCTAssertNil(viewModel?.backendVersionWarning)
 
     service.baseURLForTesting = "https://old.content-view-model-tests.local"
@@ -497,7 +497,7 @@ private actor ContentViewModelURLProtocolStub {
     case "old.content-view-model-tests.local":
       backendVersion = "v2.14.9"
     default:
-      backendVersion = "v2.15.1"
+      backendVersion = "v2.15.6"
     }
 
     let rejectsSettings = url.path == "/api/v1/system/global"
@@ -525,7 +525,7 @@ private actor ContentViewModelURLProtocolStub {
         .data(using: .utf8)!
     } else if url.path == "/api/v1/system/global" {
       data =
-        #"{"success":true,"data":{"TMDB_IMAGE_DOMAIN":"image.tmdb.org","GLOBAL_IMAGE_CACHE":true,"BACKEND_VERSION":"\#(backendVersion)","FRONTEND_VERSION":"v2.15.1"}}"#
+        #"{"success":true,"data":{"TMDB_IMAGE_DOMAIN":"image.tmdb.org","GLOBAL_IMAGE_CACHE":true,"BACKEND_VERSION":"\#(backendVersion)","FRONTEND_VERSION":"v2.15.6"}}"#
         .data(using: .utf8)!
     } else if url.path == "/api/v1/system/global/user" {
       data =

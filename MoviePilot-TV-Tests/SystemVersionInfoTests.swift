@@ -10,7 +10,7 @@ final class SystemVersionInfoTests: XCTestCase {
     XCTAssertEqual(AppVersionInfo.displayAppVersion(shortVersion: ""), "未知")
     XCTAssertEqual(AppVersionInfo.displayAppVersion(shortVersion: "   "), "未知")
     XCTAssertEqual(AppVersionInfo.displayAppVersion(shortVersion: nil), "未知")
-    XCTAssertEqual(AppVersionInfo.compatibleMoviePilotVersion, "v2.15.1")
+    XCTAssertEqual(AppVersionInfo.compatibleMoviePilotVersion, "v2.15.6")
   }
 
   func testMoviePilotVersionComparisonIgnoresPrefixAndReleaseSuffix() {
@@ -49,12 +49,12 @@ final class SystemVersionInfoTests: XCTestCase {
     )
   }
 
-  func testV2151CompatibilityBoundary() {
-    XCTAssertEqual(AppVersionInfo.supportsMoviePilotVersion("v2.15.0"), false)
-    XCTAssertEqual(AppVersionInfo.supportsMoviePilotVersion("v2.15.1"), true)
-    XCTAssertEqual(AppVersionInfo.supportsMoviePilotVersion("v2.15.2"), true)
-    XCTAssertEqual(AppVersionInfo.moviePilotVersionCompatibility("v2.15.0"), .unsupported)
-    XCTAssertEqual(AppVersionInfo.moviePilotVersionCompatibility("v2.15.1"), .supported)
+  func testV2156CompatibilityBoundary() {
+    XCTAssertEqual(AppVersionInfo.supportsMoviePilotVersion("v2.15.5"), false)
+    XCTAssertEqual(AppVersionInfo.supportsMoviePilotVersion("v2.15.6"), true)
+    XCTAssertEqual(AppVersionInfo.supportsMoviePilotVersion("v2.15.7"), true)
+    XCTAssertEqual(AppVersionInfo.moviePilotVersionCompatibility("v2.15.5"), .unsupported)
+    XCTAssertEqual(AppVersionInfo.moviePilotVersionCompatibility("v2.15.6"), .supported)
     XCTAssertEqual(AppVersionInfo.moviePilotVersionCompatibility("v2.beta.15"), .unparseable)
   }
 

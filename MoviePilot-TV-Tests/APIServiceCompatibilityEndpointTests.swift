@@ -518,6 +518,20 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
       _ = try await service.previewManualTransfer(form: form)
       XCTFail("整理预览响应缺少 success 时必须按 Web 契约判定失败")
     } catch {}
+
+    await CompatibilityEndpointURLProtocol.stub.setManualTransferResponses([
+      Data(#"{"success":true}"#.utf8),
+      Data(#"{"success":true,"data":null}"#.utf8),
+      Data(
+        #"{"success":true,"data":{"summary":{"total":1,"success":1,"failed":0},"items":[{"source":"/downloads/episode.mkv","target":"/library/Show/S01E01.mkv"}]}}"#.utf8
+      ),
+    ])
+    for diagnostic in ["缺少 data", "data 为 null", "条目缺少 success"] {
+      do {
+        _ = try await service.previewManualTransfer(form: form)
+        XCTFail("整理预览响应\(diagnostic)时必须失败")
+      } catch {}
+    }
   }
 
   func testAddDownloadPreservesSiteTransportFieldsAcrossBothProductionEndpoints() async throws {

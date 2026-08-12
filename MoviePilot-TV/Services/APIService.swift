@@ -2189,7 +2189,9 @@ class APIService: ObservableObject {
     guard response.success == true else {
       throw APIError.serverMessage(response.localizedMessage ?? "整理预览失败")
     }
-    var preview = response.data ?? .empty
+    guard var preview = response.data else {
+      throw APIError.serverMessage("整理预览响应缺少数据")
+    }
     preview.message = response.localizedMessage ?? preview.message
     return preview
   }
