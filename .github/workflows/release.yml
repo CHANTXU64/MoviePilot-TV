@@ -21,7 +21,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Show Xcode version
         run: |
@@ -67,7 +67,7 @@ jobs:
           ls -lh "$IPA_PATH"
 
       - name: Upload IPA artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: MoviePilot-TV-unsigned-ipa
           path: build/MoviePilot-TV-unsigned.ipa
