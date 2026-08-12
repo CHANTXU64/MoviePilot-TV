@@ -154,6 +154,10 @@ private struct BackendCompatibilityConfig {
       excludedAdditionalUsernames: Set(permissionBehaviorSpecs.map(\.username))
     )
 
+    let enableSideEffects = values["MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS"]?.boolValue(
+      fallback: true
+    ) ?? true
+
     return BackendCompatibilityConfig(
       baseURL: baseURL.trimmingTrailingSlashes,
       username: username,
@@ -182,22 +186,27 @@ private struct BackendCompatibilityConfig {
       collectionIDs: collectionIDs,
       testResourceSearchStreams: values["MOVIEPILOT_COMPAT_TEST_RESOURCE_SEARCH_STREAMS"]?
         .boolValue(fallback: false) ?? false,
-      enableSideEffects: values["MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS"]?.boolValue(
-        fallback: true) ?? true,
-      testSubscriptionSearch: values["MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_SEARCH"]?.boolValue(
-        fallback: true) ?? true,
-      testSubscriptionUpdate: values["MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_UPDATE"]?.boolValue(
-        fallback: true) ?? true,
-      testSubscriptionPauseResume: values["MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_PAUSE_RESUME"]?
-        .boolValue(fallback: true) ?? true,
-      testSubscriptionResetSearch: values["MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_RESET_SEARCH"]?
-        .boolValue(fallback: false) ?? false,
+      enableSideEffects: enableSideEffects,
+      testSubscriptionSearch: enableSideEffects
+        && (values["MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_SEARCH"]?.boolValue(
+          fallback: true) ?? true),
+      testSubscriptionUpdate: enableSideEffects
+        && (values["MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_UPDATE"]?.boolValue(
+          fallback: true) ?? true),
+      testSubscriptionPauseResume: enableSideEffects
+        && (values["MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_PAUSE_RESUME"]?
+          .boolValue(fallback: true) ?? true),
+      testSubscriptionResetSearch: enableSideEffects
+        && (values["MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_RESET_SEARCH"]?
+          .boolValue(fallback: false) ?? false),
       sideEffectSubscriptionLimit: values["MOVIEPILOT_COMPAT_SIDE_EFFECT_SUBSCRIPTION_LIMIT"]?
         .clampedIntValue(minimum: 1, maximum: 10) ?? 3,
-      testManualReorganize: values["MOVIEPILOT_COMPAT_TEST_MANUAL_REORGANIZE"]?.boolValue(
-        fallback: true) ?? true,
-      testAIReorganize: values["MOVIEPILOT_COMPAT_TEST_AI_REORGANIZE"]?.boolValue(
-        fallback: true) ?? true,
+      testManualReorganize: enableSideEffects
+        && (values["MOVIEPILOT_COMPAT_TEST_MANUAL_REORGANIZE"]?.boolValue(
+          fallback: true) ?? true),
+      testAIReorganize: enableSideEffects
+        && (values["MOVIEPILOT_COMPAT_TEST_AI_REORGANIZE"]?.boolValue(
+          fallback: true) ?? true),
       reorganizeHistoryLimit: values["MOVIEPILOT_COMPAT_REORGANIZE_HISTORY_LIMIT"]?
         .clampedIntValue(minimum: 1, maximum: 10) ?? 2,
       reorganizeConcurrentCount: values["MOVIEPILOT_COMPAT_REORGANIZE_CONCURRENT_COUNT"]?
@@ -1363,6 +1372,65 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         let history = try await service.fetchTransferHistory(page: 1, count: 20, title: nil)
         XCTAssertGreaterThanOrEqual(history.total, 0)
         XCTAssertLessThanOrEqual(history.list.count, 20)
+      }
+    }
+  }
+
+  @MainActor
+  func testReadOnlyReorganizePreviewCompatibility() async throws {
+    try await withReadOnlyBackend { service, config in
+      await runBackendCompatibilityStep(
+        "manual reorganize preview",
+        service: service,
+        config: config,
+        requirement: .permission(.manage)
+      ) {
+        let historyResponse = try await service.fetchTransferHistory(page: 1, count: 20, title: nil)
+        guard let history = historyResponse.list.first, let sourceFileItem = history.src_fileitem else {
+          print(
+            "Skipping manual reorganize preview for \(config.activeAccountDiagnostic): no transfer history with a source file item."
+          )
+          return
+        }
+
+        let form = ReorganizeForm(
+          fileitem: sourceFileItem,
+          logid: history.id,
+          target_storage: history.dest_storage?.nilIfBlank,
+          transfer_type: nil,
+          target_path: "",
+          min_filesize: 0,
+          scrape: nil,
+          from_history: false
+        )
+        let preview = try await service.previewManualTransfer(form: form)
+
+        XCTAssertEqual(
+          preview.summary.total,
+          preview.items.count,
+          "Preview total must match the returned item count."
+        )
+        XCTAssertGreaterThanOrEqual(preview.summary.success, 0)
+        XCTAssertGreaterThanOrEqual(preview.summary.failed, 0)
+        XCTAssertEqual(
+          preview.summary.success + preview.summary.failed,
+          preview.summary.total,
+          "Preview success and failure counts must cover every returned item."
+        )
+        XCTAssertTrue(
+          preview.items.allSatisfy { $0.success != nil },
+          "Every preview item must report an explicit success value."
+        )
+        XCTAssertEqual(
+          preview.items.filter { $0.success == true }.count,
+          preview.summary.success,
+          "Preview successful-item count must match the response summary."
+        )
+        XCTAssertEqual(
+          preview.items.filter { $0.success == false }.count,
+          preview.summary.failed,
+          "Preview failed-item count must match the response summary."
+        )
       }
     }
   }

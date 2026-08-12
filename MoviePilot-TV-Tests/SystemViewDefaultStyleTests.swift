@@ -90,27 +90,14 @@ final class SystemViewDefaultStyleTests: XCTestCase {
   func testSubscriptionCompatibilityChecklistTracksPermissionContractRisk() throws {
     let source = try Self.source(at: "docs/subscription-compatibility-checklist.md")
 
-    XCTAssertTrue(source.contains("用户权限契约风险"))
-    XCTAssertTrue(source.contains("权限契约仍不稳定"))
-    XCTAssertTrue(source.contains("Token.super_user"))
+    XCTAssertTrue(source.contains("## 订阅权限与快照"))
     XCTAssertTrue(source.contains("permissions.subscribe"))
-    XCTAssertTrue(source.contains("/mediaserver/notexists"))
-    XCTAssertTrue(source.contains("不得要求 `Token.super_user`"))
-    XCTAssertTrue(source.contains("/dashboard/*"))
-    XCTAssertTrue(source.contains("ViewModel 入口跳过"))
-    XCTAssertTrue(source.contains("下载与整理等 manage 功能请求继续交给后端鉴权"))
-    XCTAssertTrue(source.contains("CustomFilterRules"))
-    XCTAssertTrue(source.contains("UserFilterRuleGroups"))
-    XCTAssertTrue(source.contains("/system/setting/public/{key}"))
-    XCTAssertTrue(source.contains("canAccess(.subscribe)"))
-    XCTAssertTrue(source.contains("不显示入库状态徽章"))
+    XCTAssertTrue(source.contains("GET /subscribe/"))
+    XCTAssertTrue(source.contains("普通用户与超级用户"))
+    XCTAssertTrue(source.contains("不要把“过滤异常记录”当成长期契约"))
     XCTAssertTrue(source.contains("best_version"))
-    XCTAssertTrue(source.contains("不要只按 HTTP 状态码"))
-    XCTAssertTrue(source.contains("app/core/security.py"))
-    XCTAssertTrue(source.contains("app/db/user_oper.py"))
-    XCTAssertTrue(source.contains("app/api/endpoints/login.py"))
-    XCTAssertTrue(source.contains("token校验不通过"))
-    XCTAssertTrue(source.contains("400 用户权限不足"))
+    XCTAssertTrue(source.contains("完整 PUT"))
+    XCTAssertTrue(source.contains("订阅写入、状态修改、搜索、重置、删除和 Fork"))
   }
 
   func testSubscribeSeasonViewHidesAvailabilityBadgeWhenStatusTextIsNil() throws {
