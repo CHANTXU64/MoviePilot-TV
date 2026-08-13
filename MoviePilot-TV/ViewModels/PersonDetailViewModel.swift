@@ -68,37 +68,8 @@ class PersonDetailViewModel: ObservableObject {
       let fullDetail = try await apiService.fetchPersonDetail(
         personId: personId, source: source)
 
-      // 确定要保留的正确原始名称。
-      let finalOriginalName: String?
-      if let newON = fullDetail.original_name, !newON.isEmpty {
-        finalOriginalName = newON
-      } else {
-        finalOriginalName = self.person.original_name
-      }
-
-      // 创建一个新的 Person 实例，合并新旧数据。
-      let newPerson = Person(
-        source: fullDetail.source,
-        raw_id: fullDetail.raw_id,
-        name: fullDetail.name,
-        latin_name: fullDetail.latin_name,
-        character: self.person.character,  // 始终保留旧的角色信息
-        job: self.person.job,  // 始终保留旧的职位信息
-        roles: self.person.roles,  // 始终保留旧的职位信息
-        profile_path: fullDetail.profile_path,
-        original_name: finalOriginalName,  // 使用保留的名称
-        known_for_department: fullDetail.known_for_department,
-        place_of_birth: fullDetail.place_of_birth,
-        popularity: fullDetail.popularity,
-        biography: fullDetail.biography,
-        birthday: fullDetail.birthday,
-        also_known_as: fullDetail.also_known_as,
-        avatar: fullDetail.avatar,
-        images: fullDetail.images,
-        id: fullDetail.id
-      )
-
-      self.person = newPerson
+      // 详情响应可能是稀疏的 200；只补充有效字段，不覆盖入口人物的身份和已有展示数据。
+      self.person = person.mergingDetails(from: fullDetail)
     } catch {
       print("加载人物作品出错: \(error)")
     }

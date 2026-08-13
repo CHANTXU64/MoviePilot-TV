@@ -2448,6 +2448,68 @@ nonisolated struct Person: Codable, Identifiable, Hashable {
     )
   }
 
+  /// 用人物详情补充展示字段，但始终保留入口人物的路由身份和已有数据。
+  func mergingDetails(from detail: Person) -> Person {
+    func nonEmpty(_ value: String?, fallback: String?) -> String? {
+      guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        return fallback
+      }
+      return value
+    }
+
+    func nonEmpty(_ value: [String]?, fallback: [String]?) -> [String]? {
+      guard let value, !value.isEmpty else { return fallback }
+      return value
+    }
+
+    func usable(_ avatar: PersonAvatar?) -> PersonAvatar? {
+      guard let avatar,
+        !avatar.urlValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      else {
+        return nil
+      }
+      return avatar
+    }
+
+    func usable(_ images: BangumiImages?) -> BangumiImages? {
+      guard let images else { return nil }
+      let values = [images.large, images.common, images.medium, images.small, images.grid]
+      guard values.contains(where: { value in
+        guard let value else { return false }
+        return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      }) else {
+        return nil
+      }
+      return images
+    }
+
+    let mergedAvatar = usable(avatar) ?? usable(detail.avatar)
+
+    let mergedImages = usable(images) ?? usable(detail.images)
+
+    return Person(
+      source: source,
+      raw_id: raw_id,
+      name: nonEmpty(detail.name, fallback: name),
+      latin_name: nonEmpty(detail.latin_name, fallback: latin_name),
+      character: nonEmpty(detail.character, fallback: character),
+      job: nonEmpty(detail.job, fallback: job),
+      roles: nonEmpty(detail.roles, fallback: roles),
+      profile_path: nonEmpty(detail.profile_path, fallback: profile_path),
+      original_name: nonEmpty(detail.original_name, fallback: original_name),
+      known_for_department: nonEmpty(
+        detail.known_for_department, fallback: known_for_department),
+      place_of_birth: nonEmpty(detail.place_of_birth, fallback: place_of_birth),
+      popularity: detail.popularity ?? popularity,
+      biography: nonEmpty(detail.biography, fallback: biography),
+      birthday: nonEmpty(detail.birthday, fallback: birthday),
+      also_known_as: nonEmpty(detail.also_known_as, fallback: also_known_as),
+      avatar: mergedAvatar,
+      images: mergedImages,
+      id: id
+    )
+  }
+
   private static func supportedRouteSource(_ source: String?) -> String? {
     guard let source = MediaIdentifier.normalizeSource(source) else { return nil }
     switch source {

@@ -261,6 +261,41 @@ final class PersonDecodingTests: XCTestCase {
     XCTAssertTrue(decoded.2)
   }
 
+  func testSparsePersonDetailsPreserveSeedDisplayFields() throws {
+    let seed = try JSONDecoder().decode(
+      Person.self,
+      from: Data(
+        """
+        {
+          "source": "douban",
+          "id": 123,
+          "name": "种子演员",
+          "avatar": "https://douban.local/seed.jpg",
+          "original_name": "Seed Actor",
+          "birthday": "1980-01-01"
+        }
+        """.utf8
+      )
+    )
+    let sparseDetail = try JSONDecoder().decode(
+      Person.self,
+      from: Data(
+        #"{"biography":"详情简介","avatar":"https://douban.local/detail.jpg"}"#.utf8
+      )
+    )
+
+    let merged = seed.mergingDetails(from: sparseDetail)
+
+    XCTAssertEqual(merged.source, "douban")
+    XCTAssertEqual(merged.raw_id, "123")
+    XCTAssertEqual(merged.id, seed.id)
+    XCTAssertEqual(merged.name, "种子演员")
+    XCTAssertEqual(merged.avatar?.urlValue, "https://douban.local/seed.jpg")
+    XCTAssertEqual(merged.original_name, "Seed Actor")
+    XCTAssertEqual(merged.birthday, "1980-01-01")
+    XCTAssertEqual(merged.biography, "详情简介")
+  }
+
   func testPersonImageSelectionMatchesWebForEverySourceAndFallback() throws {
     let service = APIService.shared
     let snapshot = PersonDecodingServiceSnapshot.capture(service: service)
