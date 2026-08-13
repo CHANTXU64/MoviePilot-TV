@@ -2419,6 +2419,11 @@ nonisolated struct Person: Codable, Identifiable, Hashable {
 
   }
 
+  /// 按最终人物身份去重；`id` 已包含来源与原始 ID，可保留跨来源同号人物。
+  static func deduplicate(_ items: [Person], existingIDs: inout Set<String>) -> [Person] {
+    items.filter { existingIDs.insert($0.id).inserted }
+  }
+
   /// 规范化人物详情路由来源；显式但不受支持的来源不会被父媒体覆盖。
   func resolvingRouteSource(fallback: String?) -> Person {
     let declaredSource = MediaIdentifier.normalizedString(source)

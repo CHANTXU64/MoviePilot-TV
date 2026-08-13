@@ -5,6 +5,28 @@ import XCTest
 
 @MainActor
 final class PersonDecodingTests: XCTestCase {
+  func testPersonDedupUsesSourceScopedIdentityAndFiltersCurrentBatchDuplicates() throws {
+    let people = try JSONDecoder().decode(
+      [Person].self,
+      from: Data(
+        """
+        [
+          {"source":"douban","id":7,"name":"豆瓣人物"},
+          {"source":"douban","id":7,"name":"豆瓣重复人物"},
+          {"source":"themoviedb","id":7,"name":"TMDB人物"}
+        ]
+        """.utf8
+      )
+    )
+    var seenIDs = Set<String>()
+
+    let uniquePeople = Person.deduplicate(people, existingIDs: &seenIDs)
+
+    XCTAssertEqual(uniquePeople.map(\.id), ["douban-7", "themoviedb-7"])
+    XCTAssertEqual(uniquePeople.map(\.name), ["豆瓣人物", "TMDB人物"])
+    XCTAssertTrue(Person.deduplicate(people, existingIDs: &seenIDs).isEmpty)
+  }
+
   func testDecodesDoubanPersonSearchImagesWithObjectEntries() throws {
     let service = APIService.shared
     let snapshot = PersonDecodingServiceSnapshot.capture(service: service)

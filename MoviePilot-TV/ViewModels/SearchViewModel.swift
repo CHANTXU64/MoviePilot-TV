@@ -598,6 +598,7 @@ class SearchViewModel: ObservableObject {
     )
 
     // --- Person Paginator ---
+    var personSeenIDs = Set<String>()
     let newPersonPaginator = Paginator<Person>(
       threshold: 10,
       fetcher: { @MainActor [apiService] page in
@@ -613,18 +614,15 @@ class SearchViewModel: ObservableObject {
         )
       },
       processor: { @MainActor currentItems, newItems in
-        // 基于 raw_id 去重
-        let existingIds = Set(currentItems.compactMap { $0.raw_id })
-        let uniqueNewItems = newItems.filter {
-          $0.raw_id == nil || !existingIds.contains($0.raw_id!)
-        }
+        let uniqueNewItems = Person.deduplicate(newItems, existingIDs: &personSeenIDs)
         if uniqueNewItems.isEmpty { return false }
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
       imageURLsProvider: { item in
         [item.imageURLs.profile].compactMap(\.self)
-      }
+      },
+      onReset: { @MainActor in personSeenIDs.removeAll() }
     )
 
     var newSubscriptionSharePaginator: Paginator<MediaInfo>?

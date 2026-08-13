@@ -357,6 +357,32 @@ final class SearchViewModelTests: XCTestCase {
     XCTAssertTrue(sourceValues.allSatisfy { $0 == nil })
   }
 
+  func testPersonPaginatorRefreshClearsSeenIdentitySet() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.mediaSearchSource = nil
+    viewModel.query = "person-reset"
+    await viewModel.autoSearch()
+
+    let paginator = try XCTUnwrap(viewModel.personPaginator)
+    XCTAssertEqual(paginator.items.map(\.id), ["douban-7", "themoviedb-7"])
+
+    await paginator.refresh()
+
+    XCTAssertEqual(paginator.items.map(\.id), ["douban-7", "themoviedb-7"])
+  }
+
   func testTVMediaSourceDefaultsAreLoadedBySearchViewModel() {
     let service = APIService.shared
     let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
@@ -703,11 +729,21 @@ private actor SearchViewModelURLProtocolStub {
     }
 
     let type = queryItems.first(where: { $0.name == "type" })?.value
+    let page = queryItems.first(where: { $0.name == "page" })?.value ?? "1"
+    if query == "person-reset", type == "person", page == "1" {
+      return Data(
+        """
+        [
+          {"source":"douban","id":7,"name":"豆瓣人物"},
+          {"source":"douban","id":7,"name":"豆瓣重复人物"},
+          {"source":"themoviedb","id":7,"name":"TMDB人物"}
+        ]
+        """.utf8)
+    }
     guard type == nil || type == "media" else {
       return Data("[]".utf8)
     }
 
-    let page = queryItems.first(where: { $0.name == "page" })?.value ?? "1"
     guard page == "1" else {
       return Data("[]".utf8)
     }

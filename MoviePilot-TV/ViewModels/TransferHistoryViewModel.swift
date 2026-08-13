@@ -87,8 +87,8 @@ class TransferHistoryViewModel: ObservableObject {
         return response.list
       },
       processor: { items, newItems in
-        let existingIds = Set(items.map(\.id))
-        let uniqueNewItems = newItems.filter { !existingIds.contains($0.id) }
+        var existingIds = Set(items.map(\.id))
+        let uniqueNewItems = newItems.filter { existingIds.insert($0.id).inserted }
         if !uniqueNewItems.isEmpty {
           items.append(contentsOf: uniqueNewItems)
           return true

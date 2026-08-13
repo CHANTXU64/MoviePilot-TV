@@ -843,7 +843,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-034 · P2 · 已确认 · 非终止空批被误判为终页</summary>
+<summary>F-034 · P2 · 已确认 · 用户决定跳过 · 非终止空批被误判为终页</summary>
 
 - 审查单元与位置：S004→V011-F；SharedMediaFetcher 与 Paginator 空页语义
 - 触发路径：最多五轮只有另一媒体类型，更后页才有目标类型。
@@ -851,12 +851,12 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 用户影响：聚合搜索永久漏掉实际存在的电影或电视剧。
 - 证据：review_s004 构造六页异类/第七页目标序列；verify_a001_h 从 actor 实现重走；verify_s004 独立确认 buffer/hasMore 与终页契约
 - 跨端结论：TV 契约冲突已确认；后端混排分布未验证
-- 最小修改方向 / 裁决：SharedMediaFetcher 仍有后页时不得向 Paginator 返回终止空数组。
+- 最小修改方向 / 裁决：用户决定跳过；保留当前最多扫描六页的性能边界，接受极端混排下可能漏项。
 
 </details>
 
 <details>
-<summary>F-035 · P2 · 已确认 · in-flight Task 强持有 Paginator</summary>
+<summary>F-035 · P2 · 已确认 · 用户决定跳过 · in-flight Task 强持有 Paginator</summary>
 
 - 审查单元与位置：S004→V011-C→G04；Paginator/Search in-flight Task 生命周期
 - 触发路径：fetcher 挂起时 owner 释放，但未显式 cancel。
@@ -864,20 +864,20 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 用户影响：页面消失后请求、处理与预取继续，长请求延长对象图生命周期。
 - 证据：既有双审闭合强持有；全新G04 clean-room复核收窄为owner离场生命周期并升级P2；owner/session级显式取消共享搜索；不重写已有generation屏障
 - 跨端结论：TV生命周期缺口已确认；push/切Tab/销毁的取消产品边界与驻留时长未运行验证
-- 最小修改方向 / 裁决：给整次 search owner/session 一个显式取消入口；保留已正确工作的 generation 防旧发布，不依赖 deinit 先发生。
+- 最小修改方向 / 裁决：用户决定跳过；接受慢请求离页后继续占用网络与内存，正常请求快速完成时通常无感。
 
 </details>
 
 <details>
-<summary>F-036 · P2 · 已确认 · processor 漏掉页内重复 ID</summary>
+<summary>F-036 · P2 · 已修复 · processor 漏掉页内重复 ID</summary>
 
 - 审查单元与位置：S004→V011-D→G07；Search 人物与 TransferHistory processor
 - 触发路径：同一页有重复 raw_id/id，或人物缺 raw_id 后生成相同 id。
 - 根因：只从旧 items 建不可变 existingIds，过滤当前批次时不插入已接受 ID。
 - 用户影响：ForEach 重复身份、焦点含糊，firstIndex 总指向首项并可能停止继续分页。
 - 证据：既有processor复核闭合不可变seen；G07双审及第三裁确认合法跨source聚合与批内重复；使用最终`Person.id`可变seen并在reset清空；Paginator扫描另归F-034
-- 跨端结论：TV身份去重缺陷已确认；真实碰撞频率未验证
-- 最小修改方向 / 裁决：仅修两处 processor，以可变 seen set 同时覆盖旧数组和当前批次。
+- 修复：Search按包含来源的最终`Person.id`维护可变seen，并在Paginator reset时清空；Transfer过滤当前批次时同步写入seen。
+- 验证：人物身份去重测试及同一Search人物Paginator刷新链路测试通过；依赖解析、tvOS Simulator Debug完整构建与串行全量测试均通过。
 
 </details>
 

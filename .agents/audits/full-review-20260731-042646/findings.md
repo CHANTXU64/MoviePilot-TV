@@ -47,9 +47,9 @@
 | F-031 | 降级 | 条件性P3 | B004→G06 | token 登录/恢复/登录态判断 | 纯空白 access token 被视为已登录且可恢复权限 | `90b40b4`已拒绝空串；当前官方后端JWT producer不产纯空白，Web也未增加同类校验 | 不为损坏存储或非官方兼容端增加TV差异化硬化，保留内部tokenless currentUser哨兵 | 用户决定跳过；若未来官方producer可达再重开 |
 | F-032 | 已修复 | P2 | M001-E 复核新增 / S004 裁决 | `Context.meta_info` 与 TorrentCard/TorrentsResultView | torrent-only 结果解码成功但静默空渲染 | verify_m001_e 以多个 torrent-only fixture 闭合非空计数→EmptyView 链 | review_s004 独立确认模型合法、过滤保留、非零计数与卡片 EmptyView | `TorrentCard` 已按 Web 降级渲染；当前 MP 官方搜索链正常生成 `MetaInfo`，保留该兼容防御 |
 | F-033 | 已修复 | P2 | S004 | Paginator 错误状态与全部生产调用者 | 错误状态无人消费，错误上限后无保留列表恢复 | review_s004 核对 13 实例、全部 View 与测试只手动重试 | verify_s004 独立确认零消费者、错误上限与页面误空态 | 连续失败达到三次上限后统一通知用户重试；不增加重试按钮 |
-| F-034 | 已确认 | P2 | S004→V011-F | SharedMediaFetcher 与 Paginator 空页语义 | 非终止空批被当成终页，稀疏媒体类型永久截断 | review_s004 构造六页异类/第七页目标序列；verify_a001_h 从 actor 实现重走 | verify_s004 独立确认 buffer/hasMore 与终页契约 | TV 契约冲突已确认；后端混排分布未验证 |
-| F-035 | 已确认 | P2 | S004→V011-C→G04 | Paginator/Search in-flight Task 生命周期 | Task跨await强持有owner且页面离场无owner级取消；显式cancel和新搜索的generation防旧发布本身有效 | 既有双审闭合强持有；全新G04 clean-room复核收窄为owner离场生命周期并升级P2 | owner/session级显式取消共享搜索；不重写已有generation屏障 | TV生命周期缺口已确认；push/切Tab/销毁的取消产品边界与驻留时长未运行验证 |
-| F-036 | 已确认 | P2 | S004→V011-D→G07 | Search 人物与 TransferHistory processor | 只去重旧 raw ID，漏同批最终 ID并可跨 source 误合并 | 既有processor复核闭合不可变seen；G07双审及第三裁确认合法跨source聚合与批内重复 | 使用最终`Person.id`可变seen并在reset清空；Paginator扫描另归F-034 | TV身份去重缺陷已确认；真实碰撞频率未验证 |
+| F-034 | 已确认（用户决定跳过） | P2 | S004→V011-F | SharedMediaFetcher 与 Paginator 空页语义 | 非终止空批被当成终页，稀疏媒体类型永久截断 | review_s004 构造六页异类/第七页目标序列；verify_a001_h 从 actor 实现重走 | verify_s004 独立确认 buffer/hasMore 与终页契约 | 保留最多扫描六页的边界，接受极端类型分布下可能漏项 |
+| F-035 | 已确认（用户决定跳过） | P2 | S004→V011-C→G04 | Paginator/Search in-flight Task 生命周期 | Task跨await强持有owner且页面离场无owner级取消；显式cancel和新搜索的generation防旧发布本身有效 | 既有双审闭合强持有；全新G04 clean-room复核收窄为owner离场生命周期并升级P2 | owner/session级显式取消共享搜索；不重写已有generation屏障 | 用户接受慢请求离页后继续占用资源的低频影响，不再处理 |
+| F-036 | 已修复 | P2 | S004→V011-D→G07 | Search 人物与 TransferHistory processor | 只去重旧 raw ID，漏同批最终 ID并可跨 source 误合并 | 既有processor复核闭合不可变seen；G07双审及第三裁确认合法跨source聚合与批内重复 | 使用最终`Person.id`可变seen并在reset清空；Transfer批内同步写入seen | 已补人物身份去重及同一Paginator刷新回归测试；完整验证通过 |
 | F-037 | 未验证 | P3 | B006-A | `TranslationHelper.languageName` 与 original_language 展示链 | ISO/BCP 47 形态未经规范化而退化为原码 | review_b006_a 核对映射、唯一调用者、模型与标准标签边界 | verify_b006_a_retry 确认行为但函数只承诺 ISO 639-1，扩展契约缺失 | 上游字段格式及 BCP 47/别名要求未验证 |
 | F-038 | 已确认 | P3 | B006-A | TranslationHelper 与详情元数据拼接 | 空白原语种进入详情分隔串 | review_b006_a 闭合 decodeIfPresent→原样回退→append 链 | verify_b006_a_retry 独立确认空 Text/尾随分隔及通用元数据范围 | TV 展示不变量缺陷已确认；真实 payload 频率未验证 |
 | F-039 | 已确认 | P2 | S004→V011-C→G04 | `SearchViewModel.SharedMediaFetcher` 取消链 | 单waiter取消不应误伤共享请求，但整个search session废弃后仍没有aggregate cancel，底层请求、buffer与cursor继续 | 既有双审闭合unstructured task；全新G04 clean-room复核收窄共享语义并升级P2 | 只在session owner失效时取消共享task；保留另一合法waiter | TV session级取消缺口已确认；真实慢请求量未验证 |
@@ -746,7 +746,7 @@
 
 ### F-034：非终止空批被误判为终页
 
-- 状态：已确认
+- 状态：已确认（用户决定跳过）
 - 严重度：条件性 P2
 - 位置：`SearchViewModel.SharedMediaFetcher` 与 `Paginator` 空数组终止逻辑
 - 触发路径：最多五轮只有另一媒体类型，更后页才有目标类型。
@@ -757,10 +757,11 @@
 - 独立复核：verify_s004 重走 shared buffer/hasMore，确认终页契约冲突，维持条件性 P2。
 - V011-F 生产补强：`maxFetchCount=5` 配合首轮并发两页最多扫描 API 1–6 页；若这六页只有另一类型、第 7 页才有目标，actor 在内部 `hasMore=true` 时仍返回 `[]`，Paginator 永久终止。真正后端空页会先置 hasMore=false并允许既有 buffer 排空，故不扩大边界。
 - G04 clean-room 末裁：当前后端按source排序后分页，并不保证每页同时含电影/电视剧；因此第1–6页仅异类、第7页目标的反例符合合同。根修只在SharedMediaFetcher扫描到目标或真实总终页，不改Paginator空数组终页语义。
+- 处置状态：用户决定跳过；保留当前最多扫描六页的性能边界，接受极端混排下某一媒体类型可能漏项，不再列为待处理问题。
 
 ### F-035：in-flight Task 强持有 Paginator
 
-- 状态：已确认
+- 状态：已确认（用户决定跳过）
 - 严重度：P2
 - 位置：`MoviePilot-TV/Services/Paginator.swift` Task 创建与 deinit
 - 触发路径：fetcher 挂起时 owner 释放，但未显式 cancel。
@@ -772,10 +773,11 @@
 - V011-C 同根扩展：SearchViewModel 强持有 `searchStreamTask`，Task 闭包又强捕获 self，且无 deinit/页面生命周期取消入口；静默 SSE 可让页面移除后对象与请求继续驻留，复用显式 owner 生命周期取消方向，不另编号。
 - V022-A 同根扩展：搜索创建无句柄Task并强持有owner，View `.task`取消也不拥有Paginator内部Task；明确的永久环另归F-071，旧发布/query owner归F-072。
 - G04 clean-room 末裁：显式`cancel()`与新搜索已有generation/取消屏障，旧结果不会写回；确定缺口收窄为owner离场没有对应屏障且底层任务/owner继续。因请求生命周期与页面owner确定脱节，升级P2；push详情、切Tab、销毁三种离场是否都应取消仍须产品/运行验收。
+- 处置状态：用户决定跳过；接受慢请求或挂起请求在离页后继续占用网络、预取和对象内存，正常请求快速完成时通常无感，不再列为待处理问题。
 
 ### F-036：processor 漏掉页内重复 ID
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P2（由 P3 升级）
 - 位置：`SearchViewModel` 人物 processor、`TransferHistoryViewModel` processor
 - 触发路径：同一页有重复 raw_id/id，或人物缺 raw_id 后生成相同 id。
@@ -787,6 +789,8 @@
 - V011-D 补强：人物 processor 只用旧 `raw_id` 建不可变集合，除漏同页与 nil 重复外，还可把不同 source 的同 raw ID 跨页误合并；最小修复应以最终 `Person.id` 建可变 seen set并在接收当前批次时插入，不另编号。
 - V022-A 生产复核：Transfer processor在旧列表为空时对同页`[id:7,id:7]`两项都放行，rebuild快路径又原样保留；ForEach/Focus与loadMore firstIndex直接消费重复ID。
 - G07第三裁：verify_a001_h确认`Person.id`已是`source + raw_id`，Search却仅按raw_id对旧页去重且同批不更新seen；跨source合法同号会误删、批内重复会进入ForEach，升P2。修复为持久可变`seenPersonIDs`并在reset清空；连续无新增页停止仍独立归F-034。
+- 修复：Search按包含来源的最终`Person.id`维护持久seen，并在Paginator reset时清空；Transfer在过滤当前批次时同步写入seen，避免同页重复身份。
+- 验证：补充人物身份去重单元测试，以及复用同一个Search人物Paginator执行`refresh()`的链路测试；依赖解析、tvOS Simulator Debug完整构建与串行全量测试均通过。
 
 ### F-037：有效语言标识未经规范化
 

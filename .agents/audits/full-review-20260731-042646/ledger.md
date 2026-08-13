@@ -276,9 +276,9 @@
 | B004 / F-031 | S002、A001-B/C、V023/R001、G06 | `90b40b4`已拒绝空串，剩余仅纯空白token；当前官方后端JWT producer不产生，Web同样未校验，确定触发仅损坏存储/非官方兼容端 | 不为低收益异常输入增加TV差异化硬化；保留内部tokenless currentUser哨兵 | 已闭环；降为条件性P3，用户决定跳过 |
 | M001-E / F-032 | S004、A001-H、V011/V015、C017/C018、W006/W011、I001/I011、G05 | torrent-only Context 可解码但 TorrentCard 静默 EmptyView；当前 MP 官方搜索链正常结果会创建 MetaInfo，schema 仍允许 null | 按 Web 对齐：只要求 torrent_info，元数据字段按可选值降级，标题回退 torrent.title | 已闭环；修复完成 |
 | S004 / F-033 | 全部分页 ViewModel/View、G04 | Paginator 错误状态无人消费，错误上限后无保留列表恢复 | 按用户裁决保留三次错误上限，达到上限后统一通知用户重试，不增加按钮 | 已闭环；修复完成 |
-| S004 / F-034 | V011/Search、G04 | SharedMediaFetcher 非终止空批被 Paginator 当成终页 | 稀疏媒体类型分布与空数组终页契约 | 已闭环 |
-| S004 / F-035 | 所有固定owner分页ViewModel/View、G04 | in-flight Task跨await强持有owner；显式cancel/新搜索屏障有效，但页面owner离场无对应取消 | owner/session级取消；push/Tab/销毁语义与真实驻留时长 | 已闭环 |
-| S004 / F-036 | V011/Search、V022/Transfer、对应 View、G04 | processor 只去重旧 items，漏页内重复 ID | 当前批次 seen set 与真实重复频率 | 已闭环 |
+| S004 / F-034 | V011/Search、G04 | SharedMediaFetcher 非终止空批被 Paginator 当成终页 | 稀疏媒体类型分布与空数组终页契约 | 已闭环；用户决定跳过并接受极端漏项 |
+| S004 / F-035 | 所有固定owner分页ViewModel/View、G04 | in-flight Task跨await强持有owner；显式cancel/新搜索屏障有效，但页面owner离场无对应取消 | owner/session级取消；push/Tab/销毁语义与真实驻留时长 | 已闭环；用户决定跳过并接受低频资源驻留 |
+| S004 / F-036 | V011/Search、V022/Transfer、对应 View、G04 | processor 只去重旧 items，漏页内重复 ID | 最终人物身份与批内可变seen；reset清空持久seen | 已闭环；修复完成并通过回归与全量测试 |
 | B006-A / F-037 | A001-I、V004-A、V012-A、W008-C、I001/I002/I008/I013、G07 | 有效语言标签未经规范化而退化为原码 | 上游格式、BCP 47/别名支持边界 | 已闭环 |
 | B006-A / F-038 | M001-C/D、A001-I、W008-C、I001/I002/I013、G07 | 空白 original_language 进入详情元数据分隔串 | 共享规范化与空展示值过滤位置 | 已闭环 |
 | S004 / F-039 | V011-C/D/F、I007、W006、G04/G06 | 单waiter取消合理不传递，但整个search session废弃后共享Task/URL请求/cursor仍继续 | aggregate session取消且不误伤另一合法waiter | 已闭环 |
