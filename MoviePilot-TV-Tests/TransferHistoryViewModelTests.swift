@@ -82,6 +82,33 @@ final class TransferHistoryViewModelTests: XCTestCase {
     XCTAssertTrue(viewModel.isAiRedoEnabled)
   }
 
+  func testSearchFetcherDoesNotRetainViewModelAfterSearchCompletes() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await TransferHistoryURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://transfer-history-tests.local"
+    configureManageUser(service)
+
+    weak var retainedViewModel: TransferHistoryViewModel?
+    do {
+      let viewModel = TransferHistoryViewModel(apiService: service)
+      retainedViewModel = viewModel
+      viewModel.search(with: "电影")
+    }
+
+    for _ in 0..<2_000 {
+      guard retainedViewModel != nil else { break }
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertNil(retainedViewModel)
+  }
+
   func testSparseFileItemDoesNotRejectTransferHistoryPage() throws {
     let response = try JSONDecoder().decode(
       TransferHistoryResponse.self,

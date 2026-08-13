@@ -126,13 +126,14 @@ class TransferHistoryViewModel: ObservableObject {
     }
     searchText = text
     let api = apiService
+    let pageSize = self.pageSize
     let effectiveText = text.trimmingCharacters(in: .whitespacesAndNewlines)
     let title = effectiveText.isEmpty ? nil : effectiveText
 
     self.fetcher = { page in
       try await api.fetchTransferHistory(
         page: page,
-        count: self.pageSize,
+        count: pageSize,
         title: title)
     }
     resetDynamicState(clearDeletedIds: true)

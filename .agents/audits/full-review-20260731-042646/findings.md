@@ -84,7 +84,7 @@
 | F-068 | 已确认（用户决定跳过） | P2 | M001-F | Subscribe 快照与 Home/动作链 | nil/0/负数/重复业务 ID 可进入 SwiftUI 快照 | Web 同样直接依赖后端正数唯一主键；TV 不做差异化防御 | 保持当前模型与官方后端 ID 合同；不新增异常数据兜底 | 正常官方后端不触发，用户决定跳过 |
 | F-069 | 降级 | P3 | M001-F→G02→当前 v2.15.1 合同复核 | Subscribe 编码与完整 PUT | 当前TV已覆盖目标后端全部公共可写订阅字段，F-199的现成`total_episode`损坏链也已修复；只有未来后端新增TV未知可写字段时，固定模型完整PUT才可能丢值 | 当前TV `CodingKeys`、v2.15.1后端公共写入schema与Web完整表单逐字段复核；未找到当前字段反例 | 不改产品代码；并入CHK-003，官方Web/后端升级时逐字段复核后再决定建模、正式round-trip或阻止不安全保存 | 当前版本不构成缺陷；仅保留未来版本条件性兼容风险 |
 | F-070 | 已修复 | P2 | M001-H→G09 | GlobalSettings 与 Transfer AI 入口 | 未知 AI 能力被当作已启用 | 当前 Web 与后端均只在显式 true 时开放 AI 能力 | 改为 `== true`，覆盖 settings 缺失、字段缺失、null、false、true | 回归通过，完整验证通过 |
-| F-071 | 已确认 | P2 | M001-H→I009 | TransferHistoryViewModel 搜索 fetcher | 首次搜索后owner与fetcher形成永久强引用环，每次重进/搜索可无界保留整份历史对象图 | 既有双审闭合环；I009主审与定向独立复核确认请求完成后仍永久存在 | 像init一样在闭包外冻结局部pageSize；不建生命周期框架 | 纯TV永久内存生命周期缺陷已确认 |
+| F-071 | 已修复 | P2 | M001-H→I009 | TransferHistoryViewModel 搜索 fetcher | 首次搜索后owner与fetcher形成永久强引用环，每次重进/搜索可无界保留整份历史对象图 | 释放回归在修复前失败，确认 `self → fetcher → self` | 像init一样在闭包外冻结局部pageSize；不建生命周期框架 | 修复后释放回归、完整构建和串行全量测试通过 |
 | F-072 | 已确认 | P1 | M001-H→G04 | TransferHistoryViewModel 轮询/搜索/session | 旧轮询可污染新查询/会话、推进当前游标并让当前页继续操作旧记录 | 既有双审确认；G04主审与独立复核再次闭合旧fetcher续接当前fetcher/游标并双票升P1；整改已完成（`e388e8b`），验证及最终独立复审通过 | 捕获query/session/generation/fetcher，恢复与每页提交前复核 | 纯TV跨查询/会话状态归属缺陷 |
 | F-073 | 已确认 | P2 | M001-J→G09 | ManualTransferPreview envelope/data/item 与统计/UI | `success:true`但data缺失/null或item success缺失/null会被当成功预览 | 既有双审闭合fail-open；G09主审与clean-room第三裁逐矩阵确认成立分支，独立复核对envelope缺success的反证被吸收 | endpoint局部要求data与每项Bool success，合法显式空仍成功 | 当前正式producer完整；畸形/兼容producer触发频率未验证 |
 | F-074 | 已确认 | P2 | M001-J→V021/W018-B | Reorganize预览operation owner | 旧预览可在表单/会话变化、提交开始或Sheet关闭后回写并打开 | 模型/V021双审及W018-B双审闭合无revision/cancel、预览A→提交B与Web共享链 | 冻结forms/session/revision；编辑、新预览、提交、dismiss/session切换退休旧结果 | 当前Web/TV共享安全缺陷；运行时取消窗口未验证 |
@@ -1280,7 +1280,7 @@
 
 ### F-071：搜索后 owner 与 fetcher 形成强引用环
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P2（由 P3 升级）
 - 位置：`MoviePilot-TV/ViewModels/TransferHistoryViewModel.swift:35,54-63,107-129`
 - 触发路径：用户首次提交转移历史标题搜索。
@@ -1293,7 +1293,9 @@
 - V022-A 生产复核：任意首次搜索（包括纯空白规范化为nil）都会安装读取`self.pageSize`的新fetcher闭包；初始化路径已用局部pageSize展示最小正确做法。
 - I009集成升级建议：review_a001_j确认首次搜索请求完成后`self → fetcher → self`仍永久存在，退出状态页/登出不会释放且每次重进搜索可再泄漏整份历史列表；建议由P3升P2。不同代理须裁稳定用户资源后果；最小修复仍只是闭包外冻结局部`pageSize`。
 - I009定向裁决：review_a001_h确认请求完成后闭包仍永久形成`self → fetcher → self`，每次重进并搜索可无界保留VM/Paginator/历史数组；轮询Task会停是反证，不阻止资源后果升P2。修复只需像初始化路径一样在闭包外冻结局部`pageSize`。
-- 剩余未验证：需补 weak/deinit 回归，但不影响静态根因成立。
+- 修复：搜索闭包与初始化路径保持一致，在闭包外冻结局部 `pageSize`，不再捕获 ViewModel。
+- 验证：新增搜索完成后的 weak 释放回归；修复前用例失败、修复后通过，依赖解析、tvOS Simulator Debug完整构建和串行全量测试均通过。
+- 相邻检查：全部 Paginator、闭包属性、Combine sink 与持有 Task 的 owner 未发现新的请求结束后永久自环；既有在途任务保活边界仍按 F-035/F-039 裁决。
 
 ### F-072：旧轮询结果可污染新查询或新会话
 
