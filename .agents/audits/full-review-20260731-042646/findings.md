@@ -74,7 +74,7 @@
 | F-058 | 已确认 | P3 | S003 | ParsedSeason 与 Formatters 两套语法 | 卡片支持的季集语法在筛选排序中被判无效 | verify_s006 对比两套正则及 Set 未指定顺序 | verify_s003_resume 独立闭合两套正则与同一字段的显示/筛选链 | TV 语法分裂已确认；上游格式未验证 |
 | F-059 | 已确认 | P3 | S003 | ParsedSeason invalid/overflow 状态 | 解析失败和整数溢出静默折叠为合法零值 | verify_s006 闭合 Int 安全失败与整季/无效分支 | verify_s003_resume 独立确认无成功状态及零值多义性 | TV 排序混淆已确认；真实畸形输入未验证 |
 | F-060 | 降级 | P3 | S001 | Logger 与 15 个直接 print 生产文件 | 80 个直接 `print` 绕过 Debug-only Logger | integrate_i002 作为 S001 主审统计 35 Logger/80 print、确认个人数据与 bootstrap 缺失 | verify_s001_resume 独立复算调用、Release 设置与实际输出值；无凭据泄漏证据，P2→P3 | TV 本地旁路已确认；真实日志留存和凭据形态未验证 |
-| F-061 | 已确认 | P2 | S003 复核新增 / M001-K→I011 | `CustomFilterService.swift:24-67`、`TorrentsResultView.swift:248-291` | 软过滤置尾及后端默认顺序被结果页重排破坏 | 既有双审确认机制；I011补默认策略覆盖，review_a001_j第三裁决按每次默认展示与错误策略升级P2 | 默认原样保留后端顺序；其他排序只在isFilteredOut分区内执行 | 纯TV内部排序策略冲突已确认 |
+| F-061 | 已修复 | P2 | S003 复核新增 / M001-K→I011 | `CustomFilterService.swift:24-67`、`TorrentsResultView.swift:248-307` | 软过滤置尾及后端默认顺序被结果页重排破坏 | 既有双审确认机制；I011补默认策略覆盖，review_a001_j第三裁决按每次默认展示与错误策略升级P2 | 默认保留后端顺序；显式排序分别作用于正常/软过滤全局分区 | 已补默认与显式排序回归；完整验证通过 |
 | F-062 | 已确认 | P1 | S002→G06 | `KeychainHelper.swift:87-100` 及 APIService 登出链 | access token 删除失败后旧会话可在重启复活 | 既有双审闭合删除失败恢复；G06 两票确认登出成功表象后旧token重启复活的安全边界 | 删除失败写高权威logout tombstone/revision并重试；启动不得恢复被撤销代际 | 修复已完成：`90b40b4`；tombstone先于旧记录清理且启动失败关闭 |
 | F-063 | 已确认 | P1 | S002→G06 | `KeychainHelper.swift:8-84` 及 APIService/SystemViewModel 持久化链 | Keychain/UserDefaults 无明确权威导致旧或混合会话恢复 | 既有双审闭合逐项持久化；G06 两票确认A token、B user/permissions与另一代credentials可组合恢复 | 四项复用同一session owner/revision，只接受同代记录 | 修复已完成：`90b40b4`；单记录revision取代逐字段混读 |
 | F-064 | 已确认 | P2 | M001-G | `Models.swift:2323-2337` 及 Person 解码入口 | 混合类型头像对象可拖垮人物或媒体数组 | review_m001_g 闭合 PersonAvatar、数组原子解码与 source-aware 图片传播链 | verify_m001_g_retry 独立确认可选字段错误传播至人物/媒体/资源批次及空首选遮蔽 | 修复已完成（`af67839`）；当前后端允许 string/dict 头像，独立复审通过，本地测试 430/430 通过 |
@@ -1115,7 +1115,7 @@
 
 ### F-061：软过滤置尾被结果页二次排序破坏
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P2；由 P3 升级
 - 位置：`MoviePilot-TV/Services/CustomFilterService.swift:24-67`、`MoviePilot-TV/Views/Components/TorrentsResultView.swift:248-291`
 - 触发路径：软过滤未命中项的 `pri_order` 或当前排序值高于命中项；即使用户未改排序，结果页首次出现也会重排。
@@ -1129,6 +1129,8 @@
 - V015 生产补强：CustomFilter 先发布命中/未命中分区，结果页随后立即对全数组重排；默认排序和用户排序均可重新把灰置项推到顶部。
 - I011集成补强：review_a001_h完整复核确认默认排序还会覆盖后端已按TorrentsPriority/站点/上传量/做种数/季集生成的输入顺序，且任一显式排序都可能让高值软过滤项回到顶部；建议升P2。既有双审维持P3，故严重度须由不同代理裁决，机制与最小分区修复无争议。
 - 第三裁决：review_a001_j确认结果页每次初始展示都会按TV默认键重排，所有显式排序也都绕过软过滤分区；这不是只在用户改排序后出现的轻微顺序偏差，而是稳定破坏设置页承诺的资源优先策略，故由P3升级P2。
+- 修复：结果页先对所有站点资源按 `isFilteredOut` 做全局分区；默认保留后端顺序，显式排序分别在正常与软过滤分区内执行。
+- 验证：补充默认顺序与显式大小排序回归；依赖解析、tvOS Simulator Debug完整构建和串行全量测试均通过。
 
 ### F-062：Keychain 删除失败后旧会话可在重启复活
 
