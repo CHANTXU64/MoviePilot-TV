@@ -4,7 +4,7 @@ import XCTest
 
 @MainActor
 final class SubscribeSeasonContentViewTests: XCTestCase {
-  func testHomeDeleteReturnsBusinessFailureWithoutRefreshingSubscriptions() async throws {
+  func testHomeDeleteReturnsBusinessFailureWhenSubscriptionStillExists() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
 
@@ -16,21 +16,68 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     await SubscriptionSnapshotURLProtocol.stub.setSubscriptionDeleteResponse(
       #"{"success":false,"message":"delete rejected"}"#
     )
+    let subscription = Subscribe(id: 501, name: "取消失败", type: "电影")
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([subscription])
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([subscription])
     service.baseURLForTesting = "http://subscription-snapshot-tests.local"
     configureSubscriptionSnapshotAccess(service)
 
     let viewModel = HomeViewModel(apiService: service)
-    let didDelete = try await viewModel.deleteSubscribe(
-      subscribe: Subscribe(id: 501, name: "取消失败", type: "电影")
-    )
+    await viewModel.refreshSubscriptions(forceRefresh: true)
+    let didDelete = try await viewModel.deleteSubscribe(subscribe: subscription)
     let deleteRequestCount =
       await SubscriptionSnapshotURLProtocol.stub.requestCount(path: "/api/v1/subscribe/501")
     let subscriptionRefreshCount =
       await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
 
     XCTAssertFalse(didDelete)
+    XCTAssertEqual(viewModel.movieSubscriptions.map(\.id), [501])
     XCTAssertEqual(deleteRequestCount, 1)
-    XCTAssertEqual(subscriptionRefreshCount, 0)
+    XCTAssertEqual(subscriptionRefreshCount, 2)
+  }
+
+  func testHomeDeleteTreatsMissingSubscriptionAfterRefreshAsConverged() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    await SubscriptionSnapshotURLProtocol.stub.setSubscriptionDeleteResponse(
+      #"{"success":false,"message":"already deleted"}"#
+    )
+    let subscription = Subscribe(id: 502, name: "远端已删除", type: "电影")
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([subscription])
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([])
+    try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions([])
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+
+    let notifications = SubscribeSeasonNotificationCounter()
+    let observer = NotificationCenter.default.addObserver(
+      forName: .subscriptionDidUpdate,
+      object: nil,
+      queue: nil
+    ) { _ in
+      notifications.increment()
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
+    let viewModel = HomeViewModel(apiService: service)
+    await viewModel.refreshSubscriptions(forceRefresh: true)
+    let didDelete = try await viewModel.deleteSubscribe(subscribe: subscription)
+
+    XCTAssertTrue(didDelete)
+    XCTAssertTrue(viewModel.movieSubscriptions.isEmpty)
+    XCTAssertEqual(notifications.count(), 1)
+    let deleteRequestCount =
+      await SubscriptionSnapshotURLProtocol.stub.requestCount(path: "/api/v1/subscribe/502")
+    let subscriptionRefreshCount =
+      await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(deleteRequestCount, 1)
+    XCTAssertGreaterThanOrEqual(subscriptionRefreshCount, 2)
   }
 
   func testHomeSubscriptionRefreshCanBypassCachedSnapshot() async throws {

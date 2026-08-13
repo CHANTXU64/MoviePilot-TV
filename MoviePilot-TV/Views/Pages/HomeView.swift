@@ -467,6 +467,8 @@ private struct SubscribeItemView: View {
           showUnsubscribeFailure()
           return
         }
+      } catch is CancellationError {
+        return
       } catch {
         showUnsubscribeFailure()
       }
