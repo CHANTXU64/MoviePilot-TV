@@ -51,6 +51,37 @@ private func withTransferHistoryTimeout<T: Sendable>(
 
 @MainActor
 final class TransferHistoryViewModelTests: XCTestCase {
+  func testAiRedoRequiresExplicitlyEnabledSetting() throws {
+    let service = APIService.testingInstance()
+    let viewModel = TransferHistoryViewModel(apiService: service)
+
+    XCTAssertFalse(viewModel.isAiRedoEnabled)
+
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(#"{}"#.utf8)
+    )
+    XCTAssertFalse(viewModel.isAiRedoEnabled)
+
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(#"{"AI_AGENT_ENABLE":null}"#.utf8)
+    )
+    XCTAssertFalse(viewModel.isAiRedoEnabled)
+
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(#"{"AI_AGENT_ENABLE":false}"#.utf8)
+    )
+    XCTAssertFalse(viewModel.isAiRedoEnabled)
+
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(#"{"AI_AGENT_ENABLE":true}"#.utf8)
+    )
+    XCTAssertTrue(viewModel.isAiRedoEnabled)
+  }
+
   func testSparseFileItemDoesNotRejectTransferHistoryPage() throws {
     let response = try JSONDecoder().decode(
       TransferHistoryResponse.self,

@@ -31,7 +31,7 @@ class TransferHistoryViewModel: ObservableObject {
   private var aiRedoTask: Task<Void, Never>?
 
   var isAiRedoEnabled: Bool {
-    apiService.settings?.AI_AGENT_ENABLE?.value != false
+    apiService.settings?.AI_AGENT_ENABLE?.value == true
   }
 
   var isMutatingHistory: Bool {

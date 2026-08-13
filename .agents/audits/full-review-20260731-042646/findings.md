@@ -80,10 +80,10 @@
 | F-064 | 已确认 | P2 | M001-G | `Models.swift:2323-2337` 及 Person 解码入口 | 混合类型头像对象可拖垮人物或媒体数组 | review_m001_g 闭合 PersonAvatar、数组原子解码与 source-aware 图片传播链 | verify_m001_g_retry 独立确认可选字段错误传播至人物/媒体/资源批次及空首选遮蔽 | 修复已完成（`af67839`）；当前后端允许 string/dict 头像，独立复审通过，本地测试 430/430 通过 |
 | F-065 | 已确认 | P1 | M001-F→G02 | APIService 三类分季缓存 | 三类缓存只按endpoint参数寻址且旧请求可跨baseURL/user回填，新会话可显示并保存错误季/组数据 | 既有双审闭合cache污染；全新G02 clean-room复核闭合跨服payload链并升级P1 | 切会话清缓存且store前校验既有session generation；不建缓存框架 | 修复已完成：`90b40b4`；会话transition清缓存且旧epoch禁止回填 |
 | F-066 | 已修复 | P2 | M001-F | SubscribeSheetViewModel 剧集组加载资格 | 辅助或非正 raw TMDB ID 被当作主身份加载剧集组 | 当前Web明确跳过非TMDB主来源，后端接口只接受TMDB路径ID | 仅主身份TMDB且raw ID为正时加载，兼容旧无来源TMDB订阅 | 已补跨来源、旧数据与非正ID回归；完整验证通过 |
-| F-067 | 已确认 | P2 | M001-F→G02 | SubscribeSheetViewModel 配置加载 | 可选filter/group请求与核心站点/下载器/目录共用失败域，任一可选失败会清空已成功核心选项并禁用保存 | 既有双审确认机制；G02两名不同复核按当前HEAD再次闭合稳定阻断并升级P2 | 核心选项先发布，可选增强各自best-effort并保留原值 | 纯TV错误隔离P2；Web策略未验证 |
-| F-068 | 已确认 | P2 | M001-F | Subscribe 快照与 Home/动作链 | nil/0/负数/重复业务 ID 可进入 SwiftUI 快照 | review_m001_f 闭合 Optional Identifiable、ForEach、动作 guard 与巡检跳过链 | verify_m001_f_retry 独立扩展确认 0/负数动作路径及兼容巡检盲点 | TV 必需 ID 不变量已确认；当前后端保证未验证 |
+| F-067 | 已确认（用户决定跳过） | P2 | M001-F→G02 | SubscribeSheetViewModel 配置加载 | 可选filter/group请求与核心站点/下载器/目录共用失败域，任一可选失败会清空已成功核心选项并禁用保存 | 既有双审确认机制；G02两名不同复核按当前HEAD再次闭合稳定阻断并升级P2 | 订阅编辑配置按整体原子加载；不拆分为部分可编辑状态 | 当前行为符合整体加载策略，用户决定跳过 |
+| F-068 | 已确认（用户决定跳过） | P2 | M001-F | Subscribe 快照与 Home/动作链 | nil/0/负数/重复业务 ID 可进入 SwiftUI 快照 | Web 同样直接依赖后端正数唯一主键；TV 不做差异化防御 | 保持当前模型与官方后端 ID 合同；不新增异常数据兜底 | 正常官方后端不触发，用户决定跳过 |
 | F-069 | 降级 | P3 | M001-F→G02→当前 v2.15.1 合同复核 | Subscribe 编码与完整 PUT | 当前TV已覆盖目标后端全部公共可写订阅字段，F-199的现成`total_episode`损坏链也已修复；只有未来后端新增TV未知可写字段时，固定模型完整PUT才可能丢值 | 当前TV `CodingKeys`、v2.15.1后端公共写入schema与Web完整表单逐字段复核；未找到当前字段反例 | 不改产品代码；并入CHK-003，官方Web/后端升级时逐字段复核后再决定建模、正式round-trip或阻止不安全保存 | 当前版本不构成缺陷；仅保留未来版本条件性兼容风险 |
-| F-070 | 已确认 | P2 | M001-H→G09 | GlobalSettings 与 Transfer AI 入口 | 未知 AI 能力被当作已启用 | 既有双审闭合 nil settings/字段与入口分支；G09两名代理从当前后端/Web合同重新确认缺失/失败应按禁用 | `== true`复用现有settings；补nil/失败/false/true矩阵 | 当前本地跨端语义已确认；部署版本未验证 |
+| F-070 | 已修复 | P2 | M001-H→G09 | GlobalSettings 与 Transfer AI 入口 | 未知 AI 能力被当作已启用 | 当前 Web 与后端均只在显式 true 时开放 AI 能力 | 改为 `== true`，覆盖 settings 缺失、字段缺失、null、false、true | 回归通过，完整验证通过 |
 | F-071 | 已确认 | P2 | M001-H→I009 | TransferHistoryViewModel 搜索 fetcher | 首次搜索后owner与fetcher形成永久强引用环，每次重进/搜索可无界保留整份历史对象图 | 既有双审闭合环；I009主审与定向独立复核确认请求完成后仍永久存在 | 像init一样在闭包外冻结局部pageSize；不建生命周期框架 | 纯TV永久内存生命周期缺陷已确认 |
 | F-072 | 已确认 | P1 | M001-H→G04 | TransferHistoryViewModel 轮询/搜索/session | 旧轮询可污染新查询/会话、推进当前游标并让当前页继续操作旧记录 | 既有双审确认；G04主审与独立复核再次闭合旧fetcher续接当前fetcher/游标并双票升P1；整改已完成（`e388e8b`），验证及最终独立复审通过 | 捕获query/session/generation/fetcher，恢复与每页提交前复核 | 纯TV跨查询/会话状态归属缺陷 |
 | F-073 | 已确认 | P2 | M001-J→G09 | ManualTransferPreview envelope/data/item 与统计/UI | `success:true`但data缺失/null或item success缺失/null会被当成功预览 | 既有双审闭合fail-open；G09主审与clean-room第三裁逐矩阵确认成立分支，独立复核对envelope缺success的反证被吸收 | endpoint局部要求data与每项Bool success，合法显式空仍成功 | 当前正式producer完整；畸形/兼容producer触发频率未验证 |
@@ -1219,35 +1219,35 @@
 
 ### F-067：可选剧集组失败阻断整个订阅编辑页
 
-- 状态：已确认
+- 状态：已确认（用户决定跳过）
 - 严重度：P2
 - 位置：`MoviePilot-TV/ViewModels/SubscribeSheetViewModel.swift:135-167`、`MoviePilot-TV/Views/Sheets/SubscribeSheet.swift:297-303`
 - 触发路径：站点、下载器和目录已成功，但可选剧集组请求失败。
 - 根因：剧集组请求位于核心配置加载总 `do/catch` 内；任一失败都会清空全部选项并设置错误，保存按钮因此禁用。
 - 用户影响：无法编辑与剧集组无关的站点、质量、路径等配置。
 - 主审证据：分季页已有“剧集组失败不阻断主分季数据”测试；订阅编辑测试未覆盖可选剧集组失败。
-- 跨端结论：TV 本地错误隔离问题；Web 策略未验证。
-- 最小方向：核心选项发布后单独 best-effort 加载剧集组；失败只清剧集组选项并保留原始 `episode_group`。
-- 独立复核：verify_m001_f_retry 确认核心配置成功后仍会因可选组失败被清空并禁用保存，且现有分季页已采用不阻断策略；维持 P3。
+- 跨端结论：虽然可选剧集组失败会阻断编辑，但订阅配置当前按整体原子加载处理。
+- 最小方向 / 裁决：不拆分加载失败域，维持整体失败与重试；用户决定跳过。
+- 独立复核：verify_m001_f_retry 确认核心配置成功后仍会因可选组失败被清空并禁用保存；用户确认订阅配置保持整体原子加载，决定跳过。
 - V018 生产复核：核心配置与可选剧集组仍处于同一 `do/catch`，任一可选组错误都会把已经成功取得的站点、下载器和目录选项一起清空。
-- G02全局裁决：verify_a001_h与rounda_g02_third均确认当前HEAD仍把可选filter/group与核心options置于同一失败域，稳定令无关配置也不可编辑；双票升级P2。分季页已有可复用的非阻断范例，不需新增loader框架。
-- 剩余未验证：Web 是否同样阻断；产品未给出相反意图。
+- G02全局裁决：verify_a001_h与rounda_g02_third均确认当前HEAD仍把可选filter/group与核心options置于同一失败域，稳定令无关配置也不可编辑；双票升级P2。经用户确认订阅配置保持整体原子加载，不拆分失败域。
+- 处置：不做 TV 单端错误隔离增强；后续若产品明确要求部分可编辑，再另行评估。
 
 ### F-068：nil/0/重复业务 ID 可进入订阅快照
 
-- 状态：已确认
+- 状态：已确认（用户决定跳过）
 - 严重度：条件性 P2
 - 位置：`MoviePilot-TV/Models/Models.swift:1683-1689,1790-1793`、Home 快照/动作链及 BackendCompatibility 巡检。
 - 触发路径：`GET /subscribe/` 返回缺失/null、0、负数或重复 `id` 的记录。
 - 根因：`Subscribe.id` 允许 nil 并直接充当 `Identifiable.ID`；快照入口不校验唯一正业务 ID，兼容巡检遇 nil 又直接跳过。
 - 用户影响：SwiftUI 身份/焦点冲突，编辑、保存、搜索、暂停、重置和删除会因缺 ID 静默失败。
 - 主审证据：Home 直接 `ForEach(items)`，动作全部 guard ID；现有焦点测试只确认 nil 映射，巡检无法发现缺 ID schema 回归。
-- 跨端结论：正式清单声明 schema 应返回 ID；当前后端保证未验证。
-- 最小方向：快照/详情边界要求唯一正 ID，草稿构造仍可保留 nil；巡检不得跳过缺失或重复 ID。
-- 独立复核：verify_m001_f_retry 确认 nil/重复会破坏 SwiftUI 身份，0/负数仍可进入部分动作路径，兼容巡检未检查正值和唯一性；维持条件性 P2。
+- 跨端结论：Web 同样直接依赖后端正数唯一主键；正常官方后端不触发此异常数据路径。
+- 最小方向 / 裁决：不做 TV 单端异常数据兜底；用户决定跳过。
+- 独立复核：verify_m001_f_retry 确认 nil/重复会破坏 SwiftUI 身份，0/负数仍可进入部分动作路径；因 Web 同样依赖后端 ID 合同，用户决定跳过。
 - V017 生产补强：nil ID被分季摘要跳过，但0/负数与重复ID仍可被当作有效订阅/取消状态；本View以season作UI key，不直接增加重复SwiftUI ID，范围据此收窄。
 - V018 生产补强：创建 POST 返回0/负数仍会继续 pause/fetch；随后详情响应又可用 nil、非正或不匹配 ID 覆盖本地草稿，保存/取消 owner 因而失去可靠业务键。
-- 剩余未验证：A001-J/G02 决定过滤坏记录还是拒绝整批，当前后端真实输入未验证。
+- 处置：不做 TV 单端异常数据兜底；后续若发现官方后端实际返回异常 ID，再重新评估。
 
 ### F-069：完整 PUT 可能清掉未知订阅字段
 
@@ -1265,18 +1265,18 @@
 
 ### F-070：未知 AI 能力被当作已启用
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P2
 - 位置：`MoviePilot-TV/Models/Models.swift:2394,2408-2412`；`MoviePilot-TV/ViewModels/TransferHistoryViewModel.swift:24-25,461-488`；`MoviePilot-TV/Views/Pages/TransferHistoryView.swift:243-269`
 - 触发路径：settings 未加载、用户设置端点 404/403，或合法响应省略 `AI_AGENT_ENABLE`。
 - 根因：可选能力标志用 `!= false` 判断，nil/未知被当成已启用。
 - 用户影响：显示并允许执行后端未声明可用的 AI 整理，最终才提示启动失败。
 - 主审证据：设置端点测试明确允许 `AI_AGENT_ENABLE == nil`，真实后端副作用 gate 却以 `?? false` 把 nil 判禁用；ViewModel 测试只覆盖 true。
-- 跨端结论：TV 内部三态语义不一致；字段缺失的后端正式默认未验证。
-- 最小方向：先确认产品契约；若未知应禁用，再最小改为 `== true` 并补 nil/false/true 与设置异步更新测试。
+- 跨端结论：当前 Web 与后端均只在显式 `true` 时开放 AI 能力。
+- 修复：`isAiRedoEnabled` 改为 `== true`，设置或字段未知时不再显示 AI 整理入口。
 - 独立复核：verify_m001_h 确认 nil 在现有端点测试中合法可达，但 `!= false` 自功能引入即存在，无法排除旧后端乐观兼容意图，故改为未验证 P3。
 - G09交叉裁决：rounda_g03_recheck 与 rounda_g01_recheck 分别从当前后端禁用分支、Web `Boolean(undefined)` 与TV生产入口重新取证，均确认nil/加载失败时TV错误开放能力；旧后端乐观兼容假设被当前本地跨端合同覆盖，升为确认P2。
-- 剩余未验证：字段缺失/null 的正式默认及 Web 入口行为。
+- 验证：覆盖整个 settings 缺失、字段缺失、字段 null、false、true；定向 XCTest 与完整工程验证通过。
 
 ### F-071：搜索后 owner 与 fetcher 形成强引用环
 
