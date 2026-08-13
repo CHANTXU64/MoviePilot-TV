@@ -45,7 +45,7 @@
 | F-029 | 已确认 | P2 | B004 | 手动 relogin/no-access 分支 | 无功能权限响应时保留旧权限会话 | review_b004 对比手动刷新与冷启动/App 更新出口 | verify_b004 独立确认三个重登出口语义分裂 | 修复完成（`90b40b4`）；空permissions与Web默认权限差异另归F-030核对 |
 | F-030 | 已确认 | 条件性P1 | B004→G06 | `UserPermissions.swift` permissions 解码 | 任一非 Bool 权限项令整个 Token 解码失败 | 当前官方Web正常保存嵌套`features`对象，后端泛型dict不校验并在login/current原样返回；TV会在权限判断前整批解码失败 | 单一共享边界只读取四个已知Bool；未知/坏值忽略，空/缺权限默认语义拆项 | 修复完成（`ee5dcb4`）；clean build、435/435本地测试及独立复审通过 |
 | F-031 | 降级 | 条件性P3 | B004→G06 | token 登录/恢复/登录态判断 | 纯空白 access token 被视为已登录且可恢复权限 | `90b40b4`已拒绝空串；当前官方后端JWT producer不产纯空白，Web也未增加同类校验 | 不为损坏存储或非官方兼容端增加TV差异化硬化，保留内部tokenless currentUser哨兵 | 用户决定跳过；若未来官方producer可达再重开 |
-| F-032 | 已确认 | P2 | M001-E 复核新增 / S004 裁决 | `Context.meta_info` 与 TorrentCard/TorrentsResultView | torrent-only 结果解码成功但静默空渲染 | verify_m001_e 以多个 torrent-only fixture 闭合非空计数→EmptyView 链 | review_s004 独立确认模型合法、过滤保留、非零计数与卡片 EmptyView | TV 契约不一致已确认；真实返回/Web 展示未验证 |
+| F-032 | 已修复 | P2 | M001-E 复核新增 / S004 裁决 | `Context.meta_info` 与 TorrentCard/TorrentsResultView | torrent-only 结果解码成功但静默空渲染 | verify_m001_e 以多个 torrent-only fixture 闭合非空计数→EmptyView 链 | review_s004 独立确认模型合法、过滤保留、非零计数与卡片 EmptyView | `TorrentCard` 已按 Web 降级渲染；当前 MP 官方搜索链正常生成 `MetaInfo`，保留该兼容防御 |
 | F-033 | 已确认 | P2 | S004 | Paginator 错误状态与全部生产调用者 | 错误状态无人消费，错误上限后无保留列表恢复 | review_s004 核对 13 实例、全部 View 与测试只手动重试 | verify_s004 独立确认零消费者、错误上限与页面误空态 | TV 错误体验缺陷已确认；Web 体验未验证 |
 | F-034 | 已确认 | P2 | S004→V011-F | SharedMediaFetcher 与 Paginator 空页语义 | 非终止空批被当成终页，稀疏媒体类型永久截断 | review_s004 构造六页异类/第七页目标序列；verify_a001_h 从 actor 实现重走 | verify_s004 独立确认 buffer/hasMore 与终页契约 | TV 契约冲突已确认；后端混排分布未验证 |
 | F-035 | 已确认 | P2 | S004→V011-C→G04 | Paginator/Search in-flight Task 生命周期 | Task跨await强持有owner且页面离场无owner级取消；显式cancel和新搜索的generation防旧发布本身有效 | 既有双审闭合强持有；全新G04 clean-room复核收窄为owner离场生命周期并升级P2 | owner/session级显式取消共享搜索；不重写已有generation屏障 | TV生命周期缺口已确认；push/切Tab/销毁的取消产品边界与驻留时长未运行验证 |
@@ -156,7 +156,7 @@
 | F-140 | 已确认 | P3 | V011-B | 搜索提交 query 与本地最佳结果评分 | 空白未统一规范化，精确标题可退化并被扩展标题反超 | verify_a001_h 以 `Hamilton ` 闭合后端 trim→TV 原字符串评分→top-12 链 | review_a001_j 独立复算 exact `-1`/extended `484`、换行与纯空白请求路径 | 搜索 canonical query 缺陷已确认；真实输入频率未验证 |
 | F-141 | 已确认 | P3 | V011-B | 搜索年份提取与目标版本后端标题解析 | 首个任意四位数字片名被 TV 误作年份，括号移除又残留空壳 | verify_a001_h 以 `1917 2019` 闭合后端 title/year 与 TV score 分裂 | review_a001_j 独立复算数字片名、括号残留与版本特定词法边界 | 条件性搜索解析 P3已确认；当前部署未验证 |
 | F-142 | 已确认 | P2 | V011-F 复核/裁决 | `SharedMediaFetcher.currentFetchTask` 合流/退休 | 完成 task 的 handle 未清，另一 waiter第二轮重放后返回非终止空批 | review_a001_j 闭合双 waiter恢复顺序与第3页目标类型反例 | review_a001_h 独立状态机确认0→2后重放2→2、actor调度可达及F-034/F-039独立 | 条件性搜索截断已确认；真实调度频率未验证 |
-| F-143 | 已确认 | P2 | V013→G07 | Person route准入与请求owner | 当前可点击的内嵌导演可缺source，人物API在发请求前即失败；稀疏成功回包另拆F-227 | 既有双审闭合无身份死页；G07三方以当前TV/Web/后端窄化为内嵌导演路径 | 后端人物生产边界补真实source；TV只可用父source兼容旧载荷，无法确认则禁用 | TV及共享Web导演route缺口已确认；混合元数据来源未验证 |
+| F-143 | 已确认 | P2 | V013→G07 | Person route准入与请求owner | 当前可点击的内嵌导演可缺source，人物API在发请求前即失败；稀疏成功回包另拆F-227 | 既有双审闭合无身份死页；G07三方以当前TV/Web/后端窄化为内嵌导演路径 | 后端人物生产边界补真实source；TV只可用父source兼容旧载荷，无法确认则禁用 | TV兼容修复已完成（`40adb42`、`d2972b3`）；真实后端混合元数据仍未验证 |
 | F-144 | 已确认 | P2 | V013→W020-A→G02 | 串行首载与吞取消后晚启动下一阶段 | 人物/Transfer/System串行加载外，TMDB识别search取消还会被宽catch吞掉并继续启动fallback请求 | 既有多审确认串行/晚启动；G02两名不同复核闭合取消后fallback确定请求并升级P2 | 复用async let；各catch先传播CancellationError并在fallback前检查取消 | 纯TV取消语义P2；真实慢请求频率未验证 |
 | F-145 | 已确认 | P2 | V016→G05 | AddDownload 下载器 Picker 与 Optional 请求字段 | 选中下载器后无法在同一Sheet恢复初始省略状态 | 既有双审确认；G05主审与独立复核均闭合nil→选择→无法回nil、请求省略语义及仓内“自动”空项反证 | 在现有options前置“自动”空tag，复用Binding；不与F-168合并 | TV表单可逆性缺陷已确认；具体默认文案未验证 |
 | F-146 | 已修复 | P1 | V017→W013-B | SubscribeSeason剧集组请求/选择/入库与payload owner | 旧group请求可覆盖新选择并把A季显示为B订阅目标，点击后产生错误远端订阅 | V017与W013-B双审均闭合A慢B快→A覆盖seasonInfos→按当前B查入库/生成payload的同session链 | `0cfeb12`冻结剧集组、revision与session并统一latest-owner发布 | 两条定向乱序回归及当前本地451/451测试通过 |
@@ -243,7 +243,7 @@
 | F-227 | 已修复 | P2 | G07→F-143拆分裁决 | 人物稀疏详情覆盖seed展示字段 | 有效seed进入人物页后，空/稀疏200详情可把姓名、头像、别名与route字段覆盖为空，而credits仍沿seed owner | G07双审确认，verify_a001_h第三裁按独立字段merge修复/fixture拆出 | route owner保持seed；详情仅以有效更丰富字段覆盖，不做全对象替换 | TV字段合并修复已完成；真实稀疏200频率与视觉闪烁仍需复测 |
 | F-228 | 已确认 | P3 | G07→F-178拆分裁决 | 人物详情备用名展示投影 | latin_name/also_known_as已解码并参与搜索，详情只显示name/original_name | G07双审确认TV/Web展示差异，verify_a001_h第三裁确认独立详情投影并下调P3 | 先按F-227保真，再用有序去空去重displayAlternateNames显示 | TV详情投影缺口已确认；真实别名频率与排版未验证 |
 | F-229 | 已确认 | P3 | G10 | MultiSelection确认与Exit语义不一致 | Toggle即时写外部binding，“确认”只dismiss；Menu与确认同为完成但文案虚构提交边界 | review_a001_h主审与verify_a001_h独立复核闭合三类caller并排除数据丢失/越权写入 | 即时生效合同下仅改“完成”；产品要求取消时才加局部draft | TV交互文案缺口已确认；Menu产品预期未验证 |
-| F-230 | 已确认 | P2 | G10 | 旧系统SheetTextField固定字体不随辅助字号 | tvOS26.0–26.3 UIKit桥接固定30pt/66高且不用UIFontMetrics，16个输入框不消费辅助字号 | review_a001_h全局主审与verify_a001_h独立复核确认目标分支、调用范围和系统性可访问性缺口 | 现有桥接用UIFontMetrics/自动调整并把66改最小高度；不建输入框框架 | 静态动态字体缺口已确认；最大字号裁切待运行 |
+| F-230 | 已确认（用户决定跳过） | P2 | G10 | 旧系统SheetTextField固定字体不随辅助字号 | tvOS26.0–26.3 UIKit桥接固定30pt/66高且不用UIFontMetrics，16个输入框不消费辅助字号 | review_a001_h全局主审与verify_a001_h独立复核确认目标分支、调用范围和系统性可访问性缺口 | 现有桥接用UIFontMetrics/自动调整并把66改最小高度；不建输入框框架 | 仅影响过时的tvOS 26.0–26.3兼容分支，用户决定跳过，不再列为待处理项 |
 | F-231 | 已确认 | P2 | I013 | 详情TMDB异步动作缺route owner | 用户点击TMDB后pop，旧无句柄Task成功仍append共享NavigationPath，失败则在无关页面弹旧提示 | verify_a001_h整文件集成与review_a001_h定向独立复核闭合pop、双激活、跨session晚到族 | 单一action Task随route取消，发布前校验generation/session；不建导航框架 | 纯TV动作owner缺陷已确认；真实慢请求/动画时序未验证 |
 | F-232 | 已确认 | P2 | I009 | Transfer历史分页缺稳定同秒排序 | 后端秒级date仅按DESC做offset分页；同秒不同ID可跨页重复/遗漏，TV去重与遇已知即停会固化漏项 | review_a001_h定向复核提出，verify_a001_h第三裁核对TV/Web/后端四类查询并确认独立P2 | 四个分页分支统一date DESC,id DESC；补25条同秒跨页fixture，不引入游标框架 | 后端共享契约缺陷已确认；真实数据库计划与触发频率未运行验证 |
 | F-233 | 已确认 | P2 | I006 | 插件筛选truthy默认覆盖显式falsey值 | 用户明确选择false/0/空串/null后，运行更新又被truthy默认值替换，无法表达关闭/全部/零/清空 | review_a001_h受限集成提出，review_a001_j隔离审计材料定向复核确认四类值与初始化反证 | 默认只在source初始化应用；运行时原样保存用户值 | TV状态owner缺陷已确认；真实插件字段频率未验证，程序限制披露 |
@@ -712,17 +712,19 @@
 
 ### F-032：torrent-only 结果被静默空渲染
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：条件性 P2
 - 位置：`Context.meta_info`、`TorrentCard.body`、`TorrentsResultView` 空态判断
 - 触发路径：合法 `torrent_info` 存在而 `meta_info` 缺失/null。
 - 根因：模型允许部分结果，卡片却要求 meta+torrent；结果页只按原数组是否为空判断空态。
 - 用户影响：计数非零且无空态，但卡片为 EmptyView；整批如此时显示空白网格且无法下载。
 - 证据：多个 Resource/Search/Permission fixture 为 torrent-only；BackendCompatibility 只要求三类嵌套至少一种。
-- 最小方向：先确定可展示契约；现有 fixture/兼容断言认可 torrent-only，优先用 torrent title/description 等已有字段降级渲染，而不只修空态。
+- 最小方向：按 Web 对齐；只要求 `torrent_info` 存在，元数据字段按可选值分别展示，标题使用媒体名、识别名和 `torrent.title` 兜底。
 - 独立裁决：review_s004 确认模型 decodeIfPresent、三组 torrent-only fixture、结果页保留/计数和卡片 EmptyView 链，维持条件性 P2。
 - V015 生产补强：现有 ResourceResult fixture 正是 torrent-only，却只断言 ViewModel 数量；真实 `TorrentCard` 渲染仍会静默 `EmptyView`，确认测试盲点。
-- 剩余未验证：当前后端真实返回频率与 Web 展示/过滤策略。
+- 修复状态：`TorrentCard` 已移除 `meta_info` 整体门禁；缺少元数据时仍显示种子卡片并保留下载入口，缺失标签按字段隐藏。
+- 跨端核对：当前 MP 官方标题/精确搜索普通与流式链路均会创建 `MetaInfo`；后端 schema 仍允许 `null`，Web 使用可选访问和种子字段兜底，因此本项保留为兼容防御而非当前官方搜索的常规触发。
+- 验证：依赖解析、tvOS Simulator Debug 构建及串行测试均通过。
 
 ### F-033：分页错误状态无人消费且无保留列表恢复
 
@@ -2468,6 +2470,8 @@
 - 独立复核：review_a001_j 确认字符串人物经媒体详情/Search无条件导航的生产可达链、缺ID静默空页、A身份credits冻结与详情nil覆盖造成的不对称；静态缺陷确认，真实字符串/不完整payload频率保留未验证。
 - G07第三裁：verify_a001_h以当前TV/Web/后端HEAD确认可点击坏路径应窄化为内嵌导演，演员当前由带source的credits生成；导演死页成立但不造成mutation/data loss，裁P2。稀疏详情字段merge正式拆为F-227。
 - G04 clean-room 末裁：再次确认无支持的`(source,raw_id)`仍可进入人物详情；seed/详情响应/credits owner静态分裂成立，但核心provider正常回包下一般不显形，继续由F-227/上游合同边界承载，不扩大本项。
+- 修复状态：已完成（`40adb42`、`d2972b3`）。媒体详情内嵌职员在缺失 `source` 时按父媒体来源投影，人员头像同时兼容 AniList 内嵌 `avatar.large`；保留原有卡片交互，不通过禁用卡片掩盖空详情。
+- 验证：补充内嵌导演来源/头像、AniList 详情演员与推荐 endpoint、TMDB 识别 source 固定的回归与兼容契约测试；tvOS Simulator clean build 与串行本地测试 525 项通过、16 项跳过。真实后端用例因缺少 `.env.compatibility` 跳过。
 - 未验证：混合元数据时父媒体source是否始终等于嵌套人物真实来源；未请求真实后端。
 
 ### F-144：多阶段首载吞取消后仍晚启动下一阶段
@@ -3871,8 +3875,9 @@
 
 ### F-230：旧系统 SheetTextField 固定字体不消费辅助字号
 
-- 状态：已确认
+- 状态：已确认（用户决定跳过）
 - 严重度：P2
+- 处置状态：仅影响过时的tvOS 26.0–26.3兼容分支；用户决定不再为这些系统版本修改，保留历史问题但不再列为待处理项。
 - 位置：tvOS 26.0–26.3 `SheetTextField` UIKit桥接的UIFont与固定高度。
 - 触发路径：目标系统运行兼容分支，用户使用更大内容尺寸或低视力辅助设置打开任一业务Sheet文本框。
 - 根因：桥接固定`UIFont.systemFont(ofSize: 30)`与66高度，没有`UIFontMetrics`缩放或环境内容尺寸更新。
@@ -4144,3 +4149,12 @@
 
 - `../MoviePilot-Frontend` 与 `../MoviePilot` 在启动时均不存在，涉及 Web/后端契约的单元仍须完成 TV 端静态审查，但跨端对照结论必须标为 `未验证`，不得凭旧记录补齐。
 - 本轮不会运行具有真实后端副作用的测试或操作。
+
+## 审计后用户补充修复登记（2026-08-13）
+
+本节记录审计收口后用户补充路径的兼容修复，不新增正式 `F-*` 编号：
+
+- AniList 详情页现在按 `anilist/credits/{id}` 和 `anilist/recommend/{id}` 请求演员与推荐；`MediaInfo` 的辅助内容身份在前序身份无效时回退到 `anilist_id`。
+- AniList 人物头像兼容详情内嵌的 `avatar.large` 结构；内嵌职员沿父媒体来源生成可用人物路由，避免点击后进入无请求的空人物页。
+- `recognizeTmdbId` 的搜索与 fallback 均显式传 `source=themoviedb`，与豆瓣、Bangumi 的同一识别跳转流程保持 provider 一致。
+- 以上代码与回归测试已提交为 `d2972b3`；本登记仅更新审计文档，刻意不纳入该提交。

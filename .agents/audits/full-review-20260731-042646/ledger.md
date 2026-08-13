@@ -274,7 +274,7 @@
 | B004 / F-029 | A001-C、V002/W020、V007/W002、G06 | 当前`reloginStoredSession`仅在显式no-access且epoch未变时清理旧会话；密码/网络失败保留旧会话，迟到旧候选不能登出新账号 | 空permissions与Web默认权限差异另归F-030继续核对 | 已闭环；修复完成（`90b40b4`） |
 | B004 / F-030 | M001-B、A001-C/I003、I001、G06 | 当前官方Web会正常写入嵌套`permissions.features`，后端泛型dict不校验并在login/current原样返回；TV原`[String: Bool]?`合成解码会令整个身份失败 | 单一权限JSON边界只读取四个已知Bool；未知/坏值忽略，空/缺权限默认语义保持拆项 | 已闭环；修复完成（`ee5dcb4`），clean build、435/435本地测试及独立复审通过 |
 | B004 / F-031 | S002、A001-B/C、V023/R001、G06 | `90b40b4`已拒绝空串，剩余仅纯空白token；当前官方后端JWT producer不产生，Web同样未校验，确定触发仅损坏存储/非官方兼容端 | 不为低收益异常输入增加TV差异化硬化；保留内部tokenless currentUser哨兵 | 已闭环；降为条件性P3，用户决定跳过 |
-| M001-E / F-032 | S004、A001-H、V011/V015、C017/C018、W006/W011、I001/I011、G05 | torrent-only Context 可解码但 TorrentCard 静默 EmptyView；G05 主审P2、独立复核P1，单方升级不足，保留确认P2 | 可展示契约、过滤位置与 Web 行为 | 已闭环 |
+| M001-E / F-032 | S004、A001-H、V011/V015、C017/C018、W006/W011、I001/I011、G05 | torrent-only Context 可解码但 TorrentCard 静默 EmptyView；当前 MP 官方搜索链正常结果会创建 MetaInfo，schema 仍允许 null | 按 Web 对齐：只要求 torrent_info，元数据字段按可选值降级，标题回退 torrent.title | 已闭环；修复完成 |
 | S004 / F-033 | 全部分页 ViewModel/View、G04 | Paginator 错误状态无人消费，错误上限后无保留列表恢复 | 统一错误呈现与恢复入口；H-010 修订 | 已闭环 |
 | S004 / F-034 | V011/Search、G04 | SharedMediaFetcher 非终止空批被 Paginator 当成终页 | 稀疏媒体类型分布与空数组终页契约 | 已闭环 |
 | S004 / F-035 | 所有固定owner分页ViewModel/View、G04 | in-flight Task跨await强持有owner；显式cancel/新搜索屏障有效，但页面owner离场无对应取消 | owner/session级取消；push/Tab/销毁语义与真实驻留时长 | 已闭环 |
@@ -1091,6 +1091,10 @@
 | S429 | 第二轮终检补漏并收口 | 覆盖检查先通过；一致性检查继续发现G06/G09适用性漏项、F-135共享知识旧态、F-215待裁措辞及B006-A历史等待语气。补齐后适用性166/166（140正文＋16集成＋10全局），当前态无候选、待裁或开放措辞 |
 | S430 | 最终覆盖与一致性双检通过 | 覆盖代理确认78/78、140/140、16/16、10/10、284/284、246F、20CHK、报告十类内容与I006/I016永久披露全部一致；文档一致性代理确认166/166适用性、驳回/合并靶点和当前态零阻断。最终报告转为“最终” |
 | S431 | P1最终处置与当前合同校准 | 主代理重新核对完整P1台账、当前TV实现及目标v2.15.1 Web/后端合同：历史确认P1共44项，30项已修复/完成范围内对齐、10项用户明确跳过、4项重分类，待裁0。F-069降为未来兼容P3并落实CHK-003；F-076跨owner链闭合、余项P2；F-100由`0cfeb12`修复；F-193跨profile链由`90b40b4`修复、余项P2。两条聚焦回归于2026-08-11通过；仅同步审计/清单文档，未改产品代码、未提交 |
+| S432 | 审计后用户补充兼容修复登记 | 内嵌职员来源/头像、AniList详情演员与推荐、TMDB识别 provider 固定已由 `40adb42`、`d2972b3` 落实；新增回归与兼容契约测试，tvOS Simulator clean build及串行本地测试525项通过、16项跳过；真实后端因缺少`.env.compatibility`未运行。仅更新本审计目录文档，刻意不纳入代码提交 |
+| S433 | F-227人物详情闪烁修复登记 | `PersonDetailViewModel`按字段合并稀疏详情，保留seed身份与已有展示字段，并优先复用seed头像/图片；新增稀疏详情及头像地址变化回归测试，tvOS Simulator Debug clean build及全量串行测试527项执行、16项跳过、0失败 |
+| S434 | F-230旧系统辅助字号处置 | 用户确认tvOS 26.0–26.3已属过时版本，决定跳过旧兼容分支的固定字体/高度修复；保留历史P2结论，但不再列为待处理项 |
+| S435 | F-032兼容修复登记 | 当前 MP 官方标题/精确搜索普通与流式链路均创建 MetaInfo；TV `TorrentCard` 已按 Web 对齐为 torrent-only 降级渲染，标题回退 `torrent.title`；依赖解析、tvOS Simulator Debug 构建及串行测试通过 |
 
 ## 9. 错误与重试
 
