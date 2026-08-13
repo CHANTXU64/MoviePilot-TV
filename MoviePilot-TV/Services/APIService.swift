@@ -1713,8 +1713,8 @@ class APIService: ObservableObject {
     do {
       Logger.debug("[APIService] 开始 TMDB 搜索识别: '\(title)' -> 清洗后: '\(queryTitle)'", metadata: ["year": searchYear ?? "n/a", "type": type ?? "n/a"])
       
-      // 恢复原始调用：API 不带 type 参数，保持与 SearchBarDialog.vue 一致
-      let results = try await searchMedia(query: queryTitle)
+      // 不传 type，保持与 Web 搜索接口一致；显式锁定 TMDB，避免受后端默认识别源影响。
+      let results = try await searchMedia(query: queryTitle, source: .themoviedb)
       guard isSessionUnchanged(from: snapshot) else { return nil }
       let targetTitle = queryTitle.lowercased().trimmingCharacters(in: .whitespaces)
 
@@ -1793,7 +1793,7 @@ class APIService: ObservableObject {
       Logger.debug("[APIService] Search 未命中，尝试 Fallback 到后端 Recognize 接口: \(title)")
       let recognizeQuery =
         (searchYear != nil && !title.contains(searchYear!)) ? "\(title) \(searchYear!)" : title
-      let result = try await recognizeMedia(title: recognizeQuery)
+      let result = try await recognizeMedia(title: recognizeQuery, source: .themoviedb)
 
       // 检查识别出的类型是否匹配（如果已知 type）
       if let targetType = type, let recognizedType = result.media_info?.type {
@@ -1943,7 +1943,7 @@ class APIService: ObservableObject {
   }
 
   /// 获取推荐媒体
-  /// - 对应前端: MoviePilot-Frontend/src/views/discover/MediaDetailView.vue (按 TMDB、豆瓣、Bangumi 字段顺序构造 recommend 路径)
+  /// - 对应前端: MoviePilot-Frontend/src/views/discover/MediaDetailView.vue (按 TMDB、豆瓣、Bangumi、AniList 字段顺序构造 recommend 路径)
   /// - 应用场景: 在媒体详情页底部，根据 Web 支持的辅助内容来源获取“推荐”列表。
   /// - ⚠️ 注意: Bangumi 的推荐接口不需要传 type。
   func fetchMediaRecommendations(detail: MediaInfo, page: Int = 1) async throws -> [MediaInfo] {
@@ -1959,6 +1959,8 @@ class APIService: ObservableObject {
       path = "douban/recommend/\(identity.mediaId)/\(type)"
     } else if identity.source == "bangumi" {
       path = "bangumi/recommend/\(identity.mediaId)"
+    } else if identity.source == "anilist" {
+      path = "anilist/recommend/\(identity.mediaId)"
     }
 
     guard let finalPath = path else { return [] }
@@ -2420,8 +2422,16 @@ class APIService: ObservableObject {
   /// - 应用场景: 名称识别测试页面，用于测试后端的标题识别规则。
   /// - 对比组件: 前端的手动搜索功能由 `MediaIdSelector.vue` UI组件实现，该组件调用 `/media/search` API 来让用户**手动搜索并确认**影视信息。
   /// - tvOS现状: 当前 tvOS 端仅使用了此“自动识别”逻辑，后续审查时需关注其识别准确率是否满足业务场景。
-  func recognizeMedia(title: String) async throws -> RecognizeResponse {
-    let endpoint = try buildEndpoint(path: "/media/recognize", params: ["title": title])
+  func recognizeMedia(
+    title: String,
+    source: MediaSearchSource? = nil
+  ) async throws -> RecognizeResponse {
+    let endpoint = try buildEndpoint(
+      path: "/media/recognize",
+      params: [
+        "title": title,
+        "source": source?.rawValue,
+      ])
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap(RecognizeResponse.self, from: data)
   }
@@ -2487,7 +2497,7 @@ class APIService: ObservableObject {
 
   /// 获取媒体演员
   /// - 对应前端: `MoviePilot-Frontend/src/pages/credits.vue` (调用 `PersonCardListView.vue` 进行分页加载)
-  /// - 应用场景: 影视详情页按 Web 的 TMDB、豆瓣、Bangumi 字段顺序展示演员，支持分页加载。
+  /// - 应用场景: 影视详情页按 Web 的 TMDB、豆瓣、Bangumi、AniList 字段顺序展示演员，支持分页加载。
   func fetchMediaActors(detail: MediaInfo, page: Int) async throws -> [Person] {
     guard let identity = detail.auxiliaryContentIdentity else { return [] }
     let path: String
@@ -2499,6 +2509,8 @@ class APIService: ObservableObject {
       path = "douban/credits/\(identity.mediaId)/\(type)"
     } else if identity.source == "bangumi" {
       path = "bangumi/credits/\(identity.mediaId)"
+    } else if identity.source == "anilist" {
+      path = "anilist/credits/\(identity.mediaId)"
     } else {
       return []
     }
@@ -3297,7 +3309,9 @@ class APIService: ObservableObject {
       guard let image = images?.medium else { return nil }
       url = image
     case "anilist":
-      guard let image = images?.large ?? images?.medium else { return nil }
+      // AniList 媒体详情的内嵌 directors/actors 使用 avatar.large，
+      // 而独立 credits/person 端点使用 images.large；两种结构都要兼容。
+      guard let image = images?.large ?? images?.medium ?? avatar?.urlValue else { return nil }
       url = image
     default:
       return nil

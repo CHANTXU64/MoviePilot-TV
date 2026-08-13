@@ -68,7 +68,8 @@ nonisolated enum MediaIdentifier {
   static func resolveAuxiliaryContent(
     tmdbId: Int?,
     doubanId: String?,
-    bangumiId: Int?
+    bangumiId: Int?,
+    anilistId: Int?
   ) -> MediaIdentity? {
     if let id = truthyNumericIdentifier(tmdbId) {
       return MediaIdentity(source: "themoviedb", mediaId: String(id))
@@ -78,6 +79,9 @@ nonisolated enum MediaIdentifier {
     }
     if let id = truthyNumericIdentifier(bangumiId) {
       return MediaIdentity(source: "bangumi", mediaId: String(id))
+    }
+    if let id = truthyNumericIdentifier(anilistId) {
+      return MediaIdentity(source: "anilist", mediaId: String(id))
     }
     return nil
   }
@@ -1154,13 +1158,14 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     )
   }
 
-  /// Web 详情页的演职员、推荐和相似内容按 TMDB、豆瓣、Bangumi 字段顺序选择接口，
+  /// Web 详情页的演职员和推荐按 TMDB、豆瓣、Bangumi、AniList 字段顺序选择接口，
   /// 与订阅使用的主身份是两条独立规则。
   var auxiliaryContentIdentity: MediaIdentity? {
     MediaIdentifier.resolveAuxiliaryContent(
       tmdbId: tmdb_id,
       doubanId: douban_id,
-      bangumiId: bangumi_id
+      bangumiId: bangumi_id,
+      anilistId: anilist_id
     )
   }
 

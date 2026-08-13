@@ -298,8 +298,9 @@ final class PersonDecodingTests: XCTestCase {
           "https://anilist.local/medium.jpg"
         ),
         (
-          "AniList ignores avatar", "anilist", nil,
-          .url("https://anilist.local/avatar.jpg"), nil, nil
+          "AniList avatar fallback", "anilist", nil,
+          .url("https://anilist.local/avatar.jpg"), nil,
+          "https://anilist.local/avatar.jpg"
         ),
         (
           "Missing source", nil, "/tmdb.jpg", .url("https://douban.local/avatar.jpg"),
@@ -395,6 +396,75 @@ final class PersonDecodingTests: XCTestCase {
       XCTAssertNil(resolvedDirector.source)
       XCTAssertNil(resolvedDirector.imageURLs.profile)
     }
+  }
+
+  func testMediaDetailViewModelPublishesResolvedEmbeddedDirectors() throws {
+    let media = try JSONDecoder().decode(
+      MediaInfo.self,
+      from: Data(
+        """
+        {
+          "source": "themoviedb",
+          "title": "测试电影",
+          "directors": [
+            {
+              "id": 123,
+              "name": "测试导演",
+              "job": "Director",
+              "profile_path": "/director.jpg"
+            }
+          ]
+        }
+        """.utf8
+      )
+    )
+    let viewModel = MediaDetailViewModel(
+      detail: media,
+      apiService: APIService.isolatedTestingInstance()
+    )
+
+    viewModel.applyFullDetail(media)
+
+    let director = try XCTUnwrap(viewModel.uniqueDirectors.first)
+    XCTAssertEqual(director.source, "themoviedb")
+    XCTAssertEqual(director.id, "themoviedb-123")
+  }
+
+  func testAniListEmbeddedDirectorSupportsNestedAvatarAfterSourceResolution() throws {
+    let service = APIService.shared
+    let snapshot = PersonDecodingServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "http://moviepilot.local"
+    service.useImageCache = false
+
+    let media = try JSONDecoder().decode(
+      MediaInfo.self,
+      from: Data(
+        """
+        {
+          "source": "anilist",
+          "anilist_id": 154587,
+          "directors": [
+            {
+              "id": 95012,
+              "name": "Atsumi Tanezaki",
+              "job": "Director",
+              "avatar": {"large": "https://anilist.local/staff/large.jpg"}
+            }
+          ]
+        }
+        """.utf8
+      )
+    )
+
+    let director = try XCTUnwrap(media.resolvedDirectors.first)
+    XCTAssertEqual(director.source, "anilist")
+    XCTAssertEqual(director.name, "Atsumi Tanezaki")
+    XCTAssertEqual(
+      director.imageURLs.profile?.absoluteString,
+      "https://anilist.local/staff/large.jpg"
+    )
   }
 
 }

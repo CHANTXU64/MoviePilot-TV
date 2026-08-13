@@ -102,7 +102,7 @@ final class TMDBDetailPreloadTests: XCTestCase {
   }
 
   @MainActor
-  func testAniListUsesExistingTMDBJumpAndPreloadFlow() async throws {
+  func testAniListUsesSameTMDBRecognitionFlowAsDoubanAndBangumi() async throws {
     let anilist = try JSONDecoder().decode(
       MediaInfo.self,
       from: Data(
@@ -124,17 +124,17 @@ final class TMDBDetailPreloadTests: XCTestCase {
     let preloadTarget = MediaDetailContainerView.tmdbPreloadTarget(
       for: anilist,
       fullDetail: nil,
-      recognizedTmdbId: 209867,
+      recognizedTmdbId: 209_867,
       didFailToLoadDetail: true,
       isEnabled: true
     )
     let jumpTarget = await MediaActionHandler().getTMDBJumpTarget(
       for: anilist,
-      targetTmdbId: 209867
+      targetTmdbId: 209_867
     )
 
-    XCTAssertEqual(preloadTarget?.tmdb_id, 209867)
-    XCTAssertEqual(jumpTarget?.tmdb_id, 209867)
+    XCTAssertEqual(preloadTarget?.tmdb_id, 209_867)
+    XCTAssertEqual(jumpTarget?.tmdb_id, 209_867)
     XCTAssertEqual(preloadTarget?.id, jumpTarget?.id)
   }
 
