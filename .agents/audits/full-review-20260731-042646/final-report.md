@@ -935,15 +935,15 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-066 · P2 · 已确认 · 辅助或非正 raw TMDB ID 被当作主身份加载剧集组</summary>
+<summary>F-066 · P2 · 已修复 · 辅助或非正 raw TMDB ID 被当作主身份加载剧集组</summary>
 
 - 审查单元与位置：M001-F；SubscribeSheetViewModel 剧集组加载资格
 - 触发路径：主身份为 AniList、Douban 或插件但带辅助 `tmdbid`，或快照为非正 `tmdbid + 有效 mediaid`，用户打开订阅编辑页。
 - 根因：编辑页只用 `type == "电视剧" && tmdbid != nil` 放行，没有复用 `Subscribe.identity`，也不过滤 0/负数。
 - 用户影响：请求辅助媒体或 `/media/groups/0`，展示并可能保存不属于主订阅身份的剧集组；失败还可阻断编辑页。
 - 证据：review_m001_f 对照 Subscribe.identity、分季正确入口与现有契约；verify_m001_f_retry 确认编辑页 gate 分裂，verify_a001_h 补充负数也可通过并进入 API
-- 跨端结论：TV 内部主身份契约不一致
-- 最小修改方向 / 裁决：复用统一身份判定，仅在主身份为 TMDB 且 raw TMDB ID 有效时加载。
+- 修复：对齐Web，仅在订阅主身份为TMDB且raw ID为正时加载剧集组；旧无来源TMDB订阅继续兼容，后端仍只接收TMDB路径ID。
+- 验证：AniList辅助TMDB、旧TMDB无来源及0/负数ID回归通过；依赖解析、tvOS Simulator Debug完整构建和串行全量测试均通过。
 
 </details>
 

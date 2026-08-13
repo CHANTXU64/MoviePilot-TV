@@ -303,7 +303,7 @@
 | S002 / F-063 | A001-B/C、V002-B、V007、V023、R001/R002、G06 | 两票确认四项独立来源可组合A token、B user/permissions与另一代credentials，升条件P1 | 四项记录绑定同一session revision且只接受同代 | 已闭环；修复完成（`90b40b4`） |
 | M001-G / F-064 | A001-I、V012-A、V013、C010、W006/W008/W009、I001/I003/I008/I012/I013、G07 | 可选 PersonAvatar 将整个对象解为 `[String:String]`，混合类型可令整批失败，空首选可遮蔽有效后备 URL | 当前 avatar schema；混合类型/null/空首选应如何在模型边界降级且不丢整批 | 已闭环；修复完成（`af67839`） |
 | M001-F / F-065 | A001-B/J、V017/V018/V021、W013/W014/W018、I003、G02/G06 | 三缓存无session/baseURL且旧请求可回填新会话，最终进入错误季/组订阅payload；末裁P1 | 复用session generation清理并在store前拒绝旧owner | 已闭环；修复完成（`90b40b4`） |
-| M001-F / F-066 | V018/W014、A001-J、W013、G02 | 订阅编辑页用 `type + tmdbid != nil` 放行辅助或非正 raw TMDB ID，违背主身份边界 | 既有跨源订阅字段组合；所有剧集组入口是否统一复用主身份与正 ID 判定 | 已闭环 |
+| M001-F / F-066 | V018/W014、A001-J、W013、G02 | 订阅编辑页用 `type + tmdbid != nil` 放行辅助或非正 raw TMDB ID，违背主身份边界 | 对齐Web主来源判断并要求正数ID，保留旧无来源TMDB兼容 | 已闭环；修复完成并通过回归与全量测试 |
 | M001-F / F-067 | V018/W014、A001-J、G02/G10 | 可选剧集组请求与核心配置共用总 do/catch，失败会清空选项并禁用保存 | 产品是否有意阻断无关编辑；best-effort 隔离与原 episode_group 保留 | 已闭环 |
 | M001-F / F-068 | A001-J、V008/W003、V017/W013、BackendCompatibilityTests、G02/G06 | Subscribe 快照允许 nil/0/重复 id 进入 SwiftUI，而动作全部要求业务 ID | 上游 ID 保证；快照应拒绝整批还是过滤单条并报告 | 已闭环 |
 | M001-F / F-069 | A001-J/I003、V018/W014、G02 | 封闭CodingKeys完整PUT折叠unknown/absent/null/default；当前后端全量update已有持久反例，末裁转确认P1 | 原快照/dirty-field overlay；与F-199共享lossless edit根 | 已闭环 |

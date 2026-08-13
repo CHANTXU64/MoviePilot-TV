@@ -772,6 +772,113 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(filterGroupsRequestCount, 1)
   }
 
+  func testLoadDataSkipsEpisodeGroupsForAniListWithAuxiliaryTMDBID() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(
+        id: 784,
+        name: "AniList 辅助 TMDB",
+        type: "电视剧",
+        tmdbid: 817_002,
+        anilistid: 154_587,
+        media_source: "anilist",
+        media_id: "154587"
+      ),
+      apiService: service
+    )
+
+    await viewModel.loadData()
+
+    XCTAssertNil(viewModel.loadErrorMessage)
+    XCTAssertTrue(viewModel.episodeGroups.isEmpty)
+    let requestCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "GET", path: "/api/v1/media/groups/817002")
+    XCTAssertEqual(requestCount, 0)
+  }
+
+  func testLoadDataLoadsEpisodeGroupsForLegacyTMDBSubscriptionWithoutSource() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/media/groups/817003",
+      json: #"[{"id":"group-a","name":"官方排序","group_count":2,"episode_count":24}]"#
+    )
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(
+        id: 785,
+        name: "旧 TMDB 订阅",
+        type: "电视剧",
+        tmdbid: 817_003
+      ),
+      apiService: service
+    )
+
+    await viewModel.loadData()
+
+    XCTAssertNil(viewModel.loadErrorMessage)
+    XCTAssertEqual(viewModel.episodeGroups.map(\.name), ["官方排序"])
+    let requestCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "GET", path: "/api/v1/media/groups/817003")
+    XCTAssertEqual(requestCount, 1)
+  }
+
+  func testLoadDataSkipsEpisodeGroupsForNonPositiveTMDBIDs() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    for tmdbID in [0, -1] {
+      let viewModel = SubscribeSheetViewModel(
+        subscribe: Subscribe(
+          id: 786,
+          name: "非法 TMDB ID",
+          type: "电视剧",
+          tmdbid: tmdbID
+        ),
+        apiService: service
+      )
+
+      await viewModel.loadData()
+
+      XCTAssertNil(viewModel.loadErrorMessage)
+      XCTAssertTrue(viewModel.episodeGroups.isEmpty)
+    }
+
+    let zeroRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "GET", path: "/api/v1/media/groups/0")
+    let negativeRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "GET", path: "/api/v1/media/groups/-1")
+    XCTAssertEqual(zeroRequestCount, 0)
+    XCTAssertEqual(negativeRequestCount, 0)
+  }
+
   func testLoadDataShowsOnlyActiveSites() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }

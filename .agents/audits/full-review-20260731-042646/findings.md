@@ -79,7 +79,7 @@
 | F-063 | 已确认 | P1 | S002→G06 | `KeychainHelper.swift:8-84` 及 APIService/SystemViewModel 持久化链 | Keychain/UserDefaults 无明确权威导致旧或混合会话恢复 | 既有双审闭合逐项持久化；G06 两票确认A token、B user/permissions与另一代credentials可组合恢复 | 四项复用同一session owner/revision，只接受同代记录 | 修复已完成：`90b40b4`；单记录revision取代逐字段混读 |
 | F-064 | 已确认 | P2 | M001-G | `Models.swift:2323-2337` 及 Person 解码入口 | 混合类型头像对象可拖垮人物或媒体数组 | review_m001_g 闭合 PersonAvatar、数组原子解码与 source-aware 图片传播链 | verify_m001_g_retry 独立确认可选字段错误传播至人物/媒体/资源批次及空首选遮蔽 | 修复已完成（`af67839`）；当前后端允许 string/dict 头像，独立复审通过，本地测试 430/430 通过 |
 | F-065 | 已确认 | P1 | M001-F→G02 | APIService 三类分季缓存 | 三类缓存只按endpoint参数寻址且旧请求可跨baseURL/user回填，新会话可显示并保存错误季/组数据 | 既有双审闭合cache污染；全新G02 clean-room复核闭合跨服payload链并升级P1 | 切会话清缓存且store前校验既有session generation；不建缓存框架 | 修复已完成：`90b40b4`；会话transition清缓存且旧epoch禁止回填 |
-| F-066 | 已确认 | P2 | M001-F | SubscribeSheetViewModel 剧集组加载资格 | 辅助或非正 raw TMDB ID 被当作主身份加载剧集组 | review_m001_f 对照 Subscribe.identity、分季正确入口与现有契约 | verify_m001_f_retry 确认编辑页 gate 分裂，verify_a001_h 补充负数也可通过并进入 API | TV 内部主身份契约不一致 |
+| F-066 | 已修复 | P2 | M001-F | SubscribeSheetViewModel 剧集组加载资格 | 辅助或非正 raw TMDB ID 被当作主身份加载剧集组 | 当前Web明确跳过非TMDB主来源，后端接口只接受TMDB路径ID | 仅主身份TMDB且raw ID为正时加载，兼容旧无来源TMDB订阅 | 已补跨来源、旧数据与非正ID回归；完整验证通过 |
 | F-067 | 已确认 | P2 | M001-F→G02 | SubscribeSheetViewModel 配置加载 | 可选filter/group请求与核心站点/下载器/目录共用失败域，任一可选失败会清空已成功核心选项并禁用保存 | 既有双审确认机制；G02两名不同复核按当前HEAD再次闭合稳定阻断并升级P2 | 核心选项先发布，可选增强各自best-effort并保留原值 | 纯TV错误隔离P2；Web策略未验证 |
 | F-068 | 已确认 | P2 | M001-F | Subscribe 快照与 Home/动作链 | nil/0/负数/重复业务 ID 可进入 SwiftUI 快照 | review_m001_f 闭合 Optional Identifiable、ForEach、动作 guard 与巡检跳过链 | verify_m001_f_retry 独立扩展确认 0/负数动作路径及兼容巡检盲点 | TV 必需 ID 不变量已确认；当前后端保证未验证 |
 | F-069 | 降级 | P3 | M001-F→G02→当前 v2.15.1 合同复核 | Subscribe 编码与完整 PUT | 当前TV已覆盖目标后端全部公共可写订阅字段，F-199的现成`total_episode`损坏链也已修复；只有未来后端新增TV未知可写字段时，固定模型完整PUT才可能丢值 | 当前TV `CodingKeys`、v2.15.1后端公共写入schema与Web完整表单逐字段复核；未找到当前字段反例 | 不改产品代码；并入CHK-003，官方Web/后端升级时逐字段复核后再决定建模、正式round-trip或阻止不安全保存 | 当前版本不构成缺陷；仅保留未来版本条件性兼容风险 |
@@ -1199,7 +1199,7 @@
 
 ### F-066：辅助或非正 raw TMDB ID 被当作主身份加载剧集组
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P2
 - 位置：`MoviePilot-TV/ViewModels/SubscribeSheetViewModel.swift:154-161`；对照 `Models.swift:1965-1975`
 - 触发路径：主身份为 AniList、Douban 或插件但带辅助 `tmdbid`，或快照为非正 `tmdbid + 有效 mediaid`，用户打开订阅编辑页。
@@ -1213,6 +1213,9 @@
 - V017 边界补充：分季页正确拒绝AniList辅助TMDB与0，但使用truthy数值判定，负TMDB ID仍可请求`/media/groups/-1`；维持F-066正ID要求，不新增分季专用finding。
 - V018 生产复核：编辑页唯一 gate 仍是 `tmdbid != nil`，未验证主身份且未要求正数；辅助 TMDB、0 与负数均沿同一路径进入剧集组请求。
 - 剩余未验证：真实混合字段分布；V018/W014 仍需回溯测试入口。
+- 当前跨端复核：Web编辑页明确跳过非TMDB主来源的辅助TMDB ID并有AniList回归；后端`/media/groups/{tmdbid}`只按TMDB电视剧识别，无法替客户端判断主来源。
+- 修复：复用`Subscribe.identity`并要求正数raw TMDB ID；旧订阅未记录`media_source`时仍按合法TMDB ID加载。
+- 验证：补充AniList辅助TMDB不请求、旧TMDB无来源仍请求、0/负数不请求三组回归；依赖解析、tvOS Simulator Debug完整构建和串行全量测试均通过。
 
 ### F-067：可选剧集组失败阻断整个订阅编辑页
 
