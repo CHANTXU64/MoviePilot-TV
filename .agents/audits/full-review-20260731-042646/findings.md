@@ -46,7 +46,7 @@
 | F-030 | 已确认 | 条件性P1 | B004→G06 | `UserPermissions.swift` permissions 解码 | 任一非 Bool 权限项令整个 Token 解码失败 | 当前官方Web正常保存嵌套`features`对象，后端泛型dict不校验并在login/current原样返回；TV会在权限判断前整批解码失败 | 单一共享边界只读取四个已知Bool；未知/坏值忽略，空/缺权限默认语义拆项 | 修复完成（`ee5dcb4`）；clean build、435/435本地测试及独立复审通过 |
 | F-031 | 降级 | 条件性P3 | B004→G06 | token 登录/恢复/登录态判断 | 纯空白 access token 被视为已登录且可恢复权限 | `90b40b4`已拒绝空串；当前官方后端JWT producer不产纯空白，Web也未增加同类校验 | 不为损坏存储或非官方兼容端增加TV差异化硬化，保留内部tokenless currentUser哨兵 | 用户决定跳过；若未来官方producer可达再重开 |
 | F-032 | 已修复 | P2 | M001-E 复核新增 / S004 裁决 | `Context.meta_info` 与 TorrentCard/TorrentsResultView | torrent-only 结果解码成功但静默空渲染 | verify_m001_e 以多个 torrent-only fixture 闭合非空计数→EmptyView 链 | review_s004 独立确认模型合法、过滤保留、非零计数与卡片 EmptyView | `TorrentCard` 已按 Web 降级渲染；当前 MP 官方搜索链正常生成 `MetaInfo`，保留该兼容防御 |
-| F-033 | 已确认 | P2 | S004 | Paginator 错误状态与全部生产调用者 | 错误状态无人消费，错误上限后无保留列表恢复 | review_s004 核对 13 实例、全部 View 与测试只手动重试 | verify_s004 独立确认零消费者、错误上限与页面误空态 | TV 错误体验缺陷已确认；Web 体验未验证 |
+| F-033 | 已修复 | P2 | S004 | Paginator 错误状态与全部生产调用者 | 错误状态无人消费，错误上限后无保留列表恢复 | review_s004 核对 13 实例、全部 View 与测试只手动重试 | verify_s004 独立确认零消费者、错误上限与页面误空态 | 连续失败达到三次上限后统一通知用户重试；不增加重试按钮 |
 | F-034 | 已确认 | P2 | S004→V011-F | SharedMediaFetcher 与 Paginator 空页语义 | 非终止空批被当成终页，稀疏媒体类型永久截断 | review_s004 构造六页异类/第七页目标序列；verify_a001_h 从 actor 实现重走 | verify_s004 独立确认 buffer/hasMore 与终页契约 | TV 契约冲突已确认；后端混排分布未验证 |
 | F-035 | 已确认 | P2 | S004→V011-C→G04 | Paginator/Search in-flight Task 生命周期 | Task跨await强持有owner且页面离场无owner级取消；显式cancel和新搜索的generation防旧发布本身有效 | 既有双审闭合强持有；全新G04 clean-room复核收窄为owner离场生命周期并升级P2 | owner/session级显式取消共享搜索；不重写已有generation屏障 | TV生命周期缺口已确认；push/切Tab/销毁的取消产品边界与驻留时长未运行验证 |
 | F-036 | 已确认 | P2 | S004→V011-D→G07 | Search 人物与 TransferHistory processor | 只去重旧 raw ID，漏同批最终 ID并可跨 source 误合并 | 既有processor复核闭合不可变seen；G07双审及第三裁确认合法跨source聚合与批内重复 | 使用最终`Person.id`可变seen并在reset清空；Paginator扫描另归F-034 | TV身份去重缺陷已确认；真实碰撞频率未验证 |
@@ -728,7 +728,7 @@
 
 ### F-033：分页错误状态无人消费且无保留列表恢复
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P2
 - 位置：`MoviePilot-TV/Services/Paginator.swift` 错误状态/上限及全部生产调用者
 - 触发路径：首次加载失败，或任一页连续失败三次。
@@ -741,6 +741,8 @@
 - I009集成确认：review_a001_j从整文件确认refresh/loadMore等待Paginator后从不读取`hasError/lastError`；首屏500显示“没有数据”，分页500静默保留stale。复用现有`handle(error:)`消费Paginator错误即可，P2不变。
 - I013第三裁校准：review_a001_j确认详情actors/recommend/similar三个辅助区的局部后果按P3，但F-033覆盖13个生产实例、Transfer首屏误空与分页永久截断，根finding维持P2；详情传播不与F-180主详情失败或F-116成功cache hit合并。
 - I006传播：Explore首屏Paginator失败后View只按空items显示“暂无内容”且没有Retry；两份受限整文件复核均确认复用本项统一错误消费/恢复即可，不新增Explore错误状态。
+- 用户裁决与修复：保留现有三次连续失败上限；达到上限时由 `Paginator` 发送单一全局事件，`NotificationManager` 显示“加载数据失败，请重试。”。前两次保持静默，不增加重试按钮或页面恢复状态。
+- 验证：回归测试覆盖前两次不提示、第三次显示指定文案；依赖解析、tvOS Simulator Debug 完整构建及串行测试均通过。
 
 ### F-034：非终止空批被误判为终页
 

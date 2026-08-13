@@ -10,6 +10,8 @@ extension Notification.Name {
   static let subscriptionSaveDidComplete = Notification.Name("subscriptionSaveDidComplete")
   /// 会话登出通知（主动登出或自动重连失败后发送，用于清理会话相关缓存）
   static let sessionDidLogout = Notification.Name("sessionDidLogout")
+  /// 分页连续失败达到上限，交由全局通知提示用户自行重试
+  static let paginatorDidReachErrorLimit = Notification.Name("paginatorDidReachErrorLimit")
 }
 
 nonisolated struct MediaIdentity: Hashable {
