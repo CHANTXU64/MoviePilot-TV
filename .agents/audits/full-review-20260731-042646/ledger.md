@@ -281,7 +281,7 @@
 | S004 / F-036 | V011/Search、V022/Transfer、对应 View、G04 | processor 只去重旧 items，漏页内重复 ID | 最终人物身份与批内可变seen；reset清空持久seen | 已闭环；修复完成并通过回归与全量测试 |
 | B006-A / F-037 | A001-I、V004-A、V012-A、W008-C、I001/I002/I008/I013、G07 | 有效语言标签未经规范化而退化为原码 | 上游格式、BCP 47/别名支持边界 | 已闭环 |
 | B006-A / F-038 | M001-C/D、A001-I、W008-C、I001/I002/I013、G07 | 空白 original_language 进入详情元数据分隔串 | 共享规范化与空展示值过滤位置 | 已闭环 |
-| S004 / F-039 | V011-C/D/F、I007、W006、G04/G06 | 单waiter取消合理不传递，但整个search session废弃后共享Task/URL请求/cursor仍继续 | aggregate session取消且不误伤另一合法waiter | 已闭环 |
+| S004 / F-039 | V011-C/D/F、I007、W006、G04/G06 | 单waiter取消合理不传递，但整个search session废弃后共享Task/URL请求/cursor仍继续 | aggregate session取消且不误伤另一合法waiter | 已闭环；用户决定跳过并接受旧请求资源占用 |
 | B005 / F-040 | B006-C、S006、V012-A、C010、W008-D、I002/I008/I013、G07 | 不同 job key 翻译为同一显示文本后未去重 | 产品词义还是显示边界去重 | 已闭环 |
 | B005 / F-041 | M001-G、A001-I、B006-C、S006、V012-A、I001/I002/I003/I008/I013、G07 | job 大小写/换行/别名同时绕过翻译与优先级 | canonical key 与上游词表 | 已闭环 |
 | B006-B / F-042 | M001-C/D、A001-I、W008-C、I001/I002/I013、G07 | 国家对象/字符串形态没有统一 alpha-2 规范化 | 上游形态与 alpha-3/别名边界 | 已闭环 |
@@ -340,7 +340,7 @@
 | S001 / F-060 | A001、S005、V008、V011、V015、V021、W001及全部直接 print 调用者 | 默认 Logger 按设计仅 Debug 输出，但 15 个文件的 80 个直接 print 在 Release 保留且绕过隐私边界 | 各调用者应删除还是改经 Logger；若未来启用 Release handler，哪些值须先脱敏分级 | 已闭环 |
 | B007 / F-047 | M001-F、A001-J、V006/V008/V012-B/V017、W003/W008-B/W013、G02 | 当前后端已对所有身份按season筛选；剩余为同媒体同季多group/多owner时文案只展示一条，媒体级删除却可能命中多条 | 当前Web共享媒体级删除行为 | 已闭环；用户决定跳过 |
 | B007 / F-048 | V012-B、W008-B、A001-J、I008/I013、G02 | Header 确认后重新解析目标，未冻结精确订阅ID | 当前Web同样确认后读取当前媒体再执行媒体级删除 | 已闭环；用户决定跳过 |
-| B007 / F-049 | V008/V012-B、W003/W008-B、V001/G08、G02 | Home/Header Bool 业务失败静默 | 失败通知与 Home 确认前强刷 | 已闭环 |
+| B007 / F-049 | V008/V012-B、W003/W008-B、V001/G08、G02 | Home/Header Bool 业务失败静默 | 失败通知与远端已删除的静默收敛边界 | 已闭环；修复完成并通过回归与全量测试 |
 | B007 / F-054 | V006、A001-J、M001-F、C014/C016、G02 | 历史问题：Handler丢精确订阅ID并对Bangumi-only改发集合式媒体删除 | `58c7e81`已保留canonical/Bangumi/AniList/legacy身份，当前后端按身份与season筛选 | 已闭环；当前实现已解决 |
 | A001-J / F-100 | V004/V012-B、A001-J/I003、G02 | 同键旧normal/force可覆盖新强刷并反转add/cancel判断；末裁条件性P1 | 每key latest revision；旧结果store/return均失效 | 已闭环 |
 | A001-H / F-101 | A001-H/I003、V011/V015/V022、BackendCompatibilityTests | 生产与兼容探针均逐物理行解码 SSE，未按空行组帧及合并多条 data | 当前后端 framing、注释/heartbeat 与共享最小事件组帧边界 | 已闭环 |

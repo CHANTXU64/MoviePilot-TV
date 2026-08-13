@@ -7,6 +7,7 @@ struct MediaDetailView: View {
   @StateObject private var subscriptionHandler = SubscriptionHandler()
   @Environment(\.scenePhase) private var scenePhase
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
+  @EnvironmentObject private var notificationManager: NotificationManager
   @ObservedObject private var apiService = APIService.shared
   /// 预加载任务：订阅状态、TMDB 识别、分季信息的唯一数据源
   @ObservedObject var preloadTask: MediaPreloadTask
@@ -373,7 +374,13 @@ struct MediaDetailView: View {
       Button("取消", role: .cancel) {}
       Button(SubscriptionCancelConfirmation.confirmButtonTitle, role: .destructive) {
         Task {
-          await viewModel.cancelSubscription()
+          guard await viewModel.cancelSubscription() else {
+            notificationManager.show(
+              message: SubscriptionCancelConfirmation.failureMessage,
+              type: .error
+            )
+            return
+          }
         }
       }
     } message: {

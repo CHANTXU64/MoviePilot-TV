@@ -52,7 +52,7 @@
 | F-036 | 已修复 | P2 | S004→V011-D→G07 | Search 人物与 TransferHistory processor | 只去重旧 raw ID，漏同批最终 ID并可跨 source 误合并 | 既有processor复核闭合不可变seen；G07双审及第三裁确认合法跨source聚合与批内重复 | 使用最终`Person.id`可变seen并在reset清空；Transfer批内同步写入seen | 已补人物身份去重及同一Paginator刷新回归测试；完整验证通过 |
 | F-037 | 未验证 | P3 | B006-A | `TranslationHelper.languageName` 与 original_language 展示链 | ISO/BCP 47 形态未经规范化而退化为原码 | review_b006_a 核对映射、唯一调用者、模型与标准标签边界 | verify_b006_a_retry 确认行为但函数只承诺 ISO 639-1，扩展契约缺失 | 上游字段格式及 BCP 47/别名要求未验证 |
 | F-038 | 已确认 | P3 | B006-A | TranslationHelper 与详情元数据拼接 | 空白原语种进入详情分隔串 | review_b006_a 闭合 decodeIfPresent→原样回退→append 链 | verify_b006_a_retry 独立确认空 Text/尾随分隔及通用元数据范围 | TV 展示不变量缺陷已确认；真实 payload 频率未验证 |
-| F-039 | 已确认 | P2 | S004→V011-C→G04 | `SearchViewModel.SharedMediaFetcher` 取消链 | 单waiter取消不应误伤共享请求，但整个search session废弃后仍没有aggregate cancel，底层请求、buffer与cursor继续 | 既有双审闭合unstructured task；全新G04 clean-room复核收窄共享语义并升级P2 | 只在session owner失效时取消共享task；保留另一合法waiter | TV session级取消缺口已确认；真实慢请求量未验证 |
+| F-039 | 已确认（用户决定跳过） | P2 | S004→V011-C→G04 | `SearchViewModel.SharedMediaFetcher` 取消链 | 单waiter取消不应误伤共享请求，但整个search session废弃后仍没有aggregate cancel，底层请求、buffer与cursor继续 | 既有双审闭合unstructured task；全新G04 clean-room复核收窄共享语义并升级P2 | 不修改共享取消链，避免误伤仍有效的电影/电视剧waiter | 旧请求结果已有generation屏障；用户接受慢请求继续占用资源的影响 |
 | F-040 | 已确认 | P3 | B005 | JobRegistry/StaffManager/TranslationHelper | 不同职位键翻译后产生重复职位文本 | review_b006_a 确认 Cinematography/Camera 同译与原 key 去重顺序 | verify_b005 独立确认当前可见路径为职员卡片并收窄 Hero 边界 | TV 显示缺陷已确认；真实 payload 组合未验证 |
 | F-041 | 已确认 | P3 | B005 | Job key 到翻译/优先级链 | 职位键变体同时失去翻译和优先级 | review_b006_a 闭合原样解码、精确查表与排序 999 路径 | verify_b005 独立确认大小写/换行双重失配与 Hero 排序影响 | TV 行为缺陷已确认；上游 canonical 词表未验证 |
 | F-042 | 未验证 | P3 | B006-B | 国家映射/ProductionCountry/详情显示 | 非 canonical 国家码形态未经规范化 | review_b006_b_retry 核对 249 键、两个入口与多态解码 | verify_b006_b 确认 canonical alpha-2 全覆盖，宽容输入是否属契约无法判定 | 上游形态/alpha-3/别名要求未验证 |
@@ -62,7 +62,7 @@
 | F-046 | 已确认 | P3 | B006-C | MediaGenre/translateGenre/详情元数据 | 类型名未规范化且空结果仍进入详情 | verify_b005 作为 B006-C 主审闭合多态解码、精确查表与 joined 链 | verify_b006_c 独立确认 trim/filter 边界并收窄大小写/别名 | TV 展示不变量缺陷已确认；真实输入频率未验证 |
 | F-047 | 已确认 | P1 | B007→V012-B/C→W013-B | 全局/分季/Header 取消文案与删除接口 | 当前后端已对所有身份按season筛选；剩余为同媒体同季多group/多owner时文案只展示一条，媒体级删除却可能命中多条 | 当前TV、Web与后端调用链重新闭合；旧“非TMDB跨季删除”证据已失效 | 当前Web共享同一媒体级删除行为 | 用户决定跳过，不做TV单端增强 |
 | F-048 | 已确认 | P1 | B007→V012-B/C→G02 | 取消确认准备与执行 | 确认后重新解析target且未冻结精确订阅ID | 当前Web同样先通用确认、再读取当前媒体并执行媒体级删除 | TV/Web行为一致 | 用户决定跳过，不做TV单端增强 |
-| F-049 | 已确认 | P2 | B007→V012-B→G08 | Home/Header 取消结果 | DELETE false或异常被静默吞掉，Home 直接丢弃 Bool 返回 | 既有双审闭合结果出口；G08 三方裁决确认 Home 稳定丢弃 false 并升级 P2 | 复用现有错误通知反馈业务拒绝；远端已删除且 UI 收敛时保持静默 | TV 反馈缺陷已确认；SubscribeSheet 回滚持久遗留另归 F-148 P1 |
+| F-049 | 已修复 | P2 | B007→V012-B→G08 | Home/Header 取消结果 | DELETE false或异常被静默吞掉，Home 直接丢弃 Bool 返回 | 既有双审闭合结果出口；G08 三方裁决确认 Home 稳定丢弃 false 并升级 P2 | Home失败/异常与Header刷新后仍订阅统一通知；远端已删除且UI收敛时静默 | 已补业务失败、详情收敛与通知接线测试；完整验证通过 |
 | F-050 | 已确认 | P3 | S006 | MediaDetailViewModel Hero 演员截断 | Hero 演员先截断再去重，非空不足四人不补足 | verify_b006_b 闭合 prefix(4)→processActors 与分页替换条件 | verify_s006 独立确认影响仅 Hero 并修正 W008-C 路由 | TV 顺序缺陷已确认；真实重复分布未验证 |
 | F-051 | 已确认 | P3 | S006 | StaffManager.hasAvatar 与 Person.imageURLs | 头像排序判定与实际可渲染图片不一致 | verify_b006_b 以 PersonDecoding 多组反例闭合 | verify_s006 独立确认只影响 crew 新增项排序及 source-aware 反例 | TV 排序规则缺陷已确认；真实来源组合未验证 |
 | F-052 | 已确认 | P3 | S006 | getTopGroupedStaff roles fallback | 多值 roles 被拼成单一 key 后优先级 999 | verify_b006_b 闭合 roles join→priority→translate split | verify_s006 修正为 roles fallback 两人反例并确认 | TV 排序缺陷已确认；roles canonical 语义未验证 |
@@ -818,7 +818,7 @@
 
 ### F-039：取消 Paginator 不会取消共享搜索真实请求
 
-- 状态：已确认
+- 状态：已确认（用户决定跳过）
 - 严重度：P2
 - 位置：`MoviePilot-TV/ViewModels/SearchViewModel.swift` 的 SharedMediaFetcher/currentFetchTask
 - 触发路径：旧聚合搜索挂起时发起新搜索、切换模式或离开页面。
@@ -829,6 +829,7 @@
 - 既有独立复核：review_a001_h 从 V011-C 独立确认新 unified 只 cancel 旧 Paginator 等待者，`SharedMediaFetcher.currentFetchTask` 继续；unified→resource 更不 reset 旧 Paginator。现有测试必须手动打开旧 gate 才结束旧请求，当时评P3。
 - V011-C 单元复核：review_a001_j 再独立确认 unified→unified 的真实请求/后续扫描继续，以及 unified→resource 的旧 Paginator、hidden items 与请求全继续；跨会话发布仍归 F-027/CHK-005。
 - G04 clean-room 末裁：确认底层URL请求、buffer与`apiPage`在session废弃后仍继续；以“单waiter取消不传递、session owner取消必须传递”的双测试边界升级P2，并与F-035共享owner级取消实现但保留独立回归。
+- 处置状态：用户决定跳过；旧结果已有generation屏障不会发布，接受慢请求在会话失效后继续占用网络与后端资源，避免修改共享任务取消语义引入竞态。
 
 ### F-040：不同职位键翻译后重复显示
 
@@ -965,6 +966,8 @@
 - G08 归并校准：SubscribeSheet 回滚忽略 DELETE `false`、异常只打印会留下真实已创建订阅，属于 F-148 的 P1 回滚持久遗留；本项只保留 Home/Header 的业务反馈丢失，避免重复计数。
 - I008集成补强：review_a001_j确认Header点击前强刷失败直接return，取消`success:false`/throw只打印，页面已有SubscriptionHandler通知出口却未复用；查询失败、业务拒绝与异常统一走本项P2反馈，不另建错误框架。
 - I008定向复核：review_a001_h确认DELETE业务false、throw及随后refresh失败均无用户反馈；复用现有result/message与通知出口即可，P2不变。
+- 修复：Home取消返回false或抛错时统一通知“取消订阅失败，请重试”；Header让ViewModel返回最终收敛结果，仅在删除失败且刷新后仍订阅时通知，远端已由其他入口删除则保持静默。
+- 验证：补充Home业务失败、Header失败后仍订阅及两个View通知接线测试；依赖解析、tvOS Simulator Debug完整构建与串行全量测试均通过。
 
 ### F-050：Hero 演员先截断后去重
 

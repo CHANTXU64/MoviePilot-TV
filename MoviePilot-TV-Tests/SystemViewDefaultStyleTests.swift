@@ -264,6 +264,19 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(mediaSection.contains(".padding(.horizontal, 8)\n      .focusSection()"))
   }
 
+  @MainActor
+  func testSubscriptionCancellationFailureUsesGlobalNotification() throws {
+    let homeSource = try Self.source(at: "MoviePilot-TV/Views/Pages/HomeView.swift")
+    let detailSource = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
+    let failureMessage = SubscriptionCancelConfirmation.failureMessage
+
+    XCTAssertEqual(failureMessage, "取消订阅失败，请重试")
+    XCTAssertTrue(homeSource.contains("guard try await viewModel.deleteSubscribe(subscribe: item) else"))
+    XCTAssertTrue(homeSource.contains("message: SubscriptionCancelConfirmation.failureMessage"))
+    XCTAssertTrue(detailSource.contains("guard await viewModel.cancelSubscription() else"))
+    XCTAssertTrue(detailSource.contains("message: SubscriptionCancelConfirmation.failureMessage"))
+  }
+
   func testSheetFeedbackAndLoadingStateUseSharedPatterns() throws {
     let sheetStyleSource = try Self.source(at: "MoviePilot-TV/Views/Components/SheetStyles.swift")
     let subscribeSheetSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/SubscribeSheet.swift")

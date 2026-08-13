@@ -882,7 +882,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-039 · P2 · 已确认 · 取消 Paginator 不会取消共享搜索真实请求</summary>
+<summary>F-039 · P2 · 已确认 · 用户决定跳过 · 取消 Paginator 不会取消共享搜索真实请求</summary>
 
 - 审查单元与位置：S004→V011-C→G04；`SearchViewModel.SharedMediaFetcher` 取消链
 - 触发路径：旧聚合搜索挂起时发起新搜索、切换模式或离开页面。
@@ -890,20 +890,20 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 用户影响：旧查询继续占用网络/后端并与新查询重叠；结果会被 generation 丢弃，但扩大旧会话请求风险。
 - 证据：既有双审闭合unstructured task；全新G04 clean-room复核收窄共享语义并升级P2；只在session owner失效时取消共享task；保留另一合法waiter
 - 跨端结论：TV session级取消缺口已确认；真实慢请求量未验证
-- 最小修改方向 / 裁决：仅在整次search session失效时取消共享fetch task并阻止cursor/buffer继续推进；取消单个waiter不得误伤另一合法waiter。
+- 最小修改方向 / 裁决：用户决定跳过；旧结果已有generation屏障，接受慢请求继续占用资源，避免修改共享电影/电视剧请求的取消语义。
 
 </details>
 
 <details>
-<summary>F-049 · P2 · 已确认 · Home/Header 取消业务失败静默</summary>
+<summary>F-049 · P2 · 已修复 · Home/Header 取消业务失败静默</summary>
 
 - 审查单元与位置：B007→V012-B→G08；Home/Header 取消结果
 - 触发路径：缺订阅 id、远端已删、success:false、lookup/delete false。
 - 根因：流程只返回 Bool 并丢弃 false；Home 显示确认前也未强刷。只有抛错才通知。
 - 用户影响：弹窗关闭但订阅仍在或请求未发，无失败原因。
 - 证据：既有双审闭合结果出口；G08 三方裁决确认 Home 稳定丢弃 false 并升级 P2；复用现有错误通知反馈业务拒绝；远端已删除且 UI 收敛时保持静默
-- 跨端结论：TV 反馈缺陷已确认；SubscribeSheet 回滚持久遗留另归 F-148 P1
-- 最小修改方向 / 裁决：无法确认目标、删除被拒绝或刷新后仍存在时走现有错误通知；远端已删除且 UI 已收敛无需强报错，成功保持静默。
+- 修复：Home业务false或异常、Header删除失败且刷新后仍订阅时，统一通知“取消订阅失败，请重试”；远端已删除并收敛为未订阅时保持静默。
+- 验证：Home业务失败、Header状态收敛及View通知接线回归通过；依赖解析、tvOS Simulator Debug完整构建与串行全量测试均通过。
 
 </details>
 

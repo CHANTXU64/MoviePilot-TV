@@ -463,11 +463,21 @@ private struct SubscribeItemView: View {
   private func deleteSubscribe() {
     Task {
       do {
-        _ = try await viewModel.deleteSubscribe(subscribe: item)
+        guard try await viewModel.deleteSubscribe(subscribe: item) else {
+          showUnsubscribeFailure()
+          return
+        }
       } catch {
-        showRequestFailure()
+        showUnsubscribeFailure()
       }
     }
+  }
+
+  private func showUnsubscribeFailure() {
+    notificationManager.show(
+      message: SubscriptionCancelConfirmation.failureMessage,
+      type: .error
+    )
   }
 
   private func showActionFailure(_ action: String, detail: String?) {
