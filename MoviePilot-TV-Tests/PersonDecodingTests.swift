@@ -215,6 +215,52 @@ final class PersonDecodingTests: XCTestCase {
     XCTAssertEqual(avatarURL, "https://douban.local/large.jpg")
   }
 
+  func testNestedMediaInfoDecodesOffMainActorWithoutImageServiceAccess() async throws {
+    let data = Data(
+      """
+      {
+        "source": "themoviedb",
+        "title": "后台详情",
+        "directors": [
+          {
+            "source": "themoviedb",
+            "id": 123,
+            "name": "后台导演",
+            "profile_path": "/director.jpg"
+          }
+        ],
+        "actors": [
+          {
+            "source": "themoviedb",
+            "id": 456,
+            "name": "后台演员",
+            "profile_path": "/actor.jpg"
+          }
+        ],
+        "subscribeShare": {
+          "id": 7,
+          "name": "后台分享",
+          "type": "电影",
+          "poster": "/poster.jpg"
+        }
+      }
+      """.utf8
+    )
+
+    let decoded = try await Task.detached {
+      let media = try JSONDecoder().decode(MediaInfoJSON.self, from: data)
+      return (
+        media.directors?.count,
+        media.actors?.count,
+        media.subscribeShare != nil
+      )
+    }.value
+
+    XCTAssertEqual(decoded.0, 1)
+    XCTAssertEqual(decoded.1, 1)
+    XCTAssertTrue(decoded.2)
+  }
+
   func testPersonImageSelectionMatchesWebForEverySourceAndFallback() throws {
     let service = APIService.shared
     let snapshot = PersonDecodingServiceSnapshot.capture(service: service)

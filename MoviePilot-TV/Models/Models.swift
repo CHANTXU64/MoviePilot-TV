@@ -2247,7 +2247,7 @@ struct AddDownloadRequest: Codable {
 }
 
 /// 演职人员模型
-struct Person: Codable, Identifiable, Hashable {
+nonisolated struct Person: Codable, Identifiable, Hashable {
   struct ImageURLs: Hashable {
     let profile: URL?
   }
@@ -2291,8 +2291,17 @@ struct Person: Codable, Identifiable, Hashable {
   // 计算属性作为 Identifiable 的 ID，保证稳定性
   let id: String
 
-  /// 预计算的图片 URL
-  let imageURLs: ImageURLs
+  /// 图片 URL 在主线程按当前图片设置计算，避免后台 JSON 解码访问主线程 APIService。
+  @MainActor var imageURLs: ImageURLs {
+    ImageURLs(
+      profile: APIService.shared.getPersonImageURL(
+        source: source,
+        profilePath: profile_path,
+        avatar: avatar,
+        images: images
+      )
+    )
+  }
 
   enum CodingKeys: String, CodingKey {
     case source
@@ -2337,7 +2346,6 @@ struct Person: Codable, Identifiable, Hashable {
       self.avatar = nil
       self.images = nil
       self.id = "name-\(nameString)"
-      self.imageURLs = ImageURLs(profile: nil)
       return
     }
 
@@ -2378,14 +2386,6 @@ struct Person: Codable, Identifiable, Hashable {
       self.id = "name-\(self.name ?? UUID().uuidString)"
     }
 
-    self.imageURLs = ImageURLs(
-      profile: APIService.shared.getPersonImageURL(
-        source: self.source,
-        profilePath: self.profile_path,
-        avatar: self.avatar,
-        images: self.images
-      )
-    )
   }
 
   /// 成员初始化器，用于创建或修改演职人员实例。
@@ -2415,14 +2415,6 @@ struct Person: Codable, Identifiable, Hashable {
     self.images = images
     self.id = id
 
-    self.imageURLs = ImageURLs(
-      profile: APIService.shared.getPersonImageURL(
-        source: self.source,
-        profilePath: self.profile_path,
-        avatar: self.avatar,
-        images: self.images
-      )
-    )
   }
 
   /// 规范化人物详情路由来源；显式但不受支持的来源不会被父媒体覆盖。
@@ -2747,7 +2739,7 @@ struct StorageConf: Codable, Hashable {
 }
 
 /// 订阅分享
-struct SubscribeShare: Codable, Identifiable, Hashable {
+nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
   struct ImageURLs: Hashable {
     let poster: URL?
   }
@@ -2821,8 +2813,10 @@ struct SubscribeShare: Codable, Identifiable, Hashable {
   // 自定义剧集组
   let episode_group: String?
 
-  /// 预计算的图片 URL
-  let imageURLs: ImageURLs
+  /// 图片 URL 在主线程按当前图片设置计算，避免后台 JSON 解码访问主线程 APIService。
+  @MainActor var imageURLs: ImageURLs {
+    ImageURLs(poster: APIService.shared.getSubscribePosterImageUrl(poster: poster))
+  }
 
   enum CodingKeys: String, CodingKey {
     case raw_id = "id"
@@ -2881,11 +2875,10 @@ struct SubscribeShare: Codable, Identifiable, Hashable {
       self.id = UUID().uuidString
     }
 
-    // 计算图片 URL
-    self.imageURLs = ImageURLs(poster: APIService.shared.getSubscribePosterImageUrl(poster: poster))
   }
 
   /// 转换为 MediaInfo 以便在通用视图中复用
+  @MainActor
   func toMediaInfo() -> MediaInfo {
     var combinedOverview = ""
     if let comment = share_comment, !comment.isEmpty {
