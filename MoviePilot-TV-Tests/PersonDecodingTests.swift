@@ -340,6 +340,63 @@ final class PersonDecodingTests: XCTestCase {
     }
   }
 
+  func testEmbeddedDirectorInheritsDeclaredMediaSourceForImageAndRoute() throws {
+    let service = APIService.shared
+    let snapshot = PersonDecodingServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(#"{"TMDB_IMAGE_DOMAIN":"tmdb-images.local"}"#.utf8)
+    )
+    service.useImageCache = false
+
+    let media = try JSONDecoder().decode(
+      MediaInfo.self,
+      from: Data(
+        """
+        {
+          "source": "themoviedb",
+          "title": "测试电影",
+          "directors": [
+            {
+              "id": 123,
+              "name": "测试导演",
+              "job": "Director",
+              "profile_path": "/director.jpg"
+            }
+          ]
+        }
+        """.utf8
+      )
+    )
+
+    let embeddedDirector = try XCTUnwrap(media.directors?.first)
+    XCTAssertNil(embeddedDirector.source)
+    XCTAssertNil(embeddedDirector.imageURLs.profile)
+
+    let resolvedDirector = try XCTUnwrap(media.resolvedDirectors.first)
+    XCTAssertEqual(resolvedDirector.source, "themoviedb")
+    XCTAssertEqual(resolvedDirector.id, "themoviedb-123")
+    XCTAssertEqual(
+      resolvedDirector.imageURLs.profile?.absoluteString,
+      "https://tmdb-images.local/t/p/w600_and_h900_bestv2/director.jpg"
+    )
+  }
+
+  func testEmbeddedDirectorDoesNotInventMissingOrUnsupportedMediaSource() throws {
+    let director = try JSONDecoder().decode(
+      Person.self,
+      from: Data(#"{"id":123,"name":"测试导演","profile_path":"/director.jpg"}"#.utf8)
+    )
+
+    for fallback in [nil, "tvdb"] as [String?] {
+      let resolvedDirector = director.resolvingRouteSource(fallback: fallback)
+      XCTAssertNil(resolvedDirector.source)
+      XCTAssertNil(resolvedDirector.imageURLs.profile)
+    }
+  }
+
 }
 
 @MainActor

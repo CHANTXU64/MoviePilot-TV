@@ -151,8 +151,9 @@ class MediaDetailViewModel: ObservableObject {
     hasAppliedFullDetail = true
 
     // 从完整详情中派生演职员数据，作为 API 加载前的快速初始显示
-    uniqueDirectors = StaffManager.processCrew(persons: fullDetail.directors ?? [])
-    heroTopStaff = StaffManager.getTopGroupedStaff(from: fullDetail.directors ?? [], count: 1)
+    let directors = fullDetail.resolvedDirectors
+    uniqueDirectors = StaffManager.processCrew(persons: directors)
+    heroTopStaff = StaffManager.getTopGroupedStaff(from: directors, count: 1)
     heroTopActors = StaffManager.processActors(
       persons: Array((fullDetail.actors ?? []).prefix(4)))
 

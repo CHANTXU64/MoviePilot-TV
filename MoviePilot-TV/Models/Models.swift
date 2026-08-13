@@ -756,6 +756,11 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     !isCollection
   }
 
+  /// 兼容旧后端内嵌人物未携带 source 的载荷；只继承父媒体已明确声明的来源。
+  var resolvedDirectors: [Person] {
+    (directors ?? []).map { $0.resolvingRouteSource(fallback: source) }
+  }
+
   enum CodingKeys: String, CodingKey {
     case tmdb_id, douban_id, bangumi_id, anilist_id, imdb_id, tvdb_id, source,
       mediaid_prefix, media_id, title,
@@ -2413,6 +2418,47 @@ struct Person: Codable, Identifiable, Hashable {
         images: self.images
       )
     )
+  }
+
+  /// 规范化人物详情路由来源；显式但不受支持的来源不会被父媒体覆盖。
+  func resolvingRouteSource(fallback: String?) -> Person {
+    let declaredSource = MediaIdentifier.normalizedString(source)
+    let candidateSource = declaredSource == nil ? fallback : source
+    guard let resolvedSource = Self.supportedRouteSource(candidateSource), source != resolvedSource
+    else {
+      return self
+    }
+
+    return Person(
+      source: resolvedSource,
+      raw_id: raw_id,
+      name: name,
+      latin_name: latin_name,
+      character: character,
+      job: job,
+      roles: roles,
+      profile_path: profile_path,
+      original_name: original_name,
+      known_for_department: known_for_department,
+      place_of_birth: place_of_birth,
+      popularity: popularity,
+      biography: biography,
+      birthday: birthday,
+      also_known_as: also_known_as,
+      avatar: avatar,
+      images: images,
+      id: raw_id.map { "\(resolvedSource)-\($0)" } ?? id
+    )
+  }
+
+  private static func supportedRouteSource(_ source: String?) -> String? {
+    guard let source = MediaIdentifier.normalizeSource(source) else { return nil }
+    switch source {
+    case "themoviedb", "douban", "bangumi", "anilist":
+      return source
+    default:
+      return nil
+    }
   }
 
   static func == (lhs: Person, rhs: Person) -> Bool {
