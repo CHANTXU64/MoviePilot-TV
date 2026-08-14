@@ -89,7 +89,7 @@
 | F-073 | 已修复 | P2 | M001-J→G09 | ManualTransferPreview envelope/data/item 与统计/UI | `success:true`但data缺失/null或item success缺失/null会被当成功预览 | 既有双审闭合fail-open；G09主审与clean-room第三裁逐矩阵确认成立分支，独立复核对envelope缺success的反证被吸收 | 修复已完成（`e8cdaf7`）：`previewManualTransfer` 要求 `data != nil`，`ManualTransferPreviewItem.success` 收紧为必填 Bool，合法显式空仍成功 | 当前正式producer完整；畸形/兼容producer触发频率未验证 |
 | F-074 | 已确认（用户决定跳过） | P2 | M001-J→V021/W018-B | Reorganize预览operation owner | 旧预览可在表单/会话变化、提交开始或Sheet关闭后回写并打开 | 模型/V021双审及W018-B双审闭合无revision/cancel、预览A→提交B与Web共享链 | 冻结forms/session/revision；编辑、新预览、提交、dismiss/session切换退休旧结果 | 2026-08-14 用户按实际操作链复核：预览请求通常数百毫秒即返回并弹出预览 Sheet 抢占焦点，同会话表单编辑窗口过窄；会话切换已有 isSessionUnchanged 防护，决定跳过 |
 | F-075 | 已确认（用户裁决：仅修文案） | P2 | M001-J→W018-A | ReorganizeViewModel 批量后台整理 | 批量提交不保留逐 ID 的已受理/失败/未知状态 | 模型双审与W018-A双审确认success→false/throw、未发送与整批重试链 | 2026-08-14 三端对照后用户裁决：Web 同样无逐 ID 受理/只重试失败机制且部分失败不刷新列表，后端 force 重整理无幂等，故不做 TV 单端“只重试失败项”增强；仅修误导文案 | TV 错误反馈缺陷；后端幂等性未验证 |
-| F-076 | 已确认 | P2 | M001-J→V011-C→W006-B/I012→G01/G04→当前实现复核 | Manual/Search 资源与最佳结果状态 | 统一session/generation门禁已阻断旧会话/旧owner结果进入新账号；同一会话内清空关键词、开始新搜索或搜索失败时，聚合Search/Resource仍可能保留旧结果或先发布过期错误 | 手动媒体ID子项已由`44908c4`修复；当前`SearchViewModel`空查询、资源新请求及fallback失败出口复核确认剩余同会话陈旧状态 | 新attempt按query/type/generation原子清退或发布结果与错误 | 原跨owner错误动作P1链已闭合；剩余为同会话陈旧结果/错误P2 |
+| F-076 | 已修复 | P2 | M001-J→V011-C→W006-B/I012→G01/G04→当前实现复核 | Manual/Search 资源与最佳结果状态 | 统一session/generation门禁已阻断旧会话/旧owner结果进入新账号；同一会话内清空关键词、开始新搜索或搜索失败时，聚合Search/Resource仍可能保留旧结果或先发布过期错误 | 手动媒体ID子项已由`44908c4`修复；资源搜索新请求开始即清空旧结果已由本次修复（`SearchViewModel.autoSearch` `.resource` 分支）闭合，空关键词点搜索与 Web 一致（均直接不搜索）不改，聚合分支 bestResults 不扩展 | 新attempt按query/type/generation原子清退或发布结果与错误 | 原跨owner错误动作P1链已闭合；资源搜索同会话陈旧结果已修复，聚合 bestResults 旧值未列为独立修复目标 |
 | F-077 | 已确认 | P2 | M001-I当前合同复核 | SubscribeShare.toMediaInfo | 分享投影丢Bangumi、AniList与统一来源主身份 | 当前Web/后端schema与三路TV调用链复核确认；Explore/Search右键详情、资源、订阅均消费投影 | 共享投影按canonical→raw保留全部当前schema身份；模型缺字段部分与F-079同一实现边界 | 修复已完成：`58c7e81`；真实单一来源记录频率未验证 |
 | F-078 | 已确认 | P3 | M001-I | SubscribeShare 列表身份 | 缺失/0/负数/重复分享业务 ID 可破坏去重与焦点 | review_m001_i 闭合 raw_id fallback、Paginator/ForEach 与兼容巡检盲点 | verify_m001_i 独立确认列表丢项/焦点不稳，并驳回“Fork 错目标”的过宽影响 | TV 稳定身份缺口已确认；分享 ID schema 未验证 |
 | F-079 | 已确认 | P2 | M001-I当前合同复核 | SubscribeShare GET→Fork 编码 | TV模型缺当前schema的`anilistid/media_source/media_id`，GET解码后Fork确定丢失 | 后端91ce365f与Web 7ea14bc9确认三字段在GET/Fork合同；APIService直接编码原模型 | 只补三个明确字段；unknown extra与legacy mediaid不在Share合同，不做raw透传 | 修复已完成：`58c7e81`；真实记录分布未验证 |
@@ -1367,7 +1367,7 @@
 
 ### F-076：空关键词、失败或过时请求继续暴露旧媒体结果
 
-- 状态：已确认
+- 状态：已修复（资源搜索入口；2026-08-14）
 - 严重度：P2；原跨owner P1链已由统一session/generation门禁闭合
 - 位置：`MoviePilot-TV/Views/Sheets/ManualMediaSearchSheet.swift:43-55,97-125`；`MoviePilot-TV/ViewModels/ReorganizeViewModel.swift:290-295`
 - 触发路径：查询 A 成功后清空关键词、B 请求失败、A 请求挂起时把输入改为 B，或会话变化后旧请求返回。

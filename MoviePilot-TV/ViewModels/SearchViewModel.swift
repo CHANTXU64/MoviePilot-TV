@@ -315,6 +315,8 @@ class SearchViewModel: ObservableObject {
       searchProgressText = "正在搜索..."
       searchProgress = 0.0
       resourceErrorMessage = nil
+      // F-076：新搜索开始即清空旧结果，避免新搜索失败或响应在途时旧结果冒充新结果并可被操作。
+      resourceResults = []
       
       searchStreamTask = Task { @MainActor in
         var accumulatedResults: [Context] = []

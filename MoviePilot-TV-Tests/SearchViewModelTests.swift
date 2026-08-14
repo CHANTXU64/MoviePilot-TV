@@ -464,6 +464,54 @@ final class SearchViewModelTests: XCTestCase {
     await newStreamGate.open()
   }
 
+  func testNewResourceSearchClearsPreviousResultsImmediately() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureSuperUserSearchSession(service)
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .resource
+    viewModel.query = "old"
+
+    await viewModel.autoSearch()
+    let firstDeadline = Date().addingTimeInterval(2)
+    while viewModel.resourceResults.isEmpty && Date() < firstDeadline {
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    XCTAssertFalse(
+      viewModel.resourceResults.isEmpty,
+      "First search must publish results before the second search starts."
+    )
+
+    // 第二次搜索：响应被 gate 卡住期间，旧结果必须已被立即清空（F-076）。
+    let gate = SearchAsyncGate()
+    await SearchViewModelURLProtocol.stub.setGate(gate, forQuery: "new")
+    viewModel.query = "new"
+    await viewModel.autoSearch()
+
+    XCTAssertTrue(
+      viewModel.resourceResults.isEmpty,
+      "A new resource search must clear previous results before its own response arrives."
+    )
+
+    await gate.open()
+    let secondDeadline = Date().addingTimeInterval(2)
+    while viewModel.resourceResults.isEmpty && Date() < secondDeadline {
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    XCTAssertFalse(
+      viewModel.resourceResults.isEmpty,
+      "Second search must publish its own results after the gate opens."
+    )
+  }
+
   func testCustomFilterSkipsRulesForNonSuperuserSearchUserWithPersistedRuleSelection()
     async throws
   {
