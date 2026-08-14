@@ -315,12 +315,14 @@ class SearchViewModel: ObservableObject {
       searchProgressText = "正在搜索..."
       searchProgress = 0.0
       resourceErrorMessage = nil
-      // F-076：新搜索开始即清空旧结果，避免新搜索失败或响应在途时旧结果冒充新结果并可被操作。
+      // 新搜索开始即清空旧结果，避免新搜索失败或响应在途时旧结果冒充新结果并可被操作。
       resourceResults = []
       
       searchStreamTask = Task { @MainActor in
         var accumulatedResults: [Context] = []
         var finalResultApplied = false
+        // 只有收到端点认可的 done 才把结果按成功收尾发布；业务 error 与无终止 EOF 均不发布。
+        var receivedDone = false
         defer {
           self.finishSearchIfCurrent(
             generation: currentSearchGeneration,
@@ -360,10 +362,12 @@ class SearchViewModel: ObservableObject {
             if event.type == "error" {
               self.resourceErrorMessage =
                 event.message_i18n ?? event.message ?? "未找到相关资源"
-              break
+              // 整次搜索失败：不发布已积累的部分结果。
+              return
             }
             
             if event.type == "done" {
+              receivedDone = true
               // 与 Web v2.13.2 保持一致：给后端搜索结果缓存写入留出收尾时间。
               try? await Task.sleep(nanoseconds: searchStreamDoneCloseDelay)
               guard canPublishSearchResult(
@@ -380,6 +384,11 @@ class SearchViewModel: ObservableObject {
             sessionSnapshot: sessionSnapshot,
             searchType: currentSearchType)
           else { return }
+          // EOF 未收到 done 视为连接异常，不把部分结果按成功收尾发布。
+          guard receivedDone else {
+            self.resourceErrorMessage = "搜索连接中断，请重试。"
+            return
+          }
 
           // 应用自定义过滤规则
           let filteredResults = await self.applyCustomFilter(to: accumulatedResults)

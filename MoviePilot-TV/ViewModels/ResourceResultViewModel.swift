@@ -92,6 +92,8 @@ class ResourceResultViewModel: ObservableObject {
     searchStreamTask = Task { @MainActor [weak self] in
       var accumulatedResults: [Context] = []
       var finalResultApplied = false
+      // 只有收到端点认可的 done 才允许 missingSites 补偿与发布；业务 error 与无终止 EOF 均不发布。
+      var receivedDone = false
       defer {
         self?.finishSearchIfCurrent(
           generation: currentSearchGeneration,
@@ -143,10 +145,12 @@ class ResourceResultViewModel: ObservableObject {
 
           if event.type == "error" {
             self?.errorMessage = event.message_i18n ?? event.message ?? "未找到相关资源"
-            break
+            // 整次搜索失败：不发布已积累的部分结果，也不执行站点补偿。
+            return
           }
 
           if event.type == "done" {
+            receivedDone = true
             // 与 Web v2.13.2 保持一致：给后端搜索结果缓存写入留出收尾时间。
             try? await Task.sleep(nanoseconds: doneCloseDelay)
             guard canContinue() else { return }
@@ -155,6 +159,11 @@ class ResourceResultViewModel: ObservableObject {
         }
 
         if canContinue() {
+          // 只有明确成功终止（done）才允许 missingSites 补偿与结果发布。
+          guard receivedDone else {
+            self?.errorMessage = "搜索连接中断，请重试。"
+            return
+          }
           // 获取所有本次搜索的目标站点
           var targetSites: Set<Int> = []
           if let specificSites = sites, !specificSites.isEmpty {

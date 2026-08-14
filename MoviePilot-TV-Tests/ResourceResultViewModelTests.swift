@@ -591,6 +591,78 @@ final class ResourceResultViewModelTests: XCTestCase {
     )
     XCTAssertEqual(fallbackRequestCount, 0)
   }
+
+  func testResourceSearchErrorEventDoesNotPublishAccumulatedResults() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await ResourceResultViewModelURLProtocol.stub.reset()
+    let itemJSON = resourceContextJSON(title: "Partial Result")
+      .replacingOccurrences(of: "\n", with: "")
+    await ResourceResultViewModelURLProtocol.stub.setStreamBody(
+      "data: {\"type\":\"append\",\"items\":[\(itemJSON)]}\n\n"
+        + "data: {\"type\":\"error\",\"success\":false,\"message\":\"站点搜索失败\"}\n\n",
+      forKeyword: "error-after-partial"
+    )
+    service.baseURLForTesting = "http://resource-result-tests.local"
+    configureResourceResultSearchSession(service)
+
+    let viewModel = ResourceResultViewModel(keyword: "error-after-partial", apiService: service)
+    await viewModel.search()
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertEqual(viewModel.errorMessage, "站点搜索失败")
+    XCTAssertTrue(
+      viewModel.results.isEmpty,
+      "An error event must not publish partially accumulated results as a successful search."
+    )
+  }
+
+  func testResourceSearchEOFWithoutDoneDoesNotPublishOrCompensate() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await ResourceResultViewModelURLProtocol.stub.reset()
+    let itemJSON = resourceContextJSON(title: "Partial Result")
+      .replacingOccurrences(of: "\n", with: "")
+    await ResourceResultViewModelURLProtocol.stub.setStreamBody(
+      "data: {\"type\":\"append\",\"items\":[\(itemJSON)]}\n\n",
+      forKeyword: "cut"
+    )
+    service.baseURLForTesting = "http://resource-result-tests.local"
+    configureResourceResultSearchSession(service)
+
+    let viewModel = ResourceResultViewModel(keyword: "cut", apiService: service)
+    await viewModel.search()
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertEqual(viewModel.errorMessage, "搜索连接中断，请重试。")
+    XCTAssertTrue(
+      viewModel.results.isEmpty,
+      "An EOF without done must not publish partially accumulated results."
+    )
+    let fallbackRequestCount = await ResourceResultViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/search/title",
+      keyword: "cut"
+    )
+    XCTAssertEqual(fallbackRequestCount, 0)
+  }
 }
 
 @MainActor

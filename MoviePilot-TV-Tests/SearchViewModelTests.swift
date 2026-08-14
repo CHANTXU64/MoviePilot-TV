@@ -29,6 +29,13 @@ private actor SearchAsyncGate {
   }
 }
 
+/// 资源搜索流的终止形态：done（成功收尾）/ error（业务失败）/ eof（无终止断开）。
+private enum SearchStreamTermination {
+  case done
+  case error
+  case eof
+}
+
 private func withTimeout<T: Sendable>(
   _ description: String,
   seconds: TimeInterval = 2,
@@ -421,6 +428,8 @@ final class SearchViewModelTests: XCTestCase {
     let newStreamGate = SearchAsyncGate()
     await SearchViewModelURLProtocol.stub.setCustomFilterGate(oldFilterGate)
     await SearchViewModelURLProtocol.stub.setGate(newStreamGate, forQuery: "new")
+    // old 搜索以 done 成功收尾，确保进入过滤阶段后验证其取消。
+    await SearchViewModelURLProtocol.stub.setStreamTermination(.done, forQuery: "old")
 
     let viewModel = SearchViewModel(apiService: service)
     viewModel.searchType = .resource
@@ -475,6 +484,8 @@ final class SearchViewModelTests: XCTestCase {
     await SearchViewModelURLProtocol.stub.reset()
     service.baseURLForTesting = "http://search-tests.local"
     configureSuperUserSearchSession(service)
+    // 第一次搜索以 done 成功收尾，确保发布旧结果。
+    await SearchViewModelURLProtocol.stub.setStreamTermination(.done, forQuery: "old")
 
     let viewModel = SearchViewModel(apiService: service)
     viewModel.searchType = .resource
@@ -490,9 +501,11 @@ final class SearchViewModelTests: XCTestCase {
       "First search must publish results before the second search starts."
     )
 
-    // 第二次搜索：响应被 gate 卡住期间，旧结果必须已被立即清空（F-076）。
+    // 第二次搜索：响应被 gate 卡住期间，旧结果必须已被立即清空。
     let gate = SearchAsyncGate()
     await SearchViewModelURLProtocol.stub.setGate(gate, forQuery: "new")
+    // 第二次搜索以 done 成功收尾，确保 gate 打开后发布自己的结果。
+    await SearchViewModelURLProtocol.stub.setStreamTermination(.done, forQuery: "new")
     viewModel.query = "new"
     await viewModel.autoSearch()
 
@@ -509,6 +522,70 @@ final class SearchViewModelTests: XCTestCase {
     XCTAssertFalse(
       viewModel.resourceResults.isEmpty,
       "Second search must publish its own results after the gate opens."
+    )
+  }
+
+  func testResourceSearchErrorEventDoesNotPublishPartialResults() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureSuperUserSearchSession(service)
+    // error 事件 = 整次搜索失败，不得发布已积累的部分结果。
+    await SearchViewModelURLProtocol.stub.setStreamTermination(.error, forQuery: "broken")
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .resource
+    viewModel.query = "broken"
+
+    await viewModel.autoSearch()
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertEqual(viewModel.resourceErrorMessage, "站点搜索失败")
+    XCTAssertTrue(
+      viewModel.resourceResults.isEmpty,
+      "An error event must not publish partially accumulated results as a successful search."
+    )
+  }
+
+  func testResourceSearchEOFWithoutDoneDoesNotPublishPartialResults() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureSuperUserSearchSession(service)
+    // EOF 无 done = 连接异常（默认终止形态），不得把部分结果按成功收尾发布。
+    await SearchViewModelURLProtocol.stub.setStreamTermination(.eof, forQuery: "cut")
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .resource
+    viewModel.query = "cut"
+
+    await viewModel.autoSearch()
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertEqual(viewModel.resourceErrorMessage, "搜索连接中断，请重试。")
+    XCTAssertTrue(
+      viewModel.resourceResults.isEmpty,
+      "An EOF without done must not publish partially accumulated results."
     )
   }
 
@@ -646,12 +723,14 @@ private actor SearchViewModelURLProtocolStub {
   private var customFilterGate: SearchAsyncGate?
   private var requestedRequests: [SearchRecordedRequest] = []
   private var cancelledRequests: [SearchRecordedRequest] = []
+  private var streamTerminations: [String: SearchStreamTermination] = [:]
 
   func reset() {
     gatesByQuery.removeAll()
     customFilterGate = nil
     requestedRequests.removeAll()
     cancelledRequests.removeAll()
+    streamTerminations.removeAll()
   }
 
   func setGate(_ gate: SearchAsyncGate, forQuery query: String) {
@@ -660,6 +739,11 @@ private actor SearchViewModelURLProtocolStub {
 
   func setCustomFilterGate(_ gate: SearchAsyncGate) {
     customFilterGate = gate
+  }
+
+  /// 配置资源搜索流的终止形态：done（成功收尾）/ error（业务失败）/ eof（无终止断开）。
+  func setStreamTermination(_ termination: SearchStreamTermination, forQuery query: String) {
+    streamTerminations[query] = termination
   }
 
   func response(for request: URLRequest) async throws -> SearchViewModelHTTPStubResponse {
@@ -763,7 +847,10 @@ private actor SearchViewModelURLProtocolStub {
 
   private func responseData(path: String, queryItems: [URLQueryItem], query: String) -> Data {
     if path == "/api/v1/search/title/stream" {
-      return resourceSearchStreamData(title: query == "new" ? "New Resource" : "Old Resource")
+      return resourceSearchStreamData(
+        title: query == "new" ? "New Resource" : "Old Resource",
+        termination: streamTerminations[query] ?? .eof
+      )
     }
     if path == "/api/v1/system/setting/CustomFilterRules" {
       return Data(
@@ -813,12 +900,29 @@ private actor SearchViewModelURLProtocolStub {
       """.utf8)
   }
 
-  private func resourceSearchStreamData(title: String) -> Data {
-    let event =
+  private func resourceSearchStreamData(
+    title: String,
+    termination: SearchStreamTermination
+  ) -> Data {
+    let append =
       "data: {\"type\":\"append\",\"text\":\"Searching\",\"value\":50,\"items\":["
       + resourceContextJSON(title: title)
       + "]}\n\n"
-    return Data(event.utf8)
+    switch termination {
+    case .done:
+      return Data(
+        (append + "data: {\"type\":\"done\",\"text\":\"搜索完成\",\"items\":[]}\n\n").utf8
+      )
+    case .error:
+      return Data(
+        (
+          append
+            + "data: {\"type\":\"error\",\"success\":false,\"message\":\"站点搜索失败\"}\n\n"
+        ).utf8
+      )
+    case .eof:
+      return Data(append.utf8)
+    }
   }
 
   private func resourceContextJSON(title: String) -> String {

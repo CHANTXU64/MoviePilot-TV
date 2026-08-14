@@ -93,7 +93,7 @@
 | F-077 | 已确认 | P2 | M001-I当前合同复核 | SubscribeShare.toMediaInfo | 分享投影丢Bangumi、AniList与统一来源主身份 | 当前Web/后端schema与三路TV调用链复核确认；Explore/Search右键详情、资源、订阅均消费投影 | 共享投影按canonical→raw保留全部当前schema身份；模型缺字段部分与F-079同一实现边界 | 修复已完成：`58c7e81`；真实单一来源记录频率未验证 |
 | F-078 | 已确认 | P3 | M001-I | SubscribeShare 列表身份 | 缺失/0/负数/重复分享业务 ID 可破坏去重与焦点 | review_m001_i 闭合 raw_id fallback、Paginator/ForEach 与兼容巡检盲点 | verify_m001_i 独立确认列表丢项/焦点不稳，并驳回“Fork 错目标”的过宽影响 | TV 稳定身份缺口已确认；分享 ID schema 未验证 |
 | F-079 | 已确认 | P2 | M001-I当前合同复核 | SubscribeShare GET→Fork 编码 | TV模型缺当前schema的`anilistid/media_source/media_id`，GET解码后Fork确定丢失 | 后端91ce365f与Web 7ea14bc9确认三字段在GET/Fork合同；APIService直接编码原模型 | 只补三个明确字段；unknown extra与legacy mediaid不在Share合同，不做raw透传 | 修复已完成：`58c7e81`；真实记录分布未验证 |
-| F-080 | 已确认 | P2 | M001-K→V011-C | Search/Resource/AI SSE 消费者 | SSE 未收到合法终止或收到业务 error 仍可按成功收尾 | review_m001_k_retry 闭合 EOF、业务 error、missingSites 重试与 AI 进行中状态链 | verify_m001_k 确认 AI；review_a001_h 独立确认 Search append+EOF/业务 error 仍发布 | TV 生产与兼容测试终止语义冲突已确认；后端保证未验证 |
+| F-080 | 已修复 | P2 | M001-K→V011-C | Search/Resource SSE 消费者 | SSE 未收到合法终止或收到业务 error 仍可按成功收尾 | review_m001_k_retry 闭合 EOF、业务 error、missingSites 重试与 AI 进行中状态链 | 2026-08-14 三端核对后修复：`SearchViewModel`/`ResourceResultViewModel` 引入 receivedDone 门禁，error 事件不发布、EOF 无 done 不发布（提示连接中断）、missingSites 补偿仅在 done 后执行；后端单站点错误会被 indexer 层吞掉不影响 done，error 仅整次搜索失败级 | TV 生产与兼容测试终止语义冲突已确认；后端保证未验证，AI 整理 SSE 路径未动 |
 | F-081 | 已确认 | P2 | M001-K→S005/V015/W020-E | CustomRule数组/所选ID与坏identity fail-open | 单坏项可拖垮整数组，已选ID缺失/重复可静默不过滤或first-match错规则，并破坏列表/focus/profile身份 | 既有链确认fail-open；W020-E第三裁决合并F-211缺ID与F-215坏identity，两票支持条件性P2 | 输入边界隔离坏项并校验规范非空唯一ID/name；用户接受已选缺失时静默不过滤 | 修复完成（`670cf86`），验证及独立复审通过；长名布局仍未验证 |
 | F-082 | 已确认 | P1 | A001-A→G02 | 通用 ApiResponse 解码 | `success:false`会被可解data抢先发布并缓存，后续订阅/配置动作可基于业务失败载荷继续 | 既有双审闭合通用传播；全新G02 clean-room复核按当前envelope语义升级条件性P1 | 已修复（`d8198fc`）：先拒绝显式failure；错形data失败路径复用JSONValue取错误，保留success缺失兼容边界；438/438本地测试与独立复审通过 | 条件性错误状态/动作P1；真实失败envelope形状未验证 |
 | F-083 | 已确认 | P2 | A001-A→W017 | 下载动作 ActionResponse 解码 | 空body与非对象/畸形非空2xx混淆，异常响应被当成功并翻状态或移除任务 | A001-A双审收窄fail-open分支；W017双审确认三个生产mutation直接信任结果且可移除仍存在任务 | 明确空body兼容单列；其他非空响应复用严格动作decoder失败关闭 | TV fail-open已确认；空body正式契约未验证 |
@@ -1435,7 +1435,7 @@
 
 ### F-080：SSE 未收到合法终止仍按普通成功收尾
 
-- 状态：已确认
+- 状态：已修复（Search/ResourceResult 两消费者；2026-08-14）
 - 严重度：条件性 P2；纯资源展示分支单独为 P3
 - 位置：`MoviePilot-TV/Services/APIService.swift:1748-1757`、Search/ResourceResult/Transfer AI SSE 消费链。
 - 触发路径：HTTP 200 SSE 在 `done`、`error` 或 `enable == false` 前正常 EOF；或 ResourceResult 收到整体 error 且存在目标站点。
