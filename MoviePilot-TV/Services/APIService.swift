@@ -385,14 +385,11 @@ nonisolated private func decodeOrUnwrapSync<T: Decodable>(from data: Data) throw
 nonisolated private func decodeActionResponseSync(from data: Data) throws -> (
   success: Bool, message: String?
 ) {
-  struct ActionResponse: Decodable { let success: Bool?, message: String? }
-  if let response = try? JSONDecoder().decode(ActionResponse.self, from: data) {
-    return (response.success ?? false, response.message)
+  // 仅零字节空 body 按旧契约兼容为成功；非空响应一律按严格 envelope 解码，畸形/错类型失败关闭。
+  if data.isEmpty {
+    return (true, nil)
   }
-  if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-    return (response.success ?? false, response.localizedMessage)
-  }
-  return (true, nil)
+  return try decodeStrictActionResponseSync(from: data)
 }
 
 nonisolated private func decodeStrictActionResponseSync(from data: Data) throws -> (

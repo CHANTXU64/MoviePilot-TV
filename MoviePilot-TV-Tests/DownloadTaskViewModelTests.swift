@@ -503,6 +503,88 @@ final class DownloadTaskViewModelTests: XCTestCase {
     XCTAssertEqual(newRequestCountAfterActions, 0)
   }
 
+  func testMalformedNonEmptyActionResponseFailsClosedForDownloadActions() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setDownloadsJSONSequence(
+      [
+        (
+          downloadPayload(
+            hash: "h1", title: "Task", username: "download-manager", progress: 10),
+          nil
+        ),
+        // 非空但畸形的 2xx body：暂停与删除都必须失败关闭，不得翻转状态或移除仍存在的任务。
+        ("not-json", nil),
+        ("not-json", nil),
+      ],
+      forClient: "client"
+    )
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    viewModel.selectedClient = "client"
+    await viewModel.loadDownloads()
+    XCTAssertEqual(viewModel.downloads.count, 1)
+
+    let didStop = await viewModel.stopDownload(clientName: "client", hash: "h1")
+    XCTAssertFalse(didStop)
+    XCTAssertEqual(
+      viewModel.downloads.count, 1,
+      "A malformed action response must not flip the download state."
+    )
+
+    await viewModel.deleteDownload(clientName: "client", hash: "h1")
+    XCTAssertEqual(
+      viewModel.downloads.count, 1,
+      "A malformed delete response must not remove a task that still exists."
+    )
+  }
+
+  func testEmptyActionResponseRemainsCompatibleSuccess() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setDownloadsJSONSequence(
+      [
+        (
+          downloadPayload(
+            hash: "h1", title: "Task", username: "download-manager", progress: 10),
+          nil
+        ),
+        // 零字节空 body 按旧契约兼容为删除成功。
+        ("", nil),
+      ],
+      forClient: "client"
+    )
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    viewModel.selectedClient = "client"
+    await viewModel.loadDownloads()
+    XCTAssertEqual(viewModel.downloads.count, 1)
+
+    await viewModel.deleteDownload(clientName: "client", hash: "h1")
+    XCTAssertEqual(
+      viewModel.downloads.count, 0,
+      "An empty response body must remain a compatible success for delete."
+    )
+  }
+
   func testOlderClientDeleteThatCompletesLaterDoesNotRemoveCurrentClientDownloadWithSameHash()
     async throws
   {
