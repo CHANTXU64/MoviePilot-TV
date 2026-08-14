@@ -860,7 +860,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     let submitted = await viewModel.submit(background: true)
 
     XCTAssertFalse(submitted)
-    // F-075：部分受理时明确报告“已提交整理”，不再误导为“没有开始”。
+    // 部分受理时明确报告“已提交整理”，不再误导为“没有开始”。
     XCTAssertEqual(viewModel.errorMessage, "部分文件已提交整理，其余失败，请重试。")
   }
 

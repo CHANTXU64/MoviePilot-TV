@@ -160,7 +160,7 @@ class ReorganizeViewModel: ObservableObject {
     }
     isSubmitting = true
     defer { isSubmitting = false }
-    // 记录已受理成功的批次数，用于部分成功时给出准确反馈（F-075：与 Web 对齐，不改变重试范围）。
+    // 记录已受理成功的批次数，用于部分成功时给出准确反馈（与 Web 对齐，不改变重试范围）。
     var acceptedCount = 0
     do {
       if let message = try await validateBeforeSubmit?() {
