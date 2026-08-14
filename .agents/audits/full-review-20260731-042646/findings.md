@@ -19,7 +19,7 @@
 | F-003 | 已确认 | P2 | M001-C/I001→G02 | 分季订阅快照季号边界 | missing/null会被summary安全丢弃、S00合法；仅负季号仍进入字典、状态与订阅/取消目标 | G02主审提出限缩，rounda_g02_third按missing/null/negative/S00矩阵确认当前控制流 | summary入口只拒绝负季号并保留0；不改S00 | 纯TV负季号不变量已确认；后端是否保证非负未验证 |
 | F-004 | 降级 | P3 | M001-C | `Models.swift:612,614-616`，持有/编码在 `728,879,917,1000-1004` | `rawPayload` 与强类型字段重复持有深层 JSON | M001-C 主审确认唯一生产用途及分页/预加载持有路径 | verify_m001_c 确认静态重复持有，但无真机量化，P2→P3 | 静态风险成立；实际性能影响须真机 Instruments |
 | F-005 | 已确认 | P3 | M001-C | `Models.swift:416-450`，限 Statistic/DownloaderInfo 非可选字段 | 非可选字段的属性默认值不能容忍 Decodable 缺键/null | M001-C 主审追踪 Dashboard 刷新和现有测试缺口 | verify_m001_c 独立确认合成解码与顺序发布混合快照 | 官方 schema 是否保证字段齐全未验证 |
-| F-006 | 修复待提交 | P2 | M001-A→G02 | Subscribe lookup/取消identity | 2026-08-11 对照 Web v2.15.1 后收窄为 lookup 响应的 raw 数值 `0` 遮蔽合法 fallback；负数在 Web 中为 truthy，不是缺陷 | 当前工作树让 lookup 的 raw `0` 回退，同时保留 raw 负数和不透明 legacy 值 | 补 lookup 的 0/负数/fallback 矩阵；不引入“正数限定”差异 | Web v2.15.1 规则已确认；真实后端异常数据分布未验证 |
+| F-006 | 已修复 | P2 | M001-A→G02 | Subscribe lookup/取消identity | 2026-08-11 对照 Web v2.15.1 后收窄为 lookup 响应的 raw 数值 `0` 遮蔽合法 fallback；负数在 Web 中为 truthy，不是缺陷 | 已由 `49b887e`（truthyNumericIdentifier）+`f807692`（lookup 应用）修复：raw 数值只跳过 `0`、保留负数，再回退不透明 legacy 值 | 补 lookup 的 0/负数/fallback 矩阵；不引入“正数限定”差异 | Web v2.15.1 规则已确认；真实后端异常数据分布未验证 |
 | F-007 | 已确认 | P1 | M001-A→I008 | Header/预热/跳转/POST 身份链 | source-only 主身份会丢失，且启发式TMDB可覆盖完整详情权威ID并创建、暂停错误订阅 | 既有转换审查与I008整文件主审闭合四个创建入口及X≠Y序列 | review_a001_h从当前HEAD独立确认P1；复用共享draft factory与纯TMDB仲裁，不扩POST schema | 修复已完成：`bb07772`；当前后端/Web合同、构建、381条非后端兼容测试与独立复审通过 |
 | F-008 | 已确认 | P2 | M001-A→W015 | `APIService.search/fork` 与 Home/Sheet/监听方 | 搜索/Fork 完成只清缓存，不刷新已发布状态 | M001-A双审闭合；W015双审确认Fork成功后GET失败/取消编辑均永不发通知 | mutation成功出口恰好发布一次，不依赖后续GET/编辑保存 | 修复已完成：`789e9a7`；独立复审、构建及386条非后端兼容测试通过 |
 | F-009 | 已确认 | P3 | B001 | `AppVersionInfo.swift:74-98`、`ContentViewModel.swift:193-201` | 无法解析的非空后端版本被误报为“版本过低” | B001 主审闭合解析、警告分类与测试缺口 | verify_b001 独立确认三态合流矛盾及测试诊断同类误述 | 修复完成：`4c69ec9`；三态提示及兼容巡检诊断已统一，官方是否产生畸形格式仍未验证 |
@@ -86,9 +86,9 @@
 | F-070 | 已修复 | P2 | M001-H→G09 | GlobalSettings 与 Transfer AI 入口 | 未知 AI 能力被当作已启用 | 当前 Web 与后端均只在显式 true 时开放 AI 能力 | 改为 `== true`，覆盖 settings 缺失、字段缺失、null、false、true | 回归通过，完整验证通过 |
 | F-071 | 已修复 | P2 | M001-H→I009 | TransferHistoryViewModel 搜索 fetcher | 首次搜索后owner与fetcher形成永久强引用环，每次重进/搜索可无界保留整份历史对象图 | 释放回归在修复前失败，确认 `self → fetcher → self` | 像init一样在闭包外冻结局部pageSize；不建生命周期框架 | 修复后释放回归、完整构建和串行全量测试通过 |
 | F-072 | 已确认 | P1 | M001-H→G04 | TransferHistoryViewModel 轮询/搜索/session | 旧轮询可污染新查询/会话、推进当前游标并让当前页继续操作旧记录 | 既有双审确认；G04主审与独立复核再次闭合旧fetcher续接当前fetcher/游标并双票升P1；整改已完成（`e388e8b`），验证及最终独立复审通过 | 捕获query/session/generation/fetcher，恢复与每页提交前复核 | 纯TV跨查询/会话状态归属缺陷 |
-| F-073 | 已确认 | P2 | M001-J→G09 | ManualTransferPreview envelope/data/item 与统计/UI | `success:true`但data缺失/null或item success缺失/null会被当成功预览 | 既有双审闭合fail-open；G09主审与clean-room第三裁逐矩阵确认成立分支，独立复核对envelope缺success的反证被吸收 | endpoint局部要求data与每项Bool success，合法显式空仍成功 | 当前正式producer完整；畸形/兼容producer触发频率未验证 |
-| F-074 | 已确认 | P2 | M001-J→V021/W018-B | Reorganize预览operation owner | 旧预览可在表单/会话变化、提交开始或Sheet关闭后回写并打开 | 模型/V021双审及W018-B双审闭合无revision/cancel、预览A→提交B与Web共享链 | 冻结forms/session/revision；编辑、新预览、提交、dismiss/session切换退休旧结果 | 当前Web/TV共享安全缺陷；运行时取消窗口未验证 |
-| F-075 | 已确认 | P2 | M001-J→W018-A | ReorganizeViewModel 批量后台整理 | 批量提交不保留逐 ID 的已受理/失败/未知状态 | 模型双审与W018-A双审确认success→false/throw、未发送与整批重试链 | 保留逐ID receipt并只重试失败/未发送项 | TV 状态/反馈缺陷；后端幂等性未验证 |
+| F-073 | 已修复 | P2 | M001-J→G09 | ManualTransferPreview envelope/data/item 与统计/UI | `success:true`但data缺失/null或item success缺失/null会被当成功预览 | 既有双审闭合fail-open；G09主审与clean-room第三裁逐矩阵确认成立分支，独立复核对envelope缺success的反证被吸收 | 修复已完成（`e8cdaf7`）：`previewManualTransfer` 要求 `data != nil`，`ManualTransferPreviewItem.success` 收紧为必填 Bool，合法显式空仍成功 | 当前正式producer完整；畸形/兼容producer触发频率未验证 |
+| F-074 | 已确认（用户决定跳过） | P2 | M001-J→V021/W018-B | Reorganize预览operation owner | 旧预览可在表单/会话变化、提交开始或Sheet关闭后回写并打开 | 模型/V021双审及W018-B双审闭合无revision/cancel、预览A→提交B与Web共享链 | 冻结forms/session/revision；编辑、新预览、提交、dismiss/session切换退休旧结果 | 2026-08-14 用户按实际操作链复核：预览请求通常数百毫秒即返回并弹出预览 Sheet 抢占焦点，同会话表单编辑窗口过窄；会话切换已有 isSessionUnchanged 防护，决定跳过 |
+| F-075 | 已确认（用户裁决：仅修文案） | P2 | M001-J→W018-A | ReorganizeViewModel 批量后台整理 | 批量提交不保留逐 ID 的已受理/失败/未知状态 | 模型双审与W018-A双审确认success→false/throw、未发送与整批重试链 | 2026-08-14 三端对照后用户裁决：Web 同样无逐 ID 受理/只重试失败机制且部分失败不刷新列表，后端 force 重整理无幂等，故不做 TV 单端“只重试失败项”增强；仅修误导文案 | TV 错误反馈缺陷；后端幂等性未验证 |
 | F-076 | 已确认 | P2 | M001-J→V011-C→W006-B/I012→G01/G04→当前实现复核 | Manual/Search 资源与最佳结果状态 | 统一session/generation门禁已阻断旧会话/旧owner结果进入新账号；同一会话内清空关键词、开始新搜索或搜索失败时，聚合Search/Resource仍可能保留旧结果或先发布过期错误 | 手动媒体ID子项已由`44908c4`修复；当前`SearchViewModel`空查询、资源新请求及fallback失败出口复核确认剩余同会话陈旧状态 | 新attempt按query/type/generation原子清退或发布结果与错误 | 原跨owner错误动作P1链已闭合；剩余为同会话陈旧结果/错误P2 |
 | F-077 | 已确认 | P2 | M001-I当前合同复核 | SubscribeShare.toMediaInfo | 分享投影丢Bangumi、AniList与统一来源主身份 | 当前Web/后端schema与三路TV调用链复核确认；Explore/Search右键详情、资源、订阅均消费投影 | 共享投影按canonical→raw保留全部当前schema身份；模型缺字段部分与F-079同一实现边界 | 修复已完成：`58c7e81`；真实单一来源记录频率未验证 |
 | F-078 | 已确认 | P3 | M001-I | SubscribeShare 列表身份 | 缺失/0/负数/重复分享业务 ID 可破坏去重与焦点 | review_m001_i 闭合 raw_id fallback、Paginator/ForEach 与兼容巡检盲点 | verify_m001_i 独立确认列表丢项/焦点不稳，并驳回“Fork 错目标”的过宽影响 | TV 稳定身份缺口已确认；分享 ID schema 未验证 |
@@ -332,7 +332,7 @@
 
 ### F-006：Subscribe lookup 的 raw 数值 0 遮蔽合法 fallback
 
-- 状态：修复待提交（当前工作树）
+- 状态：已修复（`49b887e`+`f807692`）
 - 严重度：P2
 - 位置：`APIService.fetchSubscriptionLookup` 的局部响应 DTO，以及 Header/通用取消调用链。
 - 触发路径：lookup 响应返回 raw 数值 `tmdbid/bangumiid/anilistid: 0`，同时遗留 `mediaid` 是有效统一键。
@@ -1317,7 +1317,7 @@
 
 ### F-073：手动整理预览嵌套响应缺失时失败开放
 
-- 状态：已确认
+- 状态：已修复（`e8cdaf7`）
 - 严重度：条件性 P2；G09由未验证P3转确认
 - 位置：`MoviePilot-TV/Services/APIService.swift:1633-1651`、`Models.swift:2763-2796`、`ReorganizeViewModel.swift:202-265`、`ReorganizeSheet.swift:335-485`
 - 精确成立矩阵：envelope `success:true`且`data`缺失/null时，API以`.empty`返回；ViewModel得到零项成功数据，Sheet因`previewData != nil`打开空预览。单条item的`success`缺失/null时，模型解为nil，统计与UI只把`== false`当失败，因此把该项计成成功并按成功样式呈现。
@@ -1332,7 +1332,7 @@
 
 ### F-074：旧预览可在表单或会话变化后回写
 
-- 状态：已确认
+- 状态：已确认（用户决定跳过；2026-08-14）
 - 严重度：P2
 - 位置：`MoviePilot-TV/ViewModels/ReorganizeViewModel.swift:78-92,201-266`；`MoviePilot-TV/Views/Sheets/ReorganizeSheet.swift:335-365`
 - 触发路径：表单 A 预览挂起时修改路径、媒体 ID、季集配置或切换会话，旧请求随后返回。
@@ -1350,7 +1350,7 @@
 
 ### F-075：批量提交不保留逐 ID 受理状态
 
-- 状态：已确认
+- 状态：已确认（2026-08-14 用户裁决：仅修文案，不实现逐 ID 重试机制）
 - 严重度：P2
 - 位置：`MoviePilot-TV/ViewModels/ReorganizeViewModel.swift:154-199,344-355`；`MoviePilot-TV/Services/APIService.swift:1623-1630`
 - 触发路径：批量整理前几条 background 请求成功受理，后续返回 false 或抛错。

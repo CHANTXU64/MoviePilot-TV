@@ -837,6 +837,60 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     XCTAssertTrue(bodies.isEmpty)
   }
 
+  func testReorganizeSubmitReportsPartialAcceptanceMessage() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    await CompatibilityEndpointURLProtocol.stub.setManualTransferResponses([
+      Data(#"{"success":true,"message_i18n":"已开始整理"}"#.utf8),
+      Data(#"{"success":false}"#.utf8),
+    ])
+
+    let service = APIService.testingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    configureManageUser(service)
+    let viewModel = ReorganizeViewModel(
+      logIds: [81, 82],
+      fileItem: nil,
+      apiService: service
+    )
+
+    let submitted = await viewModel.submit(background: true)
+
+    XCTAssertFalse(submitted)
+    // F-075：部分受理时明确报告“已提交整理”，不再误导为“没有开始”。
+    XCTAssertEqual(viewModel.errorMessage, "部分文件已提交整理，其余失败，请重试。")
+  }
+
+  func testReorganizeSubmitAllFailedDoesNotClaimPartialAcceptance() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    await CompatibilityEndpointURLProtocol.stub.setManualTransferResponses([
+      Data(#"{"success":false}"#.utf8),
+      Data(#"{"success":false}"#.utf8),
+    ])
+
+    let service = APIService.testingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    configureManageUser(service)
+    let viewModel = ReorganizeViewModel(
+      logIds: [81, 82],
+      fileItem: nil,
+      apiService: service
+    )
+
+    let submitted = await viewModel.submit(background: true)
+
+    XCTAssertFalse(submitted)
+    // 全部失败时不得使用“部分已提交”措辞。
+    XCTAssertEqual(viewModel.errorMessage, "整理没有开始，请检查设置后重试。")
+  }
+
   private func assertContainsSubsequence(
     _ expected: [String],
     in actual: [String],
