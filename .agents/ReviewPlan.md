@@ -274,7 +274,7 @@
 | M001-G | 已闭环 | F-064 已确认条件性 P2且已修复（`af67839`），F-056作为重复项并入F-050后驳回；其余关联发现边界维持，无新增发现 |
 | M001-H | 已闭环 | G09交叉裁将F-070升确认P2；F-071维持P2；F-072维持P1且已修复（`e388e8b`），Simulator clean build、本地436/436测试与最终独立复审通过；支持F-001/F-021/F-027/F-036，F-013经当前合同反证后驳回 |
 | M001-I | 已闭环 | F-077/F-079 按当前分享schema分别确认投影与Fork身份丢失P2并已修复（`58c7e81`），F-078确认P3；CHK-009已补强，扩展F-002/F-008/F-017/F-027分享链；嵌套分享对象不再计入收窄后的F-011 |
-| M001-J | 已闭环 | G09 clean-room窄裁将F-073收窄后转确认P2且已修复（`e8cdaf7`）；F-074 用户按实际操作链复核后决定跳过（预览请求返回即弹 Sheet 抢焦点，同会话编辑窗口过窄，会话切换已有 isSessionUnchanged 防护）；F-075 用户按三端对照裁决仅修误导文案（Web 同样无逐 ID 受理/只重试失败机制且部分失败不刷新列表，后端 force 无幂等，不做 TV 单端增强），文案与回归测试已提交；F-076 资源搜索新请求开始即清空旧结果（`SearchViewModel.autoSearch` `.resource` 分支），空关键词点搜索与 Web 一致不改，聚合 bestResults 不扩展，定向 13/13 通过；F-077 已修复（`58c7e81`）等既有传播不变；扩展F-027下游证据不变 |
+| M001-J | 已闭环 | G09 clean-room窄裁将F-073收窄后转确认P2且已修复（`e8cdaf7`）；F-074 用户按实际操作链复核后决定跳过（预览请求返回即弹 Sheet 抢焦点，同会话编辑窗口过窄，会话切换已有 isSessionUnchanged 防护）；F-075 用户按三端对照裁决仅修误导文案（Web 同样无逐 ID 受理/只重试失败机制且部分失败不刷新列表，后端 force 无幂等，不做 TV 单端增强），文案与回归测试已提交；F-076 资源搜索新请求开始即清空旧结果（`SearchViewModel.autoSearch` `.resource` 分支），聚合搜索子项已由`d361fe4`修复（unified 分支新请求开始清空 bestResults），空关键词点搜索与 Web 一致不改，定向 16/16 通过；F-077 已修复（`58c7e81`）等既有传播不变；扩展F-027下游证据不变 |
 | M001-K | 已闭环 | F-080 已修复（`SearchViewModel`/`ResourceResultViewModel` 加 receivedDone 门禁：error 不发布、EOF 无 done 不发布、missingSites 补偿仅 done 后；后端单站点错误由 indexer 层吞掉不影响 done，2026-08-14 三端核对）；F-081 输入边界修复已完成（`670cf86`），验证及独立复审通过，已选规则缺失继续静默不过滤由用户裁为产品取舍；F-085 经 S005 不同代理修订跨端边界，F-061后续由I011升P2 |
 | I001 | 已闭环 | 55 个顶层声明全部覆盖；无新增发现，维持既有裁决；四处仅 doc comment 跨账面边界 |
 | A001-A | 已闭环 | G02末裁将F-082升条件P1（已由`d8198fc`修复）；F-083 已修复（2026-08-14：下载动作解码仅空 body 兼容成功，非空响应严格失败关闭并保留 message_i18n）；F-084 已修复（2026-08-14 用户裁决：保留 original→w500 替换，ImageURLs 加 posterFallback 原始 URL，MediaCard/BestResultCard/ForkSubscribeSheet 加载失败自动回退原始 URL）；F-030 已修复（`ee5dcb4`），其余传播闭合 |
@@ -444,7 +444,7 @@
 | 待裁决 P1 | 0 | P1审查与处置队列已清空；不等于所有历史P1都已修复 |
 
 - F-069：目标v2.15.1的全部公共可写订阅字段均已被TV建模，现成`total_episode`问题又已由F-199修复；降为仅未来版本可触发的P3兼容风险，并入CHK-003。
-- F-076：统一session/generation门禁已闭合跨账号/跨owner错误动作链；聚合Search/Resource仍有同一会话旧结果/错误残留，当前按P2开放。
+- F-076：统一session/generation门禁已闭合跨账号/跨owner错误动作链；聚合Search/Resource同会话旧结果/错误残留已由`d361fe4`修复（unified 新搜索开始清空 bestResults，资源分支此前已清空 resourceResults）。
 - F-100：`0cfeb12`已用每key revision闭合同键乱序覆盖，定向乱序回归于2026-08-11通过。
 - F-193：`90b40b4`已闭合跨账号/切服后用新会话续接旧Fork ID的P1链；同一profile内并发Fork、关闭后迟到呈现与GET-only恢复仍为P2。
 
@@ -515,7 +515,7 @@
 - `M001-H / F-071`：owner 保存的 escaping fetcher 不得反向强捕获 owner。
 - `M001-J / F-074`：整理预览必须同时绑定不可变表单快照、请求代际和 session；失配响应不得发布或打开 Sheet。
 - `M001-J / F-075`：批量手动整理必须保留逐 ID 的已受理、失败和未知结果，重试不得包含已确认受理项。
-- `M001-J / F-076`：手动媒体 ID 搜索已由 `44908c4` 在提交时清空旧结果并拒绝关键词变化后的旧响应；统一session/generation门禁已闭合跨账号P1链，聚合Search/Resource的空查询、失败及同会话旧结果/错误残留按P2继续开放。
+- `M001-J / F-076`：手动媒体 ID 搜索已由 `44908c4` 在提交时清空旧结果并拒绝关键词变化后的旧响应；聚合Search/Resource子项已由`d361fe4`修复（unified 新搜索开始清空 bestResults，请求在途/失败/会话变化不再残留旧结果，聚合结果只在完整刷新后覆盖）；统一session/generation门禁已闭合跨账号P1链；空查询保持与 Web 一致不改。
 - `M001-I / F-077/F-078/F-079`：SubscribeShare 的 Fork 载荷与 `toMediaInfo()` UI投影是两个独立边界；当前schema要求保留`bangumiid/anilistid/media_source/media_id`，投影保留全部主身份，Fork不做未知raw透传；F-077/F-079 已由 `58c7e81` 修复；SwiftUI稳定ID不能代替唯一正后端分享ID。
 - `M001-K/S003 / F-061`：软过滤的“未命中置尾”是结果页不变量；首次默认排序和后续用户排序均须先按 `isFilteredOut` 分区，再在各区应用排序键。
 - `A001-A / F-082`：显式 `success:false` 必须先于可解码 data 判失败；`success` 缺失兼容与原始响应 fallback 应作为独立边界保留。已修复（`d8198fc`）：共享解包器先拒绝显式失败，错形 data 仅在目标解码失败后用既有 `JSONValue` 取服务端错误；聚焦测试、Simulator clean build、本地串行 438/438 测试及独立复审通过，五个真实后端兼容套件未运行。
