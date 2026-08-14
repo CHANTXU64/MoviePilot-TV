@@ -426,6 +426,20 @@ nonisolated private func backdropImageURL(backdropPath: String?, config: MediaIm
   return displayImageURL(url, baseURL: config.baseURL, useImageCache: config.useImageCache)
 }
 
+/// 海报原始 URL（不降尺寸），作为降尺寸版本加载失败时的回退来源；
+/// 与 `posterImageURL` 共用豆瓣默认海报拦截规则。
+nonisolated private func posterFallbackImageURL(
+  posterPath: String?,
+  config: MediaImageURLConfig
+) -> URL? {
+  if let url = posterPath, url.contains("doubanio.com") {
+    if url.contains("movie_default") || url.contains("tv_default") {
+      return nil
+    }
+  }
+  return displayImageURL(posterPath, baseURL: config.baseURL, useImageCache: config.useImageCache)
+}
+
 /// 泛型轻量级接口缓存，带过期及淘汰策略
 actor APICache<Key: Hashable, Value> {
   struct LoadToken: Equatable, Sendable {
@@ -1428,6 +1442,7 @@ class APIService: ObservableObject {
           let raw: MediaInfoJSON = try decodeOrUnwrapSync(from: data)
           let imageURLs = MediaInfo.ImageURLs(
             poster: posterImageURL(posterPath: raw.poster_path, config: config),
+            posterFallback: posterFallbackImageURL(posterPath: raw.poster_path, config: config),
             backdrop: backdropImageURL(backdropPath: raw.backdrop_path, config: config)
           )
           continuation.resume(returning: MediaInfo(json: raw, precomputedImageURLs: imageURLs))
@@ -1450,6 +1465,7 @@ class APIService: ObservableObject {
           let mapped = raw.map { item -> MediaInfo in
             let imageURLs = MediaInfo.ImageURLs(
               poster: posterImageURL(posterPath: item.poster_path, config: config),
+              posterFallback: posterFallbackImageURL(posterPath: item.poster_path, config: config),
               backdrop: backdropImageURL(backdropPath: item.backdrop_path, config: config)
             )
             return MediaInfo(json: item, precomputedImageURLs: imageURLs)
@@ -3216,6 +3232,17 @@ class APIService: ObservableObject {
     }
 
     return displayImageURL(url, baseURL: baseURL, useImageCache: useImageCache)
+  }
+
+  /// 获取海报原始 URL（不降尺寸），作为降尺寸版本加载失败时的回退来源。
+  /// 与降尺寸版本共用豆瓣默认海报拦截规则。
+  func getPosterImageUrlOriginal(posterPath: String?) -> URL? {
+    if let url = posterPath, url.contains("doubanio.com") {
+      if url.contains("movie_default") || url.contains("tv_default") {
+        return nil
+      }
+    }
+    return displayImageURL(posterPath, baseURL: baseURL, useImageCache: useImageCache)
   }
 
   /// 获取媒体背景图片 URL

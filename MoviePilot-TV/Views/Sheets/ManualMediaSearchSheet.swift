@@ -132,6 +132,7 @@ struct ManualMediaSearchSheet: View {
                     title: displayTitle(for: item),
                     type: item.type,
                     posterUrl: item.imageURLs.poster,
+                    posterFallbackUrl: item.imageURLs.posterFallback,
                     subtitle: [item.type, item.overview]
                       .compactMap { $0?.isEmpty == false ? $0 : nil }
                       .joined(separator: " · ")

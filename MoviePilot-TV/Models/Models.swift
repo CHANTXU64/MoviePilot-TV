@@ -663,6 +663,8 @@ nonisolated struct MediaInfoJSON: Decodable {
 struct MediaInfo: Codable, Identifiable, Hashable {
   struct ImageURLs: Hashable {
     let poster: URL?
+    /// 降尺寸海报加载失败时回退的原始海报 URL。
+    let posterFallback: URL?
     let backdrop: URL?
   }
 
@@ -851,6 +853,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     // 计算图片 URL
     self.imageURLs = ImageURLs(
       poster: APIService.shared.getPosterImageUrl(posterPath: poster_path),
+      posterFallback: APIService.shared.getPosterImageUrlOriginal(posterPath: poster_path),
       backdrop: APIService.shared.getBackdropImageUrl(backdropPath: backdrop_path)
     )
   }
@@ -1009,6 +1012,7 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     // 计算图片 URL
     self.imageURLs = ImageURLs(
       poster: APIService.shared.getPosterImageUrl(posterPath: poster_path),
+      posterFallback: APIService.shared.getPosterImageUrlOriginal(posterPath: poster_path),
       backdrop: APIService.shared.getBackdropImageUrl(backdropPath: backdrop_path)
     )
   }

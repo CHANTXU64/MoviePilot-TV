@@ -10,9 +10,11 @@ struct ForkSubscribeSheet: View {
   @Environment(\.dismiss) private var dismiss
   @ObservedObject var subscriptionHandler: SubscriptionHandler
   @State private var isImageFailed = false
+  @State private var isUsingFallback = false
   @State private var isForking = false
 
   var body: some View {
+    let media = share.toMediaInfo()
     HStack(alignment: .top, spacing: 60) {
       // Poster
       ZStack {
@@ -24,10 +26,17 @@ struct ForkSubscribeSheet: View {
               .foregroundColor(.gray)
           )
 
-        if !isImageFailed, let posterUrl = share.toMediaInfo().imageURLs.poster {
+        if !isImageFailed,
+          let posterUrl = isUsingFallback ? media.imageURLs.posterFallback : media.imageURLs.poster
+        {
           KFImage.sessionImage(posterUrl)
             .onFailure { _ in
-              isImageFailed = true
+              // 降尺寸海报加载失败时回退到原始 URL 重试一次，仍失败才隐藏。
+              if !isUsingFallback, media.imageURLs.posterFallback != nil {
+                isUsingFallback = true
+              } else {
+                isImageFailed = true
+              }
             }
             .placeholder {
               Rectangle()

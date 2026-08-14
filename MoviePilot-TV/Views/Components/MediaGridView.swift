@@ -49,6 +49,7 @@ private struct GridCardView: View, Equatable {
     MediaCard(
       title: item.title ?? "",
       posterUrl: item.imageURLs.poster,
+      posterFallbackUrl: item.imageURLs.posterFallback,
       typeText: item.displayTypeText,
       ratingText: item.vote_average.map { String(format: "%.1f", $0) },
       bottomLeftText: nil,
@@ -74,6 +75,7 @@ private struct GridCardViewWithMenu<MenuContent: View>: View, Equatable {
     MediaCard(
       title: item.title ?? "",
       posterUrl: item.imageURLs.poster,
+      posterFallbackUrl: item.imageURLs.posterFallback,
       typeText: item.displayTypeText,
       ratingText: item.vote_average.map { String(format: "%.1f", $0) },
       bottomLeftText: nil,

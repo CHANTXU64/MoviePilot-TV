@@ -5,11 +5,30 @@ struct BestResultCard: View {
   let title: String
   let type: String?
   let posterUrl: URL?
+  /// 降尺寸海报加载失败时回退的原始海报 URL。
+  let posterFallbackUrl: URL?
   let subtitle: String?
   let action: () -> Void
 
   @FocusState private var isFocused: Bool
   @State private var isImageFailed: Bool = false
+  @State private var isUsingFallback: Bool = false
+
+  init(
+    title: String,
+    type: String? = nil,
+    posterUrl: URL? = nil,
+    posterFallbackUrl: URL? = nil,
+    subtitle: String? = nil,
+    action: @escaping () -> Void
+  ) {
+    self.title = title
+    self.type = type
+    self.posterUrl = posterUrl
+    self.posterFallbackUrl = posterFallbackUrl
+    self.subtitle = subtitle
+    self.action = action
+  }
 
   var body: some View {
     Button(action: action) {
@@ -62,10 +81,15 @@ struct BestResultCard: View {
             .foregroundColor(.gray)
         )
 
-      if !isImageFailed, let url = posterUrl {
+      if !isImageFailed, let url = isUsingFallback ? posterFallbackUrl : posterUrl {
         KFImage.sessionImage(url)
           .onFailure { _ in
-            isImageFailed = true
+            // 降尺寸海报加载失败时回退到原始 URL 重试一次，仍失败才隐藏。
+            if !isUsingFallback, posterFallbackUrl != nil {
+              isUsingFallback = true
+            } else {
+              isImageFailed = true
+            }
           }
           .placeholder {
             Rectangle()
@@ -80,6 +104,7 @@ struct BestResultCard: View {
     }
     .onChange(of: posterUrl) { _, _ in
       isImageFailed = false
+      isUsingFallback = false
     }
   }
 }

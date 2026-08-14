@@ -97,7 +97,7 @@
 | F-081 | 已确认 | P2 | M001-K→S005/V015/W020-E | CustomRule数组/所选ID与坏identity fail-open | 单坏项可拖垮整数组，已选ID缺失/重复可静默不过滤或first-match错规则，并破坏列表/focus/profile身份 | 既有链确认fail-open；W020-E第三裁决合并F-211缺ID与F-215坏identity，两票支持条件性P2 | 输入边界隔离坏项并校验规范非空唯一ID/name；用户接受已选缺失时静默不过滤 | 修复完成（`670cf86`），验证及独立复审通过；长名布局仍未验证 |
 | F-082 | 已确认 | P1 | A001-A→G02 | 通用 ApiResponse 解码 | `success:false`会被可解data抢先发布并缓存，后续订阅/配置动作可基于业务失败载荷继续 | 既有双审闭合通用传播；全新G02 clean-room复核按当前envelope语义升级条件性P1 | 已修复（`d8198fc`）：先拒绝显式failure；错形data失败路径复用JSONValue取错误，保留success缺失兼容边界；438/438本地测试与独立复审通过 | 条件性错误状态/动作P1；真实失败envelope形状未验证 |
 | F-083 | 已修复 | P2 | A001-A→W017 | 下载动作 ActionResponse 解码 | 空body与非对象/畸形非空2xx混淆，异常响应被当成功并翻状态或移除任务 | A001-A双审收窄fail-open分支；W017双审确认三个生产mutation直接信任结果且可移除仍存在任务 | 已修复（2026-08-14）：`decodeActionResponseSync` 仅零字节空 body 兼容成功，非空响应一律复用严格 decoder 失败关闭并保留 message_i18n | TV fail-open已确认；空body正式契约未验证 |
-| F-084 | 已确认 | P2 | A001-A→G06 | 海报 URL 降尺寸 | 任意 URL 中的 `original` 都被全局替换为 `w500` | 既有双审闭合两条生产路径；G06 两票核到当前上游允许第三方绝对海报URL且无TMDB路径段保证 | 只替换解析后精确 `/t/p/original/` 路径组件 | TV稳定改写机制已确认；真实非TMDB命中频率未验证 |
+| F-084 | 已修复 | P2 | A001-A→G06 | 海报 URL 降尺寸 | 任意 URL 中的 `original` 都被全局替换为 `w500` | 既有双审闭合两条生产路径；G06 两票核到当前上游允许第三方绝对海报URL且无TMDB路径段保证 | 2026-08-14 用户裁决采用加载失败回退方案：保留原替换逻辑，`ImageURLs` 新增 `posterFallback` 原始 URL，MediaCard/BestResultCard/ForkSubscribeSheet 在降尺寸加载失败时自动改用原始 URL 重试，共用豆瓣默认图拦截 | TV稳定改写机制已确认；真实非TMDB命中频率未验证 |
 | F-085 | 已确认 | P2 | M001-K→S005/V015/W020-F/H | CustomRule matcher/预览语义 | 已解码规则的预览、规范化与matcher/后端语义分裂；正常Web可达size单值/seeders区间可令硬过滤全空或条件静默失效 | W020-H双审以当前TV/Web/backend闭合字段矩阵并将既有P3升级P2 | 先统一官方语法，再让预览与matcher消费同一canonical解析结果；非法值显式失败 | 条件性P2；真实规则分布、Rust路径与远端最新性未验证 |
 | F-086 | 已确认 | P1 | A001-B→G02 | APIService baseURL/request 构造与登录提交边界 | 未规范化候选可生成双斜杠/无效URL，且认证成功前写全局baseURL已清旧currentUser/cache并污染原会话 | 既有双审、G02纠偏及全新clean-room复核共同闭合失败登录前全局commit链 | 局部规范化candidate完成登录后再一次commit | 修复已完成：`90b40b4`；candidate认证成功且epoch未变后一次canonical commit |
 | F-087 | 已确认 | P2 | A001-B/A001-C→V011-C→G02 | APIService/Search 错误消息选择 | 空白首选字段遮蔽后续有效detail/message，用户稳定失去可操作失败原因 | 既有API/Search双审与全新G02 clean-room复核确认各入口同根 | 逐项trim/filter后按现有优先级取首个有效文本 | TV错误恢复信息缺口P2；真实payload频率未验证 |
@@ -1509,7 +1509,7 @@
 
 ### F-084：海报降尺寸会改写任意 URL 文本
 
-- 状态：已确认
+- 状态：已修复（2026-08-14，用户裁决：加载失败回退原始 URL）
 - 严重度：P2；G06 由 P3 升级
 - 位置：`MoviePilot-TV/Services/APIService.swift:265-274` 及复制逻辑 `2533-2543`
 - 触发路径：非 TMDB 海报 URL 的 host、path、query 或签名包含字符串 `original`。
