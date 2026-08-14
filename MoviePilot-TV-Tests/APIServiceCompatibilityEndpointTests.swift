@@ -864,6 +864,36 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     XCTAssertEqual(viewModel.errorMessage, "部分文件已提交整理，其余失败，请重试。")
   }
 
+  func testReorganizeSubmitPartialAcceptanceKeepsBackendFailureReason() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    await CompatibilityEndpointURLProtocol.stub.setManualTransferResponses([
+      Data(#"{"success":true,"message_i18n":"已开始整理"}"#.utf8),
+      Data(#"{"success":false,"message_i18n":"目标目录不可用"}"#.utf8),
+    ])
+
+    let service = APIService.testingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    configureManageUser(service)
+    let viewModel = ReorganizeViewModel(
+      logIds: [81, 82],
+      fileItem: nil,
+      apiService: service
+    )
+
+    let submitted = await viewModel.submit(background: true)
+
+    XCTAssertFalse(submitted)
+    // 部分受理 + 后端错误信息时，先报部分成功，再附后端原因。
+    XCTAssertEqual(
+      viewModel.errorMessage,
+      "部分文件已提交整理，其余失败，请重试。失败原因：目标目录不可用"
+    )
+  }
+
   func testReorganizeSubmitAllFailedDoesNotClaimPartialAcceptance() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }

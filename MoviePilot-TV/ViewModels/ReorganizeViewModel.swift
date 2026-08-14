@@ -201,13 +201,14 @@ class ReorganizeViewModel: ObservableObject {
         Logger.error("Reorganize request returned false")
         let backendMessages = failureMessages.filter { !$0.isEmpty }
         errorMessage =
-          backendMessages.isEmpty
-          ? (
-            acceptedCount > 0
-              ? "部分文件已提交整理，其余失败，请重试。"
-              : "整理没有开始，请检查设置后重试。"
+          acceptedCount > 0
+          ? "部分文件已提交整理，其余失败，请重试。"
+            + (backendMessages.isEmpty ? "" : "失败原因：" + backendMessages.joined(separator: "；"))
+          : (
+            backendMessages.isEmpty
+              ? "整理没有开始，请检查设置后重试。"
+              : backendMessages.joined(separator: "；")
           )
-          : backendMessages.joined(separator: "；")
         return false
       }
     } catch is CancellationError {
