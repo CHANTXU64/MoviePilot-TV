@@ -447,7 +447,9 @@ class SearchViewModel: ObservableObject {
           searchType: currentSearchType
         )
       }
-      // 聚合搜索：创建代理 Fetcher 和 Paginators
+      // 聚合搜索：新搜索开始即清空旧最佳结果，避免请求在途或失败时旧结果冒充新结果（与资源搜索分支对齐）。
+      self.bestResults = []
+      // 创建代理 Fetcher 和 Paginators
       setupPaginators(query: submittedQuery)
 
       guard let moviePag = moviePaginator,

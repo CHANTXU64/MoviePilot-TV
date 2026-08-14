@@ -137,6 +137,64 @@ final class SearchViewModelTests: XCTestCase {
     )
   }
 
+  func testNewUnifiedSearchClearsPreviousBestResultsWhileInFlight() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.query = "old"
+    await viewModel.autoSearch()
+
+    XCTAssertFalse(viewModel.isLoading)
+    let oldResultTitles = viewModel.bestResults.compactMap { item -> String? in
+      if case .media(let media) = item {
+        return media.title
+      }
+      return nil
+    }
+    XCTAssertEqual(oldResultTitles, ["Old Result"])
+
+    let newSearchGate = SearchAsyncGate()
+    await SearchViewModelURLProtocol.stub.setGate(newSearchGate, forQuery: "new")
+    viewModel.query = "new"
+    let newSearchTask = Task { @MainActor in
+      await viewModel.autoSearch()
+    }
+    defer { newSearchTask.cancel() }
+
+    try await withTimeout("new unified search request to start") {
+      await SearchViewModelURLProtocol.stub.waitForRequest(query: "new")
+    }
+
+    XCTAssertTrue(
+      viewModel.bestResults.isEmpty,
+      "A new unified search must clear previous best results while it is in flight."
+    )
+
+    await newSearchGate.open()
+    try await withTimeout("new unified search to finish") {
+      await newSearchTask.value
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    let newResultTitles = viewModel.bestResults.compactMap { item -> String? in
+      if case .media(let media) = item {
+        return media.title
+      }
+      return nil
+    }
+    XCTAssertEqual(newResultTitles, ["New Result"])
+  }
+
   func testUnifiedSearchSessionChangeEndsLoading() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
