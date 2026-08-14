@@ -1086,7 +1086,7 @@ private struct BackendCompatibilityCollector {
       record: record,
       field: "backdrop"
     )
-    addPeople(media.directors ?? [], surface: "\(surface) directors for \(record)")
+    addPeople(media.resolvedDirectors, surface: "\(surface) directors for \(record)")
     addPeople(media.actors ?? [], surface: "\(surface) actors for \(record)")
   }
 
@@ -1868,6 +1868,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     for media in mediaForDetail {
       do {
         let detail = try await service.fetchMediaDetail(media: media)
+        assertEmbeddedDirectorProjection(detail)
         collector.addMedia(detail, surface: "media detail \(media.compatibilityTitle)")
 
         await runBackendCompatibilityStep(
@@ -1882,6 +1883,14 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
 
         do {
           let actors = try await service.fetchMediaActors(detail: detail, page: 1)
+          if let expectedSource = detail.auxiliaryContentIdentity?.source {
+            XCTAssertTrue(
+              actors.allSatisfy {
+                MediaIdentifier.normalizeSource($0.source) == expectedSource
+              },
+              "Media credits returned a mismatched person source for \(detail.compatibilityTitle)."
+            )
+          }
           collector.addPeople(actors, surface: "media actors \(detail.compatibilityTitle)")
         } catch {
           XCTFail("Failed to read actors for \(detail.compatibilityTitle): \(error)")
@@ -1910,6 +1919,27 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       } catch {
         XCTFail("Failed to read media detail \(media.compatibilityTitle): \(error)")
       }
+    }
+  }
+
+  @MainActor
+  private func assertEmbeddedDirectorProjection(
+    _ media: MediaInfo,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    let original = media.directors ?? []
+    let resolved = media.resolvedDirectors
+    XCTAssertEqual(resolved.count, original.count, file: file, line: line)
+
+    guard let fallback = MediaIdentifier.normalizeSource(media.source),
+      ["themoviedb", "douban", "bangumi", "anilist"].contains(fallback)
+    else { return }
+
+    for (seed, projected) in zip(original, resolved)
+    where MediaIdentifier.normalizedString(seed.source) == nil {
+      XCTAssertEqual(projected.source, fallback, file: file, line: line)
+      XCTAssertEqual(projected.raw_id, seed.raw_id, file: file, line: line)
     }
   }
 

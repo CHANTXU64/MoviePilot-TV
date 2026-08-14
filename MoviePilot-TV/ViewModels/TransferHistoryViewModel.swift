@@ -31,7 +31,7 @@ class TransferHistoryViewModel: ObservableObject {
   private var aiRedoTask: Task<Void, Never>?
 
   var isAiRedoEnabled: Bool {
-    apiService.settings?.AI_AGENT_ENABLE?.value != false
+    apiService.settings?.AI_AGENT_ENABLE?.value == true
   }
 
   var isMutatingHistory: Bool {
@@ -87,8 +87,8 @@ class TransferHistoryViewModel: ObservableObject {
         return response.list
       },
       processor: { items, newItems in
-        let existingIds = Set(items.map(\.id))
-        let uniqueNewItems = newItems.filter { !existingIds.contains($0.id) }
+        var existingIds = Set(items.map(\.id))
+        let uniqueNewItems = newItems.filter { existingIds.insert($0.id).inserted }
         if !uniqueNewItems.isEmpty {
           items.append(contentsOf: uniqueNewItems)
           return true
@@ -126,13 +126,14 @@ class TransferHistoryViewModel: ObservableObject {
     }
     searchText = text
     let api = apiService
+    let pageSize = self.pageSize
     let effectiveText = text.trimmingCharacters(in: .whitespacesAndNewlines)
     let title = effectiveText.isEmpty ? nil : effectiveText
 
     self.fetcher = { page in
       try await api.fetchTransferHistory(
         page: page,
-        count: self.pageSize,
+        count: pageSize,
         title: title)
     }
     resetDynamicState(clearDeletedIds: true)

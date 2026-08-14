@@ -814,33 +814,36 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-032 · P2 · 已确认 · torrent-only 结果被静默空渲染</summary>
+<summary>F-032 · P2 · 已修复 · torrent-only 结果被静默空渲染</summary>
 
 - 审查单元与位置：M001-E 复核新增 / S004 裁决；`Context.meta_info` 与 TorrentCard/TorrentsResultView
 - 触发路径：合法 `torrent_info` 存在而 `meta_info` 缺失/null。
 - 根因：模型允许部分结果，卡片却要求 meta+torrent；结果页只按原数组是否为空判断空态。
 - 用户影响：计数非零且无空态，但卡片为 EmptyView；整批如此时显示空白网格且无法下载。
 - 证据：verify_m001_e 以多个 torrent-only fixture 闭合非空计数→EmptyView 链；review_s004 独立确认模型合法、过滤保留、非零计数与卡片 EmptyView
-- 跨端结论：TV 契约不一致已确认；真实返回/Web 展示未验证
-- 最小修改方向 / 裁决：先确定可展示契约；现有 fixture/兼容断言认可 torrent-only，优先用 torrent title/description 等已有字段降级渲染，而不只修空态。
+- 跨端结论：当前 MP 官方标题/精确搜索的普通与流式链路都会创建 `MetaInfo`；schema 仍允许 `null`，Web 对异常结果保留卡片并用资源字段降级展示。
+- 最小修改方向 / 裁决：按 Web 对齐；只要求 `torrent_info` 存在，元数据字段可选，标题按媒体名、识别名、资源标题依次兜底，不改后端契约。
+- 修复状态：已完成。`TorrentCard` 已移除对 `meta_info` 的整体门禁，资源标题兜底到 `torrent.title`，季集、描述和标签按缺失字段分别隐藏。
+- 验证：依赖解析、tvOS Simulator Debug 构建及串行测试均通过；当前官方搜索源码核对确认正常搜索链不会主动生成缺失 `meta_info`，本修复作为 Web 兼容防御保留。
 
 </details>
 
 <details>
-<summary>F-033 · P2 · 已确认 · 分页错误状态无人消费且无保留列表恢复</summary>
+<summary>F-033 · P2 · 已修复 · 分页错误状态无人消费且无保留列表恢复</summary>
 
 - 审查单元与位置：S004；Paginator 错误状态与全部生产调用者
 - 触发路径：首次加载失败，或任一页连续失败三次。
 - 根因：内部不自动重试；达到上限后 hasMore=false，唯一恢复 refresh 会清列表；生产端无 hasError/lastError 消费者。
 - 用户影响：首次错误被显示成“无数据/未找到”，后续页永久截断且用户不知情。
 - 证据：review_s004 核对 13 实例、全部 View 与测试只手动重试；verify_s004 独立确认零消费者、错误上限与页面误空态
-- 跨端结论：TV 错误体验缺陷已确认；Web 体验未验证
-- 最小修改方向 / 裁决：Paginator 单点持有错误/恢复语义，调用者统一呈现并调用其恢复入口，不复制计数器。
+- 跨端结论：Web 会显示分页错误与重试入口；TV 按用户决定只在三次连续失败达到上限时统一通知，不增加按钮。
+- 修复状态：已完成。`Paginator` 达到现有三次错误上限后发送全局事件，`NotificationManager` 显示“加载数据失败，请重试。”；前两次保持静默。
+- 验证：依赖解析、tvOS Simulator Debug 完整构建及串行测试均通过，回归覆盖通知阈值与文案。
 
 </details>
 
 <details>
-<summary>F-034 · P2 · 已确认 · 非终止空批被误判为终页</summary>
+<summary>F-034 · P2 · 已确认 · 用户决定跳过 · 非终止空批被误判为终页</summary>
 
 - 审查单元与位置：S004→V011-F；SharedMediaFetcher 与 Paginator 空页语义
 - 触发路径：最多五轮只有另一媒体类型，更后页才有目标类型。
@@ -848,12 +851,12 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 用户影响：聚合搜索永久漏掉实际存在的电影或电视剧。
 - 证据：review_s004 构造六页异类/第七页目标序列；verify_a001_h 从 actor 实现重走；verify_s004 独立确认 buffer/hasMore 与终页契约
 - 跨端结论：TV 契约冲突已确认；后端混排分布未验证
-- 最小修改方向 / 裁决：SharedMediaFetcher 仍有后页时不得向 Paginator 返回终止空数组。
+- 最小修改方向 / 裁决：用户决定跳过；保留当前最多扫描六页的性能边界，接受极端混排下可能漏项。
 
 </details>
 
 <details>
-<summary>F-035 · P2 · 已确认 · in-flight Task 强持有 Paginator</summary>
+<summary>F-035 · P2 · 已确认 · 用户决定跳过 · in-flight Task 强持有 Paginator</summary>
 
 - 审查单元与位置：S004→V011-C→G04；Paginator/Search in-flight Task 生命周期
 - 触发路径：fetcher 挂起时 owner 释放，但未显式 cancel。
@@ -861,25 +864,25 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 用户影响：页面消失后请求、处理与预取继续，长请求延长对象图生命周期。
 - 证据：既有双审闭合强持有；全新G04 clean-room复核收窄为owner离场生命周期并升级P2；owner/session级显式取消共享搜索；不重写已有generation屏障
 - 跨端结论：TV生命周期缺口已确认；push/切Tab/销毁的取消产品边界与驻留时长未运行验证
-- 最小修改方向 / 裁决：给整次 search owner/session 一个显式取消入口；保留已正确工作的 generation 防旧发布，不依赖 deinit 先发生。
+- 最小修改方向 / 裁决：用户决定跳过；接受慢请求离页后继续占用网络与内存，正常请求快速完成时通常无感。
 
 </details>
 
 <details>
-<summary>F-036 · P2 · 已确认 · processor 漏掉页内重复 ID</summary>
+<summary>F-036 · P2 · 已修复 · processor 漏掉页内重复 ID</summary>
 
 - 审查单元与位置：S004→V011-D→G07；Search 人物与 TransferHistory processor
 - 触发路径：同一页有重复 raw_id/id，或人物缺 raw_id 后生成相同 id。
 - 根因：只从旧 items 建不可变 existingIds，过滤当前批次时不插入已接受 ID。
 - 用户影响：ForEach 重复身份、焦点含糊，firstIndex 总指向首项并可能停止继续分页。
 - 证据：既有processor复核闭合不可变seen；G07双审及第三裁确认合法跨source聚合与批内重复；使用最终`Person.id`可变seen并在reset清空；Paginator扫描另归F-034
-- 跨端结论：TV身份去重缺陷已确认；真实碰撞频率未验证
-- 最小修改方向 / 裁决：仅修两处 processor，以可变 seen set 同时覆盖旧数组和当前批次。
+- 修复：Search按包含来源的最终`Person.id`维护可变seen，并在Paginator reset时清空；Transfer过滤当前批次时同步写入seen。
+- 验证：人物身份去重测试及同一Search人物Paginator刷新链路测试通过；依赖解析、tvOS Simulator Debug完整构建与串行全量测试均通过。
 
 </details>
 
 <details>
-<summary>F-039 · P2 · 已确认 · 取消 Paginator 不会取消共享搜索真实请求</summary>
+<summary>F-039 · P2 · 已确认 · 用户决定跳过 · 取消 Paginator 不会取消共享搜索真实请求</summary>
 
 - 审查单元与位置：S004→V011-C→G04；`SearchViewModel.SharedMediaFetcher` 取消链
 - 触发路径：旧聚合搜索挂起时发起新搜索、切换模式或离开页面。
@@ -887,33 +890,33 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 用户影响：旧查询继续占用网络/后端并与新查询重叠；结果会被 generation 丢弃，但扩大旧会话请求风险。
 - 证据：既有双审闭合unstructured task；全新G04 clean-room复核收窄共享语义并升级P2；只在session owner失效时取消共享task；保留另一合法waiter
 - 跨端结论：TV session级取消缺口已确认；真实慢请求量未验证
-- 最小修改方向 / 裁决：仅在整次search session失效时取消共享fetch task并阻止cursor/buffer继续推进；取消单个waiter不得误伤另一合法waiter。
+- 最小修改方向 / 裁决：用户决定跳过；旧结果已有generation屏障，接受慢请求继续占用资源，避免修改共享电影/电视剧请求的取消语义。
 
 </details>
 
 <details>
-<summary>F-049 · P2 · 已确认 · Home/Header 取消业务失败静默</summary>
+<summary>F-049 · P2 · 已修复 · Home/Header 取消业务失败静默</summary>
 
 - 审查单元与位置：B007→V012-B→G08；Home/Header 取消结果
 - 触发路径：缺订阅 id、远端已删、success:false、lookup/delete false。
 - 根因：流程只返回 Bool 并丢弃 false；Home 显示确认前也未强刷。只有抛错才通知。
 - 用户影响：弹窗关闭但订阅仍在或请求未发，无失败原因。
 - 证据：既有双审闭合结果出口；G08 三方裁决确认 Home 稳定丢弃 false 并升级 P2；复用现有错误通知反馈业务拒绝；远端已删除且 UI 收敛时保持静默
-- 跨端结论：TV 反馈缺陷已确认；SubscribeSheet 回滚持久遗留另归 F-148 P1
-- 最小修改方向 / 裁决：无法确认目标、删除被拒绝或刷新后仍存在时走现有错误通知；远端已删除且 UI 已收敛无需强报错，成功保持静默。
+- 修复：Home业务false或异常、Header删除失败且刷新后仍订阅时，统一通知“取消订阅失败，请重试”；远端已删除并收敛为未订阅时保持静默。
+- 验证：Home业务失败、Header状态收敛及View通知接线回归通过；依赖解析、tvOS Simulator Debug完整构建与串行全量测试均通过。
 
 </details>
 
 <details>
-<summary>F-061 · P2 · 已确认 · 软过滤置尾被结果页二次排序破坏</summary>
+<summary>F-061 · P2 · 已修复 · 软过滤置尾被结果页二次排序破坏</summary>
 
 - 审查单元与位置：S003 复核新增 / M001-K→I011；`CustomFilterService.swift:24-67`、`TorrentsResultView.swift:248-291`
 - 触发路径：软过滤未命中项的 `pri_order` 或当前排序值高于命中项；即使用户未改排序，结果页首次出现也会重排。
 - 根因：服务先按“命中 + 未命中”置尾，结果页默认和后续排序均无条件重排整个数组，比较器忽略 `isFilteredOut`。
 - 用户影响：本应置尾的灰色资源可重新出现在顶部，软过滤只剩视觉标记。
 - 证据：既有双审确认机制；I011补默认策略覆盖，review_a001_j第三裁决按每次默认展示与错误策略升级P2；默认原样保留后端顺序；其他排序只在isFilteredOut分区内执行
-- 跨端结论：纯TV内部排序策略冲突已确认
-- 最小修改方向 / 裁决：在结果页排序中先按 `isFilteredOut` 分区，再应用用户选择的排序键；最终产品语义由 G05 单元复核。
+- 修复：所有站点资源先按 `isFilteredOut` 做全局分区；默认保留后端顺序，显式排序分别作用于正常和软过滤分区。
+- 验证：默认顺序及显式大小排序回归通过；依赖解析、tvOS Simulator Debug完整构建和串行全量测试均通过。
 
 </details>
 
@@ -932,59 +935,59 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-066 · P2 · 已确认 · 辅助或非正 raw TMDB ID 被当作主身份加载剧集组</summary>
+<summary>F-066 · P2 · 已修复 · 辅助或非正 raw TMDB ID 被当作主身份加载剧集组</summary>
 
 - 审查单元与位置：M001-F；SubscribeSheetViewModel 剧集组加载资格
 - 触发路径：主身份为 AniList、Douban 或插件但带辅助 `tmdbid`，或快照为非正 `tmdbid + 有效 mediaid`，用户打开订阅编辑页。
 - 根因：编辑页只用 `type == "电视剧" && tmdbid != nil` 放行，没有复用 `Subscribe.identity`，也不过滤 0/负数。
 - 用户影响：请求辅助媒体或 `/media/groups/0`，展示并可能保存不属于主订阅身份的剧集组；失败还可阻断编辑页。
 - 证据：review_m001_f 对照 Subscribe.identity、分季正确入口与现有契约；verify_m001_f_retry 确认编辑页 gate 分裂，verify_a001_h 补充负数也可通过并进入 API
-- 跨端结论：TV 内部主身份契约不一致
-- 最小修改方向 / 裁决：复用统一身份判定，仅在主身份为 TMDB 且 raw TMDB ID 有效时加载。
+- 修复：对齐Web，仅在订阅主身份为TMDB且raw ID为正时加载剧集组；旧无来源TMDB订阅继续兼容，后端仍只接收TMDB路径ID。
+- 验证：AniList辅助TMDB、旧TMDB无来源及0/负数ID回归通过；依赖解析、tvOS Simulator Debug完整构建和串行全量测试均通过。
 
 </details>
 
 <details>
-<summary>F-067 · P2 · 已确认 · 可选剧集组失败阻断整个订阅编辑页</summary>
+<summary>F-067 · P2 · 已确认（用户决定跳过） · 可选剧集组失败阻断整个订阅编辑页</summary>
 
 - 审查单元与位置：M001-F→G02；SubscribeSheetViewModel 配置加载
 - 触发路径：站点、下载器和目录已成功，但可选剧集组请求失败。
 - 根因：剧集组请求位于核心配置加载总 `do/catch` 内；任一失败都会清空全部选项并设置错误，保存按钮因此禁用。
 - 用户影响：无法编辑与剧集组无关的站点、质量、路径等配置。
 - 证据：既有双审确认机制；G02两名不同复核按当前HEAD再次闭合稳定阻断并升级P2；核心选项先发布，可选增强各自best-effort并保留原值
-- 跨端结论：纯TV错误隔离P2；Web策略未验证
-- 最小修改方向 / 裁决：核心选项发布后单独 best-effort 加载剧集组；失败只清剧集组选项并保留原始 `episode_group`。
+- 跨端结论：虽然可选剧集组失败会阻断编辑，但订阅配置当前按整体原子加载处理
+- 最小修改方向 / 裁决：不拆分加载失败域，维持整体失败与重试；用户决定跳过，不做TV单端增强。
 
 </details>
 
 <details>
-<summary>F-068 · P2 · 已确认 · nil/0/重复业务 ID 可进入订阅快照</summary>
+<summary>F-068 · P2 · 已确认（用户决定跳过） · nil/0/重复业务 ID 可进入订阅快照</summary>
 
 - 审查单元与位置：M001-F；Subscribe 快照与 Home/动作链
 - 触发路径：`GET /subscribe/` 返回缺失/null、0、负数或重复 `id` 的记录。
 - 根因：`Subscribe.id` 允许 nil 并直接充当 `Identifiable.ID`；快照入口不校验唯一正业务 ID，兼容巡检遇 nil 又直接跳过。
 - 用户影响：SwiftUI 身份/焦点冲突，编辑、保存、搜索、暂停、重置和删除会因缺 ID 静默失败。
 - 证据：review_m001_f 闭合 Optional Identifiable、ForEach、动作 guard 与巡检跳过链；verify_m001_f_retry 独立扩展确认 0/负数动作路径及兼容巡检盲点
-- 跨端结论：TV 必需 ID 不变量已确认；当前后端保证未验证
-- 最小修改方向 / 裁决：快照/详情边界要求唯一正 ID，草稿构造仍可保留 nil；巡检不得跳过缺失或重复 ID。
+- 跨端结论：Web 同样直接依赖后端正数唯一主键；正常官方后端不触发此异常数据路径
+- 最小修改方向 / 裁决：不做 TV 单端异常数据兜底；用户决定跳过。
 
 </details>
 
 <details>
-<summary>F-070 · P2 · 已确认 · 未知 AI 能力被当作已启用</summary>
+<summary>F-070 · P2 · 已修复 · 未知 AI 能力被当作已启用</summary>
 
 - 审查单元与位置：M001-H→G09；GlobalSettings 与 Transfer AI 入口
 - 触发路径：settings 未加载、用户设置端点 404/403，或合法响应省略 `AI_AGENT_ENABLE`。
 - 根因：可选能力标志用 `!= false` 判断，nil/未知被当成已启用。
 - 用户影响：显示并允许执行后端未声明可用的 AI 整理，最终才提示启动失败。
 - 证据：既有双审闭合 nil settings/字段与入口分支；G09两名代理从当前后端/Web合同重新确认缺失/失败应按禁用；`== true`复用现有settings；补nil/失败/false/true矩阵
-- 跨端结论：当前本地跨端语义已确认；部署版本未验证
-- 最小修改方向 / 裁决：先确认产品契约；若未知应禁用，再最小改为 `== true` 并补 nil/false/true 与设置异步更新测试。
+- 跨端结论：当前 Web 与后端均只在显式 `true` 时开放 AI 能力
+- 修复 / 验证：改为 `== true`；覆盖 settings 缺失、字段缺失、null、false、true，并通过定向回归与完整工程验证。
 
 </details>
 
 <details>
-<summary>F-071 · P2 · 已确认 · 搜索后 owner 与 fetcher 形成强引用环</summary>
+<summary>F-071 · P2 · 已修复 · 搜索后 owner 与 fetcher 形成强引用环</summary>
 
 - 审查单元与位置：M001-H→I009；TransferHistoryViewModel 搜索 fetcher
 - 触发路径：用户首次提交转移历史标题搜索。
@@ -992,7 +995,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 用户影响：退出状态页或登出后 ViewModel、历史列表及关联对象不能释放。
 - 证据：既有双审闭合环；I009主审与定向独立复核确认请求完成后仍永久存在；像init一样在闭包外冻结局部pageSize；不建生命周期框架
 - 跨端结论：纯TV永久内存生命周期缺陷已确认
-- 最小修改方向 / 裁决：与初始化路径相同，在闭包外复制 pageSize，不引入新抽象。
+- 修复 / 验证：在搜索闭包外冻结局部pageSize；释放回归修复前失败、修复后通过，完整构建和串行全量测试通过。
 
 </details>
 
@@ -1529,6 +1532,8 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：既有双审闭合无身份死页；G07三方以当前TV/Web/后端窄化为内嵌导演路径；后端人物生产边界补真实source；TV只可用父source兼容旧载荷，无法确认则禁用
 - 跨端结论：TV及共享Web导演route缺口已确认；混合元数据来源未验证
 - 最小修改方向 / 裁决：优先在后端各人物生产边界补真实source并让Web导演route传递；TV仅可用`person.source ?? fullDetail.source`兼容旧载荷，无法确认来源时禁用点击，不建人物框架。
+- 修复状态：已完成（`40adb42`、`d2972b3`）。媒体详情内嵌职员缺失 `source` 时按父媒体来源投影，并兼容 AniList 内嵌 `avatar.large`；保留卡片交互，不通过禁用卡片掩盖空详情。
+- 验证：补充人物来源/头像、AniList 演员与推荐 endpoint、TMDB 识别 source 固定回归；tvOS Simulator clean build 与串行本地测试 525 项通过、16 项跳过。真实后端用例因缺少 `.env.compatibility` 跳过。
 
 </details>
 
@@ -2002,7 +2007,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-227 · P2 · 已确认 · 人物稀疏详情覆盖 seed 展示字段</summary>
+<summary>F-227 · P2 · 已修复 · 人物稀疏详情覆盖 seed 展示字段</summary>
 
 - 审查单元与位置：G07→F-143拆分裁决；人物稀疏详情覆盖seed展示字段
 - 触发路径：seed已有规范source/raw_id、姓名、头像与别名；详情端点返回空对象或只含少数字段的合法200，credits同时按seed返回作品。
@@ -2011,11 +2016,14 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：G07双审确认，verify_a001_h第三裁按独立字段merge修复/fixture拆出；route owner保持seed；详情仅以有效更丰富字段覆盖，不做全对象替换
 - 跨端结论：TV字段合并缺陷已确认；真实稀疏200频率未验证
 - 最小修改方向 / 裁决：route identity始终保留seed；详情逐字段仅用规范非空/更丰富值覆盖，不做全对象盲替换，也不让credits跟随不可信回包。
+- 修复状态：已完成（本次提交）。`PersonDetailViewModel`按字段合并详情，保留入口人物的身份和已有展示字段；seed已有头像/图片时优先复用，避免详情返回另一图片地址造成首屏闪烁。
+- 验证：新增稀疏人物详情与头像地址变化回归测试；tvOS Simulator Debug clean build 通过，全量串行测试 527 项执行、16 项跳过、0 失败。
+- 剩余验证：当前部署稀疏200频率、异步竞态与真实人物页面视觉闪烁仍需运行环境复测。
 
 </details>
 
 <details>
-<summary>F-230 · P2 · 已确认 · 旧系统 SheetTextField 固定字体不消费辅助字号</summary>
+<summary>F-230 · P2 · 已确认（用户决定跳过） · 旧系统 SheetTextField 固定字体不消费辅助字号</summary>
 
 - 审查单元与位置：G10；旧系统SheetTextField固定字体不随辅助字号
 - 触发路径：目标系统运行兼容分支，用户使用更大内容尺寸或低视力辅助设置打开任一业务Sheet文本框。
@@ -2024,6 +2032,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：review_a001_h全局主审与verify_a001_h独立复核确认目标分支、调用范围和系统性可访问性缺口；现有桥接用UIFontMetrics/自动调整并把66改最小高度；不建输入框框架
 - 跨端结论：静态动态字体缺口已确认；最大字号裁切待运行
 - 最小修改方向 / 裁决：在现有桥接用`UIFontMetrics`生成scalable font并按环境更新，保留当前白底/阴影；高度只做满足缩放后的最小约束，不建字体或输入框框架。
+- 处置状态：仅影响过时的tvOS 26.0–26.3兼容分支；用户决定跳过，不再列为待处理项。
 
 </details>
 
@@ -3389,3 +3398,11 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 本轮静态审计已经把 78 个生产 Swift 文件拆成 140 个正文单元并完成不同代理独立复核，16 个拆分文件集成与 10 个全局回溯组均已收口。结合后续修复与当前目标版本复核，当前账面为 204 项已确认、5 项降级、20 项驳回、17 项未验证；没有 P0，没有开放裁决队列或全局阻塞。历史确认P1共44项，30项已修复/完成范围内对齐、10项明确跳过、4项重分类，待裁决为0。
 
 两名最终检查代理已对当前五份持久化文档复核通过：覆盖、状态、等级、驳回/合并边界、兼容清单、受限披露与报告十类内容均一致，阻断为 0。本轮只完成静态审计及文档收口；所有运行、部署、真机、Instruments、真实后端和用户操作边界仍按对应“未验证”项保留，不冒充运行通过。
+
+## 11. 审计后用户补充修复登记（2026-08-13）
+
+本节记录审计收口后用户补充路径的兼容修复，不新增正式 `F-*` 编号：
+
+- AniList 详情页补齐演员与推荐 endpoint，并在辅助内容身份中支持 `anilist_id` 回退。
+- AniList 内嵌职员兼容 `avatar.large`，缺失人物 `source` 时沿父媒体来源投影；TMDB 搜索和 fallback 识别均显式固定 `source=themoviedb`。
+- 代码与回归测试已提交为 `d2972b3`；本登记仅更新审计文档，未纳入该提交。真实后端兼容套件因缺少 `.env.compatibility` 未运行。

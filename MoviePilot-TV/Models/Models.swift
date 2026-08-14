@@ -10,6 +10,8 @@ extension Notification.Name {
   static let subscriptionSaveDidComplete = Notification.Name("subscriptionSaveDidComplete")
   /// 会话登出通知（主动登出或自动重连失败后发送，用于清理会话相关缓存）
   static let sessionDidLogout = Notification.Name("sessionDidLogout")
+  /// 分页连续失败达到上限，交由全局通知提示用户自行重试
+  static let paginatorDidReachErrorLimit = Notification.Name("paginatorDidReachErrorLimit")
 }
 
 nonisolated struct MediaIdentity: Hashable {
@@ -68,7 +70,8 @@ nonisolated enum MediaIdentifier {
   static func resolveAuxiliaryContent(
     tmdbId: Int?,
     doubanId: String?,
-    bangumiId: Int?
+    bangumiId: Int?,
+    anilistId: Int?
   ) -> MediaIdentity? {
     if let id = truthyNumericIdentifier(tmdbId) {
       return MediaIdentity(source: "themoviedb", mediaId: String(id))
@@ -78,6 +81,9 @@ nonisolated enum MediaIdentifier {
     }
     if let id = truthyNumericIdentifier(bangumiId) {
       return MediaIdentity(source: "bangumi", mediaId: String(id))
+    }
+    if let id = truthyNumericIdentifier(anilistId) {
+      return MediaIdentity(source: "anilist", mediaId: String(id))
     }
     return nil
   }
@@ -756,6 +762,11 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     !isCollection
   }
 
+  /// 兼容旧后端内嵌人物未携带 source 的载荷；只继承父媒体已明确声明的来源。
+  var resolvedDirectors: [Person] {
+    (directors ?? []).map { $0.resolvingRouteSource(fallback: source) }
+  }
+
   enum CodingKeys: String, CodingKey {
     case tmdb_id, douban_id, bangumi_id, anilist_id, imdb_id, tvdb_id, source,
       mediaid_prefix, media_id, title,
@@ -1149,13 +1160,14 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     )
   }
 
-  /// Web 详情页的演职员、推荐和相似内容按 TMDB、豆瓣、Bangumi 字段顺序选择接口，
+  /// Web 详情页的演职员和推荐按 TMDB、豆瓣、Bangumi、AniList 字段顺序选择接口，
   /// 与订阅使用的主身份是两条独立规则。
   var auxiliaryContentIdentity: MediaIdentity? {
     MediaIdentifier.resolveAuxiliaryContent(
       tmdbId: tmdb_id,
       doubanId: douban_id,
-      bangumiId: bangumi_id
+      bangumiId: bangumi_id,
+      anilistId: anilist_id
     )
   }
 
@@ -2237,7 +2249,7 @@ struct AddDownloadRequest: Codable {
 }
 
 /// 演职人员模型
-struct Person: Codable, Identifiable, Hashable {
+nonisolated struct Person: Codable, Identifiable, Hashable {
   struct ImageURLs: Hashable {
     let profile: URL?
   }
@@ -2281,8 +2293,17 @@ struct Person: Codable, Identifiable, Hashable {
   // 计算属性作为 Identifiable 的 ID，保证稳定性
   let id: String
 
-  /// 预计算的图片 URL
-  let imageURLs: ImageURLs
+  /// 图片 URL 在主线程按当前图片设置计算，避免后台 JSON 解码访问主线程 APIService。
+  @MainActor var imageURLs: ImageURLs {
+    ImageURLs(
+      profile: APIService.shared.getPersonImageURL(
+        source: source,
+        profilePath: profile_path,
+        avatar: avatar,
+        images: images
+      )
+    )
+  }
 
   enum CodingKeys: String, CodingKey {
     case source
@@ -2327,7 +2348,6 @@ struct Person: Codable, Identifiable, Hashable {
       self.avatar = nil
       self.images = nil
       self.id = "name-\(nameString)"
-      self.imageURLs = ImageURLs(profile: nil)
       return
     }
 
@@ -2368,14 +2388,6 @@ struct Person: Codable, Identifiable, Hashable {
       self.id = "name-\(self.name ?? UUID().uuidString)"
     }
 
-    self.imageURLs = ImageURLs(
-      profile: APIService.shared.getPersonImageURL(
-        source: self.source,
-        profilePath: self.profile_path,
-        avatar: self.avatar,
-        images: self.images
-      )
-    )
   }
 
   /// 成员初始化器，用于创建或修改演职人员实例。
@@ -2405,14 +2417,114 @@ struct Person: Codable, Identifiable, Hashable {
     self.images = images
     self.id = id
 
-    self.imageURLs = ImageURLs(
-      profile: APIService.shared.getPersonImageURL(
-        source: self.source,
-        profilePath: self.profile_path,
-        avatar: self.avatar,
-        images: self.images
-      )
+  }
+
+  /// 按最终人物身份去重；`id` 已包含来源与原始 ID，可保留跨来源同号人物。
+  static func deduplicate(_ items: [Person], existingIDs: inout Set<String>) -> [Person] {
+    items.filter { existingIDs.insert($0.id).inserted }
+  }
+
+  /// 规范化人物详情路由来源；显式但不受支持的来源不会被父媒体覆盖。
+  func resolvingRouteSource(fallback: String?) -> Person {
+    let declaredSource = MediaIdentifier.normalizedString(source)
+    let candidateSource = declaredSource == nil ? fallback : source
+    guard let resolvedSource = Self.supportedRouteSource(candidateSource), source != resolvedSource
+    else {
+      return self
+    }
+
+    return Person(
+      source: resolvedSource,
+      raw_id: raw_id,
+      name: name,
+      latin_name: latin_name,
+      character: character,
+      job: job,
+      roles: roles,
+      profile_path: profile_path,
+      original_name: original_name,
+      known_for_department: known_for_department,
+      place_of_birth: place_of_birth,
+      popularity: popularity,
+      biography: biography,
+      birthday: birthday,
+      also_known_as: also_known_as,
+      avatar: avatar,
+      images: images,
+      id: raw_id.map { "\(resolvedSource)-\($0)" } ?? id
     )
+  }
+
+  /// 用人物详情补充展示字段，但始终保留入口人物的路由身份和已有数据。
+  func mergingDetails(from detail: Person) -> Person {
+    func nonEmpty(_ value: String?, fallback: String?) -> String? {
+      guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        return fallback
+      }
+      return value
+    }
+
+    func nonEmpty(_ value: [String]?, fallback: [String]?) -> [String]? {
+      guard let value, !value.isEmpty else { return fallback }
+      return value
+    }
+
+    func usable(_ avatar: PersonAvatar?) -> PersonAvatar? {
+      guard let avatar,
+        !avatar.urlValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      else {
+        return nil
+      }
+      return avatar
+    }
+
+    func usable(_ images: BangumiImages?) -> BangumiImages? {
+      guard let images else { return nil }
+      let values = [images.large, images.common, images.medium, images.small, images.grid]
+      guard values.contains(where: { value in
+        guard let value else { return false }
+        return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      }) else {
+        return nil
+      }
+      return images
+    }
+
+    let mergedAvatar = usable(avatar) ?? usable(detail.avatar)
+
+    let mergedImages = usable(images) ?? usable(detail.images)
+
+    return Person(
+      source: source,
+      raw_id: raw_id,
+      name: nonEmpty(detail.name, fallback: name),
+      latin_name: nonEmpty(detail.latin_name, fallback: latin_name),
+      character: nonEmpty(detail.character, fallback: character),
+      job: nonEmpty(detail.job, fallback: job),
+      roles: nonEmpty(detail.roles, fallback: roles),
+      profile_path: nonEmpty(detail.profile_path, fallback: profile_path),
+      original_name: nonEmpty(detail.original_name, fallback: original_name),
+      known_for_department: nonEmpty(
+        detail.known_for_department, fallback: known_for_department),
+      place_of_birth: nonEmpty(detail.place_of_birth, fallback: place_of_birth),
+      popularity: detail.popularity ?? popularity,
+      biography: nonEmpty(detail.biography, fallback: biography),
+      birthday: nonEmpty(detail.birthday, fallback: birthday),
+      also_known_as: nonEmpty(detail.also_known_as, fallback: also_known_as),
+      avatar: mergedAvatar,
+      images: mergedImages,
+      id: id
+    )
+  }
+
+  private static func supportedRouteSource(_ source: String?) -> String? {
+    guard let source = MediaIdentifier.normalizeSource(source) else { return nil }
+    switch source {
+    case "themoviedb", "douban", "bangumi", "anilist":
+      return source
+    default:
+      return nil
+    }
   }
 
   static func == (lhs: Person, rhs: Person) -> Bool {
@@ -2696,7 +2808,7 @@ struct StorageConf: Codable, Hashable {
 }
 
 /// 订阅分享
-struct SubscribeShare: Codable, Identifiable, Hashable {
+nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
   struct ImageURLs: Hashable {
     let poster: URL?
   }
@@ -2770,8 +2882,10 @@ struct SubscribeShare: Codable, Identifiable, Hashable {
   // 自定义剧集组
   let episode_group: String?
 
-  /// 预计算的图片 URL
-  let imageURLs: ImageURLs
+  /// 图片 URL 在主线程按当前图片设置计算，避免后台 JSON 解码访问主线程 APIService。
+  @MainActor var imageURLs: ImageURLs {
+    ImageURLs(poster: APIService.shared.getSubscribePosterImageUrl(poster: poster))
+  }
 
   enum CodingKeys: String, CodingKey {
     case raw_id = "id"
@@ -2830,11 +2944,10 @@ struct SubscribeShare: Codable, Identifiable, Hashable {
       self.id = UUID().uuidString
     }
 
-    // 计算图片 URL
-    self.imageURLs = ImageURLs(poster: APIService.shared.getSubscribePosterImageUrl(poster: poster))
   }
 
   /// 转换为 MediaInfo 以便在通用视图中复用
+  @MainActor
   func toMediaInfo() -> MediaInfo {
     var combinedOverview = ""
     if let comment = share_comment, !comment.isEmpty {

@@ -304,6 +304,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
       if consecutiveErrorCount >= maxConsecutiveErrors {
         Logger.error("连续发生 \(consecutiveErrorCount) 次错误，停止后续加载")
         hasMore = false
+        NotificationCenter.default.post(name: .paginatorDidReachErrorLimit, object: nil)
       }
     }
   }

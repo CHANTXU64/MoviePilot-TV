@@ -105,7 +105,7 @@ final class MediaInfoCollectionBehaviorTests: XCTestCase {
     )
   }
 
-  func testDetailAuxiliaryContentSkipsUnsupportedAndZeroIdentifiers() {
+  func testDetailAuxiliaryContentFallsBackToAniListAfterInvalidEarlierIdentifiers() {
     let media = MediaInfo(
       tmdb_id: 0,
       douban_id: "  ",
@@ -113,7 +113,10 @@ final class MediaInfoCollectionBehaviorTests: XCTestCase {
       anilist_id: 154_587
     )
 
-    XCTAssertNil(media.auxiliaryContentIdentity)
+    XCTAssertEqual(
+      media.auxiliaryContentIdentity,
+      MediaIdentity(source: "anilist", mediaId: "154587")
+    )
   }
 
   func testPopularSubscriptionKeyKeepsAniListPrimaryIdentity() {

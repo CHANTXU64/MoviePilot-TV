@@ -151,8 +151,9 @@ class MediaDetailViewModel: ObservableObject {
     hasAppliedFullDetail = true
 
     // 从完整详情中派生演职员数据，作为 API 加载前的快速初始显示
-    uniqueDirectors = StaffManager.processCrew(persons: fullDetail.directors ?? [])
-    heroTopStaff = StaffManager.getTopGroupedStaff(from: fullDetail.directors ?? [], count: 1)
+    let directors = fullDetail.resolvedDirectors
+    uniqueDirectors = StaffManager.processCrew(persons: directors)
+    heroTopStaff = StaffManager.getTopGroupedStaff(from: directors, count: 1)
     heroTopActors = StaffManager.processActors(
       persons: Array((fullDetail.actors ?? []).prefix(4)))
 
@@ -292,22 +293,25 @@ class MediaDetailViewModel: ObservableObject {
   }
 
   /// 取消当前媒体的订阅
-  func cancelSubscription() async {
+  @discardableResult
+  func cancelSubscription() async -> Bool {
     let snapshot = apiService.sessionSnapshot()
     isUnsubscribing = true
     defer { isUnsubscribing = false }
 
     let didCancel = await deleteResolvedSubscription(snapshot: snapshot)
-    guard apiService.isSessionUnchanged(from: snapshot) else { return }
+    guard apiService.isSessionUnchanged(from: snapshot) else { return false }
 
     // 刷新所有订阅状态（包括全局和分季）
     await refreshSubscriptionStatus(forceRefresh: true)
-    guard apiService.isSessionUnchanged(from: snapshot) else { return }
+    guard apiService.isSessionUnchanged(from: snapshot) else { return false }
 
     if didCancel {
       // 通知首页刷新订阅列表
       NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
     }
+    // 远端已被其他入口删除时，刷新后的未订阅状态也视为收敛成功。
+    return didCancel || preloadTask?.isSubscribed == false
   }
 
   /// 刷新订阅状态：同时更新全局订阅和分季订阅（preloadTask 是唯一数据源）

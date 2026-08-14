@@ -209,7 +209,10 @@ class SubscribeSheetViewModel: ObservableObject {
       self.directories = dir
       self.filterGroups = f
 
-      if subscribe.type == "电视剧", let tmdbId = subscribe.tmdbid {
+      if subscribe.type == "电视剧",
+        subscribe.identity?.source == "themoviedb",
+        let tmdbId = MediaIdentifier.validNumericIdentifier(subscribe.tmdbid)
+      {
         let groups = try await apiService.fetchEpisodeGroups(tmdbId: tmdbId)
         guard canPublishLoadResult(from: sessionSnapshot) else {
           clearLoadedOptions()

@@ -165,6 +165,32 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
+  func testCancelSubscriptionReportsFailureWhileSubscriptionStillExists() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DetailHeaderSubscriptionURLProtocol.stub.reset()
+    await DetailHeaderSubscriptionURLProtocol.stub.setDeleteSucceeds(false)
+    service.baseURLForTesting = "http://detail-header-subscription-tests.local"
+    configureDetailHeaderSubscriptionAccess(service)
+
+    let detail = MediaInfo(tmdb_id: 998_877, title: "取消失败", type: "电影")
+    let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
+    preloadTask.isSubscribed = true
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
+    viewModel.preloadTask = preloadTask
+
+    let didCancel = await viewModel.cancelSubscription()
+
+    XCTAssertFalse(didCancel)
+    XCTAssertEqual(preloadTask.isSubscribed, true)
+  }
+
+  @MainActor
   func testCancelSubscriptionDoesNotRefreshUnderAnotherAccount() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
@@ -201,7 +227,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       currentUser: detailHeaderSubscriptionToken(userID: 2, accessToken: "account-b-token")
     )
     await gate.open()
-    await cancelTask.value
+    _ = await cancelTask.value
 
     let lookupCount = await DetailHeaderSubscriptionURLProtocol.stub.lookupRequestCount(
       tmdbId: 998_878
@@ -1472,6 +1498,7 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
   private var subscriptionSnapshot: [Subscribe] = []
   private var subscriptionSnapshotGate: DetailHeaderSubscriptionAsyncGate?
   private var subscriptionSnapshotRequests = 0
+  private var deleteSucceeds = true
 
   func reset() {
     resolvedSubscriptionsByTMDBID = [
@@ -1488,6 +1515,7 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
     subscriptionSnapshot.removeAll()
     subscriptionSnapshotGate = nil
     subscriptionSnapshotRequests = 0
+    deleteSucceeds = true
   }
 
   func setMinimalSubscriptionPayload(tmdbId: Int) {
@@ -1497,6 +1525,10 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
 
   func setResolvedSubscription(tmdbId: Int, id: Int?) {
     resolvedSubscriptionsByTMDBID[tmdbId] = id
+  }
+
+  func setDeleteSucceeds(_ succeeds: Bool) {
+    deleteSucceeds = succeeds
   }
 
   func failLookup(tmdbId: Int) {
@@ -1618,15 +1650,19 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
       path.hasPrefix("/api/v1/subscribe/"),
       let id = path.split(separator: "/").last.flatMap({ Int($0) })
     {
-      if let tmdbId = resolvedSubscriptionsByTMDBID.first(where: { $0.value == id })?.key {
+      if deleteSucceeds,
+        let tmdbId = resolvedSubscriptionsByTMDBID.first(where: { $0.value == id })?.key
+      {
         resolvedSubscriptionsByTMDBID[tmdbId] = nil
       }
       deletedIDs.append(id)
-      return try jsonResponse(#"{"success":true}"#)
+      return try jsonResponse(#"{"success":\#(deleteSucceeds)}"#)
     }
 
     if method == "DELETE", path.hasPrefix("/api/v1/subscribe/media/") {
-      if let tmdbId = path.split(separator: ":").last.flatMap({ Int($0) }) {
+      if deleteSucceeds,
+        let tmdbId = path.split(separator: ":").last.flatMap({ Int($0) })
+      {
         resolvedSubscriptionsByTMDBID[tmdbId] = nil
       }
       mediaDeleteRequests.append(
@@ -1636,7 +1672,7 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
           absoluteString: url.absoluteString
         )
       )
-      return try jsonResponse(#"{"success":true}"#)
+      return try jsonResponse(#"{"success":\#(deleteSucceeds)}"#)
     }
 
     throw URLError(.badServerResponse)

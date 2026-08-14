@@ -169,11 +169,12 @@ class HomeViewModel: ObservableObject {
   }
 
   /// 加载所有订阅并按电影/电视剧分类，且按 ID 倒序排列，也就是最新的在最前面
-  func refreshSubscriptions(forceRefresh: Bool = false) async {
+  @discardableResult
+  func refreshSubscriptions(forceRefresh: Bool = false) async -> Bool {
     guard apiService.canAccess(.subscribe) else {
       if !movieSubscriptions.isEmpty { movieSubscriptions = [] }
       if !tvSubscriptions.isEmpty { tvSubscriptions = [] }
-      return
+      return true
     }
     do {
       let subs = try await apiService.fetchSubscriptions(forceRefresh: forceRefresh)
@@ -188,12 +189,14 @@ class HomeViewModel: ObservableObject {
       if self.tvSubscriptions != newTVs {
         self.tvSubscriptions = newTVs
       }
+      return true
     } catch {
       if error is CancellationError {
         print("加载订阅被取消")
       } else {
         print("加载订阅失败: \(error)")
       }
+      return false
     }
   }
 
@@ -253,13 +256,18 @@ class HomeViewModel: ObservableObject {
     guard let id = subscribe.id else { return false }
     let sessionSnapshot = apiService.sessionSnapshot()
     let success = try await apiService.deleteSubscription(id: id)
-    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return false }
-    if success {
-      await refreshSubscriptions(forceRefresh: true)
-      // 通知其他页面（如详情页 preloadTask）订阅已变更
-      NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
-    }
-    return success
+    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { throw CancellationError() }
+
+    let didRefresh = await refreshSubscriptions(forceRefresh: true)
+    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { throw CancellationError() }
+
+    let stillExists = movieSubscriptions.contains { $0.id == id }
+      || tvSubscriptions.contains { $0.id == id }
+    guard success || (didRefresh && !stillExists) else { return false }
+
+    // 通知其他页面（如详情页 preloadTask）订阅已变更
+    NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
+    return true
   }
 
   private func validLinkValue(_ value: String?) -> String? {

@@ -259,36 +259,52 @@ struct TorrentsResultView<Header: View>: View {
       }
     }
 
-    // 2. 排序
-    results.sort { (lhs, rhs) -> Bool in
+    // 2. 全局排序：正常资源始终在前，软过滤资源统一置尾
+    filteredResults = Self.orderResults(results, by: sortField, type: sortType)
+  }
+
+  static func orderResults(
+    _ results: [Context],
+    by sortField: SortField,
+    type sortType: SortType
+  ) -> [Context] {
+    let matched = results.filter { !$0.isFilteredOut }
+    let filteredOut = results.filter { $0.isFilteredOut }
+
+    // 默认保留后端顺序，只调整软过滤分区。
+    guard sortField != .default else {
+      return matched + filteredOut
+    }
+
+    // 显式排序分别作用于正常资源和软过滤资源，不跨越分区。
+    let isAsc = sortType == .asc
+    let comparator: (Context, Context) -> Bool = { lhs, rhs in
       let lInfo = lhs.torrent_info
       let rInfo = rhs.torrent_info
 
-      let isAsc = sortType == .asc
-
       switch sortField {
       case .size:
-        return isAsc ? (lInfo?.size ?? 0 < rInfo?.size ?? 0) : (lInfo?.size ?? 0 > rInfo?.size ?? 0)
+        return isAsc
+          ? (lInfo?.size ?? 0) < (rInfo?.size ?? 0)
+          : (lInfo?.size ?? 0) > (rInfo?.size ?? 0)
       case .seeders:
         return isAsc
-          ? (lInfo?.seeders ?? 0 < rInfo?.seeders ?? 0)
-          : (lInfo?.seeders ?? 0 > rInfo?.seeders ?? 0)
+          ? (lInfo?.seeders ?? 0) < (rInfo?.seeders ?? 0)
+          : (lInfo?.seeders ?? 0) > (rInfo?.seeders ?? 0)
       case .peers:
         return isAsc
-          ? (lInfo?.peers ?? 0 < rInfo?.peers ?? 0) : (lInfo?.peers ?? 0 > rInfo?.peers ?? 0)
+          ? (lInfo?.peers ?? 0) < (rInfo?.peers ?? 0)
+          : (lInfo?.peers ?? 0) > (rInfo?.peers ?? 0)
       case .time:
         let lDate = lInfo?.pubdate ?? ""
         let rDate = rInfo?.pubdate ?? ""
         return isAsc ? (lDate < rDate) : (lDate > rDate)
       case .default:
-        return lhs.torrent_info?.pri_order ?? 0 > rhs.torrent_info?.pri_order ?? 0
+        return false
       }
     }
 
-    // 如果没有选择特定排序或作为次要排序，是否应用默认排序？
-    // 当前逻辑仅替换列表。
-
-    filteredResults = results
+    return matched.sorted(by: comparator) + filteredOut.sorted(by: comparator)
   }
 
   private func getFreeState(_ context: Context) -> String {

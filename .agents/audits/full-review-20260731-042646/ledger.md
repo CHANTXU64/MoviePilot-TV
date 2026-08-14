@@ -274,14 +274,14 @@
 | B004 / F-029 | A001-C、V002/W020、V007/W002、G06 | 当前`reloginStoredSession`仅在显式no-access且epoch未变时清理旧会话；密码/网络失败保留旧会话，迟到旧候选不能登出新账号 | 空permissions与Web默认权限差异另归F-030继续核对 | 已闭环；修复完成（`90b40b4`） |
 | B004 / F-030 | M001-B、A001-C/I003、I001、G06 | 当前官方Web会正常写入嵌套`permissions.features`，后端泛型dict不校验并在login/current原样返回；TV原`[String: Bool]?`合成解码会令整个身份失败 | 单一权限JSON边界只读取四个已知Bool；未知/坏值忽略，空/缺权限默认语义保持拆项 | 已闭环；修复完成（`ee5dcb4`），clean build、435/435本地测试及独立复审通过 |
 | B004 / F-031 | S002、A001-B/C、V023/R001、G06 | `90b40b4`已拒绝空串，剩余仅纯空白token；当前官方后端JWT producer不产生，Web同样未校验，确定触发仅损坏存储/非官方兼容端 | 不为低收益异常输入增加TV差异化硬化；保留内部tokenless currentUser哨兵 | 已闭环；降为条件性P3，用户决定跳过 |
-| M001-E / F-032 | S004、A001-H、V011/V015、C017/C018、W006/W011、I001/I011、G05 | torrent-only Context 可解码但 TorrentCard 静默 EmptyView；G05 主审P2、独立复核P1，单方升级不足，保留确认P2 | 可展示契约、过滤位置与 Web 行为 | 已闭环 |
-| S004 / F-033 | 全部分页 ViewModel/View、G04 | Paginator 错误状态无人消费，错误上限后无保留列表恢复 | 统一错误呈现与恢复入口；H-010 修订 | 已闭环 |
-| S004 / F-034 | V011/Search、G04 | SharedMediaFetcher 非终止空批被 Paginator 当成终页 | 稀疏媒体类型分布与空数组终页契约 | 已闭环 |
-| S004 / F-035 | 所有固定owner分页ViewModel/View、G04 | in-flight Task跨await强持有owner；显式cancel/新搜索屏障有效，但页面owner离场无对应取消 | owner/session级取消；push/Tab/销毁语义与真实驻留时长 | 已闭环 |
-| S004 / F-036 | V011/Search、V022/Transfer、对应 View、G04 | processor 只去重旧 items，漏页内重复 ID | 当前批次 seen set 与真实重复频率 | 已闭环 |
+| M001-E / F-032 | S004、A001-H、V011/V015、C017/C018、W006/W011、I001/I011、G05 | torrent-only Context 可解码但 TorrentCard 静默 EmptyView；当前 MP 官方搜索链正常结果会创建 MetaInfo，schema 仍允许 null | 按 Web 对齐：只要求 torrent_info，元数据字段按可选值降级，标题回退 torrent.title | 已闭环；修复完成 |
+| S004 / F-033 | 全部分页 ViewModel/View、G04 | Paginator 错误状态无人消费，错误上限后无保留列表恢复 | 按用户裁决保留三次错误上限，达到上限后统一通知用户重试，不增加按钮 | 已闭环；修复完成 |
+| S004 / F-034 | V011/Search、G04 | SharedMediaFetcher 非终止空批被 Paginator 当成终页 | 稀疏媒体类型分布与空数组终页契约 | 已闭环；用户决定跳过并接受极端漏项 |
+| S004 / F-035 | 所有固定owner分页ViewModel/View、G04 | in-flight Task跨await强持有owner；显式cancel/新搜索屏障有效，但页面owner离场无对应取消 | owner/session级取消；push/Tab/销毁语义与真实驻留时长 | 已闭环；用户决定跳过并接受低频资源驻留 |
+| S004 / F-036 | V011/Search、V022/Transfer、对应 View、G04 | processor 只去重旧 items，漏页内重复 ID | 最终人物身份与批内可变seen；reset清空持久seen | 已闭环；修复完成并通过回归与全量测试 |
 | B006-A / F-037 | A001-I、V004-A、V012-A、W008-C、I001/I002/I008/I013、G07 | 有效语言标签未经规范化而退化为原码 | 上游格式、BCP 47/别名支持边界 | 已闭环 |
 | B006-A / F-038 | M001-C/D、A001-I、W008-C、I001/I002/I013、G07 | 空白 original_language 进入详情元数据分隔串 | 共享规范化与空展示值过滤位置 | 已闭环 |
-| S004 / F-039 | V011-C/D/F、I007、W006、G04/G06 | 单waiter取消合理不传递，但整个search session废弃后共享Task/URL请求/cursor仍继续 | aggregate session取消且不误伤另一合法waiter | 已闭环 |
+| S004 / F-039 | V011-C/D/F、I007、W006、G04/G06 | 单waiter取消合理不传递，但整个search session废弃后共享Task/URL请求/cursor仍继续 | aggregate session取消且不误伤另一合法waiter | 已闭环；用户决定跳过并接受旧请求资源占用 |
 | B005 / F-040 | B006-C、S006、V012-A、C010、W008-D、I002/I008/I013、G07 | 不同 job key 翻译为同一显示文本后未去重 | 产品词义还是显示边界去重 | 已闭环 |
 | B005 / F-041 | M001-G、A001-I、B006-C、S006、V012-A、I001/I002/I003/I008/I013、G07 | job 大小写/换行/别名同时绕过翻译与优先级 | canonical key 与上游词表 | 已闭环 |
 | B006-B / F-042 | M001-C/D、A001-I、W008-C、I001/I002/I013、G07 | 国家对象/字符串形态没有统一 alpha-2 规范化 | 上游形态与 alpha-3/别名边界 | 已闭环 |
@@ -298,17 +298,17 @@
 | S003 / F-057 | M001-E、A001-H、C018-A/I011、G05 | 季/集范围终点未解析或校验 | 真实范围语法与实际覆盖顺序 | 已闭环 |
 | S003 / F-058 | B002/F-018、C017/C018-A/I011、G05 | 卡片格式化与筛选排序支持的季集语法不一致 | 单一解析语法与上游格式 | 已闭环 |
 | S003 / F-059 | M001-E、A001-H、C018-A/I011、G05 | 解析失败/Int 溢出静默折叠为合法零值 | invalid 状态与排序位置 | 已闭环 |
-| S003 / F-061 | S005、C018-A/I011、V011/V015、G05 | CustomFilterService 的软过滤置尾会被结果页首次默认排序和后续排序覆盖 | 根因已确认；默认保留后端顺序，显式排序在命中/软过滤分区内执行并补回归测试 | 已闭环 |
+| S003 / F-061 | S005、C018-A/I011、V011/V015、G05 | CustomFilterService 的软过滤置尾会被结果页首次默认排序和后续排序覆盖 | 默认保留后端顺序，显式排序在正常/软过滤全局分区内执行 | 已闭环；修复完成并通过回归与全量测试 |
 | S002 / F-062 | A001-B/C、V002-B、V007、V023、R001/R002、G06 | 两票确认删除失败后旧token重启复活，升条件P1 | 高权威logout tombstone/session revision先于Keychain恢复并重试删除 | 已闭环；修复完成（`90b40b4`） |
 | S002 / F-063 | A001-B/C、V002-B、V007、V023、R001/R002、G06 | 两票确认四项独立来源可组合A token、B user/permissions与另一代credentials，升条件P1 | 四项记录绑定同一session revision且只接受同代 | 已闭环；修复完成（`90b40b4`） |
 | M001-G / F-064 | A001-I、V012-A、V013、C010、W006/W008/W009、I001/I003/I008/I012/I013、G07 | 可选 PersonAvatar 将整个对象解为 `[String:String]`，混合类型可令整批失败，空首选可遮蔽有效后备 URL | 当前 avatar schema；混合类型/null/空首选应如何在模型边界降级且不丢整批 | 已闭环；修复完成（`af67839`） |
 | M001-F / F-065 | A001-B/J、V017/V018/V021、W013/W014/W018、I003、G02/G06 | 三缓存无session/baseURL且旧请求可回填新会话，最终进入错误季/组订阅payload；末裁P1 | 复用session generation清理并在store前拒绝旧owner | 已闭环；修复完成（`90b40b4`） |
-| M001-F / F-066 | V018/W014、A001-J、W013、G02 | 订阅编辑页用 `type + tmdbid != nil` 放行辅助或非正 raw TMDB ID，违背主身份边界 | 既有跨源订阅字段组合；所有剧集组入口是否统一复用主身份与正 ID 判定 | 已闭环 |
-| M001-F / F-067 | V018/W014、A001-J、G02/G10 | 可选剧集组请求与核心配置共用总 do/catch，失败会清空选项并禁用保存 | 产品是否有意阻断无关编辑；best-effort 隔离与原 episode_group 保留 | 已闭环 |
-| M001-F / F-068 | A001-J、V008/W003、V017/W013、BackendCompatibilityTests、G02/G06 | Subscribe 快照允许 nil/0/重复 id 进入 SwiftUI，而动作全部要求业务 ID | 上游 ID 保证；快照应拒绝整批还是过滤单条并报告 | 已闭环 |
+| M001-F / F-066 | V018/W014、A001-J、W013、G02 | 订阅编辑页用 `type + tmdbid != nil` 放行辅助或非正 raw TMDB ID，违背主身份边界 | 对齐Web主来源判断并要求正数ID，保留旧无来源TMDB兼容 | 已闭环；修复完成并通过回归与全量测试 |
+| M001-F / F-067 | V018/W014、A001-J、G02/G10 | 可选剧集组请求与核心配置共用总 do/catch，失败会清空选项并禁用保存 | 产品是否有意阻断无关编辑；best-effort 隔离与原 episode_group 保留 | 已闭环；用户确认订阅配置按整体原子加载，决定跳过 |
+| M001-F / F-068 | A001-J、V008/W003、V017/W013、BackendCompatibilityTests、G02/G06 | Subscribe 快照允许 nil/0/重复 id 进入 SwiftUI，而动作全部要求业务 ID | Web 同样依赖后端正数唯一主键；不做 TV 单端异常数据兜底 | 已闭环；用户决定跳过 |
 | M001-F / F-069 | A001-J/I003、V018/W014、G02 | 封闭CodingKeys完整PUT折叠unknown/absent/null/default；当前后端全量update已有持久反例，末裁转确认P1 | 原快照/dirty-field overlay；与F-199共享lossless edit根 | 已闭环 |
-| M001-H / F-070 | A001-D、V002/V019/V022/W016/W019、G01/G06/G09 | `AI_AGENT_ENABLE != false` 将 nil/未知当启用；G09两票以当前后端/Web的nil默认禁用合同升确认P2 | 复用现有settings并仅在显式true时开放；部署版本留未验证 | 已闭环 |
-| M001-H / F-071 | V022-A/I009、W019、G09 | 搜索替换的 escaping fetcher 闭包通过 `self.pageSize` 与 owner 形成强引用环 | 模型到 owner 的 ARC 根因已确认；下游只补释放回归 | 已闭环 |
+| M001-H / F-070 | A001-D、V002/V019/V022/W016/W019、G01/G06/G09 | `AI_AGENT_ENABLE != false` 将 nil/未知当启用；G09两票以当前后端/Web的nil默认禁用合同升确认P2 | 复用现有settings并仅在显式true时开放 | 已闭环；修复完成并覆盖缺失/null/false/true |
+| M001-H / F-071 | V022-A/I009、W019、G09 | 搜索替换的 escaping fetcher 闭包通过 `self.pageSize` 与 owner 形成强引用环 | 闭包外冻结局部pageSize并补搜索完成后的释放回归 | 已闭环；修复完成，回归和完整验证通过 |
 | M001-H / F-072 | V022-A/C/I009、W019、A001-F、G06/G09 | 十秒轮询无 query/session generation，旧响应可写新 prependedItems 并推进游标；G04主审与独立复核均确认稳定跨查询污染，升P1 | 延迟 page-1 后改查询/换会话时列表与游标如何隔离 | 已闭环 |
 | M001-J / F-073 | A001-F、V021、W018-B、I001/I003/I015、G09 | 全新clean-room窄裁最终确认P2：envelope success缺失/null/false均失败关闭；仅`success:true + data缺失/null`及item success缺失/null会fail-open，data `{}`与item false不触发 | data必填与item success必填的最小严格解码；正式producer不产该形态、运行未验证 | 已闭环 |
 | M001-J / F-074 | V021/W018、A001-F、G06/G09 | 预览请求无表单/session generation，旧响应可在表单或会话变化后重新发布并打开Sheet；G09保留P2 | 复用session/form snapshot与operation generation | 已闭环 |
@@ -340,7 +340,7 @@
 | S001 / F-060 | A001、S005、V008、V011、V015、V021、W001及全部直接 print 调用者 | 默认 Logger 按设计仅 Debug 输出，但 15 个文件的 80 个直接 print 在 Release 保留且绕过隐私边界 | 各调用者应删除还是改经 Logger；若未来启用 Release handler，哪些值须先脱敏分级 | 已闭环 |
 | B007 / F-047 | M001-F、A001-J、V006/V008/V012-B/V017、W003/W008-B/W013、G02 | 当前后端已对所有身份按season筛选；剩余为同媒体同季多group/多owner时文案只展示一条，媒体级删除却可能命中多条 | 当前Web共享媒体级删除行为 | 已闭环；用户决定跳过 |
 | B007 / F-048 | V012-B、W008-B、A001-J、I008/I013、G02 | Header 确认后重新解析目标，未冻结精确订阅ID | 当前Web同样确认后读取当前媒体再执行媒体级删除 | 已闭环；用户决定跳过 |
-| B007 / F-049 | V008/V012-B、W003/W008-B、V001/G08、G02 | Home/Header Bool 业务失败静默 | 失败通知与 Home 确认前强刷 | 已闭环 |
+| B007 / F-049 | V008/V012-B、W003/W008-B、V001/G08、G02 | Home/Header Bool 业务失败静默 | 失败通知与远端已删除的静默收敛边界 | 已闭环；修复完成并通过回归与全量测试 |
 | B007 / F-054 | V006、A001-J、M001-F、C014/C016、G02 | 历史问题：Handler丢精确订阅ID并对Bangumi-only改发集合式媒体删除 | `58c7e81`已保留canonical/Bangumi/AniList/legacy身份，当前后端按身份与season筛选 | 已闭环；当前实现已解决 |
 | A001-J / F-100 | V004/V012-B、A001-J/I003、G02 | 同键旧normal/force可覆盖新强刷并反转add/cancel判断；末裁条件性P1 | 每key latest revision；旧结果store/return均失效 | 已闭环 |
 | A001-H / F-101 | A001-H/I003、V011/V015/V022、BackendCompatibilityTests | 生产与兼容探针均逐物理行解码 SSE，未按空行组帧及合并多条 data | 当前后端 framing、注释/heartbeat 与共享最小事件组帧边界 | 已闭环 |
@@ -1091,6 +1091,10 @@
 | S429 | 第二轮终检补漏并收口 | 覆盖检查先通过；一致性检查继续发现G06/G09适用性漏项、F-135共享知识旧态、F-215待裁措辞及B006-A历史等待语气。补齐后适用性166/166（140正文＋16集成＋10全局），当前态无候选、待裁或开放措辞 |
 | S430 | 最终覆盖与一致性双检通过 | 覆盖代理确认78/78、140/140、16/16、10/10、284/284、246F、20CHK、报告十类内容与I006/I016永久披露全部一致；文档一致性代理确认166/166适用性、驳回/合并靶点和当前态零阻断。最终报告转为“最终” |
 | S431 | P1最终处置与当前合同校准 | 主代理重新核对完整P1台账、当前TV实现及目标v2.15.1 Web/后端合同：历史确认P1共44项，30项已修复/完成范围内对齐、10项用户明确跳过、4项重分类，待裁0。F-069降为未来兼容P3并落实CHK-003；F-076跨owner链闭合、余项P2；F-100由`0cfeb12`修复；F-193跨profile链由`90b40b4`修复、余项P2。两条聚焦回归于2026-08-11通过；仅同步审计/清单文档，未改产品代码、未提交 |
+| S432 | 审计后用户补充兼容修复登记 | 内嵌职员来源/头像、AniList详情演员与推荐、TMDB识别 provider 固定已由 `40adb42`、`d2972b3` 落实；新增回归与兼容契约测试，tvOS Simulator clean build及串行本地测试525项通过、16项跳过；真实后端因缺少`.env.compatibility`未运行。仅更新本审计目录文档，刻意不纳入代码提交 |
+| S433 | F-227人物详情闪烁修复登记 | `PersonDetailViewModel`按字段合并稀疏详情，保留seed身份与已有展示字段，并优先复用seed头像/图片；新增稀疏详情及头像地址变化回归测试，tvOS Simulator Debug clean build及全量串行测试527项执行、16项跳过、0失败 |
+| S434 | F-230旧系统辅助字号处置 | 用户确认tvOS 26.0–26.3已属过时版本，决定跳过旧兼容分支的固定字体/高度修复；保留历史P2结论，但不再列为待处理项 |
+| S435 | F-032兼容修复登记 | 当前 MP 官方标题/精确搜索普通与流式链路均创建 MetaInfo；TV `TorrentCard` 已按 Web 对齐为 torrent-only 降级渲染，标题回退 `torrent.title`；依赖解析、tvOS Simulator Debug 构建及串行测试通过 |
 
 ## 9. 错误与重试
 

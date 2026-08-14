@@ -38,7 +38,8 @@ struct TorrentCard: View {
   @FocusState private var isButtonFocused: Bool
 
   var body: some View {
-    if let meta = meta, let torrent = torrent {
+    if let torrent = torrent {
+      let displayTitle = media?.title ?? meta?.name ?? torrent.title ?? "未知资源"
       VStack(alignment: .leading, spacing: 8) {
         // 媒体标题
         HStack(alignment: .top, spacing: 12) {
@@ -54,15 +55,15 @@ struct TorrentCard: View {
                 )
                 .foregroundColor(.white)
             }
-            Text(media?.title ?? meta.name)
+            Text(displayTitle)
               .font(.headline)
               .fontWeight(.bold)
               .lineLimit(2)
               .multilineTextAlignment(.leading)
           }
           Spacer(minLength: 0)
-          if !meta.season_episode.isEmpty {
-            Text(meta.season_episode.formattedSeasonEpisode())
+          if let seasonEpisode = meta?.season_episode, !seasonEpisode.isEmpty {
+            Text(seasonEpisode.formattedSeasonEpisode())
               .font(.caption2)
               .fontWeight(.semibold)
               .padding(.horizontal, 8)
@@ -74,7 +75,7 @@ struct TorrentCard: View {
           }
         }
 
-        let descriptionText = meta.subtitle ?? torrent.description
+        let descriptionText = meta?.subtitle ?? torrent.description
         let shouldShowDescription = (descriptionText?.isEmpty == false)
 
         // 种子内容
@@ -140,24 +141,24 @@ struct TorrentCard: View {
             TorrentCardTag(text: site_name)
           }
           // 流媒体平台
-          if meta.web_source != nil && !meta.web_source!.isEmpty {
-            TorrentCardTag(text: meta.web_source!)
+          if let webSource = meta?.web_source, !webSource.isEmpty {
+            TorrentCardTag(text: webSource)
           }
           // <!-- 版本标签 -->
-          if meta.edition != nil && !meta.edition!.isEmpty {
-            TorrentCardTag(text: meta.edition!)
+          if let edition = meta?.edition, !edition.isEmpty {
+            TorrentCardTag(text: edition)
           }
           // <!-- 分辨率标签 -->
-          if let resource_pix = meta.resource_pix {
+          if let resource_pix = meta?.resource_pix {
             TorrentCardTag(text: resource_pix)
           }
           // <!-- 编码标签 -->
-          if let video_encode = meta.video_encode {
+          if let video_encode = meta?.video_encode {
             TorrentCardTag(text: video_encode)
           }
           // <!-- 制作组标签 -->
-          if meta.resource_team != nil && !meta.resource_team!.isEmpty {
-            TorrentCardTag(text: meta.resource_team!)
+          if let resource_team = meta?.resource_team, !resource_team.isEmpty {
+            TorrentCardTag(text: resource_team)
           }
         }
         .font(.caption2)
@@ -204,9 +205,6 @@ struct TorrentCard: View {
           showDownload = false
         }
       }
-    } else {
-      // 记录缺失的数据（可选，依赖内存或控制台，但根据请求隐藏）
-      EmptyView()
     }
   }
 }

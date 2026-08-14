@@ -5,6 +5,28 @@ import XCTest
 
 @MainActor
 final class PersonDecodingTests: XCTestCase {
+  func testPersonDedupUsesSourceScopedIdentityAndFiltersCurrentBatchDuplicates() throws {
+    let people = try JSONDecoder().decode(
+      [Person].self,
+      from: Data(
+        """
+        [
+          {"source":"douban","id":7,"name":"豆瓣人物"},
+          {"source":"douban","id":7,"name":"豆瓣重复人物"},
+          {"source":"themoviedb","id":7,"name":"TMDB人物"}
+        ]
+        """.utf8
+      )
+    )
+    var seenIDs = Set<String>()
+
+    let uniquePeople = Person.deduplicate(people, existingIDs: &seenIDs)
+
+    XCTAssertEqual(uniquePeople.map(\.id), ["douban-7", "themoviedb-7"])
+    XCTAssertEqual(uniquePeople.map(\.name), ["豆瓣人物", "TMDB人物"])
+    XCTAssertTrue(Person.deduplicate(people, existingIDs: &seenIDs).isEmpty)
+  }
+
   func testDecodesDoubanPersonSearchImagesWithObjectEntries() throws {
     let service = APIService.shared
     let snapshot = PersonDecodingServiceSnapshot.capture(service: service)
@@ -215,6 +237,87 @@ final class PersonDecodingTests: XCTestCase {
     XCTAssertEqual(avatarURL, "https://douban.local/large.jpg")
   }
 
+  func testNestedMediaInfoDecodesOffMainActorWithoutImageServiceAccess() async throws {
+    let data = Data(
+      """
+      {
+        "source": "themoviedb",
+        "title": "后台详情",
+        "directors": [
+          {
+            "source": "themoviedb",
+            "id": 123,
+            "name": "后台导演",
+            "profile_path": "/director.jpg"
+          }
+        ],
+        "actors": [
+          {
+            "source": "themoviedb",
+            "id": 456,
+            "name": "后台演员",
+            "profile_path": "/actor.jpg"
+          }
+        ],
+        "subscribeShare": {
+          "id": 7,
+          "name": "后台分享",
+          "type": "电影",
+          "poster": "/poster.jpg"
+        }
+      }
+      """.utf8
+    )
+
+    let decoded = try await Task.detached {
+      let media = try JSONDecoder().decode(MediaInfoJSON.self, from: data)
+      return (
+        media.directors?.count,
+        media.actors?.count,
+        media.subscribeShare != nil
+      )
+    }.value
+
+    XCTAssertEqual(decoded.0, 1)
+    XCTAssertEqual(decoded.1, 1)
+    XCTAssertTrue(decoded.2)
+  }
+
+  func testSparsePersonDetailsPreserveSeedDisplayFields() throws {
+    let seed = try JSONDecoder().decode(
+      Person.self,
+      from: Data(
+        """
+        {
+          "source": "douban",
+          "id": 123,
+          "name": "种子演员",
+          "avatar": "https://douban.local/seed.jpg",
+          "original_name": "Seed Actor",
+          "birthday": "1980-01-01"
+        }
+        """.utf8
+      )
+    )
+    let sparseDetail = try JSONDecoder().decode(
+      Person.self,
+      from: Data(
+        #"{"biography":"详情简介","avatar":"https://douban.local/detail.jpg"}"#.utf8
+      )
+    )
+
+    let merged = seed.mergingDetails(from: sparseDetail)
+
+    XCTAssertEqual(merged.source, "douban")
+    XCTAssertEqual(merged.raw_id, "123")
+    XCTAssertEqual(merged.id, seed.id)
+    XCTAssertEqual(merged.name, "种子演员")
+    XCTAssertEqual(merged.avatar?.urlValue, "https://douban.local/seed.jpg")
+    XCTAssertEqual(merged.original_name, "Seed Actor")
+    XCTAssertEqual(merged.birthday, "1980-01-01")
+    XCTAssertEqual(merged.biography, "详情简介")
+  }
+
   func testPersonImageSelectionMatchesWebForEverySourceAndFallback() throws {
     let service = APIService.shared
     let snapshot = PersonDecodingServiceSnapshot.capture(service: service)
@@ -298,8 +401,9 @@ final class PersonDecodingTests: XCTestCase {
           "https://anilist.local/medium.jpg"
         ),
         (
-          "AniList ignores avatar", "anilist", nil,
-          .url("https://anilist.local/avatar.jpg"), nil, nil
+          "AniList avatar fallback", "anilist", nil,
+          .url("https://anilist.local/avatar.jpg"), nil,
+          "https://anilist.local/avatar.jpg"
         ),
         (
           "Missing source", nil, "/tmdb.jpg", .url("https://douban.local/avatar.jpg"),
@@ -338,6 +442,132 @@ final class PersonDecodingTests: XCTestCase {
         XCTFail("预期 invalidURL，实际为 \(error)")
       }
     }
+  }
+
+  func testEmbeddedDirectorInheritsDeclaredMediaSourceForImageAndRoute() throws {
+    let service = APIService.shared
+    let snapshot = PersonDecodingServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(#"{"TMDB_IMAGE_DOMAIN":"tmdb-images.local"}"#.utf8)
+    )
+    service.useImageCache = false
+
+    let media = try JSONDecoder().decode(
+      MediaInfo.self,
+      from: Data(
+        """
+        {
+          "source": "themoviedb",
+          "title": "测试电影",
+          "directors": [
+            {
+              "id": 123,
+              "name": "测试导演",
+              "job": "Director",
+              "profile_path": "/director.jpg"
+            }
+          ]
+        }
+        """.utf8
+      )
+    )
+
+    let embeddedDirector = try XCTUnwrap(media.directors?.first)
+    XCTAssertNil(embeddedDirector.source)
+    XCTAssertNil(embeddedDirector.imageURLs.profile)
+
+    let resolvedDirector = try XCTUnwrap(media.resolvedDirectors.first)
+    XCTAssertEqual(resolvedDirector.source, "themoviedb")
+    XCTAssertEqual(resolvedDirector.id, "themoviedb-123")
+    XCTAssertEqual(
+      resolvedDirector.imageURLs.profile?.absoluteString,
+      "https://tmdb-images.local/t/p/w600_and_h900_bestv2/director.jpg"
+    )
+  }
+
+  func testEmbeddedDirectorDoesNotInventMissingOrUnsupportedMediaSource() throws {
+    let director = try JSONDecoder().decode(
+      Person.self,
+      from: Data(#"{"id":123,"name":"测试导演","profile_path":"/director.jpg"}"#.utf8)
+    )
+
+    for fallback in [nil, "tvdb"] as [String?] {
+      let resolvedDirector = director.resolvingRouteSource(fallback: fallback)
+      XCTAssertNil(resolvedDirector.source)
+      XCTAssertNil(resolvedDirector.imageURLs.profile)
+    }
+  }
+
+  func testMediaDetailViewModelPublishesResolvedEmbeddedDirectors() throws {
+    let media = try JSONDecoder().decode(
+      MediaInfo.self,
+      from: Data(
+        """
+        {
+          "source": "themoviedb",
+          "title": "测试电影",
+          "directors": [
+            {
+              "id": 123,
+              "name": "测试导演",
+              "job": "Director",
+              "profile_path": "/director.jpg"
+            }
+          ]
+        }
+        """.utf8
+      )
+    )
+    let viewModel = MediaDetailViewModel(
+      detail: media,
+      apiService: APIService.isolatedTestingInstance()
+    )
+
+    viewModel.applyFullDetail(media)
+
+    let director = try XCTUnwrap(viewModel.uniqueDirectors.first)
+    XCTAssertEqual(director.source, "themoviedb")
+    XCTAssertEqual(director.id, "themoviedb-123")
+  }
+
+  func testAniListEmbeddedDirectorSupportsNestedAvatarAfterSourceResolution() throws {
+    let service = APIService.shared
+    let snapshot = PersonDecodingServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "http://moviepilot.local"
+    service.useImageCache = false
+
+    let media = try JSONDecoder().decode(
+      MediaInfo.self,
+      from: Data(
+        """
+        {
+          "source": "anilist",
+          "anilist_id": 154587,
+          "directors": [
+            {
+              "id": 95012,
+              "name": "Atsumi Tanezaki",
+              "job": "Director",
+              "avatar": {"large": "https://anilist.local/staff/large.jpg"}
+            }
+          ]
+        }
+        """.utf8
+      )
+    )
+
+    let director = try XCTUnwrap(media.resolvedDirectors.first)
+    XCTAssertEqual(director.source, "anilist")
+    XCTAssertEqual(director.name, "Atsumi Tanezaki")
+    XCTAssertEqual(
+      director.imageURLs.profile?.absoluteString,
+      "https://anilist.local/staff/large.jpg"
+    )
   }
 
 }

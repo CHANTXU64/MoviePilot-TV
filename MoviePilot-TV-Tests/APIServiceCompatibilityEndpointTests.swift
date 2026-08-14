@@ -277,6 +277,42 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     )
   }
 
+  func testAniListDetailAuxiliaryEndpointsMatchWebContract() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+
+    let media = MediaInfo(
+      anilist_id: 154_587,
+      source: "anilist",
+      title: "葬送的芙莉莲",
+      type: "电视剧"
+    )
+
+    let actors = try await service.fetchMediaActors(detail: media, page: 1)
+    let recommendations = try await service.fetchMediaRecommendations(detail: media, page: 1)
+
+    XCTAssertEqual(actors.first?.source, "anilist")
+    XCTAssertEqual(actors.first?.raw_id, "95097")
+    XCTAssertEqual(
+      recommendations.first?.identity,
+      MediaIdentity(source: "anilist", mediaId: "20954")
+    )
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    XCTAssertEqual(
+      paths,
+      [
+        "/api/v1/anilist/credits/154587",
+        "/api/v1/anilist/recommend/154587",
+      ]
+    )
+  }
+
   func testManualMediaSearchMatchesWebSelectorContractAndKeepsAniListNativeID()
     async throws
   {
@@ -310,6 +346,38 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
       ]
     )
     XCTAssertNil(query["type"])
+  }
+
+  func testTMDBRecognitionPinsSearchAndFallbackToTMDBSource() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    await CompatibilityEndpointURLProtocol.stub.setManualMediaResponse(
+      title: "搜索未命中",
+      data: Data("[]".utf8)
+    )
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+
+    let tmdbID = await service.recognizeTmdbId(
+      title: "搜索未命中",
+      year: "2026",
+      type: "电视剧"
+    )
+
+    XCTAssertEqual(tmdbID, 209_867)
+    let searchQuery = Self.queryValues(
+      await CompatibilityEndpointURLProtocol.stub.requestQuery(suffix: "/media/search")
+    )
+    XCTAssertEqual(searchQuery["source"], "themoviedb")
+    let recognizeQuery = Self.queryValues(
+      await CompatibilityEndpointURLProtocol.stub.requestQuery(suffix: "/media/recognize")
+    )
+    XCTAssertEqual(recognizeQuery["source"], "themoviedb")
+    XCTAssertEqual(recognizeQuery["title"], "搜索未命中 2026")
   }
 
   func testManualMediaSearchOlderSuccessCannotRestoreResultsAfterEmptySearch() async {
@@ -1052,6 +1120,12 @@ private actor CompatibilityEndpointURLProtocolStub {
     } else if url.path == "/api/v1/mediaserver/exists" {
       statusCode = 200
       data = #"{"success":true,"data":{"item":{"id":"library/42"}}}"#.data(using: .utf8)!
+    } else if url.path == "/api/v1/anilist/credits/154587" {
+      statusCode = 200
+      data = #"[{"source":"anilist","id":95097,"name":"种崎敦美"}]"#.data(using: .utf8)!
+    } else if url.path == "/api/v1/anilist/recommend/154587" {
+      statusCode = 200
+      data = #"[{"source":"anilist","anilist_id":20954,"title":"声之形","type":"电影"}]"#.data(using: .utf8)!
     } else if url.path == "/api/v1/media/search" {
       let title = URLComponents(url: url, resolvingAgainstBaseURL: false)?
         .queryItems?
@@ -1069,6 +1143,11 @@ private actor CompatibilityEndpointURLProtocolStub {
           #"[{"source":"anilist","media_id":"154587","tmdb_id":42,"anilist_id":154587,"title":"葬送的芙莉莲","type":"电视剧","year":"2023"}]"#
           .data(using: .utf8)!
       }
+    } else if url.path == "/api/v1/media/recognize" {
+      statusCode = 200
+      data =
+        #"{"media_info":{"source":"themoviedb","tmdb_id":209867,"title":"搜索未命中","type":"电视剧","year":"2026"}}"#
+        .data(using: .utf8)!
     } else if url.path == "/api/v1/subscribe/shares" && request.httpMethod == "GET" {
       statusCode = 200
       data =

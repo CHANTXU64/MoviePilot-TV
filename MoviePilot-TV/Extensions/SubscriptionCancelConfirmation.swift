@@ -3,6 +3,7 @@ import Foundation
 enum SubscriptionCancelConfirmation {
   static let title = "取消订阅"
   static let confirmButtonTitle = "确认取消订阅"
+  static let failureMessage = "取消订阅失败，请重试"
 
   static func headerMessage(for media: MediaInfo) -> String {
     message(title: media.cleanedTitle ?? media.title ?? "")

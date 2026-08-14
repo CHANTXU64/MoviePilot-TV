@@ -65,6 +65,13 @@ class NotificationManager: ObservableObject {
         self?.show(message: "订阅成功", type: .success)
       }
       .store(in: &cancellables)
+
+    NotificationCenter.default.publisher(for: .paginatorDidReachErrorLimit)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in
+        self?.show(message: "加载数据失败，请重试。", type: .error)
+      }
+      .store(in: &cancellables)
   }
 
   func show(message: String, type: NotificationType = .info, duration: TimeInterval = 5) {
