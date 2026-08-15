@@ -106,6 +106,7 @@ private struct DownloadTaskRow: View {
   // 核心逻辑修正：完全对齐 Vue 的 `isDownloading` 布尔逻辑
   // 仅当 state 为 "downloading" 时为 true，用于控制“暂停/继续”按钮的状态。
   @State private var isDownloading: Bool
+  @State private var isToggling = false
 
   init(item: DownloadingInfo, clientName: String, viewModel: DownloadTaskViewModel) {
     self.item = item
@@ -117,21 +118,26 @@ private struct DownloadTaskRow: View {
   /// 核心交互：对齐 Vue 的 `toggleDownload`
   /// 切换下载状态（暂停/继续）。
   private func toggleDownload() {
+    guard !isToggling else { return }
     guard let hash = item.hash else { return }
 
+    isToggling = true
+    let shouldStop = isDownloading
+    let targetState = !shouldStop
     // 等待服务器真实响应后再翻转，类似 Vue
     Task {
       let operationSuccess: Bool
-      if isDownloading {  // 停止
+      if shouldStop {  // 停止
         operationSuccess = await viewModel.stopDownload(clientName: clientName, hash: hash)
       } else {  // 开始
         operationSuccess = await viewModel.startDownload(clientName: clientName, hash: hash)
       }
 
-      // API 调用成功，则翻转 UI 状态
+      // API 调用成功，则写入发起时冻结的目标状态，避免轮询更新后 toggle 反向。
       if operationSuccess {
-        isDownloading.toggle()
+        isDownloading = targetState
       }
+      isToggling = false
     }
   }
 
@@ -145,6 +151,7 @@ private struct DownloadTaskRow: View {
         id: "toggle",
         title: toggleActionTitle,
         icon: toggleActionIcon,
+        isEnabled: !isToggling,
         role: .normal,
         action: toggleDownload
       ),
