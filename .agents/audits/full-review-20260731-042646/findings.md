@@ -122,8 +122,8 @@
 | F-106 | 已修复 | P2 | A001-K→I003/I016/G01 | settings事务与预计算图片URL配置生命周期 | A public settings可与B user settings混合、旧请求/吞取消可发布到新会话；既有模型又长期固化旧baseURL/缓存/TMDB域 | I003双审确认P2；I016出现P1/P2分歧后，G01第三裁按无敏感设置消费边界最终维持P2 | settings每阶段绑定epoch并传播取消；会话变化清旧共享配置，生产图片包装按访问消费获胜值 | TV配置/session生命周期缺口已确认；等级已裁定P2 |
 | F-107 | 已确认（原 P1 主触发已修复；用户决定跳过剩余项） | P2 | V001→R001/R002/W020-C→G08 | 根登录转换与跨会话通知owner | 原“登录失败后成功仍残留旧banner”已修复；剩余仅旧业务任务在会话切换后晚到调用`show()`，可把A的失败提示显示到B | `90b40b4`已让manager监听会话UI身份、同步发布并在身份切换时清banner/计时；现有测试覆盖先show再切号，未覆盖切号后旧调用者晚到show | 不再修改；若以后处理，应只在异步业务调用者发布通知前校验既有operation/session owner | 剩余影响为短暂错误提示、无错误mutation，降为P2；用户决定跳过 |
 | F-108 | 未验证 | P3 | V001 | `NotificationManager.swift:44-60`、根 presenter 与 Sheet 异步失败链 | 通知可能在独立 Sheet 下不可见却照常计时并过期 | review_a001_j 闭合 SubscribeSeason/Transfer 异步失败、根 presenter 与错误清空链 | verify_a001_h 确认静态触发链，但无法静态证明 tvOS Sheet 必然遮挡根 overlay | 条件性 TV 呈现问题；模态层级、焦点与五秒可见窗口待运行验证 |
-| F-109 | 已确认 | P2 | V002-A/B→W020-A/D/G06 | profile偏好作用域与权威配置owner | 四类tuple key可碰撞；token-only/凭据轮换还会落入错误bucket，推荐开关又绕过当前per-user权威配置 | 既有多审闭合碰撞与推荐合同；G06 两票确认key读取使用凭据用户名而非currentUser且baseURL未规范化 | canonical baseURL+权威currentUser组成版本化tuple；异步操作冻结同一key | 跨profile污染机制已确认；真实多profile频率与远端最新性未验证 |
-| F-110 | 已确认 | P2 | S005→C018-B/W011→G05 | `TorrentsResultView.swift:267,283-285,329-343,374-395` | 默认排序选择升序仍固定按pri_order降序 | 既有多审确认；G05主审与独立复核均再次闭合可选asc与固定desc的稳定反例并支持P2 | 比较器遵循方向，或隐藏默认字段方向控件；不与F-061合并 | 纯TV内部控制/比较器契约冲突 |
+| F-109 | 已修复（`90b40b4`） | P2 | V002-A/B→W020-A/D/G06 | profile偏好作用域与权威配置owner | 四类tuple key可碰撞；token-only/凭据轮换还会落入错误bucket，推荐开关又绕过当前per-user权威配置 | 既有多审闭合碰撞与推荐合同；G06 两票确认key读取使用凭据用户名而非currentUser且baseURL未规范化 | canonical baseURL+权威currentUser组成版本化tuple；异步操作冻结同一key | 跨profile污染机制已确认；真实多profile频率与远端最新性未验证 |
+| F-110 | 已修复 | P2 | S005→C018-B/W011→G05 | `TorrentsResultView.swift:267,283-285,329-343,374-395` | 默认排序选择升序仍固定按pri_order降序 | 既有多审确认；G05主审与独立复核均再次闭合可选asc与固定desc的稳定反例并支持P2 | 比较器遵循方向，或隐藏默认字段方向控件；不与F-061合并 | 纯TV内部控制/比较器契约冲突 |
 | F-111 | 已确认 | P2 | V002-A/B→W020-A/C→I016 | token-only profile与连接身份 | 无storedUsername的合法会话统一使用default，System连接页也忽略权威currentUser而显示未知/输入凭据用户名 | 既有双审确认机制；I016两代理以受支持token-only双账号隔离链确认升P2 | profile与显示统一使用当前权威会话身份 | 纯TV身份缺陷；真实token-only多账号频率未验证 |
 | F-112 | 已确认 | P2 | V002-C/D→W020-A/D→I016 | 站点权威空/失败/加载状态 | 站点成功空不清旧选择，失败与当前可用数据不可区分；Search/详情还会继续发送旧ID | 既有双审确认机制；I016两代理闭合成功空→旧ID请求链并升P2 | 成功空清选择，失败/取消与空分开并提供最小重试 | 纯TV状态缺陷；真实空站点频率未验证 |
 | F-113 | 已确认 | P2 | V002-D | `SystemViewModel.swift:385-400,444-450` 及资源搜索调用者 | 默认站点异步归一化可跨 profile 写回或返回旧 profile 值 | review_a001_h 闭合 A 读取→await→动态 B key 写回、catch 回退 A 与 B 会话请求传播 | review_a001_j 独立确认成功/错误/取消/撤权、三个调用者与条件性 P2 严重度边界 | 纯 TV 会话归属缺陷已确认、严重度条件性；旧导航可见性与真实频率未运行验证 |
@@ -1917,7 +1917,7 @@
 
 ### F-109：profile 作用域偏好与权威配置 owner 不完整
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P2；G06 由 P3 升级
 - 位置：`MoviePilot-TV/ViewModels/SystemViewModel.swift:145-168`，V002-A 消费 `66-96`
 - 触发路径：profile A 使用 baseURL `https://host/mp_a`、username `b`；profile B 使用 baseURL `https://host/mp`、username `a_b`，二者都生成 `defaultSearchSites_https://host/mp_a_b`。
@@ -1932,10 +1932,11 @@
 - W020-D第三裁决：verify_a001_h确认TV只读写app-global `MP_RECOMMEND`，不按服务器/账号隔离且不访问服务端配置；当前Web本地缓存也不完整，但会在缺值时读取并在保存时写回后端per-user配置。F-214机制成立但修复/验收与本项同为配置owner，独立编号驳回并入。
 - G06联合裁决：两票确认四类key不仅有确定tuple碰撞，还从原始`baseURL + credential username`取owner而非权威`currentUser.user_name`；token-only、凭据轮换和空凭据会稳定落入错误/`default` bucket，baseURL别名再扩大污染，故升P2。异步写回仍由F-113另行约束。
 - 剩余未验证：真实碰撞/多profile频率；已碰撞旧键无法从现存数据无损还原 owner，远端上游最新性未验证。
+- 修复记录：`90b40b4` 统一会话权威时已将四类 profile key 迁移到 `userDefaultsKey` helper，key 为 `prefix_profileKey`（`profileKey = baseURL|user:user_id`，user_id 取权威 currentUser 稳定数字 ID），旧 `prefix_baseURL_username` 键仅一次性迁移后删除；原文 `_` 分隔碰撞对不再成立，W020-A 反向回写链随之消失。剩余旧碰撞键数据无法无损还原，按 finding 原结论接受。
 
 ### F-110：默认排序选择升序仍固定降序
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P2（由 P3 升级）
 - 位置：`MoviePilot-TV/Views/Components/TorrentsResultView.swift:267,283-285,329-343,374-395`
 - 触发路径：排序字段保持“默认”，用户把方向切换为“升序”。
@@ -1947,6 +1948,7 @@
 - 最小方向：默认比较器遵循方向；若产品规定默认只能降序，则在该字段隐藏方向选择，不新增排序抽象。
 - 独立复核：C018-B与W011均已有不同代理确认；回溯只需固定产品选择并覆盖default升/降两条最小排序行为。
 - G05后裁：两名不同代理重新闭合`.default + .asc`为生产可选组合，而比较器稳定忽略`isAsc`；两票均建议P2，故升级。F-061仍只管软过滤分区，不能以同一排序文件合并。
+- 修复记录：`SortType` 由升降二态扩展为“默认排序/升序/降序”三态，默认状态不再显示方向箭头；“默认排序”无论字段如何都保留后端原始顺序，仅调整软过滤分区；字段仍为“默认”但显式选择升序/降序时按 `pri_order` 应用方向（与 Web 列表视图 `sortData` 的 default 字段语义一致）。已补 default 字段升/降与任意字段默认排序的回归测试。
 
 ### F-111：token-only 会话把不同账号降成同一偏好身份
 

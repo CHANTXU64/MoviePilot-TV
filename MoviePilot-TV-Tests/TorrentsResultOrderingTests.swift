@@ -16,7 +16,7 @@ final class TorrentsResultOrderingTests: XCTestCase {
     let ordered = TorrentsResultView<EmptyView>.orderResults(
       results,
       by: .default,
-      type: .desc
+      type: .default
     )
 
     XCTAssertEqual(
@@ -42,6 +42,55 @@ final class TorrentsResultOrderingTests: XCTestCase {
     XCTAssertEqual(
       ordered.compactMap { $0.torrent_info?.title },
       ["正常较大", "正常较小", "灰色最大", "灰色最小"]
+    )
+  }
+
+  func testDefaultFieldWithExplicitDirectionSortsByPriorityWithinPartitions() {
+    let results = [
+      makeContext(title: "灰色低优先级", size: 1, priority: 1, isFilteredOut: true),
+      makeContext(title: "正常低优先级", size: 1, priority: 1),
+      makeContext(title: "灰色高优先级", size: 1, priority: 300, isFilteredOut: true),
+      makeContext(title: "正常高优先级", size: 1, priority: 300),
+    ]
+
+    let ascending = TorrentsResultView<EmptyView>.orderResults(
+      results,
+      by: .default,
+      type: .asc
+    )
+
+    XCTAssertEqual(
+      ascending.compactMap { $0.torrent_info?.title },
+      ["正常低优先级", "正常高优先级", "灰色低优先级", "灰色高优先级"]
+    )
+
+    let descending = TorrentsResultView<EmptyView>.orderResults(
+      results,
+      by: .default,
+      type: .desc
+    )
+
+    XCTAssertEqual(
+      descending.compactMap { $0.torrent_info?.title },
+      ["正常高优先级", "正常低优先级", "灰色高优先级", "灰色低优先级"]
+    )
+  }
+
+  func testDefaultTypeKeepsBackendOrderRegardlessOfField() {
+    let results = [
+      makeContext(title: "正常低优先级", size: 400, priority: 1),
+      makeContext(title: "正常高优先级", size: 100, priority: 300),
+    ]
+
+    let ordered = TorrentsResultView<EmptyView>.orderResults(
+      results,
+      by: .size,
+      type: .default
+    )
+
+    XCTAssertEqual(
+      ordered.compactMap { $0.torrent_info?.title },
+      ["正常低优先级", "正常高优先级"]
     )
   }
 
