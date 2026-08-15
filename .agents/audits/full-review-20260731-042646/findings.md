@@ -32,15 +32,15 @@
 | F-016 | 已驳回 | P3 | B002 | `Formatters.swift:6-18` 及大小调用者 | ByteCountFormatter 的精度、零值和 locale 仍为系统自适应 | B002 主审核对 SDK 默认与 13 个调用表达式 | verify_b002 证明这是注释承诺范围内的 Apple 本地化取舍 | 用户决定跳过修复；仅在未来明确固定 Web 文案契约时重开 |
 | F-017 | 未验证；用户决定跳过修复 | P3 | B002 | `Formatters.swift:79-90`、`CustomFilterService.swift:227-232` | 无时区日期固定按上海解释且过滤层重复假设 | B002 主审核对 SwiftDate 实现、调用者和 fixture | verify_b002 确认行为但无法判定源时区契约 | 用户决定跳过修复；三类字段时区及非上海部署未验证 |
 | F-018 | 已修复（`94f18f2`） | P3 | B002 | `Formatters.swift:24-32`、TorrentCard 网格调用链 | 每次卡片渲染重新编译固定季集正则 | B002 主审确认唯一高频调用与无性能测试 | verify_b002 以相邻静态正则模式确认重复工作并限制为低优先级 | 修复已完成：`94f18f2`；独立复审、构建及399条非后端兼容测试通过 |
-| F-019 | 已确认 | P1 | B003→G06 | `KingfisherCookies.swift` 与 API 会话转换 | 登出/切服未失效共享图片 Cookie | 既有双审闭合 TV 生命周期；G06 两票结合当前后端资源 Cookie 签发/刷新链确认同主机换端口及账号转换风险 | 仅删除旧会话已知主机/path 下资源 Cookie并取消对应任务；不清系统全部 Cookie | 修复已完成：`90b40b4`；最终独立复审通过，聚焦会话/持久化测试8/8通过 |
-| F-020 | 已确认 | P1 | B003→I010 | Kingfisher 全部调用者、缓存与 downloader | URL-only hit/在途合并可绕过新账号Cookie鉴权并返回旧账号图片 | 既有双审确认隔离缺口；I010主审、独立复核与第三裁闭合cache/downloader/logout全链并升级条件P1 | 受保护资源使用opaque session namespace cache key并隔离/排空旧downloader；公共图继续共享 | 修复已完成：`90b40b4`；公共图继续共享，真实后端套件未运行 |
+| F-019 | 已修复（`90b40b4`） | P1 | B003→G06 | `KingfisherCookies.swift` 与 API 会话转换 | 登出/切服未失效共享图片 Cookie | 既有双审闭合 TV 生命周期；G06 两票结合当前后端资源 Cookie 签发/刷新链确认同主机换端口及账号转换风险 | 仅删除旧会话已知主机/path 下资源 Cookie并取消对应任务；不清系统全部 Cookie | 修复已完成：`90b40b4`；最终独立复审通过，聚焦会话/持久化测试8/8通过 |
+| F-020 | 已修复（`90b40b4`） | P1 | B003→I010 | Kingfisher 全部调用者、缓存与 downloader | URL-only hit/在途合并可绕过新账号Cookie鉴权并返回旧账号图片 | 既有双审确认隔离缺口；I010主审、独立复核与第三裁闭合cache/downloader/logout全链并升级条件P1 | 受保护资源使用opaque session namespace cache key并隔离/排空旧downloader；公共图继续共享 | 修复已完成：`90b40b4`；公共图继续共享，真实后端套件未运行 |
 | F-021 | 已修复（`a0adaab`） | P3 | B002 复核新增 / M001-E | `DownloadTaskView.swift`、`TransferHistoryView.swift` 与可选大小模型 | 未知大小被显示成真实零值 | verify_b002 确认可选模型状态、调用者折叠和测试 fixture | review_m001_e 独立确认字段可选、缺失 fixture 与三个显示出口 | 修复已完成（`a0adaab`）；独立复审通过，Simulator clean build 与本地测试427/427通过（跳过5个真实后端兼容套件） |
 | F-022 | 已修复（`06d9fe5`） | P2 | M001-E | `Models.swift` 资源嵌套模型与 SSE/fallback | 单条资源缺字段可令整个搜索失败 | review_m001_e 闭合严格嵌套解码、SSE 终止和同步 fallback | verify_m001_e 独立确认当前流首错终止、fallback 同批再失败及测试盲点 | 修复已完成（`06d9fe5`）；最终独立复审通过，Simulator clean build 与本地测试428/428通过（跳过5个真实后端兼容套件） |
 | F-023 | 已修复（`af67839`） | P3 | M001-E | `MediaServerPlayItem.title` 与最近媒体整批解码 | 单项缺/null title 令服务器最新内容整批为空 | review_m001_e 闭合 API→Home 链及 fixture 缺口 | verify_m001_e 独立确认数组原子解码与 Home 清空行为 | 修复已完成（`af67839`）；当前后端允许 title 为空，独立复审通过，本地测试 430/430 通过 |
 | F-024 | 用户决定跳过 | P1 | M001-E→W017 | `DownloadingInfo.id` 与轮询合并 | 缺hash时无分隔可变fallback可碰撞，重复ID下一轮触发不可捕获Dictionary trap；全空UUID只导致每轮重建 | 当前Web/后端复核确认schema允许缺hash、内置下载器通常给唯一hash；Web共享重复key覆盖但无TV必崩字典链 | hash优先、name兜底；显式循环检测旧/新快照重复并失败关闭，禁止trapping initializer | 用户基于低频异常边界决定跳过修复；普通name/UUID身份抖动仍P3 |
 | F-025 | 已修复（`8050051`） | P3 | M001-E | `MediaServerPlayItem.id` 与首页十秒刷新 | 有稳定raw_id仍拼入可变link；稀疏响应又忽略server_id/item_id并生成UUID | 当前Web有id时只用id；后端六个内置producer通常提供稳定id，但link可随host/playhost/token变化 | 服务器类型作用域下按raw→server/item→link→UUID取值，分支标签+长度前缀防碰撞 | 修复完成（`8050051`），clean build、433/433本地测试及独立复审通过 |
-| F-026 | 已确认 | P2 | B003 复核新增 / S004→I010 | `Paginator.swift:114-129` 与 12 个图片 provider | 无 Cookie 预取可劫持后续有 Cookie 图片请求 | 既有双审闭合；I010独立复核再次确认Search/MediaCard调用链仍使用无modifier预取 | 预取与显示复用同一认证选项；会话持久缓存隔离仍归F-020 | 修复已完成：`90b40b4`；预取与显示共用受保护资源选项 |
-| F-027 | 已确认 | P1 | B004→W015/W018-A/W020-C→I003/I010 | APIService鉴权重放与session/permission owner | 旧会话可修改新会话；A mutation的401/403可读取B当前凭据/baseURL并把原body重放到B，旧login也可撤销logout或注销B | 既有双审及I003闭合；I010补A订阅lookup后切B、后续DELETE读取当前单例凭据的跨会话链 | 单调session epoch加requiredPermission；多阶段lookup→mutation共用owner并在后续请求前复核 | 修复已完成：`90b40b4`；请求不自动重放并绑定epoch/operation |
+| F-026 | 已修复（`90b40b4`） | P2 | B003 复核新增 / S004→I010 | `Paginator.swift:114-129` 与 12 个图片 provider | 无 Cookie 预取可劫持后续有 Cookie 图片请求 | 既有双审闭合；I010独立复核再次确认Search/MediaCard调用链仍使用无modifier预取 | 预取与显示复用同一认证选项；会话持久缓存隔离仍归F-020 | 修复已完成：`90b40b4`；预取与显示共用受保护资源选项 |
+| F-027 | 已修复（`90b40b4`） | P1 | B004→W015/W018-A/W020-C→I003/I010 | APIService鉴权重放与session/permission owner | 旧会话可修改新会话；A mutation的401/403可读取B当前凭据/baseURL并把原body重放到B，旧login也可撤销logout或注销B | 既有双审及I003闭合；I010补A订阅lookup后切B、后续DELETE读取当前单例凭据的跨会话链 | 单调session epoch加requiredPermission；多阶段lookup→mutation共用owner并在后续请求前复核 | 修复已完成：`90b40b4`；请求不自动重放并绑定epoch/operation |
 | F-028 | 已驳回；用户决定跳过修复 | P2 | B004→R001 | `validateTokenSilently` 与权限 UI/缓存 | 前台/Tab 校验丢弃最新权限快照 | 当前三方复核确认Web同样不做运行中权限热刷新，TV冷启动/403失效链完整，90b40b4已闭合正式发布后的UI/cache收敛 | 保持token有效性校验，不新增权限热同步 | 用户决定跳过；管理员运行中改权限由重登/重启恢复 |
 | F-029 | 已修复（`90b40b4`） | P2 | B004 | 手动 relogin/no-access 分支 | 无功能权限响应时保留旧权限会话 | review_b004 对比手动刷新与冷启动/App 更新出口 | verify_b004 独立确认三个重登出口语义分裂 | 修复完成（`90b40b4`）；空permissions与Web默认权限差异另归F-030核对 |
 | F-030 | 已修复（`ee5dcb4`） | 条件性P1 | B004→G06 | `UserPermissions.swift` permissions 解码 | 任一非 Bool 权限项令整个 Token 解码失败 | 当前官方Web正常保存嵌套`features`对象，后端泛型dict不校验并在login/current原样返回；TV会在权限判断前整批解码失败 | 单一共享边界只读取四个已知Bool；未知/坏值忽略，空/缺权限默认语义拆项 | 修复完成（`ee5dcb4`）；clean build、435/435本地测试及独立复审通过 |
@@ -62,12 +62,12 @@
 | F-046 | 已确认 | P3 | B006-C | MediaGenre/translateGenre/详情元数据 | 类型名未规范化且空结果仍进入详情 | verify_b005 作为 B006-C 主审闭合多态解码、精确查表与 joined 链 | verify_b006_c 独立确认 trim/filter 边界并收窄大小写/别名 | TV 展示不变量缺陷已确认；真实输入频率未验证 |
 | F-047 | 用户决定跳过 | P1 | B007→V012-B/C→W013-B | 全局/分季/Header 取消文案与删除接口 | 当前后端已对所有身份按season筛选；剩余为同媒体同季多group/多owner时文案只展示一条，媒体级删除却可能命中多条 | 当前TV、Web与后端调用链重新闭合；旧“非TMDB跨季删除”证据已失效 | 当前Web共享同一媒体级删除行为 | 用户决定跳过，不做TV单端增强 |
 | F-048 | 用户决定跳过 | P1 | B007→V012-B/C→G02 | 取消确认准备与执行 | 确认后重新解析target且未冻结精确订阅ID | 当前Web同样先通用确认、再读取当前媒体并执行媒体级删除 | TV/Web行为一致 | 用户决定跳过，不做TV单端增强 |
-| F-049 | 已确认 | P2 | B007→V012-B→G08 | Home/Header 取消结果 | DELETE false或异常被静默吞掉，Home 直接丢弃 Bool 返回 | 既有双审闭合结果出口；G08 三方裁决确认 Home 稳定丢弃 false 并升级 P2 | Home失败/异常与Header刷新后仍订阅统一通知；远端已删除且UI收敛时静默 | 已补业务失败、详情收敛与通知接线测试；完整验证通过 |
+| F-049 | 已修复 | P2 | B007→V012-B→G08 | Home/Header 取消结果 | DELETE false或异常被静默吞掉，Home 直接丢弃 Bool 返回 | 既有双审闭合结果出口；G08 三方裁决确认 Home 稳定丢弃 false 并升级 P2 | Home失败/异常与Header刷新后仍订阅统一通知；远端已删除且UI收敛时静默 | 已补业务失败、详情收敛与通知接线测试；完整验证通过 |
 | F-050 | 已确认 | P3 | S006 | MediaDetailViewModel Hero 演员截断 | Hero 演员先截断再去重，非空不足四人不补足 | verify_b006_b 闭合 prefix(4)→processActors 与分页替换条件 | verify_s006 独立确认影响仅 Hero 并修正 W008-C 路由 | TV 顺序缺陷已确认；真实重复分布未验证 |
 | F-051 | 已确认 | P3 | S006 | StaffManager.hasAvatar 与 Person.imageURLs | 头像排序判定与实际可渲染图片不一致 | verify_b006_b 以 PersonDecoding 多组反例闭合 | verify_s006 独立确认只影响 crew 新增项排序及 source-aware 反例 | TV 排序规则缺陷已确认；真实来源组合未验证 |
 | F-052 | 已确认 | P3 | S006 | getTopGroupedStaff roles fallback | 多值 roles 被拼成单一 key 后优先级 999 | verify_b006_b 闭合 roles join→priority→translate split | verify_s006 修正为 roles fallback 两人反例并确认 | TV 排序缺陷已确认；roles canonical 语义未验证 |
 | F-053 | 已确认 | P3 | S006 | mergeCrew 增量 API | 已翻译返回值不能安全作为下一批 existing | verify_b006_b 构造 Director→导演/Director→导演/导演 链 | verify_s006 独立确认条件性且当前无非空 existing 调用者 | 潜伏 API 缺陷已确认；当前无用户路径 |
-| F-054 | 已确认 | P1 | B007 复核新增 / M001-F→G02 | SubscriptionHandler Bangumi-only 取消 | 历史实现会丢失精确身份并改走集合式媒体删除 | 当前TV `58c7e81`已保留canonical/Bangumi/AniList/legacy身份；当前后端按身份与season筛选 | 当前实现与上游合同重新核对 | 修复已完成；旧部署版本未验证 |
+| F-054 | 已修复（`58c7e81`） | P1 | B007 复核新增 / M001-F→G02 | SubscriptionHandler Bangumi-only 取消 | 历史实现会丢失精确身份并改走集合式媒体删除 | 当前TV `58c7e81`已保留canonical/Bangumi/AniList/legacy身份；当前后端按身份与season筛选 | 当前实现与上游合同重新核对 | 修复已完成；旧部署版本未验证 |
 | F-055 | 已确认 | P3 | S006 复核新增 / M001-G | Search 最佳人物结果头像准入 | 使用 TMDB profile_path 而非 source-aware imageURLs.profile | verify_s006 以 Douban 有 avatar 无 profile_path 反例闭合 | review_m001_g 独立重走 Douban 搜索、评分准入与卡片图片链 | TV 跨来源准入差异已确认；Web 排名未验证 |
 | F-056 | 已驳回 | P3 | S006→G07→F-050 | Hero 演员姓名展示 | 不过滤 nil/空 name 且首四项后不补位的机制成立，但与F-050同属过滤/去重后再截断的取样顺序 | 既有双审确认；G07第三裁将重复、空名和补位合成一个Hero选人根因 | 并入F-050，不驳回机制；全量processActors后过滤空名再prefix(4) | 驳回重复编号；真实人物分布未验证 |
 | F-057 | 已确认 | P3 | S003 | ParsedSeason 范围解析/排序 | 范围终点丢失或未校验，排序不反映实际覆盖 | verify_s006 作为 S003 主审构造季/集范围反例 | verify_s003_resume 独立确认结束季捕获未消费及范围排序内部不一致 | TV 排序行为可见；真实范围格式未验证 |
@@ -75,10 +75,10 @@
 | F-059 | 已确认 | P3 | S003 | ParsedSeason invalid/overflow 状态 | 解析失败和整数溢出静默折叠为合法零值 | verify_s006 闭合 Int 安全失败与整季/无效分支 | verify_s003_resume 独立确认无成功状态及零值多义性 | TV 排序混淆已确认；真实畸形输入未验证 |
 | F-060 | 降级 | P3 | S001 | Logger 与 15 个直接 print 生产文件 | 80 个直接 `print` 绕过 Debug-only Logger | integrate_i002 作为 S001 主审统计 35 Logger/80 print、确认个人数据与 bootstrap 缺失 | verify_s001_resume 独立复算调用、Release 设置与实际输出值；无凭据泄漏证据，P2→P3 | TV 本地旁路已确认；真实日志留存和凭据形态未验证 |
 | F-061 | 已修复 | P2 | S003 复核新增 / M001-K→I011 | `CustomFilterService.swift:24-67`、`TorrentsResultView.swift:248-307` | 软过滤置尾及后端默认顺序被结果页重排破坏 | 既有双审确认机制；I011补默认策略覆盖，review_a001_j第三裁决按每次默认展示与错误策略升级P2 | 默认保留后端顺序；显式排序分别作用于正常/软过滤全局分区 | 已补默认与显式排序回归；完整验证通过 |
-| F-062 | 已确认 | P1 | S002→G06 | `KeychainHelper.swift:87-100` 及 APIService 登出链 | access token 删除失败后旧会话可在重启复活 | 既有双审闭合删除失败恢复；G06 两票确认登出成功表象后旧token重启复活的安全边界 | 删除失败写高权威logout tombstone/revision并重试；启动不得恢复被撤销代际 | 修复已完成：`90b40b4`；tombstone先于旧记录清理且启动失败关闭 |
-| F-063 | 已确认 | P1 | S002→G06 | `KeychainHelper.swift:8-84` 及 APIService/SystemViewModel 持久化链 | Keychain/UserDefaults 无明确权威导致旧或混合会话恢复 | 既有双审闭合逐项持久化；G06 两票确认A token、B user/permissions与另一代credentials可组合恢复 | 四项复用同一session owner/revision，只接受同代记录 | 修复已完成：`90b40b4`；单记录revision取代逐字段混读 |
+| F-062 | 已修复（`90b40b4`） | P1 | S002→G06 | `KeychainHelper.swift:87-100` 及 APIService 登出链 | access token 删除失败后旧会话可在重启复活 | 既有双审闭合删除失败恢复；G06 两票确认登出成功表象后旧token重启复活的安全边界 | 删除失败写高权威logout tombstone/revision并重试；启动不得恢复被撤销代际 | 修复已完成：`90b40b4`；tombstone先于旧记录清理且启动失败关闭 |
+| F-063 | 已修复（`90b40b4`） | P1 | S002→G06 | `KeychainHelper.swift:8-84` 及 APIService/SystemViewModel 持久化链 | Keychain/UserDefaults 无明确权威导致旧或混合会话恢复 | 既有双审闭合逐项持久化；G06 两票确认A token、B user/permissions与另一代credentials可组合恢复 | 四项复用同一session owner/revision，只接受同代记录 | 修复已完成：`90b40b4`；单记录revision取代逐字段混读 |
 | F-064 | 已修复（`af67839`） | P2 | M001-G | `Models.swift:2323-2337` 及 Person 解码入口 | 混合类型头像对象可拖垮人物或媒体数组 | review_m001_g 闭合 PersonAvatar、数组原子解码与 source-aware 图片传播链 | verify_m001_g_retry 独立确认可选字段错误传播至人物/媒体/资源批次及空首选遮蔽 | 修复已完成（`af67839`）；当前后端允许 string/dict 头像，独立复审通过，本地测试 430/430 通过 |
-| F-065 | 已确认 | P1 | M001-F→G02 | APIService 三类分季缓存 | 三类缓存只按endpoint参数寻址且旧请求可跨baseURL/user回填，新会话可显示并保存错误季/组数据 | 既有双审闭合cache污染；全新G02 clean-room复核闭合跨服payload链并升级P1 | 切会话清缓存且store前校验既有session generation；不建缓存框架 | 修复已完成：`90b40b4`；会话transition清缓存且旧epoch禁止回填 |
+| F-065 | 已修复（`90b40b4`） | P1 | M001-F→G02 | APIService 三类分季缓存 | 三类缓存只按endpoint参数寻址且旧请求可跨baseURL/user回填，新会话可显示并保存错误季/组数据 | 既有双审闭合cache污染；全新G02 clean-room复核闭合跨服payload链并升级P1 | 切会话清缓存且store前校验既有session generation；不建缓存框架 | 修复已完成：`90b40b4`；会话transition清缓存且旧epoch禁止回填 |
 | F-066 | 已修复 | P2 | M001-F | SubscribeSheetViewModel 剧集组加载资格 | 辅助或非正 raw TMDB ID 被当作主身份加载剧集组 | 当前Web明确跳过非TMDB主来源，后端接口只接受TMDB路径ID | 仅主身份TMDB且raw ID为正时加载，兼容旧无来源TMDB订阅 | 已补跨来源、旧数据与非正ID回归；完整验证通过 |
 | F-067 | 已确认（用户决定跳过） | P2 | M001-F→G02 | SubscribeSheetViewModel 配置加载 | 可选filter/group请求与核心站点/下载器/目录共用失败域，任一可选失败会清空已成功核心选项并禁用保存 | 既有双审确认机制；G02两名不同复核按当前HEAD再次闭合稳定阻断并升级P2 | 订阅编辑配置按整体原子加载；不拆分为部分可编辑状态 | 当前行为符合整体加载策略，用户决定跳过 |
 | F-068 | 已确认（用户决定跳过） | P2 | M001-F | Subscribe 快照与 Home/动作链 | nil/0/负数/重复业务 ID 可进入 SwiftUI 快照 | Web 同样直接依赖后端正数唯一主键；TV 不做差异化防御 | 保持当前模型与官方后端 ID 合同；不新增异常数据兜底 | 正常官方后端不触发，用户决定跳过 |
@@ -99,12 +99,12 @@
 | F-083 | 已修复（2026-08-14） | P2 | A001-A→W017 | 下载动作 ActionResponse 解码 | 空body与非对象/畸形非空2xx混淆，异常响应被当成功并翻状态或移除任务 | A001-A双审收窄fail-open分支；W017双审确认三个生产mutation直接信任结果且可移除仍存在任务 | 已修复（2026-08-14）：`decodeActionResponseSync` 仅零字节空 body 兼容成功，非空响应一律复用严格 decoder 失败关闭并保留 message_i18n | TV fail-open已确认；空body正式契约未验证 |
 | F-084 | 已修复（2026-08-14，用户裁决：加载失败回退原始 URL） | P2 | A001-A→G06 | 海报 URL 降尺寸 | 任意 URL 中的 `original` 都被全局替换为 `w500` | 既有双审闭合两条生产路径；G06 两票核到当前上游允许第三方绝对海报URL且无TMDB路径段保证 | 2026-08-14 用户裁决采用加载失败回退方案：保留原替换逻辑，`ImageURLs` 新增 `posterFallback` 原始 URL，MediaCard/BestResultCard/ForkSubscribeSheet 在降尺寸加载失败时自动改用原始 URL 重试，共用豆瓣默认图拦截 | TV稳定改写机制已确认；真实非TMDB命中频率未验证 |
 | F-085 | 已修复（`7f9fd17`） | P2 | M001-K→S005/V015/W020-F/H | CustomRule matcher/预览语义 | 已解码规则的预览、规范化与matcher/后端语义分裂；正常Web可达size单值/seeders区间可令硬过滤全空或条件静默失效 | W020-H双审以当前TV/Web/backend闭合字段矩阵并将既有P3升级P2 | 先统一官方语法，再让预览与matcher消费同一canonical解析结果；非法值显式失败 | 条件性P2；真实规则分布、Rust路径与远端最新性未验证 |
-| F-086 | 已确认 | P1 | A001-B→G02 | APIService baseURL/request 构造与登录提交边界 | 未规范化候选可生成双斜杠/无效URL，且认证成功前写全局baseURL已清旧currentUser/cache并污染原会话 | 既有双审、G02纠偏及全新clean-room复核共同闭合失败登录前全局commit链 | 局部规范化candidate完成登录后再一次commit | 修复已完成：`90b40b4`；candidate认证成功且epoch未变后一次canonical commit |
+| F-086 | 已修复（`90b40b4`） | P1 | A001-B→G02 | APIService baseURL/request 构造与登录提交边界 | 未规范化候选可生成双斜杠/无效URL，且认证成功前写全局baseURL已清旧currentUser/cache并污染原会话 | 既有双审、G02纠偏及全新clean-room复核共同闭合失败登录前全局commit链 | 局部规范化candidate完成登录后再一次commit | 修复已完成：`90b40b4`；candidate认证成功且epoch未变后一次canonical commit |
 | F-087 | 已修复 | P2 | A001-B/A001-C→V011-C→G02 | APIService/Search 错误消息选择 | 空白首选字段遮蔽后续有效detail/message，用户稳定失去可操作失败原因 | 既有API/Search双审与全新G02 clean-room复核确认各入口同根 | 逐项trim/filter后按现有优先级取首个有效文本 | TV错误恢复信息缺口P2；真实payload频率未验证 |
 | F-088 | 已修复 | P2 | A001-B/C；V009-A/E 条件扩展 | form/query 标量值编码 | 合法特殊字符凭据及动态来源字面 `+` 未按目标解析规则编码 | verify_a001_b/review_a001_c_retry2 确认登录 form；verify_a001_h 闭合动态 `%2B`/C++ query 链 | review_a001_h 独立确认 query 机制但部署 fixture 未验证；V009-E 根因支持 | TV 登录 P2 已确认；动态来源为条件性 P3传播 |
 | F-089 | 已修复（`90b40b4`） | P2 | A001-C→I016/G06 | 登录 401/403 错误分类 | 登录拒绝被当成既有会话失效，System手动刷新会清除旧有效会话 | G06 两票核到当前后端凭据/MFA失败使用401并确认System默认不保留旧会话；403仍仅为条件分支 | 登录请求禁通用鉴权重放；401/MFA、403、网络失败与权威no-access分别裁决 | 当前401生产链已确认；login 403合同与真实刷新频率未验证 |
 | F-090 | 已修复 | P3 | A001-D | TMDB 搜索/识别返回值 | `tmdb_id <= 0` 被当成有效识别结果并遮蔽正候选 | review_a001_d_retry 闭合四个成功出口、动作/预加载调用者与测试盲点 | verify_a001_d 独立确认非法值立即返回并可遮蔽 fullDetail 正 ID | TV 正 ID 边界不一致已确认；真实输入未验证 |
-| F-091 | 已确认 | P2 | A001-E→W016/W017 | 下载器首次加载与轮询恢复 | 首次下载器列表失败后页面不再重试客户端并永久显示假空 | A001-E双审闭合；W016/W017不同代理再次从页面/轮询与Web对照确认 | 失败时轮询复用initialLoad，成功空配置单独呈现 | TV恢复缺口已确认；真实失败频率未验证 |
+| F-091 | 已修复 | P2 | A001-E→W016/W017 | 下载器首次加载与轮询恢复 | 首次下载器列表失败后页面不再重试客户端并永久显示假空 | A001-E双审闭合；W016/W017不同代理再次从页面/轮询与Web对照确认 | 失败时轮询复用initialLoad，成功空配置单独呈现 | TV恢复缺口已确认；真实失败频率未验证 |
 | F-092 | 已修复 | P2 | A001-E→W017 | 下载动作与三秒轮询/快速重复 | 暂停/恢复成功后盲目toggle，可反向覆盖轮询正确状态；无in-flight gate又允许双击重复mutation | A001-E双审闭合竞态；W017双审确认同一行可并发两次请求且错误状态可持续 | 单行串行、冻结目标状态，成功后赋目标值或刷新，禁止盲toggle | 纯TV状态竞态已确认；真机连击频率未验证 |
 | F-093 | 已修复 | P2 | A001-E→W017 | 下载列表及动作错误/四态呈现 | clients/list/start/stop/delete全部错误仅print，首次失败假空、刷新失败陈旧、mutation失败无反馈 | A001-E双审闭合出口；W017双审确认页面无error/stale/retry且全部主动动作可无声失败 | 最小loading/empty/error/stale/data与可聚焦重试；主动动作复用现有错误通知 | TV错误体验缺陷已确认；后端失败文案未验证 |
 | F-094 | 用户决定跳过 | P2 | A001-E→G05 | 下载任务 hash 身份与动作路径 | nil/空/空白或 path delimiter hash 没有统一动作与路由边界 | 既有双审闭合 Optional gate/路径；G05两名代理确认当前后端仍允许optional hash且三个动作可接受空白值 | 与F-024共用规范化helper但保持独立：本项管动作可用性/路由，F-024管行身份/trap | TV 输入/路由边界已确认；异常hash分布与部署版本未验证 |
@@ -165,7 +165,7 @@
 | F-149 | 已修复 | P1 | V019→W016/G09 | StatusViewModel三个Dashboard请求发布 | 固定await顺序与单catch形成混合运维快照，且同权限A会话结果可写入B会话 | 既有双审闭合分项失败混合快照；G09两名代理确认三请求无session owner及A→B发布链 | 局部收齐tuple、校验现有session snapshot后一次发布；失败保留上一完整快照并标stale/error | 条件性跨会话运维数据污染已确认；真实切换/失败频率未验证 |
 | F-150 | 已修复 | P2 | V019→W016 | manage-only状态页的superuser卡片可见性 | 已知无权查看被固定渲染为三张“暂无数据”卡 | V019双审闭合可达链；W016双审确认合法角色每次稳定看到三块系统性伪空态 | 复用canRequestSuperUserEndpoints隐藏三卡或显示一次权限说明，并保留下半页功能 | 跨端页面设计未验证 |
 | F-151 | 用户决定跳过 | P1 | V021→W018-B/I015/G09 | Reorganize预览条目去重与实际逐intent提交 | 不同intent/logID解析为同一路径时预览只显示一次，实际仍执行多次文件mutation | 既有双审闭合投影/跨logID丢provenance；G09两名代理确认当前测试反向固化“显示一次、提交多次” | 删除TV二次去重，或让预览携带logID/intent索引并与submit使用同一规则 | 用户决定按当前官方Web v2共享行为跳过修复，不做TV单端增强；真实碰撞分布未验证 |
-| F-152 | 已确认 | P1 | V022-B→G09 | TransferHistory批删确认目标快照 | alert文案和action读取实时selectedIds/items，可在确认期间删除不同集合或同ID新记录 | 既有双审闭合列表变化链；G09两名代理结合F-204 SQLite同ID复用确认破坏性错目标 | 呈现alert时冻结对象签名数组，文案与action只消费该快照 | 条件性错误删除已确认；真实批删中变化频率未验证 |
+| F-152 | 已修复（`fc0cefa`） | P1 | V022-B→G09 | TransferHistory批删确认目标快照 | alert文案和action读取实时selectedIds/items，可在确认期间删除不同集合或同ID新记录 | 既有双审闭合列表变化链；G09两名代理结合F-204 SQLite同ID复用确认破坏性错目标 | 呈现alert时冻结对象签名数组，文案与action只消费该快照 | 条件性错误删除已确认；真实批删中变化频率未验证 |
 | F-153 | 已驳回 | P3 | V022-B→G09 | TransferHistory删除与Paginator游标协调 | 稳定排序前提下删除回退是保守且可补偿的，未形成独立漏页缺陷 | 早期双审反例被G09两名代理按`ceil(deleted/pageSize)`与最多两页重复扫描重新推演反驳 | 不改算法；补删除+插入+loadMore集成测试，排序不稳定归F-232，ID复用归F-204 | 当前独立缺陷驳回；真实集成行为仍作P3测试缺口 |
 | F-154 | 已驳回 | P3 | V022-C→I009/G09 | TransferHistory轮询插入余数与loadMore游标 | 稳定排序前提下整页推进、余数重叠去重的算术自洽，未形成独立跳页缺陷 | 早期双审反例被G09两名代理重新推演反驳；1/19/20/21项矩阵仍缺测试 | 不改算法；仅补插入组合测试，不稳定排序统一归F-232 | 当前独立缺陷驳回；高频真实交错保留P3测试边界 |
 | F-155 | 已确认 | P2 | V022-C→I009 | TransferHistory轮询多页扫描上限 | 第6页已请求成功却在处理前退出，101st新项被永久越过 | 既有双审闭合页6丢弃；I009主审/独立复核确认前100项提交后下一轮无法恢复 | 扫描未找到已知边界时不提交前缀/推进游标，回退现有refresh | TV历史漏记录已确认；一次101+新增频率未验证 |
@@ -206,7 +206,7 @@
 | F-190 | 已确认 | P3 | W013-C | SeasonDetailSheet季名与可选文本投影 | S00缺名显示“第0季”而卡片显示“特别篇”；空白name/date/overview又生成空标题、图标空行或空壳区域 | review_a001_h主审与verify_a001_h独立复核闭合nil/空/纯空白输入及同页文案分裂 | 复用现有字符串trim→nil；S00/有效季/缺季号使用一套回退规则 | TV显示不变量缺陷已确认；真实空白payload频率未验证 |
 | F-191 | 已确认 | P3 | W013-C→W015 | SeasonDetail/Fork Sheet海报容器几何 | processor按360×540降采样但外层只约束width；缺图/失败只剩无固有2:3高度的Rectangle，四态无法保证稳定海报尺寸 | W013-C第三裁决成案；W015主审独立确认Fork的URL缺失/loading/失败/成功四态同根 | 两个Sheet外层容器直接固定360×540；覆盖四态 | 静态布局契约缺陷已确认；实际塌缩/拉伸形态与焦点影响未验证 |
 | F-192 | 已修复（`b304b58` 范围内处置；后端对象级授权风险范围外） | P1 | W016→W017 | 下载任务列表与mutation owner授权 | manage-only用户可看到并暂停/继续/删除其他用户任务，当前后端list/start/stop/delete只验token且owner回填只按hash | review_a001_j与review_a001_h闭合原跨用户反例；`b304b58`后独立复审确认TV普通用户展示过滤逐字对齐Web | `b304b58`仅补Web同款`userid/username`展示过滤；不修改后端 | 用户确认范围已完成；后端对象级授权缺口作为明确接受的范围外风险保留 |
-| F-193 | 已确认 | P2 | W015→G06→当前实现复核 | Fork POST→GET→编辑器operation owner | `90b40b4`已把POST结果绑定来源profile/session，切账号或切服后旧ID不能在新owner下继续GET或呈现；同一profile内A/B并发、关闭Sheet后的迟到结果及GET-only恢复仍共享单一状态槽 | 跨profile回归`testForkedEditorDoesNotContinueUnderAnotherAccount`通过；当前Handler/Sheet静态复核确认剩余同会话竞争 | 后续若处理，只在现有Handler内增加同会话operation owner与GET-only receipt，不扩账号框架 | 原跨服务器同号ID P1链已闭合；剩余同会话呈现/恢复为P2 |
+| F-193 | 部分修复（`90b40b4` 原 P1 链）；同 profile 竞争维持 P2 | P2 | W015→G06→当前实现复核 | Fork POST→GET→编辑器operation owner | `90b40b4`已把POST结果绑定来源profile/session，切账号或切服后旧ID不能在新owner下继续GET或呈现；同一profile内A/B并发、关闭Sheet后的迟到结果及GET-only恢复仍共享单一状态槽 | 跨profile回归`testForkedEditorDoesNotContinueUnderAnotherAccount`通过；当前Handler/Sheet静态复核确认剩余同会话竞争 | 后续若处理，只在现有Handler内增加同会话operation owner与GET-only receipt，不扩账号框架 | 原跨服务器同号ID P1链已闭合；剩余同会话呈现/恢复为P2 |
 | F-194 | 已确认 | P2 | W015 | Fork最终确认字段完整性 | POST立即持久化keyword/custom_words，但TV确认页不展示，用户无法预见将生效的搜索/识别规则 | W015双审对照TV编码、当前后端持久化与Web显示闭合多行规则反例 | 按Web最小边界只读展示非空keyword/custom_words并支持展开/滚动 | 两字段缺口已确认；其他过滤字段是否须展示未验证 |
 | F-195 | 已确认 | P2 | W014 | SubscribeSheet custom_words多行编辑合同 | 后端按LF拆分多规则且Web使用textarea，TV单行TextField无法创建/可靠审阅第二条规则 | W014双审闭合SheetTextField/UITextField、Web VTextarea与后端split链 | 仅该字段复用tvOS多行编辑器并保留LF原值 | 编辑能力缺口已确认；既有LF聚焦后是否改写须运行验证 |
 | F-196 | 已修复（`e47693a`） | P1 | W017 | 下载删除确认与实际文件范围 | UI原来只确认“删除任务”，当前后端默认delete_file=true并由Transmission执行delete_data=true | W017双审闭合永久文件删除链；用户确认保留现有TV确认、不改接口和后端 | `e47693a`将确认文案明确为“将永久删除任务及已下载文件” | 按用户要求仅改一行文案并直接提交，未运行测试、未做子代理复审；后端行为保持不变 |
@@ -512,7 +512,7 @@
 
 ### F-019：登出/切服未失效共享图片 Cookie
 
-- 状态：已确认
+- 状态：已修复（`90b40b4`）
 - 严重度：条件性 P1；G06 由 P2 升级
 - 位置：`MoviePilot-TV/Extensions/KingfisherCookies.swift:7-16`、APIService 会话转换与登录路径
 - 触发路径：后端 origin 写入会话 Cookie；用户登出、换账号或切到同 Cookie 域下另一服务后请求图片。
@@ -527,7 +527,7 @@
 
 ### F-020：受保护图片缓存和在途任务未按账号隔离
 
-- 状态：已确认
+- 状态：已修复（`90b40b4`）
 - 严重度：条件性 P1（由 P2 升级）
 - 位置：全部 cookieModifier 调用者、`MediaPreloader` 与 Kingfisher 8.10 cache/downloader
 - 触发路径：账号 A 以 Cookie 请求受保护 URL；登出/换账号后 B 请求相同 URL，或旧下载仍在进行。
@@ -615,7 +615,7 @@
 
 ### F-026：Paginator 无认证预取可劫持后续 Cookie 请求
 
-- 状态：已确认
+- 状态：已修复（`90b40b4`）
 - 严重度：P2
 - 位置：`MoviePilot-TV/Services/Paginator.swift:114-129` 与 12 个 `imageURLsProvider`
 - 触发路径：Paginator 先预取受 Cookie 保护 URL，随后可见 KFImage 请求同一 URL。
@@ -629,7 +629,7 @@
 
 ### F-027：旧会话延迟鉴权错误可修改新会话
 
-- 状态：已确认
+- 状态：已修复（`90b40b4`）
 - 严重度：条件性 P1
 - 位置：APIService 请求/重登/logout 路径与 ContentView 静默验证入口
 - 触发路径：会话 A 请求或自动登录在途，用户 logout/切换并安装会话 B，A 随后返回 401/403 或登录 200；A→B→A 时结构快照还可能恢复相等。
@@ -954,7 +954,7 @@
 
 ### F-049：Home/Header 取消业务失败静默
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P2（由 P3 升级）
 - 位置：HomeView/HomeViewModel、MediaDetailViewModel
 - 触发路径：缺订阅 id、远端已删、success:false、lookup/delete false。
@@ -1020,7 +1020,7 @@
 
 ### F-054：Handler 丢弃 Bangumi 精确订阅 ID
 
-- 状态：已确认
+- 状态：已修复（`58c7e81`）
 - 严重度：条件性 P1
 - 位置：SubscriptionHandler lookup/取消，对照 MediaDetailViewModel 正确分支
 - 触发路径：Bangumi-only 电影已有订阅，lookup 返回 bangumi mediaId 与精确 subscription id，无 TMDB fallback。
@@ -1134,7 +1134,7 @@
 
 ### F-062：Keychain 删除失败后旧会话可在重启复活
 
-- 状态：已确认
+- 状态：已修复（`90b40b4`）
 - 严重度：条件性 P1；G06 由 P2 升级
 - 位置：`MoviePilot-TV/Services/KeychainHelper.swift:87-100`；`MoviePilot-TV/Services/APIService.swift:386-405,546-557,584-607,630-635`
 - 触发路径：已有持久 access token 的登出或 no-access 清理中，`SecItemDelete` 返回 success/not-found 之外的状态且旧 token 仍可读；UI 仍完成登出，随后进程重启。
@@ -1149,7 +1149,7 @@
 
 ### F-063：Keychain/UserDefaults 无明确权威导致旧或混合会话恢复
 
-- 状态：已确认
+- 状态：已修复（`90b40b4`）
 - 严重度：条件性 P1；G06 由 P2 升级
 - 位置：`MoviePilot-TV/Services/KeychainHelper.swift:8-84`；`MoviePilot-TV/Services/APIService.swift:382-405,471-617,1030-1061`；`MoviePilot-TV/ViewModels/SystemViewModel.swift:145-252`
 - 触发路径：Keychain 已有账号 A，登录账号 B 时一个或多个更新失败；B 写入 UserDefaults fallback，但旧 Keychain 项仍保留。
@@ -1179,7 +1179,7 @@
 
 ### F-065：分季与剧集组缓存未按 session 隔离
 
-- 状态：已确认
+- 状态：已修复（`90b40b4`）
 - 严重度：条件性 P1
 - 位置：`MoviePilot-TV/Services/APIService.swift:372-468,428-430,2007-2047`
 - 触发路径：服务器/账号 A 拉取剧集组或分季后切换到 B，在缓存有效期内请求相同 TMDB/group ID；或 A 的旧请求在切换后返回。
@@ -1543,7 +1543,7 @@
 
 ### F-086：未规范化 baseURL 可生成双斜杠或无效 URL
 
-- 状态：已确认
+- 状态：已修复（`90b40b4`）
 - 严重度：条件性 P1
 - 位置：`MoviePilot-TV/Services/APIService.swift:372-379,795-800`，同类拼接位于 SSE/图片路径；入口 `LoginViewModel.swift:20-25`。
 - 触发路径：用户输入带尾斜杠或前后空白的服务器 URL。
@@ -1624,7 +1624,7 @@
 
 ### F-091：首次下载器列表失败后页面不再恢复
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P2
 - 位置：`MoviePilot-TV/ViewModels/DownloadTaskViewModel.swift:19-29,40`；`MoviePilot-TV/Views/Pages/DownloadTaskView.swift:55-76`
 - 触发路径：页面首次 `fetchDownloadClients()` 遇到瞬时网络、鉴权或解码失败。
@@ -2627,7 +2627,7 @@
 
 ### F-152：批删按实时列表重取目标可让确认集合静默缩水
 
-- 状态：已确认
+- 状态：已修复（`fc0cefa`）
 - 严重度：条件性 P1
 - 位置：TransferHistoryViewModel `deleteSelected` 的selectedIds快照、逐项`items.first(id)`与搜索/刷新交错
 - 触发路径：选择ID 10、11并确认删除两条；第一条DELETE挂起时，在仍可用的搜索框提交另一查询并替换items。
@@ -3229,7 +3229,7 @@
 
 ### F-193：Fork 的 POST、GET 与编辑器呈现没有统一 operation owner
 
-- 状态：已确认
+- 状态：部分修复（`90b40b4` 原 P1 链）；同 profile 竞争维持 P2
 - 严重度：P2；原跨profile条件性P1链已修复
 - 位置：`ForkSubscribeSheet`、`SubscriptionHandler` 及 Search/Explore 的 Fork 成功回调与编辑器呈现槽。
 - 触发路径：当前剩余仅限同一profile、同一session内，用户先对分享A发起Fork，又关闭或迅速对B操作；A/B完成顺序与Sheet退场顺序逆转。POST成功而GET失败时，也仍缺GET-only恢复入口。
