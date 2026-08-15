@@ -29,6 +29,61 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     )
   }
 
+  func testLoginSendsFormURLEncodedBodyWithEscapedSpecialCharacters() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = nil
+
+    do {
+      _ = try await service.login(
+        username: "user+plus",
+        password: "p%ss&C++ 密"
+      )
+      XCTFail("Expected stub token decoding to fail")
+    } catch {
+      // stub 默认响应无法解码为 Token，登录必然失败；重点是捕获实际请求体。
+    }
+
+    let capturedBody = await CompatibilityEndpointURLProtocol.stub.requestBody(
+      suffix: "/login/access-token"
+    )
+    let body = try XCTUnwrap(capturedBody)
+    let bodyString = try XCTUnwrap(String(data: body, encoding: .utf8))
+    XCTAssertTrue(bodyString.contains("username=user%2Bplus"))
+    XCTAssertTrue(bodyString.contains("password=p%25ss%26C%2B%2B%20%E5%AF%86"))
+    XCTAssertFalse(bodyString.contains("user+plus"))
+    XCTAssertFalse(bodyString.contains("C++"))
+  }
+
+  func testSearchMediaEncodesQueryValuesLikeWebAxios() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = nil
+
+    _ = try await service.searchMedia(query: "C++ 电影", page: 1)
+
+    let queries = await CompatibilityEndpointURLProtocol.stub.matchingQueries(
+      suffix: "/media/search"
+    )
+    let query = try XCTUnwrap(queries.compactMap { $0 }.last)
+    XCTAssertTrue(query.contains("title=C%2B%2B%20%E7%94%B5%E5%BD%B1"))
+    XCTAssertFalse(query.contains("title=C++"))
+  }
+
   func testFetchSettingsRejectsExplicitFailureBeforeDecodingWrappedData() async {
     XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }

@@ -266,10 +266,32 @@ nonisolated private func firstNonWhitespaceByte(in data: Data) -> UInt8? {
   }
 }
 
-nonisolated private func encodeURIComponent(_ value: String) -> String? {
+nonisolated func encodeURIComponent(_ value: String) -> String? {
   let allowed = CharacterSet(
     charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
   return value.addingPercentEncoding(withAllowedCharacters: allowed)
+}
+
+nonisolated func appendPercentEncodedQueryParams(
+  to components: inout URLComponents,
+  params: [String: String?]
+) {
+  let additions = params.compactMap { name, value -> String? in
+    guard let value,
+      let encodedName = encodeURIComponent(name),
+      let encodedValue = encodeURIComponent(value)
+    else {
+      return nil
+    }
+    return "\(encodedName)=\(encodedValue)"
+  }
+  guard !additions.isEmpty else { return }
+  let suffix = additions.joined(separator: "&")
+  if let existing = components.percentEncodedQuery, !existing.isEmpty {
+    components.percentEncodedQuery = existing + "&" + suffix
+  } else {
+    components.percentEncodedQuery = suffix
+  }
 }
 
 nonisolated private func encodeMediaIDPathSegment(_ value: String) -> String? {
@@ -301,12 +323,7 @@ nonisolated func relativeBackendEndpoint(
   guard !components.path.isEmpty, components.path != "/" else {
     throw APIError.invalidURL
   }
-  var items = components.queryItems ?? []
-  items.append(
-    contentsOf: params.compactMap { name, value in
-      value.map { URLQueryItem(name: name, value: $0) }
-    })
-  components.queryItems = items.isEmpty ? nil : items
+  appendPercentEncodedQueryParams(to: &components, params: params)
   guard let endpoint = components.string else { throw APIError.invalidURL }
   return endpoint
 }
@@ -1384,16 +1401,7 @@ class APIService: ObservableObject {
       throw APIError.invalidURL
     }
     // 保留 path 中可能已存在的查询参数
-    var queryItems = components.queryItems ?? []
-    // 添加新的参数
-    for (name, value) in params {
-      if let value = value {
-        queryItems.append(URLQueryItem(name: name, value: value))
-      }
-    }
-    if !queryItems.isEmpty {
-      components.queryItems = queryItems
-    }
+    appendPercentEncodedQueryParams(to: &components, params: params)
     guard let endpoint = components.string else {
       throw APIError.invalidURL
     }
@@ -1522,12 +1530,13 @@ class APIService: ObservableObject {
     defer { endCandidateLogin(for: startingEpoch) }
     let candidateRuntime = APIServiceSessionRuntime(configuration: sessionConfiguration)
     defer { candidateRuntime.cancel() }
-    var components = URLComponents()
-    components.queryItems = [
-      URLQueryItem(name: "username", value: username),
-      URLQueryItem(name: "password", value: password),
-    ]
-    guard let bodyData = components.query?.data(using: .utf8) else {
+    guard let encodedUsername = encodeURIComponent(username),
+      let encodedPassword = encodeURIComponent(password)
+    else {
+      throw APIError.unknown
+    }
+    let formBody = "username=\(encodedUsername)&password=\(encodedPassword)"
+    guard let bodyData = formBody.data(using: .utf8) else {
       throw APIError.unknown
     }
 

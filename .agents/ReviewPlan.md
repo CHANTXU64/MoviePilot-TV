@@ -278,7 +278,7 @@
 | M001-K | 已闭环 | F-080 已修复（`SearchViewModel`/`ResourceResultViewModel` 加 receivedDone 门禁：error 不发布、EOF 无 done 不发布、missingSites 补偿仅 done 后；后端单站点错误由 indexer 层吞掉不影响 done，2026-08-14 三端核对）；F-081 输入边界修复已完成（`670cf86`），验证及独立复审通过，已选规则缺失继续静默不过滤由用户裁为产品取舍；F-085 已修复（`7f9fd17`：matcher 与后端 `__match_rule` 全字段对齐，规则 ID 缺失全排除、非法值显式失败、拉取网络失败放行，独立代理逐项复审+55 项定向测试通过），F-061后续由I011升P2 |
 | I001 | 已闭环 | 55 个顶层声明全部覆盖；无新增发现，维持既有裁决；四处仅 doc comment 跨账面边界 |
 | A001-A | 已闭环 | G02末裁将F-082升条件P1（已由`d8198fc`修复）；F-083 已修复（2026-08-14：下载动作解码仅空 body 兼容成功，非空响应严格失败关闭并保留 message_i18n）；F-084 已修复（2026-08-14 用户裁决：保留 original→w500 替换，ImageURLs 加 posterFallback 原始 URL，MediaCard/BestResultCard/ForkSubscribeSheet 加载失败自动回退原始 URL）；F-030 已修复（`ee5dcb4`），其余传播闭合 |
-| A001-B | 已闭环 | F-019/F-020/F-027/F-062/F-063及G02末裁F-086为条件P1；F-030/F-031/F-026/F-087/F-088 P2，缓存归CHK-007 |
+| A001-B | 已闭环 | F-019/F-020/F-027/F-062/F-063及G02末裁F-086为条件P1；F-030/F-031/F-026/F-087/F-088 P2，缓存归CHK-007；F-088 已修复（共享 `encodeURIComponent` 原语并保留既有 `percentEncodedQuery`：登录 form body 与 `buildEndpoint`/`relativeBackendEndpoint`/`appendingQuery` 追加参数均按 form 语义编码，`+`→`%2B`、已有 `%2B` 往返不丢、非 ASCII 走 UTF-8，与 Web axios/FormData 字面值到后端解析一致；新增登录 body、搜索 query、`%2B` 往返定向测试，tvOS Simulator 构建通过，相关套件 39/39 通过） |
 | A001-C | 已闭环 | G06核当前后端401后F-089 P2；G02末裁将F-087升P2，F-088 P2；F-087 已修复（统一 `trimmedNonEmpty` 选择器：逐项 trim 后按优先级取首个有效文本，覆盖 ApiResponse/非2xx/动作解码/AI重做/SSE 六类入口，空白首选不再遮蔽有效 detail/message），其他会话/响应传播闭合 |
 | A001-D | 已闭环 | F-090 已确认条件性 P3；支持 F-005/F-009/F-013/F-027/F-031/F-060/F-064/F-076/F-077/F-078/F-082/F-084/F-086/F-087 |
 | A001-E | 已闭环 | W017双审补强后F-024/F-095升P1，F-083/F-092/F-093升P2；后续G05将F-094升P2、F-197升条件P1。F-091维持P2，F-196 P1，扩展F-027/F-192/CHK-005/012 |

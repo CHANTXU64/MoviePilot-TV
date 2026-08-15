@@ -720,12 +720,11 @@ class ExploreViewModel: ObservableObject {
     values: [String: JSONValue]
   ) -> String {
     guard var components = URLComponents(string: path) else { return path }
-    var items = components.queryItems ?? []
-    items.append(
-      contentsOf: values.sorted(by: { $0.key < $1.key }).compactMap { key, value in
-        value.queryString.map { URLQueryItem(name: key, value: $0) }
-      })
-    components.queryItems = items.isEmpty ? nil : items
+    var params: [String: String?] = [:]
+    for (key, value) in values {
+      params[key] = value.queryString
+    }
+    appendPercentEncodedQueryParams(to: &components, params: params)
     return components.string ?? path
   }
 

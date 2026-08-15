@@ -76,6 +76,47 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     )
   }
 
+  func testQueryAppendKeepsExistingPercentEncodingAndEscapesLiteralPlus() throws {
+    let endpoint = try relativeBackendEndpoint(
+      path: "discover/tmdb/popular?token=A%2BB&lang=zh-CN",
+      params: ["q": "C++", "name": "张三"]
+    )
+    let components = try XCTUnwrap(URLComponents(string: endpoint))
+
+    let rawQuery = try XCTUnwrap(components.percentEncodedQuery)
+    XCTAssertTrue(rawQuery.contains("token=A%2BB"))
+    XCTAssertTrue(rawQuery.contains("lang=zh-CN"))
+    XCTAssertTrue(rawQuery.contains("q=C%2B%2B"))
+    XCTAssertTrue(rawQuery.contains("name=%E5%BC%A0%E4%B8%89"))
+    XCTAssertFalse(rawQuery.contains("q=C++"))
+
+    let items = try XCTUnwrap(components.queryItems)
+    XCTAssertEqual(items.first(where: { $0.name == "token" })?.value, "A+B")
+    XCTAssertEqual(items.first(where: { $0.name == "q" })?.value, "C++")
+    XCTAssertEqual(items.first(where: { $0.name == "name" })?.value, "张三")
+  }
+
+  func testExploreAppendingQueryKeepsPercentEncodedTokenAndEncodesValues() throws {
+    let path = ExploreViewModel.appendingQuery(
+      to: "plugin/Example/example?token=A%2BB&apikey=signed%23token",
+      values: [
+        "keyword": .string("C++ 电影"),
+        "year": .int(2026),
+      ]
+    )
+    let components = try XCTUnwrap(URLComponents(string: path))
+
+    let rawQuery = try XCTUnwrap(components.percentEncodedQuery)
+    XCTAssertTrue(rawQuery.contains("token=A%2BB"))
+    XCTAssertTrue(rawQuery.contains("apikey=signed%23token"))
+    XCTAssertTrue(rawQuery.contains("keyword=C%2B%2B%20%E7%94%B5%E5%BD%B1"))
+    XCTAssertTrue(rawQuery.contains("year=2026"))
+
+    let items = try XCTUnwrap(components.queryItems)
+    XCTAssertEqual(items.first(where: { $0.name == "token" })?.value, "A+B")
+    XCTAssertEqual(items.first(where: { $0.name == "keyword" })?.value, "C++ 电影")
+  }
+
   func testDiscoverSourceSnapshotDeduplicatesBuiltInsAndPluginPrefixes() {
     let sources = ExploreViewModel.updatedExtraSourceSnapshot(
       previous: [],
