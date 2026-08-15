@@ -3,6 +3,7 @@ import SwiftUI
 
 struct DownloadTaskView: View {
   @StateObject private var viewModel = DownloadTaskViewModel()
+  @EnvironmentObject private var notificationManager: NotificationManager
   @State private var isExpanded = true
 
   var body: some View {
@@ -39,10 +40,17 @@ struct DownloadTaskView: View {
 
       if isExpanded {
         if viewModel.downloads.isEmpty {
-          Text("暂无下载任务")
-            .foregroundColor(.secondary)
-            .padding()
-            .frame(maxWidth: .infinity, alignment: .center)
+          if viewModel.clientsLoadFailed {
+            Text("下载器加载失败，正在自动重试")
+              .foregroundColor(.secondary)
+              .padding()
+              .frame(maxWidth: .infinity, alignment: .center)
+          } else {
+            Text("暂无下载任务")
+              .foregroundColor(.secondary)
+              .padding()
+              .frame(maxWidth: .infinity, alignment: .center)
+          }
         } else {
           LazyVStack(spacing: 15) {
             ForEach(viewModel.downloads) { item in
@@ -62,6 +70,11 @@ struct DownloadTaskView: View {
         initialLoad: { await viewModel.initialLoad() },
         loadDownloads: { await viewModel.loadDownloads() }
       )
+    }
+    .onChange(of: viewModel.errorMessage) { _, message in
+      guard let message else { return }
+      notificationManager.show(message: message, type: .error)
+      viewModel.errorMessage = nil
     }
   }
 

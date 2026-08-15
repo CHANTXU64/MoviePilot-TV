@@ -394,6 +394,153 @@ final class DownloadTaskViewModelTests: XCTestCase {
     }
   }
 
+  func testInitialClientsFailureIsRetriedOnNextPollAndRecovers() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setClientsJSONSequence([
+      (json: "[]", statusCode: 500),
+      (json: clientsPayload(["qbittorrent"]), statusCode: 200),
+    ])
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON(
+      downloadPayload(
+        hash: "recovered-hash",
+        title: "Recovered Task",
+        username: "user",
+        progress: 42
+      ),
+      forClient: "qbittorrent"
+    )
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    await viewModel.initialLoad()
+
+    XCTAssertFalse(viewModel.clientsLoadFailed)
+    XCTAssertEqual(viewModel.clients.map(\.name), ["qbittorrent"])
+    XCTAssertEqual(viewModel.selectedClient, "qbittorrent")
+    XCTAssertEqual(viewModel.downloads.map(\.hash), ["recovered-hash"])
+    let clientsRequestCount = await DownloadTaskURLProtocol.stub.clientsRequestCount()
+    XCTAssertEqual(
+      clientsRequestCount,
+      2,
+      "The failed first clients load must be retried before downloads can load."
+    )
+  }
+
+  func testPollingFailuresNotifyOncePerSixConsecutiveFailuresAndResetOnSuccess() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setClientsJSON(clientsPayload(["qbittorrent"]))
+    await DownloadTaskURLProtocol.stub.setDownloadsJSONSequence(
+      Array(
+        repeating: (json: "{}", gate: nil),
+        count: 6
+      ),
+      forClient: "qbittorrent",
+      statusCode: 500
+    )
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    await viewModel.initialLoad()
+
+    XCTAssertNil(viewModel.errorMessage)
+    for _ in 0..<4 {
+      await viewModel.loadDownloads()
+    }
+    XCTAssertNil(viewModel.errorMessage, "First five consecutive failures must stay silent.")
+    await viewModel.loadDownloads()
+    XCTAssertEqual(viewModel.errorMessage, "下载任务刷新失败，正在自动重试。")
+
+    viewModel.errorMessage = nil
+    await DownloadTaskURLProtocol.stub.setDownloadsJSONSequence(
+      Array(
+        repeating: (json: "{}", gate: nil),
+        count: 6
+      ),
+      forClient: "qbittorrent",
+      statusCode: 500
+    )
+    for _ in 0..<5 {
+      await viewModel.loadDownloads()
+    }
+    XCTAssertNil(viewModel.errorMessage)
+    await viewModel.loadDownloads()
+    XCTAssertEqual(viewModel.errorMessage, "下载任务刷新失败，正在自动重试。")
+
+    viewModel.errorMessage = nil
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON(
+      downloadPayload(
+        hash: "recovered-hash",
+        title: "Recovered Task",
+        username: "user",
+        progress: 10
+      ),
+      forClient: "qbittorrent"
+    )
+    await viewModel.loadDownloads()
+    XCTAssertNil(viewModel.errorMessage)
+    XCTAssertEqual(viewModel.downloads.map(\.hash), ["recovered-hash"])
+  }
+
+  func testDownloadActionFailureNotifiesImmediately() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    await DownloadTaskURLProtocol.stub.setClientsJSON(clientsPayload(["qbittorrent"]))
+    await DownloadTaskURLProtocol.stub.setDownloadsJSONSequence(
+      [
+        (
+          downloadPayload(
+            hash: "action-hash",
+            title: "Action Task",
+            username: "user",
+            progress: 30
+          ),
+          nil
+        ),
+        ("{\"success\":false,\"message\":\"下载器不可用\"}", nil),
+      ],
+      forClient: "qbittorrent"
+    )
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    await viewModel.initialLoad()
+    XCTAssertEqual(viewModel.downloads.map(\.hash), ["action-hash"])
+
+    let stopped = await viewModel.stopDownload(
+      clientName: "qbittorrent",
+      hash: "action-hash"
+    )
+
+    XCTAssertFalse(stopped)
+    XCTAssertEqual(viewModel.errorMessage, "下载器不可用")
+  }
+
   func testSameDownloadRefreshUpdatesLatestMetadataForExistingRow() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
@@ -720,6 +867,15 @@ final class DownloadTaskViewModelTests: XCTestCase {
       avatar: nil
     )
   }
+
+  private func clientsPayload(_ names: [String]) -> String {
+    let items = names.map { name in
+      """
+      {"name":"\(name)","type":"qbittorrent","enabled":true}
+      """
+    }
+    return "[" + items.joined(separator: ",") + "]"
+  }
 }
 
 @MainActor
@@ -792,11 +948,35 @@ private struct DownloadTaskHTTPStubResponse: Sendable {
 
 private actor DownloadTaskURLProtocolStub {
   private var responsesByClient: [String: [DownloadTaskHTTPStubResponse]] = [:]
+  private var clientsResponses: [DownloadTaskHTTPStubResponse] = []
   private var requestedClients: [String] = []
+  private var requestedClientsLoads = 0
 
   func reset() {
     responsesByClient.removeAll()
+    clientsResponses.removeAll()
     requestedClients.removeAll()
+    requestedClientsLoads = 0
+  }
+
+  func setClientsJSON(_ json: String, statusCode: Int = 200) {
+    clientsResponses = [
+      DownloadTaskHTTPStubResponse(
+        statusCode: statusCode,
+        data: Data(json.utf8),
+        gate: nil
+      )
+    ]
+  }
+
+  func setClientsJSONSequence(_ sequence: [(json: String, statusCode: Int)]) {
+    clientsResponses = sequence.map { item in
+      DownloadTaskHTTPStubResponse(
+        statusCode: item.statusCode,
+        data: Data(item.json.utf8),
+        gate: nil
+      )
+    }
   }
 
   func setDownloadsJSON(
@@ -831,9 +1011,24 @@ private actor DownloadTaskURLProtocolStub {
   func response(for request: URLRequest) async throws -> DownloadTaskHTTPStubResponse {
     guard
       let url = request.url,
-      let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-      let clientName = components.queryItems?.first(where: { $0.name == "name" })?.value
+      let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
     else {
+      throw URLError(.badURL)
+    }
+
+    if components.path == "/api/v1/download/clients" {
+      requestedClientsLoads += 1
+      guard let response = clientsResponses.first else {
+        throw URLError(.unsupportedURL)
+      }
+      clientsResponses.removeFirst()
+      if let gate = response.gate {
+        await gate.wait()
+      }
+      return response
+    }
+
+    guard let clientName = components.queryItems?.first(where: { $0.name == "name" })?.value else {
       throw URLError(.badURL)
     }
 
@@ -869,6 +1064,10 @@ private actor DownloadTaskURLProtocolStub {
 
   func requestCount(clientName: String) -> Int {
     requestedClients.filter { $0 == clientName }.count
+  }
+
+  func clientsRequestCount() -> Int {
+    requestedClientsLoads
   }
 
   private func recordRequest(for clientName: String) {

@@ -279,9 +279,9 @@
 | I001 | 已闭环 | 55 个顶层声明全部覆盖；无新增发现，维持既有裁决；四处仅 doc comment 跨账面边界 |
 | A001-A | 已闭环 | G02末裁将F-082升条件P1（已由`d8198fc`修复）；F-083 已修复（2026-08-14：下载动作解码仅空 body 兼容成功，非空响应严格失败关闭并保留 message_i18n）；F-084 已修复（2026-08-14 用户裁决：保留 original→w500 替换，ImageURLs 加 posterFallback 原始 URL，MediaCard/BestResultCard/ForkSubscribeSheet 加载失败自动回退原始 URL）；F-030 已修复（`ee5dcb4`），其余传播闭合 |
 | A001-B | 已闭环 | F-019/F-020/F-027/F-062/F-063及G02末裁F-086为条件P1；F-030/F-031/F-026/F-087/F-088 P2，缓存归CHK-007；F-088 已修复（共享 `encodeURIComponent` 原语并保留既有 `percentEncodedQuery`：登录 form body 与 `buildEndpoint`/`relativeBackendEndpoint`/`appendingQuery` 追加参数均按 form 语义编码，`+`→`%2B`、已有 `%2B` 往返不丢、非 ASCII 走 UTF-8，与 Web axios/FormData 字面值到后端解析一致；新增登录 body、搜索 query、`%2B` 往返定向测试，tvOS Simulator 构建通过，相关套件 39/39 通过） |
-| A001-C | 已闭环 | G06核当前后端401后F-089 P2；G02末裁将F-087升P2，F-088 P2；F-087 已修复（统一 `trimmedNonEmpty` 选择器：逐项 trim 后按优先级取首个有效文本，覆盖 ApiResponse/非2xx/动作解码/AI重做/SSE 六类入口，空白首选不再遮蔽有效 detail/message），其他会话/响应传播闭合 |
+| A001-C | 已闭环 | G06核当前后端401后F-089 P2；G02末裁将F-087升P2，F-088 P2；F-087 已修复（统一 `trimmedNonEmpty` 选择器：逐项 trim 后按优先级取首个有效文本，覆盖 ApiResponse/非2xx/动作解码/AI重做/SSE 六类入口，空白首选不再遮蔽有效 detail/message）；F-089 已修复（`90b40b4` 候选登录重构闭合：login 401/403 直传服务端错误文本、不再抛 unauthorized/logout，System 手动刷新与 App 更新刷新失败均保留旧会话，`APIServiceSessionTransitionTests`/`SystemSessionBehaviorTests` 相关用例已覆盖），其他会话/响应传播闭合 |
 | A001-D | 已闭环 | F-090 已确认条件性 P3；支持 F-005/F-009/F-013/F-027/F-031/F-060/F-064/F-076/F-077/F-078/F-082/F-084/F-086/F-087 |
-| A001-E | 已闭环 | W017双审补强后F-024/F-095升P1，F-083/F-092/F-093升P2；后续G05将F-094升P2、F-197升条件P1。F-091维持P2，F-196 P1，扩展F-027/F-192/CHK-005/012 |
+| A001-E | 已闭环 | W017双审补强后F-024/F-095升P1，F-083/F-092/F-093升P2；后续G05将F-094升P2、F-197升条件P1。F-091维持P2，F-196 P1，扩展F-027/F-192/CHK-005/012；F-091/F-093 已修复（首次下载器列表加载失败后轮询复用 `loadClientsIfNeeded` 自动重试并区分错误/真实空态，成功空列表不再重复请求；clients/downloads 轮询连续失败超过 5 次发一次全局通知并重置、成功清零，暂停/启动/删除动作失败立即通知、成功静默，`DownloadTaskViewModel`/`DownloadTaskView` 实现，定向测试通过） |
 | A001-F | 已闭环 | G09两票将F-098逐ID terminal receipt升P1、F-099正ID边界升P2；其余支持 F-027/F-033/F-036/F-060/F-071…F-076/F-080/F-082/F-086/F-087 |
 | A001-G | 已闭环 | F-096 P2；后续G03窄第三裁将F-097升P2；支持F-001/F-023/F-025/F-027/F-060/F-082/F-086/F-087 |
 | A001-H | 已闭环 | F-101 P3、F-103 P2确认；G05/G09按当前producer安全把F-102转未验证P3；CHK-011维持修订，传播边界补F-004/F-011/F-013 |

@@ -8,6 +8,8 @@ class DownloadTaskViewModel: ObservableObject {
   @Published var selectedClient: String = ""
   @Published var downloads: [DownloadingInfo] = []
   @Published private(set) var loadedClient: String = ""
+  @Published private(set) var clientsLoadFailed = false
+  @Published var errorMessage: String?
 
   var canOperateDownloads: Bool {
     !loadedClient.isEmpty && loadedClient == selectedClient
@@ -15,6 +17,11 @@ class DownloadTaskViewModel: ObservableObject {
 
   private let apiService: APIService
   private var downloadLoadGeneration = 0
+  private var hasLoadedClients = false
+  private var consecutiveClientsFailures = 0
+  private var consecutiveDownloadsFailures = 0
+
+  private static let pollingFailureNotificationThreshold = 5
 
   init(apiService: APIService = .shared) {
     self.apiService = apiService
@@ -26,24 +33,37 @@ class DownloadTaskViewModel: ObservableObject {
       return
     }
     let sessionSnapshot = apiService.sessionSnapshot()
-    if clients.isEmpty {
-      do {
-        let loadedClients = try await apiService.fetchDownloadClients()
-        guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
-        clients = loadedClients
-        if let first = loadedClients.first(where: { $0.enabled?.value ?? false })
-          ?? loadedClients.first
-        {
-          selectedClient = first.name
-        }
-      } catch is CancellationError {
-        return
-      } catch {
-        print("Error fetching clients: \(error)")
-      }
-    }
+    await loadClientsIfNeeded()
     guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
     await loadDownloads()
+  }
+
+  func loadClientsIfNeeded() async {
+    guard !hasLoadedClients else { return }
+    let sessionSnapshot = apiService.sessionSnapshot()
+    do {
+      let loadedClients = try await apiService.fetchDownloadClients()
+      guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
+      hasLoadedClients = true
+      clientsLoadFailed = false
+      consecutiveClientsFailures = 0
+      clients = loadedClients
+      if let first = loadedClients.first(where: { $0.enabled?.value ?? false })
+        ?? loadedClients.first
+      {
+        selectedClient = first.name
+      }
+    } catch is CancellationError {
+      return
+    } catch {
+      clientsLoadFailed = true
+      consecutiveClientsFailures += 1
+      reportPollingFailureIfNeeded(
+        &consecutiveClientsFailures,
+        message: "下载器列表加载失败，正在自动重试。"
+      )
+      print("Error fetching clients: \(error)")
+    }
   }
 
   func loadDownloads() async {
@@ -51,6 +71,7 @@ class DownloadTaskViewModel: ObservableObject {
       clearForRestrictedUser()
       return
     }
+    await loadClientsIfNeeded()
     downloadLoadGeneration += 1
     let currentGeneration = downloadLoadGeneration
     let clientName = selectedClient
@@ -94,19 +115,36 @@ class DownloadTaskViewModel: ObservableObject {
       if loadedClient != clientName {
         loadedClient = clientName
       }
+      consecutiveDownloadsFailures = 0
     } catch is CancellationError {
       return
     } catch {
+      consecutiveDownloadsFailures += 1
+      reportPollingFailureIfNeeded(
+        &consecutiveDownloadsFailures,
+        message: "下载任务刷新失败，正在自动重试。"
+      )
       print("Error loading downloads: \(error)")
     }
   }
 
   private func clearForRestrictedUser() {
     downloadLoadGeneration += 1
+    hasLoadedClients = false
+    clientsLoadFailed = false
     clients = []
     selectedClient = ""
     downloads = []
     loadedClient = ""
+  }
+
+  private func reportPollingFailureIfNeeded(
+    _ consecutiveFailures: inout Int,
+    message: String
+  ) {
+    guard consecutiveFailures > Self.pollingFailureNotificationThreshold else { return }
+    consecutiveFailures = 0
+    errorMessage = message
   }
 
   func stopDownload(clientName: String, hash: String) async -> Bool {
@@ -117,12 +155,14 @@ class DownloadTaskViewModel: ObservableObject {
         clientName: clientName, hash: hash)
       guard canOperateDownloads, loadedClient == clientName else { return false }
       if !success {
+        errorMessage = message ?? "暂停下载失败，请稍后重试。"
         print("Failed to stop download: \(message ?? "Unknown error")")
       }
       return success
     } catch is CancellationError {
       return false
     } catch {
+      errorMessage = "暂停下载失败，请稍后重试。"
       print("Error stopping download: \(error)")
       return false
     }
@@ -136,12 +176,14 @@ class DownloadTaskViewModel: ObservableObject {
         clientName: clientName, hash: hash)
       guard canOperateDownloads, loadedClient == clientName else { return false }
       if !success {
+        errorMessage = message ?? "启动下载失败，请稍后重试。"
         print("Failed to start download: \(message ?? "Unknown error")")
       }
       return success
     } catch is CancellationError {
       return false
     } catch {
+      errorMessage = "启动下载失败，请稍后重试。"
       print("Error starting download: \(error)")
       return false
     }
@@ -159,11 +201,13 @@ class DownloadTaskViewModel: ObservableObject {
       if success, let index = downloads.firstIndex(where: { $0.hash == hash }) {
         downloads.remove(at: index)
       } else {
+        errorMessage = message ?? "删除下载失败，请稍后重试。"
         print("Failed to delete download: \(message ?? "Unknown error")")
       }
     } catch is CancellationError {
       return
     } catch {
+      errorMessage = "删除下载失败，请稍后重试。"
       print("Error deleting download: \(error)")
     }
   }
