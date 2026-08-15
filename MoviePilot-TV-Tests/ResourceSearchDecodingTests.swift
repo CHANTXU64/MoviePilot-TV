@@ -90,4 +90,39 @@ final class ResourceSearchDecodingTests: XCTestCase {
     XCTAssertEqual(fallbackItems[1].meta_info?.season_episode, "")
     XCTAssertEqual(fallbackItems[2].torrent_info?.size, 0)
   }
+
+  func testSearchStreamEventLocalizedMessageTrimsThenFallsBack() throws {
+    // message_i18n 全空白时不得遮蔽有效 message。
+    let blankI18n = try JSONDecoder().decode(
+      SearchStreamEvent.self,
+      from: Data(#"{"type":"error","message_i18n":"   ","message":"站点搜索失败"}"#.utf8)
+    )
+    XCTAssertEqual(blankI18n.localizedMessage, "站点搜索失败")
+
+    let validI18n = try JSONDecoder().decode(
+      SearchStreamEvent.self,
+      from: Data(#"{"type":"error","message_i18n":"读取失败","message":"raw"}"#.utf8)
+    )
+    XCTAssertEqual(validI18n.localizedMessage, "读取失败")
+
+    let blankOnly = try JSONDecoder().decode(
+      SearchStreamEvent.self,
+      from: Data(#"{"type":"error","message_i18n":" \n "}"#.utf8)
+    )
+    XCTAssertNil(blankOnly.localizedMessage)
+  }
+
+  func testAiRedoDataLocalizedErrorTrimsThenFallsBack() throws {
+    let blankI18n = try JSONDecoder().decode(
+      SearchStreamEvent.self,
+      from: Data(#"{"data":{"success":false,"error_i18n":"   ","error":"目标目录不可用"}}"#.utf8)
+    )
+    XCTAssertEqual(blankI18n.data?.localizedError, "目标目录不可用")
+
+    let validI18n = try JSONDecoder().decode(
+      SearchStreamEvent.self,
+      from: Data(#"{"data":{"success":false,"error_i18n":"AI 整理失败","error":"raw"}}"#.utf8)
+    )
+    XCTAssertEqual(validI18n.data?.localizedError, "AI 整理失败")
+  }
 }

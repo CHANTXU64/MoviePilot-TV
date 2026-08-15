@@ -3170,12 +3170,22 @@ nonisolated struct SearchStreamEvent: Codable, @unchecked Sendable {
   let items: [Context]?
   let message: String?
   let message_i18n: String?
+
+  /// 统一错误文本选择器：逐项 trim 后优先 message_i18n，再回退 message。
+  var localizedMessage: String? {
+    trimmedNonEmpty([message_i18n, message])
+  }
   
   // AI 重新整理进度使用的结构也类似，可以在需要时复用
   struct AiRedoData: Codable {
     let success: Bool?
     let error: String?
     let error_i18n: String?
+
+    /// 统一错误文本选择器：逐项 trim 后优先 error_i18n，再回退 error。
+    var localizedError: String? {
+      trimmedNonEmpty([error_i18n, error])
+    }
   }
   let data: AiRedoData?
 

@@ -921,6 +921,74 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     XCTAssertEqual(viewModel.errorMessage, "整理没有开始，请检查设置后重试。")
   }
 
+  func testApiResponseLocalizedMessageTrimsThenFallsBack() {
+    // message_i18n 全空白时不得遮蔽有效 message。
+    let blankI18n = ApiResponse<String>(
+      success: false,
+      data: nil,
+      message: "真实原因",
+      message_i18n: "   "
+    )
+    XCTAssertEqual(blankI18n.localizedMessage, "真实原因")
+
+    let validI18n = ApiResponse<String>(
+      success: false,
+      data: nil,
+      message: "raw",
+      message_i18n: "读取失败"
+    )
+    XCTAssertEqual(validI18n.localizedMessage, "读取失败")
+
+    let blankOnly = ApiResponse<String>(
+      success: false,
+      data: nil,
+      message: nil,
+      message_i18n: " \n "
+    )
+    XCTAssertNil(blankOnly.localizedMessage)
+  }
+
+  func testServerMessageErrorIgnoresBlankPreferredField() {
+    let error = APIService.serverMessageError(
+      statusCode: 422,
+      data: Data(#"{"message_i18n":"   ","detail":"目标目录不可用"}"#.utf8)
+    )
+    guard case APIError.serverMessage(let message) = error else {
+      return XCTFail("Expected serverMessage, got \(error)")
+    }
+    XCTAssertEqual(message, "422: 目标目录不可用")
+  }
+
+  func testReorganizeSubmitFallsBackToMessageWhenMessageI18nIsBlank() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    await CompatibilityEndpointURLProtocol.stub.setManualTransferResponses([
+      Data(#"{"success":true,"message_i18n":"已开始整理"}"#.utf8),
+      Data(#"{"success":false,"message_i18n":"   ","message":"目标目录不可用"}"#.utf8),
+    ])
+
+    let service = APIService.testingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    configureManageUser(service)
+    let viewModel = ReorganizeViewModel(
+      logIds: [81, 82],
+      fileItem: nil,
+      apiService: service
+    )
+
+    let submitted = await viewModel.submit(background: true)
+
+    XCTAssertFalse(submitted)
+    // 空白 message_i18n 不得遮蔽有效 message。
+    XCTAssertEqual(
+      viewModel.errorMessage,
+      "部分文件已提交整理，其余失败，请重试。失败原因：目标目录不可用"
+    )
+  }
+
   private func assertContainsSubsequence(
     _ expected: [String],
     in actual: [String],

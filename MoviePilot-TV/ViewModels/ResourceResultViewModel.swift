@@ -144,7 +144,7 @@ class ResourceResultViewModel: ObservableObject {
           )
 
           if event.type == "error" {
-            self?.errorMessage = event.message_i18n ?? event.message ?? "未找到相关资源"
+            self?.errorMessage = event.localizedMessage ?? "未找到相关资源"
             // 整次搜索失败：不发布已积累的部分结果，也不执行站点补偿。
             return
           }

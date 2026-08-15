@@ -38,6 +38,18 @@ enum SessionRefreshResult: Equatable {
   case refreshFailed
 }
 
+/// 统一错误文本选择器：逐项 trim 后按顺序取首个非空文本；全部无效返回 nil。
+nonisolated func trimmedNonEmpty(_ candidates: [String?]) -> String? {
+  for candidate in candidates {
+    if let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !trimmed.isEmpty
+    {
+      return trimmed
+    }
+  }
+  return nil
+}
+
 nonisolated struct ApiResponse<T: Decodable>: Decodable {
   let success: Bool?
   let data: T?
@@ -45,7 +57,7 @@ nonisolated struct ApiResponse<T: Decodable>: Decodable {
   let message_i18n: String?
 
   var localizedMessage: String? {
-    message_i18n?.isEmpty == false ? message_i18n : message
+    trimmedNonEmpty([message_i18n, message])
   }
 }
 
@@ -403,7 +415,7 @@ nonisolated private func decodeStrictActionResponseSync(from data: Data) throws 
   let response = try JSONDecoder().decode(ActionResponse.self, from: data)
   return (
     response.success ?? false,
-    response.message_i18n?.isEmpty == false ? response.message_i18n : response.message
+    trimmedNonEmpty([response.message_i18n, response.message])
   )
 }
 
@@ -1354,12 +1366,12 @@ class APIService: ObservableObject {
       let detail_i18n: String?
     }
     let payload = try? JSONDecoder().decode(ErrorPayload.self, from: data)
-    let message = [
+    let message = trimmedNonEmpty([
       payload?.message_i18n,
       payload?.detail_i18n,
       payload?.message,
       payload?.detail,
-    ].compactMap(\.self).first { !$0.isEmpty }
+    ])
     let description = [String(statusCode), message]
       .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
       .filter { !$0.isEmpty }
@@ -2151,7 +2163,7 @@ class APIService: ObservableObject {
       let history_ids: [Int]?
     }
     let res = try JSONDecoder().decode(AiRedoResponse.self, from: data)
-    let message = res.message_i18n?.isEmpty == false ? res.message_i18n : res.message
+    let message = trimmedNonEmpty([res.message_i18n, res.message])
     guard res.success == true else {
       throw APIError.serverMessage(message ?? "未知错误")
     }
@@ -2807,7 +2819,7 @@ class APIService: ObservableObject {
       throw APIError.decodingError(error)
     }
     guard response.success != false else {
-      throw APIError.serverMessage(response.message ?? "复用订阅失败")
+      throw APIError.serverMessage(response.localizedMessage ?? "复用订阅失败")
     }
     guard let id = response.data?.id else {
       throw APIError.serverMessage("复用订阅响应缺少 ID")

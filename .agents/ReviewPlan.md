@@ -275,11 +275,11 @@
 | M001-H | 已闭环 | G09交叉裁将F-070升确认P2；F-071维持P2；F-072维持P1且已修复（`e388e8b`），Simulator clean build、本地436/436测试与最终独立复审通过；支持F-001/F-021/F-027/F-036，F-013经当前合同反证后驳回 |
 | M001-I | 已闭环 | F-077/F-079 按当前分享schema分别确认投影与Fork身份丢失P2并已修复（`58c7e81`），F-078确认P3；CHK-009已补强，扩展F-002/F-008/F-017/F-027分享链；嵌套分享对象不再计入收窄后的F-011 |
 | M001-J | 已闭环 | G09 clean-room窄裁将F-073收窄后转确认P2且已修复（`e8cdaf7`）；F-074 用户按实际操作链复核后决定跳过（预览请求返回即弹 Sheet 抢焦点，同会话编辑窗口过窄，会话切换已有 isSessionUnchanged 防护）；F-075 用户按三端对照裁决仅修误导文案（Web 同样无逐 ID 受理/只重试失败机制且部分失败不刷新列表，后端 force 无幂等，不做 TV 单端增强），文案与回归测试已提交；F-076 资源搜索新请求开始即清空旧结果（`SearchViewModel.autoSearch` `.resource` 分支），聚合搜索子项已由`d361fe4`修复（unified 分支新请求开始清空 bestResults），空关键词点搜索与 Web 一致不改，定向 16/16 通过；F-077 已修复（`58c7e81`）等既有传播不变；扩展F-027下游证据不变 |
-| M001-K | 已闭环 | F-080 已修复（`SearchViewModel`/`ResourceResultViewModel` 加 receivedDone 门禁：error 不发布、EOF 无 done 不发布、missingSites 补偿仅 done 后；后端单站点错误由 indexer 层吞掉不影响 done，2026-08-14 三端核对）；F-081 输入边界修复已完成（`670cf86`），验证及独立复审通过，已选规则缺失继续静默不过滤由用户裁为产品取舍；F-085 已修复（`4d3bb0b`：matcher 与后端 `__match_rule` 全字段对齐，规则 ID 缺失全排除、非法值显式失败、拉取网络失败放行，独立代理逐项复审+55 项定向测试通过），F-061后续由I011升P2 |
+| M001-K | 已闭环 | F-080 已修复（`SearchViewModel`/`ResourceResultViewModel` 加 receivedDone 门禁：error 不发布、EOF 无 done 不发布、missingSites 补偿仅 done 后；后端单站点错误由 indexer 层吞掉不影响 done，2026-08-14 三端核对）；F-081 输入边界修复已完成（`670cf86`），验证及独立复审通过，已选规则缺失继续静默不过滤由用户裁为产品取舍；F-085 已修复（`7f9fd17`：matcher 与后端 `__match_rule` 全字段对齐，规则 ID 缺失全排除、非法值显式失败、拉取网络失败放行，独立代理逐项复审+55 项定向测试通过），F-061后续由I011升P2 |
 | I001 | 已闭环 | 55 个顶层声明全部覆盖；无新增发现，维持既有裁决；四处仅 doc comment 跨账面边界 |
 | A001-A | 已闭环 | G02末裁将F-082升条件P1（已由`d8198fc`修复）；F-083 已修复（2026-08-14：下载动作解码仅空 body 兼容成功，非空响应严格失败关闭并保留 message_i18n）；F-084 已修复（2026-08-14 用户裁决：保留 original→w500 替换，ImageURLs 加 posterFallback 原始 URL，MediaCard/BestResultCard/ForkSubscribeSheet 加载失败自动回退原始 URL）；F-030 已修复（`ee5dcb4`），其余传播闭合 |
 | A001-B | 已闭环 | F-019/F-020/F-027/F-062/F-063及G02末裁F-086为条件P1；F-030/F-031/F-026/F-087/F-088 P2，缓存归CHK-007 |
-| A001-C | 已闭环 | G06核当前后端401后F-089 P2；G02末裁将F-087升P2，F-088 P2，其他会话/响应传播闭合 |
+| A001-C | 已闭环 | G06核当前后端401后F-089 P2；G02末裁将F-087升P2，F-088 P2；F-087 已修复（统一 `trimmedNonEmpty` 选择器：逐项 trim 后按优先级取首个有效文本，覆盖 ApiResponse/非2xx/动作解码/AI重做/SSE 六类入口，空白首选不再遮蔽有效 detail/message），其他会话/响应传播闭合 |
 | A001-D | 已闭环 | F-090 已确认条件性 P3；支持 F-005/F-009/F-013/F-027/F-031/F-060/F-064/F-076/F-077/F-078/F-082/F-084/F-086/F-087 |
 | A001-E | 已闭环 | W017双审补强后F-024/F-095升P1，F-083/F-092/F-093升P2；后续G05将F-094升P2、F-197升条件P1。F-091维持P2，F-196 P1，扩展F-027/F-192/CHK-005/012 |
 | A001-F | 已闭环 | G09两票将F-098逐ID terminal receipt升P1、F-099正ID边界升P2；其余支持 F-027/F-033/F-036/F-060/F-071…F-076/F-080/F-082/F-086/F-087 |
@@ -294,7 +294,7 @@
 | B002 | 已闭环 | F-016 驳回、F-017 未验证 P3，用户均决定跳过修复；F-018确认P3并已修复（`94f18f2`），F-021确认P3并已修复（`a0adaab`）；H-007 已修正 |
 | B003 | 已闭环 | G06后F-019/F-020为条件P1、F-026为P2；Cookie/cache/in-flight三层边界闭合，订阅清单不适用 |
 | S004 | 已闭环 | F-026/F-032/F-033/F-034/F-035/F-036/F-039均P2；G04 clean-room末裁将F-035/F-039收窄为owner/session取消并闭环 |
-| S005 | 已闭环 | 主审与独立复核已闭环；F-060/F-061/F-081 维持，F-085 已修复（`4d3bb0b`），F-017 未验证；下游F-110后经C018/W011确认并由G05升P2 |
+| S005 | 已闭环 | 主审与独立复核已闭环；F-060/F-061/F-081 维持，F-085 已修复（`7f9fd17`），F-017 未验证；下游F-110后经C018/W011确认并由G05升P2 |
 | V002-A | 已闭环 | 主审/独立/G06闭合；F-109/F-111均P2，四类profile key、credential/currentUser身份分裂与迁移边界已登记 |
 | V002-B | 已闭环 | 主审/独立/G06闭合；F-109/F-111均P2且根因/验收独立，既有会话/Keychain/规则发现传播完成 |
 | V002-C | 已闭环 | 主审、独立复核与I016后裁已闭环；F-112确认P2，权威空、首次伪空、后续无stale/error标记及Search/详情继续发送旧ID的传播已闭合 |
@@ -524,10 +524,10 @@
 - `A001-A / F-027/F-065`：结构快照和页面 guard 不能替代单调 session epoch；共享 cache key 与旧请求回填须绑定发起时 namespace。
 - `M001-K / F-080`：SSE 只有收到端点认可的明确成功终止才能成功收尾；业务 error、无终止 EOF 和取消必须分流，AI 的全部终止形态均须检查 `data.success`。
 - `M001-K / F-081`：自定义规则输入边界须逐项隔离坏项并保证规范化后的 ID/name 非空唯一；实现已静默丢弃坏项并保留首个合法规则，用户明确接受已选规则缺失时继续静默不过滤且不新增错误 UI。
-- `M001-K/S005 / F-085`：已修复（`4d3bb0b`）：matcher 与后端 `__match_rule` 全字段对齐（include/exclude 任一匹配、空串视为未配置、空正则匹配一切、seeders/publish_time/size 解析与失败语义、pubdate 缺失/不可解析按 0 分钟、规则 ID 缺失硬过滤全排除软过滤全置灰）；规则内容非法显式报错，拉取规则网络失败放行；独立代理逐项复审通过，55 项定向测试通过。System 预览 trim 展示与 matcher 原始值的展示层差异保留。
+- `M001-K/S005 / F-085`：已修复（`7f9fd17`）：matcher 与后端 `__match_rule` 全字段对齐（include/exclude 任一匹配、空串视为未配置、空正则匹配一切、seeders/publish_time/size 解析与失败语义、pubdate 缺失/不可解析按 0 分钟、规则 ID 缺失硬过滤全排除软过滤全置灰）；规则内容非法显式报错，拉取规则网络失败放行；独立代理逐项复审通过，55 项定向测试通过。System 预览 trim 展示与 matcher 原始值的展示层差异保留。
 - `A001-B / F-027`：请求、loginTask、递归重试、logout、currentUser/settings 发布必须绑定单调 session epoch；结构值相等不能防止 ABA。
 - `A001-B / F-086`：baseURL 只在单一入口规范化并持久化，须保留反向代理 path-prefix；API/SSE/图片不能各自字符串拼接。
-- `A001-C / F-087`：服务端错误字段须逐项 trim/filter 后按本地化优先级选择，空白首选值不得遮蔽后续有效消息。
+- `A001-C / F-087`：已修复（统一 `trimmedNonEmpty` 选择器）：服务端错误字段逐项 trim/filter 后按本地化优先级选择，空白首选值不再遮蔽后续有效 detail/message；与 Web `normalizeLocalizedMessage` 空串回退语义一致，纯空白为 TV 防御性回退。
 - `A001-C / F-088`：登录与全部重登路径必须使用真正的 `application/x-www-form-urlencoded` 编码，`URLComponents.query/percentEncodedQuery` 不能直接充当通用表单编码器。
 - `A001-D / F-090`：TMDB 识别、跳转和预加载只接受正 ID；0/负数不得遮蔽后续候选或完整详情正 ID，但不能借此无条件改写 MediaInfo 主身份的既有 Web-zero 语义。
 - `A001-E/W017 / F-091/F-093`：下载器发现失败必须可恢复且不得伪装合法空；clients/list刷新须分loading/empty/error/stale/data并有重试，主动动作失败复用现有错误通知，成功保持静默。
@@ -594,9 +594,9 @@
 - `M001-H / F-070…F-072`：G09已将F-070升确认P2，F-071维持P2、F-072维持P1；统一代际与能力默认边界已闭合，单元只随G01/G06程序队列收尾。
 - `M001-J / F-073…F-076`：clean-room窄裁确认F-073仅在`success:true + data缺失/null`与item success缺失/null两支fail-open，转确认P2；F-074/F-075 P2；F-076原跨owner P1链闭合，当前同会话余项P2。
 - `M001-I / F-077…F-079`：F-077/F-078已确认；F-079经当前后端91ce365f与Web 7ea14bc9合同裁决，从未知raw风险收窄为`anilistid/media_source/media_id`三个已知字段丢失并确认P2；G02/A001/Fork/session/刷新链回溯已闭合。
-- `M001-K/S005 / F-080/F-081/F-085`：三项均已确认；F-085 已修复（`4d3bb0b`）并经独立代理逐项复审，目标部署后端路径/版本与正则方言差异仍留 V002/W020/I003/I004/I016/G01/G05 回溯。
+- `M001-K/S005 / F-080/F-081/F-085`：三项均已确认；F-085 已修复（`7f9fd17`）并经独立代理逐项复审，目标部署后端路径/版本与正则方言差异仍留 V002/W020/I003/I004/I016/G01/G05 回溯。
 - `A001-A / F-082…F-084`：三项均确认；G02末裁将F-082升条件P1，F-083/F-084 P2，API/下载/图片路径闭合。
-- `A001-B / F-086…F-088`：G02末裁将F-086升条件P1、F-087升P2，F-088 P2；登录candidate commit、错误文本与form/query边界闭合。
+- `A001-B / F-086…F-088`：G02末裁将F-086升条件P1、F-087升P2，F-088 P2；登录candidate commit、错误文本与form/query边界闭合；F-087 已修复（统一 `trimmedNonEmpty` 选择器）。
 - `A001-C / F-089`：G06两票核到当前后端凭据/MFA失败为401并闭合System手动刷新清旧有效会话，转确认P2；403仍只作条件分支。
 - `A001-D / F-090`：已确认条件性 P3；待动作、预加载、详情、订阅补查和 I003 回溯非法值传播。
 - `A001-E/W017 / F-091…F-095`：F-091/P2、F-092/P2、F-093/P2、F-094/P2、F-095/P1均确认；F-094后裁来源为G05。client代际与动作目标不并入session CHK-005，行须绑定downloader+task并在切换时禁旧行。

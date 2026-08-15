@@ -735,12 +735,12 @@ class TransferHistoryViewModel: ObservableObject {
           if event.enable == false {
             if event.data?.success == false {
               terminalError =
-                event.data?.error_i18n ?? event.data?.error ?? "AI 整理失败"
+                event.data?.localizedError ?? "AI 整理失败"
             }
             break
           }
           if event.type == "error" {
-            terminalError = event.message_i18n ?? event.message ?? "AI 整理失败"
+            terminalError = event.localizedMessage ?? "AI 整理失败"
             break
           }
           if event.type == "done" {

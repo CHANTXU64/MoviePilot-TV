@@ -361,7 +361,7 @@ class SearchViewModel: ObservableObject {
             
             if event.type == "error" {
               self.resourceErrorMessage =
-                event.message_i18n ?? event.message ?? "未找到相关资源"
+                event.localizedMessage ?? "未找到相关资源"
               // 整次搜索失败：不发布已积累的部分结果。
               return
             }
