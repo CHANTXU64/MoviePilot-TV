@@ -208,9 +208,19 @@ class ResourceResultViewModel: ObservableObject {
 
           guard canContinue() else { return }
 
-          // 应用自定义过滤规则
+          // 应用自定义过滤规则（规则内容非法时显式提示；拉取规则网络失败时放行不过滤）
           guard let self else { return }
-          let filteredResults = await self.applyCustomFilter(to: accumulatedResults)
+          let filteredResults: [Context]
+          do {
+            filteredResults = try await self.applyCustomFilter(to: accumulatedResults)
+          } catch let error as CustomFilterService.FilterError {
+            guard canContinue() else { return }
+            self.errorMessage = error.localizedDescription
+            return
+          } catch {
+            print("❌ [ResourceResultVM] 加载过滤规则失败，放行不过滤: \(error)")
+            filteredResults = accumulatedResults
+          }
           
           guard canContinue() else { return }
 
@@ -232,7 +242,14 @@ class ResourceResultViewModel: ObservableObject {
             guard canContinue() else { return }
 
             guard let self else { return }
-            searchResults = await self.applyCustomFilter(to: searchResults)
+            do {
+              searchResults = try await self.applyCustomFilter(to: searchResults)
+            } catch let error as CustomFilterService.FilterError {
+              self.errorMessage = error.localizedDescription
+              return
+            } catch {
+              print("❌ [ResourceResultVM] 加载过滤规则失败，放行不过滤: \(error)")
+            }
             guard canContinue() else { return }
 
             self.results = searchResults
@@ -263,13 +280,8 @@ class ResourceResultViewModel: ObservableObject {
   }
 
   /// 应用自定义过滤规则
-  private func applyCustomFilter(to contexts: [Context]) async -> [Context] {
-    do {
-      return try await CustomFilterService.applyHardAndSoftFilter(
-        to: contexts, using: apiService, caller: "ResourceResultVM")
-    } catch {
-      print("❌ [ResourceResultVM] 加载过滤规则失败: \(error)")
-      return contexts
-    }
+  private func applyCustomFilter(to contexts: [Context]) async throws -> [Context] {
+    try await CustomFilterService.applyHardAndSoftFilter(
+      to: contexts, using: apiService, caller: "ResourceResultVM")
   }
 }

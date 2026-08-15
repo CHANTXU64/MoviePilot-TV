@@ -714,6 +714,202 @@ final class SearchViewModelTests: XCTestCase {
     )
   }
 
+  func testCustomFilterMissingRuleIdExcludesAllLikeBackend() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureSuperUserSearchSession(service)
+    // 所选规则 ID 不存在（后端 rule_set.get 为空返回 False）→ 全部排除。
+    let filterSnapshot = SearchViewModelFilterSelectionSnapshot.selectHardRule(
+      "missing-id", apiService: service)
+    defer { filterSnapshot.restore() }
+
+    let contexts = [
+      Context(
+        torrent_info: TorrentInfo(
+          site: 1,
+          site_name: "Test Site",
+          site_order: 1,
+          title: "Any Result",
+          description: "",
+          enclosure: "https://example.test/any",
+          page_url: "https://example.test/any",
+          size: 1024,
+          seeders: 10,
+          peers: 1,
+          pubdate: "2026-06-16 10:00:00",
+          uploadvolumefactor: 1.0,
+          downloadvolumefactor: 1.0,
+          pri_order: 1,
+          labels: [],
+          volume_factor: "1x"
+        )
+      )
+    ]
+
+    let filtered = try await CustomFilterService.applyHardAndSoftFilter(
+      to: contexts,
+      using: service,
+      caller: "missing-rule-test"
+    )
+
+    XCTAssertTrue(
+      filtered.isEmpty,
+      "与后端 __match_rule 一致：所选规则 ID 不存在时全部排除，而非静默放行。"
+    )
+  }
+
+  func testCustomFilterInvalidRuleShowsErrorAndDoesNotPublishResults() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureSuperUserSearchSession(service)
+    // 规则内容非法（include 是无法编译的正则）→ 显式报错，不发布已积累的结果。
+    await SearchViewModelURLProtocol.stub.setCustomFilterRulesJSON(
+      #"{"data":{"value":[{"id":"bad-regex","name":"Bad","include":["["]}]}}"#)
+    await SearchViewModelURLProtocol.stub.setStreamTermination(.done, forQuery: "invalid")
+    let filterSnapshot = SearchViewModelFilterSelectionSnapshot.selectHardRule(
+      "bad-regex", apiService: service)
+    defer { filterSnapshot.restore() }
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .resource
+    viewModel.query = "invalid"
+
+    await viewModel.autoSearch()
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertTrue(
+      viewModel.resourceResults.isEmpty,
+      "规则内容非法时不得发布未过滤的结果。"
+    )
+    XCTAssertEqual(
+      viewModel.resourceErrorMessage,
+      "自定义过滤规则无效：正则表达式「[」无法编译"
+    )
+  }
+
+  func testCustomFilterFetchNetworkFailurePassesThroughUnfiltered() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureSuperUserSearchSession(service)
+    // 拉取规则网络失败 → 与旧行为一致放行不过滤，不阻断结果。
+    await SearchViewModelURLProtocol.stub.setCustomFilterRulesFailure()
+    await SearchViewModelURLProtocol.stub.setStreamTermination(.done, forQuery: "netdown")
+    let filterSnapshot = SearchViewModelFilterSelectionSnapshot.selectHardRule(
+      "allow-all", apiService: service)
+    defer { filterSnapshot.restore() }
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .resource
+    viewModel.query = "netdown"
+
+    await viewModel.autoSearch()
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertEqual(viewModel.resourceResults.count, 1)
+    XCTAssertNil(viewModel.resourceErrorMessage)
+  }
+
+  func testCustomFilterMissingSoftRuleIdGreysAllLikeBackend() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureSuperUserSearchSession(service)
+    // 所选软规则 ID 不存在（后端 rule_set.get 为空返回 False）→ 全部置灰。
+    let filterSnapshot = SearchViewModelFilterSelectionSnapshot.selectSoftRule(
+      "missing-id", apiService: service)
+    defer { filterSnapshot.restore() }
+
+    let contexts = [
+      Context(
+        torrent_info: TorrentInfo(
+          site: 1,
+          site_name: "Test Site",
+          site_order: 1,
+          title: "First Result",
+          description: "",
+          enclosure: "https://example.test/first",
+          page_url: "https://example.test/first",
+          size: 1024,
+          seeders: 10,
+          peers: 1,
+          pubdate: "2026-06-16 10:00:00",
+          uploadvolumefactor: 1.0,
+          downloadvolumefactor: 1.0,
+          pri_order: 1,
+          labels: [],
+          volume_factor: "1x"
+        )
+      ),
+      Context(
+        torrent_info: TorrentInfo(
+          site: 1,
+          site_name: "Test Site",
+          site_order: 1,
+          title: "Second Result",
+          description: "",
+          enclosure: "https://example.test/second",
+          page_url: "https://example.test/second",
+          size: 2048,
+          seeders: 20,
+          peers: 2,
+          pubdate: "2026-06-16 10:00:00",
+          uploadvolumefactor: 1.0,
+          downloadvolumefactor: 1.0,
+          pri_order: 2,
+          labels: [],
+          volume_factor: "1x"
+        )
+      ),
+    ]
+
+    let filtered = try await CustomFilterService.applyHardAndSoftFilter(
+      to: contexts,
+      using: service,
+      caller: "missing-soft-rule-test"
+    )
+
+    XCTAssertEqual(filtered.count, 2)
+    XCTAssertTrue(
+      filtered.allSatisfy(\.isFilteredOut),
+      "与后端 __match_rule 一致：所选软规则 ID 不存在时全部置灰。"
+    )
+  }
+
   func testMapMediaToSubscribePreservesUnifiedIdentity() {
     let subscribe = SearchViewModel().mapMediaToSubscribe(
       MediaInfo(
@@ -779,6 +975,8 @@ private struct SearchViewModelHTTPStubResponse: Sendable {
 private actor SearchViewModelURLProtocolStub {
   private var gatesByQuery: [String: SearchAsyncGate] = [:]
   private var customFilterGate: SearchAsyncGate?
+  private var customFilterRulesJSON: String?
+  private var customFilterRulesFailure = false
   private var requestedRequests: [SearchRecordedRequest] = []
   private var cancelledRequests: [SearchRecordedRequest] = []
   private var streamTerminations: [String: SearchStreamTermination] = [:]
@@ -786,6 +984,8 @@ private actor SearchViewModelURLProtocolStub {
   func reset() {
     gatesByQuery.removeAll()
     customFilterGate = nil
+    customFilterRulesJSON = nil
+    customFilterRulesFailure = false
     requestedRequests.removeAll()
     cancelledRequests.removeAll()
     streamTerminations.removeAll()
@@ -797,6 +997,16 @@ private actor SearchViewModelURLProtocolStub {
 
   func setCustomFilterGate(_ gate: SearchAsyncGate) {
     customFilterGate = gate
+  }
+
+  /// 覆盖 CustomFilterRules 返回的规则列表 JSON。
+  func setCustomFilterRulesJSON(_ json: String) {
+    customFilterRulesJSON = json
+  }
+
+  /// 让 CustomFilterRules 拉取以网络错误失败。
+  func setCustomFilterRulesFailure() {
+    customFilterRulesFailure = true
   }
 
   /// 配置资源搜索流的终止形态：done（成功收尾）/ error（业务失败）/ eof（无终止断开）。
@@ -830,6 +1040,12 @@ private actor SearchViewModelURLProtocolStub {
       await gate.wait()
     } else if let gate = gatesByQuery[query] {
       await gate.wait()
+    }
+
+    if components.path == "/api/v1/system/setting/CustomFilterRules",
+      customFilterRulesFailure
+    {
+      throw URLError(.notConnectedToInternet)
     }
 
     return SearchViewModelHTTPStubResponse(
@@ -911,6 +1127,9 @@ private actor SearchViewModelURLProtocolStub {
       )
     }
     if path == "/api/v1/system/setting/CustomFilterRules" {
+      if let customFilterRulesJSON {
+        return Data(customFilterRulesJSON.utf8)
+      }
       return Data(
         """
         {"data":{"value":[{"id":"allow-all","name":"Allow All"}]}}
@@ -1134,6 +1353,23 @@ private struct SearchViewModelFilterSelectionSnapshot {
     )
     UserDefaults.standard.set(ruleId, forKey: hardKey)
     UserDefaults.standard.removeObject(forKey: softKey)
+    return snapshot
+  }
+
+  static func selectSoftRule(_ ruleId: String, apiService: APIService)
+    -> SearchViewModelFilterSelectionSnapshot
+  {
+    let profileKey = apiService.profileKey ?? "missing-profile"
+    let hardKey = "selectedCustomFilterRuleId_\(profileKey)"
+    let softKey = "selectedSoftFilterRuleId_\(profileKey)"
+    let snapshot = SearchViewModelFilterSelectionSnapshot(
+      hardKey: hardKey,
+      softKey: softKey,
+      hardValue: UserDefaults.standard.string(forKey: hardKey),
+      softValue: UserDefaults.standard.string(forKey: softKey)
+    )
+    UserDefaults.standard.removeObject(forKey: hardKey)
+    UserDefaults.standard.set(ruleId, forKey: softKey)
     return snapshot
   }
 

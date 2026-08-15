@@ -1046,10 +1046,10 @@ enum SystemFilterRulePreview {
   nonisolated private static func summaryParts(for rule: CustomRule) -> [String] {
     var parts: [String] = []
 
-    if let include = normalized(rule.include) {
+    if let include = normalized(rule.include?.joined(separator: " ")) {
       parts.append("包含: \(include)")
     }
-    if let exclude = normalized(rule.exclude) {
+    if let exclude = normalized(rule.exclude?.joined(separator: " ")) {
       parts.append("排除: \(exclude)")
     }
     if let sizeRange = normalized(rule.size_range) {

@@ -390,8 +390,22 @@ class SearchViewModel: ObservableObject {
             return
           }
 
-          // 应用自定义过滤规则
-          let filteredResults = await self.applyCustomFilter(to: accumulatedResults)
+          // 应用自定义过滤规则（规则内容非法时显式提示；拉取规则网络失败时放行不过滤）
+          let filteredResults: [Context]
+          do {
+            filteredResults = try await self.applyCustomFilter(to: accumulatedResults)
+          } catch let error as CustomFilterService.FilterError {
+            guard canPublishSearchResult(
+              generation: currentSearchGeneration,
+              sessionSnapshot: sessionSnapshot,
+              searchType: currentSearchType)
+            else { return }
+            self.resourceErrorMessage = error.localizedDescription
+            return
+          } catch {
+            print("❌ [SearchVM] 加载过滤规则失败，放行不过滤: \(error)")
+            filteredResults = accumulatedResults
+          }
           guard canPublishSearchResult(
             generation: currentSearchGeneration,
             sessionSnapshot: sessionSnapshot,
@@ -418,7 +432,14 @@ class SearchViewModel: ObservableObject {
               searchType: currentSearchType)
             else { return }
 
-            fallbackResults = await self.applyCustomFilter(to: fallbackResults)
+            do {
+              fallbackResults = try await self.applyCustomFilter(to: fallbackResults)
+            } catch let error as CustomFilterService.FilterError {
+              self.resourceErrorMessage = error.localizedDescription
+              return
+            } catch {
+              print("❌ [SearchVM] 加载过滤规则失败，放行不过滤: \(error)")
+            }
             guard canPublishSearchResult(
               generation: currentSearchGeneration,
               sessionSnapshot: sessionSnapshot,
@@ -749,14 +770,9 @@ class SearchViewModel: ObservableObject {
   // MARK: - 自定义过滤规则
 
   /// 应用自定义过滤规则
-  private func applyCustomFilter(to contexts: [Context]) async -> [Context] {
-    do {
-      return try await CustomFilterService.applyHardAndSoftFilter(
-        to: contexts, using: apiService, caller: "SearchVM")
-    } catch {
-      print("❌ [SearchVM] 加载过滤规则失败: \(error)")
-      return contexts
-    }
+  private func applyCustomFilter(to contexts: [Context]) async throws -> [Context] {
+    try await CustomFilterService.applyHardAndSoftFilter(
+      to: contexts, using: apiService, caller: "SearchVM")
   }
 }
 

@@ -3209,16 +3209,74 @@ struct CustomRule: Codable, Identifiable, Hashable {
   let id: String
   /// 名称
   var name: String
-  /// 包含 (正则表达式)
-  var include: String?
-  /// 排除 (正则表达式)
-  var exclude: String?
+  /// 包含 (正则表达式)，与后端一致支持单个字符串或列表；任一匹配即通过
+  var include: [String]?
+  /// 排除 (正则表达式)，与后端一致支持单个字符串或列表；任一匹配即排除
+  var exclude: [String]?
   /// 大小 (MB)，格式: "min" 或 "min-max"
   var size_range: String?
   /// 做种人数，格式: "min" 或 "min-max"
   var seeders: String?
   /// 发布时间 (分钟)，格式: "min" 或 "min-max"
   var publish_time: String?
+
+  init(
+    id: String,
+    name: String,
+    include: [String]? = nil,
+    exclude: [String]? = nil,
+    size_range: String? = nil,
+    seeders: String? = nil,
+    publish_time: String? = nil
+  ) {
+    self.id = id
+    self.name = name
+    self.include = include
+    self.exclude = exclude
+    self.size_range = size_range
+    self.seeders = seeders
+    self.publish_time = publish_time
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    name = try container.decode(String.self, forKey: .name)
+    include = try Self.decodePatternList(from: container, forKey: .include)
+    exclude = try Self.decodePatternList(from: container, forKey: .exclude)
+    size_range = try container.decodeIfPresent(String.self, forKey: .size_range)
+    seeders = try container.decodeIfPresent(String.self, forKey: .seeders)
+    publish_time = try container.decodeIfPresent(String.self, forKey: .publish_time)
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(id, forKey: .id)
+    try container.encode(name, forKey: .name)
+    try container.encodeIfPresent(include, forKey: .include)
+    try container.encodeIfPresent(exclude, forKey: .exclude)
+    try container.encodeIfPresent(size_range, forKey: .size_range)
+    try container.encodeIfPresent(seeders, forKey: .seeders)
+    try container.encodeIfPresent(publish_time, forKey: .publish_time)
+  }
+
+  private static func decodePatternList(
+    from container: KeyedDecodingContainer<CodingKeys>,
+    forKey key: CodingKeys
+  ) throws -> [String]? {
+    if let list = try? container.decodeIfPresent([String].self, forKey: key) {
+      return list
+    }
+    if let single = try container.decodeIfPresent(String.self, forKey: key) {
+      // 与后端 `rule.get(...) or []` 一致：空字符串视为未配置（数组里的空串仍保留，后端按真实排除项处理）。
+      return single.isEmpty ? nil : [single]
+    }
+    return nil
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case id, name, include, exclude, size_range, seeders, publish_time
+  }
 }
 
 /// 对应 API 的返回格式：{ "data": { "value": [...] } }
