@@ -155,7 +155,10 @@ nonisolated enum MediaIdentifier {
 
   static func isValidManualMediaId(_ mediaId: String?) -> Bool {
     guard let mediaId = normalizedString(mediaId) else { return true }
-    return mediaId.unicodeScalars.allSatisfy { (48...57).contains(Int($0.value)) }
+    guard mediaId.unicodeScalars.allSatisfy({ (48...57).contains(Int($0.value)) }) else {
+      return false
+    }
+    return (Int(mediaId) ?? 0) > 0
   }
 
   static func normalizedMediaIdentifier(_ mediaId: String?) -> String? {

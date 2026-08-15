@@ -5,10 +5,10 @@ enum ManualMediaSelection {
   static func mediaId(for media: MediaInfo, source: MediaSearchSource) -> String? {
     let nativeId: String? =
       switch source {
-      case .themoviedb: media.tmdb_id.map(String.init)
+      case .themoviedb: MediaIdentifier.validNumericIdentifier(media.tmdb_id).map(String.init)
       case .douban: media.douban_id
-      case .bangumi: media.bangumi_id.map(String.init)
-      case .anilist: media.anilist_id.map(String.init)
+      case .bangumi: MediaIdentifier.validNumericIdentifier(media.bangumi_id).map(String.init)
+      case .anilist: MediaIdentifier.validNumericIdentifier(media.anilist_id).map(String.init)
       }
     for candidate in [nativeId, media.media_id] {
       let normalized = candidate?.trimmingCharacters(in: .whitespacesAndNewlines)

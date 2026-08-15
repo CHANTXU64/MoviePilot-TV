@@ -1774,7 +1774,7 @@ class APIService: ObservableObject {
         let yearMatch = (searchYear == nil || result.year == nil || searchYear == result.year)
 
         if titleMatch && typeMatch && yearMatch {
-          if let tmdbId = result.tmdb_id {
+          if let tmdbId = MediaIdentifier.validNumericIdentifier(result.tmdb_id) {
             Logger.info("[APIService] Search 识别成功 (严格匹配): \(rTitle), TMDB: \(tmdbId)")
             return tmdbId
           }
@@ -1808,7 +1808,7 @@ class APIService: ObservableObject {
         }()
 
         if titleMatch && typeMatch && yearMatch {
-          if let tmdbId = result.tmdb_id {
+          if let tmdbId = MediaIdentifier.validNumericIdentifier(result.tmdb_id) {
             Logger.info("[APIService] Search 识别成功 (年份误差匹配): \(rTitle), TMDB: \(tmdbId)")
             return tmdbId
           }
@@ -1832,7 +1832,7 @@ class APIService: ObservableObject {
       // 检查识别出的类型是否匹配（如果已知 type）
       if let targetType = type, let recognizedType = result.media_info?.type {
         if normalizeMediaType(targetType) == normalizeMediaType(recognizedType) {
-          if let tmdbId = result.media_info?.tmdb_id {
+          if let tmdbId = MediaIdentifier.validNumericIdentifier(result.media_info?.tmdb_id) {
              Logger.info("[APIService] Recognize 识别成功: \(result.media_info?.title ?? ""), TMDB: \(tmdbId)")
              return tmdbId
           }
@@ -1843,7 +1843,7 @@ class APIService: ObservableObject {
         }
       }
 
-      if let tmdbId = result.media_info?.tmdb_id {
+      if let tmdbId = MediaIdentifier.validNumericIdentifier(result.media_info?.tmdb_id) {
         Logger.info("[APIService] Recognize 识别成功: \(result.media_info?.title ?? ""), TMDB: \(tmdbId)")
         return tmdbId
       }
