@@ -245,11 +245,6 @@ private struct CurrentUserResponse: Decodable {
   }
 }
 
-nonisolated struct MediaImageURLConfig: Sendable {
-  let baseURL: String
-  let useImageCache: Bool
-}
-
 nonisolated private func decodingContext(from error: DecodingError) -> DecodingError.Context? {
   switch error {
   case .typeMismatch(_, let context), .valueNotFound(_, let context),
@@ -434,39 +429,6 @@ nonisolated private func decodeStrictActionResponseSync(from data: Data) throws 
     response.success ?? false,
     trimmedNonEmpty([response.message_i18n, response.message])
   )
-}
-
-nonisolated private func posterImageURL(posterPath: String?, config: MediaImageURLConfig) -> URL? {
-  let url = posterPath?.replacingOccurrences(of: "original", with: "w500")
-
-  if let currentUrl = url, currentUrl.contains("doubanio.com") {
-    if currentUrl.contains("movie_default") || currentUrl.contains("tv_default") {
-      return nil
-    }
-  }
-
-  return displayImageURL(url, baseURL: config.baseURL, useImageCache: config.useImageCache)
-}
-
-nonisolated private func backdropImageURL(backdropPath: String?, config: MediaImageURLConfig)
-  -> URL?
-{
-  guard let url = backdropPath, !url.isEmpty else { return nil }
-  return displayImageURL(url, baseURL: config.baseURL, useImageCache: config.useImageCache)
-}
-
-/// 海报原始 URL（不降尺寸），作为降尺寸版本加载失败时的回退来源；
-/// 与 `posterImageURL` 共用豆瓣默认海报拦截规则。
-nonisolated private func posterFallbackImageURL(
-  posterPath: String?,
-  config: MediaImageURLConfig
-) -> URL? {
-  if let url = posterPath, url.contains("doubanio.com") {
-    if url.contains("movie_default") || url.contains("tv_default") {
-      return nil
-    }
-  }
-  return displayImageURL(posterPath, baseURL: config.baseURL, useImageCache: config.useImageCache)
 }
 
 /// 泛型轻量级接口缓存，带过期及淘汰策略
@@ -1417,8 +1379,7 @@ class APIService: ObservableObject {
     let decodeEpoch = session.epoch
     let decoded: T
     if type == MediaInfo.self {
-      let config = currentMediaImageURLConfig()
-      let mappedMedia = try await decodeMediaInfoInBackground(from: data, config: config)
+      let mappedMedia = try await decodeMediaInfoInBackground(from: data)
       guard let mapped = mappedMedia as? T else {
         throw APIError.decodingError(
           DecodingError.typeMismatch(
@@ -1429,8 +1390,7 @@ class APIService: ObservableObject {
       }
       decoded = mapped
     } else if type == [MediaInfo].self {
-      let config = currentMediaImageURLConfig()
-      let mappedMedia = try await decodeMediaInfoArrayInBackground(from: data, config: config)
+      let mappedMedia = try await decodeMediaInfoArrayInBackground(from: data)
       guard let mapped = mappedMedia as? T else {
         throw APIError.decodingError(
           DecodingError.typeMismatch(
@@ -1447,25 +1407,15 @@ class APIService: ObservableObject {
     return decoded
   }
 
-  private func currentMediaImageURLConfig() -> MediaImageURLConfig {
-    MediaImageURLConfig(baseURL: baseURL, useImageCache: useImageCache)
-  }
-
   /// 仅对 MediaInfo 热路径做后台解码，避免主线程解析大 JSON。
-  private func decodeMediaInfoInBackground(from data: Data, config: MediaImageURLConfig)
-    async throws -> MediaInfo
+  private func decodeMediaInfoInBackground(from data: Data) async throws -> MediaInfo
   {
     try await withCheckedThrowingContinuation {
       (continuation: CheckedContinuation<MediaInfo, Error>) in
       DispatchQueue.global(qos: .userInitiated).async {
         do {
           let raw: MediaInfoJSON = try decodeOrUnwrapSync(from: data)
-          let imageURLs = MediaInfo.ImageURLs(
-            poster: posterImageURL(posterPath: raw.poster_path, config: config),
-            posterFallback: posterFallbackImageURL(posterPath: raw.poster_path, config: config),
-            backdrop: backdropImageURL(backdropPath: raw.backdrop_path, config: config)
-          )
-          continuation.resume(returning: MediaInfo(json: raw, precomputedImageURLs: imageURLs))
+          continuation.resume(returning: MediaInfo(json: raw))
         } catch {
           continuation.resume(throwing: error)
         }
@@ -1474,7 +1424,7 @@ class APIService: ObservableObject {
   }
 
   /// 仅对 MediaInfo 列表热路径做后台解码，缓解分页加载时的主线程压力。
-  private func decodeMediaInfoArrayInBackground(from data: Data, config: MediaImageURLConfig)
+  private func decodeMediaInfoArrayInBackground(from data: Data)
     async throws -> [MediaInfo]
   {
     try await withCheckedThrowingContinuation {
@@ -1482,14 +1432,7 @@ class APIService: ObservableObject {
       DispatchQueue.global(qos: .userInitiated).async {
         do {
           let raw: [MediaInfoJSON] = try decodeOrUnwrapSync(from: data)
-          let mapped = raw.map { item -> MediaInfo in
-            let imageURLs = MediaInfo.ImageURLs(
-              poster: posterImageURL(posterPath: item.poster_path, config: config),
-              posterFallback: posterFallbackImageURL(posterPath: item.poster_path, config: config),
-              backdrop: backdropImageURL(backdropPath: item.backdrop_path, config: config)
-            )
-            return MediaInfo(json: item, precomputedImageURLs: imageURLs)
-          }
+          let mapped = raw.map { MediaInfo(json: $0) }
           continuation.resume(returning: mapped)
         } catch {
           continuation.resume(throwing: error)

@@ -116,10 +116,10 @@
 | F-100 | 已修复（`0cfeb12`） | P1 | A001-J→V012-A→G02 | 订阅状态同键请求与详情/预加载调用链 | 同键旧normal/force曾可覆盖较新强刷并反转菜单add/cancel判断 | `0cfeb12`已为每个规范化key绑定request revision/owner，旧响应不能覆盖较新的force结果或缓存；乱序回归测试通过 | 已按原最小方向完成，不再开放 | 修复已完成；真实网络触发频率不影响闭合结论 |
 | F-101 | 已确认 | P3 | A001-H→V011-C | `APIService.streamSSE` 与 Search 等消费者 | SSE 逐物理行解码，未按事件边界组帧并合并多条 data | review_a001_h 核对生产解析器、兼容探针、Search fallback 及全部单行桩 | verify_a001_h 用独立 Foundation/JSON 探针确认逐行失败、换行拼接成功，且现有 fixture 全为单行 | TV framing 缺口已确认；当前后端单行/heartbeat/Content-Type 契约未验证 |
 | F-102 | 未验证 | P3 | A001-H→G05/G09 | `APIService.swift:1813-1814`、`decodeAiRedoResponse:1611-1614` | opaque progress_key 未按单一路径段编码 | 静态构造可被特殊字符改写；G05与G09复核均确认当前后端生成值只含字母、数字和下划线 | 保留path-segment编码硬化建议；先固定合同/部署fixture | 当前本地生产者路径安全；外部生产者、部署版本与opaque合同未验证 |
-| F-103 | 已确认 | P2 | A001-H→I012 | 资源标题与媒体ID意图 | 标题与媒体ID共用keyword并由宽正则猜路由；Search stream标题失败后fallback可把同一输入改成ID搜索 | 既有双审确认路由猜测；I012提出fallback漂移，review_a001_j以现有标题测试第三裁升级P2 | 入口冻结title/media-ID intent，Search fallback只走title路径 | TV稳定搜索语义漂移已确认；后端真实结果差异未验证 |
-| F-104 | 已确认 | P2 | A001-I | `APIService.swift:1885,1897,1912,1938-1943`，A001-D Douban recommendations `1431` | 动态媒体或人物不透明 ID 未编码为单一路径段 | review_a001_i 闭合保留字符经 URL 构造改写 path/query/fragment 与详情/人物调用链 | review_a001_h 独立确认模型允许不透明 String、同文件已有整段编码惯例，并收窄相邻传播范围 | TV 路径构造缺口已确认、严重度条件性；上游 ID 字符集及后端 percent-decoding 未验证 |
-| F-105 | 已确认 | P3 | A001-K | `APIService.swift:166-200,2519-2552,2596-2600,2618-2647` | 相对路径及带空白图片值未规范化为可请求的绝对 URL | review_a001_j 对照生产 displayImageURL 与兼容 oracle，并追到媒体/订阅/下载/人物卡片 | verify_a001_h 用独立 Foundation 探针确认相对 URL 保持无 host、空白绝对 URL 为 nil，并收窄 oracle 身份 | TV 图片 URL 规范化缺口已确认；当前 Web/后端 origin 契约与真实频率未验证 |
-| F-106 | 已确认 | P2 | A001-K→I003/I016/G01 | settings事务与预计算图片URL配置生命周期 | A public settings可与B user settings混合、旧请求/吞取消可发布到新会话；既有模型又长期固化旧baseURL/缓存/TMDB域 | I003双审确认P2；I016出现P1/P2分歧后，G01第三裁按无敏感设置消费边界最终维持P2 | settings每阶段绑定epoch并传播取消；会话变化清旧共享配置，生产图片包装按访问消费获胜值 | TV配置/session生命周期缺口已确认；等级已裁定P2 |
+| F-103 | 用户决定跳过 | P2 | A001-H→I012 | 资源标题与媒体ID意图 | 标题与媒体ID共用keyword并由宽正则猜路由；Search stream标题失败后fallback可把同一输入改成ID搜索 | 既有双审确认路由猜测；I012提出fallback漂移，review_a001_j以现有标题测试第三裁升级P2 | 入口冻结title/media-ID intent，Search fallback只走title路径 | TV稳定搜索语义漂移已确认；后端真实结果差异未验证 |
+| F-104 | 用户决定跳过 | P2 | A001-I | `APIService.swift:1885,1897,1912,1938-1943`，A001-D Douban recommendations `1431` | 动态媒体或人物不透明 ID 未编码为单一路径段 | review_a001_i 闭合保留字符经 URL 构造改写 path/query/fragment 与详情/人物调用链 | review_a001_h 独立确认模型允许不透明 String、同文件已有整段编码惯例，并收窄相邻传播范围 | TV 路径构造缺口已确认、严重度条件性；上游 ID 字符集及后端 percent-decoding 未验证 |
+| F-105 | 用户决定跳过 | P3 | A001-K | `APIService.swift:166-200,2519-2552,2596-2600,2618-2647` | 相对路径及带空白图片值未规范化为可请求的绝对 URL | review_a001_j 对照生产 displayImageURL 与兼容 oracle，并追到媒体/订阅/下载/人物卡片 | verify_a001_h 用独立 Foundation 探针确认相对 URL 保持无 host、空白绝对 URL 为 nil，并收窄 oracle 身份 | TV 图片 URL 规范化缺口已确认；当前 Web/后端 origin 契约与真实频率未验证 |
+| F-106 | 已修复 | P2 | A001-K→I003/I016/G01 | settings事务与预计算图片URL配置生命周期 | A public settings可与B user settings混合、旧请求/吞取消可发布到新会话；既有模型又长期固化旧baseURL/缓存/TMDB域 | I003双审确认P2；I016出现P1/P2分歧后，G01第三裁按无敏感设置消费边界最终维持P2 | settings每阶段绑定epoch并传播取消；会话变化清旧共享配置，生产图片包装按访问消费获胜值 | TV配置/session生命周期缺口已确认；等级已裁定P2 |
 | F-107 | 已确认（原 P1 主触发已修复；用户决定跳过剩余项） | P2 | V001→R001/R002/W020-C→G08 | 根登录转换与跨会话通知owner | 原“登录失败后成功仍残留旧banner”已修复；剩余仅旧业务任务在会话切换后晚到调用`show()`，可把A的失败提示显示到B | `90b40b4`已让manager监听会话UI身份、同步发布并在身份切换时清banner/计时；现有测试覆盖先show再切号，未覆盖切号后旧调用者晚到show | 不再修改；若以后处理，应只在异步业务调用者发布通知前校验既有operation/session owner | 剩余影响为短暂错误提示、无错误mutation，降为P2；用户决定跳过 |
 | F-108 | 未验证 | P3 | V001 | `NotificationManager.swift:44-60`、根 presenter 与 Sheet 异步失败链 | 通知可能在独立 Sheet 下不可见却照常计时并过期 | review_a001_j 闭合 SubscribeSeason/Transfer 异步失败、根 presenter 与错误清空链 | verify_a001_h 确认静态触发链，但无法静态证明 tvOS Sheet 必然遮挡根 overlay | 条件性 TV 呈现问题；模态层级、焦点与五秒可见窗口待运行验证 |
 | F-109 | 已确认 | P2 | V002-A/B→W020-A/D/G06 | profile偏好作用域与权威配置owner | 四类tuple key可碰撞；token-only/凭据轮换还会落入错误bucket，推荐开关又绕过当前per-user权威配置 | 既有多审闭合碰撞与推荐合同；G06 两票确认key读取使用凭据用户名而非currentUser且baseURL未规范化 | canonical baseURL+权威currentUser组成版本化tuple；异步操作冻结同一key | 跨profile污染机制已确认；真实多profile频率与远端最新性未验证 |
@@ -1815,7 +1815,7 @@
 
 ### F-103：资源标题与媒体 ID 由宽正则猜路由
 
-- 状态：已确认
+- 状态：用户决定跳过
 - 严重度：P2；由 P3 升级
 - 位置：`MoviePilot-TV/Models/Models.swift:2799-2801`、`MoviePilot-TV/Services/APIService.swift:1828-1847`、`ResourceResultViewModel` 与 `MediaActionHandler` builder
 - 触发路径：标题以字母加冒号开头（如 `Re:Zero`），或媒体缺少 `apiMediaId` 但仍进入资源搜索。
@@ -1831,7 +1831,7 @@
 
 ### F-104：动态媒体或人物 ID 未编码为单一路径段
 
-- 状态：已确认
+- 状态：用户决定跳过
 - 严重度：条件性 P2
 - 位置：`MoviePilot-TV/Services/APIService.swift:1885,1897,1912,1938-1943`，A001-D Douban `fetchMediaRecommendations:1431`；对照既有路径段编码辅助 `120-124,1793-1798,1832-1837`
 - 触发路径：完整媒体键、人物 `raw_id` 或 Douban 辅助 ID 含 `/`、`?`、`#`、`%` 等保留字符。
@@ -1846,7 +1846,7 @@
 
 ### F-105：相对图片值未规范化为绝对 URL
 
-- 状态：已确认
+- 状态：用户决定跳过
 - 严重度：P3
 - 位置：`MoviePilot-TV/Services/APIService.swift:166-200,2519-2552,2596-2600,2618-2647`
 - 触发路径：海报、背景、订阅分享或人物字段返回 `/api/...`、`images/...`，或绝对 URL 前后带空白。
@@ -1860,7 +1860,7 @@
 
 ### F-106：预计算图片 URL 固化旧配置
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P2；由 P3 升级
 - 位置：`MoviePilot-TV/Services/APIService.swift:2519-2647`、`Models.swift` 的主要图片包装、`ContentView.swift:10-89`、`ContentViewModel.swift:112-147`
 - 触发路径：冷启动内容请求早于 `fetchSettings()` 完成；回前台刷新改变 `GLOBAL_IMAGE_CACHE` 或 `TMDB_IMAGE_DOMAIN` 后，同一会话页面继续持有旧模型。
@@ -1873,6 +1873,7 @@
 - I003集成与定向复核：verify_a001_h主审、review_a001_h独立确认`fetchSettings()`的public/user两阶段没有冻结会话：A public后可读取B token并请求B user配置，旧A user结果又可发布到B；内层catch还会吞取消后发布public设置。事后ViewModel guard挡不住`APIService.settings`先写，故合并同一配置生命周期并升级P2；每个await/发布绑定epoch，取消单独传播。
 - I016等级冲突与第三裁：review_a001_h受限整文件集成再次确认A public+B user混合、共享settings无guard及B失败继续留A配置，并按跨服务器图片/识别等全局配置污染建议P1；verify_a001_h独立确认机制，但未发现已消费的敏感settings字段，按默认识别源、AI开关和图片域影响维持P2。rounda_g01_recheck第三裁再次闭合两段读取/统一snapshot缺口，确认独立finding但不把配置错配扩大为敏感数据泄露，最终维持P2并复用F-130的session机制。
 - 剩余未验证：真实启动命中率、各页面旧模型存活时长、tvOS 17 强制禁用缓存表现；切服后旧视图树是否仍渲染只列未验证。
+- 修复记录：MediaInfo/DownloadingMediaInfo/MediaServerPlayItem/Subscribe 的预计算 `let imageURLs` 改为 `@MainActor` 按访问计算（复用 TmdbSeason/Person 模式），init 不再访问 APIService；后台 MediaInfo 解码路径删除预计算与 `MediaImageURLConfig`/三个私有 helper；按工程 `SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor` 补齐 `nonisolated struct`（MediaInfo/DownloadingMediaInfo/Subscribe，Subscribe.addRequest 同步标 `@MainActor`；MediaServerPlayItem 因成员 FlexibleString/FlexibleBool 的 Equatable conformance 为主 actor 隔离且解码本在主线程，保留默认隔离）；tvOS Simulator clean build 通过、无隔离诊断，全量测试 602 用例 16 skipped 2 failures（均为已知 SSE 时序失败），两轮子代理独立审查验收通过。
 
 ### F-107：根登录转换的错误通知 owner 失配
 

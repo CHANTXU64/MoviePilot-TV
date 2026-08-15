@@ -663,7 +663,7 @@ nonisolated struct MediaInfoJSON: Decodable {
   }
 }
 
-struct MediaInfo: Codable, Identifiable, Hashable {
+nonisolated struct MediaInfo: Codable, Identifiable, Hashable {
   struct ImageURLs: Hashable {
     let poster: URL?
     /// 降尺寸海报加载失败时回退的原始海报 URL。
@@ -752,8 +752,14 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   /// 标识当前媒体项是否为合集/系列
   let isCollection: Bool
 
-  /// 预计算的图片 URL
-  let imageURLs: ImageURLs
+  /// 图片 URL 在主线程按当前图片设置计算，避免后台 JSON 解码访问主线程 APIService。
+  @MainActor var imageURLs: ImageURLs {
+    ImageURLs(
+      poster: APIService.shared.getPosterImageUrl(posterPath: poster_path),
+      posterFallback: APIService.shared.getPosterImageUrlOriginal(posterPath: poster_path),
+      backdrop: APIService.shared.getBackdropImageUrl(backdropPath: backdrop_path)
+    )
+  }
 
   /// 预编译的合集后缀正则表达式，避免重复创建提升性能
   nonisolated private static let collectionSuffixRegex = try? NSRegularExpression(
@@ -852,13 +858,6 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     self.cleanedOriginalTitle = cleaned.originalTitle
     self.cleanedOriginalName = cleaned.originalName
     self.cleanedNames = cleaned.names
-
-    // 计算图片 URL
-    self.imageURLs = ImageURLs(
-      poster: APIService.shared.getPosterImageUrl(posterPath: poster_path),
-      posterFallback: APIService.shared.getPosterImageUrlOriginal(posterPath: poster_path),
-      backdrop: APIService.shared.getBackdropImageUrl(backdropPath: backdrop_path)
-    )
   }
 
   init(json: MediaInfoJSON) {
@@ -898,62 +897,6 @@ struct MediaInfo: Codable, Identifiable, Hashable {
       subscribeShare: json.subscribeShare,
       rawPayload: json.rawPayload
     )
-  }
-
-  nonisolated init(json: MediaInfoJSON, precomputedImageURLs: ImageURLs) {
-    self.tmdb_id = json.tmdb_id
-    self.douban_id = json.douban_id
-    self.bangumi_id = json.bangumi_id
-    self.anilist_id = json.anilist_id
-    self.imdb_id = json.imdb_id
-    self.tvdb_id = json.tvdb_id
-    self.source = json.source
-    self.mediaid_prefix = json.mediaid_prefix
-    self.media_id = json.media_id
-    self.title = json.title
-    self.original_title = json.original_title
-    self.original_name = json.original_name
-    self.names = json.names
-    self.type = json.type
-    self.year = json.year
-    self.season = json.season
-    self.poster_path = json.poster_path
-    self.backdrop_path = json.backdrop_path
-    self.overview = json.overview
-    self.vote_average = json.vote_average
-    self.popularity = json.popularity
-    self.season_info = json.season_info
-    self.collection_id = json.collection_id
-    self.directors = json.directors
-    self.actors = json.actors
-    self.episode_group = json.episode_group
-    self.runtime = json.runtime
-    self.release_date = json.release_date
-    self.original_language = json.original_language
-    self.production_countries = json.production_countries
-    self.genres = json.genres
-    self.category = json.category
-    self.subscribeShare = json.subscribeShare
-    self.rawPayload = json.rawPayload
-
-    self.id = Self.generateUniqueKey(
-      source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
-      tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id,
-      anilist_id: anilist_id, mediaid_prefix: mediaid_prefix, media_id: media_id,
-      title: title,
-      subscribeShare: subscribeShare)
-
-    self.isCollection = Self.checkIsCollection(type: type, collection_id: collection_id)
-
-    let cleaned = Self.parseCleanedNames(
-      isCollection: self.isCollection, title: title,
-      original_title: original_title, original_name: original_name, names: names)
-    self.cleanedTitle = cleaned.title
-    self.cleanedOriginalTitle = cleaned.originalTitle
-    self.cleanedOriginalName = cleaned.originalName
-    self.cleanedNames = cleaned.names
-
-    self.imageURLs = precomputedImageURLs
   }
 
   init(from decoder: Decoder) throws {
@@ -1011,13 +954,6 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     self.cleanedOriginalTitle = cleaned.originalTitle
     self.cleanedOriginalName = cleaned.originalName
     self.cleanedNames = cleaned.names
-
-    // 计算图片 URL
-    self.imageURLs = ImageURLs(
-      poster: APIService.shared.getPosterImageUrl(posterPath: poster_path),
-      posterFallback: APIService.shared.getPosterImageUrlOriginal(posterPath: poster_path),
-      backdrop: APIService.shared.getBackdropImageUrl(backdropPath: backdrop_path)
-    )
   }
 
   func encode(to encoder: Encoder) throws {
@@ -1253,7 +1189,7 @@ struct DownloaderConf: Codable {
 }
 
 /// 下载任务中关联的轻量级媒体信息
-struct DownloadingMediaInfo: Codable, Equatable {
+nonisolated struct DownloadingMediaInfo: Codable, Equatable {
   struct ImageURLs: Hashable {
     let image: URL?
   }
@@ -1263,8 +1199,10 @@ struct DownloadingMediaInfo: Codable, Equatable {
   let episode: String?
   let season: String?
 
-  /// 预计算的图片 URL
-  let imageURLs: ImageURLs
+  /// 图片 URL 在主线程按当前图片设置计算，避免后台 JSON 解码访问主线程 APIService。
+  @MainActor var imageURLs: ImageURLs {
+    ImageURLs(image: APIService.shared.getBackdropImageUrl(backdropPath: image))
+  }
 
   enum CodingKeys: String, CodingKey {
     case image, title, episode, season
@@ -1277,8 +1215,6 @@ struct DownloadingMediaInfo: Codable, Equatable {
     episode = try container.decodeIfPresent(String.self, forKey: .episode)
     season = try container.decodeIfPresent(String.self, forKey: .season)
 
-    // 计算图片 URL
-    self.imageURLs = ImageURLs(image: APIService.shared.getBackdropImageUrl(backdropPath: image))
   }
 }
 
@@ -1656,8 +1592,12 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
   /// 媒体服务器类型
   let server_type: MediaServerType?
 
-  /// 预计算的图片 URL
-  let imageURLs: ImageURLs
+  /// 图片 URL 在主线程按当前图片设置计算，避免后台 JSON 解码访问主线程 APIService。
+  @MainActor var imageURLs: ImageURLs {
+    ImageURLs(
+      image: APIService.shared.getMediaServerPosterImageURL(
+        image: image, useCookies: use_cookies?.value))
+  }
 
   enum CodingKeys: String, CodingKey {
     case raw_id = "id"
@@ -1712,11 +1652,6 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
       link: link,
       serverType: server_type
     )
-
-    // 计算图片 URL
-    self.imageURLs = ImageURLs(
-      image: APIService.shared.getMediaServerPosterImageURL(
-        image: image, useCookies: use_cookies?.value))
   }
 
   /// 供手动构造使用的 init (常用于 Preview 或 Mock)
@@ -1736,11 +1671,6 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
     self.link = link
     self.use_cookies = use_cookies
     self.server_type = server_type
-
-    // 计算图片 URL
-    self.imageURLs = ImageURLs(
-      image: APIService.shared.getMediaServerPosterImageURL(
-        image: image, useCookies: use_cookies?.value))
   }
 }
 
@@ -1835,7 +1765,7 @@ struct SubscribeRequest: Codable {
 }
 
 /// 订阅详细配置数据
-struct Subscribe: Codable, Identifiable, Hashable {
+nonisolated struct Subscribe: Codable, Identifiable, Hashable {
   struct ImageURLs: Hashable {
     let poster: URL?
   }
@@ -1930,8 +1860,10 @@ struct Subscribe: Codable, Identifiable, Hashable {
   /// 洗版订阅的剧集优先级状态，保存原详情时需要原样保留。
   var episode_priority: [String: Int]?
 
-  /// 预计算的图片 URL
-  let imageURLs: ImageURLs
+  /// 图片 URL 在主线程按当前图片设置计算，避免后台 JSON 解码访问主线程 APIService。
+  @MainActor var imageURLs: ImageURLs {
+    ImageURLs(poster: APIService.shared.getSubscribePosterImageUrl(poster: poster))
+  }
 
   enum CodingKeys: String, CodingKey {
     case id, name, year, type, keyword, season, poster, backdrop, state, last_update,
@@ -1996,8 +1928,6 @@ struct Subscribe: Codable, Identifiable, Hashable {
     mediaid = try container.decodeIfPresent(String.self, forKey: .mediaid)
     episode_priority = try container.decodeIfPresent([String: Int].self, forKey: .episode_priority)
 
-    // 计算图片 URL
-    self.imageURLs = ImageURLs(poster: APIService.shared.getSubscribePosterImageUrl(poster: poster))
   }
 
   func encode(to encoder: Encoder) throws {
@@ -2115,8 +2045,6 @@ struct Subscribe: Codable, Identifiable, Hashable {
     self.mediaid = mediaid
     self.episode_priority = episode_priority
 
-    // 计算图片 URL
-    self.imageURLs = ImageURLs(poster: APIService.shared.getSubscribePosterImageUrl(poster: poster))
   }
 
   /// 解析订阅记录的主媒体身份，严格遵循 Web 订阅卡片的来源优先级。
@@ -2140,7 +2068,7 @@ struct Subscribe: Codable, Identifiable, Hashable {
   }
 
   /// 生成新增订阅请求，完整保留当前订阅的来源身份与洗版设置。
-  var addRequest: SubscribeRequest {
+  @MainActor var addRequest: SubscribeRequest {
     SubscribeRequest(
       name: name,
       type: type,
