@@ -103,30 +103,43 @@ class HomeViewModel: ObservableObject {
       let enabledServers = servers.filter { $0.enabled?.value ?? false }
 
       // 2. 使用 TaskGroup 并发获取已启用服务器的“最近新增/播放”列表
-      let latestByServer = await withTaskGroup(of: (String, [MediaServerPlayItem]).self) { group in
+      // 失败/取消返回 nil：只有成功结果（含成功空）才覆盖对应服务器快照，
+      // 失败/取消保留上一轮快照，避免轮询抖动把旧卡片误清空。
+      let latestByServer = await withTaskGroup(of: (String, [MediaServerPlayItem]?).self) {
+        group in
         for server in enabledServers {
           group.addTask {
             do {
               let items = try await self.apiService.fetchMediaServerLatest(server: server.name)
-              return (server.name, items)
+              return (server.name, items as [MediaServerPlayItem]?)
+            } catch is CancellationError {
+              return (server.name, nil)
             } catch {
               print("加载服务器 \(server.name) 最新媒体失败: \(error)")
-              return (server.name, [])
+              return (server.name, nil)
             }
           }
         }
 
-        // 收集各服务器结果
+        // 收集各服务器结果，仅保留成功项
         var byServer: [String: [MediaServerPlayItem]] = [:]
         for await (serverName, items) in group {
-          byServer[serverName] = items
+          if let items {
+            byServer[serverName] = items
+          }
         }
         return byServer
       }
       guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
 
       // 3. 更新筛选器和当前展示列表
-      self.latestMediaByServer = latestByServer
+      // 失败/取消的服务器保留上一轮快照；停用服务器随新列表移除。
+      let enabledServerNames = Set(enabledServers.map(\.name))
+      var nextByServer = latestMediaByServer.filter { enabledServerNames.contains($0.key) }
+      for (serverName, items) in latestByServer {
+        nextByServer[serverName] = items
+      }
+      self.latestMediaByServer = nextByServer
       let newServerNames = enabledServers.map(\.name)
       if self.latestMediaServers != newServerNames {
         self.latestMediaServers = newServerNames
