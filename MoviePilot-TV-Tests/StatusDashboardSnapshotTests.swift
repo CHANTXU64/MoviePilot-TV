@@ -16,19 +16,33 @@ final class StatusDashboardSnapshotTests: XCTestCase {
     super.tearDown()
   }
 
-  private func makeService() -> APIService {
+  private func makeService(superUser: Bool = true) -> APIService {
     let service = APIService.isolatedTestingInstance()
     service.baseURLForTesting = "https://status-dashboard-tests.local"
-    service.tokenForTesting = "dashboard-token"
+    service.tokenForTesting = superUser ? "dashboard-token" : "manage-token"
     service.currentUserForTesting = Token(
-      access_token: "dashboard-token",
+      access_token: service.tokenForTesting ?? "",
       token_type: "bearer",
-      super_user: FlexibleBool(true),
-      permissions: nil,
-      user_name: "dashboard-admin",
+      super_user: FlexibleBool(superUser),
+      permissions: superUser ? nil : [UserPermissionKey.manage.rawValue: true],
+      user_name: superUser ? "dashboard-admin" : "dashboard-manager",
       avatar: nil
     )
     return service
+  }
+
+  func testManageOnlyHidesDashboardAndDoesNotRequest() async {
+    let service = makeService(superUser: false)
+    let viewModel = StatusViewModel(apiService: service)
+
+    XCTAssertFalse(viewModel.canRequestSuperUserEndpoints)
+    await viewModel.refreshAllData()
+
+    // manage-only 不请求任何 Dashboard 数据，三项保持空，View 侧整组隐藏。
+    XCTAssertNil(viewModel.statistic)
+    XCTAssertNil(viewModel.storage)
+    XCTAssertNil(viewModel.downloader)
+    XCTAssertTrue(StatusDashboardURLProtocol.stub.requestPaths().isEmpty)
   }
 
   func testPartialFailureKeepsPreviousCompleteSnapshot() async throws {
