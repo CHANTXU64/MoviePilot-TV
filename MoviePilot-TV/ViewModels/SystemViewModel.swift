@@ -59,6 +59,8 @@ class SystemViewModel: ObservableObject {
   // MARK: - 站点设置
   @Published var availableSites: [Site] = []
   @Published var isLoadingSites: Bool = false
+  @Published private(set) var hasLoadedSites: Bool = false
+  @Published private(set) var siteLoadError: String?
 
   /// 默认搜索站点（绑定服务器 + 稳定用户 ID）
   var defaultSearchSites: Set<Int> {
@@ -286,22 +288,25 @@ class SystemViewModel: ObservableObject {
   func loadSites() async {
     guard apiService.canAccess(.search) else {
       availableSites = []
+      siteLoadError = nil
       return
     }
     guard !isLoadingSites else { return }
     isLoadingSites = true
+    siteLoadError = nil
     defer {
       isLoadingSites = false
     }
     do {
       let sites = try await apiService.fetchSites()
       availableSites = sites
+      hasLoadedSites = true
       defaultSearchSites = defaultSearchSites
       print("✅ [SystemViewModel] 加载到 \(availableSites.count) 个站点")
     } catch is CancellationError {
-      availableSites = []
       return
     } catch {
+      siteLoadError = "站点加载失败，请重试"
       print("❌ [SystemViewModel] 加载站点失败: \(error)")
     }
   }
@@ -434,7 +439,7 @@ class SystemViewModel: ObservableObject {
   }
 
   private func normalizeDefaultSearchSites(_ sites: Set<Int>) -> Set<Int> {
-    guard !availableSites.isEmpty else { return sites }
+    guard hasLoadedSites else { return sites }
 
     let availableSiteIds = Set(availableSites.map(\.id))
     return sites.intersection(availableSiteIds)

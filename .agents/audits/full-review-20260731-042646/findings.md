@@ -125,7 +125,7 @@
 | F-109 | 已修复（`90b40b4`） | P2 | V002-A/B→W020-A/D/G06 | profile偏好作用域与权威配置owner | 四类tuple key可碰撞；token-only/凭据轮换还会落入错误bucket，推荐开关又绕过当前per-user权威配置 | 既有多审闭合碰撞与推荐合同；G06 两票确认key读取使用凭据用户名而非currentUser且baseURL未规范化 | canonical baseURL+权威currentUser组成版本化tuple；异步操作冻结同一key | 跨profile污染机制已确认；真实多profile频率与远端最新性未验证 |
 | F-110 | 已修复 | P2 | S005→C018-B/W011→G05 | `TorrentsResultView.swift:267,283-285,329-343,374-395` | 默认排序选择升序仍固定按pri_order降序 | 既有多审确认；G05主审与独立复核均再次闭合可选asc与固定desc的稳定反例并支持P2 | 比较器遵循方向，或隐藏默认字段方向控件；不与F-061合并 | 纯TV内部控制/比较器契约冲突 |
 | F-111 | 已修复 | P2 | V002-A/B→W020-A/C→I016 | token-only profile与连接身份 | 无storedUsername的合法会话统一使用default，System连接页也忽略权威currentUser而显示未知/输入凭据用户名 | 既有双审确认机制；I016两代理以受支持token-only双账号隔离链确认升P2 | profile与显示统一使用当前权威会话身份 | 纯TV身份缺陷；真实token-only多账号频率未验证 |
-| F-112 | 已确认 | P2 | V002-C/D→W020-A/D→I016 | 站点权威空/失败/加载状态 | 站点成功空不清旧选择，失败与当前可用数据不可区分；Search/详情还会继续发送旧ID | 既有双审确认机制；I016两代理闭合成功空→旧ID请求链并升P2 | 成功空清选择，失败/取消与空分开并提供最小重试 | 纯TV状态缺陷；真实空站点频率未验证 |
+| F-112 | 已修复 | P2 | V002-C/D→W020-A/D→I016 | 站点权威空/失败/加载状态 | 站点成功空不清旧选择，失败与当前可用数据不可区分；Search/详情还会继续发送旧ID | 既有双审确认机制；I016两代理闭合成功空→旧ID请求链并升P2 | 成功空清选择，失败/取消与空分开并提供最小重试 | 纯TV状态缺陷；真实空站点频率未验证 |
 | F-113 | 已确认 | P2 | V002-D | `SystemViewModel.swift:385-400,444-450` 及资源搜索调用者 | 默认站点异步归一化可跨 profile 写回或返回旧 profile 值 | review_a001_h 闭合 A 读取→await→动态 B key 写回、catch 回退 A 与 B 会话请求传播 | review_a001_j 独立确认成功/错误/取消/撤权、三个调用者与条件性 P2 严重度边界 | 纯 TV 会话归属缺陷已确认、严重度条件性；旧导航可见性与真实频率未运行验证 |
 | F-114 | 已确认 | P3 | V003 | `SearchViewModel.swift:270,658-668`、`MediaDetailViewModel.swift:40,122-133` 及对应 View | 父 ViewModel 未转发 SiteFilter 子对象变化，站点按钮可停留旧文案 | verify_a001_h 闭合两个固定子对象、父 View 观察关系及 Paginator 已桥接反证 | review_a001_h 独立确认成功非空即可触发，实际请求读取子对象当前值并收窄为 UI 新鲜度 | 纯 TV SwiftUI 观察缺陷已确认；无关重绘前实际可见时长未运行验证 |
 | F-115 | 已确认 | P2 | V004-A→I005 | MediaPreloader详情ready与阶段屏障 | ready值域判定错误；详情响应已可启动season时仍等待识别和图片，稳定把有订阅权限电视剧的全屏Loading串行延长 | V004双审闭合身份值域；I005集成与不同代理复核闭合`detail response→season`关键路径并升级P2 | 规范ready值；详情响应发布即启动season，图片/识别仅约束真实依赖者 | TV详情ready/主流程阶段屏障已确认；真实延迟分布未验证 |
@@ -1972,7 +1972,7 @@
 
 ### F-112：站点成功空不清旧选择且失败与空态不可区分
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P2（由 P3 升级）
 - 位置：`MoviePilot-TV/ViewModels/SystemViewModel.swift:62-78,291-315,437-442`、`SystemView.swift:105-107,421-426,774-785`，传播到 SiteFilter、Search 与 MediaDetail 的站点按钮和请求链
 - 触发路径：已保存默认站点 `{1}` 后，当前 profile 的 `/site/rss` 权威成功返回空数组；或首次/后续站点加载失败。
@@ -1987,6 +1987,7 @@
 - W020-D传播：review_a001_j主审确认站点设置页自身仍不区分尚未加载、首次失败与成功空，后续失败则无标识继续显示旧列表；页面没有独立重试，只能依赖整个System生命周期重跑。站点集合语义错误另登记F-209/F-210候选，不混入本项。
 - I016最终等级：review_a001_h补足`/site/rss`成功空后System仍显示旧选中数、Search/MediaDetail继续发送旧站点ID；verify_a001_h独立闭合System与SiteFilter两条空成功路径及后续请求，第二票同意P2。失败/旧快照四态继续归F-126，权威域选择仍分别由F-209/F-210约束。
 - 剩余未验证：真实无站点频率、后端接收无效 site ID 的行为及 tvOS 权限变化后的页面重建时序。
+- 修复记录：`SystemViewModel` 增加 `hasLoadedSites` 与 `siteLoadError`：只有成功响应才按权威 ID 集归一化，成功空也清除旧默认站点；加载失败保留旧列表并给出错误状态行，站点设置页提供点击重试；取消不再清空旧列表。`SiteFilterViewModel` 同步按成功空清除 `selectedSites`（Search/详情不再发送旧站点 ID），未加载完成前的写入不被误清。已补成功空清选择、失败保留+错误、未加载写入保留、SiteFilter 成功空清选择四条回归测试。
 
 ### F-113：默认站点异步归一化跨 profile 写回或返回旧值
 

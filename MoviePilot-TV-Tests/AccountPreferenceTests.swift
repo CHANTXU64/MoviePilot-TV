@@ -92,4 +92,151 @@ extension SystemSessionBehaviorTests {
     XCTAssertEqual(UserDefaults.standard.string(forKey: stableKey), "Emby-A")
     XCTAssertNil(UserDefaults.standard.object(forKey: legacyKey))
   }
+
+  func testSystemViewModelSiteLoadSuccessEmptyClearsStaleDefaultSites() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SiteListURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SiteListURLProtocol.self) }
+
+    SiteListURLProtocol.reset()
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { snapshot.restore(to: sharedService) }
+    let service = APIService.isolatedTestingInstance()
+    let account = sessionToken(userId: 11, accessToken: "site-user", userName: "site-user")
+    service.replaceSessionForTesting(
+      baseURL: "http://site-load-state.local",
+      token: account.access_token,
+      currentUser: account
+    )
+    let preferenceKey = "defaultSearchSites_\(service.profileKey!)"
+    let oldValue = UserDefaults.standard.array(forKey: preferenceKey)
+    defer { restoreUserDefaultsArray(oldValue, forKey: preferenceKey) }
+
+    let viewModel = SystemViewModel(apiService: service)
+    viewModel.defaultSearchSites = [1]
+    XCTAssertEqual(viewModel.defaultSearchSites, [1])
+
+    SiteListURLProtocol.sitesJSON = "[]"
+    await viewModel.loadSites()
+
+    XCTAssertTrue(viewModel.availableSites.isEmpty)
+    XCTAssertTrue(viewModel.defaultSearchSites.isEmpty)
+    XCTAssertNil(viewModel.siteLoadError)
+  }
+
+  func testSystemViewModelSiteLoadFailureKeepsSelectionAndReportsError() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SiteListURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SiteListURLProtocol.self) }
+
+    SiteListURLProtocol.reset()
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { snapshot.restore(to: sharedService) }
+    let service = APIService.isolatedTestingInstance()
+    let account = sessionToken(userId: 11, accessToken: "site-user", userName: "site-user")
+    service.replaceSessionForTesting(
+      baseURL: "http://site-load-state.local",
+      token: account.access_token,
+      currentUser: account
+    )
+    let preferenceKey = "defaultSearchSites_\(service.profileKey!)"
+    let oldValue = UserDefaults.standard.array(forKey: preferenceKey)
+    defer { restoreUserDefaultsArray(oldValue, forKey: preferenceKey) }
+
+    SiteListURLProtocol.sitesJSON =
+      #"[{"id":1,"name":"站点A","domain":null,"url":null,"downloader":null,"is_active":true}]"#
+    let viewModel = SystemViewModel(apiService: service)
+    await viewModel.loadSites()
+    XCTAssertEqual(viewModel.availableSites.map(\.id), [1])
+    viewModel.defaultSearchSites = [1]
+
+    SiteListURLProtocol.loadError = URLError(.badServerResponse)
+    await viewModel.loadSites()
+
+    XCTAssertEqual(viewModel.availableSites.map(\.id), [1])
+    XCTAssertEqual(viewModel.defaultSearchSites, [1])
+    XCTAssertNotNil(viewModel.siteLoadError)
+  }
+
+  func testSystemViewModelPreferenceWriteBeforeSiteLoadKeepsSelection() {
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { snapshot.restore(to: sharedService) }
+    let service = APIService.isolatedTestingInstance()
+    let account = sessionToken(userId: 11, accessToken: "site-user", userName: "site-user")
+    service.replaceSessionForTesting(
+      baseURL: "http://site-load-state.local",
+      token: account.access_token,
+      currentUser: account
+    )
+    let preferenceKey = "defaultSearchSites_\(service.profileKey!)"
+    let oldValue = UserDefaults.standard.array(forKey: preferenceKey)
+    defer { restoreUserDefaultsArray(oldValue, forKey: preferenceKey) }
+
+    let viewModel = SystemViewModel(apiService: service)
+    viewModel.defaultSearchSites = [1, 999]
+
+    XCTAssertEqual(viewModel.defaultSearchSites, [1, 999])
+  }
+
+  func testSiteFilterViewModelSiteLoadSuccessEmptyClearsStaleSelection() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SiteListURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SiteListURLProtocol.self) }
+
+    SiteListURLProtocol.reset()
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { snapshot.restore(to: sharedService) }
+    let service = APIService.isolatedTestingInstance()
+    let account = sessionToken(userId: 11, accessToken: "site-user", userName: "site-user")
+    service.replaceSessionForTesting(
+      baseURL: "http://site-load-state.local",
+      token: account.access_token,
+      currentUser: account
+    )
+
+    let viewModel = SiteFilterViewModel(apiService: service)
+    viewModel.selectedSites = [1]
+    SiteListURLProtocol.sitesJSON = "[]"
+    await viewModel.loadSites()
+
+    XCTAssertTrue(viewModel.availableSites.isEmpty)
+    XCTAssertTrue(viewModel.selectedSites.isEmpty)
+  }
+}
+
+private final class SiteListURLProtocol: URLProtocol {
+  nonisolated(unsafe) static var sitesJSON: String = "[]"
+  nonisolated(unsafe) static var loadError: Error?
+
+  static func reset() {
+    sitesJSON = "[]"
+    loadError = nil
+  }
+
+  override class func canInit(with request: URLRequest) -> Bool {
+    request.url?.path == "/api/v1/site/rss"
+  }
+
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+    request
+  }
+
+  override func startLoading() {
+    if let loadError = Self.loadError {
+      client?.urlProtocol(self, didFailWithError: loadError)
+      return
+    }
+    let response = HTTPURLResponse(
+      url: request.url!,
+      statusCode: 200,
+      httpVersion: nil,
+      headerFields: ["Content-Type": "application/json"]
+    )!
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    client?.urlProtocol(self, didLoad: Self.sitesJSON.data(using: .utf8)!)
+    client?.urlProtocolDidFinishLoading(self)
+  }
+
+  override func stopLoading() {}
 }

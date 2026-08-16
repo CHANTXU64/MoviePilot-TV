@@ -510,6 +510,13 @@ struct SystemView: View {
       if viewModel.isLoadingSites {
         row("站点状态", value: "正在加载")
           .foregroundStyle(.secondary)
+      } else if let siteLoadError = viewModel.siteLoadError {
+        Button {
+          Task { await viewModel.loadSites() }
+        } label: {
+          row("站点状态", value: siteLoadError)
+            .foregroundStyle(.red)
+        }
       } else if viewModel.availableSites.isEmpty {
         row("站点状态", value: "暂无站点")
           .foregroundStyle(.secondary)
