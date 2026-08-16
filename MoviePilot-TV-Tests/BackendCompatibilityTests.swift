@@ -1355,7 +1355,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
           XCTFail("Failed to recognize read-only title sample \(title): \(error)")
         }
 
-        let tmdbID = await service.recognizeTmdbId(title: title)
+        let tmdbID = try await service.recognizeTmdbId(title: title)
         XCTAssertGreaterThanOrEqual(
           tmdbID ?? 0,
           0,

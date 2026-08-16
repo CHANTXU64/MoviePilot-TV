@@ -31,7 +31,7 @@ final class TmdbRecognitionPositiveIDTests: XCTestCase {
     return service
   }
 
-  func testSearchSkipsZeroCandidateAndPicksPositiveCandidate() async {
+  func testSearchSkipsZeroCandidateAndPicksPositiveCandidate() async throws {
     TmdbRecognitionURLProtocol.stub.setSearchResults(
       """
       [
@@ -42,12 +42,12 @@ final class TmdbRecognitionPositiveIDTests: XCTestCase {
     )
 
     let service = makeService()
-    let recognized = await service.recognizeTmdbId(title: "测试电影", year: "2025", type: "电影")
+    let recognized = try await service.recognizeTmdbId(title: "测试电影", year: "2025", type: "电影")
 
     XCTAssertEqual(recognized, 42)
   }
 
-  func testSearchSkipsNegativeCandidateAndPicksPositiveCandidate() async {
+  func testSearchSkipsNegativeCandidateAndPicksPositiveCandidate() async throws {
     TmdbRecognitionURLProtocol.stub.setSearchResults(
       """
       [
@@ -58,33 +58,79 @@ final class TmdbRecognitionPositiveIDTests: XCTestCase {
     )
 
     let service = makeService()
-    let recognized = await service.recognizeTmdbId(title: "测试电影", year: "2025", type: "电影")
+    let recognized = try await service.recognizeTmdbId(title: "测试电影", year: "2025", type: "电影")
 
     XCTAssertEqual(recognized, 42)
   }
 
-  func testRecognizeFallbackZeroResultIsRejected() async {
+  func testRecognizeFallbackZeroResultIsRejected() async throws {
     TmdbRecognitionURLProtocol.stub.setSearchResults("[]")
     TmdbRecognitionURLProtocol.stub.setRecognizeResult(
       #"{"media_info":{"tmdb_id":0,"title":"测试电影","type":"电影"}}"#
     )
 
     let service = makeService()
-    let recognized = await service.recognizeTmdbId(title: "测试电影", year: "2025", type: "电影")
+    let recognized = try await service.recognizeTmdbId(title: "测试电影", year: "2025", type: "电影")
 
     XCTAssertNil(recognized)
   }
 
-  func testRecognizeFallbackPositiveResultIsAccepted() async {
+  func testRecognizeFallbackPositiveResultIsAccepted() async throws {
     TmdbRecognitionURLProtocol.stub.setSearchResults("[]")
     TmdbRecognitionURLProtocol.stub.setRecognizeResult(
       #"{"media_info":{"tmdb_id":42,"title":"测试电影","type":"电影"}}"#
     )
 
     let service = makeService()
-    let recognized = await service.recognizeTmdbId(title: "测试电影", year: "2025", type: "电影")
+    let recognized = try await service.recognizeTmdbId(title: "测试电影", year: "2025", type: "电影")
 
     XCTAssertEqual(recognized, 42)
+  }
+
+  func testSearchFailureThrowsInsteadOfReturningNil() async {
+    TmdbRecognitionURLProtocol.stub.setSearchStatusCode(500)
+    TmdbRecognitionURLProtocol.stub.setRecognizeStatusCode(500)
+
+    let service = makeService()
+
+    do {
+      _ = try await service.recognizeTmdbId(title: "测试电影", year: "2025", type: "电影")
+      XCTFail("搜索与兜底都失败时应抛出错误，而不是伪装 no-match")
+    } catch is CancellationError {
+      XCTFail("不应将后端错误折叠为取消")
+    } catch {
+      // 期望：抛出后端错误
+    }
+  }
+
+  func testSearchFailureThenFallbackSuccessReturnsId() async throws {
+    TmdbRecognitionURLProtocol.stub.setSearchStatusCode(500)
+    TmdbRecognitionURLProtocol.stub.setRecognizeResult(
+      #"{"media_info":{"tmdb_id":42,"title":"测试电影","type":"电影"}}"#
+    )
+
+    let service = makeService()
+    let recognized = try await service.recognizeTmdbId(
+      title: "测试电影",
+      year: "2025",
+      type: "电影"
+    )
+
+    XCTAssertEqual(recognized, 42)
+  }
+
+  func testBothStagesNoMatchStillReturnsNil() async throws {
+    TmdbRecognitionURLProtocol.stub.setSearchResults("[]")
+    TmdbRecognitionURLProtocol.stub.setRecognizeResult(#"{"media_info":null}"#)
+
+    let service = makeService()
+    let recognized = try await service.recognizeTmdbId(
+      title: "测试电影",
+      year: "2025",
+      type: "电影"
+    )
+
+    XCTAssertNil(recognized)
   }
 }
 
@@ -92,12 +138,16 @@ private final class TmdbRecognitionURLProtocolStub: @unchecked Sendable {
   private let lock = NSLock()
   private var searchResults = "[]"
   private var recognizeResult = #"{"media_info":null}"#
+  private var searchStatusCode = 200
+  private var recognizeStatusCode = 200
 
   func reset() {
     lock.lock()
     defer { lock.unlock() }
     searchResults = "[]"
     recognizeResult = #"{"media_info":null}"#
+    searchStatusCode = 200
+    recognizeStatusCode = 200
   }
 
   func setSearchResults(_ json: String) {
@@ -112,6 +162,18 @@ private final class TmdbRecognitionURLProtocolStub: @unchecked Sendable {
     recognizeResult = json
   }
 
+  func setSearchStatusCode(_ statusCode: Int) {
+    lock.lock()
+    defer { lock.unlock() }
+    searchStatusCode = statusCode
+  }
+
+  func setRecognizeStatusCode(_ statusCode: Int) {
+    lock.lock()
+    defer { lock.unlock() }
+    recognizeStatusCode = statusCode
+  }
+
   func searchResultsValue() -> String {
     lock.lock()
     defer { lock.unlock() }
@@ -122,6 +184,18 @@ private final class TmdbRecognitionURLProtocolStub: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     return recognizeResult
+  }
+
+  func searchStatusCodeValue() -> Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return searchStatusCode
+  }
+
+  func recognizeStatusCodeValue() -> Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return recognizeStatusCode
   }
 }
 
@@ -143,9 +217,12 @@ private final class TmdbRecognitionURLProtocol: URLProtocol {
     }
     switch url.path {
     case "/api/v1/media/search":
-      respond(statusCode: 200, body: Self.stub.searchResultsValue())
+      respond(statusCode: Self.stub.searchStatusCodeValue(), body: Self.stub.searchResultsValue())
     case "/api/v1/media/recognize":
-      respond(statusCode: 200, body: Self.stub.recognizeResultValue())
+      respond(
+        statusCode: Self.stub.recognizeStatusCodeValue(),
+        body: Self.stub.recognizeResultValue()
+      )
     default:
       respond(statusCode: 200, body: "[]")
     }

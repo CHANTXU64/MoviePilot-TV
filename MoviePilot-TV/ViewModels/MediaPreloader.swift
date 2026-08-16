@@ -246,7 +246,8 @@ class MediaPreloadTask: ObservableObject {
 
   private func recognizeTmdb() async {
     defer { isTmdbRecognitionFinished = true }
-    let result = await apiService.recognizeTmdbId(
+    // 预加载识别失败/取消静默处理：不弹提示，也不伪装 no-match。
+    let result = try? await apiService.recognizeTmdbId(
       title: partialMedia.title ?? "",
       year: partialMedia.year,
       type: partialMedia.type

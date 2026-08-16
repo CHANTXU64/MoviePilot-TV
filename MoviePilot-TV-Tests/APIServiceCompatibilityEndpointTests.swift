@@ -417,7 +417,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     defer { snapshot.restore(to: service) }
     service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
 
-    let tmdbID = await service.recognizeTmdbId(
+    let tmdbID = try await service.recognizeTmdbId(
       title: "搜索未命中",
       year: "2026",
       type: "电视剧"

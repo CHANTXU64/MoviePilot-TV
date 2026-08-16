@@ -1673,7 +1673,7 @@ class APIService: ObservableObject {
     title: String,
     year: String? = nil,
     type: String? = nil
-  ) async -> Int? {
+  ) async throws -> Int? {
     let snapshot = sessionSnapshot()
     var queryTitle = title.trimmingCharacters(in: .whitespaces)
     let searchYear = year?.trimmingCharacters(in: .whitespaces)
@@ -1705,12 +1705,14 @@ class APIService: ObservableObject {
     guard !queryTitle.isEmpty else { return nil }
 
     // 2. 尝试使用 searchMedia 进行精确搜索
+    // 首段失败不直接返回：暂存错误并继续 fallback，fallback 也无结果时抛出，避免伪装 no-match。
+    var firstStageError: Error?
     do {
       Logger.debug("[APIService] 开始 TMDB 搜索识别: '\(title)' -> 清洗后: '\(queryTitle)'", metadata: ["year": searchYear ?? "n/a", "type": type ?? "n/a"])
       
       // 不传 type，保持与 Web 搜索接口一致；显式锁定 TMDB，避免受后端默认识别源影响。
       let results = try await searchMedia(query: queryTitle, source: .themoviedb)
-      guard isSessionUnchanged(from: snapshot) else { return nil }
+      guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
       let targetTitle = queryTitle.lowercased().trimmingCharacters(in: .whitespaces)
 
       let normalizedTargetType = type.map { normalizeMediaType($0) }
@@ -1776,14 +1778,15 @@ class APIService: ObservableObject {
         }
       }
     } catch is CancellationError {
-      return nil
+      throw CancellationError()
     } catch {
+      firstStageError = error
       Logger.error("[APIService] searchMedia during recognition failed: \(error)")
     }
 
     // 3. Fallback 到 recognizeMedia
     // 适用于包含季、集、制作组信息的原始文件名字符串
-    guard isSessionUnchanged(from: snapshot) else { return nil }
+    guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
     do {
       Logger.debug("[APIService] Search 未命中，尝试 Fallback 到后端 Recognize 接口: \(title)")
       let recognizeQuery =
@@ -1809,9 +1812,12 @@ class APIService: ObservableObject {
         return tmdbId
       }
     } catch is CancellationError {
-      return nil
+      throw CancellationError()
     } catch {
       Logger.error("[APIService] recognizeMedia fallback failed: \(error)")
+      // 两段都失败时抛出首段原始错误（若首段未失败则抛尾段错误），
+      // 让调用方区分"识别失败"与"真正无匹配"。
+      throw firstStageError ?? error
     }
 
     Logger.info("[APIService] 识别失败: \(title)")

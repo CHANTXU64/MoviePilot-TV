@@ -135,7 +135,7 @@
 | F-119 | 用户决定跳过（暂时，待内存优化工作树） | P2 | V004-B→V012-B→G02 | MediaPreloader cache aliases 与订阅回写 | UI key与canonical media ID一对多；保存/取消只更新单task或有限TMDB alias，其他未pin alias可长期显示旧订阅状态 | 既有双审确认机制；G02两名不同复核确认fullDetail/非TMDB alias缺口并升级P2 | 线性扫描小缓存并更新全部已知canonical alias；不建alias registry | 条件性TV状态错误P2；真实alias并存频率未验证 |
 | F-120 | 降级（用户决定跳过） | P2 | V006→V012-B→G10/G09 | 页面/Sheet mutation single-flight owner | 共享busy无target会令B卡片动作被丢弃或被A晚到提示打断；Reorganize预览与提交可交叉，但当前Web同样允许，且本项未证明错目标mutation | 既有双审闭合卡片owner与三个Sheet；后续按当前TV/Web触发与后果重裁 | 不做TV单端增强 | 普通快速网络下窗口较短；主要影响为动作无反馈或迟到UI，降P2并由用户决定跳过 |
 | F-121 | 已修复 | P2 | V006→W015→G02 | `SubscriptionHandler.forkErrorMessage` 与分享 Sheet 呈现链 | 错误不绑定share presentation/operation，A的同步残留或迟到失败可稳定污染B的可恢复操作界面 | 既有多轮裁决闭合同步链；全新G02 clean-room复核确认operation owner缺口并升级P2 | 错误绑定operationID/shareID，新presentation清旧且拒绝迟到发布 | TV跨目标错误归属P2；迟到调度频率未验证 |
-| F-122 | 已确认 | P3 | V005 | `APIService.recognizeTmdbId`、`MediaActionHandler` 及 Home 标题回退 | nullable 结果把最终无匹配、失败与取消统一呈现为未识别 | review_a001_j 闭合两阶段识别、通配 catch、全局弹窗与标题回退继续导航 | review_a001_h 独立确认最终 error/cancel→nil→不存在弹窗，并收窄首段失败但 fallback 成功不算用户缺陷 | 纯 TV 错误语义缺陷已确认；Home 真 no-match 提示产品意图未验证 |
+| F-122 | 已修复 | P3 | V005 | `APIService.recognizeTmdbId`、`MediaActionHandler` 及 Home 标题回退 | nullable 结果把最终无匹配、失败与取消统一呈现为未识别 | review_a001_j 闭合两阶段识别、通配 catch、全局弹窗与标题回退继续导航 | review_a001_h 独立确认最终 error/cancel→nil→不存在弹窗，并收窄首段失败但 fallback 成功不算用户缺陷 | 纯 TV 错误语义缺陷已确认；Home 真 no-match 提示产品意图未验证 |
 | F-123 | 已确认 | P2 | V005 | 高层 TMDB action、两阶段识别、默认站点与最终导航链 | 用户动作未绑定发起 session，后续请求可携 B 凭据发送 A 标题 | review_a001_j 闭合 A search 等待→切 B→B recognize 的确定链及全局状态传播 | review_a001_h 独立确认正常 A 空响应后 B 新请求链、与 F-027/F-113 的修复边界及 ResourceResult 快照过晚 | 条件性跨 profile P2 已确认；旧导航/海报可见性未运行验证 |
 | F-124 | 已修复（`4a1a291`） | P1 | V006→I010→G02 | 订阅菜单标签/peek task 与 Handler fresh lookup/action | 菜单显示的add/cancel意图在fresh lookup后可反转，显示“订阅”的激活可直接执行无确认DELETE | `4a1a291`：菜单冻结展示意图，lookup后统一校验session，mismatch只刷新提示，取消走destructive确认 | 聚焦5/5、完整本地450/450通过；同一独立复审代理首轮问题修正后最终PASS | 原条件性错误删除P1已闭合；真实后端兼容套件未运行 |
 | F-125 | 已确认 | P3 | V008 | Home Plex link 解析与 v2.15.1 版本快照 | `/server/{machine}/details?key=` 未被旧 `/media/...` 解析器识别，目标身份退化 | verify_a001_h 以本地 v2.15.1 tag 闭合后端生成、Web 解析与 TV fallback | review_a001_j 独立确认 latest/resume 链、Plex 无结构化 ID 时只能从 link 恢复身份，并限制第三方 scheme 结论 | 版本特定 TV 深链缺陷已确认；tvOS Plex 精确 scheme 未验证 |
@@ -2145,7 +2145,7 @@
 
 ### F-122：nullable TMDB 识别结果折叠失败、取消与无匹配
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P3
 - 位置：`MoviePilot-TV/Services/APIService.swift:1160-1295`、`MoviePilot-TV/ViewModels/MediaActionHandler.swift:29-46`、`MoviePilot-TV/Views/Pages/HomeView.swift:231-246`
 - 触发路径：两阶段识别发生请求/鉴权/解码失败或取消；或者确实没有匹配。Home 资源搜索还会把 nil 当成正常标题回退并继续导航。
@@ -2155,6 +2155,7 @@
 - 最小方向：复用 Swift `throws` 保留 error/cancel，让 nil 仅表示成功完成两阶段后的真正 no-match；若保留首段失败后继续 fallback，暂存首段错误，fallback 成功可返回 ID，fallback 也无结果时不得伪装 no-match。详情动作才按真 no-match 呈现不存在，Home 标题回退不强制发该弹窗。
 - 主审证据：review_a001_j 闭合两个请求 catch、Handler 状态与 Home 回退调用链，并确认第一阶段失败、第二阶段成功目前也会被折叠。
 - 独立复核：review_a001_h 独立确认两段 error/cancel 最终落 nil→Handler 统一“不存在”，Home 仍回退并导航；同时收窄首段失败但 fallback 成功不构成用户缺陷，维持 P3。Home 对真正无匹配是否仍需信息提示属于产品意图，不能由静态审计代定。
+- 修复记录：`recognizeTmdbId` 改为 `async throws -> Int?`：失败/取消抛出（首段失败暂存、兜底也失败时抛首段原始错误，取消优先），nil 仅表示两阶段成功完成后的真正 no-match，会话变化按取消处理。`MediaActionHandler.getTMDBJumpTarget` 空标题直接返回不弹提示，网络/后端失败不再弹"媒体不存在"，仅真 no-match 弹；`MediaPreloader` 预加载识别用 `try?` 静默。已补 3 条回归测试（双段失败抛错不伪装 no-match / 首段失败兜底成功返回 ID / 双段无匹配仍返回 nil），现有 4 条识别测试与 2 处兼容测试同步 throws 签名。验证：tvOS Simulator build 通过；`TmdbRecognitionPositiveIDTests` 7/7、`APIServiceCompatibilityEndpointTests` 29/29；全量 621 用例仅已知 SSE 时序用例失败。
 
 ### F-123：高层 TMDB action 未绑定发起会话
 

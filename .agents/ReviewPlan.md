@@ -624,7 +624,7 @@
 - `V004-B / F-119`：已确认P2并暂时跳过（用户拍板，待内存优化工作树）；G02全局裁确认精确ID/recognized-TMDB仍只覆盖部分alias，非pinned alias可长期显示旧订阅状态；保存/取消回写须线性扫描当前小缓存更新全部canonical alias，点击时fresh lookup只限制错误mutation；用户在另一工作树开发内存优化，本项涉及代码均有变更，留待后续。
 - `V006 / F-120`：降P2且用户决定跳过；卡片共享busy主要造成异目标动作丢失/迟到UI，Reorganize preview/submit交叉与当前Web一致，本项未证明错目标mutation，具体破坏性风险仍由F-074/F-075/F-152/F-156承载。
 - `V006 / F-121`：已确认P2并修复（用户拍板方案）；Fork 失败错误文案带目标媒体标题，残留/迟到错误可识别来源、消除误导；未做 presentation 清旧与拒绝迟到的 operation owner 改造。已同步 2 条失败反馈测试断言，相关用例通过。
-- `V005 / F-122`：已确认 P3；最终 error/cancel 与 no-match 共用 nil 并被误报不存在，Home 仍提交标题回退导航；首段失败但 fallback 成功不算用户缺陷，真 no-match 提示产品意图未验证。
+- `V005 / F-122`：已确认 P3 并修复；`recognizeTmdbId` 改 throws，失败/取消不再折叠为 nil 误报"不存在"，nil 仅表示真 no-match；Handler 空标题与失败/取消不弹提示，MediaPreloader 预加载静默；已补双段失败/兜底成功/真 no-match 三条回归测试并同步兼容测试签名。
 - `V005 / F-123`：已确认条件性 P2；旧 A 动作可在切 B 后以 B 凭据发起后续识别请求，独立于 F-027/F-113；按钮起点到多 await/全局状态/导航已纳入 CHK-005，当前仓库需统一引入单调 epoch。
 - `V007 / 会话传播`：无新增 finding；旧自动登录 A→logout→手动登录 B→A 迟到 200 可在 B baseURL 下覆盖 token/currentUser/四项凭据，归 F-027；login acquisition owner、单调 epoch 与 A→B→A 已纳入 CHK-005，F-107/F-113/F-123 只闭合传播入口。
 - `V008 / F-125`：已确认 P3；本项目声明版本的本地 v2.15.1 tag 生成 Plex `/server/{machine}/details?key=`，TV 只解析旧 `/media/...` 后退化 generic scheme；只确认解析/身份丢失，tvOS Plex 精确 scheme 仍未验证。
