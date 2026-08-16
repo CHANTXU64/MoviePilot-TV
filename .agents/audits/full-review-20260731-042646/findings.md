@@ -142,7 +142,7 @@
 | F-126 | 已修复 | P2 | V008→W013-A/W020-A/E/F→G02 | 多owner加载失败/取消与成功空或旧快照终态 | Home有10秒自愈但短时无stale标识；Season订阅/availability及System sites/rules各自把部分失败、取消、成功空或旧值混用，恢复入口不一致 | 既有多审确认总根；G02两名不同复核要求按五条子链验收并维持总体P2，驳回“Home永久锁死”扩大 | 各owner分别保留最小success-empty/error/cancel/stale与现有retry；不建统一状态机 | 条件性P2；System部分恢复UI与真实失败时序未运行验证 |
 | F-127 | 用户决定跳过修复 | P1 | V008→G02 | Home 重置订阅动作与后端 reset 字段 | 无确认reset会立即覆盖note、缺集、优先级、人工标记与运行状态，远超普通重新搜索 | 既有双审闭合字段范围；全新G02 clean-room复核对照当前后端与Web确认升级P1 | 保持当前直接重置行为，不修改 | 条件性持久状态破坏P1；用户接受误触风险 |
 | F-128 | 已修复 | P3 | V008 | Home 媒体库跳转、unsupported/invalid/openURL rejected 出口 | 用户点击失败只记录日志，无可见反馈 | 已知不支持类型隐藏动作入口；其余失败经 onFailure 出口复用 NotificationManager 提示 | HomeViewModelMediaServerLinkTests 12/12 通过；全量 636 测试仅既有 SSE 兼容失败 | 纯 TV 动作反馈缺陷已确认；第三方 App 能力未验证 |
-| F-129 | 已确认 | P2 | V009-B→V009-E/F→G01/G04 | Explore Popular 去重 key 与 `MediaInfo.id` | 无有效结构身份时title区分去重项，但实际SwiftUI ID不含title，形成重复ID与错误firstIndex/loadMore | 既有双审确认；G01纠偏与G04独立复核再次闭合A/B反例并双票升P2 | 与F-138共用中央identity修复但保留Popular回归 | 条件性TV列表身份缺陷；真实Popular坏身份频率未验证 |
+| F-129 | 用户决定跳过（2026-08-16） | P2 | V009-B→V009-E/F→G01/G04 | Explore Popular 去重 key 与 `MediaInfo.id` | 无有效结构身份时title区分去重项，但实际SwiftUI ID不含title，形成重复ID与错误firstIndex/loadMore | 既有双审确认；G01纠偏与G04独立复核再次闭合A/B反例并双票升P2 | 与F-138共用中央identity修复但保留Popular回归 | 条件性TV列表身份缺陷；真实Popular坏身份频率未验证 |
 | F-130 | 已修复（`90b40b4`） | P1 | V009-C→V011-C→V012-A→W006-B/W020-A…F/R001/I006→G04 | 存活页面权限派生状态与currentUser发布 | 来源/模式/route/focus/受限快照与child Paginator不随session/权限收敛，旧items/error可跨profile先于父gate发布 | `90b40b4`：统一session UI identity重建Tab子树，session转换取消旧runtime并清缓存，epoch拒绝旧发布 | 聚焦会话/缓存/分页/根页面测试96/96通过；既有独立复审PASS | 原TV跨profile根状态P1已闭合；真实Apple TV焦点视觉未单独复演 |
 | F-131 | 已确认 | P2 | V009-D/E→G05 | Douban/Bangumi/AniList 动态年份集合 | `Calendar.current` 的非公历年被直接显示并发送为 API 年份 | 既有三票闭合Picker→query；G05主审与独立复核均确认三条发现API稳定直传非公历年并支持P2 | 直接固定Gregorian calendar，不引入日期provider | 条件性 TV locale/API 缺陷已确认；非公历实际配置未运行验证 |
 | F-132 | 已确认 | P3 | V009-D/E | TMDB movie/tv sort 字典与类型切换 | 独占 sort key 跨类型残留，Picker 无匹配却继续发请求 | review_a001_h 闭合双向独占 key、onTypeChanged 与 buildApiPath 链 | review_a001_j 独立确认纯 TV 状态分裂且独立于 F-110；verify_a001_h 从构建段确认双向路径及 Web normalization 参考 | 纯 TV 状态一致性缺陷已确认；后端处理非法 key 未验证 |
@@ -2258,7 +2258,7 @@
 
 ### F-129：Popular 去重键与实际列表 ID 不一致
 
-- 状态：已确认
+- 状态：用户决定跳过（2026-08-16）
 - 严重度：P2
 - 位置：`MoviePilot-TV/ViewModels/ExploreViewModel.swift` 的 `popularSubscriptionKey`、Popular processor 与 `MediaGrid` 消费链；根因段 V009-E/F
 - 触发路径：Popular 返回两条没有有效结构身份的媒体，例如 `tmdb_id=0`、其余身份相同但 title 分别为 A/B；或同一坏身份项跨页改名。
@@ -2270,6 +2270,7 @@
 - 独立复核：review_a001_j 独立确认 Popular seenKeys 对两个 title key 都正常插入，但最终 `MediaInfo.id` 相同；重复 ID 传播到 ForEach、焦点/预加载及 View/Paginator 两层 firstIndex，可让第二项命中远离尾部的第一项并停止 loadMore。F-036 是本批 seen set 漏写，位置/修复/回归均独立，维持条件性 P3。
 - G01/G04升级裁决：rounda_g01_recheck与rounda_g02_third分别构造无结构ID、不同title的A/B；Popular按title同时保留而`MediaInfo.id`相同，重复SwiftUI ID与firstIndex/loadMore误命中静态成立。两票升级P2；实现与F-138共用中央identity，但保留本项Popular key/最终ID一致性测试。
 - 未验证：真实 Popular 是否返回缺失/0 身份。
+- 用户裁决：`subscribe/popular` 是 movie-pilot.org 统计聚合的透传，`tmdb_id=0` 条目真实存在；Web 热门订阅页同键去重同样会合并不同作品，官方聚合是否产生多行 `tmdb_id=0` 无法本地验证；用户决定跳过，不做 TV 单端改动。
 
 ### F-130：Explore 不消费已更新的权限快照
 
