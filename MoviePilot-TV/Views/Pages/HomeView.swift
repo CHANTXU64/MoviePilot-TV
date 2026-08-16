@@ -174,6 +174,7 @@ private struct MediaSectionView: View {
 
   @Environment(\.openURL) private var openURL
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
+  @EnvironmentObject private var notificationManager: NotificationManager
   @FocusState private var focusedItemId: String?
   @FocusState private var isTopRedirectorFocused: Bool
   @State private var hasRedirectedFocus: Bool = false
@@ -237,17 +238,19 @@ private struct MediaSectionView: View {
                 bottomLeftText: nil,
                 bottomLeftSecondaryText: nil,
                 source: nil,
-                action: {
-                  viewModel.openMediaItem(item, using: openURL)
-                }
+                action: canOpenMediaLibrary(item)
+                  ? { openMediaItem(item) }
+                  : nil
               )
               .focused($focusedItemId, equals: item.id)
               .compositingGroup()
               .contextMenu {
-                Button {
-                  viewModel.openMediaItem(item, using: openURL)
-                } label: {
-                  Label("跳转媒体库", systemImage: "arrow.up.right.square")
+                if canOpenMediaLibrary(item) {
+                  Button {
+                    openMediaItem(item)
+                  } label: {
+                    Label("跳转媒体库", systemImage: "arrow.up.right.square")
+                  }
                 }
                 Button {
                   Task {
@@ -300,6 +303,16 @@ private struct MediaSectionView: View {
         .scrollClipDisabled()
         .focusSection()
       }
+    }
+  }
+
+  private func canOpenMediaLibrary(_ item: MediaServerPlayItem) -> Bool {
+    HomeViewModel.supportsMediaLibraryDeepLink(serverType: item.server_type)
+  }
+
+  private func openMediaItem(_ item: MediaServerPlayItem) {
+    viewModel.openMediaItem(item, using: openURL) { message in
+      notificationManager.show(message: message, type: .error)
     }
   }
 }

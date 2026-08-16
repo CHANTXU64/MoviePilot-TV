@@ -324,9 +324,27 @@ class HomeViewModel: ObservableObject {
     return trimmed
   }
 
-  func openMediaItem(_ item: MediaServerPlayItem, using openURL: OpenURLAction) {
+  /// 该服务器类型是否已知支持在 tvOS 打开媒体库深链（静态能力，不依赖具体链接）
+  static func supportsMediaLibraryDeepLink(serverType: MediaServerType?) -> Bool {
+    guard let serverType else { return true }
+    switch serverType {
+    case .jellyfin, .trimemedia, .ugreen, .zspace:
+      return false
+    default:
+      return true
+    }
+  }
+
+  func openMediaItem(
+    _ item: MediaServerPlayItem,
+    using openURL: OpenURLAction,
+    onFailure: @escaping (String) -> Void
+  ) {
     let originalUrl = validLinkValue(item.link).flatMap { URL(string: $0) }
-    guard originalUrl != nil || item.server_type == .emby else { return }
+    guard originalUrl != nil || item.server_type == .emby else {
+      onFailure("无法打开媒体库：链接无效")
+      return
+    }
 
     var finalUrl: URL? = nil
 
@@ -400,25 +418,32 @@ class HomeViewModel: ObservableObject {
       if finalUrl == nil { finalUrl = URL(string: "plex://") }
 
     case .jellyfin:
-      print("Jellyfin 暂不支持在 tvOS 打开媒体")
+      onFailure("Jellyfin 暂不支持在 tvOS 打开媒体")
+      return
     case .trimemedia:
-      print("飞牛 Nas 暂不支持在 tvOS 打开媒体")
+      onFailure("飞牛 NAS 暂不支持在 tvOS 打开媒体")
+      return
     case .ugreen:
-      print("绿联 Nas 暂不支持在 tvOS 打开媒体")
+      onFailure("绿联 NAS 暂不支持在 tvOS 打开媒体")
+      return
     case .zspace:
-      print("极空间 Nas 暂不支持在 tvOS 打开媒体")
+      onFailure("极空间 NAS 暂不支持在 tvOS 打开媒体")
+      return
     default:
       // 处理未来未知的服务器类型（item.server_type.rawValue）
-      print("未知的媒体服务器类型: \(item.server_type?.rawValue ?? "未知")，且 tvOS 无法直接打开网页")
+      onFailure(
+        "未知的媒体服务器类型\(item.server_type.map { "（\($0.rawValue)）" } ?? "")暂不支持在 tvOS 打开媒体")
+      return
     }
 
     if let finalUrl = finalUrl {
       openURL(finalUrl) { accepted in
-        print(accepted ? "成功打开深度链接: \(finalUrl)" : "无法打开深度链接: \(finalUrl)")
+        if !accepted {
+          onFailure("无法打开媒体库 App，请确认已安装后重试")
+        }
       }
     } else if let serverType = item.server_type {
-      let source = originalUrl?.absoluteString ?? item.link ?? "<无链接>"
-      print("未能生成 \(serverType.rawValue) 的有效深度链接: \(source)")
+      onFailure("未能生成 \(serverType.rawValue) 的有效媒体库链接")
     }
   }
 }
