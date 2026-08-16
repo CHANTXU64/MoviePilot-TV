@@ -125,10 +125,8 @@ class MediaPreloadTask: ObservableObject {
   private func prefetchBackgroundImage(for detail: MediaInfo, timeout: Duration? = nil) async {
     // 避免为已取消（LRU 淘汰）的任务发起无意义的图片请求
     guard !Task.isCancelled else { return }
-    // 逻辑同 MediaDetailViewModel.updateBackground()：backdrop 优先，无则 poster
-    let backdropUrl = detail.imageURLs.backdrop
-    let posterUrl = detail.imageURLs.poster
-    let targetUrl = backdropUrl ?? posterUrl
+    // 与 MediaInfo.ImageURLs.backgroundTarget 保持一致：backdrop 优先，无则 poster
+    let targetUrl = detail.imageURLs.backgroundTarget.url
     guard let url = targetUrl else { return }
 
     if let timeout {

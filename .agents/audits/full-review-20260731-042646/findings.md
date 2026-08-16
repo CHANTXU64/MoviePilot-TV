@@ -128,8 +128,8 @@
 | F-112 | 已修复 | P2 | V002-C/D→W020-A/D→I016 | 站点权威空/失败/加载状态 | 站点成功空不清旧选择，失败与当前可用数据不可区分；Search/详情还会继续发送旧ID | 既有双审确认机制；I016两代理闭合成功空→旧ID请求链并升P2 | 成功空清选择，失败/取消与空分开并提供最小重试 | 纯TV状态缺陷；真实空站点频率未验证 |
 | F-113 | 用户决定跳过 | P2 | V002-D | `SystemViewModel.swift:385-400,444-450` 及资源搜索调用者 | 默认站点异步归一化可跨 profile 写回或返回旧 profile 值 | review_a001_h 闭合 A 读取→await→动态 B key 写回、catch 回退 A 与 B 会话请求传播 | review_a001_j 独立确认成功/错误/取消/撤权、三个调用者与条件性 P2 严重度边界 | 纯 TV 会话归属缺陷已确认、严重度条件性；旧导航可见性与真实频率未运行验证 |
 | F-114 | 已修复 | P3 | V003 | `SearchViewModel.swift:270,658-668`、`MediaDetailViewModel.swift:40,122-133` 及对应 View | 父 ViewModel 未转发 SiteFilter 子对象变化，站点按钮可停留旧文案 | verify_a001_h 闭合两个固定子对象、父 View 观察关系及 Paginator 已桥接反证 | review_a001_h 独立确认成功非空即可触发，实际请求读取子对象当前值并收窄为 UI 新鲜度 | 纯 TV SwiftUI 观察缺陷已确认；无关重绘前实际可见时长未运行验证 |
-| F-115 | 已确认 | P2 | V004-A→I005 | MediaPreloader详情ready与阶段屏障 | ready值域判定错误；详情响应已可启动season时仍等待识别和图片，稳定把有订阅权限电视剧的全屏Loading串行延长 | V004双审闭合身份值域；I005集成与不同代理复核闭合`detail response→season`关键路径并升级P2 | 规范ready值；详情响应发布即启动season，图片/识别仅约束真实依赖者 | TV详情ready/主流程阶段屏障已确认；真实延迟分布未验证 |
-| F-116 | 已确认 | P2 | V004-A→V012-A→I013→G03 | 热缓存首帧内容与背景安装顺序 | Container凭wasPreloaded先揭示内容，但VM初始化不安装传入full detail的背景，首帧确定进入灰底后才由View task补齐 | G03两名纠偏复核按正确命题独立闭合热缓存Container→VM init→View task顺序，覆盖I013原运行未验证边界并升级P2 | VM初始化同步安装已有full detail/background；不改F-115网络阶段图 | 纯TV首帧状态分裂已确认；实际闪烁时长/焦点影响未运行验证 |
+| F-115 | 用户决定跳过 | P2 | V004-A→I005 | MediaPreloader详情ready与阶段屏障 | ready值域判定错误；详情响应已可启动season时仍等待识别和图片，稳定把有订阅权限电视剧的全屏Loading串行延长 | V004双审闭合身份值域；I005集成与不同代理复核闭合`detail response→season`关键路径并升级P2 | 规范ready值；详情响应发布即启动season，图片/识别仅约束真实依赖者 | TV详情ready/主流程阶段屏障已确认；真实延迟分布未验证 |
+| F-116 | 已修复 | P2 | V004-A→V012-A→I013→G03 | 热缓存首帧内容与背景安装顺序 | Container凭wasPreloaded先揭示内容，但VM初始化不安装传入full detail的背景，首帧确定进入灰底后才由View task补齐 | G03两名纠偏复核按正确命题独立闭合热缓存Container→VM init→View task顺序，覆盖I013原运行未验证边界并升级P2 | VM初始化同步安装已有full detail/background；不改F-115网络阶段图 | 纯TV首帧状态分裂已确认；实际闪烁时长/焦点影响未运行验证 |
 | F-117 | 已确认 | P3 | V004-A | `MediaPreloader.swift:95,123-169` 图片预取取消链 | 取消早于 Kingfisher handle 安装时，请求仍启动且可继续发布 ready | verify_a001_h 闭合已取消 child、onCancel 先恢复、operation 后启动请求与 handle 清空时序 | review_a001_h 独立确认 Swift/Kingfisher 顺序、真实取消入口、缓存写入与取消后 ready 发布 | TV 资源/生命周期缺陷已确认；真实竞态频率及注销传播未运行验证 |
 | F-118 | 已确认 | P2 | V004-B→V012-A→G03 | MediaPreloader pin owner与详情返回栈 | ownerless Set使同key任一owner消失即释放全部保护；父详情暂时onDisappear后可被LRU移除并漏通知刷新 | G03两名不同复核确认ownerless语义、唯一生产调用与淘汰/刷新链；tvOS push/返回表现保留运行边界 | 复用稳定owner token/lease，最后owner释放才可淘汰；不建缓存框架 | 静态owner缺陷P2已确认；push onDisappear、30+ churn与返回卡死未运行验证 |
 | F-119 | 已确认 | P2 | V004-B→V012-B→G02 | MediaPreloader cache aliases 与订阅回写 | UI key与canonical media ID一对多；保存/取消只更新单task或有限TMDB alias，其他未pin alias可长期显示旧订阅状态 | 既有双审确认机制；G02两名不同复核确认fullDetail/非TMDB alias缺口并升级P2 | 线性扫描小缓存并更新全部已知canonical alias；不建alias registry | 条件性TV状态错误P2；真实alias并存频率未验证 |
@@ -2024,7 +2024,7 @@
 
 ### F-115：详情 ready 判定与阶段屏障阻塞主流程
 
-- 状态：已确认
+- 状态：用户决定跳过
 - 严重度：P2；由 P3 升级
 - 位置：`MoviePilot-TV/ViewModels/MediaPreloader.swift:94`，传播到 MediaDetailContainer/MediaDetailViewModel/Header ready 链
 - 触发路径：详情响应含空串/纯空白标题、空白 Douban ID 或非正 TMDB ID；反向路径为 title/tmdb/douban 全 nil 但 Bangumi、AniList 或插件身份有效。
@@ -2036,10 +2036,11 @@
 - 最小方向：增加一个私有纯判定，复用现有 normalizedString 与正数 ID 语义并覆盖已支持身份；不引入验证框架。
 - 独立复核：review_a001_h 确认空白 title/douban、非正 tmdb 会误 ready，正 Bangumi/AniList 与规范化插件身份被漏判；修复须局限私有纯判定，保留非空标题可 ready，不能全局改 MediaInfo.identity/Web-zero 语义或顺带引入裸 IMDB/TVDB。
 - I005阶段屏障扩展：review_a001_h集成提出、verify_a001_h独立确认详情HTTP已发布`fullDetail`后仍等待背景图，外层又等待无关识别，season因此只能在`max(识别,详情+图片)`后启动；有订阅权限电视剧的内容ready明确等待`isSeasonDataLoaded`，Container全屏遮罩随之稳定串行延长。详情响应即启动season，图片独立并行，取消后不得晚发布；该主流程后果将本项升级P2，F-220作为重复编号驳回。
+- 跳过依据（用户拍板）：对后端 `app/api/endpoints/media.py` `/media/{mediaid}` 确认，识别失败返回全空 `schemas.MediaInfo()`（TV 端现有 ready 校验+重试规则正是防此场景且仍必要）；识别成功时各数据源（TMDB/豆瓣/Bangumi/AniList）必然带非空 title，后端不会返回空串标题或 0/负数 ID，也不会出现“全 nil 但 bangumi/anilist 有效”的载荷，故 ready 值域误判为纯静态理论问题、真实不可触发。阶段屏障部分用户按“背景图等待有设置开关”裁非问题，一并跳过。
 
 ### F-116：预加载命中时背景安装晚于遮罩解除
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P2
 - 位置：`MoviePilot-TV/Views/MediaDetailContainerView.swift:269`、MediaDetailViewModel 初始背景与视图异步 apply 链
 - 触发路径：详情从 MediaPreloader 缓存命中，Container 记录 `wasPreloaded = true`。
@@ -2051,6 +2052,7 @@
 - 验证要求：用固定cache-hit task延迟辅助首行，断言背景安装和`isContentReady`前不揭示；再以Simulator/真机记录可见闪烁与焦点。
 - I013第三裁：review_a001_j确认成功cache hit旁路与F-180主失败、F-033辅助错误的触发源/修复/fixture均独立；随后apply通常自愈，不需用户操作，故维持未验证P3而不升P2。
 - G03全局纠偏：review_a001_h与rounda_g03_recheck均按正确F-116命题独立确认Container首帧直接揭示、VM init不安装背景、View `.task` 后补背景的确定顺序；新证据覆盖I013仅按可见时长保留未验证的旧边界，升级确认P2。实际闪烁时长与焦点影响仍留运行验证。
+- 修复记录：背景选择逻辑收敛到 `MediaInfo.ImageURLs.backgroundTarget`（backdrop 优先、无则 poster），`MediaDetailViewModel` init 同步安装传入详情的背景且不走动画，`setBackground()` 与 `MediaPreloader` 背景预取共用同一实现；`setBackground` 保留 0.8s 动画与仅变化才更新的保护。预加载命中首帧即有背景 URL，网络路径随后由 `applyFullDetail` 动画升级。已补 6 条回归测试（backdrop 优先 / poster 回退 / 无图 nil / 同值 apply 守卫 / http URL 走缓存代理的 backdrop 与 poster 分支）。验证：tvOS Simulator clean build 通过；`MediaDetailViewHeaderActionTests` 46/46 通过；全量 618 用例仅已知 SSE 时序用例 `testResourceSearchPublishesResultsWithSearchPermission` 2 断言失败，与本次改动无关。
 
 ### F-117：取消早于图片 handle 安装时仍启动不可取消请求
 

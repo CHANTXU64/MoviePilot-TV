@@ -669,6 +669,17 @@ nonisolated struct MediaInfo: Codable, Identifiable, Hashable {
     /// 降尺寸海报加载失败时回退的原始海报 URL。
     let posterFallback: URL?
     let backdrop: URL?
+
+    /// 详情背景目标：backdrop 优先，无则 poster；`isPoster` 表示是否用海报替代背景图。
+    var backgroundTarget: (url: URL?, isPoster: Bool) {
+      if let backdrop {
+        return (backdrop, false)
+      }
+      if let poster {
+        return (poster, true)
+      }
+      return (nil, false)
+    }
   }
 
   /// TMDB ID

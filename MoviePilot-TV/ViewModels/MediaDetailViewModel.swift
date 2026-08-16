@@ -57,6 +57,12 @@ class MediaDetailViewModel: ObservableObject {
     let box = DetailBox(detail)
     self.detailBox = box
 
+    // 预加载命中时容器首帧即揭示内容，这里同步安装背景避免首帧灰底；
+    // 网络加载路径随后由 applyFullDetail 以动画升级为完整详情背景。
+    let initialBackground = detail.imageURLs.backgroundTarget
+    self.backgroundUrl = initialBackground.url
+    self.isUsingPosterAsBackdrop = initialBackground.isPoster
+
     // --- Paginator for Recommend ---
     // ⚠️ 闭包 capture box（引用类型），而非 capture init 时的 detail 值。
     // applyFullDetail 会更新 box.value，让闭包读取完整数据。
@@ -228,33 +234,17 @@ class MediaDetailViewModel: ObservableObject {
 
   /// 根据媒体的海报或背景图更新详情页背景
   private func setBackground() {
-    let backdrop = detail.imageURLs.backdrop
-    let poster = detail.imageURLs.poster
-
-    let targetUrl: URL?
-    let targetIsPoster: Bool
-
-    // 优先级：背景大图 > 海报图
-    if let backdrop = backdrop {
-      targetUrl = backdrop
-      targetIsPoster = false
-    } else if let poster = poster {
-      targetUrl = poster
-      targetIsPoster = true
-    } else {
-      targetUrl = nil
-      targetIsPoster = false
-    }
+    let target = detail.imageURLs.backgroundTarget
 
     // 核心保护逻辑：只有当背景 URL 真正改变时才触发 @Published 更新。
     // 这能有效防止因为值相同但对象不同导致的 UI 重新闪烁刷新。
-    if self.backgroundUrl != targetUrl || self.isUsingPosterAsBackdrop != targetIsPoster {
+    if self.backgroundUrl != target.url || self.isUsingPosterAsBackdrop != target.isPoster {
       withAnimation(.easeInOut(duration: 0.8)) {
-        if self.backgroundUrl != targetUrl {
-          self.backgroundUrl = targetUrl
+        if self.backgroundUrl != target.url {
+          self.backgroundUrl = target.url
         }
-        if self.isUsingPosterAsBackdrop != targetIsPoster {
-          self.isUsingPosterAsBackdrop = targetIsPoster
+        if self.isUsingPosterAsBackdrop != target.isPoster {
+          self.isUsingPosterAsBackdrop = target.isPoster
         }
       }
     }
