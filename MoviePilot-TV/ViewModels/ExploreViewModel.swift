@@ -864,10 +864,24 @@ class ExploreViewModel: ObservableObject {
   }
 
   func onTypeChanged() {
-    // 类型变化时重置风格（因为电影和剧集的风格不同）
-    tmdbGenre = ""
-    doubanCategory = ""
-    popularGenre = ""
+    // 与 Web 端 TheMovieDbView/DoubanView 对齐：切换后只做成员归一化，
+    // 保留新类型字典仍接受的共有值，只清掉/回落新类型不接受的独占值。
+    switch selectedSource {
+    case .themoviedb:
+      if !currentSortDict.contains(where: { $0.key == tmdbSortBy }) {
+        tmdbSortBy = "popularity.desc"
+      }
+      if !currentGenreDict.contains(where: { $0.key == tmdbGenre }) {
+        tmdbGenre = ""
+      }
+    case .popular:
+      if !currentGenreDict.contains(where: { $0.key == popularGenre }) {
+        popularGenre = ""
+      }
+    default:
+      // Douban category/Bangumi cat/AniList genre 等字典不随类型变化，无需清理
+      break
+    }
   }
 
   func setPluginFilter(_ field: String, value: JSONValue) {

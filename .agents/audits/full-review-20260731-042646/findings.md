@@ -145,7 +145,7 @@
 | F-129 | 用户决定跳过（2026-08-16） | P2 | V009-B→V009-E/F→G01/G04 | Explore Popular 去重 key 与 `MediaInfo.id` | 无有效结构身份时title区分去重项，但实际SwiftUI ID不含title，形成重复ID与错误firstIndex/loadMore | 既有双审确认；G01纠偏与G04独立复核再次闭合A/B反例并双票升P2 | 与F-138共用中央identity修复但保留Popular回归 | 条件性TV列表身份缺陷；真实Popular坏身份频率未验证 |
 | F-130 | 已修复（`90b40b4`） | P1 | V009-C→V011-C→V012-A→W006-B/W020-A…F/R001/I006→G04 | 存活页面权限派生状态与currentUser发布 | 来源/模式/route/focus/受限快照与child Paginator不随session/权限收敛，旧items/error可跨profile先于父gate发布 | `90b40b4`：统一session UI identity重建Tab子树，session转换取消旧runtime并清缓存，epoch拒绝旧发布 | 聚焦会话/缓存/分页/根页面测试96/96通过；既有独立复审PASS | 原TV跨profile根状态P1已闭合；真实Apple TV焦点视觉未单独复演 |
 | F-131 | 已修复 | P2 | V009-D/E→G05 | Douban/Bangumi/AniList 动态年份集合 | `Calendar.current` 的非公历年被直接显示并发送为 API 年份 | 三处年份字典固定 `Calendar(identifier: .gregorian)`，不动筛选结构 | ExploreViewModelYearDictTests 4/4 通过；全量 640 测试仅既有 SSE 兼容失败 | 条件性 TV locale/API 缺陷已确认；非公历实际配置未运行验证 |
-| F-132 | 已确认 | P3 | V009-D/E | TMDB movie/tv sort 字典与类型切换 | 独占 sort key 跨类型残留，Picker 无匹配却继续发请求 | review_a001_h 闭合双向独占 key、onTypeChanged 与 buildApiPath 链 | review_a001_j 独立确认纯 TV 状态分裂且独立于 F-110；verify_a001_h 从构建段确认双向路径及 Web normalization 参考 | 纯 TV 状态一致性缺陷已确认；后端处理非法 key 未验证 |
+| F-132 | 已修复 | P3 | V009-D/E | TMDB movie/tv sort 字典与类型切换 | 独占 sort key 跨类型残留，Picker 无匹配却继续发请求 | onTypeChanged 按 Web 端成员归一化：非法独占 sort 回落 popularity.desc、共有 sort/genre 保留、Douban category 不再误清 | ExploreViewModelTypeSwitchTests 6/6 通过；全量 646 测试仅既有 SSE 兼容失败 | 纯 TV 状态一致性缺陷已确认；后端处理非法 key 未验证 |
 | F-133 | 未验证 | P3 | V009-A/F | 插件 `filter_ui` parser 与 FilterPickersView | 未支持控件/多选/custom items 被静默删除或降级 | verify_a001_h 闭合 source→parser→controls→query 链与最小组件反例 | review_a001_h/review_a001_j 独立确认机制，但公开 fixture 未触发且无部署载荷 | 条件性插件筛选未验证；固定真实 fixture 到位时重开 |
 | F-134 | 未验证 | P3 | V009-A/E/F | 复合插件筛选值的 query serialization | 数组/对象被 JSON 化为单值，与 v2.15.1 Web Axios bracket 形状不同 | verify_a001_h 以数组默认值闭合 parser 外直达 query 与版本特定序列化差异 | review_a001_h/review_a001_j 独立确认结构差异，但无复合部署 fixture/后端契约 | 条件性插件查询未验证；固定复合 fixture 到位时重开 |
 | F-135 | 已确认 | P3 | V009-A/F→W012 | Picker option value/身份规范化 | 重复value同时成为ForEach ID与Picker tag；空目录还与内建自动重复空ID或生成`storage:` | 插件链三代理确认机制；W012双审与当前Web/后端裁决确认空/空白download_path生产可达 | 插件first-wins去重；目录trim后丢空再去重并保留唯一自动项 | 条件性P3；真实插件重复value频率仍未验证 |
@@ -2324,7 +2324,7 @@
 
 ### F-132：TMDB 类型切换保留另一类型独占排序键
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P3
 - 位置：TMDB movie/tv sort dictionaries、Explore `onTypeChanged()` 与 `buildApiPath()`
 - 触发路径：电影选择 `release_date.desc/asc` 后切电视剧，或电视剧选择 `first_air_date.desc/asc` 后切电影。
