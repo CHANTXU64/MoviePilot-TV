@@ -300,7 +300,7 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
       let forkedId = await handler.fork(share: try PermissionBehaviorFixtures.subscribeShare())
 
       XCTAssertNil(forkedId)
-      XCTAssertEqual(handler.forkErrorMessage, "暂时无法复用订阅，请稍后重试。")
+      XCTAssertEqual(handler.forkErrorMessage, "暂时无法复用订阅《复用分享》，请稍后重试。")
       XCTAssertEqual(handler.notificationSerial, 0)
       XCTAssertEqual(notifications.count(), 0)
     }
@@ -317,7 +317,7 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
       let forkedId = await handler.fork(share: try PermissionBehaviorFixtures.subscribeShare())
 
       XCTAssertNil(forkedId)
-      XCTAssertEqual(handler.forkErrorMessage, "暂时无法复用订阅，请稍后重试。")
+      XCTAssertEqual(handler.forkErrorMessage, "暂时无法复用订阅《复用分享》，请稍后重试。")
       XCTAssertEqual(handler.notificationSerial, 0)
     }
   }

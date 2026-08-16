@@ -130,11 +130,11 @@
 | F-114 | 已修复 | P3 | V003 | `SearchViewModel.swift:270,658-668`、`MediaDetailViewModel.swift:40,122-133` 及对应 View | 父 ViewModel 未转发 SiteFilter 子对象变化，站点按钮可停留旧文案 | verify_a001_h 闭合两个固定子对象、父 View 观察关系及 Paginator 已桥接反证 | review_a001_h 独立确认成功非空即可触发，实际请求读取子对象当前值并收窄为 UI 新鲜度 | 纯 TV SwiftUI 观察缺陷已确认；无关重绘前实际可见时长未运行验证 |
 | F-115 | 用户决定跳过 | P2 | V004-A→I005 | MediaPreloader详情ready与阶段屏障 | ready值域判定错误；详情响应已可启动season时仍等待识别和图片，稳定把有订阅权限电视剧的全屏Loading串行延长 | V004双审闭合身份值域；I005集成与不同代理复核闭合`detail response→season`关键路径并升级P2 | 规范ready值；详情响应发布即启动season，图片/识别仅约束真实依赖者 | TV详情ready/主流程阶段屏障已确认；真实延迟分布未验证 |
 | F-116 | 已修复 | P2 | V004-A→V012-A→I013→G03 | 热缓存首帧内容与背景安装顺序 | Container凭wasPreloaded先揭示内容，但VM初始化不安装传入full detail的背景，首帧确定进入灰底后才由View task补齐 | G03两名纠偏复核按正确命题独立闭合热缓存Container→VM init→View task顺序，覆盖I013原运行未验证边界并升级P2 | VM初始化同步安装已有full detail/background；不改F-115网络阶段图 | 纯TV首帧状态分裂已确认；实际闪烁时长/焦点影响未运行验证 |
-| F-117 | 已确认 | P3 | V004-A | `MediaPreloader.swift:95,123-169` 图片预取取消链 | 取消早于 Kingfisher handle 安装时，请求仍启动且可继续发布 ready | verify_a001_h 闭合已取消 child、onCancel 先恢复、operation 后启动请求与 handle 清空时序 | review_a001_h 独立确认 Swift/Kingfisher 顺序、真实取消入口、缓存写入与取消后 ready 发布 | TV 资源/生命周期缺陷已确认；真实竞态频率及注销传播未运行验证 |
-| F-118 | 已确认 | P2 | V004-B→V012-A→G03 | MediaPreloader pin owner与详情返回栈 | ownerless Set使同key任一owner消失即释放全部保护；父详情暂时onDisappear后可被LRU移除并漏通知刷新 | G03两名不同复核确认ownerless语义、唯一生产调用与淘汰/刷新链；tvOS push/返回表现保留运行边界 | 复用稳定owner token/lease，最后owner释放才可淘汰；不建缓存框架 | 静态owner缺陷P2已确认；push onDisappear、30+ churn与返回卡死未运行验证 |
-| F-119 | 已确认 | P2 | V004-B→V012-B→G02 | MediaPreloader cache aliases 与订阅回写 | UI key与canonical media ID一对多；保存/取消只更新单task或有限TMDB alias，其他未pin alias可长期显示旧订阅状态 | 既有双审确认机制；G02两名不同复核确认fullDetail/非TMDB alias缺口并升级P2 | 线性扫描小缓存并更新全部已知canonical alias；不建alias registry | 条件性TV状态错误P2；真实alias并存频率未验证 |
+| F-117 | 用户决定跳过（暂时，待内存优化工作树） | P3 | V004-A | `MediaPreloader.swift:95,123-169` 图片预取取消链 | 取消早于 Kingfisher handle 安装时，请求仍启动且可继续发布 ready | verify_a001_h 闭合已取消 child、onCancel 先恢复、operation 后启动请求与 handle 清空时序 | review_a001_h 独立确认 Swift/Kingfisher 顺序、真实取消入口、缓存写入与取消后 ready 发布 | TV 资源/生命周期缺陷已确认；真实竞态频率及注销传播未运行验证 |
+| F-118 | 用户决定跳过（暂时，待内存优化工作树） | P2 | V004-B→V012-A→G03 | MediaPreloader pin owner与详情返回栈 | ownerless Set使同key任一owner消失即释放全部保护；父详情暂时onDisappear后可被LRU移除并漏通知刷新 | G03两名不同复核确认ownerless语义、唯一生产调用与淘汰/刷新链；tvOS push/返回表现保留运行边界 | 复用稳定owner token/lease，最后owner释放才可淘汰；不建缓存框架 | 静态owner缺陷P2已确认；push onDisappear、30+ churn与返回卡死未运行验证 |
+| F-119 | 用户决定跳过（暂时，待内存优化工作树） | P2 | V004-B→V012-B→G02 | MediaPreloader cache aliases 与订阅回写 | UI key与canonical media ID一对多；保存/取消只更新单task或有限TMDB alias，其他未pin alias可长期显示旧订阅状态 | 既有双审确认机制；G02两名不同复核确认fullDetail/非TMDB alias缺口并升级P2 | 线性扫描小缓存并更新全部已知canonical alias；不建alias registry | 条件性TV状态错误P2；真实alias并存频率未验证 |
 | F-120 | 降级（用户决定跳过） | P2 | V006→V012-B→G10/G09 | 页面/Sheet mutation single-flight owner | 共享busy无target会令B卡片动作被丢弃或被A晚到提示打断；Reorganize预览与提交可交叉，但当前Web同样允许，且本项未证明错目标mutation | 既有双审闭合卡片owner与三个Sheet；后续按当前TV/Web触发与后果重裁 | 不做TV单端增强 | 普通快速网络下窗口较短；主要影响为动作无反馈或迟到UI，降P2并由用户决定跳过 |
-| F-121 | 已确认 | P2 | V006→W015→G02 | `SubscriptionHandler.forkErrorMessage` 与分享 Sheet 呈现链 | 错误不绑定share presentation/operation，A的同步残留或迟到失败可稳定污染B的可恢复操作界面 | 既有多轮裁决闭合同步链；全新G02 clean-room复核确认operation owner缺口并升级P2 | 错误绑定operationID/shareID，新presentation清旧且拒绝迟到发布 | TV跨目标错误归属P2；迟到调度频率未验证 |
+| F-121 | 已修复 | P2 | V006→W015→G02 | `SubscriptionHandler.forkErrorMessage` 与分享 Sheet 呈现链 | 错误不绑定share presentation/operation，A的同步残留或迟到失败可稳定污染B的可恢复操作界面 | 既有多轮裁决闭合同步链；全新G02 clean-room复核确认operation owner缺口并升级P2 | 错误绑定operationID/shareID，新presentation清旧且拒绝迟到发布 | TV跨目标错误归属P2；迟到调度频率未验证 |
 | F-122 | 已确认 | P3 | V005 | `APIService.recognizeTmdbId`、`MediaActionHandler` 及 Home 标题回退 | nullable 结果把最终无匹配、失败与取消统一呈现为未识别 | review_a001_j 闭合两阶段识别、通配 catch、全局弹窗与标题回退继续导航 | review_a001_h 独立确认最终 error/cancel→nil→不存在弹窗，并收窄首段失败但 fallback 成功不算用户缺陷 | 纯 TV 错误语义缺陷已确认；Home 真 no-match 提示产品意图未验证 |
 | F-123 | 已确认 | P2 | V005 | 高层 TMDB action、两阶段识别、默认站点与最终导航链 | 用户动作未绑定发起 session，后续请求可携 B 凭据发送 A 标题 | review_a001_j 闭合 A search 等待→切 B→B recognize 的确定链及全局状态传播 | review_a001_h 独立确认正常 A 空响应后 B 新请求链、与 F-027/F-113 的修复边界及 ResourceResult 快照过晚 | 条件性跨 profile P2 已确认；旧导航/海报可见性未运行验证 |
 | F-124 | 已修复（`4a1a291`） | P1 | V006→I010→G02 | 订阅菜单标签/peek task 与 Handler fresh lookup/action | 菜单显示的add/cancel意图在fresh lookup后可反转，显示“订阅”的激活可直接执行无确认DELETE | `4a1a291`：菜单冻结展示意图，lookup后统一校验session，mismatch只刷新提示，取消走destructive确认 | 聚焦5/5、完整本地450/450通过；同一独立复审代理首轮问题修正后最终PASS | 原条件性错误删除P1已闭合；真实后端兼容套件未运行 |
@@ -2056,7 +2056,7 @@
 
 ### F-117：取消早于图片 handle 安装时仍启动不可取消请求
 
-- 状态：已确认
+- 状态：用户决定跳过（暂时，待内存优化工作树）
 - 严重度：P3
 - 位置：`MoviePilot-TV/ViewModels/MediaPreloader.swift:95,123-169`
 - 触发路径：预取 timeout 的 group cancel、LRU 淘汰或 logout/显式 clearAll 在图片 child 已继承取消、但 Kingfisher DownloadTask handle 尚未安装时发生。
@@ -2067,10 +2067,11 @@
 - 跨端结论：纯 TV 资源/生命周期缺陷已确认；真实竞态频率与后端保护性未验证。
 - 最小方向：扩展现有锁盒同时保存 continuation、取消标记与 handle，operation 内二次检查，handle 安装时若已取消立即 cancel；ready 发布前再检查父 Task，不重构下载层。
 - 独立复核：review_a001_h 确认 Swift 已取消任务仍执行 operation、Kingfisher cache miss 会先启动网络后返回 handle并写共享 cache；`onDisappear/unpin`、卡片防抖与普通所有者释放不是取消入口，失败 task 替换通常也不命中图片阶段。另确认图片预取返回后缺父 Task 复查，外部持有者可观察取消后的 ready 发布，归入本项而不新建 finding。
+- 跳过依据（用户拍板）：P3 低严重度；竞态窗口（handle 安装前被取消）极小且无运行证据，实际频率未验证；影响仅为已取消请求继续下载写共享缓存与登出时残余请求的资源浪费，无用户可见功能错误。账号隔离放大由已修复的 F-019/F-020（`90b40b4`）承载，本项不独立成立。用户在另一工作树开发内存优化，本项涉及代码（MediaPreloader 图片预取链）均有变更，暂时跳过、留待后续。
 
 ### F-118：pin 无 owner 且非 pop 的 onDisappear 也解除保护
 
-- 状态：已确认
+- 状态：用户决定跳过（暂时，待内存优化工作树）
 - 严重度：P2
 - 位置：`MoviePilot-TV/ViewModels/MediaPreloader.swift:312-313,388-398`、`MediaDetailContainerView.swift:238-245` 与四个 Tab NavigationStack/详情继续 push 链
 - 触发路径：同 key 有多个详情 owner，或父详情 push 推荐/类似子详情、切 Tab 等使容器 `onDisappear`，随后有订阅通知或超过 30 个焦点预加载。
@@ -2084,10 +2085,11 @@
 - 跨端结论：纯 TV ownerless pin 根因已确认；端到端导航时序与可见后果未运行验证。
 - 最小方向：pin 使用稳定 owner token/lease（或等价最小refcount）且同 owner 幂等，只在实际导航条目结束时释放；返回时校验 View task 与 manager 注册项一致，不新建缓存框架。
 - 验证要求：V012-A 与真机/Simulator 覆盖 push/pop、Tab 切换、多 owner、返回后通知刷新、LRU 及焦点，不以静态生命周期猜测冒充用户影响。
+- 跳过依据（用户拍板）：静态 ownerless pin 缺陷成立，但 push/pop、Tab 切换与 30+ LRU churn 的端到端时序无运行证据，真实可见后果（返回数据失效、通知漏刷）未在真机/Simulator 复现；修复需改四 Tab 导航链与详情生命周期。用户在另一工作树开发内存优化，本项涉及代码（MediaPreloader pin/淘汰与详情生命周期）均有变更，暂时跳过、留待后续。
 
 ### F-119：canonical media alias 只回写任意一个缓存任务
 
-- 状态：已确认
+- 状态：用户决定跳过（暂时，待内存优化工作树）
 - 严重度：P2
 - 位置：`MoviePilot-TV/ViewModels/MediaPreloader.swift:308,342,402-415`、`Models.swift:1080-1152`、SubscriptionModifier/Handler 与 MediaContextMenu
 - 触发路径：cache 同时持有两个 `MediaInfo.id` 不同、但 `apiMediaId` 相同的富/简字段媒体对象，随后保存或取消该媒体订阅。
@@ -2100,6 +2102,7 @@
 - 独立复核：review_a001_h 确认现有 rich/slim AniList 反例及生产中源 task 自动创建 TMDB target 的第二类 alias；保存与通用取消仅写一个，通知只刷 pinned，未 pin alias 的菜单按精确 item.id 继续读旧标签，维持 P3。
 - V012-B 补强：详情成功刷新只写当前注入的 preload task，成功通知也只强刷 pinned tasks；相同 canonical ID 的未 pinned aliases 继续陈旧。保持当前小缓存线性更新全部 alias 的最小方向。
 - G02全局裁决：verify_a001_h与rounda_g02_third均确认精确ID/recognized-TMDB只覆盖部分alias，fullDetail与非TMDB canonical alias仍可能存活并长期读旧订阅状态；双票升级P2，点击时fresh lookup只限制错误mutation、不修正稳定错误标签。
+- 跳过依据（用户拍板）：非 pinned alias 菜单标签陈旧为条件性 P2，真实 alias 并存频率未验证；点击时仍 fresh lookup，不会造成错误 mutation。用户在另一工作树开发内存优化，本项涉及代码（MediaPreloader 缓存/alias 与订阅回写链）均有变更，暂时跳过、留待后续。
 
 ### F-120：页面级 busy 状态没有动作目标
 
@@ -2123,7 +2126,7 @@
 
 ### F-121：Fork 错误跨分享目标残留
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P2
 - 位置：`MoviePilot-TV/ViewModels/SubscriptionHandler.swift` 的 `forkErrorMessage` 与分享 Sheet 调用者
 - 触发路径：目标 A 的 Fork 失败后关闭 Sheet，在没有实际开始新 Fork 前打开目标 B 的分享 Sheet；或 A 的未结构化任务在 B 呈现后晚到。
@@ -2138,6 +2141,7 @@
 - G08独立复核：review_a001_j逐步确认A失败写错、关闭不清、B新Sheet复用同一handler并立即读旧错，只有真正点击B后才清；“重试前清错”不能反证presentation首帧，主张保留P3。因与G08主审直接冲突，交第三裁。
 - G08第三裁：verify_a001_h确认当前HEAD仍可达“A失败写错→dismiss只清request→页面级handler存活→B新Sheet首帧直接读A错误→仅点击B后才清”的同步序列，当时保留P3。
 - G02 clean-room 末裁：错误既不绑定share presentation、share ID，也不绑定operation；它会污染当前可恢复操作界面，升级P2。使用`(operationID,shareID,message)`即可，与F-193复用token而不合并用户反馈回归。
+- 修复记录（用户拍板方案）：Fork 失败错误文案带上目标媒体标题（`share_title ?? name`，兜底"该订阅"），例如"暂时无法复用订阅《XXX》，请稍后重试。"。残留/迟到错误即使显示在新目标弹窗上也可直接识别来源，消除误导；未做 presentation 清旧/拒绝迟到的 operation owner 改造。已同步更新 2 条失败反馈测试断言。验证：tvOS Simulator build 通过；`PermissionGrantedBehaviorTests` 中两个反馈用例均通过（全套仅已知 SSE 时序用例失败）。
 
 ### F-122：nullable TMDB 识别结果折叠失败、取消与无匹配
 

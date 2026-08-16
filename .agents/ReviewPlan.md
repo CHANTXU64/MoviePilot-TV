@@ -619,11 +619,11 @@
 - `V003 / F-114`：已确认 P3 并修复；Search/MediaDetail 父 VM 固定持有 SiteFilter 子对象，已复用现有事件桥接（`siteFilter.objectWillChange` → 父 `objectWillChange`）让按钮及时刷新；仅影响 UI 新鲜度，回溯 V011/V012/W006/W008/I007/I008/I012/I013/G01/G03。
 - `V004-A/I005 / F-115`：已确认 P2 并跳过（用户拍板）；详情ready复用规范化字符串、正ID与已支持身份；详情响应可用后立即启动season，图片/识别不得把有订阅权限电视剧全屏Loading串行延长，回溯I008/G02/G03。对后端确认识别失败才返回全空（现有 ready 校验仍必要），识别成功必有非空 title，ready 值域误判为不可触发的纯理论问题；背景图等待有开关，阶段屏障按用户裁决一并跳过。
 - `V004-A / F-116`：已确认P2并修复；cache-hit 时 Container 首帧直接揭示内容但 VM init 未装背景、View task 后补背景的确定顺序已确认。修复：背景选择逻辑收敛到 `MediaInfo.ImageURLs.backgroundTarget`，VM init 同步安装背景不走动画，`setBackground()` 与 `MediaPreloader` 预取共用同一实现；已补 6 条回归测试（init 契约 3 条 + 同值守卫/http 代理分支 3 条）。实际闪烁时长、焦点与真机表现仍列运行未验证。
-- `V004-A / F-117`：已确认 P3；图片预取取消标记与 Kingfisher handle 安装须原子，已取消 operation 不得随后启动、写缓存或发布 ready；回溯 V004-B/V023/R001/R002/I005/G03/G06。
-- `V004-B / F-118`：已确认P2；G03窄第三裁确认无owner/refcount会令多owner提前解除保护，push/Tab/State、返回后通知刷新及LRU组合的端到端时序仍需运行验证。
-- `V004-B / F-119`：已确认P2；G02全局裁确认精确ID/recognized-TMDB仍只覆盖部分alias，非pinned alias可长期显示旧订阅状态；保存/取消回写须线性扫描当前小缓存更新全部canonical alias，点击时fresh lookup只限制错误mutation。
+- `V004-A / F-117`：已确认 P3 并暂时跳过（用户拍板，待内存优化工作树）；图片预取取消标记与 Kingfisher handle 安装的原子性缺口静态成立，但竞态窗口极小且无运行证据，影响仅为资源浪费与登出残余请求，无用户可见功能错误；账号隔离放大由已修复的 F-019/F-020 承载；用户在另一工作树开发内存优化，相关代码均有变更，留待后续；回溯 V004-B/V023/R001/R002/I005/G03/G06。
+- `V004-B / F-118`：已确认P2并暂时跳过（用户拍板，待内存优化工作树）；ownerless pin 会令多 owner 任一消失即提前解除保护，但 push/Tab/State、返回后通知刷新及 LRU 组合的端到端时序无运行证据，真实可见后果未复现；修复需改四 Tab 导航链与详情生命周期；用户在另一工作树开发内存优化，相关代码均有变更，留待后续。
+- `V004-B / F-119`：已确认P2并暂时跳过（用户拍板，待内存优化工作树）；G02全局裁确认精确ID/recognized-TMDB仍只覆盖部分alias，非pinned alias可长期显示旧订阅状态；保存/取消回写须线性扫描当前小缓存更新全部canonical alias，点击时fresh lookup只限制错误mutation；用户在另一工作树开发内存优化，本项涉及代码均有变更，留待后续。
 - `V006 / F-120`：降P2且用户决定跳过；卡片共享busy主要造成异目标动作丢失/迟到UI，Reorganize preview/submit交叉与当前Web一致，本项未证明错目标mutation，具体破坏性风险仍由F-074/F-075/F-152/F-156承载。
-- `V006 / F-121`：已确认P2；Fork错误不绑定presentation/share/operation，A可污染B。复用F-193 operation token并保留错误状态专属回归。
+- `V006 / F-121`：已确认P2并修复（用户拍板方案）；Fork 失败错误文案带目标媒体标题，残留/迟到错误可识别来源、消除误导；未做 presentation 清旧与拒绝迟到的 operation owner 改造。已同步 2 条失败反馈测试断言，相关用例通过。
 - `V005 / F-122`：已确认 P3；最终 error/cancel 与 no-match 共用 nil 并被误报不存在，Home 仍提交标题回退导航；首段失败但 fallback 成功不算用户缺陷，真 no-match 提示产品意图未验证。
 - `V005 / F-123`：已确认条件性 P2；旧 A 动作可在切 B 后以 B 凭据发起后续识别请求，独立于 F-027/F-113；按钮起点到多 await/全局状态/导航已纳入 CHK-005，当前仓库需统一引入单调 epoch。
 - `V007 / 会话传播`：无新增 finding；旧自动登录 A→logout→手动登录 B→A 迟到 200 可在 B baseURL 下覆盖 token/currentUser/四项凭据，归 F-027；login acquisition owner、单调 epoch 与 A→B→A 已纳入 CHK-005，F-107/F-113/F-123 只闭合传播入口。
