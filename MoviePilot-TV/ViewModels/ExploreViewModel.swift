@@ -448,7 +448,7 @@ class ExploreViewModel: ObservableObject {
 
   static var doubanYearDict: [(key: String, value: String)] {
     var years: [(key: String, value: String)] = []
-    let currentYear = Calendar.current.component(.year, from: Date())
+    let currentYear = Calendar(identifier: .gregorian).component(.year, from: Date())
     // 近6年
     for i in 0..<6 {
       let year = String(currentYear - i)
@@ -483,7 +483,7 @@ class ExploreViewModel: ObservableObject {
   ]
 
   static var bangumiYearDict: [(key: String, value: String)] {
-    let currentYear = Calendar.current.component(.year, from: Date())
+    let currentYear = Calendar(identifier: .gregorian).component(.year, from: Date())
     return (0..<10).map { i in
       let year = String(currentYear - i)
       return (key: year, value: year)
@@ -534,7 +534,7 @@ class ExploreViewModel: ObservableObject {
   ]
 
   static var anilistYearDict: [(key: Int, value: String)] {
-    let currentYear = Calendar.current.component(.year, from: Date())
+    let currentYear = Calendar(identifier: .gregorian).component(.year, from: Date())
     return (0..<15).map { (currentYear - $0, String(currentYear - $0)) }
   }
 
