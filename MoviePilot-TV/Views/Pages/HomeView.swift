@@ -22,6 +22,19 @@ struct HomeView: View {
             ProgressView()
               .frame(maxWidth: .infinity, minHeight: 200)
           } else {
+            // 部分数据失败：保留旧快照并提示（成功空不算失败）
+            if viewModel.latestLoadFailed || viewModel.subscriptionsLoadFailed {
+              HStack {
+                Text("部分数据加载失败，当前显示的是旧数据")
+                  .font(.footnote)
+                  .foregroundColor(.secondary)
+                Button("重试") {
+                  Task { await viewModel.refreshData() }
+                }
+              }
+              .padding(.horizontal)
+            }
+
             // 第1节：最近添加
             if !viewModel.latestMediaServers.isEmpty {
               MediaSectionView(
@@ -64,10 +77,22 @@ struct HomeView: View {
             if viewModel.latestMediaServers.isEmpty && viewModel.movieSubscriptions.isEmpty
               && viewModel.tvSubscriptions.isEmpty
             {
-              Text("暂无内容")
-                .font(.headline)
-                .foregroundColor(.secondary)
+              if viewModel.latestLoadFailed || viewModel.subscriptionsLoadFailed {
+                VStack(spacing: 12) {
+                  Text("加载失败，请重试")
+                    .font(.headline)
+                    .foregroundColor(.secondary)
+                  Button("重试") {
+                    Task { await viewModel.refreshData() }
+                  }
+                }
                 .frame(maxWidth: .infinity, minHeight: 200)
+              } else {
+                Text("暂无内容")
+                  .font(.headline)
+                  .foregroundColor(.secondary)
+                  .frame(maxWidth: .infinity, minHeight: 200)
+              }
             }
           }
         }

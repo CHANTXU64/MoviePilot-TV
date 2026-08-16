@@ -136,10 +136,10 @@
 | F-120 | 降级（用户决定跳过） | P2 | V006→V012-B→G10/G09 | 页面/Sheet mutation single-flight owner | 共享busy无target会令B卡片动作被丢弃或被A晚到提示打断；Reorganize预览与提交可交叉，但当前Web同样允许，且本项未证明错目标mutation | 既有双审闭合卡片owner与三个Sheet；后续按当前TV/Web触发与后果重裁 | 不做TV单端增强 | 普通快速网络下窗口较短；主要影响为动作无反馈或迟到UI，降P2并由用户决定跳过 |
 | F-121 | 已修复 | P2 | V006→W015→G02 | `SubscriptionHandler.forkErrorMessage` 与分享 Sheet 呈现链 | 错误不绑定share presentation/operation，A的同步残留或迟到失败可稳定污染B的可恢复操作界面 | 既有多轮裁决闭合同步链；全新G02 clean-room复核确认operation owner缺口并升级P2 | 错误绑定operationID/shareID，新presentation清旧且拒绝迟到发布 | TV跨目标错误归属P2；迟到调度频率未验证 |
 | F-122 | 已修复 | P3 | V005 | `APIService.recognizeTmdbId`、`MediaActionHandler` 及 Home 标题回退 | nullable 结果把最终无匹配、失败与取消统一呈现为未识别 | review_a001_j 闭合两阶段识别、通配 catch、全局弹窗与标题回退继续导航 | review_a001_h 独立确认最终 error/cancel→nil→不存在弹窗，并收窄首段失败但 fallback 成功不算用户缺陷 | 纯 TV 错误语义缺陷已确认；Home 真 no-match 提示产品意图未验证 |
-| F-123 | 已确认 | P2 | V005 | 高层 TMDB action、两阶段识别、默认站点与最终导航链 | 用户动作未绑定发起 session，后续请求可携 B 凭据发送 A 标题 | review_a001_j 闭合 A search 等待→切 B→B recognize 的确定链及全局状态传播 | review_a001_h 独立确认正常 A 空响应后 B 新请求链、与 F-027/F-113 的修复边界及 ResourceResult 快照过晚 | 条件性跨 profile P2 已确认；旧导航/海报可见性未运行验证 |
+| F-123 | 用户决定跳过（核心链已闭合，剩余低影响） | P2 | V005 | 高层 TMDB action、两阶段识别、默认站点与最终导航链 | 用户动作未绑定发起 session，后续请求可携 B 凭据发送 A 标题 | review_a001_j 闭合 A search 等待→切 B→B recognize 的确定链及全局状态传播 | review_a001_h 独立确认正常 A 空响应后 B 新请求链、与 F-027/F-113 的修复边界及 ResourceResult 快照过晚 | 条件性跨 profile P2 已确认；旧导航/海报可见性未运行验证 |
 | F-124 | 已修复（`4a1a291`） | P1 | V006→I010→G02 | 订阅菜单标签/peek task 与 Handler fresh lookup/action | 菜单显示的add/cancel意图在fresh lookup后可反转，显示“订阅”的激活可直接执行无确认DELETE | `4a1a291`：菜单冻结展示意图，lookup后统一校验session，mismatch只刷新提示，取消走destructive确认 | 聚焦5/5、完整本地450/450通过；同一独立复审代理首轮问题修正后最终PASS | 原条件性错误删除P1已闭合；真实后端兼容套件未运行 |
-| F-125 | 已确认 | P3 | V008 | Home Plex link 解析与 v2.15.1 版本快照 | `/server/{machine}/details?key=` 未被旧 `/media/...` 解析器识别，目标身份退化 | verify_a001_h 以本地 v2.15.1 tag 闭合后端生成、Web 解析与 TV fallback | review_a001_j 独立确认 latest/resume 链、Plex 无结构化 ID 时只能从 link 恢复身份，并限制第三方 scheme 结论 | 版本特定 TV 深链缺陷已确认；tvOS Plex 精确 scheme 未验证 |
-| F-126 | 已确认 | P2 | V008→W013-A/W020-A/E/F→G02 | 多owner加载失败/取消与成功空或旧快照终态 | Home有10秒自愈但短时无stale标识；Season订阅/availability及System sites/rules各自把部分失败、取消、成功空或旧值混用，恢复入口不一致 | 既有多审确认总根；G02两名不同复核要求按五条子链验收并维持总体P2，驳回“Home永久锁死”扩大 | 各owner分别保留最小success-empty/error/cancel/stale与现有retry；不建统一状态机 | 条件性P2；System部分恢复UI与真实失败时序未运行验证 |
+| F-125 | 用户决定跳过 | P3 | V008 | Home Plex link 解析与 v2.15.1 版本快照 | `/server/{machine}/details?key=` 未被旧 `/media/...` 解析器识别，目标身份退化 | verify_a001_h 以本地 v2.15.1 tag 闭合后端生成、Web 解析与 TV fallback | review_a001_j 独立确认 latest/resume 链、Plex 无结构化 ID 时只能从 link 恢复身份，并限制第三方 scheme 结论 | 版本特定 TV 深链缺陷已确认；tvOS Plex 精确 scheme 未验证 |
+| F-126 | 已修复 | P2 | V008→W013-A/W020-A/E/F→G02 | 多owner加载失败/取消与成功空或旧快照终态 | Home有10秒自愈但短时无stale标识；Season订阅/availability及System sites/rules各自把部分失败、取消、成功空或旧值混用，恢复入口不一致 | 既有多审确认总根；G02两名不同复核要求按五条子链验收并维持总体P2，驳回“Home永久锁死”扩大 | 各owner分别保留最小success-empty/error/cancel/stale与现有retry；不建统一状态机 | 条件性P2；System部分恢复UI与真实失败时序未运行验证 |
 | F-127 | 用户决定跳过修复 | P1 | V008→G02 | Home 重置订阅动作与后端 reset 字段 | 无确认reset会立即覆盖note、缺集、优先级、人工标记与运行状态，远超普通重新搜索 | 既有双审闭合字段范围；全新G02 clean-room复核对照当前后端与Web确认升级P1 | 保持当前直接重置行为，不修改 | 条件性持久状态破坏P1；用户接受误触风险 |
 | F-128 | 已确认 | P3 | V008 | Home 媒体库跳转、unsupported/invalid/openURL rejected 出口 | 用户点击失败只记录日志，无可见反馈 | verify_a001_h 闭合各服务器分支与调用者无返回值/错误出口 | review_a001_j 独立确认主动作/菜单始终暴露及异步 openURL completion 无用户出口 | 纯 TV 动作反馈缺陷已确认；第三方 App 能力未验证 |
 | F-129 | 已确认 | P2 | V009-B→V009-E/F→G01/G04 | Explore Popular 去重 key 与 `MediaInfo.id` | 无有效结构身份时title区分去重项，但实际SwiftUI ID不含title，形成重复ID与错误firstIndex/loadMore | 既有双审确认；G01纠偏与G04独立复核再次闭合A/B反例并双票升P2 | 与F-138共用中央identity修复但保留Popular回归 | 条件性TV列表身份缺陷；真实Popular坏身份频率未验证 |
@@ -2159,7 +2159,7 @@
 
 ### F-123：高层 TMDB action 未绑定发起会话
 
-- 状态：已确认
+- 状态：用户决定跳过（核心链已闭合，剩余低影响）
 - 严重度：条件性 P2
 - 位置：`MoviePilot-TV/ViewModels/MediaActionHandler.swift:29-51`、`APIService.swift:1130-1146,1160-1295,1865-1868`、`ContentView.swift:5,83-105` 及 Home/ContextMenu/详情动作
 - 触发路径：profile A 发起 `/media/search` 并等待，期间切到 B；A 响应无匹配后，同一高层动作继续以当前 B baseURL/token 发起 `/media/recognize`，但载荷仍是 A 的标题。
@@ -2170,6 +2170,7 @@
 - 主审证据：review_a001_j 闭合 A search→切 B→B recognize 的确定调用链，并收窄 overlay、poster 与旧 NavigationPath 的静态证据边界。
 - 独立复核：review_a001_h 独立确认正常 A `/media/search` 空响应后，B `/media/recognize` 会以 B 凭据发送 A 标题；F-027 单请求、F-113 helper 与导航后才捕获的 ResourceResult snapshot 均不能覆盖，维持条件性 P2。A→B→A、重叠 action 与 logout 后树生命周期仍需后续回归。
 - I010第三裁传播：TMDB target计算可在非详情动作前写全局loadingPosterURL并确定性残留，之后B详情可把A poster与B frame组合；异步poster/session owner继续归本项。错误详情对象和mutation参数始终仍是B，组合视觉位置另归F-174 P3，不把交叉表现升级或另编号。
+- 跳过依据（用户拍板）：`90b40b4` 之后识别两阶段之间、识别返回、默认站点读取后均有 `isSessionUnchanged` epoch 校验（epoch 每次切换会话单调递增，A→B→A 同样被挡），跨账号"B 凭据发送 A 查询"核心链在当前 HEAD 已闭合；剩余为同账号重叠 action 的 UI 状态竞争（旧 spinner/弹窗/导航盖新），tvOS 需完整"聚焦→呼出菜单→点击"序列才能触发、重叠窗口窄且实际频率未验证，另有 logout 后根 StateObject 生命周期 P3。完整修法需 CHK-005 统一单调 session epoch 的大改造，用户决定在运行验证缺失前跳过。
 
 ### F-124：菜单显示意图可在 Handler 中反转为相反 mutation
 
@@ -2190,7 +2191,7 @@
 
 ### F-125：v2.15.1 Plex 链接形状未被 Home 解析
 
-- 状态：已确认
+- 状态：用户决定跳过
 - 严重度：P3
 - 位置：`MoviePilot-TV/ViewModels/HomeViewModel.swift:298-323` 的 Plex link 解析；本地 v2.15.1 Backend/Web tag 静态快照
 - 触发路径：媒体服务器 latest 返回 `web/index.html#!/server/{machine}/details?key={item_id}&X-Plex-Token=...`，用户从 Home 打开该 Plex 卡片。
@@ -2201,10 +2202,11 @@
 - 主审证据：verify_a001_h 对照 `/Users/chantxu/code/MoviePilot` 的本地 `v2.15.1^{}` `7a5e565b…` 与 `/Users/chantxu/code/MoviePilot-Frontend` 的 `v2.15.1^{}` `76c524eb…`，闭合目标版本后端生成、Web 解析和 TV fallback；两个约定同级仓库仍缺失，未 fetch，故只算版本特定不可变参考，不冒充当前远端。
 - 独立复核：review_a001_j 独立确认 v2.15.1 latest/resume 共用新形状、Plex 项没有填结构化 `item_id/server_id` 因而只能从 link 恢复 machine/item，TV 旧 parser 必然退化 generic scheme；维持 P3并严格不声明任一 tvOS Plex scheme 可用。
 - 未验证：tvOS Plex App 支持的精确 URL scheme、第三方 App 安装状态和远端 tag 当前性。
+- 跳过依据（用户拍板）：已对照当前后端 `plex.py:157`（媒体库项旧形状）与 `plex.py:828`（`get_play_url` 新形状）及 Web `appDeepLink.ts` 双分支，确认 TV 只认媒体库项旧形状、继续观看媒体项新形状降级 `plex://`。但影响仅 P3（只能打开 Plex App 首页、落不到具体媒体），且即使按 Web 形状修复，tvOS Plex App 是否支持 `plex://play/?metadataKey=...&server=...` 也未验证——修正后能否精确落点取决于未验证的第三方 scheme 支持，用户决定跳过。
 
 ### F-126：加载失败或取消与成功空/旧快照终态混淆
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P2
 - 位置：`MoviePilot-TV/ViewModels/HomeViewModel.swift` 的媒体配置、latest 与订阅加载；`SubscribeSeasonViewModel.loadSeasonManagementData`及包装`.task`
 - 触发路径：冷启动的媒体配置或订阅请求失败，或已有订阅快照后的周期刷新失败。
@@ -2223,6 +2225,7 @@
 - G02全局裁决：verify_a001_h与rounda_g02_third按原命题分别核Home、Season subscription、Season availability、System sites、System rules。Home约10秒轮询会自愈，故删除“永久锁死”扩大说法；五条子链的成功空/失败/取消/stale与恢复入口不同，验收必须分开，但共同根和总体P2维持。System部分恢复UI仍留未验证。
 - W013-A 最小方向：只在全部阶段成功且未取消后锁`hasLoaded`；`CancellationError`复位门闩、不发布错误并停止后续阶段，继续复用现有Retry，不引入通用加载状态机。
 - 未验证：真实故障频率、最终文案与retry交互、tvOS切Tab后同一StateObject重现时序。
+- 修复记录：Home 增加 `latestLoadFailed`/`subscriptionsLoadFailed`：成功空视为有效结果并清错，失败保留旧快照/旧数组并置位，取消不改状态；`loadData` 被取消时复位 `hasLoaded` 门闩，切回可立即重试。HomeView 空态分流（失败显示"加载失败，请重试"+重试按钮）并新增部分失败顶部横幅（"部分数据加载失败，当前显示的是旧数据"+重试）。System 过滤规则增加 `rulesLoadFailed`：失败保留旧规则并置位，成功/无权限清错，取消不再清空数组；SystemView 规则状态行加"加载失败，点击重试"。分季页取消复位门闩与站点四态（F-112）核对后确认已由 `0cfeb12`/F-112 处理，未重复实现。已补 8 条回归测试（Home 服务器失败/恢复/取消不置位/配置失败/订阅失败恢复 5 条 + rules 失败保留/成功清错/取消保留 3 条）。验证：tvOS Simulator build 通过；相关套件 13/13；全量 629 用例仅已知 SSE 时序用例失败。
 
 ### F-127：重置订阅无确认即执行会丢状态的 mutation
 

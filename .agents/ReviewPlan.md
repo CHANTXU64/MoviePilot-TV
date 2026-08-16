@@ -625,10 +625,10 @@
 - `V006 / F-120`：降P2且用户决定跳过；卡片共享busy主要造成异目标动作丢失/迟到UI，Reorganize preview/submit交叉与当前Web一致，本项未证明错目标mutation，具体破坏性风险仍由F-074/F-075/F-152/F-156承载。
 - `V006 / F-121`：已确认P2并修复（用户拍板方案）；Fork 失败错误文案带目标媒体标题，残留/迟到错误可识别来源、消除误导；未做 presentation 清旧与拒绝迟到的 operation owner 改造。已同步 2 条失败反馈测试断言，相关用例通过。
 - `V005 / F-122`：已确认 P3 并修复；`recognizeTmdbId` 改 throws，失败/取消不再折叠为 nil 误报"不存在"，nil 仅表示真 no-match；Handler 空标题与失败/取消不弹提示，MediaPreloader 预加载静默；已补双段失败/兜底成功/真 no-match 三条回归测试并同步兼容测试签名。
-- `V005 / F-123`：已确认条件性 P2；旧 A 动作可在切 B 后以 B 凭据发起后续识别请求，独立于 F-027/F-113；按钮起点到多 await/全局状态/导航已纳入 CHK-005，当前仓库需统一引入单调 epoch。
+- `V005 / F-123`：已确认条件性 P2 并跳过（用户拍板）；`90b40b4` 后识别链各 await 点均有 epoch 校验，跨账号"B 凭据发 A 查询"核心链已闭合，剩余同账号重叠 action 的 UI 状态竞争与 logout 根生命周期为低影响；完整修法需 CHK-005 统一单调 epoch，用户决定在运行验证缺失前跳过。
 - `V007 / 会话传播`：无新增 finding；旧自动登录 A→logout→手动登录 B→A 迟到 200 可在 B baseURL 下覆盖 token/currentUser/四项凭据，归 F-027；login acquisition owner、单调 epoch 与 A→B→A 已纳入 CHK-005，F-107/F-113/F-123 只闭合传播入口。
-- `V008 / F-125`：已确认 P3；本项目声明版本的本地 v2.15.1 tag 生成 Plex `/server/{machine}/details?key=`，TV 只解析旧 `/media/...` 后退化 generic scheme；只确认解析/身份丢失，tvOS Plex 精确 scheme 仍未验证。
-- `V008/W013-A / F-126`：已确认P2；Home把失败与成功空/旧快照共用outcome，分季页又在成功前置hasLoaded并在取消后不复位，Tab保留同owner重现时自动重载被锁死。各owner只在完整成功后锁门闩，取消复位且不发布错误，保留现有retry，不建加载状态机。
+- `V008 / F-125`：已确认 P3 并跳过（用户拍板）；当前后端 `get_play_url` 生成 `/server/{machine}/details?key=` 新形状，TV 只解析媒体库项旧形状后退化 `plex://`；但修正后能否精确落点依赖未验证的 tvOS Plex scheme 支持，用户决定跳过。
+- `V008/W013-A / F-126`：已确认P2并修复；Home 最近播放/订阅增加失败标记（成功空清错、失败保留旧值置位、取消不改），`loadData` 取消复位 `hasLoaded` 门闩，HomeView 空态分流+部分失败横幅+重试；System 过滤规则增加 `rulesLoadFailed` 与"加载失败，点击重试"，取消不再清空规则；分季页与站点子链核对已由 `0cfeb12`/F-112 覆盖。已补 8 条回归测试。
 - `V008 / F-127`：已确认条件P1；无确认reset覆盖多项运行/优先级/人工字段并恢复R。用户决定跳过修复，保持当前直接重置行为。
 - `V008 / F-128`：已确认 P3；不支持/非法媒体库链接与异步 openURL 拒绝均只有日志、无用户反馈；修复须保留异步 callback/outcome，与 F-125 解析契约、F-060 日志治理独立。
 - `V009-B / F-129`：已确认P2；G01/G04双票确认Popular按title保留A/B但最终SwiftUI ID相同并破坏focus/firstIndex/loadMore；与F-036独立，与F-138共用中央identity实现但保留专属回归。

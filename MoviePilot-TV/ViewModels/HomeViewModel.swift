@@ -20,6 +20,10 @@ class HomeViewModel: ObservableObject {
   @Published var movieSubscriptions: [Subscribe] = []
   /// 电视剧订阅列表
   @Published var tvSubscriptions: [Subscribe] = []
+  /// 最近播放加载失败标记（成功空视为有效结果；失败保留旧快照并置位）
+  @Published var latestLoadFailed = false
+  /// 订阅加载失败标记（成功空视为有效结果；失败保留旧数组并置位）
+  @Published var subscriptionsLoadFailed = false
   /// 加载状态
   @Published var isLoading = true
 
@@ -69,6 +73,12 @@ class HomeViewModel: ObservableObject {
 
     await refreshData()
 
+    // 页面 .task 被取消（切 Tab 等）后复位门闩，重新出现时能立即重试
+    if Task.isCancelled {
+      hasLoaded = false
+      return
+    }
+
     if isFirstLoad {
       isLoading = false
     }
@@ -88,6 +98,7 @@ class HomeViewModel: ObservableObject {
     guard apiService.canRequestSuperUserEndpoints else {
       latestMediaByServer = [:]
       latestMediaServers = []
+      latestLoadFailed = false
       if selectedLatestMediaServer != "" { selectedLatestMediaServer = "" }
       if !latestMedia.isEmpty { latestMedia = [] }
       return
@@ -103,30 +114,41 @@ class HomeViewModel: ObservableObject {
       let enabledServers = servers.filter { $0.enabled?.value ?? false }
 
       // 2. 使用 TaskGroup 并发获取已启用服务器的“最近新增/播放”列表
-      // 失败/取消返回 nil：只有成功结果（含成功空）才覆盖对应服务器快照，
-      // 失败/取消保留上一轮快照，避免轮询抖动把旧卡片误清空。
-      let latestByServer = await withTaskGroup(of: (String, [MediaServerPlayItem]?).self) {
+      // 只有成功结果（含成功空）才覆盖对应服务器快照；
+      // 失败保留上一轮快照并置失败标记，取消保留快照但不视为失败。
+      let latestByServer = await withTaskGroup(of: (String, ServerLatestOutcome).self) {
         group in
         for server in enabledServers {
           group.addTask {
             do {
               let items = try await self.apiService.fetchMediaServerLatest(server: server.name)
-              return (server.name, items as [MediaServerPlayItem]?)
+              return (server.name, .success(items))
             } catch is CancellationError {
-              return (server.name, nil)
+              return (server.name, .cancelled)
             } catch {
               print("加载服务器 \(server.name) 最新媒体失败: \(error)")
-              return (server.name, nil)
+              return (server.name, .failed)
             }
           }
         }
 
         // 收集各服务器结果，仅保留成功项
         var byServer: [String: [MediaServerPlayItem]] = [:]
-        for await (serverName, items) in group {
-          if let items {
+        var anyFailed = false
+        var anyCancelled = false
+        for await (serverName, outcome) in group {
+          switch outcome {
+          case .success(let items):
             byServer[serverName] = items
+          case .failed:
+            anyFailed = true
+          case .cancelled:
+            anyCancelled = true
           }
+        }
+        // 全部完成（无取消）时按结果刷新失败标记；有取消保持原值。
+        if !anyCancelled {
+          self.latestLoadFailed = anyFailed
         }
         return byServer
       }
@@ -161,8 +183,15 @@ class HomeViewModel: ObservableObject {
         print("加载最新媒体被取消")
       } else {
         print("加载最新媒体失败: \(error)")
+        latestLoadFailed = true
       }
     }
+  }
+
+  private enum ServerLatestOutcome {
+    case success([MediaServerPlayItem])
+    case failed
+    case cancelled
   }
 
   private func applyLatestMediaSelection() {
@@ -187,6 +216,7 @@ class HomeViewModel: ObservableObject {
     guard apiService.canAccess(.subscribe) else {
       if !movieSubscriptions.isEmpty { movieSubscriptions = [] }
       if !tvSubscriptions.isEmpty { tvSubscriptions = [] }
+      subscriptionsLoadFailed = false
       return true
     }
     do {
@@ -202,13 +232,14 @@ class HomeViewModel: ObservableObject {
       if self.tvSubscriptions != newTVs {
         self.tvSubscriptions = newTVs
       }
+      subscriptionsLoadFailed = false
       return true
+    } catch is CancellationError {
+      print("加载订阅被取消")
+      return false
     } catch {
-      if error is CancellationError {
-        print("加载订阅被取消")
-      } else {
-        print("加载订阅失败: \(error)")
-      }
+      print("加载订阅失败: \(error)")
+      subscriptionsLoadFailed = true
       return false
     }
   }

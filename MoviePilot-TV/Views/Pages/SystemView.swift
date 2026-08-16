@@ -299,6 +299,13 @@ struct SystemView: View {
             if viewModel.isLoadingRules {
               row("规则状态", value: "正在加载")
                 .foregroundStyle(.secondary)
+            } else if viewModel.rulesLoadFailed {
+              Button {
+                Task { await viewModel.loadCustomFilterRules() }
+              } label: {
+                row("规则状态", value: "加载失败，点击重试")
+                  .foregroundStyle(.secondary)
+              }
             } else if viewModel.customFilterRules.isEmpty {
               row("规则状态", value: "暂无自定义过滤规则")
                 .foregroundStyle(.secondary)
