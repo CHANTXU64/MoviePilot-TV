@@ -124,7 +124,7 @@
 | F-108 | 未验证 | P3 | V001 | `NotificationManager.swift:44-60`、根 presenter 与 Sheet 异步失败链 | 通知可能在独立 Sheet 下不可见却照常计时并过期 | review_a001_j 闭合 SubscribeSeason/Transfer 异步失败、根 presenter 与错误清空链 | verify_a001_h 确认静态触发链，但无法静态证明 tvOS Sheet 必然遮挡根 overlay | 条件性 TV 呈现问题；模态层级、焦点与五秒可见窗口待运行验证 |
 | F-109 | 已修复（`90b40b4`） | P2 | V002-A/B→W020-A/D/G06 | profile偏好作用域与权威配置owner | 四类tuple key可碰撞；token-only/凭据轮换还会落入错误bucket，推荐开关又绕过当前per-user权威配置 | 既有多审闭合碰撞与推荐合同；G06 两票确认key读取使用凭据用户名而非currentUser且baseURL未规范化 | canonical baseURL+权威currentUser组成版本化tuple；异步操作冻结同一key | 跨profile污染机制已确认；真实多profile频率与远端最新性未验证 |
 | F-110 | 已修复 | P2 | S005→C018-B/W011→G05 | `TorrentsResultView.swift:267,283-285,329-343,374-395` | 默认排序选择升序仍固定按pri_order降序 | 既有多审确认；G05主审与独立复核均再次闭合可选asc与固定desc的稳定反例并支持P2 | 比较器遵循方向，或隐藏默认字段方向控件；不与F-061合并 | 纯TV内部控制/比较器契约冲突 |
-| F-111 | 已确认 | P2 | V002-A/B→W020-A/C→I016 | token-only profile与连接身份 | 无storedUsername的合法会话统一使用default，System连接页也忽略权威currentUser而显示未知/输入凭据用户名 | 既有双审确认机制；I016两代理以受支持token-only双账号隔离链确认升P2 | profile与显示统一使用当前权威会话身份 | 纯TV身份缺陷；真实token-only多账号频率未验证 |
+| F-111 | 已修复 | P2 | V002-A/B→W020-A/C→I016 | token-only profile与连接身份 | 无storedUsername的合法会话统一使用default，System连接页也忽略权威currentUser而显示未知/输入凭据用户名 | 既有双审确认机制；I016两代理以受支持token-only双账号隔离链确认升P2 | profile与显示统一使用当前权威会话身份 | 纯TV身份缺陷；真实token-only多账号频率未验证 |
 | F-112 | 已确认 | P2 | V002-C/D→W020-A/D→I016 | 站点权威空/失败/加载状态 | 站点成功空不清旧选择，失败与当前可用数据不可区分；Search/详情还会继续发送旧ID | 既有双审确认机制；I016两代理闭合成功空→旧ID请求链并升P2 | 成功空清选择，失败/取消与空分开并提供最小重试 | 纯TV状态缺陷；真实空站点频率未验证 |
 | F-113 | 已确认 | P2 | V002-D | `SystemViewModel.swift:385-400,444-450` 及资源搜索调用者 | 默认站点异步归一化可跨 profile 写回或返回旧 profile 值 | review_a001_h 闭合 A 读取→await→动态 B key 写回、catch 回退 A 与 B 会话请求传播 | review_a001_j 独立确认成功/错误/取消/撤权、三个调用者与条件性 P2 严重度边界 | 纯 TV 会话归属缺陷已确认、严重度条件性；旧导航可见性与真实频率未运行验证 |
 | F-114 | 已确认 | P3 | V003 | `SearchViewModel.swift:270,658-668`、`MediaDetailViewModel.swift:40,122-133` 及对应 View | 父 ViewModel 未转发 SiteFilter 子对象变化，站点按钮可停留旧文案 | verify_a001_h 闭合两个固定子对象、父 View 观察关系及 Paginator 已桥接反证 | review_a001_h 独立确认成功非空即可触发，实际请求读取子对象当前值并收窄为 UI 新鲜度 | 纯 TV SwiftUI 观察缺陷已确认；无关重绘前实际可见时长未运行验证 |
@@ -1952,7 +1952,7 @@
 
 ### F-111：token-only 会话把不同账号降成同一偏好身份
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P2（由 P3 升级）
 - 位置：`MoviePilot-TV/ViewModels/SystemViewModel.swift:145-168`，传播到 token-only 会话恢复、四类 profile 偏好消费者
 - 触发路径：同一服务器先后使用两个合法 token-only 账号，二者都没有保存的登录用户名；或 token-only 账号与真实用户名 `default` 共存。
@@ -1968,6 +1968,7 @@
 - W020-C独立复核：verify_a001_h确认连接页“登录用户”取手工输入/持久凭据而非已认证`currentUser.user_name`；Plex邮箱登录后服务端规范用户名是直接反例，继续归本项而不新建显示finding。
 - I016最终等级：review_a001_h以同服token-only Alice/Bob依次写四类偏好、二者都落`default`的确定隔离链建议P2；verify_a001_h独立确认token-only是受支持且有测试的生产路径，并闭合四类配置跨账号共享，第二票同意P2。历史`default`键无法证明owner，迁移不得跨用户猜测。
 - 剩余未验证：真实 token-only 多账号频率、字面用户名 `default` 的后端限制；legacy `default` key 的原 owner 已不可无损判定。
+- 修复记录：`90b40b4` 已把四类 profile key 迁移到 `profileKey`（`baseURL|user:user_id`，user_id 取权威 currentUser），`/user/current` 恢复时映射 `id`→`user_id`，连接页用户名取权威 `currentUser.user_name`，原“无 storedUsername 落字面量 default 共享”链已消失。本次补充 token-only 会话在 `/user/current` 恢复完成前/失败时 `profileKey` 为 nil 的窗口：`APIService.profileKey` 回退到持久化且与当前 token 强校验匹配（`withRestoredAccessToken`）的快照 user_id，保证恢复前四类偏好读写不静默失效；快照 token 不匹配时拒绝回退，保持不串号。已补匹配回退与不匹配拒绝两条回归测试。
 
 ### F-112：站点成功空不清旧选择且失败与空态不可区分
 

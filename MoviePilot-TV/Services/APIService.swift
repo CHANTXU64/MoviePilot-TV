@@ -554,8 +554,26 @@ class APIService: ObservableObject {
   var token: String? { session.token }
   var currentUser: Token? { session.currentUser }
 
-  var profileKey: String? { session.profileKey }
+  var profileKey: String? {
+    if let key = session.profileKey {
+      return key
+    }
+    return Self.persistedProfileKey(baseURL: session.baseURL, token: session.token)
+  }
   var uiIdentity: String { session.uiIdentity }
+
+  /// 会话身份尚未恢复（token-only 会话在 /user/current 恢复完成前或恢复失败）时，
+  /// 回退到持久化且与当前 token 匹配的已验证快照，避免四类 profile 偏好读写静默失效。
+  private static func persistedProfileKey(baseURL: String, token: String?) -> String? {
+    guard let token, !token.isEmpty,
+      let storedUser = loadStoredCurrentUser(),
+      let restoredUser = storedUser.withRestoredAccessToken(token),
+      let userId = restoredUser.user_id
+    else {
+      return nil
+    }
+    return "\(baseURL)|user:\(userId)"
+  }
 
   var isSessionStoredInKeychain: Bool? {
     guard session.token != nil else { return nil }

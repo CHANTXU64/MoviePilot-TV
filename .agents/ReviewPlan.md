@@ -613,7 +613,7 @@
 - `V001 / F-108`：未验证、条件性 P3；静态触发与错误清空链成立，但 tvOS Sheet 是否遮挡根 overlay、五秒可见窗口及焦点必须运行验证；回溯 C002/R001/V017/W013/V022/W019/G08。
 - `V001 / H-012`：已确认；成功操作保持静默，周期请求按生产者 error episode 去重并在恢复/会话变化时清 latch，用户主动操作每次失败仍须反馈，不做全局同文案去重。
 - `V002-A/B / F-109`：G06两票升P2；profile偏好使用canonical baseURL与权威currentUser组成的版本化无歧义tuple，四个旧prefix同批一次迁移，异步操作冻结同一key；G01争议关闭。
-- `V002-A/B / F-111`：已确认 P2；合法 token-only 会话恢复后必须使用与当前 token/session 绑定的权威用户名，身份未解析时延迟 profile 读写，不降为 `default`；legacy `default` key 不可无损判主，相关回溯已闭合。
+- `V002-A/B / F-111`：已确认 P2 并修复；合法 token-only 会话恢复后必须使用与当前 token/session 绑定的权威用户名，身份未解析时延迟 profile 读写，不降为 `default`；legacy `default` key 不可无损判主，相关回溯已闭合。`90b40b4` 已统一 key 为 `profileKey` 并修复连接页显示，本次补充恢复前窗口：`profileKey` 回退持久化且与当前 token 强校验匹配的快照 user_id，匹配回退/不匹配拒绝两条回归测试已补。
 - `V002-C/D / F-112`：已确认 P2；站点权威成功空必须清除旧选择，失败/取消须与成功空分流并提供现有入口的最小恢复；Search/详情继续发送旧ID的传播与相关回溯已闭合。
 - `V002-D / F-113`：已确认条件性 P2；异步默认站点归一化须冻结发起时 session/profile key，成功、失败与取消的过期结果均显式中止，调用者不得继续导航；回溯 V005/V007/V015/W003/W011/C014/R001/I004/G01/G05/G06。
 - `V003 / F-114`：已确认 P3；Search/MediaDetail 父 VM 固定持有 SiteFilter 子对象，须复用现有事件桥接让按钮及时刷新；仅影响 UI 新鲜度，回溯 V011/V012/W006/W008/I007/I008/I012/I013/G01/G03。
