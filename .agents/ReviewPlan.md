@@ -615,8 +615,8 @@
 - `V002-A/B / F-109`：G06两票升P2；profile偏好使用canonical baseURL与权威currentUser组成的版本化无歧义tuple，四个旧prefix同批一次迁移，异步操作冻结同一key；G01争议关闭。
 - `V002-A/B / F-111`：已确认 P2 并修复；合法 token-only 会话恢复后必须使用与当前 token/session 绑定的权威用户名，身份未解析时延迟 profile 读写，不降为 `default`；legacy `default` key 不可无损判主，相关回溯已闭合。`90b40b4` 已统一 key 为 `profileKey` 并修复连接页显示，本次补充恢复前窗口：`profileKey` 回退持久化且与当前 token 强校验匹配的快照 user_id，匹配回退/不匹配拒绝两条回归测试已补。
 - `V002-C/D / F-112`：已确认 P2 并修复；站点权威成功空必须清除旧选择，失败/取消须与成功空分流并提供现有入口的最小恢复；Search/详情继续发送旧ID的传播与相关回溯已闭合。已实现：`SystemViewModel` 成功空清旧选择、失败保留旧列表并显示错误行+点击重试、取消不清旧值；`SiteFilterViewModel` 成功空清 `selectedSites`。
-- `V002-D / F-113`：已确认条件性 P2；异步默认站点归一化须冻结发起时 session/profile key，成功、失败与取消的过期结果均显式中止，调用者不得继续导航；回溯 V005/V007/V015/W003/W011/C014/R001/I004/G01/G05/G06。
-- `V003 / F-114`：已确认 P3；Search/MediaDetail 父 VM 固定持有 SiteFilter 子对象，须复用现有事件桥接让按钮及时刷新；仅影响 UI 新鲜度，回溯 V011/V012/W006/W008/I007/I008/I012/I013/G01/G03。
+- `V002-D / F-113`：已确认条件性 P2 并跳过（用户拍板）；异步默认站点归一化须冻结发起时 session/profile key，成功、失败与取消的过期结果均显式中止，调用者不得继续导航；`90b40b4` 后所有调用者 await 前后均有 `isSessionUnchanged` 校验，跨 profile 写回与旧站点发起新会话搜索已被外层挡住，取消分支在当前按钮无结构 Task 调用链下不可达，实际影响已不存在，剩余为防御性语义问题；回溯 V005/V007/V015/W003/W011/C014/R001/I004/G01/G05/G06。
+- `V003 / F-114`：已确认 P3 并修复；Search/MediaDetail 父 VM 固定持有 SiteFilter 子对象，已复用现有事件桥接（`siteFilter.objectWillChange` → 父 `objectWillChange`）让按钮及时刷新；仅影响 UI 新鲜度，回溯 V011/V012/W006/W008/I007/I008/I012/I013/G01/G03。
 - `V004-A/I005 / F-115`：已确认 P2；详情ready复用规范化字符串、正ID与已支持身份；详情响应可用后立即启动season，图片/识别不得把有订阅权限电视剧全屏Loading串行延长，回溯I008/G02/G03。
 - `V004-A / F-116`：已确认P2；G03两张正确映射票确认cache-hit先揭示内容、VM初始化未装背景、View task后补背景的确定顺序；实际闪烁时长、焦点与真机表现仍列运行未验证。
 - `V004-A / F-117`：已确认 P3；图片预取取消标记与 Kingfisher handle 安装须原子，已取消 operation 不得随后启动、写缓存或发布 ready；回溯 V004-B/V023/R001/R002/I005/G03/G06。

@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import XCTest
 
@@ -58,6 +59,24 @@ private func withTimeout<T: Sendable>(
 
 @MainActor
 final class SearchViewModelTests: XCTestCase {
+  @MainActor
+  func testSearchViewModelForwardsSiteFilterChangesToParent() {
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { snapshot.restore(to: sharedService) }
+
+    let viewModel = SearchViewModel()
+    let changeReceived = expectation(description: "父 VM 收到 siteFilter 变化")
+    let cancellable = viewModel.objectWillChange.sink { _ in
+      changeReceived.fulfill()
+    }
+    defer { cancellable.cancel() }
+
+    viewModel.siteFilter.selectedSites = [1]
+
+    wait(for: [changeReceived], timeout: 1)
+  }
+
   func testOlderUnifiedSearchCompletionDoesNotClearLoadingForNewerSearch() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }

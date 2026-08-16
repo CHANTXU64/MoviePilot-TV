@@ -1,8 +1,34 @@
+import Combine
 import XCTest
 
 @testable import MoviePilot_TV
 
 final class MediaDetailViewHeaderActionTests: XCTestCase {
+  @MainActor
+  func testMediaDetailViewModelForwardsSiteFilterChangesToParent() {
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { snapshot.restore(to: sharedService) }
+
+    let detail = MediaInfo(
+      tmdb_id: 209_867,
+      anilist_id: 154_587,
+      source: "anilist",
+      title: "葬送的芙莉莲",
+      type: "电视剧"
+    )
+    let viewModel = MediaDetailViewModel(detail: detail)
+    let changeReceived = expectation(description: "父 VM 收到 siteFilter 变化")
+    let cancellable = viewModel.objectWillChange.sink { _ in
+      changeReceived.fulfill()
+    }
+    defer { cancellable.cancel() }
+
+    viewModel.siteFilter.selectedSites = [1]
+
+    wait(for: [changeReceived], timeout: 1)
+  }
+
   @MainActor
   func testHeaderSubscribeKeepsAniListIdentityAndPrefersFullDetailTMDB() throws {
     let detail = MediaInfo(

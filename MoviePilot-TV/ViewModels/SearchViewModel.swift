@@ -290,6 +290,9 @@ class SearchViewModel: ObservableObject {
     self.apiService = apiService
     self.siteFilter = SiteFilterViewModel(apiService: apiService)
     self.mediaSearchSource = SystemViewModel.currentDefaultMediaSearchSource(apiService: apiService)
+    self.siteFilter.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
   }
 
   /// 执行初始搜索：根据 searchType 决定是资源搜索还是聚合元数据搜索

@@ -126,8 +126,8 @@
 | F-110 | 已修复 | P2 | S005→C018-B/W011→G05 | `TorrentsResultView.swift:267,283-285,329-343,374-395` | 默认排序选择升序仍固定按pri_order降序 | 既有多审确认；G05主审与独立复核均再次闭合可选asc与固定desc的稳定反例并支持P2 | 比较器遵循方向，或隐藏默认字段方向控件；不与F-061合并 | 纯TV内部控制/比较器契约冲突 |
 | F-111 | 已修复 | P2 | V002-A/B→W020-A/C→I016 | token-only profile与连接身份 | 无storedUsername的合法会话统一使用default，System连接页也忽略权威currentUser而显示未知/输入凭据用户名 | 既有双审确认机制；I016两代理以受支持token-only双账号隔离链确认升P2 | profile与显示统一使用当前权威会话身份 | 纯TV身份缺陷；真实token-only多账号频率未验证 |
 | F-112 | 已修复 | P2 | V002-C/D→W020-A/D→I016 | 站点权威空/失败/加载状态 | 站点成功空不清旧选择，失败与当前可用数据不可区分；Search/详情还会继续发送旧ID | 既有双审确认机制；I016两代理闭合成功空→旧ID请求链并升P2 | 成功空清选择，失败/取消与空分开并提供最小重试 | 纯TV状态缺陷；真实空站点频率未验证 |
-| F-113 | 已确认 | P2 | V002-D | `SystemViewModel.swift:385-400,444-450` 及资源搜索调用者 | 默认站点异步归一化可跨 profile 写回或返回旧 profile 值 | review_a001_h 闭合 A 读取→await→动态 B key 写回、catch 回退 A 与 B 会话请求传播 | review_a001_j 独立确认成功/错误/取消/撤权、三个调用者与条件性 P2 严重度边界 | 纯 TV 会话归属缺陷已确认、严重度条件性；旧导航可见性与真实频率未运行验证 |
-| F-114 | 已确认 | P3 | V003 | `SearchViewModel.swift:270,658-668`、`MediaDetailViewModel.swift:40,122-133` 及对应 View | 父 ViewModel 未转发 SiteFilter 子对象变化，站点按钮可停留旧文案 | verify_a001_h 闭合两个固定子对象、父 View 观察关系及 Paginator 已桥接反证 | review_a001_h 独立确认成功非空即可触发，实际请求读取子对象当前值并收窄为 UI 新鲜度 | 纯 TV SwiftUI 观察缺陷已确认；无关重绘前实际可见时长未运行验证 |
+| F-113 | 用户决定跳过 | P2 | V002-D | `SystemViewModel.swift:385-400,444-450` 及资源搜索调用者 | 默认站点异步归一化可跨 profile 写回或返回旧 profile 值 | review_a001_h 闭合 A 读取→await→动态 B key 写回、catch 回退 A 与 B 会话请求传播 | review_a001_j 独立确认成功/错误/取消/撤权、三个调用者与条件性 P2 严重度边界 | 纯 TV 会话归属缺陷已确认、严重度条件性；旧导航可见性与真实频率未运行验证 |
+| F-114 | 已修复 | P3 | V003 | `SearchViewModel.swift:270,658-668`、`MediaDetailViewModel.swift:40,122-133` 及对应 View | 父 ViewModel 未转发 SiteFilter 子对象变化，站点按钮可停留旧文案 | verify_a001_h 闭合两个固定子对象、父 View 观察关系及 Paginator 已桥接反证 | review_a001_h 独立确认成功非空即可触发，实际请求读取子对象当前值并收窄为 UI 新鲜度 | 纯 TV SwiftUI 观察缺陷已确认；无关重绘前实际可见时长未运行验证 |
 | F-115 | 已确认 | P2 | V004-A→I005 | MediaPreloader详情ready与阶段屏障 | ready值域判定错误；详情响应已可启动season时仍等待识别和图片，稳定把有订阅权限电视剧的全屏Loading串行延长 | V004双审闭合身份值域；I005集成与不同代理复核闭合`detail response→season`关键路径并升级P2 | 规范ready值；详情响应发布即启动season，图片/识别仅约束真实依赖者 | TV详情ready/主流程阶段屏障已确认；真实延迟分布未验证 |
 | F-116 | 已确认 | P2 | V004-A→V012-A→I013→G03 | 热缓存首帧内容与背景安装顺序 | Container凭wasPreloaded先揭示内容，但VM初始化不安装传入full detail的背景，首帧确定进入灰底后才由View task补齐 | G03两名纠偏复核按正确命题独立闭合热缓存Container→VM init→View task顺序，覆盖I013原运行未验证边界并升级P2 | VM初始化同步安装已有full detail/background；不改F-115网络阶段图 | 纯TV首帧状态分裂已确认；实际闪烁时长/焦点影响未运行验证 |
 | F-117 | 已确认 | P3 | V004-A | `MediaPreloader.swift:95,123-169` 图片预取取消链 | 取消早于 Kingfisher handle 安装时，请求仍启动且可继续发布 ready | verify_a001_h 闭合已取消 child、onCancel 先恢复、operation 后启动请求与 handle 清空时序 | review_a001_h 独立确认 Swift/Kingfisher 顺序、真实取消入口、缓存写入与取消后 ready 发布 | TV 资源/生命周期缺陷已确认；真实竞态频率及注销传播未运行验证 |
@@ -1991,7 +1991,7 @@
 
 ### F-113：默认站点异步归一化跨 profile 写回或返回旧值
 
-- 状态：已确认
+- 状态：用户决定跳过
 - 严重度：条件性 P2
 - 位置：`MoviePilot-TV/ViewModels/SystemViewModel.swift:385-400,444-450`，传播 `MediaActionHandler.swift:24-27`、`HomeView.swift:230-247`、`MediaContextMenu.swift:80-85`
 - 触发路径：profile A 读取默认站点并发起 `/site/rss`，网络等待期间切换到 B；A 随后成功、失败或取消。
@@ -2004,10 +2004,11 @@
 - 独立复核：review_a001_j 确认普通成功（交集变化/相等）、错误、取消、撤权及未来 stale-session error 均可泄露 A 值；MediaActionHandler/Home/MediaContextMenu 当前都无法表达中止，B 有 search 权限时会由 B 会话继续请求。
 - 严重度裁决：跨 profile 持久偏好污染本身按 P3；旧 action 仍 append/回调且 B 有搜索权限时会用 A 站点发起 B 会话请求，故整体保留条件性 P2。
 - 剩余未验证：logout 后旧 SwiftUI Task/导航树的实际存活时长、真实触发频率及用户可见搜索传播。
+- 跳过依据（用户拍板）：`90b40b4` 后所有调用者（`HomeView`/`MediaActionHandler`/`MediaContextMenu`）在 await 前后均校验 `isSessionUnchanged`，跨 profile 写回与旧站点发起新会话搜索已被外层挡住；`catch is CancellationError { return [] }` 的取消分支在当前按钮无结构 Task 调用链下不可达（会话切换/401 重登均伴随 epoch 变化被外层拦截），实际影响已不存在，剩余仅为函数内部“中止=空集”的防御性语义问题，按用户决定跳过。
 
 ### F-114：父 ViewModel 未转发 SiteFilter 子对象变化
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P3
 - 位置：`MoviePilot-TV/ViewModels/SearchViewModel.swift:270,658-668`、`MediaDetailViewModel.swift:40,122-133` 及对应 Search/MediaDetail View
 - 触发路径：首帧以默认选择 `{1}` 显示“1 个站点”，随后 SiteFilter 成功加载并把它解析为站点名；或加载后把失效 ID 归一化为空。
@@ -2019,6 +2020,7 @@
 - 最小方向：复用现有 Paginator 桥接模式，仅把固定 `siteFilter.objectWillChange` 转发给两个父 VM；不引入新状态框架。
 - 独立复核：review_a001_h 确认两个父 VM 固定持有、父 View 仅观察父对象、Paginator 已桥接而 SiteFilter 未桥接；有效非空响应即可触发，搜索动作当场读取子对象当前值，故维持 UI 新鲜度 P3。
 - 剩余未验证：无关父状态触发重绘前的实际可见时长与 tvOS 焦点行为。
+- 修复记录：`SearchViewModel.init` 与 `MediaDetailViewModel.init` 各补一行 `siteFilter.objectWillChange` → 父 `objectWillChange` 转发（复用既有 Paginator 桥接模式，不引入新框架）；搜索页/详情页站点按钮随 `SiteFilter` 加载解析与选择变化即时刷新。已补两个父 VM 转发行为的回归测试。
 
 ### F-115：详情 ready 判定与阶段屏障阻塞主流程
 

@@ -133,6 +133,10 @@ class MediaDetailViewModel: ObservableObject {
     self.actorsPaginator.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &cancellables)
+
+    self.siteFilter.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
   }
 
   private var hasAppliedFullDetail = false
