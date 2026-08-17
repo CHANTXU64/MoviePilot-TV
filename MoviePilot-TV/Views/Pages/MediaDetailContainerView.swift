@@ -3,7 +3,7 @@ import SwiftUI
 
 /// 媒体详情加载占位视图（共享组件）
 /// 用于 MediaDetailContainerView 的加载状态遮罩
-/// 海报从源卡片位置飞入屏幕中央 + 标题/元数据/加载指示器
+/// 海报缩放进入屏幕中央 + 标题/元数据/加载指示器
 private struct MediaLoadingView: View {
   let title: String?
   let posterUrl: URL?
@@ -17,8 +17,6 @@ private struct MediaLoadingView: View {
   private let posterWidth: CGFloat = 460
   private let posterHeight: CGFloat = 690
 
-  /// 海报相对于自然居中位置的偏移量
-  @State private var animationOffset: CGSize = .zero
   /// 海报缩放比
   @State private var posterScale: CGFloat = 1.0
   /// 文本是否已显示
@@ -69,7 +67,6 @@ private struct MediaLoadingView: View {
           .clipShape(RoundedRectangle(cornerRadius: 20))
           .shadow(color: .black.opacity(0.8), radius: 30, y: 15)
           .scaleEffect(posterScale)
-          .offset(animationOffset)
 
         // 文本信息区
         VStack(spacing: 12) {
@@ -123,9 +120,7 @@ private struct MediaLoadingView: View {
       guard !hasAnimated else { return }
       hasAnimated = true
 
-      let source = MediaCardTransition.sourceFrame
-      // 清除本次过渡数据，防止预加载命中或后续入口复用脏数据
-      MediaCardTransition.sourceFrame = .zero
+      // 清除本次过渡海报，防止后续入口复用脏数据
       MediaCardTransition.loadingPosterURL = nil
 
       // 数据已预加载完毕，跳过所有动画
@@ -134,49 +129,17 @@ private struct MediaLoadingView: View {
         return
       }
 
-      if source != .zero {
-        // 估算海报在 VStack 居中布局下的屏幕中心位置
-        let screen = UIScreen.main.bounds
-        let contentBlockHeight: CGFloat = posterHeight + 28 + 210
-        let estimatedPosterCenterY = (screen.height - contentBlockHeight) / 2 + posterHeight / 2
-        let estimatedPosterCenter = CGPoint(x: screen.midX, y: estimatedPosterCenterY)
-
-        // ── Phase 1: 强制禁用所有动画，立即渲染到源卡片位置 ──
-        var t = Transaction()
-        t.disablesAnimations = true
-        withTransaction(t) {
-          animationOffset = CGSize(
-            width: source.midX - estimatedPosterCenter.x,
-            height: source.midY - estimatedPosterCenter.y
-          )
-          posterScale = source.width / posterWidth
+      var t = Transaction()
+      t.disablesAnimations = true
+      withTransaction(t) {
+        posterScale = 0.6
+      }
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+        withAnimation(.spring(duration: 0.6, bounce: 0.15)) {
+          posterScale = 1.0
         }
-
-        // ── Phase 2: 等待渲染完成，再启动纯移动+放大动画 ──
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-          withAnimation(.spring(duration: 0.55, bounce: 0.12)) {
-            animationOffset = .zero
-            posterScale = 1.0
-          }
-          // 文字在海报到达中央后渐入
-          withAnimation(.easeOut(duration: 0.5).delay(0.35)) {
-            textAppeared = true
-          }
-        }
-      } else {
-        // Fallback：无源位置（如从右键菜单进入），使用简单缩放动画
-        var t = Transaction()
-        t.disablesAnimations = true
-        withTransaction(t) {
-          posterScale = 0.6
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-          withAnimation(.spring(duration: 0.6, bounce: 0.15)) {
-            posterScale = 1.0
-          }
-          withAnimation(.easeOut(duration: 0.5).delay(0.3)) {
-            textAppeared = true
-          }
+        withAnimation(.easeOut(duration: 0.5).delay(0.3)) {
+          textAppeared = true
         }
       }
     }
