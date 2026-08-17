@@ -146,7 +146,7 @@
 | F-130 | 已修复（`90b40b4`） | P1 | V009-C→V011-C→V012-A→W006-B/W020-A…F/R001/I006→G04 | 存活页面权限派生状态与currentUser发布 | 来源/模式/route/focus/受限快照与child Paginator不随session/权限收敛，旧items/error可跨profile先于父gate发布 | `90b40b4`：统一session UI identity重建Tab子树，session转换取消旧runtime并清缓存，epoch拒绝旧发布 | 聚焦会话/缓存/分页/根页面测试96/96通过；既有独立复审PASS | 原TV跨profile根状态P1已闭合；真实Apple TV焦点视觉未单独复演 |
 | F-131 | 已修复 | P2 | V009-D/E→G05 | Douban/Bangumi/AniList 动态年份集合 | `Calendar.current` 的非公历年被直接显示并发送为 API 年份 | 三处年份字典固定 `Calendar(identifier: .gregorian)`，不动筛选结构 | ExploreViewModelYearDictTests 4/4 通过；全量 640 测试仅既有 SSE 兼容失败 | 条件性 TV locale/API 缺陷已确认；非公历实际配置未运行验证 |
 | F-132 | 已修复 | P3 | V009-D/E | TMDB movie/tv sort 字典与类型切换 | 独占 sort key 跨类型残留，Picker 无匹配却继续发请求 | onTypeChanged 按 Web 端成员归一化：非法独占 sort 回落 popularity.desc、共有 sort/genre 保留、Douban category 不再误清 | ExploreViewModelTypeSwitchTests 6/6 通过；全量 646 测试仅既有 SSE 兼容失败 | 纯 TV 状态一致性缺陷已确认；后端处理非法 key 未验证 |
-| F-133 | 未验证 | P3 | V009-A/F | 插件 `filter_ui` parser 与 FilterPickersView | 未支持控件/多选/custom items 被静默删除或降级 | verify_a001_h 闭合 source→parser→controls→query 链与最小组件反例 | review_a001_h/review_a001_j 独立确认机制，但公开 fixture 未触发且无部署载荷 | 条件性插件筛选未验证；固定真实 fixture 到位时重开 |
+| F-133 | 已修复 | P3 | V009-A/F | 插件 `filter_ui` parser 与 FilterPickersView | 未支持控件/多选/show 表达式被静默删除或降级 | 官方插件仓库核实 tvdbdiscover/imdbsource 载荷；parser 支持 VSwitch/VRangeSlider/multiple 并新增 show 表达式求值；子代理独立审查后修复清空恢复默认/sheet 竞争/Range 崩溃/嵌套显隐 4 项 | DynamicSourceBehaviorTests 新增 11 项全过；全量 657 测试仅既有 SSE 兼容失败 | VRangeSlider 按用户裁决映射单选，标量值与 Web 数组形状差异交 F-134；slots/onXXX 无真实载荷保持静默 |
 | F-134 | 未验证 | P3 | V009-A/E/F | 复合插件筛选值的 query serialization | 数组/对象被 JSON 化为单值，与 v2.15.1 Web Axios bracket 形状不同 | verify_a001_h 以数组默认值闭合 parser 外直达 query 与版本特定序列化差异 | review_a001_h/review_a001_j 独立确认结构差异，但无复合部署 fixture/后端契约 | 条件性插件查询未验证；固定复合 fixture 到位时重开 |
 | F-135 | 已确认 | P3 | V009-A/F→W012 | Picker option value/身份规范化 | 重复value同时成为ForEach ID与Picker tag；空目录还与内建自动重复空ID或生成`storage:` | 插件链三代理确认机制；W012双审与当前Web/后端裁决确认空/空白download_path生产可达 | 插件first-wins去重；目录trim后丢空再去重并保留唯一自动项 | 条件性P3；真实插件重复value频率仍未验证 |
 | F-136 | 未验证 | P3 | V009-E/F | Share 默认排序状态与 v2.15.1 Web | TV 初始/切源均用 count，目标版本 Web 默认 time | verify_a001_h 闭合两处 literal、首路径与版本特定 Web/test | review_a001_j 两次独立确认版本差异，但 TV 产品默认意图缺失 | 条件性默认行为未验证；产品确认 Web 对齐或 TV 特例时收敛 |
@@ -2338,17 +2338,18 @@
 
 ### F-133：插件筛选控件被静默删除或错误降级
 
-- 状态：未验证
+- 状态：已修复（2026-08-17）
 - 严重度：条件性 P3
 - 位置：`MoviePilot-TV/ViewModels/ExploreViewModel.swift:1-180` 的 `PluginFilterControlParser` 与 Explore FilterPickersView
 - 触发路径：`/discover/source` 的插件 `filter_ui` 含 `VSwitch`、`VSelect(multiple: true)`、自定义 `item-title/item-value`、`show/v-show`、slot 或动态表达式。
 - 根因：TV parser 只实现窄子集，却对未支持语义静默跳过或降为单选/自由文本，没有 unsupported 状态；现有测试还把“未知组件静默跳过”固定为预期。
 - 用户影响：插件默认页仍可加载，但用户无法设置 Web 可设置的目标筛选，或向后端发送错误类型/含义的值。
 - 与既有 finding 区分：F-081/F-085 是自定义资源过滤规则的解析/版本语义；本项是发现插件自己的 `filter_ui` 能力边界。
-- 最小方向：不实现 Vuetify/FormRender 框架；先把未支持描述变成可见 unsupported 提示，只根据固定真实插件 fixture 增补确实需要的控件语义。
+- 修复实现（2026-08-17）：官方插件仓库（jxxghp/MoviePilot-Plugins）核实仅 tvdbdiscover/imdbsource 有 `filter_ui`；tvdbdiscover 全为受支持 chip 组，imdbsource 含 `show: "{{mtype == 'movies'}}"`、`VSwitch`、`VRangeSlider`、`VDivider`，无 slots/onXXX/文本插值真实用例。据此：`show/v-show` 表达式新增受限求值器（`==`/`!=`/`&&`/`||`/`!`/括号/字面量，未解析失败放行可见）；`VSwitch`→`Kind.toggle`（SwiftUI Toggle）；`VRangeSlider`→按 min/max/step 生成单选选项（用户裁决“不就是单选”）；`VSelect/VCombobox(multiple)`→`Kind.multiChoice`（复用 `MultiSelectionSheet`）；自定义 `item-title/item-value` 与 slots/onXXX 按用户裁决不做（无真实载荷）。
+- 独立审查（2026-08-17）：子代理只读复核提出 4 项必改并全部修复：`applyingPluginFilter` 删除“falsy 值恢复默认”归一化（否则多选清空/Toggle 关闭被默认值顶回，与 Web 直接写回模型不一致）；多选 `.sheet(item:)` 改为唯一挂载到 FilterPickersView 外层容器（多按钮重复挂载会竞争 presentation）；`rangeOptions` 增加 isFinite/步数上限/Int 安全范围检查与选项去重（远端载荷可致 `Int(Double)` 崩溃）；`show` 显隐改为继承+本地 AND 组合（`showExpressions` 数组），去重身份纳入显隐条件（同字段互斥分支不再丢一个）。
 - 主审证据：verify_a001_h 闭合 source→parser→`pluginFilterControls`→FilterPickersView→query 链，并以 switch/multiple/custom items 构造最小反例；本地 v2.15.1 Web tag 使用通用 FormRender，只作版本参考。
 - 独立复核：review_a001_h 独立确认 switch 删除、multiple 降级、自定义 items 变文本、show/v-show 条件失效及 slot/dynamic 语义缺失；review_a001_j 从 V009-F 再确认调用链，但公开 Tvdb fixture 只用受支持 VChipGroup+标量。双审已尽，因缺部署 fixture 转未验证，交 I006 在固定载荷到位时重开。
-- 未验证：当前安装插件的真实 `filter_ui` 载荷与使用频率。
+- 残留：`VRangeSlider` 单选发出标量值，Web 端是 `[min,max]` 数组（Axios bracket），后端契约差异交 F-134 处理；多选写入数组值但 query 仍 JSON 编码单值，同样属 F-134 范围。验证：DynamicSourceBehaviorTests 新增 11 项全过；全量 657 测试仅既有 SSE 兼容失败。
 
 ### F-134：复合插件筛选值使用错误的查询形状
 
