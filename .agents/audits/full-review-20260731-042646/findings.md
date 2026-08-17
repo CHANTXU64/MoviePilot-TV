@@ -147,7 +147,7 @@
 | F-131 | 已修复 | P2 | V009-D/E→G05 | Douban/Bangumi/AniList 动态年份集合 | `Calendar.current` 的非公历年被直接显示并发送为 API 年份 | 三处年份字典固定 `Calendar(identifier: .gregorian)`，不动筛选结构 | ExploreViewModelYearDictTests 4/4 通过；全量 640 测试仅既有 SSE 兼容失败 | 条件性 TV locale/API 缺陷已确认；非公历实际配置未运行验证 |
 | F-132 | 已修复 | P3 | V009-D/E | TMDB movie/tv sort 字典与类型切换 | 独占 sort key 跨类型残留，Picker 无匹配却继续发请求 | onTypeChanged 按 Web 端成员归一化：非法独占 sort 回落 popularity.desc、共有 sort/genre 保留、Douban category 不再误清 | ExploreViewModelTypeSwitchTests 6/6 通过；全量 646 测试仅既有 SSE 兼容失败 | 纯 TV 状态一致性缺陷已确认；后端处理非法 key 未验证 |
 | F-133 | 已修复 | P3 | V009-A/F | 插件 `filter_ui` parser 与 FilterPickersView | 未支持控件/多选/show 表达式被静默删除或降级 | 官方插件仓库核实 tvdbdiscover/imdbsource 载荷；parser 支持 VSwitch/VRangeSlider/multiple 并新增 show 表达式求值；子代理独立审查后修复清空恢复默认/sheet 竞争/Range 崩溃/嵌套显隐 4 项 | DynamicSourceBehaviorTests 新增 11 项全过；全量 657 测试仅既有 SSE 兼容失败 | VRangeSlider 按用户裁决映射单选，标量值与 Web 数组形状差异交 F-134；slots/onXXX 无真实载荷保持静默 |
-| F-134 | 未验证 | P3 | V009-A/E/F | 复合插件筛选值的 query serialization | 数组/对象被 JSON 化为单值，与 v2.15.1 Web Axios bracket 形状不同 | verify_a001_h 以数组默认值闭合 parser 外直达 query 与版本特定序列化差异 | review_a001_h/review_a001_j 独立确认结构差异，但无复合部署 fixture/后端契约 | 条件性插件查询未验证；固定复合 fixture 到位时重开 |
+| F-134 | 已修复 | P3 | V009-A/E/F | 复合插件筛选值的 query serialization | 数组/对象被 JSON 化为单值，与 v2.15.1 Web Axios bracket 形状不同 | 官方 imdbsource 载荷 user_rating=[1,10] 与后端 alias="user_rating[]" 确认契约；appendingQuery 按 Axios 实测行为展开（扁平数组 key[]、含对象数组用索引 key[i]、对象 key[sub]），空集合/null 不发送 | DynamicSourceBehaviorTests 新增 6 项全过；全量 663 测试仅既有 SSE 兼容失败 | 编码保持 TV 端 encodeURIComponent（%20/%5B%5D 与 Axios 的 +/[] 对后端解码等价）；后端契约仅对 imdbsource 核实 |
 | F-135 | 已确认 | P3 | V009-A/F→W012 | Picker option value/身份规范化 | 重复value同时成为ForEach ID与Picker tag；空目录还与内建自动重复空ID或生成`storage:` | 插件链三代理确认机制；W012双审与当前Web/后端裁决确认空/空白download_path生产可达 | 插件first-wins去重；目录trim后丢空再去重并保留唯一自动项 | 条件性P3；真实插件重复value频率仍未验证 |
 | F-136 | 未验证 | P3 | V009-E/F | Share 默认排序状态与 v2.15.1 Web | TV 初始/切源均用 count，目标版本 Web 默认 time | verify_a001_h 闭合两处 literal、首路径与版本特定 Web/test | review_a001_j 两次独立确认版本差异，但 TV 产品默认意图缺失 | 条件性默认行为未验证；产品确认 Web 对齐或 TV 特例时收敛 |
 | F-137 | 已确认 | P2 | V011-A/B→G04 | `fuzzyMatchScore` 类别带与 top-12 | 无界长度罚分穿透prefix/contains/subsequence/nonmatch分档并可把真实匹配挤出最终top-12 | 既有三票闭合反例；全新G04 clean-room复核确认四类交叉与最终截断并升级P2 | 保持Int评分，仅为类别设置互不重叠带宽并clamp长度惩罚 | 条件性搜索结果缺失P2；真实长标题竞争频率未验证 |
@@ -2353,17 +2353,17 @@
 
 ### F-134：复合插件筛选值使用错误的查询形状
 
-- 状态：未验证
+- 状态：已修复（2026-08-17）
 - 严重度：条件性 P3
 - 位置：Explore `filter_params/pluginFilterValues`、`appendingQuery`、`relativeBackendEndpoint` 与推荐请求
 - 触发路径：插件筛选默认值或用户值为数组/嵌套对象，例如 `genre=["a","b"]`；即使 parser 没生成控件，复合默认值也能直接到达请求链。
 - 根因：TV 把任意复合 JSON 值编码成一个 JSON 字符串 query item；目标 v2.15.1 Web 锁定的 Axios 1.9 默认按 `genre[]=a&genre[]=b` 与 bracket path 展开嵌套对象。
 - 用户影响：插件可能忽略筛选、校验失败或返回与用户选择不符的列表。
 - 与既有 finding 区分：F-088 是标量 form/query 字符转义（含 `+`）；本项是数组/对象的结构展开契约，修复与验收独立。
-- 最小方向：先取得固定插件 fixture；确需复合值时在现有边界加入小型、确定性的 Axios bracket flattener。若产品只支持标量，则显式拒绝复合值，不再静默 JSON 化；不引入通用参数框架。
+- 修复实现（2026-08-17）：官方插件仓库核实 imdbsource `filter_params.user_rating=[1,10]` 且后端签名 `user_rating: list[int] = Query(None, alias="user_rating[]")`，Web 端 `MediaCardListView` 将 `filterParams` 原样交给 axios（yarn.lock 锁定 1.9.0，无自定义 paramsSerializer），契约成立。`appendingQuery` 新增递归 bracket flattener：数组 `key[]=v`、对象 `key[sub]=v`、空数组/空对象/null 不发送、标量不变；`encodeURIComponent` 全编码与 Axios 一致。同时复核发现 Web `ExtraSourceView` watch 本身有 falsy 恢复默认逻辑，恢复 `applyingPluginFilter` 归一化并将多选清空写回 `.array([])`（空数组 truthy 不触发恢复），修正 F-133 子代理审查中“删除归一化”的误判。
 - 主审证据：verify_a001_h 用数组默认值闭合 parser 外直达 query 链，并对照版本特定 Axios 1.9 序列化实现；空数组/null/嵌套/顺序及既有 query 均无测试。
 - 独立复核：review_a001_h 独立确认 TV 单 JSON 值与 v2.15.1 Axios 1.9 bracket 形状差异、空数组/null 边界及与 F-088 独立；review_a001_j 从 V009-E/F 独立确认 descriptor 复合默认值直达及差异。双审已尽，因无复合部署 fixture和插件后端契约转未验证。
-- 未验证：当前插件后端的实际参数契约与复合值频率。
+- 验证（2026-08-17 二次复核）：下载 axios@1.9.0 实测序列化（数组→`key[]`、含对象数组→索引 `key[i]`、对象→`key[sub]`、空数组/空对象/null 跳过、null 元素跳过），flattener 与实测逐项对齐；编码保持 TV 端 encodeURIComponent（`%20`/`%5B%5D` 与 Axios 的 `+`/`[]` 对 FastAPI/parse_qsl 解码等价，且 URLComponents 对 `+` 按字面解析，TV 内部一致性优先）。DynamicSourceBehaviorTests 新增 6 项（数组 bracket、空集合/null 跳过、嵌套对象、数组内对象索引、混排数组索引+null 跳过、既有 query 与特殊字符并存）全过；全量 663 测试仅既有 SSE 兼容失败。残留：后端契约仅对 imdbsource 核实，其他插件假设同样遵循 Axios bracket。
 
 ### F-135：未规范化 option value 形成重复 Picker 身份
 

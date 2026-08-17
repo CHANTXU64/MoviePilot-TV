@@ -241,7 +241,7 @@ struct FilterPickersView: View {
           .map(\.value)
         viewModel.setPluginFilter(
           control.field,
-          value: selected.isEmpty ? .null : .array(selected)
+          value: .array(selected)
         )
       }
     }

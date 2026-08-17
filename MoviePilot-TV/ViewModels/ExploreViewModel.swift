@@ -1052,12 +1052,56 @@ class ExploreViewModel: ObservableObject {
     values: [String: JSONValue]
   ) -> String {
     guard var components = URLComponents(string: path) else { return path }
-    var params: [String: String?] = [:]
+    var additions: [String] = []
     for (key, value) in values {
-      params[key] = value.queryString
+      flattenQueryValue(key, value, into: &additions)
     }
-    appendPercentEncodedQueryParams(to: &components, params: params)
+    guard !additions.isEmpty else { return components.string ?? path }
+    let suffix = additions.joined(separator: "&")
+    if let existing = components.percentEncodedQuery, !existing.isEmpty {
+      components.percentEncodedQuery = existing + "&" + suffix
+    } else {
+      components.percentEncodedQuery = suffix
+    }
     return components.string ?? path
+  }
+
+  private nonisolated static func flattenQueryValue(
+    _ key: String,
+    _ value: JSONValue,
+    into additions: inout [String]
+  ) {
+    switch value {
+    case .null:
+      return
+    case .array(let items):
+      guard !items.isEmpty else { return }
+      let isFlat = items.allSatisfy {
+        if case .object = $0 { return false }
+        if case .array = $0 { return false }
+        return true
+      }
+      if isFlat {
+        for item in items {
+          flattenQueryValue(key + "[]", item, into: &additions)
+        }
+      } else {
+        for (index, item) in items.enumerated() {
+          flattenQueryValue("\(key)[\(index)]", item, into: &additions)
+        }
+      }
+    case .object(let dictionary):
+      guard !dictionary.isEmpty else { return }
+      for (subKey, subValue) in dictionary {
+        flattenQueryValue("\(key)[\(subKey)]", subValue, into: &additions)
+      }
+    default:
+      guard let text = value.queryString,
+        let encodedName = encodeURIComponent(key),
+        let encodedValue = encodeURIComponent(text)
+      else { return }
+      additions.append("\(encodedName)=\(encodedValue)")
+    }
   }
 
   nonisolated static func popularSubscriptionKey(_ item: MediaInfo) -> String {
@@ -1222,6 +1266,7 @@ class ExploreViewModel: ObservableObject {
       field: field,
       value: value,
       to: pluginFilterValues,
+      defaults: source.filter_params,
       depends: source.depends
     )
   }
@@ -1230,12 +1275,18 @@ class ExploreViewModel: ObservableObject {
     field: String,
     value: JSONValue,
     to values: [String: JSONValue],
+    defaults: [String: JSONValue] = [:],
     depends: [String: [String]]?
   ) -> [String: JSONValue] {
     var result = values
     let oldValue = result[field]
-    result[field] = value
-    guard oldValue != value, let depends else { return result }
+    let defaultValue = defaults[field]
+    let normalizedValue =
+      !value.isTruthy && defaultValue?.isTruthy == true
+      ? defaultValue ?? value
+      : value
+    result[field] = normalizedValue
+    guard oldValue != normalizedValue, let depends else { return result }
     for (dependentField, prerequisites) in depends
     where dependentField != field && prerequisites.contains(field) {
       result[dependentField] = .null

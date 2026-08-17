@@ -177,28 +177,153 @@ final class DynamicSourceBehaviorTests: XCTestCase {
       field: "using_rating",
       value: .bool(true),
       to: ["using_rating": .bool(false)],
+      defaults: ["using_rating": .bool(false)],
       depends: nil
     )
 
     XCTAssertEqual(values["using_rating"], .bool(true))
   }
 
-  func testPluginFilterUserWriteDoesNotRestoreDefaults() {
-    let cleared = ExploreViewModel.applyingPluginFilter(
-      field: "genre",
+  func testPluginFilterUserWriteAlignsWithWebDefaultRestore() {
+    // Web ExtraSourceView watch：falsy 值且有非空默认时恢复默认
+    let restored = ExploreViewModel.applyingPluginFilter(
+      field: "user_rating",
       value: .null,
-      to: ["genre": .array([.string("动作"), .string("喜剧")])],
+      to: ["user_rating": .array([.int(1), .int(10)])],
+      defaults: ["user_rating": .array([.int(1), .int(10)])],
       depends: nil
     )
-    XCTAssertEqual(cleared["genre"], .null)
+    XCTAssertEqual(restored["user_rating"], .array([.int(1), .int(10)]))
 
+    // 空数组是 truthy，不触发恢复（Web 多选清空语义）
+    let cleared = ExploreViewModel.applyingPluginFilter(
+      field: "genre",
+      value: .array([]),
+      to: ["genre": .array([.string("动作")])],
+      defaults: ["genre": .array([.string("动作")])],
+      depends: nil
+    )
+    XCTAssertEqual(cleared["genre"], .array([]))
+
+    // 默认 false 的开关关闭后保持 false
     let turnedOff = ExploreViewModel.applyingPluginFilter(
       field: "using_rating",
       value: .bool(false),
-      to: ["using_rating": .bool(true)],
+      to: ["using_rating": .bool(false)],
+      defaults: ["using_rating": .bool(false)],
       depends: nil
     )
     XCTAssertEqual(turnedOff["using_rating"], .bool(false))
+  }
+
+  func testAppendingQueryFlattensArrayWithBrackets() throws {
+    let path = ExploreViewModel.appendingQuery(
+      to: "plugin/ImdbSource/imdb-discover",
+      values: [
+        "user_rating": .array([.int(1), .int(10)]),
+        "mtype": .string("series"),
+      ]
+    )
+    let components = try XCTUnwrap(URLComponents(string: path))
+    let items = try XCTUnwrap(components.queryItems)
+
+    XCTAssertEqual(
+      items.filter { $0.name == "user_rating[]" }.compactMap(\.value),
+      ["1", "10"]
+    )
+    XCTAssertEqual(items.first(where: { $0.name == "mtype" })?.value, "series")
+  }
+
+  func testAppendingQuerySkipsNullAndEmptyCollections() throws {
+    let path = ExploreViewModel.appendingQuery(
+      to: "plugin/TvdbDiscover/tvdb_discover",
+      values: [
+        "empty": .array([]),
+        "nilValue": .null,
+        "genre": .array([.string("动作"), .string("喜剧")]),
+      ]
+    )
+    let components = try XCTUnwrap(URLComponents(string: path))
+    let items = try XCTUnwrap(components.queryItems)
+
+    XCTAssertNil(items.first(where: { $0.name == "empty" }))
+    XCTAssertNil(items.first(where: { $0.name == "nilValue" }))
+    XCTAssertEqual(
+      items.filter { $0.name == "genre[]" }.compactMap(\.value),
+      ["动作", "喜剧"]
+    )
+  }
+
+  func testAppendingQueryFlattensNestedObjectWithBrackets() throws {
+    let path = ExploreViewModel.appendingQuery(
+      to: "plugin/Example/discover",
+      values: [
+        "filter": .object([
+          "genre": .string("动作"),
+          "year": .int(2026),
+        ])
+      ]
+    )
+    let components = try XCTUnwrap(URLComponents(string: path))
+    let items = try XCTUnwrap(components.queryItems)
+
+    XCTAssertEqual(items.first(where: { $0.name == "filter[genre]" })?.value, "动作")
+    XCTAssertEqual(items.first(where: { $0.name == "filter[year]" })?.value, "2026")
+  }
+
+  func testAppendingQueryUsesIndexesForArrayOfObjects() throws {
+    let path = ExploreViewModel.appendingQuery(
+      to: "plugin/Example/discover",
+      values: [
+        "x": .array([
+          .object(["a": .int(1)]),
+          .object(["a": .int(2)]),
+        ])
+      ]
+    )
+    let components = try XCTUnwrap(URLComponents(string: path))
+    let items = try XCTUnwrap(components.queryItems)
+
+    XCTAssertEqual(items.first(where: { $0.name == "x[0][a]" })?.value, "1")
+    XCTAssertEqual(items.first(where: { $0.name == "x[1][a]" })?.value, "2")
+  }
+
+  func testAppendingQueryMixedArrayUsesIndexesAndSkipsNull() throws {
+    let path = ExploreViewModel.appendingQuery(
+      to: "plugin/Example/discover",
+      values: [
+        "x": .array([
+          .object(["a": .int(1)]),
+          .int(2),
+          .null,
+        ])
+      ]
+    )
+    let components = try XCTUnwrap(URLComponents(string: path))
+    let items = try XCTUnwrap(components.queryItems)
+
+    XCTAssertEqual(items.first(where: { $0.name == "x[0][a]" })?.value, "1")
+    XCTAssertEqual(items.first(where: { $0.name == "x[1]" })?.value, "2")
+    XCTAssertNil(items.first(where: { $0.name == "x[2]" }))
+  }
+
+  func testAppendingQueryKeepsExistingQueryAndEncodesSpecialChars() throws {
+    let path = ExploreViewModel.appendingQuery(
+      to: "plugin/ImdbSource/imdb-discover?apikey=signed%23token",
+      values: [
+        "user_rating": .array([.int(1), .int(10)]),
+        "name": .string("C++"),
+      ]
+    )
+    let components = try XCTUnwrap(URLComponents(string: path))
+    let items = try XCTUnwrap(components.queryItems)
+
+    XCTAssertEqual(items.first(where: { $0.name == "apikey" })?.value, "signed#token")
+    XCTAssertEqual(items.first(where: { $0.name == "name" })?.value, "C++")
+    XCTAssertEqual(
+      items.filter { $0.name == "user_rating[]" }.compactMap(\.value),
+      ["1", "10"]
+    )
   }
 
   func testPluginFilterRangeSliderBoundaries() {
