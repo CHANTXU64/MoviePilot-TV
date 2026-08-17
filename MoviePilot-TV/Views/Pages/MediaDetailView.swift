@@ -4,38 +4,19 @@ import SwiftUI
 private struct MediaDetailBackgroundLayer: View {
   let url: URL?
   let usingPosterAsBackdrop: Bool
-  let showContentPage: Bool
-  let isSecondPageBackgroundPrepared: Bool
-  let onHeroLoaded: (URL, RetrieveImageResult) -> Void
 
   @ViewBuilder
   var body: some View {
     if let url {
       let size = UIScreen.main.bounds.size
-      let secondPageProcessor = MediaDetailBackgroundImage.secondPageProcessor(for: size)
-
-      if usingPosterAsBackdrop {
-        backgroundImage(url, processor: secondPageProcessor, alignment: .top)
-      } else {
-        ZStack {
-          backgroundImage(
-            url,
-            processor: MediaDetailBackgroundImage.heroProcessor(
-              for: size,
-              usingPosterAsBackdrop: false
-            ),
-            alignment: .center,
-            onSuccess: { onHeroLoaded(url, $0) }
-          )
-          .opacity(showContentPage ? 0 : 1)
-
-          if isSecondPageBackgroundPrepared {
-            backgroundImage(url, processor: secondPageProcessor, alignment: .center)
-              .opacity(showContentPage ? 1 : 0)
-          }
-        }
-        .animation(.easeInOut(duration: 0.5), value: showContentPage)
-      }
+      backgroundImage(
+        url,
+        processor: MediaDetailBackgroundImage.heroProcessor(
+          for: size,
+          usingPosterAsBackdrop: usingPosterAsBackdrop
+        ),
+        alignment: usingPosterAsBackdrop ? .top : .center
+      )
     } else {
       Color.gray.opacity(0.3)
         .ignoresSafeArea()
@@ -45,8 +26,7 @@ private struct MediaDetailBackgroundLayer: View {
   private func backgroundImage(
     _ url: URL,
     processor: any ImageProcessor,
-    alignment: Alignment,
-    onSuccess: @escaping (RetrieveImageResult) -> Void = { _ in }
+    alignment: Alignment
   ) -> some View {
     KFImage.sessionImage(url)
       .placeholder {
@@ -54,7 +34,6 @@ private struct MediaDetailBackgroundLayer: View {
       }
       .setProcessor(processor)
       .scaleFactor(UIScreen.main.scale)
-      .onSuccess(onSuccess)
       .resizable()
       .aspectRatio(contentMode: .fill)
       .frame(
@@ -86,11 +65,8 @@ struct MediaDetailView: View {
   @State private var showContentPage = false
   @State private var hasAppeared = false
   @State private var hasRefreshedSubscriptionAfterFullDetail = false
-  @State private var preparedSecondPageBackgroundURL: URL?
-  @State private var secondPageBackgroundTask: Task<Void, Never>?
   @State private var isBackgroundMounted = true
   @State private var backgroundGeneration = 0
-  @State private var backgroundPreparationWasCancelled = false
   @State private var didReleaseAfterPop = false
 
   // 订阅相关 UI 状态（弹窗开关，纯 UI 逻辑）
@@ -225,11 +201,8 @@ struct MediaDetailView: View {
     self.returnTargetImageSnapshot = returnTargetImageSnapshot
   }
 
-  static func shouldRefreshBackground(
-    isMounted: Bool,
-    preparationWasCancelled: Bool
-  ) -> Bool {
-    !isMounted || preparationWasCancelled
+  static func shouldRefreshBackground(isMounted: Bool) -> Bool {
+    !isMounted
   }
 
   nonisolated static func wasPopped(
@@ -240,30 +213,24 @@ struct MediaDetailView: View {
   }
 
   var body: some View {
+    let backgroundColor = Color(white: 0.1)
+
     ZStack {
-      Color.black
+      backgroundColor
         .ignoresSafeArea()
 
       if isBackgroundMounted {
         MediaDetailBackgroundLayer(
           url: viewModel.backgroundUrl,
-          usingPosterAsBackdrop: viewModel.isUsingPosterAsBackdrop,
-          showContentPage: showContentPage,
-          isSecondPageBackgroundPrepared:
-            preparedSecondPageBackgroundURL == viewModel.backgroundUrl,
-          onHeroLoaded: { url, result in
-            guard url == viewModel.backgroundUrl else { return }
-            prepareSecondPageBackground(
-              from: result.image,
-              for: url,
-              size: UIScreen.main.bounds.size
-            )
-          }
+          usingPosterAsBackdrop: viewModel.isUsingPosterAsBackdrop
         )
         .id(backgroundGeneration)
+        .opacity(showContentPage ? 0 : 1)
+        .animation(.easeInOut(duration: 0.4), value: showContentPage)
+        .transition(.opacity)
       }
 
-      // Apple TV Style 动态阴影
+      // 首屏动态阴影
       ZStack {
         // 1. 顶部很淡的阴影（左边长一点，右边短一点）
         LinearGradient(
@@ -288,27 +255,22 @@ struct MediaDetailView: View {
         // 3. 底部渐变：很黑 -> 到演员变浅 -> 延伸到中心
         LinearGradient(
           gradient: Gradient(stops: [
-            .init(color: .black.opacity(1.0), location: 0.0),
-            .init(color: .black.opacity(0.8), location: 0.1),
-            .init(color: .black.opacity(0.5), location: 0.2),
-            .init(color: .black.opacity(0.25), location: 0.3),
-            .init(color: .black.opacity(0.15), location: 0.4),
-            .init(color: .black.opacity(0.07), location: 0.5),
-            .init(color: .black.opacity(0.02), location: 0.6),
-            .init(color: .clear, location: 0.7),
+            .init(color: backgroundColor.opacity(1.0), location: 0.0),
+            .init(color: backgroundColor.opacity(0.8), location: 0.1),
+            .init(color: backgroundColor.opacity(0.5), location: 0.2),
+            .init(color: backgroundColor.opacity(0.25), location: 0.3),
+            .init(color: backgroundColor.opacity(0.15), location: 0.4),
+            .init(color: backgroundColor.opacity(0.07), location: 0.5),
+            .init(color: backgroundColor.opacity(0.02), location: 0.6),
+            .init(color: backgroundColor.opacity(0), location: 0.7),
           ]),
           startPoint: .bottom,
           endPoint: .top
         )
       }
       .ignoresSafeArea()
-
-      if showContentPage && !viewModel.isUsingPosterAsBackdrop {
-        // 第二页模糊时增加浅黑色遮罩，避免白色背景导致文字看不清
-        Color.black.opacity(0.18)
-          .ignoresSafeArea()
-          .transition(.opacity)
-      }
+      .opacity(showContentPage ? 0 : 1)
+      .animation(.easeInOut(duration: 0.4), value: showContentPage)
 
       ScrollViewReader { proxy in
         ScrollView {
@@ -364,10 +326,6 @@ struct MediaDetailView: View {
       // 取消防抖任务，防止视图消失后仍发起无意义的预加载请求
       recommendPreloadDebounce?.cancel()
       similarPreloadDebounce?.cancel()
-      backgroundPreparationWasCancelled =
-        backgroundPreparationWasCancelled || secondPageBackgroundTask != nil
-      secondPageBackgroundTask?.cancel()
-      secondPageBackgroundTask = nil
       DispatchQueue.main.async {
         releaseAfterPopIfNeeded(currentPathCount: navigationPath.count)
       }
@@ -377,20 +335,10 @@ struct MediaDetailView: View {
         viewModel.pageImageSnapshot,
         owner: navigationOwnerID
       )
-      let shouldRefresh = Self.shouldRefreshBackground(
-        isMounted: isBackgroundMounted,
-        preparationWasCancelled: backgroundPreparationWasCancelled
-      )
-      backgroundPreparationWasCancelled = false
-      if shouldRefresh {
+      if Self.shouldRefreshBackground(isMounted: isBackgroundMounted) {
         backgroundGeneration &+= 1
         isBackgroundMounted = true
       }
-    }
-    .onChange(of: viewModel.backgroundUrl) { _, _ in
-      secondPageBackgroundTask?.cancel()
-      secondPageBackgroundTask = nil
-      preparedSecondPageBackgroundURL = nil
     }
     .onChange(of: viewModel.pageImageSnapshot) { _, snapshot in
       MediaPreloader.shared.updateActivePageImageSnapshot(
@@ -519,33 +467,6 @@ struct MediaDetailView: View {
     }
   }
 
-  private func prepareSecondPageBackground(
-    from firstPageImage: KFCrossPlatformImage,
-    for url: URL,
-    size: CGSize
-  ) {
-    guard preparedSecondPageBackgroundURL != url else { return }
-    secondPageBackgroundTask?.cancel()
-
-    let scaleFactor = UIScreen.main.scale
-    let cacheKey = APIService.shared.imageSource(for: url).cacheKey
-    secondPageBackgroundTask = Task.detached(priority: .utility) {
-      let didPrepare = MediaDetailBackgroundImage.cacheSecondPageImage(
-        from: firstPageImage,
-        for: url,
-        size: size,
-        scaleFactor: scaleFactor,
-        cacheKey: cacheKey
-      )
-      guard didPrepare, !Task.isCancelled else { return }
-      await MainActor.run {
-        guard !Task.isCancelled else { return }
-        preparedSecondPageBackgroundURL = url
-        secondPageBackgroundTask = nil
-      }
-    }
-  }
-
   private func navigateFromSecondPage<Destination: Hashable>(to destination: Destination) {
     MediaPreloader.shared.activatePageImageSnapshot(
       viewModel.pageImageSnapshot,
@@ -575,11 +496,7 @@ struct MediaDetailView: View {
     )
     guard
       let url = viewModel.backgroundUrl,
-      MediaDetailBackgroundImage.shouldReleaseForNavigation(
-        memoryOptimizationEnabled: MemoryOptimizationPolicy.shared.isEnabled,
-        usingPosterAsBackdrop: viewModel.isUsingPosterAsBackdrop,
-        secondPageBackgroundPrepared: preparedSecondPageBackgroundURL == url
-      )
+      MemoryOptimizationPolicy.shared.isEnabled
     else {
       return
     }
@@ -597,7 +514,7 @@ struct MediaDetailView: View {
       size: UIScreen.main.bounds.size,
       cacheKey: cacheKey
     )
-    MediaDetailBackgroundImage.removeSecondPageBackgroundFromMemory(
+    MediaDetailBackgroundImage.removePosterFallbackBackgroundFromMemory(
       for: url,
       size: UIScreen.main.bounds.size,
       cacheKey: cacheKey

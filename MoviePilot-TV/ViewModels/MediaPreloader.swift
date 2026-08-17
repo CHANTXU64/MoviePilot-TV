@@ -11,11 +11,11 @@ enum MediaDetailBackgroundImage {
     usingPosterAsBackdrop: Bool
   ) -> any ImageProcessor {
     usingPosterAsBackdrop
-      ? secondPageProcessor(for: size)
+      ? posterFallbackProcessor(for: size)
       : DownsamplingImageProcessor(size: size)
   }
 
-  nonisolated static func secondPageProcessor(for size: CGSize) -> any ImageProcessor {
+  nonisolated static func posterFallbackProcessor(for size: CGSize) -> any ImageProcessor {
     DownsamplingImageProcessor(size: size)
       |> BlurImageProcessor(blurRadius: blurRadius)
   }
@@ -36,17 +36,7 @@ enum MediaDetailBackgroundImage {
     ]
   }
 
-  nonisolated static func shouldReleaseForNavigation(
-    memoryOptimizationEnabled: Bool,
-    usingPosterAsBackdrop: Bool,
-    secondPageBackgroundPrepared: Bool
-  ) -> Bool {
-    memoryOptimizationEnabled
-      && !usingPosterAsBackdrop
-      && secondPageBackgroundPrepared
-  }
-
-  nonisolated static func removeSecondPageBackgroundFromMemory(
+  nonisolated static func removePosterFallbackBackgroundFromMemory(
     for url: URL,
     size: CGSize,
     cacheKey: String? = nil,
@@ -54,7 +44,7 @@ enum MediaDetailBackgroundImage {
   ) {
     cache.removeImage(
       forKey: cacheKey ?? url.cacheKey,
-      processorIdentifier: secondPageProcessor(for: size).identifier,
+      processorIdentifier: posterFallbackProcessor(for: size).identifier,
       fromMemory: true,
       fromDisk: false
     )
@@ -75,39 +65,6 @@ enum MediaDetailBackgroundImage {
       fromMemory: true,
       fromDisk: false
     )
-  }
-
-  @discardableResult
-  nonisolated static func cacheSecondPageImage(
-    from firstPageImage: KFCrossPlatformImage,
-    for url: URL,
-    size: CGSize,
-    scaleFactor: CGFloat,
-    cacheKey: String? = nil,
-    cache: ImageCache = .default
-  ) -> Bool {
-    guard !Task.isCancelled else { return false }
-    let processor = secondPageProcessor(for: size)
-    let cacheKey = cacheKey ?? url.cacheKey
-    guard !cache.isCached(forKey: cacheKey, processorIdentifier: processor.identifier)
-    else {
-      return true
-    }
-
-    let options = KingfisherParsedOptionsInfo([.scaleFactor(scaleFactor)])
-    guard
-      let image = BlurImageProcessor(blurRadius: blurRadius).process(
-        item: .image(firstPageImage),
-        options: options
-      )
-    else {
-      return false
-    }
-    guard !Task.isCancelled else { return false }
-
-    // firstPageImage 已按目标尺寸下采样；这里只补 Blur，并按完整处理链的缓存键保存。
-    cache.store(image, forKey: cacheKey, processorIdentifier: processor.identifier)
-    return true
   }
 }
 
@@ -892,14 +849,14 @@ class MediaPreloader: ObservableObject {
         size: size,
         cacheKey: cacheKey
       )
-      MediaDetailBackgroundImage.removeSecondPageBackgroundFromMemory(
+      MediaDetailBackgroundImage.removePosterFallbackBackgroundFromMemory(
         for: backdropURL,
         size: size,
         cacheKey: cacheKey
       )
     } else if let posterURL = detail.imageURLs.poster {
       let cacheKey = apiService.imageSource(for: posterURL).cacheKey
-      MediaDetailBackgroundImage.removeSecondPageBackgroundFromMemory(
+      MediaDetailBackgroundImage.removePosterFallbackBackgroundFromMemory(
         for: posterURL,
         size: size,
         cacheKey: cacheKey

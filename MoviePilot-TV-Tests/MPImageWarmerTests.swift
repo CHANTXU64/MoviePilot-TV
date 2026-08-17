@@ -192,27 +192,27 @@ final class MPImageWarmerTests: XCTestCase {
     }
   }
 
-  func testBackgroundProcessorsKeepFocusPreloadOutOfSecondPageBlur() {
+  func testPosterFallbackBlurDoesNotChangeBackdropHeroProcessor() {
     let size = CGSize(width: 1920, height: 1080)
     let firstPage = MediaDetailBackgroundImage.heroProcessor(
       for: size,
       usingPosterAsBackdrop: false
     )
-    let secondPage = MediaDetailBackgroundImage.secondPageProcessor(for: size)
-    let posterFallback = MediaDetailBackgroundImage.heroProcessor(
+    let posterFallback = MediaDetailBackgroundImage.posterFallbackProcessor(for: size)
+    let posterHero = MediaDetailBackgroundImage.heroProcessor(
       for: size,
       usingPosterAsBackdrop: true
     )
 
     XCTAssertTrue(firstPage.identifier.contains("DownsamplingImageProcessor"))
     XCTAssertFalse(firstPage.identifier.contains("BlurImageProcessor"))
-    XCTAssertNotEqual(firstPage.identifier, secondPage.identifier)
-    XCTAssertEqual(posterFallback.identifier, secondPage.identifier)
+    XCTAssertNotEqual(firstPage.identifier, posterFallback.identifier)
+    XCTAssertEqual(posterHero.identifier, posterFallback.identifier)
 
     let downsamplingRange = try? XCTUnwrap(
-      secondPage.identifier.range(of: "DownsamplingImageProcessor")
+      posterFallback.identifier.range(of: "DownsamplingImageProcessor")
     )
-    let blurRange = try? XCTUnwrap(secondPage.identifier.range(of: "BlurImageProcessor"))
+    let blurRange = try? XCTUnwrap(posterFallback.identifier.range(of: "BlurImageProcessor"))
     XCTAssertNotNil(downsamplingRange)
     XCTAssertNotNil(blurRange)
     if let downsamplingRange, let blurRange {
@@ -230,43 +230,9 @@ final class MPImageWarmerTests: XCTestCase {
     XCTAssertFalse(heroOptions.cacheOriginalImage)
   }
 
-  func testOnlyPreparedSecondPageBackgroundIsEligibleForNavigationRelease() {
-    let cases: [(Bool, Bool, Bool, Bool)] = [
-      (true, false, true, true),
-      (false, false, true, false),
-      (true, true, true, false),
-      (true, false, false, false),
-    ]
-
-    for (enabled, usesPoster, prepared, expected) in cases {
-      XCTAssertEqual(
-        MediaDetailBackgroundImage.shouldReleaseForNavigation(
-          memoryOptimizationEnabled: enabled,
-          usingPosterAsBackdrop: usesPoster,
-          secondPageBackgroundPrepared: prepared
-        ),
-        expected
-      )
-    }
-  }
-
-  func testBackgroundAppearanceRefreshesUnmountedOrCancelledPreparation() {
-    let cases = [
-      (isMounted: false, wasCancelled: false, expected: true),
-      (isMounted: false, wasCancelled: true, expected: true),
-      (isMounted: true, wasCancelled: true, expected: true),
-      (isMounted: true, wasCancelled: false, expected: false),
-    ]
-
-    for item in cases {
-      XCTAssertEqual(
-        MediaDetailView.shouldRefreshBackground(
-          isMounted: item.isMounted,
-          preparationWasCancelled: item.wasCancelled
-        ),
-        item.expected
-      )
-    }
+  func testBackgroundAppearanceRefreshesOnlyUnmountedBackground() {
+    XCTAssertTrue(MediaDetailView.shouldRefreshBackground(isMounted: false))
+    XCTAssertFalse(MediaDetailView.shouldRefreshBackground(isMounted: true))
   }
 
   func testReleasingDetailBackgroundsKeepsBothOnDisk() async throws {
@@ -282,7 +248,7 @@ final class MPImageWarmerTests: XCTestCase {
         for: size,
         usingPosterAsBackdrop: false
       ),
-      MediaDetailBackgroundImage.secondPageProcessor(for: size),
+      MediaDetailBackgroundImage.posterFallbackProcessor(for: size),
     ]
     let image = UIGraphicsImageRenderer(size: size).image { context in
       UIColor.blue.setFill()
@@ -309,7 +275,7 @@ final class MPImageWarmerTests: XCTestCase {
       size: size,
       cache: cache
     )
-    MediaDetailBackgroundImage.removeSecondPageBackgroundFromMemory(
+    MediaDetailBackgroundImage.removePosterFallbackBackgroundFromMemory(
       for: url,
       size: size,
       cache: cache
@@ -328,95 +294,6 @@ final class MPImageWarmerTests: XCTestCase {
         processorIdentifier: processors[1].identifier
       ),
       .disk
-    )
-  }
-
-  func testSecondPageBlurReusesDownsampledHeroWithoutOriginalCache() throws {
-    let cache = ImageCache(name: "second-page-background-\(UUID().uuidString)")
-    defer {
-      cache.clearMemoryCache()
-      cache.clearDiskCache()
-    }
-    let url = try XCTUnwrap(URL(string: "https://example.com/backdrop.jpg"))
-    let size = CGSize(width: 32, height: 18)
-    let firstPageProcessor = MediaDetailBackgroundImage.heroProcessor(
-      for: size,
-      usingPosterAsBackdrop: false
-    )
-    let secondPageProcessor = MediaDetailBackgroundImage.secondPageProcessor(for: size)
-    let image = UIGraphicsImageRenderer(size: size).image { context in
-      UIColor.blue.setFill()
-      context.cgContext.fill(CGRect(origin: .zero, size: size))
-    }
-    cache.store(
-      image,
-      forKey: url.cacheKey,
-      processorIdentifier: firstPageProcessor.identifier,
-      toDisk: false
-    )
-
-    XCTAssertTrue(
-      MediaDetailBackgroundImage.cacheSecondPageImage(
-        from: image,
-        for: url,
-        size: size,
-        scaleFactor: 1,
-        cache: cache
-      )
-    )
-
-    XCTAssertTrue(
-      cache.isCached(
-        forKey: url.cacheKey,
-        processorIdentifier: firstPageProcessor.identifier
-      )
-    )
-    XCTAssertTrue(
-      cache.isCached(
-        forKey: url.cacheKey,
-        processorIdentifier: secondPageProcessor.identifier
-      )
-    )
-    XCTAssertFalse(
-      cache.isCached(
-        forKey: url.cacheKey,
-        processorIdentifier: DefaultImageProcessor.default.identifier
-      )
-    )
-  }
-
-  func testCancelledSecondPageBlurIsNotCached() async throws {
-    let cache = ImageCache(name: "cancelled-second-page-background-\(UUID().uuidString)")
-    defer {
-      cache.clearMemoryCache()
-      cache.clearDiskCache()
-    }
-    let url = try XCTUnwrap(URL(string: "https://example.com/cancelled-backdrop.jpg"))
-    let size = CGSize(width: 32, height: 18)
-    let image = UIGraphicsImageRenderer(size: size).image { context in
-      UIColor.blue.setFill()
-      context.cgContext.fill(CGRect(origin: .zero, size: size))
-    }
-
-    let task = Task.detached {
-      try? await Task.sleep(for: .seconds(1))
-      return MediaDetailBackgroundImage.cacheSecondPageImage(
-        from: image,
-        for: url,
-        size: size,
-        scaleFactor: 1,
-        cache: cache
-      )
-    }
-    task.cancel()
-
-    let didCache = await task.value
-    XCTAssertFalse(didCache)
-    XCTAssertFalse(
-      cache.isCached(
-        forKey: url.cacheKey,
-        processorIdentifier: MediaDetailBackgroundImage.secondPageProcessor(for: size).identifier
-      )
     )
   }
 
