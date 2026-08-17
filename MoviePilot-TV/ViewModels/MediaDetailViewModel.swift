@@ -35,6 +35,7 @@ class MediaDetailViewModel: ObservableObject {
   /// 用于控制 Loading 遮罩的显隐——必须等首行数据加载完才能移除遮罩，
   /// 否则首行 Card 顶部露出在第一页底部时，非首行先加载会导致闪烁。
   @Published var isFirstRowReady = false
+  @Published private(set) var isRelatedContentSnapshotComplete = false
 
   // 视图模型与服务
   @Published var siteFilter: SiteFilterViewModel
@@ -49,6 +50,9 @@ class MediaDetailViewModel: ObservableObject {
   }
   private let detailBox: DetailBox
   private var cancellables = Set<AnyCancellable>()
+  private var mediaServerExistsTask: Task<Void, Never>?
+  private var relatedContentTask: Task<Void, Never>?
+  private var relatedContentChildTasks: [Task<Void, Never>] = []
 
   init(detail: MediaInfo, apiService: APIService = .shared) {
     self.detail = detail
@@ -77,6 +81,7 @@ class MediaDetailViewModel: ObservableObject {
       imageURLsProvider: { item in
         [item.imageURLs.poster].compactMap(\.self)
       },
+      imagePrefetchProcessor: MediaCard.posterProcessor(for: MediaCard.defaultPosterSize),
       onReset: { @MainActor in
         recommendSeenKeys.removeAll()
       }
@@ -100,6 +105,7 @@ class MediaDetailViewModel: ObservableObject {
       imageURLsProvider: { @MainActor item in
         [item.imageURLs.poster].compactMap { $0 }
       },
+      imagePrefetchProcessor: MediaCard.posterProcessor(for: MediaCard.defaultPosterSize),
       onReset: { @MainActor in
         similarSeenKeys.removeAll()
       }
@@ -118,7 +124,8 @@ class MediaDetailViewModel: ObservableObject {
       },
       imageURLsProvider: { item in
         [item.imageURLs.profile].compactMap(\.self)
-      }
+      },
+      imagePrefetchProcessor: PersonCard.imageProcessor()
     )
 
     // --- Forward Paginator Updates ---
@@ -156,8 +163,9 @@ class MediaDetailViewModel: ObservableObject {
     heroTopActors = StaffManager.processActors(
       persons: Array((fullDetail.actors ?? []).prefix(4)))
 
-    Task {
-      await loadMediaServerExists()
+    mediaServerExistsTask = Task { [weak self] in
+      await self?.loadMediaServerExists()
+      self?.mediaServerExistsTask = nil
     }
 
     // ── 判断第二页首行类型 ──
@@ -174,14 +182,34 @@ class MediaDetailViewModel: ObservableObject {
     }
 
     // 异步加载网络数据（不阻塞调用方返回，数据到达后渐进显示）
-    Task {
-      // 1. 并发启动演职员、推荐和相似内容加载
-      let actorsTask = Task { @MainActor in await actorsPaginator.refresh() }
-      let recommendTask = Task { @MainActor in await recommendPaginator.refresh() }
-      let similarTask = Task { @MainActor in await similarPaginator.refresh() }
+    relatedContentTask = Task { [weak self] in
+      guard let self else { return }
+      defer {
+        relatedContentChildTasks.removeAll()
+        relatedContentTask = nil
+        if !Task.isCancelled {
+          isRelatedContentSnapshotComplete = true
+        }
+      }
+
+      // 1. 并发启动演职员、推荐和相似内容加载，并保存句柄供 Pop 取消。
+      let actorsTask = Task { @MainActor [weak self] in
+        guard let self else { return }
+        await actorsPaginator.refresh()
+      }
+      let recommendTask = Task { @MainActor [weak self] in
+        guard let self else { return }
+        await recommendPaginator.refresh()
+      }
+      let similarTask = Task { @MainActor [weak self] in
+        guard let self else { return }
+        await similarPaginator.refresh()
+      }
+      relatedContentChildTasks = [actorsTask, recommendTask, similarTask]
 
       // 2. 优先等待演员信息加载完成，用于快速更新 Hero 区域和判断首行就绪
       await actorsTask.value
+      guard !Task.isCancelled else { return }
 
       if heroTopActors.isEmpty {
         heroTopActors = Array(actorsPaginator.items.prefix(4))
@@ -199,6 +227,7 @@ class MediaDetailViewModel: ObservableObject {
 
       // 3. 继续等待推荐和相似内容的并行任务完成
       _ = await (recommendTask.value, similarTask.value)
+      guard !Task.isCancelled else { return }
 
       // ── 所有数据加载完毕，兜底设置 ──
       // 仅对非电视剧（首行不是 season）生效：此时 actors/directors/recommend/similar 都已确定。
@@ -208,6 +237,38 @@ class MediaDetailViewModel: ObservableObject {
         isFirstRowReady = true
       }
     }
+  }
+
+  /// 当前详情页已加载的普通卡片图片快照。
+  var pageImageSnapshot: PageImageSnapshot {
+    PageImageSnapshot(
+      mediaPosterURLs: Set(
+        (recommendPaginator.items + similarPaginator.items)
+          .compactMap { $0.imageURLs.poster }
+      ),
+      personImageURLs: Set(
+        (actorsPaginator.items + uniqueDirectors)
+          .compactMap { $0.imageURLs.profile }
+      ),
+      isComplete: isRelatedContentSnapshotComplete
+        && !actorsPaginator.isLoading
+        && !recommendPaginator.isLoading
+        && !similarPaginator.isLoading
+    )
+  }
+
+  /// 仅在页面已确认被 Pop 出 NavigationPath 后调用。
+  func cancelForPop() {
+    mediaServerExistsTask?.cancel()
+    mediaServerExistsTask = nil
+    relatedContentTask?.cancel()
+    relatedContentTask = nil
+    relatedContentChildTasks.forEach { $0.cancel() }
+    relatedContentChildTasks.removeAll()
+    actorsPaginator.cancel()
+    recommendPaginator.cancel()
+    similarPaginator.cancel()
+    preloadTask = nil
   }
 
   private func loadMediaServerExists() async {

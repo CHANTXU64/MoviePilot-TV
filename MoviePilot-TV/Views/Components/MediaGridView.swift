@@ -12,7 +12,7 @@ private final class PreloadDebouncer {
       try? await Task.sleep(for: .milliseconds(delayMs))
       guard !Task.isCancelled else { return }
 
-      MediaPreloader.shared.preloadIfNeeded(for: item)
+      MediaPreloader.shared.preloadFocusedCandidateIfNeeded(for: item)
       // 执行完后清理
       tasks.removeValue(forKey: id)
     }
@@ -102,9 +102,18 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
   let contextMenu: ((MediaInfo) -> ContextMenu)?
   let onShareTapped: ((SubscribeShare) -> Void)?
   let loadMoreThreshold: Int
+  @Environment(\.mediaNavigationStackID) private var mediaNavigationStackID
 
   /// 预加载防抖器：引用类型，内部状态变化不会触发 View 刷新
   @State private var preloadDebouncer = PreloadDebouncer()
+  @State private var imageSnapshotOwnerID = UUID()
+
+  private var pageImageSnapshot: PageImageSnapshot {
+    PageImageSnapshot(
+      mediaPosterURLs: Set(items.compactMap { $0.imageURLs.poster }),
+      isComplete: !isLoading && !isLoadingMore
+    )
+  }
 
   init(
     items: [MediaInfo],
@@ -208,6 +217,18 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
       }
     }
     .focusSection()
+    .onAppear {
+      MediaPreloader.shared.activatePageImageSnapshot(
+        pageImageSnapshot,
+        owner: imageSnapshotOwnerID
+      )
+    }
+    .onChange(of: pageImageSnapshot) { _, snapshot in
+      MediaPreloader.shared.updateActivePageImageSnapshot(
+        snapshot,
+        owner: imageSnapshotOwnerID
+      )
+    }
     .onDisappear {
       preloadDebouncer.cancel()
     }
@@ -218,9 +239,16 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     if let share = item.subscribeShare {
       onShareTapped?(share)
     } else {
+      MediaPreloader.shared.activatePageImageSnapshot(
+        pageImageSnapshot,
+        owner: imageSnapshotOwnerID
+      )
       preloadDebouncer.cancel(id: item.id)
-      MediaPreloader.shared.preloadIfNeeded(for: item)
-      navigationPath.append(item)
+      MediaPreloader.shared.appendMedia(
+        item,
+        to: $navigationPath,
+        stackID: mediaNavigationStackID
+      )
     }
   }
 
@@ -231,6 +259,11 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
       return
     }
 
+    MediaPreloader.shared.activatePageImageSnapshot(
+      pageImageSnapshot,
+      owner: imageSnapshotOwnerID
+    )
+    MediaPreloader.shared.focusDidMove(to: item.id)
     preloadDebouncer.cancel(id: item.id)
     if item.shouldPreloadDetail {
       preloadDebouncer.schedule(for: item)

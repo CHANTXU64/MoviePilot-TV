@@ -226,6 +226,13 @@ private struct BadgeOverlay: View, Equatable {
 }
 
 struct MediaCard: View {
+  static let defaultPosterSize = CGSize(width: 256, height: 384)
+
+  static func posterProcessor(for downsamplingSize: CGSize) -> any ImageProcessor {
+    DownsamplingImageProcessor(size: downsamplingSize)
+      |> ResizingImageProcessor(referenceSize: defaultPosterSize, mode: .aspectFill)
+  }
+
   static let defaultGridColumns = Array(
     repeating: GridItem(.fixed(256), spacing: 44, alignment: .top),
     count: 6
@@ -245,8 +252,8 @@ struct MediaCard: View {
 
   @FocusState private var isFocused: Bool
 
-  var width: CGFloat = 256
-  var height: CGFloat = 384
+  var width: CGFloat = defaultPosterSize.width
+  var height: CGFloat = defaultPosterSize.height
 
   /// 在主标题下方显示的可选副标题。
   var subTitleBelow: String? = nil
@@ -277,8 +284,8 @@ struct MediaCard: View {
     bottomLeftSecondaryText: String? = nil,
     source: MediaSource? = nil,
     showBadges: Bool = true,
-    width: CGFloat = 256,
-    height: CGFloat = 384,
+    width: CGFloat = defaultPosterSize.width,
+    height: CGFloat = defaultPosterSize.height,
     subTitleBelow: String? = nil,
     isBackgroundBlurred: Bool = false,
     footerLabel: (icon: String, text: String)? = nil,
@@ -380,8 +387,8 @@ struct MediaCard: View {
               .foregroundStyle(.gray)
           )
       }
-      .downsampling(size: CGSize(width: width, height: height))
-      .resizing(referenceSize: CGSize(width: 256, height: 384), mode: .aspectFill)
+      .setProcessor(Self.posterProcessor(for: CGSize(width: width, height: height)))
+      .cancelOnDisappear(true)
       .resizable()
       .fade(duration: 0.25)
       .aspectRatio(contentMode: .fill)

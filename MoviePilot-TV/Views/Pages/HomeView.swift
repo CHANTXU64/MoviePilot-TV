@@ -9,6 +9,18 @@ struct HomeView: View {
 
   // 导航状态
   @State private var path = NavigationPath()
+  @State private var mediaNavigationStackID = UUID()
+  @State private var imageSnapshotOwnerID = UUID()
+
+  private var pageImageSnapshot: PageImageSnapshot {
+    let mediaURLs = viewModel.latestMedia.compactMap { $0.imageURLs.image }
+    let subscriptionURLs = (viewModel.movieSubscriptions + viewModel.tvSubscriptions)
+      .compactMap { $0.imageURLs.poster }
+    return PageImageSnapshot(
+      mediaPosterURLs: Set(mediaURLs + subscriptionURLs),
+      isComplete: !viewModel.isLoading
+    )
+  }
 
   init(viewModel: HomeViewModel? = nil) {
     _viewModel = StateObject(wrappedValue: viewModel ?? HomeViewModel())
@@ -31,7 +43,13 @@ struct HomeView: View {
                 selectedServer: $viewModel.selectedLatestMediaServer,
                 isFirstRow: true,
                 viewModel: viewModel,
-                onTMDBDetail: { mediaInfo in path.append(mediaInfo) },
+                onTMDBDetail: { mediaInfo in
+                  MediaPreloader.shared.appendMedia(
+                    mediaInfo,
+                    to: $path,
+                    stackID: mediaNavigationStackID
+                  )
+                },
                 onSearchResource: { request in path.append(request) }
               )
             }
@@ -116,6 +134,25 @@ struct HomeView: View {
         )
       }
     }
+    .environment(\.mediaNavigationStackID, mediaNavigationStackID)
+    .onChange(of: path.count) { _, depth in
+      MediaPreloader.shared.reconcilePendingMediaNavigations(
+        currentPathDepth: depth,
+        stackID: mediaNavigationStackID
+      )
+    }
+    .onAppear {
+      MediaPreloader.shared.activatePageImageSnapshot(
+        pageImageSnapshot,
+        owner: imageSnapshotOwnerID
+      )
+    }
+    .onChange(of: pageImageSnapshot) { _, snapshot in
+      MediaPreloader.shared.updateActivePageImageSnapshot(
+        snapshot,
+        owner: imageSnapshotOwnerID
+      )
+    }
   }
 
   // MARK: - 动作
@@ -125,7 +162,11 @@ struct HomeView: View {
   }
 
   private func navigateToDetail(for subscribe: Subscribe) {
-    path.append(subscribe.navigationMediaInfo())
+    MediaPreloader.shared.appendMedia(
+      subscribe.navigationMediaInfo(),
+      to: $path,
+      stackID: mediaNavigationStackID
+    )
   }
 }
 

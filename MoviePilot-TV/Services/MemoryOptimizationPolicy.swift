@@ -131,12 +131,14 @@ final class MemoryOptimizationPolicy: ObservableObject {
   private func refreshAutomaticDecision() {
     let apiService = APIService.shared
     let sessionSnapshot = apiService.sessionSnapshot()
+    let baseURL = apiService.baseURL
     let generation = automaticEvaluationGeneration
     automaticEvaluationTask = Task { [weak self] in
       guard let self else { return }
       do {
         _ = try await apiService.fetchSettings()
         await performAutomaticEvaluation(
+          baseURL: baseURL,
           sessionSnapshot: sessionSnapshot,
           settingsLoaded: true,
           imageCacheAvailable: apiService.useImageCache,
@@ -144,6 +146,7 @@ final class MemoryOptimizationPolicy: ObservableObject {
         )
       } catch {
         await performAutomaticEvaluation(
+          baseURL: baseURL,
           sessionSnapshot: sessionSnapshot,
           settingsLoaded: false,
           imageCacheAvailable: false,
@@ -155,6 +158,7 @@ final class MemoryOptimizationPolicy: ObservableObject {
 
   /// 使用本次进入 App 时获取的服务器设置重新判断。
   func evaluateAutomatically(
+    baseURL: String,
     sessionSnapshot: APIServiceSessionSnapshot,
     settingsLoaded: Bool,
     imageCacheAvailable: Bool
@@ -169,6 +173,7 @@ final class MemoryOptimizationPolicy: ObservableObject {
     let generation = automaticEvaluationGeneration
     automaticEvaluationTask = Task { [weak self] in
       await self?.performAutomaticEvaluation(
+        baseURL: baseURL,
         sessionSnapshot: sessionSnapshot,
         settingsLoaded: settingsLoaded,
         imageCacheAvailable: imageCacheAvailable,
@@ -178,6 +183,7 @@ final class MemoryOptimizationPolicy: ObservableObject {
   }
 
   private func performAutomaticEvaluation(
+    baseURL: String,
     sessionSnapshot: APIServiceSessionSnapshot,
     settingsLoaded: Bool,
     imageCacheAvailable: Bool,
@@ -218,7 +224,7 @@ final class MemoryOptimizationPolicy: ObservableObject {
       finish(false, reason: "MP 图片缓存不可用")
       return
     }
-    guard URL(string: sessionSnapshot.baseURL)?.host?.isEmpty == false else {
+    guard URL(string: baseURL)?.host?.isEmpty == false else {
       finish(
         false,
         reason: "服务器地址无效",
@@ -230,7 +236,7 @@ final class MemoryOptimizationPolicy: ObservableObject {
     var probes: [(latency: TimeInterval, remoteAddress: String)] = []
     for _ in 0..<3 {
       guard !Task.isCancelled else { return }
-      if let probe = await latencyProbe(sessionSnapshot.baseURL) {
+      if let probe = await latencyProbe(baseURL) {
         probes.append(probe)
       }
     }

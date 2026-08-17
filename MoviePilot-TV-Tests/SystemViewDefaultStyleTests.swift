@@ -31,32 +31,39 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(policySource.contains("为所有内存优化提供单一开关"))
   }
 
-  func testMemoryOptimizationOnlyRechecksTokenAfterSessionInvalidation() throws {
+  func testMemoryOptimizationOnlyRechecksAfterAtomicSessionInvalidation() throws {
     let source = try Self.source(at: "MoviePilot-TV/ViewModels/ContentViewModel.swift")
-    let tokenPublisher = try XCTUnwrap(source.range(of: "apiService.$token"))
-    let receiveOn = try XCTUnwrap(
-      source.range(of: ".receive(on: RunLoop.main)", range: tokenPublisher.upperBound..<source.endIndex)
-    )
+    let sessionPublisher = try XCTUnwrap(source.range(of: "apiService.$session"))
     let store = try XCTUnwrap(
-      source.range(of: ".store(in: &cancellables)", range: receiveOn.upperBound..<source.endIndex)
+      source.range(
+        of: ".store(in: &cancellables)",
+        range: sessionPublisher.upperBound..<source.endIndex
+      )
     )
-    let subscription = source[tokenPublisher.lowerBound..<store.upperBound]
+    let subscription = source[sessionPublisher.lowerBound..<store.upperBound]
 
-    XCTAssertTrue(subscription.contains(".dropFirst()"))
     XCTAssertFalse(subscription.contains("evaluateMemoryOptimization: true"))
     XCTAssertTrue(subscription.contains("shouldEvaluateMemoryOptimizationAfterSessionChange"))
     XCTAssertTrue(subscription.contains("invalidateAutomaticDecision()"))
+    XCTAssertTrue(subscription.contains("backendVersionCheckKey(for: session)"))
   }
 
-  func testBackendVersionObserverIgnoresInitialServerReplay() throws {
+  func testBackendVersionObserverDefersInitialSessionReplayUntilStartup() throws {
     let source = try Self.source(at: "MoviePilot-TV/ViewModels/ContentViewModel.swift")
-    let baseURLPublisher = try XCTUnwrap(source.range(of: "apiService.$baseURL"))
-    let receiveOn = try XCTUnwrap(
-      source.range(of: ".receive(on: RunLoop.main)", range: baseURLPublisher.upperBound..<source.endIndex)
+    let sessionPublisher = try XCTUnwrap(source.range(of: "apiService.$session"))
+    let store = try XCTUnwrap(
+      source.range(
+        of: ".store(in: &cancellables)",
+        range: sessionPublisher.upperBound..<source.endIndex
+      )
     )
-    let subscription = source[baseURLPublisher.lowerBound..<receiveOn.upperBound]
+    let subscription = source[sessionPublisher.lowerBound..<store.upperBound]
 
-    XCTAssertTrue(subscription.contains(".dropFirst()"))
+    XCTAssertTrue(
+      subscription.contains(
+        "session.token != nil, self.didPrepareStartup, !self.isPreparingStartupSession"
+      )
+    )
   }
 
   func testContentViewLabelsSystemTabAsSettings() throws {
@@ -245,6 +252,9 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("session.token == nil"))
     XCTAssertTrue(source.contains("session.uiIdentity != self.observedSessionUIIdentity"))
     XCTAssertTrue(source.contains("if shouldClear { self.clearAll() }"))
+    XCTAssertFalse(source.contains("maxCacheSize"))
+    XCTAssertFalse(source.contains("accessOrder"))
+    XCTAssertFalse(source.contains("evictIfNeeded"))
   }
 
   func testContentViewNormalizesHiddenSelectedTabOnAppear() throws {

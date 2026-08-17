@@ -111,6 +111,39 @@ enum MediaDetailBackgroundImage {
   }
 }
 
+struct PageImageSnapshot: Equatable {
+  let mediaPosterURLs: Set<URL>
+  let personImageURLs: Set<URL>
+  let isComplete: Bool
+
+  init(
+    mediaPosterURLs: Set<URL> = [],
+    personImageURLs: Set<URL> = [],
+    isComplete: Bool = true
+  ) {
+    self.mediaPosterURLs = mediaPosterURLs
+    self.personImageURLs = personImageURLs
+    self.isComplete = isComplete
+  }
+}
+
+private struct MediaNavigationStackIDKey: EnvironmentKey {
+  static let defaultValue = UUID()
+}
+
+extension EnvironmentValues {
+  var mediaNavigationStackID: UUID {
+    get { self[MediaNavigationStackIDKey.self] }
+    set { self[MediaNavigationStackIDKey.self] = newValue }
+  }
+}
+
+private struct PendingMediaNavigation {
+  let mediaKey: String
+  let stackID: UUID
+  let expectedPathDepth: Int
+}
+
 // MARK: - 单个媒体的预加载任务
 
 /// 管理单个媒体项的所有预加载数据。
@@ -247,7 +280,7 @@ class MediaPreloadTask: ObservableObject {
   // MARK: - ② 预热背景图
 
   private func prefetchBackgroundImage(for detail: MediaInfo, timeout: Duration? = nil) async {
-    // 避免为已取消（LRU 淘汰）的任务发起无意义的图片请求
+    // 避免为已取消（生命周期释放）的任务发起无意义的图片请求
     guard !Task.isCancelled else { return }
     // 逻辑同 MediaDetailViewModel.updateBackground()：backdrop 优先，无则 poster
     let backdropUrl = detail.imageURLs.backdrop
@@ -465,12 +498,18 @@ class MediaPreloader: ObservableObject {
 
   /// 预加载任务缓存，key = MediaInfo.id
   private var cache: [String: MediaPreloadTask] = [:]
-  /// LRU 访问顺序
-  private var accessOrder: [String] = []
-  /// 被 DetailView 持有中的 Task keys — 淘汰时跳过，防止活跃详情页数据丢失
-  private var pinnedKeys: Set<String> = []
-  /// 最大缓存数量（Apple TV 内存有限，但 20 太小容易淘汰活跃数据）
-  private let maxCacheSize = 30
+  /// 尚未进入详情页的临时焦点候选。新候选出现时立即释放旧候选。
+  private var candidateKey: String?
+  /// 仍存在于导航栈中的详情页 owner；同一媒体可以在栈中出现多次。
+  private var navigationOwners: [String: Set<UUID>] = [:]
+  /// 当前屏幕页面的图片 URL，用于新详情捕获自己的返回目标。
+  private var activePageImageOwner: UUID?
+  private var activePageImageSnapshot: PageImageSnapshot?
+  /// Pop 回列表后，阻止焦点恢复立即重新预载刚退出的媒体。
+  private var suppressedFocusCandidateKey: String?
+  /// `NavigationPath.append` 到目的页 `onAppear` 之间的临时 owner。
+  private var pendingMediaNavigations: [UUID: PendingMediaNavigation] = [:]
+  private static let legacyNavigationOwner = UUID()
   private var cancellables = Set<AnyCancellable>()
   private var subscriptionRefreshTask: Task<Void, Never>?
   private var observedSessionUIIdentity: String
@@ -513,10 +552,7 @@ class MediaPreloader: ObservableObject {
       if existing.isDetailFailed {
         existing.cancel()
         cache.removeValue(forKey: key)
-        accessOrder.removeAll { $0 == key }
       } else {
-        // 更新 LRU 顺序
-        touchLRU(key: key)
         return existing
       }
     }
@@ -524,11 +560,7 @@ class MediaPreloader: ObservableObject {
     // 创建新任务
     let task = MediaPreloadTask(partialMedia: media, apiService: apiService)
     cache[key] = task
-    accessOrder.append(key)
     task.start()
-
-    // LRU 淘汰
-    evictIfNeeded()
 
     return task
   }
@@ -538,38 +570,216 @@ class MediaPreloader: ObservableObject {
   @discardableResult
   func preloadIfNeeded(for media: MediaInfo) -> MediaPreloadTask? {
     guard media.shouldPreloadDetail else { return nil }
+    replaceCandidate(with: media.id)
     return preload(for: media)
   }
 
-  /// 仅获取已有的预加载任务（不创建新的），并更新 LRU 顺序。
-  /// ⚠️ 不要在 SwiftUI body 中使用此方法（会修改状态），请用 peekTask。
-  func getTask(for media: MediaInfo) -> MediaPreloadTask? {
-    let key = media.id
-    if let existing = cache[key] {
-      touchLRU(key: key)
-      return existing
-    }
-    return nil
+  /// 仅供焦点停留触发的预载。刚 Pop 的同一媒体会被抑制，显式点击不受影响。
+  @discardableResult
+  func preloadFocusedCandidateIfNeeded(for media: MediaInfo) -> MediaPreloadTask? {
+    guard suppressedFocusCandidateKey != media.id else { return nil }
+    return preloadIfNeeded(for: media)
   }
 
-  /// 纯读取：仅查询缓存中是否存在对应任务，**不修改 LRU 顺序**。
+  /// 焦点真正移动到另一项后，解除上一次 Pop 的单次抑制。
+  func focusDidMove(to key: String) {
+    guard let suppressedFocusCandidateKey, suppressedFocusCandidateKey != key else { return }
+    self.suppressedFocusCandidateKey = nil
+  }
+
+  func isFocusPreloadSuppressed(for key: String) -> Bool {
+    suppressedFocusCandidateKey == key
+  }
+
+  // MARK: - 当前页面图片快照
+
+  func activatePageImageSnapshot(_ snapshot: PageImageSnapshot, owner: UUID) {
+    activePageImageOwner = owner
+    activePageImageSnapshot = snapshot
+  }
+
+  func updateActivePageImageSnapshot(_ snapshot: PageImageSnapshot, owner: UUID) {
+    guard activePageImageOwner == owner else { return }
+    activePageImageSnapshot = snapshot
+  }
+
+  func captureActivePageImageSnapshot() -> PageImageSnapshot? {
+    activePageImageSnapshot
+  }
+
+  /// 普通媒体在 append 前建立临时 owner；合集保持原有导航行为。
+  func appendMedia(
+    _ media: MediaInfo,
+    to navigationPath: Binding<NavigationPath>,
+    stackID: UUID
+  ) {
+    _ = beginMediaNavigation(
+      for: media,
+      pathDepth: navigationPath.wrappedValue.count,
+      stackID: stackID
+    )
+    navigationPath.wrappedValue.append(media)
+  }
+
+  /// 在追加普通媒体详情前建立临时 owner，防止转场期间的焦点变化取消目标任务。
+  @discardableResult
+  func beginMediaNavigation(
+    for media: MediaInfo,
+    pathDepth: Int,
+    stackID: UUID
+  ) -> UUID? {
+    guard media.shouldPreloadDetail else { return nil }
+
+    let key = media.id
+    let expectedPathDepth = pathDepth + 1
+    if let existing = pendingMediaNavigations.first(where: {
+      $0.value.mediaKey == key
+        && $0.value.stackID == stackID
+        && $0.value.expectedPathDepth == expectedPathDepth
+    }) {
+      return existing.key
+    }
+
+    replaceCandidate(with: key)
+    _ = preload(for: media)
+
+    let token = UUID()
+    navigationOwners[key, default: []].insert(token)
+    pendingMediaNavigations[token] = PendingMediaNavigation(
+      mediaKey: key,
+      stackID: stackID,
+      expectedPathDepth: expectedPathDepth
+    )
+    candidateKey = nil
+    return token
+  }
+
+  /// 目的页首次出现时，把唯一匹配的临时 owner 转成页面自己的 owner。
+  @discardableResult
+  func transferPendingMediaNavigation(
+    for mediaKey: String,
+    pathDepth: Int,
+    stackID: UUID,
+    to owner: UUID
+  ) -> Bool {
+    let matches = pendingMediaNavigations.filter {
+      $0.value.mediaKey == mediaKey
+        && $0.value.stackID == stackID
+        && $0.value.expectedPathDepth <= pathDepth
+    }
+    guard matches.count == 1, let match = matches.first else { return false }
+
+    pendingMediaNavigations.removeValue(forKey: match.key)
+    unpin(key: mediaKey, owner: match.key)
+    navigationOwners[mediaKey, default: []].insert(owner)
+    return true
+  }
+
+  /// 根栈路径回滚到预期深度以下时，回收没有完成交接的临时 owner。
+  func reconcilePendingMediaNavigations(currentPathDepth: Int, stackID: UUID) {
+    let staleTokens = pendingMediaNavigations.compactMap { token, pending in
+      pending.stackID == stackID && currentPathDepth < pending.expectedPathDepth
+        ? token
+        : nil
+    }
+    for token in staleTokens {
+      cancelPendingMediaNavigation(token)
+    }
+  }
+
+  /// 仅获取已有的预加载任务（不创建新的）。
+  func getTask(for media: MediaInfo) -> MediaPreloadTask? {
+    cache[media.id]
+  }
+
+  /// 纯读取：仅查询缓存中是否存在对应任务，不改变任何生命周期所有权。
   /// 可安全在 SwiftUI body / contextMenu @ViewBuilder 中使用。
   func peekTask(for media: MediaInfo) -> MediaPreloadTask? {
     return cache[media.id]
   }
 
-  // MARK: - Pin / Unpin（DetailView 生命周期保护）
+  // MARK: - 导航生命周期
 
-  /// 标记某个 Task 为"活跃使用中"，淘汰时自动跳过。
-  /// 应在 MediaDetailContainerView 的 .task / .onAppear 中调用。
+  /// 兼容现有测试和非导航调用；生产详情页应传入自己的 owner。
   func pin(key: String) {
-    pinnedKeys.insert(key)
+    pin(key: key, owner: Self.legacyNavigationOwner)
   }
 
-  /// 解除"活跃使用中"标记。
-  /// 应在 MediaDetailContainerView 的 .onDisappear 中调用。
   func unpin(key: String) {
-    pinnedKeys.remove(key)
+    unpin(key: key, owner: Self.legacyNavigationOwner)
+  }
+
+  /// 标记详情页仍存在于 NavigationPath 中。被子页面覆盖时不解除。
+  func pin(key: String, owner: UUID) {
+    // 首页/订阅等入口可能直接 append NavigationPath，没有经过焦点候选交接。
+    // 新详情接管时立即释放旧的临时候选，避免它脱离任何生命周期长期留在缓存里。
+    if let previousCandidate = candidateKey, previousCandidate != key,
+      navigationOwners[previousCandidate] == nil
+    {
+      releaseTask(
+        forKey: previousCandidate,
+        fallbackMedia: cache[previousCandidate]?.partialMedia,
+        size: UIScreen.main.bounds.size
+      )
+    }
+    candidateKey = nil
+    navigationOwners[key, default: []].insert(owner)
+  }
+
+  private func unpin(key: String, owner: UUID) {
+    navigationOwners[key]?.remove(owner)
+    if navigationOwners[key]?.isEmpty == true {
+      navigationOwners.removeValue(forKey: key)
+    }
+  }
+
+  /// 页面真正被 Pop 后解除 owner；最后一个 owner 离开时彻底释放该详情任务和背景内存。
+  func releaseAfterPop(
+    media: MediaInfo,
+    owner: UUID,
+    size: CGSize,
+    leavingImageSnapshot: PageImageSnapshot,
+    returnTargetImageSnapshot: PageImageSnapshot?,
+    imageCache: ImageCache = .default
+  ) {
+    let key = media.id
+    unpin(key: key, owner: owner)
+    releaseCardImagesAfterPop(
+      leaving: leavingImageSnapshot,
+      returningTo: returnTargetImageSnapshot,
+      cache: imageCache
+    )
+    suppressedFocusCandidateKey = key
+    guard navigationOwners[key] == nil else { return }
+    releaseTask(forKey: key, fallbackMedia: media, size: size)
+  }
+
+  func releaseCardImagesAfterPop(
+    leaving: PageImageSnapshot,
+    returningTo target: PageImageSnapshot?,
+    cache: ImageCache = .default
+  ) {
+    guard let target, target.isComplete else { return }
+
+    let mediaProcessor = MediaCard.posterProcessor(for: MediaCard.defaultPosterSize)
+    for url in leaving.mediaPosterURLs.subtracting(target.mediaPosterURLs) {
+      cache.removeImage(
+        forKey: apiService.imageSource(for: url).cacheKey,
+        processorIdentifier: mediaProcessor.identifier,
+        fromMemory: true,
+        fromDisk: false
+      )
+    }
+
+    let personProcessor = PersonCard.imageProcessor()
+    for url in leaving.personImageURLs.subtracting(target.personImageURLs) {
+      cache.removeImage(
+        forKey: apiService.imageSource(for: url).cacheKey,
+        processorIdentifier: personProcessor.identifier,
+        fromMemory: true,
+        fromDisk: false
+      )
+    }
   }
 
   /// 通过 mediaId（如 "tmdb:123"）查找对应的预加载任务。
@@ -603,8 +813,12 @@ class MediaPreloader: ObservableObject {
     }
     MPImageWarmer.shared.clear()
     cache.removeAll()
-    accessOrder.removeAll()
-    pinnedKeys.removeAll()
+    candidateKey = nil
+    navigationOwners.removeAll()
+    pendingMediaNavigations.removeAll()
+    activePageImageOwner = nil
+    activePageImageSnapshot = nil
+    suppressedFocusCandidateKey = nil
   }
 
   // MARK: - 订阅状态批量刷新
@@ -613,7 +827,7 @@ class MediaPreloader: ObservableObject {
   /// 普通海报墙预加载缓存不主动强刷，避免浏览海报墙后一次通知触发大量订阅查询。
   private func refreshAllSubscriptionStatus() async {
     let snapshot = apiService.sessionSnapshot()
-    let tasks = pinnedKeys.compactMap { cache[$0] }
+    let tasks = navigationOwners.keys.compactMap { cache[$0] }
     guard !tasks.isEmpty else { return }
 
     if tasks.contains(where: { $0.seasonViewModel != nil }) {
@@ -633,25 +847,63 @@ class MediaPreloader: ObservableObject {
     }
   }
 
-  // MARK: - LRU 管理
+  // MARK: - 临时候选与释放
 
-  private func touchLRU(key: String) {
-    accessOrder.removeAll { $0 == key }
-    accessOrder.append(key)
+  private func replaceCandidate(with key: String) {
+    guard candidateKey != key else { return }
+    if let previousKey = candidateKey, navigationOwners[previousKey] == nil {
+      releaseTask(
+        forKey: previousKey,
+        fallbackMedia: cache[previousKey]?.partialMedia,
+        size: UIScreen.main.bounds.size
+      )
+    }
+    candidateKey = navigationOwners[key] == nil ? key : nil
   }
 
-  private func evictIfNeeded() {
-    // 从最老的开始淘汰，但跳过被 pin 住的 Task
-    while cache.count > maxCacheSize {
-      // 找到第一个未被 pin 的 key
-      guard let indexToEvict = accessOrder.firstIndex(where: { !pinnedKeys.contains($0) }) else {
-        // 所有缓存都被 pin 住了（极端情况），无法淘汰，退出
-        break
-      }
-      let keyToEvict = accessOrder[indexToEvict]
-      cache[keyToEvict]?.cancel()
-      cache.removeValue(forKey: keyToEvict)
-      accessOrder.remove(at: indexToEvict)
+  private func cancelPendingMediaNavigation(_ token: UUID) {
+    guard let pending = pendingMediaNavigations.removeValue(forKey: token) else { return }
+    unpin(key: pending.mediaKey, owner: token)
+    guard navigationOwners[pending.mediaKey] == nil else { return }
+    releaseTask(
+      forKey: pending.mediaKey,
+      fallbackMedia: cache[pending.mediaKey]?.partialMedia,
+      size: UIScreen.main.bounds.size
+    )
+  }
+
+  private func releaseTask(
+    forKey key: String,
+    fallbackMedia: MediaInfo?,
+    size: CGSize
+  ) {
+    let task = cache.removeValue(forKey: key)
+    let detail = task?.fullDetail ?? fallbackMedia ?? task?.partialMedia
+    task?.cancel()
+    if candidateKey == key {
+      candidateKey = nil
+    }
+
+    guard let detail else { return }
+    if let backdropURL = detail.imageURLs.backdrop {
+      let cacheKey = apiService.imageSource(for: backdropURL).cacheKey
+      MediaDetailBackgroundImage.removeFirstPageBackgroundFromMemory(
+        for: backdropURL,
+        size: size,
+        cacheKey: cacheKey
+      )
+      MediaDetailBackgroundImage.removeSecondPageBackgroundFromMemory(
+        for: backdropURL,
+        size: size,
+        cacheKey: cacheKey
+      )
+    } else if let posterURL = detail.imageURLs.poster {
+      let cacheKey = apiService.imageSource(for: posterURL).cacheKey
+      MediaDetailBackgroundImage.removeSecondPageBackgroundFromMemory(
+        for: posterURL,
+        size: size,
+        cacheKey: cacheKey
+      )
     }
   }
 }

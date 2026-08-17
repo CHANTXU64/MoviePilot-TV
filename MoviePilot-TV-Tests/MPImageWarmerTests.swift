@@ -431,6 +431,347 @@ final class MPImageWarmerTests: XCTestCase {
     XCTAssertFalse(task.shouldWarmBackgroundImage(memoryOptimizationEnabled: true))
   }
 
+  func testOnlyReducedNavigationDepthMeansDetailWasPopped() {
+    XCTAssertFalse(MediaDetailView.wasPopped(navigationDepth: 3, currentPathCount: 4))
+    XCTAssertFalse(MediaDetailView.wasPopped(navigationDepth: 3, currentPathCount: 3))
+    XCTAssertTrue(MediaDetailView.wasPopped(navigationDepth: 3, currentPathCount: 2))
+  }
+
+  func testNewCandidateImmediatelyReleasesPreviousCandidate() {
+    let preloader = MediaPreloader(apiService: .testingInstance())
+    defer { preloader.clearAll() }
+    let first = MediaInfo(tmdb_id: 710_001, title: "候选一", type: "合集")
+    let second = MediaInfo(tmdb_id: 710_002, title: "候选二", type: "合集")
+
+    XCTAssertNotNil(preloader.preloadIfNeeded(for: first))
+    XCTAssertNotNil(preloader.peekTask(for: first))
+
+    XCTAssertNotNil(preloader.preloadIfNeeded(for: second))
+
+    XCTAssertNil(preloader.peekTask(for: first))
+    XCTAssertNotNil(preloader.peekTask(for: second))
+  }
+
+  func testPopReleasesTaskOnlyAfterLastNavigationOwnerLeaves() {
+    let preloader = MediaPreloader(apiService: .testingInstance())
+    defer { preloader.clearAll() }
+    let media = MediaInfo(
+      tmdb_id: 720_001,
+      title: "重复导航详情",
+      type: "合集",
+      collection_id: 1
+    )
+    let firstOwner = UUID()
+    let secondOwner = UUID()
+
+    preloader.preload(for: media)
+    preloader.pin(key: media.id, owner: firstOwner)
+    preloader.pin(key: media.id, owner: secondOwner)
+
+    preloader.releaseAfterPop(
+      media: media,
+      owner: firstOwner,
+      size: .zero,
+      leavingImageSnapshot: PageImageSnapshot(),
+      returnTargetImageSnapshot: nil
+    )
+    XCTAssertNotNil(preloader.peekTask(for: media))
+
+    preloader.releaseAfterPop(
+      media: media,
+      owner: secondOwner,
+      size: .zero,
+      leavingImageSnapshot: PageImageSnapshot(),
+      returnTargetImageSnapshot: nil
+    )
+    XCTAssertNil(preloader.peekTask(for: media))
+  }
+
+  func testCandidateReplacementDoesNotReleaseNavigationOwnedTask() {
+    let preloader = MediaPreloader(apiService: .testingInstance())
+    defer { preloader.clearAll() }
+    let navigationMedia = MediaInfo(tmdb_id: 730_001, title: "栈内详情", type: "合集")
+    let candidateMedia = MediaInfo(tmdb_id: 730_002, title: "新候选", type: "合集")
+    let owner = UUID()
+
+    preloader.preloadIfNeeded(for: navigationMedia)
+    preloader.pin(key: navigationMedia.id, owner: owner)
+    preloader.preloadIfNeeded(for: candidateMedia)
+
+    XCTAssertNotNil(preloader.peekTask(for: navigationMedia))
+    XCTAssertNotNil(preloader.peekTask(for: candidateMedia))
+  }
+
+  func testPendingMediaNavigationProtectsTaskUntilDestinationAppears() {
+    let preloader = MediaPreloader(apiService: .testingInstance())
+    defer { preloader.clearAll() }
+    let stackID = UUID()
+    let media = MediaInfo(tmdb_id: 730_101, title: "交接详情", type: "电影")
+    let nextCandidate = MediaInfo(tmdb_id: 730_102, title: "交接后的候选", type: "电影")
+    let destinationOwner = UUID()
+
+    let token = preloader.beginMediaNavigation(
+      for: media,
+      pathDepth: 0,
+      stackID: stackID
+    )
+    XCTAssertNotNil(token)
+
+    preloader.preloadIfNeeded(for: nextCandidate)
+    XCTAssertNotNil(preloader.peekTask(for: media))
+
+    XCTAssertTrue(
+      preloader.transferPendingMediaNavigation(
+        for: media.id,
+        pathDepth: 1,
+        stackID: stackID,
+        to: destinationOwner
+      )
+    )
+    preloader.releaseAfterPop(
+      media: media,
+      owner: destinationOwner,
+      size: .zero,
+      leavingImageSnapshot: PageImageSnapshot(),
+      returnTargetImageSnapshot: nil
+    )
+    XCTAssertNil(preloader.peekTask(for: media))
+  }
+
+  func testPendingMediaNavigationIsReleasedWhenPathRollsBack() {
+    let preloader = MediaPreloader(apiService: .testingInstance())
+    defer { preloader.clearAll() }
+    let stackID = UUID()
+    let media = MediaInfo(tmdb_id: 730_111, title: "取消交接", type: "电影")
+
+    XCTAssertNotNil(
+      preloader.beginMediaNavigation(for: media, pathDepth: 2, stackID: stackID)
+    )
+    preloader.reconcilePendingMediaNavigations(currentPathDepth: 2, stackID: stackID)
+
+    XCTAssertNil(preloader.peekTask(for: media))
+  }
+
+  func testPendingMediaNavigationRollbackIsIsolatedByStack() {
+    let preloader = MediaPreloader(apiService: .testingInstance())
+    defer { preloader.clearAll() }
+    let firstStack = UUID()
+    let secondStack = UUID()
+    let media = MediaInfo(tmdb_id: 730_121, title: "跨栈交接", type: "电影")
+
+    XCTAssertNotNil(
+      preloader.beginMediaNavigation(for: media, pathDepth: 0, stackID: firstStack)
+    )
+    preloader.reconcilePendingMediaNavigations(currentPathDepth: 0, stackID: secondStack)
+    XCTAssertNotNil(preloader.peekTask(for: media))
+
+    preloader.reconcilePendingMediaNavigations(currentPathDepth: 0, stackID: firstStack)
+    XCTAssertNil(preloader.peekTask(for: media))
+  }
+
+  func testOnlyActivePageCanUpdateReturnImageSnapshot() throws {
+    let preloader = MediaPreloader(apiService: .testingInstance())
+    defer { preloader.clearAll() }
+    let activeOwner = UUID()
+    let hiddenOwner = UUID()
+    let firstURL = try XCTUnwrap(URL(string: "https://example.com/active.jpg"))
+    let hiddenURL = try XCTUnwrap(URL(string: "https://example.com/hidden.jpg"))
+    let updatedURL = try XCTUnwrap(URL(string: "https://example.com/updated.jpg"))
+
+    preloader.activatePageImageSnapshot(
+      PageImageSnapshot(mediaPosterURLs: [firstURL]),
+      owner: activeOwner
+    )
+    preloader.updateActivePageImageSnapshot(
+      PageImageSnapshot(mediaPosterURLs: [hiddenURL]),
+      owner: hiddenOwner
+    )
+    XCTAssertEqual(
+      preloader.captureActivePageImageSnapshot()?.mediaPosterURLs,
+      [firstURL]
+    )
+
+    preloader.updateActivePageImageSnapshot(
+      PageImageSnapshot(mediaPosterURLs: [updatedURL]),
+      owner: activeOwner
+    )
+    XCTAssertEqual(
+      preloader.captureActivePageImageSnapshot()?.mediaPosterURLs,
+      [updatedURL]
+    )
+  }
+
+  func testPoppedFocusedItemIsSuppressedUntilFocusMoves() {
+    let preloader = MediaPreloader(apiService: .testingInstance())
+    defer { preloader.clearAll() }
+    let popped = MediaInfo(tmdb_id: 740_001, title: "刚退出的 A", type: "合集")
+    let next = MediaInfo(tmdb_id: 740_002, title: "移动到 B", type: "合集")
+    let owner = UUID()
+
+    preloader.preload(for: popped)
+    preloader.pin(key: popped.id, owner: owner)
+    preloader.releaseAfterPop(
+      media: popped,
+      owner: owner,
+      size: .zero,
+      leavingImageSnapshot: PageImageSnapshot(),
+      returnTargetImageSnapshot: PageImageSnapshot()
+    )
+
+    XCTAssertTrue(preloader.isFocusPreloadSuppressed(for: popped.id))
+    XCTAssertNil(preloader.preloadFocusedCandidateIfNeeded(for: popped))
+    XCTAssertNotNil(preloader.preloadIfNeeded(for: popped), "显式点击 A 不应被焦点抑制拦截")
+
+    preloader.focusDidMove(to: next.id)
+    XCTAssertFalse(preloader.isFocusPreloadSuppressed(for: popped.id))
+  }
+
+  func testCardImageDiffRemovesOnlyUnsharedMemoryEntriesAndKeepsDisk() async throws {
+    let preloader = MediaPreloader(apiService: .testingInstance())
+    defer { preloader.clearAll() }
+    let cache = ImageCache(name: "detail-card-diff-\(UUID().uuidString)")
+    defer {
+      cache.clearMemoryCache()
+      cache.clearDiskCache()
+    }
+    let removedPoster = try XCTUnwrap(URL(string: "https://example.com/removed-poster.jpg"))
+    let keptPoster = try XCTUnwrap(URL(string: "https://example.com/kept-poster.jpg"))
+    let removedPerson = try XCTUnwrap(URL(string: "https://example.com/removed-person.jpg"))
+    let keptPerson = try XCTUnwrap(URL(string: "https://example.com/kept-person.jpg"))
+    let image = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { context in
+      UIColor.orange.setFill()
+      context.cgContext.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+    }
+    let mediaProcessor = MediaCard.posterProcessor(for: MediaCard.defaultPosterSize)
+    let personProcessor = PersonCard.imageProcessor()
+
+    for url in [removedPoster, keptPoster] {
+      try await cache.store(
+        image,
+        forKey: url.cacheKey,
+        processorIdentifier: mediaProcessor.identifier
+      )
+    }
+    for url in [removedPerson, keptPerson] {
+      try await cache.store(
+        image,
+        forKey: url.cacheKey,
+        processorIdentifier: personProcessor.identifier
+      )
+    }
+
+    preloader.releaseCardImagesAfterPop(
+      leaving: PageImageSnapshot(
+        mediaPosterURLs: [removedPoster, keptPoster],
+        personImageURLs: [removedPerson, keptPerson]
+      ),
+      returningTo: PageImageSnapshot(
+        mediaPosterURLs: [keptPoster],
+        personImageURLs: [keptPerson]
+      ),
+      cache: cache
+    )
+
+    XCTAssertEqual(
+      cache.imageCachedType(
+        forKey: removedPoster.cacheKey,
+        processorIdentifier: mediaProcessor.identifier
+      ),
+      .disk
+    )
+    XCTAssertEqual(
+      cache.imageCachedType(
+        forKey: keptPoster.cacheKey,
+        processorIdentifier: mediaProcessor.identifier
+      ),
+      .memory
+    )
+    XCTAssertEqual(
+      cache.imageCachedType(
+        forKey: removedPerson.cacheKey,
+        processorIdentifier: personProcessor.identifier
+      ),
+      .disk
+    )
+    XCTAssertEqual(
+      cache.imageCachedType(
+        forKey: keptPerson.cacheKey,
+        processorIdentifier: personProcessor.identifier
+      ),
+      .memory
+    )
+  }
+
+  func testUnknownReturnTargetDoesNotRemoveCardImages() async throws {
+    let preloader = MediaPreloader(apiService: .testingInstance())
+    defer { preloader.clearAll() }
+    let cache = ImageCache(name: "unknown-return-target-\(UUID().uuidString)")
+    defer {
+      cache.clearMemoryCache()
+      cache.clearDiskCache()
+    }
+    let url = try XCTUnwrap(URL(string: "https://example.com/unknown-target.jpg"))
+    let processor = MediaCard.posterProcessor(for: MediaCard.defaultPosterSize)
+    let image = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { context in
+      UIColor.purple.setFill()
+      context.cgContext.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+    }
+    try await cache.store(
+      image,
+      forKey: url.cacheKey,
+      processorIdentifier: processor.identifier
+    )
+
+    preloader.releaseCardImagesAfterPop(
+      leaving: PageImageSnapshot(mediaPosterURLs: [url]),
+      returningTo: nil,
+      cache: cache
+    )
+
+    XCTAssertEqual(
+      cache.imageCachedType(
+        forKey: url.cacheKey,
+        processorIdentifier: processor.identifier
+      ),
+      .memory
+    )
+  }
+
+  func testIncompleteReturnTargetDoesNotRemoveCardImages() async throws {
+    let preloader = MediaPreloader(apiService: .testingInstance())
+    defer { preloader.clearAll() }
+    let cache = ImageCache(name: "incomplete-return-target-\(UUID().uuidString)")
+    defer {
+      cache.clearMemoryCache()
+      cache.clearDiskCache()
+    }
+    let url = try XCTUnwrap(URL(string: "https://example.com/incomplete-target.jpg"))
+    let processor = MediaCard.posterProcessor(for: MediaCard.defaultPosterSize)
+    let image = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { context in
+      UIColor.green.setFill()
+      context.cgContext.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+    }
+    try await cache.store(
+      image,
+      forKey: url.cacheKey,
+      processorIdentifier: processor.identifier
+    )
+
+    preloader.releaseCardImagesAfterPop(
+      leaving: PageImageSnapshot(mediaPosterURLs: [url]),
+      returningTo: PageImageSnapshot(isComplete: false),
+      cache: cache
+    )
+
+    XCTAssertEqual(
+      cache.imageCachedType(
+        forKey: url.cacheKey,
+        processorIdentifier: processor.identifier
+      ),
+      .memory
+    )
+  }
+
   private func waitUntil(
     _ description: String,
     timeout: Duration = .seconds(2),

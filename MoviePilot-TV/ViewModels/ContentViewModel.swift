@@ -60,7 +60,7 @@ class ContentViewModel: ObservableObject {
           for: session.currentUser,
           profileIdentity: profileIdentity
         )
-        let sessionKey = self.currentBackendVersionCheckKey()
+        let sessionKey = self.backendVersionCheckKey(for: session)
         if sessionKey != self.memoryOptimizationSessionKey {
           self.memoryOptimizationSessionKey = sessionKey
           self.memoryOptimizationPolicy.invalidateAutomaticDecision()
@@ -181,6 +181,7 @@ class ContentViewModel: ObservableObject {
         let sessionSnapshot = apiService.sessionSnapshot()
         let imageCacheAvailable = apiService.useImageCache
         memoryOptimizationPolicy.evaluateAutomatically(
+          baseURL: apiService.baseURL,
           sessionSnapshot: sessionSnapshot,
           settingsLoaded: true,
           imageCacheAvailable: imageCacheAvailable
@@ -199,6 +200,7 @@ class ContentViewModel: ObservableObject {
       }
       if evaluateMemoryOptimization, sessionIsCurrent {
         memoryOptimizationPolicy.evaluateAutomatically(
+          baseURL: apiService.baseURL,
           sessionSnapshot: apiService.sessionSnapshot(),
           settingsLoaded: false,
           imageCacheAvailable: false
@@ -256,9 +258,15 @@ class ContentViewModel: ObservableObject {
   }
 
   private func currentBackendVersionCheckKey() -> BackendVersionCheckKey {
+    backendVersionCheckKey(for: apiService.session)
+  }
+
+  private func backendVersionCheckKey(
+    for session: APIServiceSessionState
+  ) -> BackendVersionCheckKey {
     BackendVersionCheckKey(
-      baseURL: apiService.baseURL,
-      token: apiService.token,
+      baseURL: session.baseURL,
+      token: session.token,
       appVersion: AppVersionInfo.currentAppVersion()
     )
   }

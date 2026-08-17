@@ -160,6 +160,7 @@ class RecommendViewModel: ObservableObject {
       imageURLsProvider: { item in
         [item.imageURLs.poster].compactMap(\.self)
       },
+      imagePrefetchProcessor: MediaCard.posterProcessor(for: MediaCard.defaultPosterSize),
       onReset: { @MainActor in
         seenKeys.removeAll()
       }

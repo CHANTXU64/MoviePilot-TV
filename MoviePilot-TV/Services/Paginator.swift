@@ -50,6 +50,9 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   /// 预取图片 URL 的函数。
   private let imageURLsProvider: (@MainActor (ItemType) -> [URL])?
 
+  /// 与实际卡片显示一致的图片处理器，避免预取额外缓存默认处理器的大图。
+  private let imagePrefetchProcessor: (any ImageProcessor)?
+
   /// 处理新项目并将其合并到现有项目数组的函数。
   /// 如果添加了新的、唯一的内容，它应该返回 `true`。
   private let processor: @MainActor (inout [ItemType], [ItemType]) -> Bool
@@ -83,6 +86,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     fetcher: @escaping @MainActor (Int) async throws -> [ItemType],
     processor: @escaping @MainActor (inout [ItemType], [ItemType]) -> Bool,
     imageURLsProvider: (@MainActor (ItemType) -> [URL])? = nil,
+    imagePrefetchProcessor: (any ImageProcessor)? = nil,
     prefetchThreshold: Int? = nil,
     onReset: (() -> Void)? = nil
   ) {
@@ -90,6 +94,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     self.fetcher = fetcher
     self.processor = processor
     self.imageURLsProvider = imageURLsProvider
+    self.imagePrefetchProcessor = imagePrefetchProcessor
     self.prefetchThreshold = prefetchThreshold ?? ((threshold + 1) / 2)
     self.onReset = onReset
   }
@@ -129,9 +134,13 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
               }
               activePrefetchers = grouped.compactMap { protected, urls in
                 let sources = urls.map { service.imageSource(for: $0) }
+                var options = protected ? service.imageOptions(for: urls[0]) : []
+                if let imagePrefetchProcessor {
+                  options.append(.processor(imagePrefetchProcessor))
+                }
                 return ImagePrefetcher(
                   sources: sources,
-                  options: protected ? service.imageOptions(for: urls[0]) : []
+                  options: options
                 )
               }
               activePrefetchers.forEach { $0.start() }

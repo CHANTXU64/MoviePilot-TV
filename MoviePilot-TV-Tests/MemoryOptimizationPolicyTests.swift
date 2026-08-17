@@ -91,11 +91,12 @@ final class MemoryOptimizationPolicyTests: XCTestCase {
     let policy = MemoryOptimizationPolicy(
       testingMode: .automatic,
       latencyProbe: { await probe.call(baseURL: $0) },
-      sessionIsCurrent: { $0 == currentSession }
+      sessionIsCurrent: { $0 == currentSession.snapshot }
     )
 
     policy.evaluateAutomatically(
-      sessionSnapshot: firstSession,
+      baseURL: firstSession.baseURL,
+      sessionSnapshot: firstSession.snapshot,
       settingsLoaded: true,
       imageCacheAvailable: true
     )
@@ -105,7 +106,8 @@ final class MemoryOptimizationPolicyTests: XCTestCase {
 
     currentSession = secondSession
     policy.evaluateAutomatically(
-      sessionSnapshot: secondSession,
+      baseURL: secondSession.baseURL,
+      sessionSnapshot: secondSession.snapshot,
       settingsLoaded: true,
       imageCacheAvailable: true
     )
@@ -143,7 +145,7 @@ final class MemoryOptimizationPolicyTests: XCTestCase {
       testingMode: .disabled,
       automaticEnabled: true,
       latencyProbe: { _ in await probe.next() },
-      sessionIsCurrent: { $0 == currentSession }
+      sessionIsCurrent: { $0 == currentSession.snapshot }
     )
 
     policy.mode = .automatic
@@ -155,7 +157,8 @@ final class MemoryOptimizationPolicyTests: XCTestCase {
     XCTAssertFalse(policy.isEnabled)
 
     policy.evaluateAutomatically(
-      sessionSnapshot: currentSession,
+      baseURL: currentSession.baseURL,
+      sessionSnapshot: currentSession.snapshot,
       settingsLoaded: true,
       imageCacheAvailable: true
     )
@@ -166,13 +169,11 @@ final class MemoryOptimizationPolicyTests: XCTestCase {
     XCTAssertTrue(policy.isEnabled)
   }
 
-  private func session(_ baseURL: String, token: String) -> APIServiceSessionSnapshot {
-    APIServiceSessionSnapshot(
+  private func session(_ baseURL: String, token: String) -> TestSession {
+    let epoch = token.utf8.reduce(UInt64(0)) { $0 &* 31 &+ UInt64($1) }
+    return TestSession(
       baseURL: baseURL,
-      token: token,
-      userName: "tester",
-      superUser: false,
-      permissions: ["discovery": true]
+      snapshot: APIServiceSessionSnapshot(epoch: epoch)
     )
   }
 
@@ -188,6 +189,11 @@ final class MemoryOptimizationPolicyTests: XCTestCase {
     }
     XCTFail(failureMessage)
   }
+}
+
+private struct TestSession {
+  let baseURL: String
+  let snapshot: APIServiceSessionSnapshot
 }
 
 private actor ControlledMemoryOptimizationProbe {

@@ -72,12 +72,16 @@ struct MediaDetailView: View {
   @Binding var navigationPath: NavigationPath
   @StateObject private var subscriptionHandler = SubscriptionHandler()
   @Environment(\.scenePhase) private var scenePhase
+  @Environment(\.mediaNavigationStackID) private var mediaNavigationStackID
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
   @ObservedObject private var apiService = APIService.shared
   /// 预加载任务：订阅状态、TMDB 识别、分季信息的唯一数据源
   @ObservedObject var preloadTask: MediaPreloadTask
   /// 由 ContainerView 传入，当第二页首行内容就绪时回写 true，控制 Loading 遮罩显隐
   @Binding var isContentReady: Bool
+  let navigationOwnerID: UUID
+  let navigationDepth: Int
+  let returnTargetImageSnapshot: PageImageSnapshot?
   @State private var showSiteSelection = false
   @State private var showContentPage = false
   @State private var hasAppeared = false
@@ -87,6 +91,7 @@ struct MediaDetailView: View {
   @State private var isBackgroundMounted = true
   @State private var backgroundGeneration = 0
   @State private var backgroundPreparationWasCancelled = false
+  @State private var didReleaseAfterPop = false
 
   // 订阅相关 UI 状态（弹窗开关，纯 UI 逻辑）
   @State private var sheetSubscribe: Subscribe?
@@ -205,7 +210,9 @@ struct MediaDetailView: View {
 
   init(
     detail: MediaInfo, navigationPath: Binding<NavigationPath>,
-    preloadTask: MediaPreloadTask, isContentReady: Binding<Bool>
+    preloadTask: MediaPreloadTask, isContentReady: Binding<Bool>,
+    navigationOwnerID: UUID, navigationDepth: Int,
+    returnTargetImageSnapshot: PageImageSnapshot?
   ) {
     let vm = MediaDetailViewModel(detail: detail)
     vm.preloadTask = preloadTask
@@ -213,6 +220,9 @@ struct MediaDetailView: View {
     _navigationPath = navigationPath
     self.preloadTask = preloadTask
     _isContentReady = isContentReady
+    self.navigationOwnerID = navigationOwnerID
+    self.navigationDepth = navigationDepth
+    self.returnTargetImageSnapshot = returnTargetImageSnapshot
   }
 
   static func shouldRefreshBackground(
@@ -220,6 +230,13 @@ struct MediaDetailView: View {
     preparationWasCancelled: Bool
   ) -> Bool {
     !isMounted || preparationWasCancelled
+  }
+
+  nonisolated static func wasPopped(
+    navigationDepth: Int,
+    currentPathCount: Int
+  ) -> Bool {
+    currentPathCount < navigationDepth
   }
 
   var body: some View {
@@ -351,8 +368,15 @@ struct MediaDetailView: View {
         backgroundPreparationWasCancelled || secondPageBackgroundTask != nil
       secondPageBackgroundTask?.cancel()
       secondPageBackgroundTask = nil
+      DispatchQueue.main.async {
+        releaseAfterPopIfNeeded(currentPathCount: navigationPath.count)
+      }
     }
     .onAppear {
+      MediaPreloader.shared.activatePageImageSnapshot(
+        viewModel.pageImageSnapshot,
+        owner: navigationOwnerID
+      )
       let shouldRefresh = Self.shouldRefreshBackground(
         isMounted: isBackgroundMounted,
         preparationWasCancelled: backgroundPreparationWasCancelled
@@ -367,6 +391,17 @@ struct MediaDetailView: View {
       secondPageBackgroundTask?.cancel()
       secondPageBackgroundTask = nil
       preparedSecondPageBackgroundURL = nil
+    }
+    .onChange(of: viewModel.pageImageSnapshot) { _, snapshot in
+      MediaPreloader.shared.updateActivePageImageSnapshot(
+        snapshot,
+        owner: navigationOwnerID
+      )
+    }
+    .onChange(of: navigationPath.count) { _, currentPathCount in
+      DispatchQueue.main.async {
+        releaseAfterPopIfNeeded(currentPathCount: currentPathCount)
+      }
     }
     .task {
       if !hasAppeared, let preferredHeaderFocus {
@@ -512,11 +547,32 @@ struct MediaDetailView: View {
   }
 
   private func navigateFromSecondPage<Destination: Hashable>(to destination: Destination) {
+    MediaPreloader.shared.activatePageImageSnapshot(
+      viewModel.pageImageSnapshot,
+      owner: navigationOwnerID
+    )
     navigationPath.append(destination)
     scheduleBackgroundReleaseAfterNavigationStarts()
   }
 
+  private func navigateToMediaFromSecondPage(_ media: MediaInfo) {
+    MediaPreloader.shared.activatePageImageSnapshot(
+      viewModel.pageImageSnapshot,
+      owner: navigationOwnerID
+    )
+    MediaPreloader.shared.appendMedia(
+      media,
+      to: $navigationPath,
+      stackID: mediaNavigationStackID
+    )
+    scheduleBackgroundReleaseAfterNavigationStarts()
+  }
+
   private func scheduleBackgroundReleaseAfterNavigationStarts() {
+    MediaPreloader.shared.activatePageImageSnapshot(
+      viewModel.pageImageSnapshot,
+      owner: navigationOwnerID
+    )
     guard
       let url = viewModel.backgroundUrl,
       MediaDetailBackgroundImage.shouldReleaseForNavigation(
@@ -545,6 +601,28 @@ struct MediaDetailView: View {
       for: url,
       size: UIScreen.main.bounds.size,
       cacheKey: cacheKey
+    )
+  }
+
+  private func releaseAfterPopIfNeeded(currentPathCount: Int) {
+    guard !didReleaseAfterPop,
+      Self.wasPopped(
+        navigationDepth: navigationDepth,
+        currentPathCount: currentPathCount
+      )
+    else {
+      return
+    }
+
+    didReleaseAfterPop = true
+    let leavingImageSnapshot = viewModel.pageImageSnapshot
+    viewModel.cancelForPop()
+    MediaPreloader.shared.releaseAfterPop(
+      media: preloadTask.partialMedia,
+      owner: navigationOwnerID,
+      size: UIScreen.main.bounds.size,
+      leavingImageSnapshot: leavingImageSnapshot,
+      returnTargetImageSnapshot: returnTargetImageSnapshot
     )
   }
 
@@ -837,7 +915,11 @@ struct MediaDetailView: View {
                   if let target = await mediaActionHandler.getTMDBJumpTarget(
                     for: viewModel.detail, targetTmdbId: targetTmdbId)
                   {
-                    navigationPath.append(target)
+                    MediaPreloader.shared.appendMedia(
+                      target,
+                      to: $navigationPath,
+                      stackID: mediaNavigationStackID
+                    )
                     scheduleBackgroundReleaseAfterNavigationStarts()
                   }
                 }
@@ -1114,6 +1196,9 @@ struct MediaDetailView: View {
           .padding(.top, 25)
           .padding(.bottom, 30)
           .onChange(of: focusedActorId) { _, newId in
+            if let newId {
+              MediaPreloader.shared.focusDidMove(to: "person:\(newId)")
+            }
             Task {
               await viewModel.actorsPaginator.loadMore(newId)
             }
@@ -1146,8 +1231,7 @@ struct MediaDetailView: View {
                 item: media,
                 showBadges: badges,
                 onTap: {
-                  MediaPreloader.shared.preloadIfNeeded(for: media)
-                  navigateFromSecondPage(to: media)
+                  navigateToMediaFromSecondPage(media)
                 }
               )
               .equatable()
@@ -1171,10 +1255,11 @@ struct MediaDetailView: View {
             if let newId = newId,
               let item = viewModel.recommendPaginator.items.first(where: { $0.id == newId })
             {
+              MediaPreloader.shared.focusDidMove(to: newId)
               recommendPreloadDebounce = Task {
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
-                MediaPreloader.shared.preloadIfNeeded(for: item)
+                MediaPreloader.shared.preloadFocusedCandidateIfNeeded(for: item)
               }
             }
             // 分页加载
@@ -1210,8 +1295,7 @@ struct MediaDetailView: View {
                 item: media,
                 showBadges: badges,
                 onTap: {
-                  MediaPreloader.shared.preloadIfNeeded(for: media)
-                  navigateFromSecondPage(to: media)
+                  navigateToMediaFromSecondPage(media)
                 }
               )
               .equatable()
@@ -1235,10 +1319,11 @@ struct MediaDetailView: View {
             if let newId = newId,
               let item = viewModel.similarPaginator.items.first(where: { $0.id == newId })
             {
+              MediaPreloader.shared.focusDidMove(to: newId)
               similarPreloadDebounce = Task {
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
-                MediaPreloader.shared.preloadIfNeeded(for: item)
+                MediaPreloader.shared.preloadFocusedCandidateIfNeeded(for: item)
               }
             }
             // 分页加载

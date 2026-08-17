@@ -2,10 +2,17 @@ import Kingfisher
 import SwiftUI
 
 struct PersonCard: View {
+  static let imageSize = CGSize(width: 210, height: 315)
+
+  static func imageProcessor() -> any ImageProcessor {
+    DefaultImageProcessor.default
+      |> ResizingImageProcessor(referenceSize: imageSize, mode: .aspectFill)
+  }
+
   let person: Person
   var staffImageUrl: URL? = nil
-  let width: CGFloat = 210
-  let height: CGFloat = 315
+  let width: CGFloat = imageSize.width
+  let height: CGFloat = imageSize.height
 
   // 卡片被点击时的操作
   var action: (() -> Void)? = nil
@@ -72,7 +79,8 @@ struct PersonCard: View {
               .foregroundColor(.gray)
           )
       }
-      .resizing(referenceSize: CGSize(width: 210, height: 315), mode: .aspectFill)
+      .setProcessor(Self.imageProcessor())
+      .cancelOnDisappear(true)
       .resizable()
       .fade(duration: 0.25)
       .aspectRatio(contentMode: .fill)

@@ -545,6 +545,7 @@ class SearchViewModel: ObservableObject {
       imageURLsProvider: { item in
         [item.imageURLs.poster].compactMap(\.self)
       },
+      imagePrefetchProcessor: MediaCard.posterProcessor(for: MediaCard.defaultPosterSize),
       onReset: { @MainActor in movieSeenKeys.removeAll() }
     )
 
@@ -564,6 +565,7 @@ class SearchViewModel: ObservableObject {
       imageURLsProvider: { @MainActor item in
         [item.imageURLs.poster].compactMap { $0 }
       },
+      imagePrefetchProcessor: MediaCard.posterProcessor(for: MediaCard.defaultPosterSize),
       onReset: { @MainActor in tvSeenKeys.removeAll() }
     )
 
@@ -592,6 +594,7 @@ class SearchViewModel: ObservableObject {
       imageURLsProvider: { @MainActor item in
         [item.imageURLs.poster].compactMap { $0 }
       },
+      imagePrefetchProcessor: MediaCard.posterProcessor(for: MediaCard.defaultPosterSize),
       onReset: { @MainActor in
         collectionSeenKeys.removeAll()
       }
@@ -624,7 +627,8 @@ class SearchViewModel: ObservableObject {
       },
       imageURLsProvider: { item in
         [item.imageURLs.profile].compactMap(\.self)
-      }
+      },
+      imagePrefetchProcessor: PersonCard.imageProcessor()
     )
 
     var newSubscriptionSharePaginator: Paginator<MediaInfo>?
@@ -648,6 +652,7 @@ class SearchViewModel: ObservableObject {
         imageURLsProvider: { item in
           [item.imageURLs.poster].compactMap(\.self)
         },
+        imagePrefetchProcessor: MediaCard.posterProcessor(for: MediaCard.defaultPosterSize),
         onReset: { @MainActor in
           shareSeenKeys.removeAll()
         }

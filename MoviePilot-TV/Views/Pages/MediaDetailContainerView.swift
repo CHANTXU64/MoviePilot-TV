@@ -158,14 +158,23 @@ private struct MediaLoadingView: View {
 struct MediaDetailContainerView: View {
   let media: MediaInfo
   @Binding var navigationPath: NavigationPath
+  @Environment(\.mediaNavigationStackID) private var mediaNavigationStackID
 
   /// 预加载任务：在 init 中立即获取/创建，确保首帧就有数据
   /// 非 Optional，消除 if let 条件分支导致的视图结构变化
   @State private var preloadTask: MediaPreloadTask
+  @State private var navigationOwnerID = UUID()
+  @State private var navigationDepth: Int
+  @State private var didCaptureNavigationDepth = false
+  @State private var returnTargetImageSnapshot: PageImageSnapshot?
 
   init(media: MediaInfo, navigationPath: Binding<NavigationPath>) {
     self.media = media
     _navigationPath = navigationPath
+    _navigationDepth = State(initialValue: max(navigationPath.wrappedValue.count, 1))
+    _returnTargetImageSnapshot = State(
+      initialValue: MediaPreloader.shared.captureActivePageImageSnapshot()
+    )
     // 在 init 中立即获取预加载任务，避免首帧出现条件分支
     let preloadTask = MediaPreloader.shared.preload(for: media)
     preloadTask.cancelImageWarm()
@@ -197,15 +206,29 @@ struct MediaDetailContainerView: View {
     MediaDetailContainerContent(
       media: media,
       navigationPath: $navigationPath,
-      preloadTask: preloadTask
+      preloadTask: preloadTask,
+      navigationOwnerID: navigationOwnerID,
+      navigationDepth: navigationDepth,
+      returnTargetImageSnapshot: returnTargetImageSnapshot
     )
-    .task(id: media.id) {
-      // 确保当前任务被锁定，防止用户在子页面浏览时被最近最少使用算法 (LRU) 淘汰
-      MediaPreloader.shared.pin(key: media.id)
-    }
-    .onDisappear {
-      // 离开详情页后解除锁定，允许最近最少使用算法 (LRU) 正常淘汰
-      MediaPreloader.shared.unpin(key: media.id)
+    .onAppear {
+      // 只要页面仍在 NavigationPath 中就继续持有；被子页面覆盖时不释放。
+      if !MediaPreloader.shared.transferPendingMediaNavigation(
+        for: media.id,
+        pathDepth: navigationPath.count,
+        stackID: mediaNavigationStackID,
+        to: navigationOwnerID
+      ) {
+        MediaPreloader.shared.pin(key: media.id, owner: navigationOwnerID)
+      }
+      // destination 闭包初始化时可能还拿到旧的 Binding 值；以首次出现时的路径深度校准，
+      // 后续 Push/返回不再改写这个页面自己的进入深度。
+      guard !didCaptureNavigationDepth else { return }
+      DispatchQueue.main.async {
+        guard !didCaptureNavigationDepth else { return }
+        navigationDepth = max(navigationDepth, navigationPath.count)
+        didCaptureNavigationDepth = true
+      }
     }
   }
 }
@@ -215,6 +238,9 @@ private struct MediaDetailContainerContent: View {
   let media: MediaInfo
   @Binding var navigationPath: NavigationPath
   @ObservedObject var preloadTask: MediaPreloadTask
+  let navigationOwnerID: UUID
+  let navigationDepth: Int
+  let returnTargetImageSnapshot: PageImageSnapshot?
 
   /// 第二页首行内容是否已就绪（由 MediaDetailView 回写）
   @State private var isContentReady = false
@@ -225,10 +251,20 @@ private struct MediaDetailContainerContent: View {
   /// 最短展示时间是否已过（防止加载太快导致动画闪烁）
   @State private var minTimeElapsed = false
 
-  init(media: MediaInfo, navigationPath: Binding<NavigationPath>, preloadTask: MediaPreloadTask) {
+  init(
+    media: MediaInfo,
+    navigationPath: Binding<NavigationPath>,
+    preloadTask: MediaPreloadTask,
+    navigationOwnerID: UUID,
+    navigationDepth: Int,
+    returnTargetImageSnapshot: PageImageSnapshot?
+  ) {
     self.media = media
     _navigationPath = navigationPath
     self.preloadTask = preloadTask
+    self.navigationOwnerID = navigationOwnerID
+    self.navigationDepth = navigationDepth
+    self.returnTargetImageSnapshot = returnTargetImageSnapshot
     // 在 init 中判断，确保第一帧 isReady 就正确
     _wasPreloaded = State(initialValue: preloadTask.isDetailReady)
     _loadingPosterURL = State(
@@ -266,7 +302,10 @@ private struct MediaDetailContainerContent: View {
         detail: detail,
         navigationPath: $navigationPath,
         preloadTask: preloadTask,
-        isContentReady: $isContentReady
+        isContentReady: $isContentReady,
+        navigationOwnerID: navigationOwnerID,
+        navigationDepth: navigationDepth,
+        returnTargetImageSnapshot: returnTargetImageSnapshot
       )
       // 加载未完成时隐藏详情，防止 NavigationStack 过渡动画透出内容
       .opacity(isReady ? 1 : 0)

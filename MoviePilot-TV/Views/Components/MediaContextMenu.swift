@@ -5,6 +5,7 @@ struct MediaContextMenuItems: View {
   @Binding var navigationPath: NavigationPath
   @ObservedObject var subscriptionHandler: SubscriptionHandler
   @EnvironmentObject var mediaActionHandler: MediaActionHandler
+  @Environment(\.mediaNavigationStackID) private var mediaNavigationStackID
 
   // 可选的自定义订阅操作
   var onSubscribe: ((MediaInfo) -> Void)? = nil
@@ -30,8 +31,11 @@ struct MediaContextMenuItems: View {
 
     Button {
       // 点击"详情"时立即触发预加载
-      MediaPreloader.shared.preloadIfNeeded(for: item)
-      navigationPath.append(item)
+      MediaPreloader.shared.appendMedia(
+        item,
+        to: $navigationPath,
+        stackID: mediaNavigationStackID
+      )
       onDidNavigate?()
     } label: {
       Label("详情", systemImage: "info.circle")
@@ -49,7 +53,11 @@ struct MediaContextMenuItems: View {
             if let target = await mediaActionHandler.getTMDBJumpTarget(
               for: item, targetTmdbId: preloadedTmdbId)
             {
-              navigationPath.append(target)
+              MediaPreloader.shared.appendMedia(
+                target,
+                to: $navigationPath,
+                stackID: mediaNavigationStackID
+              )
               onDidNavigate?()
             }
           }
@@ -59,7 +67,7 @@ struct MediaContextMenuItems: View {
       }
 
       // 订阅按钮：预加载状态只控制显示；点击后由 Handler 向后端复查
-      // ⚠️ 使用 peekTask（纯读取），避免在 body 渲染期间修改最近使用 (LRU) 状态
+      // ⚠️ 使用 peekTask（纯读取），避免在 body 渲染期间修改预载任务生命周期状态
       let preloadedSubscribed = MediaPreloader.shared.peekTask(for: item)?.isSubscribed
 
       if canSubscribeMedia {

@@ -3,6 +3,7 @@ import SwiftUI
 struct RecommendView: View {
   @StateObject private var viewModel = RecommendViewModel()
   @State private var path = NavigationPath()
+  @State private var mediaNavigationStackID = UUID()
   @StateObject private var subscriptionHandler = SubscriptionHandler()
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
 
@@ -93,6 +94,13 @@ struct RecommendView: View {
           initialEpisodeGroup: request.initialEpisodeGroup
         )
       }
+    }
+    .environment(\.mediaNavigationStackID, mediaNavigationStackID)
+    .onChange(of: path.count) { _, depth in
+      MediaPreloader.shared.reconcilePendingMediaNavigations(
+        currentPathDepth: depth,
+        stackID: mediaNavigationStackID
+      )
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $path)
     .onAppear {

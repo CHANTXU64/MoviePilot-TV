@@ -3,6 +3,7 @@ import SwiftUI
 struct SearchView: View {
   @StateObject private var viewModel = SearchViewModel()
   @State private var path = NavigationPath()
+  @State private var mediaNavigationStackID = UUID()
   @StateObject private var subscriptionHandler = SubscriptionHandler()
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
   @State private var showSiteSelection = false
@@ -256,6 +257,13 @@ struct SearchView: View {
         }
       }
     }
+    .environment(\.mediaNavigationStackID, mediaNavigationStackID)
+    .onChange(of: path.count) { _, depth in
+      MediaPreloader.shared.reconcilePendingMediaNavigations(
+        currentPathDepth: depth,
+        stackID: mediaNavigationStackID
+      )
+    }
     .environmentObject(subscriptionHandler)
   }
 
@@ -304,6 +312,36 @@ struct UnifiedSearchResult<Header: View>: View {
   let onShareTapped: (SubscribeShare) -> Void
 
   @State private var scrollPosition: String?
+  @State private var imageSnapshotOwnerID = UUID()
+
+  private var pageImageSnapshot: PageImageSnapshot {
+    let mediaItems =
+      (viewModel.subscriptionSharePaginator?.items ?? [])
+      + (viewModel.moviePaginator?.items ?? [])
+      + (viewModel.tvPaginator?.items ?? [])
+      + (viewModel.collectionPaginator?.items ?? [])
+      + viewModel.bestResults.compactMap { result -> MediaInfo? in
+        guard case .media(let media) = result else { return nil }
+        return media
+      }
+    let people =
+      (viewModel.personPaginator?.items ?? [])
+      + viewModel.bestResults.compactMap { result -> Person? in
+        guard case .person(let person) = result else { return nil }
+        return person
+      }
+    let isLoadingAnyResult = viewModel.isLoading
+      || viewModel.subscriptionSharePaginator?.isLoading == true
+      || viewModel.moviePaginator?.isLoading == true
+      || viewModel.tvPaginator?.isLoading == true
+      || viewModel.collectionPaginator?.isLoading == true
+      || viewModel.personPaginator?.isLoading == true
+    return PageImageSnapshot(
+      mediaPosterURLs: Set(mediaItems.compactMap { $0.imageURLs.poster }),
+      personImageURLs: Set(people.compactMap { $0.imageURLs.profile }),
+      isComplete: !isLoadingAnyResult
+    )
+  }
 
   init(
     viewModel: SearchViewModel,
@@ -429,6 +467,18 @@ struct UnifiedSearchResult<Header: View>: View {
     .animation(.snappy, value: scrollPosition)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     .focusSection()
+    .onAppear {
+      MediaPreloader.shared.activatePageImageSnapshot(
+        pageImageSnapshot,
+        owner: imageSnapshotOwnerID
+      )
+    }
+    .onChange(of: pageImageSnapshot) { _, snapshot in
+      MediaPreloader.shared.updateActivePageImageSnapshot(
+        snapshot,
+        owner: imageSnapshotOwnerID
+      )
+    }
   }
 }
 
@@ -443,6 +493,7 @@ private struct ResultRow: View {
   @Binding var scrollPosition: String?
   let onShareTapped: (SubscribeShare) -> Void
   @EnvironmentObject var subscriptionHandler: SubscriptionHandler
+  @Environment(\.mediaNavigationStackID) private var mediaNavigationStackID
 
   @FocusState private var focusedItemId: MediaInfo.ID?
   /// 预加载防抖任务：避免快速滚动时触发过多无效请求
@@ -472,8 +523,11 @@ private struct ResultRow: View {
                   onShareTapped(share)
                 } else {
                   preloadDebounceTask?.cancel()
-                  MediaPreloader.shared.preloadIfNeeded(for: item)
-                  navigationPath.append(item)
+                  MediaPreloader.shared.appendMedia(
+                    item,
+                    to: $navigationPath,
+                    stackID: mediaNavigationStackID
+                  )
                 }
               }
             )
@@ -494,13 +548,14 @@ private struct ResultRow: View {
           // 预加载触发：聚焦后延迟 ~300ms，防止快速滚动时浪费请求
           preloadDebounceTask?.cancel()
           if let newId = newId, let item = items.first(where: { $0.id == newId }) {
+            MediaPreloader.shared.focusDidMove(to: newId)
             // 只有带 collection_id 的合集走 CollectionDetailView，不预加载普通详情。
             // collection-like type 但缺少 collection_id 时仍按普通媒体处理，和 Web 保持一致。
             if item.shouldPreloadDetail {
               preloadDebounceTask = Task {
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
-                MediaPreloader.shared.preloadIfNeeded(for: item)
+                MediaPreloader.shared.preloadFocusedCandidateIfNeeded(for: item)
               }
             }
             // 分页加载
@@ -569,6 +624,7 @@ private struct PersonResultRow: View {
         .padding(.bottom, 30)
         .onChange(of: focusedItemId) { _, newId in
           if let newId = newId {
+            MediaPreloader.shared.focusDidMove(to: "person:\(newId)")
             scrollPosition = rowId
             onLoadMore(newId)
           }
@@ -597,6 +653,7 @@ private struct BestResultRow: View {
   @Binding var scrollPosition: String?
   let onShareTapped: (SubscribeShare) -> Void
   @EnvironmentObject var subscriptionHandler: SubscriptionHandler
+  @Environment(\.mediaNavigationStackID) private var mediaNavigationStackID
   @FocusState private var focusedItemId: String?
   /// 预加载防抖任务：避免快速滚动时触发过多无效请求
   @State private var preloadDebounceTask: Task<Void, Never>?
@@ -649,8 +706,11 @@ private struct BestResultRow: View {
                     onShareTapped(share)
                   } else {
                     preloadDebounceTask?.cancel()
-                    MediaPreloader.shared.preloadIfNeeded(for: media)
-                    navigationPath.append(media)
+                    MediaPreloader.shared.appendMedia(
+                      media,
+                      to: $navigationPath,
+                      stackID: mediaNavigationStackID
+                    )
                   }
                 }
               )
@@ -698,11 +758,14 @@ private struct BestResultRow: View {
         if let newId = newId, let item = items.first(where: { $0.id == newId }) {
           // 仅对媒体类型预加载，人物类型走 PersonDetailView，不需要 MediaPreloader
           if case .media(let media) = item, media.shouldPreloadDetail {
+            MediaPreloader.shared.focusDidMove(to: media.id)
             preloadDebounceTask = Task {
               try? await Task.sleep(for: .milliseconds(300))
               guard !Task.isCancelled else { return }
-              MediaPreloader.shared.preloadIfNeeded(for: media)
+              MediaPreloader.shared.preloadFocusedCandidateIfNeeded(for: media)
             }
+          } else {
+            MediaPreloader.shared.focusDidMove(to: newId)
           }
           scrollPosition = "best"
         }
