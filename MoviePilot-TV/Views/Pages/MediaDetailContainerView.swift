@@ -166,14 +166,15 @@ struct MediaDetailContainerView: View {
   @State private var navigationOwnerID = UUID()
   @State private var navigationDepth: Int
   @State private var didCaptureNavigationDepth = false
-  @State private var returnTargetImageSnapshot: PageImageSnapshot?
+  @State private var pageImageCleanupTarget = PageImageCleanupTarget()
+  @State private var returnTargetImageCleanupTarget: PageImageCleanupTarget?
 
   init(media: MediaInfo, navigationPath: Binding<NavigationPath>) {
     self.media = media
     _navigationPath = navigationPath
     _navigationDepth = State(initialValue: max(navigationPath.wrappedValue.count, 1))
-    _returnTargetImageSnapshot = State(
-      initialValue: MediaPreloader.shared.captureActivePageImageSnapshot()
+    _returnTargetImageCleanupTarget = State(
+      initialValue: MediaPreloader.shared.captureActivePageImageCleanupTarget()
     )
     // 在 init 中立即获取预加载任务，避免首帧出现条件分支
     let preloadTask = MediaPreloader.shared.preload(for: media)
@@ -209,7 +210,8 @@ struct MediaDetailContainerView: View {
       preloadTask: preloadTask,
       navigationOwnerID: navigationOwnerID,
       navigationDepth: navigationDepth,
-      returnTargetImageSnapshot: returnTargetImageSnapshot
+      pageImageCleanupTarget: pageImageCleanupTarget,
+      returnTargetImageCleanupTarget: returnTargetImageCleanupTarget
     )
     .onAppear {
       // 只要页面仍在 NavigationPath 中就继续持有；被子页面覆盖时不释放。
@@ -240,7 +242,8 @@ private struct MediaDetailContainerContent: View {
   @ObservedObject var preloadTask: MediaPreloadTask
   let navigationOwnerID: UUID
   let navigationDepth: Int
-  let returnTargetImageSnapshot: PageImageSnapshot?
+  let pageImageCleanupTarget: PageImageCleanupTarget
+  let returnTargetImageCleanupTarget: PageImageCleanupTarget?
 
   /// 第二页首行内容是否已就绪（由 MediaDetailView 回写）
   @State private var isContentReady = false
@@ -257,14 +260,16 @@ private struct MediaDetailContainerContent: View {
     preloadTask: MediaPreloadTask,
     navigationOwnerID: UUID,
     navigationDepth: Int,
-    returnTargetImageSnapshot: PageImageSnapshot?
+    pageImageCleanupTarget: PageImageCleanupTarget,
+    returnTargetImageCleanupTarget: PageImageCleanupTarget?
   ) {
     self.media = media
     _navigationPath = navigationPath
     self.preloadTask = preloadTask
     self.navigationOwnerID = navigationOwnerID
     self.navigationDepth = navigationDepth
-    self.returnTargetImageSnapshot = returnTargetImageSnapshot
+    self.pageImageCleanupTarget = pageImageCleanupTarget
+    self.returnTargetImageCleanupTarget = returnTargetImageCleanupTarget
     // 在 init 中判断，确保第一帧 isReady 就正确
     _wasPreloaded = State(initialValue: preloadTask.isDetailReady)
     _loadingPosterURL = State(
@@ -305,7 +310,8 @@ private struct MediaDetailContainerContent: View {
         isContentReady: $isContentReady,
         navigationOwnerID: navigationOwnerID,
         navigationDepth: navigationDepth,
-        returnTargetImageSnapshot: returnTargetImageSnapshot
+        pageImageCleanupTarget: pageImageCleanupTarget,
+        returnTargetImageCleanupTarget: returnTargetImageCleanupTarget
       )
       // 加载未完成时隐藏详情，防止 NavigationStack 过渡动画透出内容
       .opacity(isReady ? 1 : 0)

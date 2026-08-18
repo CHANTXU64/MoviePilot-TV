@@ -107,6 +107,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
   /// 预加载防抖器：引用类型，内部状态变化不会触发 View 刷新
   @State private var preloadDebouncer = PreloadDebouncer()
   @State private var imageSnapshotOwnerID = UUID()
+  @State private var pageImageCleanupTarget = PageImageCleanupTarget()
 
   private var pageImageSnapshot: PageImageSnapshot {
     PageImageSnapshot(
@@ -220,13 +221,14 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     .onAppear {
       MediaPreloader.shared.activatePageImageSnapshot(
         pageImageSnapshot,
-        owner: imageSnapshotOwnerID
+        owner: imageSnapshotOwnerID,
+        target: pageImageCleanupTarget
       )
     }
     .onChange(of: pageImageSnapshot) { _, snapshot in
-      MediaPreloader.shared.updateActivePageImageSnapshot(
+      MediaPreloader.shared.updatePageImageSnapshot(
         snapshot,
-        owner: imageSnapshotOwnerID
+        target: pageImageCleanupTarget
       )
     }
     .onDisappear {
@@ -241,7 +243,8 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     } else {
       MediaPreloader.shared.activatePageImageSnapshot(
         pageImageSnapshot,
-        owner: imageSnapshotOwnerID
+        owner: imageSnapshotOwnerID,
+        target: pageImageCleanupTarget
       )
       preloadDebouncer.cancel(id: item.id)
       MediaPreloader.shared.appendMedia(
@@ -261,7 +264,8 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
 
     MediaPreloader.shared.activatePageImageSnapshot(
       pageImageSnapshot,
-      owner: imageSnapshotOwnerID
+      owner: imageSnapshotOwnerID,
+      target: pageImageCleanupTarget
     )
     MediaPreloader.shared.focusDidMove(to: item.id)
     preloadDebouncer.cancel(id: item.id)

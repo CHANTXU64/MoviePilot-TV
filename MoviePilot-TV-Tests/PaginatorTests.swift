@@ -1,3 +1,4 @@
+import Kingfisher
 import XCTest
 
 @testable import MoviePilot_TV
@@ -99,6 +100,80 @@ private func withTimeout<T: Sendable>(
 }
 
 final class PaginatorTests: XCTestCase {
+
+  @MainActor
+  func testRetiredImagePrefetchBatchPublishesURLsExactlyOnceOnCompletion() throws {
+    let first = try XCTUnwrap(URL(string: "https://example.com/first.jpg"))
+    let second = try XCTUnwrap(URL(string: "https://example.com/second.jpg"))
+    let batch = PaginatorImagePrefetchBatch(urls: [first, second])
+    var published: [Set<URL>] = []
+
+    batch.retire { published.append($0) }
+    batch.complete()
+    batch.complete()
+
+    XCTAssertEqual(published, [[first, second]])
+  }
+
+  @MainActor
+  func testCompletedImagePrefetchBatchDoesNotPublishWhenRetiredLater() throws {
+    let url = try XCTUnwrap(URL(string: "https://example.com/completed.jpg"))
+    let batch = PaginatorImagePrefetchBatch(urls: [url])
+    var published: [Set<URL>] = []
+
+    batch.complete()
+    batch.retire { published.append($0) }
+
+    XCTAssertTrue(published.isEmpty)
+  }
+
+  @MainActor
+  func testCancelForPopPublishesPendingProductionPrefetchBatch() async throws {
+    let downloader = ImageDownloader.default
+    let originalConfiguration = downloader.sessionConfiguration.copy() as! URLSessionConfiguration
+    PaginatorImageURLProtocol.reset()
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [PaginatorImageURLProtocol.self]
+    downloader.sessionConfiguration = configuration
+    defer { downloader.sessionConfiguration = originalConfiguration }
+
+    let url = try XCTUnwrap(
+      URL(string: "https://paginator-prefetch.test/\(UUID().uuidString).png")
+    )
+    let cleanupGate = AsyncGate()
+    var publishedURLs = Set<URL>()
+    let paginator = Paginator<TestItem>(
+      threshold: 1,
+      fetcher: { page in
+        page == 1 ? [TestItem(id: 1), TestItem(id: 2)] : []
+      },
+      processor: { items, newItems in
+        items.append(contentsOf: newItems)
+        return !newItems.isEmpty
+      },
+      imageURLsProvider: { item in
+        item.id == 2 ? [url] : []
+      },
+      prefetchThreshold: 1
+    )
+
+    await paginator.refresh()
+    await paginator.loadMore(1)
+    let requestStarted = await Task.detached {
+      PaginatorImageURLProtocol.waitForRequestStart(timeout: .now() + 2)
+    }.value
+    XCTAssertTrue(requestStarted, "应通过生产 makeImagePrefetcher 启动图片预取")
+
+    paginator.cancelForPop { urls in
+      publishedURLs = urls
+      Task { await cleanupGate.open() }
+    }
+    try await withTimeout("production prefetch batch cleanup") {
+      await cleanupGate.wait()
+    }
+
+    XCTAssertEqual(publishedURLs, [url])
+  }
   
   // MARK: - 生命周期与任务取消测试
 
@@ -858,4 +933,39 @@ final class PaginatorTests: XCTestCase {
 
     XCTAssertFalse(paginator.isLoading)
   }
+}
+
+private final class PaginatorImageURLProtocol: URLProtocol {
+  private static let lock = NSLock()
+  nonisolated(unsafe) private static var requestStarted = DispatchSemaphore(value: 0)
+
+  static func reset() {
+    lock.lock()
+    requestStarted = DispatchSemaphore(value: 0)
+    lock.unlock()
+  }
+
+  static func waitForRequestStart(timeout: DispatchTime) -> Bool {
+    lock.lock()
+    let semaphore = requestStarted
+    lock.unlock()
+    return semaphore.wait(timeout: timeout) == .success
+  }
+
+  override class func canInit(with request: URLRequest) -> Bool {
+    request.url?.host == "paginator-prefetch.test"
+  }
+
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+    request
+  }
+
+  override func startLoading() {
+    Self.lock.lock()
+    let semaphore = Self.requestStarted
+    Self.lock.unlock()
+    semaphore.signal()
+  }
+
+  override func stopLoading() {}
 }

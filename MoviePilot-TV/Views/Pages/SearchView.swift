@@ -313,6 +313,7 @@ struct UnifiedSearchResult<Header: View>: View {
 
   @State private var scrollPosition: String?
   @State private var imageSnapshotOwnerID = UUID()
+  @State private var pageImageCleanupTarget = PageImageCleanupTarget()
 
   private var pageImageSnapshot: PageImageSnapshot {
     let mediaItems =
@@ -470,13 +471,14 @@ struct UnifiedSearchResult<Header: View>: View {
     .onAppear {
       MediaPreloader.shared.activatePageImageSnapshot(
         pageImageSnapshot,
-        owner: imageSnapshotOwnerID
+        owner: imageSnapshotOwnerID,
+        target: pageImageCleanupTarget
       )
     }
     .onChange(of: pageImageSnapshot) { _, snapshot in
-      MediaPreloader.shared.updateActivePageImageSnapshot(
+      MediaPreloader.shared.updatePageImageSnapshot(
         snapshot,
-        owner: imageSnapshotOwnerID
+        target: pageImageCleanupTarget
       )
     }
   }

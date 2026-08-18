@@ -2,6 +2,51 @@ import Combine
 import Foundation
 import Kingfisher
 
+/// 预取器 completion 独立持有的轻量批次状态，不反向持有 Paginator 或 ViewModel。
+@MainActor
+final class PaginatorImagePrefetchBatch {
+  let urls: Set<URL>
+  private var isComplete = false
+  private var cleanupAfterPop: (@MainActor @Sendable (Set<URL>) -> Void)?
+
+  init(urls: Set<URL>) {
+    self.urls = urls
+  }
+
+  func retire(cleanup: @escaping @MainActor @Sendable (Set<URL>) -> Void) {
+    guard !isComplete else { return }
+    cleanupAfterPop = cleanup
+  }
+
+  func complete() {
+    guard !isComplete else { return }
+    isComplete = true
+    let cleanup = cleanupAfterPop
+    cleanupAfterPop = nil
+    cleanup?(urls)
+  }
+}
+
+@MainActor
+private final class PaginatorImagePrefetchRegistry {
+  private var batches: [UUID: PaginatorImagePrefetchBatch] = [:]
+
+  func insert(_ batch: PaginatorImagePrefetchBatch) -> UUID {
+    let id = UUID()
+    batches[id] = batch
+    return id
+  }
+
+  func retireAll(cleanup: @escaping @MainActor @Sendable (Set<URL>) -> Void) {
+    batches.values.forEach { $0.retire(cleanup: cleanup) }
+  }
+
+  func complete(_ batch: PaginatorImagePrefetchBatch, id: UUID) {
+    batch.complete()
+    batches.removeValue(forKey: id)
+  }
+}
+
 @MainActor
 public class Paginator<ItemType: Identifiable>: ObservableObject {
   deinit {
@@ -71,6 +116,8 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
 
   /// 当前正在执行的图片预取器实例，持有以便在 reset 或新批次时取消旧任务。
   private var activePrefetchers: [ImagePrefetcher] = []
+  /// 所有尚未 completion 的批次只保留 URL 状态，用于真正 Pop 后补删晚到写回。
+  private let imagePrefetchRegistry = PaginatorImagePrefetchRegistry()
 
   // MARK: - 初始化
 
@@ -133,14 +180,10 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
                 service.isProtectedImageURL($0)
               }
               activePrefetchers = grouped.compactMap { protected, urls in
-                let sources = urls.map { service.imageSource(for: $0) }
-                var options = protected ? service.imageOptions(for: urls[0]) : []
-                if let imagePrefetchProcessor {
-                  options.append(.processor(imagePrefetchProcessor))
-                }
-                return ImagePrefetcher(
-                  sources: sources,
-                  options: options
+                makeImagePrefetcher(
+                  urls: urls,
+                  protected: protected,
+                  service: service
                 )
               }
               activePrefetchers.forEach { $0.start() }
@@ -167,6 +210,14 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     isLoadingMore = false
     activePrefetchers.forEach { $0.stop() }
     activePrefetchers.removeAll()
+  }
+
+  /// 真正 Pop 专用：普通取消后，仅给尚未 completion 的 URL 批次登记补删回调。
+  public func cancelForPop(
+    onLateImagePrefetch: @escaping @MainActor @Sendable (Set<URL>) -> Void
+  ) {
+    cancel()
+    imagePrefetchRegistry.retireAll(cleanup: onLateImagePrefetch)
   }
 
   /// 将下一次加载的页游标向后推进指定页数。
@@ -198,6 +249,31 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     guard let runningTask = inFlightLoadTask else { return }
     pendingRestartLoadTaskToken = inFlightLoadTaskToken
     runningTask.cancel()
+  }
+
+  private func makeImagePrefetcher(
+    urls: [URL],
+    protected: Bool,
+    service: APIService
+  ) -> ImagePrefetcher {
+    let sources = urls.map { service.imageSource(for: $0) }
+    var options = protected ? service.imageOptions(for: urls[0]) : []
+    if let imagePrefetchProcessor {
+      options.append(.processor(imagePrefetchProcessor))
+    }
+
+    let batch = PaginatorImagePrefetchBatch(urls: Set(urls))
+    let batchID = imagePrefetchRegistry.insert(batch)
+    let registry = imagePrefetchRegistry
+    return ImagePrefetcher(
+      sources: sources,
+      options: options,
+      completionHandler: { [registry, batch] _, _, _ in
+        Task { @MainActor [registry, batch] in
+          registry.complete(batch, id: batchID)
+        }
+      }
+    )
   }
 
   private func startLoadTask() -> (task: Task<Void, Never>, token: Int) {

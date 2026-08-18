@@ -84,6 +84,18 @@ struct PageImageSnapshot: Equatable {
   }
 }
 
+/// 页面级图片清理目标。只保存 URL 快照和待清理 URL；不会持有页面、ViewModel 或下载任务。
+@MainActor
+final class PageImageCleanupTarget {
+  fileprivate var snapshot: PageImageSnapshot?
+  fileprivate var pendingMediaPosterURLs: Set<URL> = []
+  fileprivate var pendingPersonImageURLs: Set<URL> = []
+  fileprivate var forwardingTarget: PageImageCleanupTarget?
+  fileprivate var isDiscarded = false
+
+  var currentSnapshot: PageImageSnapshot? { snapshot }
+}
+
 private struct MediaNavigationStackIDKey: EnvironmentKey {
   static let defaultValue = UUID()
 }
@@ -461,7 +473,7 @@ class MediaPreloader: ObservableObject {
   private var navigationOwners: [String: Set<UUID>] = [:]
   /// 当前屏幕页面的图片 URL，用于新详情捕获自己的返回目标。
   private var activePageImageOwner: UUID?
-  private var activePageImageSnapshot: PageImageSnapshot?
+  private weak var activePageImageCleanupTarget: PageImageCleanupTarget?
   /// Pop 回列表后，阻止焦点恢复立即重新预载刚退出的媒体。
   private var suppressedFocusCandidateKey: String?
   /// `NavigationPath.append` 到目的页 `onAppear` 之间的临时 owner。
@@ -550,18 +562,34 @@ class MediaPreloader: ObservableObject {
 
   // MARK: - 当前页面图片快照
 
-  func activatePageImageSnapshot(_ snapshot: PageImageSnapshot, owner: UUID) {
+  func activatePageImageSnapshot(
+    _ snapshot: PageImageSnapshot,
+    owner: UUID,
+    target: PageImageCleanupTarget,
+    cache: ImageCache = .default
+  ) {
+    updatePageImageSnapshot(snapshot, target: target, cache: cache)
     activePageImageOwner = owner
-    activePageImageSnapshot = snapshot
+    activePageImageCleanupTarget = target
   }
 
-  func updateActivePageImageSnapshot(_ snapshot: PageImageSnapshot, owner: UUID) {
-    guard activePageImageOwner == owner else { return }
-    activePageImageSnapshot = snapshot
+  /// 页面被子页面覆盖后仍更新自己的引用，避免子页面捕获到永久不完整的值快照。
+  func updatePageImageSnapshot(
+    _ snapshot: PageImageSnapshot,
+    target: PageImageCleanupTarget,
+    cache: ImageCache = .default
+  ) {
+    guard target.forwardingTarget == nil, !target.isDiscarded else { return }
+    target.snapshot = snapshot
+    flushPendingCardImagesIfPossible(from: target, cache: cache)
   }
 
   func captureActivePageImageSnapshot() -> PageImageSnapshot? {
-    activePageImageSnapshot
+    activePageImageCleanupTarget?.snapshot
+  }
+
+  func captureActivePageImageCleanupTarget() -> PageImageCleanupTarget? {
+    activePageImageCleanupTarget
   }
 
   /// 普通媒体在 append 前建立临时 owner；合集保持原有导航行为。
@@ -696,19 +724,90 @@ class MediaPreloader: ObservableObject {
     owner: UUID,
     size: CGSize,
     leavingImageSnapshot: PageImageSnapshot,
-    returnTargetImageSnapshot: PageImageSnapshot?,
+    pageImageCleanupTarget: PageImageCleanupTarget,
+    returnTargetImageCleanupTarget: PageImageCleanupTarget?,
     imageCache: ImageCache = .default
   ) {
     let key = media.id
     unpin(key: key, owner: owner)
-    releaseCardImagesAfterPop(
+    forwardCardImageCleanup(
       leaving: leavingImageSnapshot,
-      returningTo: returnTargetImageSnapshot,
+      from: pageImageCleanupTarget,
+      to: returnTargetImageCleanupTarget,
       cache: imageCache
     )
     suppressedFocusCandidateKey = key
     guard navigationOwners[key] == nil else { return }
     releaseTask(forKey: key, fallbackMedia: media, size: size)
+  }
+
+  /// 页面快速连续 Pop 时，把尚未能处理的 URL 转发到更上一级目标。
+  func forwardCardImageCleanup(
+    leaving: PageImageSnapshot,
+    from pageTarget: PageImageCleanupTarget,
+    to returnTarget: PageImageCleanupTarget?,
+    cache: ImageCache = .default
+  ) {
+    let mediaURLs = pageTarget.pendingMediaPosterURLs.union(leaving.mediaPosterURLs)
+    let personURLs = pageTarget.pendingPersonImageURLs.union(leaving.personImageURLs)
+    pageTarget.pendingMediaPosterURLs.removeAll()
+    pageTarget.pendingPersonImageURLs.removeAll()
+    pageTarget.snapshot = nil
+
+    guard let returnTarget else {
+      pageTarget.isDiscarded = true
+      pageTarget.forwardingTarget = nil
+      return
+    }
+
+    pageTarget.forwardingTarget = returnTarget
+    enqueuePrefetchedCardImages(
+      PageImageSnapshot(
+        mediaPosterURLs: mediaURLs,
+        personImageURLs: personURLs
+      ),
+      returningTo: returnTarget,
+      cache: cache
+    )
+  }
+
+  /// Paginator completion 用同一入口补交晚到写回的 URL。
+  func enqueuePrefetchedCardImages(
+    _ images: PageImageSnapshot,
+    returningTo target: PageImageCleanupTarget,
+    cache: ImageCache = .default
+  ) {
+    if target.isDiscarded { return }
+    if let forwardingTarget = target.forwardingTarget {
+      enqueuePrefetchedCardImages(images, returningTo: forwardingTarget, cache: cache)
+      return
+    }
+
+    guard let snapshot = target.snapshot, snapshot.isComplete else {
+      target.pendingMediaPosterURLs.formUnion(images.mediaPosterURLs)
+      target.pendingPersonImageURLs.formUnion(images.personImageURLs)
+      return
+    }
+
+    releaseCardImagesAfterPop(leaving: images, returningTo: snapshot, cache: cache)
+  }
+
+  private func flushPendingCardImagesIfPossible(
+    from target: PageImageCleanupTarget,
+    cache: ImageCache
+  ) {
+    guard let snapshot = target.snapshot, snapshot.isComplete else { return }
+    guard !target.pendingMediaPosterURLs.isEmpty || !target.pendingPersonImageURLs.isEmpty else {
+      return
+    }
+
+    let pending = PageImageSnapshot(
+      mediaPosterURLs: target.pendingMediaPosterURLs,
+      personImageURLs: target.pendingPersonImageURLs
+    )
+    target.pendingMediaPosterURLs.removeAll()
+    target.pendingPersonImageURLs.removeAll()
+    releaseCardImagesAfterPop(leaving: pending, returningTo: snapshot, cache: cache)
   }
 
   func releaseCardImagesAfterPop(
@@ -774,7 +873,7 @@ class MediaPreloader: ObservableObject {
     navigationOwners.removeAll()
     pendingMediaNavigations.removeAll()
     activePageImageOwner = nil
-    activePageImageSnapshot = nil
+    activePageImageCleanupTarget = nil
     suppressedFocusCandidateKey = nil
   }
 

@@ -60,7 +60,8 @@ struct MediaDetailView: View {
   @Binding var isContentReady: Bool
   let navigationOwnerID: UUID
   let navigationDepth: Int
-  let returnTargetImageSnapshot: PageImageSnapshot?
+  let pageImageCleanupTarget: PageImageCleanupTarget
+  let returnTargetImageCleanupTarget: PageImageCleanupTarget?
   @State private var showSiteSelection = false
   @State private var showContentPage = false
   @State private var hasAppeared = false
@@ -188,7 +189,8 @@ struct MediaDetailView: View {
     detail: MediaInfo, navigationPath: Binding<NavigationPath>,
     preloadTask: MediaPreloadTask, isContentReady: Binding<Bool>,
     navigationOwnerID: UUID, navigationDepth: Int,
-    returnTargetImageSnapshot: PageImageSnapshot?
+    pageImageCleanupTarget: PageImageCleanupTarget,
+    returnTargetImageCleanupTarget: PageImageCleanupTarget?
   ) {
     let vm = MediaDetailViewModel(detail: detail)
     vm.preloadTask = preloadTask
@@ -198,7 +200,8 @@ struct MediaDetailView: View {
     _isContentReady = isContentReady
     self.navigationOwnerID = navigationOwnerID
     self.navigationDepth = navigationDepth
-    self.returnTargetImageSnapshot = returnTargetImageSnapshot
+    self.pageImageCleanupTarget = pageImageCleanupTarget
+    self.returnTargetImageCleanupTarget = returnTargetImageCleanupTarget
   }
 
   static func shouldRefreshBackground(isMounted: Bool) -> Bool {
@@ -333,7 +336,8 @@ struct MediaDetailView: View {
     .onAppear {
       MediaPreloader.shared.activatePageImageSnapshot(
         viewModel.pageImageSnapshot,
-        owner: navigationOwnerID
+        owner: navigationOwnerID,
+        target: pageImageCleanupTarget
       )
       if Self.shouldRefreshBackground(isMounted: isBackgroundMounted) {
         backgroundGeneration &+= 1
@@ -341,9 +345,9 @@ struct MediaDetailView: View {
       }
     }
     .onChange(of: viewModel.pageImageSnapshot) { _, snapshot in
-      MediaPreloader.shared.updateActivePageImageSnapshot(
+      MediaPreloader.shared.updatePageImageSnapshot(
         snapshot,
-        owner: navigationOwnerID
+        target: pageImageCleanupTarget
       )
     }
     .onChange(of: navigationPath.count) { _, currentPathCount in
@@ -470,7 +474,8 @@ struct MediaDetailView: View {
   private func navigateFromSecondPage<Destination: Hashable>(to destination: Destination) {
     MediaPreloader.shared.activatePageImageSnapshot(
       viewModel.pageImageSnapshot,
-      owner: navigationOwnerID
+      owner: navigationOwnerID,
+      target: pageImageCleanupTarget
     )
     navigationPath.append(destination)
     scheduleBackgroundReleaseAfterNavigationStarts()
@@ -479,7 +484,8 @@ struct MediaDetailView: View {
   private func navigateToMediaFromSecondPage(_ media: MediaInfo) {
     MediaPreloader.shared.activatePageImageSnapshot(
       viewModel.pageImageSnapshot,
-      owner: navigationOwnerID
+      owner: navigationOwnerID,
+      target: pageImageCleanupTarget
     )
     MediaPreloader.shared.appendMedia(
       media,
@@ -492,7 +498,8 @@ struct MediaDetailView: View {
   private func scheduleBackgroundReleaseAfterNavigationStarts() {
     MediaPreloader.shared.activatePageImageSnapshot(
       viewModel.pageImageSnapshot,
-      owner: navigationOwnerID
+      owner: navigationOwnerID,
+      target: pageImageCleanupTarget
     )
     guard
       let url = viewModel.backgroundUrl,
@@ -533,13 +540,14 @@ struct MediaDetailView: View {
 
     didReleaseAfterPop = true
     let leavingImageSnapshot = viewModel.pageImageSnapshot
-    viewModel.cancelForPop()
+    viewModel.cancelForPop(returningTo: returnTargetImageCleanupTarget)
     MediaPreloader.shared.releaseAfterPop(
       media: preloadTask.partialMedia,
       owner: navigationOwnerID,
       size: UIScreen.main.bounds.size,
       leavingImageSnapshot: leavingImageSnapshot,
-      returnTargetImageSnapshot: returnTargetImageSnapshot
+      pageImageCleanupTarget: pageImageCleanupTarget,
+      returnTargetImageCleanupTarget: returnTargetImageCleanupTarget
     )
   }
 

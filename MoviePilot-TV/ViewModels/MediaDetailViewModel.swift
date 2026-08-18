@@ -258,16 +258,38 @@ class MediaDetailViewModel: ObservableObject {
   }
 
   /// 仅在页面已确认被 Pop 出 NavigationPath 后调用。
-  func cancelForPop() {
+  func cancelForPop(returningTo target: PageImageCleanupTarget?) {
     mediaServerExistsTask?.cancel()
     mediaServerExistsTask = nil
     relatedContentTask?.cancel()
     relatedContentTask = nil
     relatedContentChildTasks.forEach { $0.cancel() }
     relatedContentChildTasks.removeAll()
-    actorsPaginator.cancel()
-    recommendPaginator.cancel()
-    similarPaginator.cancel()
+    if let target {
+      let preloader = MediaPreloader.shared
+      recommendPaginator.cancelForPop { urls in
+        preloader.enqueuePrefetchedCardImages(
+          PageImageSnapshot(mediaPosterURLs: urls),
+          returningTo: target
+        )
+      }
+      similarPaginator.cancelForPop { urls in
+        preloader.enqueuePrefetchedCardImages(
+          PageImageSnapshot(mediaPosterURLs: urls),
+          returningTo: target
+        )
+      }
+      actorsPaginator.cancelForPop { urls in
+        preloader.enqueuePrefetchedCardImages(
+          PageImageSnapshot(personImageURLs: urls),
+          returningTo: target
+        )
+      }
+    } else {
+      actorsPaginator.cancel()
+      recommendPaginator.cancel()
+      similarPaginator.cancel()
+    }
     preloadTask = nil
   }
 
