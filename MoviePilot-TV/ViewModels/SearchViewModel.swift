@@ -858,6 +858,7 @@ actor SharedMediaFetcher {
   private var tvBuffer: [MediaInfo] = []
 
   private var currentFetchTask: Task<Void, Error>?
+  private var currentFetchTaskIdentity = 0
 
   init(query: String, source: MediaSearchSource?, apiService: APIService) {
     self.query = query
@@ -918,7 +919,18 @@ actor SharedMediaFetcher {
     let localPage = apiPage + 1
     let isInitialFetch = (apiPage == 0)
 
+    currentFetchTaskIdentity += 1
+    let identity = currentFetchTaskIdentity
+
     let task = Task {
+      // 无论成功或失败，都在完成时按 identity 退休自己的句柄；
+      // 保证唤醒任何等待者之前 currentFetchTask 已清空，避免合流方
+      // 重复 await 已完成任务导致游标不推进。
+      defer {
+        if self.currentFetchTaskIdentity == identity {
+          self.currentFetchTask = nil
+        }
+      }
       if isInitialFetch {
         // 首次搜索时，并发获取前两页，大幅度提升混排首屏加载速度
         async let fetchPage1 = apiService.searchMedia(query: query, page: 1, source: source)
@@ -950,7 +962,6 @@ actor SharedMediaFetcher {
     }
 
     self.currentFetchTask = task
-    defer { self.currentFetchTask = nil }
     try await task.value
   }
 

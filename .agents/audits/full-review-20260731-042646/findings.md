@@ -155,7 +155,7 @@
 | F-139 | 已修复 | P2 | V010→V012-A→G01/G04 | 推荐/详情分页成功空终态与页面再激活 | retained shelf、详情或合集首批成功空后，再激活不刷新且无恢复入口 | 既有双审确认；G01纠偏与G04独立复核再次闭合retained激活链并双票升P2 | 三处均按“重新激活且成功空终态”对现有 Paginator 调一次 refresh；不动 Paginator 状态机 | 条件性恢复P2；真实tvOS实例保留与发生频率未运行验证 |
 | F-140 | 已确认 | P3 | V011-B | 搜索提交 query 与本地最佳结果评分 | 空白未统一规范化，精确标题可退化并被扩展标题反超 | verify_a001_h 以 `Hamilton ` 闭合后端 trim→TV 原字符串评分→top-12 链 | review_a001_j 独立复算 exact `-1`/extended `484`、换行与纯空白请求路径 | 搜索 canonical query 缺陷已确认；真实输入频率未验证 |
 | F-141 | 已确认 | P3 | V011-B | 搜索年份提取与目标版本后端标题解析 | 首个任意四位数字片名被 TV 误作年份，括号移除又残留空壳 | verify_a001_h 以 `1917 2019` 闭合后端 title/year 与 TV score 分裂 | review_a001_j 独立复算数字片名、括号残留与版本特定词法边界 | 条件性搜索解析 P3已确认；当前部署未验证 |
-| F-142 | 已确认 | P2 | V011-F 复核/裁决 | `SharedMediaFetcher.currentFetchTask` 合流/退休 | 完成 task 的 handle 未清，另一 waiter第二轮重放后返回非终止空批 | review_a001_j 闭合双 waiter恢复顺序与第3页目标类型反例 | review_a001_h 独立状态机确认0→2后重放2→2、actor调度可达及F-034/F-039独立 | 条件性搜索截断已确认；真实调度频率未验证 |
+| F-142 | 已修复（2026-08-18） | P2 | V011-F 复核/裁决 | `SharedMediaFetcher.currentFetchTask` 合流/退休 | 完成 task 的 handle 未清，另一 waiter第二轮重放后返回非终止空批 | review_a001_j 闭合双 waiter恢复顺序与第3页目标类型反例 | review_a001_h 独立状态机确认0→2后重放2→2、actor调度可达及F-034/F-039独立 | 已修：task 内部按 identity 退休句柄；定向回归 1/1 通过 |
 | F-143 | 已修复（`40adb42`/`d2972b3`） | P2 | V013→G07 | Person route准入与请求owner | 当前可点击的内嵌导演可缺source，人物API在发请求前即失败；稀疏成功回包另拆F-227 | 既有双审闭合无身份死页；G07三方以当前TV/Web/后端窄化为内嵌导演路径 | 后端人物生产边界补真实source；TV只可用父source兼容旧载荷，无法确认则禁用 | TV兼容修复已完成（`40adb42`、`d2972b3`）；真实后端混合元数据仍未验证 |
 | F-144 | 已确认 | P2 | V013→W020-A→G02 | 串行首载与吞取消后晚启动下一阶段 | 人物/Transfer/System串行加载外，TMDB识别search取消还会被宽catch吞掉并继续启动fallback请求 | 既有多审确认串行/晚启动；G02两名不同复核闭合取消后fallback确定请求并升级P2 | 复用async let；各catch先传播CancellationError并在fallback前检查取消 | 纯TV取消语义P2；真实慢请求频率未验证 |
 | F-145 | 已确认 | P2 | V016→G05 | AddDownload 下载器 Picker 与 Optional 请求字段 | 选中下载器后无法在同一Sheet恢复初始省略状态 | 既有双审确认；G05主审与独立复核均闭合nil→选择→无法回nil、请求省略语义及仓内“自动”空项反证 | 在现有options前置“自动”空tag，复用Binding；不与F-168合并 | TV表单可逆性缺陷已确认；具体默认文案未验证 |
@@ -2500,6 +2500,9 @@
 - 修复/回归边界：仍复用现有 actor与单一Task；让Task自身在完成、唤醒waiter前按单调 identity退休handle，避免旧Task误清未来新Task。确定性用例只需 gate creator恢复并断言页1/2/3各请求一次，无需复制Paginator空页测试。
 - G04 clean-room 末裁：独立重走A创建/B合流与恢复顺序，确认B可在A的defer退休前重复取得已完成handle并命中2→2提前break；维持P2，与F-034可同批修但保留独立回归。
 - 未验证：真实 Swift actor调度下的发生频率；按授权未运行调度测试。
+- 修复状态：已完成（2026-08-18）。`fetchNextApiPage()` 创建 task 前以单调 `currentFetchTaskIdentity` 递增取 identity，清理从创建者外层 `defer` 移入 task 内部 `defer`（成功/失败均执行），保证唤醒任何 waiter 前句柄已退休，旧 task 不会误清新 task。
+- 验证：新增 `SharedMediaFetcherTests` 定向回归（页1/2仅电影、页3才出现电视剧，gate 卡住页1后释放），修复前复现 0 条电视剧/页3 请求 0 次，修复后 1/1 通过；tvOS Simulator 串行测试。
+- 未验证：真实 Swift actor 调度下的发生频率。
 
 ### F-143：人物 route identity 未准入且展示身份与请求 owner 不统一
 

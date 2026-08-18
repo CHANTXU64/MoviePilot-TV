@@ -1516,7 +1516,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-142 · P2 · 已确认 · 完成的共享搜索 task 未及时退休导致非终止空批</summary>
+<summary>F-142 · P2 · 已修复（2026-08-18） · 完成的共享搜索 task 未及时退休导致非终止空批</summary>
 
 - 审查单元与位置：V011-F 复核/裁决；`SharedMediaFetcher.currentFetchTask` 合流/退休
 - 触发路径：电影 waiter 创建页 1-2 的共享 task，电视剧 waiter 合流；页 1-2 只有电影、页 3 才有电视剧，且电视剧 continuation 在 task 已完成但创建者尚未取得 actor并执行外层 defer清理时先恢复。
@@ -1525,6 +1525,8 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：review_a001_j 闭合双 waiter恢复顺序与第3页目标类型反例；review_a001_h 独立状态机确认0→2后重放2→2、actor调度可达及F-034/F-039独立
 - 跨端结论：条件性搜索截断已确认；真实调度频率未验证
 - 最小修改方向 / 裁决：仍使用现有 actor和单一 Task，让实际共享任务的完成所有者在唤醒 waiter 前按 task identity 原子退休 handle；不增加协调器、owner/refcount或任务框架。
+- 修复状态：已完成（2026-08-18）。`fetchNextApiPage()` 以单调 identity 递增，句柄清理移入 task 内部 `defer`，唤醒任何 waiter 前退休；旧 task 不误清未来新 task。
+- 验证：新增 `SharedMediaFetcherTests` 定向回归；还原修复后测试失败（电视剧 0 条、页3 请求 0 次），修复后 1/1 通过；tvOS Simulator 串行测试。
 
 </details>
 

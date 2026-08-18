@@ -318,7 +318,7 @@
 | V011-C | 已闭环 | G04末裁将F-035/F-039升P2并明确显式cancel/new-search屏障有效；权限热切换并入F-130/CHK-005，页面离场语义保留运行验收 |
 | V011-D | 已闭环 | 主审与独立复核已闭环；无新编号，F-036 最终 Person.id 去重确认，F-138 title-only核心确认、collection_id机制成立但生产输入未验证；其余传播闭合 |
 | V011-E | 已闭环 | 主审与独立复核已闭环；无新编号，自定义规则 fail-open/坏配置并入 F-081/F-085，响应/profile/session 既有传播闭合 |
-| V011-F | 已闭环 | 主审、独立复核与第三代理裁决均完成；F-142 确认为条件性 P2，完成 task handle 重放在扫描上限前制造非终止空批；F-034/F-039 保持独立 |
+| V011-F | 已闭环 | 主审、独立复核与第三代理裁决均完成；F-142 确认为条件性 P2，完成 task handle 重放在扫描上限前制造非终止空批；F-034/F-039 保持独立；F-142 已修复（2026-08-18） |
 | V012-A | 已闭环 | 主审与 review_a001_j 独立复核完成；F-100/F-130/F-139详情扩展成立，F-138仅task/season/lifecycle alias成立，wrong fullDetail注入因有效ID guard收窄为未验证；后续G03将F-116/F-118均收敛确认P2并保留各自运行边界 |
 | V012-B | 已闭环 | verify_a001_h 主审与 review_a001_h 独立复核完成；无新编号，确认 F-006/F-007/F-015/F-027/F-047…F-049/F-068/F-082/F-090/F-100/F-119/F-120 与 CHK-005/006/008/010；F-008/F-054 本段不复现 |
 | V012-C | 已闭环 | 主审与 review_a001_j 独立复核完成；无新编号，F-047/F-048/CHK-006确认，补 AniList fallback漏计及电影入口/电视剧统计/测试入口三重错位；失败开放与执行重查未冻结维持 |
@@ -421,7 +421,7 @@
 | W020-H | 已闭环 | 双审完成；无新编号。H只处理成功解码且已选中的单条规则，不给F-081数组/缺ID链加权；当前Web正常可达size单值/seeders区间及空白正则可令硬过滤全空或条件静默失效，准确归F-085并由P3升P2；G05回溯已关闭 |
 | R001 | 已闭环 | 三代理确认F-218独立条件性P3：已存token时首次同步body先具备构造认证Tab/Home资格；F-106负责会话恢复后必要settings完成前撤门，F-130/CHK-005负责异步owner，三者不可互替。根MediaAction跨logout归F-130/CHK-005；真实认证帧/Home task待运行验证 |
 | R002 | 已闭环 | 双审完成且review_a001_j披露R001时仅见第6/11行owner命中；无新编号，App级旧session通知跨logout/排队重排并入F-107，但须保留显式一次性logout原因交接；媒体handler归R001/F-130/CHK-005，Sheet层与VoiceOver归F-108/F-159运行验证，App注入/初始化通过 |
-| F-142 裁决 | 已闭环 | review_a001_h 以双 waiter 状态机独立确认：共享 task 先令 apiPage 0→2，TV waiter 再次重放未退休完成 handle 使 2→2 并提前返回空批；条件性 P2 |
+| F-142 裁决 | 已闭环 | review_a001_h 以双 waiter 状态机独立确认：共享 task 先令 apiPage 0→2，TV waiter 再次重放未退休完成 handle 使 2→2 并提前返回空批；条件性 P2；已修复（2026-08-18） |
 | B006-A | 已闭环 | F-037 未验证 P3；F-038 已确认 P3；H-006 本段无违反；B006-C/S006/I002 后续复核均已闭环 |
 | B005 | 已闭环 | F-040/F-041/F-044/F-045 已确认 P3；H-006 数据源层成立 |
 | B006-B | 已闭环 | F-042 未验证 P3；F-043 已确认 P3；共享空值展示边界但保持语言/国家标准分离 |
@@ -648,7 +648,7 @@
 - `V011-D / F-138`：已确认 finding 的同根条件扩展；三类 Search processor 按共享 ID first-wins，共享 key 又遗漏 collection_id，合集碰撞机制成立；当前上游缺失，生产输入终态未验证，固定 fixture 到位后才决定把 collection_id 置于 title fallback 前。
 - `V011-D / F-036`：已确认 finding 的生产补强；人物 processor 应按最终 `Person.id` 使用可变 seen set，覆盖同页、nil raw ID与不同 source 的同 raw ID，转 W006/I007/G01/G04。
 - `V011-F / F-034`：已确认 P2；共享 actor 最多扫 API 1–6 页，第 7 页才出现目标类型时在内部 hasMore 仍真时返回空批并被 Paginator 永久判终页；转 I007/W006/G04。
-- `V011-F / F-142`：已确认条件性 P2；共享 task 先把 apiPage 0→2，但 handle 只由创建者 continuation外层 defer清理，TV waiter可先恢复并在第二轮重放完成 handle，使该轮2→2并提前返回内部hasMore=true的空批。页1/2各4部电影、页3八部电视剧反例成立；与F-034扫描上限、F-039取消所有权独立，真实频率未运行验证。
+- `V011-F / F-142`：已确认条件性 P2；共享 task 先把 apiPage 0→2，但 handle 只由创建者 continuation外层 defer清理，TV waiter可先恢复并在第二轮重放完成 handle，使该轮2→2并提前返回内部hasMore=true的空批。页1/2各4部电影、页3八部电视剧反例成立；与F-034扫描上限、F-039取消所有权独立，真实频率未运行验证。已修复（2026-08-18）：句柄清理移入 task 内部 defer 并按单调 identity 退休，定向回归先复现后通过。
 - `V012-A / F-100`：原Preloader normal与详情force同键重叠反转动作判断链已由`0cfeb12`的revision/latest语义闭合。
 - `V012-A / F-130/F-138/F-139`：独立复核确认权限热变令分季/首屏gate不收敛、共享ID碰撞造成task失败/取消/ready/pin与season fallback alias、retained推荐/相似成功空无恢复。原“全nil不同title把A fullDetail/背景/推荐灌入B”会被apiMediaId guard拦截，合法wrong-detail碰撞fixture缺失，正式收窄为未验证。
 - `V012-B / 取消链`：无新编号；准备失败开放、执行重查、owner/count/scope未冻结归 F-047/F-048/CHK-006，业务 false/异常静默归 F-049，session/cancel owner归 F-027/CHK-005，重叠 busy/alias/latest-wins归 F-120/F-119/F-100。
