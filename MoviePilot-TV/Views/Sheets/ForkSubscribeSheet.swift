@@ -8,6 +8,7 @@ struct ForkSubscribeSheet: View {
   var onFork: (Int) -> Void
 
   @Environment(\.dismiss) private var dismiss
+  @ObservedObject private var apiService = APIService.shared
   @ObservedObject var subscriptionHandler: SubscriptionHandler
   @State private var isImageFailed = false
   @State private var isUsingFallback = false

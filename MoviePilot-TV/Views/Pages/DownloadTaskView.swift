@@ -3,6 +3,7 @@ import SwiftUI
 
 struct DownloadTaskView: View {
   @StateObject private var viewModel = DownloadTaskViewModel()
+  @ObservedObject private var apiService = APIService.shared
   @EnvironmentObject private var notificationManager: NotificationManager
   @State private var isExpanded = true
 

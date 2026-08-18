@@ -161,8 +161,7 @@ class ResourceResultViewModel: ObservableObject {
         if canContinue() {
           // 只有明确成功终止（done）才允许 missingSites 补偿与结果发布。
           guard receivedDone else {
-            self?.errorMessage = "搜索连接中断，请重试。"
-            return
+            throw URLError(.networkConnectionLost)
           }
           // 获取所有本次搜索的目标站点
           var targetSites: Set<Int> = []

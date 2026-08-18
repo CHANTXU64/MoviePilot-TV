@@ -4,6 +4,24 @@ import XCTest
 
 @MainActor
 final class DynamicSourceBehaviorTests: XCTestCase {
+  func testMediaGridEquatableIdentityIncludesImageConfiguration() throws {
+    let gridSource = try source("MoviePilot-TV/Views/Components/MediaGridView.swift")
+    XCTAssertTrue(
+      gridSource.contains(
+        "lhs.imageConfigurationIdentity == rhs.imageConfigurationIdentity"
+      )
+    )
+    XCTAssertTrue(
+      gridSource.contains(
+        "imageConfigurationIdentity: apiService.imageConfigurationIdentity"
+      )
+    )
+    let preloaderSource = try source("MoviePilot-TV/ViewModels/MediaPreloader.swift")
+    XCTAssertTrue(
+      preloaderSource.contains("retrieveHeroImage(url, fallbackURL: target.fallbackURL)")
+    )
+  }
+
   func testPluginFilterParserKeepsSupportedControlsAndSkipsUnknownControls() {
     let parsed = PluginFilterControlParser.parse([
       .object([
@@ -66,8 +84,38 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     XCTAssertEqual(parsed[1].kind, .choice)
     XCTAssertEqual(parsed[1].options.map(\.value), (1...10).map { JSONValue.int($0) })
     XCTAssertEqual(parsed[1].options.map(\.title), (1...10).map(String.init))
+    XCTAssertEqual(parsed[1].rangeBounds, [.int(1), .int(10)])
     XCTAssertEqual(parsed[0].showExpressions, ["{{mtype == 'movies'}}"])
     XCTAssertEqual(parsed[1].showExpressions, ["{{mtype == 'movies'}}"])
+  }
+
+  func testRangeSliderProjectsDefaultArrayAndWritesSelectedLowerBound() throws {
+    let control = try XCTUnwrap(
+      PluginFilterControlParser.parse([
+        .object([
+          "component": .string("VRangeSlider"),
+          "props": .object([
+            "v-model": .string("user_rating"),
+            "min": .int(1),
+            "max": .int(10),
+          ]),
+        ])
+      ]).first
+    )
+
+    XCTAssertEqual(control.selectionValue(from: .array([.int(1), .int(10)])), .int(1))
+    let stored = control.storedValue(for: .int(7))
+    XCTAssertEqual(stored, .array([.int(7), .int(10)]))
+
+    let path = ExploreViewModel.appendingQuery(
+      to: "plugin/IMDbDiscover/discover",
+      values: [control.field: stored]
+    )
+    let items = try XCTUnwrap(URLComponents(string: path)?.queryItems)
+    XCTAssertEqual(
+      items.filter { $0.name == "user_rating[]" }.compactMap(\.value),
+      ["7", "10"]
+    )
   }
 
   func testPluginFilterMultiSelectParsedAsMultiChoiceAndSingleStaysChoice() {

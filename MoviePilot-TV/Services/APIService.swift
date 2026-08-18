@@ -598,6 +598,10 @@ class APIService: ObservableObject {
   }
   @Published var useImageCache: Bool = false
 
+  var imageConfigurationIdentity: String {
+    "\(baseURL)|\(useImageCache)|\(settings?.TMDB_IMAGE_DOMAIN ?? "")"
+  }
+
   // MARK: - 短暂内存缓存 (提升二级页面和分季组件流畅度)
   private let episodeGroupsCache = APICache<String, [EpisodeGroup]>(defaultTTL: 120, size: 20)
   private let mediaSeasonsCache = APICache<String, [TmdbSeason]>(defaultTTL: 120, size: 20)

@@ -72,6 +72,7 @@ final class ManualMediaSearchViewModel: ObservableObject {
 }
 
 struct ManualMediaSearchSheet: View {
+  @ObservedObject private var apiService = APIService.shared
   @StateObject private var viewModel: ManualMediaSearchViewModel
 
   let onSelect: (String, MediaInfo) -> Void

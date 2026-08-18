@@ -142,6 +142,60 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       URL(string: "http://moviepilot.local/api/v1/system/cache/image?url=https%3A%2F%2Fexample.com%2Fposter.jpg")
     )
     XCTAssertTrue(viewModel.isUsingPosterAsBackdrop)
+    XCTAssertEqual(
+      viewModel.backgroundFallbackUrl,
+      URL(string: "http://moviepilot.local/api/v1/system/cache/image?url=https%3A%2F%2Fexample.com%2Fposter.jpg")
+    )
+  }
+
+  @MainActor
+  func testPosterBackgroundFailureSwitchesToOriginalPosterOnce() throws {
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { snapshot.restore(to: sharedService) }
+    sharedService.baseURLForTesting = "http://moviepilot.local"
+    sharedService.useImageCache = true
+
+    let detail = MediaInfo(
+      title: "Poster fallback",
+      poster_path: "https://image.tmdb.org/t/p/original/poster.jpg",
+      backdrop_path: nil
+    )
+    let viewModel = MediaDetailViewModel(detail: detail)
+    let primary = try XCTUnwrap(viewModel.backgroundUrl)
+    let fallback = try XCTUnwrap(viewModel.backgroundFallbackUrl)
+    XCTAssertNotEqual(primary, fallback)
+
+    viewModel.useBackgroundFallback(afterFailing: primary)
+
+    XCTAssertEqual(viewModel.backgroundUrl, fallback)
+    XCTAssertNil(viewModel.backgroundFallbackUrl)
+  }
+
+  @MainActor
+  func testDetailCardEqualityIncludesImageConfiguration() {
+    let media = MediaInfo(title: "Card", poster_path: "/poster.jpg")
+    let initial = DetailCardView(
+      item: media,
+      showBadges: false,
+      imageConfigurationIdentity: "config-a",
+      onTap: {}
+    )
+    let unchanged = DetailCardView(
+      item: media,
+      showBadges: false,
+      imageConfigurationIdentity: "config-a",
+      onTap: {}
+    )
+    let changed = DetailCardView(
+      item: media,
+      showBadges: false,
+      imageConfigurationIdentity: "config-b",
+      onTap: {}
+    )
+
+    XCTAssertEqual(initial, unchanged)
+    XCTAssertNotEqual(initial, changed)
   }
 
   @MainActor

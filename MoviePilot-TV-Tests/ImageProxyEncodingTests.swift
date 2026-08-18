@@ -5,6 +5,47 @@ import XCTest
 
 @MainActor
 final class ImageProxyEncodingTests: XCTestCase {
+  func testImageConfigurationIdentityTracksURLInputs() throws {
+    let service = APIService.isolatedTestingInstance()
+    service.baseURLForTesting = "http://images-a.local"
+    service.useImageCache = false
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(#"{"TMDB_IMAGE_DOMAIN":"images-a.example"}"#.utf8)
+    )
+    let initial = service.imageConfigurationIdentity
+
+    service.useImageCache = true
+    let cacheEnabled = service.imageConfigurationIdentity
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(#"{"TMDB_IMAGE_DOMAIN":"images-b.example","GLOBAL_IMAGE_CACHE":true}"#.utf8)
+    )
+    let domainChanged = service.imageConfigurationIdentity
+
+    XCTAssertNotEqual(initial, cacheEnabled)
+    XCTAssertNotEqual(cacheEnabled, domainChanged)
+  }
+
+  func testExistingMediaRecomputesPosterAfterImageConfigurationChanges() throws {
+    let service = APIService.shared
+    let snapshot = ImageProxyServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURLForTesting = "http://moviepilot.local"
+    service.useImageCache = false
+    let media = MediaInfo(
+      title: "Dynamic Image",
+      poster_path: "https://image.tmdb.org/t/p/original/poster.jpg"
+    )
+
+    let uncached = try XCTUnwrap(media.imageURLs.poster)
+    service.useImageCache = true
+    let cached = try XCTUnwrap(media.imageURLs.poster)
+
+    XCTAssertNotEqual(uncached, cached)
+    XCTAssertEqual(cached.path, "/api/v1/system/cache/image")
+  }
+
   func testMediaServerPosterProxyPreservesNestedQueryAndFragment() throws {
     let service = APIService.shared
     let snapshot = ImageProxyServiceSnapshot.capture(service: service)

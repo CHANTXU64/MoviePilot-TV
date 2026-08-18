@@ -157,6 +157,9 @@ struct MediaDetailView: View {
           : DefaultImageProcessor.default
 
         KFImage.sessionImage(url)
+          .onFailure { _ in
+            viewModel.useBackgroundFallback(afterFailing: url)
+          }
           .placeholder {
             EmptyView()
           }
@@ -276,6 +279,9 @@ struct MediaDetailView: View {
           }
         }
       }
+    }
+    .onChange(of: apiService.imageConfigurationIdentity) { _, _ in
+      viewModel.refreshBackgroundForImageConfiguration()
     }
     .environmentObject(subscriptionHandler)
     .ignoresSafeArea()
@@ -1002,6 +1008,7 @@ struct MediaDetailView: View {
               DetailCardView(
                 item: media,
                 showBadges: badges,
+                imageConfigurationIdentity: apiService.imageConfigurationIdentity,
                 onTap: {
                   MediaPreloader.shared.preloadIfNeeded(for: media)
                   navigationPath.append(media)
@@ -1065,6 +1072,7 @@ struct MediaDetailView: View {
               DetailCardView(
                 item: media,
                 showBadges: badges,
+                imageConfigurationIdentity: apiService.imageConfigurationIdentity,
                 onTap: {
                   MediaPreloader.shared.preloadIfNeeded(for: media)
                   navigationPath.append(media)

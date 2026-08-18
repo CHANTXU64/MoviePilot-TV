@@ -702,7 +702,7 @@ final class ResourceResultViewModelTests: XCTestCase {
     )
   }
 
-  func testResourceSearchEOFWithoutDoneDoesNotPublishOrCompensate() async throws {
+  func testResourceSearchEOFWithoutDoneUsesFallbackWithoutPublishingPartialResult() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
 
@@ -717,6 +717,10 @@ final class ResourceResultViewModelTests: XCTestCase {
       "data: {\"type\":\"append\",\"items\":[\(itemJSON)]}\n\n",
       forKeyword: "cut"
     )
+    await ResourceResultViewModelURLProtocol.stub.setFallbackResults(
+      [resourceContextJSON(title: "Fallback Result")],
+      forKeyword: "cut"
+    )
     service.baseURLForTesting = "http://resource-result-tests.local"
     configureResourceResultSearchSession(service)
 
@@ -728,16 +732,13 @@ final class ResourceResultViewModelTests: XCTestCase {
     }
 
     XCTAssertFalse(viewModel.isLoading)
-    XCTAssertEqual(viewModel.errorMessage, "搜索连接中断，请重试。")
-    XCTAssertTrue(
-      viewModel.results.isEmpty,
-      "An EOF without done must not publish partially accumulated results."
-    )
+    XCTAssertNil(viewModel.errorMessage)
+    XCTAssertEqual(viewModel.results.first?.torrent_info?.title, "Fallback Result")
     let fallbackRequestCount = await ResourceResultViewModelURLProtocol.stub.requestCount(
       path: "/api/v1/search/title",
       keyword: "cut"
     )
-    XCTAssertEqual(fallbackRequestCount, 0)
+    XCTAssertEqual(fallbackRequestCount, 1)
   }
 }
 

@@ -17,6 +17,7 @@ class MediaDetailViewModel: ObservableObject {
 
   // 界面背景稳定性控制
   @Published var backgroundUrl: URL?
+  @Published var backgroundFallbackUrl: URL?
   @Published var isUsingPosterAsBackdrop = false
 
   // 分页加载器
@@ -61,6 +62,7 @@ class MediaDetailViewModel: ObservableObject {
     // 网络加载路径随后由 applyFullDetail 以动画升级为完整详情背景。
     let initialBackground = detail.imageURLs.backgroundTarget
     self.backgroundUrl = initialBackground.url
+    self.backgroundFallbackUrl = initialBackground.fallbackURL
     self.isUsingPosterAsBackdrop = initialBackground.isPoster
 
     // --- Paginator for Recommend ---
@@ -238,16 +240,33 @@ class MediaDetailViewModel: ObservableObject {
 
     // 核心保护逻辑：只有当背景 URL 真正改变时才触发 @Published 更新。
     // 这能有效防止因为值相同但对象不同导致的 UI 重新闪烁刷新。
-    if self.backgroundUrl != target.url || self.isUsingPosterAsBackdrop != target.isPoster {
+    if self.backgroundUrl != target.url || self.backgroundFallbackUrl != target.fallbackURL
+      || self.isUsingPosterAsBackdrop != target.isPoster
+    {
       withAnimation(.easeInOut(duration: 0.8)) {
         if self.backgroundUrl != target.url {
           self.backgroundUrl = target.url
+        }
+        if self.backgroundFallbackUrl != target.fallbackURL {
+          self.backgroundFallbackUrl = target.fallbackURL
         }
         if self.isUsingPosterAsBackdrop != target.isPoster {
           self.isUsingPosterAsBackdrop = target.isPoster
         }
       }
     }
+  }
+
+  func refreshBackgroundForImageConfiguration() {
+    setBackground()
+  }
+
+  func useBackgroundFallback(afterFailing failedURL: URL) {
+    guard backgroundUrl == failedURL, let fallbackURL = backgroundFallbackUrl,
+      fallbackURL != failedURL
+    else { return }
+    backgroundFallbackUrl = nil
+    backgroundUrl = fallbackURL
   }
 
   // MARK: - 订阅操作（业务逻辑，由 View 层调用）

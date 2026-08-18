@@ -464,20 +464,23 @@ private struct FrameAnchorView: UIViewRepresentable {
 // MARK: - EquatableView 包装器（用于详情页推荐/类似横向列表）
 
 /// 将 MediaCard 包装在 Equatable 视图中，用于详情页的推荐/类似区域。
-/// 配合 `.equatable()` 修饰符，仅当 item.id 或 showBadges 变化时才重新求值 body。
+/// 配合 `.equatable()` 修饰符，仅当 item.id、showBadges 或图片配置变化时才重新求值 body。
 struct DetailCardView: View, Equatable {
   let item: MediaInfo
   let showBadges: Bool
+  let imageConfigurationIdentity: String
   let onTap: () -> Void
 
   static func == (lhs: DetailCardView, rhs: DetailCardView) -> Bool {
     lhs.item.id == rhs.item.id && lhs.showBadges == rhs.showBadges
+      && lhs.imageConfigurationIdentity == rhs.imageConfigurationIdentity
   }
 
   var body: some View {
     MediaCard(
       title: item.cleanedTitle ?? "",
       posterUrl: item.imageURLs.poster,
+      posterFallbackUrl: item.imageURLs.posterFallback,
       typeText: item.type,
       ratingText: item.vote_average.map { String(format: "%.1f", $0) },
       bottomLeftText: nil,

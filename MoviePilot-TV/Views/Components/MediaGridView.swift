@@ -32,17 +32,19 @@ private final class PreloadDebouncer {
 
 // MARK: - EquatableView 包装器
 // 当父视图 body 重新求值（如 Paginator 状态变化）时，
-// `.equatable()` 通过 `==`（仅比较 item.id）短路，跳过 MediaCard 子树的 body 求值。
+// `.equatable()` 通过 `==`（item.id + 图片配置）短路，跳过 MediaCard 子树的 body 求值。
 // 注意：不在 grid 层使用 @FocusState，避免每次焦点移动触发整个 grid body 重新求值。
 // 焦点处理保留在 per-card 的 onFocus 回调中（由 MediaCard 内部的 @FocusState 驱动）。
 
 private struct GridCardView: View, Equatable {
   let item: MediaInfo
+  let imageConfigurationIdentity: String
   let onTap: () -> Void
   let onFocus: (Bool) -> Void
 
   static func == (lhs: GridCardView, rhs: GridCardView) -> Bool {
     lhs.item.id == rhs.item.id
+      && lhs.imageConfigurationIdentity == rhs.imageConfigurationIdentity
   }
 
   var body: some View {
@@ -63,12 +65,14 @@ private struct GridCardView: View, Equatable {
 
 private struct GridCardViewWithMenu<MenuContent: View>: View, Equatable {
   let item: MediaInfo
+  let imageConfigurationIdentity: String
   let onTap: () -> Void
   let onFocus: (Bool) -> Void
   let menuBuilder: (MediaInfo) -> MenuContent
 
   static func == (lhs: GridCardViewWithMenu, rhs: GridCardViewWithMenu) -> Bool {
     lhs.item.id == rhs.item.id
+      && lhs.imageConfigurationIdentity == rhs.imageConfigurationIdentity
   }
 
   var body: some View {
@@ -95,6 +99,7 @@ private struct GridCardViewWithMenu<MenuContent: View>: View, Equatable {
 /// 通用媒体网格视图组件
 /// 用于展示媒体海报卡片的网格布局，支持分页加载
 struct MediaGridView<Header: View, ContextMenu: View>: View {
+  @ObservedObject private var apiService = APIService.shared
   let items: [MediaInfo]
   let isLoading: Bool
   let isLoadingMore: Bool
@@ -179,6 +184,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
               if let contextMenu = contextMenu {
                 GridCardViewWithMenu(
                   item: item,
+                  imageConfigurationIdentity: apiService.imageConfigurationIdentity,
                   onTap: { handleItemTap(item) },
                   onFocus: { isFocused in handleFocus(item: item, isFocused: isFocused) },
                   menuBuilder: contextMenu
@@ -187,6 +193,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
               } else {
                 GridCardView(
                   item: item,
+                  imageConfigurationIdentity: apiService.imageConfigurationIdentity,
                   onTap: { handleItemTap(item) },
                   onFocus: { isFocused in handleFocus(item: item, isFocused: isFocused) }
                 )

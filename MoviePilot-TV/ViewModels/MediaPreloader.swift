@@ -126,13 +126,13 @@ class MediaPreloadTask: ObservableObject {
     // 避免为已取消（LRU 淘汰）的任务发起无意义的图片请求
     guard !Task.isCancelled else { return }
     // 与 MediaInfo.ImageURLs.backgroundTarget 保持一致：backdrop 优先，无则 poster
-    let targetUrl = detail.imageURLs.backgroundTarget.url
-    guard let url = targetUrl else { return }
+    let target = detail.imageURLs.backgroundTarget
+    guard let url = target.url else { return }
 
     if let timeout {
       await withTaskGroup(of: Void.self) { group in
         group.addTask {
-          await self.retrieveHeroImage(url)
+          await self.retrieveHeroImage(url, fallbackURL: target.fallbackURL)
         }
         group.addTask {
           try? await Task.sleep(for: timeout)
@@ -142,19 +142,25 @@ class MediaPreloadTask: ObservableObject {
         group.cancelAll()
       }
     } else {
-      await retrieveHeroImage(url)
+      await retrieveHeroImage(url, fallbackURL: target.fallbackURL)
     }
 
     // 下载完成后清理引用
     activeImageDownload = nil
   }
 
-  private func retrieveHeroImage(_ url: URL) async {
+  private func retrieveHeroImage(_ url: URL, fallbackURL: URL?) async {
+    let succeeded = await retrieveHeroImage(url)
+    guard !succeeded, !Task.isCancelled, let fallbackURL, fallbackURL != url else { return }
+    _ = await retrieveHeroImage(fallbackURL)
+  }
+
+  private func retrieveHeroImage(_ url: URL) async -> Bool {
     let continuationBox = ImageRetrieveContinuationBox()
 
     // 使用 withTaskCancellationHandler 确保 Swift Task 取消时能中断 Kingfisher 的 HTTP 下载
-    await withTaskCancellationHandler {
-      await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+    return await withTaskCancellationHandler {
+      await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
         continuationBox.set(continuation)
         let service = apiService
         var options = service.imageOptions(for: url)
@@ -162,14 +168,19 @@ class MediaPreloadTask: ObservableObject {
         self.activeImageDownload = KingfisherManager.shared.retrieveImage(
           with: service.imageSource(for: url),
           options: options
-        ) { _ in
-          continuationBox.resume()
+        ) { result in
+          switch result {
+          case .success:
+            continuationBox.resume(returning: true)
+          case .failure:
+            continuationBox.resume(returning: false)
+          }
         }
       }
     } onCancel: {
       // 此闭包可能在任意线程执行，直接取消 Kingfisher 下载任务
       self.activeImageDownload?.cancel()
-      continuationBox.resume()
+      continuationBox.resume(returning: false)
     }
   }
 
@@ -260,28 +271,25 @@ class MediaPreloadTask: ObservableObject {
 
 private final class ImageRetrieveContinuationBox: @unchecked Sendable {
   private let lock = NSLock()
-  nonisolated(unsafe) private var continuation: CheckedContinuation<Void, Never>?
-  nonisolated(unsafe) private var shouldResumeOnSet = false
+  nonisolated(unsafe) private var continuation: CheckedContinuation<Bool, Never>?
+  nonisolated(unsafe) private var pendingResult: Bool?
   nonisolated(unsafe) private var hasResumed = false
 
-  nonisolated func set(_ continuation: CheckedContinuation<Void, Never>) {
+  nonisolated func set(_ continuation: CheckedContinuation<Bool, Never>) {
     lock.lock()
-    if hasResumed {
+    if let pendingResult {
+      hasResumed = true
+      self.pendingResult = nil
       lock.unlock()
-      continuation.resume()
+      continuation.resume(returning: pendingResult)
       return
     }
 
     self.continuation = continuation
-    let shouldResume = shouldResumeOnSet
     lock.unlock()
-
-    if shouldResume {
-      resume()
-    }
   }
 
-  nonisolated func resume() {
+  nonisolated func resume(returning result: Bool) {
     lock.lock()
     guard !hasResumed else {
       lock.unlock()
@@ -292,9 +300,9 @@ private final class ImageRetrieveContinuationBox: @unchecked Sendable {
       hasResumed = true
       self.continuation = nil
       lock.unlock()
-      continuation.resume()
+      continuation.resume(returning: result)
     } else {
-      shouldResumeOnSet = true
+      pendingResult = result
       lock.unlock()
     }
   }

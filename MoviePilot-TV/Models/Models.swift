@@ -670,15 +670,15 @@ nonisolated struct MediaInfo: Codable, Identifiable, Hashable {
     let posterFallback: URL?
     let backdrop: URL?
 
-    /// 详情背景目标：backdrop 优先，无则 poster；`isPoster` 表示是否用海报替代背景图。
-    var backgroundTarget: (url: URL?, isPoster: Bool) {
+    /// 详情背景目标：backdrop 优先，无则 poster；海报背景保留原图回退。
+    var backgroundTarget: (url: URL?, fallbackURL: URL?, isPoster: Bool) {
       if let backdrop {
-        return (backdrop, false)
+        return (backdrop, nil, false)
       }
       if let poster {
-        return (poster, true)
+        return (poster, posterFallback, true)
       }
-      return (nil, false)
+      return (nil, nil, false)
     }
   }
 

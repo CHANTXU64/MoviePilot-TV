@@ -275,19 +275,19 @@
 | M001-H | 已闭环 | G09交叉裁将F-070升确认P2；F-071维持P2；F-072维持P1且已修复（`e388e8b`），Simulator clean build、本地436/436测试与最终独立复审通过；支持F-001/F-021/F-027/F-036，F-013经当前合同反证后驳回 |
 | M001-I | 已闭环 | F-077/F-079 按当前分享schema分别确认投影与Fork身份丢失P2并已修复（`58c7e81`），F-078确认P3；CHK-009已补强，扩展F-002/F-008/F-017/F-027分享链；嵌套分享对象不再计入收窄后的F-011 |
 | M001-J | 已闭环 | G09 clean-room窄裁将F-073收窄后转确认P2且已修复（`e8cdaf7`）；F-074 用户按实际操作链复核后决定跳过（预览请求返回即弹 Sheet 抢焦点，同会话编辑窗口过窄，会话切换已有 isSessionUnchanged 防护）；F-075 用户按三端对照裁决仅修误导文案（Web 同样无逐 ID 受理/只重试失败机制且部分失败不刷新列表，后端 force 无幂等，不做 TV 单端增强），文案与回归测试已提交；F-076 资源搜索新请求开始即清空旧结果（`SearchViewModel.autoSearch` `.resource` 分支），聚合搜索子项已由`d361fe4`修复（unified 分支新请求开始清空 bestResults），空关键词点搜索与 Web 一致不改，定向 16/16 通过；F-077 已修复（`58c7e81`）等既有传播不变；扩展F-027下游证据不变 |
-| M001-K | 已闭环 | F-080 已修复（`SearchViewModel`/`ResourceResultViewModel` 加 receivedDone 门禁：error 不发布、EOF 无 done 不发布、missingSites 补偿仅 done 后；后端单站点错误由 indexer 层吞掉不影响 done，2026-08-14 三端核对）；F-081 输入边界修复已完成（`670cf86`），验证及独立复审通过，已选规则缺失继续静默不过滤由用户裁为产品取舍；F-085 已修复（`7f9fd17`：matcher 与后端 `__match_rule` 全字段对齐，规则 ID 缺失全排除、非法值显式失败、拉取网络失败放行，独立代理逐项复审+55 项定向测试通过），F-061后续由I011升P2 |
+| M001-K | 已闭环 | F-080 已修复（2026-08-17：Search/Resource 的业务 error 不发布且不 fallback，clean EOF 无 done 丢弃部分结果并复用普通搜索 fallback；missingSites 仅 done 后；Transfer AI 只认明确 terminal，无终态 EOF 显示可重试错误）；F-081 输入边界修复已完成（`670cf86`），验证及独立复审通过，已选规则缺失继续静默不过滤由用户裁为产品取舍；F-085 已修复（`7f9fd17`：matcher 与后端 `__match_rule` 全字段对齐，规则 ID 缺失全排除、非法值显式失败、拉取网络失败放行，独立代理逐项复审+55 项定向测试通过），F-061后续由I011升P2 |
 | I001 | 已闭环 | 55 个顶层声明全部覆盖；无新增发现，维持既有裁决；四处仅 doc comment 跨账面边界 |
-| A001-A | 已闭环 | G02末裁将F-082升条件P1（已由`d8198fc`修复）；F-083 已修复（2026-08-14：下载动作解码仅空 body 兼容成功，非空响应严格失败关闭并保留 message_i18n）；F-084 已修复（2026-08-14 用户裁决：保留 original→w500 替换，ImageURLs 加 posterFallback 原始 URL，MediaCard/BestResultCard/ForkSubscribeSheet 加载失败自动回退原始 URL）；F-030 已修复（`ee5dcb4`），其余传播闭合 |
+| A001-A | 已闭环 | G02末裁将F-082升条件P1（已由`d8198fc`修复）；F-083 已修复（2026-08-14：下载动作解码仅空 body 兼容成功，非空响应严格失败关闭并保留 message_i18n）；F-084 已修复（用户裁决保留 original→w500 替换并回退原图；2026-08-14 覆盖普通卡片，2026-08-17 补齐详情推荐/相似卡、海报背景和预载）；F-030 已修复（`ee5dcb4`），其余传播闭合 |
 | A001-B | 已闭环 | F-019/F-020/F-027/F-062/F-063及G02末裁F-086为条件P1；F-030/F-031/F-026/F-087/F-088 P2，缓存归CHK-007；F-088 已修复（共享 `encodeURIComponent` 原语并保留既有 `percentEncodedQuery`：登录 form body 与 `buildEndpoint`/`relativeBackendEndpoint`/`appendingQuery` 追加参数均按 form 语义编码，`+`→`%2B`、已有 `%2B` 往返不丢、非 ASCII 走 UTF-8，与 Web axios/FormData 字面值到后端解析一致；新增登录 body、搜索 query、`%2B` 往返定向测试，tvOS Simulator 构建通过，相关套件 39/39 通过） |
 | A001-C | 已闭环 | G06核当前后端401后F-089 P2；G02末裁将F-087升P2，F-088 P2；F-087 已修复（统一 `trimmedNonEmpty` 选择器：逐项 trim 后按优先级取首个有效文本，覆盖 ApiResponse/非2xx/动作解码/AI重做/SSE 六类入口，空白首选不再遮蔽有效 detail/message）；F-089 已修复（`90b40b4` 候选登录重构闭合：login 401/403 直传服务端错误文本、不再抛 unauthorized/logout，System 手动刷新与 App 更新刷新失败均保留旧会话，`APIServiceSessionTransitionTests`/`SystemSessionBehaviorTests` 相关用例已覆盖），其他会话/响应传播闭合 |
 | A001-D | 已闭环 | F-090 已确认条件性 P3；支持 F-005/F-009/F-013/F-027/F-031/F-060/F-064/F-076/F-077/F-078/F-082/F-084/F-086/F-087；F-090 已修复（`recognizeTmdbId` 四个成功出口统一复用 `validNumericIdentifier`，0/负数候选跳过继续查找正 ID，不再遮蔽正候选；`TmdbRecognitionPositiveIDTests` 4 个回归用例通过） |
-| A001-E | 已闭环 | W017双审补强后F-024/F-095升P1，F-083/F-092/F-093升P2；后续G05将F-094升P2、F-197升条件P1。F-091维持P2，F-196 P1，扩展F-027/F-192/CHK-005/012；F-091/F-093 已修复（首次下载器列表加载失败后轮询复用 `loadClientsIfNeeded` 自动重试并区分错误/真实空态，成功空列表不再重复请求；clients/downloads 轮询连续失败超过 5 次发一次全局通知并重置、成功清零，暂停/启动/删除动作失败立即通知、成功静默，`DownloadTaskViewModel`/`DownloadTaskView` 实现，定向测试通过）；F-092 已修复（暂停/继续动作发起时冻结目标状态，成功后写目标值不再 toggle，单行 in-flight gate 在请求期间禁用按钮防重复提交，轮询 `onChange` 保持服务端权威同步，`DownloadTaskView` 实现，源码断言回归测试通过）；F-094 用户按三端对照裁决跳过（Web `DownloadingCard.vue` 同样不校验/不编码 hash，后端 `/download/{hashString}` 单段路由天然挡 `/` 与空段，`?`/`#` 截断 Web/TV 均存在，不做 TV 单端增强） |
+| A001-E | 已闭环 | W017双审补强后F-024/F-095升P1，F-083/F-092/F-093升P2；后续G05将F-094升P2、F-197升条件P1。F-091维持P2，F-196 P1，扩展F-027/F-192/CHK-005/012；F-091 已修复，F-093 部分修复（下载器失败可见并自动重试、连续轮询失败按 episode 通知、主动动作失败立即通知；与当前 Web 的 Loading/成功空/热失败保旧数据语义对齐，但任务列表首次失败仍可能短暂显示空态，未实现独立 stale/error 四态，不再夸大为完整五态）；F-092 已修复（暂停/继续动作发起时冻结目标状态，成功后写目标值不再 toggle，单行 in-flight gate 在请求期间禁用按钮防重复提交，轮询 `onChange` 保持服务端权威同步，`DownloadTaskView` 实现，源码断言回归测试通过）；F-094 用户按三端对照裁决跳过（Web `DownloadingCard.vue` 同样不校验/不编码 hash，后端 `/download/{hashString}` 单段路由天然挡 `/` 与空段，`?`/`#` 截断 Web/TV 均存在，不做 TV 单端增强） |
 | A001-F | 已闭环 | G09两票将F-098逐ID terminal receipt升P1、F-099正ID边界升P2；其余支持 F-027/F-033/F-036/F-060/F-071…F-076/F-080/F-082/F-086/F-087；F-099 已修复（手动选择原生数值 ID 先过正数过滤、无效回退 `media_id`；手工校验仅接受正数数字，0/000/负值无效；`MediaInfoCollectionBehaviorTests`/`ReorganizeViewModelTests` 更新并新增回归，定向与相关套件通过） |
 | A001-G | 已闭环 | F-096 P2；后续G03窄第三裁将F-097升P2；支持F-001/F-023/F-025/F-027/F-060/F-082/F-086/F-087；F-096 用户裁决跳过（TV 自动重登为既定行为；`90b40b4` 会话重构后可选探测 401/403 仅触发自动重登、重登成功不重放原请求，重登失败登出与主请求同一路径，凭据失效时迟早发生，非探测额外误伤）；F-097 已修复（轮询结果区分成功与失败：失败/取消保留该服务器上一轮快照、只有成功空才清空，停用服务器随新列表移除，对齐 Web `MediaServerLatest.vue` 失败保留旧数据语义；`HomeViewModelMediaServerSnapshotTests` 新增 5 个回归用例覆盖失败/网络错误/取消/成功空/首次失败，定向与相关套件通过） |
 | A001-H | 已闭环 | F-101 P3、F-103 P2确认；G05/G09按当前producer安全把F-102转未验证P3；CHK-011维持修订，传播边界补F-004/F-011/F-013；F-103 用户裁决跳过（Web `resource.vue` 同一 `^[a-zA-Z]+:` 猜路由且缺媒体身份同样回空串，finding 原文注明"若 Web 同样如此不得做 TV-only 兜底"；TV 空 keyword 发空标题请求与 Web `search/last` 恢复上次结果的差异一并接受，不做 TV 单端处理） |
 | A001-I | 已闭环 | F-104 已确认条件性 P2；相邻只并入 A001-D Douban recommendations，similar 与数字型 TMDB/Bangumi 分支不计已确认传播；无新增 finding；F-104 用户裁决跳过（核对后端：人物 raw_id 四来源 `/person/{person_id}` 接口参数均为 `person_id: int` 强校验、Douban 辅助 ID 与剧集组 ID 均为纯数字、完整媒体键冒号合法且不透明 media_id 不进这 6 条路径，真实数据不含保留字符，触发条件不成立） |
 | A001-J | 已闭环 | F-100条件P1已由`0cfeb12`按每key revision修复；F-069经当前v2.15.1合同复核降为未来版本条件P3并转CHK-003；CHK-010已确认，F-006范围收窄为模型负数与lookup非正数两路径 |
-| A001-K | 已闭环 | F-105(P3)/F-106 已确认；I003双审补settings跨会话混合/吞取消并将F-106升P2，图片wrapper仍收窄为生产消费、冷启动/同会话热刷新，切服旧视图树未验证；CHK-003/CHK-005 已补强；F-105 用户裁决跳过（后端海报/背景/订阅/下载字段均完整 URL，TMDB 季海报与人物相对路径已被 getSeasonPosterURL/getPersonImageURL 字段级处理；oracle relativeTo 绝对化不是当前 Web imageUtils.ts 行为，不构成对齐要求）；F-106 已修复（MediaInfo/DownloadingMediaInfo/MediaServerPlayItem/Subscribe 的预计算 let imageURLs 改为 @MainActor 按访问计算，复用 TmdbSeason/Person 模式，init 不再访问 APIService；后台 MediaInfo 解码不再预计算 URL，删除 MediaImageURLConfig 与三个私有 helper；tvOS Simulator 构建通过、定向与全量测试通过，2 个已知 SSE 时序失败与本次无关；子代理独立审查确认设计等价，唯一阻断项经实际构建证伪） |
+| A001-K | 已闭环 | F-105(P3)/F-106 已确认；I003双审补settings跨会话混合/吞取消并将F-106升P2，图片wrapper仍收窄为生产消费、冷启动/同会话热刷新，切服旧视图树未验证；CHK-003/CHK-005 已补强；F-105 用户裁决跳过；F-106 已修复：前序将主要模型改为按访问计算，2026-08-17 再用 `imageConfigurationIdentity` 驱动主要图片页面与 MediaGrid/DetailCard Equatable 失效，并让详情背景按同一原模型重算；不引入图片 revision 仓库 |
 | V001 | 已闭环 | 主审与独立复核已闭环；G08第三裁曾将F-107升P1，后续`90b40b4`修复主触发，剩余晚到show降P2且用户决定跳过；F-108维持未验证、条件性P3；H-012已确认，F-049升级P2，F-091/F-093仍须按错误episode避免轮询重复常驻通知 |
 | B004 | 已闭环 | F-027/F-029已由`90b40b4`修复；F-028经当前三方合同复核后由用户裁为已驳回；F-030已按当前Web嵌套`permissions.features`合同修复（`ee5dcb4`），clean build、435/435本地测试及独立复审通过；F-031经当前三端合同复核降为条件性P3并由用户决定跳过；CHK-005继续承载重登requiredPermission、根状态与多阶段operation owner |
 | B001 | 已闭环 | F-009/F-010 已确认 P3，已由 `4c69ec9` 合并修复；正式清单版本声明保持，无新增建议 |
@@ -302,16 +302,16 @@
 | V003 | 已闭环 | 主审与独立复核已闭环；F-114 确认 P3 并收窄为父 UI 文案新鲜度，F-112 两条请求传播维持 |
 | V004-A | 已闭环 | 主审与独立复核已闭环；I005补强后F-115升P2、F-117维持P3；后续G03纠偏以两张正确映射票将F-116升级确认P2，实际闪烁时长/焦点仍待运行；F-100传播闭合 |
 | V004-B | 已闭环 | 主审与独立复核已闭环；F-119最终P2；后续G03窄第三裁确认F-118 ownerless pin根因P2，push/Tab/State端到端时序仍待运行 |
-| V005 | 已闭环 | 主审与独立复核已闭环；F-122 确认 P3并收窄最终 error/cancel 误报，F-123 确认条件性 P2且独立于 F-027/F-113，既有传播维持 |
+| V005 | 已闭环 | 主审与独立复核已闭环；F-122 确认 P3，当前仅部分修复：throws 已关闭双段失败/取消误报，但首段 search 失败且 fallback 200 无匹配仍会返回 nil，继续混淆不完整查询与确定 no-match；历史空详情重试/转圈收敛不是本项反证，本轮不改代码。F-123 确认条件性 P2且独立于 F-027/F-113，既有传播维持 |
 | V006 | 已闭环 | F-120后续按触发与跨端后果降P2且用户决定跳过；G02末裁将F-121升P2、F-124升条件P1；F-124已由`4a1a291`修复并通过聚焦5/5、完整本地450/450与独立复审；既有传播完成；F-079后经当前官方schema裁决确认P2 |
 | V007 | 已闭环 | 主审/独立/G06闭合；无新增finding，F-027获login acquisition/ABA补强，F-089按当前后端401转确认P2，F-029无本入口新增触发、F-123仅传播 |
 | V008 | 已闭环 | 主审、独立与后裁已闭环；F-125/F-128确认P3、F-126确认P2；F-127确认条件性P1后由用户决定跳过；11项既有finding与F-027/F-028/CHK-005传播完成；版本特定tag不冒充当前远端 |
-| V009-A | 已闭环 | 主审、独立与G05后裁已闭环；F-133/F-134保持未验证P3，F-135以当前空目录生产链确认P3；F-088条件扩展与既有传播已收窄 |
+| V009-A | 已闭环 | 主审、独立与G05后裁已闭环；官方 IMDb 插件 fixture 已验证 F-133/F-134 合同并完成修复：保留 VRange 单选 UI，但投影数组下限并写回 `[selected,upperBound]`，既有 bracket flattener 发送两个 `user_rating[]`；F-135以当前空目录生产链确认P3；F-088条件扩展与既有传播已收窄 |
 | V009-B | 已闭环 | 主审与独立复核已闭环；ExploreContent为死代码；后续G01/G04双票将F-129升P2且保持独立于F-036，既有传播维持 |
 | V009-C | 已闭环 | 主审与独立复核已闭环；后续G04双票将F-130升P1并吸收F-244子Paginator跨profile发布；`90b40b4`以统一session UI identity、runtime取消与缓存失效闭合，当前聚焦96/96通过，既有独立复审PASS |
 | V009-D | 已闭环 | 主审与独立复核已闭环；后续G05将F-131升条件P2，F-132维持P3，21组筛选集合其余完整性通过 |
 | V009-E | 已闭环 | 主审与独立复核已闭环；F-129/F-131/F-132 维持确认，F-134 无部署复合 fixture、F-136 无 TV 产品意图，均转未验证；F-088 扩展维持 |
-| V009-F | 已闭环 | 主审与独立复核已闭环；无新编号，F-129/F-130 与 F-132 共有值扩展确认，传播会话/分页/分享/响应/query 发现；F-133/F-134/F-136 未验证，F-135 已确认 P3 |
+| V009-F | 已闭环 | 主审与独立复核已闭环；无新编号，F-129/F-130 与 F-132 共有值扩展确认，传播会话/分页/分享/响应/query 发现；F-133/F-134 已按官方 IMDb fixture 修复，F-136 未验证，F-135 已确认 P3 |
 | V010 | 已闭环 | 主审与独立复核已闭环；后续G01/G04双票将F-138升条件P1、F-139升P2；推荐分页/session/身份/图片/动作传播不变 |
 | V011-A | 已闭环 | G04 clean-room末裁将F-137升条件P2；枚举/wrapper身份其余通过，权限翻转/focus归V011-C/I007 |
 | V011-B | 已闭环 | 主审与独立复核已闭环；F-140/F-141 确认 P3，F-137 维持确认并补强 F-138；有限排序/去重/top-12 其余通过 |
@@ -327,7 +327,7 @@
 | V015 | 已闭环 | 主审与 verify_a001_h 独立复核完成；无新编号，F-022/F-032/F-061/F-076/F-080/F-081/F-082/F-085/F-101/F-103/F-027/F-123/F-130及CHK-005/011闭合；补偿重复ID仅留未验证合并验收 |
 | V016 | 已闭环 | 主审与 review_a001_h 独立复核完成；后续G05将F-145升P2，确认选中下载器后同一Sheet不能恢复初始省略状态；其余既有传播维持，F-135条件链不升级 |
 | V017 | 已闭环 | review_a001_h 主审、review_a001_j 独立复核完成；W013-B再次双审后F-146升级条件性P1，后由`0cfeb12`以剧集组+revision+session latest-owner修复；当前本地451/451测试通过 |
-| V018 | 已闭环 | review_a001_j主审、verify_a001_h独立复核完成；W014补强后F-147/F-148均确认条件性P1；F-147的Subscribe竞跑已由`a872737`修复，F-147的整理Sheet提交中关闭P2已由`2ce68f8`修复；F-148 用户裁决跳过（created/owner/session 回滚收据主体已由`c61412a`/`a872737`修复，剩余 reused ID 误暂停/删除仅剩"查重一次网络往返"的 TOCTOU 窗口，本地查重与 POST 间无异步间隔，用户接受该残余风险，不做 TV 单端增强） |
+| V018 | 已闭环 | review_a001_j主审、verify_a001_h独立复核完成；W014补强后F-147/F-148均确认条件性P1；F-147 的 Subscribe P1 竞跑已由`a872737`修复，整理 Sheet 只有禁用显式取消按钮的部分缓解，系统关闭/任务 owner/迟到 onDone 的 P2 风险由用户接受，不写成完整修复；F-148 用户裁决跳过（created/owner/session 回滚收据主体已由`c61412a`/`a872737`修复，剩余 reused ID 误暂停/删除仅剩"查重一次网络往返"的 TOCTOU 窗口，本地查重与 POST 间无异步间隔，用户接受该残余风险，不做 TV 单端增强） |
 | V019 | 已闭环 | 双审完成；G09两票按同权限跨session发布将F-149升P1，F-150维持P2，F-070由未知能力入口升确认P2；混合运维快照与伪空卡边界不变；F-149 已修复（`StatusViewModel.refreshAllData` 三个请求 `async let` 并发、收齐后校验同一 session 与 superuser 权限再一次性发布，分项失败整组保留上一完整快照不形成混合快照；修复随 `90b40b4` 会话重构落地，新增 `StatusDashboardSnapshotTests` 3 个回归用例覆盖分项失败保留快照/首载分项失败不发布/session 变化不发布，定向与相关套件 19/19 通过）；F-150 已修复（`StatusView` 非 superuser 时整组隐藏媒体库统计/存储空间/下载器三张 Dashboard 卡与顶部 Divider，保留下半部下载任务与整理历史；对齐 Web 非 superuser 不进入 `/dashboard` 的展示边界；`StatusViewModel` 暴露 `canRequestSuperUserEndpoints`，`StatusDashboardSnapshotTests` 新增 manage-only 用例断言不发请求且三项为空，定向与相关套件 20/20 通过） |
 | V020 | 已闭环 | 原双审完成；W017页面双审补强F-024/F-083/F-092/F-093/F-095严重度并新增F-196/F-197，F-091/F-094/F-027/F-060/F-082与CHK-005/012传播；F-033/F-035/F-120仍有不适用反证 |
 | V021 | 已闭环 | 双审与G09 clean-room窄裁完成；F-151条件P1，当前官方Web v2共享同一行为，用户决定按Web对齐跳过TV单端修复；F-120后续因Web同样允许preview/transfer交叉且未证明错目标mutation，降P2并由用户决定跳过；F-099/F-073 P2，F-074/F-075/F-076及既有session/cache传播闭合 |
@@ -361,7 +361,7 @@
 | W001 | 已闭环 | verify_a001_h 主审、review_a001_j 独立复核完成；无新编号，F-076/F-099/F-178/F-172/F-158/F-165传播闭合，F-177未验证，AddDownload media_in分工仅留契约边界 |
 | W002 | 已闭环 | review_a001_j 主审、review_a001_h 独立复核及G06后裁完成；无新编号，F-086/F-088/F-107/F-027/F-062/F-063/F-159传播闭合，F-029本View无新增触发、F-089最终确认P2，no-access首次登录顺序通过 |
 | W003 | 已闭环 | review_a001_h 主审、review_a001_j 独立复核及遗漏项补裁决完成；无新编号，Home订阅/媒体库/TMDB资源/session通知/卡片既有传播闭合；后续G03确认F-118 P2，F-012/F-017边界不变，F-158不适用；当前全文件486行覆盖原范围，前三次失败输出均作废 |
-| W004 | 已闭环 | verify_a001_h 主审、review_a001_j 独立复核完成；无新编号，F-077/F-078/F-120/F-121/F-129…F-132/F-033/F-035/F-105/F-106/F-027/CHK-005传播闭合；F-133/F-134/F-136未验证，F-135已确认P3，F-039/F-158不适用 |
+| W004 | 已闭环 | verify_a001_h 主审、review_a001_j 独立复核完成；无新编号，F-077/F-078/F-120/F-121/F-129…F-132/F-033/F-035/F-105/F-106/F-027/CHK-005传播闭合；F-133/F-134 当时未验证、后由官方 IMDb fixture 确认并修复，F-136未验证，F-135已确认P3，F-039/F-158不适用 |
 | W005 | 已闭环 | review_a001_j 主审、review_a001_h 独立复核完成；无新编号，推荐货架/空态、身份、分页恢复、生命周期session、订阅动作、卡片图片与可访问性既有finding传播闭合；F-079后经当前官方schema裁决确认P2，F-173及Fork presenter/合集route维持未验证，F-158不适用 |
 | W006-A | 已闭环 | review_a001_h 主审、review_a001_j 独立复核完成；无新编号，F-130/CHK-005/F-142/F-039/F-076/F-114/F-121/F-027/F-137/F-140/F-141/F-112/F-168传播闭合，键盘提交按显式双模式按钮契约不立项，F-169不适用 |
 | W006-B | 已闭环 | review_a001_h 主审、review_a001_j 独立复核完成；无新编号，F-033/F-034/F-035/F-036/F-039/F-076/F-027/F-130/CHK-005/F-137/F-138/F-140/F-141/F-142/F-077/F-079/CHK-009/F-104/F-143/F-178传播闭合，F-064维持未验证，F-139/F-158不适用 |
@@ -394,7 +394,7 @@
 | G02 | 已闭环 | 原逐号表压缩后遗失，未猜测恢复；全新clean-room代理从生产/测试/当时上游重审。后续当前态复核确认F-054已由`58c7e81`与现行后端合同解决；其余G02裁决维持，rawPayload合同按可表示结构/typed覆盖闭合 |
 | G03 | 已闭环 | 三票/窄第三裁完成；F-245独立P2，F-116/F-097/F-118/F-171/F-174/F-221均收敛P2，F-219驳回，F-173/F-177运行未验证；CHK-006当前仅保留同季重复/超管fan-out范围不完整P1，非TMDB跨季子证据已由现行后端反证；CHK-017补Fork；既往源码暴露永久披露 |
 | G04 | 已闭环 | 既有错号意见作废；全新clean-room代理逐项确认F-034/F-035/F-039/F-137/F-142/F-143/F-176/F-236均P2。F-035/F-039共享owner取消实现但保留独立回归；未运行验证 |
-| G05 | 已闭环 | 主审错号CHK票作废；八项共同升级既已落账。G09进一步把F-102转未验证P3，F-133/F-134/F-238继续未验证，F-135维持P3；六项CHK保持当前精确边界，无新finding、无运行验证 |
+| G05 | 已闭环 | 主审错号CHK票作废；八项共同升级既已落账。G09进一步把F-102转未验证P3；F-133/F-134 当时继续未验证，后由官方 IMDb fixture 确认并修复；F-238未验证，F-135维持P3；六项CHK保持当前精确边界，无新finding、无运行验证 |
 | G06 | 已闭环 | F-019/F-062/F-063条件P1；F-193的历史跨profile P1链已由`90b40b4`闭合、余项P2；F-030/F-031/F-084/F-109/F-157/F-089 P2；后续G02末裁把F-087/F-121升P2，F-244并入F-130。既往源码暴露永久披露，未运行验证 |
 | G09 | 已闭环 | 两票共同升级既有项、驳回F-153/F-154、转F-102未验证并新增F-246 P1；全新clean-room替代票将F-073收窄后确认P2，并确认F-246须新增CHK-020服务端manage资源授权。首个窄裁因读取ReviewPlan/ledger不计独立票，仅作补充；既往源码暴露永久披露，未运行验证 |
 | G08 | 已闭环 | 历史裁决F-107/F-148 P1；后续F-107主触发已由`90b40b4`修复，剩余晚到show降P2且用户决定跳过。F-049/F-121/F-223 P2，F-108未验证P3、F-159 P3；G02末裁覆盖F-121旧P3，H-012仅传播；既往通知源码污染永久披露 |
@@ -594,7 +594,7 @@
 - `M001-H / F-070…F-072`：G09已将F-070升确认P2，F-071维持P2、F-072维持P1；统一代际与能力默认边界已闭合，单元只随G01/G06程序队列收尾。
 - `M001-J / F-073…F-076`：clean-room窄裁确认F-073仅在`success:true + data缺失/null`与item success缺失/null两支fail-open，转确认P2；F-074/F-075 P2；F-076原跨owner P1链闭合，当前同会话余项P2。
 - `M001-I / F-077…F-079`：F-077/F-078已确认；F-079经当前后端91ce365f与Web 7ea14bc9合同裁决，从未知raw风险收窄为`anilistid/media_source/media_id`三个已知字段丢失并确认P2；G02/A001/Fork/session/刷新链回溯已闭合。
-- `M001-K/S005 / F-080/F-081/F-085`：三项均已确认；F-085 已修复（`7f9fd17`）并经独立代理逐项复审，目标部署后端路径/版本与正则方言差异仍留 V002/W020/I003/I004/I016/G01/G05 回溯。
+- `M001-K/S005 / F-080/F-081/F-085`：三项均已确认；F-080 已补齐 clean EOF 普通 fallback 与 Transfer terminal，F-085 已修复（`7f9fd17`）并经独立代理逐项复审，目标部署后端路径/版本与正则方言差异仍留 V002/W020/I003/I004/I016/G01/G05 回溯。
 - `A001-A / F-082…F-084`：三项均确认；G02末裁将F-082升条件P1，F-083/F-084 P2，API/下载/图片路径闭合。
 - `A001-B / F-086…F-088`：G02末裁将F-086升条件P1、F-087升P2，F-088 P2；登录candidate commit、错误文本与form/query边界闭合；F-087 已修复（统一 `trimmedNonEmpty` 选择器）。
 - `A001-C / F-089`：G06两票核到当前后端凭据/MFA失败为401并闭合System手动刷新清旧有效会话，转确认P2；403仍只作条件分支。
@@ -613,7 +613,7 @@
 - `V001 / F-108`：未验证、条件性 P3；静态触发与错误清空链成立，但 tvOS Sheet 是否遮挡根 overlay、五秒可见窗口及焦点必须运行验证；回溯 C002/R001/V017/W013/V022/W019/G08。
 - `V001 / H-012`：已确认；成功操作保持静默，周期请求按生产者 error episode 去重并在恢复/会话变化时清 latch，用户主动操作每次失败仍须反馈，不做全局同文案去重。
 - `V002-A/B / F-109`：G06两票升P2；profile偏好使用canonical baseURL与权威currentUser组成的版本化无歧义tuple，四个旧prefix同批一次迁移，异步操作冻结同一key；G01争议关闭。
-- `V002-A/B / F-111`：已确认 P2 并修复；合法 token-only 会话恢复后必须使用与当前 token/session 绑定的权威用户名，身份未解析时延迟 profile 读写，不降为 `default`；legacy `default` key 不可无损判主，相关回溯已闭合。`90b40b4` 已统一 key 为 `profileKey` 并修复连接页显示，本次补充恢复前窗口：`profileKey` 回退持久化且与当前 token 强校验匹配的快照 user_id，匹配回退/不匹配拒绝两条回归测试已补。
+- `V002-A/B / F-111`：已确认 P2 并由 `90b40b4`、`769c509` 修复；`/user/current` 正常恢复后使用当前 session 的权威 `user_id`，恢复前或恢复失败时，`profileKey` 仅回退到持久化且经 `withRestoredAccessToken` 与当前 token 强校验匹配的快照 `user_id`，token 不匹配时拒绝回退。该快照只补足四类 profile 偏好命名空间，不取代新版会话或权限权威；匹配回退与不匹配拒绝两条回归测试均保留。
 - `V002-C/D / F-112`：已确认 P2 并修复；站点权威成功空必须清除旧选择，失败/取消须与成功空分流并提供现有入口的最小恢复；Search/详情继续发送旧ID的传播与相关回溯已闭合。已实现：`SystemViewModel` 成功空清旧选择、失败保留旧列表并显示错误行+点击重试、取消不清旧值；`SiteFilterViewModel` 成功空清 `selectedSites`。
 - `V002-D / F-113`：已确认条件性 P2 并跳过（用户拍板）；异步默认站点归一化须冻结发起时 session/profile key，成功、失败与取消的过期结果均显式中止，调用者不得继续导航；`90b40b4` 后所有调用者 await 前后均有 `isSessionUnchanged` 校验，跨 profile 写回与旧站点发起新会话搜索已被外层挡住，取消分支在当前按钮无结构 Task 调用链下不可达，实际影响已不存在，剩余为防御性语义问题；回溯 V005/V007/V015/W003/W011/C014/R001/I004/G01/G05/G06。
 - `V003 / F-114`：已确认 P3 并修复；Search/MediaDetail 父 VM 固定持有 SiteFilter 子对象，已复用现有事件桥接（`siteFilter.objectWillChange` → 父 `objectWillChange`）让按钮及时刷新；仅影响 UI 新鲜度，回溯 V011/V012/W006/W008/I007/I008/I012/I013/G01/G03。
@@ -624,7 +624,7 @@
 - `V004-B / F-119`：已确认P2并暂时跳过（用户拍板，待内存优化工作树）；G02全局裁确认精确ID/recognized-TMDB仍只覆盖部分alias，非pinned alias可长期显示旧订阅状态；保存/取消回写须线性扫描当前小缓存更新全部canonical alias，点击时fresh lookup只限制错误mutation；用户在另一工作树开发内存优化，本项涉及代码均有变更，留待后续。
 - `V006 / F-120`：降P2且用户决定跳过；卡片共享busy主要造成异目标动作丢失/迟到UI，Reorganize preview/submit交叉与当前Web一致，本项未证明错目标mutation，具体破坏性风险仍由F-074/F-075/F-152/F-156承载。
 - `V006 / F-121`：已确认P2并修复（用户拍板方案）；Fork 失败错误文案带目标媒体标题，残留/迟到错误可识别来源、消除误导；未做 presentation 清旧与拒绝迟到的 operation owner 改造。已同步 2 条失败反馈测试断言，相关用例通过。
-- `V005 / F-122`：已确认 P3 并修复；`recognizeTmdbId` 改 throws，失败/取消不再折叠为 nil 误报"不存在"，nil 仅表示真 no-match；Handler 空标题与失败/取消不弹提示，MediaPreloader 预加载静默；已补双段失败/兜底成功/真 no-match 三条回归测试并同步兼容测试签名。
+- `V005 / F-122`：已确认 P3、当前部分修复；`recognizeTmdbId` 改 throws 已关闭双段失败/取消误报，但首段 search 失败且 fallback 成功无匹配仍返回 nil，不能宣称 nil 只表示确定 no-match；本轮只记录缺口。
 - `V005 / F-123`：已确认条件性 P2 并跳过（用户拍板）；`90b40b4` 后识别链各 await 点均有 epoch 校验，跨账号"B 凭据发 A 查询"核心链已闭合，剩余同账号重叠 action 的 UI 状态竞争与 logout 根生命周期为低影响；完整修法需 CHK-005 统一单调 epoch，用户决定在运行验证缺失前跳过。
 - `V007 / 会话传播`：无新增 finding；旧自动登录 A→logout→手动登录 B→A 迟到 200 可在 B baseURL 下覆盖 token/currentUser/四项凭据，归 F-027；login acquisition owner、单调 epoch 与 A→B→A 已纳入 CHK-005，F-107/F-113/F-123 只闭合传播入口。
 - `V008 / F-125`：已确认 P3 并跳过（用户拍板）；当前后端 `get_play_url` 生成 `/server/{machine}/details?key=` 新形状，TV 只解析媒体库项旧形状后退化 `plex://`；但修正后能否精确落点依赖未验证的 tvOS Plex scheme 支持，用户决定跳过。
@@ -636,7 +636,7 @@
 - `I006 / F-233…F-238`：受限集成与G04末裁闭合；F-233/F-234/F-235/F-236均P2、F-237驳回、F-238未验证P3。最终报告永久披露无法取得严格零暴露文件集成票。
 - `V009-D/E / F-131`：已确认条件性 P2；G05两名代理再次确认Douban/Bangumi/AniList用非公历Calendar.current生成并直传年份；实际tvOS非公历配置频率仍未验证。
 - `V009-D/E / F-132`：已确认 P3；TMDB movie/tv 类型切换保留另一类型独占 sort key，Picker 无匹配而请求继续携旧字段；只在新字典不含旧值时回落默认，保留共有字段。
-- `V009-A/E/F / F-133…F-135`：F-133/F-134 未验证 P3，unsupported filter_ui 与复合 query 结构须待固定部署 fixture/契约到位再重开；F-135 已确认 P3，重复 option tag 与空目录生产链已闭合。均不引入通用 FormRender/query 框架。
+- `V009-A/E/F / F-133…F-135`：F-133/F-134 已按官方 IMDb 插件 `user_rating=[1,10]` 与后端 `user_rating[]` 合同修复；VRange 单选 UI 投影下限并写回合法二元数组，复用既有 bracket flattener。F-135 已确认 P3；未引入通用 FormRender/query 框架。
 - `V009-E/F / F-136`：转未验证 P3；TV Share 初始/切源默认 count，而本地 v2.15.1 Web 与测试默认 time，差异已确认但 TV 产品意图缺失；明确 Web 对齐时确认，明确 TV 热门特例时驳回。
 - `V011-A/B / F-137`：已确认条件性P2；无界长度罚分穿透四类评分带并可把真实匹配挤出top-12；使用互不重叠带宽和clamp即可。
 - `V011-A / 权限 focus`：不立本段 finding；存活 SearchView 权限互换后旧 searchType、可见按钮、结果 switch 与 focus target 可能分裂，已转 V011-C/W006-A/I007/G01/G06 闭合自动归一化和 tvOS focus 可达性。
@@ -669,7 +669,7 @@
 - `V016 / F-145`：已确认 P2；G05两名代理确认下载器初始nil可省略提交，但options无空值，选中后当前Sheet不能恢复省略状态。复用仓内“默认/自动”空option与现有Binding，不扩Picker框架。
 - `V016 / 下载 mutation`：无其他新编号；跨会话提交/旧完成并入 F-027/CHK-005，重复 POST与旧defer清busy并入F-120，TorrentInfo四个官方字段丢失并入F-011，通用media原形留在CHK-003未验证边界，手动正ID与旧结果/错误/权限分别并入F-099/F-076/F-087/F-130。
 - `V017/W013-B / F-146`：已确认条件性P1并由`0cfeb12`修复；每次加载冻结剧集组、revision与session，季列表、入库、订阅摘要、错误及loading只允许最新owner发布。A慢B快与旧订阅阶段两条定向回归均在当前本地451/451测试中通过。
-- `V018/W014 / F-147`：Subscribe P1子项已由`a872737`修复；保存中禁用取消，系统返回当下同步冻结saving状态并跳过回滚，只有该返回路径最终保存成功才发一次全局成功提示；整理Sheet的提交中关闭P2已由`2ce68f8`修复（提交中禁用取消按钮，完成/失败后恢复），tvOS Simulator 构建及整理模块/兼容端点 60 项定向测试通过。
+- `V018/W014 / F-147`：Subscribe P1子项已由`a872737`修复；整理 Sheet 仅禁用显式取消按钮，系统关闭/任务 owner/迟到 `onDone` 的 P2 传播未完整关闭，用户接受残余风险，本轮不改代码。
 - `V018/W013-B/W014 / F-148`：已确认条件性P1；loading分支可令Retry误删、退出/session变化遗留；当前后端`exist_ok=True`重复创建又返回既有ID，TV丢失created/reused后无条件暂停并可在取消时删除。稳定根关闭观察与同session created/owner receipt统一收敛；reused ID永不由本次pause/delete。
 - `W014 / F-195`：已确认P2；当前后端按LF拆分多条custom_words且Web使用textarea，TV单行输入无法创建/可靠审阅第二条规则。仅该字段使用tvOS多行控件并保留LF原值，不改全部文本字段。
 - `W014 / F-170`：已确认P2；历史停用站点或删除/失权规则组脱离options后不可见、不可清且继续PUT，当前后端可回退默认站点或规则fail-open；只显示并允许主动清域外值，不自动求交。

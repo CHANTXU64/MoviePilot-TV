@@ -417,7 +417,12 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
         method: "GET",
         path: "/api/v1/search/title/stream"
       )
+      let fallbackRequestCount = await PermissionBehaviorURLProtocol.stub.requestCount(
+        method: "GET",
+        path: "/api/v1/search/title"
+      )
       XCTAssertEqual(streamRequestCount, 1)
+      XCTAssertEqual(fallbackRequestCount, 1)
     }
   }
 }

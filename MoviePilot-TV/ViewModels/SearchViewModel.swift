@@ -389,8 +389,7 @@ class SearchViewModel: ObservableObject {
           else { return }
           // EOF 未收到 done 视为连接异常，不把部分结果按成功收尾发布。
           guard receivedDone else {
-            self.resourceErrorMessage = "搜索连接中断，请重试。"
-            return
+            throw URLError(.networkConnectionLost)
           }
 
           // 应用自定义过滤规则（规则内容非法时显式提示；拉取规则网络失败时放行不过滤）

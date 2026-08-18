@@ -634,7 +634,7 @@ final class SearchViewModelTests: XCTestCase {
     )
   }
 
-  func testResourceSearchEOFWithoutDoneDoesNotPublishPartialResults() async throws {
+  func testResourceSearchEOFWithoutDoneUsesFallbackInsteadOfPartialResults() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
 
@@ -645,7 +645,7 @@ final class SearchViewModelTests: XCTestCase {
     await SearchViewModelURLProtocol.stub.reset()
     service.baseURLForTesting = "http://search-tests.local"
     configureSuperUserSearchSession(service)
-    // EOF 无 done = 连接异常（默认终止形态），不得把部分结果按成功收尾发布。
+    // EOF 无 done = 连接异常；丢弃流中部分结果，改走普通搜索端点。
     await SearchViewModelURLProtocol.stub.setStreamTermination(.eof, forQuery: "cut")
 
     let viewModel = SearchViewModel(apiService: service)
@@ -659,11 +659,11 @@ final class SearchViewModelTests: XCTestCase {
     }
 
     XCTAssertFalse(viewModel.isLoading)
-    XCTAssertEqual(viewModel.resourceErrorMessage, "搜索连接中断，请重试。")
-    XCTAssertTrue(
-      viewModel.resourceResults.isEmpty,
-      "An EOF without done must not publish partially accumulated results."
-    )
+    XCTAssertNil(viewModel.resourceErrorMessage)
+    XCTAssertEqual(viewModel.resourceResults.first?.torrent_info?.title, "Fallback Resource")
+    let fallbackRequestCount = await SearchViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/search/title")
+    XCTAssertEqual(fallbackRequestCount, 1)
   }
 
   func testCustomFilterSkipsRulesForNonSuperuserSearchUserWithPersistedRuleSelection()
@@ -1144,6 +1144,9 @@ private actor SearchViewModelURLProtocolStub {
         title: query == "new" ? "New Resource" : "Old Resource",
         termination: streamTerminations[query] ?? .eof
       )
+    }
+    if path == "/api/v1/search/title" {
+      return Data("[\(resourceContextJSON(title: "Fallback Resource"))]".utf8)
     }
     if path == "/api/v1/system/setting/CustomFilterRules" {
       if let customFilterRulesJSON {

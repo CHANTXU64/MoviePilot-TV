@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SearchView: View {
   @StateObject private var viewModel = SearchViewModel()
+  @ObservedObject private var apiService = APIService.shared
   @State private var path = NavigationPath()
   @StateObject private var subscriptionHandler = SubscriptionHandler()
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler

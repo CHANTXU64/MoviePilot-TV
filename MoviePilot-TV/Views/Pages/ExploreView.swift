@@ -469,10 +469,11 @@ struct FilterPickersView: View {
         case .choice:
           Picker(
             control.label,
-            selection: pluginBinding(for: control.field)
+            selection: pluginBinding(for: control)
           ) {
-            if !control.options.contains(where: { $0.value == pluginBindingValue(control.field) }) {
-              Text("\(control.label)：默认").tag(pluginBindingValue(control.field))
+            let selection = control.selectionValue(from: pluginBindingValue(control.field))
+            if !control.options.contains(where: { $0.value == selection }) {
+              Text("\(control.label)：默认").tag(selection)
             }
             ForEach(control.options) { option in
               Text("\(control.label)：\(option.title)").tag(option.value)
@@ -538,10 +539,10 @@ struct FilterPickersView: View {
     viewModel.pluginFilterValues[field] ?? .null
   }
 
-  private func pluginBinding(for field: String) -> Binding<JSONValue> {
+  private func pluginBinding(for control: PluginFilterControl) -> Binding<JSONValue> {
     Binding(
-      get: { pluginBindingValue(field) },
-      set: { viewModel.setPluginFilter(field, value: $0) }
+      get: { control.selectionValue(from: pluginBindingValue(control.field)) },
+      set: { viewModel.setPluginFilter(control.field, value: control.storedValue(for: $0)) }
     )
   }
 

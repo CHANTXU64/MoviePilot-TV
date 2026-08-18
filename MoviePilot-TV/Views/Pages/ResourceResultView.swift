@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ResourceResultView: View {
   @Environment(\.dismiss) private var dismiss
+  @ObservedObject private var apiService = APIService.shared
   @StateObject private var viewModel: ResourceResultViewModel
   let title: String
   let mediaInfo: MediaInfo?

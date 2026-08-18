@@ -3,6 +3,7 @@ import SwiftUI
 @MainActor
 struct HomeView: View {
   @StateObject private var viewModel: HomeViewModel
+  @ObservedObject private var apiService = APIService.shared
 
   // Sheet 状态
   @State private var selectedSubscribe: Subscribe?

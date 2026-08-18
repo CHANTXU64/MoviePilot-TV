@@ -67,6 +67,7 @@ nonisolated struct PluginFilterControl: Hashable, Identifiable {
   let kind: Kind
   let options: [PluginFilterOption]
   let showExpressions: [String]
+  let rangeBounds: [JSONValue]?
 
   var id: String { field }
 
@@ -74,6 +75,16 @@ nonisolated struct PluginFilterControl: Hashable, Identifiable {
     showExpressions.allSatisfy {
       PluginFilterExpression.evaluate($0, values: values) ?? true
     }
+  }
+
+  func selectionValue(from storedValue: JSONValue) -> JSONValue {
+    guard rangeBounds != nil else { return storedValue }
+    return storedValue.arrayValue?.first ?? storedValue
+  }
+
+  func storedValue(for selection: JSONValue) -> JSONValue {
+    guard let upperBound = rangeBounds?.last else { return selection }
+    return .array([selection, upperBound])
   }
 }
 
@@ -120,6 +131,7 @@ nonisolated enum PluginFilterControlParser {
         from: children + (prop(["items"])?.arrayValue ?? [])
       )
       let kind: PluginFilterControl.Kind
+      var rangeBounds: [JSONValue]?
       switch lower {
       case "vchipgroup", "vradiogroup", "vselect", "vcombobox":
         if isMultiSelect(props) {
@@ -136,6 +148,9 @@ nonisolated enum PluginFilterControlParser {
       case "vrangeslider":
         kind = .choice
         options = rangeOptions(from: props)
+        if let lowerBound = options.first?.value, let upperBound = options.last?.value {
+          rangeBounds = [lowerBound, upperBound]
+        }
       default:
         return
       }
@@ -145,7 +160,8 @@ nonisolated enum PluginFilterControlParser {
           label: localLabel ?? field,
           kind: kind,
           options: options,
-          showExpressions: visibility
+          showExpressions: visibility,
+          rangeBounds: rangeBounds
         ))
       return
     }
