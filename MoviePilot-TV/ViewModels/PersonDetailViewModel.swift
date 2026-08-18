@@ -52,7 +52,7 @@ class PersonDetailViewModel: ObservableObject {
       .store(in: &cancellables)
   }
 
-  func loadDetails() async {
+  func loadDetails() async throws {
     // 如果缺少 raw_id，则不获取详情数据。
     guard let personId = person.raw_id, !personId.isEmpty else {
       isLoadingDetails = false
@@ -70,6 +70,8 @@ class PersonDetailViewModel: ObservableObject {
 
       // 详情响应可能是稀疏的 200；只补充有效字段，不覆盖入口人物的身份和已有展示数据。
       self.person = person.mergingDetails(from: fullDetail)
+    } catch is CancellationError {
+      throw CancellationError()
     } catch {
       print("加载人物作品出错: \(error)")
     }
@@ -80,10 +82,9 @@ class PersonDetailViewModel: ObservableObject {
   func loadInitialData() async {
     guard !hasLoaded else { return }
     hasLoaded = true
-    // 并行执行：获取人物详情 和 加载第一页作品
-    _ = await (
-      loadDetails(),
-      paginator.refresh()
-    )
+    // 刻意串行：先取人物详情，再加载第一页作品；详情被取消时不再启动分页请求。
+    try? await loadDetails()
+    guard !Task.isCancelled else { return }
+    await paginator.refresh()
   }
 }

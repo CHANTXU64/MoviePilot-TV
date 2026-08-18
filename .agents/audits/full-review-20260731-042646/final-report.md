@@ -1546,7 +1546,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-144 · P2 · 已确认 · 多阶段首载吞取消后仍晚启动下一阶段</summary>
+<summary>F-144 · P2 · 部分修复（2026-08-18；系统页用户决定不动） · 多阶段首载吞取消后仍晚启动下一阶段</summary>
 
 - 审查单元与位置：V013→W020-A→G02；串行首载与吞取消后晚启动下一阶段
 - 触发路径：人物详情请求慢、超时或取消时进入人物页。
@@ -1555,6 +1555,9 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：既有多审确认串行/晚启动；G02两名不同复核闭合取消后fallback确定请求并升级P2；复用async let；各catch先传播CancellationError并在fallback前检查取消
 - 跨端结论：纯TV取消语义P2；真实慢请求频率未验证
 - 最小修改方向 / 裁决：各catch先传播`CancellationError`，阶段之间检查取消；只有确认两项独立且产品需要降低首载延迟时才复用`async let`，不把并行化作为关闭取消缺陷的必要条件。
+- 修复状态：部分修复（2026-08-18）。人物详情 `loadDetails()` 改 `async throws` 传播 `CancellationError`，`loadInitialData()` 先 `try? await loadDetails()` 再 `guard !Task.isCancelled` 才启动分页；`MediaPreloader.recognizeTmdb()` 传播取消，识别被取消时预加载提前结束，不再启动分季/订阅 fallback 补查。
+- 用户决定：SystemView 的 `loadSystemInfo()→loadSites()` 链保留不改；`loadInitialData` 维持串行（注释已改为说明刻意串行），不并行化。
+- 验证：tvOS Simulator 构建通过；TmdbRecognitionPositiveIDTests / MediaInfoCollectionBehaviorTests / DynamicSourceBehaviorTests 共 57 项 0 失败。
 
 </details>
 

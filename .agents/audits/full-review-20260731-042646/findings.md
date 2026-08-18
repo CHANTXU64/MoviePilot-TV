@@ -157,7 +157,7 @@
 | F-141 | 已确认 | P3 | V011-B | 搜索年份提取与目标版本后端标题解析 | 首个任意四位数字片名被 TV 误作年份，括号移除又残留空壳 | verify_a001_h 以 `1917 2019` 闭合后端 title/year 与 TV score 分裂 | review_a001_j 独立复算数字片名、括号残留与版本特定词法边界 | 条件性搜索解析 P3已确认；当前部署未验证 |
 | F-142 | 已修复（2026-08-18） | P2 | V011-F 复核/裁决 | `SharedMediaFetcher.currentFetchTask` 合流/退休 | 完成 task 的 handle 未清，另一 waiter第二轮重放后返回非终止空批 | review_a001_j 闭合双 waiter恢复顺序与第3页目标类型反例 | review_a001_h 独立状态机确认0→2后重放2→2、actor调度可达及F-034/F-039独立 | 已修：task 内部按 identity 退休句柄；定向回归 1/1 通过 |
 | F-143 | 已修复（`40adb42`/`d2972b3`） | P2 | V013→G07 | Person route准入与请求owner | 当前可点击的内嵌导演可缺source，人物API在发请求前即失败；稀疏成功回包另拆F-227 | 既有双审闭合无身份死页；G07三方以当前TV/Web/后端窄化为内嵌导演路径 | 后端人物生产边界补真实source；TV只可用父source兼容旧载荷，无法确认则禁用 | TV兼容修复已完成（`40adb42`、`d2972b3`）；真实后端混合元数据仍未验证 |
-| F-144 | 已确认 | P2 | V013→W020-A→G02 | 串行首载与吞取消后晚启动下一阶段 | 人物/Transfer/System串行加载外，TMDB识别search取消还会被宽catch吞掉并继续启动fallback请求 | 既有多审确认串行/晚启动；G02两名不同复核闭合取消后fallback确定请求并升级P2 | 复用async let；各catch先传播CancellationError并在fallback前检查取消 | 纯TV取消语义P2；真实慢请求频率未验证 |
+| F-144 | 部分修复（2026-08-18）；系统页用户决定不动 | P2 | V013→W020-A→G02 | 串行首载与吞取消后晚启动下一阶段 | 人物/Transfer/System串行加载外，TMDB识别search取消还会被宽catch吞掉并继续启动fallback请求 | 既有多审确认串行/晚启动；G02两名不同复核闭合取消后fallback确定请求并升级P2 | 复用async let；各catch先传播CancellationError并在fallback前检查取消 | 人物与TMDB识别已修；系统页按用户决定保留，loadInitialData维持串行 |
 | F-145 | 已确认 | P2 | V016→G05 | AddDownload 下载器 Picker 与 Optional 请求字段 | 选中下载器后无法在同一Sheet恢复初始省略状态 | 既有双审确认；G05主审与独立复核均闭合nil→选择→无法回nil、请求省略语义及仓内“自动”空项反证 | 在现有options前置“自动”空tag，复用Binding；不与F-168合并 | TV表单可逆性缺陷已确认；具体默认文案未验证 |
 | F-146 | 已修复（`0cfeb12`） | P1 | V017→W013-B | SubscribeSeason剧集组请求/选择/入库与payload owner | 旧group请求可覆盖新选择并把A季显示为B订阅目标，点击后产生错误远端订阅 | V017与W013-B双审均闭合A慢B快→A覆盖seasonInfos→按当前B查入库/生成payload的同session链 | `0cfeb12`冻结剧集组、revision与session并统一latest-owner发布 | 两条定向乱序回归及当前本地451/451测试通过 |
 | F-147 | 部分修复；接受残余风险 | P1 | V018→W014/W018-A | Sheet mutation期间取消/关闭生命周期 | Subscribe可形成PUT/DELETE持久竞跑；整理关闭后仍发后续POST并迟到回调 | V018/W014双审维持P1；W018-A传播按P2 | Subscribe P1由`a872737`修复；整理只禁用显式取消按钮，系统关闭/任务owner/迟到回调未完整关闭 | 用户接受整理 P2 残余风险，本轮不改代码 |
@@ -2541,6 +2541,9 @@
 - I016受限集成确认：System整文件主审再次确认唯一outer task严格等待system info后才启动sites，取消还可被吞后晚启动下一loader；错误/空/stale用户状态归F-126/F-112。
 - G02 clean-room 末裁：再次闭合System与Season的“前一阶段吞取消→后一阶段仍启动”，并明确最小修复只需传播取消/`Task.checkCancellation()`，不要求把所有首载并行化；维持P2。
 - 未验证：真实人物详情延迟/超时频率与可见等待时长。
+- 修复状态：部分修复（2026-08-18）。`PersonDetailViewModel.loadDetails()` 改 `async throws` 并传播 `CancellationError`，`loadInitialData()` 用 `try? await loadDetails()` + `guard !Task.isCancelled` 后再启动分页；`MediaPreloader.recognizeTmdb()` 同样传播取消，识别被取消时整个预加载提前结束，不再启动分季/订阅 fallback 补查。
+- 用户决定：SystemView 的 `loadSystemInfo()→loadSites()` 链保留不改；`loadInitialData` 维持串行（已改注释说明刻意串行），不改成 `async let`。
+- 验证：tvOS Simulator 构建通过；TmdbRecognitionPositiveIDTests / MediaInfoCollectionBehaviorTests / DynamicSourceBehaviorTests 共 57 项 0 失败。
 
 ### F-145：下载器选择无法恢复初始省略状态
 

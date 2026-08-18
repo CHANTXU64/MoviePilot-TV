@@ -322,7 +322,7 @@
 | V012-A | 已闭环 | 主审与 review_a001_j 独立复核完成；F-100/F-130/F-139详情扩展成立，F-138仅task/season/lifecycle alias成立，wrong fullDetail注入因有效ID guard收窄为未验证；后续G03将F-116/F-118均收敛确认P2并保留各自运行边界 |
 | V012-B | 已闭环 | verify_a001_h 主审与 review_a001_h 独立复核完成；无新编号，确认 F-006/F-007/F-015/F-027/F-047…F-049/F-068/F-082/F-090/F-100/F-119/F-120 与 CHK-005/006/008/010；F-008/F-054 本段不复现 |
 | V012-C | 已闭环 | 主审与 review_a001_j 独立复核完成；无新编号，F-047/F-048/CHK-006确认，补 AniList fallback漏计及电影入口/电视剧统计/测试入口三重错位；失败开放与执行重查未冻结维持 |
-| V013 | 已闭环 | F-143 P2；F-144按吞取消晚启动后果维持P2，单纯串行性能为P3子边界；G04/G02 clean-room复核收口，其余传播闭合 |
+| V013 | 已闭环 | F-143 P2；F-144按吞取消晚启动后果维持P2，单纯串行性能为P3子边界；G04/G02 clean-room复核收口，其余传播闭合；F-144 人物与TMDB识别已修复（2026-08-18），系统页用户决定不动 |
 | V014 | 已闭环 | 主审与 verify_a001_h 独立复核完成；无新编号，F-027/F-033/F-035/F-082/CHK-005直接适用，F-138 identity/inert-task与F-139成功空扩展成立；SwiftUI旧StateObject、wrong-fullDetail及part父ID误路由维持未验证 |
 | V015 | 已闭环 | 主审与 verify_a001_h 独立复核完成；无新编号，F-022/F-032/F-061/F-076/F-080/F-081/F-082/F-085/F-101/F-103/F-027/F-123/F-130及CHK-005/011闭合；补偿重复ID仅留未验证合并验收 |
 | V016 | 已闭环 | 主审与 review_a001_h 独立复核完成；后续G05将F-145升P2，确认选中下载器后同一Sheet不能恢复初始省略状态；其余既有传播维持，F-135条件链不升级 |
@@ -655,7 +655,7 @@
 - `V012-C / F-047/F-048/CHK-006`：独立复核确认生产只从电影 Header 进入、warning只统计电视剧且漏 AniList→TMDB fallback，测试又以电视剧直接调用 helper；准备失败/取消仍开放、确认后重查且未冻结模式/范围/session。用一次性不可变 cancel intent 收敛，不新建取消框架。
 - `V014 / F-138/F-139`：合集详情无新编号；共享ID碰撞可继续污染NavigationPath并复用inert preload task，retained成功空无恢复；collection_id生产payload/普通part误路由语义缺固定fixture，保持未验证。
 - `V013 / F-143`：已确认条件性P2；纯name Person可无条件进入死详情，credits已冻结入口A但详情nil回包可覆盖公开person，形成展示身份与请求owner不统一；不是两个请求都在await中漂移。复用身份规范化做route准入/owner，真实payload频率未验证，W009/M001/I001/G04/G07回溯已闭合。
-- `V013 / F-144`：已确认P2；串行首载性能本身为P3子边界，P2来自System/Season/人物等宽catch吞取消后仍晚启下一阶段。先传播取消/阶段间检查，只有独立请求确需降延迟时再用`async let`。
+- `V013 / F-144`：已确认P2；串行首载性能本身为P3子边界，P2来自System/Season/人物等宽catch吞取消后仍晚启下一阶段。先传播取消/阶段间检查，只有独立请求确需降延迟时再用`async let`。已修复（2026-08-18）：人物 `loadDetails`/`recognizeTmdb` 传播取消，分页与 fallback 不再晚启动；SystemView 链按用户决定保留，loadInitialData 维持串行。
 - `W009 / F-185`：已确认P2；足够长合法biography在“完整简介”模态Sheet内没有ScrollView、分页或可移动焦点锚点，尾部无替代读取路径。Header保留有限行预览，Sheet只需原生纵向ScrollView，并验证遥控器/VoiceOver到达末尾，不建阅读框架。
 - `W009/W013-C / F-185`：季详情的无上限overview与人物完整简介共享同一无ScrollView静态Sheet根因；原生纵向ScrollView统一覆盖，不新增阅读组件。
 - `W013-C / F-190`：已确认P3；S00缺名在详情显示“第0季”而同页卡片显示“特别篇”，空白name/date/overview又产生空标题、图标空行或空壳区域。复用现有trim→nil与单一季名回退规则，不建显示模型。

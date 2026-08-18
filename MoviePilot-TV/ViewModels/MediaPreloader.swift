@@ -54,13 +54,13 @@ class MediaPreloadTask: ObservableObject {
         // 与 loadDetail 并发启动（两者互不依赖），但都在依赖任务之前完成
         async let tmdbRecognition: Void = {
           if self.partialMedia.tmdb_id == nil && self.partialMedia.canJumpToTMDB {
-            await self.recognizeTmdb()
+            try await self.recognizeTmdb()
           }
         }()
         async let detailLoad: Void = self.loadDetail()
 
-        // 等待两者都完成
-        _ = await (tmdbRecognition, detailLoad)
+        // 等待两者都完成；识别被取消时提前结束，不再启动依赖任务
+        try? await (tmdbRecognition, detailLoad)
         guard !Task.isCancelled else { return }
 
         // 无论成功还是失败，都尝试加载依赖任务（失败时用 partialMedia 做 fallback）
@@ -255,14 +255,22 @@ class MediaPreloadTask: ObservableObject {
 
   // MARK: - ⑤ TMDB 识别
 
-  private func recognizeTmdb() async {
+  private func recognizeTmdb() async throws {
     defer { isTmdbRecognitionFinished = true }
-    // 预加载识别失败/取消静默处理：不弹提示，也不伪装 no-match。
-    let result = try? await apiService.recognizeTmdbId(
-      title: partialMedia.title ?? "",
-      year: partialMedia.year,
-      type: partialMedia.type
-    )
+    // 预加载识别失败静默处理：不弹提示，也不伪装 no-match。
+    // 取消向上传播，避免取消后仍继续启动依赖任务（分季/订阅 fallback 补查）。
+    let result: Int?
+    do {
+      result = try await apiService.recognizeTmdbId(
+        title: partialMedia.title ?? "",
+        year: partialMedia.year,
+        type: partialMedia.type
+      )
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch {
+      result = nil
+    }
     if let tmdbId = result {
       self.tmdbId = tmdbId
     }
