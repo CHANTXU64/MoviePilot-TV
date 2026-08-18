@@ -158,7 +158,7 @@
 | F-142 | 已修复（2026-08-18） | P2 | V011-F 复核/裁决 | `SharedMediaFetcher.currentFetchTask` 合流/退休 | 完成 task 的 handle 未清，另一 waiter第二轮重放后返回非终止空批 | review_a001_j 闭合双 waiter恢复顺序与第3页目标类型反例 | review_a001_h 独立状态机确认0→2后重放2→2、actor调度可达及F-034/F-039独立 | 已修：task 内部按 identity 退休句柄；定向回归 1/1 通过 |
 | F-143 | 已修复（`40adb42`/`d2972b3`） | P2 | V013→G07 | Person route准入与请求owner | 当前可点击的内嵌导演可缺source，人物API在发请求前即失败；稀疏成功回包另拆F-227 | 既有双审闭合无身份死页；G07三方以当前TV/Web/后端窄化为内嵌导演路径 | 后端人物生产边界补真实source；TV只可用父source兼容旧载荷，无法确认则禁用 | TV兼容修复已完成（`40adb42`、`d2972b3`）；真实后端混合元数据仍未验证 |
 | F-144 | 部分修复（2026-08-18）；系统页用户决定不动 | P2 | V013→W020-A→G02 | 串行首载与吞取消后晚启动下一阶段 | 人物/Transfer/System串行加载外，TMDB识别search取消还会被宽catch吞掉并继续启动fallback请求 | 既有多审确认串行/晚启动；G02两名不同复核闭合取消后fallback确定请求并升级P2 | 复用async let；各catch先传播CancellationError并在fallback前检查取消 | 人物与TMDB识别已修；系统页按用户决定保留，loadInitialData维持串行 |
-| F-145 | 已确认 | P2 | V016→G05 | AddDownload 下载器 Picker 与 Optional 请求字段 | 选中下载器后无法在同一Sheet恢复初始省略状态 | 既有双审确认；G05主审与独立复核均闭合nil→选择→无法回nil、请求省略语义及仓内“自动”空项反证 | 在现有options前置“自动”空tag，复用Binding；不与F-168合并 | TV表单可逆性缺陷已确认；具体默认文案未验证 |
+| F-145 | 已修复（2026-08-18） | P2 | V016→G05 | AddDownload 下载器 Picker 与 Optional 请求字段 | 选中下载器后无法在同一Sheet恢复初始省略状态 | 既有双审确认；G05主审与独立复核均闭合nil→选择→无法回nil、请求省略语义及仓内“自动”空项反证 | 在现有options前置“自动”空tag，复用Binding；不与F-168合并 | 已修：下载器 options 前置“自动”空项；定向回归 1/1 通过 |
 | F-146 | 已修复（`0cfeb12`） | P1 | V017→W013-B | SubscribeSeason剧集组请求/选择/入库与payload owner | 旧group请求可覆盖新选择并把A季显示为B订阅目标，点击后产生错误远端订阅 | V017与W013-B双审均闭合A慢B快→A覆盖seasonInfos→按当前B查入库/生成payload的同session链 | `0cfeb12`冻结剧集组、revision与session并统一latest-owner发布 | 两条定向乱序回归及当前本地451/451测试通过 |
 | F-147 | 部分修复；接受残余风险 | P1 | V018→W014/W018-A | Sheet mutation期间取消/关闭生命周期 | Subscribe可形成PUT/DELETE持久竞跑；整理关闭后仍发后续POST并迟到回调 | V018/W014双审维持P1；W018-A传播按P2 | Subscribe P1由`a872737`修复；整理只禁用显式取消按钮，系统关闭/任务owner/迟到回调未完整关闭 | 用户接受整理 P2 残余风险，本轮不改代码 |
 | F-148 | 用户决定跳过 | P1 | V018→W013-B→W014 | SubscribeSheet临时订阅created/owner/session回滚收据 | loading替换唯一onDisappear钩子可误删/漏删；API又丢失created/reused区别，使既有订阅被无条件暂停并在取消时删除 | V018双审闭合Retry/退出链；W013-B与W014不同代理闭合当前后端`exist_ok`复用ID合同 | G02/G10稳定根关闭钩子、created ownership receipt、单一ID owner及恰好一次回滚矩阵 | 条件性P1；真实生命周期帧序、部署版本与触发频率未验证 |
@@ -2559,6 +2559,9 @@
 - 独立复核：review_a001_h 确认初始nil可直接提交且合成Codable省略字段，下载器options只有真实值，SheetPicker无清除动作；仅一个唯一非空下载器即可复现，故与F-120并发和F-135重复ID独立。
 - G05后裁：主审与不同代理独立复核均按请求省略语义、现有“自动”空项反证及同Sheet不可逆路径建议P2，故升级；修复仍只需追加一个现有空tag，不扩展Picker框架。
 - 未验证：实际部署对省略downloader的默认策略与最终用户文案；当前本地Web/后端源码已静态核对，未做运行验证。
+- 修复状态：已完成（2026-08-18）。`AddDownloadSheet` 下载器 options 前置 `PickerOption(title: "自动", value: "")`，与保存路径同款空项；选中后可在同一 Sheet 改回“自动”，Binding 空串转 nil，请求体恢复省略 `downloader` 字段。
+- 同类排查：全仓 SheetPicker 使用点核对——SubscribeSheet（质量/分辨率/特效/下载器/保存路径/剧集组/指定季）、ReorganizeSheet（目的存储/整理方式/目的目录/媒体类型/指定剧集）均已有空项；Explore/DownloadTask 等 Picker 初始值均在 options 内可回选，无同类问题。
+- 验证：新增 `AddDownloadRequestOmissionTests` 定向回归（初始省略→选中携带→选回自动恢复省略），与 PermissionScopedLoadViewModelTests 共 5 项 0 失败；tvOS Simulator 串行测试。
 
 ### F-146：剧集组旧请求可覆盖新选择并生成混合订阅目标
 

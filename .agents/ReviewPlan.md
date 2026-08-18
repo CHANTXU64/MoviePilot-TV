@@ -325,7 +325,7 @@
 | V013 | 已闭环 | F-143 P2；F-144按吞取消晚启动后果维持P2，单纯串行性能为P3子边界；G04/G02 clean-room复核收口，其余传播闭合；F-144 人物与TMDB识别已修复（2026-08-18），系统页用户决定不动 |
 | V014 | 已闭环 | 主审与 verify_a001_h 独立复核完成；无新编号，F-027/F-033/F-035/F-082/CHK-005直接适用，F-138 identity/inert-task与F-139成功空扩展成立；SwiftUI旧StateObject、wrong-fullDetail及part父ID误路由维持未验证 |
 | V015 | 已闭环 | 主审与 verify_a001_h 独立复核完成；无新编号，F-022/F-032/F-061/F-076/F-080/F-081/F-082/F-085/F-101/F-103/F-027/F-123/F-130及CHK-005/011闭合；补偿重复ID仅留未验证合并验收 |
-| V016 | 已闭环 | 主审与 review_a001_h 独立复核完成；后续G05将F-145升P2，确认选中下载器后同一Sheet不能恢复初始省略状态；其余既有传播维持，F-135条件链不升级 |
+| V016 | 已闭环 | 主审与 review_a001_h 独立复核完成；后续G05将F-145升P2，确认选中下载器后同一Sheet不能恢复初始省略状态；其余既有传播维持，F-135条件链不升级；F-145 已修复（2026-08-18） |
 | V017 | 已闭环 | review_a001_h 主审、review_a001_j 独立复核完成；W013-B再次双审后F-146升级条件性P1，后由`0cfeb12`以剧集组+revision+session latest-owner修复；当前本地451/451测试通过 |
 | V018 | 已闭环 | review_a001_j主审、verify_a001_h独立复核完成；W014补强后F-147/F-148均确认条件性P1；F-147 的 Subscribe P1 竞跑已由`a872737`修复，整理 Sheet 只有禁用显式取消按钮的部分缓解，系统关闭/任务 owner/迟到 onDone 的 P2 风险由用户接受，不写成完整修复；F-148 用户裁决跳过（created/owner/session 回滚收据主体已由`c61412a`/`a872737`修复，剩余 reused ID 误暂停/删除仅剩"查重一次网络往返"的 TOCTOU 窗口，本地查重与 POST 间无异步间隔，用户接受该残余风险，不做 TV 单端增强） |
 | V019 | 已闭环 | 双审完成；G09两票按同权限跨session发布将F-149升P1，F-150维持P2，F-070由未知能力入口升确认P2；混合运维快照与伪空卡边界不变；F-149 已修复（`StatusViewModel.refreshAllData` 三个请求 `async let` 并发、收齐后校验同一 session 与 superuser 权限再一次性发布，分项失败整组保留上一完整快照不形成混合快照；修复随 `90b40b4` 会话重构落地，新增 `StatusDashboardSnapshotTests` 3 个回归用例覆盖分项失败保留快照/首载分项失败不发布/session 变化不发布，定向与相关套件 19/19 通过）；F-150 已修复（`StatusView` 非 superuser 时整组隐藏媒体库统计/存储空间/下载器三张 Dashboard 卡与顶部 Divider，保留下半部下载任务与整理历史；对齐 Web 非 superuser 不进入 `/dashboard` 的展示边界；`StatusViewModel` 暴露 `canRequestSuperUserEndpoints`，`StatusDashboardSnapshotTests` 新增 manage-only 用例断言不发请求且三项为空，定向与相关套件 20/20 通过） |
@@ -666,7 +666,7 @@
 - `W001/W012 / F-189`：与F-188同属旧后端快照；目标v2.15.1已统一source/ID流，后续复核驳回，不做旧schema客户端过滤。
 - `W008-E/W010/I013 / F-184`：合法正数合集条件性P1已由`e0f1122`修复；Home/Explore/Recommend/Search统一合集分流，所有来源共用预载门禁，487/487测试及独立复审通过。0/负数、parts包装/递归仍未验证。
 - `V015 / 资源搜索链`：双审完成、无新编号；业务error、无终止EOF、`enable=false`与`done+success:false`闭合F-080/CHK-011，多`data:`闭合F-101；旧结果/权限/session/过滤/路由并入F-076/F-130/CHK-005/F-061/F-081/F-085/F-103。补偿append无去重且Context.id不含site机制成立，但缺重叠fixture/唯一性契约，只补CHK-011合并身份验收。
-- `V016 / F-145`：已确认 P2；G05两名代理确认下载器初始nil可省略提交，但options无空值，选中后当前Sheet不能恢复省略状态。复用仓内“默认/自动”空option与现有Binding，不扩Picker框架。
+- `V016 / F-145`：已确认 P2；G05两名代理确认下载器初始nil可省略提交，但options无空值，选中后当前Sheet不能恢复省略状态。复用仓内“默认/自动”空option与现有Binding，不扩Picker框架。已修复（2026-08-18）：下载器 options 前置“自动”空项，全仓 SheetPicker 无同类遗漏，定向回归通过。
 - `V016 / 下载 mutation`：无其他新编号；跨会话提交/旧完成并入 F-027/CHK-005，重复 POST与旧defer清busy并入F-120，TorrentInfo四个官方字段丢失并入F-011，通用media原形留在CHK-003未验证边界，手动正ID与旧结果/错误/权限分别并入F-099/F-076/F-087/F-130。
 - `V017/W013-B / F-146`：已确认条件性P1并由`0cfeb12`修复；每次加载冻结剧集组、revision与session，季列表、入库、订阅摘要、错误及loading只允许最新owner发布。A慢B快与旧订阅阶段两条定向回归均在当前本地451/451测试中通过。
 - `V018/W014 / F-147`：Subscribe P1子项已由`a872737`修复；整理 Sheet 仅禁用显式取消按钮，系统关闭/任务 owner/迟到 `onDone` 的 P2 传播未完整关闭，用户接受残余风险，本轮不改代码。
