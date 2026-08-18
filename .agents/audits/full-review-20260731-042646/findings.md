@@ -150,7 +150,7 @@
 | F-134 | 已修复 | P3 | V009-A/E/F | 复合插件筛选值的 query serialization | 数组/对象被 JSON 化为单值，与 Web Axios bracket 形状不同 | IMDb `user_rating=[1,10]` 与后端 `user_rating[]` 确认合同；既有 flattener 已按 Axios 展开 | 本轮 VRange 选择写回合法数组后复用既有序列化，产生两个 `user_rating[]` | 后端契约仅对 IMDb 插件核实 |
 | F-135 | 已确认 | P3 | V009-A/F→W012 | Picker option value/身份规范化 | 重复value同时成为ForEach ID与Picker tag；空目录还与内建自动重复空ID或生成`storage:` | 插件链三代理确认机制；W012双审与当前Web/后端裁决确认空/空白download_path生产可达 | 插件first-wins去重；目录trim后丢空再去重并保留唯一自动项 | 条件性P3；真实插件重复value频率仍未验证 |
 | F-136 | 未验证 | P3 | V009-E/F | Share 默认排序状态与 v2.15.1 Web | TV 初始/切源均用 count，目标版本 Web 默认 time | verify_a001_h 闭合两处 literal、首路径与版本特定 Web/test | review_a001_j 两次独立确认版本差异，但 TV 产品默认意图缺失 | 条件性默认行为未验证；产品确认 Web 对齐或 TV 特例时收敛 |
-| F-137 | 已确认 | P2 | V011-A/B→G04 | `fuzzyMatchScore` 类别带与 top-12 | 无界长度罚分穿透prefix/contains/subsequence/nonmatch分档并可把真实匹配挤出最终top-12 | 既有三票闭合反例；全新G04 clean-room复核确认四类交叉与最终截断并升级P2 | 保持Int评分，仅为类别设置互不重叠带宽并clamp长度惩罚 | 条件性搜索结果缺失P2；真实长标题竞争频率未验证 |
+| F-137 | 已修复 | P2 | V011-A/B→G04 | `fuzzyMatchScore` 类别带与 top-12 | 无界长度罚分穿透prefix/contains/subsequence/nonmatch分档并可把真实匹配挤出最终top-12 | 既有三票闭合反例；全新G04 clean-room复核确认四类交叉与最终截断并升级P2 | 保持Int评分，类别带宽互不重叠（全等1000/前缀700/包含400/顺序100-299）且长度罚分封顶；顺序匹配采用fzf风格词首/连续加分 | 条件性搜索结果缺失P2；真实长标题竞争频率未验证 |
 | F-138 | 已确认 | P1 | V010→V011-B/D→V012-A→G01/G04 | 共享 `MediaInfo.id`、缓存任务与 first-wins 去重 | title-only/collection等对象可碰撞丢项，并把列表、导航、pin及preload task绑定到错误owner | 既有三代理确认机制；G01纠偏与G04独立复核从中央ID到缓存/导航双票升P1 | `ff4ea14`在无任何现有媒体ID时追加trim后的标题兜底，保留0/空串及分享快路径 | 依赖解析、Simulator clean build、本地451/451测试及独立复审通过；真实后端兼容套件未运行 |
 | F-139 | 已确认 | P2 | V010→V012-A→G01/G04 | 推荐/详情分页成功空终态与页面再激活 | retained shelf、详情或合集首批成功空后，再激活不刷新且无恢复入口 | 既有双审确认；G01纠偏与G04独立复核再次闭合retained激活链并双票升P2 | 仅在激活边沿对成功空terminal调用现有refresh | 条件性恢复P2；真实tvOS实例保留与发生频率未运行验证 |
 | F-140 | 已确认 | P3 | V011-B | 搜索提交 query 与本地最佳结果评分 | 空白未统一规范化，精确标题可退化并被扩展标题反超 | verify_a001_h 以 `Hamilton ` 闭合后端 trim→TV 原字符串评分→top-12 链 | review_a001_j 独立复算 exact `-1`/extended `484`、换行与纯空白请求路径 | 搜索 canonical query 缺陷已确认；真实输入频率未验证 |
@@ -2403,7 +2403,7 @@
 
 ### F-137：模糊匹配长度罚分让不匹配项反超真实匹配
 
-- 状态：已确认
+- 状态：已修复（2026-08-18）
 - 严重度：条件性 P2
 - 位置：`MoviePilot-TV/ViewModels/SearchViewModel.swift:57` 的 `fuzzyMatchScore` 与最佳结果 sort/top-12 链
 - 触发路径：查询 `ab`；真实候选标题为 `a`+50 个其他字符+`b`，无关候选标题为 `zz`，两者海报、popularity 与合法唯一身份相同；另有足量无关候选竞争 top-12。
@@ -2415,6 +2415,8 @@
 - 既有独立复核：verify_a001_h 独立复算 52 字符顺序匹配 `-2` 与不匹配 `-1`，并确认长连续包含还可被更弱的短子序列反超，直接违反源码声明的类别顺序；当时按普通结果仍可见评P3。
 - I007同评分族扩展：review_a001_j提出、verify_a001_h独立确认SubscribeShare已解码`year`却固定允许无年份fallback；查询`Dune 2021`时`Dune/1984`可同得1000分并按更高热度反超。明确查询年份下分享复用媒体候选的`yearMatches`门；查询年份词法本身仍归F-141，F-224作为重复编号驳回。
 - G04 clean-room 末裁：进一步确认prefix/contains/subsequence三段也彼此穿透，且最终top-12会稳定改变；升级条件性P2。保持Int分数并限制每类惩罚带宽即可。
+- 处置：四类带宽互不重叠（全等1000、前缀700−min(长度,100)、包含400−min(长度,100)、顺序100~299），任何长度的前缀/包含分都高于下一档；顺序匹配改为 fzf 风格：词首+24、连续+12、间隔罚有界，长标题不再出现负分；过滤阈值与 sort/top-12 链不变。热度加权按用户裁决：订阅分享固定 0.6 参与加权（boost≈10）；候选池出现多个媒体来源（订阅分享不计入混池）时全部不计算热度；单来源时 TMDB log10 基数 3、AniList 基数 6、封顶 149。
+- 验证：新增档位不重叠与长标题回归、词首/连续偏好、中文标题、来源归一化、单来源加权、混池关闭、过滤项不计混池共 7 条测试；SearchViewModelTests 28/28 通过（tvOS Simulator）。
 - 未验证：真实长标题与无关高热度候选同时出现的频率。
 
 ### F-138：共享 MediaInfo 身份碰撞并被去重丢弃
