@@ -49,6 +49,13 @@ private func withTransferHistoryTimeout<T: Sendable>(
   }
 }
 
+private func transferHistoryListJSON(ids: ClosedRange<Int>) -> String {
+  let items = ids.map { id in
+    #"{"id":\#(id),"title":"记录\#(id)","type":"电影","status":true}"#
+  }.joined(separator: ",")
+  return #"{"list":[\#(items)],"total":\#(ids.count)}"#
+}
+
 @MainActor
 final class TransferHistoryViewModelTests: XCTestCase {
   func testAiRedoRequiresExplicitlyEnabledSetting() throws {
@@ -319,6 +326,58 @@ final class TransferHistoryViewModelTests: XCTestCase {
     let historyRequestCounts =
       await TransferHistoryURLProtocol.stub.recordedHistoryRequestCounts()
     XCTAssertEqual(historyRequestCounts, [20, 20])
+  }
+
+  func testPollingScanLimitFallbackRefreshesInsteadOfDroppingTail() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await TransferHistoryURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://transfer-history-tests.local"
+    configureManageUser(service)
+
+    // 初始已知项
+    await TransferHistoryURLProtocol.stub.setHistoryResponseData(
+      Data(#"{"list":[{"id":999,"title":"已知记录","type":"电影","status":true}],"total":1}"#.utf8)
+    )
+    let viewModel = TransferHistoryViewModel(apiService: service)
+    await viewModel.refresh()
+    XCTAssertEqual(viewModel.items.map(\.id), [999])
+
+    // 一次 101+ 条新增：页 1-5 各 20 条满页新记录，页 6 为 101-120，页 7 已知项，页 8 空
+    var dataByPage: [Int: Data] = [:]
+    for page in 1...5 {
+      let start = (page - 1) * 20 + 1
+      dataByPage[page] = Data(transferHistoryListJSON(ids: start...(start + 19)).utf8)
+    }
+    dataByPage[6] = Data(transferHistoryListJSON(ids: 101...120).utf8)
+    dataByPage[7] =
+      Data(#"{"list":[{"id":999,"title":"已知记录","type":"电影","status":true}],"total":1}"#.utf8)
+    dataByPage[8] = Data(#"{"list":[],"total":0}"#.utf8)
+    await TransferHistoryURLProtocol.stub.setHistoryResponseDataByPage(dataByPage)
+
+    // 轮询扫满 5 页仍未遇到已知项：不得提交不完整前缀，必须回退权威刷新
+    await viewModel.fetchLatest()
+    // 回退 refresh 会把游标重置回第 1 页，首屏只加载第 1 页（Paginator 首屏一页 + 滚动加载）
+    XCTAssertEqual(
+      viewModel.items.map(\.id), Array(1...20),
+      "应回退权威刷新而非提交前 100 条不完整前缀")
+
+    // 滚动加载全部页：旧缺陷下游标已被推到第 7 页，第 101-120 条永远拿不到
+    for _ in 0..<8 {
+      guard let lastId = viewModel.items.last?.id else { break }
+      await viewModel.loadMore(currentItemId: lastId)
+    }
+
+    let ids = Set(viewModel.items.map(\.id))
+    XCTAssertEqual(ids.count, 121)
+    XCTAssertTrue(
+      Set(101...120).isSubset(of: ids), "第 101-120 条不应被扫描上限丢弃")
+    XCTAssertTrue(ids.contains(999), "原有已知记录应保留")
   }
 
   func testLeavingStatusTabCancelsRefreshBeforeHistoryRequestStarts() async throws {
@@ -1375,6 +1434,7 @@ private actor TransferHistoryURLProtocolStub {
   private var storageGate: TransferHistoryAsyncGate?
   private var historyGate: TransferHistoryAsyncGate?
   private var historyResponseData: Data?
+  private var historyResponseDataByPage: [Int: Data] = [:]
   private var deleteGate: TransferHistoryAsyncGate?
   private var deleteResponseData: Data?
   private var recordedDeleteRequestCount = 0
@@ -1390,6 +1450,7 @@ private actor TransferHistoryURLProtocolStub {
     storageGate = nil
     historyGate = nil
     historyResponseData = nil
+    historyResponseDataByPage.removeAll()
     deleteGate = nil
     deleteResponseData = nil
     recordedDeleteRequestCount = 0
@@ -1410,6 +1471,10 @@ private actor TransferHistoryURLProtocolStub {
 
   func setHistoryResponseData(_ data: Data?) {
     historyResponseData = data
+  }
+
+  func setHistoryResponseDataByPage(_ dataByPage: [Int: Data]) {
+    historyResponseDataByPage = dataByPage
   }
 
   func setDeleteResponse(_ data: Data, gate: TransferHistoryAsyncGate?) {
@@ -1464,9 +1529,11 @@ private actor TransferHistoryURLProtocolStub {
           queryItems?.first(where: { $0.name == "count" })?.value.flatMap(Int.init)
         )
       }
+      let page = queryItems?.first(where: { $0.name == "page" })?.value.flatMap(Int.init)
       let response = TransferHistoryHTTPStubResponse(
         statusCode: 200,
-        data: historyResponseData
+        data: page.flatMap({ historyResponseDataByPage[$0] })
+          ?? historyResponseData
           ?? Data(
             (title == "新查询"
               ? #"{"list":[{"id":20,"title":"新查询结果","type":"电影","status":true}],"total":1}"#

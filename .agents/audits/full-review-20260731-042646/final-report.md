@@ -1591,7 +1591,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-155 · P2 · 已确认 · 第 6 页已请求却被轮询扫描上限丢弃</summary>
+<summary>F-155 · P2 · 已修复（2026-08-18） · 第 6 页已请求却被轮询扫描上限丢弃</summary>
 
 - 审查单元与位置：V022-C→I009；TransferHistory轮询多页扫描上限
 - 触发路径：距离当前首个已知记录有101条以上新记录。
@@ -1600,6 +1600,8 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：既有双审闭合页6丢弃；I009主审/独立复核确认前100项提交后下一轮无法恢复；扫描未找到已知边界时不提交前缀/推进游标，回退现有refresh
 - 跨端结论：TV历史漏记录已确认；一次101+新增频率未验证
 - 最小修改方向 / 裁决：扫描达到上限但尚未找到已知边界时不得提交不完整前缀或推进游标；优先回退复用现有Paginator顺序refresh/reset路径，单纯“不请求page6”不足以修复漏项。
+- 修复状态：已完成（2026-08-18）。`fetchLatest()` 扫满 5 页仍未遇已知边界时不再提交前缀/推进游标，直接回退 `performAuthoritativeRefresh()` 把游标重置回第 1 页。
+- 验证：新增 `testPollingScanLimitFallbackRefreshesInsteadOfDroppingTail`；还原修复后复现提交前 100 条、101-120 永久缺失，修复后 TransferHistoryViewModelTests 22/22 通过。
 
 </details>
 
