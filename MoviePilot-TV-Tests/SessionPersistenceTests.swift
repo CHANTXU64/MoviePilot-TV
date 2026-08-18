@@ -144,4 +144,50 @@ extension SystemSessionBehaviorTests {
     XCTAssertEqual(restoredService.currentUser?.user_name, "test-user")
     XCTAssertEqual(restoredService.profileKey, "https://session-refresh-tests.local|user:1")
   }
+
+  func testTokenOnlySessionFallsBackToPersistedSnapshotForProfilePreferences() {
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { snapshot.restore(to: sharedService) }
+
+    clearCredential(account: "currentUser")
+    persistStoredCurrentUserJSON(
+      #"{"access_token":"snapshot-token","token_type":"bearer","super_user":false,"permissions":{"discovery":true},"user_id":99,"user_name":"snapshot-user","avatar":null}"#
+    )
+    sharedService.replaceSessionForTesting(
+      baseURL: "https://token-only.local",
+      token: "snapshot-token",
+      currentUser: nil
+    )
+
+    XCTAssertNil(sharedService.currentUser)
+    XCTAssertEqual(sharedService.profileKey, "https://token-only.local|user:99")
+
+    let preferenceKey = "defaultSearchSites_https://token-only.local|user:99"
+    let oldValue = UserDefaults.standard.array(forKey: preferenceKey)
+    defer { restoreUserDefaultsArray(oldValue, forKey: preferenceKey) }
+    let viewModel = SystemViewModel()
+    viewModel.defaultSearchSites = [3, 7]
+    XCTAssertEqual(UserDefaults.standard.array(forKey: preferenceKey) as? [Int], [3, 7])
+    XCTAssertEqual(SystemViewModel().defaultSearchSites, [3, 7])
+  }
+
+  func testTokenOnlySessionRejectsSnapshotWithMismatchedToken() {
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { snapshot.restore(to: sharedService) }
+
+    clearCredential(account: "currentUser")
+    persistStoredCurrentUserJSON(
+      #"{"access_token":"other-token","token_type":"bearer","super_user":false,"permissions":{"discovery":true},"user_id":98,"user_name":"other-user","avatar":null}"#
+    )
+    sharedService.replaceSessionForTesting(
+      baseURL: "https://token-only.local",
+      token: "current-token",
+      currentUser: nil
+    )
+
+    XCTAssertNil(sharedService.currentUser)
+    XCTAssertNil(sharedService.profileKey)
+  }
 }

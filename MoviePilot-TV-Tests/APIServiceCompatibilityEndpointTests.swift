@@ -29,6 +29,61 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     )
   }
 
+  func testLoginSendsFormURLEncodedBodyWithEscapedSpecialCharacters() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = nil
+
+    do {
+      _ = try await service.login(
+        username: "user+plus",
+        password: "p%ss&C++ 密"
+      )
+      XCTFail("Expected stub token decoding to fail")
+    } catch {
+      // stub 默认响应无法解码为 Token，登录必然失败；重点是捕获实际请求体。
+    }
+
+    let capturedBody = await CompatibilityEndpointURLProtocol.stub.requestBody(
+      suffix: "/login/access-token"
+    )
+    let body = try XCTUnwrap(capturedBody)
+    let bodyString = try XCTUnwrap(String(data: body, encoding: .utf8))
+    XCTAssertTrue(bodyString.contains("username=user%2Bplus"))
+    XCTAssertTrue(bodyString.contains("password=p%25ss%26C%2B%2B%20%E5%AF%86"))
+    XCTAssertFalse(bodyString.contains("user+plus"))
+    XCTAssertFalse(bodyString.contains("C++"))
+  }
+
+  func testSearchMediaEncodesQueryValuesLikeWebAxios() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = nil
+
+    _ = try await service.searchMedia(query: "C++ 电影", page: 1)
+
+    let queries = await CompatibilityEndpointURLProtocol.stub.matchingQueries(
+      suffix: "/media/search"
+    )
+    let query = try XCTUnwrap(queries.compactMap { $0 }.last)
+    XCTAssertTrue(query.contains("title=C%2B%2B%20%E7%94%B5%E5%BD%B1"))
+    XCTAssertFalse(query.contains("title=C++"))
+  }
+
   func testFetchSettingsRejectsExplicitFailureBeforeDecodingWrappedData() async {
     XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
@@ -362,7 +417,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     defer { snapshot.restore(to: service) }
     service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
 
-    let tmdbID = await service.recognizeTmdbId(
+    let tmdbID = try await service.recognizeTmdbId(
       title: "搜索未命中",
       year: "2026",
       type: "电视剧"
@@ -835,6 +890,158 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
       suffix: "/transfer/manual"
     )
     XCTAssertTrue(bodies.isEmpty)
+  }
+
+  func testReorganizeSubmitReportsPartialAcceptanceMessage() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    await CompatibilityEndpointURLProtocol.stub.setManualTransferResponses([
+      Data(#"{"success":true,"message_i18n":"已开始整理"}"#.utf8),
+      Data(#"{"success":false}"#.utf8),
+    ])
+
+    let service = APIService.testingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    configureManageUser(service)
+    let viewModel = ReorganizeViewModel(
+      logIds: [81, 82],
+      fileItem: nil,
+      apiService: service
+    )
+
+    let submitted = await viewModel.submit(background: true)
+
+    XCTAssertFalse(submitted)
+    // 部分受理时明确报告“已提交整理”，不再误导为“没有开始”。
+    XCTAssertEqual(viewModel.errorMessage, "部分文件已提交整理，其余失败，请重试。")
+  }
+
+  func testReorganizeSubmitPartialAcceptanceKeepsBackendFailureReason() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    await CompatibilityEndpointURLProtocol.stub.setManualTransferResponses([
+      Data(#"{"success":true,"message_i18n":"已开始整理"}"#.utf8),
+      Data(#"{"success":false,"message_i18n":"目标目录不可用"}"#.utf8),
+    ])
+
+    let service = APIService.testingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    configureManageUser(service)
+    let viewModel = ReorganizeViewModel(
+      logIds: [81, 82],
+      fileItem: nil,
+      apiService: service
+    )
+
+    let submitted = await viewModel.submit(background: true)
+
+    XCTAssertFalse(submitted)
+    // 部分受理 + 后端错误信息时，先报部分成功，再附后端原因。
+    XCTAssertEqual(
+      viewModel.errorMessage,
+      "部分文件已提交整理，其余失败，请重试。失败原因：目标目录不可用"
+    )
+  }
+
+  func testReorganizeSubmitAllFailedDoesNotClaimPartialAcceptance() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    await CompatibilityEndpointURLProtocol.stub.setManualTransferResponses([
+      Data(#"{"success":false}"#.utf8),
+      Data(#"{"success":false}"#.utf8),
+    ])
+
+    let service = APIService.testingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    configureManageUser(service)
+    let viewModel = ReorganizeViewModel(
+      logIds: [81, 82],
+      fileItem: nil,
+      apiService: service
+    )
+
+    let submitted = await viewModel.submit(background: true)
+
+    XCTAssertFalse(submitted)
+    // 全部失败时不得使用“部分已提交”措辞。
+    XCTAssertEqual(viewModel.errorMessage, "整理没有开始，请检查设置后重试。")
+  }
+
+  func testApiResponseLocalizedMessageTrimsThenFallsBack() {
+    // message_i18n 全空白时不得遮蔽有效 message。
+    let blankI18n = ApiResponse<String>(
+      success: false,
+      data: nil,
+      message: "真实原因",
+      message_i18n: "   "
+    )
+    XCTAssertEqual(blankI18n.localizedMessage, "真实原因")
+
+    let validI18n = ApiResponse<String>(
+      success: false,
+      data: nil,
+      message: "raw",
+      message_i18n: "读取失败"
+    )
+    XCTAssertEqual(validI18n.localizedMessage, "读取失败")
+
+    let blankOnly = ApiResponse<String>(
+      success: false,
+      data: nil,
+      message: nil,
+      message_i18n: " \n "
+    )
+    XCTAssertNil(blankOnly.localizedMessage)
+  }
+
+  func testServerMessageErrorIgnoresBlankPreferredField() {
+    let error = APIService.serverMessageError(
+      statusCode: 422,
+      data: Data(#"{"message_i18n":"   ","detail":"目标目录不可用"}"#.utf8)
+    )
+    guard case APIError.serverMessage(let message) = error else {
+      return XCTFail("Expected serverMessage, got \(error)")
+    }
+    XCTAssertEqual(message, "422: 目标目录不可用")
+  }
+
+  func testReorganizeSubmitFallsBackToMessageWhenMessageI18nIsBlank() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    await CompatibilityEndpointURLProtocol.stub.setManualTransferResponses([
+      Data(#"{"success":true,"message_i18n":"已开始整理"}"#.utf8),
+      Data(#"{"success":false,"message_i18n":"   ","message":"目标目录不可用"}"#.utf8),
+    ])
+
+    let service = APIService.testingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    configureManageUser(service)
+    let viewModel = ReorganizeViewModel(
+      logIds: [81, 82],
+      fileItem: nil,
+      apiService: service
+    )
+
+    let submitted = await viewModel.submit(background: true)
+
+    XCTAssertFalse(submitted)
+    // 空白 message_i18n 不得遮蔽有效 message。
+    XCTAssertEqual(
+      viewModel.errorMessage,
+      "部分文件已提交整理，其余失败，请重试。失败原因：目标目录不可用"
+    )
   }
 
   private func assertContainsSubsequence(

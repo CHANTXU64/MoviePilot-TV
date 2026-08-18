@@ -390,6 +390,7 @@ struct ReorganizeSheet: View {
         Text("取消")
           .frame(maxWidth: .infinity)
       }
+      .disabled(viewModel.isSubmitting)
 
       if let message = viewModel.errorMessage {
         SheetFeedbackView(message: message)

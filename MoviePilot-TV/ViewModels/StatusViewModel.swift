@@ -14,6 +14,10 @@ class StatusViewModel: ObservableObject {
     self.apiService = apiService
   }
 
+  var canRequestSuperUserEndpoints: Bool {
+    apiService.canRequestSuperUserEndpoints
+  }
+
   func refreshAllData() async {
     guard apiService.canRequestSuperUserEndpoints else {
       statistic = nil

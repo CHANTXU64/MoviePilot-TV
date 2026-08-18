@@ -290,6 +290,9 @@ class SearchViewModel: ObservableObject {
     self.apiService = apiService
     self.siteFilter = SiteFilterViewModel(apiService: apiService)
     self.mediaSearchSource = SystemViewModel.currentDefaultMediaSearchSource(apiService: apiService)
+    self.siteFilter.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
   }
 
   /// 执行初始搜索：根据 searchType 决定是资源搜索还是聚合元数据搜索
@@ -315,10 +318,14 @@ class SearchViewModel: ObservableObject {
       searchProgressText = "正在搜索..."
       searchProgress = 0.0
       resourceErrorMessage = nil
+      // 新搜索开始即清空旧结果，避免新搜索失败或响应在途时旧结果冒充新结果并可被操作。
+      resourceResults = []
       
       searchStreamTask = Task { @MainActor in
         var accumulatedResults: [Context] = []
         var finalResultApplied = false
+        // 只有收到端点认可的 done 才把结果按成功收尾发布；业务 error 与无终止 EOF 均不发布。
+        var receivedDone = false
         defer {
           self.finishSearchIfCurrent(
             generation: currentSearchGeneration,
@@ -357,11 +364,13 @@ class SearchViewModel: ObservableObject {
             
             if event.type == "error" {
               self.resourceErrorMessage =
-                event.message_i18n ?? event.message ?? "未找到相关资源"
-              break
+                event.localizedMessage ?? "未找到相关资源"
+              // 整次搜索失败：不发布已积累的部分结果。
+              return
             }
             
             if event.type == "done" {
+              receivedDone = true
               // 与 Web v2.13.2 保持一致：给后端搜索结果缓存写入留出收尾时间。
               try? await Task.sleep(nanoseconds: searchStreamDoneCloseDelay)
               guard canPublishSearchResult(
@@ -378,9 +387,27 @@ class SearchViewModel: ObservableObject {
             sessionSnapshot: sessionSnapshot,
             searchType: currentSearchType)
           else { return }
+          // EOF 未收到 done 视为连接异常，不把部分结果按成功收尾发布。
+          guard receivedDone else {
+            throw URLError(.networkConnectionLost)
+          }
 
-          // 应用自定义过滤规则
-          let filteredResults = await self.applyCustomFilter(to: accumulatedResults)
+          // 应用自定义过滤规则（规则内容非法时显式提示；拉取规则网络失败时放行不过滤）
+          let filteredResults: [Context]
+          do {
+            filteredResults = try await self.applyCustomFilter(to: accumulatedResults)
+          } catch let error as CustomFilterService.FilterError {
+            guard canPublishSearchResult(
+              generation: currentSearchGeneration,
+              sessionSnapshot: sessionSnapshot,
+              searchType: currentSearchType)
+            else { return }
+            self.resourceErrorMessage = error.localizedDescription
+            return
+          } catch {
+            print("❌ [SearchVM] 加载过滤规则失败，放行不过滤: \(error)")
+            filteredResults = accumulatedResults
+          }
           guard canPublishSearchResult(
             generation: currentSearchGeneration,
             sessionSnapshot: sessionSnapshot,
@@ -407,7 +434,14 @@ class SearchViewModel: ObservableObject {
               searchType: currentSearchType)
             else { return }
 
-            fallbackResults = await self.applyCustomFilter(to: fallbackResults)
+            do {
+              fallbackResults = try await self.applyCustomFilter(to: fallbackResults)
+            } catch let error as CustomFilterService.FilterError {
+              self.resourceErrorMessage = error.localizedDescription
+              return
+            } catch {
+              print("❌ [SearchVM] 加载过滤规则失败，放行不过滤: \(error)")
+            }
             guard canPublishSearchResult(
               generation: currentSearchGeneration,
               sessionSnapshot: sessionSnapshot,
@@ -436,7 +470,9 @@ class SearchViewModel: ObservableObject {
           searchType: currentSearchType
         )
       }
-      // 聚合搜索：创建代理 Fetcher 和 Paginators
+      // 聚合搜索：新搜索开始即清空旧最佳结果，避免请求在途或失败时旧结果冒充新结果（与资源搜索分支对齐）。
+      self.bestResults = []
+      // 创建代理 Fetcher 和 Paginators
       setupPaginators(query: submittedQuery)
 
       guard let moviePag = moviePaginator,
@@ -736,14 +772,9 @@ class SearchViewModel: ObservableObject {
   // MARK: - 自定义过滤规则
 
   /// 应用自定义过滤规则
-  private func applyCustomFilter(to contexts: [Context]) async -> [Context] {
-    do {
-      return try await CustomFilterService.applyHardAndSoftFilter(
-        to: contexts, using: apiService, caller: "SearchVM")
-    } catch {
-      print("❌ [SearchVM] 加载过滤规则失败: \(error)")
-      return contexts
-    }
+  private func applyCustomFilter(to contexts: [Context]) async throws -> [Context] {
+    try await CustomFilterService.applyHardAndSoftFilter(
+      to: contexts, using: apiService, caller: "SearchVM")
   }
 }
 

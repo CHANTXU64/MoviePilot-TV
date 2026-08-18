@@ -233,6 +233,8 @@ struct MediaCard: View {
 
   let title: String
   let posterUrl: URL?
+  /// 降尺寸海报加载失败时回退的原始海报 URL。
+  let posterFallbackUrl: URL?
 
   // 角落文本
   let typeText: String?  // 左上角 (例如 "电影", "电视剧")
@@ -244,6 +246,8 @@ struct MediaCard: View {
   var showBadges: Bool = true
 
   @FocusState private var isFocused: Bool
+  /// 降尺寸海报加载失败后切换到原始 URL 重试。
+  @State private var posterLoadFailed = false
 
   var width: CGFloat = 256
   var height: CGFloat = 384
@@ -271,6 +275,7 @@ struct MediaCard: View {
   init(
     title: String = "",
     posterUrl: URL? = nil,
+    posterFallbackUrl: URL? = nil,
     typeText: String? = nil,
     ratingText: String? = nil,
     bottomLeftText: String? = nil,
@@ -287,6 +292,7 @@ struct MediaCard: View {
   ) {
     self.title = title
     self.posterUrl = posterUrl
+    self.posterFallbackUrl = posterFallbackUrl
     self.typeText = typeText
     self.ratingText = ratingText
     self.bottomLeftText = bottomLeftText
@@ -387,7 +393,11 @@ struct MediaCard: View {
   // 提取的海报内容 - Apple TV 风格设计
   private var posterContent: some View {
     let resolvedTypeIcon = Self.typeIconMap[typeText ?? ""] ?? "film"
-    return KFImage.sessionImage(posterUrl)
+    return KFImage.sessionImage(posterLoadFailed ? posterFallbackUrl : posterUrl)
+      .onFailure { _ in
+        // 降尺寸海报加载失败（如第三方 URL 被改写）时，回退到原始 URL 重试一次。
+        posterLoadFailed = true
+      }
       .placeholder {
         Rectangle()
           .fill(Color(white: 0.12))
@@ -454,20 +464,23 @@ private struct FrameAnchorView: UIViewRepresentable {
 // MARK: - EquatableView 包装器（用于详情页推荐/类似横向列表）
 
 /// 将 MediaCard 包装在 Equatable 视图中，用于详情页的推荐/类似区域。
-/// 配合 `.equatable()` 修饰符，仅当 item.id 或 showBadges 变化时才重新求值 body。
+/// 配合 `.equatable()` 修饰符，仅当 item.id、showBadges 或图片配置变化时才重新求值 body。
 struct DetailCardView: View, Equatable {
   let item: MediaInfo
   let showBadges: Bool
+  let imageConfigurationIdentity: String
   let onTap: () -> Void
 
   static func == (lhs: DetailCardView, rhs: DetailCardView) -> Bool {
     lhs.item.id == rhs.item.id && lhs.showBadges == rhs.showBadges
+      && lhs.imageConfigurationIdentity == rhs.imageConfigurationIdentity
   }
 
   var body: some View {
     MediaCard(
       title: item.cleanedTitle ?? "",
       posterUrl: item.imageURLs.poster,
+      posterFallbackUrl: item.imageURLs.posterFallback,
       typeText: item.type,
       ratingText: item.vote_average.map { String(format: "%.1f", $0) },
       bottomLeftText: nil,

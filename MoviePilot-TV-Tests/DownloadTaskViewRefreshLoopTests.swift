@@ -29,6 +29,27 @@ final class DownloadTaskViewRefreshLoopTests: XCTestCase {
     XCTAssertEqual(events, ["initialLoad", "sleep", "loadDownloads"])
   }
 
+  func testToggleActionFreezesTargetStateAndGatesDuplicateSubmission() throws {
+    let viewSource = try source("MoviePilot-TV/Views/Pages/DownloadTaskView.swift")
+
+    XCTAssertTrue(viewSource.contains("guard !isToggling else { return }"))
+    XCTAssertTrue(viewSource.contains("let shouldStop = isDownloading"))
+    XCTAssertTrue(viewSource.contains("let targetState = !shouldStop"))
+    XCTAssertTrue(viewSource.contains("isDownloading = targetState"))
+    XCTAssertFalse(
+      viewSource.contains("isDownloading.toggle()"),
+      "Successful toggle actions must assign the frozen target state instead of flipping the current value."
+    )
+    XCTAssertTrue(viewSource.contains("isEnabled: !isToggling"))
+  }
+
+  private func source(_ relativePath: String) throws -> String {
+    let repositoryRoot = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+    return try String(contentsOf: repositoryRoot.appendingPathComponent(relativePath))
+  }
+
   func testTransferHistoryRefreshesOnceForEachStatusTabEntry() async {
     var refreshCount = 0
 

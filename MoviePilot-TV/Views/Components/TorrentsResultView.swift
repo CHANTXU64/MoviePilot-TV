@@ -9,7 +9,7 @@ struct TorrentsResultView<Header: View>: View {
   // 筛选与排序状态
   @State private var filterForm: [String: Set<String>] = [:]
   @State private var sortField: SortField = .default
-  @State private var sortType: SortType = .desc
+  @State private var sortType: SortType = .default
 
   // Sheet 状态
   @State private var activeFilter: FilterConfig?
@@ -271,8 +271,8 @@ struct TorrentsResultView<Header: View>: View {
     let matched = results.filter { !$0.isFilteredOut }
     let filteredOut = results.filter { $0.isFilteredOut }
 
-    // 默认保留后端顺序，只调整软过滤分区。
-    guard sortField != .default else {
+    // “默认排序”保留后端顺序，只调整软过滤分区。
+    guard sortType != .default else {
       return matched + filteredOut
     }
 
@@ -300,7 +300,9 @@ struct TorrentsResultView<Header: View>: View {
         let rDate = rInfo?.pubdate ?? ""
         return isAsc ? (lDate < rDate) : (lDate > rDate)
       case .default:
-        return false
+        return isAsc
+          ? (lInfo?.pri_order ?? 0) < (rInfo?.pri_order ?? 0)
+          : (lInfo?.pri_order ?? 0) > (rInfo?.pri_order ?? 0)
       }
     }
 
@@ -353,6 +355,7 @@ enum SortField: String, CaseIterable, Identifiable {
 }
 
 enum SortType: String, CaseIterable, Identifiable {
+  case `default` = "默认排序"
   case asc = "升序"
   case desc = "降序"
 
@@ -401,7 +404,11 @@ struct TorrentFilterBar: View {
           }
         } label: {
           HStack(spacing: 4) {
-            Image(systemName: sortType == .asc ? "arrow.up" : "arrow.down")
+            if sortType == .asc {
+              Image(systemName: "arrow.up")
+            } else if sortType == .desc {
+              Image(systemName: "arrow.down")
+            }
             Text(sortField.rawValue)
           }
           .font(.caption)

@@ -5,10 +5,10 @@ enum ManualMediaSelection {
   static func mediaId(for media: MediaInfo, source: MediaSearchSource) -> String? {
     let nativeId: String? =
       switch source {
-      case .themoviedb: media.tmdb_id.map(String.init)
+      case .themoviedb: MediaIdentifier.validNumericIdentifier(media.tmdb_id).map(String.init)
       case .douban: media.douban_id
-      case .bangumi: media.bangumi_id.map(String.init)
-      case .anilist: media.anilist_id.map(String.init)
+      case .bangumi: MediaIdentifier.validNumericIdentifier(media.bangumi_id).map(String.init)
+      case .anilist: MediaIdentifier.validNumericIdentifier(media.anilist_id).map(String.init)
       }
     for candidate in [nativeId, media.media_id] {
       let normalized = candidate?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -72,6 +72,7 @@ final class ManualMediaSearchViewModel: ObservableObject {
 }
 
 struct ManualMediaSearchSheet: View {
+  @ObservedObject private var apiService = APIService.shared
   @StateObject private var viewModel: ManualMediaSearchViewModel
 
   let onSelect: (String, MediaInfo) -> Void
@@ -132,6 +133,7 @@ struct ManualMediaSearchSheet: View {
                     title: displayTitle(for: item),
                     type: item.type,
                     posterUrl: item.imageURLs.poster,
+                    posterFallbackUrl: item.imageURLs.posterFallback,
                     subtitle: [item.type, item.overview]
                       .compactMap { $0?.isEmpty == false ? $0 : nil }
                       .joined(separator: " · ")

@@ -13,33 +13,34 @@ struct StatusView: View {
   var body: some View {
     ScrollView {
       VStack(spacing: 0) {
-        // --- 1. 系统状态 ---
-        // --- 2. 媒体库统计 ---
-        if let statistic = viewModel.statistic {
-          MediaStatCard(statistic: statistic)
-            .padding(.bottom, 20)
-        } else {
-          EmptyDataView(title: "暂无媒体库统计", description: "")
-            .padding(.bottom, 20)
-        }
-
-        // --- 3. 存储与下载器概览 ---
-        HStack(alignment: .top, spacing: 20) {
-          if let storage = viewModel.storage {
-            StorageView(storage: storage, downloader: viewModel.downloader)
+        // 媒体库统计、存储空间与下载器概览仅对 superuser 展示；
+        // manage-only 不请求这些 Dashboard 数据，隐藏整组避免伪空卡。
+        if viewModel.canRequestSuperUserEndpoints {
+          if let statistic = viewModel.statistic {
+            MediaStatCard(statistic: statistic)
+              .padding(.bottom, 20)
           } else {
-            EmptyDataView(title: "暂无存储空间信息", description: "")
+            EmptyDataView(title: "暂无媒体库统计", description: "")
+              .padding(.bottom, 20)
           }
 
-          if let downloader = viewModel.downloader {
-            DownloaderCard(info: downloader)
-          } else {
-            EmptyDataView(title: "暂无下载器信息", description: "")
-          }
-        }
-        .padding(.bottom, 20)
+          HStack(alignment: .top, spacing: 20) {
+            if let storage = viewModel.storage {
+              StorageView(storage: storage, downloader: viewModel.downloader)
+            } else {
+              EmptyDataView(title: "暂无存储空间信息", description: "")
+            }
 
-        Divider()
+            if let downloader = viewModel.downloader {
+              DownloaderCard(info: downloader)
+            } else {
+              EmptyDataView(title: "暂无下载器信息", description: "")
+            }
+          }
+          .padding(.bottom, 20)
+
+          Divider()
+        }
 
         DownloadTaskView()
           .padding(.vertical, 20)

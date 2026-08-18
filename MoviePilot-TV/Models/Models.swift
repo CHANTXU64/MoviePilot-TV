@@ -155,7 +155,10 @@ nonisolated enum MediaIdentifier {
 
   static func isValidManualMediaId(_ mediaId: String?) -> Bool {
     guard let mediaId = normalizedString(mediaId) else { return true }
-    return mediaId.unicodeScalars.allSatisfy { (48...57).contains(Int($0.value)) }
+    guard mediaId.unicodeScalars.allSatisfy({ (48...57).contains(Int($0.value)) }) else {
+      return false
+    }
+    return (Int(mediaId) ?? 0) > 0
   }
 
   static func normalizedMediaIdentifier(_ mediaId: String?) -> String? {
@@ -660,10 +663,23 @@ nonisolated struct MediaInfoJSON: Decodable {
   }
 }
 
-struct MediaInfo: Codable, Identifiable, Hashable {
+nonisolated struct MediaInfo: Codable, Identifiable, Hashable {
   struct ImageURLs: Hashable {
     let poster: URL?
+    /// 降尺寸海报加载失败时回退的原始海报 URL。
+    let posterFallback: URL?
     let backdrop: URL?
+
+    /// 详情背景目标：backdrop 优先，无则 poster；海报背景保留原图回退。
+    var backgroundTarget: (url: URL?, fallbackURL: URL?, isPoster: Bool) {
+      if let backdrop {
+        return (backdrop, nil, false)
+      }
+      if let poster {
+        return (poster, posterFallback, true)
+      }
+      return (nil, nil, false)
+    }
   }
 
   /// TMDB ID
@@ -747,8 +763,14 @@ struct MediaInfo: Codable, Identifiable, Hashable {
   /// 标识当前媒体项是否为合集/系列
   let isCollection: Bool
 
-  /// 预计算的图片 URL
-  let imageURLs: ImageURLs
+  /// 图片 URL 在主线程按当前图片设置计算，避免后台 JSON 解码访问主线程 APIService。
+  @MainActor var imageURLs: ImageURLs {
+    ImageURLs(
+      poster: APIService.shared.getPosterImageUrl(posterPath: poster_path),
+      posterFallback: APIService.shared.getPosterImageUrlOriginal(posterPath: poster_path),
+      backdrop: APIService.shared.getBackdropImageUrl(backdropPath: backdrop_path)
+    )
+  }
 
   /// 预编译的合集后缀正则表达式，避免重复创建提升性能
   nonisolated private static let collectionSuffixRegex = try? NSRegularExpression(
@@ -847,12 +869,6 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     self.cleanedOriginalTitle = cleaned.originalTitle
     self.cleanedOriginalName = cleaned.originalName
     self.cleanedNames = cleaned.names
-
-    // 计算图片 URL
-    self.imageURLs = ImageURLs(
-      poster: APIService.shared.getPosterImageUrl(posterPath: poster_path),
-      backdrop: APIService.shared.getBackdropImageUrl(backdropPath: backdrop_path)
-    )
   }
 
   init(json: MediaInfoJSON) {
@@ -892,62 +908,6 @@ struct MediaInfo: Codable, Identifiable, Hashable {
       subscribeShare: json.subscribeShare,
       rawPayload: json.rawPayload
     )
-  }
-
-  nonisolated init(json: MediaInfoJSON, precomputedImageURLs: ImageURLs) {
-    self.tmdb_id = json.tmdb_id
-    self.douban_id = json.douban_id
-    self.bangumi_id = json.bangumi_id
-    self.anilist_id = json.anilist_id
-    self.imdb_id = json.imdb_id
-    self.tvdb_id = json.tvdb_id
-    self.source = json.source
-    self.mediaid_prefix = json.mediaid_prefix
-    self.media_id = json.media_id
-    self.title = json.title
-    self.original_title = json.original_title
-    self.original_name = json.original_name
-    self.names = json.names
-    self.type = json.type
-    self.year = json.year
-    self.season = json.season
-    self.poster_path = json.poster_path
-    self.backdrop_path = json.backdrop_path
-    self.overview = json.overview
-    self.vote_average = json.vote_average
-    self.popularity = json.popularity
-    self.season_info = json.season_info
-    self.collection_id = json.collection_id
-    self.directors = json.directors
-    self.actors = json.actors
-    self.episode_group = json.episode_group
-    self.runtime = json.runtime
-    self.release_date = json.release_date
-    self.original_language = json.original_language
-    self.production_countries = json.production_countries
-    self.genres = json.genres
-    self.category = json.category
-    self.subscribeShare = json.subscribeShare
-    self.rawPayload = json.rawPayload
-
-    self.id = Self.generateUniqueKey(
-      source: source, type: type, season: season, tmdb_id: tmdb_id, imdb_id: imdb_id,
-      tvdb_id: tvdb_id, douban_id: douban_id, bangumi_id: bangumi_id,
-      anilist_id: anilist_id, mediaid_prefix: mediaid_prefix, media_id: media_id,
-      title: title,
-      subscribeShare: subscribeShare)
-
-    self.isCollection = Self.checkIsCollection(type: type, collection_id: collection_id)
-
-    let cleaned = Self.parseCleanedNames(
-      isCollection: self.isCollection, title: title,
-      original_title: original_title, original_name: original_name, names: names)
-    self.cleanedTitle = cleaned.title
-    self.cleanedOriginalTitle = cleaned.originalTitle
-    self.cleanedOriginalName = cleaned.originalName
-    self.cleanedNames = cleaned.names
-
-    self.imageURLs = precomputedImageURLs
   }
 
   init(from decoder: Decoder) throws {
@@ -1005,12 +965,6 @@ struct MediaInfo: Codable, Identifiable, Hashable {
     self.cleanedOriginalTitle = cleaned.originalTitle
     self.cleanedOriginalName = cleaned.originalName
     self.cleanedNames = cleaned.names
-
-    // 计算图片 URL
-    self.imageURLs = ImageURLs(
-      poster: APIService.shared.getPosterImageUrl(posterPath: poster_path),
-      backdrop: APIService.shared.getBackdropImageUrl(backdropPath: backdrop_path)
-    )
   }
 
   func encode(to encoder: Encoder) throws {
@@ -1246,7 +1200,7 @@ struct DownloaderConf: Codable {
 }
 
 /// 下载任务中关联的轻量级媒体信息
-struct DownloadingMediaInfo: Codable, Equatable {
+nonisolated struct DownloadingMediaInfo: Codable, Equatable {
   struct ImageURLs: Hashable {
     let image: URL?
   }
@@ -1256,8 +1210,10 @@ struct DownloadingMediaInfo: Codable, Equatable {
   let episode: String?
   let season: String?
 
-  /// 预计算的图片 URL
-  let imageURLs: ImageURLs
+  /// 图片 URL 在主线程按当前图片设置计算，避免后台 JSON 解码访问主线程 APIService。
+  @MainActor var imageURLs: ImageURLs {
+    ImageURLs(image: APIService.shared.getBackdropImageUrl(backdropPath: image))
+  }
 
   enum CodingKeys: String, CodingKey {
     case image, title, episode, season
@@ -1270,8 +1226,6 @@ struct DownloadingMediaInfo: Codable, Equatable {
     episode = try container.decodeIfPresent(String.self, forKey: .episode)
     season = try container.decodeIfPresent(String.self, forKey: .season)
 
-    // 计算图片 URL
-    self.imageURLs = ImageURLs(image: APIService.shared.getBackdropImageUrl(backdropPath: image))
   }
 }
 
@@ -1649,8 +1603,12 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
   /// 媒体服务器类型
   let server_type: MediaServerType?
 
-  /// 预计算的图片 URL
-  let imageURLs: ImageURLs
+  /// 图片 URL 在主线程按当前图片设置计算，避免后台 JSON 解码访问主线程 APIService。
+  @MainActor var imageURLs: ImageURLs {
+    ImageURLs(
+      image: APIService.shared.getMediaServerPosterImageURL(
+        image: image, useCookies: use_cookies?.value))
+  }
 
   enum CodingKeys: String, CodingKey {
     case raw_id = "id"
@@ -1705,11 +1663,6 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
       link: link,
       serverType: server_type
     )
-
-    // 计算图片 URL
-    self.imageURLs = ImageURLs(
-      image: APIService.shared.getMediaServerPosterImageURL(
-        image: image, useCookies: use_cookies?.value))
   }
 
   /// 供手动构造使用的 init (常用于 Preview 或 Mock)
@@ -1729,11 +1682,6 @@ struct MediaServerPlayItem: Codable, Identifiable, Equatable {
     self.link = link
     self.use_cookies = use_cookies
     self.server_type = server_type
-
-    // 计算图片 URL
-    self.imageURLs = ImageURLs(
-      image: APIService.shared.getMediaServerPosterImageURL(
-        image: image, useCookies: use_cookies?.value))
   }
 }
 
@@ -1828,7 +1776,7 @@ struct SubscribeRequest: Codable {
 }
 
 /// 订阅详细配置数据
-struct Subscribe: Codable, Identifiable, Hashable {
+nonisolated struct Subscribe: Codable, Identifiable, Hashable {
   struct ImageURLs: Hashable {
     let poster: URL?
   }
@@ -1923,8 +1871,10 @@ struct Subscribe: Codable, Identifiable, Hashable {
   /// 洗版订阅的剧集优先级状态，保存原详情时需要原样保留。
   var episode_priority: [String: Int]?
 
-  /// 预计算的图片 URL
-  let imageURLs: ImageURLs
+  /// 图片 URL 在主线程按当前图片设置计算，避免后台 JSON 解码访问主线程 APIService。
+  @MainActor var imageURLs: ImageURLs {
+    ImageURLs(poster: APIService.shared.getSubscribePosterImageUrl(poster: poster))
+  }
 
   enum CodingKeys: String, CodingKey {
     case id, name, year, type, keyword, season, poster, backdrop, state, last_update,
@@ -1989,8 +1939,6 @@ struct Subscribe: Codable, Identifiable, Hashable {
     mediaid = try container.decodeIfPresent(String.self, forKey: .mediaid)
     episode_priority = try container.decodeIfPresent([String: Int].self, forKey: .episode_priority)
 
-    // 计算图片 URL
-    self.imageURLs = ImageURLs(poster: APIService.shared.getSubscribePosterImageUrl(poster: poster))
   }
 
   func encode(to encoder: Encoder) throws {
@@ -2108,8 +2056,6 @@ struct Subscribe: Codable, Identifiable, Hashable {
     self.mediaid = mediaid
     self.episode_priority = episode_priority
 
-    // 计算图片 URL
-    self.imageURLs = ImageURLs(poster: APIService.shared.getSubscribePosterImageUrl(poster: poster))
   }
 
   /// 解析订阅记录的主媒体身份，严格遵循 Web 订阅卡片的来源优先级。
@@ -2133,7 +2079,7 @@ struct Subscribe: Codable, Identifiable, Hashable {
   }
 
   /// 生成新增订阅请求，完整保留当前订阅的来源身份与洗版设置。
-  var addRequest: SubscribeRequest {
+  @MainActor var addRequest: SubscribeRequest {
     SubscribeRequest(
       name: name,
       type: type,
@@ -3166,12 +3112,22 @@ nonisolated struct SearchStreamEvent: Codable, @unchecked Sendable {
   let items: [Context]?
   let message: String?
   let message_i18n: String?
+
+  /// 统一错误文本选择器：逐项 trim 后优先 message_i18n，再回退 message。
+  var localizedMessage: String? {
+    trimmedNonEmpty([message_i18n, message])
+  }
   
   // AI 重新整理进度使用的结构也类似，可以在需要时复用
   struct AiRedoData: Codable {
     let success: Bool?
     let error: String?
     let error_i18n: String?
+
+    /// 统一错误文本选择器：逐项 trim 后优先 error_i18n，再回退 error。
+    var localizedError: String? {
+      trimmedNonEmpty([error_i18n, error])
+    }
   }
   let data: AiRedoData?
 
@@ -3205,16 +3161,74 @@ struct CustomRule: Codable, Identifiable, Hashable {
   let id: String
   /// 名称
   var name: String
-  /// 包含 (正则表达式)
-  var include: String?
-  /// 排除 (正则表达式)
-  var exclude: String?
+  /// 包含 (正则表达式)，与后端一致支持单个字符串或列表；任一匹配即通过
+  var include: [String]?
+  /// 排除 (正则表达式)，与后端一致支持单个字符串或列表；任一匹配即排除
+  var exclude: [String]?
   /// 大小 (MB)，格式: "min" 或 "min-max"
   var size_range: String?
   /// 做种人数，格式: "min" 或 "min-max"
   var seeders: String?
   /// 发布时间 (分钟)，格式: "min" 或 "min-max"
   var publish_time: String?
+
+  init(
+    id: String,
+    name: String,
+    include: [String]? = nil,
+    exclude: [String]? = nil,
+    size_range: String? = nil,
+    seeders: String? = nil,
+    publish_time: String? = nil
+  ) {
+    self.id = id
+    self.name = name
+    self.include = include
+    self.exclude = exclude
+    self.size_range = size_range
+    self.seeders = seeders
+    self.publish_time = publish_time
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    name = try container.decode(String.self, forKey: .name)
+    include = try Self.decodePatternList(from: container, forKey: .include)
+    exclude = try Self.decodePatternList(from: container, forKey: .exclude)
+    size_range = try container.decodeIfPresent(String.self, forKey: .size_range)
+    seeders = try container.decodeIfPresent(String.self, forKey: .seeders)
+    publish_time = try container.decodeIfPresent(String.self, forKey: .publish_time)
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(id, forKey: .id)
+    try container.encode(name, forKey: .name)
+    try container.encodeIfPresent(include, forKey: .include)
+    try container.encodeIfPresent(exclude, forKey: .exclude)
+    try container.encodeIfPresent(size_range, forKey: .size_range)
+    try container.encodeIfPresent(seeders, forKey: .seeders)
+    try container.encodeIfPresent(publish_time, forKey: .publish_time)
+  }
+
+  private static func decodePatternList(
+    from container: KeyedDecodingContainer<CodingKeys>,
+    forKey key: CodingKeys
+  ) throws -> [String]? {
+    if let list = try? container.decodeIfPresent([String].self, forKey: key) {
+      return list
+    }
+    if let single = try container.decodeIfPresent(String.self, forKey: key) {
+      // 与后端 `rule.get(...) or []` 一致：空字符串视为未配置（数组里的空串仍保留，后端按真实排除项处理）。
+      return single.isEmpty ? nil : [single]
+    }
+    return nil
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case id, name, include, exclude, size_range, seeders, publish_time
+  }
 }
 
 /// 对应 API 的返回格式：{ "data": { "value": [...] } }

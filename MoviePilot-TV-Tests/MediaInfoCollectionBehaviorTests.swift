@@ -180,11 +180,13 @@ final class MediaInfoCollectionBehaviorTests: XCTestCase {
     XCTAssertEqual(tmdb.apiMediaId, "tmdb:42")
   }
 
-  func testManualMediaIdAllowsEmptyAndASCIIDigitsOnly() {
+  func testManualMediaIdAllowsEmptyAndPositiveASCIIDigitsOnly() {
     XCTAssertTrue(MediaIdentifier.isValidManualMediaId(nil))
     XCTAssertTrue(MediaIdentifier.isValidManualMediaId("  "))
-    XCTAssertTrue(MediaIdentifier.isValidManualMediaId("0"))
     XCTAssertTrue(MediaIdentifier.isValidManualMediaId(" 33674 "))
+    XCTAssertFalse(MediaIdentifier.isValidManualMediaId("0"))
+    XCTAssertFalse(MediaIdentifier.isValidManualMediaId("000"))
+    XCTAssertFalse(MediaIdentifier.isValidManualMediaId("-5"))
     XCTAssertFalse(MediaIdentifier.isValidManualMediaId("33x"))
     XCTAssertFalse(MediaIdentifier.isValidManualMediaId("１２３"))
   }

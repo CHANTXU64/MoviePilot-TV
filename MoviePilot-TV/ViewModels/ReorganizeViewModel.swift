@@ -160,6 +160,8 @@ class ReorganizeViewModel: ObservableObject {
     }
     isSubmitting = true
     defer { isSubmitting = false }
+    // 记录已受理成功的批次数，用于部分成功时给出准确反馈（与 Web 对齐，不改变重试范围）。
+    var acceptedCount = 0
     do {
       if let message = try await validateBeforeSubmit?() {
         mutationRetryMessage = message
@@ -182,7 +184,9 @@ class ReorganizeViewModel: ObservableObject {
         guard apiService.isSessionUnchanged(from: snapshot) else {
           throw CancellationError()
         }
-        if !result.success, let message = result.message?.trimmingCharacters(
+        if result.success {
+          acceptedCount += 1
+        } else if let message = result.message?.trimmingCharacters(
           in: .whitespacesAndNewlines
         ), !message.isEmpty {
           failureMessages.append(message)
@@ -197,20 +201,24 @@ class ReorganizeViewModel: ObservableObject {
         Logger.error("Reorganize request returned false")
         let backendMessages = failureMessages.filter { !$0.isEmpty }
         errorMessage =
-          backendMessages.isEmpty
-          ? (
-            logIds.count > 1
-              ? "部分文件没有开始整理，请稍后重试。"
-              : "整理没有开始，请检查设置后重试。"
+          acceptedCount > 0
+          ? "部分文件已提交整理，其余失败，请重试。"
+            + (backendMessages.isEmpty ? "" : "失败原因：" + backendMessages.joined(separator: "；"))
+          : (
+            backendMessages.isEmpty
+              ? "整理没有开始，请检查设置后重试。"
+              : backendMessages.joined(separator: "；")
           )
-          : backendMessages.joined(separator: "；")
         return false
       }
     } catch is CancellationError {
       return false
     } catch {
       Logger.error("Failed to reorganize: \(error)")
-      errorMessage = "整理没有开始，请稍后重试。"
+      errorMessage =
+        acceptedCount > 0
+        ? "部分文件已提交整理，其余失败，请重试。"
+        : "整理没有开始，请稍后重试。"
       return false
     }
   }

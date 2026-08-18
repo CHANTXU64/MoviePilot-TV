@@ -999,6 +999,50 @@ final class TransferHistoryViewModelTests: XCTestCase {
     )
   }
 
+  func testAIRedoCleanEOFWithoutTerminalEventShowsRetryableFailure() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await TransferHistoryURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://transfer-history-tests.local"
+    configureManageUser(service)
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(#"{"AI_AGENT_ENABLE":true}"#.utf8)
+    )
+    await TransferHistoryURLProtocol.stub.setHistoryResponseData(
+      Data(#"{"list":[{"id":10,"title":"History","type":"电影","status":true}],"total":1}"#.utf8)
+    )
+    await TransferHistoryURLProtocol.stub.setProgressResponseData(
+      Data(
+        #"data: {"type":"progress","text":"处理中"}"#
+          .appending("\n\n").utf8
+      )
+    )
+
+    let history = try JSONDecoder().decode(
+      TransferHistory.self,
+      from: Data(#"{"id":10,"title":"History","type":"电影","status":true}"#.utf8)
+    )
+    let viewModel = TransferHistoryViewModel(apiService: service)
+    await viewModel.triggerAiRedo(
+      for: history,
+      sourceSession: viewModel.captureMutationSession()
+    )
+
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.errorMessage != "AI 整理连接中断，请重试。", Date() < deadline {
+      try await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isAiRedoing)
+    XCTAssertEqual(viewModel.errorMessage, "AI 整理连接中断，请重试。")
+  }
+
   func testAIRedoDoesNotPostWhenSessionChangesAfterValidation() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }

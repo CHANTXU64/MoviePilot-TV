@@ -3,6 +3,8 @@ import SwiftUI
 
 struct DownloadTaskView: View {
   @StateObject private var viewModel = DownloadTaskViewModel()
+  @ObservedObject private var apiService = APIService.shared
+  @EnvironmentObject private var notificationManager: NotificationManager
   @State private var isExpanded = true
 
   var body: some View {
@@ -39,10 +41,17 @@ struct DownloadTaskView: View {
 
       if isExpanded {
         if viewModel.downloads.isEmpty {
-          Text("暂无下载任务")
-            .foregroundColor(.secondary)
-            .padding()
-            .frame(maxWidth: .infinity, alignment: .center)
+          if viewModel.clientsLoadFailed {
+            Text("下载器加载失败，正在自动重试")
+              .foregroundColor(.secondary)
+              .padding()
+              .frame(maxWidth: .infinity, alignment: .center)
+          } else {
+            Text("暂无下载任务")
+              .foregroundColor(.secondary)
+              .padding()
+              .frame(maxWidth: .infinity, alignment: .center)
+          }
         } else {
           LazyVStack(spacing: 15) {
             ForEach(viewModel.downloads) { item in
@@ -62,6 +71,11 @@ struct DownloadTaskView: View {
         initialLoad: { await viewModel.initialLoad() },
         loadDownloads: { await viewModel.loadDownloads() }
       )
+    }
+    .onChange(of: viewModel.errorMessage) { _, message in
+      guard let message else { return }
+      notificationManager.show(message: message, type: .error)
+      viewModel.errorMessage = nil
     }
   }
 
@@ -93,6 +107,7 @@ private struct DownloadTaskRow: View {
   // 核心逻辑修正：完全对齐 Vue 的 `isDownloading` 布尔逻辑
   // 仅当 state 为 "downloading" 时为 true，用于控制“暂停/继续”按钮的状态。
   @State private var isDownloading: Bool
+  @State private var isToggling = false
 
   init(item: DownloadingInfo, clientName: String, viewModel: DownloadTaskViewModel) {
     self.item = item
@@ -104,21 +119,26 @@ private struct DownloadTaskRow: View {
   /// 核心交互：对齐 Vue 的 `toggleDownload`
   /// 切换下载状态（暂停/继续）。
   private func toggleDownload() {
+    guard !isToggling else { return }
     guard let hash = item.hash else { return }
 
+    isToggling = true
+    let shouldStop = isDownloading
+    let targetState = !shouldStop
     // 等待服务器真实响应后再翻转，类似 Vue
     Task {
       let operationSuccess: Bool
-      if isDownloading {  // 停止
+      if shouldStop {  // 停止
         operationSuccess = await viewModel.stopDownload(clientName: clientName, hash: hash)
       } else {  // 开始
         operationSuccess = await viewModel.startDownload(clientName: clientName, hash: hash)
       }
 
-      // API 调用成功，则翻转 UI 状态
+      // API 调用成功，则写入发起时冻结的目标状态，避免轮询更新后 toggle 反向。
       if operationSuccess {
-        isDownloading.toggle()
+        isDownloading = targetState
       }
+      isToggling = false
     }
   }
 
@@ -132,6 +152,7 @@ private struct DownloadTaskRow: View {
         id: "toggle",
         title: toggleActionTitle,
         icon: toggleActionIcon,
+        isEnabled: !isToggling,
         role: .normal,
         action: toggleDownload
       ),

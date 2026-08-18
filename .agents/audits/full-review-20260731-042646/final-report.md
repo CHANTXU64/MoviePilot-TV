@@ -389,7 +389,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-147 · P1 · 已确认 · 保存期间仍可取消或关闭并与远端 mutation 竞跑</summary>
+<summary>F-147 · P1 · 部分修复；接受残余风险 · 保存期间仍可取消或关闭并与远端 mutation 竞跑</summary>
 
 - 审查单元与位置：V018→W014/W018-A；Sheet mutation期间取消/关闭生命周期
 - 触发路径：单次PUT仍在途时点击取消；或PUT已成功但恢复/立即搜索仍在途时点击Close。
@@ -398,7 +398,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：V018/W014双审维持P1；W018-A双审确认同机制传播但本段按P2；复用单一mutation phase、保存中禁关闭；整理逐项复核owner
 - 跨端结论：全局条件性P1；W018本段P2，真实时延未验证
 - 最小修改方向 / 裁决：直接复用`isSaving`禁用取消与交互式关闭，仅在`isSaved && !isSaving`开放Close；不得把`isSaved`推迟到后处理结束，以免恢复“保存成功但搜索失败后误删”的旧问题。
-- 整改状态：Subscribe P1子项已由`a872737`修复；保存中禁用取消，系统返回当下同步冻结saving状态并跳过回滚，仅该返回路径最终保存成功时提示一次。聚焦27/27、排除真实后端兼容套件后的本地452/452测试和独立复审均通过；W018-A整理Sheet的P2传播仍开放。
+- 整改状态：Subscribe P1子项已由`a872737`修复；整理 Sheet 仅禁用显式取消按钮，系统关闭、任务 owner 与迟到 `onDone` 的 P2 风险仍存在。用户接受该残余风险，本轮不改代码。
 
 </details>
 
@@ -1067,7 +1067,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-080 · P2 · 已确认 · SSE 未收到合法终止仍按普通成功收尾</summary>
+<summary>F-080 · P2 · 已修复（2026-08-17） · SSE 未收到合法终止仍按普通成功收尾</summary>
 
 - 审查单元与位置：M001-K→V011-C；Search/Resource/AI SSE 消费者
 - 触发路径：HTTP 200 SSE 在 `done`、`error` 或 `enable == false` 前正常 EOF；或 ResourceResult 收到整体 error 且存在目标站点。
@@ -1076,6 +1076,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：review_m001_k_retry 闭合 EOF、业务 error、missingSites 重试与 AI 进行中状态链；verify_m001_k 确认 AI；review_a001_h 独立确认 Search append+EOF/业务 error 仍发布
 - 跨端结论：TV 生产与兼容测试终止语义冲突已确认；后端保证未验证
 - 最小修改方向 / 裁决：共享最小终止分类；搜索无终止走既有 fallback，业务 error 不进 missing-site 重试，AI 未终止不得按成功清状态。
+- 当前处置：Search/Resource 的业务 error 直接失败，clean EOF 丢弃部分结果并复用普通搜索 fallback；Transfer AI 无明确 terminal 时显示可重试错误。
 
 </details>
 
@@ -1107,7 +1108,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-084 · P2 · 已确认 · 海报降尺寸会改写任意 URL 文本</summary>
+<summary>F-084 · P2 · 已修复（2026-08-17 补齐详情路径） · 海报降尺寸会改写任意 URL 文本</summary>
 
 - 审查单元与位置：A001-A→G06；海报 URL 降尺寸
 - 触发路径：非 TMDB 海报 URL 的 host、path、query 或签名包含字符串 `original`。
@@ -1116,6 +1117,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：既有双审闭合两条生产路径；G06 两票核到当前上游允许第三方绝对海报URL且无TMDB路径段保证；只替换解析后精确 `/t/p/original/` 路径组件
 - 跨端结论：TV稳定改写机制已确认；真实非TMDB命中频率未验证
 - 最小修改方向 / 裁决：用单一共享 helper 基于 URL components 只改写精确 path 段 `/t/p/original/`，保留 host/query/fragment 原文。
+- 当前处置：按用户裁决保留降尺寸行为并以原图失败回退；普通卡、详情推荐/相似卡、海报背景与预载均已覆盖，主 URL 失败后只重试一次原图。
 
 </details>
 
@@ -1198,7 +1200,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-093 · P2 · 已确认 · 下载列表和动作错误全部静默</summary>
+<summary>F-093 · P2 · 部分修复 · 下载列表和动作错误全部静默</summary>
 
 - 审查单元与位置：A001-E→W017；下载列表及动作错误/四态呈现
 - 触发路径：下载器列表、任务轮询、暂停、恢复或删除任一路径失败。
@@ -1207,6 +1209,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：A001-E双审闭合出口；W017双审确认页面无error/stale/retry且全部主动动作可无声失败；最小loading/empty/error/stale/data与可聚焦重试；主动动作复用现有错误通知
 - 跨端结论：TV错误体验缺陷已确认；后端失败文案未验证
 - 最小修改方向 / 裁决：复用现有 NotificationManager 或单一 VM 错误状态只报告失败，成功保持静默；同时经 Logger 取代直接 `print`。
+- 当前处置：下载器失败可见并自动恢复，连续轮询与主动动作失败会通知；与当前 Web 的 Loading、成功空、热失败保留旧数据语义对齐，但 TV 任务列表首次失败仍可能短暂显示空态，未形成独立 stale/error 四态。
 
 </details>
 
@@ -1289,7 +1292,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-106 · P2 · 已确认 · 预计算图片 URL 固化旧配置</summary>
+<summary>F-106 · P2 · 已修复（2026-08-17 补齐重绘） · 预计算图片 URL 固化旧配置</summary>
 
 - 审查单元与位置：A001-K→I003/I016/G01；settings事务与预计算图片URL配置生命周期
 - 触发路径：冷启动内容请求早于 `fetchSettings()` 完成；回前台刷新改变 `GLOBAL_IMAGE_CACHE` 或 `TMDB_IMAGE_DOMAIN` 后，同一会话页面继续持有旧模型。
@@ -1298,6 +1301,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：I003双审确认P2；I016出现P1/P2分歧后，G01第三裁按无敏感设置消费边界最终维持P2；settings每阶段绑定epoch并传播取消；会话变化清旧共享配置，生产图片包装按访问消费获胜值
 - 跨端结论：TV配置/session生命周期缺口已确认；等级已裁定P2
 - 最小修改方向 / 裁决：复用现有季海报模式，让真实生产消费的包装在访问时从原始字段和当前配置计算；不新建图片 revision/重建框架，也不为无生产消费的 wrapper 扩机制。
+- 当前处置：前序已改为按访问计算；本轮以图片配置 identity 驱动主要图片页面、MediaGrid/DetailCard Equatable 与详情背景重算。
 
 </details>
 
@@ -1328,7 +1332,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-111 · P2 · 已确认 · token-only 会话把不同账号降成同一偏好身份</summary>
+<summary>F-111 · P2 · 已修复（`90b40b4`/`769c509`） · token-only 会话把不同账号降成同一偏好身份</summary>
 
 - 审查单元与位置：V002-A/B→W020-A/C→I016；token-only profile与连接身份
 - 触发路径：同一服务器先后使用两个合法 token-only 账号，二者都没有保存的登录用户名；或 token-only 账号与真实用户名 `default` 共存。
@@ -1337,6 +1341,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：既有双审确认机制；I016两代理以受支持token-only双账号隔离链确认升P2；profile与显示统一使用当前权威会话身份
 - 跨端结论：纯TV身份缺陷；真实token-only多账号频率未验证
 - 最小修改方向 / 裁决：profile 用户分量取当前权威会话身份；身份尚未恢复时延迟读取或使用已验证快照，不建立新 profile 仓库。
+- 当前处置：`profileKey` 使用 `baseURL|user_id`；token-only 会话正常路径通过 `/user/current` 恢复权威身份，恢复前或恢复失败时仅回退到经 `withRestoredAccessToken` 与当前 token 强校验匹配的持久快照 `user_id`，不匹配时拒绝回退。该快照只恢复四类 profile 偏好命名空间，不取代新版会话或权限权威；匹配回退与不匹配拒绝两条测试均已保留。
 
 </details>
 
@@ -2593,7 +2598,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-122 · P3 · 已确认 · nullable TMDB 识别结果折叠失败、取消与无匹配</summary>
+<summary>F-122 · P3 · 部分修复 · nullable TMDB 识别结果折叠失败、取消与无匹配</summary>
 
 - 审查单元与位置：V005；`APIService.recognizeTmdbId`、`MediaActionHandler` 及 Home 标题回退
 - 触发路径：两阶段识别发生请求/鉴权/解码失败或取消；或者确实没有匹配。Home 资源搜索还会把 nil 当成正常标题回退并继续导航。
@@ -2602,6 +2607,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：review_a001_j 闭合两阶段识别、通配 catch、全局弹窗与标题回退继续导航；review_a001_h 独立确认最终 error/cancel→nil→不存在弹窗，并收窄首段失败但 fallback 成功不算用户缺陷
 - 跨端结论：纯 TV 错误语义缺陷已确认；Home 真 no-match 提示产品意图未验证
 - 最小修改方向 / 裁决：复用 Swift `throws` 保留 error/cancel，让 nil 仅表示成功完成两阶段后的真正 no-match；若保留首段失败后继续 fallback，暂存首段错误，fallback 成功可返回 ID，fallback 也无结果时不得伪装 no-match。详情动作才按真 no-match 呈现不存在，Home 标题回退不强制发该弹窗。
+- 当前处置：双段失败/取消已通过 `throws` 分流；首段 `/media/search` 失败且 fallback `/media/recognize` 成功无匹配时仍返回 nil，尚会把不完整查询误报为确定 no-match，本轮仅记录不改代码。
 
 </details>
 
@@ -3154,7 +3160,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-133 · P3 · 未验证 · 插件筛选控件被静默删除或错误降级</summary>
+<summary>F-133 · P3 · 已修复（2026-08-17） · 插件筛选控件被静默删除或错误降级</summary>
 
 - 审查单元与位置：V009-A/F；插件 `filter_ui` parser 与 FilterPickersView
 - 触发路径：`/discover/source` 的插件 `filter_ui` 含 `VSwitch`、`VSelect(multiple: true)`、自定义 `item-title/item-value`、`show/v-show`、slot 或动态表达式。
@@ -3164,11 +3170,12 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 跨端结论：条件性插件筛选未验证；固定真实 fixture 到位时重开
 - 最小修改方向 / 裁决：不实现 Vuetify/FormRender 框架；先把未支持描述变成可见 unsupported 提示，只根据固定真实插件 fixture 增补确实需要的控件语义。
 - 必须补充的验证：当前安装插件的真实 `filter_ui` 载荷与使用频率。
+- 当前处置：已用官方 IMDb 插件 fixture 确认 VRange 合同；保留单选 UI，默认数组投影下限，选择后写回 `[selected, upperBound]`，不引入通用 FormRender。
 
 </details>
 
 <details>
-<summary>F-134 · P3 · 未验证 · 复合插件筛选值使用错误的查询形状</summary>
+<summary>F-134 · P3 · 已修复（2026-08-17） · 复合插件筛选值使用错误的查询形状</summary>
 
 - 审查单元与位置：V009-A/E/F；复合插件筛选值的 query serialization
 - 触发路径：插件筛选默认值或用户值为数组/嵌套对象，例如 `genre=["a","b"]`；即使 parser 没生成控件，复合默认值也能直接到达请求链。
@@ -3178,6 +3185,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 跨端结论：条件性插件查询未验证；固定复合 fixture 到位时重开
 - 最小修改方向 / 裁决：先取得固定插件 fixture；确需复合值时在现有边界加入小型、确定性的 Axios bracket flattener。若产品只支持标量，则显式拒绝复合值，不再静默 JSON 化；不引入通用参数框架。
 - 必须补充的验证：当前插件后端的实际参数契约与复合值频率。
+- 当前处置：IMDb 默认 `user_rating=[1,10]` 与后端 `user_rating[]` 合同已核实；VRange 写回二元数组后复用既有 bracket flattener，发送两个 `user_rating[]`。
 
 </details>
 

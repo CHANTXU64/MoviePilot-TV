@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SearchView: View {
   @StateObject private var viewModel = SearchViewModel()
+  @ObservedObject private var apiService = APIService.shared
   @State private var path = NavigationPath()
   @StateObject private var subscriptionHandler = SubscriptionHandler()
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
@@ -462,6 +463,7 @@ private struct ResultRow: View {
             MediaCard(
               title: item.cleanedTitle ?? "",
               posterUrl: item.imageURLs.poster,
+              posterFallbackUrl: item.imageURLs.posterFallback,
               typeText: item.displayTypeText,
               ratingText: item.vote_average.map { String(format: "%.1f", $0) },
               bottomLeftText: nil,
@@ -643,6 +645,7 @@ private struct BestResultRow: View {
                 title: media.cleanedTitle ?? "",
                 type: media.type,
                 posterUrl: media.imageURLs.poster,
+                posterFallbackUrl: media.imageURLs.posterFallback,
                 subtitle: subtitle,
                 action: {
                   if let share = media.subscribeShare {

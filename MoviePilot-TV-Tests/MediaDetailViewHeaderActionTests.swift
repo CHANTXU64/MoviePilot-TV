@@ -1,8 +1,203 @@
+import Combine
 import XCTest
 
 @testable import MoviePilot_TV
 
 final class MediaDetailViewHeaderActionTests: XCTestCase {
+  @MainActor
+  func testMediaDetailViewModelForwardsSiteFilterChangesToParent() {
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { snapshot.restore(to: sharedService) }
+
+    let detail = MediaInfo(
+      tmdb_id: 209_867,
+      anilist_id: 154_587,
+      source: "anilist",
+      title: "葬送的芙莉莲",
+      type: "电视剧"
+    )
+    let viewModel = MediaDetailViewModel(detail: detail)
+    let changeReceived = expectation(description: "父 VM 收到 siteFilter 变化")
+    let cancellable = viewModel.objectWillChange.sink { _ in
+      changeReceived.fulfill()
+    }
+    defer { cancellable.cancel() }
+
+    viewModel.siteFilter.selectedSites = [1]
+
+    wait(for: [changeReceived], timeout: 1)
+  }
+
+  @MainActor
+  func testViewModelInitSynchronouslyInstallsBackdropAsBackground() {
+    let detail = MediaInfo(
+      tmdb_id: 1,
+      source: "themoviedb",
+      title: "测试电影",
+      poster_path: "/poster.jpg",
+      backdrop_path: "/backdrop.jpg"
+    )
+
+    let viewModel = MediaDetailViewModel(detail: detail)
+
+    XCTAssertEqual(viewModel.backgroundUrl, URL(string: "/backdrop.jpg"))
+    XCTAssertFalse(viewModel.isUsingPosterAsBackdrop)
+  }
+
+  @MainActor
+  func testViewModelInitFallsBackToPosterWhenNoBackdrop() {
+    let detail = MediaInfo(
+      tmdb_id: 1,
+      source: "themoviedb",
+      title: "测试电影",
+      poster_path: "/poster.jpg",
+      backdrop_path: nil
+    )
+
+    let viewModel = MediaDetailViewModel(detail: detail)
+
+    XCTAssertEqual(viewModel.backgroundUrl, URL(string: "/poster.jpg"))
+    XCTAssertTrue(viewModel.isUsingPosterAsBackdrop)
+  }
+
+  @MainActor
+  func testViewModelInitLeavesBackgroundNilWhenNoImages() {
+    let detail = MediaInfo(
+      tmdb_id: 1,
+      source: "themoviedb",
+      title: "测试电影",
+      poster_path: nil,
+      backdrop_path: nil
+    )
+
+    let viewModel = MediaDetailViewModel(detail: detail)
+
+    XCTAssertNil(viewModel.backgroundUrl)
+    XCTAssertFalse(viewModel.isUsingPosterAsBackdrop)
+  }
+
+  @MainActor
+  func testApplyFullDetailWithSameDetailKeepsInstalledBackground() {
+    let detail = MediaInfo(
+      tmdb_id: 1,
+      source: "themoviedb",
+      title: "测试电影",
+      poster_path: "/poster.jpg",
+      backdrop_path: "/backdrop.jpg"
+    )
+    let viewModel = MediaDetailViewModel(detail: detail)
+
+    viewModel.applyFullDetail(detail)
+
+    XCTAssertEqual(viewModel.backgroundUrl, URL(string: "/backdrop.jpg"))
+    XCTAssertFalse(viewModel.isUsingPosterAsBackdrop)
+  }
+
+  @MainActor
+  func testViewModelInitUsesImageCacheProxyForHttpBackdrop() {
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { snapshot.restore(to: sharedService) }
+    sharedService.baseURLForTesting = "http://moviepilot.local"
+    sharedService.useImageCache = true
+
+    let detail = MediaInfo(
+      tmdb_id: 1,
+      source: "themoviedb",
+      title: "测试电影",
+      poster_path: nil,
+      backdrop_path: "https://example.com/backdrop.jpg"
+    )
+
+    let viewModel = MediaDetailViewModel(detail: detail)
+
+    XCTAssertEqual(
+      viewModel.backgroundUrl,
+      URL(string: "http://moviepilot.local/api/v1/system/cache/image?url=https%3A%2F%2Fexample.com%2Fbackdrop.jpg")
+    )
+    XCTAssertFalse(viewModel.isUsingPosterAsBackdrop)
+  }
+
+  @MainActor
+  func testViewModelInitFallsBackToHttpPosterViaImageCacheProxy() {
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { snapshot.restore(to: sharedService) }
+    sharedService.baseURLForTesting = "http://moviepilot.local"
+    sharedService.useImageCache = true
+
+    let detail = MediaInfo(
+      tmdb_id: 1,
+      source: "themoviedb",
+      title: "测试电影",
+      poster_path: "https://example.com/poster.jpg",
+      backdrop_path: nil
+    )
+
+    let viewModel = MediaDetailViewModel(detail: detail)
+
+    XCTAssertEqual(
+      viewModel.backgroundUrl,
+      URL(string: "http://moviepilot.local/api/v1/system/cache/image?url=https%3A%2F%2Fexample.com%2Fposter.jpg")
+    )
+    XCTAssertTrue(viewModel.isUsingPosterAsBackdrop)
+    XCTAssertEqual(
+      viewModel.backgroundFallbackUrl,
+      URL(string: "http://moviepilot.local/api/v1/system/cache/image?url=https%3A%2F%2Fexample.com%2Fposter.jpg")
+    )
+  }
+
+  @MainActor
+  func testPosterBackgroundFailureSwitchesToOriginalPosterOnce() throws {
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { snapshot.restore(to: sharedService) }
+    sharedService.baseURLForTesting = "http://moviepilot.local"
+    sharedService.useImageCache = true
+
+    let detail = MediaInfo(
+      title: "Poster fallback",
+      poster_path: "https://image.tmdb.org/t/p/original/poster.jpg",
+      backdrop_path: nil
+    )
+    let viewModel = MediaDetailViewModel(detail: detail)
+    let primary = try XCTUnwrap(viewModel.backgroundUrl)
+    let fallback = try XCTUnwrap(viewModel.backgroundFallbackUrl)
+    XCTAssertNotEqual(primary, fallback)
+
+    viewModel.useBackgroundFallback(afterFailing: primary)
+
+    XCTAssertEqual(viewModel.backgroundUrl, fallback)
+    XCTAssertNil(viewModel.backgroundFallbackUrl)
+  }
+
+  @MainActor
+  func testDetailCardEqualityIncludesImageConfiguration() {
+    let media = MediaInfo(title: "Card", poster_path: "/poster.jpg")
+    let initial = DetailCardView(
+      item: media,
+      showBadges: false,
+      imageConfigurationIdentity: "config-a",
+      onTap: {}
+    )
+    let unchanged = DetailCardView(
+      item: media,
+      showBadges: false,
+      imageConfigurationIdentity: "config-a",
+      onTap: {}
+    )
+    let changed = DetailCardView(
+      item: media,
+      showBadges: false,
+      imageConfigurationIdentity: "config-b",
+      onTap: {}
+    )
+
+    XCTAssertEqual(initial, unchanged)
+    XCTAssertNotEqual(initial, changed)
+  }
+
   @MainActor
   func testHeaderSubscribeKeepsAniListIdentityAndPrefersFullDetailTMDB() throws {
     let detail = MediaInfo(

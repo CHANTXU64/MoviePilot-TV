@@ -726,6 +726,7 @@ class TransferHistoryViewModel: ObservableObject {
         }
 
         var terminalError: String?
+        var receivedTerminalEvent = false
         let stream = apiService.progressStream(progressKey: result.progressKey)
         for try await event in stream {
           if Task.isCancelled { break }
@@ -733,17 +734,20 @@ class TransferHistoryViewModel: ObservableObject {
             self.aiRedoProgressText = text
           }
           if event.enable == false {
+            receivedTerminalEvent = true
             if event.data?.success == false {
               terminalError =
-                event.data?.error_i18n ?? event.data?.error ?? "AI 整理失败"
+                event.data?.localizedError ?? "AI 整理失败"
             }
             break
           }
           if event.type == "error" {
-            terminalError = event.message_i18n ?? event.message ?? "AI 整理失败"
+            receivedTerminalEvent = true
+            terminalError = event.localizedMessage ?? "AI 整理失败"
             break
           }
           if event.type == "done" {
+            receivedTerminalEvent = true
             break
           }
         }
@@ -757,9 +761,8 @@ class TransferHistoryViewModel: ObservableObject {
           }
           self.isAiRedoing = false
           await self.refresh()
-          if let terminalError {
-            self.errorMessage = terminalError
-          }
+          self.errorMessage = terminalError
+            ?? (receivedTerminalEvent ? nil : "AI 整理连接中断，请重试。")
         }
       } catch is CancellationError {
         for id in pendingIds {

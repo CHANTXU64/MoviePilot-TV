@@ -299,6 +299,13 @@ struct SystemView: View {
             if viewModel.isLoadingRules {
               row("规则状态", value: "正在加载")
                 .foregroundStyle(.secondary)
+            } else if viewModel.rulesLoadFailed {
+              Button {
+                Task { await viewModel.loadCustomFilterRules() }
+              } label: {
+                row("规则状态", value: "加载失败，点击重试")
+                  .foregroundStyle(.secondary)
+              }
             } else if viewModel.customFilterRules.isEmpty {
               row("规则状态", value: "暂无自定义过滤规则")
                 .foregroundStyle(.secondary)
@@ -510,6 +517,13 @@ struct SystemView: View {
       if viewModel.isLoadingSites {
         row("站点状态", value: "正在加载")
           .foregroundStyle(.secondary)
+      } else if let siteLoadError = viewModel.siteLoadError {
+        Button {
+          Task { await viewModel.loadSites() }
+        } label: {
+          row("站点状态", value: siteLoadError)
+            .foregroundStyle(.red)
+        }
       } else if viewModel.availableSites.isEmpty {
         row("站点状态", value: "暂无站点")
           .foregroundStyle(.secondary)
@@ -1046,10 +1060,10 @@ enum SystemFilterRulePreview {
   nonisolated private static func summaryParts(for rule: CustomRule) -> [String] {
     var parts: [String] = []
 
-    if let include = normalized(rule.include) {
+    if let include = normalized(rule.include?.joined(separator: " ")) {
       parts.append("包含: \(include)")
     }
-    if let exclude = normalized(rule.exclude) {
+    if let exclude = normalized(rule.exclude?.joined(separator: " ")) {
       parts.append("排除: \(exclude)")
     }
     if let sizeRange = normalized(rule.size_range) {

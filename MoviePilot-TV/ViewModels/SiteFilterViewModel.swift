@@ -6,6 +6,7 @@ import SwiftUI
 class SiteFilterViewModel: ObservableObject {
   @Published var selectedSites: Set<Int>
   @Published var availableSites: [Site] = []
+  private(set) var hasLoadedSites: Bool = false
 
   private let apiService: APIService
 
@@ -22,6 +23,7 @@ class SiteFilterViewModel: ObservableObject {
     do {
       let sites = try await apiService.fetchSites()
       self.availableSites = sites
+      hasLoadedSites = true
       normalizeSelectedSites()
     } catch is CancellationError {
       if !apiService.canAccess(.search) {
@@ -51,7 +53,7 @@ class SiteFilterViewModel: ObservableObject {
   }
 
   private func normalizeSelectedSites() {
-    guard !availableSites.isEmpty else { return }
+    guard hasLoadedSites else { return }
 
     let availableSiteIds = Set(availableSites.map(\.id))
     let normalizedSites = selectedSites.intersection(availableSiteIds)
@@ -63,5 +65,6 @@ class SiteFilterViewModel: ObservableObject {
   private func clearLoadedSites() {
     availableSites = []
     selectedSites = []
+    hasLoadedSites = false
   }
 }
