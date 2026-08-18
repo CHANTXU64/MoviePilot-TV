@@ -306,6 +306,8 @@ struct MediaDetailView: View {
       if canSearchResources {
         await viewModel.siteFilter.loadSites()
       }
+      // 重新激活时自动恢复成功空终态的推荐/相似/演员区域
+      await viewModel.refreshSuccessEmptySections()
     }
     .task(id: preloadTask.partialMedia.id) {
       await Self.runActiveSubscriptionRefreshLoop {
