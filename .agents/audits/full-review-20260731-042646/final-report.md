@@ -1606,7 +1606,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-157 · P2 · 已确认 · settings 失败被永久记作版本检查完成</summary>
+<summary>F-157 · P2 · 已修复（2026-08-19） · settings 失败被永久记作版本检查完成</summary>
 
 - 审查单元与位置：V023→W020-A/W020-C/G06；settings加载与后端版本检查终态
 - 触发路径：会话K冷启动`/system/global`瞬时失败或任务取消；网络恢复后应用进前台并成功加载settings。

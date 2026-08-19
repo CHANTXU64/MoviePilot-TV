@@ -301,6 +301,48 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     )
   }
 
+  func testTransientSettingsFailureWarningClearsAfterForegroundRefresh() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ContentViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ContentViewModelURLProtocol.self) }
+
+    await ContentViewModelURLProtocol.stub.reset()
+    await ContentViewModelURLProtocol.stub.setFailSettingsTransport(true)
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
+    let markerKey = APIService.sessionRefreshAppVersionKey
+    let originalMarker = UserDefaults.standard.string(forKey: markerKey)
+    var viewModel: ContentViewModel?
+    defer {
+      viewModel = nil
+      snapshot.restore(to: service)
+      restoreUserDefaultsString(originalMarker, forKey: markerKey)
+    }
+
+    clearCredential(account: "username")
+    clearCredential(account: "password")
+    UserDefaults.standard.set(AppVersionInfo.currentAppVersion(), forKey: markerKey)
+    service.baseURLForTesting = "https://compatible.content-view-model-tests.local"
+    service.tokenForTesting = "token-a"
+    service.currentUserForTesting = token("token-a", userName: "first-user")
+    service.settings = nil
+
+    viewModel = ContentViewModel(apiService: service)
+    await viewModel?.prepareStartupIfNeeded()
+
+    // 首次 settings 失败：显示 unknown 警告，但不占用已检查终态。
+    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, nil)
+    XCTAssertEqual(viewModel?.backendVersionWarning?.title, "无法确认 MoviePilot 后端版本")
+
+    // 网络恢复后前台刷新成功：复用版本判定并清除旧警告。
+    await ContentViewModelURLProtocol.stub.setFailSettingsTransport(false)
+    NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+    try await waitUntil("expected warning to clear after foreground refresh") {
+      service.settings?.BACKEND_VERSION == "v2.15.6"
+        && viewModel?.backendVersionWarning == nil
+    }
+    XCTAssertNil(viewModel?.backendVersionWarning)
+  }
+
   func testMalformedBackendVersionBuildsUnconfirmedWarning() {
     let warning = ContentViewModel.backendVersionWarning(for: "v2.beta.14")
 
@@ -434,6 +476,7 @@ private actor ContentViewModelURLProtocolStub {
   private var requests: [URLRequest] = []
   private var currentUserStatusCode = 200
   private var rejectedSettingsToken: String?
+  private var failSettingsTransport = false
   private var holdLoginResponses = false
   private var loginWaiters: [CheckedContinuation<Void, Never>] = []
 
@@ -441,6 +484,7 @@ private actor ContentViewModelURLProtocolStub {
     requests.removeAll()
     currentUserStatusCode = 200
     rejectedSettingsToken = nil
+    failSettingsTransport = false
     holdLoginResponses = false
     loginWaiters.forEach { $0.resume() }
     loginWaiters.removeAll()
@@ -452,6 +496,10 @@ private actor ContentViewModelURLProtocolStub {
 
   func rejectSettingsToken(_ token: String?) {
     rejectedSettingsToken = token
+  }
+
+  func setFailSettingsTransport(_ fail: Bool) {
+    failSettingsTransport = fail
   }
 
   func setHoldLoginResponses(_ enabled: Bool) {
@@ -490,6 +538,9 @@ private actor ContentViewModelURLProtocolStub {
       await withCheckedContinuation { continuation in
         loginWaiters.append(continuation)
       }
+    }
+    if url.path == "/api/v1/system/global", failSettingsTransport {
+      throw URLError(.notConnectedToInternet)
     }
 
     let backendVersion: String
