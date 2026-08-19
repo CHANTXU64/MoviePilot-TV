@@ -299,6 +299,15 @@ class TransferHistoryViewModel: ObservableObject {
     selectedIds.removeAll()
   }
 
+  /// 只移除指定记录的选择，保留其他已选项（整理等动作收尾时不清用户新选）。
+  func deselect(ids: [Int]) {
+    guard !isMutatingHistory else { return }
+    selectedIds.subtract(Set(ids))
+    if selectedIds.isEmpty {
+      isSelectionMode = false
+    }
+  }
+
   /// 在展示确认时冻结完整记录，确保确认数量和最终删除始终消费同一批次。
   func selectedItemsSnapshot() -> [TransferHistory] {
     items.filter { selectedIds.contains($0.id) }

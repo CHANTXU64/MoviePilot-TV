@@ -455,7 +455,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-156 · P1 · 已确认 · TransferHistory 旧动作只持有可复用 ID 并清新选择</summary>
+<summary>F-156 · P1 · 已修复（2026-08-18） · TransferHistory 旧动作只持有可复用 ID 并清新选择</summary>
 
 - 审查单元与位置：V022-D→W018-A/G09；TransferHistory旧动作与选择状态owner
 - 触发路径：同session/query选A启动批量AI；服务端全量受理A且SSE仍在运行时，用户在主行点选B；A随后终止。

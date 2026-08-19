@@ -169,7 +169,7 @@
 | F-153 | 已驳回 | P3 | V022-B→G09 | TransferHistory删除与Paginator游标协调 | 稳定排序前提下删除回退是保守且可补偿的，未形成独立漏页缺陷 | 早期双审反例被G09两名代理按`ceil(deleted/pageSize)`与最多两页重复扫描重新推演反驳 | 不改算法；补删除+插入+loadMore集成测试，排序不稳定归F-232，ID复用归F-204 | 当前独立缺陷驳回；真实集成行为仍作P3测试缺口 |
 | F-154 | 已驳回 | P3 | V022-C→I009/G09 | TransferHistory轮询插入余数与loadMore游标 | 稳定排序前提下整页推进、余数重叠去重的算术自洽，未形成独立跳页缺陷 | 早期双审反例被G09两名代理重新推演反驳；1/19/20/21项矩阵仍缺测试 | 不改算法；仅补插入组合测试，不稳定排序统一归F-232 | 当前独立缺陷驳回；高频真实交错保留P3测试边界 |
 | F-155 | 已修复（2026-08-18） | P2 | V022-C→I009 | TransferHistory轮询多页扫描上限 | 第6页已请求成功却在处理前退出，101st新项被永久越过 | 既有双审闭合页6丢弃；I009主审/独立复核确认前100项提交后下一轮无法恢复 | 扫描未找到已知边界时不提交前缀/推进游标，回退现有refresh | 已修：扫满上限未遇边界时回退权威刷新；回归 22/22 通过 |
-| F-156 | 已确认 | P1 | V022-D→W018-A/G09 | TransferHistory旧动作与选择状态owner | 选择、删除、AI、整理只持有可复用Int ID；旧UI/alert可对同ID新记录执行破坏性动作 | 既有双审闭合迟到收尾清新选择；G09两名代理结合F-204确认后端按ID重查当前行的错对象mutation链 | 与F-152/F-204共用session/query和对象签名快照；不建任务框架 | 条件性错误删除/重整已确认；真实ID复用频率未验证 |
+| F-156 | 已修复（2026-08-18） | P1 | V022-D→W018-A/G09 | TransferHistory旧动作与选择状态owner | 选择、删除、AI、整理只持有可复用Int ID；旧UI/alert可对同ID新记录执行破坏性动作 | 既有双审闭合迟到收尾清新选择；G09两名代理结合F-204确认后端按ID重查当前行的错对象mutation链 | 与F-152/F-204共用session/query和对象签名快照；不建任务框架 | 已修：核心交互/选择入口由`fc0cefa`冻结，整理Sheet迟到收尾改按intent id移除本次；回归 23/23 通过 |
 | F-157 | 已确认 | P2 | V023→W020-A/W020-C/G06 | settings加载与后端版本检查终态 | 失败/取消被永久记成检查完成；同owner恢复成功仍不清旧兼容警告 | 既有多审闭合不可恢复状态机；G06 两票确认首次瞬时失败后前台固定不重判且无显式retry | 只有有效版本/明确不兼容才写terminal key；unknown/failure保持可重试 | 稳定错误终态已确认；真实启动瞬时失败频率未验证 |
 | F-158 | 已确认 | P2 | C001→W009/W011/W018-B/W019→G05 | 无操作焦点目标 | EmptyDataView无action、人物/整理空Button、资源重定向器及历史/下载空动作Button生成无操作焦点节点 | 既有多审确认；G05两名代理将P2锚定在DownloadTask主行稳定可按但无动作，其他透明sink的实际落焦仍属运行边界 | 有主动作放入原生Button action；无主动作删除空Button/focus sink | Download主行静态P2；其他Focus Engine/VoiceOver命中频率未验证 |
 | F-159 | 已确认 | P3 | C002 | 全局短暂错误通知的可访问性传达 | 五秒toast无主动announcement，唯一错误反馈可被VoiceOver用户错过 | review_a001_h主审与review_a001_j独立复核确认5文件6个生产show、根唯一presenter、全仓无announcement且tvOS17原生API可用 | G08及调用页回溯逐次type+message播报、同文案重发与单一元素语义 | 实际VoiceOver/盲文漏传频率未验证 |
@@ -2729,7 +2729,7 @@
 
 ### F-156：TransferHistory 旧动作只持有可复用 ID 并清新选择
 
-- 状态：已确认
+- 状态：已修复（2026-08-18）
 - 严重度：条件性 P1
 - 位置：TransferHistoryView AI运行期ActionRow/overlay、ViewModel `toggleSelection`、accepted处理与终止后`refresh/resetDynamicState`
 - 触发路径：同session/query选A启动批量AI；服务端全量受理A且SSE仍在运行时，用户在主行点选B；A随后终止。
@@ -2743,6 +2743,8 @@
 - I009集成传播：AI accepted时提前移除启动快照、终态refresh又清当前选择；此处只补运行期间新选择owner的P3子案，accepted≠completed的安全重试集合交F-098、缺终态EOF交F-080；根finding最终等级以后续G09为准。
 - G09交叉升级：两名代理从选择、删除、AI、Reorganize四条动作链确认owner只保留`Int id`或实时selectedIds；结合F-204同ID复用，旧A的可见行/alert可让后端按ID重查并删除或整理新B。错对象mutation升条件P1；F-152负责确认快照，F-204负责身份复用，本项保留动作owner验收。
 - 未验证：用户在AI进度期改选的真实频率。
+
+- 修复（2026-08-18）：核心交互与VM选择入口已由 `fc0cefa` 以 `isMutatingHistory` guard 冻结；本次补齐整理Sheet迟到成功回调子案：`deselectAll()` 改为按本次intent id `deselect(ids:)`，只移除动作启动快照对应记录，不再清掉整理期间新选。新增 `testDeselectIdsOnlyRemovesTargetSelection` 回归，TransferHistoryViewModelTests 23/23 通过。
 
 ### F-157：settings 失败被永久记作版本检查完成
 

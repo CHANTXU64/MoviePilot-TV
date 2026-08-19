@@ -942,6 +942,7 @@ final class TransferHistoryViewModelTests: XCTestCase {
       XCTAssertEqual(blockedDeleteCount, 1)
     }
 
+
     // 对应父 View 因 Back/Menu 销毁：外部 owner 已释放，只有运行中的批删 Task 保活 ViewModel。
     XCTAssertNotNil(retainedViewModel)
 
@@ -957,6 +958,27 @@ final class TransferHistoryViewModelTests: XCTestCase {
     let finishedDeleteRequestCount = await TransferHistoryURLProtocol.stub.deleteRequestCount()
     XCTAssertEqual(finishedDeleteRequestCount, 2)
     XCTAssertNil(retainedViewModel)
+  }
+
+
+  func testDeselectIdsOnlyRemovesTargetSelection() async throws {
+    let service = APIService.testingInstance()
+    let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    let viewModel = TransferHistoryViewModel(apiService: service)
+    viewModel.selectedIds = [10, 11, 12]
+    viewModel.isSelectionMode = true
+
+    // 整理 A(10) 完成收尾：只移除 10，保留整理期间新选的 11/12
+    viewModel.deselect(ids: [10])
+    XCTAssertEqual(viewModel.selectedIds, [11, 12])
+    XCTAssertTrue(viewModel.isSelectionMode)
+
+    // 全部移除后退出选择模式
+    viewModel.deselect(ids: [11, 12])
+    XCTAssertTrue(viewModel.selectedIds.isEmpty)
+    XCTAssertFalse(viewModel.isSelectionMode)
   }
 
   func testAIRedoUsesWebSingleAndBatchRoutesAndShowsFailures() async throws {
