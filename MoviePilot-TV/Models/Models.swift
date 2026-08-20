@@ -12,6 +12,8 @@ extension Notification.Name {
   static let sessionDidLogout = Notification.Name("sessionDidLogout")
   /// 分页连续失败达到上限，交由全局通知提示用户自行重试
   static let paginatorDidReachErrorLimit = Notification.Name("paginatorDidReachErrorLimit")
+  /// 媒体详情连续失败达到上限，交由全局通知提示用户
+  static let mediaDetailLoadDidFail = Notification.Name("mediaDetailLoadDidFail")
 }
 
 nonisolated struct MediaIdentity: Hashable {

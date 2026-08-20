@@ -193,7 +193,7 @@
 | F-177 | 未验证 | P3 | C010 | PersonCard图片处理 | 冷缓存人物图先构造原图再用ResizingImageProcessor重绘 | 双审确认Kingfisher 8.10.0数据/processor链与演员/搜索分页；cache命中/后台queue/近目标原图为反证 | resizing换downsampling后需真机Instruments/像质验收 | 条件性性能影响未验证 |
 | F-178 | 已确认 | P3 | C012→W006-C | 搜索评分名与展示名投影 | 备用名称可获最高匹配分，但最佳卡与普通媒体/人物行只显示主名称而出现空标题或“未知” | C012双审闭合媒体original_title与人物latin_name反例；W006-C双审确认普通行同根传播 | 评分与展示共用现有有序非空名称候选；不建新匹配或卡片框架 | 条件性P3；真实备用名payload频率未验证 |
 | F-179 | 已修复（2026-08-20） | P2 | C017→G05 | 资源卡/筛选展示字符串规范化 | 空串或纯空白值可遮蔽有效fallback、生成悬空分隔符或不可辨识标签 | 既有双审闭合字段矩阵；G05主审与独立复核均确认卡片与筛选的稳定分裂并支持P2 | 复用现有trim→空为nil投影后再fallback/渲染/筛选；不建资源展示模型 | 已修：卡片标题/描述/季集/标签与筛选三链统一trim→空为缺值；新增规范化测试10/10、排序回归4/4通过 |
-| F-180 | 已确认 | P2 | W007→I013 | 详情失败终态呈现 | 三次主详情失败被当成ready，静默揭开未完整初始化的partial页面且无当前页错误/重试 | 既有三方闭合机制；review_a001_j第三裁确认主详情静默失败独立P2并保留Back重进反证 | partial旁显示明确失败与原生Retry，复用failed-task重建 | 条件性P2；真实失败频率、partial丰富度及focus表现未验证 |
+| F-180 | 已修复（2026-08-20） | P2 | W007→I013 | 详情失败终态呈现 | 三次主详情失败被当成ready，静默揭开未完整初始化的partial页面且无当前页错误/重试 | 既有三方闭合机制；review_a001_j第三裁确认主详情静默失败独立P2并保留Back重进反证 | partial旁显示明确失败与原生Retry，复用failed-task重建 | 未做页内失败/Retry；失败终态改Logger记录并触发全局横幅“详情加载失败，请重试。”，静默呈现保留 |
 | F-181 | 未验证 | P2 | W008-A→I013 | Hero到内容页焦点切换 | 只监听Hero并即时采样Content，若Hero先false、Content后true会漏置showContentPage | 三代理确认静态交错；review_a001_j最终裁定事件顺序未证，若运行复现影响为P2 | 先记录Simulator/真机事件序；确认后分别监听两个现有FocusState | 未验证条件性P2；真实事件顺序和可见影响未验证 |
 | F-182 | 已确认 | P2 | W008-B→I008 | 详情前台及60秒订阅刷新 | scene/周期仍以本地active状态决定是否强刷，旧false/空分季可无限不发现远端新增且首次点击静默终止 | 既有双审闭合false→true链；I008整文件主审确认无时间上界的核心CTA错误 | review_a001_h独立确认P2；活跃可订阅详情复用现有强刷，不新增轮询框架 | TV静态用户链已确认；真实跨设备频率与后台时序未验证 |
 | F-183 | 未验证 | P3 | W008-C | TMDB按钮动作重入 | 每次激活创建独立Task，双激活可重复append同一目标并让共享busy提前清除 | review_a001_j提出静态链；verify_a001_h不读审计文档第三裁决机制成立但tvOS第二次Select可达性无证据 | 先做双Select序号日志；确认后在Task前同步设置本地in-flight标志 | 条件性P3；真实输入窗口与导航表现未验证 |
@@ -3134,7 +3134,7 @@
 
 ### F-180：详情加载失败被静默伪装成可用 partial 页面
 
-- 状态：已确认
+- 状态：已修复（2026-08-20）
 - 严重度：条件性 P2（由 P3 升级）
 - 位置：`MediaDetailContainerView`的`isReady`/失败呈现、`MediaPreloadTask.loadDetail()`失败终态与`MediaDetailView.applyReadyPreloadedDetail`
 - 触发路径：详情请求连续三次异常或连续返回无有效详情；`fullDetail`保持nil而`isDetailFailed=true`。
@@ -3148,6 +3148,8 @@
 - I013最终第三裁：review_a001_j确认主详情核心数据失败被静默呈现为完成态、当前页无错误或Retry，独立升P2；Back重进与partial可用仅阻止升P1。F-033辅助Paginator错误、F-116成功cache hit均保持独立。
 - 测试缺口：现有测试未覆盖`isDetailFailed→partial页面`、错误呈现、页内retry、failed task重建或失败后的Focus/VoiceOver。
 - 未验证：真实后端连续失败/无效详情频率、partial信息丰富度、用户实际恢复行为及tvOS焦点表现。
+
+- 修复（2026-08-20）：按用户判断，加 Logger + 全局失败横幅即视为修复完成；未做页内失败提示/Retry，保留 partial 静默呈现与退出重进恢复；`MediaPreloadTask.loadDetail()` 失败路径的 print 替换为 `Logger.warning/error`（空数据重试、请求异常、最终失败均带标题/媒体ID 元数据），最终失败置 `isDetailFailed` 时 post `.mediaDetailLoadDidFail`，由全局 `NotificationManager` 弹横幅“详情加载失败，请重试。”。
 
 ### F-181：Hero 到内容页切换依赖两个 FocusState 的回调顺序
 

@@ -101,23 +101,38 @@ class MediaPreloadTask: ObservableObject {
           self.isDetailReady = true
           return
         } else {
-          print("[MediaPreloadTask] 第 \(attempt + 1) 次请求 API 返回空数据...")
+          Logger.warning(
+            "第 \(attempt + 1) 次请求详情返回空数据，等待重试",
+            metadata: ["title": partialMedia.title ?? "", "mediaId": partialMedia.id]
+          )
           if attempt < maxRetries {
             try await Task.sleep(nanoseconds: 1_500_000_000)  // 等待 1.5 秒后重试
           }
         }
       } catch {
-        print("[MediaPreloadTask] 加载详情失败(attempt \(attempt + 1)): \(error)")
+        Logger.error(
+          "加载详情失败(attempt \(attempt + 1)): \(error)",
+          metadata: ["title": partialMedia.title ?? "", "mediaId": partialMedia.id]
+        )
         if attempt < maxRetries {
           try? await Task.sleep(nanoseconds: 1_500_000_000)
         } else {
-          self.isDetailFailed = true
+          markDetailFailed()
           return
         }
       }
     }
-    print("[MediaPreloadTask] API 重试后仍返回空数据，视为失败")
-    self.isDetailFailed = true
+    Logger.error(
+      "API 重试后仍返回空数据，视为失败",
+      metadata: ["title": partialMedia.title ?? "", "mediaId": partialMedia.id]
+    )
+    markDetailFailed()
+  }
+
+  /// 详情连续失败终态：置失败标志并交由全局通知提示用户。
+  private func markDetailFailed() {
+    isDetailFailed = true
+    NotificationCenter.default.post(name: .mediaDetailLoadDidFail, object: nil)
   }
 
   // MARK: - ② 预取背景图（Kingfisher）

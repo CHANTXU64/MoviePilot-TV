@@ -1775,7 +1775,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-180 · P2 · 已确认 · 详情加载失败被静默伪装成可用 partial 页面</summary>
+<summary>F-180 · P2 · 已修复（2026-08-20） · 详情加载失败被静默伪装成可用 partial 页面</summary>
 
 - 审查单元与位置：W007→I013；详情失败终态呈现
 - 触发路径：详情请求连续三次异常或连续返回无有效详情；`fullDetail`保持nil而`isDetailFailed=true`。

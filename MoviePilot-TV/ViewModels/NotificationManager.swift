@@ -72,6 +72,13 @@ class NotificationManager: ObservableObject {
         self?.show(message: "加载数据失败，请重试。", type: .error)
       }
       .store(in: &cancellables)
+
+    NotificationCenter.default.publisher(for: .mediaDetailLoadDidFail)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in
+        self?.show(message: "详情加载失败，请重试。", type: .error)
+      }
+      .store(in: &cancellables)
   }
 
   func show(message: String, type: NotificationType = .info, duration: TimeInterval = 5) {
