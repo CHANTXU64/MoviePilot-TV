@@ -184,12 +184,12 @@
 | F-168 | 用户跳过（2026-08-20） | P2 | C006→W020-E/F→G05 | 自建选择页上下文、选中语义与初始焦点 | SheetPicker丢title且无selected语义；System来源/过滤页固定首焦清空项而非当前选择 | 既有多审确认；G05主审与独立复核均确认title被丢弃、选中项无结构化语义并支持P2 | 显示既有title、给当前项isSelected并复用最小默认焦点 | 静态上下文/选中语义P2；真实初焦、VoiceOver播报与动态删除回退未验证 |
 | F-169 | 已确认 | P3 | C007 | ShelfPicker持久选择的可访问性语义 | 当前货架只做视觉overlay，Button没有isSelected trait/value | review_a001_j主审与verify_a001_h独立复核确认唯一Recommend调用、focus/selection分离及默认Button仅有名称/动作语义 | W005/G02/G04回溯一行条件isSelected trait与VoiceOver验收 | 真实困惑频率/播报措辞未验证 |
 | F-170 | 已修复（2026-08-20） | P2 | C008→W014/W020-D/E | 选项域外已选值 | 已选但不在options的站点/规则组不可见、不可移除；System还会自动归一化并删除合法或暂缺选择 | C008/W014双审闭合主链；W020-D/E补站点/规则传播 | 显示可移除不可用项；仅正确权威域成功后归一化且未经确认不删除 | 已修：MultiSelectionSheet 显示“清除不可用选择（N）”区，只做集合减法；回归 4/4 通过 |
-| F-171 | 已确认 | P2 | C009-A→I010→G03 | MediaCard徽章元数据可访问性 | 类型/评分、订阅/入库状态及来源均在Canvas symbols中且无替代语义，持久状态对辅助功能用户不可达 | 既有双审与I010确认机制；G03两名纠偏复核再次独立闭合全部生产卡片owner并升级P2 | 先按F-175建立原生整卡owner，再拼实际可见徽章accessibilityValue | 静态缺失已确认；VoiceOver焦点顺序/播报措辞未运行验证 |
+| F-171 | 用户跳过（2026-08-20） | P2 | C009-A→I010→G03 | MediaCard徽章元数据可访问性 | 类型/评分、订阅/入库状态及来源均在Canvas symbols中且无替代语义，持久状态对辅助功能用户不可达 | 既有双审与I010确认机制；G03两名纠偏复核再次独立闭合全部生产卡片owner并升级P2 | 先按F-175建立原生整卡owner，再拼实际可见徽章accessibilityValue | 静态缺失已确认；VoiceOver焦点顺序/播报措辞未运行验证 |
 | F-172 | 已确认 | P3 | C009-B→W006-D | 卡片缺图占位类型 | nil/空/未知typeText统一回退电影glyph；最佳合集卡还可显示原始类型文本 | 双审确认MediaCard生产链；W006-D双审补collection_id有效但nil/英文/系列类型仍导航合集却显示电影glyph | 各卡片/调用页/G03回溯中性glyph与统一displayTypeText测试 | 缺图/加载中触发频率未验证 |
 | F-173 | 未验证 | P3 | C009-B | MediaCard图片处理链 | downsampling后再append硬编码resizing，冷处理路径多一次栅格化 | 双审确认锁定Kingfisher 8.10.0 processor追加/缓存key；processed-cache命中绕过处理、默认2:3同尺寸为反证 | 删除resizing后需真机Instruments与像素/缓存冷启动验收 | 条件性性能影响未验证 |
-| F-174 | 已确认 | P2 | C009-C→W006-C→I010→G03 | MediaCard详情转场源owner | 任意MediaCard主动作都会写无目标/动作owner的全局sourceFrame；分享/编辑等非详情动作遗留值可被后续无源详情消费 | G03两名纠偏复核独立闭合Search分享Sheet→后续详情生产链并升级P2；loadingPosterURL/session仍留F-123 | 只在实际详情push写目标绑定的一次性frame payload；不合并F-123/F-118 | 纯TV错误转场已确认；真实动作顺序与视觉持续时间未运行验证 |
-| F-175 | 已确认 | P2 | C010→I011/I010 | 自定义卡片主操作可访问性 | PersonCard、TorrentCard及MediaCard以raw focusable/onTap承载主动作，没有原生Button/disabled控制语义 | 既有Person/Torrent三方裁P2；I010两代理确认MediaCard同根传播 | 三类卡复用原生Button与现有route/download gate，不建卡片框架 | 静态控制语义缺口已确认；VoiceOver/遥控实际表现待运行 |
-| F-176 | 已确认 | P2 | C010→G04 | 详情横向行焦点分页 | 三个FocusState变nil都会绕过threshold调用强制loadMore，重复离行可逐页消耗到真实终页 | 既有双审闭合三处调用；全新G04 clean-room复核确认静态请求链并升级P2 | 三处调用前`guard let newId`；不改Paginator公共nil语义 | 静态功能缺口P2；tvOS nil频率、视觉与焦点后果未运行验证 |
+| F-174 | 用户跳过（2026-08-20） | P2 | C009-C→W006-C→I010→G03 | MediaCard详情转场源owner | 任意MediaCard主动作都会写无目标/动作owner的全局sourceFrame；分享/编辑等非详情动作遗留值可被后续无源详情消费 | G03两名纠偏复核独立闭合Search分享Sheet→后续详情生产链并升级P2；loadingPosterURL/session仍留F-123 | 只在实际详情push写目标绑定的一次性frame payload；不合并F-123/F-118 | 纯TV错误转场已确认；真实动作顺序与视觉持续时间未运行验证 |
+| F-175 | 用户跳过（2026-08-20） | P2 | C010→I011/I010 | 自定义卡片主操作可访问性 | PersonCard、TorrentCard及MediaCard以raw focusable/onTap承载主动作，没有原生Button/disabled控制语义 | 既有Person/Torrent三方裁P2；I010两代理确认MediaCard同根传播 | 三类卡复用原生Button与现有route/download gate，不建卡片框架 | 静态控制语义缺口已确认；VoiceOver/遥控实际表现待运行 |
+| F-176 | 已修复（2026-08-20） | P2 | C010→G04 | 详情横向行焦点分页 | 三个FocusState变nil都会绕过threshold调用强制loadMore，重复离行可逐页消耗到真实终页 | 既有双审闭合三处调用；全新G04 clean-room复核确认静态请求链并升级P2 | 三处调用前`guard let newId`；不改Paginator公共nil语义 | 已修：演员/推荐/相似三处 onChange 失焦 nil 直接 return；Paginator/TransferHistory 回归 47/47 通过 |
 | F-177 | 未验证 | P3 | C010 | PersonCard图片处理 | 冷缓存人物图先构造原图再用ResizingImageProcessor重绘 | 双审确认Kingfisher 8.10.0数据/processor链与演员/搜索分页；cache命中/后台queue/近目标原图为反证 | resizing换downsampling后需真机Instruments/像质验收 | 条件性性能影响未验证 |
 | F-178 | 已确认 | P3 | C012→W006-C | 搜索评分名与展示名投影 | 备用名称可获最高匹配分，但最佳卡与普通媒体/人物行只显示主名称而出现空标题或“未知” | C012双审闭合媒体original_title与人物latin_name反例；W006-C双审确认普通行同根传播 | 评分与展示共用现有有序非空名称候选；不建新匹配或卡片框架 | 条件性P3；真实备用名payload频率未验证 |
 | F-179 | 已确认 | P2 | C017→G05 | 资源卡/筛选展示字符串规范化 | 空串或纯空白值可遮蔽有效fallback、生成悬空分隔符或不可辨识标签 | 既有双审闭合字段矩阵；G05主审与独立复核均确认卡片与筛选的稳定分裂并支持P2 | 复用现有trim→空为nil投影后再fallback/渲染/筛选；不建资源展示模型 | 条件性P2；真实上游空白字段频率未验证 |
@@ -2984,7 +2984,7 @@
 
 ### F-171：Canvas 徽章元数据没有可访问性替代
 
-- 状态：已确认
+- 状态：用户跳过（2026-08-20，可访问性类暂缓）
 - 严重度：P2
 - 位置：MediaCard BadgeOverlay的类型、评分、订阅/入库状态与来源symbols
 - 触发路径：任一卡片显示上述徽章，VoiceOver用户浏览整卡。
@@ -3030,7 +3030,7 @@
 
 ### F-174：无 owner 的全局 sourceFrame 被另一详情消费
 
-- 状态：已确认
+- 状态：用户跳过（2026-08-20，主仓库 ai/fix-rapid-navigation-image-cleanup 分支已删除该机制）
 - 严重度：P2
 - 位置：MediaCard主点击写frame、MediaCardTransition静态槽与MediaDetailContainer Loading读取/清除
 - 触发路径：Home订阅卡A主点击先写frame但只开编辑Sheet；关闭后长按卡B选详情，B入口不写/清frame且未预加载。
@@ -3048,7 +3048,7 @@
 
 ### F-175：人物卡主操作没有建立整卡控制语义
 
-- 状态：已确认
+- 状态：用户跳过（2026-08-20，可访问性类暂缓）
 - 严重度：条件性 P2；由条件性 P3 升级
 - 位置：PersonCard、TorrentCard与MediaCard的海报focusable/onTap及其主动作生产调用
 - 触发路径：VoiceOver用户浏览/激活人物卡；普通遥控器Select可工作。
@@ -3066,7 +3066,7 @@
 
 ### F-176：详情横向行失焦会无条件请求下一页
 
-- 状态：已确认
+- 状态：已修复（2026-08-20）
 - 严重度：P2
 - 位置：MediaDetailView演员/推荐/相似三处focused item onChange与Paginator.loadMore
 - 触发路径：焦点从任一行移走或激活卡片push详情，optional FocusState从ID变nil且Paginator仍hasMore。
@@ -3078,6 +3078,8 @@
 - 独立复核：verify_a001_h 确认无需push：焦点从演员移到推荐即令actor ID变nil并尝试下一页；hasMore=false、isLoading=true与状态已nil不再变化限制请求量，但不消除错误触发。
 - G04 clean-room 末裁：三个FocusState的nil都走同一强制加载分支；每次独立离行在上次完成且`hasMore=true`时会继续消耗下一页，升级P2。实际tvOS产生nil的次数和视觉后果仍必须运行验收。
 - 未验证：真实用户离行/进详情频率与额外页请求量。
+
+- 修复（2026-08-20）：MediaDetailView 演员/推荐/相似三处 `onChange` 在分页 Task 前加 `guard let newId else { return }`，失焦 nil 不再调用 `loadMore`；Paginator 的 `loadMore(nil)` 公共手动加载语义保持不变（TransferHistory 仍依赖）。PaginatorTests + TransferHistoryViewModelTests 47/47 通过，tvOS Simulator Debug 构建通过。
 
 ### F-177：人物卡冷处理先完整解码再缩放
 

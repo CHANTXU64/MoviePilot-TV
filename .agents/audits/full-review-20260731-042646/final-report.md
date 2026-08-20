@@ -1710,7 +1710,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-171 · P2 · 已确认 · Canvas 徽章元数据没有可访问性替代</summary>
+<summary>F-171 · P2 · 用户跳过（2026-08-20） · Canvas 徽章元数据没有可访问性替代</summary>
 
 - 审查单元与位置：C009-A→I010→G03；MediaCard徽章元数据可访问性
 - 触发路径：任一卡片显示上述徽章，VoiceOver用户浏览整卡。
@@ -1723,7 +1723,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-174 · P2 · 已确认 · 无 owner 的全局 sourceFrame 被另一详情消费</summary>
+<summary>F-174 · P2 · 用户跳过（2026-08-20） · 无 owner 的全局 sourceFrame 被另一详情消费</summary>
 
 - 审查单元与位置：C009-C→W006-C→I010→G03；MediaCard详情转场源owner
 - 触发路径：Home订阅卡A主点击先写frame但只开编辑Sheet；关闭后长按卡B选详情，B入口不写/清frame且未预加载。
@@ -1736,7 +1736,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-175 · P2 · 已确认 · 人物卡主操作没有建立整卡控制语义</summary>
+<summary>F-175 · P2 · 用户跳过（2026-08-20） · 人物卡主操作没有建立整卡控制语义</summary>
 
 - 审查单元与位置：C010→I011/I010；自定义卡片主操作可访问性
 - 触发路径：VoiceOver用户浏览/激活人物卡；普通遥控器Select可工作。
@@ -1749,7 +1749,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-176 · P2 · 已确认 · 详情横向行失焦会无条件请求下一页</summary>
+<summary>F-176 · P2 · 已修复（2026-08-20） · 详情横向行失焦会无条件请求下一页</summary>
 
 - 审查单元与位置：C010→G04；详情横向行焦点分页
 - 触发路径：焦点从任一行移走或激活卡片push详情，optional FocusState从ID变nil且Paginator仍hasMore。

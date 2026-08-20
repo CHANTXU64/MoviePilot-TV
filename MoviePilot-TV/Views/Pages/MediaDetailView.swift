@@ -979,6 +979,7 @@ struct MediaDetailView: View {
           .padding(.top, 25)
           .padding(.bottom, 30)
           .onChange(of: focusedActorId) { _, newId in
+            guard let newId else { return }
             Task {
               await viewModel.actorsPaginator.loadMore(newId)
             }
@@ -1043,6 +1044,7 @@ struct MediaDetailView: View {
               }
             }
             // 分页加载
+            guard let newId else { return }
             Task {
               await viewModel.recommendPaginator.loadMore(newId)
             }
@@ -1107,6 +1109,7 @@ struct MediaDetailView: View {
               }
             }
             // 分页加载
+            guard let newId else { return }
             Task {
               await viewModel.similarPaginator.loadMore(newId)
             }
