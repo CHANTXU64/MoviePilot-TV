@@ -171,11 +171,11 @@
 | F-155 | 已修复（2026-08-18） | P2 | V022-C→I009 | TransferHistory轮询多页扫描上限 | 第6页已请求成功却在处理前退出，101st新项被永久越过 | 既有双审闭合页6丢弃；I009主审/独立复核确认前100项提交后下一轮无法恢复 | 扫描未找到已知边界时不提交前缀/推进游标，回退现有refresh | 已修：扫满上限未遇边界时回退权威刷新；回归 22/22 通过 |
 | F-156 | 已修复（2026-08-18） | P1 | V022-D→W018-A/G09 | TransferHistory旧动作与选择状态owner | 选择、删除、AI、整理只持有可复用Int ID；旧UI/alert可对同ID新记录执行破坏性动作 | 既有双审闭合迟到收尾清新选择；G09两名代理结合F-204确认后端按ID重查当前行的错对象mutation链 | 与F-152/F-204共用session/query和对象签名快照；不建任务框架 | 已修：核心交互/选择入口由`fc0cefa`冻结，整理Sheet迟到收尾改按intent id移除本次；回归 23/23 通过 |
 | F-157 | 已修复（2026-08-19） | P2 | V023→W020-A/W020-C/G06 | settings加载与后端版本检查终态 | 失败/取消被永久记成检查完成；同owner恢复成功仍不清旧兼容警告 | 既有多审闭合不可恢复状态机；G06 两票确认首次瞬时失败后前台固定不重判且无显式retry | 只有有效版本/明确不兼容才写terminal key；unknown/failure保持可重试 | 已修：失败不再占用检查终态，前台成功统一复用版本判定并清旧警告；回归 9/9 通过 |
-| F-158 | 已确认 | P2 | C001→W009/W011/W018-B/W019→G05 | 无操作焦点目标 | EmptyDataView无action、人物/整理空Button、资源重定向器及历史/下载空动作Button生成无操作焦点节点 | 既有多审确认；G05两名代理将P2锚定在DownloadTask主行稳定可按但无动作，其他透明sink的实际落焦仍属运行边界 | 有主动作放入原生Button action；无主动作删除空Button/focus sink | Download主行静态P2；其他Focus Engine/VoiceOver命中频率未验证 |
-| F-159 | 已确认 | P3 | C002 | 全局短暂错误通知的可访问性传达 | 五秒toast无主动announcement，唯一错误反馈可被VoiceOver用户错过 | review_a001_h主审与review_a001_j独立复核确认5文件6个生产show、根唯一presenter、全仓无announcement且tvOS17原生API可用 | G08及调用页回溯逐次type+message播报、同文案重发与单一元素语义 | 实际VoiceOver/盲文漏传频率未验证 |
-| F-160 | 已确认 | P2 | C003→G10 | ActionRow主Button与实际手势语义 | Transfer核心选择只挂simultaneous TapGesture，语义Button action为空；辅助功能默认激活可无动作 | 既有双审确认结构；G10主审/独立复核区分核心Transfer操作与无主动作Download行并确认P2 | 有tap时直接放入Button action并删重复TapGesture；无主操作改非Button | 静态控制语义缺陷已确认；真实VoiceOver路由仍待运行 |
-| F-161 | 已确认 | P2 | C003→W020-B/G09 | 非活动UI的focus/accessibility门禁 | ActionRow隐藏Button仅opacity(0)，仍保留原生Button、focus绑定与激活语义 | 既有双审确认静态结构；G09两名代理均评P2，其中一票保留Focus Engine条件边界 | 非活动时用原生disabled/hit-testing/accessibility门禁或按active构建；验证转换 | 静态控制树缺陷已确认；真实落焦/VoiceOver频率未验证 |
-| F-162 | 已确认 | P2 | C004→W018-B/W020-C/G09 | Sheet与System静态行长反馈完整性 | 共享反馈强制单行，整理预览限两行，长错误/路径没有完整读取入口 | 既有多段双审闭合；G09两名代理确认当前失败原因/路径稳定被限行且无展开 | 删除共享限制；允许完整换行并纳入现有ScrollView | 条件性诊断信息不可达已确认；真实长文本频率未验证 |
+| F-158 | 用户跳过（2026-08-20） | P2 | C001→W009/W011/W018-B/W019→G05 | 无操作焦点目标 | EmptyDataView无action、人物/整理空Button、资源重定向器及历史/下载空动作Button生成无操作焦点节点 | 既有多审确认；G05两名代理将P2锚定在DownloadTask主行稳定可按但无动作，其他透明sink的实际落焦仍属运行边界 | 有主动作放入原生Button action；无主动作删除空Button/focus sink | Download主行静态P2；其他Focus Engine/VoiceOver命中频率未验证 |
+| F-159 | 用户跳过（2026-08-20） | P3 | C002 | 全局短暂错误通知的可访问性传达 | 五秒toast无主动announcement，唯一错误反馈可被VoiceOver用户错过 | review_a001_h主审与review_a001_j独立复核确认5文件6个生产show、根唯一presenter、全仓无announcement且tvOS17原生API可用 | G08及调用页回溯逐次type+message播报、同文案重发与单一元素语义 | 实际VoiceOver/盲文漏传频率未验证 |
+| F-160 | 用户跳过（2026-08-20） | P2 | C003→G10 | ActionRow主Button与实际手势语义 | Transfer核心选择只挂simultaneous TapGesture，语义Button action为空；辅助功能默认激活可无动作 | 既有双审确认结构；G10主审/独立复核区分核心Transfer操作与无主动作Download行并确认P2 | 有tap时直接放入Button action并删重复TapGesture；无主操作改非Button | 静态控制语义缺陷已确认；真实VoiceOver路由仍待运行 |
+| F-161 | 用户跳过（2026-08-20） | P2 | C003→W020-B/G09 | 非活动UI的focus/accessibility门禁 | ActionRow隐藏Button仅opacity(0)，仍保留原生Button、focus绑定与激活语义 | 既有双审确认静态结构；G09两名代理均评P2，其中一票保留Focus Engine条件边界 | 非活动时用原生disabled/hit-testing/accessibility门禁或按active构建；验证转换 | 静态控制树缺陷已确认；真实落焦/VoiceOver频率未验证 |
+| F-162 | 已修复（2026-08-20） | P2 | C004→W018-B/W020-C/G09 | Sheet与System静态行长反馈完整性 | 共享反馈强制单行，整理预览限两行，长错误/路径没有完整读取入口 | 既有多段双审闭合；G09两名代理确认当前失败原因/路径稳定被限行且无展开 | 删除共享限制；允许完整换行并纳入现有ScrollView | 已修：共享反馈 lineLimit 1→3；整理预览行维持 2 行（用户指示保留）；tvOS Simulator 构建通过 |
 | F-163 | 未验证 | P3 | C004 | 旧系统Sheet自定义样式的disabled外观 | 26.0–26.3样式不读isEnabled，禁用与启用未聚焦控件作者样式相同 | 双审确认Button/Toggle静态缺口及可达disabled实例，但标准交互门禁与系统外层视觉仍可能成立，MultiSelection另有opacity反例 | tvOS 26.0–26.3验证disabled视觉/focus；26.4+不受影响 | 条件性P3；运行外观未验证 |
 | F-164 | 未验证 | P3 | C004 | Fork Sheet旧系统样式接入 | 唯一SheetActionButton所在根树漏用applySheetStyles | 双审确认Search/Explore两入口及父树均不传播该modifier，但漏接本身不能证明旧系统按钮确实错画/错焦 | tvOS 26.0–26.3验证Fork原始渲染/焦点后裁决 | 条件性P3；运行症状未验证 |
 | F-165 | 已确认 | P2 | C004→W018-B/W019/W020-C/G09 | Sheet内容内显式退出可发现性 | 多个业务Sheet缺少内容内关闭/取消，当前源码测试还反向固化该结构 | 既有多段双审确认；G09两名代理从Manual/Preview/Transfer detail与辅助功能语义共同支持P2 | 各Sheet复用原生取消/关闭并更新反向源码测试 | 不声称focus trap；系统Back、VoiceOver escape实际表现未验证 |
@@ -2767,7 +2767,7 @@
 
 ### F-158：状态页生成无操作焦点目标
 
-- 状态：已确认
+- 状态：用户跳过（2026-08-20，故意设计的焦点行为，不改）
 - 严重度：P2（由条件性 P3 升级；P2锚定下载主行）
 - 位置：EmptyDataView无action分支及Status/TransferHistory/TorrentsResult/ManualMediaSearch/Reorganize七处调用；PersonDetail加载/无简介/空作品状态。
 - 触发路径：任一生产页面显示无action EmptyDataView；或人物详情进入加载、永久无简介、空作品状态。
@@ -2786,7 +2786,7 @@
 
 ### F-159：五秒错误通知没有可访问性主动播报
 
-- 状态：已确认
+- 状态：用户跳过（2026-08-20，暂不做VoiceOver播报增强）
 - 严重度：P3
 - 位置：NotificationComponent/NotificationManager及Login、TransferHistory、SubscribeSeason等唯一错误反馈调用链
 - 触发路径：VoiceOver用户遇到登录、删除、订阅等错误，producer调用全局toast并清除自身error。
@@ -2803,7 +2803,7 @@
 
 ### F-160：ActionRow 空 Button 与 raw 手势语义分裂
 
-- 状态：已确认
+- 状态：用户跳过（2026-08-20，暂不改手势语义）
 - 严重度：P2（由未验证 P3 升级）
 - 位置：ActionRow主Button、TapGesture/LongPressGesture及DownloadTask/TransferHistory两处调用
 - 触发路径：Download主行未传tap/longPress，或VoiceOver用户激活/长按Transfer主行。
@@ -2818,7 +2818,7 @@
 
 ### F-161：透明隐藏 action 未退出 focus/accessibility 树
 
-- 状态：已确认
+- 状态：用户跳过（2026-08-20，暂不改 focus/accessibility 门禁）
 - 严重度：条件性 P2
 - 位置：ActionRow右侧ActionButton容器、opacity与focused绑定
 - 触发路径：焦点位于上一行右侧action列后向下移动，或VoiceOver遍历非活动行。
@@ -2834,7 +2834,7 @@
 
 ### F-162：Sheet 长错误被强制压成一行
 
-- 状态：已确认
+- 状态：已修复（2026-08-20）
 - 严重度：P2
 - 位置：SheetFeedbackView的Text布局及AddDownload/Reorganize反馈调用链
 - 触发路径：后端返回较长错误，或Reorganize一次操作产生多项失败并以`；`拼接。
@@ -2851,6 +2851,8 @@
 - G10独立传播：verify_a001_h再次确认共享SheetFeedback强制单行及ReorganizePreview路径/错误限两行；删除限制、纳入现有滚动区即可，维持P3，不把长正文核心阅读目的重复计入F-185。
 - G09交叉升级：两名代理确认Transfer/Reorganize真实失败原因与路径没有第二个完整读取入口，现有单/双行限制可稳定隐藏唯一诊断信息；共同升P2。最小继续只是移除限制并放进现有滚动区。
 - 未验证：生产长错误/多失败频率与真实字号布局。
+
+- 修复（2026-08-20）：按用户指示把共享 `SheetFeedbackView` 的 `lineLimit(1)` 放宽到 `lineLimit(3)`，`minimumScaleFactor(0.75)` 保留；整理预览 `pathCard` 的名称/路径/失败原因按用户复核意见维持 `lineLimit(2)` 未改。tvOS Simulator Debug 构建通过，无可运行测试（纯布局修改）。
 
 ### F-163：旧系统自定义样式不表达 disabled 状态
 

@@ -1619,7 +1619,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-158 · P2 · 已确认 · 状态页生成无操作焦点目标</summary>
+<summary>F-158 · P2 · 用户跳过（2026-08-20） · 状态页生成无操作焦点目标</summary>
 
 - 审查单元与位置：C001→W009/W011/W018-B/W019→G05；无操作焦点目标
 - 触发路径：任一生产页面显示无action EmptyDataView；或人物详情进入加载、永久无简介、空作品状态。
@@ -1632,7 +1632,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-160 · P2 · 已确认 · ActionRow 空 Button 与 raw 手势语义分裂</summary>
+<summary>F-160 · P2 · 用户跳过（2026-08-20） · ActionRow 空 Button 与 raw 手势语义分裂</summary>
 
 - 审查单元与位置：C003→G10；ActionRow主Button与实际手势语义
 - 触发路径：Download主行未传tap/longPress，或VoiceOver用户激活/长按Transfer主行。
@@ -1645,7 +1645,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-161 · P2 · 已确认 · 透明隐藏 action 未退出 focus/accessibility 树</summary>
+<summary>F-161 · P2 · 用户跳过（2026-08-20） · 透明隐藏 action 未退出 focus/accessibility 树</summary>
 
 - 审查单元与位置：C003→W020-B/G09；非活动UI的focus/accessibility门禁
 - 触发路径：焦点位于上一行右侧action列后向下移动，或VoiceOver遍历非活动行。
@@ -1658,7 +1658,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-162 · P2 · 已确认 · Sheet 长错误被强制压成一行</summary>
+<summary>F-162 · P2 · 已修复（2026-08-20） · Sheet 长错误被强制压成一行</summary>
 
 - 审查单元与位置：C004→W018-B/W020-C/G09；Sheet与System静态行长反馈完整性
 - 触发路径：后端返回较长错误，或Reorganize一次操作产生多项失败并以`；`拼接。
@@ -2701,7 +2701,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-159 · P3 · 已确认 · 五秒错误通知没有可访问性主动播报</summary>
+<summary>F-159 · P3 · 用户跳过（2026-08-20） · 五秒错误通知没有可访问性主动播报</summary>
 
 - 审查单元与位置：C002；全局短暂错误通知的可访问性传达
 - 触发路径：VoiceOver用户遇到登录、删除、订阅等错误，producer调用全局toast并清除自身error。
