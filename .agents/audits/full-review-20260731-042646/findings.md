@@ -178,12 +178,12 @@
 | F-162 | 已修复（2026-08-20） | P2 | C004→W018-B/W020-C/G09 | Sheet与System静态行长反馈完整性 | 共享反馈强制单行，整理预览限两行，长错误/路径没有完整读取入口 | 既有多段双审闭合；G09两名代理确认当前失败原因/路径稳定被限行且无展开 | 删除共享限制；允许完整换行并纳入现有ScrollView | 已修：共享反馈 lineLimit 1→3；整理预览行维持 2 行（用户指示保留）；tvOS Simulator 构建通过 |
 | F-163 | 未验证 | P3 | C004 | 旧系统Sheet自定义样式的disabled外观 | 26.0–26.3样式不读isEnabled，禁用与启用未聚焦控件作者样式相同 | 双审确认Button/Toggle静态缺口及可达disabled实例，但标准交互门禁与系统外层视觉仍可能成立，MultiSelection另有opacity反例 | tvOS 26.0–26.3验证disabled视觉/focus；26.4+不受影响 | 条件性P3；运行外观未验证 |
 | F-164 | 未验证 | P3 | C004 | Fork Sheet旧系统样式接入 | 唯一SheetActionButton所在根树漏用applySheetStyles | 双审确认Search/Explore两入口及父树均不传播该modifier，但漏接本身不能证明旧系统按钮确实错画/错焦 | tvOS 26.0–26.3验证Fork原始渲染/焦点后裁决 | 条件性P3；运行症状未验证 |
-| F-165 | 已确认 | P2 | C004→W018-B/W019/W020-C/G09 | Sheet内容内显式退出可发现性 | 多个业务Sheet缺少内容内关闭/取消，当前源码测试还反向固化该结构 | 既有多段双审确认；G09两名代理从Manual/Preview/Transfer detail与辅助功能语义共同支持P2 | 各Sheet复用原生取消/关闭并更新反向源码测试 | 不声称focus trap；系统Back、VoiceOver escape实际表现未验证 |
+| F-165 | 用户降级（2026-08-20） | P3 | C004→W018-B/W019/W020-C/G09 | Sheet内容内显式退出可发现性 | 多个业务Sheet缺少内容内关闭/取消，当前源码测试还反向固化该结构 | 既有多段双审确认；G09两名代理从Manual/Preview/Transfer detail与辅助功能语义共同支持P2 | 各Sheet复用原生取消/关闭并更新反向源码测试 | 用户裁决：系统Back可退出，按P3暂缓，不修 |
 | F-166 | 已驳回 | P3 | C005 | 旧系统SheetTextField的disabled传递 | 桥接未转发isEnabled，但当前生产入口无法令唯一disabled条件为true | review_a001_h独立枚举两个Reorganize入口均为非空历史logIds，isFromHistory分支无条件令isEpisodeDetailDisabled=false | 已闭环；未来新增非历史目录入口时重开桥接测试 | 潜在桥接债务不构成当前生产缺陷 |
 | F-167 | 未验证 | P3 | C005 | UIViewRepresentable托管根视图几何 | 旧系统文本框聚焦直接修改SwiftUI托管根UIView的transform | review_a001_h发现、verify_a001_h独立确认managed root两次写入、26.0–26.3共16调用可达及官方契约违反 | 删除scale/identity两次写入；目标OS验证布局/焦点动画/更新冲突 | 可见用户故障未验证 |
-| F-168 | 已确认 | P2 | C006→W020-E/F→G05 | 自建选择页上下文、选中语义与初始焦点 | SheetPicker丢title且无selected语义；System来源/过滤页固定首焦清空项而非当前选择 | 既有多审确认；G05主审与独立复核均确认title被丢弃、选中项无结构化语义并支持P2 | 显示既有title、给当前项isSelected并复用最小默认焦点 | 静态上下文/选中语义P2；真实初焦、VoiceOver播报与动态删除回退未验证 |
+| F-168 | 用户跳过（2026-08-20） | P2 | C006→W020-E/F→G05 | 自建选择页上下文、选中语义与初始焦点 | SheetPicker丢title且无selected语义；System来源/过滤页固定首焦清空项而非当前选择 | 既有多审确认；G05主审与独立复核均确认title被丢弃、选中项无结构化语义并支持P2 | 显示既有title、给当前项isSelected并复用最小默认焦点 | 静态上下文/选中语义P2；真实初焦、VoiceOver播报与动态删除回退未验证 |
 | F-169 | 已确认 | P3 | C007 | ShelfPicker持久选择的可访问性语义 | 当前货架只做视觉overlay，Button没有isSelected trait/value | review_a001_j主审与verify_a001_h独立复核确认唯一Recommend调用、focus/selection分离及默认Button仅有名称/动作语义 | W005/G02/G04回溯一行条件isSelected trait与VoiceOver验收 | 真实困惑频率/播报措辞未验证 |
-| F-170 | 已确认 | P2 | C008→W014/W020-D/E | 选项域外已选值 | 已选但不在options的站点/规则组不可见、不可移除；System还会自动归一化并删除合法或暂缺选择 | C008/W014双审闭合主链；W020-D/E补站点/规则传播 | 显示可移除不可用项；仅正确权威域成功后归一化且未经确认不删除 | 条件性P2；真实旧配置/域变化频率未验证 |
+| F-170 | 已修复（2026-08-20） | P2 | C008→W014/W020-D/E | 选项域外已选值 | 已选但不在options的站点/规则组不可见、不可移除；System还会自动归一化并删除合法或暂缺选择 | C008/W014双审闭合主链；W020-D/E补站点/规则传播 | 显示可移除不可用项；仅正确权威域成功后归一化且未经确认不删除 | 已修：MultiSelectionSheet 显示“清除不可用选择（N）”区，只做集合减法；回归 4/4 通过 |
 | F-171 | 已确认 | P2 | C009-A→I010→G03 | MediaCard徽章元数据可访问性 | 类型/评分、订阅/入库状态及来源均在Canvas symbols中且无替代语义，持久状态对辅助功能用户不可达 | 既有双审与I010确认机制；G03两名纠偏复核再次独立闭合全部生产卡片owner并升级P2 | 先按F-175建立原生整卡owner，再拼实际可见徽章accessibilityValue | 静态缺失已确认；VoiceOver焦点顺序/播报措辞未运行验证 |
 | F-172 | 已确认 | P3 | C009-B→W006-D | 卡片缺图占位类型 | nil/空/未知typeText统一回退电影glyph；最佳合集卡还可显示原始类型文本 | 双审确认MediaCard生产链；W006-D双审补collection_id有效但nil/英文/系列类型仍导航合集却显示电影glyph | 各卡片/调用页/G03回溯中性glyph与统一displayTypeText测试 | 缺图/加载中触发频率未验证 |
 | F-173 | 未验证 | P3 | C009-B | MediaCard图片处理链 | downsampling后再append硬编码resizing，冷处理路径多一次栅格化 | 双审确认锁定Kingfisher 8.10.0 processor追加/缓存key；processed-cache命中绕过处理、默认2:3同尺寸为反证 | 删除resizing后需真机Instruments与像素/缓存冷启动验收 | 条件性性能影响未验证 |
@@ -2884,8 +2884,8 @@
 
 ### F-165：部分 Sheet 缺少明显的内容内退出方式
 
-- 状态：已确认
-- 严重度：P2
+- 状态：用户降级（2026-08-20，系统Back可退出，按P3暂缓）
+- 严重度：P3
 - 位置：ForkSubscribeSheet、ReorganizePreviewSheet及其呈现链
 - 触发路径：用户进入Fork但不想创建订阅，或打开整理预览后只想退出。
 - 根因：Fork内容只有会触发mutation的主按钮，预览没有dismiss按钮；没有HIG要求的明显内容内退出方式。
@@ -2931,7 +2931,7 @@
 
 ### F-168：SheetPicker 未把当前选择交给 focus/accessibility
 
-- 状态：已确认
+- 状态：用户跳过（2026-08-20，暂不改选择页语义）
 - 严重度：P2（由 P3 升级；运行焦点边界保留）
 - 位置：SheetPickerDetailView标题、Button列表、选中标记与初始焦点
 - 触发路径：任一Picker打开嵌套详情；最强反例为Subscribe指定季已选100，选项为“全部”加0...100。
@@ -2965,7 +2965,7 @@
 
 ### F-170：选项域变化后隐藏的多选值无法移除
 
-- 状态：已确认
+- 状态：已修复（2026-08-20）
 - 严重度：P2
 - 位置：MultiSelectionSheet仅遍历options、Subscribe站点/规则组选项加载与保存
 - 触发路径：既有订阅包含后来停用的站点、被删除的规则组，或普通订阅用户打开含既有规则组的订阅。
@@ -2979,6 +2979,8 @@
 - W020-D传播：review_a001_j主审确认System在非空站点响应后把已保存值与当前options求交并立即持久化；若F-210候选所述RSS集合被误当搜索权威域，合法非RSS搜索站点会被制造成域外值并静默永久删除。即使改用正确域，仍须保留本项的显式提示/用户清除边界。
 - W020-E传播：review_a001_j独立确认规则成功加载后，只要持久ID暂不在返回数组就立即删除本地硬/软选择，UI不先展示“规则已失效”或让用户确认；加载四态归F-126，权威列表域外值的可逆清理继续归本项。
 - 未验证：真实停用站点、旧/无权规则组配置频率。
+
+- 修复（2026-08-20）：对齐 Web 端 VAutocomplete 的“域外值可见可删”行为——`MultiSelectionSheet` 在“已选 − 可选项”非空时显示“清除不可用选择（N）”按钮，只做集合减法，不自动求交、不清可见选择、未确认前保留原值。Web 端对照：`SubscribeEditDialog.vue` 的 sites/filter_groups 均为 `multiple clearable chips`，域外值以 chip 显示可逐删/一键清空，保存原样提交。不可用集合计算提取为 `MultiSelectionSheet.unavailableSelections(in:options:id:)` 静态方法，新增 `MultiSelectionSheetUnavailableTests` 4 个用例（全在选项内/部分域外/空选项/空选择）4/4 通过；tvOS Simulator Debug 构建通过。
 
 ### F-171：Canvas 徽章元数据没有可访问性替代
 
