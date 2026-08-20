@@ -123,6 +123,11 @@ struct TorrentsResultView<Header: View>: View {
 
   // MARK: - 逻辑
 
+  /// 筛选选项规范值：trim 后空串/纯空白统一为“无”。
+  static func normalizedFilterOption(_ value: String?) -> String {
+    MediaIdentifier.normalizedString(value) ?? "无"
+  }
+
   private func updateFilterOptions() {
     var sites = Set<String>()
     var seasons = Set<String>()
@@ -133,23 +138,23 @@ struct TorrentsResultView<Header: View>: View {
     var freeStates = Set<String>()
 
     for context in result {
-      let site = context.torrent_info?.site_name ?? ""
-      sites.insert(site.isEmpty ? "无" : site)
+      let site = Self.normalizedFilterOption(context.torrent_info?.site_name)
+      sites.insert(site)
 
-      let seasonEpisode = context.meta_info?.season_episode ?? ""
-      seasons.insert(seasonEpisode.isEmpty ? "无" : seasonEpisode)
+      let seasonEpisode = Self.normalizedFilterOption(context.meta_info?.season_episode)
+      seasons.insert(seasonEpisode)
 
-      let res = context.meta_info?.resource_pix ?? ""
-      resolutions.insert(res.isEmpty ? "无" : res)
+      let res = Self.normalizedFilterOption(context.meta_info?.resource_pix)
+      resolutions.insert(res)
 
-      let code = context.meta_info?.video_encode ?? ""
-      videoCodes.insert(code.isEmpty ? "无" : code)
+      let code = Self.normalizedFilterOption(context.meta_info?.video_encode)
+      videoCodes.insert(code)
 
-      let edition = context.meta_info?.edition ?? ""
-      editions.insert(edition.isEmpty ? "无" : edition)
+      let edition = Self.normalizedFilterOption(context.meta_info?.edition)
+      editions.insert(edition)
 
-      let group = context.meta_info?.resource_team ?? ""
-      releaseGroups.insert(group.isEmpty ? "无" : group)
+      let group = Self.normalizedFilterOption(context.meta_info?.resource_team)
+      releaseGroups.insert(group)
 
       freeStates.insert(getFreeState(context))
     }
@@ -177,23 +182,17 @@ struct TorrentsResultView<Header: View>: View {
   private func contextMatches(_ context: Context, key: String, values: Set<String>) -> Bool {
     switch key {
     case "site":
-      let val = context.torrent_info?.site_name ?? ""
-      return values.contains(val.isEmpty ? "无" : val)
+      return values.contains(Self.normalizedFilterOption(context.torrent_info?.site_name))
     case "season":
-      let val = context.meta_info?.season_episode ?? ""
-      return values.contains(val.isEmpty ? "无" : val)
+      return values.contains(Self.normalizedFilterOption(context.meta_info?.season_episode))
     case "resolution":
-      let val = context.meta_info?.resource_pix ?? ""
-      return values.contains(val.isEmpty ? "无" : val)
+      return values.contains(Self.normalizedFilterOption(context.meta_info?.resource_pix))
     case "videoCode":
-      let val = context.meta_info?.video_encode ?? ""
-      return values.contains(val.isEmpty ? "无" : val)
+      return values.contains(Self.normalizedFilterOption(context.meta_info?.video_encode))
     case "edition":
-      let val = context.meta_info?.edition ?? ""
-      return values.contains(val.isEmpty ? "无" : val)
+      return values.contains(Self.normalizedFilterOption(context.meta_info?.edition))
     case "releaseGroup":
-      let val = context.meta_info?.resource_team ?? ""
-      return values.contains(val.isEmpty ? "无" : val)
+      return values.contains(Self.normalizedFilterOption(context.meta_info?.resource_team))
     case "freeState":
       return values.contains(getFreeState(context))
     default:
@@ -216,23 +215,17 @@ struct TorrentsResultView<Header: View>: View {
     for context in partiallyFiltered {
       switch targetKey {
       case "site":
-        let val = context.torrent_info?.site_name ?? ""
-        availableOptions.insert(val.isEmpty ? "无" : val)
+        availableOptions.insert(Self.normalizedFilterOption(context.torrent_info?.site_name))
       case "season":
-        let val = context.meta_info?.season_episode ?? ""
-        availableOptions.insert(val.isEmpty ? "无" : val)
+        availableOptions.insert(Self.normalizedFilterOption(context.meta_info?.season_episode))
       case "resolution":
-        let val = context.meta_info?.resource_pix ?? ""
-        availableOptions.insert(val.isEmpty ? "无" : val)
+        availableOptions.insert(Self.normalizedFilterOption(context.meta_info?.resource_pix))
       case "videoCode":
-        let val = context.meta_info?.video_encode ?? ""
-        availableOptions.insert(val.isEmpty ? "无" : val)
+        availableOptions.insert(Self.normalizedFilterOption(context.meta_info?.video_encode))
       case "edition":
-        let val = context.meta_info?.edition ?? ""
-        availableOptions.insert(val.isEmpty ? "无" : val)
+        availableOptions.insert(Self.normalizedFilterOption(context.meta_info?.edition))
       case "releaseGroup":
-        let val = context.meta_info?.resource_team ?? ""
-        availableOptions.insert(val.isEmpty ? "无" : val)
+        availableOptions.insert(Self.normalizedFilterOption(context.meta_info?.resource_team))
       case "freeState":
         availableOptions.insert(getFreeState(context))
       default:

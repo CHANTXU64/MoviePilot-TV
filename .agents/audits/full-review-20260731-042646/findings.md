@@ -192,7 +192,7 @@
 | F-176 | 已修复（2026-08-20） | P2 | C010→G04 | 详情横向行焦点分页 | 三个FocusState变nil都会绕过threshold调用强制loadMore，重复离行可逐页消耗到真实终页 | 既有双审闭合三处调用；全新G04 clean-room复核确认静态请求链并升级P2 | 三处调用前`guard let newId`；不改Paginator公共nil语义 | 已修：演员/推荐/相似三处 onChange 失焦 nil 直接 return；Paginator/TransferHistory 回归 47/47 通过 |
 | F-177 | 未验证 | P3 | C010 | PersonCard图片处理 | 冷缓存人物图先构造原图再用ResizingImageProcessor重绘 | 双审确认Kingfisher 8.10.0数据/processor链与演员/搜索分页；cache命中/后台queue/近目标原图为反证 | resizing换downsampling后需真机Instruments/像质验收 | 条件性性能影响未验证 |
 | F-178 | 已确认 | P3 | C012→W006-C | 搜索评分名与展示名投影 | 备用名称可获最高匹配分，但最佳卡与普通媒体/人物行只显示主名称而出现空标题或“未知” | C012双审闭合媒体original_title与人物latin_name反例；W006-C双审确认普通行同根传播 | 评分与展示共用现有有序非空名称候选；不建新匹配或卡片框架 | 条件性P3；真实备用名payload频率未验证 |
-| F-179 | 已确认 | P2 | C017→G05 | 资源卡/筛选展示字符串规范化 | 空串或纯空白值可遮蔽有效fallback、生成悬空分隔符或不可辨识标签 | 既有双审闭合字段矩阵；G05主审与独立复核均确认卡片与筛选的稳定分裂并支持P2 | 复用现有trim→空为nil投影后再fallback/渲染/筛选；不建资源展示模型 | 条件性P2；真实上游空白字段频率未验证 |
+| F-179 | 已修复（2026-08-20） | P2 | C017→G05 | 资源卡/筛选展示字符串规范化 | 空串或纯空白值可遮蔽有效fallback、生成悬空分隔符或不可辨识标签 | 既有双审闭合字段矩阵；G05主审与独立复核均确认卡片与筛选的稳定分裂并支持P2 | 复用现有trim→空为nil投影后再fallback/渲染/筛选；不建资源展示模型 | 已修：卡片标题/描述/季集/标签与筛选三链统一trim→空为缺值；新增规范化测试10/10、排序回归4/4通过 |
 | F-180 | 已确认 | P2 | W007→I013 | 详情失败终态呈现 | 三次主详情失败被当成ready，静默揭开未完整初始化的partial页面且无当前页错误/重试 | 既有三方闭合机制；review_a001_j第三裁确认主详情静默失败独立P2并保留Back重进反证 | partial旁显示明确失败与原生Retry，复用failed-task重建 | 条件性P2；真实失败频率、partial丰富度及focus表现未验证 |
 | F-181 | 未验证 | P2 | W008-A→I013 | Hero到内容页焦点切换 | 只监听Hero并即时采样Content，若Hero先false、Content后true会漏置showContentPage | 三代理确认静态交错；review_a001_j最终裁定事件顺序未证，若运行复现影响为P2 | 先记录Simulator/真机事件序；确认后分别监听两个现有FocusState | 未验证条件性P2；真实事件顺序和可见影响未验证 |
 | F-182 | 已确认 | P2 | W008-B→I008 | 详情前台及60秒订阅刷新 | scene/周期仍以本地active状态决定是否强刷，旧false/空分季可无限不发现远端新增且首次点击静默终止 | 既有双审闭合false→true链；I008整文件主审确认无时间上界的核心CTA错误 | review_a001_h独立确认P2；活跃可订阅详情复用现有强刷，不新增轮询框架 | TV静态用户链已确认；真实跨设备频率与后台时序未验证 |
@@ -3116,7 +3116,7 @@
 
 ### F-179：资源卡展示字符串未统一规范空白
 
-- 状态：已确认
+- 状态：已修复（2026-08-20）
 - 严重度：条件性 P2（由 P3 升级）
 - 位置：TorrentCard主/副标题、发布时间与标签投影；TorrentsResultView筛选options/matching/disabled-options
 - 触发路径：资源能够完整解码且meta+torrent均存在，但任一可选展示字段为`""`或纯空白；同时可能存在有效后备标题/描述。
@@ -3129,6 +3129,8 @@
 - 独立复核：review_a001_j从头确认nil/空串/纯空白矩阵共享同一最小修复点；F-018/F-022/F-032/F-058/F-175传播与F-017/F-084边界不变。
 - G05后裁：主审与不同代理独立复核重新闭合卡片fallback、标签及筛选options/matching的同一空白矩阵，并共同建议P2；升级仍以合法可解码空白字段为条件，不并入结构缺失的F-032。
 - 未验证：真实上游空白字段频率、SwiftUI空文本/标签的精确布局、VoiceOver表现与非默认促销因子缺文案契约。
+
+- 修复（2026-08-20）：TorrentCard 主标题/副标题/季集/全部标签先经 `MediaIdentifier.normalizedString` trim→空为 nil 再 fallback/渲染；TorrentsResultView 筛选 options 收集、matching、disabled 三链统一走同一规范值（空白归“无”）。促销 badge 按 finding 原判撤出候选未动。与 Web 19cead06 对照：Web 未做规范化，TV 端描述空串不 fallback 的独有劣化一并消除。新增 TorrentCardDisplayNormalizationTests 10/10、既有排序回归 4/4 通过，tvOS Simulator Debug 构建通过。
 
 ### F-180：详情加载失败被静默伪装成可用 partial 页面
 
