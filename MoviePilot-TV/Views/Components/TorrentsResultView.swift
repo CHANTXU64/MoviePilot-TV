@@ -128,6 +128,11 @@ struct TorrentsResultView<Header: View>: View {
     MediaIdentifier.normalizedString(value) ?? "无"
   }
 
+  /// 促销筛选值：直接复用后端 volume_factor（对齐 Web），trim 后空视为无促销（不生成选项、不参与匹配）。
+  static func freeStateValue(_ context: Context) -> String? {
+    MediaIdentifier.normalizedString(context.torrent_info?.volume_factor)
+  }
+
   private func updateFilterOptions() {
     var sites = Set<String>()
     var seasons = Set<String>()
@@ -156,7 +161,9 @@ struct TorrentsResultView<Header: View>: View {
       let group = Self.normalizedFilterOption(context.meta_info?.resource_team)
       releaseGroups.insert(group)
 
-      freeStates.insert(getFreeState(context))
+      if let freeState = Self.freeStateValue(context) {
+        freeStates.insert(freeState)
+      }
     }
 
     // 辅助排序方法：将"无"放在最后
@@ -194,7 +201,8 @@ struct TorrentsResultView<Header: View>: View {
     case "releaseGroup":
       return values.contains(Self.normalizedFilterOption(context.meta_info?.resource_team))
     case "freeState":
-      return values.contains(getFreeState(context))
+      guard let val = Self.freeStateValue(context) else { return false }
+      return values.contains(val)
     default:
       return true
     }
@@ -227,7 +235,9 @@ struct TorrentsResultView<Header: View>: View {
       case "releaseGroup":
         availableOptions.insert(Self.normalizedFilterOption(context.meta_info?.resource_team))
       case "freeState":
-        availableOptions.insert(getFreeState(context))
+        if let val = Self.freeStateValue(context) {
+          availableOptions.insert(val)
+        }
       default:
         break
       }
@@ -300,23 +310,6 @@ struct TorrentsResultView<Header: View>: View {
     }
 
     return matched.sorted(by: comparator) + filteredOut.sorted(by: comparator)
-  }
-
-  private func getFreeState(_ context: Context) -> String {
-    let dl = context.torrent_info?.downloadvolumefactor ?? 1.0
-    let up = context.torrent_info?.uploadvolumefactor ?? 1.0
-
-    if dl == 0 {
-      if up > 1 { return "2xFree" }
-      return "Free"
-    }
-    if dl < 1.0 {
-      return "50%"
-    }
-    if up > 1.0 {
-      return "2x"
-    }
-    return "Normal"
   }
 
 }

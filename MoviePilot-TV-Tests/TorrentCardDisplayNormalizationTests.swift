@@ -3,6 +3,7 @@ import XCTest
 
 @testable import MoviePilot_TV
 
+@MainActor
 final class TorrentCardDisplayNormalizationTests: XCTestCase {
   // MARK: - 主标题规范链
 
@@ -94,7 +95,48 @@ final class TorrentCardDisplayNormalizationTests: XCTestCase {
     XCTAssertEqual(TorrentsResultView<EmptyView>.normalizedFilterOption("HDR"), "HDR")
   }
 
+  // MARK: - 促销筛选值
+
+  func testFreeStateKeepsBackendVolumeFactorVerbatim() {
+    XCTAssertEqual(
+      TorrentsResultView<EmptyView>.freeStateValue(makeContext(volumeFactor: "30%")),
+      "30%"
+    )
+    XCTAssertEqual(
+      TorrentsResultView<EmptyView>.freeStateValue(makeContext(volumeFactor: "4X")),
+      "4X"
+    )
+    XCTAssertEqual(
+      TorrentsResultView<EmptyView>.freeStateValue(makeContext(volumeFactor: "2X 50%")),
+      "2X 50%"
+    )
+  }
+
+  func testFreeStateTrimsWhitespace() {
+    XCTAssertEqual(
+      TorrentsResultView<EmptyView>.freeStateValue(makeContext(volumeFactor: "  4X  ")),
+      "4X"
+    )
+  }
+
+  func testFreeStateIsNilWhenBlank() {
+    XCTAssertNil(TorrentsResultView<EmptyView>.freeStateValue(makeContext(volumeFactor: nil)))
+    XCTAssertNil(TorrentsResultView<EmptyView>.freeStateValue(makeContext(volumeFactor: "")))
+    XCTAssertNil(TorrentsResultView<EmptyView>.freeStateValue(makeContext(volumeFactor: "   ")))
+  }
+
   // MARK: - 构造辅助
+
+  private func makeContext(volumeFactor: String?) -> Context {
+    Context(
+      torrent_info: TorrentInfo(
+        site: 1, site_name: "测试站点", site_order: 1, title: "t", description: nil,
+        enclosure: "https://example.test/t", page_url: nil, size: 100,
+        seeders: 1, peers: 1, pubdate: nil, uploadvolumefactor: 1, downloadvolumefactor: 1,
+        pri_order: 1, labels: [], volume_factor: volumeFactor
+      )
+    )
+  }
 
   private func makeMeta(name: String, subtitle: String? = nil) -> MetaInfo {
     MetaInfo(

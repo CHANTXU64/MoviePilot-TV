@@ -1788,7 +1788,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-182 · P2 · 已确认 · 前台恢复被旧负订阅状态阻止发现远端新增</summary>
+<summary>F-182 · P2 · 用户跳过（2026-08-20） · 前台恢复被旧负订阅状态阻止发现远端新增</summary>
 
 - 审查单元与位置：W008-B→I008；详情前台及60秒订阅刷新
 - 触发路径：电影本地`isSubscribed=false`或电视剧`subscribedSeasons`为空；页面存活期间Web、其他设备或后端新建订阅；TV回到前台。
@@ -1801,7 +1801,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-185 · P2 · 已确认 · 人物与季详情 Sheet 无法到达长文本尾部</summary>
+<summary>F-185 · P2 · 用户跳过（2026-08-20） · 人物与季详情 Sheet 无法到达长文本尾部</summary>
 
 - 审查单元与位置：W009→W013-C→W015/W018-B/W019/W020-B；模态Sheet长文本/路径可达性
 - 触发路径：人物返回足够长但合法的biography并打开“完整简介”，或季详情返回足够长的overview。
@@ -1814,7 +1814,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-186 · P2 · 已确认 · 资源促销筛选压扁后端枚举</summary>
+<summary>F-186 · P2 · 已修复（2026-08-20） · 资源促销筛选压扁后端枚举</summary>
 
 - 审查单元与位置：W011；资源促销筛选枚举
 - 触发路径：资源使用当前后端支持的30%、70%、25%、75%、4X或2X 50%等非简化促销值，用户打开或应用促销筛选。
@@ -3285,7 +3285,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-181 · P2 · 未验证 · Hero 到内容页切换依赖两个 FocusState 的回调顺序</summary>
+<summary>F-181 · P2 · 用户跳过（2026-08-20） · Hero 到内容页切换依赖两个 FocusState 的回调顺序</summary>
 
 - 审查单元与位置：W008-A→I013；Hero到内容页焦点切换
 - 触发路径：只监听Hero并即时采样Content，若Hero先false、Content后true会漏置showContentPage
