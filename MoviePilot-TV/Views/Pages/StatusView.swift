@@ -2,6 +2,11 @@ import SwiftUI
 
 /// 系统状态视图：展示媒体库统计、服务器存储空间以及实时下载器状态
 struct StatusView: View {
+  /// 剧集统计投影：后端 nil 表示所有媒体服务均未提供，显示“未获取”；真实 0/正数原样显示。
+  static func episodeCountText(_ count: Int?) -> String {
+    count.map(String.init) ?? "未获取"
+  }
+
   private let isSelected: Bool
   @StateObject private var viewModel = StatusViewModel()
   @StateObject private var transferHistoryViewModel = TransferHistoryViewModel()
@@ -92,7 +97,7 @@ private struct MediaStatCard: View {
         .frame(maxWidth: .infinity)
       MiniStat(title: "电视剧", value: "\(statistic.tv_count)", icon: "tv")
         .frame(maxWidth: .infinity)
-      MiniStat(title: "剧集", value: "\(statistic.episode_count ?? 0)", icon: "film.stack")
+      MiniStat(title: "剧集", value: StatusView.episodeCountText(statistic.episode_count), icon: "film.stack")
         .frame(maxWidth: .infinity)
     }
     .padding()

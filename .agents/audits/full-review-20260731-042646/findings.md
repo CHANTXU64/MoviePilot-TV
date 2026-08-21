@@ -200,18 +200,18 @@
 | F-184 | 已修复（`e0f1122`） | P1 | W008-E→W010→I013/I010 | 合法正数`collection_id`合集route身份 | 动态来源可正式返回合集；三根栈仍送入普通Container，inert preload永不ready/failed且每次重进必现 | I013第三裁确认条件P1；I010独立复核机制但建议P2，作为等级异议记录不重开既有裁决 | `e0f1122`统一四根导航与来源无关的预载门禁，不建route框架 | Simulator clean build、487/487本地测试与独立复审通过；0/负数、parts包装/递归仍未验证 |
 | F-185 | 用户跳过（2026-08-20） | P2 | W009→W013-C→W015/W018-B/W019/W020-B | 模态Sheet长文本/路径可达性 | 无上限正文、整理汇总、完整路径、未来errmsg或自定义规则摘要在固定viewport/限行中不可完整读取 | 既有多段双审确认；W020-B主审补五行规则预览且无展开/滚动入口 | 信息区使用原生ScrollView/完整换行，操作区固定并验证遥控器/VoiceOver | 条件性触发；真实长度阈值未验证 |
 | F-186 | 已修复（2026-08-20） | P2 | W011 | 资源促销筛选枚举 | TV从数值倍率重算并压扁后端`volume_factor`，筛选值与卡片/Web分裂 | review_a001_j提出并核对当前上游；verify_a001_h无W011污染独立确认30/70/4X/2X 50%反例 | 删除重算helper，筛选直接复用现有`volume_factor`并覆盖完整枚举 | 已修：删除 getFreeState 重算，筛选三链直接用 volume_factor（空白视为无促销）；规范化测试 13/13、排序回归 4/4 通过 |
-| F-187 | 已确认 | P2 | W011 | 资源空/错终态恢复 | 业务error、transport失败或成功空均进入无action空态，hasSearched阻止同页面再次请求 | review_a001_j提出错误/空无重试；verify_a001_h确认三类终态与现有根因均不能提供retry contract | 复用EmptyDataView action，调用现有cancelSearch后重新search | 用户只能退出重进；真实故障/空结果频率未验证 |
+| F-187 | 用户跳过（2026-08-20） | P2 | W011 | 资源空/错终态恢复 | 业务error、transport失败或成功空均进入无action空态，hasSearched阻止同页面再次请求 | review_a001_j提出错误/空无重试；verify_a001_h确认三类终态与现有根因均不能提供retry contract | 复用EmptyDataView action，调用现有cancelSearch后重新search | 用户只能退出重进；真实故障/空结果频率未验证 |
 | F-188 | 已驳回（旧v2.14.4基线历史机制保留） | P1 | W012→W018-A/G09 | 下载/整理高级媒体ID端点合同 | 旧后端只消费专用ID；`3b709b7`随后统一媒体来源身份合同 | 原审计使用后端v2.14.4；目标v2.15.1已包含2026-07-21提交`3b709b7`，并非报告后修复 | 当前TV按v2.15.1统一字段保持不变 | 对目标版本属于审计基线过旧误报；历史裁决仅保留作审计记录 |
 | F-189 | 已驳回（旧v2.14.4基线历史机制保留） | P1 | W001→W012/W018-A/W020-D/G09 | 手动媒体搜索来源owner | 旧后端忽略source；`3b709b7`随后统一媒体来源身份合同 | 原审计使用后端v2.14.4；目标v2.15.1已包含2026-07-21提交`3b709b7`，并非报告后修复 | 当前TV按v2.15.1统一来源合同保持不变 | 对目标版本属于审计基线过旧误报；历史裁决仅保留作审计记录 |
 | F-190 | 已确认 | P3 | W013-C | SeasonDetailSheet季名与可选文本投影 | S00缺名显示“第0季”而卡片显示“特别篇”；空白name/date/overview又生成空标题、图标空行或空壳区域 | review_a001_h主审与verify_a001_h独立复核闭合nil/空/纯空白输入及同页文案分裂 | 复用现有字符串trim→nil；S00/有效季/缺季号使用一套回退规则 | TV显示不变量缺陷已确认；真实空白payload频率未验证 |
 | F-191 | 已确认 | P3 | W013-C→W015 | SeasonDetail/Fork Sheet海报容器几何 | processor按360×540降采样但外层只约束width；缺图/失败只剩无固有2:3高度的Rectangle，四态无法保证稳定海报尺寸 | W013-C第三裁决成案；W015主审独立确认Fork的URL缺失/loading/失败/成功四态同根 | 两个Sheet外层容器直接固定360×540；覆盖四态 | 静态布局契约缺陷已确认；实际塌缩/拉伸形态与焦点影响未验证 |
 | F-192 | 已修复（`b304b58` 范围内处置；后端对象级授权风险范围外） | P1 | W016→W017 | 下载任务列表与mutation owner授权 | manage-only用户可看到并暂停/继续/删除其他用户任务，当前后端list/start/stop/delete只验token且owner回填只按hash | review_a001_j与review_a001_h闭合原跨用户反例；`b304b58`后独立复审确认TV普通用户展示过滤逐字对齐Web | `b304b58`仅补Web同款`userid/username`展示过滤；不修改后端 | 用户确认范围已完成；后端对象级授权缺口作为明确接受的范围外风险保留 |
 | F-193 | 部分修复（`90b40b4` 原 P1 链）；同 profile 竞争维持 P2 | P2 | W015→G06→当前实现复核 | Fork POST→GET→编辑器operation owner | `90b40b4`已把POST结果绑定来源profile/session，切账号或切服后旧ID不能在新owner下继续GET或呈现；同一profile内A/B并发、关闭Sheet后的迟到结果及GET-only恢复仍共享单一状态槽 | 跨profile回归`testForkedEditorDoesNotContinueUnderAnotherAccount`通过；当前Handler/Sheet静态复核确认剩余同会话竞争 | 后续若处理，只在现有Handler内增加同会话operation owner与GET-only receipt，不扩账号框架 | 原跨服务器同号ID P1链已闭合；剩余同会话呈现/恢复为P2 |
-| F-194 | 已确认 | P2 | W015 | Fork最终确认字段完整性 | POST立即持久化keyword/custom_words，但TV确认页不展示，用户无法预见将生效的搜索/识别规则 | W015双审对照TV编码、当前后端持久化与Web显示闭合多行规则反例 | 按Web最小边界只读展示非空keyword/custom_words并支持展开/滚动 | 两字段缺口已确认；其他过滤字段是否须展示未验证 |
-| F-195 | 已确认 | P2 | W014 | SubscribeSheet custom_words多行编辑合同 | 后端按LF拆分多规则且Web使用textarea，TV单行TextField无法创建/可靠审阅第二条规则 | W014双审闭合SheetTextField/UITextField、Web VTextarea与后端split链 | 仅该字段复用tvOS多行编辑器并保留LF原值 | 编辑能力缺口已确认；既有LF聚焦后是否改写须运行验证 |
+| F-194 | 用户跳过（2026-08-20） | P2 | W015 | Fork最终确认字段完整性 | POST立即持久化keyword/custom_words，但TV确认页不展示，用户无法预见将生效的搜索/识别规则 | W015双审对照TV编码、当前后端持久化与Web显示闭合多行规则反例 | 按Web最小边界只读展示非空keyword/custom_words并支持展开/滚动 | 两字段缺口已确认；其他过滤字段是否须展示未验证 |
+| F-195 | 用户跳过（2026-08-20） | P2 | W014 | SubscribeSheet custom_words多行编辑合同 | 后端按LF拆分多规则且Web使用textarea，TV单行TextField无法创建/可靠审阅第二条规则 | W014双审闭合SheetTextField/UITextField、Web VTextarea与后端split链 | 仅该字段复用tvOS多行编辑器并保留LF原值 | 编辑能力缺口已确认；既有LF聚焦后是否改写须运行验证 |
 | F-196 | 已修复（`e47693a`） | P1 | W017 | 下载删除确认与实际文件范围 | UI原来只确认“删除任务”，当前后端默认delete_file=true并由Transmission执行delete_data=true | W017双审闭合永久文件删除链；用户确认保留现有TV确认、不改接口和后端 | `e47693a`将确认文案明确为“将永久删除任务及已下载文件” | 按用户要求仅改一行文案并直接提交，未运行测试、未做子代理复审；后端行为保持不变 |
 | F-197 | 用户决定跳过 | P1 | W017→G05 | 未完成下载暂停后的列表可恢复性 | stop成功后qBittorrent/Transmission任务不再属于当前downloading查询，下一轮从TV/Web消失并失去继续入口 | 既有双审确认且当前TV/Web共享行为 | 不做TV单端缓存兜底；CHK-016已写入正式兼容清单 | 等待MoviePilot官方后端/Web更新后同步对齐；当前行为保持不变 |
-| F-198 | 已确认 | P2 | W016→G09 | Status剧集统计nil展示 | 后端None/Web“未获取”被TV折叠为确切0 | 既有三票确认静态误报；G09两名代理按当前后端明确nil语义与跨端稳定差异共同支持P2 | 仅View层nil→“未获取”，0与正数原样 | 稳定运维统计误报已确认；部署组合与渲染未验证 |
+| F-198 | 已修复（2026-08-21） | P2 | W016→G09 | Status剧集统计nil展示 | 后端None/Web“未获取”被TV折叠为确切0 | 既有三票确认静态误报；G09两名代理按当前后端明确nil语义与跨端稳定差异共同支持P2 | 仅View层nil→“未获取”，0与正数原样 | 已修：StatusView 的 nil 显示“未获取”，0/正数保持原值；投影测试 1/1 通过 |
 | F-199 | 已修复（`ce7afcc`） | P1 | W014→G02 | Subscribe total_episode null保真 | 无编辑GET→PUT把nil/absent固化为0并令当前后端置`manual_total_episode=1`，永久关闭自动总集数刷新 | 既有两票与G02闭合跨端链；`ce7afcc`后独立复审确认null/省略/输入边界对齐 | 现有订阅nil显式编码null；新建nil仍省略，负数/空白/非法输入归一为nil | 修复完成；490项本地测试通过，F-069其余完整PUT保真边界仍开放 |
 | F-200 | 已确认 | P2 | W014→G01纠偏 | Subscribe save_path开放值域 | 既有任意值和配置中已有URI可显示并原样保存，但封闭Picker无法新建或编辑任意合法子路径/URI | 既有双审确认开放合同；G01按当前TV/Web再次核对并驳回“已有值必丢/已配置URI不可选”的扩大说法 | 复用现有文本输入直接绑定String，配置路径只作快捷建议 | 条件性P2；产品文案、真实远程目录与自定义子路径频率未验证 |
 | F-201 | 已确认 | P2 | W019 | Transfer失败原因可达性 | 模型已解码errmsg，但列表与详情只显示“失败”，TV内没有任何读取路径 | verify_a001_h与review_a001_h双审对照TV模型/View、当前Web tooltip与后端语义闭合 | 仅在可滚动详情展示trim后非空errmsg，列表保持紧凑 | 真实长错误频率未验证 |
@@ -3302,7 +3302,7 @@
 
 ### F-194：Fork 确认页隐藏立即持久化的关键搜索规则
 
-- 状态：已确认
+- 状态：用户跳过（2026-08-20，仅少展示两条只读信息，用户判断可接受）
 - 严重度：P2
 - 位置：`ForkSubscribeSheet` 的确认信息、Fork 请求模型/编码及当前后端分享 Fork 持久化链。
 - 触发路径：分享携带非空 `keyword` 或含多行规则的 `custom_words`，用户在 TV 确认页完成 Fork。
@@ -3316,7 +3316,7 @@
 
 ### F-195：`custom_words` 多规则合同被降成单行编辑
 
-- 状态：已确认
+- 状态：用户跳过（2026-08-20，用户判断遥控器不承担复杂多行输入）
 - 严重度：P2
 - 位置：`SubscribeSheet` 的 `custom_words` 字段、共享 `SheetTextField`，以及当前 Web/后端多行规则合同。
 - 触发路径：用户需要创建或编辑两条以上自定义识别规则，例如以 LF 分隔的两行映射/过滤表达式。
@@ -3362,7 +3362,7 @@
 
 ### F-198：不可获取的剧集统计被显示为 0
 
-- 状态：已确认
+- 状态：已修复（2026-08-21）
 - 严重度：P2
 - 位置：Status媒体库统计卡的`episode_count`投影；模型/API、当前Web与当前后端仅作合同证据。
 - 触发路径：所有已配置媒体服务都不提供剧集总数，例如当前UGREEN实现返回None，同时电影/电视剧数量正常可用。
@@ -3373,6 +3373,7 @@
 - G09交叉升级：两名代理重新以当前后端明确`nil=所有媒体服务均未提供`及Web“未获取”作合同证据，均评P2；稳定把未知运维指标显示为确定0的跨端误报覆盖旧P3裁决，升P2。
 - 测试缺口：最小矩阵`nil→未获取`、`0→0`、`6→6`，再做一次状态卡渲染/真机可见验收；无需引入View inspection依赖。
 - 未验证：用户部署版本、实际媒体服务组合与真机状态卡呈现；不影响静态P2结论。
+- 修复（2026-08-21）：`StatusView` 新增剧集统计投影，`nil` 显示“未获取”，真实 `0` 与正数原样显示；补充 `nil/0/6` 回归测试，StatusDashboardSnapshotTests 通过，tvOS Simulator Debug 构建通过。
 
 ### F-199：`total_episode=nil` 保存后变成 0 并关闭自动总集数刷新
 
@@ -3512,7 +3513,7 @@
 
 ### F-187：资源错误或成功空终态没有同页面重试
 
-- 状态：已确认
+- 状态：用户跳过（2026-08-20，用户判断返回重进即可恢复，页面内重试非必需）
 - 严重度：P2
 - 位置：`ResourceResultView`完成态、`TorrentsResultView`空分支、`EmptyDataView`与`ResourceResultViewModel.hasSearched/cancelSearch/search`。
 - 触发路径：资源搜索收到业务error且最终无结果、流与同步fallback均失败，或合法完成但返回空数组。
