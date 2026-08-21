@@ -105,7 +105,7 @@ final class MediaInfoCollectionBehaviorTests: XCTestCase {
     )
   }
 
-  func testDetailAuxiliaryContentSkipsUnsupportedAndZeroIdentifiers() {
+  func testDetailAuxiliaryContentFallsBackToAniListAfterInvalidEarlierIdentifiers() {
     let media = MediaInfo(
       tmdb_id: 0,
       douban_id: "  ",
@@ -113,7 +113,10 @@ final class MediaInfoCollectionBehaviorTests: XCTestCase {
       anilist_id: 154_587
     )
 
-    XCTAssertNil(media.auxiliaryContentIdentity)
+    XCTAssertEqual(
+      media.auxiliaryContentIdentity,
+      MediaIdentity(source: "anilist", mediaId: "154587")
+    )
   }
 
   func testPopularSubscriptionKeyKeepsAniListPrimaryIdentity() {
@@ -177,11 +180,13 @@ final class MediaInfoCollectionBehaviorTests: XCTestCase {
     XCTAssertEqual(tmdb.apiMediaId, "tmdb:42")
   }
 
-  func testManualMediaIdAllowsEmptyAndASCIIDigitsOnly() {
+  func testManualMediaIdAllowsEmptyAndPositiveASCIIDigitsOnly() {
     XCTAssertTrue(MediaIdentifier.isValidManualMediaId(nil))
     XCTAssertTrue(MediaIdentifier.isValidManualMediaId("  "))
-    XCTAssertTrue(MediaIdentifier.isValidManualMediaId("0"))
     XCTAssertTrue(MediaIdentifier.isValidManualMediaId(" 33674 "))
+    XCTAssertFalse(MediaIdentifier.isValidManualMediaId("0"))
+    XCTAssertFalse(MediaIdentifier.isValidManualMediaId("000"))
+    XCTAssertFalse(MediaIdentifier.isValidManualMediaId("-5"))
     XCTAssertFalse(MediaIdentifier.isValidManualMediaId("33x"))
     XCTAssertFalse(MediaIdentifier.isValidManualMediaId("１２３"))
   }

@@ -159,6 +159,46 @@ final class ReorganizeViewModelTests: XCTestCase {
     XCTAssertEqual(viewModel.mediaId, "42")
   }
 
+  func testManualSelectionFallsBackToMediaIDWhenNativeIDIsZero() {
+    let media = MediaInfo(
+      tmdb_id: 0,
+      source: "themoviedb",
+      media_id: "tmdb:999",
+      title: "测试电影",
+      type: "movie"
+    )
+
+    let selectedID = ManualMediaSelection.mediaId(for: media, source: .themoviedb)
+
+    XCTAssertEqual(selectedID, "tmdb:999")
+  }
+
+  func testManualSelectionFallsBackToMediaIDWhenNativeIDIsNegative() {
+    let media = MediaInfo(
+      anilist_id: -1,
+      source: "anilist",
+      media_id: "anilist:7",
+      title: "测试番剧",
+      type: "tv"
+    )
+
+    let selectedID = ManualMediaSelection.mediaId(for: media, source: .anilist)
+
+    XCTAssertEqual(selectedID, "anilist:7")
+  }
+
+  func testManualSelectionKeepsZeroNativeIDWithNoFallbackAsUnselectable() {
+    let media = MediaInfo(
+      tmdb_id: 0,
+      source: "themoviedb",
+      media_id: nil,
+      title: "测试电影",
+      type: "movie"
+    )
+
+    XCTAssertNil(ManualMediaSelection.mediaId(for: media, source: .themoviedb))
+  }
+
   func testPreviewFileNameMatchesWebPathPresentation() {
     XCTAssertEqual(
       manualTransferPreviewFileName(from: "/media/电影名称.2025.2160p.mkv"),

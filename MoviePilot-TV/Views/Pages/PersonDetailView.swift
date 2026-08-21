@@ -3,6 +3,7 @@ import SwiftUI
 
 struct PersonDetailView: View {
   @StateObject private var viewModel: PersonDetailViewModel
+  @ObservedObject private var apiService = APIService.shared
   @Binding var navigationPath: NavigationPath
 
   init(person: Person, navigationPath: Binding<NavigationPath>) {

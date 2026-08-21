@@ -49,8 +49,73 @@ private func withTransferHistoryTimeout<T: Sendable>(
   }
 }
 
+private func transferHistoryListJSON(ids: ClosedRange<Int>) -> String {
+  let items = ids.map { id in
+    #"{"id":\#(id),"title":"记录\#(id)","type":"电影","status":true}"#
+  }.joined(separator: ",")
+  return #"{"list":[\#(items)],"total":\#(ids.count)}"#
+}
+
 @MainActor
 final class TransferHistoryViewModelTests: XCTestCase {
+  func testAiRedoRequiresExplicitlyEnabledSetting() throws {
+    let service = APIService.testingInstance()
+    let viewModel = TransferHistoryViewModel(apiService: service)
+
+    XCTAssertFalse(viewModel.isAiRedoEnabled)
+
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(#"{}"#.utf8)
+    )
+    XCTAssertFalse(viewModel.isAiRedoEnabled)
+
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(#"{"AI_AGENT_ENABLE":null}"#.utf8)
+    )
+    XCTAssertFalse(viewModel.isAiRedoEnabled)
+
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(#"{"AI_AGENT_ENABLE":false}"#.utf8)
+    )
+    XCTAssertFalse(viewModel.isAiRedoEnabled)
+
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(#"{"AI_AGENT_ENABLE":true}"#.utf8)
+    )
+    XCTAssertTrue(viewModel.isAiRedoEnabled)
+  }
+
+  func testSearchFetcherDoesNotRetainViewModelAfterSearchCompletes() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await TransferHistoryURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://transfer-history-tests.local"
+    configureManageUser(service)
+
+    weak var retainedViewModel: TransferHistoryViewModel?
+    do {
+      let viewModel = TransferHistoryViewModel(apiService: service)
+      retainedViewModel = viewModel
+      viewModel.search(with: "电影")
+    }
+
+    for _ in 0..<2_000 {
+      guard retainedViewModel != nil else { break }
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertNil(retainedViewModel)
+  }
+
   func testSparseFileItemDoesNotRejectTransferHistoryPage() throws {
     let response = try JSONDecoder().decode(
       TransferHistoryResponse.self,
@@ -261,6 +326,58 @@ final class TransferHistoryViewModelTests: XCTestCase {
     let historyRequestCounts =
       await TransferHistoryURLProtocol.stub.recordedHistoryRequestCounts()
     XCTAssertEqual(historyRequestCounts, [20, 20])
+  }
+
+  func testPollingScanLimitFallbackRefreshesInsteadOfDroppingTail() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await TransferHistoryURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://transfer-history-tests.local"
+    configureManageUser(service)
+
+    // 初始已知项
+    await TransferHistoryURLProtocol.stub.setHistoryResponseData(
+      Data(#"{"list":[{"id":999,"title":"已知记录","type":"电影","status":true}],"total":1}"#.utf8)
+    )
+    let viewModel = TransferHistoryViewModel(apiService: service)
+    await viewModel.refresh()
+    XCTAssertEqual(viewModel.items.map(\.id), [999])
+
+    // 一次 101+ 条新增：页 1-5 各 20 条满页新记录，页 6 为 101-120，页 7 已知项，页 8 空
+    var dataByPage: [Int: Data] = [:]
+    for page in 1...5 {
+      let start = (page - 1) * 20 + 1
+      dataByPage[page] = Data(transferHistoryListJSON(ids: start...(start + 19)).utf8)
+    }
+    dataByPage[6] = Data(transferHistoryListJSON(ids: 101...120).utf8)
+    dataByPage[7] =
+      Data(#"{"list":[{"id":999,"title":"已知记录","type":"电影","status":true}],"total":1}"#.utf8)
+    dataByPage[8] = Data(#"{"list":[],"total":0}"#.utf8)
+    await TransferHistoryURLProtocol.stub.setHistoryResponseDataByPage(dataByPage)
+
+    // 轮询扫满 5 页仍未遇到已知项：不得提交不完整前缀，必须回退权威刷新
+    await viewModel.fetchLatest()
+    // 回退 refresh 会把游标重置回第 1 页，首屏只加载第 1 页（Paginator 首屏一页 + 滚动加载）
+    XCTAssertEqual(
+      viewModel.items.map(\.id), Array(1...20),
+      "应回退权威刷新而非提交前 100 条不完整前缀")
+
+    // 滚动加载全部页：旧缺陷下游标已被推到第 7 页，第 101-120 条永远拿不到
+    for _ in 0..<8 {
+      guard let lastId = viewModel.items.last?.id else { break }
+      await viewModel.loadMore(currentItemId: lastId)
+    }
+
+    let ids = Set(viewModel.items.map(\.id))
+    XCTAssertEqual(ids.count, 121)
+    XCTAssertTrue(
+      Set(101...120).isSubset(of: ids), "第 101-120 条不应被扫描上限丢弃")
+    XCTAssertTrue(ids.contains(999), "原有已知记录应保留")
   }
 
   func testLeavingStatusTabCancelsRefreshBeforeHistoryRequestStarts() async throws {
@@ -825,6 +942,7 @@ final class TransferHistoryViewModelTests: XCTestCase {
       XCTAssertEqual(blockedDeleteCount, 1)
     }
 
+
     // 对应父 View 因 Back/Menu 销毁：外部 owner 已释放，只有运行中的批删 Task 保活 ViewModel。
     XCTAssertNotNil(retainedViewModel)
 
@@ -840,6 +958,27 @@ final class TransferHistoryViewModelTests: XCTestCase {
     let finishedDeleteRequestCount = await TransferHistoryURLProtocol.stub.deleteRequestCount()
     XCTAssertEqual(finishedDeleteRequestCount, 2)
     XCTAssertNil(retainedViewModel)
+  }
+
+
+  func testDeselectIdsOnlyRemovesTargetSelection() async throws {
+    let service = APIService.testingInstance()
+    let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    let viewModel = TransferHistoryViewModel(apiService: service)
+    viewModel.selectedIds = [10, 11, 12]
+    viewModel.isSelectionMode = true
+
+    // 整理 A(10) 完成收尾：只移除 10，保留整理期间新选的 11/12
+    viewModel.deselect(ids: [10])
+    XCTAssertEqual(viewModel.selectedIds, [11, 12])
+    XCTAssertTrue(viewModel.isSelectionMode)
+
+    // 全部移除后退出选择模式
+    viewModel.deselect(ids: [11, 12])
+    XCTAssertTrue(viewModel.selectedIds.isEmpty)
+    XCTAssertFalse(viewModel.isSelectionMode)
   }
 
   func testAIRedoUsesWebSingleAndBatchRoutesAndShowsFailures() async throws {
@@ -939,6 +1078,50 @@ final class TransferHistoryViewModelTests: XCTestCase {
       guardedPaths.contains("/api/v1/history/transfer"),
       "AI 重整运行时不得并发删除同一整理历史。"
     )
+  }
+
+  func testAIRedoCleanEOFWithoutTerminalEventShowsRetryableFailure() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await TransferHistoryURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://transfer-history-tests.local"
+    configureManageUser(service)
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(#"{"AI_AGENT_ENABLE":true}"#.utf8)
+    )
+    await TransferHistoryURLProtocol.stub.setHistoryResponseData(
+      Data(#"{"list":[{"id":10,"title":"History","type":"电影","status":true}],"total":1}"#.utf8)
+    )
+    await TransferHistoryURLProtocol.stub.setProgressResponseData(
+      Data(
+        #"data: {"type":"progress","text":"处理中"}"#
+          .appending("\n\n").utf8
+      )
+    )
+
+    let history = try JSONDecoder().decode(
+      TransferHistory.self,
+      from: Data(#"{"id":10,"title":"History","type":"电影","status":true}"#.utf8)
+    )
+    let viewModel = TransferHistoryViewModel(apiService: service)
+    await viewModel.triggerAiRedo(
+      for: history,
+      sourceSession: viewModel.captureMutationSession()
+    )
+
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.errorMessage != "AI 整理连接中断，请重试。", Date() < deadline {
+      try await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isAiRedoing)
+    XCTAssertEqual(viewModel.errorMessage, "AI 整理连接中断，请重试。")
   }
 
   func testAIRedoDoesNotPostWhenSessionChangesAfterValidation() async throws {
@@ -1273,6 +1456,7 @@ private actor TransferHistoryURLProtocolStub {
   private var storageGate: TransferHistoryAsyncGate?
   private var historyGate: TransferHistoryAsyncGate?
   private var historyResponseData: Data?
+  private var historyResponseDataByPage: [Int: Data] = [:]
   private var deleteGate: TransferHistoryAsyncGate?
   private var deleteResponseData: Data?
   private var recordedDeleteRequestCount = 0
@@ -1288,6 +1472,7 @@ private actor TransferHistoryURLProtocolStub {
     storageGate = nil
     historyGate = nil
     historyResponseData = nil
+    historyResponseDataByPage.removeAll()
     deleteGate = nil
     deleteResponseData = nil
     recordedDeleteRequestCount = 0
@@ -1308,6 +1493,10 @@ private actor TransferHistoryURLProtocolStub {
 
   func setHistoryResponseData(_ data: Data?) {
     historyResponseData = data
+  }
+
+  func setHistoryResponseDataByPage(_ dataByPage: [Int: Data]) {
+    historyResponseDataByPage = dataByPage
   }
 
   func setDeleteResponse(_ data: Data, gate: TransferHistoryAsyncGate?) {
@@ -1362,9 +1551,11 @@ private actor TransferHistoryURLProtocolStub {
           queryItems?.first(where: { $0.name == "count" })?.value.flatMap(Int.init)
         )
       }
+      let page = queryItems?.first(where: { $0.name == "page" })?.value.flatMap(Int.init)
       let response = TransferHistoryHTTPStubResponse(
         statusCode: 200,
-        data: historyResponseData
+        data: page.flatMap({ historyResponseDataByPage[$0] })
+          ?? historyResponseData
           ?? Data(
             (title == "新查询"
               ? #"{"list":[{"id":20,"title":"新查询结果","type":"电影","status":true}],"total":1}"#

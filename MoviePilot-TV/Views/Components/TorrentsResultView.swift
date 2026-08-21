@@ -9,7 +9,7 @@ struct TorrentsResultView<Header: View>: View {
   // 筛选与排序状态
   @State private var filterForm: [String: Set<String>] = [:]
   @State private var sortField: SortField = .default
-  @State private var sortType: SortType = .desc
+  @State private var sortType: SortType = .default
 
   // Sheet 状态
   @State private var activeFilter: FilterConfig?
@@ -123,6 +123,16 @@ struct TorrentsResultView<Header: View>: View {
 
   // MARK: - 逻辑
 
+  /// 筛选选项规范值：trim 后空串/纯空白统一为“无”。
+  static func normalizedFilterOption(_ value: String?) -> String {
+    MediaIdentifier.normalizedString(value) ?? "无"
+  }
+
+  /// 促销筛选值：直接复用后端 volume_factor（对齐 Web），trim 后空视为无促销（不生成选项、不参与匹配）。
+  static func freeStateValue(_ context: Context) -> String? {
+    MediaIdentifier.normalizedString(context.torrent_info?.volume_factor)
+  }
+
   private func updateFilterOptions() {
     var sites = Set<String>()
     var seasons = Set<String>()
@@ -133,25 +143,27 @@ struct TorrentsResultView<Header: View>: View {
     var freeStates = Set<String>()
 
     for context in result {
-      let site = context.torrent_info?.site_name ?? ""
-      sites.insert(site.isEmpty ? "无" : site)
+      let site = Self.normalizedFilterOption(context.torrent_info?.site_name)
+      sites.insert(site)
 
-      let seasonEpisode = context.meta_info?.season_episode ?? ""
-      seasons.insert(seasonEpisode.isEmpty ? "无" : seasonEpisode)
+      let seasonEpisode = Self.normalizedFilterOption(context.meta_info?.season_episode)
+      seasons.insert(seasonEpisode)
 
-      let res = context.meta_info?.resource_pix ?? ""
-      resolutions.insert(res.isEmpty ? "无" : res)
+      let res = Self.normalizedFilterOption(context.meta_info?.resource_pix)
+      resolutions.insert(res)
 
-      let code = context.meta_info?.video_encode ?? ""
-      videoCodes.insert(code.isEmpty ? "无" : code)
+      let code = Self.normalizedFilterOption(context.meta_info?.video_encode)
+      videoCodes.insert(code)
 
-      let edition = context.meta_info?.edition ?? ""
-      editions.insert(edition.isEmpty ? "无" : edition)
+      let edition = Self.normalizedFilterOption(context.meta_info?.edition)
+      editions.insert(edition)
 
-      let group = context.meta_info?.resource_team ?? ""
-      releaseGroups.insert(group.isEmpty ? "无" : group)
+      let group = Self.normalizedFilterOption(context.meta_info?.resource_team)
+      releaseGroups.insert(group)
 
-      freeStates.insert(getFreeState(context))
+      if let freeState = Self.freeStateValue(context) {
+        freeStates.insert(freeState)
+      }
     }
 
     // 辅助排序方法：将"无"放在最后
@@ -177,25 +189,20 @@ struct TorrentsResultView<Header: View>: View {
   private func contextMatches(_ context: Context, key: String, values: Set<String>) -> Bool {
     switch key {
     case "site":
-      let val = context.torrent_info?.site_name ?? ""
-      return values.contains(val.isEmpty ? "无" : val)
+      return values.contains(Self.normalizedFilterOption(context.torrent_info?.site_name))
     case "season":
-      let val = context.meta_info?.season_episode ?? ""
-      return values.contains(val.isEmpty ? "无" : val)
+      return values.contains(Self.normalizedFilterOption(context.meta_info?.season_episode))
     case "resolution":
-      let val = context.meta_info?.resource_pix ?? ""
-      return values.contains(val.isEmpty ? "无" : val)
+      return values.contains(Self.normalizedFilterOption(context.meta_info?.resource_pix))
     case "videoCode":
-      let val = context.meta_info?.video_encode ?? ""
-      return values.contains(val.isEmpty ? "无" : val)
+      return values.contains(Self.normalizedFilterOption(context.meta_info?.video_encode))
     case "edition":
-      let val = context.meta_info?.edition ?? ""
-      return values.contains(val.isEmpty ? "无" : val)
+      return values.contains(Self.normalizedFilterOption(context.meta_info?.edition))
     case "releaseGroup":
-      let val = context.meta_info?.resource_team ?? ""
-      return values.contains(val.isEmpty ? "无" : val)
+      return values.contains(Self.normalizedFilterOption(context.meta_info?.resource_team))
     case "freeState":
-      return values.contains(getFreeState(context))
+      guard let val = Self.freeStateValue(context) else { return false }
+      return values.contains(val)
     default:
       return true
     }
@@ -216,25 +223,21 @@ struct TorrentsResultView<Header: View>: View {
     for context in partiallyFiltered {
       switch targetKey {
       case "site":
-        let val = context.torrent_info?.site_name ?? ""
-        availableOptions.insert(val.isEmpty ? "无" : val)
+        availableOptions.insert(Self.normalizedFilterOption(context.torrent_info?.site_name))
       case "season":
-        let val = context.meta_info?.season_episode ?? ""
-        availableOptions.insert(val.isEmpty ? "无" : val)
+        availableOptions.insert(Self.normalizedFilterOption(context.meta_info?.season_episode))
       case "resolution":
-        let val = context.meta_info?.resource_pix ?? ""
-        availableOptions.insert(val.isEmpty ? "无" : val)
+        availableOptions.insert(Self.normalizedFilterOption(context.meta_info?.resource_pix))
       case "videoCode":
-        let val = context.meta_info?.video_encode ?? ""
-        availableOptions.insert(val.isEmpty ? "无" : val)
+        availableOptions.insert(Self.normalizedFilterOption(context.meta_info?.video_encode))
       case "edition":
-        let val = context.meta_info?.edition ?? ""
-        availableOptions.insert(val.isEmpty ? "无" : val)
+        availableOptions.insert(Self.normalizedFilterOption(context.meta_info?.edition))
       case "releaseGroup":
-        let val = context.meta_info?.resource_team ?? ""
-        availableOptions.insert(val.isEmpty ? "无" : val)
+        availableOptions.insert(Self.normalizedFilterOption(context.meta_info?.resource_team))
       case "freeState":
-        availableOptions.insert(getFreeState(context))
+        if let val = Self.freeStateValue(context) {
+          availableOptions.insert(val)
+        }
       default:
         break
       }
@@ -259,53 +262,54 @@ struct TorrentsResultView<Header: View>: View {
       }
     }
 
-    // 2. 排序
-    results.sort { (lhs, rhs) -> Bool in
+    // 2. 全局排序：正常资源始终在前，软过滤资源统一置尾
+    filteredResults = Self.orderResults(results, by: sortField, type: sortType)
+  }
+
+  static func orderResults(
+    _ results: [Context],
+    by sortField: SortField,
+    type sortType: SortType
+  ) -> [Context] {
+    let matched = results.filter { !$0.isFilteredOut }
+    let filteredOut = results.filter { $0.isFilteredOut }
+
+    // “默认排序”保留后端顺序，只调整软过滤分区。
+    guard sortType != .default else {
+      return matched + filteredOut
+    }
+
+    // 显式排序分别作用于正常资源和软过滤资源，不跨越分区。
+    let isAsc = sortType == .asc
+    let comparator: (Context, Context) -> Bool = { lhs, rhs in
       let lInfo = lhs.torrent_info
       let rInfo = rhs.torrent_info
 
-      let isAsc = sortType == .asc
-
       switch sortField {
       case .size:
-        return isAsc ? (lInfo?.size ?? 0 < rInfo?.size ?? 0) : (lInfo?.size ?? 0 > rInfo?.size ?? 0)
+        return isAsc
+          ? (lInfo?.size ?? 0) < (rInfo?.size ?? 0)
+          : (lInfo?.size ?? 0) > (rInfo?.size ?? 0)
       case .seeders:
         return isAsc
-          ? (lInfo?.seeders ?? 0 < rInfo?.seeders ?? 0)
-          : (lInfo?.seeders ?? 0 > rInfo?.seeders ?? 0)
+          ? (lInfo?.seeders ?? 0) < (rInfo?.seeders ?? 0)
+          : (lInfo?.seeders ?? 0) > (rInfo?.seeders ?? 0)
       case .peers:
         return isAsc
-          ? (lInfo?.peers ?? 0 < rInfo?.peers ?? 0) : (lInfo?.peers ?? 0 > rInfo?.peers ?? 0)
+          ? (lInfo?.peers ?? 0) < (rInfo?.peers ?? 0)
+          : (lInfo?.peers ?? 0) > (rInfo?.peers ?? 0)
       case .time:
         let lDate = lInfo?.pubdate ?? ""
         let rDate = rInfo?.pubdate ?? ""
         return isAsc ? (lDate < rDate) : (lDate > rDate)
       case .default:
-        return lhs.torrent_info?.pri_order ?? 0 > rhs.torrent_info?.pri_order ?? 0
+        return isAsc
+          ? (lInfo?.pri_order ?? 0) < (rInfo?.pri_order ?? 0)
+          : (lInfo?.pri_order ?? 0) > (rInfo?.pri_order ?? 0)
       }
     }
 
-    // 如果没有选择特定排序或作为次要排序，是否应用默认排序？
-    // 当前逻辑仅替换列表。
-
-    filteredResults = results
-  }
-
-  private func getFreeState(_ context: Context) -> String {
-    let dl = context.torrent_info?.downloadvolumefactor ?? 1.0
-    let up = context.torrent_info?.uploadvolumefactor ?? 1.0
-
-    if dl == 0 {
-      if up > 1 { return "2xFree" }
-      return "Free"
-    }
-    if dl < 1.0 {
-      return "50%"
-    }
-    if up > 1.0 {
-      return "2x"
-    }
-    return "Normal"
+    return matched.sorted(by: comparator) + filteredOut.sorted(by: comparator)
   }
 
 }
@@ -337,6 +341,7 @@ enum SortField: String, CaseIterable, Identifiable {
 }
 
 enum SortType: String, CaseIterable, Identifiable {
+  case `default` = "默认排序"
   case asc = "升序"
   case desc = "降序"
 
@@ -385,7 +390,11 @@ struct TorrentFilterBar: View {
           }
         } label: {
           HStack(spacing: 4) {
-            Image(systemName: sortType == .asc ? "arrow.up" : "arrow.down")
+            if sortType == .asc {
+              Image(systemName: "arrow.up")
+            } else if sortType == .desc {
+              Image(systemName: "arrow.down")
+            }
             Text(sortField.rawValue)
           }
           .font(.caption)

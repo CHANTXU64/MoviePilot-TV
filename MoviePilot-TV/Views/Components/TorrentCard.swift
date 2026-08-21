@@ -34,11 +34,26 @@ struct TorrentCard: View {
     apiService.canAccess(.search)
   }
 
+  /// 主标题规范链：media.title → meta.name → torrent.title；纯空白视为缺值。
+  static func displayTitle(media: MediaInfo?, meta: MetaInfo?, torrent: TorrentInfo?) -> String {
+    MediaIdentifier.normalizedString(media?.title)
+      ?? MediaIdentifier.normalizedString(meta?.name)
+      ?? MediaIdentifier.normalizedString(torrent?.title)
+      ?? ""
+  }
+
+  /// 副标题规范链：meta.subtitle → torrent.description；纯空白视为缺值。
+  static func descriptionText(meta: MetaInfo?, torrent: TorrentInfo?) -> String? {
+    MediaIdentifier.normalizedString(meta?.subtitle)
+      ?? MediaIdentifier.normalizedString(torrent?.description)
+  }
+
   @State private var showDownload = false
   @FocusState private var isButtonFocused: Bool
 
   var body: some View {
-    if let meta = meta, let torrent = torrent {
+    if let torrent = torrent {
+      let displayTitle = Self.displayTitle(media: media, meta: meta, torrent: torrent)
       VStack(alignment: .leading, spacing: 8) {
         // 媒体标题
         HStack(alignment: .top, spacing: 12) {
@@ -54,15 +69,15 @@ struct TorrentCard: View {
                 )
                 .foregroundColor(.white)
             }
-            Text(media?.title ?? meta.name)
+            Text(displayTitle)
               .font(.headline)
               .fontWeight(.bold)
               .lineLimit(2)
               .multilineTextAlignment(.leading)
           }
           Spacer(minLength: 0)
-          if !meta.season_episode.isEmpty {
-            Text(meta.season_episode.formattedSeasonEpisode())
+          if let seasonEpisode = MediaIdentifier.normalizedString(meta?.season_episode) {
+            Text(seasonEpisode.formattedSeasonEpisode())
               .font(.caption2)
               .fontWeight(.semibold)
               .padding(.horizontal, 8)
@@ -74,20 +89,19 @@ struct TorrentCard: View {
           }
         }
 
-        let descriptionText = meta.subtitle ?? torrent.description
-        let shouldShowDescription = (descriptionText?.isEmpty == false)
+        let descriptionText = Self.descriptionText(meta: meta, torrent: torrent)
 
         // 种子内容
-        if let title = torrent.title {
+        if let title = MediaIdentifier.normalizedString(torrent.title) {
           Text(title)
             .font(.caption)
             .foregroundColor(.secondary)
-            .lineLimit(shouldShowDescription ? 2 : 4)
+            .lineLimit(descriptionText == nil ? 4 : 2)
         }
 
         // 种子描述
-        if shouldShowDescription {
-          Text(descriptionText!)
+        if let descriptionText {
+          Text(descriptionText)
             .font(.caption2)
             .foregroundColor(.secondary)
             .lineLimit(2)
@@ -136,28 +150,28 @@ struct TorrentCard: View {
         // 资源标签区
         HFlow(itemSpacing: 20, rowSpacing: 8) {
           // 站点
-          if let site_name = torrent.site_name {
-            TorrentCardTag(text: site_name)
+          if let siteName = MediaIdentifier.normalizedString(torrent.site_name) {
+            TorrentCardTag(text: siteName)
           }
           // 流媒体平台
-          if meta.web_source != nil && !meta.web_source!.isEmpty {
-            TorrentCardTag(text: meta.web_source!)
+          if let webSource = MediaIdentifier.normalizedString(meta?.web_source) {
+            TorrentCardTag(text: webSource)
           }
-          // <!-- 版本标签 -->
-          if meta.edition != nil && !meta.edition!.isEmpty {
-            TorrentCardTag(text: meta.edition!)
+          // 版本标签
+          if let edition = MediaIdentifier.normalizedString(meta?.edition) {
+            TorrentCardTag(text: edition)
           }
-          // <!-- 分辨率标签 -->
-          if let resource_pix = meta.resource_pix {
-            TorrentCardTag(text: resource_pix)
+          // 分辨率标签
+          if let resourcePix = MediaIdentifier.normalizedString(meta?.resource_pix) {
+            TorrentCardTag(text: resourcePix)
           }
-          // <!-- 编码标签 -->
-          if let video_encode = meta.video_encode {
-            TorrentCardTag(text: video_encode)
+          // 编码标签
+          if let videoEncode = MediaIdentifier.normalizedString(meta?.video_encode) {
+            TorrentCardTag(text: videoEncode)
           }
-          // <!-- 制作组标签 -->
-          if meta.resource_team != nil && !meta.resource_team!.isEmpty {
-            TorrentCardTag(text: meta.resource_team!)
+          // 制作组标签
+          if let resourceTeam = MediaIdentifier.normalizedString(meta?.resource_team) {
+            TorrentCardTag(text: resourceTeam)
           }
         }
         .font(.caption2)
@@ -204,9 +218,6 @@ struct TorrentCard: View {
           showDownload = false
         }
       }
-    } else {
-      // 记录缺失的数据（可选，依赖内存或控制台，但根据请求隐藏）
-      EmptyView()
     }
   }
 }

@@ -92,6 +92,8 @@ class ResourceResultViewModel: ObservableObject {
     searchStreamTask = Task { @MainActor [weak self] in
       var accumulatedResults: [Context] = []
       var finalResultApplied = false
+      // 只有收到端点认可的 done 才允许 missingSites 补偿与发布；业务 error 与无终止 EOF 均不发布。
+      var receivedDone = false
       defer {
         self?.finishSearchIfCurrent(
           generation: currentSearchGeneration,
@@ -142,11 +144,13 @@ class ResourceResultViewModel: ObservableObject {
           )
 
           if event.type == "error" {
-            self?.errorMessage = event.message_i18n ?? event.message ?? "未找到相关资源"
-            break
+            self?.errorMessage = event.localizedMessage ?? "未找到相关资源"
+            // 整次搜索失败：不发布已积累的部分结果，也不执行站点补偿。
+            return
           }
 
           if event.type == "done" {
+            receivedDone = true
             // 与 Web v2.13.2 保持一致：给后端搜索结果缓存写入留出收尾时间。
             try? await Task.sleep(nanoseconds: doneCloseDelay)
             guard canContinue() else { return }
@@ -155,6 +159,10 @@ class ResourceResultViewModel: ObservableObject {
         }
 
         if canContinue() {
+          // 只有明确成功终止（done）才允许 missingSites 补偿与结果发布。
+          guard receivedDone else {
+            throw URLError(.networkConnectionLost)
+          }
           // 获取所有本次搜索的目标站点
           var targetSites: Set<Int> = []
           if let specificSites = sites, !specificSites.isEmpty {
@@ -199,9 +207,19 @@ class ResourceResultViewModel: ObservableObject {
 
           guard canContinue() else { return }
 
-          // 应用自定义过滤规则
+          // 应用自定义过滤规则（规则内容非法时显式提示；拉取规则网络失败时放行不过滤）
           guard let self else { return }
-          let filteredResults = await self.applyCustomFilter(to: accumulatedResults)
+          let filteredResults: [Context]
+          do {
+            filteredResults = try await self.applyCustomFilter(to: accumulatedResults)
+          } catch let error as CustomFilterService.FilterError {
+            guard canContinue() else { return }
+            self.errorMessage = error.localizedDescription
+            return
+          } catch {
+            print("❌ [ResourceResultVM] 加载过滤规则失败，放行不过滤: \(error)")
+            filteredResults = accumulatedResults
+          }
           
           guard canContinue() else { return }
 
@@ -223,7 +241,14 @@ class ResourceResultViewModel: ObservableObject {
             guard canContinue() else { return }
 
             guard let self else { return }
-            searchResults = await self.applyCustomFilter(to: searchResults)
+            do {
+              searchResults = try await self.applyCustomFilter(to: searchResults)
+            } catch let error as CustomFilterService.FilterError {
+              self.errorMessage = error.localizedDescription
+              return
+            } catch {
+              print("❌ [ResourceResultVM] 加载过滤规则失败，放行不过滤: \(error)")
+            }
             guard canContinue() else { return }
 
             self.results = searchResults
@@ -254,13 +279,8 @@ class ResourceResultViewModel: ObservableObject {
   }
 
   /// 应用自定义过滤规则
-  private func applyCustomFilter(to contexts: [Context]) async -> [Context] {
-    do {
-      return try await CustomFilterService.applyHardAndSoftFilter(
-        to: contexts, using: apiService, caller: "ResourceResultVM")
-    } catch {
-      print("❌ [ResourceResultVM] 加载过滤规则失败: \(error)")
-      return contexts
-    }
+  private func applyCustomFilter(to contexts: [Context]) async throws -> [Context] {
+    try await CustomFilterService.applyHardAndSoftFilter(
+      to: contexts, using: apiService, caller: "ResourceResultVM")
   }
 }

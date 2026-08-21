@@ -146,7 +146,8 @@ class SubscriptionHandler: ObservableObject {
       return nil
     } catch {
       Logger.error("Failed to fork subscription: \(error)")
-      forkErrorMessage = "暂时无法复用订阅，请稍后重试。"
+      let title = share.share_title ?? share.name ?? "该订阅"
+      forkErrorMessage = "暂时无法复用订阅《\(title)》，请稍后重试。"
       return nil
     }
   }

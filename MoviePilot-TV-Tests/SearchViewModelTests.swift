@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import XCTest
 
@@ -29,6 +30,13 @@ private actor SearchAsyncGate {
   }
 }
 
+/// 资源搜索流的终止形态：done（成功收尾）/ error（业务失败）/ eof（无终止断开）。
+private enum SearchStreamTermination {
+  case done
+  case error
+  case eof
+}
+
 private func withTimeout<T: Sendable>(
   _ description: String,
   seconds: TimeInterval = 2,
@@ -51,6 +59,24 @@ private func withTimeout<T: Sendable>(
 
 @MainActor
 final class SearchViewModelTests: XCTestCase {
+  @MainActor
+  func testSearchViewModelForwardsSiteFilterChangesToParent() {
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { snapshot.restore(to: sharedService) }
+
+    let viewModel = SearchViewModel()
+    let changeReceived = expectation(description: "父 VM 收到 siteFilter 变化")
+    let cancellable = viewModel.objectWillChange.sink { _ in
+      changeReceived.fulfill()
+    }
+    defer { cancellable.cancel() }
+
+    viewModel.siteFilter.selectedSites = [1]
+
+    wait(for: [changeReceived], timeout: 1)
+  }
+
   func testOlderUnifiedSearchCompletionDoesNotClearLoadingForNewerSearch() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
@@ -128,6 +154,64 @@ final class SearchViewModelTests: XCTestCase {
       0,
       "Unified search should not auto-load subscription shares for a user without subscribe permission."
     )
+  }
+
+  func testNewUnifiedSearchClearsPreviousBestResultsWhileInFlight() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.query = "old"
+    await viewModel.autoSearch()
+
+    XCTAssertFalse(viewModel.isLoading)
+    let oldResultTitles = viewModel.bestResults.compactMap { item -> String? in
+      if case .media(let media) = item {
+        return media.title
+      }
+      return nil
+    }
+    XCTAssertEqual(oldResultTitles, ["Old Result"])
+
+    let newSearchGate = SearchAsyncGate()
+    await SearchViewModelURLProtocol.stub.setGate(newSearchGate, forQuery: "new")
+    viewModel.query = "new"
+    let newSearchTask = Task { @MainActor in
+      await viewModel.autoSearch()
+    }
+    defer { newSearchTask.cancel() }
+
+    try await withTimeout("new unified search request to start") {
+      await SearchViewModelURLProtocol.stub.waitForRequest(query: "new")
+    }
+
+    XCTAssertTrue(
+      viewModel.bestResults.isEmpty,
+      "A new unified search must clear previous best results while it is in flight."
+    )
+
+    await newSearchGate.open()
+    try await withTimeout("new unified search to finish") {
+      await newSearchTask.value
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    let newResultTitles = viewModel.bestResults.compactMap { item -> String? in
+      if case .media(let media) = item {
+        return media.title
+      }
+      return nil
+    }
+    XCTAssertEqual(newResultTitles, ["New Result"])
   }
 
   func testUnifiedSearchSessionChangeEndsLoading() async throws {
@@ -357,6 +441,32 @@ final class SearchViewModelTests: XCTestCase {
     XCTAssertTrue(sourceValues.allSatisfy { $0 == nil })
   }
 
+  func testPersonPaginatorRefreshClearsSeenIdentitySet() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.mediaSearchSource = nil
+    viewModel.query = "person-reset"
+    await viewModel.autoSearch()
+
+    let paginator = try XCTUnwrap(viewModel.personPaginator)
+    XCTAssertEqual(paginator.items.map(\.id), ["douban-7", "themoviedb-7"])
+
+    await paginator.refresh()
+
+    XCTAssertEqual(paginator.items.map(\.id), ["douban-7", "themoviedb-7"])
+  }
+
   func testTVMediaSourceDefaultsAreLoadedBySearchViewModel() {
     let service = APIService.shared
     let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
@@ -395,6 +505,8 @@ final class SearchViewModelTests: XCTestCase {
     let newStreamGate = SearchAsyncGate()
     await SearchViewModelURLProtocol.stub.setCustomFilterGate(oldFilterGate)
     await SearchViewModelURLProtocol.stub.setGate(newStreamGate, forQuery: "new")
+    // old 搜索以 done 成功收尾，确保进入过滤阶段后验证其取消。
+    await SearchViewModelURLProtocol.stub.setStreamTermination(.done, forQuery: "old")
 
     let viewModel = SearchViewModel(apiService: service)
     viewModel.searchType = .resource
@@ -436,6 +548,122 @@ final class SearchViewModelTests: XCTestCase {
 
     await oldFilterGate.open()
     await newStreamGate.open()
+  }
+
+  func testNewResourceSearchClearsPreviousResultsImmediately() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureSuperUserSearchSession(service)
+    // 第一次搜索以 done 成功收尾，确保发布旧结果。
+    await SearchViewModelURLProtocol.stub.setStreamTermination(.done, forQuery: "old")
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .resource
+    viewModel.query = "old"
+
+    await viewModel.autoSearch()
+    let firstDeadline = Date().addingTimeInterval(2)
+    while viewModel.resourceResults.isEmpty && Date() < firstDeadline {
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    XCTAssertFalse(
+      viewModel.resourceResults.isEmpty,
+      "First search must publish results before the second search starts."
+    )
+
+    // 第二次搜索：响应被 gate 卡住期间，旧结果必须已被立即清空。
+    let gate = SearchAsyncGate()
+    await SearchViewModelURLProtocol.stub.setGate(gate, forQuery: "new")
+    // 第二次搜索以 done 成功收尾，确保 gate 打开后发布自己的结果。
+    await SearchViewModelURLProtocol.stub.setStreamTermination(.done, forQuery: "new")
+    viewModel.query = "new"
+    await viewModel.autoSearch()
+
+    XCTAssertTrue(
+      viewModel.resourceResults.isEmpty,
+      "A new resource search must clear previous results before its own response arrives."
+    )
+
+    await gate.open()
+    let secondDeadline = Date().addingTimeInterval(2)
+    while viewModel.resourceResults.isEmpty && Date() < secondDeadline {
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    XCTAssertFalse(
+      viewModel.resourceResults.isEmpty,
+      "Second search must publish its own results after the gate opens."
+    )
+  }
+
+  func testResourceSearchErrorEventDoesNotPublishPartialResults() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureSuperUserSearchSession(service)
+    // error 事件 = 整次搜索失败，不得发布已积累的部分结果。
+    await SearchViewModelURLProtocol.stub.setStreamTermination(.error, forQuery: "broken")
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .resource
+    viewModel.query = "broken"
+
+    await viewModel.autoSearch()
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertEqual(viewModel.resourceErrorMessage, "站点搜索失败")
+    XCTAssertTrue(
+      viewModel.resourceResults.isEmpty,
+      "An error event must not publish partially accumulated results as a successful search."
+    )
+  }
+
+  func testResourceSearchEOFWithoutDoneUsesFallbackInsteadOfPartialResults() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureSuperUserSearchSession(service)
+    // EOF 无 done = 连接异常；丢弃流中部分结果，改走普通搜索端点。
+    await SearchViewModelURLProtocol.stub.setStreamTermination(.eof, forQuery: "cut")
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .resource
+    viewModel.query = "cut"
+
+    await viewModel.autoSearch()
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertNil(viewModel.resourceErrorMessage)
+    XCTAssertEqual(viewModel.resourceResults.first?.torrent_info?.title, "Fallback Resource")
+    let fallbackRequestCount = await SearchViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/search/title")
+    XCTAssertEqual(fallbackRequestCount, 1)
   }
 
   func testCustomFilterSkipsRulesForNonSuperuserSearchUserWithPersistedRuleSelection()
@@ -505,6 +733,202 @@ final class SearchViewModelTests: XCTestCase {
     )
   }
 
+  func testCustomFilterMissingRuleIdExcludesAllLikeBackend() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureSuperUserSearchSession(service)
+    // 所选规则 ID 不存在（后端 rule_set.get 为空返回 False）→ 全部排除。
+    let filterSnapshot = SearchViewModelFilterSelectionSnapshot.selectHardRule(
+      "missing-id", apiService: service)
+    defer { filterSnapshot.restore() }
+
+    let contexts = [
+      Context(
+        torrent_info: TorrentInfo(
+          site: 1,
+          site_name: "Test Site",
+          site_order: 1,
+          title: "Any Result",
+          description: "",
+          enclosure: "https://example.test/any",
+          page_url: "https://example.test/any",
+          size: 1024,
+          seeders: 10,
+          peers: 1,
+          pubdate: "2026-06-16 10:00:00",
+          uploadvolumefactor: 1.0,
+          downloadvolumefactor: 1.0,
+          pri_order: 1,
+          labels: [],
+          volume_factor: "1x"
+        )
+      )
+    ]
+
+    let filtered = try await CustomFilterService.applyHardAndSoftFilter(
+      to: contexts,
+      using: service,
+      caller: "missing-rule-test"
+    )
+
+    XCTAssertTrue(
+      filtered.isEmpty,
+      "与后端 __match_rule 一致：所选规则 ID 不存在时全部排除，而非静默放行。"
+    )
+  }
+
+  func testCustomFilterInvalidRuleShowsErrorAndDoesNotPublishResults() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureSuperUserSearchSession(service)
+    // 规则内容非法（include 是无法编译的正则）→ 显式报错，不发布已积累的结果。
+    await SearchViewModelURLProtocol.stub.setCustomFilterRulesJSON(
+      #"{"data":{"value":[{"id":"bad-regex","name":"Bad","include":["["]}]}}"#)
+    await SearchViewModelURLProtocol.stub.setStreamTermination(.done, forQuery: "invalid")
+    let filterSnapshot = SearchViewModelFilterSelectionSnapshot.selectHardRule(
+      "bad-regex", apiService: service)
+    defer { filterSnapshot.restore() }
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .resource
+    viewModel.query = "invalid"
+
+    await viewModel.autoSearch()
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertTrue(
+      viewModel.resourceResults.isEmpty,
+      "规则内容非法时不得发布未过滤的结果。"
+    )
+    XCTAssertEqual(
+      viewModel.resourceErrorMessage,
+      "自定义过滤规则无效：正则表达式「[」无法编译"
+    )
+  }
+
+  func testCustomFilterFetchNetworkFailurePassesThroughUnfiltered() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureSuperUserSearchSession(service)
+    // 拉取规则网络失败 → 与旧行为一致放行不过滤，不阻断结果。
+    await SearchViewModelURLProtocol.stub.setCustomFilterRulesFailure()
+    await SearchViewModelURLProtocol.stub.setStreamTermination(.done, forQuery: "netdown")
+    let filterSnapshot = SearchViewModelFilterSelectionSnapshot.selectHardRule(
+      "allow-all", apiService: service)
+    defer { filterSnapshot.restore() }
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .resource
+    viewModel.query = "netdown"
+
+    await viewModel.autoSearch()
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertEqual(viewModel.resourceResults.count, 1)
+    XCTAssertNil(viewModel.resourceErrorMessage)
+  }
+
+  func testCustomFilterMissingSoftRuleIdGreysAllLikeBackend() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureSuperUserSearchSession(service)
+    // 所选软规则 ID 不存在（后端 rule_set.get 为空返回 False）→ 全部置灰。
+    let filterSnapshot = SearchViewModelFilterSelectionSnapshot.selectSoftRule(
+      "missing-id", apiService: service)
+    defer { filterSnapshot.restore() }
+
+    let contexts = [
+      Context(
+        torrent_info: TorrentInfo(
+          site: 1,
+          site_name: "Test Site",
+          site_order: 1,
+          title: "First Result",
+          description: "",
+          enclosure: "https://example.test/first",
+          page_url: "https://example.test/first",
+          size: 1024,
+          seeders: 10,
+          peers: 1,
+          pubdate: "2026-06-16 10:00:00",
+          uploadvolumefactor: 1.0,
+          downloadvolumefactor: 1.0,
+          pri_order: 1,
+          labels: [],
+          volume_factor: "1x"
+        )
+      ),
+      Context(
+        torrent_info: TorrentInfo(
+          site: 1,
+          site_name: "Test Site",
+          site_order: 1,
+          title: "Second Result",
+          description: "",
+          enclosure: "https://example.test/second",
+          page_url: "https://example.test/second",
+          size: 2048,
+          seeders: 20,
+          peers: 2,
+          pubdate: "2026-06-16 10:00:00",
+          uploadvolumefactor: 1.0,
+          downloadvolumefactor: 1.0,
+          pri_order: 2,
+          labels: [],
+          volume_factor: "1x"
+        )
+      ),
+    ]
+
+    let filtered = try await CustomFilterService.applyHardAndSoftFilter(
+      to: contexts,
+      using: service,
+      caller: "missing-soft-rule-test"
+    )
+
+    XCTAssertEqual(filtered.count, 2)
+    XCTAssertTrue(
+      filtered.allSatisfy(\.isFilteredOut),
+      "与后端 __match_rule 一致：所选软规则 ID 不存在时全部置灰。"
+    )
+  }
+
   func testMapMediaToSubscribePreservesUnifiedIdentity() {
     let subscribe = SearchViewModel().mapMediaToSubscribe(
       MediaInfo(
@@ -570,14 +994,22 @@ private struct SearchViewModelHTTPStubResponse: Sendable {
 private actor SearchViewModelURLProtocolStub {
   private var gatesByQuery: [String: SearchAsyncGate] = [:]
   private var customFilterGate: SearchAsyncGate?
+  private var customFilterRulesJSON: String?
+  private var customFilterRulesFailure = false
+  private var mediaResultsByQuery: [String: String] = [:]
   private var requestedRequests: [SearchRecordedRequest] = []
   private var cancelledRequests: [SearchRecordedRequest] = []
+  private var streamTerminations: [String: SearchStreamTermination] = [:]
 
   func reset() {
     gatesByQuery.removeAll()
     customFilterGate = nil
+    customFilterRulesJSON = nil
+    customFilterRulesFailure = false
+    mediaResultsByQuery.removeAll()
     requestedRequests.removeAll()
     cancelledRequests.removeAll()
+    streamTerminations.removeAll()
   }
 
   func setGate(_ gate: SearchAsyncGate, forQuery query: String) {
@@ -586,6 +1018,26 @@ private actor SearchViewModelURLProtocolStub {
 
   func setCustomFilterGate(_ gate: SearchAsyncGate) {
     customFilterGate = gate
+  }
+
+  /// 覆盖 CustomFilterRules 返回的规则列表 JSON。
+  func setCustomFilterRulesJSON(_ json: String) {
+    customFilterRulesJSON = json
+  }
+
+  /// 让 CustomFilterRules 拉取以网络错误失败。
+  func setCustomFilterRulesFailure() {
+    customFilterRulesFailure = true
+  }
+
+  /// 覆盖 /media/search 返回的媒体 JSON 数组（按 title 参数匹配）。
+  func setMediaResults(_ json: String, forQuery query: String) {
+    mediaResultsByQuery[query] = json
+  }
+
+  /// 配置资源搜索流的终止形态：done（成功收尾）/ error（业务失败）/ eof（无终止断开）。
+  func setStreamTermination(_ termination: SearchStreamTermination, forQuery query: String) {
+    streamTerminations[query] = termination
   }
 
   func response(for request: URLRequest) async throws -> SearchViewModelHTTPStubResponse {
@@ -614,6 +1066,12 @@ private actor SearchViewModelURLProtocolStub {
       await gate.wait()
     } else if let gate = gatesByQuery[query] {
       await gate.wait()
+    }
+
+    if components.path == "/api/v1/system/setting/CustomFilterRules",
+      customFilterRulesFailure
+    {
+      throw URLError(.notConnectedToInternet)
     }
 
     return SearchViewModelHTTPStubResponse(
@@ -689,9 +1147,18 @@ private actor SearchViewModelURLProtocolStub {
 
   private func responseData(path: String, queryItems: [URLQueryItem], query: String) -> Data {
     if path == "/api/v1/search/title/stream" {
-      return resourceSearchStreamData(title: query == "new" ? "New Resource" : "Old Resource")
+      return resourceSearchStreamData(
+        title: query == "new" ? "New Resource" : "Old Resource",
+        termination: streamTerminations[query] ?? .eof
+      )
+    }
+    if path == "/api/v1/search/title" {
+      return Data("[\(resourceContextJSON(title: "Fallback Resource"))]".utf8)
     }
     if path == "/api/v1/system/setting/CustomFilterRules" {
+      if let customFilterRulesJSON {
+        return Data(customFilterRulesJSON.utf8)
+      }
       return Data(
         """
         {"data":{"value":[{"id":"allow-all","name":"Allow All"}]}}
@@ -703,17 +1170,30 @@ private actor SearchViewModelURLProtocolStub {
     }
 
     let type = queryItems.first(where: { $0.name == "type" })?.value
+    let page = queryItems.first(where: { $0.name == "page" })?.value ?? "1"
+    if query == "person-reset", type == "person", page == "1" {
+      return Data(
+        """
+        [
+          {"source":"douban","id":7,"name":"豆瓣人物"},
+          {"source":"douban","id":7,"name":"豆瓣重复人物"},
+          {"source":"themoviedb","id":7,"name":"TMDB人物"}
+        ]
+        """.utf8)
+    }
     guard type == nil || type == "media" else {
       return Data("[]".utf8)
     }
 
-    let page = queryItems.first(where: { $0.name == "page" })?.value ?? "1"
     guard page == "1" else {
       return Data("[]".utf8)
     }
 
     let id = query == "new" ? 1002 : 1001
     let title = query == "new" ? "New Result" : "Old Result"
+    if let custom = mediaResultsByQuery[query] {
+      return Data(custom.utf8)
+    }
     return Data(
       """
       [
@@ -729,12 +1209,29 @@ private actor SearchViewModelURLProtocolStub {
       """.utf8)
   }
 
-  private func resourceSearchStreamData(title: String) -> Data {
-    let event =
+  private func resourceSearchStreamData(
+    title: String,
+    termination: SearchStreamTermination
+  ) -> Data {
+    let append =
       "data: {\"type\":\"append\",\"text\":\"Searching\",\"value\":50,\"items\":["
       + resourceContextJSON(title: title)
       + "]}\n\n"
-    return Data(event.utf8)
+    switch termination {
+    case .done:
+      return Data(
+        (append + "data: {\"type\":\"done\",\"text\":\"搜索完成\",\"items\":[]}\n\n").utf8
+      )
+    case .error:
+      return Data(
+        (
+          append
+            + "data: {\"type\":\"error\",\"success\":false,\"message\":\"站点搜索失败\"}\n\n"
+        ).utf8
+      )
+    case .eof:
+      return Data(append.utf8)
+    }
   }
 
   private func resourceContextJSON(title: String) -> String {
@@ -891,6 +1388,23 @@ private struct SearchViewModelFilterSelectionSnapshot {
     return snapshot
   }
 
+  static func selectSoftRule(_ ruleId: String, apiService: APIService)
+    -> SearchViewModelFilterSelectionSnapshot
+  {
+    let profileKey = apiService.profileKey ?? "missing-profile"
+    let hardKey = "selectedCustomFilterRuleId_\(profileKey)"
+    let softKey = "selectedSoftFilterRuleId_\(profileKey)"
+    let snapshot = SearchViewModelFilterSelectionSnapshot(
+      hardKey: hardKey,
+      softKey: softKey,
+      hardValue: UserDefaults.standard.string(forKey: hardKey),
+      softValue: UserDefaults.standard.string(forKey: softKey)
+    )
+    UserDefaults.standard.removeObject(forKey: hardKey)
+    UserDefaults.standard.set(ruleId, forKey: softKey)
+    return snapshot
+  }
+
   func restore() {
     if let hardValue {
       UserDefaults.standard.set(hardValue, forKey: hardKey)
@@ -996,5 +1510,192 @@ private final class SearchViewModelURLProtocolClientBox: @unchecked Sendable {
 
   func fail(_ error: Error) {
     client?.urlProtocol(protocolInstance, didFailWithError: error)
+  }
+}
+
+// MARK: - 模糊匹配分档（最佳结果排序）
+
+extension SearchViewModelTests {
+  func testFuzzyMatchScoreBandsNeverOverlapAcrossTitles() {
+    // 完全相等高于一切
+    XCTAssertEqual(fuzzyMatchScore(text: "The Movie", query: "the movie"), 1000)
+
+    // 超长标题的前缀匹配仍高于短标题的包含匹配（长度罚分不再打穿类别）
+    let longPrefixTitle = "The Target " + String(repeating: "x", count: 600)
+    XCTAssertEqual(fuzzyMatchScore(text: longPrefixTitle, query: "the target"), 600)
+    XCTAssertGreaterThan(
+      fuzzyMatchScore(text: longPrefixTitle, query: "the target"),
+      fuzzyMatchScore(text: "A short target", query: "target")
+    )
+
+    // 超长标题的包含匹配仍高于任意顺序匹配
+    let longContainTitle = String(repeating: "x", count: 200) + "target"
+    XCTAssertEqual(fuzzyMatchScore(text: longContainTitle, query: "target"), 300)
+    XCTAssertGreaterThan(
+      fuzzyMatchScore(text: longContainTitle, query: "target"),
+      fuzzyMatchScore(text: "Hamilton", query: "hml")
+    )
+
+    // 顺序匹配不低于档位下限，不匹配固定为 -1
+    XCTAssertGreaterThanOrEqual(fuzzyMatchScore(text: "Hamilton", query: "hml"), 100)
+    XCTAssertEqual(fuzzyMatchScore(text: "Nobody", query: "zzz"), -1)
+  }
+
+  func testFuzzyMatchScoreSubsequencePrefersWordStartAndConsecutive() {
+    // 词首匹配高于非词首匹配（query 非连续子串，走顺序匹配档）
+    XCTAssertGreaterThan(
+      fuzzyMatchScore(text: "the lord", query: "lrd"),
+      fuzzyMatchScore(text: "belorded", query: "lrd")
+    )
+    // 部分连续匹配高于全程分散（"ab" 紧邻 vs 每字符间隔）
+    XCTAssertGreaterThan(
+      fuzzyMatchScore(text: "xabxc", query: "abc"),
+      fuzzyMatchScore(text: "xaxbxc", query: "abc")
+    )
+  }
+
+  func testFuzzyMatchScoreChineseTitles() {
+    // 完全相等最高
+    XCTAssertEqual(fuzzyMatchScore(text: "流浪地球", query: "流浪地球"), 1000)
+    // 前缀匹配高于包含匹配
+    XCTAssertGreaterThan(
+      fuzzyMatchScore(text: "流浪地球 2", query: "流浪地球"),
+      fuzzyMatchScore(text: "我喜欢的流浪地球", query: "流浪地球")
+    )
+    // 中文标题无词首加分时，紧邻匹配仍高于间隔更远的匹配
+    XCTAssertGreaterThan(
+      fuzzyMatchScore(text: "流浪地球", query: "流地球"),
+      fuzzyMatchScore(text: "流啊浪啊地球", query: "流地球")
+    )
+    // 不匹配固定为 -1
+    XCTAssertEqual(fuzzyMatchScore(text: "三体", query: "流浪地球"), -1)
+  }
+
+  func testPopularityBoostNormalizesPerSource() {
+    // TMDB 热度指数：log10 基数 3，封顶 149
+    XCTAssertEqual(popularityBoost(source: "themoviedb", popularity: 0.6), 10)
+    XCTAssertEqual(popularityBoost(source: "themoviedb", popularity: 3), 30)
+    XCTAssertEqual(popularityBoost(source: "themoviedb", popularity: 1900), 149)
+    XCTAssertEqual(popularityBoost(source: "themoviedb", popularity: 0), 0)
+    // AniList 收藏数：log10 基数 6，避免数十万收藏数全部顶满
+    XCTAssertEqual(popularityBoost(source: "anilist", popularity: 4732), 91)
+    XCTAssertEqual(popularityBoost(source: "anilist", popularity: 742091), 146)
+    // 无热度来源与非法值不加分
+    XCTAssertEqual(popularityBoost(source: "douban", popularity: 8), 0)
+    XCTAssertEqual(popularityBoost(source: "bangumi", popularity: 8), 0)
+    XCTAssertEqual(popularityBoost(source: nil, popularity: 8), 0)
+  }
+
+  func testBestResultsBoostedByPopularityWithinSingleSource() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    // 同来源（TMDB）：B 是长标题包含匹配（分低但超热），A 是短标题包含匹配（分高但冷门）。
+    // 加权后 B 的热度加分应使其反超 A。
+    let longTitle = String(repeating: "x", count: 250) + "abc"
+    await SearchViewModelURLProtocol.stub.setMediaResults(
+      """
+      [
+        {"tmdb_id": 2001, "source": "themoviedb", "title": "xxabcxxxx", "type": "电影", "year": "2026", "poster_path": "/a.jpg", "popularity": 0.5},
+        {"tmdb_id": 2002, "source": "themoviedb", "title": "\(longTitle)", "type": "电影", "year": "2026", "poster_path": "/b.jpg", "popularity": 500}
+      ]
+      """,
+      forQuery: "abc"
+    )
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.query = "abc"
+    await viewModel.autoSearch()
+
+    XCTAssertFalse(viewModel.isLoading)
+    let titles = viewModel.bestResults.compactMap { item -> String? in
+      if case .media(let media) = item { return media.title }
+      return nil
+    }
+    XCTAssertEqual(titles, [longTitle, "xxabcxxxx"])
+  }
+
+  func testBestResultsDisablePopularityBoostForMixedSources() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    // 混合来源（TMDB + 豆瓣）：热度口径不可比，全部不计算热度，纯按匹配分排序。
+    let longTitle = String(repeating: "x", count: 250) + "abc"
+    await SearchViewModelURLProtocol.stub.setMediaResults(
+      """
+      [
+        {"tmdb_id": 2003, "source": "themoviedb", "title": "\(longTitle)", "type": "电影", "year": "2026", "poster_path": "/a.jpg", "popularity": 500},
+        {"douban_id": "2004", "source": "douban", "title": "xxabcxxxx", "type": "电影", "year": "2026", "poster_path": "/b.jpg", "popularity": null}
+      ]
+      """,
+      forQuery: "abc"
+    )
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.query = "abc"
+    await viewModel.autoSearch()
+
+    XCTAssertFalse(viewModel.isLoading)
+    let titles = viewModel.bestResults.compactMap { item -> String? in
+      if case .media(let media) = item { return media.title }
+      return nil
+    }
+    XCTAssertEqual(titles, ["xxabcxxxx", longTitle])
+  }
+
+  func testBestResultsFilteredOutItemDoesNotCountAsMixedSource() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    // 豆瓣项因无海报且完全不匹配被过滤掉，不构成可见混池：TMDB 热度加权仍应生效。
+    let longTitle = String(repeating: "x", count: 250) + "abc"
+    await SearchViewModelURLProtocol.stub.setMediaResults(
+      """
+      [
+        {"tmdb_id": 2005, "source": "themoviedb", "title": "\(longTitle)", "type": "电影", "year": "2026", "poster_path": "/a.jpg", "popularity": 500},
+        {"tmdb_id": 2006, "source": "themoviedb", "title": "xxabcxxxx", "type": "电影", "year": "2026", "poster_path": "/b.jpg", "popularity": 0.5},
+        {"douban_id": "2007", "source": "douban", "title": "zzzzzz", "type": "电影", "year": "2026", "poster_path": null, "popularity": null}
+      ]
+      """,
+      forQuery: "abc"
+    )
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.query = "abc"
+    await viewModel.autoSearch()
+
+    XCTAssertFalse(viewModel.isLoading)
+    let titles = viewModel.bestResults.compactMap { item -> String? in
+      if case .media(let media) = item { return media.title }
+      return nil
+    }
+    XCTAssertEqual(titles, [longTitle, "xxabcxxxx"])
   }
 }

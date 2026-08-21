@@ -213,7 +213,27 @@ class RecommendViewModel: ObservableObject {
     for title in ["AniList 当前趋势", "AniList 本季热门"] where enableConfig[title] == nil {
       enableConfig[title] = true
     }
-    if selectShelf { reconcileSelection() }
+    guard selectShelf else { return }
+    reconcileSelection()
+    // 重新激活（非首次）时，若当前 shelf 处于成功空终态则自动重试一次，
+    // 避免页面一直空白直到手动切换 shelf。
+    if hasHandledFirstActivation {
+      await refreshIfSuccessEmpty()
+    }
+    hasHandledFirstActivation = true
+  }
+
+  private var hasHandledFirstActivation = false
+
+  /// 当前 shelf 处于“成功空终态”（空、无加载、无错误、无更多页）时重试一次。
+  private func refreshIfSuccessEmpty() async {
+    guard let paginator,
+      paginator.items.isEmpty,
+      !paginator.isLoading,
+      !paginator.hasError,
+      !paginator.hasMore
+    else { return }
+    await paginator.refresh()
   }
 
   func reloadLocalConfig() {

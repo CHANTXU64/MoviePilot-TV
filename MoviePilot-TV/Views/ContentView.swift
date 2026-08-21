@@ -20,7 +20,7 @@ struct ContentView: View {
             .tag(ContentViewModel.Tab.home)
 
           if viewModel.visibleTabs.contains(.recommend) {
-            RecommendView()
+            RecommendView(isSelected: selectedTab == .recommend)
               .tabItem {
                 Label("推荐", systemImage: "sparkles.tv")
               }

@@ -31,7 +31,7 @@ class TransferHistoryViewModel: ObservableObject {
   private var aiRedoTask: Task<Void, Never>?
 
   var isAiRedoEnabled: Bool {
-    apiService.settings?.AI_AGENT_ENABLE?.value != false
+    apiService.settings?.AI_AGENT_ENABLE?.value == true
   }
 
   var isMutatingHistory: Bool {
@@ -87,8 +87,8 @@ class TransferHistoryViewModel: ObservableObject {
         return response.list
       },
       processor: { items, newItems in
-        let existingIds = Set(items.map(\.id))
-        let uniqueNewItems = newItems.filter { !existingIds.contains($0.id) }
+        var existingIds = Set(items.map(\.id))
+        let uniqueNewItems = newItems.filter { existingIds.insert($0.id).inserted }
         if !uniqueNewItems.isEmpty {
           items.append(contentsOf: uniqueNewItems)
           return true
@@ -126,13 +126,14 @@ class TransferHistoryViewModel: ObservableObject {
     }
     searchText = text
     let api = apiService
+    let pageSize = self.pageSize
     let effectiveText = text.trimmingCharacters(in: .whitespacesAndNewlines)
     let title = effectiveText.isEmpty ? nil : effectiveText
 
     self.fetcher = { page in
       try await api.fetchTransferHistory(
         page: page,
-        count: self.pageSize,
+        count: pageSize,
         title: title)
     }
     resetDynamicState(clearDeletedIds: true)
@@ -296,6 +297,15 @@ class TransferHistoryViewModel: ObservableObject {
   func deselectAll() {
     guard !isMutatingHistory else { return }
     selectedIds.removeAll()
+  }
+
+  /// 只移除指定记录的选择，保留其他已选项（整理等动作收尾时不清用户新选）。
+  func deselect(ids: [Int]) {
+    guard !isMutatingHistory else { return }
+    selectedIds.subtract(Set(ids))
+    if selectedIds.isEmpty {
+      isSelectionMode = false
+    }
   }
 
   /// 在展示确认时冻结完整记录，确保确认数量和最终删除始终消费同一批次。
@@ -473,8 +483,13 @@ class TransferHistoryViewModel: ObservableObject {
 
       let existingIds = Set(items.map { $0.id }).union(deletedIds)
 
-      while currentPage <= maxPagesToFetch {
+      // 只有遇到已知项、空页或不满页才视为找到已知边界；
+      // 扫满上限仍无边界时不得提交不完整前缀或推进游标。
+      var reachedKnownBoundary = false
+
+      while true {
         if fetchedItems.isEmpty {
+          reachedKnownBoundary = true
           break
         }
 
@@ -491,15 +506,25 @@ class TransferHistoryViewModel: ObservableObject {
         allNewItems.append(contentsOf: newItemsOnThisPage)
 
         if foundExistingItem || fetchedItems.count < pageSize {
+          reachedKnownBoundary = true
           break
         }
 
         currentPage += 1
+        if currentPage > maxPagesToFetch {
+          break
+        }
         let nextPageResponse = try await pollFetcher(currentPage)
         guard pollGeneration == queryGeneration,
           apiService.isSessionUnchanged(from: sessionSnapshot)
         else { return }
         fetchedItems = nextPageResponse.list
+      }
+
+      guard reachedKnownBoundary else {
+        // 超过扫描上限仍未遇到已知项：回退权威顺序刷新，避免漏掉第 101 条及以后。
+        await performAuthoritativeRefresh()
+        return
       }
 
       if !allNewItems.isEmpty {
@@ -725,6 +750,7 @@ class TransferHistoryViewModel: ObservableObject {
         }
 
         var terminalError: String?
+        var receivedTerminalEvent = false
         let stream = apiService.progressStream(progressKey: result.progressKey)
         for try await event in stream {
           if Task.isCancelled { break }
@@ -732,17 +758,20 @@ class TransferHistoryViewModel: ObservableObject {
             self.aiRedoProgressText = text
           }
           if event.enable == false {
+            receivedTerminalEvent = true
             if event.data?.success == false {
               terminalError =
-                event.data?.error_i18n ?? event.data?.error ?? "AI 整理失败"
+                event.data?.localizedError ?? "AI 整理失败"
             }
             break
           }
           if event.type == "error" {
-            terminalError = event.message_i18n ?? event.message ?? "AI 整理失败"
+            receivedTerminalEvent = true
+            terminalError = event.localizedMessage ?? "AI 整理失败"
             break
           }
           if event.type == "done" {
+            receivedTerminalEvent = true
             break
           }
         }
@@ -756,9 +785,8 @@ class TransferHistoryViewModel: ObservableObject {
           }
           self.isAiRedoing = false
           await self.refresh()
-          if let terminalError {
-            self.errorMessage = terminalError
-          }
+          self.errorMessage = terminalError
+            ?? (receivedTerminalEvent ? nil : "AI 整理连接中断，请重试。")
         }
       } catch is CancellationError {
         for id in pendingIds {

@@ -190,13 +190,13 @@ class MediaPreloadTask: ObservableObject {
         // 与 loadDetail 并发启动（两者互不依赖），但都在依赖任务之前完成
         async let tmdbRecognition: Void = {
           if self.partialMedia.tmdb_id == nil && self.partialMedia.canJumpToTMDB {
-            await self.recognizeTmdb()
+            try await self.recognizeTmdb()
           }
         }()
         async let detailLoad: Void = self.loadDetail()
 
-        // 等待两者都完成
-        _ = await (tmdbRecognition, detailLoad)
+        // 等待两者都完成；识别被取消时提前结束，不再启动依赖任务
+        try? await (tmdbRecognition, detailLoad)
         guard !Task.isCancelled else { return }
 
         // 无论成功还是失败，都尝试加载依赖任务（失败时用 partialMedia 做 fallback）
@@ -261,23 +261,38 @@ class MediaPreloadTask: ObservableObject {
           self.isDetailReady = true
           return
         } else {
-          print("[MediaPreloadTask] 第 \(attempt + 1) 次请求 API 返回空数据...")
+          Logger.warning(
+            "第 \(attempt + 1) 次请求详情返回空数据，等待重试",
+            metadata: ["title": partialMedia.title ?? "", "mediaId": partialMedia.id]
+          )
           if attempt < maxRetries {
             try await Task.sleep(nanoseconds: 1_500_000_000)  // 等待 1.5 秒后重试
           }
         }
       } catch {
-        print("[MediaPreloadTask] 加载详情失败(attempt \(attempt + 1)): \(error)")
+        Logger.error(
+          "加载详情失败(attempt \(attempt + 1)): \(error)",
+          metadata: ["title": partialMedia.title ?? "", "mediaId": partialMedia.id]
+        )
         if attempt < maxRetries {
           try? await Task.sleep(nanoseconds: 1_500_000_000)
         } else {
-          self.isDetailFailed = true
+          markDetailFailed()
           return
         }
       }
     }
-    print("[MediaPreloadTask] API 重试后仍返回空数据，视为失败")
-    self.isDetailFailed = true
+    Logger.error(
+      "API 重试后仍返回空数据，视为失败",
+      metadata: ["title": partialMedia.title ?? "", "mediaId": partialMedia.id]
+    )
+    markDetailFailed()
+  }
+
+  /// 详情连续失败终态：置失败标志并交由全局通知提示用户。
+  private func markDetailFailed() {
+    isDetailFailed = true
+    NotificationCenter.default.post(name: .mediaDetailLoadDidFail, object: nil)
   }
 
   // MARK: - ② 预热背景图
@@ -285,12 +300,10 @@ class MediaPreloadTask: ObservableObject {
   private func prefetchBackgroundImage(for detail: MediaInfo, timeout: Duration? = nil) async {
     // 避免为已取消（生命周期释放）的任务发起无意义的图片请求
     guard !Task.isCancelled else { return }
-    // 逻辑同 MediaDetailViewModel.updateBackground()：backdrop 优先，无则 poster
-    let backdropUrl = detail.imageURLs.backdrop
-    let posterUrl = detail.imageURLs.poster
-    let targetUrl = backdropUrl ?? posterUrl
-    guard let url = targetUrl else { return }
-    let isUsingPosterAsBackdrop = backdropUrl == nil
+    // 与 MediaInfo.ImageURLs.backgroundTarget 保持一致：backdrop 优先，无则 poster
+    let target = detail.imageURLs.backgroundTarget
+    guard let url = target.url else { return }
+    let isUsingPosterAsBackdrop = target.isPoster
 
     let preparedAsCandidate = shouldWarmBackgroundImage(
       memoryOptimizationEnabled: MemoryOptimizationPolicy.shared.isEnabled
@@ -299,10 +312,7 @@ class MediaPreloadTask: ObservableObject {
     if let timeout {
       await withTaskGroup(of: Void.self) { group in
         group.addTask {
-          await self.retrieveHeroImage(
-            url,
-            isUsingPosterAsBackdrop: isUsingPosterAsBackdrop
-          )
+          await self.retrieveHeroImage(url, fallbackURL: target.fallbackURL)
         }
         group.addTask {
           try? await Task.sleep(for: timeout)
@@ -312,10 +322,7 @@ class MediaPreloadTask: ObservableObject {
         group.cancelAll()
       }
     } else {
-      await retrieveHeroImage(
-        url,
-        isUsingPosterAsBackdrop: isUsingPosterAsBackdrop
-      )
+      await retrieveHeroImage(url, fallbackURL: target.fallbackURL)
     }
 
     // 下载完成后清理引用
@@ -327,20 +334,33 @@ class MediaPreloadTask: ObservableObject {
       !Task.isCancelled
     else { return }
     markPreparedBackgroundForReleaseAfterCompletion()
-    let cacheKey = apiService.imageSource(for: url).cacheKey
-    MediaDetailBackgroundImage.removeHeroFromMemory(
-      for: url,
-      size: UIScreen.main.bounds.size,
-      usingPosterAsBackdrop: isUsingPosterAsBackdrop,
-      cacheKey: cacheKey
+    let size = UIScreen.main.bounds.size
+    removePreparedHeroFromMemory(
+      url: url,
+      isUsingPosterAsBackdrop: isUsingPosterAsBackdrop,
+      size: size
     )
+    if let fallbackURL = target.fallbackURL, fallbackURL != url {
+      removePreparedHeroFromMemory(
+        url: fallbackURL,
+        isUsingPosterAsBackdrop: isUsingPosterAsBackdrop,
+        size: size
+      )
+    }
+  }
+
+  private func retrieveHeroImage(_ url: URL, fallbackURL: URL?) async {
+    let isUsingPosterAsBackdrop = (fullDetail ?? partialMedia).imageURLs.backgroundTarget.isPoster
+    let succeeded = await retrieveHeroImage(url, isUsingPosterAsBackdrop: isUsingPosterAsBackdrop)
+    guard !succeeded, !Task.isCancelled, let fallbackURL, fallbackURL != url else { return }
+    _ = await retrieveHeroImage(fallbackURL, isUsingPosterAsBackdrop: isUsingPosterAsBackdrop)
   }
 
   private func retrieveHeroImage(
     _ url: URL,
     isUsingPosterAsBackdrop: Bool
-  ) async {
-    let continuationBox = imageRetrieveState
+  ) async -> Bool {
+    let continuationBox = ImageRetrieveContinuationBox()
     let size = UIScreen.main.bounds.size
     var options = MediaDetailBackgroundImage.heroOptions(
       for: size,
@@ -352,14 +372,14 @@ class MediaPreloadTask: ObservableObject {
     options.append(contentsOf: service.imageOptions(for: url))
 
     // 使用 withTaskCancellationHandler 确保 Swift Task 取消时能中断 Kingfisher 的 HTTP 下载
-    await withTaskCancellationHandler {
-      await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+    return await withTaskCancellationHandler {
+      await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
         continuationBox.set(continuation)
         self.activeImageDownload = KingfisherManager.shared.retrieveImage(
           with: source,
           options: options
-        ) { _ in
-          if continuationBox.shouldRemoveResultFromMemory {
+        ) { result in
+          if self.imageRetrieveState.shouldRemoveResultFromMemory {
             MediaDetailBackgroundImage.removeHeroFromMemory(
               for: url,
               size: size,
@@ -367,14 +387,32 @@ class MediaPreloadTask: ObservableObject {
               cacheKey: source.cacheKey
             )
           }
-          continuationBox.resume()
+          switch result {
+          case .success:
+            continuationBox.resume(returning: true)
+          case .failure:
+            continuationBox.resume(returning: false)
+          }
         }
       }
     } onCancel: {
       // 此闭包可能在任意线程执行，直接取消 Kingfisher 下载任务
       self.activeImageDownload?.cancel()
-      continuationBox.resume()
+      continuationBox.resume(returning: false)
     }
+  }
+
+  private func removePreparedHeroFromMemory(
+    url: URL,
+    isUsingPosterAsBackdrop: Bool,
+    size: CGSize
+  ) {
+    MediaDetailBackgroundImage.removeHeroFromMemory(
+      for: url,
+      size: size,
+      usingPosterAsBackdrop: isUsingPosterAsBackdrop,
+      cacheKey: apiService.imageSource(for: url).cacheKey
+    )
   }
 
   // MARK: - ③ 分季信息
@@ -448,13 +486,22 @@ class MediaPreloadTask: ObservableObject {
 
   // MARK: - ⑤ TMDB 识别
 
-  private func recognizeTmdb() async {
+  private func recognizeTmdb() async throws {
     defer { isTmdbRecognitionFinished = true }
-    let result = await apiService.recognizeTmdbId(
-      title: partialMedia.title ?? "",
-      year: partialMedia.year,
-      type: partialMedia.type
-    )
+    // 预加载识别失败静默处理：不弹提示，也不伪装 no-match。
+    // 取消向上传播，避免取消后仍继续启动依赖任务（分季/订阅 fallback 补查）。
+    let result: Int?
+    do {
+      result = try await apiService.recognizeTmdbId(
+        title: partialMedia.title ?? "",
+        year: partialMedia.year,
+        type: partialMedia.type
+      )
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch {
+      result = nil
+    }
     if let tmdbId = result {
       self.tmdbId = tmdbId
     }
@@ -463,8 +510,8 @@ class MediaPreloadTask: ObservableObject {
 
 private final class ImageRetrieveContinuationBox: @unchecked Sendable {
   private let lock = NSLock()
-  nonisolated(unsafe) private var continuation: CheckedContinuation<Void, Never>?
-  nonisolated(unsafe) private var shouldResumeOnSet = false
+  nonisolated(unsafe) private var continuation: CheckedContinuation<Bool, Never>?
+  nonisolated(unsafe) private var pendingResult: Bool?
   nonisolated(unsafe) private var hasResumed = false
   nonisolated(unsafe) private var removeResultFromMemory = false
   nonisolated(unsafe) private var ownerReleased = false
@@ -496,24 +543,21 @@ private final class ImageRetrieveContinuationBox: @unchecked Sendable {
     lock.unlock()
   }
 
-  nonisolated func set(_ continuation: CheckedContinuation<Void, Never>) {
+  nonisolated func set(_ continuation: CheckedContinuation<Bool, Never>) {
     lock.lock()
-    if hasResumed {
+    if let pendingResult {
+      hasResumed = true
+      self.pendingResult = nil
       lock.unlock()
-      continuation.resume()
+      continuation.resume(returning: pendingResult)
       return
     }
 
     self.continuation = continuation
-    let shouldResume = shouldResumeOnSet
     lock.unlock()
-
-    if shouldResume {
-      resume()
-    }
   }
 
-  nonisolated func resume() {
+  nonisolated func resume(returning result: Bool) {
     lock.lock()
     guard !hasResumed else {
       lock.unlock()
@@ -524,9 +568,9 @@ private final class ImageRetrieveContinuationBox: @unchecked Sendable {
       hasResumed = true
       self.continuation = nil
       lock.unlock()
-      continuation.resume()
+      continuation.resume(returning: result)
     } else {
-      shouldResumeOnSet = true
+      pendingResult = result
       lock.unlock()
     }
   }

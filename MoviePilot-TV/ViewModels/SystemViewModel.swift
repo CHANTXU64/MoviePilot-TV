@@ -59,6 +59,8 @@ class SystemViewModel: ObservableObject {
   // MARK: - 站点设置
   @Published var availableSites: [Site] = []
   @Published var isLoadingSites: Bool = false
+  @Published private(set) var hasLoadedSites: Bool = false
+  @Published private(set) var siteLoadError: String?
 
   /// 默认搜索站点（绑定服务器 + 稳定用户 ID）
   var defaultSearchSites: Set<Int> {
@@ -101,6 +103,8 @@ class SystemViewModel: ObservableObject {
   // MARK: - 自定义过滤规则
   @Published var customFilterRules: [CustomRule] = []
   @Published var isLoadingRules: Bool = false
+  /// 规则加载失败标记（成功空视为有效结果；失败保留旧数组并置位）
+  @Published var rulesLoadFailed = false
 
   /// 当前选中的硬过滤规则 ID（绑定服务器 + 稳定用户 ID）
   var selectedHardFilterRuleId: String? {
@@ -286,22 +290,25 @@ class SystemViewModel: ObservableObject {
   func loadSites() async {
     guard apiService.canAccess(.search) else {
       availableSites = []
+      siteLoadError = nil
       return
     }
     guard !isLoadingSites else { return }
     isLoadingSites = true
+    siteLoadError = nil
     defer {
       isLoadingSites = false
     }
     do {
       let sites = try await apiService.fetchSites()
       availableSites = sites
+      hasLoadedSites = true
       defaultSearchSites = defaultSearchSites
       print("✅ [SystemViewModel] 加载到 \(availableSites.count) 个站点")
     } catch is CancellationError {
-      availableSites = []
       return
     } catch {
+      siteLoadError = "站点加载失败，请重试"
       print("❌ [SystemViewModel] 加载站点失败: \(error)")
     }
   }
@@ -312,6 +319,7 @@ class SystemViewModel: ObservableObject {
   func loadCustomFilterRules() async {
     guard apiService.canRequestSuperUserEndpoints else {
       customFilterRules = []
+      rulesLoadFailed = false
       return
     }
     guard !isLoadingRules else { return }
@@ -322,6 +330,7 @@ class SystemViewModel: ObservableObject {
     do {
       let rules = try await apiService.fetchCustomFilterRules()
       customFilterRules = rules
+      rulesLoadFailed = false
       print("✅ [SystemViewModel] 加载到 \(customFilterRules.count) 个自定义过滤规则")
       // 如果选中的规则 ID 不在列表中，清除选择
       if let selectedHardId = selectedHardFilterRuleId,
@@ -337,9 +346,9 @@ class SystemViewModel: ObservableObject {
         selectedSoftFilterRuleId = nil
       }
     } catch is CancellationError {
-      customFilterRules = []
       return
     } catch {
+      rulesLoadFailed = true
       print("❌ [SystemViewModel] 加载自定义过滤规则失败: \(error)")
     }
   }
@@ -434,7 +443,7 @@ class SystemViewModel: ObservableObject {
   }
 
   private func normalizeDefaultSearchSites(_ sites: Set<Int>) -> Set<Int> {
-    guard !availableSites.isEmpty else { return sites }
+    guard hasLoadedSites else { return sites }
 
     let availableSiteIds = Set(availableSites.map(\.id))
     return sites.intersection(availableSiteIds)

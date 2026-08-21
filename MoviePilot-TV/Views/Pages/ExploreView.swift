@@ -141,6 +141,10 @@ struct FilterPickersView: View {
   @FocusState private var isTopRedirectorFocused: Bool
   @FocusState private var isBottomRedirectorFocused: Bool
 
+  // 插件多选筛选
+  @State private var multiSelectControl: PluginFilterControl?
+  @State private var multiSelectSelection: Set<JSONValue> = []
+
   private var hasFocusableFilters: Bool {
     if case .custom = viewModel.selectedSource {
       return !viewModel.pluginFilterControls.isEmpty
@@ -230,6 +234,23 @@ struct FilterPickersView: View {
     .onChange(of: focusedPickerIndex) { _, newIndex in
       if let newIndex {
         setCurrentFocusIndex(newIndex)
+      }
+    }
+    .sheet(item: $multiSelectControl) { control in
+      MultiSelectionSheet(
+        options: control.options,
+        id: \.value,
+        selected: $multiSelectSelection,
+        label: { $0.title }
+      )
+      .onDisappear {
+        let selected = control.options
+          .filter { multiSelectSelection.contains($0.value) }
+          .map(\.value)
+        viewModel.setPluginFilter(
+          control.field,
+          value: .array(selected)
+        )
       }
     }
   }
@@ -451,41 +472,85 @@ struct FilterPickersView: View {
   private var pluginFilters: some View {
     ForEach(Array(viewModel.pluginFilterControls.enumerated()), id: \.element.id) {
       index, control in
-      switch control.kind {
-      case .choice:
-        Picker(
-          control.label,
-          selection: pluginBinding(for: control.field)
-        ) {
-          if !control.options.contains(where: { $0.value == pluginBindingValue(control.field) }) {
-            Text("\(control.label)：默认").tag(pluginBindingValue(control.field))
+      if control.isVisible(in: viewModel.pluginFilterValues) {
+        switch control.kind {
+        case .choice:
+          Picker(
+            control.label,
+            selection: pluginBinding(for: control)
+          ) {
+            let selection = control.selectionValue(from: pluginBindingValue(control.field))
+            if !control.options.contains(where: { $0.value == selection }) {
+              Text("\(control.label)：默认").tag(selection)
+            }
+            ForEach(control.options) { option in
+              Text("\(control.label)：\(option.title)").tag(option.value)
+            }
           }
-          ForEach(control.options) { option in
-            Text("\(control.label)：\(option.title)").tag(option.value)
-          }
+          .pickerStyle(.menu)
+          .focused($focusedPickerIndex, equals: index)
+        case .multiChoice:
+          multiSelectButton(for: control, index: index)
+        case .text:
+          TextField(control.label, text: pluginTextBinding(for: control.field))
+            .frame(width: 260)
+            .focused($focusedPickerIndex, equals: index)
+        case .number:
+          TextField(control.label, text: pluginNumberBinding(for: control.field))
+            .frame(width: 180)
+            .focused($focusedPickerIndex, equals: index)
+        case .toggle:
+          Toggle(control.label, isOn: pluginToggleBinding(for: control.field))
+            .fixedSize()
+            .focused($focusedPickerIndex, equals: index)
         }
-        .pickerStyle(.menu)
-        .focused($focusedPickerIndex, equals: index)
-      case .text:
-        TextField(control.label, text: pluginTextBinding(for: control.field))
-          .frame(width: 260)
-          .focused($focusedPickerIndex, equals: index)
-      case .number:
-        TextField(control.label, text: pluginNumberBinding(for: control.field))
-          .frame(width: 180)
-          .focused($focusedPickerIndex, equals: index)
       }
     }
+  }
+
+  @ViewBuilder
+  private func multiSelectButton(for control: PluginFilterControl, index: Int) -> some View {
+    Button {
+      multiSelectSelection = Set(pluginBindingValue(control.field).arrayValue ?? [])
+      multiSelectControl = control
+    } label: {
+      Text(multiSelectSummary(for: control))
+    }
+    .focused($focusedPickerIndex, equals: index)
+  }
+
+  private func multiSelectSummary(for control: PluginFilterControl) -> String {
+    let selected = pluginBindingValue(control.field).arrayValue ?? []
+    guard !selected.isEmpty else { return "\(control.label)：全部" }
+    let titles = control.options
+      .filter { selected.contains($0.value) }
+      .map(\.title)
+    if !titles.isEmpty {
+      return "\(control.label)：" + titles.joined(separator: "/")
+    }
+    return "\(control.label)：已选 \(selected.count) 项"
+  }
+
+  private func pluginToggleBinding(for field: String) -> Binding<Bool> {
+    Binding(
+      get: {
+        if case .bool(let value) = pluginBindingValue(field) {
+          return value
+        }
+        return false
+      },
+      set: { viewModel.setPluginFilter(field, value: .bool($0)) }
+    )
   }
 
   private func pluginBindingValue(_ field: String) -> JSONValue {
     viewModel.pluginFilterValues[field] ?? .null
   }
 
-  private func pluginBinding(for field: String) -> Binding<JSONValue> {
+  private func pluginBinding(for control: PluginFilterControl) -> Binding<JSONValue> {
     Binding(
-      get: { pluginBindingValue(field) },
-      set: { viewModel.setPluginFilter(field, value: $0) }
+      get: { control.selectionValue(from: pluginBindingValue(control.field)) },
+      set: { viewModel.setPluginFilter(control.field, value: control.storedValue(for: $0)) }
     )
   }
 

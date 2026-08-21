@@ -4,6 +4,7 @@ import SwiftUI
 private struct MediaDetailBackgroundLayer: View {
   let url: URL?
   let usingPosterAsBackdrop: Bool
+  var onFailure: ((URL) -> Void)? = nil
 
   @ViewBuilder
   var body: some View {
@@ -29,6 +30,9 @@ private struct MediaDetailBackgroundLayer: View {
     alignment: Alignment
   ) -> some View {
     KFImage.sessionImage(url)
+      .onFailure { _ in
+        onFailure?(url)
+      }
       .placeholder {
         EmptyView()
       }
@@ -54,6 +58,7 @@ struct MediaDetailView: View {
   @Environment(\.scenePhase) private var scenePhase
   @Environment(\.mediaNavigationStackID) private var mediaNavigationStackID
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
+  @EnvironmentObject private var notificationManager: NotificationManager
   @ObservedObject private var apiService = APIService.shared
   /// 预加载任务：订阅状态、TMDB 识别、分季信息的唯一数据源
   @ObservedObject var preloadTask: MediaPreloadTask
@@ -226,7 +231,10 @@ struct MediaDetailView: View {
       if isBackgroundMounted {
         MediaDetailBackgroundLayer(
           url: viewModel.backgroundUrl,
-          usingPosterAsBackdrop: viewModel.isUsingPosterAsBackdrop
+          usingPosterAsBackdrop: viewModel.isUsingPosterAsBackdrop,
+          onFailure: { failedURL in
+            viewModel.useBackgroundFallback(afterFailing: failedURL)
+          }
         )
         .id(backgroundGeneration)
         .opacity(showContentPage ? 0 : 1)
@@ -324,6 +332,9 @@ struct MediaDetailView: View {
         }
       }
     }
+    .onChange(of: apiService.imageConfigurationIdentity) { _, _ in
+      viewModel.refreshBackgroundForImageConfiguration()
+    }
     .environmentObject(subscriptionHandler)
     .ignoresSafeArea()
     .onDisappear {
@@ -372,6 +383,8 @@ struct MediaDetailView: View {
       if canSearchResources {
         await viewModel.siteFilter.loadSites()
       }
+      // 重新激活时自动恢复成功空终态的推荐/相似/演员区域
+      await viewModel.refreshSuccessEmptySections()
     }
     .task(id: preloadTask.partialMedia.id) {
       await Self.runActiveSubscriptionRefreshLoop {
@@ -446,7 +459,13 @@ struct MediaDetailView: View {
       Button("取消", role: .cancel) {}
       Button(SubscriptionCancelConfirmation.confirmButtonTitle, role: .destructive) {
         Task {
-          await viewModel.cancelSubscription()
+          guard await viewModel.cancelSubscription() else {
+            notificationManager.show(
+              message: SubscriptionCancelConfirmation.failureMessage,
+              type: .error
+            )
+            return
+          }
         }
       }
     } message: {
@@ -1122,9 +1141,8 @@ struct MediaDetailView: View {
           .padding(.top, 25)
           .padding(.bottom, 30)
           .onChange(of: focusedActorId) { _, newId in
-            if let newId {
-              MediaPreloader.shared.focusDidMove(to: "person:\(newId)")
-            }
+            guard let newId else { return }
+            MediaPreloader.shared.focusDidMove(to: "person:\(newId)")
             Task {
               await viewModel.actorsPaginator.loadMore(newId)
             }
@@ -1156,6 +1174,7 @@ struct MediaDetailView: View {
               DetailCardView(
                 item: media,
                 showBadges: badges,
+                imageConfigurationIdentity: apiService.imageConfigurationIdentity,
                 onTap: {
                   navigateToMediaFromSecondPage(media)
                 }
@@ -1189,6 +1208,7 @@ struct MediaDetailView: View {
               }
             }
             // 分页加载
+            guard let newId else { return }
             Task {
               await viewModel.recommendPaginator.loadMore(newId)
             }
@@ -1220,6 +1240,7 @@ struct MediaDetailView: View {
               DetailCardView(
                 item: media,
                 showBadges: badges,
+                imageConfigurationIdentity: apiService.imageConfigurationIdentity,
                 onTap: {
                   navigateToMediaFromSecondPage(media)
                 }
@@ -1253,6 +1274,7 @@ struct MediaDetailView: View {
               }
             }
             // 分页加载
+            guard let newId else { return }
             Task {
               await viewModel.similarPaginator.loadMore(newId)
             }

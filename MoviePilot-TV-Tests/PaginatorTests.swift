@@ -394,6 +394,7 @@ final class PaginatorTests: XCTestCase {
   @MainActor
   func testStopsAfterThreeConsecutiveErrors() async {
     var requestCount = 0
+    let notificationManager = NotificationManager()
     let paginator = Paginator<TestItem>(
       threshold: 1,
       fetcher: { _ in
@@ -408,6 +409,7 @@ final class PaginatorTests: XCTestCase {
 
     await paginator.refresh()
     await paginator.loadMore()
+    XCTAssertFalse(notificationManager.isShowing)
     await paginator.loadMore()
     await paginator.loadMore()
 
@@ -416,6 +418,8 @@ final class PaginatorTests: XCTestCase {
     XCTAssertNotNil(paginator.lastError)
     XCTAssertFalse(paginator.hasMore)
     XCTAssertEqual(paginator.items, [])
+    XCTAssertTrue(notificationManager.isShowing)
+    XCTAssertEqual(notificationManager.message, "加载数据失败，请重试。")
   }
 
   // MARK: - 数据去重与并发隔离测试

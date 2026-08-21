@@ -226,6 +226,82 @@ final class ResourceResultViewModelTests: XCTestCase {
     )
   }
 
+  func testCustomFilterInvalidRuleShowsErrorAndDoesNotPublishResults() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await ResourceResultViewModelURLProtocol.stub.reset()
+    let itemJSON = resourceContextJSON(title: "Filtered Result")
+      .replacingOccurrences(of: "\n", with: "")
+    await ResourceResultViewModelURLProtocol.stub.setStreamBody(
+      "data: {\"type\":\"append\",\"items\":[\(itemJSON)]}\n\n"
+        + "data: {\"type\":\"done\",\"text\":\"搜索完成\",\"items\":[]}\n\n",
+      forKeyword: "invalid-rule"
+    )
+    // 规则内容非法（include 是无法编译的正则）→ 显式报错，不发布已积累的结果。
+    await ResourceResultViewModelURLProtocol.stub.setCustomFilterRulesJSON(
+      #"{"data":{"value":[{"id":"bad-regex","name":"Bad","include":["["]}]}}"#)
+    service.baseURLForTesting = "http://resource-result-tests.local"
+    configureResourceResultSuperUserSearchSession(service)
+    let filterSnapshot = ResourceResultViewModelFilterSelectionSnapshot.selectHardRule(
+      "bad-regex", apiService: service)
+    defer { filterSnapshot.restore() }
+
+    let viewModel = ResourceResultViewModel(keyword: "invalid-rule", apiService: service)
+    await viewModel.search()
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertTrue(
+      viewModel.results.isEmpty,
+      "规则内容非法时不得发布未过滤的结果。"
+    )
+    XCTAssertEqual(viewModel.errorMessage, "自定义过滤规则无效：正则表达式「[」无法编译")
+  }
+
+  func testCustomFilterFetchNetworkFailurePassesThroughUnfiltered() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await ResourceResultViewModelURLProtocol.stub.reset()
+    let itemJSON = resourceContextJSON(title: "Unfiltered Result")
+      .replacingOccurrences(of: "\n", with: "")
+    await ResourceResultViewModelURLProtocol.stub.setStreamBody(
+      "data: {\"type\":\"append\",\"items\":[\(itemJSON)]}\n\n"
+        + "data: {\"type\":\"done\",\"text\":\"搜索完成\",\"items\":[]}\n\n",
+      forKeyword: "netdown"
+    )
+    // 拉取规则网络失败 → 与旧行为一致放行不过滤，不阻断结果。
+    await ResourceResultViewModelURLProtocol.stub.setCustomFilterRulesFailure()
+    service.baseURLForTesting = "http://resource-result-tests.local"
+    configureResourceResultSuperUserSearchSession(service)
+    let filterSnapshot = ResourceResultViewModelFilterSelectionSnapshot.selectHardRule(
+      "allow-all", apiService: service)
+    defer { filterSnapshot.restore() }
+
+    let viewModel = ResourceResultViewModel(keyword: "netdown", apiService: service)
+    await viewModel.search()
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertEqual(viewModel.results.count, 1)
+    XCTAssertNil(viewModel.errorMessage)
+  }
+
   func testSearchCanRestartAfterDisappearCancellation() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
@@ -591,6 +667,79 @@ final class ResourceResultViewModelTests: XCTestCase {
     )
     XCTAssertEqual(fallbackRequestCount, 0)
   }
+
+  func testResourceSearchErrorEventDoesNotPublishAccumulatedResults() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await ResourceResultViewModelURLProtocol.stub.reset()
+    let itemJSON = resourceContextJSON(title: "Partial Result")
+      .replacingOccurrences(of: "\n", with: "")
+    await ResourceResultViewModelURLProtocol.stub.setStreamBody(
+      "data: {\"type\":\"append\",\"items\":[\(itemJSON)]}\n\n"
+        + "data: {\"type\":\"error\",\"success\":false,\"message\":\"站点搜索失败\"}\n\n",
+      forKeyword: "error-after-partial"
+    )
+    service.baseURLForTesting = "http://resource-result-tests.local"
+    configureResourceResultSearchSession(service)
+
+    let viewModel = ResourceResultViewModel(keyword: "error-after-partial", apiService: service)
+    await viewModel.search()
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertEqual(viewModel.errorMessage, "站点搜索失败")
+    XCTAssertTrue(
+      viewModel.results.isEmpty,
+      "An error event must not publish partially accumulated results as a successful search."
+    )
+  }
+
+  func testResourceSearchEOFWithoutDoneUsesFallbackWithoutPublishingPartialResult() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ResourceResultViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ResourceResultViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = ResourceResultViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await ResourceResultViewModelURLProtocol.stub.reset()
+    let itemJSON = resourceContextJSON(title: "Partial Result")
+      .replacingOccurrences(of: "\n", with: "")
+    await ResourceResultViewModelURLProtocol.stub.setStreamBody(
+      "data: {\"type\":\"append\",\"items\":[\(itemJSON)]}\n\n",
+      forKeyword: "cut"
+    )
+    await ResourceResultViewModelURLProtocol.stub.setFallbackResults(
+      [resourceContextJSON(title: "Fallback Result")],
+      forKeyword: "cut"
+    )
+    service.baseURLForTesting = "http://resource-result-tests.local"
+    configureResourceResultSearchSession(service)
+
+    let viewModel = ResourceResultViewModel(keyword: "cut", apiService: service)
+    await viewModel.search()
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.isLoading && Date() < deadline {
+      try await Task.sleep(nanoseconds: 1_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertNil(viewModel.errorMessage)
+    XCTAssertEqual(viewModel.results.first?.torrent_info?.title, "Fallback Result")
+    let fallbackRequestCount = await ResourceResultViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/search/title",
+      keyword: "cut"
+    )
+    XCTAssertEqual(fallbackRequestCount, 1)
+  }
 }
 
 @MainActor
@@ -641,6 +790,8 @@ private actor ResourceResultViewModelURLProtocolStub {
   private var fallbackFailureKeywords: Set<String> = []
   private var fallbackGatesByKeyword: [String: ResourceResultAsyncGate] = [:]
   private var customFilterGate: ResourceResultAsyncGate?
+  private var customFilterRulesJSON: String?
+  private var customFilterRulesFailure = false
 
   func reset() {
     requestedRequests.removeAll()
@@ -651,6 +802,8 @@ private actor ResourceResultViewModelURLProtocolStub {
     fallbackFailureKeywords.removeAll()
     fallbackGatesByKeyword.removeAll()
     customFilterGate = nil
+    customFilterRulesJSON = nil
+    customFilterRulesFailure = false
   }
 
   func setStreamFailure(forKeyword keyword: String) {
@@ -675,6 +828,16 @@ private actor ResourceResultViewModelURLProtocolStub {
 
   func setCustomFilterGate(_ gate: ResourceResultAsyncGate) {
     customFilterGate = gate
+  }
+
+  /// 覆盖 CustomFilterRules 返回的规则列表 JSON。
+  func setCustomFilterRulesJSON(_ json: String) {
+    customFilterRulesJSON = json
+  }
+
+  /// 让 CustomFilterRules 拉取以网络错误失败。
+  func setCustomFilterRulesFailure() {
+    customFilterRulesFailure = true
   }
 
   func response(for request: URLRequest) async throws -> ResourceResultHTTPStubResponse {
@@ -719,9 +882,12 @@ private actor ResourceResultViewModelURLProtocolStub {
       if let customFilterGate {
         await customFilterGate.wait()
       }
+      if customFilterRulesFailure {
+        throw URLError(.notConnectedToInternet)
+      }
       return ResourceResultHTTPStubResponse(
         statusCode: 200,
-        data: Data(#"{"data":{"value":[{"id":"allow-all","name":"Allow All"}]}}"#.utf8)
+        data: Data((customFilterRulesJSON ?? #"{"data":{"value":[{"id":"allow-all","name":"Allow All"}]}}"#).utf8)
       )
     }
 

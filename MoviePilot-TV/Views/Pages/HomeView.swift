@@ -3,6 +3,7 @@ import SwiftUI
 @MainActor
 struct HomeView: View {
   @StateObject private var viewModel: HomeViewModel
+  @ObservedObject private var apiService = APIService.shared
 
   // Sheet 状态
   @State private var selectedSubscribe: Subscribe?
@@ -35,6 +36,19 @@ struct HomeView: View {
             ProgressView()
               .frame(maxWidth: .infinity, minHeight: 200)
           } else {
+            // 部分数据失败：保留旧快照并提示（成功空不算失败）
+            if viewModel.latestLoadFailed || viewModel.subscriptionsLoadFailed {
+              HStack {
+                Text("部分数据加载失败，当前显示的是旧数据")
+                  .font(.footnote)
+                  .foregroundColor(.secondary)
+                Button("重试") {
+                  Task { await viewModel.refreshData() }
+                }
+              }
+              .padding(.horizontal)
+            }
+
             // 第1节：最近添加
             if !viewModel.latestMediaServers.isEmpty {
               MediaSectionView(
@@ -83,10 +97,22 @@ struct HomeView: View {
             if viewModel.latestMediaServers.isEmpty && viewModel.movieSubscriptions.isEmpty
               && viewModel.tvSubscriptions.isEmpty
             {
-              Text("暂无内容")
-                .font(.headline)
-                .foregroundColor(.secondary)
+              if viewModel.latestLoadFailed || viewModel.subscriptionsLoadFailed {
+                VStack(spacing: 12) {
+                  Text("加载失败，请重试")
+                    .font(.headline)
+                    .foregroundColor(.secondary)
+                  Button("重试") {
+                    Task { await viewModel.refreshData() }
+                  }
+                }
                 .frame(maxWidth: .infinity, minHeight: 200)
+              } else {
+                Text("暂无内容")
+                  .font(.headline)
+                  .foregroundColor(.secondary)
+                  .frame(maxWidth: .infinity, minHeight: 200)
+              }
             }
           }
         }
@@ -192,6 +218,7 @@ private struct MediaSectionView: View {
 
   @Environment(\.openURL) private var openURL
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
+  @EnvironmentObject private var notificationManager: NotificationManager
   @FocusState private var focusedItemId: String?
   @FocusState private var isTopRedirectorFocused: Bool
   @State private var hasRedirectedFocus: Bool = false
@@ -255,17 +282,19 @@ private struct MediaSectionView: View {
                 bottomLeftText: nil,
                 bottomLeftSecondaryText: nil,
                 source: nil,
-                action: {
-                  viewModel.openMediaItem(item, using: openURL)
-                }
+                action: canOpenMediaLibrary(item)
+                  ? { openMediaItem(item) }
+                  : nil
               )
               .focused($focusedItemId, equals: item.id)
               .compositingGroup()
               .contextMenu {
-                Button {
-                  viewModel.openMediaItem(item, using: openURL)
-                } label: {
-                  Label("跳转媒体库", systemImage: "arrow.up.right.square")
+                if canOpenMediaLibrary(item) {
+                  Button {
+                    openMediaItem(item)
+                  } label: {
+                    Label("跳转媒体库", systemImage: "arrow.up.right.square")
+                  }
                 }
                 Button {
                   Task {
@@ -318,6 +347,16 @@ private struct MediaSectionView: View {
         .scrollClipDisabled()
         .focusSection()
       }
+    }
+  }
+
+  private func canOpenMediaLibrary(_ item: MediaServerPlayItem) -> Bool {
+    HomeViewModel.supportsMediaLibraryDeepLink(serverType: item.server_type)
+  }
+
+  private func openMediaItem(_ item: MediaServerPlayItem) {
+    viewModel.openMediaItem(item, using: openURL) { message in
+      notificationManager.show(message: message, type: .error)
     }
   }
 }
@@ -506,11 +545,23 @@ private struct SubscribeItemView: View {
   private func deleteSubscribe() {
     Task {
       do {
-        _ = try await viewModel.deleteSubscribe(subscribe: item)
+        guard try await viewModel.deleteSubscribe(subscribe: item) else {
+          showUnsubscribeFailure()
+          return
+        }
+      } catch is CancellationError {
+        return
       } catch {
-        showRequestFailure()
+        showUnsubscribeFailure()
       }
     }
+  }
+
+  private func showUnsubscribeFailure() {
+    notificationManager.show(
+      message: SubscriptionCancelConfirmation.failureMessage,
+      type: .error
+    )
   }
 
   private func showActionFailure(_ action: String, detail: String?) {

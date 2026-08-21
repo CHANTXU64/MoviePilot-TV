@@ -38,6 +38,18 @@ enum SessionRefreshResult: Equatable {
   case refreshFailed
 }
 
+/// 统一错误文本选择器：逐项 trim 后按顺序取首个非空文本；全部无效返回 nil。
+nonisolated func trimmedNonEmpty(_ candidates: [String?]) -> String? {
+  for candidate in candidates {
+    if let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !trimmed.isEmpty
+    {
+      return trimmed
+    }
+  }
+  return nil
+}
+
 nonisolated struct ApiResponse<T: Decodable>: Decodable {
   let success: Bool?
   let data: T?
@@ -45,7 +57,7 @@ nonisolated struct ApiResponse<T: Decodable>: Decodable {
   let message_i18n: String?
 
   var localizedMessage: String? {
-    message_i18n?.isEmpty == false ? message_i18n : message
+    trimmedNonEmpty([message_i18n, message])
   }
 }
 
@@ -233,11 +245,6 @@ private struct CurrentUserResponse: Decodable {
   }
 }
 
-nonisolated struct MediaImageURLConfig: Sendable {
-  let baseURL: String
-  let useImageCache: Bool
-}
-
 nonisolated private func decodingContext(from error: DecodingError) -> DecodingError.Context? {
   switch error {
   case .typeMismatch(_, let context), .valueNotFound(_, let context),
@@ -254,10 +261,32 @@ nonisolated private func firstNonWhitespaceByte(in data: Data) -> UInt8? {
   }
 }
 
-nonisolated private func encodeURIComponent(_ value: String) -> String? {
+nonisolated func encodeURIComponent(_ value: String) -> String? {
   let allowed = CharacterSet(
     charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
   return value.addingPercentEncoding(withAllowedCharacters: allowed)
+}
+
+nonisolated func appendPercentEncodedQueryParams(
+  to components: inout URLComponents,
+  params: [String: String?]
+) {
+  let additions = params.compactMap { name, value -> String? in
+    guard let value,
+      let encodedName = encodeURIComponent(name),
+      let encodedValue = encodeURIComponent(value)
+    else {
+      return nil
+    }
+    return "\(encodedName)=\(encodedValue)"
+  }
+  guard !additions.isEmpty else { return }
+  let suffix = additions.joined(separator: "&")
+  if let existing = components.percentEncodedQuery, !existing.isEmpty {
+    components.percentEncodedQuery = existing + "&" + suffix
+  } else {
+    components.percentEncodedQuery = suffix
+  }
 }
 
 nonisolated private func encodeMediaIDPathSegment(_ value: String) -> String? {
@@ -289,12 +318,7 @@ nonisolated func relativeBackendEndpoint(
   guard !components.path.isEmpty, components.path != "/" else {
     throw APIError.invalidURL
   }
-  var items = components.queryItems ?? []
-  items.append(
-    contentsOf: params.compactMap { name, value in
-      value.map { URLQueryItem(name: name, value: $0) }
-    })
-  components.queryItems = items.isEmpty ? nil : items
+  appendPercentEncodedQueryParams(to: &components, params: params)
   guard let endpoint = components.string else { throw APIError.invalidURL }
   return endpoint
 }
@@ -385,14 +409,11 @@ nonisolated private func decodeOrUnwrapSync<T: Decodable>(from data: Data) throw
 nonisolated private func decodeActionResponseSync(from data: Data) throws -> (
   success: Bool, message: String?
 ) {
-  struct ActionResponse: Decodable { let success: Bool?, message: String? }
-  if let response = try? JSONDecoder().decode(ActionResponse.self, from: data) {
-    return (response.success ?? false, response.message)
+  // 仅零字节空 body 按旧契约兼容为成功；非空响应一律按严格 envelope 解码，畸形/错类型失败关闭。
+  if data.isEmpty {
+    return (true, nil)
   }
-  if let response = try? JSONDecoder().decode(ApiResponse<String>.self, from: data) {
-    return (response.success ?? false, response.localizedMessage)
-  }
-  return (true, nil)
+  return try decodeStrictActionResponseSync(from: data)
 }
 
 nonisolated private func decodeStrictActionResponseSync(from data: Data) throws -> (
@@ -406,27 +427,8 @@ nonisolated private func decodeStrictActionResponseSync(from data: Data) throws 
   let response = try JSONDecoder().decode(ActionResponse.self, from: data)
   return (
     response.success ?? false,
-    response.message_i18n?.isEmpty == false ? response.message_i18n : response.message
+    trimmedNonEmpty([response.message_i18n, response.message])
   )
-}
-
-nonisolated private func posterImageURL(posterPath: String?, config: MediaImageURLConfig) -> URL? {
-  let url = posterPath?.replacingOccurrences(of: "original", with: "w500")
-
-  if let currentUrl = url, currentUrl.contains("doubanio.com") {
-    if currentUrl.contains("movie_default") || currentUrl.contains("tv_default") {
-      return nil
-    }
-  }
-
-  return displayImageURL(url, baseURL: config.baseURL, useImageCache: config.useImageCache)
-}
-
-nonisolated private func backdropImageURL(backdropPath: String?, config: MediaImageURLConfig)
-  -> URL?
-{
-  guard let url = backdropPath, !url.isEmpty else { return nil }
-  return displayImageURL(url, baseURL: config.baseURL, useImageCache: config.useImageCache)
 }
 
 /// 泛型轻量级接口缓存，带过期及淘汰策略
@@ -552,8 +554,26 @@ class APIService: ObservableObject {
   var token: String? { session.token }
   var currentUser: Token? { session.currentUser }
 
-  var profileKey: String? { session.profileKey }
+  var profileKey: String? {
+    if let key = session.profileKey {
+      return key
+    }
+    return Self.persistedProfileKey(baseURL: session.baseURL, token: session.token)
+  }
   var uiIdentity: String { session.uiIdentity }
+
+  /// 会话身份尚未恢复（token-only 会话在 /user/current 恢复完成前或恢复失败）时，
+  /// 回退到持久化且与当前 token 匹配的已验证快照，避免四类 profile 偏好读写静默失效。
+  private static func persistedProfileKey(baseURL: String, token: String?) -> String? {
+    guard let token, !token.isEmpty,
+      let storedUser = loadStoredCurrentUser(),
+      let restoredUser = storedUser.withRestoredAccessToken(token),
+      let userId = restoredUser.user_id
+    else {
+      return nil
+    }
+    return "\(baseURL)|user:\(userId)"
+  }
 
   var isSessionStoredInKeychain: Bool? {
     guard session.token != nil else { return nil }
@@ -577,6 +597,10 @@ class APIService: ObservableObject {
     }
   }
   @Published var useImageCache: Bool = false
+
+  var imageConfigurationIdentity: String {
+    "\(baseURL)|\(useImageCache)|\(settings?.TMDB_IMAGE_DOMAIN ?? "")"
+  }
 
   // MARK: - 短暂内存缓存 (提升二级页面和分季组件流畅度)
   private let episodeGroupsCache = APICache<String, [EpisodeGroup]>(defaultTTL: 120, size: 20)
@@ -1343,12 +1367,12 @@ class APIService: ObservableObject {
       let detail_i18n: String?
     }
     let payload = try? JSONDecoder().decode(ErrorPayload.self, from: data)
-    let message = [
+    let message = trimmedNonEmpty([
       payload?.message_i18n,
       payload?.detail_i18n,
       payload?.message,
       payload?.detail,
-    ].compactMap(\.self).first { !$0.isEmpty }
+    ])
     let description = [String(statusCode), message]
       .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
       .filter { !$0.isEmpty }
@@ -1361,16 +1385,7 @@ class APIService: ObservableObject {
       throw APIError.invalidURL
     }
     // 保留 path 中可能已存在的查询参数
-    var queryItems = components.queryItems ?? []
-    // 添加新的参数
-    for (name, value) in params {
-      if let value = value {
-        queryItems.append(URLQueryItem(name: name, value: value))
-      }
-    }
-    if !queryItems.isEmpty {
-      components.queryItems = queryItems
-    }
+    appendPercentEncodedQueryParams(to: &components, params: params)
     guard let endpoint = components.string else {
       throw APIError.invalidURL
     }
@@ -1386,8 +1401,7 @@ class APIService: ObservableObject {
     let decodeEpoch = session.epoch
     let decoded: T
     if type == MediaInfo.self {
-      let config = currentMediaImageURLConfig()
-      let mappedMedia = try await decodeMediaInfoInBackground(from: data, config: config)
+      let mappedMedia = try await decodeMediaInfoInBackground(from: data)
       guard let mapped = mappedMedia as? T else {
         throw APIError.decodingError(
           DecodingError.typeMismatch(
@@ -1398,8 +1412,7 @@ class APIService: ObservableObject {
       }
       decoded = mapped
     } else if type == [MediaInfo].self {
-      let config = currentMediaImageURLConfig()
-      let mappedMedia = try await decodeMediaInfoArrayInBackground(from: data, config: config)
+      let mappedMedia = try await decodeMediaInfoArrayInBackground(from: data)
       guard let mapped = mappedMedia as? T else {
         throw APIError.decodingError(
           DecodingError.typeMismatch(
@@ -1416,24 +1429,15 @@ class APIService: ObservableObject {
     return decoded
   }
 
-  private func currentMediaImageURLConfig() -> MediaImageURLConfig {
-    MediaImageURLConfig(baseURL: baseURL, useImageCache: useImageCache)
-  }
-
   /// 仅对 MediaInfo 热路径做后台解码，避免主线程解析大 JSON。
-  private func decodeMediaInfoInBackground(from data: Data, config: MediaImageURLConfig)
-    async throws -> MediaInfo
+  private func decodeMediaInfoInBackground(from data: Data) async throws -> MediaInfo
   {
     try await withCheckedThrowingContinuation {
       (continuation: CheckedContinuation<MediaInfo, Error>) in
       DispatchQueue.global(qos: .userInitiated).async {
         do {
           let raw: MediaInfoJSON = try decodeOrUnwrapSync(from: data)
-          let imageURLs = MediaInfo.ImageURLs(
-            poster: posterImageURL(posterPath: raw.poster_path, config: config),
-            backdrop: backdropImageURL(backdropPath: raw.backdrop_path, config: config)
-          )
-          continuation.resume(returning: MediaInfo(json: raw, precomputedImageURLs: imageURLs))
+          continuation.resume(returning: MediaInfo(json: raw))
         } catch {
           continuation.resume(throwing: error)
         }
@@ -1442,7 +1446,7 @@ class APIService: ObservableObject {
   }
 
   /// 仅对 MediaInfo 列表热路径做后台解码，缓解分页加载时的主线程压力。
-  private func decodeMediaInfoArrayInBackground(from data: Data, config: MediaImageURLConfig)
+  private func decodeMediaInfoArrayInBackground(from data: Data)
     async throws -> [MediaInfo]
   {
     try await withCheckedThrowingContinuation {
@@ -1450,13 +1454,7 @@ class APIService: ObservableObject {
       DispatchQueue.global(qos: .userInitiated).async {
         do {
           let raw: [MediaInfoJSON] = try decodeOrUnwrapSync(from: data)
-          let mapped = raw.map { item -> MediaInfo in
-            let imageURLs = MediaInfo.ImageURLs(
-              poster: posterImageURL(posterPath: item.poster_path, config: config),
-              backdrop: backdropImageURL(backdropPath: item.backdrop_path, config: config)
-            )
-            return MediaInfo(json: item, precomputedImageURLs: imageURLs)
-          }
+          let mapped = raw.map { MediaInfo(json: $0) }
           continuation.resume(returning: mapped)
         } catch {
           continuation.resume(throwing: error)
@@ -1497,12 +1495,13 @@ class APIService: ObservableObject {
     defer { endCandidateLogin(for: startingEpoch) }
     let candidateRuntime = APIServiceSessionRuntime(configuration: sessionConfiguration)
     defer { candidateRuntime.cancel() }
-    var components = URLComponents()
-    components.queryItems = [
-      URLQueryItem(name: "username", value: username),
-      URLQueryItem(name: "password", value: password),
-    ]
-    guard let bodyData = components.query?.data(using: .utf8) else {
+    guard let encodedUsername = encodeURIComponent(username),
+      let encodedPassword = encodeURIComponent(password)
+    else {
+      throw APIError.unknown
+    }
+    let formBody = "username=\(encodedUsername)&password=\(encodedPassword)"
+    guard let bodyData = formBody.data(using: .utf8) else {
       throw APIError.unknown
     }
 
@@ -1678,7 +1677,7 @@ class APIService: ObservableObject {
     title: String,
     year: String? = nil,
     type: String? = nil
-  ) async -> Int? {
+  ) async throws -> Int? {
     let snapshot = sessionSnapshot()
     var queryTitle = title.trimmingCharacters(in: .whitespaces)
     let searchYear = year?.trimmingCharacters(in: .whitespaces)
@@ -1710,12 +1709,14 @@ class APIService: ObservableObject {
     guard !queryTitle.isEmpty else { return nil }
 
     // 2. 尝试使用 searchMedia 进行精确搜索
+    // 首段失败不直接返回：暂存错误并继续 fallback，fallback 也无结果时抛出，避免伪装 no-match。
+    var firstStageError: Error?
     do {
       Logger.debug("[APIService] 开始 TMDB 搜索识别: '\(title)' -> 清洗后: '\(queryTitle)'", metadata: ["year": searchYear ?? "n/a", "type": type ?? "n/a"])
       
-      // 恢复原始调用：API 不带 type 参数，保持与 SearchBarDialog.vue 一致
-      let results = try await searchMedia(query: queryTitle)
-      guard isSessionUnchanged(from: snapshot) else { return nil }
+      // 不传 type，保持与 Web 搜索接口一致；显式锁定 TMDB，避免受后端默认识别源影响。
+      let results = try await searchMedia(query: queryTitle, source: .themoviedb)
+      guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
       let targetTitle = queryTitle.lowercased().trimmingCharacters(in: .whitespaces)
 
       let normalizedTargetType = type.map { normalizeMediaType($0) }
@@ -1740,7 +1741,7 @@ class APIService: ObservableObject {
         let yearMatch = (searchYear == nil || result.year == nil || searchYear == result.year)
 
         if titleMatch && typeMatch && yearMatch {
-          if let tmdbId = result.tmdb_id {
+          if let tmdbId = MediaIdentifier.validNumericIdentifier(result.tmdb_id) {
             Logger.info("[APIService] Search 识别成功 (严格匹配): \(rTitle), TMDB: \(tmdbId)")
             return tmdbId
           }
@@ -1774,31 +1775,32 @@ class APIService: ObservableObject {
         }()
 
         if titleMatch && typeMatch && yearMatch {
-          if let tmdbId = result.tmdb_id {
+          if let tmdbId = MediaIdentifier.validNumericIdentifier(result.tmdb_id) {
             Logger.info("[APIService] Search 识别成功 (年份误差匹配): \(rTitle), TMDB: \(tmdbId)")
             return tmdbId
           }
         }
       }
     } catch is CancellationError {
-      return nil
+      throw CancellationError()
     } catch {
+      firstStageError = error
       Logger.error("[APIService] searchMedia during recognition failed: \(error)")
     }
 
     // 3. Fallback 到 recognizeMedia
     // 适用于包含季、集、制作组信息的原始文件名字符串
-    guard isSessionUnchanged(from: snapshot) else { return nil }
+    guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
     do {
       Logger.debug("[APIService] Search 未命中，尝试 Fallback 到后端 Recognize 接口: \(title)")
       let recognizeQuery =
         (searchYear != nil && !title.contains(searchYear!)) ? "\(title) \(searchYear!)" : title
-      let result = try await recognizeMedia(title: recognizeQuery)
+      let result = try await recognizeMedia(title: recognizeQuery, source: .themoviedb)
 
       // 检查识别出的类型是否匹配（如果已知 type）
       if let targetType = type, let recognizedType = result.media_info?.type {
         if normalizeMediaType(targetType) == normalizeMediaType(recognizedType) {
-          if let tmdbId = result.media_info?.tmdb_id {
+          if let tmdbId = MediaIdentifier.validNumericIdentifier(result.media_info?.tmdb_id) {
              Logger.info("[APIService] Recognize 识别成功: \(result.media_info?.title ?? ""), TMDB: \(tmdbId)")
              return tmdbId
           }
@@ -1809,14 +1811,17 @@ class APIService: ObservableObject {
         }
       }
 
-      if let tmdbId = result.media_info?.tmdb_id {
+      if let tmdbId = MediaIdentifier.validNumericIdentifier(result.media_info?.tmdb_id) {
         Logger.info("[APIService] Recognize 识别成功: \(result.media_info?.title ?? ""), TMDB: \(tmdbId)")
         return tmdbId
       }
     } catch is CancellationError {
-      return nil
+      throw CancellationError()
     } catch {
       Logger.error("[APIService] recognizeMedia fallback failed: \(error)")
+      // 两段都失败时抛出首段原始错误（若首段未失败则抛尾段错误），
+      // 让调用方区分"识别失败"与"真正无匹配"。
+      throw firstStageError ?? error
     }
 
     Logger.info("[APIService] 识别失败: \(title)")
@@ -1943,7 +1948,7 @@ class APIService: ObservableObject {
   }
 
   /// 获取推荐媒体
-  /// - 对应前端: MoviePilot-Frontend/src/views/discover/MediaDetailView.vue (按 TMDB、豆瓣、Bangumi 字段顺序构造 recommend 路径)
+  /// - 对应前端: MoviePilot-Frontend/src/views/discover/MediaDetailView.vue (按 TMDB、豆瓣、Bangumi、AniList 字段顺序构造 recommend 路径)
   /// - 应用场景: 在媒体详情页底部，根据 Web 支持的辅助内容来源获取“推荐”列表。
   /// - ⚠️ 注意: Bangumi 的推荐接口不需要传 type。
   func fetchMediaRecommendations(detail: MediaInfo, page: Int = 1) async throws -> [MediaInfo] {
@@ -1959,6 +1964,8 @@ class APIService: ObservableObject {
       path = "douban/recommend/\(identity.mediaId)/\(type)"
     } else if identity.source == "bangumi" {
       path = "bangumi/recommend/\(identity.mediaId)"
+    } else if identity.source == "anilist" {
+      path = "anilist/recommend/\(identity.mediaId)"
     }
 
     guard let finalPath = path else { return [] }
@@ -2136,7 +2143,7 @@ class APIService: ObservableObject {
       let history_ids: [Int]?
     }
     let res = try JSONDecoder().decode(AiRedoResponse.self, from: data)
-    let message = res.message_i18n?.isEmpty == false ? res.message_i18n : res.message
+    let message = trimmedNonEmpty([res.message_i18n, res.message])
     guard res.success == true else {
       throw APIError.serverMessage(message ?? "未知错误")
     }
@@ -2420,8 +2427,16 @@ class APIService: ObservableObject {
   /// - 应用场景: 名称识别测试页面，用于测试后端的标题识别规则。
   /// - 对比组件: 前端的手动搜索功能由 `MediaIdSelector.vue` UI组件实现，该组件调用 `/media/search` API 来让用户**手动搜索并确认**影视信息。
   /// - tvOS现状: 当前 tvOS 端仅使用了此“自动识别”逻辑，后续审查时需关注其识别准确率是否满足业务场景。
-  func recognizeMedia(title: String) async throws -> RecognizeResponse {
-    let endpoint = try buildEndpoint(path: "/media/recognize", params: ["title": title])
+  func recognizeMedia(
+    title: String,
+    source: MediaSearchSource? = nil
+  ) async throws -> RecognizeResponse {
+    let endpoint = try buildEndpoint(
+      path: "/media/recognize",
+      params: [
+        "title": title,
+        "source": source?.rawValue,
+      ])
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap(RecognizeResponse.self, from: data)
   }
@@ -2487,7 +2502,7 @@ class APIService: ObservableObject {
 
   /// 获取媒体演员
   /// - 对应前端: `MoviePilot-Frontend/src/pages/credits.vue` (调用 `PersonCardListView.vue` 进行分页加载)
-  /// - 应用场景: 影视详情页按 Web 的 TMDB、豆瓣、Bangumi 字段顺序展示演员，支持分页加载。
+  /// - 应用场景: 影视详情页按 Web 的 TMDB、豆瓣、Bangumi、AniList 字段顺序展示演员，支持分页加载。
   func fetchMediaActors(detail: MediaInfo, page: Int) async throws -> [Person] {
     guard let identity = detail.auxiliaryContentIdentity else { return [] }
     let path: String
@@ -2499,6 +2514,8 @@ class APIService: ObservableObject {
       path = "douban/credits/\(identity.mediaId)/\(type)"
     } else if identity.source == "bangumi" {
       path = "bangumi/credits/\(identity.mediaId)"
+    } else if identity.source == "anilist" {
+      path = "anilist/credits/\(identity.mediaId)"
     } else {
       return []
     }
@@ -2782,7 +2799,7 @@ class APIService: ObservableObject {
       throw APIError.decodingError(error)
     }
     guard response.success != false else {
-      throw APIError.serverMessage(response.message ?? "复用订阅失败")
+      throw APIError.serverMessage(response.localizedMessage ?? "复用订阅失败")
     }
     guard let id = response.data?.id else {
       throw APIError.serverMessage("复用订阅响应缺少 ID")
@@ -3209,6 +3226,17 @@ class APIService: ObservableObject {
     return displayImageURL(url, baseURL: baseURL, useImageCache: useImageCache)
   }
 
+  /// 获取海报原始 URL（不降尺寸），作为降尺寸版本加载失败时的回退来源。
+  /// 与降尺寸版本共用豆瓣默认海报拦截规则。
+  func getPosterImageUrlOriginal(posterPath: String?) -> URL? {
+    if let url = posterPath, url.contains("doubanio.com") {
+      if url.contains("movie_default") || url.contains("tv_default") {
+        return nil
+      }
+    }
+    return displayImageURL(posterPath, baseURL: baseURL, useImageCache: useImageCache)
+  }
+
   /// 获取媒体背景图片 URL
   func getBackdropImageUrl(_ media: MediaInfo) -> URL? {
     return getBackdropImageUrl(backdropPath: media.backdrop_path)
@@ -3297,7 +3325,9 @@ class APIService: ObservableObject {
       guard let image = images?.medium else { return nil }
       url = image
     case "anilist":
-      guard let image = images?.large ?? images?.medium else { return nil }
+      // AniList 媒体详情的内嵌 directors/actors 使用 avatar.large，
+      // 而独立 credits/person 端点使用 images.large；两种结构都要兼容。
+      guard let image = images?.large ?? images?.medium ?? avatar?.urlValue else { return nil }
       url = image
     default:
       return nil

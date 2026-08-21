@@ -95,6 +95,17 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(historySource.contains("await Self.runAutoRefresh("))
   }
 
+  func testRecommendTabSelectionDrivesSuccessEmptyReactivation() throws {
+    let contentSource = try Self.source(at: "MoviePilot-TV/Views/ContentView.swift")
+    let recommendSource = try Self.source(at: "MoviePilot-TV/Views/Pages/RecommendView.swift")
+
+    XCTAssertTrue(
+      contentSource.contains("RecommendView(isSelected: selectedTab == .recommend)"))
+    XCTAssertTrue(recommendSource.contains(".task(id: isSelected)"))
+    XCTAssertTrue(recommendSource.contains("guard isSelected else { return }"))
+    XCTAssertTrue(recommendSource.contains("await viewModel.refreshSources()"))
+  }
+
   func testTransferHistoryMutationIntentsCarryTheirSourceSession() throws {
     let source = try Self.source(
       at: "MoviePilot-TV/Views/Pages/TransferHistoryView.swift"
@@ -320,6 +331,19 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(mediaSection.contains(".padding(.horizontal, 8)\n      .focusSection()"))
   }
 
+  @MainActor
+  func testSubscriptionCancellationFailureUsesGlobalNotification() throws {
+    let homeSource = try Self.source(at: "MoviePilot-TV/Views/Pages/HomeView.swift")
+    let detailSource = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
+    let failureMessage = SubscriptionCancelConfirmation.failureMessage
+
+    XCTAssertEqual(failureMessage, "取消订阅失败，请重试")
+    XCTAssertTrue(homeSource.contains("guard try await viewModel.deleteSubscribe(subscribe: item) else"))
+    XCTAssertTrue(homeSource.contains("message: SubscriptionCancelConfirmation.failureMessage"))
+    XCTAssertTrue(detailSource.contains("guard await viewModel.cancelSubscription() else"))
+    XCTAssertTrue(detailSource.contains("message: SubscriptionCancelConfirmation.failureMessage"))
+  }
+
   func testSheetFeedbackAndLoadingStateUseSharedPatterns() throws {
     let sheetStyleSource = try Self.source(at: "MoviePilot-TV/Views/Components/SheetStyles.swift")
     let subscribeSheetSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/SubscribeSheet.swift")
@@ -532,11 +556,13 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     )
     XCTAssertTrue(
       detailSource.contains(
-        "navigationPath.append(target)\n                    scheduleBackgroundReleaseAfterNavigationStarts()"
+        "MediaPreloader.shared.appendMedia(\n                      target,\n                      to: $navigationPath,\n                      stackID: mediaNavigationStackID\n                    )\n                    scheduleBackgroundReleaseAfterNavigationStarts()"
       )
     )
     XCTAssertTrue(
-      menuSource.contains("navigationPath.append(item)\n      onDidNavigate?()")
+      menuSource.contains(
+        "MediaPreloader.shared.appendMedia(\n        item,\n        to: $navigationPath,\n        stackID: mediaNavigationStackID\n      )\n      onDidNavigate?()"
+      )
     )
     XCTAssertFalse(menuSource.contains("onWillNavigate"))
     XCTAssertFalse(detailSource.contains("scheduleBackgroundReleaseOnDisappear"))

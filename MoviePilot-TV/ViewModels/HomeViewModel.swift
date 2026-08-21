@@ -20,6 +20,10 @@ class HomeViewModel: ObservableObject {
   @Published var movieSubscriptions: [Subscribe] = []
   /// 电视剧订阅列表
   @Published var tvSubscriptions: [Subscribe] = []
+  /// 最近播放加载失败标记（成功空视为有效结果；失败保留旧快照并置位）
+  @Published var latestLoadFailed = false
+  /// 订阅加载失败标记（成功空视为有效结果；失败保留旧数组并置位）
+  @Published var subscriptionsLoadFailed = false
   /// 加载状态
   @Published var isLoading = true
 
@@ -69,6 +73,12 @@ class HomeViewModel: ObservableObject {
 
     await refreshData()
 
+    // 页面 .task 被取消（切 Tab 等）后复位门闩，重新出现时能立即重试
+    if Task.isCancelled {
+      hasLoaded = false
+      return
+    }
+
     if isFirstLoad {
       isLoading = false
     }
@@ -88,6 +98,7 @@ class HomeViewModel: ObservableObject {
     guard apiService.canRequestSuperUserEndpoints else {
       latestMediaByServer = [:]
       latestMediaServers = []
+      latestLoadFailed = false
       if selectedLatestMediaServer != "" { selectedLatestMediaServer = "" }
       if !latestMedia.isEmpty { latestMedia = [] }
       return
@@ -103,30 +114,54 @@ class HomeViewModel: ObservableObject {
       let enabledServers = servers.filter { $0.enabled?.value ?? false }
 
       // 2. 使用 TaskGroup 并发获取已启用服务器的“最近新增/播放”列表
-      let latestByServer = await withTaskGroup(of: (String, [MediaServerPlayItem]).self) { group in
+      // 只有成功结果（含成功空）才覆盖对应服务器快照；
+      // 失败保留上一轮快照并置失败标记，取消保留快照但不视为失败。
+      let latestByServer = await withTaskGroup(of: (String, ServerLatestOutcome).self) {
+        group in
         for server in enabledServers {
           group.addTask {
             do {
               let items = try await self.apiService.fetchMediaServerLatest(server: server.name)
-              return (server.name, items)
+              return (server.name, .success(items))
+            } catch is CancellationError {
+              return (server.name, .cancelled)
             } catch {
               print("加载服务器 \(server.name) 最新媒体失败: \(error)")
-              return (server.name, [])
+              return (server.name, .failed)
             }
           }
         }
 
-        // 收集各服务器结果
+        // 收集各服务器结果，仅保留成功项
         var byServer: [String: [MediaServerPlayItem]] = [:]
-        for await (serverName, items) in group {
-          byServer[serverName] = items
+        var anyFailed = false
+        var anyCancelled = false
+        for await (serverName, outcome) in group {
+          switch outcome {
+          case .success(let items):
+            byServer[serverName] = items
+          case .failed:
+            anyFailed = true
+          case .cancelled:
+            anyCancelled = true
+          }
+        }
+        // 全部完成（无取消）时按结果刷新失败标记；有取消保持原值。
+        if !anyCancelled {
+          self.latestLoadFailed = anyFailed
         }
         return byServer
       }
       guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
 
       // 3. 更新筛选器和当前展示列表
-      self.latestMediaByServer = latestByServer
+      // 失败/取消的服务器保留上一轮快照；停用服务器随新列表移除。
+      let enabledServerNames = Set(enabledServers.map(\.name))
+      var nextByServer = latestMediaByServer.filter { enabledServerNames.contains($0.key) }
+      for (serverName, items) in latestByServer {
+        nextByServer[serverName] = items
+      }
+      self.latestMediaByServer = nextByServer
       let newServerNames = enabledServers.map(\.name)
       if self.latestMediaServers != newServerNames {
         self.latestMediaServers = newServerNames
@@ -148,8 +183,15 @@ class HomeViewModel: ObservableObject {
         print("加载最新媒体被取消")
       } else {
         print("加载最新媒体失败: \(error)")
+        latestLoadFailed = true
       }
     }
+  }
+
+  private enum ServerLatestOutcome {
+    case success([MediaServerPlayItem])
+    case failed
+    case cancelled
   }
 
   private func applyLatestMediaSelection() {
@@ -169,11 +211,13 @@ class HomeViewModel: ObservableObject {
   }
 
   /// 加载所有订阅并按电影/电视剧分类，且按 ID 倒序排列，也就是最新的在最前面
-  func refreshSubscriptions(forceRefresh: Bool = false) async {
+  @discardableResult
+  func refreshSubscriptions(forceRefresh: Bool = false) async -> Bool {
     guard apiService.canAccess(.subscribe) else {
       if !movieSubscriptions.isEmpty { movieSubscriptions = [] }
       if !tvSubscriptions.isEmpty { tvSubscriptions = [] }
-      return
+      subscriptionsLoadFailed = false
+      return true
     }
     do {
       let subs = try await apiService.fetchSubscriptions(forceRefresh: forceRefresh)
@@ -188,12 +232,15 @@ class HomeViewModel: ObservableObject {
       if self.tvSubscriptions != newTVs {
         self.tvSubscriptions = newTVs
       }
+      subscriptionsLoadFailed = false
+      return true
+    } catch is CancellationError {
+      print("加载订阅被取消")
+      return false
     } catch {
-      if error is CancellationError {
-        print("加载订阅被取消")
-      } else {
-        print("加载订阅失败: \(error)")
-      }
+      print("加载订阅失败: \(error)")
+      subscriptionsLoadFailed = true
+      return false
     }
   }
 
@@ -253,13 +300,18 @@ class HomeViewModel: ObservableObject {
     guard let id = subscribe.id else { return false }
     let sessionSnapshot = apiService.sessionSnapshot()
     let success = try await apiService.deleteSubscription(id: id)
-    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return false }
-    if success {
-      await refreshSubscriptions(forceRefresh: true)
-      // 通知其他页面（如详情页 preloadTask）订阅已变更
-      NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
-    }
-    return success
+    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { throw CancellationError() }
+
+    let didRefresh = await refreshSubscriptions(forceRefresh: true)
+    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { throw CancellationError() }
+
+    let stillExists = movieSubscriptions.contains { $0.id == id }
+      || tvSubscriptions.contains { $0.id == id }
+    guard success || (didRefresh && !stillExists) else { return false }
+
+    // 通知其他页面（如详情页 preloadTask）订阅已变更
+    NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
+    return true
   }
 
   private func validLinkValue(_ value: String?) -> String? {
@@ -272,9 +324,27 @@ class HomeViewModel: ObservableObject {
     return trimmed
   }
 
-  func openMediaItem(_ item: MediaServerPlayItem, using openURL: OpenURLAction) {
+  /// 该服务器类型是否已知支持在 tvOS 打开媒体库深链（静态能力，不依赖具体链接）
+  static func supportsMediaLibraryDeepLink(serverType: MediaServerType?) -> Bool {
+    guard let serverType else { return true }
+    switch serverType {
+    case .jellyfin, .trimemedia, .ugreen, .zspace:
+      return false
+    default:
+      return true
+    }
+  }
+
+  func openMediaItem(
+    _ item: MediaServerPlayItem,
+    using openURL: OpenURLAction,
+    onFailure: @escaping (String) -> Void
+  ) {
     let originalUrl = validLinkValue(item.link).flatMap { URL(string: $0) }
-    guard originalUrl != nil || item.server_type == .emby else { return }
+    guard originalUrl != nil || item.server_type == .emby else {
+      onFailure("无法打开媒体库：链接无效")
+      return
+    }
 
     var finalUrl: URL? = nil
 
@@ -348,25 +418,32 @@ class HomeViewModel: ObservableObject {
       if finalUrl == nil { finalUrl = URL(string: "plex://") }
 
     case .jellyfin:
-      print("Jellyfin 暂不支持在 tvOS 打开媒体")
+      onFailure("Jellyfin 暂不支持在 tvOS 打开媒体")
+      return
     case .trimemedia:
-      print("飞牛 Nas 暂不支持在 tvOS 打开媒体")
+      onFailure("飞牛 NAS 暂不支持在 tvOS 打开媒体")
+      return
     case .ugreen:
-      print("绿联 Nas 暂不支持在 tvOS 打开媒体")
+      onFailure("绿联 NAS 暂不支持在 tvOS 打开媒体")
+      return
     case .zspace:
-      print("极空间 Nas 暂不支持在 tvOS 打开媒体")
+      onFailure("极空间 NAS 暂不支持在 tvOS 打开媒体")
+      return
     default:
       // 处理未来未知的服务器类型（item.server_type.rawValue）
-      print("未知的媒体服务器类型: \(item.server_type?.rawValue ?? "未知")，且 tvOS 无法直接打开网页")
+      onFailure(
+        "未知的媒体服务器类型\(item.server_type.map { "（\($0.rawValue)）" } ?? "")暂不支持在 tvOS 打开媒体")
+      return
     }
 
     if let finalUrl = finalUrl {
       openURL(finalUrl) { accepted in
-        print(accepted ? "成功打开深度链接: \(finalUrl)" : "无法打开深度链接: \(finalUrl)")
+        if !accepted {
+          onFailure("无法打开媒体库 App，请确认已安装后重试")
+        }
       }
     } else if let serverType = item.server_type {
-      let source = originalUrl?.absoluteString ?? item.link ?? "<无链接>"
-      print("未能生成 \(serverType.rawValue) 的有效深度链接: \(source)")
+      onFailure("未能生成 \(serverType.rawValue) 的有效媒体库链接")
     }
   }
 }

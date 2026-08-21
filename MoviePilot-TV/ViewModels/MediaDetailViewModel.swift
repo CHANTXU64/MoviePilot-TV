@@ -17,6 +17,7 @@ class MediaDetailViewModel: ObservableObject {
 
   // 界面背景稳定性控制
   @Published var backgroundUrl: URL?
+  @Published var backgroundFallbackUrl: URL?
   @Published var isUsingPosterAsBackdrop = false
 
   // 分页加载器
@@ -60,6 +61,13 @@ class MediaDetailViewModel: ObservableObject {
     self.siteFilter = SiteFilterViewModel(apiService: apiService)
     let box = DetailBox(detail)
     self.detailBox = box
+
+    // 预加载命中时容器首帧即揭示内容，这里同步安装背景避免首帧灰底；
+    // 网络加载路径随后由 applyFullDetail 以动画升级为完整详情背景。
+    let initialBackground = detail.imageURLs.backgroundTarget
+    self.backgroundUrl = initialBackground.url
+    self.backgroundFallbackUrl = initialBackground.fallbackURL
+    self.isUsingPosterAsBackdrop = initialBackground.isPoster
 
     // --- Paginator for Recommend ---
     // ⚠️ 闭包 capture box（引用类型），而非 capture init 时的 detail 值。
@@ -140,9 +148,32 @@ class MediaDetailViewModel: ObservableObject {
     self.actorsPaginator.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &cancellables)
+
+    self.siteFilter.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
   }
 
   private var hasAppliedFullDetail = false
+
+  /// 页面重新激活时，对处于“成功空终态”的推荐/相似/演员分页各重试一次。
+  func refreshSuccessEmptySections() async {
+    if recommendPaginator.items.isEmpty, !recommendPaginator.isLoading, !recommendPaginator.hasError,
+      !recommendPaginator.hasMore
+    {
+      await recommendPaginator.refresh()
+    }
+    if similarPaginator.items.isEmpty, !similarPaginator.isLoading, !similarPaginator.hasError,
+      !similarPaginator.hasMore
+    {
+      await similarPaginator.refresh()
+    }
+    if actorsPaginator.items.isEmpty, !actorsPaginator.isLoading, !actorsPaginator.hasError,
+      !actorsPaginator.hasMore
+    {
+      await actorsPaginator.refresh()
+    }
+  }
 
   /// 应用完整的媒体详情数据并加载辅助内容。
   /// 在 fullDetail 加载完成后调用，负责：
@@ -158,8 +189,9 @@ class MediaDetailViewModel: ObservableObject {
     hasAppliedFullDetail = true
 
     // 从完整详情中派生演职员数据，作为 API 加载前的快速初始显示
-    uniqueDirectors = StaffManager.processCrew(persons: fullDetail.directors ?? [])
-    heroTopStaff = StaffManager.getTopGroupedStaff(from: fullDetail.directors ?? [], count: 1)
+    let directors = fullDetail.resolvedDirectors
+    uniqueDirectors = StaffManager.processCrew(persons: directors)
+    heroTopStaff = StaffManager.getTopGroupedStaff(from: directors, count: 1)
     heroTopActors = StaffManager.processActors(
       persons: Array((fullDetail.actors ?? []).prefix(4)))
 
@@ -306,36 +338,37 @@ class MediaDetailViewModel: ObservableObject {
 
   /// 根据媒体的海报或背景图更新详情页背景
   private func setBackground() {
-    let backdrop = detail.imageURLs.backdrop
-    let poster = detail.imageURLs.poster
-
-    let targetUrl: URL?
-    let targetIsPoster: Bool
-
-    // 优先级：背景大图 > 海报图
-    if let backdrop = backdrop {
-      targetUrl = backdrop
-      targetIsPoster = false
-    } else if let poster = poster {
-      targetUrl = poster
-      targetIsPoster = true
-    } else {
-      targetUrl = nil
-      targetIsPoster = false
-    }
+    let target = detail.imageURLs.backgroundTarget
 
     // 核心保护逻辑：只有当背景 URL 真正改变时才触发 @Published 更新。
     // 这能有效防止因为值相同但对象不同导致的 UI 重新闪烁刷新。
-    if self.backgroundUrl != targetUrl || self.isUsingPosterAsBackdrop != targetIsPoster {
+    if self.backgroundUrl != target.url || self.backgroundFallbackUrl != target.fallbackURL
+      || self.isUsingPosterAsBackdrop != target.isPoster
+    {
       withAnimation(.easeInOut(duration: 0.8)) {
-        if self.backgroundUrl != targetUrl {
-          self.backgroundUrl = targetUrl
+        if self.backgroundUrl != target.url {
+          self.backgroundUrl = target.url
         }
-        if self.isUsingPosterAsBackdrop != targetIsPoster {
-          self.isUsingPosterAsBackdrop = targetIsPoster
+        if self.backgroundFallbackUrl != target.fallbackURL {
+          self.backgroundFallbackUrl = target.fallbackURL
+        }
+        if self.isUsingPosterAsBackdrop != target.isPoster {
+          self.isUsingPosterAsBackdrop = target.isPoster
         }
       }
     }
+  }
+
+  func refreshBackgroundForImageConfiguration() {
+    setBackground()
+  }
+
+  func useBackgroundFallback(afterFailing failedURL: URL) {
+    guard backgroundUrl == failedURL, let fallbackURL = backgroundFallbackUrl,
+      fallbackURL != failedURL
+    else { return }
+    backgroundFallbackUrl = nil
+    backgroundUrl = fallbackURL
   }
 
   // MARK: - 订阅操作（业务逻辑，由 View 层调用）
@@ -375,22 +408,25 @@ class MediaDetailViewModel: ObservableObject {
   }
 
   /// 取消当前媒体的订阅
-  func cancelSubscription() async {
+  @discardableResult
+  func cancelSubscription() async -> Bool {
     let snapshot = apiService.sessionSnapshot()
     isUnsubscribing = true
     defer { isUnsubscribing = false }
 
     let didCancel = await deleteResolvedSubscription(snapshot: snapshot)
-    guard apiService.isSessionUnchanged(from: snapshot) else { return }
+    guard apiService.isSessionUnchanged(from: snapshot) else { return false }
 
     // 刷新所有订阅状态（包括全局和分季）
     await refreshSubscriptionStatus(forceRefresh: true)
-    guard apiService.isSessionUnchanged(from: snapshot) else { return }
+    guard apiService.isSessionUnchanged(from: snapshot) else { return false }
 
     if didCancel {
       // 通知首页刷新订阅列表
       NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
     }
+    // 远端已被其他入口删除时，刷新后的未订阅状态也视为收敛成功。
+    return didCancel || preloadTask?.isSubscribed == false
   }
 
   /// 刷新订阅状态：同时更新全局订阅和分季订阅（preloadTask 是唯一数据源）

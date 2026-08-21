@@ -4,6 +4,24 @@ import XCTest
 
 @MainActor
 final class DynamicSourceBehaviorTests: XCTestCase {
+  func testMediaGridEquatableIdentityIncludesImageConfiguration() throws {
+    let gridSource = try source("MoviePilot-TV/Views/Components/MediaGridView.swift")
+    XCTAssertTrue(
+      gridSource.contains(
+        "lhs.imageConfigurationIdentity == rhs.imageConfigurationIdentity"
+      )
+    )
+    XCTAssertTrue(
+      gridSource.contains(
+        "imageConfigurationIdentity: apiService.imageConfigurationIdentity"
+      )
+    )
+    let preloaderSource = try source("MoviePilot-TV/ViewModels/MediaPreloader.swift")
+    XCTAssertTrue(
+      preloaderSource.contains("retrieveHeroImage(url, fallbackURL: target.fallbackURL)")
+    )
+  }
+
   func testPluginFilterParserKeepsSupportedControlsAndSkipsUnknownControls() {
     let parsed = PluginFilterControlParser.parse([
       .object([
@@ -31,6 +49,440 @@ final class DynamicSourceBehaviorTests: XCTestCase {
 
     XCTAssertEqual(parsed.map(\.field), ["mtype"])
     XCTAssertEqual(parsed.first?.options.map(\.title), ["电影"])
+  }
+
+  func testPluginFilterSwitchAndRangeSliderParsedWithVisibility() {
+    let parsed = PluginFilterControlParser.parse([
+      .object([
+        "component": .string("div"),
+        "props": .object([
+          "show": .string("{{mtype == 'movies'}}"),
+        ]),
+        "content": .array([
+          .object([
+            "component": .string("VSwitch"),
+            "props": .object([
+              "model": .string("using_rating"),
+              "label": .string("启用"),
+            ]),
+          ]),
+          .object([
+            "component": .string("VRangeSlider"),
+            "props": .object([
+              "v-model": .string("user_rating"),
+              "min": .string("1"),
+              "max": .string("10"),
+              "step": .string("1"),
+            ]),
+          ]),
+        ]),
+      ]),
+    ])
+
+    XCTAssertEqual(parsed.map(\.field), ["using_rating", "user_rating"])
+    XCTAssertEqual(parsed[0].kind, .toggle)
+    XCTAssertEqual(parsed[1].kind, .choice)
+    XCTAssertEqual(parsed[1].options.map(\.value), (1...10).map { JSONValue.int($0) })
+    XCTAssertEqual(parsed[1].options.map(\.title), (1...10).map(String.init))
+    XCTAssertEqual(parsed[1].rangeBounds, [.int(1), .int(10)])
+    XCTAssertEqual(parsed[0].showExpressions, ["{{mtype == 'movies'}}"])
+    XCTAssertEqual(parsed[1].showExpressions, ["{{mtype == 'movies'}}"])
+  }
+
+  func testRangeSliderProjectsDefaultArrayAndWritesSelectedLowerBound() throws {
+    let control = try XCTUnwrap(
+      PluginFilterControlParser.parse([
+        .object([
+          "component": .string("VRangeSlider"),
+          "props": .object([
+            "v-model": .string("user_rating"),
+            "min": .int(1),
+            "max": .int(10),
+          ]),
+        ])
+      ]).first
+    )
+
+    XCTAssertEqual(control.selectionValue(from: .array([.int(1), .int(10)])), .int(1))
+    let stored = control.storedValue(for: .int(7))
+    XCTAssertEqual(stored, .array([.int(7), .int(10)]))
+
+    let path = ExploreViewModel.appendingQuery(
+      to: "plugin/IMDbDiscover/discover",
+      values: [control.field: stored]
+    )
+    let items = try XCTUnwrap(URLComponents(string: path)?.queryItems)
+    XCTAssertEqual(
+      items.filter { $0.name == "user_rating[]" }.compactMap(\.value),
+      ["7", "10"]
+    )
+  }
+
+  func testPluginFilterMultiSelectParsedAsMultiChoiceAndSingleStaysChoice() {
+    let parsed = PluginFilterControlParser.parse([
+      .object([
+        "component": .string("VSelect"),
+        "props": .object([
+          "model": .string("genre"),
+          "multiple": .bool(true),
+          "items": .array([
+            .string("动作"),
+            .string("喜剧"),
+          ]),
+        ]),
+      ]),
+      .object([
+        "component": .string("VSelect"),
+        "props": .object([
+          "model": .string("country"),
+          "items": .array([.string("美国")]),
+        ]),
+      ]),
+    ])
+
+    XCTAssertEqual(parsed[0].kind, .multiChoice)
+    XCTAssertEqual(parsed[0].options.map(\.title), ["动作", "喜剧"])
+    XCTAssertEqual(parsed[1].kind, .choice)
+  }
+
+  func testPluginFilterShowExpressionControlsVisibility() throws {
+    let parsed = PluginFilterControlParser.parse([
+      .object([
+        "component": .string("VChipGroup"),
+        "props": .object([
+          "model": .string("ranked_list"),
+          "show": .string("{{mtype == 'movies'}}"),
+        ]),
+      ]),
+    ])
+    let control = try XCTUnwrap(parsed.first)
+
+    XCTAssertTrue(control.isVisible(in: ["mtype": .string("movies")]))
+    XCTAssertFalse(control.isVisible(in: ["mtype": .string("series")]))
+    XCTAssertFalse(control.isVisible(in: [:]))
+  }
+
+  func testPluginFilterUnparsableExpressionStaysVisible() throws {
+    let parsed = PluginFilterControlParser.parse([
+      .object([
+        "component": .string("VChipGroup"),
+        "props": .object([
+          "model": .string("ranked_list"),
+          "show": .string("{{mtype === 'movies'}}"),
+        ]),
+      ]),
+    ])
+    let control = try XCTUnwrap(parsed.first)
+
+    XCTAssertTrue(control.isVisible(in: ["mtype": .string("movies")]))
+  }
+
+  func testPluginFilterExpressionEvaluator() {
+    let values: [String: JSONValue] = [
+      "mtype": .string("movies"),
+      "year": .int(2026),
+      "flag": .bool(true),
+    ]
+
+    XCTAssertEqual(
+      PluginFilterExpression.evaluate("{{mtype == 'movies'}}", values: values),
+      true
+    )
+    XCTAssertEqual(
+      PluginFilterExpression.evaluate("mtype != 'series'", values: values),
+      true
+    )
+    XCTAssertEqual(
+      PluginFilterExpression.evaluate("{{mtype == 'series' && flag}}", values: values),
+      false
+    )
+    XCTAssertEqual(
+      PluginFilterExpression.evaluate("{{mtype == 'series' || flag}}", values: values),
+      true
+    )
+    XCTAssertEqual(
+      PluginFilterExpression.evaluate("{{ !flag }}", values: values),
+      false
+    )
+    XCTAssertEqual(
+      PluginFilterExpression.evaluate("{{ year == 2026 }}", values: values),
+      true
+    )
+    XCTAssertEqual(
+      PluginFilterExpression.evaluate("{{ missing == 'x' }}", values: values),
+      false
+    )
+    XCTAssertEqual(
+      PluginFilterExpression.evaluate("{{ (mtype == 'movies') }}", values: values),
+      true
+    )
+    XCTAssertNil(PluginFilterExpression.evaluate("{{ mtype === 'movies' }}", values: values))
+    XCTAssertNil(PluginFilterExpression.evaluate("", values: values))
+  }
+
+  func testPluginFilterToggleValueRoundTrips() {
+    let values = ExploreViewModel.applyingPluginFilter(
+      field: "using_rating",
+      value: .bool(true),
+      to: ["using_rating": .bool(false)],
+      defaults: ["using_rating": .bool(false)],
+      depends: nil
+    )
+
+    XCTAssertEqual(values["using_rating"], .bool(true))
+  }
+
+  func testPluginFilterUserWriteAlignsWithWebDefaultRestore() {
+    // Web ExtraSourceView watch：falsy 值且有非空默认时恢复默认
+    let restored = ExploreViewModel.applyingPluginFilter(
+      field: "user_rating",
+      value: .null,
+      to: ["user_rating": .array([.int(1), .int(10)])],
+      defaults: ["user_rating": .array([.int(1), .int(10)])],
+      depends: nil
+    )
+    XCTAssertEqual(restored["user_rating"], .array([.int(1), .int(10)]))
+
+    // 空数组是 truthy，不触发恢复（Web 多选清空语义）
+    let cleared = ExploreViewModel.applyingPluginFilter(
+      field: "genre",
+      value: .array([]),
+      to: ["genre": .array([.string("动作")])],
+      defaults: ["genre": .array([.string("动作")])],
+      depends: nil
+    )
+    XCTAssertEqual(cleared["genre"], .array([]))
+
+    // 默认 false 的开关关闭后保持 false
+    let turnedOff = ExploreViewModel.applyingPluginFilter(
+      field: "using_rating",
+      value: .bool(false),
+      to: ["using_rating": .bool(false)],
+      defaults: ["using_rating": .bool(false)],
+      depends: nil
+    )
+    XCTAssertEqual(turnedOff["using_rating"], .bool(false))
+  }
+
+  func testAppendingQueryFlattensArrayWithBrackets() throws {
+    let path = ExploreViewModel.appendingQuery(
+      to: "plugin/ImdbSource/imdb-discover",
+      values: [
+        "user_rating": .array([.int(1), .int(10)]),
+        "mtype": .string("series"),
+      ]
+    )
+    let components = try XCTUnwrap(URLComponents(string: path))
+    let items = try XCTUnwrap(components.queryItems)
+
+    XCTAssertEqual(
+      items.filter { $0.name == "user_rating[]" }.compactMap(\.value),
+      ["1", "10"]
+    )
+    XCTAssertEqual(items.first(where: { $0.name == "mtype" })?.value, "series")
+  }
+
+  func testAppendingQuerySkipsNullAndEmptyCollections() throws {
+    let path = ExploreViewModel.appendingQuery(
+      to: "plugin/TvdbDiscover/tvdb_discover",
+      values: [
+        "empty": .array([]),
+        "nilValue": .null,
+        "genre": .array([.string("动作"), .string("喜剧")]),
+      ]
+    )
+    let components = try XCTUnwrap(URLComponents(string: path))
+    let items = try XCTUnwrap(components.queryItems)
+
+    XCTAssertNil(items.first(where: { $0.name == "empty" }))
+    XCTAssertNil(items.first(where: { $0.name == "nilValue" }))
+    XCTAssertEqual(
+      items.filter { $0.name == "genre[]" }.compactMap(\.value),
+      ["动作", "喜剧"]
+    )
+  }
+
+  func testAppendingQueryFlattensNestedObjectWithBrackets() throws {
+    let path = ExploreViewModel.appendingQuery(
+      to: "plugin/Example/discover",
+      values: [
+        "filter": .object([
+          "genre": .string("动作"),
+          "year": .int(2026),
+        ])
+      ]
+    )
+    let components = try XCTUnwrap(URLComponents(string: path))
+    let items = try XCTUnwrap(components.queryItems)
+
+    XCTAssertEqual(items.first(where: { $0.name == "filter[genre]" })?.value, "动作")
+    XCTAssertEqual(items.first(where: { $0.name == "filter[year]" })?.value, "2026")
+  }
+
+  func testAppendingQueryUsesIndexesForArrayOfObjects() throws {
+    let path = ExploreViewModel.appendingQuery(
+      to: "plugin/Example/discover",
+      values: [
+        "x": .array([
+          .object(["a": .int(1)]),
+          .object(["a": .int(2)]),
+        ])
+      ]
+    )
+    let components = try XCTUnwrap(URLComponents(string: path))
+    let items = try XCTUnwrap(components.queryItems)
+
+    XCTAssertEqual(items.first(where: { $0.name == "x[0][a]" })?.value, "1")
+    XCTAssertEqual(items.first(where: { $0.name == "x[1][a]" })?.value, "2")
+  }
+
+  func testAppendingQueryMixedArrayUsesIndexesAndSkipsNull() throws {
+    let path = ExploreViewModel.appendingQuery(
+      to: "plugin/Example/discover",
+      values: [
+        "x": .array([
+          .object(["a": .int(1)]),
+          .int(2),
+          .null,
+        ])
+      ]
+    )
+    let components = try XCTUnwrap(URLComponents(string: path))
+    let items = try XCTUnwrap(components.queryItems)
+
+    XCTAssertEqual(items.first(where: { $0.name == "x[0][a]" })?.value, "1")
+    XCTAssertEqual(items.first(where: { $0.name == "x[1]" })?.value, "2")
+    XCTAssertNil(items.first(where: { $0.name == "x[2]" }))
+  }
+
+  func testAppendingQueryKeepsExistingQueryAndEncodesSpecialChars() throws {
+    let path = ExploreViewModel.appendingQuery(
+      to: "plugin/ImdbSource/imdb-discover?apikey=signed%23token",
+      values: [
+        "user_rating": .array([.int(1), .int(10)]),
+        "name": .string("C++"),
+      ]
+    )
+    let components = try XCTUnwrap(URLComponents(string: path))
+    let items = try XCTUnwrap(components.queryItems)
+
+    XCTAssertEqual(items.first(where: { $0.name == "apikey" })?.value, "signed#token")
+    XCTAssertEqual(items.first(where: { $0.name == "name" })?.value, "C++")
+    XCTAssertEqual(
+      items.filter { $0.name == "user_rating[]" }.compactMap(\.value),
+      ["1", "10"]
+    )
+  }
+
+  func testPluginFilterRangeSliderBoundaries() {
+    func parse(_ props: [String: JSONValue]) -> [PluginFilterOption] {
+      let controls = PluginFilterControlParser.parse([
+        .object([
+          "component": .string("VRangeSlider"),
+          "props": .object(props),
+        ]),
+      ])
+      return controls.first?.options ?? []
+    }
+
+    XCTAssertTrue(parse(["v-model": .string("x"), "min": .string("5"), "max": .string("1")]).isEmpty)
+    XCTAssertTrue(
+      parse(["v-model": .string("x"), "min": .string("0"), "max": .string("1e308"), "step": .string("1")]).isEmpty
+    )
+    XCTAssertTrue(
+      parse(["v-model": .string("x"), "min": .string("0"), "max": .string("10"), "step": .string("0.0001")]).isEmpty
+    )
+    XCTAssertTrue(
+      parse(["v-model": .string("x"), "min": .string("0"), "max": .string("10"), "step": .string("0")]).isEmpty
+    )
+    XCTAssertEqual(
+      parse(["v-model": .string("x"), "min": .string("1"), "max": .string("3"), "step": .string("0.5")])
+        .map(\.value),
+      [.int(1), .double(1.5), .int(2), .double(2.5), .int(3)]
+    )
+    XCTAssertEqual(
+      parse(["v-model": .string("x"), "min": .string("0"), "max": .string("1e10"), "step": .string("1e9")])
+        .map(\.value),
+      (0...10).map { .int($0 * 1_000_000_000) }
+    )
+    let huge = parse([
+      "v-model": .string("x"),
+      "min": .string("1e300"),
+      "max": .string("1e301"),
+      "step": .string("1e299"),
+    ])
+    XCTAssertEqual(huge.count, 91)
+    XCTAssertEqual(huge.first?.value, .double(1e300))
+  }
+
+  func testPluginFilterNestedVisibilityCombinesWithAnd() throws {
+    let parsed = PluginFilterControlParser.parse([
+      .object([
+        "component": .string("div"),
+        "props": .object([
+          "show": .string("{{mtype == 'movies'}}"),
+        ]),
+        "content": .array([
+          .object([
+            "component": .string("VChipGroup"),
+            "props": .object([
+              "model": .string("ranked_list"),
+              "show": .string("{{flag}}"),
+            ]),
+          ]),
+        ]),
+      ]),
+    ])
+    let control = try XCTUnwrap(parsed.first)
+
+    XCTAssertEqual(control.showExpressions, ["{{mtype == 'movies'}}", "{{flag}}"])
+    XCTAssertTrue(
+      control.isVisible(in: ["mtype": .string("movies"), "flag": .bool(true)])
+    )
+    XCTAssertFalse(
+      control.isVisible(in: ["mtype": .string("movies"), "flag": .bool(false)])
+    )
+    XCTAssertFalse(
+      control.isVisible(in: ["mtype": .string("series"), "flag": .bool(true)])
+    )
+  }
+
+  func testPluginFilterSameFieldDifferentVisibilityBranchesBothSurvive() {
+    let parsed = PluginFilterControlParser.parse([
+      .object([
+        "component": .string("VChipGroup"),
+        "props": .object([
+          "model": .string("genre"),
+          "show": .string("{{mtype == 'movies'}}"),
+        ]),
+      ]),
+      .object([
+        "component": .string("VChipGroup"),
+        "props": .object([
+          "model": .string("genre"),
+          "show": .string("{{mtype == 'series'}}"),
+        ]),
+      ]),
+    ])
+
+    XCTAssertEqual(parsed.count, 2)
+    XCTAssertEqual(parsed[0].showExpressions, ["{{mtype == 'movies'}}"])
+    XCTAssertEqual(parsed[1].showExpressions, ["{{mtype == 'series'}}"])
+  }
+
+  func testPluginFilterMultiplePropIsCaseInsensitive() {
+    let parsed = PluginFilterControlParser.parse([
+      .object([
+        "component": .string("VSelect"),
+        "props": .object([
+          "model": .string("genre"),
+          "Multiple": .bool(true),
+          "items": .array([.string("动作")]),
+        ]),
+      ]),
+    ])
+
+    XCTAssertEqual(parsed.first?.kind, .multiChoice)
   }
 
   func testPluginFilterDependencyClearsDependentField() {
@@ -74,6 +526,47 @@ final class DynamicSourceBehaviorTests: XCTestCase {
       ),
       "/plugin/TvdbDiscover/tvdb_discover"
     )
+  }
+
+  func testQueryAppendKeepsExistingPercentEncodingAndEscapesLiteralPlus() throws {
+    let endpoint = try relativeBackendEndpoint(
+      path: "discover/tmdb/popular?token=A%2BB&lang=zh-CN",
+      params: ["q": "C++", "name": "张三"]
+    )
+    let components = try XCTUnwrap(URLComponents(string: endpoint))
+
+    let rawQuery = try XCTUnwrap(components.percentEncodedQuery)
+    XCTAssertTrue(rawQuery.contains("token=A%2BB"))
+    XCTAssertTrue(rawQuery.contains("lang=zh-CN"))
+    XCTAssertTrue(rawQuery.contains("q=C%2B%2B"))
+    XCTAssertTrue(rawQuery.contains("name=%E5%BC%A0%E4%B8%89"))
+    XCTAssertFalse(rawQuery.contains("q=C++"))
+
+    let items = try XCTUnwrap(components.queryItems)
+    XCTAssertEqual(items.first(where: { $0.name == "token" })?.value, "A+B")
+    XCTAssertEqual(items.first(where: { $0.name == "q" })?.value, "C++")
+    XCTAssertEqual(items.first(where: { $0.name == "name" })?.value, "张三")
+  }
+
+  func testExploreAppendingQueryKeepsPercentEncodedTokenAndEncodesValues() throws {
+    let path = ExploreViewModel.appendingQuery(
+      to: "plugin/Example/example?token=A%2BB&apikey=signed%23token",
+      values: [
+        "keyword": .string("C++ 电影"),
+        "year": .int(2026),
+      ]
+    )
+    let components = try XCTUnwrap(URLComponents(string: path))
+
+    let rawQuery = try XCTUnwrap(components.percentEncodedQuery)
+    XCTAssertTrue(rawQuery.contains("token=A%2BB"))
+    XCTAssertTrue(rawQuery.contains("apikey=signed%23token"))
+    XCTAssertTrue(rawQuery.contains("keyword=C%2B%2B%20%E7%94%B5%E5%BD%B1"))
+    XCTAssertTrue(rawQuery.contains("year=2026"))
+
+    let items = try XCTUnwrap(components.queryItems)
+    XCTAssertEqual(items.first(where: { $0.name == "token" })?.value, "A+B")
+    XCTAssertEqual(items.first(where: { $0.name == "keyword" })?.value, "C++ 电影")
   }
 
   func testDiscoverSourceSnapshotDeduplicatesBuiltInsAndPluginPrefixes() {
@@ -167,7 +660,9 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     ] {
       let viewSource = try source(relativePath)
       XCTAssertTrue(
-        viewSource.contains("preloadIfNeeded(for:"),
+        viewSource.contains("preloadIfNeeded(for:")
+          || viewSource.contains("preloadFocusedCandidateIfNeeded(for:")
+          || viewSource.contains("appendMedia("),
         relativePath
       )
       XCTAssertFalse(

@@ -53,26 +53,74 @@ enum BestResultItem: Identifiable, Hashable {
 }
 
 /// 模糊匹配分值计算：用于给搜索结果进行初级排序
-/// 原理：全匹配最高，前缀匹配次之，包含匹配再次，最后是按顺序出现的字符匹配
-private func fuzzyMatchScore(text: String?, query: String) -> Int {
+/// 原理：全匹配最高，前缀匹配次之，包含匹配再次，最后是按顺序出现的字符匹配。
+/// 类别带宽互不重叠且长度罚分有上限，避免长标题的真实匹配被弱匹配挤出。
+func fuzzyMatchScore(text: String?, query: String) -> Int {
   guard let t = text?.lowercased(), !query.isEmpty else { return -1 }
   let q = query.lowercased()
 
   if t == q { return 1000 }  // 完全相等
-  if t.hasPrefix(q) { return 500 - t.count }  // 前缀匹配（标题越短权重越高）
-  if t.contains(q) { return 100 - t.count }  // 包含匹配
+  if t.hasPrefix(q) { return 700 - min(t.count, 100) }  // 前缀匹配（标题越短权重越高，罚分封顶）
+  if t.contains(q) { return 400 - min(t.count, 100) }  // 包含匹配
 
-  // 字符顺序匹配（如搜索 "hml" 匹配 "Hamilton"）
-  var qIndex = q.startIndex
-  for char in t {
-    if char == q[qIndex] {
-      qIndex = q.index(after: qIndex)
-      if qIndex == q.endIndex {
-        return 50 - t.count
+  // 字符顺序匹配（如搜索 "hml" 匹配 "Hamilton"），采用 fzf 风格加分
+  return subsequenceMatchScore(text: t, query: q)
+}
+
+/// 顺序匹配打分：匹配字符越靠词首、越连续得分越高，间隔与长度惩罚有界。
+/// 结果区间 [100, 299]，始终高于“不匹配(-1)”、低于“包含匹配”档。
+private func subsequenceMatchScore(text: String, query: String) -> Int {
+  var queryIndex = query.startIndex
+  var previousMatchOffset: Int?
+  var bonus = 0
+  var gapPenalty = 0
+  var offset = 0
+  let chars = Array(text)
+
+  for char in chars {
+    if char == query[queryIndex] {
+      // 词首加分：标题开头或前一个字符是分隔符/标点
+      if offset == 0 || !chars[offset - 1].isLetterOrNumber {
+        bonus += 24
       }
+      if let previous = previousMatchOffset {
+        let gap = offset - previous - 1
+        if gap == 0 {
+          bonus += 12  // 连续匹配
+        } else {
+          gapPenalty += min(gap * 3, 60)
+        }
+      }
+      previousMatchOffset = offset
+      queryIndex = query.index(after: queryIndex)
+      if queryIndex == query.endIndex { break }
     }
+    offset += 1
   }
-  return -1
+  guard queryIndex == query.endIndex else { return -1 }
+  return min(max(100 + bonus - gapPenalty - min(text.count, 99), 100), 299)
+}
+
+private extension Character {
+  var isLetterOrNumber: Bool {
+    isLetter || isNumber
+  }
+}
+
+/// 热度加分：按来源热度口径归一化，避免不同来源量级混算。
+/// - TMDB 热度指数（常见 0.5~1900）用 log10 基数 3；
+/// - AniList 收藏数（常见数千~数十万）用 log10 基数 6；
+/// - 其余来源无热度或口径不可比，返回 0。
+func popularityBoost(source: String?, popularity: Double) -> Int {
+  guard popularity > 0 else { return 0 }
+  let base: Double
+  switch source?.lowercased() {
+  case "themoviedb": base = 3
+  case "anilist": base = 6
+  default: return 0
+  }
+  let normalized = min(log10(1 + popularity) / base, 1)
+  return Int((normalized * 149).rounded())
 }
 
 @MainActor
@@ -143,7 +191,8 @@ class SearchViewModel: ObservableObject {
       }.max() ?? -1
     }
 
-    var scoredItems: [(item: BestResultItem, score: Int, popularity: Double)] = []
+    var scoredItems: [(item: BestResultItem, score: Int, popularity: Double, boost: Int)] = []
+    var candidateSources = Set<String>()
 
     // 1. 处理媒体搜索结果 (电影/电视剧)
     for mediaItem in media {
@@ -167,10 +216,12 @@ class SearchViewModel: ObservableObject {
       let maxS = bestScore(Set(candidates), yearMatches)
       let pop = mediaItem.popularity ?? 0
       let hasNoPoster = mediaItem.poster_path == nil || mediaItem.poster_path?.isEmpty == true
+      let boost = popularityBoost(source: mediaItem.source, popularity: pop)
 
       // 过滤匹配度极低且无海报的结果，减少噪音
       if !(hasNoPoster && maxS < 50 && pop < 1) {
-        scoredItems.append((item: .media(mediaItem), score: maxS, popularity: pop))
+        if let source = mediaItem.source, !source.isEmpty { candidateSources.insert(source) }
+        scoredItems.append((item: .media(mediaItem), score: maxS, popularity: pop, boost: boost))
       }
     }
 
@@ -196,9 +247,11 @@ class SearchViewModel: ObservableObject {
       let maxS = bestScore(Set(candidates), yearMatches)
       let pop = mediaItem.popularity ?? 0
       let hasNoPoster = mediaItem.poster_path == nil || mediaItem.poster_path?.isEmpty == true
+      let boost = popularityBoost(source: mediaItem.source, popularity: pop)
 
       if !(hasNoPoster && maxS < 50 && pop < 1) {
-        scoredItems.append((item: .media(mediaItem), score: maxS, popularity: pop))
+        if let source = mediaItem.source, !source.isEmpty { candidateSources.insert(source) }
+        scoredItems.append((item: .media(mediaItem), score: maxS, popularity: pop, boost: boost))
       }
     }
 
@@ -213,9 +266,11 @@ class SearchViewModel: ObservableObject {
       let maxS = bestScore(Set(candidates), true)
       let pop = personItem.popularity ?? 0
       let hasNoPoster = personItem.profile_path == nil || personItem.profile_path?.isEmpty == true
+      let boost = popularityBoost(source: personItem.source, popularity: pop)
 
       if !(hasNoPoster && maxS < 50 && pop < 1) {
-        scoredItems.append((item: .person(personItem), score: maxS, popularity: pop))
+        if let source = personItem.source, !source.isEmpty { candidateSources.insert(source) }
+        scoredItems.append((item: .person(personItem), score: maxS, popularity: pop, boost: boost))
       }
     }
 
@@ -227,19 +282,30 @@ class SearchViewModel: ObservableObject {
         !$0.isEmpty
       }
       let maxS = bestScore(Set(titles), true)
-      let pop = shareItem.popularity ?? 0  // 复用次数
+      // 订阅分享无真实热度（复用次数与媒体热度口径不同），固定小值参与加权。
+      let pop = 0.6
       let hasNoPoster = shareItem.poster_path == nil || shareItem.poster_path?.isEmpty == true
+      let boost = popularityBoost(source: "themoviedb", popularity: pop)
 
       // 分享结果通常比较优质，放宽准入
       if !(hasNoPoster && maxS < 0) {
-        scoredItems.append((item: .media(shareItem), score: maxS, popularity: pop))
+        scoredItems.append((item: .media(shareItem), score: maxS, popularity: pop, boost: boost))
       }
     }
 
-    // 核心排序逻辑：优先按匹配分值倒序，分值相同时按热度 (Popularity) 倒序
+    // 候选池出现多个媒体来源（订阅分享不计）时热度口径不可比，全部不计算热度。
+    if candidateSources.count > 1 {
+      scoredItems = scoredItems.map {
+        (item: $0.item, score: $0.score, popularity: $0.popularity, boost: 0)
+      }
+    }
+
+    // 核心排序逻辑：按“匹配分值 + 热度加分”倒序，总分相同时按热度倒序
     scoredItems.sort {
-      if $0.score != $1.score {
-        return $0.score > $1.score
+      let lhsTotal = $0.score + $0.boost
+      let rhsTotal = $1.score + $1.boost
+      if lhsTotal != rhsTotal {
+        return lhsTotal > rhsTotal
       }
       return $0.popularity > $1.popularity
     }
@@ -290,6 +356,9 @@ class SearchViewModel: ObservableObject {
     self.apiService = apiService
     self.siteFilter = SiteFilterViewModel(apiService: apiService)
     self.mediaSearchSource = SystemViewModel.currentDefaultMediaSearchSource(apiService: apiService)
+    self.siteFilter.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
   }
 
   /// 执行初始搜索：根据 searchType 决定是资源搜索还是聚合元数据搜索
@@ -315,10 +384,14 @@ class SearchViewModel: ObservableObject {
       searchProgressText = "正在搜索..."
       searchProgress = 0.0
       resourceErrorMessage = nil
+      // 新搜索开始即清空旧结果，避免新搜索失败或响应在途时旧结果冒充新结果并可被操作。
+      resourceResults = []
       
       searchStreamTask = Task { @MainActor in
         var accumulatedResults: [Context] = []
         var finalResultApplied = false
+        // 只有收到端点认可的 done 才把结果按成功收尾发布；业务 error 与无终止 EOF 均不发布。
+        var receivedDone = false
         defer {
           self.finishSearchIfCurrent(
             generation: currentSearchGeneration,
@@ -357,11 +430,13 @@ class SearchViewModel: ObservableObject {
             
             if event.type == "error" {
               self.resourceErrorMessage =
-                event.message_i18n ?? event.message ?? "未找到相关资源"
-              break
+                event.localizedMessage ?? "未找到相关资源"
+              // 整次搜索失败：不发布已积累的部分结果。
+              return
             }
             
             if event.type == "done" {
+              receivedDone = true
               // 与 Web v2.13.2 保持一致：给后端搜索结果缓存写入留出收尾时间。
               try? await Task.sleep(nanoseconds: searchStreamDoneCloseDelay)
               guard canPublishSearchResult(
@@ -378,9 +453,27 @@ class SearchViewModel: ObservableObject {
             sessionSnapshot: sessionSnapshot,
             searchType: currentSearchType)
           else { return }
+          // EOF 未收到 done 视为连接异常，不把部分结果按成功收尾发布。
+          guard receivedDone else {
+            throw URLError(.networkConnectionLost)
+          }
 
-          // 应用自定义过滤规则
-          let filteredResults = await self.applyCustomFilter(to: accumulatedResults)
+          // 应用自定义过滤规则（规则内容非法时显式提示；拉取规则网络失败时放行不过滤）
+          let filteredResults: [Context]
+          do {
+            filteredResults = try await self.applyCustomFilter(to: accumulatedResults)
+          } catch let error as CustomFilterService.FilterError {
+            guard canPublishSearchResult(
+              generation: currentSearchGeneration,
+              sessionSnapshot: sessionSnapshot,
+              searchType: currentSearchType)
+            else { return }
+            self.resourceErrorMessage = error.localizedDescription
+            return
+          } catch {
+            print("❌ [SearchVM] 加载过滤规则失败，放行不过滤: \(error)")
+            filteredResults = accumulatedResults
+          }
           guard canPublishSearchResult(
             generation: currentSearchGeneration,
             sessionSnapshot: sessionSnapshot,
@@ -407,7 +500,14 @@ class SearchViewModel: ObservableObject {
               searchType: currentSearchType)
             else { return }
 
-            fallbackResults = await self.applyCustomFilter(to: fallbackResults)
+            do {
+              fallbackResults = try await self.applyCustomFilter(to: fallbackResults)
+            } catch let error as CustomFilterService.FilterError {
+              self.resourceErrorMessage = error.localizedDescription
+              return
+            } catch {
+              print("❌ [SearchVM] 加载过滤规则失败，放行不过滤: \(error)")
+            }
             guard canPublishSearchResult(
               generation: currentSearchGeneration,
               sessionSnapshot: sessionSnapshot,
@@ -436,7 +536,9 @@ class SearchViewModel: ObservableObject {
           searchType: currentSearchType
         )
       }
-      // 聚合搜索：创建代理 Fetcher 和 Paginators
+      // 聚合搜索：新搜索开始即清空旧最佳结果，避免请求在途或失败时旧结果冒充新结果（与资源搜索分支对齐）。
+      self.bestResults = []
+      // 创建代理 Fetcher 和 Paginators
       setupPaginators(query: submittedQuery)
 
       guard let moviePag = moviePaginator,
@@ -601,6 +703,7 @@ class SearchViewModel: ObservableObject {
     )
 
     // --- Person Paginator ---
+    var personSeenIDs = Set<String>()
     let newPersonPaginator = Paginator<Person>(
       threshold: 10,
       fetcher: { @MainActor [apiService] page in
@@ -616,11 +719,7 @@ class SearchViewModel: ObservableObject {
         )
       },
       processor: { @MainActor currentItems, newItems in
-        // 基于 raw_id 去重
-        let existingIds = Set(currentItems.compactMap { $0.raw_id })
-        let uniqueNewItems = newItems.filter {
-          $0.raw_id == nil || !existingIds.contains($0.raw_id!)
-        }
+        let uniqueNewItems = Person.deduplicate(newItems, existingIDs: &personSeenIDs)
         if uniqueNewItems.isEmpty { return false }
         currentItems.append(contentsOf: uniqueNewItems)
         return true
@@ -628,7 +727,8 @@ class SearchViewModel: ObservableObject {
       imageURLsProvider: { item in
         [item.imageURLs.profile].compactMap(\.self)
       },
-      imagePrefetchProcessor: PersonCard.imageProcessor()
+      imagePrefetchProcessor: PersonCard.imageProcessor(),
+      onReset: { @MainActor in personSeenIDs.removeAll() }
     )
 
     var newSubscriptionSharePaginator: Paginator<MediaInfo>?
@@ -743,14 +843,9 @@ class SearchViewModel: ObservableObject {
   // MARK: - 自定义过滤规则
 
   /// 应用自定义过滤规则
-  private func applyCustomFilter(to contexts: [Context]) async -> [Context] {
-    do {
-      return try await CustomFilterService.applyHardAndSoftFilter(
-        to: contexts, using: apiService, caller: "SearchVM")
-    } catch {
-      print("❌ [SearchVM] 加载过滤规则失败: \(error)")
-      return contexts
-    }
+  private func applyCustomFilter(to contexts: [Context]) async throws -> [Context] {
+    try await CustomFilterService.applyHardAndSoftFilter(
+      to: contexts, using: apiService, caller: "SearchVM")
   }
 }
 
@@ -768,6 +863,7 @@ actor SharedMediaFetcher {
   private var tvBuffer: [MediaInfo] = []
 
   private var currentFetchTask: Task<Void, Error>?
+  private var currentFetchTaskIdentity = 0
 
   init(query: String, source: MediaSearchSource?, apiService: APIService) {
     self.query = query
@@ -828,7 +924,18 @@ actor SharedMediaFetcher {
     let localPage = apiPage + 1
     let isInitialFetch = (apiPage == 0)
 
+    currentFetchTaskIdentity += 1
+    let identity = currentFetchTaskIdentity
+
     let task = Task {
+      // 无论成功或失败，都在完成时按 identity 退休自己的句柄；
+      // 保证唤醒任何等待者之前 currentFetchTask 已清空，避免合流方
+      // 重复 await 已完成任务导致游标不推进。
+      defer {
+        if self.currentFetchTaskIdentity == identity {
+          self.currentFetchTask = nil
+        }
+      }
       if isInitialFetch {
         // 首次搜索时，并发获取前两页，大幅度提升混排首屏加载速度
         async let fetchPage1 = apiService.searchMedia(query: query, page: 1, source: source)
@@ -860,7 +967,6 @@ actor SharedMediaFetcher {
     }
 
     self.currentFetchTask = task
-    defer { self.currentFetchTask = nil }
     try await task.value
   }
 

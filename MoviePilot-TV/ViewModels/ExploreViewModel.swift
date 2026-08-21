@@ -56,31 +56,54 @@ nonisolated struct PluginFilterOption: Hashable, Identifiable {
 nonisolated struct PluginFilterControl: Hashable, Identifiable {
   enum Kind: Hashable {
     case choice
+    case multiChoice
     case text
     case number
+    case toggle
   }
 
   let field: String
   let label: String
   let kind: Kind
   let options: [PluginFilterOption]
+  let showExpressions: [String]
+  let rangeBounds: [JSONValue]?
 
   var id: String { field }
+
+  func isVisible(in values: [String: JSONValue]) -> Bool {
+    showExpressions.allSatisfy {
+      PluginFilterExpression.evaluate($0, values: values) ?? true
+    }
+  }
+
+  func selectionValue(from storedValue: JSONValue) -> JSONValue {
+    guard rangeBounds != nil else { return storedValue }
+    return storedValue.arrayValue?.first ?? storedValue
+  }
+
+  func storedValue(for selection: JSONValue) -> JSONValue {
+    guard let upperBound = rangeBounds?.last else { return selection }
+    return .array([selection, upperBound])
+  }
 }
 
 nonisolated enum PluginFilterControlParser {
   static func parse(_ nodes: [JSONValue]) -> [PluginFilterControl] {
     var controls: [PluginFilterControl] = []
     nodes.forEach {
-      collect($0, inheritedLabel: nil, controls: &controls)
+      collect($0, inheritedLabel: nil, inheritedVisibility: [], controls: &controls)
     }
     var seenFields = Set<String>()
-    return controls.filter { seenFields.insert($0.field).inserted }
+    return controls.filter {
+      seenFields.insert($0.field + "|" + $0.showExpressions.joined(separator: "|")).inserted
+    }
   }
 
   private static func collect(
     _ node: JSONValue,
     inheritedLabel: String?,
+    inheritedVisibility: [String],
     controls: inout [PluginFilterControl]
   ) {
     guard let object = node.objectValue else { return }
@@ -93,6 +116,10 @@ nonisolated enum PluginFilterControlParser {
       }.first
     }
     let localLabel = prop(["label"])?.stringValue ?? inheritedLabel
+    var visibility = inheritedVisibility
+    if let localVisibility = prop(["show", "v-show"])?.stringValue {
+      visibility.append(localVisibility)
+    }
     let field =
       prop(["model", "v-model", "modelvalue", "modelValue"])?.stringValue
       ?? prop(["name"])?.stringValue
@@ -100,17 +127,30 @@ nonisolated enum PluginFilterControlParser {
 
     if let field {
       let lower = component.lowercased()
-      let options = collectOptions(
+      var options = collectOptions(
         from: children + (prop(["items"])?.arrayValue ?? [])
       )
       let kind: PluginFilterControl.Kind
+      var rangeBounds: [JSONValue]?
       switch lower {
       case "vchipgroup", "vradiogroup", "vselect", "vcombobox":
-        kind = options.isEmpty ? .text : .choice
+        if isMultiSelect(props) {
+          kind = .multiChoice
+        } else {
+          kind = options.isEmpty ? .text : .choice
+        }
       case "vtextfield":
         kind = props["type"]?.stringValue?.lowercased() == "number" ? .number : .text
       case "vnumberinput":
         kind = .number
+      case "vswitch":
+        kind = .toggle
+      case "vrangeslider":
+        kind = .choice
+        options = rangeOptions(from: props)
+        if let lowerBound = options.first?.value, let upperBound = options.last?.value {
+          rangeBounds = [lowerBound, upperBound]
+        }
       default:
         return
       }
@@ -119,7 +159,9 @@ nonisolated enum PluginFilterControlParser {
           field: field,
           label: localLabel ?? field,
           kind: kind,
-          options: options
+          options: options,
+          showExpressions: visibility,
+          rangeBounds: rangeBounds
         ))
       return
     }
@@ -129,8 +171,57 @@ nonisolated enum PluginFilterControlParser {
       if let label = firstLabel(in: $0) {
         siblingLabel = label
       }
-      collect($0, inheritedLabel: siblingLabel, controls: &controls)
+      collect($0, inheritedLabel: siblingLabel, inheritedVisibility: visibility, controls: &controls)
     }
+  }
+
+  private static func isMultiSelect(_ props: [String: JSONValue]) -> Bool {
+    guard let value = props.first(where: { $0.key.lowercased() == "multiple" })?.value else {
+      return false
+    }
+    switch value {
+    case .bool(let flag):
+      return flag
+    case .string(let text):
+      return text.lowercased() == "true"
+    case .int(let number):
+      return number != 0
+    default:
+      return false
+    }
+  }
+
+  private static func rangeOptions(from props: [String: JSONValue]) -> [PluginFilterOption] {
+    func number(_ name: String) -> Double? {
+      guard let value = props.first(where: { $0.key.lowercased() == name })?.value else {
+        return nil
+      }
+      switch value {
+      case .int(let number): return Double(number)
+      case .double(let number): return number
+      case .string(let text): return Double(text)
+      default: return nil
+      }
+    }
+    guard let min = number("min"), let max = number("max"), max >= min,
+      min.isFinite, max.isFinite else { return [] }
+    let step = number("step") ?? 1
+    guard step.isFinite, step > 0 else { return [] }
+    let rawSteps = (max - min) / step
+    guard rawSteps.isFinite, rawSteps >= 0, rawSteps <= 999 else { return [] }
+    let steps = Int(rawSteps.rounded(.down)) + 1
+    var options: [PluginFilterOption] = []
+    var previous: JSONValue?
+    for index in 0..<steps {
+      let value = min + Double(index) * step
+      let isInteger = value.rounded() == value && value.magnitude < 9e15
+      let json: JSONValue = isInteger ? .int(Int(value)) : .double(value)
+      if json == previous { continue }
+      let title: String = isInteger ? String(Int(value)) : String(value)
+      options.append(PluginFilterOption(value: json, title: title))
+      previous = json
+    }
+    return options
   }
 
   private static func firstLabel(in node: JSONValue) -> String? {
@@ -174,6 +265,263 @@ nonisolated enum PluginFilterControlParser {
         return [PluginFilterOption(value: value, title: title)]
       }
       return collectOptions(from: object["content"]?.arrayValue ?? [])
+    }
+  }
+}
+
+// MARK: - 动态显隐表达式
+
+nonisolated enum PluginFilterExpression {
+  static func evaluate(_ expression: String, values: [String: JSONValue]) -> Bool? {
+    var source = expression.trimmingCharacters(in: .whitespacesAndNewlines)
+    if source.hasPrefix("{{"), source.hasSuffix("}}") {
+      source = String(source.dropFirst(2).dropLast(2))
+    }
+    guard !source.isEmpty else { return nil }
+    var lexer = Lexer(source)
+    var parser = Parser(lexer: &lexer, values: values)
+    guard let result = parser.parse() else { return nil }
+    return result.isTruthy
+  }
+
+  private struct Token: Equatable {
+    enum Kind: Equatable {
+      case identifier, string, number, boolean, null
+      case bang, andAnd, orOr, eq, neq, lparen, rparen, invalid
+    }
+
+    let kind: Kind
+    let text: String
+  }
+
+  private struct Lexer {
+    private let source: [Character]
+    private var index = 0
+
+    init(_ source: String) {
+      self.source = Array(source)
+    }
+
+    mutating func next() -> Token? {
+      while index < source.count, source[index].isWhitespace {
+        index += 1
+      }
+      guard index < source.count else { return nil }
+      let char = source[index]
+      switch char {
+      case "(":
+        index += 1
+        return Token(kind: .lparen, text: "(")
+      case ")":
+        index += 1
+        return Token(kind: .rparen, text: ")")
+      case "!":
+        if peek(offset: 1) == "=" {
+          index += 2
+          return Token(kind: .neq, text: "!=")
+        }
+        index += 1
+        return Token(kind: .bang, text: "!")
+      case "=":
+        if peek(offset: 1) == "=" {
+          index += 2
+          return Token(kind: .eq, text: "==")
+        }
+        index += 1
+        return Token(kind: .invalid, text: "=")
+      case "&":
+        guard peek(offset: 1) == "&" else {
+          index += 1
+          return Token(kind: .invalid, text: "&")
+        }
+        index += 2
+        return Token(kind: .andAnd, text: "&&")
+      case "|":
+        guard peek(offset: 1) == "|" else {
+          index += 1
+          return Token(kind: .invalid, text: "|")
+        }
+        index += 2
+        return Token(kind: .orOr, text: "||")
+      case "'", "\"":
+        return readString(quote: char)
+      default:
+        if char.isNumber || char == "-" {
+          return readNumber()
+        }
+        if char.isLetter || char == "_" {
+          return readIdentifier()
+        }
+        return Token(kind: .invalid, text: String(char))
+      }
+    }
+
+    private func peek(offset: Int) -> Character? {
+      let target = index + offset
+      guard target < source.count else { return nil }
+      return source[target]
+    }
+
+    private mutating func readString(quote: Character) -> Token? {
+      var text = ""
+      index += 1
+      while index < source.count {
+        let char = source[index]
+        if char == quote {
+          index += 1
+          return Token(kind: .string, text: text)
+        }
+        if char == "\\", index + 1 < source.count {
+          index += 1
+          text.append(source[index])
+        } else {
+          text.append(char)
+        }
+        index += 1
+      }
+      return nil
+    }
+
+    private mutating func readNumber() -> Token? {
+      let start = index
+      if source[index] == "-" {
+        index += 1
+      }
+      while index < source.count, source[index].isNumber {
+        index += 1
+      }
+      if index < source.count, source[index] == ".",
+        index + 1 < source.count, source[index + 1].isNumber {
+        index += 1
+        while index < source.count, source[index].isNumber {
+          index += 1
+        }
+      }
+      return Token(kind: .number, text: String(source[start..<index]))
+    }
+
+    private mutating func readIdentifier() -> Token? {
+      let start = index
+      while index < source.count,
+        source[index].isLetter || source[index].isNumber
+          || source[index] == "_" || source[index] == "." || source[index] == "-" {
+        index += 1
+      }
+      let text = String(source[start..<index])
+      switch text {
+      case "true", "false":
+        return Token(kind: .boolean, text: text)
+      case "null":
+        return Token(kind: .null, text: text)
+      default:
+        return Token(kind: .identifier, text: text)
+      }
+    }
+  }
+
+  private struct Parser {
+    private var lexer: Lexer
+    private let values: [String: JSONValue]
+    private var current: Token?
+
+    init(lexer: inout Lexer, values: [String: JSONValue]) {
+      self.lexer = lexer
+      self.values = values
+      advance()
+    }
+
+    mutating func parse() -> JSONValue? {
+      guard let result = parseOr() else { return nil }
+      guard current == nil else { return nil }
+      return result
+    }
+
+    private mutating func advance() {
+      current = lexer.next()
+    }
+
+    private mutating func parseOr() -> JSONValue? {
+      guard var result = parseAnd() else { return nil }
+      while current?.kind == .orOr {
+        advance()
+        guard let rhs = parseAnd() else { return nil }
+        result = .bool(result.isTruthy || rhs.isTruthy)
+      }
+      return result
+    }
+
+    private mutating func parseAnd() -> JSONValue? {
+      guard var result = parseComparison() else { return nil }
+      while current?.kind == .andAnd {
+        advance()
+        guard let rhs = parseComparison() else { return nil }
+        result = .bool(result.isTruthy && rhs.isTruthy)
+      }
+      return result
+    }
+
+    private mutating func parseComparison() -> JSONValue? {
+      guard let lhs = parseNot() else { return nil }
+      guard current?.kind == .eq || current?.kind == .neq else { return lhs }
+      let isEqualOperator = current?.kind == .eq
+      advance()
+      guard let rhs = parseNot() else { return nil }
+      return .bool(isEqualOperator ? isEqual(lhs, rhs) : !isEqual(lhs, rhs))
+    }
+
+    private mutating func parseNot() -> JSONValue? {
+      if current?.kind == .bang {
+        advance()
+        guard let operand = parseNot() else { return nil }
+        return .bool(!operand.isTruthy)
+      }
+      return parsePrimary()
+    }
+
+    private mutating func parsePrimary() -> JSONValue? {
+      guard let token = current else { return nil }
+      switch token.kind {
+      case .lparen:
+        advance()
+        guard let value = parseOr() else { return nil }
+        guard current?.kind == .rparen else { return nil }
+        advance()
+        return value
+      case .string:
+        advance()
+        return .string(token.text)
+      case .number:
+        advance()
+        if let int = Int(token.text) {
+          return .int(int)
+        }
+        if let double = Double(token.text) {
+          return .double(double)
+        }
+        return nil
+      case .boolean:
+        advance()
+        return .bool(token.text == "true")
+      case .null:
+        advance()
+        return .null
+      case .identifier:
+        advance()
+        return values[token.text] ?? .null
+      case .eq, .neq, .bang, .andAnd, .orOr, .rparen, .invalid:
+        return nil
+      }
+    }
+
+    private func isEqual(_ a: JSONValue, _ b: JSONValue) -> Bool {
+      switch (a, b) {
+      case (.int(let x), .double(let y)):
+        return Double(x) == y
+      case (.double(let x), .int(let y)):
+        return x == Double(y)
+      default:
+        return a == b
+      }
     }
   }
 }
@@ -448,7 +796,7 @@ class ExploreViewModel: ObservableObject {
 
   static var doubanYearDict: [(key: String, value: String)] {
     var years: [(key: String, value: String)] = []
-    let currentYear = Calendar.current.component(.year, from: Date())
+    let currentYear = Calendar(identifier: .gregorian).component(.year, from: Date())
     // 近6年
     for i in 0..<6 {
       let year = String(currentYear - i)
@@ -483,7 +831,7 @@ class ExploreViewModel: ObservableObject {
   ]
 
   static var bangumiYearDict: [(key: String, value: String)] {
-    let currentYear = Calendar.current.component(.year, from: Date())
+    let currentYear = Calendar(identifier: .gregorian).component(.year, from: Date())
     return (0..<10).map { i in
       let year = String(currentYear - i)
       return (key: year, value: year)
@@ -534,7 +882,7 @@ class ExploreViewModel: ObservableObject {
   ]
 
   static var anilistYearDict: [(key: Int, value: String)] {
-    let currentYear = Calendar.current.component(.year, from: Date())
+    let currentYear = Calendar(identifier: .gregorian).component(.year, from: Date())
     return (0..<15).map { (currentYear - $0, String(currentYear - $0)) }
   }
 
@@ -720,13 +1068,56 @@ class ExploreViewModel: ObservableObject {
     values: [String: JSONValue]
   ) -> String {
     guard var components = URLComponents(string: path) else { return path }
-    var items = components.queryItems ?? []
-    items.append(
-      contentsOf: values.sorted(by: { $0.key < $1.key }).compactMap { key, value in
-        value.queryString.map { URLQueryItem(name: key, value: $0) }
-      })
-    components.queryItems = items.isEmpty ? nil : items
+    var additions: [String] = []
+    for (key, value) in values {
+      flattenQueryValue(key, value, into: &additions)
+    }
+    guard !additions.isEmpty else { return components.string ?? path }
+    let suffix = additions.joined(separator: "&")
+    if let existing = components.percentEncodedQuery, !existing.isEmpty {
+      components.percentEncodedQuery = existing + "&" + suffix
+    } else {
+      components.percentEncodedQuery = suffix
+    }
     return components.string ?? path
+  }
+
+  private nonisolated static func flattenQueryValue(
+    _ key: String,
+    _ value: JSONValue,
+    into additions: inout [String]
+  ) {
+    switch value {
+    case .null:
+      return
+    case .array(let items):
+      guard !items.isEmpty else { return }
+      let isFlat = items.allSatisfy {
+        if case .object = $0 { return false }
+        if case .array = $0 { return false }
+        return true
+      }
+      if isFlat {
+        for item in items {
+          flattenQueryValue(key + "[]", item, into: &additions)
+        }
+      } else {
+        for (index, item) in items.enumerated() {
+          flattenQueryValue("\(key)[\(index)]", item, into: &additions)
+        }
+      }
+    case .object(let dictionary):
+      guard !dictionary.isEmpty else { return }
+      for (subKey, subValue) in dictionary {
+        flattenQueryValue("\(key)[\(subKey)]", subValue, into: &additions)
+      }
+    default:
+      guard let text = value.queryString,
+        let encodedName = encodeURIComponent(key),
+        let encodedValue = encodeURIComponent(text)
+      else { return }
+      additions.append("\(encodedName)=\(encodedValue)")
+    }
   }
 
   nonisolated static func popularSubscriptionKey(_ item: MediaInfo) -> String {
@@ -866,10 +1257,24 @@ class ExploreViewModel: ObservableObject {
   }
 
   func onTypeChanged() {
-    // 类型变化时重置风格（因为电影和剧集的风格不同）
-    tmdbGenre = ""
-    doubanCategory = ""
-    popularGenre = ""
+    // 与 Web 端 TheMovieDbView/DoubanView 对齐：切换后只做成员归一化，
+    // 保留新类型字典仍接受的共有值，只清掉/回落新类型不接受的独占值。
+    switch selectedSource {
+    case .themoviedb:
+      if !currentSortDict.contains(where: { $0.key == tmdbSortBy }) {
+        tmdbSortBy = "popularity.desc"
+      }
+      if !currentGenreDict.contains(where: { $0.key == tmdbGenre }) {
+        tmdbGenre = ""
+      }
+    case .popular:
+      if !currentGenreDict.contains(where: { $0.key == popularGenre }) {
+        popularGenre = ""
+      }
+    default:
+      // Douban category/Bangumi cat/AniList genre 等字典不随类型变化，无需清理
+      break
+    }
   }
 
   func setPluginFilter(_ field: String, value: JSONValue) {

@@ -35,12 +35,25 @@ class MediaActionHandler: ObservableObject {
     var tmdbIdToUse: Int? = targetTmdbId ?? item.tmdb_id
 
     if tmdbIdToUse == nil {
+      let title = item.title?.trimmingCharacters(in: .whitespaces) ?? ""
+      // 无标题无法识别，不属于"媒体不存在"，直接返回不弹提示。
+      guard !title.isEmpty else { return nil }
       isRecognizingTmdb = true
-      tmdbIdToUse = await APIService.shared.recognizeTmdbId(
-        title: item.title ?? "",
-        year: item.year,
-        type: item.type
-      )
+      do {
+        tmdbIdToUse = try await APIService.shared.recognizeTmdbId(
+          title: title,
+          year: item.year,
+          type: item.type
+        )
+      } catch is CancellationError {
+        isRecognizingTmdb = false
+        return nil
+      } catch {
+        // 网络/后端/解码失败不是"媒体不存在"，不弹误导提示。
+        Logger.error("TMDB 识别失败: \(error)")
+        isRecognizingTmdb = false
+        return nil
+      }
       isRecognizingTmdb = false
     }
 

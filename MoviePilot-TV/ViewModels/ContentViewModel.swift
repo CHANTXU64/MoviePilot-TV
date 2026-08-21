@@ -172,12 +172,16 @@ class ContentViewModel: ObservableObject {
 
     do {
       let settings = try await apiService.fetchSettings()
-      let sessionIsCurrent = currentBackendVersionCheckKey() == checkKey
-      if checkBackendVersion, backendVersionCheckKey != checkKey, sessionIsCurrent {
-        backendVersionCheckKey = checkKey
+      guard currentBackendVersionCheckKey() == checkKey else { return }
+      let shouldUpdateWarning =
+        checkBackendVersion ? backendVersionCheckKey != checkKey : backendVersionWarning != nil
+      if shouldUpdateWarning {
         backendVersionWarning = Self.backendVersionWarning(for: settings.BACKEND_VERSION)
       }
-      if evaluateMemoryOptimization, sessionIsCurrent {
+      if checkBackendVersion {
+        backendVersionCheckKey = checkKey
+      }
+      if evaluateMemoryOptimization {
         let sessionSnapshot = apiService.sessionSnapshot()
         let imageCacheAvailable = apiService.useImageCache
         memoryOptimizationPolicy.evaluateAutomatically(
@@ -191,13 +195,6 @@ class ContentViewModel: ObservableObject {
       return
     } catch {
       let sessionIsCurrent = currentBackendVersionCheckKey() == checkKey
-      if checkBackendVersion, backendVersionCheckKey != checkKey, sessionIsCurrent {
-        backendVersionCheckKey = checkKey
-        backendVersionWarning = BackendVersionWarning(
-          backendVersion: nil,
-          requiredVersion: AppVersionInfo.compatibleMoviePilotVersion
-        )
-      }
       if evaluateMemoryOptimization, sessionIsCurrent {
         memoryOptimizationPolicy.evaluateAutomatically(
           baseURL: apiService.baseURL,
@@ -206,6 +203,12 @@ class ContentViewModel: ObservableObject {
           imageCacheAvailable: false
         )
       }
+      guard checkBackendVersion, backendVersionCheckKey != checkKey else { return }
+      guard sessionIsCurrent else { return }
+      backendVersionWarning = BackendVersionWarning(
+        backendVersion: nil,
+        requiredVersion: AppVersionInfo.compatibleMoviePilotVersion
+      )
     }
   }
 

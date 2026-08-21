@@ -2,6 +2,11 @@ import SwiftUI
 
 /// 系统状态视图：展示媒体库统计、服务器存储空间以及实时下载器状态
 struct StatusView: View {
+  /// 剧集统计投影：后端 nil 表示所有媒体服务均未提供，显示“未获取”；真实 0/正数原样显示。
+  static func episodeCountText(_ count: Int?) -> String {
+    count.map(String.init) ?? "未获取"
+  }
+
   private let isSelected: Bool
   @StateObject private var viewModel = StatusViewModel()
   @StateObject private var transferHistoryViewModel = TransferHistoryViewModel()
@@ -13,33 +18,34 @@ struct StatusView: View {
   var body: some View {
     ScrollView {
       VStack(spacing: 0) {
-        // --- 1. 系统状态 ---
-        // --- 2. 媒体库统计 ---
-        if let statistic = viewModel.statistic {
-          MediaStatCard(statistic: statistic)
-            .padding(.bottom, 20)
-        } else {
-          EmptyDataView(title: "暂无媒体库统计", description: "")
-            .padding(.bottom, 20)
-        }
-
-        // --- 3. 存储与下载器概览 ---
-        HStack(alignment: .top, spacing: 20) {
-          if let storage = viewModel.storage {
-            StorageView(storage: storage, downloader: viewModel.downloader)
+        // 媒体库统计、存储空间与下载器概览仅对 superuser 展示；
+        // manage-only 不请求这些 Dashboard 数据，隐藏整组避免伪空卡。
+        if viewModel.canRequestSuperUserEndpoints {
+          if let statistic = viewModel.statistic {
+            MediaStatCard(statistic: statistic)
+              .padding(.bottom, 20)
           } else {
-            EmptyDataView(title: "暂无存储空间信息", description: "")
+            EmptyDataView(title: "暂无媒体库统计", description: "")
+              .padding(.bottom, 20)
           }
 
-          if let downloader = viewModel.downloader {
-            DownloaderCard(info: downloader)
-          } else {
-            EmptyDataView(title: "暂无下载器信息", description: "")
-          }
-        }
-        .padding(.bottom, 20)
+          HStack(alignment: .top, spacing: 20) {
+            if let storage = viewModel.storage {
+              StorageView(storage: storage, downloader: viewModel.downloader)
+            } else {
+              EmptyDataView(title: "暂无存储空间信息", description: "")
+            }
 
-        Divider()
+            if let downloader = viewModel.downloader {
+              DownloaderCard(info: downloader)
+            } else {
+              EmptyDataView(title: "暂无下载器信息", description: "")
+            }
+          }
+          .padding(.bottom, 20)
+
+          Divider()
+        }
 
         DownloadTaskView()
           .padding(.vertical, 20)
@@ -91,7 +97,7 @@ private struct MediaStatCard: View {
         .frame(maxWidth: .infinity)
       MiniStat(title: "电视剧", value: "\(statistic.tv_count)", icon: "tv")
         .frame(maxWidth: .infinity)
-      MiniStat(title: "剧集", value: "\(statistic.episode_count ?? 0)", icon: "film.stack")
+      MiniStat(title: "剧集", value: StatusView.episodeCountText(statistic.episode_count), icon: "film.stack")
         .frame(maxWidth: .infinity)
     }
     .padding()
