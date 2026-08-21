@@ -90,6 +90,22 @@ enum MediaDetailBackgroundImage {
       )
     }
   }
+
+  /// 预载可能写入主图和海报原图 fallback 两份处理后的 hero，释放时都要清。
+  @MainActor
+  static func backgroundHeroURLs(from detail: MediaInfo) -> (
+    urls: [URL], isPoster: Bool
+  ) {
+    let target = detail.imageURLs.backgroundTarget
+    var urls: [URL] = []
+    if let url = target.url {
+      urls.append(url)
+    }
+    if let fallbackURL = target.fallbackURL, fallbackURL != target.url {
+      urls.append(fallbackURL)
+    }
+    return (urls, target.isPoster)
+  }
 }
 
 struct PageImageSnapshot: Equatable {
@@ -303,7 +319,6 @@ class MediaPreloadTask: ObservableObject {
     // 与 MediaInfo.ImageURLs.backgroundTarget 保持一致：backdrop 优先，无则 poster
     let target = detail.imageURLs.backgroundTarget
     guard let url = target.url else { return }
-    let isUsingPosterAsBackdrop = target.isPoster
 
     let preparedAsCandidate = shouldWarmBackgroundImage(
       memoryOptimizationEnabled: MemoryOptimizationPolicy.shared.isEnabled
@@ -335,15 +350,11 @@ class MediaPreloadTask: ObservableObject {
     else { return }
     markPreparedBackgroundForReleaseAfterCompletion()
     let size = UIScreen.main.bounds.size
-    removePreparedHeroFromMemory(
-      url: url,
-      isUsingPosterAsBackdrop: isUsingPosterAsBackdrop,
-      size: size
-    )
-    if let fallbackURL = target.fallbackURL, fallbackURL != url {
+    let heroes = MediaDetailBackgroundImage.backgroundHeroURLs(from: detail)
+    for heroURL in heroes.urls {
       removePreparedHeroFromMemory(
-        url: fallbackURL,
-        isUsingPosterAsBackdrop: isUsingPosterAsBackdrop,
+        url: heroURL,
+        isUsingPosterAsBackdrop: heroes.isPoster,
         size: size
       )
     }
@@ -857,7 +868,7 @@ class MediaPreloader: ObservableObject {
     )
     suppressedFocusCandidateKey = key
     guard navigationOwners[key] == nil else { return }
-    releaseTask(forKey: key, fallbackMedia: media, size: size)
+    releaseTask(forKey: key, fallbackMedia: media, size: size, imageCache: imageCache)
   }
 
   /// 页面快速连续 Pop 时，把尚未能处理的 URL 转发到更上一级目标。
@@ -1047,10 +1058,37 @@ class MediaPreloader: ObservableObject {
     )
   }
 
+  func removeBackgroundTargetHeroesFromMemory(
+    for detail: MediaInfo,
+    size: CGSize,
+    imageCache: ImageCache = .default
+  ) {
+    let heroes = MediaDetailBackgroundImage.backgroundHeroURLs(from: detail)
+    for url in heroes.urls {
+      let cacheKey = apiService.imageSource(for: url).cacheKey
+      MediaDetailBackgroundImage.removeHeroFromMemory(
+        for: url,
+        size: size,
+        usingPosterAsBackdrop: heroes.isPoster,
+        cacheKey: cacheKey,
+        cache: imageCache
+      )
+      if !heroes.isPoster {
+        MediaDetailBackgroundImage.removePosterFallbackBackgroundFromMemory(
+          for: url,
+          size: size,
+          cacheKey: cacheKey,
+          cache: imageCache
+        )
+      }
+    }
+  }
+
   private func releaseTask(
     forKey key: String,
     fallbackMedia: MediaInfo?,
-    size: CGSize
+    size: CGSize,
+    imageCache: ImageCache = .default
   ) {
     let task = cache.removeValue(forKey: key)
     let detail = task?.fullDetail ?? fallbackMedia ?? task?.partialMedia
@@ -1060,25 +1098,6 @@ class MediaPreloader: ObservableObject {
     }
 
     guard let detail else { return }
-    if let backdropURL = detail.imageURLs.backdrop {
-      let cacheKey = apiService.imageSource(for: backdropURL).cacheKey
-      MediaDetailBackgroundImage.removeFirstPageBackgroundFromMemory(
-        for: backdropURL,
-        size: size,
-        cacheKey: cacheKey
-      )
-      MediaDetailBackgroundImage.removePosterFallbackBackgroundFromMemory(
-        for: backdropURL,
-        size: size,
-        cacheKey: cacheKey
-      )
-    } else if let posterURL = detail.imageURLs.poster {
-      let cacheKey = apiService.imageSource(for: posterURL).cacheKey
-      MediaDetailBackgroundImage.removePosterFallbackBackgroundFromMemory(
-        for: posterURL,
-        size: size,
-        cacheKey: cacheKey
-      )
-    }
+    removeBackgroundTargetHeroesFromMemory(for: detail, size: size, imageCache: imageCache)
   }
 }

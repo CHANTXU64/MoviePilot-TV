@@ -535,15 +535,20 @@ struct MediaDetailView: View {
   private func releaseBackground(for url: URL) {
     guard isBackgroundMounted else { return }
     isBackgroundMounted = false
+    let size = UIScreen.main.bounds.size
+    MediaPreloader.shared.removeBackgroundTargetHeroesFromMemory(
+      for: viewModel.detail,
+      size: size
+    )
     let cacheKey = APIService.shared.imageSource(for: url).cacheKey
     MediaDetailBackgroundImage.removeFirstPageBackgroundFromMemory(
       for: url,
-      size: UIScreen.main.bounds.size,
+      size: size,
       cacheKey: cacheKey
     )
     MediaDetailBackgroundImage.removePosterFallbackBackgroundFromMemory(
       for: url,
-      size: UIScreen.main.bounds.size,
+      size: size,
       cacheKey: cacheKey
     )
   }

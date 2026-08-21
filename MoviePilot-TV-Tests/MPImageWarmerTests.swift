@@ -307,6 +307,81 @@ final class MPImageWarmerTests: XCTestCase {
     )
   }
 
+  func testPopReleasesPosterFallbackHeroFromMemoryAndKeepsDisk() async throws {
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { snapshot.restore(to: sharedService) }
+    sharedService.baseURLForTesting = "http://moviepilot.local"
+    sharedService.useImageCache = true
+
+    let preloader = MediaPreloader(apiService: .testingInstance())
+    defer { preloader.clearAll() }
+    let cache = ImageCache(name: "poster-fallback-hero-pop-\(UUID().uuidString)")
+    defer {
+      cache.clearMemoryCache()
+      cache.clearDiskCache()
+    }
+
+    let media = MediaInfo(
+      tmdb_id: 750_001,
+      title: "海报原图回退",
+      poster_path: "https://image.tmdb.org/t/p/original/poster.jpg",
+      backdrop_path: nil
+    )
+    let target = media.imageURLs.backgroundTarget
+    let primary = try XCTUnwrap(target.url)
+    let fallback = try XCTUnwrap(target.fallbackURL)
+    XCTAssertNotEqual(primary, fallback)
+    XCTAssertTrue(target.isPoster)
+
+    let size = CGSize(width: 32, height: 18)
+    let processor = MediaDetailBackgroundImage.posterFallbackProcessor(for: size)
+    let image = UIGraphicsImageRenderer(size: size).image { context in
+      UIColor.purple.setFill()
+      context.cgContext.fill(CGRect(origin: .zero, size: size))
+    }
+
+    for url in [primary, fallback] {
+      try await cache.store(
+        image,
+        forKey: url.cacheKey,
+        processorIdentifier: processor.identifier
+      )
+      XCTAssertEqual(
+        cache.imageCachedType(
+          forKey: url.cacheKey,
+          processorIdentifier: processor.identifier
+        ),
+        .memory
+      )
+    }
+
+    let owner = UUID()
+    preloader.preload(for: media)
+    preloader.pin(key: media.id, owner: owner)
+    preloader.releaseAfterPop(
+      media: media,
+      owner: owner,
+      size: size,
+      leavingImageSnapshot: PageImageSnapshot(),
+      pageImageCleanupTarget: PageImageCleanupTarget(),
+      returnTargetImageCleanupTarget: nil,
+      imageCache: cache
+    )
+
+    XCTAssertNil(preloader.peekTask(for: media))
+    for url in [primary, fallback] {
+      XCTAssertEqual(
+        cache.imageCachedType(
+          forKey: url.cacheKey,
+          processorIdentifier: processor.identifier
+        ),
+        .disk,
+        url.absoluteString
+      )
+    }
+  }
+
   func testOpeningDetailDisablesFutureBackgroundWarm() {
     let task = MediaPreloadTask(partialMedia: MediaInfo(tmdb_id: 1, type: "电影"))
     let preparedAsCandidate = task.shouldWarmBackgroundImage(memoryOptimizationEnabled: true)
