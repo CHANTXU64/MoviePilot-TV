@@ -66,6 +66,30 @@ enum MediaDetailBackgroundImage {
       fromDisk: false
     )
   }
+
+  nonisolated static func removeHeroFromMemory(
+    for url: URL,
+    size: CGSize,
+    usingPosterAsBackdrop: Bool,
+    cacheKey: String? = nil,
+    cache: ImageCache = .default
+  ) {
+    if usingPosterAsBackdrop {
+      removePosterFallbackBackgroundFromMemory(
+        for: url,
+        size: size,
+        cacheKey: cacheKey,
+        cache: cache
+      )
+    } else {
+      removeFirstPageBackgroundFromMemory(
+        for: url,
+        size: size,
+        cacheKey: cacheKey,
+        cache: cache
+      )
+    }
+  }
 }
 
 struct PageImageSnapshot: Equatable {
@@ -143,7 +167,7 @@ class MediaPreloadTask: ObservableObject {
   /// nonisolated(unsafe) 因为需要在 withTaskCancellationHandler 的 onCancel 闭包中访问，
   /// 该闭包可能在任意线程执行。实际写入只在 @MainActor 隔离的方法中进行，读取仅在取消时（单次），无竞争风险。
   nonisolated(unsafe) private var activeImageDownload: DownloadTask?
-  private var activeImageWarmHandle: MPImageWarmer.Handle?
+  private let imageRetrieveState = ImageRetrieveContinuationBox()
   private var allowsImageWarm = true
 
   init(partialMedia: MediaInfo, apiService: APIService = .shared) {
@@ -186,8 +210,9 @@ class MediaPreloadTask: ObservableObject {
       })
   }
 
-  /// 取消所有预加载任务（包括正在进行的 Kingfisher 图片下载和 MP 图片预热）
+  /// 取消所有预加载任务（包括正在进行的 Kingfisher 图片下载）
   func cancel() {
+    imageRetrieveState.markOwnerReleased()
     internalTasks.forEach { $0.cancel() }
     internalTasks.removeAll()
     // 主动中断 Kingfisher 下载，释放网络资源和内存
@@ -196,17 +221,26 @@ class MediaPreloadTask: ObservableObject {
     cancelImageWarm()
   }
 
-  /// 当前媒体即将真正显示时，停止仅用于服务器缓存的后台请求。
+  /// 当前媒体即将真正显示时，停止候选图清理并将进行中的背景结果交给前台复用。
   func cancelImageWarm() {
     allowsImageWarm = false
-    if let activeImageWarmHandle {
-      MPImageWarmer.shared.cancel(activeImageWarmHandle)
-      self.activeImageWarmHandle = nil
-    }
+    imageRetrieveState.keepResultInMemoryUnlessOwnerReleased()
   }
 
   func shouldWarmBackgroundImage(memoryOptimizationEnabled: Bool) -> Bool {
     memoryOptimizationEnabled && allowsImageWarm
+  }
+
+  func shouldReleasePreparedBackgroundFromMemory(preparedAsCandidate: Bool) -> Bool {
+    preparedAsCandidate && allowsImageWarm
+  }
+
+  var shouldRemoveRetrievedBackgroundAfterCompletion: Bool {
+    imageRetrieveState.shouldRemoveResultFromMemory
+  }
+
+  func markPreparedBackgroundForReleaseAfterCompletion() {
+    imageRetrieveState.markCandidateResultForRemoval()
   }
 
   // MARK: - ① 加载完整媒体详情
@@ -258,21 +292,9 @@ class MediaPreloadTask: ObservableObject {
     guard let url = targetUrl else { return }
     let isUsingPosterAsBackdrop = backdropUrl == nil
 
-    if shouldWarmBackgroundImage(
+    let preparedAsCandidate = shouldWarmBackgroundImage(
       memoryOptimizationEnabled: MemoryOptimizationPolicy.shared.isEnabled
-    ) {
-      let handle = await MPImageWarmer.shared.warm(url)
-      guard !Task.isCancelled,
-        shouldWarmBackgroundImage(memoryOptimizationEnabled: true)
-      else {
-        if let handle {
-          MPImageWarmer.shared.cancel(handle)
-        }
-        return
-      }
-      activeImageWarmHandle = handle
-      return
-    }
+    )
 
     if let timeout {
       await withTaskGroup(of: Void.self) { group in
@@ -298,19 +320,35 @@ class MediaPreloadTask: ObservableObject {
 
     // 下载完成后清理引用
     activeImageDownload = nil
+
+    // 仍停留在推荐页时才释放候选图；进入详情后保留同一份内存图供前台直接复用。
+    guard
+      shouldReleasePreparedBackgroundFromMemory(preparedAsCandidate: preparedAsCandidate),
+      !Task.isCancelled
+    else { return }
+    markPreparedBackgroundForReleaseAfterCompletion()
+    let cacheKey = apiService.imageSource(for: url).cacheKey
+    MediaDetailBackgroundImage.removeHeroFromMemory(
+      for: url,
+      size: UIScreen.main.bounds.size,
+      usingPosterAsBackdrop: isUsingPosterAsBackdrop,
+      cacheKey: cacheKey
+    )
   }
 
   private func retrieveHeroImage(
     _ url: URL,
     isUsingPosterAsBackdrop: Bool
   ) async {
-    let continuationBox = ImageRetrieveContinuationBox()
+    let continuationBox = imageRetrieveState
+    let size = UIScreen.main.bounds.size
     var options = MediaDetailBackgroundImage.heroOptions(
-      for: UIScreen.main.bounds.size,
+      for: size,
       scaleFactor: UIScreen.main.scale,
       usingPosterAsBackdrop: isUsingPosterAsBackdrop
     )
     let service = apiService
+    let source = service.imageSource(for: url)
     options.append(contentsOf: service.imageOptions(for: url))
 
     // 使用 withTaskCancellationHandler 确保 Swift Task 取消时能中断 Kingfisher 的 HTTP 下载
@@ -318,9 +356,17 @@ class MediaPreloadTask: ObservableObject {
       await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
         continuationBox.set(continuation)
         self.activeImageDownload = KingfisherManager.shared.retrieveImage(
-          with: service.imageSource(for: url),
+          with: source,
           options: options
         ) { _ in
+          if continuationBox.shouldRemoveResultFromMemory {
+            MediaDetailBackgroundImage.removeHeroFromMemory(
+              for: url,
+              size: size,
+              usingPosterAsBackdrop: isUsingPosterAsBackdrop,
+              cacheKey: source.cacheKey
+            )
+          }
           continuationBox.resume()
         }
       }
@@ -420,6 +466,35 @@ private final class ImageRetrieveContinuationBox: @unchecked Sendable {
   nonisolated(unsafe) private var continuation: CheckedContinuation<Void, Never>?
   nonisolated(unsafe) private var shouldResumeOnSet = false
   nonisolated(unsafe) private var hasResumed = false
+  nonisolated(unsafe) private var removeResultFromMemory = false
+  nonisolated(unsafe) private var ownerReleased = false
+
+  nonisolated var shouldRemoveResultFromMemory: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return removeResultFromMemory
+  }
+
+  nonisolated func markOwnerReleased() {
+    lock.lock()
+    ownerReleased = true
+    removeResultFromMemory = true
+    lock.unlock()
+  }
+
+  nonisolated func markCandidateResultForRemoval() {
+    lock.lock()
+    removeResultFromMemory = true
+    lock.unlock()
+  }
+
+  nonisolated func keepResultInMemoryUnlessOwnerReleased() {
+    lock.lock()
+    if !ownerReleased {
+      removeResultFromMemory = false
+    }
+    lock.unlock()
+  }
 
   nonisolated func set(_ continuation: CheckedContinuation<Void, Never>) {
     lock.lock()

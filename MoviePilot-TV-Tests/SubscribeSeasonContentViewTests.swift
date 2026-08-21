@@ -496,6 +496,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     let detail = MediaInfo(tmdb_id: 817_001, title: "分季刷新重试", type: "电视剧")
     let preloadTask = MediaPreloadTask(partialMedia: detail)
     preloadTask.fullDetail = detail
+    preloadTask.isDetailReady = true
 
     let viewModel = MediaDetailViewModel(
       detail: MediaInfo(title: "占位详情", type: "电视剧"),

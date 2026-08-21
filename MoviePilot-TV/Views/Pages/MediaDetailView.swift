@@ -34,6 +34,7 @@ private struct MediaDetailBackgroundLayer: View {
       }
       .setProcessor(processor)
       .scaleFactor(UIScreen.main.scale)
+      .cancelOnDisappear(true)
       .resizable()
       .aspectRatio(contentMode: .fill)
       .frame(
@@ -560,7 +561,7 @@ struct MediaDetailView: View {
     to viewModel: MediaDetailViewModel,
     hasRefreshedSubscription: Bool
   ) async -> Bool {
-    guard let fullDetail = preloadTask.fullDetail else {
+    guard preloadTask.isDetailReady, let fullDetail = preloadTask.fullDetail else {
       return hasRefreshedSubscription
     }
 

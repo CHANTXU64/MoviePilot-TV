@@ -227,7 +227,17 @@ final class MPImageWarmerTests: XCTestCase {
       )
     )
     XCTAssertEqual(heroOptions.processor.identifier, firstPage.identifier)
+    XCTAssertFalse(heroOptions.cacheMemoryOnly)
     XCTAssertFalse(heroOptions.cacheOriginalImage)
+    XCTAssertFalse(heroOptions.cacheSerializer.originalDataUsed)
+    let posterOptions = KingfisherParsedOptionsInfo(
+      MediaDetailBackgroundImage.heroOptions(
+        for: size,
+        scaleFactor: 1,
+        usingPosterAsBackdrop: true
+      )
+    )
+    XCTAssertFalse(posterOptions.cacheSerializer.originalDataUsed)
   }
 
   func testBackgroundAppearanceRefreshesOnlyUnmountedBackground() {
@@ -299,13 +309,31 @@ final class MPImageWarmerTests: XCTestCase {
 
   func testOpeningDetailDisablesFutureBackgroundWarm() {
     let task = MediaPreloadTask(partialMedia: MediaInfo(tmdb_id: 1, type: "电影"))
+    let preparedAsCandidate = task.shouldWarmBackgroundImage(memoryOptimizationEnabled: true)
 
-    XCTAssertTrue(task.shouldWarmBackgroundImage(memoryOptimizationEnabled: true))
+    XCTAssertTrue(preparedAsCandidate)
+    XCTAssertTrue(
+      task.shouldReleasePreparedBackgroundFromMemory(preparedAsCandidate: preparedAsCandidate)
+    )
+    task.markPreparedBackgroundForReleaseAfterCompletion()
+    XCTAssertTrue(task.shouldRemoveRetrievedBackgroundAfterCompletion)
     XCTAssertFalse(task.shouldWarmBackgroundImage(memoryOptimizationEnabled: false))
 
     task.cancelImageWarm()
 
     XCTAssertFalse(task.shouldWarmBackgroundImage(memoryOptimizationEnabled: true))
+    XCTAssertFalse(task.shouldRemoveRetrievedBackgroundAfterCompletion)
+    XCTAssertFalse(
+      task.shouldReleasePreparedBackgroundFromMemory(preparedAsCandidate: preparedAsCandidate)
+    )
+  }
+
+  func testCancelledPreloadRemovesLateBackgroundResultAfterCompletion() {
+    let task = MediaPreloadTask(partialMedia: MediaInfo(tmdb_id: 2, type: "电影"))
+
+    task.cancel()
+
+    XCTAssertTrue(task.shouldRemoveRetrievedBackgroundAfterCompletion)
   }
 
   func testOnlyReducedNavigationDepthMeansDetailWasPopped() {

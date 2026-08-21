@@ -571,6 +571,26 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
   }
 
   @MainActor
+  func testDetailReadyHandlerWaitsForBackgroundPreparation() async {
+    let fullDetail = MediaInfo(tmdb_id: 776_654, title: "尚未准备完成", type: "电影")
+    let preloadTask = MediaPreloadTask(partialMedia: fullDetail)
+    preloadTask.fullDetail = fullDetail
+
+    let viewModel = MediaDetailViewModel(
+      detail: MediaInfo(title: "占位详情", type: "电影")
+    )
+    viewModel.preloadTask = preloadTask
+
+    _ = await MediaDetailView.applyReadyPreloadedDetail(
+      from: preloadTask,
+      to: viewModel,
+      hasRefreshedSubscription: true
+    )
+
+    XCTAssertEqual(viewModel.detail.title, "占位详情")
+  }
+
+  @MainActor
   func testDetailReadyHandlerRefreshesSubscriptionWhenPreloadCompletesAfterViewAppears()
     async throws
   {
@@ -600,6 +620,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let preloadTask = MediaPreloadTask(partialMedia: fullDetail, apiService: service)
     preloadTask.tmdbId = 776_656
     preloadTask.fullDetail = fullDetail
+    preloadTask.isDetailReady = true
     preloadTask.isSubscribed = true
 
     let viewModel = MediaDetailViewModel(
@@ -642,6 +663,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let fullDetail = MediaInfo(tmdb_id: tmdbId, title: "订阅查询失败", type: "电影")
     let preloadTask = MediaPreloadTask(partialMedia: fullDetail, apiService: service)
     preloadTask.fullDetail = fullDetail
+    preloadTask.isDetailReady = true
     preloadTask.isSubscribed = true
 
     let viewModel = MediaDetailViewModel(
