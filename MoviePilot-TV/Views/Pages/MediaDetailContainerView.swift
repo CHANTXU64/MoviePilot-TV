@@ -67,6 +67,7 @@ private struct MediaLoadingView: View {
             discardLoadingPosterIfAbandoned()
           }
           .setProcessor(MediaDetailLoadingPoster.processor)
+          .skippingMemoryCache()
           .resizable()
           .aspectRatio(contentMode: .fill)
           .frame(

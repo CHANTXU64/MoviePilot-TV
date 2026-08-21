@@ -230,6 +230,7 @@ final class MPImageWarmerTests: XCTestCase {
     XCTAssertFalse(heroOptions.cacheMemoryOnly)
     XCTAssertFalse(heroOptions.cacheOriginalImage)
     XCTAssertFalse(heroOptions.cacheSerializer.originalDataUsed)
+    XCTAssertTrue(Self.skipsMemoryCache(heroOptions.memoryCacheExpiration))
     let posterOptions = KingfisherParsedOptionsInfo(
       MediaDetailBackgroundImage.heroOptions(
         for: size,
@@ -238,11 +239,49 @@ final class MPImageWarmerTests: XCTestCase {
       )
     )
     XCTAssertFalse(posterOptions.cacheSerializer.originalDataUsed)
+    XCTAssertTrue(Self.skipsMemoryCache(posterOptions.memoryCacheExpiration))
   }
 
-  func testBackgroundAppearanceRefreshesOnlyUnmountedBackground() {
-    XCTAssertTrue(MediaDetailView.shouldRefreshBackground(isMounted: false))
-    XCTAssertFalse(MediaDetailView.shouldRefreshBackground(isMounted: true))
+  func testTransientDecodedImageSkipsMemoryCache() {
+    let parsed = KingfisherParsedOptionsInfo([TransientDecodedImage.skipMemoryCache])
+    XCTAssertTrue(Self.skipsMemoryCache(parsed.memoryCacheExpiration))
+  }
+
+  func testBackgroundAppearanceRefreshesOnlyUnmountedHeroPage() {
+    XCTAssertTrue(
+      MediaDetailView.shouldRefreshBackground(isMounted: false, showingContentPage: false)
+    )
+    XCTAssertFalse(
+      MediaDetailView.shouldRefreshBackground(isMounted: true, showingContentPage: false)
+    )
+    XCTAssertFalse(
+      MediaDetailView.shouldRefreshBackground(isMounted: false, showingContentPage: true)
+    )
+    XCTAssertFalse(
+      MediaDetailView.shouldRefreshBackground(isMounted: true, showingContentPage: true)
+    )
+  }
+
+  func testContentPageKeepsBackgroundUntilFadeCompletes() {
+    XCTAssertEqual(MediaDetailView.contentPageBackgroundFadeDuration, 0.4)
+    XCTAssertFalse(
+      MediaDetailView.shouldUnmountContentPageBackground(
+        fadeElapsed: false,
+        showingContentPage: true
+      )
+    )
+    XCTAssertTrue(
+      MediaDetailView.shouldUnmountContentPageBackground(
+        fadeElapsed: true,
+        showingContentPage: true
+      )
+    )
+    XCTAssertFalse(
+      MediaDetailView.shouldUnmountContentPageBackground(
+        fadeElapsed: true,
+        showingContentPage: false
+      )
+    )
   }
 
   func testReleasingDetailBackgroundsKeepsBothOnDisk() async throws {
@@ -1278,6 +1317,13 @@ final class MPImageWarmerTests: XCTestCase {
       ),
       .memory
     )
+  }
+
+  private static func skipsMemoryCache(_ expiration: StorageExpiration?) -> Bool {
+    if case .expired = expiration {
+      return true
+    }
+    return false
   }
 
   private func waitUntil(

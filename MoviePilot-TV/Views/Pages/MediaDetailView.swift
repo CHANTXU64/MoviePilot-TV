@@ -47,6 +47,7 @@ private struct MediaDetailBackgroundLayer: View {
       }
       .setProcessor(processor)
       .scaleFactor(UIScreen.main.scale)
+      .skippingMemoryCache()
       .cancelOnDisappear(true)
       .resizable()
       .aspectRatio(contentMode: .fill)
@@ -86,6 +87,7 @@ struct MediaDetailView: View {
   @State private var backgroundGeneration = 0
   @State private var didReleaseAfterPop = false
   @State private var imageLifetime = MediaDetailImageLifetime()
+  @State private var contentPageBackgroundUnmountTask: Task<Void, Never>?
 
   // 订阅相关 UI 状态（弹窗开关，纯 UI 逻辑）
   @State private var sheetSubscribe: Subscribe?
@@ -223,8 +225,17 @@ struct MediaDetailView: View {
     self.loadingPosterURL = loadingPosterURL
   }
 
-  static func shouldRefreshBackground(isMounted: Bool) -> Bool {
-    !isMounted
+  nonisolated static let contentPageBackgroundFadeDuration: TimeInterval = 0.4
+
+  static func shouldRefreshBackground(isMounted: Bool, showingContentPage: Bool) -> Bool {
+    !isMounted && !showingContentPage
+  }
+
+  static func shouldUnmountContentPageBackground(
+    fadeElapsed: Bool,
+    showingContentPage: Bool
+  ) -> Bool {
+    fadeElapsed && showingContentPage
   }
 
   static func shouldDiscardLoadedBackground(
@@ -261,7 +272,10 @@ struct MediaDetailView: View {
         )
         .id(backgroundGeneration)
         .opacity(showContentPage ? 0 : 1)
-        .animation(.easeInOut(duration: 0.4), value: showContentPage)
+        .animation(
+          .easeInOut(duration: Self.contentPageBackgroundFadeDuration),
+          value: showContentPage
+        )
         .transition(.opacity)
       }
 
@@ -305,7 +319,10 @@ struct MediaDetailView: View {
       }
       .ignoresSafeArea()
       .opacity(showContentPage ? 0 : 1)
-      .animation(.easeInOut(duration: 0.4), value: showContentPage)
+      .animation(
+        .easeInOut(duration: Self.contentPageBackgroundFadeDuration),
+        value: showContentPage
+      )
 
       ScrollViewReader { proxy in
         ScrollView {
@@ -336,6 +353,7 @@ struct MediaDetailView: View {
             .animation(.easeInOut(duration: 0.6), value: showContentPage)
             .onChange(of: isHeroFocused) { _, focused in
               guard focused else { return }
+              remountBackgroundForHeroIfNeeded()
               withAnimation(.easeInOut(duration: 0.6)) {
                 showContentPage = false
                 proxy.scrollTo("top", anchor: .top)
@@ -364,6 +382,8 @@ struct MediaDetailView: View {
       // 取消防抖任务，防止视图消失后仍发起无意义的预加载请求
       recommendPreloadDebounce?.cancel()
       similarPreloadDebounce?.cancel()
+      contentPageBackgroundUnmountTask?.cancel()
+      contentPageBackgroundUnmountTask = nil
       DispatchQueue.main.async {
         releaseAfterPopIfNeeded(currentPathCount: navigationPath.count)
       }
@@ -374,10 +394,15 @@ struct MediaDetailView: View {
         owner: navigationOwnerID,
         target: pageImageCleanupTarget
       )
-      if Self.shouldRefreshBackground(isMounted: isBackgroundMounted) {
-        backgroundGeneration &+= 1
-        isBackgroundMounted = true
-        imageLifetime.isBackgroundMounted = true
+      remountBackgroundIfNeeded()
+    }
+    .onChange(of: showContentPage) { _, showingContent in
+      contentPageBackgroundUnmountTask?.cancel()
+      contentPageBackgroundUnmountTask = nil
+      if showingContent {
+        scheduleUnmountBackgroundAfterContentPageFade()
+      } else {
+        remountBackgroundIfNeeded()
       }
     }
     .onChange(of: viewModel.pageImageSnapshot) { _, snapshot in
@@ -545,18 +570,15 @@ struct MediaDetailView: View {
       owner: navigationOwnerID,
       target: pageImageCleanupTarget
     )
-    guard
-      let url = viewModel.backgroundUrl,
-      MemoryOptimizationPolicy.shared.isEnabled
-    else {
-      return
-    }
+    guard let url = viewModel.backgroundUrl else { return }
     DispatchQueue.main.async {
       releaseBackground(for: url)
     }
   }
 
   private func releaseBackground(for url: URL) {
+    contentPageBackgroundUnmountTask?.cancel()
+    contentPageBackgroundUnmountTask = nil
     guard isBackgroundMounted else { return }
     isBackgroundMounted = false
     imageLifetime.isBackgroundMounted = false
@@ -589,6 +611,48 @@ struct MediaDetailView: View {
       ),
       size: UIScreen.main.bounds.size
     )
+  }
+
+  private func remountBackgroundIfNeeded() {
+    guard
+      Self.shouldRefreshBackground(
+        isMounted: isBackgroundMounted,
+        showingContentPage: showContentPage
+      )
+    else { return }
+    remountBackgroundForHeroIfNeeded()
+  }
+
+  /// 回到 Hero 时先挂上透明背景，再随 showContentPage 淡入。
+  private func remountBackgroundForHeroIfNeeded() {
+    guard !isBackgroundMounted else { return }
+    backgroundGeneration &+= 1
+    isBackgroundMounted = true
+    imageLifetime.isBackgroundMounted = true
+  }
+
+  /// 下滑淡出结束后再卸背景，避免动画中途突然消失。
+  private func scheduleUnmountBackgroundAfterContentPageFade() {
+    contentPageBackgroundUnmountTask = Task { @MainActor in
+      try? await Task.sleep(for: .seconds(Self.contentPageBackgroundFadeDuration))
+      guard
+        !Task.isCancelled,
+        Self.shouldUnmountContentPageBackground(
+          fadeElapsed: true,
+          showingContentPage: showContentPage
+        )
+      else { return }
+      unmountBackgroundForContentPage()
+    }
+  }
+
+  private func unmountBackgroundForContentPage() {
+    guard let url = viewModel.backgroundUrl else {
+      isBackgroundMounted = false
+      imageLifetime.isBackgroundMounted = false
+      return
+    }
+    releaseBackground(for: url)
   }
 
   private func releaseAfterPopIfNeeded(currentPathCount: Int) {
@@ -982,7 +1046,7 @@ struct MediaDetailView: View {
                   for: viewModel.detail,
                   sites: viewModel.siteFilter.sitesString
                 )
-                navigationPath.append(request)
+                navigateFromSecondPage(to: request)
               }) {
                 Label("搜索资源", systemImage: "magnifyingglass")
                   .foregroundColor(.primary)

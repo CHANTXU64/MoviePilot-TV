@@ -33,6 +33,7 @@ enum MediaDetailBackgroundImage {
         )
       ),
       .scaleFactor(scaleFactor),
+      TransientDecodedImage.skipMemoryCache,
     ]
   }
 
@@ -205,6 +206,7 @@ class MediaPreloadTask: ObservableObject {
   /// 该闭包可能在任意线程执行。实际写入只在 @MainActor 隔离的方法中进行，读取仅在取消时（单次），无竞争风险。
   nonisolated(unsafe) private var activeImageDownload: DownloadTask?
   private let imageRetrieveState = ImageRetrieveContinuationBox()
+  private var activeImageWarmHandle: MPImageWarmer.Handle?
   private var allowsImageWarm = true
 
   init(partialMedia: MediaInfo, apiService: APIService = .shared) {
@@ -266,9 +268,13 @@ class MediaPreloadTask: ObservableObject {
     imageRetrieveState.shouldDiscardResult(generation: generation)
   }
 
-  /// 当前媒体即将真正显示时，停止候选图清理并将进行中的背景结果交给前台复用。
+  /// 当前媒体即将真正显示时，停止仅用于服务器缓存的 warm，并把已解码的候选背景交给前台复用。
   func cancelImageWarm() {
     allowsImageWarm = false
+    if let activeImageWarmHandle {
+      MPImageWarmer.shared.cancel(activeImageWarmHandle)
+      self.activeImageWarmHandle = nil
+    }
     imageRetrieveState.keepResultInMemoryUnlessOwnerReleased()
   }
 
@@ -352,6 +358,20 @@ class MediaPreloadTask: ObservableObject {
     let preparedAsCandidate = shouldWarmBackgroundImage(
       memoryOptimizationEnabled: MemoryOptimizationPolicy.shared.isEnabled
     )
+
+    if preparedAsCandidate {
+      let handle = await MPImageWarmer.shared.warm(url)
+      guard !Task.isCancelled,
+        shouldWarmBackgroundImage(memoryOptimizationEnabled: true)
+      else {
+        if let handle {
+          MPImageWarmer.shared.cancel(handle)
+        }
+        return
+      }
+      activeImageWarmHandle = handle
+      return
+    }
 
     if let timeout {
       await withTaskGroup(of: Void.self) { group in

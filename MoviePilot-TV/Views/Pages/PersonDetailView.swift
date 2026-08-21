@@ -59,6 +59,7 @@ struct PersonDetailView: View {
                       .overlay(ProgressView().tint(.gray))
                   }
                   .resizing(referenceSize: CGSize(width: 400, height: 600), mode: .aspectFill)
+                  .skippingMemoryCache()
                   .resizable()
                   .aspectRatio(contentMode: .fill)
               }

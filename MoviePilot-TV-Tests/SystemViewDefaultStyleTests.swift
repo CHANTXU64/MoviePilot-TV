@@ -569,12 +569,42 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(release.contains("DispatchQueue.main.async"))
     XCTAssertFalse(release.contains("Task.sleep"))
     XCTAssertFalse(release.contains("asyncAfter"))
+    XCTAssertFalse(release.contains("MemoryOptimizationPolicy"))
+    XCTAssertTrue(
+      detailSource.contains("navigateFromSecondPage(to: request)"),
+      "搜索资源应走同一条进子页卸背景路径"
+    )
   }
 
   func testMediaDetailRestoredContentFocusDoesNotScrollToTopAgain() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
 
     XCTAssertTrue(source.contains("guard focused, !showContentPage else { return }"))
+  }
+
+  func testMediaDetailDoesNotLoadBackgroundOnContentPageUntilHero() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
+
+    XCTAssertTrue(source.contains("if isBackgroundMounted {"))
+    XCTAssertFalse(
+      source.contains("shouldShowBackground(isMounted: isBackgroundMounted, showingContentPage:")
+    )
+    XCTAssertTrue(source.contains(".opacity(showContentPage ? 0 : 1)"))
+    XCTAssertTrue(source.contains("scheduleUnmountBackgroundAfterContentPageFade()"))
+    XCTAssertTrue(
+      source.contains("try? await Task.sleep(for: .seconds(Self.contentPageBackgroundFadeDuration))")
+    )
+    XCTAssertTrue(source.contains("remountBackgroundForHeroIfNeeded()"))
+    XCTAssertTrue(
+      source.contains(
+        "remountBackgroundForHeroIfNeeded()\n              withAnimation(.easeInOut(duration: 0.6)) {\n                showContentPage = false"
+      )
+    )
+    XCTAssertTrue(
+      source.contains(
+        "Self.shouldRefreshBackground(\n        isMounted: isBackgroundMounted,\n        showingContentPage: showContentPage"
+      )
+    )
   }
 
   func testSystemViewModelRechecksPermissionBeforePublishingCustomRules() throws {

@@ -459,6 +459,7 @@ struct SeasonDetailSheet: View {
                 .overlay(ProgressView().tint(.gray))
             }
             .resizing(referenceSize: CGSize(width: 360, height: 540), mode: .aspectFill)
+            .skippingMemoryCache()
             .resizable()
             .aspectRatio(contentMode: .fill)
             .frame(width: 360)

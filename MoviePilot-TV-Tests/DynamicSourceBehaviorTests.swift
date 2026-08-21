@@ -22,6 +22,37 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     )
   }
 
+  func testPrefetchBackgroundImageWarmsOnFocusAndDecodesAfterOpeningDetail() throws {
+    let preloaderSource = try source("MoviePilot-TV/ViewModels/MediaPreloader.swift")
+    let prefetchStart = try XCTUnwrap(
+      preloaderSource.range(of: "private func prefetchBackgroundImage(for detail: MediaInfo")
+    )
+    let prefetchEnd = try XCTUnwrap(
+      preloaderSource.range(
+        of: "private func retrieveHeroImage(_ url: URL, fallbackURL: URL?)",
+        range: prefetchStart.upperBound..<preloaderSource.endIndex
+      )
+    )
+    let prefetch = preloaderSource[prefetchStart.lowerBound..<prefetchEnd.lowerBound]
+    let cancelStart = try XCTUnwrap(preloaderSource.range(of: "func cancelImageWarm()"))
+    let cancelEnd = try XCTUnwrap(
+      preloaderSource.range(
+        of: "func shouldWarmBackgroundImage(memoryOptimizationEnabled: Bool)",
+        range: cancelStart.upperBound..<preloaderSource.endIndex
+      )
+    )
+    let cancel = preloaderSource[cancelStart.lowerBound..<cancelEnd.lowerBound]
+    let containerSource = try source("MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift")
+
+    XCTAssertTrue(prefetch.contains("if preparedAsCandidate {"))
+    XCTAssertTrue(prefetch.contains("MPImageWarmer.shared.warm(url)"))
+    XCTAssertTrue(prefetch.contains("activeImageWarmHandle = handle"))
+    XCTAssertTrue(prefetch.contains("return"))
+    XCTAssertTrue(prefetch.contains("retrieveHeroImage(url, fallbackURL: target.fallbackURL)"))
+    XCTAssertTrue(cancel.contains("MPImageWarmer.shared.cancel(activeImageWarmHandle)"))
+    XCTAssertTrue(containerSource.contains("preloadTask.cancelImageWarm()"))
+  }
+
   func testPluginFilterParserKeepsSupportedControlsAndSkipsUnknownControls() {
     let parsed = PluginFilterControlParser.parse([
       .object([

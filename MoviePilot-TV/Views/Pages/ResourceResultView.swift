@@ -66,6 +66,7 @@ struct ResourceResultView: View {
             referenceSize: UIScreen.main.bounds.size,
             mode: .aspectFill
           )
+          .skippingMemoryCache()
           .resizable()
           .aspectRatio(contentMode: .fill)
           .opacity(0.3)
