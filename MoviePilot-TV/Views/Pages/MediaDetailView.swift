@@ -306,6 +306,8 @@ struct MediaDetailView: View {
       if canSearchResources {
         await viewModel.siteFilter.loadSites()
       }
+      // 重新激活时自动恢复成功空终态的推荐/相似/演员区域
+      await viewModel.refreshSuccessEmptySections()
     }
     .task(id: preloadTask.partialMedia.id) {
       await Self.runActiveSubscriptionRefreshLoop {
@@ -977,6 +979,7 @@ struct MediaDetailView: View {
           .padding(.top, 25)
           .padding(.bottom, 30)
           .onChange(of: focusedActorId) { _, newId in
+            guard let newId else { return }
             Task {
               await viewModel.actorsPaginator.loadMore(newId)
             }
@@ -1041,6 +1044,7 @@ struct MediaDetailView: View {
               }
             }
             // 分页加载
+            guard let newId else { return }
             Task {
               await viewModel.recommendPaginator.loadMore(newId)
             }
@@ -1105,6 +1109,7 @@ struct MediaDetailView: View {
               }
             }
             // 分页加载
+            guard let newId else { return }
             Task {
               await viewModel.similarPaginator.loadMore(newId)
             }

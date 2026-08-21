@@ -149,6 +149,25 @@ class MediaDetailViewModel: ObservableObject {
 
   private var hasAppliedFullDetail = false
 
+  /// 页面重新激活时，对处于“成功空终态”的推荐/相似/演员分页各重试一次。
+  func refreshSuccessEmptySections() async {
+    if recommendPaginator.items.isEmpty, !recommendPaginator.isLoading, !recommendPaginator.hasError,
+      !recommendPaginator.hasMore
+    {
+      await recommendPaginator.refresh()
+    }
+    if similarPaginator.items.isEmpty, !similarPaginator.isLoading, !similarPaginator.hasError,
+      !similarPaginator.hasMore
+    {
+      await similarPaginator.refresh()
+    }
+    if actorsPaginator.items.isEmpty, !actorsPaginator.isLoading, !actorsPaginator.hasError,
+      !actorsPaginator.hasMore
+    {
+      await actorsPaginator.refresh()
+    }
+  }
+
   /// 应用完整的媒体详情数据并加载辅助内容。
   /// 在 fullDetail 加载完成后调用，负责：
   /// 1. 设置 detail、更新背景图、派生演职员等所有依赖属性（同步，立即生效）

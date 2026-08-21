@@ -140,16 +140,20 @@ class ContentViewModel: ObservableObject {
 
     do {
       let settings = try await apiService.fetchSettings()
-      guard checkBackendVersion, backendVersionCheckKey != checkKey else { return }
       guard currentBackendVersionCheckKey() == checkKey else { return }
-      backendVersionCheckKey = checkKey
-      backendVersionWarning = Self.backendVersionWarning(for: settings.BACKEND_VERSION)
+      let shouldUpdateWarning =
+        checkBackendVersion ? backendVersionCheckKey != checkKey : backendVersionWarning != nil
+      if shouldUpdateWarning {
+        backendVersionWarning = Self.backendVersionWarning(for: settings.BACKEND_VERSION)
+      }
+      if checkBackendVersion {
+        backendVersionCheckKey = checkKey
+      }
     } catch is CancellationError {
       return
     } catch {
       guard checkBackendVersion, backendVersionCheckKey != checkKey else { return }
       guard currentBackendVersionCheckKey() == checkKey else { return }
-      backendVersionCheckKey = checkKey
       backendVersionWarning = BackendVersionWarning(
         backendVersion: nil,
         requiredVersion: AppVersionInfo.compatibleMoviePilotVersion

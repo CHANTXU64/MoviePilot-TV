@@ -16,6 +16,12 @@ final class StatusDashboardSnapshotTests: XCTestCase {
     super.tearDown()
   }
 
+  func testEpisodeCountProjectionNilShowsNotFetched() {
+    XCTAssertEqual(StatusView.episodeCountText(nil), "未获取")
+    XCTAssertEqual(StatusView.episodeCountText(0), "0")
+    XCTAssertEqual(StatusView.episodeCountText(6), "6")
+  }
+
   private func makeService(superUser: Bool = true) -> APIService {
     let service = APIService.isolatedTestingInstance()
     service.baseURLForTesting = "https://status-dashboard-tests.local"

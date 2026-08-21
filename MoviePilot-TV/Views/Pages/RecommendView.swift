@@ -1,10 +1,15 @@
 import SwiftUI
 
 struct RecommendView: View {
+  private let isSelected: Bool
   @StateObject private var viewModel = RecommendViewModel()
   @State private var path = NavigationPath()
   @StateObject private var subscriptionHandler = SubscriptionHandler()
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
+
+  init(isSelected: Bool) {
+    self.isSelected = isSelected
+  }
 
   var body: some View {
     NavigationStack(path: $path) {
@@ -98,7 +103,8 @@ struct RecommendView: View {
     .onAppear {
       viewModel.reloadLocalConfig()
     }
-    .task {
+    .task(id: isSelected) {
+      guard isSelected else { return }
       await viewModel.refreshSources()
     }
   }

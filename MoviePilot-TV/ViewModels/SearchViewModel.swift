@@ -53,26 +53,74 @@ enum BestResultItem: Identifiable, Hashable {
 }
 
 /// 模糊匹配分值计算：用于给搜索结果进行初级排序
-/// 原理：全匹配最高，前缀匹配次之，包含匹配再次，最后是按顺序出现的字符匹配
-private func fuzzyMatchScore(text: String?, query: String) -> Int {
+/// 原理：全匹配最高，前缀匹配次之，包含匹配再次，最后是按顺序出现的字符匹配。
+/// 类别带宽互不重叠且长度罚分有上限，避免长标题的真实匹配被弱匹配挤出。
+func fuzzyMatchScore(text: String?, query: String) -> Int {
   guard let t = text?.lowercased(), !query.isEmpty else { return -1 }
   let q = query.lowercased()
 
   if t == q { return 1000 }  // 完全相等
-  if t.hasPrefix(q) { return 500 - t.count }  // 前缀匹配（标题越短权重越高）
-  if t.contains(q) { return 100 - t.count }  // 包含匹配
+  if t.hasPrefix(q) { return 700 - min(t.count, 100) }  // 前缀匹配（标题越短权重越高，罚分封顶）
+  if t.contains(q) { return 400 - min(t.count, 100) }  // 包含匹配
 
-  // 字符顺序匹配（如搜索 "hml" 匹配 "Hamilton"）
-  var qIndex = q.startIndex
-  for char in t {
-    if char == q[qIndex] {
-      qIndex = q.index(after: qIndex)
-      if qIndex == q.endIndex {
-        return 50 - t.count
+  // 字符顺序匹配（如搜索 "hml" 匹配 "Hamilton"），采用 fzf 风格加分
+  return subsequenceMatchScore(text: t, query: q)
+}
+
+/// 顺序匹配打分：匹配字符越靠词首、越连续得分越高，间隔与长度惩罚有界。
+/// 结果区间 [100, 299]，始终高于“不匹配(-1)”、低于“包含匹配”档。
+private func subsequenceMatchScore(text: String, query: String) -> Int {
+  var queryIndex = query.startIndex
+  var previousMatchOffset: Int?
+  var bonus = 0
+  var gapPenalty = 0
+  var offset = 0
+  let chars = Array(text)
+
+  for char in chars {
+    if char == query[queryIndex] {
+      // 词首加分：标题开头或前一个字符是分隔符/标点
+      if offset == 0 || !chars[offset - 1].isLetterOrNumber {
+        bonus += 24
       }
+      if let previous = previousMatchOffset {
+        let gap = offset - previous - 1
+        if gap == 0 {
+          bonus += 12  // 连续匹配
+        } else {
+          gapPenalty += min(gap * 3, 60)
+        }
+      }
+      previousMatchOffset = offset
+      queryIndex = query.index(after: queryIndex)
+      if queryIndex == query.endIndex { break }
     }
+    offset += 1
   }
-  return -1
+  guard queryIndex == query.endIndex else { return -1 }
+  return min(max(100 + bonus - gapPenalty - min(text.count, 99), 100), 299)
+}
+
+private extension Character {
+  var isLetterOrNumber: Bool {
+    isLetter || isNumber
+  }
+}
+
+/// 热度加分：按来源热度口径归一化，避免不同来源量级混算。
+/// - TMDB 热度指数（常见 0.5~1900）用 log10 基数 3；
+/// - AniList 收藏数（常见数千~数十万）用 log10 基数 6；
+/// - 其余来源无热度或口径不可比，返回 0。
+func popularityBoost(source: String?, popularity: Double) -> Int {
+  guard popularity > 0 else { return 0 }
+  let base: Double
+  switch source?.lowercased() {
+  case "themoviedb": base = 3
+  case "anilist": base = 6
+  default: return 0
+  }
+  let normalized = min(log10(1 + popularity) / base, 1)
+  return Int((normalized * 149).rounded())
 }
 
 @MainActor
@@ -143,7 +191,8 @@ class SearchViewModel: ObservableObject {
       }.max() ?? -1
     }
 
-    var scoredItems: [(item: BestResultItem, score: Int, popularity: Double)] = []
+    var scoredItems: [(item: BestResultItem, score: Int, popularity: Double, boost: Int)] = []
+    var candidateSources = Set<String>()
 
     // 1. 处理媒体搜索结果 (电影/电视剧)
     for mediaItem in media {
@@ -167,10 +216,12 @@ class SearchViewModel: ObservableObject {
       let maxS = bestScore(Set(candidates), yearMatches)
       let pop = mediaItem.popularity ?? 0
       let hasNoPoster = mediaItem.poster_path == nil || mediaItem.poster_path?.isEmpty == true
+      let boost = popularityBoost(source: mediaItem.source, popularity: pop)
 
       // 过滤匹配度极低且无海报的结果，减少噪音
       if !(hasNoPoster && maxS < 50 && pop < 1) {
-        scoredItems.append((item: .media(mediaItem), score: maxS, popularity: pop))
+        if let source = mediaItem.source, !source.isEmpty { candidateSources.insert(source) }
+        scoredItems.append((item: .media(mediaItem), score: maxS, popularity: pop, boost: boost))
       }
     }
 
@@ -196,9 +247,11 @@ class SearchViewModel: ObservableObject {
       let maxS = bestScore(Set(candidates), yearMatches)
       let pop = mediaItem.popularity ?? 0
       let hasNoPoster = mediaItem.poster_path == nil || mediaItem.poster_path?.isEmpty == true
+      let boost = popularityBoost(source: mediaItem.source, popularity: pop)
 
       if !(hasNoPoster && maxS < 50 && pop < 1) {
-        scoredItems.append((item: .media(mediaItem), score: maxS, popularity: pop))
+        if let source = mediaItem.source, !source.isEmpty { candidateSources.insert(source) }
+        scoredItems.append((item: .media(mediaItem), score: maxS, popularity: pop, boost: boost))
       }
     }
 
@@ -213,9 +266,11 @@ class SearchViewModel: ObservableObject {
       let maxS = bestScore(Set(candidates), true)
       let pop = personItem.popularity ?? 0
       let hasNoPoster = personItem.profile_path == nil || personItem.profile_path?.isEmpty == true
+      let boost = popularityBoost(source: personItem.source, popularity: pop)
 
       if !(hasNoPoster && maxS < 50 && pop < 1) {
-        scoredItems.append((item: .person(personItem), score: maxS, popularity: pop))
+        if let source = personItem.source, !source.isEmpty { candidateSources.insert(source) }
+        scoredItems.append((item: .person(personItem), score: maxS, popularity: pop, boost: boost))
       }
     }
 
@@ -227,19 +282,30 @@ class SearchViewModel: ObservableObject {
         !$0.isEmpty
       }
       let maxS = bestScore(Set(titles), true)
-      let pop = shareItem.popularity ?? 0  // 复用次数
+      // 订阅分享无真实热度（复用次数与媒体热度口径不同），固定小值参与加权。
+      let pop = 0.6
       let hasNoPoster = shareItem.poster_path == nil || shareItem.poster_path?.isEmpty == true
+      let boost = popularityBoost(source: "themoviedb", popularity: pop)
 
       // 分享结果通常比较优质，放宽准入
       if !(hasNoPoster && maxS < 0) {
-        scoredItems.append((item: .media(shareItem), score: maxS, popularity: pop))
+        scoredItems.append((item: .media(shareItem), score: maxS, popularity: pop, boost: boost))
       }
     }
 
-    // 核心排序逻辑：优先按匹配分值倒序，分值相同时按热度 (Popularity) 倒序
+    // 候选池出现多个媒体来源（订阅分享不计）时热度口径不可比，全部不计算热度。
+    if candidateSources.count > 1 {
+      scoredItems = scoredItems.map {
+        (item: $0.item, score: $0.score, popularity: $0.popularity, boost: 0)
+      }
+    }
+
+    // 核心排序逻辑：按“匹配分值 + 热度加分”倒序，总分相同时按热度倒序
     scoredItems.sort {
-      if $0.score != $1.score {
-        return $0.score > $1.score
+      let lhsTotal = $0.score + $0.boost
+      let rhsTotal = $1.score + $1.boost
+      if lhsTotal != rhsTotal {
+        return lhsTotal > rhsTotal
       }
       return $0.popularity > $1.popularity
     }
@@ -792,6 +858,7 @@ actor SharedMediaFetcher {
   private var tvBuffer: [MediaInfo] = []
 
   private var currentFetchTask: Task<Void, Error>?
+  private var currentFetchTaskIdentity = 0
 
   init(query: String, source: MediaSearchSource?, apiService: APIService) {
     self.query = query
@@ -852,7 +919,18 @@ actor SharedMediaFetcher {
     let localPage = apiPage + 1
     let isInitialFetch = (apiPage == 0)
 
+    currentFetchTaskIdentity += 1
+    let identity = currentFetchTaskIdentity
+
     let task = Task {
+      // 无论成功或失败，都在完成时按 identity 退休自己的句柄；
+      // 保证唤醒任何等待者之前 currentFetchTask 已清空，避免合流方
+      // 重复 await 已完成任务导致游标不推进。
+      defer {
+        if self.currentFetchTaskIdentity == identity {
+          self.currentFetchTask = nil
+        }
+      }
       if isInitialFetch {
         // 首次搜索时，并发获取前两页，大幅度提升混排首屏加载速度
         async let fetchPage1 = apiService.searchMedia(query: query, page: 1, source: source)
@@ -884,7 +962,6 @@ actor SharedMediaFetcher {
     }
 
     self.currentFetchTask = task
-    defer { self.currentFetchTask = nil }
     try await task.value
   }
 

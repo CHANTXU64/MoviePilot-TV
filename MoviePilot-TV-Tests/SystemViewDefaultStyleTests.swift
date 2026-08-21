@@ -42,6 +42,17 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(historySource.contains("await Self.runAutoRefresh("))
   }
 
+  func testRecommendTabSelectionDrivesSuccessEmptyReactivation() throws {
+    let contentSource = try Self.source(at: "MoviePilot-TV/Views/ContentView.swift")
+    let recommendSource = try Self.source(at: "MoviePilot-TV/Views/Pages/RecommendView.swift")
+
+    XCTAssertTrue(
+      contentSource.contains("RecommendView(isSelected: selectedTab == .recommend)"))
+    XCTAssertTrue(recommendSource.contains(".task(id: isSelected)"))
+    XCTAssertTrue(recommendSource.contains("guard isSelected else { return }"))
+    XCTAssertTrue(recommendSource.contains("await viewModel.refreshSources()"))
+  }
+
   func testTransferHistoryMutationIntentsCarryTheirSourceSession() throws {
     let source = try Self.source(
       at: "MoviePilot-TV/Views/Pages/TransferHistoryView.swift"

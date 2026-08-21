@@ -181,7 +181,7 @@ struct TransferHistoryView: View {
         }
       ) {
         Task {
-          viewModel.deselectAll()
+          viewModel.deselect(ids: intent.items.map(\.id))
           await viewModel.refresh()
         }
       }

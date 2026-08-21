@@ -81,9 +81,10 @@ struct AddDownloadSheet: View {
                   get: { viewModel.selectedDownloader ?? "" },
                   set: { viewModel.selectedDownloader = $0.isEmpty ? nil : $0 }
                 ),
-                options: viewModel.downloaders.map {
-                  PickerOption(title: $0.name, value: $0.name)
-                }
+                options: [PickerOption(title: "自动", value: "")]
+                  + viewModel.downloaders.map {
+                    PickerOption(title: $0.name, value: $0.name)
+                  }
               )
 
               SheetPicker(

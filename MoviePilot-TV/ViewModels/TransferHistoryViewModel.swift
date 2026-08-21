@@ -299,6 +299,15 @@ class TransferHistoryViewModel: ObservableObject {
     selectedIds.removeAll()
   }
 
+  /// 只移除指定记录的选择，保留其他已选项（整理等动作收尾时不清用户新选）。
+  func deselect(ids: [Int]) {
+    guard !isMutatingHistory else { return }
+    selectedIds.subtract(Set(ids))
+    if selectedIds.isEmpty {
+      isSelectionMode = false
+    }
+  }
+
   /// 在展示确认时冻结完整记录，确保确认数量和最终删除始终消费同一批次。
   func selectedItemsSnapshot() -> [TransferHistory] {
     items.filter { selectedIds.contains($0.id) }
@@ -474,8 +483,13 @@ class TransferHistoryViewModel: ObservableObject {
 
       let existingIds = Set(items.map { $0.id }).union(deletedIds)
 
-      while currentPage <= maxPagesToFetch {
+      // 只有遇到已知项、空页或不满页才视为找到已知边界；
+      // 扫满上限仍无边界时不得提交不完整前缀或推进游标。
+      var reachedKnownBoundary = false
+
+      while true {
         if fetchedItems.isEmpty {
+          reachedKnownBoundary = true
           break
         }
 
@@ -492,15 +506,25 @@ class TransferHistoryViewModel: ObservableObject {
         allNewItems.append(contentsOf: newItemsOnThisPage)
 
         if foundExistingItem || fetchedItems.count < pageSize {
+          reachedKnownBoundary = true
           break
         }
 
         currentPage += 1
+        if currentPage > maxPagesToFetch {
+          break
+        }
         let nextPageResponse = try await pollFetcher(currentPage)
         guard pollGeneration == queryGeneration,
           apiService.isSessionUnchanged(from: sessionSnapshot)
         else { return }
         fetchedItems = nextPageResponse.list
+      }
+
+      guard reachedKnownBoundary else {
+        // 超过扫描上限仍未遇到已知项：回退权威顺序刷新，避免漏掉第 101 条及以后。
+        await performAuthoritativeRefresh()
+        return
       }
 
       if !allNewItems.isEmpty {

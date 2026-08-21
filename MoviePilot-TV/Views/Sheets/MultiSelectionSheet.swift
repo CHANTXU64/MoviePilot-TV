@@ -10,6 +10,15 @@ struct MultiSelectionSheet<T, ID: Hashable>: View {
 
   @Environment(\.dismiss) private var dismiss
 
+  /// 已选但不在可选项中的值（旧配置/已停用项）。
+  static func unavailableSelections(
+    in selected: Set<ID>,
+    options: [T],
+    id: KeyPath<T, ID>
+  ) -> Set<ID> {
+    selected.subtracting(options.map { $0[keyPath: id] })
+  }
+
   var body: some View {
     NavigationStack {
       ScrollView {
@@ -68,6 +77,23 @@ struct MultiSelectionSheet<T, ID: Hashable>: View {
               )
               .disabled(true)
               .opacity(0.5)
+            }
+          }
+
+          // 已选但不在可选项中的值（旧配置/已停用项）：给出可见的主动清除入口
+          let unavailableSelections = Self.unavailableSelections(
+            in: selected,
+            options: options,
+            id: id
+          )
+          if !unavailableSelections.isEmpty {
+            Divider()
+            Button {
+              selected.subtract(unavailableSelections)
+            } label: {
+              Text("清除不可用选择（\(unavailableSelections.count)）")
+                .frame(maxWidth: .infinity)
+                .foregroundColor(.red)
             }
           }
         }

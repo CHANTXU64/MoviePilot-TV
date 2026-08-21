@@ -4,10 +4,11 @@ import Foundation
 @MainActor
 class CollectionDetailViewModel: ObservableObject {
   let paginator: Paginator<MediaInfo>
-  private let apiService = APIService.shared
+  private let apiService: APIService
   private var cancellables = Set<AnyCancellable>()
 
-  init(collectionId: Int, title: String) {
+  init(collectionId: Int, title: String, apiService: APIService = .shared) {
+    self.apiService = apiService
     var seenKeys = Set<String>()
 
     self.paginator = Paginator<MediaInfo>(
@@ -42,7 +43,13 @@ class CollectionDetailViewModel: ObservableObject {
   private var hasLoaded = false
 
   func loadInitialData() async {
-    guard !hasLoaded else { return }
+    guard !hasLoaded else {
+      // 重新进入页面时，若首次成功返回空，则自动重试一次。
+      if paginator.items.isEmpty, !paginator.isLoading, !paginator.hasError, !paginator.hasMore {
+        await paginator.refresh()
+      }
+      return
+    }
     hasLoaded = true
     await paginator.refresh()
   }

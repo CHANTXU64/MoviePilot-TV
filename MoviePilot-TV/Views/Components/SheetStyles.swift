@@ -18,7 +18,7 @@ struct SheetFeedbackView: View {
       Label(message, systemImage: "exclamationmark.circle.fill")
         .font(.callout)
         .foregroundStyle(.orange)
-        .lineLimit(1)
+        .lineLimit(3)
         .minimumScaleFactor(0.75)
 
       if let actionTitle, let action {

@@ -455,7 +455,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-156 · P1 · 已确认 · TransferHistory 旧动作只持有可复用 ID 并清新选择</summary>
+<summary>F-156 · P1 · 已修复（2026-08-18） · TransferHistory 旧动作只持有可复用 ID 并清新选择</summary>
 
 - 审查单元与位置：V022-D→W018-A/G09；TransferHistory旧动作与选择状态owner
 - 触发路径：同session/query选A启动批量AI；服务端全量受理A且SSE仍在运行时，用户在主行点选B；A随后终止。
@@ -1489,7 +1489,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-137 · P2 · 已确认 · 模糊匹配长度罚分让不匹配项反超真实匹配</summary>
+<summary>F-137 · P2 · 已修复（2026-08-18） · 模糊匹配长度罚分让不匹配项反超真实匹配</summary>
 
 - 审查单元与位置：V011-A/B→G04；`fuzzyMatchScore` 类别带与 top-12
 - 触发路径：查询 `ab`；真实候选标题为 `a`+50 个其他字符+`b`，无关候选标题为 `zz`，两者海报、popularity 与合法唯一身份相同；另有足量无关候选竞争 top-12。
@@ -1498,11 +1498,12 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：既有三票闭合反例；全新G04 clean-room复核确认四类交叉与最终截断并升级P2；保持Int评分，仅为类别设置互不重叠带宽并clamp长度惩罚
 - 跨端结论：条件性搜索结果缺失P2；真实长标题竞争频率未验证
 - 最小修改方向 / 裁决：若独立复核确认，只给现有三类分数设置互不重叠的下限，例如前缀不低于 100、包含不低于 50、顺序不低于 0；不新建评分框架。
+- 当前处置：四类带宽互不重叠（全等1000/前缀700/包含400/顺序100-299）且长度罚分封顶；顺序匹配 fzf 风格词首/连续加分；另按用户裁决新增热度加权：订阅分享固定 0.6 参与加权，候选池出现多来源（订阅分享不计）时全部不计算热度；SearchViewModelTests 28/28 通过。
 
 </details>
 
 <details>
-<summary>F-139 · P2 · 已确认 · 推荐成功空 shelf 无恢复入口</summary>
+<summary>F-139 · P2 · 已修复（2026-08-21） · 推荐成功空 shelf 无恢复入口</summary>
 
 - 审查单元与位置：V010→V012-A→G01/G04；推荐/详情分页成功空终态与页面再激活
 - 触发路径：当前 shelf 首次请求成功返回 `[]`，Paginator 与页面实例被 Tab 保留；稍后服务已有数据或空响应只是瞬时结果，用户离开并再次激活推荐 Tab但不切换 shelf。
@@ -1511,11 +1512,12 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：既有双审确认；G01纠偏与G04独立复核再次闭合retained激活链并双票升P2；仅在激活边沿对成功空terminal调用现有refresh
 - 跨端结论：条件性恢复P2；真实tvOS实例保留与发生频率未运行验证
 - 最小修改方向 / 裁决：复用仓内 `SystemView(isSelected:)` 的激活边沿模式，只在 false→true 且当前同 shelf 满足 `items.isEmpty && !isLoading && !hasError && !hasMore` 时调用现有 `Paginator.refresh()` 一次；非空、错误、加载中与切 shelf 不触发，不改 Paginator。
+- 修复状态：Recommend已接入ContentView的Tab选中状态，并在active task调用现有成功空恢复；详情/合集保留既有恢复。View接线、成功空及相关定向回归47/47通过。
 
 </details>
 
 <details>
-<summary>F-142 · P2 · 已确认 · 完成的共享搜索 task 未及时退休导致非终止空批</summary>
+<summary>F-142 · P2 · 已修复（2026-08-18） · 完成的共享搜索 task 未及时退休导致非终止空批</summary>
 
 - 审查单元与位置：V011-F 复核/裁决；`SharedMediaFetcher.currentFetchTask` 合流/退休
 - 触发路径：电影 waiter 创建页 1-2 的共享 task，电视剧 waiter 合流；页 1-2 只有电影、页 3 才有电视剧，且电视剧 continuation 在 task 已完成但创建者尚未取得 actor并执行外层 defer清理时先恢复。
@@ -1524,6 +1526,8 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：review_a001_j 闭合双 waiter恢复顺序与第3页目标类型反例；review_a001_h 独立状态机确认0→2后重放2→2、actor调度可达及F-034/F-039独立
 - 跨端结论：条件性搜索截断已确认；真实调度频率未验证
 - 最小修改方向 / 裁决：仍使用现有 actor和单一 Task，让实际共享任务的完成所有者在唤醒 waiter 前按 task identity 原子退休 handle；不增加协调器、owner/refcount或任务框架。
+- 修复状态：已完成（2026-08-18）。`fetchNextApiPage()` 以单调 identity 递增，句柄清理移入 task 内部 `defer`，唤醒任何 waiter 前退休；旧 task 不误清未来新 task。
+- 验证：新增 `SharedMediaFetcherTests` 定向回归；还原修复后测试失败（电视剧 0 条、页3 请求 0 次），修复后 1/1 通过；tvOS Simulator 串行测试。
 
 </details>
 
@@ -1543,7 +1547,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-144 · P2 · 已确认 · 多阶段首载吞取消后仍晚启动下一阶段</summary>
+<summary>F-144 · P2 · 部分修复（2026-08-18；系统页用户决定不动） · 多阶段首载吞取消后仍晚启动下一阶段</summary>
 
 - 审查单元与位置：V013→W020-A→G02；串行首载与吞取消后晚启动下一阶段
 - 触发路径：人物详情请求慢、超时或取消时进入人物页。
@@ -1552,11 +1556,14 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：既有多审确认串行/晚启动；G02两名不同复核闭合取消后fallback确定请求并升级P2；复用async let；各catch先传播CancellationError并在fallback前检查取消
 - 跨端结论：纯TV取消语义P2；真实慢请求频率未验证
 - 最小修改方向 / 裁决：各catch先传播`CancellationError`，阶段之间检查取消；只有确认两项独立且产品需要降低首载延迟时才复用`async let`，不把并行化作为关闭取消缺陷的必要条件。
+- 修复状态：部分修复（2026-08-18）。人物详情 `loadDetails()` 改 `async throws` 传播 `CancellationError`，`loadInitialData()` 先 `try? await loadDetails()` 再 `guard !Task.isCancelled` 才启动分页；`MediaPreloader.recognizeTmdb()` 传播取消，识别被取消时预加载提前结束，不再启动分季/订阅 fallback 补查。
+- 用户决定：SystemView 的 `loadSystemInfo()→loadSites()` 链保留不改；`loadInitialData` 维持串行（注释已改为说明刻意串行），不并行化。
+- 验证：tvOS Simulator 构建通过；TmdbRecognitionPositiveIDTests / MediaInfoCollectionBehaviorTests / DynamicSourceBehaviorTests 共 57 项 0 失败。
 
 </details>
 
 <details>
-<summary>F-145 · P2 · 已确认 · 下载器选择无法恢复初始省略状态</summary>
+<summary>F-145 · P2 · 已修复（2026-08-18） · 下载器选择无法恢复初始省略状态</summary>
 
 - 审查单元与位置：V016→G05；AddDownload 下载器 Picker 与 Optional 请求字段
 - 触发路径：打开添加下载Sheet时保留初始nil，随后选择任一下载器，又希望改回后端默认后提交。
@@ -1565,6 +1572,9 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：既有双审确认；G05主审与独立复核均闭合nil→选择→无法回nil、请求省略语义及仓内“自动”空项反证；在现有options前置“自动”空tag，复用Binding；不与F-168合并
 - 跨端结论：TV表单可逆性缺陷已确认；具体默认文案未验证
 - 最小修改方向 / 裁决：复用现有机制做局部收敛；具体边界以发现台账为准。
+- 修复状态：已完成（2026-08-18）。下载器 options 前置“自动”空项（与保存路径同款），选中后可在同一 Sheet 改回自动，请求体恢复省略 `downloader`。
+- 同类排查：全仓 SheetPicker 使用点均已核对，其余表单（SubscribeSheet/ReorganizeSheet）已有空项，无同类问题。
+- 验证：新增 AddDownloadRequestOmissionTests 定向回归（初始省略→选中携带→选回自动恢复省略），共 5 项 0 失败。
 
 </details>
 
@@ -1582,7 +1592,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-155 · P2 · 已确认 · 第 6 页已请求却被轮询扫描上限丢弃</summary>
+<summary>F-155 · P2 · 已修复（2026-08-18） · 第 6 页已请求却被轮询扫描上限丢弃</summary>
 
 - 审查单元与位置：V022-C→I009；TransferHistory轮询多页扫描上限
 - 触发路径：距离当前首个已知记录有101条以上新记录。
@@ -1591,11 +1601,13 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：既有双审闭合页6丢弃；I009主审/独立复核确认前100项提交后下一轮无法恢复；扫描未找到已知边界时不提交前缀/推进游标，回退现有refresh
 - 跨端结论：TV历史漏记录已确认；一次101+新增频率未验证
 - 最小修改方向 / 裁决：扫描达到上限但尚未找到已知边界时不得提交不完整前缀或推进游标；优先回退复用现有Paginator顺序refresh/reset路径，单纯“不请求page6”不足以修复漏项。
+- 修复状态：已完成（2026-08-18）。`fetchLatest()` 扫满 5 页仍未遇已知边界时不再提交前缀/推进游标，直接回退 `performAuthoritativeRefresh()` 把游标重置回第 1 页。
+- 验证：新增 `testPollingScanLimitFallbackRefreshesInsteadOfDroppingTail`；还原修复后复现提交前 100 条、101-120 永久缺失，修复后 TransferHistoryViewModelTests 22/22 通过。
 
 </details>
 
 <details>
-<summary>F-157 · P2 · 已确认 · settings 失败被永久记作版本检查完成</summary>
+<summary>F-157 · P2 · 已修复（2026-08-21） · settings 失败被永久记作版本检查完成</summary>
 
 - 审查单元与位置：V023→W020-A/W020-C/G06；settings加载与后端版本检查终态
 - 触发路径：会话K冷启动`/system/global`瞬时失败或任务取消；网络恢复后应用进前台并成功加载settings。
@@ -1604,11 +1616,12 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：既有多审闭合不可恢复状态机；G06 两票确认首次瞬时失败后前台固定不重判且无显式retry；只有有效版本/明确不兼容才写terminal key；unknown/failure保持可重试
 - 跨端结论：稳定错误终态已确认；真实启动瞬时失败频率未验证
 - 最小修改方向 / 裁决：transport失败/取消不标记成功检查，取消直接退出；前台成功在当前session key下复用既有版本判定并清旧警告。若保留失败提示，只做per-key失败episode去重，不建状态框架。
+- 修复状态：失败/取消不占terminal key；前台被动成功只收敛仍存在的warning，不重新发布用户已关闭的同key低版本warning。两条生命周期回归及相关定向47/47通过。
 
 </details>
 
 <details>
-<summary>F-158 · P2 · 已确认 · 状态页生成无操作焦点目标</summary>
+<summary>F-158 · P2 · 用户跳过（2026-08-20） · 状态页生成无操作焦点目标</summary>
 
 - 审查单元与位置：C001→W009/W011/W018-B/W019→G05；无操作焦点目标
 - 触发路径：任一生产页面显示无action EmptyDataView；或人物详情进入加载、永久无简介、空作品状态。
@@ -1621,7 +1634,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-160 · P2 · 已确认 · ActionRow 空 Button 与 raw 手势语义分裂</summary>
+<summary>F-160 · P2 · 用户跳过（2026-08-20） · ActionRow 空 Button 与 raw 手势语义分裂</summary>
 
 - 审查单元与位置：C003→G10；ActionRow主Button与实际手势语义
 - 触发路径：Download主行未传tap/longPress，或VoiceOver用户激活/长按Transfer主行。
@@ -1634,7 +1647,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-161 · P2 · 已确认 · 透明隐藏 action 未退出 focus/accessibility 树</summary>
+<summary>F-161 · P2 · 用户跳过（2026-08-20） · 透明隐藏 action 未退出 focus/accessibility 树</summary>
 
 - 审查单元与位置：C003→W020-B/G09；非活动UI的focus/accessibility门禁
 - 触发路径：焦点位于上一行右侧action列后向下移动，或VoiceOver遍历非活动行。
@@ -1647,7 +1660,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-162 · P2 · 已确认 · Sheet 长错误被强制压成一行</summary>
+<summary>F-162 · P2 · 已修复（2026-08-20） · Sheet 长错误被强制压成一行</summary>
 
 - 审查单元与位置：C004→W018-B/W020-C/G09；Sheet与System静态行长反馈完整性
 - 触发路径：后端返回较长错误，或Reorganize一次操作产生多项失败并以`；`拼接。
@@ -1660,7 +1673,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-165 · P2 · 已确认 · 部分 Sheet 缺少明显的内容内退出方式</summary>
+<summary>F-165 · P3 · 用户降级（2026-08-20） · 部分 Sheet 缺少明显的内容内退出方式</summary>
 
 - 审查单元与位置：C004→W018-B/W019/W020-C/G09；Sheet内容内显式退出可发现性
 - 触发路径：用户进入Fork但不想创建订阅，或打开整理预览后只想退出。
@@ -1673,7 +1686,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-168 · P2 · 已确认 · SheetPicker 未把当前选择交给 focus/accessibility</summary>
+<summary>F-168 · P2 · 用户跳过（2026-08-20） · SheetPicker 未把当前选择交给 focus/accessibility</summary>
 
 - 审查单元与位置：C006→W020-E/F→G05；自建选择页上下文、选中语义与初始焦点
 - 触发路径：任一Picker打开嵌套详情；最强反例为Subscribe指定季已选100，选项为“全部”加0...100。
@@ -1686,7 +1699,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-170 · P2 · 已确认 · 选项域变化后隐藏的多选值无法移除</summary>
+<summary>F-170 · P2 · 已修复（2026-08-20） · 选项域变化后隐藏的多选值无法移除</summary>
 
 - 审查单元与位置：C008→W014/W020-D/E；选项域外已选值
 - 触发路径：既有订阅包含后来停用的站点、被删除的规则组，或普通订阅用户打开含既有规则组的订阅。
@@ -1699,7 +1712,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-171 · P2 · 已确认 · Canvas 徽章元数据没有可访问性替代</summary>
+<summary>F-171 · P2 · 用户跳过（2026-08-20） · Canvas 徽章元数据没有可访问性替代</summary>
 
 - 审查单元与位置：C009-A→I010→G03；MediaCard徽章元数据可访问性
 - 触发路径：任一卡片显示上述徽章，VoiceOver用户浏览整卡。
@@ -1712,7 +1725,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-174 · P2 · 已确认 · 无 owner 的全局 sourceFrame 被另一详情消费</summary>
+<summary>F-174 · P2 · 用户跳过（2026-08-20） · 无 owner 的全局 sourceFrame 被另一详情消费</summary>
 
 - 审查单元与位置：C009-C→W006-C→I010→G03；MediaCard详情转场源owner
 - 触发路径：Home订阅卡A主点击先写frame但只开编辑Sheet；关闭后长按卡B选详情，B入口不写/清frame且未预加载。
@@ -1725,7 +1738,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-175 · P2 · 已确认 · 人物卡主操作没有建立整卡控制语义</summary>
+<summary>F-175 · P2 · 用户跳过（2026-08-20） · 人物卡主操作没有建立整卡控制语义</summary>
 
 - 审查单元与位置：C010→I011/I010；自定义卡片主操作可访问性
 - 触发路径：VoiceOver用户浏览/激活人物卡；普通遥控器Select可工作。
@@ -1738,7 +1751,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-176 · P2 · 已确认 · 详情横向行失焦会无条件请求下一页</summary>
+<summary>F-176 · P2 · 已修复（2026-08-20） · 详情横向行失焦会无条件请求下一页</summary>
 
 - 审查单元与位置：C010→G04；详情横向行焦点分页
 - 触发路径：焦点从任一行移走或激活卡片push详情，optional FocusState从ID变nil且Paginator仍hasMore。
@@ -1751,7 +1764,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-179 · P2 · 已确认 · 资源卡展示字符串未统一规范空白</summary>
+<summary>F-179 · P2 · 已修复（2026-08-20） · 资源卡展示字符串未统一规范空白</summary>
 
 - 审查单元与位置：C017→G05；资源卡/筛选展示字符串规范化
 - 触发路径：资源能够完整解码且meta+torrent均存在，但任一可选展示字段为`""`或纯空白；同时可能存在有效后备标题/描述。
@@ -1764,7 +1777,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-180 · P2 · 已确认 · 详情加载失败被静默伪装成可用 partial 页面</summary>
+<summary>F-180 · P2 · 已修复（2026-08-20） · 详情加载失败被静默伪装成可用 partial 页面</summary>
 
 - 审查单元与位置：W007→I013；详情失败终态呈现
 - 触发路径：详情请求连续三次异常或连续返回无有效详情；`fullDetail`保持nil而`isDetailFailed=true`。
@@ -1777,7 +1790,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-182 · P2 · 已确认 · 前台恢复被旧负订阅状态阻止发现远端新增</summary>
+<summary>F-182 · P2 · 用户跳过（2026-08-20） · 前台恢复被旧负订阅状态阻止发现远端新增</summary>
 
 - 审查单元与位置：W008-B→I008；详情前台及60秒订阅刷新
 - 触发路径：电影本地`isSubscribed=false`或电视剧`subscribedSeasons`为空；页面存活期间Web、其他设备或后端新建订阅；TV回到前台。
@@ -1790,7 +1803,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-185 · P2 · 已确认 · 人物与季详情 Sheet 无法到达长文本尾部</summary>
+<summary>F-185 · P2 · 用户跳过（2026-08-20） · 人物与季详情 Sheet 无法到达长文本尾部</summary>
 
 - 审查单元与位置：W009→W013-C→W015/W018-B/W019/W020-B；模态Sheet长文本/路径可达性
 - 触发路径：人物返回足够长但合法的biography并打开“完整简介”，或季详情返回足够长的overview。
@@ -1803,7 +1816,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-186 · P2 · 已确认 · 资源促销筛选压扁后端枚举</summary>
+<summary>F-186 · P2 · 已修复（2026-08-20） · 资源促销筛选压扁后端枚举</summary>
 
 - 审查单元与位置：W011；资源促销筛选枚举
 - 触发路径：资源使用当前后端支持的30%、70%、25%、75%、4X或2X 50%等非简化促销值，用户打开或应用促销筛选。
@@ -1816,7 +1829,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-187 · P2 · 已确认 · 资源错误或成功空终态没有同页面重试</summary>
+<summary>F-187 · P2 · 用户跳过（2026-08-20） · 资源错误或成功空终态没有同页面重试</summary>
 
 - 审查单元与位置：W011；资源空/错终态恢复
 - 触发路径：资源搜索收到业务error且最终无结果、流与同步fallback均失败，或合法完成但返回空数组。
@@ -1829,7 +1842,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-194 · P2 · 已确认 · Fork 确认页隐藏立即持久化的关键搜索规则</summary>
+<summary>F-194 · P2 · 用户跳过（2026-08-20） · Fork 确认页隐藏立即持久化的关键搜索规则</summary>
 
 - 审查单元与位置：W015；Fork最终确认字段完整性
 - 触发路径：分享携带非空 `keyword` 或含多行规则的 `custom_words`，用户在 TV 确认页完成 Fork。
@@ -1842,7 +1855,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-195 · P2 · 已确认 · `custom_words` 多规则合同被降成单行编辑</summary>
+<summary>F-195 · P2 · 用户跳过（2026-08-20） · `custom_words` 多规则合同被降成单行编辑</summary>
 
 - 审查单元与位置：W014；SubscribeSheet custom_words多行编辑合同
 - 触发路径：用户需要创建或编辑两条以上自定义识别规则，例如以 LF 分隔的两行映射/过滤表达式。
@@ -1855,7 +1868,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-198 · P2 · 已确认 · 不可获取的剧集统计被显示为 0</summary>
+<summary>F-198 · P2 · 已修复（2026-08-21） · 不可获取的剧集统计被显示为 0</summary>
 
 - 审查单元与位置：W016→G09；Status剧集统计nil展示
 - 触发路径：所有已配置媒体服务都不提供剧集总数，例如当前UGREEN实现返回None，同时电影/电视剧数量正常可用。
@@ -2690,7 +2703,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-159 · P3 · 已确认 · 五秒错误通知没有可访问性主动播报</summary>
+<summary>F-159 · P3 · 用户跳过（2026-08-20） · 五秒错误通知没有可访问性主动播报</summary>
 
 - 审查单元与位置：C002；全局短暂错误通知的可访问性传达
 - 触发路径：VoiceOver用户遇到登录、删除、订阅等错误，producer调用全局toast并清除自身error。
@@ -3274,7 +3287,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-181 · P2 · 未验证 · Hero 到内容页切换依赖两个 FocusState 的回调顺序</summary>
+<summary>F-181 · P2 · 用户跳过（2026-08-20） · Hero 到内容页切换依赖两个 FocusState 的回调顺序</summary>
 
 - 审查单元与位置：W008-A→I013；Hero到内容页焦点切换
 - 触发路径：只监听Hero并即时采样Content，若Hero先false、Content后true会漏置showContentPage
