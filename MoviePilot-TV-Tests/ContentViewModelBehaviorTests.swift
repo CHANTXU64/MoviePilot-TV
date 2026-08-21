@@ -299,6 +299,15 @@ final class ContentViewModelBehaviorTests: XCTestCase {
       viewModel?.backendVersionWarning?.requiredVersion,
       AppVersionInfo.compatibleMoviePilotVersion
     )
+
+    // 用户已确认继续使用后，同一会话的前台被动刷新不得重新发布同一低版本警告。
+    viewModel?.backendVersionWarning = nil
+    service.settings = nil
+    NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+    try await waitUntil("expected dismissed backend warning to stay dismissed") {
+      service.settings?.BACKEND_VERSION == "v2.14.9"
+    }
+    XCTAssertNil(viewModel?.backendVersionWarning)
   }
 
   func testTransientSettingsFailureWarningClearsAfterForegroundRefresh() async throws {

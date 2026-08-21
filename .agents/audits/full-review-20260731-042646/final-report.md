@@ -1503,7 +1503,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-139 · P2 · 已修复（2026-08-18） · 推荐成功空 shelf 无恢复入口</summary>
+<summary>F-139 · P2 · 已修复（2026-08-21） · 推荐成功空 shelf 无恢复入口</summary>
 
 - 审查单元与位置：V010→V012-A→G01/G04；推荐/详情分页成功空终态与页面再激活
 - 触发路径：当前 shelf 首次请求成功返回 `[]`，Paginator 与页面实例被 Tab 保留；稍后服务已有数据或空响应只是瞬时结果，用户离开并再次激活推荐 Tab但不切换 shelf。
@@ -1512,6 +1512,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：既有双审确认；G01纠偏与G04独立复核再次闭合retained激活链并双票升P2；仅在激活边沿对成功空terminal调用现有refresh
 - 跨端结论：条件性恢复P2；真实tvOS实例保留与发生频率未运行验证
 - 最小修改方向 / 裁决：复用仓内 `SystemView(isSelected:)` 的激活边沿模式，只在 false→true 且当前同 shelf 满足 `items.isEmpty && !isLoading && !hasError && !hasMore` 时调用现有 `Paginator.refresh()` 一次；非空、错误、加载中与切 shelf 不触发，不改 Paginator。
+- 修复状态：Recommend已接入ContentView的Tab选中状态，并在active task调用现有成功空恢复；详情/合集保留既有恢复。View接线、成功空及相关定向回归47/47通过。
 
 </details>
 
@@ -1606,7 +1607,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-157 · P2 · 已修复（2026-08-19） · settings 失败被永久记作版本检查完成</summary>
+<summary>F-157 · P2 · 已修复（2026-08-21） · settings 失败被永久记作版本检查完成</summary>
 
 - 审查单元与位置：V023→W020-A/W020-C/G06；settings加载与后端版本检查终态
 - 触发路径：会话K冷启动`/system/global`瞬时失败或任务取消；网络恢复后应用进前台并成功加载settings。
@@ -1615,6 +1616,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：既有多审闭合不可恢复状态机；G06 两票确认首次瞬时失败后前台固定不重判且无显式retry；只有有效版本/明确不兼容才写terminal key；unknown/failure保持可重试
 - 跨端结论：稳定错误终态已确认；真实启动瞬时失败频率未验证
 - 最小修改方向 / 裁决：transport失败/取消不标记成功检查，取消直接退出；前台成功在当前session key下复用既有版本判定并清旧警告。若保留失败提示，只做per-key失败episode去重，不建状态框架。
+- 修复状态：失败/取消不占terminal key；前台被动成功只收敛仍存在的warning，不重新发布用户已关闭的同key低版本warning。两条生命周期回归及相关定向47/47通过。
 
 </details>
 

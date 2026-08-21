@@ -152,7 +152,7 @@
 | F-136 | 未验证 | P3 | V009-E/F | Share 默认排序状态与 v2.15.1 Web | TV 初始/切源均用 count，目标版本 Web 默认 time | verify_a001_h 闭合两处 literal、首路径与版本特定 Web/test | review_a001_j 两次独立确认版本差异，但 TV 产品默认意图缺失 | 条件性默认行为未验证；产品确认 Web 对齐或 TV 特例时收敛 |
 | F-137 | 已修复 | P2 | V011-A/B→G04 | `fuzzyMatchScore` 类别带与 top-12 | 无界长度罚分穿透prefix/contains/subsequence/nonmatch分档并可把真实匹配挤出最终top-12 | 既有三票闭合反例；全新G04 clean-room复核确认四类交叉与最终截断并升级P2 | 保持Int评分，类别带宽互不重叠（全等1000/前缀700/包含400/顺序100-299）且长度罚分封顶；顺序匹配采用fzf风格词首/连续加分 | 条件性搜索结果缺失P2；真实长标题竞争频率未验证 |
 | F-138 | 已确认 | P1 | V010→V011-B/D→V012-A→G01/G04 | 共享 `MediaInfo.id`、缓存任务与 first-wins 去重 | title-only/collection等对象可碰撞丢项，并把列表、导航、pin及preload task绑定到错误owner | 既有三代理确认机制；G01纠偏与G04独立复核从中央ID到缓存/导航双票升P1 | `ff4ea14`在无任何现有媒体ID时追加trim后的标题兜底，保留0/空串及分享快路径 | 依赖解析、Simulator clean build、本地451/451测试及独立复审通过；真实后端兼容套件未运行 |
-| F-139 | 已修复 | P2 | V010→V012-A→G01/G04 | 推荐/详情分页成功空终态与页面再激活 | retained shelf、详情或合集首批成功空后，再激活不刷新且无恢复入口 | 既有双审确认；G01纠偏与G04独立复核再次闭合retained激活链并双票升P2 | 三处均按“重新激活且成功空终态”对现有 Paginator 调一次 refresh；不动 Paginator 状态机 | 条件性恢复P2；真实tvOS实例保留与发生频率未运行验证 |
+| F-139 | 已修复（2026-08-21） | P2 | V010→V012-A→G01/G04 | 推荐/详情分页成功空终态与页面再激活 | retained shelf、详情或合集首批成功空后，再激活不刷新且无恢复入口 | 既有双审确认；G01纠偏与G04独立复核再次闭合retained激活链并双票升P2 | Recommend接入Tab选中边沿并调用现有成功空恢复；详情/合集保留既有恢复，不动Paginator状态机 | View接线测试、SuccessEmpty回归及相关定向47/47通过；真机可见表现未验证 |
 | F-140 | 已确认 | P3 | V011-B | 搜索提交 query 与本地最佳结果评分 | 空白未统一规范化，精确标题可退化并被扩展标题反超 | verify_a001_h 以 `Hamilton ` 闭合后端 trim→TV 原字符串评分→top-12 链 | review_a001_j 独立复算 exact `-1`/extended `484`、换行与纯空白请求路径 | 搜索 canonical query 缺陷已确认；真实输入频率未验证 |
 | F-141 | 已确认 | P3 | V011-B | 搜索年份提取与目标版本后端标题解析 | 首个任意四位数字片名被 TV 误作年份，括号移除又残留空壳 | verify_a001_h 以 `1917 2019` 闭合后端 title/year 与 TV score 分裂 | review_a001_j 独立复算数字片名、括号残留与版本特定词法边界 | 条件性搜索解析 P3已确认；当前部署未验证 |
 | F-142 | 已修复（2026-08-18） | P2 | V011-F 复核/裁决 | `SharedMediaFetcher.currentFetchTask` 合流/退休 | 完成 task 的 handle 未清，另一 waiter第二轮重放后返回非终止空批 | review_a001_j 闭合双 waiter恢复顺序与第3页目标类型反例 | review_a001_h 独立状态机确认0→2后重放2→2、actor调度可达及F-034/F-039独立 | 已修：task 内部按 identity 退休句柄；定向回归 1/1 通过 |
@@ -170,7 +170,7 @@
 | F-154 | 已驳回 | P3 | V022-C→I009/G09 | TransferHistory轮询插入余数与loadMore游标 | 稳定排序前提下整页推进、余数重叠去重的算术自洽，未形成独立跳页缺陷 | 早期双审反例被G09两名代理重新推演反驳；1/19/20/21项矩阵仍缺测试 | 不改算法；仅补插入组合测试，不稳定排序统一归F-232 | 当前独立缺陷驳回；高频真实交错保留P3测试边界 |
 | F-155 | 已修复（2026-08-18） | P2 | V022-C→I009 | TransferHistory轮询多页扫描上限 | 第6页已请求成功却在处理前退出，101st新项被永久越过 | 既有双审闭合页6丢弃；I009主审/独立复核确认前100项提交后下一轮无法恢复 | 扫描未找到已知边界时不提交前缀/推进游标，回退现有refresh | 已修：扫满上限未遇边界时回退权威刷新；回归 22/22 通过 |
 | F-156 | 已修复（2026-08-18） | P1 | V022-D→W018-A/G09 | TransferHistory旧动作与选择状态owner | 选择、删除、AI、整理只持有可复用Int ID；旧UI/alert可对同ID新记录执行破坏性动作 | 既有双审闭合迟到收尾清新选择；G09两名代理结合F-204确认后端按ID重查当前行的错对象mutation链 | 与F-152/F-204共用session/query和对象签名快照；不建任务框架 | 已修：核心交互/选择入口由`fc0cefa`冻结，整理Sheet迟到收尾改按intent id移除本次；回归 23/23 通过 |
-| F-157 | 已修复（2026-08-19） | P2 | V023→W020-A/W020-C/G06 | settings加载与后端版本检查终态 | 失败/取消被永久记成检查完成；同owner恢复成功仍不清旧兼容警告 | 既有多审闭合不可恢复状态机；G06 两票确认首次瞬时失败后前台固定不重判且无显式retry | 只有有效版本/明确不兼容才写terminal key；unknown/failure保持可重试 | 已修：失败不再占用检查终态，前台成功统一复用版本判定并清旧警告；回归 9/9 通过 |
+| F-157 | 已修复（2026-08-21） | P2 | V023→W020-A/W020-C/G06 | settings加载与后端版本检查终态 | 失败/取消被永久记成检查完成；同owner恢复成功仍不清旧兼容警告 | 既有多审闭合不可恢复状态机；G06 两票确认首次瞬时失败后前台固定不重判且无显式retry | 只有有效版本/明确不兼容才写terminal key；unknown/failure保持可重试 | 已修：失败不占检查终态；前台成功只收敛仍存在的警告，不重建已关闭的同key低版本警告；相关定向47/47通过 |
 | F-158 | 用户跳过（2026-08-20） | P2 | C001→W009/W011/W018-B/W019→G05 | 无操作焦点目标 | EmptyDataView无action、人物/整理空Button、资源重定向器及历史/下载空动作Button生成无操作焦点节点 | 既有多审确认；G05两名代理将P2锚定在DownloadTask主行稳定可按但无动作，其他透明sink的实际落焦仍属运行边界 | 有主动作放入原生Button action；无主动作删除空Button/focus sink | Download主行静态P2；其他Focus Engine/VoiceOver命中频率未验证 |
 | F-159 | 用户跳过（2026-08-20） | P3 | C002 | 全局短暂错误通知的可访问性传达 | 五秒toast无主动announcement，唯一错误反馈可被VoiceOver用户错过 | review_a001_h主审与review_a001_j独立复核确认5文件6个生产show、根唯一presenter、全仓无announcement且tvOS17原生API可用 | G08及调用页回溯逐次type+message播报、同文案重发与单一元素语义 | 实际VoiceOver/盲文漏传频率未验证 |
 | F-160 | 用户跳过（2026-08-20） | P2 | C003→G10 | ActionRow主Button与实际手势语义 | Transfer核心选择只挂simultaneous TapGesture，语义Button action为空；辅助功能默认激活可无动作 | 既有双审确认结构；G10主审/独立复核区分核心Transfer操作与无主动作Download行并确认P2 | 有tap时直接放入Button action并删重复TapGesture；无主操作改非Button | 静态控制语义缺陷已确认；真实VoiceOver路由仍待运行 |
@@ -2440,7 +2440,7 @@
 
 ### F-139：推荐成功空 shelf 无恢复入口
 
-- 状态：已修复（2026-08-18）
+- 状态：已修复（2026-08-21）
 - 严重度：条件性 P2
 - 位置：`MoviePilot-TV/ViewModels/RecommendViewModel.swift` 的首批加载/页面激活与通用 Paginator 成功空终态
 - 触发路径：当前 shelf 首次请求成功返回 `[]`，Paginator 与页面实例被 Tab 保留；稍后服务已有数据或空响应只是瞬时结果，用户离开并再次激活推荐 Tab但不切换 shelf。
@@ -2453,8 +2453,8 @@
 - V012-A 同根扩展：详情推荐/相似等三个 Paginator 只在首次 `applyFullDetail` 启动；返回 retained NavigationStack 页面时 `hasAppliedFullDetail` 阻止重载，成功空后同样无行、提示或重试。review_a001_j 独立确认；复用页面再激活的一次性成功空 refresh 方向，不改 Paginator。
 - V014 同根扩展：合集 `hasLoaded` 在首次请求前置 true，成功 `[]` 后 Paginator进入无错终态；retained页面重新执行 task仍被 hasLoaded拦截，无 refresh/retry入口。复用现有页面激活边沿的一次成功空 refresh，非空/错误单独由 F-033治理。
 - G01/G04升级裁决：rounda_g01_recheck与rounda_g02_third分别确认Recommend同shelf激活只刷新source descriptor、详情受`hasAppliedFullDetail`阻挡、合集受`hasLoaded`阻挡；三者在retained页面成功空后均无恢复入口。两票升级P2；仅在新的激活边沿对“成功空且terminal”调用现有refresh，非空/错误/切换不触发。
-- 处置：三处接入“重新激活”事件——推荐 `refreshSources` 二次激活后对成功空 shelf 调 `paginator.refresh()`；合集 `loadInitialData` 在 `hasLoaded` 后对成功空调 `refresh()`；详情新增 `refreshSuccessEmptySections()`，由 `MediaDetailView.task` 每次出现时对推荐/相似/演员三个成功空 Paginator 各重试一次。`CollectionDetailViewModel` 增加 `apiService` 注入参数（默认 `.shared`，生产行为不变）。
-- 验证：新增 `SuccessEmptyReactivationTests` 三条回归（推荐 shelf、合集、详情三区域），tvOS Simulator 3/3 通过。
+- 处置：推荐由 `ContentView` 传入 `selectedTab == .recommend`，`RecommendView.task(id: isSelected)` 仅在激活时调用 `refreshSources()`；首次激活保留现有加载，后续 false→true 才由 ViewModel 对成功空 shelf 调 `paginator.refresh()`。合集 `loadInitialData` 与详情 `refreshSuccessEmptySections()` 保留既有成功空恢复，不改 Paginator。
+- 验证：`SuccessEmptyReactivationTests` 覆盖推荐 shelf、合集和详情三区域；`SystemViewDefaultStyleTests` 锁定 Content→Recommend→active task 接线；相关定向 tvOS Simulator 47/47 通过。
 - 未验证：tvOS Tab 的实际实例保留和可见表现、瞬时成功空发生频率；不影响静态恢复缺口。
 
 ### F-140：尾随空白让精确搜索标题退化为不匹配
@@ -2748,7 +2748,7 @@
 
 ### F-157：settings 失败被永久记作版本检查完成
 
-- 状态：已修复（2026-08-19）
+- 状态：已修复（2026-08-21）
 - 严重度：P2；G06 由 P3 升级
 - 位置：ContentViewModel settings加载、backendVersionCheckKey、前台刷新与版本警告状态
 - 触发路径：会话K冷启动`/system/global`瞬时失败或任务取消；网络恢复后应用进前台并成功加载settings。
@@ -2763,7 +2763,7 @@
 - G06联合裁决：两票确认首次settings瞬时失败/取消会写terminal key与unknown警告，而前台恢复固定`checkBackendVersion:false`且无显式retry，形成同session不可恢复的高强度错误终态，升P2。只有有效版本或明确不兼容响应才应占用terminal key；unknown/failure保持可重试。
 - 未验证：真实启动瞬时失败/取消频率与警告可见时长；未运行生命周期测试。
 
-- 修复（2026-08-19）：transport 失败/取消不再写入 `backendVersionCheckKey`（不占用“已检查”终态），取消仍直接退出；settings 加载成功时无论显式检查还是前台刷新，都复用版本判定更新/清除 `backendVersionWarning`，显式检查才写 key。新增 `testTransientSettingsFailureWarningClearsAfterForegroundRefresh` 回归，ContentViewModelBehaviorTests 9/9 通过。
+- 修复（2026-08-21）：transport 失败/取消不写入 `backendVersionCheckKey`，取消直接退出；显式检查成功继续发布版本判定并写 key，前台被动刷新只在当前 warning 仍存在时更新或清除，因此可收敛 unknown/failure，却不会重建用户已关闭的同key低版本警告。回归同时覆盖瞬时失败→前台兼容成功清除，以及低版本→dismiss→前台不重现；相关定向 tvOS Simulator 47/47 通过。
 
 ### F-158：状态页生成无操作焦点目标
 

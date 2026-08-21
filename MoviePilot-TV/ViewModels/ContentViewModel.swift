@@ -141,7 +141,11 @@ class ContentViewModel: ObservableObject {
     do {
       let settings = try await apiService.fetchSettings()
       guard currentBackendVersionCheckKey() == checkKey else { return }
-      backendVersionWarning = Self.backendVersionWarning(for: settings.BACKEND_VERSION)
+      let shouldUpdateWarning =
+        checkBackendVersion ? backendVersionCheckKey != checkKey : backendVersionWarning != nil
+      if shouldUpdateWarning {
+        backendVersionWarning = Self.backendVersionWarning(for: settings.BACKEND_VERSION)
+      }
       if checkBackendVersion {
         backendVersionCheckKey = checkKey
       }
