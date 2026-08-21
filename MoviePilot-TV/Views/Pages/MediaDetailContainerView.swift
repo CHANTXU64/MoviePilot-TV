@@ -14,8 +14,11 @@ private struct MediaLoadingView: View {
   /// 如果数据已预加载完毕，跳过飞入动画
   let isAlreadyLoaded: Bool
 
-  private let posterWidth: CGFloat = 460
-  private let posterHeight: CGFloat = 690
+  private final class LoadingPosterLifetime {
+    var hasDisappeared = false
+  }
+
+  @State private var loadingPosterLifetime = LoadingPosterLifetime()
 
   /// 海报缩放比
   @State private var posterScale: CGFloat = 1.0
@@ -60,10 +63,16 @@ private struct MediaLoadingView: View {
                   .foregroundStyle(.gray.opacity(0.5))
               )
           }
-          .downsampling(size: CGSize(width: posterWidth, height: posterHeight))
+          .onSuccess { _ in
+            discardLoadingPosterIfAbandoned()
+          }
+          .setProcessor(MediaDetailLoadingPoster.processor)
           .resizable()
           .aspectRatio(contentMode: .fill)
-          .frame(width: posterWidth, height: posterHeight)
+          .frame(
+            width: MediaDetailLoadingPoster.size.width,
+            height: MediaDetailLoadingPoster.size.height
+          )
           .clipShape(RoundedRectangle(cornerRadius: 20))
           .shadow(color: .black.opacity(0.8), radius: 30, y: 15)
           .scaleEffect(posterScale)
@@ -117,6 +126,7 @@ private struct MediaLoadingView: View {
       }
     }
     .onAppear {
+      loadingPosterLifetime.hasDisappeared = false
       guard !hasAnimated else { return }
       hasAnimated = true
 
@@ -143,6 +153,18 @@ private struct MediaLoadingView: View {
         }
       }
     }
+    .onDisappear {
+      loadingPosterLifetime.hasDisappeared = true
+      discardLoadingPosterIfAbandoned()
+    }
+  }
+
+  private func discardLoadingPosterIfAbandoned() {
+    guard loadingPosterLifetime.hasDisappeared, let posterUrl else { return }
+    MediaDetailLoadingPoster.removeFromMemory(
+      for: posterUrl,
+      cacheKey: APIService.shared.imageSource(for: posterUrl).cacheKey
+    )
   }
 }
 
@@ -311,7 +333,8 @@ private struct MediaDetailContainerContent: View {
         navigationOwnerID: navigationOwnerID,
         navigationDepth: navigationDepth,
         pageImageCleanupTarget: pageImageCleanupTarget,
-        returnTargetImageCleanupTarget: returnTargetImageCleanupTarget
+        returnTargetImageCleanupTarget: returnTargetImageCleanupTarget,
+        loadingPosterURL: loadingPosterURL
       )
       // 加载未完成时隐藏详情，防止 NavigationStack 过渡动画透出内容
       .opacity(isReady ? 1 : 0)
@@ -344,7 +367,10 @@ private struct MediaDetailContainerContent: View {
     }
     .task(id: tmdbPreloadTarget?.id) {
       guard let target = tmdbPreloadTarget else { return }
-      MediaPreloader.shared.preloadIfNeeded(for: target)
+      MediaPreloader.shared.preloadAuxiliary(
+        for: target,
+        owner: navigationOwnerID
+      )
     }
   }
 }

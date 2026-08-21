@@ -673,6 +673,10 @@ final class DynamicSourceBehaviorTests: XCTestCase {
 
     XCTAssertTrue(
       try source("MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift")
+        .contains("preloadAuxiliary(")
+    )
+    XCTAssertFalse(
+      try source("MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift")
         .contains("preloadIfNeeded(for:")
     )
   }

@@ -108,6 +108,27 @@ enum MediaDetailBackgroundImage {
   }
 }
 
+enum MediaDetailLoadingPoster {
+  nonisolated static let size = CGSize(width: 460, height: 690)
+
+  nonisolated static var processor: DownsamplingImageProcessor {
+    DownsamplingImageProcessor(size: size)
+  }
+
+  nonisolated static func removeFromMemory(
+    for url: URL,
+    cacheKey: String? = nil,
+    cache: ImageCache = .default
+  ) {
+    cache.removeImage(
+      forKey: cacheKey ?? url.cacheKey,
+      processorIdentifier: processor.identifier,
+      fromMemory: true,
+      fromDisk: false
+    )
+  }
+}
+
 struct PageImageSnapshot: Equatable {
   let mediaPosterURLs: Set<URL>
   let personImageURLs: Set<URL>
@@ -235,6 +256,14 @@ class MediaPreloadTask: ObservableObject {
     activeImageDownload?.cancel()
     activeImageDownload = nil
     cancelImageWarm()
+  }
+
+  var imageRetrieveGeneration: UInt {
+    imageRetrieveState.generation
+  }
+
+  func shouldDiscardRetrievedBackground(generation: UInt) -> Bool {
+    imageRetrieveState.shouldDiscardResult(generation: generation)
   }
 
   /// 当前媒体即将真正显示时，停止候选图清理并将进行中的背景结果交给前台复用。
@@ -372,6 +401,7 @@ class MediaPreloadTask: ObservableObject {
     isUsingPosterAsBackdrop: Bool
   ) async -> Bool {
     let continuationBox = ImageRetrieveContinuationBox()
+    let retrieveGeneration = imageRetrieveState.generation
     let size = UIScreen.main.bounds.size
     var options = MediaDetailBackgroundImage.heroOptions(
       for: size,
@@ -390,7 +420,7 @@ class MediaPreloadTask: ObservableObject {
           with: source,
           options: options
         ) { result in
-          if self.imageRetrieveState.shouldRemoveResultFromMemory {
+          if self.imageRetrieveState.shouldDiscardResult(generation: retrieveGeneration) {
             MediaDetailBackgroundImage.removeHeroFromMemory(
               for: url,
               size: size,
@@ -526,6 +556,13 @@ private final class ImageRetrieveContinuationBox: @unchecked Sendable {
   nonisolated(unsafe) private var hasResumed = false
   nonisolated(unsafe) private var removeResultFromMemory = false
   nonisolated(unsafe) private var ownerReleased = false
+  nonisolated(unsafe) private var retrieveGeneration: UInt = 0
+
+  nonisolated var generation: UInt {
+    lock.lock()
+    defer { lock.unlock() }
+    return retrieveGeneration
+  }
 
   nonisolated var shouldRemoveResultFromMemory: Bool {
     lock.lock()
@@ -533,10 +570,17 @@ private final class ImageRetrieveContinuationBox: @unchecked Sendable {
     return removeResultFromMemory
   }
 
+  nonisolated func shouldDiscardResult(generation: UInt) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return removeResultFromMemory || generation != retrieveGeneration
+  }
+
   nonisolated func markOwnerReleased() {
     lock.lock()
     ownerReleased = true
     removeResultFromMemory = true
+    retrieveGeneration &+= 1
     lock.unlock()
   }
 
@@ -608,6 +652,8 @@ class MediaPreloader: ObservableObject {
   private var suppressedFocusCandidateKey: String?
   /// `NavigationPath.append` 到目的页 `onAppear` 之间的临时 owner。
   private var pendingMediaNavigations: [UUID: PendingMediaNavigation] = [:]
+  /// 详情页附带预载（如 TMDB 跳转目标），不占用焦点 candidateKey。
+  private var auxiliaryPreloads: [UUID: Set<String>] = [:]
   private static let legacyNavigationOwner = UUID()
   private var cancellables = Set<AnyCancellable>()
   private var subscriptionRefreshTask: Task<Void, Never>?
@@ -671,6 +717,29 @@ class MediaPreloader: ObservableObject {
     guard media.shouldPreloadDetail else { return nil }
     replaceCandidate(with: media.id)
     return preload(for: media)
+  }
+
+  /// 给当前详情页附带预载，不抢走推荐页焦点候选。
+  @discardableResult
+  func preloadAuxiliary(for media: MediaInfo, owner: UUID) -> MediaPreloadTask? {
+    guard media.shouldPreloadDetail else { return nil }
+    let key = media.id
+    let previous = auxiliaryPreloads[owner] ?? []
+    auxiliaryPreloads[owner] = [key]
+    let task = preload(for: media)
+    for staleKey in previous where staleKey != key {
+      guard navigationOwners[staleKey] == nil else { continue }
+      releaseTask(
+        forKey: staleKey,
+        fallbackMedia: cache[staleKey]?.partialMedia,
+        size: UIScreen.main.bounds.size
+      )
+    }
+    return task
+  }
+
+  func isFocusCandidate(_ key: String) -> Bool {
+    candidateKey == key
   }
 
   /// 仅供焦点停留触发的预载。刚 Pop 的同一媒体会被抑制，显式点击不受影响。
@@ -856,6 +925,7 @@ class MediaPreloader: ObservableObject {
     leavingImageSnapshot: PageImageSnapshot,
     pageImageCleanupTarget: PageImageCleanupTarget,
     returnTargetImageCleanupTarget: PageImageCleanupTarget?,
+    loadingPosterURL: URL? = nil,
     imageCache: ImageCache = .default
   ) {
     let key = media.id
@@ -867,8 +937,30 @@ class MediaPreloader: ObservableObject {
       cache: imageCache
     )
     suppressedFocusCandidateKey = key
+    removeLoadingPosterFromMemory(url: loadingPosterURL, imageCache: imageCache)
+    releaseAuxiliaryPreloads(ownedBy: owner, size: size, imageCache: imageCache)
     guard navigationOwners[key] == nil else { return }
     releaseTask(forKey: key, fallbackMedia: media, size: size, imageCache: imageCache)
+  }
+
+  func discardLoadedBackgroundIfAbandoned(
+    url: URL,
+    detail: MediaInfo,
+    usingPosterAsBackdrop: Bool,
+    isAbandoned: Bool,
+    size: CGSize,
+    imageCache: ImageCache = .default
+  ) {
+    guard isAbandoned else { return }
+    let cacheKey = apiService.imageSource(for: url).cacheKey
+    MediaDetailBackgroundImage.removeHeroFromMemory(
+      for: url,
+      size: size,
+      usingPosterAsBackdrop: usingPosterAsBackdrop,
+      cacheKey: cacheKey,
+      cache: imageCache
+    )
+    removeBackgroundTargetHeroesFromMemory(for: detail, size: size, imageCache: imageCache)
   }
 
   /// 页面快速连续 Pop 时，把尚未能处理的 URL 转发到更上一级目标。
@@ -1002,6 +1094,7 @@ class MediaPreloader: ObservableObject {
     candidateKey = nil
     navigationOwners.removeAll()
     pendingMediaNavigations.removeAll()
+    auxiliaryPreloads.removeAll()
     activePageImageOwner = nil
     activePageImageCleanupTarget = nil
     suppressedFocusCandidateKey = nil
@@ -1045,6 +1138,35 @@ class MediaPreloader: ObservableObject {
       )
     }
     candidateKey = navigationOwners[key] == nil ? key : nil
+  }
+
+  private func releaseAuxiliaryPreloads(
+    ownedBy owner: UUID,
+    size: CGSize,
+    imageCache: ImageCache
+  ) {
+    let keys = auxiliaryPreloads.removeValue(forKey: owner) ?? []
+    for key in keys {
+      guard navigationOwners[key] == nil else { continue }
+      releaseTask(
+        forKey: key,
+        fallbackMedia: cache[key]?.partialMedia,
+        size: size,
+        imageCache: imageCache
+      )
+    }
+  }
+
+  func removeLoadingPosterFromMemory(
+    url: URL?,
+    imageCache: ImageCache = .default
+  ) {
+    guard let url else { return }
+    MediaDetailLoadingPoster.removeFromMemory(
+      for: url,
+      cacheKey: apiService.imageSource(for: url).cacheKey,
+      cache: imageCache
+    )
   }
 
   private func cancelPendingMediaNavigation(_ token: UUID) {

@@ -277,7 +277,7 @@ class MediaDetailViewModel: ObservableObject {
       mediaPosterURLs: Set(
         (recommendPaginator.items + similarPaginator.items)
           .compactMap { $0.imageURLs.poster }
-      ),
+      ).union(seasonPosterURLs),
       personImageURLs: Set(
         (actorsPaginator.items + uniqueDirectors)
           .compactMap { $0.imageURLs.profile }
@@ -286,6 +286,23 @@ class MediaDetailViewModel: ObservableObject {
         && !actorsPaginator.isLoading
         && !recommendPaginator.isLoading
         && !similarPaginator.isLoading
+    )
+  }
+
+  private var seasonPosterURLs: Set<URL> {
+    let seasons: [TmdbSeason]
+    if let loaded = preloadTask?.seasonViewModel?.seasonInfos, !loaded.isEmpty {
+      seasons = loaded
+    } else {
+      seasons = detail.season_info ?? []
+    }
+    return Set(
+      seasons.compactMap { season in
+        apiService.getSeasonPosterURL(
+          posterPath: season.poster_path,
+          mediaPosterPath: detail.poster_path
+        )
+      }
     )
   }
 

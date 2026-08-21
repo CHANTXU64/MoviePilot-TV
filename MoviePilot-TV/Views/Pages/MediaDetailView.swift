@@ -1,10 +1,16 @@
 import Kingfisher
 import SwiftUI
 
+private final class MediaDetailImageLifetime {
+  var isBackgroundMounted = true
+  var didReleaseAfterPop = false
+}
+
 private struct MediaDetailBackgroundLayer: View {
   let url: URL?
   let usingPosterAsBackdrop: Bool
   var onFailure: ((URL) -> Void)? = nil
+  var onLoaded: ((URL) -> Void)? = nil
 
   @ViewBuilder
   var body: some View {
@@ -30,6 +36,9 @@ private struct MediaDetailBackgroundLayer: View {
     alignment: Alignment
   ) -> some View {
     KFImage.sessionImage(url)
+      .onSuccess { _ in
+        onLoaded?(url)
+      }
       .onFailure { _ in
         onFailure?(url)
       }
@@ -68,6 +77,7 @@ struct MediaDetailView: View {
   let navigationDepth: Int
   let pageImageCleanupTarget: PageImageCleanupTarget
   let returnTargetImageCleanupTarget: PageImageCleanupTarget?
+  let loadingPosterURL: URL?
   @State private var showSiteSelection = false
   @State private var showContentPage = false
   @State private var hasAppeared = false
@@ -75,6 +85,7 @@ struct MediaDetailView: View {
   @State private var isBackgroundMounted = true
   @State private var backgroundGeneration = 0
   @State private var didReleaseAfterPop = false
+  @State private var imageLifetime = MediaDetailImageLifetime()
 
   // 订阅相关 UI 状态（弹窗开关，纯 UI 逻辑）
   @State private var sheetSubscribe: Subscribe?
@@ -196,7 +207,8 @@ struct MediaDetailView: View {
     preloadTask: MediaPreloadTask, isContentReady: Binding<Bool>,
     navigationOwnerID: UUID, navigationDepth: Int,
     pageImageCleanupTarget: PageImageCleanupTarget,
-    returnTargetImageCleanupTarget: PageImageCleanupTarget?
+    returnTargetImageCleanupTarget: PageImageCleanupTarget?,
+    loadingPosterURL: URL?
   ) {
     let vm = MediaDetailViewModel(detail: detail)
     vm.preloadTask = preloadTask
@@ -208,10 +220,18 @@ struct MediaDetailView: View {
     self.navigationDepth = navigationDepth
     self.pageImageCleanupTarget = pageImageCleanupTarget
     self.returnTargetImageCleanupTarget = returnTargetImageCleanupTarget
+    self.loadingPosterURL = loadingPosterURL
   }
 
   static func shouldRefreshBackground(isMounted: Bool) -> Bool {
     !isMounted
+  }
+
+  static func shouldDiscardLoadedBackground(
+    didReleaseAfterPop: Bool,
+    isBackgroundMounted: Bool
+  ) -> Bool {
+    didReleaseAfterPop || !isBackgroundMounted
   }
 
   nonisolated static func wasPopped(
@@ -234,6 +254,9 @@ struct MediaDetailView: View {
           usingPosterAsBackdrop: viewModel.isUsingPosterAsBackdrop,
           onFailure: { failedURL in
             viewModel.useBackgroundFallback(afterFailing: failedURL)
+          },
+          onLoaded: { url in
+            discardLoadedBackgroundIfAbandoned(url: url)
           }
         )
         .id(backgroundGeneration)
@@ -354,6 +377,7 @@ struct MediaDetailView: View {
       if Self.shouldRefreshBackground(isMounted: isBackgroundMounted) {
         backgroundGeneration &+= 1
         isBackgroundMounted = true
+        imageLifetime.isBackgroundMounted = true
       }
     }
     .onChange(of: viewModel.pageImageSnapshot) { _, snapshot in
@@ -535,6 +559,7 @@ struct MediaDetailView: View {
   private func releaseBackground(for url: URL) {
     guard isBackgroundMounted else { return }
     isBackgroundMounted = false
+    imageLifetime.isBackgroundMounted = false
     let size = UIScreen.main.bounds.size
     MediaPreloader.shared.removeBackgroundTargetHeroesFromMemory(
       for: viewModel.detail,
@@ -553,6 +578,19 @@ struct MediaDetailView: View {
     )
   }
 
+  private func discardLoadedBackgroundIfAbandoned(url: URL) {
+    MediaPreloader.shared.discardLoadedBackgroundIfAbandoned(
+      url: url,
+      detail: viewModel.detail,
+      usingPosterAsBackdrop: viewModel.isUsingPosterAsBackdrop,
+      isAbandoned: Self.shouldDiscardLoadedBackground(
+        didReleaseAfterPop: imageLifetime.didReleaseAfterPop,
+        isBackgroundMounted: imageLifetime.isBackgroundMounted
+      ),
+      size: UIScreen.main.bounds.size
+    )
+  }
+
   private func releaseAfterPopIfNeeded(currentPathCount: Int) {
     guard !didReleaseAfterPop,
       Self.wasPopped(
@@ -564,6 +602,7 @@ struct MediaDetailView: View {
     }
 
     didReleaseAfterPop = true
+    imageLifetime.didReleaseAfterPop = true
     let leavingImageSnapshot = viewModel.pageImageSnapshot
     viewModel.cancelForPop(returningTo: returnTargetImageCleanupTarget)
     MediaPreloader.shared.releaseAfterPop(
@@ -572,7 +611,8 @@ struct MediaDetailView: View {
       size: UIScreen.main.bounds.size,
       leavingImageSnapshot: leavingImageSnapshot,
       pageImageCleanupTarget: pageImageCleanupTarget,
-      returnTargetImageCleanupTarget: returnTargetImageCleanupTarget
+      returnTargetImageCleanupTarget: returnTargetImageCleanupTarget,
+      loadingPosterURL: loadingPosterURL
     )
   }
 
