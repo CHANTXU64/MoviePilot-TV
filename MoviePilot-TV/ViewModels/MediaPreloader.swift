@@ -5,19 +5,44 @@ import SwiftUI
 
 enum MediaDetailBackgroundImage {
   nonisolated static let blurRadius: CGFloat = 60
+  /// 详情背景按 2K 长边解码（2560×1440），不到 4K 屏幕也不上采样。
+  nonisolated static let targetLongEdgePixels: CGFloat = 2560
+
+  nonisolated static func downsampleScale(
+    for pointSize: CGSize,
+    screenScale: CGFloat
+  ) -> CGFloat {
+    let longEdge = max(pointSize.width, pointSize.height)
+    guard longEdge > 0 else { return 1 }
+    return min(screenScale, targetLongEdgePixels / longEdge)
+  }
 
   nonisolated static func heroProcessor(
     for size: CGSize,
-    usingPosterAsBackdrop: Bool
+    usingPosterAsBackdrop: Bool,
+    screenScale: CGFloat
   ) -> any ImageProcessor {
     usingPosterAsBackdrop
-      ? posterFallbackProcessor(for: size)
-      : DownsamplingImageProcessor(size: size)
+      ? posterFallbackProcessor(for: size, screenScale: screenScale)
+      : heroDownsamplingProcessor(for: size, screenScale: screenScale)
   }
 
-  nonisolated static func posterFallbackProcessor(for size: CGSize) -> any ImageProcessor {
-    DownsamplingImageProcessor(size: size)
+  nonisolated static func posterFallbackProcessor(
+    for size: CGSize,
+    screenScale: CGFloat
+  ) -> any ImageProcessor {
+    heroDownsamplingProcessor(for: size, screenScale: screenScale)
       |> BlurImageProcessor(blurRadius: blurRadius)
+  }
+
+  nonisolated static func heroDownsamplingProcessor(
+    for size: CGSize,
+    screenScale: CGFloat
+  ) -> MediaDetailHeroDownsamplingProcessor {
+    MediaDetailHeroDownsamplingProcessor(
+      size: size,
+      scale: downsampleScale(for: size, screenScale: screenScale)
+    )
   }
 
   static func heroOptions(
@@ -25,14 +50,16 @@ enum MediaDetailBackgroundImage {
     scaleFactor: CGFloat,
     usingPosterAsBackdrop: Bool
   ) -> KingfisherOptionsInfo {
-    [
+    let scale = downsampleScale(for: size, screenScale: scaleFactor)
+    return [
       .processor(
         heroProcessor(
           for: size,
-          usingPosterAsBackdrop: usingPosterAsBackdrop
+          usingPosterAsBackdrop: usingPosterAsBackdrop,
+          screenScale: scaleFactor
         )
       ),
-      .scaleFactor(scaleFactor),
+      .scaleFactor(scale),
       TransientDecodedImage.skipMemoryCache,
     ]
   }
@@ -40,12 +67,16 @@ enum MediaDetailBackgroundImage {
   nonisolated static func removePosterFallbackBackgroundFromMemory(
     for url: URL,
     size: CGSize,
+    screenScale: CGFloat,
     cacheKey: String? = nil,
     cache: ImageCache = .default
   ) {
     cache.removeImage(
       forKey: cacheKey ?? url.cacheKey,
-      processorIdentifier: posterFallbackProcessor(for: size).identifier,
+      processorIdentifier: posterFallbackProcessor(
+        for: size,
+        screenScale: screenScale
+      ).identifier,
       fromMemory: true,
       fromDisk: false
     )
@@ -54,6 +85,7 @@ enum MediaDetailBackgroundImage {
   nonisolated static func removeFirstPageBackgroundFromMemory(
     for url: URL,
     size: CGSize,
+    screenScale: CGFloat,
     cacheKey: String? = nil,
     cache: ImageCache = .default
   ) {
@@ -61,7 +93,8 @@ enum MediaDetailBackgroundImage {
       forKey: cacheKey ?? url.cacheKey,
       processorIdentifier: heroProcessor(
         for: size,
-        usingPosterAsBackdrop: false
+        usingPosterAsBackdrop: false,
+        screenScale: screenScale
       ).identifier,
       fromMemory: true,
       fromDisk: false
@@ -72,6 +105,7 @@ enum MediaDetailBackgroundImage {
     for url: URL,
     size: CGSize,
     usingPosterAsBackdrop: Bool,
+    screenScale: CGFloat,
     cacheKey: String? = nil,
     cache: ImageCache = .default
   ) {
@@ -79,6 +113,7 @@ enum MediaDetailBackgroundImage {
       removePosterFallbackBackgroundFromMemory(
         for: url,
         size: size,
+        screenScale: screenScale,
         cacheKey: cacheKey,
         cache: cache
       )
@@ -86,6 +121,7 @@ enum MediaDetailBackgroundImage {
       removeFirstPageBackgroundFromMemory(
         for: url,
         size: size,
+        screenScale: screenScale,
         cacheKey: cacheKey,
         cache: cache
       )
@@ -106,6 +142,32 @@ enum MediaDetailBackgroundImage {
       urls.append(fallbackURL)
     }
     return (urls, target.isPoster)
+  }
+}
+
+/// 按指定 scale 做 ImageIO 缩略图解码。identifier 带目标长边像素，避免沿用旧的 4K `DownsamplingImageProcessor` 磁盘缓存。
+struct MediaDetailHeroDownsamplingProcessor: ImageProcessor {
+  let size: CGSize
+  let scale: CGFloat
+
+  var identifier: String {
+    let longEdgePixels = Int((max(size.width, size.height) * scale).rounded())
+    return "com.moviepilot.hero-downsample(\(Int(size.width))x\(Int(size.height)),\(longEdgePixels))"
+  }
+
+  func process(
+    item: ImageProcessItem,
+    options _: KingfisherParsedOptionsInfo
+  ) -> KFCrossPlatformImage? {
+    let data: Data?
+    switch item {
+    case .image(let image):
+      data = image.kf.data(format: .unknown)
+    case .data(let dataValue):
+      data = dataValue
+    }
+    guard let data else { return nil }
+    return KingfisherWrapper.downsampledImage(data: data, to: size, scale: scale)
   }
 }
 
@@ -399,12 +461,14 @@ class MediaPreloadTask: ObservableObject {
     else { return }
     markPreparedBackgroundForReleaseAfterCompletion()
     let size = UIScreen.main.bounds.size
+    let screenScale = UIScreen.main.scale
     let heroes = MediaDetailBackgroundImage.backgroundHeroURLs(from: detail)
     for heroURL in heroes.urls {
       removePreparedHeroFromMemory(
         url: heroURL,
         isUsingPosterAsBackdrop: heroes.isPoster,
-        size: size
+        size: size,
+        screenScale: screenScale
       )
     }
   }
@@ -423,9 +487,10 @@ class MediaPreloadTask: ObservableObject {
     let continuationBox = ImageRetrieveContinuationBox()
     let retrieveGeneration = imageRetrieveState.generation
     let size = UIScreen.main.bounds.size
+    let screenScale = UIScreen.main.scale
     var options = MediaDetailBackgroundImage.heroOptions(
       for: size,
-      scaleFactor: UIScreen.main.scale,
+      scaleFactor: screenScale,
       usingPosterAsBackdrop: isUsingPosterAsBackdrop
     )
     let service = apiService
@@ -445,6 +510,7 @@ class MediaPreloadTask: ObservableObject {
               for: url,
               size: size,
               usingPosterAsBackdrop: isUsingPosterAsBackdrop,
+              screenScale: screenScale,
               cacheKey: source.cacheKey
             )
           }
@@ -466,12 +532,14 @@ class MediaPreloadTask: ObservableObject {
   private func removePreparedHeroFromMemory(
     url: URL,
     isUsingPosterAsBackdrop: Bool,
-    size: CGSize
+    size: CGSize,
+    screenScale: CGFloat
   ) {
     MediaDetailBackgroundImage.removeHeroFromMemory(
       for: url,
       size: size,
       usingPosterAsBackdrop: isUsingPosterAsBackdrop,
+      screenScale: screenScale,
       cacheKey: apiService.imageSource(for: url).cacheKey
     )
   }
@@ -969,6 +1037,7 @@ class MediaPreloader: ObservableObject {
     usingPosterAsBackdrop: Bool,
     isAbandoned: Bool,
     size: CGSize,
+    screenScale: CGFloat = UIScreen.main.scale,
     imageCache: ImageCache = .default
   ) {
     guard isAbandoned else { return }
@@ -977,10 +1046,16 @@ class MediaPreloader: ObservableObject {
       for: url,
       size: size,
       usingPosterAsBackdrop: usingPosterAsBackdrop,
+      screenScale: screenScale,
       cacheKey: cacheKey,
       cache: imageCache
     )
-    removeBackgroundTargetHeroesFromMemory(for: detail, size: size, imageCache: imageCache)
+    removeBackgroundTargetHeroesFromMemory(
+      for: detail,
+      size: size,
+      screenScale: screenScale,
+      imageCache: imageCache
+    )
   }
 
   /// 页面快速连续 Pop 时，把尚未能处理的 URL 转发到更上一级目标。
@@ -1203,6 +1278,7 @@ class MediaPreloader: ObservableObject {
   func removeBackgroundTargetHeroesFromMemory(
     for detail: MediaInfo,
     size: CGSize,
+    screenScale: CGFloat = UIScreen.main.scale,
     imageCache: ImageCache = .default
   ) {
     let heroes = MediaDetailBackgroundImage.backgroundHeroURLs(from: detail)
@@ -1212,6 +1288,7 @@ class MediaPreloader: ObservableObject {
         for: url,
         size: size,
         usingPosterAsBackdrop: heroes.isPoster,
+        screenScale: screenScale,
         cacheKey: cacheKey,
         cache: imageCache
       )
@@ -1219,6 +1296,7 @@ class MediaPreloader: ObservableObject {
         MediaDetailBackgroundImage.removePosterFallbackBackgroundFromMemory(
           for: url,
           size: size,
+          screenScale: screenScale,
           cacheKey: cacheKey,
           cache: imageCache
         )

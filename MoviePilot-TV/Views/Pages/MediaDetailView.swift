@@ -16,11 +16,17 @@ private struct MediaDetailBackgroundLayer: View {
   var body: some View {
     if let url {
       let size = UIScreen.main.bounds.size
+      let screenScale = UIScreen.main.scale
       backgroundImage(
         url,
         processor: MediaDetailBackgroundImage.heroProcessor(
           for: size,
-          usingPosterAsBackdrop: usingPosterAsBackdrop
+          usingPosterAsBackdrop: usingPosterAsBackdrop,
+          screenScale: screenScale
+        ),
+        scaleFactor: MediaDetailBackgroundImage.downsampleScale(
+          for: size,
+          screenScale: screenScale
         ),
         alignment: usingPosterAsBackdrop ? .top : .center
       )
@@ -33,6 +39,7 @@ private struct MediaDetailBackgroundLayer: View {
   private func backgroundImage(
     _ url: URL,
     processor: any ImageProcessor,
+    scaleFactor: CGFloat,
     alignment: Alignment
   ) -> some View {
     KFImage.sessionImage(url)
@@ -46,7 +53,7 @@ private struct MediaDetailBackgroundLayer: View {
         EmptyView()
       }
       .setProcessor(processor)
-      .scaleFactor(UIScreen.main.scale)
+      .scaleFactor(scaleFactor)
       .skippingMemoryCache()
       .cancelOnDisappear(true)
       .resizable()
@@ -583,19 +590,23 @@ struct MediaDetailView: View {
     isBackgroundMounted = false
     imageLifetime.isBackgroundMounted = false
     let size = UIScreen.main.bounds.size
+    let screenScale = UIScreen.main.scale
     MediaPreloader.shared.removeBackgroundTargetHeroesFromMemory(
       for: viewModel.detail,
-      size: size
+      size: size,
+      screenScale: screenScale
     )
     let cacheKey = APIService.shared.imageSource(for: url).cacheKey
     MediaDetailBackgroundImage.removeFirstPageBackgroundFromMemory(
       for: url,
       size: size,
+      screenScale: screenScale,
       cacheKey: cacheKey
     )
     MediaDetailBackgroundImage.removePosterFallbackBackgroundFromMemory(
       for: url,
       size: size,
+      screenScale: screenScale,
       cacheKey: cacheKey
     )
   }

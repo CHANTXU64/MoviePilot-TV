@@ -194,23 +194,30 @@ final class MPImageWarmerTests: XCTestCase {
 
   func testPosterFallbackBlurDoesNotChangeBackdropHeroProcessor() {
     let size = CGSize(width: 1920, height: 1080)
+    let screenScale: CGFloat = 1
     let firstPage = MediaDetailBackgroundImage.heroProcessor(
       for: size,
-      usingPosterAsBackdrop: false
+      usingPosterAsBackdrop: false,
+      screenScale: screenScale
     )
-    let posterFallback = MediaDetailBackgroundImage.posterFallbackProcessor(for: size)
+    let posterFallback = MediaDetailBackgroundImage.posterFallbackProcessor(
+      for: size,
+      screenScale: screenScale
+    )
     let posterHero = MediaDetailBackgroundImage.heroProcessor(
       for: size,
-      usingPosterAsBackdrop: true
+      usingPosterAsBackdrop: true,
+      screenScale: screenScale
     )
 
-    XCTAssertTrue(firstPage.identifier.contains("DownsamplingImageProcessor"))
+    XCTAssertTrue(firstPage.identifier.contains("com.moviepilot.hero-downsample"))
+    XCTAssertFalse(firstPage.identifier.contains("DownsamplingImageProcessor"))
     XCTAssertFalse(firstPage.identifier.contains("BlurImageProcessor"))
     XCTAssertNotEqual(firstPage.identifier, posterFallback.identifier)
     XCTAssertEqual(posterHero.identifier, posterFallback.identifier)
 
     let downsamplingRange = try? XCTUnwrap(
-      posterFallback.identifier.range(of: "DownsamplingImageProcessor")
+      posterFallback.identifier.range(of: "com.moviepilot.hero-downsample")
     )
     let blurRange = try? XCTUnwrap(posterFallback.identifier.range(of: "BlurImageProcessor"))
     XCTAssertNotNil(downsamplingRange)
@@ -284,6 +291,40 @@ final class MPImageWarmerTests: XCTestCase {
     )
   }
 
+  func testDetailHeroDownsamplesToTwoKLongEdge() {
+    let size = CGSize(width: 1920, height: 1080)
+    XCTAssertEqual(MediaDetailBackgroundImage.targetLongEdgePixels, 2560)
+    XCTAssertEqual(
+      MediaDetailBackgroundImage.downsampleScale(for: size, screenScale: 2),
+      2560 / 1920,
+      accuracy: 0.0001
+    )
+    XCTAssertEqual(
+      MediaDetailBackgroundImage.downsampleScale(for: size, screenScale: 1),
+      1
+    )
+
+    let processor = MediaDetailBackgroundImage.heroProcessor(
+      for: size,
+      usingPosterAsBackdrop: false,
+      screenScale: 2
+    )
+    XCTAssertTrue(processor.identifier.contains("com.moviepilot.hero-downsample"))
+    XCTAssertTrue(processor.identifier.contains(",2560)"))
+    XCTAssertFalse(processor.identifier.contains("DownsamplingImageProcessor"))
+
+    let options = KingfisherParsedOptionsInfo(
+      MediaDetailBackgroundImage.heroOptions(
+        for: size,
+        scaleFactor: 2,
+        usingPosterAsBackdrop: false
+      )
+    )
+    XCTAssertEqual(options.scaleFactor, 2560 / 1920, accuracy: 0.0001)
+    XCTAssertEqual(options.processor.identifier, processor.identifier)
+    XCTAssertTrue(Self.skipsMemoryCache(options.memoryCacheExpiration))
+  }
+
   func testReleasingDetailBackgroundsKeepsBothOnDisk() async throws {
     let cache = ImageCache(name: "released-detail-backgrounds-\(UUID().uuidString)")
     defer {
@@ -292,12 +333,17 @@ final class MPImageWarmerTests: XCTestCase {
     }
     let url = try XCTUnwrap(URL(string: "https://example.com/released-backdrop.jpg"))
     let size = CGSize(width: 32, height: 18)
+    let screenScale: CGFloat = 2
     let processors = [
       MediaDetailBackgroundImage.heroProcessor(
         for: size,
-        usingPosterAsBackdrop: false
+        usingPosterAsBackdrop: false,
+        screenScale: screenScale
       ),
-      MediaDetailBackgroundImage.posterFallbackProcessor(for: size),
+      MediaDetailBackgroundImage.posterFallbackProcessor(
+        for: size,
+        screenScale: screenScale
+      ),
     ]
     let image = UIGraphicsImageRenderer(size: size).image { context in
       UIColor.blue.setFill()
@@ -322,11 +368,13 @@ final class MPImageWarmerTests: XCTestCase {
     MediaDetailBackgroundImage.removeFirstPageBackgroundFromMemory(
       for: url,
       size: size,
+      screenScale: screenScale,
       cache: cache
     )
     MediaDetailBackgroundImage.removePosterFallbackBackgroundFromMemory(
       for: url,
       size: size,
+      screenScale: screenScale,
       cache: cache
     )
 
@@ -353,7 +401,10 @@ final class MPImageWarmerTests: XCTestCase {
     sharedService.baseURLForTesting = "http://moviepilot.local"
     sharedService.useImageCache = true
 
-    let preloader = MediaPreloader(apiService: .testingInstance())
+    let apiService = APIService.testingInstance()
+    apiService.baseURLForTesting = "http://moviepilot.local"
+    apiService.useImageCache = true
+    let preloader = MediaPreloader(apiService: apiService)
     defer { preloader.clearAll() }
     let cache = ImageCache(name: "poster-fallback-hero-pop-\(UUID().uuidString)")
     defer {
@@ -374,21 +425,25 @@ final class MPImageWarmerTests: XCTestCase {
     XCTAssertTrue(target.isPoster)
 
     let size = CGSize(width: 32, height: 18)
-    let processor = MediaDetailBackgroundImage.posterFallbackProcessor(for: size)
+    let processor = MediaDetailBackgroundImage.posterFallbackProcessor(
+      for: size,
+      screenScale: UIScreen.main.scale
+    )
     let image = UIGraphicsImageRenderer(size: size).image { context in
       UIColor.purple.setFill()
       context.cgContext.fill(CGRect(origin: .zero, size: size))
     }
 
     for url in [primary, fallback] {
+      let cacheKey = apiService.imageSource(for: url).cacheKey
       try await cache.store(
         image,
-        forKey: url.cacheKey,
+        forKey: cacheKey,
         processorIdentifier: processor.identifier
       )
       XCTAssertEqual(
         cache.imageCachedType(
-          forKey: url.cacheKey,
+          forKey: cacheKey,
           processorIdentifier: processor.identifier
         ),
         .memory
@@ -412,7 +467,7 @@ final class MPImageWarmerTests: XCTestCase {
     for url in [primary, fallback] {
       XCTAssertEqual(
         cache.imageCachedType(
-          forKey: url.cacheKey,
+          forKey: apiService.imageSource(for: url).cacheKey,
           processorIdentifier: processor.identifier
         ),
         .disk,
@@ -839,7 +894,8 @@ final class MPImageWarmerTests: XCTestCase {
     let size = CGSize(width: 32, height: 18)
     let processor = MediaDetailBackgroundImage.heroProcessor(
       for: size,
-      usingPosterAsBackdrop: false
+      usingPosterAsBackdrop: false,
+      screenScale: UIScreen.main.scale
     )
     let image = UIGraphicsImageRenderer(size: size).image { context in
       UIColor.red.setFill()
