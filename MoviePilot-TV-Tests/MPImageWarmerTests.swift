@@ -1010,6 +1010,58 @@ final class MPImageWarmerTests: XCTestCase {
     XCTAssertNil(preloader.peekTask(for: tmdb))
   }
 
+  func testAuxiliaryPreloadKeepsSharedTaskUntilAllOwnersAndCandidateRelease() throws {
+    let preloader = MediaPreloader(apiService: .testingInstance())
+    defer { preloader.clearAll() }
+    let firstParent = MediaInfo(douban_id: "760501", title: "父详情一", type: "电影")
+    let secondParent = MediaInfo(douban_id: "760502", title: "父详情二", type: "电影")
+    let shared = MediaInfo(tmdb_id: 760_503, title: "共享 TMDB 预载", type: "电影")
+    let replacement = MediaInfo(tmdb_id: 760_504, title: "替换预载", type: "电影")
+    let nextFocused = MediaInfo(tmdb_id: 760_505, title: "新焦点", type: "电影")
+    let firstOwner = UUID()
+    let secondOwner = UUID()
+
+    preloader.preload(for: firstParent)
+    preloader.pin(key: firstParent.id, owner: firstOwner)
+    preloader.preload(for: secondParent)
+    preloader.pin(key: secondParent.id, owner: secondOwner)
+
+    let sharedTask = try XCTUnwrap(
+      preloader.preloadAuxiliary(for: shared, owner: firstOwner)
+    )
+    XCTAssertTrue(preloader.preloadAuxiliary(for: shared, owner: secondOwner) === sharedTask)
+    XCTAssertTrue(preloader.preloadIfNeeded(for: shared) === sharedTask)
+
+    XCTAssertNotNil(preloader.preloadAuxiliary(for: replacement, owner: firstOwner))
+    XCTAssertTrue(preloader.peekTask(for: shared) === sharedTask)
+
+    preloader.releaseAfterPop(
+      media: firstParent,
+      owner: firstOwner,
+      size: .zero,
+      leavingImageSnapshot: PageImageSnapshot(),
+      pageImageCleanupTarget: PageImageCleanupTarget(),
+      returnTargetImageCleanupTarget: nil
+    )
+    XCTAssertTrue(preloader.peekTask(for: shared) === sharedTask)
+    XCTAssertNil(preloader.peekTask(for: replacement))
+
+    preloader.releaseAfterPop(
+      media: secondParent,
+      owner: secondOwner,
+      size: .zero,
+      leavingImageSnapshot: PageImageSnapshot(),
+      pageImageCleanupTarget: PageImageCleanupTarget(),
+      returnTargetImageCleanupTarget: nil
+    )
+    XCTAssertTrue(preloader.peekTask(for: shared) === sharedTask)
+    XCTAssertTrue(preloader.isFocusCandidate(shared.id))
+
+    XCTAssertNotNil(preloader.preloadIfNeeded(for: nextFocused))
+    XCTAssertNil(preloader.peekTask(for: shared))
+    XCTAssertTrue(preloader.isFocusCandidate(nextFocused.id))
+  }
+
   func testPoppedFocusedItemIsSuppressedUntilFocusMoves() {
     let preloader = MediaPreloader(apiService: .testingInstance())
     defer { preloader.clearAll() }

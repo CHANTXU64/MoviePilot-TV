@@ -816,7 +816,6 @@ class MediaPreloader: ObservableObject {
     auxiliaryPreloads[owner] = [key]
     let task = preload(for: media)
     for staleKey in previous where staleKey != key {
-      guard navigationOwners[staleKey] == nil else { continue }
       releaseTask(
         forKey: staleKey,
         fallbackMedia: cache[staleKey]?.partialMedia,
@@ -985,16 +984,15 @@ class MediaPreloader: ObservableObject {
   func pin(key: String, owner: UUID) {
     // 首页/订阅等入口可能直接 append NavigationPath，没有经过焦点候选交接。
     // 新详情接管时立即释放旧的临时候选，避免它脱离任何生命周期长期留在缓存里。
-    if let previousCandidate = candidateKey, previousCandidate != key,
-      navigationOwners[previousCandidate] == nil
-    {
+    let previousCandidate = candidateKey
+    candidateKey = nil
+    if let previousCandidate, previousCandidate != key {
       releaseTask(
         forKey: previousCandidate,
         fallbackMedia: cache[previousCandidate]?.partialMedia,
         size: UIScreen.main.bounds.size
       )
     }
-    candidateKey = nil
     navigationOwners[key, default: []].insert(owner)
   }
 
@@ -1027,7 +1025,6 @@ class MediaPreloader: ObservableObject {
     suppressedFocusCandidateKey = key
     removeLoadingPosterFromMemory(url: loadingPosterURL, imageCache: imageCache)
     releaseAuxiliaryPreloads(ownedBy: owner, size: size, imageCache: imageCache)
-    guard navigationOwners[key] == nil else { return }
     releaseTask(forKey: key, fallbackMedia: media, size: size, imageCache: imageCache)
   }
 
@@ -1225,14 +1222,15 @@ class MediaPreloader: ObservableObject {
 
   private func replaceCandidate(with key: String) {
     guard candidateKey != key else { return }
-    if let previousKey = candidateKey, navigationOwners[previousKey] == nil {
+    let previousKey = candidateKey
+    candidateKey = navigationOwners[key] == nil ? key : nil
+    if let previousKey {
       releaseTask(
         forKey: previousKey,
         fallbackMedia: cache[previousKey]?.partialMedia,
         size: UIScreen.main.bounds.size
       )
     }
-    candidateKey = navigationOwners[key] == nil ? key : nil
   }
 
   private func releaseAuxiliaryPreloads(
@@ -1242,7 +1240,6 @@ class MediaPreloader: ObservableObject {
   ) {
     let keys = auxiliaryPreloads.removeValue(forKey: owner) ?? []
     for key in keys {
-      guard navigationOwners[key] == nil else { continue }
       releaseTask(
         forKey: key,
         fallbackMedia: cache[key]?.partialMedia,
@@ -1267,7 +1264,6 @@ class MediaPreloader: ObservableObject {
   private func cancelPendingMediaNavigation(_ token: UUID) {
     guard let pending = pendingMediaNavigations.removeValue(forKey: token) else { return }
     unpin(key: pending.mediaKey, owner: token)
-    guard navigationOwners[pending.mediaKey] == nil else { return }
     releaseTask(
       forKey: pending.mediaKey,
       fallbackMedia: cache[pending.mediaKey]?.partialMedia,
@@ -1310,14 +1306,18 @@ class MediaPreloader: ObservableObject {
     size: CGSize,
     imageCache: ImageCache = .default
   ) {
+    guard !isTaskRetained(key) else { return }
     let task = cache.removeValue(forKey: key)
     let detail = task?.fullDetail ?? fallbackMedia ?? task?.partialMedia
     task?.cancel()
-    if candidateKey == key {
-      candidateKey = nil
-    }
 
     guard let detail else { return }
     removeBackgroundTargetHeroesFromMemory(for: detail, size: size, imageCache: imageCache)
+  }
+
+  private func isTaskRetained(_ key: String) -> Bool {
+    candidateKey == key
+      || navigationOwners[key] != nil
+      || auxiliaryPreloads.values.contains { $0.contains(key) }
   }
 }
