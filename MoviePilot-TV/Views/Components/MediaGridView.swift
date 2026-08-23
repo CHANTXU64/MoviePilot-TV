@@ -1,32 +1,60 @@
 import SwiftUI
 
-private final class PreloadDebouncer {
-  private var tasks: [String: Task<Void, Never>] = [:]
+@MainActor
+final class GridPreloadDebouncer {
+  private struct TaskKey: Hashable {
+    let listIdentity: GridListIdentity
+    let itemID: MediaInfo.ID
+  }
 
-  func schedule(for item: MediaInfo, stackID: UUID, delayMs: Int = 300) {
-    let id = item.id
-    // 取消该 ID 已有的计时任务
-    tasks[id]?.cancel()
+  private var tasks: [TaskKey: Task<Void, Never>] = [:]
+  private let preloadAction: @MainActor (MediaInfo, UUID) -> Void
 
-    tasks[id] = Task { @MainActor in
-      try? await Task.sleep(for: .milliseconds(delayMs))
-      guard !Task.isCancelled else { return }
-
+  init(
+    preloadAction: @escaping @MainActor (MediaInfo, UUID) -> Void = { item, stackID in
       MediaPreloader.shared.preloadFocusedCandidateIfNeeded(for: item, stackID: stackID)
-      // 执行完后清理
-      tasks.removeValue(forKey: id)
+    }
+  ) {
+    self.preloadAction = preloadAction
+  }
+
+  func schedule(
+    for item: MediaInfo,
+    listIdentity: GridListIdentity,
+    stackID: UUID,
+    delayMs: Int = 300
+  ) {
+    let key = TaskKey(listIdentity: listIdentity, itemID: item.id)
+    tasks[key]?.cancel()
+
+    tasks[key] = Task { @MainActor [weak self] in
+      try? await Task.sleep(for: .milliseconds(delayMs))
+      guard !Task.isCancelled, let self else { return }
+
+      preloadAction(item, stackID)
+      tasks.removeValue(forKey: key)
     }
   }
 
-  func cancel(id: String? = nil) {
-    if let id = id {
-      tasks[id]?.cancel()
-      tasks.removeValue(forKey: id)
-    } else {
-      // 取消所有（用于 onDisappear 或全局重置）
-      tasks.values.forEach { $0.cancel() }
-      tasks.removeAll()
+  func cancel(itemID: MediaInfo.ID, listIdentity: GridListIdentity) {
+    let key = TaskKey(listIdentity: listIdentity, itemID: itemID)
+    tasks.removeValue(forKey: key)?.cancel()
+  }
+
+  /// 列表更新回调可能晚于新卡片获焦；只清理更旧代际，避免误取消新代际的同 ID 任务。
+  func cancelTasks(olderThan currentIdentity: GridListIdentity) {
+    let staleKeys = tasks.keys.filter {
+      $0.listIdentity != currentIdentity
+        && $0.listIdentity.generation <= currentIdentity.generation
     }
+    for key in staleKeys {
+      tasks.removeValue(forKey: key)?.cancel()
+    }
+  }
+
+  func cancelAll() {
+    tasks.values.forEach { $0.cancel() }
+    tasks.removeAll()
   }
 }
 
@@ -127,7 +155,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
   @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
 
   /// 预加载防抖器：引用类型，内部状态变化不会触发 View 刷新
-  @State private var preloadDebouncer = PreloadDebouncer()
+  @State private var preloadDebouncer = GridPreloadDebouncer()
   @StateObject private var domRetention: GridDOMRetentionController
   @StateObject private var imageRetention: GridImageLifecycleController
 
@@ -346,6 +374,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
       imageRetention.reconcile(listIdentity: listIdentity, itemIDs: newItemIDs)
     }
     .onChange(of: listIdentity) { _, newIdentity in
+      preloadDebouncer.cancelTasks(olderThan: newIdentity)
       let itemIDs = items.map(\.id)
       domRetention.reconcile(listIdentity: newIdentity, itemIDs: itemIDs)
       imageRetention.reconcile(listIdentity: newIdentity, itemIDs: itemIDs)
@@ -354,7 +383,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
       domRetention.setStackInteractive(isInteractive)
     }
     .onDisappear {
-      preloadDebouncer.cancel()
+      preloadDebouncer.cancelAll()
       domRetention.setViewActive(false)
     }
   }
@@ -364,7 +393,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     if let share = item.subscribeShare {
       onShareTapped?(share)
     } else {
-      preloadDebouncer.cancel(id: item.id)
+      preloadDebouncer.cancel(itemID: item.id, listIdentity: listIdentity)
       navigationCoordinator.push(item)
     }
   }
@@ -378,6 +407,11 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     itemCount: Int,
     isFocused: Bool
   ) {
+    preloadDebouncer.cancelTasks(olderThan: eventIdentity)
+    if !isFocused {
+      preloadDebouncer.cancel(itemID: item.id, listIdentity: eventIdentity)
+    }
+
     // 新列表卡片可能早于 View.onChange 获焦；先同步接管新代际，旧代际会被控制器拒绝。
     imageRetention.reconcileEventSnapshot(
       listIdentity: eventIdentity,
@@ -406,14 +440,17 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     }
 
     guard isFocused else {
-      preloadDebouncer.cancel(id: item.id)
       return
     }
 
     MediaPreloader.shared.focusDidMove(to: item.id, stackID: navigationCoordinator.id)
-    preloadDebouncer.cancel(id: item.id)
+    preloadDebouncer.cancel(itemID: item.id, listIdentity: eventIdentity)
     if item.shouldPreloadDetail {
-      preloadDebouncer.schedule(for: item, stackID: navigationCoordinator.id)
+      preloadDebouncer.schedule(
+        for: item,
+        listIdentity: eventIdentity,
+        stackID: navigationCoordinator.id
+      )
     }
 
     if index >= itemCount - loadMoreThreshold {

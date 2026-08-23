@@ -433,6 +433,58 @@ final class ImageLoadWindowTests: XCTestCase {
     XCTAssertEqual(releaseCount, 1)
   }
 
+  func testGridPreloadDebouncerCancelsOldGenerationWithoutCancellingNewSameItem() async throws {
+    let oldIdentity = GridListIdentity.make()
+    let newIdentity = oldIdentity.advanced()
+    let media = MediaInfo(tmdb_id: 990_001, title: "同一媒体", type: "电影")
+    let stackID = UUID()
+    var preloadCount = 0
+    let debouncer = GridPreloadDebouncer { _, _ in
+      preloadCount += 1
+    }
+
+    debouncer.schedule(
+      for: media,
+      listIdentity: oldIdentity,
+      stackID: stackID,
+      delayMs: 60
+    )
+    debouncer.schedule(
+      for: media,
+      listIdentity: newIdentity,
+      stackID: stackID,
+      delayMs: 20
+    )
+
+    debouncer.cancelTasks(olderThan: newIdentity)
+    debouncer.cancelTasks(olderThan: oldIdentity)
+    debouncer.cancel(itemID: media.id, listIdentity: oldIdentity)
+    try await Task.sleep(for: .milliseconds(100))
+
+    XCTAssertEqual(preloadCount, 1)
+  }
+
+  func testGridPreloadDebouncerListAdvanceCancelsPendingTaskWithoutFocusLoss() async throws {
+    let oldIdentity = GridListIdentity.make()
+    let newIdentity = oldIdentity.advanced()
+    let media = MediaInfo(tmdb_id: 990_002, title: "旧列表媒体", type: "电影")
+    var preloadCount = 0
+    let debouncer = GridPreloadDebouncer { _, _ in
+      preloadCount += 1
+    }
+
+    debouncer.schedule(
+      for: media,
+      listIdentity: oldIdentity,
+      stackID: UUID(),
+      delayMs: 20
+    )
+    debouncer.cancelTasks(olderThan: newIdentity)
+    try await Task.sleep(for: .milliseconds(60))
+
+    XCTAssertEqual(preloadCount, 0)
+  }
+
   func testBackgroundingStackImmediatelyFinishesRetiringPage() {
     let coordinator = ImageNavigationCoordinator(
       mediaPreloader: MediaPreloader(apiService: .testingInstance()),
