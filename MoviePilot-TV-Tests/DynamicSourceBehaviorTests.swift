@@ -16,6 +16,26 @@ final class DynamicSourceBehaviorTests: XCTestCase {
         "imageConfigurationIdentity: apiService.imageConfigurationIdentity"
       )
     )
+    XCTAssertTrue(gridSource.contains("lhs.itemIndex == rhs.itemIndex"))
+    XCTAssertTrue(gridSource.contains("lhs.itemCount == rhs.itemCount"))
+    XCTAssertTrue(gridSource.contains("lhs.listID == rhs.listID"))
+    XCTAssertTrue(gridSource.contains("GridImageDemandContext("))
+    XCTAssertFalse(gridSource.contains("loadsImage(at:"))
+    XCTAssertFalse(gridSource.contains("loadsImage: loadsImage"))
+    XCTAssertFalse(gridSource.contains("topRestorationRevision"))
+    XCTAssertFalse(
+      gridSource.contains("domRetention.reconcile(itemIDs: items.map(\\.id))\n    domRetention.cardFocusChanged")
+    )
+    let paginatorSource = try source("MoviePilot-TV/Services/Paginator.swift")
+    XCTAssertTrue(paginatorSource.contains("public let listID: UUID"))
+    let recommendSource = try source("MoviePilot-TV/Views/Pages/RecommendView.swift")
+    let exploreSource = try source("MoviePilot-TV/Views/Pages/ExploreView.swift")
+    XCTAssertFalse(recommendSource.contains(".id(paginator.listID)"))
+    XCTAssertFalse(exploreSource.contains(".id(paginator.listID)"))
+    XCTAssertEqual(gridSource.components(separatedBy: ".id(listID)").count - 1, 1)
+    XCTAssertTrue(
+      gridSource.contains("          .id(listID)\n          .padding(.horizontal, -12)")
+    )
     let preloaderSource = try source("MoviePilot-TV/ViewModels/MediaPreloader.swift")
     XCTAssertTrue(
       preloaderSource.contains("retrieveHeroImage(url, fallbackURL: target.fallbackURL)")

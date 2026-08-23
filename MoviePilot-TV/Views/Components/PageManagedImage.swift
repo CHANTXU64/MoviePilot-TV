@@ -13,6 +13,7 @@ enum PageImageRole {
 /// 不需要先重新求值 SwiftUI body，也能同步释放解码图片和渲染层。
 struct PageManagedImage: View {
   @Environment(\.pageImageLifecycle) private var pageImageLifecycle
+  @Environment(\.gridImageDemandContext) private var gridImageDemandContext
   @State private var demandLease = PageImageDemandLease()
 
   let url: URL?
@@ -39,6 +40,7 @@ struct PageManagedImage: View {
       onSuccess: onSuccess,
       onFailure: onFailure,
       lifecycle: pageImageLifecycle,
+      gridImageDemandContext: gridImageDemandContext,
       demandLease: demandLease
     )
   }
@@ -58,6 +60,7 @@ private struct PageManagedImageSurface: UIViewRepresentable {
   let onSuccess: (() -> Void)?
   let onFailure: (() -> Void)?
   let lifecycle: PageImageLifecycle?
+  let gridImageDemandContext: GridImageDemandContext?
   let demandLease: PageImageDemandLease
 
   func makeUIView(context _: UIViewRepresentableContext<PageManagedImageSurface>) -> UIView {
@@ -84,6 +87,7 @@ private struct PageManagedImageSurface: UIViewRepresentable {
       onSuccess: onSuccess,
       onFailure: onFailure,
       lifecycle: lifecycle,
+      gridImageDemandContext: gridImageDemandContext,
       demandLease: demandLease
     )
   }
@@ -120,7 +124,7 @@ final class PageImageDemandLease {
 }
 
 @MainActor
-final class PageImageSlot: PageImageResource {
+final class PageImageSlot: PageImageResource, GridImageDemandResource {
   let key: String
 
   private let url: URL
@@ -131,6 +135,10 @@ final class PageImageSlot: PageImageResource {
   private let fadeDuration: TimeInterval
   private let performsImageRetrieval: Bool
   private weak var lifecycle: PageImageLifecycle?
+  private weak var gridImageController: GridImageLifecycleController?
+  private var gridImageListID: UUID?
+  private var gridImageItemIndex: Int?
+  private var requiresGridImagePermission = false
   private var surfaces: [ObjectIdentifier: WeakPageManagedImageView] = [:]
   private var surfaceDemandIDs: [ObjectIdentifier: UUID] = [:]
   private var demands: [UUID: Bool] = [:]
@@ -173,7 +181,7 @@ final class PageImageSlot: PageImageResource {
     let id = ObjectIdentifier(surface)
     surfaces[id] = WeakPageManagedImageView(surface)
     surfaceDemandIDs[id] = demandID
-    if demands[demandID] == true {
+    if demands[demandID] == true, pageAllowsImage {
       if let decodedImage {
         surface.install(decodedImage, fadeDuration: 0)
       }
@@ -218,15 +226,57 @@ final class PageImageSlot: PageImageResource {
     updateLoading()
   }
 
+  func setGridImageDemandContext(_ context: GridImageDemandContext?) {
+    if let context,
+      gridImageController === context.controller,
+      gridImageListID == context.listID,
+      gridImageItemIndex == context.itemIndex
+    {
+      return
+    }
+    if context == nil, !requiresGridImagePermission {
+      return
+    }
+
+    gridImageController?.unregister(self)
+    gridImageController = context?.controller
+    gridImageListID = context?.listID
+    gridImageItemIndex = context?.itemIndex
+    requiresGridImagePermission = context != nil
+
+    if let context {
+      context.controller.register(
+        self,
+        listID: context.listID,
+        itemIndex: context.itemIndex
+      )
+    } else {
+      updateLoading()
+    }
+  }
+
+  func gridImageDemandPermissionDidChange() {
+    updateLoading()
+  }
+
   private var isRequested: Bool {
     demands.values.contains(true)
   }
 
   private var pageAllowsImage: Bool {
-    switch role {
+    let roleAllowed = switch role {
     case .content: contentImagesAllowed
     case .activePage: activePageImagesAllowed
     }
+    guard roleAllowed else { return false }
+    guard requiresGridImagePermission else { return true }
+    guard let gridImageController, let gridImageListID, let gridImageItemIndex else {
+      return false
+    }
+    return gridImageController.allowsImages(
+      listID: gridImageListID,
+      itemIndex: gridImageItemIndex
+    )
   }
 
   private func updateLoading() {
@@ -328,6 +378,8 @@ final class PageImageSlot: PageImageResource {
 
   private func discardIfUnused() {
     guard surfaces.isEmpty, demands.isEmpty else { return }
+    gridImageController?.unregister(self)
+    gridImageController = nil
     lifecycle?.discardRetainedImageResource(for: key, matching: self)
   }
 }
@@ -360,11 +412,13 @@ final class PageManagedImageView: UIImageView {
     onSuccess: (() -> Void)?,
     onFailure: (() -> Void)?,
     lifecycle: PageImageLifecycle?,
+    gridImageDemandContext: GridImageDemandContext?,
     demandLease: PageImageDemandLease
   ) {
     successHandler = onSuccess
     failureHandler = onFailure
     let managedLifecycle = participatesInPageLifecycle ? lifecycle : nil
+    let managedGridContext = participatesInPageLifecycle ? gridImageDemandContext : nil
     guard let url else {
       replaceSlot(
         with: nil,
@@ -378,9 +432,13 @@ final class PageManagedImageView: UIImageView {
     let service = APIService.shared
     let source = service.imageSource(for: url)
     let roleKey = role == .content ? "content" : "active"
-    let key = "\(service.imageConfigurationIdentity)|\(source.cacheKey)|\(processor.identifier)|\(roleKey)|disk:\(loadsDiskFileSynchronously)|skip:\(skipsMemoryCache)|fade:\(fadeDuration)"
+    let gridKey = managedGridContext.map {
+      "grid:\($0.listID.uuidString):\($0.itemID):\($0.itemIndex)"
+    } ?? "grid:none"
+    let key = "\(service.imageConfigurationIdentity)|\(source.cacheKey)|\(processor.identifier)|\(roleKey)|\(gridKey)|disk:\(loadsDiskFileSynchronously)|skip:\(skipsMemoryCache)|fade:\(fadeDuration)"
 
     if slot?.key == key, self.lifecycle === managedLifecycle, self.demandLease === demandLease {
+      slot?.setGridImageDemandContext(managedGridContext)
       demandLease.bind(to: slot, isEnabled: isEnabled)
       return
     }
@@ -410,6 +468,7 @@ final class PageManagedImageView: UIImageView {
         fadeDuration: fadeDuration
       )
     }
+    newSlot.setGridImageDemandContext(managedGridContext)
     replaceSlot(
       with: newSlot,
       lifecycle: managedLifecycle,

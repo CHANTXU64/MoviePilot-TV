@@ -20,6 +20,7 @@ struct CollectionDetailView: View {
   var body: some View {
     MediaGridView(
       imageLifecycle: imageLifecycle,
+      listID: viewModel.paginator.listID,
       items: viewModel.paginator.items,
       isLoading: viewModel.paginator.isFirstLoading,
       isLoadingMore: viewModel.paginator.isLoadingMore,

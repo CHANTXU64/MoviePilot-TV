@@ -101,6 +101,26 @@ private func withTimeout<T: Sendable>(
 final class PaginatorTests: XCTestCase {
 
   @MainActor
+  func testListIDStaysStableAcrossRefreshButDiffersForNewPaginator() async {
+    let first = Paginator<TestItem>(
+      threshold: 1,
+      fetcher: { _ in [] },
+      processor: { _, _ in false }
+    )
+    let second = Paginator<TestItem>(
+      threshold: 1,
+      fetcher: { _ in [] },
+      processor: { _, _ in false }
+    )
+    let firstListID = first.listID
+
+    await first.refresh()
+
+    XCTAssertEqual(first.listID, firstListID)
+    XCTAssertNotEqual(first.listID, second.listID)
+  }
+
+  @MainActor
   func testFocusOnlyOffersForwardBatchToServerWarmer() async throws {
     var offeredItemIDs: [Int] = []
     let paginator = Paginator<TestItem>(

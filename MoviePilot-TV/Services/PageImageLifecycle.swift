@@ -14,6 +14,26 @@ protocol PageImageResource: AnyObject {
   func setPageImagePermissions(contentAllowed: Bool, activePageAllowed: Bool)
 }
 
+/// NavigationStack 的图片展示状态；普通导航深度只改变 PageImagePhase，不改变该状态。
+struct PageImageStackState: Equatable {
+  let isInteractive: Bool
+  let isForeground: Bool
+  let releaseEpoch: UInt
+}
+
+@MainActor
+protocol PageImageStackObserver: AnyObject {
+  func pageImageStackStateDidChange(_ state: PageImageStackState)
+}
+
+private final class WeakPageImageStackObserver {
+  weak var value: (any PageImageStackObserver)?
+
+  init(_ value: any PageImageStackObserver) {
+    self.value = value
+  }
+}
+
 /// 一个可导航页面唯一的图片生命周期。页面只读取保留策略，不自行判断 Push 或 Pop。
 @MainActor
 final class PageImageLifecycle: ObservableObject {
@@ -22,8 +42,11 @@ final class PageImageLifecycle: ObservableObject {
   @Published private(set) var phase: PageImagePhase
   @Published private(set) var isStackForeground = false
   @Published private(set) var isRemoved = false
+  @Published private(set) var stackReleaseEpoch: UInt = 0
+  private(set) var isStackInteractive = false
   /// 页面强持有图片 slot 的请求描述；UIView 可以销毁，slot 仍能在 adjacent 时预热。
   private var imageResources: [String: any PageImageResource] = [:]
+  private var stackObservers: [ObjectIdentifier: WeakPageImageStackObserver] = [:]
 
   init(id: UUID = UUID(), phase: PageImagePhase = .active) {
     self.id = id
@@ -65,6 +88,15 @@ final class PageImageLifecycle: ObservableObject {
     imageResources.removeValue(forKey: "object:\(ObjectIdentifier(resource))")
   }
 
+  func registerStackObserver(_ observer: any PageImageStackObserver) {
+    stackObservers[ObjectIdentifier(observer)] = WeakPageImageStackObserver(observer)
+    observer.pageImageStackStateDidChange(stackState)
+  }
+
+  func unregisterStackObserver(_ observer: any PageImageStackObserver) {
+    stackObservers.removeValue(forKey: ObjectIdentifier(observer))
+  }
+
   func retainedImageResource<Resource: PageImageResource>(
     for key: String,
     create: () -> Resource
@@ -89,14 +121,28 @@ final class PageImageLifecycle: ObservableObject {
     imageResources.removeValue(forKey: key)
   }
 
-  fileprivate func update(phase: PageImagePhase, isStackForeground: Bool) {
+  fileprivate func update(
+    phase: PageImagePhase,
+    isStackForeground: Bool,
+    isStackInteractive: Bool
+  ) {
     let previousContentPermission = keepsContentImages
     let previousActivePermission = keepsActivePageImages
+    let previousStackState = stackState
+    let wasStackForeground = self.isStackForeground
     if self.phase != phase {
       self.phase = phase
     }
     if self.isStackForeground != isStackForeground {
       self.isStackForeground = isStackForeground
+    }
+    self.isStackInteractive = isStackInteractive
+    if wasStackForeground, !isStackForeground {
+      stackReleaseEpoch &+= 1
+    }
+    let newStackState = stackState
+    if previousStackState != newStackState {
+      notifyStackObservers(newStackState)
     }
     if previousContentPermission != keepsContentImages
       || previousActivePermission != keepsActivePageImages
@@ -113,8 +159,16 @@ final class PageImageLifecycle: ObservableObject {
 
   /// Pop 动画结束后的终态。即使 SwiftUI 继续持有旧 destination，也会同步清空其图片 surface。
   fileprivate func finishRemoval() {
-    update(phase: .released, isStackForeground: false)
+    update(phase: .released, isStackForeground: false, isStackInteractive: false)
     imageResources.removeAll()
+  }
+
+  private var stackState: PageImageStackState {
+    PageImageStackState(
+      isInteractive: isStackInteractive,
+      isForeground: isStackForeground,
+      releaseEpoch: stackReleaseEpoch
+    )
   }
 
   private func updateImageResources() {
@@ -125,6 +179,18 @@ final class PageImageLifecycle: ObservableObject {
         contentAllowed: contentAllowed,
         activePageAllowed: activePageAllowed
       )
+    }
+  }
+
+  private func notifyStackObservers(_ state: PageImageStackState) {
+    let deadIDs = stackObservers.compactMap { id, observer in
+      observer.value == nil ? id : nil
+    }
+    for id in deadIDs {
+      stackObservers.removeValue(forKey: id)
+    }
+    for observer in stackObservers.values {
+      observer.value?.pageImageStackStateDidChange(state)
     }
   }
 }
@@ -181,7 +247,7 @@ final class ImageNavigationCoordinator: ObservableObject {
   private var removedLifecycleCleanupTasks: [UUID: Task<Void, Never>] = [:]
   private var stackForegroundReleaseTask: Task<Void, Never>?
   private var isStackForeground = false
-  private var isStackInteractive = false
+  @Published private(set) var isStackInteractive = false
   private var navigationRevision: UInt = 0
   private let mediaPreloader: MediaPreloader
   private let removedLifecycleRetention: Duration
@@ -228,6 +294,7 @@ final class ImageNavigationCoordinator: ObservableObject {
     guard isStackInteractive != isInteractive else { return }
     isStackInteractive = isInteractive
     navigationRevision &+= 1
+    reconcileLifecycles()
   }
 
   private func applyStackForeground(_ isForeground: Bool) {
@@ -308,7 +375,11 @@ final class ImageNavigationCoordinator: ObservableObject {
 
     // SwiftUI 在 Pop 转场中可能再次求值已移除的 destination。
     let lifecycle = PageImageLifecycle(id: entry.id, phase: .released)
-    lifecycle.update(phase: .released, isStackForeground: false)
+    lifecycle.update(
+      phase: .released,
+      isStackForeground: false,
+      isStackInteractive: false
+    )
     lifecycle.markRemoved()
     return lifecycle
   }
@@ -396,14 +467,16 @@ final class ImageNavigationCoordinator: ObservableObject {
     let topIndex = entries.count
     rootLifecycle.update(
       phase: phase(for: 0, topIndex: topIndex),
-      isStackForeground: isStackForeground
+      isStackForeground: isStackForeground,
+      isStackInteractive: isStackInteractive
     )
 
     for (index, entry) in entries.enumerated() {
       let phase = phase(for: index + 1, topIndex: topIndex)
       lifecycles[entry.id]?.update(
         phase: phase,
-        isStackForeground: isStackForeground
+        isStackForeground: isStackForeground,
+        isStackInteractive: isStackInteractive
       )
       if case .media(let media) = entry.route,
         !isStackForeground || phase != .active

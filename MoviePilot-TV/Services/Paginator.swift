@@ -3,6 +3,9 @@ import Foundation
 
 @MainActor
 public class Paginator<ItemType: Identifiable>: ObservableObject {
+  /// Paginator 实例的稳定列表代际；refresh/尾部追加不变，新子 Tab 会创建新实例和新 ID。
+  public let listID: UUID
+
   deinit {
     // 保留显式 deinit，维持既有 SIL 生成路径；同时清理未完成的数据加载任务。
     inFlightLoadTask?.cancel()
@@ -74,6 +77,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   ///                处理它们，并在添加了新内容时返回 `true`。
   ///   - onReset: 一个可选的闭包，用于在“重置”期间运行自定义的状态清除逻辑。
   public init(
+    listID: UUID = UUID(),
     threshold: Int,
     fetcher: @escaping @MainActor (Int) async throws -> [ItemType],
     processor: @escaping @MainActor (inout [ItemType], [ItemType]) -> Bool,
@@ -81,6 +85,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     imageWarmThreshold: Int? = nil,
     onReset: (() -> Void)? = nil
   ) {
+    self.listID = listID
     self.threshold = threshold
     self.fetcher = fetcher
     self.processor = processor

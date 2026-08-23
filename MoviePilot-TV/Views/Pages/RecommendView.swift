@@ -19,6 +19,7 @@ struct RecommendView: View {
           // 主内容槽（网格布局）
           MediaGridView(
             imageLifecycle: navigationCoordinator.rootLifecycle,
+            listID: paginator.listID,
             items: paginator.items,
             isLoading: paginator.isFirstLoading,
             isLoadingMore: paginator.isLoadingMore,
