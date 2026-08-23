@@ -145,6 +145,30 @@ final class DownloadTaskViewRefreshLoopTests: XCTestCase {
     XCTAssertEqual(cancelCount, 1)
   }
 
+  func testTransferHistoryMountsOnlyThreeRowsUntilItsSectionIsActivated() {
+    XCTAssertEqual(
+      TransferHistoryView.mountedRowCount(
+        totalCount: 20,
+        hasActivatedHistoryRows: false
+      ),
+      3
+    )
+    XCTAssertEqual(
+      TransferHistoryView.mountedRowCount(
+        totalCount: 2,
+        hasActivatedHistoryRows: false
+      ),
+      2
+    )
+    XCTAssertEqual(
+      TransferHistoryView.mountedRowCount(
+        totalCount: 20,
+        hasActivatedHistoryRows: true
+      ),
+      20
+    )
+  }
+
   func testActiveDetailSubscriptionRefreshWaitsBeforeFirstRefresh() async {
     var events: [String] = []
     var refreshCount = 0

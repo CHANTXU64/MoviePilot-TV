@@ -18,7 +18,7 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     )
     XCTAssertTrue(gridSource.contains("lhs.itemIndex == rhs.itemIndex"))
     XCTAssertTrue(gridSource.contains("lhs.itemCount == rhs.itemCount"))
-    XCTAssertTrue(gridSource.contains("lhs.listID == rhs.listID"))
+    XCTAssertTrue(gridSource.contains("lhs.listIdentity == rhs.listIdentity"))
     XCTAssertTrue(gridSource.contains("GridImageDemandContext("))
     XCTAssertFalse(gridSource.contains("loadsImage(at:"))
     XCTAssertFalse(gridSource.contains("loadsImage: loadsImage"))
@@ -27,18 +27,85 @@ final class DynamicSourceBehaviorTests: XCTestCase {
       gridSource.contains("domRetention.reconcile(itemIDs: items.map(\\.id))\n    domRetention.cardFocusChanged")
     )
     let paginatorSource = try source("MoviePilot-TV/Services/Paginator.swift")
-    XCTAssertTrue(paginatorSource.contains("public let listID: UUID"))
+    XCTAssertTrue(
+      paginatorSource.contains("@Published private(set) var listIdentity: GridListIdentity")
+    )
     let recommendSource = try source("MoviePilot-TV/Views/Pages/RecommendView.swift")
     let exploreSource = try source("MoviePilot-TV/Views/Pages/ExploreView.swift")
     XCTAssertFalse(recommendSource.contains(".id(paginator.listID)"))
     XCTAssertFalse(exploreSource.contains(".id(paginator.listID)"))
-    XCTAssertEqual(gridSource.components(separatedBy: ".id(listID)").count - 1, 1)
+    XCTAssertEqual(gridSource.components(separatedBy: ".id(listIdentity.id)").count - 1, 1)
     XCTAssertTrue(
-      gridSource.contains("          .id(listID)\n          .padding(.horizontal, -12)")
+      gridSource.contains("          .id(listIdentity.id)\n          .padding(.horizontal, -12)")
     )
     let preloaderSource = try source("MoviePilot-TV/ViewModels/MediaPreloader.swift")
     XCTAssertTrue(
       preloaderSource.contains("retrieveHeroImage(url, fallbackURL: target.fallbackURL)")
+    )
+    let managedImageSource = try source("MoviePilot-TV/Views/Components/PageManagedImage.swift")
+    XCTAssertTrue(managedImageSource.contains("$0.listIdentity.generation"))
+  }
+
+  func testMemoryCleanupPagesUseTheIntendedLifecycleBoundaries() throws {
+    let statusSource = try source("MoviePilot-TV/Views/Pages/StatusView.swift")
+    let downloadSource = try source("MoviePilot-TV/Views/Pages/DownloadTaskView.swift")
+    let downloadViewModelSource = try source(
+      "MoviePilot-TV/ViewModels/DownloadTaskViewModel.swift"
+    )
+    let transferSource = try source("MoviePilot-TV/Views/Pages/TransferHistoryView.swift")
+    let seasonSource = try source("MoviePilot-TV/Views/Pages/SubscribeSeasonView.swift")
+    let manualSearchSource = try source("MoviePilot-TV/Views/Sheets/ManualMediaSearchSheet.swift")
+    let lifecycleSource = try source("MoviePilot-TV/Services/PageImageLifecycle.swift")
+    let retentionSource = try source(
+      "MoviePilot-TV/Services/PresentationTransitionRetention.swift"
+    )
+    let detailSource = try source("MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift")
+
+    XCTAssertTrue(statusSource.contains("DownloadTaskView(isSelected: isSelected)"))
+    XCTAssertTrue(statusSource.contains(".task(id: isSelected)"))
+    XCTAssertTrue(statusSource.contains("guard isSelected else { return }"))
+    XCTAssertTrue(
+      statusSource.contains(
+        ".environment(\\.pageImageLifecycle, imageLifecycleCoordinator.rootLifecycle)"
+      )
+    )
+    XCTAssertTrue(downloadSource.contains(".task(id: isSelected)"))
+    XCTAssertTrue(downloadSource.contains("guard isSelected else { return }"))
+    XCTAssertTrue(downloadSource.contains("viewModel.setPresentationActive(isSelected)"))
+    XCTAssertTrue(downloadViewModelSource.contains("private var presentationGeneration = 0"))
+    XCTAssertTrue(downloadViewModelSource.contains("currentPresentationGeneration"))
+    XCTAssertTrue(downloadViewModelSource.contains("!Task.isCancelled"))
+    XCTAssertTrue(downloadSource.contains("PageManagedImage("))
+    XCTAssertFalse(downloadSource.contains("KFImage.sessionImage("))
+
+    XCTAssertTrue(
+      transferSource.contains(
+        "if !keepsRowsMounted {\n        EmptyView()\n      } else if viewModel.isFirstLoading"
+      )
+    )
+    XCTAssertTrue(statusSource.contains("TransferHistoryView.shouldMountRows("))
+    XCTAssertTrue(transferSource.contains(".onChange(of: keepsRowsMounted)"))
+
+    XCTAssertTrue(seasonSource.contains("@State private var gridListIdentity"))
+    XCTAssertFalse(seasonSource.contains("private let gridListIdentity"))
+    XCTAssertTrue(seasonSource.contains("GridImageDemandContext("))
+    XCTAssertTrue(seasonSource.contains("seasonInfos.prefix(retainedItemCount)"))
+    XCTAssertTrue(seasonSource.contains("let displayCount = min(10, viewModel.seasonInfos.count)"))
+
+    XCTAssertTrue(manualSearchSource.contains("searchTask?.cancel()"))
+    XCTAssertTrue(manualSearchSource.contains("viewModel.presentationDidDisappear()"))
+    XCTAssertTrue(manualSearchSource.contains("guard searchRevision == revision else { return }"))
+
+    XCTAssertTrue(
+      lifecycleSource.contains(
+        "tabTransitionImageRetention: Duration = PresentationTransitionRetention.duration"
+      )
+    )
+    XCTAssertTrue(retentionSource.contains("static let duration = Duration.seconds(1)"))
+    XCTAssertTrue(
+      detailSource.contains(
+        "loadingPosterReleaseDelay = PresentationTransitionRetention.duration"
+      )
     )
   }
 

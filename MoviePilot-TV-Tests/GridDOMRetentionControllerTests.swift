@@ -259,14 +259,14 @@ final class GridDOMRetentionControllerTests: XCTestCase {
     controller.cardFocusChanged(itemID: "item-59", isFocused: true)
     XCTAssertEqual(controller.retainedItemLimit, 78)
 
-    let oldListID = controller.listID
-    let newListID = UUID()
-    controller.reconcile(listID: newListID, itemIDs: itemIDs(120))
+    let oldListIdentity = controller.listIdentity
+    let newListIdentity = GridListIdentity.make()
+    controller.reconcile(listIdentity: newListIdentity, itemIDs: itemIDs(120))
     XCTAssertEqual(controller.retainedItemLimit, 24)
 
     XCTAssertFalse(
       controller.cardFocusChanged(
-        listID: oldListID,
+        listIdentity: oldListIdentity,
         itemID: "item-59",
         itemIndex: 59,
         isFocused: true
@@ -275,9 +275,44 @@ final class GridDOMRetentionControllerTests: XCTestCase {
     XCTAssertEqual(controller.retainedItemLimit, 24)
   }
 
+  func testEventSnapshotCannotRestorePreRefreshDOMOrReplaceCurrentGeneration() {
+    let controller = makeActiveController(itemCount: 120)
+    let oldIdentity = controller.listIdentity
+    controller.cardFocusChanged(itemID: "item-65", itemIndex: 65, isFocused: true)
+    XCTAssertEqual(controller.retainedItemLimit, 84)
+
+    let refreshedIdentity = oldIdentity.advanced()
+    controller.reconcile(listIdentity: refreshedIdentity, itemIDs: [])
+    XCTAssertFalse(
+      controller.reconcileEventSnapshot(
+        listIdentity: oldIdentity,
+        itemIDs: itemIDs(120)
+      )
+    )
+    XCTAssertEqual(controller.listIdentity, refreshedIdentity)
+    XCTAssertEqual(controller.retainedItemLimit, 24)
+
+    let replacementIDs = (0..<60).map { "replacement-\($0)" }
+    controller.reconcile(listIdentity: refreshedIdentity, itemIDs: replacementIDs)
+    XCTAssertFalse(
+      controller.reconcileEventSnapshot(
+        listIdentity: refreshedIdentity,
+        itemIDs: itemIDs(60)
+      )
+    )
+    XCTAssertFalse(
+      controller.cardFocusChanged(
+        listIdentity: refreshedIdentity,
+        itemID: "item-42",
+        itemIndex: 42,
+        isFocused: true
+      )
+    )
+  }
+
   private func makeController(itemCount: Int) -> GridDOMRetentionController {
     GridDOMRetentionController(
-      listID: UUID(),
+      listIdentity: GridListIdentity.make(),
       itemIDs: itemIDs(itemCount),
       columnCount: columnCount,
       stabilizationDelay: .milliseconds(15)
@@ -308,7 +343,7 @@ private extension GridDOMRetentionController {
     isFocused: Bool
   ) -> Bool {
     cardFocusChanged(
-      listID: listID,
+      listIdentity: listIdentity,
       itemID: itemID,
       itemIndex: itemIndex,
       isFocused: isFocused
@@ -316,6 +351,6 @@ private extension GridDOMRetentionController {
   }
 
   func reconcile(itemIDs: [MediaInfo.ID]) {
-    reconcile(listID: listID, itemIDs: itemIDs)
+    reconcile(listIdentity: listIdentity, itemIDs: itemIDs)
   }
 }

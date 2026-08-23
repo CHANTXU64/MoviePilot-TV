@@ -101,7 +101,7 @@ private func withTimeout<T: Sendable>(
 final class PaginatorTests: XCTestCase {
 
   @MainActor
-  func testListIDStaysStableAcrossRefreshButDiffersForNewPaginator() async {
+  func testListIDStaysStableButContentGenerationAdvancesAcrossRefresh() async {
     let first = Paginator<TestItem>(
       threshold: 1,
       fetcher: { _ in [] },
@@ -112,12 +112,15 @@ final class PaginatorTests: XCTestCase {
       fetcher: { _ in [] },
       processor: { _, _ in false }
     )
+    let firstListIdentity = first.listIdentity
     let firstListID = first.listID
 
     await first.refresh()
 
     XCTAssertEqual(first.listID, firstListID)
-    XCTAssertNotEqual(first.listID, second.listID)
+    XCTAssertNotEqual(first.listIdentity, firstListIdentity)
+    XCTAssertGreaterThan(first.listIdentity.generation, firstListIdentity.generation)
+    XCTAssertNotEqual(first.listIdentity, second.listIdentity)
   }
 
   @MainActor

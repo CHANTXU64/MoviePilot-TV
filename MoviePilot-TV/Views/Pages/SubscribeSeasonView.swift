@@ -4,6 +4,10 @@ import SwiftUI
 struct SubscribeSeasonView: View {
   @StateObject private var viewModel: SubscribeSeasonViewModel
   @ObservedObject var imageLifecycle: PageImageLifecycle
+  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
+  @State private var gridListIdentity: GridListIdentity
+  @StateObject private var gridDOMRetention: GridDOMRetentionController
+  @StateObject private var gridImageRetention: GridImageLifecycleController
 
   init(
     mediaInfo: MediaInfo,
@@ -12,26 +16,119 @@ struct SubscribeSeasonView: View {
     imageLifecycle: PageImageLifecycle
   ) {
     self.imageLifecycle = imageLifecycle
+    let listIdentity = GridListIdentity.make()
+    _gridListIdentity = State(initialValue: listIdentity)
     _viewModel = StateObject(
       wrappedValue: SubscribeSeasonViewModel(
         mediaInfo: mediaInfo,
         initialSeason: initialSeason,
         initialEpisodeGroup: initialEpisodeGroup
       ))
+    _gridDOMRetention = StateObject(
+      wrappedValue: GridDOMRetentionController(
+        listIdentity: listIdentity,
+        itemIDs: [],
+        columnCount: MediaCard.defaultGridColumns.count
+      )
+    )
+    _gridImageRetention = StateObject(
+      wrappedValue: GridImageLifecycleController(
+        listIdentity: listIdentity,
+        itemIDs: [],
+        columnCount: MediaCard.defaultGridColumns.count,
+        imageLifecycle: imageLifecycle
+      )
+    )
   }
 
   var body: some View {
+    let itemIDs = Self.gridItemIDs(for: viewModel.seasonInfos)
+    let retainedItemCount = gridDOMRetention.retainedItemCount(
+      for: viewModel.seasonInfos.count,
+      listIdentity: gridListIdentity
+    )
+
     ScrollView {
       SubscribeSeasonContentView(
         viewModel: viewModel,
         layout: .grid,
-        loadsImages: true
+        loadsImages: true,
+        gridLifecycle: SeasonGridLifecycleContext(
+          listIdentity: gridListIdentity,
+          itemIDs: itemIDs,
+          retainedItemCount: retainedItemCount,
+          imageController: gridImageRetention,
+          onFocus: handleGridFocus
+        )
       )
     }
     .focusSection()
+    .onScrollGeometryChange(
+      for: CGFloat.self,
+      of: { geometry in
+        geometry.contentOffset.y + geometry.contentInsets.top
+      },
+      action: { _, adjustedOffsetY in
+        gridDOMRetention.scrollPositionChanged(adjustedOffsetY: adjustedOffsetY)
+      }
+    )
+    .onScrollPhaseChange { _, newPhase in
+      gridDOMRetention.scrollPhaseChanged(newPhase)
+    }
+    .onAppear {
+      gridDOMRetention.reconcile(listIdentity: gridListIdentity, itemIDs: itemIDs)
+      gridImageRetention.reconcile(listIdentity: gridListIdentity, itemIDs: itemIDs)
+      gridDOMRetention.setViewActive(true)
+      gridDOMRetention.setStackInteractive(navigationCoordinator.isStackInteractive)
+    }
+    .onChange(of: itemIDs) { oldItemIDs, newItemIDs in
+      let isAppend = newItemIDs.count >= oldItemIDs.count
+        && newItemIDs.prefix(oldItemIDs.count).elementsEqual(oldItemIDs)
+      let newIdentity = isAppend ? gridListIdentity : gridListIdentity.advanced()
+      if newIdentity != gridListIdentity {
+        gridListIdentity = newIdentity
+      }
+      gridDOMRetention.reconcile(listIdentity: newIdentity, itemIDs: newItemIDs)
+      gridImageRetention.reconcile(listIdentity: newIdentity, itemIDs: newItemIDs)
+    }
+    .onChange(of: navigationCoordinator.isStackInteractive) { _, isInteractive in
+      gridDOMRetention.setStackInteractive(isInteractive)
+    }
+    .onDisappear {
+      gridDOMRetention.setViewActive(false)
+    }
     .task {
       await viewModel.loadSeasonManagementData()
     }
+  }
+
+  private static func gridItemIDs(for seasons: [TmdbSeason]) -> [MediaInfo.ID] {
+    seasons.enumerated().map { index, season in
+      "season:\(season.season_number.map(String.init) ?? "missing"):\(index)"
+    }
+  }
+
+  private func handleGridFocus(
+    listIdentity: GridListIdentity,
+    itemIDs: [MediaInfo.ID],
+    itemID: MediaInfo.ID,
+    itemIndex: Int,
+    isFocused: Bool
+  ) {
+    gridImageRetention.reconcileEventSnapshot(listIdentity: listIdentity, itemIDs: itemIDs)
+    gridDOMRetention.reconcileEventSnapshot(listIdentity: listIdentity, itemIDs: itemIDs)
+    guard gridImageRetention.cardFocusChanged(
+      listIdentity: listIdentity,
+      itemID: itemID,
+      itemIndex: itemIndex,
+      isFocused: isFocused
+    ) else { return }
+    _ = gridDOMRetention.cardFocusChanged(
+      listIdentity: listIdentity,
+      itemID: itemID,
+      itemIndex: itemIndex,
+      isFocused: isFocused
+    )
   }
 }
 
@@ -39,6 +136,15 @@ struct SubscribeSeasonView: View {
 enum SeasonLayout {
   case shelf
   case grid
+}
+
+struct SeasonGridLifecycleContext {
+  let listIdentity: GridListIdentity
+  let itemIDs: [MediaInfo.ID]
+  let retainedItemCount: Int
+  let imageController: GridImageLifecycleController
+  let onFocus:
+    (GridListIdentity, [MediaInfo.ID], MediaInfo.ID, Int, Bool) -> Void
 }
 
 struct SubscribeSeasonContentView: View {
@@ -49,6 +155,7 @@ struct SubscribeSeasonContentView: View {
   var loadsImages: Bool = true
   var onSeasonTap: ((TmdbSeason) -> Void)? = nil
   var onMoreTapped: (() -> Void)? = nil
+  var gridLifecycle: SeasonGridLifecycleContext? = nil
 
   @EnvironmentObject private var notificationManager: NotificationManager
   @Environment(\.scenePhase) private var scenePhase
@@ -177,6 +284,11 @@ struct SubscribeSeasonContentView: View {
           .scrollClipDisabled()
           .focusSection()
         case .grid:
+          let gridLifecycle = gridLifecycle
+          let retainedItemCount = min(
+            viewModel.seasonInfos.count,
+            gridLifecycle?.retainedItemCount ?? viewModel.seasonInfos.count
+          )
           VStack(spacing: 0) {
             // Top Focus Redirector: Catches focus when navigating down from header
             Color.clear
@@ -191,11 +303,43 @@ struct SubscribeSeasonContentView: View {
               }
 
             LazyVGrid(columns: MediaCard.defaultGridColumns, spacing: 40) {
-              ForEach(viewModel.seasonInfos, id: \.self) { season in
-                seasonCard(season)
+              ForEach(
+                Array(viewModel.seasonInfos.prefix(retainedItemCount).enumerated()),
+                id: \.offset
+              ) { entry in
+                let index = entry.offset
+                let season = entry.element
+                let itemID = gridLifecycle?.itemIDs[index]
+                  ?? "season:\(season.season_number.map(String.init) ?? "missing"):\(index)"
+                seasonCard(
+                  season,
+                  onFocus: { isFocused in
+                    guard let gridLifecycle else { return }
+                    gridLifecycle.onFocus(
+                      gridLifecycle.listIdentity,
+                      gridLifecycle.itemIDs,
+                      itemID,
+                      index,
+                      isFocused
+                    )
+                  }
+                )
                   .focused($focusedSeasonId, equals: season.season_number)
+                  .environment(
+                    \.gridImageDemandContext,
+                    gridLifecycle.map {
+                      GridImageDemandContext(
+                        controller: $0.imageController,
+                        listIdentity: $0.listIdentity,
+                        itemIDs: $0.itemIDs,
+                        itemID: itemID,
+                        itemIndex: index
+                      )
+                    }
+                  )
               }
             }
+            .id(gridLifecycle?.listIdentity.id)
             .padding()
 
             // Focus Redirector: Catches focus when navigating down from an incomplete row
@@ -317,7 +461,10 @@ struct SubscribeSeasonContentView: View {
   }
 
   @ViewBuilder
-  private func seasonCard(_ season: TmdbSeason) -> some View {
+  private func seasonCard(
+    _ season: TmdbSeason,
+    onFocus: ((Bool) -> Void)? = nil
+  ) -> some View {
     let seasonNumber = season.season_number ?? 0
     let isSubscribed = viewModel.isSeasonSubscribed(seasonNumber)
     let isProcessing = viewModel.isSeasonSubscribing(seasonNumber)
@@ -369,7 +516,8 @@ struct SubscribeSeasonContentView: View {
             prepareSubscription: { viewModel.prepareSubscription(seasonNumber: $0) }
           )
         }
-      }
+      },
+      onFocus: onFocus
     )
     .compositingGroup()
     .contextMenu {

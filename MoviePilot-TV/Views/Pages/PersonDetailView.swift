@@ -25,7 +25,7 @@ struct PersonDetailView: View {
   var body: some View {
     MediaGridView(
       imageLifecycle: imageLifecycle,
-      listID: viewModel.paginator.listID,
+      listIdentity: viewModel.paginator.listIdentity,
       items: viewModel.paginator.items,
       isLoading: viewModel.isLoadingDetails || viewModel.paginator.isFirstLoading,
       isLoadingMore: viewModel.paginator.isLoadingMore,

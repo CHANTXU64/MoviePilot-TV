@@ -136,7 +136,7 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
   private let performsImageRetrieval: Bool
   private weak var lifecycle: PageImageLifecycle?
   private weak var gridImageController: GridImageLifecycleController?
-  private var gridImageListID: UUID?
+  private var gridImageListIdentity: GridListIdentity?
   private var gridImageItemIndex: Int?
   private var requiresGridImagePermission = false
   private var surfaces: [ObjectIdentifier: WeakPageManagedImageView] = [:]
@@ -229,7 +229,7 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
   func setGridImageDemandContext(_ context: GridImageDemandContext?) {
     if let context,
       gridImageController === context.controller,
-      gridImageListID == context.listID,
+      gridImageListIdentity == context.listIdentity,
       gridImageItemIndex == context.itemIndex
     {
       return
@@ -240,14 +240,20 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
 
     gridImageController?.unregister(self)
     gridImageController = context?.controller
-    gridImageListID = context?.listID
+    gridImageListIdentity = context?.listIdentity
     gridImageItemIndex = context?.itemIndex
     requiresGridImagePermission = context != nil
 
     if let context {
+      if let itemIDs = context.itemIDs {
+        context.controller.reconcileEventSnapshot(
+          listIdentity: context.listIdentity,
+          itemIDs: itemIDs
+        )
+      }
       context.controller.register(
         self,
-        listID: context.listID,
+        listIdentity: context.listIdentity,
         itemIndex: context.itemIndex
       )
     } else {
@@ -270,11 +276,11 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
     }
     guard roleAllowed else { return false }
     guard requiresGridImagePermission else { return true }
-    guard let gridImageController, let gridImageListID, let gridImageItemIndex else {
+    guard let gridImageController, let gridImageListIdentity, let gridImageItemIndex else {
       return false
     }
     return gridImageController.allowsImages(
-      listID: gridImageListID,
+      listIdentity: gridImageListIdentity,
       itemIndex: gridImageItemIndex
     )
   }
@@ -433,7 +439,7 @@ final class PageManagedImageView: UIImageView {
     let source = service.imageSource(for: url)
     let roleKey = role == .content ? "content" : "active"
     let gridKey = managedGridContext.map {
-      "grid:\($0.listID.uuidString):\($0.itemID):\($0.itemIndex)"
+      "grid:\($0.listIdentity.id.uuidString):\($0.listIdentity.generation):\($0.itemID):\($0.itemIndex)"
     } ?? "grid:none"
     let key = "\(service.imageConfigurationIdentity)|\(source.cacheKey)|\(processor.identifier)|\(roleKey)|\(gridKey)|disk:\(loadsDiskFileSynchronously)|skip:\(skipsMemoryCache)|fade:\(fadeDuration)"
 

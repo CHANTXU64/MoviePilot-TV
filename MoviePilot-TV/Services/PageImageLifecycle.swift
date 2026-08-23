@@ -256,8 +256,8 @@ final class ImageNavigationCoordinator: ObservableObject {
 
   init(
     mediaPreloader: MediaPreloader = .shared,
-    removedLifecycleRetention: Duration = .seconds(1),
-    tabTransitionImageRetention: Duration = .milliseconds(500)
+    removedLifecycleRetention: Duration = PresentationTransitionRetention.duration,
+    tabTransitionImageRetention: Duration = PresentationTransitionRetention.duration
   ) {
     self.mediaPreloader = mediaPreloader
     self.removedLifecycleRetention = removedLifecycleRetention

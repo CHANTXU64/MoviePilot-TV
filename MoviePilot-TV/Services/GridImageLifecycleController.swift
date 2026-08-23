@@ -9,9 +9,24 @@ protocol GridImageDemandResource: AnyObject {
 /// 单张 Grid 图片所属的稳定列表位置。卡片节点通过环境把它传给 PageManagedImage。
 struct GridImageDemandContext {
   let controller: GridImageLifecycleController
-  let listID: UUID
+  let listIdentity: GridListIdentity
+  let itemIDs: [MediaInfo.ID]?
   let itemID: MediaInfo.ID
   let itemIndex: Int
+
+  init(
+    controller: GridImageLifecycleController,
+    listIdentity: GridListIdentity,
+    itemIDs: [MediaInfo.ID]? = nil,
+    itemID: MediaInfo.ID,
+    itemIndex: Int
+  ) {
+    self.controller = controller
+    self.listIdentity = listIdentity
+    self.itemIDs = itemIDs
+    self.itemID = itemID
+    self.itemIndex = itemIndex
+  }
 }
 
 private struct GridImageDemandContextEnvironmentKey: EnvironmentKey {
@@ -36,24 +51,29 @@ final class GridImageLifecycleController: ObservableObject, PageImageStackObserv
 
   private final class WeakResource {
     weak var value: (any GridImageDemandResource)?
-    let listID: UUID
+    let listIdentity: GridListIdentity
     let itemIndex: Int
 
-    init(value: any GridImageDemandResource, listID: UUID, itemIndex: Int) {
+    init(
+      value: any GridImageDemandResource,
+      listIdentity: GridListIdentity,
+      itemIndex: Int
+    ) {
       self.value = value
-      self.listID = listID
+      self.listIdentity = listIdentity
       self.itemIndex = itemIndex
     }
   }
 
   private struct PermissionSnapshot {
-    let listID: UUID
+    let listIdentity: GridListIdentity
     let itemCount: Int
     let activation: Activation
   }
 
   private(set) var activation: Activation = .disarmed
-  private(set) var listID: UUID
+  private(set) var listIdentity: GridListIdentity
+  var listID: UUID { listIdentity.id }
 
   private var itemIDs: [MediaInfo.ID]
   private let columnCount: Int
@@ -64,12 +84,12 @@ final class GridImageLifecycleController: ObservableObject, PageImageStackObserv
   private var isStackForeground = false
 
   init(
-    listID: UUID,
+    listIdentity: GridListIdentity,
     itemIDs: [MediaInfo.ID],
     columnCount: Int,
     imageLifecycle: PageImageLifecycle
   ) {
-    self.listID = listID
+    self.listIdentity = listIdentity
     self.itemIDs = itemIDs
     self.columnCount = columnCount
     self.imageLifecycle = imageLifecycle
@@ -81,47 +101,68 @@ final class GridImageLifecycleController: ObservableObject, PageImageStackObserv
   }
 
   /// 同一 Paginator 的尾部追加保留窗口；新 listID 或非追加变化立即关闭旧窗口。
-  func reconcile(listID newListID: UUID, itemIDs newItemIDs: [MediaInfo.ID]) {
+  @discardableResult
+  func reconcile(
+    listIdentity newIdentity: GridListIdentity,
+    itemIDs newItemIDs: [MediaInfo.ID]
+  ) -> Bool {
     let previousPermissions = permissionSnapshot
-    guard newListID == listID else {
-      listID = newListID
+    guard newIdentity.generation >= listIdentity.generation else { return false }
+    guard newIdentity.generation != listIdentity.generation || newIdentity.id == listIdentity.id
+    else { return false }
+    guard newIdentity == listIdentity else {
+      listIdentity = newIdentity
       itemIDs = newItemIDs
       setActivation(restoredActivation, changedFrom: previousPermissions)
-      return
+      return true
     }
 
-    let appendedByPaginator = newItemIDs.count >= itemIDs.count
-      && newItemIDs.prefix(itemIDs.count).elementsEqual(itemIDs)
+    let appendedByPaginator = isPaginatorAppend(newItemIDs)
     itemIDs = newItemIDs
 
     guard appendedByPaginator else {
       setActivation(restoredActivation, changedFrom: previousPermissions)
-      return
+      return true
     }
 
     if activation == .disarmed {
       setActivation(restoredActivation, changedFrom: previousPermissions)
-      return
+      return true
     }
 
     if case .armed(let itemID, let itemIndex) = activation,
       !isValid(itemID: itemID, itemIndex: itemIndex)
     {
       setActivation(restoredActivation, changedFrom: previousPermissions)
-      return
+      return true
     }
     notifyResources(changedFrom: previousPermissions)
+    return true
+  }
+
+  /// 卡片/Slot 的快照不是权威数据源：只允许更高内容代际，或同代际严格尾部追加。
+  /// refresh 会先推进 generation，因此 refresh 前的旧卡片不能把清空后的列表重新写回。
+  @discardableResult
+  func reconcileEventSnapshot(
+    listIdentity newIdentity: GridListIdentity,
+    itemIDs newItemIDs: [MediaInfo.ID]
+  ) -> Bool {
+    guard newIdentity != listIdentity || newItemIDs != itemIDs else { return true }
+    if newIdentity == listIdentity, !isPaginatorAppend(newItemIDs) {
+      return false
+    }
+    return reconcile(listIdentity: newIdentity, itemIDs: newItemIDs)
   }
 
   /// 只有当前列表中真实存在的卡片焦点才能激活或推进图片窗口。
   @discardableResult
   func cardFocusChanged(
-    listID eventListID: UUID,
+    listIdentity eventIdentity: GridListIdentity,
     itemID: MediaInfo.ID,
     itemIndex: Int,
     isFocused: Bool
   ) -> Bool {
-    guard eventListID == listID, isValid(itemID: itemID, itemIndex: itemIndex) else {
+    guard eventIdentity == listIdentity, isValid(itemID: itemID, itemIndex: itemIndex) else {
       return false
     }
     guard isFocused else { return true }
@@ -138,9 +179,9 @@ final class GridImageLifecycleController: ObservableObject, PageImageStackObserv
     return true
   }
 
-  func allowsImages(listID resourceListID: UUID, itemIndex: Int) -> Bool {
+  func allowsImages(listIdentity resourceIdentity: GridListIdentity, itemIndex: Int) -> Bool {
     allowsImages(
-      listID: resourceListID,
+      listIdentity: resourceIdentity,
       itemIndex: itemIndex,
       snapshot: permissionSnapshot
     )
@@ -148,12 +189,12 @@ final class GridImageLifecycleController: ObservableObject, PageImageStackObserv
 
   func register(
     _ resource: any GridImageDemandResource,
-    listID resourceListID: UUID,
+    listIdentity resourceIdentity: GridListIdentity,
     itemIndex: Int
   ) {
     resources[ObjectIdentifier(resource)] = WeakResource(
       value: resource,
-      listID: resourceListID,
+      listIdentity: resourceIdentity,
       itemIndex: itemIndex
     )
     resource.gridImageDemandPermissionDidChange()
@@ -180,6 +221,11 @@ final class GridImageLifecycleController: ObservableObject, PageImageStackObserv
     itemIDs.indices.contains(itemIndex) && itemIDs[itemIndex] == itemID
   }
 
+  private func isPaginatorAppend(_ newItemIDs: [MediaInfo.ID]) -> Bool {
+    newItemIDs.count >= itemIDs.count
+      && newItemIDs.prefix(itemIDs.count).elementsEqual(itemIDs)
+  }
+
   private func disarm() {
     let previousPermissions = permissionSnapshot
     setActivation(.disarmed, changedFrom: previousPermissions)
@@ -200,7 +246,11 @@ final class GridImageLifecycleController: ObservableObject, PageImageStackObserv
   }
 
   private var permissionSnapshot: PermissionSnapshot {
-    PermissionSnapshot(listID: listID, itemCount: itemIDs.count, activation: activation)
+    PermissionSnapshot(
+      listIdentity: listIdentity,
+      itemCount: itemIDs.count,
+      activation: activation
+    )
   }
 
   private func setActivation(
@@ -223,12 +273,12 @@ final class GridImageLifecycleController: ObservableObject, PageImageStackObserv
     }
     for resource in resources.values {
       let wasAllowed = allowsImages(
-        listID: resource.listID,
+        listIdentity: resource.listIdentity,
         itemIndex: resource.itemIndex,
         snapshot: previousPermissions
       )
       let isAllowed = allowsImages(
-        listID: resource.listID,
+        listIdentity: resource.listIdentity,
         itemIndex: resource.itemIndex,
         snapshot: currentPermissions
       )
@@ -239,11 +289,11 @@ final class GridImageLifecycleController: ObservableObject, PageImageStackObserv
   }
 
   private func allowsImages(
-    listID resourceListID: UUID,
+    listIdentity resourceIdentity: GridListIdentity,
     itemIndex: Int,
     snapshot: PermissionSnapshot
   ) -> Bool {
-    guard resourceListID == snapshot.listID,
+    guard resourceIdentity == snapshot.listIdentity,
       snapshot.itemCount > 0,
       (0..<snapshot.itemCount).contains(itemIndex)
     else { return false }

@@ -37,6 +37,7 @@ final class ManualMediaSearchViewModel: ObservableObject {
   let source: MediaSearchSource
   private let apiService: APIService
   private var searchRevision = 0
+  private let dismissalReleaseScheduler = PresentationReleaseScheduler()
 
   init(source: MediaSearchSource, apiService: APIService = .shared) {
     self.source = source
@@ -69,11 +70,32 @@ final class ManualMediaSearchViewModel: ObservableObject {
       Logger.error("Failed to search manual media ID: \(error)")
     }
   }
+
+  func presentationDidAppear() {
+    let wasAwaitingDismissalCleanup = dismissalReleaseScheduler.isPending
+    dismissalReleaseScheduler.cancel()
+    if wasAwaitingDismissalCleanup {
+      isLoading = false
+    }
+  }
+
+  func presentationDidDisappear(
+    retention: Duration = PresentationTransitionRetention.duration
+  ) {
+    searchRevision &+= 1
+    let revision = searchRevision
+    dismissalReleaseScheduler.schedule(after: retention) { [self] in
+      guard searchRevision == revision else { return }
+      items = []
+      isLoading = false
+    }
+  }
 }
 
 struct ManualMediaSearchSheet: View {
   @ObservedObject private var apiService = APIService.shared
   @StateObject private var viewModel: ManualMediaSearchViewModel
+  @State private var searchTask: Task<Void, Never>?
 
   let onSelect: (String, MediaInfo) -> Void
 
@@ -102,7 +124,8 @@ struct ManualMediaSearchSheet: View {
           .labelsHidden()
 
           Button {
-            Task { await viewModel.search() }
+            searchTask?.cancel()
+            searchTask = Task { await viewModel.search() }
           } label: {
             Label("搜索", systemImage: "magnifyingglass")
           }
@@ -150,6 +173,14 @@ struct ManualMediaSearchSheet: View {
       .padding(.top, 40)
     }
     .frame(width: 1092, height: 820)
+    .onAppear {
+      viewModel.presentationDidAppear()
+    }
+    .onDisappear {
+      searchTask?.cancel()
+      searchTask = nil
+      viewModel.presentationDidDisappear()
+    }
   }
 
   private func displayTitle(for item: MediaInfo) -> String {

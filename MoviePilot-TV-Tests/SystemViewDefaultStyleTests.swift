@@ -86,11 +86,9 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     )
 
     XCTAssertTrue(contentSource.contains("StatusView(isSelected: selectedTab == .status)"))
-    XCTAssertTrue(
-      statusSource.contains(
-        "TransferHistoryView(viewModel: transferHistoryViewModel, isSelected: isSelected)"
-      )
-    )
+    XCTAssertTrue(statusSource.contains("TransferHistoryView("))
+    XCTAssertTrue(statusSource.contains("viewModel: transferHistoryViewModel"))
+    XCTAssertTrue(statusSource.contains("keepsRowsMounted: TransferHistoryView.shouldMountRows("))
     XCTAssertTrue(historySource.contains(".task(id: isSelected)"))
     XCTAssertTrue(historySource.contains("await Self.runAutoRefresh("))
   }
@@ -449,7 +447,11 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains(".focusSection()"))
     XCTAssertFalse(source.contains("Button(\"关闭\")"))
     XCTAssertEqual(source.components(separatedBy: "viewModel.search()").count - 1, 1)
-    XCTAssertTrue(source.contains("Button {\n            Task { await viewModel.search() }"))
+    XCTAssertTrue(
+      source.contains(
+        "Button {\n            searchTask?.cancel()\n            searchTask = Task { await viewModel.search() }"
+      )
+    )
     XCTAssertTrue(source.contains(".disabled(viewModel.isLoading)"))
     XCTAssertTrue(source.contains("private var searchRevision = 0"))
     XCTAssertTrue(source.contains("searchRevision &+= 1"))
@@ -491,6 +493,9 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains(".frame(width: 1140, height: 820)"))
     XCTAssertFalse(source.contains(".frame(width: 1200, height: 820)"))
     XCTAssertFalse(source.contains(".frame(width: 1400, height: 820)"))
+    XCTAssertTrue(source.contains(".onDisappear {"))
+    XCTAssertTrue(source.contains("viewModel.presentationDidDisappear()"))
+    XCTAssertTrue(source.contains("viewModel.presentationDidAppear()"))
   }
 
   @MainActor
@@ -502,6 +507,37 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     await viewModel.search()
 
     XCTAssertTrue(viewModel.items.isEmpty)
+    XCTAssertFalse(viewModel.isLoading)
+  }
+
+  @MainActor
+  func testManualMediaSearchDismissalKeepsResultsUntilTransitionCompletes() async throws {
+    let viewModel = ManualMediaSearchViewModel(source: .themoviedb)
+    viewModel.items = [MediaInfo(tmdb_id: 42, title: "旧结果")]
+    viewModel.isLoading = true
+
+    viewModel.presentationDidDisappear(retention: .milliseconds(20))
+
+    XCTAssertEqual(viewModel.items.map(\.tmdb_id), [42])
+    XCTAssertTrue(viewModel.isLoading)
+
+    try await Task.sleep(for: .milliseconds(40))
+
+    XCTAssertTrue(viewModel.items.isEmpty)
+    XCTAssertFalse(viewModel.isLoading)
+  }
+
+  @MainActor
+  func testManualMediaSearchRapidReappearanceCancelsPendingCleanup() async throws {
+    let viewModel = ManualMediaSearchViewModel(source: .themoviedb)
+    viewModel.items = [MediaInfo(tmdb_id: 42, title: "旧结果")]
+    viewModel.isLoading = true
+
+    viewModel.presentationDidDisappear(retention: .milliseconds(20))
+    viewModel.presentationDidAppear()
+    try await Task.sleep(for: .milliseconds(40))
+
+    XCTAssertEqual(viewModel.items.map(\.tmdb_id), [42])
     XCTAssertFalse(viewModel.isLoading)
   }
 
@@ -561,7 +597,11 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let source = try Self.source(at: "MoviePilot-TV/Views/Components/MediaGridView.swift")
     let windowSource = try Self.source(at: "MoviePilot-TV/Services/ImageLoadWindow.swift")
 
-    XCTAssertTrue(source.contains("onFocus: { isFocused in handleFocus"))
+    XCTAssertTrue(
+      source.contains(
+        "onFocus: { isFocused in\n                    handleFocus("
+      )
+    )
     XCTAssertFalse(source.contains("@FocusState private var focusedGridItemID"))
     XCTAssertFalse(source.contains("scheduleImageAnchorReset"))
     XCTAssertTrue(windowSource.contains("gridPinnedTopRowCount = 2"))
@@ -572,7 +612,11 @@ final class SystemViewDefaultStyleTests: XCTestCase {
       at: "MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift"
     )
 
-    XCTAssertTrue(source.contains("loadingPosterReleaseDelay = Duration.milliseconds(350)"))
+    XCTAssertTrue(
+      source.contains(
+        "loadingPosterReleaseDelay = PresentationTransitionRetention.duration"
+      )
+    )
     XCTAssertTrue(
       source.contains(
         "loadsImage: keepsLoadingPosterImage && imageLifecycle.keepsActivePageImages"
@@ -582,6 +626,10 @@ final class SystemViewDefaultStyleTests: XCTestCase {
       source.contains("try? await Task.sleep(for: Self.loadingPosterReleaseDelay)")
     )
     XCTAssertTrue(source.contains("keepsLoadingPosterImage = false"))
+    XCTAssertTrue(source.contains("scheduleLoadingPosterDiscardIfAbandoned()"))
+    XCTAssertTrue(source.contains("lifetime.releaseScheduler.schedule"))
+    XCTAssertFalse(source.contains("discardLoadingPosterIfAbandoned()"))
+    XCTAssertFalse(source.contains("if isReady {\n        keepsLoadingPosterImage = false"))
     XCTAssertFalse(
       source.contains("loadsImage: !isReady && imageLifecycle.keepsActivePageImages")
     )

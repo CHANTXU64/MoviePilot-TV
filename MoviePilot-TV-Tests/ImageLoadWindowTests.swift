@@ -367,6 +367,13 @@ final class ImageLoadWindowTests: XCTestCase {
     coordinator.setStackPresentation(isSelected: false, scenePhase: .active)
 
     XCTAssertTrue(lifecycle.keepsContentImages, "Tab 转场期间不能先把画面清空")
+    XCTAssertTrue(
+      TransferHistoryView.shouldMountRows(
+        isSelected: false,
+        isStackForeground: coordinator.rootLifecycle.isStackForeground
+      ),
+      "Tab 转场期间整理行 DOM 应复用同一 Stack 前台保留"
+    )
     XCTAssertNil(
       coordinator.push(resourceRequest("late"), ifCurrent: source),
       "离开 Tab 后应立即拒绝迟到的异步导航"
@@ -374,6 +381,12 @@ final class ImageLoadWindowTests: XCTestCase {
 
     try await Task.sleep(for: .milliseconds(40))
     XCTAssertFalse(lifecycle.keepsContentImages)
+    XCTAssertFalse(
+      TransferHistoryView.shouldMountRows(
+        isSelected: false,
+        isStackForeground: coordinator.rootLifecycle.isStackForeground
+      )
+    )
   }
 
   func testReturningToTabCancelsPendingImageReleaseAndBackgroundingDoesNotDelay() async throws {
@@ -387,9 +400,37 @@ final class ImageLoadWindowTests: XCTestCase {
     coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
     try await Task.sleep(for: .milliseconds(40))
     XCTAssertTrue(coordinator.rootLifecycle.keepsContentImages)
+    XCTAssertTrue(
+      TransferHistoryView.shouldMountRows(
+        isSelected: true,
+        isStackForeground: coordinator.rootLifecycle.isStackForeground
+      )
+    )
 
     coordinator.setStackPresentation(isSelected: true, scenePhase: .background)
     XCTAssertFalse(coordinator.rootLifecycle.keepsContentImages)
+  }
+
+  func testSharedPresentationReleaseSchedulerWaitsAndSupportsCancellation() async throws {
+    let scheduler = PresentationReleaseScheduler()
+    var releaseCount = 0
+
+    scheduler.schedule(after: .milliseconds(20)) {
+      releaseCount += 1
+    }
+    XCTAssertTrue(scheduler.isPending)
+    XCTAssertEqual(releaseCount, 0)
+
+    try await Task.sleep(for: .milliseconds(40))
+    XCTAssertFalse(scheduler.isPending)
+    XCTAssertEqual(releaseCount, 1)
+
+    scheduler.schedule(after: .milliseconds(20)) {
+      releaseCount += 1
+    }
+    scheduler.cancel()
+    try await Task.sleep(for: .milliseconds(40))
+    XCTAssertEqual(releaseCount, 1)
   }
 
   func testBackgroundingStackImmediatelyFinishesRetiringPage() {

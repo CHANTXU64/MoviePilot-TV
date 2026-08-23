@@ -20,7 +20,7 @@ struct ExploreView: View {
           // 主内容区：媒体网格
           MediaGridView(
             imageLifecycle: navigationCoordinator.rootLifecycle,
-            listID: paginator.listID,
+            listIdentity: paginator.listIdentity,
             items: paginator.items,
             isLoading: paginator.isFirstLoading,
             isLoadingMore: paginator.isLoadingMore,

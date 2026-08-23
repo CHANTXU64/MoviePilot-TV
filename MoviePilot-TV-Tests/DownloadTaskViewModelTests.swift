@@ -51,6 +51,101 @@ private func withTimeout<T: Sendable>(
 
 @MainActor
 final class DownloadTaskViewModelTests: XCTestCase {
+  func testIndependentPickerLoadCannotPublishAfterRapidTabRoundTrip() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    let requestGate = DownloadTaskAsyncGate()
+    await DownloadTaskURLProtocol.stub.setDownloadsJSON(
+      downloadPayload(
+        hash: "stale-picker-hash",
+        title: "Stale Picker Task",
+        username: "old-user",
+        progress: 10
+      ),
+      forClient: "old",
+      waitFor: requestGate
+    )
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    viewModel.selectedClient = "old"
+    let pickerLoadTask = Task { @MainActor in
+      await viewModel.loadDownloads()
+    }
+    defer { pickerLoadTask.cancel() }
+
+    try await withTimeout("picker request to start") {
+      await DownloadTaskURLProtocol.stub.waitForRequest(clientName: "old")
+    }
+
+    viewModel.setPresentationActive(false)
+    viewModel.setPresentationActive(true)
+    await requestGate.open()
+    try await withTimeout("stale picker load to finish") {
+      await pickerLoadTask.value
+    }
+
+    XCTAssertTrue(
+      viewModel.downloads.isEmpty,
+      "切走再快速切回后，旧 Picker Task 不能把隐藏期间的下载行写回"
+    )
+  }
+
+  func testStalePickerFailuresCannotPublishAfterRapidTabRoundTrip() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(DownloadTaskURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(DownloadTaskURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = DownloadTaskServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await DownloadTaskURLProtocol.stub.reset()
+    let requestGate = DownloadTaskAsyncGate()
+    await DownloadTaskURLProtocol.stub.setClientsJSON(clientsPayload(["old"]))
+    await DownloadTaskURLProtocol.stub.setDownloadsJSONSequence(
+      Array(repeating: (json: "{}", gate: requestGate), count: 6),
+      forClient: "old",
+      statusCode: 500
+    )
+
+    service.baseURLForTesting = "http://download-tests.local"
+    configureManageUser(service)
+
+    let viewModel = DownloadTaskViewModel(apiService: service)
+    await viewModel.loadClientsIfNeeded()
+    XCTAssertEqual(viewModel.selectedClient, "old")
+    let staleTasks = (0..<6).map { _ in
+      Task { @MainActor in await viewModel.loadDownloads() }
+    }
+    defer { staleTasks.forEach { $0.cancel() } }
+
+    try await withTimeout("all stale picker requests to start") {
+      await DownloadTaskURLProtocol.stub.waitForRequest(clientName: "old", count: 6)
+    }
+
+    viewModel.setPresentationActive(false)
+    viewModel.setPresentationActive(true)
+    await requestGate.open()
+    for task in staleTasks {
+      try await withTimeout("stale picker failure to finish") {
+        await task.value
+      }
+    }
+
+    XCTAssertNil(
+      viewModel.errorMessage,
+      "切走前的失败响应不能在快速切回后累计并发布旧错误"
+    )
+  }
+
   func testOlderClientLoadThatCompletesLaterDoesNotPublishOverCurrentClientDownloads()
     async throws
   {

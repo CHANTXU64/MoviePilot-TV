@@ -9,17 +9,17 @@ final class GridImageLifecycleControllerTests: XCTestCase {
   private let columnCount = 6
 
   func testVisibleGridStartsWithTopRowsAndFirstValidFocusOpensCurrentWindow() {
-    let listID = UUID()
+    let listIdentity = GridListIdentity.make()
     let lifecycle = PageImageLifecycle()
-    let controller = makeController(listID: listID, itemCount: 60, lifecycle: lifecycle)
+    let controller = makeController(listIdentity: listIdentity, itemCount: 60, lifecycle: lifecycle)
 
     XCTAssertEqual(controller.activation, .visibleTop)
-    XCTAssertTrue(controller.allowsImages(listID: listID, itemIndex: 0))
-    XCTAssertFalse(controller.allowsImages(listID: listID, itemIndex: 12))
+    XCTAssertTrue(controller.allowsImages(listIdentity: listIdentity, itemIndex: 0))
+    XCTAssertFalse(controller.allowsImages(listIdentity: listIdentity, itemIndex: 12))
 
     XCTAssertTrue(
       controller.cardFocusChanged(
-        listID: listID,
+        listIdentity: listIdentity,
         itemID: "item-36",
         itemIndex: 36,
         isFocused: true
@@ -27,69 +27,157 @@ final class GridImageLifecycleControllerTests: XCTestCase {
     )
 
     let allowed = Set(
-      (0..<60).filter { controller.allowsImages(listID: listID, itemIndex: $0) }
+      (0..<60).filter { controller.allowsImages(listIdentity: listIdentity, itemIndex: $0) }
     )
     XCTAssertEqual(allowed, Set(0...11).union(24...53))
   }
 
   func testNewListRestoresOnlyTopRowsEvenWithIdenticalItemsAndRejectsOldFocus() {
-    let oldListID = UUID()
-    let newListID = UUID()
+    let oldListIdentity = GridListIdentity.make()
+    let newListIdentity = GridListIdentity.make()
     let lifecycle = PageImageLifecycle()
-    let controller = makeController(listID: oldListID, itemCount: 60, lifecycle: lifecycle)
+    let controller = makeController(listIdentity: oldListIdentity, itemCount: 60, lifecycle: lifecycle)
     XCTAssertTrue(
       controller.cardFocusChanged(
-        listID: oldListID,
+        listIdentity: oldListIdentity,
         itemID: "item-18",
         itemIndex: 18,
         isFocused: true
       )
     )
 
-    controller.reconcile(listID: newListID, itemIDs: itemIDs(60))
+    controller.reconcile(listIdentity: newListIdentity, itemIDs: itemIDs(60))
 
     XCTAssertEqual(controller.activation, .visibleTop)
     XCTAssertFalse(
       controller.cardFocusChanged(
-        listID: oldListID,
+        listIdentity: oldListIdentity,
         itemID: "item-18",
         itemIndex: 18,
         isFocused: true
       )
     )
-    XCTAssertFalse(controller.allowsImages(listID: oldListID, itemIndex: 18))
-    XCTAssertTrue(controller.allowsImages(listID: newListID, itemIndex: 0))
+    XCTAssertFalse(controller.allowsImages(listIdentity: oldListIdentity, itemIndex: 18))
+    XCTAssertTrue(controller.allowsImages(listIdentity: newListIdentity, itemIndex: 0))
+  }
+
+  func testNewListSlotRegistrationSynchronouslyAdoptsGenerationAndOldSlotCannotRollBack() {
+    let sharedID = UUID()
+    let oldListIdentity = GridListIdentity.make(id: sharedID)
+    let newListIdentity = GridListIdentity.make(id: sharedID)
+    let lifecycle = PageImageLifecycle()
+    let controller = makeController(
+      listIdentity: oldListIdentity,
+      itemCount: 60,
+      lifecycle: lifecycle
+    )
+    let newSlot = makeSlot(key: "new-generation", lifecycle: lifecycle)
+    let oldSlot = makeSlot(key: "old-generation", lifecycle: lifecycle)
+
+    newSlot.setGridImageDemandContext(
+      GridImageDemandContext(
+        controller: controller,
+        listIdentity: newListIdentity,
+        itemIDs: itemIDs(60),
+        itemID: "item-0",
+        itemIndex: 0
+      )
+    )
+    let newDemand = UUID()
+    newSlot.setDemand(id: newDemand, isEnabled: true)
+
+    XCTAssertEqual(controller.listIdentity, newListIdentity)
+    XCTAssertEqual(controller.activation, .visibleTop)
+    XCTAssertEqual(newSlot.retrievalStartCount, 1)
+
+    oldSlot.setGridImageDemandContext(
+      GridImageDemandContext(
+        controller: controller,
+        listIdentity: oldListIdentity,
+        itemIDs: itemIDs(60),
+        itemID: "item-0",
+        itemIndex: 0
+      )
+    )
+    let oldDemand = UUID()
+    oldSlot.setDemand(id: oldDemand, isEnabled: true)
+
+    XCTAssertEqual(controller.listIdentity, newListIdentity)
+    XCTAssertEqual(controller.activation, .visibleTop)
+    XCTAssertEqual(oldSlot.retrievalStartCount, 0)
+    XCTAssertFalse(
+      controller.cardFocusChanged(
+        listIdentity: oldListIdentity,
+        itemID: "item-0",
+        itemIndex: 0,
+        isFocused: true
+      )
+    )
+
+    newSlot.removeDemand(id: newDemand)
+    oldSlot.removeDemand(id: oldDemand)
   }
 
   func testPaginatorAppendKeepsArmedWindow() {
-    let listID = UUID()
+    let listIdentity = GridListIdentity.make()
     let lifecycle = PageImageLifecycle()
-    let controller = makeController(listID: listID, itemCount: 30, lifecycle: lifecycle)
+    let controller = makeController(listIdentity: listIdentity, itemCount: 30, lifecycle: lifecycle)
     controller.cardFocusChanged(
-      listID: listID,
+      listIdentity: listIdentity,
       itemID: "item-18",
       itemIndex: 18,
       isFocused: true
     )
 
-    controller.reconcile(listID: listID, itemIDs: itemIDs(60))
+    controller.reconcile(listIdentity: listIdentity, itemIDs: itemIDs(60))
 
     XCTAssertEqual(controller.activation, .armed(itemID: "item-18", itemIndex: 18))
-    XCTAssertTrue(controller.allowsImages(listID: listID, itemIndex: 30))
+    XCTAssertTrue(controller.allowsImages(listIdentity: listIdentity, itemIndex: 30))
   }
 
   func testFirstPaginatorPageRestoresVisibleTopWithoutFocus() {
-    let listID = UUID()
+    let listIdentity = GridListIdentity.make()
     let lifecycle = PageImageLifecycle()
-    let controller = makeController(listID: listID, itemCount: 0, lifecycle: lifecycle)
+    let controller = makeController(listIdentity: listIdentity, itemCount: 0, lifecycle: lifecycle)
     XCTAssertEqual(controller.activation, .disarmed)
 
-    controller.reconcile(listID: listID, itemIDs: itemIDs(60))
+    controller.reconcileEventSnapshot(listIdentity: listIdentity, itemIDs: itemIDs(60))
 
     XCTAssertEqual(controller.activation, .visibleTop)
-    XCTAssertTrue(controller.allowsImages(listID: listID, itemIndex: 0))
-    XCTAssertTrue(controller.allowsImages(listID: listID, itemIndex: 11))
-    XCTAssertFalse(controller.allowsImages(listID: listID, itemIndex: 12))
+    XCTAssertTrue(controller.allowsImages(listIdentity: listIdentity, itemIndex: 0))
+    XCTAssertTrue(controller.allowsImages(listIdentity: listIdentity, itemIndex: 11))
+    XCTAssertFalse(controller.allowsImages(listIdentity: listIdentity, itemIndex: 12))
+  }
+
+  func testEventSnapshotCannotRestorePreRefreshItemsOrReplaceCurrentGeneration() {
+    let oldIdentity = GridListIdentity.make()
+    let lifecycle = PageImageLifecycle()
+    let controller = makeController(
+      listIdentity: oldIdentity,
+      itemCount: 60,
+      lifecycle: lifecycle
+    )
+    let refreshedIdentity = oldIdentity.advanced()
+
+    controller.reconcile(listIdentity: refreshedIdentity, itemIDs: [])
+    XCTAssertFalse(
+      controller.reconcileEventSnapshot(
+        listIdentity: oldIdentity,
+        itemIDs: itemIDs(60)
+      )
+    )
+    XCTAssertEqual(controller.listIdentity, refreshedIdentity)
+    XCTAssertEqual(controller.activation, .disarmed)
+
+    let replacementIDs = (0..<60).map { "replacement-\($0)" }
+    controller.reconcile(listIdentity: refreshedIdentity, itemIDs: replacementIDs)
+    XCTAssertFalse(
+      controller.reconcileEventSnapshot(
+        listIdentity: refreshedIdentity,
+        itemIDs: itemIDs(60)
+      )
+    )
+    XCTAssertTrue(controller.allowsImages(listIdentity: refreshedIdentity, itemIndex: 0))
   }
 
   func testNavigationDepthDoesNotDisarmButActualStackReleaseDoes() {
@@ -97,14 +185,14 @@ final class GridImageLifecycleControllerTests: XCTestCase {
       mediaPreloader: MediaPreloader(apiService: .testingInstance())
     )
     coordinator.setStackForeground(true)
-    let listID = UUID()
+    let listIdentity = GridListIdentity.make()
     let controller = makeController(
-      listID: listID,
+      listIdentity: listIdentity,
       itemCount: 60,
       lifecycle: coordinator.rootLifecycle
     )
     controller.cardFocusChanged(
-      listID: listID,
+      listIdentity: listIdentity,
       itemID: "item-18",
       itemIndex: 18,
       isFocused: true
@@ -117,7 +205,7 @@ final class GridImageLifecycleControllerTests: XCTestCase {
     XCTAssertEqual(controller.observedStackReleaseEpoch, 0)
     XCTAssertFalse(
       controller.cardFocusChanged(
-        listID: listID,
+        listIdentity: listIdentity,
         itemID: "item-24",
         itemIndex: 24,
         isFocused: true
@@ -136,14 +224,14 @@ final class GridImageLifecycleControllerTests: XCTestCase {
       tabTransitionImageRetention: .milliseconds(20)
     )
     coordinator.setStackForeground(true)
-    let listID = UUID()
+    let listIdentity = GridListIdentity.make()
     let controller = makeController(
-      listID: listID,
+      listIdentity: listIdentity,
       itemCount: 60,
       lifecycle: coordinator.rootLifecycle
     )
     controller.cardFocusChanged(
-      listID: listID,
+      listIdentity: listIdentity,
       itemID: "item-18",
       itemIndex: 18,
       isFocused: true
@@ -162,14 +250,14 @@ final class GridImageLifecycleControllerTests: XCTestCase {
       mediaPreloader: MediaPreloader(apiService: .testingInstance())
     )
     coordinator.setStackForeground(true)
-    let listID = UUID()
+    let listIdentity = GridListIdentity.make()
     let controller = makeController(
-      listID: listID,
+      listIdentity: listIdentity,
       itemCount: 60,
       lifecycle: coordinator.rootLifecycle
     )
     controller.cardFocusChanged(
-      listID: listID,
+      listIdentity: listIdentity,
       itemID: "item-18",
       itemIndex: 18,
       isFocused: true
@@ -178,7 +266,7 @@ final class GridImageLifecycleControllerTests: XCTestCase {
     coordinator.setStackPresentation(isSelected: false, scenePhase: .active)
     XCTAssertFalse(
       controller.cardFocusChanged(
-        listID: listID,
+        listIdentity: listIdentity,
         itemID: "item-24",
         itemIndex: 24,
         isFocused: true
@@ -189,7 +277,7 @@ final class GridImageLifecycleControllerTests: XCTestCase {
     coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
     XCTAssertTrue(
       controller.cardFocusChanged(
-        listID: listID,
+        listIdentity: listIdentity,
         itemID: "item-24",
         itemIndex: 24,
         isFocused: true
@@ -203,14 +291,14 @@ final class GridImageLifecycleControllerTests: XCTestCase {
       mediaPreloader: MediaPreloader(apiService: .testingInstance())
     )
     coordinator.setStackForeground(true)
-    let listID = UUID()
+    let listIdentity = GridListIdentity.make()
     let controller = makeController(
-      listID: listID,
+      listIdentity: listIdentity,
       itemCount: 60,
       lifecycle: coordinator.rootLifecycle
     )
     controller.cardFocusChanged(
-      listID: listID,
+      listIdentity: listIdentity,
       itemID: "item-18",
       itemIndex: 18,
       isFocused: true
@@ -220,7 +308,7 @@ final class GridImageLifecycleControllerTests: XCTestCase {
     XCTAssertEqual(controller.activation, .disarmed)
     XCTAssertFalse(
       controller.cardFocusChanged(
-        listID: listID,
+        listIdentity: listIdentity,
         itemID: "item-18",
         itemIndex: 18,
         isFocused: true
@@ -237,9 +325,9 @@ final class GridImageLifecycleControllerTests: XCTestCase {
       mediaPreloader: MediaPreloader(apiService: .testingInstance())
     )
     coordinator.setStackForeground(true)
-    let listID = UUID()
+    let listIdentity = GridListIdentity.make()
     let controller = makeController(
-      listID: listID,
+      listIdentity: listIdentity,
       itemCount: 60,
       lifecycle: coordinator.rootLifecycle
     )
@@ -248,7 +336,7 @@ final class GridImageLifecycleControllerTests: XCTestCase {
     topSlot.setGridImageDemandContext(
       GridImageDemandContext(
         controller: controller,
-        listID: listID,
+        listIdentity: listIdentity,
         itemID: "item-0",
         itemIndex: 0
       )
@@ -256,7 +344,7 @@ final class GridImageLifecycleControllerTests: XCTestCase {
     deepSlot.setGridImageDemandContext(
       GridImageDemandContext(
         controller: controller,
-        listID: listID,
+        listIdentity: listIdentity,
         itemID: "item-36",
         itemIndex: 36
       )
@@ -269,7 +357,7 @@ final class GridImageLifecycleControllerTests: XCTestCase {
     XCTAssertEqual(deepSlot.retrievalStartCount, 0)
 
     controller.cardFocusChanged(
-      listID: listID,
+      listIdentity: listIdentity,
       itemID: "item-36",
       itemIndex: 36,
       isFocused: true
@@ -283,7 +371,7 @@ final class GridImageLifecycleControllerTests: XCTestCase {
     XCTAssertEqual(deepSlot.retrievalStartCount, 1, "停在 Tab 栏时不能恢复旧深处需求")
 
     controller.cardFocusChanged(
-      listID: listID,
+      listIdentity: listIdentity,
       itemID: "item-36",
       itemIndex: 36,
       isFocused: true
@@ -298,9 +386,9 @@ final class GridImageLifecycleControllerTests: XCTestCase {
       mediaPreloader: MediaPreloader(apiService: .testingInstance())
     )
     coordinator.setStackForeground(true)
-    let listID = UUID()
+    let listIdentity = GridListIdentity.make()
     let controller = makeController(
-      listID: listID,
+      listIdentity: listIdentity,
       itemCount: 60,
       lifecycle: coordinator.rootLifecycle
     )
@@ -309,7 +397,7 @@ final class GridImageLifecycleControllerTests: XCTestCase {
     topSlot.setGridImageDemandContext(
       GridImageDemandContext(
         controller: controller,
-        listID: listID,
+        listIdentity: listIdentity,
         itemID: "item-0",
         itemIndex: 0
       )
@@ -317,7 +405,7 @@ final class GridImageLifecycleControllerTests: XCTestCase {
     deepSlot.setGridImageDemandContext(
       GridImageDemandContext(
         controller: controller,
-        listID: listID,
+        listIdentity: listIdentity,
         itemID: "item-36",
         itemIndex: 36
       )
@@ -330,7 +418,7 @@ final class GridImageLifecycleControllerTests: XCTestCase {
     XCTAssertEqual(deepSlot.retrievalStartCount, 0)
 
     controller.cardFocusChanged(
-      listID: listID,
+      listIdentity: listIdentity,
       itemID: "item-36",
       itemIndex: 36,
       isFocused: true
@@ -344,12 +432,12 @@ final class GridImageLifecycleControllerTests: XCTestCase {
   }
 
   private func makeController(
-    listID: UUID,
+    listIdentity: GridListIdentity,
     itemCount: Int,
     lifecycle: PageImageLifecycle
   ) -> GridImageLifecycleController {
     let controller = GridImageLifecycleController(
-      listID: listID,
+      listIdentity: listIdentity,
       itemIDs: itemIDs(itemCount),
       columnCount: columnCount,
       imageLifecycle: lifecycle

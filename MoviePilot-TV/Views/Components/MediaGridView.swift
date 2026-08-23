@@ -37,7 +37,7 @@ private final class PreloadDebouncer {
 // 焦点处理保留在 per-card 的 onFocus 回调中（由 MediaCard 内部的 @FocusState 驱动）。
 
 private struct GridCardView: View, Equatable {
-  let listID: UUID
+  let listIdentity: GridListIdentity
   let item: MediaInfo
   let itemIndex: Int
   let itemCount: Int
@@ -46,7 +46,7 @@ private struct GridCardView: View, Equatable {
   let onFocus: (Bool) -> Void
 
   static func == (lhs: GridCardView, rhs: GridCardView) -> Bool {
-    lhs.listID == rhs.listID
+    lhs.listIdentity == rhs.listIdentity
       && lhs.item.id == rhs.item.id
       && lhs.itemIndex == rhs.itemIndex
       && lhs.itemCount == rhs.itemCount
@@ -71,7 +71,7 @@ private struct GridCardView: View, Equatable {
 }
 
 private struct GridCardViewWithMenu<MenuContent: View>: View, Equatable {
-  let listID: UUID
+  let listIdentity: GridListIdentity
   let item: MediaInfo
   let itemIndex: Int
   let itemCount: Int
@@ -81,7 +81,7 @@ private struct GridCardViewWithMenu<MenuContent: View>: View, Equatable {
   let menuBuilder: (MediaInfo) -> MenuContent
 
   static func == (lhs: GridCardViewWithMenu, rhs: GridCardViewWithMenu) -> Bool {
-    lhs.listID == rhs.listID
+    lhs.listIdentity == rhs.listIdentity
       && lhs.item.id == rhs.item.id
       && lhs.itemIndex == rhs.itemIndex
       && lhs.itemCount == rhs.itemCount
@@ -115,7 +115,7 @@ private struct GridCardViewWithMenu<MenuContent: View>: View, Equatable {
 struct MediaGridView<Header: View, ContextMenu: View>: View {
   @ObservedObject private var apiService = APIService.shared
   @ObservedObject var imageLifecycle: PageImageLifecycle
-  let listID: UUID
+  let listIdentity: GridListIdentity
   let items: [MediaInfo]
   let isLoading: Bool
   let isLoadingMore: Bool
@@ -133,7 +133,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
 
   init(
     imageLifecycle: PageImageLifecycle,
-    listID: UUID,
+    listIdentity: GridListIdentity,
     items: [MediaInfo],
     isLoading: Bool,
     isLoadingMore: Bool,
@@ -144,7 +144,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     onShareTapped: ((SubscribeShare) -> Void)? = nil
   ) {
     self.imageLifecycle = imageLifecycle
-    self.listID = listID
+    self.listIdentity = listIdentity
     self.items = items
     self.isLoading = isLoading
     self.isLoadingMore = isLoadingMore
@@ -155,14 +155,14 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     self.onShareTapped = onShareTapped
     _domRetention = StateObject(
       wrappedValue: GridDOMRetentionController(
-        listID: listID,
+        listIdentity: listIdentity,
         itemIDs: items.map(\.id),
         columnCount: MediaCard.defaultGridColumns.count
       )
     )
     _imageRetention = StateObject(
       wrappedValue: GridImageLifecycleController(
-        listID: listID,
+        listIdentity: listIdentity,
         itemIDs: items.map(\.id),
         columnCount: MediaCard.defaultGridColumns.count,
         imageLifecycle: imageLifecycle
@@ -173,7 +173,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
   // 无上下文菜单的初始化方法
   init(
     imageLifecycle: PageImageLifecycle,
-    listID: UUID,
+    listIdentity: GridListIdentity,
     items: [MediaInfo],
     isLoading: Bool,
     isLoadingMore: Bool,
@@ -183,7 +183,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     onShareTapped: ((SubscribeShare) -> Void)? = nil
   ) where ContextMenu == EmptyView {
     self.imageLifecycle = imageLifecycle
-    self.listID = listID
+    self.listIdentity = listIdentity
     self.items = items
     self.isLoading = isLoading
     self.isLoadingMore = isLoadingMore
@@ -194,14 +194,14 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     self.onShareTapped = onShareTapped
     _domRetention = StateObject(
       wrappedValue: GridDOMRetentionController(
-        listID: listID,
+        listIdentity: listIdentity,
         itemIDs: items.map(\.id),
         columnCount: MediaCard.defaultGridColumns.count
       )
     )
     _imageRetention = StateObject(
       wrappedValue: GridImageLifecycleController(
-        listID: listID,
+        listIdentity: listIdentity,
         itemIDs: items.map(\.id),
         columnCount: MediaCard.defaultGridColumns.count,
         imageLifecycle: imageLifecycle
@@ -211,7 +211,10 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
 
   var body: some View {
     let currentItemIDs = items.map(\.id)
-    let retainedItemCount = domRetention.retainedItemCount(for: items.count, listID: listID)
+    let retainedItemCount = domRetention.retainedItemCount(
+      for: items.count,
+      listIdentity: listIdentity
+    )
 
     ScrollView {
       VStack(spacing: 20) {
@@ -241,7 +244,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
               let item = entry.element
               if let contextMenu = contextMenu {
                 GridCardViewWithMenu(
-                  listID: listID,
+                  listIdentity: listIdentity,
                   item: item,
                   itemIndex: index,
                   itemCount: items.count,
@@ -249,7 +252,8 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
                   onTap: { handleItemTap(item) },
                   onFocus: { isFocused in
                     handleFocus(
-                      listID: listID,
+                      listIdentity: listIdentity,
+                      itemIDs: currentItemIDs,
                       item: item,
                       index: index,
                       itemCount: items.count,
@@ -263,14 +267,15 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
                   \.gridImageDemandContext,
                   GridImageDemandContext(
                     controller: imageRetention,
-                    listID: listID,
+                    listIdentity: listIdentity,
+                    itemIDs: currentItemIDs,
                     itemID: item.id,
                     itemIndex: index
                   )
                 )
               } else {
                 GridCardView(
-                  listID: listID,
+                  listIdentity: listIdentity,
                   item: item,
                   itemIndex: index,
                   itemCount: items.count,
@@ -278,7 +283,8 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
                   onTap: { handleItemTap(item) },
                   onFocus: { isFocused in
                     handleFocus(
-                      listID: listID,
+                      listIdentity: listIdentity,
+                      itemIDs: currentItemIDs,
                       item: item,
                       index: index,
                       itemCount: items.count,
@@ -291,7 +297,8 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
                   \.gridImageDemandContext,
                   GridImageDemandContext(
                     controller: imageRetention,
-                    listID: listID,
+                    listIdentity: listIdentity,
+                    itemIDs: currentItemIDs,
                     itemID: item.id,
                     itemIndex: index
                   )
@@ -299,7 +306,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
               }
             }
           }
-          .id(listID)
+          .id(listIdentity.id)
           .padding(.horizontal, -12)
           .padding(.bottom, 20)
 
@@ -329,19 +336,19 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
       domRetention.scrollPhaseChanged(newPhase)
     }
     .onAppear {
-      domRetention.reconcile(listID: listID, itemIDs: items.map(\.id))
-      imageRetention.reconcile(listID: listID, itemIDs: items.map(\.id))
+      domRetention.reconcile(listIdentity: listIdentity, itemIDs: items.map(\.id))
+      imageRetention.reconcile(listIdentity: listIdentity, itemIDs: items.map(\.id))
       domRetention.setViewActive(true)
       domRetention.setStackInteractive(navigationCoordinator.isStackInteractive)
     }
     .onChange(of: currentItemIDs) { _, newItemIDs in
-      domRetention.reconcile(listID: listID, itemIDs: newItemIDs)
-      imageRetention.reconcile(listID: listID, itemIDs: newItemIDs)
+      domRetention.reconcile(listIdentity: listIdentity, itemIDs: newItemIDs)
+      imageRetention.reconcile(listIdentity: listIdentity, itemIDs: newItemIDs)
     }
-    .onChange(of: listID) { _, newListID in
+    .onChange(of: listIdentity) { _, newIdentity in
       let itemIDs = items.map(\.id)
-      domRetention.reconcile(listID: newListID, itemIDs: itemIDs)
-      imageRetention.reconcile(listID: newListID, itemIDs: itemIDs)
+      domRetention.reconcile(listIdentity: newIdentity, itemIDs: itemIDs)
+      imageRetention.reconcile(listIdentity: newIdentity, itemIDs: itemIDs)
     }
     .onChange(of: navigationCoordinator.isStackInteractive) { _, isInteractive in
       domRetention.setStackInteractive(isInteractive)
@@ -364,15 +371,25 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
 
   /// 集中处理焦点变化逻辑（由 per-card @FocusState 驱动，不触发 grid body 重新求值）
   private func handleFocus(
-    listID eventListID: UUID,
+    listIdentity eventIdentity: GridListIdentity,
+    itemIDs eventItemIDs: [MediaInfo.ID],
     item: MediaInfo,
     index: Int,
     itemCount: Int,
     isFocused: Bool
   ) {
+    // 新列表卡片可能早于 View.onChange 获焦；先同步接管新代际，旧代际会被控制器拒绝。
+    imageRetention.reconcileEventSnapshot(
+      listIdentity: eventIdentity,
+      itemIDs: eventItemIDs
+    )
+    domRetention.reconcileEventSnapshot(
+      listIdentity: eventIdentity,
+      itemIDs: eventItemIDs
+    )
     // 图片控制器同时验证页面是否可见/可交互；先过这道门，避免隐藏页面的迟到焦点扩张 DOM。
     guard imageRetention.cardFocusChanged(
-      listID: eventListID,
+      listIdentity: eventIdentity,
       itemID: item.id,
       itemIndex: index,
       isFocused: isFocused
@@ -380,7 +397,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
       return
     }
     guard domRetention.cardFocusChanged(
-      listID: eventListID,
+      listIdentity: eventIdentity,
       itemID: item.id,
       itemIndex: index,
       isFocused: isFocused
@@ -408,7 +425,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
 extension MediaGridView where Header == EmptyView {
   init(
     imageLifecycle: PageImageLifecycle,
-    listID: UUID,
+    listIdentity: GridListIdentity,
     items: [MediaInfo],
     isLoading: Bool,
     isLoadingMore: Bool,
@@ -419,7 +436,7 @@ extension MediaGridView where Header == EmptyView {
   ) {
     self.init(
       imageLifecycle: imageLifecycle,
-      listID: listID,
+      listIdentity: listIdentity,
       items: items,
       isLoading: isLoading,
       isLoadingMore: isLoadingMore,
@@ -435,7 +452,7 @@ extension MediaGridView where Header == EmptyView {
 extension MediaGridView where Header == EmptyView, ContextMenu == EmptyView {
   init(
     imageLifecycle: PageImageLifecycle,
-    listID: UUID,
+    listIdentity: GridListIdentity,
     items: [MediaInfo],
     isLoading: Bool,
     isLoadingMore: Bool,
@@ -445,7 +462,7 @@ extension MediaGridView where Header == EmptyView, ContextMenu == EmptyView {
   ) {
     self.init(
       imageLifecycle: imageLifecycle,
-      listID: listID,
+      listIdentity: listIdentity,
       items: items,
       isLoading: isLoading,
       isLoadingMore: isLoadingMore,

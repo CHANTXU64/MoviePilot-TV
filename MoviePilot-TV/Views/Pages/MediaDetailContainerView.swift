@@ -18,6 +18,7 @@ private struct MediaLoadingView: View {
 
   private final class LoadingPosterLifetime {
     var hasDisappeared = false
+    let releaseScheduler = PresentationReleaseScheduler()
   }
 
   @State private var loadingPosterLifetime = LoadingPosterLifetime()
@@ -72,7 +73,7 @@ private struct MediaLoadingView: View {
             loadsDiskFileSynchronously: true,
             fadeDuration: 0,
             onSuccess: {
-              discardLoadingPosterIfAbandoned()
+              scheduleLoadingPosterDiscardIfAbandoned()
             }
           )
         }
@@ -133,6 +134,7 @@ private struct MediaLoadingView: View {
       }
     }
     .onAppear {
+      loadingPosterLifetime.releaseScheduler.cancel()
       loadingPosterLifetime.hasDisappeared = false
       guard !hasAnimated else { return }
       hasAnimated = true
@@ -162,16 +164,19 @@ private struct MediaLoadingView: View {
     }
     .onDisappear {
       loadingPosterLifetime.hasDisappeared = true
-      discardLoadingPosterIfAbandoned()
+      scheduleLoadingPosterDiscardIfAbandoned()
     }
   }
 
-  private func discardLoadingPosterIfAbandoned() {
+  private func scheduleLoadingPosterDiscardIfAbandoned() {
     guard loadingPosterLifetime.hasDisappeared, let posterUrl else { return }
-    MediaDetailLoadingPoster.removeFromMemory(
-      for: posterUrl,
-      cacheKey: APIService.shared.imageSource(for: posterUrl).cacheKey
-    )
+    guard !loadingPosterLifetime.releaseScheduler.isPending else { return }
+    let lifetime = loadingPosterLifetime
+    let cacheKey = APIService.shared.imageSource(for: posterUrl).cacheKey
+    lifetime.releaseScheduler.schedule {
+      guard lifetime.hasDisappeared else { return }
+      MediaDetailLoadingPoster.removeFromMemory(for: posterUrl, cacheKey: cacheKey)
+    }
   }
 }
 
@@ -240,8 +245,8 @@ struct MediaDetailContainerView: View {
 
 /// 内部辅助视图：通过 @ObservedObject 监听 MediaPreloadTask 的 @Published 属性变化，驱动 UI 刷新
 private struct MediaDetailContainerContent: View {
-  /// 比 0.3 秒淡出略长一帧余量，确保图片只在遮罩完全透明后释放。
-  private static let loadingPosterReleaseDelay = Duration.milliseconds(350)
+  /// 统一保留 1 秒，确保快速导航或转场中断时等待海报不会提前消失。
+  private static let loadingPosterReleaseDelay = PresentationTransitionRetention.duration
 
   let media: MediaInfo
   @ObservedObject var preloadTask: MediaPreloadTask
@@ -345,13 +350,6 @@ private struct MediaDetailContainerContent: View {
             minTimeElapsed = true
           }
         }
-      }
-    }
-    .onDisappear {
-      loadingPosterReleaseTask?.cancel()
-      loadingPosterReleaseTask = nil
-      if isReady {
-        keepsLoadingPosterImage = false
       }
     }
     .task(id: tmdbPreloadTarget?.id) {

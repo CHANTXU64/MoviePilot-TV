@@ -2,10 +2,15 @@ import Kingfisher
 import SwiftUI
 
 struct DownloadTaskView: View {
+  private let isSelected: Bool
   @StateObject private var viewModel = DownloadTaskViewModel()
   @ObservedObject private var apiService = APIService.shared
   @EnvironmentObject private var notificationManager: NotificationManager
   @State private var isExpanded = true
+
+  init(isSelected: Bool = true) {
+    self.isSelected = isSelected
+  }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 20) {
@@ -66,11 +71,16 @@ struct DownloadTaskView: View {
         }
       }
     }
-    .task {
+    .task(id: isSelected) {
+      viewModel.setPresentationActive(isSelected)
+      guard isSelected else { return }
       await DownloadTaskView.runAutoRefresh(
         initialLoad: { await viewModel.initialLoad() },
         loadDownloads: { await viewModel.loadDownloads() }
       )
+    }
+    .onChange(of: isSelected) { _, newValue in
+      viewModel.setPresentationActive(newValue)
     }
     .onChange(of: viewModel.errorMessage) { _, message in
       guard let message else { return }
@@ -108,6 +118,7 @@ private struct DownloadTaskRow: View {
   // 仅当 state 为 "downloading" 时为 true，用于控制“暂停/继续”按钮的状态。
   @State private var isDownloading: Bool
   @State private var isToggling = false
+  @ObservedObject private var memoryOptimizationPolicy = MemoryOptimizationPolicy.shared
 
   init(item: DownloadingInfo, clientName: String, viewModel: DownloadTaskViewModel) {
     self.item = item
@@ -205,11 +216,17 @@ private struct DownloadTaskRow: View {
       // MARK: - 背景
       let backdropUrl = item.media?.imageURLs.image
       ZStack {
-        KFImage.sessionImage(backdropUrl)
-          .setProcessor(BlurImageProcessor(blurRadius: 2))
-          .resizing(referenceSize: CGSize(width: 500, height: 180), mode: .aspectFill)
-          .resizable()
-          .aspectRatio(contentMode: .fill)
+        PageManagedImage(
+          url: backdropUrl,
+          processor: BlurImageProcessor(blurRadius: 2)
+            |> ResizingImageProcessor(
+              referenceSize: CGSize(width: 500, height: 180),
+              mode: .aspectFill
+            ),
+          isEnabled: true,
+          participatesInPageLifecycle: memoryOptimizationPolicy.isEnabled,
+          skipsMemoryCache: memoryOptimizationPolicy.isEnabled
+        )
 
         Color.black.opacity(0.6)
       }

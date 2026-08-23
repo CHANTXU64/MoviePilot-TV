@@ -3,8 +3,9 @@ import Foundation
 
 @MainActor
 public class Paginator<ItemType: Identifiable>: ObservableObject {
-  /// Paginator 实例的稳定列表代际；refresh/尾部追加不变，新子 Tab 会创建新实例和新 ID。
-  public let listID: UUID
+  /// Paginator 实例保持稳定 UUID；reset/refresh 推进内容代际，普通尾部追加保持不变。
+  @Published private(set) var listIdentity: GridListIdentity
+  public var listID: UUID { listIdentity.id }
 
   deinit {
     // 保留显式 deinit，维持既有 SIL 生成路径；同时清理未完成的数据加载任务。
@@ -85,7 +86,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     imageWarmThreshold: Int? = nil,
     onReset: (() -> Void)? = nil
   ) {
-    self.listID = listID
+    self.listIdentity = GridListIdentity.make(id: listID)
     self.threshold = threshold
     self.fetcher = fetcher
     self.processor = processor
@@ -312,6 +313,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   /// 重置分页器的状态，清除所有项目并重置标志。
   private func reset() {
     generation += 1
+    listIdentity = listIdentity.advanced()
     pendingRestartLoadTaskToken = nil
     inFlightLoadTask?.cancel()
     inFlightLoadTask = nil

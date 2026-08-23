@@ -17,6 +17,8 @@ class DownloadTaskViewModel: ObservableObject {
 
   private let apiService: APIService
   private var downloadLoadGeneration = 0
+  private var presentationGeneration = 0
+  private var isPresentationActive = true
   private var hasLoadedClients = false
   private var consecutiveClientsFailures = 0
   private var consecutiveDownloadsFailures = 0
@@ -27,23 +29,42 @@ class DownloadTaskViewModel: ObservableObject {
     self.apiService = apiService
   }
 
+  /// 主 Tab 生命周期门禁。generation 让“切走后又快速切回”的旧独立 Task 也无法写回。
+  func setPresentationActive(_ isActive: Bool) {
+    guard isPresentationActive != isActive else { return }
+    isPresentationActive = isActive
+    presentationGeneration &+= 1
+    downloadLoadGeneration &+= 1
+  }
+
   func initialLoad() async {
+    let currentPresentationGeneration = presentationGeneration
+    guard isPresentationActive, !Task.isCancelled else { return }
     guard apiService.canAccess(.manage) else {
       clearForRestrictedUser()
       return
     }
     let sessionSnapshot = apiService.sessionSnapshot()
     await loadClientsIfNeeded()
-    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
+    guard isPresentationActive,
+      currentPresentationGeneration == presentationGeneration,
+      !Task.isCancelled,
+      apiService.isSessionUnchanged(from: sessionSnapshot)
+    else { return }
     await loadDownloads()
   }
 
   func loadClientsIfNeeded() async {
-    guard !hasLoadedClients else { return }
+    let currentPresentationGeneration = presentationGeneration
+    guard isPresentationActive, !Task.isCancelled, !hasLoadedClients else { return }
     let sessionSnapshot = apiService.sessionSnapshot()
     do {
       let loadedClients = try await apiService.fetchDownloadClients()
-      guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
+      guard isPresentationActive,
+        currentPresentationGeneration == presentationGeneration,
+        !Task.isCancelled,
+        apiService.isSessionUnchanged(from: sessionSnapshot)
+      else { return }
       hasLoadedClients = true
       clientsLoadFailed = false
       consecutiveClientsFailures = 0
@@ -56,6 +77,10 @@ class DownloadTaskViewModel: ObservableObject {
     } catch is CancellationError {
       return
     } catch {
+      guard isPresentationActive,
+        currentPresentationGeneration == presentationGeneration,
+        !Task.isCancelled
+      else { return }
       clientsLoadFailed = true
       consecutiveClientsFailures += 1
       reportPollingFailureIfNeeded(
@@ -67,18 +92,27 @@ class DownloadTaskViewModel: ObservableObject {
   }
 
   func loadDownloads() async {
+    let currentPresentationGeneration = presentationGeneration
+    guard isPresentationActive, !Task.isCancelled else { return }
     guard apiService.canAccess(.manage) else {
       clearForRestrictedUser()
       return
     }
     await loadClientsIfNeeded()
+    guard isPresentationActive,
+      currentPresentationGeneration == presentationGeneration,
+      !Task.isCancelled
+    else { return }
     downloadLoadGeneration += 1
     let currentGeneration = downloadLoadGeneration
     let clientName = selectedClient
     guard !clientName.isEmpty else { return }
     do {
       var newDownloads = try await apiService.fetchDownloading(clientName: clientName)
-      guard selectedClient == clientName,
+      guard isPresentationActive,
+        currentPresentationGeneration == presentationGeneration,
+        !Task.isCancelled,
+        selectedClient == clientName,
         currentGeneration == downloadLoadGeneration
       else {
         return
@@ -119,6 +153,10 @@ class DownloadTaskViewModel: ObservableObject {
     } catch is CancellationError {
       return
     } catch {
+      guard isPresentationActive,
+        currentPresentationGeneration == presentationGeneration,
+        !Task.isCancelled
+      else { return }
       consecutiveDownloadsFailures += 1
       reportPollingFailureIfNeeded(
         &consecutiveDownloadsFailures,

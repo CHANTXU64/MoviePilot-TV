@@ -11,7 +11,8 @@ final class GridDOMRetentionController: ObservableObject {
 
   @Published private(set) var retainedItemLimit: Int
 
-  private(set) var listID: UUID
+  private(set) var listIdentity: GridListIdentity
+  var listID: UUID { listIdentity.id }
   private let columnCount: Int
   private let rowsAfterFocusedRow: Int
   private let initialRowCount: Int
@@ -31,7 +32,7 @@ final class GridDOMRetentionController: ObservableObject {
   private var isViewActive = false
 
   init(
-    listID: UUID,
+    listIdentity: GridListIdentity,
     itemIDs: [MediaInfo.ID],
     columnCount: Int,
     rowsAfterFocusedRow: Int = 3,
@@ -39,7 +40,7 @@ final class GridDOMRetentionController: ObservableObject {
   ) {
     precondition(columnCount > 0)
     precondition(rowsAfterFocusedRow >= 0)
-    self.listID = listID
+    self.listIdentity = listIdentity
     self.itemIDs = itemIDs
     self.columnCount = columnCount
     self.rowsAfterFocusedRow = rowsAfterFocusedRow
@@ -57,19 +58,29 @@ final class GridDOMRetentionController: ObservableObject {
   }
 
   /// View 首帧已拿到新 Paginator、控制器尚未来得及 reconcile 时，也只创建新列表顶部窗口。
-  func retainedItemCount(for itemCount: Int, listID requestedListID: UUID) -> Int {
-    min(itemCount, requestedListID == listID ? retainedItemLimit : initialLimit)
+  func retainedItemCount(
+    for itemCount: Int,
+    listIdentity requestedIdentity: GridListIdentity
+  ) -> Int {
+    min(itemCount, requestedIdentity == listIdentity ? retainedItemLimit : initialLimit)
   }
 
   /// Paginator 只在原数组尾部追加时保留当前上界；换源、重排或截断都视为新列表。
-  func reconcile(listID newListID: UUID, itemIDs newItemIDs: [MediaInfo.ID]) {
-    guard newListID != listID || newItemIDs != itemIDs else { return }
+  @discardableResult
+  func reconcile(
+    listIdentity newIdentity: GridListIdentity,
+    itemIDs newItemIDs: [MediaInfo.ID]
+  ) -> Bool {
+    guard newIdentity.generation >= listIdentity.generation else { return false }
+    guard newIdentity.generation != listIdentity.generation || newIdentity.id == listIdentity.id
+    else { return false }
+    guard newIdentity != listIdentity || newItemIDs != itemIDs else { return true }
 
-    let appendedByPaginator = newListID == listID && isPaginatorAppend(newItemIDs)
-    listID = newListID
+    let appendedByPaginator = newIdentity == listIdentity && isPaginatorAppend(newItemIDs)
+    listIdentity = newIdentity
     itemIDs = newItemIDs
 
-    guard !appendedByPaginator else { return }
+    guard !appendedByPaginator else { return true }
 
     invalidatePendingTrim()
     focusedItemID = nil
@@ -78,6 +89,21 @@ final class GridDOMRetentionController: ObservableObject {
     ownsCurrentScrollSession = false
     preservesLimitForRestoredFocus = false
     setRetainedItemLimit(initialLimit)
+    return true
+  }
+
+  /// 卡片/Slot 只可用更高内容代际接管控制器，或补充同代际的尾部追加。
+  /// 同代际的截断、重排和等长替换只能由 View 的权威 onChange 写入。
+  @discardableResult
+  func reconcileEventSnapshot(
+    listIdentity newIdentity: GridListIdentity,
+    itemIDs newItemIDs: [MediaInfo.ID]
+  ) -> Bool {
+    guard newIdentity != listIdentity || newItemIDs != itemIDs else { return true }
+    if newIdentity == listIdentity, !isPaginatorAppend(newItemIDs) {
+      return false
+    }
+    return reconcile(listIdentity: newIdentity, itemIDs: newItemIDs)
   }
 
   func setViewActive(_ isActive: Bool) {
@@ -117,12 +143,12 @@ final class GridDOMRetentionController: ObservableObject {
 
   @discardableResult
   func cardFocusChanged(
-    listID eventListID: UUID,
+    listIdentity eventIdentity: GridListIdentity,
     itemID: MediaInfo.ID,
     itemIndex: Int? = nil,
     isFocused: Bool
   ) -> Bool {
-    guard eventListID == listID,
+    guard eventIdentity == listIdentity,
       let index = itemIndex ?? itemIDs.firstIndex(of: itemID),
       itemIDs.indices.contains(index),
       itemIDs[index] == itemID
