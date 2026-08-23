@@ -2,14 +2,12 @@ import SwiftUI
 
 struct MediaContextMenuItems: View {
   let item: MediaInfo
-  @Binding var navigationPath: NavigationPath
   @ObservedObject var subscriptionHandler: SubscriptionHandler
   @EnvironmentObject var mediaActionHandler: MediaActionHandler
-  @Environment(\.mediaNavigationStackID) private var mediaNavigationStackID
+  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
 
   // 可选的自定义订阅操作
   var onSubscribe: ((MediaInfo) -> Void)? = nil
-  var onDidNavigate: (() -> Void)? = nil
 
   private var canSubscribeMedia: Bool {
     APIService.shared.canAccess(.subscribe)
@@ -31,12 +29,7 @@ struct MediaContextMenuItems: View {
 
     Button {
       // 点击"详情"时立即触发预加载
-      MediaPreloader.shared.appendMedia(
-        item,
-        to: $navigationPath,
-        stackID: mediaNavigationStackID
-      )
-      onDidNavigate?()
+      navigationCoordinator.push(item)
     } label: {
       Label("详情", systemImage: "info.circle")
     }
@@ -46,6 +39,7 @@ struct MediaContextMenuItems: View {
       // 不依赖预加载状态，按钮永远可点，避免菜单状态不刷新的问题
       if item.canJumpToTMDB {
         Button {
+          let navigationSource = navigationCoordinator.sourceToken()
           Task {
             // 优先传入预加载的 tmdbId，避免重复网络请求
             // ⚠️ 此处在 Button 操作中（非 body 渲染），可安全使用 getTask
@@ -53,12 +47,7 @@ struct MediaContextMenuItems: View {
             if let target = await mediaActionHandler.getTMDBJumpTarget(
               for: item, targetTmdbId: preloadedTmdbId)
             {
-              MediaPreloader.shared.appendMedia(
-                target,
-                to: $navigationPath,
-                stackID: mediaNavigationStackID
-              )
-              onDidNavigate?()
+              navigationCoordinator.push(target, ifCurrent: navigationSource)
             }
           }
         } label: {
@@ -93,12 +82,12 @@ struct MediaContextMenuItems: View {
 
       if canSearchResources {
         Button {
+          let navigationSource = navigationCoordinator.sourceToken()
           Task { @MainActor in
             if let request = await mediaActionHandler.searchResourcesTargetUsingDefaultSites(
               for: item
             ) {
-              navigationPath.append(request)
-              onDidNavigate?()
+              navigationCoordinator.push(request, ifCurrent: navigationSource)
             }
           }
         } label: {
@@ -111,12 +100,10 @@ struct MediaContextMenuItems: View {
 
 struct MediaContextMenu: ViewModifier {
   let item: MediaInfo
-  @Binding var navigationPath: NavigationPath
   @EnvironmentObject var subscriptionHandler: SubscriptionHandler
 
   // 可选的自定义订阅操作
   var onSubscribe: ((MediaInfo) -> Void)? = nil
-  var onDidNavigate: (() -> Void)? = nil
 
   func body(content: Content) -> some View {
     content
@@ -124,10 +111,8 @@ struct MediaContextMenu: ViewModifier {
       .contextMenu {
         MediaContextMenuItems(
           item: item,
-          navigationPath: $navigationPath,
           subscriptionHandler: subscriptionHandler,
-          onSubscribe: onSubscribe,
-          onDidNavigate: onDidNavigate
+          onSubscribe: onSubscribe
         )
       }
   }
@@ -136,16 +121,12 @@ struct MediaContextMenu: ViewModifier {
 extension View {
   func mediaContextMenu(
     item: MediaInfo,
-    navigationPath: Binding<NavigationPath>,
-    onSubscribe: ((MediaInfo) -> Void)? = nil,
-    onDidNavigate: (() -> Void)? = nil
+    onSubscribe: ((MediaInfo) -> Void)? = nil
   ) -> some View {
     self.modifier(
       MediaContextMenu(
         item: item,
-        navigationPath: navigationPath,
-        onSubscribe: onSubscribe,
-        onDidNavigate: onDidNavigate
+        onSubscribe: onSubscribe
       )
     )
   }

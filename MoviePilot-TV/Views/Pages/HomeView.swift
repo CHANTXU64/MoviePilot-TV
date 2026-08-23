@@ -2,34 +2,24 @@ import SwiftUI
 
 @MainActor
 struct HomeView: View {
+  private let isSelected: Bool
   @StateObject private var viewModel: HomeViewModel
   @ObservedObject private var apiService = APIService.shared
+  @Environment(\.scenePhase) private var scenePhase
 
   // Sheet 状态
   @State private var selectedSubscribe: Subscribe?
 
   // 导航状态
-  @State private var path = NavigationPath()
-  @State private var mediaNavigationStackID = UUID()
-  @State private var imageSnapshotOwnerID = UUID()
-  @State private var pageImageCleanupTarget = PageImageCleanupTarget()
+  @StateObject private var navigationCoordinator = ImageNavigationCoordinator()
 
-  private var pageImageSnapshot: PageImageSnapshot {
-    let mediaURLs = viewModel.latestMedia.compactMap { $0.imageURLs.image }
-    let subscriptionURLs = (viewModel.movieSubscriptions + viewModel.tvSubscriptions)
-      .compactMap { $0.imageURLs.poster }
-    return PageImageSnapshot(
-      mediaPosterURLs: Set(mediaURLs + subscriptionURLs),
-      isComplete: !viewModel.isLoading
-    )
-  }
-
-  init(viewModel: HomeViewModel? = nil) {
+  init(isSelected: Bool = true, viewModel: HomeViewModel? = nil) {
+    self.isSelected = isSelected
     _viewModel = StateObject(wrappedValue: viewModel ?? HomeViewModel())
   }
 
   var body: some View {
-    NavigationStack(path: $path) {
+    NavigationStack(path: $navigationCoordinator.path) {
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 30) {
           if viewModel.isLoading {
@@ -57,15 +47,12 @@ struct HomeView: View {
                 servers: viewModel.latestMediaServers,
                 selectedServer: $viewModel.selectedLatestMediaServer,
                 isFirstRow: true,
+                loadsPageImages: true,
                 viewModel: viewModel,
                 onTMDBDetail: { mediaInfo in
-                  MediaPreloader.shared.appendMedia(
-                    mediaInfo,
-                    to: $path,
-                    stackID: mediaNavigationStackID
-                  )
+                  navigationCoordinator.push(mediaInfo)
                 },
-                onSearchResource: { request in path.append(request) }
+                onSearchResource: { request in navigationCoordinator.push(request) }
               )
             }
 
@@ -75,6 +62,7 @@ struct HomeView: View {
                 title: "电影订阅",
                 items: viewModel.movieSubscriptions,
                 isFirstRow: viewModel.latestMediaServers.isEmpty,
+                loadsPageImages: true,
                 viewModel: viewModel,
                 onEdit: presentEditSheet,
                 onViewDetail: navigateToDetail
@@ -88,6 +76,7 @@ struct HomeView: View {
                 items: viewModel.tvSubscriptions,
                 isFirstRow: viewModel.latestMediaServers.isEmpty
                   && viewModel.movieSubscriptions.isEmpty,
+                loadsPageImages: true,
                 viewModel: viewModel,
                 onEdit: presentEditSheet,
                 onViewDetail: navigateToDetail
@@ -133,53 +122,20 @@ struct HomeView: View {
         SubscribeSheet(subscribe: subscribe)
       }
       // 导航目的地
-      .navigationDestination(for: MediaInfo.self) { mediaInfo in
-        if let collectionId = mediaInfo.collection_id {
-          CollectionDetailView(
-            title: mediaInfo.title ?? "合集详情",
-            collectionId: collectionId,
-            navigationPath: $path
-          )
-        } else {
-          MediaDetailContainerView(media: mediaInfo, navigationPath: $path)
-        }
-      }
-      .navigationDestination(for: Person.self) { person in
-        PersonDetailView(
-          person: person,
-          navigationPath: $path
-        )
-      }
-      .navigationDestination(for: ResourceSearchRequest.self) { request in
-        ResourceResultView(request: request)
-      }
-      .navigationDestination(for: SubscribeSeasonRequest.self) { request in
-        SubscribeSeasonView(
-          mediaInfo: request.mediaInfo,
-          initialSeason: request.initialSeason,
-          initialEpisodeGroup: request.initialEpisodeGroup
-        )
+      .navigationDestination(for: ImageNavigationEntry.self) { entry in
+        ImageNavigationDestination(entry: entry)
       }
     }
-    .environment(\.mediaNavigationStackID, mediaNavigationStackID)
-    .onChange(of: path.count) { _, depth in
-      MediaPreloader.shared.reconcilePendingMediaNavigations(
-        currentPathDepth: depth,
-        stackID: mediaNavigationStackID
-      )
-    }
+    .environment(\.pageImageLifecycle, navigationCoordinator.rootLifecycle)
+    .environmentObject(navigationCoordinator)
     .onAppear {
-      MediaPreloader.shared.activatePageImageSnapshot(
-        pageImageSnapshot,
-        owner: imageSnapshotOwnerID,
-        target: pageImageCleanupTarget
-      )
+      updateStackForeground()
     }
-    .onChange(of: pageImageSnapshot) { _, snapshot in
-      MediaPreloader.shared.updatePageImageSnapshot(
-        snapshot,
-        target: pageImageCleanupTarget
-      )
+    .onChange(of: isSelected) { _, _ in
+      updateStackForeground()
+    }
+    .onChange(of: scenePhase) { _, _ in
+      updateStackForeground()
     }
   }
 
@@ -190,11 +146,11 @@ struct HomeView: View {
   }
 
   private func navigateToDetail(for subscribe: Subscribe) {
-    MediaPreloader.shared.appendMedia(
-      subscribe.navigationMediaInfo(),
-      to: $path,
-      stackID: mediaNavigationStackID
-    )
+    navigationCoordinator.push(subscribe.navigationMediaInfo())
+  }
+
+  private func updateStackForeground() {
+    navigationCoordinator.setStackPresentation(isSelected: isSelected, scenePhase: scenePhase)
   }
 }
 
@@ -212,6 +168,7 @@ private struct MediaSectionView: View {
   let servers: [String]
   @Binding var selectedServer: String
   var isFirstRow: Bool = false
+  let loadsPageImages: Bool
   @ObservedObject var viewModel: HomeViewModel
   var onTMDBDetail: ((MediaInfo) -> Void)? = nil
   var onSearchResource: ((ResourceSearchRequest) -> Void)? = nil
@@ -222,6 +179,7 @@ private struct MediaSectionView: View {
   @FocusState private var focusedItemId: String?
   @FocusState private var isTopRedirectorFocused: Bool
   @State private var hasRedirectedFocus: Bool = false
+  @State private var imageAnchorId: String?
 
   private var canSearchResources: Bool {
     APIService.shared.canAccess(.search)
@@ -273,7 +231,9 @@ private struct MediaSectionView: View {
       } else {
         ScrollView(.horizontal, showsIndicators: false) {
           LazyHStack(spacing: 40) {
-            ForEach(items) { item in
+            ForEach(Array(items.enumerated()), id: \.element.id) { entry in
+              let index = entry.offset
+              let item = entry.element
               MediaCard(
                 title: item.title,
                 posterUrl: item.imageURLs.image,
@@ -282,6 +242,15 @@ private struct MediaSectionView: View {
                 bottomLeftText: nil,
                 bottomLeftSecondaryText: nil,
                 source: nil,
+                loadsImage: loadsPageImages
+                  && ImageLoadWindow.containsHorizontalItem(
+                    at: index,
+                    itemCount: items.count,
+                    anchorIndex: imageAnchorId.flatMap { id in
+                      items.firstIndex(where: { $0.id == id })
+                    },
+                    cardKind: .media
+                  ),
                 action: canOpenMediaLibrary(item)
                   ? { openMediaItem(item) }
                   : nil
@@ -343,6 +312,10 @@ private struct MediaSectionView: View {
           }
           .padding(.top, 25)
           .padding(.bottom, 30)
+          .onChange(of: focusedItemId) { _, newId in
+            guard let newId else { return }
+            imageAnchorId = newId
+          }
         }
         .scrollClipDisabled()
         .focusSection()
@@ -365,6 +338,7 @@ private struct SubscribeSectionView: View {
   let title: String
   let items: [Subscribe]
   var isFirstRow: Bool = false
+  let loadsPageImages: Bool
   @ObservedObject var viewModel: HomeViewModel
   let onEdit: (Subscribe) -> Void
   let onViewDetail: (Subscribe) -> Void
@@ -372,6 +346,7 @@ private struct SubscribeSectionView: View {
   @FocusState private var focusedItemId: String?
   @FocusState private var isTopRedirectorFocused: Bool
   @State private var hasRedirectedFocus: Bool = false
+  @State private var imageAnchorId: String?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -398,9 +373,20 @@ private struct SubscribeSectionView: View {
 
       ScrollView(.horizontal, showsIndicators: false) {
         LazyHStack(spacing: 40) {
-          ForEach(items) { item in
+          ForEach(Array(items.enumerated()), id: \.element.id) { entry in
+            let index = entry.offset
+            let item = entry.element
             SubscribeItemView(
               item: item,
+              loadsImage: loadsPageImages
+                && ImageLoadWindow.containsHorizontalItem(
+                  at: index,
+                  itemCount: items.count,
+                  anchorIndex: imageAnchorId.flatMap { id in
+                    items.firstIndex(where: { HomeSubscribeFocusID.value(for: $0.id) == id })
+                  },
+                  cardKind: .media
+                ),
               viewModel: viewModel,
               onEdit: { onEdit(item) },
               onViewDetail: { onViewDetail(item) }
@@ -410,6 +396,10 @@ private struct SubscribeSectionView: View {
         }
         .padding(.top, 25)
         .padding(.bottom, 30)
+        .onChange(of: focusedItemId) { _, newId in
+          guard let newId else { return }
+          imageAnchorId = newId
+        }
       }
       .scrollClipDisabled()
       .focusSection()
@@ -419,6 +409,7 @@ private struct SubscribeSectionView: View {
 
 private struct SubscribeItemView: View {
   let item: Subscribe
+  let loadsImage: Bool
   @ObservedObject var viewModel: HomeViewModel
   let onEdit: () -> Void
   let onViewDetail: () -> Void
@@ -434,6 +425,7 @@ private struct SubscribeItemView: View {
       bottomLeftText: formatProgress(total: item.total_episode, lack: item.lack_episode),
       bottomLeftSecondaryText: item.last_update?.toRelativeDateString() ?? nil,
       source: nil,
+      loadsImage: loadsImage,
       action: {
         onEdit()
       }

@@ -1,14 +1,19 @@
 import SwiftUI
 
 struct SearchView: View {
+  private let isSelected: Bool
   @StateObject private var viewModel = SearchViewModel()
   @ObservedObject private var apiService = APIService.shared
-  @State private var path = NavigationPath()
-  @State private var mediaNavigationStackID = UUID()
+  @StateObject private var navigationCoordinator = ImageNavigationCoordinator()
   @StateObject private var subscriptionHandler = SubscriptionHandler()
+  @Environment(\.scenePhase) private var scenePhase
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
   @State private var showSiteSelection = false
   @State private var showMediaSourceSelection = false
+
+  init(isSelected: Bool = true) {
+    self.isSelected = isSelected
+  }
 
   // 焦点管理枚举：定义页面内可获得焦点的区域
   enum Field: Hashable {
@@ -149,7 +154,7 @@ struct SearchView: View {
   }
 
   var body: some View {
-    NavigationStack(path: $path) {
+    NavigationStack(path: $navigationCoordinator.path) {
       Group {
         if viewModel.isLoading {
           VStack {
@@ -187,7 +192,7 @@ struct SearchView: View {
           case .unified:
             UnifiedSearchResult(
               viewModel: viewModel,
-              navigationPath: $path,
+              imageLifecycle: navigationCoordinator.rootLifecycle,
               header: { searchHeader },
               onShareTapped: { share in
                 guard APIService.shared.canAccess(.subscribe) else { return }
@@ -197,31 +202,10 @@ struct SearchView: View {
           }
         }
       }
-      .navigationDestination(for: MediaInfo.self) { detail in
-        if let collectionId = detail.collection_id {
-          CollectionDetailView(
-            title: detail.title ?? "合集详情",
-            collectionId: collectionId,
-            navigationPath: $path
-          )
-        } else {
-          MediaDetailContainerView(media: detail, navigationPath: $path)
-        }
+      .navigationDestination(for: ImageNavigationEntry.self) { entry in
+        ImageNavigationDestination(entry: entry)
       }
-      .navigationDestination(for: Person.self) { person in
-        PersonDetailView(person: person, navigationPath: $path)
-      }
-      .navigationDestination(for: ResourceSearchRequest.self) { request in
-        ResourceResultView(request: request)
-      }
-      .navigationDestination(for: SubscribeSeasonRequest.self) { request in
-        SubscribeSeasonView(
-          mediaInfo: request.mediaInfo,
-          initialSeason: request.initialSeason,
-          initialEpisodeGroup: request.initialEpisodeGroup
-        )
-      }
-      .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $path)
+      .mediaSubscriptionAlerts(using: subscriptionHandler)
       .sheet(item: $subscriptionHandler.forkSheetRequest) { share in
         ForkSubscribeSheet(
           share: share,
@@ -258,14 +242,16 @@ struct SearchView: View {
         }
       }
     }
-    .environment(\.mediaNavigationStackID, mediaNavigationStackID)
-    .onChange(of: path.count) { _, depth in
-      MediaPreloader.shared.reconcilePendingMediaNavigations(
-        currentPathDepth: depth,
-        stackID: mediaNavigationStackID
-      )
-    }
+    .environment(\.pageImageLifecycle, navigationCoordinator.rootLifecycle)
+    .environmentObject(navigationCoordinator)
     .environmentObject(subscriptionHandler)
+    .onAppear { updateStackForeground() }
+    .onChange(of: isSelected) { _, _ in updateStackForeground() }
+    .onChange(of: scenePhase) { _, _ in updateStackForeground() }
+  }
+
+  private func updateStackForeground() {
+    navigationCoordinator.setStackPresentation(isSelected: isSelected, scenePhase: scenePhase)
   }
 
 }
@@ -308,51 +294,20 @@ private struct MediaSourceSelectionSheet: View {
 // MARK: - 聚合搜索结果
 struct UnifiedSearchResult<Header: View>: View {
   @ObservedObject var viewModel: SearchViewModel
-  @Binding var navigationPath: NavigationPath
+  @ObservedObject var imageLifecycle: PageImageLifecycle
   let header: Header
   let onShareTapped: (SubscribeShare) -> Void
 
   @State private var scrollPosition: String?
-  @State private var imageSnapshotOwnerID = UUID()
-  @State private var pageImageCleanupTarget = PageImageCleanupTarget()
-
-  private var pageImageSnapshot: PageImageSnapshot {
-    let mediaItems =
-      (viewModel.subscriptionSharePaginator?.items ?? [])
-      + (viewModel.moviePaginator?.items ?? [])
-      + (viewModel.tvPaginator?.items ?? [])
-      + (viewModel.collectionPaginator?.items ?? [])
-      + viewModel.bestResults.compactMap { result -> MediaInfo? in
-        guard case .media(let media) = result else { return nil }
-        return media
-      }
-    let people =
-      (viewModel.personPaginator?.items ?? [])
-      + viewModel.bestResults.compactMap { result -> Person? in
-        guard case .person(let person) = result else { return nil }
-        return person
-      }
-    let isLoadingAnyResult = viewModel.isLoading
-      || viewModel.subscriptionSharePaginator?.isLoading == true
-      || viewModel.moviePaginator?.isLoading == true
-      || viewModel.tvPaginator?.isLoading == true
-      || viewModel.collectionPaginator?.isLoading == true
-      || viewModel.personPaginator?.isLoading == true
-    return PageImageSnapshot(
-      mediaPosterURLs: Set(mediaItems.compactMap { $0.imageURLs.poster }),
-      personImageURLs: Set(people.compactMap { $0.imageURLs.profile }),
-      isComplete: !isLoadingAnyResult
-    )
-  }
 
   init(
     viewModel: SearchViewModel,
-    navigationPath: Binding<NavigationPath>,
+    imageLifecycle: PageImageLifecycle,
     @ViewBuilder header: () -> Header,
     onShareTapped: @escaping (SubscribeShare) -> Void
   ) {
     self.viewModel = viewModel
-    self._navigationPath = navigationPath
+    self.imageLifecycle = imageLifecycle
     self.header = header()
     self.onShareTapped = onShareTapped
   }
@@ -378,7 +333,7 @@ struct UnifiedSearchResult<Header: View>: View {
         rowId: rowId,
         items: items,
         isLoadingMore: paginator?.isLoadingMore ?? false,
-        navigationPath: $navigationPath,
+        loadsPageImages: true,
         onLoadMore: { focusedId in
           Task { await paginator?.loadMore(focusedId) }
         },
@@ -408,7 +363,7 @@ struct UnifiedSearchResult<Header: View>: View {
             BestResultRow(
               title: "最佳结果",
               items: bestResults,
-              navigationPath: $navigationPath,
+              loadsPageImages: true,
               scrollPosition: $scrollPosition,
               onShareTapped: onShareTapped
             )
@@ -454,7 +409,7 @@ struct UnifiedSearchResult<Header: View>: View {
             rowId: "persons",
             items: personResults,
             isLoadingMore: viewModel.personPaginator?.isLoadingMore ?? false,
-            navigationPath: $navigationPath,
+            loadsPageImages: true,
             onLoadMore: { focusedId in
               Task { await viewModel.personPaginator?.loadMore(focusedId) }
             },
@@ -469,19 +424,6 @@ struct UnifiedSearchResult<Header: View>: View {
     .animation(.snappy, value: scrollPosition)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     .focusSection()
-    .onAppear {
-      MediaPreloader.shared.activatePageImageSnapshot(
-        pageImageSnapshot,
-        owner: imageSnapshotOwnerID,
-        target: pageImageCleanupTarget
-      )
-    }
-    .onChange(of: pageImageSnapshot) { _, snapshot in
-      MediaPreloader.shared.updatePageImageSnapshot(
-        snapshot,
-        target: pageImageCleanupTarget
-      )
-    }
   }
 }
 
@@ -491,14 +433,15 @@ private struct ResultRow: View {
   let rowId: String
   let items: [MediaInfo]
   let isLoadingMore: Bool
-  @Binding var navigationPath: NavigationPath
+  let loadsPageImages: Bool
   let onLoadMore: (MediaInfo.ID?) -> Void
   @Binding var scrollPosition: String?
   let onShareTapped: (SubscribeShare) -> Void
   @EnvironmentObject var subscriptionHandler: SubscriptionHandler
-  @Environment(\.mediaNavigationStackID) private var mediaNavigationStackID
+  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
 
   @FocusState private var focusedItemId: MediaInfo.ID?
+  @State private var imageAnchorId: MediaInfo.ID?
   /// 预加载防抖任务：避免快速滚动时触发过多无效请求
   @State private var preloadDebounceTask: Task<Void, Never>?
 
@@ -512,7 +455,9 @@ private struct ResultRow: View {
 
       ScrollView(.horizontal, showsIndicators: false) {
         LazyHStack(spacing: 40) {
-          ForEach(items) { item in
+          ForEach(Array(items.enumerated()), id: \.element.id) { entry in
+            let index = entry.offset
+            let item = entry.element
             MediaCard(
               title: item.cleanedTitle ?? "",
               posterUrl: item.imageURLs.poster,
@@ -522,23 +467,27 @@ private struct ResultRow: View {
               bottomLeftText: nil,
               bottomLeftSecondaryText: nil,
               source: MediaSource.from(mediaInfo: item),
+              loadsImage: loadsPageImages
+                && ImageLoadWindow.containsHorizontalItem(
+                  at: index,
+                  itemCount: items.count,
+                  anchorIndex: imageAnchorId.flatMap { id in
+                    items.firstIndex(where: { $0.id == id })
+                  },
+                  cardKind: .media
+                ),
               action: {
                 if let share = item.subscribeShare {
                   onShareTapped(share)
                 } else {
                   preloadDebounceTask?.cancel()
-                  MediaPreloader.shared.appendMedia(
-                    item,
-                    to: $navigationPath,
-                    stackID: mediaNavigationStackID
-                  )
+                  navigationCoordinator.push(item)
                 }
               }
             )
             .focused($focusedItemId, equals: item.id)
             .mediaContextMenu(
-              item: item,
-              navigationPath: $navigationPath
+              item: item
             )
           }
 
@@ -552,14 +501,18 @@ private struct ResultRow: View {
           // 预加载触发：聚焦后延迟 ~300ms，防止快速滚动时浪费请求
           preloadDebounceTask?.cancel()
           if let newId = newId, let item = items.first(where: { $0.id == newId }) {
-            MediaPreloader.shared.focusDidMove(to: newId)
+            imageAnchorId = newId
+            MediaPreloader.shared.focusDidMove(to: newId, stackID: navigationCoordinator.id)
             // 只有带 collection_id 的合集走 CollectionDetailView，不预加载普通详情。
             // collection-like type 但缺少 collection_id 时仍按普通媒体处理，和 Web 保持一致。
             if item.shouldPreloadDetail {
               preloadDebounceTask = Task {
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
-                MediaPreloader.shared.preloadFocusedCandidateIfNeeded(for: item)
+                MediaPreloader.shared.preloadFocusedCandidateIfNeeded(
+                  for: item,
+                  stackID: navigationCoordinator.id
+                )
               }
             }
             // 分页加载
@@ -589,11 +542,13 @@ private struct PersonResultRow: View {
   let rowId: String
   let items: [Person]
   let isLoadingMore: Bool
-  @Binding var navigationPath: NavigationPath
+  let loadsPageImages: Bool
   let onLoadMore: (Person.ID?) -> Void
   @Binding var scrollPosition: String?
+  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
 
   @FocusState private var focusedItemId: Person.ID?
+  @State private var imageAnchorId: Person.ID?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -605,15 +560,28 @@ private struct PersonResultRow: View {
 
       ScrollView(.horizontal, showsIndicators: false) {
         LazyHStack(spacing: 40) {
-          ForEach(items) { item in
-            PersonCard(person: item) {
-              navigationPath.append(item)
+          ForEach(Array(items.enumerated()), id: \.element.id) { entry in
+            let index = entry.offset
+            let item = entry.element
+            PersonCard(
+              person: item,
+              loadsImage: loadsPageImages
+                && ImageLoadWindow.containsHorizontalItem(
+                  at: index,
+                  itemCount: items.count,
+                  anchorIndex: imageAnchorId.flatMap { id in
+                    items.firstIndex(where: { $0.id == id })
+                  },
+                  cardKind: .person
+                )
+            ) {
+              navigationCoordinator.push(item)
             }
             .focused($focusedItemId, equals: item.id)
             .compositingGroup()
             .contextMenu {
               Button {
-                navigationPath.append(item)
+                navigationCoordinator.push(item)
               } label: {
                 Label("详情", systemImage: "info.circle")
               }
@@ -628,7 +596,11 @@ private struct PersonResultRow: View {
         .padding(.bottom, 30)
         .onChange(of: focusedItemId) { _, newId in
           if let newId = newId {
-            MediaPreloader.shared.focusDidMove(to: "person:\(newId)")
+            imageAnchorId = newId
+            MediaPreloader.shared.focusDidMove(
+              to: "person:\(newId)",
+              stackID: navigationCoordinator.id
+            )
             scrollPosition = rowId
             onLoadMore(newId)
           }
@@ -653,12 +625,13 @@ private struct PersonResultRow: View {
 private struct BestResultRow: View {
   let title: String
   let items: [BestResultItem]
-  @Binding var navigationPath: NavigationPath
+  let loadsPageImages: Bool
   @Binding var scrollPosition: String?
   let onShareTapped: (SubscribeShare) -> Void
   @EnvironmentObject var subscriptionHandler: SubscriptionHandler
-  @Environment(\.mediaNavigationStackID) private var mediaNavigationStackID
+  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
   @FocusState private var focusedItemId: String?
+  @State private var imageAnchorId: String?
   /// 预加载防抖任务：避免快速滚动时触发过多无效请求
   @State private var preloadDebounceTask: Task<Void, Never>?
 
@@ -690,7 +663,18 @@ private struct BestResultRow: View {
 
       ScrollView(.horizontal, showsIndicators: false) {
         LazyHGrid(rows: gridRows, spacing: 26) {
-          ForEach(items) { item in
+          ForEach(Array(items.enumerated()), id: \.element.id) { entry in
+            let index = entry.offset
+            let item = entry.element
+            let loadsImage = loadsPageImages
+              && ImageLoadWindow.containsHorizontalItem(
+                at: index,
+                itemCount: items.count,
+                anchorIndex: imageAnchorId.flatMap { id in
+                  items.firstIndex(where: { $0.id == id })
+                },
+                cardKind: .media
+              )
             switch item {
             case .media(let media):
               let sourceStr = sourceText(for: media.source)
@@ -706,23 +690,19 @@ private struct BestResultRow: View {
                 posterUrl: media.imageURLs.poster,
                 posterFallbackUrl: media.imageURLs.posterFallback,
                 subtitle: subtitle,
+                loadsImage: loadsImage,
                 action: {
                   if let share = media.subscribeShare {
                     onShareTapped(share)
                   } else {
                     preloadDebounceTask?.cancel()
-                    MediaPreloader.shared.appendMedia(
-                      media,
-                      to: $navigationPath,
-                      stackID: mediaNavigationStackID
-                    )
+                    navigationCoordinator.push(media)
                   }
                 }
               )
               .focused($focusedItemId, equals: item.id)
               .mediaContextMenu(
-                item: media,
-                navigationPath: $navigationPath
+                item: media
               )
             case .person(let person):
               let sourceStr = sourceText(for: person.source)
@@ -738,13 +718,14 @@ private struct BestResultRow: View {
                 type: "人物",
                 posterUrl: person.imageURLs.profile,
                 subtitle: subtitle,
-                action: { navigationPath.append(person) }
+                loadsImage: loadsImage,
+                action: { navigationCoordinator.push(person) }
               )
               .focused($focusedItemId, equals: item.id)
               .compositingGroup()
               .contextMenu {
                 Button {
-                  navigationPath.append(person)
+                  navigationCoordinator.push(person)
                 } label: {
                   Label("详情", systemImage: "info.circle")
                 }
@@ -761,16 +742,26 @@ private struct BestResultRow: View {
         // 预加载触发：聚焦后延迟 ~300ms，防止快速滚动时浪费请求
         preloadDebounceTask?.cancel()
         if let newId = newId, let item = items.first(where: { $0.id == newId }) {
+          imageAnchorId = newId
           // 仅对媒体类型预加载，人物类型走 PersonDetailView，不需要 MediaPreloader
           if case .media(let media) = item, media.shouldPreloadDetail {
-            MediaPreloader.shared.focusDidMove(to: media.id)
+            MediaPreloader.shared.focusDidMove(
+              to: media.id,
+              stackID: navigationCoordinator.id
+            )
             preloadDebounceTask = Task {
               try? await Task.sleep(for: .milliseconds(300))
               guard !Task.isCancelled else { return }
-              MediaPreloader.shared.preloadFocusedCandidateIfNeeded(for: media)
+              MediaPreloader.shared.preloadFocusedCandidateIfNeeded(
+                for: media,
+                stackID: navigationCoordinator.id
+              )
             }
           } else {
-            MediaPreloader.shared.focusDidMove(to: newId)
+            MediaPreloader.shared.focusDidMove(
+              to: newId,
+              stackID: navigationCoordinator.id
+            )
           }
           scrollPosition = "best"
         }

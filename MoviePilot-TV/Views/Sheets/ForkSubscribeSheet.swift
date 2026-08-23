@@ -27,29 +27,28 @@ struct ForkSubscribeSheet: View {
               .foregroundColor(.gray)
           )
 
-        if !isImageFailed,
-          let posterUrl = isUsingFallback ? media.imageURLs.posterFallback : media.imageURLs.poster
-        {
-          KFImage.sessionImage(posterUrl)
-            .onFailure { _ in
-              // 降尺寸海报加载失败时回退到原始 URL 重试一次，仍失败才隐藏。
-              if !isUsingFallback, media.imageURLs.posterFallback != nil {
-                isUsingFallback = true
-              } else {
-                isImageFailed = true
-              }
+        PageManagedImage(
+          url: isUsingFallback ? media.imageURLs.posterFallback : media.imageURLs.poster,
+          processor: ResizingImageProcessor(
+            referenceSize: CGSize(width: 360, height: 540),
+            mode: .aspectFill
+          ),
+          isEnabled: !isImageFailed,
+          role: .activePage,
+          participatesInPageLifecycle: true,
+          skipsMemoryCache: true,
+          fadeDuration: 0,
+          onFailure: {
+            // 降尺寸海报加载失败时回退到原始 URL 重试一次，仍失败才隐藏。
+            if !isUsingFallback, media.imageURLs.posterFallback != nil {
+              isUsingFallback = true
+            } else {
+              isImageFailed = true
             }
-            .placeholder {
-              Rectangle()
-                .fill(Color(white: 0.12))
-                .overlay(ProgressView().tint(.gray))
-            }
-            .resizing(referenceSize: CGSize(width: 360, height: 540), mode: .aspectFill)
-            .resizable()
-            .aspectRatio(contentMode: .fill)
-            .frame(width: 360)
-            .clipped()
-        }
+          }
+        )
+        .frame(width: 360)
+        .clipped()
       }
       .frame(width: 360)
       .cornerRadius(20)

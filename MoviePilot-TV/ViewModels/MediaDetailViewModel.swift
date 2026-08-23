@@ -36,7 +36,6 @@ class MediaDetailViewModel: ObservableObject {
   /// 用于控制 Loading 遮罩的显隐——必须等首行数据加载完才能移除遮罩，
   /// 否则首行 Card 顶部露出在第一页底部时，非首行先加载会导致闪烁。
   @Published var isFirstRowReady = false
-  @Published private(set) var isRelatedContentSnapshotComplete = false
 
   // 视图模型与服务
   @Published var siteFilter: SiteFilterViewModel
@@ -86,10 +85,9 @@ class MediaDetailViewModel: ObservableObject {
         }
         return false
       },
-      imageURLsProvider: { item in
+      imageWarmURLsProvider: { item in
         [item.imageURLs.poster].compactMap(\.self)
       },
-      imagePrefetchProcessor: MediaCard.posterProcessor(for: MediaCard.defaultPosterSize),
       onReset: { @MainActor in
         recommendSeenKeys.removeAll()
       }
@@ -110,10 +108,9 @@ class MediaDetailViewModel: ObservableObject {
         }
         return false
       },
-      imageURLsProvider: { @MainActor item in
+      imageWarmURLsProvider: { @MainActor item in
         [item.imageURLs.poster].compactMap { $0 }
       },
-      imagePrefetchProcessor: MediaCard.posterProcessor(for: MediaCard.defaultPosterSize),
       onReset: { @MainActor in
         similarSeenKeys.removeAll()
       }
@@ -130,10 +127,9 @@ class MediaDetailViewModel: ObservableObject {
         items = StaffManager.mergeActors(existing: items, newBatch: newItems)
         return items.count > initialCount
       },
-      imageURLsProvider: { item in
+      imageWarmURLsProvider: { item in
         [item.imageURLs.profile].compactMap(\.self)
-      },
-      imagePrefetchProcessor: PersonCard.imageProcessor()
+      }
     )
 
     // --- Forward Paginator Updates ---
@@ -219,9 +215,6 @@ class MediaDetailViewModel: ObservableObject {
       defer {
         relatedContentChildTasks.removeAll()
         relatedContentTask = nil
-        if !Task.isCancelled {
-          isRelatedContentSnapshotComplete = true
-        }
       }
 
       // 1. 并发启动演职员、推荐和相似内容加载，并保存句柄供 Pop 取消。
@@ -271,74 +264,17 @@ class MediaDetailViewModel: ObservableObject {
     }
   }
 
-  /// 当前详情页已加载的普通卡片图片快照。
-  var pageImageSnapshot: PageImageSnapshot {
-    PageImageSnapshot(
-      mediaPosterURLs: Set(
-        (recommendPaginator.items + similarPaginator.items)
-          .compactMap { $0.imageURLs.poster }
-      ).union(seasonPosterURLs),
-      personImageURLs: Set(
-        (actorsPaginator.items + uniqueDirectors)
-          .compactMap { $0.imageURLs.profile }
-      ),
-      isComplete: isRelatedContentSnapshotComplete
-        && !actorsPaginator.isLoading
-        && !recommendPaginator.isLoading
-        && !similarPaginator.isLoading
-    )
-  }
-
-  private var seasonPosterURLs: Set<URL> {
-    let seasons: [TmdbSeason]
-    if let loaded = preloadTask?.seasonViewModel?.seasonInfos, !loaded.isEmpty {
-      seasons = loaded
-    } else {
-      seasons = detail.season_info ?? []
-    }
-    return Set(
-      seasons.compactMap { season in
-        apiService.getSeasonPosterURL(
-          posterPath: season.poster_path,
-          mediaPosterPath: detail.poster_path
-        )
-      }
-    )
-  }
-
   /// 仅在页面已确认被 Pop 出 NavigationPath 后调用。
-  func cancelForPop(returningTo target: PageImageCleanupTarget?) {
+  func cancelForPop() {
     mediaServerExistsTask?.cancel()
     mediaServerExistsTask = nil
     relatedContentTask?.cancel()
     relatedContentTask = nil
     relatedContentChildTasks.forEach { $0.cancel() }
     relatedContentChildTasks.removeAll()
-    if let target {
-      let preloader = MediaPreloader.shared
-      recommendPaginator.cancelForPop { urls in
-        preloader.enqueuePrefetchedCardImages(
-          PageImageSnapshot(mediaPosterURLs: urls),
-          returningTo: target
-        )
-      }
-      similarPaginator.cancelForPop { urls in
-        preloader.enqueuePrefetchedCardImages(
-          PageImageSnapshot(mediaPosterURLs: urls),
-          returningTo: target
-        )
-      }
-      actorsPaginator.cancelForPop { urls in
-        preloader.enqueuePrefetchedCardImages(
-          PageImageSnapshot(personImageURLs: urls),
-          returningTo: target
-        )
-      }
-    } else {
-      actorsPaginator.cancel()
-      recommendPaginator.cancel()
-      similarPaginator.cancel()
-    }
+    actorsPaginator.cancel()
+    recommendPaginator.cancel()
+    similarPaginator.cancel()
     preloadTask = nil
   }
 

@@ -178,24 +178,36 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let initial = DetailCardView(
       item: media,
       showBadges: false,
+      loadsImage: true,
       imageConfigurationIdentity: "config-a",
       onTap: {}
     )
     let unchanged = DetailCardView(
       item: media,
       showBadges: false,
+      loadsImage: true,
       imageConfigurationIdentity: "config-a",
       onTap: {}
     )
     let changed = DetailCardView(
       item: media,
       showBadges: false,
+      loadsImage: true,
       imageConfigurationIdentity: "config-b",
       onTap: {}
     )
 
     XCTAssertEqual(initial, unchanged)
     XCTAssertNotEqual(initial, changed)
+
+    let unloaded = DetailCardView(
+      item: media,
+      showBadges: false,
+      loadsImage: false,
+      imageConfigurationIdentity: "config-a",
+      onTap: {}
+    )
+    XCTAssertNotEqual(initial, unloaded)
   }
 
   @MainActor

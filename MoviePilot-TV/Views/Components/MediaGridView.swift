@@ -3,7 +3,7 @@ import SwiftUI
 private final class PreloadDebouncer {
   private var tasks: [String: Task<Void, Never>] = [:]
 
-  func schedule(for item: MediaInfo, delayMs: Int = 300) {
+  func schedule(for item: MediaInfo, stackID: UUID, delayMs: Int = 300) {
     let id = item.id
     // 取消该 ID 已有的计时任务
     tasks[id]?.cancel()
@@ -12,7 +12,7 @@ private final class PreloadDebouncer {
       try? await Task.sleep(for: .milliseconds(delayMs))
       guard !Task.isCancelled else { return }
 
-      MediaPreloader.shared.preloadFocusedCandidateIfNeeded(for: item)
+      MediaPreloader.shared.preloadFocusedCandidateIfNeeded(for: item, stackID: stackID)
       // 执行完后清理
       tasks.removeValue(forKey: id)
     }
@@ -32,18 +32,20 @@ private final class PreloadDebouncer {
 
 // MARK: - EquatableView 包装器
 // 当父视图 body 重新求值（如 Paginator 状态变化）时，
-// `.equatable()` 通过 `==`（item.id + 图片配置）短路，跳过 MediaCard 子树的 body 求值。
+// `.equatable()` 通过 `==`（item.id + 图片窗口 + 图片配置）短路，跳过 MediaCard 子树的 body 求值。
 // 注意：不在 grid 层使用 @FocusState，避免每次焦点移动触发整个 grid body 重新求值。
 // 焦点处理保留在 per-card 的 onFocus 回调中（由 MediaCard 内部的 @FocusState 驱动）。
 
 private struct GridCardView: View, Equatable {
   let item: MediaInfo
+  let loadsImage: Bool
   let imageConfigurationIdentity: String
   let onTap: () -> Void
   let onFocus: (Bool) -> Void
 
   static func == (lhs: GridCardView, rhs: GridCardView) -> Bool {
     lhs.item.id == rhs.item.id
+      && lhs.loadsImage == rhs.loadsImage
       && lhs.imageConfigurationIdentity == rhs.imageConfigurationIdentity
   }
 
@@ -57,6 +59,7 @@ private struct GridCardView: View, Equatable {
       bottomLeftText: nil,
       bottomLeftSecondaryText: nil,
       source: MediaSource.from(mediaInfo: item),
+      loadsImage: loadsImage,
       action: onTap,
       onFocus: onFocus
     )
@@ -65,6 +68,7 @@ private struct GridCardView: View, Equatable {
 
 private struct GridCardViewWithMenu<MenuContent: View>: View, Equatable {
   let item: MediaInfo
+  let loadsImage: Bool
   let imageConfigurationIdentity: String
   let onTap: () -> Void
   let onFocus: (Bool) -> Void
@@ -72,6 +76,7 @@ private struct GridCardViewWithMenu<MenuContent: View>: View, Equatable {
 
   static func == (lhs: GridCardViewWithMenu, rhs: GridCardViewWithMenu) -> Bool {
     lhs.item.id == rhs.item.id
+      && lhs.loadsImage == rhs.loadsImage
       && lhs.imageConfigurationIdentity == rhs.imageConfigurationIdentity
   }
 
@@ -85,6 +90,7 @@ private struct GridCardViewWithMenu<MenuContent: View>: View, Equatable {
       bottomLeftText: nil,
       bottomLeftSecondaryText: nil,
       source: MediaSource.from(mediaInfo: item),
+      loadsImage: loadsImage,
       action: onTap,
       onFocus: onFocus
     )
@@ -100,45 +106,48 @@ private struct GridCardViewWithMenu<MenuContent: View>: View, Equatable {
 /// 用于展示媒体海报卡片的网格布局，支持分页加载
 struct MediaGridView<Header: View, ContextMenu: View>: View {
   @ObservedObject private var apiService = APIService.shared
+  @ObservedObject var imageLifecycle: PageImageLifecycle
   let items: [MediaInfo]
   let isLoading: Bool
   let isLoadingMore: Bool
   let onLoadMore: (MediaInfo.ID?) -> Void
-  @Binding var navigationPath: NavigationPath
   let header: Header
   let contextMenu: ((MediaInfo) -> ContextMenu)?
   let onShareTapped: ((SubscribeShare) -> Void)?
   let loadMoreThreshold: Int
-  @Environment(\.mediaNavigationStackID) private var mediaNavigationStackID
+  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
 
   /// 预加载防抖器：引用类型，内部状态变化不会触发 View 刷新
   @State private var preloadDebouncer = PreloadDebouncer()
-  @State private var imageSnapshotOwnerID = UUID()
-  @State private var pageImageCleanupTarget = PageImageCleanupTarget()
+  @State private var focusedImageItemID: MediaInfo.ID?
 
-  private var pageImageSnapshot: PageImageSnapshot {
-    PageImageSnapshot(
-      mediaPosterURLs: Set(items.compactMap { $0.imageURLs.poster }),
-      isComplete: !isLoading && !isLoadingMore
+  private func loadsImage(at index: Int) -> Bool {
+    ImageLoadWindow.containsGridItem(
+      at: index,
+      itemCount: items.count,
+      anchorIndex: focusedImageItemID.flatMap { id in
+        items.firstIndex(where: { $0.id == id })
+      },
+      columnCount: MediaCard.defaultGridColumns.count
     )
   }
 
   init(
+    imageLifecycle: PageImageLifecycle,
     items: [MediaInfo],
     isLoading: Bool,
     isLoadingMore: Bool,
     onLoadMore: @escaping (MediaInfo.ID?) -> Void,
-    navigationPath: Binding<NavigationPath>,
     loadMoreThreshold: Int = 24,
     @ViewBuilder header: () -> Header,
     @ViewBuilder contextMenu: @escaping (MediaInfo) -> ContextMenu,
     onShareTapped: ((SubscribeShare) -> Void)? = nil
   ) {
+    self.imageLifecycle = imageLifecycle
     self.items = items
     self.isLoading = isLoading
     self.isLoadingMore = isLoadingMore
     self.onLoadMore = onLoadMore
-    self._navigationPath = navigationPath
     self.loadMoreThreshold = loadMoreThreshold
     self.header = header()
     self.contextMenu = contextMenu
@@ -147,20 +156,20 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
 
   // 无上下文菜单的初始化方法
   init(
+    imageLifecycle: PageImageLifecycle,
     items: [MediaInfo],
     isLoading: Bool,
     isLoadingMore: Bool,
     onLoadMore: @escaping (MediaInfo.ID?) -> Void,
-    navigationPath: Binding<NavigationPath>,
     loadMoreThreshold: Int = 24,
     @ViewBuilder header: () -> Header,
     onShareTapped: ((SubscribeShare) -> Void)? = nil
   ) where ContextMenu == EmptyView {
+    self.imageLifecycle = imageLifecycle
     self.items = items
     self.isLoading = isLoading
     self.isLoadingMore = isLoadingMore
     self.onLoadMore = onLoadMore
-    self._navigationPath = navigationPath
     self.loadMoreThreshold = loadMoreThreshold
     self.header = header()
     self.contextMenu = nil
@@ -190,10 +199,13 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
         } else {
 
           LazyVGrid(columns: MediaCard.defaultGridColumns, spacing: 40) {
-            ForEach(items) { item in
+            ForEach(Array(items.enumerated()), id: \.element.id) { entry in
+              let index = entry.offset
+              let item = entry.element
               if let contextMenu = contextMenu {
                 GridCardViewWithMenu(
                   item: item,
+                  loadsImage: loadsImage(at: index),
                   imageConfigurationIdentity: apiService.imageConfigurationIdentity,
                   onTap: { handleItemTap(item) },
                   onFocus: { isFocused in handleFocus(item: item, isFocused: isFocused) },
@@ -203,6 +215,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
               } else {
                 GridCardView(
                   item: item,
+                  loadsImage: loadsImage(at: index),
                   imageConfigurationIdentity: apiService.imageConfigurationIdentity,
                   onTap: { handleItemTap(item) },
                   onFocus: { isFocused in handleFocus(item: item, isFocused: isFocused) }
@@ -227,19 +240,6 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
       }
     }
     .focusSection()
-    .onAppear {
-      MediaPreloader.shared.activatePageImageSnapshot(
-        pageImageSnapshot,
-        owner: imageSnapshotOwnerID,
-        target: pageImageCleanupTarget
-      )
-    }
-    .onChange(of: pageImageSnapshot) { _, snapshot in
-      MediaPreloader.shared.updatePageImageSnapshot(
-        snapshot,
-        target: pageImageCleanupTarget
-      )
-    }
     .onDisappear {
       preloadDebouncer.cancel()
     }
@@ -250,17 +250,8 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     if let share = item.subscribeShare {
       onShareTapped?(share)
     } else {
-      MediaPreloader.shared.activatePageImageSnapshot(
-        pageImageSnapshot,
-        owner: imageSnapshotOwnerID,
-        target: pageImageCleanupTarget
-      )
       preloadDebouncer.cancel(id: item.id)
-      MediaPreloader.shared.appendMedia(
-        item,
-        to: $navigationPath,
-        stackID: mediaNavigationStackID
-      )
+      navigationCoordinator.push(item)
     }
   }
 
@@ -271,43 +262,39 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
       return
     }
 
-    MediaPreloader.shared.activatePageImageSnapshot(
-      pageImageSnapshot,
-      owner: imageSnapshotOwnerID,
-      target: pageImageCleanupTarget
-    )
-    MediaPreloader.shared.focusDidMove(to: item.id)
+    MediaPreloader.shared.focusDidMove(to: item.id, stackID: navigationCoordinator.id)
     preloadDebouncer.cancel(id: item.id)
     if item.shouldPreloadDetail {
-      preloadDebouncer.schedule(for: item)
+      preloadDebouncer.schedule(for: item, stackID: navigationCoordinator.id)
     }
 
     // 用 index 判断是否接近末尾，避免创建 Set
-    if let index = items.firstIndex(where: { $0.id == item.id }),
-      index >= items.count - loadMoreThreshold
-    {
-      onLoadMore(item.id)
+    if let index = items.firstIndex(where: { $0.id == item.id }) {
+      focusedImageItemID = item.id
+      if index >= items.count - loadMoreThreshold {
+        onLoadMore(item.id)
+      }
     }
   }
 }
 
 extension MediaGridView where Header == EmptyView {
   init(
+    imageLifecycle: PageImageLifecycle,
     items: [MediaInfo],
     isLoading: Bool,
     isLoadingMore: Bool,
     onLoadMore: @escaping (MediaInfo.ID?) -> Void,
-    navigationPath: Binding<NavigationPath>,
     loadMoreThreshold: Int = 24,
     @ViewBuilder contextMenu: @escaping (MediaInfo) -> ContextMenu,
     onShareTapped: ((SubscribeShare) -> Void)? = nil
   ) {
     self.init(
+      imageLifecycle: imageLifecycle,
       items: items,
       isLoading: isLoading,
       isLoadingMore: isLoadingMore,
       onLoadMore: onLoadMore,
-      navigationPath: navigationPath,
       loadMoreThreshold: loadMoreThreshold,
       header: { EmptyView() },
       contextMenu: contextMenu,
@@ -318,20 +305,20 @@ extension MediaGridView where Header == EmptyView {
 
 extension MediaGridView where Header == EmptyView, ContextMenu == EmptyView {
   init(
+    imageLifecycle: PageImageLifecycle,
     items: [MediaInfo],
     isLoading: Bool,
     isLoadingMore: Bool,
     onLoadMore: @escaping (MediaInfo.ID?) -> Void,
-    navigationPath: Binding<NavigationPath>,
     loadMoreThreshold: Int = 24,
     onShareTapped: ((SubscribeShare) -> Void)? = nil
   ) {
     self.init(
+      imageLifecycle: imageLifecycle,
       items: items,
       isLoading: isLoading,
       isLoadingMore: isLoadingMore,
       onLoadMore: onLoadMore,
-      navigationPath: navigationPath,
       loadMoreThreshold: loadMoreThreshold,
       header: { EmptyView() },
       onShareTapped: onShareTapped

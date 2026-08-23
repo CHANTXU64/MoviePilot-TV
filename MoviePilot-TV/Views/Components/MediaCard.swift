@@ -251,8 +251,10 @@ struct MediaCard: View {
   let source: MediaSource?  // 右下角：数据源图标
 
   var showBadges: Bool = true
+  var loadsImage: Bool = true
 
   @FocusState private var isFocused: Bool
+  @ObservedObject private var memoryOptimizationPolicy = MemoryOptimizationPolicy.shared
   /// 降尺寸海报加载失败后切换到原始 URL 重试。
   @State private var posterLoadFailed = false
 
@@ -289,6 +291,7 @@ struct MediaCard: View {
     bottomLeftSecondaryText: String? = nil,
     source: MediaSource? = nil,
     showBadges: Bool = true,
+    loadsImage: Bool = true,
     width: CGFloat = defaultPosterSize.width,
     height: CGFloat = defaultPosterSize.height,
     subTitleBelow: String? = nil,
@@ -306,6 +309,7 @@ struct MediaCard: View {
     self.bottomLeftSecondaryText = bottomLeftSecondaryText
     self.source = source
     self.showBadges = showBadges
+    self.loadsImage = loadsImage
     self.width = width
     self.height = height
     self.subTitleBelow = subTitleBelow
@@ -381,41 +385,47 @@ struct MediaCard: View {
   }
 
   // 提取的海报内容 - Apple TV 风格设计
+  @ViewBuilder
   private var posterContent: some View {
     let resolvedTypeIcon = Self.typeIconMap[typeText ?? ""] ?? "film"
-    return KFImage.sessionImage(posterLoadFailed ? posterFallbackUrl : posterUrl)
-      .onFailure { _ in
-        // 降尺寸海报加载失败（如第三方 URL 被改写）时，回退到原始 URL 重试一次。
-        posterLoadFailed = true
-      }
-      .placeholder {
-        Rectangle()
-          .fill(Color(white: 0.12))
-          .overlay(
-            Image(systemName: resolvedTypeIcon)
-              .font(.title2)
-              .foregroundStyle(.gray)
-          )
-      }
-      .setProcessor(Self.posterProcessor(for: CGSize(width: width, height: height)))
-      .cancelOnDisappear(true)
-      .resizable()
-      .fade(duration: 0.25)
-      .aspectRatio(contentMode: .fill)
-      .frame(width: width, height: height)
-      .overlay {
-        if showBadges {
-          // 覆盖徽章 - 纯色浅黑风格
-          BadgeOverlay(
-            typeText: typeText,
-            ratingText: ratingText,
-            bottomLeftText: bottomLeftText,
-            bottomLeftSecondaryText: bottomLeftSecondaryText,
-            source: source
-          )
-          .equatable()
+    ZStack {
+      Rectangle()
+        .fill(Color(white: 0.12))
+        .overlay(
+          Image(systemName: resolvedTypeIcon)
+            .font(.title2)
+            .foregroundStyle(.gray)
+        )
+
+      PageManagedImage(
+        url: posterLoadFailed ? posterFallbackUrl : posterUrl,
+        processor: Self.posterProcessor(for: CGSize(width: width, height: height)),
+        isEnabled: loadsImage || !memoryOptimizationPolicy.isEnabled,
+        participatesInPageLifecycle: memoryOptimizationPolicy.isEnabled,
+        skipsMemoryCache: memoryOptimizationPolicy.isEnabled,
+        onFailure: {
+          // 降尺寸海报加载失败（如第三方 URL 被改写）时，回退到原始 URL 重试一次。
+          posterLoadFailed = true
         }
+      )
+    }
+    .frame(width: width, height: height)
+    .onChange(of: posterUrl) { _, _ in
+      posterLoadFailed = false
+    }
+    .overlay {
+      if showBadges {
+        // 覆盖徽章 - 纯色浅黑风格
+        BadgeOverlay(
+          typeText: typeText,
+          ratingText: ratingText,
+          bottomLeftText: bottomLeftText,
+          bottomLeftSecondaryText: bottomLeftSecondaryText,
+          source: source
+        )
+        .equatable()
       }
+    }
   }
 
 }
@@ -423,15 +433,17 @@ struct MediaCard: View {
 // MARK: - EquatableView 包装器（用于详情页推荐/类似横向列表）
 
 /// 将 MediaCard 包装在 Equatable 视图中，用于详情页的推荐/类似区域。
-/// 配合 `.equatable()` 修饰符，仅当 item.id、showBadges 或图片配置变化时才重新求值 body。
+/// 配合 `.equatable()` 修饰符，仅当 item.id、showBadges、图片窗口或图片配置变化时才重新求值 body。
 struct DetailCardView: View, Equatable {
   let item: MediaInfo
   let showBadges: Bool
+  let loadsImage: Bool
   let imageConfigurationIdentity: String
   let onTap: () -> Void
 
   static func == (lhs: DetailCardView, rhs: DetailCardView) -> Bool {
     lhs.item.id == rhs.item.id && lhs.showBadges == rhs.showBadges
+      && lhs.loadsImage == rhs.loadsImage
       && lhs.imageConfigurationIdentity == rhs.imageConfigurationIdentity
   }
 
@@ -446,6 +458,7 @@ struct DetailCardView: View, Equatable {
       bottomLeftSecondaryText: nil,
       source: MediaSource.from(mediaInfo: item),
       showBadges: showBadges,
+      loadsImage: loadsImage,
       action: onTap
     )
   }

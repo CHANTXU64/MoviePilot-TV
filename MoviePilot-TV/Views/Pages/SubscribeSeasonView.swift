@@ -3,12 +3,15 @@ import SwiftUI
 
 struct SubscribeSeasonView: View {
   @StateObject private var viewModel: SubscribeSeasonViewModel
+  @ObservedObject var imageLifecycle: PageImageLifecycle
 
   init(
     mediaInfo: MediaInfo,
     initialSeason: Int? = nil,
-    initialEpisodeGroup: String? = nil
+    initialEpisodeGroup: String? = nil,
+    imageLifecycle: PageImageLifecycle
   ) {
+    self.imageLifecycle = imageLifecycle
     _viewModel = StateObject(
       wrappedValue: SubscribeSeasonViewModel(
         mediaInfo: mediaInfo,
@@ -19,7 +22,11 @@ struct SubscribeSeasonView: View {
 
   var body: some View {
     ScrollView {
-      SubscribeSeasonContentView(viewModel: viewModel, layout: .grid)
+      SubscribeSeasonContentView(
+        viewModel: viewModel,
+        layout: .grid,
+        loadsImages: true
+      )
     }
     .focusSection()
     .task {
@@ -39,6 +46,7 @@ struct SubscribeSeasonContentView: View {
   var layout: SeasonLayout = .shelf
   var title: String? = nil
   var showBadges: Bool = true
+  var loadsImages: Bool = true
   var onSeasonTap: ((TmdbSeason) -> Void)? = nil
   var onMoreTapped: (() -> Void)? = nil
 
@@ -341,6 +349,7 @@ struct SubscribeSeasonContentView: View {
       bottomLeftSecondaryText: nil,
       source: nil,
       showBadges: showBadges,
+      loadsImage: loadsImages,
       footerLabel: (
         icon: isSubscribed ? "minus.circle" : "plus.circle",
         text: footerText
@@ -419,6 +428,7 @@ struct SubscribeSeasonContentView: View {
         posterPath: nextSeason.poster_path,
         mediaPosterPath: viewModel.mediaInfo.poster_path
       ),
+      loadsImage: loadsImages,
       action: {
         onMoreTapped?()
       }
@@ -443,28 +453,26 @@ struct SeasonDetailSheet: View {
               .foregroundColor(.gray)
           )
 
-        if !isImageFailed,
-          let posterUrl = APIService.shared.getSeasonPosterURL(
+        PageManagedImage(
+          url: APIService.shared.getSeasonPosterURL(
             posterPath: season.poster_path,
             mediaPosterPath: mediaInfo.poster_path
-          )
-        {
-          KFImage.sessionImage(posterUrl)
-            .onFailure { _ in
-              isImageFailed = true
-            }
-            .placeholder {
-              Rectangle()
-                .fill(Color(white: 0.12))
-                .overlay(ProgressView().tint(.gray))
-            }
-            .resizing(referenceSize: CGSize(width: 360, height: 540), mode: .aspectFill)
-            .skippingMemoryCache()
-            .resizable()
-            .aspectRatio(contentMode: .fill)
-            .frame(width: 360)
-            .clipped()
-        }
+          ),
+          processor: ResizingImageProcessor(
+            referenceSize: CGSize(width: 360, height: 540),
+            mode: .aspectFill
+          ),
+          isEnabled: !isImageFailed,
+          role: .activePage,
+          participatesInPageLifecycle: true,
+          skipsMemoryCache: true,
+          fadeDuration: 0,
+          onFailure: {
+            isImageFailed = true
+          }
+        )
+        .frame(width: 360)
+        .clipped()
       }
       .frame(width: 360)
       .cornerRadius(20)

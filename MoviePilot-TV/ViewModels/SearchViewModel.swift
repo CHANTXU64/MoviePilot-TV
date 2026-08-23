@@ -644,10 +644,9 @@ class SearchViewModel: ObservableObject {
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
-      imageURLsProvider: { item in
+      imageWarmURLsProvider: { item in
         [item.imageURLs.poster].compactMap(\.self)
       },
-      imagePrefetchProcessor: MediaCard.posterProcessor(for: MediaCard.defaultPosterSize),
       onReset: { @MainActor in movieSeenKeys.removeAll() }
     )
 
@@ -664,10 +663,9 @@ class SearchViewModel: ObservableObject {
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
-      imageURLsProvider: { @MainActor item in
+      imageWarmURLsProvider: { @MainActor item in
         [item.imageURLs.poster].compactMap { $0 }
       },
-      imagePrefetchProcessor: MediaCard.posterProcessor(for: MediaCard.defaultPosterSize),
       onReset: { @MainActor in tvSeenKeys.removeAll() }
     )
 
@@ -693,10 +691,9 @@ class SearchViewModel: ObservableObject {
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
-      imageURLsProvider: { @MainActor item in
+      imageWarmURLsProvider: { @MainActor item in
         [item.imageURLs.poster].compactMap { $0 }
       },
-      imagePrefetchProcessor: MediaCard.posterProcessor(for: MediaCard.defaultPosterSize),
       onReset: { @MainActor in
         collectionSeenKeys.removeAll()
       }
@@ -724,10 +721,9 @@ class SearchViewModel: ObservableObject {
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
-      imageURLsProvider: { item in
+      imageWarmURLsProvider: { item in
         [item.imageURLs.profile].compactMap(\.self)
       },
-      imagePrefetchProcessor: PersonCard.imageProcessor(),
       onReset: { @MainActor in personSeenIDs.removeAll() }
     )
 
@@ -749,10 +745,9 @@ class SearchViewModel: ObservableObject {
           currentItems.append(contentsOf: uniqueNewItems)
           return true
         },
-        imageURLsProvider: { item in
+        imageWarmURLsProvider: { item in
           [item.imageURLs.poster].compactMap(\.self)
         },
-        imagePrefetchProcessor: MediaCard.posterProcessor(for: MediaCard.defaultPosterSize),
         onReset: { @MainActor in
           shareSeenKeys.removeAll()
         }

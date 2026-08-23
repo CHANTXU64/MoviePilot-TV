@@ -3,9 +3,9 @@ import SwiftUI
 struct MediaSubscriptionModifier: ViewModifier {
   @Binding var sheetSubscribe: Subscribe?
   @Binding var tvSubscribeRequest: SubscribeSeasonRequest?
-  @Binding var navigationPath: NavigationPath
   @ObservedObject var handler: SubscriptionHandler
   @EnvironmentObject private var notificationManager: NotificationManager
+  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
 
   func body(content: Content) -> some View {
     content
@@ -21,7 +21,7 @@ struct MediaSubscriptionModifier: ViewModifier {
       }
       .onChange(of: tvSubscribeRequest) { _, newValue in
         if let request = newValue {
-          navigationPath.append(request)
+          navigationCoordinator.push(request)
           tvSubscribeRequest = nil
         }
       }
@@ -61,9 +61,7 @@ struct MediaSubscriptionModifier: ViewModifier {
 
 extension View {
   /// 添加媒体订阅相关的弹窗（使用 SubscriptionHandler）
-  func mediaSubscriptionAlerts(
-    using handler: SubscriptionHandler, navigationPath: Binding<NavigationPath>
-  ) -> some View {
+  func mediaSubscriptionAlerts(using handler: SubscriptionHandler) -> some View {
     modifier(
       MediaSubscriptionModifier(
         sheetSubscribe: Binding(
@@ -74,7 +72,6 @@ extension View {
           get: { handler.tvSubscribeRequest },
           set: { handler.tvSubscribeRequest = $0 }
         ),
-        navigationPath: navigationPath,
         handler: handler
       ))
   }

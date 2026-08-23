@@ -13,6 +13,8 @@ private struct MediaLoadingView: View {
   let overview: String?
   /// 如果数据已预加载完毕，跳过飞入动画
   let isAlreadyLoaded: Bool
+  /// 加载结束后卸载透明遮罩内的解码海报，只保留稳定的视图结构。
+  let loadsImage: Bool
 
   private final class LoadingPosterLifetime {
     var hasDisappeared = false
@@ -51,32 +53,36 @@ private struct MediaLoadingView: View {
         Spacer()
 
         // 海报图片
-        KFImage.sessionImage(posterUrl)
-          .loadDiskFileSynchronously()
-          .fade(duration: 0)
-          .placeholder {
-            RoundedRectangle(cornerRadius: 20)
-              .fill(Color(white: 0.12))
-              .overlay(
-                Image(systemName: "film")
-                  .font(.largeTitle)
-                  .foregroundStyle(.gray.opacity(0.5))
-              )
-          }
-          .onSuccess { _ in
-            discardLoadingPosterIfAbandoned()
-          }
-          .setProcessor(MediaDetailLoadingPoster.processor)
-          .skippingMemoryCache()
-          .resizable()
-          .aspectRatio(contentMode: .fill)
-          .frame(
-            width: MediaDetailLoadingPoster.size.width,
-            height: MediaDetailLoadingPoster.size.height
+        ZStack {
+          RoundedRectangle(cornerRadius: 20)
+            .fill(Color(white: 0.12))
+            .overlay(
+              Image(systemName: "film")
+                .font(.largeTitle)
+                .foregroundStyle(.gray.opacity(0.5))
+            )
+
+          PageManagedImage(
+            url: posterUrl,
+            processor: MediaDetailLoadingPoster.processor,
+            isEnabled: loadsImage,
+            role: .activePage,
+            participatesInPageLifecycle: true,
+            skipsMemoryCache: true,
+            loadsDiskFileSynchronously: true,
+            fadeDuration: 0,
+            onSuccess: {
+              discardLoadingPosterIfAbandoned()
+            }
           )
-          .clipShape(RoundedRectangle(cornerRadius: 20))
-          .shadow(color: .black.opacity(0.8), radius: 30, y: 15)
-          .scaleEffect(posterScale)
+        }
+        .frame(
+          width: MediaDetailLoadingPoster.size.width,
+          height: MediaDetailLoadingPoster.size.height
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+        .shadow(color: .black.opacity(0.8), radius: 30, y: 15)
+        .scaleEffect(posterScale)
 
         // 文本信息区
         VStack(spacing: 12) {
@@ -180,27 +186,23 @@ private struct MediaLoadingView: View {
 /// 可以正确恢复源页面的焦点位置。
 struct MediaDetailContainerView: View {
   let media: MediaInfo
-  @Binding var navigationPath: NavigationPath
-  @Environment(\.mediaNavigationStackID) private var mediaNavigationStackID
+  let routeID: UUID
+  @ObservedObject var imageLifecycle: PageImageLifecycle
 
   /// 预加载任务：在 init 中立即获取/创建，确保首帧就有数据
   /// 非 Optional，消除 if let 条件分支导致的视图结构变化
   @State private var preloadTask: MediaPreloadTask
-  @State private var navigationOwnerID = UUID()
-  @State private var navigationDepth: Int
-  @State private var didCaptureNavigationDepth = false
-  @State private var pageImageCleanupTarget = PageImageCleanupTarget()
-  @State private var returnTargetImageCleanupTarget: PageImageCleanupTarget?
 
-  init(media: MediaInfo, navigationPath: Binding<NavigationPath>) {
+  init(
+    media: MediaInfo,
+    preloadTask: MediaPreloadTask,
+    routeID: UUID,
+    imageLifecycle: PageImageLifecycle
+  ) {
     self.media = media
-    _navigationPath = navigationPath
-    _navigationDepth = State(initialValue: max(navigationPath.wrappedValue.count, 1))
-    _returnTargetImageCleanupTarget = State(
-      initialValue: MediaPreloader.shared.captureActivePageImageCleanupTarget()
-    )
-    // 在 init 中立即获取预加载任务，避免首帧出现条件分支
-    let preloadTask = MediaPreloader.shared.preload(for: media)
+    self.routeID = routeID
+    self.imageLifecycle = imageLifecycle
+    // task 由导航 entry 在 Push 时取得；转场重求值不能创建无 owner task。
     preloadTask.cancelImageWarm()
     _preloadTask = State(wrappedValue: preloadTask)
   }
@@ -229,44 +231,22 @@ struct MediaDetailContainerView: View {
     // 直接传入 preloadTask（非 Optional，无条件分支）
     MediaDetailContainerContent(
       media: media,
-      navigationPath: $navigationPath,
       preloadTask: preloadTask,
-      navigationOwnerID: navigationOwnerID,
-      navigationDepth: navigationDepth,
-      pageImageCleanupTarget: pageImageCleanupTarget,
-      returnTargetImageCleanupTarget: returnTargetImageCleanupTarget
+      routeID: routeID,
+      imageLifecycle: imageLifecycle
     )
-    .onAppear {
-      // 只要页面仍在 NavigationPath 中就继续持有；被子页面覆盖时不释放。
-      if !MediaPreloader.shared.transferPendingMediaNavigation(
-        for: media.id,
-        pathDepth: navigationPath.count,
-        stackID: mediaNavigationStackID,
-        to: navigationOwnerID
-      ) {
-        MediaPreloader.shared.pin(key: media.id, owner: navigationOwnerID)
-      }
-      // destination 闭包初始化时可能还拿到旧的 Binding 值；以首次出现时的路径深度校准，
-      // 后续 Push/返回不再改写这个页面自己的进入深度。
-      guard !didCaptureNavigationDepth else { return }
-      DispatchQueue.main.async {
-        guard !didCaptureNavigationDepth else { return }
-        navigationDepth = max(navigationDepth, navigationPath.count)
-        didCaptureNavigationDepth = true
-      }
-    }
   }
 }
 
 /// 内部辅助视图：通过 @ObservedObject 监听 MediaPreloadTask 的 @Published 属性变化，驱动 UI 刷新
 private struct MediaDetailContainerContent: View {
+  /// 比 0.3 秒淡出略长一帧余量，确保图片只在遮罩完全透明后释放。
+  private static let loadingPosterReleaseDelay = Duration.milliseconds(350)
+
   let media: MediaInfo
-  @Binding var navigationPath: NavigationPath
   @ObservedObject var preloadTask: MediaPreloadTask
-  let navigationOwnerID: UUID
-  let navigationDepth: Int
-  let pageImageCleanupTarget: PageImageCleanupTarget
-  let returnTargetImageCleanupTarget: PageImageCleanupTarget?
+  let routeID: UUID
+  @ObservedObject var imageLifecycle: PageImageLifecycle
 
   /// 第二页首行内容是否已就绪（由 MediaDetailView 回写）
   @State private var isContentReady = false
@@ -276,27 +256,27 @@ private struct MediaDetailContainerContent: View {
   @State private var loadingPosterURL: URL?
   /// 最短展示时间是否已过（防止加载太快导致动画闪烁）
   @State private var minTimeElapsed = false
+  /// Loading 层淡出完成前继续保留海报，避免动画刚开始底层图片就被清空。
+  @State private var keepsLoadingPosterImage: Bool
+  @State private var loadingPosterReleaseTask: Task<Void, Never>?
 
   init(
     media: MediaInfo,
-    navigationPath: Binding<NavigationPath>,
     preloadTask: MediaPreloadTask,
-    navigationOwnerID: UUID,
-    navigationDepth: Int,
-    pageImageCleanupTarget: PageImageCleanupTarget,
-    returnTargetImageCleanupTarget: PageImageCleanupTarget?
+    routeID: UUID,
+    imageLifecycle: PageImageLifecycle
   ) {
     self.media = media
-    _navigationPath = navigationPath
     self.preloadTask = preloadTask
-    self.navigationOwnerID = navigationOwnerID
-    self.navigationDepth = navigationDepth
-    self.pageImageCleanupTarget = pageImageCleanupTarget
-    self.returnTargetImageCleanupTarget = returnTargetImageCleanupTarget
+    self.routeID = routeID
+    self.imageLifecycle = imageLifecycle
     // 在 init 中判断，确保第一帧 isReady 就正确
     _wasPreloaded = State(initialValue: preloadTask.isDetailReady)
     _loadingPosterURL = State(
       initialValue: MediaCardTransition.loadingPosterURL ?? media.imageURLs.poster
+    )
+    _keepsLoadingPosterImage = State(
+      initialValue: !preloadTask.isDetailReady && !preloadTask.isDetailFailed
     )
   }
 
@@ -328,13 +308,10 @@ private struct MediaDetailContainerContent: View {
       // Detail 层 — 无条件渲染，从第一帧就存在于视图树中
       MediaDetailView(
         detail: detail,
-        navigationPath: $navigationPath,
         preloadTask: preloadTask,
         isContentReady: $isContentReady,
-        navigationOwnerID: navigationOwnerID,
-        navigationDepth: navigationDepth,
-        pageImageCleanupTarget: pageImageCleanupTarget,
-        returnTargetImageCleanupTarget: returnTargetImageCleanupTarget,
+        routeID: routeID,
+        imageLifecycle: imageLifecycle,
         loadingPosterURL: loadingPosterURL
       )
       // 加载未完成时隐藏详情，防止 NavigationStack 过渡动画透出内容
@@ -348,7 +325,8 @@ private struct MediaDetailContainerContent: View {
         year: media.year,
         rating: media.vote_average,
         overview: media.overview,
-        isAlreadyLoaded: wasPreloaded
+        isAlreadyLoaded: wasPreloaded,
+        loadsImage: keepsLoadingPosterImage && imageLifecycle.keepsActivePageImages
       )
       .opacity(isReady ? 0 : 1)
       // 备忘：在 tvOS 上，全屏的透明视图有时会干扰 Focus Engine 对下方卡片的探测。
@@ -356,6 +334,9 @@ private struct MediaDetailContainerContent: View {
       .allowsHitTesting(!isReady)  // 数据就绪后不拦截焦点事件
     }
     .animation(.easeInOut(duration: 0.3), value: isReady)
+    .onChange(of: isReady) { _, isReady in
+      updateLoadingPosterRetention(isReady: isReady)
+    }
     .onAppear {
       // 最短展示计时器（仅在需要加载时生效）
       if !wasPreloaded {
@@ -366,12 +347,36 @@ private struct MediaDetailContainerContent: View {
         }
       }
     }
+    .onDisappear {
+      loadingPosterReleaseTask?.cancel()
+      loadingPosterReleaseTask = nil
+      if isReady {
+        keepsLoadingPosterImage = false
+      }
+    }
     .task(id: tmdbPreloadTarget?.id) {
       guard let target = tmdbPreloadTarget else { return }
       MediaPreloader.shared.preloadAuxiliary(
         for: target,
-        owner: navigationOwnerID
+        owner: routeID
       )
+    }
+  }
+
+  private func updateLoadingPosterRetention(isReady: Bool) {
+    loadingPosterReleaseTask?.cancel()
+    loadingPosterReleaseTask = nil
+
+    guard isReady else {
+      keepsLoadingPosterImage = true
+      return
+    }
+
+    loadingPosterReleaseTask = Task { @MainActor in
+      try? await Task.sleep(for: Self.loadingPosterReleaseDelay)
+      guard !Task.isCancelled else { return }
+      keepsLoadingPosterImage = false
+      loadingPosterReleaseTask = nil
     }
   }
 }

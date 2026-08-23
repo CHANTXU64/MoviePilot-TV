@@ -25,10 +25,9 @@ class CollectionDetailViewModel: ObservableObject {
         }
         return false
       },
-      imageURLsProvider: { item in
+      imageWarmURLsProvider: { item in
         [item.imageURLs.poster].compactMap(\.self)
       },
-      imagePrefetchProcessor: MediaCard.posterProcessor(for: MediaCard.defaultPosterSize),
       onReset: { @MainActor in
         seenKeys.removeAll()  // 重置时清空 seenKeys
       }

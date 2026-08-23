@@ -8,11 +8,13 @@ struct BestResultCard: View {
   /// 降尺寸海报加载失败时回退的原始海报 URL。
   let posterFallbackUrl: URL?
   let subtitle: String?
+  let loadsImage: Bool
   let action: () -> Void
 
   @FocusState private var isFocused: Bool
   @State private var isImageFailed: Bool = false
   @State private var isUsingFallback: Bool = false
+  @ObservedObject private var memoryOptimizationPolicy = MemoryOptimizationPolicy.shared
 
   init(
     title: String,
@@ -20,6 +22,7 @@ struct BestResultCard: View {
     posterUrl: URL? = nil,
     posterFallbackUrl: URL? = nil,
     subtitle: String? = nil,
+    loadsImage: Bool = true,
     action: @escaping () -> Void
   ) {
     self.title = title
@@ -27,6 +30,7 @@ struct BestResultCard: View {
     self.posterUrl = posterUrl
     self.posterFallbackUrl = posterFallbackUrl
     self.subtitle = subtitle
+    self.loadsImage = loadsImage
     self.action = action
   }
 
@@ -81,26 +85,24 @@ struct BestResultCard: View {
             .foregroundColor(.gray)
         )
 
-      if !isImageFailed, let url = isUsingFallback ? posterFallbackUrl : posterUrl {
-        KFImage.sessionImage(url)
-          .onFailure { _ in
-            // 降尺寸海报加载失败时回退到原始 URL 重试一次，仍失败才隐藏。
-            if !isUsingFallback, posterFallbackUrl != nil {
-              isUsingFallback = true
-            } else {
-              isImageFailed = true
-            }
+      PageManagedImage(
+        url: isUsingFallback ? posterFallbackUrl : posterUrl,
+        processor: ResizingImageProcessor(
+          referenceSize: CGSize(width: 100, height: 150),
+          mode: .aspectFill
+        ),
+        isEnabled: (loadsImage || !memoryOptimizationPolicy.isEnabled) && !isImageFailed,
+        participatesInPageLifecycle: memoryOptimizationPolicy.isEnabled,
+        skipsMemoryCache: memoryOptimizationPolicy.isEnabled,
+        onFailure: {
+          // 降尺寸海报加载失败时回退到原始 URL 重试一次，仍失败才隐藏。
+          if !isUsingFallback, posterFallbackUrl != nil {
+            isUsingFallback = true
+          } else {
+            isImageFailed = true
           }
-          .placeholder {
-            Rectangle()
-              .fill(Color(white: 0.12))
-              .overlay(ProgressView().tint(.gray))
-          }
-          .resizing(referenceSize: CGSize(width: 100, height: 150), mode: .aspectFill)
-          .resizable()
-          .fade(duration: 0.25)
-          .aspectRatio(contentMode: .fill)
-      }
+        }
+      )
     }
     .onChange(of: posterUrl) { _, _ in
       isImageFailed = false

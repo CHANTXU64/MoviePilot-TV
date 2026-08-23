@@ -25,4 +25,8 @@ extension KFImage {
   func skippingMemoryCache() -> Self {
     memoryCacheExpiration(.expired)
   }
+
+  func skippingMemoryCache(_ enabled: Bool) -> Self {
+    enabled ? memoryCacheExpiration(.expired) : self
+  }
 }

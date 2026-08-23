@@ -2,30 +2,34 @@ import Combine
 import SwiftUI
 
 struct ExploreView: View {
+  private let isSelected: Bool
   @StateObject private var viewModel = ExploreViewModel()
-  @State private var path = NavigationPath()
-  @State private var mediaNavigationStackID = UUID()
+  @StateObject private var navigationCoordinator = ImageNavigationCoordinator()
   @StateObject private var subscriptionHandler = SubscriptionHandler()
+  @Environment(\.scenePhase) private var scenePhase
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
 
+  init(isSelected: Bool = true) {
+    self.isSelected = isSelected
+  }
+
   var body: some View {
-    NavigationStack(path: $path) {
+    NavigationStack(path: $navigationCoordinator.path) {
       Group {
         if let paginator = viewModel.paginator {
           // 主内容区：媒体网格
           MediaGridView(
+            imageLifecycle: navigationCoordinator.rootLifecycle,
             items: paginator.items,
             isLoading: paginator.isFirstLoading,
             isLoadingMore: paginator.isLoadingMore,
             onLoadMore: { itemId in
               Task { await paginator.loadMore(itemId) }
             },
-            navigationPath: $path,
             header: { headerView },
             contextMenu: { item in
               MediaContextMenuItems(
                 item: item,
-                navigationPath: $path,
                 subscriptionHandler: subscriptionHandler
               )
             },
@@ -40,39 +44,18 @@ struct ExploreView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
       }
-      .navigationDestination(for: MediaInfo.self) { media in
-        if let collectionId = media.collection_id {
-          CollectionDetailView(
-            title: media.title ?? "合集详情",
-            collectionId: collectionId,
-            navigationPath: $path
-          )
-        } else {
-          MediaDetailContainerView(media: media, navigationPath: $path)
-        }
-      }
-      .navigationDestination(for: Person.self) { person in
-        PersonDetailView(person: person, navigationPath: $path)
-      }
-      .navigationDestination(for: ResourceSearchRequest.self) { request in
-        ResourceResultView(request: request)
-      }
-      .navigationDestination(for: SubscribeSeasonRequest.self) { request in
-        SubscribeSeasonView(
-          mediaInfo: request.mediaInfo,
-          initialSeason: request.initialSeason,
-          initialEpisodeGroup: request.initialEpisodeGroup
-        )
+      .navigationDestination(for: ImageNavigationEntry.self) { entry in
+        ImageNavigationDestination(entry: entry)
       }
     }
-    .environment(\.mediaNavigationStackID, mediaNavigationStackID)
-    .onChange(of: path.count) { _, depth in
-      MediaPreloader.shared.reconcilePendingMediaNavigations(
-        currentPathDepth: depth,
-        stackID: mediaNavigationStackID
-      )
+    .environment(\.pageImageLifecycle, navigationCoordinator.rootLifecycle)
+    .environmentObject(navigationCoordinator)
+    .onAppear {
+      updateStackForeground()
     }
-    .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $path)
+    .onChange(of: isSelected) { _, _ in updateStackForeground() }
+    .onChange(of: scenePhase) { _, _ in updateStackForeground() }
+    .mediaSubscriptionAlerts(using: subscriptionHandler)
     .sheet(item: $subscriptionHandler.forkSheetRequest) { share in
       ForkSubscribeSheet(
         share: share,
@@ -84,7 +67,8 @@ struct ExploreView: View {
         subscriptionHandler: subscriptionHandler
       )
     }
-    .task {
+    .task(id: isSelected) {
+      guard isSelected else { return }
       await viewModel.refreshSources()
     }
   }
@@ -106,6 +90,10 @@ struct ExploreView: View {
           viewModel.onTypeChanged()
         }
     }
+  }
+
+  private func updateStackForeground() {
+    navigationCoordinator.setStackPresentation(isSelected: isSelected, scenePhase: scenePhase)
   }
 }
 

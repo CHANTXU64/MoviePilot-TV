@@ -535,45 +535,20 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains(".frame(minHeight: UIScreen.main.bounds.height, alignment: .top)"))
   }
 
-  func testMediaDetailReleasesBackgroundAfterNavigationStartsWithoutDelay() throws {
+  func testMediaDetailNavigationUsesUnifiedImageLifecycle() throws {
     let detailSource = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
     let menuSource = try Self.source(at: "MoviePilot-TV/Views/Components/MediaContextMenu.swift")
-    let releaseStart = try XCTUnwrap(
-      detailSource.range(of: "private func scheduleBackgroundReleaseAfterNavigationStarts()")
-    )
-    let releaseEnd = try XCTUnwrap(
-      detailSource.range(
-        of: "private func releaseBackground(for url: URL)",
-        range: releaseStart.upperBound..<detailSource.endIndex
-      )
-    )
-    let release = detailSource[releaseStart.lowerBound..<releaseEnd.lowerBound]
 
+    XCTAssertTrue(detailSource.contains("@ObservedObject var imageLifecycle: PageImageLifecycle"))
     XCTAssertTrue(
-      detailSource.contains(
-        "navigationPath.append(destination)\n    scheduleBackgroundReleaseAfterNavigationStarts()"
-      )
+      detailSource.contains(".onChange(of: imageLifecycle.keepsActivePageImages)")
     )
-    XCTAssertTrue(
-      detailSource.contains(
-        "MediaPreloader.shared.appendMedia(\n                      target,\n                      to: $navigationPath,\n                      stackID: mediaNavigationStackID\n                    )\n                    scheduleBackgroundReleaseAfterNavigationStarts()"
-      )
-    )
-    XCTAssertTrue(
-      menuSource.contains(
-        "MediaPreloader.shared.appendMedia(\n        item,\n        to: $navigationPath,\n        stackID: mediaNavigationStackID\n      )\n      onDidNavigate?()"
-      )
-    )
-    XCTAssertFalse(menuSource.contains("onWillNavigate"))
-    XCTAssertFalse(detailSource.contains("scheduleBackgroundReleaseOnDisappear"))
-    XCTAssertTrue(release.contains("DispatchQueue.main.async"))
-    XCTAssertFalse(release.contains("Task.sleep"))
-    XCTAssertFalse(release.contains("asyncAfter"))
-    XCTAssertFalse(release.contains("MemoryOptimizationPolicy"))
-    XCTAssertTrue(
-      detailSource.contains("navigateFromSecondPage(to: request)"),
-      "搜索资源应走同一条进子页卸背景路径"
-    )
+    XCTAssertTrue(detailSource.contains("unmountBackgroundForNavigation()"))
+    XCTAssertTrue(detailSource.contains("navigationCoordinator.push(destination)"))
+    XCTAssertTrue(menuSource.contains("navigationCoordinator.push(item)"))
+    XCTAssertFalse(detailSource.contains("navigationPath.count"))
+    XCTAssertFalse(detailSource.contains("scheduleBackgroundReleaseAfterNavigationStarts"))
+    XCTAssertFalse(menuSource.contains("onDidNavigate"))
   }
 
   func testMediaDetailRestoredContentFocusDoesNotScrollToTopAgain() throws {
@@ -582,10 +557,42 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("guard focused, !showContentPage else { return }"))
   }
 
+  func testMediaGridPinsTopRowsWithoutContainerFocusReset() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Components/MediaGridView.swift")
+    let windowSource = try Self.source(at: "MoviePilot-TV/Services/ImageLoadWindow.swift")
+
+    XCTAssertTrue(source.contains("onFocus: { isFocused in handleFocus"))
+    XCTAssertFalse(source.contains("@FocusState private var focusedGridItemID"))
+    XCTAssertFalse(source.contains("scheduleImageAnchorReset"))
+    XCTAssertTrue(windowSource.contains("gridPinnedTopRowCount = 2"))
+  }
+
+  func testMediaDetailLoadingPosterReleasesAfterFadeCompletes() throws {
+    let source = try Self.source(
+      at: "MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift"
+    )
+
+    XCTAssertTrue(source.contains("loadingPosterReleaseDelay = Duration.milliseconds(350)"))
+    XCTAssertTrue(
+      source.contains(
+        "loadsImage: keepsLoadingPosterImage && imageLifecycle.keepsActivePageImages"
+      )
+    )
+    XCTAssertTrue(
+      source.contains("try? await Task.sleep(for: Self.loadingPosterReleaseDelay)")
+    )
+    XCTAssertTrue(source.contains("keepsLoadingPosterImage = false"))
+    XCTAssertFalse(
+      source.contains("loadsImage: !isReady && imageLifecycle.keepsActivePageImages")
+    )
+  }
+
   func testMediaDetailDoesNotLoadBackgroundOnContentPageUntilHero() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
 
-    XCTAssertTrue(source.contains("if isBackgroundMounted {"))
+    XCTAssertTrue(
+      source.contains("if isBackgroundMounted && imageLifecycle.keepsActivePageImages {")
+    )
     XCTAssertFalse(
       source.contains("shouldShowBackground(isMounted: isBackgroundMounted, showingContentPage:")
     )
@@ -600,11 +607,8 @@ final class SystemViewDefaultStyleTests: XCTestCase {
         "remountBackgroundForHeroIfNeeded()\n              withAnimation(.easeInOut(duration: 0.6)) {\n                showContentPage = false"
       )
     )
-    XCTAssertTrue(
-      source.contains(
-        "Self.shouldRefreshBackground(\n        isMounted: isBackgroundMounted,\n        showingContentPage: showContentPage"
-      )
-    )
+    XCTAssertTrue(source.contains("imageLifecycle.keepsActivePageImages,"))
+    XCTAssertTrue(source.contains("!showContentPage"))
   }
 
   func testSystemViewModelRechecksPermissionBeforePublishingCustomRules() throws {

@@ -670,16 +670,24 @@ final class DynamicSourceBehaviorTests: XCTestCase {
       "MoviePilot-TV/Views/Pages/SearchView.swift",
     ] {
       let viewSource = try source(relativePath)
-      let collectionDestination = try XCTUnwrap(
-        viewSource.range(of: "CollectionDetailView(")
+      XCTAssertTrue(
+        viewSource.contains(".navigationDestination(for: ImageNavigationEntry.self)"),
+        relativePath
       )
-      let mediaDestination = try XCTUnwrap(
-        viewSource.range(of: "MediaDetailContainerView(")
-      )
-
-      XCTAssertTrue(viewSource.contains("if let collectionId ="), relativePath)
-      XCTAssertLessThan(collectionDestination.lowerBound, mediaDestination.lowerBound, relativePath)
+      XCTAssertTrue(viewSource.contains("ImageNavigationDestination(entry: entry)"), relativePath)
     }
+
+    let destinationSource = try source(
+      "MoviePilot-TV/Views/Components/ImageNavigationDestination.swift"
+    )
+    let collectionDestination = try XCTUnwrap(
+      destinationSource.range(of: "CollectionDetailView(")
+    )
+    let mediaDestination = try XCTUnwrap(
+      destinationSource.range(of: "MediaDetailContainerView(")
+    )
+    XCTAssertTrue(destinationSource.contains("if let collectionID = media.collection_id"))
+    XCTAssertLessThan(collectionDestination.lowerBound, mediaDestination.lowerBound)
   }
 
   func testSharedMediaEntryPointsUseCollectionSafePreloadGate() throws {
@@ -691,9 +699,8 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     ] {
       let viewSource = try source(relativePath)
       XCTAssertTrue(
-        viewSource.contains("preloadIfNeeded(for:")
-          || viewSource.contains("preloadFocusedCandidateIfNeeded(for:")
-          || viewSource.contains("appendMedia("),
+        viewSource.contains("navigationCoordinator.push(")
+          || viewSource.contains("preloadFocusedCandidateIfNeeded("),
         relativePath
       )
       XCTAssertFalse(
@@ -702,13 +709,12 @@ final class DynamicSourceBehaviorTests: XCTestCase {
       )
     }
 
-    XCTAssertTrue(
-      try source("MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift")
-        .contains("preloadAuxiliary(")
-    )
+    let containerSource = try source("MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift")
+    XCTAssertTrue(containerSource.contains("preloadAuxiliary("))
+    XCTAssertFalse(containerSource.contains("preloadIfNeeded(for:"))
     XCTAssertFalse(
-      try source("MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift")
-        .contains("preloadIfNeeded(for:")
+      containerSource.contains("MediaPreloader.shared.preload(for:"),
+      "详情 task 必须由 navigation entry 注入，destination 重求值不得创建 orphan task"
     )
   }
 

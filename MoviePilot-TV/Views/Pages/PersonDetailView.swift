@@ -4,12 +4,12 @@ import SwiftUI
 struct PersonDetailView: View {
   @StateObject private var viewModel: PersonDetailViewModel
   @ObservedObject private var apiService = APIService.shared
-  @Binding var navigationPath: NavigationPath
+  @ObservedObject var imageLifecycle: PageImageLifecycle
 
-  init(person: Person, navigationPath: Binding<NavigationPath>) {
+  init(person: Person, imageLifecycle: PageImageLifecycle) {
     _viewModel = StateObject(
       wrappedValue: PersonDetailViewModel(person: person))
-    _navigationPath = navigationPath
+    self.imageLifecycle = imageLifecycle
   }
 
   @State private var showFullBio = false
@@ -24,13 +24,13 @@ struct PersonDetailView: View {
 
   var body: some View {
     MediaGridView(
+      imageLifecycle: imageLifecycle,
       items: viewModel.paginator.items,
       isLoading: viewModel.isLoadingDetails || viewModel.paginator.isFirstLoading,
       isLoadingMore: viewModel.paginator.isLoadingMore,
       onLoadMore: { currentItem in
         Task { await viewModel.paginator.loadMore(currentItem) }
       },
-      navigationPath: $navigationPath,
       header: {
         VStack(alignment: .leading, spacing: 40) {
           let person = viewModel.person
@@ -48,21 +48,21 @@ struct PersonDetailView: View {
                     .foregroundColor(.gray)
                 )
 
-              if !isImageFailed, let validUrl = imageUrl {
-                KFImage.sessionImage(validUrl)
-                  .onFailure { _ in
-                    isImageFailed = true
-                  }
-                  .placeholder {
-                    Rectangle()
-                      .fill(Color(white: 0.12))
-                      .overlay(ProgressView().tint(.gray))
-                  }
-                  .resizing(referenceSize: CGSize(width: 400, height: 600), mode: .aspectFill)
-                  .skippingMemoryCache()
-                  .resizable()
-                  .aspectRatio(contentMode: .fill)
-              }
+              PageManagedImage(
+                url: imageUrl,
+                processor: ResizingImageProcessor(
+                  referenceSize: CGSize(width: 400, height: 600),
+                  mode: .aspectFill
+                ),
+                isEnabled: !isImageFailed,
+                role: .activePage,
+                participatesInPageLifecycle: true,
+                skipsMemoryCache: true,
+                fadeDuration: 0,
+                onFailure: {
+                  isImageFailed = true
+                }
+              )
             }
             .onChange(of: imageUrl) { _, _ in
               isImageFailed = false
@@ -151,7 +151,6 @@ struct PersonDetailView: View {
       contextMenu: { item in
         MediaContextMenuItems(
           item: item,
-          navigationPath: $navigationPath,
           subscriptionHandler: subscriptionHandler
         )
       }
@@ -174,7 +173,7 @@ struct PersonDetailView: View {
         .frame(width: 1600)
       }
     }
-    .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $navigationPath)
+    .mediaSubscriptionAlerts(using: subscriptionHandler)
   }
 
   static func biographyText(_ biography: String, source: String?) -> AttributedString {
