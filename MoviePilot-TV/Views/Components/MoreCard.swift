@@ -9,7 +9,6 @@ struct MoreCard: View {
   let action: () -> Void
 
   @FocusState private var isFocused: Bool
-  @ObservedObject private var memoryOptimizationPolicy = MemoryOptimizationPolicy.shared
   private let width: CGFloat = 256
   private let height: CGFloat = 384
 
@@ -26,9 +25,9 @@ struct MoreCard: View {
               referenceSize: CGSize(width: 256, height: 384),
               mode: .aspectFill
             ),
-          isEnabled: loadsImage || !memoryOptimizationPolicy.isEnabled,
-          participatesInPageLifecycle: memoryOptimizationPolicy.isEnabled,
-          skipsMemoryCache: memoryOptimizationPolicy.isEnabled
+          isEnabled: loadsImage,
+          participatesInPageLifecycle: true,
+          skipsMemoryCache: true
         )
         .frame(width: width, height: height)
         .blur(radius: 20)

@@ -124,18 +124,20 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     let cancelStart = try XCTUnwrap(preloaderSource.range(of: "func cancelImageWarm()"))
     let cancelEnd = try XCTUnwrap(
       preloaderSource.range(
-        of: "func shouldWarmBackgroundImage(memoryOptimizationEnabled: Bool)",
+        of: "func shouldWarmBackgroundImage()",
         range: cancelStart.upperBound..<preloaderSource.endIndex
       )
     )
     let cancel = preloaderSource[cancelStart.lowerBound..<cancelEnd.lowerBound]
     let containerSource = try source("MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift")
 
-    XCTAssertTrue(prefetch.contains("if preparedAsCandidate {"))
+    XCTAssertTrue(prefetch.contains("let canWarmOnMoviePilot = MPImageWarmer.isWarmable("))
+    XCTAssertTrue(prefetch.contains("if preparedAsCandidate, canWarmOnMoviePilot"))
     XCTAssertTrue(prefetch.contains("MPImageWarmer.shared.warm(url)"))
     XCTAssertTrue(prefetch.contains("activeImageWarmHandle = handle"))
     XCTAssertTrue(prefetch.contains("return"))
     XCTAssertTrue(prefetch.contains("retrieveHeroImage(url, fallbackURL: target.fallbackURL)"))
+    XCTAssertTrue(prefetch.contains("guard !Task.isCancelled else { return }"))
     XCTAssertTrue(cancel.contains("MPImageWarmer.shared.cancel(activeImageWarmHandle)"))
     XCTAssertTrue(containerSource.contains("preloadTask.cancelImageWarm()"))
   }

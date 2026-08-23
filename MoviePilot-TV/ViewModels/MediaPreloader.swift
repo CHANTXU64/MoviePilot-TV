@@ -295,8 +295,8 @@ class MediaPreloadTask: ObservableObject {
     imageRetrieveState.keepResultInMemoryUnlessOwnerReleased()
   }
 
-  func shouldWarmBackgroundImage(memoryOptimizationEnabled: Bool) -> Bool {
-    memoryOptimizationEnabled && allowsImageWarm
+  func shouldWarmBackgroundImage() -> Bool {
+    allowsImageWarm
   }
 
   func shouldReleasePreparedBackgroundFromMemory(preparedAsCandidate: Bool) -> Bool {
@@ -372,14 +372,17 @@ class MediaPreloadTask: ObservableObject {
     let target = detail.imageURLs.backgroundTarget
     guard let url = target.url else { return }
 
-    let preparedAsCandidate = shouldWarmBackgroundImage(
-      memoryOptimizationEnabled: MemoryOptimizationPolicy.shared.isEnabled
-    )
+    let preparedAsCandidate = shouldWarmBackgroundImage()
 
-    if preparedAsCandidate {
+    let canWarmOnMoviePilot = MPImageWarmer.isWarmable(
+      url,
+      baseURL: apiService.baseURL,
+      imageCacheEnabled: apiService.useImageCache
+    )
+    if preparedAsCandidate, canWarmOnMoviePilot {
       let handle = await MPImageWarmer.shared.warm(url)
       guard !Task.isCancelled,
-        shouldWarmBackgroundImage(memoryOptimizationEnabled: true)
+        shouldWarmBackgroundImage()
       else {
         if let handle {
           MPImageWarmer.shared.cancel(handle)
@@ -389,6 +392,7 @@ class MediaPreloadTask: ObservableObject {
       activeImageWarmHandle = handle
       return
     }
+    guard !Task.isCancelled else { return }
 
     if let timeout {
       await withTaskGroup(of: Void.self) { group in

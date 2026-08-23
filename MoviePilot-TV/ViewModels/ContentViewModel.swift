@@ -21,25 +21,17 @@ class ContentViewModel: ObservableObject {
   @Published private(set) var sessionUIIdentity: String
 
   private let apiService: APIService
-  private let memoryOptimizationPolicy: MemoryOptimizationPolicy
   private var cancellables = Set<AnyCancellable>()
   private var didPrepareStartup = false
   private var backendVersionCheckKey: BackendVersionCheckKey?
   private var lastAccountPermissionWarningKey: AccountPermissionWarningKey?
-  private var shouldEvaluateMemoryOptimizationAfterSessionChange = false
-  private var memoryOptimizationSessionKey: BackendVersionCheckKey?
 
-  init(
-    apiService: APIService = .shared,
-    memoryOptimizationPolicy: MemoryOptimizationPolicy = .shared
-  ) {
+  init(apiService: APIService = .shared) {
     self.apiService = apiService
-    self.memoryOptimizationPolicy = memoryOptimizationPolicy
     // 初始状态
     isLoggedIn = apiService.isLoggedIn
     currentUser = apiService.currentUser
     sessionUIIdentity = apiService.uiIdentity
-    memoryOptimizationSessionKey = currentBackendVersionCheckKey()
     updateAccountPermissionWarning(for: currentUser)
 
     // 单一会话权威：登录、登出、换账号、切服与权限变化都从同一原子状态发布。
@@ -60,25 +52,13 @@ class ContentViewModel: ObservableObject {
           for: session.currentUser,
           profileIdentity: profileIdentity
         )
-        let sessionKey = self.backendVersionCheckKey(for: session)
-        if sessionKey != self.memoryOptimizationSessionKey {
-          self.memoryOptimizationSessionKey = sessionKey
-          self.memoryOptimizationPolicy.invalidateAutomaticDecision()
-          self.shouldEvaluateMemoryOptimizationAfterSessionChange = true
-        }
         if session.token == nil {
           self.resetBackendVersionCheck()
         }
         if session.token != nil, self.didPrepareStartup, !self.isPreparingStartupSession {
-          let shouldEvaluateMemoryOptimization =
-            self.shouldEvaluateMemoryOptimizationAfterSessionChange
-          self.shouldEvaluateMemoryOptimizationAfterSessionChange = false
           Task { [weak self] in
             guard let self else { return }
-            await self.loadGlobalSettings(
-              checkBackendVersion: true,
-              evaluateMemoryOptimization: shouldEvaluateMemoryOptimization
-            )
+            await self.loadGlobalSettings(checkBackendVersion: true)
           }
         }
       }
@@ -91,10 +71,7 @@ class ContentViewModel: ObservableObject {
           !self.isPreparingStartupSession
         else { return }
         Task { [weak self] in
-          await self?.loadGlobalSettings(
-            checkBackendVersion: false,
-            evaluateMemoryOptimization: true
-          )
+          await self?.loadGlobalSettings(checkBackendVersion: false)
         }
       }
       .store(in: &cancellables)
@@ -151,20 +128,11 @@ class ContentViewModel: ObservableObject {
     }
 
     if isLoggedIn {
-      await loadGlobalSettings(
-        checkBackendVersion: true,
-        evaluateMemoryOptimization: true
-      )
+      await loadGlobalSettings(checkBackendVersion: true)
     }
   }
 
-  private func loadGlobalSettings(
-    checkBackendVersion: Bool,
-    evaluateMemoryOptimization: Bool = false
-  ) async {
-    if evaluateMemoryOptimization {
-      shouldEvaluateMemoryOptimizationAfterSessionChange = false
-    }
+  private func loadGlobalSettings(checkBackendVersion: Bool) async {
     let checkKey = currentBackendVersionCheckKey()
     if checkBackendVersion, backendVersionCheckKey != checkKey {
       backendVersionWarning = nil
@@ -181,28 +149,10 @@ class ContentViewModel: ObservableObject {
       if checkBackendVersion {
         backendVersionCheckKey = checkKey
       }
-      if evaluateMemoryOptimization {
-        let sessionSnapshot = apiService.sessionSnapshot()
-        let imageCacheAvailable = apiService.useImageCache
-        memoryOptimizationPolicy.evaluateAutomatically(
-          baseURL: apiService.baseURL,
-          sessionSnapshot: sessionSnapshot,
-          settingsLoaded: true,
-          imageCacheAvailable: imageCacheAvailable
-        )
-      }
     } catch is CancellationError {
       return
     } catch {
       let sessionIsCurrent = currentBackendVersionCheckKey() == checkKey
-      if evaluateMemoryOptimization, sessionIsCurrent {
-        memoryOptimizationPolicy.evaluateAutomatically(
-          baseURL: apiService.baseURL,
-          sessionSnapshot: apiService.sessionSnapshot(),
-          settingsLoaded: false,
-          imageCacheAvailable: false
-        )
-      }
       guard checkBackendVersion, backendVersionCheckKey != checkKey else { return }
       guard sessionIsCurrent else { return }
       backendVersionWarning = BackendVersionWarning(

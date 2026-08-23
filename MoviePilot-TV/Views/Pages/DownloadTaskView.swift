@@ -118,7 +118,6 @@ private struct DownloadTaskRow: View {
   // 仅当 state 为 "downloading" 时为 true，用于控制“暂停/继续”按钮的状态。
   @State private var isDownloading: Bool
   @State private var isToggling = false
-  @ObservedObject private var memoryOptimizationPolicy = MemoryOptimizationPolicy.shared
 
   init(item: DownloadingInfo, clientName: String, viewModel: DownloadTaskViewModel) {
     self.item = item
@@ -222,10 +221,10 @@ private struct DownloadTaskRow: View {
             |> ResizingImageProcessor(
               referenceSize: CGSize(width: 500, height: 180),
               mode: .aspectFill
-            ),
+          ),
           isEnabled: true,
-          participatesInPageLifecycle: memoryOptimizationPolicy.isEnabled,
-          skipsMemoryCache: memoryOptimizationPolicy.isEnabled
+          participatesInPageLifecycle: true,
+          skipsMemoryCache: true
         )
 
         Color.black.opacity(0.6)

@@ -19,7 +19,6 @@ struct PersonCard: View {
   var action: (() -> Void)? = nil
 
   @FocusState private var isFocused: Bool
-  @ObservedObject private var memoryOptimizationPolicy = MemoryOptimizationPolicy.shared
 
   init(
     person: Person,
@@ -99,9 +98,9 @@ struct PersonCard: View {
       PageManagedImage(
         url: url,
         processor: Self.imageProcessor(),
-        isEnabled: loadsImage || !memoryOptimizationPolicy.isEnabled,
-        participatesInPageLifecycle: memoryOptimizationPolicy.isEnabled,
-        skipsMemoryCache: memoryOptimizationPolicy.isEnabled
+        isEnabled: loadsImage,
+        participatesInPageLifecycle: true,
+        skipsMemoryCache: true
       )
     }
     .frame(width: width, height: height)

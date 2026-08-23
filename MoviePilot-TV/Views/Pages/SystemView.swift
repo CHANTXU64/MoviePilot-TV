@@ -20,7 +20,6 @@ struct SystemView: View {
   @StateObject private var viewModel = SystemViewModel()
   @StateObject private var recommendViewModel = RecommendViewModel(selectShelf: false)
   @ObservedObject private var apiService = APIService.shared
-  @ObservedObject private var memoryOptimizationPolicy = MemoryOptimizationPolicy.shared
   @State private var showAppInfo = false
   @State private var selectedChangelogEntry: AppChangelogEntry?
   @State private var updateNotice: AppChangelogEntry?
@@ -171,8 +170,6 @@ struct SystemView: View {
             if canConfigureRecommendations {
               mediaSourceSelectionPage
             }
-          case .memoryOptimization:
-            memoryOptimizationPage
           case .siteSelection:
             if canConfigureSearch {
               siteSelectionPage
@@ -273,19 +270,6 @@ struct SystemView: View {
         )
         .font(.body.weight(.semibold))
         .focused($focusedItem, equals: .waitBackgroundImage)
-      }
-
-      section("性能") {
-        Button {
-          push(.memoryOptimization)
-        } label: {
-          row(
-            "内存优化",
-            value: memoryOptimizationTitle(for: memoryOptimizationPolicy.mode),
-            showsDisclosure: true
-          )
-        }
-        .focused($focusedItem, equals: .memoryOptimization)
       }
 
       if canConfigureSearch {
@@ -582,22 +566,6 @@ struct SystemView: View {
     }
   }
 
-  private var memoryOptimizationPage: some View {
-    section(nil) {
-      ForEach(MemoryOptimizationMode.allCases) { mode in
-        Button {
-          memoryOptimizationPolicy.mode = mode
-        } label: {
-          row(
-            memoryOptimizationTitle(for: mode),
-            value: memoryOptimizationPolicy.mode == mode ? "已选择" : nil
-          )
-        }
-        .focused($focusedItem, equals: .memoryOptimizationMode(mode))
-      }
-    }
-  }
-
   private func filterPage(
     selectedRuleId: String?,
     onSelect: @escaping (String?) -> Void
@@ -731,8 +699,6 @@ struct SystemView: View {
       target = .changelog
     case .mediaSourceSelection:
       target = .mediaSourceSelection
-    case .memoryOptimization:
-      target = .memoryOptimization
     case .siteSelection:
       target = .siteSelection
     case .hardFilter:
@@ -759,8 +725,6 @@ struct SystemView: View {
       target = AppChangelog.latest.map { .changelogVersion($0.version) } ?? .changelog
     case .mediaSourceSelection:
       target = .defaultMediaSource
-    case .memoryOptimization:
-      target = .memoryOptimizationMode(.automatic)
     case .siteSelection:
       target = .allSites
     case .hardFilter:
@@ -780,8 +744,8 @@ struct SystemView: View {
     switch route.last {
     case .softFilter:
       return .softFilterNone
-    case .root, .connection, .changelog, .mediaSourceSelection, .memoryOptimization,
-      .siteSelection, .hardFilter, .recommendation, .none:
+    case .root, .connection, .changelog, .mediaSourceSelection, .siteSelection, .hardFilter,
+      .recommendation, .none:
       return .hardFilterNone
     }
   }
@@ -790,8 +754,8 @@ struct SystemView: View {
     switch route.last {
     case .softFilter:
       return .softFilterRule(ruleId)
-    case .root, .connection, .changelog, .mediaSourceSelection, .memoryOptimization,
-      .siteSelection, .hardFilter, .recommendation, .none:
+    case .root, .connection, .changelog, .mediaSourceSelection, .siteSelection, .hardFilter,
+      .recommendation, .none:
       return .hardFilterRule(ruleId)
     }
   }
@@ -851,8 +815,6 @@ struct SystemView: View {
         return "进入豆瓣、Bangumi 或 AniList 详情页并识别到对应 TMDB 条目后，提前加载其详情，以缩短后续跳转等待时间。（只影响 TV 端）"
       case .mediaSourceSelection:
         return "设置聚合搜索默认使用的媒体来源；未选择时沿用 MoviePilot 后端搜索设置。（只影响 TV 端）"
-      case .memoryOptimization:
-        return "允许通过少量网络请求、重新解码或重新渲染降低内存占用；常规优化始终生效。不确定时请选择自动。（只影响 TV 端）"
       case .siteSelection:
         return "设置资源搜索默认使用的站点。（只影响 TV 端）"
       case .hardFilter:
@@ -869,7 +831,7 @@ struct SystemView: View {
         return "查看 MoviePilot TV 各版本的更新摘要、完整改动和后端兼容版本。"
       case .allSites, .site, .defaultMediaSource, .mediaSource, .relogin, .logout,
         .hardFilterNone, .softFilterNone, .hardFilterRule, .softFilterRule,
-        .recommendationShelf, .changelogVersion, .memoryOptimizationMode:
+        .recommendationShelf, .changelogVersion:
         break
       }
     }
@@ -894,8 +856,6 @@ struct SystemView: View {
       return "查看 MoviePilot TV 各版本的更新摘要、完整改动和后端兼容版本。"
     case .mediaSourceSelection:
       return "设置聚合搜索默认使用的媒体来源。（只影响 TV 端）"
-    case .memoryOptimization:
-      return "允许通过少量网络请求、重新解码或重新渲染降低内存占用；常规优化始终生效。不确定时请选择自动。（只影响 TV 端）"
     case .siteSelection:
       return "设置资源搜索默认使用的站点。（只影响 TV 端）"
     case .hardFilter:
@@ -947,11 +907,6 @@ struct SystemView: View {
     viewModel.defaultMediaSearchSource?.title ?? "默认"
   }
 
-  private func memoryOptimizationTitle(for mode: MemoryOptimizationMode) -> String {
-    mode == .automatic
-      ? "自动（\(memoryOptimizationPolicy.automaticEnabled ? "开启" : "关闭")）"
-      : mode.title
-  }
 }
 
 private enum SystemSettingsPage: Hashable {
@@ -959,7 +914,6 @@ private enum SystemSettingsPage: Hashable {
   case connection
   case changelog
   case mediaSourceSelection
-  case memoryOptimization
   case siteSelection
   case hardFilter
   case softFilter
@@ -980,8 +934,6 @@ private enum SystemSettingsFocus: Hashable {
   case autoSearch
   case preloadTMDBDetails
   case waitBackgroundImage
-  case memoryOptimization
-  case memoryOptimizationMode(MemoryOptimizationMode)
   case hardFilter
   case softFilter
   case relogin

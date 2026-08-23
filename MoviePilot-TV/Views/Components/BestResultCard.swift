@@ -14,7 +14,6 @@ struct BestResultCard: View {
   @FocusState private var isFocused: Bool
   @State private var isImageFailed: Bool = false
   @State private var isUsingFallback: Bool = false
-  @ObservedObject private var memoryOptimizationPolicy = MemoryOptimizationPolicy.shared
 
   init(
     title: String,
@@ -91,9 +90,9 @@ struct BestResultCard: View {
           referenceSize: CGSize(width: 100, height: 150),
           mode: .aspectFill
         ),
-        isEnabled: (loadsImage || !memoryOptimizationPolicy.isEnabled) && !isImageFailed,
-        participatesInPageLifecycle: memoryOptimizationPolicy.isEnabled,
-        skipsMemoryCache: memoryOptimizationPolicy.isEnabled,
+        isEnabled: loadsImage && !isImageFailed,
+        participatesInPageLifecycle: true,
+        skipsMemoryCache: true,
         onFailure: {
           // 降尺寸海报加载失败时回退到原始 URL 重试一次，仍失败才隐藏。
           if !isUsingFallback, posterFallbackUrl != nil {

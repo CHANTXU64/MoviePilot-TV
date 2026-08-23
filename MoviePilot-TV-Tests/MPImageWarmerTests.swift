@@ -476,7 +476,7 @@ final class MPImageWarmerTests: XCTestCase {
 
   func testOpeningDetailDisablesFutureBackgroundWarm() {
     let task = MediaPreloadTask(partialMedia: MediaInfo(tmdb_id: 1, type: "电影"))
-    let preparedAsCandidate = task.shouldWarmBackgroundImage(memoryOptimizationEnabled: true)
+    let preparedAsCandidate = task.shouldWarmBackgroundImage()
 
     XCTAssertTrue(preparedAsCandidate)
     XCTAssertTrue(
@@ -484,11 +484,10 @@ final class MPImageWarmerTests: XCTestCase {
     )
     task.markPreparedBackgroundForReleaseAfterCompletion()
     XCTAssertTrue(task.shouldRemoveRetrievedBackgroundAfterCompletion)
-    XCTAssertFalse(task.shouldWarmBackgroundImage(memoryOptimizationEnabled: false))
 
     task.cancelImageWarm()
 
-    XCTAssertFalse(task.shouldWarmBackgroundImage(memoryOptimizationEnabled: true))
+    XCTAssertFalse(task.shouldWarmBackgroundImage())
     XCTAssertFalse(task.shouldRemoveRetrievedBackgroundAfterCompletion)
     XCTAssertFalse(
       task.shouldReleasePreparedBackgroundFromMemory(preparedAsCandidate: preparedAsCandidate)

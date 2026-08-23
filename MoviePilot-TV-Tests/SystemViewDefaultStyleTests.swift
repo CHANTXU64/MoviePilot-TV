@@ -13,39 +13,13 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("_TSK"))
   }
 
-  func testMemoryOptimizationUsesExistingSettingsSubpageStyle() throws {
+  func testSystemViewDoesNotExposeLegacyMemoryOptimizationSetting() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
-    let policySource = try Self.source(
-      at: "MoviePilot-TV/Services/MemoryOptimizationPolicy.swift"
-    )
+    let contentSource = try Self.source(at: "MoviePilot-TV/ViewModels/ContentViewModel.swift")
 
-    XCTAssertTrue(source.contains("push(.memoryOptimization)"))
-    XCTAssertTrue(source.contains("private var memoryOptimizationPage: some View"))
-    XCTAssertFalse(source.contains("Picker(\n          \"内存优化\""))
-    XCTAssertTrue(
-      source.contains(
-        "允许通过少量网络请求、重新解码或重新渲染降低内存占用；常规优化始终生效"
-      )
-    )
-    XCTAssertFalse(source.contains("开启后会减少图片预加载和解码"))
-    XCTAssertFalse(policySource.contains("为所有内存优化提供单一开关"))
-  }
-
-  func testMemoryOptimizationOnlyRechecksAfterAtomicSessionInvalidation() throws {
-    let source = try Self.source(at: "MoviePilot-TV/ViewModels/ContentViewModel.swift")
-    let sessionPublisher = try XCTUnwrap(source.range(of: "apiService.$session"))
-    let store = try XCTUnwrap(
-      source.range(
-        of: ".store(in: &cancellables)",
-        range: sessionPublisher.upperBound..<source.endIndex
-      )
-    )
-    let subscription = source[sessionPublisher.lowerBound..<store.upperBound]
-
-    XCTAssertFalse(subscription.contains("evaluateMemoryOptimization: true"))
-    XCTAssertTrue(subscription.contains("shouldEvaluateMemoryOptimizationAfterSessionChange"))
-    XCTAssertTrue(subscription.contains("invalidateAutomaticDecision()"))
-    XCTAssertTrue(subscription.contains("backendVersionCheckKey(for: session)"))
+    XCTAssertFalse(source.contains("memoryOptimization"))
+    XCTAssertFalse(source.contains("内存优化"))
+    XCTAssertFalse(contentSource.contains("MemoryOptimization"))
   }
 
   func testBackendVersionObserverDefersInitialSessionReplayUntilStartup() throws {

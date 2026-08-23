@@ -254,7 +254,6 @@ struct MediaCard: View {
   var loadsImage: Bool = true
 
   @FocusState private var isFocused: Bool
-  @ObservedObject private var memoryOptimizationPolicy = MemoryOptimizationPolicy.shared
   /// 降尺寸海报加载失败后切换到原始 URL 重试。
   @State private var posterLoadFailed = false
 
@@ -400,9 +399,9 @@ struct MediaCard: View {
       PageManagedImage(
         url: posterLoadFailed ? posterFallbackUrl : posterUrl,
         processor: Self.posterProcessor(for: CGSize(width: width, height: height)),
-        isEnabled: loadsImage || !memoryOptimizationPolicy.isEnabled,
-        participatesInPageLifecycle: memoryOptimizationPolicy.isEnabled,
-        skipsMemoryCache: memoryOptimizationPolicy.isEnabled,
+        isEnabled: loadsImage,
+        participatesInPageLifecycle: true,
+        skipsMemoryCache: true,
         onFailure: {
           // 降尺寸海报加载失败（如第三方 URL 被改写）时，回退到原始 URL 重试一次。
           posterLoadFailed = true
