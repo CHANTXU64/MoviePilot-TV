@@ -4,6 +4,12 @@ import XCTest
 
 @MainActor
 final class DynamicSourceBehaviorTests: XCTestCase {
+  func testApplicationAppliesKingfisherMemoryCachePolicyAtLaunch() throws {
+    let appSource = try source("MoviePilot-TV/App/MoviePilot-TVApp.swift")
+
+    XCTAssertTrue(appSource.contains("KingfisherCachePolicy.apply()"))
+  }
+
   func testMediaGridEquatableIdentityIncludesImageConfiguration() throws {
     let gridSource = try source("MoviePilot-TV/Views/Components/MediaGridView.swift")
     XCTAssertTrue(
