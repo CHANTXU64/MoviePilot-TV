@@ -195,8 +195,11 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
     let wasEnabled = demands[id] == true
     demands[id] = isEnabled
     if isEnabled {
-      if !wasEnabled, didFail {
-        didFail = false
+      if !wasEnabled {
+        if didFail {
+          didFail = false
+        }
+        restoreDecodedImage(for: id)
       }
     } else {
       clearSurfaces(for: id)
@@ -315,19 +318,27 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
     ) { [weak self] result in
       Task { @MainActor [weak self] in
         guard let self, requestGeneration == self.generation else { return }
-        self.downloadTask = nil
-        self.isRetrieving = false
         switch result {
         case .success(let value):
-          guard self.isRequested, self.pageAllowsImage else { return }
-          self.decodedImage = value.image
-          self.renderImageOnSurfaces(value.image)
+          self.acceptRetrievedImage(value.image)
         case .failure:
+          self.downloadTask = nil
+          self.isRetrieving = false
           self.didFail = true
           self.notifyFailureOnSurfaces()
         }
       }
     }
+  }
+
+  /// 接收一次有效解码结果。下载回调与状态机测试共用同一生产转换入口。
+  func acceptRetrievedImage(_ image: UIImage) {
+    downloadTask = nil
+    isRetrieving = false
+    didFail = false
+    guard isRequested, pageAllowsImage else { return }
+    decodedImage = image
+    renderImageOnSurfaces(image)
   }
 
   private func renderImageOnSurfaces(_ image: UIImage) {
@@ -369,6 +380,13 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
   private func clearSurfaces(for demandID: UUID) {
     for (surfaceID, surface) in surfaces where surfaceDemandIDs[surfaceID] == demandID {
       surface.value?.clearRenderedImage()
+    }
+  }
+
+  private func restoreDecodedImage(for demandID: UUID) {
+    guard pageAllowsImage, let decodedImage else { return }
+    for (surfaceID, surface) in surfaces where surfaceDemandIDs[surfaceID] == demandID {
+      surface.value?.install(decodedImage, fadeDuration: 0)
     }
   }
 

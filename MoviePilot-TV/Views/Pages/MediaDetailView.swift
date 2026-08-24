@@ -942,7 +942,11 @@ struct MediaDetailView: View {
                   if let target = await mediaActionHandler.getTMDBJumpTarget(
                     for: viewModel.detail, targetTmdbId: targetTmdbId)
                   {
-                    navigationCoordinator.push(target, ifCurrent: navigationSource)
+                    navigationCoordinator.push(
+                      target,
+                      loadingPosterURL: viewModel.detail.imageURLs.poster,
+                      ifCurrent: navigationSource
+                    )
                   }
                 }
               }) {

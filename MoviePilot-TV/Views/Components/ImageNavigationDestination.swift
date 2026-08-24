@@ -21,7 +21,8 @@ struct ImageNavigationDestination: View {
             media: media,
             preloadTask: preloadTask,
             routeID: entry.id,
-            imageLifecycle: lifecycle
+            imageLifecycle: lifecycle,
+            loadingPosterURL: entry.loadingPosterURL
           )
         } else {
           // 仅可能发生在 Pop 转场已经完成后，绝不为已移除 route 重建无 owner task。

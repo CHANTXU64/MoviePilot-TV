@@ -48,11 +48,7 @@ struct HomeView: View {
                 selectedServer: $viewModel.selectedLatestMediaServer,
                 isFirstRow: true,
                 loadsPageImages: true,
-                viewModel: viewModel,
-                onTMDBDetail: { mediaInfo in
-                  navigationCoordinator.push(mediaInfo)
-                },
-                onSearchResource: { request in navigationCoordinator.push(request) }
+                viewModel: viewModel
               )
             }
 
@@ -170,12 +166,11 @@ private struct MediaSectionView: View {
   var isFirstRow: Bool = false
   let loadsPageImages: Bool
   @ObservedObject var viewModel: HomeViewModel
-  var onTMDBDetail: ((MediaInfo) -> Void)? = nil
-  var onSearchResource: ((ResourceSearchRequest) -> Void)? = nil
 
   @Environment(\.openURL) private var openURL
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
   @EnvironmentObject private var notificationManager: NotificationManager
+  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
   @FocusState private var focusedItemId: String?
   @FocusState private var isTopRedirectorFocused: Bool
   @State private var hasRedirectedFocus: Bool = false
@@ -266,11 +261,17 @@ private struct MediaSectionView: View {
                   }
                 }
                 Button {
+                  let navigationSource = navigationCoordinator.sourceToken()
+                  let loadingPosterURL = item.imageURLs.image
                   Task {
                     // 使用实际的标题、年份和类型进行识别
                     let info = MediaInfo(title: item.title, type: item.type, year: item.subtitle)
                     if let target = await mediaActionHandler.getTMDBJumpTarget(for: info) {
-                      onTMDBDetail?(target)
+                      navigationCoordinator.push(
+                        target,
+                        loadingPosterURL: loadingPosterURL,
+                        ifCurrent: navigationSource
+                      )
                     }
                   }
                 } label: {
@@ -278,6 +279,7 @@ private struct MediaSectionView: View {
                 }
                 if canSearchResources {
                   Button {
+                    let navigationSource = navigationCoordinator.sourceToken()
                     Task {
                       guard APIService.shared.canAccess(.search) else { return }
                       let sessionSnapshot = APIService.shared.sessionSnapshot()
@@ -287,7 +289,7 @@ private struct MediaSectionView: View {
                           await mediaActionHandler.searchResourcesTargetUsingDefaultSites(
                             for: target)
                         {
-                          onSearchResource?(request)
+                          navigationCoordinator.push(request, ifCurrent: navigationSource)
                         }
                       } else {
                         guard APIService.shared.isSessionUnchanged(from: sessionSnapshot) else {
@@ -300,7 +302,7 @@ private struct MediaSectionView: View {
                         let request = ResourceSearchRequest(
                           keyword: item.title, type: item.type, area: nil, title: nil, year: nil,
                           season: nil, mediaInfo: nil, sites: sites)
-                        onSearchResource?(request)
+                        navigationCoordinator.push(request, ifCurrent: navigationSource)
                       }
                     }
                   } label: {

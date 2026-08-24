@@ -285,6 +285,48 @@ final class ImageLoadWindowTests: XCTestCase {
     secondLease.cancel()
   }
 
+  func testSharedSlotRestoresDecodedImageWhenDisabledDemandIsReenabled() throws {
+    let slot = PageImageSlot(
+      key: "shared-restore",
+      url: URL(string: "https://example.invalid/shared-restore.jpg")!,
+      processor: DownsamplingImageProcessor(size: CGSize(width: 100, height: 150)),
+      role: .content,
+      skipsMemoryCache: true,
+      loadsDiskFileSynchronously: false,
+      fadeDuration: 0.25,
+      performsImageRetrieval: false
+    )
+    let firstLease = PageImageDemandLease()
+    let secondLease = PageImageDemandLease()
+    let firstSurface = PageManagedImageView()
+    let secondSurface = PageManagedImageView()
+    let decodedImage = try XCTUnwrap(UIImage(systemName: "film.fill"))
+
+    firstLease.bind(to: slot, isEnabled: true)
+    secondLease.bind(to: slot, isEnabled: true)
+    slot.attach(firstSurface, demandID: firstLease.id)
+    slot.attach(secondSurface, demandID: secondLease.id)
+    slot.acceptRetrievedImage(decodedImage)
+
+    XCTAssertTrue(firstSurface.image === decodedImage)
+    XCTAssertTrue(secondSurface.image === decodedImage)
+    XCTAssertEqual(slot.retrievalStartCount, 1)
+
+    firstLease.bind(to: slot, isEnabled: false)
+    XCTAssertNil(firstSurface.image)
+    XCTAssertTrue(secondSurface.image === decodedImage)
+
+    firstLease.bind(to: slot, isEnabled: true)
+    XCTAssertTrue(firstSurface.image === decodedImage)
+    XCTAssertTrue(secondSurface.image === decodedImage)
+    XCTAssertEqual(slot.retrievalStartCount, 1)
+
+    slot.detach(firstSurface)
+    slot.detach(secondSurface)
+    firstLease.cancel()
+    secondLease.cancel()
+  }
+
   func testRepeatedEnabledUpdatesDoNotStartDuplicateRetrievals() {
     let slot = PageImageSlot(
       key: "single-retrieval",

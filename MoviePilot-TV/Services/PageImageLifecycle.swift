@@ -216,10 +216,16 @@ enum ImageNavigationRoute: Hashable {
 struct ImageNavigationEntry: Identifiable, Hashable {
   let id: UUID
   let route: ImageNavigationRoute
+  let loadingPosterURL: URL?
 
-  init(id: UUID = UUID(), route: ImageNavigationRoute) {
+  init(
+    id: UUID = UUID(),
+    route: ImageNavigationRoute,
+    loadingPosterURL: URL? = nil
+  ) {
     self.id = id
     self.route = route
+    self.loadingPosterURL = loadingPosterURL
   }
 }
 
@@ -331,17 +337,21 @@ final class ImageNavigationCoordinator: ObservableObject {
   }
 
   @discardableResult
-  func push(_ media: MediaInfo) -> ImageNavigationEntry {
-    push(.media(media))
+  func push(
+    _ media: MediaInfo,
+    loadingPosterURL: URL? = nil
+  ) -> ImageNavigationEntry {
+    push(.media(media), loadingPosterURL: loadingPosterURL)
   }
 
   @discardableResult
   func push(
     _ media: MediaInfo,
+    loadingPosterURL: URL? = nil,
     ifCurrent source: ImageNavigationSourceToken
   ) -> ImageNavigationEntry? {
     guard isCurrent(source) else { return nil }
-    return push(media)
+    return push(media, loadingPosterURL: loadingPosterURL)
   }
 
   @discardableResult
@@ -389,8 +399,11 @@ final class ImageNavigationCoordinator: ObservableObject {
     preloadTasks[entry.id]
   }
 
-  private func push(_ route: ImageNavigationRoute) -> ImageNavigationEntry {
-    let entry = ImageNavigationEntry(route: route)
+  private func push(
+    _ route: ImageNavigationRoute,
+    loadingPosterURL: URL? = nil
+  ) -> ImageNavigationEntry {
+    let entry = ImageNavigationEntry(route: route, loadingPosterURL: loadingPosterURL)
     entries.append(entry)
     lifecycles[entry.id] = PageImageLifecycle(id: entry.id)
 

@@ -462,12 +462,3 @@ struct DetailCardView: View, Equatable {
     )
   }
 }
-
-// MARK: - 详情页加载动画状态
-
-/// 保存本次 TMDB 跳转加载动画需要复用的源海报 URL。
-@MainActor
-enum MediaCardTransition {
-  /// 仅供本次详情页加载动画使用的源海报
-  static var loadingPosterURL: URL?
-}

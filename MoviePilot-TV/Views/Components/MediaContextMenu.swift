@@ -47,7 +47,11 @@ struct MediaContextMenuItems: View {
             if let target = await mediaActionHandler.getTMDBJumpTarget(
               for: item, targetTmdbId: preloadedTmdbId)
             {
-              navigationCoordinator.push(target, ifCurrent: navigationSource)
+              navigationCoordinator.push(
+                target,
+                loadingPosterURL: item.imageURLs.poster,
+                ifCurrent: navigationSource
+              )
             }
           }
         } label: {

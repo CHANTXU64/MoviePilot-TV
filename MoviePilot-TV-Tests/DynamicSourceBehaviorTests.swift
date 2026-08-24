@@ -109,6 +109,52 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     )
   }
 
+  func testHomeAsyncNavigationCapturesSourceBeforeTaskAndUsesConditionalPush() throws {
+    let homeSource = try source("MoviePilot-TV/Views/Pages/HomeView.swift")
+
+    XCTAssertTrue(
+      homeSource.contains(
+        "@EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator"
+      )
+    )
+    XCTAssertEqual(
+      homeSource.components(
+        separatedBy: "let navigationSource = navigationCoordinator.sourceToken()"
+      ).count - 1,
+      2
+    )
+    XCTAssertTrue(
+      homeSource.contains(
+        "let navigationSource = navigationCoordinator.sourceToken()\n                  let loadingPosterURL = item.imageURLs.image\n                  Task {"
+      )
+    )
+    XCTAssertTrue(
+      homeSource.contains(
+        "if canSearchResources {\n                  Button {\n                    let navigationSource = navigationCoordinator.sourceToken()\n                    Task {"
+      )
+    )
+    XCTAssertEqual(
+      homeSource.components(separatedBy: "ifCurrent: navigationSource").count - 1,
+      3
+    )
+    XCTAssertFalse(homeSource.contains("onTMDBDetail"))
+    XCTAssertFalse(homeSource.contains("onSearchResource"))
+  }
+
+  func testLoadingPosterIsScopedToNavigationEntryInsteadOfGlobalState() throws {
+    let lifecycleSource = try source("MoviePilot-TV/Services/PageImageLifecycle.swift")
+    let destinationSource = try source(
+      "MoviePilot-TV/Views/Components/ImageNavigationDestination.swift"
+    )
+    let actionSource = try source("MoviePilot-TV/ViewModels/MediaActionHandler.swift")
+    let cardSource = try source("MoviePilot-TV/Views/Components/MediaCard.swift")
+
+    XCTAssertTrue(lifecycleSource.contains("let loadingPosterURL: URL?"))
+    XCTAssertTrue(destinationSource.contains("loadingPosterURL: entry.loadingPosterURL"))
+    XCTAssertFalse(actionSource.contains("MediaCardTransition.loadingPosterURL"))
+    XCTAssertFalse(cardSource.contains("enum MediaCardTransition"))
+  }
+
   func testPrefetchBackgroundImageWarmsOnFocusAndDecodesAfterOpeningDetail() throws {
     let preloaderSource = try source("MoviePilot-TV/ViewModels/MediaPreloader.swift")
     let prefetchStart = try XCTUnwrap(

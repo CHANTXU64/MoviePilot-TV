@@ -139,9 +139,6 @@ private struct MediaLoadingView: View {
       guard !hasAnimated else { return }
       hasAnimated = true
 
-      // 清除本次过渡海报，防止后续入口复用脏数据
-      MediaCardTransition.loadingPosterURL = nil
-
       // 数据已预加载完毕，跳过所有动画
       guard !isAlreadyLoaded else {
         textAppeared = true
@@ -192,6 +189,7 @@ private struct MediaLoadingView: View {
 struct MediaDetailContainerView: View {
   let media: MediaInfo
   let routeID: UUID
+  let loadingPosterURL: URL?
   @ObservedObject var imageLifecycle: PageImageLifecycle
 
   /// 预加载任务：在 init 中立即获取/创建，确保首帧就有数据
@@ -202,10 +200,12 @@ struct MediaDetailContainerView: View {
     media: MediaInfo,
     preloadTask: MediaPreloadTask,
     routeID: UUID,
-    imageLifecycle: PageImageLifecycle
+    imageLifecycle: PageImageLifecycle,
+    loadingPosterURL: URL? = nil
   ) {
     self.media = media
     self.routeID = routeID
+    self.loadingPosterURL = loadingPosterURL
     self.imageLifecycle = imageLifecycle
     // task 由导航 entry 在 Push 时取得；转场重求值不能创建无 owner task。
     preloadTask.cancelImageWarm()
@@ -238,7 +238,8 @@ struct MediaDetailContainerView: View {
       media: media,
       preloadTask: preloadTask,
       routeID: routeID,
-      imageLifecycle: imageLifecycle
+      imageLifecycle: imageLifecycle,
+      loadingPosterURL: loadingPosterURL
     )
   }
 }
@@ -257,7 +258,7 @@ private struct MediaDetailContainerContent: View {
   @State private var isContentReady = false
   /// 记录首次出现时数据是否已预加载完毕（在 init 中设置，确保第一帧就生效）
   @State private var wasPreloaded: Bool
-  /// 记录进入页面时的加载海报，避免清除全局过渡状态后图片消失
+  /// 记录进入页面时由导航条目携带的加载海报，确保转场期间图片稳定。
   @State private var loadingPosterURL: URL?
   /// 最短展示时间是否已过（防止加载太快导致动画闪烁）
   @State private var minTimeElapsed = false
@@ -269,7 +270,8 @@ private struct MediaDetailContainerContent: View {
     media: MediaInfo,
     preloadTask: MediaPreloadTask,
     routeID: UUID,
-    imageLifecycle: PageImageLifecycle
+    imageLifecycle: PageImageLifecycle,
+    loadingPosterURL transitionPosterURL: URL?
   ) {
     self.media = media
     self.preloadTask = preloadTask
@@ -278,7 +280,7 @@ private struct MediaDetailContainerContent: View {
     // 在 init 中判断，确保第一帧 isReady 就正确
     _wasPreloaded = State(initialValue: preloadTask.isDetailReady)
     _loadingPosterURL = State(
-      initialValue: MediaCardTransition.loadingPosterURL ?? media.imageURLs.poster
+      initialValue: transitionPosterURL ?? media.imageURLs.poster
     )
     _keepsLoadingPosterImage = State(
       initialValue: !preloadTask.isDetailReady && !preloadTask.isDetailFailed
