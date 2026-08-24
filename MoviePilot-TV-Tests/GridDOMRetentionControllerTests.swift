@@ -55,7 +55,7 @@ final class GridDOMRetentionControllerTests: XCTestCase {
     XCTAssertEqual(controller.retainedItemLimit, 66)
 
     controller.cardFocusChanged(itemID: "item-6", itemIndex: 12, isFocused: true)
-    await waitForTrim()
+    await settleTrimWindow()
 
     XCTAssertEqual(controller.retainedItemLimit, 66)
   }
@@ -70,7 +70,7 @@ final class GridDOMRetentionControllerTests: XCTestCase {
     controller.cardFocusChanged(itemID: "item-24", isFocused: true)
     XCTAssertEqual(controller.retainedItemLimit, 78, "向上移动不能在稳定期之前裁剪")
 
-    await waitForTrim()
+    await waitForRetainedItemLimit(48, in: controller)
     XCTAssertEqual(controller.retainedItemLimit, 48)
   }
 
@@ -81,11 +81,11 @@ final class GridDOMRetentionControllerTests: XCTestCase {
     controller.scrollPhaseChanged(.animating)
     controller.cardFocusChanged(itemID: "item-59", isFocused: false)
     controller.cardFocusChanged(itemID: "item-24", isFocused: true)
-    await waitForTrim()
+    await settleTrimWindow()
     XCTAssertEqual(controller.retainedItemLimit, 78)
 
     controller.scrollPhaseChanged(.idle)
-    await waitForTrim()
+    await waitForRetainedItemLimit(48, in: controller)
     XCTAssertEqual(controller.retainedItemLimit, 48)
   }
 
@@ -95,7 +95,7 @@ final class GridDOMRetentionControllerTests: XCTestCase {
     controller.cardFocusChanged(itemID: "item-24", isFocused: true)
     controller.cardFocusChanged(itemID: "item-24", isFocused: false)
 
-    await waitForTrim()
+    await settleTrimWindow()
     XCTAssertEqual(controller.retainedItemLimit, 78)
   }
 
@@ -111,7 +111,7 @@ final class GridDOMRetentionControllerTests: XCTestCase {
     XCTAssertEqual(controller.retainedItemLimit, 84)
 
     controller.scrollPhaseChanged(.idle)
-    await waitForTrim()
+    await waitForRetainedItemLimit(24, in: controller)
     XCTAssertEqual(controller.retainedItemLimit, 24)
   }
 
@@ -123,7 +123,7 @@ final class GridDOMRetentionControllerTests: XCTestCase {
 
     controller.cardFocusChanged(itemID: "item-65", isFocused: false)
     controller.scrollPositionChanged(adjustedOffsetY: 0)
-    await waitForTrim()
+    await waitForRetainedItemLimit(24, in: controller)
 
     XCTAssertEqual(controller.retainedItemLimit, 24)
   }
@@ -136,7 +136,7 @@ final class GridDOMRetentionControllerTests: XCTestCase {
     controller.scrollPhaseChanged(.animating)
     controller.cardFocusChanged(itemID: "item-65", isFocused: false)
     controller.scrollPositionChanged(adjustedOffsetY: 0)
-    await waitForTrim()
+    await waitForRetainedItemLimit(24, in: controller)
 
     XCTAssertEqual(controller.retainedItemLimit, 24)
   }
@@ -149,7 +149,7 @@ final class GridDOMRetentionControllerTests: XCTestCase {
     controller.cardFocusChanged(itemID: "item-65", isFocused: false)
     controller.scrollPositionChanged(adjustedOffsetY: 0)
     controller.setStackInteractive(false)
-    await waitForTrim()
+    await waitForRetainedItemLimit(24, in: controller)
 
     XCTAssertEqual(controller.retainedItemLimit, 24, "切 Tab 不能丢弃已经确认的回顶裁剪")
   }
@@ -164,9 +164,9 @@ final class GridDOMRetentionControllerTests: XCTestCase {
     controller.scrollPhaseChanged(.idle)
 
     controller.setStackInteractive(false)
-    await waitForTrim()
+    await waitForRetainedItemLimit(24, in: controller)
     controller.setStackInteractive(true)
-    await waitForTrim()
+    await settleTrimWindow()
 
     XCTAssertEqual(controller.retainedItemLimit, 24, "切 Tab 本身不裁 DOM，但已确认回顶必须完成")
   }
@@ -180,7 +180,7 @@ final class GridDOMRetentionControllerTests: XCTestCase {
 
     controller.setStackInteractive(false)
     controller.setViewActive(false)
-    await waitForTrim()
+    await waitForRetainedItemLimit(24, in: controller)
 
     XCTAssertEqual(controller.retainedItemLimit, 24, "onDisappear 不能丢掉已确认的回顶裁剪")
   }
@@ -196,7 +196,7 @@ final class GridDOMRetentionControllerTests: XCTestCase {
     controller.setStackInteractive(true)
     controller.scrollPositionChanged(adjustedOffsetY: 0)
     controller.scrollPhaseChanged(.idle)
-    await waitForTrim()
+    await settleTrimWindow()
 
     XCTAssertEqual(controller.retainedItemLimit, 84, "切回后不能接管切走前开始的动画")
   }
@@ -210,11 +210,11 @@ final class GridDOMRetentionControllerTests: XCTestCase {
     controller.cardFocusChanged(itemID: "item-65", isFocused: false)
     controller.setStackInteractive(true)
     controller.cardFocusChanged(itemID: "item-0", isFocused: true)
-    await waitForTrim()
+    await settleTrimWindow()
     XCTAssertEqual(controller.retainedItemLimit, 84, "系统恢复焦点不能被当成用户向上滚动")
 
     controller.cardFocusChanged(itemID: "item-1", isFocused: true)
-    await waitForTrim()
+    await waitForRetainedItemLimit(24, in: controller)
     XCTAssertEqual(controller.retainedItemLimit, 24, "恢复完成后的真实焦点移动应继续正常裁剪")
   }
 
@@ -226,7 +226,7 @@ final class GridDOMRetentionControllerTests: XCTestCase {
     controller.cardFocusChanged(itemID: "item-65", isFocused: false)
     controller.setViewActive(true)
     controller.cardFocusChanged(itemID: "item-0", isFocused: true)
-    await waitForTrim()
+    await settleTrimWindow()
 
     XCTAssertEqual(controller.retainedItemLimit, 84, "详情页返回时的系统焦点恢复不能裁剪父页")
   }
@@ -237,7 +237,7 @@ final class GridDOMRetentionControllerTests: XCTestCase {
     controller.cardFocusChanged(itemID: "item-24", isFocused: true)
     controller.cardFocusChanged(itemID: "item-83", isFocused: true)
 
-    await waitForTrim()
+    await settleTrimWindow()
     XCTAssertEqual(controller.retainedItemLimit, 102)
   }
 
@@ -330,8 +330,41 @@ final class GridDOMRetentionControllerTests: XCTestCase {
     (0..<count).map { "item-\($0)" }
   }
 
-  private func waitForTrim() async {
-    try? await Task.sleep(for: .milliseconds(40))
+  private func waitForRetainedItemLimit(
+    _ expectedLimit: Int,
+    in controller: GridDOMRetentionController,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) async {
+    await waitUntil(
+      "retained item limit to become \(expectedLimit)",
+      file: file,
+      line: line
+    ) {
+      controller.retainedItemLimit == expectedLimit
+    }
+  }
+
+  private func waitUntil(
+    _ description: String,
+    timeout: Duration = .seconds(1),
+    file: StaticString = #filePath,
+    line: UInt = #line,
+    condition: @MainActor () -> Bool
+  ) async {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while !condition() {
+      if clock.now >= deadline {
+        XCTFail("Timed out waiting for \(description)", file: file, line: line)
+        return
+      }
+      try? await Task.sleep(for: .milliseconds(5))
+    }
+  }
+
+  private func settleTrimWindow() async {
+    try? await Task.sleep(for: .milliseconds(75))
   }
 }
 

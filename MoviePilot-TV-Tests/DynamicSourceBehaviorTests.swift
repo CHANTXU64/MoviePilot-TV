@@ -24,7 +24,13 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     XCTAssertFalse(gridSource.contains("loadsImage: loadsImage"))
     XCTAssertFalse(gridSource.contains("topRestorationRevision"))
     XCTAssertFalse(
-      gridSource.contains("domRetention.reconcile(itemIDs: items.map(\\.id))\n    domRetention.cardFocusChanged")
+      containsTrimmedLineSequence(
+        gridSource,
+        [
+          "domRetention.reconcile(itemIDs: items.map(\\.id))",
+          "domRetention.cardFocusChanged",
+        ]
+      )
     )
     let paginatorSource = try source("MoviePilot-TV/Services/Paginator.swift")
     XCTAssertTrue(
@@ -36,7 +42,13 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     XCTAssertFalse(exploreSource.contains(".id(paginator.listID)"))
     XCTAssertEqual(gridSource.components(separatedBy: ".id(listIdentity.id)").count - 1, 1)
     XCTAssertTrue(
-      gridSource.contains("          .id(listIdentity.id)\n          .padding(.horizontal, -12)")
+      containsTrimmedLineSequence(
+        gridSource,
+        [
+          ".id(listIdentity.id)",
+          ".padding(.horizontal, -12)",
+        ]
+      )
     )
     let preloaderSource = try source("MoviePilot-TV/ViewModels/MediaPreloader.swift")
     XCTAssertTrue(
@@ -79,8 +91,13 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     XCTAssertFalse(downloadSource.contains("KFImage.sessionImage("))
 
     XCTAssertTrue(
-      transferSource.contains(
-        "if !keepsRowsMounted {\n        EmptyView()\n      } else if viewModel.isFirstLoading"
+      containsTokensInOrder(
+        transferSource,
+        [
+          "if !keepsRowsMounted {",
+          "EmptyView()",
+          "} else if viewModel.isFirstLoading {",
+        ]
       )
     )
     XCTAssertTrue(statusSource.contains("TransferHistoryView.shouldMountRows("))
@@ -124,13 +141,26 @@ final class DynamicSourceBehaviorTests: XCTestCase {
       2
     )
     XCTAssertTrue(
-      homeSource.contains(
-        "let navigationSource = navigationCoordinator.sourceToken()\n                  let loadingPosterURL = item.imageURLs.image\n                  Task {"
+      containsTokensInOrder(
+        homeSource,
+        [
+          "let navigationSource = navigationCoordinator.sourceToken()",
+          "let loadingPosterURL = item.imageURLs.image",
+          "Task {",
+          "Label(\"TMDB详情页\"",
+        ]
       )
     )
     XCTAssertTrue(
-      homeSource.contains(
-        "if canSearchResources {\n                  Button {\n                    let navigationSource = navigationCoordinator.sourceToken()\n                    Task {"
+      containsTokensInOrder(
+        homeSource,
+        [
+          "if canSearchResources {",
+          "Button {",
+          "let navigationSource = navigationCoordinator.sourceToken()",
+          "Task {",
+          "Label(\"搜索资源\"",
+        ]
       )
     )
     XCTAssertEqual(

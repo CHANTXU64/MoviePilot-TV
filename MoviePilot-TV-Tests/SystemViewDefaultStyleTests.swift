@@ -139,11 +139,22 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let searchSource = try Self.source(at: "MoviePilot-TV/Views/Pages/SearchView.swift")
 
     XCTAssertTrue(
-      systemSource.contains("case .mediaSourceSelection:\n            if canConfigureRecommendations {")
+      containsTokensInOrder(
+        systemSource,
+        ["case .mediaSourceSelection:", "if canConfigureRecommendations {"]
+      )
     )
-    XCTAssertTrue(systemSource.contains("case .siteSelection:\n            if canConfigureSearch {"))
     XCTAssertTrue(
-      systemSource.contains("if canConfigureRecommendations {\n        section(\"聚合搜索\")")
+      containsTokensInOrder(
+        systemSource,
+        ["case .siteSelection:", "if canConfigureSearch {"]
+      )
+    )
+    XCTAssertTrue(
+      containsTokensInOrder(
+        systemSource,
+        ["if canConfigureRecommendations {", "section(\"聚合搜索\")"]
+      )
     )
     XCTAssertTrue(searchSource.contains("ZStack(alignment: .trailing)"))
     XCTAssertTrue(searchSource.contains("ZStack(alignment: .leading)"))
@@ -300,7 +311,12 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let mediaSection = String(source[start.lowerBound..<end.lowerBound])
 
     XCTAssertTrue(mediaSection.contains("Picker(\"服务器\", selection: $selectedServer)"))
-    XCTAssertTrue(mediaSection.contains(".padding(.horizontal, 8)\n      .focusSection()"))
+    XCTAssertTrue(
+      containsTrimmedLineSequence(
+        mediaSection,
+        [".padding(.horizontal, 8)", ".focusSection()"]
+      )
+    )
   }
 
   @MainActor
@@ -354,7 +370,9 @@ final class SystemViewDefaultStyleTests: XCTestCase {
   func testReorganizeSheetUsesSheetRowSourceButtonPreviewSheetAndBackgroundSubmit() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Sheets/ReorganizeSheet.swift")
 
-    XCTAssertTrue(source.contains("SheetPicker(\n        title: \"媒体来源\""))
+    XCTAssertTrue(
+      containsTokensInOrder(source, ["SheetPicker(", "title: \"媒体来源\""])
+    )
     XCTAssertTrue(source.contains("MediaSearchSource.allowed(for: .media).map"))
     XCTAssertFalse(source.contains("Picker(\"媒体来源\""))
     XCTAssertFalse(source.contains("private var sourceButtons: some View"))
@@ -366,8 +384,9 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("Label(\"搜索媒体\", systemImage: \"magnifyingglass\")"))
     XCTAssertTrue(source.contains(".sheet(isPresented: $showPreview)"))
     XCTAssertTrue(
-      source.contains(
-        "viewModel.mutationRetryMessage = nil\n            dismiss()"
+      containsTokensInOrder(
+        source,
+        ["viewModel.mutationRetryMessage = nil", "dismiss()"]
       )
     )
     XCTAssertTrue(source.contains("private struct ReorganizePreviewSheet: View"))
@@ -386,16 +405,28 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("Label(\"整理预览\""))
     XCTAssertFalse(source.contains("Button(\"关闭\")"))
     XCTAssertFalse(source.contains("确认整理前后的文件路径"))
-    XCTAssertFalse(source.contains("Text(value.formatted())\n          .font("))
-    XCTAssertFalse(source.contains("Text(name)\n        .font("))
-    XCTAssertFalse(source.contains("Image(systemName: icon)\n        .font("))
-    XCTAssertFalse(source.contains("Image(systemName: \"arrow.right\")\n        .font("))
+    XCTAssertFalse(
+      containsTrimmedLineSequence(source, ["Text(value.formatted())", ".font("])
+    )
+    XCTAssertFalse(containsTrimmedLineSequence(source, ["Text(name)", ".font("]))
+    XCTAssertFalse(
+      containsTrimmedLineSequence(source, ["Image(systemName: icon)", ".font("])
+    )
+    XCTAssertFalse(
+      containsTrimmedLineSequence(
+        source,
+        ["Image(systemName: \"arrow.right\")", ".font("]
+      )
+    )
     XCTAssertFalse(source.contains(".font(.title3.bold())"))
     XCTAssertTrue(source.contains("HStack(spacing: 16)"))
-    XCTAssertTrue(source.contains(".padding(14)\n    .padding(.leading, 10)"))
     XCTAssertTrue(
-      source.contains(
-        "    .padding(.top, 28)\n    .frame(width: 1400, height: 820)"
+      containsTrimmedLineSequence(source, [".padding(14)", ".padding(.leading, 10)"])
+    )
+    XCTAssertTrue(
+      containsTrimmedLineSequence(
+        source,
+        [".padding(.top, 28)", ".frame(width: 1400, height: 820)"]
       )
     )
     XCTAssertTrue(source.contains("manualTransferPreviewFileName(from: item.source)"))
@@ -422,8 +453,13 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("Button(\"关闭\")"))
     XCTAssertEqual(source.components(separatedBy: "viewModel.search()").count - 1, 1)
     XCTAssertTrue(
-      source.contains(
-        "Button {\n            searchTask?.cancel()\n            searchTask = Task { await viewModel.search() }"
+      containsTokensInOrder(
+        source,
+        [
+          "Button {",
+          "searchTask?.cancel()",
+          "searchTask = Task { await viewModel.search() }",
+        ]
       )
     )
     XCTAssertTrue(source.contains(".disabled(viewModel.isLoading)"))
@@ -433,8 +469,9 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("guard !title.isEmpty else {"))
     XCTAssertTrue(source.contains("guard searchRevision == revision else { return }"))
     XCTAssertTrue(
-      source.contains(
-        "if searchRevision == revision {\n        isLoading = false"
+      containsTokensInOrder(
+        source,
+        ["if searchRevision == revision {", "isLoading = false"]
       )
     )
     XCTAssertFalse(
@@ -459,8 +496,9 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     )
     XCTAssertFalse(source.contains(".padding(.horizontal, 40)"))
     XCTAssertTrue(
-      source.contains(
-        "      .padding(.top, 40)\n    }\n    .frame(width: 1092, height: 820)"
+      containsTrimmedLineSequence(
+        source,
+        [".padding(.top, 40)", "}", ".frame(width: 1092, height: 820)"]
       )
     )
     XCTAssertFalse(source.contains(".frame(width: 1120, height: 780)"))
@@ -495,7 +533,9 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertEqual(viewModel.items.map(\.tmdb_id), [42])
     XCTAssertTrue(viewModel.isLoading)
 
-    try await Task.sleep(for: .milliseconds(40))
+    await waitUntil("manual media search dismissal cleanup") {
+      viewModel.items.isEmpty && !viewModel.isLoading
+    }
 
     XCTAssertTrue(viewModel.items.isEmpty)
     XCTAssertFalse(viewModel.isLoading)
@@ -509,7 +549,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
 
     viewModel.presentationDidDisappear(retention: .milliseconds(20))
     viewModel.presentationDidAppear()
-    try await Task.sleep(for: .milliseconds(40))
+    await settleAsyncWindow()
 
     XCTAssertEqual(viewModel.items.map(\.tmdb_id), [42])
     XCTAssertFalse(viewModel.isLoading)
@@ -541,7 +581,12 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
 
     XCTAssertTrue(source.contains(".frame(height: UIScreen.main.bounds.height * 0.94)"))
-    XCTAssertTrue(source.contains("Color.clear\n              .frame(height: UIScreen.main.bounds.height)"))
+    XCTAssertTrue(
+      containsTrimmedLineSequence(
+        source,
+        ["Color.clear", ".frame(height: UIScreen.main.bounds.height)"]
+      )
+    )
     XCTAssertFalse(source.contains(".frame(minHeight: UIScreen.main.bounds.height, alignment: .top)"))
   }
 
@@ -572,8 +617,9 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let windowSource = try Self.source(at: "MoviePilot-TV/Services/ImageLoadWindow.swift")
 
     XCTAssertTrue(
-      source.contains(
-        "onFocus: { isFocused in\n                    handleFocus("
+      containsTokensInOrder(
+        source,
+        ["onFocus: { isFocused in", "handleFocus("]
       )
     )
     XCTAssertFalse(source.contains("@FocusState private var focusedGridItemID"))
@@ -603,7 +649,12 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("scheduleLoadingPosterDiscardIfAbandoned()"))
     XCTAssertTrue(source.contains("lifetime.releaseScheduler.schedule"))
     XCTAssertFalse(source.contains("discardLoadingPosterIfAbandoned()"))
-    XCTAssertFalse(source.contains("if isReady {\n        keepsLoadingPosterImage = false"))
+    XCTAssertFalse(
+      containsTrimmedLineSequence(
+        source,
+        ["if isReady {", "keepsLoadingPosterImage = false"]
+      )
+    )
     XCTAssertFalse(
       source.contains("loadsImage: !isReady && imageLifecycle.keepsActivePageImages")
     )
@@ -625,8 +676,13 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     )
     XCTAssertTrue(source.contains("remountBackgroundForHeroIfNeeded()"))
     XCTAssertTrue(
-      source.contains(
-        "remountBackgroundForHeroIfNeeded()\n              withAnimation(.easeInOut(duration: 0.6)) {\n                showContentPage = false"
+      containsTokensInOrder(
+        source,
+        [
+          "remountBackgroundForHeroIfNeeded()",
+          "withAnimation(.easeInOut(duration: 0.6)) {",
+          "showContentPage = false",
+        ]
       )
     )
     XCTAssertTrue(source.contains("imageLifecycle.keepsActivePageImages,"))
@@ -674,6 +730,30 @@ final class SystemViewDefaultStyleTests: XCTestCase {
 
     XCTAssertTrue(probe.contains("requirement: .superUser"))
     XCTAssertFalse(probe.contains("requirement: .permission(.subscribe)"))
+  }
+
+  @MainActor
+  private func waitUntil(
+    _ description: String,
+    timeout: Duration = .seconds(1),
+    file: StaticString = #filePath,
+    line: UInt = #line,
+    condition: @MainActor () -> Bool
+  ) async {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while !condition() {
+      if clock.now >= deadline {
+        XCTFail("Timed out waiting for \(description)", file: file, line: line)
+        return
+      }
+      try? await Task.sleep(for: .milliseconds(5))
+    }
+  }
+
+  @MainActor
+  private func settleAsyncWindow() async {
+    try? await Task.sleep(for: .milliseconds(75))
   }
 
   private static func source(at path: String) throws -> String {

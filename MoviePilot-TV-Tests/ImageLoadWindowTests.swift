@@ -130,7 +130,9 @@ final class ImageLoadWindowTests: XCTestCase {
     XCTAssertEqual(secondLifecycle.phase, .active)
     XCTAssertTrue(firstLifecycle.keepsContentImages)
 
-    try await Task.sleep(for: .milliseconds(20))
+    await waitUntil("removed route lifecycle to release") {
+      thirdLifecycle.phase == .released
+    }
     XCTAssertEqual(thirdLifecycle.phase, .released)
     XCTAssertFalse(thirdLifecycle.keepsContentImages)
   }
@@ -421,7 +423,9 @@ final class ImageLoadWindowTests: XCTestCase {
       "离开 Tab 后应立即拒绝迟到的异步导航"
     )
 
-    try await Task.sleep(for: .milliseconds(40))
+    await waitUntil("Tab transition image retention to expire") {
+      !lifecycle.keepsContentImages
+    }
     XCTAssertFalse(lifecycle.keepsContentImages)
     XCTAssertFalse(
       TransferHistoryView.shouldMountRows(
@@ -440,7 +444,7 @@ final class ImageLoadWindowTests: XCTestCase {
 
     coordinator.setStackPresentation(isSelected: false, scenePhase: .active)
     coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
-    try await Task.sleep(for: .milliseconds(40))
+    await settleAsyncWindow()
     XCTAssertTrue(coordinator.rootLifecycle.keepsContentImages)
     XCTAssertTrue(
       TransferHistoryView.shouldMountRows(
@@ -463,7 +467,9 @@ final class ImageLoadWindowTests: XCTestCase {
     XCTAssertTrue(scheduler.isPending)
     XCTAssertEqual(releaseCount, 0)
 
-    try await Task.sleep(for: .milliseconds(40))
+    await waitUntil("shared presentation release to execute") {
+      !scheduler.isPending && releaseCount == 1
+    }
     XCTAssertFalse(scheduler.isPending)
     XCTAssertEqual(releaseCount, 1)
 
@@ -471,7 +477,7 @@ final class ImageLoadWindowTests: XCTestCase {
       releaseCount += 1
     }
     scheduler.cancel()
-    try await Task.sleep(for: .milliseconds(40))
+    await settleAsyncWindow()
     XCTAssertEqual(releaseCount, 1)
   }
 
@@ -501,7 +507,10 @@ final class ImageLoadWindowTests: XCTestCase {
     debouncer.cancelTasks(olderThan: newIdentity)
     debouncer.cancelTasks(olderThan: oldIdentity)
     debouncer.cancel(itemID: media.id, listIdentity: oldIdentity)
-    try await Task.sleep(for: .milliseconds(100))
+    await waitUntil("new grid preload generation to execute") {
+      preloadCount == 1
+    }
+    await settleAsyncWindow(for: .milliseconds(100))
 
     XCTAssertEqual(preloadCount, 1)
   }
@@ -522,7 +531,7 @@ final class ImageLoadWindowTests: XCTestCase {
       delayMs: 20
     )
     debouncer.cancelTasks(olderThan: newIdentity)
-    try await Task.sleep(for: .milliseconds(60))
+    await settleAsyncWindow()
 
     XCTAssertEqual(preloadCount, 0)
   }
@@ -581,7 +590,9 @@ final class ImageLoadWindowTests: XCTestCase {
     XCTAssertNil(preloader.peekTask(for: media))
     XCTAssertTrue(entryTask === coordinator.preloadTask(for: entry), "Pop 转场只能复用原 task")
 
-    try await Task.sleep(for: .milliseconds(20))
+    await waitUntil("retiring route task to release") {
+      coordinator.preloadTask(for: entry) == nil
+    }
     XCTAssertNil(coordinator.preloadTask(for: entry))
   }
 
@@ -610,6 +621,28 @@ final class ImageLoadWindowTests: XCTestCase {
       mediaInfo: nil,
       sites: nil
     )
+  }
+
+  private func waitUntil(
+    _ description: String,
+    timeout: Duration = .seconds(1),
+    file: StaticString = #filePath,
+    line: UInt = #line,
+    condition: @MainActor () -> Bool
+  ) async {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while !condition() {
+      if clock.now >= deadline {
+        XCTFail("Timed out waiting for \(description)", file: file, line: line)
+        return
+      }
+      try? await Task.sleep(for: .milliseconds(5))
+    }
+  }
+
+  private func settleAsyncWindow(for duration: Duration = .milliseconds(75)) async {
+    try? await Task.sleep(for: duration)
   }
 
   private func makeSlot(key: String, lifecycle: PageImageLifecycle) -> PageImageSlot {
