@@ -254,6 +254,23 @@ final class MPImageWarmerTests: XCTestCase {
     XCTAssertTrue(Self.skipsMemoryCache(parsed.memoryCacheExpiration))
   }
 
+  func testDefaultKingfisherMemoryCachePolicyUses250MiBForFiveMinutes() {
+    let cache = ImageCache(name: "memory-cache-policy-\(UUID().uuidString)")
+    defer {
+      cache.clearMemoryCache()
+      cache.clearDiskCache()
+    }
+
+    KingfisherCachePolicy.apply(to: cache)
+
+    XCTAssertEqual(cache.memoryStorage.config.totalCostLimit, 250 * 1024 * 1024)
+    guard case .seconds(let seconds) = cache.memoryStorage.config.expiration else {
+      XCTFail("Expected a seconds-based memory cache expiration")
+      return
+    }
+    XCTAssertEqual(seconds, 300)
+  }
+
   func testBackgroundAppearanceRefreshesOnlyUnmountedHeroPage() {
     XCTAssertTrue(
       MediaDetailView.shouldRefreshBackground(isMounted: false, showingContentPage: false)
