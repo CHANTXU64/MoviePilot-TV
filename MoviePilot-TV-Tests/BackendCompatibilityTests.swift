@@ -2226,9 +2226,12 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
           )
         }
 
+      // Web 没有远端图时，TV 额外显示头像不报错；Web 有图时 TV 仍须选同一张。
+      guard let expected = expectedURL?.absoluteString else { continue }
+
       XCTAssertEqual(
         person.imageURLs.profile?.absoluteString,
-        expectedURL?.absoluteString,
+        expected,
         "Person image selection differs from MP Web for \(person.compatibilityName) [\(person.source ?? "unknown")]",
         file: file,
         line: line

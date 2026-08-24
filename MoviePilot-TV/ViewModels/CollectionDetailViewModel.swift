@@ -25,7 +25,7 @@ class CollectionDetailViewModel: ObservableObject {
         }
         return false
       },
-      imageURLsProvider: { item in
+      imageWarmURLsProvider: { item in
         [item.imageURLs.poster].compactMap(\.self)
       },
       onReset: { @MainActor in

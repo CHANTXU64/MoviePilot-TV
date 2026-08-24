@@ -1,13 +1,15 @@
 import Combine
 import Foundation
-import Kingfisher
 
 @MainActor
 public class Paginator<ItemType: Identifiable>: ObservableObject {
+  /// Paginator 实例保持稳定 UUID；reset/refresh 推进内容代际，普通尾部追加保持不变。
+  @Published private(set) var listIdentity: GridListIdentity
+  public var listID: UUID { listIdentity.id }
+
   deinit {
-    // 保留显式 deinit，维持既有 SIL 生成路径；同时清理未完成的加载和预取任务。
+    // 保留显式 deinit，维持既有 SIL 生成路径；同时清理未完成的数据加载任务。
     inFlightLoadTask?.cancel()
-    activePrefetchers.forEach { $0.stop() }
   }
 
   // MARK: - 公开状态
@@ -47,8 +49,8 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   /// 获取一页项目的函数。
   private let fetcher: @MainActor (Int) async throws -> [ItemType]
 
-  /// 预取图片 URL 的函数。
-  private let imageURLsProvider: (@MainActor (ItemType) -> [URL])?
+  /// 提前触发服务端缓存的图片 URL 函数；不会在 Apple TV 下载或解码图片。
+  private let imageWarmURLsProvider: (@MainActor (ItemType) -> [URL])?
 
   /// 处理新项目并将其合并到现有项目数组的函数。
   /// 如果添加了新的、唯一的内容，它应该返回 `true`。
@@ -60,14 +62,11 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   /// 从列表末尾开始触发加载更多的项目数。
   private let threshold: Int
 
-  /// 提前触发图片预取的项数。如果未设定，默认为 threshold 的一半（向上取整）。
-  private let prefetchThreshold: Int
+  /// 提前触发服务端图片缓存的项数。如果未设定，默认为 threshold 的一半（向上取整）。
+  private let imageWarmThreshold: Int
 
-  /// 已经最高触发过预取的项目索引，用于进行分批预取并防抖、跳过不可见区。
-  private var maxPrefetchedIndex: Int = -1
-
-  /// 当前正在执行的图片预取器实例，持有以便在 reset 或新批次时取消旧任务。
-  private var activePrefetchers: [ImagePrefetcher] = []
+  /// 已经最高触发过 Warm 的项目索引，用于分批防抖并跳过不可见区。
+  private var maxWarmedIndex: Int = -1
 
   // MARK: - 初始化
 
@@ -79,18 +78,20 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   ///                处理它们，并在添加了新内容时返回 `true`。
   ///   - onReset: 一个可选的闭包，用于在“重置”期间运行自定义的状态清除逻辑。
   public init(
+    listID: UUID = UUID(),
     threshold: Int,
     fetcher: @escaping @MainActor (Int) async throws -> [ItemType],
     processor: @escaping @MainActor (inout [ItemType], [ItemType]) -> Bool,
-    imageURLsProvider: (@MainActor (ItemType) -> [URL])? = nil,
-    prefetchThreshold: Int? = nil,
+    imageWarmURLsProvider: (@MainActor (ItemType) -> [URL])? = nil,
+    imageWarmThreshold: Int? = nil,
     onReset: (() -> Void)? = nil
   ) {
+    self.listIdentity = GridListIdentity.make(id: listID)
     self.threshold = threshold
     self.fetcher = fetcher
     self.processor = processor
-    self.imageURLsProvider = imageURLsProvider
-    self.prefetchThreshold = prefetchThreshold ?? ((threshold + 1) / 2)
+    self.imageWarmURLsProvider = imageWarmURLsProvider
+    self.imageWarmThreshold = imageWarmThreshold ?? ((threshold + 1) / 2)
     self.onReset = onReset
   }
 
@@ -111,32 +112,19 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     if let currentItemId = currentItemId {
       guard let itemIndex = items.firstIndex(where: { $0.id == currentItemId }) else { return }
 
-      if let provider = imageURLsProvider {
-        // 当滚动到达之前的预取边界前一点时（预留 margin），才分批触发下一次请求
-        let prefetchMargin = max(1, prefetchThreshold / 2)
-        if itemIndex + prefetchMargin >= maxPrefetchedIndex {
-          let start = max(itemIndex + 1, maxPrefetchedIndex + 1)
-          let end = min(start + prefetchThreshold, items.count)
+      if let provider = imageWarmURLsProvider {
+        // 当滚动到达之前的 Warm 边界前一点时（预留 margin），才分批触发下一次请求。
+        let warmMargin = max(1, imageWarmThreshold / 2)
+        if itemIndex + warmMargin >= maxWarmedIndex {
+          let start = max(itemIndex + 1, maxWarmedIndex + 1)
+          let end = min(start + imageWarmThreshold, items.count)
 
           if start < end {
-            let urlsToPrefetch = items[start..<end].flatMap { provider($0) }
-            if !urlsToPrefetch.isEmpty {
-              // 批量预取。由于只在跨越边界时触发，极大降低了 ImagePrefetcher() 实例的创建频率
-              activePrefetchers.forEach { $0.stop() }
-              let service = APIService.shared
-              let grouped = Dictionary(grouping: urlsToPrefetch) {
-                service.isProtectedImageURL($0)
-              }
-              activePrefetchers = grouped.compactMap { protected, urls in
-                let sources = urls.map { service.imageSource(for: $0) }
-                return ImagePrefetcher(
-                  sources: sources,
-                  options: protected ? service.imageOptions(for: urls[0]) : []
-                )
-              }
-              activePrefetchers.forEach { $0.start() }
+            let urlsToWarm = items[start..<end].flatMap { provider($0) }
+            if !urlsToWarm.isEmpty {
+              _ = await MPImageWarmer.shared.warm(urlsToWarm)
             }
-            maxPrefetchedIndex = end - 1
+            maxWarmedIndex = end - 1
           }
         }
       }
@@ -147,7 +135,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     await runLoadSequence()
   }
 
-  /// 取消当前加载和图片预取，并让已恢复的旧请求结果失效。
+  /// 取消当前数据加载，并让已恢复的旧请求结果失效。
   public func cancel() {
     generation += 1
     pendingRestartLoadTaskToken = nil
@@ -156,8 +144,6 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     isLoading = false
     isFirstLoading = false
     isLoadingMore = false
-    activePrefetchers.forEach { $0.stop() }
-    activePrefetchers.removeAll()
   }
 
   /// 将下一次加载的页游标向后推进指定页数。
@@ -327,6 +313,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   /// 重置分页器的状态，清除所有项目并重置标志。
   private func reset() {
     generation += 1
+    listIdentity = listIdentity.advanced()
     pendingRestartLoadTaskToken = nil
     inFlightLoadTask?.cancel()
     inFlightLoadTask = nil
@@ -338,9 +325,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     clearErrorState()
     page = 1
     consecutiveErrorCount = 0
-    maxPrefetchedIndex = -1
-    activePrefetchers.forEach { $0.stop() }
-    activePrefetchers.removeAll()
+    maxWarmedIndex = -1
     onReset?()
   }
 }

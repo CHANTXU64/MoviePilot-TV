@@ -1,11 +1,78 @@
 import Kingfisher
 import SwiftUI
 
+private final class MediaDetailImageLifetime {
+  var isBackgroundMounted = true
+  var didReleaseAfterPop = false
+}
+
+private struct MediaDetailBackgroundLayer: View {
+  let url: URL?
+  let usingPosterAsBackdrop: Bool
+  var onFailure: ((URL) -> Void)? = nil
+  var onLoaded: ((URL) -> Void)? = nil
+
+  @ViewBuilder
+  var body: some View {
+    if let url {
+      let size = UIScreen.main.bounds.size
+      let screenScale = UIScreen.main.scale
+      backgroundImage(
+        url,
+        processor: MediaDetailBackgroundImage.heroProcessor(
+          for: size,
+          usingPosterAsBackdrop: usingPosterAsBackdrop,
+          screenScale: screenScale
+        ),
+        scaleFactor: MediaDetailBackgroundImage.downsampleScale(
+          for: size,
+          screenScale: screenScale
+        ),
+        alignment: usingPosterAsBackdrop ? .top : .center
+      )
+    } else {
+      Color.gray.opacity(0.3)
+        .ignoresSafeArea()
+    }
+  }
+
+  private func backgroundImage(
+    _ url: URL,
+    processor: any ImageProcessor,
+    scaleFactor: CGFloat,
+    alignment: Alignment
+  ) -> some View {
+    KFImage.sessionImage(url)
+      .onSuccess { _ in
+        onLoaded?(url)
+      }
+      .onFailure { _ in
+        onFailure?(url)
+      }
+      .placeholder {
+        EmptyView()
+      }
+      .setProcessor(processor)
+      .scaleFactor(scaleFactor)
+      .skippingMemoryCache()
+      .cancelOnDisappear(true)
+      .resizable()
+      .aspectRatio(contentMode: .fill)
+      .frame(
+        width: UIScreen.main.bounds.width,
+        height: UIScreen.main.bounds.height,
+        alignment: alignment
+      )
+      .id("\(url.absoluteString)-\(processor.identifier)")
+      .ignoresSafeArea()
+  }
+}
+
 struct MediaDetailView: View {
   @StateObject private var viewModel: MediaDetailViewModel
-  @Binding var navigationPath: NavigationPath
   @StateObject private var subscriptionHandler = SubscriptionHandler()
   @Environment(\.scenePhase) private var scenePhase
+  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
   @EnvironmentObject private var notificationManager: NotificationManager
   @ObservedObject private var apiService = APIService.shared
@@ -13,10 +80,18 @@ struct MediaDetailView: View {
   @ObservedObject var preloadTask: MediaPreloadTask
   /// 由 ContainerView 传入，当第二页首行内容就绪时回写 true，控制 Loading 遮罩显隐
   @Binding var isContentReady: Bool
+  let routeID: UUID
+  @ObservedObject var imageLifecycle: PageImageLifecycle
+  let loadingPosterURL: URL?
   @State private var showSiteSelection = false
   @State private var showContentPage = false
   @State private var hasAppeared = false
   @State private var hasRefreshedSubscriptionAfterFullDetail = false
+  @State private var isBackgroundMounted = true
+  @State private var backgroundGeneration = 0
+  @State private var didReleaseAfterPop = false
+  @State private var imageLifetime = MediaDetailImageLifetime()
+  @State private var contentPageBackgroundUnmountTask: Task<Void, Never>?
 
   // 订阅相关 UI 状态（弹窗开关，纯 UI 逻辑）
   @State private var sheetSubscribe: Subscribe?
@@ -26,7 +101,12 @@ struct MediaDetailView: View {
   @State private var recommendPreloadDebounce: Task<Void, Never>?
   /// 相似区预加载防抖任务
   @State private var similarPreloadDebounce: Task<Void, Never>?
+  @State private var directorImageAnchorId: Person.ID?
+  @State private var actorImageAnchorId: Person.ID?
+  @State private var recommendImageAnchorId: MediaInfo.ID?
+  @State private var similarImageAnchorId: MediaInfo.ID?
 
+  @FocusState private var focusedDirectorId: Person.ID?
   @FocusState private var focusedRecommendId: MediaInfo.ID?
   @FocusState private var focusedSimilarId: MediaInfo.ID?
   @FocusState private var focusedActorId: Person.ID?
@@ -62,6 +142,23 @@ struct MediaDetailView: View {
     if canSearchResources { return .search }
     if shouldShowOtherInfo { return .otherInfo }
     return nil
+  }
+
+  private func loadsHorizontalImage<Item: Identifiable>(
+    at index: Int,
+    in items: [Item],
+    anchorID: Item.ID?,
+    cardKind: ImageLoadWindow.HorizontalCardKind
+  ) -> Bool where Item.ID: Equatable {
+    let anchorIndex = anchorID.flatMap { id in
+      items.firstIndex(where: { $0.id == id })
+    }
+    return ImageLoadWindow.containsHorizontalItem(
+      at: index,
+      itemCount: items.count,
+      anchorIndex: anchorIndex,
+      cardKind: cardKind
+    )
   }
 
   private var shouldShowSiteFilter: Bool {
@@ -134,71 +231,82 @@ struct MediaDetailView: View {
   }
 
   init(
-    detail: MediaInfo, navigationPath: Binding<NavigationPath>,
-    preloadTask: MediaPreloadTask, isContentReady: Binding<Bool>
+    detail: MediaInfo,
+    preloadTask: MediaPreloadTask, isContentReady: Binding<Bool>,
+    routeID: UUID,
+    imageLifecycle: PageImageLifecycle,
+    loadingPosterURL: URL?
   ) {
     let vm = MediaDetailViewModel(detail: detail)
     vm.preloadTask = preloadTask
     _viewModel = StateObject(wrappedValue: vm)
-    _navigationPath = navigationPath
     self.preloadTask = preloadTask
     _isContentReady = isContentReady
+    self.routeID = routeID
+    self.imageLifecycle = imageLifecycle
+    self.loadingPosterURL = loadingPosterURL
+  }
+
+  nonisolated static let contentPageBackgroundFadeDuration: TimeInterval = 0.4
+
+  static func shouldRefreshBackground(isMounted: Bool, showingContentPage: Bool) -> Bool {
+    !isMounted && !showingContentPage
+  }
+
+  static func shouldUnmountContentPageBackground(
+    fadeElapsed: Bool,
+    showingContentPage: Bool
+  ) -> Bool {
+    fadeElapsed && showingContentPage
+  }
+
+  static func shouldDiscardLoadedBackground(
+    didReleaseAfterPop: Bool,
+    isBackgroundMounted: Bool
+  ) -> Bool {
+    didReleaseAfterPop || !isBackgroundMounted
   }
 
   var body: some View {
-    ZStack {
-      // 固定背景图
-      if let url = viewModel.backgroundUrl {
-        let blurRadius =
-          viewModel.isUsingPosterAsBackdrop ? 60 : (showContentPage ? 60 : 0)
-        let processor: ImageProcessor =
-          blurRadius > 0
-          ? BlurImageProcessor(blurRadius: CGFloat(blurRadius))
-          : DefaultImageProcessor.default
+    let backgroundColor = Color(white: 0.1)
 
-        KFImage.sessionImage(url)
-          .onFailure { _ in
-            viewModel.useBackgroundFallback(afterFailing: url)
+    ZStack {
+      backgroundColor
+        .ignoresSafeArea()
+
+      if isBackgroundMounted && imageLifecycle.keepsActivePageImages {
+        MediaDetailBackgroundLayer(
+          url: viewModel.backgroundUrl,
+          usingPosterAsBackdrop: viewModel.isUsingPosterAsBackdrop,
+          onFailure: { failedURL in
+            viewModel.useBackgroundFallback(afterFailing: failedURL)
+          },
+          onLoaded: { url in
+            discardLoadedBackgroundIfAbandoned(url: url)
           }
-          .placeholder {
-            EmptyView()
-          }
-          .setProcessor(processor)
-          .resizing(
-            referenceSize: UIScreen.main.bounds.size,
-            mode: .aspectFill
-          )
-          .resizable()
-          .aspectRatio(contentMode: .fill)
-          .frame(
-            width: UIScreen.main.bounds.width,
-            height: UIScreen.main.bounds.height,
-            alignment: viewModel.isUsingPosterAsBackdrop ? .top : .center
-          )
-          .animation(.easeInOut(duration: 0.5), value: showContentPage)
-          .id("\(url.absoluteString)-\(blurRadius)")
-          .transition(.opacity)
-          .ignoresSafeArea()
-      } else {
-        Color.gray.opacity(0.3)
-          .ignoresSafeArea()
+        )
+        .id(backgroundGeneration)
+        .opacity(showContentPage ? 0 : 1)
+        .animation(
+          .easeInOut(duration: Self.contentPageBackgroundFadeDuration),
+          value: showContentPage
+        )
+        .transition(.opacity)
       }
 
-      // Apple TV Style 动态阴影
+      // 首屏动态阴影
       ZStack {
         // 1. 顶部很淡的阴影（左边长一点，右边短一点）
-        ZStack {
-          LinearGradient(
-            gradient: Gradient(colors: [.black.opacity(0.2), .black.opacity(0.05), .clear]),
-            startPoint: .top,
-            endPoint: UnitPoint(x: 0.5, y: 0.1)
-          )
-          LinearGradient(
-            gradient: Gradient(colors: [.black.opacity(0.2), .black.opacity(0.15), .clear]),
-            startPoint: .topLeading,
-            endPoint: UnitPoint(x: 0.4, y: 0.4)
-          )
-        }
+        LinearGradient(
+          gradient: Gradient(colors: [.black.opacity(0.2), .black.opacity(0.05), .clear]),
+          startPoint: .top,
+          endPoint: UnitPoint(x: 0.5, y: 0.1)
+        )
+        LinearGradient(
+          gradient: Gradient(colors: [.black.opacity(0.2), .black.opacity(0.15), .clear]),
+          startPoint: .topLeading,
+          endPoint: UnitPoint(x: 0.4, y: 0.4)
+        )
 
         // 2. 左下角 1/4 圆形的阴影
         RadialGradient(
@@ -211,27 +319,25 @@ struct MediaDetailView: View {
         // 3. 底部渐变：很黑 -> 到演员变浅 -> 延伸到中心
         LinearGradient(
           gradient: Gradient(stops: [
-            .init(color: .black.opacity(1.0), location: 0.0),
-            .init(color: .black.opacity(0.8), location: 0.1),
-            .init(color: .black.opacity(0.5), location: 0.2),
-            .init(color: .black.opacity(0.25), location: 0.3),
-            .init(color: .black.opacity(0.15), location: 0.4),
-            .init(color: .black.opacity(0.07), location: 0.5),
-            .init(color: .black.opacity(0.02), location: 0.6),
-            .init(color: .clear, location: 0.7),
+            .init(color: backgroundColor.opacity(1.0), location: 0.0),
+            .init(color: backgroundColor.opacity(0.8), location: 0.1),
+            .init(color: backgroundColor.opacity(0.5), location: 0.2),
+            .init(color: backgroundColor.opacity(0.25), location: 0.3),
+            .init(color: backgroundColor.opacity(0.15), location: 0.4),
+            .init(color: backgroundColor.opacity(0.07), location: 0.5),
+            .init(color: backgroundColor.opacity(0.02), location: 0.6),
+            .init(color: backgroundColor.opacity(0), location: 0.7),
           ]),
           startPoint: .bottom,
           endPoint: .top
         )
       }
       .ignoresSafeArea()
-
-      if showContentPage && !viewModel.isUsingPosterAsBackdrop {
-        // 第二页模糊时增加浅黑色遮罩，避免白色背景导致文字看不清
-        Color.black.opacity(0.18)
-          .ignoresSafeArea()
-          .transition(.opacity)
-      }
+      .opacity(showContentPage ? 0 : 1)
+      .animation(
+        .easeInOut(duration: Self.contentPageBackgroundFadeDuration),
+        value: showContentPage
+      )
 
       ScrollViewReader { proxy in
         ScrollView {
@@ -261,16 +367,18 @@ struct MediaDetailView: View {
             .focused($isContentFocused)
             .animation(.easeInOut(duration: 0.6), value: showContentPage)
             .onChange(of: isHeroFocused) { _, focused in
-              if focused {
-                withAnimation(.easeInOut(duration: 0.6)) {
-                  showContentPage = false
-                  proxy.scrollTo("top", anchor: .top)
-                }
-              } else if isContentFocused {
-                withAnimation(.easeInOut(duration: 0.6)) {
-                  showContentPage = true
-                  proxy.scrollTo("contentTop", anchor: .top)
-                }
+              guard focused else { return }
+              remountBackgroundForHeroIfNeeded()
+              withAnimation(.easeInOut(duration: 0.6)) {
+                showContentPage = false
+                proxy.scrollTo("top", anchor: .top)
+              }
+            }
+            .onChange(of: isContentFocused) { _, focused in
+              guard focused, !showContentPage else { return }
+              withAnimation(.easeInOut(duration: 0.6)) {
+                showContentPage = true
+                proxy.scrollTo("contentTop", anchor: .top)
               }
             }
 
@@ -289,6 +397,34 @@ struct MediaDetailView: View {
       // 取消防抖任务，防止视图消失后仍发起无意义的预加载请求
       recommendPreloadDebounce?.cancel()
       similarPreloadDebounce?.cancel()
+      contentPageBackgroundUnmountTask?.cancel()
+      contentPageBackgroundUnmountTask = nil
+      handleRouteRemovalIfNeeded()
+    }
+    .onAppear {
+      handleRouteRemovalIfNeeded()
+      remountBackgroundIfNeeded()
+    }
+    .onChange(of: showContentPage) { _, showingContent in
+      contentPageBackgroundUnmountTask?.cancel()
+      contentPageBackgroundUnmountTask = nil
+      if showingContent {
+        scheduleUnmountBackgroundAfterContentPageFade()
+      } else {
+        remountBackgroundIfNeeded()
+      }
+    }
+    .onChange(of: imageLifecycle.keepsActivePageImages) { _, keepsBackground in
+      if keepsBackground {
+        remountBackgroundIfNeeded()
+      } else {
+        unmountBackgroundForNavigation()
+      }
+    }
+    .onChange(of: imageLifecycle.isRemoved) { _, removed in
+      if removed {
+        handleRouteRemovalIfNeeded()
+      }
     }
     .task {
       if !hasAppeared, let preferredHeaderFocus {
@@ -398,7 +534,7 @@ struct MediaDetailView: View {
           : unsubscribeConfirmationMessage
       )
     }
-    .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $navigationPath)
+    .mediaSubscriptionAlerts(using: subscriptionHandler)
     .sheet(isPresented: $showSiteSelection) {
       MultiSelectionSheet(
         options: viewModel.siteFilter.availableSites,
@@ -414,6 +550,108 @@ struct MediaDetailView: View {
     }
   }
 
+  private func navigateFromSecondPage(to destination: Person) {
+    navigationCoordinator.push(destination)
+  }
+
+  private func navigateFromSecondPage(to destination: ResourceSearchRequest) {
+    navigationCoordinator.push(destination)
+  }
+
+  private func navigateFromSecondPage(to destination: SubscribeSeasonRequest) {
+    navigationCoordinator.push(destination)
+  }
+
+  private func navigateToMediaFromSecondPage(_ media: MediaInfo) {
+    navigationCoordinator.push(media)
+  }
+
+  private func releaseBackground() {
+    contentPageBackgroundUnmountTask?.cancel()
+    contentPageBackgroundUnmountTask = nil
+    guard isBackgroundMounted else { return }
+    isBackgroundMounted = false
+    imageLifetime.isBackgroundMounted = false
+    let size = UIScreen.main.bounds.size
+    let screenScale = UIScreen.main.scale
+    MediaPreloader.shared.setHeroPresented(
+      false,
+      for: viewModel.detail,
+      owner: routeID,
+      size: size,
+      screenScale: screenScale,
+    )
+  }
+
+  private func discardLoadedBackgroundIfAbandoned(url: URL) {
+    MediaPreloader.shared.discardLoadedBackgroundIfAbandoned(
+      url: url,
+      detail: viewModel.detail,
+      usingPosterAsBackdrop: viewModel.isUsingPosterAsBackdrop,
+      isAbandoned: Self.shouldDiscardLoadedBackground(
+        didReleaseAfterPop: imageLifetime.didReleaseAfterPop,
+        isBackgroundMounted: imageLifetime.isBackgroundMounted
+      ),
+      size: UIScreen.main.bounds.size
+    )
+  }
+
+  private func remountBackgroundIfNeeded() {
+    guard !imageLifecycle.isRemoved,
+      imageLifecycle.keepsActivePageImages,
+      !showContentPage
+    else { return }
+    MediaPreloader.shared.setHeroPresented(
+      true,
+      for: viewModel.detail,
+      owner: routeID,
+      size: UIScreen.main.bounds.size
+    )
+    guard Self.shouldRefreshBackground(
+      isMounted: isBackgroundMounted,
+      showingContentPage: showContentPage
+    ) else { return }
+    remountBackgroundForHeroIfNeeded()
+  }
+
+  /// 回到 Hero 时先挂上透明背景，再随 showContentPage 淡入。
+  private func remountBackgroundForHeroIfNeeded() {
+    guard !isBackgroundMounted else { return }
+    backgroundGeneration &+= 1
+    isBackgroundMounted = true
+    imageLifetime.isBackgroundMounted = true
+  }
+
+  /// 下滑淡出结束后再卸背景，避免动画中途突然消失。
+  private func scheduleUnmountBackgroundAfterContentPageFade() {
+    contentPageBackgroundUnmountTask = Task { @MainActor in
+      try? await Task.sleep(for: .seconds(Self.contentPageBackgroundFadeDuration))
+      guard
+        !Task.isCancelled,
+        Self.shouldUnmountContentPageBackground(
+          fadeElapsed: true,
+          showingContentPage: showContentPage
+        )
+      else { return }
+      unmountBackgroundForContentPage()
+    }
+  }
+
+  private func unmountBackgroundForContentPage() {
+    releaseBackground()
+  }
+
+  private func unmountBackgroundForNavigation() {
+    releaseBackground()
+  }
+
+  private func handleRouteRemovalIfNeeded() {
+    guard imageLifecycle.isRemoved, !didReleaseAfterPop else { return }
+    didReleaseAfterPop = true
+    imageLifetime.didReleaseAfterPop = true
+    viewModel.cancelForPop()
+  }
+
   // MARK: - 订阅 UI 操作（业务逻辑委托给 ViewModel）
 
   @MainActor
@@ -423,7 +661,7 @@ struct MediaDetailView: View {
     to viewModel: MediaDetailViewModel,
     hasRefreshedSubscription: Bool
   ) async -> Bool {
-    guard let fullDetail = preloadTask.fullDetail else {
+    guard preloadTask.isDetailReady, let fullDetail = preloadTask.fullDetail else {
       return hasRefreshedSubscription
     }
 
@@ -699,11 +937,16 @@ struct MediaDetailView: View {
                 targetTmdbId == nil && !preloadTask.isTmdbRecognitionFinished
 
               Button(action: {
+                let navigationSource = navigationCoordinator.sourceToken()
                 Task {
                   if let target = await mediaActionHandler.getTMDBJumpTarget(
                     for: viewModel.detail, targetTmdbId: targetTmdbId)
                   {
-                    navigationPath.append(target)
+                    navigationCoordinator.push(
+                      target,
+                      loadingPosterURL: viewModel.detail.imageURLs.poster,
+                      ifCurrent: navigationSource
+                    )
                   }
                 }
               }) {
@@ -775,7 +1018,7 @@ struct MediaDetailView: View {
                   for: viewModel.detail,
                   sites: viewModel.siteFilter.sitesString
                 )
-                navigationPath.append(request)
+                navigateFromSecondPage(to: request)
               }) {
                 Label("搜索资源", systemImage: "magnifyingglass")
                   .foregroundColor(.primary)
@@ -867,13 +1110,14 @@ struct MediaDetailView: View {
             layout: .shelf,
             title: showContentPage ? "分季订阅" : nil,
             showBadges: showContentPage,
+            loadsImages: true,
             onSeasonTap: { season in
               let request = SubscribeSeasonRequest(
                 mediaInfo: viewModel.detail,
                 initialSeason: season.season_number,
                 initialEpisodeGroup: seasonVM.selectedGroupId
               )
-              navigationPath.append(request)
+              navigateFromSecondPage(to: request)
             },
             onMoreTapped: {
               let request = SubscribeSeasonRequest(
@@ -881,7 +1125,7 @@ struct MediaDetailView: View {
                 initialSeason: nil,
                 initialEpisodeGroup: seasonVM.selectedGroupId
               )
-              navigationPath.append(request)
+              navigateFromSecondPage(to: request)
             }
           )
         } else {
@@ -914,17 +1158,26 @@ struct MediaDetailView: View {
 
         ScrollView(.horizontal, showsIndicators: false) {
           LazyHStack(spacing: 40) {
-            ForEach(directors) { director in
+            ForEach(Array(directors.enumerated()), id: \.element.id) { entry in
+              let index = entry.offset
+              let director = entry.element
               PersonCard(
                 person: director,
-                staffImageUrl: director.imageURLs.profile
+                staffImageUrl: director.imageURLs.profile,
+                loadsImage: loadsHorizontalImage(
+                  at: index,
+                  in: directors,
+                  anchorID: directorImageAnchorId,
+                  cardKind: .person
+                )
               ) {
-                navigationPath.append(director)
+                navigateFromSecondPage(to: director)
               }
+              .focused($focusedDirectorId, equals: director.id)
               .compositingGroup()
               .contextMenu {
                 Button {
-                  navigationPath.append(director)
+                  navigateFromSecondPage(to: director)
                 } label: {
                   Label("详情", systemImage: "info.circle")
                 }
@@ -934,6 +1187,14 @@ struct MediaDetailView: View {
           .padding(.horizontal, 81)
           .padding(.top, 25)
           .padding(.bottom, 30)
+          .onChange(of: focusedDirectorId) { _, newId in
+            guard let newId else { return }
+            directorImageAnchorId = newId
+            MediaPreloader.shared.focusDidMove(
+              to: "person:\(newId)",
+              stackID: navigationCoordinator.id
+            )
+          }
         }
         .scrollClipDisabled()
         .focusSection()
@@ -957,15 +1218,25 @@ struct MediaDetailView: View {
 
         ScrollView(.horizontal, showsIndicators: false) {
           LazyHStack(spacing: 40) {
-            ForEach(actors) { actor in
-              PersonCard(person: actor) {
-                navigationPath.append(actor)
+            ForEach(Array(actors.enumerated()), id: \.element.id) { entry in
+              let index = entry.offset
+              let actor = entry.element
+              PersonCard(
+                person: actor,
+                loadsImage: loadsHorizontalImage(
+                  at: index,
+                  in: actors,
+                  anchorID: actorImageAnchorId,
+                  cardKind: .person
+                )
+              ) {
+                navigateFromSecondPage(to: actor)
               }
               .focused($focusedActorId, equals: actor.id)
               .compositingGroup()
               .contextMenu {
                 Button {
-                  navigationPath.append(actor)
+                  navigateFromSecondPage(to: actor)
                 } label: {
                   Label("详情", systemImage: "info.circle")
                 }
@@ -980,6 +1251,11 @@ struct MediaDetailView: View {
           .padding(.bottom, 30)
           .onChange(of: focusedActorId) { _, newId in
             guard let newId else { return }
+            actorImageAnchorId = newId
+            MediaPreloader.shared.focusDidMove(
+              to: "person:\(newId)",
+              stackID: navigationCoordinator.id
+            )
             Task {
               await viewModel.actorsPaginator.loadMore(newId)
             }
@@ -1007,22 +1283,27 @@ struct MediaDetailView: View {
         ScrollView(.horizontal, showsIndicators: false) {
           LazyHStack(spacing: 40) {
             let badges = showContentPage || firstVisibleRow != "recommendations"
-            ForEach(viewModel.recommendPaginator.items) { media in
+            let items = viewModel.recommendPaginator.items
+            ForEach(Array(items.enumerated()), id: \.element.id) { entry in
+              let index = entry.offset
+              let media = entry.element
               DetailCardView(
                 item: media,
                 showBadges: badges,
+                loadsImage: loadsHorizontalImage(
+                  at: index,
+                  in: items,
+                  anchorID: recommendImageAnchorId,
+                  cardKind: .media
+                ),
                 imageConfigurationIdentity: apiService.imageConfigurationIdentity,
                 onTap: {
-                  MediaPreloader.shared.preloadIfNeeded(for: media)
-                  navigationPath.append(media)
+                  navigateToMediaFromSecondPage(media)
                 }
               )
               .equatable()
               .focused($focusedRecommendId, equals: media.id)
-              .mediaContextMenu(
-                item: media,
-                navigationPath: $navigationPath
-              )
+              .mediaContextMenu(item: media)
             }
             if viewModel.recommendPaginator.isLoadingMore {
               posterCenteredLoadingIndicator(height: 384)
@@ -1037,10 +1318,18 @@ struct MediaDetailView: View {
             if let newId = newId,
               let item = viewModel.recommendPaginator.items.first(where: { $0.id == newId })
             {
+              recommendImageAnchorId = newId
+              MediaPreloader.shared.focusDidMove(
+                to: newId,
+                stackID: navigationCoordinator.id
+              )
               recommendPreloadDebounce = Task {
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
-                MediaPreloader.shared.preloadIfNeeded(for: item)
+                MediaPreloader.shared.preloadFocusedCandidateIfNeeded(
+                  for: item,
+                  stackID: navigationCoordinator.id
+                )
               }
             }
             // 分页加载
@@ -1072,22 +1361,27 @@ struct MediaDetailView: View {
         ScrollView(.horizontal, showsIndicators: false) {
           LazyHStack(spacing: 40) {
             let badges = showContentPage || firstVisibleRow != "similar"
-            ForEach(viewModel.similarPaginator.items) { media in
+            let items = viewModel.similarPaginator.items
+            ForEach(Array(items.enumerated()), id: \.element.id) { entry in
+              let index = entry.offset
+              let media = entry.element
               DetailCardView(
                 item: media,
                 showBadges: badges,
+                loadsImage: loadsHorizontalImage(
+                  at: index,
+                  in: items,
+                  anchorID: similarImageAnchorId,
+                  cardKind: .media
+                ),
                 imageConfigurationIdentity: apiService.imageConfigurationIdentity,
                 onTap: {
-                  MediaPreloader.shared.preloadIfNeeded(for: media)
-                  navigationPath.append(media)
+                  navigateToMediaFromSecondPage(media)
                 }
               )
               .equatable()
               .focused($focusedSimilarId, equals: media.id)
-              .mediaContextMenu(
-                item: media,
-                navigationPath: $navigationPath
-              )
+              .mediaContextMenu(item: media)
             }
             if viewModel.similarPaginator.isLoadingMore {
               posterCenteredLoadingIndicator(height: 384)
@@ -1102,10 +1396,18 @@ struct MediaDetailView: View {
             if let newId = newId,
               let item = viewModel.similarPaginator.items.first(where: { $0.id == newId })
             {
+              similarImageAnchorId = newId
+              MediaPreloader.shared.focusDidMove(
+                to: newId,
+                stackID: navigationCoordinator.id
+              )
               similarPreloadDebounce = Task {
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
-                MediaPreloader.shared.preloadIfNeeded(for: item)
+                MediaPreloader.shared.preloadFocusedCandidateIfNeeded(
+                  for: item,
+                  stackID: navigationCoordinator.id
+                )
               }
             }
             // 分页加载

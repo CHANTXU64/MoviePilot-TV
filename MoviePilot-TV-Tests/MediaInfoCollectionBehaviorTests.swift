@@ -41,6 +41,10 @@ final class MediaInfoCollectionBehaviorTests: XCTestCase {
       )
 
       XCTAssertNil(preloader.preloadIfNeeded(for: media), source)
+      XCTAssertNil(
+        preloader.preloadAuxiliary(for: media, owner: UUID()),
+        source
+      )
       XCTAssertNil(preloader.peekTask(for: media), source)
     }
 

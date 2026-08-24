@@ -3,6 +3,195 @@ import Foundation
 import Kingfisher
 import SwiftUI
 
+enum MediaDetailBackgroundImage {
+  nonisolated static let blurRadius: CGFloat = 60
+  /// 详情背景按 2K 长边解码（2560×1440），不到 4K 屏幕也不上采样。
+  nonisolated static let targetLongEdgePixels: CGFloat = 2560
+
+  nonisolated static func downsampleScale(
+    for pointSize: CGSize,
+    screenScale: CGFloat
+  ) -> CGFloat {
+    let longEdge = max(pointSize.width, pointSize.height)
+    guard longEdge > 0 else { return 1 }
+    return min(screenScale, targetLongEdgePixels / longEdge)
+  }
+
+  nonisolated static func heroProcessor(
+    for size: CGSize,
+    usingPosterAsBackdrop: Bool,
+    screenScale: CGFloat
+  ) -> any ImageProcessor {
+    usingPosterAsBackdrop
+      ? posterFallbackProcessor(for: size, screenScale: screenScale)
+      : heroDownsamplingProcessor(for: size, screenScale: screenScale)
+  }
+
+  nonisolated static func posterFallbackProcessor(
+    for size: CGSize,
+    screenScale: CGFloat
+  ) -> any ImageProcessor {
+    heroDownsamplingProcessor(for: size, screenScale: screenScale)
+      |> BlurImageProcessor(blurRadius: blurRadius)
+  }
+
+  nonisolated static func heroDownsamplingProcessor(
+    for size: CGSize,
+    screenScale: CGFloat
+  ) -> MediaDetailHeroDownsamplingProcessor {
+    MediaDetailHeroDownsamplingProcessor(
+      size: size,
+      scale: downsampleScale(for: size, screenScale: screenScale)
+    )
+  }
+
+  static func heroOptions(
+    for size: CGSize,
+    scaleFactor: CGFloat,
+    usingPosterAsBackdrop: Bool
+  ) -> KingfisherOptionsInfo {
+    let scale = downsampleScale(for: size, screenScale: scaleFactor)
+    return [
+      .processor(
+        heroProcessor(
+          for: size,
+          usingPosterAsBackdrop: usingPosterAsBackdrop,
+          screenScale: scaleFactor
+        )
+      ),
+      .scaleFactor(scale),
+      TransientDecodedImage.skipMemoryCache,
+    ]
+  }
+
+  nonisolated static func removePosterFallbackBackgroundFromMemory(
+    for url: URL,
+    size: CGSize,
+    screenScale: CGFloat,
+    cacheKey: String? = nil,
+    cache: ImageCache = .default
+  ) {
+    cache.removeImage(
+      forKey: cacheKey ?? url.cacheKey,
+      processorIdentifier: posterFallbackProcessor(
+        for: size,
+        screenScale: screenScale
+      ).identifier,
+      fromMemory: true,
+      fromDisk: false
+    )
+  }
+
+  nonisolated static func removeFirstPageBackgroundFromMemory(
+    for url: URL,
+    size: CGSize,
+    screenScale: CGFloat,
+    cacheKey: String? = nil,
+    cache: ImageCache = .default
+  ) {
+    cache.removeImage(
+      forKey: cacheKey ?? url.cacheKey,
+      processorIdentifier: heroProcessor(
+        for: size,
+        usingPosterAsBackdrop: false,
+        screenScale: screenScale
+      ).identifier,
+      fromMemory: true,
+      fromDisk: false
+    )
+  }
+
+  nonisolated static func removeHeroFromMemory(
+    for url: URL,
+    size: CGSize,
+    usingPosterAsBackdrop: Bool,
+    screenScale: CGFloat,
+    cacheKey: String? = nil,
+    cache: ImageCache = .default
+  ) {
+    if usingPosterAsBackdrop {
+      removePosterFallbackBackgroundFromMemory(
+        for: url,
+        size: size,
+        screenScale: screenScale,
+        cacheKey: cacheKey,
+        cache: cache
+      )
+    } else {
+      removeFirstPageBackgroundFromMemory(
+        for: url,
+        size: size,
+        screenScale: screenScale,
+        cacheKey: cacheKey,
+        cache: cache
+      )
+    }
+  }
+
+  /// 预载可能写入主图和海报原图 fallback 两份处理后的 hero，释放时都要清。
+  @MainActor
+  static func backgroundHeroURLs(from detail: MediaInfo) -> (
+    urls: [URL], isPoster: Bool
+  ) {
+    let target = detail.imageURLs.backgroundTarget
+    var urls: [URL] = []
+    if let url = target.url {
+      urls.append(url)
+    }
+    if let fallbackURL = target.fallbackURL, fallbackURL != target.url {
+      urls.append(fallbackURL)
+    }
+    return (urls, target.isPoster)
+  }
+}
+
+/// 按指定 scale 做 ImageIO 缩略图解码。identifier 带目标长边像素，避免沿用旧的 4K `DownsamplingImageProcessor` 磁盘缓存。
+struct MediaDetailHeroDownsamplingProcessor: ImageProcessor {
+  let size: CGSize
+  let scale: CGFloat
+
+  var identifier: String {
+    let longEdgePixels = Int((max(size.width, size.height) * scale).rounded())
+    return "com.moviepilot.hero-downsample(\(Int(size.width))x\(Int(size.height)),\(longEdgePixels))"
+  }
+
+  func process(
+    item: ImageProcessItem,
+    options _: KingfisherParsedOptionsInfo
+  ) -> KFCrossPlatformImage? {
+    let data: Data?
+    switch item {
+    case .image(let image):
+      data = image.kf.data(format: .unknown)
+    case .data(let dataValue):
+      data = dataValue
+    }
+    guard let data else { return nil }
+    return KingfisherWrapper.downsampledImage(data: data, to: size, scale: scale)
+  }
+}
+
+enum MediaDetailLoadingPoster {
+  nonisolated static let size = CGSize(width: 460, height: 690)
+
+  nonisolated static var processor: DownsamplingImageProcessor {
+    DownsamplingImageProcessor(size: size)
+  }
+
+  nonisolated static func removeFromMemory(
+    for url: URL,
+    cacheKey: String? = nil,
+    cache: ImageCache = .default
+  ) {
+    cache.removeImage(
+      forKey: cacheKey ?? url.cacheKey,
+      processorIdentifier: processor.identifier,
+      fromMemory: true,
+      fromDisk: false
+    )
+  }
+}
+
 // MARK: - 单个媒体的预加载任务
 
 /// 管理单个媒体项的所有预加载数据。
@@ -33,6 +222,9 @@ class MediaPreloadTask: ObservableObject {
   /// nonisolated(unsafe) 因为需要在 withTaskCancellationHandler 的 onCancel 闭包中访问，
   /// 该闭包可能在任意线程执行。实际写入只在 @MainActor 隔离的方法中进行，读取仅在取消时（单次），无竞争风险。
   nonisolated(unsafe) private var activeImageDownload: DownloadTask?
+  private let imageRetrieveState = ImageRetrieveContinuationBox()
+  private var activeImageWarmHandle: MPImageWarmer.Handle?
+  private var allowsImageWarm = true
 
   init(partialMedia: MediaInfo, apiService: APIService = .shared) {
     self.partialMedia = partialMedia
@@ -76,11 +268,47 @@ class MediaPreloadTask: ObservableObject {
 
   /// 取消所有预加载任务（包括正在进行的 Kingfisher 图片下载）
   func cancel() {
+    imageRetrieveState.markOwnerReleased()
     internalTasks.forEach { $0.cancel() }
     internalTasks.removeAll()
     // 主动中断 Kingfisher 下载，释放网络资源和内存
     activeImageDownload?.cancel()
     activeImageDownload = nil
+    cancelImageWarm()
+  }
+
+  var imageRetrieveGeneration: UInt {
+    imageRetrieveState.generation
+  }
+
+  func shouldDiscardRetrievedBackground(generation: UInt) -> Bool {
+    imageRetrieveState.shouldDiscardResult(generation: generation)
+  }
+
+  /// 当前媒体即将真正显示时，停止仅用于服务器缓存的 warm，并把已解码的候选背景交给前台复用。
+  func cancelImageWarm() {
+    allowsImageWarm = false
+    if let activeImageWarmHandle {
+      MPImageWarmer.shared.cancel(activeImageWarmHandle)
+      self.activeImageWarmHandle = nil
+    }
+    imageRetrieveState.keepResultInMemoryUnlessOwnerReleased()
+  }
+
+  func shouldWarmBackgroundImage() -> Bool {
+    allowsImageWarm
+  }
+
+  func shouldReleasePreparedBackgroundFromMemory(preparedAsCandidate: Bool) -> Bool {
+    preparedAsCandidate && allowsImageWarm
+  }
+
+  var shouldRemoveRetrievedBackgroundAfterCompletion: Bool {
+    imageRetrieveState.shouldRemoveResultFromMemory
+  }
+
+  func markPreparedBackgroundForReleaseAfterCompletion() {
+    imageRetrieveState.markCandidateResultForRemoval()
   }
 
   // MARK: - ① 加载完整媒体详情
@@ -135,14 +363,36 @@ class MediaPreloadTask: ObservableObject {
     NotificationCenter.default.post(name: .mediaDetailLoadDidFail, object: nil)
   }
 
-  // MARK: - ② 预取背景图（Kingfisher）
+  // MARK: - ② 预热背景图
 
   private func prefetchBackgroundImage(for detail: MediaInfo, timeout: Duration? = nil) async {
-    // 避免为已取消（LRU 淘汰）的任务发起无意义的图片请求
+    // 避免为已取消（生命周期释放）的任务发起无意义的图片请求
     guard !Task.isCancelled else { return }
     // 与 MediaInfo.ImageURLs.backgroundTarget 保持一致：backdrop 优先，无则 poster
     let target = detail.imageURLs.backgroundTarget
     guard let url = target.url else { return }
+
+    let preparedAsCandidate = shouldWarmBackgroundImage()
+
+    let canWarmOnMoviePilot = MPImageWarmer.isWarmable(
+      url,
+      baseURL: apiService.baseURL,
+      imageCacheEnabled: apiService.useImageCache
+    )
+    if preparedAsCandidate, canWarmOnMoviePilot {
+      let handle = await MPImageWarmer.shared.warm(url)
+      guard !Task.isCancelled,
+        shouldWarmBackgroundImage()
+      else {
+        if let handle {
+          MPImageWarmer.shared.cancel(handle)
+        }
+        return
+      }
+      activeImageWarmHandle = handle
+      return
+    }
+    guard !Task.isCancelled else { return }
 
     if let timeout {
       await withTaskGroup(of: Void.self) { group in
@@ -162,28 +412,67 @@ class MediaPreloadTask: ObservableObject {
 
     // 下载完成后清理引用
     activeImageDownload = nil
+
+    // 仍停留在推荐页时才释放候选图；进入详情后保留同一份内存图供前台直接复用。
+    guard
+      shouldReleasePreparedBackgroundFromMemory(preparedAsCandidate: preparedAsCandidate),
+      !Task.isCancelled
+    else { return }
+    markPreparedBackgroundForReleaseAfterCompletion()
+    let size = UIScreen.main.bounds.size
+    let screenScale = UIScreen.main.scale
+    let heroes = MediaDetailBackgroundImage.backgroundHeroURLs(from: detail)
+    for heroURL in heroes.urls {
+      removePreparedHeroFromMemory(
+        url: heroURL,
+        isUsingPosterAsBackdrop: heroes.isPoster,
+        size: size,
+        screenScale: screenScale
+      )
+    }
   }
 
   private func retrieveHeroImage(_ url: URL, fallbackURL: URL?) async {
-    let succeeded = await retrieveHeroImage(url)
+    let isUsingPosterAsBackdrop = (fullDetail ?? partialMedia).imageURLs.backgroundTarget.isPoster
+    let succeeded = await retrieveHeroImage(url, isUsingPosterAsBackdrop: isUsingPosterAsBackdrop)
     guard !succeeded, !Task.isCancelled, let fallbackURL, fallbackURL != url else { return }
-    _ = await retrieveHeroImage(fallbackURL)
+    _ = await retrieveHeroImage(fallbackURL, isUsingPosterAsBackdrop: isUsingPosterAsBackdrop)
   }
 
-  private func retrieveHeroImage(_ url: URL) async -> Bool {
+  private func retrieveHeroImage(
+    _ url: URL,
+    isUsingPosterAsBackdrop: Bool
+  ) async -> Bool {
     let continuationBox = ImageRetrieveContinuationBox()
+    let retrieveGeneration = imageRetrieveState.generation
+    let size = UIScreen.main.bounds.size
+    let screenScale = UIScreen.main.scale
+    var options = MediaDetailBackgroundImage.heroOptions(
+      for: size,
+      scaleFactor: screenScale,
+      usingPosterAsBackdrop: isUsingPosterAsBackdrop
+    )
+    let service = apiService
+    let source = service.imageSource(for: url)
+    options.append(contentsOf: service.imageOptions(for: url))
 
     // 使用 withTaskCancellationHandler 确保 Swift Task 取消时能中断 Kingfisher 的 HTTP 下载
     return await withTaskCancellationHandler {
       await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
         continuationBox.set(continuation)
-        let service = apiService
-        var options = service.imageOptions(for: url)
-        options.append(.cacheOriginalImage)
         self.activeImageDownload = KingfisherManager.shared.retrieveImage(
-          with: service.imageSource(for: url),
+          with: source,
           options: options
         ) { result in
+          if self.imageRetrieveState.shouldDiscardResult(generation: retrieveGeneration) {
+            MediaDetailBackgroundImage.removeHeroFromMemory(
+              for: url,
+              size: size,
+              usingPosterAsBackdrop: isUsingPosterAsBackdrop,
+              screenScale: screenScale,
+              cacheKey: source.cacheKey
+            )
+          }
           switch result {
           case .success:
             continuationBox.resume(returning: true)
@@ -197,6 +486,21 @@ class MediaPreloadTask: ObservableObject {
       self.activeImageDownload?.cancel()
       continuationBox.resume(returning: false)
     }
+  }
+
+  private func removePreparedHeroFromMemory(
+    url: URL,
+    isUsingPosterAsBackdrop: Bool,
+    size: CGSize,
+    screenScale: CGFloat
+  ) {
+    MediaDetailBackgroundImage.removeHeroFromMemory(
+      for: url,
+      size: size,
+      usingPosterAsBackdrop: isUsingPosterAsBackdrop,
+      screenScale: screenScale,
+      cacheKey: apiService.imageSource(for: url).cacheKey
+    )
   }
 
   // MARK: - ③ 分季信息
@@ -297,6 +601,49 @@ private final class ImageRetrieveContinuationBox: @unchecked Sendable {
   nonisolated(unsafe) private var continuation: CheckedContinuation<Bool, Never>?
   nonisolated(unsafe) private var pendingResult: Bool?
   nonisolated(unsafe) private var hasResumed = false
+  nonisolated(unsafe) private var removeResultFromMemory = false
+  nonisolated(unsafe) private var ownerReleased = false
+  nonisolated(unsafe) private var retrieveGeneration: UInt = 0
+
+  nonisolated var generation: UInt {
+    lock.lock()
+    defer { lock.unlock() }
+    return retrieveGeneration
+  }
+
+  nonisolated var shouldRemoveResultFromMemory: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return removeResultFromMemory
+  }
+
+  nonisolated func shouldDiscardResult(generation: UInt) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return removeResultFromMemory || generation != retrieveGeneration
+  }
+
+  nonisolated func markOwnerReleased() {
+    lock.lock()
+    ownerReleased = true
+    removeResultFromMemory = true
+    retrieveGeneration &+= 1
+    lock.unlock()
+  }
+
+  nonisolated func markCandidateResultForRemoval() {
+    lock.lock()
+    removeResultFromMemory = true
+    lock.unlock()
+  }
+
+  nonisolated func keepResultInMemoryUnlessOwnerReleased() {
+    lock.lock()
+    if !ownerReleased {
+      removeResultFromMemory = false
+    }
+    lock.unlock()
+  }
 
   nonisolated func set(_ continuation: CheckedContinuation<Bool, Never>) {
     lock.lock()
@@ -341,12 +688,19 @@ class MediaPreloader: ObservableObject {
 
   /// 预加载任务缓存，key = MediaInfo.id
   private var cache: [String: MediaPreloadTask] = [:]
-  /// LRU 访问顺序
-  private var accessOrder: [String] = []
-  /// 被 DetailView 持有中的 Task keys — 淘汰时跳过，防止活跃详情页数据丢失
-  private var pinnedKeys: Set<String> = []
-  /// 最大缓存数量（Apple TV 内存有限，但 20 太小容易淘汰活跃数据）
-  private let maxCacheSize = 30
+  /// 尚未进入详情页的临时焦点候选。新候选出现时立即释放旧候选。
+  private var candidateKey: String?
+  /// 仍存在于导航栈中的详情页 owner；同一媒体可以在栈中出现多次。
+  private var navigationOwners: [String: Set<UUID>] = [:]
+  /// 当前实际挂载详情背景的 route owner；跨 Tab 共用，避免一个栈误删另一个栈的 hero。
+  private var presentedHeroOwners: [String: Set<UUID>] = [:]
+  private var presentedHeroKeyByOwner: [UUID: String] = [:]
+  private var presentedHeroDetailByOwner: [UUID: MediaInfo] = [:]
+  /// Pop 回列表后，阻止焦点恢复立即重新预载刚退出的媒体。
+  private var suppressedFocusCandidateKeys: [UUID: String] = [:]
+  /// 详情页附带预载（如 TMDB 跳转目标），不占用焦点 candidateKey。
+  private var auxiliaryPreloads: [UUID: Set<String>] = [:]
+  private static let legacyNavigationOwner = UUID()
   private var cancellables = Set<AnyCancellable>()
   private var subscriptionRefreshTask: Task<Void, Never>?
   private var observedSessionUIIdentity: String
@@ -389,10 +743,7 @@ class MediaPreloader: ObservableObject {
       if existing.isDetailFailed {
         existing.cancel()
         cache.removeValue(forKey: key)
-        accessOrder.removeAll { $0 == key }
       } else {
-        // 更新 LRU 顺序
-        touchLRU(key: key)
         return existing
       }
     }
@@ -400,11 +751,7 @@ class MediaPreloader: ObservableObject {
     // 创建新任务
     let task = MediaPreloadTask(partialMedia: media, apiService: apiService)
     cache[key] = task
-    accessOrder.append(key)
     task.start()
-
-    // LRU 淘汰
-    evictIfNeeded()
 
     return task
   }
@@ -414,38 +761,175 @@ class MediaPreloader: ObservableObject {
   @discardableResult
   func preloadIfNeeded(for media: MediaInfo) -> MediaPreloadTask? {
     guard media.shouldPreloadDetail else { return nil }
+    replaceCandidate(with: media.id)
     return preload(for: media)
   }
 
-  /// 仅获取已有的预加载任务（不创建新的），并更新 LRU 顺序。
-  /// ⚠️ 不要在 SwiftUI body 中使用此方法（会修改状态），请用 peekTask。
-  func getTask(for media: MediaInfo) -> MediaPreloadTask? {
+  /// 给当前详情页附带预载，不抢走推荐页焦点候选。
+  @discardableResult
+  func preloadAuxiliary(for media: MediaInfo, owner: UUID) -> MediaPreloadTask? {
+    guard media.shouldPreloadDetail else { return nil }
     let key = media.id
-    if let existing = cache[key] {
-      touchLRU(key: key)
-      return existing
+    let previous = auxiliaryPreloads[owner] ?? []
+    auxiliaryPreloads[owner] = [key]
+    let task = preload(for: media)
+    for staleKey in previous where staleKey != key {
+      releaseTask(
+        forKey: staleKey,
+        fallbackMedia: cache[staleKey]?.partialMedia,
+        size: UIScreen.main.bounds.size
+      )
     }
-    return nil
+    return task
   }
 
-  /// 纯读取：仅查询缓存中是否存在对应任务，**不修改 LRU 顺序**。
+  func isFocusCandidate(_ key: String) -> Bool {
+    candidateKey == key
+  }
+
+  /// 仅供焦点停留触发的预载。刚 Pop 的同一媒体会被抑制，显式点击不受影响。
+  @discardableResult
+  func preloadFocusedCandidateIfNeeded(
+    for media: MediaInfo,
+    stackID: UUID = MediaPreloader.legacyNavigationOwner
+  ) -> MediaPreloadTask? {
+    guard suppressedFocusCandidateKeys[stackID] != media.id else { return nil }
+    return preloadIfNeeded(for: media)
+  }
+
+  /// 焦点真正移动到另一项后，解除上一次 Pop 的单次抑制。
+  func focusDidMove(to key: String, stackID: UUID = MediaPreloader.legacyNavigationOwner) {
+    guard let suppressedKey = suppressedFocusCandidateKeys[stackID], suppressedKey != key else {
+      return
+    }
+    suppressedFocusCandidateKeys.removeValue(forKey: stackID)
+  }
+
+  func isFocusPreloadSuppressed(
+    for key: String,
+    stackID: UUID = MediaPreloader.legacyNavigationOwner
+  ) -> Bool {
+    suppressedFocusCandidateKeys[stackID] == key
+  }
+
+  /// Push 前用稳定 route ID 获取预加载任务和所有权；不再等待 destination onAppear 交接。
+  @discardableResult
+  func acquireNavigation(for media: MediaInfo, owner: UUID) -> MediaPreloadTask? {
+    guard media.shouldPreloadDetail else { return nil }
+    replaceCandidate(with: media.id)
+    let task = preload(for: media)
+    pin(key: media.id, owner: owner)
+    return task
+  }
+
+  /// 仅获取已有的预加载任务（不创建新的）。
+  func getTask(for media: MediaInfo) -> MediaPreloadTask? {
+    cache[media.id]
+  }
+
+  /// 纯读取：仅查询缓存中是否存在对应任务，不改变任何生命周期所有权。
   /// 可安全在 SwiftUI body / contextMenu @ViewBuilder 中使用。
   func peekTask(for media: MediaInfo) -> MediaPreloadTask? {
     return cache[media.id]
   }
 
-  // MARK: - Pin / Unpin（DetailView 生命周期保护）
+  // MARK: - 导航生命周期
 
-  /// 标记某个 Task 为"活跃使用中"，淘汰时自动跳过。
-  /// 应在 MediaDetailContainerView 的 .task / .onAppear 中调用。
+  /// 兼容现有测试和非导航调用；生产详情页应传入自己的 owner。
   func pin(key: String) {
-    pinnedKeys.insert(key)
+    pin(key: key, owner: Self.legacyNavigationOwner)
   }
 
-  /// 解除"活跃使用中"标记。
-  /// 应在 MediaDetailContainerView 的 .onDisappear 中调用。
   func unpin(key: String) {
-    pinnedKeys.remove(key)
+    unpin(key: key, owner: Self.legacyNavigationOwner)
+  }
+
+  /// 标记详情页仍存在于 NavigationPath 中。被子页面覆盖时不解除。
+  func pin(key: String, owner: UUID) {
+    // 首页/订阅等入口可能直接 append NavigationPath，没有经过焦点候选交接。
+    // 新详情接管时立即释放旧的临时候选，避免它脱离任何生命周期长期留在缓存里。
+    let previousCandidate = candidateKey
+    candidateKey = nil
+    if let previousCandidate, previousCandidate != key {
+      releaseTask(
+        forKey: previousCandidate,
+        fallbackMedia: cache[previousCandidate]?.partialMedia,
+        size: UIScreen.main.bounds.size
+      )
+    }
+    navigationOwners[key, default: []].insert(owner)
+  }
+
+  private func unpin(key: String, owner: UUID) {
+    navigationOwners[key]?.remove(owner)
+    if navigationOwners[key]?.isEmpty == true {
+      navigationOwners.removeValue(forKey: key)
+    }
+  }
+
+  /// typed route 被终态移除后释放 owner；同媒体仍被其他 route 持有时不会取消共享任务。
+  func releaseNavigation(
+    for media: MediaInfo,
+    owner: UUID,
+    stackID: UUID,
+    size: CGSize,
+    imageCache: ImageCache = .default
+  ) {
+    let key = media.id
+    setHeroPresented(false, for: media, owner: owner, size: size, imageCache: imageCache)
+    unpin(key: key, owner: owner)
+    suppressedFocusCandidateKeys[stackID] = key
+    releaseAuxiliaryPreloads(ownedBy: owner, size: size, imageCache: imageCache)
+    releaseTask(forKey: key, fallbackMedia: media, size: size, imageCache: imageCache)
+  }
+
+  func setHeroPresented(
+    _ isPresented: Bool,
+    for detail: MediaInfo,
+    owner: UUID,
+    size: CGSize,
+    screenScale: CGFloat = UIScreen.main.scale,
+    imageCache: ImageCache = .default
+  ) {
+    let key = detail.id
+    if isPresented {
+      if let previousKey = presentedHeroKeyByOwner[owner], previousKey != key {
+        releasePresentedHero(owner: owner, size: size, screenScale: screenScale, imageCache: imageCache)
+      }
+      presentedHeroOwners[key, default: []].insert(owner)
+      presentedHeroKeyByOwner[owner] = key
+      presentedHeroDetailByOwner[owner] = detail
+      return
+    }
+
+    releasePresentedHero(owner: owner, size: size, screenScale: screenScale, imageCache: imageCache)
+  }
+
+  func discardLoadedBackgroundIfAbandoned(
+    url: URL,
+    detail: MediaInfo,
+    usingPosterAsBackdrop: Bool,
+    isAbandoned: Bool,
+    size: CGSize,
+    screenScale: CGFloat = UIScreen.main.scale,
+    imageCache: ImageCache = .default
+  ) {
+    guard isAbandoned, presentedHeroOwners[detail.id]?.isEmpty != false else { return }
+    let cacheKey = apiService.imageSource(for: url).cacheKey
+    MediaDetailBackgroundImage.removeHeroFromMemory(
+      for: url,
+      size: size,
+      usingPosterAsBackdrop: usingPosterAsBackdrop,
+      screenScale: screenScale,
+      cacheKey: cacheKey,
+      cache: imageCache
+    )
+    removeBackgroundTargetHeroesFromMemory(
+      for: detail,
+      size: size,
+      screenScale: screenScale,
+      imageCache: imageCache
+    )
   }
 
   /// 通过 mediaId（如 "tmdb:123"）查找对应的预加载任务。
@@ -477,9 +961,15 @@ class MediaPreloader: ObservableObject {
     for task in cache.values {
       task.cancel()
     }
+    MPImageWarmer.shared.clear()
     cache.removeAll()
-    accessOrder.removeAll()
-    pinnedKeys.removeAll()
+    candidateKey = nil
+    navigationOwners.removeAll()
+    presentedHeroOwners.removeAll()
+    presentedHeroKeyByOwner.removeAll()
+    presentedHeroDetailByOwner.removeAll()
+    auxiliaryPreloads.removeAll()
+    suppressedFocusCandidateKeys.removeAll()
   }
 
   // MARK: - 订阅状态批量刷新
@@ -488,7 +978,7 @@ class MediaPreloader: ObservableObject {
   /// 普通海报墙预加载缓存不主动强刷，避免浏览海报墙后一次通知触发大量订阅查询。
   private func refreshAllSubscriptionStatus() async {
     let snapshot = apiService.sessionSnapshot()
-    let tasks = pinnedKeys.compactMap { cache[$0] }
+    let tasks = navigationOwners.keys.compactMap { cache[$0] }
     guard !tasks.isEmpty else { return }
 
     if tasks.contains(where: { $0.seasonViewModel != nil }) {
@@ -508,25 +998,116 @@ class MediaPreloader: ObservableObject {
     }
   }
 
-  // MARK: - LRU 管理
+  // MARK: - 临时候选与释放
 
-  private func touchLRU(key: String) {
-    accessOrder.removeAll { $0 == key }
-    accessOrder.append(key)
+  private func replaceCandidate(with key: String) {
+    guard candidateKey != key else { return }
+    let previousKey = candidateKey
+    candidateKey = navigationOwners[key] == nil ? key : nil
+    if let previousKey {
+      releaseTask(
+        forKey: previousKey,
+        fallbackMedia: cache[previousKey]?.partialMedia,
+        size: UIScreen.main.bounds.size
+      )
+    }
   }
 
-  private func evictIfNeeded() {
-    // 从最老的开始淘汰，但跳过被 pin 住的 Task
-    while cache.count > maxCacheSize {
-      // 找到第一个未被 pin 的 key
-      guard let indexToEvict = accessOrder.firstIndex(where: { !pinnedKeys.contains($0) }) else {
-        // 所有缓存都被 pin 住了（极端情况），无法淘汰，退出
-        break
-      }
-      let keyToEvict = accessOrder[indexToEvict]
-      cache[keyToEvict]?.cancel()
-      cache.removeValue(forKey: keyToEvict)
-      accessOrder.remove(at: indexToEvict)
+  private func releaseAuxiliaryPreloads(
+    ownedBy owner: UUID,
+    size: CGSize,
+    imageCache: ImageCache
+  ) {
+    let keys = auxiliaryPreloads.removeValue(forKey: owner) ?? []
+    for key in keys {
+      releaseTask(
+        forKey: key,
+        fallbackMedia: cache[key]?.partialMedia,
+        size: size,
+        imageCache: imageCache
+      )
     }
+  }
+
+  private func releasePresentedHero(
+    owner: UUID,
+    size: CGSize,
+    screenScale: CGFloat,
+    imageCache: ImageCache
+  ) {
+    guard let key = presentedHeroKeyByOwner.removeValue(forKey: owner) else { return }
+    let detail = presentedHeroDetailByOwner.removeValue(forKey: owner)
+    presentedHeroOwners[key]?.remove(owner)
+    guard presentedHeroOwners[key]?.isEmpty != false else { return }
+    presentedHeroOwners.removeValue(forKey: key)
+    guard let resolvedDetail = cache[key]?.fullDetail ?? detail else { return }
+    removeBackgroundTargetHeroesFromMemory(
+      for: resolvedDetail,
+      size: size,
+      screenScale: screenScale,
+      imageCache: imageCache
+    )
+  }
+
+  func removeLoadingPosterFromMemory(
+    url: URL?,
+    imageCache: ImageCache = .default
+  ) {
+    guard let url else { return }
+    MediaDetailLoadingPoster.removeFromMemory(
+      for: url,
+      cacheKey: apiService.imageSource(for: url).cacheKey,
+      cache: imageCache
+    )
+  }
+
+  func removeBackgroundTargetHeroesFromMemory(
+    for detail: MediaInfo,
+    size: CGSize,
+    screenScale: CGFloat = UIScreen.main.scale,
+    imageCache: ImageCache = .default
+  ) {
+    let heroes = MediaDetailBackgroundImage.backgroundHeroURLs(from: detail)
+    for url in heroes.urls {
+      let cacheKey = apiService.imageSource(for: url).cacheKey
+      MediaDetailBackgroundImage.removeHeroFromMemory(
+        for: url,
+        size: size,
+        usingPosterAsBackdrop: heroes.isPoster,
+        screenScale: screenScale,
+        cacheKey: cacheKey,
+        cache: imageCache
+      )
+      if !heroes.isPoster {
+        MediaDetailBackgroundImage.removePosterFallbackBackgroundFromMemory(
+          for: url,
+          size: size,
+          screenScale: screenScale,
+          cacheKey: cacheKey,
+          cache: imageCache
+        )
+      }
+    }
+  }
+
+  private func releaseTask(
+    forKey key: String,
+    fallbackMedia: MediaInfo?,
+    size: CGSize,
+    imageCache: ImageCache = .default
+  ) {
+    guard !isTaskRetained(key) else { return }
+    let task = cache.removeValue(forKey: key)
+    let detail = task?.fullDetail ?? fallbackMedia ?? task?.partialMedia
+    task?.cancel()
+
+    guard let detail else { return }
+    removeBackgroundTargetHeroesFromMemory(for: detail, size: size, imageCache: imageCache)
+  }
+
+  private func isTaskRetained(_ key: String) -> Bool {
+    candidateKey == key
+      || navigationOwners[key] != nil
+      || auxiliaryPreloads.values.contains { $0.contains(key) }
   }
 }

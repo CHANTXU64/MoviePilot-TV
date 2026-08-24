@@ -37,7 +37,7 @@ class PersonDetailViewModel: ObservableObject {
         }
         return false  // 没有新内容
       },
-      imageURLsProvider: { item in
+      imageWarmURLsProvider: { item in
         [item.imageURLs.poster].compactMap(\.self)
       },
       onReset: { @MainActor in

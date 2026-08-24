@@ -2,15 +2,39 @@ import Kingfisher
 import SwiftUI
 
 struct PersonCard: View {
+  static let imageSize = CGSize(width: 210, height: 315)
+
+  static func imageProcessor() -> any ImageProcessor {
+    DefaultImageProcessor.default
+      |> ResizingImageProcessor(referenceSize: imageSize, mode: .aspectFill)
+  }
+
   let person: Person
   var staffImageUrl: URL? = nil
-  let width: CGFloat = 210
-  let height: CGFloat = 315
+  let width: CGFloat
+  let height: CGFloat
+  var loadsImage: Bool = true
 
   // 卡片被点击时的操作
   var action: (() -> Void)? = nil
 
   @FocusState private var isFocused: Bool
+
+  init(
+    person: Person,
+    staffImageUrl: URL? = nil,
+    width: CGFloat = imageSize.width,
+    height: CGFloat = imageSize.height,
+    loadsImage: Bool = true,
+    action: (() -> Void)? = nil
+  ) {
+    self.person = person
+    self.staffImageUrl = staffImageUrl
+    self.width = width
+    self.height = height
+    self.loadsImage = loadsImage
+    self.action = action
+  }
 
   var body: some View {
     VStack(spacing: 10) {
@@ -62,21 +86,24 @@ struct PersonCard: View {
 
   private var posterContent: some View {
     let url = staffImageUrl ?? person.imageURLs.profile
-    return KFImage.sessionImage(url)
-      .placeholder {
-        Rectangle()
-          .fill(Color(white: 0.12))
-          .overlay(
-            Image(systemName: "person.fill")
-              .font(.largeTitle)
-              .foregroundColor(.gray)
-          )
-      }
-      .resizing(referenceSize: CGSize(width: 210, height: 315), mode: .aspectFill)
-      .resizable()
-      .fade(duration: 0.25)
-      .aspectRatio(contentMode: .fill)
-      .frame(width: width, height: height)
-      .clipped()
+    return ZStack {
+      Rectangle()
+        .fill(Color(white: 0.12))
+        .overlay(
+          Image(systemName: "person.fill")
+            .font(.largeTitle)
+            .foregroundColor(.gray)
+        )
+
+      PageManagedImage(
+        url: url,
+        processor: Self.imageProcessor(),
+        isEnabled: loadsImage,
+        participatesInPageLifecycle: true,
+        skipsMemoryCache: true
+      )
+    }
+    .frame(width: width, height: height)
+    .clipped()
   }
 }

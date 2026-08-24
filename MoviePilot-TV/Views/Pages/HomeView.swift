@@ -2,21 +2,24 @@ import SwiftUI
 
 @MainActor
 struct HomeView: View {
+  private let isSelected: Bool
   @StateObject private var viewModel: HomeViewModel
   @ObservedObject private var apiService = APIService.shared
+  @Environment(\.scenePhase) private var scenePhase
 
   // Sheet 状态
   @State private var selectedSubscribe: Subscribe?
 
   // 导航状态
-  @State private var path = NavigationPath()
+  @StateObject private var navigationCoordinator = ImageNavigationCoordinator()
 
-  init(viewModel: HomeViewModel? = nil) {
+  init(isSelected: Bool = true, viewModel: HomeViewModel? = nil) {
+    self.isSelected = isSelected
     _viewModel = StateObject(wrappedValue: viewModel ?? HomeViewModel())
   }
 
   var body: some View {
-    NavigationStack(path: $path) {
+    NavigationStack(path: $navigationCoordinator.path) {
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 30) {
           if viewModel.isLoading {
@@ -44,9 +47,8 @@ struct HomeView: View {
                 servers: viewModel.latestMediaServers,
                 selectedServer: $viewModel.selectedLatestMediaServer,
                 isFirstRow: true,
-                viewModel: viewModel,
-                onTMDBDetail: { mediaInfo in path.append(mediaInfo) },
-                onSearchResource: { request in path.append(request) }
+                loadsPageImages: true,
+                viewModel: viewModel
               )
             }
 
@@ -56,6 +58,7 @@ struct HomeView: View {
                 title: "电影订阅",
                 items: viewModel.movieSubscriptions,
                 isFirstRow: viewModel.latestMediaServers.isEmpty,
+                loadsPageImages: true,
                 viewModel: viewModel,
                 onEdit: presentEditSheet,
                 onViewDetail: navigateToDetail
@@ -69,6 +72,7 @@ struct HomeView: View {
                 items: viewModel.tvSubscriptions,
                 isFirstRow: viewModel.latestMediaServers.isEmpty
                   && viewModel.movieSubscriptions.isEmpty,
+                loadsPageImages: true,
                 viewModel: viewModel,
                 onEdit: presentEditSheet,
                 onViewDetail: navigateToDetail
@@ -114,33 +118,20 @@ struct HomeView: View {
         SubscribeSheet(subscribe: subscribe)
       }
       // 导航目的地
-      .navigationDestination(for: MediaInfo.self) { mediaInfo in
-        if let collectionId = mediaInfo.collection_id {
-          CollectionDetailView(
-            title: mediaInfo.title ?? "合集详情",
-            collectionId: collectionId,
-            navigationPath: $path
-          )
-        } else {
-          MediaDetailContainerView(media: mediaInfo, navigationPath: $path)
-        }
+      .navigationDestination(for: ImageNavigationEntry.self) { entry in
+        ImageNavigationDestination(entry: entry)
       }
-      .navigationDestination(for: Person.self) { person in
-        PersonDetailView(
-          person: person,
-          navigationPath: $path
-        )
-      }
-      .navigationDestination(for: ResourceSearchRequest.self) { request in
-        ResourceResultView(request: request)
-      }
-      .navigationDestination(for: SubscribeSeasonRequest.self) { request in
-        SubscribeSeasonView(
-          mediaInfo: request.mediaInfo,
-          initialSeason: request.initialSeason,
-          initialEpisodeGroup: request.initialEpisodeGroup
-        )
-      }
+    }
+    .environment(\.pageImageLifecycle, navigationCoordinator.rootLifecycle)
+    .environmentObject(navigationCoordinator)
+    .onAppear {
+      updateStackForeground()
+    }
+    .onChange(of: isSelected) { _, _ in
+      updateStackForeground()
+    }
+    .onChange(of: scenePhase) { _, _ in
+      updateStackForeground()
     }
   }
 
@@ -151,7 +142,11 @@ struct HomeView: View {
   }
 
   private func navigateToDetail(for subscribe: Subscribe) {
-    path.append(subscribe.navigationMediaInfo())
+    navigationCoordinator.push(subscribe.navigationMediaInfo())
+  }
+
+  private func updateStackForeground() {
+    navigationCoordinator.setStackPresentation(isSelected: isSelected, scenePhase: scenePhase)
   }
 }
 
@@ -169,16 +164,17 @@ private struct MediaSectionView: View {
   let servers: [String]
   @Binding var selectedServer: String
   var isFirstRow: Bool = false
+  let loadsPageImages: Bool
   @ObservedObject var viewModel: HomeViewModel
-  var onTMDBDetail: ((MediaInfo) -> Void)? = nil
-  var onSearchResource: ((ResourceSearchRequest) -> Void)? = nil
 
   @Environment(\.openURL) private var openURL
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
   @EnvironmentObject private var notificationManager: NotificationManager
+  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
   @FocusState private var focusedItemId: String?
   @FocusState private var isTopRedirectorFocused: Bool
   @State private var hasRedirectedFocus: Bool = false
+  @State private var imageAnchorId: String?
 
   private var canSearchResources: Bool {
     APIService.shared.canAccess(.search)
@@ -230,7 +226,9 @@ private struct MediaSectionView: View {
       } else {
         ScrollView(.horizontal, showsIndicators: false) {
           LazyHStack(spacing: 40) {
-            ForEach(items) { item in
+            ForEach(Array(items.enumerated()), id: \.element.id) { entry in
+              let index = entry.offset
+              let item = entry.element
               MediaCard(
                 title: item.title,
                 posterUrl: item.imageURLs.image,
@@ -239,6 +237,15 @@ private struct MediaSectionView: View {
                 bottomLeftText: nil,
                 bottomLeftSecondaryText: nil,
                 source: nil,
+                loadsImage: loadsPageImages
+                  && ImageLoadWindow.containsHorizontalItem(
+                    at: index,
+                    itemCount: items.count,
+                    anchorIndex: imageAnchorId.flatMap { id in
+                      items.firstIndex(where: { $0.id == id })
+                    },
+                    cardKind: .media
+                  ),
                 action: canOpenMediaLibrary(item)
                   ? { openMediaItem(item) }
                   : nil
@@ -254,11 +261,17 @@ private struct MediaSectionView: View {
                   }
                 }
                 Button {
+                  let navigationSource = navigationCoordinator.sourceToken()
+                  let loadingPosterURL = item.imageURLs.image
                   Task {
                     // 使用实际的标题、年份和类型进行识别
                     let info = MediaInfo(title: item.title, type: item.type, year: item.subtitle)
                     if let target = await mediaActionHandler.getTMDBJumpTarget(for: info) {
-                      onTMDBDetail?(target)
+                      navigationCoordinator.push(
+                        target,
+                        loadingPosterURL: loadingPosterURL,
+                        ifCurrent: navigationSource
+                      )
                     }
                   }
                 } label: {
@@ -266,6 +279,7 @@ private struct MediaSectionView: View {
                 }
                 if canSearchResources {
                   Button {
+                    let navigationSource = navigationCoordinator.sourceToken()
                     Task {
                       guard APIService.shared.canAccess(.search) else { return }
                       let sessionSnapshot = APIService.shared.sessionSnapshot()
@@ -275,7 +289,7 @@ private struct MediaSectionView: View {
                           await mediaActionHandler.searchResourcesTargetUsingDefaultSites(
                             for: target)
                         {
-                          onSearchResource?(request)
+                          navigationCoordinator.push(request, ifCurrent: navigationSource)
                         }
                       } else {
                         guard APIService.shared.isSessionUnchanged(from: sessionSnapshot) else {
@@ -288,7 +302,7 @@ private struct MediaSectionView: View {
                         let request = ResourceSearchRequest(
                           keyword: item.title, type: item.type, area: nil, title: nil, year: nil,
                           season: nil, mediaInfo: nil, sites: sites)
-                        onSearchResource?(request)
+                        navigationCoordinator.push(request, ifCurrent: navigationSource)
                       }
                     }
                   } label: {
@@ -300,6 +314,10 @@ private struct MediaSectionView: View {
           }
           .padding(.top, 25)
           .padding(.bottom, 30)
+          .onChange(of: focusedItemId) { _, newId in
+            guard let newId else { return }
+            imageAnchorId = newId
+          }
         }
         .scrollClipDisabled()
         .focusSection()
@@ -322,6 +340,7 @@ private struct SubscribeSectionView: View {
   let title: String
   let items: [Subscribe]
   var isFirstRow: Bool = false
+  let loadsPageImages: Bool
   @ObservedObject var viewModel: HomeViewModel
   let onEdit: (Subscribe) -> Void
   let onViewDetail: (Subscribe) -> Void
@@ -329,6 +348,7 @@ private struct SubscribeSectionView: View {
   @FocusState private var focusedItemId: String?
   @FocusState private var isTopRedirectorFocused: Bool
   @State private var hasRedirectedFocus: Bool = false
+  @State private var imageAnchorId: String?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -355,9 +375,20 @@ private struct SubscribeSectionView: View {
 
       ScrollView(.horizontal, showsIndicators: false) {
         LazyHStack(spacing: 40) {
-          ForEach(items) { item in
+          ForEach(Array(items.enumerated()), id: \.element.id) { entry in
+            let index = entry.offset
+            let item = entry.element
             SubscribeItemView(
               item: item,
+              loadsImage: loadsPageImages
+                && ImageLoadWindow.containsHorizontalItem(
+                  at: index,
+                  itemCount: items.count,
+                  anchorIndex: imageAnchorId.flatMap { id in
+                    items.firstIndex(where: { HomeSubscribeFocusID.value(for: $0.id) == id })
+                  },
+                  cardKind: .media
+                ),
               viewModel: viewModel,
               onEdit: { onEdit(item) },
               onViewDetail: { onViewDetail(item) }
@@ -367,6 +398,10 @@ private struct SubscribeSectionView: View {
         }
         .padding(.top, 25)
         .padding(.bottom, 30)
+        .onChange(of: focusedItemId) { _, newId in
+          guard let newId else { return }
+          imageAnchorId = newId
+        }
       }
       .scrollClipDisabled()
       .focusSection()
@@ -376,6 +411,7 @@ private struct SubscribeSectionView: View {
 
 private struct SubscribeItemView: View {
   let item: Subscribe
+  let loadsImage: Bool
   @ObservedObject var viewModel: HomeViewModel
   let onEdit: () -> Void
   let onViewDetail: () -> Void
@@ -391,6 +427,7 @@ private struct SubscribeItemView: View {
       bottomLeftText: formatProgress(total: item.total_episode, lack: item.lack_episode),
       bottomLeftSecondaryText: item.last_update?.toRelativeDateString() ?? nil,
       source: nil,
+      loadsImage: loadsImage,
       action: {
         onEdit()
       }

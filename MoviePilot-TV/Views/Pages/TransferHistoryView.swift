@@ -1,8 +1,11 @@
 import SwiftUI
 
 struct TransferHistoryView: View {
+  static let initialMountedRowCount = 3
+
   @ObservedObject var viewModel: TransferHistoryViewModel
   private let isSelected: Bool
+  private let keepsRowsMounted: Bool
   @EnvironmentObject private var notificationManager: NotificationManager
   @State private var deleteIntent: TransferHistoryItemMutationIntent? = nil
   @State private var reorganizeIntent: TransferHistoryItemMutationIntent? = nil
@@ -12,11 +15,18 @@ struct TransferHistoryView: View {
   @State private var batchDeleteIntent: TransferHistoryBatchMutationIntent? = nil
   @State private var batchReorganizeIntent: TransferHistoryBatchMutationIntent? = nil
   @State private var localSearchText: String = ""
+  @State private var hasActivatedHistoryRows = false
   @FocusState private var focusedHistoryId: Int?
+  @FocusState private var isSearchFieldFocused: Bool
 
-  init(viewModel: TransferHistoryViewModel, isSelected: Bool = true) {
+  init(
+    viewModel: TransferHistoryViewModel,
+    isSelected: Bool = true,
+    keepsRowsMounted: Bool? = nil
+  ) {
     self.viewModel = viewModel
     self.isSelected = isSelected
+    self.keepsRowsMounted = keepsRowsMounted ?? isSelected
   }
 
   var body: some View {
@@ -41,6 +51,11 @@ struct TransferHistoryView: View {
           // 新增的搜索框和按钮
           TextField("搜索整理记录", text: $localSearchText)
             .frame(width: 400)
+            .focused($isSearchFieldFocused)
+            .onChange(of: isSearchFieldFocused) { _, isFocused in
+              guard isFocused else { return }
+              activateHistoryRows()
+            }
             .onSubmit {
               // 当用户提交输入时 (例如，移开焦点)，调用搜索方法
               viewModel.search(with: localSearchText)
@@ -50,14 +65,16 @@ struct TransferHistoryView: View {
       .focusSection()
 
       // 加载中：正在首次加载
-      if viewModel.isFirstLoading {
+      if !keepsRowsMounted {
+        EmptyView()
+      } else if viewModel.isFirstLoading {
         ProgressView().frame(maxWidth: .infinity, alignment: .center).padding()
       } else if viewModel.items.isEmpty {
         EmptyDataView(title: "没有数据")
       } else {
         // 使用 LazyVStack 提高性能
         LazyVStack {
-          ForEach(viewModel.items) { item in
+          ForEach(viewModel.items.prefix(mountedRowCount)) { item in
             ActionRow(
               actions: actionDescriptors(for: item),
               onTap: {
@@ -99,10 +116,10 @@ struct TransferHistoryView: View {
         .padding(.top, 25)
         .padding(.bottom, 30)
         .onChange(of: focusedHistoryId) { _, newId in
-          if let newId = newId {
-            Task {
-              await viewModel.loadMore(currentItemId: newId)
-            }
+          guard isSelected, let newId else { return }
+          activateHistoryRows()
+          Task {
+            await viewModel.loadMore(currentItemId: newId)
           }
         }
       }
@@ -115,6 +132,15 @@ struct TransferHistoryView: View {
         refresh: { await viewModel.refresh() },
         fetchLatest: { await viewModel.fetchLatest() }
       )
+    }
+    .onChange(of: isSelected) { _, isSelected in
+      guard !isSelected else { return }
+      focusedHistoryId = nil
+      isSearchFieldFocused = false
+    }
+    .onChange(of: keepsRowsMounted) { _, keepsRowsMounted in
+      guard !keepsRowsMounted else { return }
+      hasActivatedHistoryRows = false
     }
     .onChange(of: viewModel.errorMessage) { _, newValue in
       if let message = newValue {
@@ -286,6 +312,17 @@ struct TransferHistoryView: View {
   static let autoRefreshIntervalNanoseconds: UInt64 = 10 * 1_000_000_000
   static let mutationRefreshRetryNanoseconds: UInt64 = 100_000_000
 
+  static func mountedRowCount(totalCount: Int, hasActivatedHistoryRows: Bool) -> Int {
+    let validTotalCount = max(0, totalCount)
+    return hasActivatedHistoryRows
+      ? validTotalCount
+      : min(initialMountedRowCount, validTotalCount)
+  }
+
+  static func shouldMountRows(isSelected: Bool, isStackForeground: Bool) -> Bool {
+    isSelected || isStackForeground
+  }
+
   static func runAutoRefresh(
     isSelected: Bool,
     cancelRefresh: () -> Void = {},
@@ -325,6 +362,18 @@ struct TransferHistoryView: View {
       focusedHistoryId = id
       historyIdToRestoreFocus = nil
     }
+  }
+
+  private var mountedRowCount: Int {
+    Self.mountedRowCount(
+      totalCount: viewModel.items.count,
+      hasActivatedHistoryRows: hasActivatedHistoryRows
+    )
+  }
+
+  private func activateHistoryRows() {
+    guard isSelected else { return }
+    hasActivatedHistoryRows = true
   }
 
   private func actionDescriptors(for item: TransferHistory) -> [ActionDescriptor] {

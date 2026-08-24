@@ -5,12 +5,14 @@ struct ResourceResultView: View {
   @Environment(\.dismiss) private var dismiss
   @ObservedObject private var apiService = APIService.shared
   @StateObject private var viewModel: ResourceResultViewModel
+  @ObservedObject var imageLifecycle: PageImageLifecycle
   let title: String
   let mediaInfo: MediaInfo?
 
-  init(request: ResourceSearchRequest) {
+  init(request: ResourceSearchRequest, imageLifecycle: PageImageLifecycle) {
     self.title = request.title ?? "资源搜索"
     self.mediaInfo = request.mediaInfo
+    self.imageLifecycle = imageLifecycle
     _viewModel = StateObject(
       wrappedValue: ResourceResultViewModel(
         keyword: request.keyword,
@@ -56,21 +58,21 @@ struct ResourceResultView: View {
       }
     }
     .background {
-      if let mediaInfo = mediaInfo, let url = mediaInfo.imageURLs.backdrop {
-        KFImage.sessionImage(url)
-          .placeholder {
-            EmptyView()
-          }
-          .setProcessor(BlurImageProcessor(blurRadius: 60))
-          .resizing(
+      PageManagedImage(
+        url: mediaInfo?.imageURLs.backdrop,
+        processor: BlurImageProcessor(blurRadius: 60)
+          |> ResizingImageProcessor(
             referenceSize: UIScreen.main.bounds.size,
             mode: .aspectFill
-          )
-          .resizable()
-          .aspectRatio(contentMode: .fill)
-          .opacity(0.3)
-          .ignoresSafeArea()
-      }
+          ),
+        isEnabled: true,
+        role: .activePage,
+        participatesInPageLifecycle: true,
+        skipsMemoryCache: true,
+        fadeDuration: 0
+      )
+      .opacity(0.3)
+      .ignoresSafeArea()
     }
     .task {
       await viewModel.search()

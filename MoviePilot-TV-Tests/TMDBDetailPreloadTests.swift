@@ -27,7 +27,7 @@ final class TMDBDetailPreloadTests: XCTestCase {
   }
 
   @MainActor
-  func testTMDBJumpTargetKeepsImagesOutOfPartialObjectAndPassesPosterToTransition() async {
+  func testTMDBJumpTargetKeepsImagesOutOfPartialObjectAndEntryCarriesPoster() async throws {
     let source = MediaInfo(
       douban_id: "1295644",
       title: "这个杀手不太冷",
@@ -36,15 +36,17 @@ final class TMDBDetailPreloadTests: XCTestCase {
       backdrop_path: "https://example.com/douban-backdrop.jpg"
     )
 
-    MediaCardTransition.loadingPosterURL = nil
-    defer { MediaCardTransition.loadingPosterURL = nil }
-
     let target = await MediaActionHandler().getTMDBJumpTarget(for: source, targetTmdbId: 101)
+    let resolvedTarget = try XCTUnwrap(target)
+    let entry = ImageNavigationEntry(
+      route: .media(resolvedTarget),
+      loadingPosterURL: source.imageURLs.poster
+    )
 
-    XCTAssertEqual(target?.tmdb_id, 101)
-    XCTAssertNil(target?.poster_path)
-    XCTAssertNil(target?.backdrop_path)
-    XCTAssertEqual(MediaCardTransition.loadingPosterURL, source.imageURLs.poster)
+    XCTAssertEqual(resolvedTarget.tmdb_id, 101)
+    XCTAssertNil(resolvedTarget.poster_path)
+    XCTAssertNil(resolvedTarget.backdrop_path)
+    XCTAssertEqual(entry.loadingPosterURL, source.imageURLs.poster)
   }
 
   @MainActor

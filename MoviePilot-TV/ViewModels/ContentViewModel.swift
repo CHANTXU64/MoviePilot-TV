@@ -152,8 +152,9 @@ class ContentViewModel: ObservableObject {
     } catch is CancellationError {
       return
     } catch {
+      let sessionIsCurrent = currentBackendVersionCheckKey() == checkKey
       guard checkBackendVersion, backendVersionCheckKey != checkKey else { return }
-      guard currentBackendVersionCheckKey() == checkKey else { return }
+      guard sessionIsCurrent else { return }
       backendVersionWarning = BackendVersionWarning(
         backendVersion: nil,
         requiredVersion: AppVersionInfo.compatibleMoviePilotVersion
@@ -210,9 +211,15 @@ class ContentViewModel: ObservableObject {
   }
 
   private func currentBackendVersionCheckKey() -> BackendVersionCheckKey {
+    backendVersionCheckKey(for: apiService.session)
+  }
+
+  private func backendVersionCheckKey(
+    for session: APIServiceSessionState
+  ) -> BackendVersionCheckKey {
     BackendVersionCheckKey(
-      baseURL: apiService.baseURL,
-      token: apiService.token,
+      baseURL: session.baseURL,
+      token: session.token,
       appVersion: AppVersionInfo.currentAppVersion()
     )
   }

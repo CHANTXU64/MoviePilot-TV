@@ -644,7 +644,7 @@ class SearchViewModel: ObservableObject {
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
-      imageURLsProvider: { item in
+      imageWarmURLsProvider: { item in
         [item.imageURLs.poster].compactMap(\.self)
       },
       onReset: { @MainActor in movieSeenKeys.removeAll() }
@@ -663,7 +663,7 @@ class SearchViewModel: ObservableObject {
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
-      imageURLsProvider: { @MainActor item in
+      imageWarmURLsProvider: { @MainActor item in
         [item.imageURLs.poster].compactMap { $0 }
       },
       onReset: { @MainActor in tvSeenKeys.removeAll() }
@@ -691,7 +691,7 @@ class SearchViewModel: ObservableObject {
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
-      imageURLsProvider: { @MainActor item in
+      imageWarmURLsProvider: { @MainActor item in
         [item.imageURLs.poster].compactMap { $0 }
       },
       onReset: { @MainActor in
@@ -721,7 +721,7 @@ class SearchViewModel: ObservableObject {
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
-      imageURLsProvider: { item in
+      imageWarmURLsProvider: { item in
         [item.imageURLs.profile].compactMap(\.self)
       },
       onReset: { @MainActor in personSeenIDs.removeAll() }
@@ -745,7 +745,7 @@ class SearchViewModel: ObservableObject {
           currentItems.append(contentsOf: uniqueNewItems)
           return true
         },
-        imageURLsProvider: { item in
+        imageWarmURLsProvider: { item in
           [item.imageURLs.poster].compactMap(\.self)
         },
         onReset: { @MainActor in

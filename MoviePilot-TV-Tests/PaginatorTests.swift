@@ -99,6 +99,56 @@ private func withTimeout<T: Sendable>(
 }
 
 final class PaginatorTests: XCTestCase {
+
+  @MainActor
+  func testListIDStaysStableButContentGenerationAdvancesAcrossRefresh() async {
+    let first = Paginator<TestItem>(
+      threshold: 1,
+      fetcher: { _ in [] },
+      processor: { _, _ in false }
+    )
+    let second = Paginator<TestItem>(
+      threshold: 1,
+      fetcher: { _ in [] },
+      processor: { _, _ in false }
+    )
+    let firstListIdentity = first.listIdentity
+    let firstListID = first.listID
+
+    await first.refresh()
+
+    XCTAssertEqual(first.listID, firstListID)
+    XCTAssertNotEqual(first.listIdentity, firstListIdentity)
+    XCTAssertGreaterThan(first.listIdentity.generation, firstListIdentity.generation)
+    XCTAssertNotEqual(first.listIdentity, second.listIdentity)
+  }
+
+  @MainActor
+  func testFocusOnlyOffersForwardBatchToServerWarmer() async throws {
+    var offeredItemIDs: [Int] = []
+    let paginator = Paginator<TestItem>(
+      threshold: 1,
+      fetcher: { page in
+        page == 1 ? (1...5).map(TestItem.init(id:)) : []
+      },
+      processor: { items, newItems in
+        items.append(contentsOf: newItems)
+        return !newItems.isEmpty
+      },
+      imageWarmURLsProvider: { item in
+        offeredItemIDs.append(item.id)
+        return [URL(string: "https://example.com/\(item.id).jpg")!]
+      },
+      imageWarmThreshold: 2
+    )
+
+    await paginator.refresh()
+    await paginator.loadMore(1)
+    await paginator.loadMore(2)
+    await paginator.loadMore(1)
+
+    XCTAssertEqual(offeredItemIDs, [2, 3, 4, 5])
+  }
   
   // MARK: - 生命周期与任务取消测试
 

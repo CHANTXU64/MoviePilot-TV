@@ -1,6 +1,11 @@
 import Foundation
 import Kingfisher
 
+enum TransientDecodedImage {
+  /// 全屏或过渡大图只在当前视图解码，不写入 Kingfisher 内存表。
+  static let skipMemoryCache: KingfisherOptionsInfoItem = .memoryCacheExpiration(.expired)
+}
+
 @MainActor
 extension KFImage {
   /// 公共图片继续共享 Kingfisher 默认缓存；后端受保护图片绑定当前会话的 downloader、Cookie 与 cache key。
@@ -15,5 +20,13 @@ extension KFImage {
       image = image.requestModifier(modifier)
     }
     return image
+  }
+
+  func skippingMemoryCache() -> Self {
+    memoryCacheExpiration(.expired)
+  }
+
+  func skippingMemoryCache(_ enabled: Bool) -> Self {
+    enabled ? memoryCacheExpiration(.expired) : self
   }
 }

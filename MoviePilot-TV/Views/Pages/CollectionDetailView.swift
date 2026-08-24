@@ -3,22 +3,24 @@ import SwiftUI
 struct CollectionDetailView: View {
   let title: String
   let collectionId: Int
-  @Binding var navigationPath: NavigationPath
+  @ObservedObject var imageLifecycle: PageImageLifecycle
 
   @StateObject private var viewModel: CollectionDetailViewModel
   @StateObject private var subscriptionHandler = SubscriptionHandler()
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
 
-  init(title: String, collectionId: Int, navigationPath: Binding<NavigationPath>) {
+  init(title: String, collectionId: Int, imageLifecycle: PageImageLifecycle) {
     self.title = title
     self.collectionId = collectionId
-    self._navigationPath = navigationPath
+    self.imageLifecycle = imageLifecycle
     self._viewModel = StateObject(
       wrappedValue: CollectionDetailViewModel(collectionId: collectionId, title: title))
   }
 
   var body: some View {
     MediaGridView(
+      imageLifecycle: imageLifecycle,
+      listIdentity: viewModel.paginator.listIdentity,
       items: viewModel.paginator.items,
       isLoading: viewModel.paginator.isFirstLoading,
       isLoadingMore: viewModel.paginator.isLoadingMore,
@@ -27,7 +29,6 @@ struct CollectionDetailView: View {
           await viewModel.paginator.loadMore(currentItem)
         }
       },
-      navigationPath: $navigationPath,
       header: {
         Text(title)
           .font(.largeTitle.bold())
@@ -36,12 +37,11 @@ struct CollectionDetailView: View {
       contextMenu: { item in
         MediaContextMenuItems(
           item: item,
-          navigationPath: $navigationPath,
           subscriptionHandler: subscriptionHandler
         )
       }
     )
-    .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $navigationPath)
+    .mediaSubscriptionAlerts(using: subscriptionHandler)
     .task {
       await viewModel.loadInitialData()
     }

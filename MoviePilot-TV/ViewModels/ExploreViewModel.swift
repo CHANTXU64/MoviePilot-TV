@@ -1191,7 +1191,7 @@ class ExploreViewModel: ObservableObject {
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
-      imageURLsProvider: { item in
+      imageWarmURLsProvider: { item in
         [item.imageURLs.poster].compactMap(\.self)
       },
       onReset: { @MainActor in

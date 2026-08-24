@@ -3,8 +3,9 @@ import SwiftUI
 struct RecommendView: View {
   private let isSelected: Bool
   @StateObject private var viewModel = RecommendViewModel()
-  @State private var path = NavigationPath()
+  @StateObject private var navigationCoordinator = ImageNavigationCoordinator()
   @StateObject private var subscriptionHandler = SubscriptionHandler()
+  @Environment(\.scenePhase) private var scenePhase
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
 
   init(isSelected: Bool) {
@@ -12,11 +13,13 @@ struct RecommendView: View {
   }
 
   var body: some View {
-    NavigationStack(path: $path) {
+    NavigationStack(path: $navigationCoordinator.path) {
       Group {
         if let paginator = viewModel.paginator {
           // 主内容槽（网格布局）
           MediaGridView(
+            imageLifecycle: navigationCoordinator.rootLifecycle,
+            listIdentity: paginator.listIdentity,
             items: paginator.items,
             isLoading: paginator.isFirstLoading,
             isLoadingMore: paginator.isLoadingMore,
@@ -25,7 +28,6 @@ struct RecommendView: View {
                 await paginator.loadMore(newId)
               }
             },
-            navigationPath: $path,
             header: {
               VStack(spacing: 20) {
                 // 分类选择器 - 使用 Picker，带 Icon
@@ -47,7 +49,6 @@ struct RecommendView: View {
             contextMenu: { item in
               MediaContextMenuItems(
                 item: item,
-                navigationPath: $path,
                 subscriptionHandler: subscriptionHandler
               )
             }
@@ -74,39 +75,27 @@ struct RecommendView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
       }
-      .navigationDestination(for: MediaInfo.self) { media in
-        if let collectionId = media.collection_id {
-          CollectionDetailView(
-            title: media.title ?? "合集详情",
-            collectionId: collectionId,
-            navigationPath: $path
-          )
-        } else {
-          MediaDetailContainerView(media: media, navigationPath: $path)
-        }
-      }
-      .navigationDestination(for: Person.self) { person in
-        PersonDetailView(person: person, navigationPath: $path)
-      }
-      .navigationDestination(for: ResourceSearchRequest.self) { request in
-        ResourceResultView(request: request)
-      }
-      .navigationDestination(for: SubscribeSeasonRequest.self) { request in
-        SubscribeSeasonView(
-          mediaInfo: request.mediaInfo,
-          initialSeason: request.initialSeason,
-          initialEpisodeGroup: request.initialEpisodeGroup
-        )
+      .navigationDestination(for: ImageNavigationEntry.self) { entry in
+        ImageNavigationDestination(entry: entry)
       }
     }
-    .mediaSubscriptionAlerts(using: subscriptionHandler, navigationPath: $path)
+    .environment(\.pageImageLifecycle, navigationCoordinator.rootLifecycle)
+    .environmentObject(navigationCoordinator)
+    .mediaSubscriptionAlerts(using: subscriptionHandler)
     .onAppear {
+      updateStackForeground()
       viewModel.reloadLocalConfig()
     }
+    .onChange(of: isSelected) { _, _ in updateStackForeground() }
+    .onChange(of: scenePhase) { _, _ in updateStackForeground() }
     .task(id: isSelected) {
       guard isSelected else { return }
       await viewModel.refreshSources()
     }
+  }
+
+  private func updateStackForeground() {
+    navigationCoordinator.setStackPresentation(isSelected: isSelected, scenePhase: scenePhase)
   }
 }
 

@@ -226,6 +226,13 @@ private struct BadgeOverlay: View, Equatable {
 }
 
 struct MediaCard: View {
+  static let defaultPosterSize = CGSize(width: 256, height: 384)
+
+  static func posterProcessor(for downsamplingSize: CGSize) -> any ImageProcessor {
+    DownsamplingImageProcessor(size: downsamplingSize)
+      |> ResizingImageProcessor(referenceSize: defaultPosterSize, mode: .aspectFill)
+  }
+
   static let defaultGridColumns = Array(
     repeating: GridItem(.fixed(256), spacing: 44, alignment: .top),
     count: 6
@@ -244,13 +251,14 @@ struct MediaCard: View {
   let source: MediaSource?  // 右下角：数据源图标
 
   var showBadges: Bool = true
+  var loadsImage: Bool = true
 
   @FocusState private var isFocused: Bool
   /// 降尺寸海报加载失败后切换到原始 URL 重试。
   @State private var posterLoadFailed = false
 
-  var width: CGFloat = 256
-  var height: CGFloat = 384
+  var width: CGFloat = defaultPosterSize.width
+  var height: CGFloat = defaultPosterSize.height
 
   /// 在主标题下方显示的可选副标题。
   var subTitleBelow: String? = nil
@@ -282,8 +290,9 @@ struct MediaCard: View {
     bottomLeftSecondaryText: String? = nil,
     source: MediaSource? = nil,
     showBadges: Bool = true,
-    width: CGFloat = 256,
-    height: CGFloat = 384,
+    loadsImage: Bool = true,
+    width: CGFloat = defaultPosterSize.width,
+    height: CGFloat = defaultPosterSize.height,
     subTitleBelow: String? = nil,
     isBackgroundBlurred: Bool = false,
     footerLabel: (icon: String, text: String)? = nil,
@@ -299,6 +308,7 @@ struct MediaCard: View {
     self.bottomLeftSecondaryText = bottomLeftSecondaryText
     self.source = source
     self.showBadges = showBadges
+    self.loadsImage = loadsImage
     self.width = width
     self.height = height
     self.subTitleBelow = subTitleBelow
@@ -308,17 +318,11 @@ struct MediaCard: View {
     self.onFocus = onFocus
   }
 
-  /// 海报在屏幕上的布局 frame（用于过渡动画）。
-  /// 通过 UIViewRepresentable 持有底层 UIView 弱引用，tap 时才读取实时 frame，
-  /// 避免滚动期间 GeometryReader + onChange 的高频 CGRect diff 导致 CPU 飙升。
-  @State private var posterFrameBox = PosterFrameBox()
-
   var body: some View {
     VStack(spacing: 10) {
       // 海报图片
       posterContent
         .frame(width: width, height: height)
-        .background(FrameAnchorView(box: posterFrameBox))
         .clipShape(RoundedRectangle(cornerRadius: 20))
         .shadow(
           color: .black.opacity(isFocused ? 0.5 : 0),
@@ -330,17 +334,6 @@ struct MediaCard: View {
         .focusable(true)
         .focused($isFocused)
         .onTapGesture {
-          // 记录点击时卡片的视觉 frame（含焦点缩放），供详情页加载动画使用
-          let posterFrame = posterFrameBox.frame
-          let scale: CGFloat = isFocused ? 1.1 : 1.0
-          let scaledW = posterFrame.width * scale
-          let scaledH = posterFrame.height * scale
-          MediaCardTransition.sourceFrame = CGRect(
-            x: posterFrame.midX - scaledW / 2,
-            y: posterFrame.midY - scaledH / 2,
-            width: scaledW,
-            height: scaledH
-          )
           action?()
         }
 
@@ -391,88 +384,65 @@ struct MediaCard: View {
   }
 
   // 提取的海报内容 - Apple TV 风格设计
+  @ViewBuilder
   private var posterContent: some View {
     let resolvedTypeIcon = Self.typeIconMap[typeText ?? ""] ?? "film"
-    return KFImage.sessionImage(posterLoadFailed ? posterFallbackUrl : posterUrl)
-      .onFailure { _ in
-        // 降尺寸海报加载失败（如第三方 URL 被改写）时，回退到原始 URL 重试一次。
-        posterLoadFailed = true
-      }
-      .placeholder {
-        Rectangle()
-          .fill(Color(white: 0.12))
-          .overlay(
-            Image(systemName: resolvedTypeIcon)
-              .font(.title2)
-              .foregroundStyle(.gray)
-          )
-      }
-      .downsampling(size: CGSize(width: width, height: height))
-      .resizing(referenceSize: CGSize(width: 256, height: 384), mode: .aspectFill)
-      .resizable()
-      .fade(duration: 0.25)
-      .aspectRatio(contentMode: .fill)
-      .frame(width: width, height: height)
-      .overlay {
-        if showBadges {
-          // 覆盖徽章 - 纯色浅黑风格
-          BadgeOverlay(
-            typeText: typeText,
-            ratingText: ratingText,
-            bottomLeftText: bottomLeftText,
-            bottomLeftSecondaryText: bottomLeftSecondaryText,
-            source: source
-          )
-          .equatable()
+    ZStack {
+      Rectangle()
+        .fill(Color(white: 0.12))
+        .overlay(
+          Image(systemName: resolvedTypeIcon)
+            .font(.title2)
+            .foregroundStyle(.gray)
+        )
+
+      PageManagedImage(
+        url: posterLoadFailed ? posterFallbackUrl : posterUrl,
+        processor: Self.posterProcessor(for: CGSize(width: width, height: height)),
+        isEnabled: loadsImage,
+        participatesInPageLifecycle: true,
+        skipsMemoryCache: true,
+        onFailure: {
+          // 降尺寸海报加载失败（如第三方 URL 被改写）时，回退到原始 URL 重试一次。
+          posterLoadFailed = true
         }
+      )
+    }
+    .frame(width: width, height: height)
+    .onChange(of: posterUrl) { _, _ in
+      posterLoadFailed = false
+    }
+    .overlay {
+      if showBadges {
+        // 覆盖徽章 - 纯色浅黑风格
+        BadgeOverlay(
+          typeText: typeText,
+          ratingText: ratingText,
+          bottomLeftText: bottomLeftText,
+          bottomLeftSecondaryText: bottomLeftSecondaryText,
+          source: source
+        )
+        .equatable()
       }
+    }
   }
 
-}
-
-/// 海报 frame 的引用盒子。通过 UIView 弱引用实时读取屏幕坐标，
-/// 不产生任何滚动期间的 SwiftUI 值追踪开销。
-private final class PosterFrameBox: @unchecked Sendable {
-  weak var anchorView: UIView?
-
-  /// 从 UIKit 读取实时屏幕 frame（tap/长按时调用）
-  var frame: CGRect {
-    guard let view = anchorView else { return .zero }
-    return view.convert(view.bounds, to: nil)
-  }
-}
-
-/// 零开销的 UIView 锚点，用于在需要时读取屏幕坐标。
-private struct FrameAnchorView: UIViewRepresentable {
-  typealias UIViewType = UIView
-  let box: PosterFrameBox
-
-  func makeUIView(context: UIViewRepresentableContext<FrameAnchorView>) -> UIView {
-    let view = UIView()
-    view.isUserInteractionEnabled = false
-    view.backgroundColor = .clear
-    box.anchorView = view
-    return view
-  }
-
-  func updateUIView(_ uiView: UIView, context: UIViewRepresentableContext<FrameAnchorView>) {
-    // anchorView 可能因 LazyVGrid 复用而变化，保持引用最新
-    box.anchorView = uiView
-  }
 }
 
 // MARK: - EquatableView 包装器（用于详情页推荐/类似横向列表）
 
 /// 将 MediaCard 包装在 Equatable 视图中，用于详情页的推荐/类似区域。
-/// 配合 `.equatable()` 修饰符，仅当 item.id、showBadges 或图片配置变化时才重新求值 body。
+/// 配合 `.equatable()` 修饰符，仅当 item.id、showBadges、图片窗口或图片配置变化时才重新求值 body。
 struct DetailCardView: View, Equatable {
   let item: MediaInfo
   let showBadges: Bool
+  let loadsImage: Bool
   let imageConfigurationIdentity: String
   let onTap: () -> Void
 
   static func == (lhs: DetailCardView, rhs: DetailCardView) -> Bool {
     lhs.item.id == rhs.item.id && lhs.showBadges == rhs.showBadges
+      && lhs.loadsImage == rhs.loadsImage
       && lhs.imageConfigurationIdentity == rhs.imageConfigurationIdentity
   }
 
@@ -487,20 +457,8 @@ struct DetailCardView: View, Equatable {
       bottomLeftSecondaryText: nil,
       source: MediaSource.from(mediaInfo: item),
       showBadges: showBadges,
+      loadsImage: loadsImage,
       action: onTap
     )
   }
-}
-
-// MARK: - 卡片过渡动画状态（详情页加载动画的数据源）
-
-/// 存储最后一次点击的 MediaCard 海报在屏幕上的 frame，
-/// 供 MediaDetailContainerView 的加载动画作为起始位置使用。
-/// 同时保存本次 TMDB 跳转加载动画需要复用的源海报 URL。
-@MainActor
-enum MediaCardTransition {
-  /// 最后一次点击的卡片海报在屏幕坐标系中的 frame（已包含焦点缩放）
-  static var sourceFrame: CGRect = .zero
-  /// 仅供本次详情页加载动画使用的源海报
-  static var loadingPosterURL: URL?
 }

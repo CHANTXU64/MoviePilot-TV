@@ -10,6 +10,8 @@ struct StatusView: View {
   private let isSelected: Bool
   @StateObject private var viewModel = StatusViewModel()
   @StateObject private var transferHistoryViewModel = TransferHistoryViewModel()
+  @StateObject private var imageLifecycleCoordinator = ImageNavigationCoordinator()
+  @Environment(\.scenePhase) private var scenePhase
 
   init(isSelected: Bool = true) {
     self.isSelected = isSelected
@@ -47,18 +49,26 @@ struct StatusView: View {
           Divider()
         }
 
-        DownloadTaskView()
+        DownloadTaskView(isSelected: isSelected)
           .padding(.vertical, 20)
 
         Divider()
 
         // --- 4. 媒体整理历史 ---
-        TransferHistoryView(viewModel: transferHistoryViewModel, isSelected: isSelected)
+        TransferHistoryView(
+          viewModel: transferHistoryViewModel,
+          isSelected: isSelected,
+          keepsRowsMounted: TransferHistoryView.shouldMountRows(
+            isSelected: isSelected,
+            isStackForeground: imageLifecycleCoordinator.rootLifecycle.isStackForeground
+          )
+        )
           .padding(.vertical, 20)
 
       }
     }
-    .task {
+    .task(id: isSelected) {
+      guard isSelected else { return }
       /// 核心异步刷新逻辑：
       /// 1. 初始加载全部数据。
       /// 2. 进入 while 循环，每隔 3 秒调用一次后端接口刷新状态。
@@ -68,6 +78,17 @@ struct StatusView: View {
         try? await Task.sleep(nanoseconds: 3 * 1_000_000_000)  // 3秒刷新周期
       }
     }
+    .environment(\.pageImageLifecycle, imageLifecycleCoordinator.rootLifecycle)
+    .onAppear { updateImageLifecycle() }
+    .onChange(of: isSelected) { _, _ in updateImageLifecycle() }
+    .onChange(of: scenePhase) { _, _ in updateImageLifecycle() }
+  }
+
+  private func updateImageLifecycle() {
+    imageLifecycleCoordinator.setStackPresentation(
+      isSelected: isSelected,
+      scenePhase: scenePhase
+    )
   }
 }
 

@@ -16,10 +16,206 @@ final class DynamicSourceBehaviorTests: XCTestCase {
         "imageConfigurationIdentity: apiService.imageConfigurationIdentity"
       )
     )
+    XCTAssertTrue(gridSource.contains("lhs.itemIndex == rhs.itemIndex"))
+    XCTAssertTrue(gridSource.contains("lhs.itemCount == rhs.itemCount"))
+    XCTAssertTrue(gridSource.contains("lhs.listIdentity == rhs.listIdentity"))
+    XCTAssertTrue(gridSource.contains("GridImageDemandContext("))
+    XCTAssertFalse(gridSource.contains("loadsImage(at:"))
+    XCTAssertFalse(gridSource.contains("loadsImage: loadsImage"))
+    XCTAssertFalse(gridSource.contains("topRestorationRevision"))
+    XCTAssertFalse(
+      containsTrimmedLineSequence(
+        gridSource,
+        [
+          "domRetention.reconcile(itemIDs: items.map(\\.id))",
+          "domRetention.cardFocusChanged",
+        ]
+      )
+    )
+    let paginatorSource = try source("MoviePilot-TV/Services/Paginator.swift")
+    XCTAssertTrue(
+      paginatorSource.contains("@Published private(set) var listIdentity: GridListIdentity")
+    )
+    let recommendSource = try source("MoviePilot-TV/Views/Pages/RecommendView.swift")
+    let exploreSource = try source("MoviePilot-TV/Views/Pages/ExploreView.swift")
+    XCTAssertFalse(recommendSource.contains(".id(paginator.listID)"))
+    XCTAssertFalse(exploreSource.contains(".id(paginator.listID)"))
+    XCTAssertEqual(gridSource.components(separatedBy: ".id(listIdentity.id)").count - 1, 1)
+    XCTAssertTrue(
+      containsTrimmedLineSequence(
+        gridSource,
+        [
+          ".id(listIdentity.id)",
+          ".padding(.horizontal, -12)",
+        ]
+      )
+    )
     let preloaderSource = try source("MoviePilot-TV/ViewModels/MediaPreloader.swift")
     XCTAssertTrue(
       preloaderSource.contains("retrieveHeroImage(url, fallbackURL: target.fallbackURL)")
     )
+    let managedImageSource = try source("MoviePilot-TV/Views/Components/PageManagedImage.swift")
+    XCTAssertTrue(managedImageSource.contains("$0.listIdentity.generation"))
+  }
+
+  func testMemoryCleanupPagesUseTheIntendedLifecycleBoundaries() throws {
+    let statusSource = try source("MoviePilot-TV/Views/Pages/StatusView.swift")
+    let downloadSource = try source("MoviePilot-TV/Views/Pages/DownloadTaskView.swift")
+    let downloadViewModelSource = try source(
+      "MoviePilot-TV/ViewModels/DownloadTaskViewModel.swift"
+    )
+    let transferSource = try source("MoviePilot-TV/Views/Pages/TransferHistoryView.swift")
+    let seasonSource = try source("MoviePilot-TV/Views/Pages/SubscribeSeasonView.swift")
+    let manualSearchSource = try source("MoviePilot-TV/Views/Sheets/ManualMediaSearchSheet.swift")
+    let lifecycleSource = try source("MoviePilot-TV/Services/PageImageLifecycle.swift")
+    let retentionSource = try source(
+      "MoviePilot-TV/Services/PresentationTransitionRetention.swift"
+    )
+    let detailSource = try source("MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift")
+
+    XCTAssertTrue(statusSource.contains("DownloadTaskView(isSelected: isSelected)"))
+    XCTAssertTrue(statusSource.contains(".task(id: isSelected)"))
+    XCTAssertTrue(statusSource.contains("guard isSelected else { return }"))
+    XCTAssertTrue(
+      statusSource.contains(
+        ".environment(\\.pageImageLifecycle, imageLifecycleCoordinator.rootLifecycle)"
+      )
+    )
+    XCTAssertTrue(downloadSource.contains(".task(id: isSelected)"))
+    XCTAssertTrue(downloadSource.contains("guard isSelected else { return }"))
+    XCTAssertTrue(downloadSource.contains("viewModel.setPresentationActive(isSelected)"))
+    XCTAssertTrue(downloadViewModelSource.contains("private var presentationGeneration = 0"))
+    XCTAssertTrue(downloadViewModelSource.contains("currentPresentationGeneration"))
+    XCTAssertTrue(downloadViewModelSource.contains("!Task.isCancelled"))
+    XCTAssertTrue(downloadSource.contains("PageManagedImage("))
+    XCTAssertFalse(downloadSource.contains("KFImage.sessionImage("))
+
+    XCTAssertTrue(
+      containsTokensInOrder(
+        transferSource,
+        [
+          "if !keepsRowsMounted {",
+          "EmptyView()",
+          "} else if viewModel.isFirstLoading {",
+        ]
+      )
+    )
+    XCTAssertTrue(statusSource.contains("TransferHistoryView.shouldMountRows("))
+    XCTAssertTrue(transferSource.contains(".onChange(of: keepsRowsMounted)"))
+
+    XCTAssertTrue(seasonSource.contains("@State private var gridListIdentity"))
+    XCTAssertFalse(seasonSource.contains("private let gridListIdentity"))
+    XCTAssertTrue(seasonSource.contains("GridImageDemandContext("))
+    XCTAssertTrue(seasonSource.contains("seasonInfos.prefix(retainedItemCount)"))
+    XCTAssertTrue(seasonSource.contains("let displayCount = min(10, viewModel.seasonInfos.count)"))
+
+    XCTAssertTrue(manualSearchSource.contains("searchTask?.cancel()"))
+    XCTAssertTrue(manualSearchSource.contains("viewModel.presentationDidDisappear()"))
+    XCTAssertTrue(manualSearchSource.contains("guard searchRevision == revision else { return }"))
+
+    XCTAssertTrue(
+      lifecycleSource.contains(
+        "tabTransitionImageRetention: Duration = PresentationTransitionRetention.duration"
+      )
+    )
+    XCTAssertTrue(retentionSource.contains("static let duration = Duration.seconds(1)"))
+    XCTAssertTrue(
+      detailSource.contains(
+        "loadingPosterReleaseDelay = PresentationTransitionRetention.duration"
+      )
+    )
+  }
+
+  func testHomeAsyncNavigationCapturesSourceBeforeTaskAndUsesConditionalPush() throws {
+    let homeSource = try source("MoviePilot-TV/Views/Pages/HomeView.swift")
+
+    XCTAssertTrue(
+      homeSource.contains(
+        "@EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator"
+      )
+    )
+    XCTAssertEqual(
+      homeSource.components(
+        separatedBy: "let navigationSource = navigationCoordinator.sourceToken()"
+      ).count - 1,
+      2
+    )
+    XCTAssertTrue(
+      containsTokensInOrder(
+        homeSource,
+        [
+          "let navigationSource = navigationCoordinator.sourceToken()",
+          "let loadingPosterURL = item.imageURLs.image",
+          "Task {",
+          "Label(\"TMDB详情页\"",
+        ]
+      )
+    )
+    XCTAssertTrue(
+      containsTokensInOrder(
+        homeSource,
+        [
+          "if canSearchResources {",
+          "Button {",
+          "let navigationSource = navigationCoordinator.sourceToken()",
+          "Task {",
+          "Label(\"搜索资源\"",
+        ]
+      )
+    )
+    XCTAssertEqual(
+      homeSource.components(separatedBy: "ifCurrent: navigationSource").count - 1,
+      3
+    )
+    XCTAssertFalse(homeSource.contains("onTMDBDetail"))
+    XCTAssertFalse(homeSource.contains("onSearchResource"))
+  }
+
+  func testLoadingPosterIsScopedToNavigationEntryInsteadOfGlobalState() throws {
+    let lifecycleSource = try source("MoviePilot-TV/Services/PageImageLifecycle.swift")
+    let destinationSource = try source(
+      "MoviePilot-TV/Views/Components/ImageNavigationDestination.swift"
+    )
+    let actionSource = try source("MoviePilot-TV/ViewModels/MediaActionHandler.swift")
+    let cardSource = try source("MoviePilot-TV/Views/Components/MediaCard.swift")
+
+    XCTAssertTrue(lifecycleSource.contains("let loadingPosterURL: URL?"))
+    XCTAssertTrue(destinationSource.contains("loadingPosterURL: entry.loadingPosterURL"))
+    XCTAssertFalse(actionSource.contains("MediaCardTransition.loadingPosterURL"))
+    XCTAssertFalse(cardSource.contains("enum MediaCardTransition"))
+  }
+
+  func testPrefetchBackgroundImageWarmsOnFocusAndDecodesAfterOpeningDetail() throws {
+    let preloaderSource = try source("MoviePilot-TV/ViewModels/MediaPreloader.swift")
+    let prefetchStart = try XCTUnwrap(
+      preloaderSource.range(of: "private func prefetchBackgroundImage(for detail: MediaInfo")
+    )
+    let prefetchEnd = try XCTUnwrap(
+      preloaderSource.range(
+        of: "private func retrieveHeroImage(_ url: URL, fallbackURL: URL?)",
+        range: prefetchStart.upperBound..<preloaderSource.endIndex
+      )
+    )
+    let prefetch = preloaderSource[prefetchStart.lowerBound..<prefetchEnd.lowerBound]
+    let cancelStart = try XCTUnwrap(preloaderSource.range(of: "func cancelImageWarm()"))
+    let cancelEnd = try XCTUnwrap(
+      preloaderSource.range(
+        of: "func shouldWarmBackgroundImage()",
+        range: cancelStart.upperBound..<preloaderSource.endIndex
+      )
+    )
+    let cancel = preloaderSource[cancelStart.lowerBound..<cancelEnd.lowerBound]
+    let containerSource = try source("MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift")
+
+    XCTAssertTrue(prefetch.contains("let canWarmOnMoviePilot = MPImageWarmer.isWarmable("))
+    XCTAssertTrue(prefetch.contains("if preparedAsCandidate, canWarmOnMoviePilot"))
+    XCTAssertTrue(prefetch.contains("MPImageWarmer.shared.warm(url)"))
+    XCTAssertTrue(prefetch.contains("activeImageWarmHandle = handle"))
+    XCTAssertTrue(prefetch.contains("return"))
+    XCTAssertTrue(prefetch.contains("retrieveHeroImage(url, fallbackURL: target.fallbackURL)"))
+    XCTAssertTrue(prefetch.contains("guard !Task.isCancelled else { return }"))
+    XCTAssertTrue(cancel.contains("MPImageWarmer.shared.cancel(activeImageWarmHandle)"))
+    XCTAssertTrue(containerSource.contains("preloadTask.cancelImageWarm()"))
   }
 
   func testPluginFilterParserKeepsSupportedControlsAndSkipsUnknownControls() {
@@ -639,16 +835,24 @@ final class DynamicSourceBehaviorTests: XCTestCase {
       "MoviePilot-TV/Views/Pages/SearchView.swift",
     ] {
       let viewSource = try source(relativePath)
-      let collectionDestination = try XCTUnwrap(
-        viewSource.range(of: "CollectionDetailView(")
+      XCTAssertTrue(
+        viewSource.contains(".navigationDestination(for: ImageNavigationEntry.self)"),
+        relativePath
       )
-      let mediaDestination = try XCTUnwrap(
-        viewSource.range(of: "MediaDetailContainerView(")
-      )
-
-      XCTAssertTrue(viewSource.contains("if let collectionId ="), relativePath)
-      XCTAssertLessThan(collectionDestination.lowerBound, mediaDestination.lowerBound, relativePath)
+      XCTAssertTrue(viewSource.contains("ImageNavigationDestination(entry: entry)"), relativePath)
     }
+
+    let destinationSource = try source(
+      "MoviePilot-TV/Views/Components/ImageNavigationDestination.swift"
+    )
+    let collectionDestination = try XCTUnwrap(
+      destinationSource.range(of: "CollectionDetailView(")
+    )
+    let mediaDestination = try XCTUnwrap(
+      destinationSource.range(of: "MediaDetailContainerView(")
+    )
+    XCTAssertTrue(destinationSource.contains("if let collectionID = media.collection_id"))
+    XCTAssertLessThan(collectionDestination.lowerBound, mediaDestination.lowerBound)
   }
 
   func testSharedMediaEntryPointsUseCollectionSafePreloadGate() throws {
@@ -660,7 +864,8 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     ] {
       let viewSource = try source(relativePath)
       XCTAssertTrue(
-        viewSource.contains("preloadIfNeeded(for:"),
+        viewSource.contains("navigationCoordinator.push(")
+          || viewSource.contains("preloadFocusedCandidateIfNeeded("),
         relativePath
       )
       XCTAssertFalse(
@@ -669,9 +874,12 @@ final class DynamicSourceBehaviorTests: XCTestCase {
       )
     }
 
-    XCTAssertTrue(
-      try source("MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift")
-        .contains("preloadIfNeeded(for:")
+    let containerSource = try source("MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift")
+    XCTAssertTrue(containerSource.contains("preloadAuxiliary("))
+    XCTAssertFalse(containerSource.contains("preloadIfNeeded(for:"))
+    XCTAssertFalse(
+      containerSource.contains("MediaPreloader.shared.preload(for:"),
+      "详情 task 必须由 navigation entry 注入，destination 重求值不得创建 orphan task"
     )
   }
 

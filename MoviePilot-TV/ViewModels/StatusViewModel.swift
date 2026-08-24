@@ -34,13 +34,17 @@ class StatusViewModel: ObservableObject {
       async let down = apiService.fetchDownloaderInfo()
 
       let values = try await (stat, stor, down)
-      guard apiService.isSessionUnchanged(from: sessionSnapshot),
+      guard !Task.isCancelled,
+        apiService.isSessionUnchanged(from: sessionSnapshot),
         apiService.canRequestSuperUserEndpoints
       else { return }
       statistic = values.0
       storage = values.1
       downloader = values.2
+    } catch is CancellationError {
+      return
     } catch {
+      guard !Task.isCancelled else { return }
       print("Error fetching dashboard data: \(error)")
     }
   }

@@ -367,6 +367,10 @@ final class ResourceResultViewModelTests: XCTestCase {
       await ResourceResultViewModelURLProtocol.stub.waitForCancellation(
         path: "/api/v1/search/title/stream", keyword: "tab-switch")
     }
+    XCTAssertTrue(
+      viewModel.isLoading,
+      "页面退场只应取消请求，Pop 动画期间必须保留原来的加载画面"
+    )
 
     await viewModel.search()
 

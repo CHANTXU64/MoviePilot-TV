@@ -53,13 +53,14 @@ class ResourceResultViewModel: ObservableObject {
     isLoading = false
   }
 
+  /// 页面退场时立即使请求失效，但保留当前公开展示状态，避免 Pop 动画第一帧切换 UI。
   func cancelInFlightSearch() {
     let wasInFlight = isLoading
     searchGeneration += 1
     searchStreamTask?.cancel()
     searchStreamTask = nil
-    isLoading = false
     if wasInFlight {
+      // View 再次出现时允许 `.task` 重启搜索；`isLoading` 会保持到退场结束或新搜索接管。
       hasSearched = false
     }
   }

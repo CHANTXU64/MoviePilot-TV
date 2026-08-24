@@ -13,7 +13,7 @@ struct ContentView: View {
         ProgressView("正在准备会话...")
       } else if viewModel.isLoggedIn {
         TabView(selection: $selectedTab) {
-          HomeView()
+          HomeView(isSelected: selectedTab == .home)
             .tabItem {
               Label("媒体库", systemImage: "play.tv")
             }
@@ -28,7 +28,7 @@ struct ContentView: View {
           }
 
           if viewModel.visibleTabs.contains(.explore) {
-            ExploreView()
+            ExploreView(isSelected: selectedTab == .explore)
               .tabItem {
                 Label("探索", systemImage: "safari")
               }
@@ -36,7 +36,7 @@ struct ContentView: View {
           }
 
           if viewModel.visibleTabs.contains(.search) {
-            SearchView()
+            SearchView(isSelected: selectedTab == .search)
               .tabItem {
                 Label("搜索", systemImage: "magnifyingglass")
               }

@@ -13,6 +13,33 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("_TSK"))
   }
 
+  func testSystemViewDoesNotExposeLegacyMemoryOptimizationSetting() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+    let contentSource = try Self.source(at: "MoviePilot-TV/ViewModels/ContentViewModel.swift")
+
+    XCTAssertFalse(source.contains("memoryOptimization"))
+    XCTAssertFalse(source.contains("内存优化"))
+    XCTAssertFalse(contentSource.contains("MemoryOptimization"))
+  }
+
+  func testBackendVersionObserverDefersInitialSessionReplayUntilStartup() throws {
+    let source = try Self.source(at: "MoviePilot-TV/ViewModels/ContentViewModel.swift")
+    let sessionPublisher = try XCTUnwrap(source.range(of: "apiService.$session"))
+    let store = try XCTUnwrap(
+      source.range(
+        of: ".store(in: &cancellables)",
+        range: sessionPublisher.upperBound..<source.endIndex
+      )
+    )
+    let subscription = source[sessionPublisher.lowerBound..<store.upperBound]
+
+    XCTAssertTrue(
+      subscription.contains(
+        "session.token != nil, self.didPrepareStartup, !self.isPreparingStartupSession"
+      )
+    )
+  }
+
   func testContentViewLabelsSystemTabAsSettings() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/ContentView.swift")
 
@@ -33,11 +60,9 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     )
 
     XCTAssertTrue(contentSource.contains("StatusView(isSelected: selectedTab == .status)"))
-    XCTAssertTrue(
-      statusSource.contains(
-        "TransferHistoryView(viewModel: transferHistoryViewModel, isSelected: isSelected)"
-      )
-    )
+    XCTAssertTrue(statusSource.contains("TransferHistoryView("))
+    XCTAssertTrue(statusSource.contains("viewModel: transferHistoryViewModel"))
+    XCTAssertTrue(statusSource.contains("keepsRowsMounted: TransferHistoryView.shouldMountRows("))
     XCTAssertTrue(historySource.contains(".task(id: isSelected)"))
     XCTAssertTrue(historySource.contains("await Self.runAutoRefresh("))
   }
@@ -114,11 +139,22 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let searchSource = try Self.source(at: "MoviePilot-TV/Views/Pages/SearchView.swift")
 
     XCTAssertTrue(
-      systemSource.contains("case .mediaSourceSelection:\n            if canConfigureRecommendations {")
+      containsTokensInOrder(
+        systemSource,
+        ["case .mediaSourceSelection:", "if canConfigureRecommendations {"]
+      )
     )
-    XCTAssertTrue(systemSource.contains("case .siteSelection:\n            if canConfigureSearch {"))
     XCTAssertTrue(
-      systemSource.contains("if canConfigureRecommendations {\n        section(\"聚合搜索\")")
+      containsTokensInOrder(
+        systemSource,
+        ["case .siteSelection:", "if canConfigureSearch {"]
+      )
+    )
+    XCTAssertTrue(
+      containsTokensInOrder(
+        systemSource,
+        ["if canConfigureRecommendations {", "section(\"聚合搜索\")"]
+      )
     )
     XCTAssertTrue(searchSource.contains("ZStack(alignment: .trailing)"))
     XCTAssertTrue(searchSource.contains("ZStack(alignment: .leading)"))
@@ -210,6 +246,9 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("session.token == nil"))
     XCTAssertTrue(source.contains("session.uiIdentity != self.observedSessionUIIdentity"))
     XCTAssertTrue(source.contains("if shouldClear { self.clearAll() }"))
+    XCTAssertFalse(source.contains("maxCacheSize"))
+    XCTAssertFalse(source.contains("accessOrder"))
+    XCTAssertFalse(source.contains("evictIfNeeded"))
   }
 
   func testContentViewNormalizesHiddenSelectedTabOnAppear() throws {
@@ -272,7 +311,12 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let mediaSection = String(source[start.lowerBound..<end.lowerBound])
 
     XCTAssertTrue(mediaSection.contains("Picker(\"服务器\", selection: $selectedServer)"))
-    XCTAssertTrue(mediaSection.contains(".padding(.horizontal, 8)\n      .focusSection()"))
+    XCTAssertTrue(
+      containsTrimmedLineSequence(
+        mediaSection,
+        [".padding(.horizontal, 8)", ".focusSection()"]
+      )
+    )
   }
 
   @MainActor
@@ -326,7 +370,9 @@ final class SystemViewDefaultStyleTests: XCTestCase {
   func testReorganizeSheetUsesSheetRowSourceButtonPreviewSheetAndBackgroundSubmit() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Sheets/ReorganizeSheet.swift")
 
-    XCTAssertTrue(source.contains("SheetPicker(\n        title: \"媒体来源\""))
+    XCTAssertTrue(
+      containsTokensInOrder(source, ["SheetPicker(", "title: \"媒体来源\""])
+    )
     XCTAssertTrue(source.contains("MediaSearchSource.allowed(for: .media).map"))
     XCTAssertFalse(source.contains("Picker(\"媒体来源\""))
     XCTAssertFalse(source.contains("private var sourceButtons: some View"))
@@ -338,8 +384,9 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("Label(\"搜索媒体\", systemImage: \"magnifyingglass\")"))
     XCTAssertTrue(source.contains(".sheet(isPresented: $showPreview)"))
     XCTAssertTrue(
-      source.contains(
-        "viewModel.mutationRetryMessage = nil\n            dismiss()"
+      containsTokensInOrder(
+        source,
+        ["viewModel.mutationRetryMessage = nil", "dismiss()"]
       )
     )
     XCTAssertTrue(source.contains("private struct ReorganizePreviewSheet: View"))
@@ -358,16 +405,28 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("Label(\"整理预览\""))
     XCTAssertFalse(source.contains("Button(\"关闭\")"))
     XCTAssertFalse(source.contains("确认整理前后的文件路径"))
-    XCTAssertFalse(source.contains("Text(value.formatted())\n          .font("))
-    XCTAssertFalse(source.contains("Text(name)\n        .font("))
-    XCTAssertFalse(source.contains("Image(systemName: icon)\n        .font("))
-    XCTAssertFalse(source.contains("Image(systemName: \"arrow.right\")\n        .font("))
+    XCTAssertFalse(
+      containsTrimmedLineSequence(source, ["Text(value.formatted())", ".font("])
+    )
+    XCTAssertFalse(containsTrimmedLineSequence(source, ["Text(name)", ".font("]))
+    XCTAssertFalse(
+      containsTrimmedLineSequence(source, ["Image(systemName: icon)", ".font("])
+    )
+    XCTAssertFalse(
+      containsTrimmedLineSequence(
+        source,
+        ["Image(systemName: \"arrow.right\")", ".font("]
+      )
+    )
     XCTAssertFalse(source.contains(".font(.title3.bold())"))
     XCTAssertTrue(source.contains("HStack(spacing: 16)"))
-    XCTAssertTrue(source.contains(".padding(14)\n    .padding(.leading, 10)"))
     XCTAssertTrue(
-      source.contains(
-        "    .padding(.top, 28)\n    .frame(width: 1400, height: 820)"
+      containsTrimmedLineSequence(source, [".padding(14)", ".padding(.leading, 10)"])
+    )
+    XCTAssertTrue(
+      containsTrimmedLineSequence(
+        source,
+        [".padding(.top, 28)", ".frame(width: 1400, height: 820)"]
       )
     )
     XCTAssertTrue(source.contains("manualTransferPreviewFileName(from: item.source)"))
@@ -393,7 +452,16 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains(".focusSection()"))
     XCTAssertFalse(source.contains("Button(\"关闭\")"))
     XCTAssertEqual(source.components(separatedBy: "viewModel.search()").count - 1, 1)
-    XCTAssertTrue(source.contains("Button {\n            Task { await viewModel.search() }"))
+    XCTAssertTrue(
+      containsTokensInOrder(
+        source,
+        [
+          "Button {",
+          "searchTask?.cancel()",
+          "searchTask = Task { await viewModel.search() }",
+        ]
+      )
+    )
     XCTAssertTrue(source.contains(".disabled(viewModel.isLoading)"))
     XCTAssertTrue(source.contains("private var searchRevision = 0"))
     XCTAssertTrue(source.contains("searchRevision &+= 1"))
@@ -401,8 +469,9 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("guard !title.isEmpty else {"))
     XCTAssertTrue(source.contains("guard searchRevision == revision else { return }"))
     XCTAssertTrue(
-      source.contains(
-        "if searchRevision == revision {\n        isLoading = false"
+      containsTokensInOrder(
+        source,
+        ["if searchRevision == revision {", "isLoading = false"]
       )
     )
     XCTAssertFalse(
@@ -427,14 +496,18 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     )
     XCTAssertFalse(source.contains(".padding(.horizontal, 40)"))
     XCTAssertTrue(
-      source.contains(
-        "      .padding(.top, 40)\n    }\n    .frame(width: 1092, height: 820)"
+      containsTrimmedLineSequence(
+        source,
+        [".padding(.top, 40)", "}", ".frame(width: 1092, height: 820)"]
       )
     )
     XCTAssertFalse(source.contains(".frame(width: 1120, height: 780)"))
     XCTAssertFalse(source.contains(".frame(width: 1140, height: 820)"))
     XCTAssertFalse(source.contains(".frame(width: 1200, height: 820)"))
     XCTAssertFalse(source.contains(".frame(width: 1400, height: 820)"))
+    XCTAssertTrue(source.contains(".onDisappear {"))
+    XCTAssertTrue(source.contains("viewModel.presentationDidDisappear()"))
+    XCTAssertTrue(source.contains("viewModel.presentationDidAppear()"))
   }
 
   @MainActor
@@ -446,6 +519,39 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     await viewModel.search()
 
     XCTAssertTrue(viewModel.items.isEmpty)
+    XCTAssertFalse(viewModel.isLoading)
+  }
+
+  @MainActor
+  func testManualMediaSearchDismissalKeepsResultsUntilTransitionCompletes() async throws {
+    let viewModel = ManualMediaSearchViewModel(source: .themoviedb)
+    viewModel.items = [MediaInfo(tmdb_id: 42, title: "旧结果")]
+    viewModel.isLoading = true
+
+    viewModel.presentationDidDisappear(retention: .milliseconds(20))
+
+    XCTAssertEqual(viewModel.items.map(\.tmdb_id), [42])
+    XCTAssertTrue(viewModel.isLoading)
+
+    await waitUntil("manual media search dismissal cleanup") {
+      viewModel.items.isEmpty && !viewModel.isLoading
+    }
+
+    XCTAssertTrue(viewModel.items.isEmpty)
+    XCTAssertFalse(viewModel.isLoading)
+  }
+
+  @MainActor
+  func testManualMediaSearchRapidReappearanceCancelsPendingCleanup() async throws {
+    let viewModel = ManualMediaSearchViewModel(source: .themoviedb)
+    viewModel.items = [MediaInfo(tmdb_id: 42, title: "旧结果")]
+    viewModel.isLoading = true
+
+    viewModel.presentationDidDisappear(retention: .milliseconds(20))
+    viewModel.presentationDidAppear()
+    await settleAsyncWindow()
+
+    XCTAssertEqual(viewModel.items.map(\.tmdb_id), [42])
     XCTAssertFalse(viewModel.isLoading)
   }
 
@@ -475,8 +581,112 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
 
     XCTAssertTrue(source.contains(".frame(height: UIScreen.main.bounds.height * 0.94)"))
-    XCTAssertTrue(source.contains("Color.clear\n              .frame(height: UIScreen.main.bounds.height)"))
+    XCTAssertTrue(
+      containsTrimmedLineSequence(
+        source,
+        ["Color.clear", ".frame(height: UIScreen.main.bounds.height)"]
+      )
+    )
     XCTAssertFalse(source.contains(".frame(minHeight: UIScreen.main.bounds.height, alignment: .top)"))
+  }
+
+  func testMediaDetailNavigationUsesUnifiedImageLifecycle() throws {
+    let detailSource = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
+    let menuSource = try Self.source(at: "MoviePilot-TV/Views/Components/MediaContextMenu.swift")
+
+    XCTAssertTrue(detailSource.contains("@ObservedObject var imageLifecycle: PageImageLifecycle"))
+    XCTAssertTrue(
+      detailSource.contains(".onChange(of: imageLifecycle.keepsActivePageImages)")
+    )
+    XCTAssertTrue(detailSource.contains("unmountBackgroundForNavigation()"))
+    XCTAssertTrue(detailSource.contains("navigationCoordinator.push(destination)"))
+    XCTAssertTrue(menuSource.contains("navigationCoordinator.push(item)"))
+    XCTAssertFalse(detailSource.contains("navigationPath.count"))
+    XCTAssertFalse(detailSource.contains("scheduleBackgroundReleaseAfterNavigationStarts"))
+    XCTAssertFalse(menuSource.contains("onDidNavigate"))
+  }
+
+  func testMediaDetailRestoredContentFocusDoesNotScrollToTopAgain() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
+
+    XCTAssertTrue(source.contains("guard focused, !showContentPage else { return }"))
+  }
+
+  func testMediaGridPinsTopRowsWithoutContainerFocusReset() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Components/MediaGridView.swift")
+    let windowSource = try Self.source(at: "MoviePilot-TV/Services/ImageLoadWindow.swift")
+
+    XCTAssertTrue(
+      containsTokensInOrder(
+        source,
+        ["onFocus: { isFocused in", "handleFocus("]
+      )
+    )
+    XCTAssertFalse(source.contains("@FocusState private var focusedGridItemID"))
+    XCTAssertFalse(source.contains("scheduleImageAnchorReset"))
+    XCTAssertTrue(windowSource.contains("gridPinnedTopRowCount = 2"))
+  }
+
+  func testMediaDetailLoadingPosterReleasesAfterFadeCompletes() throws {
+    let source = try Self.source(
+      at: "MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift"
+    )
+
+    XCTAssertTrue(
+      source.contains(
+        "loadingPosterReleaseDelay = PresentationTransitionRetention.duration"
+      )
+    )
+    XCTAssertTrue(
+      source.contains(
+        "loadsImage: keepsLoadingPosterImage && imageLifecycle.keepsActivePageImages"
+      )
+    )
+    XCTAssertTrue(
+      source.contains("try? await Task.sleep(for: Self.loadingPosterReleaseDelay)")
+    )
+    XCTAssertTrue(source.contains("keepsLoadingPosterImage = false"))
+    XCTAssertTrue(source.contains("scheduleLoadingPosterDiscardIfAbandoned()"))
+    XCTAssertTrue(source.contains("lifetime.releaseScheduler.schedule"))
+    XCTAssertFalse(source.contains("discardLoadingPosterIfAbandoned()"))
+    XCTAssertFalse(
+      containsTrimmedLineSequence(
+        source,
+        ["if isReady {", "keepsLoadingPosterImage = false"]
+      )
+    )
+    XCTAssertFalse(
+      source.contains("loadsImage: !isReady && imageLifecycle.keepsActivePageImages")
+    )
+  }
+
+  func testMediaDetailDoesNotLoadBackgroundOnContentPageUntilHero() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
+
+    XCTAssertTrue(
+      source.contains("if isBackgroundMounted && imageLifecycle.keepsActivePageImages {")
+    )
+    XCTAssertFalse(
+      source.contains("shouldShowBackground(isMounted: isBackgroundMounted, showingContentPage:")
+    )
+    XCTAssertTrue(source.contains(".opacity(showContentPage ? 0 : 1)"))
+    XCTAssertTrue(source.contains("scheduleUnmountBackgroundAfterContentPageFade()"))
+    XCTAssertTrue(
+      source.contains("try? await Task.sleep(for: .seconds(Self.contentPageBackgroundFadeDuration))")
+    )
+    XCTAssertTrue(source.contains("remountBackgroundForHeroIfNeeded()"))
+    XCTAssertTrue(
+      containsTokensInOrder(
+        source,
+        [
+          "remountBackgroundForHeroIfNeeded()",
+          "withAnimation(.easeInOut(duration: 0.6)) {",
+          "showContentPage = false",
+        ]
+      )
+    )
+    XCTAssertTrue(source.contains("imageLifecycle.keepsActivePageImages,"))
+    XCTAssertTrue(source.contains("!showContentPage"))
   }
 
   func testSystemViewModelRechecksPermissionBeforePublishingCustomRules() throws {
@@ -520,6 +730,30 @@ final class SystemViewDefaultStyleTests: XCTestCase {
 
     XCTAssertTrue(probe.contains("requirement: .superUser"))
     XCTAssertFalse(probe.contains("requirement: .permission(.subscribe)"))
+  }
+
+  @MainActor
+  private func waitUntil(
+    _ description: String,
+    timeout: Duration = .seconds(1),
+    file: StaticString = #filePath,
+    line: UInt = #line,
+    condition: @MainActor () -> Bool
+  ) async {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while !condition() {
+      if clock.now >= deadline {
+        XCTFail("Timed out waiting for \(description)", file: file, line: line)
+        return
+      }
+      try? await Task.sleep(for: .milliseconds(5))
+    }
+  }
+
+  @MainActor
+  private func settleAsyncWindow() async {
+    try? await Task.sleep(for: .milliseconds(75))
   }
 
   private static func source(at path: String) throws -> String {

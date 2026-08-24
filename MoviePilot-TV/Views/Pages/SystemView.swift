@@ -906,6 +906,7 @@ struct SystemView: View {
   private var mediaSourceButtonLabel: String {
     viewModel.defaultMediaSearchSource?.title ?? "默认"
   }
+
 }
 
 private enum SystemSettingsPage: Hashable {
