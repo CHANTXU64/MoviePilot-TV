@@ -142,7 +142,12 @@ struct HomeView: View {
   }
 
   private func navigateToDetail(for subscribe: Subscribe) {
-    navigationCoordinator.push(subscribe.navigationMediaInfo())
+    // 订阅列表的 navigationMediaInfo() 不含海报（poster_path 为 nil），
+    // 必须显式携带订阅海报，否则详情页加载遮罩的海报区域会显示空白。
+    navigationCoordinator.push(
+      subscribe.navigationMediaInfo(),
+      loadingPosterURL: subscribe.imageURLs.poster
+    )
   }
 
   private func updateStackForeground() {

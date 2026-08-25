@@ -175,6 +175,20 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     )
     XCTAssertFalse(homeSource.contains("onTMDBDetail"))
     XCTAssertFalse(homeSource.contains("onSearchResource"))
+
+    // 订阅卡片跳详情必须携带订阅海报：navigationMediaInfo() 本身不含
+    // poster_path，漏传会让详情页加载遮罩的海报区域空白。
+    XCTAssertTrue(
+      containsTokensInOrder(
+        homeSource,
+        [
+          "private func navigateToDetail(for subscribe: Subscribe)",
+          "navigationCoordinator.push(",
+          "subscribe.navigationMediaInfo()",
+          "loadingPosterURL: subscribe.imageURLs.poster",
+        ]
+      )
+    )
   }
 
   func testLoadingPosterIsScopedToNavigationEntryInsteadOfGlobalState() throws {
