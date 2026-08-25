@@ -2211,12 +2211,20 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
 
     for person in supportedPeople {
       let rawURL = person.compatibilityRawImageURL
-      let isFilteredDoubanDefault =
-        rawURL?.contains("doubanio.com") == true
-        && (rawURL?.contains("personage-default") == true
-          || rawURL?.contains("celebrity-default") == true)
+      // 数据源官方默认空白图（豆瓣 personage-default/celebrity-default、
+      // AniList anilistcdn/.../default.jpg、Bangumi no_icon_*）在 TV 端统一
+      // 拦截为占位符，不参与 Web 对齐。
+      let isFilteredPlaceholder =
+        (rawURL?.contains("doubanio.com") == true
+          && (rawURL?.contains("personage-default") == true
+            || rawURL?.contains("celebrity-default") == true))
+        || (rawURL?.contains("anilist.co") == true
+          && rawURL?.contains("anilistcdn") == true
+          && rawURL?.contains("default.jpg") == true)
+        || (rawURL?.contains("lain.bgm.tv") == true
+          && rawURL?.contains("no_icon") == true)
       let expectedURL =
-        isFilteredDoubanDefault
+        isFilteredPlaceholder
         ? nil
         : rawURL.flatMap {
           Self.webDisplayImageURL(

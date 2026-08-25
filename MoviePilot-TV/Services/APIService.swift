@@ -3216,9 +3216,15 @@ class APIService: ObservableObject {
   func getPosterImageUrl(posterPath: String?) -> URL? {
     let url = posterPath?.replacingOccurrences(of: "original", with: "w500")
 
-    // 1. 匹配豆瓣默认海报并拦截
-    if let currentUrl = url, currentUrl.contains("doubanio.com") {
-      if currentUrl.contains("movie_default") || currentUrl.contains("tv_default") {
+    // 1. 匹配数据源默认空白海报并拦截：豆瓣 movie_default/tv_default、
+    //    Bangumi 无封面官方占位图 no_icon_subject。
+    if let currentUrl = url {
+      if currentUrl.contains("doubanio.com"),
+        currentUrl.contains("movie_default") || currentUrl.contains("tv_default")
+      {
+        return nil
+      }
+      if currentUrl.contains("lain.bgm.tv") && currentUrl.contains("no_icon") {
         return nil
       }
     }
@@ -3227,10 +3233,15 @@ class APIService: ObservableObject {
   }
 
   /// 获取海报原始 URL（不降尺寸），作为降尺寸版本加载失败时的回退来源。
-  /// 与降尺寸版本共用豆瓣默认海报拦截规则。
+  /// 与降尺寸版本共用数据源默认空白海报拦截规则。
   func getPosterImageUrlOriginal(posterPath: String?) -> URL? {
-    if let url = posterPath, url.contains("doubanio.com") {
-      if url.contains("movie_default") || url.contains("tv_default") {
+    if let url = posterPath {
+      if url.contains("doubanio.com"),
+        url.contains("movie_default") || url.contains("tv_default")
+      {
+        return nil
+      }
+      if url.contains("lain.bgm.tv") && url.contains("no_icon") {
         return nil
       }
     }
@@ -3333,10 +3344,19 @@ class APIService: ObservableObject {
       return nil
     }
 
-    // 匹配豆瓣默认人员图标并拦截 (针对 Apple TV 的特殊优化)
-    if url.contains("doubanio.com")
-      && (url.contains("personage-default") || (url.contains("celebrity-default")))
-    {
+    // 匹配数据源默认空白图片并拦截 (针对 Apple TV 的特殊优化)：
+    // 豆瓣无图人物返回 personage-default / celebrity-default；
+    // AniList 无头像 Staff/Character 返回官方默认图 anilistcdn/.../default.jpg；
+    // Bangumi 官方占位图 no_icon_*（subject/person）。
+    // 均与豆瓣空白图一样改为显示本地统一占位符。
+    let isDoubanPlaceholder =
+      url.contains("doubanio.com")
+      && (url.contains("personage-default") || url.contains("celebrity-default"))
+    let isAniListPlaceholder =
+      url.contains("anilist.co") && url.contains("anilistcdn") && url.contains("default.jpg")
+    let isBangumiPlaceholder =
+      url.contains("lain.bgm.tv") && url.contains("no_icon")
+    if isDoubanPlaceholder || isAniListPlaceholder || isBangumiPlaceholder {
       return nil
     }
 

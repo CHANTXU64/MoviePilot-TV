@@ -313,6 +313,15 @@ final class ImageProxyEncodingTests: XCTestCase {
     )
     XCTAssertNil(doubanMedia.imageURLs.poster)
     XCTAssertNil(doubanMedia.imageURLs.posterFallback)
+
+    // Bangumi 官方无封面占位图：降尺寸与 fallback 都按同一规则拦截。
+    let bangumiMedia = MediaInfo(
+      title: "Bangumi",
+      poster_path: "https://lain.bgm.tv/img/no_icon_subject.png",
+      backdrop_path: nil
+    )
+    XCTAssertNil(bangumiMedia.imageURLs.poster)
+    XCTAssertNil(bangumiMedia.imageURLs.posterFallback)
   }
 
   private func assertProxyURL(
