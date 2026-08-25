@@ -341,7 +341,11 @@ final class ImageNavigationCoordinator: ObservableObject {
     _ media: MediaInfo,
     loadingPosterURL: URL? = nil
   ) -> ImageNavigationEntry {
-    push(.media(media), loadingPosterURL: loadingPosterURL)
+    // 预热详情加载遮罩海报（显式传入的 loadingPosterURL，或 MediaDetailContainerView
+    // 兜底使用的 media 海报）：按转场海报相同缓存 key 提前写入磁盘缓存，
+    // 进入详情页时同步命中，避免跳转动画中海报先空白再出现。
+    mediaPreloader.warmLoadingPoster(loadingPosterURL ?? media.imageURLs.poster)
+    return push(.media(media), loadingPosterURL: loadingPosterURL)
   }
 
   @discardableResult

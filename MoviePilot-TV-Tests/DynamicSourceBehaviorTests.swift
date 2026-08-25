@@ -191,6 +191,28 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     )
   }
 
+  func testNavigationPushWarmsLoadingPosterBeforeTransition() throws {
+    let lifecycleSource = try source("MoviePilot-TV/Services/PageImageLifecycle.swift")
+    let preloaderSource = try source("MoviePilot-TV/ViewModels/MediaPreloader.swift")
+
+    // 推送详情时按转场海报相同缓存 key（460x690 processor）预热加载遮罩海报，
+    // 转场动画期间 PageManagedImage 磁盘同步命中，避免海报先空白再出现。
+    XCTAssertTrue(
+      containsTokensInOrder(
+        lifecycleSource,
+        [
+          "func push(",
+          "_ media: MediaInfo,",
+          "loadingPosterURL: URL? = nil",
+          "mediaPreloader.warmLoadingPoster(",
+          "loadingPosterURL ?? media.imageURLs.poster",
+        ]
+      )
+    )
+    XCTAssertTrue(preloaderSource.contains("func warmLoadingPoster(_ url: URL?)"))
+    XCTAssertTrue(preloaderSource.contains("MediaDetailLoadingPoster.processor"))
+  }
+
   func testLoadingPosterIsScopedToNavigationEntryInsteadOfGlobalState() throws {
     let lifecycleSource = try source("MoviePilot-TV/Services/PageImageLifecycle.swift")
     let destinationSource = try source(

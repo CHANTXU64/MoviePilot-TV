@@ -180,6 +180,7 @@ private struct MediaSectionView: View {
   @FocusState private var isTopRedirectorFocused: Bool
   @State private var hasRedirectedFocus: Bool = false
   @State private var imageAnchorId: String?
+  @State private var posterWarmTask: Task<Void, Never>?
 
   private var canSearchResources: Bool {
     APIService.shared.canAccess(.search)
@@ -322,6 +323,15 @@ private struct MediaSectionView: View {
           .onChange(of: focusedItemId) { _, newId in
             guard let newId else { return }
             imageAnchorId = newId
+            // 聚焦停留后预热详情加载遮罩海报：媒体服务器图经后端代理转发较慢，
+            // push 时才开始下载会赶不上转场，聚焦时提前下载磁盘即可命中。
+            posterWarmTask?.cancel()
+            guard let item = items.first(where: { $0.id == newId }) else { return }
+            posterWarmTask = Task {
+              try? await Task.sleep(for: .milliseconds(300))
+              guard !Task.isCancelled else { return }
+              MediaPreloader.shared.warmLoadingPoster(item.imageURLs.image)
+            }
           }
         }
         .scrollClipDisabled()
@@ -354,6 +364,7 @@ private struct SubscribeSectionView: View {
   @FocusState private var isTopRedirectorFocused: Bool
   @State private var hasRedirectedFocus: Bool = false
   @State private var imageAnchorId: String?
+  @State private var posterWarmTask: Task<Void, Never>?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -406,6 +417,19 @@ private struct SubscribeSectionView: View {
         .onChange(of: focusedItemId) { _, newId in
           guard let newId else { return }
           imageAnchorId = newId
+          // 聚焦停留后预热详情加载遮罩海报（与“最近添加”一致），
+          // 订阅卡片从菜单进详情时转场海报磁盘已命中。
+          posterWarmTask?.cancel()
+          guard
+            let item = items.first(where: {
+              HomeSubscribeFocusID.value(for: $0.id) == newId
+            })
+          else { return }
+          posterWarmTask = Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            MediaPreloader.shared.warmLoadingPoster(item.imageURLs.poster)
+          }
         }
       }
       .scrollClipDisabled()
