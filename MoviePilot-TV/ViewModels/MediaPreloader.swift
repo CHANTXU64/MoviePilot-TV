@@ -703,6 +703,7 @@ class MediaPreloader: ObservableObject {
   private static let legacyNavigationOwner = UUID()
   private var cancellables = Set<AnyCancellable>()
   private var subscriptionRefreshTask: Task<Void, Never>?
+  private var loadingPosterWarmDownloadTask: DownloadTask?
   private var observedSessionUIIdentity: String
   private let apiService: APIService
 
@@ -769,16 +770,21 @@ class MediaPreloader: ObservableObject {
   /// 提前经 Kingfisher 下载并写入磁盘缓存（解码图不占内存缓存）。
   /// 详情页 PageManagedImage 加载时磁盘同步命中，跳转动画期间即可显示，
   /// 避免“先空白再出现”；缓存已命中时无任何网络开销。
-  func warmLoadingPoster(_ url: URL?) {
-    guard let url else { return }
+  @discardableResult
+  func warmLoadingPoster(_ url: URL?) -> DownloadTask? {
+    loadingPosterWarmDownloadTask?.cancel()
+    loadingPosterWarmDownloadTask = nil
+    guard let url else { return nil }
     var options = apiService.imageOptions(for: url)
     options.append(.processor(MediaDetailLoadingPoster.processor))
     options.append(TransientDecodedImage.skipMemoryCache)
-    KingfisherManager.shared.retrieveImage(
+    let downloadTask = KingfisherManager.shared.retrieveImage(
       with: apiService.imageSource(for: url),
       options: options,
       completionHandler: { _ in }
     )
+    loadingPosterWarmDownloadTask = downloadTask
+    return downloadTask
   }
 
   /// 给当前详情页附带预载，不抢走推荐页焦点候选。
@@ -974,6 +980,8 @@ class MediaPreloader: ObservableObject {
   func clearAll() {
     subscriptionRefreshTask?.cancel()
     subscriptionRefreshTask = nil
+    loadingPosterWarmDownloadTask?.cancel()
+    loadingPosterWarmDownloadTask = nil
     for task in cache.values {
       task.cancel()
     }

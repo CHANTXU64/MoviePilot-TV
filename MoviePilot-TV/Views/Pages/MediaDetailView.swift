@@ -83,6 +83,8 @@ struct MediaDetailView: View {
   let routeID: UUID
   @ObservedObject var imageLifecycle: PageImageLifecycle
   let loadingPosterURL: URL?
+  /// Loading 遮罩释放焦点后才允许详情页选择真实操作按钮。
+  let isFocusEnabled: Bool
   @State private var showSiteSelection = false
   @State private var showContentPage = false
   @State private var hasAppeared = false
@@ -235,7 +237,8 @@ struct MediaDetailView: View {
     preloadTask: MediaPreloadTask, isContentReady: Binding<Bool>,
     routeID: UUID,
     imageLifecycle: PageImageLifecycle,
-    loadingPosterURL: URL?
+    loadingPosterURL: URL?,
+    isFocusEnabled: Bool
   ) {
     let vm = MediaDetailViewModel(detail: detail)
     vm.preloadTask = preloadTask
@@ -245,6 +248,7 @@ struct MediaDetailView: View {
     self.routeID = routeID
     self.imageLifecycle = imageLifecycle
     self.loadingPosterURL = loadingPosterURL
+    self.isFocusEnabled = isFocusEnabled
   }
 
   nonisolated static let contentPageBackgroundFadeDuration: TimeInterval = 0.4
@@ -426,12 +430,17 @@ struct MediaDetailView: View {
         handleRouteRemovalIfNeeded()
       }
     }
+    .onChange(of: isFocusEnabled) { _, isEnabled in
+      guard isEnabled else {
+        focusedButton = nil
+        return
+      }
+      requestPreferredHeaderFocus()
+    }
     .task {
-      if !hasAppeared, let preferredHeaderFocus {
-        focusedButton = preferredHeaderFocus
+      if !hasAppeared {
         hasAppeared = true
-      } else if !hasAppeared {
-        hasAppeared = true
+        requestPreferredHeaderFocus()
       }
       // 如果 fullDetail 已经就绪（预加载命中），立即应用（网络加载自动在后台启动）
       hasRefreshedSubscriptionAfterFullDetail = await Self.applyReadyPreloadedDetail(
@@ -548,6 +557,11 @@ struct MediaDetailView: View {
         lastFocusedButton = newValue
       }
     }
+  }
+
+  private func requestPreferredHeaderFocus() {
+    guard isFocusEnabled, let preferredHeaderFocus else { return }
+    focusedButton = preferredHeaderFocus
   }
 
   private func navigateFromSecondPage(to destination: Person) {

@@ -279,16 +279,28 @@ final class SystemViewDefaultStyleTests: XCTestCase {
 
   func testMediaDetailHeaderFocusOnlyTargetsVisiblePermittedActions() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
+    let containerSource = try Self.source(
+      at: "MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift"
+    )
 
     XCTAssertTrue(source.contains("@ObservedObject private var apiService = APIService.shared"))
     XCTAssertTrue(source.contains("private var canJumpToTMDB: Bool"))
     XCTAssertTrue(source.contains("private var preferredHeaderFocus: ButtonField?"))
-    XCTAssertTrue(source.contains("if !hasAppeared, let preferredHeaderFocus"))
+    XCTAssertTrue(source.contains("private func requestPreferredHeaderFocus()"))
+    XCTAssertTrue(source.contains("guard isFocusEnabled, let preferredHeaderFocus else { return }"))
+    XCTAssertTrue(source.contains(".onChange(of: isFocusEnabled)"))
     XCTAssertFalse(source.contains(".defaultFocus($focusedButton, preferredHeaderFocus)"))
     XCTAssertTrue(source.contains("private var shouldShowOtherInfo: Bool"))
     XCTAssertTrue(source.contains("case subscribe, search, sites, otherInfo"))
     XCTAssertFalse(source.contains("equals: .tmdbJump"))
     XCTAssertTrue(source.contains(".focused($focusedButton, equals: .otherInfo)"))
+    XCTAssertTrue(containerSource.contains("@FocusState private var isLoadingFocusAnchorFocused"))
+    XCTAssertTrue(containerSource.contains(".focusable(!isReady)"))
+    XCTAssertTrue(containerSource.contains(".focused($isLoadingFocusAnchorFocused)"))
+    XCTAssertTrue(containerSource.contains(".focusEffectDisabled()"))
+    XCTAssertTrue(containerSource.contains(".disabled(!isReady)"))
+    XCTAssertTrue(containerSource.contains(".allowsHitTesting(isReady)"))
+    XCTAssertTrue(containerSource.contains("isFocusEnabled: isReady"))
   }
 
   func testMediaDetailSeasonInformationButtonStaysEnabled() throws {

@@ -421,7 +421,7 @@ final class PersonDecodingTests: XCTestCase {
         ),
         (
           "Bangumi no_icon person filtered", "bangumi", nil, nil,
-          images(large: "https://lain.bgm.tv/img/no_icon_person.png"), nil
+          images(medium: "https://lain.bgm.tv/img/no_icon_person.png"), nil
         ),
         (
           "Missing source", nil, "/tmdb.jpg", .url("https://douban.local/avatar.jpg"),

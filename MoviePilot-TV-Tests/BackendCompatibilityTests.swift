@@ -2234,7 +2234,17 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
           )
         }
 
-      // Web 没有远端图时，TV 额外显示头像不报错；Web 有图时 TV 仍须选同一张。
+      if isFilteredPlaceholder {
+        XCTAssertNil(
+          person.imageURLs.profile,
+          "Official placeholder must use the local fallback for \(person.compatibilityName) [\(person.source ?? "unknown")]",
+          file: file,
+          line: line
+        )
+        continue
+      }
+
+      // Web 有图时，TV 仍须选同一张。
       guard let expected = expectedURL?.absoluteString else { continue }
 
       XCTAssertEqual(

@@ -322,6 +322,28 @@ final class ImageProxyEncodingTests: XCTestCase {
     )
     XCTAssertNil(bangumiMedia.imageURLs.poster)
     XCTAssertNil(bangumiMedia.imageURLs.posterFallback)
+
+    // 订阅和订阅分享复用同一入口，不能让原始占位图重新出现在首页或加载遮罩。
+    XCTAssertNil(
+      service.getSubscribePosterImageUrl(
+        poster: "https://lain.bgm.tv/img/no_icon_subject.png"
+      )
+    )
+    XCTAssertNil(
+      service.getSubscribePosterImageUrl(
+        poster: "https://s4.anilist.co/file/anilistcdn/staff/large/default.jpg"
+      )
+    )
+    XCTAssertNil(
+      service.getSubscribePosterImageUrl(
+        poster: "https://img9.doubanio.com/view/photo/s_ratio_poster/public/movie_default_large.png"
+      )
+    )
+    XCTAssertNotNil(
+      service.getSubscribePosterImageUrl(
+        poster: "https://lain.bgm.tv/pic/cover/l/valid.jpg"
+      )
+    )
   }
 
   private func assertProxyURL(

@@ -330,6 +330,29 @@ nonisolated private func isBangumiImageURL(_ value: String) -> Bool {
   return value.contains("lain.bgm.tv")
 }
 
+nonisolated private func isDefaultPlaceholderImageURL(_ value: String) -> Bool {
+  guard let components = URLComponents(string: value),
+    let host = components.host?.lowercased()
+  else {
+    return false
+  }
+
+  let path = components.path.lowercased()
+  let isDoubanHost = host == "doubanio.com" || host.hasSuffix(".doubanio.com")
+  if isDoubanHost {
+    return path.contains("movie_default") || path.contains("tv_default")
+      || path.contains("personage-default") || path.contains("celebrity-default")
+  }
+
+  let isBangumiHost = host == "lain.bgm.tv" || host.hasSuffix(".lain.bgm.tv")
+  if isBangumiHost {
+    return path.contains("no_icon")
+  }
+
+  let isAniListHost = host == "anilist.co" || host.hasSuffix(".anilist.co")
+  return isAniListHost && path.contains("anilistcdn") && path.hasSuffix("/default.jpg")
+}
+
 nonisolated private func displayImageURL(
   _ value: String?,
   baseURL: String,
@@ -3200,6 +3223,7 @@ class APIService: ObservableObject {
   }
 
   func getSubscribePosterImageUrl(poster: String?) -> URL? {
+    guard let poster, !isDefaultPlaceholderImageURL(poster) else { return nil }
     return displayImageURL(poster, baseURL: baseURL, useImageCache: useImageCache)
   }
 
@@ -3214,20 +3238,8 @@ class APIService: ObservableObject {
   }
 
   func getPosterImageUrl(posterPath: String?) -> URL? {
-    let url = posterPath?.replacingOccurrences(of: "original", with: "w500")
-
-    // 1. 匹配数据源默认空白海报并拦截：豆瓣 movie_default/tv_default、
-    //    Bangumi 无封面官方占位图 no_icon_subject。
-    if let currentUrl = url {
-      if currentUrl.contains("doubanio.com"),
-        currentUrl.contains("movie_default") || currentUrl.contains("tv_default")
-      {
-        return nil
-      }
-      if currentUrl.contains("lain.bgm.tv") && currentUrl.contains("no_icon") {
-        return nil
-      }
-    }
+    guard let posterPath, !isDefaultPlaceholderImageURL(posterPath) else { return nil }
+    let url = posterPath.replacingOccurrences(of: "original", with: "w500")
 
     return displayImageURL(url, baseURL: baseURL, useImageCache: useImageCache)
   }
@@ -3235,16 +3247,7 @@ class APIService: ObservableObject {
   /// 获取海报原始 URL（不降尺寸），作为降尺寸版本加载失败时的回退来源。
   /// 与降尺寸版本共用数据源默认空白海报拦截规则。
   func getPosterImageUrlOriginal(posterPath: String?) -> URL? {
-    if let url = posterPath {
-      if url.contains("doubanio.com"),
-        url.contains("movie_default") || url.contains("tv_default")
-      {
-        return nil
-      }
-      if url.contains("lain.bgm.tv") && url.contains("no_icon") {
-        return nil
-      }
-    }
+    guard let posterPath, !isDefaultPlaceholderImageURL(posterPath) else { return nil }
     return displayImageURL(posterPath, baseURL: baseURL, useImageCache: useImageCache)
   }
 
@@ -3344,21 +3347,7 @@ class APIService: ObservableObject {
       return nil
     }
 
-    // 匹配数据源默认空白图片并拦截 (针对 Apple TV 的特殊优化)：
-    // 豆瓣无图人物返回 personage-default / celebrity-default；
-    // AniList 无头像 Staff/Character 返回官方默认图 anilistcdn/.../default.jpg；
-    // Bangumi 官方占位图 no_icon_*（subject/person）。
-    // 均与豆瓣空白图一样改为显示本地统一占位符。
-    let isDoubanPlaceholder =
-      url.contains("doubanio.com")
-      && (url.contains("personage-default") || url.contains("celebrity-default"))
-    let isAniListPlaceholder =
-      url.contains("anilist.co") && url.contains("anilistcdn") && url.contains("default.jpg")
-    let isBangumiPlaceholder =
-      url.contains("lain.bgm.tv") && url.contains("no_icon")
-    if isDoubanPlaceholder || isAniListPlaceholder || isBangumiPlaceholder {
-      return nil
-    }
+    guard !isDefaultPlaceholderImageURL(url) else { return nil }
 
     return displayImageURL(url, baseURL: baseURL, useImageCache: useImageCache)
   }
