@@ -13,10 +13,10 @@
 3. 禁止用 `swift build`、`swift test` 或 `swift package resolve` 冒充本项目验证。
 4. 禁止把未完成、未合并、未验证的内容写进 Release Notes。
 5. Release Notes 必须使用本文固定格式，并与代码内对应版本的 Changelog 内容一致，不要临场模仿或二次改写。
-6. AI 不得为了“完成任务”而跳过 Changelog 内容确认、代码合并和正式发布确认；GitHub 发布动作必须发生在对应条目已合并且用户再次明确确认正式发布之后。
+6. AI 不得为了“完成任务”而跳过 Changelog 内容确认、新版本信息同步和正式发布确认；GitHub 发布动作必须发生在新版本信息已直接提交并推送到 `main`，且用户再次明确确认正式发布之后。
 7. 发布版本号必须同时同步 README 与 Xcode 工程版本号，不能只改其中一个。
-8. 正式发布是 `AGENTS.md` Git 工作流的唯一例外：用户确认 Release Notes 并明确允许 commit、Push 后，必须确认本地 `main` 与远端 `main` 一致，然后直接提交并推送 `main`，不要创建发布分支或 Pull Request。该例外不适用于其他任务。
-9. `MoviePilot-TV/Models/AppChangelog.swift` 是版本说明的单一事实来源。新版本必须先在普通功能分支写入并经用户确认、验证、推送和合并，之后才能进入正式发布；这些 Git 动作仍分别需要用户明确授权。
+8. 正式发布是 `AGENTS.md` Git 工作流的唯一例外：用户确认 Release Notes 后，发布专属的新版本信息改动必须直接在最新 `main` 上完成，不要创建发布分支或 Pull Request。新版本信息包括 `MoviePilot-TV/Models/AppChangelog.swift` 的新条目及对应版本断言、README 版本标记和 App target 的 `MARKETING_VERSION`；commit、Push 和创建 GitHub Release 仍分别需要用户明确授权。该例外不适用于其他任务。
+9. `MoviePilot-TV/Models/AppChangelog.swift` 是版本说明的单一事实来源。新版本条目必须先由用户确认内容，再与 README、Xcode 工程版本号一起直接写入最新 `main`；不得为这些发布专属改动创建普通功能分支或 Pull Request。待发布的业务功能仍必须事先按普通工作流合并到 `main`。
 
 ## 发布模式判断
 
@@ -30,9 +30,9 @@
 4. 收集从上一个版本到当前发布目标分支的变更。
 5. 按本文固定格式生成 Changelog 草稿；`更新内容` 标题下最前面的摘要条目用于弹窗，后续小节是完整说明。
 6. 将草稿发给用户确认。
-7. 用户确认内容后，在普通 `ai/xxx` 分支把该版本作为 `AppChangelog.entries` 的第一项写入代码，并补充或更新测试。
-8. 按 `AGENTS.md` 完成验证；commit、Push、创建 PR 和合并都必须分别取得用户明确授权。
-9. Changelog 改动未合并到 `main` 前，不得进入正式发布。
+7. 用户确认内容后，先确认本地 `main` 与远端 `main` 一致，再直接在 `main` 把该版本作为 `AppChangelog.entries` 的第一项写入代码，同步 README 和 App target 的 `MARKETING_VERSION`，并补充或更新对应版本断言；不要创建发布分支或 Pull Request。
+8. 按 `AGENTS.md` 完成验证；commit 和 Push 必须分别取得用户明确授权，并直接发生在 `main`。
+9. 新版本信息未提交并推送到 `main` 前，不得创建 GitHub Release；创建 Release 仍需用户再次明确确认。
 
 准备发布阶段不得创建 GitHub Release。
 
@@ -60,7 +60,7 @@
    - 默认不要修改 `CURRENT_PROJECT_VERSION`，除非用户明确要求递增 build number。
    - 不要修改 `MoviePilot-TV-Tests` test target 的 `MARKETING_VERSION = 1.0`。
 3. `MoviePilot-TV/Models/AppChangelog.swift`
-   - 对应版本条目必须已经作为第一项合并到 `main`。
+   - 对应版本条目必须在用户确认内容后直接作为第一项写入最新 `main`，不要另建分支或 Pull Request。
    - `version` 必须与发布版本号完全一致，`releaseDate` 使用发布日期。
    - `compatibleMoviePilotVersion` 必须与该版本实际兼容基线一致。
    - 不要在正式发布阶段临时改写已确认的 `highlights`、`updates`、`fixes` 或 `optimizations`。
@@ -87,7 +87,7 @@ Release Notes 必须使用下面的固定 Markdown 格式。不得自行更改�
 - ...
 ```
 
-代码字段与 Markdown 内容固定对应：`highlights` → `更新内容` 标题下最前面的摘要条目、`updates` → `新增功能`、`fixes` → `修复`、`optimizations` → `优化`。GitHub Release Notes 必须从已合并的对应 `AppChangelogEntry` 逐项复制，保持文字和顺序一致。
+代码字段与 Markdown 内容固定对应：`highlights` → `更新内容` 标题下最前面的摘要条目、`updates` → `新增功能`、`fixes` → `修复`、`optimizations` → `优化`。GitHub Release Notes 必须从 `main` 中对应的 `AppChangelogEntry` 逐项复制，保持文字和顺序一致。
 
 ## 小节写法
 
@@ -142,7 +142,7 @@ Release Notes 必须使用下面的固定 Markdown 格式。不得自行更改�
 1. 当前目标分支是否为最新 `main`。
 2. 用户提供的版本号是否有效。
 3. 是否已存在同名版本记录。
-4. 相关 PR 是否已经合并。
+4. 待发布的业务功能相关 PR 是否已经合并；发布专属的新版本信息改动本身不得另建 PR。
 5. CI 是否通过。
 6. README Release 徽章和安装示例 tag 是否已经同步到用户提供的版本号。
 7. `MoviePilot-TV` App target 的 Debug / Release `MARKETING_VERSION` 是否已经同步到用户提供的不带 `v` 版本号。
@@ -170,12 +170,13 @@ Release Notes 必须使用下面的固定 Markdown 格式。不得自行更改�
 ## 正式发布步骤
 
 1. 确认用户已提供版本号。
-2. 确认对应 `AppChangelogEntry` 已经按普通分支/PR 流程合并到 `main`。
-3. 确认 README 与 Xcode 工程版本号已同步。
-4. 确认用户已审核并批准从该条目生成的 Release Notes。
+2. 确认待发布的业务功能已经按普通分支/PR 流程合并到最新 `main`；不要为新版本信息另建分支或 Pull Request。
+3. 确认用户已审核并批准 Release Notes 内容。
+4. 直接在最新 `main` 写入对应 `AppChangelogEntry`，同步 README、App target 的 `MARKETING_VERSION` 和对应版本断言。
 5. 确认测试/CI 状态满足发布门禁。
-6. 确认本地 `main` 与远端 `main` 一致，将版本同步和本次发布相关改动直接提交并推送 `main`。
-7. 使用已合并 Changelog 的对应内容创建 GitHub Release。
-8. 等待 GitHub Actions 发布流程。
-9. 检查 `MoviePilot-TV-unsigned.ipa` 是否成功上传到 Release。
-10. 向用户报告：Release 链接、版本号、workflow 状态、产物名称、是否 unsigned。
+6. 取得用户对 commit、Push 的明确授权后，将新版本信息直接提交并推送 `main`。
+7. 再次取得用户创建 GitHub Release 的明确确认。
+8. 使用 `main` 中 Changelog 的对应内容创建 GitHub Release。
+9. 等待 GitHub Actions 发布流程。
+10. 检查 `MoviePilot-TV-unsigned.ipa` 是否成功上传到 Release。
+11. 向用户报告：Release 链接、版本号、workflow 状态、产物名称、是否 unsigned。
