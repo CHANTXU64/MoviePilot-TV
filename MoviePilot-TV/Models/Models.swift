@@ -14,6 +14,8 @@ extension Notification.Name {
   static let paginatorDidReachErrorLimit = Notification.Name("paginatorDidReachErrorLimit")
   /// 媒体详情连续失败达到上限，交由全局通知提示用户
   static let mediaDetailLoadDidFail = Notification.Name("mediaDetailLoadDidFail")
+  /// 当前服务器和用户的默认搜索来源或站点发生变化
+  static let searchDefaultsDidChange = Notification.Name("searchDefaultsDidChange")
 }
 
 nonisolated struct MediaIdentity: Hashable {

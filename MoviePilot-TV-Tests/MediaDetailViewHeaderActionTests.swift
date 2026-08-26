@@ -3,6 +3,23 @@ import XCTest
 
 @testable import MoviePilot_TV
 
+@MainActor
+private func drainDetailSearchDefaultsNotifications() async {
+  await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+    DispatchQueue.main.async {
+      continuation.resume()
+    }
+  }
+}
+
+private func restoreDetailSearchDefaultsArray(_ value: [Any]?, forKey key: String) {
+  if let value {
+    UserDefaults.standard.set(value, forKey: key)
+  } else {
+    UserDefaults.standard.removeObject(forKey: key)
+  }
+}
+
 final class MediaDetailViewHeaderActionTests: XCTestCase {
   @MainActor
   func testMediaDetailViewModelForwardsSiteFilterChangesToParent() {
@@ -27,6 +44,58 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     viewModel.siteFilter.selectedSites = [1]
 
     wait(for: [changeReceived], timeout: 1)
+  }
+
+  @MainActor
+  func testSettingsHotUpdateDetailSitesWithoutOverwritingPageOverride() async throws {
+    let service = APIService.isolatedTestingInstance()
+    let account = Token(
+      access_token: "detail-search-defaults",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: [
+        "discovery": false,
+        "search": true,
+        "subscribe": false,
+        "manage": false,
+        "admin": false,
+      ],
+      user_id: 302,
+      user_name: "detail-search-defaults",
+      avatar: nil
+    )
+    service.replaceSessionForTesting(
+      baseURL: "http://detail-search-defaults.local",
+      token: account.access_token,
+      currentUser: account
+    )
+    let profileKey = try XCTUnwrap(service.profileKey)
+    let sitesKey = "defaultSearchSites_\(profileKey)"
+    let previousSites = UserDefaults.standard.array(forKey: sitesKey)
+    defer { restoreDetailSearchDefaultsArray(previousSites, forKey: sitesKey) }
+    UserDefaults.standard.set([1], forKey: sitesKey)
+
+    let detail = MediaInfo(
+      tmdb_id: 1,
+      source: "themoviedb",
+      title: "详情筛选热更新",
+      type: "电影"
+    )
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
+    let settings = SystemViewModel(apiService: service)
+
+    XCTAssertEqual(viewModel.siteFilter.selectedSites, [1])
+    settings.defaultSearchSites = [2]
+    await drainDetailSearchDefaultsNotifications()
+    XCTAssertEqual(viewModel.siteFilter.selectedSites, [2])
+
+    viewModel.siteFilter.selectedSites = [9]
+    settings.defaultSearchSites = [9]
+    await drainDetailSearchDefaultsNotifications()
+
+    settings.defaultSearchSites = [3]
+    await drainDetailSearchDefaultsNotifications()
+    XCTAssertEqual(viewModel.siteFilter.selectedSites, [9])
   }
 
   @MainActor

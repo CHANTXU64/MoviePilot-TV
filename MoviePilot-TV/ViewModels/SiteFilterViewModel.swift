@@ -4,15 +4,35 @@ import SwiftUI
 
 @MainActor
 class SiteFilterViewModel: ObservableObject {
-  @Published var selectedSites: Set<Int>
+  @Published var selectedSites: Set<Int> {
+    didSet {
+      guard !isUpdatingSelectionInternally, selectedSites != oldValue else { return }
+      followsDefaultSites = false
+    }
+  }
   @Published var availableSites: [Site] = []
   private(set) var hasLoadedSites: Bool = false
 
   private let apiService: APIService
+  private var lastAppliedDefaultSites: Set<Int>
+  private var followsDefaultSites = true
+  private var isUpdatingSelectionInternally = false
+  private var cancellables = Set<AnyCancellable>()
 
   init(apiService: APIService = .shared) {
     self.apiService = apiService
-    self.selectedSites = SystemViewModel.currentDefaultSearchSites(apiService: apiService)
+    let defaultSites = SystemViewModel.currentDefaultSearchSites(apiService: apiService)
+    self.selectedSites = defaultSites
+    self.lastAppliedDefaultSites = defaultSites
+
+    NotificationCenter.default.publisher(for: .searchDefaultsDidChange)
+      .compactMap { $0.object as? SearchDefaultsChange }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] change in
+        guard let self, change.profileKey == self.apiService.profileKey else { return }
+        self.applyDefaultSites(change.defaultSearchSites)
+      }
+      .store(in: &cancellables)
   }
 
   func loadSites() async {
@@ -24,6 +44,7 @@ class SiteFilterViewModel: ObservableObject {
       let sites = try await apiService.fetchSites()
       self.availableSites = sites
       hasLoadedSites = true
+      applyDefaultSites(SystemViewModel.currentDefaultSearchSites(apiService: apiService))
       normalizeSelectedSites()
     } catch is CancellationError {
       if !apiService.canAccess(.search) {
@@ -56,15 +77,33 @@ class SiteFilterViewModel: ObservableObject {
     guard hasLoadedSites else { return }
 
     let availableSiteIds = Set(availableSites.map(\.id))
-    let normalizedSites = selectedSites.intersection(availableSiteIds)
-    if normalizedSites != selectedSites {
-      selectedSites = normalizedSites
+    lastAppliedDefaultSites.formIntersection(availableSiteIds)
+    let normalizedSelection = selectedSites.intersection(availableSiteIds)
+    let nextSelection = followsDefaultSites ? lastAppliedDefaultSites : normalizedSelection
+    updateSelectionInternally(nextSelection)
+  }
+
+  private func applyDefaultSites(_ sites: Set<Int>) {
+    let nextDefault =
+      hasLoadedSites ? sites.intersection(Set(availableSites.map(\.id))) : sites
+    lastAppliedDefaultSites = nextDefault
+    if followsDefaultSites {
+      updateSelectionInternally(nextDefault)
     }
   }
 
   private func clearLoadedSites() {
     availableSites = []
-    selectedSites = []
+    lastAppliedDefaultSites = []
+    followsDefaultSites = true
+    updateSelectionInternally([])
     hasLoadedSites = false
+  }
+
+  private func updateSelectionInternally(_ sites: Set<Int>) {
+    guard selectedSites != sites else { return }
+    isUpdatingSelectionInternally = true
+    selectedSites = sites
+    isUpdatingSelectionInternally = false
   }
 }

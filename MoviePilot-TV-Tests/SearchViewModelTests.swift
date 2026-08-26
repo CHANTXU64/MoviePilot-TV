@@ -37,6 +37,31 @@ private enum SearchStreamTermination {
   case eof
 }
 
+@MainActor
+private func drainSearchDefaultsNotifications() async {
+  await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+    DispatchQueue.main.async {
+      continuation.resume()
+    }
+  }
+}
+
+private func restoreSearchDefaultsArray(_ value: [Any]?, forKey key: String) {
+  if let value {
+    UserDefaults.standard.set(value, forKey: key)
+  } else {
+    UserDefaults.standard.removeObject(forKey: key)
+  }
+}
+
+private func restoreSearchDefaultsString(_ value: String?, forKey key: String) {
+  if let value {
+    UserDefaults.standard.set(value, forKey: key)
+  } else {
+    UserDefaults.standard.removeObject(forKey: key)
+  }
+}
+
 private func withTimeout<T: Sendable>(
   _ description: String,
   seconds: TimeInterval = 2,
@@ -482,6 +507,62 @@ final class SearchViewModelTests: XCTestCase {
 
     settingsViewModel.defaultMediaSearchSource = nil
     XCTAssertNil(SearchViewModel().mediaSearchSource)
+  }
+
+  func testSettingsHotUpdateSearchDefaultsWithoutOverwritingPageOverrides() async throws {
+    let service = APIService.isolatedTestingInstance()
+    service.baseURLForTesting = "http://search-defaults.local"
+    configureSearchPermissionSession(service)
+    let profileKey = try XCTUnwrap(service.profileKey)
+    let sitesKey = "defaultSearchSites_\(profileKey)"
+    let sourceKey = "defaultMediaSearchSource_\(profileKey)"
+    let previousSites = UserDefaults.standard.array(forKey: sitesKey)
+    let previousSource = UserDefaults.standard.string(forKey: sourceKey)
+    defer {
+      restoreSearchDefaultsArray(previousSites, forKey: sitesKey)
+      restoreSearchDefaultsString(previousSource, forKey: sourceKey)
+    }
+
+    UserDefaults.standard.set([1], forKey: sitesKey)
+    UserDefaults.standard.set(MediaSearchSource.douban.rawValue, forKey: sourceKey)
+    let viewModel = SearchViewModel(apiService: service)
+    let settings = SystemViewModel(apiService: service)
+
+    XCTAssertEqual(viewModel.siteFilter.selectedSites, [1])
+    XCTAssertEqual(viewModel.mediaSearchSource, .douban)
+
+    settings.defaultSearchSites = [2]
+    settings.defaultMediaSearchSource = .anilist
+    await drainSearchDefaultsNotifications()
+
+    XCTAssertEqual(viewModel.siteFilter.selectedSites, [2])
+    XCTAssertEqual(viewModel.mediaSearchSource, .anilist)
+
+    NotificationCenter.default.post(
+      name: .searchDefaultsDidChange,
+      object: SearchDefaultsChange(
+        profileKey: "another-profile",
+        defaultSearchSites: [8],
+        defaultMediaSearchSource: .bangumi
+      )
+    )
+    await drainSearchDefaultsNotifications()
+
+    XCTAssertEqual(viewModel.siteFilter.selectedSites, [2])
+    XCTAssertEqual(viewModel.mediaSearchSource, .anilist)
+
+    viewModel.siteFilter.selectedSites = [9]
+    viewModel.mediaSearchSource = .themoviedb
+    settings.defaultSearchSites = [9]
+    settings.defaultMediaSearchSource = .themoviedb
+    await drainSearchDefaultsNotifications()
+
+    settings.defaultSearchSites = [3]
+    settings.defaultMediaSearchSource = .bangumi
+    await drainSearchDefaultsNotifications()
+
+    XCTAssertEqual(viewModel.siteFilter.selectedSites, [9])
+    XCTAssertEqual(viewModel.mediaSearchSource, .themoviedb)
   }
 
   func testCancelledResourceSearchFilteringDoesNotPublishOldResultsOrClearNewLoading()

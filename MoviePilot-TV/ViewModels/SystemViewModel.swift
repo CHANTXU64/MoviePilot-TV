@@ -1,6 +1,27 @@
 import Combine
 import Foundation
 
+struct SearchDefaultsChange {
+  let profileKey: String
+  let defaultSearchSites: Set<Int>
+  let defaultMediaSearchSource: MediaSearchSource?
+
+  @MainActor
+  static func post(apiService: APIService) {
+    guard let profileKey = apiService.profileKey else { return }
+    NotificationCenter.default.post(
+      name: .searchDefaultsDidChange,
+      object: SearchDefaultsChange(
+        profileKey: profileKey,
+        defaultSearchSites: SystemViewModel.currentDefaultSearchSites(apiService: apiService),
+        defaultMediaSearchSource: SystemViewModel.currentDefaultMediaSearchSource(
+          apiService: apiService
+        )
+      )
+    )
+  }
+}
+
 @MainActor
 class SystemViewModel: ObservableObject {
   enum StorageMechanism {
@@ -79,6 +100,7 @@ class SystemViewModel: ObservableObject {
         UserDefaults.standard.set(array, forKey: key)
       }
       objectWillChange.send()
+      SearchDefaultsChange.post(apiService: apiService)
     }
   }
 
@@ -97,6 +119,7 @@ class SystemViewModel: ObservableObject {
         UserDefaults.standard.removeObject(forKey: key)
       }
       objectWillChange.send()
+      SearchDefaultsChange.post(apiService: apiService)
     }
   }
 
@@ -460,6 +483,7 @@ class SystemViewModel: ObservableObject {
     } else {
       UserDefaults.standard.set(array, forKey: key)
     }
+    SearchDefaultsChange.post(apiService: apiService)
   }
 
   private static func siteIdsString(from sites: Set<Int>) -> String? {
