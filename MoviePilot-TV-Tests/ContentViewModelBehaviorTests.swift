@@ -73,6 +73,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
 
     await ContentViewModelURLProtocol.stub.reset()
     await ContentViewModelURLProtocol.stub.rejectSettingsToken("expired-token")
+    await ContentViewModelURLProtocol.stub.setCurrentUserStatusCode(403)
     await ContentViewModelURLProtocol.stub.setHoldLoginResponses(true)
     let service = APIService.testingInstance()
     let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
@@ -138,7 +139,9 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     XCTAssertEqual(freshSettingsCount, 1)
   }
 
-  func testPrepareStartupLogsOutUnauthorizedTokenOnlySession() async throws {
+  func testPrepareStartupRequiresReauthenticationForRejectedTokenWithoutCredentials()
+    async throws
+  {
     XCTAssertTrue(APIService.installURLProtocolForTesting(ContentViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(ContentViewModelURLProtocol.self) }
 
@@ -168,6 +171,8 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     XCTAssertNil(service.token)
     XCTAssertNil(service.currentUser)
     XCTAssertFalse(viewModel?.isLoggedIn == true)
+    XCTAssertEqual(service.loginDraft?.serverURL, "https://startup-token-only.content-view-model-tests.local")
+    XCTAssertEqual(service.loginDraft?.reason, .missingCredentials)
   }
 
   func testAccountPermissionWarningClearsWhenCurrentUserRegainsRecommendedPermissions() async throws {
@@ -409,6 +414,7 @@ private struct ContentViewModelServiceSnapshot {
   let baseURL: String
   let token: String?
   let currentUser: Token?
+  let loginDraft: LoginDraft?
   let settings: GlobalSettings?
   let serverURLDefaults: String?
   let tokenKeychain: String?
@@ -427,6 +433,7 @@ private struct ContentViewModelServiceSnapshot {
       baseURL: service.baseURL,
       token: service.token,
       currentUser: service.currentUser,
+      loginDraft: service.loginDraft,
       settings: service.settings,
       serverURLDefaults: UserDefaults.standard.string(forKey: "serverURL"),
       tokenKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "accessToken"),
@@ -448,6 +455,7 @@ private struct ContentViewModelServiceSnapshot {
       token: token,
       currentUser: currentUser
     )
+    service.loginDraft = loginDraft
     service.settings = settings
     service.restorePersistenceSnapshotForTesting(persistence)
     restoreDefaults(value: serverURLDefaults, forKey: "serverURL")
@@ -573,7 +581,11 @@ private actor ContentViewModelURLProtocolStub {
     }
 
     let data: Data
-    if statusCode == 403 {
+    if url.path == "/api/v1/user/current", statusCode == 401 {
+      data = #"{"detail":"Not authenticated"}"#.data(using: .utf8)!
+    } else if url.path == "/api/v1/user/current", statusCode == 403 {
+      data = #"{"detail":"token校验不通过"}"#.data(using: .utf8)!
+    } else if statusCode == 403 {
       data = #"{"success":false,"message":"forbidden"}"#.data(using: .utf8)!
     } else if url.path == "/api/v1/login/access-token" {
       data =

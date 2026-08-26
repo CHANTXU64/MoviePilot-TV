@@ -210,11 +210,12 @@ struct ReorganizeSheet: View {
             get: { viewModel.form.episode_group ?? "" },
             set: { viewModel.form.episode_group = $0.isEmpty ? nil : $0 }
           ),
-          options: viewModel.episodeGroupOptions
+          options: viewModel.episodeGroupOptions,
+          // 加载剧集组期间保持可聚焦但忽略点击，避免焦点跳走
+          ignoresInteractionWhileDisabled: viewModel.isEpisodeGroupsLoading
         )
         .disabled(
           viewModel.mediaId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || viewModel.isEpisodeGroupsLoading
         )
         .task(id: viewModel.episodeGroupQueryKey) {
           try? await Task.sleep(nanoseconds: 400_000_000)

@@ -79,6 +79,16 @@ class NotificationManager: ObservableObject {
         self?.show(message: "详情加载失败，请重试。", type: .error)
       }
       .store(in: &cancellables)
+
+    NotificationCenter.default.publisher(for: .authenticationNeedsAttention)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in
+        self?.show(
+          message: "登录状态反复验证失败，请前往设置的连接信息，选择“刷新登录凭据”。",
+          type: .warning
+        )
+      }
+      .store(in: &cancellables)
   }
 
   func show(message: String, type: NotificationType = .info, duration: TimeInterval = 5) {

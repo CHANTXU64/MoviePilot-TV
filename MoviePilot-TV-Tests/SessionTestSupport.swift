@@ -8,6 +8,9 @@ struct APIServicePersistenceSnapshot {
   let marker: Data?
   let keychainRecord: String?
   let defaultsRecord: String?
+  let loginDraftMarker: Data?
+  let loginDraftKeychainRecord: String?
+  let loginDraftDefaultsRecord: String?
   let username: String?
   let password: String?
   let legacyKeychainValues: [String: String]
@@ -27,6 +30,12 @@ struct APIServicePersistenceSnapshot {
       marker: UserDefaults.standard.data(forKey: "sessionMarker.v2"),
       keychainRecord: keychainRecord,
       defaultsRecord: defaultsRecord,
+      loginDraftMarker: UserDefaults.standard.data(forKey: "loginDraftMarker.v1"),
+      loginDraftKeychainRecord: KeychainHelper.shared.read(
+        service: "MoviePilot-TV",
+        account: "loginDraft.v1"
+      ),
+      loginDraftDefaultsRecord: UserDefaults.standard.string(forKey: "loginDraft.v1"),
       username: credentials?.username,
       password: credentials?.password,
       legacyKeychainValues: Dictionary(
@@ -65,6 +74,28 @@ struct APIServicePersistenceSnapshot {
       UserDefaults.standard.set(defaultsRecord, forKey: "sessionRecord.v2")
     } else {
       UserDefaults.standard.removeObject(forKey: "sessionRecord.v2")
+    }
+
+    if let loginDraftMarker {
+      UserDefaults.standard.set(loginDraftMarker, forKey: "loginDraftMarker.v1")
+    } else {
+      UserDefaults.standard.removeObject(forKey: "loginDraftMarker.v1")
+    }
+
+    if let loginDraftKeychainRecord {
+      _ = KeychainHelper.shared.save(
+        loginDraftKeychainRecord,
+        service: "MoviePilot-TV",
+        account: "loginDraft.v1"
+      )
+    } else {
+      _ = KeychainHelper.shared.delete(service: "MoviePilot-TV", account: "loginDraft.v1")
+    }
+
+    if let loginDraftDefaultsRecord {
+      UserDefaults.standard.set(loginDraftDefaultsRecord, forKey: "loginDraft.v1")
+    } else {
+      UserDefaults.standard.removeObject(forKey: "loginDraft.v1")
     }
 
     for account in Self.legacyAccounts {
@@ -193,6 +224,7 @@ struct SystemSessionServiceSnapshot {
   let baseURL: String
   let token: String?
   let currentUser: Token?
+  let loginDraft: LoginDraft?
   let tokenKeychain: String?
   let tokenDefaults: String?
   let currentUserKeychain: String?
@@ -211,6 +243,7 @@ struct SystemSessionServiceSnapshot {
       baseURL: service.baseURL,
       token: service.token,
       currentUser: service.currentUser,
+      loginDraft: service.loginDraft,
       tokenKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "accessToken"),
       tokenDefaults: UserDefaults.standard.string(forKey: "accessToken"),
       currentUserKeychain: KeychainHelper.shared.read(
@@ -235,6 +268,7 @@ struct SystemSessionServiceSnapshot {
       token: token,
       currentUser: currentUser
     )
+    service.loginDraft = loginDraft
     service.settings = settings
     service.useImageCache = useImageCache
     service.restorePersistenceSnapshotForTesting(persistence)
@@ -279,6 +313,9 @@ struct SystemSessionServiceSnapshot {
 actor SessionRefreshURLProtocolStub {
   private var requests: [URLRequest] = []
   private var loginFailureStatusCode: Int?
+  private var loginFailureJSON = #"{"detail":"用户名或密码错误"}"#
+  private var loginFailureHeaders: [String: String] = [:]
+  private var loginTransportErrorCode: URLError.Code?
   private var loginNoAccessibleFeatureResponse = false
   private var holdLoginResponses = false
   private var loginWaiters: [CheckedContinuation<Void, Never>] = []
@@ -287,10 +324,15 @@ actor SessionRefreshURLProtocolStub {
   private var resourceCookie: String?
   private var unauthorizedPath: String?
   private var unauthorizedStatusCode = 401
+  private var currentUserFailureStatusCode: Int?
+  private var currentUserFailureJSON = #"{"detail":"token校验不通过"}"#
 
   func reset() {
     requests.removeAll()
     loginFailureStatusCode = nil
+    loginFailureJSON = #"{"detail":"用户名或密码错误"}"#
+    loginFailureHeaders = [:]
+    loginTransportErrorCode = nil
     loginNoAccessibleFeatureResponse = false
     holdLoginResponses = false
     loginWaiters.forEach { $0.resume() }
@@ -301,10 +343,30 @@ actor SessionRefreshURLProtocolStub {
     resourceCookie = nil
     unauthorizedPath = nil
     unauthorizedStatusCode = 401
+    currentUserFailureStatusCode = nil
+    currentUserFailureJSON = #"{"detail":"token校验不通过"}"#
   }
 
-  func setLoginFailure(statusCode: Int?) {
+  func setLoginFailure(
+    statusCode: Int?,
+    json: String = #"{"detail":"用户名或密码错误"}"#,
+    headers: [String: String] = [:]
+  ) {
     loginFailureStatusCode = statusCode
+    loginFailureJSON = json
+    loginFailureHeaders = headers
+  }
+
+  func setLoginTransportError(_ code: URLError.Code?) {
+    loginTransportErrorCode = code
+  }
+
+  func setCurrentUserFailure(
+    statusCode: Int?,
+    json: String = #"{"detail":"token校验不通过"}"#
+  ) {
+    currentUserFailureStatusCode = statusCode
+    currentUserFailureJSON = json
   }
 
   func setLoginNoAccessibleFeatureResponse(_ enabled: Bool) {
@@ -379,10 +441,15 @@ actor SessionRefreshURLProtocolStub {
         unauthorizedWaiters.append(continuation)
       }
     }
+    if isLogin, let loginTransportErrorCode {
+      throw URLError(loginTransportErrorCode)
+    }
 
     let rejectsCurrentToken = unauthorizedPath.map({ url.path.hasPrefix($0) }) == true
       && request.value(forHTTPHeaderField: "Authorization") != "Bearer fresh-token"
-    let statusCode = if rejectsCurrentToken {
+    let statusCode = if url.path == "/api/v1/user/current", let currentUserFailureStatusCode {
+      currentUserFailureStatusCode
+    } else if rejectsCurrentToken {
       unauthorizedStatusCode
     } else if isLogin {
       loginFailureStatusCode ?? 200
@@ -390,6 +457,9 @@ actor SessionRefreshURLProtocolStub {
       200
     }
     var headers = ["Content-Type": "application/json"]
+    if isLogin, statusCode != 200 {
+      headers.merge(loginFailureHeaders) { _, new in new }
+    }
     if isLogin, statusCode == 200, let resourceCookie {
       headers["Set-Cookie"] = "\(resourceCookie); Path=/api/v1; HttpOnly"
     }
@@ -400,7 +470,11 @@ actor SessionRefreshURLProtocolStub {
       headerFields: headers
     )!
     let data: Data
-    if url.path == "/api/v1/user/current" {
+    if url.path == "/api/v1/user/current", currentUserFailureStatusCode != nil {
+      data = currentUserFailureJSON.data(using: .utf8)!
+    } else if isLogin, loginFailureStatusCode != nil {
+      data = loginFailureJSON.data(using: .utf8)!
+    } else if url.path == "/api/v1/user/current" {
       data =
         #"{"id":1,"name":"token-only-user","email":null,"is_active":true,"is_superuser":false,"avatar":null,"is_otp":false,"permissions":{"discovery":true,"search":true,"subscribe":false,"manage":false},"settings":{}}"#
         .data(using: .utf8)!
@@ -408,11 +482,8 @@ actor SessionRefreshURLProtocolStub {
       data = #"{"total_storage":100,"used_storage":40}"#.data(using: .utf8)!
     } else if url.path == "/api/v1/system/global" {
       data = #"{"success":true,"data":{"BACKEND_VERSION":"v2.15.5"}}"#.data(using: .utf8)!
-    } else if statusCode == 401 {
+    } else if statusCode == 401 || statusCode == 403 {
       data = #"{"success":false,"message":"unauthorized"}"#.data(using: .utf8)!
-    } else if isLogin, let loginFailureStatusCode {
-      data = #"{"success":false,"message":"login failed","status":\#(loginFailureStatusCode)}"#
-        .data(using: .utf8)!
     } else if loginNoAccessibleFeatureResponse {
       data =
         #"{"access_token":"fresh-token","token_type":"bearer","super_user":false,"permissions":{"discovery":false,"search":false,"subscribe":false,"manage":false},"user_id":2,"user_name":"locked","avatar":null}"#

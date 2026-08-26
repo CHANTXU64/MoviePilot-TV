@@ -124,12 +124,14 @@ struct ManualMediaSearchSheet: View {
           .labelsHidden()
 
           Button {
+            // 搜索中保持可聚焦：tvOS 上聚焦元素变 disabled 会导致焦点跳走；
+            // 点击在加载中被忽略，防重入由 guard 完成。
+            guard !viewModel.isLoading else { return }
             searchTask?.cancel()
             searchTask = Task { await viewModel.search() }
           } label: {
             Label("搜索", systemImage: "magnifyingglass")
           }
-          .disabled(viewModel.isLoading)
         }
         .focusSection()
         .padding(.horizontal, 28)

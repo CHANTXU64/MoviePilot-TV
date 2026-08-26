@@ -128,7 +128,15 @@ class SearchViewModel: ObservableObject {
   @Published var query: String = ""
   @Published var submittedQuery: String = ""  // 记录点击搜索时的关键词，用于分页请求
   @Published var hasSearched: Bool = false
-  @Published var mediaSearchSource: MediaSearchSource?
+  @Published var mediaSearchSource: MediaSearchSource? {
+    didSet {
+      guard
+        !isApplyingDefaultMediaSearchSource,
+        mediaSearchSource != oldValue
+      else { return }
+      followsDefaultMediaSearchSource = false
+    }
+  }
 
   var mediaSourceButtonLabel: String {
     mediaSearchSource?.title ?? "默认"
@@ -347,6 +355,8 @@ class SearchViewModel: ObservableObject {
   private var searchStreamTask: Task<Void, Never>?
   private var searchGeneration: Int = 0
   private let searchStreamDoneCloseDelay: UInt64 = 1_500_000_000
+  private var followsDefaultMediaSearchSource = true
+  private var isApplyingDefaultMediaSearchSource = false
   
   @Published var searchProgressText: String = ""
   @Published var searchProgress: Double = 0.0
@@ -355,9 +365,27 @@ class SearchViewModel: ObservableObject {
   init(apiService: APIService = .shared) {
     self.apiService = apiService
     self.siteFilter = SiteFilterViewModel(apiService: apiService)
-    self.mediaSearchSource = SystemViewModel.currentDefaultMediaSearchSource(apiService: apiService)
+    let defaultMediaSearchSource = SystemViewModel.currentDefaultMediaSearchSource(
+      apiService: apiService
+    )
+    self.mediaSearchSource = defaultMediaSearchSource
+    self.followsDefaultMediaSearchSource = true
     self.siteFilter.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
+
+    NotificationCenter.default.publisher(for: .searchDefaultsDidChange)
+      .compactMap { $0.object as? SearchDefaultsChange }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] change in
+        guard let self, change.profileKey == self.apiService.profileKey else { return }
+        guard self.followsDefaultMediaSearchSource else { return }
+        if self.mediaSearchSource != change.defaultMediaSearchSource {
+          self.isApplyingDefaultMediaSearchSource = true
+          self.mediaSearchSource = change.defaultMediaSearchSource
+          self.isApplyingDefaultMediaSearchSource = false
+        }
+      }
       .store(in: &cancellables)
   }
 

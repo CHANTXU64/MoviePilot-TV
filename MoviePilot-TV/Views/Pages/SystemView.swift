@@ -202,12 +202,19 @@ struct SystemView: View {
       }
       .scrollClipDisabled()
       .background(
-        SystemSettingsRootBackObserver(isEnabled: isSelected && isActive && page == .root) {
-          focusedItem = nil
-          withAnimation(.easeInOut(duration: 0.24)) {
-            scrollProxy.scrollTo(Self.topAnchorID, anchor: .top)
+        SystemSettingsRootBackObserver(
+          // Sheet / Alert 呈现期间禁用 Menu 手势：否则按 Menu 关闭弹层时
+          // 会同时触发 scrollTo(top)，随后焦点恢复又滚回原行，形成"先上滑再下滑"。
+          isEnabled: isSelected && isActive && page == .root
+            && !showAppInfo && updateNotice == nil && selectedChangelogEntry == nil
+            && !showLogoutConfirmation,
+          onExitPress: {
+            focusedItem = nil
+            withAnimation(.easeInOut(duration: 0.24)) {
+              scrollProxy.scrollTo(Self.topAnchorID, anchor: .top)
+            }
           }
-        }
+        )
       )
     }
   }
@@ -354,7 +361,8 @@ struct SystemView: View {
           )
         }
         .focused($focusedItem, equals: .relogin)
-        .disabled(viewModel.isRefreshing)
+        // 刷新中保持可聚焦：tvOS 上聚焦元素变 disabled 会导致焦点跳走并触发滚动；
+        // 防重入由 SystemViewModel.relogin() 内的 guard !isRefreshing 保证。
 
         Button {
           showLogoutConfirmation = true
@@ -379,6 +387,14 @@ struct SystemView: View {
             staticRow("最近状态", refreshMessage)
           }
         }
+
+        Text(
+          "密码安全提示：请勿将 MoviePilot 密码与其他服务共用。Apple 钥匙串不可用时，本 App 会自动降级为明文持久化密码；即使 Apple TV 环境相对封闭，仍存在密码泄露风险。"
+        )
+        .font(.body.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
       .padding(.leading, 16)
     }
@@ -1046,7 +1062,14 @@ private struct SystemSettingsRootBackObserver: UIViewRepresentable {
 
     @objc private func handlePress(_ recognizer: UITapGestureRecognizer) {
       guard recognizer.state == .ended, isEnabled else { return }
+      // 兜底：window 上若有模态呈现（sheet/alert 关闭动画中），Menu 键不属于设置页。
+      guard windowHasNoPresentedContent() else { return }
       onExitPress?()
+    }
+
+    private func windowHasNoPresentedContent() -> Bool {
+      guard let window = view?.window else { return true }
+      return window.rootViewController?.presentedViewController == nil
     }
   }
 }

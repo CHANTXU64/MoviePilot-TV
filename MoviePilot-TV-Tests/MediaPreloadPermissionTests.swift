@@ -200,7 +200,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertEqual(task.isSubscribed, true)
   }
 
-  func testSubscriptionStatusPermissionFailureLogsOutWithoutRetryingLogin() async throws {
+  func testSubscriptionStatusPermissionFailureKeepsSessionWithoutRelogin() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
@@ -219,17 +219,18 @@ final class MediaPreloadPermissionTests: XCTestCase {
         media: MediaInfo(tmdb_id: 456, title: "Subscriber Movie", type: "电影")
       )
       XCTFail("Expected subscription status permission failure to be surfaced.")
-    } catch APIError.unauthorized {
-      // Expected: authenticated 403 follows the same logout contract as Web.
+    } catch APIError.authenticationChallenge(let statusCode, _) {
+      XCTAssertEqual(statusCode, 403)
     } catch {
       XCTFail("Unexpected error: \(error)")
     }
 
-    XCTAssertNil(service.token)
-    XCTAssertNil(service.currentUser)
+    XCTAssertEqual(service.token, "subscriber-token")
+    XCTAssertEqual(service.currentUser?.user_name, "subscriber")
 
     let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
     XCTAssertEqual(paths.filter { $0.hasPrefix("/api/v1/subscribe/media/") }.count, 1)
+    XCTAssertEqual(paths.filter { $0 == "/api/v1/user/current" }.count, 1)
     XCTAssertFalse(paths.contains("/api/v1/login/access-token"))
   }
 
@@ -261,7 +262,7 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertNotNil(task.seasonViewModel)
   }
 
-  func testSeasonAvailabilityPermissionFailureLogsOutWithoutReplay() async throws {
+  func testSeasonAvailabilityPermissionFailureKeepsSessionWithoutReplay() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
 
@@ -277,18 +278,19 @@ final class MediaPreloadPermissionTests: XCTestCase {
       _ = try await service.checkSeasonsNotExists(
         mediaInfo: MediaInfo(tmdb_id: 123, title: "Subscriber Show", type: "电视剧")
       )
-      XCTFail("Expected season availability permission failure to surface as unauthorized")
-    } catch APIError.unauthorized {
-      // Expected: authenticated 403 follows the same logout contract as Web.
+      XCTFail("Expected season availability permission failure to surface")
+    } catch APIError.authenticationChallenge(let statusCode, _) {
+      XCTAssertEqual(statusCode, 403)
     } catch {
       XCTFail("Unexpected error: \(error)")
     }
 
-    XCTAssertNil(service.token)
-    XCTAssertNil(service.currentUser)
+    XCTAssertEqual(service.token, "subscriber-token")
+    XCTAssertEqual(service.currentUser?.user_name, "subscriber")
 
     let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
     XCTAssertEqual(paths.filter { $0 == "/api/v1/mediaserver/notexists" }.count, 1)
+    XCTAssertEqual(paths.filter { $0 == "/api/v1/user/current" }.count, 1)
     XCTAssertFalse(paths.contains("/api/v1/login/access-token"))
   }
 
@@ -320,11 +322,12 @@ final class MediaPreloadPermissionTests: XCTestCase {
     let sheetSubscribe = try XCTUnwrap(viewModel.sheetSubscribe)
     XCTAssertNil(sheetSubscribe.best_version)
     XCTAssertNil(sheetSubscribe.best_version_full)
-    XCTAssertNil(service.token)
-    XCTAssertNil(service.currentUser)
+    XCTAssertEqual(service.token, "subscriber-token")
+    XCTAssertEqual(service.currentUser?.user_name, "subscriber")
 
     let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
     XCTAssertEqual(paths.filter { $0 == "/api/v1/mediaserver/notexists" }.count, 1)
+    XCTAssertEqual(paths.filter { $0 == "/api/v1/user/current" }.count, 1)
     XCTAssertFalse(paths.contains("/api/v1/login/access-token"))
   }
 
@@ -806,6 +809,13 @@ private final class MediaPreloadPermissionURLProtocolStub: @unchecked Sendable {
       return (200, jsonData(#"{"tmdb_id":456,"title":"Limited Movie","type":"电影"}"#))
     case "/api/v1/media/bangumi:987":
       return (200, jsonData(#"{"bangumi_id":987,"title":"无法识别的 Bangumi 条目","type":"电视剧"}"#))
+    case "/api/v1/user/current":
+      return (
+        200,
+        jsonData(
+          #"{"id":17,"name":"subscriber","is_superuser":false,"permissions":{"discovery":true,"search":true,"subscribe":true,"manage":false}}"#
+        )
+      )
     case "/api/v1/media/groups/123",
       "/api/v1/media/seasons",
       "/api/v1/subscribe/":

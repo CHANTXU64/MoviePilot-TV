@@ -7,6 +7,9 @@ enum APIError: Error {
   case networkError(Error)
   case decodingError(Error)
   case serverMessage(String)
+  case authenticationChallenge(statusCode: Int, message: String?)
+  case credentialsRejected
+  case mfaUnsupported
   case unauthorized
   case unknown
 }
@@ -22,6 +25,12 @@ extension APIError: LocalizedError {
       return "响应解析失败"
     case .serverMessage(let message):
       return message
+    case .authenticationChallenge(let statusCode, let message):
+      return trimmedNonEmpty([message]) ?? "HTTP \(statusCode)"
+    case .credentialsRejected:
+      return "用户名或密码错误"
+    case .mfaUnsupported:
+      return "当前账号已开启 MFA，TV 端暂不支持"
     case .unauthorized:
       return "登录已失效"
     case .unknown:
@@ -36,6 +45,20 @@ enum SessionRefreshResult: Equatable {
   case skippedWithoutCredentials
   case refreshed
   case refreshFailed
+}
+
+enum LoginDraftReason: String, Codable, Equatable {
+  case credentialsRejected
+  case mfaUnsupported
+  case missingCredentials
+  case missingServerURL
+}
+
+struct LoginDraft: Codable, Equatable {
+  let serverURL: String
+  let username: String
+  let password: String?
+  let reason: LoginDraftReason
 }
 
 /// 统一错误文本选择器：逐项 trim 后按顺序取首个非空文本；全部无效返回 nil。
@@ -330,6 +353,29 @@ nonisolated private func isBangumiImageURL(_ value: String) -> Bool {
   return value.contains("lain.bgm.tv")
 }
 
+nonisolated private func isDefaultPlaceholderImageURL(_ value: String) -> Bool {
+  guard let components = URLComponents(string: value),
+    let host = components.host?.lowercased()
+  else {
+    return false
+  }
+
+  let path = components.path.lowercased()
+  let isDoubanHost = host == "doubanio.com" || host.hasSuffix(".doubanio.com")
+  if isDoubanHost {
+    return path.contains("movie_default") || path.contains("tv_default")
+      || path.contains("personage-default") || path.contains("celebrity-default")
+  }
+
+  let isBangumiHost = host == "lain.bgm.tv" || host.hasSuffix(".lain.bgm.tv")
+  if isBangumiHost {
+    return path.contains("no_icon")
+  }
+
+  let isAniListHost = host == "anilist.co" || host.hasSuffix(".anilist.co")
+  return isAniListHost && path.contains("anilistcdn") && path.hasSuffix("/default.jpg")
+}
+
 nonisolated private func displayImageURL(
   _ value: String?,
   baseURL: String,
@@ -534,13 +580,15 @@ actor APICache<Key: Hashable, Value> {
 class APIService: ObservableObject {
   static let shared = APIService()
   static let sessionRefreshAppVersionKey = "lastSessionRefreshAppVersion"
-  private static let noAccessibleFeatureMessage = "当前用户没有可访问的功能权限"
   private static let keychainService = "MoviePilot-TV"
   private static let accessTokenAccount = "accessToken"
   private static let currentUserAccount = "currentUser"
   private static let sessionRecordAccount = "sessionRecord.v2"
   private static let sessionMarkerKey = "sessionMarker.v2"
+  private static let loginDraftAccount = "loginDraft.v1"
+  private static let loginDraftMarkerKey = "loginDraftMarker.v1"
   private static let defaultBaseURL = "http://192.168.1.1:3000"
+  private static let ambiguousAuthenticationChallengeLimit = 3
 
   @Published private(set) var session: APIServiceSessionState
   private let sessionConfiguration: URLSessionConfiguration
@@ -549,6 +597,11 @@ class APIService: ObservableObject {
   private var storedPassword: String?
   private var storageLocation: StoredSessionMarker.Storage = .tombstone
   private var activeCandidateLoginCounts: [UInt64: Int] = [:]
+  var loginDraft: LoginDraft?
+  private var authenticationRetryTask: Task<Void, Never>?
+  private var authenticationRetryEpoch: UInt64?
+  private var ambiguousAuthenticationChallengeCount = 0
+  private var didNotifyAmbiguousAuthenticationChallenge = false
 
   var baseURL: String { session.baseURL }
   var token: String? { session.token }
@@ -638,7 +691,6 @@ class APIService: ObservableObject {
 
   private enum StoredCurrentUserState {
     case missing
-    case noAccessibleFeature
     case invalidToken
     case restored(Token)
   }
@@ -659,6 +711,81 @@ class APIService: ObservableObject {
     return try? JSONDecoder().decode(Token.self, from: data)
   }
 
+  private static func loadStoredLoginDraft() -> LoginDraft? {
+    let defaults = UserDefaults.standard
+    if let marker = loadLoginDraftMarker() {
+      let json: String?
+      switch marker.storage {
+      case .keychain:
+        json = KeychainHelper.shared.read(service: keychainService, account: loginDraftAccount)
+      case .userDefaults:
+        json = defaults.string(forKey: loginDraftAccount)
+      case .tombstone:
+        json = nil
+      }
+      return decodeLoginDraft(json)
+    }
+
+    // Marker 存在但损坏时失败关闭，避免重新加载已失去权威性的旧密码副本。
+    guard defaults.object(forKey: loginDraftMarkerKey) == nil else { return nil }
+
+    // 兼容本次 marker 引入前的草稿；旧实现中 UserDefaults 是 Keychain 失败后的新副本。
+    guard let legacyDraft = decodeLoginDraft(
+      defaults.string(forKey: loginDraftAccount)
+        ?? KeychainHelper.shared.read(service: keychainService, account: loginDraftAccount)
+    ) else {
+      return nil
+    }
+    _ = persistLoginDraft(legacyDraft)
+    return legacyDraft
+  }
+
+  @discardableResult
+  private static func persistLoginDraft(_ draft: LoginDraft) -> Bool {
+    guard
+      let data = try? JSONEncoder().encode(draft),
+      let json = String(data: data, encoding: .utf8)
+    else {
+      return false
+    }
+    let revision = nextLoginDraftRevision()
+    persistLoginDraftMarker(StoredSessionMarker(revision: revision, storage: .tombstone))
+    if KeychainHelper.shared.save(json, service: keychainService, account: loginDraftAccount) {
+      UserDefaults.standard.removeObject(forKey: loginDraftAccount)
+      persistLoginDraftMarker(StoredSessionMarker(revision: revision, storage: .keychain))
+      return true
+    }
+    UserDefaults.standard.set(json, forKey: loginDraftAccount)
+    persistLoginDraftMarker(StoredSessionMarker(revision: revision, storage: .userDefaults))
+    return true
+  }
+
+  private static func clearStoredLoginDraft() {
+    let revision = nextLoginDraftRevision()
+    persistLoginDraftMarker(StoredSessionMarker(revision: revision, storage: .tombstone))
+    _ = KeychainHelper.shared.delete(service: keychainService, account: loginDraftAccount)
+    UserDefaults.standard.removeObject(forKey: loginDraftAccount)
+  }
+
+  private static func decodeLoginDraft(_ json: String?) -> LoginDraft? {
+    guard let json, let data = json.data(using: .utf8) else { return nil }
+    return try? JSONDecoder().decode(LoginDraft.self, from: data)
+  }
+
+  private static func loadLoginDraftMarker() -> StoredSessionMarker? {
+    guard let data = UserDefaults.standard.data(forKey: loginDraftMarkerKey) else { return nil }
+    return try? JSONDecoder().decode(StoredSessionMarker.self, from: data)
+  }
+
+  private static func nextLoginDraftRevision() -> UInt64 {
+    (loadLoginDraftMarker()?.revision ?? 0) &+ 1
+  }
+
+  private static func persistLoginDraftMarker(_ marker: StoredSessionMarker) {
+    guard let data = try? JSONEncoder().encode(marker) else { return }
+    UserDefaults.standard.set(data, forKey: loginDraftMarkerKey)
+  }
+
   private static func clearStoredSessionCredentials() {
     [
       accessTokenAccount,
@@ -676,7 +803,6 @@ class APIService: ObservableObject {
   private static func storedCurrentUserState(storedToken: String) -> StoredCurrentUserState {
     guard let storedUser = loadStoredCurrentUser() else { return .missing }
     guard storedUser.hasKnownFeaturePermissions else { return .missing }
-    guard storedUser.hasLoginAccessibleFeature else { return .noAccessibleFeature }
     guard let restoredUser = storedUser.withRestoredAccessToken(storedToken) else {
       return .invalidToken
     }
@@ -698,9 +824,6 @@ class APIService: ObservableObject {
         cookies: cookies
       )
       return true
-    case .noAccessibleFeature:
-      logout()
-      return false
     case .missing, .invalidToken:
       return false
     }
@@ -710,6 +833,7 @@ class APIService: ObservableObject {
     let initial = Self.loadInitialSession()
     self.sessionConfiguration = sessionConfiguration.copy() as! URLSessionConfiguration
     session = initial.state
+    loginDraft = initial.loginDraft
     runtime = APIServiceSessionRuntime(
       identifier: initial.state.imageNamespace,
       configuration: self.sessionConfiguration
@@ -735,6 +859,10 @@ class APIService: ObservableObject {
         storageLocation = .tombstone
       }
     }
+    if initial.state.token != nil {
+      loginDraft = nil
+      Self.clearStoredLoginDraft()
+    }
   }
 
   var isLoggedIn: Bool {
@@ -745,6 +873,8 @@ class APIService: ObservableObject {
     let revision = nextStoredRevision()
     persistMarker(StoredSessionMarker(revision: revision, storage: .tombstone))
     storageLocation = .tombstone
+    loginDraft = nil
+    Self.clearStoredLoginDraft()
     clearStoredRecordAndLegacyCredentials()
     replaceSession(
       baseURL: baseURL,
@@ -757,6 +887,47 @@ class APIService: ObservableObject {
     NotificationCenter.default.post(name: .sessionDidLogout, object: nil)
   }
 
+  private func requireReauthentication(reason: LoginDraftReason) {
+    let draft = LoginDraft(
+      serverURL: baseURL,
+      username: storedUsername ?? currentUser?.user_name ?? "",
+      password: storedPassword,
+      reason: reason
+    )
+    loginDraft = draft
+    _ = Self.persistLoginDraft(draft)
+
+    let revision = nextStoredRevision()
+    persistMarker(StoredSessionMarker(revision: revision, storage: .tombstone))
+    storageLocation = .tombstone
+    clearStoredRecordAndLegacyCredentials()
+    replaceSession(
+      baseURL: draft.serverURL,
+      token: nil,
+      currentUser: nil,
+      username: draft.username,
+      password: draft.password,
+      persist: false
+    )
+  }
+
+  func updateLoginDraft(
+    serverURL: String,
+    username: String,
+    password: String,
+    reason: LoginDraftReason? = nil
+  ) {
+    guard let resolvedReason = reason ?? loginDraft?.reason else { return }
+    let draft = LoginDraft(
+      serverURL: serverURL.trimmingCharacters(in: .whitespacesAndNewlines),
+      username: username,
+      password: password,
+      reason: resolvedReason
+    )
+    loginDraft = draft
+    _ = Self.persistLoginDraft(draft)
+  }
+
   private var currentOrStoredUser: Token? {
     if let currentUser {
       return currentUser
@@ -765,7 +936,7 @@ class APIService: ObservableObject {
     switch Self.persistedCurrentUserState(storedToken: token) {
     case .restored(let storedUser):
       return storedUser
-    case .noAccessibleFeature, .invalidToken, .missing:
+    case .invalidToken, .missing:
       return nil
     }
   }
@@ -791,26 +962,39 @@ class APIService: ObservableObject {
     let username: String?
     let password: String?
     let storage: StoredSessionMarker.Storage
+    let loginDraft: LoginDraft?
   }
 
   private static func loadInitialSession() -> InitialSession {
     let defaults = UserDefaults.standard
-    let fallbackBaseURL = normalizedBaseURL(defaults.string(forKey: "serverURL")) ?? defaultBaseURL
+    let storedBaseURL = normalizedBaseURL(defaults.string(forKey: "serverURL"))
+    let fallbackBaseURL = storedBaseURL ?? defaultBaseURL
+    let persistedLoginDraft = loadStoredLoginDraft()
     if let marker = loadMarker() {
-      return restoreInitialSession(from: marker, fallbackBaseURL: fallbackBaseURL)
+      return restoreInitialSession(
+        from: marker,
+        fallbackBaseURL: fallbackBaseURL,
+        loginDraft: persistedLoginDraft
+      )
     }
 
     // 新格式标记存在但无法解码时必须失败关闭，不能退回旧字段复活已退出的账号。
     if defaults.object(forKey: sessionMarkerKey) != nil {
-      return loggedOutInitialSession(baseURL: fallbackBaseURL)
+      return loggedOutInitialSession(baseURL: fallbackBaseURL, loginDraft: persistedLoginDraft)
     }
 
-    return migrateLegacyInitialSession(baseURL: fallbackBaseURL, defaults: defaults)
+    return migrateLegacyInitialSession(
+      baseURL: storedBaseURL,
+      fallbackBaseURL: fallbackBaseURL,
+      persistedLoginDraft: persistedLoginDraft,
+      defaults: defaults
+    )
   }
 
   private static func restoreInitialSession(
     from marker: StoredSessionMarker,
-    fallbackBaseURL: String
+    fallbackBaseURL: String,
+    loginDraft: LoginDraft?
   ) -> InitialSession {
     guard marker.storage != .tombstone,
       let record = loadRecord(from: marker.storage),
@@ -818,12 +1002,20 @@ class APIService: ObservableObject {
       let normalizedURL = normalizedBaseURL(record.baseURL),
       !record.token.isEmpty
     else {
-      return loggedOutInitialSession(baseURL: fallbackBaseURL, epoch: marker.revision)
+      return loggedOutInitialSession(
+        baseURL: fallbackBaseURL,
+        epoch: marker.revision,
+        loginDraft: loginDraft
+      )
     }
 
     let restoredUser = record.currentUser?.withRestoredAccessToken(record.token)
     guard record.currentUser == nil || restoredUser != nil else {
-      return loggedOutInitialSession(baseURL: fallbackBaseURL, epoch: marker.revision)
+      return loggedOutInitialSession(
+        baseURL: fallbackBaseURL,
+        epoch: marker.revision,
+        loginDraft: loginDraft
+      )
     }
     return InitialSession(
       state: APIServiceSessionState(
@@ -835,23 +1027,41 @@ class APIService: ObservableObject {
       ),
       username: record.username,
       password: record.password,
-      storage: marker.storage
+      storage: marker.storage,
+      loginDraft: nil
     )
   }
 
   private static func migrateLegacyInitialSession(
-    baseURL: String,
+    baseURL: String?,
+    fallbackBaseURL: String,
+    persistedLoginDraft: LoginDraft?,
     defaults: UserDefaults
   ) -> InitialSession {
+    let legacyUsername = KeychainHelper.shared.read(service: keychainService, account: "username")
+      ?? defaults.string(forKey: "username")
+    let legacyPassword = KeychainHelper.shared.read(service: keychainService, account: "password")
+      ?? defaults.string(forKey: "password")
     guard let legacyToken = storedAccessToken, !legacyToken.isEmpty else {
       clearStoredSessionCredentials()
-      return loggedOutInitialSession(baseURL: baseURL)
+      return loggedOutInitialSession(
+        baseURL: fallbackBaseURL,
+        loginDraft: persistedLoginDraft
+      )
     }
-    let legacyUserState = storedCurrentUserState(storedToken: legacyToken)
-    if case .noAccessibleFeature = legacyUserState {
+    guard let baseURL else {
+      let draft = LoginDraft(
+        serverURL: "",
+        username: legacyUsername ?? "",
+        password: legacyPassword,
+        reason: .missingServerURL
+      )
+      _ = persistLoginDraft(draft)
       clearStoredSessionCredentials()
-      return loggedOutInitialSession(baseURL: baseURL)
+      return loggedOutInitialSession(baseURL: fallbackBaseURL, loginDraft: draft)
     }
+
+    let legacyUserState = storedCurrentUserState(storedToken: legacyToken)
     let legacyUser: Token?
     if case .restored(let user) = legacyUserState {
       legacyUser = user
@@ -866,23 +1076,24 @@ class APIService: ObservableObject {
         epoch: 0,
         imageNamespace: UUID().uuidString
       ),
-      username: KeychainHelper.shared.read(service: keychainService, account: "username")
-        ?? defaults.string(forKey: "username"),
-      password: KeychainHelper.shared.read(service: keychainService, account: "password")
-        ?? defaults.string(forKey: "password"),
-      storage: .userDefaults
+      username: legacyUsername,
+      password: legacyPassword,
+      storage: .userDefaults,
+      loginDraft: nil
     )
   }
 
   private static func loggedOutInitialSession(
     baseURL: String,
-    epoch: UInt64 = 0
+    epoch: UInt64 = 0,
+    loginDraft: LoginDraft? = nil
   ) -> InitialSession {
     InitialSession(
       state: loggedOutState(baseURL: baseURL, epoch: epoch),
       username: nil,
       password: nil,
-      storage: .tombstone
+      storage: .tombstone,
+      loginDraft: loginDraft
     )
   }
 
@@ -936,7 +1147,6 @@ class APIService: ObservableObject {
       let storedUser = record.currentUser
     {
       guard storedUser.hasKnownFeaturePermissions else { return .missing }
-      guard storedUser.hasLoginAccessibleFeature else { return .noAccessibleFeature }
       guard let restoredUser = storedUser.withRestoredAccessToken(storedToken) else {
         return .invalidToken
       }
@@ -999,6 +1209,8 @@ class APIService: ObservableObject {
     persist: Bool,
     cookies: [HTTPCookie] = []
   ) {
+    cancelAuthenticationRetry()
+    resetAmbiguousAuthenticationChallenges()
     let normalizedURL = Self.normalizedBaseURL(rawBaseURL) ?? session.baseURL
     let nextEpoch = session.epoch &+ 1
     let provisional = APIServiceSessionState(
@@ -1033,6 +1245,8 @@ class APIService: ObservableObject {
         imageNamespace: nextState.imageNamespace
       )
       storageLocation = persistRecord(record)
+      loginDraft = nil
+      Self.clearStoredLoginDraft()
     }
 
     let oldUIIdentity = session.uiIdentity
@@ -1088,14 +1302,6 @@ class APIService: ObservableObject {
     }
 
     let defaults = UserDefaults.standard
-    if let currentUser, currentUser.hasKnownFeaturePermissions,
-      !currentUser.hasLoginAccessibleFeature
-    {
-      logout()
-      defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
-      return .noStoredSession
-    }
-
     if defaults.string(forKey: Self.sessionRefreshAppVersionKey) == normalizedAppVersion {
       if token != nil, currentUser == nil {
         _ = restoreCurrentUserFromStorage()
@@ -1145,20 +1351,11 @@ class APIService: ObservableObject {
       return .skippedWithoutCredentials
     }
 
-    let startEpoch = session.epoch
     do {
-      _ = try await login(
-        username: username,
-        password: password
-      )
+      _ = try await reloginStoredSession()
       defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
       return .refreshed
     } catch {
-      if Self.isNoAccessibleFeatureError(error), session.epoch == startEpoch {
-        logout()
-        defaults.set(normalizedAppVersion, forKey: Self.sessionRefreshAppVersionKey)
-        return .noStoredSession
-      }
       return .refreshFailed
     }
   }
@@ -1169,27 +1366,18 @@ class APIService: ObservableObject {
 
   private func recoverCurrentUserFromCurrentUserEndpoint() async -> Bool {
     guard token?.isEmpty == false else { return false }
+    let startingEpoch = session.epoch
     do {
       let data = try await makeRequest(endpoint: "/user/current")
       let user = try JSONDecoder().decode(CurrentUserResponse.self, from: data)
       guard let accessToken = token, !accessToken.isEmpty else { return false }
       let recoveredUser = user.token(accessToken: accessToken)
-      guard recoveredUser.hasLoginAccessibleFeature else {
-        logout()
-        return false
-      }
-      let cookies = runtime.cookieVault.snapshot()
-      replaceSession(
-        baseURL: baseURL,
-        token: accessToken,
-        currentUser: recoveredUser,
-        username: storedUsername,
-        password: storedPassword,
-        persist: true,
-        cookies: cookies
-      )
+      applyRecoveredCurrentUser(recoveredUser, accessToken: accessToken)
       return true
+    } catch is CancellationError {
+      return session.epoch != startingEpoch && token != nil && currentUser != nil
     } catch {
+      scheduleAuthenticationRetry(forEpoch: startingEpoch)
       return false
     }
   }
@@ -1207,31 +1395,195 @@ class APIService: ObservableObject {
         lease: lease,
         requireCurrentLease: true
       )
-    } catch APIError.unauthorized {
-      try await recoverSessionAfterUnauthorized(lease)
+    } catch APIError.authenticationChallenge(let statusCode, let message) {
+      try await recoverSessionAfterAuthenticationChallenge(
+        lease,
+        endpoint: endpoint,
+        statusCode: statusCode,
+        message: message
+      )
       throw CancellationError()
     }
   }
 
-  private func recoverSessionAfterUnauthorized(_ lease: APIServiceSessionLease) async throws {
+  private enum CurrentUserProbeResult {
+    case valid(Token)
+    case rejected
+    case unavailable(Error)
+  }
+
+  private func recoverSessionAfterAuthenticationChallenge(
+    _ lease: APIServiceSessionLease,
+    endpoint: String,
+    statusCode: Int,
+    message: String?
+  ) async throws {
     try validate(lease)
+
+    if endpoint == "/user/current" {
+      guard Self.isDefinitiveCurrentUserRejection(statusCode: statusCode, message: message) else {
+        recordAmbiguousAuthenticationChallenge(forEpoch: lease.epoch)
+        throw APIError.authenticationChallenge(statusCode: statusCode, message: message)
+      }
+    } else {
+      switch await probeCurrentUser(using: lease) {
+      case .valid(let recoveredUser):
+        cancelAuthenticationRetry()
+        resetAmbiguousAuthenticationChallenges()
+        guard let accessToken = lease.token, !accessToken.isEmpty else {
+          throw APIError.authenticationChallenge(statusCode: statusCode, message: message)
+        }
+        if recoveredUser != currentUser {
+          applyRecoveredCurrentUser(recoveredUser, accessToken: accessToken)
+        }
+        // `/user/current` 成功证明 token 仍有效，原响应只能按业务权限错误处理。
+        throw APIError.authenticationChallenge(statusCode: statusCode, message: message)
+      case .rejected:
+        break
+      case .unavailable(let error):
+        // 无法完成权威校验时保持原会话，等待网络或服务恢复后重试。
+        recordAmbiguousAuthenticationChallenge(forEpoch: lease.epoch)
+        scheduleAuthenticationRetry(forEpoch: lease.epoch)
+        throw error
+      }
+    }
+
     guard let username = storedUsername, let password = storedPassword,
       !username.isEmpty, !password.isEmpty
     else {
-      logout()
-      throw APIError.unauthorized
+      requireReauthentication(reason: .missingCredentials)
+      return
     }
 
     do {
       _ = try await login(username: username, password: password, serverURL: lease.baseURL)
     } catch is CancellationError {
       throw CancellationError()
+    } catch APIError.credentialsRejected {
+      guard session.epoch == lease.epoch else { throw CancellationError() }
+      requireReauthentication(reason: .credentialsRejected)
+    } catch APIError.mfaUnsupported {
+      guard session.epoch == lease.epoch else { throw CancellationError() }
+      requireReauthentication(reason: .mfaUnsupported)
     } catch {
-      if session.epoch == lease.epoch {
-        logout()
-      }
-      throw APIError.unauthorized
+      // 断网、超时、服务端错误和未知响应都不是密码认证结论。
+      scheduleAuthenticationRetry(forEpoch: lease.epoch)
+      throw error
     }
+  }
+
+  private func probeCurrentUser(using lease: APIServiceSessionLease) async -> CurrentUserProbeResult {
+    do {
+      let data = try await performRequest(
+        endpoint: "/user/current",
+        method: "GET",
+        body: nil,
+        isForm: false,
+        lease: lease,
+        requireCurrentLease: true
+      )
+      let response = try JSONDecoder().decode(CurrentUserResponse.self, from: data)
+      guard let accessToken = lease.token, !accessToken.isEmpty else {
+        return .rejected
+      }
+      return .valid(response.token(accessToken: accessToken))
+    } catch APIError.authenticationChallenge(let statusCode, let message) {
+      if Self.isDefinitiveCurrentUserRejection(statusCode: statusCode, message: message) {
+        return .rejected
+      }
+      return .unavailable(
+        APIError.authenticationChallenge(statusCode: statusCode, message: message)
+      )
+    } catch {
+      return .unavailable(error)
+    }
+  }
+
+  private func applyRecoveredCurrentUser(_ recoveredUser: Token, accessToken: String) {
+    cancelAuthenticationRetry()
+    resetAmbiguousAuthenticationChallenges()
+    guard currentUser != recoveredUser else { return }
+    let cookies = runtime.cookieVault.snapshot()
+    replaceSession(
+      baseURL: baseURL,
+      token: accessToken,
+      currentUser: recoveredUser,
+      username: storedUsername,
+      password: storedPassword,
+      persist: true,
+      cookies: cookies
+    )
+  }
+
+  private static func isDefinitiveCurrentUserRejection(
+    statusCode: Int,
+    message: String?
+  ) -> Bool {
+    guard statusCode == 401 || statusCode == 403,
+      let message = trimmedNonEmpty([message])?.lowercased()
+    else {
+      return false
+    }
+    return [
+      "not authenticated",
+      "token校验不通过",
+      "authentication token not found",
+      "用户不存在",
+      "user does not exist",
+      "使用者不存在",
+      "用户未激活",
+    ].contains { message.contains($0) }
+  }
+
+  private func recordAmbiguousAuthenticationChallenge(forEpoch epoch: UInt64) {
+    guard session.epoch == epoch, token != nil else { return }
+    ambiguousAuthenticationChallengeCount += 1
+    guard ambiguousAuthenticationChallengeCount >= Self.ambiguousAuthenticationChallengeLimit,
+      !didNotifyAmbiguousAuthenticationChallenge
+    else {
+      return
+    }
+    didNotifyAmbiguousAuthenticationChallenge = true
+    NotificationCenter.default.post(name: .authenticationNeedsAttention, object: nil)
+  }
+
+  private func resetAmbiguousAuthenticationChallenges() {
+    ambiguousAuthenticationChallengeCount = 0
+    didNotifyAmbiguousAuthenticationChallenge = false
+  }
+
+  private func scheduleAuthenticationRetry(forEpoch epoch: UInt64) {
+    guard session.epoch == epoch, token != nil else { return }
+    guard authenticationRetryEpoch != epoch || authenticationRetryTask == nil else { return }
+
+    authenticationRetryTask?.cancel()
+    authenticationRetryEpoch = epoch
+    authenticationRetryTask = Task { [weak self] in
+      let delays: [UInt64] = [2, 5, 15, 30, 60]
+      var attempt = 0
+      while !Task.isCancelled {
+        let seconds = delays[min(attempt, delays.count - 1)]
+        do {
+          try await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+        } catch {
+          break
+        }
+        guard let self else { break }
+        guard !Task.isCancelled, self.session.epoch == epoch, self.token != nil else { break }
+        if await self.recoverCurrentUserFromCurrentUserEndpoint() { break }
+        attempt += 1
+      }
+      if let self, self.authenticationRetryEpoch == epoch {
+        self.authenticationRetryTask = nil
+        self.authenticationRetryEpoch = nil
+      }
+    }
+  }
+
+  private func cancelAuthenticationRetry() {
+    authenticationRetryTask?.cancel()
+    authenticationRetryTask = nil
+    authenticationRetryEpoch = nil
   }
 
   private func performRequest(
@@ -1279,7 +1631,7 @@ class APIService: ObservableObject {
     guard let url = URL(string: "\(lease.baseURL)/api/v1\(endpoint)") else {
       throw APIError.invalidURL
     }
-    return Self.configuredRequest(
+    var request = Self.configuredRequest(
       url: url,
       method: method,
       body: body,
@@ -1287,6 +1639,10 @@ class APIService: ObservableObject {
       token: lease.token,
       cookieHeader: lease.runtime.cookieVault.cookieHeader(for: url)
     )
+    if endpoint == "/user/current" || endpoint == "/login/access-token" {
+      request.timeoutInterval = 10
+    }
+    return request
   }
 
   static func configuredRequest(
@@ -1344,12 +1700,37 @@ class APIService: ObservableObject {
     if let responseURL = response.url {
       lease.runtime.cookieVault.update(from: response, for: responseURL)
     }
+    let errorPayload = Self.decodeErrorPayload(from: data)
+    let message = if endpoint == "/user/current" {
+      Self.definitiveCurrentUserRejectionMessage(errorPayload) ?? errorPayload?.localizedMessage
+    } else {
+      errorPayload?.localizedMessage
+    }
     if response.statusCode == 401 || response.statusCode == 403 {
+      if endpoint == "/login/access-token", response.statusCode == 401 {
+        if response.value(forHTTPHeaderField: "X-MFA-Required")?.lowercased() == "true"
+          || Self.containsAuthenticationMessage(
+            errorPayload,
+            candidates: ["需要二次验证", "two-step verification is required", "需要二次驗證"]
+          )
+        {
+          throw APIError.mfaUnsupported
+        }
+        if Self.isDefinitiveCredentialRejection(errorPayload) {
+          throw APIError.credentialsRejected
+        }
+      }
+      if endpoint == "/login/access-token" {
+        recordAmbiguousAuthenticationChallenge(forEpoch: lease.epoch)
+      }
       if requireCurrentLease, session.epoch == lease.epoch {
         if isCandidateLoginActive(for: lease.epoch) {
           throw CancellationError()
         }
-        throw APIError.unauthorized
+        throw APIError.authenticationChallenge(
+          statusCode: response.statusCode,
+          message: message
+        )
       }
       throw Self.serverMessageError(statusCode: response.statusCode, data: data)
     }
@@ -1360,24 +1741,80 @@ class APIService: ObservableObject {
   }
 
   static func serverMessageError(statusCode: Int, data: Data) -> APIError {
-    struct ErrorPayload: Decodable {
-      let message: String?
-      let message_i18n: String?
-      let detail: String?
-      let detail_i18n: String?
-    }
-    let payload = try? JSONDecoder().decode(ErrorPayload.self, from: data)
-    let message = trimmedNonEmpty([
-      payload?.message_i18n,
-      payload?.detail_i18n,
-      payload?.message,
-      payload?.detail,
-    ])
+    let message = decodeErrorPayload(from: data)?.localizedMessage
     let description = [String(statusCode), message]
       .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
       .filter { !$0.isEmpty }
       .joined(separator: ": ")
     return APIError.serverMessage(description)
+  }
+
+  private struct ErrorPayload: Decodable {
+    let message: String?
+    let message_i18n: String?
+    let detail: String?
+    let detail_i18n: String?
+
+    var localizedMessage: String? {
+      trimmedNonEmpty([message_i18n, detail_i18n, message, detail])
+    }
+
+    var allMessages: [String] {
+      [message_i18n, detail_i18n, message, detail].compactMap {
+        trimmedNonEmpty([$0])
+      }
+    }
+  }
+
+  private static func decodeErrorPayload(from data: Data) -> ErrorPayload? {
+    try? JSONDecoder().decode(ErrorPayload.self, from: data)
+  }
+
+  private static func isDefinitiveCredentialRejection(_ payload: ErrorPayload?) -> Bool {
+    containsAuthenticationMessage(
+      payload,
+      candidates: [
+        "用户名或密码错误",
+        "incorrect username or password",
+        "使用者名稱或密碼錯誤",
+      ]
+    )
+  }
+
+  private static func definitiveCurrentUserRejectionMessage(
+    _ payload: ErrorPayload?
+  ) -> String? {
+    matchingAuthenticationMessage(
+      payload,
+      candidates: [
+        "not authenticated",
+        "token校验不通过",
+        "authentication token not found",
+        "用户不存在",
+        "user does not exist",
+        "使用者不存在",
+        "用户未激活",
+      ]
+    )
+  }
+
+  private static func containsAuthenticationMessage(
+    _ payload: ErrorPayload?,
+    candidates: [String]
+  ) -> Bool {
+    matchingAuthenticationMessage(payload, candidates: candidates) != nil
+  }
+
+  private static func matchingAuthenticationMessage(
+    _ payload: ErrorPayload?,
+    candidates: [String]
+  ) -> String? {
+    guard let payload else { return nil }
+    let normalizedCandidates = candidates.map { $0.lowercased() }
+    return payload.allMessages.first { message in
+      let normalizedMessage = message.lowercased()
+      return normalizedCandidates.contains { normalizedMessage.contains($0) }
+    }
   }
 
   private func buildEndpoint(path: String, params: [String: String?] = [:]) throws -> String {
@@ -1520,9 +1957,6 @@ class APIService: ObservableObject {
       requireCurrentLease: false
     )
     let tokenResponse = try JSONDecoder().decode(Token.self, from: data)
-    guard tokenResponse.hasLoginAccessibleFeature else {
-      throw APIError.serverMessage(Self.noAccessibleFeatureMessage)
-    }
     guard session.epoch == startingEpoch else { throw CancellationError() }
 
     replaceSession(
@@ -1544,24 +1978,22 @@ class APIService: ObservableObject {
     else {
       throw APIError.serverMessage("未找到保存的凭据")
     }
-    let startEpoch = session.epoch
+    let startingEpoch = session.epoch
     do {
       return try await login(
         username: storedUsername,
         password: storedPassword,
         serverURL: baseURL
       )
-    } catch {
-      if Self.isNoAccessibleFeatureError(error), session.epoch == startEpoch {
-        logout()
-      }
-      throw error
+    } catch APIError.credentialsRejected {
+      guard session.epoch == startingEpoch else { throw CancellationError() }
+      requireReauthentication(reason: .credentialsRejected)
+      throw APIError.credentialsRejected
+    } catch APIError.mfaUnsupported {
+      guard session.epoch == startingEpoch else { throw CancellationError() }
+      requireReauthentication(reason: .mfaUnsupported)
+      throw APIError.mfaUnsupported
     }
-  }
-
-  private static func isNoAccessibleFeatureError(_ error: Error) -> Bool {
-    guard case APIError.serverMessage(let message) = error else { return false }
-    return message.contains(noAccessibleFeatureMessage)
   }
 
   private func beginCandidateLogin(for epoch: UInt64) {
@@ -3200,6 +3632,7 @@ class APIService: ObservableObject {
   }
 
   func getSubscribePosterImageUrl(poster: String?) -> URL? {
+    guard let poster, !isDefaultPlaceholderImageURL(poster) else { return nil }
     return displayImageURL(poster, baseURL: baseURL, useImageCache: useImageCache)
   }
 
@@ -3214,26 +3647,16 @@ class APIService: ObservableObject {
   }
 
   func getPosterImageUrl(posterPath: String?) -> URL? {
-    let url = posterPath?.replacingOccurrences(of: "original", with: "w500")
-
-    // 1. 匹配豆瓣默认海报并拦截
-    if let currentUrl = url, currentUrl.contains("doubanio.com") {
-      if currentUrl.contains("movie_default") || currentUrl.contains("tv_default") {
-        return nil
-      }
-    }
+    guard let posterPath, !isDefaultPlaceholderImageURL(posterPath) else { return nil }
+    let url = posterPath.replacingOccurrences(of: "original", with: "w500")
 
     return displayImageURL(url, baseURL: baseURL, useImageCache: useImageCache)
   }
 
   /// 获取海报原始 URL（不降尺寸），作为降尺寸版本加载失败时的回退来源。
-  /// 与降尺寸版本共用豆瓣默认海报拦截规则。
+  /// 与降尺寸版本共用数据源默认空白海报拦截规则。
   func getPosterImageUrlOriginal(posterPath: String?) -> URL? {
-    if let url = posterPath, url.contains("doubanio.com") {
-      if url.contains("movie_default") || url.contains("tv_default") {
-        return nil
-      }
-    }
+    guard let posterPath, !isDefaultPlaceholderImageURL(posterPath) else { return nil }
     return displayImageURL(posterPath, baseURL: baseURL, useImageCache: useImageCache)
   }
 
@@ -3333,12 +3756,7 @@ class APIService: ObservableObject {
       return nil
     }
 
-    // 匹配豆瓣默认人员图标并拦截 (针对 Apple TV 的特殊优化)
-    if url.contains("doubanio.com")
-      && (url.contains("personage-default") || (url.contains("celebrity-default")))
-    {
-      return nil
-    }
+    guard !isDefaultPlaceholderImageURL(url) else { return nil }
 
     return displayImageURL(url, baseURL: baseURL, useImageCache: useImageCache)
   }

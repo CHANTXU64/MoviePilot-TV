@@ -54,7 +54,7 @@ final class SystemSessionBehaviorTests: XCTestCase {
     )
   }
 
-  func testRefreshStoredSessionKeepsExistingSessionAndRetryMarkerWhenReloginFails() async throws {
+  func testRefreshStoredSessionRequiresReauthenticationWhenCredentialsAreRejected() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SessionRefreshURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SessionRefreshURLProtocol.self) }
 
@@ -101,13 +101,17 @@ final class SystemSessionBehaviorTests: XCTestCase {
     )
 
     XCTAssertEqual(result, .refreshFailed)
-    XCTAssertEqual(service.token, "stale-token")
-    XCTAssertEqual(service.currentUser?.user_name, "stale-user")
+    XCTAssertNil(service.token)
+    XCTAssertNil(service.currentUser)
+    XCTAssertEqual(service.loginDraft?.serverURL, "https://session-refresh-tests.local")
+    XCTAssertEqual(service.loginDraft?.username, "test-user")
+    XCTAssertEqual(service.loginDraft?.password, "test-password")
+    XCTAssertEqual(service.loginDraft?.reason, .credentialsRejected)
     let logoutNotificationCount = logoutNotifications.count()
     XCTAssertEqual(logoutNotificationCount, 0)
     XCTAssertNil(UserDefaults.standard.string(forKey: markerKey))
-    XCTAssertEqual(effectiveCredential(account: "username"), "test-user")
-    XCTAssertEqual(effectiveCredential(account: "password"), "test-password")
+    XCTAssertNil(effectiveCredential(account: "username"))
+    XCTAssertNil(effectiveCredential(account: "password"))
   }
 
   func testRefreshStoredSessionKeepsExistingSessionWhenStoredCredentialsAreMissing() async throws {
@@ -156,7 +160,7 @@ final class SystemSessionBehaviorTests: XCTestCase {
     XCTAssertEqual(UserDefaults.standard.string(forKey: markerKey), "v0.4.2")
   }
 
-  func testRefreshStoredSessionClearsActiveUserWithoutAccessibleFeature() async throws {
+  func testRefreshStoredSessionKeepsActiveUserWithoutAccessibleFeature() async throws {
     let service = APIService.shared
     let snapshot = SystemSessionServiceSnapshot.capture(service: service)
     let markerKey = "lastSessionRefreshAppVersion"
@@ -178,14 +182,12 @@ final class SystemSessionBehaviorTests: XCTestCase {
       appVersion: "v0.4.3"
     )
 
-    XCTAssertEqual(result, .noStoredSession)
-    XCTAssertNil(service.token)
-    XCTAssertNil(service.currentUser)
-    XCTAssertNil(effectiveCredential(account: "accessToken"))
-    XCTAssertNil(effectiveCredential(account: "currentUser"))
+    XCTAssertEqual(result, .skippedWithoutCredentials)
+    XCTAssertEqual(service.token, "stored-token")
+    XCTAssertEqual(service.currentUser?.user_name, "limited")
   }
 
-  func testRefreshStoredSessionClearsStoredUserWithoutAccessibleFeatureWhenVersionAlreadyRefreshed()
+  func testRefreshStoredSessionKeepsStoredUserWithoutAccessibleFeatureWhenVersionAlreadyRefreshed()
     async throws
   {
     let sharedService = APIService.shared
@@ -207,11 +209,9 @@ final class SystemSessionBehaviorTests: XCTestCase {
       appVersion: "v0.4.0"
     )
 
-    XCTAssertEqual(result, .noStoredSession)
-    XCTAssertNil(service.token)
-    XCTAssertNil(service.currentUser)
-    XCTAssertNil(effectiveCredential(account: "accessToken"))
-    XCTAssertNil(effectiveCredential(account: "currentUser"))
+    XCTAssertEqual(result, .alreadyRefreshed)
+    XCTAssertEqual(service.token, "stored-token")
+    XCTAssertEqual(service.currentUser?.user_name, "limited")
   }
 
   func testRefreshStoredSessionReloginsStoredLegacyUserWithoutPermissions() async throws {
@@ -291,7 +291,7 @@ final class SystemSessionBehaviorTests: XCTestCase {
     XCTAssertEqual(persistence.password, "test-password")
   }
 
-  func testRefreshStoredSessionClearsExistingSessionWhenReloginReturnsNoAccessibleFeature()
+  func testRefreshStoredSessionAcceptsReloginWithoutAccessibleFeature()
     async throws
   {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SessionRefreshURLProtocol.self))
@@ -329,11 +329,9 @@ final class SystemSessionBehaviorTests: XCTestCase {
       appVersion: "v0.4.4"
     )
 
-    XCTAssertEqual(result, .noStoredSession)
-    XCTAssertNil(service.token)
-    XCTAssertNil(service.currentUser)
-    XCTAssertNil(effectiveCredential(account: "accessToken"))
-    XCTAssertNil(effectiveCredential(account: "currentUser"))
+    XCTAssertEqual(result, .refreshed)
+    XCTAssertEqual(service.token, "fresh-token")
+    XCTAssertEqual(service.currentUser?.user_name, "locked")
   }
 
   func testRefreshStoredSessionRestoresUserContextWhenVersionAlreadyRefreshed() async throws {

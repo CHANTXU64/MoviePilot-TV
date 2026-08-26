@@ -394,7 +394,7 @@ private extension Error {
   var isBackendCompatibilityPermissionDenied: Bool {
     if let apiError = self as? APIError {
       switch apiError {
-      case .unauthorized:
+      case .unauthorized, .authenticationChallenge, .credentialsRejected, .mfaUnsupported:
         return true
       case .serverMessage(let message):
         return message.contains("权限") || message.localizedCaseInsensitiveContains("permission")
@@ -859,6 +859,7 @@ private struct BackendServiceSnapshot {
   let baseURL: String
   let token: String?
   let currentUser: Token?
+  let loginDraft: LoginDraft?
   let settings: GlobalSettings?
   let useImageCache: Bool
   let serverURLDefaults: String?
@@ -874,6 +875,7 @@ private struct BackendServiceSnapshot {
       baseURL: service.baseURL,
       token: service.token,
       currentUser: service.currentUser,
+      loginDraft: service.loginDraft,
       settings: service.settings,
       useImageCache: service.useImageCache,
       serverURLDefaults: UserDefaults.standard.string(forKey: "serverURL"),
@@ -898,6 +900,7 @@ private struct BackendServiceSnapshot {
       token: token,
       currentUser: currentUser
     )
+    service.loginDraft = loginDraft
     service.settings = settings
     service.useImageCache = useImageCache
     service.restorePersistenceSnapshotForTesting(persistence)
@@ -2211,12 +2214,20 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
 
     for person in supportedPeople {
       let rawURL = person.compatibilityRawImageURL
-      let isFilteredDoubanDefault =
-        rawURL?.contains("doubanio.com") == true
-        && (rawURL?.contains("personage-default") == true
-          || rawURL?.contains("celebrity-default") == true)
+      // 数据源官方默认空白图（豆瓣 personage-default/celebrity-default、
+      // AniList anilistcdn/.../default.jpg、Bangumi no_icon_*）在 TV 端统一
+      // 拦截为占位符，不参与 Web 对齐。
+      let isFilteredPlaceholder =
+        (rawURL?.contains("doubanio.com") == true
+          && (rawURL?.contains("personage-default") == true
+            || rawURL?.contains("celebrity-default") == true))
+        || (rawURL?.contains("anilist.co") == true
+          && rawURL?.contains("anilistcdn") == true
+          && rawURL?.contains("default.jpg") == true)
+        || (rawURL?.contains("lain.bgm.tv") == true
+          && rawURL?.contains("no_icon") == true)
       let expectedURL =
-        isFilteredDoubanDefault
+        isFilteredPlaceholder
         ? nil
         : rawURL.flatMap {
           Self.webDisplayImageURL(
@@ -2226,7 +2237,17 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
           )
         }
 
-      // Web 没有远端图时，TV 额外显示头像不报错；Web 有图时 TV 仍须选同一张。
+      if isFilteredPlaceholder {
+        XCTAssertNil(
+          person.imageURLs.profile,
+          "Official placeholder must use the local fallback for \(person.compatibilityName) [\(person.source ?? "unknown")]",
+          file: file,
+          line: line
+        )
+        continue
+      }
+
+      // Web 有图时，TV 仍须选同一张。
       guard let expected = expectedURL?.absoluteString else { continue }
 
       XCTAssertEqual(

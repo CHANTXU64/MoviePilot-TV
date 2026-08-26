@@ -81,9 +81,11 @@ extension SystemSessionBehaviorTests {
       "legacy-password", service: "MoviePilot-TV", account: "password")
     UserDefaults.standard.set("legacy-user", forKey: "username")
     UserDefaults.standard.set("legacy-password", forKey: "password")
+    UserDefaults.standard.set("https://legacy-server.local/mp", forKey: "serverURL")
 
     let migratedService = APIService.testingInstance()
 
+    XCTAssertEqual(migratedService.baseURL, "https://legacy-server.local/mp")
     XCTAssertEqual(migratedService.token, "legacy-token")
     XCTAssertNotNil(UserDefaults.standard.data(forKey: "sessionMarker.v2"))
     for account in ["accessToken", "currentUser", "username", "password"] {
@@ -95,6 +97,88 @@ extension SystemSessionBehaviorTests {
 
     XCTAssertNil(restoredAfterMarkerLoss.token)
     XCTAssertNil(restoredAfterMarkerLoss.currentUser)
+  }
+
+  func testLegacyTokenWithoutStoredServerURLRequiresPrefilledReauthentication() {
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { snapshot.restore(to: sharedService) }
+
+    UserDefaults.standard.removeObject(forKey: "sessionMarker.v2")
+    UserDefaults.standard.removeObject(forKey: "sessionRecord.v2")
+    UserDefaults.standard.removeObject(forKey: "serverURL")
+    UserDefaults.standard.removeObject(forKey: "loginDraft.v1")
+    UserDefaults.standard.removeObject(forKey: "loginDraftMarker.v1")
+    _ = KeychainHelper.shared.delete(service: "MoviePilot-TV", account: "sessionRecord.v2")
+    _ = KeychainHelper.shared.delete(service: "MoviePilot-TV", account: "loginDraft.v1")
+    _ = KeychainHelper.shared.save(
+      "legacy-token", service: "MoviePilot-TV", account: "accessToken")
+    _ = KeychainHelper.shared.save(
+      "legacy-user", service: "MoviePilot-TV", account: "username")
+    _ = KeychainHelper.shared.save(
+      "legacy-password", service: "MoviePilot-TV", account: "password")
+    UserDefaults.standard.set("legacy-token", forKey: "accessToken")
+    UserDefaults.standard.set("legacy-user", forKey: "username")
+    UserDefaults.standard.set("legacy-password", forKey: "password")
+
+    let restoredService = APIService.testingInstance()
+
+    XCTAssertNil(restoredService.token)
+    XCTAssertEqual(restoredService.loginDraft?.serverURL, "")
+    XCTAssertEqual(restoredService.loginDraft?.username, "legacy-user")
+    XCTAssertEqual(restoredService.loginDraft?.password, "legacy-password")
+    XCTAssertEqual(restoredService.loginDraft?.reason, .missingServerURL)
+  }
+
+  func testLoginDraftLoadsFromUserDefaultsFallback() {
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { snapshot.restore(to: sharedService) }
+
+    UserDefaults.standard.set(
+      Data(#"{"revision":12,"storage":"tombstone"}"#.utf8),
+      forKey: "sessionMarker.v2"
+    )
+    _ = KeychainHelper.shared.delete(service: "MoviePilot-TV", account: "loginDraft.v1")
+    UserDefaults.standard.set(
+      Data(#"{"revision":3,"storage":"userDefaults"}"#.utf8),
+      forKey: "loginDraftMarker.v1"
+    )
+    UserDefaults.standard.set(
+      #"{"serverURL":"https:\/\/fallback.local","username":"fallback-user","password":"fallback-password","reason":"credentialsRejected"}"#,
+      forKey: "loginDraft.v1"
+    )
+
+    let restoredService = APIService.testingInstance()
+
+    XCTAssertNil(restoredService.token)
+    XCTAssertEqual(restoredService.loginDraft?.serverURL, "https://fallback.local")
+    XCTAssertEqual(restoredService.loginDraft?.username, "fallback-user")
+    XCTAssertEqual(restoredService.loginDraft?.password, "fallback-password")
+    XCTAssertEqual(restoredService.loginDraft?.reason, .credentialsRejected)
+  }
+
+  func testLoginDraftTombstoneBlocksStalePasswordCopies() {
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { snapshot.restore(to: sharedService) }
+
+    UserDefaults.standard.set(
+      Data(#"{"revision":8,"storage":"tombstone"}"#.utf8),
+      forKey: "loginDraftMarker.v1"
+    )
+    let staleDraft =
+      #"{"serverURL":"https:\/\/stale.local","username":"stale-user","password":"stale-password","reason":"credentialsRejected"}"#
+    _ = KeychainHelper.shared.save(
+      staleDraft,
+      service: "MoviePilot-TV",
+      account: "loginDraft.v1"
+    )
+    UserDefaults.standard.set(staleDraft, forKey: "loginDraft.v1")
+
+    let restoredService = APIService.testingInstance()
+
+    XCTAssertNil(restoredService.loginDraft)
   }
 
   func testLegacyCredentialsWithoutTokenAreClearedInsteadOfReloggedIn() {

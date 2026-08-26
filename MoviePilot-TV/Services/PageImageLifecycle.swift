@@ -41,6 +41,7 @@ final class PageImageLifecycle: ObservableObject {
 
   @Published private(set) var phase: PageImagePhase
   @Published private(set) var isStackForeground = false
+  @Published private(set) var retainsImagesForSceneReturn = false
   @Published private(set) var isRemoved = false
   @Published private(set) var stackReleaseEpoch: UInt = 0
   private(set) var isStackInteractive = false
@@ -55,12 +56,16 @@ final class PageImageLifecycle: ObservableObject {
 
   /// 海报墙和横向行在当前页、直接父页保留。
   var keepsContentImages: Bool {
-    isStackForeground && phase != .released
+    keepsStackImages && phase != .released
   }
 
   /// 背景、人物头图和加载海报只在当前页保留。
   var keepsActivePageImages: Bool {
-    isStackForeground && phase == .active
+    keepsStackImages && phase == .active
+  }
+
+  private var keepsStackImages: Bool {
+    isStackForeground || retainsImagesForSceneReturn
   }
 
   /// 只读调试快照：当前仍强持有解码图的注册 surface 数量。
@@ -124,12 +129,13 @@ final class PageImageLifecycle: ObservableObject {
   fileprivate func update(
     phase: PageImagePhase,
     isStackForeground: Bool,
-    isStackInteractive: Bool
+    isStackInteractive: Bool,
+    retainsImagesForSceneReturn: Bool
   ) {
     let previousContentPermission = keepsContentImages
     let previousActivePermission = keepsActivePageImages
     let previousStackState = stackState
-    let wasStackForeground = self.isStackForeground
+    let previouslyKeptStackImages = keepsStackImages
     if self.phase != phase {
       self.phase = phase
     }
@@ -137,7 +143,10 @@ final class PageImageLifecycle: ObservableObject {
       self.isStackForeground = isStackForeground
     }
     self.isStackInteractive = isStackInteractive
-    if wasStackForeground, !isStackForeground {
+    if self.retainsImagesForSceneReturn != retainsImagesForSceneReturn {
+      self.retainsImagesForSceneReturn = retainsImagesForSceneReturn
+    }
+    if previouslyKeptStackImages, !keepsStackImages {
       stackReleaseEpoch &+= 1
     }
     let newStackState = stackState
@@ -159,7 +168,12 @@ final class PageImageLifecycle: ObservableObject {
 
   /// Pop 动画结束后的终态。即使 SwiftUI 继续持有旧 destination，也会同步清空其图片 surface。
   fileprivate func finishRemoval() {
-    update(phase: .released, isStackForeground: false, isStackInteractive: false)
+    update(
+      phase: .released,
+      isStackForeground: false,
+      isStackInteractive: false,
+      retainsImagesForSceneReturn: false
+    )
     imageResources.removeAll()
   }
 
@@ -253,6 +267,7 @@ final class ImageNavigationCoordinator: ObservableObject {
   private var removedLifecycleCleanupTasks: [UUID: Task<Void, Never>] = [:]
   private var stackForegroundReleaseTask: Task<Void, Never>?
   private var isStackForeground = false
+  private var retainsImagesForSceneReturn = false
   @Published private(set) var isStackInteractive = false
   private var navigationRevision: UInt = 0
   private let mediaPreloader: MediaPreloader
@@ -277,22 +292,41 @@ final class ImageNavigationCoordinator: ObservableObject {
   func setStackForeground(_ isForeground: Bool) {
     cancelStackForegroundRelease()
     updateStackInteraction(isForeground)
-    applyStackForeground(isForeground)
+    applyStackPresentation(
+      isForeground: isForeground,
+      retainsImagesForSceneReturn: false
+    )
   }
 
-  /// Tab 切换先立即关闭导航交互，再等系统转场结束后释放图片；退后台则立即释放。
+  /// Tab 切换先关闭交互并在转场后释放；App 退后台只保留当前选中栈的现有图片。
   func setStackPresentation(isSelected: Bool, scenePhase: ScenePhase) {
     let shouldBeInteractive = isSelected && scenePhase == .active
     updateStackInteraction(shouldBeInteractive)
 
     if shouldBeInteractive {
       cancelStackForegroundRelease()
-      applyStackForeground(true)
+      applyStackPresentation(
+        isForeground: true,
+        retainsImagesForSceneReturn: false
+      )
     } else if scenePhase == .active {
-      scheduleStackForegroundRelease()
+      if retainsImagesForSceneReturn {
+        cancelStackForegroundRelease()
+        applyStackPresentation(
+          isForeground: false,
+          retainsImagesForSceneReturn: false
+        )
+      } else {
+        scheduleStackForegroundRelease()
+      }
     } else {
       cancelStackForegroundRelease()
-      applyStackForeground(false)
+      let shouldRetainImages = isSelected
+        && (isStackForeground || retainsImagesForSceneReturn)
+      applyStackPresentation(
+        isForeground: false,
+        retainsImagesForSceneReturn: shouldRetainImages
+      )
     }
   }
 
@@ -303,9 +337,15 @@ final class ImageNavigationCoordinator: ObservableObject {
     reconcileLifecycles()
   }
 
-  private func applyStackForeground(_ isForeground: Bool) {
-    guard isStackForeground != isForeground else { return }
+  private func applyStackPresentation(
+    isForeground: Bool,
+    retainsImagesForSceneReturn: Bool
+  ) {
+    guard isStackForeground != isForeground
+      || self.retainsImagesForSceneReturn != retainsImagesForSceneReturn
+    else { return }
     isStackForeground = isForeground
+    self.retainsImagesForSceneReturn = retainsImagesForSceneReturn
     if !isForeground {
       finishRemovedLifecyclesImmediately()
     }
@@ -319,7 +359,10 @@ final class ImageNavigationCoordinator: ObservableObject {
       try? await Task.sleep(for: retention)
       guard !Task.isCancelled, let self, !self.isStackInteractive else { return }
       self.stackForegroundReleaseTask = nil
-      self.applyStackForeground(false)
+      self.applyStackPresentation(
+        isForeground: false,
+        retainsImagesForSceneReturn: false
+      )
     }
   }
 
@@ -388,7 +431,8 @@ final class ImageNavigationCoordinator: ObservableObject {
     lifecycle.update(
       phase: .released,
       isStackForeground: false,
-      isStackInteractive: false
+      isStackInteractive: false,
+      retainsImagesForSceneReturn: false
     )
     lifecycle.markRemoved()
     return lifecycle
@@ -481,7 +525,8 @@ final class ImageNavigationCoordinator: ObservableObject {
     rootLifecycle.update(
       phase: phase(for: 0, topIndex: topIndex),
       isStackForeground: isStackForeground,
-      isStackInteractive: isStackInteractive
+      isStackInteractive: isStackInteractive,
+      retainsImagesForSceneReturn: retainsImagesForSceneReturn
     )
 
     for (index, entry) in entries.enumerated() {
@@ -489,10 +534,11 @@ final class ImageNavigationCoordinator: ObservableObject {
       lifecycles[entry.id]?.update(
         phase: phase,
         isStackForeground: isStackForeground,
-        isStackInteractive: isStackInteractive
+        isStackInteractive: isStackInteractive,
+        retainsImagesForSceneReturn: retainsImagesForSceneReturn
       )
       if case .media(let media) = entry.route,
-        !isStackForeground || phase != .active
+        !(isStackForeground || retainsImagesForSceneReturn) || phase != .active
       {
         mediaPreloader.setHeroPresented(
           false,

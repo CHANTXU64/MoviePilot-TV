@@ -406,6 +406,24 @@ final class PersonDecodingTests: XCTestCase {
           "https://anilist.local/avatar.jpg"
         ),
         (
+          "AniList staff default avatar filtered", "anilist", nil, nil,
+          images(large: "https://s4.anilist.co/file/anilistcdn/staff/large/default.jpg"), nil
+        ),
+        (
+          "AniList character default avatar filtered", "anilist", nil, nil,
+          images(large: "https://s4.anilist.co/file/anilistcdn/character/large/default.jpg"),
+          nil
+        ),
+        (
+          "AniList object default avatar filtered", "anilist", nil,
+          .url("https://s4.anilist.co/file/anilistcdn/staff/large/default.jpg"), nil,
+          nil
+        ),
+        (
+          "Bangumi no_icon person filtered", "bangumi", nil, nil,
+          images(medium: "https://lain.bgm.tv/img/no_icon_person.png"), nil
+        ),
+        (
           "Missing source", nil, "/tmdb.jpg", .url("https://douban.local/avatar.jpg"),
           images(medium: "https://anilist.local/medium.jpg"), nil
         ),

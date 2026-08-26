@@ -1,6 +1,27 @@
 import Combine
 import Foundation
 
+struct SearchDefaultsChange {
+  let profileKey: String
+  let defaultSearchSites: Set<Int>
+  let defaultMediaSearchSource: MediaSearchSource?
+
+  @MainActor
+  static func post(apiService: APIService) {
+    guard let profileKey = apiService.profileKey else { return }
+    NotificationCenter.default.post(
+      name: .searchDefaultsDidChange,
+      object: SearchDefaultsChange(
+        profileKey: profileKey,
+        defaultSearchSites: SystemViewModel.currentDefaultSearchSites(apiService: apiService),
+        defaultMediaSearchSource: SystemViewModel.currentDefaultMediaSearchSource(
+          apiService: apiService
+        )
+      )
+    )
+  }
+}
+
 @MainActor
 class SystemViewModel: ObservableObject {
   enum StorageMechanism {
@@ -20,6 +41,7 @@ class SystemViewModel: ObservableObject {
   @Published var username: String = ""
   @Published var backendVersion: String? = nil
   private let apiService: APIService
+  private var cancellables = Set<AnyCancellable>()
 
   var appVersion: String {
     AppVersionInfo.currentAppVersion()
@@ -79,6 +101,7 @@ class SystemViewModel: ObservableObject {
         UserDefaults.standard.set(array, forKey: key)
       }
       objectWillChange.send()
+      SearchDefaultsChange.post(apiService: apiService)
     }
   }
 
@@ -97,6 +120,7 @@ class SystemViewModel: ObservableObject {
         UserDefaults.standard.removeObject(forKey: key)
       }
       objectWillChange.send()
+      SearchDefaultsChange.post(apiService: apiService)
     }
   }
 
@@ -194,6 +218,11 @@ class SystemViewModel: ObservableObject {
     preloadTMDBDetails = Self.shouldPreloadTMDBDetails
     autoSearchNewSubscriptions = Self.shouldAutoSearchNewSubscriptions
     checkKeychainStatus()
+    apiService.$session
+      .sink { [weak self] session in
+        self?.updateStorageStatus(for: session)
+      }
+      .store(in: &cancellables)
   }
 
   /// 手动刷新登录凭据（解决服务器重启或 Token 失效问题）
@@ -222,8 +251,12 @@ class SystemViewModel: ObservableObject {
 
   /// 检查凭证的实际存储方式 (Keychain 或降级的 UserDefaults)
   func checkKeychainStatus() {
+    updateStorageStatus(for: apiService.session)
+  }
+
+  private func updateStorageStatus(for session: APIServiceSessionState) {
     // 从单一事实来源 APIService 获取当前 App 生效的 token
-    guard let activeToken = apiService.token, !activeToken.isEmpty else {
+    guard let activeToken = session.token, !activeToken.isEmpty else {
       // 如果没有生效的 token，则当前无任何凭证在使用
       self.storageMechanism = .none
       self.storageDescription = "未登录"
@@ -233,12 +266,12 @@ class SystemViewModel: ObservableObject {
     // 尝试从 Keychain 中读取 token
     if apiService.isSessionStoredInKeychain == true {
       self.storageMechanism = .keychain
-      self.storageDescription = "已登录 (安全存储)"
+      self.storageDescription = "已登录（Apple 钥匙串安全存储）"
     } else {
       // 否则，虽然 App 已登录（有 activeToken），但凭证并非来自 Keychain，
       // 这说明程序已降级到使用 UserDefaults。
       self.storageMechanism = .userDefaults
-      self.storageDescription = "已登录 (非安全模式)"
+      self.storageDescription = "已登录（密码明文非安全存储）"
     }
   }
 
@@ -460,6 +493,7 @@ class SystemViewModel: ObservableObject {
     } else {
       UserDefaults.standard.set(array, forKey: key)
     }
+    SearchDefaultsChange.post(apiService: apiService)
   }
 
   private static func siteIdsString(from sites: Set<Int>) -> String? {
