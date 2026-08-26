@@ -113,6 +113,8 @@
   - 媒体搜索 `source` 必须核对后端允许值、默认值、实际执行分支和返回来源。仅看到 TV URL 带 query 不足以证明兼容；如果后端不再执行该参数或 Web 不再暴露某来源，TV 选择器和请求必须一起调整。
 - **认证、Session 与 Cookie**：
   - Token、Cookie、登录状态刷新、图片防盗链和媒体服务器 cookie 代理。
+  - 核对 `POST /login/access-token` 的 401/403 响应结构、明确凭据拒绝文案、`X-MFA-Required` 与全部 locale 翻译；这些信号变化时，必须同步 TV 的明确凭据判定和多语言回归测试，不能把任意登录 401 直接当成密码错误。
+  - 核对 `/user/current` 对 token 过期、token 缺失、用户删除和用户停用的状态码与错误字段。业务接口 401/403 只有经该端点明确确认失效后才能进入自动续期；无法确认时应保留会话并退避重试，连续模糊认证挑战只能限流提醒用户前往设置刷新登录凭据。
 - **订阅专项契约**：
   - 对照 `docs/subscription-compatibility-checklist.md` 检查 `/subscribe/`、`/subscribe/media/{mediaid}`、`/subscribe/{id}`、订阅搜索、暂停/恢复、重置、复用订阅、`episode_group`、`mediaid` fallback、缓存和刷新语义是否变化。
   - 对每种写入操作分别核对“配套 Web 实际请求 -> 后端写入边界 -> TV 编码来源”。确认哪些字段由用户配置、哪些由后端维护；不要把后端拒绝或忽略的字段误判成 TV 必须删除的字段，也不要让 TV 覆盖后端状态。
@@ -175,6 +177,13 @@
 - [ ] 如果真实后端兼容测试流程、环境变量或覆盖范围发生变化，必须同步更新 `docs/backend-compatibility-tests.md`；不要把测试说明写回 `README.md`。
 - [ ] 如果订阅契约、媒体 ID、`episode_group`、Header 取消、订阅缓存或刷新时机发生变化，必须同步更新 `docs/subscription-compatibility-checklist.md`，并在报告中说明本次是否触发订阅专项风险。
 - [ ] 如果后续功能候选发生变化，必须先向用户说明建议如何更新 `docs/frontend-update-todo.md`；只有得到用户明确同意后，才可以修改该文件。
+
+## 🔐 认证契约更新检查
+
+- [ ] 对照目标后端的 `POST /login/access-token`、HTTP 异常包装和全部 locale 文件，核对明确凭据拒绝、MFA 的状态码、header 与所有 `message/detail`、`*_i18n` 字段；新增或修改语言时同步 TV 匹配表和普通回归测试。
+- [ ] 对照目标后端 `/user/current`，核对 token 过期、token 缺失、用户删除和用户停用的明确错误信号。业务接口 401/403 不得直接触发退出；探测无法得出明确结论时必须保留会话并退避重试。
+- [ ] 确认连续模糊认证挑战仍按同一会话限流提醒一次，认证恢复或会话替换后才重新计数；该提醒只引导用户前往设置的连接信息刷新登录凭据，不得自动清除会话。
+- [ ] 确认 TV 端仍不支持 MFA 登录流程；只能检测 MFA、保留 URL/用户名/密码并提示不支持，不得未经产品决策新增验证码步骤。
 
 ## ✅ 真实后端兼容验证
 - [ ] 若存在 `.env.compatibility` 或用户提供了 `MOVIEPILOT_COMPAT_ENV_FILE`，必须运行真实后端兼容测试，至少覆盖 `BackendCompatibilityReadOnlyTests`。

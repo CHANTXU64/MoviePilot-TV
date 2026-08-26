@@ -588,6 +588,7 @@ class APIService: ObservableObject {
   private static let loginDraftAccount = "loginDraft.v1"
   private static let loginDraftMarkerKey = "loginDraftMarker.v1"
   private static let defaultBaseURL = "http://192.168.1.1:3000"
+  private static let ambiguousAuthenticationChallengeLimit = 3
 
   @Published private(set) var session: APIServiceSessionState
   private let sessionConfiguration: URLSessionConfiguration
@@ -599,6 +600,8 @@ class APIService: ObservableObject {
   var loginDraft: LoginDraft?
   private var authenticationRetryTask: Task<Void, Never>?
   private var authenticationRetryEpoch: UInt64?
+  private var ambiguousAuthenticationChallengeCount = 0
+  private var didNotifyAmbiguousAuthenticationChallenge = false
 
   var baseURL: String { session.baseURL }
   var token: String? { session.token }
@@ -1207,6 +1210,7 @@ class APIService: ObservableObject {
     cookies: [HTTPCookie] = []
   ) {
     cancelAuthenticationRetry()
+    resetAmbiguousAuthenticationChallenges()
     let normalizedURL = Self.normalizedBaseURL(rawBaseURL) ?? session.baseURL
     let nextEpoch = session.epoch &+ 1
     let provisional = APIServiceSessionState(
@@ -1418,12 +1422,14 @@ class APIService: ObservableObject {
 
     if endpoint == "/user/current" {
       guard Self.isDefinitiveCurrentUserRejection(statusCode: statusCode, message: message) else {
+        recordAmbiguousAuthenticationChallenge(forEpoch: lease.epoch)
         throw APIError.authenticationChallenge(statusCode: statusCode, message: message)
       }
     } else {
       switch await probeCurrentUser(using: lease) {
       case .valid(let recoveredUser):
         cancelAuthenticationRetry()
+        resetAmbiguousAuthenticationChallenges()
         guard let accessToken = lease.token, !accessToken.isEmpty else {
           throw APIError.authenticationChallenge(statusCode: statusCode, message: message)
         }
@@ -1436,6 +1442,7 @@ class APIService: ObservableObject {
         break
       case .unavailable(let error):
         // 无法完成权威校验时保持原会话，等待网络或服务恢复后重试。
+        recordAmbiguousAuthenticationChallenge(forEpoch: lease.epoch)
         scheduleAuthenticationRetry(forEpoch: lease.epoch)
         throw error
       }
@@ -1494,6 +1501,7 @@ class APIService: ObservableObject {
 
   private func applyRecoveredCurrentUser(_ recoveredUser: Token, accessToken: String) {
     cancelAuthenticationRetry()
+    resetAmbiguousAuthenticationChallenges()
     guard currentUser != recoveredUser else { return }
     let cookies = runtime.cookieVault.snapshot()
     replaceSession(
@@ -1521,8 +1529,27 @@ class APIService: ObservableObject {
       "token校验不通过",
       "authentication token not found",
       "用户不存在",
+      "user does not exist",
+      "使用者不存在",
       "用户未激活",
     ].contains { message.contains($0) }
+  }
+
+  private func recordAmbiguousAuthenticationChallenge(forEpoch epoch: UInt64) {
+    guard session.epoch == epoch, token != nil else { return }
+    ambiguousAuthenticationChallengeCount += 1
+    guard ambiguousAuthenticationChallengeCount >= Self.ambiguousAuthenticationChallengeLimit,
+      !didNotifyAmbiguousAuthenticationChallenge
+    else {
+      return
+    }
+    didNotifyAmbiguousAuthenticationChallenge = true
+    NotificationCenter.default.post(name: .authenticationNeedsAttention, object: nil)
+  }
+
+  private func resetAmbiguousAuthenticationChallenges() {
+    ambiguousAuthenticationChallengeCount = 0
+    didNotifyAmbiguousAuthenticationChallenge = false
   }
 
   private func scheduleAuthenticationRetry(forEpoch epoch: UInt64) {
@@ -1674,17 +1701,27 @@ class APIService: ObservableObject {
       lease.runtime.cookieVault.update(from: response, for: responseURL)
     }
     let errorPayload = Self.decodeErrorPayload(from: data)
-    let message = errorPayload?.localizedMessage
+    let message = if endpoint == "/user/current" {
+      Self.definitiveCurrentUserRejectionMessage(errorPayload) ?? errorPayload?.localizedMessage
+    } else {
+      errorPayload?.localizedMessage
+    }
     if response.statusCode == 401 || response.statusCode == 403 {
       if endpoint == "/login/access-token", response.statusCode == 401 {
         if response.value(forHTTPHeaderField: "X-MFA-Required")?.lowercased() == "true"
-          || message?.contains("需要二次验证") == true
+          || Self.containsAuthenticationMessage(
+            errorPayload,
+            candidates: ["需要二次验证", "two-step verification is required", "需要二次驗證"]
+          )
         {
           throw APIError.mfaUnsupported
         }
-        if Self.isDefinitiveCredentialRejection(message) {
+        if Self.isDefinitiveCredentialRejection(errorPayload) {
           throw APIError.credentialsRejected
         }
+      }
+      if endpoint == "/login/access-token" {
+        recordAmbiguousAuthenticationChallenge(forEpoch: lease.epoch)
       }
       if requireCurrentLease, session.epoch == lease.epoch {
         if isCandidateLoginActive(for: lease.epoch) {
@@ -1721,18 +1758,63 @@ class APIService: ObservableObject {
     var localizedMessage: String? {
       trimmedNonEmpty([message_i18n, detail_i18n, message, detail])
     }
+
+    var allMessages: [String] {
+      [message_i18n, detail_i18n, message, detail].compactMap {
+        trimmedNonEmpty([$0])
+      }
+    }
   }
 
   private static func decodeErrorPayload(from data: Data) -> ErrorPayload? {
     try? JSONDecoder().decode(ErrorPayload.self, from: data)
   }
 
-  private static func isDefinitiveCredentialRejection(_ message: String?) -> Bool {
-    guard let message = trimmedNonEmpty([message])?.lowercased() else { return false }
-    return [
-      "用户名或密码错误",
-      "incorrect username or password",
-    ].contains { message.contains($0) }
+  private static func isDefinitiveCredentialRejection(_ payload: ErrorPayload?) -> Bool {
+    containsAuthenticationMessage(
+      payload,
+      candidates: [
+        "用户名或密码错误",
+        "incorrect username or password",
+        "使用者名稱或密碼錯誤",
+      ]
+    )
+  }
+
+  private static func definitiveCurrentUserRejectionMessage(
+    _ payload: ErrorPayload?
+  ) -> String? {
+    matchingAuthenticationMessage(
+      payload,
+      candidates: [
+        "not authenticated",
+        "token校验不通过",
+        "authentication token not found",
+        "用户不存在",
+        "user does not exist",
+        "使用者不存在",
+        "用户未激活",
+      ]
+    )
+  }
+
+  private static func containsAuthenticationMessage(
+    _ payload: ErrorPayload?,
+    candidates: [String]
+  ) -> Bool {
+    matchingAuthenticationMessage(payload, candidates: candidates) != nil
+  }
+
+  private static func matchingAuthenticationMessage(
+    _ payload: ErrorPayload?,
+    candidates: [String]
+  ) -> String? {
+    guard let payload else { return nil }
+    let normalizedCandidates = candidates.map { $0.lowercased() }
+    return payload.allMessages.first { message in
+      let normalizedMessage = message.lowercased()
+      return normalizedCandidates.contains { normalizedMessage.contains($0) }
+    }
   }
 
   private func buildEndpoint(path: String, params: [String: String?] = [:]) throws -> String {

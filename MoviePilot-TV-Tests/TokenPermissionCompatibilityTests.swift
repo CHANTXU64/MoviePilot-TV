@@ -262,7 +262,7 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     )
   }
 
-  func testLoginRejectsStandardUserWithoutAnyFunctionalPermission() async throws {
+  func testLoginAcceptsStandardUserWithoutAnyFunctionalPermission() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(LoginPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(LoginPermissionURLProtocol.self) }
 
@@ -275,16 +275,19 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     service.tokenForTesting = nil
     service.currentUserForTesting = nil
 
-    do {
-      _ = try await service.login(username: "locked", password: "password")
-      XCTFail("Expected login to reject a user without any functional permission")
-    } catch {
-      XCTAssertNil(service.token)
-      XCTAssertNil(service.currentUser)
-    }
+    let token = try await service.login(username: "locked", password: "password")
+
+    XCTAssertEqual(token.access_token, "limited-token")
+    XCTAssertFalse(token.hasLoginAccessibleFeature)
+    XCTAssertFalse(token.canAccess(.discovery))
+    XCTAssertFalse(token.canAccess(.search))
+    XCTAssertFalse(token.canAccess(.subscribe))
+    XCTAssertFalse(token.canAccess(.manage))
+    XCTAssertEqual(service.token, "limited-token")
+    XCTAssertEqual(service.currentUser?.user_name, "locked")
   }
 
-  func testLoginRejectsStandardUserWithEmptyPermissionsPayload() async throws {
+  func testLoginAcceptsStandardUserWithEmptyPermissionsPayload() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(LoginPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(LoginPermissionURLProtocol.self) }
 
@@ -298,13 +301,12 @@ final class TokenPermissionCompatibilityTests: XCTestCase {
     service.tokenForTesting = nil
     service.currentUserForTesting = nil
 
-    do {
-      _ = try await service.login(username: "default-user", password: "password")
-      XCTFail("Expected empty permissions to be rejected like the Web login menu filter.")
-    } catch {
-      XCTAssertNil(service.token)
-      XCTAssertNil(service.currentUser)
-    }
+    let token = try await service.login(username: "default-user", password: "password")
+
+    XCTAssertEqual(token.permissions, [:])
+    XCTAssertFalse(token.hasLoginAccessibleFeature)
+    XCTAssertEqual(service.token, "limited-token")
+    XCTAssertEqual(service.currentUser?.permissions, [:])
   }
 
   func testLoginAcceptsManageOnlyUser() async throws {

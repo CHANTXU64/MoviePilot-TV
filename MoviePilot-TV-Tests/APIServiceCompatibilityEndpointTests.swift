@@ -171,7 +171,9 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     )
   }
 
-  func testFetchSettingsLogsOutWhenUserSettingsIsForbidden() async throws {
+  func testFetchSettingsKeepsSessionWhenUserSettingsForbiddenCannotProveTokenInvalid()
+    async throws
+  {
     XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
 
@@ -194,19 +196,16 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     setCredential(account: "username", value: "limited-user")
     setCredential(account: "password", value: "stale-password")
 
-    do {
-      _ = try await service.fetchSettings()
-      XCTFail("Expected the forbidden authenticated settings request to cancel the operation")
-    } catch is CancellationError {
-      // Web 对任意 403 都会退出登录；TV 同样不保留或重放这条会话链。
-    }
+    let settings = try await service.fetchSettings()
 
-    XCTAssertNil(service.token)
-    XCTAssertNil(service.currentUser)
+    XCTAssertEqual(settings.BACKEND_VERSION, "v2.13.14")
+    XCTAssertEqual(service.token, "token")
+    XCTAssertEqual(service.currentUser?.user_name, "limited-user")
+    XCTAssertNil(service.loginDraft)
 
     let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
     assertContainsSubsequence(
-      ["/api/v1/system/global", "/api/v1/system/global/user"],
+      ["/api/v1/system/global", "/api/v1/system/global/user", "/api/v1/user/current"],
       in: paths
     )
     XCTAssertFalse(paths.contains("/api/v1/login/access-token"))

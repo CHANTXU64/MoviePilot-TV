@@ -294,6 +294,293 @@ extension SystemSessionBehaviorTests {
     XCTAssertNil(service.loginDraft)
   }
 
+  func testAutomaticReloginRecognizesCredentialRejectionAcrossBackendLanguagesAndFields()
+    async throws
+  {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SessionRefreshURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SessionRefreshURLProtocol.self) }
+
+    let fixtures: [(label: String, json: String)] = [
+      ("简体中文", #"{"detail":"用户名或密码错误"}"#),
+      ("English", #"{"message":"Incorrect username or password"}"#),
+      ("繁體中文", #"{"detail_i18n":"使用者名稱或密碼錯誤"}"#),
+      (
+        "未知翻译字段不遮蔽原始字段",
+        #"{"message_i18n":"Unrecognized localized response","message":"用户名或密码错误"}"#
+      ),
+    ]
+
+    for fixture in fixtures {
+      await SessionRefreshURLProtocol.stub.reset()
+      await SessionRefreshURLProtocol.stub.setUnauthorizedPath("/api/v1/dashboard/storage")
+      await SessionRefreshURLProtocol.stub.setCurrentUserFailure(statusCode: 403)
+      await SessionRefreshURLProtocol.stub.setLoginFailure(
+        statusCode: 401,
+        json: fixture.json
+      )
+
+      let service = APIService.isolatedTestingInstance()
+      let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+      do {
+        defer { snapshot.restore(to: service) }
+        let user = sessionToken(
+          userId: 1,
+          accessToken: "expired-token",
+          userName: "account-a"
+        )
+        service.replaceSessionForTesting(
+          baseURL: "https://session-refresh-tests.local",
+          token: user.access_token,
+          currentUser: user
+        )
+        service.setStoredCredentialsForTesting(
+          username: "account-a",
+          password: "saved-password"
+        )
+
+        do {
+          _ = try await service.fetchStorage()
+          XCTFail("Expected reauthentication for fixture: \(fixture.label)")
+        } catch is CancellationError {}
+
+        XCTAssertNil(service.token, fixture.label)
+        XCTAssertEqual(service.loginDraft?.reason, .credentialsRejected, fixture.label)
+        XCTAssertEqual(service.loginDraft?.username, "account-a", fixture.label)
+        XCTAssertEqual(service.loginDraft?.password, "saved-password", fixture.label)
+      }
+    }
+  }
+
+  func testRepeatedAmbiguousCurrentUserChallengesNotifyOnceAndResetAfterRecovery()
+    async throws
+  {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SessionRefreshURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SessionRefreshURLProtocol.self) }
+
+    await SessionRefreshURLProtocol.stub.reset()
+    await SessionRefreshURLProtocol.stub.setCurrentUserFailure(
+      statusCode: 403,
+      json: #"{"detail":"无法识别的认证响应"}"#
+    )
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    let user = Token(
+      access_token: "active-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: ["discovery": true, "search": true, "subscribe": false, "manage": false],
+      user_id: 1,
+      user_name: "token-only-user",
+      avatar: nil
+    )
+    service.replaceSessionForTesting(
+      baseURL: "https://session-refresh-tests.local",
+      token: user.access_token,
+      currentUser: user
+    )
+
+    let notifications = NotificationCounter()
+    let observer = NotificationCenter.default.addObserver(
+      forName: .authenticationNeedsAttention,
+      object: nil,
+      queue: nil
+    ) { _ in
+      notifications.increment()
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+    let notificationManager = NotificationManager()
+
+    for attempt in 1...5 {
+      await service.refreshCurrentUserForStartup()
+      XCTAssertEqual(notifications.count(), attempt < 3 ? 0 : 1)
+    }
+
+    try await waitUntil { notificationManager.isShowing }
+    XCTAssertEqual(
+      notificationManager.message,
+      "登录状态反复验证失败，请前往设置的连接信息，选择“刷新登录凭据”。"
+    )
+    XCTAssertEqual(service.token, "active-token")
+    XCTAssertNil(service.loginDraft)
+
+    await SessionRefreshURLProtocol.stub.setCurrentUserFailure(statusCode: nil)
+    await service.refreshCurrentUserForStartup()
+    XCTAssertEqual(service.currentUser?.user_name, "token-only-user")
+
+    await SessionRefreshURLProtocol.stub.setCurrentUserFailure(
+      statusCode: 403,
+      json: #"{"detail":"无法识别的认证响应"}"#
+    )
+    await service.refreshCurrentUserForStartup()
+    await service.refreshCurrentUserForStartup()
+    XCTAssertEqual(notifications.count(), 1)
+    await service.refreshCurrentUserForStartup()
+    XCTAssertEqual(notifications.count(), 2)
+  }
+
+  func testRepeatedUnrecognizedLogin401WarnsWithoutClearingExistingSession() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SessionRefreshURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SessionRefreshURLProtocol.self) }
+
+    await SessionRefreshURLProtocol.stub.reset()
+    await SessionRefreshURLProtocol.stub.setLoginFailure(
+      statusCode: 401,
+      json: #"{"detail":"Unknown authentication response"}"#
+    )
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    let user = sessionToken(userId: 1, accessToken: "active-token", userName: "account-a")
+    service.replaceSessionForTesting(
+      baseURL: "https://account-a.local",
+      token: user.access_token,
+      currentUser: user
+    )
+
+    let notifications = NotificationCounter()
+    let observer = NotificationCenter.default.addObserver(
+      forName: .authenticationNeedsAttention,
+      object: nil,
+      queue: nil
+    ) { _ in
+      notifications.increment()
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
+    for attempt in 1...5 {
+      do {
+        _ = try await service.login(
+          username: "candidate",
+          password: "password",
+          serverURL: "https://session-refresh-tests.local"
+        )
+        XCTFail("Expected an unrecognized login challenge")
+      } catch APIError.serverMessage {}
+      XCTAssertEqual(notifications.count(), attempt < 3 ? 0 : 1)
+    }
+
+    XCTAssertEqual(service.baseURL, "https://account-a.local")
+    XCTAssertEqual(service.token, "active-token")
+    XCTAssertEqual(service.currentUser?.user_name, "account-a")
+    XCTAssertNil(service.loginDraft)
+  }
+
+  func testRepeatedAutomaticReloginUnknown401WarnsWithoutClearingExistingSession()
+    async throws
+  {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SessionRefreshURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SessionRefreshURLProtocol.self) }
+
+    await SessionRefreshURLProtocol.stub.reset()
+    await SessionRefreshURLProtocol.stub.setUnauthorizedPath("/api/v1/dashboard/storage")
+    await SessionRefreshURLProtocol.stub.setCurrentUserFailure(statusCode: 403)
+    await SessionRefreshURLProtocol.stub.setLoginFailure(
+      statusCode: 401,
+      json: #"{"detail":"Unknown authentication response"}"#
+    )
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    let user = sessionToken(userId: 1, accessToken: "expired-token", userName: "account-a")
+    service.replaceSessionForTesting(
+      baseURL: "https://session-refresh-tests.local",
+      token: user.access_token,
+      currentUser: user
+    )
+    service.setStoredCredentialsForTesting(username: "account-a", password: "saved-password")
+
+    let notifications = NotificationCounter()
+    let observer = NotificationCenter.default.addObserver(
+      forName: .authenticationNeedsAttention,
+      object: nil,
+      queue: nil
+    ) { _ in
+      notifications.increment()
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
+    for attempt in 1...5 {
+      do {
+        _ = try await service.fetchStorage()
+        XCTFail("Expected an unrecognized automatic relogin challenge")
+      } catch APIError.serverMessage {}
+      XCTAssertEqual(notifications.count(), attempt < 3 ? 0 : 1)
+    }
+
+    XCTAssertEqual(service.token, "expired-token")
+    XCTAssertEqual(service.currentUser?.user_name, "account-a")
+    XCTAssertNil(service.loginDraft)
+  }
+
+  func testStaleCredentialRejectionCannotResetNewSessionAuthenticationWarningState()
+    async throws
+  {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SessionRefreshURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SessionRefreshURLProtocol.self) }
+
+    await SessionRefreshURLProtocol.stub.reset()
+    await SessionRefreshURLProtocol.stub.setCurrentUserFailure(
+      statusCode: 403,
+      json: #"{"detail":"无法识别的认证响应"}"#
+    )
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    let accountA = sessionToken(userId: 1, accessToken: "account-a-token", userName: "account-a")
+    service.replaceSessionForTesting(
+      baseURL: "https://session-refresh-tests.local",
+      token: accountA.access_token,
+      currentUser: accountA
+    )
+
+    await service.refreshCurrentUserForStartup()
+    await service.refreshCurrentUserForStartup()
+
+    await SessionRefreshURLProtocol.stub.setLoginFailure(statusCode: 401)
+    await SessionRefreshURLProtocol.stub.setHoldLoginResponses(true)
+    let staleLogin = Task {
+      try await service.login(
+        username: "candidate",
+        password: "wrong-password",
+        serverURL: "https://session-refresh-tests.local"
+      )
+    }
+    await SessionRefreshURLProtocol.stub.waitForLoginRequest()
+
+    let accountB = sessionToken(userId: 2, accessToken: "account-b-token", userName: "account-b")
+    service.replaceSessionForTesting(
+      baseURL: "https://session-refresh-tests.local",
+      token: accountB.access_token,
+      currentUser: accountB
+    )
+
+    let notifications = NotificationCounter()
+    let observer = NotificationCenter.default.addObserver(
+      forName: .authenticationNeedsAttention,
+      object: nil,
+      queue: nil
+    ) { _ in
+      notifications.increment()
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
+    await service.refreshCurrentUserForStartup()
+    await service.refreshCurrentUserForStartup()
+
+    await SessionRefreshURLProtocol.stub.releaseLoginResponses()
+    do {
+      _ = try await staleLogin.value
+      XCTFail("Expected stale candidate credentials to be rejected")
+    } catch APIError.credentialsRejected {}
+
+    await service.refreshCurrentUserForStartup()
+    XCTAssertEqual(notifications.count(), 1)
+    XCTAssertEqual(service.token, "account-b-token")
+    XCTAssertEqual(service.currentUser?.user_name, "account-b")
+    XCTAssertNil(service.loginDraft)
+  }
+
   func testAutomaticReloginCredentialRejectionPreservesLoginDraft() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SessionRefreshURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SessionRefreshURLProtocol.self) }
