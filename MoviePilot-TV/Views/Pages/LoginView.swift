@@ -27,6 +27,9 @@ struct LoginView: View {
             .textContentType(.password)
 
           Button(action: {
+            // 登录中保持可聚焦：tvOS 上聚焦元素变 disabled 会导致焦点跳走；
+            // 点击在加载中被忽略，防重入由 guard 完成。
+            guard !viewModel.isLoading else { return }
             Task {
               await viewModel.login()
             }
@@ -39,7 +42,7 @@ struct LoginView: View {
             }
             .frame(maxWidth: .infinity)
           }
-          .disabled(viewModel.isLoading || viewModel.serverURL.isEmpty || viewModel.username.isEmpty || viewModel.password.isEmpty)
+          .disabled(viewModel.serverURL.isEmpty || viewModel.username.isEmpty || viewModel.password.isEmpty)
         }
         .frame(width: 600)
       }

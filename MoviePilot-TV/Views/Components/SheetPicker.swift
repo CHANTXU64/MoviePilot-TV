@@ -17,12 +17,17 @@ struct SheetPicker<Value: Hashable>: View {
   let title: String
   @Binding var selection: Value
   let options: [PickerOption<Value>]
+  // 动态加载期间保持可聚焦但忽略点击：tvOS 上聚焦元素变 disabled 会导致焦点跳走
+  var ignoresInteractionWhileDisabled = false
 
   @State private var showingPicker = false
 
   var body: some View {
     // 所有版本都使用嵌套 Sheet 模式，避免 NavigationLink 导致的 dismiss 问题
-    Button(action: { showingPicker = true }) {
+    Button(action: {
+      guard !ignoresInteractionWhileDisabled else { return }
+      showingPicker = true
+    }) {
       LabeledContent(title) {
         Group {
           if let selected = options.first(where: { $0.value == selection }) {

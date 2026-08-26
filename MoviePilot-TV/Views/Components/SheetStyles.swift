@@ -40,7 +40,13 @@ struct SheetActionButton: View {
 
   var body: some View {
     VStack(spacing: 10) {
-      Button(action: action) {
+      Button(action: {
+        // 加载中保持按钮可聚焦：tvOS 上聚焦元素一旦被 disabled，
+        // 焦点引擎会把焦点移走，ScrollView 随即滚回顶部（“保存后自动上滑”）。
+        // 这里只忽略点击，不让焦点状态发生变化。
+        guard !isLoading else { return }
+        action()
+      }) {
         HStack(spacing: 8) {
           if isLoading {
             ProgressView()
@@ -49,7 +55,7 @@ struct SheetActionButton: View {
         }
         .frame(maxWidth: .infinity)
       }
-      .disabled(isLoading || isDisabled)
+      .disabled(isDisabled)
 
       if let feedbackMessage {
         SheetFeedbackView(message: feedbackMessage)

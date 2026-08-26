@@ -195,11 +195,26 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
 
     XCTAssertTrue(
-      source.contains("SystemSettingsRootBackObserver(isEnabled: isSelected && isActive && page == .root)")
+      source.contains("isEnabled: isSelected && isActive && page == .root")
     )
+    XCTAssertTrue(
+      source.contains(
+        "&& !showAppInfo && updateNotice == nil && selectedChangelogEntry == nil"
+      )
+    )
+    XCTAssertTrue(source.contains("&& !showLogoutConfirmation"))
+    XCTAssertTrue(source.contains("guard windowHasNoPresentedContent() else { return }"))
     XCTAssertTrue(
       source.contains(".systemSettingsExitCommand(isEnabled: isSelected && isActive && page != .root")
     )
+  }
+
+  func testSystemViewRefreshButtonStaysFocusableWhileRefreshing() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+    let viewModelSource = try Self.source(at: "MoviePilot-TV/ViewModels/SystemViewModel.swift")
+
+    XCTAssertFalse(source.contains(".disabled(viewModel.isRefreshing)"))
+    XCTAssertTrue(viewModelSource.contains("guard !isRefreshing else { return }"))
   }
 
   func testMissingPersistedFilterRuleDoesNotDisplayAsNoFilter() throws {
@@ -280,6 +295,11 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
 
     XCTAssertTrue(
+      source.contains(
+        "guard !(detail.canDirectlySubscribe && viewModel.isUnsubscribing) else { return }"
+      )
+    )
+    XCTAssertFalse(
       source.contains(".disabled(detail.canDirectlySubscribe && viewModel.isUnsubscribing)")
     )
     XCTAssertTrue(
@@ -298,6 +318,12 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("Image(\"SettingsLogoGlass\")"))
     XCTAssertTrue(source.contains("ProgressView()"))
     XCTAssertTrue(source.contains("Text(viewModel.isLoading ? \"登录中\" : \"登录\")"))
+    XCTAssertTrue(source.contains("guard !viewModel.isLoading else { return }"))
+    XCTAssertFalse(
+      source.contains(
+        ".disabled(viewModel.isLoading || viewModel.serverURL.isEmpty"
+      )
+    )
     XCTAssertTrue(source.contains("notificationManager.show(message: message, type: .error)"))
     XCTAssertFalse(source.contains("Image(systemName: \"film.stack.fill\")"))
     XCTAssertFalse(source.contains("Text(errorMessage)"))
@@ -344,6 +370,9 @@ final class SystemViewDefaultStyleTests: XCTestCase {
 
     XCTAssertTrue(sheetStyleSource.contains("struct SheetFeedbackView: View"))
     XCTAssertTrue(sheetStyleSource.contains("struct SheetActionButton: View"))
+    XCTAssertTrue(sheetStyleSource.contains("guard !isLoading else { return }"))
+    XCTAssertTrue(sheetStyleSource.contains(".disabled(isDisabled)"))
+    XCTAssertFalse(sheetStyleSource.contains(".disabled(isLoading || isDisabled)"))
     XCTAssertTrue(subscribeSheetSource.contains("SheetActionButton("))
     XCTAssertTrue(reorganizeSheetSource.contains("SheetActionButton("))
     XCTAssertTrue(addDownloadSheetSource.contains("SheetActionButton("))
@@ -374,6 +403,11 @@ final class SystemViewDefaultStyleTests: XCTestCase {
       containsTokensInOrder(source, ["SheetPicker(", "title: \"媒体来源\""])
     )
     XCTAssertTrue(source.contains("MediaSearchSource.allowed(for: .media).map"))
+    XCTAssertTrue(
+      source.contains(
+        "ignoresInteractionWhileDisabled: viewModel.isEpisodeGroupsLoading"
+      )
+    )
     XCTAssertFalse(source.contains("Picker(\"媒体来源\""))
     XCTAssertFalse(source.contains("private var sourceButtons: some View"))
     XCTAssertFalse(source.contains(".disabled((viewModel.form.type_name ?? \"\").isEmpty)"))
@@ -457,12 +491,13 @@ final class SystemViewDefaultStyleTests: XCTestCase {
         source,
         [
           "Button {",
+          "guard !viewModel.isLoading else { return }",
           "searchTask?.cancel()",
           "searchTask = Task { await viewModel.search() }",
         ]
       )
     )
-    XCTAssertTrue(source.contains(".disabled(viewModel.isLoading)"))
+    XCTAssertFalse(source.contains(".disabled(viewModel.isLoading)"))
     XCTAssertTrue(source.contains("private var searchRevision = 0"))
     XCTAssertTrue(source.contains("searchRevision &+= 1"))
     XCTAssertTrue(source.contains("items = []"))

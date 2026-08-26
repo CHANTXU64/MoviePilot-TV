@@ -968,6 +968,7 @@ struct MediaDetailView: View {
             if canSubscribeMedia {
               // Primary subscribe button — 使用预加载的订阅状态
               Button(action: {
+                guard !(detail.canDirectlySubscribe && viewModel.isUnsubscribing) else { return }
                 if detail.canDirectlySubscribe {
                   handleHeaderSubscribe()
                 } else if detail.type == "电视剧" {
@@ -1008,7 +1009,8 @@ struct MediaDetailView: View {
                 }
               }
               .focused($focusedButton, equals: .subscribe)
-              .disabled(detail.canDirectlySubscribe && viewModel.isUnsubscribing)
+              // 取消订阅中保持可聚焦：tvOS 上聚焦元素变 disabled 会导致焦点跳走并触发滚动；
+              // 点击已由 action 内 guard 忽略。
             }
 
             if canSearchResources {
