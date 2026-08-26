@@ -45,9 +45,10 @@ private struct MediaLoadingView: View {
 
   var body: some View {
     ZStack {
-      // 毛玻璃背景
+      // 不透明背景：Detail 层不再用 opacity(0) 隐藏（否则内容区会失去焦点），
+      // 视觉遮挡改由遮罩完成，必须完全不透明才能盖住未就绪的详情内容。
       Rectangle()
-        .fill(.ultraThinMaterial)
+        .fill(Color(white: 0.08))
         .ignoresSafeArea()
 
       VStack(spacing: 28) {
@@ -312,7 +313,11 @@ private struct MediaDetailContainerContent: View {
     let detail = preloadTask.fullDetail ?? media
 
     ZStack {
-      // Detail 层 — 无条件渲染，从第一帧就存在于视图树中
+      // Detail 层 — 无条件渲染，从第一帧就存在于视图树中。
+      // 保持 opacity(1)：如果这里用 opacity(0) 隐藏，SwiftUI 会把整个
+      // 内容区从焦点系统中排除，进入页面时焦点会落到导航栏返回按钮上，
+      // 且加载完成后不会自动迁移回来。视觉遮挡完全交给 Loading 遮罩
+      // （其背景已改为不透明），焦点从首帧就属于内容区。
       MediaDetailView(
         detail: detail,
         preloadTask: preloadTask,
@@ -321,8 +326,6 @@ private struct MediaDetailContainerContent: View {
         imageLifecycle: imageLifecycle,
         loadingPosterURL: loadingPosterURL
       )
-      // 加载未完成时隐藏详情，防止 NavigationStack 过渡动画透出内容
-      .opacity(isReady ? 1 : 0)
 
       // Loading 遮罩层 — 始终存在于视图树中，通过 opacity 控制显隐
       MediaLoadingView(
