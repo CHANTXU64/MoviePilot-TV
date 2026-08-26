@@ -435,12 +435,14 @@ final class ImageLoadWindowTests: XCTestCase {
     )
   }
 
-  func testReturningToTabCancelsPendingImageReleaseAndBackgroundingDoesNotDelay() async throws {
+  func testSelectedStackRetainsImagesAcrossSceneBackgroundWithoutStayingForeground() async throws {
     let coordinator = ImageNavigationCoordinator(
       mediaPreloader: MediaPreloader(apiService: .testingInstance()),
       tabTransitionImageRetention: .milliseconds(20)
     )
     coordinator.setStackForeground(true)
+    let entry = coordinator.push(resourceRequest("detail"))
+    let lifecycle = coordinator.lifecycle(for: entry)
 
     coordinator.setStackPresentation(isSelected: false, scenePhase: .active)
     coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
@@ -453,7 +455,98 @@ final class ImageLoadWindowTests: XCTestCase {
       )
     )
 
+    coordinator.setStackPresentation(isSelected: true, scenePhase: .inactive)
+    XCTAssertFalse(coordinator.isStackInteractive)
+    XCTAssertFalse(coordinator.rootLifecycle.isStackForeground)
+    XCTAssertTrue(coordinator.rootLifecycle.retainsImagesForSceneReturn)
+    XCTAssertTrue(coordinator.rootLifecycle.keepsContentImages)
+    XCTAssertTrue(lifecycle.retainsImagesForSceneReturn)
+    XCTAssertTrue(lifecycle.keepsActivePageImages)
+    XCTAssertEqual(coordinator.rootLifecycle.stackReleaseEpoch, 0)
+    XCTAssertEqual(lifecycle.stackReleaseEpoch, 0)
+    XCTAssertFalse(
+      TransferHistoryView.shouldMountRows(
+        isSelected: false,
+        isStackForeground: coordinator.rootLifecycle.isStackForeground
+      ),
+      "图片保留态不能伪装成 Stack 前台态"
+    )
+
     coordinator.setStackPresentation(isSelected: true, scenePhase: .background)
+    XCTAssertTrue(coordinator.rootLifecycle.keepsContentImages)
+    XCTAssertTrue(lifecycle.keepsActivePageImages)
+
+    coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
+    XCTAssertTrue(coordinator.isStackInteractive)
+    XCTAssertTrue(coordinator.rootLifecycle.isStackForeground)
+    XCTAssertFalse(coordinator.rootLifecycle.retainsImagesForSceneReturn)
+    XCTAssertTrue(lifecycle.keepsActivePageImages)
+    XCTAssertEqual(lifecycle.stackReleaseEpoch, 0)
+  }
+
+  func testSelectedSceneBackgroundKeepsDecodedSurfaceForImmediateReturn() {
+    let coordinator = ImageNavigationCoordinator(
+      mediaPreloader: MediaPreloader(apiService: .testingInstance())
+    )
+    coordinator.setStackForeground(true)
+    let slot = makeSlot(key: "scene-return", lifecycle: coordinator.rootLifecycle)
+    let surface = PageManagedImageView()
+    let demandLease = PageImageDemandLease()
+    let decodedImage = UIImage()
+    demandLease.bind(to: slot, isEnabled: true)
+    slot.attach(surface, demandID: demandLease.id)
+    slot.acceptRetrievedImage(decodedImage)
+
+    XCTAssertTrue(surface.image === decodedImage)
+    XCTAssertEqual(slot.retrievalStartCount, 1)
+
+    coordinator.setStackPresentation(isSelected: true, scenePhase: .inactive)
+    coordinator.setStackPresentation(isSelected: true, scenePhase: .background)
+
+    XCTAssertTrue(slot.hasLoadedPageImage)
+    XCTAssertTrue(surface.image === decodedImage)
+    XCTAssertEqual(slot.retrievalStartCount, 1)
+
+    coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
+
+    XCTAssertTrue(surface.image === decodedImage)
+    XCTAssertEqual(slot.retrievalStartCount, 1, "返回前台不能重新读取或解码已保留图片")
+
+    coordinator.setStackForeground(false)
+
+    XCTAssertFalse(slot.hasLoadedPageImage)
+    XCTAssertNil(surface.image)
+    slot.detach(surface)
+    demandLease.cancel()
+  }
+
+  func testUnselectedStackStillReleasesImmediatelyWhenSceneLeavesActive() {
+    let coordinator = ImageNavigationCoordinator(
+      mediaPreloader: MediaPreloader(apiService: .testingInstance())
+    )
+    coordinator.setStackForeground(true)
+    let entry = coordinator.push(resourceRequest("detail"))
+    let lifecycle = coordinator.lifecycle(for: entry)
+
+    coordinator.setStackPresentation(isSelected: false, scenePhase: .inactive)
+
+    XCTAssertFalse(coordinator.rootLifecycle.isStackForeground)
+    XCTAssertFalse(coordinator.rootLifecycle.retainsImagesForSceneReturn)
+    XCTAssertFalse(coordinator.rootLifecycle.keepsContentImages)
+    XCTAssertFalse(lifecycle.keepsActivePageImages)
+    XCTAssertEqual(coordinator.rootLifecycle.stackReleaseEpoch, 1)
+    XCTAssertEqual(lifecycle.stackReleaseEpoch, 1)
+  }
+
+  func testInitiallyInactiveSelectedStackDoesNotEnableImageRetention() {
+    let coordinator = ImageNavigationCoordinator(
+      mediaPreloader: MediaPreloader(apiService: .testingInstance())
+    )
+
+    coordinator.setStackPresentation(isSelected: true, scenePhase: .background)
+
+    XCTAssertFalse(coordinator.rootLifecycle.isStackForeground)
+    XCTAssertFalse(coordinator.rootLifecycle.retainsImagesForSceneReturn)
     XCTAssertFalse(coordinator.rootLifecycle.keepsContentImages)
   }
 

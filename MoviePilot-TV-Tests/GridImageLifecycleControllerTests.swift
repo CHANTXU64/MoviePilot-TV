@@ -245,6 +245,44 @@ final class GridImageLifecycleControllerTests: XCTestCase {
     XCTAssertEqual(controller.observedStackReleaseEpoch, 0)
   }
 
+  func testSelectedSceneBackgroundKeepsArmedWindowWithoutAcceptingFocus() {
+    let coordinator = ImageNavigationCoordinator(
+      mediaPreloader: MediaPreloader(apiService: .testingInstance())
+    )
+    coordinator.setStackForeground(true)
+    let listIdentity = GridListIdentity.make()
+    let controller = makeController(
+      listIdentity: listIdentity,
+      itemCount: 60,
+      lifecycle: coordinator.rootLifecycle
+    )
+    controller.cardFocusChanged(
+      listIdentity: listIdentity,
+      itemID: "item-18",
+      itemIndex: 18,
+      isFocused: true
+    )
+
+    coordinator.setStackPresentation(isSelected: true, scenePhase: .inactive)
+
+    XCTAssertEqual(controller.activation, .armed(itemID: "item-18", itemIndex: 18))
+    XCTAssertEqual(controller.observedStackReleaseEpoch, 0)
+    XCTAssertFalse(
+      controller.cardFocusChanged(
+        listIdentity: listIdentity,
+        itemID: "item-24",
+        itemIndex: 24,
+        isFocused: true
+      ),
+      "App 非 Active 时不能接受新的焦点窗口"
+    )
+
+    coordinator.setStackPresentation(isSelected: true, scenePhase: .active)
+
+    XCTAssertEqual(controller.activation, .armed(itemID: "item-18", itemIndex: 18))
+    XCTAssertEqual(controller.observedStackReleaseEpoch, 0)
+  }
+
   func testTabInteractionGateUpdatesSynchronouslyWithoutViewOnChange() {
     let coordinator = ImageNavigationCoordinator(
       mediaPreloader: MediaPreloader(apiService: .testingInstance())
