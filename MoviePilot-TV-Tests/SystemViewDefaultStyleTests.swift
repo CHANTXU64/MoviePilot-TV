@@ -127,7 +127,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("value: \"\\(entry.releaseDate) · MoviePilot \\(entry.compatibleMoviePilotVersion)\""))
   }
 
-  func testReleaseWorkflowUsesMergedChangelogAsReleaseNotesSource() throws {
+  func testReleaseWorkflowUsesMainChangelogAsReleaseNotesSource() throws {
     let source = try Self.source(at: ".agents/prompts/release.md")
 
     XCTAssertTrue(source.contains("## 更新内容"))
@@ -135,7 +135,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("## 主要更新"))
     XCTAssertTrue(source.contains("只有兼容 MoviePilot 后端基线相对上一发布版本发生变化时"))
     XCTAssertTrue(source.contains("`highlights` → `更新内容` 标题下最前面的摘要条目"))
-    XCTAssertTrue(source.contains("Changelog 改动未合并到 `main` 前，不得进入正式发布"))
+    XCTAssertTrue(source.contains("新版本信息未提交并推送到 `main` 前，不得创建 GitHub Release"))
     XCTAssertTrue(source.contains("保持文字和顺序一致"))
   }
 

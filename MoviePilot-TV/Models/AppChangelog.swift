@@ -17,6 +17,24 @@ nonisolated enum AppChangelog {
 
   static let entries: [AppChangelogEntry] = [
     AppChangelogEntry(
+      version: "v0.3.7",
+      releaseDate: "2026-08-26",
+      compatibleMoviePilotVersion: "v2.15.6",
+      highlights: [
+        "降低 77% 内存占用，减少 MoviePilot-TV 或其他 App 因内存压力被系统终止的情况。",
+        "优化登录状态处理，网络波动或服务异常时不再轻易退出登录。",
+      ],
+      updates: [],
+      fixes: [
+        "修复登录状态误判、凭据恢复、特殊字符密码、版本提醒及账号切换后的权限和旧会话残留问题。",
+        "修复探索来源插件筛选与 MoviePilot Web 不一致，以及聚合搜索、资源搜索、站点过滤、资源排序和卡片显示异常。",
+        "修复详情与人物页面焦点、加载失败提示、转场海报、背景图片、空白占位图及页面返回恢复异常。",
+        "修复订阅状态与取消反馈、剧集组加载、下载器重试和暂停继续状态，以及批量整理反馈、选择和轮询漏项问题。",
+        "修复首页与状态页空态、媒体库轮询、分页失败提示、接口错误解析、后台数据解码及多来源媒体身份兼容问题。",
+      ],
+      optimizations: []
+    ),
+    AppChangelogEntry(
       version: "v0.3.6",
       releaseDate: "2026-08-12",
       compatibleMoviePilotVersion: "v2.15.6",
