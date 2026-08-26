@@ -86,6 +86,11 @@ struct SeasonSubscriptionSummary: Equatable, Hashable {
   }
 }
 
+private struct SeasonAvailabilityScope: Equatable {
+  let uiIdentity: String
+  let episodeGroup: String?
+}
+
 @MainActor
 class SubscribeSeasonViewModel: ObservableObject {
   let mediaInfo: MediaInfo
@@ -115,6 +120,7 @@ class SubscribeSeasonViewModel: ObservableObject {
   private var isSeasonManagementContext = false
   private var seasonLoadRevision = 0
   private var seasonAvailabilityRevision = 0
+  private var seasonAvailabilityScope: SeasonAvailabilityScope
 
   init(
     mediaInfo: MediaInfo,
@@ -126,10 +132,15 @@ class SubscribeSeasonViewModel: ObservableObject {
     self.apiService = apiService
     self.initialSeason = initialSeason
     self.seasonInfos = mediaInfo.season_info ?? []
-    self.selectedGroupId =
+    let selectedGroupId =
       Self.episodeGroupTMDBID(for: mediaInfo) != nil
       ? (initialEpisodeGroup ?? "")
       : ""
+    self.selectedGroupId = selectedGroupId
+    self.seasonAvailabilityScope = SeasonAvailabilityScope(
+      uiIdentity: apiService.uiIdentity,
+      episodeGroup: selectedGroupId.isEmpty ? nil : selectedGroupId
+    )
   }
 
   private static func episodeGroupTMDBID(for mediaInfo: MediaInfo) -> Int? {
@@ -298,6 +309,7 @@ class SubscribeSeasonViewModel: ObservableObject {
     try await checkSeasonsStatus(
       snapshot: snapshot,
       episodeGroup: load.episodeGroup,
+      preserveVisibleState: false,
       isCurrent: {
         self.seasonAvailabilityRevision == availabilityRevision
           && self.isSeasonLoadOwnerCurrent(load)
@@ -336,6 +348,7 @@ class SubscribeSeasonViewModel: ObservableObject {
       try await checkSeasonsStatus(
         snapshot: snapshot,
         episodeGroup: episodeGroup,
+        preserveVisibleState: true,
         isCurrent: {
           self.seasonAvailabilityRevision == revision
             && self.effectiveEpisodeGroup == episodeGroup
@@ -348,7 +361,6 @@ class SubscribeSeasonViewModel: ObservableObject {
         effectiveEpisodeGroup == episodeGroup,
         apiService.isSessionUnchanged(from: snapshot)
       else { return }
-      seasonsNotExisted = [:]
       print("检查季入库状态失败: \(error)")
     }
   }
@@ -356,16 +368,36 @@ class SubscribeSeasonViewModel: ObservableObject {
   private func checkSeasonsStatus(
     snapshot: APIServiceSessionSnapshot,
     episodeGroup: String?,
+    preserveVisibleState: Bool,
     isCurrent: () -> Bool
   ) async throws {
     guard apiService.isSessionUnchanged(from: snapshot), isCurrent() else {
       throw CancellationError()
     }
-    let availabilityUIIdentity = apiService.uiIdentity
-    let wasAvailabilityLoaded = isSeasonAvailabilityLoaded
-    isSeasonAvailabilityLoaded = false
+    let requestedScope = SeasonAvailabilityScope(
+      uiIdentity: apiService.uiIdentity,
+      episodeGroup: episodeGroup
+    )
+    let previousScope = seasonAvailabilityScope
+    let previousStatuses = seasonsNotExisted
+    let previousWasLoaded = isSeasonAvailabilityLoaded
+    // 同账号、同剧集组的后台复查保留上一成功快照，成功后再整体替换。
+    let canPreserveVisibleState =
+      preserveVisibleState
+      && previousWasLoaded
+      && previousScope == requestedScope
+
+    seasonAvailabilityScope = requestedScope
+    if !canPreserveVisibleState {
+      isSeasonAvailabilityLoaded = false
+      if previousScope != requestedScope {
+        seasonsNotExisted = [:]
+      }
+    }
+
     guard apiService.canAccess(.subscribe) else {
       seasonsNotExisted = [:]
+      isSeasonAvailabilityLoaded = false
       return
     }
 
@@ -394,23 +426,62 @@ class SubscribeSeasonViewModel: ObservableObject {
       }
       seasonsNotExisted = newStatus
       isSeasonAvailabilityLoaded = true
+      seasonAvailabilityScope = requestedScope
     } catch is CancellationError {
-      if isCurrent() {
-        if apiService.uiIdentity == availabilityUIIdentity {
-          isSeasonAvailabilityLoaded = wasAvailabilityLoaded
-        } else {
-          seasonsNotExisted = [:]
-          isSeasonAvailabilityLoaded = false
-        }
-      }
+      restoreOrClearAvailabilityAfterInterruption(
+        previousScope: previousScope,
+        previousStatuses: previousStatuses,
+        previousWasLoaded: previousWasLoaded,
+        requestedScope: requestedScope,
+        requestIsCurrent: isCurrent()
+      )
       throw CancellationError()
     } catch {
-      guard apiService.isSessionUnchanged(from: snapshot), isCurrent() else {
+      let requestIsCurrent = isCurrent()
+      guard apiService.isSessionUnchanged(from: snapshot), requestIsCurrent else {
+        restoreOrClearAvailabilityAfterInterruption(
+          previousScope: previousScope,
+          previousStatuses: previousStatuses,
+          previousWasLoaded: previousWasLoaded,
+          requestedScope: requestedScope,
+          requestIsCurrent: requestIsCurrent
+        )
         throw CancellationError()
       }
-      seasonsNotExisted = [:]
+      restoreOrClearAvailabilityAfterInterruption(
+        previousScope: previousScope,
+        previousStatuses: previousStatuses,
+        previousWasLoaded: previousWasLoaded,
+        requestedScope: requestedScope,
+        requestIsCurrent: true
+      )
       print("检查季入库状态失败: \(error)")
     }
+  }
+
+  private func restoreOrClearAvailabilityAfterInterruption(
+    previousScope: SeasonAvailabilityScope,
+    previousStatuses: [Int: Int],
+    previousWasLoaded: Bool,
+    requestedScope: SeasonAvailabilityScope,
+    requestIsCurrent: Bool
+  ) {
+    guard requestIsCurrent else { return }
+
+    let currentScope = SeasonAvailabilityScope(
+      uiIdentity: apiService.uiIdentity,
+      episodeGroup: effectiveEpisodeGroup
+    )
+    guard currentScope == requestedScope, previousScope == requestedScope else {
+      seasonsNotExisted = [:]
+      isSeasonAvailabilityLoaded = false
+      seasonAvailabilityScope = currentScope
+      return
+    }
+
+    seasonsNotExisted = previousStatuses
+    isSeasonAvailabilityLoaded = previousWasLoaded
+    seasonAvailabilityScope = previousScope
   }
 
   func seasonAvailabilityMedia() throws -> MediaInfo {
