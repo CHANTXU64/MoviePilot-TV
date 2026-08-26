@@ -35,7 +35,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
 
     XCTAssertTrue(
       subscription.contains(
-        "session.token != nil, self.didPrepareStartup, !self.isPreparingStartupSession"
+        "session.token != nil, self.didPrepareStartup, !self.isRefreshingStartupSession"
       )
     )
   }
@@ -92,6 +92,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
 
   func testSystemViewKeepsConnectionAppInfoAndChangelogEntryPoints() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+    let viewModelSource = try Self.source(at: "MoviePilot-TV/ViewModels/SystemViewModel.swift")
 
     XCTAssertTrue(source.contains("\"连接与APP信息\""))
     XCTAssertTrue(source.contains("\"连接\""))
@@ -100,6 +101,10 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("row(\"版本更新历史\", showsDisclosure: true)"))
     XCTAssertTrue(source.contains("push(.changelog)"))
     XCTAssertTrue(source.contains("\"MoviePilot TV APP\""))
+    XCTAssertTrue(source.contains("密码安全提示：请勿将 MoviePilot 密码与其他服务共用"))
+    XCTAssertTrue(source.contains("Apple 钥匙串不可用时，本 App 会自动降级为明文持久化密码"))
+    XCTAssertTrue(viewModelSource.contains("已登录（Apple 钥匙串安全存储）"))
+    XCTAssertTrue(viewModelSource.contains("已登录（密码明文非安全存储）"))
     XCTAssertFalse(source.contains("\"连接与版本\""))
   }
 

@@ -394,7 +394,7 @@ private extension Error {
   var isBackendCompatibilityPermissionDenied: Bool {
     if let apiError = self as? APIError {
       switch apiError {
-      case .unauthorized:
+      case .unauthorized, .authenticationChallenge, .credentialsRejected, .mfaUnsupported:
         return true
       case .serverMessage(let message):
         return message.contains("权限") || message.localizedCaseInsensitiveContains("permission")
@@ -859,6 +859,7 @@ private struct BackendServiceSnapshot {
   let baseURL: String
   let token: String?
   let currentUser: Token?
+  let loginDraft: LoginDraft?
   let settings: GlobalSettings?
   let useImageCache: Bool
   let serverURLDefaults: String?
@@ -874,6 +875,7 @@ private struct BackendServiceSnapshot {
       baseURL: service.baseURL,
       token: service.token,
       currentUser: service.currentUser,
+      loginDraft: service.loginDraft,
       settings: service.settings,
       useImageCache: service.useImageCache,
       serverURLDefaults: UserDefaults.standard.string(forKey: "serverURL"),
@@ -898,6 +900,7 @@ private struct BackendServiceSnapshot {
       token: token,
       currentUser: currentUser
     )
+    service.loginDraft = loginDraft
     service.settings = settings
     service.useImageCache = useImageCache
     service.restorePersistenceSnapshotForTesting(persistence)

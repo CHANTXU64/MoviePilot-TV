@@ -387,6 +387,14 @@ struct SystemView: View {
             staticRow("最近状态", refreshMessage)
           }
         }
+
+        Text(
+          "密码安全提示：请勿将 MoviePilot 密码与其他服务共用。Apple 钥匙串不可用时，本 App 会自动降级为明文持久化密码；即使 Apple TV 环境相对封闭，仍存在密码泄露风险。"
+        )
+        .font(.body.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
       .padding(.leading, 16)
     }

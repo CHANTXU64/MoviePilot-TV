@@ -23,6 +23,7 @@ class ContentViewModel: ObservableObject {
   private let apiService: APIService
   private var cancellables = Set<AnyCancellable>()
   private var didPrepareStartup = false
+  private var isRefreshingStartupSession = false
   private var backendVersionCheckKey: BackendVersionCheckKey?
   private var lastAccountPermissionWarningKey: AccountPermissionWarningKey?
 
@@ -55,7 +56,7 @@ class ContentViewModel: ObservableObject {
         if session.token == nil {
           self.resetBackendVersionCheck()
         }
-        if session.token != nil, self.didPrepareStartup, !self.isPreparingStartupSession {
+        if session.token != nil, self.didPrepareStartup, !self.isRefreshingStartupSession {
           Task { [weak self] in
             guard let self else { return }
             await self.loadGlobalSettings(checkBackendVersion: true)
@@ -68,7 +69,7 @@ class ContentViewModel: ObservableObject {
     NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)
       .sink { [weak self] _ in
         guard let self, self.isLoggedIn, self.didPrepareStartup,
-          !self.isPreparingStartupSession
+          !self.isRefreshingStartupSession
         else { return }
         Task { [weak self] in
           await self?.loadGlobalSettings(checkBackendVersion: false)
@@ -114,16 +115,12 @@ class ContentViewModel: ObservableObject {
     didPrepareStartup = true
 
     if apiService.isLoggedIn {
-      isPreparingStartupSession = true
-      let hadRestoredCurrentUser = apiService.currentUser != nil
-      let refreshResult = await apiService.refreshStoredSessionAfterAppUpdateIfNeeded()
-      if refreshResult != .refreshed,
-        apiService.isLoggedIn,
-        hadRestoredCurrentUser || apiService.currentUser == nil
-      {
-        await apiService.refreshCurrentUserForStartup()
-      }
+      // 有持久化用户快照时直接展示界面；网络校验只在身份尚未恢复时占用启动页。
+      isRefreshingStartupSession = true
+      isPreparingStartupSession = apiService.currentUser == nil
+      await apiService.refreshCurrentUserForStartup()
       isPreparingStartupSession = false
+      isRefreshingStartupSession = false
       isLoggedIn = apiService.isLoggedIn
     }
 
