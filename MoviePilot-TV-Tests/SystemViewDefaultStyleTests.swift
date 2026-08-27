@@ -300,6 +300,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("equals: .tmdbJump"))
     XCTAssertTrue(source.contains(".focused($focusedButton, equals: .otherInfo)"))
     XCTAssertTrue(containerSource.contains(".allowsHitTesting(!isReady)"))
+    XCTAssertFalse(containerSource.contains(".allowsHitTesting(isReady)"))
     XCTAssertFalse(containerSource.contains("isLoadingFocusAnchorFocused"))
     XCTAssertFalse(containerSource.contains(".focusable(!isReady)"))
     XCTAssertFalse(containerSource.contains(".disabled(!isReady)"))
