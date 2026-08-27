@@ -17,6 +17,20 @@ nonisolated enum AppChangelog {
 
   static let entries: [AppChangelogEntry] = [
     AppChangelogEntry(
+      version: "v0.3.8",
+      releaseDate: "2026-08-27",
+      compatibleMoviePilotVersion: "v2.15.6",
+      highlights: [
+        "紧急修复详情页焦点卡死、无法操作且只能重启 App 恢复的严重问题。",
+      ],
+      updates: [],
+      fixes: [
+        "修复 App 从后台返回后，详情页焦点卡在顶部 Tab 栏、无法下移到内容区的问题。",
+        "修复详情页上移到顶部 Tab 栏后无法再次下移的问题，恢复正常浏览操作。",
+      ],
+      optimizations: []
+    ),
+    AppChangelogEntry(
       version: "v0.3.7",
       releaseDate: "2026-08-26",
       compatibleMoviePilotVersion: "v2.15.6",
