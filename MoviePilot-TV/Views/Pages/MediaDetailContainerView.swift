@@ -184,10 +184,8 @@ private struct MediaLoadingView: View {
 ///
 /// ⚠️ 焦点恢复关键设计：
 /// MediaDetailView 从第一帧起就存在于视图树中（用 partialMedia 初始化），
-/// Loading 视图叠加在上方并在加载期间持有一个无动作焦点锚点；
-/// 详情内容保持挂载但禁用交互，数据就绪后再把焦点交给可见操作。
-/// 这保证了视图树结构永远不发生变化，tvOS Focus Engine 在导航返回时
-/// 可以正确恢复源页面的焦点位置。
+/// Loading 只负责视觉遮挡，真实详情始终留在原生焦点树中。
+/// 不按 Loading 状态限制按钮动作，不禁用整页、不向 Loading 转移焦点。
 struct MediaDetailContainerView: View {
   let media: MediaInfo
   let routeID: UUID
@@ -267,7 +265,6 @@ private struct MediaDetailContainerContent: View {
   /// Loading 层淡出完成前继续保留海报，避免动画刚开始底层图片就被清空。
   @State private var keepsLoadingPosterImage: Bool
   @State private var loadingPosterReleaseTask: Task<Void, Never>?
-  @FocusState private var isLoadingFocusAnchorFocused: Bool
 
   init(
     media: MediaInfo,
@@ -290,8 +287,8 @@ private struct MediaDetailContainerContent: View {
     )
   }
 
-  /// 数据是否就绪（加载成功或失败均算就绪，且首行内容已加载）
-  /// 如果数据在进入时已预加载完毕，直接视为就绪
+  /// 只决定 Loading 遮罩显隐，不用于禁用详情焦点或按钮动作。
+  /// 预加载命中和详情失败直接结束 Loading，冷加载等待首行及最短展示时间。
   private var isReady: Bool {
     wasPreloaded
       || ((preloadTask.isDetailReady && isContentReady) && minTimeElapsed)
@@ -310,26 +307,22 @@ private struct MediaDetailContainerContent: View {
   var body: some View {
     // ⚠️ 焦点恢复核心设计：
     // MediaDetailView 无条件渲染（从第一帧就存在），用 partialMedia 初始化。
-    // Loading 叠加在上方；视图树结构永远不变，tvOS Focus Engine
-    // 可正确追踪和恢复焦点。加载期间由遮罩持有无动作焦点锚点，
-    // 详情内容保持挂载但不参与交互。
+    // Loading 叠加在上方，仅通过 opacity 控制显隐。
+    // 真实详情从首帧就留在焦点树中，方向导航始终由 tvOS 原生 Focus Engine 管理。
     let detail = preloadTask.fullDetail ?? media
 
     ZStack {
       // Detail 层 — 无条件渲染，从第一帧就存在于视图树中。
-      // 保持 opacity(1) 以维持稳定结构；视觉遮挡交给不透明 Loading 遮罩。
-      // isReady 前禁用真实操作，防止用户误触尚不可见的订阅/搜索按钮。
+      // 保持 opacity(1)；不按加载状态 disabled，避免整个详情区被移出焦点树。
+      // 接受 Loading 期间可能误触，避免加载判定把正常按钮锁成无响应。
       MediaDetailView(
         detail: detail,
         preloadTask: preloadTask,
         isContentReady: $isContentReady,
         routeID: routeID,
         imageLifecycle: imageLifecycle,
-        loadingPosterURL: loadingPosterURL,
-        isFocusEnabled: isReady
+        loadingPosterURL: loadingPosterURL
       )
-      .disabled(!isReady)
-      .allowsHitTesting(isReady)
 
       // Loading 遮罩层 — 始终存在于视图树中，通过 opacity 控制显隐
       MediaLoadingView(
@@ -343,19 +336,14 @@ private struct MediaDetailContainerContent: View {
         loadsImage: keepsLoadingPosterImage && imageLifecycle.keepsActivePageImages
       )
       .opacity(isReady ? 0 : 1)
-      .focusable(!isReady)
-      .focused($isLoadingFocusAnchorFocused)
-      .focusEffectDisabled()
       .allowsHitTesting(!isReady)
       .accessibilityHidden(isReady)
     }
     .animation(.easeInOut(duration: 0.3), value: isReady)
     .onChange(of: isReady) { _, isReady in
-      isLoadingFocusAnchorFocused = !isReady
       updateLoadingPosterRetention(isReady: isReady)
     }
     .onAppear {
-      isLoadingFocusAnchorFocused = !isReady
       // 最短展示计时器（仅在需要加载时生效）
       if !wasPreloaded {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
