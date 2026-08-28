@@ -1096,6 +1096,7 @@
 | S434 | F-230旧系统辅助字号处置 | 用户确认tvOS 26.0–26.3已属过时版本，决定跳过旧兼容分支的固定字体/高度修复；保留历史P2结论，但不再列为待处理项 |
 | S435 | F-032兼容修复登记 | 当前 MP 官方标题/精确搜索普通与流式链路均创建 MetaInfo；TV `TorrentCard` 已按 Web 对齐为 torrent-only 降级渲染，标题回退 `torrent.title`；依赖解析、tvOS Simulator Debug 构建及串行测试通过 |
 | S436 | F-093 用户跳过与 F-193 operation owner 修复登记 | 用户核对当前实现后决定跳过 F-093 残余（任务列表首次失败短暂假空、无独立 stale 投影），自动恢复与 Web 对齐部分保持；F-193 同 profile 竞争由提交 `5345a7b` 修复：Handler 内 operationID+POST 收据，同一分享 GET-only 重试不重复 POST，迟到发布按当前操作作废；新增 `ForkOperationOwnerTests` 4 条回归，依赖解析、tvOS Simulator clean build 及排除 8 类兼容套件后 751/751 串行测试通过 |
+| S437 | F-201 失败原因可达性修复登记 | 列表行"失败"徽章旁展示 trim 后前 20 字符原因（`failureReason(maxLength: 20)`）、详情页"目标文件"下方展示完整 trim 后原因（`failureReason()`），成功记录与空白原因一律不显示；新增 `TransferHistoryFailureReasonTests` 8 条投影回归，依赖解析、tvOS Simulator clean build 及排除 8 类兼容套件后 759/759 串行测试通过 |
 
 ## 9. 错误与重试
 

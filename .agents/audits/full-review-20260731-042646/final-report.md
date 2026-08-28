@@ -1896,7 +1896,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-201 · P2 · 已确认 · 失败历史的 `errmsg` 在 TV 内完全不可达</summary>
+<summary>F-201 · P2 · 已修复（2026-08-28） · 失败历史的 `errmsg` 在 TV 内完全不可达</summary>
 
 - 审查单元与位置：W019；Transfer失败原因可达性
 - 触发路径：任一转移历史状态为失败且后端提供非空失败原因，用户查看行或长按详情。
@@ -1905,6 +1905,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：verify_a001_h与review_a001_h双审对照TV模型/View、当前Web tooltip与后端语义闭合；仅在可滚动详情展示trim后非空errmsg，列表保持紧凑
 - 跨端结论：真实长错误频率未验证
 - 最小修改方向 / 裁决：仅在详情页展示trim后非空`errmsg`，列表保持紧凑；详情随F-185使用原生ScrollView，不建诊断框架。
+- 修复状态：已完成（2026-08-28）；列表行"失败"徽章旁展示 trim 后前 20 字符原因（`failureReason(maxLength: 20)`）、详情页"目标文件"下方展示完整 trim 后原因（`failureReason()`）；成功记录与空白原因一律不显示；新增 `TransferHistoryFailureReasonTests` 8 条投影回归，依赖解析、tvOS Simulator clean build 及排除 8 类兼容套件后的 759/759 串行测试通过。
 
 </details>
 

@@ -2741,6 +2741,15 @@ extension TransferHistory {
       && dest_fileitem == other.dest_fileitem
       && date == other.date
   }
+
+  /// 失败记录的后端失败原因：仅失败记录且 trim 后非空白才返回；成功记录与空白原因一律返回 nil。
+  /// maxLength 非 nil 时截取前 maxLength 个字符（列表行概览用），nil 返回完整原因（详情页用）。
+  func failureReason(maxLength: Int? = nil) -> String? {
+    guard !status.value else { return nil }
+    guard let reason = trimmedNonEmpty([errmsg]) else { return nil }
+    guard let maxLength else { return reason }
+    return String(reason.prefix(maxLength))
+  }
 }
 
 struct FileItem: Codable, Equatable {

@@ -214,7 +214,7 @@
 | F-198 | 已修复（2026-08-21） | P2 | W016→G09 | Status剧集统计nil展示 | 后端None/Web“未获取”被TV折叠为确切0 | 既有三票确认静态误报；G09两名代理按当前后端明确nil语义与跨端稳定差异共同支持P2 | 仅View层nil→“未获取”，0与正数原样 | 已修：StatusView 的 nil 显示“未获取”，0/正数保持原值；投影测试 1/1 通过 |
 | F-199 | 已修复（`ce7afcc`） | P1 | W014→G02 | Subscribe total_episode null保真 | 无编辑GET→PUT把nil/absent固化为0并令当前后端置`manual_total_episode=1`，永久关闭自动总集数刷新 | 既有两票与G02闭合跨端链；`ce7afcc`后独立复审确认null/省略/输入边界对齐 | 现有订阅nil显式编码null；新建nil仍省略，负数/空白/非法输入归一为nil | 修复完成；490项本地测试通过，F-069其余完整PUT保真边界仍开放 |
 | F-200 | 已确认 | P2 | W014→G01纠偏 | Subscribe save_path开放值域 | 既有任意值和配置中已有URI可显示并原样保存，但封闭Picker无法新建或编辑任意合法子路径/URI | 既有双审确认开放合同；G01按当前TV/Web再次核对并驳回“已有值必丢/已配置URI不可选”的扩大说法 | 复用现有文本输入直接绑定String，配置路径只作快捷建议 | 条件性P2；产品文案、真实远程目录与自定义子路径频率未验证 |
-| F-201 | 已确认 | P2 | W019 | Transfer失败原因可达性 | 模型已解码errmsg，但列表与详情只显示“失败”，TV内没有任何读取路径 | verify_a001_h与review_a001_h双审对照TV模型/View、当前Web tooltip与后端语义闭合 | 仅在可滚动详情展示trim后非空errmsg，列表保持紧凑 | 真实长错误频率未验证 |
+| F-201 | 已修复（2026-08-28） | P2 | W019 | Transfer失败原因可达性 | 模型已解码errmsg，但列表与详情只显示“失败”，TV内没有任何读取路径 | verify_a001_h与review_a001_h双审对照TV模型/View、当前Web tooltip与后端语义闭合 | 仅在可滚动详情展示trim后非空errmsg，列表保持紧凑 | 已修复（2026-08-28）：行徽章旁展示 trim 后前 20 字符、详情页展示完整原因；8 条投影回归 + 759/759 测试通过 |
 | F-202 | 已修复（`670cf86`） | P2 | W019 | Transfer嵌套FileItem解码 | TV把name/path/type设为必填，当前后端schema/历史JSON允许稀疏项，单坏行可毒化整页 | 双审核对后端原样JSON、仅path fixture及整页原子解码；危险边界为非null稀疏对象 | 仅历史响应DTO字段级宽容并降级显示，保留相邻好行 | 修复完成（`670cf86`），验证及独立复审通过 |
 | F-203 | 用户决定跳过 | P1 | W019→G09 | Transfer deletedest失败语义 | 后端忽略目标文件删除Bool，仍删历史并返回成功，目标文件与可重试依据发生不可逆分裂 | 既有双审闭合端点/工具反例；v2.15.1与当前v2复核仍成立 | 不改TV/Web或本地后端，等待MoviePilot官方修复 | 当前Web/TV共享破坏性后端缺陷；现状保持不变 |
 | F-204 | 已修复（`81d42fb`） | P1 | W019→I009 | Transfer轮询权威对账与SQLite同ID复用 | 默认SQLite删最大ID后add_force可复用ID；TV保留旧卡，DELETE/AI/manual按同ID重查新行并可删除/移动新文件 | W019双审先闭合非权威列表；I009主审/定向独立复核闭合当前DB/端点完整破坏链 | TV每次进入Tab权威刷新，mutation前全量比较指纹并绑定来源session，异常时整批拒绝且刷新；后端长期方向仍是AUTOINCREMENT或row version | 依赖解析、clean build、本地479/479与第二独立复审通过；保留GET→mutation TOCTOU及完全同指纹边界 |
@@ -3412,7 +3412,7 @@
 
 ### F-201：失败历史的 `errmsg` 在 TV 内完全不可达
 
-- 状态：已确认
+- 状态：已修复（2026-08-28）
 - 严重度：P2
 - 位置：TransferHistory模型`errmsg`、历史行状态与`TransferHistoryDetailSheet`。
 - 触发路径：任一转移历史状态为失败且后端提供非空失败原因，用户查看行或长按详情。
@@ -3423,6 +3423,8 @@
 - 主审证据：verify_a001_h从模型→行/详情无读取→当前Web tooltip→后端字段语义完整闭合。
 - 独立复核：review_a001_h从完整View重新确认列表和详情均未读取`errmsg`，当前Web失败tooltip与后端语义一致；仅详情展示trim后非空原因，长文本随F-185滚动，维持P2。
 - 测试缺口：缺失败详情、空/空白/长`errmsg`与滚动可达用例。
+- 修复（2026-08-28）：列表行"失败"徽章旁展示 trim 后前 20 字符原因（`failureReason(maxLength: 20)`），详情页"目标文件"下方展示完整 trim 后原因（`failureReason()`）；成功记录与空白原因一律不显示，列表保持紧凑。
+- 验证（2026-08-28）：新增 `TransferHistoryFailureReasonTests` 8 条回归；依赖解析、tvOS Simulator clean build 及排除 8 类兼容套件后的 759/759 串行测试通过。
 - 未验证：真实错误文案长度/频率。
 
 ### F-202：合法稀疏 `FileItem` 可令整页历史解码失败
