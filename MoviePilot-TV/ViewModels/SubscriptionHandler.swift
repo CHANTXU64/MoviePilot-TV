@@ -18,7 +18,10 @@ class SubscriptionHandler: ObservableObject {
   private let apiService: APIService
   private let mediaPreloader: MediaPreloader
   private var isCheckingSubscription = false
-  private var pendingForkOwner: (subscriptionId: Int, profileKey: String)?
+  /// 最近一次 Fork 的成功收据：POST 已创建订阅、但编辑器（GET）尚未完成。GET 成功后才清除。
+  private var pendingForkReceipt: PendingForkReceipt?
+  /// 最近一次 fork(share:) 调用的 operation 代际，用于丢弃旧操作的迟到错误与呈现。
+  private var activeForkOperation: UUID?
   private var pendingUnsubscribe: (
     item: MediaInfo, mediaId: String, snapshot: APIServiceSessionSnapshot
   )?
@@ -130,21 +133,46 @@ class SubscriptionHandler: ObservableObject {
   }
 
   func fork(share: SubscribeShare) async -> Int? {
-    forkErrorMessage = nil
     guard apiService.canAccess(.subscribe) else { return nil }
     guard let profileKey = apiService.profileKey else { return nil }
+
+    // POST 已成功但编辑器尚未完成（GET 失败或未执行）时，同一分享再次点击只重试 GET，
+    // 不重复创建订阅；仅当收据与当前会话、当前分享匹配时复用。
+    if let receipt = pendingForkReceipt,
+      receipt.profileKey == profileKey,
+      receipt.shareID == share.id
+    {
+      return receipt.subscriptionId
+    }
+
+    let operationID = UUID()
+    activeForkOperation = operationID
+    forkErrorMessage = nil
     let snapshot = apiService.sessionSnapshot()
+    defer {
+      if activeForkOperation == operationID {
+        activeForkOperation = nil
+      }
+    }
 
     do {
       let subscriptionId = try await apiService.forkSubscription(share: share)
-      guard apiService.isSessionUnchanged(from: snapshot), apiService.profileKey == profileKey
+      guard apiService.isSessionUnchanged(from: snapshot),
+        apiService.profileKey == profileKey,
+        activeForkOperation == operationID
       else { return nil }
-      pendingForkOwner = (subscriptionId, profileKey)
+      pendingForkReceipt = PendingForkReceipt(
+        operationID: operationID,
+        subscriptionId: subscriptionId,
+        profileKey: profileKey,
+        shareID: share.id
+      )
       NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
       return subscriptionId
     } catch is CancellationError {
       return nil
     } catch {
+      guard activeForkOperation == operationID else { return nil }
       Logger.error("Failed to fork subscription: \(error)")
       let title = share.share_title ?? share.name ?? "该订阅"
       forkErrorMessage = "暂时无法复用订阅《\(title)》，请稍后重试。"
@@ -156,19 +184,37 @@ class SubscriptionHandler: ObservableObject {
     guard apiService.canAccess(.subscribe) else { return }
 
     do {
-      let pendingProfileKey = pendingForkOwner.flatMap {
-        $0.subscriptionId == subId ? $0.profileKey : nil
+      // 本请求是否属于一次已产生收据的 Fork 操作；无收据的调用保持既有直接打开语义。
+      let receiptForThisRequest = pendingForkReceipt.flatMap {
+        $0.subscriptionId == subId ? $0 : nil
       }
-      pendingForkOwner = nil
-      guard pendingProfileKey == nil || pendingProfileKey == apiService.profileKey else {
-        throw CancellationError()
+      if let receiptForThisRequest {
+        guard receiptForThisRequest.profileKey == apiService.profileKey,
+          activeForkOperation == nil
+        else {
+          throw CancellationError()
+        }
       }
       let subscription = try await apiService.fetchSubscription(id: subId)
+      // GET 完成后，有收据的请求必须是仍未退休的当前操作，否则视为迟到的旧请求丢弃结果。
+      if let receiptForThisRequest {
+        guard let currentReceipt = pendingForkReceipt,
+          currentReceipt.operationID == receiptForThisRequest.operationID,
+          currentReceipt.profileKey == apiService.profileKey,
+          activeForkOperation == nil
+        else {
+          throw CancellationError()
+        }
+        // 编辑器成功打开后操作完成；再次点击同一分享是新的合法 Fork。
+        pendingForkReceipt = nil
+      }
       sheetIsNewSubscription = false
       self.sheetSubscribe = subscription
     } catch is CancellationError {
+      // 迟到、退休或取消的请求直接终止，不影响当前收据。
       return
     } catch {
+      // GET 失败保留收据：同一分享再次点击时只重试 GET，不重复 POST。
       showNotification(message: "加载订阅失败: \(error.localizedDescription)", type: .error)
     }
   }
@@ -239,4 +285,13 @@ class SubscriptionHandler: ObservableObject {
     notificationType = type
     notificationSerial += 1
   }
+}
+
+/// Fork 的 POST 成功收据：一次操作创建订阅后，在编辑器（GET）成功打开前持续有效。
+private struct PendingForkReceipt {
+  let operationID: UUID
+  let subscriptionId: Int
+  let profileKey: String
+  /// 来源分享的稳定标识；同一分享再次点击时用于判定“只重试 GET，不重复 POST”。
+  let shareID: String?
 }

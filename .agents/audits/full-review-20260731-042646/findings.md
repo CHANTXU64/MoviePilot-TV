@@ -106,7 +106,7 @@
 | F-090 | 已修复 | P3 | A001-D | TMDB 搜索/识别返回值 | `tmdb_id <= 0` 被当成有效识别结果并遮蔽正候选 | review_a001_d_retry 闭合四个成功出口、动作/预加载调用者与测试盲点 | verify_a001_d 独立确认非法值立即返回并可遮蔽 fullDetail 正 ID | TV 正 ID 边界不一致已确认；真实输入未验证 |
 | F-091 | 已修复 | P2 | A001-E→W016/W017 | 下载器首次加载与轮询恢复 | 首次下载器列表失败后页面不再重试客户端并永久显示假空 | A001-E双审闭合；W016/W017不同代理再次从页面/轮询与Web对照确认 | 失败时轮询复用initialLoad，成功空配置单独呈现 | TV恢复缺口已确认；真实失败频率未验证 |
 | F-092 | 已修复 | P2 | A001-E→W017 | 下载动作与三秒轮询/快速重复 | 暂停/恢复成功后盲目toggle，可反向覆盖轮询正确状态；无in-flight gate又允许双击重复mutation | A001-E双审闭合竞态；W017双审确认同一行可并发两次请求且错误状态可持续 | 单行串行、冻结目标状态，成功后赋目标值或刷新，禁止盲toggle | 纯TV状态竞态已确认；真机连击频率未验证 |
-| F-093 | 部分修复 | P2 | A001-E→W017 | 下载列表及动作错误/状态呈现 | clients/list/start/stop/delete全部错误仅print，首次失败假空、刷新失败陈旧、mutation失败无反馈 | A001-E/W017双审闭合；2026-08-17 再与当前 Web 对照 | 下载器失败可见并自动恢复、连续轮询/主动动作失败通知；任务列表首次失败仍可能短暂假空，无独立 stale/error 四态 | 自动恢复语义与 Web 对齐；完整五态说法撤销 |
+| F-093 | 用户决定跳过（2026-08-27）；已实现部分保持 | P2 | A001-E→W017 | 下载列表及动作错误/状态呈现 | clients/list/start/stop/delete全部错误仅print，首次失败假空、刷新失败陈旧、mutation失败无反馈 | A001-E/W017双审闭合；2026-08-17 再与当前 Web 对照 | 下载器失败可见并自动恢复、连续轮询/主动动作失败通知；任务列表首次失败仍可能短暂假空，无独立 stale/error 四态 | 自动恢复语义与 Web 对齐；完整五态说法撤销。2026-08-27 用户决定跳过残余项 |
 | F-094 | 用户决定跳过 | P2 | A001-E→G05 | 下载任务 hash 身份与动作路径 | nil/空/空白或 path delimiter hash 没有统一动作与路由边界 | 既有双审闭合 Optional gate/路径；G05两名代理确认当前后端仍允许optional hash且三个动作可接受空白值 | 与F-024共用规范化helper但保持独立：本项管动作可用性/路由，F-024管行身份/trap | TV 输入/路由边界已确认；异常hash分布与部署版本未验证 |
 | F-095 | 已修复（`7b7130e`） | P1 | A001-E→W017 | 下载客户端切换与旧行动作 | 切到B后A旧行仍可达且动作读取当前B；同hash时可删除B任务及文件 | A001-E双审闭合错client参数；W017双审确认B慢/失败时旧行持续、固定delete_file=true形成持久数据损失 | 已修复（`7b7130e`）：列表绑定loadedClient，旧行禁用，三种mutation显式传并校验行客户端；439/439本地测试与独立复审通过 | 条件性P1；跨客户端同hash频率未验证 |
 | F-096 | 用户决定跳过 | P2 | A001-G | 媒体服务器可选入库状态探测 | `/mediaserver/exists` 的辅助 401/403 可自动重登或登出整个会话 | review_a001_g 闭合 best-effort 调用、makeRequest 默认参数与 `/notexists` 非破坏性对照 | verify_a001_g 确认参数分裂与现有非破坏性探测规则 | TV 会话副作用已确认；端点权限/状态码未验证 |
@@ -206,7 +206,7 @@
 | F-190 | 已确认 | P3 | W013-C | SeasonDetailSheet季名与可选文本投影 | S00缺名显示“第0季”而卡片显示“特别篇”；空白name/date/overview又生成空标题、图标空行或空壳区域 | review_a001_h主审与verify_a001_h独立复核闭合nil/空/纯空白输入及同页文案分裂 | 复用现有字符串trim→nil；S00/有效季/缺季号使用一套回退规则 | TV显示不变量缺陷已确认；真实空白payload频率未验证 |
 | F-191 | 已确认 | P3 | W013-C→W015 | SeasonDetail/Fork Sheet海报容器几何 | processor按360×540降采样但外层只约束width；缺图/失败只剩无固有2:3高度的Rectangle，四态无法保证稳定海报尺寸 | W013-C第三裁决成案；W015主审独立确认Fork的URL缺失/loading/失败/成功四态同根 | 两个Sheet外层容器直接固定360×540；覆盖四态 | 静态布局契约缺陷已确认；实际塌缩/拉伸形态与焦点影响未验证 |
 | F-192 | 已修复（`b304b58` 范围内处置；后端对象级授权风险范围外） | P1 | W016→W017 | 下载任务列表与mutation owner授权 | manage-only用户可看到并暂停/继续/删除其他用户任务，当前后端list/start/stop/delete只验token且owner回填只按hash | review_a001_j与review_a001_h闭合原跨用户反例；`b304b58`后独立复审确认TV普通用户展示过滤逐字对齐Web | `b304b58`仅补Web同款`userid/username`展示过滤；不修改后端 | 用户确认范围已完成；后端对象级授权缺口作为明确接受的范围外风险保留 |
-| F-193 | 部分修复（`90b40b4` 原 P1 链）；同 profile 竞争维持 P2 | P2 | W015→G06→当前实现复核 | Fork POST→GET→编辑器operation owner | `90b40b4`已把POST结果绑定来源profile/session，切账号或切服后旧ID不能在新owner下继续GET或呈现；同一profile内A/B并发、关闭Sheet后的迟到结果及GET-only恢复仍共享单一状态槽 | 跨profile回归`testForkedEditorDoesNotContinueUnderAnotherAccount`通过；当前Handler/Sheet静态复核确认剩余同会话竞争 | 后续若处理，只在现有Handler内增加同会话operation owner与GET-only receipt，不扩账号框架 | 原跨服务器同号ID P1链已闭合；剩余同会话呈现/恢复为P2 |
+| F-193 | 已修复（2026-08-28） | P2 | W015→G06→当前实现复核 | Fork POST→GET→编辑器operation owner | `90b40b4`已把POST结果绑定来源profile/session，切账号或切服后旧ID不能在新owner下继续GET或呈现；同一profile内A/B并发、关闭Sheet后的迟到结果及GET-only恢复仍共享单一状态槽 | 跨profile回归`testForkedEditorDoesNotContinueUnderAnotherAccount`通过；当前Handler/Sheet静态复核确认剩余同会话竞争 | 后续若处理，只在现有Handler内增加同会话operation owner与GET-only receipt，不扩账号框架 | 已修复（2026-08-28）：Handler 内 operationID+receipt，同分享 GET-only 重试不重复 POST，迟到发布按当前操作作废；4 条新回归 + 751/751 测试通过 |
 | F-194 | 用户跳过（2026-08-20） | P2 | W015 | Fork最终确认字段完整性 | POST立即持久化keyword/custom_words，但TV确认页不展示，用户无法预见将生效的搜索/识别规则 | W015双审对照TV编码、当前后端持久化与Web显示闭合多行规则反例 | 按Web最小边界只读展示非空keyword/custom_words并支持展开/滚动 | 两字段缺口已确认；其他过滤字段是否须展示未验证 |
 | F-195 | 用户跳过（2026-08-20） | P2 | W014 | SubscribeSheet custom_words多行编辑合同 | 后端按LF拆分多规则且Web使用textarea，TV单行TextField无法创建/可靠审阅第二条规则 | W014双审闭合SheetTextField/UITextField、Web VTextarea与后端split链 | 仅该字段复用tvOS多行编辑器并保留LF原值 | 编辑能力缺口已确认；既有LF聚焦后是否改写须运行验证 |
 | F-196 | 已修复（`e47693a`） | P1 | W017 | 下载删除确认与实际文件范围 | UI原来只确认“删除任务”，当前后端默认delete_file=true并由Transmission执行delete_data=true | W017双审闭合永久文件删除链；用户确认保留现有TV确认、不改接口和后端 | `e47693a`将确认文案明确为“将永久删除任务及已下载文件” | 按用户要求仅改一行文案并直接提交，未运行测试、未做子代理复审；后端行为保持不变 |
@@ -1656,7 +1656,7 @@
 
 ### F-093：下载列表和动作错误全部静默
 
-- 状态：部分修复（自动恢复与 Web 对齐；未形成完整四态）
+- 状态：用户决定跳过（2026-08-27）；已实现部分保持，残余维持现状
 - 严重度：P2
 - 位置：`MoviePilot-TV/ViewModels/DownloadTaskViewModel.swift:25-27,65-67,83-105,121-126`
 - 触发路径：下载器列表、任务轮询、暂停、恢复或删除任一路径失败。
@@ -1668,6 +1668,7 @@
 - 独立复核：verify_a001_e 确认父级已有 NotificationManager、同类 Transfer 页面已复用，但下载页没有消费者；Logger 替换只能闭合 F-060，不能替代用户反馈，维持 P3。
 - W017双审升级：clients、列表、start/stop/delete全部失败仅print；首次失败误作真实空，热刷新失败保留旧任务却无stale提示，主动mutation失败又像遥控器无响应，页面没有error/retry或辅助功能反馈。覆盖完整页面和全部任务控制，故升级P2；最小为loading/empty/error/stale/data分流、可聚焦重试与主动动作错误通知，成功继续静默。
 - 当前处置：下载器列表首次失败后轮询会自动重试，下载器错误有可见提示；clients/downloads 连续失败超过 5 次通知一次，暂停/恢复/删除失败立即通知，成功保持静默。与当前 Web 核对后，Web 只保证首次成功前 Loading、成功空才空态、热刷新失败保留旧数据，动作失败仍仅 `console.error`，并不存在 error/stale/retry 四态；TV 的自动恢复语义与 Web 一致且主动动作反馈更强，但任务列表首次失败仍可能短暂显示“暂无任务”，旧数据也没有独立 stale 投影。因此不能写成完整 loading/empty/error/stale/data 已修复。
+- 用户裁决（2026-08-27）：已实现的自动恢复与失败通知保持；残余“任务列表首次失败短暂假空”与“旧数据无独立 stale 投影”由用户决定跳过，不改代码。
 - 剩余未验证：后端失败消息的真实形态，以及 TV 任务列表首次失败短暂空态的实际可见时长。
 
 ### F-094：空白下载 hash 可穿透到动作 URL
@@ -3284,7 +3285,7 @@
 
 ### F-193：Fork 的 POST、GET 与编辑器呈现没有统一 operation owner
 
-- 状态：部分修复（`90b40b4` 原 P1 链）；同 profile 竞争维持 P2
+- 状态：已修复（2026-08-28）；原跨profile条件性P1链由`90b40b4`先闭合，本提交闭合同profile竞争P2
 - 严重度：P2；原跨profile条件性P1链已修复
 - 位置：`ForkSubscribeSheet`、`SubscriptionHandler` 及 Search/Explore 的 Fork 成功回调与编辑器呈现槽。
 - 触发路径：当前剩余仅限同一profile、同一session内，用户先对分享A发起Fork，又关闭或迅速对B操作；A/B完成顺序与Sheet退场顺序逆转。POST成功而GET失败时，也仍缺GET-only恢复入口。
@@ -3299,6 +3300,8 @@
 - 剩余最小方向：若后续处理，只在现有Handler内给同一profile Fork增加operation ID并保存POST receipt；新目标或关闭时退休旧呈现，GET失败只重试GET，不新增账号或通用任务框架。
 - 测试缺口：同一profile下A慢/B快与A快/B慢、关闭后迟到完成、GET单独失败后重试；GET-only重试须断言POST总数仍为1。
 - 未验证：真实Sheet动画时序、连续Fork频率及当前部署网络失败率。
+- 修复（2026-08-28）：`SubscriptionHandler` 内新增 operationID + POST 收据（`PendingForkReceipt`）。同一分享在当前会话下 POST 已成功但编辑器未完成时，再次点击只重试 GET、不重复 POST；Fork 错误与编辑器呈现均校验自己是否仍是当前操作，迟到的旧结果直接作废；GET 成功打开编辑器后清除收据，之后的再次点击为新的合法 Fork。UI 与调用点零改动。
+- 验证（2026-08-28）：新增 `ForkOperationOwnerTests` 4 条回归（A慢B快交错、迟到失败不污染错误槽、GET-only 重试 POST 总数保持 1、不同分享退休旧收据）；依赖解析、tvOS Simulator clean build 及排除 8 类兼容套件后的 751/751 串行测试通过。
 
 ### F-194：Fork 确认页隐藏立即持久化的关键搜索规则
 

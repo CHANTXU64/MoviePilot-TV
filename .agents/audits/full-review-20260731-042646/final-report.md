@@ -524,7 +524,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-193 · P2 · 已确认 · 原跨profile P1链已修复（`90b40b4`） · Fork同会话operation owner仍不完整</summary>
+<summary>F-193 · P2 · 已修复（2026-08-28） · Fork 多阶段操作绑定 operation owner 并防重复创建</summary>
 
 - 审查单元与位置：W015→G06；Fork POST→GET→编辑器operation owner
 - 触发路径：当前剩余限于同一profile/session内，用户对A发起Fork后关闭或迅速对B操作，A/B完成与Sheet退场顺序逆转；POST成功而GET失败时也缺GET-only恢复。
@@ -533,6 +533,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：跨profile回归`testForkedEditorDoesNotContinueUnderAnotherAccount`于2026-08-11定向复跑通过；当前Handler/Sheet复核确认剩余同会话竞争。
 - 跨端结论：原条件性P1链已闭合；剩余为P2。
 - 最小修改方向 / 裁决：若后续处理，只在现有Handler内增加同会话operation ID并保存POST receipt，GET失败只重试GET；不扩账号框架。
+- 修复状态：已完成（2026-08-28）。`SubscriptionHandler` 内新增 operationID + POST 收据（`PendingForkReceipt`）；同一分享在当前会话 POST 已成功但编辑器未完成时，再次点击只重试 GET、不重复 POST；Fork 错误与编辑器呈现校验自身 operation 代际，迟到/退休结果作废；GET 成功打开编辑器后清除收据。UI 与调用点零改动。新增 `ForkOperationOwnerTests` 4 条回归（A慢B快交错、迟到失败不污染错误槽、GET-only 重试 POST 总数保持 1、不同分享退休旧收据）；依赖解析、tvOS Simulator clean build 及排除 8 类兼容套件后的 751/751 串行测试通过。
 
 </details>
 
@@ -1200,7 +1201,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-093 · P2 · 部分修复 · 下载列表和动作错误全部静默</summary>
+<summary>F-093 · P2 · 用户决定跳过（2026-08-27） · 下载列表和动作错误全部静默</summary>
 
 - 审查单元与位置：A001-E→W017；下载列表及动作错误/四态呈现
 - 触发路径：下载器列表、任务轮询、暂停、恢复或删除任一路径失败。
@@ -1210,6 +1211,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 跨端结论：TV错误体验缺陷已确认；后端失败文案未验证
 - 最小修改方向 / 裁决：复用现有 NotificationManager 或单一 VM 错误状态只报告失败，成功保持静默；同时经 Logger 取代直接 `print`。
 - 当前处置：下载器失败可见并自动恢复，连续轮询与主动动作失败会通知；与当前 Web 的 Loading、成功空、热失败保留旧数据语义对齐，但 TV 任务列表首次失败仍可能短暂显示空态，未形成独立 stale/error 四态。
+- 用户裁决（2026-08-27）：已实现的自动恢复与失败通知保持；残余“任务列表首次失败短暂假空”与“旧数据无独立 stale 投影”由用户决定跳过，不改代码。
 
 </details>
 
