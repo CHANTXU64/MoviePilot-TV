@@ -145,6 +145,73 @@ final class MediaPreloadPermissionTests: XCTestCase {
     XCTAssertEqual(task.fullDetail?.bangumi_id, 987)
   }
 
+  // MARK: - F-221：partial 跳过识别后，full detail 补出 douban 身份须重评并落定终态
+
+  func testFullDetailAddedDoubanIdentitySettlesRecognitionWhenNoMatch() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    MediaPreloadPermissionURLProtocol.stub.reset()
+    configureLimitedUser(service)
+
+    let task = MediaPreloadTask(
+      partialMedia: MediaInfo(
+        mediaid_prefix: "custom",
+        media_id: "fixture-221a",
+        title: "AAA 无法识别的自定义条目",
+        type: "电视剧"
+      ),
+      apiService: service
+    )
+    task.start()
+    defer { task.cancel() }
+
+    // 修复前：partial custom（canJumpToTMDB=false）跳过识别，finished 永不落定 → 此处超时失败。
+    // full detail 补出 douban_id 后补识别并落定 finished，Header TMDB 按钮不再永久转圈。
+    try await waitUntil("full-detail douban recognition settles to finished") {
+      task.isDetailReady && task.isTmdbRecognitionFinished
+    }
+
+    XCTAssertNil(task.tmdbId)
+    XCTAssertEqual(task.fullDetail?.douban_id, "db-221a")
+  }
+
+  func testFullDetailAddedDoubanIdentityRecognitionPopulatesTmdbId() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    MediaPreloadPermissionURLProtocol.stub.reset()
+    configureLimitedUser(service)
+
+    let task = MediaPreloadTask(
+      partialMedia: MediaInfo(
+        mediaid_prefix: "custom",
+        media_id: "fixture-221b",
+        title: "BBB 可识别的自定义条目",
+        type: "电视剧"
+      ),
+      apiService: service
+    )
+    task.start()
+    defer { task.cancel() }
+
+    // 补识别命中 search（BBB → tmdb 221）时填值，Header 按钮直接可跳。
+    try await waitUntil("full-detail douban recognition fills tmdbId") {
+      task.isDetailReady && task.isTmdbRecognitionFinished && task.tmdbId == 221
+    }
+
+    XCTAssertEqual(task.tmdbId, 221)
+    XCTAssertEqual(task.fullDetail?.douban_id, "db-221b")
+  }
+
   func testSubscriptionHandlerDoesNotOpenSheetWhenLookupFails() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
@@ -809,6 +876,14 @@ private final class MediaPreloadPermissionURLProtocolStub: @unchecked Sendable {
       return (200, jsonData(#"{"tmdb_id":456,"title":"Limited Movie","type":"电影"}"#))
     case "/api/v1/media/bangumi:987":
       return (200, jsonData(#"{"bangumi_id":987,"title":"无法识别的 Bangumi 条目","type":"电视剧"}"#))
+    case "/api/v1/media/custom:fixture-221a":
+      // partial 为 custom（无可识别身份）；full detail 补出 douban_id（canJumpToTMDB 翻 true）但无 TMDB。
+      return (200, jsonData(#"{"douban_id":"db-221a","title":"AAA 无法识别的自定义条目","type":"电视剧"}"#))
+    case "/api/v1/media/custom:fixture-221b":
+      return (200, jsonData(#"{"douban_id":"db-221b","title":"BBB 可识别的自定义条目","type":"电视剧"}"#))
+    case "/api/v1/media/search":
+      // 仅命中 "BBB 可识别的自定义条目"；AAA/Bangumi 标题不匹配 → 走 no-result。
+      return (200, jsonData(#"[{"title":"BBB 可识别的自定义条目","tmdb_id":221,"type":"电视剧"}]"#))
     case "/api/v1/user/current":
       return (
         200,

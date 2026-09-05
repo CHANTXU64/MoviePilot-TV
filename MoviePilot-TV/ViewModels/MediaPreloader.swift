@@ -246,7 +246,7 @@ class MediaPreloadTask: ObservableObject {
         // 与 loadDetail 并发启动（两者互不依赖），但都在依赖任务之前完成
         async let tmdbRecognition: Void = {
           if self.partialMedia.tmdb_id == nil && self.partialMedia.canJumpToTMDB {
-            try await self.recognizeTmdb()
+            try await self.recognizeTmdb(using: self.partialMedia)
           }
         }()
         async let detailLoad: Void = self.loadDetail()
@@ -256,12 +256,23 @@ class MediaPreloadTask: ObservableObject {
         guard !Task.isCancelled else { return }
 
         // 无论成功还是失败，都尝试加载依赖任务（失败时用 partialMedia 做 fallback）
-        let mediaForDeps = fullDetail ?? partialMedia
+        let canonical = fullDetail ?? partialMedia
+
+        // F-221: partial 阶段可能因 canJumpToTMDB=false（无可识别身份）跳过识别；
+        // full detail 到达后若补出 douban/bangumi/anilist 身份但无 TMDB 目标，
+        // 按最终 canonical media 补一次识别，让 isTmdbRecognitionFinished 明确落定，
+        // 否则 Header 的 TMDB 跳转按钮会因「无目标且识别未结束」永久转圈（F-221）。
+        if self.tmdbId == nil, !self.isTmdbRecognitionFinished,
+          canonical.tmdb_id == nil, canonical.canJumpToTMDB
+        {
+          try? await self.recognizeTmdb(using: canonical)
+        }
+
         await withTaskGroup(of: Void.self) { group in
           // ③ 分季信息（仅电视剧）
-          group.addTask { await self.loadSeasonData(for: mediaForDeps) }
+          group.addTask { await self.loadSeasonData(for: canonical) }
           // ④ 订阅状态（此时 self.tmdbId 已就绪，可正确执行 fallback 查询）
-          group.addTask { await self.checkSubscription(for: mediaForDeps) }
+          group.addTask { await self.checkSubscription(for: canonical) }
         }
       })
   }
@@ -574,16 +585,16 @@ class MediaPreloadTask: ObservableObject {
 
   // MARK: - ⑤ TMDB 识别
 
-  private func recognizeTmdb() async throws {
+  private func recognizeTmdb(using media: MediaInfo) async throws {
     defer { isTmdbRecognitionFinished = true }
     // 预加载识别失败静默处理：不弹提示，也不伪装 no-match。
     // 取消向上传播，避免取消后仍继续启动依赖任务（分季/订阅 fallback 补查）。
     let result: Int?
     do {
       result = try await apiService.recognizeTmdbId(
-        title: partialMedia.title ?? "",
-        year: partialMedia.year,
-        type: partialMedia.type
+        title: media.title ?? "",
+        year: media.year,
+        type: media.type
       )
     } catch is CancellationError {
       throw CancellationError()

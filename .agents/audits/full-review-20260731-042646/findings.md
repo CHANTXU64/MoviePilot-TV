@@ -234,7 +234,7 @@
 | F-218 | 已确认 | P3 | R001 | 已存会话启动准备门晚于认证首帧 | 初始isLoggedIn可为true但isPreparingStartupSession为false，首个body先构造旧权限Tab/Home任务，随后.task才打开准备遮罩 | 三代理确认静态入口；第三裁决确认其与F-106出口窗口、F-130/CHK-005异步owner均不可互替 | 初始化准备态与已存token同步，必要settings完成或明确失败策略后再统一清门 | 条件性P3已确认；真实认证帧/Home task启动待运行验证 |
 | F-219 | 已驳回 | P2 | I012 | TorrentsResult同ID载荷更新不重算派生状态 | 组件机制成立，但当前两个生产调用在新搜索时先移除旧结果View，完成后以最新载荷新建实例，不存在原位更新路径 | verify_a001_h提出、review_a001_h反向、review_a001_j第三裁完整闭合两调用分支身份后驳回 | 仅未来新增原位刷新调用者时改纯派生或generation重算 | 驳回当前生产缺陷；保留未来组件回归边界 |
 | F-220 | 已驳回 | P2 | I005→F-115 | MediaPreloader跨阶段串行屏障 | season只依赖详情响应，却必须等待识别及详情内图片阶段结束；有订阅权限电视剧因此稳定延长全屏Loading | review_a001_h集成提出，verify_a001_h独立闭合关键路径并裁其由扩展后的F-115完整承载 | 详情响应发布即启动season，图片/识别仅约束真实依赖者 | 驳回重复编号，不驳回机制；F-115升P2 |
-| F-221 | 已确认 | P2 | I005→G03 | 识别终态冻结在partial media | 合法custom partial初始跳过识别；full detail补Douban/Bangumi/AniList且无TMDB后不重评，Header TMDB按钮永久spinner/disabled | I005双审确认；G03窄第三裁逐个consumer收窄为Header单动作并再次确认P2 | full detail后重评一次；执行/跳过/失败/取消均落terminal，不建状态机 | 纯TV识别终态P2已确认；实际插件payload频率未验证 |
+| F-221 | 已修复（2026-09-05） | P2 | I005→G03 | 识别终态冻结在partial media | 合法custom partial初始跳过识别；full detail补Douban/Bangumi/AniList且无TMDB后不重评，Header TMDB按钮永久spinner/disabled | I005双审确认；G03窄第三裁逐个consumer收窄为Header单动作并再次确认P2 | full detail后重评一次；执行/跳过/失败/取消均落terminal，不建状态机 | 已修复（2026-09-05）：full detail 后按 canonical media 补一次识别并落定 finished；MediaPreloadPermissionTests 18/18 + 相关类全过 |
 | F-222 | 已驳回 | P1 | G08→F-107/CHK-005 | 全局通知缺少会话owner | App级manager跨登录根存活，旧账号操作可在logout、切服或A→B后才发布错误，已有旧banner也不会随会话转换清退 | 两票确认机制；verify_a001_h第三裁确认与F-107共享manager/session transition根owner并合并 | F-107复用session/operation epoch，在show入队与发布双检并按owner reset，保留结构化当前logout原因 | 驳回重复编号而非机制；根finding F-107最终P1 |
 | F-223 | 已确认 | P2 | G08 | 同操作成功不会撤销旧失败通知 | 失败banner显示后快速重试成功，成功策略保持静默且manager无scope dismiss，旧失败继续覆盖新成功状态；旧成功又不能误删更新错误 | review_a001_h提出登录/Home反例，review_a001_j独立确认同session可达与A失败/B失败/A成功反向边界 | 轻量notification ID/operation scope；成功只撤销同owner旧错误，不新增成功toast或通知框架 | 纯TV通知operation owner缺陷已确认 |
 | F-224 | 已驳回 | P3 | I007→F-137/F-141 | 订阅分享最佳结果忽略明确查询年份 | 机制成立：错误年份分享可获标题完全匹配并按热度反超；但修复和验收属于同一`calculateBestResults`评分/年份不变量 | review_a001_j提出、verify_a001_h独立确认模型year与排序反例后裁合并既有评分族 | 分享评分复用媒体候选明确年份门；并入F-137传播，查询年份词法仍归F-141 | 驳回重复编号，不驳回机制；维持P3 |
@@ -3822,7 +3822,7 @@
 
 ### F-221：识别状态按 partial media 冻结后无法到达终态
 
-- 状态：已确认
+- 状态：已修复（2026-09-05）
 - 严重度：P2；由候选 P1 校准
 - 位置：`MediaPreloadTask`以partial media决定是否启动识别、`isRecognitionFinished`发布与full detail/canonical media更新后的详情动作呈现。
 - 触发路径：partial没有可识别主ID而跳过识别；full detail随后补出Douban/Bangumi/AniList等可识别身份但仍无TMDB目标。
@@ -3834,6 +3834,8 @@
 - 独立复核：verify_a001_h构造合法`custom/fixture-221` partial使详情请求可达但初始`canJumpToTMDB=false`，full detail保留custom主身份并补Douban/Bangumi/AniList且无TMDB；View随后满足可识别、目标nil、finished=false，按钮永久loading。退出重进按同一partial ID命中非失败缓存task且start幂等，普通路径不自愈。核心入口长期不可用但无数据损坏/安全后果，确认P2而非P1。
 - G03窄第三裁：rounda_g02_third确认该生产链只直接锁死Header中的TMDB跳转按钮，不应扩大为整个详情页或全部详情动作不可用；custom partial跳过识别、full detail补Douban/Bangumi/AniList且不重新裁决时，Header按钮保持永久spinner，P2不变。
 - 测试缺口：partial无ID、full detail补Douban/Bangumi/AniList；分别覆盖识别成功、no-result、unavailable、取消及同一最终target。
+- 修复（2026-09-05）：`MediaPreloadTask.start()` 在 `await (tmdbRecognition, detailLoad)` 之后、依赖任务之前，按最终 canonical media（`fullDetail ?? partialMedia`）重评一次：若 tmdbId 仍 nil、识别未落定、canonical 无 tmdb_id 但 canJumpToTMDB=true（full detail 补出 douban/bangumi/anilist 身份），补调 `recognizeTmdb(using: canonical)` 使 `isTmdbRecognitionFinished` 明确落定——成功填 tmdbId，no-result/失败/取消均落定 finished，Header TMDB 按钮不再因「无目标且识别未结束」永久转圈。`recognizeTmdb` 参数化改用 canonical media 的标题/年份/类型，原 partial 识别传 `partialMedia`。
+- 验证（2026-09-05）：新增 `MediaPreloadPermissionTests` 2 条 F-221 回归（partial custom + full detail 补 douban_id：识别 no-result 落定 finished、命中 search 填 tmdbId），MediaPreloadPermissionTests 18/18 通过；既有 bangumi 识别失败落定与 MediaDetailViewHeaderAction/DynamicSourceBehavior/SubscribeSeasonContentView/SubscribeSheetViewModel 相关类全过。
 - 未验证：真实payload频率、Header spinner焦点与真机表现；其他详情动作不在本finding影响范围。
 
 ### F-222：全局通知缺少会话 owner，可跨账号发布

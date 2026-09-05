@@ -1981,7 +1981,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-221 · P2 · 已确认 · 识别状态按 partial media 冻结后无法到达终态</summary>
+<summary>F-221 · P2 · 已修复（2026-09-05） · 识别状态按 partial media 冻结后无法到达终态</summary>
 
 - 审查单元与位置：I005→G03；识别终态冻结在partial media
 - 触发路径：partial没有可识别主ID而跳过识别；full detail随后补出Douban/Bangumi/AniList等可识别身份但仍无TMDB目标。
@@ -1990,6 +1990,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：I005双审确认；G03窄第三裁逐个consumer收窄为Header单动作并再次确认P2；full detail后重评一次；执行/跳过/失败/取消均落terminal，不建状态机
 - 跨端结论：纯TV识别终态P2已确认；实际插件payload频率未验证
 - 最小修改方向 / 裁决：以最终canonical media驱动单一terminal state：running/succeeded/no-result/unavailable均明确落定；full detail补身份时按owner重新判断，预载与实际跳转复用同一最终key。
+- 修复状态：已完成（2026-09-05）；`MediaPreloadTask.start()` 在 detail 到达后按 canonical media（`fullDetail ?? partialMedia`）重评一次，tmdbId 仍 nil、识别未落定且 canonical 有可识别身份时补调 `recognizeTmdb(using: canonical)` 落定 `isTmdbRecognitionFinished`（成功填 tmdbId、no-result/失败/取消均落定）；`recognizeTmdb` 参数化改用 canonical 标题/年份/类型。新增 `MediaPreloadPermissionTests` 2 条 F-221 回归，18/18 通过，相关类（MediaDetailViewHeaderAction/DynamicSourceBehavior/SubscribeSeasonContentView/SubscribeSheetViewModel）全过。
 
 </details>
 
