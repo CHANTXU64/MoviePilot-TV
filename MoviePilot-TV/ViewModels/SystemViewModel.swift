@@ -82,6 +82,8 @@ class SystemViewModel: ObservableObject {
   @Published var availableSites: [Site] = []
   @Published var isLoadingSites: Bool = false
   @Published private(set) var hasLoadedSites: Bool = false
+  /// 是否拿到了权威搜索站点域（/site/）。降级为订阅域（/site/rss）时不能用来裁剪默认搜索站点（F-210）。
+  @Published private(set) var loadedSitesAuthoritative: Bool = false
   @Published private(set) var siteLoadError: String?
 
   /// 默认搜索站点（绑定服务器 + 稳定用户 ID）
@@ -333,11 +335,12 @@ class SystemViewModel: ObservableObject {
       isLoadingSites = false
     }
     do {
-      let sites = try await apiService.fetchSites()
+      let (sites, authoritative) = try await apiService.fetchSearchableSites()
       availableSites = sites
+      loadedSitesAuthoritative = authoritative
       hasLoadedSites = true
       defaultSearchSites = defaultSearchSites
-      print("✅ [SystemViewModel] 加载到 \(availableSites.count) 个站点")
+      print("✅ [SystemViewModel] 加载到 \(availableSites.count) 个站点\(authoritative ? "" : "（订阅域）")")
     } catch is CancellationError {
       return
     } catch {
@@ -424,8 +427,10 @@ class SystemViewModel: ObservableObject {
     let snapshot = apiService.sessionSnapshot()
 
     do {
-      let availableSites = try await apiService.fetchSites()
+      let (availableSites, authoritative) = try await apiService.fetchSearchableSites()
       guard apiService.isSessionUnchanged(from: snapshot) else { return [] }
+      // 降级为订阅域时不能裁剪已保存的合法站点选择（F-210 破坏性副作用）。
+      guard authoritative else { return storedSites }
       let availableSiteIds = Set(availableSites.map(\.id))
       let normalizedSites = storedSites.intersection(availableSiteIds)
       if normalizedSites != storedSites {
@@ -476,7 +481,7 @@ class SystemViewModel: ObservableObject {
   }
 
   private func normalizeDefaultSearchSites(_ sites: Set<Int>) -> Set<Int> {
-    guard hasLoadedSites else { return sites }
+    guard hasLoadedSites, loadedSitesAuthoritative else { return sites }
 
     let availableSiteIds = Set(availableSites.map(\.id))
     return sites.intersection(availableSiteIds)

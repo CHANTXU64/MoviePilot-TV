@@ -1097,6 +1097,11 @@
 | S435 | F-032兼容修复登记 | 当前 MP 官方标题/精确搜索普通与流式链路均创建 MetaInfo；TV `TorrentCard` 已按 Web 对齐为 torrent-only 降级渲染，标题回退 `torrent.title`；依赖解析、tvOS Simulator Debug 构建及串行测试通过 |
 | S436 | F-093 用户跳过与 F-193 operation owner 修复登记 | 用户核对当前实现后决定跳过 F-093 残余（任务列表首次失败短暂假空、无独立 stale 投影），自动恢复与 Web 对齐部分保持；F-193 同 profile 竞争由提交 `5345a7b` 修复：Handler 内 operationID+POST 收据，同一分享 GET-only 重试不重复 POST，迟到发布按当前操作作废；新增 `ForkOperationOwnerTests` 4 条回归，依赖解析、tvOS Simulator clean build 及排除 8 类兼容套件后 751/751 串行测试通过 |
 | S437 | F-201 失败原因可达性修复登记 | 列表行"失败"徽章旁展示 trim 后前 20 字符原因（`failureReason(maxLength: 20)`）、详情页"目标文件"下方展示完整 trim 后原因（`failureReason()`），成功记录与空白原因一律不显示；新增 `TransferHistoryFailureReasonTests` 8 条投影回归，依赖解析、tvOS Simulator clean build 及排除 8 类兼容套件后 759/759 串行测试通过 |
+| S438 | F-205 用户暂缓登记 | 用户决定暂时跳过 Reorganize 刷新期间唯一焦点恢复调用被丢弃（refresh 期间唯一 restore 被 guard 丢弃、保存 ID 长期未消费），保留问题与后续修复可能；未改代码、未提交 |
+| S439 | F-200 用户跳过登记 | 用户决定直接跳过 Subscribe 保存路径开放合同被封闭 Picker 限制，不修改；保留问题，现状保持不变。未改代码 |
+| S440 | F-206 用户跳过登记 | 用户决定直接跳过 Reorganize 无法输入后端支持的自定义目标路径，不修改；保留问题，现状保持不变。未改代码 |
+| S441 | F-209 修复登记 | 三端对照确认合同：后端 `search.py` 对 nil sites 回退 `IndexerSites`（“搜索站点范围”）默认子集、Web 显式发送全部 active 站点 ID、TV 原发 nil；修复 `SiteFilterViewModel.sitesString` 空选择（“全部站点”）显式发送全部启用站点 ID（过滤 `is_active`），启用站点为空降级 nil，具体选择不变；新增 `SiteFilterViewModelSitesStringTests` 7 条投影回归，依赖解析、tvOS Simulator clean build 及排除 8 类兼容套件后 766/766 串行测试通过；真实后端兼容 `testF209SearchAllActiveSitesContractCompatibility` 1/1 通过 |
+| S442 | F-209/F-210 domain 修复登记 | 用户审阅后确认编码层修复不足：`/site/rss` 是订阅域，配置 RssSites 时只返回 RSS 子集，权威搜索域不由 RssSites 定义，且无 search 权限可读的权威接口。A 方案落地：`APIService` 新增 `fetchAllSites()`（`/site/`，需 manage）与 `fetchSearchableSites()`（有 manage 优先权威域、失败或无 manage 降级 `/site/rss`，返回 authoritative 标志）；`SiteFilterViewModel`/`SystemViewModel` 站点加载切换权威域，且仅 authoritative 时按 availableSites 归一化（降级订阅域不裁剪已保存合法站点，防 F-210 破坏）；`SubscribeSheetViewModel` 保持 `/site/rss`（订阅场景）；`SiteFilterViewModelSitesStringTests` 增至 10 条（新增权威裁剪/降级不裁剪/未加载守卫），真实后端兼容 `testF209SearchAllActiveSitesContractCompatibility` 扩展权威域断言（`/site/` 非空且含 `is_active`、订阅域⊆权威域、authoritative==`/site/` 全量）1/1 通过，受影响类 AccountPreference/SearchViewModel/MediaDetailViewHeaderAction/SessionPersistence 全部通过 |
 
 ## 9. 错误与重试
 

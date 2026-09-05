@@ -213,17 +213,17 @@
 | F-197 | 用户决定跳过 | P1 | W017→G05 | 未完成下载暂停后的列表可恢复性 | stop成功后qBittorrent/Transmission任务不再属于当前downloading查询，下一轮从TV/Web消失并失去继续入口 | 既有双审确认且当前TV/Web共享行为 | 不做TV单端缓存兜底；CHK-016已写入正式兼容清单 | 等待MoviePilot官方后端/Web更新后同步对齐；当前行为保持不变 |
 | F-198 | 已修复（2026-08-21） | P2 | W016→G09 | Status剧集统计nil展示 | 后端None/Web“未获取”被TV折叠为确切0 | 既有三票确认静态误报；G09两名代理按当前后端明确nil语义与跨端稳定差异共同支持P2 | 仅View层nil→“未获取”，0与正数原样 | 已修：StatusView 的 nil 显示“未获取”，0/正数保持原值；投影测试 1/1 通过 |
 | F-199 | 已修复（`ce7afcc`） | P1 | W014→G02 | Subscribe total_episode null保真 | 无编辑GET→PUT把nil/absent固化为0并令当前后端置`manual_total_episode=1`，永久关闭自动总集数刷新 | 既有两票与G02闭合跨端链；`ce7afcc`后独立复审确认null/省略/输入边界对齐 | 现有订阅nil显式编码null；新建nil仍省略，负数/空白/非法输入归一为nil | 修复完成；490项本地测试通过，F-069其余完整PUT保真边界仍开放 |
-| F-200 | 已确认 | P2 | W014→G01纠偏 | Subscribe save_path开放值域 | 既有任意值和配置中已有URI可显示并原样保存，但封闭Picker无法新建或编辑任意合法子路径/URI | 既有双审确认开放合同；G01按当前TV/Web再次核对并驳回“已有值必丢/已配置URI不可选”的扩大说法 | 复用现有文本输入直接绑定String，配置路径只作快捷建议 | 条件性P2；产品文案、真实远程目录与自定义子路径频率未验证 |
+| F-200 | 用户决定跳过 | P2 | W014→G01纠偏 | Subscribe save_path开放值域 | 既有任意值和配置中已有URI可显示并原样保存，但封闭Picker无法新建或编辑任意合法子路径/URI | 既有双审确认开放合同；G01按当前TV/Web再次核对并驳回“已有值必丢/已配置URI不可选”的扩大说法 | 复用现有文本输入直接绑定String，配置路径只作快捷建议 | 条件性P2；用户决定跳过（2026-08-28），现状保持不变 |
 | F-201 | 已修复（2026-08-28） | P2 | W019 | Transfer失败原因可达性 | 模型已解码errmsg，但列表与详情只显示“失败”，TV内没有任何读取路径 | verify_a001_h与review_a001_h双审对照TV模型/View、当前Web tooltip与后端语义闭合 | 仅在可滚动详情展示trim后非空errmsg，列表保持紧凑 | 已修复（2026-08-28）：行徽章旁展示 trim 后前 20 字符、详情页展示完整原因；8 条投影回归 + 759/759 测试通过 |
 | F-202 | 已修复（`670cf86`） | P2 | W019 | Transfer嵌套FileItem解码 | TV把name/path/type设为必填，当前后端schema/历史JSON允许稀疏项，单坏行可毒化整页 | 双审核对后端原样JSON、仅path fixture及整页原子解码；危险边界为非null稀疏对象 | 仅历史响应DTO字段级宽容并降级显示，保留相邻好行 | 修复完成（`670cf86`），验证及独立复审通过 |
 | F-203 | 用户决定跳过 | P1 | W019→G09 | Transfer deletedest失败语义 | 后端忽略目标文件删除Bool，仍删历史并返回成功，目标文件与可重试依据发生不可逆分裂 | 既有双审闭合端点/工具反例；v2.15.1与当前v2复核仍成立 | 不改TV/Web或本地后端，等待MoviePilot官方修复 | 当前Web/TV共享破坏性后端缺陷；现状保持不变 |
 | F-204 | 已修复（`81d42fb`） | P1 | W019→I009 | Transfer轮询权威对账与SQLite同ID复用 | 默认SQLite删最大ID后add_force可复用ID；TV保留旧卡，DELETE/AI/manual按同ID重查新行并可删除/移动新文件 | W019双审先闭合非权威列表；I009主审/定向独立复核闭合当前DB/端点完整破坏链 | TV每次进入Tab权威刷新，mutation前全量比较指纹并绑定来源session，异常时整批拒绝且刷新；后端长期方向仍是AUTOINCREMENT或row version | 依赖解析、clean build、本地479/479与第二独立复审通过；保留GET→mutation TOCTOU及完全同指纹边界 |
-| F-205 | 已确认 | P2 | W019→I009/G10 | Reorganize关闭刷新焦点时序 | onDone先启动refresh再dismiss；onDismiss在refresh中丢弃唯一restore，完成后不补偿 | 既有双审闭合静态丢调用；I009主审与G10独立复核确认成功路径和保存ID长期未消费 | refresh完成清标志后复用现有restore；提交中禁取消/管理Task生命周期 | TV返回导航上下文缺陷已确认；真实Focus Engine落点未验证 |
-| F-206 | 已确认 | P2 | W018-A | Reorganize自定义目标路径能力 | TV只提供自动/配置目录闭合Picker，无法输入当前Web与后端一等支持的任意target_path | review_a001_h提出；review_a001_j独立闭合TV/VM测试/Web combobox/后端自定义路径分支 | 保留现有目录建议，仅该字段增加自定义输入并复用现有updateForm/编码 | 当前本地上游已核对；真实自定义路径频率与部署版本未验证 |
+| F-205 | 用户决定暂缓 | P2 | W019→I009/G10 | Reorganize关闭刷新焦点时序 | onDone先启动refresh再dismiss；onDismiss在refresh中丢弃唯一restore，完成后不补偿 | 既有双审闭合静态丢调用；I009主审与G10独立复核确认成功路径和保存ID长期未消费 | refresh完成清标志后复用现有restore；提交中禁取消/管理Task生命周期 | TV返回导航上下文缺陷已确认；用户暂缓（2026-08-28），后续可能修复 |
+| F-206 | 用户决定跳过 | P2 | W018-A | Reorganize自定义目标路径能力 | TV只提供自动/配置目录闭合Picker，无法输入当前Web与后端一等支持的任意target_path | review_a001_h提出；review_a001_j独立闭合TV/VM测试/Web combobox/后端自定义路径分支 | 保留现有目录建议，仅该字段增加自定义输入并复用现有updateForm/编码 | 当前本地上游已核对；用户决定跳过（2026-08-28），现状保持不变 |
 | F-207 | 已确认 | P3 | W020-C | 重登成功后的连接信息新鲜度 | 手动重登提示刷新成功，连接页仍显示旧/未知backendVersion等快照直到SystemView重建 | review_a001_j与verify_a001_h双审闭合单次根task、重登成功及局部版本无后续写入 | 获胜session epoch重登成功后复用现有loadSystemInfo或直接消费权威settings/currentUser | 纯TV新鲜度缺陷；真实重建/可见时序未验证 |
 | F-208 | 已确认 | P3 | W020-B/F→I016 | System导航减少动态效果 | 页面push/pop固定执行0.42s、824pt横移，根页Back还固定0.24s滚动；均未读取accessibilityReduceMotion | 既有三审及I016两代理均确认同根并维持P3 | 读取原生Reduce Motion环境；开启时立即切换或淡化，并让清理等待跟随实际时长 | 真机体感与系统是否代抑制未验证 |
-| F-209 | 已确认 | P2 | W020-D | “全部站点”与后端默认集合合同 | TV把“全部”编码nil，当前后端却把nil解释为IndexerSites默认子集，稳定漏搜非默认活动站点 | 三代理确认机制/P2；第三裁决证明正确候选域仍不能修复nil三态，独立于F-210 | 显式发送全部活动站点ID；若保留nil则UI准确命名“后端默认” | 条件性P2；真实部署IndexerSites分布未验证 |
-| F-210 | 已确认 | P2 | W020-D | 资源搜索站点权威域 | TV用/site/rss作为搜索站点域且不滤inactive，可漏非RSS活动站点、展示停用项并持久删除合法偏好 | 三代理确认机制/P2；第三裁决证明修正nil仍不能补回RSS域缺失项，独立于F-209 | 使用search权限可读的活动搜索站点合同，TV仍滤inactive且仅权威成功后归一化 | 条件性P2；实际indexer过滤模块与部署分布未验证 |
+| F-209 | 已修复（2026-08-28） | P2 | W020-D | “全部站点”与后端默认集合合同 | TV把”全部”编码nil，当前后端却把nil解释为IndexerSites默认子集，稳定漏搜非默认活动站点 | 三代理确认机制/P2；第三裁决证明正确候选域仍不能修复nil三态，独立于F-210 | 显式发送全部活动站点ID；若保留nil则UI准确命名”后端默认” | 已修复（2026-08-28）：全部站点显式发送全部启用站点ID；TV 站点来源切换权威域 `/site/`（过滤 active），无 manage 或失败时降级 `/site/rss`，仅权威成功后归一化（防 F-210 破坏）；10 条投影回归 + 受影响类全过 + 真实后端兼容扩展权威域断言 1/1 通过 |
+| F-210 | 已修复（2026-08-28） | P2 | W020-D | 资源搜索站点权威域 | TV用/site/rss作为搜索站点域且不滤inactive，可漏非RSS活动站点、展示停用项并持久删除合法偏好 | 三代理确认机制/P2；第三裁决证明修正nil仍不能补回RSS域缺失项，独立于F-209 | 使用search权限可读的活动搜索站点合同，TV仍滤inactive且仅权威成功后归一化 | 已修复（2026-08-28，部分覆盖）：TV 切换权威 `/site/` 域并滤 inactive、仅权威成功后归一化，覆盖主要破坏面；残留：search-only 无 manage 账号降级订阅域、search 权限可读接口未落地；部署分布未验证 |
 | F-211 | 已驳回 | P3 | W020-E→F-126/F-081 | 过滤规则展示与执行快照一致性 | 同ID执行当前B符合现合同；失败仍展示A归加载四态，响应缺所选ID后静默不过滤归F-081 | verify_a001_h第三裁决按互不替代修复/测试拆分，驳回复合重复编号 | 设置页标stale/error；执行端对已选缺失ID显式失败，不强制消费旧A快照 | 机制分别保留在既有项；真实编辑/失败重叠频率未验证 |
 | F-212 | 部分修复（`a6cc428`）；复合身份增强用户决定跳过 | P1 | I015→G09 | Reorganize目标目录复合身份 | TV/Web按library_path去重并first(path)，后端却以(storage,path)为目标键；同path跨storage可静默选错真实文件目标 | 既有双审闭合数组顺序/混合tuple；G09两名代理确认当前后端复合身份与TV稳定丢storage选择 | Picker身份直接使用规范(storage,path)并同步生成完整target tuple | 按Web对齐处置完成：`a6cc428`已移除TV独有100ms窗口；复合身份增强由用户决定跳过TV单端实现，原P1历史裁决保留 |
 | F-213 | 用户决定跳过 | P1 | I015→G09 | Reorganize媒体类型与隐藏剧集字段 | 从电视剧切电影只清episode_group，旧episode_format等仍被后端执行并可改变真实整理结果 | 既有双审闭合明确电影/模板硬过滤链；G09两名代理确认全部剧集专属字段继续编码与后端消费 | 唯一intent构造按最终类型清除剧集专属字段；Auto由后端识别后门控 | 当前Web共享同一行为，用户决定跳过TV单端修复；原P1历史裁决与episode_part公共字段边界保留 |
@@ -3397,7 +3397,8 @@
 
 ### F-200：保存路径开放合同被封闭 Picker 限制
 
-- 状态：已确认
+- 状态：用户决定跳过（2026-08-28）
+- 处置状态：用户决定直接跳过，不修改；保留问题，现状保持不变。
 - 严重度：条件性 P2
 - 位置：SubscribeSheet保存路径Picker、SubscribeSheetViewModel目录选项，以及当前Web combobox、后端download paths/allowlist与订阅下载链。
 - 触发路径：用户需要新建或编辑配置根目录下的合法子路径，或输入不在当前选项中的合法storage-qualified URI。
@@ -3483,7 +3484,8 @@
 
 ### F-205：Reorganize 刷新期间唯一焦点恢复调用被丢弃
 
-- 状态：已确认
+- 状态：用户决定暂缓（2026-08-28）
+- 处置状态：用户决定暂时跳过，保留问题与后续修复可能；未改代码。
 - 严重度：P2（由 P3 升级）
 - 位置：Reorganize成功顺序、TransferHistory父回调/`onDismiss`与`restoreHistoryFocus`。
 - 触发路径：整理成功后父级refresh比Sheet dismiss慢；或提交期间按取消，后台Task继续成功并迟到调用父回调。
@@ -3568,7 +3570,8 @@
 
 ### F-206：Reorganize 无法输入后端支持的自定义目标路径
 
-- 状态：已确认
+- 状态：用户决定跳过（2026-08-28）
+- 处置状态：用户决定直接跳过，不修改；保留问题，现状保持不变。
 - 严重度：P2
 - 位置：`ReorganizeSheet`目标目录Picker、`ReorganizeViewModel`表单更新/编码、当前Web整理表单与后端`target_path`处理。
 - 触发路径：用户需要把整理结果写入未列入系统配置目录的合法自定义目标路径。
@@ -3616,7 +3619,7 @@
 
 ### F-209：“全部站点”被编码成后端默认站点子集
 
-- 状态：已确认
+- 状态：已修复（2026-08-28）
 - 严重度：条件性 P2
 - 位置：`SystemView.swift:389-465`站点设置、`SiteFilterViewModel`站点参数投影、搜索请求与当前后端SearchChain默认集合。
 - 触发路径：活动搜索站点为`{1,2}`，后端`IndexerSites={1}`；用户在System明确选择“全部站点”后发起资源搜索。
@@ -3629,11 +3632,13 @@
 - 独立复核：review_a001_h确认空选择最终缺失sites、当前后端回退IndexerSites，因此“全部”稳定不等于全部active；维持P2，但认为该sentinel与F-210错误权威域共同造成三套集合分裂，建议合并，转第三代理裁一条或两条。
 - 第三裁决：verify_a001_h核对TV、当前Web/后端后确认保留独立P2；即使候选域已正确，“全部”nil仍会回退默认子集。default省略、all显式全ID、specific显式子集须分别测试，SSE与普通fallback一致。
 - 测试缺口：active`{1,2}`/default`{1}`、“全部”请求值，以及default为空/等于全部的负向场景。
+- 修复（2026-08-28）：`SiteFilterViewModel.sitesString` 空选择（“全部站点”）显式发送全部启用站点 ID（过滤 `is_active`），不再发 nil 让后端回退 `IndexerSites` 默认子集；启用站点为空时降级 nil，具体选择行为不变。domain 修复（用户审阅后批准 A 方案）：TV 站点来源切换权威 `/site/` 域——`APIService` 新增 `fetchAllSites()`（`/site/`，需 manage）与 `fetchSearchableSites()`（有 manage 优先权威域、失败或无 manage 降级 `/site/rss`，返回 authoritative 标志）；`SiteFilterViewModel`/`SystemViewModel` 加载与归一化仅在 authoritative 时按 availableSites 交集，降级订阅域不裁剪已保存合法站点（防 F-210 破坏性副作用）；`SubscribeSheetViewModel` 保持 `/site/rss`（订阅场景）。
+- 验证（2026-08-28）：后端/Web/TV 三端对照确认合同（后端 `search.py` nil 回退 `IndexerSites`、Web 显式发 active ID、TV 原发 nil）；`SiteFilterViewModelSitesStringTests` 增至 10 条（新增权威裁剪/降级不裁剪/未加载守卫），真实后端兼容 `testF209SearchAllActiveSitesContractCompatibility` 扩展权威域断言（`/site/` 非空且含 `is_active`、订阅域⊆权威域、`fetchSearchableSites` authoritative==`/site/` 全量）1/1 通过，受影响类 AccountPreference/SearchViewModel/MediaDetailViewHeaderAction/SessionPersistence 全部通过。
 - 未验证：真实部署IndexerSites分布、用户选择“全部”的频率及远端上游最新性。
 
 ### F-210：资源搜索站点选择器使用了错误的 RSS 权威域
 
-- 状态：已确认
+- 状态：已修复（2026-08-28，部分覆盖）
 - 严重度：条件性 P2
 - 位置：`APIService.fetchSites`、`SystemViewModel`/`SiteFilterViewModel`站点加载归一化、System站点设置与当前后端`/site/rss`。
 - 触发路径：活动搜索站点含RSS站点1和非RSS站点2，inactive站点3；`RssSites={1}`、`IndexerSites={1,2}`，用户已保存站点2或打开站点选择页。
@@ -3645,7 +3650,9 @@
 - 主审证据：review_a001_j闭合`fetchSites→/site/rss→System/SiteFilter→自动持久化`及后端RssSites/inactive链，并以RSS1、非RSS2、inactive3构造反例。
 - 独立复核：review_a001_h确认`/site/rss`受RssSites截断且不滤inactive，TV options、持久值与实际active indexer来自不同域；维持P2并阶段性建议与F-209合并。下行第三裁已拒绝合并并保留两条独立P2。
 - 第三裁决：verify_a001_h确认保留独立P2；修正all/default sentinel不会让`/site/rss`补回非RSS active项或删除inactive项。当前`/site/`需要manage，最小跨端修复须提供search用户可读的活动执行域，而非TV越权调用管理端点。
-- 测试缺口：RssSites子集、非RSS active、inactive、search-only无manage用户，以及已保存非RSS站点不得被删除。
+- 修复（2026-08-28，部分覆盖）：TV 站点来源切换权威 `/site/` 域（`APIService.fetchAllSites`/`fetchSearchableSites`，有 manage 优先、失败或无 manage 降级 `/site/rss`），`SiteFilterViewModel`/`SystemViewModel` 滤 inactive 且仅权威成功后归一化（已保存非 RSS 站点不再被降级域交集删除）；`SubscribeSheetViewModel` 保持 `/site/rss`。
+- 残留（2026-08-28）：search-only 无 manage 账号仍降级订阅域（TV 不越权调用管理端点，search 权限可读接口未在 TV 侧落地）；降级路径无真实后端账号可实测。
+- 测试缺口：RssSites子集、非RSS active、inactive、search-only无manage用户，以及已保存非RSS站点不得被删除（已由「仅权威归一化」守卫覆盖）。
 - 未验证：真实RssSites/IndexerSites/active分布、部署权限合同与远端上游最新性。
 
 ### F-211：过滤页展示的旧规则与实际执行规则可能不是同一语义

@@ -1489,6 +1489,82 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   }
 
   @MainActor
+  func testF209SearchAllActiveSitesContractCompatibility() async throws {
+    try await withReadOnlyBackend { service, config in
+      guard let query = uniqueStrings(config.resourceQueries).first else {
+        throw XCTSkip(
+          "Set MOVIEPILOT_COMPAT_RESOURCE_QUERY to run the F-209 all-active-sites search contract compatibility check."
+        )
+      }
+
+      await runBackendCompatibilityStep(
+        "F-209 all-active-sites search",
+        service: service,
+        config: config,
+        requirement: .permission(.search)
+      ) {
+        let sites = try await service.fetchSites()
+        XCTAssertFalse(sites.isEmpty, "Backend should expose at least one site for the F-209 contract.")
+        for site in sites {
+          XCTAssertNotNil(
+            site.is_active,
+            "Site \(site.id) should expose is_active so TV can filter enabled search sites (F-209/F-210)."
+          )
+        }
+
+        // Authoritative domain (/site/, requires manage): TV's "all sites" is derived from it,
+        // so it must cover the RSS subscription domain to avoid missing non-RSS search sites (F-209 domain fix).
+        let authoritativeSites: [Site]
+        if service.canAccess(.manage) {
+          let allSites = try await service.fetchAllSites()
+          XCTAssertFalse(allSites.isEmpty, "/site/ authoritative domain should expose at least one site.")
+          for site in allSites {
+            XCTAssertNotNil(
+              site.is_active,
+              "Authoritative-domain site \(site.id) should expose is_active."
+            )
+          }
+          XCTAssertTrue(
+            Set(sites.map(\.id)).isSubset(of: Set(allSites.map(\.id))),
+            "RSS subscription sites should be a subset of the authoritative domain, so 'all sites' misses no non-RSS search sites."
+          )
+          let (searchable, authoritative) = try await service.fetchSearchableSites()
+          XCTAssertTrue(authoritative, "A manage account should get the authoritative domain.")
+          XCTAssertEqual(
+            Set(searchable.map(\.id)),
+            Set(allSites.map(\.id)),
+            "Authoritative searchable sites should equal the /site/ full set (TV filters active itself)."
+          )
+          authoritativeSites = searchable
+        } else {
+          let (searchable, authoritative) = try await service.fetchSearchableSites()
+          XCTAssertFalse(authoritative, "Without manage permission TV should degrade to the RSS domain.")
+          authoritativeSites = searchable
+        }
+
+        let allActiveSitesString = authoritativeSites
+          .filter { $0.is_active?.value == true }
+          .map(\.id)
+          .sorted()
+          .map(String.init)
+          .joined(separator: ",")
+
+        // 修复后：TV 选「全部站点」显式发送全部启用站点 ID，后端必须接受并产生搜索流。
+        let allActiveProbe = await Self.probeSearchStream(
+          service.searchTitleStream(keyword: query, sites: allActiveSitesString)
+        )
+        assertSSEProbe(allActiveProbe, label: "F-209 all-active-sites stream \(query)")
+
+        // 回归：不指定站点（后端默认路径）仍被接受。
+        let defaultProbe = await Self.probeSearchStream(
+          service.searchTitleStream(keyword: query, sites: nil)
+        )
+        assertSSEProbe(defaultProbe, label: "F-209 default-sites stream \(query)")
+      }
+    }
+  }
+
+  @MainActor
   func testReadOnlyMediaInfoRequestContractCompatibility() async throws {
     try await withReadOnlyBackend { service, config in
       await runBackendCompatibilityStep(

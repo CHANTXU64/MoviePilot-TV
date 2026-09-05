@@ -2965,6 +2965,29 @@ class APIService: ObservableObject {
     return try await decodeOrUnwrap([Site].self, from: data)
   }
 
+  /// 获取全部站点（含未启用），权威域。
+  /// - 对应后端: `/site/`（site.py:39-47），需要 **manage** 权限，返回全部站点。
+  /// - 应用场景: 作为资源搜索的权威站点列表（F-209/F-210），调用方按 `is_active` 过滤。
+  func fetchAllSites() async throws -> [Site] {
+    let data = try await makeRequest(endpoint: "/site/")
+    return try await decodeOrUnwrap([Site].self, from: data)
+  }
+
+  /// 获取资源搜索可用的站点列表：优先权威域 `/site/`（全部站点，需 manage 权限），
+  /// 权限不足或接口失败时降级为订阅域 `/site/rss`。
+  /// - Returns: 站点列表 + 是否拿到权威域。仅 authoritative 时按 availableSites 做归一化才有意义，
+  ///   降级域（订阅子集）不能用来裁剪已保存的合法站点选择（F-210 破坏性副作用）。
+  func fetchSearchableSites() async throws -> (sites: [Site], authoritative: Bool) {
+    if canAccess(.manage) {
+      do {
+        return (try await fetchAllSites(), authoritative: true)
+      } catch {
+        Logger.warning("[APIService] 加载权威站点 /site/ 失败，降级订阅域 /site/rss: \(error)")
+      }
+    }
+    return (try await fetchSites(), authoritative: false)
+  }
+
   /// 获取目录配置
   /// - 对应前端: MoviePilot-Frontend/src/views/setting/AccountSettingDirectory.vue
   /// - 应用场景: 添加下载时选择目标存储目录
