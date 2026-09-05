@@ -1995,7 +1995,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-223 · P2 · 已确认 · 同操作重试成功不会撤销旧失败通知</summary>
+<summary>F-223 · P2 · 已确认（用户决定跳过） · 同操作重试成功不会撤销旧失败通知</summary>
 
 - 审查单元与位置：G08；同操作成功不会撤销旧失败通知
 - 触发路径：登录或订阅动作失败显示五秒错误，用户立即重试并成功；或A失败、B失败后A的迟到成功试图清理。
@@ -2004,11 +2004,12 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：review_a001_h提出登录/Home反例，review_a001_j独立确认同session可达与A失败/B失败/A成功反向边界；轻量notification ID/operation scope；成功只撤销同owner旧错误，不新增成功toast或通知框架
 - 跨端结论：纯TV通知operation owner缺陷已确认
 - 最小修改方向 / 裁决：让现有`show`返回轻量notification ID或复用小型operation scope；新attempt/成功只撤销自身旧错误，成功继续静默，不建错误总线或通知框架。
+- 处置状态：用户审阅大白话报告后决定不为本通知呈现改动；保留历史P2结论，不再列为待处理项。
 
 </details>
 
 <details>
-<summary>F-225 · P2 · 已确认 · 可选订阅分享阻塞核心搜索结果揭示</summary>
+<summary>F-225 · P2 · 已修复 · 可选订阅分享阻塞核心搜索结果揭示</summary>
 
 - 审查单元与位置：I007；可选订阅分享阻塞核心搜索结果揭示
 - 触发路径：媒体、合集、人物请求均已完成并有结果，可选订阅分享请求仍挂起或显著更慢。
@@ -2017,11 +2018,12 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：review_a001_j整文件集成提出，verify_a001_h独立以share gate闭合全页spinner与两阶段发布边界；核心类别完成即显示，分享行独立加载；复用现有Paginator错误字段，不建搜索状态机
 - 跨端结论：纯TV阶段屏障已确认；真实分享延迟分布未验证
 - 最小修改方向 / 裁决：核心类别settled后立即显示现有结果，分享行独立使用已有loading/error字段；不新建搜索状态机或协调器。
+- 修复状态：已完成（本次提交）。统一搜索为可选“订阅分享”增加首屏等待上限（默认3秒、测试可注入），分享刷新与核心四类并发启动且 fire-and-forget，核心四类完成后轮询至多3秒即收口计算 `bestResults`；迟到的分享请求不取消，晚到只补“订阅分享”行、不回填“最佳结果”行，换词搜索走既有 reset 取消旧分享。新增3条回归，`SearchViewModelTests` 整类 32/32 通过。
 
 </details>
 
 <details>
-<summary>F-226 · P2 · 已确认 · Bangumi人物 `career` 未进入 TV 展示投影</summary>
+<summary>F-226 · P2 · 已确认（用户决定跳过） · Bangumi人物 `career` 未进入 TV 展示投影</summary>
 
 - 审查单元与位置：G07；Bangumi人物`career`展示投影
 - 触发路径：Bangumi 人物 credits 返回非空 `career`，TV 解码并显示人物卡片或人物详情。
@@ -2030,6 +2032,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：review_a001_h主审与review_a001_j独立复核闭合Bangumi credits、schema、TV模型/卡片及Web对照；解码career并纳入同人物合并，复用共享displayRole；relation无调用者不扩展
 - 跨端结论：TV跨端字段投影缺陷已确认；真实载荷频率未验证
 - 最小修改方向 / 裁决：解码`career`并纳入同人物合并，由共享display role投影按`job → career/roles/character`消费；`relation`当前无确认调用者，不为未来扩字段。
+- 处置状态：用户审阅大白话报告后决定跳过（仅 Bangumi 来源缺 career 展示，TMDB/豆瓣角色字段已正常显示、AniList 无真人演员数据）；不改动模型解码、同人合并或卡片投影，保留历史 P2 结论但不再列为待处理项。
 
 </details>
 
@@ -2064,7 +2067,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-231 · P2 · 已确认 · 详情 TMDB 异步动作不属于当前 route</summary>
+<summary>F-231 · P2 · 已确认（用户决定跳过） · 详情 TMDB 异步动作不属于当前 route</summary>
 
 - 审查单元与位置：I013；详情TMDB异步动作缺route owner
 - 触发路径：预载识别未给目标；用户点击TMDB并挂起识别请求，随后pop离开详情，再放行请求。
@@ -2073,11 +2076,12 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：verify_a001_h整文件集成与review_a001_h定向独立复核闭合pop、双激活、跨session晚到族；单一action Task随route取消，发布前校验generation/session；不建导航框架
 - 跨端结论：纯TV动作owner缺陷已确认；真实慢请求/动画时序未验证
 - 最小修改方向 / 裁决：保存单一TMDB action Task，route离场取消；每个await后同时检查cancellation与当前route owner再append/报警，fallback前传播取消。不建导航协调器。
+- 处置状态：用户审阅大白话报告后决定跳过本项（详情页“去 TMDB”动作离场后旧请求仍可追着用户推页/在无关页弹旧提示）；不改动按钮 Task 生命周期、导航追加或提示门禁，保留历史 P2 结论但不再列为待处理项。
 
 </details>
 
 <details>
-<summary>F-232 · P2 · 已确认 · Transfer 历史 offset 分页缺少稳定同秒排序</summary>
+<summary>F-232 · P2 · 已确认（用户决定跳过） · Transfer 历史 offset 分页缺少稳定同秒排序</summary>
 
 - 审查单元与位置：I009；Transfer历史分页缺稳定同秒排序
 - 触发路径：至少21条不同ID记录拥有同一秒`date`，用户连续请求相邻offset页；或同秒新旧记录进入`fetchLatest()`扫描。
@@ -2086,11 +2090,12 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：review_a001_h定向复核提出，verify_a001_h第三裁核对TV/Web/后端四类查询并确认独立P2；四个分页分支统一date DESC,id DESC；补25条同秒跨页fixture，不引入游标框架
 - 跨端结论：后端共享契约缺陷已确认；真实数据库计划与触发频率未运行验证
 - 最小修改方向 / 裁决：四个分页查询统一追加`id DESC`作为tie-breaker；不引入cursor分页框架。
+- 处置状态：用户审阅大白话报告（根子在 MoviePilot 后端分页排序契约，TV 仓库无修改权、TV/Web 无客户端补偿）后决定跳过本项；不改动后端或 TV，保留历史 P2 结论但不再列为待处理项。
 
 </details>
 
 <details>
-<summary>F-233 · P2 · 已确认 · 插件筛选运行值被 truthy 默认值强制覆盖</summary>
+<summary>F-233 · P2 · 已确认（用户决定跳过） · 插件筛选运行值被 truthy 默认值强制覆盖</summary>
 
 - 审查单元与位置：I006；插件筛选truthy默认覆盖显式falsey值
 - 触发路径：插件给字段truthy默认；用户显式选择`.bool(false)`、`.int(0)`、空字符串或`.null`。
@@ -2099,11 +2104,12 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：review_a001_h受限集成提出，review_a001_j隔离审计材料定向复核确认四类值与初始化反证；默认只在source初始化应用；运行时原样保存用户值
 - 跨端结论：TV状态owner缺陷已确认；真实插件字段频率未验证，程序限制披露
 - 最小修改方向 / 裁决：删除运行更新中的truthy默认回填；默认只在source/profile初始化或明确reset时应用，不建筛选框架。
+- 处置状态：用户核对 Web 对照后决定跳过：`MoviePilot-Frontend/src/views/discover/ExtraSourceView.vue` `watch(filterParams)` 同为“空值且存在默认即回填默认”，TV 与 Web 行为一致；用户判断“对齐了即可”，不改动 TV，保留历史 P2 结论但不再列为待处理项。
 
 </details>
 
 <details>
-<summary>F-234 · P2 · 已确认 · 动态插件 profile 变化时保留失效旧筛选</summary>
+<summary>F-234 · P2 · 已确认（用户决定跳过） · 动态插件 profile 变化时保留失效旧筛选</summary>
 
 - 审查单元与位置：I006；插件profile兼容只比较defaults
 - 触发路径：D1选择`mode=cold`；D2保持相同source prefix与defaults，但删除该option或改变control kind/depends。
@@ -2112,11 +2118,12 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：两代理完整复核descriptor保留、控件显示与query链；profile任一结构部分变化即回新defaults，或仅校验并清失效值
 - 跨端结论：条件性TV动态schema缺陷；后端热更新保证未验证，程序限制披露
 - 最小修改方向 / 裁决：仅当defaults、filter_ui与depends都相同才保留值；任一结构部分变化回新defaults。若要更精细，只用现有parser校验并清失效值。
+- 处置状态：用户核对 Web 对照后决定跳过。Web 端 `ExtraSourceView.vue` 同样只 `watch(filter_params)`，`options/depends/filter_ui` 变化不清失效值；FormRender 无失效自愈。TV 现状与 Web 行为一致。恢复路径已确认：值仅存于内存 `@Published pluginFilterValues`，切走再切回 Discover 源、手动改控件或重启 App 即恢复。与 Web 对齐即可，不改动 TV；保留历史 P2 结论，不再列为待处理项。
 
 </details>
 
 <details>
-<summary>F-235 · P2 · 已确认 · Explore 手写 source key 绕过统一身份规范化</summary>
+<summary>F-235 · P2 · 已确认（用户决定跳过） · Explore 手写 source key 绕过统一身份规范化</summary>
 
 - 审查单元与位置：I006；Explore source与Popular身份绕过规范化
 - 触发路径：动态source返回`tmdb`/`TMDB`/带空白AniList；或Popular为同一ID/同季返回`tmdb`与`themoviedb`别名。
@@ -2125,6 +2132,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：两代理确认已有MediaIdentifier canonical逻辑却被两处手写prefix/key绕过；source去重复用normalizeSource；Popular key复用canonical identity并保留season
 - 跨端结论：条件性TV身份缺陷；真实非规范载荷频率未验证，程序限制披露
 - 最小修改方向 / 裁决：source快照统一调用`MediaIdentifier.normalizeSource`；Popular优先复用`item.identity?.mediaKey`并只附加season，不再手写来源规范化。
+- 处置状态：用户以大白话报告质疑后核实决定跳过。核实确认：Explore 一次只选一个来源、单 paginator 单 feed，跨源重复从结构上排除；导航/预载走已归一 `identity?.mediaKey`，`popularSubscriptionKey` 仅用于热门订阅 feed 内部去重，`updatedExtraSourceSnapshot` 仅影响选择器 chip——别名双卡最坏只多一张同详情卡。`subscribe/popular` 为外部社区共享订阅统计聚合（需 `SUBSCRIBE_STATISTIC_SHARE`），别名双卡需上游混用别名写法，TV/Web 无法控制且无证据会返回。不改动 TV；保留历史 P2 结论，不再列为待处理项。
 
 </details>
 

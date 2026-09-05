@@ -335,6 +335,11 @@ class SearchViewModel: ObservableObject {
   @Published var isLoading = false
   @Published var searchType: SearchType = .unified
 
+  /// 等待“订阅分享”可选行首屏的最长时长（纳秒）。超过即先行收口核心结果；
+  /// 不取消分享请求——它晚到返回只会补“订阅分享”行，不再回填已算好的最佳行。
+  /// 默认 3 秒；测试可注入更短值以稳定覆盖超时路径。
+  var subscriptionShareTimeoutNanoseconds: UInt64 = 3_000_000_000
+
   var availableSearchTypes: [SearchType] {
     SearchType.allCases.filter(canAccess)
   }
@@ -581,13 +586,18 @@ class SearchViewModel: ObservableObject {
       let tvTask = Task { @MainActor in await tvPag.refresh() }
       let collectionTask = Task { @MainActor in await collectionPag.refresh() }
       let personTask = Task { @MainActor in await personPag.refresh() }
-      let shareTask = sharePag.map { paginator in
-        Task { @MainActor in await paginator.refresh() }
+      // “订阅分享”是可选锦上添花：与核心分类并发刷新，晚到结果只填充“订阅分享”行。
+      if let sharePag {
+        Task { @MainActor in await sharePag.refresh() }
       }
       _ = await (
         movieTask.value, tvTask.value, collectionTask.value, personTask.value
       )
-      await shareTask?.value
+      // 核心四类完成后最多再等“订阅分享”超时窗口即先行收口；不取消分享请求。
+      await waitForOptionalShareIfPresent(
+        sharePag,
+        timeoutNanoseconds: subscriptionShareTimeoutNanoseconds
+      )
       guard canPublishSearchResult(
         generation: currentSearchGeneration,
         sessionSnapshot: sessionSnapshot,
@@ -602,6 +612,22 @@ class SearchViewModel: ObservableObject {
         persons: personPag.items,
         shares: sharePag?.items ?? []
       )
+    }
+  }
+
+  /// 等待可选的“订阅分享”首屏完成，最多等 timeoutNanoseconds。分页器 isLoading 期间
+  /// 表示其首屏请求仍在途；完成（成功或失败）即返回，其 items 已落位。超时放弃等待并
+  /// 返回，分享刷新保持后台运行——晚到结果只驱动“订阅分享”行，不回填已算好的最佳行。
+  /// 用轮询而非 task group：对 Task.value 的等待不可因组取消而中断，会让组作用域隐式等待挂起。
+  private func waitForOptionalShareIfPresent(
+    _ sharePaginator: Paginator<MediaInfo>?,
+    timeoutNanoseconds: UInt64
+  ) async {
+    guard let sharePaginator else { return }
+    let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
+    while sharePaginator.isLoading || sharePaginator.isFirstLoading {
+      if DispatchTime.now().uptimeNanoseconds >= deadline { return }
+      try? await Task.sleep(nanoseconds: 1_000_000)
     }
   }
 
