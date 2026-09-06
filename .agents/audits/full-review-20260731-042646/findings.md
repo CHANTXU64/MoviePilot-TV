@@ -256,7 +256,7 @@
 | F-240 | 已修复 | P2 | I016→G01第三裁 | 动态推荐开关使用可重复title作为配置owner | 同名不同path的两条货架分别渲染却共享enableConfig[title]，无法独立开启/关闭 | I016两票确认机制；G01第三裁按当前生产链确认P2并保持与F-109独立 | 配置键全程改用稳定shelf.id/path，migrateTitleKeys一次性迁移旧title键并回写 | 纯TV配置owner已确认；修复后渲染与配置统一以稳定id寻址，用户核实后端/Web后批准 |
 | F-241 | 未验证 | P3 | I016 | App Info Sheet下root Menu observer仍启用 | 若modal与底层共享UIWindow，Menu关闭Sheet还会同时清底层焦点并滚顶 | I016两代理确认静态前提，但均不能证明tvOS modal下Menu投递 | Sheet/alert展示时禁底层observer/exit handler | 条件性TV焦点风险；需UI/真机证据，程序限制披露 |
 | F-242 | 已确认 | P3 | I016 | System站点/规则长名称缺完整可辨识入口 | 站点/规则标题固定单行且preview不回显完整名称，同前缀项可视觉不可区分 | I016两代理确认站点/规则视觉链；推荐截断与VoiceOver扩大说法未确认 | preview显示完整名称或允许两行；不新建长文本组件 | 条件性TV视觉缺陷；推荐、具体阈值与VoiceOver待运行，程序限制披露 |
-| F-243 | 已确认 | P2 | I014 | SubscribeSeason前台恢复与availability owner | 回前台只刷新subscription，不刷新season availability，旧best_version/full可进入临时订阅mutation | I014严格整文件集成提出，review_a001_h定向独立闭合后台媒体库变化→旧availability→create/pause链 | scene active复用现有checkSeasonsStatus后再刷新subscription；不新增timer/协调器 | 条件性TV真实mutation；媒体库变化频率与运行时序未验证 |
+| F-243 | 已修复 | P2 | I014 | SubscribeSeason前台恢复与availability owner | 回前台只刷新subscription，不刷新season availability，旧best_version/full可进入临时订阅mutation | I014严格整文件集成提出，review_a001_h定向独立闭合后台媒体库变化→旧availability→create/pause链 | scenePhase active 先复用现有checkSeasonsStatus再刷新subscription；不新增timer/协调器 | 条件性TV真实mutation；修复后前台恢复重查可用性，用户澄清场景后批准 |
 | F-244 | 已驳回 | P1 | G01→G04并入F-130/CHK-005 | Unified Search子状态与父级session gate | A→B不发新query时旧child items/error可早于父gate发布，机制成立但与F-130同一跨profile子发布owner | G01主审/纠偏确认；G04独立复核在F-130中再次闭合相同Search child链，根因/修复/验收相同 | 并入F-130：session变化统一cancel/reset并把epoch gate下沉到child发布 | 重复编号驳回，不驳回机制；普通新query有child generation保护 |
 | F-245 | 已确认 | P2 | G03 | Fork mutation 2xx envelope | `forkSubscription`在`success == nil`且带任意ID时仍当成功，缺失成功标志的响应可关闭Sheet并进入GET/编辑链 | 主审及两名不同纠偏复核均确认内联decoder、真实调用链与P2；它和F-083不是同decoder/端点/最小补丁，只共同关联CHK-017 | 仅`success == true`且ID为正时接受；不改下载decoder | TV fail-open分支已确认；当前后端Fork成功envelope合同未验证 |
 | F-246 | 用户决定跳过 | P1 | G09 | 整理历史读取端点服务端授权 | 当前后端GET `/history/transfer`只验证token，低权限已认证用户可读取全局整理记录与文件路径 | G09主审与独立复核分别从TV/Web入口、当前后端依赖、全局表字段与测试缺口闭合；现有F-245已占号，顺延登记 | 后端复用现有active-manage依赖；TV不做安全兜底，Web路由门禁仅作UX | TV/Web v2.15.1已对齐manage门禁，用户决定跳过TV单端处理；上游后端风险保留 |
@@ -4169,7 +4169,7 @@
 
 ### F-243：SubscribeSeason 前台恢复不刷新分季 availability
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：条件性 P2
 - 位置：`MoviePilot-TV/Views/Pages/SubscribeSeasonView.swift` 的scenePhase恢复处理、`SubscribeSeasonViewModel.checkSeasonsStatus/prepareSubscription`与SubscribeSheet临时创建入口。
 - 触发路径：分季页已加载后进入后台，媒体库在后台由缺失变完整或相反；页面保持存活并回前台，用户在重新加载或切group前选择一季订阅。
@@ -4180,6 +4180,9 @@
 - 双审证据：review_a001_j严格整文件集成发现前台刷新集合缺口；review_a001_h定向独立复核从初载/group切换、scenePhase、availability字段到SubscribeSheet立即创建暂停完整闭合第二票。
 - 测试缺口：后台期间availability false→true与true→false、group不变、页面不重建；回前台后badge与创建payload同步，旧session结果不得发布。
 - 未验证：真实媒体库后台变化频率、页面存活与scenePhase时序；本轮未运行测试或Simulator。
+- 修复状态：`SubscribeSeasonView.swift` scenePhase `.active` 处理（原只 `checkSubscriptionStatus(forceRefresh:true)`）改为先 `await viewModel.checkSeasonsStatus()` 再刷订阅。`checkSeasonsStatus()` 为已存在的公开方法，自带 session/剧集组 scope 守卫、成功后整体替换、失败/取消保留旧快照并恢复 scope，与弹窗关闭回调（365-367 行）同源，直接复用即安全。可用性重查后 `prepareSubscription` 读取的 `seasonsNotExisted` 即与当前媒体库一致，`best_version`/`best_version_full` 不再基于陈旧值进入 create→pause 的 `addSubscription` POST。
+- 验证：新增 `MoviePilot-TV-Tests/SubscribeSeasonForegroundRefreshTests.swift` 接线回归——切片 scenePhase `onChange` 块到其首个 `checkSubscriptionStatus(forceRefresh: true)`，断言块内含 `guard phase == .active` 且 `checkSeasonsStatus()` 位于订阅刷新之前。既有 `SubscribeSeasonContentViewTests`（64 项）已覆盖 `checkSeasonsStatus` 的刷新语义（成功整体替换、同账号 token 刷新取消保留旧值、失败保留旧角标、切号清除），本次只补"前台接没接上"一环。本项 SubscribeSeasonForegroundRefreshTests + SubscribeSeasonContentViewTests 64 + SubscribeSheetViewModelTests 全绿。
+- 处置状态：用户两次追问（"没太看懂"→大白话重讲后台媒体库变化如何进入新建订阅默认、"就是说进APP时再重新刷新一次"→澄清是回前台而非冷启动）后批准修复。触发需要"页面活过后台 + 后台期间媒体库确实变化 + 回前台后未经任何可用性刷新就订阅"；不改则陈旧角标持续到切 group/重进，订阅那一刻才造成 mutation 级后果。
 
 ### F-244：Unified Search 子状态可早于父级 session gate 发布
 

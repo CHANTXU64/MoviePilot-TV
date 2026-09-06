@@ -389,6 +389,9 @@ struct SubscribeSeasonContentView: View {
     .onChange(of: scenePhase) { _, phase in
       guard phase == .active else { return }
       Task {
+        // 前台恢复同时重查"每季入库状态"：后台期间媒体库可能已变化，陈旧
+        // availability 不只让角标过时，还会作为 best_version 默认进入新建订阅。
+        await viewModel.checkSeasonsStatus()
         await viewModel.checkSubscriptionStatus(forceRefresh: true)
       }
     }

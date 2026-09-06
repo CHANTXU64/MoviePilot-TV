@@ -2182,7 +2182,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-243 · P2 · 已确认 · SubscribeSeason 前台恢复不刷新分季 availability</summary>
+<summary>F-243 · P2 · 已修复 · SubscribeSeason 前台恢复不刷新分季 availability</summary>
 
 - 审查单元与位置：I014；SubscribeSeason前台恢复与availability owner
 - 触发路径：分季页已加载后进入后台，媒体库在后台由缺失变完整或相反；页面保持存活并回前台，用户在重新加载或切group前选择一季订阅。
@@ -2191,6 +2191,9 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：I014严格整文件集成提出，review_a001_h定向独立闭合后台媒体库变化→旧availability→create/pause链；scene active复用现有checkSeasonsStatus后再刷新subscription；不新增timer/协调器
 - 跨端结论：条件性TV真实mutation；媒体库变化频率与运行时序未验证
 - 最小修改方向 / 裁决：在现有scene-active Task中先复用`checkSeasonsStatus()`，再刷新subscription；沿用已有session/request owner，不新增timer、协调器或第二状态层。
+- 修复状态：`SubscribeSeasonView.swift` scenePhase `.active` 处理改为先 `await checkSeasonsStatus()` 再 `checkSubscriptionStatus(forceRefresh: true)`。`checkSeasonsStatus()` 自带 session/剧集组守卫、成功后整体替换、失败/取消保留旧快照，与弹窗关闭回调同源；可用性刷新后 `prepareSubscription` 的 `best_version`/`best_version_full` 不再基于陈旧值。
+- 验证：新增 `SubscribeSeasonForegroundRefreshTests` 接线回归（切片 scenePhase 块断言先重查可用性再刷订阅）；既有 `SubscribeSeasonContentViewTests` 64 项已覆盖 `checkSeasonsStatus` 刷新语义。本项新测试 + SubscribeSeasonContentViewTests + SubscribeSheetViewModelTests 全绿。
+- 处置状态：用户两次追问场景澄清（"没太看懂"→大白话重讲、"就是说进APP时再重新刷新一次"→澄清为回前台而非冷启动）后批准修复。
 
 </details>
 
