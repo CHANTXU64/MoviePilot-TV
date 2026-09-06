@@ -90,11 +90,21 @@ class RecommendViewModel: ObservableObject {
 
   // 根据当前分类过滤的货架列表
   var filteredShelves: [RecommendShelf] {
-    let enabledShelves = shelves.filter { enableConfig[$0.title] == true }
+    let enabledShelves = Self.enabledShelves(shelves, enableConfig: enableConfig)
     if selectedCategory == .all {
       return enabledShelves
     }
     return enabledShelves.filter { $0.category == selectedCategory }
+  }
+
+  /// 按稳定 `shelf.id`（API 路径）过滤已启用的货架。
+  /// 渲染/ForEach/焦点/取数都以 `id` 区分货架，开关配置也以 `id` 为键，否则两条
+  /// 同名不同路径的货架会渲染成两行却共享一个开关值，无法表达“启用 A、停用 B”。
+  nonisolated static func enabledShelves(
+    _ shelves: [RecommendShelf],
+    enableConfig: [String: Bool]
+  ) -> [RecommendShelf] {
+    shelves.filter { enableConfig[$0.id] == true }
   }
 
   var visibleCategories: [RecommendCategory] {
@@ -106,7 +116,7 @@ class RecommendViewModel: ObservableObject {
     enableConfig: [String: Bool]
   ) -> [RecommendCategory] {
     let categories = Set(
-      shelves.lazy.filter { enableConfig[$0.title] == true }.map(\.category)
+      shelves.lazy.filter { enableConfig[$0.id] == true }.map(\.category)
     )
     guard !categories.isEmpty else { return [] }
     return RecommendCategory.allCases.filter { $0 == .all || categories.contains($0) }
@@ -115,7 +125,7 @@ class RecommendViewModel: ObservableObject {
   init(selectShelf: Bool = true, apiService: APIService = .shared) {
     self.apiService = apiService
     shelves = Self.allShelves
-    enableConfig = Dictionary(uniqueKeysWithValues: Self.allShelves.map { ($0.title, true) })
+    enableConfig = Dictionary(uniqueKeysWithValues: Self.allShelves.map { ($0.id, true) })
     loadConfig()
     // 默认选中流行趋势
     // 当 selectedShelf 改变时，自动创建一个新的 Paginator 实例
@@ -209,8 +219,15 @@ class RecommendViewModel: ObservableObject {
       Logger.error("动态推荐来源加载失败: \(error)")
     }
     shelves = Self.mergedShelves(extras: extraSourceSnapshot)
-    for title in ["AniList 当前趋势", "AniList 本季热门"] where enableConfig[title] == nil {
-      enableConfig[title] = true
+    // 二次迁移：本轮新拉到的 extra 名称现在可解析到稳定 id；无法唯一解析的同名键
+    // 按旧“共享开关”语义平铺到各同名货架，之后用户即可在开关上独立拆分。
+    let migrated = Self.migrateTitleKeys(in: enableConfig, shelves: shelves)
+    if migrated != enableConfig {
+      saveEnableConfig(migrated)
+    }
+    // 配置早于新版内置货架创建时默认开启（与旧 title 键逻辑等价）。
+    for id in ["anilist/trending", "anilist/popular-this-season"] where enableConfig[id] == nil {
+      enableConfig[id] = true
     }
     guard selectShelf else { return }
     reconcileSelection()
@@ -275,14 +292,45 @@ class RecommendViewModel: ObservableObject {
     }
   }
 
+  /// 把旧版本以可重复 `shelf.title` 为键的本地配置迁移到稳定 `shelf.id`：
+  /// - 键已是当前货架的 id → 原样保留；
+  /// - 键是某货架的 title 且唯一 → 改写为该货架的 id（保留原开关值）；
+  /// - 键是多个同名货架共用的 title → 把旧共享值平铺到每个同名 id 后删除 title 键
+  ///   （还原旧“一键控全部”行为，用户之后可独立拆分）；
+  /// - 其余未知键（暂无法解析的旧 title / 已消失货架的 id）→ 原样保留，不做破坏性删除。
+  nonisolated static func migrateTitleKeys(
+    in raw: [String: Bool],
+    shelves: [RecommendShelf]
+  ) -> [String: Bool] {
+    var idsByTitle: [String: [String]] = [:]
+    let presentIDs = Set(shelves.map(\.id))
+    for shelf in shelves {
+      idsByTitle[shelf.title, default: []].append(shelf.id)
+    }
+    var out = raw
+    for (key, value) in raw {
+      guard !presentIDs.contains(key), let ids = idsByTitle[key], !ids.isEmpty else { continue }
+      for id in ids where out[id] == nil {
+        out[id] = value
+      }
+      out.removeValue(forKey: key)
+    }
+    return out
+  }
+
   private func loadConfig() {
     if let data = UserDefaults.standard.data(forKey: Self.localConfigKey) {
       if let config = try? JSONDecoder().decode([String: Bool].self, from: data) {
-        enableConfig = config
+        let migrated = Self.migrateTitleKeys(in: config, shelves: shelves)
+        enableConfig = migrated
+        if migrated != config {
+          // 迁移后立即以稳定 id 键回写，落盘即切换到新 key 语义，避免每次启动重复迁移。
+          saveEnableConfig(migrated)
+        }
         return
       }
       UserDefaults.standard.removeObject(forKey: Self.localConfigKey)
     }
-    enableConfig = Dictionary(uniqueKeysWithValues: Self.allShelves.map { ($0.title, true) })
+    enableConfig = Dictionary(uniqueKeysWithValues: Self.allShelves.map { ($0.id, true) })
   }
 }

@@ -253,7 +253,7 @@
 | F-237 | 已驳回 | P3 | I006→F-130/CHK-005 | 动态source刷新缺请求代际 | 代码允许双refresh逆序，但当前同实例只有一个生产调度点，未闭合第二调用者 | verify_a001_h第三裁确认机制与单调用反证，裁不保留独立生产finding | 跨session由F-130/CHK-005阻断；未来新增第二调用点时再加局部revision | 驳回当前生产缺陷，不驳回组件脆弱点 |
 | F-238 | 未验证 | P3 | I006 | api_path与筛选值同名时重复query | api_path已有mode=old、筛选追加mode=new会形成重复键，但服务端首/末值/拒绝合同未知 | 三代理确认构造；两代理均拒绝在未核FastAPI/plugin合同前确认用户影响 | 固定真实插件与服务端重复scalar解析合同后再决定是否定向覆盖 | TV构造成立；当前插件产出与服务端优先级未验证 |
 | F-239 | 用户决定跳过 | P2 | I010 | Search行延迟预载缺离页与session owner | 行离场或A→B切会话后，300ms睡眠任务仍可用当前B凭据创建A媒体预载并回填全局cache | review_a001_j整文件集成与verify_a001_h独立复核均闭合两类Row、logout清理先于迟到注册及现有Debouncer反例 | 复用现有PreloadDebouncer；离场取消并在调度/执行时复核session snapshot | 条件性跨页面/会话P2已确认；真实300ms命中频率未运行验证 |
-| F-240 | 已确认 | P2 | I016→G01第三裁 | 动态推荐开关使用可重复title作为配置owner | 同名不同path的两条货架分别渲染却共享enableConfig[title]，无法独立开启/关闭 | I016两票确认机制；G01第三裁按当前生产链确认P2并保持与F-109独立 | 配置键复用稳定shelf.id/path，读取旧title仅作一次迁移fallback | 纯TV配置owner已确认；真实同名来源频率未验证，程序限制披露 |
+| F-240 | 已修复 | P2 | I016→G01第三裁 | 动态推荐开关使用可重复title作为配置owner | 同名不同path的两条货架分别渲染却共享enableConfig[title]，无法独立开启/关闭 | I016两票确认机制；G01第三裁按当前生产链确认P2并保持与F-109独立 | 配置键全程改用稳定shelf.id/path，migrateTitleKeys一次性迁移旧title键并回写 | 纯TV配置owner已确认；修复后渲染与配置统一以稳定id寻址，用户核实后端/Web后批准 |
 | F-241 | 未验证 | P3 | I016 | App Info Sheet下root Menu observer仍启用 | 若modal与底层共享UIWindow，Menu关闭Sheet还会同时清底层焦点并滚顶 | I016两代理确认静态前提，但均不能证明tvOS modal下Menu投递 | Sheet/alert展示时禁底层observer/exit handler | 条件性TV焦点风险；需UI/真机证据，程序限制披露 |
 | F-242 | 已确认 | P3 | I016 | System站点/规则长名称缺完整可辨识入口 | 站点/规则标题固定单行且preview不回显完整名称，同前缀项可视觉不可区分 | I016两代理确认站点/规则视觉链；推荐截断与VoiceOver扩大说法未确认 | preview显示完整名称或允许两行；不新建长文本组件 | 条件性TV视觉缺陷；推荐、具体阈值与VoiceOver待运行，程序限制披露 |
 | F-243 | 已确认 | P2 | I014 | SubscribeSeason前台恢复与availability owner | 回前台只刷新subscription，不刷新season availability，旧best_version/full可进入临时订阅mutation | I014严格整文件集成提出，review_a001_h定向独立闭合后台媒体库变化→旧availability→create/pause链 | scene active复用现有checkSeasonsStatus后再刷新subscription；不新增timer/协调器 | 条件性TV真实mutation；媒体库变化频率与运行时序未验证 |
@@ -4123,7 +4123,7 @@
 
 ### F-240：动态推荐开关以可重复 title 作为配置 owner
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：条件性 P2
 - 位置：System推荐来源Toggle、Recommend shelves合并/去重与本地enableConfig。
 - 触发路径：动态来源返回两条title相同但api_path不同的货架，或动态来源与内建货架同名。
@@ -4135,6 +4135,9 @@
 - G01第三裁：rounda_g01_recheck按当前生产链再次确认同title、不同api_path会分开渲染却共享开关键，用户无法独立表达两项配置；Web同样title-keyed不撤销TV缺陷，最终确认P2。稳定owner复用shelf id/api_path，旧title只作一次迁移fallback，与F-109的跨profile权威配置根因保持独立。
 - 测试缺口：两个同名不同path来源、动态与内建同名、旧title配置一次迁移；断言开关独立。
 - 未验证：真实动态来源同名频率；程序限制导致无严格零暴露集成票，但不影响当前生产机制确认。
+- 修复状态：`RecommendViewModel.enableConfig` 寻址全程由 `shelf.title` 改为稳定 `shelf.id`（= API path，与渲染/ForEach/焦点/取数同一身份）：`filteredShelves`（新增可注入静态 `enabledShelves`）、`visibleCategories`、init 默认初始化、`refreshSources` 的 AniList 内置默认开启均按 id；SystemView 推荐 Toggle get/set 改用 `shelf.id`。新增 `migrateTitleKeys(in:shelves:)` 一次性迁移旧 title 键——键已是当前货架 id 原样保留；title 唯一可解析改写到对应货架 id 并保留开关值；多个同名货架共用 title 时把旧共享值平铺到各同名 id 后删除 title 键（还原旧行为、之后可独立拆分）；未知键不做破坏性删除。`loadConfig` 迁移后立即以 id 键回写落盘；`refreshSources` 拉回 extra 后二次迁移，补齐本轮才可解析的 extra 名。
+- 验证：更新 `RecommendCategoryVisibilityTests` 随契约改 id 键（原测试钉旧 title 契约）；新增 `RecommendShelfToggleKeyTests` 5/5——同名不同 path 两行按 id 独立开关、分类可见性跟随各自 id、旧 title 配置迁移保留开关值并回写（旧 title 键不残留）、迁移 helper 对同名歧义/未知键边界、SystemView 接线守卫（含 `shelf.id`、不含 `shelf.title`）。相邻 RecommendCategoryVisibility 2/2、SuccessEmptyReactivation 3/3、DynamicSourceBehavior、SystemViewDefaultStyle、BackendCompatibilityTests 全绿。
+- 处置状态：用户先追问"后端和 Web 到底会不会返回同名"后批准修复。核实：后端官方仓库无任何 `RecommendSource` 事件 producer（`app/` 内仅枚举/读取端点/schema/`fetch_medias` 发送方，默认 `/recommend/source` 返回 `[]`），extra 仅来自第三方插件且 `name` 为自由文本、无唯一约束，Recommend 描述符无 `mediaid_prefix` 类稳定键；Web `recommendSources.ts` 合并同样只按 apipath 去重、`recommend.vue` 配置同样 title-keyed（注释"以title为key"），与 TV 同病而非"不会同名"的证据。修复后渲染与配置统一以稳定 id 寻址，旧 title 键配置一次性迁移。
 
 ### F-241：App Info Sheet 展示时底层 root Menu observer 仍启用
 

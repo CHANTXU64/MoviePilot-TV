@@ -2166,7 +2166,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-240 · P2 · 已确认 · 动态推荐开关以可重复 title 作为配置 owner</summary>
+<summary>F-240 · P2 · 已修复 · 动态推荐开关以可重复 title 作为配置 owner</summary>
 
 - 审查单元与位置：I016→G01第三裁；动态推荐开关使用可重复title作为配置owner
 - 触发路径：动态来源返回两条title相同但api_path不同的货架，或动态来源与内建货架同名。
@@ -2175,6 +2175,9 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：I016两票确认机制；G01第三裁按当前生产链确认P2并保持与F-109独立；配置键复用稳定shelf.id/path，读取旧title仅作一次迁移fallback
 - 跨端结论：纯TV配置owner已确认；真实同名来源频率未验证，程序限制披露
 - 最小修改方向 / 裁决：开关键直接复用已用于渲染去重的稳定`shelf.id`/规范path；读取旧title键只作一次兼容fallback并写回新键，不建配置框架。
+- 修复状态：`RecommendViewModel.enableConfig` 寻址全程由 `shelf.title` 改为稳定 `shelf.id`（与渲染/ForEach/焦点/取数同一身份）：`filteredShelves`（新增静态 `enabledShelves`）、`visibleCategories`、init 默认、`refreshSources` AniList 内置默认均按 id；SystemView Toggle get/set 用 `shelf.id`。新增 `migrateTitleKeys` 一次性迁移旧 title 键——id 键保留、唯一 title 改写保留值、同名歧义平铺各 id 供拆分、未知键不删；`loadConfig` 迁移后以 id 键回写，`refreshSources` 拉回 extra 后二次迁移。
+- 验证：更新 `RecommendCategoryVisibilityTests` 随契约改 id 键；新增 `RecommendShelfToggleKeyTests` 5/5（同名两行独立开关、分类可见性跟随各自 id、旧 title 配置迁移保留值并回写、迁移 helper 歧义/未知边界、SystemView 接线守卫）；相邻 RecommendCategoryVisibility 2/2、SuccessEmptyReactivation 3/3、DynamicSourceBehavior / SystemViewDefaultStyle / BackendCompatibilityTests 全绿。
+- 处置状态：用户先核实后端/Web 后批准修复。后端官方仓无 `RecommendSource` 事件 producer（默认 `/recommend/source` 返回 `[]`），extra 仅来自第三方插件自由 `name`、无唯一约束；Web 合并与配置同样 title-keyed，与 TV 同病而非"不会同名"的证据。修复后渲染与配置统一以稳定 id 寻址，旧 title 键配置一次性迁移。
 
 </details>
 
