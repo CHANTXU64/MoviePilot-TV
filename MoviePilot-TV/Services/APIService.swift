@@ -3253,10 +3253,14 @@ class APIService: ObservableObject {
     } catch {
       throw APIError.decodingError(error)
     }
-    guard response.success != false else {
+    // 与仓内其它 mutation 解码（decodeStrictActionResponseSync 的 `success ?? false`）
+    // 及 Web 端 ForkSubscribeDialog（`if (result.success)`）保持一致：成功必须是显式
+    // `success == true` 且携带正 ID。缺/空 success 一律失败关闭，避免把含糊的 2xx
+    // 当成已创建的订阅继续走 GET→编辑器链。
+    guard response.success == true else {
       throw APIError.serverMessage(response.localizedMessage ?? "复用订阅失败")
     }
-    guard let id = response.data?.id else {
+    guard let id = response.data?.id, id > 0 else {
       throw APIError.serverMessage("复用订阅响应缺少 ID")
     }
     invalidateSubscriptionCaches()

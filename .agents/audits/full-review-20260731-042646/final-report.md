@@ -2198,15 +2198,18 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-245 · P2 · 已确认 · Fork 接受缺失 success 标志的 2xx 响应</summary>
+<summary>F-245 · P2 · 已修复 · Fork 接受缺失 success 标志的 2xx 响应</summary>
 
 - 审查单元与位置：G03；Fork mutation 2xx envelope
 - 触发路径：Fork端点返回HTTP 2xx、正订阅ID，但envelope缺少`success`或其值为null；调用方随后按成功ID继续GET/presentation。
 - 根因：内联 `ApiResponse<ForkResponse>` 成功判断使用 `success != false`；缺失/null会通过，且当前实现只要求ID存在、不要求正值。
 - 用户影响：Fork Sheet按成功关闭，Search/Explore随后GET该ID并尝试打开编辑器；GET虽提供后续限制，却不能把含糊mutation acknowledgement变成明确成功。
 - 证据：主审及两名不同纠偏复核均确认内联decoder、真实调用链与P2；它和F-083不是同decoder/端点/最小补丁，只共同关联CHK-017；仅`success == true`且ID为正时接受；不改下载decoder
-- 跨端结论：TV fail-open分支已确认；当前后端Fork成功envelope合同未验证
+- 跨端结论：TV fail-open 与 Web/decodeStrict fail-closed 合同已核对，TV 为唯一 fail-open 分支；修复后仅 success==true 且 id>0 成功，对真实后端零行为变化
 - 最小修改方向 / 裁决：仅当`success == true`且ID为合法正值时接受，其他2xx失败关闭；只改Fork判断并补矩阵，不重构所有API响应。
+- 修复状态：`forkSubscription` 两处守卫收紧为失败关闭——`response.success == true`（缺字段/null/false 一律抛`复用订阅失败`，服务端文案透传）且 `data.id > 0`（缺 id/data null/id 为 0 或负数抛`复用订阅响应缺少 ID`）；与 `decodeStrictActionResponseSync` 的 `success ?? false` 及 Web `ForkSubscribeDialog` 的 `if (result.success)` 对齐。
+- 验证：新增 `ForkEnvelopeStrictnessTests` 矩阵（success 显式 true/false/null/缺失 × id 正常/缺失/null/0/负数/自相矛盾 + 空对象，10 格），仅 success==true 且 id 为正返回，其余全抛对应 `serverMessage`。新矩阵 + `ForkOperationOwnerTests` + `PermissionBehaviorTests` + `APIServiceCompatibilityEndpointTests` 全绿。
+- 处置状态：用户核准修复方向后批准改。核对后端 `schemas.Response.success` 为必填 bool 且 `create_subscribe` 返回 `success=bool(sid)`——当前后端不可能发出缺失/null success 的 Fork 成功响应，纯失败关闭加固，无行为变化。
 
 </details>
 

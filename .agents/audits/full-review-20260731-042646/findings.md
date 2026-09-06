@@ -258,7 +258,7 @@
 | F-242 | 已确认 | P3 | I016 | System站点/规则长名称缺完整可辨识入口 | 站点/规则标题固定单行且preview不回显完整名称，同前缀项可视觉不可区分 | I016两代理确认站点/规则视觉链；推荐截断与VoiceOver扩大说法未确认 | preview显示完整名称或允许两行；不新建长文本组件 | 条件性TV视觉缺陷；推荐、具体阈值与VoiceOver待运行，程序限制披露 |
 | F-243 | 已修复 | P2 | I014 | SubscribeSeason前台恢复与availability owner | 回前台只刷新subscription，不刷新season availability，旧best_version/full可进入临时订阅mutation | I014严格整文件集成提出，review_a001_h定向独立闭合后台媒体库变化→旧availability→create/pause链 | scenePhase active 先复用现有checkSeasonsStatus再刷新subscription；不新增timer/协调器 | 条件性TV真实mutation；修复后前台恢复重查可用性，用户澄清场景后批准 |
 | F-244 | 已驳回 | P1 | G01→G04并入F-130/CHK-005 | Unified Search子状态与父级session gate | A→B不发新query时旧child items/error可早于父gate发布，机制成立但与F-130同一跨profile子发布owner | G01主审/纠偏确认；G04独立复核在F-130中再次闭合相同Search child链，根因/修复/验收相同 | 并入F-130：session变化统一cancel/reset并把epoch gate下沉到child发布 | 重复编号驳回，不驳回机制；普通新query有child generation保护 |
-| F-245 | 已确认 | P2 | G03 | Fork mutation 2xx envelope | `forkSubscription`在`success == nil`且带任意ID时仍当成功，缺失成功标志的响应可关闭Sheet并进入GET/编辑链 | 主审及两名不同纠偏复核均确认内联decoder、真实调用链与P2；它和F-083不是同decoder/端点/最小补丁，只共同关联CHK-017 | 仅`success == true`且ID为正时接受；不改下载decoder | TV fail-open分支已确认；当前后端Fork成功envelope合同未验证 |
+| F-245 | 已修复 | P2 | G03 | Fork mutation 2xx envelope | `forkSubscription`在`success == nil`且带任意ID时仍当成功，缺失成功标志的响应可关闭Sheet并进入GET/编辑链 | 主审及两名不同纠偏复核均确认内联decoder、真实调用链与P2；它和F-083不是同decoder/端点/最小补丁，只共同关联CHK-017 | 仅`success == true`且ID为正时接受；不改下载decoder | TV fail-open 与 Web/decodeStrict fail-closed 合同已核对；修复后仅 success==true 且 id>0 成功，用户核实后端/Web 后批准 |
 | F-246 | 用户决定跳过 | P1 | G09 | 整理历史读取端点服务端授权 | 当前后端GET `/history/transfer`只验证token，低权限已认证用户可读取全局整理记录与文件路径 | G09主审与独立复核分别从TV/Web入口、当前后端依赖、全局表字段与测试缺口闭合；现有F-245已占号，顺延登记 | 后端复用现有active-manage依赖；TV不做安全兜底，Web路由门禁仅作UX | TV/Web v2.15.1已对齐manage门禁，用户决定跳过TV单端处理；上游后端风险保留 |
 
 ## 发现详情
@@ -4203,7 +4203,7 @@
 
 ### F-245：Fork 接受缺失 success 标志的 2xx 响应
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：条件性 P2
 - 位置：`APIService.forkSubscription`的mutation响应解码、正ID接受与Fork POST→GET→编辑器链。
 - 触发路径：Fork端点返回HTTP 2xx、正订阅ID，但envelope缺少`success`或其值为null；调用方随后按成功ID继续GET/presentation。
@@ -4213,7 +4213,10 @@
 - 最小方向：仅当`success == true`且ID为合法正值时接受，其他2xx失败关闭；只改Fork判断并补矩阵，不重构所有API响应。
 - 三票证据：verify_a001_h首轮提出；review_a001_h纠偏复核与rounda_g03_recheck分别独立确认missing/null success、非正ID、Sheet dismiss→GET→editor链及独立编号/P2边界。
 - 测试缺口：`success:true/false/nil/missing`×正/缺/非法ID矩阵，以及成功POST后GET失败的部分成功边界。
-- 未验证：当前后端Fork成功/失败envelope与部署版本；TV fail-open分支及后续生产调用链已确认。
+- 未验证：真实部署版本组合未运行验证；TV fail-open分支及后续生产调用链已确认。
+- 修复状态：`forkSubscription` 两处守卫收紧为失败关闭——`response.success == true`（缺字段/null/false 一律抛 `复用订阅失败`，服务端 `message_i18n/message` 透传）且 `data.id > 0`（缺 id/data 为 null/id 为 0 或负数抛 `复用订阅响应缺少 ID`）。与仓内 `decodeStrictActionResponseSync` 的 `success ?? false`、Web 端 `ForkSubscribeDialog.vue` 的 `if (result.success)` 对齐；只改本端点，不重构下载等其它 decoder。
+- 验证：新增 `MoviePilot-TV-Tests/ForkEnvelopeStrictnessTests.swift` 矩阵——`success` 显式 true/false/null/缺失 × `id` 正常/缺失/null/0/负数/自相矛盾（false 却带正 id），另含空对象，共 10 格；仅 success==true 且 id 为正返回，其余 9 格断言抛对应 `serverMessage` 且文案透传正确。新矩阵 + `ForkOperationOwnerTests`（4 项 F-193 多阶段 owner）+ `PermissionBehaviorTests` + `APIServiceCompatibilityEndpointTests` 全绿；这两套既有 stub 均显式带 `success`，与 fail-closed 兼容，无旧行为依赖。
+- 处置状态：用户先核准修复方向后批准改。核对：后端 `schemas.Response.success` 为必填 bool，`create_subscribe` 返回 `success=bool(sid)`——当前后端不可能发出缺失/null success 的 Fork 成功响应，故对真实后端为零行为变化，属纯失败关闭加固；Web 端 `ForkSubscribeDialog` 亦 fail-closed，TV 原为唯一 fail-open 分支，现已对齐。
 
 ### F-246：整理历史读取端点缺少 manage 授权
 
