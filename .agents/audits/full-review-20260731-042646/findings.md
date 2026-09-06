@@ -249,10 +249,10 @@
 | F-233 | 用户决定跳过 | P2 | I006 | 插件筛选truthy默认覆盖显式falsey值 | 用户明确选择false/0/空串/null后，运行更新又被truthy默认值替换，无法表达关闭/全部/零/清空 | review_a001_h受限集成提出，review_a001_j隔离审计材料定向复核确认四类值与初始化反证 | 默认只在source初始化应用；运行时原样保存用户值 | TV状态owner缺陷已确认；真实插件字段频率未验证，程序限制披露 |
 | F-234 | 用户决定跳过 | P2 | I006 | 插件profile兼容只比较defaults | filter_ui/options/depends已变化但prefix/defaults相同会保留失效旧值；Picker显示“默认”而query仍发送旧值 | 两代理完整复核descriptor保留、控件显示与query链 | profile任一结构部分变化即回新defaults，或仅校验并清失效值 | 条件性TV动态schema缺陷；后端热更新保证未验证，程序限制披露 |
 | F-235 | 用户决定跳过 | P2 | I006 | Explore source与Popular身份绕过规范化 | tmdb/themoviedb、大小写或空白别名可生成重复source与同媒体重复卡片 | 两代理确认已有MediaIdentifier canonical逻辑却被两处手写prefix/key绕过 | source去重复用normalizeSource；Popular key复用canonical identity并保留season | 条件性TV身份缺陷；真实非规范载荷频率未验证，程序限制披露 |
-| F-236 | 已确认 | P2 | I006→G04 | Explore Paginator owner键只有path | 同path不同source/prefix切换被removeDuplicates吞掉，UI已属新source而Paginator/items/seenKeys仍由旧source拥有 | 既有双审确认机制；全新G04 clean-room复核补当前上游无path唯一合同并升级P2 | publisher用现有(source.id,path) tuple去重，setup仍消费path | 条件性TV owner缺陷P2；实际插件碰撞频率未验证，程序限制永久披露 |
+| F-236 | 已修复 | P2 | I006→G04 | Explore Paginator owner键只有path | 同path不同source/prefix切换被removeDuplicates吞掉，UI已属新source而Paginator/items/seenKeys仍由旧source拥有 | 既有双审确认机制；全新G04 clean-room复核补当前上游无path唯一合同并升级P2 | publisher用现有(source.id,path) tuple去重，setup仍消费path | 条件性TV owner缺陷P2；实际插件碰撞频率未验证，程序限制永久披露 |
 | F-237 | 已驳回 | P3 | I006→F-130/CHK-005 | 动态source刷新缺请求代际 | 代码允许双refresh逆序，但当前同实例只有一个生产调度点，未闭合第二调用者 | verify_a001_h第三裁确认机制与单调用反证，裁不保留独立生产finding | 跨session由F-130/CHK-005阻断；未来新增第二调用点时再加局部revision | 驳回当前生产缺陷，不驳回组件脆弱点 |
 | F-238 | 未验证 | P3 | I006 | api_path与筛选值同名时重复query | api_path已有mode=old、筛选追加mode=new会形成重复键，但服务端首/末值/拒绝合同未知 | 三代理确认构造；两代理均拒绝在未核FastAPI/plugin合同前确认用户影响 | 固定真实插件与服务端重复scalar解析合同后再决定是否定向覆盖 | TV构造成立；当前插件产出与服务端优先级未验证 |
-| F-239 | 已确认 | P2 | I010 | Search行延迟预载缺离页与session owner | 行离场或A→B切会话后，300ms睡眠任务仍可用当前B凭据创建A媒体预载并回填全局cache | review_a001_j整文件集成与verify_a001_h独立复核均闭合两类Row、logout清理先于迟到注册及现有Debouncer反例 | 复用现有PreloadDebouncer；离场取消并在调度/执行时复核session snapshot | 条件性跨页面/会话P2已确认；真实300ms命中频率未运行验证 |
+| F-239 | 用户决定跳过 | P2 | I010 | Search行延迟预载缺离页与session owner | 行离场或A→B切会话后，300ms睡眠任务仍可用当前B凭据创建A媒体预载并回填全局cache | review_a001_j整文件集成与verify_a001_h独立复核均闭合两类Row、logout清理先于迟到注册及现有Debouncer反例 | 复用现有PreloadDebouncer；离场取消并在调度/执行时复核session snapshot | 条件性跨页面/会话P2已确认；真实300ms命中频率未运行验证 |
 | F-240 | 已确认 | P2 | I016→G01第三裁 | 动态推荐开关使用可重复title作为配置owner | 同名不同path的两条货架分别渲染却共享enableConfig[title]，无法独立开启/关闭 | I016两票确认机制；G01第三裁按当前生产链确认P2并保持与F-109独立 | 配置键复用稳定shelf.id/path，读取旧title仅作一次迁移fallback | 纯TV配置owner已确认；真实同名来源频率未验证，程序限制披露 |
 | F-241 | 未验证 | P3 | I016 | App Info Sheet下root Menu observer仍启用 | 若modal与底层共享UIWindow，Menu关闭Sheet还会同时清底层焦点并滚顶 | I016两代理确认静态前提，但均不能证明tvOS modal下Menu投递 | Sheet/alert展示时禁底层observer/exit handler | 条件性TV焦点风险；需UI/真机证据，程序限制披露 |
 | F-242 | 已确认 | P3 | I016 | System站点/规则长名称缺完整可辨识入口 | 站点/规则标题固定单行且preview不回显完整名称，同前缀项可视觉不可区分 | I016两代理确认站点/规则视觉链；推荐截断与VoiceOver扩大说法未确认 | preview显示完整名称或允许两行；不新建长文本组件 | 条件性TV视觉缺陷；推荐、具体阈值与VoiceOver待运行，程序限制披露 |
@@ -4064,7 +4064,7 @@
 
 ### F-236：Explore Paginator 去重键丢失 source owner
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：条件性 P2
 - 位置：Explore选中source→path publisher的`removeDuplicates()`与`setupPaginator`闭包捕获。
 - 触发路径：从source A切换到source B，两者最终path相同但fetch/processor或权限语义不同。
@@ -4076,6 +4076,9 @@
 - G04 clean-room 末裁：当前后端把prefix与api_path定义为独立字段且无path唯一约束，Web也按prefix拥有页面；同path切换后UI、Paginator/items/seenKeys的owner稳定分裂，升级条件性P2。
 - 测试缺口：两个同path不同processor/source的切换，断言Paginator实例与dispatch更新。
 - 未验证：真实动态profile复用内置endpoint的频率。
+- 修复状态：`ExploreViewModel.init` 加载管线由"投影纯 path → `removeDuplicates()`"改为"携带 `(sourceID, path)` → sink 内按 `"sourceID\0path"` 字符串键手动去重"；同一 (sourceID, path) 仍去重跳过，仅换源或换路径必重建 Paginator。因元组不满足 `Equatable` 协议无法直接入 `removeDuplicates`，故去重下移到 sink 内比较上一键，键值类型仅 `String?`，未建 owner 类型/状态机，path 仍原样交给 `setupPaginator(for:)`。`setupPaginator` 保持调用时读 `selectedSource`，源切换后重建即以新 source 语义建 Paginator（fetch/decode/processor/seenKeys 全部随新实例重置）。
+- 验证：新增 `MoviePilot-TV-Tests/ExploreViewModelPaginatorOwnerSwitchTests.swift` 回归：两 custom 源 api_path 完全一致、仅 prefix 不同，先确认两源拼出同路径且 id 不同，切到源 A 建基线 Paginator 后切到源 B，断言 Paginator 实例被重建（身份变化）。对旧"仅按 path 去重"实现反向验证该测试确实失败（2.6s 超时 XCTFail），修复后通过。本次修复后：PaginatorOwnerSwitchTests 1/1、ExploreViewModelTypeSwitchTests 7/7、ExploreViewModelYearDictTests 3/3、DynamicSourceBehaviorTests + MediaInfoCollectionBehaviorTests 56/56，全绿。
+- 处置状态：用户以大白话报告后批准修复，改动已提交。
 
 ### F-237：动态 source 刷新缺少请求代际
 
@@ -4105,7 +4108,7 @@
 
 ### F-239：Search 延迟预载任务离页或切会话后仍执行
 
-- 状态：已确认
+- 状态：用户决定跳过
 - 严重度：条件性 P2
 - 位置：Search `ResultRow`/`BestResultRow`的300ms延迟预载任务、全局MediaPreloader与logout清理顺序。
 - 触发路径：行获得焦点后300ms内离开页面；或账号A调度后logout并登录B，再让旧sleep结束。
@@ -4116,6 +4119,7 @@
 - 双审证据：review_a001_j完整集成MediaCard及Search生产caller，verify_a001_h从两个Row、logout、MediaPreloader请求读取与MediaGrid现有Debouncer反例独立闭环，均确认P2。
 - 测试缺口：300ms内离页零preload；A调度后切B零preload/零发布；同会话持续聚焦恰好一次。
 - 未验证：真实聚焦不足300ms、页面退出与账号切换的发生频率；未运行异步/Simulator测试。
+- 处置状态：用户提示"P1 修改好像修了"，核实后决定跳过。核实确认：跨账号防线确已存在（`MediaPreloader` init 监听 `apiService.$session`，登出/换账号即 `clearAll()` 清已登记任务），但 Search 两个 Row 各自 `@State` 持有的 300ms 睡眠裸 Task 尚未登记、不受 clearAll 管；`SearchView.swift` 全文无 `.onDisappear`，`MediaPreloadTask.start()` 开头亦无 canAccess/会话门禁，故"聚焦后 300ms 内非点击离页"仍会漏发一次请求，极端时序（登出+登新号发生在 300ms 内）才可能跨账号漏发。实际代价为一次多余/必然 401 的请求（进缓存自愈），非错数据级。用户判断不改动 TV；保留历史 P2 结论，不再列为待处理项。
 
 ### F-240：动态推荐开关以可重复 title 作为配置 owner
 

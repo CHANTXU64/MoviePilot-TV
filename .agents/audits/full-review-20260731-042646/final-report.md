@@ -2137,7 +2137,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-236 · P2 · 已确认 · Explore Paginator 去重键丢失 source owner</summary>
+<summary>F-236 · P2 · 已修复 · Explore Paginator 去重键丢失 source owner</summary>
 
 - 审查单元与位置：I006→G04；Explore Paginator owner键只有path
 - 触发路径：从source A切换到source B，两者最终path相同但fetch/processor或权限语义不同。
@@ -2146,11 +2146,13 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：既有双审确认机制；全新G04 clean-room复核补当前上游无path唯一合同并升级P2；publisher用现有(source.id,path) tuple去重，setup仍消费path
 - 跨端结论：条件性TV owner缺陷P2；实际插件碰撞频率未验证，程序限制永久披露
 - 最小修改方向 / 裁决：publisher输出现有`(selectedSource.id, path)`作为owner key，去重后仍把path交给原setup，不建owner类型或状态机。
+- 修复状态：`ExploreViewModel.init` 管线改为携带 `(sourceID, path)`，sink 内以 `"sourceID\0path"` 字符串键手动去重（元组不满足 `Equatable` 无法直接入 `removeDuplicates`）；同 (sourceID, path) 仍跳过，换源或换路径必重建 Paginator，path 原样交 `setupPaginator(for:)`，未建 owner 类型/状态机。
+- 验证：新增 `ExploreViewModelPaginatorOwnerSwitchTests`（同 path 不同 prefix 两 custom 源切换，断言 Paginator 实例重建）；对旧"仅按 path 去重"实现反向验证该测试确实失败（2.6s XCTFail），修复后通过。本次 PaginatorOwnerSwitchTests 1/1、TypeSwitch 7/7、YearDict 3/3、DynamicSource + MediaInfoCollection 56/56 全绿。
 
 </details>
 
 <details>
-<summary>F-239 · P2 · 已确认 · Search 延迟预载任务离页或切会话后仍执行</summary>
+<summary>F-239 · P2 · 已确认（用户决定跳过） · Search 延迟预载任务离页或切会话后仍执行</summary>
 
 - 审查单元与位置：I010；Search行延迟预载缺离页与session owner
 - 触发路径：行获得焦点后300ms内离开页面；或账号A调度后logout并登录B，再让旧sleep结束。
@@ -2159,6 +2161,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：review_a001_j整文件集成与verify_a001_h独立复核均闭合两类Row、logout清理先于迟到注册及现有Debouncer反例；复用现有PreloadDebouncer；离场取消并在调度/执行时复核session snapshot
 - 跨端结论：条件性跨页面/会话P2已确认；真实300ms命中频率未运行验证
 - 最小修改方向 / 裁决：复用仓内现有`PreloadDebouncer`，Row离场调用cancel；schedule与执行前复核同一session snapshot。不要新增第二个预载协调器。
+- 处置状态：用户提示"P1 修改好像修了"，核实后决定跳过。核实：跨账号防线确已存在（`MediaPreloader` 监听 `$session` 登出/换账号即 `clearAll()`），但 Search 两 Row 各自的 300ms 睡眠裸 Task 尚未登记、不受 clearAll 管；`SearchView.swift` 无 `.onDisappear`，`MediaPreloadTask.start()` 无会话门禁，故非点击离页仍漏发一次请求、极端时序才跨账号。代价为一次多余/401 请求，非错数据级。不改动 TV；保留历史 P2 结论，不再列为待处理项。
 
 </details>
 
