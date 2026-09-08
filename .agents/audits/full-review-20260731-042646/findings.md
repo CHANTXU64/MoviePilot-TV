@@ -17,7 +17,7 @@
 | F-001 | 已修复 | P3 | M001-B | `Models.swift:187-224` | `FlexibleBool` 不清理换行，带行尾的真值字符串静默解为 `false` | M001-B 主审完整追踪所有包装类型调用者及相关测试 | verify_m001_b 独立复现解析分支、全量调用者和测试缺口；无新候选 | TV 端缺陷已确认；修复后字符串分支改用 `.whitespacesAndNewlines`，带行尾真值不再误降级，用户批准 |
 | F-002 | 已修复（`ff4ea14`） | P2 | M001-C | `Models.swift:578-651`；嵌套根因在 `Person`/`SubscribeShare` 解码器 | 后台媒体解码继续读取 MainActor 图片配置 | M001-C 主审追踪后台入口、嵌套解码器、工程隔离设置与测试 | verify_m001_c 独立确认静态隔离冲突并限定 Release/触发边界 | TV 本地隔离风险已确认；实际携带字段及 Release 表现未验证 |
 | F-003 | 已修复（`0cfeb12`） | P2 | M001-C/I001→G02 | 分季订阅快照季号边界 | missing/null会被summary安全丢弃、S00合法；仅负季号仍进入字典、状态与订阅/取消目标 | G02主审提出限缩，rounda_g02_third按missing/null/negative/S00矩阵确认当前控制流 | summary入口只拒绝负季号并保留0；不改S00 | 纯TV负季号不变量已确认；后端是否保证非负未验证 |
-| F-004 | 降级 | P3 | M001-C | `Models.swift:612,614-616`，持有/编码在 `728,879,917,1000-1004` | `rawPayload` 与强类型字段重复持有深层 JSON | M001-C 主审确认唯一生产用途及分页/预加载持有路径 | verify_m001_c 确认静态重复持有，但无真机量化，P2→P3 | 静态风险成立；实际性能影响须真机 Instruments |
+| F-004 | 降级（用户决定跳过） | P3 | M001-C | `Models.swift:612,614-616`，持有/编码在 `728,879,917,1000-1004` | `rawPayload` 与强类型字段重复持有深层 JSON | M001-C 主审确认唯一生产用途及分页/预加载持有路径 | verify_m001_c 确认静态重复持有，但无真机量化，P2→P3 | 静态风险成立；无真机实测影响、rawPayload 承担 re-encode 保字段职责，用户决定跳过 |
 | F-005 | 已确认 | P3 | M001-C | `Models.swift:416-450`，限 Statistic/DownloaderInfo 非可选字段 | 非可选字段的属性默认值不能容忍 Decodable 缺键/null | M001-C 主审追踪 Dashboard 刷新和现有测试缺口 | verify_m001_c 独立确认合成解码与顺序发布混合快照 | 官方 schema 是否保证字段齐全未验证 |
 | F-006 | 已修复（`49b887e`+`f807692`） | P2 | M001-A→G02 | Subscribe lookup/取消identity | 2026-08-11 对照 Web v2.15.1 后收窄为 lookup 响应的 raw 数值 `0` 遮蔽合法 fallback；负数在 Web 中为 truthy，不是缺陷 | 已由 `49b887e`（truthyNumericIdentifier）+`f807692`（lookup 应用）修复：raw 数值只跳过 `0`、保留负数，再回退不透明 legacy 值 | 补 lookup 的 0/负数/fallback 矩阵；不引入“正数限定”差异 | Web v2.15.1 规则已确认；真实后端异常数据分布未验证 |
 | F-007 | 已修复（`bb07772`） | P1 | M001-A→I008 | Header/预热/跳转/POST 身份链 | source-only 主身份会丢失，且启发式TMDB可覆盖完整详情权威ID并创建、暂停错误订阅 | 既有转换审查与I008整文件主审闭合四个创建入口及X≠Y序列 | review_a001_h从当前HEAD独立确认P1；复用共享draft factory与纯TMDB仲裁，不扩POST schema | 修复已完成：`bb07772`；当前后端/Web合同、构建、381条非后端兼容测试与独立复审通过 |
@@ -309,7 +309,7 @@
 
 ### F-004：完整原始 JSON 与强类型字段重复持有
 
-- 状态：降级
+- 状态：降级（用户决定跳过）
 - 严重度：P3；由 P2 降级，性能影响未验证
 - 位置：`MoviePilot-TV/Models/Models.swift:612,614-616,728,879,917,1000-1004`
 - 触发路径：任何 `MediaInfo` 或 `[MediaInfo]` 解码，长分页和预加载缓存放大持有量。
@@ -318,6 +318,7 @@
 - 主审证据：`rawPayload` 唯一生产用途是重新编码；测试只要求保留未知字段。
 - 最小方向：先验证多态原始字段依赖，再只保留未建模/不透明字段；必须保留未知字段回归，并用真机 Allocations/RSS 定量。
 - 独立复核：静态重复持有成立，但没有 Allocations/RSS/解码耗时或真机淘汰证据，P2 证据不足。
+- 用户裁决：P3 逐条过时决定跳过——无真机实测影响；`rawPayload` 承担 re-encode 保未建模/插件字段的功能职责（`Models.swift:758`），冒然瘦身有丢插件契约风险；若未来真机 Instruments 量化出实际影响再重开。
 
 ### F-005：状态模型默认值不能兜底缺键
 
