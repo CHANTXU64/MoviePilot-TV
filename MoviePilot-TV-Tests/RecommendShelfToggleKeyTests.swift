@@ -61,8 +61,8 @@ final class RecommendShelfToggleKeyTests: XCTestCase {
 
   // MARK: 旧 title 键配置迁移
 
-  /// 旧版以 title 为键的本地配置，加载后一次性迁移到稳定 id，并保留原开关值。
-  func testLegacyTitleKeyConfigMigratesToShelfIDPreservingValues() {
+  /// 初始化阶段先让内置货架继承旧值，但在动态来源返回前不得删除或回写 title 键。
+  func testLegacyTitleKeyConfigStagesKnownIDsWithoutPrematurePersistence() {
     seedLegacyConfig([
       "流行趋势": true,       // recommend/tmdb_trending
       "豆瓣Top250": false,   // recommend/douban_movie_top250
@@ -75,9 +75,9 @@ final class RecommendShelfToggleKeyTests: XCTestCase {
     XCTAssertEqual(viewModel.enableConfig["recommend/tmdb_trending"], true)
     XCTAssertEqual(viewModel.enableConfig["recommend/douban_movie_top250"], false)
     XCTAssertEqual(viewModel.enableConfig["recommend/douban_tv_hot"], true)
-    // 旧 title 键不再残留为配置键。
-    XCTAssertNil(viewModel.enableConfig["流行趋势"])
-    XCTAssertNil(viewModel.enableConfig["豆瓣Top250"])
+    // 动态来源尚未加载，旧 title 键必须暂留，供稍后出现的同名来源继承。
+    XCTAssertEqual(viewModel.enableConfig["流行趋势"], true)
+    XCTAssertEqual(viewModel.enableConfig["豆瓣Top250"], false)
 
     // 过滤结果跟随迁移后的 id 键。
     let enabledIDs = Set(viewModel.filteredShelves.map(\.id))
@@ -85,10 +85,54 @@ final class RecommendShelfToggleKeyTests: XCTestCase {
     XCTAssertTrue(enabledIDs.contains("recommend/douban_tv_hot"))
     XCTAssertFalse(enabledIDs.contains("recommend/douban_movie_top250"))
 
-    // 迁移结果已用 id 键回写落盘，避免每次启动重复迁移。
+    // 初始化只做内存阶段迁移，不破坏持久化的旧 title 配置。
     let stored = storedConfig()
-    XCTAssertEqual(stored?["recommend/douban_movie_top250"], false)
-    XCTAssertNil(stored?["豆瓣Top250"])
+    XCTAssertNil(stored?["recommend/douban_movie_top250"])
+    XCTAssertEqual(stored?["豆瓣Top250"], false)
+  }
+
+  /// 真实两阶段顺序：初始化仅有内置来源，动态同名来源成功加载后也必须继承旧值，
+  /// 然后才能删除 title 键并把完整的 id 配置落盘。
+  func testLegacySameTitleConfigMigratesAfterDynamicSourcesLoad() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(RecommendShelfSourceURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(RecommendShelfSourceURLProtocol.self) }
+
+    seedLegacyConfig(["流行趋势": true])
+    let service = APIService.isolatedTestingInstance()
+    let account = Token(
+      access_token: "recommend-shelf-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: ["discovery": true],
+      user_id: 501,
+      user_name: "recommend-shelf-user",
+      avatar: nil
+    )
+    service.replaceSessionForTesting(
+      baseURL: "http://recommend-shelf-toggle.local",
+      token: account.access_token,
+      currentUser: account
+    )
+    RecommendShelfSourceURLProtocol.sourcesJSON =
+      #"[{"name":"流行趋势","api_path":"plugin/custom-trending","type":"榜单"}]"#
+
+    let viewModel = RecommendViewModel(selectShelf: false, apiService: service)
+
+    XCTAssertEqual(viewModel.enableConfig["recommend/tmdb_trending"], true)
+    XCTAssertEqual(storedConfig()?["流行趋势"], true)
+    XCTAssertNil(storedConfig()?["recommend/tmdb_trending"])
+
+    await viewModel.refreshSources(selectShelf: false)
+
+    XCTAssertTrue(viewModel.shelves.contains(where: { $0.id == "plugin/custom-trending" }))
+    XCTAssertEqual(viewModel.enableConfig["recommend/tmdb_trending"], true)
+    XCTAssertEqual(viewModel.enableConfig["plugin/custom-trending"], true)
+    XCTAssertNil(viewModel.enableConfig["流行趋势"])
+
+    let stored = storedConfig()
+    XCTAssertEqual(stored?["recommend/tmdb_trending"], true)
+    XCTAssertEqual(stored?["plugin/custom-trending"], true)
+    XCTAssertNil(stored?["流行趋势"])
   }
 
   // MARK: 迁移 helper 边界
@@ -131,4 +175,35 @@ final class RecommendShelfToggleKeyTests: XCTestCase {
     let repositoryRoot = testFileURL.deletingLastPathComponent().deletingLastPathComponent()
     return try String(contentsOf: repositoryRoot.appendingPathComponent(path))
   }
+}
+
+private final class RecommendShelfSourceURLProtocol: URLProtocol {
+  nonisolated(unsafe) static var sourcesJSON = "[]"
+
+  override class func canInit(with request: URLRequest) -> Bool {
+    request.url?.host == "recommend-shelf-toggle.local"
+      && request.url?.path == "/api/v1/recommend/source"
+  }
+
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+    request
+  }
+
+  override func startLoading() {
+    guard let url = request.url else {
+      client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+      return
+    }
+    let response = HTTPURLResponse(
+      url: url,
+      statusCode: 200,
+      httpVersion: nil,
+      headerFields: ["Content-Type": "application/json"]
+    )!
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    client?.urlProtocol(self, didLoad: Data(Self.sourcesJSON.utf8))
+    client?.urlProtocolDidFinishLoading(self)
+  }
+
+  override func stopLoading() {}
 }

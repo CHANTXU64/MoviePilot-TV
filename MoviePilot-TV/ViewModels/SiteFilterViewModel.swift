@@ -74,9 +74,11 @@ class SiteFilterViewModel: ObservableObject {
 
   /// 站点过滤参数的请求编码：有具体选择时发选中的 ID 串；
   /// 选「全部站点」（空选择）时显式发送全部启用站点 ID，避免后端把空/nil 回退成
-  /// 「搜索站点范围」默认子集而漏搜（F-209）。启用站点为空时降级为 nil。
+  /// 「搜索站点范围」默认子集而漏搜（F-209）。只有权威站点列表可以安全展开；
+  /// 未加载、降级订阅域或启用站点为空时保留 nil 的后端默认语义。
   var sitesString: String? {
     if selectedSites.isEmpty {
+      guard hasLoadedSites, loadedSitesAuthoritative else { return nil }
       let allActiveIds = availableSites
         .filter { $0.is_active?.value == true }
         .map(\.id)

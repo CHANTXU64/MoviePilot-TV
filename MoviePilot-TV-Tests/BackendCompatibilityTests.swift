@@ -43,6 +43,7 @@ private struct BackendCompatibilityConfig {
   let requireMediaServer: Bool
   let requireLatestMedia: Bool
   let metadataQueries: [String]
+  let personQueries: [String]
   let recognitionTitles: [String]
   let resourceQueries: [String]
   let resourceMediaIDs: [String]
@@ -83,6 +84,7 @@ private struct BackendCompatibilityConfig {
       requireMediaServer: false,
       requireLatestMedia: false,
       metadataQueries: [],
+      personQueries: ["易中天"],
       recognitionTitles: [],
       resourceQueries: [],
       resourceMediaIDs: [],
@@ -120,6 +122,14 @@ private struct BackendCompatibilityConfig {
     var explicitQueries = values["MOVIEPILOT_COMPAT_METADATA_QUERIES"]?.listValue ?? []
     if explicitQueries.isEmpty, let query = values["MOVIEPILOT_COMPAT_METADATA_QUERY"]?.nilIfBlank {
       explicitQueries = [query]
+    }
+
+    var personQueries = values["MOVIEPILOT_COMPAT_PERSON_QUERIES"]?.listValue ?? []
+    if personQueries.isEmpty, let query = values["MOVIEPILOT_COMPAT_PERSON_QUERY"]?.nilIfBlank {
+      personQueries = [query]
+    }
+    if personQueries.isEmpty {
+      personQueries = ["易中天"]
     }
 
     let recognitionTitles =
@@ -175,6 +185,7 @@ private struct BackendCompatibilityConfig {
       requireLatestMedia: values["MOVIEPILOT_COMPAT_REQUIRE_LATEST_MEDIA"]?.boolValue(
         fallback: false) ?? false,
       metadataQueries: explicitQueries,
+      personQueries: personQueries,
       recognitionTitles: recognitionTitles,
       resourceQueries: resourceQueries,
       resourceMediaIDs: resourceMediaIDs,
@@ -1626,10 +1637,12 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       await scanSeasonAvailabilityStatus(service: service, config: config, collector: collector)
       await scanPersonDetailSurfaces(service: service, collector: &collector)
 
-      assertPersonImagesMatchWebSelection(
-        Array(collector.peopleByID.values),
-        service: service
-      )
+      if config.allows(.permission(.discovery)) {
+        assertPersonImagesMatchWebSelection(
+          Array(collector.peopleByID.values),
+          service: service
+        )
+      }
       await assertImagesRenderable(collector.imageCandidates, service: service)
     }
   }
@@ -1840,16 +1853,17 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     config: BackendCompatibilityConfig,
     collector: inout BackendCompatibilityCollector
   ) async {
-    let queries = uniqueStrings(config.metadataQueries + collector.derivedSearchQueries(limit: 5))
-    guard !queries.isEmpty else { return }
+    let mediaQueries = uniqueStrings(config.metadataQueries + collector.derivedSearchQueries(limit: 5))
+    let personQueries = uniqueStrings(config.personQueries)
+    guard !mediaQueries.isEmpty || !personQueries.isEmpty else { return }
 
     await runBackendCompatibilityStep(
-      "metadata search surfaces",
+      "metadata and person search surfaces",
       service: service,
       config: config,
       requirement: .permission(.discovery)
     ) {
-      for query in queries {
+      for query in mediaQueries {
         for source in MediaSearchSource.allowed(for: .media) {
           for page in 1...2 {
             let items = try await service.searchMedia(query: query, page: page, source: source)
@@ -1872,13 +1886,15 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
           collector: &collector
         )
 
+        let shares = try await service.searchSubscriptionShares(query: query, page: 1)
+        collector.addSubscriptionShares(shares, surface: "subscription share search \(query)")
+      }
+
+      for query in personQueries {
         for source in MediaSearchSource.allowed(for: .person) {
           let people = try await service.searchPerson(query: query, page: 1, source: source)
           collector.addPeople(people, surface: "\(source.title) person search \(query)")
         }
-
-        let shares = try await service.searchSubscriptionShares(query: query, page: 1)
-        collector.addSubscriptionShares(shares, surface: "subscription share search \(query)")
       }
     }
   }

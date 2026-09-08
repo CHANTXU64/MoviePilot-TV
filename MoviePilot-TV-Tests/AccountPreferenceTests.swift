@@ -215,7 +215,7 @@ private final class SiteListURLProtocol: URLProtocol {
   }
 
   override class func canInit(with request: URLRequest) -> Bool {
-    request.url?.path == "/api/v1/site/rss"
+    request.url?.host == "site-load-state.local"
   }
 
   override class func canonicalRequest(for request: URLRequest) -> URLRequest {

@@ -212,18 +212,22 @@ class RecommendViewModel: ObservableObject {
   func refreshSources(selectShelf: Bool = true) async {
     loadConfig()
     guard apiService.canAccess(.discovery) else { return }
+    var loadedExtraSourcesSuccessfully = false
     do {
       extraSourceSnapshot = try await apiService.fetchRecommendSources()
+      loadedExtraSourcesSuccessfully = true
     } catch {
       // 保留最近成功快照。
       Logger.error("动态推荐来源加载失败: \(error)")
     }
     shelves = Self.mergedShelves(extras: extraSourceSnapshot)
-    // 二次迁移：本轮新拉到的 extra 名称现在可解析到稳定 id；无法唯一解析的同名键
-    // 按旧“共享开关”语义平铺到各同名货架，之后用户即可在开关上独立拆分。
-    let migrated = Self.migrateTitleKeys(in: enableConfig, shelves: shelves)
-    if migrated != enableConfig {
-      saveEnableConfig(migrated)
+    if loadedExtraSourcesSuccessfully {
+      // 只有完整来源请求成功后才消费旧 title 键：把旧“共享开关”值平铺到本轮全部
+      // 同名货架，再切换为稳定 id 持久化。失败时保留 title，供下次刷新继续迁移。
+      let migrated = Self.migrateTitleKeys(in: enableConfig, shelves: shelves)
+      if migrated != enableConfig {
+        saveEnableConfig(migrated)
+      }
     }
     // 配置早于新版内置货架创建时默认开启（与旧 title 键逻辑等价）。
     for id in ["anilist/trending", "anilist/popular-this-season"] where enableConfig[id] == nil {
@@ -298,9 +302,11 @@ class RecommendViewModel: ObservableObject {
   /// - 键是多个同名货架共用的 title → 把旧共享值平铺到每个同名 id 后删除 title 键
   ///   （还原旧“一键控全部”行为，用户之后可独立拆分）；
   /// - 其余未知键（暂无法解析的旧 title / 已消失货架的 id）→ 原样保留，不做破坏性删除。
+  /// - `consumeMatchedTitles == false` → 只复制到当前已知 id，保留 title 供稍后加载的动态来源继承。
   nonisolated static func migrateTitleKeys(
     in raw: [String: Bool],
-    shelves: [RecommendShelf]
+    shelves: [RecommendShelf],
+    consumeMatchedTitles: Bool = true
   ) -> [String: Bool] {
     var idsByTitle: [String: [String]] = [:]
     let presentIDs = Set(shelves.map(\.id))
@@ -313,7 +319,9 @@ class RecommendViewModel: ObservableObject {
       for id in ids where out[id] == nil {
         out[id] = value
       }
-      out.removeValue(forKey: key)
+      if consumeMatchedTitles {
+        out.removeValue(forKey: key)
+      }
     }
     return out
   }
@@ -321,12 +329,13 @@ class RecommendViewModel: ObservableObject {
   private func loadConfig() {
     if let data = UserDefaults.standard.data(forKey: Self.localConfigKey) {
       if let config = try? JSONDecoder().decode([String: Bool].self, from: data) {
-        let migrated = Self.migrateTitleKeys(in: config, shelves: shelves)
-        enableConfig = migrated
-        if migrated != config {
-          // 迁移后立即以稳定 id 键回写，落盘即切换到新 key 语义，避免每次启动重复迁移。
-          saveEnableConfig(migrated)
-        }
+        // 初始化时只有内置货架：先让已知 id 继承旧值，但保留且不回写 title 键。
+        // 动态来源成功加载后再统一消费，避免同名来源错过旧版共享配置。
+        enableConfig = Self.migrateTitleKeys(
+          in: config,
+          shelves: shelves,
+          consumeMatchedTitles: false
+        )
         return
       }
       UserDefaults.standard.removeObject(forKey: Self.localConfigKey)

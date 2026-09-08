@@ -2,8 +2,9 @@ import XCTest
 
 @testable import MoviePilot_TV
 
-/// F-209：选「全部站点」（空选择）时显式发送全部启用站点 ID，不再发 nil 让后端回退「搜索站点范围」默认子集。
-/// 具体选择保持原样；启用站点为空时降级为 nil（回退后端默认）。
+/// F-209：选「全部站点」（空选择）且站点列表权威时显式发送全部启用站点 ID，
+/// 不再发 nil 让后端回退「搜索站点范围」默认子集。
+/// 具体选择保持原样；列表未加载、非权威或启用站点为空时降级为 nil（回退后端默认）。
 /// F-210：availableSites 仅在拿到权威域（/site/）时用于裁剪选择；降级为订阅域（/site/rss）时不做交集，
 /// 避免把用户已保存的合法站点永久删掉。
 @MainActor
@@ -19,9 +20,14 @@ final class SiteFilterViewModelSitesStringTests: XCTestCase {
     )
   }
 
-  private func makeViewModel(available: [Site]) -> SiteFilterViewModel {
+  private func makeViewModel(
+    available: [Site],
+    authoritative: Bool = true
+  ) -> SiteFilterViewModel {
     let viewModel = SiteFilterViewModel(apiService: .shared)
     viewModel.availableSites = available
+    viewModel.hasLoadedSites = true
+    viewModel.loadedSitesAuthoritative = authoritative
     return viewModel
   }
 
@@ -56,6 +62,24 @@ final class SiteFilterViewModelSitesStringTests: XCTestCase {
   func testEmptySelectionEmptyAvailableSitesReturnsNil() {
     let viewModel = makeViewModel(available: [])
     viewModel.selectedSites = []
+    XCTAssertNil(viewModel.sitesString)
+  }
+
+  func testEmptySelectionNonAuthoritativeSubsetReturnsNil() {
+    let viewModel = makeViewModel(
+      available: [makeSite(id: 1, isActive: true)],
+      authoritative: false
+    )
+    viewModel.selectedSites = []
+
+    XCTAssertNil(viewModel.sitesString)
+  }
+
+  func testEmptySelectionBeforeSitesLoadReturnsNil() {
+    let viewModel = makeViewModel(available: [makeSite(id: 1, isActive: true)])
+    viewModel.hasLoadedSites = false
+    viewModel.selectedSites = []
+
     XCTAssertNil(viewModel.sitesString)
   }
 
