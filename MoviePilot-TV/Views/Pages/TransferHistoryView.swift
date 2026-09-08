@@ -540,6 +540,14 @@ private struct TransferHistoryRowView: View {
       HStack(spacing: 20) {
         statusChip
 
+        // 失败记录直接带后端失败原因，截取 20 字符；成功/空白原因不显示，列表保持紧凑。
+        if let reason = item.failureReason(maxLength: 20) {
+          Text(reason)
+            .font(.caption)
+            .foregroundColor(.red)
+            .lineLimit(1)
+        }
+
         if let category = item.category, !category.isEmpty {
           Text(category)
             .font(.caption)
@@ -614,6 +622,10 @@ private struct TransferHistoryDetailSheet: View {
         let destStorageName = item.dest_storage.flatMap { storageDict[$0] ?? $0 } ?? "未知"
         let destContent = "[\(destStorageName)] \(item.dest ?? "N/A")"
         TransferInfoRow(label: "目标文件", content: destContent)
+        if let reason = item.failureReason() {
+          Divider()
+          TransferInfoRow(label: "失败原因", content: reason)
+        }
       }
 
       HStack(spacing: 30) {

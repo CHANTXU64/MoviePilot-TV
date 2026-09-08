@@ -606,6 +606,10 @@ class ExploreViewModel: ObservableObject {
   private var paginatorCancellable: AnyCancellable?
   private var extraSourceSnapshot: [DiscoverSourceDescriptor] = []
 
+  /// 上次触发 Paginator 重建的 "sourceID\0path" 键，用于在 sink 内代替
+  /// removeDuplicates 做去重（元组不满足 Equatable 协议，无法直接入链）。
+  private var lastPaginatorReloadKey: String?
+
   init(apiService: APIService = .shared) {
     self.apiService = apiService
     applySources()
@@ -646,13 +650,16 @@ class ExploreViewModel: ObservableObject {
       // 使用 debounce 来防止快速连续的 UI 更新导致多次加载
       // 例如，当 onSourceChanged 重置多个属性时
       .debounce(for: .milliseconds(100), scheduler: DispatchQueue.main)
-      // 映射到 API 路径
-      .map { [unowned self] in self.buildApiPath() }
-      // 只有当路径变化时才继续
-      .removeDuplicates()
-      // 订阅路径变化，并创建新的 Paginator
-      .sink { [unowned self] path in
-        self.setupPaginator(for: path)
+      // 携带 source owner 一起作为去重键：仅按路径去重会吞掉
+      // "不同来源、拼出相同路径"的切换，导致旧 Paginator（捕获旧
+      // source 语义）继续服务新选中的来源。removeDuplicates 要求元素
+      // 遵循 Equatable 协议（元组不满足），故在 sink 内按上一对键手动去重。
+      .map { [unowned self] in (sourceID: self.selectedSource.id, path: self.buildApiPath()) }
+      .sink { [unowned self] ownerAndPath in
+        let reloadKey = "\(ownerAndPath.sourceID)\u{0}\(ownerAndPath.path)"
+        guard self.lastPaginatorReloadKey != reloadKey else { return }
+        self.lastPaginatorReloadKey = reloadKey
+        self.setupPaginator(for: ownerAndPath.path)
       }
       .store(in: &cancellables)
 

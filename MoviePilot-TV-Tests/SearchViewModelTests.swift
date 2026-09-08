@@ -1028,6 +1028,186 @@ final class SearchViewModelTests: XCTestCase {
     XCTAssertEqual(subscribe.media_id, "154587")
     XCTAssertEqual(subscribe.mediaid, "anilist:154587")
   }
+
+  // MARK: - F-225：可选订阅分享慢请求不得阻塞核心结果揭示
+
+  @MainActor
+  func testSlowSubscriptionShareRevealsCoreThenOnlyAddsShareRowWhenItLateArrives() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryAndSubscribePermissionSession(service)
+
+    let shareGate = SearchAsyncGate()
+    await SearchViewModelURLProtocol.stub.setGate(shareGate, forPath: "/api/v1/subscribe/shares")
+    await SearchViewModelURLProtocol.stub.setShareResults(shareRowsJSON(), forQuery: "old")
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.query = "old"
+    // 把超时窗口调短，稳定覆盖"分享慢于超时、核心先收口"的路径。
+    viewModel.subscriptionShareTimeoutNanoseconds = 100_000_000
+
+    let searchTask = Task { @MainActor in await viewModel.autoSearch() }
+    defer { searchTask.cancel() }
+
+    try await withTimeout("subscription-share request to start") {
+      await SearchViewModelURLProtocol.stub.waitForRequest(path: "/api/v1/subscribe/shares")
+    }
+
+    // 分享请求被 gate 卡住；核心分类已返回，超时窗口一到搜索应先行收口。
+    try await withTimeout("core reveal despite slow share", seconds: 3) {
+      await searchTask.value
+    }
+    XCTAssertFalse(
+      viewModel.isLoading,
+      "Core results must end the full-page loader even when the optional share request exceeds the timeout."
+    )
+
+    let revealTitles = viewModel.bestResults.compactMap { item -> String? in
+      if case .media(let media) = item { return media.title }
+      return nil
+    }
+    XCTAssertTrue(
+      revealTitles.contains("Old Result"),
+      "Core media results should be revealed while the optional share row is still pending."
+    )
+    XCTAssertFalse(
+      revealTitles.contains("Shared Old Pick"),
+      "A share that has not returned must not be folded into the best-results row."
+    )
+    XCTAssertTrue(
+      viewModel.subscriptionSharePaginator?.items.isEmpty ?? true,
+      "The pending subscription-share row should stay empty until the request actually returns."
+    )
+
+    // 迟到分享放行：只补"订阅分享"行，不重开已算好的最佳行。
+    await shareGate.open()
+    let shareArrivalDeadline = Date().addingTimeInterval(3)
+    while (viewModel.subscriptionSharePaginator?.items.isEmpty ?? true)
+      && Date() < shareArrivalDeadline
+    {
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    let shareRowTitles = viewModel.subscriptionSharePaginator?.items.compactMap { $0.title } ?? []
+    XCTAssertTrue(
+      shareRowTitles.contains("Shared Old Pick"),
+      "A late subscription share should appear as its own row once it arrives."
+    )
+
+    let settledTitles = viewModel.bestResults.compactMap { item -> String? in
+      if case .media(let media) = item { return media.title }
+      return nil
+    }
+    XCTAssertFalse(
+      settledTitles.contains("Shared Old Pick"),
+      "A late-arriving share must not re-open the already-computed best-results row."
+    )
+  }
+
+  @MainActor
+  func testSubscriptionShareReturningWithinTimeoutStillPopulatesItsRow() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryAndSubscribePermissionSession(service)
+
+    await SearchViewModelURLProtocol.stub.setShareResults(shareRowsJSON(), forQuery: "old")
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.query = "old"
+
+    let searchTask = Task { @MainActor in await viewModel.autoSearch() }
+    defer { searchTask.cancel() }
+    try await withTimeout("search to finish with a fast share", seconds: 3) {
+      await searchTask.value
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    let shareRowTitles = viewModel.subscriptionSharePaginator?.items.compactMap { $0.title } ?? []
+    XCTAssertTrue(
+      shareRowTitles.contains("Shared Old Pick"),
+      "A share returning within the timeout window keeps its existing row behavior."
+    )
+  }
+
+  @MainActor
+  func testStaleSubscriptionShareCanceledByNewSearchCannotLeakOldItems() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryAndSubscribePermissionSession(service)
+
+    let shareGate = SearchAsyncGate()
+    await SearchViewModelURLProtocol.stub.setGate(shareGate, forPath: "/api/v1/subscribe/shares")
+    await SearchViewModelURLProtocol.stub.setShareResults(shareRowsJSON(), forQuery: "old")
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.query = "old"
+    viewModel.subscriptionShareTimeoutNanoseconds = 100_000_000
+
+    let firstTask = Task { @MainActor in await viewModel.autoSearch() }
+    defer { firstTask.cancel() }
+    try await withTimeout("first subscription-share request to start") {
+      await SearchViewModelURLProtocol.stub.waitForRequest(path: "/api/v1/subscribe/shares")
+    }
+    try await withTimeout("first search core reveal", seconds: 3) {
+      await firstTask.value
+    }
+
+    // 分享仍在途：发起换词搜索，旧 paginator 会被 reset 取消，迟到旧分享不得泄漏。
+    viewModel.query = "new"
+    let secondTask = Task { @MainActor in await viewModel.autoSearch() }
+    defer { secondTask.cancel() }
+    try await withTimeout("second search to finish", seconds: 3) {
+      await secondTask.value
+    }
+    XCTAssertFalse(viewModel.isLoading)
+
+    // 旧的"订阅分享"请求应在新搜索 reset 时被取消。
+    try await withTimeout("stale old-share request to be cancelled", seconds: 3) {
+      await SearchViewModelURLProtocol.stub.waitForCancellation(
+        path: "/api/v1/subscribe/shares",
+        query: "old"
+      )
+    }
+
+    // 放行旧分享也无济于事：当前搜索的分享行不得出现旧标题。
+    await shareGate.open()
+    let currentShareTitles = viewModel.subscriptionSharePaginator?.items.compactMap { $0.title } ?? []
+    XCTAssertFalse(
+      currentShareTitles.contains("Shared Old Pick"),
+      "A share cancelled by a newer search must not leak its items into the current result."
+    )
+  }
+}
+
+private func shareRowsJSON() -> String {
+  """
+  [
+    {"id":501,"share_title":"Shared Old Pick","name":"Shared Old Pick","poster":"/shared-old.jpg","type":"电影","year":"2026"}
+  ]
+  """
 }
 
 @MainActor
@@ -1078,6 +1258,8 @@ private actor SearchViewModelURLProtocolStub {
   private var customFilterRulesJSON: String?
   private var customFilterRulesFailure = false
   private var mediaResultsByQuery: [String: String] = [:]
+  private var gatesByPath: [String: SearchAsyncGate] = [:]
+  private var shareResultsByQuery: [String: String] = [:]
   private var requestedRequests: [SearchRecordedRequest] = []
   private var cancelledRequests: [SearchRecordedRequest] = []
   private var streamTerminations: [String: SearchStreamTermination] = [:]
@@ -1088,6 +1270,8 @@ private actor SearchViewModelURLProtocolStub {
     customFilterRulesJSON = nil
     customFilterRulesFailure = false
     mediaResultsByQuery.removeAll()
+    gatesByPath.removeAll()
+    shareResultsByQuery.removeAll()
     requestedRequests.removeAll()
     cancelledRequests.removeAll()
     streamTerminations.removeAll()
@@ -1095,6 +1279,11 @@ private actor SearchViewModelURLProtocolStub {
 
   func setGate(_ gate: SearchAsyncGate, forQuery query: String) {
     gatesByQuery[query] = gate
+  }
+
+  /// 只卡住指定 path 的请求（如仅卡"订阅分享"，不波及同 query 的核心分类请求）。
+  func setGate(_ gate: SearchAsyncGate, forPath path: String) {
+    gatesByPath[path] = gate
   }
 
   func setCustomFilterGate(_ gate: SearchAsyncGate) {
@@ -1114,6 +1303,11 @@ private actor SearchViewModelURLProtocolStub {
   /// 覆盖 /media/search 返回的媒体 JSON 数组（按 title 参数匹配）。
   func setMediaResults(_ json: String, forQuery query: String) {
     mediaResultsByQuery[query] = json
+  }
+
+  /// 覆盖“订阅分享”接口返回的分享 JSON 数组（按名称参数匹配）。
+  func setShareResults(_ json: String, forQuery query: String) {
+    shareResultsByQuery[query] = json
   }
 
   /// 配置资源搜索流的终止形态：done（成功收尾）/ error（业务失败）/ eof（无终止断开）。
@@ -1144,6 +1338,8 @@ private actor SearchViewModelURLProtocolStub {
     if components.path == "/api/v1/system/setting/CustomFilterRules",
       let gate = customFilterGate
     {
+      await gate.wait()
+    } else if let gate = gatesByPath[components.path] {
       await gate.wait()
     } else if let gate = gatesByQuery[query] {
       await gate.wait()
@@ -1247,6 +1443,9 @@ private actor SearchViewModelURLProtocolStub {
     }
 
     if path == "/api/v1/subscribe/shares" {
+      if let shareResults = shareResultsByQuery[query] {
+        return Data(shareResults.utf8)
+      }
       return Data("[]".utf8)
     }
 
@@ -1384,6 +1583,26 @@ private func configureSubscribePermissionSession(_ service: APIService) {
     ],
     user_id: 303,
     user_name: "subscribe-user",
+    avatar: nil
+  )
+}
+
+@MainActor
+private func configureDiscoveryAndSubscribePermissionSession(_ service: APIService) {
+  service.tokenForTesting = "discovery-subscribe-permission-token"
+  service.currentUserForTesting = Token(
+    access_token: "discovery-subscribe-permission-token",
+    token_type: "bearer",
+    super_user: FlexibleBool(false),
+    permissions: [
+      "discovery": true,
+      "search": false,
+      "subscribe": true,
+      "manage": false,
+      "admin": false,
+    ],
+    user_id: 304,
+    user_name: "discovery-subscribe-user",
     avatar: nil
   )
 }

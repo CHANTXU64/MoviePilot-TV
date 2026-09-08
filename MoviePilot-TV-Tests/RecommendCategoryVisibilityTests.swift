@@ -6,10 +6,10 @@ import XCTest
 final class RecommendCategoryVisibilityTests: XCTestCase {
   func testVisibleCategoriesHidesEmptyCategoryAndKeepsAll() {
     var config = Dictionary(
-      uniqueKeysWithValues: RecommendViewModel.allShelves.map { ($0.title, true) }
+      uniqueKeysWithValues: RecommendViewModel.allShelves.map { ($0.id, true) }
     )
     for shelf in RecommendViewModel.allShelves where shelf.category == .anime {
-      config[shelf.title] = false
+      config[shelf.id] = false
     }
 
     let categories = RecommendViewModel.visibleCategories(

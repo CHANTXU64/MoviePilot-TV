@@ -504,10 +504,10 @@ struct SystemView: View {
         Toggle(
           shelf.title,
           isOn: Binding(
-            get: { recommendViewModel.enableConfig[shelf.title] == true },
+            get: { recommendViewModel.enableConfig[shelf.id] == true },
             set: { enabled in
               var config = recommendViewModel.enableConfig
-              config[shelf.title] = enabled
+              config[shelf.id] = enabled
               recommendViewModel.saveEnableConfig(config)
             }
           )
