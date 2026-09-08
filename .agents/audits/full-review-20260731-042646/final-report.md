@@ -2217,15 +2217,18 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 ### 原始 P3 处置区（52 项）
 
 <details>
-<summary>F-001 · P3 · 已确认 · `FlexibleBool` 带换行真值误降级</summary>
+<summary>F-001 · P3 · 已修复 · `FlexibleBool` 带换行真值误降级</summary>
 
-- 审查单元与位置：M001-B；`Models.swift:192-203`
+- 审查单元与位置：M001-B；`Models.swift:187-224`
+- 修复状态：字符串分支 trim 由 `.whitespaces` 改为 `.whitespacesAndNewlines`，带行尾真值不再落入 `false`。
 - 触发路径：任一 `FlexibleBool` 字段收到 `"true\n"`、`"1\r\n"` 等带行尾的字符串。
 - 根因：字符串只使用 `.whitespaces` 清理，两种真值比较与 `Int` 转换均失败后静默落入 `false`。
 - 用户影响：可能隐藏管理员或功能入口、跳过启用的下载器/媒体服务器、漏加图片 Cookie，或误显示状态；不会造成权限提升。
 - 证据：M001-B 主审完整追踪所有包装类型调用者及相关测试；verify_m001_b 独立复现解析分支、全量调用者和测试缺口；无新候选
-- 跨端结论：TV 端缺陷已确认；上游是否产生该输入未验证
-- 最小修改方向 / 裁决：若复核确认，将根因位置改为 `.whitespacesAndNewlines` 并补直接解码回归测试，不在调用者重复防御。
+- 跨端结论：TV 端缺陷已确认；上游是否产生该输入未验证，修复为防御性收敛
+- 最小修改方向 / 裁决：将根因位置改为 `.whitespacesAndNewlines` 并补直接解码回归测试，不在调用者重复防御。
+- 验证：新增 `FlexibleBoolDecodingTests`（JSONSerialization 合法转义 payload，真/假值×换行 8 例）；修复版全绿，还原旧 `.whitespaces` 后同套失败，确认可捕获。
+- 处置状态：用户逐条过 P3 时先质疑"是否已修"，经 git blame/全仓核实未修后批准修复。
 
 </details>
 

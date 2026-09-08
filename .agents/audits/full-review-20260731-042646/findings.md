@@ -14,7 +14,7 @@
 
 | ID | 状态 | 严重度 | 审查单元 | 位置 | 摘要 | 主审证据 | 复核/裁决证据 | 跨端结论 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| F-001 | 已确认 | P3 | M001-B | `Models.swift:192-203` | `FlexibleBool` 不清理换行，带行尾的真值字符串静默解为 `false` | M001-B 主审完整追踪所有包装类型调用者及相关测试 | verify_m001_b 独立复现解析分支、全量调用者和测试缺口；无新候选 | TV 端缺陷已确认；上游是否产生该输入未验证 |
+| F-001 | 已修复 | P3 | M001-B | `Models.swift:187-224` | `FlexibleBool` 不清理换行，带行尾的真值字符串静默解为 `false` | M001-B 主审完整追踪所有包装类型调用者及相关测试 | verify_m001_b 独立复现解析分支、全量调用者和测试缺口；无新候选 | TV 端缺陷已确认；修复后字符串分支改用 `.whitespacesAndNewlines`，带行尾真值不再误降级，用户批准 |
 | F-002 | 已修复（`ff4ea14`） | P2 | M001-C | `Models.swift:578-651`；嵌套根因在 `Person`/`SubscribeShare` 解码器 | 后台媒体解码继续读取 MainActor 图片配置 | M001-C 主审追踪后台入口、嵌套解码器、工程隔离设置与测试 | verify_m001_c 独立确认静态隔离冲突并限定 Release/触发边界 | TV 本地隔离风险已确认；实际携带字段及 Release 表现未验证 |
 | F-003 | 已修复（`0cfeb12`） | P2 | M001-C/I001→G02 | 分季订阅快照季号边界 | missing/null会被summary安全丢弃、S00合法；仅负季号仍进入字典、状态与订阅/取消目标 | G02主审提出限缩，rounda_g02_third按missing/null/negative/S00矩阵确认当前控制流 | summary入口只拒绝负季号并保留0；不改S00 | 纯TV负季号不变量已确认；后端是否保证非负未验证 |
 | F-004 | 降级 | P3 | M001-C | `Models.swift:612,614-616`，持有/编码在 `728,879,917,1000-1004` | `rawPayload` 与强类型字段重复持有深层 JSON | M001-C 主审确认唯一生产用途及分页/预加载持有路径 | verify_m001_c 确认静态重复持有，但无真机量化，P2→P3 | 静态风险成立；实际性能影响须真机 Instruments |
@@ -265,17 +265,20 @@
 
 ### F-001：`FlexibleBool` 带换行真值误降级
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P3
-- 位置：`MoviePilot-TV/Models/Models.swift:192-203`
+- 位置：`MoviePilot-TV/Models/Models.swift:187-224`
 - 触发路径：任一 `FlexibleBool` 字段收到 `"true\n"`、`"1\r\n"` 等带行尾的字符串。
 - 根因：字符串只使用 `.whitespaces` 清理，两种真值比较与 `Int` 转换均失败后静默落入 `false`。
 - 用户影响：可能隐藏管理员或功能入口、跳过启用的下载器/媒体服务器、漏加图片 Cookie，或误显示状态；不会造成权限提升。
 - 主审证据：`FlexibleBool` 进入 Token、下载器、站点、媒体服务器、Cookie、整理目录和转移结果；相关测试未覆盖带换行字符串。
-- 跨端结论：`../MoviePilot-Frontend` 与 `../MoviePilot` 缺失，无法确认官方后端是否会产生该输入。
-- 最小方向：若复核确认，将根因位置改为 `.whitespacesAndNewlines` 并补直接解码回归测试，不在调用者重复防御。
+- 跨端结论：TV 端缺陷已确认；上游是否产生该输入未验证，修复为防御性收敛。
+- 最小方向：将根因位置改为 `.whitespacesAndNewlines` 并补直接解码回归测试，不在调用者重复防御。
 - 独立复核：verify_m001_b 确认 Foundation 换行不属于 `.whitespaces`，`Int` 解析同样失败；维持 P3，无新增候选。
 - 剩余未验证：官方后端是否会产生字符串 Bool，尤其是带换行输入；Web 端处理方式。
+- 修复状态：Models.swift 字符串分支的 trim 由 `.whitespaces` 改为 `.whitespacesAndNewlines`；修复前后均为 fail-closed，方向只有把"真值被吞成 false"恢复为 true，无权限提升风险。
+- 验证：新增 `MoviePilot-TV-Tests/FlexibleBoolDecodingTests.swift`，用 JSONSerialization 以合法 `\n`/`\r\n` 转义构造 payload，覆盖 `true/1/yes/on` 与 `false/0/no/off` 各带行尾的 8 例；修复版全绿，临时还原旧 `.whitespaces` 后同套测试失败，确认测试能捕获本缺陷。
+- 处置状态：用户逐条过 P3 时先质疑"是否已修"，经 git blame/全仓核实未修后批准修复。
 
 ### F-002：后台媒体解码穿透 MainActor 图片初始化
 

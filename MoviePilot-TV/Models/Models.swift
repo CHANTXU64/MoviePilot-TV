@@ -206,7 +206,7 @@ struct FlexibleBool: Codable, Hashable {
     } else if let intValue = try? container.decode(Int.self) {
       self.value = intValue != 0
     } else if let stringValue = try? container.decode(String.self) {
-      let lower = stringValue.lowercased().trimmingCharacters(in: .whitespaces)
+      let lower = stringValue.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
       if lower == "true" || lower == "1" || lower == "yes" || lower == "on" {
         self.value = true
       } else if lower == "false" || lower == "0" || lower == "no" || lower == "off" {
