@@ -84,6 +84,43 @@ final class StatusDashboardSnapshotTests: XCTestCase {
     XCTAssertNil(viewModel.downloader)
   }
 
+  func testStatisticMissingFieldStillPublishesWholeDashboard() async throws {
+    // 后端统计响应缺 tv_count/episode_count：视作 0/未获取，不得让整组三连取失败。
+    StatusDashboardURLProtocol.stub.setBody(
+      for: "/api/v1/dashboard/statistic", #"{"movie_count":2}"#)
+
+    let service = makeService()
+    let viewModel = StatusViewModel(apiService: service)
+
+    await viewModel.refreshAllData()
+
+    XCTAssertEqual(viewModel.statistic?.movie_count, 2)
+    XCTAssertEqual(viewModel.statistic?.tv_count, 0)
+    XCTAssertNil(viewModel.statistic?.episode_count)
+    // 同批的存储/下载器照常发布，未被统计缺键拖累。
+    XCTAssertEqual(viewModel.storage?.total_storage, 100)
+    XCTAssertEqual(viewModel.downloader?.download_speed, 7)
+  }
+
+  func testDownloaderMissingFieldStillPublishesWholeDashboard() async throws {
+    // 无下载器/离线/旧版本响应可能只给部分速度字段。
+    StatusDashboardURLProtocol.stub.setBody(
+      for: "/api/v1/dashboard/downloader", #"{"download_speed":7}"#)
+
+    let service = makeService()
+    let viewModel = StatusViewModel(apiService: service)
+
+    await viewModel.refreshAllData()
+
+    XCTAssertEqual(viewModel.downloader?.download_speed, 7)
+    XCTAssertEqual(viewModel.downloader?.upload_speed, 0)
+    XCTAssertEqual(viewModel.downloader?.download_size, 0)
+    XCTAssertEqual(viewModel.downloader?.upload_size, 0)
+    XCTAssertEqual(viewModel.downloader?.free_space, 0)
+    XCTAssertEqual(viewModel.statistic?.movie_count, 2)
+    XCTAssertEqual(viewModel.storage?.total_storage, 100)
+  }
+
   func testSessionChangeDoesNotPublishResults() async throws {
     StatusDashboardURLProtocol.stub.setDownloaderDelay(nanoseconds: 500_000_000)
 
@@ -124,6 +161,7 @@ private final class StatusDashboardURLProtocolStub: @unchecked Sendable {
   private let lock = NSLock()
   private var paths: [String] = []
   private var statusCodes: [String: Int] = [:]
+  private var bodyOverrides: [String: String] = [:]
   private var downloaderDelayNanoseconds: UInt64 = 0
 
   func reset() {
@@ -131,6 +169,7 @@ private final class StatusDashboardURLProtocolStub: @unchecked Sendable {
     defer { lock.unlock() }
     paths = []
     statusCodes = [:]
+    bodyOverrides = [:]
     downloaderDelayNanoseconds = 0
   }
 
@@ -138,6 +177,18 @@ private final class StatusDashboardURLProtocolStub: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     statusCodes[path] = statusCode
+  }
+
+  func setBody(for path: String, _ body: String) {
+    lock.lock()
+    defer { lock.unlock() }
+    bodyOverrides[path] = body
+  }
+
+  func bodyOverride(for path: String) -> String? {
+    lock.lock()
+    defer { lock.unlock() }
+    return bodyOverrides[path]
   }
 
   func setDownloaderDelay(nanoseconds: UInt64) {
@@ -202,11 +253,17 @@ private final class StatusDashboardURLProtocol: URLProtocol {
 
     switch path {
     case "/api/v1/dashboard/statistic":
-      respond(statusCode: Self.stub.statusCode(for: path) ?? 200, body: Self.statisticJSON)
+      respond(
+        statusCode: Self.stub.statusCode(for: path) ?? 200,
+        body: Self.stub.bodyOverride(for: path) ?? Self.statisticJSON)
     case "/api/v1/dashboard/storage":
-      respond(statusCode: Self.stub.statusCode(for: path) ?? 200, body: Self.storageJSON)
+      respond(
+        statusCode: Self.stub.statusCode(for: path) ?? 200,
+        body: Self.stub.bodyOverride(for: path) ?? Self.storageJSON)
     case "/api/v1/dashboard/downloader":
-      respond(statusCode: Self.stub.statusCode(for: path) ?? 200, body: Self.downloaderJSON)
+      respond(
+        statusCode: Self.stub.statusCode(for: path) ?? 200,
+        body: Self.stub.bodyOverride(for: path) ?? Self.downloaderJSON)
     default:
       respond(statusCode: 200, body: "{}")
     }

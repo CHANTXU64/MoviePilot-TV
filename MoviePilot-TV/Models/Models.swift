@@ -437,6 +437,15 @@ struct Statistic: Codable {
   var tv_count: Int = 0
   /// 电视剧总集数
   var episode_count: Int?
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    // 属性 `= 0` 不会成为合成 Decodable 的缺键默认值；这里显式按 0 兜底，
+    // 避免单个统计字段缺键/null 让 Dashboard 统计/存储/下载器三连取整批失败。
+    movie_count = try container.decodeIfPresent(Int.self, forKey: .movie_count) ?? 0
+    tv_count = try container.decodeIfPresent(Int.self, forKey: .tv_count) ?? 0
+    episode_count = try container.decodeIfPresent(Int.self, forKey: .episode_count)
+  }
 }
 
 /// 存储空间信息
@@ -464,6 +473,16 @@ struct DownloaderInfo: Codable {
   var upload_size: Int = 0
   /// 剩余空间
   var free_space: Int = 0
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    // 同 Statistic：无下载器/离线/旧版本响应可能缺字段，逐项按 0 兜底而非整批解码失败。
+    download_speed = try container.decodeIfPresent(Int.self, forKey: .download_speed) ?? 0
+    upload_speed = try container.decodeIfPresent(Int.self, forKey: .upload_speed) ?? 0
+    download_size = try container.decodeIfPresent(Int.self, forKey: .download_size) ?? 0
+    upload_size = try container.decodeIfPresent(Int.self, forKey: .upload_size) ?? 0
+    free_space = try container.decodeIfPresent(Int.self, forKey: .free_space) ?? 0
+  }
 }
 
 struct RecognizeResponse: Codable {

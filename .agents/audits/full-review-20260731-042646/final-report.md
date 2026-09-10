@@ -2247,15 +2247,18 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-005 · P3 · 已确认 · 状态模型默认值不能兜底缺键</summary>
+<summary>F-005 · P3 · 已修复 · 状态模型默认值不能兜底缺键</summary>
 
-- 审查单元与位置：M001-C；`Models.swift:416-450`，限 Statistic/DownloaderInfo 非可选字段
+- 审查单元与位置：M001-C；`Models.swift:433-487`，限 Statistic/DownloaderInfo 非可选字段
+- 修复状态：两个模型各补自定义 `init(from:)`，非可选数字字段按 `decodeIfPresent ?? 0` 容缺；字段齐全时行为不变。
 - 触发路径：Dashboard 或下载器响应缺失/null 任一非可选统计字段。
 - 根因：属性 `= 0` 不会成为合成 `Decodable` 的缺键默认值。
 - 用户影响：状态刷新失败，首次为空、后续保留旧值；顺序赋值可能形成跨卡片混合快照。
 - 证据：M001-C 主审追踪 Dashboard 刷新和现有测试缺口；verify_m001_c 独立确认合成解码与顺序发布混合快照
-- 跨端结论：官方 schema 是否保证字段齐全未验证
+- 跨端结论：官方 schema 是否保证字段齐全未验证；采用"允许缺失、按 0 兜底"分支，字段齐全时零行为变化
 - 最小修改方向 / 裁决：若字段允许缺失，在模型边界 `decodeIfPresent ?? 0`；若必填，移除误导默认值并补严格契约测试。
+- 验证：新增 `StatusModelDecodingTests`（缺键/null/空对象/齐全矩阵）+ `StatusDashboardSnapshotTests` 两例端到端（部分字段仍整页发布）；修复版 9 例全绿，stash 还原模型后 4 个新用例全败、既有 5 例不受影响。
+- 处置状态：用户逐条过 P3 时经解释"三连取整批失败"触发链后批准修。
 
 </details>
 

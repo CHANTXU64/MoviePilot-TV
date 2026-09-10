@@ -18,7 +18,7 @@
 | F-002 | 已修复（`ff4ea14`） | P2 | M001-C | `Models.swift:578-651`；嵌套根因在 `Person`/`SubscribeShare` 解码器 | 后台媒体解码继续读取 MainActor 图片配置 | M001-C 主审追踪后台入口、嵌套解码器、工程隔离设置与测试 | verify_m001_c 独立确认静态隔离冲突并限定 Release/触发边界 | TV 本地隔离风险已确认；实际携带字段及 Release 表现未验证 |
 | F-003 | 已修复（`0cfeb12`） | P2 | M001-C/I001→G02 | 分季订阅快照季号边界 | missing/null会被summary安全丢弃、S00合法；仅负季号仍进入字典、状态与订阅/取消目标 | G02主审提出限缩，rounda_g02_third按missing/null/negative/S00矩阵确认当前控制流 | summary入口只拒绝负季号并保留0；不改S00 | 纯TV负季号不变量已确认；后端是否保证非负未验证 |
 | F-004 | 降级（用户决定跳过） | P3 | M001-C | `Models.swift:612,614-616`，持有/编码在 `728,879,917,1000-1004` | `rawPayload` 与强类型字段重复持有深层 JSON | M001-C 主审确认唯一生产用途及分页/预加载持有路径 | verify_m001_c 确认静态重复持有，但无真机量化，P2→P3 | 静态风险成立；无真机实测影响、rawPayload 承担 re-encode 保字段职责，用户决定跳过 |
-| F-005 | 已确认 | P3 | M001-C | `Models.swift:416-450`，限 Statistic/DownloaderInfo 非可选字段 | 非可选字段的属性默认值不能容忍 Decodable 缺键/null | M001-C 主审追踪 Dashboard 刷新和现有测试缺口 | verify_m001_c 独立确认合成解码与顺序发布混合快照 | 官方 schema 是否保证字段齐全未验证 |
+| F-005 | 已修复 | P3 | M001-C | `Models.swift:433-487`，限 Statistic/DownloaderInfo 非可选字段 | 非可选字段的属性默认值不能容忍 Decodable 缺键/null | M001-C 主审追踪 Dashboard 刷新和现有测试缺口 | verify_m001_c 独立确认合成解码与顺序发布混合快照 | 已按模型边界 `decodeIfPresent ?? 0` 容缺；字段齐全时行为不变，用户批准 |
 | F-006 | 已修复（`49b887e`+`f807692`） | P2 | M001-A→G02 | Subscribe lookup/取消identity | 2026-08-11 对照 Web v2.15.1 后收窄为 lookup 响应的 raw 数值 `0` 遮蔽合法 fallback；负数在 Web 中为 truthy，不是缺陷 | 已由 `49b887e`（truthyNumericIdentifier）+`f807692`（lookup 应用）修复：raw 数值只跳过 `0`、保留负数，再回退不透明 legacy 值 | 补 lookup 的 0/负数/fallback 矩阵；不引入“正数限定”差异 | Web v2.15.1 规则已确认；真实后端异常数据分布未验证 |
 | F-007 | 已修复（`bb07772`） | P1 | M001-A→I008 | Header/预热/跳转/POST 身份链 | source-only 主身份会丢失，且启发式TMDB可覆盖完整详情权威ID并创建、暂停错误订阅 | 既有转换审查与I008整文件主审闭合四个创建入口及X≠Y序列 | review_a001_h从当前HEAD独立确认P1；复用共享draft factory与纯TMDB仲裁，不扩POST schema | 修复已完成：`bb07772`；当前后端/Web合同、构建、381条非后端兼容测试与独立复审通过 |
 | F-008 | 已修复（`789e9a7`） | P2 | M001-A→W015 | `APIService.search/fork` 与 Home/Sheet/监听方 | 搜索/Fork 完成只清缓存，不刷新已发布状态 | M001-A双审闭合；W015双审确认Fork成功后GET失败/取消编辑均永不发通知 | mutation成功出口恰好发布一次，不依赖后续GET/编辑保存 | 修复已完成：`789e9a7`；独立复审、构建及386条非后端兼容测试通过 |
@@ -322,9 +322,9 @@
 
 ### F-005：状态模型默认值不能兜底缺键
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P3
-- 位置：`MoviePilot-TV/Models/Models.swift:416-450`
+- 位置：`MoviePilot-TV/Models/Models.swift:432-480`
 - 触发路径：Dashboard 或下载器响应缺失/null 任一非可选统计字段。
 - 根因：属性 `= 0` 不会成为合成 `Decodable` 的缺键默认值。
 - 用户影响：状态刷新失败，首次为空、后续保留旧值；顺序赋值可能形成跨卡片混合快照。
@@ -333,6 +333,9 @@
 - 独立复核：范围缩窄为 `Statistic.movie_count/tv_count` 和 `DownloaderInfo` 五字段；顺序发布可形成部分新旧混合快照，维持 P3。
 - V019 生产复核：Statistic与DownloaderInfo正由状态页三个并发请求直接消费；任一缺键解码错误会进入F-149的顺序丢值与F-126的假空/旧值呈现，但各根因保持独立。
 - 剩余未验证：无下载器、下载器离线、旧版本响应契约。
+- 修复状态：采用"字段允许缺失"分支——`Statistic` 与 `DownloaderInfo` 各补自定义 `init(from:)`，非可选数字字段一律 `decodeIfPresent(Int.self, forKey:) ?? 0`，`Statistic.episode_count` 保持可选；属性上的 `= 0` 保留为文档化默认。根因是 `StatusViewModel.refreshAllData` 用 `try await (stat, stor, down)` 三连取，单个统计字段缺键会整批抛错、令统计/存储/下载器三卡一起不刷新（非只坏一格），故在模型边界容缺是最小且贴合仓内既有宽容解码方向的改法。字段齐全时解码结果完全不变。
+- 验证：新增 `MoviePilot-TV-Tests/StatusModelDecodingTests.swift`（直接模型解码矩阵：缺键/null/空对象/字段齐全，Statistic 与 DownloaderInfo 各一组）与 `StatusDashboardSnapshotTests` 两个端到端用例（stub 只回部分字段时整页仍发布、同批 storage/downloader 不被拖累；为此给 stub 增加 body 覆盖能力）。修复版 9 例全绿；临时 `git stash` 还原模型改动后，4 个新用例全败、既有 5 例不受影响，确认测试能捕获本缺陷。
+- 处置状态：用户逐条过 P3 时经解释触发链（三连取整批失败）与修复方向后批准修。
 
 ### F-006：Subscribe lookup 的 raw 数值 0 遮蔽合法 fallback
 
