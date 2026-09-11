@@ -483,13 +483,22 @@ struct TranslationHelper {
    翻译包含一个或多个职位的字符串，例如 "Writer/Screenplay"。
    - Parameter jobString: 包含一个或多个职位 key 的字符串，以 "/" 分隔。
    - Returns: 翻译并用 "/" 连接好的字符串。
+   - Note: 先经 `canonicalJobKeys(from:)` 规范化（清理空白/换行、大小写归一、丢弃空段），
+     再在**翻译之后**去重 —— `Cinematography` 与 `Camera` 是不同的 key，却翻译成同一个
+     显示名（"摄影"），只有在这一层去重才能避免卡片显示 "摄影/摄影"。
+     同一去重也让「已翻译结果再次并入」不再叠加（"导演" + "Director" → "导演"）。
    */
   static func translateJobs(jobString: String) -> String {
-    let jobKeys = jobString.components(separatedBy: "/")
-    let translatedKeys = jobKeys.map { key in
-      jobName(for: key.trimmingCharacters(in: .whitespaces))
+    var seen = Set<String>()
+    var translated: [String] = []
+    for key in canonicalJobKeys(from: jobString) {
+      let name = jobName(for: key)
+      if name.isEmpty || !seen.insert(name).inserted {
+        continue
+      }
+      translated.append(name)
     }
-    return translatedKeys.joined(separator: "/")
+    return translated.joined(separator: "/")
   }
 
   // MARK: - 公共获取方法

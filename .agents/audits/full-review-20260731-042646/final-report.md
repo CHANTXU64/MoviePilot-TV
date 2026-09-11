@@ -2374,28 +2374,35 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-040 · P3 · 已确认 · 不同职位键翻译后重复显示</summary>
+<summary>F-040 · P3 · 已修复 · 不同职位键翻译后重复显示</summary>
 
-- 审查单元与位置：B005；JobRegistry/StaffManager/TranslationHelper
+- 审查单元与位置：B005；`TranslationHelper.swift:491-505`（显示边界去重）、`StaffManager.swift:126-141`
+- 修复状态：`translateJobs` 先经 `canonicalJobKeys(from:)` 规范化，再对**翻译结果**去重；原始 key 阶段的去重不变，故优先级仍按各原始 key 独立计算。
 - 触发路径：同一人员同时携带两个 key，或重复记录分别携带。
 - 根因：原始 key 阶段认为不同，翻译后都为“摄影”且不再去重。
 - 用户影响：职员卡片显示“摄影/摄影”，未来职位分组也可能同名重复。
 - 证据：review_b006_a 确认 Cinematography/Camera 同译与原 key 去重顺序；verify_b005 独立确认当前可见路径为职员卡片并收窄 Hero 边界
 - 跨端结论：TV 显示缺陷已确认；真实 payload 组合未验证
 - 最小修改方向 / 裁决：保留原始 key/优先级，在最终显示边界稳定去重；若产品要区分则改词表。
+- 验证：`testCinematographyAndCameraCollapseToSingleDisplayName` 与 `testSamePersonWithBothCameraKeysAsSeparateRecordsCollapses`；临时还原消费者改动后两例均失败。
+- 处置状态：用户逐条过 P3 时经解释触发链与影响面后，批准随“组一”一并修复。
 
 </details>
 
 <details>
-<summary>F-041 · P3 · 已确认 · 职位键变体绕过翻译与优先级</summary>
+<summary>F-041 · P3 · 已修复 · 职位键变体绕过翻译与优先级</summary>
 
-- 审查单元与位置：B005；Job key 到翻译/优先级链
+- 审查单元与位置：B005；`JobRegistry.swift:113-149`（canonical 解析）、`StaffManager.swift:9-16`、`TranslationHelper.swift:491-505`
+- 修复状态：新增 `canonicalJobKey(for:)` / `canonicalJobKeys(from:)` 单一解析入口（清理 `whitespacesAndNewlines` → 精确匹配 → 大小写不敏感 → 未知原样保真），翻译与优先级共同消费；`mergeUniqueStrings` 与分组拆分 trim 收敛为 `.whitespacesAndNewlines`。
 - 触发路径：`director`、`Director\n` 或未登记同义别名。
 - 根因：消费者仅 trim `.whitespaces`，没有共享 canonical key/alias。
 - 用户影响：重要职位降为优先级 999 并显示原始文本，Hero 可能改选较低重要度职位。
 - 证据：review_b006_a 闭合原样解码、精确查表与排序 999 路径；verify_b005 独立确认大小写/换行双重失配与 Hero 排序影响
 - 跨端结论：TV 行为缺陷已确认；上游 canonical 词表未验证
 - 最小修改方向 / 裁决：G07 单一 canonical job key 解析供翻译和优先级共用；未知保真并最低优先级。
+- 验证：`testJobKeyVariantsResolveToCanonicalKey` / `testJobKeyVariantsAreTranslated` / `testLowercaseDirectorOutranksProducerInHero`；临时还原消费者改动后后两例失败。
+- 处置状态：用户逐条过 P3 时经解释触发链与影响面后，批准随“组一”一并修复。
+- 剩余未验证：上游是否真的产生大小写/换行变体；别名映射表仍为空。
 
 </details>
 
@@ -2426,15 +2433,18 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-045 · P3 · 已确认 · roles-only 职员跨展示不一致</summary>
+<summary>F-045 · P3 · 已修复 · roles-only 职员跨展示不一致</summary>
 
-- 审查单元与位置：B005 复核新增 / S006；StaffManager roles fallback 与 PersonCard
+- 审查单元与位置：B005 复核新增 / S006；`StaffManager.swift:126-141`（投影）、`:228-240`（分组）
+- 修复状态：在 `mergeCrew` 最终 map 统一投影 —— `job` 与 `character` 均无内容时把 `roles` 经 `translateJobs` 投影进 `job`，两个 View 不再各自打补丁；`character` 非空时不覆盖。
 - 触发路径：Person 只有 roles，没有 job/character。
 - 根因：getTopGroupedStaff 用 roles 兜底，processCrew 不投影 roles，卡片只读 job/character。
 - 用户影响：Hero 显示职位，职员卡同一人无副标题。
 - 证据：verify_b005 独立确认 Hero roles 兜底而 processCrew 不投影；verify_b006_b 作为 S006 主审确认触发边界与 PersonCard 旁路
 - 跨端结论：TV 分支差异已确认；真实来源未验证
 - 最小修改方向 / 裁决：在 StaffManager 统一 roles 到展示职位的投影，不在两个 View 分别补丁。
+- 验证：`testRolesOnlyCrewGetsJobProjectionForCardSubtitle`（投影生效）+ `testCharacterSubtitleIsNotOverriddenByRoles`（阴性对照，两侧均通过）；临时还原后前者失败。
+- 处置状态：用户逐条过 P3 时经解释触发链（Hero 有职位、同人卡片空白）与影响面后，批准随“组一”一并修复。
 
 </details>
 
@@ -2478,28 +2488,34 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-052 · P3 · 已确认 · 多值 roles 整体降为未知优先级</summary>
+<summary>F-052 · P3 · 已修复 · 多值 roles 整体降为未知优先级</summary>
 
-- 审查单元与位置：S006；getTopGroupedStaff roles fallback
+- 审查单元与位置：S006；`StaffManager.swift:9-16`（多值取最高优先级）、`:235`
+- 修复状态：`getPriority` 先 `canonicalJobKeys(from:)` 拆分再取各项优先级最小值，`"Director/Writer"` 得 0 而非 999；roles 兜底标签改为逐项规范化后拼接，`["", ""]` 不再生成孤立 `/`。
 - 触发路径：roles `["Director","Writer"]` 且存在其他职位组。
 - 根因：先 join 为 `Director/Writer` 再整体查 jobPriorityMap 得 999，翻译阶段却重新拆分。
 - 用户影响：Producer 等次要职位可能压过包含 Director 的人员；空 roles 还造首尾 `/`。
 - 证据：verify_b006_b 闭合 roles join→priority→translate split；verify_s006 修正为 roles fallback 两人反例并确认
 - 跨端结论：TV 排序缺陷已确认；roles canonical 语义未验证
 - 最小修改方向 / 裁决：roles 元素逐项规范化/过滤，取最小优先级后生成显示文本。
+- 验证：`testRolesFallbackRanksByBestRolePriority`（Director/Writer 压过 Producer）+ `testAllEmptyRolesProducesFallbackLabelNotStraySeparator`；临时还原后两例均失败。
+- 处置状态：用户逐条过 P3 时经解释触发链（Hero 把导演换成制片人）后，批准随“组一”一并修复。本组唯一产生**结果错误**而非纯显示问题的一条。
 
 </details>
 
 <details>
-<summary>F-053 · P3 · 已确认 · mergeCrew 不能消费自身返回值</summary>
+<summary>F-053 · P3 · 已修复 · mergeCrew 不能消费自身返回值</summary>
 
-- 审查单元与位置：S006；mergeCrew 增量 API
+- 审查单元与位置：S006；`StaffManager.swift:45-141`、`TranslationHelper.swift:491-505`
+- 修复状态：采用翻译后显示边界去重使回灌幂等，未删除增量语义（保留 Loadmore API 形状，未来 crew 分页仍可用）；复核确认非空 existing 调用者仍为空，故对当前生产路径行为中性。
 - 触发路径：已翻译返回列表作为 existing，下一页同人再返回同一 raw job。
 - 根因：canonical job 与显示文本复用同一字段，二次合并形成“导演/Director”再翻为“导演/导演”。
 - 用户影响：未来启用 crew 分页后重复职位。
 - 证据：verify_b006_b 构造 Director→导演/Director→导演/导演 链；verify_s006 独立确认条件性且当前无非空 existing 调用者
 - 跨端结论：潜伏 API 缺陷已确认；当前无用户路径
 - 最小修改方向 / 裁决：不用则删除增量语义；启用则 canonical/display 分离。
+- 验证：`testMergeCrewIsIdempotentOverItsOwnOutput` + `testMergeCrewKeepsExistingPositionStable`；临时还原后两例均失败（分别得「导演/导演」「制片人/制片人」）。
+- 处置状态：用户逐条过 P3 时经说明“当前无调用者、属潜伏缺陷”后批准修，未删除增量语义。
 
 </details>
 

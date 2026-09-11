@@ -2,22 +2,27 @@ import Foundation
 
 struct StaffManager {
   // 职位优先级列表（数字越小优先级越高）
+  /// 解析职位优先级。`"/"` 分隔的多职位文本取其中**最高**优先级（数字最小），
+  /// 避免 `roles` 兜底把 `"Director/Writer"` 整体当作未知职位而判为 999。
+  /// key 先经 `canonicalJobKeys(from:)` 规范化，大小写/空白变体不再绕过词表。
+  /// 未登记的职位仍保底最低优先级，原文保留用于显示。
   private static func getPriority(for job: String) -> Int {
-    if let priority = jobPriorityMap[job] {
-      return priority
+    let keys = canonicalJobKeys(from: job)
+    guard !keys.isEmpty else {
+      return 999  // 未在列表中的职位，给予最低优先级
     }
-    return 999  // 未在列表中的职位，给予最低优先级
+    return keys.map { jobPriorityMap[$0] ?? 999 }.min() ?? 999
   }
 
   /// 通用辅助方法：将两个由 "/" 分隔的字符串合并去重，防止叠字重复和穿透
   private static func mergeUniqueStrings(existing: String, new: String) -> String {
     var items = existing.components(separatedBy: "/")
-      .map { $0.trimmingCharacters(in: .whitespaces) }
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
       .filter { !$0.isEmpty }
     var itemSet = Set(items)
 
     let newItems = new.components(separatedBy: "/")
-      .map { $0.trimmingCharacters(in: .whitespaces) }
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
       .filter { !$0.isEmpty }
 
     for item in newItems {
@@ -52,9 +57,8 @@ struct StaffManager {
 
     // 2. 遍历新批次数据
     for person in newBatch {
-      let currentJobs = person.job?.components(separatedBy: "/") ?? []
-      let currentMinPriority =
-        currentJobs.map { getPriority(for: $0.trimmingCharacters(in: .whitespaces)) }.min() ?? 999
+      // getPriority 自身即按 "/" 拆分并取最高优先级，无需在此重复拆分。
+      let currentMinPriority = getPriority(for: person.job ?? "")
 
       if let index = idToIndex[person.id] {
         // [场景 A] 该人员在【旧数据】中已存在：仅合并他的新职位(job keys)，绝对不改变他在旧列表中的 UI 排序
@@ -119,7 +123,22 @@ struct StaffManager {
       if let jobKeys = person.job {
         // job 字段此时存储的是英文 key, e.g., "Director/Writer"
         // 我们需要把它翻译成当前选择的语言
-        translatedPerson.job = TranslationHelper.translateJobs(jobString: jobKeys)
+        let translated = TranslationHelper.translateJobs(jobString: jobKeys)
+        translatedPerson.job = translated.isEmpty ? nil : translated
+      }
+
+      // F-045：数据源（豆瓣/Bangumi）可能只提供 roles 而没有 job/character。
+      // Hero 的 roles 兜底分支会把它当职位显示，但卡片只读 job/character，
+      // 同一个人在两处不一致。这里在 StaffManager 边界统一投影，避免两个 View 各自打补丁；
+      // 仅当 job 与 character 都没有内容时才回退，不覆盖已有的职责副标题。
+      if translatedPerson.job?.isEmpty != false,
+        translatedPerson.character?.isEmpty != false,
+        let roles = person.roles
+      {
+        let label = TranslationHelper.translateJobs(jobString: roles.joined(separator: "/"))
+        if !label.isEmpty {
+          translatedPerson.job = label
+        }
       }
       return translatedPerson
     }
@@ -184,13 +203,13 @@ struct StaffManager {
 
     // 1. 按英文职位 key 对员工进行分组，并保留顺序
     for staff in persons {
-      guard let jobKeys = staff.job, !jobKeys.isEmpty, let name = staff.name, !name.isEmpty else {
+      guard let rawJobs = staff.job, let name = staff.name, !name.isEmpty else {
         continue
       }
 
-      let individualJobKeys = jobKeys.components(separatedBy: "/")
-        .map { $0.trimmingCharacters(in: .whitespaces) }
-        .filter { !$0.isEmpty }
+      // 统一走 canonical 解析：清理空白/换行、大小写归一、丢弃空段并去重。
+      // 全空白职位在此解析为空列表，与下游 getPriority 的未知保底保持一致。
+      let individualJobKeys = canonicalJobKeys(from: rawJobs)
 
       for key in individualJobKeys {
         if !(seenNamesPerJob[key, default: []].contains(name)) {
@@ -205,16 +224,17 @@ struct StaffManager {
       for staff in persons {
         guard let name = staff.name, !name.isEmpty else { continue }
 
-        // 优先级：角色名 > 原始职位 > 角色列表 > 兜底 “职员”
+        // 优先级：角色名 > 原始职位 > 角色列表 > 兜底 “职员”。
+        // 能进入本兜底分支，说明没有任何人产出过 canonical 职位分组，
+        // 因此 `staff.job` 在此必然解析不出 key（全空白等），显示标签实际由 roles 决定；
+        // 逐项规范化后再拼接，也让 `["", ""]` 这类空段不再生成孤立的 "/" 标签。
         let jobLabel: String
         if let character = staff.character, !character.isEmpty {
           jobLabel = character
-        } else if let job = staff.job, !job.isEmpty {
-          jobLabel = job
-        } else if let rolesStr = staff.roles?.joined(separator: "/"), !rolesStr.isEmpty {
-          jobLabel = rolesStr
         } else {
-          jobLabel = "职员"
+          let label = canonicalJobKeys(from: staff.roles?.joined(separator: "/") ?? "")
+            .joined(separator: "/")
+          jobLabel = label.isEmpty ? "职员" : label
         }
 
         // 统一进行姓名查重优化，防止同一分类下出现重复姓名，保持逻辑一致

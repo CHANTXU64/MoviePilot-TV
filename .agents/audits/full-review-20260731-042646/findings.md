@@ -53,20 +53,20 @@
 | F-037 | 未验证 | P3 | B006-A | `TranslationHelper.languageName` 与 original_language 展示链 | ISO/BCP 47 形态未经规范化而退化为原码 | review_b006_a 核对映射、唯一调用者、模型与标准标签边界 | verify_b006_a_retry 确认行为但函数只承诺 ISO 639-1，扩展契约缺失 | 上游字段格式及 BCP 47/别名要求未验证 |
 | F-038 | 已确认 | P3 | B006-A | TranslationHelper 与详情元数据拼接 | 空白原语种进入详情分隔串 | review_b006_a 闭合 decodeIfPresent→原样回退→append 链 | verify_b006_a_retry 独立确认空 Text/尾随分隔及通用元数据范围 | TV 展示不变量缺陷已确认；真实 payload 频率未验证 |
 | F-039 | 用户决定跳过 | P2 | S004→V011-C→G04 | `SearchViewModel.SharedMediaFetcher` 取消链 | 单waiter取消不应误伤共享请求，但整个search session废弃后仍没有aggregate cancel，底层请求、buffer与cursor继续 | 既有双审闭合unstructured task；全新G04 clean-room复核收窄共享语义并升级P2 | 不修改共享取消链，避免误伤仍有效的电影/电视剧waiter | 旧请求结果已有generation屏障；用户接受慢请求继续占用资源的影响 |
-| F-040 | 已确认 | P3 | B005 | JobRegistry/StaffManager/TranslationHelper | 不同职位键翻译后产生重复职位文本 | review_b006_a 确认 Cinematography/Camera 同译与原 key 去重顺序 | verify_b005 独立确认当前可见路径为职员卡片并收窄 Hero 边界 | TV 显示缺陷已确认；真实 payload 组合未验证 |
-| F-041 | 已确认 | P3 | B005 | Job key 到翻译/优先级链 | 职位键变体同时失去翻译和优先级 | review_b006_a 闭合原样解码、精确查表与排序 999 路径 | verify_b005 独立确认大小写/换行双重失配与 Hero 排序影响 | TV 行为缺陷已确认；上游 canonical 词表未验证 |
+| F-040 | 已修复 | P3 | B005 | `TranslationHelper.swift:491-505`（显示边界去重） | 不同职位键翻译后产生重复职位文本 | review_b006_a 确认 Cinematography/Camera 同译与原 key 去重顺序 | verify_b005 独立确认当前可见路径为职员卡片并收窄 Hero 边界 | TV 显示缺陷已确认；修复为翻译后显示边界去重，`Cinematography/Camera` 收敛为「摄影」，用户批准 |
+| F-041 | 已修复 | P3 | B005 | `JobRegistry.swift:113-149`（canonical 解析）、`StaffManager.swift:9-16`（优先级） | 职位键变体同时失去翻译和优先级 | review_b006_a 闭合原样解码、精确查表与排序 999 路径 | verify_b005 独立确认大小写/换行双重失配与 Hero 排序影响 | TV 行为缺陷已确认；修复为单一 canonical key 解析供翻译与优先级共用，未知 key 保真且保底 999，用户批准 |
 | F-042 | 未验证 | P3 | B006-B | 国家映射/ProductionCountry/详情显示 | 非 canonical 国家码形态未经规范化 | review_b006_b_retry 核对 249 键、两个入口与多态解码 | verify_b006_b 确认 canonical alpha-2 全覆盖，宽容输入是否属契约无法判定 | 上游形态/alpha-3/别名要求未验证 |
 | F-043 | 已确认 | P3 | B006-B | ProductionCountry 多态解码与详情拼接 | 空/畸形国家元素生成空白分隔符 | review_b006_b_retry 闭合 nil模型→空显示→joined 链 | verify_b006_b 独立确认叶子与内外分隔两层空值路径 | TV 展示不变量缺陷已确认；真实 payload 未验证 |
 | F-044 | 已确认 | P3 | B005 复核新增 / B006-C | Search 人物行与 raw job | 人物搜索直接展示原始 job，绕过统一翻译 | verify_b005 独立确认 canonical Director 也会显示英文 | verify_b005 后续 B006-C 主审重走 searchPerson→SearchView 旁路并支持 | TV 旁路缺陷已确认；搜索响应 job 非空频率未验证 |
-| F-045 | 已确认 | P3 | B005 复核新增 / S006 | StaffManager roles fallback 与 PersonCard | roles-only 职员在 Hero 与卡片职位显示不一致 | verify_b005 独立确认 Hero roles 兜底而 processCrew 不投影 | verify_b006_b 作为 S006 主审确认触发边界与 PersonCard 旁路 | TV 分支差异已确认；真实来源未验证 |
+| F-045 | 已修复 | P3 | B005 复核新增 / S006 | `StaffManager.swift:126-141`（投影）、`:228-240`（分组） | roles-only 职员在 Hero 与卡片职位显示不一致 | verify_b005 独立确认 Hero roles 兜底而 processCrew 不投影 | verify_b006_b 作为 S006 主审确认触发边界与 PersonCard 旁路 | TV 分支差异已确认；修复在 StaffManager 边界统一投影 roles，job/character 均空时才回退，用户批准 |
 | F-046 | 已确认 | P3 | B006-C | MediaGenre/translateGenre/详情元数据 | 类型名未规范化且空结果仍进入详情 | verify_b005 作为 B006-C 主审闭合多态解码、精确查表与 joined 链 | verify_b006_c 独立确认 trim/filter 边界并收窄大小写/别名 | TV 展示不变量缺陷已确认；真实输入频率未验证 |
 | F-047 | 用户决定跳过 | P1 | B007→V012-B/C→W013-B | 全局/分季/Header 取消文案与删除接口 | 当前后端已对所有身份按season筛选；剩余为同媒体同季多group/多owner时文案只展示一条，媒体级删除却可能命中多条 | 当前TV、Web与后端调用链重新闭合；旧“非TMDB跨季删除”证据已失效 | 当前Web共享同一媒体级删除行为 | 用户决定跳过，不做TV单端增强 |
 | F-048 | 用户决定跳过 | P1 | B007→V012-B/C→G02 | 取消确认准备与执行 | 确认后重新解析target且未冻结精确订阅ID | 当前Web同样先通用确认、再读取当前媒体并执行媒体级删除 | TV/Web行为一致 | 用户决定跳过，不做TV单端增强 |
 | F-049 | 已修复 | P2 | B007→V012-B→G08 | Home/Header 取消结果 | DELETE false或异常被静默吞掉，Home 直接丢弃 Bool 返回 | 既有双审闭合结果出口；G08 三方裁决确认 Home 稳定丢弃 false 并升级 P2 | Home失败/异常与Header刷新后仍订阅统一通知；远端已删除且UI收敛时静默 | 已补业务失败、详情收敛与通知接线测试；完整验证通过 |
 | F-050 | 已确认 | P3 | S006 | MediaDetailViewModel Hero 演员截断 | Hero 演员先截断再去重，非空不足四人不补足 | verify_b006_b 闭合 prefix(4)→processActors 与分页替换条件 | verify_s006 独立确认影响仅 Hero 并修正 W008-C 路由 | TV 顺序缺陷已确认；真实重复分布未验证 |
 | F-051 | 已确认 | P3 | S006 | StaffManager.hasAvatar 与 Person.imageURLs | 头像排序判定与实际可渲染图片不一致 | verify_b006_b 以 PersonDecoding 多组反例闭合 | verify_s006 独立确认只影响 crew 新增项排序及 source-aware 反例 | TV 排序规则缺陷已确认；真实来源组合未验证 |
-| F-052 | 已确认 | P3 | S006 | getTopGroupedStaff roles fallback | 多值 roles 被拼成单一 key 后优先级 999 | verify_b006_b 闭合 roles join→priority→translate split | verify_s006 修正为 roles fallback 两人反例并确认 | TV 排序缺陷已确认；roles canonical 语义未验证 |
-| F-053 | 已确认 | P3 | S006 | mergeCrew 增量 API | 已翻译返回值不能安全作为下一批 existing | verify_b006_b 构造 Director→导演/Director→导演/导演 链 | verify_s006 独立确认条件性且当前无非空 existing 调用者 | 潜伏 API 缺陷已确认；当前无用户路径 |
+| F-052 | 已修复 | P3 | S006 | `StaffManager.swift:9-16`（多值取最高优先级）、`:235` | 多值 roles 被拼成单一 key 后优先级 999 | verify_b006_b 闭合 roles join→priority→translate split | verify_s006 修正为 roles fallback 两人反例并确认 | TV 排序缺陷已确认；修复为多值按项规范化后取最高优先级，空 roles 不再造孤立 `/`，用户批准 |
+| F-053 | 已修复 | P3 | S006 | `StaffManager.swift:45-141`、`TranslationHelper.swift:491-505` | 已翻译返回值不能安全作为下一批 existing | verify_b006_b 构造 Director→导演/Director→导演/导演 链 | verify_s006 独立确认条件性且当前无非空 existing 调用者 | 潜伏 API 缺陷已确认；修复为翻译后显示边界去重使回灌幂等，未启用增量语义仍保留，用户批准 |
 | F-054 | 已修复（`58c7e81`） | P1 | B007 复核新增 / M001-F→G02 | SubscriptionHandler Bangumi-only 取消 | 历史实现会丢失精确身份并改走集合式媒体删除 | 当前TV `58c7e81`已保留canonical/Bangumi/AniList/legacy身份；当前后端按身份与season筛选 | 当前实现与上游合同重新核对 | 修复已完成；旧部署版本未验证 |
 | F-055 | 已确认 | P3 | S006 复核新增 / M001-G | Search 最佳人物结果头像准入 | 使用 TMDB profile_path 而非 source-aware imageURLs.profile | verify_s006 以 Douban 有 avatar 无 profile_path 反例闭合 | review_m001_g 独立重走 Douban 搜索、评分准入与卡片图片链 | TV 跨来源准入差异已确认；Web 排名未验证 |
 | F-056 | 已驳回 | P3 | S006→G07→F-050 | Hero 演员姓名展示 | 不过滤 nil/空 name 且首四项后不补位的机制成立，但与F-050同属过滤/去重后再截断的取样顺序 | 既有双审确认；G07第三裁将重复、空名和补位合成一个Hero选人根因 | 并入F-050，不驳回机制；全量processActors后过滤空名再prefix(4) | 驳回重复编号；真实人物分布未验证 |
@@ -840,27 +840,34 @@
 
 ### F-040：不同职位键翻译后重复显示
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P3
-- 位置：`JobRegistry` 的 Cinematography/Camera、`StaffManager` 原 key 去重、TranslationHelper 翻译
+- 位置：`MoviePilot-TV/Services/TranslationHelper.swift:491-505`（显示边界去重）、`StaffManager.swift:126-141`
 - 触发路径：同一人员同时携带两个 key，或重复记录分别携带。
 - 根因：原始 key 阶段认为不同，翻译后都为“摄影”且不再去重。
 - 用户影响：职员卡片显示“摄影/摄影”，未来职位分组也可能同名重复。
 - 主审证据：两个映射值一致，processCrew 保留两个原始 key 后逐项翻译。
 - 最小方向：保留原始 key/优先级，在最终显示边界稳定去重；若产品要区分则改词表。
 - 独立复核：verify_b005 确认 PersonCard 可见重复；当前 Hero 只取一组，不能夸大为 Hero 必现。真实组合/词义未验证。
+- 修复状态：按“最小方向”取显示边界去重 —— `TranslationHelper.translateJobs` 先经 `canonicalJobKeys(from:)` 规范化，再对**翻译结果**去重。原始 key 阶段的去重（`mergeUniqueStrings`）保持不变，故优先级仍按各原始 key 独立计算，未被显示去重影响。同一去重同时闭合 F-053 的回灌叠加。
+- 验证：`StaffJobNormalizationTests` 中 `testCinematographyAndCameraCollapseToSingleDisplayName`（单条记录含两 key）与 `testSamePersonWithBothCameraKeysAsSeparateRecordsCollapses`（两条记录合并）均断言显示为「摄影」。临时还原消费者改动后两例均失败，确认测试捕获本缺陷。
+- 处置状态：用户逐条过 P3 时经解释触发链（职员行 PersonCard 读经 StaffManager 写回并翻译的 job 字段）与影响面后，批准随“组一”一并修复。
 
 ### F-041：职位键变体绕过翻译与优先级
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P3
-- 位置：JobRegistry 两张派生表、StaffManager/TranslationHelper 精确查找
+- 位置：`MoviePilot-TV/Models/JobRegistry.swift:113-149`（canonical 解析）、`StaffManager.swift:9-16`（优先级）、`TranslationHelper.swift:491-505`（翻译）
 - 触发路径：`director`、`Director\n` 或未登记同义别名。
 - 根因：消费者仅 trim `.whitespaces`，没有共享 canonical key/alias。
 - 用户影响：重要职位降为优先级 999 并显示原始文本，Hero 可能改选较低重要度职位。
 - 主审证据：Person.job 原样解码，翻译与优先级共同消费未经规范化字符串。
 - 最小方向：G07 单一 canonical job key 解析供翻译和优先级共用；未知保真并最低优先级。
 - 独立复核：verify_b005 确认大小写/换行同时绕过两张表并可改变 Hero 选择，维持 P3；别名映射与上游保证未验证。
+- 修复状态：按“最小方向”在 `JobRegistry` 增加 `canonicalJobKey(for:)` / `canonicalJobKeys(from:)` 单一解析入口（清理 `whitespacesAndNewlines` → 精确匹配 → 大小写不敏感匹配 → 未知原样保真），翻译与优先级共同消费该入口。`getPriority` 改为对规范化后的 key 查表；`mergeUniqueStrings` 与分组拆分的 trim 从 `.whitespaces` 收敛为 `.whitespacesAndNewlines`。未登记别名仍保真显示、保底 999，不静默丢弃上游信息。
+- 验证：`testJobKeyVariantsResolveToCanonicalKey` 覆盖大小写/换行/首尾空白/未知保真/全空白，`testJobKeyVariantsAreTranslated` 覆盖翻译侧，`testLowercaseDirectorOutranksProducerInHero` 覆盖 Hero 排序侧。临时还原消费者改动后后两例失败（`director` 显示原文且被 Producer 压过），确认修复必要。
+- 处置状态：用户逐条过 P3 时经解释触发链（中文界面出现英文职位、导演被次要职位顶掉）与影响面后，批准随“组一”一并修复。
+- 剩余未验证：上游是否真的产生大小写/换行变体；别名映射表仍为空，未登记别名只在显示层保真。
 
 ### F-042：国家码形态未统一规范化
 
@@ -911,6 +918,9 @@
 - G07阶段性升级建议：两代理从当前Douban链确认`roles`已解码且Hero可消费，但PersonCard稳定只读job/character，真实职员卡职责副标题丢失；当时建议P2。纯job canonical链正常、混合job/roles仅插件候选；下行第三裁已将最终等级定为P3。
 - G07第三裁：verify_a001_h确认Douban `roles`投影缺口独立成立，但当前Web普通PersonCard同样只显示character，且真实“无character仅roles”比例未验证；维持P3，卡片subtitle只在job/character均空时回退去空去重roles。
 - 剩余未验证：真实 Douban/Bangumi roles 形态与频率。
+- 修复状态：按“最小方向”在 `StaffManager.mergeCrew` 的最终 map（`StaffManager.swift:126-141`）统一投影 —— 当 `job` 与 `character` **均无内容**时，把 `roles` 经 `translateJobs` 投影进 `job`，两个 View 不再各自打补丁。判据严格贴合第三裁表述，`character` 非空时不覆盖副标题。`getTopGroupedStaff` 的 roles 兜底分组同步改为逐项规范化后拼接（`StaffManager.swift:228-240`）。
+- 验证：`testRolesOnlyCrewGetsJobProjectionForCardSubtitle` 断言 roles-only 职员经 `processCrew` 后 `job == "导演"`；`testCharacterSubtitleIsNotOverriddenByRoles` 作为阴性对照断言 `character` 非空时 `job` 仍为 nil。临时还原后前者失败、后者两侧均通过，确认投影生效且未越界。
+- 处置状态：用户逐条过 P3 时经解释触发链（Hero 有职位、同人卡片空白）与影响面后，批准随“组一”一并修复。
 
 ### F-046：类型名未规范化且空结果进入详情元数据
 
@@ -1012,6 +1022,9 @@
 - 用户影响：Producer 等次要职位可能压过包含 Director 的人员；空 roles 还造首尾 `/`。
 - 最小方向：roles 元素逐项规范化/过滤，取最小优先级后生成显示文本。
 - 独立复核：verify_s006 以 roles-only Director/Writer 对 Producer 的 fallback 反例确认，维持 P3。
+- 修复状态：按“最小方向”把 `getPriority` 改为先 `canonicalJobKeys(from:)` 拆分，再取各项优先级的**最小值**（`StaffManager.swift:9-16`），因此 `"Director/Writer"` 得 0 而非 999；`mergeCrew` 内的单批优先级同样收敛到该入口，去掉了此前的逐项 trim 后再查表。显示文本侧，roles 兜底标签改为逐项规范化后再 `/` 拼接（`StaffManager.swift:235`），`["", ""]` 不再生成孤立的 `/` 分组标签。
+- 验证：`testRolesFallbackRanksByBestRolePriority` 以 roles-only 的 Director/Writer 对 Producer 反例断言 Hero 取「导演/编剧」；`testAllEmptyRolesProducesFallbackLabelNotStraySeparator` 断言空 roles 落到「职员」而非 `/`。临时还原后两例均失败，确认修复必要。
+- 处置状态：用户逐条过 P3 时经解释触发链（Hero 把导演换成制片人）与影响面后，批准随“组一”一并修复。本组内唯一会产生**结果错误**（而非纯显示问题）的一条。
 
 ### F-053：mergeCrew 不能消费自身返回值
 
@@ -1024,6 +1037,9 @@
 - 当前边界：没有非空 existing 生产调用者。
 - 最小方向：不用则删除增量语义；启用则 canonical/display 分离。
 - 独立复核：verify_s006 确认条件性 P3；当前无非空 existing 生产调用者，修复时可优先删除未用增量语义。
+- 修复状态：采用“翻译后显示边界去重”而非删除增量语义 —— `translateJobs` 对**翻译结果**去重，使「已翻译 existing + 原始 key」回灌后收敛回单一显示名。该选型保留 `mergeCrew(existing:newBatch:)` 的 Loadmore 增量 API 形状（未来 crew 分页仍可用），同时不需要把 `job` 拆成 canonical/display 两个字段。复核确认 `mergeCrew` 的非空 existing 调用者仍为空，故本修复对当前生产路径是行为中性的。
+- 验证：`testMergeCrewIsIdempotentOverItsOwnOutput` 断言 `processCrew` 结果回灌同一原始 key 后 `job` 仍为「导演」；`testMergeCrewKeepsExistingPositionStable` 断言已翻译结果回灌不改变既有人员顺序与职位文本。临时还原后两例均失败（分别得「导演/导演」与「制片人/制片人」），确认修复必要。
+- 处置状态：用户逐条过 P3 时经说明“当前无调用者、属潜伏 API 缺陷”后，批准随“组一”一并修复，未删除增量语义。
 
 ### F-054：Handler 丢弃 Bangumi 精确订阅 ID
 
