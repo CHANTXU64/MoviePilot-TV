@@ -506,35 +506,43 @@ struct TranslationHelper {
   /**
    获取语言代码对应的本地化名称。
    - Parameter code: ISO 639-1 语言代码 (例如 "en", "zh").
-   - Returns: 根据 `currentLanguage` 设置返回对应的翻译，如果找不到则返回原始代码。
+   - Returns: 根据 `currentLanguage` 设置返回对应的翻译，如果找不到则返回原始代码；
+     全为空白时返回空串（由 `MediaMetadataText` 统一丢弃，不进入显示行）。
+   - Note: 查表前先清理空白/换行，带空白的代码不再绕过词表（同 F-041 的 key 归一）。
    */
   static func languageName(for code: String) -> String {
-    return languageNames[code]?[currentLanguage] ?? code
+    let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return "" }
+    return languageNames[trimmed]?[currentLanguage] ?? trimmed
   }
 
   /**
    获取国家代码对应的本地化名称。
    - Parameter code: ISO 3166-1 国家代码 (例如 "US", "CN").
-   - Returns: 根据 `currentLanguage` 设置返回对应的翻译，如果找不到则返回原始代码。
+   - Returns: 根据 `currentLanguage` 设置返回对应的翻译，如果找不到则返回原始代码；
+     全为空白时返回空串。
    */
   static func countryName(for code: String) -> String {
-    return countryNames[code]?[currentLanguage] ?? code
+    let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return "" }
+    return countryNames[trimmed]?[currentLanguage] ?? trimmed
   }
 
   /**
    获取 `ProductionCountry` 对象对应的本地化名称。
    它会优先使用 `iso_3166_1` 代码进行查找和翻译。
    - Parameter country: `ProductionCountry` 对象。
-   - Returns: 根据 `currentLanguage` 设置返回对应的翻译。如果代码无法翻译，则回退到 `country.name`。
+   - Returns: 根据 `currentLanguage` 设置返回对应的翻译。代码无法翻译时回退到 `country.name`；
+     名称也缺失时**保留未知 code 原文**，不静默丢弃上游信息；两者都为空才返回空串。
    */
   static func countryName(for country: ProductionCountry) -> String {
-    if let code = country.iso_3166_1, !code.isEmpty {
-      if let translatedName = countryNames[code]?[currentLanguage] {
-        return translatedName
-      }
+    let code = country.iso_3166_1?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !code.isEmpty, let translatedName = countryNames[code]?[currentLanguage] {
+      return translatedName
     }
-    // 如果无法通过 code 翻译，则直接返回 API 提供的 name 字段
-    return country.name ?? ""
+    // 如果无法通过 code 翻译，则优先用 API 提供的 name 字段
+    let name = country.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return name.isEmpty ? code : name
   }
 
   // MARK: - 类型翻译
@@ -545,7 +553,15 @@ struct TranslationHelper {
     "Action & Adventure": [.zhHans: "动作 & 冒险", .en: "Action & Adventure", .zhHant: "動作 & 冒險"],
   ]
 
+  /**
+   获取类型名称对应的本地化名称。
+   - Parameter genreName: 数据源返回的类型名称 (例如 "Sci-Fi & Fantasy").
+   - Returns: 根据 `currentLanguage` 设置返回对应的翻译；未知的非空名称**保真**返回（只做 trim）；
+     全为空白时返回空串，由 `MediaMetadataText` 统一丢弃，不再拼出 `电影 · ` 这类尾随分隔符。
+   */
   static func translateGenre(for genreName: String) -> String {
-    genreTranslations[genreName]?[currentLanguage] ?? genreName
+    let trimmed = genreName.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return "" }
+    return genreTranslations[trimmed]?[currentLanguage] ?? trimmed
   }
 }

@@ -51,15 +51,15 @@
 | F-035 | 用户决定跳过 | P2 | S004→V011-C→G04 | Paginator/Search in-flight Task 生命周期 | Task跨await强持有owner且页面离场无owner级取消；显式cancel和新搜索的generation防旧发布本身有效 | 既有双审闭合强持有；全新G04 clean-room复核收窄为owner离场生命周期并升级P2 | owner/session级显式取消共享搜索；不重写已有generation屏障 | 用户接受慢请求离页后继续占用资源的低频影响，不再处理 |
 | F-036 | 已修复 | P2 | S004→V011-D→G07 | Search 人物与 TransferHistory processor | 只去重旧 raw ID，漏同批最终 ID并可跨 source 误合并 | 既有processor复核闭合不可变seen；G07双审及第三裁确认合法跨source聚合与批内重复 | 使用最终`Person.id`可变seen并在reset清空；Transfer批内同步写入seen | 已补人物身份去重及同一Paginator刷新回归测试；完整验证通过 |
 | F-037 | 未验证 | P3 | B006-A | `TranslationHelper.languageName` 与 original_language 展示链 | ISO/BCP 47 形态未经规范化而退化为原码 | review_b006_a 核对映射、唯一调用者、模型与标准标签边界 | verify_b006_a_retry 确认行为但函数只承诺 ISO 639-1，扩展契约缺失 | 上游字段格式及 BCP 47/别名要求未验证 |
-| F-038 | 已确认 | P3 | B006-A | TranslationHelper 与详情元数据拼接 | 空白原语种进入详情分隔串 | review_b006_a 闭合 decodeIfPresent→原样回退→append 链 | verify_b006_a_retry 独立确认空 Text/尾随分隔及通用元数据范围 | TV 展示不变量缺陷已确认；真实 payload 频率未验证 |
+| F-038 | 已修复 | P3 | B006-A | TranslationHelper 语言叶子与 `MediaMetadataText.secondaryLine` | 空白原语种进入详情分隔串 | review_b006_a 闭合 decodeIfPresent→原样回退→append 链 | verify_b006_a_retry 独立确认空 Text/尾随分隔及通用元数据范围 | TV 展示不变量缺陷已确认；真实 payload 频率未验证 |
 | F-039 | 用户决定跳过 | P2 | S004→V011-C→G04 | `SearchViewModel.SharedMediaFetcher` 取消链 | 单waiter取消不应误伤共享请求，但整个search session废弃后仍没有aggregate cancel，底层请求、buffer与cursor继续 | 既有双审闭合unstructured task；全新G04 clean-room复核收窄共享语义并升级P2 | 不修改共享取消链，避免误伤仍有效的电影/电视剧waiter | 旧请求结果已有generation屏障；用户接受慢请求继续占用资源的影响 |
 | F-040 | 已修复 | P3 | B005 | `TranslationHelper.swift:491-505`（显示边界去重） | 不同职位键翻译后产生重复职位文本 | review_b006_a 确认 Cinematography/Camera 同译与原 key 去重顺序 | verify_b005 独立确认当前可见路径为职员卡片并收窄 Hero 边界 | TV 显示缺陷已确认；修复为翻译后显示边界去重，`Cinematography/Camera` 收敛为「摄影」，用户批准 |
 | F-041 | 已修复 | P3 | B005 | `JobRegistry.swift:113-149`（canonical 解析）、`StaffManager.swift:9-16`（优先级） | 职位键变体同时失去翻译和优先级 | review_b006_a 闭合原样解码、精确查表与排序 999 路径 | verify_b005 独立确认大小写/换行双重失配与 Hero 排序影响 | TV 行为缺陷已确认；修复为单一 canonical key 解析供翻译与优先级共用，未知 key 保真且保底 999，用户批准 |
 | F-042 | 未验证 | P3 | B006-B | 国家映射/ProductionCountry/详情显示 | 非 canonical 国家码形态未经规范化 | review_b006_b_retry 核对 249 键、两个入口与多态解码 | verify_b006_b 确认 canonical alpha-2 全覆盖，宽容输入是否属契约无法判定 | 上游形态/alpha-3/别名要求未验证 |
-| F-043 | 已确认 | P3 | B006-B | ProductionCountry 多态解码与详情拼接 | 空/畸形国家元素生成空白分隔符 | review_b006_b_retry 闭合 nil模型→空显示→joined 链 | verify_b006_b 独立确认叶子与内外分隔两层空值路径 | TV 展示不变量缺陷已确认；真实 payload 未验证 |
+| F-043 | 已修复 | P3 | B006-B | ProductionCountry 多态解码与 `MediaMetadataText.secondaryLine` | 空/畸形国家元素生成空白分隔符 | review_b006_b_retry 闭合 nil模型→空显示→joined 链 | verify_b006_b 独立确认叶子与内外分隔两层空值路径 | TV 展示不变量缺陷已确认；真实 payload 未验证 |
 | F-044 | 已确认 | P3 | B005 复核新增 / B006-C | Search 人物行与 raw job | 人物搜索直接展示原始 job，绕过统一翻译 | verify_b005 独立确认 canonical Director 也会显示英文 | verify_b005 后续 B006-C 主审重走 searchPerson→SearchView 旁路并支持 | TV 旁路缺陷已确认；搜索响应 job 非空频率未验证 |
 | F-045 | 已修复 | P3 | B005 复核新增 / S006 | `StaffManager.swift:126-141`（投影）、`:228-240`（分组） | roles-only 职员在 Hero 与卡片职位显示不一致 | verify_b005 独立确认 Hero roles 兜底而 processCrew 不投影 | verify_b006_b 作为 S006 主审确认触发边界与 PersonCard 旁路 | TV 分支差异已确认；修复在 StaffManager 边界统一投影 roles，job/character 均空时才回退，用户批准 |
-| F-046 | 已确认 | P3 | B006-C | MediaGenre/translateGenre/详情元数据 | 类型名未规范化且空结果仍进入详情 | verify_b005 作为 B006-C 主审闭合多态解码、精确查表与 joined 链 | verify_b006_c 独立确认 trim/filter 边界并收窄大小写/别名 | TV 展示不变量缺陷已确认；真实输入频率未验证 |
+| F-046 | 已修复 | P3 | B006-C | MediaGenre/translateGenre/`MediaMetadataText.primaryLine` | 类型名未规范化且空结果仍进入详情 | verify_b005 作为 B006-C 主审闭合多态解码、精确查表与 joined 链 | verify_b006_c 独立确认 trim/filter 边界并收窄大小写/别名 | TV 展示不变量缺陷已确认；真实输入频率未验证 |
 | F-047 | 用户决定跳过 | P1 | B007→V012-B/C→W013-B | 全局/分季/Header 取消文案与删除接口 | 当前后端已对所有身份按season筛选；剩余为同媒体同季多group/多owner时文案只展示一条，媒体级删除却可能命中多条 | 当前TV、Web与后端调用链重新闭合；旧“非TMDB跨季删除”证据已失效 | 当前Web共享同一媒体级删除行为 | 用户决定跳过，不做TV单端增强 |
 | F-048 | 用户决定跳过 | P1 | B007→V012-B/C→G02 | 取消确认准备与执行 | 确认后重新解析target且未冻结精确订阅ID | 当前Web同样先通用确认、再读取当前媒体并执行媒体级删除 | TV/Web行为一致 | 用户决定跳过，不做TV单端增强 |
 | F-049 | 已修复 | P2 | B007→V012-B→G08 | Home/Header 取消结果 | DELETE false或异常被静默吞掉，Home 直接丢弃 Bool 返回 | 既有双审闭合结果出口；G08 三方裁决确认 Home 稳定丢弃 false 并升级 P2 | Home失败/异常与Header刷新后仍订阅统一通知；远端已删除且UI收敛时静默 | 已补业务失败、详情收敛与通知接线测试；完整验证通过 |
@@ -813,16 +813,18 @@
 
 ### F-038：空白语言值穿透详情元数据
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P3
-- 位置：`MoviePilot-TV/Services/TranslationHelper.swift:502-504`、`MediaDetailView` 元数据拼接
+- 位置：`MoviePilot-TV/Services/TranslationHelper.swift:506-521`（`languageName(for:)` 先 trim 再查表）、`MoviePilot-TV/ViewModels/MediaMetadataText.swift:35-72`（`secondaryLine` 按显示值归一后才 append）
 - 触发路径：original_language 为 empty/空格/换行。
 - 根因：模型接受任意非 nil 字符串，helper 原样回退，调用者只判 non-nil 就 append。
 - 用户影响：尾随/空白分隔点，或创建空 Text 行。
 - 主审证据：decodeIfPresent 不过滤空白，显示数组按元素数量判断。
 - 最小方向：元数据 builder 统一 trim/过滤空显示值，不只补语言分支；release_date/year/国家名一并回溯。
 - 独立复核：verify_b006_a_retry 确认空 Text 与尾随分隔，维持 P3。
-
+- 修复状态：按“最小方向”在**元数据 builder 边界**统一归一，不只补语言分支 —— 新增 `MediaMetadataText`（`MoviePilot-TV/ViewModels/MediaMetadataText.swift`），把详情页两行元数据的组装从 `MediaDetailView` 的内联闭包中提取出来，所有元素都过 `displayValue(_:)`（trim `whitespacesAndNewlines`，空结果返回 nil 即丢弃）。`original_language`、`release_date`、`year`、`category`、`type` 五个标量字段全部回溯到同一判据；叶子层 `TranslationHelper.languageName(for:)` 同步改为先 trim 再查表（带空白的代码不再绕过词表），全空白输入返回空串交由 builder 丢弃。
+- 验证：`MediaMetadataTextTests` 中 `testBlankOriginalLanguageProducesNoElement`（`""` / `"   "` / `"\n"` 三种载荷均不产出元素，两行皆空）、`testBlankReleaseDateFallsBackToYear`（空白上映日期回退年份，两者都空白时整行不渲染）、`testLanguageCodeIsTrimmedBeforeLookup`、`testHostilePayloadProducesNoDanglingSeparator`（端到端断言拼接后无前导/尾随/连续分隔符）。临时还原为修复前行为后 13 项失败、仅阳性对照 `testAllValidFieldsArePreserved` 通过，确认断言确实区分缺陷而非仅引用新 API。
+- 处置状态：用户逐条过 P3 时经解释触发链（上游返回空串/空白 `original_language` → 只判 non-nil 就 append → 渲染空 Text 或尾随 `·`）与影响面后，批准随“组二”一并修复。
 ### F-039：取消 Paginator 不会取消共享搜索真实请求
 
 - 状态：用户决定跳过
@@ -883,15 +885,17 @@
 
 ### F-043：空/畸形国家元素生成空白分隔符
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P3
-- 位置：`ProductionCountry.init`、TranslationHelper 对象入口、MediaDetailView 拼接
+- 位置：`MoviePilot-TV/Services/TranslationHelper.swift:538-546`（`countryName(for country:)`）、`MoviePilot-TV/ViewModels/MediaMetadataText.swift:53-62`（`secondaryLine` 国家段）
 - 触发路径：null/数字/布尔/数组/空对象，空白 code/name，或未知 code 无 name。
 - 根因：不支持元素静默变 `(nil,nil)`，对象入口回退空串，View 仅判原数组非空就 map+joined。
 - 用户影响：`2024 · `、空 Text 或 `中国 / `。
 - 最小方向：未知非空 code 保真；先在国家叶子层 trim/过滤再 `/` 连接，之后外层元数据再过滤并以 `·` 连接。
 - 独立复核：verify_b006_b 确认 null/畸形元素被保留为 nil 模型并稳定产生尾随/空分隔，维持 P3。
-
+- 修复状态：按“最小方向”两层一起改 —— 叶子层 `countryName(for country:)` 先对 `iso_3166_1` 与 `name` 分别 trim；查不到翻译时优先用名称，名称也缺失则**保留未知非空 code 原文**（此前一律回退空串，上游信息被静默丢弃）；两者都为空才返回空串。`countryName(for code:)` 同样先 trim 再查表。外层 `MediaMetadataText.secondaryLine` 不再只判原数组非空，而是逐项归一后丢弃空结果，数组里只剩畸形元素时整段不进入显示行。
+- 验证：`testMalformedCountryElementsProduceNoElement`（`null` / `42` / `true` / `{}` / 空 code+name / 全空白 code+name 六种载荷均不产出元素）、`testMalformedCountryElementsAreDroppedButValidOneSurvives`（`[null, US, {"name":""}]` → `["美国"]`，无悬空分隔符）、`testUnknownNonEmptyCountryCodeIsPreserved`（`{"iso_3166_1":"ZZ","name":""}` → `"ZZ"`，保真而非丢弃）、`testCountryNameIsTrimmedBeforeLookup`、`testEnglishCountryNameIsTrimmed`。临时还原后上述断言全部失败、阳性对照仍通过。
+- 处置状态：用户逐条过 P3 时经解释触发链（畸形元素解码成 `(nil,nil)` → 对象入口回退空串 → View 只判数组非空就 map+joined → `中国 / ` 这类尾随分隔）与影响面后，批准随“组二”一并修复。
 ### F-044：人物搜索绕过职位翻译
 
 - 状态：已确认
@@ -924,16 +928,18 @@
 
 ### F-046：类型名未规范化且空结果进入详情元数据
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P3
-- 位置：`MediaGenre`、`TranslationHelper.translateGenre`、MediaDetailView 元数据
+- 位置：`MoviePilot-TV/Services/TranslationHelper.swift:556-566`（`translateGenre(for:)`）、`MoviePilot-TV/ViewModels/MediaMetadataText.swift:20-29`（`primaryLine` 类型段）
 - 触发路径：带空白/换行 canonical genre，或 null/数字/空对象/空名称元素。
 - 根因：模型保留原字符串或宽容为空元素；翻译精确查表不 trim；View 只判数组非空就 joined/append。
 - 用户影响：canonical 类型不翻译，空 Text、`电影 · ` 或尾随/重复分隔符。
 - 主审证据：无 genre 翻译/最终显示测试。
 - 最小方向：genre 叶子 `whitespacesAndNewlines` trim/filter，未知非空名称保真；内层 genre 和外层元数据均过滤空结果。
 - 独立复核：verify_b006_c 确认 null/数字/空对象与带空白名称路径，维持 P3；大小写/别名/ID 回退未验证。
-
+- 修复状态：按“最小方向”只动显示链，不改多态解码 —— `translateGenre(for:)` 先 trim `whitespacesAndNewlines` 再查表（带空白的 canonical 类型此前不翻译），全空白输入返回空串，未知非空名称 trim 后**保真**返回（不改大小写、不加别名回退，与独立复核收窄的范围一致）。内层 `MediaMetadataText.primaryLine` 在 `compactMap { $0.name }` 之后、翻译之后再丢一次空 —— 原写法只丢 nil，空串会活到 `joined(separator: " · ")`；外层同样按显示值归一。`category`/`type` 的判空也一并回溯（带空白不再穿透）。
+- 验证：`testBlankAndMalformedGenreElementsProduceNoElement`（`[{"name":""}]` / 全空白 / `[null]` / `[42]` / `[{}]` / `[{"id":28}]` / `[""]` 七种载荷都只剩分类段）、`testWhitespacePaddedGenreIsTranslated`（`" Sci-Fi & Fantasy "` → `"科幻 & 奇幻"`）、`testUnknownGenreNameIsTrimmedButPreserved`、`testBlankCategoryFallsBackToType`、`testAllValidFieldsArePreserved`（阳性对照，多类型顺序与分隔符不变）。临时还原后除阳性对照外全部失败。
+- 处置状态：用户逐条过 P3 时经解释触发链（带空白/空名称的 `genres` 元素 → 精确查表不 trim 且空串不是 nil → `电影 · ` 或空 Text）与影响面后，批准随“组二”一并修复。
 ### F-047：取消文案无法表示 owner 与批量影响
 
 - 状态：用户决定跳过

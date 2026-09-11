@@ -2361,15 +2361,18 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-038 · P3 · 已确认 · 空白语言值穿透详情元数据</summary>
+<summary>F-038 · P3 · 已修复 · 空白语言值穿透详情元数据</summary>
 
-- 审查单元与位置：B006-A；TranslationHelper 与详情元数据拼接
+- 审查单元与位置：B006-A；`TranslationHelper.swift:506-521`（`languageName(for:)` 先 trim 再查表）、`MoviePilot-TV/ViewModels/MediaMetadataText.swift:35-72`（`secondaryLine`）
+- 修复状态：详情页两行元数据的组装从 `MediaDetailView` 内联闭包提取为 `MediaMetadataText`，所有元素过 `displayValue(_:)`（trim `whitespacesAndNewlines`，空结果丢弃）；`original_language`/`release_date`/`year`/`category`/`type` 五个标量一并回溯。`languageName(for:)` 改为先 trim 再查表，全空白输入返回空串。
 - 触发路径：original_language 为 empty/空格/换行。
 - 根因：模型接受任意非 nil 字符串，helper 原样回退，调用者只判 non-nil 就 append。
 - 用户影响：尾随/空白分隔点，或创建空 Text 行。
 - 证据：review_b006_a 闭合 decodeIfPresent→原样回退→append 链；verify_b006_a_retry 独立确认空 Text/尾随分隔及通用元数据范围
 - 跨端结论：TV 展示不变量缺陷已确认；真实 payload 频率未验证
 - 最小修改方向 / 裁决：元数据 builder 统一 trim/过滤空显示值，不只补语言分支；release_date/year/国家名一并回溯。
+- 验证：`testBlankOriginalLanguageProducesNoElement` / `testBlankReleaseDateFallsBackToYear` / `testLanguageCodeIsTrimmedBeforeLookup` / `testHostilePayloadProducesNoDanglingSeparator`；临时还原为修复前行为后 13 项失败、仅阳性对照通过。
+- 处置状态：用户逐条过 P3 时经解释触发链与影响面后，批准随“组二”一并修复。
 
 </details>
 
@@ -2407,15 +2410,18 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-043 · P3 · 已确认 · 空/畸形国家元素生成空白分隔符</summary>
+<summary>F-043 · P3 · 已修复 · 空/畸形国家元素生成空白分隔符</summary>
 
-- 审查单元与位置：B006-B；ProductionCountry 多态解码与详情拼接
+- 审查单元与位置：B006-B；`TranslationHelper.swift:538-546`（`countryName(for country:)`）、`MoviePilot-TV/ViewModels/MediaMetadataText.swift:53-62`（国家段）
+- 修复状态：叶子层对 `iso_3166_1` 与 `name` 分别 trim；查不到翻译时优先用名称，名称也缺失则**保留未知非空 code 原文**（此前一律回退空串、静默丢弃上游信息），两者都为空才返回空串。外层不再只判原数组非空，而是逐项归一后丢弃空结果。
 - 触发路径：null/数字/布尔/数组/空对象，空白 code/name，或未知 code 无 name。
 - 根因：不支持元素静默变 `(nil,nil)`，对象入口回退空串，View 仅判原数组非空就 map+joined。
 - 用户影响：`2024 · `、空 Text 或 `中国 / `。
 - 证据：review_b006_b_retry 闭合 nil模型→空显示→joined 链；verify_b006_b 独立确认叶子与内外分隔两层空值路径
 - 跨端结论：TV 展示不变量缺陷已确认；真实 payload 未验证
 - 最小修改方向 / 裁决：未知非空 code 保真；先在国家叶子层 trim/过滤再 `/` 连接，之后外层元数据再过滤并以 `·` 连接。
+- 验证：`testMalformedCountryElementsProduceNoElement`（六种畸形载荷）/ `testMalformedCountryElementsAreDroppedButValidOneSurvives` / `testUnknownNonEmptyCountryCodeIsPreserved` / `testCountryNameIsTrimmedBeforeLookup` / `testEnglishCountryNameIsTrimmed`；临时还原后全部失败。
+- 处置状态：用户逐条过 P3 时经解释触发链与影响面后，批准随“组二”一并修复。
 
 </details>
 
@@ -2449,15 +2455,18 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-046 · P3 · 已确认 · 类型名未规范化且空结果进入详情元数据</summary>
+<summary>F-046 · P3 · 已修复 · 类型名未规范化且空结果进入详情元数据</summary>
 
-- 审查单元与位置：B006-C；MediaGenre/translateGenre/详情元数据
+- 审查单元与位置：B006-C；`TranslationHelper.swift:556-566`（`translateGenre(for:)`）、`MoviePilot-TV/ViewModels/MediaMetadataText.swift:20-29`（类型段）
+- 修复状态：`translateGenre(for:)` 先 trim `whitespacesAndNewlines` 再查表（带空白的 canonical 类型此前不翻译），全空白返回空串，未知非空名称 trim 后保真；内层在 `compactMap { $0.name }` 与翻译之后再丢一次空（原写法只丢 nil，空串会活到 `joined`），外层同样按显示值归一；`category`/`type` 判空一并回溯。
 - 触发路径：带空白/换行 canonical genre，或 null/数字/空对象/空名称元素。
 - 根因：模型保留原字符串或宽容为空元素；翻译精确查表不 trim；View 只判数组非空就 joined/append。
 - 用户影响：canonical 类型不翻译，空 Text、`电影 · ` 或尾随/重复分隔符。
 - 证据：verify_b005 作为 B006-C 主审闭合多态解码、精确查表与 joined 链；verify_b006_c 独立确认 trim/filter 边界并收窄大小写/别名
 - 跨端结论：TV 展示不变量缺陷已确认；真实输入频率未验证
 - 最小修改方向 / 裁决：genre 叶子 `whitespacesAndNewlines` trim/filter，未知非空名称保真；内层 genre 和外层元数据均过滤空结果。
+- 验证：`testBlankAndMalformedGenreElementsProduceNoElement`（七种载荷）/ `testWhitespacePaddedGenreIsTranslated` / `testUnknownGenreNameIsTrimmedButPreserved` / `testBlankCategoryFallsBackToType` / `testAllValidFieldsArePreserved`（阳性对照）；临时还原后除阳性对照外全部失败。
+- 处置状态：用户逐条过 P3 时经解释触发链与影响面后，批准随“组二”一并修复。
 
 </details>
 
