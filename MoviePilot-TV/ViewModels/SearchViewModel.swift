@@ -273,10 +273,13 @@ class SearchViewModel: ObservableObject {
 
       let maxS = bestScore(Set(candidates), true)
       let pop = personItem.popularity ?? 0
-      let hasNoPoster = personItem.profile_path == nil || personItem.profile_path?.isEmpty == true
+      // F-055：准入与实际渲染同源。原先读 TMDB 专属 `profile_path`，
+      // 会把「有可渲染 avatar 但无 profile_path」的豆瓣等来源人物当成无图低质结果排除，
+      // 而同一人仍会出现在下方人物行（卡片用 source-aware 判定能渲染出图）。
+      let hasNoProfileImage = !personItem.hasUsableProfileImage
       let boost = popularityBoost(source: personItem.source, popularity: pop)
 
-      if !(hasNoPoster && maxS < 50 && pop < 1) {
+      if !(hasNoProfileImage && maxS < 50 && pop < 1) {
         if let source = personItem.source, !source.isEmpty { candidateSources.insert(source) }
         scoredItems.append((item: .person(personItem), score: maxS, popularity: pop, boost: boost))
       }

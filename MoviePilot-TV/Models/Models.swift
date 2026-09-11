@@ -2276,6 +2276,17 @@ nonisolated struct Person: Codable, Identifiable, Hashable {
     )
   }
 
+  /// 最终**可渲染**头像判定，与卡片实际使用的 `imageURLs.profile` 同源。
+  ///
+  /// F-051 / F-055：头像判定此前有两套实现 —— 排序看「任意原始字段存在」
+  /// （`profile_path`/`avatar`/`images` 任一非空），搜索准入看 TMDB 专属 `profile_path`，
+  /// 而卡片渲染只看 `imageURLs.profile`。三者对同一 Person 可能得出不同结论
+  /// （TMDB 空 `images`、豆瓣默认头像、Bangumi 仅 `large`），于是出现「有头像的人排到无头像人后面」
+  /// 与「有头像的人被排除出最佳结果」。这里收敛为单一事实来源。
+  @MainActor var hasUsableProfileImage: Bool {
+    imageURLs.profile != nil
+  }
+
   enum CodingKeys: String, CodingKey {
     case source
     case raw_id = "id"

@@ -64,11 +64,11 @@
 | F-048 | 用户决定跳过 | P1 | B007→V012-B/C→G02 | 取消确认准备与执行 | 确认后重新解析target且未冻结精确订阅ID | 当前Web同样先通用确认、再读取当前媒体并执行媒体级删除 | TV/Web行为一致 | 用户决定跳过，不做TV单端增强 |
 | F-049 | 已修复 | P2 | B007→V012-B→G08 | Home/Header 取消结果 | DELETE false或异常被静默吞掉，Home 直接丢弃 Bool 返回 | 既有双审闭合结果出口；G08 三方裁决确认 Home 稳定丢弃 false 并升级 P2 | Home失败/异常与Header刷新后仍订阅统一通知；远端已删除且UI收敛时静默 | 已补业务失败、详情收敛与通知接线测试；完整验证通过 |
 | F-050 | 已确认 | P3 | S006 | MediaDetailViewModel Hero 演员截断 | Hero 演员先截断再去重，非空不足四人不补足 | verify_b006_b 闭合 prefix(4)→processActors 与分页替换条件 | verify_s006 独立确认影响仅 Hero 并修正 W008-C 路由 | TV 顺序缺陷已确认；真实重复分布未验证 |
-| F-051 | 已确认 | P3 | S006 | StaffManager.hasAvatar 与 Person.imageURLs | 头像排序判定与实际可渲染图片不一致 | verify_b006_b 以 PersonDecoding 多组反例闭合 | verify_s006 独立确认只影响 crew 新增项排序及 source-aware 反例 | TV 排序规则缺陷已确认；真实来源组合未验证 |
+| F-051 | 已修复 | P3 | S006 | `Models.swift:2286-2289`（`Person.hasUsableProfileImage`）、`StaffManager.swift:109-112` | 头像排序与可渲染图片判定不一致 | verify_b006_b 以 PersonDecoding 多组反例闭合；verify_s006 独立确认只影响 crew 新增项排序及 source-aware 反例 | G07 第三裁：直接复用现有 `imageURLs.profile != nil`，默认豆瓣头像与空 images 均为反例 | TV 排序规则缺陷已确认；真实来源组合未验证 |
 | F-052 | 已修复 | P3 | S006 | `StaffManager.swift:9-16`（多值取最高优先级）、`:235` | 多值 roles 被拼成单一 key 后优先级 999 | verify_b006_b 闭合 roles join→priority→translate split | verify_s006 修正为 roles fallback 两人反例并确认 | TV 排序缺陷已确认；修复为多值按项规范化后取最高优先级，空 roles 不再造孤立 `/`，用户批准 |
 | F-053 | 已修复 | P3 | S006 | `StaffManager.swift:45-141`、`TranslationHelper.swift:491-505` | 已翻译返回值不能安全作为下一批 existing | verify_b006_b 构造 Director→导演/Director→导演/导演 链 | verify_s006 独立确认条件性且当前无非空 existing 调用者 | 潜伏 API 缺陷已确认；修复为翻译后显示边界去重使回灌幂等，未启用增量语义仍保留，用户批准 |
 | F-054 | 已修复（`58c7e81`） | P1 | B007 复核新增 / M001-F→G02 | SubscriptionHandler Bangumi-only 取消 | 历史实现会丢失精确身份并改走集合式媒体删除 | 当前TV `58c7e81`已保留canonical/Bangumi/AniList/legacy身份；当前后端按身份与season筛选 | 当前实现与上游合同重新核对 | 修复已完成；旧部署版本未验证 |
-| F-055 | 已确认 | P3 | S006 复核新增 / M001-G | Search 最佳人物结果头像准入 | 使用 TMDB profile_path 而非 source-aware imageURLs.profile | verify_s006 以 Douban 有 avatar 无 profile_path 反例闭合 | review_m001_g 独立重走 Douban 搜索、评分准入与卡片图片链 | TV 跨来源准入差异已确认；Web 排名未验证 |
+| F-055 | 已修复 | P3 | M001 | `SearchViewModel.swift:279`（最佳人物准入）、`Models.swift:2286-2289` | 人物最佳结果使用 TMDB 专属头像准入 | review_m001_g 独立确认人物搜索允许 Douban 且卡片与准入判据不同源 | G07 第三裁：与 F-051 共用 `imageURLs.profile` 事实来源但保持独立出口/fixture | TV 旁路缺陷已确认；Web 排名与真实跨来源人物分布未验证 |
 | F-056 | 已驳回 | P3 | S006→G07→F-050 | Hero 演员姓名展示 | 不过滤 nil/空 name 且首四项后不补位的机制成立，但与F-050同属过滤/去重后再截断的取样顺序 | 既有双审确认；G07第三裁将重复、空名和补位合成一个Hero选人根因 | 并入F-050，不驳回机制；全量processActors后过滤空名再prefix(4) | 驳回重复编号；真实人物分布未验证 |
 | F-057 | 已确认 | P3 | S003 | ParsedSeason 范围解析/排序 | 范围终点丢失或未校验，排序不反映实际覆盖 | verify_s006 作为 S003 主审构造季/集范围反例 | verify_s003_resume 独立确认结束季捕获未消费及范围排序内部不一致 | TV 排序行为可见；真实范围格式未验证 |
 | F-058 | 已确认 | P3 | S003 | ParsedSeason 与 Formatters 两套语法 | 卡片支持的季集语法在筛选排序中被判无效 | verify_s006 对比两套正则及 Set 未指定顺序 | verify_s003_resume 独立闭合两套正则与同一字段的显示/筛选链 | TV 语法分裂已确认；上游格式未验证 |
@@ -1007,9 +1007,9 @@
 
 ### F-051：头像排序与可渲染图片判定不一致
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P3
-- 位置：StaffManager.hasAvatar / Person.imageURLs.profile
+- 位置：`MoviePilot-TV/Services/StaffManager.swift:109-112`（排序消费点，原 `hasAvatar` 已删除）、`MoviePilot-TV/Models/Models.swift:2286-2289`（`Person.hasUsableProfileImage`）
 - 根因：前者检查任意原始 profile_path/avatar/images 存在，后者按 source 严格选择可渲染 URL。
 - 用户影响：最终只有占位图的人员可排在真正有头像人员之前。
 - 证据：TMDB 空 images、Douban 默认头像、Bangumi only-large、AniList only-avatar 等现有解码反例。
@@ -1017,6 +1017,9 @@
 - 独立复核：verify_s006 确认 source-aware 图片反例和影响限于 crew 新增项同优先级排序，维持 P3。
 - G07全局双审升级建议：当前统一`imageURLs.profile`已处理来源、默认豆瓣头像与Bangumi/AniList选择，但Staff排序仍看原始字段，Search最佳人物又只看TMDB `profile_path`；两代理建议F-051/F-055分别升P2并共用`hasUsableProfileImage`。实际排序/准入竞争频率仍未运行，交第三裁。
 - G07第三裁：verify_a001_h确认Staff排序只需直接复用现有`person.imageURLs.profile != nil`，默认豆瓣头像与空images均为反例；影响限排序且分布未验证，维持P3。`mergeCrew(existing:非空)`当前无caller，不并入。
+- 修复状态：按“最小方向”直接复用最终判定 —— 新增 `Person.hasUsableProfileImage`（`imageURLs.profile != nil`，与卡片渲染同一事实来源），排序消费点改用它，**同时删除** `StaffManager.hasAvatar`（全仓唯一调用点就是这处排序），避免第二份判据继续存在。影响面确认仅限 `mergeCrew` 新增项同优先级内部排序：人数、内容、去重、已有列表位置均不变。
+- 验证：`PersonProfileImageAvailabilityTests` 中 `testCrewSortPrefersRenderableAvatarOverRawFieldPresence`（Bangumi 仅 large + 带 `profile_path` 的占位图人物，必须排在真有豆瓣头像的人之后）；叶子反例 `testBangumiOnlyLargeIsNotUsableEvenWithProfilePath` / `testDoubanDefaultAvatarIsNotUsableEvenWithProfilePath` / `testTMDBEmptyImagesIsNotUsable` / `testUnsupportedSourceIsNotUsableEvenWithAllRawFields`。临时把新判据换回修复前的原始字段逻辑后，上述 5 例失败；`testAnilistAvatarOnlyIsUsable`、`testDoubanAvatarIsUsableWithoutProfilePath` 与阴性对照 `testCrewSortKeepsJobPriorityDominantOverAvatar` 两侧均通过，确认修复未越过职位优先级。
+- 处置状态：用户逐条过 P3 时经解释触发链（同职位新增职员、占位图被判成有头像）与影响面（仅排序、一处调用点）后，批准随“组三”一并修复。
 
 ### F-052：多值 roles 整体降为未知优先级
 
@@ -1063,9 +1066,9 @@
 
 ### F-055：人物最佳结果使用 TMDB 专属头像准入
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P3
-- 位置：SearchViewModel 最佳人物评分/准入
+- 位置：`MoviePilot-TV/ViewModels/SearchViewModel.swift:279`（`calculateBestResults` 人物准入）、`MoviePilot-TV/Models/Models.swift:2286-2289`（`Person.hasUsableProfileImage`）
 - 触发路径：Douban 等来源有最终可渲染 avatar，但 profile_path nil，且其他评分不足。
 - 根因：准入读取 TMDB 专属 `profile_path`，卡片实际使用 source-aware `imageURLs.profile`。
 - 用户影响：有头像的人物被排除出最佳结果，但仍出现在人物行。
@@ -1074,6 +1077,9 @@
 - G07全局双审升级建议：两代理确认Douban有效avatar在当前生产搜索中会被本准入当作无图，低分时可被错误排除最佳结果；与F-051共享最终图片投影但用户出口/fixture独立，建议P2，交第三裁。
 - G07第三裁：verify_a001_h确认Search绕过source-aware图片投影的静态反例，但当前Douban标题匹配通常会获得高分而绕过低分过滤，真实可见触发较弱；维持P3，与F-051共用`imageURLs.profile`事实来源但保持独立出口/fixture。
 - 剩余未验证：Web 排名与真实跨来源人物分布。
+- 修复状态：把准入判据从 TMDB 专属 `profile_path` 换成与 F-051 同一个 `Person.hasUsableProfileImage`。改动只影响准入布尔量，评分、热度加权、排序与来源混合判定均未触碰。按第三裁保留 P3 与原频率判断：真实触发需要「来源非 TMDB + 有可渲染头像 + `maxS < 50` + `pop < 1`」同时成立，豆瓣来源通常标题匹配分很高，实际很难撞上，本次修的是判据本身而非可见频率。
+- 验证：`SearchViewModelTests.testBestResultsAdmitPersonWithSourceAwareAvatarButNoTMDBProfilePath` 走真实 `autoSearch()` 端到端路径（为此给既有 stub 增加 `setPersonResults(_:forQuery:)` 覆盖 `/media/search?type=person`），构造「查询词与人物名完全不匹配 + 热度不足」的最坏情形，断言有豆瓣头像的人物仍进入最佳结果。临时换回 `profile_path` 判据后该例失败，恢复后通过。
+- 处置状态：用户逐条过 P3 时经解释触发链与影响面（并说明真实触发较弱）后，批准随“组三”一并修复。
 
 ### F-056：Hero 演员不滤空名且不补位
 

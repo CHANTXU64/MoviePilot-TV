@@ -1260,6 +1260,7 @@ private actor SearchViewModelURLProtocolStub {
   private var mediaResultsByQuery: [String: String] = [:]
   private var gatesByPath: [String: SearchAsyncGate] = [:]
   private var shareResultsByQuery: [String: String] = [:]
+  private var personResultsByQuery: [String: String] = [:]
   private var requestedRequests: [SearchRecordedRequest] = []
   private var cancelledRequests: [SearchRecordedRequest] = []
   private var streamTerminations: [String: SearchStreamTermination] = [:]
@@ -1272,6 +1273,7 @@ private actor SearchViewModelURLProtocolStub {
     mediaResultsByQuery.removeAll()
     gatesByPath.removeAll()
     shareResultsByQuery.removeAll()
+    personResultsByQuery.removeAll()
     requestedRequests.removeAll()
     cancelledRequests.removeAll()
     streamTerminations.removeAll()
@@ -1308,6 +1310,11 @@ private actor SearchViewModelURLProtocolStub {
   /// 覆盖“订阅分享”接口返回的分享 JSON 数组（按名称参数匹配）。
   func setShareResults(_ json: String, forQuery query: String) {
     shareResultsByQuery[query] = json
+  }
+
+  /// 覆盖 `/media/search?type=person` 返回的人物 JSON 数组（按 title 参数匹配）。
+  func setPersonResults(_ json: String, forQuery query: String) {
+    personResultsByQuery[query] = json
   }
 
   /// 配置资源搜索流的终止形态：done（成功收尾）/ error（业务失败）/ eof（无终止断开）。
@@ -1460,6 +1467,9 @@ private actor SearchViewModelURLProtocolStub {
           {"source":"themoviedb","id":7,"name":"TMDB人物"}
         ]
         """.utf8)
+    }
+    if type == "person", let personResults = personResultsByQuery[query] {
+      return Data(personResults.utf8)
     }
     guard type == nil || type == "media" else {
       return Data("[]".utf8)
@@ -1922,6 +1932,58 @@ extension SearchViewModelTests {
       return nil
     }
     XCTAssertEqual(titles, [longTitle, "xxabcxxxx"])
+  }
+
+  /// F-055：人物最佳结果的准入必须与卡片渲染使用同一套图片判据。
+  ///
+  /// 这里刻意构造「三个条件同时成立」的最坏情形：查询词 `abc` 与人物名 `zzz` 完全不匹配
+  /// （`maxS == -1 < 50`）且 douban 热度不加分（`pop < 1`）。旧准入读的是 TMDB 专属
+  /// `profile_path`，会把「有可渲染豆瓣头像但无 profile_path」的人物当成无图低质结果排除出
+  /// 最佳结果，而同一人仍出现在下方人物行（卡片用 source-aware 判定能渲染出图）。
+  /// 生产环境实际触发较弱（豆瓣来源通常标题匹配分很高，`maxS < 50` 不成立），
+  /// 此例固化的是判据本身而非频率。
+  func testBestResultsAdmitPersonWithSourceAwareAvatarButNoTMDBProfilePath() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    service.useImageCache = false
+    configureDiscoveryPermissionSession(service)
+
+    // 媒体/合集侧清空，确保最佳结果只由人物决定。
+    await SearchViewModelURLProtocol.stub.setMediaResults("[]", forQuery: "abc")
+    await SearchViewModelURLProtocol.stub.setPersonResults(
+      """
+      [
+        {
+          "source": "douban",
+          "id": 7,
+          "name": "zzz",
+          "profile_path": null,
+          "avatar": "https://img1.doubanio.com/view/personage/s/public/abc123.jpg"
+        }
+      ]
+      """,
+      forQuery: "abc"
+    )
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.mediaSearchSource = nil
+    viewModel.query = "abc"
+    await viewModel.autoSearch()
+
+    XCTAssertFalse(viewModel.isLoading)
+    let personNames = viewModel.bestResults.compactMap { item -> String? in
+      if case .person(let person) = item { return person.name }
+      return nil
+    }
+    XCTAssertEqual(personNames, ["zzz"], "有可渲染头像的人物不应因缺少 TMDB profile_path 被排除")
   }
 
   func testBestResultsDisablePopularityBoostForMixedSources() async throws {

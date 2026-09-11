@@ -2484,15 +2484,18 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-051 · P3 · 已确认 · 头像排序与可渲染图片判定不一致</summary>
+<summary>F-051 · P3 · 已修复 · 头像排序与可渲染图片判定不一致</summary>
 
-- 审查单元与位置：S006；StaffManager.hasAvatar 与 Person.imageURLs
+- 审查单元与位置：S006；`StaffManager.swift:109-112`（排序消费点）、`Models.swift:2286-2289`（`Person.hasUsableProfileImage`）
+- 修复状态：新增 `Person.hasUsableProfileImage`（= `imageURLs.profile != nil`，与卡片渲染同一事实来源），排序消费点改用它并**删除** `StaffManager.hasAvatar`（全仓唯一调用点即此处），第二份判据不再存在。影响面确认仅限 `mergeCrew` 新增项同优先级内部排序。
 - 触发路径：头像排序判定与实际可渲染图片不一致
 - 根因：前者检查任意原始 profile_path/avatar/images 存在，后者按 source 严格选择可渲染 URL。
 - 用户影响：最终只有占位图的人员可排在真正有头像人员之前。
-- 证据：verify_b006_b 以 PersonDecoding 多组反例闭合；verify_s006 独立确认只影响 crew 新增项排序及 source-aware 反例
+- 证据：TMDB 空 images、Douban 默认头像、Bangumi only-large、AniList only-avatar 等现有解码反例。
 - 跨端结论：TV 排序规则缺陷已确认；真实来源组合未验证
 - 最小修改方向 / 裁决：排序复用最终 `imageURLs.profile != nil` 判定。
+- 验证：`testCrewSortPrefersRenderableAvatarOverRawFieldPresence` + 四个叶子反例（Bangumi 仅 large、豆瓣默认头像、TMDB 空 images、未支持来源）；临时换回原始字段逻辑后 5 例失败，两个阳性对照与阴性对照 `testCrewSortKeepsJobPriorityDominantOverAvatar` 两侧均通过。
+- 处置状态：用户逐条过 P3 时经解释触发链与影响面（仅排序、一处调用点）后，批准随“组三”一并修复。
 
 </details>
 
@@ -2529,15 +2532,18 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-055 · P3 · 已确认 · 人物最佳结果使用 TMDB 专属头像准入</summary>
+<summary>F-055 · P3 · 已修复 · 人物最佳结果使用 TMDB 专属头像准入</summary>
 
-- 审查单元与位置：S006 复核新增 / M001-G；Search 最佳人物结果头像准入
+- 审查单元与位置：M001；`SearchViewModel.swift:279`（`calculateBestResults` 人物准入）、`Models.swift:2286-2289`
+- 修复状态：准入判据从 TMDB 专属 `profile_path` 换成与 F-051 同一个 `Person.hasUsableProfileImage`。只改准入布尔量，评分、热度加权、排序与来源混合判定未触碰；按第三裁保留 P3 与原频率判断（真实触发需四个条件同时成立，豆瓣来源通常匹配分高，很难撞上），修的是判据本身。
 - 触发路径：Douban 等来源有最终可渲染 avatar，但 profile_path nil，且其他评分不足。
 - 根因：准入读取 TMDB 专属 `profile_path`，卡片实际使用 source-aware `imageURLs.profile`。
 - 用户影响：有头像的人物被排除出最佳结果，但仍出现在人物行。
-- 证据：verify_s006 以 Douban 有 avatar 无 profile_path 反例闭合；review_m001_g 独立重走 Douban 搜索、评分准入与卡片图片链
-- 跨端结论：TV 跨来源准入差异已确认；Web 排名未验证
+- 证据：review_m001_g 独立确认人物搜索允许 Douban，现有 fixture 可形成有 avatar 但无 `profile_path` 的人物，而最佳结果与卡片使用不同图片准入。
+- 跨端结论：TV 旁路缺陷已确认；Web 排名与真实跨来源人物分布未验证
 - 最小修改方向 / 裁决：准入复用最终图片可用性判定。
+- 验证：`testBestResultsAdmitPersonWithSourceAwareAvatarButNoTMDBProfilePath` 走真实 `autoSearch()` 端到端路径（为此给既有 stub 增加 `setPersonResults(_:forQuery:)`），构造最坏情形断言有豆瓣头像的人物仍进入最佳结果；临时换回 `profile_path` 判据后该例失败。
+- 处置状态：用户逐条过 P3 时经解释触发链与影响面（并说明真实触发较弱）后，批准随“组三”一并修复。
 
 </details>
 

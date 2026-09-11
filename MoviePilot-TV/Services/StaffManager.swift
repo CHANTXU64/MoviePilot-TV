@@ -105,9 +105,11 @@ struct StaffManager {
       if p1Priority != p2Priority {
         return p1Priority < p2Priority
       }
-      // 同职位中，没有头像的排后面
-      let h1 = hasAvatar(p1)
-      let h2 = hasAvatar(p2)
+      // 同职位中，没有头像的排后面。
+      // F-051：判据与卡片渲染同源（`Person.hasUsableProfileImage`），
+      // 不再看「原始字段是否存在」——那会把只有占位图的人判成有头像。
+      let h1 = p1.hasUsableProfileImage
+      let h2 = p2.hasUsableProfileImage
       if h1 != h2 {
         return h1 && !h2
       }
@@ -265,19 +267,5 @@ struct StaffManager {
       let translatedJob = TranslationHelper.translateJobs(jobString: key)
       return GroupedStaff(id: key, job: translatedJob, names: names)
     }
-  }
-
-  /// 判断人员是否有头像
-  private static func hasAvatar(_ person: Person) -> Bool {
-    if let profilePath = person.profile_path, !profilePath.isEmpty {
-      return true
-    }
-    if person.avatar != nil {
-      return true
-    }
-    if person.images != nil {
-      return true
-    }
-    return false
   }
 }
