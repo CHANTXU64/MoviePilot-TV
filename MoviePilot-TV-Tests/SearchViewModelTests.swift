@@ -1986,6 +1986,162 @@ extension SearchViewModelTests {
     XCTAssertEqual(personNames, ["zzz"], "有可渲染头像的人物不应因缺少 TMDB profile_path 被排除")
   }
 
+  // MARK: - F-044 搜索人物职位翻译
+
+  /// 中文界面下，人物行副标题不得显示 canonical 英文 `job`。
+  func testSearchPersonJobIsTranslatedForPersonRow() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let savedLanguage = TranslationHelper.currentLanguage
+    TranslationHelper.currentLanguage = .zhHans
+    defer { TranslationHelper.currentLanguage = savedLanguage }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    await SearchViewModelURLProtocol.stub.setPersonResults(
+      """
+      [{ "source": "themoviedb", "id": 11, "name": "张三", "job": "Director" }]
+      """,
+      forQuery: "abc"
+    )
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.mediaSearchSource = nil
+    viewModel.query = "abc"
+    await viewModel.autoSearch()
+
+    // 详情页的同一个人经 `StaffManager.processCrew` 后就是「导演」，
+    // 两个界面对同一职位必须给出一致文案。
+    XCTAssertEqual(viewModel.personPaginator?.items.map(\.job), ["导演"])
+  }
+
+  /// 最佳结果卡片副标题与人物行同源，同样不得漏翻。
+  func testSearchPersonJobIsTranslatedForBestResultSubtitle() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let savedLanguage = TranslationHelper.currentLanguage
+    TranslationHelper.currentLanguage = .zhHans
+    defer { TranslationHelper.currentLanguage = savedLanguage }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    service.useImageCache = false
+    configureDiscoveryPermissionSession(service)
+
+    // 媒体侧清空，确保最佳结果只由人物决定。头像用于通过最佳结果准入（F-055 的判据）。
+    await SearchViewModelURLProtocol.stub.setMediaResults("[]", forQuery: "abc")
+    await SearchViewModelURLProtocol.stub.setPersonResults(
+      """
+      [
+        {
+          "source": "douban", "id": 12, "name": "zzz", "job": "Director",
+          "profile_path": null,
+          "avatar": "https://img1.doubanio.com/view/personage/s/public/abc123.jpg"
+        }
+      ]
+      """,
+      forQuery: "abc"
+    )
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.mediaSearchSource = nil
+    viewModel.query = "abc"
+    await viewModel.autoSearch()
+
+    let bestPersonJobs = viewModel.bestResults.compactMap { item -> String? in
+      if case .person(let person) = item { return person.job }
+      return nil
+    }
+    XCTAssertEqual(bestPersonJobs, ["导演"])
+  }
+
+  /// 阴性对照：已翻译值再次经过投影必须原样保留，不能叠加成「导演/导演」。
+  func testSearchPersonJobProjectionIsIdempotentForTranslatedValue() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let savedLanguage = TranslationHelper.currentLanguage
+    TranslationHelper.currentLanguage = .zhHans
+    defer { TranslationHelper.currentLanguage = savedLanguage }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    await SearchViewModelURLProtocol.stub.setPersonResults(
+      """
+      [{ "source": "douban", "id": 13, "name": "李四", "job": "导演", "character": "Neo" }]
+      """,
+      forQuery: "abc"
+    )
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.mediaSearchSource = nil
+    viewModel.query = "abc"
+    await viewModel.autoSearch()
+
+    XCTAssertEqual(viewModel.personPaginator?.items.map(\.job), ["导演"])
+  }
+
+  /// 阴性对照：多职位按 "/" 逐项翻译，且没有 job 的人物不被凭空造出职位、character 原样保留。
+  func testSearchPersonJobProjectionHandlesMultiJobAndMissingJob() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let savedLanguage = TranslationHelper.currentLanguage
+    TranslationHelper.currentLanguage = .zhHans
+    defer { TranslationHelper.currentLanguage = savedLanguage }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    await SearchViewModelURLProtocol.stub.setPersonResults(
+      """
+      [
+        { "source": "themoviedb", "id": 14, "name": "王五", "job": "Director/Writer" },
+        { "source": "themoviedb", "id": 15, "name": "赵六", "character": "Neo" }
+      ]
+      """,
+      forQuery: "abc"
+    )
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.mediaSearchSource = nil
+    viewModel.query = "abc"
+    await viewModel.autoSearch()
+
+    let items = try XCTUnwrap(viewModel.personPaginator?.items)
+    XCTAssertEqual(items.count, 2)
+    XCTAssertEqual(items[0].job, "导演/编剧")
+    XCTAssertNil(items[1].job, "没有 job 的人物不应被投影出职位")
+    XCTAssertEqual(items[1].character, "Neo", "character 不应被职位投影影响")
+  }
+
   func testBestResultsDisablePopularityBoostForMixedSources() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }

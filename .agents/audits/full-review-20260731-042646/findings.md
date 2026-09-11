@@ -57,7 +57,7 @@
 | F-041 | 已修复 | P3 | B005 | `JobRegistry.swift:113-149`（canonical 解析）、`StaffManager.swift:9-16`（优先级） | 职位键变体同时失去翻译和优先级 | review_b006_a 闭合原样解码、精确查表与排序 999 路径 | verify_b005 独立确认大小写/换行双重失配与 Hero 排序影响 | TV 行为缺陷已确认；修复为单一 canonical key 解析供翻译与优先级共用，未知 key 保真且保底 999，用户批准 |
 | F-042 | 未验证 | P3 | B006-B | 国家映射/ProductionCountry/详情显示 | 非 canonical 国家码形态未经规范化 | review_b006_b_retry 核对 249 键、两个入口与多态解码 | verify_b006_b 确认 canonical alpha-2 全覆盖，宽容输入是否属契约无法判定 | 上游形态/alpha-3/别名要求未验证 |
 | F-043 | 已修复 | P3 | B006-B | ProductionCountry 多态解码与 `MediaMetadataText.secondaryLine` | 空/畸形国家元素生成空白分隔符 | review_b006_b_retry 闭合 nil模型→空显示→joined 链 | verify_b006_b 独立确认叶子与内外分隔两层空值路径 | TV 展示不变量缺陷已确认；真实 payload 未验证 |
-| F-044 | 已确认 | P3 | B005 复核新增 / B006-C | Search 人物行与 raw job | 人物搜索直接展示原始 job，绕过统一翻译 | verify_b005 独立确认 canonical Director 也会显示英文 | verify_b005 后续 B006-C 主审重走 searchPerson→SearchView 旁路并支持 | TV 旁路缺陷已确认；搜索响应 job 非空频率未验证 |
+| F-044 | 已修复 | P3 | B005 复核新增 / B006-C | `SearchViewModel.swift:348-357`（投影）、`:794-801`（人物分页 processor） | 人物搜索直接展示原始 job，绕过统一翻译 | verify_b005 独立确认 canonical Director 也会显示英文 | verify_b005 后续 B006-C 主审重走 searchPerson→SearchView 旁路并支持 | TV 旁路缺陷已确认；修复在人物分页器 processor 统一投影，用户批准随组四修复 |
 | F-045 | 已修复 | P3 | B005 复核新增 / S006 | `StaffManager.swift:126-141`（投影）、`:228-240`（分组） | roles-only 职员在 Hero 与卡片职位显示不一致 | verify_b005 独立确认 Hero roles 兜底而 processCrew 不投影 | verify_b006_b 作为 S006 主审确认触发边界与 PersonCard 旁路 | TV 分支差异已确认；修复在 StaffManager 边界统一投影 roles，job/character 均空时才回退，用户批准 |
 | F-046 | 已修复 | P3 | B006-C | MediaGenre/translateGenre/`MediaMetadataText.primaryLine` | 类型名未规范化且空结果仍进入详情 | verify_b005 作为 B006-C 主审闭合多态解码、精确查表与 joined 链 | verify_b006_c 独立确认 trim/filter 边界并收窄大小写/别名 | TV 展示不变量缺陷已确认；真实输入频率未验证 |
 | F-047 | 用户决定跳过 | P1 | B007→V012-B/C→W013-B | 全局/分季/Header 取消文案与删除接口 | 当前后端已对所有身份按season筛选；剩余为同媒体同季多group/多owner时文案只展示一条，媒体级删除却可能命中多条 | 当前TV、Web与后端调用链重新闭合；旧“非TMDB跨季删除”证据已失效 | 当前Web共享同一媒体级删除行为 | 用户决定跳过，不做TV单端增强 |
@@ -898,7 +898,7 @@
 - 处置状态：用户逐条过 P3 时经解释触发链（畸形元素解码成 `(nil,nil)` → 对象入口回退空串 → View 只判数组非空就 map+joined → `中国 / ` 这类尾随分隔）与影响面后，批准随“组二”一并修复。
 ### F-044：人物搜索绕过职位翻译
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P3
 - 位置：Search 人物分页到 `SearchView` 人物行
 - 触发路径：搜索响应人物含 canonical `job`，如 Director。
@@ -908,6 +908,9 @@
 - 最小方向：人物职位展示走统一翻译边界，不在 View 手工词表。
 - 独立支持：B006-C 主审重走 searchPerson→SearchView，确认 canonical Director 也直接显示英文，维持 P3。
 - 剩余未验证：搜索响应 job 非空频率。
+- 修复状态：按“最小方向”在人物分页器的 `processor` 统一投影，不在 `PersonCard` / 最佳结果卡片两处打补丁。`SearchViewModel.translatingJobForDisplay` 用 `TranslationHelper.translateJobs` 投影非空 `job`，结果为空或与原文相同时原样返回（`translateJobs` 对未登记 key 原样返回、翻译后去重，对已翻译值是幂等的，因此重复投影不会叠成「导演/导演」）。投影发生在 `Person.deduplicate` 之前，首屏与 loadMore 走同一条路径；人物行（`personPaginator.items`）与最佳结果卡片（`bestResults`）同源，一处修复覆盖两个出口。
+- 验证：`testSearchPersonJobIsTranslatedForPersonRow`（canonical `Director` → 「导演」，人物行）、`testSearchPersonJobIsTranslatedForBestResultSubtitle`（最佳结果卡片副标题同为「导演」）、`testSearchPersonJobProjectionHandlesMultiJobAndMissingJob`（`Director/Writer` → 「导演/编剧」；无 `job` 的人物不被凭空造出职位、`character` 原样保留）、`testSearchPersonJobProjectionIsIdempotentForTranslatedValue`（已翻译值「导演」原样保留，阴性对照）。临时还原投影调用后前三条失败、幂等对照仍通过。
+- 处置状态：用户逐条过 P3 时经解释触发链（搜索响应人物含 canonical `job` → 搜索链路完全绕过 `StaffManager.processCrew` 的翻译边界 → 两个 View 直接渲染 raw job）与影响面（中文界面人物行显示英文 `Director`，而详情页同一人显示「导演」）后，批准随“组四”修复。
 
 ### F-045：roles-only 职员跨展示不一致
 

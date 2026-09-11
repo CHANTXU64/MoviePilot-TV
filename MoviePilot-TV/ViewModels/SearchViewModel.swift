@@ -335,6 +335,25 @@ class SearchViewModel: ObservableObject {
     return uniqueItems
   }
 
+  /// F-044：把搜索人物的 `job` 投影成**当前语言的显示文本**。
+  ///
+  /// 详情页的职员走 `StaffManager.processCrew` 才翻译职位，而搜索结果这条链路
+  /// 完全绕过它 —— `PersonCard` 与最佳结果卡片直接把 `person.job` 当副标题渲染，
+  /// 于是中文界面下同一个人在人物行显示 "Director"、在详情页显示「导演」。
+  /// 服务端返回的 job 即使是 canonical key 也会触发，与 F-041 的变体失配无关。
+  ///
+  /// `TranslationHelper.translateJobs` 对未登记的 key 原样返回且翻译后去重，
+  /// 因此对已翻译值（如「导演」）重复投影是幂等的；这里仍显式跳过无变化的情况，
+  /// 避免每次刷新都重建 Person 实例。
+  private static func translatingJobForDisplay(_ person: Person) -> Person {
+    guard let job = person.job, !job.isEmpty else { return person }
+    let translated = TranslationHelper.translateJobs(jobString: job)
+    guard !translated.isEmpty, translated != job else { return person }
+    var projected = person
+    projected.job = translated
+    return projected
+  }
+
   @Published var isLoading = false
   @Published var searchType: SearchType = .unified
 
@@ -773,7 +792,11 @@ class SearchViewModel: ObservableObject {
         )
       },
       processor: { @MainActor currentItems, newItems in
-        let uniqueNewItems = Person.deduplicate(newItems, existingIDs: &personSeenIDs)
+        // F-044：人物行与最佳结果卡片都直接读 `job` 当副标题，搜索链路此前没有任何
+        // 翻译边界（详情页的职员才经 `StaffManager` 翻译）。在这里统一投影，
+        // 避免在 `PersonCard` / 最佳结果卡片两处各打一次补丁。
+        let uniqueNewItems = Person.deduplicate(
+          newItems.map(Self.translatingJobForDisplay), existingIDs: &personSeenIDs)
         if uniqueNewItems.isEmpty { return false }
         currentItems.append(contentsOf: uniqueNewItems)
         return true

@@ -2426,7 +2426,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-044 · P3 · 已确认 · 人物搜索绕过职位翻译</summary>
+<summary>F-044 · P3 · 已修复 · 人物搜索绕过职位翻译</summary>
 
 - 审查单元与位置：B005 复核新增 / B006-C；Search 人物行与 raw job
 - 触发路径：搜索响应人物含 canonical `job`，如 Director。
@@ -2435,6 +2435,8 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：verify_b005 独立确认 canonical Director 也会显示英文；verify_b005 后续 B006-C 主审重走 searchPerson→SearchView 旁路并支持
 - 跨端结论：TV 旁路缺陷已确认；搜索响应 job 非空频率未验证
 - 最小修改方向 / 裁决：人物职位展示走统一翻译边界，不在 View 手工词表。
+- 修复状态：在人物分页器 `processor` 统一投影（`SearchViewModel.translatingJobForDisplay`），两个 View 不再各自打补丁。用 `TranslationHelper.translateJobs` 翻译非空 `job`；无变化时原样返回，因此对已翻译值幂等。投影在 `Person.deduplicate` 之前，首屏与 loadMore 同路径，人物行与最佳结果卡片同源。
+- 验证：定向 4 条（人物行、最佳结果副标题、多职位 `Director/Writer`→「导演/编剧」+ 无 job 人物不被造值、已翻译值幂等阴性对照）；临时还原投影调用后前三条失败、幂等对照仍通过；全量套件通过。
 
 </details>
 
