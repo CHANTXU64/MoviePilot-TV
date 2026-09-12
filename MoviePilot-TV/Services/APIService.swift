@@ -2734,15 +2734,29 @@ class APIService: ObservableObject {
             throw APIError.serverMessage("HTTP Error \(httpResponse.statusCode)")
           }
 
-          for try await line in result.lines {
-            try self.validate(lease)
-            if line.hasPrefix("data:") {
-              let jsonString = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
-              if let data = jsonString.data(using: .utf8) {
-                let event = try JSONDecoder().decode(Event.self, from: data)
-                continuation.yield(event)
-              }
+          // F-101：按 SSE 事件边界组帧（同一事件的多条 `data:` 行以 `\n` 合并后再解码），
+          // 而不是逐物理行解码 —— 后者遇到合法多行事件会把每行单独当 JSON 解并抛错，
+          // 连带整条流终止。
+          //
+          // 注意这里遍历的是**字节**而不是 `result.lines`：`AsyncLineSequence` 会丢弃
+          // 空行，而空行正是事件结束标志，用它就等于把边界信息丢掉。详见 `SSEFramer`。
+          var framer = SSEFramer()
+
+          func yieldPayload(_ payload: String) throws {
+            guard let data = payload.data(using: .utf8) else { return }
+            continuation.yield(try JSONDecoder().decode(Event.self, from: data))
+          }
+
+          for try await byte in result {
+            if let payload = framer.consume(byte: byte) {
+              try self.validate(lease)
+              try yieldPayload(payload)
             }
+          }
+          // 流结束时冲刷挂起事件：断线前最后一个事件未必带空行收尾。
+          if let tail = framer.flush() {
+            try self.validate(lease)
+            try yieldPayload(tail)
           }
           continuation.finish()
         } catch {

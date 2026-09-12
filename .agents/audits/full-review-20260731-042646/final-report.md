@@ -2641,7 +2641,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-101 · P3 · 已确认 · SSE 多 data 行未按事件组帧</summary>
+<summary>F-101 · P3 · 已修复 · SSE 多 data 行未按事件组帧</summary>
 
 - 审查单元与位置：A001-H→V011-C；`APIService.streamSSE` 与 Search 等消费者
 - 触发路径：服务端发送一个由多条 `data:` 行组成、以空行结束的合法 SSE 事件。
@@ -2650,6 +2650,14 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：review_a001_h 核对生产解析器、兼容探针、Search fallback 及全部单行桩；verify_a001_h 用独立 Foundation/JSON 探针确认逐行失败、换行拼接成功，且现有 fixture 全为单行
 - 跨端结论：TV framing 缺口已确认；当前后端单行/heartbeat/Content-Type 契约未验证
 - 最小修改方向 / 裁决：只在共享 `streamSSE` 中按空行组帧、合并 data 后解码一次，并让兼容探针复用同一规则。
+
+**修复状态：已修复。** 新增 `MoviePilot-TV/Services/SSEFramer.swift`，生产解析器与兼容探针共用；两处均改为遍历字节而非 `AsyncBytes.lines`。
+
+**🆕 修复中查明的关键事实（审计「最小方向」据此修正）：** `AsyncLineSequence` 会**丢弃空行**，而空行正是 SSE 的事件结束标志，故事件边界在取行阶段就已丢失 —— `data: a\n\n data: b\n\n`（两个事件）与 `data: a\n data: b\n\n`（一个多行事件）经 `.lines` 之后完全同形、不可区分。已用本地真实 SSE 流复核。因此「在 `.lines` 之上补累积」不成立：它修不好多行事件，还会把原本正确的连续单行事件合并成非法载荷而全线报错（本轮实测一度令 7 个既有用例转挂）。最终改为让 `SSEFramer` 自己按 `0x0A` 切行，方能看见空行。性能无回归（1.3 MB / 401 事件：字节遍历 9.5 ms vs `.lines` 15.9 ms）。
+
+**验证：** 新增 `SSEFramerTests` 20 条（协议层 12 + 字节层 8）全过；此前转挂的 4 个 SSE 相关测试类 96/96 全过；反向验证逐字复刻改动前代码 → 14 挂 / 6 条阴性对照通过；全量 **957/957 通过、零失败**，逐名比对零用例消失。
+
+**残留：** 当前后端 8 处 SSE 生产端全部是 `f"data: {json.dumps(...)}\n\n"` 单一物理行形态，故触发条件目前**不可达**，属前瞻性健壮性修复；heartbeat/comment、单事件最大尺寸、Content-Type 与明确终止保证仍未验证。
 
 </details>
 

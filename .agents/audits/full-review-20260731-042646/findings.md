@@ -114,7 +114,7 @@
 | F-098 | 用户决定跳过（保持当前行为） | P1 | A001-F→I009/G09 | AI批量整理accepted/terminal逐ID回执 | accepted集合被提前移出选择，但后端/TV终态只有整批结果；失败或未知后无法安全恢复逐ID重试集合 | 既有双审闭合partial accepted与terminal receipt缺口；G09两名代理确认当前后端整批agent结果且TV模型丢弃IDs/completed | 保持当前整批错误通知与权威刷新，不做TV单端逐ID结果推断 | 当前逐ID完成语义缺失已确认；部署/真实失败分布未验证 |
 | F-099 | 已修复 | P2 | A001-F→G09 | 手动媒体选择正 ID 边界 | 原生 0 可进入整理/下载，负值又遮蔽有效 fallback | 既有双审闭合 native-first 选择与ASCII数字校验；G09两名代理对照当前后端truthy语义确认0等同未提供 | 复用现有正整数helper并在无效原生值后尝试规范fallback | TV与当前后端数值身份边界冲突已确认；部署频率未验证 |
 | F-100 | 已修复（`0cfeb12`） | P1 | A001-J→V012-A→G02 | 订阅状态同键请求与详情/预加载调用链 | 同键旧normal/force曾可覆盖较新强刷并反转菜单add/cancel判断 | `0cfeb12`已为每个规范化key绑定request revision/owner，旧响应不能覆盖较新的force结果或缓存；乱序回归测试通过 | 已按原最小方向完成，不再开放 | 修复已完成；真实网络触发频率不影响闭合结论 |
-| F-101 | 已确认 | P3 | A001-H→V011-C | `APIService.streamSSE` 与 Search 等消费者 | SSE 逐物理行解码，未按事件边界组帧并合并多条 data | review_a001_h 核对生产解析器、兼容探针、Search fallback 及全部单行桩 | verify_a001_h 用独立 Foundation/JSON 探针确认逐行失败、换行拼接成功，且现有 fixture 全为单行 | TV framing 缺口已确认；当前后端单行/heartbeat/Content-Type 契约未验证 |
+| F-101 | 已修复 | P3 | A001-H→V011-C | `SSEFramer.swift`（新增，组帧与字节切行）、`APIService.swift:2737-2766`、`BackendCompatibilityTests.swift:2689-2736` | SSE 逐物理行解码，未按事件边界组帧并合并多条 data | 新增 `SSEFramer` 并让生产解析器与兼容探针共用；两处均改为遍历**字节**而非 `.lines` | 定向 20/20；反向验证逐字复刻改动前代码 → 14 挂 / 6 条阴性对照通过；全量 **957/957 通过、零失败**（937 + 20），逐名比对无用例消失 | 🆕 `AsyncLineSequence` 会丢弃空行，事件边界只能在字节层拿到；当前后端全为单行 data，故触发条件目前不可达 |
 | F-102 | 未验证 | P3 | A001-H→G05/G09 | `APIService.swift:1813-1814`、`decodeAiRedoResponse:1611-1614` | opaque progress_key 未按单一路径段编码 | 静态构造可被特殊字符改写；G05与G09复核均确认当前后端生成值只含字母、数字和下划线 | 保留path-segment编码硬化建议；先固定合同/部署fixture | 当前本地生产者路径安全；外部生产者、部署版本与opaque合同未验证 |
 | F-103 | 用户决定跳过 | P2 | A001-H→I012 | 资源标题与媒体ID意图 | 标题与媒体ID共用keyword并由宽正则猜路由；Search stream标题失败后fallback可把同一输入改成ID搜索 | 既有双审确认路由猜测；I012提出fallback漂移，review_a001_j以现有标题测试第三裁升级P2 | 入口冻结title/media-ID intent，Search fallback只走title路径 | TV稳定搜索语义漂移已确认；后端真实结果差异未验证 |
 | F-104 | 用户决定跳过 | P2 | A001-I | `APIService.swift:1885,1897,1912,1938-1943`，A001-D Douban recommendations `1431` | 动态媒体或人物不透明 ID 未编码为单一路径段 | review_a001_i 闭合保留字符经 URL 构造改写 path/query/fragment 与详情/人物调用链 | review_a001_h 独立确认模型允许不透明 String、同文件已有整段编码惯例，并收窄相邻传播范围 | TV 路径构造缺口已确认、严重度条件性；上游 ID 字符集及后端 percent-decoding 未验证 |
@@ -1843,9 +1843,9 @@
 
 ### F-101：SSE 多 data 行未按事件组帧
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P3
-- 位置：`MoviePilot-TV/Services/APIService.swift:1748-1754`、`MoviePilot-TV-Tests/BackendCompatibilityTests.swift:2379-2387`
+- 位置：`MoviePilot-TV/Services/SSEFramer.swift`（新增）、`MoviePilot-TV/Services/APIService.swift:2737-2766`、`MoviePilot-TV-Tests/BackendCompatibilityTests.swift:2689-2736`
 - 触发路径：服务端发送一个由多条 `data:` 行组成、以空行结束的合法 SSE 事件。
 - 根因：生产解析器和兼容探针均按物理行立即 JSON 解码，没有按空行组帧并合并同一事件的 data 内容。
 - 用户影响：资源流可误判 malformed 后进入 fallback；AI 进度监控可失败，而后台任务仍可能继续。
@@ -1856,6 +1856,15 @@
 - V011-C 传播：Search 的 malformed 分支会因此进入同步 fallback；当前 Search 测试桩仍全为单行 data，未覆盖合法多行事件。
 - V015 生产补强：ResourceResult 消费同一逐物理行流；合法多 `data:` 事件被判 malformed 后误入同步 fallback，故修复仍只应落在共享 `streamSSE`。
 - 剩余未验证：当前后端 framing、heartbeat/comment、单事件最大尺寸、Content-Type 与明确终止保证。
+
+- 修复状态（🆕）：已修复。新增 `SSEFramer`（`nonisolated struct`，仅做事件组帧，不做 JSON 解码、不判定业务语义），生产解析器 `streamSSE` 与兼容探针 `readSSEStream` 共用同一条规则，不再各写一份逐行解码。
+- 🆕 修复过程中发现的关键事实（本项根因比审计描述更深一层）：**`URLSession.AsyncBytes.lines`（`AsyncLineSequence`）会丢弃空行**。审计给的「最小方向」是在既有取行之上补一层累积，但这行不通 —— 空行即事件结束标志，`lines` 根本不把它交出来，故事件边界在取行阶段就已丢失：两个独立事件 `data: a\n\n data: b\n\n` 与一个多行事件 `data: a\n data: b\n\n` 经 `.lines` 之后都是 `["data: a", "data: b"]`，二者**不可区分**。已用本地真实 SSE 流复核（`Content-Type: text/event-stream`，三个单行事件 → `lines` 只取出 3 行，分隔空行全部消失）。
+- 🆕 该事实的实践后果：在 `.lines` 之上补累积，非但修不好多行事件，反而会把原本正确的**连续单行事件**合并成一个非法载荷（`Unexpected character '{' after top-level value around line 2`）而导致全线报错 —— 本轮实测一度造成 7 个既有用例转挂（`BackendCompatibilityReadOnlyTests`、`BackendCompatibilitySideEffectTests`、`ResourceResultViewModelTests`、`SearchViewModelTests` 的 SSE 相关用例），随后改为字节层切行方才归零。可见「改动前逐行解码」对单行事件其实是**正确**的，真正的缺陷只在多行事件，而修它必须先能看见空行。
+- 最终实现：`SSEFramer` 自己按字节切行（`consume(byte:)` 在 `0x0A` 处成行，再交给 `consume(line:)` 做协议层累积），生产端与探针均改为 `for try await byte in ...`。按 `0x0A` 切分对 UTF-8 安全（续字节均 ≥ 0x80），已加多字节用例（「流浪地球」）锁定。性能对照（1.3 MB / 401 事件，`-O`）：字节遍历 9.5 ms，`.lines` 15.9 ms，无回归。
+- 与规范的唯一偏差（有意保留）：流结束时若仍有未以空行收尾的挂起事件，`flush()` **交付**它而不是按规范丢弃。改动前是「data 行一到即处理」，断线前最后一个事件（可能是 `done`）一直收得到；严格丢弃会静默降低容错。`flush()` 也会先补上停在半行上的残余内容。
+- 验证（老三样）：① 定向 —— 新增 `SSEFramerTests` 20 条（协议层 12 条 + 字节层 8 条）全过，且此前转挂的 4 个 SSE 相关测试类 96/96 全过；② **反向验证** —— 把两个入口逐字复刻改动前代码（`String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)`、`flush()` 恒返回 nil），保留全部新用例 → **14 挂 / 6 过**，6 条通过者即阴性对照（`testSingleLineEventContentIsUnchanged` 内容不变、`testBlankLineWithoutPendingDataReturnsNil`、`testConsecutiveSingleLineEventsStaySeparateThroughByteStream`、`testMissingTrailingBlankLineStillYieldsSeparateEvents`、`testHeartbeatsAndCommentsProduceNoPayloads`、`testMultibyteCharactersSurviveByteSplitting`，均为「单行/内容/应忽略行」这类改动前后必须一致的行为）；③ 全量 **957/957 通过、零失败**（937 + 20），与 F-078 一轮的 937 逐名比对确认 **零用例消失**。
+- 阴性对照的一处诚实说明：`testConsecutiveSingleLineEventsStaySeparateThroughByteStream` 在改动前的代码下**也通过** —— 这正印证了上面那条结论（旧码对单行事件本无错），本项修复的真实收益面只有合法的多行事件。
+- 残留未关闭：当前后端 8 处 SSE 生产端（`app/api/endpoints/search.py:113-128` 的 `_sse_event`、`app/api/endpoints/system.py:788` 等）**全部**是 `f"data: {json.dumps(...)}\n\n"` 的单一物理行形态，故本项触发条件目前**不可达**，属前瞻性健壮性修复；另 heartbeat/comment 行、单事件最大尺寸、Content-Type 与明确终止保证仍未验证（探针已能正确忽略 `:` 注释行，并有对应用例）。
 
 ### F-102：opaque progress_key 未按路径段编码
 

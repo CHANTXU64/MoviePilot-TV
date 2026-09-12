@@ -2686,12 +2686,14 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         )
       }
 
-      for try await line in bytes.lines {
-        if Task.isCancelled { break }
-        guard line.hasPrefix("data:") else { continue }
+      // F-101：与生产端 `streamSSE` 共用同一条组帧规则（`SSEFramer`），
+      // 不再各写一份逐物理行解码。
+      var framer = SSEFramer()
+      var shouldStop = false
 
-        let jsonString = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
-        guard let data = jsonString.data(using: .utf8) else { continue }
+      func handlePayload(_ payload: String) throws {
+        guard !shouldStop else { return }
+        guard let data = payload.data(using: .utf8) else { return }
 
         let event = try JSONDecoder().decode(BackendSSEEventProbe.self, from: data)
         eventCount += 1
@@ -2700,7 +2702,8 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         if event.type == "error" {
           streamError = event.message ?? event.data?.error ?? "Unknown SSE error event."
           sawTerminalEvent = true
-          break
+          shouldStop = true
+          return
         }
 
         if event.type == "done" || event.enable == false {
@@ -2708,12 +2711,27 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
             streamError = event.data?.error ?? event.message ?? "SSE terminal event reported failure."
           }
           sawTerminalEvent = true
-          break
+          shouldStop = true
+          return
         }
 
         if let maxEvents, eventCount >= maxEvents {
-          break
+          shouldStop = true
         }
+      }
+
+      // 与生产端一样遍历**字节**而非 `bytes.lines`：`AsyncLineSequence` 丢弃空行，
+      // 而空行是事件结束标志，用它会让多个独立事件被合并成一个非法载荷。
+      for try await byte in bytes {
+        if Task.isCancelled { break }
+        if let payload = framer.consume(byte: byte) {
+          try handlePayload(payload)
+        }
+        if shouldStop { break }
+      }
+      // 与生产端一致：流结束冲刷挂起事件。
+      if !shouldStop, let tail = framer.flush() {
+        try handlePayload(tail)
       }
 
       return BackendStreamProbeResult(
