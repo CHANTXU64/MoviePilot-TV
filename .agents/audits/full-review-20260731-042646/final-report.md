@@ -2611,7 +2611,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-078 · P3 · 已确认 · 缺失/0/重复分享业务 ID 可破坏稳定身份</summary>
+<summary>F-078 · P3 · 已修复 · 缺失/0/重复分享业务 ID 可破坏稳定身份</summary>
 
 - 审查单元与位置：M001-I；SubscribeShare 列表身份
 - 触发路径：`GET /subscribe/shares` 返回缺失、0、负数或重复分享 ID。
@@ -2620,6 +2620,10 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：review_m001_i 闭合 raw_id fallback、Paginator/ForEach 与兼容巡检盲点；verify_m001_i 独立确认列表丢项/焦点不稳，并驳回“Fork 错目标”的过宽影响
 - 跨端结论：TV 稳定身份缺口已确认；分享 ID schema 未验证
 - 最小修改方向 / 裁决：确认 schema 后，在分享快照边界要求唯一正业务 ID；非法记录采用明确过滤/拒绝策略，不以可变字段或 UUID 冒充持久身份。
+- 修复状态：用户批准修复，改动收敛在 `MoviePilot-TV/Models/Models.swift` 两处 —— `generateUniqueKey`（`:1086-1097`）把有效分享号从「非 nil」收紧为「正整数」（0/负数同缺失），消除所有 0 号分享共用 `share:0` 而被分页去重互相吞掉；`SubscribeShare.id`（`:2934-2983`）改为只在正业务 ID 时由 ID 决定身份，缺 ID 对齐 Web `SubscribeShareView.vue:287-293` 的兜底链（`media_id → tmdbid → doubanid → bangumiid → anilistid → name` + `share_user`）并舍弃可变的 `share_title`，全退化输入才退回随机 UUID（fail-open，宁可多一张重复卡也不丢卡）。新增 7 条回归用例；定向 10/10、反向验证 6 挂/4 过、全量 937/937。
+- 审计「剩余未验证」复核：分享 ID schema 已验证为 `Optional[int] = None`（`app/schemas/subscribe.py:153-155`）且列表代理逐条不校验，缺 ID 属契约内输入；非法 ID 的 Fork 语义已验证 —— `/subscribe/fork` 建订阅前 `sub_dict.pop("id")`，ID 仅用于向中心服务器上报「复用人次」且返回值不判，故「复用错目标」不成立，真实后果只是统计归属可能记错。
+- 处置说明：未采纳本条审计「最小方向」的「非法记录过滤/拒绝」—— 在缺 ID 属契约内输入的前提下等于把合法分享从列表剔除，即本项用户影响中的「列表丢项」。亦未采纳「TV 与 Web 一样不去重」：TV 的 `hasMore` 收敛依赖 processor 返回值（`Paginator.swift:242-243,283-284`），去掉去重将使翻页只能靠空页收敛，遇全已知项页面会永远翻不到底；Web 无此状态故可不去重。故保留去重、只修 key 公式使其与 Web 对齐。
+- 剩余未验证：真机 tvOS 焦点表现；中心服务器实际 ID 分布；重复正业务 ID 仍会去重掉一条（保留去重的固有代价）。
 
 </details>
 

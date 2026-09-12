@@ -1084,7 +1084,13 @@ nonisolated struct MediaInfo: Codable, Identifiable, Hashable {
     subscribeShare: SubscribeShare? = nil
   ) -> String {
     if let subscribeShare {
-      let shareId = subscribeShare.raw_id.map(String.init) ?? subscribeShare.id
+      // F-078：只有**正**业务 ID 才算有效分享号 —— 0 与负数跟缺失同义。Web 端分享列表的
+      // 卡片 key 用的是 `item.id || ...`，`0` 是假值同样落到兜底公式；而原来的 `??` 只认
+      // nil，会让所有 0 号分享共用同一个 `share:0`，进而在
+      // `deduplicateSubscriptionShareMedia` 里互相吞掉：两条不同的分享只剩第一条，
+      // 用户看到的是列表平白少卡且没有任何提示。
+      let shareId =
+        subscribeShare.raw_id.flatMap { $0 > 0 ? String($0) : nil } ?? subscribeShare.id
       return "share:\(shareId)"
     }
 
@@ -2925,16 +2931,55 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
     count = try container.decodeIfPresent(Int.self, forKey: .count)
     episode_group = try container.decodeIfPresent(String.self, forKey: .episode_group)
 
-    // 组合生成唯一的稳定标识符，防止 tvOS 焦点异常
-    let baseId = raw_id.map { String($0) } ?? ""
-    let baseTitle = share_title ?? ""
-    let baseUser = share_user ?? ""
-    if !baseId.isEmpty || !baseTitle.isEmpty || !baseUser.isEmpty {
-      self.id = "Share-\(baseId)-\(baseTitle)-\(baseUser)"
+    // 生成稳定的标识符，防止 tvOS 焦点异常。
+    //
+    // F-078：只在拿到**正**业务 ID 时才由业务 ID 决定身份（与 `generateUniqueKey` 同款判断，
+    // 0/负数不是有效分享号）。缺业务 ID 时对齐 Web 端 `SubscribeShareView.vue` 的兜底公式：
+    // 先取媒体自身的标识，其后才是订阅名与分享人 —— 不再把可变的 `share_title` 当成分，
+    // 否则分享人改一次标题，同一条分享就换了身份：列表里旧卡销毁新卡重建（焦点跳走），
+    // 复用订阅的 `pendingForkReceipt.shareID` 也随之下次对不上，用户再点一下会真的多建一个订阅。
+    //
+    // 连媒体标识都没有（退化输入）时才退回 UUID：宁可让这条记录每次解码都算作新项 —— 去重
+    // 不生效、最多多出一张重复卡 —— 也不能让它与别的记录撞成同一身份而被去重静默吞掉。
+    if let raw_id, raw_id > 0 {
+      self.id = "Share-\(raw_id)"
+    } else if let mediaComponent = Self.shareMediaIdentityComponent(
+      media_id: media_id,
+      tmdbid: tmdbid,
+      doubanid: doubanid,
+      bangumiid: bangumiid,
+      anilistid: anilistid,
+      name: name
+    ) {
+      self.id = "Share-\(mediaComponent)-\(share_user ?? "")"
     } else {
       self.id = UUID().uuidString
     }
 
+  }
+
+  /// F-078：缺业务 ID 时用来拼身份分量的媒体标识，取第一个非空值；全空返回 nil。
+  ///
+  /// 取值顺序对齐 Web 端 `SubscribeShareView.vue` 的兜底 key 链
+  /// （`item.media_id || item.tmdbid || item.doubanid || item.bangumiid || item.anilistid || item.name`）。
+  /// 用媒体自身标识而非 `share_title`：前者是分享内容的固有属性，分享人改不掉。
+  nonisolated private static func shareMediaIdentityComponent(
+    media_id: String?,
+    tmdbid: Int?,
+    doubanid: String?,
+    bangumiid: Int?,
+    anilistid: Int?,
+    name: String?
+  ) -> String? {
+    let candidates: [String?] = [
+      media_id,
+      tmdbid.map(String.init),
+      doubanid,
+      bangumiid.map(String.init),
+      anilistid.map(String.init),
+      name,
+    ]
+    return candidates.compactMap { $0 }.first { !$0.isEmpty }
   }
 
   /// 转换为 MediaInfo 以便在通用视图中复用

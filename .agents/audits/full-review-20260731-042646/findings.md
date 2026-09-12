@@ -91,7 +91,7 @@
 | F-075 | 已修复（仅误导文案；2026-08-14 用户裁决） | P2 | M001-J→W018-A | ReorganizeViewModel 批量后台整理 | 批量提交不保留逐 ID 的已受理/失败/未知状态 | 模型双审与W018-A双审确认success→false/throw、未发送与整批重试链 | 2026-08-14 三端对照后用户裁决：Web 同样无逐 ID 受理/只重试失败机制且部分失败不刷新列表，后端 force 重整理无幂等，故不做 TV 单端“只重试失败项”增强；仅修误导文案 | TV 错误反馈缺陷；后端幂等性未验证 |
 | F-076 | 已修复（资源搜索入口；2026-08-14） | P2 | M001-J→V011-C→W006-B/I012→G01/G04→当前实现复核 | Manual/Search 资源与最佳结果状态 | 统一session/generation门禁已阻断旧会话/旧owner结果进入新账号；同一会话内清空关键词、开始新搜索或搜索失败时，聚合Search/Resource仍可能保留旧结果或先发布过期错误 | 手动媒体ID子项已由`44908c4`修复；资源搜索新请求开始即清空旧结果已由本次修复（`SearchViewModel.autoSearch` `.resource` 分支）闭合，空关键词点搜索与 Web 一致（均直接不搜索）不改，聚合分支 bestResults 不扩展 | 新attempt按query/type/generation原子清退或发布结果与错误 | 原跨owner错误动作P1链已闭合；资源搜索同会话陈旧结果已修复，聚合 bestResults 旧值未列为独立修复目标 |
 | F-077 | 已修复（`58c7e81`） | P2 | M001-I当前合同复核 | SubscribeShare.toMediaInfo | 分享投影丢Bangumi、AniList与统一来源主身份 | 当前Web/后端schema与三路TV调用链复核确认；Explore/Search右键详情、资源、订阅均消费投影 | 共享投影按canonical→raw保留全部当前schema身份；模型缺字段部分与F-079同一实现边界 | 修复已完成：`58c7e81`；真实单一来源记录频率未验证 |
-| F-078 | 已确认 | P3 | M001-I | SubscribeShare 列表身份 | 缺失/0/负数/重复分享业务 ID 可破坏去重与焦点 | review_m001_i 闭合 raw_id fallback、Paginator/ForEach 与兼容巡检盲点 | verify_m001_i 独立确认列表丢项/焦点不稳，并驳回“Fork 错目标”的过宽影响 | TV 稳定身份缺口已确认；分享 ID schema 未验证 |
+| F-078 | 已修复 | P3 | M001-I | `Models.swift:1086-1097`（去重 key）、`:2934-2983`（身份构造与媒体标识兜底） | 缺失/0/负数/重复分享业务 ID 可破坏去重与焦点 | review_m001_i 闭合 raw_id fallback、Paginator/ForEach 与兼容巡检盲点 | verify_m001_i 独立确认列表丢项/焦点不稳，并驳回“Fork 错目标”的过宽影响 | 已修复：有效分享号收紧为正 ID（0/负数同缺失），缺 ID 改用媒体标识拼身份并舍弃可变的 `share_title`，全退化才退回随机身份；未采纳审计「拒绝非法记录」方向以免丢卡，亦未采纳「照 Web 不去重」因 TV 的 hasMore 收敛依赖该去重 |
 | F-079 | 已修复（`58c7e81`） | P2 | M001-I当前合同复核 | SubscribeShare GET→Fork 编码 | TV模型缺当前schema的`anilistid/media_source/media_id`，GET解码后Fork确定丢失 | 后端91ce365f与Web 7ea14bc9确认三字段在GET/Fork合同；APIService直接编码原模型 | 只补三个明确字段；unknown extra与legacy mediaid不在Share合同，不做raw透传 | 修复已完成：`58c7e81`；真实记录分布未验证 |
 | F-080 | 已修复（2026-08-17） | P2 | M001-K→V011-C/I009 | Search/Resource/Transfer AI SSE 消费者 | SSE 未收到合法终止或收到业务 error 仍可按成功收尾 | 既有双审闭合 EOF、业务 error、missingSites 与 AI 进行中状态链 | Search/Resource 业务 error 直接失败；clean EOF 无 done 丢弃部分结果并走普通 fallback；missingSites 仅 done 后；Transfer AI 无明确 terminal 显示可重试错误 | 后端终止保证与真实截断频率未验证 |
 | F-081 | 已修复（`670cf86`） | P2 | M001-K→S005/V015/W020-E | CustomRule数组/所选ID与坏identity fail-open | 单坏项可拖垮整数组，已选ID缺失/重复可静默不过滤或first-match错规则，并破坏列表/focus/profile身份 | 既有链确认fail-open；W020-E第三裁决合并F-211缺ID与F-215坏identity，两票支持条件性P2 | 输入边界隔离坏项并校验规范非空唯一ID/name；用户接受已选缺失时静默不过滤 | 修复完成（`670cf86`），验证及独立复审通过；长名布局仍未验证 |
@@ -1455,9 +1455,9 @@
 
 ### F-078：缺失/0/重复分享业务 ID 可破坏稳定身份
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：条件性 P3
-- 位置：`MoviePilot-TV/Models/Models.swift:2486-2488,2594-2602`；传播至 `MediaInfo.generateUniqueKey`、Explore/Search 去重和 ForEach。
+- 位置：`MoviePilot-TV/Models/Models.swift:1086-1097`（去重 key）、`:2934-2983`（身份构造与媒体标识兜底）；传播至 Explore/Search 去重与 SwiftUI ForEach。
 - 触发路径：`GET /subscribe/shares` 返回缺失、0、负数或重复分享 ID。
 - 根因：raw_id 可选且不校验正值/唯一性；缺 ID 时用可变标题+用户，空值时随机 UUID，raw 0 则共享 `share:0`。
 - 用户影响：不同分享被分页去重吞掉、SwiftUI 重复身份，或刷新后 ID 改变导致焦点跳动。
@@ -1465,7 +1465,14 @@
 - 跨端结论：分享 ID schema 是否强制唯一正值未验证。
 - 最小方向：确认 schema 后，在分享快照边界要求唯一正业务 ID；非法记录采用明确过滤/拒绝策略，不以可变字段或 UUID 冒充持久身份。
 - 独立复核：verify_m001_i 确认列表丢项与焦点不稳，但存活卡片仍携带自身原始 share，不能静态证明 Fork 了错误目标；维持条件性 P3并收窄影响。
-- 剩余未验证：分享 ID schema、非法 ID 的 Fork 后端语义和真机焦点表现。
+- 修复状态：用户批准修复。改动收敛在 `MoviePilot-TV/Models/Models.swift` 两处。（1）`generateUniqueKey`（`:1086-1097`）把「有效分享号」从「非 nil」收紧为「**正**整数」—— `0` 与负数一律视为缺失。原实现 `raw_id.map(String.init) ?? share.id` 只认 nil，令所有 0 号分享共用 `share:0`，进而在 `deduplicateSubscriptionShareMedia` 里互相吞掉：两条不同分享只剩第一条，用户侧表现为列表平白少卡且无任何提示。（2）`SubscribeShare.id`（`:2934-2983`）重构身份构造并新增 `shareMediaIdentityComponent`：只有正业务 ID 才由业务 ID 决定身份（`Share-<id>`，不再把可变的 `share_title`/`share_user` 掺进正 ID 分支）；缺业务 ID 时对齐 Web `SubscribeShareView.vue` 的兜底 key 链，按 `media_id → tmdbid → doubanid → bangumiid → anilistid → name` 取首个非空媒体标识，再拼 `share_user`；连媒体标识都没有的退化输入才退回随机 UUID —— 宁可让该记录每次解码都算作新项（去重不生效、最多多一张重复卡），也不与别的记录撞成同一身份而被去重静默吞掉。
+- 审计「剩余未验证」两项的复核结论：**分享 ID schema 已验证** —— `~/code/MoviePilot` 的 `app/schemas/subscribe.py:153-155` 声明 `id: Optional[int] = None`，即后端**设计上允许缺 ID**；列表代理 `MoviePilotServerHelper._handle_list_response`（`app/helper/server.py:336-342`）在 200 时直接 `return res.json()`，**逐条不做任何校验**。缺 ID 因此是契约内输入而非异常，这也是采用 fail-open 而非「拒绝非法记录」的直接依据。**非法 ID 的 Fork 后端语义已验证并驳回 F-078 的 Fork 分支** —— `app/api/endpoints/subscribe.py:715-733` 的 `/subscribe/fork` 先 `sub_dict.pop("id")` 再建订阅，订阅内容全部来自 name/year/type/keyword/媒体 ID/过滤规则等字段，ID 唯一的去处是建订阅成功后的 `async_sub_fork(share_id=sub.id)`（给中心服务器加「复用人次」），且该调用**返回值不参与任何判断**；`share_id=None` 时 URL 退化为 `/subscribe/fork/None`（垃圾请求，静默忽略），为 0 时给 0 号分享刷计数。故「复用了错误目标」在静态语义上不成立，ID 异常的真实后果仅为**中心服务器复用人次统计可能记错归属**，本机用户不可见。**真机焦点表现仍未验证**。
+- 未采纳审计原「最小方向」的理由：其表述为「在分享快照边界要求唯一正业务 ID；非法记录采用明确过滤/拒绝策略」—— 在缺 ID 属契约内输入的前提下，这条等于**把后端合法返回的分享从列表里剔除**，正是本项用户影响中「列表丢项」本身。用户明确不接受丢卡，且经比对 Web 端同位置（`SubscribeShareView.vue:287-293`）为「`item.id || 媒体标识链-share_user`」的兜底公式、列表侧完全不去重（`:181` 原样 `concat`），故改采 fail-open 并让兜底公式与 Web 对齐。
+- 未采纳用户「TV 也不去重、跟 Web 对齐」提议的理由：`Paginator.swift:242-243` 的注释（「用于跳过少量只包含已知项目的页面，继续向后寻找新内容」）与 `:283-284` 的 `if !hasNewContent && currentError == nil { hasMore = false }` 表明 TV 的 `hasMore` **收敛依赖 processor 的返回值**，而去重正是该返回值的来源。移除去重后 `processor` 只要该页非空即恒返回 true，`hasMore` 只能靠服务端空页收敛；一旦某页全为已知项（列表被插队后移）或服务端 `page` 参数失效，TV 会无限追加重复卡且永远翻不到底。Web 能不去重是因为它**没有 `hasMore` 状态**，终止条件在数据层（`currentData.length === 0`），其 key 只喂给虚拟滚动的行高缓存/ResizeObserver/行定位，没有删数据的权力。故保留去重机制、只修 key 公式。
+- 验证：新增 7 条用例（0 号与负数不再互撞、缺 ID 落到媒体标识、标题变更后身份不变仍可跨页去重、正 ID 身份不受标题/分享人影响、退化输入不被去重吞掉、重复正 ID 的现状固化）。定向 `SubscriptionShareDedupTests` 10/10 通过。**反向验证**：保留新用例、把两处实现退回修复前，得 6 挂 / 4 过 —— 4 条通过者即阴性对照（`testDuplicatePositiveRawIdsStillCollapseToOneRecord` 固化「重复正 ID 仍会去重掉一条」的现状，既有 3 条正 ID 用例为回归对照）。全量套件 **937/937 通过、零失败**（930 + 新增 7），与上一轮日志逐名比对确认无用例消失。
+- 残留未关闭：后端给出**重复正**业务 ID 时仍会去重掉一条 —— 这是「保留去重」的固有代价（Web 靠完全不去重规避），无唯一键可区分；中心服务器实际是否返回缺失/0/负数/重复 ID 在本地不可观测；真机 tvOS 焦点表现未验证。
+- 剩余未验证：真机焦点表现；中心服务器实际 ID 分布。
+
 
 ### F-079：分享GET→Fork丢失当前schema的AniList与统一身份
 
