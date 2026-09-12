@@ -1721,7 +1721,12 @@ struct TransferDirectoryConf: Codable, Hashable {
   /// 名称
   let name: String
   /// 存储
-  let storage: String
+  ///
+  /// F-135 加固：后端 schema 是 `Optional[str]`，而 `system/setting/public/Directories`
+  /// 返回的是**未经校验的原始配置**（写入路径也不做字段校验），所以该键可能缺失。
+  /// 保持非可选会让**整个目录数组**解码失败 —— 添加下载页会整体报错且重试无效。
+  /// 故取可选，缺省在生成 URI 处按「本地目录」处理。
+  let storage: String?
   /// 下载目录
   let download_path: String?
   /// 整理到媒体库目录

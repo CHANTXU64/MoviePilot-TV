@@ -2756,7 +2756,9 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-135 · P3 · 已确认 · 未规范化 option value 形成重复 Picker 身份</summary>
+<summary>F-135 · P3 · 已修复 · 未规范化 option value 形成重复 Picker 身份</summary>
+
+**本轮修复（2026-09-12）：** 按审计「最小修改方向」原文落地，四处改动。①`collectOptions` 按 `JSONValue` first-wins 去重 —— 实现为单遍展开（`collectOptionsInDeclarationOrder`）后一次性消重，因此 `content` 与 `items` 之间的跨层级重复也被同一遍扫描覆盖；`rangeOptions` 未动（其值单调且已有相邻消重，本就唯一）。②`AddDownloadViewModel.targetDirectories` 与 ③`SubscribeSheetViewModel.savePathOptions` 改为同一套规范化顺序：**先 trim、再丢空、最后去重** —— 原实现只排除 `nil`（AddDownload）或先去重、从不 trim（Subscribe），故空串会与内建「自动」选项撞成同一个 ID、远程空串会生成 `"qb:"` 这类并不存在的路径。修完后「自动」在列表中天然唯一，无需额外占位，即审计要求的「保留唯一自动项」，也**没有新增 option ID 层**。**顺带加固（同轮，用户裁决并入）：** `TransferDirectoryConf.storage` 由 `let storage: String` 改为 `String?`。查证结论是**机制成立但可达性未证实**：`system/setting/public/Directories` 走 `SystemConfigOper().get(...)` 返回**未经校验的原始配置**，写入端也只做 `list(filter(None, value))` 而不校验字段，而后端 schema 本就是 `Optional[str]`；TV 侧用裸 `JSONDecoder()` 硬解码非可选字段，任何一条缺 `storage` 都会让**整个目录数组**解码失败，`AddDownloadSheet` 随即置 `loadErrorMessage` 并禁用「确认」，且重试永不成功（整页不可用）。但 Web 目录设置页 `addDirectory()` 恒写 `storage: 'local'`，后端无播种默认值、也无补 `storage` 的迁移，故未找到会产生该形态配置的路径；且 Web 自身类型声明同为 `storage: string`，可见并非「TV 比 Web 少防一层」。因此**不单列为新发现**，仅作防御性加固并入本项。验证：新增 13 条用例（`DirectoryOptionNormalizationTests` 9 条 + `DynamicSourceBehaviorTests` 4 条），反向验证四处一并还原 → 8 挂 / 5 条阴性对照通过；全量 **977/977 通过、零失败**。
 
 - 审查单元与位置：V009-A/F→W012；Picker option value/身份规范化
 - 触发路径：插件两个标签共享JSON value；或公开Directories含`nil`之外的空/空白`download_path`。
@@ -2765,6 +2767,8 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：插件链三代理确认机制；W012双审与当前Web/后端裁决确认空/空白download_path生产可达；插件first-wins去重；目录trim后丢空再去重并保留唯一自动项
 - 跨端结论：条件性P3；真实插件重复value频率仍未验证
 - 最小修改方向 / 裁决：插件在`collectOptions`按JSONValue first-wins；目录在生成URI前trim并丢空，再去重并保留唯一自动项。不新增option ID层。
+- 🆕 跨端复核（2026-09-12，用户要求「不要光照抄 Web」）：①②Web 方向一致但**并不更完整** —— Web 的下载弹窗与字幕弹窗（`AddDownloadDialog.vue` / `AddSubtitleDownloadDialog.vue` 的 `convertToUri`）只有 `if (!item.download_path)` 而**没有 trim**，三个弹窗里仅 `SubscribeEditDialog.vue:350` 做了 trim，故纯空白路径在 Web 侧同样会变成空选项；审计的「trim 后丢空」比 Web 现状更完整。Web 还**没有**内建「自动」显式选项（用 `:placeholder` 代替），而 TV 的是遥控器可聚焦项、属有意设计，审计「保留唯一自动项」即明确保留它，不得照抄删除。③Web 侧**无对应层** —— `ExtraSourceView.vue:67` 把 `filter_ui` 交给 `FormRender.vue` 用 `h()` 原样透传给 Vuetify 组件，外层 `:key="index"` 按下标而非 value，不存在「option value 兼作身份」的中间层，故本项属 TV 独有防线；审计「不新增 option ID 层」正是明确否决了照搬 Web 那种「身份与值分离」的模型。
+- 当前处置（2026-09-12）：四处改动落地并全量通过（977/977）。`storage` 可选化一节的可达性仍未证实，作为防御性加固记录在案，未单列新发现。
 
 </details>
 
