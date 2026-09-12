@@ -2473,15 +2473,19 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-050 · P3 · 已确认 · Hero 演员先截断后去重</summary>
+<summary>F-050 · P3 · 已修复 · Hero 演员先截断后去重</summary>
 
-- 审查单元与位置：S006；MediaDetailViewModel Hero 演员截断
-- 触发路径：前四条演员含同一 Person.id 多角色重复，后面还有不同演员。
+- 审查单元与位置：S006（F-056 经 G07 第三裁并入）；`MoviePilot-TV/ViewModels/MediaDetailViewModel.swift:191-220`（`applyFullDetail` 主演初值）
+- 修复状态：取样顺序改为 G07 第三裁给的 `processActors`（全量去重并合并 `character`）→ 过滤 trim 后空名 → `prefix(4)`。过滤只落在 Hero 取样这一层，**不下沉到 `mergeActors`** —— 演员货架是否收无名者属另一条口径，verify_s006 已确认货架不受本项影响。尾部「Hero 完全为空才用分页数据补」分支保持原样。
+- 触发路径：前四条演员含同一 Person.id 多角色重复，后面还有不同演员；或前四条含 `name` 为 nil／trim 后为空的人。
 - 根因：先 prefix(4) 再 processActors 去重；分页结果仅在 Hero 完全为空时替换。
 - 用户影响：Hero 长期少于四名主演。
 - 证据：verify_b006_b 闭合 prefix(4)→processActors 与分页替换条件；verify_s006 独立确认影响仅 Hero 并修正 W008-C 路由
-- 跨端结论：TV 顺序缺陷已确认；真实重复分布未验证
-- 最小修改方向 / 裁决：完整去重后取前四并保持服务端顺序。
+- 跨端结论：后端 `actors` 取自 TMDB `credits.cast`，只按 `known_for_department == "Acting"` 过滤、**不去重**（`app/core/context.py:481-486`），而 TMDB cast 结构上允许同一个人以不同 `character` 出现多条；视图 `MediaDetailView.swift:1037` 用 `compactMap { $0.name }.joined(...)`，无名者渲染为空档却照样占名额。Web 无 Hero 主演行（演员经 `/credits/...` 页面展示），没有可对照面。
+- 最小修改方向 / 裁决：完整去重后取前四并保持服务端顺序；G07 第三裁把 F-056 的 nil/空名一并并入同一取样顺序根因。
+- 验证：新增 `MoviePilot-TV-Tests/HeroTopActorsOrderingTests.swift` 9 条（2 条阳性 + 7 条阴性对照）。定向 9/9。**反向验证分两次单独还原**：①退回「先 `prefix(4)` 再去重」→ 当时那版 6 条用例中 1 挂（重复项挤人）/ 5 过；②仅去掉空名过滤 → 9 条中 2 挂（`["乙","丙","丁"]`、`["   ","乙","丙","丁"]`）/ 7 过。全量 **991/991 通过、零失败**（982 + 9）。
+- 过程中修正的一处用例缺陷：`testMergedDuplicateKeepsAllCharacters` 在新旧实现下**同过** —— 旧实现取的前四条里重复项本就都在，合并结果同样是「角色一/角色二」，合并口径不随选取顺序变。它拦的是「用 Set 按 id 只留首条」这类**错误修法**而非本 bug，已由阳性改标为阴性对照并注明。另修正注释中已随增行失效的行号引用（原 `:250-251`、`:251`）与「不丢信息」的过度表述。
+- 处置状态：用户逐条过 P3 时听完触发链与影响面（改动一行、风险极低）后裁决「直接修吧」。真实重复分布与无名人物分布均未验证（未加真机日志统计频率）。
 
 </details>
 
@@ -3020,15 +3024,17 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-056 · P3 · 已驳回 · Hero 演员不滤空名且不补位</summary>
+<summary>F-056 · P3 · 已修复（并入 F-050） · Hero 演员不滤空名且不补位</summary>
 
 - 审查单元与位置：S006→G07→F-050；Hero 演员姓名展示
+- 修复状态：随 F-050 一并落地。Hero 取样层过滤「trim 后为空」的 name，使无名者不再消耗四个名额之一；判据是 trim 后为空而非「非 nil」，故纯空白名同处理。过滤只判空、**不改写**姓名（带空白的真名原样保留），也不下沉到 `mergeActors`。**补位那半未改动** —— 「分页完成后补非空但不足列表」只在 Hero 彻底为空时才触发，属另一条已复核过的口径，本次未放宽。
 - 触发路径：首四项包含 nil/空 name，后面有正常演员。
 - 根因：只按数组非空，nil 渲染时丢弃、空字符串参与连接，分页完成后不补非空但不足列表。
 - 用户影响：空“主演”或少于四人。
 - 证据：既有双审确认；G07第三裁将重复、空名和补位合成一个Hero选人根因；并入F-050，不驳回机制；全量processActors后过滤空名再prefix(4)
-- 跨端结论：驳回重复编号；真实人物分布未验证
-- 最小修改方向 / 裁决：按可展示非空姓名过滤/去重后截断，后续完整结果可补位。
+- 跨端结论：驳回的是**重复编号**、不是机制；真实无名人物分布未验证。
+- 最小修改方向 / 裁决：按可展示非空姓名过滤/去重后截断，后续完整结果可补位（补位部分本次未动，见「修复状态」）。
+- 验证：`testNamelessActorDoesNotOccupyHeroSlot`、`testWhitespaceOnlyNameIsTreatedAsNameless` 两条阳性（去掉过滤即 2 挂），`testNameIsOnlyCheckedForEmptinessNotRewritten` 一条阴性对照防止顺手改写显示名。定向 9/9；全量 **991/991 通过、零失败**（982 + 9）。
 
 </details>
 

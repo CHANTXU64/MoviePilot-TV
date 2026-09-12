@@ -63,13 +63,13 @@
 | F-047 | 用户决定跳过 | P1 | B007→V012-B/C→W013-B | 全局/分季/Header 取消文案与删除接口 | 当前后端已对所有身份按season筛选；剩余为同媒体同季多group/多owner时文案只展示一条，媒体级删除却可能命中多条 | 当前TV、Web与后端调用链重新闭合；旧“非TMDB跨季删除”证据已失效 | 当前Web共享同一媒体级删除行为 | 用户决定跳过，不做TV单端增强 |
 | F-048 | 用户决定跳过 | P1 | B007→V012-B/C→G02 | 取消确认准备与执行 | 确认后重新解析target且未冻结精确订阅ID | 当前Web同样先通用确认、再读取当前媒体并执行媒体级删除 | TV/Web行为一致 | 用户决定跳过，不做TV单端增强 |
 | F-049 | 已修复 | P2 | B007→V012-B→G08 | Home/Header 取消结果 | DELETE false或异常被静默吞掉，Home 直接丢弃 Bool 返回 | 既有双审闭合结果出口；G08 三方裁决确认 Home 稳定丢弃 false 并升级 P2 | Home失败/异常与Header刷新后仍订阅统一通知；远端已删除且UI收敛时静默 | 已补业务失败、详情收敛与通知接线测试；完整验证通过 |
-| F-050 | 已确认 | P3 | S006 | MediaDetailViewModel Hero 演员截断 | Hero 演员先截断再去重，非空不足四人不补足 | verify_b006_b 闭合 prefix(4)→processActors 与分页替换条件 | verify_s006 独立确认影响仅 Hero 并修正 W008-C 路由 | TV 顺序缺陷已确认；真实重复分布未验证 |
+| F-050 | 已修复 | P3 | S006→G07（F-056 并入） | `MoviePilot-TV/ViewModels/MediaDetailViewModel.swift:191-220`（`applyFullDetail` Hero 主演取样） | Hero 演员先截断再去重；无名氏白占名额，非空不足四人不补足 | 改为 G07 第三裁给的 `processActors` → 过滤 trim 后空名 → `prefix(4)`；过滤只落在 Hero 取样层、**不下沉 `mergeActors`**（货架口径经 verify_s006 确认不受影响）；尾部「完全为空才补」分支保持原样 | 定向 9/9；反向验证分两次单独还原：①退回「先 `prefix(4)` 再去重」→ 当时那版 6 条用例中 1 挂（重复项挤人）/ 5 过；②仅去掉空名过滤 → 9 条中 2 挂（nil 名与纯空白名各一）/ 7 过；全量 **991/991 通过、零失败**（982 + 9）。过程中修正一处用例缺陷：`testMergedDuplicateKeepsAllCharacters` 在新旧实现下同过（合并口径不随选取顺序变），已由阳性改标为阴性对照 | 🆕 后端 `actors` 取自 TMDB `credits.cast`，只按 `known_for_department == "Acting"` 过滤、**不去重**（`app/core/context.py:481-486`），TMDB cast 结构上允许同人多条不同 `character`；视图 `MoviePilot-TV/Views/Pages/MediaDetailView.swift:1037` 用 `compactMap { $0.name }`，无名者渲染为空档；Web 无 Hero 主演行可照抄；真实重复/无名分布仍未验证 |
 | F-051 | 已修复 | P3 | S006 | `Models.swift:2286-2289`（`Person.hasUsableProfileImage`）、`StaffManager.swift:109-112` | 头像排序与可渲染图片判定不一致 | verify_b006_b 以 PersonDecoding 多组反例闭合；verify_s006 独立确认只影响 crew 新增项排序及 source-aware 反例 | G07 第三裁：直接复用现有 `imageURLs.profile != nil`，默认豆瓣头像与空 images 均为反例 | TV 排序规则缺陷已确认；真实来源组合未验证 |
 | F-052 | 已修复 | P3 | S006 | `StaffManager.swift:9-16`（多值取最高优先级）、`:235` | 多值 roles 被拼成单一 key 后优先级 999 | verify_b006_b 闭合 roles join→priority→translate split | verify_s006 修正为 roles fallback 两人反例并确认 | TV 排序缺陷已确认；修复为多值按项规范化后取最高优先级，空 roles 不再造孤立 `/`，用户批准 |
 | F-053 | 已修复 | P3 | S006 | `StaffManager.swift:45-141`、`TranslationHelper.swift:491-505` | 已翻译返回值不能安全作为下一批 existing | verify_b006_b 构造 Director→导演/Director→导演/导演 链 | verify_s006 独立确认条件性且当前无非空 existing 调用者 | 潜伏 API 缺陷已确认；修复为翻译后显示边界去重使回灌幂等，未启用增量语义仍保留，用户批准 |
 | F-054 | 已修复（`58c7e81`） | P1 | B007 复核新增 / M001-F→G02 | SubscriptionHandler Bangumi-only 取消 | 历史实现会丢失精确身份并改走集合式媒体删除 | 当前TV `58c7e81`已保留canonical/Bangumi/AniList/legacy身份；当前后端按身份与season筛选 | 当前实现与上游合同重新核对 | 修复已完成；旧部署版本未验证 |
 | F-055 | 已修复 | P3 | M001 | `SearchViewModel.swift:279`（最佳人物准入）、`Models.swift:2286-2289` | 人物最佳结果使用 TMDB 专属头像准入 | review_m001_g 独立确认人物搜索允许 Douban 且卡片与准入判据不同源 | G07 第三裁：与 F-051 共用 `imageURLs.profile` 事实来源但保持独立出口/fixture | TV 旁路缺陷已确认；Web 排名与真实跨来源人物分布未验证 |
-| F-056 | 已驳回 | P3 | S006→G07→F-050 | Hero 演员姓名展示 | 不过滤 nil/空 name 且首四项后不补位的机制成立，但与F-050同属过滤/去重后再截断的取样顺序 | 既有双审确认；G07第三裁将重复、空名和补位合成一个Hero选人根因 | 并入F-050，不驳回机制；全量processActors后过滤空名再prefix(4) | 驳回重复编号；真实人物分布未验证 |
+| F-056 | 已修复（并入 F-050） | P3 | S006→G07→F-050 | Hero 演员姓名展示 | 不过滤 nil/空 name 且首四项后不补位的机制成立，但与F-050同属过滤/去重后再截断的取样顺序 | 既有双审确认；G07第三裁将重复、空名和补位合成一个Hero选人根因 | 并入F-050，不驳回机制；全量processActors后过滤空名再prefix(4) | 随 F-050 落地：Hero 取样层过滤 trim 后空名；定向 9/9 中 2 条覆盖本项（nil 名、纯空白名），反向验证仅去掉过滤即 2 挂；驳回的是**重复编号**、不是机制；真实无名人物分布仍未验证 |
 | F-057 | 用户决定跳过 | P3 | S003 | ParsedSeason 范围解析/排序 | 范围终点丢失或未校验，排序不反映实际覆盖 | verify_s006 作为 S003 主审构造季/集范围反例 | verify_s003_resume 独立确认结束季捕获未消费及范围排序内部不一致 | 用户决定跳过：仅影响筛选下拉排序、筛选本身按原始字符串匹配仍正确，且真实范围格式未验证；另经比对 Web v2.15.6 `useTorrentFilter.ts` 为同源同缺陷，TV 修复无法与 Web 对齐 |
 | F-058 | 用户决定跳过 | P3 | S003 | ParsedSeason 与 Formatters 两套语法 | 卡片支持的季集语法在筛选排序中被判无效 | verify_s006 对比两套正则及 Set 未指定顺序 | verify_s003_resume 独立闭合两套正则与同一字段的显示/筛选链 | 用户决定跳过：仅影响筛选下拉排序与无效组内顺序；Web 无第二套语法（卡片直显原始串），“对齐 Web”等于删掉卡片美化造成显示退化，故不对齐也不修 |
 | F-059 | 部分修复 | P3 | S003 | `ParsedSeason.swift:43-60`（整季判定） | 解析失败和整数溢出静默折叠为合法零值 | verify_s006 闭合 Int 安全失败与整季/无效分支 | verify_s003_resume 独立确认无成功状态及零值多义性 | 用户批准只修「集号解析失败被冒充整季」这条唯一的归类错误；无成功标志/零值多义性等排序侧影响与 F-057/F-058 一并跳过；另注 Web 用 `parseInt` 不产生整季误标，该形态为 TV 独有 |
@@ -124,7 +124,7 @@
 | F-108 | 未验证 | P3 | V001 | `NotificationManager.swift:44-60`、根 presenter 与 Sheet 异步失败链 | 通知可能在独立 Sheet 下不可见却照常计时并过期 | review_a001_j 闭合 SubscribeSeason/Transfer 异步失败、根 presenter 与错误清空链 | verify_a001_h 确认静态触发链，但无法静态证明 tvOS Sheet 必然遮挡根 overlay | 条件性 TV 呈现问题；模态层级、焦点与五秒可见窗口待运行验证 |
 | F-109 | 已修复（`90b40b4`） | P2 | V002-A/B→W020-A/D/G06 | profile偏好作用域与权威配置owner | 四类tuple key可碰撞；token-only/凭据轮换还会落入错误bucket，推荐开关又绕过当前per-user权威配置 | 既有多审闭合碰撞与推荐合同；G06 两票确认key读取使用凭据用户名而非currentUser且baseURL未规范化 | canonical baseURL+权威currentUser组成版本化tuple；异步操作冻结同一key | 跨profile污染机制已确认；真实多profile频率与远端最新性未验证 |
 | F-110 | 已修复 | P2 | S005→C018-B/W011→G05 | `TorrentsResultView.swift:267,283-285,329-343,374-395` | 默认排序选择升序仍固定按pri_order降序 | 既有多审确认；G05主审与独立复核均再次闭合可选asc与固定desc的稳定反例并支持P2 | 比较器遵循方向，或隐藏默认字段方向控件；不与F-061合并 | 纯TV内部控制/比较器契约冲突 |
-| F-111 | 已修复（`90b40b4`/`769c509`） | P2 | V002-A/B→W020-A/C→I016 | token-only profile与连接身份 | 无storedUsername的合法会话统一使用default，System连接页也忽略权威currentUser | 既有双审确认机制；I016两代理以受支持token-only双账号隔离链确认升P2 | `profileKey=baseURL|user_id`；正常路径由 `/user/current` 恢复，恢复前或失败时只回退与当前 token 强校验匹配的快照 `user_id` | 匹配回退/不匹配拒绝两条测试覆盖；快照不取代新版会话或权限权威 |
+| F-111 | 已修复（`90b40b4`/`769c509`） | P2 | V002-A/B→W020-A/C→I016 | token-only profile与连接身份 | 无storedUsername的合法会话统一使用default，System连接页也忽略权威currentUser | 既有双审确认机制；I016两代理以受支持token-only双账号隔离链确认升P2 | `profileKey=baseURL\|user_id`；正常路径由 `/user/current` 恢复，恢复前或失败时只回退与当前 token 强校验匹配的快照 `user_id` | 匹配回退/不匹配拒绝两条测试覆盖；快照不取代新版会话或权限权威 |
 | F-112 | 已修复 | P2 | V002-C/D→W020-A/D→I016 | 站点权威空/失败/加载状态 | 站点成功空不清旧选择，失败与当前可用数据不可区分；Search/详情还会继续发送旧ID | 既有双审确认机制；I016两代理闭合成功空→旧ID请求链并升P2 | 成功空清选择，失败/取消与空分开并提供最小重试 | 纯TV状态缺陷；真实空站点频率未验证 |
 | F-113 | 用户决定跳过 | P2 | V002-D | `SystemViewModel.swift:385-400,444-450` 及资源搜索调用者 | 默认站点异步归一化可跨 profile 写回或返回旧 profile 值 | review_a001_h 闭合 A 读取→await→动态 B key 写回、catch 回退 A 与 B 会话请求传播 | review_a001_j 独立确认成功/错误/取消/撤权、三个调用者与条件性 P2 严重度边界 | 纯 TV 会话归属缺陷已确认、严重度条件性；旧导航可见性与真实频率未运行验证 |
 | F-114 | 已修复 | P3 | V003 | `SearchViewModel.swift:270,658-668`、`MediaDetailViewModel.swift:40,122-133` 及对应 View | 父 ViewModel 未转发 SiteFilter 子对象变化，站点按钮可停留旧文案 | verify_a001_h 闭合两个固定子对象、父 View 观察关系及 Paginator 已桥接反证 | review_a001_h 独立确认成功非空即可触发，实际请求读取子对象当前值并收窄为 UI 新鲜度 | 纯 TV SwiftUI 观察缺陷已确认；无关重绘前实际可见时长未运行验证 |
@@ -135,7 +135,7 @@
 | F-119 | 用户决定跳过（暂时，待内存优化工作树） | P2 | V004-B→V012-B→G02 | MediaPreloader cache aliases 与订阅回写 | UI key与canonical media ID一对多；保存/取消只更新单task或有限TMDB alias，其他未pin alias可长期显示旧订阅状态 | 既有双审确认机制；G02两名不同复核确认fullDetail/非TMDB alias缺口并升级P2 | 线性扫描小缓存并更新全部已知canonical alias；不建alias registry | 条件性TV状态错误P2；真实alias并存频率未验证 |
 | F-120 | 降级（用户决定跳过） | P2 | V006→V012-B→G10/G09 | 页面/Sheet mutation single-flight owner | 共享busy无target会令B卡片动作被丢弃或被A晚到提示打断；Reorganize预览与提交可交叉，但当前Web同样允许，且本项未证明错目标mutation | 既有双审闭合卡片owner与三个Sheet；后续按当前TV/Web触发与后果重裁 | 不做TV单端增强 | 普通快速网络下窗口较短；主要影响为动作无反馈或迟到UI，降P2并由用户决定跳过 |
 | F-121 | 已修复 | P2 | V006→W015→G02 | `SubscriptionHandler.forkErrorMessage` 与分享 Sheet 呈现链 | 错误不绑定share presentation/operation，A的同步残留或迟到失败可稳定污染B的可恢复操作界面 | 既有多轮裁决闭合同步链；全新G02 clean-room复核确认operation owner缺口并升级P2 | 错误绑定operationID/shareID，新presentation清旧且拒绝迟到发布 | TV跨目标错误归属P2；迟到调度频率未验证 |
-| F-122 | 已修复 | P3 | V005 | `APIService.recognizeTmdbId:2255-2263`、`MediaActionHandler.swift:37-73`、`HomeView.swift:277/295` | nullable 结果把最终无匹配、失败与取消统一呈现为未识别 | 闭合「首段失败 + 兜底成功但无可用 ID」的残留折叠；并把无匹配提示改为按调用方区分 | 两段 error/cancel 已 throws；本轮补齐首段失败暂存错误的最终抛出，且「搜索资源」不再弹提示 | 新增 7 条用例 + 两轮反向验证（2 挂/7 过、2 挂/3 过）；全量 964/964 通过、零失败 | 错误折叠与误弹窗均已闭合 |
+| F-122 | 已修复 | P3 | V005 | `APIService.recognizeTmdbId:2255-2263`、`MediaActionHandler.swift:37-73`、`HomeView.swift:277/295` | nullable 结果把最终无匹配、失败与取消统一呈现为未识别 | 闭合「首段失败 + 兜底成功但无可用 ID」的残留折叠；并把无匹配提示改为按调用方区分 | 两段 error/cancel 已 throws；本轮补齐首段失败暂存错误的最终抛出，且「搜索资源」不再弹提示 | 新增 7 条用例 + 两轮反向验证（2 挂/7 过、2 挂/3 过）；全量 964/964 通过、零失败；错误折叠与误弹窗均已闭合 |
 | F-123 | 用户决定跳过（核心链已闭合，剩余低影响） | P2 | V005 | 高层 TMDB action、两阶段识别、默认站点与最终导航链 | 用户动作未绑定发起 session，后续请求可携 B 凭据发送 A 标题 | review_a001_j 闭合 A search 等待→切 B→B recognize 的确定链及全局状态传播 | review_a001_h 独立确认正常 A 空响应后 B 新请求链、与 F-027/F-113 的修复边界及 ResourceResult 快照过晚 | 条件性跨 profile P2 已确认；旧导航/海报可见性未运行验证 |
 | F-124 | 已修复（`4a1a291`） | P1 | V006→I010→G02 | 订阅菜单标签/peek task 与 Handler fresh lookup/action | 菜单显示的add/cancel意图在fresh lookup后可反转，显示“订阅”的激活可直接执行无确认DELETE | `4a1a291`：菜单冻结展示意图，lookup后统一校验session，mismatch只刷新提示，取消走destructive确认 | 聚焦5/5、完整本地450/450通过；同一独立复审代理首轮问题修正后最终PASS | 原条件性错误删除P1已闭合；真实后端兼容套件未运行 |
 | F-125 | 用户决定跳过 | P3 | V008 | Home Plex link 解析与 v2.15.1 版本快照 | `/server/{machine}/details?key=` 未被旧 `/media/...` 解析器识别，目标身份退化 | verify_a001_h 以本地 v2.15.1 tag 闭合后端生成、Web 解析与 TV fallback | review_a001_j 独立确认 latest/resume 链、Plex 无结构化 ID 时只能从 link 恢复身份，并限制第三方 scheme 结论 | 版本特定 TV 深链缺陷已确认；tvOS Plex 精确 scheme 未验证 |
@@ -997,16 +997,20 @@
 
 ### F-050：Hero 演员先截断后去重
 
-- 状态：已确认
+- 状态：已修复
 - 严重度：P3
-- 位置：MediaDetailViewModel 主演初值
-- 触发路径：前四条演员含同一 Person.id 多角色重复，后面还有不同演员。
+- 位置：`MoviePilot-TV/ViewModels/MediaDetailViewModel.swift:191-220`（`applyFullDetail` 主演初值）
+- 触发路径：前四条演员含同一 Person.id 多角色重复，后面还有不同演员；或前四条含 name 为 nil／trim 后为空的人。
 - 根因：先 prefix(4) 再 processActors 去重；分页结果仅在 Hero 完全为空时替换。
 - 用户影响：Hero 长期少于四名主演。
 - 最小方向：完整去重后取前四并保持服务端顺序。
 - 独立复核：verify_s006 确认影响仅 Hero、演员货架不受影响，并修正回溯为 W008-C；维持 P3。
 - G07全局双审升级建议：两代理用`[A角色1,A角色2,B,C,D]`及空名构造确认先截断、后去重/滤名且分页只在全空时回填，稳定令Hero少人；建议F-050/F-056同一取样顺序族升P2。Search最佳结果先去重/过滤再限12，旧同类说法驳回；等级交第三裁。
 - G07第三裁：verify_a001_h把重复、nil/空名与后续补位统一裁为本项Hero选人根因，维持P3；先全量`processActors`、过滤trim后空名，再`prefix(4)`。F-056作为重复编号驳回并入，不扩到Search。
+- 修复：按 G07 第三裁的顺序落地 `processActors` → 过滤 trim 后空名 → `prefix(4)`。过滤只落在 Hero 取样这一层，不下沉到 `mergeActors` —— 演员货架是否收无名者属另一条口径，verify_s006 已确认货架不受本项影响。尾部「完全为空才补」分支保持原样：它只在 `heroTopActors` 彻底为空时兜底，此时过滤与否都不改变「这份数据本就没有可显示的主演」这一结论。
+- 验证：定向 9/9。反向验证分两次单独还原 —— ①退回「先 `prefix(4)` 再去重」：当时那版 6 条用例中 1 挂（重复项挤人）/ 5 过；②仅去掉空名过滤：9 条中 2 挂（`["乙","丙","丁"]`、`["   ","乙","丙","丁"]`）/ 7 过。全过程修正一处用例缺陷：`testMergedDuplicateKeepsAllCharacters` 在新旧实现下同过（合并口径不随选取顺序变，旧实现取的前四条里重复项本就都在），它拦的是「用 Set 只留首条」这类错误修法而非本 bug，已由阳性改标为阴性对照。全量 **991/991 通过、零失败**（982 + 9）。
+- 跨端结论：后端 `actors` 取自 TMDB `credits.cast`，只按 `known_for_department == "Acting"` 过滤、**不去重**（`app/core/context.py:481-486`），而 TMDB cast 结构上允许同一个人以不同 `character` 出现多条；视图 `MoviePilot-TV/Views/Pages/MediaDetailView.swift:1037` 用 `compactMap { $0.name }.joined(...)`，无名者渲染为空档却照样占名额。Web 无 Hero 主演行（演员经 `/credits/...` 页面展示），没有可对照面。
+- 处置：用户逐条过 P3 时听完触发链与影响面后裁决「直接修吧」。真实重复分布与无名人物分布均未验证（未加真机日志统计频率）。
 
 ### F-051：头像排序与可渲染图片判定不一致
 
