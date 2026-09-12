@@ -2824,15 +2824,19 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-169 · P3 · 已确认 · ShelfPicker 只视觉标记当前选择</summary>
+<summary>F-169 · P3 · 已修复 · ShelfPicker 只视觉标记当前选择</summary>
 
-- 审查单元与位置：C007；ShelfPicker持久选择的可访问性语义
+- 审查单元与位置：C007；`MoviePilot-TV/Views/Components/ShelfPicker.swift:74-76`（`ShelfChip.accessibilityTraits`）、`:90`（挂载点）
+- 修复状态：新增 `accessibilityTraits` 属性（`isSelected ? .isSelected : []`）并 `.accessibilityAddTraits(...)` 挂到 `ShelfChip` 的 Button 链尾。严格按裁决「在现有 Button 上一行条件添加」——不加自定义 label/value（名称已由 `Text(title)` 提供），不引入 selection/focus 框架。抽成属性而非内联三元，是为了让规则本身可被单测断言（SwiftUI trait 无法从渲染树读回）。挂载点放在链尾是因为 `overlay` 会再包一层。
 - 触发路径：VoiceOver用户在Recommend货架chip间移动焦点，但尚未激活新货架。
 - 根因：私有`isSelected`只控制视觉overlay；Button/Text提供名称和动作，却没有`.isSelected` trait或等价value，focus与持久selection是两种状态。
 - 用户影响：用户能听到并激活货架名称，但不能可靠判断当前哪个货架正在驱动下方结果；视觉高亮和通常回到selected shelf是最强反例，故不升级P2。
 - 证据：review_a001_j主审与verify_a001_h独立复核确认唯一Recommend调用、focus/selection分离及默认Button仅有名称/动作语义；W005/G02/G04回溯一行条件isSelected trait与VoiceOver验收
-- 跨端结论：真实困惑频率/播报措辞未验证
+- 跨端结论：Web `MediaRecommend.vue:369` 确有 `aria-current` 可对照，但 **TV 不是照抄 Web 的形态** —— Web 是鼠标/触摸的 hover 模型，TV 是遥控器焦点模型，`isFocused`（焦点停在哪个 chip）与 `isSelected`（哪个货架在驱动结果）可分离，用户把焦点移过去还没按下时结果仍归原货架；故只补这一层语义，不引入 Web 那套选中状态机。真实困惑频率/播报措辞仍未验证。
 - 最小修改方向 / 裁决：在现有Button上一行条件添加`.isSelected` trait，不加自定义label/value、selection或focus框架。
+- 验证：新增 `MoviePilot-TV-Tests/ShelfChipAccessibilityTests.swift` 6 条，**分两层**——4 条行为测试断言 `accessibilityTraits` 这条规则（选中项带 `.isSelected`；未选中项不带；**焦点落在未选中 chip 上不得播报已选中**；只加这一个 trait），2 条接线守卫断言它确实挂在 Button 上、且未引入 label/value/element。定向 6/6。**反向验证分两次**：①把属性置空 → **2 挂 / 4 过**（两条阳性失败，两条阴性对照通过；接线守卫仍过）；②只拆接线、保留属性 → **1 挂 / 5 过**（4 条行为测试全过，仅接线守卫失败）。全量 **997/997 通过、零失败**（991 + 6）。
+- 说明：两层测试各守一种失败模式 —— 只写规则不接线，或只接线而规则恒空。任一层单独存在都会漏掉另一种，故两层都留。VoiceOver 实际播报措辞需真机验收，本轮未做。
+- 处置状态：用户逐条过 P3 时经解释「焦点与持久选择是两种状态、Web 有 aria-current 但形态不同」后裁决「加吧」。
 
 </details>
 
