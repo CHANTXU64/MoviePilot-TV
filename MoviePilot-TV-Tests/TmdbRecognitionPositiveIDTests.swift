@@ -132,6 +132,50 @@ final class TmdbRecognitionPositiveIDTests: XCTestCase {
 
     XCTAssertNil(recognized)
   }
+
+  /// F-122：首段搜索失败、兜底请求成功但无匹配时，不得把「查询没做完」伪装成「真无匹配」。
+  func testSearchFailureThenFallbackNoMatchThrowsInsteadOfReturningNil() async {
+    TmdbRecognitionURLProtocol.stub.setSearchStatusCode(500)
+    TmdbRecognitionURLProtocol.stub.setRecognizeResult(#"{"media_info":null}"#)
+
+    let service = makeService()
+
+    do {
+      let recognized = try await service.recognizeTmdbId(
+        title: "测试电影",
+        year: "2025",
+        type: "电影"
+      )
+      XCTFail("首段失败 + 兜底无匹配时应抛出首段错误，而不是返回 nil（会被弹成「媒体不存在」），实际返回 \(String(describing: recognized))")
+    } catch is CancellationError {
+      XCTFail("不应将后端错误折叠为取消")
+    } catch {
+      // 期望：抛出首段后端错误
+    }
+  }
+
+  /// 与上一条配对：兜底**给出了结果但没有可用 ID** 时同样不得伪装 no-match。
+  func testSearchFailureThenFallbackMissingIdThrowsInsteadOfReturningNil() async {
+    TmdbRecognitionURLProtocol.stub.setSearchStatusCode(500)
+    TmdbRecognitionURLProtocol.stub.setRecognizeResult(
+      #"{"media_info":{"tmdb_id":0,"title":"测试电影","type":"电影"}}"#
+    )
+
+    let service = makeService()
+
+    do {
+      let recognized = try await service.recognizeTmdbId(
+        title: "测试电影",
+        year: "2025",
+        type: "电影"
+      )
+      XCTFail("兜底只给出 0 号 ID（无效）时应抛出首段错误，实际返回 \(String(describing: recognized))")
+    } catch is CancellationError {
+      XCTFail("不应将后端错误折叠为取消")
+    } catch {
+      // 期望：抛出首段后端错误
+    }
+  }
 }
 
 private final class TmdbRecognitionURLProtocolStub: @unchecked Sendable {

@@ -2703,6 +2703,8 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 <details>
 <summary>F-122 · P3 · 部分修复 · nullable TMDB 识别结果折叠失败、取消与无匹配</summary>
 
+**本轮修复（2026-09-12）：** 闭合「首段 `/media/search` 失败 + 兜底 `/media/recognize` 200 但无可用 ID → 返回 nil」这一处残留折叠。原实现把首段错误存进 `firstStageError` 后继续兜底，兜底「成功却给不出 ID」时直接落到末尾 `return nil`，**丢弃暂存错误**，调用方据此断言「确定无匹配」并弹「媒体不存在」，而实际一次完整查询都没完成。修复为末尾 `return nil` 之前 `if let firstStageError { throw firstStageError }`（3 行）；真 no-match 仍返回 nil。验证：新增 2 条用例，反向验证 2 挂 / 7 条阴性对照通过，全量 **959/959 通过、零失败**。遗留：Home「搜索资源」按钮在真 no-match 时仍 alert + 标题兜底导航双动作，但该提示现已不再由错误触发、内容属实；是否保留属产品意图，留待用户裁决。
+
 - 审查单元与位置：V005；`APIService.recognizeTmdbId`、`MediaActionHandler` 及 Home 标题回退
 - 触发路径：两阶段识别发生请求/鉴权/解码失败或取消；或者确实没有匹配。Home 资源搜索还会把 nil 当成正常标题回退并继续导航。
 - 根因：`recognizeTmdbId` 用一个 `Int?` 表示空标题、无匹配、类型不符、错误与取消，通配 catch 吞掉失败；Handler 又把所有 nil 无条件发布为全局“不存在”弹窗。

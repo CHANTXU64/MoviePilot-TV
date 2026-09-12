@@ -2256,6 +2256,13 @@ class APIService: ObservableObject {
       throw firstStageError ?? error
     }
 
+    // F-122：兜底请求本身成功、却没给出可用 ID。若首段曾失败，此刻手上只有「一次不完整的
+    // 查询」，不能据此断言「媒体不存在」—— 抛出首段原始错误，让调用方按识别失败处理，
+    // 而不是弹误导性的「媒体不存在」。
+    if let firstStageError {
+      throw firstStageError
+    }
+
     Logger.info("[APIService] 识别失败: \(title)")
     return nil
   }
