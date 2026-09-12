@@ -2217,3 +2217,199 @@ extension SearchViewModelTests {
     XCTAssertEqual(titles, [longTitle, "xxabcxxxx"])
   }
 }
+
+// MARK: - F-140 / F-141 搜索提交词的规范化与年份词法
+
+extension SearchViewModelTests {
+  /// F-140：尾随空格必须在下发请求与本地评分之前被去掉，两者共用同一个串。
+  ///
+  /// 后端 `StringUtils.get_keyword` 自己会 `.strip()`，所以旧实现发出去的请求本来就干净；
+  /// 但「最佳匹配」评分读的是用户原串，`fuzzyMatchScore(text: "Hamilton", query: "Hamilton ")`
+  /// 走到顺序匹配档、文本先被消耗完而返回 `-1` —— 精确标题反而被 `Hamilton Musical`
+  /// 这类带后缀的标题（包含匹配，684 分）反超。
+  ///
+  /// 这里同时断言两件事：请求确实按 `Hamilton` 发出（stub 按 title 值取响应，
+  /// 若发的是带空格的串会取到空结果），以及精确标题排第一。
+  func testTrailingWhitespaceIsStrippedBeforeRequestAndScoring() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    await SearchViewModelURLProtocol.stub.setMediaResults(
+      """
+      [
+        {"tmdb_id": 3001, "source": "themoviedb", "title": "Hamilton Musical", "type": "电影", "year": "2020", "poster_path": "/b.jpg", "popularity": 10},
+        {"tmdb_id": 3002, "source": "themoviedb", "title": "Hamilton", "type": "电影", "year": "2020", "poster_path": "/a.jpg", "popularity": 10}
+      ]
+      """,
+      forQuery: "Hamilton"
+    )
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.query = "Hamilton "
+    await viewModel.autoSearch()
+
+    XCTAssertEqual(viewModel.submittedQuery, "Hamilton", "提交词必须是规范化后的串")
+    // 刻意**不**用 `waitForRequest` 断言请求串：stub 按 `title` 值取响应，若发出的是带空格的
+    // 串就取不到上面这份数据，下面的标题断言会连带失败 —— 这同时覆盖了「请求规范化」与
+    // 「评分用同一个串」两半。而 `waitForRequest` 无超时，一旦请求串不符会死等而不是失败，
+    // 反向验证时会挂住整个测试进程。
+
+    let titles = viewModel.bestResults.compactMap { item -> String? in
+      if case .media(let media) = item { return media.title }
+      return nil
+    }
+    XCTAssertEqual(titles, ["Hamilton", "Hamilton Musical"], "精确标题不得被带后缀标题反超")
+  }
+
+  /// F-140：纯空白搜索词不得启动搜索。
+  ///
+  /// `"   ".isEmpty == false`，所以旧守卫 `guard !query.isEmpty` 拦不住 ——
+  /// 会带着一串空格走完整个聚合搜索（四个分页器 + 订阅分享）并置 `hasSearched = true`，
+  /// 结果必然为空，用户看到的是一个搜过、但没有结果的页面。
+  func testWhitespaceOnlyQueryDoesNotStartSearch() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.query = " \n\t "
+    await viewModel.autoSearch()
+
+    XCTAssertFalse(viewModel.hasSearched)
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertEqual(viewModel.submittedQuery, "")
+    XCTAssertTrue(viewModel.bestResults.isEmpty)
+    let mediaRequestCount = await SearchViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/media/search")
+    let shareRequestCount = await SearchViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/subscribe/shares")
+    XCTAssertEqual(mediaRequestCount, 0, "纯空白不得触发任何搜索请求")
+    XCTAssertEqual(shareRequestCount, 0)
+  }
+
+  /// F-140 的**阴性对照**：规范化只去首尾，不压缩内部空白。
+  ///
+  /// 内部空白的匹配质量属于评分层分档问题，不属于「提交词身份」问题；
+  /// 一旦顺手压缩，就会改变 `hasPrefix`/`contains` 既有分档的输入，超出本条范围。
+  func testInternalWhitespaceIsDeliberatelyPreserved() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    await SearchViewModelURLProtocol.stub.setMediaResults(
+      "[]", forQuery: "流浪地球  2")
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.query = "流浪地球  2"
+    await viewModel.autoSearch()
+
+    XCTAssertEqual(viewModel.submittedQuery, "流浪地球  2", "内部空白必须原样保留")
+  }
+
+  /// F-141：`1917` 这类数字片名不得被当成年份。
+  ///
+  /// 查询 `"1917 2019"` 时，旧词法 `(19|20)\d{2}` 扫到的是片名里的 1917：
+  /// 于是《1917》（year = 2019）被判为年份不符，回退匹配被关掉，
+  /// 而 `fuzzyMatchScore(text: "1917", query: "1917 2019")` 在顺序匹配档文本先耗尽 → `-1`。
+  /// 该片若又无海报且热度 < 1，会被 `hasNoPoster && maxS < 50 && pop < 1` 整条淘汰，
+  /// 搜索「1917 2019」反而找不到《1917》。
+  ///
+  /// 与后端 `[\s(]+(\d{4})[\s)]*` 同构后，年份取到 2019、纯标题回退词是 1917，精确标题得 1000。
+  func testNumericTitleIsNotMistakenForSearchYear() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    await SearchViewModelURLProtocol.stub.setMediaResults(
+      """
+      [
+        {"tmdb_id": 1917, "source": "themoviedb", "title": "1917", "type": "电影", "year": "2019", "poster_path": null, "popularity": 0.5}
+      ]
+      """,
+      forQuery: "1917 2019"
+    )
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.query = "1917 2019"
+    await viewModel.autoSearch()
+
+    let titles = viewModel.bestResults.compactMap { item -> String? in
+      if case .media(let media) = item { return media.title }
+      return nil
+    }
+    XCTAssertEqual(titles, ["1917"], "精确标题不得因年份误判被评分 -1 后淘汰")
+  }
+
+  /// F-141：剥年份必须连括号一起剥，不得留下 `()` 空壳。
+  ///
+  /// 旧实现只删数字：`"流浪地球 (2019)"` → 回退词变成 `"流浪地球 ()"`，与「流浪地球」
+  /// 既非全等、非前缀、也非包含，顺序匹配又因括号对不上而失败 → 精确标题只得 `-1`，
+  /// 而 `流浪地球特辑`（含「流浪地球」作为前缀）在旧实现里同样只得 `-1`，
+  /// 两者同分后精确标题因无海报被淘汰，反而只剩特辑。
+  func testParenthesizedYearIsRemovedTogetherWithItsBrackets() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    await SearchViewModelURLProtocol.stub.setMediaResults(
+      """
+      [
+        {"tmdb_id": 4001, "source": "themoviedb", "title": "流浪地球特辑", "type": "电影", "year": "2019", "poster_path": "/b.jpg", "popularity": 5},
+        {"tmdb_id": 4002, "source": "themoviedb", "title": "流浪地球", "type": "电影", "year": "2019", "poster_path": null, "popularity": 0.5}
+      ]
+      """,
+      forQuery: "流浪地球 (2019)"
+    )
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.query = "流浪地球 (2019)"
+    await viewModel.autoSearch()
+
+    let titles = viewModel.bestResults.compactMap { item -> String? in
+      if case .media(let media) = item { return media.title }
+      return nil
+    }
+    XCTAssertEqual(titles, ["流浪地球", "流浪地球特辑"], "精确标题应回退到纯标题匹配并排在首位")
+  }
+}

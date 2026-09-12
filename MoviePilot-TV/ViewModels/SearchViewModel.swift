@@ -167,24 +167,35 @@ class SearchViewModel: ObservableObject {
   ) -> [BestResultItem] {
     guard !submittedQuery.isEmpty else { return [] }
 
-    // 尝试从搜索词中提取年份 (4位数字)，用于辅助匹配（如搜索 "流浪地球 2019"）
-    let yearRegex = try? NSRegularExpression(pattern: "(19|20)\\d{2}")
+    // 尝试从搜索词中提取年份 (4位数字)，用于辅助匹配（如搜索 "流浪地球 2019"）。
+    //
+    // F-141：年份必须**跟前一个分隔符一起匹配**（空白或左括号），与后端
+    // `StringUtils.get_keyword` 的 `[\s(]+(\d{4})[\s)]*` 同构。原先用裸 `(19|20)\d{2}`
+    // 扫第一个四位串，`1917`、`2001: A Space Odyssey` 这类「数字片名」会被当成搜索年份：
+    // 一是把 `1917 (2019)` 的年份认成 1917，使真正的 2019 版《1917》被判为年份不符而
+    // 关掉回退、拿不到分；二是剥年份时只删数字、留下 `(2019)` 空壳当查询词。
+    // 现在整段（含前导分隔符与尾随右括号）一起删，`1917 (2019)` 干净地还原成 `1917`。
+    // 保留 `(19|20)` 前缀约束而不照搬后端的裸 `\d{4}`：年份只用于给候选补 `标题 + 年份`
+    // 变体与放宽回退，把 `1234` 之类当成年份只会引入新的误判。
+    let yearRegex = try? NSRegularExpression(pattern: "[\\s(]+((?:19|20)\\d{2})[\\s)]*")
     let nsQuery = submittedQuery as NSString
-    let queryYear: String? = {
-      if let match = yearRegex?.firstMatch(
-        in: submittedQuery, range: NSRange(location: 0, length: nsQuery.length))
-      {
-        return nsQuery.substring(with: match.range)
-      }
-      return nil
-    }()
+    let yearMatch = yearRegex?.firstMatch(
+      in: submittedQuery, range: NSRange(location: 0, length: nsQuery.length))
+    // 上式只有一个捕获组，匹配成功时 `range(at: 1)` 必然有效。
+    let queryYear: String? = yearMatch.map { nsQuery.substring(with: $0.range(at: 1)) }
 
     // 当搜索词包含年份时，生成去掉年份的纯标题查询词
     // 用于双重匹配：既匹配完整搜索词，也匹配纯标题，取最高分
     // 这确保了即使结果缺少 year 字段（如合集），标题仍能获得合理匹配分
-    let queryWithoutYear: String? = queryYear.map {
-      submittedQuery.replacingOccurrences(of: $0, with: "")
-        .trimmingCharacters(in: .whitespaces)
+    //
+    // F-141：剥完只剩空串时返回 nil（如查询词本就是 `(2019)`）。
+    // 这一条**不改变可观测行为** —— 空串在 `fuzzyMatchScore` 里恒为 -1，
+    // 进 `max` 会被原串分值盖掉。收在这里是为了让 `queryWithoutYear` 的含义
+    // 是「可用的回退查询词」而不是「可能为空串」。
+    let queryWithoutYear: String? = yearMatch.flatMap { match -> String? in
+      let remainder = nsQuery.replacingCharacters(in: match.range, with: "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      return remainder.isEmpty ? nil : remainder
     }
 
     // 计算候选标题集合的最佳匹配分值
@@ -418,12 +429,25 @@ class SearchViewModel: ObservableObject {
 
   /// 执行初始搜索：根据 searchType 决定是资源搜索还是聚合元数据搜索
   func autoSearch() async {
-    guard !query.isEmpty else { return }
+    // F-140：提交口先把搜索词规范化一次（去掉首尾空白与换行），之后**请求与本地评分
+    // 共用这一个串**。
+    //
+    // 后端 `StringUtils.get_keyword` 自己会 `.strip()`，所以发出去的请求本来就是干净的；
+    // 出问题的是 TV 自己的「最佳匹配」评分 —— 它读 `submittedQuery`，先前直接取用户原串。
+    // 于是搜 `Hamilton` 时手滑多留一个尾随空格，精确标题在 `fuzzyMatchScore` 里拿到 `-1`
+    // （低于任何模糊命中，会被 `Hamilton Musical` 这类带后缀的标题反超而掉到末位），
+    // 若恰好又无海报且热度 < 1，还会被 `hasNoPoster && maxS < 50 && pop < 1` 整条淘汰。
+    // 纯空白串也能绕过 `isEmpty` 守卫触发一次注定无果的全量搜索。
+    //
+    // 刻意不写回 `query`：搜索框保留用户输入原样，提交后就地改写文本更突兀。
+    // 也刻意只去首尾、不压缩内部空白 —— 内部空白的匹配质量属于评分层的分档问题，
+    // 不是「提交词身份」问题，动它会波及 `hasPrefix`/`contains` 的既有分档。
+    let searchQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !searchQuery.isEmpty else { return }
     let currentSearchType = searchType
     guard canAccess(currentSearchType) else { return }
     searchGeneration += 1
     let currentSearchGeneration = searchGeneration
-    let searchQuery = query
     let sessionSnapshot = apiService.sessionSnapshot()
     
     searchStreamTask?.cancel()
