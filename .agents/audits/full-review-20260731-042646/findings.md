@@ -73,7 +73,7 @@
 | F-057 | 用户决定跳过 | P3 | S003 | ParsedSeason 范围解析/排序 | 范围终点丢失或未校验，排序不反映实际覆盖 | verify_s006 作为 S003 主审构造季/集范围反例 | verify_s003_resume 独立确认结束季捕获未消费及范围排序内部不一致 | 用户决定跳过：仅影响筛选下拉排序、筛选本身按原始字符串匹配仍正确，且真实范围格式未验证；另经比对 Web v2.15.6 `useTorrentFilter.ts` 为同源同缺陷，TV 修复无法与 Web 对齐 |
 | F-058 | 用户决定跳过 | P3 | S003 | ParsedSeason 与 Formatters 两套语法 | 卡片支持的季集语法在筛选排序中被判无效 | verify_s006 对比两套正则及 Set 未指定顺序 | verify_s003_resume 独立闭合两套正则与同一字段的显示/筛选链 | 用户决定跳过：仅影响筛选下拉排序与无效组内顺序；Web 无第二套语法（卡片直显原始串），“对齐 Web”等于删掉卡片美化造成显示退化，故不对齐也不修 |
 | F-059 | 部分修复 | P3 | S003 | `ParsedSeason.swift:43-60`（整季判定） | 解析失败和整数溢出静默折叠为合法零值 | verify_s006 闭合 Int 安全失败与整季/无效分支 | verify_s003_resume 独立确认无成功状态及零值多义性 | 用户批准只修「集号解析失败被冒充整季」这条唯一的归类错误；无成功标志/零值多义性等排序侧影响与 F-057/F-058 一并跳过；另注 Web 用 `parseInt` 不产生整季误标，该形态为 TV 独有 |
-| F-060 | 降级 | P3 | S001 | Logger 与 15 个直接 print 生产文件 | 80 个直接 `print` 绕过 Debug-only Logger | integrate_i002 作为 S001 主审统计 35 Logger/80 print、确认个人数据与 bootstrap 缺失 | verify_s001_resume 独立复算调用、Release 设置与实际输出值；无凭据泄漏证据，P2→P3 | TV 本地旁路已确认；真实日志留存和凭据形态未验证 |
+| F-060 | 已修复 | P3 | S001 | `Logger.swift:7-101`（非隔离化）、16 个生产文件的 67 处直接 `print` | 直接 `print` 绕过 Debug-only Logger | integrate_i002 作为 S001 主审统计 35 Logger/80 print、确认个人数据与 bootstrap 缺失 | verify_s001_resume 独立复算调用、Release 设置与实际输出值；无凭据泄漏证据，P2→P3 | 用户决定全部替换为 `Logger.*`；实测调用点 67 处/16 文件（原记 80 处/15 文件，差异为计数口径），新增源码级禁用 `print` 守卫测试 |
 | F-061 | 已修复 | P2 | S003 复核新增 / M001-K→I011 | `CustomFilterService.swift:24-67`、`TorrentsResultView.swift:248-307` | 软过滤置尾及后端默认顺序被结果页重排破坏 | 既有双审确认机制；I011补默认策略覆盖，review_a001_j第三裁决按每次默认展示与错误策略升级P2 | 默认保留后端顺序；显式排序分别作用于正常/软过滤全局分区 | 已补默认与显式排序回归；完整验证通过 |
 | F-062 | 已修复（`90b40b4`） | P1 | S002→G06 | `KeychainHelper.swift:87-100` 及 APIService 登出链 | access token 删除失败后旧会话可在重启复活 | 既有双审闭合删除失败恢复；G06 两票确认登出成功表象后旧token重启复活的安全边界 | 删除失败写高权威logout tombstone/revision并重试；启动不得恢复被撤销代际 | 修复已完成：`90b40b4`；tombstone先于旧记录清理且启动失败关闭 |
 | F-063 | 已修复（`90b40b4`） | P1 | S002→G06 | `KeychainHelper.swift:8-84` 及 APIService/SystemViewModel 持久化链 | Keychain/UserDefaults 无明确权威导致旧或混合会话恢复 | 既有双审闭合逐项持久化；G06 两票确认A token、B user/permissions与另一代credentials可组合恢复 | 四项复用同一session owner/revision，只接受同代记录 | 修复已完成：`90b40b4`；单记录revision取代逐字段混读 |
@@ -1142,7 +1142,7 @@
 
 ### F-060：直接 `print` 绕过 Debug-only Logger
 
-- 状态：降级
+- 状态：已修复
 - 严重度：P3；由候选 P2 降级
 - 位置：`Logger.swift:22-43,92-102`、APIService/CustomFilter/Home 等 15 个直接 `print` 文件
 - 触发路径：Release 构建的鉴权、资源过滤、媒体服务器跳转或错误路径。
@@ -1156,6 +1156,10 @@
 - V020 传播：目标文件有8个直接`print`，只直接输出服务端message或error，未直接插值client/hash；错误文本自身是否携带这些值未验证。用户反馈缺失归F-093，Release日志治理仍归本项。
 - W020-A传播：system info、sites与rules失败/取消仍直接`print`，同时缺少用户恢复状态归F-126；两代理确认只扩展既有Release日志治理，不升级P3。
 - 剩余未验证：真机 Release stdout 的可见性/留存/性能，真实错误或媒体链接是否带秘密值；若证实凭据泄漏再升级。
+- 修复状态：按“最小方向”把生产端**全部**直接 `print` 改为统一 `Logger.*` 入口，不新增日志框架。实测调用点为 **67 处、散在 16 个文件**（审计原记 80 处/15 文件，差异为计数口径：本次逐点提取并配平括号，排除了 `hasSameMutationFingerprint(` 这类子串误命中与 `Logger.swift` 自身被 `#if DEBUG` 门控的那个 `print`）。分级按原文本语义落位：错误/失败路径 → `Logger.error`，Keychain 清理失败与选中规则失效 → `Logger.warning`，加载成功计数 → `Logger.info`，取消路径与 CustomFilter 逐资源追踪 → `Logger.debug`；与级别重复的前导 emoji（❌/✅/⚠️/ℹ️/🔍）和 `DEBUG: ` 前缀一并去掉，改由 Logger 的级别前缀表达。
+- 配套改动：`Logger` / `LogHandler` / `PrintLogHandler` / `Logger.Level` 显式标注 `nonisolated`，`handler` 标注 `nonisolated(unsafe)`。原因是本 target 设置了 `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`，默认隔离下这些静态方法只能在 MainActor 调用，而 `HomeViewModel:129`、`MediaDetailViewModel:423` 等调用点位于 `nonisolated` 的 Task 闭包内，直接替换会编译失败；日志属横切关注点，本就应当可从任意隔离域调用。`bootstrap` 全仓无调用方，`handler` 只有默认值这一个实际写入点。
+- 验证：新增 `NoDirectPrintInProductionTests`（源码级守卫）——经 `#filePath` 上溯定位仓库根后遍历 `MoviePilot-TV/**.swift`，用一个状态机把字符串字面量（含三引号多行串与 `#"..."#` 原始串）、`//` 行注释、`/* */` 块注释（支持嵌套）挖空后，按 `(?<![\w.])print\s*\(` 匹配，按文件名豁免 `Logger.swift`；定位失败时 `XCTSkip` 而非误报。**双向验证**：临时投放探针文件（同时含真实调用、注释里的调用、字符串里的 `print(` 文本、`fingerprintCheck(` 调用），守卫精确报出唯一真实调用所在行、对其余三种一律不报；探针已删除。
+- 影响面说明：因 `PrintLogHandler` 整体位于 `#if DEBUG` 内，本次替换后这 67 处在 **Release 构建中完全不再执行**（闭包也不会被求值），即 Release 侧无任何输出或留存 —— 这是审计认可的设计取向（“无 bootstrap 本身不构成缺陷”），代价是 TestFlight/Release 构建也拿不到这些诊断信息；若日后需要 Release 可观测性，应改 `LogHandler` 实现（如 `os.Logger`）而非恢复 `print`。
 
 ### F-061：软过滤置尾被结果页二次排序破坏
 

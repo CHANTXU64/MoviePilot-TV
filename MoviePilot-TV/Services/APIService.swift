@@ -445,7 +445,7 @@ nonisolated private func decodeOrUnwrapSync<T: Decodable>(from data: Data) throw
         throw APIError.decodingError(error)
       }
     } catch {
-      print("DEBUG: [decodeOrUnwrap] unknown error: \(error)")
+      Logger.debug("[decodeOrUnwrap] unknown error: \(error)")
     }
   }
 
@@ -641,8 +641,8 @@ class APIService: ObservableObject {
       } else {
         // 对于 tvOS 17.x 及更早版本，禁用图像缓存以避免 WEBP 解码问题。
         if useCacheSetting {
-          print(
-            "ℹ️ Detected tvOS version older than 18.0. Disabling image cache as a workaround for WEBP."
+          Logger.info(
+            "Detected tvOS version older than 18.0. Disabling image cache as a workaround for WEBP."
           )
         }
         self.useImageCache = false
@@ -794,7 +794,7 @@ class APIService: ObservableObject {
       "password",
     ].forEach { account in
       if !KeychainHelper.shared.delete(service: keychainService, account: account) {
-        print("Failed to delete keychain item for account: \(account)")
+        Logger.warning("Failed to delete keychain item for account: \(account)")
       }
       UserDefaults.standard.removeObject(forKey: account)
     }
@@ -1194,7 +1194,7 @@ class APIService: ObservableObject {
       service: Self.keychainService,
       account: Self.sessionRecordAccount
     ) {
-      print("Failed to delete keychain item for account: \(Self.sessionRecordAccount)")
+      Logger.warning("Failed to delete keychain item for account: \(Self.sessionRecordAccount)")
     }
     UserDefaults.standard.removeObject(forKey: Self.sessionRecordAccount)
     Self.clearStoredSessionCredentials()
@@ -1909,9 +1909,9 @@ class APIService: ObservableObject {
     Task {
       do {
         _ = try await makeRequest(endpoint: "/user/current")
-        print("Token/Session validation successful.")
+        Logger.debug("Token/Session validation successful.")
       } catch {
-        print("Silent token validation background process handled: \(error)")
+        Logger.debug("Silent token validation background process handled: \(error)")
       }
     }
   }
@@ -2054,14 +2054,14 @@ class APIService: ObservableObject {
         } catch is CancellationError {
           throw CancellationError()
         } catch {
-          print("DEBUG: [fetchSettings] Failed to fetch user settings: \(error)")
+          Logger.error("[fetchSettings] Failed to fetch user settings: \(error)")
         }
       }
       guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
       self.settings = response
       return response
     } catch {
-      print("DEBUG: [fetchSettings] Failed to fetch settings: \(error)")
+      Logger.error("[fetchSettings] Failed to fetch settings: \(error)")
       throw error
     }
   }

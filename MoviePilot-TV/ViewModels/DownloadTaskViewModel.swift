@@ -87,7 +87,7 @@ class DownloadTaskViewModel: ObservableObject {
         &consecutiveClientsFailures,
         message: "下载器列表加载失败，正在自动重试。"
       )
-      print("Error fetching clients: \(error)")
+      Logger.error("Error fetching clients: \(error)")
     }
   }
 
@@ -162,7 +162,7 @@ class DownloadTaskViewModel: ObservableObject {
         &consecutiveDownloadsFailures,
         message: "下载任务刷新失败，正在自动重试。"
       )
-      print("Error loading downloads: \(error)")
+      Logger.error("Error loading downloads: \(error)")
     }
   }
 
@@ -194,14 +194,14 @@ class DownloadTaskViewModel: ObservableObject {
       guard canOperateDownloads, loadedClient == clientName else { return false }
       if !success {
         errorMessage = message ?? "暂停下载失败，请稍后重试。"
-        print("Failed to stop download: \(message ?? "Unknown error")")
+        Logger.error("Failed to stop download: \(message ?? "Unknown error")")
       }
       return success
     } catch is CancellationError {
       return false
     } catch {
       errorMessage = "暂停下载失败，请稍后重试。"
-      print("Error stopping download: \(error)")
+      Logger.error("Error stopping download: \(error)")
       return false
     }
   }
@@ -215,14 +215,14 @@ class DownloadTaskViewModel: ObservableObject {
       guard canOperateDownloads, loadedClient == clientName else { return false }
       if !success {
         errorMessage = message ?? "启动下载失败，请稍后重试。"
-        print("Failed to start download: \(message ?? "Unknown error")")
+        Logger.error("Failed to start download: \(message ?? "Unknown error")")
       }
       return success
     } catch is CancellationError {
       return false
     } catch {
       errorMessage = "启动下载失败，请稍后重试。"
-      print("Error starting download: \(error)")
+      Logger.error("Error starting download: \(error)")
       return false
     }
   }
@@ -240,13 +240,13 @@ class DownloadTaskViewModel: ObservableObject {
         downloads.remove(at: index)
       } else {
         errorMessage = message ?? "删除下载失败，请稍后重试。"
-        print("Failed to delete download: \(message ?? "Unknown error")")
+        Logger.error("Failed to delete download: \(message ?? "Unknown error")")
       }
     } catch is CancellationError {
       return
     } catch {
       errorMessage = "删除下载失败，请稍后重试。"
-      print("Error deleting download: \(error)")
+      Logger.error("Error deleting download: \(error)")
     }
   }
 }

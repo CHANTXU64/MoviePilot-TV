@@ -45,7 +45,7 @@ class StatusViewModel: ObservableObject {
       return
     } catch {
       guard !Task.isCancelled else { return }
-      print("Error fetching dashboard data: \(error)")
+      Logger.error("Error fetching dashboard data: \(error)")
     }
   }
 }

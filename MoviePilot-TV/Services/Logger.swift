@@ -4,7 +4,9 @@ import Foundation
 
 /// 定义了日志实现程序的标准接口。
 /// 任何日志记录器（例如，基于 print、os.log 或第三方）都必须遵守此协议。
-public protocol LogHandler {
+/// 与 `Logger` 一致地显式退出默认的 MainActor 隔离：
+/// 日志是横切关注点，必须能从任意隔离域（含 `nonisolated` 的 Task 闭包）调用。
+nonisolated public protocol LogHandler {
   func log(
     level: Logger.Level,
     message: @autoclosure () -> Any,
@@ -19,7 +21,7 @@ public protocol LogHandler {
 ///
 /// 此实现会格式化消息以包含级别、源文件和行号，
 /// 如果提供了元数据，它也会被一并打印出来。
-public struct PrintLogHandler: LogHandler {
+nonisolated public struct PrintLogHandler: LogHandler {
   public init() {}
 
   public func log(
@@ -67,10 +69,10 @@ public struct PrintLogHandler: LogHandler {
 /// // 在你的 AppDelegate 或 App 结构体的初始化方法中
 /// Logger.bootstrap(handler: MyCustomLogHandler())
 /// ```
-public enum Logger {
+nonisolated public enum Logger {
 
   /// 代表日志消息的严重级别。
-  public enum Level {
+  nonisolated public enum Level {
     case verbose
     case debug
     case info
@@ -90,7 +92,9 @@ public enum Logger {
   }
 
   /// 当前活动的日志处理器。默认为基于 print 的处理器。
-  private static var handler: LogHandler = PrintLogHandler()
+  /// `bootstrap` 只在应用生命周期早期调用一次，此处按既有的“单一写入点”约定
+  /// 显式标注 `nonisolated(unsafe)`：读多写少且写入不与其他访问并发。
+  nonisolated(unsafe) private static var handler: LogHandler = PrintLogHandler()
 
   /// 使用特定的处理器来配置日志系统。
   ///

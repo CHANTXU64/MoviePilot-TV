@@ -526,7 +526,7 @@ class SearchViewModel: ObservableObject {
             self.resourceErrorMessage = error.localizedDescription
             return
           } catch {
-            print("❌ [SearchVM] 加载过滤规则失败，放行不过滤: \(error)")
+            Logger.error("[SearchVM] 加载过滤规则失败，放行不过滤: \(error)")
             filteredResults = accumulatedResults
           }
           guard canPublishSearchResult(
@@ -537,7 +537,7 @@ class SearchViewModel: ObservableObject {
 
           self.resourceResults = filteredResults
         } catch {
-          print("Stream Search error: \(error)")
+          Logger.error("Stream Search error: \(error)")
           guard canPublishSearchResult(
             generation: currentSearchGeneration,
             sessionSnapshot: sessionSnapshot,
@@ -561,7 +561,7 @@ class SearchViewModel: ObservableObject {
               self.resourceErrorMessage = error.localizedDescription
               return
             } catch {
-              print("❌ [SearchVM] 加载过滤规则失败，放行不过滤: \(error)")
+              Logger.error("[SearchVM] 加载过滤规则失败，放行不过滤: \(error)")
             }
             guard canPublishSearchResult(
               generation: currentSearchGeneration,
@@ -571,7 +571,7 @@ class SearchViewModel: ObservableObject {
 
             self.resourceResults = fallbackResults
           } catch {
-            print("Fallback Search error: \(error)")
+            Logger.error("Fallback Search error: \(error)")
             self.resourceErrorMessage = error.localizedDescription
           }
           guard canPublishSearchResult(

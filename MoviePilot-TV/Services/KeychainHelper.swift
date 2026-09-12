@@ -46,7 +46,7 @@ class KeychainHelper {
     // 情况三：发生其他未预期的 Keychain 错误。
     default:
       // 打印错误以帮助调试，并返回失败。
-      print("Keychain save failed with unhandled status: \(status)")
+      Logger.error("Keychain save failed with unhandled status: \(status)")
       return false
     }
   }
@@ -78,7 +78,7 @@ class KeychainHelper {
       // 为了方便调试，我们特别打印出非“未找到”的错误。
       if status != errSecItemNotFound {
         // 在调试期间，这能帮助我们快速定位非预期的 Keychain 错误
-        print("Keychain read failed with unhandled status: \(status)")
+        Logger.error("Keychain read failed with unhandled status: \(status)")
       }
       return nil
     }

@@ -2594,7 +2594,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-060 · P3 · 降级 · 直接 `print` 绕过 Debug-only Logger</summary>
+<summary>F-060 · P3 · 已修复 · 直接 `print` 绕过 Debug-only Logger</summary>
 
 - 审查单元与位置：S001；Logger 与 15 个直接 print 生产文件
 - 触发路径：Release 构建的鉴权、资源过滤、媒体服务器跳转或错误路径。
@@ -2603,6 +2603,10 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：integrate_i002 作为 S001 主审统计 35 Logger/80 print、确认个人数据与 bootstrap 缺失；verify_s001_resume 独立复算调用、Release 设置与实际输出值；无凭据泄漏证据，P2→P3
 - 跨端结论：TV 本地旁路已确认；真实日志留存和凭据形态未验证
 - 最小修改方向 / 裁决：复用现有 Logger 替换或删除直接 `print`，URL/error 复用现有 query 脱敏边界，并增加最小生产源码禁用 `print` 检查；不新增日志框架。
+- 修复状态：按“最小方向”把生产端**全部**直接 `print` 改为统一 `Logger.*` 入口，不新增日志框架。实测调用点为 **67 处、散在 16 个文件**（审计原记 80 处/15 文件，差异为计数口径：本次逐点提取并配平括号，排除了 `hasSameMutationFingerprint(` 这类子串误命中与 `Logger.swift` 自身被 `#if DEBUG` 门控的那个 `print`）。分级按原文本语义落位：错误/失败路径 → `Logger.error`，Keychain 清理失败与选中规则失效 → `Logger.warning`，加载成功计数 → `Logger.info`，取消路径与 CustomFilter 逐资源追踪 → `Logger.debug`；与级别重复的前导 emoji（❌/✅/⚠️/ℹ️/🔍）和 `DEBUG: ` 前缀一并去掉，改由 Logger 的级别前缀表达。
+- 配套改动：`Logger` / `LogHandler` / `PrintLogHandler` / `Logger.Level` 显式标注 `nonisolated`，`handler` 标注 `nonisolated(unsafe)`。原因是本 target 设置了 `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`，默认隔离下这些静态方法只能在 MainActor 调用，而 `HomeViewModel:129`、`MediaDetailViewModel:423` 等调用点位于 `nonisolated` 的 Task 闭包内，直接替换会编译失败；日志属横切关注点，本就应当可从任意隔离域调用。`bootstrap` 全仓无调用方，`handler` 只有默认值这一个实际写入点。
+- 验证：新增 `NoDirectPrintInProductionTests`（源码级守卫）——经 `#filePath` 上溯定位仓库根后遍历 `MoviePilot-TV/**.swift`，用一个状态机把字符串字面量（含三引号多行串与 `#"..."#` 原始串）、`//` 行注释、`/* */` 块注释（支持嵌套）挖空后，按 `(?<![\w.])print\s*\(` 匹配，按文件名豁免 `Logger.swift`；定位失败时 `XCTSkip` 而非误报。**双向验证**：临时投放探针文件（同时含真实调用、注释里的调用、字符串里的 `print(` 文本、`fingerprintCheck(` 调用），守卫精确报出唯一真实调用所在行、对其余三种一律不报；探针已删除。
+- 影响面说明：因 `PrintLogHandler` 整体位于 `#if DEBUG` 内，本次替换后这 67 处在 **Release 构建中完全不再执行**（闭包也不会被求值），即 Release 侧无任何输出或留存 —— 这是审计认可的设计取向（“无 bootstrap 本身不构成缺陷”），代价是 TestFlight/Release 构建也拿不到这些诊断信息；若日后需要 Release 可观测性，应改 `LogHandler` 实现（如 `os.Logger`）而非恢复 `print`。
 
 </details>
 

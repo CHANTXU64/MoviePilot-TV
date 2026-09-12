@@ -420,7 +420,7 @@ class MediaDetailViewModel: ObservableObject {
             }
             return true
           } catch {
-            print("[MediaDetailViewModel] 刷新订阅状态失败: \(error)")
+            Logger.error("[MediaDetailViewModel] 刷新订阅状态失败: \(error)")
             return false
           }
         }
@@ -467,7 +467,7 @@ class MediaDetailViewModel: ObservableObject {
       } catch is CancellationError {
         return false
       } catch {
-        print("[MediaDetailViewModel] 取消订阅失败: \(error)")
+        Logger.error("[MediaDetailViewModel] 取消订阅失败: \(error)")
       }
     }
     if let fallbackSubscriptionId {
@@ -477,7 +477,7 @@ class MediaDetailViewModel: ObservableObject {
       } catch is CancellationError {
         return false
       } catch {
-        print("[MediaDetailViewModel] 取消订阅失败: \(error)")
+        Logger.error("[MediaDetailViewModel] 取消订阅失败: \(error)")
       }
     }
     return false
@@ -525,7 +525,7 @@ class MediaDetailViewModel: ObservableObject {
     } catch is CancellationError {
       return nil
     } catch {
-      print("[MediaDetailViewModel] 读取订阅取消影响范围失败: \(error)")
+      Logger.error("[MediaDetailViewModel] 读取订阅取消影响范围失败: \(error)")
       return nil
     }
   }
@@ -548,7 +548,7 @@ class MediaDetailViewModel: ObservableObject {
       } catch is CancellationError {
         return nil
       } catch {
-        print("[MediaDetailViewModel] 读取订阅取消目标失败: \(error)")
+        Logger.error("[MediaDetailViewModel] 读取订阅取消目标失败: \(error)")
       }
     }
     return nil
