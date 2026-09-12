@@ -28,8 +28,16 @@ class MediaActionHandler: ObservableObject {
     return searchResourcesTarget(for: item, sites: sites)
   }
 
+  /// 解析出可用于跳转/搜索的 TMDB 目标。
+  ///
+  /// - Parameter notifyWhenUnrecognized: 真正无匹配时是否弹「未识别到此媒体的TMDB信息」。
+  ///   默认 `true`，适用于「TMDB详情页」这类**以 TMDB 为目标**的动作 —— 找不到就该告诉用户。
+  ///   取 `false` 适用于「搜索资源」这类**识别失败可自愈**的调用方：拿不到 ID 会退回按标题
+  ///   搜索，动作照样完成，此时弹窗只会白白拦住用户，且与跳转同时发生（F-122）。
   func getTMDBJumpTarget(
-    for item: MediaInfo, targetTmdbId: Int? = nil
+    for item: MediaInfo,
+    targetTmdbId: Int? = nil,
+    notifyWhenUnrecognized: Bool = true
   ) async -> MediaInfo? {
     let snapshot = APIService.shared.sessionSnapshot()
     var tmdbIdToUse: Int? = targetTmdbId ?? item.tmdb_id
@@ -60,7 +68,10 @@ class MediaActionHandler: ObservableObject {
     guard APIService.shared.isSessionUnchanged(from: snapshot) else { return nil }
 
     guard let tmdbId = tmdbIdToUse else {
-      showTMDBNotFoundAlert = true
+      // 识别确实无匹配。但「搜索资源」这类调用方会自愈为标题搜索，弹窗只会拦住用户（F-122）。
+      if notifyWhenUnrecognized {
+        showTMDBNotFoundAlert = true
+      }
       return nil
     }
 

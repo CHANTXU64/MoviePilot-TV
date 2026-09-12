@@ -2701,9 +2701,9 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-122 · P3 · 部分修复 · nullable TMDB 识别结果折叠失败、取消与无匹配</summary>
+<summary>F-122 · P3 · 已修复 · nullable TMDB 识别结果折叠失败、取消与无匹配</summary>
 
-**本轮修复（2026-09-12）：** 闭合「首段 `/media/search` 失败 + 兜底 `/media/recognize` 200 但无可用 ID → 返回 nil」这一处残留折叠。原实现把首段错误存进 `firstStageError` 后继续兜底，兜底「成功却给不出 ID」时直接落到末尾 `return nil`，**丢弃暂存错误**，调用方据此断言「确定无匹配」并弹「媒体不存在」，而实际一次完整查询都没完成。修复为末尾 `return nil` 之前 `if let firstStageError { throw firstStageError }`（3 行）；真 no-match 仍返回 nil。验证：新增 2 条用例，反向验证 2 挂 / 7 条阴性对照通过，全量 **959/959 通过、零失败**。遗留：Home「搜索资源」按钮在真 no-match 时仍 alert + 标题兜底导航双动作，但该提示现已不再由错误触发、内容属实；是否保留属产品意图，留待用户裁决。
+**本轮修复（2026-09-12）：** 闭合「首段 `/media/search` 失败 + 兜底 `/media/recognize` 200 但无可用 ID → 返回 nil」这一处残留折叠。原实现把首段错误存进 `firstStageError` 后继续兜底，兜底「成功却给不出 ID」时直接落到末尾 `return nil`，**丢弃暂存错误**，调用方据此断言「确定无匹配」并弹「媒体不存在」，而实际一次完整查询都没完成。修复为末尾 `return nil` 之前 `if let firstStageError { throw firstStageError }`（3 行）；真 no-match 仍返回 nil。验证：新增 2 条用例，反向验证 2 挂 / 7 条阴性对照通过，全量 **959/959 通过、零失败**。**同轮第二处修复（用户裁决「按 A 改」）：** Home「搜索资源」不再弹「未识别到此媒体的TMDB信息」。该按钮真 no-match 时本就会退回标题搜索、动作照样完成，却因复用为「TMDB详情页」写的 `getTMDBJumpTarget` 而继承 `showTMDBNotFoundAlert = true`，全局弹窗随导航一起弹出，用户被拦在一个已自愈完成的动作上。修复为该方法增加 `notifyWhenUnrecognized: Bool = true`，仅 Home「搜索资源」传 `false`；另三个「TMDB详情页」入口保持默认。验证：新增 5 条用例（3 条行为 + 2 条源码调用点守卫），反向验证 2 挂 / 3 条阴性对照通过；全量 **964/964 通过、零失败**。
 
 - 审查单元与位置：V005；`APIService.recognizeTmdbId`、`MediaActionHandler` 及 Home 标题回退
 - 触发路径：两阶段识别发生请求/鉴权/解码失败或取消；或者确实没有匹配。Home 资源搜索还会把 nil 当成正常标题回退并继续导航。
