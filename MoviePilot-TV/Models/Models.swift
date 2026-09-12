@@ -2939,35 +2939,109 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
     // 生成稳定的标识符，防止 tvOS 焦点异常。
     //
     // F-078：只在拿到**正**业务 ID 时才由业务 ID 决定身份（与 `generateUniqueKey` 同款判断，
-    // 0/负数不是有效分享号）。缺业务 ID 时对齐 Web 端 `SubscribeShareView.vue` 的兜底公式：
-    // 先取媒体自身的标识，其后才是订阅名与分享人 —— 不再把可变的 `share_title` 当成分，
-    // 否则分享人改一次标题，同一条分享就换了身份：列表里旧卡销毁新卡重建（焦点跳走），
-    // 复用订阅的 `pendingForkReceipt.shareID` 也随之下次对不上，用户再点一下会真的多建一个订阅。
+    // 0/负数不是有效分享号）。缺业务 ID 时走 `shareFallbackIdentity` 拼一个内容身份 ——
+    // 不再把可变的 `share_title` 当成分，否则分享人改一次标题，同一条分享就换了身份：
+    // 列表里旧卡销毁新卡重建（焦点跳走），复用订阅的 `pendingForkReceipt.shareID` 也随之下次
+    // 对不上，用户再点一下会真的多建一个订阅。
     //
-    // 连媒体标识都没有（退化输入）时才退回 UUID：宁可让这条记录每次解码都算作新项 —— 去重
-    // 不生效、最多多出一张重复卡 —— 也不能让它与别的记录撞成同一身份而被去重静默吞掉。
+    // 内容身份仍然凑不出来（退化输入）时才退回 UUID：宁可让这条记录每次解码都算作新项 ——
+    // 去重不生效、最多多出一张重复卡 —— 也不能让它与别的记录撞成同一身份而被去重静默吞掉。
     if let raw_id, raw_id > 0 {
       self.id = "Share-\(raw_id)"
-    } else if let mediaComponent = Self.shareMediaIdentityComponent(
+    } else if let fallbackIdentity = Self.shareFallbackIdentity(
+      media_source: media_source,
       media_id: media_id,
       tmdbid: tmdbid,
       doubanid: doubanid,
       bangumiid: bangumiid,
       anilistid: anilistid,
-      name: name
+      name: name,
+      type: type,
+      season: season,
+      share_uid: share_uid,
+      share_user: share_user,
+      subscribe_id: subscribe_id
     ) {
-      self.id = "Share-\(mediaComponent)-\(share_user ?? "")"
+      self.id = fallbackIdentity
     } else {
       self.id = UUID().uuidString
     }
 
   }
 
-  /// F-078：缺业务 ID 时用来拼身份分量的媒体标识，取第一个非空值；全空返回 nil。
+  /// F-078：缺业务 ID 时的兜底身份。
+  ///
+  /// 这里补的是**外部审查发现的回归**（原实现见 `a92bf54`）：当时只取「媒体标识 + `share_user`」，
+  /// 结果有三类记录会撞成同一个身份，而撞了不会被用户看见 —— `toMediaInfo()` →
+  /// `generateUniqueKey` 拼出 `"share:<id>"` → `deduplicateSubscriptionShareMedia` 直接返回
+  /// false，卡片从列表里**静默消失**：
+  ///
+  /// 1. **无效媒体 ID 挡路**：后端用 `tmdbid: 0` 表示「没有」，`tmdbid.map(String.init)` 却把它
+  ///    变成非空的 `"0"` 并就此选中，排在后面的 `doubanid` 再没机会被看到，身份里于是带着一个
+  ///    假 ID。故 `normalizedNumberIdentifier` / `normalizedTextIdentifier` 先判有效性 ——
+  ///    这条规则仓库里本就有（`MediaIdentifier.isValidManualMediaId` 是 `(Int(id) ?? 0) > 0`），
+  ///    上面两行的 `raw_id > 0` 也是同一个口径，原先只是漏在了这条支路上。
+  /// 2. **跨来源同号**：不同站点的原生 `media_id` 各自从 1 开始编号，"42" 在两个站点是两部片子。
+  /// 3. **同剧不同季**：同一部剧的第 1 季与第 2 季是两条独立分享。
+  ///
+  /// 后两类靠补回 `media_source` / `type` / `season` 区分 —— 它们和媒体 ID 一样是分享内容的
+  /// 固有属性，不是 `share_title` 那种分享人随手可改的展示字段，故不违反 F-078 的原始口径。
+  /// 最后再补 `subscribe_id`（分享来源订阅号）：同一个人把同一条订阅分享两次本来就是同一条
+  /// 记录，分享自不同订阅才是两条；`share_uid` 同理优先于可改名的 `share_user`。
+  ///
+  /// 「谁分享的 / 从哪条订阅分享的」一个都没有时**返回 nil**：这时两条同媒体的记录在数据上
+  /// 完全不可区分，按审查要求「字段不足以证明是同一条记录时不应静默合并」，退回 UUID 让它们
+  /// 各自成卡 —— 多一张看得见的重复卡，好过少一张看不见的卡。
+  nonisolated private static func shareFallbackIdentity(
+    media_source: String?,
+    media_id: String?,
+    tmdbid: Int?,
+    doubanid: String?,
+    bangumiid: Int?,
+    anilistid: Int?,
+    name: String?,
+    type: String?,
+    season: Int?,
+    share_uid: String?,
+    share_user: String?,
+    subscribe_id: Int?
+  ) -> String? {
+    guard
+      let mediaComponent = shareMediaIdentityComponent(
+        media_id: media_id,
+        tmdbid: tmdbid,
+        doubanid: doubanid,
+        bangumiid: bangumiid,
+        anilistid: anilistid,
+        name: name
+      )
+    else { return nil }
+
+    let owner = normalizedTextIdentifier(share_uid) ?? normalizedTextIdentifier(share_user)
+    let subscribe = normalizedNumberIdentifier(subscribe_id)
+    guard owner != nil || subscribe != nil else { return nil }
+
+    var components = ["Share"]
+    if let source = normalizedTextIdentifier(media_source) { components.append(source) }
+    if let type = normalizedTextIdentifier(type) { components.append(type) }
+    components.append(mediaComponent)
+    // 季号只区分「给了几」，0 是合法的（特典/电影），负数与缺失同义。
+    if let season, season >= 0 { components.append("s\(season)") }
+    if let owner { components.append(owner) }
+    if let subscribe { components.append("sub\(subscribe)") }
+    return components.joined(separator: "-")
+  }
+
+  /// F-078：缺业务 ID 时用来拼身份分量的媒体标识，取第一个**有效**值；全无效返回 nil。
   ///
   /// 取值顺序对齐 Web 端 `SubscribeShareView.vue` 的兜底 key 链
   /// （`item.media_id || item.tmdbid || item.doubanid || item.bangumiid || item.anilistid || item.name`）。
   /// 用媒体自身标识而非 `share_title`：前者是分享内容的固有属性，分享人改不掉。
+  ///
+  /// 与 Web 那行 `||` 的一处**刻意不同**：JS 靠 `0` 是假值自然穿透，Swift 的
+  /// `map(String.init)` 会把 `0` 变成真值字符串，所以这里要显式判。
+  /// `name` 排在最后且仅在没有任何真实媒体 ID 时才生效 —— 它同样可被分享人改，
+  /// 只是退化输入下聊胜于无。
   nonisolated private static func shareMediaIdentityComponent(
     media_id: String?,
     tmdbid: Int?,
@@ -2977,14 +3051,31 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
     name: String?
   ) -> String? {
     let candidates: [String?] = [
-      media_id,
-      tmdbid.map(String.init),
-      doubanid,
-      bangumiid.map(String.init),
-      anilistid.map(String.init),
-      name,
+      normalizedTextIdentifier(media_id),
+      normalizedNumberIdentifier(tmdbid),
+      normalizedTextIdentifier(doubanid),
+      normalizedNumberIdentifier(bangumiid),
+      normalizedNumberIdentifier(anilistid),
+      normalizedTextIdentifier(name),
     ]
-    return candidates.compactMap { $0 }.first { !$0.isEmpty }
+    return candidates.compactMap { $0 }.first
+  }
+
+  /// 数字型媒体 / 业务 ID：只有正数才算数，0 与负数同「没给」。
+  nonisolated private static func normalizedNumberIdentifier(_ value: Int?) -> String? {
+    guard let value, value > 0 else { return nil }
+    return String(value)
+  }
+
+  /// 文本型媒体 ID：去空白后非空，且不是数值形态的哨兵值（`"0"`、`"-1"`）。
+  /// 非数值文本（如站点原生 ID `"mteam-42"`、IMDb 号）原样保留。
+  nonisolated private static func normalizedTextIdentifier(_ value: String?) -> String? {
+    guard
+      let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !trimmed.isEmpty
+    else { return nil }
+    if let number = Int(trimmed), number <= 0 { return nil }
+    return trimmed
   }
 
   /// 转换为 MediaInfo 以便在通用视图中复用

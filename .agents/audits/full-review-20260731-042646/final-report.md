@@ -2627,7 +2627,28 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 修复状态：用户批准修复，改动收敛在 `MoviePilot-TV/Models/Models.swift` 两处 —— `generateUniqueKey`（`:1086-1097`）把有效分享号从「非 nil」收紧为「正整数」（0/负数同缺失），消除所有 0 号分享共用 `share:0` 而被分页去重互相吞掉；`SubscribeShare.id`（`:2934-2983`）改为只在正业务 ID 时由 ID 决定身份，缺 ID 对齐 Web `SubscribeShareView.vue:287-293` 的兜底链（`media_id → tmdbid → doubanid → bangumiid → anilistid → name` + `share_user`）并舍弃可变的 `share_title`，全退化输入才退回随机 UUID（fail-open，宁可多一张重复卡也不丢卡）。新增 7 条回归用例；定向 10/10、反向验证 6 挂/4 过、全量 937/937。
 - 审计「剩余未验证」复核：分享 ID schema 已验证为 `Optional[int] = None`（`app/schemas/subscribe.py:153-155`）且列表代理逐条不校验，缺 ID 属契约内输入；非法 ID 的 Fork 语义已验证 —— `/subscribe/fork` 建订阅前 `sub_dict.pop("id")`，ID 仅用于向中心服务器上报「复用人次」且返回值不判，故「复用错目标」不成立，真实后果只是统计归属可能记错。
 - 处置说明：未采纳本条审计「最小方向」的「非法记录过滤/拒绝」—— 在缺 ID 属契约内输入的前提下等于把合法分享从列表剔除，即本项用户影响中的「列表丢项」。亦未采纳「TV 与 Web 一样不去重」：TV 的 `hasMore` 收敛依赖 processor 返回值（`Paginator.swift:242-243,283-284`），去掉去重将使翻页只能靠空页收敛，遇全已知项页面会永远翻不到底；Web 无此状态故可不去重。故保留去重、只修 key 公式使其与 Web 对齐。
-- 剩余未验证：真机 tvOS 焦点表现；中心服务器实际 ID 分布；重复正业务 ID 仍会去重掉一条（保留去重的固有代价）。
+
+**🆕 外部 AI 审查复核（2026-09-13）：上述 `a92bf54` 的兜底身份本身是一处回归，已修正。**
+
+审查报 [P2]「分享兜底身份会碰撞，导致列表静默漏卡」。逐条回代码核对后**确认成立**，且是上一轮修复引入的：
+
+1. **无效媒体 ID 挡路** —— 后端用 `tmdbid: 0` 表示「没有」，而 `tmdbid.map(String.init)` 把它变成**非空**的 `"0"`，`.first { !$0.isEmpty }` 就此选中，排在后面的 `doubanid` 再没机会被看到。同一段代码两行之上的 `raw_id > 0`、以及 `MediaIdentifier.isValidManualMediaId`（`Models.swift:167`，`(Int(mediaId) ?? 0) > 0`）本就是「0 不算有效 ID」的同一口径，新支路却漏了。
+2. **跨来源同号** —— 不同站点原生 `media_id` 各自从 1 编号，`"42"` 在两个站点是两部片子，兜底公式不含 `media_source`。
+3. **同剧不同季** —— 兜底公式不含 `season`，同一部剧的第 1 季与第 2 季撞成一条。基线含 `share_title`，这两条标题不同本不会撞 —— 即上一轮为了「不以可变字段冒充身份」删掉 `share_title` 时，**没有补上更稳定的区分字段**。
+
+后果不是显示问题而是**静默丢数据**：`SubscribeShare.id` → `toMediaInfo()` → `generateUniqueKey`（`Models.swift:1092`）拼出 `"share:<id>"` → `deduplicateSubscriptionShareMedia` 返回 false → 卡片直接不进列表，用户无任何提示。另需记一笔方向性错误：Web 的 `get-item-key` 是 `ProgressiveCardGrid` 的**渲染 key**（`SubscribeShareView.vue:290-293`，且 `:183` 是 `[...dataList, ...currentData]` 直接 append、不做 key 过滤），把它当**去重身份**移植是口径错配；Web 那行用 `||` 在 JS 里靠 `0` 是假值自然穿透，Swift 的 `map(String.init)` 不具备该性质。
+
+修正（`shareFallbackIdentity` + 两个有效性判定）：
+
+- 媒体标识先按有效性筛：数字型须 `> 0`，文本型须 trim 后非空且不是 `"0"`/`"-1"` 一类哨兵；均无效再退 `name`。
+- 补回 `media_source`、`type`、`season`（缺省不参与）—— 与媒体 ID 同属分享内容的固有属性，分享人改不掉，不违反本条原始口径。
+- 补 `subscribe_id`，并以 `share_uid`（唯一 ID）优先于可改名的 `share_user`：同一人分享同一条订阅两次本就是同一条记录，分享自不同订阅才是两条。
+- 「谁分享的 / 从哪条订阅分享的」全缺时**返回 nil**（退回 UUID）：此时两条同媒体记录在数据上完全不可区分，按审查要求「字段不足以证明是同一条记录时不应静默合并」，宁可多一张看得见的重复卡，不少一张看不见的卡。
+- `share_title` 仍不参与 —— 原有口径不变。
+
+验证：新增 10 条回归（含审查点名的三组反例）与 3 条阴性对照。反向验证把 `Models.swift` 退回 `HEAD` 版本 → **9 条阳性全挂**（含 `count: 1 vs 2` 的直接丢卡证据），4 条阴性对照（同记录跨页仍去重、改 `share_title` 不变身份、正业务 ID 身份不变、全退化必成新项）全部通过 —— 证明补字段没有把身份拆得过散。恢复后定向 20/20。
+
+- 剩余未验证：真机 tvOS 焦点表现；中心服务器实际 ID 分布；重复正业务 ID 仍会去重掉一条（保留去重的固有代价）；兜底身份以 `-` 拼接各分量，若某分量本身含 `-` 理论上存在拼串歧义（构造性的，未观测到实际输入）。
 
 </details>
 
@@ -2661,7 +2682,18 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 
 **验证：** 新增 `SSEFramerTests` 20 条（协议层 12 + 字节层 8）全过；此前转挂的 4 个 SSE 相关测试类 96/96 全过；反向验证逐字复刻改动前代码 → 14 挂 / 6 条阴性对照通过；全量 **957/957 通过、零失败**，逐名比对零用例消失。
 
-**残留：** 当前后端 8 处 SSE 生产端全部是 `f"data: {json.dumps(...)}\n\n"` 单一物理行形态，故触发条件目前**不可达**，属前瞻性健壮性修复；heartbeat/comment、单事件最大尺寸、Content-Type 与明确终止保证仍未验证。
+**🆕 外部 AI 审查复核（2026-09-13）：字节层行尾与流开头 BOM 两个协议兼容缺口，已修正。**
+
+审查报 [P3]「`SSEFramer` 缺 CR-only 与流开头 BOM 处理」。核对后**均成立** —— 上一轮只认 `0x0A` 确实不足以覆盖规范：
+
+- **纯 `CR` 行尾**：规范的三种行尾 `CRLF` / `LF` / `CR` 等价。只认 `0x0A` 时纯 `CR` 的整段流会被攒成一行，`flush()` 又只剥掉一个尾部 `\r`，最终交出**一个畸形载荷**给 `JSONDecoder` —— 不是少一个事件，是整条流报错。
+- **流开头 BOM**：网关/代理可能加 UTF-8 BOM，第一行于是变成 `\u{FEFF}data: ...`，`hasPrefix("data:")` 不成立，**第一个事件的数据被整条丢弃**（其后事件不受影响，线上表现为"偶发少一个事件"）。
+
+修正：`consume(byte:)` 拆成 BOM 前瞻 + `consumeBody(byte:)` 两层。BOM 只在流开头按 `EF BB BF` 三字节前瞻识别一次，前缀不匹配时把已吃进的字节原样补回；`consumeBody` 把 `0x0D` 也当行尾，并用 `lastByteWasCR` 让紧随其后的 `0x0A` 归入**同一个**行尾。`consume(line:)` 原有的尾部 `\r` 剥离保留（直接调用该入口的既有用例不受影响）。
+
+验证：新增 8 条，反向验证把 `SSEFramer.swift` 退回 `HEAD` 版本 → 5 条阳性全挂（CR-only 2 处断言、BOM 三组），阴性对照全部通过。其中 `testCRLFIsOneLineEndingNotTwo` 经反向验证**修复前也通过**（旧 `consume(line:)` 会剥掉行尾 `\r`），已按本仓库口径改标为阴性对照并写明它守的是新字节层 CR 处理不得把 CRLF 拆成两次断行 —— 不作为阳性证据。恢复后 SSEFramerTests 29/29；全量 **1016/1016 通过、零失败**。
+
+**残留：** 当前后端 8 处 SSE 生产端全部是 `f"data: {json.dumps(...)}\n\n"` 单一物理行形态，故上述三项触发条件目前均**不可达**，属前瞻性健壮性修复；heartbeat/comment、单事件最大尺寸、Content-Type 与明确终止保证仍未验证。
 
 </details>
 

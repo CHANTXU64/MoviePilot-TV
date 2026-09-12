@@ -19,6 +19,10 @@ import Foundation
 /// 本类型只负责「按事件边界累积与合并」，不做 JSON 解码、不判定业务语义 ——
 /// 生产解析器与兼容探针因此复用同一条规则，而不是各写一份。
 ///
+/// 行尾按规范三种全收：`CRLF`、`LF`、`CR`。此前只认 `LF`，纯 `CR` 的流会被攒成一整行，
+/// 到流结束时只剩一个畸形载荷交给 `JSONDecoder`，整条流报错。流开头的 UTF-8 BOM 也只
+/// 忽略一次 —— 漏掉它会让第一行不满足 `hasPrefix("data:")`，第一个事件的数据被整条丢弃。
+///
 /// 与规范的唯一偏差：流结束时若仍有未以空行收尾的挂起事件，`flush()` 会交付它
 /// 而不是丢弃（规范建议丢弃）。本项目此前就是「data 行一到即处理」，断线前最后
 /// 一个事件（可能是 `done`）一直收得到；严格丢弃会静默降低容错，故保留该行为。
@@ -29,14 +33,58 @@ nonisolated struct SSEFramer {
   /// 当前尚未遇到换行的半行内容（原始字节）。
   private var currentLine: [UInt8] = []
 
+  /// 上一个字节是 `CR`：紧随其后的 `LF` 属于同一个 CRLF 行尾，不再单独切一次行。
+  private var lastByteWasCR = false
+
+  /// 流开头的 BOM 是否已了结（识别到并丢弃，或确认不是 BOM）。
+  private var bomResolved = false
+
+  /// 已匹配上的 BOM 前缀长度（`EF` / `EF BB` / `EF BB BF`）。
+  private var bomMatchedBytes = 0
+
+  /// UTF-8 BOM。只允许出现在流的最开头，且只忽略一次。
+  private static let byteOrderMark: [UInt8] = [0xEF, 0xBB, 0xBF]
+
   /// 送入流中的一个字节；该字节使某个事件成帧时返回合并后的 data 内容，否则返回 nil。
   mutating func consume(byte: UInt8) -> String? {
-    // 只在 `\n` 处切行。UTF-8 的多字节序列里不会出现 0x0A（续字节均 ≥ 0x80），
-    // 故按 0x0A 切分绝不会把一个字符切开。
-    guard byte == 0x0A else {
+    // 流开头的 BOM 必须丢掉，否则第一行变成 `\u{FEFF}data: ...`，
+    // `hasPrefix("data:")` 不成立，**第一个事件的数据会被整条丢弃**。
+    // 只在开头认一次：解析出结果后本分支不再进入。
+    if !bomResolved {
+      if byte == Self.byteOrderMark[bomMatchedBytes] {
+        bomMatchedBytes += 1
+        if bomMatchedBytes == Self.byteOrderMark.count {
+          bomResolved = true
+        }
+        return nil
+      }
+      // 不是 BOM：把已经吃进来的前缀原样补回再按正常流程走。
+      // 前缀只可能是 `[0xEF]` 或 `[0xEF, 0xBB]`，都够不上行尾，故这里不会成帧。
+      bomResolved = true
+      currentLine.append(contentsOf: Self.byteOrderMark.prefix(bomMatchedBytes))
+      bomMatchedBytes = 0
+    }
+
+    return consumeBody(byte: byte)
+  }
+
+  /// 已排除 BOM 干扰的按字节切行。
+  private mutating func consumeBody(byte: UInt8) -> String? {
+    // CRLF 里的 `LF` 紧跟在 `CR` 之后，属于**同一个**行尾。若在这里再切一次，
+    // 会凭空多出一个空行，把事件提前截断。
+    if lastByteWasCR {
+      lastByteWasCR = false
+      if byte == 0x0A { return nil }
+    }
+
+    // 规范允许 `CRLF`、`LF`、`CR` 三种行尾，三者等价。
+    // UTF-8 的多字节序列里不会出现 0x0A / 0x0D（续字节均 ≥ 0x80），故切行不会切开一个字符。
+    guard byte == 0x0A || byte == 0x0D else {
       currentLine.append(byte)
       return nil
     }
+    if byte == 0x0D { lastByteWasCR = true }
+
     let line = String(decoding: currentLine, as: UTF8.self)
     currentLine.removeAll(keepingCapacity: true)
     return consume(line: line)
