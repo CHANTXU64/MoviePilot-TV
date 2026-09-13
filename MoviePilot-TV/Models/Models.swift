@@ -2969,29 +2969,26 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
 
   }
 
-  /// F-078：缺业务 ID 时的兜底身份。
+  /// F-078：缺业务 ID 时的兜底身份，**固定槽位 + 长度前缀**编码。
   ///
-  /// 这里补的是**外部审查发现的回归**（原实现见 `a92bf54`）：当时只取「媒体标识 + `share_user`」，
-  /// 结果有三类记录会撞成同一个身份，而撞了不会被用户看见 —— `toMediaInfo()` →
-  /// `generateUniqueKey` 拼出 `"share:<id>"` → `deduplicateSubscriptionShareMedia` 直接返回
-  /// false，卡片从列表里**静默消失**：
+  /// 每个字段各占一个槽，缺省写 `n`、有值写 `s<UTF-8 字节数>:<值>` —— 与同文件
+  /// `generateUniqueKey` 同一口径。这样「值里含分隔符」和「字段缺省」都不会拼出同一个串，
+  /// 槽位顺序则区分是哪个字段。**不能用 `joined(separator:)` 拼可变数量分量**：那样编码
+  /// 不可逆，`media_source=mteam` + `media_id=42` 与光秃秃的 `media_id="mteam-42"` 会撞，
+  /// 而撞了之后 `deduplicateSubscriptionShareMedia` 直接丢卡、`pendingForkReceipt.shareID`
+  /// 还会把另一张卡当成同一条分享去复用错订阅。
   ///
-  /// 1. **无效媒体 ID 挡路**：后端用 `tmdbid: 0` 表示「没有」，`tmdbid.map(String.init)` 却把它
-  ///    变成非空的 `"0"` 并就此选中，排在后面的 `doubanid` 再没机会被看到，身份里于是带着一个
-  ///    假 ID。故 `normalizedNumberIdentifier` / `normalizedTextIdentifier` 先判有效性 ——
-  ///    这条规则仓库里本就有（`MediaIdentifier.isValidManualMediaId` 是 `(Int(id) ?? 0) > 0`），
-  ///    上面两行的 `raw_id > 0` 也是同一个口径，原先只是漏在了这条支路上。
-  /// 2. **跨来源同号**：不同站点的原生 `media_id` 各自从 1 开始编号，"42" 在两个站点是两部片子。
-  /// 3. **同剧不同季**：同一部剧的第 1 季与第 2 季是两条独立分享。
+  /// 三类**必须**靠这个身份分开的记录（前两类是外部审查点名的反例）：
+  /// 无效媒体 ID 需让位给后面的有效标识（`tmdbid: 0` 不得被 `map(String.init)` 变成真值），
+  /// 跨来源同号（不同站点各自从 1 编号）、同剧不同季。
+  /// 媒体标识那一槽还**必须带字段名**：否则站点原生 ID `"9001"` 与 `tmdbid: 9001` 会拼成
+  /// 同一个分量，两条本不相干的分享就撞上了。
   ///
-  /// 后两类靠补回 `media_source` / `type` / `season` 区分 —— 它们和媒体 ID 一样是分享内容的
-  /// 固有属性，不是 `share_title` 那种分享人随手可改的展示字段，故不违反 F-078 的原始口径。
-  /// 最后再补 `subscribe_id`（分享来源订阅号）：同一个人把同一条订阅分享两次本来就是同一条
-  /// 记录，分享自不同订阅才是两条；`share_uid` 同理优先于可改名的 `share_user`。
+  /// 「谁分享的 / 从哪条订阅分享的」一个都没有时返回 nil（退回 UUID）：此时两条同媒体的记录
+  /// 在数据上完全不可区分，按「字段不足以证明是同一条记录时不应静默合并」处理 ——
+  /// 多一张看得见的重复卡，好过少一张看不见的卡。
   ///
-  /// 「谁分享的 / 从哪条订阅分享的」一个都没有时**返回 nil**：这时两条同媒体的记录在数据上
-  /// 完全不可区分，按审查要求「字段不足以证明是同一条记录时不应静默合并」，退回 UUID 让它们
-  /// 各自成卡 —— 多一张看得见的重复卡，好过少一张看不见的卡。
+  /// `share_title` 不参与：分享人改一次标题不该换身份（旧卡销毁重建会让焦点跳走）。
   nonisolated private static func shareFallbackIdentity(
     media_source: String?,
     media_id: String?,
@@ -3007,7 +3004,7 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
     subscribe_id: Int?
   ) -> String? {
     guard
-      let mediaComponent = shareMediaIdentityComponent(
+      let mediaSlot = firstValidMediaIdentity(
         media_id: media_id,
         tmdbid: tmdbid,
         doubanid: doubanid,
@@ -3017,32 +3014,53 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
       )
     else { return nil }
 
-    let owner = normalizedTextIdentifier(share_uid) ?? normalizedTextIdentifier(share_user)
+    // `share_uid` 是安装实例的唯一 ID，稳定且分享人改不掉，优先于可改名的 `share_user`。
+    // 用 `u:` / `n:` 前缀区分来源：否则「uid == 某人的显示名」时两条记录会拼成同一槽。
+    // 两者都仍走 `normalizedTextIdentifier`（哨兵值 `"0"`/`"-1"` 一律当没给）——
+    // 加前缀只是补上来源标签，不改变「什么算有效值」这层既有口径。
+    let owner: String?
+    if let uid = normalizedTextIdentifier(share_uid) {
+      owner = "u:\(uid)"
+    } else if let user = normalizedTextIdentifier(share_user) {
+      owner = "n:\(user)"
+    } else {
+      owner = nil
+    }
     let subscribe = normalizedNumberIdentifier(subscribe_id)
     guard owner != nil || subscribe != nil else { return nil }
 
-    var components = ["Share"]
-    if let source = normalizedTextIdentifier(media_source) { components.append(source) }
-    if let type = normalizedTextIdentifier(type) { components.append(type) }
-    components.append(mediaComponent)
-    // 季号只区分「给了几」，0 是合法的（特典/电影），负数与缺失同义。
-    if let season, season >= 0 { components.append("s\(season)") }
-    if let owner { components.append(owner) }
-    if let subscribe { components.append("sub\(subscribe)") }
-    return components.joined(separator: "-")
+    let slots: [String?] = [
+      // 这两槽是内容固有属性（`"mteam"`、`"电影"` 这类），不是后端用数字表示「没有」的
+      // 数值 ID 字段，故只做 trim 判空、不套哨兵规则。真出现 `"0"` 这种垃圾值时，
+      // 让它成为独立身份（多一张看得见的卡）比当作缺失去合并（少一张看不见的卡）安全。
+      normalizedText(media_source),
+      normalizedText(type),
+      mediaSlot,
+      // 季号 0 是合法的（特典/电影），只有负数与缺失同义。
+      season.flatMap { $0 >= 0 ? String($0) : nil },
+      owner,
+      subscribe,
+    ]
+    return "Share|" + slots.map(shareIdentitySlot).joined(separator: "|")
   }
 
-  /// F-078：缺业务 ID 时用来拼身份分量的媒体标识，取第一个**有效**值；全无效返回 nil。
+  /// 固定槽位的一个分量：缺省 `n`，有值 `s<UTF-8 字节数>:<值>`。
+  nonisolated private static func shareIdentitySlot(_ value: String?) -> String {
+    guard let value else { return "n" }
+    return "s\(value.utf8.count):\(value)"
+  }
+
+  /// 缺业务 ID 时用来拼身份的媒体标识：按 Web 兜底链的顺序取第一个**有效**值，
+  /// 返回值**带上字段名**。
   ///
-  /// 取值顺序对齐 Web 端 `SubscribeShareView.vue` 的兜底 key 链
-  /// （`item.media_id || item.tmdbid || item.doubanid || item.bangumiid || item.anilistid || item.name`）。
-  /// 用媒体自身标识而非 `share_title`：前者是分享内容的固有属性，分享人改不掉。
+  /// 顺序对齐 `SubscribeShareView.vue` 的 key 链
+  /// （`item.media_id || item.tmdbid || item.doubanid || item.bangumiid || item.anilistid || item.name`），
+  /// 但与那行 `||` 有一处刻意不同：JS 靠 `0` 是假值自然穿透，Swift 的 `map(String.init)`
+  /// 会把 `0` 变成真值字符串并就此选中，所以这里必须显式判有效性。
   ///
-  /// 与 Web 那行 `||` 的一处**刻意不同**：JS 靠 `0` 是假值自然穿透，Swift 的
-  /// `map(String.init)` 会把 `0` 变成真值字符串，所以这里要显式判。
-  /// `name` 排在最后且仅在没有任何真实媒体 ID 时才生效 —— 它同样可被分享人改，
+  /// `name` 排在最后且只在没有任何真实媒体 ID 时才生效 —— 它同样可被分享人改，
   /// 只是退化输入下聊胜于无。
-  nonisolated private static func shareMediaIdentityComponent(
+  nonisolated private static func firstValidMediaIdentity(
     media_id: String?,
     tmdbid: Int?,
     doubanid: String?,
@@ -3050,15 +3068,17 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
     anilistid: Int?,
     name: String?
   ) -> String? {
-    let candidates: [String?] = [
-      normalizedTextIdentifier(media_id),
-      normalizedNumberIdentifier(tmdbid),
-      normalizedTextIdentifier(doubanid),
-      normalizedNumberIdentifier(bangumiid),
-      normalizedNumberIdentifier(anilistid),
-      normalizedTextIdentifier(name),
+    let candidates: [(field: String, value: String?)] = [
+      ("media_id", normalizedTextIdentifier(media_id)),
+      ("tmdbid", normalizedNumberIdentifier(tmdbid)),
+      ("doubanid", normalizedTextIdentifier(doubanid)),
+      ("bangumiid", normalizedNumberIdentifier(bangumiid)),
+      ("anilistid", normalizedNumberIdentifier(anilistid)),
+      ("name", normalizedText(name)),
     ]
-    return candidates.compactMap { $0 }.first
+    guard let match = candidates.first(where: { $0.value != nil }), let value = match.value
+    else { return nil }
+    return "\(match.field):\(value)"
   }
 
   /// 数字型媒体 / 业务 ID：只有正数才算数，0 与负数同「没给」。
@@ -3067,13 +3087,20 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
     return String(value)
   }
 
-  /// 文本型媒体 ID：去空白后非空，且不是数值形态的哨兵值（`"0"`、`"-1"`）。
-  /// 非数值文本（如站点原生 ID `"mteam-42"`、IMDb 号）原样保留。
-  nonisolated private static func normalizedTextIdentifier(_ value: String?) -> String? {
+  /// 文本型字段：去空白后非空即可。
+  nonisolated private static func normalizedText(_ value: String?) -> String? {
     guard
       let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
       !trimmed.isEmpty
     else { return nil }
+    return trimmed
+  }
+
+  /// 文本型**媒体标识**：在 `normalizedText` 之上再排除数值形态的哨兵值（`"0"`、`"-1"`）。
+  /// 后端用 0 表示「没有」，字符串字段拿不到类型信息，只能按形态判。
+  /// 非数值文本（如站点原生 ID `"mteam-42"`、IMDb 号）原样保留。
+  nonisolated private static func normalizedTextIdentifier(_ value: String?) -> String? {
+    guard let trimmed = normalizedText(value) else { return nil }
     if let number = Int(trimmed), number <= 0 { return nil }
     return trimmed
   }

@@ -2237,8 +2237,16 @@ class APIService: ObservableObject {
              return tmdbId
           }
         } else {
-          // 识别出的类型不符，属于误报，拒绝该结果
+          // 识别出的类型不符，属于误报，拒绝该结果。
+          //
+          // F-122：但「拒绝这个结果」不等于「媒体不存在」—— 只有首段**查完过**才谈得上
+          // 无匹配。首段失败（超时/500）时这里的 nil 会被 `getTMDBJumpTarget` 当成
+          // 「媒体不存在」，弹出误导性的「未识别到此媒体的TMDB信息」，而首段其实从没
+          // 得出过结论。故沿用本方法尾部的同一口径：首段失败过就抛出它的原始错误。
           Logger.warning("[APIService] recognizeMedia 类型不匹配: 期望 \(targetType), 实际 \(recognizedType)")
+          if let firstStageError {
+            throw firstStageError
+          }
           return nil
         }
       }

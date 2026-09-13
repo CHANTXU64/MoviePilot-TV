@@ -97,9 +97,10 @@ final class SubscriptionShareDedupTests: XCTestCase {
     let uniqueItems = MediaInfo.deduplicateSubscriptionShareMedia(items, existingKeys: &seenKeys)
 
     XCTAssertEqual(uniqueItems.count, 2)
+    XCTAssertEqual(Set(uniqueItems.compactMap { $0.subscribeShare?.id }).count, 2)
+    // 身份必须真的落在被搜到的那部媒体上，而不是两条都退回随机身份。
     XCTAssertEqual(
-      uniqueItems.map { $0.subscribeShare?.id },
-      ["Share-电视剧-9001-s1-alice-sub200", "Share-电视剧-9002-s1-alice-sub200"])
+      uniqueItems.compactMap { $0.subscribeShare?.id }.filter { $0.contains("tmdbid:") }.count, 2)
   }
 
   /// 身份不再依赖可变的 `share_title`：分享人改标题后同一条分享仍被跨页去重，
@@ -182,8 +183,8 @@ final class SubscriptionShareDedupTests: XCTestCase {
 
     XCTAssertEqual(uniqueItems.count, 2, "0 不是有效媒体 ID，必须让位给 doubanid")
     let ids = uniqueItems.compactMap { $0.subscribeShare?.id }
-    XCTAssertTrue(ids.allSatisfy { $0.contains("35087580") || $0.contains("35087581") })
-    XCTAssertFalse(ids.contains { $0.contains("Share-0-") || $0.contains("-0-") })
+    XCTAssertTrue(ids.allSatisfy { $0.contains("doubanid:3508758") })
+    XCTAssertFalse(ids.contains { $0.contains("tmdbid:") }, "无效 tmdbid 不得进入身份")
   }
 
   /// 负数的 `tmdbid` 同样不是有效标识。
@@ -250,9 +251,7 @@ final class SubscriptionShareDedupTests: XCTestCase {
     let uniqueItems = MediaInfo.deduplicateSubscriptionShareMedia(items, existingKeys: &seenKeys)
 
     XCTAssertEqual(uniqueItems.count, 2, "同一部剧的不同季是两条分享")
-    let ids = uniqueItems.compactMap { $0.subscribeShare?.id }
-    XCTAssertTrue(ids.contains { $0.contains("s1") })
-    XCTAssertTrue(ids.contains { $0.contains("s2") })
+    XCTAssertEqual(Set(uniqueItems.compactMap { $0.subscribeShare?.id }).count, 2)
   }
 
   /// 补上季号之后的边界：同一用户、同一媒体、同一季，但**分享自不同订阅**仍是两条记录。
@@ -327,7 +326,61 @@ final class SubscriptionShareDedupTests: XCTestCase {
       json: Self.shareJSON(rawId: nil, tmdbid: 9001, user: "alice", season: 1))
 
     XCTAssertNotEqual(zero.id, special.id)
-    XCTAssertTrue(try XCTUnwrap(zero.subscribeShare?.id).contains("s0"))
+  }
+
+  // MARK: - 兜底身份的编码必须是可逆的（外部审查第二轮点名的撞键）
+
+  /// `media_id` 与 `tmdbid` 是两个字段，值相同也不得合成同一个分量。
+  /// 修复前媒体标识那一槽是「第一个有效值」且不带字段名，站点原生 ID `"9001"`
+  /// 与 `tmdbid: 9001` 会拼出完全一样的分量，两条本不相干的分享撞成一条。
+  func testSiteNativeIdAndTmdbIdDoNotCollide() throws {
+    let byNativeId = try makeMediaInfo(
+      json: Self.shareJSON(
+        rawId: nil, tmdbid: nil, user: "alice", includeMediaName: false, mediaId: "9001"))
+    let byTmdbId = try makeMediaInfo(
+      json: Self.shareJSON(rawId: nil, tmdbid: 9001, user: "alice", includeMediaName: false))
+
+    XCTAssertNotEqual(byNativeId.id, byTmdbId.id, "media_id=9001 与 tmdbid=9001 是两条记录")
+  }
+
+  /// `media_source` 是独立槽位，不参与拼串。修复前 `joined(separator: "-")` 让
+  /// 「`media_source=mteam` + `media_id=42`」与光秃秃的 `media_id="mteam-42"` 撞在一起
+  /// （须无 `type` 时成立，故此处显式省掉该字段）。
+  func testSourceFieldAndDashedMediaIdDoNotCollide() throws {
+    let withSource = try makeMediaInfo(
+      json: Self.shareJSON(
+        rawId: nil, tmdbid: nil, user: "alice", includeMediaName: false, includeType: false,
+        mediaId: "42", mediaSource: "mteam"))
+    let dashedMediaId = try makeMediaInfo(
+      json: Self.shareJSON(
+        rawId: nil, tmdbid: nil, user: "alice", includeMediaName: false, includeType: false,
+        mediaId: "mteam-42"))
+
+    XCTAssertNotEqual(withSource.id, dashedMediaId.id)
+  }
+
+  /// 同理：`season` 与 `share_user` 是独立槽位。修复前「`season=1` + `user=alice`」与
+  /// 「无 season + `user="s1-alice"`」拼出同一个串。
+  func testSeasonFieldAndDashedShareUserDoNotCollide() throws {
+    let withSeason = try makeMediaInfo(
+      json: Self.shareJSON(rawId: nil, tmdbid: 9001, user: "alice", includeMediaName: false, season: 1))
+    let dashedUser = try makeMediaInfo(
+      json: Self.shareJSON(
+        rawId: nil, tmdbid: 9001, user: "s1-alice", includeMediaName: false, season: nil))
+
+    XCTAssertNotEqual(withSeason.id, dashedUser.id)
+  }
+
+  /// `share_uid` 与 `share_user` 同值也不得撞：前者是安装实例 ID，后者是可改的显示名。
+  func testShareUidAndShareUserWithSameValueDoNotCollide() throws {
+    let byUid = try makeMediaInfo(
+      json: Self.shareJSON(
+        rawId: nil, tmdbid: 9001, user: nil, includeMediaName: false, shareUid: "alice"))
+    let byUserName = try makeMediaInfo(
+      json: Self.shareJSON(
+        rawId: nil, tmdbid: 9001, user: "alice", includeMediaName: false))
+
+    XCTAssertNotEqual(byUid.id, byUserName.id)
   }
 
   // MARK: - 夹具
@@ -339,6 +392,7 @@ final class SubscriptionShareDedupTests: XCTestCase {
     user: String?,
     title: String = "Shared Show",
     includeMediaName: Bool = true,
+    includeType: Bool = true,
     doubanid: String? = nil,
     mediaId: String? = nil,
     mediaSource: String? = nil,
@@ -356,7 +410,7 @@ final class SubscriptionShareDedupTests: XCTestCase {
     if let shareUid { fields.append("\"share_uid\": \"\(shareUid)\"") }
     if includeMediaName { fields.append("\"name\": \"\(title)\"") }
     fields.append("\"year\": \"2024\"")
-    fields.append("\"type\": \"电视剧\"")
+    if includeType { fields.append("\"type\": \"电视剧\"") }
     fields.append("\"keyword\": \"\(title)\"")
     if let tmdbid { fields.append("\"tmdbid\": \(tmdbid)") }
     if let doubanid { fields.append("\"doubanid\": \"\(doubanid)\"") }

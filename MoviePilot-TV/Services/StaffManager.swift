@@ -226,7 +226,7 @@ struct StaffManager {
       for staff in persons {
         guard let name = staff.name, !name.isEmpty else { continue }
 
-        // 优先级：角色名 > 原始职位 > 角色列表 > 兜底 “职员”。
+        // 优先用角色名；没有角色名时退回 roles，仍为空才用“职员”兜底。
         // 能进入本兜底分支，说明没有任何人产出过 canonical 职位分组，
         // 因此 `staff.job` 在此必然解析不出 key（全空白等），显示标签实际由 roles 决定；
         // 逐项规范化后再拼接，也让 `["", ""]` 这类空段不再生成孤立的 "/" 标签。

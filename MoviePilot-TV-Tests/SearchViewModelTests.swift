@@ -2275,6 +2275,9 @@ extension SearchViewModelTests {
   /// `"   ".isEmpty == false`，所以旧守卫 `guard !query.isEmpty` 拦不住 ——
   /// 会带着一串空格走完整个聚合搜索（四个分页器 + 订阅分享）并置 `hasSearched = true`，
   /// 结果必然为空，用户看到的是一个搜过、但没有结果的页面。
+  /// F-140：纯空白提交不发请求。从**全新** ViewModel 起步只保留这一条真正有判别力的断言 ——
+  /// `hasSearched` / `isLoading` / `bestResults` 在全新实例上本来就是初始值，怎么实现都过，
+  /// 「上一轮结果不被清空」这类语义由下面两条从「已有结果 / 在途搜索」起步的用例负责。
   func testWhitespaceOnlyQueryDoesNotStartSearch() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
@@ -2292,16 +2295,140 @@ extension SearchViewModelTests {
     viewModel.query = " \n\t "
     await viewModel.autoSearch()
 
-    XCTAssertFalse(viewModel.hasSearched)
-    XCTAssertFalse(viewModel.isLoading)
-    XCTAssertEqual(viewModel.submittedQuery, "")
-    XCTAssertTrue(viewModel.bestResults.isEmpty)
+    XCTAssertEqual(viewModel.submittedQuery, "", "空白串不该被记成一次提交")
     let mediaRequestCount = await SearchViewModelURLProtocol.stub.requestCount(
       path: "/api/v1/media/search")
     let shareRequestCount = await SearchViewModelURLProtocol.stub.requestCount(
       path: "/api/v1/subscribe/shares")
     XCTAssertEqual(mediaRequestCount, 0, "纯空白不得触发任何搜索请求")
     XCTAssertEqual(shareRequestCount, 0)
+  }
+
+  /// F-140：**现状固化（本轮未改生产代码）**。上一条只从**全新** ViewModel 起步，
+  /// `hasSearched == false`、`bestResults.isEmpty` 本来就都是初始值，
+  /// 无论实现有没有清过状态都成立 —— 它钉不住「上一轮的搜索结果还留在屏幕上」。
+  /// 本条从「已经搜出结果」的状态起步，如实固化纯空白提交的现状：**完全 no-op**，
+  /// 既不清旧结果、也不改已提交的检索词。这是刻意的取舍（敲几个空格不该被当成一次搜索，
+  /// 更不该把屏幕清空），代价一并写在这里备查。它守的是将来别有人「顺手补一个清空」。
+  func testWhitespaceOnlySubmitKeepsPreviousResultsAndStaysNoop() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.query = "old"
+    await viewModel.autoSearch()
+
+    XCTAssertTrue(viewModel.hasSearched)
+    XCTAssertEqual(Self.mediaTitles(of: viewModel), ["Old Result"])
+
+    let mediaRequestCountBefore = await SearchViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/media/search")
+
+    viewModel.query = " \n\t "
+    await viewModel.autoSearch()
+
+    XCTAssertEqual(viewModel.submittedQuery, "old", "空白提交不改动已提交的检索词")
+    XCTAssertTrue(viewModel.hasSearched, "上一轮的搜索状态保持不变")
+    XCTAssertEqual(
+      Self.mediaTitles(of: viewModel), ["Old Result"],
+      "空白提交是 no-op，上一轮结果仍在屏幕上（不清空）")
+    XCTAssertFalse(viewModel.isLoading)
+    let mediaRequestCountAfter = await SearchViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/media/search")
+    XCTAssertEqual(mediaRequestCountAfter, mediaRequestCountBefore, "空白提交不得再发一次请求")
+  }
+
+  /// F-140：与上一条配对 —— 空白提交发生在**在途资源搜索**期间时不会把它取消掉
+  /// （**现状固化**，本轮未改生产代码）。
+  ///
+  /// 这里刻意走 `.resource` 而不是 `.unified`：只有资源分支把在途任务存进 `searchStreamTask`
+  /// （`.unified` 用的是几个局部 Task），所以「顺手补一个 `searchStreamTask?.cancel()`
+  /// 再 return」这种改法只在资源分支上真的会打断搜索 —— 在 `.unified` 下它是空操作，
+  /// 拿 `.unified` 写这条用例会得到一个测不出东西的假绿。
+  ///
+  /// 也正因如此，这条用例是**反悔保护**：将来若有人按「空白提交应先取消在途请求」的直觉去改，
+  /// 这里会红。真要改也得连带处理 `isLoading` —— `finishSearchIfCurrent` 是清它的唯一出口
+  /// 且带 generation 守卫，随手 cancel + 递增 generation 会把 `isLoading` 永久卡在 true。
+  func testWhitespaceOnlySubmitDoesNotCancelInFlightSearch() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureSuperUserSearchSession(service)
+    await SearchViewModelURLProtocol.stub.setStreamTermination(.done, forQuery: "old")
+    await SearchViewModelURLProtocol.stub.setStreamTermination(.done, forQuery: "new")
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .resource
+    viewModel.query = "old"
+    await viewModel.autoSearch()
+
+    // 流式搜索在 autoSearch 返回后才收尾（done 后还有一段收尾等待），轮询等同邻近用例。
+    let firstDeadline = Date().addingTimeInterval(2)
+    while viewModel.resourceResults.isEmpty && Date() < firstDeadline {
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    XCTAssertTrue(viewModel.hasSearched)
+    XCTAssertEqual(viewModel.resourceResults.first?.torrent_info?.title, "Old Resource")
+
+    // 卡住「new」这一轮的资源搜索流，让它停在在途状态。
+    let inFlightGate = SearchAsyncGate()
+    await SearchViewModelURLProtocol.stub.setGate(
+      inFlightGate, forPath: "/api/v1/search/title/stream")
+    viewModel.query = "new"
+    let inFlightTask = Task { @MainActor in
+      await viewModel.autoSearch()
+    }
+    defer { inFlightTask.cancel() }
+
+    try await withTimeout("in-flight resource search to start") {
+      await SearchViewModelURLProtocol.stub.waitForRequest(
+        path: "/api/v1/search/title/stream", query: "new")
+    }
+
+    viewModel.query = "   "
+    await viewModel.autoSearch()
+
+    XCTAssertTrue(viewModel.isLoading, "空白提交不得取消在途搜索")
+
+    await inFlightGate.open()
+    // 注意：`inFlightTask` 只包住 `autoSearch()`，而资源分支在 `autoSearch()` 返回后才真正开始
+    // 跑流（任务挂在 `searchStreamTask` 上）。所以这里必须轮询状态，不能 await 那个包装任务 ——
+    // 它早就返回了，await 它等于什么都没等。
+    // 收到 done 后实现里还有 1.5s 的收尾等待（`searchStreamDoneCloseDelay`），
+    // 所以这里的上限比邻近用例宽一些，免得贴着边界偶然超时。
+    let secondDeadline = Date().addingTimeInterval(5)
+    while viewModel.isLoading && Date() < secondDeadline {
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertEqual(
+      viewModel.resourceResults.first?.torrent_info?.title, "New Resource",
+      "在途搜索照常跑完并发布结果，没有被空白提交打断")
+  }
+
+  private static func mediaTitles(of viewModel: SearchViewModel) -> [String] {
+    viewModel.bestResults.compactMap { item -> String? in
+      if case .media(let media) = item {
+        return media.title
+      }
+      return nil
+    }
   }
 
   /// F-140 的**阴性对照**：规范化只去首尾，不压缩内部空白。

@@ -176,6 +176,50 @@ final class TmdbRecognitionPositiveIDTests: XCTestCase {
       // 期望：抛出首段后端错误
     }
   }
+
+  /// F-122 的另一条漏网路径：兜底**成功但类型不符**时原先是直接 `return nil`，走不到方法
+  /// 尾部的 `throw firstStageError`。首段（超时/500）其实从没查完，nil 却会被
+  /// `getTMDBJumpTarget` 当成「媒体不存在」并弹出误导提示。
+  func testSearchFailureThenFallbackTypeMismatchThrowsInsteadOfReturningNil() async {
+    TmdbRecognitionURLProtocol.stub.setSearchStatusCode(500)
+    TmdbRecognitionURLProtocol.stub.setRecognizeResult(
+      #"{"media_info":{"tmdb_id":42,"title":"测试电影","type":"电视剧"}}"#
+    )
+
+    let service = makeService()
+
+    do {
+      let recognized = try await service.recognizeTmdbId(
+        title: "测试电影",
+        year: "2025",
+        type: "电影"
+      )
+      XCTFail("首段失败 + 兜底类型不符时应抛出首段错误，实际返回 \(String(describing: recognized))")
+    } catch is CancellationError {
+      XCTFail("不应将后端错误折叠为取消")
+    } catch {
+      // 期望：抛出首段后端错误
+    }
+  }
+
+  /// **阴性对照**：两段都成功、兜底明确认成另一种类型时，`nil`（= 不是这部媒体）仍然是对的 ——
+  /// 不能因为上面那条把「类型不符」一律当成错误抛出去。修复前后都通过，
+  /// 它守的是上一条的 `firstStageError` 条件别被放宽成无条件 throw。
+  func testBothStagesSuccessThenFallbackTypeMismatchStillReturnsNil() async throws {
+    TmdbRecognitionURLProtocol.stub.setSearchResults("[]")
+    TmdbRecognitionURLProtocol.stub.setRecognizeResult(
+      #"{"media_info":{"tmdb_id":42,"title":"测试电影","type":"电视剧"}}"#
+    )
+
+    let service = makeService()
+    let recognized = try await service.recognizeTmdbId(
+      title: "测试电影",
+      year: "2025",
+      type: "电影"
+    )
+
+    XCTAssertNil(recognized, "首段查完且无匹配、兜底认成另一类型 —— 这才是真的不属于这部媒体")
+  }
 }
 
 private final class TmdbRecognitionURLProtocolStub: @unchecked Sendable {
