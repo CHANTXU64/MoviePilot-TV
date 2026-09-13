@@ -2217,20 +2217,23 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 ### 原始 P3 处置区（52 项）
 
 <details>
-<summary>F-001 · P3 · 已确认 · `FlexibleBool` 带换行真值误降级</summary>
+<summary>F-001 · P3 · 已修复 · `FlexibleBool` 带换行真值误降级</summary>
 
-- 审查单元与位置：M001-B；`Models.swift:192-203`
+- 审查单元与位置：M001-B；`Models.swift:187-224`
+- 修复状态：字符串分支 trim 由 `.whitespaces` 改为 `.whitespacesAndNewlines`，带行尾真值不再落入 `false`。
 - 触发路径：任一 `FlexibleBool` 字段收到 `"true\n"`、`"1\r\n"` 等带行尾的字符串。
 - 根因：字符串只使用 `.whitespaces` 清理，两种真值比较与 `Int` 转换均失败后静默落入 `false`。
 - 用户影响：可能隐藏管理员或功能入口、跳过启用的下载器/媒体服务器、漏加图片 Cookie，或误显示状态；不会造成权限提升。
 - 证据：M001-B 主审完整追踪所有包装类型调用者及相关测试；verify_m001_b 独立复现解析分支、全量调用者和测试缺口；无新候选
-- 跨端结论：TV 端缺陷已确认；上游是否产生该输入未验证
-- 最小修改方向 / 裁决：若复核确认，将根因位置改为 `.whitespacesAndNewlines` 并补直接解码回归测试，不在调用者重复防御。
+- 跨端结论：TV 端缺陷已确认；上游是否产生该输入未验证，修复为防御性收敛
+- 最小修改方向 / 裁决：将根因位置改为 `.whitespacesAndNewlines` 并补直接解码回归测试，不在调用者重复防御。
+- 验证：新增 `FlexibleBoolDecodingTests`（JSONSerialization 合法转义 payload，真/假值×换行 8 例）；修复版全绿，还原旧 `.whitespaces` 后同套失败，确认可捕获。
+- 处置状态：用户逐条过 P3 时先质疑"是否已修"，经 git blame/全仓核实未修后批准修复。
 
 </details>
 
 <details>
-<summary>F-004 · P3 · 降级 · 完整原始 JSON 与强类型字段重复持有</summary>
+<summary>F-004 · P3 · 降级（用户决定跳过） · 完整原始 JSON 与强类型字段重复持有</summary>
 
 - 审查单元与位置：M001-C；`Models.swift:612,614-616`，持有/编码在 `728,879,917,1000-1004`
 - 触发路径：任何 `MediaInfo` 或 `[MediaInfo]` 解码，长分页和预加载缓存放大持有量。
@@ -2239,19 +2242,23 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：M001-C 主审确认唯一生产用途及分页/预加载持有路径；verify_m001_c 确认静态重复持有，但无真机量化，P2→P3
 - 跨端结论：静态风险成立；实际性能影响须真机 Instruments
 - 最小修改方向 / 裁决：先验证多态原始字段依赖，再只保留未建模/不透明字段；必须保留未知字段回归，并用真机 Allocations/RSS 定量。
+- 处置状态：P3 逐条过时用户决定跳过——无真机实测影响；`rawPayload` 承担 re-encode 保未建模/插件字段的功能职责，冒然瘦身有丢插件契约风险；若真机 Instruments 量化出实际影响再重开。
 
 </details>
 
 <details>
-<summary>F-005 · P3 · 已确认 · 状态模型默认值不能兜底缺键</summary>
+<summary>F-005 · P3 · 已修复 · 状态模型默认值不能兜底缺键</summary>
 
-- 审查单元与位置：M001-C；`Models.swift:416-450`，限 Statistic/DownloaderInfo 非可选字段
+- 审查单元与位置：M001-C；`Models.swift:433-487`，限 Statistic/DownloaderInfo 非可选字段
+- 修复状态：两个模型各补自定义 `init(from:)`，非可选数字字段按 `decodeIfPresent ?? 0` 容缺；字段齐全时行为不变。
 - 触发路径：Dashboard 或下载器响应缺失/null 任一非可选统计字段。
 - 根因：属性 `= 0` 不会成为合成 `Decodable` 的缺键默认值。
 - 用户影响：状态刷新失败，首次为空、后续保留旧值；顺序赋值可能形成跨卡片混合快照。
 - 证据：M001-C 主审追踪 Dashboard 刷新和现有测试缺口；verify_m001_c 独立确认合成解码与顺序发布混合快照
-- 跨端结论：官方 schema 是否保证字段齐全未验证
+- 跨端结论：官方 schema 是否保证字段齐全未验证；采用"允许缺失、按 0 兜底"分支，字段齐全时零行为变化
 - 最小修改方向 / 裁决：若字段允许缺失，在模型边界 `decodeIfPresent ?? 0`；若必填，移除误导默认值并补严格契约测试。
+- 验证：新增 `StatusModelDecodingTests`（缺键/null/空对象/齐全矩阵）+ `StatusDashboardSnapshotTests` 两例端到端（部分字段仍整页发布）；修复版 9 例全绿，stash 还原模型后 4 个新用例全败、既有 5 例不受影响。
+- 处置状态：用户逐条过 P3 时经解释"三连取整批失败"触发链后批准修。
 
 </details>
 
@@ -2354,59 +2361,72 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-038 · P3 · 已确认 · 空白语言值穿透详情元数据</summary>
+<summary>F-038 · P3 · 已修复 · 空白语言值穿透详情元数据</summary>
 
-- 审查单元与位置：B006-A；TranslationHelper 与详情元数据拼接
+- 审查单元与位置：B006-A；`TranslationHelper.swift:506-521`（`languageName(for:)` 先 trim 再查表）、`MoviePilot-TV/ViewModels/MediaMetadataText.swift:35-72`（`secondaryLine`）
+- 修复状态：详情页两行元数据的组装从 `MediaDetailView` 内联闭包提取为 `MediaMetadataText`，所有元素过 `displayValue(_:)`（trim `whitespacesAndNewlines`，空结果丢弃）；`original_language`/`release_date`/`year`/`category`/`type` 五个标量一并回溯。`languageName(for:)` 改为先 trim 再查表，全空白输入返回空串。
 - 触发路径：original_language 为 empty/空格/换行。
 - 根因：模型接受任意非 nil 字符串，helper 原样回退，调用者只判 non-nil 就 append。
 - 用户影响：尾随/空白分隔点，或创建空 Text 行。
 - 证据：review_b006_a 闭合 decodeIfPresent→原样回退→append 链；verify_b006_a_retry 独立确认空 Text/尾随分隔及通用元数据范围
 - 跨端结论：TV 展示不变量缺陷已确认；真实 payload 频率未验证
 - 最小修改方向 / 裁决：元数据 builder 统一 trim/过滤空显示值，不只补语言分支；release_date/year/国家名一并回溯。
+- 验证：`testBlankOriginalLanguageProducesNoElement` / `testBlankReleaseDateFallsBackToYear` / `testLanguageCodeIsTrimmedBeforeLookup` / `testHostilePayloadProducesNoDanglingSeparator`；临时还原为修复前行为后 13 项失败、仅阳性对照通过。
+- 处置状态：用户逐条过 P3 时经解释触发链与影响面后，批准随“组二”一并修复。
 
 </details>
 
 <details>
-<summary>F-040 · P3 · 已确认 · 不同职位键翻译后重复显示</summary>
+<summary>F-040 · P3 · 已修复 · 不同职位键翻译后重复显示</summary>
 
-- 审查单元与位置：B005；JobRegistry/StaffManager/TranslationHelper
+- 审查单元与位置：B005；`TranslationHelper.swift:491-505`（显示边界去重）、`StaffManager.swift:126-141`
+- 修复状态：`translateJobs` 先经 `canonicalJobKeys(from:)` 规范化，再对**翻译结果**去重；原始 key 阶段的去重不变，故优先级仍按各原始 key 独立计算。
 - 触发路径：同一人员同时携带两个 key，或重复记录分别携带。
 - 根因：原始 key 阶段认为不同，翻译后都为“摄影”且不再去重。
 - 用户影响：职员卡片显示“摄影/摄影”，未来职位分组也可能同名重复。
 - 证据：review_b006_a 确认 Cinematography/Camera 同译与原 key 去重顺序；verify_b005 独立确认当前可见路径为职员卡片并收窄 Hero 边界
 - 跨端结论：TV 显示缺陷已确认；真实 payload 组合未验证
 - 最小修改方向 / 裁决：保留原始 key/优先级，在最终显示边界稳定去重；若产品要区分则改词表。
+- 验证：`testCinematographyAndCameraCollapseToSingleDisplayName` 与 `testSamePersonWithBothCameraKeysAsSeparateRecordsCollapses`；临时还原消费者改动后两例均失败。
+- 处置状态：用户逐条过 P3 时经解释触发链与影响面后，批准随“组一”一并修复。
 
 </details>
 
 <details>
-<summary>F-041 · P3 · 已确认 · 职位键变体绕过翻译与优先级</summary>
+<summary>F-041 · P3 · 已修复 · 职位键变体绕过翻译与优先级</summary>
 
-- 审查单元与位置：B005；Job key 到翻译/优先级链
+- 审查单元与位置：B005；`JobRegistry.swift:113-149`（canonical 解析）、`StaffManager.swift:9-16`、`TranslationHelper.swift:491-505`
+- 修复状态：新增 `canonicalJobKey(for:)` / `canonicalJobKeys(from:)` 单一解析入口（清理 `whitespacesAndNewlines` → 精确匹配 → 大小写不敏感 → 未知原样保真），翻译与优先级共同消费；`mergeUniqueStrings` 与分组拆分 trim 收敛为 `.whitespacesAndNewlines`。
 - 触发路径：`director`、`Director\n` 或未登记同义别名。
 - 根因：消费者仅 trim `.whitespaces`，没有共享 canonical key/alias。
 - 用户影响：重要职位降为优先级 999 并显示原始文本，Hero 可能改选较低重要度职位。
 - 证据：review_b006_a 闭合原样解码、精确查表与排序 999 路径；verify_b005 独立确认大小写/换行双重失配与 Hero 排序影响
 - 跨端结论：TV 行为缺陷已确认；上游 canonical 词表未验证
 - 最小修改方向 / 裁决：G07 单一 canonical job key 解析供翻译和优先级共用；未知保真并最低优先级。
+- 验证：`testJobKeyVariantsResolveToCanonicalKey` / `testJobKeyVariantsAreTranslated` / `testLowercaseDirectorOutranksProducerInHero`；临时还原消费者改动后后两例失败。
+- 处置状态：用户逐条过 P3 时经解释触发链与影响面后，批准随“组一”一并修复。
+- 剩余未验证：上游是否真的产生大小写/换行变体；别名映射表仍为空。
 
 </details>
 
 <details>
-<summary>F-043 · P3 · 已确认 · 空/畸形国家元素生成空白分隔符</summary>
+<summary>F-043 · P3 · 已修复 · 空/畸形国家元素生成空白分隔符</summary>
 
-- 审查单元与位置：B006-B；ProductionCountry 多态解码与详情拼接
+- 审查单元与位置：B006-B；`TranslationHelper.swift:538-546`（`countryName(for country:)`）、`MoviePilot-TV/ViewModels/MediaMetadataText.swift:53-62`（国家段）
+- 修复状态：叶子层对 `iso_3166_1` 与 `name` 分别 trim；查不到翻译时优先用名称，名称也缺失则**保留未知非空 code 原文**（此前一律回退空串、静默丢弃上游信息），两者都为空才返回空串。外层不再只判原数组非空，而是逐项归一后丢弃空结果。
 - 触发路径：null/数字/布尔/数组/空对象，空白 code/name，或未知 code 无 name。
 - 根因：不支持元素静默变 `(nil,nil)`，对象入口回退空串，View 仅判原数组非空就 map+joined。
 - 用户影响：`2024 · `、空 Text 或 `中国 / `。
 - 证据：review_b006_b_retry 闭合 nil模型→空显示→joined 链；verify_b006_b 独立确认叶子与内外分隔两层空值路径
 - 跨端结论：TV 展示不变量缺陷已确认；真实 payload 未验证
 - 最小修改方向 / 裁决：未知非空 code 保真；先在国家叶子层 trim/过滤再 `/` 连接，之后外层元数据再过滤并以 `·` 连接。
+- 验证：`testMalformedCountryElementsProduceNoElement`（六种畸形载荷）/ `testMalformedCountryElementsAreDroppedButValidOneSurvives` / `testUnknownNonEmptyCountryCodeIsPreserved` / `testCountryNameIsTrimmedBeforeLookup` / `testEnglishCountryNameIsTrimmed`；临时还原后全部失败。
+- 处置状态：用户逐条过 P3 时经解释触发链与影响面后，批准随“组二”一并修复。
 
 </details>
 
 <details>
-<summary>F-044 · P3 · 已确认 · 人物搜索绕过职位翻译</summary>
+<summary>F-044 · P3 · 已修复 · 人物搜索绕过职位翻译</summary>
 
 - 审查单元与位置：B005 复核新增 / B006-C；Search 人物行与 raw job
 - 触发路径：搜索响应人物含 canonical `job`，如 Director。
@@ -2415,102 +2435,127 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：verify_b005 独立确认 canonical Director 也会显示英文；verify_b005 后续 B006-C 主审重走 searchPerson→SearchView 旁路并支持
 - 跨端结论：TV 旁路缺陷已确认；搜索响应 job 非空频率未验证
 - 最小修改方向 / 裁决：人物职位展示走统一翻译边界，不在 View 手工词表。
+- 修复状态：在人物分页器 `processor` 统一投影（`SearchViewModel.translatingJobForDisplay`），两个 View 不再各自打补丁。用 `TranslationHelper.translateJobs` 翻译非空 `job`；无变化时原样返回，因此对已翻译值幂等。投影在 `Person.deduplicate` 之前，首屏与 loadMore 同路径，人物行与最佳结果卡片同源。
+- 验证：定向 4 条（人物行、最佳结果副标题、多职位 `Director/Writer`→「导演/编剧」+ 无 job 人物不被造值、已翻译值幂等阴性对照）；临时还原投影调用后前三条失败、幂等对照仍通过；全量套件通过。
 
 </details>
 
 <details>
-<summary>F-045 · P3 · 已确认 · roles-only 职员跨展示不一致</summary>
+<summary>F-045 · P3 · 已修复 · roles-only 职员跨展示不一致</summary>
 
-- 审查单元与位置：B005 复核新增 / S006；StaffManager roles fallback 与 PersonCard
+- 审查单元与位置：B005 复核新增 / S006；`StaffManager.swift:126-141`（投影）、`:228-240`（分组）
+- 修复状态：在 `mergeCrew` 最终 map 统一投影 —— `job` 与 `character` 均无内容时把 `roles` 经 `translateJobs` 投影进 `job`，两个 View 不再各自打补丁；`character` 非空时不覆盖。
 - 触发路径：Person 只有 roles，没有 job/character。
 - 根因：getTopGroupedStaff 用 roles 兜底，processCrew 不投影 roles，卡片只读 job/character。
 - 用户影响：Hero 显示职位，职员卡同一人无副标题。
 - 证据：verify_b005 独立确认 Hero roles 兜底而 processCrew 不投影；verify_b006_b 作为 S006 主审确认触发边界与 PersonCard 旁路
 - 跨端结论：TV 分支差异已确认；真实来源未验证
 - 最小修改方向 / 裁决：在 StaffManager 统一 roles 到展示职位的投影，不在两个 View 分别补丁。
+- 验证：`testRolesOnlyCrewGetsJobProjectionForCardSubtitle`（投影生效）+ `testCharacterSubtitleIsNotOverriddenByRoles`（阴性对照，两侧均通过）；临时还原后前者失败。
+- 处置状态：用户逐条过 P3 时经解释触发链（Hero 有职位、同人卡片空白）与影响面后，批准随“组一”一并修复。
 
 </details>
 
 <details>
-<summary>F-046 · P3 · 已确认 · 类型名未规范化且空结果进入详情元数据</summary>
+<summary>F-046 · P3 · 已修复 · 类型名未规范化且空结果进入详情元数据</summary>
 
-- 审查单元与位置：B006-C；MediaGenre/translateGenre/详情元数据
+- 审查单元与位置：B006-C；`TranslationHelper.swift:556-566`（`translateGenre(for:)`）、`MoviePilot-TV/ViewModels/MediaMetadataText.swift:20-29`（类型段）
+- 修复状态：`translateGenre(for:)` 先 trim `whitespacesAndNewlines` 再查表（带空白的 canonical 类型此前不翻译），全空白返回空串，未知非空名称 trim 后保真；内层在 `compactMap { $0.name }` 与翻译之后再丢一次空（原写法只丢 nil，空串会活到 `joined`），外层同样按显示值归一；`category`/`type` 判空一并回溯。
 - 触发路径：带空白/换行 canonical genre，或 null/数字/空对象/空名称元素。
 - 根因：模型保留原字符串或宽容为空元素；翻译精确查表不 trim；View 只判数组非空就 joined/append。
 - 用户影响：canonical 类型不翻译，空 Text、`电影 · ` 或尾随/重复分隔符。
 - 证据：verify_b005 作为 B006-C 主审闭合多态解码、精确查表与 joined 链；verify_b006_c 独立确认 trim/filter 边界并收窄大小写/别名
 - 跨端结论：TV 展示不变量缺陷已确认；真实输入频率未验证
 - 最小修改方向 / 裁决：genre 叶子 `whitespacesAndNewlines` trim/filter，未知非空名称保真；内层 genre 和外层元数据均过滤空结果。
+- 验证：`testBlankAndMalformedGenreElementsProduceNoElement`（七种载荷）/ `testWhitespacePaddedGenreIsTranslated` / `testUnknownGenreNameIsTrimmedButPreserved` / `testBlankCategoryFallsBackToType` / `testAllValidFieldsArePreserved`（阳性对照）；临时还原后除阳性对照外全部失败。
+- 处置状态：用户逐条过 P3 时经解释触发链与影响面后，批准随“组二”一并修复。
 
 </details>
 
 <details>
-<summary>F-050 · P3 · 已确认 · Hero 演员先截断后去重</summary>
+<summary>F-050 · P3 · 已修复 · Hero 演员先截断后去重</summary>
 
-- 审查单元与位置：S006；MediaDetailViewModel Hero 演员截断
-- 触发路径：前四条演员含同一 Person.id 多角色重复，后面还有不同演员。
+- 审查单元与位置：S006（F-056 经 G07 第三裁并入）；`MoviePilot-TV/ViewModels/MediaDetailViewModel.swift:191-220`（`applyFullDetail` 主演初值）
+- 修复状态：取样顺序改为 G07 第三裁给的 `processActors`（全量去重并合并 `character`）→ 过滤 trim 后空名 → `prefix(4)`。过滤只落在 Hero 取样这一层，**不下沉到 `mergeActors`** —— 演员货架是否收无名者属另一条口径，verify_s006 已确认货架不受本项影响。尾部「Hero 完全为空才用分页数据补」分支保持原样。
+- 触发路径：前四条演员含同一 Person.id 多角色重复，后面还有不同演员；或前四条含 `name` 为 nil／trim 后为空的人。
 - 根因：先 prefix(4) 再 processActors 去重；分页结果仅在 Hero 完全为空时替换。
 - 用户影响：Hero 长期少于四名主演。
 - 证据：verify_b006_b 闭合 prefix(4)→processActors 与分页替换条件；verify_s006 独立确认影响仅 Hero 并修正 W008-C 路由
-- 跨端结论：TV 顺序缺陷已确认；真实重复分布未验证
-- 最小修改方向 / 裁决：完整去重后取前四并保持服务端顺序。
+- 跨端结论：后端 `actors` 取自 TMDB `credits.cast`，只按 `known_for_department == "Acting"` 过滤、**不去重**（`app/core/context.py:481-486`），而 TMDB cast 结构上允许同一个人以不同 `character` 出现多条；视图 `MediaDetailView.swift:1037` 用 `compactMap { $0.name }.joined(...)`，无名者渲染为空档却照样占名额。Web 无 Hero 主演行（演员经 `/credits/...` 页面展示），没有可对照面。
+- 最小修改方向 / 裁决：完整去重后取前四并保持服务端顺序；G07 第三裁把 F-056 的 nil/空名一并并入同一取样顺序根因。
+- 验证：新增 `MoviePilot-TV-Tests/HeroTopActorsOrderingTests.swift` 9 条（2 条阳性 + 7 条阴性对照）。定向 9/9。**反向验证分两次单独还原**：①退回「先 `prefix(4)` 再去重」→ 当时那版 6 条用例中 1 挂（重复项挤人）/ 5 过；②仅去掉空名过滤 → 9 条中 2 挂（`["乙","丙","丁"]`、`["   ","乙","丙","丁"]`）/ 7 过。全量 **991/991 通过、零失败**（982 + 9）。
+- 过程中修正的一处用例缺陷：`testMergedDuplicateKeepsAllCharacters` 在新旧实现下**同过** —— 旧实现取的前四条里重复项本就都在，合并结果同样是「角色一/角色二」，合并口径不随选取顺序变。它拦的是「用 Set 按 id 只留首条」这类**错误修法**而非本 bug，已由阳性改标为阴性对照并注明。另修正注释中已随增行失效的行号引用（原 `:250-251`、`:251`）与「不丢信息」的过度表述。
+- 处置状态：用户逐条过 P3 时听完触发链与影响面（改动一行、风险极低）后裁决「直接修吧」。真实重复分布与无名人物分布均未验证（未加真机日志统计频率）。
 
 </details>
 
 <details>
-<summary>F-051 · P3 · 已确认 · 头像排序与可渲染图片判定不一致</summary>
+<summary>F-051 · P3 · 已修复 · 头像排序与可渲染图片判定不一致</summary>
 
-- 审查单元与位置：S006；StaffManager.hasAvatar 与 Person.imageURLs
+- 审查单元与位置：S006；`StaffManager.swift:109-112`（排序消费点）、`Models.swift:2286-2289`（`Person.hasUsableProfileImage`）
+- 修复状态：新增 `Person.hasUsableProfileImage`（= `imageURLs.profile != nil`，与卡片渲染同一事实来源），排序消费点改用它并**删除** `StaffManager.hasAvatar`（全仓唯一调用点即此处），第二份判据不再存在。影响面确认仅限 `mergeCrew` 新增项同优先级内部排序。
 - 触发路径：头像排序判定与实际可渲染图片不一致
 - 根因：前者检查任意原始 profile_path/avatar/images 存在，后者按 source 严格选择可渲染 URL。
 - 用户影响：最终只有占位图的人员可排在真正有头像人员之前。
-- 证据：verify_b006_b 以 PersonDecoding 多组反例闭合；verify_s006 独立确认只影响 crew 新增项排序及 source-aware 反例
+- 证据：TMDB 空 images、Douban 默认头像、Bangumi only-large、AniList only-avatar 等现有解码反例。
 - 跨端结论：TV 排序规则缺陷已确认；真实来源组合未验证
 - 最小修改方向 / 裁决：排序复用最终 `imageURLs.profile != nil` 判定。
+- 验证：`testCrewSortPrefersRenderableAvatarOverRawFieldPresence` + 四个叶子反例（Bangumi 仅 large、豆瓣默认头像、TMDB 空 images、未支持来源）；临时换回原始字段逻辑后 5 例失败，两个阳性对照与阴性对照 `testCrewSortKeepsJobPriorityDominantOverAvatar` 两侧均通过。
+- 处置状态：用户逐条过 P3 时经解释触发链与影响面（仅排序、一处调用点）后，批准随“组三”一并修复。
 
 </details>
 
 <details>
-<summary>F-052 · P3 · 已确认 · 多值 roles 整体降为未知优先级</summary>
+<summary>F-052 · P3 · 已修复 · 多值 roles 整体降为未知优先级</summary>
 
-- 审查单元与位置：S006；getTopGroupedStaff roles fallback
+- 审查单元与位置：S006；`StaffManager.swift:9-16`（多值取最高优先级）、`:235`
+- 修复状态：`getPriority` 先 `canonicalJobKeys(from:)` 拆分再取各项优先级最小值，`"Director/Writer"` 得 0 而非 999；roles 兜底标签改为逐项规范化后拼接，`["", ""]` 不再生成孤立 `/`。
 - 触发路径：roles `["Director","Writer"]` 且存在其他职位组。
 - 根因：先 join 为 `Director/Writer` 再整体查 jobPriorityMap 得 999，翻译阶段却重新拆分。
 - 用户影响：Producer 等次要职位可能压过包含 Director 的人员；空 roles 还造首尾 `/`。
 - 证据：verify_b006_b 闭合 roles join→priority→translate split；verify_s006 修正为 roles fallback 两人反例并确认
 - 跨端结论：TV 排序缺陷已确认；roles canonical 语义未验证
 - 最小修改方向 / 裁决：roles 元素逐项规范化/过滤，取最小优先级后生成显示文本。
+- 验证：`testRolesFallbackRanksByBestRolePriority`（Director/Writer 压过 Producer）+ `testAllEmptyRolesProducesFallbackLabelNotStraySeparator`；临时还原后两例均失败。
+- 处置状态：用户逐条过 P3 时经解释触发链（Hero 把导演换成制片人）后，批准随“组一”一并修复。本组唯一产生**结果错误**而非纯显示问题的一条。
+- 🆕 注释勘误（2026-09-13，二轮外部审查 [P3]）：审查指出 `StaffManager.swift:229` 的注释与代码不符 —— 原文「优先级：角色名 > 原始职位 > 角色列表 > 兜底『职员』」描述了一个**不存在的 `staff.job` 分支**。能走到该 fallback，恰恰说明没有任何人产出过 canonical 职位分组，`staff.job` 在此必然解析不出 key；显示标签实际只由 `character` → `roles` → 「职员」决定。注释已按实际代码改写，并补上「`roles` 是逐项规范化后再拼接，故 `["", ""]` 不再生成孤立 `/`」这一说明。**纯注释修正，零行为变更**；同批审查提出的 `MediaDetailViewModel.swift:191` 长注释属风格建议，本轮不改。
 
 </details>
 
 <details>
-<summary>F-053 · P3 · 已确认 · mergeCrew 不能消费自身返回值</summary>
+<summary>F-053 · P3 · 已修复 · mergeCrew 不能消费自身返回值</summary>
 
-- 审查单元与位置：S006；mergeCrew 增量 API
+- 审查单元与位置：S006；`StaffManager.swift:45-141`、`TranslationHelper.swift:491-505`
+- 修复状态：采用翻译后显示边界去重使回灌幂等，未删除增量语义（保留 Loadmore API 形状，未来 crew 分页仍可用）；复核确认非空 existing 调用者仍为空，故对当前生产路径行为中性。
 - 触发路径：已翻译返回列表作为 existing，下一页同人再返回同一 raw job。
 - 根因：canonical job 与显示文本复用同一字段，二次合并形成“导演/Director”再翻为“导演/导演”。
 - 用户影响：未来启用 crew 分页后重复职位。
 - 证据：verify_b006_b 构造 Director→导演/Director→导演/导演 链；verify_s006 独立确认条件性且当前无非空 existing 调用者
 - 跨端结论：潜伏 API 缺陷已确认；当前无用户路径
 - 最小修改方向 / 裁决：不用则删除增量语义；启用则 canonical/display 分离。
+- 验证：`testMergeCrewIsIdempotentOverItsOwnOutput` + `testMergeCrewKeepsExistingPositionStable`；临时还原后两例均失败（分别得「导演/导演」「制片人/制片人」）。
+- 处置状态：用户逐条过 P3 时经说明“当前无调用者、属潜伏缺陷”后批准修，未删除增量语义。
 
 </details>
 
 <details>
-<summary>F-055 · P3 · 已确认 · 人物最佳结果使用 TMDB 专属头像准入</summary>
+<summary>F-055 · P3 · 已修复 · 人物最佳结果使用 TMDB 专属头像准入</summary>
 
-- 审查单元与位置：S006 复核新增 / M001-G；Search 最佳人物结果头像准入
+- 审查单元与位置：M001；`SearchViewModel.swift:279`（`calculateBestResults` 人物准入）、`Models.swift:2286-2289`
+- 修复状态：准入判据从 TMDB 专属 `profile_path` 换成与 F-051 同一个 `Person.hasUsableProfileImage`。只改准入布尔量，评分、热度加权、排序与来源混合判定未触碰；按第三裁保留 P3 与原频率判断（真实触发需四个条件同时成立，豆瓣来源通常匹配分高，很难撞上），修的是判据本身。
 - 触发路径：Douban 等来源有最终可渲染 avatar，但 profile_path nil，且其他评分不足。
 - 根因：准入读取 TMDB 专属 `profile_path`，卡片实际使用 source-aware `imageURLs.profile`。
 - 用户影响：有头像的人物被排除出最佳结果，但仍出现在人物行。
-- 证据：verify_s006 以 Douban 有 avatar 无 profile_path 反例闭合；review_m001_g 独立重走 Douban 搜索、评分准入与卡片图片链
-- 跨端结论：TV 跨来源准入差异已确认；Web 排名未验证
+- 证据：review_m001_g 独立确认人物搜索允许 Douban，现有 fixture 可形成有 avatar 但无 `profile_path` 的人物，而最佳结果与卡片使用不同图片准入。
+- 跨端结论：TV 旁路缺陷已确认；Web 排名与真实跨来源人物分布未验证
 - 最小修改方向 / 裁决：准入复用最终图片可用性判定。
+- 验证：`testBestResultsAdmitPersonWithSourceAwareAvatarButNoTMDBProfilePath` 走真实 `autoSearch()` 端到端路径（为此给既有 stub 增加 `setPersonResults(_:forQuery:)`），构造最坏情形断言有豆瓣头像的人物仍进入最佳结果；临时换回 `profile_path` 判据后该例失败。
+- 处置状态：用户逐条过 P3 时经解释触发链与影响面（并说明真实触发较弱）后，批准随“组三”一并修复。
 
 </details>
 
 <details>
-<summary>F-057 · P3 · 已确认 · 季集范围终点丢失或未校验</summary>
+<summary>F-057 · P3 · 用户决定跳过 · 季集范围终点丢失或未校验</summary>
 
 - 审查单元与位置：S003；ParsedSeason 范围解析/排序
 - 触发路径：`S01-S12`、倒序集范围等。
@@ -2519,11 +2564,12 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：verify_s006 作为 S003 主审构造季/集范围反例；verify_s003_resume 独立确认结束季捕获未消费及范围排序内部不一致
 - 跨端结论：TV 排序行为可见；真实范围格式未验证
 - 最小修改方向 / 裁决：明确范围语法并解析/校验终点，invalid 单独排序。
+- 处置状态：用户决定跳过。只影响「季」筛选下拉的选项位置，点击筛选按原始字符串精确匹配仍正确，且上游是否产出范围格式从未验证。比对 Web v2.15.6 `useTorrentFilter.ts:109` 后确认正则逐字相同、同样捕获第二季号却从不读取——TV 与 Web 已同源同缺陷，「对齐 Web」即维持现状。
 
 </details>
 
 <details>
-<summary>F-058 · P3 · 已确认 · 卡片与筛选排序季集语法不一致</summary>
+<summary>F-058 · P3 · 用户决定跳过 · 卡片与筛选排序季集语法不一致</summary>
 
 - 审查单元与位置：S003；ParsedSeason 与 Formatters 两套语法
 - 触发路径：E02、E01-E05、S01E01-10、S01-02。
@@ -2532,11 +2578,12 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：verify_s006 对比两套正则及 Set 未指定顺序；verify_s003_resume 独立闭合两套正则与同一字段的显示/筛选链
 - 跨端结论：TV 语法分裂已确认；上游格式未验证
 - 最小修改方向 / 裁决：两处共享一个明确语法/解析结果，不重复维护不一致正则。
+- 处置状态：用户决定跳过。落进无效组的选项照样能选中并正确筛选，受影响的只是该组内部顺序。Web 不存在第二套语法（`TorrentCard.vue:177` 直接渲染原始 `season_episode`），「对齐 Web」只能靠删掉卡片美化实现，属显示退化，故不对齐也不修。
 
 </details>
 
 <details>
-<summary>F-059 · P3 · 已确认 · 无效/溢出输入折叠为合法零值</summary>
+<summary>F-059 · P3 · 部分修复 · 无效/溢出输入折叠为合法零值</summary>
 
 - 审查单元与位置：S003；ParsedSeason invalid/overflow 状态
 - 触发路径：`无`、超大季/集数、空白/附加文本等。
@@ -2545,11 +2592,14 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：verify_s006 闭合 Int 安全失败与整季/无效分支；verify_s003_resume 独立确认无成功状态及零值多义性
 - 跨端结论：TV 排序混淆已确认；真实畸形输入未验证
 - 最小修改方向 / 裁决：显式 invalid 状态与稳定末尾排序，区分“没有 E”和“E 解析失败”。
+- 修复状态：用户批准只修三条同源 finding 中唯一的归类错误——`ParsedSeason` 初始化器的 `else` 分支把「没有 E 标记」与「有 E 标记但集号解析失败」合并，后者被标成整季。改为整季当且仅当压根没有 E 标记，畸形输入与「无」一样留在无效组。无成功标志/零值多义性等排序侧影响与 F-057/F-058 一并跳过。
+- 跨端补充：Web 用 JS `parseInt`，超长数字算出巨大浮点数而非解析失败，不产生整季误标；该形态为 TV 独有。
+- 验证：新增 `ParsedSeasonTests` 9 例（2 阳性 + 7 阴性对照）；反向验证还原该行后 2 失败 / 7 通过，失败者正是两条阳性断言；全量套件通过。
 
 </details>
 
 <details>
-<summary>F-060 · P3 · 降级 · 直接 `print` 绕过 Debug-only Logger</summary>
+<summary>F-060 · P3 · 已修复 · 直接 `print` 绕过 Debug-only Logger</summary>
 
 - 审查单元与位置：S001；Logger 与 15 个直接 print 生产文件
 - 触发路径：Release 构建的鉴权、资源过滤、媒体服务器跳转或错误路径。
@@ -2558,11 +2608,15 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：integrate_i002 作为 S001 主审统计 35 Logger/80 print、确认个人数据与 bootstrap 缺失；verify_s001_resume 独立复算调用、Release 设置与实际输出值；无凭据泄漏证据，P2→P3
 - 跨端结论：TV 本地旁路已确认；真实日志留存和凭据形态未验证
 - 最小修改方向 / 裁决：复用现有 Logger 替换或删除直接 `print`，URL/error 复用现有 query 脱敏边界，并增加最小生产源码禁用 `print` 检查；不新增日志框架。
+- 修复状态：按“最小方向”把生产端**全部**直接 `print` 改为统一 `Logger.*` 入口，不新增日志框架。实测调用点为 **67 处、散在 16 个文件**（审计原记 80 处/15 文件，差异为计数口径：本次逐点提取并配平括号，排除了 `hasSameMutationFingerprint(` 这类子串误命中与 `Logger.swift` 自身被 `#if DEBUG` 门控的那个 `print`）。分级按原文本语义落位：错误/失败路径 → `Logger.error`，Keychain 清理失败与选中规则失效 → `Logger.warning`，加载成功计数 → `Logger.info`，取消路径与 CustomFilter 逐资源追踪 → `Logger.debug`；与级别重复的前导 emoji（❌/✅/⚠️/ℹ️/🔍）和 `DEBUG: ` 前缀一并去掉，改由 Logger 的级别前缀表达。
+- 配套改动：`Logger` / `LogHandler` / `PrintLogHandler` / `Logger.Level` 显式标注 `nonisolated`，`handler` 标注 `nonisolated(unsafe)`。原因是本 target 设置了 `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`，默认隔离下这些静态方法只能在 MainActor 调用，而 `HomeViewModel:129`、`MediaDetailViewModel:423` 等调用点位于 `nonisolated` 的 Task 闭包内，直接替换会编译失败；日志属横切关注点，本就应当可从任意隔离域调用。`bootstrap` 全仓无调用方，`handler` 只有默认值这一个实际写入点。
+- 验证：新增 `NoDirectPrintInProductionTests`（源码级守卫）——经 `#filePath` 上溯定位仓库根后遍历 `MoviePilot-TV/**.swift`，用一个状态机把字符串字面量（含三引号多行串与 `#"..."#` 原始串）、`//` 行注释、`/* */` 块注释（支持嵌套）挖空后，按 `(?<![\w.])print\s*\(` 匹配，按文件名豁免 `Logger.swift`；定位失败时 `XCTSkip` 而非误报。**双向验证**：临时投放探针文件（同时含真实调用、注释里的调用、字符串里的 `print(` 文本、`fingerprintCheck(` 调用），守卫精确报出唯一真实调用所在行、对其余三种一律不报；探针已删除。
+- 影响面说明：因 `PrintLogHandler` 整体位于 `#if DEBUG` 内，本次替换后这 67 处在 **Release 构建中完全不再执行**（闭包也不会被求值），即 Release 侧无任何输出或留存 —— 这是审计认可的设计取向（“无 bootstrap 本身不构成缺陷”），代价是 TestFlight/Release 构建也拿不到这些诊断信息；若日后需要 Release 可观测性，应改 `LogHandler` 实现（如 `os.Logger`）而非恢复 `print`。
 
 </details>
 
 <details>
-<summary>F-078 · P3 · 已确认 · 缺失/0/重复分享业务 ID 可破坏稳定身份</summary>
+<summary>F-078 · P3 · 已修复 · 缺失/0/重复分享业务 ID 可破坏稳定身份</summary>
 
 - 审查单元与位置：M001-I；SubscribeShare 列表身份
 - 触发路径：`GET /subscribe/shares` 返回缺失、0、负数或重复分享 ID。
@@ -2571,6 +2625,97 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：review_m001_i 闭合 raw_id fallback、Paginator/ForEach 与兼容巡检盲点；verify_m001_i 独立确认列表丢项/焦点不稳，并驳回“Fork 错目标”的过宽影响
 - 跨端结论：TV 稳定身份缺口已确认；分享 ID schema 未验证
 - 最小修改方向 / 裁决：确认 schema 后，在分享快照边界要求唯一正业务 ID；非法记录采用明确过滤/拒绝策略，不以可变字段或 UUID 冒充持久身份。
+- 修复状态：用户批准修复，改动收敛在 `MoviePilot-TV/Models/Models.swift` 两处 —— `generateUniqueKey`（`:1086-1097`）把有效分享号从「非 nil」收紧为「正整数」（0/负数同缺失），消除所有 0 号分享共用 `share:0` 而被分页去重互相吞掉；`SubscribeShare.id`（`:2934-2983`）改为只在正业务 ID 时由 ID 决定身份，缺 ID 对齐 Web `SubscribeShareView.vue:287-293` 的兜底链（`media_id → tmdbid → doubanid → bangumiid → anilistid → name` + `share_user`）并舍弃可变的 `share_title`，全退化输入才退回随机 UUID（fail-open，宁可多一张重复卡也不丢卡）。新增 7 条回归用例；定向 10/10、反向验证 6 挂/4 过、全量 937/937。
+- 审计「剩余未验证」复核：分享 ID schema 已验证为 `Optional[int] = None`（`app/schemas/subscribe.py:153-155`）且列表代理逐条不校验，缺 ID 属契约内输入；非法 ID 的 Fork 语义已验证 —— `/subscribe/fork` 建订阅前 `sub_dict.pop("id")`，ID 仅用于向中心服务器上报「复用人次」且返回值不判，故「复用错目标」不成立，真实后果只是统计归属可能记错。
+- 处置说明：未采纳本条审计「最小方向」的「非法记录过滤/拒绝」—— 在缺 ID 属契约内输入的前提下等于把合法分享从列表剔除，即本项用户影响中的「列表丢项」。亦未采纳「TV 与 Web 一样不去重」：TV 的 `hasMore` 收敛依赖 processor 返回值（`Paginator.swift:242-243,283-284`），去掉去重将使翻页只能靠空页收敛，遇全已知项页面会永远翻不到底；Web 无此状态故可不去重。故保留去重、只修 key 公式使其与 Web 对齐。
+
+**🆕 外部 AI 审查复核（2026-09-13）：上述 `a92bf54` 的兜底身份本身是一处回归，已修正。**
+
+审查报 [P2]「分享兜底身份会碰撞，导致列表静默漏卡」。逐条回代码核对后**确认成立**，且是上一轮修复引入的：
+
+1. **无效媒体 ID 挡路** —— 后端用 `tmdbid: 0` 表示「没有」，而 `tmdbid.map(String.init)` 把它变成**非空**的 `"0"`，`.first { !$0.isEmpty }` 就此选中，排在后面的 `doubanid` 再没机会被看到。同一段代码两行之上的 `raw_id > 0`、以及 `MediaIdentifier.isValidManualMediaId`（`Models.swift:167`，`(Int(mediaId) ?? 0) > 0`）本就是「0 不算有效 ID」的同一口径，新支路却漏了。
+2. **跨来源同号** —— 不同站点原生 `media_id` 各自从 1 编号，`"42"` 在两个站点是两部片子，兜底公式不含 `media_source`。
+3. **同剧不同季** —— 兜底公式不含 `season`，同一部剧的第 1 季与第 2 季撞成一条。基线含 `share_title`，这两条标题不同本不会撞 —— 即上一轮为了「不以可变字段冒充身份」删掉 `share_title` 时，**没有补上更稳定的区分字段**。
+
+后果不是显示问题而是**静默丢数据**：`SubscribeShare.id` → `toMediaInfo()` → `generateUniqueKey`（`Models.swift:1092`）拼出 `"share:<id>"` → `deduplicateSubscriptionShareMedia` 返回 false → 卡片直接不进列表，用户无任何提示。另需记一笔方向性错误：Web 的 `get-item-key` 是 `ProgressiveCardGrid` 的**渲染 key**（`SubscribeShareView.vue:290-293`，且 `:183` 是 `[...dataList, ...currentData]` 直接 append、不做 key 过滤），把它当**去重身份**移植是口径错配；Web 那行用 `||` 在 JS 里靠 `0` 是假值自然穿透，Swift 的 `map(String.init)` 不具备该性质。
+
+修正（`shareFallbackIdentity` + 两个有效性判定）：
+
+- 媒体标识先按有效性筛：数字型须 `> 0`，文本型须 trim 后非空且不是 `"0"`/`"-1"` 一类哨兵；均无效再退 `name`。
+- 补回 `media_source`、`type`、`season`（缺省不参与）—— 与媒体 ID 同属分享内容的固有属性，分享人改不掉，不违反本条原始口径。
+- 补 `subscribe_id`，并以 `share_uid`（唯一 ID）优先于可改名的 `share_user`：同一人分享同一条订阅两次本就是同一条记录，分享自不同订阅才是两条。
+- 「谁分享的 / 从哪条订阅分享的」全缺时**返回 nil**（退回 UUID）：此时两条同媒体记录在数据上完全不可区分，按审查要求「字段不足以证明是同一条记录时不应静默合并」，宁可多一张看得见的重复卡，不少一张看不见的卡。
+- `share_title` 仍不参与 —— 原有口径不变。
+
+验证：新增 10 条回归（含审查点名的三组反例）与 3 条阴性对照。反向验证把 `Models.swift` 退回 `HEAD` 版本 → **9 条阳性全挂**（含 `count: 1 vs 2` 的直接丢卡证据），4 条阴性对照（同记录跨页仍去重、改 `share_title` 不变身份、正业务 ID 身份不变、全退化必成新项）全部通过 —— 证明补字段没有把身份拆得过散。恢复后定向 20/20。
+
+**🆕 二轮审查复核（2026-09-13）：拼接口径仍不可逆，已改为定长带标签槽位 + 长度前缀。**
+
+同一轮第二份审查继续报此条（[P2]）：上述修正补回了字段，但仍是「用 `-` 把**可变数量**的字段拼起来」，编码不可逆 —— 不同字段组合可以拼出同一字符串，碰撞只是从「漏字段」换成了「分隔符歧义」。逐组构造确认成立，四组反例：
+
+| 反例 | 旧编码 | 结果 |
+| --- | --- | --- |
+| 站点原生 ID 对 TMDB ID | `media_id=9001` 与 `tmdbid=9001` | 同一媒体标识槽 |
+| 字段内容冒充分隔符 | `media_source=mteam`+`media_id=42` 对 `media_id="mteam-42"` | 拼出同一串 |
+| 季号冒充用户名前缀 | `season=1`+`share_user=alice` 对 `share_user="s1-alice"` | 拼出同一串 |
+| 同名槽位 | `share_uid` 与 `share_user` 恰好同值 | 无法区分来源 |
+
+修正后身份形态为 `"Share\|" + 定长槽位依次拼接`，每槽 `n`（缺省）或 `s<UTF-8 字节数>:<值>`：
+
+- **媒体标识仍只取第一个有效项**（保留「分享人改名不改身份」这条原始口径），但**带上其字段名** —— `media_id:9001` 与 `tmdbid:9001` 不再相同。此处刻意**没有**把每个 ID 字段各占一槽：`name`（订阅名称）是可改字段，让它无条件参槽会直接推翻上一轮「改名不改身份」的修正。
+- `share_uid` 与 `share_user` 以 `u:` / `n:` 区分来源，同值不再压成同一槽。
+- 长度前缀使值内 `|`、`-`、数字全部失去歧义。
+
+验证：新增 4 条碰撞回归 + 结构断言（断言槽位形状而非整串字面量，便于日后调整槽序）。反向验证把 `Models.swift` 退回上一轮的 `-` 拼接版本 → **4 条碰撞用例 + 2 条结构断言全挂**，确认四组反例是真的可复现而非理论构造。定向 24/24；全量 **1024/1024 通过、零失败**。
+
+**🆕 三轮审查复核（2026-09-13）：三条全部成立，其中两条是我自己上一轮引入的。**
+
+**① [P2] `share_user` 被当成数字 ID 清洗 —— 上一轮收尾时我自己引入的回归。**
+
+审查报：`normalizedTextIdentifier(share_uid)` / `normalizedTextIdentifier(share_user)` 会把数字形态的 `"0"`、`"-1"` 判为无效。而 `share_user` 是**分享人显示名**，后端只声明 `Optional[str]`，从未规定叫 `"0"` 的名字无效。两条记录若只有分享人不同（`"0"` 与 `"-1"`）、其余字段相同且都带 `subscribe_id`，两个名字都被清洗成 nil，拼出同一个 key，后者被静默过滤 —— 又是漏卡。
+
+必须记一笔的经过：二轮我本已把这两处写成 `normalizedText`，收尾复查时以「保持既有口径、缩小 diff」为由**主动改回了 `normalizedTextIdentifier`**，正是这一步造出了本条回归。审查是对的，我的「保守」改错了方向 —— 哨兵规则是给「后端用数字表示没有」的**数值 ID 字段**定的，不该外推到「谁分享的」。已改回 `normalizedText`。
+
+**② [P2] 判定「是同一条分享」的门槛仍然太松 —— 用户裁决收紧。**
+
+原条件 `guard owner != nil || subscribe != nil`，等于「只要知道分享人就算数」。但分享人对得上不代表是同一条分享：同一个人完全可能把同一部剧的 2160p 与 1080p 各开一条订阅**分别分享**，缺 `subscribe_id` 时这两条会被并成一条；更退化的一路是只剩 `name` 兜底时，同名电影 1984 与 2021 也会被当成同一条。两组反例均实测复现（2 条塌成 1 条）。
+
+**关键认识**：长度前缀解决的是「怎么编码」，解决不了「凭什么认定是同一条记录」—— 编码再严谨也不能让原本不唯一的信息变得唯一。这正是审查那句「第二次修改修好了『怎么编码』，没有彻底解决『凭什么认定是同一条记录』」的意思。
+
+裁决结果：**必须有 `subscribe_id`**（`guard subscribe != nil`），拿不准就退回随机身份。代价照实记下 —— 缺 `subscribe_id` 的记录跨页重复时不再自动合并，会看到重复卡；这与 F-078 的原始口径一致：宁可多一张看得见的重复卡，不少一张看不见的卡。该代价已用一条**显式用例**固化（`testRecordsWithoutSubscribeIdAreKnowinglyNotDeduplicatedAcrossPages`），将来若有人想「顺手把跨页重复也合掉」，会先撞到它。
+
+**③ [P3] 测试断言早已失效，且该规则此前没有任何有效覆盖。**
+
+`testNumericSentinelStringsAreNotUsedAsMediaIdentity` 断言的 `!id.contains("Share-")` 在确定性 key 改成 `Share|…` 之后就没有判别力了。审查称其独立复现「改坏算法后两个断言仍通过」。我这边实测的结论**比审查更严重**：把 `normalizedTextIdentifier` 里的哨兵判据**整条删掉**，该用例与相邻两条「哨兵」用例（`testZeroTmdbIdFallsThroughToDoubanId`、`testNegativeTmdbIdIsNotUsedAsMediaIdentity`）**依然全绿** —— 后两条守的是 `normalizedNumberIdentifier`（数值字段），本就不覆盖文本字段，而唯一该覆盖的第三条又是空断言。即：文本哨兵规则此前**零覆盖**。
+
+已改：直接断言身份是 UUID，并补「同一份退化输入复解析必须得到不同身份」，另增一条真正有判别力的判别力对照 `testTextSentinelMediaIdYieldsToValidDoubanId`（两条其实同属一部豆瓣片子，其中一条多带 `media_id: "0"` 哨兵 → 必须并成一条；判据被删则会分道扬镳）。
+
+验证：三轮反向验证逐项做 —— 删哨兵判据 → 2 条转挂；退回旧 guard → 3 条转挂（两条反例 + 代价固化）。定向 29/29；全量 **1029/1029 通过、零失败**。
+
+- 剩余未验证：真机 tvOS 焦点表现；中心服务器实际 ID 分布；重复正业务 ID 仍会去重掉一条（保留去重的固有代价）；兜底身份以 `-` 拼接各分量，若某分量本身含 `-` 理论上存在拼串歧义（构造性的，未观测到实际输入）。
+
+**🆕 四轮外部审查（2026-09-13）：[P2] 只要求 `subscribe_id` 仍会跨实例误合并 —— 已修复并独立复现。**
+
+审查报：只要求存在 `subscribe_id`，但那是各实例的本地编号；当分享 `id`、`share_uid` 缺失，两个实例同号、同媒体同季，且分享人缺失或显示名相同时，不同质量的分享会被合并。**核对成立，这也是我三轮那次收紧留下的半截。**
+
+反向验证独立复现：退到 HEAD（`2cc53b0`）后，三条反例用例全部报 `("1") is not equal to ("2")` —— 两张卡塌成一张，正是审查描述的现象。
+
+**前提先回后端源码坐实**（这一步上几轮我做得不够，这次先查再改）：
+
+- `share_uid` 由 `MoviePilotServerHelper.get_user_uuid()`（`~/code/MoviePilot/app/helper/server.py:110-118`）填充，请求体里用户根本不传它；值来自 `SystemUtils.generate_user_unique_id()`（`app/utils/system.py:933-973`）—— 对根文件系统 `st_dev-st_ino` 做 SHA-256，失败才退到 MAC。`server.py:52-58` 自述「获取当前安装**实例**用于服务端统计识别的稳定用户 ID」。**它是安装实例的稳定 ID，不是用户账号 ID，也不受显示名影响。**
+- `subscribe_id` 是分享方实例 `subscribe` 表的本地自增主键（`app/db/models/subscribe.py:15`），**各实例各自从 1 发号，跨实例必然重复**；而且它不上传中心服务器（`server.py:914-915` 显式 `subscribe_dict.pop("id")`）。
+- `share_user` 是前端分享对话框里**自由填写**的显示名，后端完全不校验、不回填登录用户。
+
+所以 (实例 `share_uid`, 本地订阅号 `subscribe_id`) 足以确定一条分享；`share_user` 不满足唯一性，`subscribe_id` 单独也不满足。修法据此收紧为**同时**要求二者，并把 `share_user` 整体移出身份构造（原 `u:` / `n:` 双来源槽取消）。
+
+**为什么不照 Web**：`SubscribeShareView.vue` 的 `get-item-key` 是 `e.id || \`${e.tmdbid||e.doubanid||e.name}-${e.share_user}\`` —— 它用的恰恰是可改名的 `share_user`，且列表侧是裸 `concat`、完全不去重。TV 端有 `hasMore` 收敛依赖去重（见上文），不能照抄；而 Web 那个 key 里 `share_user` 的位置正是本项两轮反例的来源。
+
+**新增/改动的用例**：3 条反例（无分享人、显示名相同、`share_uid` 全空白）+ 1 条**代价固化**（缺 `share_uid` 时跨页不再合并，可见重复卡）；另把两条在新实现下**对身份已无判别力**的用例（`testNumericLookingShareUserNamesAreNotTreatedAsSentinels`、`testShareUidAndShareUserWithSameValueDoNotCollide`）按本仓库口径**降级标注为阴性对照**，并写明「换上任意别的显示名结果不变」—— 不留在原位冒充回归证据。
+
+**残留（照实记）：**
+- `share_uid` **不保证全局唯一**：它是文件系统属性而非注册过的实例身份，两台实例若 `/` 的 `st_dev-st_ino` 相同（同机非容器部署、共享同一 rootfs 的容器）会得到完全相同的值。这类实例在同样的 (媒体, 季, 本地订阅号) 下仍会被并成一条。**比修复前窄得多**（修复前是任意两台实例必然相撞，因为大家的 `subscribe_id` 都从 1 开始），但没有归零。
+- `share_uid` 生成失败时是空字符串（`server.py:118` 的 `or ""`）。空串经 `normalizedText` 判空后等同缺失 → 退回随机身份，方向是安全的（多卡不漏卡），但这些记录跨页不再去重。
+- `share_uid` **不持久化**（只是类变量内存缓存），容器按镜像重建后 `/` 的 inode 变了就会换值 —— 除影响本机跨页去重外，后端自己的 `Follow 订阅分享`（`app/chain/subscribe.py:2283-2284` 用 `uid in follow_users` 全等匹配）也会静默失配。这是后端行为，非本端可修。
 
 </details>
 
@@ -2588,7 +2733,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-101 · P3 · 已确认 · SSE 多 data 行未按事件组帧</summary>
+<summary>F-101 · P3 · 已修复 · SSE 多 data 行未按事件组帧</summary>
 
 - 审查单元与位置：A001-H→V011-C；`APIService.streamSSE` 与 Search 等消费者
 - 触发路径：服务端发送一个由多条 `data:` 行组成、以空行结束的合法 SSE 事件。
@@ -2597,6 +2742,49 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：review_a001_h 核对生产解析器、兼容探针、Search fallback 及全部单行桩；verify_a001_h 用独立 Foundation/JSON 探针确认逐行失败、换行拼接成功，且现有 fixture 全为单行
 - 跨端结论：TV framing 缺口已确认；当前后端单行/heartbeat/Content-Type 契约未验证
 - 最小修改方向 / 裁决：只在共享 `streamSSE` 中按空行组帧、合并 data 后解码一次，并让兼容探针复用同一规则。
+
+**修复状态：已修复。** 新增 `MoviePilot-TV/Services/SSEFramer.swift`，生产解析器与兼容探针共用；两处均改为遍历字节而非 `AsyncBytes.lines`。
+
+**🆕 修复中查明的关键事实（审计「最小方向」据此修正）：** `AsyncLineSequence` 会**丢弃空行**，而空行正是 SSE 的事件结束标志，故事件边界在取行阶段就已丢失 —— `data: a\n\n data: b\n\n`（两个事件）与 `data: a\n data: b\n\n`（一个多行事件）经 `.lines` 之后完全同形、不可区分。已用本地真实 SSE 流复核。因此「在 `.lines` 之上补累积」不成立：它修不好多行事件，还会把原本正确的连续单行事件合并成非法载荷而全线报错（本轮实测一度令 7 个既有用例转挂）。最终改为让 `SSEFramer` 自己按 `0x0A` 切行，方能看见空行。性能无回归（1.3 MB / 401 事件：字节遍历 9.5 ms vs `.lines` 15.9 ms）。
+
+**验证：** 新增 `SSEFramerTests` 20 条（协议层 12 + 字节层 8）全过；此前转挂的 4 个 SSE 相关测试类 96/96 全过；反向验证逐字复刻改动前代码 → 14 挂 / 6 条阴性对照通过；全量 **957/957 通过、零失败**，逐名比对零用例消失。
+
+**🆕 外部 AI 审查复核（2026-09-13）：字节层行尾与流开头 BOM 两个协议兼容缺口，已修正。**
+
+审查报 [P3]「`SSEFramer` 缺 CR-only 与流开头 BOM 处理」。核对后**均成立** —— 上一轮只认 `0x0A` 确实不足以覆盖规范：
+
+- **纯 `CR` 行尾**：规范的三种行尾 `CRLF` / `LF` / `CR` 等价。只认 `0x0A` 时纯 `CR` 的整段流会被攒成一行，`flush()` 又只剥掉一个尾部 `\r`，最终交出**一个畸形载荷**给 `JSONDecoder` —— 不是少一个事件，是整条流报错。
+- **流开头 BOM**：网关/代理可能加 UTF-8 BOM，第一行于是变成 `\u{FEFF}data: ...`，`hasPrefix("data:")` 不成立，**第一个事件的数据被整条丢弃**（其后事件不受影响，线上表现为"偶发少一个事件"）。
+
+修正：`consume(byte:)` 拆成 BOM 前瞻 + `consumeBody(byte:)` 两层。BOM 只在流开头按 `EF BB BF` 三字节前瞻识别一次，前缀不匹配时把已吃进的字节原样补回；`consumeBody` 把 `0x0D` 也当行尾，并用 `lastByteWasCR` 让紧随其后的 `0x0A` 归入**同一个**行尾。`consume(line:)` 原有的尾部 `\r` 剥离保留（直接调用该入口的既有用例不受影响）。
+
+验证：新增 8 条，反向验证把 `SSEFramer.swift` 退回 `HEAD` 版本 → 5 条阳性全挂（CR-only 2 处断言、BOM 三组），阴性对照全部通过。其中 `testCRLFIsOneLineEndingNotTwo` 经反向验证**修复前也通过**（旧 `consume(line:)` 会剥掉行尾 `\r`），已按本仓库口径改标为阴性对照并写明它守的是新字节层 CR 处理不得把 CRLF 拆成两次断行 —— 不作为阳性证据。恢复后 SSEFramerTests 29/29；全量 **1016/1016 通过、零失败**。
+
+**残留：** 当前后端 8 处 SSE 生产端全部是 `f"data: {json.dumps(...)}\n\n"` 单一物理行形态，故上述三项触发条件目前均**不可达**，属前瞻性健壮性修复；heartbeat/comment、单事件最大尺寸、Content-Type 与明确终止保证仍未验证。
+
+**🆕 四轮外部审查（2026-09-13）：[P1] 字节级组帧本身引入了严重性能回归 —— 已修复并独立复现。**
+
+审查报：`APIService.swift:2765` 在 MainActor 中逐字节 `await`，同样约 530 KiB、512 个事件，旧读取方式 78 ms，当前 API 11.09 s。**核对成立，且这是我自己在 `10e0699`（本项修复）里引入的。**
+
+我自己的复现（不是引用审查的数字）：
+
+| 版本 | `production` | `baseline` | 结果 |
+|---|---|---|---|
+| 当前工作区（`@concurrent`） | **0.331 s** | 0.034 s | 通过 |
+| 退回 `HEAD`（MainActor 逐字节） | **11.089 s** | 0.038 s | 转挂 |
+| 仅删 `@concurrent`，其余逐字不动 | **11.377 s** | 0.043 s | 转挂 |
+
+**根因不是「字节比行慢」，而是每个字节一次 actor 往返。** 旧代码 `for try await line in result.lines` 的外层 `await` 只有 512 次，按字节的循环发生在 `AsyncLineSequence` 内部、留在同一执行器上；`10e0699` 改成在调用点逐字节 `await` 之后，537k 个字节每个都要跳出 MainActor 再跳回来。
+
+修法（审查建议的「将读取和组帧移出 MainActor」）：新增 `SSEEventReader.read`，用 `@concurrent` 把字节读取、`SSEFramer` 组帧、JSON 解码整体放到通用执行器，只在**完整事件**的交付边界回调 MainActor 做 `Task.checkCancellation()` + `validate(lease)` + `continuation.yield(event)`。切服与取消边界因此不改语义（`testConsumerCancellationStopsTransport` / `testSessionSwitchStopsOldStream` 两条对照均通过）。
+
+**`@concurrent` 是承重的，不是装饰**：工程开了 `SWIFT_APPROACHABLE_CONCURRENCY`（含 `NonisolatedNonsendingByDefault`），只写 `nonisolated` 的函数仍会继承调用者执行器，实测把 `@concurrent` 删掉后回归原样复现（第三行）。这个标注若被「清理」掉，性能会静默退回 11 s。
+
+**新增测试**：`SSEStreamTests` 4 条 —— 1 条吞吐判别（同时校准机器负载，避开纯相对预算的假绿）+ 3 条阴性对照（多行/BOM/无终止尾的组帧、消费者取消停流、切服停旧流）。
+
+**残留：**
+- 字节级组帧本身仍有约 **9 倍于 `.lines`** 的固有开销（537k 次 async 迭代），这是「必须在字节层才拿得到空行边界」的代价。彻底消除需要改用基于 `URLSessionDataDelegate` 的分块读取（`didReceive data:` 拿整块 `Data` 再组帧），改动面更大，本轮不做。
+- 吞吐用例是**墙钟断言**（预算 `max(1 s, baseline × 20)`）。当前值 0.331 s 对 1 s 地板有 3 倍余量，判别的失败态是 11 s，但机器重载时仍有抖动风险。
 
 </details>
 
@@ -2640,7 +2828,9 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-122 · P3 · 部分修复 · nullable TMDB 识别结果折叠失败、取消与无匹配</summary>
+<summary>F-122 · P3 · 已修复 · nullable TMDB 识别结果折叠失败、取消与无匹配</summary>
+
+**本轮修复（2026-09-12）：** 闭合「首段 `/media/search` 失败 + 兜底 `/media/recognize` 200 但无可用 ID → 返回 nil」这一处残留折叠。原实现把首段错误存进 `firstStageError` 后继续兜底，兜底「成功却给不出 ID」时直接落到末尾 `return nil`，**丢弃暂存错误**，调用方据此断言「确定无匹配」并弹「媒体不存在」，而实际一次完整查询都没完成。修复为末尾 `return nil` 之前 `if let firstStageError { throw firstStageError }`（3 行）；真 no-match 仍返回 nil。验证：新增 2 条用例，反向验证 2 挂 / 7 条阴性对照通过，全量 **959/959 通过、零失败**。**同轮第二处修复（用户裁决「按 A 改」）：** Home「搜索资源」不再弹「未识别到此媒体的TMDB信息」。该按钮真 no-match 时本就会退回标题搜索、动作照样完成，却因复用为「TMDB详情页」写的 `getTMDBJumpTarget` 而继承 `showTMDBNotFoundAlert = true`，全局弹窗随导航一起弹出，用户被拦在一个已自愈完成的动作上。修复为该方法增加 `notifyWhenUnrecognized: Bool = true`，仅 Home「搜索资源」传 `false`；另三个「TMDB详情页」入口保持默认。验证：新增 5 条用例（3 条行为 + 2 条源码调用点守卫），反向验证 2 挂 / 3 条阴性对照通过；全量 **964/964 通过、零失败**。
 
 - 审查单元与位置：V005；`APIService.recognizeTmdbId`、`MediaActionHandler` 及 Home 标题回退
 - 触发路径：两阶段识别发生请求/鉴权/解码失败或取消；或者确实没有匹配。Home 资源搜索还会把 nil 当成正常标题回退并继续导航。
@@ -2650,6 +2840,18 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 跨端结论：纯 TV 错误语义缺陷已确认；Home 真 no-match 提示产品意图未验证
 - 最小修改方向 / 裁决：复用 Swift `throws` 保留 error/cancel，让 nil 仅表示成功完成两阶段后的真正 no-match；若保留首段失败后继续 fallback，暂存首段错误，fallback 成功可返回 ID，fallback 也无结果时不得伪装 no-match。详情动作才按真 no-match 呈现不存在，Home 标题回退不强制发该弹窗。
 - 当前处置：双段失败/取消已通过 `throws` 分流；首段 `/media/search` 失败且 fallback `/media/recognize` 成功无匹配时仍返回 nil，尚会把不完整查询误报为确定 no-match，本轮仅记录不改代码。
+- ⚠️ 上条已被 2026-09-12 的「本轮修复」覆盖：该残留折叠当时即已闭合（末尾 `throw firstStageError`），此处的「仅记录不改代码」只反映更早一轮的状态，保留原文以存沿革。
+
+**🆕 二轮审查复核（2026-09-13）：同一条残留折叠还有第三条漏网路径（兜底类型不符），已闭合。**
+
+二轮审查（[P2]）指出：`APIService.swift:2239` 的**类型不符**分支是直接 `return nil`，**走不到**方法末尾那个 `throw firstStageError`。核对成立 —— 首段 500/超时、兜底 200 但认成另一类型（如期望「电影」、兜底给「电视剧」）时，仍然返回 `nil`，`getTMDBJumpTarget` 依旧把它当「媒体不存在」弹误导提示，而首段其实从没查完。修法与 2026-09-12 那处同源，在该分支补同一口径：
+
+```swift
+if let firstStageError { throw firstStageError }
+return nil
+```
+
+**边界由阴性对照守住**：两段都成功、首段查完确实无匹配、兜底明确认成另一类型时，`nil`（= 不是这部媒体）仍然正确 —— 防止「类型不符就无条件 throw」的过度修正。验证：新增 2 条（1 阳性 + 1 阴性对照），反向验证还原该分支 → **阳性 1 挂**，阴性对照与既有 2 条 F-122 用例（兜底 no-match、兜底缺 ID）全过；全量 **1024/1024 通过、零失败**。
 
 </details>
 
@@ -2693,7 +2895,9 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-135 · P3 · 已确认 · 未规范化 option value 形成重复 Picker 身份</summary>
+<summary>F-135 · P3 · 已修复 · 未规范化 option value 形成重复 Picker 身份</summary>
+
+**本轮修复（2026-09-12）：** 按审计「最小修改方向」原文落地，四处改动。①`collectOptions` 按 `JSONValue` first-wins 去重 —— 实现为单遍展开（`collectOptionsInDeclarationOrder`）后一次性消重，因此 `content` 与 `items` 之间的跨层级重复也被同一遍扫描覆盖；`rangeOptions` 未动（其值单调且已有相邻消重，本就唯一）。②`AddDownloadViewModel.targetDirectories` 与 ③`SubscribeSheetViewModel.savePathOptions` 改为同一套规范化顺序：**先 trim、再丢空、最后去重** —— 原实现只排除 `nil`（AddDownload）或先去重、从不 trim（Subscribe），故空串会与内建「自动」选项撞成同一个 ID、远程空串会生成 `"qb:"` 这类并不存在的路径。修完后「自动」在列表中天然唯一，无需额外占位，即审计要求的「保留唯一自动项」，也**没有新增 option ID 层**。**顺带加固（同轮，用户裁决并入）：** `TransferDirectoryConf.storage` 由 `let storage: String` 改为 `String?`。查证结论是**机制成立但可达性未证实**：`system/setting/public/Directories` 走 `SystemConfigOper().get(...)` 返回**未经校验的原始配置**，写入端也只做 `list(filter(None, value))` 而不校验字段，而后端 schema 本就是 `Optional[str]`；TV 侧用裸 `JSONDecoder()` 硬解码非可选字段，任何一条缺 `storage` 都会让**整个目录数组**解码失败，`AddDownloadSheet` 随即置 `loadErrorMessage` 并禁用「确认」，且重试永不成功（整页不可用）。但 Web 目录设置页 `addDirectory()` 恒写 `storage: 'local'`，后端无播种默认值、也无补 `storage` 的迁移，故未找到会产生该形态配置的路径；且 Web 自身类型声明同为 `storage: string`，可见并非「TV 比 Web 少防一层」。因此**不单列为新发现**，仅作防御性加固并入本项。验证：新增 13 条用例（`DirectoryOptionNormalizationTests` 9 条 + `DynamicSourceBehaviorTests` 4 条），反向验证四处一并还原 → 8 挂 / 5 条阴性对照通过；全量 **977/977 通过、零失败**。
 
 - 审查单元与位置：V009-A/F→W012；Picker option value/身份规范化
 - 触发路径：插件两个标签共享JSON value；或公开Directories含`nil`之外的空/空白`download_path`。
@@ -2702,11 +2906,15 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：插件链三代理确认机制；W012双审与当前Web/后端裁决确认空/空白download_path生产可达；插件first-wins去重；目录trim后丢空再去重并保留唯一自动项
 - 跨端结论：条件性P3；真实插件重复value频率仍未验证
 - 最小修改方向 / 裁决：插件在`collectOptions`按JSONValue first-wins；目录在生成URI前trim并丢空，再去重并保留唯一自动项。不新增option ID层。
+- 🆕 跨端复核（2026-09-12，用户要求「不要光照抄 Web」）：①②Web 方向一致但**并不更完整** —— Web 的下载弹窗与字幕弹窗（`AddDownloadDialog.vue` / `AddSubtitleDownloadDialog.vue` 的 `convertToUri`）只有 `if (!item.download_path)` 而**没有 trim**，三个弹窗里仅 `SubscribeEditDialog.vue:350` 做了 trim，故纯空白路径在 Web 侧同样会变成空选项；审计的「trim 后丢空」比 Web 现状更完整。Web 还**没有**内建「自动」显式选项（用 `:placeholder` 代替），而 TV 的是遥控器可聚焦项、属有意设计，审计「保留唯一自动项」即明确保留它，不得照抄删除。③Web 侧**无对应层** —— `ExtraSourceView.vue:67` 把 `filter_ui` 交给 `FormRender.vue` 用 `h()` 原样透传给 Vuetify 组件，外层 `:key="index"` 按下标而非 value，不存在「option value 兼作身份」的中间层，故本项属 TV 独有防线；审计「不新增 option ID 层」正是明确否决了照搬 Web 那种「身份与值分离」的模型。
+- 当前处置（2026-09-12）：四处改动落地并全量通过（977/977）。`storage` 可选化一节的可达性仍未证实，作为防御性加固记录在案，未单列新发现。
 
 </details>
 
 <details>
-<summary>F-140 · P3 · 已确认 · 尾随空白让精确搜索标题退化为不匹配</summary>
+<summary>F-140 · P3 · 已修复 · 尾随空白让精确搜索标题退化为不匹配</summary>
+
+**本轮修复（2026-09-12）：** 按审计「最小修改方向」原文落地 —— 在 `autoSearch()` 提交口只做一次 `.whitespacesAndNewlines` 规范化（`SearchViewModel.swift:432-449`）。`let searchQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)` 随后 `guard !searchQuery.isEmpty else { return }`，之后**请求与本地评分共用这一个串**（`submittedQuery = searchQuery` 是唯一写入口，`:597` 的分页器、`:549`/`:465` 的请求、`:168-200` 的评分全部读它）。刻意**不写回 `query`**：搜索框保留用户输入原样，避免提交后就地改写文本；也刻意**只去首尾、不压缩内部空白** —— 内部空白的匹配质量属于评分层分档问题，动它会改变 `hasPrefix`/`contains` 既有分档的输入，超出本条范围。**用户要求的独立复核（「你先确认下」）结论：** 机制逐字复现且与审计一致的部分：`fuzzyMatchScore("Hamilton", "Hamilton ")` 确为 **-1**、对照 `1000`；`"   ".isEmpty == false` 故旧守卫拦不住；`SearchView.swift:232` 是 `.searchable(text: $viewModel.query, …)` 原始双向绑定，UI 全链无任何 trim，故缺陷在 TextField 路径上可达。**一处与审计不符需记录：** 审计复算的 extended 分值为 `484`，本轮按源码逐字提取 `fuzzyMatchScore` 实测 `Hamilton Musical` 对同一查询为 **684**（`700 - 标题长度`，16 字符恰为 684；要得 484 标题需长 216 字符），该数字对不上，但不影响结论方向（684 同样远高于 -1）。**跨端复核：** 后端 `StringUtils.get_keyword`（`app/utils/string.py:634`）确有 `.strip()`，即**发出去的请求本来就是干净的** —— 缺陷只存在于 TV 自己的本地评分层；而 Web **完全没有本地评分层**（`browse.vue` 直接把 `route.query.title` 原样交给 `MediaCardListView` 渲染后端列表），「最佳匹配」是 TV 独有面，故此条**无可照抄对象**，修法必须 TV 自洽。验证：新增 4 条用例 + 1 条阴性对照（`testInternalWhitespaceIsDeliberatelyPreserved` 固定「不压缩内部空白」这一非目标），反向验证还原提交口 → 2 挂 / 阴性对照通过；全量 **982/982 通过、零失败**（977 + 5）。
 
 - 审查单元与位置：V011-B；搜索提交 query 与本地最佳结果评分
 - 触发路径：用户提交 `Hamilton `；目标后端按 trim 后的 `Hamilton` 搜到结果，TV 用原始含尾随空格字符串对结果重新评分。
@@ -2715,11 +2923,31 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：verify_a001_h 以 `Hamilton ` 闭合后端 trim→TV 原字符串评分→top-12 链；review_a001_j 独立复算 exact `-1`/extended `484`、换行与纯空白请求路径
 - 跨端结论：搜索 canonical query 缺陷已确认；真实输入频率未验证
 - 最小修改方向 / 裁决：若独立复核确认，在提交搜索时只做一次 `.whitespacesAndNewlines` 规范化，并让后端请求与本地评分共用；纯空白不发请求，不引入解析器。
+- 🆕 跨端复核（2026-09-12）：后端已自带 `.strip()`，故请求侧本无缺陷；Web 无本地评分层，本条属 TV 独有面，无 Web 可对齐，按审计原文在 TV 侧自洽收敛。
+- 当前处置（2026-09-12）：提交口规范化落地并全量通过（982/982）。纯空白现在不发任何请求（媒体搜索与订阅分享请求数均为 0）；审计 extended 分值 `484` 与实测 `684` 的出入已如实记录。
+
+**🆕 二轮审查复核（2026-09-13）：行为不动，修测试诚实性 + 记残留。用户裁决。**
+
+二轮审查（[P3]）指出 `testWhitespaceOnlyQueryDoesNotStartSearch` 只用**全新** ViewModel，而它断言的 `hasSearched == false`、`isLoading == false`、`bestResults.isEmpty`、`submittedQuery == ""` 本来就都是初始值 —— 无论实现有没有清过状态都成立，**钉不住**「上一轮结果仍留在屏幕上」和「在途请求不被取消」这两条它看起来在守的语义。核对成立。
+
+处置（用户裁决「行为不动，只修测试 + 记残留」）：
+
+1. 旧用例只保留真正有判别力的部分（纯空白不发请求、不记提交），删去无判别力的状态断言。
+2. 新增 `testWhitespaceOnlySubmitKeepsPreviousResultsAndStaysNoop` —— 从「已搜出结果」起步，固化纯空白提交为**完全 no-op**：不清旧结果、不改 `submittedQuery`、不抬 `isLoading`、不追加任何请求。
+3. 新增 `testWhitespaceOnlySubmitDoesNotCancelInFlightSearch` —— 走 `.resource` 而非 `.unified`：只有资源分支把在途任务存进 `searchStreamTask`，`.unified` 用的是几个局部 Task，拿 `.unified` 写这条会得到一个**测不出东西的假绿**（实测：在实现里插入审查建议的 `searchStreamTask?.cancel()`，`.unified` 版本照样全绿）。
+
+**判别力验证**：在实现中临时插入审查建议的 `streamTask?.cancel()` 后再 `return`，`.resource` 用例转挂（在途搜索被取消、结果永不发布），另外两条仍绿 —— 证明它不是摆设。
+
+**残留（刻意保留，记录备查）**：纯空白提交**不取消**在途搜索、**不清**旧结果。取舍理由：敲了几个空格不该被当成一次搜索，更不该把屏幕清空。**将来若要改成取消，必须连带处理 `isLoading`** —— `finishSearchIfCurrent` 是这条路径上唯一清 `isLoading` 的出口且带 generation 守卫，随手 `cancel()` + 递增 generation 会让在途任务的 `defer` 因 generation 不匹配直接返回，`isLoading` 永久卡在 true。
+
+本轮**无生产代码改动**（`SearchViewModel.swift` 全仓 diff 为空），三条用例均为现状固化/回归钉。全量 **1024/1024 通过、零失败**。
 
 </details>
 
 <details>
-<summary>F-141 · P3 · 已确认 · 四位数字片名被误当成搜索年份</summary>
+<summary>F-141 · P3 · 已修复 · 四位数字片名被误当成搜索年份</summary>
+
+**本轮修复（2026-09-12）：** 按审计「最小修改方向」原文落地 —— 在 F-140 同一规范化 query 上复用目标后端等价的年份边界（`SearchViewModel.swift:170-200`）。词法由裸 `(19|20)\d{2}` 改为 **`[\s(]+((?:19|20)\d{2})[\s)]*`**，与后端 `StringUtils.get_keyword` 的 `[\s(]+(\d{4})[\s)]*` 同构：四位数字**必须紧跟在一个分隔符（空白或左括号）之后**才算年份。两处效应一并收敛：①`1917`、`2001: A Space Odyssey` 这类数字片名不再被误当年份，故 `1917 2019` 现在正确取到 year=2019、回退词为 `1917`，精确项由 `-1` 变为 `1000`；②剥年份改用 `replacingCharacters(in: match.range, …)` **连前导分隔符与尾随右括号一起删**，`1917 (2019)` 由原先残留 `(2019)` 空壳改为干净还原成 `1917`。两处都**未新建通用 query parser**。**两点刻意的偏离/收敛，均记录在案：** ①**保留 `(19|20)` 前缀约束**，不照搬后端的裸 `\d{4}` —— 年份在 TV 侧用于给候选补 `标题 + 年份` 变体并放宽回退，把 `1234` 之类当成年份只会引入新的误判，收紧是安全方向（比后端少识别只会失去加分，不会误加分）。②「剥完只剩空串 → `queryWithoutYear` 取 `nil`」（如查询词本就是 `(2019)`）**不改变任何可观测行为** —— 空串在 `fuzzyMatchScore` 里恒为 `-1`，进 `max` 必被原串分值盖掉；收在这里只是为了让它含义是「可用的回退查询词」而非「可能为空串」，故**不为其编造用例**。**跨端复核：** 后端 `get_keyword` 用的正是同一套分隔符词法（`year_re = re.search(r'[\s(]+(\d{4})[\s)]*', content)`），即本项是把 TV 的词法**收回后端契约**，而非对齐 Web；Web 同样没有本地年份层。验证：新增 3 条用例（数字片名、括号空壳、以及 F-140 的阴性对照共用），反向验证还原词法 → 2 挂（`1917 2019` 精确项被整条淘汰得 `[]`；`流浪地球 (2019)` 只剩扩展项 `["流浪地球特辑"]`）；全量 **982/982 通过、零失败**。
 
 - 审查单元与位置：V011-B；搜索年份提取与目标版本后端标题解析
 - 触发路径：查询 `1917 2019`、`1917 (2019)` 或仅四位数字片名等年份边界输入。
@@ -2728,6 +2956,8 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：verify_a001_h 以 `1917 2019` 闭合后端 title/year 与 TV score 分裂；review_a001_j 独立复算数字片名、括号残留与版本特定词法边界
 - 跨端结论：条件性搜索解析 P3已确认；当前部署未验证
 - 最小修改方向 / 裁决：若独立复核确认，在 F-140 的同一规范化 query 上复用目标后端等价的年份边界；不把开头四位数字片名直接当年份，不新建通用 query parser。
+- 🆕 跨端复核（2026-09-12）：本项是把 TV 年份词法**收回后端 `get_keyword` 的既有契约**，不是对齐 Web（Web 无本地年份层）。
+- 当前处置（2026-09-12）：年份词法改为与后端同构并全量通过（982/982）。保留 `(19|20)` 前缀与「剩余为空 → nil」两处刻意收敛已注明；后者可观测行为不变，故未配用例。
 
 </details>
 
@@ -2745,15 +2975,19 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-169 · P3 · 已确认 · ShelfPicker 只视觉标记当前选择</summary>
+<summary>F-169 · P3 · 已修复 · ShelfPicker 只视觉标记当前选择</summary>
 
-- 审查单元与位置：C007；ShelfPicker持久选择的可访问性语义
+- 审查单元与位置：C007；`MoviePilot-TV/Views/Components/ShelfPicker.swift:74-76`（`ShelfChip.accessibilityTraits`）、`:90`（挂载点）
+- 修复状态：新增 `accessibilityTraits` 属性（`isSelected ? .isSelected : []`）并 `.accessibilityAddTraits(...)` 挂到 `ShelfChip` 的 Button 链尾。严格按裁决「在现有 Button 上一行条件添加」——不加自定义 label/value（名称已由 `Text(title)` 提供），不引入 selection/focus 框架。抽成属性而非内联三元，是为了让规则本身可被单测断言（SwiftUI trait 无法从渲染树读回）。挂载点放在链尾是因为 `overlay` 会再包一层。
 - 触发路径：VoiceOver用户在Recommend货架chip间移动焦点，但尚未激活新货架。
 - 根因：私有`isSelected`只控制视觉overlay；Button/Text提供名称和动作，却没有`.isSelected` trait或等价value，focus与持久selection是两种状态。
 - 用户影响：用户能听到并激活货架名称，但不能可靠判断当前哪个货架正在驱动下方结果；视觉高亮和通常回到selected shelf是最强反例，故不升级P2。
 - 证据：review_a001_j主审与verify_a001_h独立复核确认唯一Recommend调用、focus/selection分离及默认Button仅有名称/动作语义；W005/G02/G04回溯一行条件isSelected trait与VoiceOver验收
-- 跨端结论：真实困惑频率/播报措辞未验证
+- 跨端结论：Web `MediaRecommend.vue:369` 确有 `aria-current` 可对照，但 **TV 不是照抄 Web 的形态** —— Web 是鼠标/触摸的 hover 模型，TV 是遥控器焦点模型，`isFocused`（焦点停在哪个 chip）与 `isSelected`（哪个货架在驱动结果）可分离，用户把焦点移过去还没按下时结果仍归原货架；故只补这一层语义，不引入 Web 那套选中状态机。真实困惑频率/播报措辞仍未验证。
 - 最小修改方向 / 裁决：在现有Button上一行条件添加`.isSelected` trait，不加自定义label/value、selection或focus框架。
+- 验证：新增 `MoviePilot-TV-Tests/ShelfChipAccessibilityTests.swift` 6 条，**分两层**——4 条行为测试断言 `accessibilityTraits` 这条规则（选中项带 `.isSelected`；未选中项不带；**焦点落在未选中 chip 上不得播报已选中**；只加这一个 trait），2 条接线守卫断言它确实挂在 Button 上、且未引入 label/value/element。定向 6/6。**反向验证分两次**：①把属性置空 → **2 挂 / 4 过**（两条阳性失败，两条阴性对照通过；接线守卫仍过）；②只拆接线、保留属性 → **1 挂 / 5 过**（4 条行为测试全过，仅接线守卫失败）。全量 **997/997 通过、零失败**（991 + 6）。
+- 说明：两层测试各守一种失败模式 —— 只写规则不接线，或只接线而规则恒空。任一层单独存在都会漏掉另一种，故两层都留。
+- 处置状态：用户逐条过 P3 时经解释「焦点与持久选择是两种状态、Web 有 aria-current 但形态不同」后裁决「加吧」。修复提交后，就残留的「VoiceOver 实际播报措辞需真机验收」，用户裁决 **「算了，这条要么就跳过吧」**—— 不做手动验收。本项以 `已修复` 结项，**未验证的播报措辞如实保留为残留**，不因跳过验收而改记为已验证。
 
 </details>
 
@@ -2945,15 +3179,17 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-056 · P3 · 已驳回 · Hero 演员不滤空名且不补位</summary>
+<summary>F-056 · P3 · 已修复（并入 F-050） · Hero 演员不滤空名且不补位</summary>
 
 - 审查单元与位置：S006→G07→F-050；Hero 演员姓名展示
+- 修复状态：随 F-050 一并落地。Hero 取样层过滤「trim 后为空」的 name，使无名者不再消耗四个名额之一；判据是 trim 后为空而非「非 nil」，故纯空白名同处理。过滤只判空、**不改写**姓名（带空白的真名原样保留），也不下沉到 `mergeActors`。**补位那半未改动** —— 「分页完成后补非空但不足列表」只在 Hero 彻底为空时才触发，属另一条已复核过的口径，本次未放宽。
 - 触发路径：首四项包含 nil/空 name，后面有正常演员。
 - 根因：只按数组非空，nil 渲染时丢弃、空字符串参与连接，分页完成后不补非空但不足列表。
 - 用户影响：空“主演”或少于四人。
 - 证据：既有双审确认；G07第三裁将重复、空名和补位合成一个Hero选人根因；并入F-050，不驳回机制；全量processActors后过滤空名再prefix(4)
-- 跨端结论：驳回重复编号；真实人物分布未验证
-- 最小修改方向 / 裁决：按可展示非空姓名过滤/去重后截断，后续完整结果可补位。
+- 跨端结论：驳回的是**重复编号**、不是机制；真实无名人物分布未验证。
+- 最小修改方向 / 裁决：按可展示非空姓名过滤/去重后截断，后续完整结果可补位（补位部分本次未动，见「修复状态」）。
+- 验证：`testNamelessActorDoesNotOccupyHeroSlot`、`testWhitespaceOnlyNameIsTreatedAsNameless` 两条阳性（去掉过滤即 2 挂），`testNameIsOnlyCheckedForEmptinessNotRewritten` 一条阴性对照防止顺手改写显示名。定向 9/9；全量 **991/991 通过、零失败**（982 + 9）。
 
 </details>
 

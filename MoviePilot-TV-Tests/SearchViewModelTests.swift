@@ -1260,6 +1260,7 @@ private actor SearchViewModelURLProtocolStub {
   private var mediaResultsByQuery: [String: String] = [:]
   private var gatesByPath: [String: SearchAsyncGate] = [:]
   private var shareResultsByQuery: [String: String] = [:]
+  private var personResultsByQuery: [String: String] = [:]
   private var requestedRequests: [SearchRecordedRequest] = []
   private var cancelledRequests: [SearchRecordedRequest] = []
   private var streamTerminations: [String: SearchStreamTermination] = [:]
@@ -1272,6 +1273,7 @@ private actor SearchViewModelURLProtocolStub {
     mediaResultsByQuery.removeAll()
     gatesByPath.removeAll()
     shareResultsByQuery.removeAll()
+    personResultsByQuery.removeAll()
     requestedRequests.removeAll()
     cancelledRequests.removeAll()
     streamTerminations.removeAll()
@@ -1308,6 +1310,11 @@ private actor SearchViewModelURLProtocolStub {
   /// 覆盖“订阅分享”接口返回的分享 JSON 数组（按名称参数匹配）。
   func setShareResults(_ json: String, forQuery query: String) {
     shareResultsByQuery[query] = json
+  }
+
+  /// 覆盖 `/media/search?type=person` 返回的人物 JSON 数组（按 title 参数匹配）。
+  func setPersonResults(_ json: String, forQuery query: String) {
+    personResultsByQuery[query] = json
   }
 
   /// 配置资源搜索流的终止形态：done（成功收尾）/ error（业务失败）/ eof（无终止断开）。
@@ -1460,6 +1467,9 @@ private actor SearchViewModelURLProtocolStub {
           {"source":"themoviedb","id":7,"name":"TMDB人物"}
         ]
         """.utf8)
+    }
+    if type == "person", let personResults = personResultsByQuery[query] {
+      return Data(personResults.utf8)
     }
     guard type == nil || type == "media" else {
       return Data("[]".utf8)
@@ -1924,6 +1934,214 @@ extension SearchViewModelTests {
     XCTAssertEqual(titles, [longTitle, "xxabcxxxx"])
   }
 
+  /// F-055：人物最佳结果的准入必须与卡片渲染使用同一套图片判据。
+  ///
+  /// 这里刻意构造「三个条件同时成立」的最坏情形：查询词 `abc` 与人物名 `zzz` 完全不匹配
+  /// （`maxS == -1 < 50`）且 douban 热度不加分（`pop < 1`）。旧准入读的是 TMDB 专属
+  /// `profile_path`，会把「有可渲染豆瓣头像但无 profile_path」的人物当成无图低质结果排除出
+  /// 最佳结果，而同一人仍出现在下方人物行（卡片用 source-aware 判定能渲染出图）。
+  /// 生产环境实际触发较弱（豆瓣来源通常标题匹配分很高，`maxS < 50` 不成立），
+  /// 此例固化的是判据本身而非频率。
+  func testBestResultsAdmitPersonWithSourceAwareAvatarButNoTMDBProfilePath() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    service.useImageCache = false
+    configureDiscoveryPermissionSession(service)
+
+    // 媒体/合集侧清空，确保最佳结果只由人物决定。
+    await SearchViewModelURLProtocol.stub.setMediaResults("[]", forQuery: "abc")
+    await SearchViewModelURLProtocol.stub.setPersonResults(
+      """
+      [
+        {
+          "source": "douban",
+          "id": 7,
+          "name": "zzz",
+          "profile_path": null,
+          "avatar": "https://img1.doubanio.com/view/personage/s/public/abc123.jpg"
+        }
+      ]
+      """,
+      forQuery: "abc"
+    )
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.mediaSearchSource = nil
+    viewModel.query = "abc"
+    await viewModel.autoSearch()
+
+    XCTAssertFalse(viewModel.isLoading)
+    let personNames = viewModel.bestResults.compactMap { item -> String? in
+      if case .person(let person) = item { return person.name }
+      return nil
+    }
+    XCTAssertEqual(personNames, ["zzz"], "有可渲染头像的人物不应因缺少 TMDB profile_path 被排除")
+  }
+
+  // MARK: - F-044 搜索人物职位翻译
+
+  /// 中文界面下，人物行副标题不得显示 canonical 英文 `job`。
+  func testSearchPersonJobIsTranslatedForPersonRow() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let savedLanguage = TranslationHelper.currentLanguage
+    TranslationHelper.currentLanguage = .zhHans
+    defer { TranslationHelper.currentLanguage = savedLanguage }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    await SearchViewModelURLProtocol.stub.setPersonResults(
+      """
+      [{ "source": "themoviedb", "id": 11, "name": "张三", "job": "Director" }]
+      """,
+      forQuery: "abc"
+    )
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.mediaSearchSource = nil
+    viewModel.query = "abc"
+    await viewModel.autoSearch()
+
+    // 详情页的同一个人经 `StaffManager.processCrew` 后就是「导演」，
+    // 两个界面对同一职位必须给出一致文案。
+    XCTAssertEqual(viewModel.personPaginator?.items.map(\.job), ["导演"])
+  }
+
+  /// 最佳结果卡片副标题与人物行同源，同样不得漏翻。
+  func testSearchPersonJobIsTranslatedForBestResultSubtitle() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let savedLanguage = TranslationHelper.currentLanguage
+    TranslationHelper.currentLanguage = .zhHans
+    defer { TranslationHelper.currentLanguage = savedLanguage }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    service.useImageCache = false
+    configureDiscoveryPermissionSession(service)
+
+    // 媒体侧清空，确保最佳结果只由人物决定。头像用于通过最佳结果准入（F-055 的判据）。
+    await SearchViewModelURLProtocol.stub.setMediaResults("[]", forQuery: "abc")
+    await SearchViewModelURLProtocol.stub.setPersonResults(
+      """
+      [
+        {
+          "source": "douban", "id": 12, "name": "zzz", "job": "Director",
+          "profile_path": null,
+          "avatar": "https://img1.doubanio.com/view/personage/s/public/abc123.jpg"
+        }
+      ]
+      """,
+      forQuery: "abc"
+    )
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.mediaSearchSource = nil
+    viewModel.query = "abc"
+    await viewModel.autoSearch()
+
+    let bestPersonJobs = viewModel.bestResults.compactMap { item -> String? in
+      if case .person(let person) = item { return person.job }
+      return nil
+    }
+    XCTAssertEqual(bestPersonJobs, ["导演"])
+  }
+
+  /// 阴性对照：已翻译值再次经过投影必须原样保留，不能叠加成「导演/导演」。
+  func testSearchPersonJobProjectionIsIdempotentForTranslatedValue() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let savedLanguage = TranslationHelper.currentLanguage
+    TranslationHelper.currentLanguage = .zhHans
+    defer { TranslationHelper.currentLanguage = savedLanguage }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    await SearchViewModelURLProtocol.stub.setPersonResults(
+      """
+      [{ "source": "douban", "id": 13, "name": "李四", "job": "导演", "character": "Neo" }]
+      """,
+      forQuery: "abc"
+    )
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.mediaSearchSource = nil
+    viewModel.query = "abc"
+    await viewModel.autoSearch()
+
+    XCTAssertEqual(viewModel.personPaginator?.items.map(\.job), ["导演"])
+  }
+
+  /// 阴性对照：多职位按 "/" 逐项翻译，且没有 job 的人物不被凭空造出职位、character 原样保留。
+  func testSearchPersonJobProjectionHandlesMultiJobAndMissingJob() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let savedLanguage = TranslationHelper.currentLanguage
+    TranslationHelper.currentLanguage = .zhHans
+    defer { TranslationHelper.currentLanguage = savedLanguage }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    await SearchViewModelURLProtocol.stub.setPersonResults(
+      """
+      [
+        { "source": "themoviedb", "id": 14, "name": "王五", "job": "Director/Writer" },
+        { "source": "themoviedb", "id": 15, "name": "赵六", "character": "Neo" }
+      ]
+      """,
+      forQuery: "abc"
+    )
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.mediaSearchSource = nil
+    viewModel.query = "abc"
+    await viewModel.autoSearch()
+
+    let items = try XCTUnwrap(viewModel.personPaginator?.items)
+    XCTAssertEqual(items.count, 2)
+    XCTAssertEqual(items[0].job, "导演/编剧")
+    XCTAssertNil(items[1].job, "没有 job 的人物不应被投影出职位")
+    XCTAssertEqual(items[1].character, "Neo", "character 不应被职位投影影响")
+  }
+
   func testBestResultsDisablePopularityBoostForMixedSources() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
@@ -1997,5 +2215,328 @@ extension SearchViewModelTests {
       return nil
     }
     XCTAssertEqual(titles, [longTitle, "xxabcxxxx"])
+  }
+}
+
+// MARK: - F-140 / F-141 搜索提交词的规范化与年份词法
+
+extension SearchViewModelTests {
+  /// F-140：尾随空格必须在下发请求与本地评分之前被去掉，两者共用同一个串。
+  ///
+  /// 后端 `StringUtils.get_keyword` 自己会 `.strip()`，所以旧实现发出去的请求本来就干净；
+  /// 但「最佳匹配」评分读的是用户原串，`fuzzyMatchScore(text: "Hamilton", query: "Hamilton ")`
+  /// 走到顺序匹配档、文本先被消耗完而返回 `-1` —— 精确标题反而被 `Hamilton Musical`
+  /// 这类带后缀的标题（包含匹配，684 分）反超。
+  ///
+  /// 这里同时断言两件事：请求确实按 `Hamilton` 发出（stub 按 title 值取响应，
+  /// 若发的是带空格的串会取到空结果），以及精确标题排第一。
+  func testTrailingWhitespaceIsStrippedBeforeRequestAndScoring() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    await SearchViewModelURLProtocol.stub.setMediaResults(
+      """
+      [
+        {"tmdb_id": 3001, "source": "themoviedb", "title": "Hamilton Musical", "type": "电影", "year": "2020", "poster_path": "/b.jpg", "popularity": 10},
+        {"tmdb_id": 3002, "source": "themoviedb", "title": "Hamilton", "type": "电影", "year": "2020", "poster_path": "/a.jpg", "popularity": 10}
+      ]
+      """,
+      forQuery: "Hamilton"
+    )
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.query = "Hamilton "
+    await viewModel.autoSearch()
+
+    XCTAssertEqual(viewModel.submittedQuery, "Hamilton", "提交词必须是规范化后的串")
+    // 刻意**不**用 `waitForRequest` 断言请求串：stub 按 `title` 值取响应，若发出的是带空格的
+    // 串就取不到上面这份数据，下面的标题断言会连带失败 —— 这同时覆盖了「请求规范化」与
+    // 「评分用同一个串」两半。而 `waitForRequest` 无超时，一旦请求串不符会死等而不是失败，
+    // 反向验证时会挂住整个测试进程。
+
+    let titles = viewModel.bestResults.compactMap { item -> String? in
+      if case .media(let media) = item { return media.title }
+      return nil
+    }
+    XCTAssertEqual(titles, ["Hamilton", "Hamilton Musical"], "精确标题不得被带后缀标题反超")
+  }
+
+  /// F-140：纯空白搜索词不得启动搜索。
+  ///
+  /// `"   ".isEmpty == false`，所以旧守卫 `guard !query.isEmpty` 拦不住 ——
+  /// 会带着一串空格走完整个聚合搜索（四个分页器 + 订阅分享）并置 `hasSearched = true`，
+  /// 结果必然为空，用户看到的是一个搜过、但没有结果的页面。
+  /// F-140：纯空白提交不发请求。从**全新** ViewModel 起步只保留这一条真正有判别力的断言 ——
+  /// `hasSearched` / `isLoading` / `bestResults` 在全新实例上本来就是初始值，怎么实现都过，
+  /// 「上一轮结果不被清空」这类语义由下面两条从「已有结果 / 在途搜索」起步的用例负责。
+  func testWhitespaceOnlyQueryDoesNotStartSearch() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.query = " \n\t "
+    await viewModel.autoSearch()
+
+    XCTAssertEqual(viewModel.submittedQuery, "", "空白串不该被记成一次提交")
+    let mediaRequestCount = await SearchViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/media/search")
+    let shareRequestCount = await SearchViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/subscribe/shares")
+    XCTAssertEqual(mediaRequestCount, 0, "纯空白不得触发任何搜索请求")
+    XCTAssertEqual(shareRequestCount, 0)
+  }
+
+  /// F-140：**现状固化（本轮未改生产代码）**。上一条只从**全新** ViewModel 起步，
+  /// `hasSearched == false`、`bestResults.isEmpty` 本来就都是初始值，
+  /// 无论实现有没有清过状态都成立 —— 它钉不住「上一轮的搜索结果还留在屏幕上」。
+  /// 本条从「已经搜出结果」的状态起步，如实固化纯空白提交的现状：**完全 no-op**，
+  /// 既不清旧结果、也不改已提交的检索词。这是刻意的取舍（敲几个空格不该被当成一次搜索，
+  /// 更不该把屏幕清空），代价一并写在这里备查。它守的是将来别有人「顺手补一个清空」。
+  func testWhitespaceOnlySubmitKeepsPreviousResultsAndStaysNoop() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.query = "old"
+    await viewModel.autoSearch()
+
+    XCTAssertTrue(viewModel.hasSearched)
+    XCTAssertEqual(Self.mediaTitles(of: viewModel), ["Old Result"])
+
+    let mediaRequestCountBefore = await SearchViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/media/search")
+
+    viewModel.query = " \n\t "
+    await viewModel.autoSearch()
+
+    XCTAssertEqual(viewModel.submittedQuery, "old", "空白提交不改动已提交的检索词")
+    XCTAssertTrue(viewModel.hasSearched, "上一轮的搜索状态保持不变")
+    XCTAssertEqual(
+      Self.mediaTitles(of: viewModel), ["Old Result"],
+      "空白提交是 no-op，上一轮结果仍在屏幕上（不清空）")
+    XCTAssertFalse(viewModel.isLoading)
+    let mediaRequestCountAfter = await SearchViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/media/search")
+    XCTAssertEqual(mediaRequestCountAfter, mediaRequestCountBefore, "空白提交不得再发一次请求")
+  }
+
+  /// F-140：与上一条配对 —— 空白提交发生在**在途资源搜索**期间时不会把它取消掉
+  /// （**现状固化**，本轮未改生产代码）。
+  ///
+  /// 这里刻意走 `.resource` 而不是 `.unified`：只有资源分支把在途任务存进 `searchStreamTask`
+  /// （`.unified` 用的是几个局部 Task），所以「顺手补一个 `searchStreamTask?.cancel()`
+  /// 再 return」这种改法只在资源分支上真的会打断搜索 —— 在 `.unified` 下它是空操作，
+  /// 拿 `.unified` 写这条用例会得到一个测不出东西的假绿。
+  ///
+  /// 也正因如此，这条用例是**反悔保护**：将来若有人按「空白提交应先取消在途请求」的直觉去改，
+  /// 这里会红。真要改也得连带处理 `isLoading` —— `finishSearchIfCurrent` 是清它的唯一出口
+  /// 且带 generation 守卫，随手 cancel + 递增 generation 会把 `isLoading` 永久卡在 true。
+  func testWhitespaceOnlySubmitDoesNotCancelInFlightSearch() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureSuperUserSearchSession(service)
+    await SearchViewModelURLProtocol.stub.setStreamTermination(.done, forQuery: "old")
+    await SearchViewModelURLProtocol.stub.setStreamTermination(.done, forQuery: "new")
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .resource
+    viewModel.query = "old"
+    await viewModel.autoSearch()
+
+    // 流式搜索在 autoSearch 返回后才收尾（done 后还有一段收尾等待），轮询等同邻近用例。
+    let firstDeadline = Date().addingTimeInterval(2)
+    while viewModel.resourceResults.isEmpty && Date() < firstDeadline {
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    XCTAssertTrue(viewModel.hasSearched)
+    XCTAssertEqual(viewModel.resourceResults.first?.torrent_info?.title, "Old Resource")
+
+    // 卡住「new」这一轮的资源搜索流，让它停在在途状态。
+    let inFlightGate = SearchAsyncGate()
+    await SearchViewModelURLProtocol.stub.setGate(
+      inFlightGate, forPath: "/api/v1/search/title/stream")
+    viewModel.query = "new"
+    let inFlightTask = Task { @MainActor in
+      await viewModel.autoSearch()
+    }
+    defer { inFlightTask.cancel() }
+
+    try await withTimeout("in-flight resource search to start") {
+      await SearchViewModelURLProtocol.stub.waitForRequest(
+        path: "/api/v1/search/title/stream", query: "new")
+    }
+
+    viewModel.query = "   "
+    await viewModel.autoSearch()
+
+    XCTAssertTrue(viewModel.isLoading, "空白提交不得取消在途搜索")
+
+    await inFlightGate.open()
+    // 注意：`inFlightTask` 只包住 `autoSearch()`，而资源分支在 `autoSearch()` 返回后才真正开始
+    // 跑流（任务挂在 `searchStreamTask` 上）。所以这里必须轮询状态，不能 await 那个包装任务 ——
+    // 它早就返回了，await 它等于什么都没等。
+    // 收到 done 后实现里还有 1.5s 的收尾等待（`searchStreamDoneCloseDelay`），
+    // 所以这里的上限比邻近用例宽一些，免得贴着边界偶然超时。
+    let secondDeadline = Date().addingTimeInterval(5)
+    while viewModel.isLoading && Date() < secondDeadline {
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    XCTAssertFalse(viewModel.isLoading)
+    XCTAssertEqual(
+      viewModel.resourceResults.first?.torrent_info?.title, "New Resource",
+      "在途搜索照常跑完并发布结果，没有被空白提交打断")
+  }
+
+  private static func mediaTitles(of viewModel: SearchViewModel) -> [String] {
+    viewModel.bestResults.compactMap { item -> String? in
+      if case .media(let media) = item {
+        return media.title
+      }
+      return nil
+    }
+  }
+
+  /// F-140 的**阴性对照**：规范化只去首尾，不压缩内部空白。
+  ///
+  /// 内部空白的匹配质量属于评分层分档问题，不属于「提交词身份」问题；
+  /// 一旦顺手压缩，就会改变 `hasPrefix`/`contains` 既有分档的输入，超出本条范围。
+  func testInternalWhitespaceIsDeliberatelyPreserved() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    await SearchViewModelURLProtocol.stub.setMediaResults(
+      "[]", forQuery: "流浪地球  2")
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.query = "流浪地球  2"
+    await viewModel.autoSearch()
+
+    XCTAssertEqual(viewModel.submittedQuery, "流浪地球  2", "内部空白必须原样保留")
+  }
+
+  /// F-141：`1917` 这类数字片名不得被当成年份。
+  ///
+  /// 查询 `"1917 2019"` 时，旧词法 `(19|20)\d{2}` 扫到的是片名里的 1917：
+  /// 于是《1917》（year = 2019）被判为年份不符，回退匹配被关掉，
+  /// 而 `fuzzyMatchScore(text: "1917", query: "1917 2019")` 在顺序匹配档文本先耗尽 → `-1`。
+  /// 该片若又无海报且热度 < 1，会被 `hasNoPoster && maxS < 50 && pop < 1` 整条淘汰，
+  /// 搜索「1917 2019」反而找不到《1917》。
+  ///
+  /// 与后端 `[\s(]+(\d{4})[\s)]*` 同构后，年份取到 2019、纯标题回退词是 1917，精确标题得 1000。
+  func testNumericTitleIsNotMistakenForSearchYear() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    await SearchViewModelURLProtocol.stub.setMediaResults(
+      """
+      [
+        {"tmdb_id": 1917, "source": "themoviedb", "title": "1917", "type": "电影", "year": "2019", "poster_path": null, "popularity": 0.5}
+      ]
+      """,
+      forQuery: "1917 2019"
+    )
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.query = "1917 2019"
+    await viewModel.autoSearch()
+
+    let titles = viewModel.bestResults.compactMap { item -> String? in
+      if case .media(let media) = item { return media.title }
+      return nil
+    }
+    XCTAssertEqual(titles, ["1917"], "精确标题不得因年份误判被评分 -1 后淘汰")
+  }
+
+  /// F-141：剥年份必须连括号一起剥，不得留下 `()` 空壳。
+  ///
+  /// 旧实现只删数字：`"流浪地球 (2019)"` → 回退词变成 `"流浪地球 ()"`，与「流浪地球」
+  /// 既非全等、非前缀、也非包含，顺序匹配又因括号对不上而失败 → 精确标题只得 `-1`，
+  /// 而 `流浪地球特辑`（含「流浪地球」作为前缀）在旧实现里同样只得 `-1`，
+  /// 两者同分后精确标题因无海报被淘汰，反而只剩特辑。
+  func testParenthesizedYearIsRemovedTogetherWithItsBrackets() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://search-tests.local"
+    configureDiscoveryPermissionSession(service)
+
+    await SearchViewModelURLProtocol.stub.setMediaResults(
+      """
+      [
+        {"tmdb_id": 4001, "source": "themoviedb", "title": "流浪地球特辑", "type": "电影", "year": "2019", "poster_path": "/b.jpg", "popularity": 5},
+        {"tmdb_id": 4002, "source": "themoviedb", "title": "流浪地球", "type": "电影", "year": "2019", "poster_path": null, "popularity": 0.5}
+      ]
+      """,
+      forQuery: "流浪地球 (2019)"
+    )
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .unified
+    viewModel.query = "流浪地球 (2019)"
+    await viewModel.autoSearch()
+
+    let titles = viewModel.bestResults.compactMap { item -> String? in
+      if case .media(let media) = item { return media.title }
+      return nil
+    }
+    XCTAssertEqual(titles, ["流浪地球", "流浪地球特辑"], "精确标题应回退到纯标题匹配并排在首位")
   }
 }

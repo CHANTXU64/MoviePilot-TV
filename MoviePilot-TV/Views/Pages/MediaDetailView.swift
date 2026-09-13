@@ -853,23 +853,9 @@ struct MediaDetailView: View {
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: 740, alignment: .leading)
 
-          let metadataTexts1: [String] = {
-            var items: [String] = []
-            if let category = detail.category, !category.isEmpty {
-              items.append(category)
-            } else if let type = detail.type, !type.isEmpty {
-              items.append(type)
-            }
-            if let genres = detail.genres, !genres.isEmpty {
-              items.append(
-                genres
-                  .compactMap { $0.name }
-                  .map { TranslationHelper.translateGenre(for: $0) }
-                  .joined(separator: " · ")
-              )
-            }
-            return items
-          }()
+          // 第一行元数据组装见 `MediaMetadataText.primaryLine`：
+          // 空串/畸形类型不再拼出悬空分隔符（F-038/F-043/F-046）。
+          let metadataTexts1: [String] = MediaMetadataText.primaryLine(for: detail)
 
           if !metadataTexts1.isEmpty {
             Text(metadataTexts1.joined(separator: " · "))
@@ -897,28 +883,8 @@ struct MediaDetailView: View {
           }
 
           // Detailed metadata line
-          let metadataTexts2: [String] = {
-            var items: [String] = []
-            if let releaseDate = detail.release_date {
-              items.append("\(releaseDate)")
-            } else if let year = detail.year {
-              items.append(year)
-            }
-            if let runtime = detail.runtime {
-              items.append("\(runtime) 分钟")
-            }
-            if let vote = detail.vote_average, vote > 0 {
-              items.append("评分 \(vote)")
-            }
-            if let countries = detail.production_countries, !countries.isEmpty {
-              items.append(
-                countries.map { TranslationHelper.countryName(for: $0) }.joined(separator: " / "))
-            }
-            if let language = detail.original_language {
-              items.append(TranslationHelper.languageName(for: language))
-            }
-            return items
-          }()
+          // 第二行元数据组装见 `MediaMetadataText.secondaryLine`（同上）。
+          let metadataTexts2: [String] = MediaMetadataText.secondaryLine(for: detail)
 
           if !metadataTexts2.isEmpty {
             Text(metadataTexts2.joined(separator: " · "))

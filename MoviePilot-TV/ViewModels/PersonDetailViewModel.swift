@@ -73,7 +73,7 @@ class PersonDetailViewModel: ObservableObject {
     } catch is CancellationError {
       throw CancellationError()
     } catch {
-      print("加载人物作品出错: \(error)")
+      Logger.error("加载人物作品出错: \(error)")
     }
   }
 

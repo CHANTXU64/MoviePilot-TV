@@ -296,7 +296,7 @@ class SystemViewModel: ObservableObject {
           return
         }
       } catch {
-        print("❌ [SystemViewModel] 获取后端版本号失败: \(error)")
+        Logger.error("[SystemViewModel] 获取后端版本号失败: \(error)")
       }
     }
 
@@ -306,7 +306,7 @@ class SystemViewModel: ObservableObject {
       guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
       self.backendVersion = normalizedBackendVersion(settings.BACKEND_VERSION) ?? backendVersion
     } catch {
-      print("❌ [SystemViewModel] 获取公开后端版本号失败: \(error)")
+      Logger.error("[SystemViewModel] 获取公开后端版本号失败: \(error)")
     }
   }
 
@@ -340,12 +340,12 @@ class SystemViewModel: ObservableObject {
       loadedSitesAuthoritative = authoritative
       hasLoadedSites = true
       defaultSearchSites = defaultSearchSites
-      print("✅ [SystemViewModel] 加载到 \(availableSites.count) 个站点\(authoritative ? "" : "（订阅域）")")
+      Logger.info("[SystemViewModel] 加载到 \(availableSites.count) 个站点\(authoritative ? "" : "（订阅域）")")
     } catch is CancellationError {
       return
     } catch {
       siteLoadError = "站点加载失败，请重试"
-      print("❌ [SystemViewModel] 加载站点失败: \(error)")
+      Logger.error("[SystemViewModel] 加载站点失败: \(error)")
     }
   }
 
@@ -367,25 +367,25 @@ class SystemViewModel: ObservableObject {
       let rules = try await apiService.fetchCustomFilterRules()
       customFilterRules = rules
       rulesLoadFailed = false
-      print("✅ [SystemViewModel] 加载到 \(customFilterRules.count) 个自定义过滤规则")
+      Logger.info("[SystemViewModel] 加载到 \(customFilterRules.count) 个自定义过滤规则")
       // 如果选中的规则 ID 不在列表中，清除选择
       if let selectedHardId = selectedHardFilterRuleId,
         !customFilterRules.contains(where: { $0.id == selectedHardId })
       {
-        print("⚠️ [SystemViewModel] 选中的硬规则 \(selectedHardId) 已不存在，清除选择")
+        Logger.warning("[SystemViewModel] 选中的硬规则 \(selectedHardId) 已不存在，清除选择")
         selectedHardFilterRuleId = nil
       }
       if let selectedSoftId = selectedSoftFilterRuleId,
         !customFilterRules.contains(where: { $0.id == selectedSoftId })
       {
-        print("⚠️ [SystemViewModel] 选中的软规则 \(selectedSoftId) 已不存在，清除选择")
+        Logger.warning("[SystemViewModel] 选中的软规则 \(selectedSoftId) 已不存在，清除选择")
         selectedSoftFilterRuleId = nil
       }
     } catch is CancellationError {
       return
     } catch {
       rulesLoadFailed = true
-      print("❌ [SystemViewModel] 加载自定义过滤规则失败: \(error)")
+      Logger.error("[SystemViewModel] 加载自定义过滤规则失败: \(error)")
     }
   }
 
@@ -440,7 +440,7 @@ class SystemViewModel: ObservableObject {
     } catch is CancellationError {
       return []
     } catch {
-      print("❌ [SystemViewModel] 默认搜索站点归一化失败: \(error)")
+      Logger.error("[SystemViewModel] 默认搜索站点归一化失败: \(error)")
       return storedSites
     }
   }

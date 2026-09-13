@@ -55,7 +55,7 @@ class SiteFilterViewModel: ObservableObject {
       }
       return
     } catch {
-      print("Failed to load sites: \(error)")
+      Logger.error("Failed to load sites: \(error)")
     }
   }
 

@@ -329,7 +329,7 @@ class SubscribeSeasonViewModel: ObservableObject {
         throw CancellationError()
       } catch {
         try validateSeasonLoad(load, snapshot: snapshot)
-        print("检查季订阅状态失败: \(error)")
+        Logger.error("检查季订阅状态失败: \(error)")
         errorMessage = error.localizedDescription
       }
     } else {
@@ -361,7 +361,7 @@ class SubscribeSeasonViewModel: ObservableObject {
         effectiveEpisodeGroup == episodeGroup,
         apiService.isSessionUnchanged(from: snapshot)
       else { return }
-      print("检查季入库状态失败: \(error)")
+      Logger.error("检查季入库状态失败: \(error)")
     }
   }
 
@@ -455,7 +455,7 @@ class SubscribeSeasonViewModel: ObservableObject {
         requestedScope: requestedScope,
         requestIsCurrent: true
       )
-      print("检查季入库状态失败: \(error)")
+      Logger.error("检查季入库状态失败: \(error)")
     }
   }
 
@@ -515,7 +515,7 @@ class SubscribeSeasonViewModel: ObservableObject {
       if error is CancellationError {
         return false
       }
-      print("检查季订阅状态失败: \(error)")
+      Logger.error("检查季订阅状态失败: \(error)")
       errorMessage = error.localizedDescription
       return false
     }

@@ -71,9 +71,13 @@ class SubscribeSheetViewModel: ObservableObject {
     set { subscribe.total_episode = Int(newValue).flatMap { $0 >= 0 ? $0 : nil } }
   }
 
+  // F-135：与 `AddDownloadViewModel.targetDirectories` 同一套规范化 —— 先 trim、再丢空、
+  // 最后去重。原实现先去重、从不 trim，于是纯空白路径会被当成合法项留在列表里。
   var savePathOptions: [String] {
     var seen = Set<String>()
-    return directories.compactMap(\.download_path).filter {
+    return directories.compactMap {
+      $0.download_path?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }.filter {
       !$0.isEmpty && seen.insert($0).inserted
     }
   }

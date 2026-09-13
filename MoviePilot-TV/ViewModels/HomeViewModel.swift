@@ -126,7 +126,7 @@ class HomeViewModel: ObservableObject {
             } catch is CancellationError {
               return (server.name, .cancelled)
             } catch {
-              print("加载服务器 \(server.name) 最新媒体失败: \(error)")
+              Logger.error("加载服务器 \(server.name) 最新媒体失败: \(error)")
               return (server.name, .failed)
             }
           }
@@ -180,9 +180,9 @@ class HomeViewModel: ObservableObject {
       }
     } catch {
       if error is CancellationError {
-        print("加载最新媒体被取消")
+        Logger.debug("加载最新媒体被取消")
       } else {
-        print("加载最新媒体失败: \(error)")
+        Logger.error("加载最新媒体失败: \(error)")
         latestLoadFailed = true
       }
     }
@@ -235,10 +235,10 @@ class HomeViewModel: ObservableObject {
       subscriptionsLoadFailed = false
       return true
     } catch is CancellationError {
-      print("加载订阅被取消")
+      Logger.debug("加载订阅被取消")
       return false
     } catch {
-      print("加载订阅失败: \(error)")
+      Logger.error("加载订阅失败: \(error)")
       subscriptionsLoadFailed = true
       return false
     }

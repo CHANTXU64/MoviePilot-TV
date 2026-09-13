@@ -188,8 +188,38 @@ class MediaDetailViewModel: ObservableObject {
     let directors = fullDetail.resolvedDirectors
     uniqueDirectors = StaffManager.processCrew(persons: directors)
     heroTopStaff = StaffManager.getTopGroupedStaff(from: directors, count: 1)
-    heroTopActors = StaffManager.processActors(
-      persons: Array((fullDetail.actors ?? []).prefix(4)))
+    // F-050：**先去重、再取前四**，不要反过来。
+    //
+    // 后端 `actors` 取自 TMDB `credits.cast`（`app/core/context.py:481-486`），只过滤
+    // `known_for_department == "Acting"` 而**不去重**，而 TMDB 的 cast 允许同一个人以不同
+    // `character` 出现多条。原实现先 `prefix(4)` 再交给 `processActors` 按 id 合并，于是这 4 条
+    // 里的多角色重复被折叠成一个、Hero 只剩 2~3 人，而本方法尾部「Hero 完全为空才用分页
+    // 数据补」的分支只在**彻底为空**时才兜底，半空状态永远补不上。
+    //
+    // 顺序颠倒后与分页那一路同构（`actorsPaginator` 的 processor 本就是 `mergeActors`），
+    // 所以该兜底分支里的 `prefix(4)` 是对的、无需改动。`mergeActors` 保持服务端顺序且合并
+    // `character`（多角色显示成「角色A/角色B」），故就顺序这一项而言，改的只是「取哪四个人」，
+    // 被合并者的角色信息不丢；下面 F-056 的过滤是另一件事，它确实会丢弃无名者 —— 那些人
+    // 在 Hero 行里本就渲染不出任何内容。
+    //
+    // F-056（G07 第三裁并入本项）：**空名一并剔掉**，无名氏不能白占名额。
+    // 视图侧 `MediaDetailView.swift:1037` 是 `compactMap { $0.name }.joined(...)`，
+    // name 为 nil 或去空白后为空的人渲染出来只是一个空档，却照样消耗四个名额之一，
+    // 后面明明还有别的演员可以顶上 —— 与上面重复项挤人同属「取样顺序」这一个根因，
+    // 故两条一起在这里收口，顺序是 G07 第三裁给的 `processActors` → 过滤 → `prefix(4)`。
+    //
+    // 过滤只放在 Hero 取样这一层，**不下沉到 `mergeActors`**：演员货架要不要收无名者
+    // 是另一条口径，verify_s006 已明确货架不受本项影响，不在这里顺带改。
+    //
+    // 尾部的「完全为空才补」也**不需要放宽**：分页第一页取的就是同一份 `credits.cast`
+    // 的前 24 条，故 `fullDetail.actors` 非空时分页不会有新面孔可补；本处修好后
+    // 「去重后自然不足四人」只剩「这份 cast 去重后本就不足四人」一种解释，无处可补。
+    // 该分支保持原样：它只在 `heroTopActors` 彻底为空时兜底，此时过滤与否都不改变
+    // 「这份数据本就没有可显示的主演」这一结论，为它加过滤只会扩大本次改动面。
+    heroTopActors = Array(
+      StaffManager.processActors(persons: fullDetail.actors ?? [])
+        .filter { !($0.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        .prefix(4))
 
     mediaServerExistsTask = Task { [weak self] in
       await self?.loadMediaServerExists()
@@ -420,7 +450,7 @@ class MediaDetailViewModel: ObservableObject {
             }
             return true
           } catch {
-            print("[MediaDetailViewModel] 刷新订阅状态失败: \(error)")
+            Logger.error("[MediaDetailViewModel] 刷新订阅状态失败: \(error)")
             return false
           }
         }
@@ -467,7 +497,7 @@ class MediaDetailViewModel: ObservableObject {
       } catch is CancellationError {
         return false
       } catch {
-        print("[MediaDetailViewModel] 取消订阅失败: \(error)")
+        Logger.error("[MediaDetailViewModel] 取消订阅失败: \(error)")
       }
     }
     if let fallbackSubscriptionId {
@@ -477,7 +507,7 @@ class MediaDetailViewModel: ObservableObject {
       } catch is CancellationError {
         return false
       } catch {
-        print("[MediaDetailViewModel] 取消订阅失败: \(error)")
+        Logger.error("[MediaDetailViewModel] 取消订阅失败: \(error)")
       }
     }
     return false
@@ -525,7 +555,7 @@ class MediaDetailViewModel: ObservableObject {
     } catch is CancellationError {
       return nil
     } catch {
-      print("[MediaDetailViewModel] 读取订阅取消影响范围失败: \(error)")
+      Logger.error("[MediaDetailViewModel] 读取订阅取消影响范围失败: \(error)")
       return nil
     }
   }
@@ -548,7 +578,7 @@ class MediaDetailViewModel: ObservableObject {
       } catch is CancellationError {
         return nil
       } catch {
-        print("[MediaDetailViewModel] 读取订阅取消目标失败: \(error)")
+        Logger.error("[MediaDetailViewModel] 读取订阅取消目标失败: \(error)")
       }
     }
     return nil

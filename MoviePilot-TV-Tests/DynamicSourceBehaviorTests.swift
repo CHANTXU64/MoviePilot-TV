@@ -420,6 +420,128 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     XCTAssertTrue(control.isVisible(in: ["mtype": .string("movies")]))
   }
 
+  /// F-135：`PluginFilterOption.id` 直接取 `value`，`ExploreView` 又用同一个 `value` 作
+  /// `Picker` 的 tag。同级声明重复 value 时必须按「先声明者胜」消重，否则 `ForEach` 会拿到
+  /// 重复 ID，diff 与焦点随之不稳定。
+  func testPluginFilterDuplicateOptionValuesKeepFirstDeclaration() throws {
+    let parsed = PluginFilterControlParser.parse([
+      .object([
+        "component": .string("VChipGroup"),
+        "props": .object([
+          "model": .string("mtype"),
+          "label": .string("类型"),
+        ]),
+        "content": .array([
+          .object([
+            "component": .string("VChip"),
+            "props": .object(["value": .string("movies")]),
+            "text": .string("电影"),
+          ]),
+          .object([
+            "component": .string("VChip"),
+            "props": .object(["value": .string("movies")]),
+            "text": .string("电影（重复 value）"),
+          ]),
+          .object([
+            "component": .string("VChip"),
+            "props": .object(["value": .string("series")]),
+            "text": .string("剧集"),
+          ]),
+        ]),
+      ])
+    ])
+
+    let options = try XCTUnwrap(parsed.first?.options)
+    XCTAssertEqual(options.map(\.value), [.string("movies"), .string("series")])
+    XCTAssertEqual(
+      options.map(\.title), ["电影", "剧集"],
+      "重复 value 应保留先声明者的标题，后声明的那条整条丢弃")
+    XCTAssertEqual(
+      Set(options.map(\.id)).count, options.count,
+      "option ID 必须唯一，否则 ForEach 身份重复")
+  }
+
+  /// 重复可以跨层级：`items` 与 `content` 各声明一次同一个 value，也必须在同一遍扫描里消掉。
+  /// `collect` 按 `content` 在前、`items` 在后的顺序拼接，因此先声明的是 `content`。
+  func testPluginFilterDuplicateOptionAcrossContentAndItemsKeepsFirst() throws {
+    let parsed = PluginFilterControlParser.parse([
+      .object([
+        "component": .string("VChipGroup"),
+        "props": .object([
+          "model": .string("mtype"),
+          "items": .array([
+            .object([
+              "value": .string("movies"),
+              "title": .string("来自 items"),
+            ])
+          ]),
+        ]),
+        "content": .array([
+          .object([
+            "component": .string("VChip"),
+            "props": .object(["value": .string("movies")]),
+            "text": .string("来自 content"),
+          ])
+        ]),
+      ])
+    ])
+
+    let options = try XCTUnwrap(parsed.first?.options)
+    XCTAssertEqual(options.map(\.title), ["来自 content"])
+  }
+
+  /// 阴性对照：没有重复时选项与顺序必须原样保留，去重不得顺手改动既有插件。
+  func testPluginFilterDistinctOptionsKeepDeclarationOrder() throws {
+    let parsed = PluginFilterControlParser.parse([
+      .object([
+        "component": .string("VChipGroup"),
+        "props": .object(["model": .string("mtype")]),
+        "content": .array([
+          .object([
+            "component": .string("VChip"),
+            "props": .object(["value": .string("series")]),
+            "text": .string("剧集"),
+          ]),
+          .object([
+            "component": .string("VChip"),
+            "props": .object(["value": .string("movies")]),
+            "text": .string("电影"),
+          ]),
+        ]),
+      ])
+    ])
+
+    let options = try XCTUnwrap(parsed.first?.options)
+    XCTAssertEqual(options.map(\.value), [.string("series"), .string("movies")])
+    XCTAssertEqual(options.map(\.title), ["剧集", "电影"])
+  }
+
+  /// 不同 JSON 类型即使字面相同也必须各自保留 —— `JSONValue` 的相等性按 case 区分，
+  /// 去重键不能退化成字符串比较。
+  func testPluginFilterDeduplicationRespectsJSONValueIdentity() throws {
+    let parsed = PluginFilterControlParser.parse([
+      .object([
+        "component": .string("VChipGroup"),
+        "props": .object(["model": .string("year")]),
+        "content": .array([
+          .object([
+            "component": .string("VChip"),
+            "props": .object(["value": .int(2025)]),
+            "text": .string("数字 2025"),
+          ]),
+          .object([
+            "component": .string("VChip"),
+            "props": .object(["value": .string("2025")]),
+            "text": .string("字符串 2025"),
+          ]),
+        ]),
+      ])
+    ])
+
+    let options = try XCTUnwrap(parsed.first?.options)
+    XCTAssertEqual(options.map(\.value), [.int(2025), .string("2025")])
+  }
+
   func testPluginFilterExpressionEvaluator() {
     let values: [String: JSONValue] = [
       "mtype": .string("movies"),

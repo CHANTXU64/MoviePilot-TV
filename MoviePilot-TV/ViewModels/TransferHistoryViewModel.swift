@@ -146,7 +146,7 @@ class TransferHistoryViewModel: ObservableObject {
 
   private func handle(error: Error) {
     let errorDescription = "操作失败: \(error.localizedDescription)"
-    print(errorDescription)
+    Logger.error(errorDescription)
     errorMessage = errorDescription
   }
 
@@ -200,7 +200,7 @@ class TransferHistoryViewModel: ObservableObject {
     } catch is CancellationError {
       return
     } catch {
-      print("[TransferHistoryViewModel] Failed to load storages: \(error.localizedDescription)")
+      Logger.error("[TransferHistoryViewModel] Failed to load storages: \(error.localizedDescription)")
     }
   }
 
@@ -542,7 +542,7 @@ class TransferHistoryViewModel: ObservableObject {
         }
       }
     } catch {
-      print("[TransferHistoryDataManager] Polling failed: \(error.localizedDescription)")
+      Logger.error("[TransferHistoryDataManager] Polling failed: \(error.localizedDescription)")
     }
   }
 

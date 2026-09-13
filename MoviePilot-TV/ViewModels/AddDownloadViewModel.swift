@@ -38,13 +38,20 @@ class AddDownloadViewModel: ObservableObject {
   }
 
   // 目标目录的计算属性（URI 格式）
+  //
+  // F-135：内建「自动」选项的 value 就是空串，所以空目录不能进这个列表 ——
+  // 本地空目录会和「自动」撞成同一个 ID，远程空目录则会生成 `"qb:"` 这种并不存在的路径
+  // （用户选中后提交会被后端拒绝）。因此必须**先 trim、再丢空、最后去重**：顺序反过来的话
+  // 纯空白路径会活下来变成选项。这样处理后「自动」在结果中天然唯一，无需额外占位。
+  // `storage` 缺省即本地目录，与 Web `convertToUri` 的 undefined/null/local 三态一致。
   var targetDirectories: [String] {
     let uris = directories.compactMap { item -> String? in
-      guard let path = item.download_path else { return nil }
-      if item.storage == "local" {
-        return path
-      }
-      return "\(item.storage):\(path)"
+      guard
+        let path = item.download_path?.trimmingCharacters(in: .whitespacesAndNewlines),
+        !path.isEmpty
+      else { return nil }
+      guard let storage = item.storage, storage != "local" else { return path }
+      return "\(storage):\(path)"
     }
     var seen = Set<String>()
     return uris.filter { seen.insert($0).inserted }

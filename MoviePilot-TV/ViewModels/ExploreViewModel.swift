@@ -232,7 +232,26 @@ nonisolated enum PluginFilterControlParser {
     return (object["content"]?.arrayValue ?? []).lazy.compactMap { firstLabel(in: $0) }.first
   }
 
+  /// 收集筛选项，并按 `JSONValue` first-wins 去重。
+  ///
+  /// F-135：`PluginFilterOption.id` 直接取 `value`，`ExploreView` 又用同一个 `value` 作
+  /// `Picker` 的 tag —— 一个 value 同时充当「身份」与「取值」。插件若在两个标签上声明同一个
+  /// value，就会同时产生重复 ID 和重复 tag，`ForEach` 的 diff 与焦点随之不稳定。
+  /// 这里在输入边界按「先声明者胜」消重，让 value 重新能唯一地充当身份；
+  /// 刻意**不**给 option 引入独立 ID 层 —— 那会改动 `PickerOption`/`PluginFilterOption`
+  /// 的语义面并牵动全部调用点，代价大于收益。
   private static func collectOptions(from nodes: [JSONValue]) -> [PluginFilterOption] {
+    var seen = Set<JSONValue>()
+    return collectOptionsInDeclarationOrder(from: nodes).filter {
+      seen.insert($0.value).inserted
+    }
+  }
+
+  /// 按声明顺序展开选项，不去重 —— 去重只在 `collectOptions` 的入口做一次，
+  /// 这样层级间重复（父级与子级声明同一个 value）也能被同一遍扫描消掉。
+  private static func collectOptionsInDeclarationOrder(
+    from nodes: [JSONValue]
+  ) -> [PluginFilterOption] {
     nodes.flatMap { node -> [PluginFilterOption] in
       guard let object = node.objectValue else {
         switch node {
@@ -264,7 +283,7 @@ nonisolated enum PluginFilterControlParser {
           ?? value.queryString ?? ""
         return [PluginFilterOption(value: value, title: title)]
       }
-      return collectOptions(from: object["content"]?.arrayValue ?? [])
+      return collectOptionsInDeclarationOrder(from: object["content"]?.arrayValue ?? [])
     }
   }
 }

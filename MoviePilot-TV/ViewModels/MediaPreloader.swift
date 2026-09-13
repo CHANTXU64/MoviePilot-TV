@@ -546,7 +546,7 @@ class MediaPreloadTask: ObservableObject {
       }
       self.isSubscribed = subscribed
     } catch {
-      print("[MediaPreloadTask] 检查订阅状态失败: \(error)")
+      Logger.error("[MediaPreloadTask] 检查订阅状态失败: \(error)")
     }
   }
 
@@ -575,7 +575,7 @@ class MediaPreloadTask: ObservableObject {
         }
         self.isSubscribed = subscribed
       } catch {
-        print("[MediaPreloadTask] 刷新订阅状态失败: \(error)")
+        Logger.error("[MediaPreloadTask] 刷新订阅状态失败: \(error)")
       }
     } else if let seasonVM = seasonViewModel {
       // 电视剧：刷新分季订阅状态

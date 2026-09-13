@@ -445,7 +445,7 @@ nonisolated private func decodeOrUnwrapSync<T: Decodable>(from data: Data) throw
         throw APIError.decodingError(error)
       }
     } catch {
-      print("DEBUG: [decodeOrUnwrap] unknown error: \(error)")
+      Logger.debug("[decodeOrUnwrap] unknown error: \(error)")
     }
   }
 
@@ -641,8 +641,8 @@ class APIService: ObservableObject {
       } else {
         // 对于 tvOS 17.x 及更早版本，禁用图像缓存以避免 WEBP 解码问题。
         if useCacheSetting {
-          print(
-            "ℹ️ Detected tvOS version older than 18.0. Disabling image cache as a workaround for WEBP."
+          Logger.info(
+            "Detected tvOS version older than 18.0. Disabling image cache as a workaround for WEBP."
           )
         }
         self.useImageCache = false
@@ -794,7 +794,7 @@ class APIService: ObservableObject {
       "password",
     ].forEach { account in
       if !KeychainHelper.shared.delete(service: keychainService, account: account) {
-        print("Failed to delete keychain item for account: \(account)")
+        Logger.warning("Failed to delete keychain item for account: \(account)")
       }
       UserDefaults.standard.removeObject(forKey: account)
     }
@@ -1194,7 +1194,7 @@ class APIService: ObservableObject {
       service: Self.keychainService,
       account: Self.sessionRecordAccount
     ) {
-      print("Failed to delete keychain item for account: \(Self.sessionRecordAccount)")
+      Logger.warning("Failed to delete keychain item for account: \(Self.sessionRecordAccount)")
     }
     UserDefaults.standard.removeObject(forKey: Self.sessionRecordAccount)
     Self.clearStoredSessionCredentials()
@@ -1909,9 +1909,9 @@ class APIService: ObservableObject {
     Task {
       do {
         _ = try await makeRequest(endpoint: "/user/current")
-        print("Token/Session validation successful.")
+        Logger.debug("Token/Session validation successful.")
       } catch {
-        print("Silent token validation background process handled: \(error)")
+        Logger.debug("Silent token validation background process handled: \(error)")
       }
     }
   }
@@ -2054,14 +2054,14 @@ class APIService: ObservableObject {
         } catch is CancellationError {
           throw CancellationError()
         } catch {
-          print("DEBUG: [fetchSettings] Failed to fetch user settings: \(error)")
+          Logger.error("[fetchSettings] Failed to fetch user settings: \(error)")
         }
       }
       guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
       self.settings = response
       return response
     } catch {
-      print("DEBUG: [fetchSettings] Failed to fetch settings: \(error)")
+      Logger.error("[fetchSettings] Failed to fetch settings: \(error)")
       throw error
     }
   }
@@ -2237,8 +2237,16 @@ class APIService: ObservableObject {
              return tmdbId
           }
         } else {
-          // 识别出的类型不符，属于误报，拒绝该结果
+          // 识别出的类型不符，属于误报，拒绝该结果。
+          //
+          // F-122：但「拒绝这个结果」不等于「媒体不存在」—— 只有首段**查完过**才谈得上
+          // 无匹配。首段失败（超时/500）时这里的 nil 会被 `getTMDBJumpTarget` 当成
+          // 「媒体不存在」，弹出误导性的「未识别到此媒体的TMDB信息」，而首段其实从没
+          // 得出过结论。故沿用本方法尾部的同一口径：首段失败过就抛出它的原始错误。
           Logger.warning("[APIService] recognizeMedia 类型不匹配: 期望 \(targetType), 实际 \(recognizedType)")
+          if let firstStageError {
+            throw firstStageError
+          }
           return nil
         }
       }
@@ -2254,6 +2262,13 @@ class APIService: ObservableObject {
       // 两段都失败时抛出首段原始错误（若首段未失败则抛尾段错误），
       // 让调用方区分"识别失败"与"真正无匹配"。
       throw firstStageError ?? error
+    }
+
+    // F-122：兜底请求本身成功、却没给出可用 ID。若首段曾失败，此刻手上只有「一次不完整的
+    // 查询」，不能据此断言「媒体不存在」—— 抛出首段原始错误，让调用方按识别失败处理，
+    // 而不是弹误导性的「媒体不存在」。
+    if let firstStageError {
+      throw firstStageError
     }
 
     Logger.info("[APIService] 识别失败: \(title)")
@@ -2734,15 +2749,12 @@ class APIService: ObservableObject {
             throw APIError.serverMessage("HTTP Error \(httpResponse.statusCode)")
           }
 
-          for try await line in result.lines {
+          // 字节读取/组帧/解码在后台完成，避免每个字节都往返 MainActor。
+          // 交付回调在 MainActor 上原子地校验会话并发布，保留切服及取消边界。
+          try await SSEEventReader.read(from: result, as: Event.self) { event in
+            try Task.checkCancellation()
             try self.validate(lease)
-            if line.hasPrefix("data:") {
-              let jsonString = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
-              if let data = jsonString.data(using: .utf8) {
-                let event = try JSONDecoder().decode(Event.self, from: data)
-                continuation.yield(event)
-              }
-            }
+            continuation.yield(event)
           }
           continuation.finish()
         } catch {

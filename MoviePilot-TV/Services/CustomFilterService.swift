@@ -66,7 +66,7 @@ enum CustomFilterService {
       }
       let originalCount = finalContexts.count
       finalContexts = try filter(contexts: finalContexts, with: hardRule)
-      print("🔍 [\(caller)] 应用硬过滤规则「\(hardRule.name)」: \(originalCount) → \(finalContexts.count) 个资源")
+      Logger.debug("[\(caller)] 应用硬过滤规则「\(hardRule.name)」: \(originalCount) → \(finalContexts.count) 个资源")
     }
 
     // 2. 应用软过滤 (置尾变灰)
@@ -89,7 +89,7 @@ enum CustomFilterService {
           unmatched.append(ctx)
         }
       }
-      print("🔍 [\(caller)] 应用软过滤规则「\(softRule.name)」: 命中 \(matched.count) 个资源，排除 \(unmatched.count) 个资源（置尾）")
+      Logger.debug("[\(caller)] 应用软过滤规则「\(softRule.name)」: 命中 \(matched.count) 个资源，排除 \(unmatched.count) 个资源（置尾）")
       finalContexts = matched + unmatched
     }
 
@@ -117,7 +117,7 @@ enum CustomFilterService {
         }
       }
       if !matched {
-        print("🔍 [CustomFilter] 排除: \(title) — 不匹配包含规则 \(includes)")
+        Logger.debug("[CustomFilter] 排除: \(title) — 不匹配包含规则 \(includes)")
         return false
       }
     }
@@ -126,7 +126,7 @@ enum CustomFilterService {
     if let excludes = rule.exclude {
       for exclude in excludes {
         if try regexMatches(pattern: exclude, content: content) {
-          print("🔍 [CustomFilter] 排除: \(title) — 匹配排除规则 [\(exclude)]")
+          Logger.debug("[CustomFilter] 排除: \(title) — 匹配排除规则 [\(exclude)]")
           return false
         }
       }
@@ -147,7 +147,7 @@ enum CustomFilterService {
       }
       let currentSeeders = torrent?.seeders ?? 0
       if currentSeeders < minSeeders {
-        print("🔍 [CustomFilter] 排除: \(title) — 做种人数 \(currentSeeders) < \(minSeeders)")
+        Logger.debug("[CustomFilter] 排除: \(title) — 做种人数 \(currentSeeders) < \(minSeeders)")
         return false
       }
     }
@@ -221,8 +221,8 @@ enum CustomFilterService {
       }
     }
 
-    print(
-      "🔍 [CustomFilter] 排除: \(title) — 每集大小 \(Int64(perEpisodeSize).formattedBytes()) (\(episodeCount)集) 不匹配 \(sizeRange) MB"
+    Logger.debug(
+      "[CustomFilter] 排除: \(title) — 每集大小 \(Int64(perEpisodeSize).formattedBytes()) (\(episodeCount)集) 不匹配 \(sizeRange) MB"
     )
     return false
   }
@@ -260,16 +260,16 @@ enum CustomFilterService {
     if minutes.count == 1 {
       // 单值: 发布时间必须 >= 该分钟数
       if pubMinutes < minutes[0] {
-        print(
-          "🔍 [CustomFilter] 排除: \(title) — 发布时间 \(String(format: "%.0f", pubMinutes)) 分钟 < \(minutes[0]) 分钟"
+        Logger.debug(
+          "[CustomFilter] 排除: \(title) — 发布时间 \(String(format: "%.0f", pubMinutes)) 分钟 < \(minutes[0]) 分钟"
         )
         return false
       }
     } else {
       // 区间: 发布时间必须在 [min, max] 分钟范围内（与后端一致，取前两段）
       if pubMinutes < minutes[0] || pubMinutes > minutes[1] {
-        print(
-          "🔍 [CustomFilter] 排除: \(title) — 发布时间 \(String(format: "%.0f", pubMinutes)) 分钟不在 \(minutes[0])-\(minutes[1]) 分钟范围"
+        Logger.debug(
+          "[CustomFilter] 排除: \(title) — 发布时间 \(String(format: "%.0f", pubMinutes)) 分钟不在 \(minutes[0])-\(minutes[1]) 分钟范围"
         )
         return false
       }

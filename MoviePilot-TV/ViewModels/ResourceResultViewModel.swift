@@ -175,7 +175,7 @@ class ResourceResultViewModel: ObservableObject {
               guard canContinue() else { return }
               targetSites = Set(allSites)
             } catch {
-              print("Fetch indexer sites error: \(error)")
+              Logger.error("Fetch indexer sites error: \(error)")
             }
           }
 
@@ -202,7 +202,7 @@ class ResourceResultViewModel: ObservableObject {
               // 追加到原结果后面
               accumulatedResults.append(contentsOf: retryResults)
             } catch {
-              print("Search missing sites retry error: \(error)")
+              Logger.error("Search missing sites retry error: \(error)")
             }
           }
 
@@ -218,7 +218,7 @@ class ResourceResultViewModel: ObservableObject {
             self.errorMessage = error.localizedDescription
             return
           } catch {
-            print("❌ [ResourceResultVM] 加载过滤规则失败，放行不过滤: \(error)")
+            Logger.error("[ResourceResultVM] 加载过滤规则失败，放行不过滤: \(error)")
             filteredResults = accumulatedResults
           }
           
@@ -227,7 +227,7 @@ class ResourceResultViewModel: ObservableObject {
           self.results = filteredResults
         }
       } catch {
-        print("Search Stream error: \(error)")
+        Logger.error("Search Stream error: \(error)")
         if canContinue() {
           do {
             var searchResults = try await apiService.searchResources(
@@ -248,13 +248,13 @@ class ResourceResultViewModel: ObservableObject {
               self.errorMessage = error.localizedDescription
               return
             } catch {
-              print("❌ [ResourceResultVM] 加载过滤规则失败，放行不过滤: \(error)")
+              Logger.error("[ResourceResultVM] 加载过滤规则失败，放行不过滤: \(error)")
             }
             guard canContinue() else { return }
 
             self.results = searchResults
           } catch {
-            print("Search fallback error: \(error)")
+            Logger.error("Search fallback error: \(error)")
             guard canContinue() else { return }
             self?.errorMessage = error.localizedDescription
           }
