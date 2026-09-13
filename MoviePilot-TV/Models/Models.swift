@@ -48,10 +48,11 @@ nonisolated enum MediaIdentifier {
     legacyMediaId: String? = nil
   ) -> MediaIdentity? {
     var sourceIds: [String: String] = [:]
-    sourceIds["themoviedb"] = tmdbId.map(String.init)
-    sourceIds["douban"] = normalizedString(doubanId)
-    sourceIds["bangumi"] = bangumiId.map(String.init)
-    sourceIds["anilist"] = anilistId.map(String.init)
+    // raw 数值 ID 的 0 按 Web 的 JavaScript truthy 语义视为缺失；负数仍是 truthy，保持原值。
+    sourceIds["themoviedb"] = truthyNumericIdentifier(tmdbId).map(String.init)
+    sourceIds["douban"] = truthySourceIdentifier(doubanId)
+    sourceIds["bangumi"] = truthyNumericIdentifier(bangumiId).map(String.init)
+    sourceIds["anilist"] = truthyNumericIdentifier(anilistId).map(String.init)
 
     var declaredSources: [String] = []
     for value in [mediaIdPrefix, source] {
@@ -151,6 +152,13 @@ nonisolated enum MediaIdentifier {
   static func truthyNumericIdentifier(_ id: Int?) -> Int? {
     guard let id, id != 0 else { return nil }
     return id
+  }
+
+  /// 文本型来源原生 ID 的零值判据：`"0"` 在 v3 校验中非法（Web `isValidMediaSourceId` 同样拒绝），
+  /// 因此按缺失处理，让身份解析继续回退到下一个来源。
+  static func truthySourceIdentifier(_ value: String?) -> String? {
+    guard let normalized = normalizedString(value), normalized != "0" else { return nil }
+    return normalized
   }
 
   static func normalizedString(_ value: String?) -> String? {
@@ -1014,9 +1022,12 @@ nonisolated struct MediaInfo: Codable, Identifiable, Hashable {
     try encode(imdb_id, .imdb_id)
     try encode(tvdb_id, .tvdb_id)
     try encode(source, .source)
-    try encode(source, .media_source)
+    // v3 把 `media_source` + `media_id` 定义为成对身份：半对、空白或 `"0"` 都会被后端 422 拒绝。
+    // 只有成对且值合法时才写出这两个键，否则整体省略，退化为“无身份”，由后端按标题/年份处理。
+    let mediaIdentityPair = Self.encodableMediaIdentityPair(source: source, mediaId: media_id)
+    try encode(mediaIdentityPair?.source, .media_source)
     try encode(mediaid_prefix, .mediaid_prefix)
-    try encode(media_id, .media_id)
+    try encode(mediaIdentityPair?.mediaId, .media_id)
     try encode(title, .title)
     try encode(original_title, .original_title)
     try encode(original_name, .original_name)
@@ -1041,6 +1052,19 @@ nonisolated struct MediaInfo: Codable, Identifiable, Hashable {
     try encode(genres, .genres)
     try encode(category, .category)
     try encode(subscribeShare, .subscribeShare)
+  }
+
+  /// v3 认可的媒体身份对：来源与来源原生 ID 必须同时合法，否则整体视为“无身份”。
+  /// 空白与 `"0"` 都不是合法的 `media_id`，提交它们只会换来 422。
+  nonisolated private static func encodableMediaIdentityPair(
+    source: String?,
+    mediaId: String?
+  ) -> (source: String, mediaId: String)? {
+    guard let normalizedSource = MediaIdentifier.normalizedString(source),
+      normalizedSource != "0",
+      let normalizedMediaId = MediaIdentifier.truthySourceIdentifier(mediaId)
+    else { return nil }
+    return (normalizedSource, normalizedMediaId)
   }
 
   nonisolated private static func parseCleanedNames(

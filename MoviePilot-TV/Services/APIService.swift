@@ -2717,7 +2717,12 @@ class APIService: ObservableObject {
   /// 查询媒体是否已入库
   /// - 对应前端: MoviePilot-Frontend/src/components/cards/MediaCard.vue (handleCheckExists)
   /// - 应用场景: 电影详情页订阅按钮展示入库状态
+  /// - 备注: v3.0.1 起该接口的 `success` 恒为 `true`，命中与否只体现在 `data.item`
+  ///   （Web 读 `result.item?.id`）；v2 才把命中结果放在 `success` 上。两者都以 `data.item.id` 为准。
   func fetchMediaServerExists(media: MediaInfo) async throws -> Bool {
+    struct MediaServerExistsData: Decodable {
+      let item: [String: String]?
+    }
     let identity = media.identity
     let endpoint = try buildEndpoint(
       path: "/mediaserver/exists",
@@ -2730,7 +2735,8 @@ class APIService: ObservableObject {
         "mtype": media.type,
       ])
     let data = try await makeRequest(endpoint: endpoint)
-    return try decodeStrictActionResponseSync(from: data).success
+    let result = try await decodeOrUnwrap(MediaServerExistsData.self, from: data)
+    return !(result.item?["id"] ?? "").isEmpty
   }
 
   // MARK: - 资源搜索
@@ -3381,8 +3387,10 @@ class APIService: ObservableObject {
 
   /// 查询特定媒体（及特定季）命中的订阅摘要
   /// - 对应前端: `MoviePilot-Frontend/src/components/cards/MediaCard.vue` 和 `MoviePilot-Frontend/src/views/discover/MediaDetailView.vue` 的 `checkSubscribe`
-  /// - 应用场景: 详情页 Header 取消订阅前，先复用查询结果解析出真实订阅归属的媒体 ID。
-  /// - 备注: 这里只查询传入 `media.apiMediaId` 对应的订阅；原始 ID + fallback TMDB 的解析顺序由调用方控制。
+  /// - 应用场景: 详情页 Header 取消订阅前，先确认该媒体身份下是否存在订阅。
+  /// - 备注: 清单要求 lookup 只用于确认——`mediaId` 恒为本次查询使用的媒体身份，
+  ///   响应回显的身份只用来判断“归属是否已被确认”（`isResolvedMediaId`），不再充当删除目标。
+  ///   原始 ID + fallback TMDB 的解析顺序由调用方控制。
   func fetchSubscriptionLookup(
     media: MediaInfo,
     season: Int? = nil
@@ -3397,12 +3405,13 @@ class APIService: ObservableObject {
       let media_id: String?
       let mediaid: String?
 
-      var apiMediaId: String? {
+      /// 响应是否给出了可确认的订阅归属：canonical 成对身份，或任一可用的专用 ID。
+      /// 只回答“有没有”，不再把响应身份当作删除目标。
+      var hasResolvedIdentity: Bool {
         if let source = media_source, !source.isEmpty,
           let id = media_id, !id.isEmpty
         {
-          let prefix = source == "themoviedb" ? "tmdb" : source
-          return "\(prefix):\(id)"
+          return true
         }
         return MediaIdentifier.apiMediaId(
           tmdbId: MediaIdentifier.truthyNumericIdentifier(tmdbid),
@@ -3410,7 +3419,7 @@ class APIService: ObservableObject {
           bangumiId: MediaIdentifier.truthyNumericIdentifier(bangumiid),
           anilistId: MediaIdentifier.truthyNumericIdentifier(anilistid),
           fallbackMediaId: mediaid
-        )
+        ) != nil
       }
     }
     guard let identity = media.identity else {
@@ -3428,17 +3437,10 @@ class APIService: ObservableObject {
     let data = try await makeRequest(endpoint: endpoint)
     let resp = try await decodeOrUnwrap(SubscribeLookupResp.self, from: data)
     guard let id = resp.id else { return nil }
-    if let resolvedMediaId = resp.apiMediaId {
-      return SubscriptionLookupResult(
-        id: id,
-        mediaId: resolvedMediaId,
-        isResolvedMediaId: true
-      )
-    }
     return SubscriptionLookupResult(
       id: id,
       mediaId: identity.mediaKey,
-      isResolvedMediaId: false
+      isResolvedMediaId: resp.hasResolvedIdentity
     )
   }
 

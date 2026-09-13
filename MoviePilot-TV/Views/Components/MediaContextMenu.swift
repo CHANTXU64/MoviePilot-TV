@@ -18,7 +18,7 @@ struct MediaContextMenuItems: View {
   }
 
   var body: some View {
-    if canSubscribeMedia, !item.isCollection, let share = item.subscribeShare {
+    if canSubscribeMedia, !item.isCollection, item.type != "音乐", let share = item.subscribeShare {
       // 订阅分享的专属菜单
       Button {
         subscriptionHandler.forkSheetRequest = share

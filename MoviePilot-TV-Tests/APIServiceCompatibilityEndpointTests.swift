@@ -337,6 +337,51 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     )
   }
 
+  func testMediaDetailLibraryEndpointTreatsEmptyItemAsNotInLibrary() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.testingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+
+    let media = try JSONDecoder().decode(
+      MediaInfo.self,
+      from:
+        #"{"tmdb_id":42,"title":"电影","year":"2026","type":"电影"}"#
+        .data(using: .utf8)!
+    )
+
+    // v3.0.1 起 `success` 恒为 true，未入库时只有 `data.item` 为空对象。
+    await CompatibilityEndpointURLProtocol.stub.setMediaServerExistsResponse(
+      #"{"success":true,"data":{"item":{}}}"#.data(using: .utf8)!)
+    let missing = try await service.fetchMediaServerExists(media: media)
+    XCTAssertFalse(missing, "v3 的 success=true + 空 item 必须判为未入库")
+
+    // 命中时 `data.item.id` 非空。
+    await CompatibilityEndpointURLProtocol.stub.setMediaServerExistsResponse(
+      #"{"success":true,"data":{"item":{"id":"library/42"}}}"#.data(using: .utf8)!)
+    let exists = try await service.fetchMediaServerExists(media: media)
+    XCTAssertTrue(exists)
+
+    // v2 的 `success:false` 不是“未入库”，而是失败 envelope：严格解包必须抛错，
+    // 不能把失败悄悄当成“未入库”。（v3 该端点已不再返回这种形态。）
+    await CompatibilityEndpointURLProtocol.stub.setMediaServerExistsResponse(
+      #"{"success":false,"data":{"item":{}}}"#.data(using: .utf8)!)
+    do {
+      _ = try await service.fetchMediaServerExists(media: media)
+      XCTFail("success:false 必须按失败 envelope 抛错")
+    } catch let error as APIError {
+      guard case .serverMessage = error else {
+        return XCTFail("应当是后端 envelope 报错，实际 \(error)")
+      }
+    } catch {
+      XCTFail("应当是 APIError，实际 \(error)")
+    }
+  }
+
   func testAniListDetailAuxiliaryEndpointsMatchWebContract() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
@@ -1209,6 +1254,7 @@ private actor CompatibilityEndpointURLProtocolStub {
   private var manualTransferOmitsSuccess = false
   private var subscriptionActionsFail: Bool?
   private var manualMediaResponses: [String: CompatibilityEndpointStubResponse] = [:]
+  private var mediaServerExistsResponse: Data?
 
   func reset() {
     requests.removeAll()
@@ -1219,6 +1265,11 @@ private actor CompatibilityEndpointURLProtocolStub {
     manualTransferOmitsSuccess = false
     subscriptionActionsFail = nil
     manualMediaResponses.removeAll()
+    mediaServerExistsResponse = nil
+  }
+
+  func setMediaServerExistsResponse(_ response: Data?) {
+    mediaServerExistsResponse = response
   }
 
   func setUserSettingsFailure(statusCode: Int?) {
@@ -1336,7 +1387,9 @@ private actor CompatibilityEndpointURLProtocolStub {
       }
     } else if url.path == "/api/v1/mediaserver/exists" {
       statusCode = 200
-      data = #"{"success":true,"data":{"item":{"id":"library/42"}}}"#.data(using: .utf8)!
+      data =
+        mediaServerExistsResponse
+        ?? #"{"success":true,"data":{"item":{"id":"library/42"}}}"#.data(using: .utf8)!
     } else if url.path == "/api/v1/anilist/credits/154587" {
       statusCode = 200
       data = #"[{"source":"anilist","id":95097,"name":"种崎敦美"}]"#.data(using: .utf8)!

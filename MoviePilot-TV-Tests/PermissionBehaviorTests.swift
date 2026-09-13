@@ -27,8 +27,10 @@ final class PermissionVisibleEntryTests: XCTestCase {
     let source = try permissionBehaviorSource("MoviePilot-TV/Views/Components/MediaContextMenu.swift")
 
     XCTAssertTrue(
-      source.contains("if canSubscribeMedia, !item.isCollection, let share = item.subscribeShare"),
-      "长按菜单“复用订阅”必须同时在 subscribe 权限和合集门之后。"
+      source.contains(
+        "if canSubscribeMedia, !item.isCollection, item.type != \"音乐\", let share = item.subscribeShare"
+      ),
+      "长按菜单“复用订阅”必须同时在 subscribe 权限、合集门和音乐门之后。"
     )
     XCTAssertTrue(source.contains("if !item.isCollection {"), "合集不应显示订阅或搜索入口。")
     XCTAssertTrue(

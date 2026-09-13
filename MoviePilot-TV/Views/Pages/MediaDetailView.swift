@@ -118,8 +118,10 @@ struct MediaDetailView: View {
   @FocusState private var focusedButton: ButtonField?
   @State private var lastFocusedButton: ButtonField?
 
+  /// 音乐走独立订阅链，TV 不提供入口：既不能当电影直接订阅，也不能进分季流程（否则是死按钮）。
   private var canSubscribeMedia: Bool {
     apiService.canAccess(.subscribe) && !viewModel.detail.isCollection
+      && viewModel.detail.type != "音乐"
   }
 
   private var canSearchResources: Bool {

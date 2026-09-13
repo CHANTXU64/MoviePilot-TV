@@ -146,7 +146,9 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(doubanDeleteCount, 0)
   }
 
-  func testSubscriptionHandlerDeletesCanonicalLookupIdentityInsteadOfAuxiliaryTMDB()
+  /// 清单要求 lookup 只用于确认：删除键取自当前媒体的 `getMediaId()`。
+  /// 响应即使回显另一套 canonical 身份（v2 才会出现），也不得改变删除目标。
+  func testSubscriptionHandlerDeletesQueriedIdentityInsteadOfResponseIdentity()
     async throws
   {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
@@ -188,16 +190,18 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       preloadTask.isSubscribed == false
     }
 
-    let canonicalDeleteCount = await SubscribeSheetURLProtocol.stub.requestCount(
-      method: "DELETE",
-      path: "/api/v1/subscribe/media/778902"
-    )
-    let tmdbDeleteCount = await SubscribeSheetURLProtocol.stub.requestCount(
+    let queriedDeleteCount = await SubscribeSheetURLProtocol.stub.requestCount(
       method: "DELETE",
       path: "/api/v1/subscribe/media/998907"
     )
-    XCTAssertEqual(canonicalDeleteCount, 1)
-    XCTAssertEqual(tmdbDeleteCount, 0)
+    let responseIdentityDeleteCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "DELETE",
+      path: "/api/v1/subscribe/media/778902"
+    )
+    XCTAssertEqual(queriedDeleteCount, 1)
+    XCTAssertEqual(
+      responseIdentityDeleteCount, 0,
+      "删除目标必须是本次查询用的媒体身份，不能跟着响应回显的身份漂移")
   }
 
   func testSubscriptionHandlerKeepsCachedStateWhenDeleteFails() async throws {
