@@ -2959,7 +2959,6 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
       type: type,
       season: season,
       share_uid: share_uid,
-      share_user: share_user,
       subscribe_id: subscribe_id
     ) {
       self.id = fallbackIdentity
@@ -2984,9 +2983,9 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
   /// 媒体标识那一槽还**必须带字段名**：否则站点原生 ID `"9001"` 与 `tmdbid: 9001` 会拼成
   /// 同一个分量，两条本不相干的分享就撞上了。
   ///
-  /// 「谁分享的 / 从哪条订阅分享的」一个都没有时返回 nil（退回 UUID）：此时两条同媒体的记录
-  /// 在数据上完全不可区分，按「字段不足以证明是同一条记录时不应静默合并」处理 ——
-  /// 多一张看得见的重复卡，好过少一张看不见的卡。
+  /// 必须同时有分享实例 `share_uid` 和正数 `subscribe_id`。本地订阅编号可跨实例重复，
+  /// 自由填写的 `share_user` 也不唯一，不能替代实例身份。缺任意一项时退回 UUID，
+  /// 接受跨页可能重复，避免不同分享被静默合并。
   ///
   /// `share_title` 不参与：分享人改一次标题不该换身份（旧卡销毁重建会让焦点跳走）。
   nonisolated private static func shareFallbackIdentity(
@@ -3000,7 +2999,6 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
     type: String?,
     season: Int?,
     share_uid: String?,
-    share_user: String?,
     subscribe_id: Int?
   ) -> String? {
     guard
@@ -3014,36 +3012,10 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
       )
     else { return nil }
 
-    // `share_uid` 是安装实例的唯一 ID，稳定且分享人改不掉，优先于可改名的 `share_user`。
-    // 用 `u:` / `n:` 前缀区分来源：否则「uid == 某人的显示名」时两条记录会拼成同一槽。
-    //
-    // 两者都走 `normalizedText` 而**不是** `normalizedTextIdentifier`：哨兵规则
-    //（`"0"`/`"-1"` 当作没给）是为后端用数字表示「没有」的**数值 ID 字段**定的，
-    // 而这两个是「谁分享的」—— `share_user` 是显示名，后端 `Optional[str]` 没规定
-    // 叫 `"0"` 的名字无效。套上去的后果是把两个叫 `"0"` 和 `"-1"` 的人清洗成同一个
-    // 「没给」，于是只剩 `subscribe_id` 相同就拼出同一个身份，**静默漏卡**。
-    let owner: String?
-    if let uid = normalizedText(share_uid) {
-      owner = "u:\(uid)"
-    } else if let user = normalizedText(share_user) {
-      owner = "n:\(user)"
-    } else {
-      owner = nil
-    }
-    // 三审（2026-09-13）：够不够断定「是同一条分享」，**只看分享自哪条订阅**。
-    //
-    // 原先写的是 `owner != nil || subscribe != nil`，等于「只要知道分享人就算数」。但分享人
-    // 能对上，不代表是同一条分享 —— 同一个人完全可能把同一部剧的 2160p 与 1080p 各开一条订阅
-    // 分别分享。缺 `subscribe_id` 时这两条会被并成一条，后者**静默消失**。
-    // 更退化的一路是只剩 `name` 兜底时：同名电影 1984 与 2021 也会被当成同一条。
-    // 编码再严谨也救不了「信息本身不足以区分」—— 长度前缀只保证不同字段组合不产生歧义，
-    // 不能让不唯一的信息变得唯一。
-    //
-    // 故收紧为必须有 `subscribe_id`：拿不准就退回随机身份（各自成卡）。
-    // 代价照实记下：缺 `subscribe_id` 的记录跨页重复时不再自动合并，会看到重复卡 ——
-    // 这与 F-078 的原始口径一致：**宁可多一张看得见的重复卡，不少一张看不见的卡**。
-    let subscribe = normalizedNumberIdentifier(subscribe_id)
-    guard subscribe != nil else { return nil }
+    // UID 是不透明文本，不套用数值媒体 ID 的 0/负数哨兵规则。
+    guard let uid = normalizedText(share_uid),
+      let subscribe = normalizedNumberIdentifier(subscribe_id)
+    else { return nil }
 
     let slots: [String?] = [
       // 这两槽是内容固有属性（`"mteam"`、`"电影"` 这类），不是后端用数字表示「没有」的
@@ -3054,7 +3026,7 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
       mediaSlot,
       // 季号 0 是合法的（特典/电影），只有负数与缺失同义。
       season.flatMap { $0 >= 0 ? String($0) : nil },
-      owner,
+      "u:\(uid)",
       subscribe,
     ]
     return "Share|" + slots.map(shareIdentitySlot).joined(separator: "|")

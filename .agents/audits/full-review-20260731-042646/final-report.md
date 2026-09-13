@@ -2694,6 +2694,29 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 
 - 剩余未验证：真机 tvOS 焦点表现；中心服务器实际 ID 分布；重复正业务 ID 仍会去重掉一条（保留去重的固有代价）；兜底身份以 `-` 拼接各分量，若某分量本身含 `-` 理论上存在拼串歧义（构造性的，未观测到实际输入）。
 
+**🆕 四轮外部审查（2026-09-13）：[P2] 只要求 `subscribe_id` 仍会跨实例误合并 —— 已修复并独立复现。**
+
+审查报：只要求存在 `subscribe_id`，但那是各实例的本地编号；当分享 `id`、`share_uid` 缺失，两个实例同号、同媒体同季，且分享人缺失或显示名相同时，不同质量的分享会被合并。**核对成立，这也是我三轮那次收紧留下的半截。**
+
+反向验证独立复现：退到 HEAD（`2cc53b0`）后，三条反例用例全部报 `("1") is not equal to ("2")` —— 两张卡塌成一张，正是审查描述的现象。
+
+**前提先回后端源码坐实**（这一步上几轮我做得不够，这次先查再改）：
+
+- `share_uid` 由 `MoviePilotServerHelper.get_user_uuid()`（`~/code/MoviePilot/app/helper/server.py:110-118`）填充，请求体里用户根本不传它；值来自 `SystemUtils.generate_user_unique_id()`（`app/utils/system.py:933-973`）—— 对根文件系统 `st_dev-st_ino` 做 SHA-256，失败才退到 MAC。`server.py:52-58` 自述「获取当前安装**实例**用于服务端统计识别的稳定用户 ID」。**它是安装实例的稳定 ID，不是用户账号 ID，也不受显示名影响。**
+- `subscribe_id` 是分享方实例 `subscribe` 表的本地自增主键（`app/db/models/subscribe.py:15`），**各实例各自从 1 发号，跨实例必然重复**；而且它不上传中心服务器（`server.py:914-915` 显式 `subscribe_dict.pop("id")`）。
+- `share_user` 是前端分享对话框里**自由填写**的显示名，后端完全不校验、不回填登录用户。
+
+所以 (实例 `share_uid`, 本地订阅号 `subscribe_id`) 足以确定一条分享；`share_user` 不满足唯一性，`subscribe_id` 单独也不满足。修法据此收紧为**同时**要求二者，并把 `share_user` 整体移出身份构造（原 `u:` / `n:` 双来源槽取消）。
+
+**为什么不照 Web**：`SubscribeShareView.vue` 的 `get-item-key` 是 `e.id || \`${e.tmdbid||e.doubanid||e.name}-${e.share_user}\`` —— 它用的恰恰是可改名的 `share_user`，且列表侧是裸 `concat`、完全不去重。TV 端有 `hasMore` 收敛依赖去重（见上文），不能照抄；而 Web 那个 key 里 `share_user` 的位置正是本项两轮反例的来源。
+
+**新增/改动的用例**：3 条反例（无分享人、显示名相同、`share_uid` 全空白）+ 1 条**代价固化**（缺 `share_uid` 时跨页不再合并，可见重复卡）；另把两条在新实现下**对身份已无判别力**的用例（`testNumericLookingShareUserNamesAreNotTreatedAsSentinels`、`testShareUidAndShareUserWithSameValueDoNotCollide`）按本仓库口径**降级标注为阴性对照**，并写明「换上任意别的显示名结果不变」—— 不留在原位冒充回归证据。
+
+**残留（照实记）：**
+- `share_uid` **不保证全局唯一**：它是文件系统属性而非注册过的实例身份，两台实例若 `/` 的 `st_dev-st_ino` 相同（同机非容器部署、共享同一 rootfs 的容器）会得到完全相同的值。这类实例在同样的 (媒体, 季, 本地订阅号) 下仍会被并成一条。**比修复前窄得多**（修复前是任意两台实例必然相撞，因为大家的 `subscribe_id` 都从 1 开始），但没有归零。
+- `share_uid` 生成失败时是空字符串（`server.py:118` 的 `or ""`）。空串经 `normalizedText` 判空后等同缺失 → 退回随机身份，方向是安全的（多卡不漏卡），但这些记录跨页不再去重。
+- `share_uid` **不持久化**（只是类变量内存缓存），容器按镜像重建后 `/` 的 inode 变了就会换值 —— 除影响本机跨页去重外，后端自己的 `Follow 订阅分享`（`app/chain/subscribe.py:2283-2284` 用 `uid in follow_users` 全等匹配）也会静默失配。这是后端行为，非本端可修。
+
 </details>
 
 <details>
@@ -2738,6 +2761,30 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 验证：新增 8 条，反向验证把 `SSEFramer.swift` 退回 `HEAD` 版本 → 5 条阳性全挂（CR-only 2 处断言、BOM 三组），阴性对照全部通过。其中 `testCRLFIsOneLineEndingNotTwo` 经反向验证**修复前也通过**（旧 `consume(line:)` 会剥掉行尾 `\r`），已按本仓库口径改标为阴性对照并写明它守的是新字节层 CR 处理不得把 CRLF 拆成两次断行 —— 不作为阳性证据。恢复后 SSEFramerTests 29/29；全量 **1016/1016 通过、零失败**。
 
 **残留：** 当前后端 8 处 SSE 生产端全部是 `f"data: {json.dumps(...)}\n\n"` 单一物理行形态，故上述三项触发条件目前均**不可达**，属前瞻性健壮性修复；heartbeat/comment、单事件最大尺寸、Content-Type 与明确终止保证仍未验证。
+
+**🆕 四轮外部审查（2026-09-13）：[P1] 字节级组帧本身引入了严重性能回归 —— 已修复并独立复现。**
+
+审查报：`APIService.swift:2765` 在 MainActor 中逐字节 `await`，同样约 530 KiB、512 个事件，旧读取方式 78 ms，当前 API 11.09 s。**核对成立，且这是我自己在 `10e0699`（本项修复）里引入的。**
+
+我自己的复现（不是引用审查的数字）：
+
+| 版本 | `production` | `baseline` | 结果 |
+|---|---|---|---|
+| 当前工作区（`@concurrent`） | **0.331 s** | 0.034 s | 通过 |
+| 退回 `HEAD`（MainActor 逐字节） | **11.089 s** | 0.038 s | 转挂 |
+| 仅删 `@concurrent`，其余逐字不动 | **11.377 s** | 0.043 s | 转挂 |
+
+**根因不是「字节比行慢」，而是每个字节一次 actor 往返。** 旧代码 `for try await line in result.lines` 的外层 `await` 只有 512 次，按字节的循环发生在 `AsyncLineSequence` 内部、留在同一执行器上；`10e0699` 改成在调用点逐字节 `await` 之后，537k 个字节每个都要跳出 MainActor 再跳回来。
+
+修法（审查建议的「将读取和组帧移出 MainActor」）：新增 `SSEEventReader.read`，用 `@concurrent` 把字节读取、`SSEFramer` 组帧、JSON 解码整体放到通用执行器，只在**完整事件**的交付边界回调 MainActor 做 `Task.checkCancellation()` + `validate(lease)` + `continuation.yield(event)`。切服与取消边界因此不改语义（`testConsumerCancellationStopsTransport` / `testSessionSwitchStopsOldStream` 两条对照均通过）。
+
+**`@concurrent` 是承重的，不是装饰**：工程开了 `SWIFT_APPROACHABLE_CONCURRENCY`（含 `NonisolatedNonsendingByDefault`），只写 `nonisolated` 的函数仍会继承调用者执行器，实测把 `@concurrent` 删掉后回归原样复现（第三行）。这个标注若被「清理」掉，性能会静默退回 11 s。
+
+**新增测试**：`SSEStreamTests` 4 条 —— 1 条吞吐判别（同时校准机器负载，避开纯相对预算的假绿）+ 3 条阴性对照（多行/BOM/无终止尾的组帧、消费者取消停流、切服停旧流）。
+
+**残留：**
+- 字节级组帧本身仍有约 **9 倍于 `.lines`** 的固有开销（537k 次 async 迭代），这是「必须在字节层才拿得到空行边界」的代价。彻底消除需要改用基于 `URLSessionDataDelegate` 的分块读取（`didReceive data:` 拿整块 `Data` 再组帧），改动面更大，本轮不做。
+- 吞吐用例是**墙钟断言**（预算 `max(1 s, baseline × 20)`）。当前值 0.331 s 对 1 s 地板有 3 倍余量，判别的失败态是 11 s，但机器重载时仍有抖动风险。
 
 </details>
 

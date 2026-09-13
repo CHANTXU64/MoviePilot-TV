@@ -4,6 +4,57 @@ import XCTest
 
 @MainActor
 final class SubscriptionShareDedupTests: XCTestCase {
+  func testLocalSubscriptionIdWithoutOwnerDoesNotMergeDistinctShares() throws {
+    try assertMissingShareUidKeepsDistinctShares(user: nil, shareUid: nil)
+  }
+
+  func testDuplicateDisplayNamesCannotScopeLocalSubscriptionIds() throws {
+    try assertMissingShareUidKeepsDistinctShares(user: "MoviePilot", shareUid: nil)
+  }
+
+  func testWhitespaceShareUidCannotScopeLocalSubscriptionIds() throws {
+    try assertMissingShareUidKeepsDistinctShares(user: "MoviePilot", shareUid: " \n ")
+  }
+
+  func testStableUidAndSubscriptionIdDeduplicateWithoutDisplayName() throws {
+    let json = Self.shareJSON(rawId: nil, tmdbid: 42, user: nil, shareUid: "instance-a")
+    let first = try makeMediaInfo(json: json)
+    let second = try makeMediaInfo(json: json)
+    var keys = Set<String>()
+    XCTAssertEqual(
+      MediaInfo.deduplicateSubscriptionShareMedia([first, second], existingKeys: &keys).count, 1)
+    XCTAssertTrue(try XCTUnwrap(first.subscribeShare?.id).hasPrefix("Share|"))
+  }
+
+  func testNumericLookingShareUidsRemainStableAndDistinct() throws {
+    let records = try ["0", "-1"].map { uid in
+      let json = Self.shareJSON(rawId: nil, tmdbid: 42, user: nil, shareUid: uid)
+      let first = try makeMediaInfo(json: json)
+      XCTAssertEqual(first.id, try makeMediaInfo(json: json).id)
+      return first
+    }
+    XCTAssertNotEqual(records[0].id, records[1].id)
+  }
+
+  private func assertMissingShareUidKeepsDistinctShares(user: String?, shareUid: String?) throws {
+    let items = try ["4K", "1080p"].map { quality in
+      var payload: [String: Any] = [
+        "subscribe_id": 1, "share_title": quality, "quality": quality,
+        "name": "Same Show", "type": "电视剧", "tmdbid": 42, "season": 1,
+      ]
+      if let user { payload["share_user"] = user }
+      if let shareUid { payload["share_uid"] = shareUid }
+      return try JSONDecoder().decode(
+        SubscribeShare.self, from: JSONSerialization.data(withJSONObject: payload)).toMediaInfo()
+    }
+    var seenKeys = Set<String>()
+    let unique = MediaInfo.deduplicateSubscriptionShareMedia(items, existingKeys: &seenKeys)
+    XCTAssertEqual(unique.count, 2, "本地订阅编号和可重复的显示名不足以识别同一分享")
+    for item in unique {
+      XCTAssertNotNil(UUID(uuidString: try XCTUnwrap(item.subscribeShare?.id)))
+    }
+  }
+
   func testSubscriptionShareDedupKeepsDifferentShareRecordsForSameMedia() throws {
     let mediaItems = try [
       makeShare(rawId: 101, user: "alice"),
@@ -136,7 +187,8 @@ final class SubscriptionShareDedupTests: XCTestCase {
   /// 退化输入（连媒体标识都没有）退回随机身份 —— 宁可这条记录每次解码都算作新项
   /// （去重不生效、最多多出一张重复卡），也不能让它被别人撞掉。
   func testShareWithoutAnyIdentityFieldIsNeverDeduplicatedAway() throws {
-    let degenerate = Self.shareJSON(rawId: nil, tmdbid: nil, user: nil, includeMediaName: false)
+    let degenerate = Self.shareJSON(
+      rawId: nil, tmdbid: nil, user: nil, includeMediaName: false, shareUid: nil)
     let first = try makeMediaInfo(json: degenerate)
     let second = try makeMediaInfo(json: degenerate)
 
@@ -258,14 +310,14 @@ final class SubscriptionShareDedupTests: XCTestCase {
       "`media_id` 的 \"0\" 是哨兵，必须让位给有效的 `doubanid` —— 这两条是同一部片子")
   }
 
-  /// 三审反例 A：`share_user` 是**显示名**，不是数字媒体 ID，不该套哨兵规则。
-  ///
-  /// 老实现（`normalizedTextIdentifier`）会把叫 `"0"` / `"-1"` 的分享人清洗成「没给」，
-  /// 两条只剩 `subscribe_id` 相同的记录就此拼出同一个 key，后者被静默过滤 —— 又是漏卡。
+  /// **阴性对照（本轮降级）**：`share_user` 已整体退出身份构造，本用例对身份**没有判别力** ——
+  /// 两条记录各自成卡的唯一原因是**缺实例 `share_uid`**（退回随机身份），与显示名长什么样无关：
+  /// 把 `"0"` / `"-1"` 换成任意别的名字，结果一模一样。留着只为守住一条：
+  /// 显示名在模型上原样保留，不被任何规范化/哨兵规则改写。
   func testNumericLookingShareUserNamesAreNotTreatedAsSentinels() throws {
     let items = [
-      try makeMediaInfo(json: Self.shareJSON(rawId: nil, tmdbid: 9001, user: "0")),
-      try makeMediaInfo(json: Self.shareJSON(rawId: nil, tmdbid: 9001, user: "-1")),
+      try makeMediaInfo(json: Self.shareJSON(rawId: nil, tmdbid: 9001, user: "0", shareUid: nil)),
+      try makeMediaInfo(json: Self.shareJSON(rawId: nil, tmdbid: 9001, user: "-1", shareUid: nil)),
     ]
 
     var seenKeys = Set<String>()
@@ -274,6 +326,7 @@ final class SubscriptionShareDedupTests: XCTestCase {
     XCTAssertEqual(
       uniqueItems.count, 2,
       "分享人叫「0」和叫「-1」是两个人，不能因为名字长得像数字就当成同一条分享")
+    XCTAssertEqual(uniqueItems.compactMap { $0.subscribeShare?.share_user }, ["0", "-1"])
   }
 
   /// 三审反例 B①：只知道「谁分享的」、不知道「分享自哪条订阅」时，当前实现照样生成确定身份。
@@ -340,6 +393,27 @@ final class SubscriptionShareDedupTests: XCTestCase {
       MediaInfo.deduplicateSubscriptionShareMedia(secondPage, existingKeys: &seenKeys).count,
       1,
       "缺 subscribe_id 时信息不足以断定是同一条分享，跨页不再合并 —— 已裁决接受的代价")
+  }
+
+  /// **代价固化（四审 P2 的已知取舍，不是缺陷）**：门槛收紧为「必须有安装实例 `share_uid`」之后，
+  /// 缺 `share_uid` 的记录同样只剩随机身份 —— 同一份分享在两页各出现一次时**不会**被并掉。
+  ///
+  /// 与上一条同源：`share_uid` 是后端 `generate_user_unique_id()` 对根文件系统 inode/MAC
+  /// 取的 SHA-256（`helper/server.py:111` 自述「当前安装实例…稳定用户 ID」），是唯一可靠的
+  /// 跨实例身份；缺它就等于不知道这条分享从哪台机器来。宁可多一张看得见的重复卡。
+  func testRecordsWithoutShareUidAreKnowinglyNotDeduplicatedAcrossPages() throws {
+    let json = Self.shareJSON(rawId: nil, tmdbid: 9001, user: "alice", shareUid: nil)
+    let firstPage = [try makeMediaInfo(json: json)]
+    let secondPage = [try makeMediaInfo(json: json)]
+
+    var seenKeys = Set<String>()
+    XCTAssertEqual(
+      MediaInfo.deduplicateSubscriptionShareMedia(firstPage, existingKeys: &seenKeys).count,
+      1)
+    XCTAssertEqual(
+      MediaInfo.deduplicateSubscriptionShareMedia(secondPage, existingKeys: &seenKeys).count,
+      1,
+      "缺 share_uid 时信息不足以断定是同一条分享，跨页不再合并 —— 已裁决接受的代价")
   }
 
   /// 反例二：**跨来源同号**。不同站点的原生 `media_id` 各自从 1 开始编号，
@@ -483,33 +557,39 @@ final class SubscriptionShareDedupTests: XCTestCase {
     XCTAssertNotEqual(withSource.id, dashedMediaId.id)
   }
 
-  /// 同理：`season` 与 `share_user` 是独立槽位。修复前「`season=1` + `user=alice`」与
-  /// 「无 season + `user="s1-alice"`」拼出同一个串。
-  func testSeasonFieldAndDashedShareUserDoNotCollide() throws {
+  /// 季号与实例 UID 使用独立槽位，UID 中的分隔符不能冒充季号。
+  func testSeasonFieldAndDashedShareUidDoNotCollide() throws {
     let withSeason = try makeMediaInfo(
-      json: Self.shareJSON(rawId: nil, tmdbid: 9001, user: "alice", includeMediaName: false, season: 1))
+      json: Self.shareJSON(
+        rawId: nil, tmdbid: 9001, user: nil, includeMediaName: false, season: 1, shareUid: "alice"))
     let dashedUser = try makeMediaInfo(
       json: Self.shareJSON(
-        rawId: nil, tmdbid: 9001, user: "s1-alice", includeMediaName: false, season: nil))
+        rawId: nil, tmdbid: 9001, user: nil, includeMediaName: false, season: nil, shareUid: "s1-alice"))
 
     XCTAssertNotEqual(withSeason.id, dashedUser.id)
   }
 
-  /// `share_uid` 与 `share_user` 同值也不得撞：前者是安装实例 ID，后者是可改的显示名。
+  /// 身份只认安装实例 `share_uid`：它同值也好、跟显示名撞名也好，都不影响判定；
+  /// 反过来，缺了它就只有随机身份，显示名写什么都不足以顶替。
+  ///
+  /// 本轮之前 `share_user` 还占一个 `n:` 槽，本用例守的是「`u:`/`n:` 不互撞」；
+  /// 现在该槽已整体删除，判别力落到第二条断言（缺 UID ⇒ 随机身份）上。
   func testShareUidAndShareUserWithSameValueDoNotCollide() throws {
     let byUid = try makeMediaInfo(
       json: Self.shareJSON(
         rawId: nil, tmdbid: 9001, user: nil, includeMediaName: false, shareUid: "alice"))
     let byUserName = try makeMediaInfo(
       json: Self.shareJSON(
-        rawId: nil, tmdbid: 9001, user: "alice", includeMediaName: false))
+        rawId: nil, tmdbid: 9001, user: "alice", includeMediaName: false, shareUid: nil))
 
     XCTAssertNotEqual(byUid.id, byUserName.id)
+    XCTAssertNotNil(UUID(uuidString: try XCTUnwrap(byUserName.subscribeShare?.id)))
   }
 
   // MARK: - 夹具
 
   /// 按字段拼一份分享 JSON。`rawId` 传 nil 表示**不出现** `id` 键（后端 `id` 为 Optional）。
+  /// 确定性身份用例默认带有效实例 UID；测试缺 UID 的退化输入时必须显式传 nil。
   private static func shareJSON(
     rawId: String?,
     tmdbid: Int?,
@@ -522,7 +602,7 @@ final class SubscriptionShareDedupTests: XCTestCase {
     mediaSource: String? = nil,
     season: Int? = 1,
     subscribeId: Int? = 200,
-    shareUid: String? = nil,
+    shareUid: String? = "uid-alice",
     comment: String? = nil,
     year: String = "2024"
   ) -> String {
