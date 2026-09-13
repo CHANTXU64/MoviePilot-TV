@@ -15,6 +15,44 @@ final class SubscribeModelCompatibilityTests: XCTestCase {
     XCTAssertEqual(json["bangumiid"] as? Int, 12345)
   }
 
+  func testSubscribeShareForkRoundTripPreservesV3WritableFields() throws {
+    let payload = """
+      {
+        "id": 91,
+        "name": "V3 分享",
+        "type": "电视剧",
+        "media_source": "themoviedb",
+        "media_id": "1396",
+        "music_type": "album",
+        "total_tracks": 12,
+        "audio_quality": "lossless",
+        "audio_format": "flac",
+        "min_bitrate": 1411000,
+        "min_bit_depth": 16,
+        "min_sample_rate": 44100,
+        "media_category": "剧集",
+        "media_category_id": "tv-drama"
+      }
+      """.data(using: .utf8)!
+
+    let share = try JSONDecoder().decode(SubscribeShare.self, from: payload)
+    let json = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: JSONEncoder().encode(share)) as? [String: Any])
+
+    XCTAssertEqual(json["id"] as? Int, 91)
+    XCTAssertEqual(json["media_source"] as? String, "themoviedb")
+    XCTAssertEqual(json["media_id"] as? String, "1396")
+    XCTAssertEqual(json["music_type"] as? String, "album")
+    XCTAssertEqual(json["total_tracks"] as? Int, 12)
+    XCTAssertEqual(json["audio_quality"] as? String, "lossless")
+    XCTAssertEqual(json["audio_format"] as? String, "flac")
+    XCTAssertEqual(json["min_bitrate"] as? Int, 1_411_000)
+    XCTAssertEqual(json["min_bit_depth"] as? Int, 16)
+    XCTAssertEqual(json["min_sample_rate"] as? Int, 44100)
+    XCTAssertEqual(json["media_category"] as? String, "剧集")
+    XCTAssertEqual(json["media_category_id"] as? String, "tv-drama")
+  }
+
   func testNavigationMediaInfoUsesWebIdentityPriorityAndPreservesValidRawIDs() {
     let subscribe = Subscribe(
       name: "Canonical",

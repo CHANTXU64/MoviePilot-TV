@@ -63,7 +63,7 @@ struct MediaContextMenuItems: View {
       // ⚠️ 使用 peekTask（纯读取），避免在 body 渲染期间修改预载任务生命周期状态
       let preloadedSubscribed = MediaPreloader.shared.peekTask(for: item)?.isSubscribed
 
-      if canSubscribeMedia {
+      if canSubscribeMedia, item.type != "音乐" {
         Button {
           if let onSubscribe = onSubscribe {
             onSubscribe(item)

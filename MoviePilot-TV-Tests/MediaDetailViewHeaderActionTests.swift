@@ -435,8 +435,8 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let deletedMediaRequests = await DetailHeaderSubscriptionURLProtocol.stub.deletedMediaRequests()
 
     XCTAssertEqual(deletedSubscriptionIDs, [])
-    XCTAssertEqual(deletedMediaRequests.map(\.path), ["/api/v1/subscribe/media/tmdb:998877"])
-    XCTAssertEqual(deletedMediaRequests.map(\.query), [nil])
+    XCTAssertEqual(deletedMediaRequests.map(\.path), ["/api/v1/subscribe/media/998877"])
+    XCTAssertEqual(deletedMediaRequests.map(\.query), ["media_source=themoviedb"])
     XCTAssertEqual(preloadTask.isSubscribed, false)
   }
 
@@ -599,7 +599,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let deletedMediaRequests = await DetailHeaderSubscriptionURLProtocol.stub.deletedMediaRequests()
 
     XCTAssertEqual(deletedSubscriptionIDs, [])
-    XCTAssertEqual(deletedMediaRequests.map(\.path), ["/api/v1/subscribe/media/tmdb:998877"])
+    XCTAssertEqual(deletedMediaRequests.map(\.path), ["/api/v1/subscribe/media/998877"])
     XCTAssertEqual(preloadTask.isSubscribed, false)
   }
 
@@ -634,7 +634,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let deletedMediaRequests = await DetailHeaderSubscriptionURLProtocol.stub.deletedMediaRequests()
 
     XCTAssertEqual(deletedSubscriptionIDs, [])
-    XCTAssertEqual(deletedMediaRequests.map(\.path), ["/api/v1/subscribe/media/tmdb:998877"])
+    XCTAssertEqual(deletedMediaRequests.map(\.path), ["/api/v1/subscribe/media/998877"])
     XCTAssertEqual(preloadTask.isSubscribed, false)
   }
 
@@ -753,7 +753,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let deletedMediaRequests = await DetailHeaderSubscriptionURLProtocol.stub.deletedMediaRequests()
 
     XCTAssertEqual(deletedSubscriptionIDs, [])
-    XCTAssertEqual(deletedMediaRequests.map(\.path), ["/api/v1/subscribe/media/tmdb:998877"])
+    XCTAssertEqual(deletedMediaRequests.map(\.path), ["/api/v1/subscribe/media/998877"])
     XCTAssertEqual(preloadTask.isSubscribed, false)
   }
 
@@ -1299,7 +1299,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let deletedMediaRequests = await DetailHeaderSubscriptionURLProtocol.stub.deletedMediaRequests()
     XCTAssertTrue(success)
     XCTAssertEqual(deletedMediaRequests.map(\.absoluteString), [
-      "http://detail-header-subscription-tests.local/api/v1/subscribe/media/custom:abc%2Fdef%20value"
+      "http://detail-header-subscription-tests.local/api/v1/subscribe/media/abc%2Fdef%20value?media_source=custom"
     ])
   }
 
@@ -1884,35 +1884,39 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
       return try jsonResponse(subscriptionSnapshot)
     }
 
-    if method == "GET",
-      path.hasPrefix("/api/v1/subscribe/media/douban:")
-    {
-      if path.contains("detail-header-title-fallback-douban"),
-        let id = resolvedSubscriptionsByTMDBID[998_877] ?? nil
-      {
-        return try jsonResponse(#"{"id":\#(id),"name":"标题兜底订阅","type":"电视剧","season":1,"tmdbid":998877}"#)
-      }
-      if path.contains("detail-header-minimal-alias-douban"),
-        let id = resolvedSubscriptionsByTMDBID[998_877] ?? nil
-      {
-        return try jsonResponse(#"{"id":\#(id)}"#)
-      }
-      return try jsonResponse("{}")
-    }
+    if method == "GET", path.hasPrefix("/api/v1/subscribe/media/") {
+      let mediaId = url.lastPathComponent
+      let mediaSource = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+        .queryItems?
+        .first(where: { $0.name == "media_source" })?
+        .value
 
-    if method == "GET",
-      path.hasPrefix("/api/v1/subscribe/media/bangumi:")
-    {
-      if path.contains("bangumi:12345"),
-        let id = resolvedSubscriptionsByTMDBID[998_877] ?? nil
-      {
-        return try jsonResponse(#"{"id":\#(id),"name":"Bangumi 订阅","type":"电视剧","season":1,"bangumiid":12345}"#)
+      if mediaSource == "douban" {
+        if mediaId.contains("detail-header-title-fallback-douban"),
+          let id = resolvedSubscriptionsByTMDBID[998_877] ?? nil
+        {
+          return try jsonResponse(#"{"id":\#(id),"name":"标题兜底订阅","type":"电视剧","season":1,"tmdbid":998877}"#)
+        }
+        if mediaId.contains("detail-header-minimal-alias-douban"),
+          let id = resolvedSubscriptionsByTMDBID[998_877] ?? nil
+        {
+          return try jsonResponse(#"{"id":\#(id)}"#)
+        }
+        return try jsonResponse("{}")
       }
-      return try jsonResponse("{}")
-    }
 
-    if method == "GET", path.hasPrefix("/api/v1/subscribe/media/tmdb:") {
-      let tmdbId = path.split(separator: ":").last.flatMap { Int($0) }
+      if mediaSource == "bangumi" {
+        if mediaId == "12345",
+          let id = resolvedSubscriptionsByTMDBID[998_877] ?? nil
+        {
+          return try jsonResponse(#"{"id":\#(id),"name":"Bangumi 订阅","type":"电视剧","season":1,"bangumiid":12345}"#)
+        }
+        return try jsonResponse("{}")
+      }
+
+      let tmdbId = (mediaSource == "themoviedb" || mediaSource == "tmdb")
+        ? Int(mediaId)
+        : nil
       if let tmdbId {
         lookupCountsByTMDBID[tmdbId, default: 0] += 1
         if failedLookupTMDBIDs.contains(tmdbId) {
@@ -1946,6 +1950,7 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
 
     if method == "DELETE",
       path.hasPrefix("/api/v1/subscribe/"),
+      !path.hasPrefix("/api/v1/subscribe/media/"),
       let id = path.split(separator: "/").last.flatMap({ Int($0) })
     {
       if deleteSucceeds,
@@ -1958,8 +1963,14 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
     }
 
     if method == "DELETE", path.hasPrefix("/api/v1/subscribe/media/") {
+      let mediaId = url.lastPathComponent
+      let mediaSource = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+        .queryItems?
+        .first(where: { $0.name == "media_source" })?
+        .value
       if deleteSucceeds,
-        let tmdbId = path.split(separator: ":").last.flatMap({ Int($0) })
+        mediaSource == "themoviedb" || mediaSource == "tmdb",
+        let tmdbId = Int(mediaId)
       {
         resolvedSubscriptionsByTMDBID[tmdbId] = nil
       }

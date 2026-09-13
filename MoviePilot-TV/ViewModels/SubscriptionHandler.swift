@@ -36,7 +36,7 @@ class SubscriptionHandler: ObservableObject {
 
   func handleSubscribe(_ item: MediaInfo, expectedSubscribed: Bool) {
     guard apiService.canAccess(.subscribe) else { return }
-    guard !item.isCollection else { return }
+    guard !item.isCollection, item.type != "音乐" else { return }
 
     if item.canDirectlySubscribe {
       guard !isCheckingSubscription, !isUnsubscribing else { return }
@@ -262,6 +262,8 @@ class SubscriptionHandler: ObservableObject {
     return try await apiService.fetchSubscriptionLookup(
       media: MediaInfo(
         tmdb_id: tmdbId,
+        source: "themoviedb",
+        media_id: String(tmdbId),
         title: item.title,
         type: item.type,
         season: item.season

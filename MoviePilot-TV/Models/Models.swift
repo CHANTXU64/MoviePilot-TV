@@ -657,7 +657,9 @@ nonisolated struct MediaInfoJSON: Decodable {
     anilist_id = try container.decodeIfPresent(Int.self, forKey: .anilist_id)
     imdb_id = try container.decodeIfPresent(String.self, forKey: .imdb_id)
     tvdb_id = try container.decodeIfPresent(Int.self, forKey: .tvdb_id)
-    source = try container.decodeIfPresent(String.self, forKey: .source)
+    source =
+      try container.decodeIfPresent(String.self, forKey: .media_source)
+      ?? container.decodeIfPresent(String.self, forKey: .source)
     mediaid_prefix = try container.decodeIfPresent(String.self, forKey: .mediaid_prefix)
     media_id = try container.decodeIfPresent(String.self, forKey: .media_id)
     title = try container.decodeIfPresent(String.self, forKey: .title)
@@ -815,7 +817,7 @@ nonisolated struct MediaInfo: Codable, Identifiable, Hashable {
   }
 
   enum CodingKeys: String, CodingKey {
-    case tmdb_id, douban_id, bangumi_id, anilist_id, imdb_id, tvdb_id, source,
+    case tmdb_id, douban_id, bangumi_id, anilist_id, imdb_id, tvdb_id, source, media_source,
       mediaid_prefix, media_id, title,
       original_title, original_name, names,
       type, year, season, poster_path, backdrop_path,
@@ -943,7 +945,9 @@ nonisolated struct MediaInfo: Codable, Identifiable, Hashable {
     anilist_id = try container.decodeIfPresent(Int.self, forKey: .anilist_id)
     imdb_id = try container.decodeIfPresent(String.self, forKey: .imdb_id)
     tvdb_id = try container.decodeIfPresent(Int.self, forKey: .tvdb_id)
-    source = try container.decodeIfPresent(String.self, forKey: .source)
+    source =
+      try container.decodeIfPresent(String.self, forKey: .media_source)
+      ?? container.decodeIfPresent(String.self, forKey: .source)
     mediaid_prefix = try container.decodeIfPresent(String.self, forKey: .mediaid_prefix)
     media_id = try container.decodeIfPresent(String.self, forKey: .media_id)
     title = try container.decodeIfPresent(String.self, forKey: .title)
@@ -1010,6 +1014,7 @@ nonisolated struct MediaInfo: Codable, Identifiable, Hashable {
     try encode(imdb_id, .imdb_id)
     try encode(tvdb_id, .tvdb_id)
     try encode(source, .source)
+    try encode(source, .media_source)
     try encode(mediaid_prefix, .mediaid_prefix)
     try encode(media_id, .media_id)
     try encode(title, .title)
@@ -1207,9 +1212,9 @@ nonisolated struct MediaInfo: Codable, Identifiable, Hashable {
   }
 
   /// 判断媒体是否可以直接订阅，无需选择季。
-  /// Web 只将明确的电视剧放入分季流程，合集不提供订阅入口。
+  /// Web 只将明确的电视剧放入分季流程，合集不提供订阅入口；音乐走独立订阅链，TV 暂不跟进。
   var canDirectlySubscribe: Bool {
-    !isCollection && type != "电视剧"
+    !isCollection && type != "电视剧" && type != "音乐"
   }
 
   static func == (lhs: MediaInfo, rhs: MediaInfo) -> Bool {
@@ -2124,8 +2129,8 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
       doubanid: doubanid,
       bangumiid: bangumiid,
       anilistid: anilistid,
-      media_source: media_source,
-      media_id: media_id,
+      media_source: identity?.source,
+      media_id: identity?.mediaId,
       mediaid: mediaid,
       season: season,
       best_version: best_version,
@@ -2849,6 +2854,10 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
   let media_source: String?
   // 来源原生 ID
   let media_id: String?
+  // 音乐实体类型；影视分享通常为空，Fork 时按 Web 原样回传。
+  let music_type: String?
+  // 专辑总曲目数；影视分享通常为空。
+  let total_tracks: Int?
   // 季号
   let season: Int?
   // 海报
@@ -2871,6 +2880,16 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
   let resolution: String?
   // 特效
   let effect: String?
+  // 音质等级正则；v3 分享对象可写，Fork 必须回传。
+  let audio_quality: String?
+  // 音频格式正则
+  let audio_format: String?
+  // 最低码率（bps）
+  let min_bitrate: Int?
+  // 最低位深（bit）
+  let min_bit_depth: Int?
+  // 最低采样率（Hz）
+  let min_sample_rate: Int?
   // 总集数
   let total_episode: Int?
   // 时间
@@ -2879,6 +2898,8 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
   let custom_words: String?
   // 自定义媒体类别
   let media_category: String?
+  // 自定义媒体类别稳定 ID；v3 分享对象可写，Fork 必须回传。
+  let media_category_id: String?
   // 复用次数
   let count: Int?
   // 自定义剧集组
@@ -2893,10 +2914,12 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
     case raw_id = "id"
     case subscribe_id, share_title, share_comment, share_user, share_uid, name, year, type, keyword,
       tmdbid,
-      doubanid, bangumiid, anilistid, media_source, media_id, season, poster, backdrop, vote,
+      doubanid, bangumiid, anilistid, media_source, media_id, music_type, total_tracks, season, poster,
+      backdrop, vote,
       description, filter, include, exclude,
       quality,
-      resolution, effect, total_episode, date, custom_words, media_category, count,
+      resolution, effect, audio_quality, audio_format, min_bitrate, min_bit_depth, min_sample_rate,
+      total_episode, date, custom_words, media_category, media_category_id, count,
       episode_group
   }
 
@@ -2918,6 +2941,8 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
     anilistid = try container.decodeIfPresent(Int.self, forKey: .anilistid)
     media_source = try container.decodeIfPresent(String.self, forKey: .media_source)
     media_id = try container.decodeIfPresent(String.self, forKey: .media_id)
+    music_type = try container.decodeIfPresent(String.self, forKey: .music_type)
+    total_tracks = try container.decodeIfPresent(Int.self, forKey: .total_tracks)
     season = try container.decodeIfPresent(Int.self, forKey: .season)
     poster = try container.decodeIfPresent(String.self, forKey: .poster)
     backdrop = try container.decodeIfPresent(String.self, forKey: .backdrop)
@@ -2929,10 +2954,16 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
     quality = try container.decodeIfPresent(String.self, forKey: .quality)
     resolution = try container.decodeIfPresent(String.self, forKey: .resolution)
     effect = try container.decodeIfPresent(String.self, forKey: .effect)
+    audio_quality = try container.decodeIfPresent(String.self, forKey: .audio_quality)
+    audio_format = try container.decodeIfPresent(String.self, forKey: .audio_format)
+    min_bitrate = try container.decodeIfPresent(Int.self, forKey: .min_bitrate)
+    min_bit_depth = try container.decodeIfPresent(Int.self, forKey: .min_bit_depth)
+    min_sample_rate = try container.decodeIfPresent(Int.self, forKey: .min_sample_rate)
     total_episode = try container.decodeIfPresent(Int.self, forKey: .total_episode)
     date = try container.decodeIfPresent(String.self, forKey: .date)
     custom_words = try container.decodeIfPresent(String.self, forKey: .custom_words)
     media_category = try container.decodeIfPresent(String.self, forKey: .media_category)
+    media_category_id = try container.decodeIfPresent(String.self, forKey: .media_category_id)
     count = try container.decodeIfPresent(Int.self, forKey: .count)
     episode_group = try container.decodeIfPresent(String.self, forKey: .episode_group)
 
@@ -3279,7 +3310,7 @@ nonisolated struct ManualTransferPreviewItem: Codable, Hashable {
   let season: JSONValue?
   let episode: JSONValue?
   let episode_end: JSONValue?
-  let part: String?
+  let part: JSONValue?
   let org_string: String?
   let apply_words: [String]?
   let resource_team: String?

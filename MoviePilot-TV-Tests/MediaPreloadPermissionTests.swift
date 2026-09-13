@@ -870,16 +870,16 @@ private final class MediaPreloadPermissionURLProtocolStub: @unchecked Sendable {
     lock.unlock()
 
     switch path {
-    case "/api/v1/media/tmdb:123":
+    case "/api/v1/media/123":
       return (200, jsonData(#"{"tmdb_id":123,"title":"Limited Show","type":"电视剧"}"#))
-    case "/api/v1/media/tmdb:456":
+    case "/api/v1/media/456":
       return (200, jsonData(#"{"tmdb_id":456,"title":"Limited Movie","type":"电影"}"#))
-    case "/api/v1/media/bangumi:987":
+    case "/api/v1/media/987":
       return (200, jsonData(#"{"bangumi_id":987,"title":"无法识别的 Bangumi 条目","type":"电视剧"}"#))
-    case "/api/v1/media/custom:fixture-221a":
+    case "/api/v1/media/fixture-221a":
       // partial 为 custom（无可识别身份）；full detail 补出 douban_id（canJumpToTMDB 翻 true）但无 TMDB。
       return (200, jsonData(#"{"douban_id":"db-221a","title":"AAA 无法识别的自定义条目","type":"电视剧"}"#))
-    case "/api/v1/media/custom:fixture-221b":
+    case "/api/v1/media/fixture-221b":
       return (200, jsonData(#"{"douban_id":"db-221b","title":"BBB 可识别的自定义条目","type":"电视剧"}"#))
     case "/api/v1/media/search":
       // 仅命中 "BBB 可识别的自定义条目"；AAA/Bangumi 标题不匹配 → 走 no-result。

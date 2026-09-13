@@ -148,7 +148,8 @@ final class ReorganizeFormEncodingTests: XCTestCase {
             "target": "/library/Show/S01E01.mkv",
             "success": true,
             "season": "1",
-            "episode": 1
+            "episode": 1,
+            "part": 2
           }],
           "message": "预览完成"
         }
@@ -159,6 +160,21 @@ final class ReorganizeFormEncodingTests: XCTestCase {
     XCTAssertEqual(data.summary.total, 1)
     XCTAssertEqual(data.items.first?.season, .string("1"))
     XCTAssertEqual(data.items.first?.episode, .int(1))
+    XCTAssertEqual(data.items.first?.part, .int(2))
+  }
+
+  func testPreviewItemPartAcceptsStringOrInteger() throws {
+    let stringPart = try JSONDecoder().decode(
+      ManualTransferPreviewItem.self,
+      from: Data(#"{"success":true,"part":"C"}"#.utf8)
+    )
+    let intPart = try JSONDecoder().decode(
+      ManualTransferPreviewItem.self,
+      from: Data(#"{"success":true,"part":1}"#.utf8)
+    )
+
+    XCTAssertEqual(stringPart.part, .string("C"))
+    XCTAssertEqual(intPart.part, .int(1))
   }
 
   private func encodedJSONObject(_ form: ReorganizeForm) throws -> [String: Any] {

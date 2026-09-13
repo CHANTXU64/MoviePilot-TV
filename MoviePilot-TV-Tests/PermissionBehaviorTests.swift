@@ -32,7 +32,7 @@ final class PermissionVisibleEntryTests: XCTestCase {
     )
     XCTAssertTrue(source.contains("if !item.isCollection {"), "合集不应显示订阅或搜索入口。")
     XCTAssertTrue(
-      source.contains("if canSubscribeMedia {\n        Button"),
+      source.contains("if canSubscribeMedia, item.type != \"音乐\" {\n        Button"),
       "长按菜单“订阅/分季订阅”必须在 subscribe 权限门之后。"
     )
     XCTAssertTrue(
@@ -137,7 +137,7 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
       XCTAssertEqual(handler.sheetSubscribe?.type, "电影")
       let subscriptionLookupCount = await PermissionBehaviorURLProtocol.stub.requestCount(
         method: "GET",
-        path: "/api/v1/subscribe/media/tmdb:901"
+        path: "/api/v1/subscribe/media/901"
       )
       XCTAssertEqual(subscriptionLookupCount, 1)
 
@@ -167,7 +167,7 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
       XCTAssertNil(unknownHandler.tvSubscribeRequest)
       let unknownLookupCount = await PermissionBehaviorURLProtocol.stub.requestCount(
         method: "GET",
-        path: "/api/v1/subscribe/media/tmdb:903"
+        path: "/api/v1/subscribe/media/903"
       )
       XCTAssertEqual(unknownLookupCount, 1)
 
@@ -187,7 +187,7 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
       XCTAssertNil(collectionHandler.tvSubscribeRequest)
       let collectionLookupCount = await PermissionBehaviorURLProtocol.stub.requestCount(
         method: "GET",
-        path: "/api/v1/subscribe/media/tmdb:904"
+        path: "/api/v1/subscribe/media/904"
       )
       XCTAssertEqual(collectionLookupCount, 0)
     }

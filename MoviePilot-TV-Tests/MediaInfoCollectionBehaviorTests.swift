@@ -184,6 +184,32 @@ final class MediaInfoCollectionBehaviorTests: XCTestCase {
     XCTAssertEqual(tmdb.apiMediaId, "tmdb:42")
   }
 
+  func testV3MediaSourceFieldPopulatesIdentityWithoutLegacySourceKey() throws {
+    let media = try JSONDecoder().decode(
+      MediaInfo.self,
+      from: Data(
+        #"{"media_source":"douban","media_id":"34943510","tmdb_id":550,"title":"搏击俱乐部","type":"电影"}"#
+          .utf8
+      )
+    )
+
+    XCTAssertEqual(media.source, "douban")
+    XCTAssertEqual(media.identity, MediaIdentity(source: "douban", mediaId: "34943510"))
+    XCTAssertEqual(media.apiMediaId, "douban:34943510")
+    XCTAssertEqual(media.tmdb_id, 550)
+  }
+
+  func testMusicTypeIsNotDirectlySubscribableOnTV() {
+    XCTAssertFalse(
+      MediaInfo(
+        source: "musicbrainz",
+        media_id: "abc",
+        title: "Album",
+        type: "音乐"
+      ).canDirectlySubscribe
+    )
+  }
+
   func testManualMediaIdAllowsEmptyAndPositiveASCIIDigitsOnly() {
     XCTAssertTrue(MediaIdentifier.isValidManualMediaId(nil))
     XCTAssertTrue(MediaIdentifier.isValidManualMediaId("  "))

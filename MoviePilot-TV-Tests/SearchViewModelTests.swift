@@ -335,7 +335,7 @@ final class SearchViewModelTests: XCTestCase {
 
     XCTAssertFalse(viewModel.isLoading)
     let mediaStreamRequestCount = await SearchViewModelURLProtocol.stub.requestCount(
-      path: "/api/v1/search/media/anilist:154587/stream"
+      path: "/api/v1/search/media/154587/stream"
     )
     let titleStreamRequestCount = await SearchViewModelURLProtocol.stub.requestCount(
       path: "/api/v1/search/title/stream"
@@ -1339,7 +1339,8 @@ private actor SearchViewModelURLProtocolStub {
       path: components.path,
       query: query,
       type: queryItems.first(where: { $0.name == "type" })?.value,
-      source: queryItems.first(where: { $0.name == "source" })?.value
+      source: queryItems.first(where: { $0.name == "media_source" })?.value
+        ?? queryItems.first(where: { $0.name == "source" })?.value
     )
 
     if components.path == "/api/v1/system/setting/CustomFilterRules",
@@ -1395,7 +1396,8 @@ private actor SearchViewModelURLProtocolStub {
         path: components.path,
         query: query,
         type: queryItems.first(where: { $0.name == "type" })?.value,
-        source: queryItems.first(where: { $0.name == "source" })?.value
+        source: queryItems.first(where: { $0.name == "media_source" })?.value
+        ?? queryItems.first(where: { $0.name == "source" })?.value
       )
     )
   }

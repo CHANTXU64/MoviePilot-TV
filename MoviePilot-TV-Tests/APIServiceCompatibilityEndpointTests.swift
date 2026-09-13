@@ -269,7 +269,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
     let queries = await CompatibilityEndpointURLProtocol.stub.requestQueries()
     let actionIndexes = paths.indices.filter { paths[$0].hasPrefix("/api/v1/subscribe/") }
-    XCTAssertEqual(actionIndexes.map { methods[$0] }, ["PUT", "GET", "GET"])
+    XCTAssertEqual(actionIndexes.map { methods[$0] }, ["PUT", "POST", "POST"])
     XCTAssertEqual(
       actionIndexes.map { paths[$0] },
       [
@@ -327,7 +327,13 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     let existsQuery = try XCTUnwrap(capturedExistsQuery)
     XCTAssertEqual(
       Set(existsQuery.split(separator: "&").map(String.init)),
-      Set(["tmdbid=42", "title=%E7%94%B5%E5%BD%B1", "year=2026", "mtype=%E7%94%B5%E5%BD%B1"])
+      Set([
+        "media_source=themoviedb",
+        "media_id=42",
+        "title=%E7%94%B5%E5%BD%B1",
+        "year=2026",
+        "mtype=%E7%94%B5%E5%BD%B1",
+      ])
     )
   }
 
@@ -396,7 +402,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
         "title": "葬送的芙莉莲",
         "page": "1",
         "count": "20",
-        "source": "anilist",
+        "media_source": "anilist",
       ]
     )
     XCTAssertNil(query["type"])
@@ -426,11 +432,11 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     let searchQuery = Self.queryValues(
       await CompatibilityEndpointURLProtocol.stub.requestQuery(suffix: "/media/search")
     )
-    XCTAssertEqual(searchQuery["source"], "themoviedb")
+    XCTAssertEqual(searchQuery["media_source"], "themoviedb")
     let recognizeQuery = Self.queryValues(
       await CompatibilityEndpointURLProtocol.stub.requestQuery(suffix: "/media/recognize")
     )
-    XCTAssertEqual(recognizeQuery["source"], "themoviedb")
+    XCTAssertEqual(recognizeQuery["media_source"], "themoviedb")
     XCTAssertEqual(recognizeQuery["title"], "搜索未命中 2026")
   }
 
@@ -533,8 +539,13 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
 
     let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
     XCTAssertEqual(paths.filter { $0.hasPrefix("/api/v1/media/") }, [
-      "/api/v1/media/custom:native-9"
+      "/api/v1/media/native-9"
     ])
+    let query = Self.queryValues(
+      await CompatibilityEndpointURLProtocol.stub.requestQuery(suffix: "/media/native-9")
+    )
+    XCTAssertEqual(query["media_source"], "custom")
+    XCTAssertEqual(query["type_name"], "电影")
   }
 
   func testSubscriptionShareGETThenForkPreservesCurrentIdentitySchema() async throws {

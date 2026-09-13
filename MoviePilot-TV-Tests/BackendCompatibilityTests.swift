@@ -2790,12 +2790,13 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     media: MediaInfo,
     season: Int? = nil
   ) async throws {
-    guard let mediaId = media.apiMediaId else { return }
+    guard let identity = media.identity else { return }
 
     let url = try compatibilityAPIURL(
       service: service,
-      path: "/subscribe/media/\(mediaId)",
+      path: "/subscribe/media/\(identity.mediaId)",
       params: [
+        "media_source": identity.source,
         "season": season.map(String.init),
         "title": media.title,
       ])
