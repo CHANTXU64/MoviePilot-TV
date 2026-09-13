@@ -3016,18 +3016,34 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
 
     // `share_uid` 是安装实例的唯一 ID，稳定且分享人改不掉，优先于可改名的 `share_user`。
     // 用 `u:` / `n:` 前缀区分来源：否则「uid == 某人的显示名」时两条记录会拼成同一槽。
-    // 两者都仍走 `normalizedTextIdentifier`（哨兵值 `"0"`/`"-1"` 一律当没给）——
-    // 加前缀只是补上来源标签，不改变「什么算有效值」这层既有口径。
+    //
+    // 两者都走 `normalizedText` 而**不是** `normalizedTextIdentifier`：哨兵规则
+    //（`"0"`/`"-1"` 当作没给）是为后端用数字表示「没有」的**数值 ID 字段**定的，
+    // 而这两个是「谁分享的」—— `share_user` 是显示名，后端 `Optional[str]` 没规定
+    // 叫 `"0"` 的名字无效。套上去的后果是把两个叫 `"0"` 和 `"-1"` 的人清洗成同一个
+    // 「没给」，于是只剩 `subscribe_id` 相同就拼出同一个身份，**静默漏卡**。
     let owner: String?
-    if let uid = normalizedTextIdentifier(share_uid) {
+    if let uid = normalizedText(share_uid) {
       owner = "u:\(uid)"
-    } else if let user = normalizedTextIdentifier(share_user) {
+    } else if let user = normalizedText(share_user) {
       owner = "n:\(user)"
     } else {
       owner = nil
     }
+    // 三审（2026-09-13）：够不够断定「是同一条分享」，**只看分享自哪条订阅**。
+    //
+    // 原先写的是 `owner != nil || subscribe != nil`，等于「只要知道分享人就算数」。但分享人
+    // 能对上，不代表是同一条分享 —— 同一个人完全可能把同一部剧的 2160p 与 1080p 各开一条订阅
+    // 分别分享。缺 `subscribe_id` 时这两条会被并成一条，后者**静默消失**。
+    // 更退化的一路是只剩 `name` 兜底时：同名电影 1984 与 2021 也会被当成同一条。
+    // 编码再严谨也救不了「信息本身不足以区分」—— 长度前缀只保证不同字段组合不产生歧义，
+    // 不能让不唯一的信息变得唯一。
+    //
+    // 故收紧为必须有 `subscribe_id`：拿不准就退回随机身份（各自成卡）。
+    // 代价照实记下：缺 `subscribe_id` 的记录跨页重复时不再自动合并，会看到重复卡 ——
+    // 这与 F-078 的原始口径一致：**宁可多一张看得见的重复卡，不少一张看不见的卡**。
     let subscribe = normalizedNumberIdentifier(subscribe_id)
-    guard owner != nil || subscribe != nil else { return nil }
+    guard subscribe != nil else { return nil }
 
     let slots: [String?] = [
       // 这两槽是内容固有属性（`"mteam"`、`"电影"` 这类），不是后端用数字表示「没有」的

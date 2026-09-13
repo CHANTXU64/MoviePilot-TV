@@ -198,11 +198,11 @@ final class SubscriptionShareDedupTests: XCTestCase {
   /// 字符串形态的哨兵值（`"0"` / `"-1"`）也不算媒体标识 —— 后端 `doubanid` / `media_id`
   /// 都是字符串，同款判断不能只在数字字段上做。
   func testNumericSentinelStringsAreNotUsedAsMediaIdentity() throws {
+    let firstJSON = Self.shareJSON(
+      rawId: nil, tmdbid: nil, user: "alice", includeMediaName: false,
+      doubanid: "-1", mediaId: "0")
     let items = [
-      try makeMediaInfo(
-        json: Self.shareJSON(
-          rawId: nil, tmdbid: nil, user: "alice", includeMediaName: false,
-          doubanid: "-1", mediaId: "0")),
+      try makeMediaInfo(json: firstJSON),
       try makeMediaInfo(
         json: Self.shareJSON(
           rawId: nil, tmdbid: nil, user: "alice", includeMediaName: false,
@@ -213,9 +213,133 @@ final class SubscriptionShareDedupTests: XCTestCase {
     let uniqueItems = MediaInfo.deduplicateSubscriptionShareMedia(items, existingKeys: &seenKeys)
 
     XCTAssertEqual(uniqueItems.count, 2, "哨兵值不能充当媒体标识，两条记录必须各自成卡")
-    XCTAssertFalse(
-      uniqueItems.map(\.id).contains { $0.contains("Share-") },
-      "媒体标识全无效时必须退回随机身份，而不是拿哨兵值拼一个 `Share-0-...`")
+
+    // 三审反例 C：这里原先断言「`id` 不含 `Share-`」，但确定性兜底 key 早已改成 `Share|n|…`，
+    // 该断言对「是否真的退回了随机身份」毫无判别力 —— 实测把 `normalizedTextIdentifier` 里的
+    // 哨兵判据**整条删掉**，本用例与相邻两条「哨兵」用例依然全绿。改为直接验证身份是 UUID。
+    for shareID in uniqueItems.compactMap({ $0.subscribeShare?.id }) {
+      XCTAssertNotNil(
+        UUID(uuidString: shareID),
+        "媒体标识全无效时必须退回随机身份，实际得到 `\(shareID)`")
+    }
+
+    // 「随机」不能只是名义上的：同一份退化输入再解码一次必须得到**不同**身份。
+    let again = try makeMediaInfo(json: firstJSON)
+    var repeatKeys = Set<String>()
+    let reparsed = MediaInfo.deduplicateSubscriptionShareMedia([again], existingKeys: &repeatKeys)
+
+    XCTAssertNotEqual(
+      reparsed.first?.subscribeShare?.id, uniqueItems.first?.subscribeShare?.id,
+      "同一份退化输入两次解析必须各自成卡，否则一旦拼出确定 key 就会跨页去重、漏卡")
+  }
+
+  /// 三审反例 C 的**判别力对照**：守着「文本型哨兵值不算媒体标识」的其实是这一条。
+  ///
+  /// 两条记录其实是同一部豆瓣片子，只是其中一条多带了个 `media_id: "0"` 哨兵。
+  /// 哨兵判据在位 → `media_id` 让位给有效的 `doubanid` → 两条拼出同一身份 → 并成一条；
+  /// 判据被删 → `media_id:"0"` 会被当成真标识 → 两条分道扬镳。
+  func testTextSentinelMediaIdYieldsToValidDoubanId() throws {
+    let items = [
+      try makeMediaInfo(
+        json: Self.shareJSON(
+          rawId: nil, tmdbid: nil, user: "alice", includeMediaName: false,
+          doubanid: "12345", mediaId: "0")),
+      try makeMediaInfo(
+        json: Self.shareJSON(
+          rawId: nil, tmdbid: nil, user: "alice", includeMediaName: false,
+          doubanid: "12345")),
+    ]
+
+    var seenKeys = Set<String>()
+    let uniqueItems = MediaInfo.deduplicateSubscriptionShareMedia(items, existingKeys: &seenKeys)
+
+    XCTAssertEqual(
+      uniqueItems.count, 1,
+      "`media_id` 的 \"0\" 是哨兵，必须让位给有效的 `doubanid` —— 这两条是同一部片子")
+  }
+
+  /// 三审反例 A：`share_user` 是**显示名**，不是数字媒体 ID，不该套哨兵规则。
+  ///
+  /// 老实现（`normalizedTextIdentifier`）会把叫 `"0"` / `"-1"` 的分享人清洗成「没给」，
+  /// 两条只剩 `subscribe_id` 相同的记录就此拼出同一个 key，后者被静默过滤 —— 又是漏卡。
+  func testNumericLookingShareUserNamesAreNotTreatedAsSentinels() throws {
+    let items = [
+      try makeMediaInfo(json: Self.shareJSON(rawId: nil, tmdbid: 9001, user: "0")),
+      try makeMediaInfo(json: Self.shareJSON(rawId: nil, tmdbid: 9001, user: "-1")),
+    ]
+
+    var seenKeys = Set<String>()
+    let uniqueItems = MediaInfo.deduplicateSubscriptionShareMedia(items, existingKeys: &seenKeys)
+
+    XCTAssertEqual(
+      uniqueItems.count, 2,
+      "分享人叫「0」和叫「-1」是两个人，不能因为名字长得像数字就当成同一条分享")
+  }
+
+  /// 三审反例 B①：只知道「谁分享的」、不知道「分享自哪条订阅」时，当前实现照样生成确定身份。
+  ///
+  /// 同一个人的两条分享（2160p / 1080p，标题也不同）会被并成一条。
+  func testSameSharerWithoutSubscribeIdDoesNotMergeDistinctShares() throws {
+    let items = [
+      try makeMediaInfo(
+        json: Self.shareJSON(
+          rawId: nil, tmdbid: 9001, user: "alice", title: "Shared Show 2160p",
+          subscribeId: nil, shareUid: "uid-alice")),
+      try makeMediaInfo(
+        json: Self.shareJSON(
+          rawId: nil, tmdbid: 9001, user: "alice", title: "Shared Show 1080p",
+          subscribeId: nil, shareUid: "uid-alice")),
+    ]
+
+    var seenKeys = Set<String>()
+    let uniqueItems = MediaInfo.deduplicateSubscriptionShareMedia(items, existingKeys: &seenKeys)
+
+    XCTAssertEqual(
+      uniqueItems.count, 2,
+      "缺 subscribe_id 时仅凭「同一分享人 + 同一媒体」不足以断定是同一条分享")
+  }
+
+  /// 三审反例 B②：媒体 ID 全缺、只剩订阅名称兜底时，同名不同年的两部片子会撞成一条。
+  func testSameNameDifferentYearsDoNotCollideWhenOnlyNameIsAvailable() throws {
+    let items = [
+      try makeMediaInfo(
+        json: Self.shareJSON(
+          rawId: nil, tmdbid: nil, user: "alice", title: "同名电影",
+          subscribeId: nil, shareUid: "uid-alice", year: "1984")),
+      try makeMediaInfo(
+        json: Self.shareJSON(
+          rawId: nil, tmdbid: nil, user: "alice", title: "同名电影",
+          subscribeId: nil, shareUid: "uid-alice", year: "2021")),
+    ]
+
+    var seenKeys = Set<String>()
+    let uniqueItems = MediaInfo.deduplicateSubscriptionShareMedia(items, existingKeys: &seenKeys)
+
+    XCTAssertEqual(
+      uniqueItems.count, 2,
+      "同名电影 1984 与 2021 是两部片子，光凭名称相同不能认定是同一条分享")
+  }
+
+  /// **代价固化（三审裁决的已知取舍，不是缺陷）**：收紧为「必须有 `subscribe_id`」之后，
+  /// 缺 `subscribe_id` 的记录不再有确定身份 —— 同一份分享在两页各出现一次时**不会**被并掉，
+  /// 用户会看到两张重复卡。
+  ///
+  /// 这是刻意选的：可见的重复卡好过看不见的漏卡。写在这里是为了让它显式存在，
+  /// 将来若有人想「顺手把跨页重复也合掉」，会先看到这条再决定要不要推翻该取舍。
+  func testRecordsWithoutSubscribeIdAreKnowinglyNotDeduplicatedAcrossPages() throws {
+    let json = Self.shareJSON(
+      rawId: nil, tmdbid: 9001, user: "alice", subscribeId: nil, shareUid: "uid-alice")
+    let firstPage = [try makeMediaInfo(json: json)]
+    let secondPage = [try makeMediaInfo(json: json)]
+
+    var seenKeys = Set<String>()
+    XCTAssertEqual(
+      MediaInfo.deduplicateSubscriptionShareMedia(firstPage, existingKeys: &seenKeys).count,
+      1)
+    XCTAssertEqual(
+      MediaInfo.deduplicateSubscriptionShareMedia(secondPage, existingKeys: &seenKeys).count,
+      1,
+      "缺 subscribe_id 时信息不足以断定是同一条分享，跨页不再合并 —— 已裁决接受的代价")
   }
 
   /// 反例二：**跨来源同号**。不同站点的原生 `media_id` 各自从 1 开始编号，
@@ -399,7 +523,8 @@ final class SubscriptionShareDedupTests: XCTestCase {
     season: Int? = 1,
     subscribeId: Int? = 200,
     shareUid: String? = nil,
-    comment: String? = nil
+    comment: String? = nil,
+    year: String = "2024"
   ) -> String {
     var fields: [String] = []
     if let rawId { fields.append("\"id\": \(rawId)") }
@@ -409,7 +534,7 @@ final class SubscriptionShareDedupTests: XCTestCase {
     if let user { fields.append("\"share_user\": \"\(user)\"") }
     if let shareUid { fields.append("\"share_uid\": \"\(shareUid)\"") }
     if includeMediaName { fields.append("\"name\": \"\(title)\"") }
-    fields.append("\"year\": \"2024\"")
+    fields.append("\"year\": \"\(year)\"")
     if includeType { fields.append("\"type\": \"电视剧\"") }
     fields.append("\"keyword\": \"\(title)\"")
     if let tmdbid { fields.append("\"tmdbid\": \(tmdbid)") }
