@@ -41,7 +41,7 @@
 - MoviePilot v2.15.3 起，新增订阅和存在性查重已按媒体身份、季号与 `episode_group` 区分；同一媒体同一季可以存在不同剧集组的订阅。创建请求必须保留所选剧集组。
 - MoviePilot Web v3.0.1 仍按媒体与 `season` 汇总已订阅状态，媒体级查询和取消传 `media_source`，仍没有传 `episode_group`；TV 跟随 Web 保持相同状态与操作范围，不擅自改成按剧集组取消。
 - `best_version` / `best_version_full` 的省略值当前表示使用后端默认配置，显式 `0` 表示普通订阅或关闭洗版。目标版本若改变空值、默认值或数值语义，TV 创建 payload 必须同步。
-- Web 快速新增当前发送精简配置；编辑当前先 GET 完整 `Subscribe`，再完整 PUT，并由后端裁剪不可写运行字段。MoviePilot v3.0.1 的 PUT 使用 `exclude_unset=True`，TV 编辑未暴露的新可写字段（`search_interval`、音质过滤、`media_category_id`）只要省略就不会被清空。每次 schema 更新都要逐字段对照 Web 请求体、后端公共可写/排除字段、TV `CodingKeys` 与最终编码，避免新可写字段在无关编辑后丢失，也不得盲目回传 owner、运行状态等不可写字段。
+- Web 快速新增当前发送精简配置；编辑当前先 GET 完整 `Subscribe`，再完整 PUT，并由后端裁剪不可写运行字段。MoviePilot v3.0.1 的 PUT 使用 `exclude_unset=True`：省略表示不修改，显式 `null` 才清空。TV 编辑页用户可清空的字段（包含/排除词、关键词、识别词、剧集组、保存路径等）必须发 `null`，不能 `encodeIfPresent` 省略；未暴露的新可写字段（`search_interval`、音质过滤、`media_category_id`）继续省略以保留。每次 schema 更新都要逐字段对照 Web 请求体、后端公共可写/排除字段、TV `CodingKeys` 与最终编码，避免新可写字段在无关编辑后丢失，也不得盲目回传 owner、运行状态等不可写字段。
 - `total_episode` 需要保留 `null`、`0`、正数三态及后端的人工集数语义。未修改保存不应把 `null` 变为 `0` 或意外切换人工模式；若后端默认值、更新逻辑或 Web 表单行为变化，TV 编码需同步。
 - `save_path == nil` 当前表示自动目录；非空值是后端可直接消费的本地路径或带 storage 的远程 URI。编辑时保留既有合法值并允许清空；若目录接口、存储 URI 格式或后端允许范围变化，TV 选择器与请求值必须一起复核。
 - 订阅写入、状态修改、搜索、重置、删除和 Fork 是否成功，必须按各端点在目标版本声明的响应 envelope 判断，不能只用 HTTP 2xx 推断。只有端点明确改为 `204` 或无正文成功时，TV 才接受空响应。

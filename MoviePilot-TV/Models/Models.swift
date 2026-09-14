@@ -2012,8 +2012,8 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
     try container.encode(name, forKey: .name)
     try container.encodeIfPresent(year, forKey: .year)
     try container.encode(type, forKey: .type)
-    try container.encodeIfPresent(keyword, forKey: .keyword)
-    try container.encodeIfPresent(season, forKey: .season)
+    try encodeUserClearableString(keyword, forKey: .keyword, to: &container)
+    try encodeUserClearableValue(season, forKey: .season, to: &container)
     try container.encodeIfPresent(poster, forKey: .poster)
     try container.encodeIfPresent(backdrop, forKey: .backdrop)
     try container.encodeIfPresent(vote, forKey: .vote)
@@ -2036,26 +2036,56 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
     try container.encodeIfPresent(anilistid, forKey: .anilistid)
     try container.encodeIfPresent(media_source, forKey: .media_source)
     try container.encodeIfPresent(media_id, forKey: .media_id)
-    try container.encodeIfPresent(quality, forKey: .quality)
-    try container.encodeIfPresent(resolution, forKey: .resolution)
-    try container.encodeIfPresent(effect, forKey: .effect)
-    try container.encodeIfPresent(include, forKey: .include)
-    try container.encodeIfPresent(exclude, forKey: .exclude)
+    try encodeUserClearableString(quality, forKey: .quality, to: &container)
+    try encodeUserClearableString(resolution, forKey: .resolution, to: &container)
+    try encodeUserClearableString(effect, forKey: .effect, to: &container)
+    try encodeUserClearableString(include, forKey: .include, to: &container)
+    try encodeUserClearableString(exclude, forKey: .exclude, to: &container)
     try container.encodeIfPresent(sites, forKey: .sites)
-    try container.encodeIfPresent(downloader, forKey: .downloader)
-    try container.encodeIfPresent(save_path, forKey: .save_path)
+    try encodeUserClearableString(downloader, forKey: .downloader, to: &container)
+    try encodeUserClearableString(save_path, forKey: .save_path, to: &container)
     try container.encodeIfPresent(best_version, forKey: .best_version)
     try container.encodeIfPresent(best_version_full, forKey: .best_version_full)
     try container.encodeIfPresent(current_priority, forKey: .current_priority)
     try container.encodeIfPresent(filter_groups, forKey: .filter_groups)
-    try container.encodeIfPresent(custom_words, forKey: .custom_words)
+    try encodeUserClearableString(custom_words, forKey: .custom_words, to: &container)
     try container.encodeIfPresent(description, forKey: .description)
-    try container.encodeIfPresent(filter, forKey: .filter)
-    try container.encodeIfPresent(episode_group, forKey: .episode_group)
+    try encodeUserClearableString(filter, forKey: .filter, to: &container)
+    try encodeUserClearableString(episode_group, forKey: .episode_group, to: &container)
     try container.encodeIfPresent(search_imdbid, forKey: .search_imdbid)
-    try container.encodeIfPresent(media_category, forKey: .media_category)
+    try encodeUserClearableString(media_category, forKey: .media_category, to: &container)
     try container.encodeIfPresent(mediaid, forKey: .mediaid)
     try container.encodeIfPresent(episode_priority, forKey: .episode_priority)
+  }
+
+  /// 已落库订阅的更新必须区分“未提交”和“用户明确清空”。
+  /// v3 PUT 使用 `exclude_unset=True`：省略字段表示不修改，显式 `null` 才清空。
+  private var encodesExplicitNullsForClearedFields: Bool {
+    (id ?? 0) > 0
+  }
+
+  private func encodeUserClearableString(
+    _ value: String?,
+    forKey key: CodingKeys,
+    to container: inout KeyedEncodingContainer<CodingKeys>
+  ) throws {
+    if let value = MediaIdentifier.normalizedString(value) {
+      try container.encode(value, forKey: key)
+    } else if encodesExplicitNullsForClearedFields {
+      try container.encodeNil(forKey: key)
+    }
+  }
+
+  private func encodeUserClearableValue<Value: Encodable>(
+    _ value: Value?,
+    forKey key: CodingKeys,
+    to container: inout KeyedEncodingContainer<CodingKeys>
+  ) throws {
+    if let value {
+      try container.encode(value, forKey: key)
+    } else if encodesExplicitNullsForClearedFields {
+      try container.encodeNil(forKey: key)
+    }
   }
 
   /// 成员初始化器，用于手动创建订阅。

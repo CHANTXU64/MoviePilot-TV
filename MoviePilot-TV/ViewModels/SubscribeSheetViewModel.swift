@@ -214,8 +214,7 @@ class SubscribeSheetViewModel: ObservableObject {
       self.filterGroups = f
 
       if subscribe.type == "电视剧",
-        subscribe.identity?.source == "themoviedb",
-        let tmdbId = MediaIdentifier.validNumericIdentifier(subscribe.tmdbid)
+        let tmdbId = Self.tmdbEpisodeGroupID(from: subscribe)
       {
         let groups = try await apiService.fetchEpisodeGroups(tmdbId: tmdbId)
         guard canPublishLoadResult(from: sessionSnapshot) else {
@@ -234,6 +233,17 @@ class SubscribeSheetViewModel: ObservableObject {
 
   private func canPublishLoadResult(from snapshot: APIServiceSessionSnapshot) -> Bool {
     apiService.isSessionUnchanged(from: snapshot) && apiService.canAccess(.subscribe)
+  }
+
+  /// v3 订阅主身份是 `media_source` + `media_id`；剧集组接口仍要 TMDB 数字 ID。
+  /// 从 identity 取正整数，兼容旧响应里只有 `tmdbid` 的记录。
+  static func tmdbEpisodeGroupID(from subscribe: Subscribe) -> Int? {
+    guard subscribe.identity?.source == "themoviedb",
+      let mediaId = subscribe.identity?.mediaId
+    else {
+      return nil
+    }
+    return MediaIdentifier.validNumericIdentifier(Int(mediaId))
   }
 
   private func currentCreatedSubscriptionReceipt() -> CreatedSubscriptionReceipt? {
