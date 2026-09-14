@@ -2039,8 +2039,8 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
     try encodeUserClearableString(quality, forKey: .quality, to: &container)
     try encodeUserClearableString(resolution, forKey: .resolution, to: &container)
     try encodeUserClearableString(effect, forKey: .effect, to: &container)
-    try encodeUserClearableString(include, forKey: .include, to: &container)
-    try encodeUserClearableString(exclude, forKey: .exclude, to: &container)
+    try encodeUserClearablePattern(include, forKey: .include, to: &container)
+    try encodeUserClearablePattern(exclude, forKey: .exclude, to: &container)
     try encodeUserClearableArray(sites, forKey: .sites, to: &container)
     try encodeUserClearableString(downloader, forKey: .downloader, to: &container)
     try encodeUserClearableString(save_path, forKey: .save_path, to: &container)
@@ -2070,6 +2070,19 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
     to container: inout KeyedEncodingContainer<CodingKeys>
   ) throws {
     if let value = MediaIdentifier.normalizedString(value) {
+      try container.encode(value, forKey: key)
+    } else if encodesExplicitNullsForClearedFields {
+      try container.encodeNil(forKey: key)
+    }
+  }
+
+  /// 包含/排除词按原始字符串提交。首尾空格可能是正则边界，不能用 ID 规范化裁掉。
+  private func encodeUserClearablePattern(
+    _ value: String?,
+    forKey key: CodingKeys,
+    to container: inout KeyedEncodingContainer<CodingKeys>
+  ) throws {
+    if let value, !value.isEmpty {
       try container.encode(value, forKey: key)
     } else if encodesExplicitNullsForClearedFields {
       try container.encodeNil(forKey: key)

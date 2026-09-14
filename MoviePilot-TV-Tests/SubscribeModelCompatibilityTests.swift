@@ -401,6 +401,25 @@ final class SubscribeModelCompatibilityTests: XCTestCase {
     XCTAssertFalse(json["filter_groups"] is NSNull)
   }
 
+  func testExistingSubscribePreservesIncludeExcludeWhitespaceWhenSavingOtherFields() throws {
+    var existing = Subscribe(
+      id: 48,
+      name: "保留正则空白",
+      type: "电影",
+      keyword: "1080p",
+      include: " DV ",
+      exclude: " CAM "
+    )
+    existing.keyword = "2160p"
+
+    let json = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: JSONEncoder().encode(existing)) as? [String: Any])
+
+    XCTAssertEqual(json["include"] as? String, " DV ")
+    XCTAssertEqual(json["exclude"] as? String, " CAM ")
+    XCTAssertEqual(json["keyword"] as? String, "2160p")
+  }
+
   func testNewSubscribeOmitsUnclearedOptionalEditableFields() throws {
     let created = Subscribe(name: "新订阅", type: "电影")
 
