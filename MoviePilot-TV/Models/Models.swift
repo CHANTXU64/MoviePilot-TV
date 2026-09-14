@@ -2041,13 +2041,13 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
     try encodeUserClearableString(effect, forKey: .effect, to: &container)
     try encodeUserClearableString(include, forKey: .include, to: &container)
     try encodeUserClearableString(exclude, forKey: .exclude, to: &container)
-    try container.encodeIfPresent(sites, forKey: .sites)
+    try encodeUserClearableArray(sites, forKey: .sites, to: &container)
     try encodeUserClearableString(downloader, forKey: .downloader, to: &container)
     try encodeUserClearableString(save_path, forKey: .save_path, to: &container)
     try container.encodeIfPresent(best_version, forKey: .best_version)
     try container.encodeIfPresent(best_version_full, forKey: .best_version_full)
     try container.encodeIfPresent(current_priority, forKey: .current_priority)
-    try container.encodeIfPresent(filter_groups, forKey: .filter_groups)
+    try encodeUserClearableArray(filter_groups, forKey: .filter_groups, to: &container)
     try encodeUserClearableString(custom_words, forKey: .custom_words, to: &container)
     try container.encodeIfPresent(description, forKey: .description)
     try encodeUserClearableString(filter, forKey: .filter, to: &container)
@@ -2059,7 +2059,7 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
   }
 
   /// 已落库订阅的更新必须区分“未提交”和“用户明确清空”。
-  /// v3 PUT 使用 `exclude_unset=True`：省略字段表示不修改，显式 `null` 才清空。
+  /// v3 PUT 使用 `exclude_unset=True`：省略表示不修改；字符串发 `null`，站点/规则组发 `[]`。
   private var encodesExplicitNullsForClearedFields: Bool {
     (id ?? 0) > 0
   }
@@ -2085,6 +2085,19 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
       try container.encode(value, forKey: key)
     } else if encodesExplicitNullsForClearedFields {
       try container.encodeNil(forKey: key)
+    }
+  }
+
+  private func encodeUserClearableArray<Value: Encodable>(
+    _ value: [Value]?,
+    forKey key: CodingKeys,
+    to container: inout KeyedEncodingContainer<CodingKeys>
+  ) throws {
+    if let value {
+      try container.encode(value, forKey: key)
+    } else if encodesExplicitNullsForClearedFields {
+      // Web 清空多选项发 `[]`，不是 `null`。
+      try container.encode([Value](), forKey: key)
     }
   }
 

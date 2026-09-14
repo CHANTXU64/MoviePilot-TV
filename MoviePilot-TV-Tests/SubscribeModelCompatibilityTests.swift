@@ -364,6 +364,8 @@ final class SubscribeModelCompatibilityTests: XCTestCase {
     existing.episode_group = nil
     existing.save_path = nil
     existing.media_category = nil
+    existing.sites = nil
+    existing.filter_groups = nil
 
     let json = try XCTUnwrap(
       JSONSerialization.jsonObject(with: JSONEncoder().encode(existing)) as? [String: Any])
@@ -375,6 +377,28 @@ final class SubscribeModelCompatibilityTests: XCTestCase {
     XCTAssertTrue(json["episode_group"] is NSNull)
     XCTAssertTrue(json["save_path"] is NSNull)
     XCTAssertTrue(json["media_category"] is NSNull)
+    XCTAssertEqual(json["sites"] as? [Int], [])
+    XCTAssertEqual(json["filter_groups"] as? [String], [])
+  }
+
+  func testExistingSubscribeEncodesClearedSitesAndFilterGroupsAsEmptyArrays() throws {
+    var existing = Subscribe(
+      id: 47,
+      name: "清空站点和规则组",
+      type: "电影",
+      sites: [11, 12],
+      filter_groups: ["组A"]
+    )
+    existing.sites = nil
+    existing.filter_groups = []
+
+    let json = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: JSONEncoder().encode(existing)) as? [String: Any])
+
+    XCTAssertEqual(json["sites"] as? [Int], [])
+    XCTAssertEqual(json["filter_groups"] as? [String], [])
+    XCTAssertFalse(json["sites"] is NSNull)
+    XCTAssertFalse(json["filter_groups"] is NSNull)
   }
 
   func testNewSubscribeOmitsUnclearedOptionalEditableFields() throws {
@@ -386,5 +410,7 @@ final class SubscribeModelCompatibilityTests: XCTestCase {
     XCTAssertFalse(json.keys.contains("include"))
     XCTAssertFalse(json.keys.contains("keyword"))
     XCTAssertFalse(json.keys.contains("episode_group"))
+    XCTAssertFalse(json.keys.contains("sites"))
+    XCTAssertFalse(json.keys.contains("filter_groups"))
   }
 }

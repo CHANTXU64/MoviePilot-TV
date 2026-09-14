@@ -974,6 +974,66 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertNil(reread.include)
   }
 
+  func testSaveExistingSubscriptionSendsEmptyArraysForClearedSitesAndFilterGroups() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "PUT",
+      path: "/api/v1/subscribe/",
+      json: #"{"success":true}"#
+    )
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/subscribe/789",
+      json: #"{"id":789,"name":"清空站点","type":"电影","sites":[],"filter_groups":[]}"#
+    )
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(
+        id: 789,
+        name: "清空站点",
+        type: "电影",
+        sites: [3, 5],
+        filter_groups: ["组A"]
+      ),
+      apiService: service
+    )
+    viewModel.subscribe.sites = []
+    viewModel.subscribe.filter_groups = []
+
+    let didSave = await viewModel.save()
+    XCTAssertTrue(didSave)
+
+    var capturedBody = await SubscribeSheetURLProtocol.stub.requestBody(
+      method: "PUT",
+      path: "/api/v1/subscribe/"
+    )
+    if capturedBody == nil {
+      capturedBody = await SubscribeSheetURLProtocol.stub.requestBody(
+        method: "PUT",
+        path: "/api/v1/subscribe"
+      )
+    }
+    let json = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: try XCTUnwrap(capturedBody)) as? [String: Any])
+    XCTAssertEqual((json["sites"] as? [Any])?.count, 0)
+    XCTAssertEqual((json["filter_groups"] as? [Any])?.count, 0)
+    XCTAssertFalse(json["sites"] is NSNull)
+    XCTAssertFalse(json["filter_groups"] is NSNull)
+
+    let reread = try await service.fetchSubscription(id: 789)
+    XCTAssertEqual(reread.sites ?? [], [])
+    XCTAssertEqual(reread.filter_groups ?? [], [])
+  }
+
   func testLoadDataShowsOnlyActiveSites() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
