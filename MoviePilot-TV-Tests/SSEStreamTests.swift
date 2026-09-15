@@ -8,6 +8,7 @@ final class SSEStreamTests: XCTestCase {
   override func setUp() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SSEStreamURLProtocol.self))
     SSEStreamURLProtocol.cancellation.reset()
+    SSEStreamURLProtocol.requestCounts.reset()
   }
 
   override func tearDown() async throws {
@@ -60,6 +61,97 @@ final class SSEStreamTests: XCTestCase {
       if let text = event.text { texts.append(text) }
     }
     XCTAssertEqual(texts, ["中文", "tail"])
+    XCTAssertEqual(SSEStreamURLProtocol.requestCount(for: "framing"), 1)
+  }
+
+  func testProgressStreamReconnectsAfterUnexpectedEOF() async throws {
+    let service = makeService()
+    var events: [SearchStreamEvent] = []
+
+    do {
+      for try await event in service.progressStream(progressKey: "progress-reconnect") {
+        events.append(event)
+      }
+    } catch {
+      XCTFail("进度 SSE 在可重连的 EOF 后不应失败：\(error)")
+    }
+
+    XCTAssertEqual(events.compactMap(\.text), ["first", "finished"])
+    XCTAssertEqual(SSEStreamURLProtocol.requestCount(for: "progress-reconnect"), 2)
+  }
+
+  func testProgressStreamReconnectsAfterTransportFailure() async throws {
+    let service = makeService()
+    var events: [SearchStreamEvent] = []
+
+    do {
+      for try await event in service.progressStream(progressKey: "progress-retry-error") {
+        events.append(event)
+      }
+    } catch {
+      XCTFail("进度 SSE 在临时网络断开后不应失败：\(error)")
+    }
+
+    XCTAssertEqual(events.compactMap(\.text).last, "finished")
+    XCTAssertEqual(SSEStreamURLProtocol.requestCount(for: "progress-retry-error"), 2)
+  }
+
+  func testProgressStreamStopsAfterFiveReconnects() async throws {
+    let service = makeService()
+    var eventCount = 0
+
+    do {
+      for try await _ in service.progressStream(progressKey: "progress-always-fails") {
+        eventCount += 1
+      }
+    } catch {
+      XCTFail("达到重连上限后应正常结束进度流：\(error)")
+    }
+
+    XCTAssertEqual(eventCount, 0)
+    XCTAssertEqual(SSEStreamURLProtocol.requestCount(for: "progress-always-fails"), 6)
+  }
+
+  func testProgressStreamCancellationDoesNotReconnect() async throws {
+    let service = makeService()
+    let reader = Task { @MainActor in
+      do {
+        for try await _ in service.progressStream(progressKey: "hold-progress") {}
+      } catch {}
+    }
+    defer { reader.cancel() }
+
+    try await waitUntil {
+      SSEStreamURLProtocol.requestCount(for: "hold-progress") == 1
+    }
+
+    reader.cancel()
+    try await waitUntil {
+      SSEStreamURLProtocol.cancellation.wasStopped
+    }
+
+    XCTAssertEqual(SSEStreamURLProtocol.requestCount(for: "hold-progress"), 1)
+  }
+
+  func testProgressStreamSessionSwitchDoesNotReconnect() async throws {
+    let service = makeService()
+    let reader = Task { @MainActor in
+      do {
+        for try await _ in service.progressStream(progressKey: "hold-progress") {}
+      } catch {}
+    }
+    defer { reader.cancel() }
+
+    try await waitUntil {
+      SSEStreamURLProtocol.requestCount(for: "hold-progress") == 1
+    }
+
+    service.baseURLForTesting = "https://sse-next-session.local"
+    try await waitUntil {
+      SSEStreamURLProtocol.cancellation.wasStopped
+    }
+
+    XCTAssertEqual(SSEStreamURLProtocol.requestCount(for: "hold-progress"), 1)
   }
 
   func testConsumerCancellationStopsTransport() async throws {
@@ -137,20 +229,38 @@ private final class SSEStreamCancellation: @unchecked Sendable {
 
 private final class SSEStreamURLProtocol: URLProtocol {
   static let cancellation = SSEStreamCancellation()
+  static let requestCounts = SSEStreamRequestCounts()
 
   override class func canInit(with request: URLRequest) -> Bool { true }
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
   override func startLoading() {
-    let keyword = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+    let scenario = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
       .queryItems?.first { $0.name == "keyword" }?.value
+      ?? request.url?.path.split(separator: "/").last.map(String.init)
     let body: String
-    switch keyword {
+    var shouldFail = false
+    let attempt = Self.requestCounts.record(for: scenario)
+    switch scenario {
     case "buffered":
       let line = "data: {\"type\":\"append\",\"text\":\"" + String(repeating: "x", count: 1024) + "\"}\n\n"
       body = String(repeating: line, count: 512)
     case "framing":
       body = "\u{FEFF}data: {\"type\":\"append\",\r\ndata: \"text\":\"中文\"}\r\n\r\ndata: {\"type\":\"done\",\"text\":\"tail\"}"
+    case "progress-reconnect":
+      body = attempt == 1
+        ? "data: {\"type\":\"append\",\"text\":\"first\"}\n\n"
+        : "data: {\"type\":\"done\",\"enable\":false,\"text\":\"finished\"}\n\n"
+    case "progress-retry-error":
+      if attempt == 1 {
+        body = "data: {\"type\":\"append\",\"text\":\"first\"}\n\n"
+        shouldFail = true
+      } else {
+        body = "data: {\"type\":\"done\",\"enable\":false,\"text\":\"finished\"}\n\n"
+      }
+    case "progress-always-fails":
+      body = ""
+      shouldFail = true
     default:
       body = "data: {\"type\":\"append\",\"text\":\"first\"}\n\n"
     }
@@ -159,12 +269,49 @@ private final class SSEStreamURLProtocol: URLProtocol {
       headerFields: ["Content-Type": "text/event-stream"])!
     client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
     client?.urlProtocol(self, didLoad: Data(body.utf8))
-    if keyword != "hold" { client?.urlProtocolDidFinishLoading(self) }
+    if shouldFail {
+      client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+    } else if scenario != "hold" && scenario != "hold-progress" {
+      client?.urlProtocolDidFinishLoading(self)
+    }
   }
 
   override func stopLoading() {
-    let keyword = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+    let scenario = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
       .queryItems?.first { $0.name == "keyword" }?.value
-    if keyword == "hold" { Self.cancellation.markStopped() }
+      ?? request.url?.path.split(separator: "/").last.map(String.init)
+    if scenario == "hold" || scenario == "hold-progress" {
+      Self.cancellation.markStopped()
+    }
+  }
+
+  static func requestCount(for scenario: String) -> Int {
+    requestCounts.count(for: scenario)
+  }
+}
+
+private final class SSEStreamRequestCounts: @unchecked Sendable {
+  private let lock = NSLock()
+  private var counts: [String: Int] = [:]
+
+  func reset() {
+    lock.lock()
+    counts.removeAll()
+    lock.unlock()
+  }
+
+  func record(for scenario: String?) -> Int {
+    guard let scenario else { return 0 }
+    lock.lock()
+    defer { lock.unlock() }
+    let next = (counts[scenario] ?? 0) + 1
+    counts[scenario] = next
+    return next
+  }
+
+  func count(for scenario: String) -> Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return counts[scenario] ?? 0
   }
 }

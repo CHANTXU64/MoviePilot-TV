@@ -1077,7 +1077,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：review_m001_k_retry 闭合 EOF、业务 error、missingSites 重试与 AI 进行中状态链；verify_m001_k 确认 AI；review_a001_h 独立确认 Search append+EOF/业务 error 仍发布
 - 跨端结论：TV 生产与兼容测试终止语义冲突已确认；后端保证未验证
 - 最小修改方向 / 裁决：共享最小终止分类；搜索无终止走既有 fallback，业务 error 不进 missing-site 重试，AI 未终止不得按成功清状态。
-- 当前处置：Search/Resource 的业务 error 直接失败，clean EOF 丢弃部分结果并复用普通搜索 fallback；Transfer AI 无明确 terminal 时显示可重试错误。
+- 当前处置：Search/Resource 的业务 error 直接失败，clean EOF 丢弃部分结果并复用普通搜索 fallback；Transfer AI 无明确 terminal 时显示可重试错误。2026-09-15 另完成进度 SSE 重连跟进：仅 `progressStream` 按 1 秒间隔最多重连 5 次，终态立即结束，取消/切服不重连，搜索/资源通用流不变。
 
 </details>
 
@@ -3415,14 +3415,15 @@ return nil
 </details>
 
 <details>
-<summary>F-102 · P3 · 未验证 · opaque progress_key 未按路径段编码</summary>
+<summary>F-102 · P3 · 未验证 · 用户决定跳过修复 · opaque progress_key 未按路径段编码</summary>
 
 - 审查单元与位置：A001-H→G05/G09；`APIService.swift:1813-1814`、`decodeAiRedoResponse:1611-1614`
 - 触发路径：后端返回包含 `/`、`?`、`#`，或形似既有 percent escape 的 `%xx` 的非空 progress key。
 - 根因：启动响应只校验非空，`progressStream` 直接把 opaque key 插入 URL path。
 - 用户影响：进度请求走错路由或丢失 key，TV 报失败并允许重复触发，而后台任务可能仍在运行。
-- 证据：静态构造可被特殊字符改写；G05与G09复核均确认当前后端生成值只含字母、数字和下划线；保留path-segment编码硬化建议；先固定合同/部署fixture
-- 跨端结论：当前本地生产者路径安全；外部生产者、部署版本与opaque合同未验证
+- 证据：静态构造可被特殊字符改写；G05与G09复核均确认当前后端生成值只含字母、数字和下划线；进一步核对 V3.0.1 的 `transfer_retry*` 与 `ai_redo_transfer*` producer，仍未发现 `/`、`?`、`#` 或 `%xx`；保留path-segment编码硬化建议；先固定合同/部署fixture
+- 跨端结论：V3.0.1 当前本地生产者路径安全；外部生产者、部署版本与opaque合同未验证
+- 处置：用户基于 V3.0.1 当前 producer 安全且未遇到该问题，决定跳过 TV 单端修复；保留未验证状态，不因进度 SSE 重连跟进而重开路径编码问题。
 - 最小修改方向 / 裁决：复用单一路径段编码 helper，编码失败立即返回现有 invalidURL，不新增 URL 层。
 - 必须补充的验证：后端 key 格式保证、percent-decoding 语义及编码斜杠能否作为单段路由参数。
 

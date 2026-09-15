@@ -344,7 +344,7 @@
 | B007 / F-054 | V006、A001-J、M001-F、C014/C016、G02 | 历史问题：Handler丢精确订阅ID并对Bangumi-only改发集合式媒体删除 | `58c7e81`已保留canonical/Bangumi/AniList/legacy身份，当前后端按身份与season筛选 | 已闭环；当前实现已解决 |
 | A001-J / F-100 | V004/V012-B、A001-J/I003、G02 | 同键旧normal/force可覆盖新强刷并反转add/cancel判断；末裁条件性P1 | 每key latest revision；旧结果store/return均失效 | 已闭环 |
 | A001-H / F-101 | A001-H/I003、V011/V015/V022、BackendCompatibilityTests | 生产与兼容探针均逐物理行解码 SSE，未按空行组帧及合并多条 data | 当前后端 framing、注释/heartbeat 与共享最小事件组帧边界 | 已闭环 |
-| A001-H / F-102 | A001-F/H、V022/I003、G05/G09 | 静态path拼接脆弱，但两轮复核确认当前producer仅安全字符 | 转未验证P3；保留path-segment硬化与部署fixture，不宣称当前生产触发 | 已闭环 |
+| A001-H / F-102 | A001-F/H、V022/I003、G05/G09 | 静态path拼接脆弱；V3.0.1 retry/AI producer 仍仅生成字母、数字和下划线 | 转未验证P3；用户决定跳过TV单端修复，保留path-segment硬化与部署fixture，不宣称当前生产触发 | 已闭环 |
 | A001-H / F-103 | V005/V015、C014、W003/W008、G01/G03 | 标题和媒体 ID 共用 keyword，消费端以宽正则猜路由且 builder 可产空字符串 | Web 当前路由规则、无身份媒体入口与显式最小路由意图 | 已闭环 |
 | A001-I / F-104 | M001/A001-D/I/J/K、V004/V012/V013、I003/G03/G07 | 动态媒体 ID、人物 raw ID、豆瓣辅助 ID 或 EpisodeGroup.id 直接插入 URL path，保留字符可改写路由 | 上游 ID 字符集、后端 percent-decoding 与共享单路径段编码边界 | 已闭环 |
 | A001-K / F-105 | A001-K、模型图片包装、V004/V008/V012/V013、各卡片/View、I003/I005/G03 | 相对或带空白图片值未按 origin 解析为规范绝对 URL | 当前 Web/后端相对地址契约、字段来源语义与共享 displayImageURL 边界 | 已闭环 |

@@ -115,7 +115,7 @@
 | F-099 | 已修复 | P2 | A001-F→G09 | 手动媒体选择正 ID 边界 | 原生 0 可进入整理/下载，负值又遮蔽有效 fallback | 既有双审闭合 native-first 选择与ASCII数字校验；G09两名代理对照当前后端truthy语义确认0等同未提供 | 复用现有正整数helper并在无效原生值后尝试规范fallback | TV与当前后端数值身份边界冲突已确认；部署频率未验证 |
 | F-100 | 已修复（`0cfeb12`） | P1 | A001-J→V012-A→G02 | 订阅状态同键请求与详情/预加载调用链 | 同键旧normal/force曾可覆盖较新强刷并反转菜单add/cancel判断 | `0cfeb12`已为每个规范化key绑定request revision/owner，旧响应不能覆盖较新的force结果或缓存；乱序回归测试通过 | 已按原最小方向完成，不再开放 | 修复已完成；真实网络触发频率不影响闭合结论 |
 | F-101 | 已修复 | P3 | A001-H→V011-C | `SSEFramer.swift`（新增，组帧与字节切行）、`APIService.swift:2737-2766`、`BackendCompatibilityTests.swift:2689-2736` | SSE 逐物理行解码，未按事件边界组帧并合并多条 data | 新增 `SSEFramer` 并让生产解析器与兼容探针共用；两处均改为遍历**字节**而非 `.lines` | 定向 20/20；反向验证逐字复刻改动前代码 → 14 挂 / 6 条阴性对照通过；全量 **957/957 通过、零失败**（937 + 20），逐名比对无用例消失。外部 AI 审查另点出字节层只认 `0x0A`：纯 CR 流会被攒成一整行，结束时只砍一个尾部 `\r`，整条流拿到畸形载荷而报错；流开头 BOM 又让第一行不满足 `hasPrefix("data:")`，第一个事件整条丢弃。两条均已按规范修正并补测（CRLF 那组经反向验证属阴性对照） | 🆕 `AsyncLineSequence` 会丢弃空行，事件边界只能在字节层拿到；行尾按规范三种全收（`CRLF`/`LF`/`CR`），流开头 BOM 只忽略一次。当前后端全为单行 data + `\n\n`，故这三项触发条件目前均不可达，属前瞻性健壮性修复。🆕 **四轮外部审查复核（2026-09-13）**：审查报 **[P1] 逐字节读把每个字节的 `await` 都落在 MainActor 上**，530 KiB / 512 事件的流从 37 ms 劣化到 11.09 s。**独立复现成立** —— 把 `APIService.swift` 退回 HEAD 重跑同一条吞吐用例，`production=11.089317 s`。根因不是「字节比行慢」而是**每个字节一次 actor 往返**：`.lines` 的外层 `await` 只有 512 次、内部按字节的循环留在同一执行器上；改成在调用点逐字节 `await` 后，每个字节都要跳出去再跳回来（537k 次 × 2）。修法：新增 `SSEEventReader`，用 `@concurrent` 把读取/组帧/JSON 解码整体移到通用执行器，只在**完整事件**的交付边界回调 MainActor 做 `validate(lease)` + `yield`，切服与取消语义不变。工程开了 `SWIFT_APPROACHABLE_CONCURRENCY`（含 NonisolatedNonsendingByDefault），只写 `nonisolated` 仍会继承调用者执行器 —— **已实测**：仅删掉 `@concurrent`、其余逐字不动，回归原样复现（`production=11.377022667 s`），故该标注是承重的而非装饰。修复后同一条用例 `production=0.331 s`（baseline `0.034 s`） |
-| F-102 | 未验证 | P3 | A001-H→G05/G09 | `APIService.swift:1813-1814`、`decodeAiRedoResponse:1611-1614` | opaque progress_key 未按单一路径段编码 | 静态构造可被特殊字符改写；G05与G09复核均确认当前后端生成值只含字母、数字和下划线 | 保留path-segment编码硬化建议；先固定合同/部署fixture | 当前本地生产者路径安全；外部生产者、部署版本与opaque合同未验证 |
+| F-102 | 未验证；用户决定跳过修复 | P3 | A001-H→G05/G09 | `APIService.swift:1813-1814`、`decodeAiRedoResponse:1611-1614` | opaque progress_key 未按单一路径段编码 | 静态构造可被特殊字符改写；G05与G09复核均确认当前后端生成值只含字母、数字和下划线；V3.0.1 的 retry/AI producer 仍只生成安全字符 | 保留path-segment编码硬化建议；先固定合同/部署fixture | V3.0.1 当前本地生产者路径安全；外部生产者、部署版本与opaque合同未验证；用户决定跳过修复 |
 | F-103 | 用户决定跳过 | P2 | A001-H→I012 | 资源标题与媒体ID意图 | 标题与媒体ID共用keyword并由宽正则猜路由；Search stream标题失败后fallback可把同一输入改成ID搜索 | 既有双审确认路由猜测；I012提出fallback漂移，review_a001_j以现有标题测试第三裁升级P2 | 入口冻结title/media-ID intent，Search fallback只走title路径 | TV稳定搜索语义漂移已确认；后端真实结果差异未验证 |
 | F-104 | 用户决定跳过 | P2 | A001-I | `APIService.swift:1885,1897,1912,1938-1943`，A001-D Douban recommendations `1431` | 动态媒体或人物不透明 ID 未编码为单一路径段 | review_a001_i 闭合保留字符经 URL 构造改写 path/query/fragment 与详情/人物调用链 | review_a001_h 独立确认模型允许不透明 String、同文件已有整段编码惯例，并收窄相邻传播范围 | TV 路径构造缺口已确认、严重度条件性；上游 ID 字符集及后端 percent-decoding 未验证 |
 | F-105 | 用户决定跳过 | P3 | A001-K | `APIService.swift:166-200,2519-2552,2596-2600,2618-2647` | 相对路径及带空白图片值未规范化为可请求的绝对 URL | review_a001_j 对照生产 displayImageURL 与兼容 oracle，并追到媒体/订阅/下载/人物卡片 | verify_a001_h 用独立 Foundation 探针确认相对 URL 保持无 host、空白绝对 URL 为 nil，并收窄 oracle 身份 | TV 图片 URL 规范化缺口已确认；当前 Web/后端 origin 契约与真实频率未验证 |
@@ -1517,6 +1517,7 @@
 - I003集成与定向复核：verify_a001_h与review_a001_h确认底层stream在clean EOF直接正常finish，Search/Resource两个consumer会发布累积结果；当前Web记录`receivedDone`并在缺done关闭时fallback。malformed data当前会throw并恰好进入普通fallback，驳回把历史畸形流结论继续算作当前缺陷；维持F-080 P2终止合同。
 - I009集成传播：review_a001_j确认Transfer AI SSE在没有`enable=false/type=done/error`的clean EOF后仍按成功结束，取消分支又跳过进行中状态清理；复用局部`sawTerminalEvent`与现有终止分类，维持本项P2，不新增AI流框架。
 - 修复记录：2026-08-14 的 `receivedDone` 门禁先关闭业务 `error` 发布部分结果与缺 `done` 成功收尾，但 clean EOF 只显示中断、没有按 Web 语义进入普通搜索 fallback，Transfer AI 仍会静默成功。2026-08-17 补齐：Search/ResourceResult 在 clean EOF 无 `done` 时抛传输中断并复用既有 `/search/title` fallback，业务 `error` 仍直接失败且不 fallback；Transfer 只把 `enable=false`、`type=error`、`type=done` 视为终态，无终态 EOF 显示“AI 整理连接中断，请重试。”。回归测试覆盖两个搜索消费者、权限 fixture 与 AI clean EOF。
+- 重连跟进（2026-09-15）：仅 `progressStream` 为 AI 整理进度监听启用与 Web 对齐的 1 秒间隔、最多 5 次重连；正常 EOF 或临时 `URLError` 可恢复，`done`/`error`/`enable=false` 立即结束，取消和切服不重连。搜索/资源通用 SSE 仍保持单次连接；新增 5 条回归测试覆盖这些边界。
 - 剩余未验证：端点精确成功 token、后端终止保证和真实网络截断频率。
 
 ### F-081：单条坏规则令整份配置失效并静默 fail-open
@@ -1879,17 +1880,18 @@
 
 ### F-102：opaque progress_key 未按路径段编码
 
-- 状态：未验证
+- 状态：未验证；用户决定跳过修复
 - 严重度：P3
 - 位置：`MoviePilot-TV/Services/APIService.swift:1813-1814`、`decodeAiRedoResponse:1611-1614`
 - 触发路径：后端返回包含 `/`、`?`、`#`，或形似既有 percent escape 的 `%xx` 的非空 progress key。
 - 根因：启动响应只校验非空，`progressStream` 直接把 opaque key 插入 URL path。
 - 用户影响：进度请求走错路由或丢失 key，TV 报失败并允许重复触发，而后台任务可能仍在运行。
 - 主审证据：测试只使用 URL-safe 的固定 key；目标路径未复用已有 path-segment 编码辅助。
-- 跨端结论：TV URL 构造缺口已确认；后端是否永久保证 UUID/URL-safe token 未验证。
+- 跨端结论：TV URL 构造缺口已确认；V3.0.1 官方 retry/AI producer 只生成字母、数字和下划线，但后端 schema/helper 未形成永久字符集保证。
 - 最小方向：复用单一路径段编码 helper，编码失败立即返回现有 invalidURL，不新增 URL 层。
 - 独立复核：verify_a001_h 的只读 URL 探针确认 `/ ? #` 改写路径、查询或片段，`%xx` 被提前解释；Foundation 会自动安全编码普通空格与裸 `%`，两者不再列为已确认触发。
-- G05/G09限缩裁决：两轮主审/独立复核均确认当前本地后端只生成字母、数字和下划线，当前成功路径不会触发特殊字符；静态拼接脆弱点保留为P3合同风险，但在缺外部producer或不同部署fixture前转为未验证，不再宣称当前生产缺陷。
+- G05/G09限缩裁决：两轮主审/独立复核均确认当前本地后端只生成字母、数字和下划线；进一步核对 V3.0.1 的 `transfer_retry*` 与 `ai_redo_transfer*` producer，仍未发现 `/`、`?`、`#` 或 `%xx`。当前成功路径不会触发特殊字符；静态拼接脆弱点保留为P3合同风险，但在缺外部producer或不同部署fixture前转为未验证，不宣称当前生产缺陷。
+- 处置状态：用户基于 V3.0.1 当前 producer 安全且未遇到该问题，决定跳过 TV 单端修复；保留未验证状态，不因进度 SSE 重连跟进而重开路径编码问题。
 - 剩余未验证：后端 key 格式保证、percent-decoding 语义及编码斜杠能否作为单段路由参数。
 
 ### F-103：资源标题与媒体 ID 由宽正则猜路由

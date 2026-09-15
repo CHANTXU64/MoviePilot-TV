@@ -284,7 +284,7 @@
 | A001-E | 已闭环 | W017双审补强后F-024/F-095升P1，F-083/F-092/F-093升P2；后续G05将F-094升P2、F-197升条件P1。F-091维持P2，F-196 P1，扩展F-027/F-192/CHK-005/012；F-091 已修复，F-093 部分修复（下载器失败可见并自动重试、连续轮询失败按 episode 通知、主动动作失败立即通知；与当前 Web 的 Loading/成功空/热失败保旧数据语义对齐，但任务列表首次失败仍可能短暂显示空态，未实现独立 stale/error 四态，不再夸大为完整五态）；F-092 已修复（暂停/继续动作发起时冻结目标状态，成功后写目标值不再 toggle，单行 in-flight gate 在请求期间禁用按钮防重复提交，轮询 `onChange` 保持服务端权威同步，`DownloadTaskView` 实现，源码断言回归测试通过）；F-094 用户按三端对照裁决跳过（Web `DownloadingCard.vue` 同样不校验/不编码 hash，后端 `/download/{hashString}` 单段路由天然挡 `/` 与空段，`?`/`#` 截断 Web/TV 均存在，不做 TV 单端增强） |
 | A001-F | 已闭环 | G09两票将F-098逐ID terminal receipt升P1、F-099正ID边界升P2；其余支持 F-027/F-033/F-036/F-060/F-071…F-076/F-080/F-082/F-086/F-087；F-099 已修复（手动选择原生数值 ID 先过正数过滤、无效回退 `media_id`；手工校验仅接受正数数字，0/000/负值无效；`MediaInfoCollectionBehaviorTests`/`ReorganizeViewModelTests` 更新并新增回归，定向与相关套件通过） |
 | A001-G | 已闭环 | F-096 P2；后续G03窄第三裁将F-097升P2；支持F-001/F-023/F-025/F-027/F-060/F-082/F-086/F-087；F-096 用户裁决跳过（TV 自动重登为既定行为；`90b40b4` 会话重构后可选探测 401/403 仅触发自动重登、重登成功不重放原请求，重登失败登出与主请求同一路径，凭据失效时迟早发生，非探测额外误伤）；F-097 已修复（轮询结果区分成功与失败：失败/取消保留该服务器上一轮快照、只有成功空才清空，停用服务器随新列表移除，对齐 Web `MediaServerLatest.vue` 失败保留旧数据语义；`HomeViewModelMediaServerSnapshotTests` 新增 5 个回归用例覆盖失败/网络错误/取消/成功空/首次失败，定向与相关套件通过） |
-| A001-H | 已闭环 | F-101 P3、F-103 P2确认；G05/G09按当前producer安全把F-102转未验证P3；CHK-011维持修订，传播边界补F-004/F-011/F-013；F-103 用户裁决跳过（Web `resource.vue` 同一 `^[a-zA-Z]+:` 猜路由且缺媒体身份同样回空串，finding 原文注明"若 Web 同样如此不得做 TV-only 兜底"；TV 空 keyword 发空标题请求与 Web `search/last` 恢复上次结果的差异一并接受，不做 TV 单端处理） |
+| A001-H | 已闭环 | F-101 P3、F-103 P2确认；G05/G09按 V3.0.1 producer 安全把F-102转未验证P3，用户决定跳过TV单端修复；CHK-011维持修订，传播边界补F-004/F-011/F-013；F-103 用户裁决跳过（Web `resource.vue` 同一 `^[a-zA-Z]+:` 猜路由且缺媒体身份同样回空串，finding 原文注明"若 Web 同样如此不得做 TV-only 兜底"；TV 空 keyword 发空标题请求与 Web `search/last` 恢复上次结果的差异一并接受，不做 TV 单端处理）；2026-09-15 进度 SSE 重连跟进已完成：仅 `progressStream` 1 秒间隔最多重连 5 次，终态立即结束，取消/切服不重连，搜索/资源通用流保持单次连接，定向 `SSEStreamTests` 9/9 |
 | A001-I | 已闭环 | F-104 已确认条件性 P2；相邻只并入 A001-D Douban recommendations，similar 与数字型 TMDB/Bangumi 分支不计已确认传播；无新增 finding；F-104 用户裁决跳过（核对后端：人物 raw_id 四来源 `/person/{person_id}` 接口参数均为 `person_id: int` 强校验、Douban 辅助 ID 与剧集组 ID 均为纯数字、完整媒体键冒号合法且不透明 media_id 不进这 6 条路径，真实数据不含保留字符，触发条件不成立） |
 | A001-J | 已闭环 | F-100条件P1已由`0cfeb12`按每key revision修复；F-069经当前v2.15.1合同复核降为未来版本条件P3并转CHK-003；CHK-010已确认，F-006范围收窄为模型负数与lookup非正数两路径 |
 | A001-K | 已闭环 | F-105(P3)/F-106 已确认；I003双审补settings跨会话混合/吞取消并将F-106升P2，图片wrapper仍收窄为生产消费、冷启动/同会话热刷新，切服旧视图树未验证；CHK-003/CHK-005 已补强；F-105 用户裁决跳过；F-106 已修复：前序将主要模型改为按访问计算，2026-08-17 再用 `imageConfigurationIdentity` 驱动主要图片页面与 MediaGrid/DetailCard Equatable 失效，并让详情背景按同一原模型重算；不引入图片 revision 仓库 |
@@ -538,8 +538,8 @@
 - `A001-F / F-099`：手动媒体原生数值 ID 仅正值可覆盖规范化 fallback；0/负数不得遮蔽有效 fallback。
 - `A001-G / F-096`：可选媒体服务器徽章探测不得触发自动重登或登出；失败保持未知并继续受 session 归属约束。
 - `A001-G / F-097`：首页媒体服务器轮询须区分成功空、失败与取消；失败保留该服务器旧快照，取消不得发布。
-- `A001-H / F-080/F-101`：SSE 按空行分帧并以换行拼接同一事件的多条 data；EOF 不等于成功，资源 missingSites 补偿只允许在端点明确成功终止后执行。
-- `A001-H / F-102`：当前后端progress key仅含安全字符，特殊字符触发转未验证P3；若合同继续opaque，仍应在API边界按单一路径段编码一次。
+- `A001-H / F-080/F-101`：SSE 按空行分帧并以换行拼接同一事件的多条 data；EOF 不等于成功，资源 missingSites 补偿只允许在端点明确成功终止后执行；进度监听按 Web 对齐有限重连，搜索/资源通用流不重连。
+- `A001-H / F-102`：V3.0.1 当前后端progress key producer仅含安全字符，特殊字符触发转未验证P3；用户决定跳过TV单端修复；若合同继续opaque，仍应在API边界按单一路径段编码一次。
 - `A001-H / F-103`：资源 title/media-ID 意图由 builder 显式保存并保证值非空，API 不得从任意文本正则反推路由。
 - `A001-I / F-104`：动态媒体键或人物不透明 ID 进入 URL path 时，由 API 边界整体编码为单一路径段；来源 token 保持固定白名单，调用者不得拆分、改写或重复转义。
 - `A001-J / F-100`：同一规范化 media+season 的较新 force supersede 较旧普通 miss/force；`0cfeb12`已用同key request revision闭合旧响应写缓存/返回旧值，2026-08-11定向乱序回归通过。
@@ -605,7 +605,7 @@
 - `A001-G / F-096/F-097`：两项均已确认；转 V008/V012-A/W003/W008/G03/G06/I003 回溯可选探测会话副作用与轮询失败保留语义。
 - `A001-F / F-098/F-099`：G09两票分别将逐ID terminal receipt升P1、正ID边界升P2；F-098用户决定保持现状，F-099继续独立于F-090，具体owner/调用者回溯已闭合。
 - `A001-J / F-100`：原条件性P1已由`0cfeb12`修复；每key revision覆盖双调用者与最终缓存，2026-08-11定向乱序回归通过。TTL产品选择仍为独立边界。
-- `A001-H / F-101…F-103`：F-101 P3、F-103 P2确认；F-102因当前producer安全转未验证P3，G05/G09已闭合状态边界。
+- `A001-H / F-101…F-103`：F-101 P3、F-103 P2确认；F-102因 V3.0.1 当前producer安全转未验证P3，用户决定跳过TV单端修复，G05/G09已闭合状态边界。
 - `A001-I/A001-J / F-104`：已确认条件性 P2；A001-D 仅回溯 Douban recommendations，A001-J 增补任意 EpisodeGroup.id；similar 与数字型 TMDB/Bangumi 分支不重开，转 I003/G03/G07 核对统一单段编码与用户可见失败。
 - `A001-K / F-105`：已确认 P3；转 I003/I005/G03 回溯相对/空白图片值、MoviePilot origin/path-prefix 与共享 displayImageURL 最小边界。
 - `A001-K/I003 / F-106`：已确认 P2；图片wrapper仍回溯启动/前台settings时序、生产模型存活与访问时重算，I003双审新增两阶段settings跨会话混合、吞取消与旧发布；切服旧树只保留未验证。
