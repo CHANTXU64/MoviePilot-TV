@@ -1573,6 +1573,69 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     )
   }
 
+  func testSeasonDisplayFormatterUsesUnifiedSeasonNameRules() {
+    XCTAssertEqual(
+      SeasonDisplayFormatter.name(seasonNumber: 0, rawName: nil),
+      "特别篇"
+    )
+    XCTAssertEqual(
+      SeasonDisplayFormatter.name(seasonNumber: 0, rawName: "  特别篇名称  "),
+      "特别篇名称"
+    )
+    XCTAssertEqual(
+      SeasonDisplayFormatter.name(seasonNumber: 2, rawName: "忽略的名称"),
+      "第 2 季"
+    )
+    XCTAssertEqual(
+      SeasonDisplayFormatter.name(seasonNumber: nil, rawName: "特别篇"),
+      "未知季"
+    )
+    XCTAssertEqual(
+      SeasonDisplayFormatter.name(seasonNumber: -1, rawName: nil),
+      "未知季"
+    )
+  }
+
+  func testSeasonDisplayFormatterTreatsWhitespaceOptionalTextAsMissing() {
+    XCTAssertNil(SeasonDisplayFormatter.nonEmpty(" \n\t"))
+    XCTAssertEqual(
+      SeasonDisplayFormatter.nonEmpty(" 2024-01-01 \n"),
+      "2024-01-01"
+    )
+    XCTAssertEqual(
+      SeasonDisplayFormatter.cardTitle(
+        seasonNumber: 0,
+        rawName: " \n",
+        airDate: " \t"
+      ),
+      "特别篇"
+    )
+    XCTAssertEqual(
+      SeasonDisplayFormatter.cardTitle(
+        seasonNumber: 2,
+        rawName: nil,
+        airDate: " 2024-01-01 "
+      ),
+      "第 2 季 · 2024"
+    )
+  }
+
+  func testSeasonCardAndDetailSheetUseSharedDisplayFormatter() throws {
+    let testFileURL = URL(fileURLWithPath: #filePath)
+    let repositoryRoot = testFileURL.deletingLastPathComponent().deletingLastPathComponent()
+    let source = try String(
+      contentsOf: repositoryRoot.appendingPathComponent(
+        "MoviePilot-TV/Views/Pages/SubscribeSeasonView.swift"
+      ),
+      encoding: .utf8
+    )
+
+    XCTAssertTrue(source.contains("SeasonDisplayFormatter.cardTitle("))
+    XCTAssertTrue(source.contains("SeasonDisplayFormatter.name("))
+    XCTAssertTrue(source.contains("SeasonDisplayFormatter.nonEmpty(season.air_date)"))
+    XCTAssertTrue(source.contains("SeasonDisplayFormatter.nonEmpty(season.overview)"))
+  }
+
   func testPrepareSubscriptionUsesSelectedPickerGroupForNewSubscriptionOnly() {
     let media = MediaInfo(tmdb_id: 12345, title: "航海王", type: "电视剧")
     let viewModel = SubscribeSeasonViewModel(mediaInfo: media)

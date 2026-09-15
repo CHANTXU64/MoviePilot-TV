@@ -3005,7 +3005,7 @@ return nil
 </details>
 
 <details>
-<summary>F-178 · P3 · 已确认 · 最佳结果评分候选名与卡片展示名分裂</summary>
+<summary>F-178 · P3 · 已确认（用户决定跳过） · 最佳结果评分候选名与卡片展示名分裂</summary>
 
 - 审查单元与位置：C012→W006-C；搜索评分名与展示名投影
 - 触发路径：媒体或人物只有备用名称非空；该备用名与规范短query精确匹配并使对象进入最佳结果。
@@ -3014,19 +3014,22 @@ return nil
 - 证据：C012双审闭合媒体original_title与人物latin_name反例；W006-C双审确认普通行同根传播；评分与展示共用现有有序非空名称候选；不建新匹配或卡片框架
 - 跨端结论：条件性P3；真实备用名payload频率未验证
 - 最小修改方向 / 裁决：让评分和展示复用同一组已规范化、去空白的有序名称候选并取首个非空值；Manual复用同一媒体名称投影，不新增匹配框架或卡片模型。
+- 处置：用户决定跳过修复；Web前端没有TV的本地bestScore/最佳结果聚合链，暂不做TV单端展示fallback；真实备用名payload频率未验证。
 
 </details>
 
 <details>
-<summary>F-190 · P3 · 已确认 · 季详情名称与可选文本未统一归一化</summary>
+<summary>F-190 · P3 · 已修复（2026-09-15） · 季详情名称与可选文本统一归一化</summary>
 
 - 审查单元与位置：W013-C；SeasonDetailSheet季名与可选文本投影
 - 触发路径：真实S00的name为nil，或name/air_date/overview为可解码空串、纯空白或换行。
-- 根因：季名只做nil coalescing，空白值不会回退；nil名称的S00又直接格式化成“第0季”。日期与overview仅检查Optional存在，不检查规范化后是否为空。
+- 根因：季卡与详情 Sheet 各自处理季名；季名只做nil coalescing，空白值不会回退；nil名称的S00又直接格式化成“第0季”。日期与overview仅检查Optional存在，不检查规范化后是否为空。
 - 用户影响：同一页面的季卡把S00显示为“特别篇”，详情却显示“第0季”；空白名称会产生空标题，空白日期产生只有图标的行，空白简介保留无意义区域。
-- 证据：review_a001_h主审与verify_a001_h独立复核闭合nil/空/纯空白输入及同页文案分裂；复用现有字符串trim→nil；S00/有效季/缺季号使用一套回退规则
-- 跨端结论：TV显示不变量缺陷已确认；真实空白payload频率未验证
-- 最小修改方向 / 裁决：复用现有字符串trim/空转nil；一套回退规则覆盖S00“特别篇”、有效正季号“第N季”、缺失/非法季号“未知季”，日期和overview仅在归一化非空后显示。不建季显示模型。
+- 证据：review_a001_h主审与verify_a001_h独立复核闭合nil/空/纯空白输入及同页文案分裂；现已由季卡与详情 Sheet 共用 `SeasonDisplayFormatter`，统一季名、日期和简介投影。
+- 跨端结论：TV显示不变量代码修复已完成；本次未跑兼容测试，未做真机/VoiceOver验收。
+- 最小修改方向 / 裁决：已复用字符串trim/空转nil；统一覆盖S00“特别篇”、有效正季号“第N季”、缺失/非法季号“未知季”，日期和overview仅在归一化非空后显示，不新增季显示模型。
+- 处置：已修复；定向SubscribeSeasonContentViewTests 3/3通过，反向还原校验按预期失败，恢复后3/3通过，tvOS Simulator clean build通过。
+- 剩余验证：真实空白payload频率、真机布局及VoiceOver播报仍未验收。
 
 </details>
 

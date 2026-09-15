@@ -155,7 +155,7 @@
 | C009-C | `MediaCard.swift:426-494`，Frame、详情包装与转场状态 | L4 | verify_a001_h | 已闭环 | review_a001_j | 已闭环 | 后续G03将F-174升P2；确认F-105/F-106/F-138/F-171传播，F-114不适用，F-172/F-173归B，loadingPosterURL归F-123 | G03 | 已闭环 |
 | C010 | `PersonCard.swift` 全文件 | L4 | review_a001_h | 已闭环 | verify_a001_h | 已闭环 | F-175 P2；G04末裁将F-176升P2；F-177已修复（2026-09-15）：按实际width/height使用DownsamplingImageProcessor，定向2/2与Simulator clean build通过，真机性能/像质仍未验收；确认F-143/F-104/F-064/F-105/F-106/F-019/F-020/F-026/F-036/F-044/F-045传播 | G07 | 已闭环 |
 | C011 | `MoreCard.swift` 全文件 | L4 | verify_a001_h | 已闭环 | review_a001_j | 已闭环 | 无新编号；确认F-175/F-173/F-003传播，F-033/F-035/F-036/F-138及F-171/F-172/F-174不适用；唯一调用/导航/边界其余通过 | G02 | 已闭环 |
-| C012 | `BestResultCard.swift` 全文件 | L4 | review_a001_h | 已闭环 | review_a001_j | 已闭环 | F-178确认条件性P3；F-076/F-172/F-174/F-177及搜索评分/身份传播闭合，F-171/F-175不适用；固定高度/完整overview仅留运行盲点 | G01 | 已闭环 |
+| C012 | `BestResultCard.swift` 全文件 | L4 | review_a001_h | 已闭环 | review_a001_j | 已闭环 | F-178条件性P3且用户决定跳过修复：评分备用名与卡片展示名分裂；F-076/F-172/F-174/F-177及搜索评分/身份传播闭合，F-171/F-175不适用；固定高度/完整overview仅留运行盲点 | G01 | 已闭环 |
 | C013 | `MediaGridView.swift` 全文件 | L4 | verify_a001_h | 已闭环 | review_a001_j | 已闭环 | 无新编号；ID-only Equatable/旧items闭包仅留契约风险，四owner无同ID原位替换且Paginator当前门槛兜底；F-033/F-035/F-019/F-020/F-026/F-084/F-105/F-106/F-129/F-130/F-138/F-139/F-171…F-174传播闭合 | G03 | 已闭环 |
 | C014 | `MediaContextMenu.swift` 全文件 | L4 | review_a001_h | 已闭环 | review_a001_j | 已闭环 | 无新编号；8生产入口及F-014/F-015/F-054/F-077/F-090/F-103/F-113/F-119…F-124/F-174传播闭合；F-124已由`4a1a291`冻结菜单展示意图并接入destructive确认，聚焦5/5、完整本地450/450与独立复审PASS；无Fork presenter页仅留payload契约未验证 | G02/G03 | 已闭环 |
 | C015 | `MediaActionModifier.swift` 全文件 | L4 | verify_a001_h | 已闭环 | review_a001_h | 已闭环 | 无新编号；唯一ContentView根presenter及4入口闭合，F-090/F-122/F-123/CHK-005传播确认；重叠识别busy/alert/poster/导航归既有owner根因，overlay focus/accessibility留运行盲点 | G03 | 已闭环 |
@@ -169,7 +169,7 @@
 
 | 审查单元 | 范围/符号 | 依赖层级 | 主审代理 | 主审状态 | 复核代理 | 复核状态 | 发现编号 | 回溯依赖 | 最终状态 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| W001 | `ManualMediaSearchSheet.swift` 全文件 | L5 | verify_a001_h | 已闭环 | review_a001_j | 已闭环 | 无新编号；F-076/F-099/F-178/F-172/F-158/F-165传播，F-177已修复但真机性能/像质仍未验收，F-060/F-157/F-159/F-171/F-175/F-174不适用；AddDownload media_in分工仅留契约边界 | G01/G09/G10 | 已闭环 |
+| W001 | `ManualMediaSearchSheet.swift` 全文件 | L5 | verify_a001_h | 已闭环 | review_a001_j | 已闭环 | 无新编号；F-076/F-099/F-172/F-158/F-165传播，F-178已确认且用户决定跳过修复，F-177已修复但真机性能/像质仍未验收，F-060/F-157/F-159/F-171/F-175/F-174不适用；AddDownload media_in分工仅留契约边界 | G01/G09/G10 | 已闭环 |
 | W002 | `LoginView.swift` 全文件 | L5 | review_a001_j | 已闭环 | review_a001_h | 已闭环 | 无新编号；F-086/F-088/F-107/F-027/F-062/F-063/F-159传播，F-029无本View新增触发，F-089最终确认P2；no-access首次登录顺序通过 | G06/G08 | 已闭环 |
 | W003 | `HomeView.swift` 全文件（当前1-486，覆盖原1-428） | L5 | review_a001_h | 已闭环 | review_a001_j | 已闭环 | 无新编号；既有finding/CHK传播闭合；后续G03将F-118/F-171/F-174升确认P2，F-012/F-017边界不变，F-158不适用；失败线程三次输出均作废 | G02/G03/G06/G08 | 已闭环 |
 | W004 | `ExploreView.swift` 全文件 | L5 | verify_a001_h | 已闭环 | review_a001_j | 已闭环 | 无新编号；F-077/F-078/F-120/F-121/F-129/F-130/F-131/F-132/F-033/F-035/F-105/F-106/F-027/CHK-005传播；F-133/F-134/F-136未验证且用户决定跳过修复，F-135已确认P3，F-039/F-158不适用 | G02/G03/G05 | 已闭环 |
@@ -190,7 +190,7 @@
 | W012 | `AddDownloadSheet.swift` 全文件 | L5 | review_a001_h | 已闭环 | review_a001_j | 已闭环 | G09将F-188/F-189升条件P1，F-135维持P3；F-011仅保留TorrentInfo官方字段丢失，通用media原形留在CHK-003未验证边界；提交owner/session归F-147/F-027/F-120，旧搜索归F-076，下载器默认归F-145 | G01/G05/G06/G10 | 已闭环 |
 | W013-A | `SubscribeSeasonView.swift:1-31`，页面包装 | L5 | verify_a001_h | 已闭环 | review_a001_h＋review_a001_j | 已闭环 | 无新编号；第三裁决确认季卡主操作由测试锁定直订/取消，onSeasonTap/initialSeason无生产消费，仅死链清理。Tab保留NavigationStack时`.task`取消后hasLoaded锁死同owner重载并吞取消晚启动请求，分别扩展F-126为P2与F-144；跨服分季缓存归F-065，非电影二分归F-015，包装route/owner/退出其余通过 | G02 | 已闭环 |
 | W013-B | `SubscribeSeasonView.swift:32-428`，内容与交互 | L5 | verify_a001_h | 已闭环 | review_a001_j＋review_a001_h | 已闭环 | F-146/F-047确认条件性P1；临时订阅退出/Retry与`exist_ok`复用既有ID后误暂停/删除统一并入F-148 created/owner/session receipt并确认条件性P1。group default恢复及权限/session/卡片传播闭合 | G02/G03 | 已闭环 |
-| W013-C | `SubscribeSeasonView.swift:429-506`，详情 Sheet | L5 | review_a001_h | 已闭环 | verify_a001_h＋review_a001_j | 已闭环（既往源码暴露披露） | 长overview并入F-185；S00与空白name/date/overview登记F-190确认P3；第三裁决确认width-only海报四态无法维持360×540，登记F-191确认P3。无写操作owner；可访问关闭与具体海报形态维持运行盲点 | G02/G10 | 已闭环 |
+| W013-C | `SubscribeSeasonView.swift:429-506`，详情 Sheet | L5 | review_a001_h | 已闭环 | verify_a001_h＋review_a001_j | 已闭环（既往源码暴露披露） | 长overview并入F-185；F-190已修复（2026-09-15）：季卡与详情Sheet共用SeasonDisplayFormatter，定向3/3、反向还原失败校验、恢复后3/3与Simulator clean build通过；第三裁决确认width-only海报四态无法维持360×540，登记F-191确认P3。无写操作owner；可访问关闭与具体海报形态维持运行盲点 | G02/G10 | 已闭环 |
 | W014 | `SubscribeSheet.swift` 全文件 | L5 | review_a001_h | 已闭环 | verify_a001_h＋review_a001_j | 已闭环（既往源码暴露披露） | F-147 Subscribe子项已由`a872737`修复；F-148/F-199条件P1仍开放，F-170/F-195/F-200 P2；total_episode与save_path合同形成CHK-013/014 | G02/G10 | 已闭环 |
 | W015 | `ForkSubscribeSheet.swift` 全文件 | L5 | verify_a001_h | 已闭环（既往源码暴露披露） | review_a001_j | 已闭环 | G06将F-193升条件P1，F-194 P2；F-027/CHK-005与F-008/F-121/F-185/F-191传播闭合，F-164 已修复（2026-09-15），旧系统实际渲染/焦点仍未单独验证 | G02 | 已闭环 |
 | W016 | `StatusView.swift` 全文件 | L5 | review_a001_j | 已闭环 | review_a001_h＋verify_a001_h | 已闭环（W017下载源码暴露披露） | G09后F-149 P1、F-150/F-198 P2；F-192/CHK-012维持P1，F-091传播，Transfer转W019 | G06/G09 | 已闭环 |
@@ -419,7 +419,7 @@
 | C010 / F-175 | C011/各人物卡调用页、G07/G08 | PersonCard海报raw focusable/onTap承载动作，姓名/job为兄弟且无Button/整卡label/trait/default action | 复用原生Button承载整卡label/action；route无效同步禁用/隐藏，MoreCard同根传播 | 已闭环 |
 | C010 / F-176 | W008-D/W008-E、G04/G07 | 三处FocusState变nil绕过threshold，重复离行可逐页加载；G04末裁P2 | 三处onChange在Task前guard let newId；保留Paginator合法无参手动加载 | 已闭环 |
 | C010 / F-177 | W008-D/W006-C、G03/G07 | PersonCard只用ResizingImageProcessor，冷处理先构造原图再重绘分页人物头像 | 已按实际width/height改用DownsamplingImageProcessor；定向MPImageWarmerTests 2/2与Simulator clean build通过；真机Instruments/像质验收仍待补 | 已修复（2026-09-15） |
-| C012 / F-178 | I007/W006-D/W001、G01 | 评分消费备用名称而Search/Manual卡片只展示主名称，最高分有效结果可为空标题或“未知” | 评分与展示共用现有有序非空名称候选，并验证Button可访问名称；仅修复触及共享MediaInfo/卡片/导航helper时再纳入G03 | 已闭环 |
+| C012 / F-178 | I007/W006-D/W001、G01 | 评分消费备用名称而Search/Manual卡片只展示主名称，最高分有效结果可为空标题或“未知” | 用户决定跳过修复；Web前端没有TV的本地bestScore/最佳结果聚合链，暂不做TV单端展示fallback；真实备用名payload频率未验证 | 已确认（用户决定跳过） |
 | C017 / F-179 | C018-C/I011、G05/G10 | 资源卡与筛选空白字符串遮蔽fallback并生成空标签；G05两票升条件P2 | 复用现有trim→空为nil投影供卡片fallback/标签与筛选三链共用 | 已闭环 |
 | W007 / F-180 | W008-A、G03/G06/G10 | 详情连续失败后容器把`isDetailFailed`并入ready，显示未完整初始化的partial页面且当前页无失败标识/retry | I013裁P2；在现有Loading owner显示失败并让一次retry复用failed-task重建，保留partial fallback | 已闭环 |
 | W008-A / F-181 | W008-C/G03/G10 | 内容页切换只监听Hero FocusState并交叉采样Content，真实回调若Hero先false、Content后true会漏置`showContentPage` | I013裁未验证条件P2；真机/Simulator固定事件序，确认后分别监听两个现有FocusState | 已闭环 |
@@ -427,7 +427,7 @@
 | W008-C / F-183 | G03/G06/G10/I013 | TMDB按钮在创建Task前无同步reentry owner，两个调用可重复append且先完成者提前清共享busy | 维持未验证P3；双Select须运行确认，离开route后的单动作晚到另由F-231 P2承载 | 已闭环 |
 | W008-E/W010/I013 / F-184 | W003/W004/W005、G03/G04 | 合法正数合集可由正式动态来源进入三根栈，误送普通Container后preload永不ready/failed；0/负数与parts递归仍无fixture | 最终裁条件P1；原样复用Search合集分支与shouldPreloadDetail，未验证子域不顺手扩展 | 已闭环 |
 | W009 / F-185 | W013-C/W015、G07/G10 | 足够长的人物简介、季overview或Fork分享文本在静态/限行Sheet内不可完整读取，Fork还可把提交按钮推出可达区 | 有限预览保留；信息区用原生纵向ScrollView/限行，操作区固定并验证遥控器/VoiceOver到达末尾 | 已闭环 |
-| W013-C / F-190 | G02/G10 | S00缺名在详情显示“第0季”而卡片显示“特别篇”；空白name/date/overview生成空标题、图标空行或空壳区域 | 复用现有trim→nil与S00/正季/缺季号单一显示回退，覆盖可选文本矩阵 | 已闭环 |
+| W013-C / F-190 | G02/G10 | S00缺名在详情显示“第0季”而卡片显示“特别篇”；空白name/date/overview生成空标题、图标空行或空壳区域 | 已修复：季卡与详情Sheet共用SeasonDisplayFormatter；定向3/3、反向还原失败校验、恢复后3/3与Simulator clean build通过；真机/VoiceOver与真实payload频率仍待补 | 已修复（2026-09-15） |
 | W013-C / F-191 | W015、G10 | processor按360×540降采样但外层width-only；缺图/失败只剩无2:3固有高度的Rectangle，四态无法保证稳定几何 | 两个Sheet直接固定360×540，覆盖URL缺失/loading/失败/成功并验证右栏与焦点不位移 | 已闭环 |
 | W016/W017 / F-192 | A001-E/V020、G05/G06 | manage-only可见并操作其他用户任务；当前后端list/start/stop/delete只验token，owner回填仅按hash且TV无过滤 | 后端subject过滤与mutation鉴权、downloader+task复合owner、TV展示防御及superuser/API Token矩阵 | 已闭环 |
 | M001-E/W017 / F-024 | V020/I003、G04/G05/G10 | 缺hash fallback无分隔拼接/UUID可重复；首次重复进入数组后下一轮Dictionary trap确定终止App，升级条件性P1 | 规范化不可变身份并显式循环检测重复后失败关闭；普通抖动单独按P3验收 | 已闭环 |
@@ -480,7 +480,7 @@
 | I007 / 既有传播 | V011/W006/I003/I012、G01/G04/G05/G06 | source合同、子Paginator session发布、扫描上限、SSE终止、规则fail-open、旧fallback错误及长度评分均由独立复核确认命中既有编号；F-219继续驳回 | 各归既有owner，I007不再保留开放去重项 | 已闭环 |
 | G07 / F-143/F-227/F-036/F-034人物identity | M001/V011/V013/W006/W008/W009、G03/G04 | 三方确认内嵌导演缺source稳定route失败、稀疏详情覆盖seed而credits沿旧owner、人物raw_id跨source误合并/批内漏去重；连续无新增扫描另归F-034 | F-143/F-036/F-227确认P2；F-034维持P2，演员当前credits带source，优先上游补source且TV旧版仅可用父媒体兼容 | 已闭环 |
 | G07 / F-189/CHK-019人物source筛选 | A001/V011/W006、G01/G09 | 三方确认通用source合同错配；后续G09以错误媒体mutation链将F-189升条件P1 | 当前先过滤/移除无效能力；若保留须先建后端统一source合同，CHK-019不新增 | 已闭环 |
-| G07 / F-045/F-050/F-051/F-055/F-056/F-178/F-228 | B005/B006/S006/V012/W006/W008/W009 | 三方确认Hero、Douban roles、两类头像与详情备用名各自投影边界；job canonical正常，mergeCrew非空existing当前不可达 | F-045/F-050/F-051/F-055维持P3，F-056驳回重复并入F-050，F-228独立确认P3；复用displayRole/imageURLs/alternateNames | 已闭环 |
+| G07 / F-045/F-050/F-051/F-055/F-056/F-178/F-228 | B005/B006/S006/V012/W006/W008/W009 | 三方确认Hero、Douban roles、两类头像与详情备用名各自投影边界；job canonical正常，mergeCrew非空existing当前不可达 | F-045/F-050/F-051/F-055维持P3，F-056驳回重复并入F-050，F-178用户决定跳过修复，F-228独立确认P3；复用displayRole/imageURLs/alternateNames | 已闭环 |
 | G07 / F-226 | M001/Bangumi/C010/W006/W009 | 三方确认当前后端正式返回Bangumi career、Web显示，TV不解码/合并且卡片无出口；relation无确认caller | F-226确认P2且仅限credits卡片；解码并合并career，复用现有displayRole，relation不扩展 | 已闭环 |
 | G07 / F-175及反证 | C010/I011/W006/W008/W009 | 三方确认PersonCard/TorrentCard raw focusable/onTap同根，但静态不能证明遥控完全不可用；Search最佳结果不存在先截后去重 | F-175维持P2并拒绝P1；原生Button/disabled复用现有视觉，最佳结果旧说法驳回，VoiceOver/Select留运行验证 | 已闭环 |
 | G10 / Sheet焦点与样式全局链 | C003/C004/C005/C017及全部业务Sheet、W013/W015/W018/W019/W020 | ActionRow、SheetStyles/TextField/Picker、MultiSelection与业务Sheet的焦点、控制语义、Exit、嵌套呈现、状态反馈、长文本及VoiceOver须全局收敛 | 双审闭合；F-229确认P3、F-230确认P2，既往多业务Sheet调用链污染永久披露 | 已闭环 |

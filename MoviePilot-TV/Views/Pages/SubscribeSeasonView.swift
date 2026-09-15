@@ -1,6 +1,37 @@
 import Kingfisher
 import SwiftUI
 
+enum SeasonDisplayFormatter {
+  /// 季卡与详情 Sheet 共用季名规则，避免 S00、缺失和非法季号出现不同文案。
+  static func name(seasonNumber: Int?, rawName: String?) -> String {
+    guard let seasonNumber else { return "未知季" }
+
+    switch seasonNumber {
+    case 0:
+      return nonEmpty(rawName) ?? "特别篇"
+    case let seasonNumber where seasonNumber > 0:
+      return "第 \(seasonNumber) 季"
+    default:
+      return "未知季"
+    }
+  }
+
+  /// 将可选文本统一裁剪空白；纯空白值按缺失处理。
+  static func nonEmpty(_ value: String?) -> String? {
+    guard let value else { return nil }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
+
+  static func cardTitle(seasonNumber: Int?, rawName: String?, airDate: String?) -> String {
+    var title = name(seasonNumber: seasonNumber, rawName: rawName)
+    if let airDate = nonEmpty(airDate) {
+      title += " · \(airDate.prefix(4))"
+    }
+    return title
+  }
+}
+
 struct SubscribeSeasonView: View {
   @StateObject private var viewModel: SubscribeSeasonViewModel
   @ObservedObject var imageLifecycle: PageImageLifecycle
@@ -472,12 +503,11 @@ struct SubscribeSeasonContentView: View {
     let isSubscribed = viewModel.isSeasonSubscribed(seasonNumber)
     let isProcessing = viewModel.isSeasonSubscribing(seasonNumber)
 
-    let seasonName =
-      seasonNumber == 0
-      ? (season.name?.isEmpty == false ? season.name! : "特别篇")
-      : "第 \(seasonNumber) 季"
-    let title =
-      "\(seasonName)\(season.air_date != nil ? " · " + (season.air_date?.prefix(4) ?? "") : "")"
+    let title = SeasonDisplayFormatter.cardTitle(
+      seasonNumber: season.season_number,
+      rawName: season.name,
+      airDate: season.air_date
+    )
     let statusText = viewModel.getStatusText(season: seasonNumber)
     let episodeCount = season.episode_count ?? 0
     let bottomLeft = statusText.map { "\(episodeCount) 集 · \($0)" }
@@ -634,12 +664,17 @@ struct SeasonDetailSheet: View {
           Text(mediaInfo.title ?? "")
             .font(.title3)
             .foregroundColor(.secondary)
-          Text(season.name ?? "第 \(season.season_number ?? 0) 季")
+          Text(
+            SeasonDisplayFormatter.name(
+              seasonNumber: season.season_number,
+              rawName: season.name
+            )
+          )
             .font(.headline)
         }
 
         HStack(spacing: 30) {
-          if let date = season.air_date {
+          if let date = SeasonDisplayFormatter.nonEmpty(season.air_date) {
             Label(date, systemImage: "calendar")
           }
           if let count = season.episode_count {
@@ -652,7 +687,7 @@ struct SeasonDetailSheet: View {
         }
         .font(.body)
 
-        if let overview = season.overview, !overview.isEmpty {
+        if let overview = SeasonDisplayFormatter.nonEmpty(season.overview) {
           Text(overview)
             .font(.body)
             .foregroundColor(.secondary)
