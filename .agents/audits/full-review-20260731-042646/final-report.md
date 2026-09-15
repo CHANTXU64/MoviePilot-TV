@@ -3430,7 +3430,7 @@ return nil
 </details>
 
 <details>
-<summary>F-108 · P3 · 未验证 · 通知可能在 Sheet 下不可见却照常计时并过期</summary>
+<summary>F-108 · P3 · 未验证；用户决定跳过修复 · 通知可能在 Sheet 下不可见却照常计时并过期</summary>
 
 - 审查单元与位置：V001；`NotificationManager.swift:44-60`、根 presenter 与 Sheet 异步失败链
 - 触发路径：父页面在 Sheet 打开期间因前台刷新、订阅事件或 AI SSE 失败调用全局通知；用户在 Sheet 内停留超过 5 秒。
@@ -3439,6 +3439,7 @@ return nil
 - 证据：review_a001_j 闭合 SubscribeSeason/Transfer 异步失败、根 presenter 与错误清空链；verify_a001_h 确认静态触发链，但无法静态证明 tvOS Sheet 必然遮挡根 overlay
 - 跨端结论：条件性 TV 呈现问题；模态层级、焦点与五秒可见窗口待运行验证
 - 最小修改方向 / 裁决：Sheet 自身动作继续复用现有本地 feedback；页面异步错误在 Sheet 打开时保留并延后呈现，暂不引入额外 UIWindow 或通知队列。
+- 处置：用户决定跳过修复；保留未验证状态，不再安排 Sheet 层级与五秒计时验收。
 - 必须补充的验证：tvOS Simulator 注入无副作用失败，验证 Sheet 打开期间的层级、五秒计时、主动关闭后的剩余可见时间与焦点表现。
 
 </details>
@@ -3474,7 +3475,7 @@ return nil
 </details>
 
 <details>
-<summary>F-136 · P3 · 未验证 · 订阅分享默认排序与目标版本 Web 相反</summary>
+<summary>F-136 · P3 · 未验证；用户决定跳过修复 · 订阅分享默认排序与目标版本 Web 相反</summary>
 
 - 审查单元与位置：V009-E/F；Share 默认排序状态与 v2.15.1 Web
 - 触发路径：首次打开或重新切换到“订阅分享”，用户未主动选择排序。
@@ -3483,12 +3484,13 @@ return nil
 - 证据：verify_a001_h 闭合两处 literal、首路径与版本特定 Web/test；review_a001_j 两次独立确认版本差异，但 TV 产品默认意图缺失
 - 跨端结论：条件性默认行为未验证；产品确认 Web 对齐或 TV 特例时收敛
 - 最小修改方向 / 裁决：若复核确认没有 TV 产品差异意图，只改属性初值和切源重置两个 literal 为 `time`，补首路径断言；不改排序框架。
+- 处置：用户决定跳过修复；保留 TV 与目标版本 Web 的默认排序差异，不再安排产品意图确认或默认排序运行验证。
 - 必须补充的验证：TV 是否有明确“默认热门”的产品选择；若有则驳回。
 
 </details>
 
 <details>
-<summary>F-163 · P3 · 未验证 · 旧系统自定义样式不表达 disabled 状态</summary>
+<summary>F-163 · P3 · 未验证；用户决定跳过修复 · 旧系统自定义样式不表达 disabled 状态</summary>
 
 - 审查单元与位置：C004；旧系统Sheet自定义样式的disabled外观
 - 触发路径：旧系统分支中某Sheet控件被`.disabled`，例如Reorganize媒体ID为空时的指定剧集。
@@ -3497,12 +3499,13 @@ return nil
 - 证据：双审确认Button/Toggle静态缺口及可达disabled实例，但标准交互门禁与系统外层视觉仍可能成立，MultiSelection另有opacity反例；tvOS 26.0–26.3验证disabled视觉/focus；26.4+不受影响
 - 跨端结论：条件性P3；运行外观未验证
 - 最小修改方向 / 裁决：现有两个样式读取`isEnabled`并统一降低不可用态opacity/对比度，不改写disabled、不建状态框架。
+- 处置：用户决定跳过修复；保留 tvOS 26.0–26.3 的静态触发和运行外观未验证边界，不再安排目标系统视觉验证。
 - 必须补充的验证：tvOS 26.0–26.3实际禁用渲染和用户误判频率。
 
 </details>
 
 <details>
-<summary>F-164 · P3 · 未验证 · Fork Sheet 漏用旧系统样式修补</summary>
+<summary>F-164 · P3 · 已修复（2026-09-15） · Fork Sheet 漏用旧系统样式修补</summary>
 
 - 审查单元与位置：C004；Fork Sheet旧系统样式接入
 - 触发路径：tvOS 26.0–26.3从Search或Explore以Sheet打开Fork并聚焦唯一操作按钮。
@@ -3511,6 +3514,8 @@ return nil
 - 证据：双审确认Search/Explore两入口及父树均不传播该modifier，但漏接本身不能证明旧系统按钮确实错画/错焦；tvOS 26.0–26.3验证Fork原始渲染/焦点后裁决
 - 跨端结论：条件性P3；运行症状未验证
 - 最小修改方向 / 裁决：只在Fork根容器补一次现有modifier，不让SheetActionButton自建样式体系。
+- 修复：ForkSubscribeSheet 外层 HStack 接入现有 `.applySheetStyles()`，使 Fork Sheet 内的 SheetActionButton 继承旧系统条件样式；未修改共享按钮组件。
+- 验证：定向 `SystemViewDefaultStyleTests` 1/1 通过，依赖解析和 tvOS Simulator clean build 通过；tvOS 26.0–26.3 实际渲染/焦点仍未单独运行验证。
 - 必须补充的验证：tvOS 26.0–26.3实际渲染/焦点影响。
 
 </details>

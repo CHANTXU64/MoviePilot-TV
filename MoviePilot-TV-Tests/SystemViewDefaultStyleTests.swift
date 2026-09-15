@@ -393,6 +393,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(addDownloadSheetSource.contains("SheetActionButton("))
     XCTAssertTrue(addDownloadSheetSource.contains("SheetFeedbackView(message: message, actionTitle: \"重新加载\")"))
     XCTAssertTrue(forkSource.contains("SheetActionButton("))
+    XCTAssertTrue(forkSource.contains(".applySheetStyles()"))
     XCTAssertTrue(subscribeSheetSource.contains("title: viewModel.isNewSubscription ? \"确定\" : \"保存\""))
     XCTAssertTrue(reorganizeSheetSource.contains("title: \"开始整理\""))
     XCTAssertTrue(addDownloadSheetSource.contains("title: \"确定\""))
