@@ -1636,6 +1636,32 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertTrue(source.contains("SeasonDisplayFormatter.nonEmpty(season.overview)"))
   }
 
+  func testSeasonAndForkSheetPostersKeepStableTwoToThreeFrame() throws {
+    let testFileURL = URL(fileURLWithPath: #filePath)
+    let repositoryRoot = testFileURL.deletingLastPathComponent().deletingLastPathComponent()
+    let sources = [
+      (
+        name: "SeasonDetailSheet",
+        path: "MoviePilot-TV/Views/Pages/SubscribeSeasonView.swift"
+      ),
+      (
+        name: "ForkSubscribeSheet",
+        path: "MoviePilot-TV/Views/Sheets/ForkSubscribeSheet.swift"
+      ),
+    ]
+
+    for source in sources {
+      let contents = try String(
+        contentsOf: repositoryRoot.appendingPathComponent(source.path),
+        encoding: .utf8
+      )
+      XCTAssertTrue(
+        contents.contains(".frame(width: 360, height: 540)"),
+        "\(source.name) 海报外层必须固定为 360×540，保证缺图、加载和失败态布局稳定。"
+      )
+    }
+  }
+
   func testPrepareSubscriptionUsesSelectedPickerGroupForNewSubscriptionOnly() {
     let media = MediaInfo(tmdb_id: 12345, title: "航海王", type: "电视剧")
     let viewModel = SubscribeSeasonViewModel(mediaInfo: media)

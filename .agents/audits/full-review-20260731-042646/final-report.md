@@ -3034,15 +3034,17 @@ return nil
 </details>
 
 <details>
-<summary>F-191 · P3 · 已确认 · 详情 Sheet 海报缺少稳定的 2:3 布局约束</summary>
+<summary>F-191 · P3 · 已修复（2026-09-15） · 详情 Sheet 海报固定 2:3 布局</summary>
 
 - 审查单元与位置：W013-C→W015；SeasonDetail/Fork Sheet海报容器几何
 - 触发路径：季海报与媒体回退海报均无有效URL，或图片加载最终失败。
 - 根因：Kingfisher processor使用`360×540`只决定图像处理参考尺寸，不是SwiftUI外层几何约束；图片和`ZStack`只设置`width: 360`，失败/缺图后只剩没有固定540高度或2:3比例的`Rectangle`。
 - 用户影响：缺图、loading、失败与成功四态不能保证保持相同海报占位，具体Sheet proposal可令占位塌缩、拉伸或在状态切换时跳变。当前证据只证明局部布局退化，未证明正文或操作不可达，故P3。
-- 证据：W013-C第三裁决成案；W015主审独立确认Fork的URL缺失/loading/失败/成功四态同根；两个Sheet外层容器直接固定360×540；覆盖四态
-- 跨端结论：静态布局契约缺陷已确认；实际塌缩/拉伸形态与焦点影响未验证
+- 证据：W013-C第三裁决成案；W015主审独立确认Fork的URL缺失/loading/失败/成功四态同根；现已在两个Sheet海报外层容器直接固定360×540，并由定向测试覆盖两处接线
+- 跨端结论：TV静态布局契约已修复；实际四态渲染、焦点和VoiceOver影响未验证
 - 最小修改方向 / 裁决：直接给两个现有Sheet的海报外层容器`.frame(width: 360, height: 540)`，继续复用当前processor、clip和占位；不抽取新组件。
+- 处置：已修复；定向SubscribeSeasonContentViewTests 1/1和tvOS Simulator clean build通过；本次未跑兼容测试。
+- 剩余验证：真实URL缺失/loading/失败/成功四态的Sheet渲染，以及焦点和VoiceOver行为仍未验收。
 
 </details>
 
