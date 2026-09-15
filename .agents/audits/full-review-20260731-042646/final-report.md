@@ -3049,15 +3049,16 @@ return nil
 </details>
 
 <details>
-<summary>F-207 · P3 · 已确认 · 手动重登成功后连接信息仍停留在旧快照</summary>
+<summary>F-207 · P3 · 已修复（2026-09-15） · 手动重登成功后连接信息仍停留在旧快照</summary>
 
 - 审查单元与位置：W020-C；重登成功后的连接信息新鲜度
-- 触发路径：首次系统信息加载失败/版本未知，或后端版本、服务地址、用户名随后变化；用户在连接页执行手动重登且收到成功反馈。
-- 根因：System根`.task`只调用一次`loadSystemInfo`；手动重登成功只发布刷新反馈，没有再次加载`serverURL/username/backendVersion`，System局部状态也不观察Content的权威settings变化。
-- 用户影响：页面明确说连接已刷新，却继续展示旧版本或“未知”等旧连接信息，直到`SystemView`重建；不会阻断已成功的登录，故主审建议P3。
-- 证据：review_a001_j与verify_a001_h双审闭合单次根task、重登成功及局部版本无后续写入；获胜session epoch重登成功后复用现有loadSystemInfo或直接消费权威settings/currentUser
-- 跨端结论：纯TV新鲜度缺陷；真实重建/可见时序未验证
-- 最小修改方向 / 裁决：获胜session epoch的重登成功后复用现有`loadSystemInfo`，或让连接页直接消费已存在的权威settings/currentUser；不新增第二套连接状态。
+- 触发路径：同账号、同权限的会话在连接页执行“刷新登录凭据”；首次系统信息加载失败/版本未知，或后端返回的用户名、版本已变化；用户收到“刷新成功”反馈。
+- 根因：System根`.task`只调用一次`loadSystemInfo`；同账号重登不改变`sessionUIIdentity`，因此`SystemView`不会重建。修复前手动重登成功只发布刷新反馈，没有再次加载`serverURL/username/backendVersion`。
+- 用户影响（修复前）：页面明确说连接已刷新，却继续展示旧版本、旧用户名或“未知”等旧连接信息，直到`SystemView`重建；不会阻断已成功的登录，故主审建议P3。
+- 证据：review_a001_j与verify_a001_h双审闭合单次根task、重登成功及局部版本无后续写入；现已在`SystemViewModel.relogin()`成功路径复用`loadSystemInfo`。`SystemSessionBehaviorTests.testReloginRefreshesDisplayedSystemInfoForSameProfile`定向测试1/1通过；反向移除刷新调用后用户名、版本号和`/api/v1/system/global`断言按预期失败，恢复后定向测试通过；tvOS Simulator clean build通过。
+- 处置：已修复；成功重登后主动刷新现有System连接信息，不修改登录核心、不建立第二套连接状态。本次未跑兼容测试。
+- 跨端结论：纯TV新鲜度缺陷；真实页面重登时序、真机/VoiceOver可见性未验证。
+- 最小修改方向 / 裁决：获胜session的重登成功后复用现有`loadSystemInfo`，刷新`serverURL/username/backendVersion`；不新增第二套连接状态。
 
 </details>
 
