@@ -4,9 +4,9 @@ import SwiftUI
 struct PersonCard: View {
   static let imageSize = CGSize(width: 210, height: 315)
 
-  static func imageProcessor() -> any ImageProcessor {
-    DefaultImageProcessor.default
-      |> ResizingImageProcessor(referenceSize: imageSize, mode: .aspectFill)
+  /// 按卡片实际显示尺寸直接下采样，避免先完整解码人物原图再重绘缩小图。
+  static func imageProcessor(for size: CGSize = imageSize) -> any ImageProcessor {
+    DownsamplingImageProcessor(size: size)
   }
 
   let person: Person
@@ -97,7 +97,7 @@ struct PersonCard: View {
 
       PageManagedImage(
         url: url,
-        processor: Self.imageProcessor(),
+        processor: Self.imageProcessor(for: CGSize(width: width, height: height)),
         isEnabled: loadsImage,
         participatesInPageLifecycle: true,
         skipsMemoryCache: true

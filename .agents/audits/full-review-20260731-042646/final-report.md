@@ -3521,7 +3521,7 @@ return nil
 </details>
 
 <details>
-<summary>F-167 · P3 · 未验证 · 直接修改 SwiftUI 托管根 UIView 的 transform</summary>
+<summary>F-167 · P3 · 未验证；用户决定跳过修复 · 直接修改 SwiftUI 托管根 UIView 的 transform</summary>
 
 - 审查单元与位置：C005；UIViewRepresentable托管根视图几何
 - 触发路径：tvOS 26.0–26.3任一SheetTextField获得或失去焦点。
@@ -3530,35 +3530,38 @@ return nil
 - 证据：review_a001_h发现、verify_a001_h独立确认managed root两次写入、26.0–26.3共16调用可达及官方契约违反；删除scale/identity两次写入；目标OS验证布局/焦点动画/更新冲突
 - 跨端结论：可见用户故障未验证
 - 最小修改方向 / 裁决：同时删除1.01缩放和失焦`.identity`两次根transform写入，保留已有白底和阴影焦点反馈，不建focus状态或包装层。
+- 处置：用户表示未遇到该问题，决定跳过修复；保留托管几何契约和可见故障未验证边界，不再安排目标系统运行验证。
 - 必须补充的验证：tvOS 26.0–26.3布局/焦点动画/更新冲突表现。
 
 </details>
 
 <details>
-<summary>F-173 · P3 · 未验证 · 海报连续执行 downsampling 与 resizing</summary>
+<summary>F-173 · P3 · 未验证；用户决定跳过修复 · 海报连续执行 downsampling 与 resizing</summary>
 
 - 审查单元与位置：C009-B；MediaCard图片处理链
 - 触发路径：任一生产MediaCard成功加载海报；当前7个构造点均使用默认256×384。
-- 根因：锁定Kingfisher 8.10.0中downsampling设置DownsamplingImageProcessor，随后resizing以复合identifier append ResizingImageProcessor且无同尺寸短路；processed-cache冷缺失/原图回退重处理会再次绘制，cache命中则绕过。
-- 用户影响：冷处理海报墙可能承担额外CPU/内存/滚动开销；默认2:3最终尺寸相同、缓存命中绕过且未运行真机Instruments，不能声称已有可见性能回归。
-- 证据：双审确认锁定Kingfisher 8.10.0 processor追加/缓存key；processed-cache命中绕过处理、默认2:3同尺寸为反证；删除resizing后需真机Instruments与像素/缓存冷启动验收
+- 根因：锁定Kingfisher processor追加链中，downsampling先产出UIImage，随后resizing以复合identifier append ResizingImageProcessor且无同尺寸短路；processed-cache冷缺失/原图回退重处理会再次绘制，cache命中则绕过。当前 Package.resolved 为 Kingfisher 8.11.0，核对实现仍如此。
+- 用户影响：代码级额外绘制已确认，冷处理海报墙可能承担额外CPU/内存/滚动开销；默认2:3最终尺寸相同、缓存命中绕过且未运行真机Instruments，实际可见性能回归未量化。
+- 证据：Kingfisher processor追加、DownsamplingImageProcessor、ResizingImageProcessor 与 `resize` 绘制路径已由源码闭合；processed-cache命中绕过处理、默认2:3同尺寸为反证；删除resizing后需真机Instruments与像素/缓存冷启动验收
 - 跨端结论：条件性性能影响未验证
 - 最小修改方向 / 裁决：删除resizing，保留downsampling、SwiftUI aspectFill与clip；不增加processor或图片框架。
+- 处置：用户决定跳过修复；接受已确认的代码级重复处理，暂不安排真机性能与图片质量验收。
 - 必须补充的验证：真机CPU、内存、滚动帧率和图片质量差异。
 
 </details>
 
 <details>
-<summary>F-177 · P3 · 未验证 · 人物卡冷处理先完整解码再缩放</summary>
+<summary>F-177 · P3 · 已修复（2026-09-15） · 人物卡冷处理按实际尺寸下采样</summary>
 
 - 审查单元与位置：C010；PersonCard图片处理
 - 触发路径：演员或搜索人物分页LazyHStack首次显示新头像且processed-cache冷缺失/原图回退。
-- 根因：仅使用ResizingImageProcessor，数据路径先默认完整解码再重绘；锁定Kingfisher源码建议缩小数据改用更省内存的DownsamplingImageProcessor。
+- 根因：仅使用ResizingImageProcessor，数据路径先默认完整解码再重绘；当前Kingfisher 8.11.0源码仍保持该行为。
 - 用户影响：冷滚动可能增加CPU/峰值内存并影响帧率；缓存命中绕过且无真机Instruments，不能声称已有卡顿。
-- 证据：双审确认Kingfisher 8.10.0数据/processor链与演员/搜索分页；cache命中/后台queue/近目标原图为反证；resizing换downsampling后需真机Instruments/像质验收
-- 跨端结论：条件性性能影响未验证
-- 最小修改方向 / 裁决：按实际width/height用DownsamplingImageProcessor替换resizing；不增加处理链或图片框架。
-- 必须补充的验证：CPU、峰值内存、帧率、图像质量及真实头像尺寸分布。
+- 证据：双审确认Kingfisher数据/processor链与演员/搜索分页；cache命中/后台queue/近目标原图仍是影响边界；PersonCard已按实例width/height直接使用DownsamplingImageProcessor，未再追加resizing。
+- 跨端结论：TV端代码修复已完成；兼容测试命令误启动后中止，未将其计入验证；未进行真机验收。
+- 最小修改方向 / 裁决：已按实际width/height用DownsamplingImageProcessor替换resizing；不增加处理链或图片框架。
+- 处置：已修复；定向MPImageWarmerTests 2/2通过，tvOS Simulator clean build通过。兼容测试命令误启动后中止，未将其计入验证。
+- 必须补充的验证：真机CPU、峰值内存、帧率、图像质量及真实头像尺寸分布。
 
 </details>
 
