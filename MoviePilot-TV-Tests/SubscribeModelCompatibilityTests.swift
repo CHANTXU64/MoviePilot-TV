@@ -15,6 +15,44 @@ final class SubscribeModelCompatibilityTests: XCTestCase {
     XCTAssertEqual(json["bangumiid"] as? Int, 12345)
   }
 
+  func testSubscribeShareForkRoundTripPreservesV3WritableFields() throws {
+    let payload = """
+      {
+        "id": 91,
+        "name": "V3 分享",
+        "type": "电视剧",
+        "media_source": "themoviedb",
+        "media_id": "1396",
+        "music_type": "album",
+        "total_tracks": 12,
+        "audio_quality": "lossless",
+        "audio_format": "flac",
+        "min_bitrate": 1411000,
+        "min_bit_depth": 16,
+        "min_sample_rate": 44100,
+        "media_category": "剧集",
+        "media_category_id": "tv-drama"
+      }
+      """.data(using: .utf8)!
+
+    let share = try JSONDecoder().decode(SubscribeShare.self, from: payload)
+    let json = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: JSONEncoder().encode(share)) as? [String: Any])
+
+    XCTAssertEqual(json["id"] as? Int, 91)
+    XCTAssertEqual(json["media_source"] as? String, "themoviedb")
+    XCTAssertEqual(json["media_id"] as? String, "1396")
+    XCTAssertEqual(json["music_type"] as? String, "album")
+    XCTAssertEqual(json["total_tracks"] as? Int, 12)
+    XCTAssertEqual(json["audio_quality"] as? String, "lossless")
+    XCTAssertEqual(json["audio_format"] as? String, "flac")
+    XCTAssertEqual(json["min_bitrate"] as? Int, 1_411_000)
+    XCTAssertEqual(json["min_bit_depth"] as? Int, 16)
+    XCTAssertEqual(json["min_sample_rate"] as? Int, 44100)
+    XCTAssertEqual(json["media_category"] as? String, "剧集")
+    XCTAssertEqual(json["media_category_id"] as? String, "tv-drama")
+  }
+
   func testNavigationMediaInfoUsesWebIdentityPriorityAndPreservesValidRawIDs() {
     let subscribe = Subscribe(
       name: "Canonical",
@@ -304,5 +342,94 @@ final class SubscribeModelCompatibilityTests: XCTestCase {
     XCTAssertTrue(existingJSON["total_episode"] is NSNull)
     XCTAssertFalse(newJSON.keys.contains("total_episode"))
     XCTAssertEqual(zeroJSON["total_episode"] as? Int, 0)
+  }
+
+  func testExistingSubscribeEncodesClearedEditableFieldsAsNull() throws {
+    var existing = Subscribe(
+      id: 46,
+      name: "清空过滤",
+      type: "电视剧",
+      episode_group: "group-a",
+      keyword: "1080p",
+      include: "WEB-DL",
+      exclude: "CAM",
+      save_path: "/downloads",
+      custom_words: "旧词",
+      media_category: "剧集"
+    )
+    existing.include = nil
+    existing.exclude = nil
+    existing.keyword = nil
+    existing.custom_words = nil
+    existing.episode_group = nil
+    existing.save_path = nil
+    existing.media_category = nil
+    existing.sites = nil
+    existing.filter_groups = nil
+
+    let json = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: JSONEncoder().encode(existing)) as? [String: Any])
+
+    XCTAssertTrue(json["include"] is NSNull)
+    XCTAssertTrue(json["exclude"] is NSNull)
+    XCTAssertTrue(json["keyword"] is NSNull)
+    XCTAssertTrue(json["custom_words"] is NSNull)
+    XCTAssertTrue(json["episode_group"] is NSNull)
+    XCTAssertTrue(json["save_path"] is NSNull)
+    XCTAssertTrue(json["media_category"] is NSNull)
+    XCTAssertEqual(json["sites"] as? [Int], [])
+    XCTAssertEqual(json["filter_groups"] as? [String], [])
+  }
+
+  func testExistingSubscribeEncodesClearedSitesAndFilterGroupsAsEmptyArrays() throws {
+    var existing = Subscribe(
+      id: 47,
+      name: "清空站点和规则组",
+      type: "电影",
+      sites: [11, 12],
+      filter_groups: ["组A"]
+    )
+    existing.sites = nil
+    existing.filter_groups = []
+
+    let json = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: JSONEncoder().encode(existing)) as? [String: Any])
+
+    XCTAssertEqual(json["sites"] as? [Int], [])
+    XCTAssertEqual(json["filter_groups"] as? [String], [])
+    XCTAssertFalse(json["sites"] is NSNull)
+    XCTAssertFalse(json["filter_groups"] is NSNull)
+  }
+
+  func testExistingSubscribePreservesIncludeExcludeWhitespaceWhenSavingOtherFields() throws {
+    var existing = Subscribe(
+      id: 48,
+      name: "保留正则空白",
+      type: "电影",
+      keyword: "1080p",
+      include: " DV ",
+      exclude: " CAM "
+    )
+    existing.keyword = "2160p"
+
+    let json = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: JSONEncoder().encode(existing)) as? [String: Any])
+
+    XCTAssertEqual(json["include"] as? String, " DV ")
+    XCTAssertEqual(json["exclude"] as? String, " CAM ")
+    XCTAssertEqual(json["keyword"] as? String, "2160p")
+  }
+
+  func testNewSubscribeOmitsUnclearedOptionalEditableFields() throws {
+    let created = Subscribe(name: "新订阅", type: "电影")
+
+    let json = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: JSONEncoder().encode(created)) as? [String: Any])
+
+    XCTAssertFalse(json.keys.contains("include"))
+    XCTAssertFalse(json.keys.contains("keyword"))
+    XCTAssertFalse(json.keys.contains("episode_group"))
+    XCTAssertFalse(json.keys.contains("sites"))
+    XCTAssertFalse(json.keys.contains("filter_groups"))
   }
 }

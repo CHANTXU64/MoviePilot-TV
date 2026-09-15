@@ -3,6 +3,7 @@ import Foundation
 @testable import MoviePilot_TV
 
 struct APIServicePersistenceSnapshot {
+  private static let keychainService = "MoviePilot-TV"
   private static let legacyAccounts = ["accessToken", "currentUser", "username", "password"]
 
   let marker: Data?
@@ -11,6 +12,7 @@ struct APIServicePersistenceSnapshot {
   let loginDraftMarker: Data?
   let loginDraftKeychainRecord: String?
   let loginDraftDefaultsRecord: String?
+  let serverURL: String?
   let username: String?
   let password: String?
   let legacyKeychainValues: [String: String]
@@ -19,7 +21,7 @@ struct APIServicePersistenceSnapshot {
   @MainActor
   static func capture() -> APIServicePersistenceSnapshot {
     let keychainRecord = KeychainHelper.shared.read(
-      service: "MoviePilot-TV",
+      service: keychainService,
       account: "sessionRecord.v2"
     )
     let defaultsRecord = UserDefaults.standard.string(forKey: "sessionRecord.v2")
@@ -32,15 +34,16 @@ struct APIServicePersistenceSnapshot {
       defaultsRecord: defaultsRecord,
       loginDraftMarker: UserDefaults.standard.data(forKey: "loginDraftMarker.v1"),
       loginDraftKeychainRecord: KeychainHelper.shared.read(
-        service: "MoviePilot-TV",
+        service: keychainService,
         account: "loginDraft.v1"
       ),
       loginDraftDefaultsRecord: UserDefaults.standard.string(forKey: "loginDraft.v1"),
+      serverURL: UserDefaults.standard.string(forKey: "serverURL"),
       username: credentials?.username,
       password: credentials?.password,
       legacyKeychainValues: Dictionary(
         uniqueKeysWithValues: legacyAccounts.compactMap { account in
-          KeychainHelper.shared.read(service: "MoviePilot-TV", account: account)
+          KeychainHelper.shared.read(service: keychainService, account: account)
             .map { (account, $0) }
         }
       ),
@@ -52,8 +55,30 @@ struct APIServicePersistenceSnapshot {
     )
   }
 
+  /// 测试实例启动前清空会话与登录草稿，避免读到模拟器 App 容器里的残留。
+  @MainActor
+  static func clearForTesting() {
+    UserDefaults.standard.removeObject(forKey: "sessionMarker.v2")
+    UserDefaults.standard.removeObject(forKey: "sessionRecord.v2")
+    UserDefaults.standard.removeObject(forKey: "loginDraftMarker.v1")
+    UserDefaults.standard.removeObject(forKey: "loginDraft.v1")
+    UserDefaults.standard.removeObject(forKey: "serverURL")
+    _ = KeychainHelper.shared.delete(service: keychainService, account: "sessionRecord.v2")
+    _ = KeychainHelper.shared.delete(service: keychainService, account: "loginDraft.v1")
+    for account in legacyAccounts {
+      _ = KeychainHelper.shared.delete(service: keychainService, account: account)
+      UserDefaults.standard.removeObject(forKey: account)
+    }
+  }
+
   @MainActor
   func restore() {
+    if let serverURL {
+      UserDefaults.standard.set(serverURL, forKey: "serverURL")
+    } else {
+      UserDefaults.standard.removeObject(forKey: "serverURL")
+    }
+
     if let marker {
       UserDefaults.standard.set(marker, forKey: "sessionMarker.v2")
     } else {
@@ -152,6 +177,7 @@ extension APIService {
 
   static func isolatedTestingInstance() -> APIService {
     let persistence = APIServicePersistenceSnapshot.capture()
+    APIServicePersistenceSnapshot.clearForTesting()
     defer { persistence.restore() }
     return testingInstance()
   }
@@ -181,6 +207,7 @@ extension APIService {
       password: nil,
       persist: false
     )
+    loginDraft = nil
   }
 
   func setStoredCredentialsForTesting(username: String?, password: String?) {

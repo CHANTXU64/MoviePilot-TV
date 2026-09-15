@@ -353,7 +353,7 @@ struct SubscribeSheet: View {
         id: \.id,
         selected: Binding(
           get: { Set(viewModel.subscribe.sites ?? []) },
-          set: { viewModel.subscribe.sites = $0.isEmpty ? nil : Array($0) }
+          set: { viewModel.subscribe.sites = Array($0) }
         ),
         label: { $0.name }
       )
@@ -364,7 +364,7 @@ struct SubscribeSheet: View {
         id: \.name,
         selected: Binding(
           get: { Set(viewModel.subscribe.filter_groups ?? []) },
-          set: { viewModel.subscribe.filter_groups = $0.isEmpty ? nil : Array($0) }
+          set: { viewModel.subscribe.filter_groups = Array($0) }
         ),
         label: { $0.name }
       )

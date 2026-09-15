@@ -287,7 +287,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
 
     await viewModel?.prepareStartupIfNeeded()
 
-    XCTAssertEqual(service.settings?.BACKEND_VERSION, "v2.15.6")
+    XCTAssertEqual(service.settings?.BACKEND_VERSION, "v3.0.1")
     XCTAssertNil(viewModel?.backendVersionWarning)
 
     service.baseURLForTesting = "https://old.content-view-model-tests.local"
@@ -351,7 +351,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     await ContentViewModelURLProtocol.stub.setFailSettingsTransport(false)
     NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
     try await waitUntil("expected warning to clear after foreground refresh") {
-      service.settings?.BACKEND_VERSION == "v2.15.6"
+      service.settings?.BACKEND_VERSION == "v3.0.1"
         && viewModel?.backendVersionWarning == nil
     }
     XCTAssertNil(viewModel?.backendVersionWarning)
@@ -565,7 +565,7 @@ private actor ContentViewModelURLProtocolStub {
     case "old.content-view-model-tests.local":
       backendVersion = "v2.14.9"
     default:
-      backendVersion = "v2.15.6"
+      backendVersion = "v3.0.1"
     }
 
     let rejectsSettings = url.path == "/api/v1/system/global"
@@ -597,7 +597,7 @@ private actor ContentViewModelURLProtocolStub {
         .data(using: .utf8)!
     } else if url.path == "/api/v1/system/global" {
       data =
-        #"{"success":true,"data":{"TMDB_IMAGE_DOMAIN":"image.tmdb.org","GLOBAL_IMAGE_CACHE":true,"BACKEND_VERSION":"\#(backendVersion)","FRONTEND_VERSION":"v2.15.6"}}"#
+        #"{"success":true,"data":{"TMDB_IMAGE_DOMAIN":"image.tmdb.org","GLOBAL_IMAGE_CACHE":true,"BACKEND_VERSION":"\#(backendVersion)","FRONTEND_VERSION":"v3.0.1"}}"#
         .data(using: .utf8)!
     } else if url.path == "/api/v1/system/global/user" {
       data =

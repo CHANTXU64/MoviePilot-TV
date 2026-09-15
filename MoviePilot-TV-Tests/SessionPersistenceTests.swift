@@ -181,6 +181,64 @@ extension SystemSessionBehaviorTests {
     XCTAssertNil(restoredService.loginDraft)
   }
 
+  func testIsolatedTestingInstanceDoesNotLoadLeftoverLoginDraft() {
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { snapshot.restore(to: sharedService) }
+
+    UserDefaults.standard.set(
+      Data(#"{"revision":12,"storage":"tombstone"}"#.utf8),
+      forKey: "sessionMarker.v2"
+    )
+    UserDefaults.standard.set(
+      Data(#"{"revision":3,"storage":"userDefaults"}"#.utf8),
+      forKey: "loginDraftMarker.v1"
+    )
+    let leftoverDraft =
+      #"{"serverURL":"https:\/\/leftover.local","username":"leftover-user","password":"leftover-password","reason":"credentialsRejected"}"#
+    UserDefaults.standard.set(leftoverDraft, forKey: "loginDraft.v1")
+
+    let isolated = APIService.isolatedTestingInstance()
+    XCTAssertNil(isolated.loginDraft)
+
+    isolated.replaceSessionForTesting(
+      baseURL: "https://session-refresh-tests.local",
+      token: "token",
+      currentUser: sessionToken(userId: 1, accessToken: "token", userName: "test-user")
+    )
+    XCTAssertNil(isolated.loginDraft)
+    XCTAssertEqual(UserDefaults.standard.string(forKey: "loginDraft.v1"), leftoverDraft)
+  }
+
+  func testReplaceSessionForTestingClearsInMemoryLoginDraftLoadedFromDefaults() {
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { snapshot.restore(to: sharedService) }
+
+    UserDefaults.standard.set(
+      Data(#"{"revision":12,"storage":"tombstone"}"#.utf8),
+      forKey: "sessionMarker.v2"
+    )
+    UserDefaults.standard.set(
+      Data(#"{"revision":3,"storage":"userDefaults"}"#.utf8),
+      forKey: "loginDraftMarker.v1"
+    )
+    UserDefaults.standard.set(
+      #"{"serverURL":"https:\/\/leftover.local","username":"leftover-user","password":"leftover-password","reason":"credentialsRejected"}"#,
+      forKey: "loginDraft.v1"
+    )
+
+    let service = APIService.testingInstance()
+    XCTAssertEqual(service.loginDraft?.username, "leftover-user")
+
+    service.replaceSessionForTesting(
+      baseURL: "https://session-refresh-tests.local",
+      token: "token",
+      currentUser: sessionToken(userId: 1, accessToken: "token", userName: "test-user")
+    )
+    XCTAssertNil(service.loginDraft)
+  }
+
   func testLegacyCredentialsWithoutTokenAreClearedInsteadOfReloggedIn() {
     let sharedService = APIService.shared
     let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)

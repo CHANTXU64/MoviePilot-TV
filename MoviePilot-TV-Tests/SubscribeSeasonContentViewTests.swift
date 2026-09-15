@@ -1638,6 +1638,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     )
     XCTAssertTrue(MediaInfo(tmdb_id: 5, title: "未知", type: "未知").canDirectlySubscribe)
     XCTAssertTrue(MediaInfo(tmdb_id: 6, title: "无合集 ID 的系列", type: "系列").canDirectlySubscribe)
+    XCTAssertFalse(MediaInfo(source: "musicbrainz", media_id: "mb-1", title: "专辑", type: "音乐").canDirectlySubscribe)
   }
 
   func testSeasonPrimaryActionSubscribesSeasonWhenNavigationHandlerIsProvided() throws {
@@ -2244,7 +2245,7 @@ private actor SubscriptionSnapshotURLProtocolStub {
       return try jsonResponse(#"{"success":true}"#)
     }
 
-    if request.httpMethod == "GET", path.hasPrefix("/api/v1/subscribe/search/") {
+    if request.httpMethod == "POST", path.hasPrefix("/api/v1/subscribe/search/") {
       return try jsonResponse(#"{"success":true}"#)
     }
 
@@ -2252,7 +2253,7 @@ private actor SubscriptionSnapshotURLProtocolStub {
       return try jsonResponse(#"{"success":true}"#)
     }
 
-    if request.httpMethod == "GET", path.hasPrefix("/api/v1/subscribe/reset/") {
+    if request.httpMethod == "POST", path.hasPrefix("/api/v1/subscribe/reset/") {
       return try jsonResponse(#"{"success":true}"#)
     }
 
@@ -2301,8 +2302,11 @@ private actor SubscriptionSnapshotURLProtocolStub {
       return seasonAvailabilityResponse
     }
 
-    if path.hasPrefix("/api/v1/media/tmdb:") {
-      let tmdbId = request.url?.lastPathComponent.split(separator: ":").last.flatMap { Int($0) }
+    if path.hasPrefix("/api/v1/media/"),
+      let last = request.url?.lastPathComponent,
+      last != "search", last != "recognize", last != "seasons"
+    {
+      let tmdbId = Int(last)
       return try mediaDetailResponse(tmdbId: tmdbId)
     }
 

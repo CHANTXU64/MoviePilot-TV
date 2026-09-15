@@ -1369,7 +1369,7 @@ class APIService: ObservableObject {
     let startingEpoch = session.epoch
     do {
       let data = try await makeRequest(endpoint: "/user/current")
-      let user = try JSONDecoder().decode(CurrentUserResponse.self, from: data)
+      let user = try await decodeOrUnwrap(CurrentUserResponse.self, from: data)
       guard let accessToken = token, !accessToken.isEmpty else { return false }
       let recoveredUser = user.token(accessToken: accessToken)
       applyRecoveredCurrentUser(recoveredUser, accessToken: accessToken)
@@ -1482,7 +1482,7 @@ class APIService: ObservableObject {
         lease: lease,
         requireCurrentLease: true
       )
-      let response = try JSONDecoder().decode(CurrentUserResponse.self, from: data)
+      let response = try await decodeOrUnwrap(CurrentUserResponse.self, from: data)
       guard let accessToken = lease.token, !accessToken.isEmpty else {
         return .rejected
       }
@@ -1829,6 +1829,34 @@ class APIService: ObservableObject {
     return endpoint
   }
 
+  /// V3 媒体身份路径：`/{prefix}/{media_id}?media_source=`，不再把 `tmdb:123` 整段放进 path。
+  private func endpointForMediaIdentity(
+    pathPrefix: String,
+    identity: MediaIdentity,
+    extraParams: [String: String?] = [:]
+  ) throws -> String {
+    guard let encodedMediaId = encodeMediaIDPathSegment(identity.mediaId), !encodedMediaId.isEmpty
+    else {
+      throw APIError.invalidURL
+    }
+    var params = extraParams
+    params["media_source"] = identity.source
+    return try buildEndpoint(path: "\(pathPrefix)/\(encodedMediaId)", params: params)
+  }
+
+  private func endpointForMediaIdentity(
+    pathPrefix: String,
+    media: MediaInfo,
+    extraParams: [String: String?] = [:]
+  ) throws -> String {
+    guard let identity = media.identity else { throw APIError.invalidURL }
+    return try endpointForMediaIdentity(
+      pathPrefix: pathPrefix,
+      identity: identity,
+      extraParams: extraParams
+    )
+  }
+
   // MARK: - Helpers
 
   private func decodeOrUnwrap<T: Decodable>(
@@ -2085,7 +2113,7 @@ class APIService: ObservableObject {
       "title": query,
       "page": String(page),
     ]
-    params["source"] = source?.rawValue
+    params["media_source"] = source?.rawValue
     let endpoint = try buildEndpoint(
       path: "/media/search",
       params: params
@@ -2286,7 +2314,7 @@ class APIService: ObservableObject {
         "title": title,
         "page": "1",
         "count": "20",
-        "source": source.rawValue,
+        "media_source": source.rawValue,
       ])
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([MediaInfo].self, from: data)
@@ -2305,7 +2333,7 @@ class APIService: ObservableObject {
       "title": query,
       "page": String(page),
     ]
-    params["source"] = source?.rawValue
+    params["media_source"] = source?.rawValue
     let endpoint = try buildEndpoint(
       path: "/media/search",
       params: params
@@ -2327,7 +2355,7 @@ class APIService: ObservableObject {
       "title": query,
       "page": String(page),
     ]
-    params["source"] = source?.rawValue
+    params["media_source"] = source?.rawValue
     let endpoint = try buildEndpoint(
       path: "/media/search",
       params: params
@@ -2689,18 +2717,26 @@ class APIService: ObservableObject {
   /// 查询媒体是否已入库
   /// - 对应前端: MoviePilot-Frontend/src/components/cards/MediaCard.vue (handleCheckExists)
   /// - 应用场景: 电影详情页订阅按钮展示入库状态
+  /// - 备注: v3.0.1 起该接口的 `success` 恒为 `true`，命中与否只体现在 `data.item`
+  ///   （Web 读 `result.item?.id`）；v2 才把命中结果放在 `success` 上。两者都以 `data.item.id` 为准。
   func fetchMediaServerExists(media: MediaInfo) async throws -> Bool {
+    struct MediaServerExistsData: Decodable {
+      let item: [String: String]?
+    }
+    let identity = media.identity
     let endpoint = try buildEndpoint(
       path: "/mediaserver/exists",
       params: [
-        "tmdbid": media.tmdb_id.map(String.init),
+        "media_source": identity?.source,
+        "media_id": identity?.mediaId,
         "title": media.title,
         "year": media.year,
         "season": media.season.map(String.init),
         "mtype": media.type,
       ])
     let data = try await makeRequest(endpoint: endpoint)
-    return try decodeStrictActionResponseSync(from: data).success
+    let result = try await decodeOrUnwrap(MediaServerExistsData.self, from: data)
+    return !(result.item?["id"] ?? "").isEmpty
   }
 
   // MARK: - 资源搜索
@@ -2796,12 +2832,17 @@ class APIService: ObservableObject {
     keyword: String, type: String?, area: String?, title: String?, year: String?, season: Int?, sites: String?
   ) -> AsyncThrowingStream<SearchStreamEvent, Error> {
     do {
-      guard let mediaId = encodeMediaIDPathSegment(keyword) else {
+      guard let identity = MediaIdentifier.identity(from: keyword) else {
+        throw APIError.invalidURL
+      }
+      guard let encodedMediaId = encodeMediaIDPathSegment(identity.mediaId), !encodedMediaId.isEmpty
+      else {
         throw APIError.invalidURL
       }
       let endpoint = try buildEndpoint(
-        path: "/search/media/\(mediaId)/stream",
+        path: "/search/media/\(encodedMediaId)/stream",
         params: [
+          "media_source": identity.source,
           "mtype": type,
           "area": area,
           "title": title,
@@ -2838,12 +2879,13 @@ class APIService: ObservableObject {
 
     let endpoint: String
     if isIdSearch {
-      guard let mediaId = encodeMediaIDPathSegment(keyword) else {
+      guard let identity = MediaIdentifier.identity(from: keyword) else {
         throw APIError.invalidURL
       }
-      endpoint = try buildEndpoint(
-        path: "/search/media/\(mediaId)",
-        params: [
+      endpoint = try endpointForMediaIdentity(
+        pathPrefix: "/search/media",
+        identity: identity,
+        extraParams: [
           "mtype": type,
           "area": area,
           "title": title,
@@ -2879,7 +2921,7 @@ class APIService: ObservableObject {
       path: "/media/recognize",
       params: [
         "title": title,
-        "source": source?.rawValue,
+        "media_source": source?.rawValue,
       ])
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap(RecognizeResponse.self, from: data)
@@ -2889,17 +2931,17 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/discover/MediaDetailView.vue
   /// - 应用场景: 影视剧详情页的主接口，获取最全的媒体信息。
   func fetchMediaDetail(media: MediaInfo) async throws -> MediaInfo {
-    guard let mediaId = media.apiMediaId else {
-      // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求，并可能导致上层视图显示“无数据”。
-      // 这里直接抛出错误以便上层捕获并处理UI状态。
+    guard media.identity != nil else {
+      // 遵循 Vue 逻辑，如果无法生成媒体身份，则不发起请求，并可能导致上层视图显示“无数据”。
       throw APIError.invalidURL
     }
-    let params: [String: String?] = [
-      "type_name": media.type,
-      "title": media.title,
-      "year": media.year,
-    ]
-    let endpoint = try buildEndpoint(path: "/media/\(mediaId)", params: params)
+    let endpoint = try endpointForMediaIdentity(
+      pathPrefix: "/media",
+      media: media,
+      extraParams: [
+        "type_name": media.type
+      ]
+    )
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap(MediaInfo.self, from: data)
   }
@@ -3067,12 +3109,13 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeSeasonDialog.vue (getMediaSeasons)
   /// - 应用场景: 在前端的季订阅弹窗中，当用户**未**选择任何特殊的“剧集组”时，调用此 API 获取并展示该剧集在 TMDB 上定义的标准分季信息（S01, S02 等）。
   func getMediaSeasons(media: MediaInfo) async throws -> [TmdbSeason] {
-    guard let mediaId = media.apiMediaId else {
-      // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求，返回空数组
+    guard let identity = media.identity else {
+      // 遵循 Vue 逻辑，如果无法生成媒体身份，则不发起请求，返回空数组
       return []
     }
     let params: [String: String?] = [
-      "mediaid": mediaId,
+      "media_source": identity.source,
+      "media_id": identity.mediaId,
       "title": media.title,
       "year": media.year,
       "season": media.season.map(String.init),
@@ -3209,11 +3252,11 @@ class APIService: ObservableObject {
   func deleteSubscriptionResult(media: MediaInfo, season: Int?) async throws -> (
     success: Bool, message: String?
   ) {
-    guard let mediaId = media.apiMediaId else {
-      // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求，返回失败
+    guard let identity = media.identity else {
+      // 遵循 Vue 逻辑，如果无法生成媒体身份，则不发起请求，返回失败
       return (false, "媒体身份不完整")
     }
-    return try await deleteSubscriptionResult(mediaId: mediaId, season: season)
+    return try await deleteSubscriptionResult(identity: identity, season: season)
   }
 
   /// 通过已归一化的主媒体 ID 和季数删除订阅
@@ -3229,12 +3272,23 @@ class APIService: ObservableObject {
   ) async throws -> (
     success: Bool, message: String?
   ) {
-    guard let encodedMediaId = encodeMediaIDPathSegment(mediaId), !encodedMediaId.isEmpty else {
-      throw APIError.invalidURL
+    guard let identity = MediaIdentifier.identity(from: mediaId) else {
+      return (false, "媒体身份不完整")
     }
-    let endpoint = try buildEndpoint(
-      path: "/subscribe/media/\(encodedMediaId)",
-      params: ["season": season.map(String.init)])
+    return try await deleteSubscriptionResult(identity: identity, season: season)
+  }
+
+  private func deleteSubscriptionResult(
+    identity: MediaIdentity,
+    season: Int?
+  ) async throws -> (
+    success: Bool, message: String?
+  ) {
+    let endpoint = try endpointForMediaIdentity(
+      pathPrefix: "/subscribe/media",
+      identity: identity,
+      extraParams: ["season": season.map(String.init)]
+    )
     let data = try await makeRequest(
       endpoint: endpoint,
       method: "DELETE"
@@ -3301,7 +3355,7 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/cards/SubscribeCard.vue (searchSubscribe)
   /// - 应用场景: 用户在订阅列表手动点击“搜索”按钮，强制后端立即针对该条目执行一次资源检索。
   func searchSubscription(id: Int) async throws -> Bool {
-    let data = try await makeRequest(endpoint: "/subscribe/search/\(id)")
+    let data = try await makeRequest(endpoint: "/subscribe/search/\(id)", method: "POST")
     let success = try decodeStrictActionResponseSync(from: data).success
     if success {
       invalidateSubscriptionCaches()
@@ -3315,7 +3369,7 @@ class APIService: ObservableObject {
   func resetSubscription(id: Int) async throws -> (
     success: Bool, message: String?
   ) {
-    let data = try await makeRequest(endpoint: "/subscribe/reset/\(id)")
+    let data = try await makeRequest(endpoint: "/subscribe/reset/\(id)", method: "POST")
     let result = try decodeStrictActionResponseSync(from: data)
     if result.success {
       invalidateSubscriptionCaches()
@@ -3333,8 +3387,10 @@ class APIService: ObservableObject {
 
   /// 查询特定媒体（及特定季）命中的订阅摘要
   /// - 对应前端: `MoviePilot-Frontend/src/components/cards/MediaCard.vue` 和 `MoviePilot-Frontend/src/views/discover/MediaDetailView.vue` 的 `checkSubscribe`
-  /// - 应用场景: 详情页 Header 取消订阅前，先复用查询结果解析出真实订阅归属的媒体 ID。
-  /// - 备注: 这里只查询传入 `media.apiMediaId` 对应的订阅；原始 ID + fallback TMDB 的解析顺序由调用方控制。
+  /// - 应用场景: 详情页 Header 取消订阅前，先确认该媒体身份下是否存在订阅。
+  /// - 备注: 清单要求 lookup 只用于确认——`mediaId` 恒为本次查询使用的媒体身份，
+  ///   响应回显的身份只用来判断“归属是否已被确认”（`isResolvedMediaId`），不再充当删除目标。
+  ///   原始 ID + fallback TMDB 的解析顺序由调用方控制。
   func fetchSubscriptionLookup(
     media: MediaInfo,
     season: Int? = nil
@@ -3349,12 +3405,13 @@ class APIService: ObservableObject {
       let media_id: String?
       let mediaid: String?
 
-      var apiMediaId: String? {
+      /// 响应是否给出了可确认的订阅归属：canonical 成对身份，或任一可用的专用 ID。
+      /// 只回答“有没有”，不再把响应身份当作删除目标。
+      var hasResolvedIdentity: Bool {
         if let source = media_source, !source.isEmpty,
           let id = media_id, !id.isEmpty
         {
-          let prefix = source == "themoviedb" ? "tmdb" : source
-          return "\(prefix):\(id)"
+          return true
         }
         return MediaIdentifier.apiMediaId(
           tmdbId: MediaIdentifier.truthyNumericIdentifier(tmdbid),
@@ -3362,36 +3419,28 @@ class APIService: ObservableObject {
           bangumiId: MediaIdentifier.truthyNumericIdentifier(bangumiid),
           anilistId: MediaIdentifier.truthyNumericIdentifier(anilistid),
           fallbackMediaId: mediaid
-        )
+        ) != nil
       }
     }
-    guard let mediaId = media.apiMediaId else {
-      // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求
+    guard let identity = media.identity else {
+      // 遵循 Vue 逻辑，如果无法生成媒体身份，则不发起请求
       return nil
     }
-    guard let encodedMediaId = encodeMediaIDPathSegment(mediaId), !encodedMediaId.isEmpty else {
-      throw APIError.invalidURL
-    }
-    let endpoint = try buildEndpoint(
-      path: "/subscribe/media/\(encodedMediaId)",
-      params: [
+    let endpoint = try endpointForMediaIdentity(
+      pathPrefix: "/subscribe/media",
+      identity: identity,
+      extraParams: [
         "season": season.map(String.init),
         "title": media.title,
-      ])
+      ]
+    )
     let data = try await makeRequest(endpoint: endpoint)
     let resp = try await decodeOrUnwrap(SubscribeLookupResp.self, from: data)
     guard let id = resp.id else { return nil }
-    if let resolvedMediaId = resp.apiMediaId {
-      return SubscriptionLookupResult(
-        id: id,
-        mediaId: resolvedMediaId,
-        isResolvedMediaId: true
-      )
-    }
     return SubscriptionLookupResult(
       id: id,
-      mediaId: mediaId,
-      isResolvedMediaId: false
+      mediaId: identity.mediaKey,
+      isResolvedMediaId: resp.hasResolvedIdentity
     )
   }
 

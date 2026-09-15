@@ -435,8 +435,8 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let deletedMediaRequests = await DetailHeaderSubscriptionURLProtocol.stub.deletedMediaRequests()
 
     XCTAssertEqual(deletedSubscriptionIDs, [])
-    XCTAssertEqual(deletedMediaRequests.map(\.path), ["/api/v1/subscribe/media/tmdb:998877"])
-    XCTAssertEqual(deletedMediaRequests.map(\.query), [nil])
+    XCTAssertEqual(deletedMediaRequests.map(\.path), ["/api/v1/subscribe/media/998877"])
+    XCTAssertEqual(deletedMediaRequests.map(\.query), ["media_source=themoviedb"])
     XCTAssertEqual(preloadTask.isSubscribed, false)
   }
 
@@ -569,8 +569,10 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     XCTAssertEqual(snapshotRequestCount, 1)
   }
 
+  /// 响应里回显的身份不再是删除目标：清单要求删除键取自当前媒体自身的身份，
+  /// lookup 只用于确认“这个身份下确实有订阅”。v3 后端按身份过滤，回显身份恒等于查询身份。
   @MainActor
-  func testCancelSubscriptionUsesSubscriptionMediaIdFromOriginalLookupFallback() async throws {
+  func testCancelSubscriptionDeletesByCurrentMediaIdentityNotResponseIdentity() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
@@ -599,7 +601,10 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let deletedMediaRequests = await DetailHeaderSubscriptionURLProtocol.stub.deletedMediaRequests()
 
     XCTAssertEqual(deletedSubscriptionIDs, [])
-    XCTAssertEqual(deletedMediaRequests.map(\.path), ["/api/v1/subscribe/media/tmdb:998877"])
+    XCTAssertEqual(
+      deletedMediaRequests.map(\.path),
+      ["/api/v1/subscribe/media/detail-header-title-fallback-douban"])
+    XCTAssertEqual(deletedMediaRequests.map(\.query), ["media_source=douban"])
     XCTAssertEqual(preloadTask.isSubscribed, false)
   }
 
@@ -634,12 +639,14 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let deletedMediaRequests = await DetailHeaderSubscriptionURLProtocol.stub.deletedMediaRequests()
 
     XCTAssertEqual(deletedSubscriptionIDs, [])
-    XCTAssertEqual(deletedMediaRequests.map(\.path), ["/api/v1/subscribe/media/tmdb:998877"])
+    XCTAssertEqual(deletedMediaRequests.map(\.path), ["/api/v1/subscribe/media/998877"])
     XCTAssertEqual(preloadTask.isSubscribed, false)
   }
 
+  /// 清单要求 lookup 只用于确认：删除目标必须是本次查询使用的媒体身份。
+  /// 响应里的遗留 `mediaid`（哪怕形如 `tmdb:0`）不再决定删除目标，只作为“归属已确认”的信号。
   @MainActor
-  func testFetchSubscriptionLookupKeepsOpaqueLegacyMediaIdLikeWeb() async throws {
+  func testFetchSubscriptionLookupKeepsQueryIdentityAsDeleteTarget() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
@@ -660,12 +667,12 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     )
 
     XCTAssertEqual(lookup?.id, 7201)
-    XCTAssertEqual(lookup?.mediaId, "tmdb:0")
+    XCTAssertEqual(lookup?.mediaId, "tmdb:112233")
     XCTAssertEqual(lookup?.isResolvedMediaId, true)
   }
 
   @MainActor
-  func testFetchSubscriptionLookupUsesWebSubscribeIdentityOrder() async throws {
+  func testFetchSubscriptionLookupKeepsQueryIdentityRegardlessOfResponseIdentity() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(DetailHeaderSubscriptionURLProtocol.self) }
 
@@ -673,31 +680,38 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let snapshot = DetailHeaderSubscriptionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    let cases: [(queryId: Int, payload: String, expectedMediaId: String)] = [
+    // 这些响应形态覆盖 canonical 成对身份、空 canonical、专用 ID、遗留 `mediaid` 与负值。
+    // 删除目标一律取查询身份；响应只回答“归属是否已确认”。
+    let cases: [(queryId: Int, payload: String, expectsResolvedIdentity: Bool)] = [
       (
         112_234,
         #"{"id":7202,"tmdbid":445566,"anilistid":778899,"media_source":"anilist","media_id":"778899","mediaid":"tmdb:445566"}"#,
-        "anilist:778899"
+        true
       ),
       (
         112_235,
         #"{"id":7203,"tmdbid":445567,"anilistid":778900,"media_source":"anilist","media_id":""}"#,
-        "tmdb:445567"
+        true
       ),
       (
         112_236,
         #"{"id":7204,"anilistid":778901}"#,
-        "anilist:778901"
+        true
       ),
       (
         112_237,
         #"{"id":7205,"tmdbid":0,"mediaid":"tmdb:445568"}"#,
-        "tmdb:445568"
+        true
       ),
       (
         112_238,
         #"{"id":7206,"tmdbid":-1,"mediaid":"tmdb:445569"}"#,
-        "tmdb:-1"
+        true
+      ),
+      (
+        112_239,
+        #"{"id":7207,"name":"Minimal","type":"电视剧","season":1}"#,
+        false
       ),
     ]
 
@@ -715,8 +729,8 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       let lookup = try await service.fetchSubscriptionLookup(
         media: MediaInfo(tmdb_id: testCase.queryId, type: "电视剧")
       )
-      XCTAssertEqual(lookup?.mediaId, testCase.expectedMediaId)
-      XCTAssertEqual(lookup?.isResolvedMediaId, true)
+      XCTAssertEqual(lookup?.mediaId, "tmdb:\(testCase.queryId)")
+      XCTAssertEqual(lookup?.isResolvedMediaId, testCase.expectsResolvedIdentity)
     }
   }
 
@@ -753,7 +767,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let deletedMediaRequests = await DetailHeaderSubscriptionURLProtocol.stub.deletedMediaRequests()
 
     XCTAssertEqual(deletedSubscriptionIDs, [])
-    XCTAssertEqual(deletedMediaRequests.map(\.path), ["/api/v1/subscribe/media/tmdb:998877"])
+    XCTAssertEqual(deletedMediaRequests.map(\.path), ["/api/v1/subscribe/media/998877"])
     XCTAssertEqual(preloadTask.isSubscribed, false)
   }
 
@@ -1299,7 +1313,7 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let deletedMediaRequests = await DetailHeaderSubscriptionURLProtocol.stub.deletedMediaRequests()
     XCTAssertTrue(success)
     XCTAssertEqual(deletedMediaRequests.map(\.absoluteString), [
-      "http://detail-header-subscription-tests.local/api/v1/subscribe/media/custom:abc%2Fdef%20value"
+      "http://detail-header-subscription-tests.local/api/v1/subscribe/media/abc%2Fdef%20value?media_source=custom"
     ])
   }
 
@@ -1884,35 +1898,39 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
       return try jsonResponse(subscriptionSnapshot)
     }
 
-    if method == "GET",
-      path.hasPrefix("/api/v1/subscribe/media/douban:")
-    {
-      if path.contains("detail-header-title-fallback-douban"),
-        let id = resolvedSubscriptionsByTMDBID[998_877] ?? nil
-      {
-        return try jsonResponse(#"{"id":\#(id),"name":"标题兜底订阅","type":"电视剧","season":1,"tmdbid":998877}"#)
-      }
-      if path.contains("detail-header-minimal-alias-douban"),
-        let id = resolvedSubscriptionsByTMDBID[998_877] ?? nil
-      {
-        return try jsonResponse(#"{"id":\#(id)}"#)
-      }
-      return try jsonResponse("{}")
-    }
+    if method == "GET", path.hasPrefix("/api/v1/subscribe/media/") {
+      let mediaId = url.lastPathComponent
+      let mediaSource = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+        .queryItems?
+        .first(where: { $0.name == "media_source" })?
+        .value
 
-    if method == "GET",
-      path.hasPrefix("/api/v1/subscribe/media/bangumi:")
-    {
-      if path.contains("bangumi:12345"),
-        let id = resolvedSubscriptionsByTMDBID[998_877] ?? nil
-      {
-        return try jsonResponse(#"{"id":\#(id),"name":"Bangumi 订阅","type":"电视剧","season":1,"bangumiid":12345}"#)
+      if mediaSource == "douban" {
+        if mediaId.contains("detail-header-title-fallback-douban"),
+          let id = resolvedSubscriptionsByTMDBID[998_877] ?? nil
+        {
+          return try jsonResponse(#"{"id":\#(id),"name":"标题兜底订阅","type":"电视剧","season":1,"tmdbid":998877}"#)
+        }
+        if mediaId.contains("detail-header-minimal-alias-douban"),
+          let id = resolvedSubscriptionsByTMDBID[998_877] ?? nil
+        {
+          return try jsonResponse(#"{"id":\#(id)}"#)
+        }
+        return try jsonResponse("{}")
       }
-      return try jsonResponse("{}")
-    }
 
-    if method == "GET", path.hasPrefix("/api/v1/subscribe/media/tmdb:") {
-      let tmdbId = path.split(separator: ":").last.flatMap { Int($0) }
+      if mediaSource == "bangumi" {
+        if mediaId == "12345",
+          let id = resolvedSubscriptionsByTMDBID[998_877] ?? nil
+        {
+          return try jsonResponse(#"{"id":\#(id),"name":"Bangumi 订阅","type":"电视剧","season":1,"bangumiid":12345}"#)
+        }
+        return try jsonResponse("{}")
+      }
+
+      let tmdbId = (mediaSource == "themoviedb" || mediaSource == "tmdb")
+        ? Int(mediaId)
+        : nil
       if let tmdbId {
         lookupCountsByTMDBID[tmdbId, default: 0] += 1
         if failedLookupTMDBIDs.contains(tmdbId) {
@@ -1946,6 +1964,7 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
 
     if method == "DELETE",
       path.hasPrefix("/api/v1/subscribe/"),
+      !path.hasPrefix("/api/v1/subscribe/media/"),
       let id = path.split(separator: "/").last.flatMap({ Int($0) })
     {
       if deleteSucceeds,
@@ -1958,10 +1977,23 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
     }
 
     if method == "DELETE", path.hasPrefix("/api/v1/subscribe/media/") {
+      let mediaId = url.lastPathComponent
+      let mediaSource = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+        .queryItems?
+        .first(where: { $0.name == "media_source" })?
+        .value
       if deleteSucceeds,
-        let tmdbId = path.split(separator: ":").last.flatMap({ Int($0) })
+        mediaSource == "themoviedb" || mediaSource == "tmdb",
+        let tmdbId = Int(mediaId)
       {
         resolvedSubscriptionsByTMDBID[tmdbId] = nil
+      } else if deleteSucceeds, mediaSource == "douban",
+        mediaId.contains("detail-header-title-fallback-douban")
+          || mediaId.contains("detail-header-minimal-alias-douban")
+      {
+        // 后端按身份匹配删除：这两个豆瓣身份背后映射的订阅也必须一并消失，
+        // 否则删除后的状态复查会重新读到同一家订阅。
+        resolvedSubscriptionsByTMDBID[998_877] = nil
       }
       mediaDeleteRequests.append(
         DetailHeaderSubscriptionMediaDeleteRequest(

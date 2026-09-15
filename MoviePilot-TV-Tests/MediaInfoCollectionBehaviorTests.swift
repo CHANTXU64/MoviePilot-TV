@@ -64,11 +64,12 @@ final class MediaInfoCollectionBehaviorTests: XCTestCase {
     XCTAssertEqual(media.apiMediaId, "tmdb:12345")
   }
 
-  func testMediaInfoIdentityKeepsWebZeroValueAndDeclaredBlankFallsBackByBuiltInOrder() {
-    XCTAssertEqual(
-      MediaInfo(tmdb_id: 0).identity,
-      MediaIdentity(source: "themoviedb", mediaId: "0")
-    )
+  func testMediaInfoIdentityTreatsRawZeroAsMissingAndDeclaredBlankFallsBackByBuiltInOrder() {
+    // raw 数值 ID 的 0 按 Web 的 JavaScript truthy 语义视为缺失，不再拼出 `themoviedb:0`。
+    XCTAssertNil(MediaInfo(tmdb_id: 0).identity)
+    XCTAssertNil(MediaInfo(bangumi_id: 0, anilist_id: 0).identity)
+    XCTAssertNil(MediaInfo(douban_id: "0").identity)
+
     XCTAssertEqual(
       MediaInfo(
         tmdb_id: 42,
@@ -78,6 +79,43 @@ final class MediaInfoCollectionBehaviorTests: XCTestCase {
       ).identity,
       MediaIdentity(source: "themoviedb", mediaId: "42")
     )
+    // 响应里显式给出的 `media_id: "0"` 仍按遗留哨兵参与匹配（见 SubscribeSeasonContentViewTests），
+    // 与“raw 数值 0 视为缺失”是两条规则；它只在编码请求时被省略。
+    XCTAssertEqual(
+      MediaInfo(mediaid_prefix: "tmdb", media_id: "0").identity,
+      MediaIdentity(source: "themoviedb", mediaId: "0")
+    )
+  }
+
+  func testMediaInfoEncodingOmitsHalfAndIllegalMediaIdentityPairs() throws {
+    func encodedJSON(_ media: MediaInfo) throws -> [String: Any] {
+      let data = try JSONEncoder().encode(media)
+      return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    // 只有 source、没有 media_id：不能编出半对身份（v3 会 422）。
+    let halfPair = try encodedJSON(
+      MediaInfo(source: "tmdb", media_id: nil, title: "无 ID", type: "电视剧"))
+    XCTAssertNil(halfPair["media_source"])
+    XCTAssertNil(halfPair["media_id"])
+
+    // 只有 media_id、没有 source：同样不能编出半对身份。
+    let missingSource = try encodedJSON(
+      MediaInfo(source: nil, mediaid_prefix: "tmdb", media_id: "42", title: "无来源", type: "电视剧"))
+    XCTAssertNil(missingSource["media_source"])
+    XCTAssertNil(missingSource["media_id"])
+
+    // `media_id: "0"` 在 v3 校验中非法，不能外发。
+    let zeroId = try encodedJSON(
+      MediaInfo(source: "themoviedb", media_id: "0", title: "零值", type: "电视剧"))
+    XCTAssertNil(zeroId["media_source"])
+    XCTAssertNil(zeroId["media_id"])
+
+    // 成对且合法时照常写出（来源按调用方给的值原样透传，后端接受 `tmdb` 别名）。
+    let complete = try encodedJSON(
+      MediaInfo(source: "tmdb", media_id: "42", title: "完整", type: "电视剧"))
+    XCTAssertEqual(complete["media_source"] as? String, "tmdb")
+    XCTAssertEqual(complete["media_id"] as? String, "42")
   }
 
   func testExplicitSourceIdentityWinsOverAuxiliaryTMDB() {
@@ -182,6 +220,32 @@ final class MediaInfoCollectionBehaviorTests: XCTestCase {
     XCTAssertEqual(custom.identity?.source, "tvdb")
     XCTAssertEqual(tmdb.identity?.source, "themoviedb")
     XCTAssertEqual(tmdb.apiMediaId, "tmdb:42")
+  }
+
+  func testV3MediaSourceFieldPopulatesIdentityWithoutLegacySourceKey() throws {
+    let media = try JSONDecoder().decode(
+      MediaInfo.self,
+      from: Data(
+        #"{"media_source":"douban","media_id":"34943510","tmdb_id":550,"title":"搏击俱乐部","type":"电影"}"#
+          .utf8
+      )
+    )
+
+    XCTAssertEqual(media.source, "douban")
+    XCTAssertEqual(media.identity, MediaIdentity(source: "douban", mediaId: "34943510"))
+    XCTAssertEqual(media.apiMediaId, "douban:34943510")
+    XCTAssertEqual(media.tmdb_id, 550)
+  }
+
+  func testMusicTypeIsNotDirectlySubscribableOnTV() {
+    XCTAssertFalse(
+      MediaInfo(
+        source: "musicbrainz",
+        media_id: "abc",
+        title: "Album",
+        type: "音乐"
+      ).canDirectlySubscribe
+    )
   }
 
   func testManualMediaIdAllowsEmptyAndPositiveASCIIDigitsOnly() {

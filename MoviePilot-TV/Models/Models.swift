@@ -48,10 +48,11 @@ nonisolated enum MediaIdentifier {
     legacyMediaId: String? = nil
   ) -> MediaIdentity? {
     var sourceIds: [String: String] = [:]
-    sourceIds["themoviedb"] = tmdbId.map(String.init)
-    sourceIds["douban"] = normalizedString(doubanId)
-    sourceIds["bangumi"] = bangumiId.map(String.init)
-    sourceIds["anilist"] = anilistId.map(String.init)
+    // raw 数值 ID 的 0 按 Web 的 JavaScript truthy 语义视为缺失；负数仍是 truthy，保持原值。
+    sourceIds["themoviedb"] = truthyNumericIdentifier(tmdbId).map(String.init)
+    sourceIds["douban"] = truthySourceIdentifier(doubanId)
+    sourceIds["bangumi"] = truthyNumericIdentifier(bangumiId).map(String.init)
+    sourceIds["anilist"] = truthyNumericIdentifier(anilistId).map(String.init)
 
     var declaredSources: [String] = []
     for value in [mediaIdPrefix, source] {
@@ -151,6 +152,13 @@ nonisolated enum MediaIdentifier {
   static func truthyNumericIdentifier(_ id: Int?) -> Int? {
     guard let id, id != 0 else { return nil }
     return id
+  }
+
+  /// 文本型来源原生 ID 的零值判据：`"0"` 在 v3 校验中非法（Web `isValidMediaSourceId` 同样拒绝），
+  /// 因此按缺失处理，让身份解析继续回退到下一个来源。
+  static func truthySourceIdentifier(_ value: String?) -> String? {
+    guard let normalized = normalizedString(value), normalized != "0" else { return nil }
+    return normalized
   }
 
   static func normalizedString(_ value: String?) -> String? {
@@ -657,7 +665,9 @@ nonisolated struct MediaInfoJSON: Decodable {
     anilist_id = try container.decodeIfPresent(Int.self, forKey: .anilist_id)
     imdb_id = try container.decodeIfPresent(String.self, forKey: .imdb_id)
     tvdb_id = try container.decodeIfPresent(Int.self, forKey: .tvdb_id)
-    source = try container.decodeIfPresent(String.self, forKey: .source)
+    source =
+      try container.decodeIfPresent(String.self, forKey: .media_source)
+      ?? container.decodeIfPresent(String.self, forKey: .source)
     mediaid_prefix = try container.decodeIfPresent(String.self, forKey: .mediaid_prefix)
     media_id = try container.decodeIfPresent(String.self, forKey: .media_id)
     title = try container.decodeIfPresent(String.self, forKey: .title)
@@ -815,7 +825,7 @@ nonisolated struct MediaInfo: Codable, Identifiable, Hashable {
   }
 
   enum CodingKeys: String, CodingKey {
-    case tmdb_id, douban_id, bangumi_id, anilist_id, imdb_id, tvdb_id, source,
+    case tmdb_id, douban_id, bangumi_id, anilist_id, imdb_id, tvdb_id, source, media_source,
       mediaid_prefix, media_id, title,
       original_title, original_name, names,
       type, year, season, poster_path, backdrop_path,
@@ -943,7 +953,9 @@ nonisolated struct MediaInfo: Codable, Identifiable, Hashable {
     anilist_id = try container.decodeIfPresent(Int.self, forKey: .anilist_id)
     imdb_id = try container.decodeIfPresent(String.self, forKey: .imdb_id)
     tvdb_id = try container.decodeIfPresent(Int.self, forKey: .tvdb_id)
-    source = try container.decodeIfPresent(String.self, forKey: .source)
+    source =
+      try container.decodeIfPresent(String.self, forKey: .media_source)
+      ?? container.decodeIfPresent(String.self, forKey: .source)
     mediaid_prefix = try container.decodeIfPresent(String.self, forKey: .mediaid_prefix)
     media_id = try container.decodeIfPresent(String.self, forKey: .media_id)
     title = try container.decodeIfPresent(String.self, forKey: .title)
@@ -1010,8 +1022,12 @@ nonisolated struct MediaInfo: Codable, Identifiable, Hashable {
     try encode(imdb_id, .imdb_id)
     try encode(tvdb_id, .tvdb_id)
     try encode(source, .source)
+    // v3 把 `media_source` + `media_id` 定义为成对身份：半对、空白或 `"0"` 都会被后端 422 拒绝。
+    // 只有成对且值合法时才写出这两个键，否则整体省略，退化为“无身份”，由后端按标题/年份处理。
+    let mediaIdentityPair = Self.encodableMediaIdentityPair(source: source, mediaId: media_id)
+    try encode(mediaIdentityPair?.source, .media_source)
     try encode(mediaid_prefix, .mediaid_prefix)
-    try encode(media_id, .media_id)
+    try encode(mediaIdentityPair?.mediaId, .media_id)
     try encode(title, .title)
     try encode(original_title, .original_title)
     try encode(original_name, .original_name)
@@ -1036,6 +1052,19 @@ nonisolated struct MediaInfo: Codable, Identifiable, Hashable {
     try encode(genres, .genres)
     try encode(category, .category)
     try encode(subscribeShare, .subscribeShare)
+  }
+
+  /// v3 认可的媒体身份对：来源与来源原生 ID 必须同时合法，否则整体视为“无身份”。
+  /// 空白与 `"0"` 都不是合法的 `media_id`，提交它们只会换来 422。
+  nonisolated private static func encodableMediaIdentityPair(
+    source: String?,
+    mediaId: String?
+  ) -> (source: String, mediaId: String)? {
+    guard let normalizedSource = MediaIdentifier.normalizedString(source),
+      normalizedSource != "0",
+      let normalizedMediaId = MediaIdentifier.truthySourceIdentifier(mediaId)
+    else { return nil }
+    return (normalizedSource, normalizedMediaId)
   }
 
   nonisolated private static func parseCleanedNames(
@@ -1207,9 +1236,9 @@ nonisolated struct MediaInfo: Codable, Identifiable, Hashable {
   }
 
   /// 判断媒体是否可以直接订阅，无需选择季。
-  /// Web 只将明确的电视剧放入分季流程，合集不提供订阅入口。
+  /// Web 只将明确的电视剧放入分季流程，合集不提供订阅入口；音乐走独立订阅链，TV 暂不跟进。
   var canDirectlySubscribe: Bool {
-    !isCollection && type != "电视剧"
+    !isCollection && type != "电视剧" && type != "音乐"
   }
 
   static func == (lhs: MediaInfo, rhs: MediaInfo) -> Bool {
@@ -1983,8 +2012,8 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
     try container.encode(name, forKey: .name)
     try container.encodeIfPresent(year, forKey: .year)
     try container.encode(type, forKey: .type)
-    try container.encodeIfPresent(keyword, forKey: .keyword)
-    try container.encodeIfPresent(season, forKey: .season)
+    try encodeUserClearableString(keyword, forKey: .keyword, to: &container)
+    try encodeUserClearableValue(season, forKey: .season, to: &container)
     try container.encodeIfPresent(poster, forKey: .poster)
     try container.encodeIfPresent(backdrop, forKey: .backdrop)
     try container.encodeIfPresent(vote, forKey: .vote)
@@ -2007,26 +2036,82 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
     try container.encodeIfPresent(anilistid, forKey: .anilistid)
     try container.encodeIfPresent(media_source, forKey: .media_source)
     try container.encodeIfPresent(media_id, forKey: .media_id)
-    try container.encodeIfPresent(quality, forKey: .quality)
-    try container.encodeIfPresent(resolution, forKey: .resolution)
-    try container.encodeIfPresent(effect, forKey: .effect)
-    try container.encodeIfPresent(include, forKey: .include)
-    try container.encodeIfPresent(exclude, forKey: .exclude)
-    try container.encodeIfPresent(sites, forKey: .sites)
-    try container.encodeIfPresent(downloader, forKey: .downloader)
-    try container.encodeIfPresent(save_path, forKey: .save_path)
+    try encodeUserClearableString(quality, forKey: .quality, to: &container)
+    try encodeUserClearableString(resolution, forKey: .resolution, to: &container)
+    try encodeUserClearableString(effect, forKey: .effect, to: &container)
+    try encodeUserClearablePattern(include, forKey: .include, to: &container)
+    try encodeUserClearablePattern(exclude, forKey: .exclude, to: &container)
+    try encodeUserClearableArray(sites, forKey: .sites, to: &container)
+    try encodeUserClearableString(downloader, forKey: .downloader, to: &container)
+    try encodeUserClearableString(save_path, forKey: .save_path, to: &container)
     try container.encodeIfPresent(best_version, forKey: .best_version)
     try container.encodeIfPresent(best_version_full, forKey: .best_version_full)
     try container.encodeIfPresent(current_priority, forKey: .current_priority)
-    try container.encodeIfPresent(filter_groups, forKey: .filter_groups)
-    try container.encodeIfPresent(custom_words, forKey: .custom_words)
+    try encodeUserClearableArray(filter_groups, forKey: .filter_groups, to: &container)
+    try encodeUserClearableString(custom_words, forKey: .custom_words, to: &container)
     try container.encodeIfPresent(description, forKey: .description)
-    try container.encodeIfPresent(filter, forKey: .filter)
-    try container.encodeIfPresent(episode_group, forKey: .episode_group)
+    try encodeUserClearableString(filter, forKey: .filter, to: &container)
+    try encodeUserClearableString(episode_group, forKey: .episode_group, to: &container)
     try container.encodeIfPresent(search_imdbid, forKey: .search_imdbid)
-    try container.encodeIfPresent(media_category, forKey: .media_category)
+    try encodeUserClearableString(media_category, forKey: .media_category, to: &container)
     try container.encodeIfPresent(mediaid, forKey: .mediaid)
     try container.encodeIfPresent(episode_priority, forKey: .episode_priority)
+  }
+
+  /// 已落库订阅的更新必须区分“未提交”和“用户明确清空”。
+  /// v3 PUT 使用 `exclude_unset=True`：省略表示不修改；字符串发 `null`，站点/规则组发 `[]`。
+  private var encodesExplicitNullsForClearedFields: Bool {
+    (id ?? 0) > 0
+  }
+
+  private func encodeUserClearableString(
+    _ value: String?,
+    forKey key: CodingKeys,
+    to container: inout KeyedEncodingContainer<CodingKeys>
+  ) throws {
+    if let value = MediaIdentifier.normalizedString(value) {
+      try container.encode(value, forKey: key)
+    } else if encodesExplicitNullsForClearedFields {
+      try container.encodeNil(forKey: key)
+    }
+  }
+
+  /// 包含/排除词按原始字符串提交。首尾空格可能是正则边界，不能用 ID 规范化裁掉。
+  private func encodeUserClearablePattern(
+    _ value: String?,
+    forKey key: CodingKeys,
+    to container: inout KeyedEncodingContainer<CodingKeys>
+  ) throws {
+    if let value, !value.isEmpty {
+      try container.encode(value, forKey: key)
+    } else if encodesExplicitNullsForClearedFields {
+      try container.encodeNil(forKey: key)
+    }
+  }
+
+  private func encodeUserClearableValue<Value: Encodable>(
+    _ value: Value?,
+    forKey key: CodingKeys,
+    to container: inout KeyedEncodingContainer<CodingKeys>
+  ) throws {
+    if let value {
+      try container.encode(value, forKey: key)
+    } else if encodesExplicitNullsForClearedFields {
+      try container.encodeNil(forKey: key)
+    }
+  }
+
+  private func encodeUserClearableArray<Value: Encodable>(
+    _ value: [Value]?,
+    forKey key: CodingKeys,
+    to container: inout KeyedEncodingContainer<CodingKeys>
+  ) throws {
+    if let value {
+      try container.encode(value, forKey: key)
+    } else if encodesExplicitNullsForClearedFields {
+      // Web 清空多选项发 `[]`，不是 `null`。
+      try container.encode([Value](), forKey: key)
+    }
   }
 
   /// 成员初始化器，用于手动创建订阅。
@@ -2124,8 +2209,8 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
       doubanid: doubanid,
       bangumiid: bangumiid,
       anilistid: anilistid,
-      media_source: media_source,
-      media_id: media_id,
+      media_source: identity?.source,
+      media_id: identity?.mediaId,
       mediaid: mediaid,
       season: season,
       best_version: best_version,
@@ -2849,6 +2934,10 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
   let media_source: String?
   // 来源原生 ID
   let media_id: String?
+  // 音乐实体类型；影视分享通常为空，Fork 时按 Web 原样回传。
+  let music_type: String?
+  // 专辑总曲目数；影视分享通常为空。
+  let total_tracks: Int?
   // 季号
   let season: Int?
   // 海报
@@ -2871,6 +2960,16 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
   let resolution: String?
   // 特效
   let effect: String?
+  // 音质等级正则；v3 分享对象可写，Fork 必须回传。
+  let audio_quality: String?
+  // 音频格式正则
+  let audio_format: String?
+  // 最低码率（bps）
+  let min_bitrate: Int?
+  // 最低位深（bit）
+  let min_bit_depth: Int?
+  // 最低采样率（Hz）
+  let min_sample_rate: Int?
   // 总集数
   let total_episode: Int?
   // 时间
@@ -2879,6 +2978,8 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
   let custom_words: String?
   // 自定义媒体类别
   let media_category: String?
+  // 自定义媒体类别稳定 ID；v3 分享对象可写，Fork 必须回传。
+  let media_category_id: String?
   // 复用次数
   let count: Int?
   // 自定义剧集组
@@ -2893,10 +2994,12 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
     case raw_id = "id"
     case subscribe_id, share_title, share_comment, share_user, share_uid, name, year, type, keyword,
       tmdbid,
-      doubanid, bangumiid, anilistid, media_source, media_id, season, poster, backdrop, vote,
+      doubanid, bangumiid, anilistid, media_source, media_id, music_type, total_tracks, season, poster,
+      backdrop, vote,
       description, filter, include, exclude,
       quality,
-      resolution, effect, total_episode, date, custom_words, media_category, count,
+      resolution, effect, audio_quality, audio_format, min_bitrate, min_bit_depth, min_sample_rate,
+      total_episode, date, custom_words, media_category, media_category_id, count,
       episode_group
   }
 
@@ -2918,6 +3021,8 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
     anilistid = try container.decodeIfPresent(Int.self, forKey: .anilistid)
     media_source = try container.decodeIfPresent(String.self, forKey: .media_source)
     media_id = try container.decodeIfPresent(String.self, forKey: .media_id)
+    music_type = try container.decodeIfPresent(String.self, forKey: .music_type)
+    total_tracks = try container.decodeIfPresent(Int.self, forKey: .total_tracks)
     season = try container.decodeIfPresent(Int.self, forKey: .season)
     poster = try container.decodeIfPresent(String.self, forKey: .poster)
     backdrop = try container.decodeIfPresent(String.self, forKey: .backdrop)
@@ -2929,10 +3034,16 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
     quality = try container.decodeIfPresent(String.self, forKey: .quality)
     resolution = try container.decodeIfPresent(String.self, forKey: .resolution)
     effect = try container.decodeIfPresent(String.self, forKey: .effect)
+    audio_quality = try container.decodeIfPresent(String.self, forKey: .audio_quality)
+    audio_format = try container.decodeIfPresent(String.self, forKey: .audio_format)
+    min_bitrate = try container.decodeIfPresent(Int.self, forKey: .min_bitrate)
+    min_bit_depth = try container.decodeIfPresent(Int.self, forKey: .min_bit_depth)
+    min_sample_rate = try container.decodeIfPresent(Int.self, forKey: .min_sample_rate)
     total_episode = try container.decodeIfPresent(Int.self, forKey: .total_episode)
     date = try container.decodeIfPresent(String.self, forKey: .date)
     custom_words = try container.decodeIfPresent(String.self, forKey: .custom_words)
     media_category = try container.decodeIfPresent(String.self, forKey: .media_category)
+    media_category_id = try container.decodeIfPresent(String.self, forKey: .media_category_id)
     count = try container.decodeIfPresent(Int.self, forKey: .count)
     episode_group = try container.decodeIfPresent(String.self, forKey: .episode_group)
 
@@ -3279,7 +3390,7 @@ nonisolated struct ManualTransferPreviewItem: Codable, Hashable {
   let season: JSONValue?
   let episode: JSONValue?
   let episode_end: JSONValue?
-  let part: String?
+  let part: JSONValue?
   let org_string: String?
   let apply_words: [String]?
   let resource_team: String?

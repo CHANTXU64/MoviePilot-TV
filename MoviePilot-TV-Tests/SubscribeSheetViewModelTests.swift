@@ -51,7 +51,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     await SubscribeSheetURLProtocol.stub.reset()
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET",
-      path: "/api/v1/subscribe/media/tmdb:998901",
+      path: "/api/v1/subscribe/media/998901",
       json: "{}"
     )
     await SubscribeSheetURLProtocol.stub.respond(
@@ -90,17 +90,17 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     await SubscribeSheetURLProtocol.stub.reset()
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET",
-      path: "/api/v1/media/douban:fallback-douban",
+      path: "/api/v1/media/fallback-douban",
       json: #"{"douban_id":"fallback-douban","title":"回退取消订阅","type":"电影"}"#
     )
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET",
-      path: "/api/v1/subscribe/media/douban:fallback-douban",
+      path: "/api/v1/subscribe/media/fallback-douban",
       json: "{}"
     )
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET",
-      path: "/api/v1/subscribe/media/tmdb:998903",
+      path: "/api/v1/subscribe/media/998903",
       json: #"{"id":998903,"name":"回退取消订阅","type":"电影","tmdbid":998903}"#
     )
     service.baseURLForTesting = "http://subscribe-sheet-tests.local"
@@ -125,7 +125,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     let deleteCountBeforeConfirmation = await SubscribeSheetURLProtocol.stub.requestCount(
       method: "DELETE",
-      path: "/api/v1/subscribe/media/tmdb:998903"
+      path: "/api/v1/subscribe/media/998903"
     )
     XCTAssertEqual(deleteCountBeforeConfirmation, 0)
 
@@ -136,17 +136,19 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     let tmdbDeleteCount = await SubscribeSheetURLProtocol.stub.requestCount(
       method: "DELETE",
-      path: "/api/v1/subscribe/media/tmdb:998903"
+      path: "/api/v1/subscribe/media/998903"
     )
     let doubanDeleteCount = await SubscribeSheetURLProtocol.stub.requestCount(
       method: "DELETE",
-      path: "/api/v1/subscribe/media/douban:fallback-douban"
+      path: "/api/v1/subscribe/media/fallback-douban"
     )
     XCTAssertEqual(tmdbDeleteCount, 1)
     XCTAssertEqual(doubanDeleteCount, 0)
   }
 
-  func testSubscriptionHandlerDeletesCanonicalLookupIdentityInsteadOfAuxiliaryTMDB()
+  /// 清单要求 lookup 只用于确认：删除键取自当前媒体的 `getMediaId()`。
+  /// 响应即使回显另一套 canonical 身份（v2 才会出现），也不得改变删除目标。
+  func testSubscriptionHandlerDeletesQueriedIdentityInsteadOfResponseIdentity()
     async throws
   {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
@@ -161,12 +163,12 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     await SubscribeSheetURLProtocol.stub.reset()
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET",
-      path: "/api/v1/media/tmdb:998907",
+      path: "/api/v1/media/998907",
       json: #"{"tmdb_id":998907,"title":"统一身份取消订阅","type":"电影"}"#
     )
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET",
-      path: "/api/v1/subscribe/media/tmdb:998907",
+      path: "/api/v1/subscribe/media/998907",
       json: #"{"id":998907,"name":"统一身份取消订阅","type":"电影","tmdbid":998907,"media_source":"thetvdb","media_id":"778902"}"#
     )
     service.baseURLForTesting = "http://subscribe-sheet-tests.local"
@@ -188,16 +190,18 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       preloadTask.isSubscribed == false
     }
 
-    let canonicalDeleteCount = await SubscribeSheetURLProtocol.stub.requestCount(
+    let queriedDeleteCount = await SubscribeSheetURLProtocol.stub.requestCount(
       method: "DELETE",
-      path: "/api/v1/subscribe/media/thetvdb:778902"
+      path: "/api/v1/subscribe/media/998907"
     )
-    let tmdbDeleteCount = await SubscribeSheetURLProtocol.stub.requestCount(
+    let responseIdentityDeleteCount = await SubscribeSheetURLProtocol.stub.requestCount(
       method: "DELETE",
-      path: "/api/v1/subscribe/media/tmdb:998907"
+      path: "/api/v1/subscribe/media/778902"
     )
-    XCTAssertEqual(canonicalDeleteCount, 1)
-    XCTAssertEqual(tmdbDeleteCount, 0)
+    XCTAssertEqual(queriedDeleteCount, 1)
+    XCTAssertEqual(
+      responseIdentityDeleteCount, 0,
+      "删除目标必须是本次查询用的媒体身份，不能跟着响应回显的身份漂移")
   }
 
   func testSubscriptionHandlerKeepsCachedStateWhenDeleteFails() async throws {
@@ -212,17 +216,17 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     await SubscribeSheetURLProtocol.stub.reset()
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET",
-      path: "/api/v1/media/tmdb:998904",
+      path: "/api/v1/media/998904",
       json: #"{"tmdb_id":998904,"title":"取消失败","type":"电影"}"#
     )
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET",
-      path: "/api/v1/subscribe/media/tmdb:998904",
+      path: "/api/v1/subscribe/media/998904",
       json: #"{"id":998904,"name":"取消失败","type":"电影","tmdbid":998904}"#
     )
     await SubscribeSheetURLProtocol.stub.respond(
       method: "DELETE",
-      path: "/api/v1/subscribe/media/tmdb:998904",
+      path: "/api/v1/subscribe/media/998904",
       json: #"{"success":false,"message":"后端拒绝取消"}"#
     )
     service.baseURLForTesting = "http://subscribe-sheet-tests.local"
@@ -262,7 +266,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     await SubscribeSheetURLProtocol.stub.reset()
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET",
-      path: "/api/v1/subscribe/media/tmdb:998905",
+      path: "/api/v1/subscribe/media/998905",
       json: #"{"id":998905,"name":"远端已订阅","type":"电影","tmdbid":998905}"#
     )
     service.baseURLForTesting = "http://subscribe-sheet-tests.local"
@@ -286,7 +290,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertNil(handler.unsubscribeConfirmationMessage)
     let deleteRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
       method: "DELETE",
-      path: "/api/v1/subscribe/media/tmdb:998905"
+      path: "/api/v1/subscribe/media/998905"
     )
     XCTAssertEqual(deleteRequestCount, 0)
   }
@@ -303,7 +307,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     await SubscribeSheetURLProtocol.stub.reset()
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET",
-      path: "/api/v1/subscribe/media/tmdb:998906",
+      path: "/api/v1/subscribe/media/998906",
       json: "{}"
     )
     service.baseURLForTesting = "http://subscribe-sheet-tests.local"
@@ -327,7 +331,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertNil(handler.unsubscribeConfirmationMessage)
     let deleteRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
       method: "DELETE",
-      path: "/api/v1/subscribe/media/tmdb:998906"
+      path: "/api/v1/subscribe/media/998906"
     )
     XCTAssertEqual(deleteRequestCount, 0)
   }
@@ -444,7 +448,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     let statusRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
       method: "PUT", path: "/api/v1/subscribe/status/777")
     let searchRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
-      method: "GET", path: "/api/v1/subscribe/search/777")
+      method: "POST", path: "/api/v1/subscribe/search/777")
     XCTAssertEqual(statusRequestCount, 1)
     XCTAssertEqual(searchRequestCount, 0)
   }
@@ -480,7 +484,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     let statusRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
       method: "PUT", path: "/api/v1/subscribe/status/778")
     let searchRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
-      method: "GET", path: "/api/v1/subscribe/search/778")
+      method: "POST", path: "/api/v1/subscribe/search/778")
     XCTAssertEqual(statusRequestCount, 1)
     XCTAssertEqual(searchRequestCount, 1)
   }
@@ -514,7 +518,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     let statusRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
       method: "PUT", path: "/api/v1/subscribe/status/779")
     let searchRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
-      method: "GET", path: "/api/v1/subscribe/search/779")
+      method: "POST", path: "/api/v1/subscribe/search/779")
     XCTAssertEqual(statusRequestCount, 0)
     XCTAssertEqual(searchRequestCount, 1)
   }
@@ -549,7 +553,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     let saveTask = Task { await viewModel.save() }
     try await waitUntil("follow-up search starts") {
       await SubscribeSheetURLProtocol.stub.requestCount(
-        method: "GET", path: "/api/v1/subscribe/search/780") == 1
+        method: "POST", path: "/api/v1/subscribe/search/780") == 1
     }
 
     XCTAssertEqual(notifications.count(), 0)
@@ -879,6 +883,157 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(negativeRequestCount, 0)
   }
 
+  func testLoadDataLoadsEpisodeGroupsForV3TMDBIdentityWithoutLegacyTmdbId() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/media/groups/817004",
+      json: #"[{"id":"group-b","name":"播出顺序","group_count":1,"episode_count":10}]"#
+    )
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(
+        id: 787,
+        name: "v3 TMDB 订阅",
+        type: "电视剧",
+        media_source: "themoviedb",
+        media_id: "817004"
+      ),
+      apiService: service
+    )
+
+    await viewModel.loadData()
+
+    XCTAssertNil(viewModel.loadErrorMessage)
+    XCTAssertEqual(viewModel.episodeGroups.map(\.name), ["播出顺序"])
+    let requestCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "GET", path: "/api/v1/media/groups/817004")
+    XCTAssertEqual(requestCount, 1)
+  }
+
+  func testSaveExistingSubscriptionSendsNullForClearedInclude() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "PUT",
+      path: "/api/v1/subscribe/",
+      json: #"{"success":true}"#
+    )
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/subscribe/788",
+      json: #"{"id":788,"name":"清空包含词","type":"电影","include":null}"#
+    )
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(
+        id: 788,
+        name: "清空包含词",
+        type: "电影",
+        include: "WEB-DL"
+      ),
+      apiService: service
+    )
+    viewModel.subscribe.include = nil
+
+    let didSave = await viewModel.save()
+    XCTAssertTrue(didSave)
+
+    var capturedBody = await SubscribeSheetURLProtocol.stub.requestBody(
+      method: "PUT",
+      path: "/api/v1/subscribe/"
+    )
+    if capturedBody == nil {
+      capturedBody = await SubscribeSheetURLProtocol.stub.requestBody(
+        method: "PUT",
+        path: "/api/v1/subscribe"
+      )
+    }
+    let json = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: try XCTUnwrap(capturedBody)) as? [String: Any])
+    XCTAssertTrue(json["include"] is NSNull)
+
+    let reread = try await service.fetchSubscription(id: 788)
+    XCTAssertNil(reread.include)
+  }
+
+  func testSaveExistingSubscriptionSendsEmptyArraysForClearedSitesAndFilterGroups() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "PUT",
+      path: "/api/v1/subscribe/",
+      json: #"{"success":true}"#
+    )
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/subscribe/789",
+      json: #"{"id":789,"name":"清空站点","type":"电影","sites":[],"filter_groups":[]}"#
+    )
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(
+        id: 789,
+        name: "清空站点",
+        type: "电影",
+        sites: [3, 5],
+        filter_groups: ["组A"]
+      ),
+      apiService: service
+    )
+    viewModel.subscribe.sites = []
+    viewModel.subscribe.filter_groups = []
+
+    let didSave = await viewModel.save()
+    XCTAssertTrue(didSave)
+
+    var capturedBody = await SubscribeSheetURLProtocol.stub.requestBody(
+      method: "PUT",
+      path: "/api/v1/subscribe/"
+    )
+    if capturedBody == nil {
+      capturedBody = await SubscribeSheetURLProtocol.stub.requestBody(
+        method: "PUT",
+        path: "/api/v1/subscribe"
+      )
+    }
+    let json = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: try XCTUnwrap(capturedBody)) as? [String: Any])
+    XCTAssertEqual((json["sites"] as? [Any])?.count, 0)
+    XCTAssertEqual((json["filter_groups"] as? [Any])?.count, 0)
+    XCTAssertFalse(json["sites"] is NSNull)
+    XCTAssertFalse(json["filter_groups"] is NSNull)
+
+    let reread = try await service.fetchSubscription(id: 789)
+    XCTAssertEqual(reread.sites ?? [], [])
+    XCTAssertEqual(reread.filter_groups ?? [], [])
+  }
+
   func testLoadDataShowsOnlyActiveSites() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
@@ -972,7 +1127,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     await SubscribeSheetURLProtocol.stub.reset()
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET",
-      path: "/api/v1/subscribe/media/tmdb:123456",
+      path: "/api/v1/subscribe/media/123456",
       json: #"{"id":812,"name":"已有订阅","type":"电影","tmdbid":123456}"#
     )
     await SubscribeSheetURLProtocol.stub.respond(
@@ -993,7 +1148,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     await viewModel.cancel()
 
     let lookupRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
-      method: "GET", path: "/api/v1/subscribe/media/tmdb:123456")
+      method: "GET", path: "/api/v1/subscribe/media/123456")
     let postCountWithoutSlash = await SubscribeSheetURLProtocol.stub.requestCount(
       method: "POST", path: "/api/v1/subscribe")
     let postCountWithSlash = await SubscribeSheetURLProtocol.stub.requestCount(
@@ -1019,7 +1174,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     defer { snapshot.restore(to: service) }
 
     await SubscribeSheetURLProtocol.stub.reset()
-    await SubscribeSheetURLProtocol.stub.fail(path: "/api/v1/subscribe/media/tmdb:123457")
+    await SubscribeSheetURLProtocol.stub.fail(path: "/api/v1/subscribe/media/123457")
     service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
 
@@ -1079,7 +1234,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     await SubscribeSheetURLProtocol.stub.reset()
     await SubscribeSheetURLProtocol.stub.suspend(
-      path: "/api/v1/subscribe/media/tmdb:123459")
+      path: "/api/v1/subscribe/media/123459")
     service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
 
@@ -1091,7 +1246,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     let firstLoad = Task { await viewModel.loadData() }
     try await waitUntil("first subscription lookup starts") {
       await SubscribeSheetURLProtocol.stub.requestCount(
-        method: "GET", path: "/api/v1/subscribe/media/tmdb:123459") == 1
+        method: "GET", path: "/api/v1/subscribe/media/123459") == 1
     }
 
     let duplicateLoad = Task { await viewModel.loadData() }
@@ -1099,15 +1254,15 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     XCTAssertTrue(viewModel.isLoading)
     let lookupCountWhileSuspended = await SubscribeSheetURLProtocol.stub.requestCount(
-      method: "GET", path: "/api/v1/subscribe/media/tmdb:123459")
+      method: "GET", path: "/api/v1/subscribe/media/123459")
     XCTAssertEqual(lookupCountWhileSuspended, 1)
 
     await SubscribeSheetURLProtocol.stub.release(
-      path: "/api/v1/subscribe/media/tmdb:123459")
+      path: "/api/v1/subscribe/media/123459")
     await firstLoad.value
 
     let finalLookupCount = await SubscribeSheetURLProtocol.stub.requestCount(
-      method: "GET", path: "/api/v1/subscribe/media/tmdb:123459")
+      method: "GET", path: "/api/v1/subscribe/media/123459")
     let postCountWithoutSlash = await SubscribeSheetURLProtocol.stub.requestCount(
       method: "POST", path: "/api/v1/subscribe")
     let postCountWithSlash = await SubscribeSheetURLProtocol.stub.requestCount(
@@ -1400,7 +1555,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       "订阅已保存，但暂时未能启用。你可以稍后在订阅页面重试。"
     )
     let searchRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
-      method: "GET", path: "/api/v1/subscribe/search/786")
+      method: "POST", path: "/api/v1/subscribe/search/786")
     XCTAssertEqual(searchRequestCount, 0)
 
     await viewModel.cancel()
@@ -1478,7 +1633,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   ) async -> SubscribeSheetViewModel {
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET",
-      path: "/api/v1/subscribe/media/tmdb:\(tmdbID)",
+      path: "/api/v1/subscribe/media/\(tmdbID)",
       json: "{}"
     )
     let createResponse = #"{"success":true,"data":{"id":\#(id)}}"#
