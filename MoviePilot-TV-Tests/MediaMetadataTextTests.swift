@@ -2,7 +2,7 @@ import XCTest
 
 @testable import MoviePilot_TV
 
-/// F-038 / F-043 / F-046 回归：详情页两行元数据只允许「产出非空」的显示值进入，
+/// F-038 / F-042 / F-043 / F-046 回归：详情页两行元数据只允许「产出非空」的显示值进入，
 /// 且叶子层（语言/国家/类型）先 trim 再查表。三条缺陷共用同一处 `joined(separator:)`，
 /// 因此断言统一落在**最终拼接结果**上：既不能有悬空分隔符，也不能有一条空 `Text`。
 ///
@@ -86,11 +86,26 @@ final class MediaMetadataTextTests: XCTestCase {
     XCTAssertEqual(MediaMetadataText.secondaryLine(for: detail), ["ZZ"])
   }
 
+  // MARK: - F-042：国家码 trim 与大小写规范化
+
   func testCountryNameIsTrimmedBeforeLookup() throws {
     XCTAssertEqual(TranslationHelper.countryName(for: " US "), "美国")
     XCTAssertEqual(TranslationHelper.countryName(for: "  "), "")
     // 未知非空 code 保真，全空白 code 视为无内容。
     XCTAssertEqual(TranslationHelper.countryName(for: "ZZ"), "ZZ")
+  }
+
+  func testCountryCodeIsUppercasedBeforeLookup() {
+    XCTAssertEqual(TranslationHelper.countryName(for: " us "), "美国")
+    XCTAssertEqual(TranslationHelper.countryName(for: "us\n"), "美国")
+    // 未知 code 也按同一规范化边界返回，不能因为查表失败而恢复成小写。
+    XCTAssertEqual(TranslationHelper.countryName(for: "zz"), "ZZ")
+  }
+
+  func testProductionCountryCodeIsUppercasedBeforeLookup() throws {
+    let detail = try media(
+      #"{"production_countries":[{"iso_3166_1":" us ","name":"Fallback"}]}"#)
+    XCTAssertEqual(MediaMetadataText.secondaryLine(for: detail), ["美国"])
   }
 
   func testEnglishCountryNameIsTrimmed() throws {

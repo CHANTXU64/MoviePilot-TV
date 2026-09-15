@@ -50,12 +50,12 @@
 | F-034 | 用户决定跳过 | P2 | S004→V011-F | SharedMediaFetcher 与 Paginator 空页语义 | 非终止空批被当成终页，稀疏媒体类型永久截断 | review_s004 构造六页异类/第七页目标序列；verify_a001_h 从 actor 实现重走 | verify_s004 独立确认 buffer/hasMore 与终页契约 | 保留最多扫描六页的边界，接受极端类型分布下可能漏项 |
 | F-035 | 用户决定跳过 | P2 | S004→V011-C→G04 | Paginator/Search in-flight Task 生命周期 | Task跨await强持有owner且页面离场无owner级取消；显式cancel和新搜索的generation防旧发布本身有效 | 既有双审闭合强持有；全新G04 clean-room复核收窄为owner离场生命周期并升级P2 | owner/session级显式取消共享搜索；不重写已有generation屏障 | 用户接受慢请求离页后继续占用资源的低频影响，不再处理 |
 | F-036 | 已修复 | P2 | S004→V011-D→G07 | Search 人物与 TransferHistory processor | 只去重旧 raw ID，漏同批最终 ID并可跨 source 误合并 | 既有processor复核闭合不可变seen；G07双审及第三裁确认合法跨source聚合与批内重复 | 使用最终`Person.id`可变seen并在reset清空；Transfer批内同步写入seen | 已补人物身份去重及同一Paginator刷新回归测试；完整验证通过 |
-| F-037 | 未验证 | P3 | B006-A | `TranslationHelper.languageName` 与 original_language 展示链 | ISO/BCP 47 形态未经规范化而退化为原码 | review_b006_a 核对映射、唯一调用者、模型与标准标签边界 | verify_b006_a_retry 确认行为但函数只承诺 ISO 639-1，扩展契约缺失 | 上游字段格式及 BCP 47/别名要求未验证 |
+| F-037 | 未验证；用户决定跳过修复 | P3 | B006-A | `TranslationHelper.languageName` 与 original_language 展示链 | ISO/BCP 47 形态未经规范化而退化为原码 | review_b006_a 核对映射、唯一调用者、模型与标准标签边界 | verify_b006_a_retry 确认行为但函数只承诺 ISO 639-1，扩展契约缺失 | 用户决定跳过修复；上游字段格式及 BCP 47/别名要求仍未验证 |
 | F-038 | 已修复 | P3 | B006-A | TranslationHelper 语言叶子与 `MediaMetadataText.secondaryLine` | 空白原语种进入详情分隔串 | review_b006_a 闭合 decodeIfPresent→原样回退→append 链 | verify_b006_a_retry 独立确认空 Text/尾随分隔及通用元数据范围 | TV 展示不变量缺陷已确认；真实 payload 频率未验证 |
 | F-039 | 用户决定跳过 | P2 | S004→V011-C→G04 | `SearchViewModel.SharedMediaFetcher` 取消链 | 单waiter取消不应误伤共享请求，但整个search session废弃后仍没有aggregate cancel，底层请求、buffer与cursor继续 | 既有双审闭合unstructured task；全新G04 clean-room复核收窄共享语义并升级P2 | 不修改共享取消链，避免误伤仍有效的电影/电视剧waiter | 旧请求结果已有generation屏障；用户接受慢请求继续占用资源的影响 |
 | F-040 | 已修复 | P3 | B005 | `TranslationHelper.swift:491-505`（显示边界去重） | 不同职位键翻译后产生重复职位文本 | review_b006_a 确认 Cinematography/Camera 同译与原 key 去重顺序 | verify_b005 独立确认当前可见路径为职员卡片并收窄 Hero 边界 | TV 显示缺陷已确认；修复为翻译后显示边界去重，`Cinematography/Camera` 收敛为「摄影」，用户批准 |
 | F-041 | 已修复 | P3 | B005 | `JobRegistry.swift:113-149`（canonical 解析）、`StaffManager.swift:9-16`（优先级） | 职位键变体同时失去翻译和优先级 | review_b006_a 闭合原样解码、精确查表与排序 999 路径 | verify_b005 独立确认大小写/换行双重失配与 Hero 排序影响 | TV 行为缺陷已确认；修复为单一 canonical key 解析供翻译与优先级共用，未知 key 保真且保底 999，用户批准 |
-| F-042 | 未验证 | P3 | B006-B | 国家映射/ProductionCountry/详情显示 | 非 canonical 国家码形态未经规范化 | review_b006_b_retry 核对 249 键、两个入口与多态解码 | verify_b006_b 确认 canonical alpha-2 全覆盖，宽容输入是否属契约无法判定 | 上游形态/alpha-3/别名要求未验证 |
+| F-042 | 已修复 | P3 | B006-B | 国家映射/ProductionCountry/详情显示 | 非 canonical 国家码形态未经规范化 | review_b006_b_retry 核对 249 键、两个入口与多态解码 | verify_b006_b 确认 canonical alpha-2 全覆盖，宽容输入是否属契约无法判定；补充定向与反向验证确认大小写归一修复 | TV 端 trim + 大写归一已修复；上游形态/alpha-3/别名要求仍未验证 |
 | F-043 | 已修复 | P3 | B006-B | ProductionCountry 多态解码与 `MediaMetadataText.secondaryLine` | 空/畸形国家元素生成空白分隔符 | review_b006_b_retry 闭合 nil模型→空显示→joined 链 | verify_b006_b 独立确认叶子与内外分隔两层空值路径 | TV 展示不变量缺陷已确认；真实 payload 未验证 |
 | F-044 | 已修复 | P3 | B005 复核新增 / B006-C | `SearchViewModel.swift:348-357`（投影）、`:794-801`（人物分页 processor） | 人物搜索直接展示原始 job，绕过统一翻译 | verify_b005 独立确认 canonical Director 也会显示英文 | verify_b005 后续 B006-C 主审重走 searchPerson→SearchView 旁路并支持 | TV 旁路缺陷已确认；修复在人物分页器 processor 统一投影，用户批准随组四修复 |
 | F-045 | 已修复 | P3 | B005 复核新增 / S006 | `StaffManager.swift:126-141`（投影）、`:228-240`（分组） | roles-only 职员在 Hero 与卡片职位显示不一致 | verify_b005 独立确认 Hero roles 兜底而 processCrew 不投影 | verify_b006_b 作为 S006 主审确认触发边界与 PersonCard 旁路 | TV 分支差异已确认；修复在 StaffManager 边界统一投影 roles，job/character 均空时才回退，用户批准 |
@@ -801,7 +801,7 @@
 
 ### F-037：有效语言标识未经规范化
 
-- 状态：未验证
+- 状态：未验证；用户决定跳过修复
 - 严重度：P3
 - 位置：`MoviePilot-TV/Services/TranslationHelper.swift:1-207,502-504` 与详情 original_language 链
 - 触发路径：`EN`、` en `、`en-US`、`zh-Hant` 或历史别名。
@@ -809,6 +809,7 @@
 - 用户影响：可识别语言显示原始代码，而非本地化名称。
 - 主审证据：模型/API 原样传递，映射仅小写两位键和少数手工别名，无直接测试。
 - 裁决：整串大小写敏感行为确认，但函数只声明 ISO 639-1，不能把完整 BCP 47/历史别名支持确认为既有契约。
+- 处置：用户表示未遇到该问题，决定跳过修复；保留未验证状态，不继续扩大兼容契约。
 - 最小方向：仅在上游契约确认后于 helper 单点 trim、大小写和主语言规范化；未知非空值保真。
 
 ### F-038：空白语言值穿透详情元数据
@@ -873,7 +874,7 @@
 
 ### F-042：国家码形态未统一规范化
 
-- 状态：未验证
+- 状态：已修复
 - 严重度：P3
 - 位置：`TranslationHelper.countryName`、`ProductionCountry`、详情国家显示
 - 触发路径：lowercase/带空白 alpha-2、字符串 `"US"`、alpha-3 `"USA"`。
@@ -882,6 +883,11 @@
 - 主审证据：249 个 canonical alpha-2 键完整，但无国家解码/显示测试。
 - 裁决：249 个 canonical alpha-2 全部正确覆盖；lowercase/空白/字符串 code/alpha-3 是否属于真实契约无法确认。
 - 最小方向：仅在上游确认后，对 trim 后两位 ASCII 字母大写查表；不顺带加入 alpha-3、UK/XK/历史码。
+- 修复状态：按用户限定的最小范围，在 `countryName(for: String)` 和 `countryName(for: ProductionCountry)` 两个入口对 code 先 trim，再统一大写后查表；未知非空 code 保留归一化后的值，不加入 alpha-3、UK/XK 或历史别名。
+- 验证：`MediaMetadataTextTests` 定向运行 **16/16**；新增 `testCountryCodeIsUppercasedBeforeLookup` 覆盖带空白/换行的小写 `us` 及未知 `zz`，`testProductionCountryCodeIsUppercasedBeforeLookup` 覆盖对象入口并确认不再落到 API name fallback。将 `TranslationHelper.swift` 单文件退回修复前确切版本后，同一组测试仅新增行为失败（3 个标量断言 + 1 个对象入口），其余 12 个对照通过，确认测试具有判别力。
+- 全量验证：用户明确要求跳过兼容测试；已经启动的标准全量命令因包含兼容套件而中止，本轮不宣称全量通过。
+- 处置状态：用户批准按“与语言标识相同”的方式修复，只做去首尾空白与大小写归一。
+- 剩余未验证：上游是否实际产生 lowercase/空白变体，以及 alpha-3/别名是否属于正式契约仍未验证。
 
 ### F-043：空/畸形国家元素生成空白分隔符
 

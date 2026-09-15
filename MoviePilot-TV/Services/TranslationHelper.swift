@@ -519,13 +519,14 @@ struct TranslationHelper {
   /**
    获取国家代码对应的本地化名称。
    - Parameter code: ISO 3166-1 国家代码 (例如 "US", "CN").
-   - Returns: 根据 `currentLanguage` 设置返回对应的翻译，如果找不到则返回原始代码；
+   - Returns: 根据 `currentLanguage` 设置返回对应的翻译，如果找不到则返回归一化后的代码；
      全为空白时返回空串。
+   - Note: 查表前先清理空白/换行并统一大写；不扩展 alpha-3 或历史别名。
    */
   static func countryName(for code: String) -> String {
-    let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return "" }
-    return countryNames[trimmed]?[currentLanguage] ?? trimmed
+    let normalized = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    guard !normalized.isEmpty else { return "" }
+    return countryNames[normalized]?[currentLanguage] ?? normalized
   }
 
   /**
@@ -533,10 +534,10 @@ struct TranslationHelper {
    它会优先使用 `iso_3166_1` 代码进行查找和翻译。
    - Parameter country: `ProductionCountry` 对象。
    - Returns: 根据 `currentLanguage` 设置返回对应的翻译。代码无法翻译时回退到 `country.name`；
-     名称也缺失时**保留未知 code 原文**，不静默丢弃上游信息；两者都为空才返回空串。
+     名称也缺失时**保留归一化后的未知 code**，不静默丢弃上游信息；两者都为空才返回空串。
    */
   static func countryName(for country: ProductionCountry) -> String {
-    let code = country.iso_3166_1?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let code = country.iso_3166_1?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() ?? ""
     if !code.isEmpty, let translatedName = countryNames[code]?[currentLanguage] {
       return translatedName
     }

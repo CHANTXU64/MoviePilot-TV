@@ -3382,7 +3382,7 @@ return nil
 </details>
 
 <details>
-<summary>F-037 · P3 · 未验证 · 有效语言标识未经规范化</summary>
+<summary>F-037 · P3 · 未验证 · 用户决定跳过修复 · 有效语言标识未经规范化</summary>
 
 - 审查单元与位置：B006-A；`TranslationHelper.languageName` 与 original_language 展示链
 - 触发路径：`EN`、` en `、`en-US`、`zh-Hant` 或历史别名。
@@ -3390,13 +3390,14 @@ return nil
 - 用户影响：可识别语言显示原始代码，而非本地化名称。
 - 证据：review_b006_a 核对映射、唯一调用者、模型与标准标签边界；verify_b006_a_retry 确认行为但函数只承诺 ISO 639-1，扩展契约缺失
 - 跨端结论：上游字段格式及 BCP 47/别名要求未验证
+- 处置：用户表示未遇到该问题，决定跳过修复；保留未验证状态，不继续扩大兼容契约。
 - 最小修改方向 / 裁决：仅在上游契约确认后于 helper 单点 trim、大小写和主语言规范化；未知非空值保真。
 - 必须补充的验证：上游字段格式及 BCP 47/别名要求未验证
 
 </details>
 
 <details>
-<summary>F-042 · P3 · 未验证 · 国家码形态未统一规范化</summary>
+<summary>F-042 · P3 · 已修复 · 国家码形态未统一规范化</summary>
 
 - 审查单元与位置：B006-B；国家映射/ProductionCountry/详情显示
 - 触发路径：lowercase/带空白 alpha-2、字符串 `"US"`、alpha-3 `"USA"`。
@@ -3405,6 +3406,10 @@ return nil
 - 证据：review_b006_b_retry 核对 249 键、两个入口与多态解码；verify_b006_b 确认 canonical alpha-2 全覆盖，宽容输入是否属契约无法判定
 - 跨端结论：上游形态/alpha-3/别名要求未验证
 - 最小修改方向 / 裁决：仅在上游确认后，对 trim 后两位 ASCII 字母大写查表；不顺带加入 alpha-3、UK/XK/历史码。
+- 修复状态：按用户限定的最小范围，在两个 `countryName` 入口对 code 先 trim，再统一大写后查表；未知非空 code 保留归一化后的值，不加入 alpha-3、UK/XK 或历史别名。
+- 验证：`MediaMetadataTextTests` 定向运行 **16/16**；新增小写/空白国家码及 `ProductionCountry` 对象入口回归。将 `TranslationHelper.swift` 单文件退回修复前确切版本后，仅新增行为失败（3 个标量断言 + 1 个对象入口），其余 12 个对照通过，确认测试具有判别力。
+- 全量验证：用户明确要求跳过兼容测试；已启动的标准全量命令因包含兼容套件而中止，本轮不宣称全量通过。
+- 处置状态：用户批准按“与语言标识相同”的方式修复，只做去首尾空白与大小写归一。
 - 必须补充的验证：上游形态/alpha-3/别名要求未验证
 
 </details>
