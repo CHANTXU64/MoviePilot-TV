@@ -199,19 +199,19 @@
 | W018-B | `ReorganizeSheet.swift:381-520`，预览 | L5 | review_a001_h | 已闭环（既往局部暴露披露） | review_a001_j | 已闭环（W018-A/ledger暴露披露） | G09后F-151 P1且用户按当前官方Web v2对齐决定跳过，F-162/F-165 P2；F-073经clean-room窄裁确认P2，F-074/F-158/F-185维持，intent/logID provenance边界不变 | G09/G10 | 已闭环 |
 | W019 | `TransferHistoryView.swift` 全文件 | L5 | verify_a001_h | 已闭环 | review_a001_h | 已闭环（调用链/V022既往暴露披露） | F-202 修复已提交（`670cf86`），验证及独立复审通过；G09后F-203/F-204/F-152/F-156为P1，F-201/F-205/F-232为P2，F-153/F-154驳回；F-204 TV修复已由`81d42fb`提交；F-165/F-185及F-246读取授权传播闭合 | G08/G09/G10 | 已闭环 |
 | W020-A | `SystemView.swift:1-113`，根状态与主体 | L5 | verify_a001_h | 已闭环 | review_a001_h | 已闭环（V002下游既往暴露披露） | 无新编号；F-130/CHK-005常驻根页、F-144/F-157、F-109/F-111/F-112及F-126/F-060传播获两票；F-113/F-035/F-029本段不直接 | G01/G06 | 已闭环 |
-| W020-B | `SystemView.swift:114-195`，页面容器与滑动导航 | L5 | verify_a001_h | 已闭环（W020-A局部暴露披露） | review_a001_h | 已闭环（W020-A边界暴露；误显W020-C头20行未用于结论） | F-208确认P3；F-130/CHK-005与F-185传播，F-161维持运行未验证；空白非法route确定，Back/Focus运行未验证，无手势滑动入口 | G06/G10 | 已闭环 |
+| W020-B | `SystemView.swift:114-195`，页面容器与滑动导航 | L5 | verify_a001_h | 已闭环（W020-A局部暴露披露） | review_a001_h | 已闭环（W020-A边界暴露；误显W020-C头20行未用于结论） | F-208确认P3，用户决定跳过TV端修复（2026-09-15）；F-130/CHK-005与F-185传播，F-161维持运行未验证；空白非法route确定，Back/Focus运行未验证，无手势滑动入口 | G06/G10 | 已闭环 |
 | W020-C | `SystemView.swift:196-388`，根页、连接页与 App 信息 | L5 | review_a001_j | 已闭环 | verify_a001_h | 已闭环（W020-A/B、I015及F-207标题暴露披露） | F-207已修复（2026-09-15）：同账号同权限重登成功后复用`loadSystemInfo`刷新连接信息，定向回归1/1、反向失败校验、恢复后测试及tvOS Simulator clean build通过；兼容测试未跑，真实页面时序未验证。F-216机制定向确认但重复编号并入F-107，401/403分类交叉F-089；F-027/F-130/CHK-005、F-111/F-162等传播闭合 | G06/G10 | 已闭环 |
 | W020-D | `SystemView.swift:389-465`，推荐、站点与媒体源 | L5 | review_a001_j | 已闭环（W020-C/相邻辅助暴露披露） | review_a001_h＋verify_a001_h | 已闭环（既往W020/I015与必要上游暴露披露） | 第三裁决确认F-209/F-210为两条独立P2；F-214重复编号驳回并入F-109；CHK-018/019确认，F-112/F-126/F-130/F-170/F-189等传播闭合 | G01/G05/G06 | 已闭环 |
 | W020-E | `SystemView.swift:466-552`，过滤页与通用行 | L5 | review_a001_h | 已闭环（W020-A/B及误显W020-C头20行披露） | review_a001_j＋verify_a001_h | 已闭环（既往W020/I015及必要上游暴露披露） | 第三裁决驳回F-211复合项并拆归F-126/F-081；F-215坏identity并入F-081且促其升P2，合法长名留运行风险；其余传播闭合 | G01/G05/G10 | 已闭环 |
 | W020-F | `SystemView.swift:553-793`，路由、焦点与规则预览辅助 | L5 | review_a001_j | 已闭环（W020-C/D及相邻辅助暴露披露） | review_a001_h | 已闭环（W020-A/B/D/E及F段符号命中披露） | 无新编号；F-130/CHK-005、F-126、F-085、F-168、F-208传播；补充P2建议无新后果，F-208维持P3；Back/VoiceOver运行项交I016 | G05/G06/G10 | 已闭环 |
-| W020-G | `SystemView.swift:794-932`，路由/焦点类型与 UIKit 返回观察器 | L5 | review_a001_j | 已闭环（C/D/E/F及G相邻暴露披露） | verify_a001_h＋review_a001_h | 已闭环（既往W020/I015/R001及G边界暴露披露） | F-217第三裁决确认独立P3：结构重建/task重启确定但只读GET与StateObject保留不足P2；F-130/CHK-005/F-208传播，window/Menu/Sheet交I016 | G10 | 已闭环 |
+| W020-G | `SystemView.swift:794-932`，路由/焦点类型与 UIKit 返回观察器 | L5 | review_a001_j | 已闭环（C/D/E/F及G相邻暴露披露） | verify_a001_h＋review_a001_h | 已闭环（既往W020/I015/R001及G边界暴露披露） | F-217第三裁决确认独立P3，用户未遇到并决定跳过TV端修复（2026-09-15）：结构重建/task重启确定但只读GET与StateObject保留不足P2；F-130/CHK-005/F-208传播，window/Menu/Sheet交I016 | G10 | 已闭环 |
 | W020-H | `SystemView.swift:933-970`，`SystemFilterRulePreview` | L5 | review_a001_h | 已闭环（A/B/D/E/F既往暴露；D符号索引已显933行披露） | review_a001_j | 已闭环（C/D/E/F/G暴露披露） | 无新编号；双审确认单条规则解析/预览/matcher分裂准确归F-085并由P3升P2，F-081数组/缺ID不加权；本地化/VoiceOver留全局或运行边界 | G05 | 已闭环 |
 
 ### 4.5 应用入口与根集成
 
 | 审查单元 | 范围/符号 | 依赖层级 | 主审代理 | 主审状态 | 复核代理 | 复核状态 | 发现编号 | 回溯依赖 | 最终状态 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| R001 | `Views/ContentView.swift` 全文件 | L6 | review_a001_h | 已闭环（多下游View/System、Content调用链与R002前13行暴露披露） | review_a001_j＋verify_a001_h | 已闭环（多段调用链与第三裁决输入污染永久披露） | F-218第三裁决确认独立条件性P3；F-106出口settings窗口与F-130/CHK-005异步owner交叉但不可互替，权限归F-028、媒体handler归F-130/CHK-005 | G03/G06/G08 | 已闭环 |
+| R001 | `Views/ContentView.swift` 全文件 | L6 | review_a001_h | 已闭环（多下游View/System、Content调用链与R002前13行暴露披露） | review_a001_j＋verify_a001_h | 已闭环（多段调用链与第三裁决输入污染永久披露） | F-218已修复（2026-09-15）：已有会话首帧先进入准备状态，用户信息恢复完成后再构造认证Tab/Home；定向回归1/1、反向失败校验、恢复后测试通过，兼容测试未跑且真实认证帧/Home task待运行验证。F-106出口settings窗口与F-130/CHK-005异步owner交叉但不可互替，权限归F-028、媒体handler归F-130/CHK-005 | G03/G06/G08 | 已闭环 |
 | R002 | `App/MoviePilot-TVApp.swift` 全文件 | L7 | verify_a001_h | 已闭环（W020/I015及G中ContentView必要链暴露披露） | review_a001_j | 已闭环（R001 owner搜索仅暴露第6/11行命中） | 无新编号；App级通知跨logout/排队重排并入F-107且须保留当前logout原因交接；Sheet层归F-108、VoiceOver归F-159运行验证；媒体handler归R001/F-130/CHK-005 | G06/G08 | 已闭环 |
 
 ## 5. 拆分文件集成复核
@@ -235,7 +235,7 @@
 | I013 | `MediaDetailView.swift` | W008-A…E | verify_a001_h | 已闭环（既往详情页面/Sheet、I010及审计索引暴露永久披露） | F-231 P2、F-184条件P1、F-180 P2、F-181未验证条件P2、F-033根P2/详情局部P3；后续G03将F-116升确认P2 | G02/G03/G04/G07 |
 | I014 | `SubscribeSeasonView.swift` | W013-A…C | review_a001_j＋review_a001_h | 已闭环（严格整文件集成＋受污染定向独立复核；既往订阅/媒体调用链暴露永久披露） | F-012当前P2由导航投影缺失/优先级反转支撑；group raw限制改留Web共享且用户路径未验证P3边界；F-243及其余传播不变 | G02/G03/G10 |
 | I015 | `ReorganizeSheet.swift` | W018-A…B | verify_a001_h | 已闭环（ledger/W019调用链暴露披露；review_a001_h独立复核完成） | G09后F-151/F-212/F-213均条件P1；F-212的TV独有100ms差异已由`a6cc428`修复，复合身份因当前Web共享且用户要求仅对齐Web而跳过TV单端增强；F-151/F-213同样因当前Web共享由用户决定跳过TV单端修复；intent/logID provenance、episode_part公共字段与Auto门控边界不变 | G01/G09/G10 |
-| I016 | `SystemView.swift` | W020-A…H | review_a001_h＋verify_a001_h＋rounda_g01_recheck＋rounda_g02_third | 受限已闭环（参与代理均有W020/G01或其他会话组暴露，不能宣称严格独立） | G06将F-089转确认P2；F-106/F-111/F-112/F-240 P2，F-208/F-242 P3，F-241未验证P3；其余传播不变 | G01/G05/G06/G10 |
+| I016 | `SystemView.swift` | W020-A…H | review_a001_h＋verify_a001_h＋rounda_g01_recheck＋rounda_g02_third | 受限已闭环（参与代理均有W020/G01或其他会话组暴露，不能宣称严格独立） | G06将F-089转确认P2；F-106/F-111/F-112/F-240 P2，F-242 P3，F-208 P3且用户决定跳过（2026-09-15），F-241未验证P3；其余传播不变 | G01/G05/G06/G10 |
 
 ## 6. 开放依赖 / 回溯队列
 
@@ -456,7 +456,7 @@
 | I009 / F-232稳定排序 | V022-C/W019、G04/G09 | 后端秒级date仅按DESC做offset分页，同秒不同ID可跨页重复/遗漏；TV去重和遇已知早停不能补漏 | review_a001_h提出、verify_a001_h第三裁确认P2；四分页分支追加id DESC并补25条同秒跨页fixture，不建cursor框架 | 已闭环 |
 | W020-C / F-207 | V002/V023/I016、G06/G10 | 双审确认同账号同权限手动重登成功只写反馈，不重跑System根信息加载或更新backendVersion，局部旧快照直到View重建 | 已修复（2026-09-15）：成功重登后复用`loadSystemInfo`刷新`serverURL/username/backendVersion`；定向回归、反向失败校验、恢复后测试及tvOS Simulator clean build通过，兼容测试未跑 | 已闭环 |
 | W020-C / F-216→F-107/F-089 | W002/C002/V023/R001、G06/G08/G10 | G06已将F-089转确认P2；刷新后错误跨根交接仍完整归F-107，F-216驳回重复编号 | App级一次性错误owner交接，登录分类分流 | 已闭环 |
-| W020-B / F-208 | I016、G10 | 双审确认push/pop固定0.42s横移824pt、根页Back固定0.24s滚动，均未读取Reduce Motion；本段无手势滑动 | 原生环境值切换即时/淡化路径，清理等待跟随实际时长 | 已闭环 |
+| W020-B / F-208 | I016、G10 | 双审确认push/pop固定0.42s横移824pt、根页Back固定0.24s滚动，均未读取Reduce Motion；本段无手势滑动 | 用户决定跳过TV端修复（2026-09-15）；原生环境值切换即时/淡化路径与清理等待跟随实际时长留作未来方向 | 已闭环 |
 | W020-D / F-209 | V003/V011/I016、G01/G05 | 三代理确认“全部”空sentinel被后端解释为IndexerSites默认子集；正确候选域也不能修复nil三态；G05单方提议P1不足以推翻既有多票，保留确认P2 | 显式发送全部active IDs；若仍发nil则改名“后端默认”；覆盖default/all/specific与SSE/fallback | 已闭环 |
 | W020-D / F-210 | A001-I/V002/V003/I016、G01/G05/G06 | 三代理确认TV以/site/rss作为搜索站点域且不滤inactive；修正sentinel也不能补非RSS active或删inactive，独立P2 | 提供search权限可读的active搜索站点合同；只在正确权威域成功后归一化 | 已闭环 |
 | W020-E / F-211→F-126/F-081 | M001-K/S005/V015/I016、G05/G06 | 第三裁决：同ID当前B执行符合合同；失败仍展示A归四态，成功响应缺所选ID静默不过滤归F-081 | 设置页标stale/error；执行端区分未选择与已选不可用，驳回复合编号 | 已闭环 |
@@ -492,10 +492,10 @@
 | I008 / F-047/F-048/F-049 | B007/V012/W008、CHK-006 | 警告读取失败仍开放普通确认；执行会重查target但不冻结/比对scope，DELETE false/throw又无反馈 | F-047保持跨季条件P1、Header局部证据P2；F-048/F-049维持P2，不可变intent与现有通知出口闭合 | 已闭环 |
 | I008 / F-130/F-182/F-118 | V004/V012/W007/W008、CHK-005 | 加载中撤权可令season与辅助内容均不落ready；旧false gate无限不发现远端新增；ownerless pin根因与push/LRU运行链分离 | I008时F-130/F-182均P2；后续G04将跨页面F-130升P1，G03确认F-118根因P2；端到端生命周期与真机可见影响仍未验证 | 已闭环 |
 | W020-D / F-214→F-109 | V010/W005/I016、G01/G06 | G06将F-109升P2；app-global与当前per-user权威错位仍由F-109完整承载，F-214重复驳回 | 服务端当前用户配置为权威，本地fallback按canonical profile隔离 | 已闭环 |
-| W020-G / F-217 | W020-B/F/I016、G06/G10 | 三代理确认pop离场窗口的条件Exit结构分支会重建并重启推荐task；StateObject保留且只读GET，第三裁独立P3 | 恒定保留同一onExitCommand modifier类型，禁用传nil或action guard；root不安装no-op | 已闭环 |
+| W020-G / F-217 | W020-B/F/I016、G06/G10 | 三代理确认从“推荐页显示内容”返回时，pop离场窗口的条件Exit结构分支会重建并重启推荐task；StateObject保留且只读GET，第三裁独立P3；用户未遇到并决定跳过TV端修复（2026-09-15） | 用户决定跳过TV端修复；恒定保留同一onExitCommand modifier类型，禁用传nil或action guard；root不安装no-op留作未来方向 | 已闭环 |
 | W020-H / F-085 | M001-K/S005/V015、G05 | 双审确认已成功解码规则的空白/非法正则、size单值、seeders区间等预览与执行相反；当前Web正常可达且可清空核心搜索 | 先统一官方语法，再让单一canonical解析结果驱动预览与matcher；F-085升P2，F-081不加权 | 已闭环 |
 | R001 / F-028 | B004/V023、G06/G08 | 当前Web同样不做前台/路由权限热刷新，TV token校验/自动重登与正式session发布后的UI收敛已完整 | 保持现有静默token校验；管理员运行中改权限由重登/重启恢复 | 已闭环；已驳回（用户决定跳过） |
-| R001 / F-218 | V023/R002、G06/G08 | 三代理确认已存token令初始isLoggedIn=true而准备态false，首个body先具备构造旧权限Tab/Home资格；与F-106 settings出口窗口不可互替 | 准备初值与待恢复token同步；必要settings完成或明确失败策略后统一清门，真机验证首帧/Home task | 已闭环 |
+| R001 / F-218 | V023/R002、G06/G08 | 三代理确认已存token令初始isLoggedIn=true而准备态false，首个body先具备构造旧权限Tab/Home资格；与F-106 settings出口窗口不可互替 | 已修复（2026-09-15）：准备初值与待恢复token同步，用户信息恢复完成后统一清门；定向回归1/1、反向失败校验、恢复后测试通过，兼容测试未跑 | 已闭环 |
 | W011 / F-186 | C017/C018-C、G05/G10 | TV从数值倍率重算促销并把30/70/25/75压成50、4X压成2x，筛选值与卡片、当前Web/后端`volume_factor`枚举分裂 | 删除重算helper，直接复用已显示的`volume_factor`，以后端完整枚举表驱动验证，不建促销模型 | 已闭环 |
 | W011 / F-187 | V015/C001、G05/G10 | 资源业务error、transport失败或成功空均置hasSearched并进入无action空态；同页面再次search被门闩拒绝，只能退出重进 | 复用EmptyDataView action，调用现有cancelSearch重置后再search；分别覆盖三类终态与session隔离 | 已闭环 |
 | W012 / F-188 | A001-K/W001、G01/G05/G06/G09 | G09两票确认高级正ID只填当前后端不消费字段，可错媒体下载/整理，升条件P1 | 映射TMDB/豆瓣旧字段；未支持来源隐藏/解释 | 已闭环 |

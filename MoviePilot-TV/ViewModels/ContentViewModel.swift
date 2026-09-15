@@ -31,6 +31,8 @@ class ContentViewModel: ObservableObject {
     self.apiService = apiService
     // 初始状态
     isLoggedIn = apiService.isLoggedIn
+    // 已有持久化会话时，首帧先挡住主界面，等待权威用户信息恢复完成。
+    isPreparingStartupSession = apiService.isLoggedIn
     currentUser = apiService.currentUser
     sessionUIIdentity = apiService.uiIdentity
     updateAccountPermissionWarning(for: currentUser)
@@ -115,13 +117,15 @@ class ContentViewModel: ObservableObject {
     didPrepareStartup = true
 
     if apiService.isLoggedIn {
-      // 有持久化用户快照时直接展示界面；网络校验只在身份尚未恢复时占用启动页。
+      // 有持久化会话时先占住启动门，避免旧权限状态先构造主界面。
       isRefreshingStartupSession = true
-      isPreparingStartupSession = apiService.currentUser == nil
+      isPreparingStartupSession = true
       await apiService.refreshCurrentUserForStartup()
       isPreparingStartupSession = false
       isRefreshingStartupSession = false
       isLoggedIn = apiService.isLoggedIn
+    } else {
+      isPreparingStartupSession = false
     }
 
     if isLoggedIn {

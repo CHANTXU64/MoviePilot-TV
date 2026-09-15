@@ -3063,7 +3063,7 @@ return nil
 </details>
 
 <details>
-<summary>F-208 · P3 · 已确认 · System 页面切换动画未尊重“减少动态效果”</summary>
+<summary>F-208 · P3 · 用户跳过（2026-09-15） · System 页面切换动画未尊重“减少动态效果”</summary>
 
 - 审查单元与位置：W020-B/F→I016；System导航减少动态效果
 - 触发路径：系统已开启“减少动态效果”，用户选择进入子页、按Menu/Back返回，或在根页执行Back滚动。
@@ -3071,32 +3071,33 @@ return nil
 - 用户影响：明确请求减少运动的用户仍看到大幅横向移动；静态违反偏好成立，实际不适程度与真机渲染待验证。
 - 证据：既有三审及I016两代理均确认同根并维持P3；读取原生Reduce Motion环境；开启时立即切换或淡化，并让清理等待跟随实际时长
 - 跨端结论：真机体感与系统是否代抑制未验证
-- 最小修改方向 / 裁决：读取`accessibilityReduceMotion`；开启时立即切换或使用非位移淡化，并让清理等待复用实际持续时间，不抽象动画协调器。
+- 最小修改方向 / 裁决：读取`accessibilityReduceMotion`；开启时立即切换或使用非位移淡化，并让清理等待复用实际持续时间，不抽象动画协调器。用户决定跳过TV端修复（2026-09-15），现状保持不变。
 
 </details>
 
 <details>
-<summary>F-217 · P3 · 已确认 · 条件 Exit modifier 令离场子页重建并重启任务</summary>
+<summary>F-217 · P3 · 用户跳过（2026-09-15） · 条件 Exit modifier 令离场子页重建并重启任务</summary>
 
 - 审查单元与位置：W020-G；条件Exit modifier改变离场页结构身份
-- 触发路径：用户从推荐设置页按Back；`route`先回root而`displayedRoute`继续保留旧页约0.43秒，旧页`isActive`立即由true变false。
+- 触发路径：用户进入系统设置的“推荐页”→“推荐页显示内容”，再按Back；`route`先回root而`displayedRoute`继续保留旧页约0.43秒，旧页`isActive`立即由true变false。
 - 根因：helper以`@ViewBuilder if/else`在带`onExitCommand`和裸`Self`两种结构分支间切换；同一ForEach ID不阻止modifier分支改变SwiftUI structural identity，旧页生命周期结束而新分支重新出现。
-- 用户影响：离场推荐页的旧task被取消，新分支又无意义启动`refreshSources()`，随后页面删除再次取消；其他子页的滚动/focus子树也会重建，但后两项真实可见结果仍待运行。若重复请求只在取消前不产生状态/流量后果，严重度可下调。
+- 用户影响：离场推荐页的旧task被取消，新分支又无意义启动`refreshSources()`，随后页面删除再次取消；其他子页的滚动/focus子树也会重建，但后两项真实可见结果仍待运行。若重复请求只在取消前不产生状态/流量后果，严重度可下调。用户表示未遇到该问题，决定跳过TV端修复（2026-09-15）。
 - 证据：三代理确认机制；第三裁决按只读GET、StateObject保留降P3，但稳定modifier修复独立于通用task owner；恒定保留同一onExitCommand modifier类型，禁用时传nil或在action内guard；root不吞Exit
 - 跨端结论：纯TV P3；重复请求/自动重连与滚动/focus体感待运行
-- 最小修改方向 / 裁决：只按稳定页面角色决定是否安装modifier；非root子页恒定安装`onExitCommand`，把`isSelected && isActive`移入action guard，root保持不安装。不建导航或modifier框架。
+- 最小修改方向 / 裁决：只按稳定页面角色决定是否安装modifier；非root子页恒定安装`onExitCommand`，把`isSelected && isActive`移入action guard，root保持不安装。不建导航或modifier框架。用户决定跳过TV端修复（2026-09-15），现状保持不变。
 
 </details>
 
 <details>
-<summary>F-218 · P3 · 已确认 · 已存会话启动时准备门晚于首个认证分支</summary>
+<summary>F-218 · P3 · 已修复（2026-09-15） · 已存会话启动时准备门晚于首个认证分支</summary>
 
 - 审查单元与位置：R001；已存会话启动准备门晚于认证首帧
-- 触发路径：本地已有非空token，应用冷启动；ViewModel初始即判为已登录，但准备态固定false。
-- 根因：首个body先进入authenticated TabView分支，只有视图挂载后的`.task`调用恢复流程时才把`isPreparingStartupSession`设true。
-- 用户影响：旧权限Tab子树与Home加载循环可在准备遮罩建立前被构造，旧权限警告也可能抢先呈现；静态顺序确定，但SwiftUI是否提交该中间帧或启动子task仍需运行/挂载测试，因此保持条件性P3。
-- 证据：三代理确认静态入口；第三裁决确认其与F-106出口窗口、F-130/CHK-005异步owner均不可互替；初始化准备态与已存token同步，必要settings完成或明确失败策略后再统一清门
-- 跨端结论：条件性P3已确认；真实认证帧/Home task启动待运行验证
+- 触发路径：本地已有非空token，应用冷启动；修复前初始即判为已登录，但准备态固定false。
+- 根因：修复前首个body先进入authenticated TabView分支，只有视图挂载后的`.task`调用恢复流程时才把准备态设true。现已在创建根状态时根据已有会话同步打开准备门，并在恢复流程结束后关闭。
+- 用户影响（修复前）：旧权限Tab子树与Home加载循环可在准备遮罩建立前被构造，旧权限警告也可能抢先呈现；不会直接造成数据修改或阻断登录。
+- 证据：三代理确认静态入口；第三裁决确认其与F-106出口窗口、F-130/CHK-005异步owner均不可互替。`ContentViewModelBehaviorTests.testPrepareStartupRefreshesPersistedPermissionsOnSameAppVersion`定向测试1/1通过；反向移除首帧准备门断言按预期失败，恢复后定向测试通过。
+- 处置：已修复；已有会话首帧先显示“正在准备会话...”，用户信息恢复完成后才构造主界面；无已存会话时仍直接进入登录页，不新增bootstrap coordinator。本次未跑兼容测试。
+- 跨端结论：条件性P3已修复；真实认证帧/Home task启动、真机可见性仍未验证。
 - 最小修改方向 / 裁决：初始化准备态与“存在待恢复token”同步；在唯一恢复流程的成功、失败、取消出口统一清除。复用现有状态，不新增bootstrap coordinator。
 
 </details>
