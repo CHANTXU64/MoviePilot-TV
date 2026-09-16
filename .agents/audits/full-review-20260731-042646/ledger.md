@@ -181,7 +181,7 @@
 | W007 | `MediaDetailContainerView.swift` 全文件 | L5 | review_a001_h | 已闭环 | review_a001_j | 已闭环 | I013最终裁F-180 P2；后续G03将F-116升确认P2并保留可见时长/焦点运行边界，其他传播闭合 | G03/G06/G10 | 已闭环 |
 | W008-A | `MediaDetailView.swift:1-402`，状态、初始化、主视图与生命周期 | L5 | review_a001_h | 已闭环 | review_a001_j | 已闭环 | I013最终裁F-181保持未验证、条件影响校准P2；F-114/F-100/F-130/CHK-005/F-027/F-035/F-115…F-119/F-138/F-139/F-176传播闭合 | G03/G06/G10 | 已闭环 |
 | W008-B | `MediaDetailView.swift:403-587`，订阅、刷新与 Header 动作规则 | L5 | review_a001_h | 已闭环 | review_a001_j | 已闭环 | I008/I013回溯后F-182升P2；F-007/F-015/F-047…F-049/F-130/F-147/F-148及CHK-004/005/006/010传播闭合 | G02/G03/G06/G10 | 已闭环 |
-| W008-C | `MediaDetailView.swift:588-842`，Hero 与详情内容 | L5 | review_a001_h | 已闭环 | review_a001_j | 已闭环 | F-183维持未验证P3，I013新增F-231确认P2；F-123/CHK-005及Hero/详情投影/图片转场传播闭合 | G01/G03/G06/G07/G10 | 已闭环 |
+| W008-C | `MediaDetailView.swift:588-842`，Hero 与详情内容 | L5 | review_a001_h | 已闭环 | review_a001_j | 已闭环 | F-183已修复（2026-09-16）：详情页TMDB动作入口保留预识别disabled并同步防重入，不新增任务期间disabled，定向测试1/1、反向校验与clean build通过，未跑兼容测试；I013新增F-231确认P2；F-123/CHK-005及Hero/详情投影/图片转场传播闭合 | G01/G03/G06/G07/G10 | 已闭环 |
 | W008-D | `MediaDetailView.swift:843-979`，分季、导演与演员 | L5 | review_a001_h | 已闭环 | review_a001_j | 已闭环 | 无新编号；分季、人物身份/导航、分页、图片与卡片既有F/CHK传播闭合；onSeasonTap/initialSeason为死链清理项 | G02/G03/G04/G07/G10 | 已闭环 |
 | W008-E | `MediaDetailView.swift:980-1113`，推荐、相似媒体与加载 UI | L5 | review_a001_h | 已闭环 | review_a001_j＋verify_a001_h | 已闭环（程序限制披露） | F-184合法正数合集条件P1，0/负数/parts未验证；后续G03将F-116升P2，F-033详情局部P3、F-231 P2不变 | G03/G04/G10 | 已闭环 |
 | W009 | `PersonDetailView.swift` 全文件 | L5 | review_a001_h | 已闭环 | review_a001_j＋verify_a001_h | 已闭环 | F-185经第三裁决确认P2：足够长的合法biography进入“完整简介”Sheet后无ScrollView/分页/可移动焦点锚点，末尾没有可达路径；短简介仅降低触发频率。加载/无简介空action Button及空作品focusable Text并入F-158同根传播，不另编号。详情失败并入F-126，F-143/F-144等route/request、分页图片session、卡片传播闭合，F-176不适用 | G02/G03/G04/G06/G07/G10 | 已闭环 |
@@ -235,7 +235,7 @@
 | I013 | `MediaDetailView.swift` | W008-A…E | verify_a001_h | 已闭环（既往详情页面/Sheet、I010及审计索引暴露永久披露） | F-231 P2、F-184条件P1、F-180 P2、F-181未验证条件P2、F-033根P2/详情局部P3；后续G03将F-116升确认P2 | G02/G03/G04/G07 |
 | I014 | `SubscribeSeasonView.swift` | W013-A…C | review_a001_j＋review_a001_h | 已闭环（严格整文件集成＋受污染定向独立复核；既往订阅/媒体调用链暴露永久披露） | F-012当前P2由导航投影缺失/优先级反转支撑；group raw限制改留Web共享且用户路径未验证P3边界；F-243及其余传播不变 | G02/G03/G10 |
 | I015 | `ReorganizeSheet.swift` | W018-A…B | verify_a001_h | 已闭环（ledger/W019调用链暴露披露；review_a001_h独立复核完成） | G09后F-151/F-212/F-213均条件P1；F-212的TV独有100ms差异已由`a6cc428`修复，复合身份因当前Web共享且用户要求仅对齐Web而跳过TV单端增强；F-151/F-213同样因当前Web共享由用户决定跳过TV单端修复；intent/logID provenance、episode_part公共字段与Auto门控边界不变 | G01/G09/G10 |
-| I016 | `SystemView.swift` | W020-A…H | review_a001_h＋verify_a001_h＋rounda_g01_recheck＋rounda_g02_third | 受限已闭环（参与代理均有W020/G01或其他会话组暴露，不能宣称严格独立） | G06将F-089转确认P2；F-106/F-111/F-112/F-240 P2，F-242 P3，F-208 P3且用户决定跳过（2026-09-15），F-241未验证P3；其余传播不变 | G01/G05/G06/G10 |
+| I016 | `SystemView.swift` | W020-A…H | review_a001_h＋verify_a001_h＋rounda_g01_recheck＋rounda_g02_third | 受限已闭环（参与代理均有W020/G01或其他会话组暴露，不能宣称严格独立） | G06将F-089转确认P2；F-106/F-111/F-112/F-240 P2，F-242 P3且用户决定跳过TV端处理（2026-09-16），F-208 P3且用户决定跳过（2026-09-15），F-241未验证P3；其余传播不变 | G01/G05/G06/G10 |
 
 ## 6. 开放依赖 / 回溯队列
 
@@ -424,7 +424,7 @@
 | W007 / F-180 | W008-A、G03/G06/G10 | 详情连续失败后容器把`isDetailFailed`并入ready，显示未完整初始化的partial页面且当前页无失败标识/retry | I013裁P2；在现有Loading owner显示失败并让一次retry复用failed-task重建，保留partial fallback | 已闭环 |
 | W008-A / F-181 | W008-C/G03/G10 | 内容页切换只监听Hero FocusState并交叉采样Content，真实回调若Hero先false、Content后true会漏置`showContentPage` | I013裁未验证条件P2；真机/Simulator固定事件序，确认后分别监听两个现有FocusState | 已闭环 |
 | W008-B / F-182 | G02/G06/I008/I013 | scene回active与周期轮询共用当前订阅真假gate，旧false无法发现远端false→true；首次Header点击只强刷并静默终止旧意图 | I008双审升P2；前台恢复无条件复用现有强刷并保留点击前状态一致性guard | 已闭环 |
-| W008-C / F-183 | G03/G06/G10/I013 | TMDB按钮在创建Task前无同步reentry owner，两个调用可重复append且先完成者提前清共享busy | 维持未验证P3；双Select须运行确认，离开route后的单动作晚到另由F-231 P2承载 | 已闭环 |
+| W008-C / F-183 | G03/G06/G10/I013 | TMDB按钮在创建Task前无同步reentry owner，两个调用可重复append且先完成者提前清共享busy | 已修复（2026-09-16）：保留预识别期间原有disabled，动作入口同步设置本地in-flight，重复激活直接返回；成功/失败/取消均清除，离开route后的单动作晚到仍由F-231 P2承载 | 已闭环 |
 | W008-E/W010/I013 / F-184 | W003/W004/W005、G03/G04 | 合法正数合集可由正式动态来源进入三根栈，误送普通Container后preload永不ready/failed；0/负数与parts递归仍无fixture | 最终裁条件P1；原样复用Search合集分支与shouldPreloadDetail，未验证子域不顺手扩展 | 已闭环 |
 | W009 / F-185 | W013-C/W015、G07/G10 | 足够长的人物简介、季overview或Fork分享文本在静态/限行Sheet内不可完整读取，Fork还可把提交按钮推出可达区 | 有限预览保留；信息区用原生纵向ScrollView/限行，操作区固定并验证遥控器/VoiceOver到达末尾 | 已闭环 |
 | W013-C / F-190 | G02/G10 | S00缺名在详情显示“第0季”而卡片显示“特别篇”；空白name/date/overview生成空标题、图标空行或空壳区域 | 已修复：季卡与详情Sheet共用SeasonDisplayFormatter；定向3/3、反向还原失败校验、恢复后3/3与Simulator clean build通过；真机/VoiceOver与真实payload频率仍待补 | 已修复（2026-09-15） |
@@ -515,7 +515,7 @@
 | I014 / retry | V018、W013-B、G02/G10 | Retry切换form subtree触发onDisappear cleanup并可能删除prepared临时订阅 | 两票确认完整归F-148，稳定根生命周期与created/owner/session receipt同一修复 | 已闭环 |
 | I016 / F-240 | W020-D、Recommend、G01/G05/G06 | 同名不同path货架分开渲染却共享title配置键 | G01第三裁确认P2；稳定owner使用shelf id/path，旧title只作一次迁移 | 已闭环 |
 | I016 / F-241 | W020-G/H、G10 | App Info Sheet展示时底层root Menu observer仍启用且允许同时识别 | 两票确认静态前提但tvOS modal Menu投递缺失，转未验证P3 | 已闭环 |
-| I016 / F-242 | W020-D/E、G10 | 站点/规则长名单行截断且preview不回显完整名称 | 两票确认视觉P3；推荐截断与VoiceOver扩大说法保留运行边界 | 已闭环 |
+| I016 / F-242 | W020-D/E、G10 | 站点/规则长名单行截断且preview不回显完整名称 | 两票确认视觉P3；用户决定跳过TV端处理（2026-09-16）；推荐截断与VoiceOver扩大说法保留运行边界 | 已闭环 |
 | I016 / 等级第三裁 | W020-A/C/D、I004、G01/G05/G06 | G06以当前后端401闭合F-089并取两票共同下界确认P2；F-106/F-240仍P2 | I016受限集成闭环；严格零暴露缺口永久披露 | 已闭环 |
 | G01 / F-244 | V011/I007/W006、G01/G06 | 两票确认A→B不发新query时子Paginator items/resource error可早于父最终gate发布；G04第三票确认它与F-130同属会话/权限派生状态未收敛根因 | 并入F-130/CHK-005；F-244作为重复编号驳回 | 已闭环 |
 | G01 / 首轮等级与合并 | G01全部开放F/CHK | G06将F-109升P2，G09将F-212升条件P1；G04 clean-room末裁将F-137升P2 | G01全部争议闭合；F-106/F-240/F-200等既有收口不变 | 已闭环 |
