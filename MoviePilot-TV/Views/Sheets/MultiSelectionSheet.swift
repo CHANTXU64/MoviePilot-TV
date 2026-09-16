@@ -42,7 +42,8 @@ struct MultiSelectionSheet<T, ID: Hashable>: View {
           }
 
           Button(action: { dismiss() }) {
-            Text("确认")
+            // 选项在切换时即时生效，按钮只负责完成并关闭弹窗。
+            Text("完成")
               .frame(maxWidth: .infinity)
           }
 

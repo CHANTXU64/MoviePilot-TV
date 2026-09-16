@@ -3103,7 +3103,7 @@ return nil
 </details>
 
 <details>
-<summary>F-228 · P3 · 已确认 · 人物详情未显示已解码备用名</summary>
+<summary>F-228 · P3 · 用户跳过（2026-09-16） · 人物详情未显示已解码备用名</summary>
 
 - 审查单元与位置：G07→F-178拆分裁决；人物详情备用名展示投影
 - 触发路径：人物具有非空`latin_name`或`also_known_as`，主名不同或本地用户需靠别名辨识。
@@ -3111,20 +3111,20 @@ return nil
 - 用户影响：详情与搜索命中依据不一致，用户无法看到当前Web已展示的备用名；主名仍在时不阻断route。
 - 证据：G07双审确认TV/Web展示差异，verify_a001_h第三裁确认独立详情投影并下调P3；先按F-227保真，再用有序去空去重displayAlternateNames显示
 - 跨端结论：TV详情投影缺口已确认；真实别名频率与排版未验证
-- 最小修改方向 / 裁决：先按F-227保真，再构造去空、去重、排除主名的有序`displayAlternateNames`；不新增人物展示框架。
+- 最小修改方向 / 裁决：先按F-227保真，再构造去空、去重、排除主名的有序`displayAlternateNames`；不新增人物展示框架。Web行为已核对，用户决定跳过TV端修复（2026-09-16），现状保持不变。
 
 </details>
 
 <details>
-<summary>F-229 · P3 · 已确认 · MultiSelection 的“确认”与 Menu/Exit 没有不同提交语义</summary>
+<summary>F-229 · P3 · 已修复（2026-09-16） · MultiSelection 的“确认”与 Menu/Exit 没有不同提交语义</summary>
 
 - 审查单元与位置：G10；MultiSelection确认与Exit语义不一致
-- 触发路径：用户在多选Sheet切换选项后，不点“确认”而按Menu/Exit关闭。
-- 根因：Toggle立即修改外部binding，“确认”只执行dismiss；部分caller又在onDisappear无条件应用选择，使确认与系统退出没有事务差别。
-- 用户影响：若文案让用户把Menu理解为取消，未确认选择仍被保留/提交；若产品本就采用即时生效，当前“确认”文案虚构了不存在的提交边界。
-- 证据：review_a001_h主审与verify_a001_h独立复核闭合三类caller并排除数据丢失/越权写入；即时生效合同下仅改“完成”；产品要求取消时才加局部draft
-- 跨端结论：TV交互文案缺口已确认；Menu产品预期未验证
-- 最小修改方向 / 裁决：先定单一产品合同。即时生效则按钮改“完成”并明确Exit也是完成；确认提交则组件内保留局部draft，只在确认时写回。两种都不需新协调器。
+- 触发路径：用户在搜索站点、媒体详情站点、Explore插件多选或种子筛选等多选Sheet切换选项，然后点击“确认”或直接按Menu/Exit关闭。
+- 根因：选项在切换时已经即时写入外部选择，底部按钮只负责关闭弹窗；Menu/Exit关闭后也保留同一选择，因此“确认”并不是额外的提交动作。
+- 用户影响：旧文案会让用户误以为只有点击“确认”才会保存、Menu/Exit可以取消；实际行为是两条离场路径都会保留已选结果。问题是交互含义误导，不是数据丢失或越权写入。
+- 证据：review_a001_h主审与verify_a001_h独立复核闭合三类caller并排除数据丢失/越权写入；本次将按钮改为“完成”，`MultiSelectionSheetUnavailableTests.testMultiSelectionUsesCompletionLabelForImmediateSelection`定向测试1/1通过，tvOS Simulator clean build通过。
+- 跨端结论：已按TV现有即时生效行为修正文案；未扩大Web/后端合同，本次未跑兼容测试，Menu/Exit实际操作未单独验证。
+- 最小修改方向 / 裁决：已修复。保留即时生效合同，只把按钮改为“完成”，不引入临时副本或取消事务；如果未来产品明确要求Menu取消，再另行设计局部草稿状态。
 
 </details>
 

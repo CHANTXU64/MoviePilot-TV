@@ -48,4 +48,15 @@ final class MultiSelectionSheetUnavailableTests: XCTestCase {
     )
     XCTAssertTrue(unavailable.isEmpty)
   }
+
+  func testMultiSelectionUsesCompletionLabelForImmediateSelection() throws {
+    let sourceURL = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("MoviePilot-TV/Views/Sheets/MultiSelectionSheet.swift")
+    let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+    XCTAssertTrue(source.contains("Text(\"完成\")"))
+    XCTAssertFalse(source.contains("Text(\"确认\")"))
+  }
 }
