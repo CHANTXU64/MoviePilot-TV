@@ -1149,21 +1149,6 @@ private struct BackendStreamProbeResult: Sendable {
   let timedOut: Bool
 }
 
-private struct BackendSSEEventProbe: Decodable, Sendable {
-  struct DataPayload: Decodable, Sendable {
-    let success: Bool?
-    let error: String?
-  }
-
-  struct ItemPayload: Decodable, Sendable {}
-
-  let type: String?
-  let enable: Bool?
-  let items: [ItemPayload]?
-  let message: String?
-  let data: DataPayload?
-}
-
 private enum BackendCompatibilityProbeError: Error, CustomStringConvertible {
   case invalidURL(String)
   case nonHTTPResponse(String)
@@ -2743,41 +2728,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     }
   }
 
-  fileprivate static func probeSSEStream(
-    url: URL,
-    token: String?,
-    timeoutSeconds: UInt64 = 45,
-    maxEvents: Int? = 40
-  ) async -> BackendStreamProbeResult {
-    await withTaskGroup(of: BackendStreamProbeResult.self) { group in
-      group.addTask {
-        await readSSEStream(url: url, token: token, maxEvents: maxEvents)
-      }
-      group.addTask {
-        try? await Task.sleep(nanoseconds: timeoutSeconds * 1_000_000_000)
-        return BackendStreamProbeResult(
-          eventCount: 0,
-          itemCount: 0,
-          sawTerminalEvent: false,
-          errorMessage: nil,
-          timedOut: true
-        )
-      }
-
-      let result = await group.next()
-        ?? BackendStreamProbeResult(
-          eventCount: 0,
-          itemCount: 0,
-          sawTerminalEvent: false,
-          errorMessage: "Stream probe finished without a result.",
-          timedOut: false
-        )
-      group.cancelAll()
-      return result
-    }
-  }
-
-  private static func probeSearchStream(
+  fileprivate static func probeSearchStream(
     _ stream: AsyncThrowingStream<SearchStreamEvent, Error>,
     timeoutSeconds: UInt64 = 45,
     maxEvents: Int? = 40
@@ -2854,110 +2805,6 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       errorMessage: streamError,
       timedOut: false
     )
-  }
-
-  private static func readSSEStream(
-    url: URL,
-    token: String?,
-    maxEvents: Int?
-  ) async -> BackendStreamProbeResult {
-    var eventCount = 0
-    var itemCount = 0
-    var sawTerminalEvent = false
-    var streamError: String?
-
-    do {
-      var request = URLRequest(url: url)
-      request.timeoutInterval = 300
-      request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-      if let token {
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-      }
-
-      let (bytes, response) = try await URLSession.shared.bytes(for: request)
-      guard let httpResponse = response as? HTTPURLResponse else {
-        return BackendStreamProbeResult(
-          eventCount: eventCount,
-          itemCount: itemCount,
-          sawTerminalEvent: false,
-          errorMessage: "SSE response is not HTTP.",
-          timedOut: false
-        )
-      }
-      guard httpResponse.statusCode == 200 else {
-        return BackendStreamProbeResult(
-          eventCount: eventCount,
-          itemCount: itemCount,
-          sawTerminalEvent: false,
-          errorMessage: "HTTP \(httpResponse.statusCode), content-type: \(httpResponse.contentTypeDescription)",
-          timedOut: false
-        )
-      }
-
-      // F-101：与生产端 `streamSSE` 共用同一条组帧规则（`SSEFramer`），
-      // 不再各写一份逐物理行解码。
-      var framer = SSEFramer()
-      var shouldStop = false
-
-      func handlePayload(_ payload: String) throws {
-        guard !shouldStop else { return }
-        guard let data = payload.data(using: .utf8) else { return }
-
-        let event = try JSONDecoder().decode(BackendSSEEventProbe.self, from: data)
-        eventCount += 1
-        itemCount += event.items?.count ?? 0
-
-        if event.type == "error" {
-          streamError = event.message ?? event.data?.error ?? "Unknown SSE error event."
-          sawTerminalEvent = true
-          shouldStop = true
-          return
-        }
-
-        if event.type == "done" || event.enable == false {
-          if let success = event.data?.success, success == false {
-            streamError = event.data?.error ?? event.message ?? "SSE terminal event reported failure."
-          }
-          sawTerminalEvent = true
-          shouldStop = true
-          return
-        }
-
-        if let maxEvents, eventCount >= maxEvents {
-          shouldStop = true
-        }
-      }
-
-      // 与生产端一样遍历**字节**而非 `bytes.lines`：`AsyncLineSequence` 丢弃空行，
-      // 而空行是事件结束标志，用它会让多个独立事件被合并成一个非法载荷。
-      for try await byte in bytes {
-        if Task.isCancelled { break }
-        if let payload = framer.consume(byte: byte) {
-          try handlePayload(payload)
-        }
-        if shouldStop { break }
-      }
-      // 与生产端一致：流结束冲刷挂起事件。
-      if !shouldStop, let tail = framer.flush() {
-        try handlePayload(tail)
-      }
-
-      return BackendStreamProbeResult(
-        eventCount: eventCount,
-        itemCount: itemCount,
-        sawTerminalEvent: sawTerminalEvent,
-        errorMessage: streamError,
-        timedOut: false
-      )
-    } catch {
-      return BackendStreamProbeResult(
-        eventCount: eventCount,
-        itemCount: itemCount,
-        sawTerminalEvent: sawTerminalEvent,
-        errorMessage: String(describing: error),
-        timedOut: false
-      )
-    }
   }
 
   @MainActor
@@ -3626,13 +3473,8 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
         XCTAssertFalse(result.progressKey.isEmpty, "AI reorganize returned an empty progress key.")
         XCTAssertFalse(result.acceptedIds.isEmpty, "AI reorganize accepted no history IDs.")
 
-        let progressURL = try compatibilityAPIURL(
-          service: service,
-          path: "/system/progress/\(result.progressKey)"
-        )
-        let progress = await BackendCompatibilityReadOnlyTests.probeSSEStream(
-          url: progressURL,
-          token: service.token,
+        let progress = await BackendCompatibilityReadOnlyTests.probeSearchStream(
+          service.progressStream(progressKey: result.progressKey),
           timeoutSeconds: 180,
           maxEvents: nil
         )
@@ -3799,31 +3641,6 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
           ? "ReorganizeViewModel.submit accepted the request."
           : "ReorganizeViewModel.submit rejected the request without a visible error.")
     )
-  }
-
-  @MainActor
-  private func compatibilityAPIURL(
-    service: APIService,
-    path: String,
-    params: [String: String?] = [:]
-  ) throws -> URL {
-    let endpoint = "\(service.baseURL)/api/v1\(path)"
-    guard var components = URLComponents(string: endpoint) else {
-      throw BackendCompatibilityProbeError.invalidURL(endpoint)
-    }
-
-    var queryItems = components.queryItems ?? []
-    for (name, value) in params.sorted(by: { $0.key < $1.key }) {
-      if let value {
-        queryItems.append(URLQueryItem(name: name, value: value))
-      }
-    }
-    components.queryItems = queryItems.isEmpty ? nil : queryItems
-
-    guard let url = components.url else {
-      throw BackendCompatibilityProbeError.invalidURL(endpoint)
-    }
-    return url
   }
 
 }

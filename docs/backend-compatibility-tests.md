@@ -108,7 +108,7 @@ xcodebuild test \
 - `MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_PAUSE_RESUME=true`：取 `state=R/S` 条目并临时切换到另一状态，再写回测试前的状态；原本暂停的 `state=S` 会在测试期间短暂恢复为 `R`，可能参与后台调度。
 - `MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_RESET_SEARCH=true`：取现有订阅列表中有 ID 且 `state=R/S` 的条目，重置订阅后立即触发同一条订阅搜索；执行后只会把订阅的 `state` 字段写回测试前的值，包括原本已暂停的 `state=S`。reset 清除的已下载/已入库记录无法恢复，search 触发的后台搜索或下载任务也无法撤销。
 - `MOVIEPILOT_COMPAT_TEST_MANUAL_REORGANIZE=true`：取整理历史第一页最近几条，通过 TV 端 `ReorganizeViewModel.submit(background: true)` 生产入口并发触发后台手动重新整理。
-- `MOVIEPILOT_COMPAT_TEST_AI_REORGANIZE=true`：取整理历史第一页最近几条，批量触发 AI 重新整理，并检查返回的进度流。
+- `MOVIEPILOT_COMPAT_TEST_AI_REORGANIZE=true`：取整理历史第一页最近几条，批量触发 AI 重新整理，并通过 TV 端 `APIService.progressStream`（含当前会话的资源 Cookie）检查返回的进度流。
 
 这些测试不会新增订阅、删除订阅、添加下载、删除下载或删除整理历史。订阅重置、订阅搜索、暂停/恢复订阅、手动/AI 重新整理都会触发真实后台动作；只应在你接受这些影响的后端上运行副作用套件。
 
