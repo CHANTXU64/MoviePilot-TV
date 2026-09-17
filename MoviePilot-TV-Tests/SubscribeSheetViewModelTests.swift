@@ -164,7 +164,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET",
       path: "/api/v1/media/998907",
-      json: #"{"tmdb_id":998907,"title":"统一身份取消订阅","type":"电影"}"#
+      json: #"{"tmdb_id":998907,"title":"统一身份取消订阅","type":"电影","year":"2026"}"#
     )
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET",
@@ -174,7 +174,12 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
 
-    let media = MediaInfo(tmdb_id: 998_907, title: "统一身份取消订阅", type: "电影")
+    let media = MediaInfo(
+      tmdb_id: 998_907,
+      title: "统一身份取消订阅",
+      type: "电影",
+      year: "2026"
+    )
     let preloadTask = preloader.preload(for: media)
     try await waitUntil("preloaded canonical subscription state is ready") {
       preloadTask.isSubscribed == true
@@ -202,6 +207,18 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(
       responseIdentityDeleteCount, 0,
       "删除目标必须是本次查询用的媒体身份，不能跟着响应回显的身份漂移")
+    let lookupQueries = await SubscribeSheetURLProtocol.stub.requestQueries(
+      method: "GET",
+      path: "/api/v1/subscribe/media/998907"
+    )
+    XCTAssertTrue(
+      lookupQueries.contains { $0["year"] == "2026" && $0["mtype"] == "电影" },
+      "常规订阅状态预载必须继续携带视频元数据兜底参数"
+    )
+    XCTAssertEqual(lookupQueries.last?["media_source"], "themoviedb")
+    XCTAssertEqual(lookupQueries.last?["title"], "统一身份取消订阅")
+    XCTAssertNil(lookupQueries.last?["year"])
+    XCTAssertNil(lookupQueries.last?["mtype"])
   }
 
   func testSubscriptionHandlerKeepsCachedStateWhenDeleteFails() async throws {
@@ -1826,6 +1843,7 @@ private struct SubscribeSheetServiceSnapshot {
 
 private actor SubscribeSheetURLProtocolStub {
   private var requestCounts: [String: Int] = [:]
+  private var requestQueriesByEndpoint: [String: [[String: String]]] = [:]
   private var requestBodies: [String: Data] = [:]
   private var responseOverrides: [String: Data] = [:]
   private var suspendedPaths: Set<String> = []
@@ -1834,6 +1852,7 @@ private actor SubscribeSheetURLProtocolStub {
 
   func reset() {
     requestCounts.removeAll()
+    requestQueriesByEndpoint.removeAll()
     requestBodies.removeAll()
     responseOverrides.removeAll()
     suspendedPaths.removeAll()
@@ -1865,6 +1884,10 @@ private actor SubscribeSheetURLProtocolStub {
     requestCounts["\(method) \(path)", default: 0]
   }
 
+  func requestQueries(method: String, path: String) -> [[String: String]] {
+    requestQueriesByEndpoint["\(method) \(path)", default: []]
+  }
+
   func totalRequestCount() -> Int {
     requestCounts.values.reduce(0, +)
   }
@@ -1876,7 +1899,13 @@ private actor SubscribeSheetURLProtocolStub {
   func response(for request: URLRequest) async throws -> (HTTPURLResponse, Data) {
     let method = request.httpMethod ?? "GET"
     let path = request.url?.path ?? ""
-    requestCounts["\(method) \(path)", default: 0] += 1
+    let endpoint = "\(method) \(path)"
+    requestCounts[endpoint, default: 0] += 1
+    let query = Dictionary(
+      uniqueKeysWithValues: (URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+        .queryItems ?? []).map { ($0.name, $0.value ?? "") }
+    )
+    requestQueriesByEndpoint[endpoint, default: []].append(query)
     if let body = requestBodyData(from: request) {
       requestBodies["\(method) \(path)"] = body
     }

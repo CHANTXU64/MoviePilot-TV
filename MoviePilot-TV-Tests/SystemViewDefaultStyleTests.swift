@@ -775,7 +775,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
 
   func testFilterRuleGroupsCompatibilityProbeUsesSuperUserRequirement() throws {
     let source = try Self.source(at: "MoviePilot-TV-Tests/BackendCompatibilityTests.swift")
-    let start = try XCTUnwrap(source.range(of: "\"filter-rule groups\""))
+    let start = try XCTUnwrap(source.range(of: "\"filter-rule groups\"", options: .backwards))
     let end = try XCTUnwrap(source.range(of: "\"custom filter rules\"", range: start.upperBound..<source.endIndex))
     let probe = String(source[start.lowerBound..<end.lowerBound])
 
