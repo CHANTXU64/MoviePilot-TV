@@ -64,22 +64,12 @@ struct BestResultCard: View {
     .animation(.easeInOut(duration: 0.2), value: isFocused)
   }
 
-  private func typeIcon(_ type: String?) -> String {
-    switch type {
-    case "电影": return "film"
-    case "电视剧": return "tv"
-    case "合集": return "rectangle.stack"
-    case "人物": return "person.fill"
-    default: return "film"
-    }
-  }
-
   private var posterContent: some View {
     ZStack {
       Rectangle()
         .fill(Color(white: 0.12))
         .overlay(
-          Image(systemName: typeIcon(type))
+          Image(systemName: MediaTypePresentation.placeholderIconName(for: type))
             .font(.largeTitle)
             .foregroundColor(.gray)
         )

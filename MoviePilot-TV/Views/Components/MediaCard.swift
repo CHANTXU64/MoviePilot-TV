@@ -29,18 +29,39 @@ enum MediaSource: String {
 
 }
 
+/// 统一卡片媒体类型图标，未知类型只用于缺图占位，不冒充电影。
+enum MediaTypePresentation {
+  private static let iconMap: [String: String] = [
+    "电影": "film",
+    "电视剧": "tv",
+    "合集": "rectangle.stack",
+    "人物": "person.fill",
+  ]
+
+  static func iconName(for typeText: String?) -> String? {
+    guard let typeText else { return nil }
+    return iconMap[typeText]
+  }
+
+  /// 左上角徽章维持既有边界：人物仍显示文字，仅三种媒体类型显示图标。
+  static func badgeIconName(for typeText: String?) -> String? {
+    guard typeText == "电影" || typeText == "电视剧" || typeText == "合集" else {
+      return nil
+    }
+    return iconName(for: typeText)
+  }
+
+  static func placeholderIconName(for typeText: String?) -> String {
+    iconName(for: typeText) ?? "photo"
+  }
+}
+
 private struct BadgeOverlay: View, Equatable {
   let typeText: String?
   let ratingText: String?
   let bottomLeftText: String?
   let bottomLeftSecondaryText: String?
   let source: MediaSource?
-
-  static let typeIconMap: [String: String] = [
-    "电影": "film",
-    "电视剧": "tv",
-    "合集": "rectangle.stack",
-  ]
 
   var body: some View {
     Canvas { context, size in
@@ -165,10 +186,9 @@ private struct BadgeOverlay: View, Equatable {
       }
     } symbols: {
       // 通过 symbols 提供需要的 SwiftUI 内容（仅创建一次，不参与 view tree diffing）
-      let typeIcon = Self.typeIconMap[typeText ?? ""] ?? "film"
       Group {
         if let type = typeText, !type.isEmpty {
-          if Self.typeIconMap[type] != nil {  // 检查是否为图标类型
+          if let typeIcon = MediaTypePresentation.badgeIconName(for: type) {
             Image(systemName: typeIcon)
           } else {
             Text(type)
@@ -273,12 +293,6 @@ struct MediaCard: View {
   // 卡片被点击时的操作
   var action: (() -> Void)? = nil
   var onFocus: ((Bool) -> Void)? = nil
-
-  private static let typeIconMap: [String: String] = [
-    "电影": "film",
-    "电视剧": "tv",
-    "合集": "rectangle.stack",
-  ]
 
   init(
     title: String = "",
@@ -386,7 +400,7 @@ struct MediaCard: View {
   // 提取的海报内容 - Apple TV 风格设计
   @ViewBuilder
   private var posterContent: some View {
-    let resolvedTypeIcon = Self.typeIconMap[typeText ?? ""] ?? "film"
+    let resolvedTypeIcon = MediaTypePresentation.placeholderIconName(for: typeText)
     ZStack {
       Rectangle()
         .fill(Color(white: 0.12))
@@ -451,7 +465,7 @@ struct DetailCardView: View, Equatable {
       title: item.cleanedTitle ?? "",
       posterUrl: item.imageURLs.poster,
       posterFallbackUrl: item.imageURLs.posterFallback,
-      typeText: item.type,
+      typeText: item.displayTypeText,
       ratingText: item.vote_average.map { String(format: "%.1f", $0) },
       bottomLeftText: nil,
       bottomLeftSecondaryText: nil,

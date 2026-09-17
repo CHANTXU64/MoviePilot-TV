@@ -4,6 +4,46 @@ import XCTest
 
 @MainActor
 final class MediaInfoCollectionBehaviorTests: XCTestCase {
+  func testKnownMediaTypesUseSpecificPlaceholderIcons() {
+    XCTAssertEqual(MediaTypePresentation.placeholderIconName(for: "电影"), "film")
+    XCTAssertEqual(MediaTypePresentation.placeholderIconName(for: "电视剧"), "tv")
+    XCTAssertEqual(MediaTypePresentation.placeholderIconName(for: "合集"), "rectangle.stack")
+    XCTAssertEqual(MediaTypePresentation.placeholderIconName(for: "人物"), "person.fill")
+  }
+
+  func testUnknownMediaTypesUseGenericPhotoPlaceholder() {
+    for typeText in [nil, "", "新", "阅", "待", "停", "未知类型"] as [String?] {
+      XCTAssertEqual(
+        MediaTypePresentation.placeholderIconName(for: typeText),
+        "photo",
+        typeText ?? "nil"
+      )
+    }
+  }
+
+  func testBadgeIconsPreserveExistingTypeBoundary() {
+    XCTAssertEqual(MediaTypePresentation.badgeIconName(for: "电影"), "film")
+    XCTAssertEqual(MediaTypePresentation.badgeIconName(for: "电视剧"), "tv")
+    XCTAssertEqual(MediaTypePresentation.badgeIconName(for: "合集"), "rectangle.stack")
+    XCTAssertNil(MediaTypePresentation.badgeIconName(for: "人物"))
+    XCTAssertNil(MediaTypePresentation.badgeIconName(for: "新"))
+    XCTAssertNil(MediaTypePresentation.badgeIconName(for: nil))
+  }
+
+  func testCollectionDisplayTypeUsesCollectionPlaceholderIcon() {
+    for media in [
+      MediaInfo(type: "collection"),
+      MediaInfo(type: "系列"),
+      MediaInfo(type: nil, collection_id: 42),
+    ] {
+      XCTAssertEqual(media.displayTypeText, "合集")
+      XCTAssertEqual(
+        MediaTypePresentation.placeholderIconName(for: media.displayTypeText),
+        "rectangle.stack"
+      )
+    }
+  }
+
   func testCollectionDisplayTypeUsesIsCollectionWithoutCollectionId() {
     let media = MediaInfo(type: "collection", collection_id: nil)
 

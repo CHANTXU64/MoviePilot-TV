@@ -2992,15 +2992,15 @@ return nil
 </details>
 
 <details>
-<summary>F-172 · P3 · 已确认 · 未知类型缺图时误显示电影图标</summary>
+<summary>F-172 · P3 · 已修复（2026-09-17） · 未知类型缺图时误显示电影图标</summary>
 
 - 审查单元与位置：C009-B→W006-D；卡片缺图占位类型
 - 触发路径：海报nil、加载中或失败，typeText为nil/空/未知/业务状态文本。
-- 根因：`typeIconMap[typeText ?? ""] ?? "film"`把所有未知输入统一解释为电影。
-- 用户影响：Home电视剧订阅把typeText传“新/阅/待/停”，季卡固定传nil；缺图/加载中仍显示电影glyph，误导内容类型。已知电影/电视剧/合集分别命中正确映射，是明确反证边界。
-- 证据：双审确认MediaCard生产链；W006-D双审补collection_id有效但nil/英文/系列类型仍导航合集却显示电影glyph；各卡片/调用页/G03回溯中性glyph与统一displayTypeText测试
-- 跨端结论：缺图/加载中触发频率未验证
-- 最小修改方向 / 裁决：未知/nil使用中性`photo`或`rectangle.portrait`，保留三种已知映射，不新增占位组件/类型框架。
+- 历史根因：`typeIconMap[typeText ?? ""] ?? "film"`把所有未知输入统一解释为电影，`BestResultCard`又维护第二套同样默认film的switch。
+- 历史用户影响：Home电视剧订阅把typeText传“新/阅/待/停”，季卡固定传nil；缺图/加载中仍显示电影glyph，误导内容类型。已知电影/电视剧/合集分别命中正确映射，是明确反证边界。
+- 修复：新增小型共享`MediaTypePresentation`，电影/电视剧/合集/人物的缺图占位继续使用`film`/`tv`/`rectangle.stack`/`person.fill`，nil、空值、状态文字及未知类型统一使用系统`photo`。左上BadgeOverlay严格维持原有边界：仅电影/电视剧/合集画图标，人物与未知状态仍显示原文字；BestResultCard删除重复switch并复用同一占位投影。DetailCard、搜索最佳结果和手动搜索的MediaInfo入口统一传`displayTypeText`，因此collection_id、`collection`与`系列`都显示合集图标。
+- 验证：新增4条投影测试，覆盖4种已知占位类型、7种未知/状态值、左上徽章既有边界及3种合集形态；`MediaInfoCollectionBehaviorTests` 28/28通过，tvOS Simulator clean build通过。标准串行测试在`BackendCompatibilityReadOnlyTests.testReadOnlyTVSurfaceCompatibilityAndImageRendering`因真实后端`/mediaserver/latest`返回502失败后按仓库规则停止，未隔离重跑或调查；真机缺图视觉仍未验收。
+- 跨端结论：纯TV缺图占位语义已修复；真实缺图频率与真机视觉仍未验证。
 
 </details>
 

@@ -345,7 +345,7 @@
 | C007 | 已闭环 | review_a001_j 主审、verify_a001_h 独立复核完成；F-169确认P3，视觉overlay与焦点重定向不会生成持久选择语义；F-033/F-139传播闭合 |
 | C008 | 已闭环 | review_a001_h 主审、review_a001_j 独立复核完成；W014双审补强当前后端默认站点回退/规则fail-open后F-170升级确认P2；修复须只让用户主动清域外值；F-170 已修复（2026-08-20） |
 | C009-A | 已闭环 | verify_a001_h 主审、review_a001_j 独立复核完成；后续G03两张正确映射票将F-171升P2，Canvas五类持久业务状态无替代；标题/页面上下文只限制影响，整卡owner交B；F-171 用户跳过（2026-08-20） |
-| C009-B | 已闭环 | review_a001_h 主审、review_a001_j 独立复核完成；F-172确认P3，F-173代码级重复处理确认但实际影响未量化，用户决定跳过修复；整卡语义并入F-171；F-171 用户跳过（2026-08-20） |
+| C009-B | 已闭环 | review_a001_h 主审、review_a001_j 独立复核完成；F-172已修复（2026-09-17）：电影/电视剧/合集/人物保留专用缺图图标，nil、空值、状态文字和未知类型统一使用系统`photo`，BadgeOverlay维持原三类型图标/其他值文字边界，BestResultCard复用同一占位投影，MediaInfo卡片入口统一传`displayTypeText`；定向28/28与Simulator clean build通过，标准串行套件因真实后端`/mediaserver/latest`返回502失败后按规则停止。F-173代码级重复处理确认但实际影响未量化，用户决定跳过修复；整卡语义并入F-171；F-171 用户跳过（2026-08-20） |
 | C009-C | 已闭环 | verify_a001_h 主审、review_a001_j 独立复核完成；后续G03两张正确映射票将F-174升P2，全仓单写/读/清静态槽无目标owner，A编辑→B无源详情冷Loading错误飞入链闭合；F-174 用户跳过（2026-08-20） |
 | C010 | 已闭环 | F-175 P2，G04末裁将F-176升P2；F-177 已修复（2026-09-15）：PersonCard按实际width/height使用DownsamplingImageProcessor，定向MPImageWarmerTests 2/2与Simulator clean build通过，真机性能/像质仍未验收；人物route/图片/预取/身份传播闭合；F-176 已修复（2026-08-20）；F-175 用户跳过（2026-08-20） |
 | C011 | 已闭环 | verify_a001_h 主审、review_a001_j 独立复核完成；无新编号，F-175/F-173/F-003传播确认，10/11季显示、SubscribeSeasonRequest三字段与四根导航destination通过；F-175 用户跳过（2026-08-20） |
