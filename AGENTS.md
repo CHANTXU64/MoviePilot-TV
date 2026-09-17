@@ -24,6 +24,7 @@
 5. 如果用户明确要求“只分析”“先检查”“不要修改”，只能审查、解释、提出建议，不要改代码、不要提交、不要开 PR。
 6. 如果需要修改代码、配置、文档或工作流，必须遵守本文件的 Git 工作流。
 7. 兼容任务的目标是与 MoviePilot 后端和 MoviePilot Web 前端当前行为对齐。只有当前任务明确涉及新增或修改兼容测试，或用户明确要求诊断兼容失败时，才在测试失败后判断 MP Web / 官方后端是否同样异常；若上游同样异常或 Web 本来也不发起对应请求，不要在 TV 端替 MoviePilot 官方兜底、修 Bug 或新增差异化容错。普通代码、UI、文档或工作流修改遇到兼容测试失败时，只记录结果并停止，不要诊断、重跑或扩大任务范围。
+8. 修改会话/权限、异步状态、业务身份、缓存、破坏性操作、分页/SSE 或 tvOS 焦点与弹层时，必须先读取 `.agents/engineering-invariants.md` 中对应章节；该文档是全量审计后沉淀的长期工程底线，不是历史缺陷队列。
 
 ## 任务路由
 
@@ -31,18 +32,30 @@
 
 | 用户意图 | 读取文件 |
 | --- | --- |
-| 最终联合审查、AI + 人工收尾审查、按 ReviewPlan 继续、继续审查下一个文件 | `.agents/prompts/final-review.md` + `.agents/ReviewPlan.md` |
 | 普通 PR Review、检查最近提交、检查分支、临时检查某个文件 | 不读取专项 Prompt；直接查看对应 diff / 提交 / 源码 |
-| 检查 `MoviePilot-Frontend` / `MoviePilot` 上游更新对 TV 端影响 | `.agents/prompts/frontend-update.md` + `.agents/ReviewPlan.md` |
+| 检查 `MoviePilot-Frontend` / `MoviePilot` 上游更新对 TV 端影响 | `.agents/prompts/frontend-update.md` |
+| 修改跨会话异步链、身份/缓存、mutation、分页/SSE 或 tvOS 焦点 | `.agents/engineering-invariants.md` 的相关章节 |
 | 准备发布、生成 Release Notes、创建 GitHub Release | `.agents/prompts/release.md` |
 | 整理 Prompt、文档、工作流 | 读取被修改的相关文件；如新增专项 Prompt，同步更新本路由表 |
 
 ## 路由边界
 
-1. `.agents/prompts/final-review.md` 只用于明确的最终联合审查；普通 PR Review、最近提交检查、分支检查不要读取它。
-2. 如果用户意图不明确，先按普通只读调查处理；确认任务类型后再读取对应专项 Prompt。
-3. 上游兼容更新分析必须确认 `../MoviePilot-Frontend` 和 `../MoviePilot` 存在且是合法 Git 仓库；如果用户只是临时排查某个运行 Bug，可以说明缺失仓库会降低判断完整性后继续分析。
-4. 发布类任务必须读取 `.agents/prompts/release.md`；版本号必须由用户提供，Release Notes 必须先给用户确认。
+1. 如果用户意图不明确，先按普通只读调查处理；确认任务类型后再读取对应专项 Prompt 或工程不变量章节。
+2. 上游兼容更新分析必须确认 `../MoviePilot-Frontend` 和 `../MoviePilot` 存在且是合法 Git 仓库；如果用户只是临时排查某个运行 Bug，可以说明缺失仓库会降低判断完整性后继续分析。
+3. 发布类任务必须读取 `.agents/prompts/release.md`；版本号必须由用户提供，Release Notes 必须先给用户确认。
+
+## 审计沉淀的工程底线
+
+1. 跨 `await` 发布的状态必须绑定 session/request/operation owner；旧会话、旧代际或已取消任务不得写回 UI、error、loading、子 Paginator 或共享缓存。
+2. SwiftUI 渲染 `id`、后端业务 ID、来源原生 media ID、canonical 身份和缓存 key 必须分离；持久与破坏性操作不得使用动态 UUID 或可变展示文字定位对象。
+3. 会话数据缓存必须分 namespace；同 key 并发采用 latest-wins，旧结果在返回和写入两处都失效；多 owner 预载只在最后一个 owner 离开时释放。
+4. Mutation 在确认前冻结目标、owner、session、season/范围和 intent；HTTP 2xx 只有在符合端点声明 envelope 时才是成功，破坏性范围须单独明确确认。
+5. 分页必须有稳定全序；SSE 按空行组帧并区分终态、EOF、断线、取消与切服；error、success-empty、stale-data 和 loading 不得折叠。
+6. tvOS 主操作优先原生 `Button`、`ScrollView` 和平台可访问性能力；Sheet/Alert 存在时禁用底层 Menu/焦点处理，静态接线测试不得冒充 Focus Engine 真机验收。
+7. 上游兼容以后端发布版本及其 `FRONTEND_VERSION` 指定的 Web 为准；客户端隐藏入口不替代服务端授权，Web/后端共享问题不在 TV 端发明差异化兜底。
+8. 回归测试必须能区分修复前后，安全时做反向验证；定向测试、影响套件、完整套件、真实后端、真机与 Instruments 是不同证据层级，未运行必须明确说明。
+
+详细规则、触发条件、验证要求与已接受例外边界见 `.agents/engineering-invariants.md`。
 
 ## 运行环境与测试策略
 
@@ -222,7 +235,8 @@ xcrun simctl list devices tvOS available
 ## 文档维护规则
 
 1. `.agents/prompts/` 下的专项 Prompt 是具体任务的单一事实来源。
-2. `.agents/ReviewPlan.md` 是收尾联合审查的进度与跨文件副作用记录。
-3. `AGENTS.md` 只维护入口、路由、通用项目约束和 Git 工作流。
-4. 如果新增专项 Prompt，应同步更新本文件的任务路由表。
-5. 如果修改专项 Prompt 的行为规则，应优先修改 `.agents/prompts/` 对应文件，再检查本文件是否需要更新路由描述。
+2. `.agents/engineering-invariants.md` 只维护经多个模块验证的长期工程底线；不写入一次性修复过程、历史状态统计或尚未裁决的假设。
+3. `.agents/audits/` 下的文件是已完成审计的只读历史证据，不作为普通开发、PR Review 或上游兼容分析的默认上下文。
+4. `AGENTS.md` 只维护入口、路由、通用项目约束和 Git 工作流。
+5. 如果新增专项 Prompt 或工程指南，应同步更新本文件的任务路由表。
+6. 如果修改专项 Prompt 的行为规则，应优先修改 `.agents/prompts/` 对应文件，再检查本文件是否需要更新路由描述。

@@ -1,4 +1,6 @@
-# MoviePilot-TV 全量代码审查计划 (Full Review Plan)
+# MoviePilot-TV 全量代码审查计划 (Full Review Plan)（归档）
+
+> 状态：已归档。本文档前半段包含早期审查计划的历史“待开始”状态，后半段 `full-review-20260731-042646` 已全部闭环。当前结论以同目录 `final-report.md` 与 `findings.md` 为准；本文档不再作为活跃开发或审查队列。
 
 本计划涵盖项目所有 Swift 源码文件。为了在单文件审查模式下保持最佳的上下文连贯性，审查顺序已经过优化：**底层基建优先，上层业务按功能模块（ViewModel -> View 结对）推进。**
 

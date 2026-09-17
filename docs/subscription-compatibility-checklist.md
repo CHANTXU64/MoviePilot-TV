@@ -1,6 +1,6 @@
 # 订阅兼容契约与更新检查清单
 
-本文档只记录 MoviePilot 后端或配套 Web 前端发生变化时，可能让 TV 端现有订阅路径产生运行错误、状态误判或错误操作的跨端契约。通用 API、下载、资源搜索、客户端并发实现和测试组织由 `.agents/prompts/frontend-update.md`、`.agents/ReviewPlan.md` 与测试代码负责，不在这里重复。
+本文档只记录 MoviePilot 后端或配套 Web 前端发生变化时，可能让 TV 端现有订阅路径产生运行错误、状态误判或错误操作的跨端契约。通用 API、下载、资源搜索和客户端并发/状态安全边界分别由 `.agents/prompts/frontend-update.md`、`.agents/engineering-invariants.md` 与测试代码负责，不在这里重复。
 
 当前 TV 端声明的最低兼容 MoviePilot 版本为 `v3.0.1`。每次更新必须以后端目标标签及其 `FRONTEND_VERSION` 指定的 Web 版本为准，重新核对实际调用链；本文记录的既有行为不是对未来版本的永久假设。
 
@@ -69,7 +69,7 @@
 
 - 普通读取可以复用短期快照；用户主动进入页面、保存、创建、删除、暂停/恢复、重置、手动搜索或 Fork 成功后，必须仍能获得权威订阅状态。
 - 分季页从一次 `/subscribe/` 快照映射状态，不能退回逐季查询。若 Web/后端把快照改成分页、增量、事件推送或新的默认过滤，必须同步重审 TV 的读取和刷新入口。
-- 具体 `forceRefresh`、请求代际、账号切换清理和预加载通知实现属于 TV 客户端正确性，留在代码、测试和 ReviewPlan，不在这里展开。
+- 具体 `forceRefresh`、请求代际、账号切换清理和预加载通知实现属于 TV 客户端正确性，由代码、测试和 `.agents/engineering-invariants.md` 维护，不在这里展开。
 
 ## 后端更新时重点检查
 
@@ -129,5 +129,5 @@ Web 若只是共享后端缺陷或根本不会发起对应请求，应记录为�
 ## 验证与文档边界
 
 - 修改订阅契约后，按 `AGENTS.md` 运行标准 tvOS Simulator 构建和完整测试；涉及真实后端时，按 `docs/backend-compatibility-tests.md` 执行相应只读或显式副作用套件。
-- 只为实际变化的契约补聚焦回归测试。畸形数据矩阵、请求代际、会话切换和缓存竞态继续由对应单元测试与 ReviewPlan 管理，不在本清单逐项展开。
+- 只为实际变化的契约补聚焦回归测试。畸形数据矩阵、请求代际、会话切换和缓存竞态继续由对应单元测试与 `.agents/engineering-invariants.md` 管理，不在本清单逐项展开。
 - 如果本次变化属于下载、资源搜索、SSE、通用权限或其他非订阅路径，更新 `.agents/prompts/frontend-update.md` 或相应专项文档，不继续扩张本文件。

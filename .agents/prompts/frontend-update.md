@@ -50,7 +50,7 @@
 - 读取 `MoviePilot-TV/Models/AppVersionInfo.swift` 中的 `AppVersionInfo.compatibleMoviePilotVersion`，将其记录为 `<当前兼容版本>`。该常量决定 App 的版本过低警告和设置页显示，是运行时兼容基线的单一事实来源。
 - 读取 `README.md` 中的 MoviePilot 版本徽章和兼容性说明，确认它们与 `<当前兼容版本>` 一致；README 只用于展示，不能反向覆盖运行时基线。
 - 检查 `SystemVersionInfoTests` 和 `ContentViewModelBehaviorTests` 是否覆盖同一兼容版本及紧邻的过低版本。常量、README 或测试不一致时，必须先列为 **必须修**，不能继续得出“兼容版本已更新”的结论。
-- 简要查阅 `.agents/ReviewPlan.md`，了解当前 TV 应用的架构现状和待办事项，以便在后续分析中结合上下文。
+- 按本次变更实际涉及的主题，读取 `.agents/engineering-invariants.md` 中对应章节；不读取已归档的全量审计计划作为默认上下文。
 - 读取 `docs/subscription-compatibility-checklist.md`，后续只要上游变更涉及订阅管理、媒体 ID、详情页 Header 订阅按钮、分季订阅、`episode_group`、`/subscribe/` 缓存或刷新语义，必须按该文档逐项复核。
 - 读取 `docs/frontend-update-todo.md`，了解此前记录的后续功能候选。若本次上游更新让其中某项变成必须修、已不再适合 TV、或出现新的可评估功能，只能先在报告中提出 TODO 更新建议；未经用户明确同意，不要修改该文件。
 

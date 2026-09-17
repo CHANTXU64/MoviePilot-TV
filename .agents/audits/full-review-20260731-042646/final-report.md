@@ -3627,7 +3627,7 @@ return nil
 - 审查单元与位置：I016；App Info Sheet下root Menu observer仍启用
 - 历史触发路径：root聚焦App信息并打开Sheet，用户按Menu关闭；modal与底层若共享接收该UIWindow recognizer，底层回调会清focusedItem并滚到顶部。
 - 用户影响（修复前）：Menu可能既关闭Sheet又改变底层焦点/滚动，破坏系统模态关闭后的焦点恢复。
-- 当前修复：`05ba3bd`已把App Info、更新通知、更日志与退出确认的呈现状态并入`SystemSettingsRootBackObserver.isEnabled`；`handlePress`又以`windowHasNoPresentedContent()`拦截Sheet/alert关闭动画期间的Menu。
+- 当前修复：`05ba3bd`已把App Info、更新通知、更新日志与退出确认的呈现状态并入`SystemSettingsRootBackObserver.isEnabled`；`handlePress`又以`windowHasNoPresentedContent()`拦截Sheet/alert关闭动画期间的Menu。
 - 证据：原I016双审只能确认静态前提；本次复核当前源码及`SystemViewDefaultStyleTests.testSystemViewExitHandlersOnlyRunWhenSettingsTabIsActive`，双层守卫已覆盖原触发链，定向回归1/1通过。
 - 跨端结论：TV端固有的Menu/Focus Engine链路，已在本端修复；不涉及Web/后端合同。
 - 最小修改方向 / 裁决：已修复；保留普通root Menu滚顶行为，仅在弹层存在或关闭动画期间拦截底层处理。
