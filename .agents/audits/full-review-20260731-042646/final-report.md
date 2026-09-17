@@ -1413,7 +1413,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-119 · P2 · 已确认 · canonical media alias 只回写任意一个缓存任务</summary>
+<summary>F-119 · P2 · 用户决定跳过（2026-09-17） · canonical media alias 只回写任意一个缓存任务</summary>
 
 - 审查单元与位置：V004-B→V012-B→G02；MediaPreloader cache aliases 与订阅回写
 - 触发路径：cache 同时持有两个 `MediaInfo.id` 不同、但 `apiMediaId` 相同的富/简字段媒体对象，随后保存或取消该媒体订阅。
@@ -1422,6 +1422,9 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：既有双审确认机制；G02两名不同复核确认fullDetail/非TMDB alias缺口并升级P2；线性扫描小缓存并更新全部已知canonical alias；不建alias registry
 - 跨端结论：条件性TV状态错误P2；真实alias并存频率未验证
 - 最小修改方向 / 裁决：保留现有 cache key，线性扫描当前小缓存并按精确 apiMediaId 或已识别 TMDB fallback 更新全部 alias；缓存通常受 30 项软上限约束但可超限，不重键、不加索引或缓存层。
+- 后续内存优化复核（2026-09-17）：生命周期收紧会释放失去全部owner的任务，只减少普通alias并存数量；导航owner、焦点候选与附带预载仍可同时持有同一canonical媒体的不同任务，`findTask(byMediaId:)`仍用`cache.values.first(where:)`，候选转导航时也不会重新执行初始订阅查询，故根因仍在。
+- 配套Web v3.0.1对照：Web以canonical媒体身份+season共享订阅缓存，不存在TV的first-match任务根因；但每个已挂载组件仍持有独立`isSubscribed`，mutation只更新当前实例及非响应式Map缓存，另一个已完成首次查询的同媒体组件也可能保留旧标签。现有重复卡片测试只覆盖初次请求合并，不覆盖mutation传播。
+- 最终处置：用户据此决定不做TV单端增强并标记跳过；保留点击时权威查询边界，不修改生产代码。
 
 </details>
 
@@ -2815,7 +2818,7 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-117 · P3 · 已确认 · 取消早于图片 handle 安装时仍启动不可取消请求</summary>
+<summary>F-117 · P3 · 用户决定跳过（2026-09-17） · 取消早于图片 handle 安装时仍启动不可取消请求</summary>
 
 - 审查单元与位置：V004-A；`MediaPreloader.swift:95,123-169` 图片预取取消链
 - 触发路径：预取 timeout 的 group cancel、LRU 淘汰或 logout/显式 clearAll 在图片 child 已继承取消、但 Kingfisher DownloadTask handle 尚未安装时发生。
@@ -2824,6 +2827,8 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 - 证据：verify_a001_h 闭合已取消 child、onCancel 先恢复、operation 后启动请求与 handle 清空时序；review_a001_h 独立确认 Swift/Kingfisher 顺序、真实取消入口、缓存写入与取消后 ready 发布
 - 跨端结论：TV 资源/生命周期缺陷已确认；真实竞态频率及注销传播未运行验证
 - 最小修改方向 / 裁决：扩展现有锁盒同时保存 continuation、取消标记与 handle，operation 内二次检查，handle 安装时若已取消立即 cancel；ready 发布前再检查父 Task，不重构下载层。
+- 后续内存优化复核（2026-09-17）：当前实现已增加请求前取消检查、`MPImageWarmer`取得handle后的取消、continuation exactly-once及晚到内存结果代际丢弃，因此取消后的内存残留已明显收窄；但直接Kingfisher路径的`activeImageDownload`安装仍未与取消标记原子交接，`loadDetail`也仍会在图片预取返回后不复查取消便写`isDetailReady`。现有测试仅覆盖晚到结果丢弃，没有覆盖handle安装窗口。
+- 最终处置：用户认为该P3竞态窗口极小、继续改动取消/句柄交接反而容易引入问题，决定保持现状并标记跳过；不修改生产代码。
 
 </details>
 
@@ -3601,7 +3606,7 @@ return nil
 </details>
 
 <details>
-<summary>F-238 · P3 · 未验证 · 插件筛选同名 query 只追加不替换</summary>
+<summary>F-238 · P3 · 用户决定跳过（2026-09-17） · 插件筛选同名 query 只追加不替换</summary>
 
 - 审查单元与位置：I006；api_path与筛选值同名时重复query
 - 触发路径：插件路径含`?mode=old`，同名筛选当前值为`mode=new`。
@@ -3611,20 +3616,22 @@ return nil
 - 跨端结论：TV构造成立；当前插件产出与服务端优先级未验证
 - 最小修改方向 / 裁决：先核当前插件/后端解析合同；确认筛选应覆盖时，仅移除被当前filter values覆盖的同名项，保留token等无关键，不建query框架。
 - 必须补充的验证：当前插件是否生成同名键、服务端取首/末/拒绝及用户影响。
+- 后续跨端复核（2026-09-17）：目标后端v3.0.1绑定的Web v3.0.1在`ExtraSourceView`中原样传`source.api_path`，同时把`filter_params`独立传给`MediaCardListView`，后者以`api.get(apipath, { params })`追加查询，因此与TV一样可形成`mode=old&mode=new`。标准Starlette `QueryParams.get("mode")`返回最后值`new`，FastAPI普通标量路径因此让当前筛选值生效；`getlist`/列表参数保留两值。核心与配套Web没有同名真实插件fixture，特殊插件自定义取首解析仍未验证。
+- 最终处置：用户决定保持Web一致，不在TV端单独定义“替换同名参数”语义并标记跳过；若官方插件后续明确不同合同，再按上游同步。
 
 </details>
 
 <details>
-<summary>F-241 · P3 · 未验证 · App Info Sheet 展示时底层 root Menu observer 仍启用</summary>
+<summary>F-241 · P3 · 已修复（`05ba3bd`） · App Info Sheet 展示时底层 root Menu observer 仍启用</summary>
 
 - 审查单元与位置：I016；App Info Sheet下root Menu observer仍启用
-- 触发路径：root聚焦App信息并打开Sheet，用户按Menu关闭；modal与底层若共享接收该UIWindow recognizer。
-- 根因：observer启用条件不含`showAppInfo`，且显式允许simultaneous recognition；底层回调会清focusedItem并滚到顶部。
-- 用户影响：Menu可能既关闭Sheet又改变底层焦点/滚动，破坏系统模态关闭后的焦点恢复。
-- 证据：I016两代理确认静态前提，但均不能证明tvOS modal下Menu投递；Sheet/alert展示时禁底层observer/exit handler
-- 跨端结论：条件性TV焦点风险；需UI/真机证据，程序限制披露
-- 最小修改方向 / 裁决：App Info Sheet或logout alert展示时禁用底层observer/exit handler；普通root Menu行为不变。
-- 必须补充的验证：系统Sheet/window press路由与真实Focus Engine恢复；程序限制永久披露。
+- 历史触发路径：root聚焦App信息并打开Sheet，用户按Menu关闭；modal与底层若共享接收该UIWindow recognizer，底层回调会清focusedItem并滚到顶部。
+- 用户影响（修复前）：Menu可能既关闭Sheet又改变底层焦点/滚动，破坏系统模态关闭后的焦点恢复。
+- 当前修复：`05ba3bd`已把App Info、更新通知、更日志与退出确认的呈现状态并入`SystemSettingsRootBackObserver.isEnabled`；`handlePress`又以`windowHasNoPresentedContent()`拦截Sheet/alert关闭动画期间的Menu。
+- 证据：原I016双审只能确认静态前提；本次复核当前源码及`SystemViewDefaultStyleTests.testSystemViewExitHandlersOnlyRunWhenSettingsTabIsActive`，双层守卫已覆盖原触发链，定向回归1/1通过。
+- 跨端结论：TV端固有的Menu/Focus Engine链路，已在本端修复；不涉及Web/后端合同。
+- 最小修改方向 / 裁决：已修复；保留普通root Menu滚顶行为，仅在弹层存在或关闭动画期间拦截底层处理。
+- 剩余验证边界：真机Sheet/window press路由与Focus Engine最终落点未单独复验；不再作为未处理缺陷。
 
 </details>
 
