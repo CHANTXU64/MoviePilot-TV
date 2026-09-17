@@ -52,7 +52,7 @@ GitHub CI 没有真实后端账号，`ci.yml` 会显式跳过 `BackendCompatibil
 
 这组测试不会新增订阅、删除订阅、添加下载、暂停/恢复下载、重置订阅、触发订阅搜索或执行整理任务。可选的 `MOVIEPILOT_COMPAT_METADATA_QUERY` / `MOVIEPILOT_COMPAT_METADATA_QUERIES` 只用于媒体元数据搜索和详情读取；人物搜索使用独立的 `MOVIEPILOT_COMPAT_PERSON_QUERY` / `MOVIEPILOT_COMPAT_PERSON_QUERIES`，未配置时默认查询“易中天”，避免拿媒体标题作为人物搜索词。如果媒体搜索结果包含合集，还会继续读取合集详情。也可以用 `MOVIEPILOT_COMPAT_COLLECTION_ID` / `MOVIEPILOT_COMPAT_COLLECTION_IDS` 直接指定合集 ID。
 
-默认还会检查标题识别、TMDB ID 识别、整理历史读取、整理预览和订阅状态读取，以覆盖 TV 端现有后台能力。整理预览只读取最近一条已有整理历史，以 `preview=true` 调用 `/transfer/manual?background=false`，校验预览 envelope、汇总计数以及每个条目的 `success` 值，不执行文件写入或后台整理任务。若要额外检查资源搜索兼容性，可配置 `MOVIEPILOT_COMPAT_RESOURCE_QUERY` / `MOVIEPILOT_COMPAT_RESOURCE_QUERIES` 或 `MOVIEPILOT_COMPAT_RESOURCE_MEDIA_ID` / `MOVIEPILOT_COMPAT_RESOURCE_MEDIA_IDS`；这只会调用资源搜索并解码结果，不会添加下载。`MOVIEPILOT_COMPAT_TEST_RESOURCE_SEARCH_STREAMS=true` 会额外检查资源搜索 SSE 流式接口，耗时更长，默认关闭。若要检查分季已入库状态，可设置 `MOVIEPILOT_COMPAT_CHECK_SEASON_AVAILABILITY=true`；该检查只读取媒体服务器状态，不会创建订阅。
+默认还会检查标题识别、TMDB ID 识别、整理历史读取、整理预览和订阅状态读取，以覆盖 TV 端现有后台能力。整理预览只读取最近一条已有整理历史，经 `ReorganizeViewModel` 的生产表单组装入口，以 `preview=true` 调用 `/transfer/manual?background=false`，并校验可选媒体来源/ID 成对省略、请求不返回 422、预览 envelope、汇总计数以及每个条目的 `success` 值；该检查不执行文件写入或后台整理任务。若要额外检查资源搜索兼容性，可配置 `MOVIEPILOT_COMPAT_RESOURCE_QUERY` / `MOVIEPILOT_COMPAT_RESOURCE_QUERIES` 或 `MOVIEPILOT_COMPAT_RESOURCE_MEDIA_ID` / `MOVIEPILOT_COMPAT_RESOURCE_MEDIA_IDS`；这只会调用资源搜索并解码结果，不会添加下载。`MOVIEPILOT_COMPAT_TEST_RESOURCE_SEARCH_STREAMS=true` 会额外检查资源搜索 SSE 流式接口，耗时更长，默认关闭。若要检查分季已入库状态，可设置 `MOVIEPILOT_COMPAT_CHECK_SEASON_AVAILABILITY=true`；该检查只读取媒体服务器状态，不会创建订阅。
 
 MoviePilot v3.0.1 媒体业务只读巡检还会覆盖：
 

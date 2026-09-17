@@ -381,7 +381,7 @@ final class PersonDecodingTests: XCTestCase {
             large: "https://lain.bgm.tv/pic/crt/l/large.jpg",
             medium: "https://lain.bgm.tv/pic/crt/m/medium.jpg"
           ),
-          "http://moviepilot.local/api/v1/system/img/1?imgurl=https%3A%2F%2Flain.bgm.tv%2Fpic%2Fcrt%2Fm%2Fmedium.jpg"
+          "https://lain.bgm.tv/pic/crt/m/medium.jpg"
         ),
         (
           "Bangumi does not fall back to large", "bangumi", nil, nil,

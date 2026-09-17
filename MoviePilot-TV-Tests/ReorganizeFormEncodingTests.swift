@@ -105,6 +105,31 @@ final class ReorganizeFormEncodingTests: XCTestCase {
     XCTAssertTrue(json["episode_group"] is NSNull)
   }
 
+  func testIncompleteMediaIdentityIsOmittedForAutomaticRecognition() throws {
+    var form = ReorganizeForm(
+      fileitem: nil,
+      logid: 42,
+      target_storage: nil,
+      transfer_type: nil,
+      target_path: "",
+      min_filesize: 0,
+      scrape: nil,
+      from_history: true,
+      media_source: "themoviedb",
+      media_id: nil
+    )
+
+    var json = try encodedJSONObject(form)
+    XCTAssertFalse(json.keys.contains("media_source"))
+    XCTAssertFalse(json.keys.contains("media_id"))
+
+    form.media_source = nil
+    form.media_id = "42"
+    json = try encodedJSONObject(form)
+    XCTAssertFalse(json.keys.contains("media_source"))
+    XCTAssertFalse(json.keys.contains("media_id"))
+  }
+
   func testPreviewUsesSameFormContractAndAddsPreviewFlagOnlyWhenEnabled() throws {
     let form = ReorganizeForm(
       fileitem: FileItem(

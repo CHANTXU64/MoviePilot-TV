@@ -346,11 +346,54 @@ nonisolated func relativeBackendEndpoint(
   return endpoint
 }
 
-nonisolated private func isBangumiImageURL(_ value: String) -> Bool {
-  if let host = URLComponents(string: value)?.host?.lowercased() {
-    return host == "lain.bgm.tv" || host.hasSuffix(".lain.bgm.tv")
+nonisolated private func isBangumiImageHost(_ value: String) -> Bool {
+  let host = value.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+  return ["bgm.tv", "bangumi.tv", "bangumi.lol"].contains { domain in
+    host == domain || host.hasSuffix(".\(domain)")
   }
-  return value.contains("lain.bgm.tv")
+}
+
+nonisolated private func isBangumiImageURL(_ value: String) -> Bool {
+  guard let host = URLComponents(string: value)?.host else { return false }
+  return isBangumiImageHost(host)
+}
+
+nonisolated private func bangumiImageProxyURL(_ imageURL: String, baseURL: String) -> String {
+  guard isBangumiImageURL(imageURL) else { return imageURL }
+  let rawBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+  guard !rawBaseURL.isEmpty else { return imageURL }
+
+  let candidate = rawBaseURL.contains("://") ? rawBaseURL : "https://\(rawBaseURL)"
+  guard let proxyComponents = URLComponents(string: candidate),
+    let proxyScheme = proxyComponents.scheme?.lowercased(),
+    ["http", "https"].contains(proxyScheme),
+    let proxyHost = proxyComponents.host,
+    !proxyHost.isEmpty,
+    proxyComponents.fragment == nil,
+    let sourceComponents = URLComponents(string: imageURL),
+    let sourceHost = sourceComponents.host
+  else {
+    return imageURL
+  }
+
+  if let query = proxyComponents.percentEncodedQuery, !query.isEmpty {
+    guard let encodedImageURL = encodeURIComponent(imageURL) else { return imageURL }
+    return candidate + encodedImageURL
+  }
+
+  var normalizedBaseURL = candidate
+  while normalizedBaseURL.hasSuffix("/") {
+    normalizedBaseURL.removeLast()
+  }
+  if rawBaseURL.hasSuffix("/") {
+    if sourceHost.caseInsensitiveCompare(proxyHost) == .orderedSame {
+      return imageURL
+    }
+    let query = sourceComponents.percentEncodedQuery.map { "?\($0)" } ?? ""
+    return normalizedBaseURL + sourceComponents.percentEncodedPath + query
+  }
+
+  return "\(normalizedBaseURL)/\(imageURL)"
 }
 
 nonisolated private func isDefaultPlaceholderImageURL(_ value: String) -> Bool {
@@ -367,7 +410,7 @@ nonisolated private func isDefaultPlaceholderImageURL(_ value: String) -> Bool {
       || path.contains("personage-default") || path.contains("celebrity-default")
   }
 
-  let isBangumiHost = host == "lain.bgm.tv" || host.hasSuffix(".lain.bgm.tv")
+  let isBangumiHost = isBangumiImageHost(host)
   if isBangumiHost {
     return path.contains("no_icon")
   }
@@ -379,7 +422,9 @@ nonisolated private func isDefaultPlaceholderImageURL(_ value: String) -> Bool {
 nonisolated private func displayImageURL(
   _ value: String?,
   baseURL: String,
-  useImageCache: Bool
+  useImageCache: Bool,
+  bangumiProxyEnabled: Bool,
+  bangumiImageDomain: String?
 ) -> URL? {
   guard let value, !value.isEmpty else {
     return nil
@@ -390,16 +435,18 @@ nonisolated private func displayImageURL(
     return URL(string: value)
   }
 
-  guard let encodedUrl = encodeURIComponent(value) else {
-    return nil
-  }
-
-  if isBangumiImageURL(value) {
+  if isBangumiImageURL(value), bangumiProxyEnabled {
+    let proxiedValue = bangumiImageProxyURL(value, baseURL: bangumiImageDomain ?? "")
+    guard let encodedUrl = encodeURIComponent(proxiedValue) else { return nil }
     var urlString = "\(baseURL)/api/v1/system/img/1?imgurl=\(encodedUrl)"
     if useImageCache {
       urlString += "&cache=true"
     }
     return URL(string: urlString)
+  }
+
+  guard let encodedUrl = encodeURIComponent(value) else {
+    return nil
   }
 
   if useImageCache {
@@ -652,7 +699,8 @@ class APIService: ObservableObject {
   @Published var useImageCache: Bool = false
 
   var imageConfigurationIdentity: String {
-    "\(baseURL)|\(useImageCache)|\(settings?.TMDB_IMAGE_DOMAIN ?? "")"
+    let bangumiProxyEnabled = settings?.BANGUMI_PROXY_ENABLE?.value == true
+    return "\(baseURL)|\(useImageCache)|\(settings?.TMDB_IMAGE_DOMAIN ?? "")|\(bangumiProxyEnabled)|\(settings?.BANGUMI_IMAGE_DOMAIN ?? "")"
   }
 
   // MARK: - 短暂内存缓存 (提升二级页面和分季组件流畅度)
@@ -3446,13 +3494,15 @@ class APIService: ObservableObject {
 
   /// 查询特定媒体（及特定季）命中的订阅摘要
   /// - 对应前端: `MoviePilot-Frontend/src/components/cards/MediaCard.vue` 和 `MoviePilot-Frontend/src/views/discover/MediaDetailView.vue` 的 `checkSubscribe`
-  /// - 应用场景: 详情页 Header 取消订阅前，先确认该媒体身份下是否存在订阅。
-  /// - 备注: 清单要求 lookup 只用于确认——`mediaId` 恒为本次查询使用的媒体身份，
+  /// - 应用场景: 状态检查、编辑定位，以及详情页 Header 取消订阅前的严格身份确认。
+  /// - 备注: v3.0.4 可用标题、年份和类型跨来源回退；解析媒体级删除目标时必须关闭该回退，
+  ///   因为 DELETE 仍只接受精确来源身份。`mediaId` 恒为本次查询使用的媒体身份，
   ///   响应回显的身份只用来判断“归属是否已被确认”（`isResolvedMediaId`），不再充当删除目标。
   ///   原始 ID + fallback TMDB 的解析顺序由调用方控制。
   func fetchSubscriptionLookup(
     media: MediaInfo,
-    season: Int? = nil
+    season: Int? = nil,
+    includeVideoMetadataFallback: Bool = true
   ) async throws -> SubscriptionLookupResult? {
     struct SubscribeLookupResp: Codable {
       let id: Int?
@@ -3485,12 +3535,16 @@ class APIService: ObservableObject {
       // 遵循 Vue 逻辑，如果无法生成媒体身份，则不发起请求
       return nil
     }
+    let usesVideoMetadataFallback = includeVideoMetadataFallback
+      && (media.type == "电影" || media.type == "电视剧")
     let endpoint = try endpointForMediaIdentity(
       pathPrefix: "/subscribe/media",
       identity: identity,
       extraParams: [
         "season": season.map(String.init),
         "title": media.title,
+        "year": usesVideoMetadataFallback ? media.year : nil,
+        "mtype": usesVideoMetadataFallback ? media.type : nil,
       ]
     )
     let data = try await makeRequest(endpoint: endpoint)
@@ -3774,13 +3828,23 @@ class APIService: ObservableObject {
   }
 
   /// 获取订阅的海报图片 URL
+  private func configuredDisplayImageURL(_ value: String?) -> URL? {
+    displayImageURL(
+      value,
+      baseURL: baseURL,
+      useImageCache: useImageCache,
+      bangumiProxyEnabled: settings?.BANGUMI_PROXY_ENABLE?.value == true,
+      bangumiImageDomain: settings?.BANGUMI_IMAGE_DOMAIN
+    )
+  }
+
   func getSubscribePosterImageUrl(_ subscribe: Subscribe) -> URL? {
     return getSubscribePosterImageUrl(poster: subscribe.poster)
   }
 
   func getSubscribePosterImageUrl(poster: String?) -> URL? {
     guard let poster, !isDefaultPlaceholderImageURL(poster) else { return nil }
-    return displayImageURL(poster, baseURL: baseURL, useImageCache: useImageCache)
+    return configuredDisplayImageURL(poster)
   }
 
   /// 获取订阅分享的海报图片 URL
@@ -3797,14 +3861,14 @@ class APIService: ObservableObject {
     guard let posterPath, !isDefaultPlaceholderImageURL(posterPath) else { return nil }
     let url = posterPath.replacingOccurrences(of: "original", with: "w500")
 
-    return displayImageURL(url, baseURL: baseURL, useImageCache: useImageCache)
+    return configuredDisplayImageURL(url)
   }
 
   /// 获取海报原始 URL（不降尺寸），作为降尺寸版本加载失败时的回退来源。
   /// 与降尺寸版本共用数据源默认空白海报拦截规则。
   func getPosterImageUrlOriginal(posterPath: String?) -> URL? {
     guard let posterPath, !isDefaultPlaceholderImageURL(posterPath) else { return nil }
-    return displayImageURL(posterPath, baseURL: baseURL, useImageCache: useImageCache)
+    return configuredDisplayImageURL(posterPath)
   }
 
   /// 获取媒体背景图片 URL
@@ -3813,7 +3877,7 @@ class APIService: ObservableObject {
   }
 
   func getBackdropImageUrl(backdropPath: String?) -> URL? {
-    return displayImageURL(backdropPath, baseURL: baseURL, useImageCache: useImageCache)
+    return configuredDisplayImageURL(backdropPath)
   }
 
   /// 获取下载 Card 中的背景图片
@@ -3851,16 +3915,10 @@ class APIService: ObservableObject {
 
     if path.hasPrefix("/") {
       let domain = settings?.TMDB_IMAGE_DOMAIN ?? "image.tmdb.org"
-      return displayImageURL(
-        "https://\(domain)/t/p/w500\(path)",
-        baseURL: baseURL,
-        useImageCache: useImageCache
-      )
+      return configuredDisplayImageURL("https://\(domain)/t/p/w500\(path)")
     }
-    return displayImageURL(
-      path.replacingOccurrences(of: "/t/p/original/", with: "/t/p/w500/"),
-      baseURL: baseURL,
-      useImageCache: useImageCache
+    return configuredDisplayImageURL(
+      path.replacingOccurrences(of: "/t/p/original/", with: "/t/p/w500/")
     )
   }
 
@@ -3905,7 +3963,7 @@ class APIService: ObservableObject {
 
     guard !isDefaultPlaceholderImageURL(url) else { return nil }
 
-    return displayImageURL(url, baseURL: baseURL, useImageCache: useImageCache)
+    return configuredDisplayImageURL(url)
   }
 
   func isProtectedImageURL(_ url: URL) -> Bool {

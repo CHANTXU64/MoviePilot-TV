@@ -30,6 +30,11 @@ private struct BackendCompatibilityAccountSnapshot {
   }
 }
 
+private struct BackendBangumiImageProxySettings: Sendable {
+  let enabled: Bool
+  let domain: String
+}
+
 private struct BackendCompatibilityConfig {
   let baseURL: String
   let username: String
@@ -1218,9 +1223,9 @@ private struct BackendCompatibilityCollector {
 
     switch components.path {
     case "/api/v1/system/img/0", "/api/v1/system/img/1":
-      return queryItems["imgurl"]?.nilIfBlank ?? fallback
+      return fallback?.nilIfBlank ?? queryItems["imgurl"]?.nilIfBlank
     case "/api/v1/system/cache/image":
-      return queryItems["url"]?.nilIfBlank ?? fallback
+      return fallback?.nilIfBlank ?? queryItems["url"]?.nilIfBlank
     default:
       return fallback ?? url.absoluteString
     }
@@ -1411,17 +1416,28 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
           return false
         }
 
-        let form = ReorganizeForm(
-          fileitem: sourceFileItem,
-          logid: history.id,
-          target_storage: history.dest_storage?.nilIfBlank,
-          transfer_type: nil,
-          target_path: "",
-          min_filesize: 0,
-          scrape: nil,
-          from_history: false
+        let viewModel = ReorganizeViewModel(
+          logIds: [history.id],
+          fileItem: sourceFileItem,
+          targetStorage: history.dest_storage?.nilIfBlank,
+          apiService: service
         )
-        let preview = try await service.previewManualTransfer(form: form)
+        let submittedForm = viewModel.preparedSingleSubmissionForm()
+        XCTAssertNil(
+          submittedForm.media_source,
+          "Automatic reorganize preview must omit media_source when media_id is empty."
+        )
+        XCTAssertNil(
+          submittedForm.media_id,
+          "Automatic reorganize preview must omit both halves of the optional media identity."
+        )
+
+        _ = await viewModel.preview()
+        let preview = try XCTUnwrap(viewModel.previewData)
+        XCTAssertFalse(
+          preview.items.contains { ($0.message ?? "").contains("422") },
+          "Production ViewModel preview path must pass MoviePilot request validation."
+        )
 
         XCTAssertEqual(
           preview.summary.total,
@@ -2226,6 +2242,10 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     _ candidates: [BackendImageCandidate],
     service: APIService
   ) async {
+    let bangumiSettings = BackendBangumiImageProxySettings(
+      enabled: service.settings?.BANGUMI_PROXY_ENABLE?.value == true,
+      domain: service.settings?.BANGUMI_IMAGE_DOMAIN ?? ""
+    )
     var seenURLs = Set<String>()
     var uniqueCandidates: [BackendImageCandidate] = []
     var checkedImages = 0
@@ -2235,7 +2255,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       let urlString = candidate.url.absoluteString
       guard seenURLs.insert(urlString).inserted else { continue }
 
-      assertProxyURLPreservesRawImage(candidate)
+      assertProxyURLPreservesRawImage(candidate, bangumiSettings: bangumiSettings)
       uniqueCandidates.append(candidate)
     }
 
@@ -2253,7 +2273,8 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
             let webCandidate = Self.webEquivalentImageCandidate(
               for: candidate,
               baseURL: service.baseURL,
-              useImageCache: service.useImageCache
+              useImageCache: service.useImageCache,
+              bangumiSettings: bangumiSettings
             )
           else {
             webAlignedFailures += 1
@@ -2316,7 +2337,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         || (rawURL?.contains("anilist.co") == true
           && rawURL?.contains("anilistcdn") == true
           && rawURL?.contains("default.jpg") == true)
-        || (rawURL?.contains("lain.bgm.tv") == true
+        || (rawURL.map(Self.isBangumiImageURL) == true
           && rawURL?.contains("no_icon") == true)
       let expectedURL =
         isFilteredPlaceholder
@@ -2325,7 +2346,9 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
           Self.webDisplayImageURL(
             $0,
             baseURL: service.baseURL,
-            useImageCache: service.useImageCache
+            useImageCache: service.useImageCache,
+            bangumiProxyEnabled: service.settings?.BANGUMI_PROXY_ENABLE?.value == true,
+            bangumiImageDomain: service.settings?.BANGUMI_IMAGE_DOMAIN
           )
         }
 
@@ -2389,7 +2412,8 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   private static func webEquivalentImageCandidate(
     for candidate: BackendImageCandidate,
     baseURL: String,
-    useImageCache: Bool
+    useImageCache: Bool,
+    bangumiSettings: BackendBangumiImageProxySettings
   ) -> BackendImageCandidate? {
     guard let rawURLString = candidate.rawURLString?.nilIfBlank else {
       return nil
@@ -2398,7 +2422,9 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       let webURL = webDisplayImageURL(
         rawURLString,
         baseURL: baseURL,
-        useImageCache: useImageCache
+        useImageCache: useImageCache,
+        bangumiProxyEnabled: bangumiSettings.enabled,
+        bangumiImageDomain: bangumiSettings.domain
       )
     else {
       return nil
@@ -2416,7 +2442,9 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   private static func webDisplayImageURL(
     _ rawURLString: String,
     baseURL: String,
-    useImageCache: Bool
+    useImageCache: Bool,
+    bangumiProxyEnabled: Bool,
+    bangumiImageDomain: String?
   ) -> URL? {
     let value = rawURLString.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !value.isEmpty else { return nil }
@@ -2425,8 +2453,9 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       return URL(string: value, relativeTo: URL(string: baseURL))?.absoluteURL
     }
 
-    if isBangumiImageURL(value) {
-      return proxiedWebImageURL(value, baseURL: baseURL, proxy: true, cache: useImageCache)
+    if isBangumiImageURL(value), bangumiProxyEnabled {
+      let target = webBangumiImageProxyURL(value, baseURL: bangumiImageDomain ?? "")
+      return proxiedWebImageURL(target, baseURL: baseURL, proxy: true, cache: useImageCache)
     }
 
     if useImageCache {
@@ -2460,10 +2489,45 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   }
 
   private static func isBangumiImageURL(_ rawURLString: String) -> Bool {
-    if let host = URLComponents(string: rawURLString)?.host?.lowercased() {
-      return host == "lain.bgm.tv" || host.hasSuffix(".lain.bgm.tv")
+    guard let host = URLComponents(string: rawURLString)?.host?.lowercased() else {
+      return false
     }
-    return rawURLString.contains("lain.bgm.tv")
+    return ["bgm.tv", "bangumi.tv", "bangumi.lol"].contains { domain in
+      host == domain || host.hasSuffix(".\(domain)")
+    }
+  }
+
+  private static func webBangumiImageProxyURL(_ imageURL: String, baseURL: String) -> String {
+    guard isBangumiImageURL(imageURL) else { return imageURL }
+    let rawBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !rawBaseURL.isEmpty else { return imageURL }
+    let candidate = rawBaseURL.contains("://") ? rawBaseURL : "https://\(rawBaseURL)"
+    guard let proxyComponents = URLComponents(string: candidate),
+      let scheme = proxyComponents.scheme?.lowercased(),
+      ["http", "https"].contains(scheme),
+      let proxyHost = proxyComponents.host,
+      proxyComponents.fragment == nil,
+      let sourceComponents = URLComponents(string: imageURL),
+      let sourceHost = sourceComponents.host
+    else {
+      return imageURL
+    }
+
+    if let query = proxyComponents.percentEncodedQuery, !query.isEmpty {
+      guard let encodedImageURL = encodeURIComponent(imageURL) else { return imageURL }
+      return candidate + encodedImageURL
+    }
+
+    var normalizedBaseURL = candidate
+    while normalizedBaseURL.hasSuffix("/") {
+      normalizedBaseURL.removeLast()
+    }
+    if rawBaseURL.hasSuffix("/") {
+      if sourceHost.caseInsensitiveCompare(proxyHost) == .orderedSame { return imageURL }
+      let query = sourceComponents.percentEncodedQuery.map { "?\($0)" } ?? ""
+      return normalizedBaseURL + sourceComponents.percentEncodedPath + query
+    }
+    return "\(normalizedBaseURL)/\(imageURL)"
   }
 
   private static func isDoubanImageURL(_ rawURLString: String) -> Bool {
@@ -2799,6 +2863,8 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         "media_source": identity.source,
         "season": season.map(String.init),
         "title": media.title,
+        "year": media.year,
+        "mtype": media.type,
       ])
     var request = URLRequest(url: url)
     request.timeoutInterval = 15
@@ -2947,6 +3013,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
 
   private func assertProxyURLPreservesRawImage(
     _ candidate: BackendImageCandidate,
+    bangumiSettings: BackendBangumiImageProxySettings,
     file: StaticString = #filePath,
     line: UInt = #line
   ) {
@@ -2971,10 +3038,17 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     let queryItems = queryItemMap(from: components)
 
     XCTAssertNil(components.fragment, "Outer proxy URL must not have a fragment for \(candidate.label)", file: file, line: line)
+    let expectedTarget =
+      bangumiSettings.enabled && Self.isBangumiImageURL(rawURLString)
+      ? Self.webBangumiImageProxyURL(
+        rawURLString,
+        baseURL: bangumiSettings.domain
+      )
+      : rawURLString
     XCTAssertEqual(
       queryItems[proxyQueryName],
-      rawURLString,
-      "Outer proxy query must preserve the full raw image URL for \(candidate.label)",
+      expectedTarget,
+      "Outer proxy query must preserve the expected image target for \(candidate.label)",
       file: file,
       line: line
     )

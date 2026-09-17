@@ -1,7 +1,7 @@
 import Foundation
 
 enum AppVersionInfo {
-  nonisolated static let compatibleMoviePilotVersion = "v3.0.1"
+  nonisolated static let compatibleMoviePilotVersion = "v3.0.4"
 
   nonisolated static func currentAppVersion(bundle: Bundle = .main) -> String {
     let shortVersion = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String

@@ -249,7 +249,8 @@ class SubscriptionHandler: ObservableObject {
   {
     if let subscription = try await apiService.fetchSubscriptionLookup(
       media: item,
-      season: item.season
+      season: item.season,
+      includeVideoMetadataFallback: false
     ) {
       return subscription
     }
@@ -268,7 +269,8 @@ class SubscriptionHandler: ObservableObject {
         type: item.type,
         season: item.season
       ),
-      season: item.season
+      season: item.season,
+      includeVideoMetadataFallback: false
     )
   }
 
