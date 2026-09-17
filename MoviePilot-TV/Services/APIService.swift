@@ -2743,65 +2743,113 @@ class APIService: ObservableObject {
 
   // MARK: - Server-Sent Events (SSE) Streaming
 
+  private struct SSEReconnectPolicy: Sendable {
+    let delay: Duration
+    let maxRetries: Int
+  }
+
+  private struct SSETerminalEvent: Error {}
+
   /// 通用 SSE 流式请求
   private func streamSSE<Event: Decodable & Sendable>(
     endpoint: String,
-    as _: Event.Type
+    as _: Event.Type,
+    reconnectPolicy: SSEReconnectPolicy? = nil,
+    isTerminal: (@Sendable (Event) -> Bool)? = nil
   ) -> AsyncThrowingStream<Event, Error> {
     let lease = currentLease()
 
     return AsyncThrowingStream { continuation in
       let task = Task {
-        do {
-          try self.validate(lease)
-          guard let url = URL(string: "\(lease.baseURL)/api/v1\(endpoint)") else {
-            throw APIError.invalidURL
-          }
-          var request = URLRequest(url: url)
-          request.timeoutInterval = 300 // 长连接
-          request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        var retryCount = 0
 
-          if let authToken = lease.token {
-            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
-          }
-          if let cookie = lease.runtime.cookieVault.cookieHeader(for: url) {
-            request.setValue(cookie, forHTTPHeaderField: "Cookie")
-          }
-          request.setValue("zh-CN", forHTTPHeaderField: "X-MoviePilot-Locale")
-          request.setValue("zh-CN", forHTTPHeaderField: "Accept-Language")
+        while true {
+          var shouldReconnect = false
 
-          let (result, response) = try await lease.runtime.transport.bytes(for: request)
-          try self.validate(lease)
-
-          guard let httpResponse = response as? HTTPURLResponse else {
-            throw APIError.serverMessage("无效响应")
-          }
-          lease.runtime.cookieVault.update(from: httpResponse, for: url)
-
-          if httpResponse.statusCode != 200 {
-            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
-              throw APIError.unauthorized
-            }
-            throw APIError.serverMessage("HTTP Error \(httpResponse.statusCode)")
-          }
-
-          // 字节读取/组帧/解码在后台完成，避免每个字节都往返 MainActor。
-          // 交付回调在 MainActor 上原子地校验会话并发布，保留切服及取消边界。
-          try await SSEEventReader.read(from: result, as: Event.self) { event in
-            try Task.checkCancellation()
+          do {
             try self.validate(lease)
-            continuation.yield(event)
-          }
-          continuation.finish()
-        } catch {
-          if Task.isCancelled {
+            guard let url = URL(string: "\(lease.baseURL)/api/v1\(endpoint)") else {
+              throw APIError.invalidURL
+            }
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 300 // 长连接
+            request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+
+            if let authToken = lease.token {
+              request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+            }
+            if let cookie = lease.runtime.cookieVault.cookieHeader(for: url) {
+              request.setValue(cookie, forHTTPHeaderField: "Cookie")
+            }
+            request.setValue("zh-CN", forHTTPHeaderField: "X-MoviePilot-Locale")
+            request.setValue("zh-CN", forHTTPHeaderField: "Accept-Language")
+
+            let (result, response) = try await lease.runtime.transport.bytes(for: request)
+            try self.validate(lease)
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+              throw APIError.serverMessage("无效响应")
+            }
+            lease.runtime.cookieVault.update(from: httpResponse, for: url)
+
+            if httpResponse.statusCode != 200 {
+              if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                throw APIError.unauthorized
+              }
+              throw APIError.serverMessage("HTTP Error \(httpResponse.statusCode)")
+            }
+
+            // 字节读取/组帧/解码在后台完成，避免每个字节都往返 MainActor。
+            // 交付回调在 MainActor 上原子地校验会话并发布，保留切服及取消边界。
+            try await SSEEventReader.read(from: result, as: Event.self) { event in
+              try Task.checkCancellation()
+              try self.validate(lease)
+              continuation.yield(event)
+              if isTerminal?(event) == true {
+                throw SSETerminalEvent()
+              }
+            }
+
+            guard reconnectPolicy != nil else {
+              continuation.finish()
+              return
+            }
+            shouldReconnect = true
+          } catch is SSETerminalEvent {
             continuation.finish()
-          } else if self.session.epoch != lease.epoch
-            || (error as? URLError)?.code == .cancelled
-          {
-            continuation.finish(throwing: CancellationError())
-          } else {
-            continuation.finish(throwing: error)
+            return
+          } catch {
+            if Task.isCancelled {
+              continuation.finish()
+              return
+            }
+            if self.session.epoch != lease.epoch || (error as? URLError)?.code == .cancelled {
+              continuation.finish(throwing: CancellationError())
+              return
+            }
+
+            guard reconnectPolicy != nil, Self.isTransientSSEError(error) else {
+              continuation.finish(throwing: error)
+              return
+            }
+            shouldReconnect = true
+          }
+
+          guard shouldReconnect, let policy = reconnectPolicy else {
+            continuation.finish()
+            return
+          }
+          guard retryCount < policy.maxRetries else {
+            continuation.finish()
+            return
+          }
+          retryCount += 1
+
+          do {
+            try await Task.sleep(for: policy.delay)
+          } catch {
+            continuation.finish()
+            return
           }
         }
       }
@@ -2809,6 +2857,11 @@ class APIService: ObservableObject {
         task.cancel()
       }
     }
+  }
+
+  private nonisolated static func isTransientSSEError(_ error: Error) -> Bool {
+    guard let urlError = error as? URLError else { return false }
+    return urlError.code != .cancelled
   }
 
   /// 流式标题搜索 (SSE)
@@ -2860,8 +2913,14 @@ class APIService: ObservableObject {
   func progressStream(progressKey: String) -> AsyncThrowingStream<SearchStreamEvent, Error> {
     return streamSSE(
       endpoint: "/system/progress/\(progressKey)",
-      as: SearchStreamEvent.self
+      as: SearchStreamEvent.self,
+      reconnectPolicy: SSEReconnectPolicy(delay: .seconds(1), maxRetries: 5),
+      isTerminal: Self.isTerminalProgressEvent
     )
+  }
+
+  private nonisolated static func isTerminalProgressEvent(_ event: SearchStreamEvent) -> Bool {
+    event.enable == false || event.type == "done" || event.type == "error"
   }
 
   /// 搜索资源

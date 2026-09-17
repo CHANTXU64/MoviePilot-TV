@@ -239,6 +239,8 @@ class SystemViewModel: ObservableObject {
 
     do {
       _ = try await apiService.reloginStoredSession()
+      // 同账号重登不会改变 sessionUIIdentity，SystemView 不会因此重建；成功后主动刷新连接信息。
+      await loadSystemInfo()
       refreshMessage = "刷新成功"
       checkKeychainStatus()
     } catch {

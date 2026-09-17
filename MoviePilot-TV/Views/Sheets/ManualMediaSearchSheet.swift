@@ -156,7 +156,7 @@ struct ManualMediaSearchSheet: View {
                 ) {
                   BestResultCard(
                     title: displayTitle(for: item),
-                    type: item.type,
+                    type: item.displayTypeText,
                     posterUrl: item.imageURLs.poster,
                     posterFallbackUrl: item.imageURLs.posterFallback,
                     subtitle: [item.type, item.overview]

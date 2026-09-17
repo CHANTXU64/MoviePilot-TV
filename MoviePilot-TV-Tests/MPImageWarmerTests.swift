@@ -557,6 +557,22 @@ final class MPImageWarmerTests: XCTestCase {
     XCTAssertNotEqual(loading.identifier, card.identifier)
   }
 
+  func testPersonCardProcessorUsesDownsamplingOnly() {
+    let processor = PersonCard.imageProcessor()
+
+    XCTAssertTrue(processor.identifier.contains("DownsamplingImageProcessor"))
+    XCTAssertFalse(processor.identifier.contains("ResizingImageProcessor"))
+  }
+
+  func testPersonCardPassesRenderedSizeToImageProcessor() throws {
+    let source = try source(at: "MoviePilot-TV/Views/Components/PersonCard.swift")
+
+    XCTAssertTrue(source.contains("static func imageProcessor(for size: CGSize = imageSize)"))
+    XCTAssertTrue(
+      source.contains("Self.imageProcessor(for: CGSize(width: width, height: height))")
+    )
+  }
+
   func testNewCandidateImmediatelyReleasesPreviousCandidate() {
     let preloader = MediaPreloader(apiService: .testingInstance())
     defer { preloader.clearAll() }
@@ -887,6 +903,12 @@ final class MPImageWarmerTests: XCTestCase {
       return true
     }
     return false
+  }
+
+  private func source(at path: String) throws -> String {
+    let testFileURL = URL(fileURLWithPath: #filePath)
+    let repositoryRoot = testFileURL.deletingLastPathComponent().deletingLastPathComponent()
+    return try String(contentsOf: repositoryRoot.appendingPathComponent(path))
   }
 
   private func waitUntil(

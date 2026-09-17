@@ -540,6 +540,43 @@ final class SystemSessionBehaviorTests: XCTestCase {
     }
   }
 
+  func testReloginRefreshesDisplayedSystemInfoForSameProfile() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SessionRefreshURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SessionRefreshURLProtocol.self) }
+
+    await SessionRefreshURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "https://session-refresh-tests.local"
+    let currentUser = sessionToken(
+      userId: 1,
+      accessToken: "old-token",
+      userName: "test-user"
+    )
+    service.tokenForTesting = currentUser.access_token
+    service.currentUserForTesting = currentUser
+    service.setStoredCredentialsForTesting(username: "test-user", password: "test-password")
+
+    let originalUIIdentity = service.uiIdentity
+    let viewModel = SystemViewModel(apiService: service)
+    viewModel.serverURL = service.baseURL
+    viewModel.username = "旧用户"
+    viewModel.backendVersion = "v2.14.9"
+
+    await viewModel.relogin()
+
+    XCTAssertEqual(viewModel.refreshMessage, "刷新成功")
+    XCTAssertEqual(viewModel.serverURL, "https://session-refresh-tests.local")
+    XCTAssertEqual(viewModel.username, "test-user")
+    XCTAssertEqual(viewModel.backendVersion, "v2.15.5")
+    XCTAssertEqual(service.uiIdentity, originalUIIdentity)
+    let paths = await SessionRefreshURLProtocol.stub.requestPaths()
+    XCTAssertEqual(paths.filter { $0 == "/api/v1/login/access-token" }.count, 1)
+    XCTAssertGreaterThanOrEqual(paths.filter { $0 == "/api/v1/system/global" }.count, 1)
+  }
+
   func testReloginReturnsWithoutMutatingStateWhenRefreshIsAlreadyRunning() async {
     let viewModel = SystemViewModel()
     viewModel.isRefreshing = true

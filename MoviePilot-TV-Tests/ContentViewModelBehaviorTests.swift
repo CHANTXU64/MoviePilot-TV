@@ -58,9 +58,12 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     )
 
     viewModel = ContentViewModel(apiService: service)
+    XCTAssertTrue(viewModel?.isLoggedIn == true)
+    XCTAssertTrue(viewModel?.isPreparingStartupSession == true)
     await viewModel?.prepareStartupIfNeeded()
 
     XCTAssertEqual(service.currentUser?.user_name, "refreshed-user")
+    XCTAssertFalse(viewModel?.isPreparingStartupSession == true)
     XCTAssertFalse(service.canAccess(.discovery))
     XCTAssertTrue(service.canAccess(.search))
     let paths = await ContentViewModelURLProtocol.stub.requestPaths()

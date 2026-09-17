@@ -50,7 +50,7 @@ struct ForkSubscribeSheet: View {
         .frame(width: 360)
         .clipped()
       }
-      .frame(width: 360)
+      .frame(width: 360, height: 540)
       .cornerRadius(20)
 
       // Info
@@ -117,5 +117,6 @@ struct ForkSubscribeSheet: View {
       .frame(width: 900, alignment: .leading)
     }
     .padding(50)
+    .applySheetStyles()
   }
 }

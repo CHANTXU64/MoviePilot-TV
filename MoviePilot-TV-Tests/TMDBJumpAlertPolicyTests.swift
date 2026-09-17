@@ -84,3 +84,27 @@ final class TMDBJumpAlertCallSiteTests: XCTestCase {
     }
   }
 }
+
+/// F-183：TMDB 详情入口保留预识别门禁，并在动作层同步防重入。
+final class TMDBJumpReentrancyCallSiteTests: XCTestCase {
+
+  private func source(_ relativePath: String) throws -> String {
+    let repositoryRoot = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+    return try String(contentsOf: repositoryRoot.appendingPathComponent(relativePath))
+  }
+
+  func testDetailJumpKeepsPreloadDisableAndGuardsReentrancy() throws {
+    let detailView = try source("MoviePilot-TV/Views/Pages/MediaDetailView.swift")
+
+    XCTAssertTrue(detailView.contains("@State private var isTMDBJumpInFlight = false"))
+    XCTAssertTrue(
+      detailView.contains("guard !isButtonLoading, !isTMDBJumpInFlight else { return }")
+    )
+    XCTAssertTrue(detailView.contains("isTMDBJumpInFlight = true"))
+    XCTAssertTrue(detailView.contains("defer { isTMDBJumpInFlight = false }"))
+    XCTAssertTrue(detailView.contains(".disabled(isButtonLoading)"))
+    XCTAssertFalse(detailView.contains(".disabled(isTMDBJumpInFlight)"))
+  }
+}

@@ -1115,7 +1115,8 @@ final class TransferHistoryViewModelTests: XCTestCase {
       sourceSession: viewModel.captureMutationSession()
     )
 
-    let deadline = Date().addingTimeInterval(2)
+    // 进度流对齐 Web：无终态 EOF 会先完成 5 次有限重连，再交付中断结果。
+    let deadline = Date().addingTimeInterval(8)
     while viewModel.errorMessage != "AI 整理连接中断，请重试。", Date() < deadline {
       try await Task.sleep(nanoseconds: 1_000_000)
     }

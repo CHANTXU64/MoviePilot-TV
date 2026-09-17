@@ -686,7 +686,7 @@ private struct BestResultRow: View {
 
               BestResultCard(
                 title: media.cleanedTitle ?? "",
-                type: media.type,
+                type: media.displayTypeText,
                 posterUrl: media.imageURLs.poster,
                 posterFallbackUrl: media.imageURLs.posterFallback,
                 subtitle: subtitle,

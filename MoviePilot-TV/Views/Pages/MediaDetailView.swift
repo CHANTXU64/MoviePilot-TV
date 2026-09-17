@@ -85,6 +85,8 @@ struct MediaDetailView: View {
   let loadingPosterURL: URL?
   @State private var showSiteSelection = false
   @State private var showContentPage = false
+  /// TMDB 跳转动作的同步防重入标记；预识别期间沿用原有 disabled 门禁。
+  @State private var isTMDBJumpInFlight = false
   @State private var hasAppeared = false
   @State private var hasRefreshedSubscriptionAfterFullDetail = false
   @State private var isBackgroundMounted = true
@@ -905,8 +907,12 @@ struct MediaDetailView: View {
                 targetTmdbId == nil && !preloadTask.isTmdbRecognitionFinished
 
               Button(action: {
+                // 预识别期间沿用原有禁用门禁；其余重复 Select 只在动作入口被忽略。
+                guard !isButtonLoading, !isTMDBJumpInFlight else { return }
+                isTMDBJumpInFlight = true
                 let navigationSource = navigationCoordinator.sourceToken()
                 Task {
+                  defer { isTMDBJumpInFlight = false }
                   if let target = await mediaActionHandler.getTMDBJumpTarget(
                     for: viewModel.detail, targetTmdbId: targetTmdbId)
                   {
