@@ -131,7 +131,7 @@
 | F-115 | 用户决定跳过 | P2 | V004-A→I005 | MediaPreloader详情ready与阶段屏障 | ready值域判定错误；详情响应已可启动season时仍等待识别和图片，稳定把有订阅权限电视剧的全屏Loading串行延长 | V004双审闭合身份值域；I005集成与不同代理复核闭合`detail response→season`关键路径并升级P2 | 规范ready值；详情响应发布即启动season，图片/识别仅约束真实依赖者 | TV详情ready/主流程阶段屏障已确认；真实延迟分布未验证 |
 | F-116 | 已修复 | P2 | V004-A→V012-A→I013→G03 | 热缓存首帧内容与背景安装顺序 | Container凭wasPreloaded先揭示内容，但VM初始化不安装传入full detail的背景，首帧确定进入灰底后才由View task补齐 | G03两名纠偏复核按正确命题独立闭合热缓存Container→VM init→View task顺序，覆盖I013原运行未验证边界并升级P2 | VM初始化同步安装已有full detail/background；不改F-115网络阶段图 | 纯TV首帧状态分裂已确认；实际闪烁时长/焦点影响未运行验证 |
 | F-117 | 用户决定跳过（暂时，待内存优化工作树） | P3 | V004-A | `MediaPreloader.swift:95,123-169` 图片预取取消链 | 取消早于 Kingfisher handle 安装时，请求仍启动且可继续发布 ready | verify_a001_h 闭合已取消 child、onCancel 先恢复、operation 后启动请求与 handle 清空时序 | review_a001_h 独立确认 Swift/Kingfisher 顺序、真实取消入口、缓存写入与取消后 ready 发布 | TV 资源/生命周期缺陷已确认；真实竞态频率及注销传播未运行验证 |
-| F-118 | 用户决定跳过（暂时，待内存优化工作树） | P2 | V004-B→V012-A→G03 | MediaPreloader pin owner与详情返回栈 | ownerless Set使同key任一owner消失即释放全部保护；父详情暂时onDisappear后可被LRU移除并漏通知刷新 | G03两名不同复核确认ownerless语义、唯一生产调用与淘汰/刷新链；tvOS push/返回表现保留运行边界 | 复用稳定owner token/lease，最后owner释放才可淘汰；不建缓存框架 | 静态owner缺陷P2已确认；push onDisappear、30+ churn与返回卡死未运行验证 |
+| F-118 | 已修复（`1a30c01`初修、`9f55542`与`84d910a`补强） | P2 | V004-B→V012-A→G03 | MediaPreloader pin owner与详情返回栈 | 历史实现的ownerless Set会令同key任一owner消失即释放全部保护；父详情暂时onDisappear后可被LRU移除并漏通知刷新 | `1a30c01`引入多owner集合，`9f55542`以`isTaskRetained`统一保护共享任务，`84d910a`用稳定entry UUID把acquire/release接到当前typed-route生命周期 | manager层`testPopReleasesTaskOnlyAfterLastNavigationOwnerLeaves`与生产接线层`testSameMediaUsesIndependentRouteOwnersAcrossStacks`分别覆盖最后owner释放和双栈交接；当前分支独立复核确认原根因已不存在 | 真机push/Tab/focus表现仍未单独验收，不影响代码修复状态 |
 | F-119 | 用户决定跳过（暂时，待内存优化工作树） | P2 | V004-B→V012-B→G02 | MediaPreloader cache aliases 与订阅回写 | UI key与canonical media ID一对多；保存/取消只更新单task或有限TMDB alias，其他未pin alias可长期显示旧订阅状态 | 既有双审确认机制；G02两名不同复核确认fullDetail/非TMDB alias缺口并升级P2 | 线性扫描小缓存并更新全部已知canonical alias；不建alias registry | 条件性TV状态错误P2；真实alias并存频率未验证 |
 | F-120 | 降级（用户决定跳过） | P2 | V006→V012-B→G10/G09 | 页面/Sheet mutation single-flight owner | 共享busy无target会令B卡片动作被丢弃或被A晚到提示打断；Reorganize预览与提交可交叉，但当前Web同样允许，且本项未证明错目标mutation | 既有双审闭合卡片owner与三个Sheet；后续按当前TV/Web触发与后果重裁 | 不做TV单端增强 | 普通快速网络下窗口较短；主要影响为动作无反馈或迟到UI，降P2并由用户决定跳过 |
 | F-121 | 已修复 | P2 | V006→W015→G02 | `SubscriptionHandler.forkErrorMessage` 与分享 Sheet 呈现链 | 错误不绑定share presentation/operation，A的同步残留或迟到失败可稳定污染B的可恢复操作界面 | 既有多轮裁决闭合同步链；全新G02 clean-room复核确认operation owner缺口并升级P2 | 错误绑定operationID/shareID，新presentation清旧且拒绝迟到发布 | TV跨目标错误归属P2；迟到调度频率未验证 |
@@ -151,7 +151,7 @@
 | F-135 | 已修复 | P3 | V009-A/F→W012 | `ExploreViewModel.swift:243-262`（`collectOptions` first-wins 去重）、`AddDownloadViewModel.swift:40-58`、`SubscribeSheetViewModel.swift:74-83`、`Models.swift:1719-1731`（`storage` 可选化） | 重复value同时成为ForEach ID与Picker tag；空目录还与内建自动重复空ID或生成`storage:` | 插件按 `JSONValue` first-wins 去重（单遍展开后消重，父级/子级重复同样覆盖）；目录**先 trim、再丢空、最后去重**，使内建「自动」天然唯一；**不新增 option ID 层** | 定向 39/39；反向验证四处一并还原 → 8 挂 / 5 条阴性对照通过；全量 **977/977 通过、零失败**（964 + 13），逐名比对无用例消失 | 🆕 ①②Web 方向一致但**更不完整**（Web 三个弹窗只有一个 trim，本修复覆盖全部）；③ Web 无 option 收集中间层，属 TV 独有防线；`storage` 可选化为顺带加固，可达性未证实 |
 | F-136 | 未验证；用户决定跳过修复 | P3 | V009-E/F | Share 默认排序状态与 v2.15.1 Web | TV 初始/切源均用 count，目标版本 Web 默认 time | verify_a001_h 闭合两处 literal、首路径与版本特定 Web/test | review_a001_j 两次独立确认版本差异，但 TV 产品默认意图缺失 | 条件性默认行为未验证；用户决定跳过修复，保留 TV/Web 差异 |
 | F-137 | 已修复 | P2 | V011-A/B→G04 | `fuzzyMatchScore` 类别带与 top-12 | 无界长度罚分穿透prefix/contains/subsequence/nonmatch分档并可把真实匹配挤出最终top-12 | 既有三票闭合反例；全新G04 clean-room复核确认四类交叉与最终截断并升级P2 | 保持Int评分，类别带宽互不重叠（全等1000/前缀700/包含400/顺序100-299）且长度罚分封顶；顺序匹配采用fzf风格词首/连续加分 | 条件性搜索结果缺失P2；真实长标题竞争频率未验证 |
-| F-138 | 已确认 | P1 | V010→V011-B/D→V012-A→G01/G04 | 共享 `MediaInfo.id`、缓存任务与 first-wins 去重 | title-only/collection等对象可碰撞丢项，并把列表、导航、pin及preload task绑定到错误owner | 既有三代理确认机制；G01纠偏与G04独立复核从中央ID到缓存/导航双票升P1 | `ff4ea14`在无任何现有媒体ID时追加trim后的标题兜底，保留0/空串及分享快路径 | 依赖解析、Simulator clean build、本地451/451测试及独立复审通过；真实后端兼容套件未运行 |
+| F-138 | 已修复（`ff4ea14`） | P1 | V010→V011-B/D→V012-A→G01/G04 | 共享 `MediaInfo.id`、缓存任务与 first-wins 去重 | title-only/collection等对象可碰撞丢项，并把列表、导航、pin及preload task绑定到错误owner | 既有三代理确认机制；G01纠偏与G04独立复核从中央ID到缓存/导航双票升P1 | `ff4ea14`在无任何现有媒体ID时追加trim后的标题兜底，保留0/空串及分享快路径 | 依赖解析、Simulator clean build、本地451/451测试及独立复审通过；真实后端兼容套件未运行 |
 | F-139 | 已修复（2026-08-21） | P2 | V010→V012-A→G01/G04 | 推荐/详情分页成功空终态与页面再激活 | retained shelf、详情或合集首批成功空后，再激活不刷新且无恢复入口 | 既有双审确认；G01纠偏与G04独立复核再次闭合retained激活链并双票升P2 | Recommend接入Tab选中边沿并调用现有成功空恢复；详情/合集保留既有恢复，不动Paginator状态机 | View接线测试、SuccessEmpty回归及相关定向47/47通过；真机可见表现未验证 |
 | F-140 | 已修复 | P3 | V011-B | `SearchViewModel.swift:432-449`（`autoSearch` 提交口规范化） | 空白未统一规范化，精确标题可退化并被扩展标题反超 | 提交口 trim 首尾空白与换行后 `guard` 空串，请求与本地评分共用同一串；不写回 `query`、不压缩内部空白 | 定向 42/42；反向验证还原提交口 → 2 挂 / 阴性对照（内部空白保留）通过；全量 **982/982 通过、零失败**（977 + 5） | 🆕 逐字复现：exact `-1`（审计同）/ extended **684**（审计写 484，实测不符）；后端 `StringUtils.get_keyword` 确有 `.strip()`，缺陷仅存在于 TV 本地评分层；Web 无本地评分层故无此面。🆕 **二轮外部审查复核（2026-09-13）**：审查指出原用例 `testWhitespaceOnlyQueryDoesNotStartSearch` 只用全新 ViewModel，`hasSearched == false`、`bestResults.isEmpty` 本就是初始值，「上一轮结果仍留在屏幕上」与「在途请求不被取消」两条语义**钉不住**。核对成立，**用户裁决：行为不动，只修测试 + 记残留**。处置：①旧用例删去无判别力的状态断言（保留真正有效的「不发请求 / 不记提交」）；②新增 `testWhitespaceOnlySubmitKeepsPreviousResultsAndStaysNoop`，从「已搜出结果」起步，固化纯空白提交为**完全 no-op**（不清旧结果、不改 `submittedQuery`、不抬 `isLoading`、不追加请求）；③新增 `testWhitespaceOnlySubmitDoesNotCancelInFlightSearch`，走 `.resource`（只有该分支把在途任务存进 `searchStreamTask`，`.unified` 用局部 Task，拿 `.unified` 写会得到测不出东西的假绿），并在实现里临时插入审查建议的 `searchStreamTask?.cancel()` 后确认该用例转挂，证明它有判别力。**残留（刻意保留，记录备查）**：纯空白提交不取消在途搜索、不清旧结果；真要改成取消，必须连带处理 `isLoading` —— `finishSearchIfCurrent` 是清它的唯一出口且带 generation 守卫，随手 cancel + 递增 generation 会把 `isLoading` 永久卡在 true。本轮**无生产代码改动**，三条均为现状固化/回归钉 |
 | F-141 | 已修复 | P3 | V011-B | `SearchViewModel.swift:170-200`（`calculateBestResults` 年份词法） | 首个任意四位数字片名被 TV 误作年份，括号移除又残留空壳 | 年份词法改为 `[\s(]+((?:19\|20)\d{2})[\s)]*`，与后端 `get_keyword` 同构：数字须紧跟分隔符；剥年份连前导分隔符与尾随右括号一起删 | 定向 42/42；反向验证还原词法 → 2 挂（`1917 2019` 精确项被整条淘汰、`流浪地球 (2019)` 只剩扩展项）；全量 **982/982 通过、零失败** | 🆕 保留 `(19\|20)` 前缀而不照搬后端裸 `\d{4}`（年份用于补 `标题+年份` 变体，放宽只会新增误判）；「剥完为空 → nil」纯属契约收敛，可观测行为不变 |
@@ -2154,21 +2154,21 @@
 
 ### F-118：pin 无 owner 且非 pop 的 onDisappear 也解除保护
 
-- 状态：用户决定跳过（暂时，待内存优化工作树）
+- 状态：已修复（`1a30c01`初修、`9f55542`与`84d910a`补强）
 - 严重度：P2
-- 位置：`MoviePilot-TV/ViewModels/MediaPreloader.swift:312-313,388-398`、`MediaDetailContainerView.swift:238-245` 与四个 Tab NavigationStack/详情继续 push 链
+- 位置：历史实现位于 `MediaPreloader` 的布尔 pin 集合与 `MediaDetailContainerView.onDisappear`；当前实现位于 `MediaPreloader.navigationOwners`、`acquireNavigation`、`releaseNavigation` 与 route owner 接线
 - 触发路径：同 key 有多个详情 owner，或父详情 push 推荐/类似子详情、切 Tab 等使容器 `onDisappear`，随后有订阅通知或超过 30 个焦点预加载。
-- 根因：`pinnedKeys` 是布尔 Set，无 owner/refcount；通用 onDisappear 不等于导航条目终止。返回只重新 pin key，不验证 manager cache 仍注册当前 View 的 `@State` task。
-- 用户影响：静态可证明 pin 会提前失效；通知刷新可能先漏掉该 task，LRU 压力下还可能移除/取消。SwiftUI State/生命周期及真实可见后果未运行确认。
+- 历史根因：`pinnedKeys` 是布尔 Set，无 owner/refcount；通用 onDisappear 不等于导航条目终止。返回只重新 pin key，不验证 manager cache 仍注册当前 View 的 `@State` task。
+- 历史用户影响：pin 可提前失效；通知刷新可能先漏掉该 task，LRU 压力下还可能移除/取消。SwiftUI State/生命周期及真实可见后果当时未运行确认。
 - 主审证据：verify_a001_h 闭合唯一 pin/unpin 调用者、四 Tab/子详情导航、通知只刷 pinned 与 LRU 仅淘汰未 pin 的传播链。
 - 独立复核：review_a001_h 确认多 owner 任一 unpin 会解除全局保护，返回只 re-pin 不校验 View `@State` task 与 manager cache identity；all-pinned 时新未 pin task 可自淘汰，ghost pin 时软上限可超过 30 且 unpin 不立即收缩。push/Tab 的实际 onDisappear/State 顺序仍不能静态确认。
 - I008集成补强：review_a001_j给出父详情push子页→通用onDisappear解除pin→超过30项LRU取消A→返回只重加key、不把旧`@State` task重新注册cache的完整条件序列；但push是否触发该生命周期仍需运行实证，主审建议条件P2，当前保持未验证P3并交不同代理裁。
 - I008定向复核裁决：review_a001_h独立确认unpin→LRU移除/cancel→再pin仅写Set、旧`@State` task又因`isStarted`不能重启的注册表分裂；但push/pop的onDisappear、State保留和30+ churn仍须运行，故静态缺陷保持P3，P2用户影响不以静态票升级。
 - G03窄第三裁：rounda_g02_third确认`Set`式pin的无owner根因与多owner提前解除保护静态成立，且通知只刷新pinned、LRU只保护pinned；据两张当前正确映射票确认P2。push/onDisappear/返回/LRU组合是否在真实SwiftUI生命周期完整发生仍属于运行边界，不把该边界反向当作根因未确认。
-- 跨端结论：纯 TV ownerless pin 根因已确认；端到端导航时序与可见后果未运行验证。
-- 最小方向：pin 使用稳定 owner token/lease（或等价最小refcount）且同 owner 幂等，只在实际导航条目结束时释放；返回时校验 View task 与 manager 注册项一致，不新建缓存框架。
-- 验证要求：V012-A 与真机/Simulator 覆盖 push/pop、Tab 切换、多 owner、返回后通知刷新、LRU 及焦点，不以静态生命周期猜测冒充用户影响。
-- 跳过依据（用户拍板）：静态 ownerless pin 缺陷成立，但 push/pop、Tab 切换与 30+ LRU churn 的端到端时序无运行证据，真实可见后果（返回数据失效、通知漏刷）未在真机/Simulator 复现；修复需改四 Tab 导航链与详情生命周期。用户在另一工作树开发内存优化，本项涉及代码（MediaPreloader pin/淘汰与详情生命周期）均有变更，暂时跳过、留待后续。
+- 跨端结论：纯 TV ownerless pin 根因已确认并由后续内存生命周期改造消除；真机焦点与转场表现仍是运行验收边界。
+- 修复记录：`1a30c01` 将布尔 pin 改为 `navigationOwners: [String: Set<UUID>]` 并建立多 owner 基础；`9f55542` 进一步用 `isTaskRetained` 统一保护导航 owner、焦点候选与附带预载；`84d910a` 引入当前 `ImageNavigationEntry.id`/`ImageNavigationCoordinator` 接线，在 Push 时调用 `acquireNavigation` 取得 owner，并在路径终态移除时调用 `releaseNavigation`，因此非 Pop 的普通 View 消失不再解除保护。
+- 验证记录：manager层 `MPImageWarmerTests.testPopReleasesTaskOnlyAfterLastNavigationOwnerLeaves` 明确断言首个 owner 离开后任务仍在、最后一个 owner 离开后才回收；生产接线层 `ImageLoadWindowTests.testSameMediaUsesIndependentRouteOwnersAcrossStacks` 经两个 coordinator Push 同一媒体，断言移除第一栈后任务仍在、移除第二栈后才回收。当前分支独立审查覆盖该调用链；前一轮定向测试集合 275/275 通过，工作区保持干净。未做真机 push/Tab/focus 验收，不将运行边界写成已验证。
+- 历史处置：本项曾因内存优化工作树正在改动同一代码而暂时跳过；后续实现已经覆盖原最小方向，当前不再保留“待内存优化工作树”状态。
 
 ### F-119：canonical media alias 只回写任意一个缓存任务
 

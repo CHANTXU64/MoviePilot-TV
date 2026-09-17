@@ -1400,15 +1400,15 @@ P1 处置复核（2026-08-11）：历史上确认过的 P1 共 44 项，其中 3
 </details>
 
 <details>
-<summary>F-118 · P2 · 已确认 · pin 无 owner 且非 pop 的 onDisappear 也解除保护</summary>
+<summary>F-118 · P2 · 已修复（`1a30c01`初修、`9f55542`与`84d910a`补强） · pin 无 owner 且非 pop 的 onDisappear 也解除保护</summary>
 
 - 审查单元与位置：V004-B→V012-A→G03；MediaPreloader pin owner与详情返回栈
 - 触发路径：同 key 有多个详情 owner，或父详情 push 推荐/类似子详情、切 Tab 等使容器 `onDisappear`，随后有订阅通知或超过 30 个焦点预加载。
-- 根因：`pinnedKeys` 是布尔 Set，无 owner/refcount；通用 onDisappear 不等于导航条目终止。返回只重新 pin key，不验证 manager cache 仍注册当前 View 的 `@State` task。
-- 用户影响：静态可证明 pin 会提前失效；通知刷新可能先漏掉该 task，LRU 压力下还可能移除/取消。SwiftUI State/生命周期及真实可见后果未运行确认。
-- 证据：G03两名不同复核确认ownerless语义、唯一生产调用与淘汰/刷新链；tvOS push/返回表现保留运行边界；复用稳定owner token/lease，最后owner释放才可淘汰；不建缓存框架
-- 跨端结论：静态owner缺陷P2已确认；push onDisappear、30+ churn与返回卡死未运行验证
-- 最小修改方向 / 裁决：pin 使用稳定 owner token/lease（或等价最小refcount）且同 owner 幂等，只在实际导航条目结束时释放；返回时校验 View task 与 manager 注册项一致，不新建缓存框架。
+- 历史根因：`pinnedKeys` 是布尔 Set，无 owner/refcount；通用 onDisappear 不等于导航条目终止。返回只重新 pin key，不验证 manager cache 仍注册当前 View 的 `@State` task。
+- 历史用户影响：pin 可提前失效；通知刷新可能先漏掉该 task，LRU 压力下还可能移除/取消。SwiftUI State/生命周期及真实可见后果当时未运行确认。
+- 证据：G03两名不同复核确认ownerless语义、唯一生产调用与淘汰/刷新链；后续 `1a30c01` 引入多owner `navigationOwners`，`9f55542` 以 `isTaskRetained` 统一保护共享任务，`84d910a` 再用稳定 `ImageNavigationEntry.id` 把 Push 时 acquire 与路径终态 release 接入当前 typed-route 生命周期。
+- 跨端结论：静态owner缺陷P2已确认并由后续内存生命周期改造消除；真机push/Tab/focus表现仍未单独验收。
+- 修复与验证：manager层 `MPImageWarmerTests.testPopReleasesTaskOnlyAfterLastNavigationOwnerLeaves` 覆盖首个 owner 离开仍保留、最后 owner 离开才回收；生产接线层 `ImageLoadWindowTests.testSameMediaUsesIndependentRouteOwnersAcrossStacks` 覆盖两个导航栈的独立 entry owner。当前分支独立审查覆盖该调用链；前一轮定向测试集合 275/275 通过。未把真机运行边界写成已验证。
 
 </details>
 
