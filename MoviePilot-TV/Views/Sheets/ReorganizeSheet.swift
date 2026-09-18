@@ -363,8 +363,7 @@ struct ReorganizeSheet: View {
         feedbackMessage: nil
       ) {
         Task {
-          await viewModel.preview()
-          if viewModel.previewData != nil {
+          if (await viewModel.preview()).shouldPresent {
             showPreview = true
           }
         }

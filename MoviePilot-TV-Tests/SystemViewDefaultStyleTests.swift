@@ -415,7 +415,10 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(addDownloadSheetSource.contains(".onChange(of: viewModel.errorMessage"))
     XCTAssertTrue(subscribeViewModelSource.contains("guard !isSaving else { return false }"))
     XCTAssertTrue(reorganizeViewModelSource.contains("guard !isSubmitting else { return false }"))
-    XCTAssertTrue(reorganizeViewModelSource.contains("guard !isPreviewing else { return false }"))
+    XCTAssertTrue(
+      reorganizeViewModelSource.contains("guard !isPreviewing else { return .notGenerated }")
+    )
+    XCTAssertTrue(reorganizeSheetSource.contains("(await viewModel.preview()).shouldPresent"))
     XCTAssertTrue(addDownloadViewModelSource.contains("guard !isSubmitting else { return }"))
     XCTAssertTrue(forkSource.contains("guard !isForking else { return }"))
     XCTAssertTrue(addDownloadViewModelSource.contains("下载设置没有加载完成，请重试。"))

@@ -212,6 +212,50 @@ final class ReorganizeViewModelTests: XCTestCase {
     XCTAssertNil(manualTransferPreviewFileName(from: nil))
   }
 
+  func testRejectedDuplicatePreviewDoesNotPresentStaleResult() async {
+    let service = APIService.isolatedTestingInstance()
+    service.tokenForTesting = "reorganize-preview-token"
+    service.currentUserForTesting = Token(
+      access_token: "reorganize-preview-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(true),
+      permissions: nil,
+      user_id: 901,
+      user_name: "reorganize-preview-user",
+      avatar: nil
+    )
+
+    var previousPreview = ManualTransferPreviewData.empty
+    previousPreview.message = "previous-preview"
+    var refreshedPreview = ManualTransferPreviewData.empty
+    refreshedPreview.message = "refreshed-preview"
+    let gate = ReorganizePreviewRequestGate()
+    let viewModel = ReorganizeViewModel(
+      logIds: [42],
+      fileItem: nil,
+      previewRequest: { _ in
+        await gate.run()
+        return refreshedPreview
+      },
+      apiService: service
+    )
+    viewModel.previewData = previousPreview
+
+    let firstPreview = Task { await viewModel.preview() }
+    await gate.waitUntilStarted()
+
+    let duplicateOutcome = await viewModel.preview()
+    XCTAssertEqual(duplicateOutcome, .notGenerated)
+    XCTAssertFalse(duplicateOutcome.shouldPresent)
+    XCTAssertEqual(viewModel.previewData?.message, "previous-preview")
+
+    await gate.open()
+    let firstOutcome = await firstPreview.value
+    XCTAssertEqual(firstOutcome, .generated(allSucceeded: true))
+    XCTAssertTrue(firstOutcome.shouldPresent)
+    XCTAssertEqual(viewModel.previewData?.message, "refreshed-preview")
+  }
+
   private func directory(path: String, storage: String) -> TransferDirectoryConf {
     TransferDirectoryConf(
       name: "电影",
@@ -224,5 +268,39 @@ final class ReorganizeViewModelTests: XCTestCase {
       library_category_folder: FlexibleBool(false),
       library_type_folder: FlexibleBool(false)
     )
+  }
+}
+
+private actor ReorganizePreviewRequestGate {
+  private var isStarted = false
+  private var isOpen = false
+  private var startWaiters: [CheckedContinuation<Void, Never>] = []
+  private var requestWaiters: [CheckedContinuation<Void, Never>] = []
+
+  func run() async {
+    isStarted = true
+    let pendingStartWaiters = startWaiters
+    startWaiters.removeAll()
+    pendingStartWaiters.forEach { $0.resume() }
+
+    if !isOpen {
+      await withCheckedContinuation { continuation in
+        requestWaiters.append(continuation)
+      }
+    }
+  }
+
+  func waitUntilStarted() async {
+    guard !isStarted else { return }
+    await withCheckedContinuation { continuation in
+      startWaiters.append(continuation)
+    }
+  }
+
+  func open() {
+    isOpen = true
+    let pendingRequestWaiters = requestWaiters
+    requestWaiters.removeAll()
+    pendingRequestWaiters.forEach { $0.resume() }
   }
 }

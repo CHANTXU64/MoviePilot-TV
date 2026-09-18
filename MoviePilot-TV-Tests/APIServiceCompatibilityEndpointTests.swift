@@ -896,8 +896,8 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
       apiService: service
     )
 
-    let previewSucceeded = await viewModel.preview()
-    XCTAssertFalse(previewSucceeded)
+    let previewOutcome = await viewModel.preview()
+    XCTAssertEqual(previewOutcome, .generated(allSucceeded: false))
 
     let preview = try XCTUnwrap(viewModel.previewData)
     XCTAssertEqual(preview.summary, ManualTransferPreviewSummary(total: 2, success: 1, failed: 1))

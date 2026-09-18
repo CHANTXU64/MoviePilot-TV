@@ -1,6 +1,16 @@
 import Combine
 import SwiftUI
 
+enum ReorganizePreviewOutcome: Equatable {
+  case notGenerated
+  case generated(allSucceeded: Bool)
+
+  var shouldPresent: Bool {
+    if case .generated = self { return true }
+    return false
+  }
+}
+
 @MainActor
 class ReorganizeViewModel: ObservableObject {
   @Published var form: ReorganizeForm
@@ -23,6 +33,7 @@ class ReorganizeViewModel: ObservableObject {
 
   private let apiService: APIService
   private let validateBeforeSubmit: (() async throws -> String?)?
+  private let previewRequest: (ReorganizeForm) async throws -> ManualTransferPreviewData
   private let sourceSession: APIServiceSessionSnapshot?
   private var cancellables = Set<AnyCancellable>()
 
@@ -45,10 +56,14 @@ class ReorganizeViewModel: ObservableObject {
     targetStorage: String? = nil,
     validateBeforeSubmit: (() async throws -> String?)? = nil,
     sourceSession: APIServiceSessionSnapshot? = nil,
+    previewRequest: ((ReorganizeForm) async throws -> ManualTransferPreviewData)? = nil,
     apiService: APIService = .shared
   ) {
     self.apiService = apiService
     self.validateBeforeSubmit = validateBeforeSubmit
+    self.previewRequest = previewRequest ?? { form in
+      try await apiService.previewManualTransfer(form: form)
+    }
     self.sourceSession = sourceSession
     self.logIds = logIds
     self.explicitTargetStorage = targetStorage?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -225,13 +240,13 @@ class ReorganizeViewModel: ObservableObject {
   }
 
   @discardableResult
-  func preview() async -> Bool {
-    guard !isPreviewing else { return false }
-    guard apiService.canAccess(.manage) else { return false }
+  func preview() async -> ReorganizePreviewOutcome {
+    guard !isPreviewing else { return .notGenerated }
+    guard apiService.canAccess(.manage) else { return .notGenerated }
     errorMessage = nil
     guard isMediaIdValid else {
       errorMessage = "媒体 ID 只能包含数字。"
-      return false
+      return .notGenerated
     }
     isPreviewing = true
     defer { isPreviewing = false }
@@ -240,15 +255,15 @@ class ReorganizeViewModel: ObservableObject {
     var merged = ManualTransferPreviewData.empty
     for submittedForm in preparedSubmissionForms() {
       do {
-        guard apiService.isSessionUnchanged(from: snapshot) else { return false }
-        let data = try await apiService.previewManualTransfer(form: submittedForm)
-        guard apiService.isSessionUnchanged(from: snapshot) else { return false }
+        guard apiService.isSessionUnchanged(from: snapshot) else { return .notGenerated }
+        let data = try await previewRequest(submittedForm)
+        guard apiService.isSessionUnchanged(from: snapshot) else { return .notGenerated }
         merged.items.append(contentsOf: data.items)
         if let message = data.message, !message.isEmpty {
           merged.message = [merged.message, message].compactMap(\.self).joined(separator: "；")
         }
       } catch is CancellationError {
-        return false
+        return .notGenerated
       } catch {
         let batchItems = submittedForm.fileitems ?? []
         let batchSource =
@@ -290,12 +305,12 @@ class ReorganizeViewModel: ObservableObject {
       success: merged.items.count - failures,
       failed: failures
     )
-    guard apiService.isSessionUnchanged(from: snapshot) else { return false }
+    guard apiService.isSessionUnchanged(from: snapshot) else { return .notGenerated }
     previewData = merged
     if failures > 0 {
       errorMessage = "预览完成，其中 \(failures) 项无法整理。"
     }
-    return failures == 0
+    return .generated(allSucceeded: failures == 0)
   }
 
   func selectTargetPath(_ path: String) {
