@@ -1,4 +1,3 @@
-import Kingfisher
 import SwiftUI
 
 struct DownloadTaskView: View {
@@ -211,24 +210,6 @@ private struct DownloadTaskRow: View {
       }
       .padding()
       .frame(maxWidth: .infinity, alignment: .topLeading)
-    } background: {
-      // MARK: - 背景
-      let backdropUrl = item.media?.imageURLs.image
-      ZStack {
-        PageManagedImage(
-          url: backdropUrl,
-          processor: BlurImageProcessor(blurRadius: 2)
-            |> ResizingImageProcessor(
-              referenceSize: CGSize(width: 500, height: 180),
-              mode: .aspectFill
-          ),
-          isEnabled: true,
-          participatesInPageLifecycle: true,
-          skipsMemoryCache: true
-        )
-
-        Color.black.opacity(0.6)
-      }
     } progressBar: {
       // MARK: - 进度条
       if let progress = item.progress, progress > 0 {

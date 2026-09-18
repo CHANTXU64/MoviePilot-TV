@@ -100,12 +100,6 @@ struct TransferHistoryView: View {
               }
               .padding()
               .contentShape(Rectangle())
-            } background: {
-              LinearGradient(
-                colors: [.black.opacity(0.3), .black.opacity(0.7)],
-                startPoint: .top,
-                endPoint: .bottom
-              )
             }
             .focused($focusedHistoryId, equals: item.id)
           }
