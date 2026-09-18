@@ -101,6 +101,7 @@ class AddDownloadViewModel: ObservableObject {
   }
 
   func addDownload() async {
+    guard !isSubmitting else { return }
     errorMessage = nil
     guard isMediaIdValid else {
       errorMessage = "媒体 ID 只能包含数字。"

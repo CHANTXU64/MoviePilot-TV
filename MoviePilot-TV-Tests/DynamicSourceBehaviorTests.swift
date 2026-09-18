@@ -67,6 +67,7 @@ final class DynamicSourceBehaviorTests: XCTestCase {
   func testMemoryCleanupPagesUseTheIntendedLifecycleBoundaries() throws {
     let statusSource = try source("MoviePilot-TV/Views/Pages/StatusView.swift")
     let downloadSource = try source("MoviePilot-TV/Views/Pages/DownloadTaskView.swift")
+    let actionRowSource = try source("MoviePilot-TV/Views/Components/ActionRow.swift")
     let downloadViewModelSource = try source(
       "MoviePilot-TV/ViewModels/DownloadTaskViewModel.swift"
     )
@@ -93,8 +94,10 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     XCTAssertTrue(downloadViewModelSource.contains("private var presentationGeneration = 0"))
     XCTAssertTrue(downloadViewModelSource.contains("currentPresentationGeneration"))
     XCTAssertTrue(downloadViewModelSource.contains("!Task.isCancelled"))
-    XCTAssertTrue(downloadSource.contains("PageManagedImage("))
+    XCTAssertFalse(downloadSource.contains("PageManagedImage("))
     XCTAssertFalse(downloadSource.contains("KFImage.sessionImage("))
+    XCTAssertTrue(actionRowSource.contains("struct ActionRow<Content: View, ProgressBar: View>"))
+    XCTAssertFalse(actionRowSource.contains("@ViewBuilder let background"))
 
     XCTAssertTrue(
       containsTokensInOrder(

@@ -303,6 +303,7 @@ class SubscribeSheetViewModel: ObservableObject {
   }
 
   func save() async -> Bool {
+    guard !isSaving else { return false }
     guard (subscribe.id ?? 0) > 0 else {
       errorMessage = "订阅信息不完整，无法保存。"
       return false

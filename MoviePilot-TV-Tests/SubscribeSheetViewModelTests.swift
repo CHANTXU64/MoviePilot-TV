@@ -666,6 +666,47 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(notifications.count(), 1)
   }
 
+  func testConcurrentSaveCallsSendOnlyOneMutationRequest() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.suspend(path: "/api/v1/subscribe")
+    defer {
+      Task { await SubscribeSheetURLProtocol.stub.release(path: "/api/v1/subscribe") }
+    }
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(id: 789, name: "防止重复保存", type: "电影", tmdbid: 123_468),
+      apiService: service
+    )
+    let firstSave = Task { await viewModel.save() }
+    try await waitUntil("first save request starts") {
+      await SubscribeSheetURLProtocol.stub.requestCount(
+        method: "PUT", path: "/api/v1/subscribe") == 1
+    }
+
+    let duplicateResult = await viewModel.save()
+    XCTAssertFalse(duplicateResult)
+    XCTAssertTrue(viewModel.isSaving)
+    let countWhileFirstSaveIsPending = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "PUT", path: "/api/v1/subscribe")
+    XCTAssertEqual(countWhileFirstSaveIsPending, 1)
+
+    await SubscribeSheetURLProtocol.stub.release(path: "/api/v1/subscribe")
+    let firstSaveResult = await firstSave.value
+    XCTAssertTrue(firstSaveResult)
+    let finalSaveRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "PUT", path: "/api/v1/subscribe")
+    XCTAssertEqual(finalSaveRequestCount, 1)
+  }
+
   func testReturningWhileSavingSkipsRollbackAndShowsSuccessAfterSave() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
