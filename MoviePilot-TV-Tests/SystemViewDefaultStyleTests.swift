@@ -400,6 +400,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(subscribeSheetSource.contains("@State private var showBasic = false"))
     XCTAssertTrue(subscribeSheetSource.contains("Text(\"基本设置\")"))
     XCTAssertTrue(subscribeSheetSource.contains("if showBasic {"))
+    XCTAssertTrue(subscribeSheetSource.contains(".padding(.horizontal, 48)"))
     XCTAssertTrue(subscribeSheetSource.contains("@State private var isSaveAttemptInFlight = false"))
     XCTAssertTrue(subscribeSheetSource.contains("if viewModel.isSaved && !isSaveAttemptInFlight"))
     XCTAssertTrue(subscribeSheetSource.contains("isLoading: isSaveAttemptInFlight"))

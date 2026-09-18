@@ -54,7 +54,9 @@ struct SubscribeSheet: View {
             )
             .font(.headline)
             .lineLimit(1)
+            .frame(maxWidth: .infinity)
             .foregroundColor(.secondary)
+            .padding(.horizontal, 48)
             .padding(.top, 28)
             .padding(.bottom, 0)
 
