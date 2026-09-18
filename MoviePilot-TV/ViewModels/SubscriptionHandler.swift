@@ -259,8 +259,9 @@ class SubscriptionHandler: ObservableObject {
     for item: MediaInfo,
     snapshot: APIServiceSessionSnapshot
   ) async throws -> Bool {
+    let statusMedia = subscriptionStatusMedia(for: item)
     if try await apiService.fetchSubscriptionLookup(
-      media: item,
+      media: statusMedia,
       season: item.season
     ) != nil {
       return true
@@ -276,12 +277,34 @@ class SubscriptionHandler: ObservableObject {
         tmdb_id: tmdbId,
         source: "themoviedb",
         media_id: String(tmdbId),
-        title: item.title,
-        type: item.type,
+        title: statusMedia.title,
+        type: statusMedia.type,
+        year: statusMedia.year,
         season: item.season
       ),
       season: item.season
     ) != nil
+  }
+
+  /// 状态复查沿用原始来源身份和季号，只补入同一预加载任务已取得的详情查询元数据。
+  /// 不能直接使用 fullDetail：详情补出的其他来源 ID 可能改变业务身份和缓存键。
+  private func subscriptionStatusMedia(for item: MediaInfo) -> MediaInfo {
+    guard let detail = mediaPreloader.peekTask(for: item)?.fullDetail else { return item }
+    return MediaInfo(
+      tmdb_id: item.tmdb_id,
+      douban_id: item.douban_id,
+      bangumi_id: item.bangumi_id,
+      anilist_id: item.anilist_id,
+      imdb_id: item.imdb_id,
+      tvdb_id: item.tvdb_id,
+      source: item.source,
+      mediaid_prefix: item.mediaid_prefix,
+      media_id: item.media_id,
+      title: detail.title ?? item.title,
+      type: detail.type ?? item.type,
+      year: detail.year ?? item.year,
+      season: item.season
+    )
   }
 
   /// 只回答能否取得可安全执行 DELETE 的精确来源目标，不承担订阅状态判断。

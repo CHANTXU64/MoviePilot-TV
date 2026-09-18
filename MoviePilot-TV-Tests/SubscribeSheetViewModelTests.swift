@@ -193,13 +193,14 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     let media = MediaInfo(
       douban_id: "cross-source-douban",
       title: "跨来源订阅",
-      type: "电影",
-      year: "2026"
+      type: "电影"
     )
+    XCTAssertNil(media.year)
     let preloadTask = preloader.preload(for: media)
     try await waitUntil("metadata lookup marks cross-source subscription as subscribed") {
       preloadTask.isSubscribed == true && preloadTask.isTmdbRecognitionFinished
     }
+    XCTAssertEqual(preloadTask.fullDetail?.year, "2026")
     XCTAssertNil(preloadTask.tmdbId)
 
     let handler = SubscriptionHandler(apiService: service, mediaPreloader: preloader)
@@ -218,9 +219,12 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       method: "GET",
       path: "/api/v1/subscribe/media/cross-source-douban"
     )
-    XCTAssertTrue(
-      lookupQueries.contains { $0["year"] == "2026" && $0["mtype"] == "电影" }
+    XCTAssertEqual(
+      lookupQueries.filter { $0["year"] == "2026" && $0["mtype"] == "电影" }.count,
+      2,
+      "预加载和菜单状态复查都必须使用详情补出的年份"
     )
+    XCTAssertTrue(lookupQueries.allSatisfy { $0["media_source"] == "douban" })
     XCTAssertTrue(
       lookupQueries.contains { $0["year"] == nil && $0["mtype"] == nil },
       "回归用例必须实际经过关闭元数据回退的精确删除定位"
