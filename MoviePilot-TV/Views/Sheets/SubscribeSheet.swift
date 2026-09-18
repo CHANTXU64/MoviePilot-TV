@@ -7,8 +7,10 @@ struct SubscribeSheet: View {
   @State private var isRetryingLoad = false
   @State private var showingSiteSelection = false
   @State private var showingFilterGroupSelection = false
+  @State private var showBasic = false
   @State private var showAdvanced = false
   @State private var isSaveAttemptInFlight = false
+  @FocusState private var isBasicButtonFocused: Bool
   @FocusState private var isAdvancedButtonFocused: Bool
 
   var onSave: ((Subscribe) -> Void)?
@@ -74,122 +76,143 @@ struct SubscribeSheet: View {
                   }
                 }
 
-                if viewModel.subscribe.type == "电视剧" {
-                  SheetTextField(
-                    title: "电视剧总集数",
-                    placeholder: "0",
-                    text: Binding(
-                      get: { viewModel.totalEpisodeText },
-                      set: { viewModel.totalEpisodeText = $0 }
-                    ),
-                    keyboardType: .numberPad
-                  )
-
-                  SheetTextField(
-                    title: "开始订阅集数",
-                    placeholder: "0",
-                    text: Binding(
-                      get: { String(viewModel.subscribe.start_episode ?? 0) },
-                      set: { viewModel.subscribe.start_episode = Int($0) }
-                    ),
-                    keyboardType: .numberPad
-                  )
-                }
-
-                SheetPicker(
-                  title: "质量",
-                  selection: Binding(
-                    get: { viewModel.subscribe.quality ?? "" },
-                    set: { viewModel.subscribe.quality = $0 }
-                  ),
-                  options: viewModel.qualityOptions.map {
-                    PickerOption(title: $0.title, value: $0.value)
+                Button {
+                  withAnimation {
+                    showBasic.toggle()
                   }
-                )
-
-                SheetPicker(
-                  title: "分辨率",
-                  selection: Binding(
-                    get: { viewModel.subscribe.resolution ?? "" },
-                    set: { viewModel.subscribe.resolution = $0 }
-                  ),
-                  options: viewModel.resolutionOptions.map {
-                    PickerOption(title: $0.title, value: $0.value)
+                } label: {
+                  HStack {
+                    Text("基本设置")
+                    Spacer()
+                    Image(systemName: showBasic ? "chevron.down" : "chevron.right")
                   }
-                )
-
-                SheetPicker(
-                  title: "特效",
-                  selection: Binding(
-                    get: { viewModel.subscribe.effect ?? "" },
-                    set: { viewModel.subscribe.effect = $0 }
-                  ),
-                  options: viewModel.effectOptions.map {
-                    PickerOption(title: $0.title, value: $0.value)
-                  }
-                )
-
-                Button(action: { showingSiteSelection = true }) {
-                  LabeledContent("站点") {
-                    Text(siteButtonLabel)
-                  }
+                  .foregroundColor(isBasicButtonFocused ? .black : .secondary)
                   .if(SheetStyleFix.shouldApply) { view in
                     view.padding(.horizontal)
                   }
                 }
+                .focused($isBasicButtonFocused)
 
-                SheetPicker(
-                  title: "下载器",
-                  selection: Binding(
-                    get: { viewModel.subscribe.downloader ?? "" },
-                    set: { viewModel.subscribe.downloader = $0 }
-                  ),
-                  options: [PickerOption(title: "默认", value: "")]
-                    + viewModel.downloaders.map {
-                      PickerOption(title: $0.name, value: $0.name)
+                if showBasic {
+                  if viewModel.subscribe.type == "电视剧" {
+                    SheetTextField(
+                      title: "电视剧总集数",
+                      placeholder: "0",
+                      text: Binding(
+                        get: { viewModel.totalEpisodeText },
+                        set: { viewModel.totalEpisodeText = $0 }
+                      ),
+                      keyboardType: .numberPad
+                    )
+
+                    SheetTextField(
+                      title: "开始订阅集数",
+                      placeholder: "0",
+                      text: Binding(
+                        get: { String(viewModel.subscribe.start_episode ?? 0) },
+                        set: { viewModel.subscribe.start_episode = Int($0) }
+                      ),
+                      keyboardType: .numberPad
+                    )
+                  }
+
+                  SheetPicker(
+                    title: "质量",
+                    selection: Binding(
+                      get: { viewModel.subscribe.quality ?? "" },
+                      set: { viewModel.subscribe.quality = $0 }
+                    ),
+                    options: viewModel.qualityOptions.map {
+                      PickerOption(title: $0.title, value: $0.value)
                     }
-                )
+                  )
 
-                SheetPicker(
-                  title: "保存路径",
-                  selection: Binding(
-                    get: { viewModel.subscribe.save_path ?? "" },
-                    set: { viewModel.subscribe.save_path = $0.isEmpty ? nil : $0 }
-                  ),
-                  options: [PickerOption(title: "自动", value: "")]
-                    + viewModel.savePathOptions.map {
-                      PickerOption(title: $0, value: $0)
+                  SheetPicker(
+                    title: "分辨率",
+                    selection: Binding(
+                      get: { viewModel.subscribe.resolution ?? "" },
+                      set: { viewModel.subscribe.resolution = $0 }
+                    ),
+                    options: viewModel.resolutionOptions.map {
+                      PickerOption(title: $0.title, value: $0.value)
                     }
-                )
+                  )
 
-                Toggle(
-                  "洗版",
-                  isOn: Binding(
-                    get: { (viewModel.subscribe.best_version ?? 0) == 1 },
-                    set: {
-                      let newValue = $0 ? 1 : 0
-                      viewModel.subscribe.best_version = newValue
-                      if newValue == 0 {
-                        viewModel.subscribe.best_version_full = 0
+                  SheetPicker(
+                    title: "特效",
+                    selection: Binding(
+                      get: { viewModel.subscribe.effect ?? "" },
+                      set: { viewModel.subscribe.effect = $0 }
+                    ),
+                    options: viewModel.effectOptions.map {
+                      PickerOption(title: $0.title, value: $0.value)
+                    }
+                  )
+
+                  Button(action: { showingSiteSelection = true }) {
+                    LabeledContent("站点") {
+                      Text(siteButtonLabel)
+                    }
+                    .if(SheetStyleFix.shouldApply) { view in
+                      view.padding(.horizontal)
+                    }
+                  }
+
+                  SheetPicker(
+                    title: "下载器",
+                    selection: Binding(
+                      get: { viewModel.subscribe.downloader ?? "" },
+                      set: { viewModel.subscribe.downloader = $0 }
+                    ),
+                    options: [PickerOption(title: "默认", value: "")]
+                      + viewModel.downloaders.map {
+                        PickerOption(title: $0.name, value: $0.name)
                       }
-                    }
-                  ))
+                  )
 
-                if viewModel.subscribe.type == "电视剧" && (viewModel.subscribe.best_version ?? 0) == 1 {
+                  SheetPicker(
+                    title: "保存路径",
+                    selection: Binding(
+                      get: { viewModel.subscribe.save_path ?? "" },
+                      set: { viewModel.subscribe.save_path = $0.isEmpty ? nil : $0 }
+                    ),
+                    options: [PickerOption(title: "自动", value: "")]
+                      + viewModel.savePathOptions.map {
+                        PickerOption(title: $0, value: $0)
+                      }
+                  )
+
                   Toggle(
-                    "仅洗全集",
+                    "洗版",
                     isOn: Binding(
-                      get: { (viewModel.subscribe.best_version_full ?? 0) == 1 },
-                      set: { viewModel.subscribe.best_version_full = $0 ? 1 : 0 }
+                      get: { (viewModel.subscribe.best_version ?? 0) == 1 },
+                      set: {
+                        let newValue = $0 ? 1 : 0
+                        viewModel.subscribe.best_version = newValue
+                        if newValue == 0 {
+                          viewModel.subscribe.best_version_full = 0
+                        }
+                      }
+                    ))
+
+                  if viewModel.subscribe.type == "电视剧"
+                    && (viewModel.subscribe.best_version ?? 0) == 1
+                  {
+                    Toggle(
+                      "仅洗全集",
+                      isOn: Binding(
+                        get: { (viewModel.subscribe.best_version_full ?? 0) == 1 },
+                        set: { viewModel.subscribe.best_version_full = $0 ? 1 : 0 }
+                      ))
+                  }
+
+                  Toggle(
+                    "使用IMDB搜索",
+                    isOn: Binding(
+                      get: { (viewModel.subscribe.search_imdbid ?? 0) == 1 },
+                      set: { viewModel.subscribe.search_imdbid = $0 ? 1 : 0 }
                     ))
                 }
-
-                Toggle(
-                  "使用IMDB搜索",
-                  isOn: Binding(
-                    get: { (viewModel.subscribe.search_imdbid ?? 0) == 1 },
-                    set: { viewModel.subscribe.search_imdbid = $0 ? 1 : 0 }
-                  ))
 
                 Button {
                   withAnimation {
