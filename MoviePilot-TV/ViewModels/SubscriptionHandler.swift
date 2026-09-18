@@ -45,9 +45,8 @@ class SubscriptionHandler: ObservableObject {
         defer { isCheckingSubscription = false }
         do {
           let snapshot = apiService.sessionSnapshot()
-          let subscription = try await subscriptionLookup(for: item, snapshot: snapshot)
+          let latestSubscribed = try await subscriptionExists(for: item, snapshot: snapshot)
           guard apiService.isSessionUnchanged(from: snapshot) else { return }
-          let latestSubscribed = subscription != nil
 
           // 菜单显示意图与最新状态不一致时只刷新，不把“订阅”反转成取消操作。
           guard latestSubscribed == expectedSubscribed else {
@@ -56,7 +55,21 @@ class SubscriptionHandler: ObservableObject {
             return
           }
 
-          if let subscription {
+          if latestSubscribed {
+            guard
+              let subscription = try await deletionTargetLookup(for: item, snapshot: snapshot)
+            else {
+              guard apiService.isSessionUnchanged(from: snapshot) else { return }
+              // 元数据状态查询能跨来源确认“已订阅”，但 DELETE 仍要求精确来源身份。
+              // 严格定位失败只代表无法安全删除，不能据此把已订阅状态改成 false。
+              mediaPreloader.peekTask(for: item)?.isSubscribed = true
+              showUnsubscribeFailure(
+                for: item,
+                message: "无法定位可安全取消的订阅，请刷新后重试。"
+              )
+              return
+            }
+            guard apiService.isSessionUnchanged(from: snapshot) else { return }
             pendingUnsubscribe = (item, subscription.mediaId, snapshot)
             unsubscribeConfirmationMessage = SubscriptionCancelConfirmation.headerMessage(
               for: item
@@ -241,7 +254,38 @@ class SubscriptionHandler: ObservableObject {
     )
   }
 
-  private func subscriptionLookup(
+  /// 回答当前媒体是否存在订阅。v3.0.4 的状态查询允许按标题、年份、类型跨来源匹配。
+  private func subscriptionExists(
+    for item: MediaInfo,
+    snapshot: APIServiceSessionSnapshot
+  ) async throws -> Bool {
+    if try await apiService.fetchSubscriptionLookup(
+      media: item,
+      season: item.season
+    ) != nil {
+      return true
+    }
+    guard apiService.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
+    guard item.tmdb_id == nil,
+      let tmdbId = mediaPreloader.peekTask(for: item)?.tmdbId
+    else {
+      return false
+    }
+    return try await apiService.fetchSubscriptionLookup(
+      media: MediaInfo(
+        tmdb_id: tmdbId,
+        source: "themoviedb",
+        media_id: String(tmdbId),
+        title: item.title,
+        type: item.type,
+        season: item.season
+      ),
+      season: item.season
+    ) != nil
+  }
+
+  /// 只回答能否取得可安全执行 DELETE 的精确来源目标，不承担订阅状态判断。
+  private func deletionTargetLookup(
     for item: MediaInfo,
     snapshot: APIServiceSessionSnapshot
   ) async throws

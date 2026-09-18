@@ -62,7 +62,7 @@ MoviePilot v3.0.4 媒体业务只读巡检还会覆盖：
 - `/discover/source`、`/recommend/source` 动态来源；已安装 TheTVDB 插件时检查筛选默认值、两页分页结果和 `tvdb` 来源原生 ID。
 - 资源搜索 SSE 的事件解码与终止语义；该项仍由显式开关控制。
 - `/user/current` 成功体可能包在 `{success,data}` 中。
-- 资源搜索“全部站点”通过 `SiteFilterViewModel` 生成全部启用站点 ID，并由 `SearchViewModel` 的真实请求入口校验参数透传。
+- 资源搜索“全部站点”由真实后端巡检验证 `SiteFilterViewModel`/API 返回的全部启用站点域；`SearchViewModel` 到 `sites` 参数的透传另由 URLProtocol 单元测试覆盖，目前不是一条完整的真实后端端到端验收。
 - 订阅状态查询保留 v3.0.4 的标题/年份/类型跨来源回退；取消订阅定位关闭该回退，避免查询命中与精确删除身份不一致。
 
 如果在独立 worktree 中运行测试，可以用 `MOVIEPILOT_COMPAT_ENV_FILE=/absolute/path/.env.compatibility` 指向已有配置文件；命令行环境变量会覆盖配置文件中的同名值。`MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS=false` 时会强制关闭所有副作用子项，即使配置文件中某个 `MOVIEPILOT_COMPAT_TEST_*` 仍为 `true`，也不会发起真实后台动作；这只是总开关的关闭优先级，不是禁止副作用测试，副作用套件仍可在明确接受真实后台影响时启用。

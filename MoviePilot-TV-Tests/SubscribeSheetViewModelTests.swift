@@ -146,6 +146,87 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(doubanDeleteCount, 0)
   }
 
+  func testSubscriptionHandlerKeepsSubscribedStateWhenExactDeleteTargetIsUnavailable()
+    async throws
+  {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    let preloader = MediaPreloader(apiService: service)
+    defer { preloader.clearAll() }
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/media/cross-source-douban",
+      json:
+        #"{"douban_id":"cross-source-douban","title":"跨来源订阅","type":"电影","year":"2026"}"#
+    )
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/media/search",
+      json: "[]"
+    )
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/media/recognize",
+      json: #"{"media_info":null}"#
+    )
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/subscribe/media/cross-source-douban",
+      json: "{}"
+    )
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/subscribe/media/cross-source-douban",
+      matchingQuery: ["year": "2026", "mtype": "电影"],
+      json:
+        #"{"id":998908,"name":"跨来源订阅","type":"电影","tmdbid":998908,"media_source":"themoviedb","media_id":"998908"}"#
+    )
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let media = MediaInfo(
+      douban_id: "cross-source-douban",
+      title: "跨来源订阅",
+      type: "电影",
+      year: "2026"
+    )
+    let preloadTask = preloader.preload(for: media)
+    try await waitUntil("metadata lookup marks cross-source subscription as subscribed") {
+      preloadTask.isSubscribed == true && preloadTask.isTmdbRecognitionFinished
+    }
+    XCTAssertNil(preloadTask.tmdbId)
+
+    let handler = SubscriptionHandler(apiService: service, mediaPreloader: preloader)
+    handler.handleSubscribe(media, expectedSubscribed: true)
+    try await waitUntil("missing exact delete target is reported") {
+      handler.notificationType == .error
+        && handler.notificationMessage
+          == "《跨来源订阅》取消订阅失败：无法定位可安全取消的订阅，请刷新后重试。"
+    }
+
+    XCTAssertEqual(preloadTask.isSubscribed, true)
+    XCTAssertNil(handler.unsubscribeConfirmationMessage)
+    let deleteRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(method: "DELETE")
+    XCTAssertEqual(deleteRequestCount, 0)
+    let lookupQueries = await SubscribeSheetURLProtocol.stub.requestQueries(
+      method: "GET",
+      path: "/api/v1/subscribe/media/cross-source-douban"
+    )
+    XCTAssertTrue(
+      lookupQueries.contains { $0["year"] == "2026" && $0["mtype"] == "电影" }
+    )
+    XCTAssertTrue(
+      lookupQueries.contains { $0["year"] == nil && $0["mtype"] == nil },
+      "回归用例必须实际经过关闭元数据回退的精确删除定位"
+    )
+  }
+
   /// 清单要求 lookup 只用于确认：删除键取自当前媒体的 `getMediaId()`。
   /// 响应即使回显另一套 canonical 身份（v2 才会出现），也不得改变删除目标。
   func testSubscriptionHandlerDeletesQueriedIdentityInsteadOfResponseIdentity()
@@ -1842,10 +1923,16 @@ private struct SubscribeSheetServiceSnapshot {
 }
 
 private actor SubscribeSheetURLProtocolStub {
+  private struct QueryResponseOverride {
+    let matchingQuery: [String: String]
+    let data: Data
+  }
+
   private var requestCounts: [String: Int] = [:]
   private var requestQueriesByEndpoint: [String: [[String: String]]] = [:]
   private var requestBodies: [String: Data] = [:]
   private var responseOverrides: [String: Data] = [:]
+  private var queryResponseOverrides: [String: [QueryResponseOverride]] = [:]
   private var suspendedPaths: Set<String> = []
   private var failedPaths: Set<String> = []
   private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
@@ -1855,6 +1942,7 @@ private actor SubscribeSheetURLProtocolStub {
     requestQueriesByEndpoint.removeAll()
     requestBodies.removeAll()
     responseOverrides.removeAll()
+    queryResponseOverrides.removeAll()
     suspendedPaths.removeAll()
     failedPaths.removeAll()
     let pendingWaiters = waiters.values.flatMap { $0 }
@@ -1880,8 +1968,27 @@ private actor SubscribeSheetURLProtocolStub {
     responseOverrides["\(method) \(path)"] = Data(json.utf8)
   }
 
+  func respond(
+    method: String,
+    path: String,
+    matchingQuery: [String: String],
+    json: String
+  ) {
+    queryResponseOverrides["\(method) \(path)", default: []].append(
+      QueryResponseOverride(matchingQuery: matchingQuery, data: Data(json.utf8))
+    )
+  }
+
   func requestCount(method: String, path: String) -> Int {
     requestCounts["\(method) \(path)", default: 0]
+  }
+
+  func requestCount(method: String) -> Int {
+    requestCounts.reduce(into: 0) { total, request in
+      if request.key.hasPrefix("\(method) ") {
+        total += request.value
+      }
+    }
   }
 
   func requestQueries(method: String, path: String) -> [[String: String]] {
@@ -1919,7 +2026,11 @@ private actor SubscribeSheetURLProtocolStub {
     }
 
     let data: Data
-    if let responseOverride = responseOverrides["\(method) \(path)"] {
+    if let queryResponseOverride = queryResponseOverrides[endpoint]?.first(where: { override in
+      override.matchingQuery.allSatisfy { query[$0.key] == $0.value }
+    }) {
+      data = queryResponseOverride.data
+    } else if let responseOverride = responseOverrides[endpoint] {
       data = responseOverride
     } else {
       switch (method, path) {
