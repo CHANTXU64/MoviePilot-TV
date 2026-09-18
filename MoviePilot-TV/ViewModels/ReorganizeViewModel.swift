@@ -149,6 +149,7 @@ class ReorganizeViewModel: ObservableObject {
   }
 
   func submit(background: Bool) async -> Bool {
+    guard !isSubmitting else { return false }
     guard sourceSession.map({ apiService.isSessionUnchanged(from: $0) }) ?? true,
       apiService.canAccess(.manage)
     else { return false }
@@ -225,6 +226,7 @@ class ReorganizeViewModel: ObservableObject {
 
   @discardableResult
   func preview() async -> Bool {
+    guard !isPreviewing else { return false }
     guard apiService.canAccess(.manage) else { return false }
     errorMessage = nil
     guard isMediaIdValid else {

@@ -8,6 +8,7 @@ struct SubscribeSheet: View {
   @State private var showingSiteSelection = false
   @State private var showingFilterGroupSelection = false
   @State private var showAdvanced = false
+  @State private var isSaveAttemptInFlight = false
   @FocusState private var isAdvancedButtonFocused: Bool
 
   var onSave: ((Subscribe) -> Void)?
@@ -289,7 +290,7 @@ struct SubscribeSheet: View {
                     ))
                 }
 
-                if viewModel.isSaved {
+                if viewModel.isSaved && !isSaveAttemptInFlight {
                   SheetActionButton(
                     title: "关闭",
                     loadingTitle: "关闭",
@@ -302,17 +303,21 @@ struct SubscribeSheet: View {
                   SheetActionButton(
                     title: viewModel.isNewSubscription ? "确定" : "保存",
                     loadingTitle: viewModel.isNewSubscription ? "确定中" : "保存中",
-                    isLoading: viewModel.isSaving,
+                    isLoading: isSaveAttemptInFlight,
                     isDisabled: viewModel.loadErrorMessage != nil,
                     feedbackMessage: viewModel.errorMessage
                   ) {
+                    guard !isSaveAttemptInFlight else { return }
+                    isSaveAttemptInFlight = true
                     Task {
                       if await viewModel.save() {
                         onSave?(viewModel.subscribe)
                         if viewModel.errorMessage == nil {
                           dismiss()
+                          return
                         }
                       }
+                      isSaveAttemptInFlight = false
                     }
                   }
 
@@ -322,7 +327,7 @@ struct SubscribeSheet: View {
                     Text(viewModel.isNewSubscription ? "取消订阅" : "取消修改")
                       .frame(maxWidth: .infinity)
                   }
-                  .disabled(viewModel.isSaving)
+                  .disabled(isSaveAttemptInFlight)
                 }
               }
               .padding(.horizontal, 28)
