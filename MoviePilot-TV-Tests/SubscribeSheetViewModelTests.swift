@@ -146,6 +146,91 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(doubanDeleteCount, 0)
   }
 
+  func testSubscriptionHandlerKeepsSubscribedStateWhenExactDeleteTargetIsUnavailable()
+    async throws
+  {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    let preloader = MediaPreloader(apiService: service)
+    defer { preloader.clearAll() }
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/media/cross-source-douban",
+      json:
+        #"{"douban_id":"cross-source-douban","title":"跨来源订阅","type":"电影","year":"2026"}"#
+    )
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/media/search",
+      json: "[]"
+    )
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/media/recognize",
+      json: #"{"media_info":null}"#
+    )
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/subscribe/media/cross-source-douban",
+      json: "{}"
+    )
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET",
+      path: "/api/v1/subscribe/media/cross-source-douban",
+      matchingQuery: ["year": "2026", "mtype": "电影"],
+      json:
+        #"{"id":998908,"name":"跨来源订阅","type":"电影","tmdbid":998908,"media_source":"themoviedb","media_id":"998908"}"#
+    )
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let media = MediaInfo(
+      douban_id: "cross-source-douban",
+      title: "跨来源订阅",
+      type: "电影"
+    )
+    XCTAssertNil(media.year)
+    let preloadTask = preloader.preload(for: media)
+    try await waitUntil("metadata lookup marks cross-source subscription as subscribed") {
+      preloadTask.isSubscribed == true && preloadTask.isTmdbRecognitionFinished
+    }
+    XCTAssertEqual(preloadTask.fullDetail?.year, "2026")
+    XCTAssertNil(preloadTask.tmdbId)
+
+    let handler = SubscriptionHandler(apiService: service, mediaPreloader: preloader)
+    handler.handleSubscribe(media, expectedSubscribed: true)
+    try await waitUntil("missing exact delete target is reported") {
+      handler.notificationType == .error
+        && handler.notificationMessage
+          == "《跨来源订阅》取消订阅失败：无法定位可安全取消的订阅，请刷新后重试。"
+    }
+
+    XCTAssertEqual(preloadTask.isSubscribed, true)
+    XCTAssertNil(handler.unsubscribeConfirmationMessage)
+    let deleteRequestCount = await SubscribeSheetURLProtocol.stub.requestCount(method: "DELETE")
+    XCTAssertEqual(deleteRequestCount, 0)
+    let lookupQueries = await SubscribeSheetURLProtocol.stub.requestQueries(
+      method: "GET",
+      path: "/api/v1/subscribe/media/cross-source-douban"
+    )
+    XCTAssertEqual(
+      lookupQueries.filter { $0["year"] == "2026" && $0["mtype"] == "电影" }.count,
+      2,
+      "预加载和菜单状态复查都必须使用详情补出的年份"
+    )
+    XCTAssertTrue(lookupQueries.allSatisfy { $0["media_source"] == "douban" })
+    XCTAssertTrue(
+      lookupQueries.contains { $0["year"] == nil && $0["mtype"] == nil },
+      "回归用例必须实际经过关闭元数据回退的精确删除定位"
+    )
+  }
+
   /// 清单要求 lookup 只用于确认：删除键取自当前媒体的 `getMediaId()`。
   /// 响应即使回显另一套 canonical 身份（v2 才会出现），也不得改变删除目标。
   func testSubscriptionHandlerDeletesQueriedIdentityInsteadOfResponseIdentity()
@@ -164,7 +249,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET",
       path: "/api/v1/media/998907",
-      json: #"{"tmdb_id":998907,"title":"统一身份取消订阅","type":"电影"}"#
+      json: #"{"tmdb_id":998907,"title":"统一身份取消订阅","type":"电影","year":"2026"}"#
     )
     await SubscribeSheetURLProtocol.stub.respond(
       method: "GET",
@@ -174,7 +259,12 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
 
-    let media = MediaInfo(tmdb_id: 998_907, title: "统一身份取消订阅", type: "电影")
+    let media = MediaInfo(
+      tmdb_id: 998_907,
+      title: "统一身份取消订阅",
+      type: "电影",
+      year: "2026"
+    )
     let preloadTask = preloader.preload(for: media)
     try await waitUntil("preloaded canonical subscription state is ready") {
       preloadTask.isSubscribed == true
@@ -202,6 +292,18 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(
       responseIdentityDeleteCount, 0,
       "删除目标必须是本次查询用的媒体身份，不能跟着响应回显的身份漂移")
+    let lookupQueries = await SubscribeSheetURLProtocol.stub.requestQueries(
+      method: "GET",
+      path: "/api/v1/subscribe/media/998907"
+    )
+    XCTAssertTrue(
+      lookupQueries.contains { $0["year"] == "2026" && $0["mtype"] == "电影" },
+      "常规订阅状态预载必须继续携带视频元数据兜底参数"
+    )
+    XCTAssertEqual(lookupQueries.last?["media_source"], "themoviedb")
+    XCTAssertEqual(lookupQueries.last?["title"], "统一身份取消订阅")
+    XCTAssertNil(lookupQueries.last?["year"])
+    XCTAssertNil(lookupQueries.last?["mtype"])
   }
 
   func testSubscriptionHandlerKeepsCachedStateWhenDeleteFails() async throws {
@@ -1825,17 +1927,26 @@ private struct SubscribeSheetServiceSnapshot {
 }
 
 private actor SubscribeSheetURLProtocolStub {
+  private struct QueryResponseOverride {
+    let matchingQuery: [String: String]
+    let data: Data
+  }
+
   private var requestCounts: [String: Int] = [:]
+  private var requestQueriesByEndpoint: [String: [[String: String]]] = [:]
   private var requestBodies: [String: Data] = [:]
   private var responseOverrides: [String: Data] = [:]
+  private var queryResponseOverrides: [String: [QueryResponseOverride]] = [:]
   private var suspendedPaths: Set<String> = []
   private var failedPaths: Set<String> = []
   private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
 
   func reset() {
     requestCounts.removeAll()
+    requestQueriesByEndpoint.removeAll()
     requestBodies.removeAll()
     responseOverrides.removeAll()
+    queryResponseOverrides.removeAll()
     suspendedPaths.removeAll()
     failedPaths.removeAll()
     let pendingWaiters = waiters.values.flatMap { $0 }
@@ -1861,8 +1972,31 @@ private actor SubscribeSheetURLProtocolStub {
     responseOverrides["\(method) \(path)"] = Data(json.utf8)
   }
 
+  func respond(
+    method: String,
+    path: String,
+    matchingQuery: [String: String],
+    json: String
+  ) {
+    queryResponseOverrides["\(method) \(path)", default: []].append(
+      QueryResponseOverride(matchingQuery: matchingQuery, data: Data(json.utf8))
+    )
+  }
+
   func requestCount(method: String, path: String) -> Int {
     requestCounts["\(method) \(path)", default: 0]
+  }
+
+  func requestCount(method: String) -> Int {
+    requestCounts.reduce(into: 0) { total, request in
+      if request.key.hasPrefix("\(method) ") {
+        total += request.value
+      }
+    }
+  }
+
+  func requestQueries(method: String, path: String) -> [[String: String]] {
+    requestQueriesByEndpoint["\(method) \(path)", default: []]
   }
 
   func totalRequestCount() -> Int {
@@ -1876,7 +2010,13 @@ private actor SubscribeSheetURLProtocolStub {
   func response(for request: URLRequest) async throws -> (HTTPURLResponse, Data) {
     let method = request.httpMethod ?? "GET"
     let path = request.url?.path ?? ""
-    requestCounts["\(method) \(path)", default: 0] += 1
+    let endpoint = "\(method) \(path)"
+    requestCounts[endpoint, default: 0] += 1
+    let query = Dictionary(
+      uniqueKeysWithValues: (URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+        .queryItems ?? []).map { ($0.name, $0.value ?? "") }
+    )
+    requestQueriesByEndpoint[endpoint, default: []].append(query)
     if let body = requestBodyData(from: request) {
       requestBodies["\(method) \(path)"] = body
     }
@@ -1890,7 +2030,11 @@ private actor SubscribeSheetURLProtocolStub {
     }
 
     let data: Data
-    if let responseOverride = responseOverrides["\(method) \(path)"] {
+    if let queryResponseOverride = queryResponseOverrides[endpoint]?.first(where: { override in
+      override.matchingQuery.allSatisfy { query[$0.key] == $0.value }
+    }) {
+      data = queryResponseOverride.data
+    } else if let responseOverride = responseOverrides[endpoint] {
       data = responseOverride
     } else {
       switch (method, path) {

@@ -398,8 +398,14 @@ class ReorganizeViewModel: ObservableObject {
     target.doubanid = nil
     target.bangumiid = nil
     target.anilistid = nil
-    target.media_source = mediaSource.rawValue
-    target.media_id = normalized.isEmpty ? nil : normalized
+    if normalized.isEmpty {
+      // MoviePilot 的可选媒体身份要求 source/id 成对出现；自动识别时两者都省略。
+      target.media_source = nil
+      target.media_id = nil
+    } else {
+      target.media_source = mediaSource.rawValue
+      target.media_id = normalized
+    }
     if mediaSource != .themoviedb || target.type_name != "电视剧" {
       target.episode_group = nil
     }

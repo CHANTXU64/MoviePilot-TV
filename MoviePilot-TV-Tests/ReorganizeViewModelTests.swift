@@ -81,6 +81,7 @@ final class ReorganizeViewModelTests: XCTestCase {
     let submitted = viewModel.preparedSingleSubmissionForm()
 
     XCTAssertTrue(submitted.from_history)
+    XCTAssertNil(submitted.media_source)
     XCTAssertNil(submitted.media_id)
   }
 

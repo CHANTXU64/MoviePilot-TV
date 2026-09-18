@@ -6,7 +6,7 @@
 
 `.env.compatibility` 会被 Git 忽略，不要提交真实账号密码。复制 `.env.compatibility.example` 为 `.env.compatibility` 后，填写后端地址、用户名和密码；媒体服务器、元数据、资源搜索、分季状态、副作用套件等可选开关按 `.env.compatibility.example` 中的注释调整。
 
-真实后端兼容测试分为只读套件和副作用套件。副作用套件默认开启，会触发订阅搜索、原参数保存订阅、暂停/恢复订阅、重置订阅、手动重新整理和 AI 重新整理等真实后台动作；如果只想跑只读检查，请参考 `.env.compatibility.example` 关闭副作用开关。
+真实后端兼容测试分为只读套件和副作用套件。副作用套件默认关闭；只有显式设置 `MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS=true` 才会触发订阅搜索、原参数保存订阅、暂停/恢复订阅、重置订阅、手动重新整理和 AI 重新整理等真实后台动作。
 
 配置完成后运行 Xcode 测试：
 
@@ -24,7 +24,7 @@ xcodebuild test \
   -skipPackagePluginValidation
 ```
 
-这里默认关闭 XCTest 并行。未关闭时，Xcode 可能启动多个 `Clone N of Apple TV` 模拟器，把不同测试套件并行分发执行；真实后端兼容测试包含默认开启的副作用套件，串行运行更容易确认执行顺序、定位失败和避免误判。
+这里默认关闭 XCTest 并行。未关闭时，Xcode 可能启动多个 `Clone N of Apple TV` 模拟器，把不同测试套件并行分发执行；串行运行更容易确认执行顺序、定位失败，并防止显式启用的副作用套件被并行执行。
 
 真实后端巡检在 `Testing started` 后可能数分钟没有增量输出。图片巡检会扫描多个 TV 页面入口、实际下载海报/背景图/头像并等待 tvOS 解码；不要只因为短时间无输出就判断卡死，应等待用例结束或查看 `.xcresult` 中的测试摘要和失败详情。
 
@@ -38,7 +38,7 @@ GitHub CI 没有真实后端账号，`ci.yml` 会显式跳过 `BackendCompatibil
 
 ## 真实后端只读套件
 
-`.env.compatibility` 用于真实 MoviePilot 后端的兼容性检查。已配置时，只读套件会登录后端并按 TV 端真实页面入口巡检：系统配置、仪表盘、站点/下载器/目录配置、订阅读取、媒体服务器最近添加、下载中任务、推荐货架、发现页、搜索、详情页、演员/人物和分季数据。未配置时，这组测试会自动跳过。
+`.env.compatibility` 用于真实 MoviePilot 后端的兼容性检查。已配置时，只读套件会登录后端，巡检 TV 页面使用的 API、模型和部分生产 ViewModel 入口：系统配置、仪表盘、站点/下载器/目录配置、订阅读取、媒体服务器最近添加、下载中任务、推荐货架、发现页、搜索、详情页、演员/人物和分季数据。文档会明确哪些流程只验证 API/模型，不能把它们表述成完整页面交互测试。未配置时，这组测试会自动跳过。
 
 使用普通账号巡检订阅时，测试还会断言 `/subscribe/` 返回记录的 `username` 都属于当前账号，以覆盖 MoviePilot v2.14.2 起的订阅所有权隔离；超级用户仍按后端契约读取全局订阅。
 
@@ -52,9 +52,9 @@ GitHub CI 没有真实后端账号，`ci.yml` 会显式跳过 `BackendCompatibil
 
 这组测试不会新增订阅、删除订阅、添加下载、暂停/恢复下载、重置订阅、触发订阅搜索或执行整理任务。可选的 `MOVIEPILOT_COMPAT_METADATA_QUERY` / `MOVIEPILOT_COMPAT_METADATA_QUERIES` 只用于媒体元数据搜索和详情读取；人物搜索使用独立的 `MOVIEPILOT_COMPAT_PERSON_QUERY` / `MOVIEPILOT_COMPAT_PERSON_QUERIES`，未配置时默认查询“易中天”，避免拿媒体标题作为人物搜索词。如果媒体搜索结果包含合集，还会继续读取合集详情。也可以用 `MOVIEPILOT_COMPAT_COLLECTION_ID` / `MOVIEPILOT_COMPAT_COLLECTION_IDS` 直接指定合集 ID。
 
-默认还会检查标题识别、TMDB ID 识别、整理历史读取、整理预览和订阅状态读取，以覆盖 TV 端现有后台能力。整理预览只读取最近一条已有整理历史，以 `preview=true` 调用 `/transfer/manual?background=false`，校验预览 envelope、汇总计数以及每个条目的 `success` 值，不执行文件写入或后台整理任务。若要额外检查资源搜索兼容性，可配置 `MOVIEPILOT_COMPAT_RESOURCE_QUERY` / `MOVIEPILOT_COMPAT_RESOURCE_QUERIES` 或 `MOVIEPILOT_COMPAT_RESOURCE_MEDIA_ID` / `MOVIEPILOT_COMPAT_RESOURCE_MEDIA_IDS`；这只会调用资源搜索并解码结果，不会添加下载。`MOVIEPILOT_COMPAT_TEST_RESOURCE_SEARCH_STREAMS=true` 会额外检查资源搜索 SSE 流式接口，耗时更长，默认关闭。若要检查分季已入库状态，可设置 `MOVIEPILOT_COMPAT_CHECK_SEASON_AVAILABILITY=true`；该检查只读取媒体服务器状态，不会创建订阅。
+默认还会检查标题识别、TMDB ID 识别、整理历史读取、整理预览和订阅状态读取，以覆盖 TV 端现有后台能力。整理预览只读取最近一条已有整理历史，经 `ReorganizeViewModel` 的生产表单组装入口，以 `preview=true` 调用 `/transfer/manual?background=false`，并校验可选媒体来源/ID 成对省略、请求不返回 422、预览 envelope、汇总计数以及每个条目的 `success` 值；该检查不执行文件写入或后台整理任务。若要额外检查资源搜索兼容性，可配置 `MOVIEPILOT_COMPAT_RESOURCE_QUERY` / `MOVIEPILOT_COMPAT_RESOURCE_QUERIES` 或 `MOVIEPILOT_COMPAT_RESOURCE_MEDIA_ID` / `MOVIEPILOT_COMPAT_RESOURCE_MEDIA_IDS`；每个显式配置的查询都必须解码出至少一条结果，否则测试失败，不再允许用开关把空结果算作通过。这只会搜索和解码，不会添加下载。`MOVIEPILOT_COMPAT_TEST_RESOURCE_SEARCH_STREAMS=true` 会额外检查资源搜索 SSE 流式接口及至少一条资源项，耗时更长，默认关闭。若要检查分季已入库状态，可设置 `MOVIEPILOT_COMPAT_CHECK_SEASON_AVAILABILITY=true`；该检查只读取媒体服务器状态，不会创建订阅。
 
-MoviePilot v3.0.1 媒体业务只读巡检还会覆盖：
+MoviePilot v3.0.4 媒体业务只读巡检还会覆盖：
 
 - TMDB、豆瓣、Bangumi、AniList 四来源媒体搜索，TMDB 合集搜索，以及 TMDB/豆瓣人物搜索；搜索与识别请求使用 `media_source` 而不是 `source`。
 - AniList 推荐货架、发现、详情与统一分季接口。
@@ -62,6 +62,8 @@ MoviePilot v3.0.1 媒体业务只读巡检还会覆盖：
 - `/discover/source`、`/recommend/source` 动态来源；已安装 TheTVDB 插件时检查筛选默认值、两页分页结果和 `tvdb` 来源原生 ID。
 - 资源搜索 SSE 的事件解码与终止语义；该项仍由显式开关控制。
 - `/user/current` 成功体可能包在 `{success,data}` 中。
+- 资源搜索“全部站点”由真实后端巡检验证 `SiteFilterViewModel`/API 返回的全部启用站点域；`SearchViewModel` 到 `sites` 参数的透传另由 URLProtocol 单元测试覆盖，目前不是一条完整的真实后端端到端验收。
+- 订阅状态查询保留 v3.0.4 的标题/年份/类型跨来源回退；取消订阅定位关闭该回退，避免查询命中与精确删除身份不一致。
 
 如果在独立 worktree 中运行测试，可以用 `MOVIEPILOT_COMPAT_ENV_FILE=/absolute/path/.env.compatibility` 指向已有配置文件；命令行环境变量会覆盖配置文件中的同名值。`MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS=false` 时会强制关闭所有副作用子项，即使配置文件中某个 `MOVIEPILOT_COMPAT_TEST_*` 仍为 `true`，也不会发起真实后台动作；这只是总开关的关闭优先级，不是禁止副作用测试，副作用套件仍可在明确接受真实后台影响时启用。
 
@@ -71,7 +73,7 @@ MoviePilot v3.0.1 媒体业务只读巡检还会覆盖：
 
 `MOVIEPILOT_COMPAT_ADDITIONAL_PASSWORDS` 与额外用户名按顺序对应；本地确实共用密码时可以留空，测试会回退使用 `MOVIEPILOT_COMPAT_PASSWORD`。如果某个密码本身包含逗号，在同一行中把该逗号写成 `\,`，例如 `first-password,pa\,ssword` 会解析为两个密码 `first-password` 和 `pa,ssword`。模板文件中应填写自己的测试账号用户名和密码，不要复用示例值。
 
-四个单权限账号不要放进 `MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES`。它们使用下面的专用配置，只运行 `BackendCompatibilityPermissionBehaviorTests`，不会参加只读巡检或副作用套件；即使用户名误留在 `MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES` 中，也会从普通兼容矩阵里排除：
+四个单权限账号不要放进 `MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES`。它们使用下面的专用配置，只运行 `BackendCompatibilityPermissionBehaviorTests`，不会参加只读巡检或副作用套件；即使用户名误留在 `MOVIEPILOT_COMPAT_ADDITIONAL_USERNAMES` 中，也会从普通兼容矩阵里排除。该套件除了校验 token 和 Tab，还会分别通过发现分页、搜索站点、首页订阅读取和整理配置的生产 ViewModel 验证唯一权限确实可用：
 
 ```sh
 MOVIEPILOT_COMPAT_PERMISSION_BEHAVIOR_ACCOUNTS=test_discovery=discovery,test_search=search,test_subscribe=subscribe,test_manage=manage
@@ -97,7 +99,7 @@ xcodebuild test \
 
 ## 副作用套件
 
-副作用测试默认开启。运行 `BackendCompatibilitySideEffectTests` 时，已配置真实后端的情况下会默认执行下面这些流程；如果某次兼容性检查不想跑某一项，可在 `.env.compatibility` 中把对应开关设为 `false`。
+副作用测试默认关闭。只有显式设置 `MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS=true` 后，`BackendCompatibilitySideEffectTests` 才会按下面的子项开关执行；可把某一项设为 `false` 单独排除。
 
 如果配置了额外账号，副作用套件也会用每个账号执行同一批流程；这会按账号重复触发真实后台动作。
 
@@ -105,8 +107,8 @@ xcodebuild test \
 - `MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_UPDATE=true`：读取现有订阅详情，然后用原详情原样保存一次，不修改参数。
 - `MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_PAUSE_RESUME=true`：取 `state=R/S` 条目并临时切换到另一状态，再写回测试前的状态；原本暂停的 `state=S` 会在测试期间短暂恢复为 `R`，可能参与后台调度。
 - `MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_RESET_SEARCH=true`：取现有订阅列表中有 ID 且 `state=R/S` 的条目，重置订阅后立即触发同一条订阅搜索；执行后只会把订阅的 `state` 字段写回测试前的值，包括原本已暂停的 `state=S`。reset 清除的已下载/已入库记录无法恢复，search 触发的后台搜索或下载任务也无法撤销。
-- `MOVIEPILOT_COMPAT_TEST_MANUAL_REORGANIZE=true`：取整理历史第一页最近几条，按 TV 端 `ReorganizeForm` 编码后并发触发后台手动重新整理。
-- `MOVIEPILOT_COMPAT_TEST_AI_REORGANIZE=true`：取整理历史第一页最近几条，批量触发 AI 重新整理，并检查返回的进度流。
+- `MOVIEPILOT_COMPAT_TEST_MANUAL_REORGANIZE=true`：取整理历史第一页最近几条，通过 TV 端 `ReorganizeViewModel.submit(background: true)` 生产入口并发触发后台手动重新整理。
+- `MOVIEPILOT_COMPAT_TEST_AI_REORGANIZE=true`：取整理历史第一页最近几条，批量触发 AI 重新整理，并通过 TV 端 `APIService.progressStream`（含当前会话的资源 Cookie）检查返回的进度流。
 
 这些测试不会新增订阅、删除订阅、添加下载、删除下载或删除整理历史。订阅重置、订阅搜索、暂停/恢复订阅、手动/AI 重新整理都会触发真实后台动作；只应在你接受这些影响的后端上运行副作用套件。
 

@@ -479,7 +479,8 @@ class MediaDetailViewModel: ObservableObject {
         guard apiService.isSessionUnchanged(from: snapshot) else { return false }
         guard
           let subscription = try await apiService.fetchSubscriptionLookup(
-            media: media
+            media: media,
+            includeVideoMetadataFallback: false
           )
         else {
           continue
@@ -566,7 +567,10 @@ class MediaDetailViewModel: ObservableObject {
     for media in subscriptionLookupCandidates() {
       do {
         guard apiService.isSessionUnchanged(from: snapshot) else { return nil }
-        guard let subscription = try await apiService.fetchSubscriptionLookup(media: media) else {
+        guard let subscription = try await apiService.fetchSubscriptionLookup(
+          media: media,
+          includeVideoMetadataFallback: false
+        ) else {
           continue
         }
         guard apiService.isSessionUnchanged(from: snapshot) else { return nil }

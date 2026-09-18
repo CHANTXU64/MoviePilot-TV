@@ -337,6 +337,54 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     )
   }
 
+  func testSubscriptionLookupMatchesV304CrossSourceMetadataContract() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    await CompatibilityEndpointURLProtocol.stub.setSubscriptionLookupResponse(
+      #"{"id":701,"media_source":"themoviedb","media_id":"42"}"#.data(using: .utf8)!)
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+
+    let media = try JSONDecoder().decode(
+      MediaInfo.self,
+      from:
+        #"{"media_source":"douban","media_id":"34943510","title":"跨来源电影","year":"2026","type":"电影"}"#
+        .data(using: .utf8)!
+    )
+
+    let lookup = try await service.fetchSubscriptionLookup(media: media)
+    XCTAssertEqual(lookup?.id, 701)
+
+    _ = try await service.fetchSubscriptionLookup(
+      media: media,
+      includeVideoMetadataFallback: false
+    )
+
+    let queries = await CompatibilityEndpointURLProtocol.stub.matchingQueries(
+      suffix: "/subscribe/media/34943510")
+    XCTAssertEqual(queries.count, 2)
+    XCTAssertEqual(
+      Self.queryValues(queries[0]),
+      [
+        "media_source": "douban",
+        "title": "跨来源电影",
+        "year": "2026",
+        "mtype": "电影",
+      ]
+    )
+    XCTAssertEqual(
+      Self.queryValues(queries[1]),
+      [
+        "media_source": "douban",
+        "title": "跨来源电影",
+      ]
+    )
+  }
+
   func testMediaDetailLibraryEndpointTreatsEmptyItemAsNotInLibrary() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
@@ -868,7 +916,10 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     }
     XCTAssertEqual(previewLogIds, [81, 82])
     let allPreviewBodies = try bodies.allSatisfy {
-      try Self.jsonObject($0)["preview"] as? Bool == true
+      let body = try Self.jsonObject($0)
+      return body["preview"] as? Bool == true
+        && !body.keys.contains("media_source")
+        && !body.keys.contains("media_id")
     }
     XCTAssertTrue(allPreviewBodies)
   }
@@ -1253,6 +1304,7 @@ private actor CompatibilityEndpointURLProtocolStub {
   private var userSettingsFailureStatusCode: Int?
   private var manualTransferOmitsSuccess = false
   private var subscriptionActionsFail: Bool?
+  private var subscriptionLookupResponse: Data?
   private var manualMediaResponses: [String: CompatibilityEndpointStubResponse] = [:]
   private var mediaServerExistsResponse: Data?
 
@@ -1264,6 +1316,7 @@ private actor CompatibilityEndpointURLProtocolStub {
     userSettingsFailureStatusCode = nil
     manualTransferOmitsSuccess = false
     subscriptionActionsFail = nil
+    subscriptionLookupResponse = nil
     manualMediaResponses.removeAll()
     mediaServerExistsResponse = nil
   }
@@ -1290,6 +1343,10 @@ private actor CompatibilityEndpointURLProtocolStub {
 
   func setSubscriptionActionsFail(_ fail: Bool) {
     subscriptionActionsFail = fail
+  }
+
+  func setSubscriptionLookupResponse(_ response: Data?) {
+    subscriptionLookupResponse = response
   }
 
   func setManualMediaResponse(
@@ -1426,6 +1483,9 @@ private actor CompatibilityEndpointURLProtocolStub {
     } else if url.path == "/api/v1/subscribe/fork" && request.httpMethod == "POST" {
       statusCode = 200
       data = #"{"success":true,"data":{"id":901}}"#.data(using: .utf8)!
+    } else if url.path.hasPrefix("/api/v1/subscribe/media/") && request.httpMethod == "GET" {
+      statusCode = 200
+      data = subscriptionLookupResponse ?? #"{}"#.data(using: .utf8)!
     } else if url.path == "/api/v1/transfer/manual" {
       statusCode = 200
       if manualTransferResponses.isEmpty {

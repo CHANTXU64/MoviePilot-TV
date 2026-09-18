@@ -344,6 +344,54 @@ final class SearchViewModelTests: XCTestCase {
     XCTAssertEqual(titleStreamRequestCount, 1)
   }
 
+  @MainActor
+  func testResourceSearchForwardsProductionAllActiveSitesFilter() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SearchViewModelServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SearchViewModelURLProtocol.stub.reset()
+    await SearchViewModelURLProtocol.stub.setStreamTermination(
+      .done, forQuery: "site-filter-forwarding")
+    service.baseURLForTesting = "http://search-tests.local"
+    configureSearchPermissionSession(service)
+
+    let viewModel = SearchViewModel(apiService: service)
+    viewModel.searchType = .resource
+    viewModel.query = "site-filter-forwarding"
+    viewModel.siteFilter.availableSites = [
+      Site(
+        id: 2, name: "Active 2", domain: nil, url: nil, downloader: nil,
+        is_active: FlexibleBool(true)),
+      Site(
+        id: 1, name: "Active 1", domain: nil, url: nil, downloader: nil,
+        is_active: FlexibleBool(true)),
+      Site(
+        id: 3, name: "Inactive", domain: nil, url: nil, downloader: nil,
+        is_active: FlexibleBool(false)),
+    ]
+    viewModel.siteFilter.hasLoadedSites = true
+    viewModel.siteFilter.loadedSitesAuthoritative = true
+    viewModel.siteFilter.selectedSites = []
+
+    await viewModel.autoSearch()
+    try await withTimeout("resource search to forward all active sites") {
+      await SearchViewModelURLProtocol.stub.waitForRequest(
+        path: "/api/v1/search/title/stream",
+        query: "site-filter-forwarding"
+      )
+    }
+
+    let sites = await SearchViewModelURLProtocol.stub.sitesValues(
+      path: "/api/v1/search/title/stream",
+      query: "site-filter-forwarding"
+    )
+    XCTAssertEqual(sites, ["1,2"])
+  }
+
   func testSearchTypesAndExecutionUseWebPermissionSplit() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SearchViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SearchViewModelURLProtocol.self) }
@@ -1340,7 +1388,8 @@ private actor SearchViewModelURLProtocolStub {
       query: query,
       type: queryItems.first(where: { $0.name == "type" })?.value,
       source: queryItems.first(where: { $0.name == "media_source" })?.value
-        ?? queryItems.first(where: { $0.name == "source" })?.value
+        ?? queryItems.first(where: { $0.name == "source" })?.value,
+      sites: queryItems.first(where: { $0.name == "sites" })?.value
     )
 
     if components.path == "/api/v1/system/setting/CustomFilterRules",
@@ -1397,7 +1446,8 @@ private actor SearchViewModelURLProtocolStub {
         query: query,
         type: queryItems.first(where: { $0.name == "type" })?.value,
         source: queryItems.first(where: { $0.name == "media_source" })?.value
-        ?? queryItems.first(where: { $0.name == "source" })?.value
+        ?? queryItems.first(where: { $0.name == "source" })?.value,
+        sites: queryItems.first(where: { $0.name == "sites" })?.value
       )
     )
   }
@@ -1425,9 +1475,21 @@ private actor SearchViewModelURLProtocolStub {
       .map(\.source)
   }
 
-  private func recordRequest(path: String, query: String, type: String?, source: String?) {
+  func sitesValues(path: String, query: String? = nil) -> [String?] {
+    requestedRequests
+      .filter { $0.path == path && (query == nil || $0.query == query) }
+      .map(\.sites)
+  }
+
+  private func recordRequest(
+    path: String,
+    query: String,
+    type: String?,
+    source: String?,
+    sites: String?
+  ) {
     requestedRequests.append(
-      SearchRecordedRequest(path: path, query: query, type: type, source: source)
+      SearchRecordedRequest(path: path, query: query, type: type, source: source, sites: sites)
     )
   }
 
@@ -1537,6 +1599,7 @@ private struct SearchRecordedRequest: Equatable {
   let query: String
   let type: String?
   let source: String?
+  let sites: String?
 }
 
 @MainActor

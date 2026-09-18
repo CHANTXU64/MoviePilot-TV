@@ -2739,6 +2739,8 @@ struct SystemEnv: Codable {
 /// 全局应用设置
 struct GlobalSettings: Codable {
   var TMDB_IMAGE_DOMAIN: String?
+  var BANGUMI_PROXY_ENABLE: FlexibleBool?
+  var BANGUMI_IMAGE_DOMAIN: String?
   var BACKEND_VERSION: String?
   var FRONTEND_VERSION: String?
   var BACKEND_DEV: Bool?
@@ -2754,6 +2756,8 @@ struct GlobalSettings: Codable {
 
   enum CodingKeys: String, CodingKey {
     case TMDB_IMAGE_DOMAIN
+    case BANGUMI_PROXY_ENABLE
+    case BANGUMI_IMAGE_DOMAIN
     case BACKEND_VERSION
     case FRONTEND_VERSION
     case BACKEND_DEV
@@ -2765,6 +2769,8 @@ struct GlobalSettings: Codable {
   }
 
   mutating func mergeUserSettings(_ userSettings: GlobalSettings) {
+    BANGUMI_PROXY_ENABLE = userSettings.BANGUMI_PROXY_ENABLE ?? BANGUMI_PROXY_ENABLE
+    BANGUMI_IMAGE_DOMAIN = userSettings.BANGUMI_IMAGE_DOMAIN ?? BANGUMI_IMAGE_DOMAIN
     RECOGNIZE_SOURCE = userSettings.RECOGNIZE_SOURCE ?? RECOGNIZE_SOURCE
     USER_UNIQUE_ID = userSettings.USER_UNIQUE_ID ?? USER_UNIQUE_ID
     SUBSCRIBE_SHARE_MANAGE = userSettings.SUBSCRIBE_SHARE_MANAGE ?? SUBSCRIBE_SHARE_MANAGE
@@ -3351,8 +3357,14 @@ struct ReorganizeForm: Codable {
     try container.encodeIfPresent(doubanid, forKey: .doubanid)
     try container.encodeIfPresent(bangumiid, forKey: .bangumiid)
     try container.encodeIfPresent(anilistid, forKey: .anilistid)
-    try container.encodeIfPresent(media_source, forKey: .media_source)
-    try container.encodeIfPresent(media_id, forKey: .media_id)
+    let normalizedMediaSource = media_source?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let normalizedMediaId = media_id?.trimmingCharacters(in: .whitespacesAndNewlines)
+    if let normalizedMediaSource, !normalizedMediaSource.isEmpty,
+      let normalizedMediaId, !normalizedMediaId.isEmpty
+    {
+      try container.encode(normalizedMediaSource, forKey: .media_source)
+      try container.encode(normalizedMediaId, forKey: .media_id)
+    }
 
     if let episodeGroup = episode_group?.trimmingCharacters(in: .whitespacesAndNewlines), !episodeGroup.isEmpty {
       try container.encode(episodeGroup, forKey: .episode_group)

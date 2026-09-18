@@ -420,7 +420,8 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let detail = MediaInfo(
       douban_id: "detail-header-douban",
       title: "详情页取消订阅",
-      type: "电影"
+      type: "电影",
+      year: "2026"
     )
     let preloadTask = MediaPreloadTask(partialMedia: detail, apiService: service)
     preloadTask.tmdbId = 998_877
@@ -433,10 +434,33 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
 
     let deletedSubscriptionIDs = await DetailHeaderSubscriptionURLProtocol.stub.deletedSubscriptionIDs()
     let deletedMediaRequests = await DetailHeaderSubscriptionURLProtocol.stub.deletedMediaRequests()
+    let lookupQueries = await DetailHeaderSubscriptionURLProtocol.stub.lookupQueries(
+      mediaId: "detail-header-douban"
+    )
+    let fallbackLookupQueries = await DetailHeaderSubscriptionURLProtocol.stub.lookupQueries(
+      mediaId: "998877"
+    )
 
     XCTAssertEqual(deletedSubscriptionIDs, [])
     XCTAssertEqual(deletedMediaRequests.map(\.path), ["/api/v1/subscribe/media/998877"])
     XCTAssertEqual(deletedMediaRequests.map(\.query), ["media_source=themoviedb"])
+    XCTAssertTrue(
+      lookupQueries.contains {
+        $0["media_source"] == "douban"
+          && $0["title"] == "详情页取消订阅"
+          && $0["year"] == nil
+          && $0["mtype"] == nil
+      },
+      "详情页取消定位必须关闭跨来源视频元数据兜底"
+    )
+    XCTAssertTrue(
+      fallbackLookupQueries.contains {
+        $0["media_source"] == "themoviedb"
+          && $0["year"] == nil
+          && $0["mtype"] == nil
+      },
+      "详情页 TMDB fallback 取消定位也必须保持精确身份查询"
+    )
     XCTAssertEqual(preloadTask.isSubscribed, false)
   }
 
@@ -1802,6 +1826,7 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
   private var resolvedSubscriptionsByTMDBID: [Int: Int?] = [:]
   private var queuedStatusesByTMDBID: [Int: [DetailHeaderSubscriptionQueuedStatus]] = [:]
   private var lookupCountsByTMDBID: [Int: Int] = [:]
+  private var lookupQueriesByMediaID: [String: [[String: String]]] = [:]
   private var failedLookupTMDBIDs: Set<Int> = []
   private var minimalPayloadTMDBIDs: Set<Int> = []
   private var customLookupPayloadsByTMDBID: [Int: String] = [:]
@@ -1819,6 +1844,7 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
     ]
     queuedStatusesByTMDBID.removeAll()
     lookupCountsByTMDBID.removeAll()
+    lookupQueriesByMediaID.removeAll()
     failedLookupTMDBIDs.removeAll()
     minimalPayloadTMDBIDs.removeAll()
     customLookupPayloadsByTMDBID.removeAll()
@@ -1877,6 +1903,10 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
     lookupCountsByTMDBID[tmdbId, default: 0]
   }
 
+  func lookupQueries(mediaId: String) -> [[String: String]] {
+    lookupQueriesByMediaID[mediaId, default: []]
+  }
+
   func deletedSubscriptionIDs() -> [Int] {
     deletedIDs
   }
@@ -1900,10 +1930,12 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
 
     if method == "GET", path.hasPrefix("/api/v1/subscribe/media/") {
       let mediaId = url.lastPathComponent
-      let mediaSource = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-        .queryItems?
-        .first(where: { $0.name == "media_source" })?
-        .value
+      let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+      let query = Dictionary(
+        uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") }
+      )
+      lookupQueriesByMediaID[mediaId, default: []].append(query)
+      let mediaSource = query["media_source"]
 
       if mediaSource == "douban" {
         if mediaId.contains("detail-header-title-fallback-douban"),

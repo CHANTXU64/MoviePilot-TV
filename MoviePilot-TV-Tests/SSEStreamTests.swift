@@ -80,6 +80,39 @@ final class SSEStreamTests: XCTestCase {
     XCTAssertEqual(SSEStreamURLProtocol.requestCount(for: "progress-reconnect"), 2)
   }
 
+  func testProgressStreamSendsSessionResourceCookie() async throws {
+    let service = APIService.isolatedTestingInstance()
+    let cookie = try XCTUnwrap(
+      HTTPCookie(properties: [
+        .domain: "sse-stream-tests.local",
+        .path: "/api/v1",
+        .name: "resource_token",
+        .value: "progress-resource-cookie",
+        .secure: "TRUE",
+      ])
+    )
+    service.replaceSession(
+      baseURL: "https://sse-stream-tests.local",
+      token: "sse-test-token",
+      currentUser: nil,
+      username: nil,
+      password: nil,
+      persist: false,
+      cookies: [cookie]
+    )
+
+    var events: [SearchStreamEvent] = []
+    for try await event in service.progressStream(progressKey: "progress-cookie") {
+      events.append(event)
+    }
+
+    XCTAssertEqual(events.compactMap(\.text), ["cookie-authorized"])
+    XCTAssertEqual(
+      SSEStreamURLProtocol.cookieHeader(for: "progress-cookie"),
+      "resource_token=progress-resource-cookie"
+    )
+  }
+
   func testProgressStreamReconnectsAfterTransportFailure() async throws {
     let service = makeService()
     var events: [SearchStreamEvent] = []
@@ -240,7 +273,10 @@ private final class SSEStreamURLProtocol: URLProtocol {
       ?? request.url?.path.split(separator: "/").last.map(String.init)
     let body: String
     var shouldFail = false
-    let attempt = Self.requestCounts.record(for: scenario)
+    let attempt = Self.requestCounts.record(
+      for: scenario,
+      cookieHeader: request.value(forHTTPHeaderField: "Cookie")
+    )
     switch scenario {
     case "buffered":
       let line = "data: {\"type\":\"append\",\"text\":\"" + String(repeating: "x", count: 1024) + "\"}\n\n"
@@ -261,6 +297,9 @@ private final class SSEStreamURLProtocol: URLProtocol {
     case "progress-always-fails":
       body = ""
       shouldFail = true
+    case "progress-cookie":
+      body =
+        "data: {\"enable\":false,\"text\":\"cookie-authorized\",\"data\":{\"success\":true}}\n\n"
     default:
       body = "data: {\"type\":\"append\",\"text\":\"first\"}\n\n"
     }
@@ -288,22 +327,31 @@ private final class SSEStreamURLProtocol: URLProtocol {
   static func requestCount(for scenario: String) -> Int {
     requestCounts.count(for: scenario)
   }
+
+  static func cookieHeader(for scenario: String) -> String? {
+    requestCounts.cookieHeader(for: scenario)
+  }
 }
 
 private final class SSEStreamRequestCounts: @unchecked Sendable {
   private let lock = NSLock()
   private var counts: [String: Int] = [:]
+  private var cookieHeaders: [String: String] = [:]
 
   func reset() {
     lock.lock()
     counts.removeAll()
+    cookieHeaders.removeAll()
     lock.unlock()
   }
 
-  func record(for scenario: String?) -> Int {
+  func record(for scenario: String?, cookieHeader: String?) -> Int {
     guard let scenario else { return 0 }
     lock.lock()
     defer { lock.unlock() }
+    if let cookieHeader {
+      cookieHeaders[scenario] = cookieHeader
+    }
     let next = (counts[scenario] ?? 0) + 1
     counts[scenario] = next
     return next
@@ -313,5 +361,11 @@ private final class SSEStreamRequestCounts: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     return counts[scenario] ?? 0
+  }
+
+  func cookieHeader(for scenario: String) -> String? {
+    lock.lock()
+    defer { lock.unlock() }
+    return cookieHeaders[scenario]
   }
 }
