@@ -17,6 +17,26 @@ nonisolated enum AppChangelog {
 
   static let entries: [AppChangelogEntry] = [
     AppChangelogEntry(
+      version: "v0.3.9",
+      releaseDate: "2026-09-18",
+      compatibleMoviePilotVersion: "v3.0.4",
+      highlights: [
+        "兼容 MoviePilot 后端 v3.0.4。",
+      ],
+      updates: [],
+      fixes: [
+        "对齐 MoviePilot v3.0.4 的媒体数据、订阅编辑、站点与规则组保存等接口行为。",
+        "修复搜索词空白和年份识别导致的最佳匹配排序异常。",
+        "修复重复发起整理预览时可能展示旧结果的问题，并增强 SSE 进度连接恢复能力。",
+        "修复状态页遇到后端可选字段缺失时整页无法刷新的问题。",
+      ],
+      optimizations: [
+        "订阅设置支持折叠基础选项，减少配置页面的滚动负担。",
+        "人物图片按实际显示尺寸下采样，改善详情页内存占用。",
+        "完善缺图占位、国家/季信息与转移失败原因的显示。",
+      ]
+    ),
+    AppChangelogEntry(
       version: "v0.3.8",
       releaseDate: "2026-08-27",
       compatibleMoviePilotVersion: "v2.15.6",
