@@ -1347,6 +1347,31 @@ private struct BackendCompatibilityCollector {
 
 final class BackendCompatibilityReadOnlyTests: XCTestCase {
   @MainActor
+  func testReadOnlyOpenAPIContractCompatibility() async throws {
+    let config = try BackendCompatibilityConfig.loadOrSkip()
+    do {
+      let fetched = try await OpenAPIContractSupport.fetchOpenAPI(baseURL: config.baseURL)
+      let baseline = try OpenAPIContractSupport.loadDocument("openapi-baseline.json")
+      let exceptions = try OpenAPIContractSupport.loadExceptions()
+      let report = OpenAPIContractChecker.check(
+        live: fetched.document,
+        baseline: baseline,
+        exceptions: exceptions,
+        sourceGaps: TVAPIContractSourceScanner.coverageGaps()
+      )
+      print(report.formattedDescription)
+      print(
+        "OpenAPI contract backend version=\(fetched.version ?? "unknown"); document title=\(fetched.document.title ?? "unknown")"
+      )
+      if report.hasBlockingFindings {
+        XCTFail(report.formattedDescription)
+      }
+    } catch {
+      XCTFail("OpenAPI 契约检查未完成，不能当作通过：\(error)")
+    }
+  }
+
+  @MainActor
   func testReadOnlySystemEnvCompatibility() async throws {
     try await withReadOnlyBackend(requiring: ["/system/env"]) { service, config in
       await runBackendCompatibilityStep(
