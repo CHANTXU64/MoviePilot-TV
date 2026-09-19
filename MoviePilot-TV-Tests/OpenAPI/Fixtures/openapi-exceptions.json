@@ -210,6 +210,41 @@
       "kind": "undeclaredBodyField",
       "path": "body.anilistid",
       "reason": "整理表单仍发送专用 ID；OpenAPI ManualTransferItem 使用 media_source/media_id。"
+    },
+    {
+      "id": "media.search.union-year",
+      "operation": "GET /media/search",
+      "kind": "responseFieldTypeMismatch",
+      "path": "year",
+      "reason": "搜索结果是媒体/人物/音乐联合类型：MusicInfo.year 为 integer，MediaInfo.year 为 string。TV 按 type 参数分别解码，不按联合类型一次解码。"
+    },
+    {
+      "id": "media.search.union-type",
+      "operation": "GET /media/search",
+      "kind": "responseFieldTypeMismatch",
+      "path": "type",
+      "reason": "搜索联合类型中 MediaPerson.type 可为 integer，媒体/音乐为 string。TV 按 type 参数分别解码。"
+    },
+    {
+      "id": "media.detail.union-year",
+      "operation": "GET /media/{media_id}",
+      "kind": "responseFieldTypeMismatch",
+      "path": "year",
+      "reason": "详情响应是 MusicInfo|MediaInfo 联合类型，音乐 year 为 integer，影视 year 为 string。TV 按 MediaInfo 解码影视详情。"
+    },
+    {
+      "id": "subscribe.add.id-int-or-string",
+      "operation": "POST /subscribe/",
+      "kind": "responseFieldTypeMismatch",
+      "path": "id",
+      "reason": "OpenAPI 将新增订阅 id 标为 integer|string|null，TV 成功路径按 Int 解码。"
+    },
+    {
+      "id": "subscribe.put.note-json",
+      "operation": "PUT /subscribe/",
+      "kind": "bodyFieldTypeMismatch",
+      "path": "body.note",
+      "reason": "OpenAPI 将 note 标为 integer[]，TV 按任意 JSON 往返保真。"
     }
   ]
 }

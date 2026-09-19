@@ -19,6 +19,7 @@ enum OpenAPIFindingKind: String, Equatable, CaseIterable {
   case bodyFieldTypeMismatch
   case responseFieldMissing
   case responseFieldNullability
+  case responseFieldPresence
   case responseFieldTypeMismatch
   case responseStructureChanged
   case newWritableField
@@ -299,11 +300,8 @@ enum OpenAPIContractChecker {
     live: OpenAPIOperation,
     into report: inout OpenAPIContractReport
   ) {
-    var consumed: Set<String> = []
-
     for parameter in catalog.parameters {
       if let matched = matchParameter(parameter, in: live.parameters) {
-        consumed.insert("\(matched.location):\(matched.name)")
         if !parameterTypesCompatible(tv: parameter.jsonType, schema: matched.schema, location: parameter.location)
         {
           report.findings.append(
@@ -342,16 +340,17 @@ enum OpenAPIContractChecker {
     }
 
     for parameter in live.parameters where parameter.required {
-      let key = "\(parameter.location):\(parameter.name)"
-      if consumed.contains(key) { continue }
-      if catalog.parameters.contains(where: { $0.name == parameter.name }) { continue }
+      let alwaysSent = catalog.parameters.contains {
+        $0.name == parameter.name && $0.alwaysSent
+      }
+      if alwaysSent { continue }
       report.findings.append(
         OpenAPIFinding(
           severity: .failure,
           kind: .missingRequiredParameter,
           operationID: catalog.operationID,
           path: "\(parameter.location).\(parameter.name)",
-          message: "后端新增或仍声明必填参数，但 TV 未提供"
+          message: "后端声明该参数必填，但 TV 未保证每次都发送"
         )
       )
     }
@@ -435,14 +434,17 @@ enum OpenAPIContractChecker {
     }
 
     for requiredName in schema.required {
-      if catalog.bodyFields.contains(where: { $0.name == requiredName }) { continue }
+      let alwaysSent = catalog.bodyFields.contains {
+        $0.name == requiredName && $0.alwaysSent
+      }
+      if alwaysSent { continue }
       report.findings.append(
         OpenAPIFinding(
           severity: .failure,
           kind: .missingRequiredBodyField,
           operationID: catalog.operationID,
           path: "body.\(requiredName)",
-          message: "后端请求体新增或仍声明必填字段，但 TV 没有提供"
+          message: "后端请求体声明该字段必填，但 TV 未保证每次都发送该键"
         )
       )
     }
@@ -492,6 +494,10 @@ enum OpenAPIContractChecker {
       return
     }
 
+    let expectsJSON =
+      catalog.responseKind == .moviePilotEnvelope
+      || catalog.responseKind == .raw
+      || catalog.responseKind == .opaqueJSON
     let schema: OpenAPISchema?
     switch catalog.responseKind {
     case .moviePilotEnvelope:
@@ -501,7 +507,20 @@ enum OpenAPIContractChecker {
     case .sse, .image:
       schema = nil
     }
-    guard var schema else { return }
+    guard var schema else {
+      if expectsJSON {
+        report.findings.append(
+          OpenAPIFinding(
+            severity: .failure,
+            kind: .unverifiedSchema,
+            operationID: catalog.operationID,
+            path: "response",
+            message: "TV 按 JSON 解码，但 OpenAPI 未声明成功响应结构"
+          )
+        )
+      }
+      return
+    }
     if catalog.responseKind == .moviePilotEnvelope,
       schema.kind == .array || schema.types.contains("array"),
       let items = schema.items?.schema
@@ -537,7 +556,12 @@ enum OpenAPIContractChecker {
     let fields = catalog.requiredResponseFields + catalog.dependedResponseFields
     let canInspectProperties = !schema.properties.isEmpty || schema.kind == .union
     for field in fields {
-      guard responseDeclaresField(schema, name: field.name) else {
+      let declaredEverywhere = responseDeclaresField(
+        schema,
+        name: field.name,
+        requireAllUnionBranches: field.required
+      )
+      guard declaredEverywhere else {
         if field.required || canInspectProperties {
           report.findings.append(
             OpenAPIFinding(
@@ -551,8 +575,6 @@ enum OpenAPIContractChecker {
         }
         continue
       }
-      // MoviePilot 的 Pydantic 模型几乎都是 anyOf T|null，不能把“TV 必填 vs OpenAPI 可空”
-      // 直接当成破坏；必填变可缺失只在相对基线比较时失败。
       if !responseTypeCompatible(tv: field.jsonType, schema: schema, fieldName: field.name) {
         report.findings.append(
           OpenAPIFinding(
@@ -567,15 +589,25 @@ enum OpenAPIContractChecker {
     }
   }
 
-  private static func responseDeclaresField(_ schema: OpenAPISchema, name: String) -> Bool {
-    if schema.properties[name] != nil { return true }
-    if schema.kind == .union {
-      return schema.alternatives.contains { responseDeclaresField($0, name: name) }
-    }
+  private static func responseDeclaresField(
+    _ schema: OpenAPISchema,
+    name: String,
+    requireAllUnionBranches: Bool = false
+  ) -> Bool {
     if schema.kind == .array, let items = schema.items?.schema {
-      return responseDeclaresField(items, name: name)
+      return responseDeclaresField(
+        items,
+        name: name,
+        requireAllUnionBranches: requireAllUnionBranches
+      )
     }
-    return false
+    if schema.kind == .union, !schema.alternatives.isEmpty {
+      let checks = schema.alternatives.map {
+        responseDeclaresField($0, name: name, requireAllUnionBranches: requireAllUnionBranches)
+      }
+      return requireAllUnionBranches ? checks.allSatisfy { $0 } : checks.contains(true)
+    }
+    return schema.properties[name] != nil
   }
 
   private static func responseTypeCompatible(
@@ -587,9 +619,11 @@ enum OpenAPIContractChecker {
       return responseTypeCompatible(tv: tv, schema: items, fieldName: fieldName)
     }
     if schema.kind == .union, !schema.alternatives.isEmpty {
-      let declaring = schema.alternatives.filter { responseDeclaresField($0, name: fieldName) }
+      let declaring = schema.alternatives.filter {
+        responseDeclaresField($0, name: fieldName)
+      }
       guard !declaring.isEmpty else { return true }
-      return declaring.contains {
+      return declaring.allSatisfy {
         responseTypeCompatible(tv: tv, schema: $0, fieldName: fieldName)
       }
     }
@@ -640,6 +674,10 @@ enum OpenAPIContractChecker {
       baseline: baselineOperation,
       into: &report
     )
+    let expectsJSON =
+      catalog.responseKind == .moviePilotEnvelope
+      || catalog.responseKind == .raw
+      || catalog.responseKind == .opaqueJSON
     compareSchemaBaseline(
       catalogID: catalog.operationID,
       location: "body",
@@ -647,6 +685,9 @@ enum OpenAPIContractChecker {
       baseline: baselineOperation.requestBodySchema,
       roundTrip: catalog.roundTrip,
       direction: .request,
+      catalogFields: catalog.bodyFields,
+      expectsValue: !catalog.bodyFields.isEmpty || live.requestBodySchema != nil
+        || baselineOperation.requestBodySchema != nil,
       into: &report
     )
     compareSchemaBaseline(
@@ -656,6 +697,8 @@ enum OpenAPIContractChecker {
       baseline: baselineOperation.innerDataSchema ?? baselineOperation.successSchema,
       roundTrip: catalog.roundTrip,
       direction: .response,
+      catalogFields: catalog.requiredResponseFields + catalog.dependedResponseFields,
+      expectsValue: expectsJSON,
       into: &report
     )
   }
@@ -736,14 +779,130 @@ enum OpenAPIContractChecker {
     baseline: OpenAPISchema?,
     roundTrip: Bool,
     direction: CompatibilityDirection,
+    catalogFields: [TVAPIField] = [],
+    expectsValue: Bool = true,
+    depth: Int = 0,
     into report: inout OpenAPIContractReport
   ) {
+    if depth > 8 { return }
+    if live == nil && baseline == nil {
+      if expectsValue && depth == 0 {
+        report.findings.append(
+          OpenAPIFinding(
+            severity: .failure,
+            kind: .unverifiedSchema,
+            operationID: catalogID,
+            path: location,
+            message: "基线与当前都缺少可比较的 JSON schema"
+          )
+        )
+      }
+      return
+    }
+    if live == nil, baseline != nil {
+      report.findings.append(
+        OpenAPIFinding(
+          severity: .failure,
+          kind: direction == .response ? .responseStructureChanged : .responseStructureChanged,
+          operationID: catalogID,
+          path: location,
+          message: direction == .response
+            ? "相对基线，成功 JSON 响应结构消失"
+            : "相对基线，请求体 schema 消失"
+        )
+      )
+      return
+    }
+    if live != nil, baseline == nil {
+      if expectsValue {
+        report.findings.append(
+          OpenAPIFinding(
+            severity: .review,
+            kind: .responseStructureChanged,
+            operationID: catalogID,
+            path: location,
+            message: "相对基线新增 JSON schema"
+          )
+        )
+      }
+      return
+    }
     guard let live, let baseline else { return }
+
+    compareRequiredSets(
+      catalogID: catalogID,
+      location: location,
+      live: live,
+      baseline: baseline,
+      direction: direction,
+      catalogFields: catalogFields,
+      into: &report
+    )
+
+    if let liveItems = live.items?.schema, let baselineItems = baseline.items?.schema {
+      compareSchemaBaseline(
+        catalogID: catalogID,
+        location: "\(location)[]",
+        live: liveItems,
+        baseline: baselineItems,
+        roundTrip: roundTrip,
+        direction: direction,
+        catalogFields: catalogFields,
+        expectsValue: true,
+        depth: depth + 1,
+        into: &report
+      )
+    } else if live.kind == .array || baseline.kind == .array,
+      live.items == nil || baseline.items == nil, live.kind != baseline.kind
+    {
+      report.findings.append(
+        OpenAPIFinding(
+          severity: .failure,
+          kind: .responseStructureChanged,
+          operationID: catalogID,
+          path: location,
+          message: "相对基线，数组结构发生变化"
+        )
+      )
+    }
+
+    if live.kind == .union || baseline.kind == .union {
+      let liveTypes = schemaProducedJSONTypes(live)
+      let baselineTypes = schemaProducedJSONTypes(baseline)
+      if direction == .response, !liveTypes.isSubset(of: baselineTypes) {
+        report.findings.append(
+          OpenAPIFinding(
+            severity: .failure,
+            kind: .responseFieldTypeMismatch,
+            operationID: catalogID,
+            path: location,
+            message:
+              "相对基线，联合类型可产生的值变宽：\(liveTypes.sorted().joined(separator: "|"))"
+          )
+        )
+      }
+      if direction == .request, !baselineTypes.isSubset(of: schemaAcceptedJSONTypes(live)) {
+        report.findings.append(
+          OpenAPIFinding(
+            severity: .failure,
+            kind: .bodyFieldTypeMismatch,
+            operationID: catalogID,
+            path: location,
+            message: "相对基线，请求可接受的类型变窄"
+          )
+        )
+      }
+    }
+
     let liveProps = live.properties
     let baselineProps = baseline.properties
     for name in Set(liveProps.keys).union(baselineProps.keys).sorted() {
       let liveProperty = liveProps[name]
       let baselineProperty = baselineProps[name]
+      let field = catalogFields.first { $0.name == name }
+      let childPath = location == "response" || location == "body"
+        ? "\(location).\(name)"
+        : "\(location).\(name)"
       if let liveProperty, baselineProperty == nil {
         if direction == .request && (roundTrip || live.required.contains(name)) {
           report.findings.append(
@@ -751,7 +910,7 @@ enum OpenAPIContractChecker {
               severity: live.required.contains(name) ? .failure : .review,
               kind: live.required.contains(name) ? .missingRequiredBodyField : .newWritableField,
               operationID: catalogID,
-              path: "\(location).\(name)",
+              path: childPath,
               message: live.required.contains(name)
                 ? "相对基线新增必填请求字段"
                 : "相对基线新增可写字段，往返保存时可能丢失语义"
@@ -763,31 +922,31 @@ enum OpenAPIContractChecker {
               severity: .review,
               kind: .newWritableField,
               operationID: catalogID,
-              path: "\(location).\(name)",
+              path: childPath,
               message: "相对基线新增响应字段"
             )
           )
         }
         continue
       }
-      if liveProperty == nil, let baselineProperty {
+      if liveProperty == nil, baselineProperty != nil {
         if direction == .response {
           report.findings.append(
             OpenAPIFinding(
               severity: .failure,
               kind: .responseFieldMissing,
               operationID: catalogID,
-              path: "\(location).\(name)",
+              path: childPath,
               message: "相对基线删除了响应字段"
             )
           )
-        } else if !baselineProperty.nullable {
+        } else {
           report.findings.append(
             OpenAPIFinding(
               severity: .review,
               kind: .responseStructureChanged,
               operationID: catalogID,
-              path: "\(location).\(name)",
+              path: childPath,
               message: "相对基线删除了请求字段"
             )
           )
@@ -795,6 +954,7 @@ enum OpenAPIContractChecker {
         continue
       }
       guard let liveProperty, let baselineProperty else { continue }
+
       if direction == .response {
         if !baselineProperty.nullable && liveProperty.nullable {
           report.findings.append(
@@ -802,23 +962,49 @@ enum OpenAPIContractChecker {
               severity: .failure,
               kind: .responseFieldNullability,
               operationID: catalogID,
-              path: "\(location).\(name)",
-              message: "相对基线，响应字段从必填/存在变为可缺失"
+              path: childPath,
+              message: "相对基线，响应字段值变为可 null"
             )
           )
         }
-      } else if !liveProperty.nullable && baselineProperty.nullable && live.required.contains(name)
-        && !baseline.required.contains(name)
-      {
-        report.findings.append(
-          OpenAPIFinding(
-            severity: .failure,
-            kind: .missingRequiredBodyField,
-            operationID: catalogID,
-            path: "\(location).\(name)",
-            message: "相对基线，请求字段变为必填"
+        if !schemaProducedJSONTypes(liveProperty).isSubset(of: schemaProducedJSONTypes(baselineProperty)) {
+          report.findings.append(
+            OpenAPIFinding(
+              severity: .failure,
+              kind: .responseFieldTypeMismatch,
+              operationID: catalogID,
+              path: childPath,
+              message: "相对基线，响应字段可产生的类型变宽"
+            )
           )
-        )
+        } else if let field,
+          typesCompatible(tv: field.jsonType, schema: baselineProperty, direction: .response),
+          !typesCompatible(tv: field.jsonType, schema: liveProperty, direction: .response)
+        {
+          report.findings.append(
+            OpenAPIFinding(
+              severity: .failure,
+              kind: .responseFieldTypeMismatch,
+              operationID: catalogID,
+              path: childPath,
+              message: "相对基线，响应字段类型变为 TV 无法保证解码的集合"
+            )
+          )
+        }
+      } else {
+        if !schemaAcceptedJSONTypes(liveProperty).isSuperset(
+          of: schemaProducedJSONTypes(baselineProperty)
+        ) {
+          report.findings.append(
+            OpenAPIFinding(
+              severity: .failure,
+              kind: .bodyFieldTypeMismatch,
+              operationID: catalogID,
+              path: childPath,
+              message: "相对基线，请求字段可接受类型变窄"
+            )
+          )
+        }
       }
       if normalizedDefault(baselineProperty.defaultValue) != normalizedDefault(liveProperty.defaultValue) {
         report.findings.append(
@@ -826,7 +1012,7 @@ enum OpenAPIContractChecker {
             severity: .review,
             kind: .defaultChanged,
             operationID: catalogID,
-            path: "\(location).\(name)",
+            path: childPath,
             message: "相对基线，字段默认值发生变化"
           )
         )
@@ -837,8 +1023,60 @@ enum OpenAPIContractChecker {
             severity: .review,
             kind: .deprecated,
             operationID: catalogID,
-            path: "\(location).\(name)",
+            path: childPath,
             message: "相对基线新增废弃标记"
+          )
+        )
+      }
+
+      compareSchemaBaseline(
+        catalogID: catalogID,
+        location: childPath,
+        live: liveProperty,
+        baseline: baselineProperty,
+        roundTrip: roundTrip,
+        direction: direction,
+        catalogFields: [],
+        expectsValue: true,
+        depth: depth + 1,
+        into: &report
+      )
+    }
+  }
+
+  private static func compareRequiredSets(
+    catalogID: String,
+    location: String,
+    live: OpenAPISchema,
+    baseline: OpenAPISchema,
+    direction: CompatibilityDirection,
+    catalogFields: [TVAPIField],
+    into report: inout OpenAPIContractReport
+  ) {
+    let removed = baseline.required.subtracting(live.required)
+    let added = live.required.subtracting(baseline.required)
+    if direction == .response {
+      for name in removed.sorted() {
+        report.findings.append(
+          OpenAPIFinding(
+            severity: .failure,
+            kind: .responseFieldPresence,
+            operationID: catalogID,
+            path: "\(location).\(name)",
+            message: "相对基线，响应字段从 required 中移除，键可以缺失"
+          )
+        )
+      }
+    } else {
+      for name in added.sorted() {
+        let alwaysSent = catalogFields.contains { $0.name == name && $0.alwaysSent }
+        report.findings.append(
+          OpenAPIFinding(
+            severity: alwaysSent ? .review : .failure,
+            kind: .missingRequiredBodyField,
+            operationID: catalogID,
+            path: "\(location).\(name)",
+            message: "相对基线，请求字段加入 required，键必须出现"
           )
         )
       }
@@ -946,7 +1184,10 @@ enum OpenAPIContractChecker {
       return false
     }
     if let path = exception.path, !path.isEmpty {
-      return finding.path == path || finding.path.hasPrefix(path)
+      return finding.path == path
+        || finding.path.hasPrefix(path)
+        || finding.path.hasSuffix(".\(path)")
+        || finding.path.hasSuffix("[].\(path)")
     }
     return true
   }
@@ -962,18 +1203,19 @@ enum OpenAPIContractChecker {
     location: TVAPIParameter.Location
   ) -> Bool {
     if location == .query || location == .path || location == .header {
-      let queryCompatible: Set<String> = ["string", "integer", "number", "boolean"]
-      if tv == .string || tv == .flexibleString || tv == .integer || tv == .number
-        || tv == .boolean || tv == .flexibleBool
-      {
-        return schema.types.isEmpty
-          || !schema.types.subtracting(["null"]).isDisjoint(with: queryCompatible)
-          || schema.kind == .union
-          || schema.kind == .string
-          || schema.kind == .integer
-          || schema.kind == .number
-          || schema.kind == .boolean
+      let sent = tvSentJSONTypes(tv)
+      let accepted = schemaAcceptedJSONTypes(schema)
+      if tv == .string || tv == .flexibleString {
+        return accepted.contains("string")
       }
+      if tv == .integer {
+        return accepted.contains("integer") || accepted.contains("number")
+          || accepted.contains("string")
+      }
+      if tv == .boolean || tv == .flexibleBool {
+        return accepted.contains("boolean") || accepted.contains("string")
+      }
+      return sent.isSubset(of: accepted)
     }
     return typesCompatible(tv: tv, schema: schema, direction: .request)
   }
@@ -983,29 +1225,109 @@ enum OpenAPIContractChecker {
     schema: OpenAPISchema,
     direction: CompatibilityDirection
   ) -> Bool {
-    if schema.kind == .opaque || schema.kind == .recursive || schema.kind == .union {
-      if tv == .json || tv == .object { return true }
+    if schema.kind == .opaque || schema.kind == .recursive {
+      return tv == .json || tv == .object
     }
-    let types = schema.types.subtracting(["null"])
+    if direction == .response {
+      if schema.kind == .union, !schema.alternatives.isEmpty {
+        return schema.alternatives.allSatisfy {
+          typesCompatible(tv: tv, schema: $0, direction: .response)
+        }
+      }
+      return schemaProducedJSONTypes(schema).isSubset(of: tvDecodableJSONTypes(tv))
+    }
+    if schema.kind == .union, !schema.alternatives.isEmpty {
+      return schema.alternatives.contains {
+        typesCompatible(tv: tv, schema: $0, direction: .request)
+      }
+    }
+    return tvSentJSONTypes(tv).isSubset(of: schemaAcceptedJSONTypes(schema))
+  }
+
+  private static func tvSentJSONTypes(_ tv: TVJSONType) -> Set<String> {
     switch tv {
     case .string, .flexibleString:
-      return types.isEmpty || types.contains("string")
+      return ["string"]
     case .integer:
-      return types.contains("integer") || types.contains("number")
+      return ["integer"]
     case .number:
-      return types.contains("number") || types.contains("integer")
+      return ["number", "integer"]
     case .boolean, .flexibleBool:
-      return types.contains("boolean") || types.contains("integer")
+      return ["boolean"]
     case .array:
-      return types.contains("array") || schema.kind == .array
+      return ["array"]
     case .object:
-      return types.contains("object") || schema.kind == .object || schema.kind == .opaque
+      return ["object"]
     case .json:
-      if direction == .response { return true }
-      return types.contains("object") || types.contains("array") || schema.kind == .object
-        || schema.kind == .array || schema.kind == .opaque || schema.kind == .union
-        || schema.kind == .recursive
+      return ["object", "array"]
     }
+  }
+
+  private static func tvDecodableJSONTypes(_ tv: TVJSONType) -> Set<String> {
+    switch tv {
+    case .string:
+      return ["string"]
+    case .flexibleString:
+      return ["string", "integer", "number"]
+    case .integer:
+      return ["integer"]
+    case .number:
+      return ["integer", "number"]
+    case .boolean:
+      return ["boolean"]
+    case .flexibleBool:
+      return ["boolean", "integer", "string"]
+    case .array:
+      return ["array"]
+    case .object:
+      return ["object"]
+    case .json:
+      return ["string", "integer", "number", "boolean", "array", "object"]
+    }
+  }
+
+  private static func schemaProducedJSONTypes(_ schema: OpenAPISchema) -> Set<String> {
+    if schema.kind == .union, !schema.alternatives.isEmpty {
+      return Set(schema.alternatives.flatMap { schemaProducedJSONTypes($0) })
+    }
+    if schema.kind == .array { return ["array"] }
+    if schema.kind == .object { return ["object"] }
+    if schema.kind == .opaque || schema.kind == .recursive { return ["object"] }
+    return schema.types.subtracting(["null"])
+  }
+
+  private static func schemaAcceptedJSONTypes(_ schema: OpenAPISchema) -> Set<String> {
+    if schema.kind == .union, !schema.alternatives.isEmpty {
+      return Set(schema.alternatives.flatMap { schemaAcceptedJSONTypes($0) })
+    }
+    var accepted: Set<String> = []
+    for type in schema.types.subtracting(["null"]) {
+      switch type {
+      case "number":
+        accepted.formUnion(["number", "integer"])
+      case "integer":
+        accepted.insert("integer")
+      case "string":
+        accepted.insert("string")
+      case "boolean":
+        accepted.insert("boolean")
+      case "array":
+        accepted.insert("array")
+      case "object":
+        accepted.insert("object")
+      default:
+        break
+      }
+    }
+    if accepted.isEmpty {
+      if schema.kind == .string { accepted.insert("string") }
+      if schema.kind == .integer { accepted.insert("integer") }
+      if schema.kind == .number { accepted.formUnion(["number", "integer"]) }
+      if schema.kind == .boolean { accepted.insert("boolean") }
+      if schema.kind == .array { accepted.insert("array") }
+      if schema.kind == .object || schema.kind == .opaque { accepted.insert("object") }
+    }
+    return accepted
   }
 
   private static func normalizedDefault(_ value: JSONValue?) -> String {

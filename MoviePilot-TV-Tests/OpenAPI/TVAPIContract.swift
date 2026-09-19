@@ -28,7 +28,10 @@ enum TVJSONType: String, Equatable {
 struct TVAPIField: Equatable {
   let name: String
   let jsonType: TVJSONType
+  /// TV 解码时该键必须出现（`decode` 而非 `decodeIfPresent`）。
   let required: Bool
+  /// TV 请求体每次都会写出该键，包括显式 null。
+  let alwaysSent: Bool
 }
 
 enum TVAPIResponseKind: Equatable {
@@ -189,8 +192,18 @@ enum TVAPIParam {
 }
 
 enum TVAPIFields {
-  static func field(_ name: String, _ type: TVJSONType, required: Bool = false) -> TVAPIField {
-    TVAPIField(name: name, jsonType: type, required: required)
+  static func field(
+    _ name: String,
+    _ type: TVJSONType,
+    required: Bool = false,
+    alwaysSent: Bool? = nil
+  ) -> TVAPIField {
+    TVAPIField(
+      name: name,
+      jsonType: type,
+      required: required,
+      alwaysSent: alwaysSent ?? required
+    )
   }
 
   static let subscribeRequired: [TVAPIField] = [
@@ -702,13 +715,13 @@ enum TVAPIContractCatalog {
       [
         TVAPIOperationBuilder.get(
           "/\(source)/person/{person_id}",
-          pathParams: [TVAPIParam.path("person_id")],
+          pathParams: [TVAPIParam.path("person_id", type: .integer)],
           coverage: readDecode
         ),
         TVAPIOperationBuilder.get(
           "/\(source)/person/credits/{person_id}",
           query: [TVAPIParam.query("page", type: .integer)],
-          pathParams: [TVAPIParam.path("person_id")],
+          pathParams: [TVAPIParam.path("person_id", type: .integer)],
           coverage: read
         ),
       ]
@@ -839,7 +852,7 @@ enum TVAPIContractCatalog {
           TVAPIParam.query("deletesrc", alwaysSent: true, type: .boolean),
           TVAPIParam.query("deletedest", alwaysSent: true, type: .boolean),
         ],
-        body: [TVAPIFields.field("id", .integer)],
+        body: [TVAPIFields.field("id", .integer, required: true, alwaysSent: true)],
         coverage: [.urlProtocol]
       ),
       TVAPIOperationBuilder.mutation(
@@ -869,6 +882,7 @@ enum TVAPIContractCatalog {
           TVAPIFields.field("min_filesize", .integer),
           TVAPIFields.field("scrape", .boolean),
           TVAPIFields.field("from_history", .boolean),
+          TVAPIFields.field("transfer_type", .string, alwaysSent: true),
           TVAPIFields.field("type_name", .string),
           TVAPIFields.field("tmdbid", .integer),
           TVAPIFields.field("doubanid", .string),

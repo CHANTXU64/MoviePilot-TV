@@ -435,8 +435,366 @@ final class OpenAPIContractOfflineTests: XCTestCase {
     let normalized = TVAPIContractSourceScanner.normalizeSourcePath("/subscribe/\\(id)")
     XCTAssertTrue(OpenAPIPathIndex.pathsMatch(normalized, "/subscribe/{subscribe_id}"))
   }
+
+  func testResponseRequiredRemovedWithoutNullableChangeIsFailure() throws {
+    let baseline = try makeDocument(
+      paths: [
+        "/api/v1/subscribe/": .object([
+          "get": arrayGET(
+            itemProperties: ["name": .object(["type": .string("string")])],
+            required: ["name"]
+          )
+        ])
+      ]
+    )
+    let live = try makeDocument(
+      paths: [
+        "/api/v1/subscribe/": .object([
+          "get": arrayGET(
+            itemProperties: ["name": .object(["type": .string("string")])],
+            required: []
+          )
+        ])
+      ]
+    )
+    let catalog = [
+      TVAPIOperationBuilder.get(
+        "/subscribe/",
+        requiredResponse: [TVAPIFields.field("name", .string, required: true)],
+        coverage: [.liveReadOnly]
+      )
+    ]
+    let report = OpenAPIContractChecker.check(live: live, baseline: baseline, catalog: catalog)
+    XCTAssertTrue(
+      report.failures.contains {
+        $0.kind == .responseFieldPresence && $0.path.contains("name")
+      },
+      report.formattedDescription
+    )
+  }
+
+  func testRequestFieldBecomingRequiredWhileStillNullableIsFailureIfNotAlwaysSent() throws {
+    let optionalNote: [String: JSONValue] = [
+      "name": .object(["type": .string("string")]),
+      "note": .object([
+        "anyOf": .array([
+          .object(["type": .string("string")]),
+          .object(["type": .string("null")]),
+        ])
+      ]),
+    ]
+    let baseline = try makeDocument(
+      paths: [
+        "/api/v1/subscribe/": .object([
+          "put": bodyOperation(properties: optionalNote, required: [])
+        ])
+      ]
+    )
+    let live = try makeDocument(
+      paths: [
+        "/api/v1/subscribe/": .object([
+          "put": bodyOperation(properties: optionalNote, required: ["note"])
+        ])
+      ]
+    )
+    let catalog = [
+      TVAPIOperationBuilder.mutation(
+        "PUT",
+        "/subscribe/",
+        body: [
+          TVAPIFields.field("name", .string, required: true),
+          TVAPIFields.field("note", .string, alwaysSent: false),
+        ],
+        coverage: [.liveSideEffect]
+      )
+    ]
+    let report = OpenAPIContractChecker.check(live: live, baseline: baseline, catalog: catalog)
+    XCTAssertTrue(
+      report.failures.contains { finding in
+        finding.kind == OpenAPIFindingKind.missingRequiredBodyField
+          && finding.path.contains("note")
+      },
+      report.formattedDescription
+    )
+  }
+
+  func testArrayItemNullabilityChangeIsFailure() throws {
+    let baseline = try makeDocument(
+      paths: [
+        "/api/v1/subscribe/": .object([
+          "get": arrayGET(
+            itemProperties: ["name": .object(["type": .string("string")])],
+            required: ["name"]
+          )
+        ])
+      ]
+    )
+    let live = try makeDocument(
+      paths: [
+        "/api/v1/subscribe/": .object([
+          "get": arrayGET(
+            itemProperties: [
+              "name": .object([
+                "anyOf": .array([
+                  .object(["type": .string("string")]),
+                  .object(["type": .string("null")]),
+                ])
+              ])
+            ],
+            required: ["name"]
+          )
+        ])
+      ]
+    )
+    let catalog = [
+      TVAPIOperationBuilder.get(
+        "/subscribe/",
+        requiredResponse: [TVAPIFields.field("name", .string, required: true)],
+        coverage: [.liveReadOnly]
+      )
+    ]
+    let report = OpenAPIContractChecker.check(live: live, baseline: baseline, catalog: catalog)
+    XCTAssertTrue(
+      report.failures.contains {
+        $0.kind == .responseFieldNullability && $0.path.contains("name")
+      },
+      report.formattedDescription
+    )
+  }
+
+  func testPagedListItemTypeChangeIsFailure() throws {
+    let baseline = try makeDocument(
+      paths: [
+        "/api/v1/history/transfer": .object([
+          "get": objectGET(
+            properties: [
+              "total": .object(["type": .string("integer")]),
+              "list": .object([
+                "type": .string("array"),
+                "items": .object([
+                  "type": .string("object"),
+                  "properties": .object([
+                    "id": .object(["type": .string("integer")]),
+                    "title": .object(["type": .string("string")]),
+                  ]),
+                  "required": .array([.string("id")]),
+                ]),
+              ]),
+            ],
+            required: ["list", "total"]
+          )
+        ])
+      ]
+    )
+    let live = try makeDocument(
+      paths: [
+        "/api/v1/history/transfer": .object([
+          "get": objectGET(
+            properties: [
+              "total": .object(["type": .string("integer")]),
+              "list": .object([
+                "type": .string("array"),
+                "items": .object([
+                  "type": .string("object"),
+                  "properties": .object([
+                    "id": .object(["type": .string("string")]),
+                    "title": .object(["type": .string("string")]),
+                  ]),
+                  "required": .array([.string("id")]),
+                ]),
+              ]),
+            ],
+            required: ["list", "total"]
+          )
+        ])
+      ]
+    )
+    let catalog = [
+      TVAPIOperationBuilder.get(
+        "/history/transfer",
+        dependedResponse: [
+          TVAPIFields.field("list", .array),
+          TVAPIFields.field("total", .integer),
+        ],
+        coverage: [.liveReadOnly]
+      )
+    ]
+    let report = OpenAPIContractChecker.check(live: live, baseline: baseline, catalog: catalog)
+    XCTAssertTrue(
+      report.failures.contains {
+        $0.kind == .responseFieldTypeMismatch && $0.path.contains("list") && $0.path.contains("id")
+      },
+      report.formattedDescription
+    )
+  }
+
+  func testQueryStringBecomingIntegerIsFailure() throws {
+    let live = try makeDocument(
+      paths: [
+        "/api/v1/media/search": .object([
+          "get": .object([
+            "parameters": .array([
+              .object([
+                "name": .string("title"),
+                "in": .string("query"),
+                "required": .bool(true),
+                "schema": .object(["type": .string("integer")]),
+              ])
+            ]),
+            "responses": successResponse(schema: .object(["type": .string("object")])),
+          ])
+        ])
+      ]
+    )
+    let catalog = [
+      TVAPIOperationBuilder.get(
+        "/media/search",
+        query: [TVAPIParam.query("title", alwaysSent: true)],
+        coverage: [.liveReadOnly]
+      )
+    ]
+    let report = OpenAPIContractChecker.check(live: live, baseline: nil, catalog: catalog)
+    XCTAssertTrue(report.failures.contains { $0.kind == .parameterTypeMismatch })
+  }
+
+  func testIntegerResponseBecomingNumberIsFailure() throws {
+    let baseline = try makeDocument(
+      paths: [
+        "/api/v1/history/transfer": .object([
+          "get": objectGET(
+            properties: ["total": .object(["type": .string("integer")])],
+            required: ["total"]
+          )
+        ])
+      ]
+    )
+    let live = try makeDocument(
+      paths: [
+        "/api/v1/history/transfer": .object([
+          "get": objectGET(
+            properties: ["total": .object(["type": .string("number")])],
+            required: ["total"]
+          )
+        ])
+      ]
+    )
+    let catalog = [
+      TVAPIOperationBuilder.get(
+        "/history/transfer",
+        dependedResponse: [TVAPIFields.field("total", .integer)],
+        coverage: [.liveReadOnly]
+      )
+    ]
+    let report = OpenAPIContractChecker.check(live: live, baseline: baseline, catalog: catalog)
+    XCTAssertTrue(
+      report.failures.contains {
+        $0.kind == .responseFieldTypeMismatch && $0.path.contains("total")
+      },
+      report.formattedDescription
+    )
+  }
+
+  func testUnionResponseRequiresEveryBranch() throws {
+    let live = try makeDocument(
+      paths: [
+        "/api/v1/media/search": .object([
+          "get": .object([
+            "parameters": .array([
+              .object([
+                "name": .string("title"),
+                "in": .string("query"),
+                "required": .bool(true),
+                "schema": .object(["type": .string("string")]),
+              ])
+            ]),
+            "responses": successResponse(
+              schema: .object([
+                "type": .string("array"),
+                "items": .object([
+                  "oneOf": .array([
+                    .object([
+                      "type": .string("object"),
+                      "properties": .object([
+                        "year": .object(["type": .string("string")])
+                      ]),
+                    ]),
+                    .object([
+                      "type": .string("object"),
+                      "properties": .object([
+                        "year": .object(["type": .string("integer")])
+                      ]),
+                    ]),
+                  ])
+                ]),
+              ])
+            ),
+          ])
+        ])
+      ]
+    )
+    let catalog = [
+      TVAPIOperationBuilder.get(
+        "/media/search",
+        query: [TVAPIParam.query("title", alwaysSent: true)],
+        dependedResponse: [TVAPIFields.field("year", .string)],
+        coverage: [.liveReadOnly]
+      )
+    ]
+    let report = OpenAPIContractChecker.check(live: live, baseline: nil, catalog: catalog)
+    XCTAssertTrue(
+      report.failures.contains {
+        $0.kind == .responseFieldTypeMismatch && $0.path.contains("year")
+      },
+      report.formattedDescription
+    )
+  }
+
+  func testJSONSuccessResponseMissingIsFailure() throws {
+    let live = try makeDocument(
+      paths: [
+        "/api/v1/subscribe/": .object([
+          "get": .object([
+            "responses": .object([
+              "204": .object(["description": .string("No Content")])
+            ])
+          ])
+        ])
+      ]
+    )
+    let catalog = [TVAPIOperationBuilder.get("/subscribe/", coverage: [.liveReadOnly])]
+    let report = OpenAPIContractChecker.check(live: live, baseline: nil, catalog: catalog)
+    XCTAssertTrue(report.failures.contains { $0.kind == .unverifiedSchema })
+  }
+
+  func testJSONSuccessResponseDisappearingAgainstBaselineIsFailure() throws {
+    let baseline = try makeDocument(
+      paths: [
+        "/api/v1/subscribe/": .object(["get": simpleGET()])
+      ]
+    )
+    let live = try makeDocument(
+      paths: [
+        "/api/v1/subscribe/": .object([
+          "get": .object([
+            "responses": .object([
+              "204": .object(["description": .string("No Content")])
+            ])
+          ])
+        ])
+      ]
+    )
+    let catalog = [TVAPIOperationBuilder.get("/subscribe/", coverage: [.liveReadOnly])]
+    let report = OpenAPIContractChecker.check(live: live, baseline: baseline, catalog: catalog)
+    XCTAssertTrue(
+      report.failures.contains {
+        $0.kind == .unverifiedSchema || $0.kind == .responseStructureChanged
+      },
+      report.formattedDescription
+    )
+  }
 }
 
+@MainActor
 final class OpenAPIContractCatalogIntegrityTests: XCTestCase {
   func testProductionAPIPathsAreRegisteredInCatalog() {
     let gaps = TVAPIContractSourceScanner.coverageGaps()
@@ -444,6 +802,31 @@ final class OpenAPIContractCatalogIntegrityTests: XCTestCase {
       gaps.filter { $0.kind == .sourceUnregistered }.isEmpty,
       gaps.map { "\($0.operationID): \($0.message)" }.joined(separator: "\n")
     )
+  }
+
+  @MainActor
+  func testManualTransferCatalogIncludesEncodedTransferType() throws {
+    let form = ReorganizeForm(
+      fileitem: FileItem(name: "movie.mkv", path: "/downloads/movie.mkv", type: "file", size: 1),
+      fileitems: nil,
+      logid: 7,
+      target_storage: "local",
+      transfer_type: "copy",
+      target_path: "/media",
+      min_filesize: 0,
+      scrape: false,
+      from_history: false
+    )
+    let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(form))
+    let encoded = try XCTUnwrap(object as? [String: Any])
+    let catalog = try XCTUnwrap(
+      TVAPIContractCatalog.operations.first { $0.operationID == "POST /transfer/manual" }
+    )
+    let names = Set(catalog.bodyFields.map(\.name))
+    XCTAssertTrue(names.contains("transfer_type"))
+    let missing = encoded.keys.filter { !names.contains($0) }.sorted()
+    XCTAssertTrue(missing.isEmpty, "实际编码的请求字段未登记：\(missing.joined(separator: ", "))")
+    XCTAssertEqual(encoded["transfer_type"] as? String, "copy")
   }
 }
 
@@ -470,7 +853,10 @@ private func simpleGET() -> JSONValue {
   ])
 }
 
-private func bodyOperation(properties: [String: JSONValue]) -> JSONValue {
+private func bodyOperation(
+  properties: [String: JSONValue],
+  required: [String] = []
+) -> JSONValue {
   .object([
     "requestBody": .object([
       "required": .bool(true),
@@ -478,12 +864,46 @@ private func bodyOperation(properties: [String: JSONValue]) -> JSONValue {
         "application/json": .object([
           "schema": .object([
             "type": .string("object"),
+            "required": .array(required.map { .string($0) }),
             "properties": .object(properties),
           ])
         ])
       ]),
     ]),
     "responses": successResponse(schema: .object(["type": .string("object")])),
+  ])
+}
+
+private func arrayGET(
+  itemProperties: [String: JSONValue],
+  required: [String]
+) -> JSONValue {
+  .object([
+    "responses": successResponse(
+      schema: .object([
+        "type": .string("array"),
+        "items": .object([
+          "type": .string("object"),
+          "required": .array(required.map { .string($0) }),
+          "properties": .object(itemProperties),
+        ]),
+      ])
+    )
+  ])
+}
+
+private func objectGET(
+  properties: [String: JSONValue],
+  required: [String]
+) -> JSONValue {
+  .object([
+    "responses": successResponse(
+      schema: .object([
+        "type": .string("object"),
+        "required": .array(required.map { .string($0) }),
+        "properties": .object(properties),
+      ])
+    )
   ])
 }
 
