@@ -1,0 +1,215 @@
+{
+  "version": 1,
+  "exceptions": [
+    {
+      "id": "media.search.media_source-query-array",
+      "operation": "GET /media/search",
+      "kind": "parameterTypeMismatch",
+      "path": "query.media_source",
+      "reason": "OpenAPI 将 media_source 标为 array，TV 与 Web 都发送单值字符串；FastAPI 查询参数接受单值。"
+    },
+    {
+      "id": "tmdb.collection.query-title",
+      "operation": "GET /tmdb/collection/{collection_id}",
+      "kind": "undeclaredParameter",
+      "path": "query.title",
+      "reason": "TV 与 Web 仍发送 title 用于合集页展示，OpenAPI 未声明该查询参数。"
+    },
+    {
+      "id": "search.media.query-title",
+      "operation": "GET /search/media/{media_id}",
+      "kind": "undeclaredParameter",
+      "path": "query.title",
+      "reason": "TV 按 Web 资源搜索继续发送 title/year，OpenAPI 当前只声明 media_source/mtype/area/season/sites。"
+    },
+    {
+      "id": "search.media.query-year",
+      "operation": "GET /search/media/{media_id}",
+      "kind": "undeclaredParameter",
+      "path": "query.year",
+      "reason": "TV 按 Web 资源搜索继续发送 title/year，OpenAPI 当前只声明 media_source/mtype/area/season/sites。"
+    },
+    {
+      "id": "search.media.stream.query-title",
+      "operation": "GET /search/media/{media_id}/stream",
+      "kind": "undeclaredParameter",
+      "path": "query.title",
+      "reason": "TV 流式资源搜索继续发送 title/year，OpenAPI 未声明。"
+    },
+    {
+      "id": "search.media.stream.query-year",
+      "operation": "GET /search/media/{media_id}/stream",
+      "kind": "undeclaredParameter",
+      "path": "query.year",
+      "reason": "TV 流式资源搜索继续发送 title/year，OpenAPI 未声明。"
+    },
+    {
+      "id": "subscribe.post.legacy-tmdbid",
+      "operation": "POST /subscribe/",
+      "kind": "undeclaredBodyField",
+      "path": "body.tmdbid",
+      "reason": "v3 Subscribe schema 改为 media_source/media_id；TV 仍发送专用 ID 以兼容旧后端和 Web 提交。"
+    },
+    {
+      "id": "subscribe.post.legacy-doubanid",
+      "operation": "POST /subscribe/",
+      "kind": "undeclaredBodyField",
+      "path": "body.doubanid",
+      "reason": "v3 Subscribe schema 改为 media_source/media_id；TV 仍发送专用 ID。"
+    },
+    {
+      "id": "subscribe.post.legacy-bangumiid",
+      "operation": "POST /subscribe/",
+      "kind": "undeclaredBodyField",
+      "path": "body.bangumiid",
+      "reason": "v3 Subscribe schema 改为 media_source/media_id；TV 仍发送专用 ID。"
+    },
+    {
+      "id": "subscribe.post.legacy-anilistid",
+      "operation": "POST /subscribe/",
+      "kind": "undeclaredBodyField",
+      "path": "body.anilistid",
+      "reason": "v3 Subscribe schema 改为 media_source/media_id；TV 仍发送专用 ID。"
+    },
+    {
+      "id": "subscribe.post.legacy-mediaid",
+      "operation": "POST /subscribe/",
+      "kind": "undeclaredBodyField",
+      "path": "body.mediaid",
+      "reason": "v3 Subscribe schema 改为 media_source/media_id；TV 仍发送 legacy mediaid。"
+    },
+    {
+      "id": "subscribe.put.legacy-tmdbid",
+      "operation": "PUT /subscribe/",
+      "kind": "undeclaredBodyField",
+      "path": "body.tmdbid",
+      "reason": "往返保存仍回写专用 ID，OpenAPI Subscribe 模型已不再声明这些字段。"
+    },
+    {
+      "id": "subscribe.put.legacy-doubanid",
+      "operation": "PUT /subscribe/",
+      "kind": "undeclaredBodyField",
+      "path": "body.doubanid",
+      "reason": "往返保存仍回写专用 ID，OpenAPI Subscribe 模型已不再声明这些字段。"
+    },
+    {
+      "id": "subscribe.put.legacy-bangumiid",
+      "operation": "PUT /subscribe/",
+      "kind": "undeclaredBodyField",
+      "path": "body.bangumiid",
+      "reason": "往返保存仍回写专用 ID，OpenAPI Subscribe 模型已不再声明这些字段。"
+    },
+    {
+      "id": "subscribe.put.legacy-anilistid",
+      "operation": "PUT /subscribe/",
+      "kind": "undeclaredBodyField",
+      "path": "body.anilistid",
+      "reason": "往返保存仍回写专用 ID，OpenAPI Subscribe 模型已不再声明这些字段。"
+    },
+    {
+      "id": "subscribe.put.legacy-mediaid",
+      "operation": "PUT /subscribe/",
+      "kind": "undeclaredBodyField",
+      "path": "body.mediaid",
+      "reason": "往返保存仍回写 legacy mediaid，OpenAPI Subscribe 模型已不再声明。"
+    },
+    {
+      "id": "subscribe.list.legacy-tmdbid",
+      "operation": "GET /subscribe/",
+      "kind": "responseFieldMissing",
+      "path": "response.tmdbid",
+      "reason": "TV 仍解码专用 ID；OpenAPI Subscribe 改为 media_source/media_id，运行响应可能仍带回这些字段。"
+    },
+    {
+      "id": "subscribe.list.legacy-doubanid",
+      "operation": "GET /subscribe/",
+      "kind": "responseFieldMissing",
+      "path": "response.doubanid",
+      "reason": "TV 仍解码专用 ID；OpenAPI Subscribe 改为 media_source/media_id。"
+    },
+    {
+      "id": "subscribe.list.legacy-bangumiid",
+      "operation": "GET /subscribe/",
+      "kind": "responseFieldMissing",
+      "path": "response.bangumiid",
+      "reason": "TV 仍解码专用 ID；OpenAPI Subscribe 改为 media_source/media_id。"
+    },
+    {
+      "id": "subscribe.list.legacy-anilistid",
+      "operation": "GET /subscribe/",
+      "kind": "responseFieldMissing",
+      "path": "response.anilistid",
+      "reason": "TV 仍解码专用 ID；OpenAPI Subscribe 改为 media_source/media_id。"
+    },
+    {
+      "id": "subscribe.list.legacy-mediaid",
+      "operation": "GET /subscribe/",
+      "kind": "responseFieldMissing",
+      "path": "response.mediaid",
+      "reason": "TV 仍解码 legacy mediaid；OpenAPI Subscribe 已不再声明。"
+    },
+    {
+      "id": "subscribe.detail.legacy-tmdbid",
+      "operation": "GET /subscribe/{subscribe_id}",
+      "kind": "responseFieldMissing",
+      "path": "response.tmdbid",
+      "reason": "TV 仍解码专用 ID；OpenAPI Subscribe 改为 media_source/media_id。"
+    },
+    {
+      "id": "subscribe.detail.legacy-doubanid",
+      "operation": "GET /subscribe/{subscribe_id}",
+      "kind": "responseFieldMissing",
+      "path": "response.doubanid",
+      "reason": "TV 仍解码专用 ID；OpenAPI Subscribe 改为 media_source/media_id。"
+    },
+    {
+      "id": "subscribe.detail.legacy-bangumiid",
+      "operation": "GET /subscribe/{subscribe_id}",
+      "kind": "responseFieldMissing",
+      "path": "response.bangumiid",
+      "reason": "TV 仍解码专用 ID；OpenAPI Subscribe 改为 media_source/media_id。"
+    },
+    {
+      "id": "subscribe.detail.legacy-anilistid",
+      "operation": "GET /subscribe/{subscribe_id}",
+      "kind": "responseFieldMissing",
+      "path": "response.anilistid",
+      "reason": "TV 仍解码专用 ID；OpenAPI Subscribe 改为 media_source/media_id。"
+    },
+    {
+      "id": "subscribe.detail.legacy-mediaid",
+      "operation": "GET /subscribe/{subscribe_id}",
+      "kind": "responseFieldMissing",
+      "path": "response.mediaid",
+      "reason": "TV 仍解码 legacy mediaid；OpenAPI Subscribe 已不再声明。"
+    },
+    {
+      "id": "transfer.manual.legacy-tmdbid",
+      "operation": "POST /transfer/manual",
+      "kind": "undeclaredBodyField",
+      "path": "body.tmdbid",
+      "reason": "整理表单仍发送专用 ID；OpenAPI ManualTransferItem 使用 media_source/media_id。"
+    },
+    {
+      "id": "transfer.manual.legacy-doubanid",
+      "operation": "POST /transfer/manual",
+      "kind": "undeclaredBodyField",
+      "path": "body.doubanid",
+      "reason": "整理表单仍发送专用 ID；OpenAPI ManualTransferItem 使用 media_source/media_id。"
+    },
+    {
+      "id": "transfer.manual.legacy-bangumiid",
+      "operation": "POST /transfer/manual",
+      "kind": "undeclaredBodyField",
+      "path": "body.bangumiid",
+      "reason": "整理表单仍发送专用 ID；OpenAPI ManualTransferItem 使用 media_source/media_id。"
+    },
+    {
+      "id": "transfer.manual.legacy-anilistid",
+      "operation": "POST /transfer/manual",
+      "kind": "undeclaredBodyField",
+      "path": "body.anilistid",
+      "reason": "整理表单仍发送专用 ID；OpenAPI ManualTransferItem 使用 media_source/media_id。"
+    }
+  ]
+}

@@ -8,6 +8,8 @@
 
 真实后端兼容测试分为只读套件和副作用套件。副作用套件默认关闭；只有显式设置 `MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS=true` 才会触发订阅搜索、原参数保存订阅、暂停/恢复订阅、重置订阅、手动重新整理和 AI 重新整理等真实后台动作。
 
+只读套件还包含独立的 OpenAPI 契约检查：对配置的同一个后端读取一次 `GET {baseURL}/api/v1/openapi.json`，核对 TV 已用接口的路径、方法、参数、必填性和响应结构，并输出覆盖缺口与待审查变更。它不执行保存、删除、下载等写操作，也不能代替真实调用测试。读取失败、返回登录页或遇到暂不支持的 schema 记为该项失败，不会改走公共文档站。已确认兼容的 OpenAPI 基线保存在 `MoviePilot-TV-Tests/OpenAPI/Fixtures/openapi-baseline.json`；发现差异后必须经审查再更新基线，测试本身不会自动覆盖。解析、分级和基线比较的离线用例走普通 CI，不访问真实后端。
+
 配置完成后运行 Xcode 测试：
 
 ```sh
@@ -34,11 +36,11 @@ xcodebuild test \
 
 图片巡检尤其要遵守这一点。TV 图片请求失败时，测试应按 MP Web 的图片 URL 规则生成等价请求；若 Web 等价请求也失败，或原始图片值为空、非可请求 URL，导致 Web 本来也没有可下载图片，则应计入 Web 对齐失败并继续。只有 MP Web 等价图片能正常获取，而 TV 端图片失败，才应判定为 TV 端兼容问题。
 
-GitHub CI 没有真实后端账号，`ci.yml` 会显式跳过 `BackendCompatibilityReadOnlyTests` 和 `BackendCompatibilitySideEffectTests`。真实后端兼容测试应在本机或用户指定的带后端配置环境中运行。
+GitHub CI 没有真实后端账号，`ci.yml` 会显式跳过 `BackendCompatibilityReadOnlyTests` 和 `BackendCompatibilitySideEffectTests`。真实后端兼容测试应在本机或用户指定的带后端配置环境中运行。OpenAPI 离线契约测试属于普通 XCTest，CI 会运行；针对真实实例的 `testReadOnlyOpenAPIContractCompatibility` 仍留在只读套件内，随真实后端配置执行。
 
 ## 真实后端只读套件
 
-`.env.compatibility` 用于真实 MoviePilot 后端的兼容性检查。已配置时，只读套件会登录后端，巡检 TV 页面使用的 API、模型和部分生产 ViewModel 入口：系统配置、仪表盘、站点/下载器/目录配置、订阅读取、媒体服务器最近添加、下载中任务、推荐货架、发现页、搜索、详情页、演员/人物和分季数据。文档会明确哪些流程只验证 API/模型，不能把它们表述成完整页面交互测试。未配置时，这组测试会自动跳过。
+`.env.compatibility` 用于真实 MoviePilot 后端的兼容性检查。已配置时，只读套件会登录后端，巡检 TV 页面使用的 API、模型和部分生产 ViewModel 入口，并额外读取同一实例的 OpenAPI 做已用接口契约检查：系统配置、仪表盘、站点/下载器/目录配置、订阅读取、媒体服务器最近添加、下载中任务、推荐货架、发现页、搜索、详情页、演员/人物和分季数据。文档会明确哪些流程只验证 API/模型，不能把它们表述成完整页面交互测试。未配置时，这组测试会自动跳过。
 
 使用普通账号巡检订阅时，测试还会断言 `/subscribe/` 返回记录的 `username` 都属于当前账号，以覆盖 MoviePilot v2.14.2 起的订阅所有权隔离；超级用户仍按后端契约读取全局订阅。
 
@@ -49,6 +51,18 @@ GitHub CI 没有真实后端账号，`ci.yml` 会显式跳过 `BackendCompatibil
 - `testReadOnlySystemAndConfigurationCompatibility` 验证配置读取、站点、下载器和目录等 TV 页面入口；`Storages`、`Directories`、`IndexerSites` 通过登录用户可读的 `/system/setting/public/{key}` 读取，写配置仍由后端限制为超管。`MediaServers`、`UserFilterRuleGroups`、`CustomFilterRules` 仍按上游现有接口读取，只由超管账号巡检，非超管 TV 端不预加载这些自定义规则配置。
 
 巡检采集到的海报、背景图、头像和媒体服务器图片都会实际下载，并在 tvOS XCTest 运行环境中用系统图片解码能力验证；如果后端改成 Apple TV 不支持的图片格式，即使 API 返回正常也会失败。测试也会检查图片代理 URL 是否把内层 query/fragment 正确保留，避免图片地址被外层参数截断。
+
+OpenAPI 契约检查只核对声明，不证明运行行为一定兼容。自定义 Response、权限实际执行、字段间业务约束、SSE 结束语义，以及“保存成功后是否正确启用订阅”等，仍由原有真实调用测试覆盖。分级规则：
+
+| 检查项 | 处理 |
+| --- | --- |
+| TV 使用的路径、HTTP 方法消失或改变 | 兼容失败 |
+| TV 发出的参数不再被声明，或后端新增必填参数而 TV 没有提供 | 不匹配；已确认例外登记在 `openapi-exceptions.json` |
+| TV 依赖的响应字段、类型、可空性或返回结构不兼容 | 失败 |
+| 已用接口相对基线新增字段、默认值变化、标记废弃 | 待审查；审查后再更新基线 |
+| 新增无关接口、修改描述文字、调整文档顺序 | 不作为兼容失败 |
+
+覆盖缺口会对照三份集合：TV 实际依赖的接口、已有测试覆盖的接口、后端 OpenAPI 声明的接口。动态发现/推荐路径按 `/discover/source` 与 `/recommend/source` 的 `api_path` 处理，不要求 TV 覆盖后端全部接口。
 
 这组测试不会新增订阅、删除订阅、添加下载、暂停/恢复下载、重置订阅、触发订阅搜索或执行整理任务。可选的 `MOVIEPILOT_COMPAT_METADATA_QUERY` / `MOVIEPILOT_COMPAT_METADATA_QUERIES` 只用于媒体元数据搜索和详情读取；人物搜索使用独立的 `MOVIEPILOT_COMPAT_PERSON_QUERY` / `MOVIEPILOT_COMPAT_PERSON_QUERIES`，未配置时默认查询“易中天”，避免拿媒体标题作为人物搜索词。如果媒体搜索结果包含合集，还会继续读取合集详情。也可以用 `MOVIEPILOT_COMPAT_COLLECTION_ID` / `MOVIEPILOT_COMPAT_COLLECTION_IDS` 直接指定合集 ID。
 
