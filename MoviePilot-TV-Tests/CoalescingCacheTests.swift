@@ -248,6 +248,51 @@ final class CoalescingCacheTests: XCTestCase {
     XCTAssertEqual(probe.loadCount, 2)
   }
 
+  func testWaiterOnOldestLoadFollowsEveryLaterForcedRefresh() async throws {
+    let outcomes: [(middle: Result<String, CoalescingCacheTestError>,
+      latest: Result<String, CoalescingCacheTestError>)] = [
+        (.success("middle"), .success("latest")),
+        (.failure(.stale), .success("latest")),
+        (.success("middle"), .failure(.latest)),
+        (.failure(.stale), .failure(.latest)),
+      ]
+
+    for outcome in outcomes {
+      let cache = CoalescingCache<String, String>(ttl: 60, capacity: 10)
+      let oldestGate = LoadGate()
+      let probe = LoadProbe()
+
+      let oldest = Task { () -> Result<String, CoalescingCacheTestError> in
+        do {
+          let value = try await cache.value(for: "key", validate: {}) {
+            probe.loadCount += 1
+            await oldestGate.wait()
+            return "oldest"
+          }
+          return .success(value)
+        } catch {
+          return .failure(error as? CoalescingCacheTestError ?? .rejected)
+        }
+      }
+      await oldestGate.waitForArrival()
+
+      // 中间强刷完成且其调用方已返回后，再来一次强刷；最早的调用仍要跟到最后一次。
+      _ = try? await cache.value(for: "key", forceRefresh: true, validate: {}) {
+        probe.loadCount += 1
+        return try outcome.middle.get()
+      }
+      _ = try? await cache.value(for: "key", forceRefresh: true, validate: {}) {
+        probe.loadCount += 1
+        return try outcome.latest.get()
+      }
+      oldestGate.open()
+
+      let oldestResult = await oldest.value
+      XCTAssertEqual(oldestResult, outcome.latest)
+      XCTAssertEqual(probe.loadCount, 3)
+    }
+  }
+
   func testForcedRefreshStartedBeforeCompletedWaiterResumesSupersedesIt() async throws {
     let cache = CoalescingCache<String, String>(ttl: 60, capacity: 10)
     let firstGate = LoadGate()

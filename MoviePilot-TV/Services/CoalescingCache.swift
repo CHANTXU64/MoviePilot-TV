@@ -4,9 +4,9 @@ import Foundation
 /// 调用方只提供 key、加载闭包和自身的校验（会话快照、任务取消）。
 ///
 /// - 普通读取：命中未过期缓存直接返回；否则加入同 key 仍在运行的加载，没有才发起新加载。
-/// - 强制刷新：跳过缓存发起新加载，并把同 key 的上一个加载（包括已完成但仍有等待者未返回的）
-///   标记为被它取代。被取代加载的成功或失败既不写缓存，也不返回；它的等待者沿取代链等待最新加载，
-///   拿到最新加载的成功或失败。
+/// - 强制刷新：跳过缓存发起新加载。同 key 每次新加载都接在上一个加载之后形成取代链；
+///   只要该 key 还有调用者在等待，链尾就一直保留，之后的加载都能接上。被取代加载的成功或失败
+///   既不写缓存，也不返回；它的等待者沿取代链走到链尾，拿到最新加载的成功或失败。
 /// - `invalidateAll()`：推进代际并清空缓存。在途加载不取消（可能正在执行重登等不可中断流程），
 ///   但其成功结果不再写缓存，等待者按新代际重新读取；其失败照常抛给等待者。
 /// - 未被取代的加载失败时直接抛给它的全部等待者，不写缓存、不自动重试。
@@ -15,12 +15,9 @@ import Foundation
 final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
   private final class FlightState {
     let generation: UInt64
-    /// 取代本次加载的强制刷新。
+    /// 同 key 在本次之后发起的下一个加载。
     var successor: Flight?
     var isFinished = false
-    /// 尚未恢复的等待者数。归零且已完成后才从 `latestFlights` 移除，
-    /// 保证完成后、等待者恢复前开始的强刷仍能取代它。
-    var waiterCount = 0
 
     init(generation: UInt64) {
       self.generation = generation
@@ -42,8 +39,11 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
   private let renewsTTLOnAccess: Bool
   private let now: () -> Date
   private var entries: [Key: Entry] = [:]
-  /// 每个 key 最近发起的加载；运行中或仍有等待者未返回时保留。
+  /// 每个 key 最近发起的加载（取代链的链尾）；运行中或该 key 仍有调用者等待时保留。
   private var latestFlights: [Key: Flight] = [:]
+  /// 每个 key 仍在 `value(for:)` 内的调用者数。按 key 而不按单个加载计数：
+  /// 仍阻塞在链上较早加载的调用者，之后也会沿链走到链尾。
+  private var activeCallers: [Key: Int] = [:]
   private var generation: UInt64 = 0
 
   init(
@@ -64,6 +64,8 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
     validate: () throws -> Void,
     load: @escaping @MainActor () async throws -> Value
   ) async throws -> Value {
+    activeCallers[key, default: 0] += 1
+    defer { endCall(for: key) }
     var startsNewLoad = forceRefresh
     while true {
       try validate()
@@ -75,14 +77,14 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
       if !startsNewLoad, let running = latestFlights[key], !running.state.isFinished {
         flight = running
       } else {
-        flight = startFlight(for: key, supersedesLatest: startsNewLoad, load: load)
+        flight = startFlight(for: key, load: load)
       }
       startsNewLoad = false
 
-      var result = await awaitResult(of: flight, key: key)
+      var result = await flight.task.value
       while let successor = flight.state.successor {
         flight = successor
-        result = await awaitResult(of: flight, key: key)
+        result = await flight.task.value
       }
 
       switch result {
@@ -122,7 +124,6 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
 
   private func startFlight(
     for key: Key,
-    supersedesLatest: Bool,
     load: @escaping @MainActor () async throws -> Value
   ) -> Flight {
     let state = FlightState(generation: generation)
@@ -137,34 +138,34 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
       return result
     }
     let flight = Flight(state: state, task: task)
-    if supersedesLatest {
-      latestFlights[key]?.state.successor = flight
-    }
+    // 普通读取只在链尾已完成时才会新发加载，因此无论是否强刷，都接在链尾之后。
+    latestFlights[key]?.state.successor = flight
     latestFlights[key] = flight
     return flight
   }
 
-  private func awaitResult(of flight: Flight, key: Key) async -> Result<Value, Error> {
-    flight.state.waiterCount += 1
-    let result = await flight.task.value
-    flight.state.waiterCount -= 1
-    releaseIfSettled(flight.state, key: key)
-    return result
-  }
-
   private func finish(key: Key, state: FlightState, result: Result<Value, Error>) {
     state.isFinished = true
-    releaseIfSettled(state, key: key)
+    releaseLatestIfSettled(for: key)
     guard state.successor == nil, state.generation == generation,
       case .success(let value) = result
     else { return }
     store(value, for: key)
   }
 
-  private func releaseIfSettled(_ state: FlightState, key: Key) {
-    guard state.isFinished, state.waiterCount == 0,
-      latestFlights[key]?.state === state
-    else { return }
+  private func endCall(for key: Key) {
+    let remaining = (activeCallers[key] ?? 1) - 1
+    if remaining > 0 {
+      activeCallers[key] = remaining
+    } else {
+      activeCallers.removeValue(forKey: key)
+    }
+    releaseLatestIfSettled(for: key)
+  }
+
+  /// 链尾已完成且该 key 没有调用者在等待时，不会再有人沿链走到它，才释放。
+  private func releaseLatestIfSettled(for key: Key) {
+    guard activeCallers[key] == nil, latestFlights[key]?.state.isFinished == true else { return }
     latestFlights.removeValue(forKey: key)
   }
 
