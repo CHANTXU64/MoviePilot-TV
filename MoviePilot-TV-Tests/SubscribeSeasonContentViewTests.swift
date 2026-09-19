@@ -553,6 +553,72 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(subscribeRequestCount, 1)
   }
 
+  func testStaleSnapshotFailureAfterMutationRereadsLatestSnapshot() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    let staleGate = SubscriptionSnapshotAsyncGate()
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueServerError(waitFor: staleGate)
+    try await SubscriptionSnapshotURLProtocol.stub.enqueueSubscriptions([
+      Subscribe(id: 905, name: "变更后订阅", type: "电视剧", season: 1, tmdbid: 817_005)
+    ])
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+
+    let staleRefresh = Task {
+      try await service.fetchSubscriptions(forceRefresh: true)
+    }
+    await staleGate.waitForWaiter()
+
+    let searchSuccess = try await service.searchSubscription(id: 905)
+    XCTAssertTrue(searchSuccess)
+    let latestSubscriptions = try await service.fetchSubscriptions(forceRefresh: true)
+    await staleGate.open()
+
+    // 变更前发起的旧刷新随后失败时，调用方应重读到变更后的列表，而不是收到旧请求的错误。
+    let staleCallerSubscriptions = try await staleRefresh.value
+    XCTAssertEqual(latestSubscriptions.map(\.id), [905])
+    XCTAssertEqual(staleCallerSubscriptions.map(\.id), [905])
+    let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(subscribeRequestCount, 2)
+  }
+
+  func testQueuedSubscriptionSnapshotLoadDoesNotRunUnderNewSession() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions([])
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service, userName: "first-user")
+
+    let firstSessionFetch = Task { () -> Bool in
+      do {
+        _ = try await service.fetchSubscriptions()
+        return false
+      } catch {
+        return error is CancellationError
+      }
+    }
+    // 调用方已创建共享加载任务、加载任务尚未执行时切换账号。
+    await Task.yield()
+    configureSubscriptionSnapshotAccess(service, userName: "second-user", userId: 2)
+
+    let wasCancelled = await firstSessionFetch.value
+    XCTAssertTrue(wasCancelled)
+    let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(subscribeRequestCount, 0)
+  }
+
   func testMultiSeasonDetailCanRefreshAfterSeasonSubscriptionFailure() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
@@ -2102,27 +2168,6 @@ private struct SubscriptionSnapshotServiceSnapshot {
     } else {
       UserDefaults.standard.removeObject(forKey: account)
     }
-  }
-}
-
-private final class APICacheTestClock: @unchecked Sendable {
-  private let lock = NSLock()
-  private var currentDate: Date
-
-  init(start: Date) {
-    self.currentDate = start
-  }
-
-  func now() -> Date {
-    lock.lock()
-    defer { lock.unlock() }
-    return currentDate
-  }
-
-  func advance(by interval: TimeInterval) {
-    lock.lock()
-    currentDate = currentDate.addingTimeInterval(interval)
-    lock.unlock()
   }
 }
 

@@ -524,105 +524,6 @@ nonisolated private func decodeStrictActionResponseSync(from data: Data) throws 
   )
 }
 
-/// 泛型轻量级接口缓存，带过期及淘汰策略
-actor APICache<Key: Hashable, Value> {
-  struct LoadToken: Equatable, Sendable {
-    fileprivate let revision: UInt64
-  }
-
-  private struct CacheEntry {
-    let value: Value
-    var expiresAt: Date
-  }
-
-  private var cache: [Key: CacheEntry] = [:]
-  private var activeLoadRevisions: [Key: UInt64] = [:]
-  private let defaultTTL: TimeInterval
-  private let size: Int
-  private let renewsTTLOnAccess: Bool
-
-  init(
-    defaultTTL: TimeInterval = 60,
-    size: Int = 50,
-    renewsTTLOnAccess: Bool = true
-  ) {
-    self.defaultTTL = defaultTTL
-    self.size = size
-    self.renewsTTLOnAccess = renewsTTLOnAccess
-  }
-
-  func get(_ key: Key) -> Value? {
-    guard var entry = cache[key] else { return nil }
-
-    let currentDate = Date()
-    if currentDate > entry.expiresAt {
-      cache.removeValue(forKey: key)
-      return nil
-    }
-
-    if renewsTTLOnAccess {
-      // 访问时“续期”，变相实现了 LRU
-      entry.expiresAt = currentDate.addingTimeInterval(defaultTTL)
-      cache[key] = entry
-    }
-
-    return entry.value
-  }
-
-  func set(_ key: Key, value: Value, ttl: TimeInterval? = nil) {
-    activeLoadRevisions.removeValue(forKey: key)
-    store(key, value: value, ttl: ttl)
-  }
-
-  func beginLoad(_ key: Key, revision: UInt64) -> LoadToken {
-    if revision > activeLoadRevisions[key, default: 0] {
-      activeLoadRevisions[key] = revision
-    }
-    return LoadToken(revision: revision)
-  }
-
-  func setIfCurrent(
-    _ key: Key,
-    value: Value,
-    token: LoadToken,
-    ttl: TimeInterval? = nil
-  ) -> Bool {
-    guard activeLoadRevisions[key] == token.revision else { return false }
-    activeLoadRevisions.removeValue(forKey: key)
-    store(key, value: value, ttl: ttl)
-    return true
-  }
-
-  func endLoadIfCurrent(_ key: Key, token: LoadToken) {
-    guard activeLoadRevisions[key] == token.revision else { return }
-    activeLoadRevisions.removeValue(forKey: key)
-  }
-
-  private func store(_ key: Key, value: Value, ttl: TimeInterval?) {
-    // 如果缓存已满且要添加的是新 Key，则执行淘汰策略
-    if cache.count >= size, cache[key] == nil {
-      // 淘汰掉最接近过期的项
-      if let keyToEvict = cache.min(by: { $0.value.expiresAt < $1.value.expiresAt })?.key {
-        cache.removeValue(forKey: keyToEvict)
-      }
-    }
-
-    let expiresAt = Date().addingTimeInterval(ttl ?? defaultTTL)
-    let newEntry = CacheEntry(value: value, expiresAt: expiresAt)
-    cache[key] = newEntry
-  }
-
-  func remove(_ key: Key) {
-    activeLoadRevisions.removeValue(forKey: key)
-    cache.removeValue(forKey: key)
-  }
-
-  func clear() {
-    activeLoadRevisions.removeAll()
-    cache.removeAll()
-  }
-}
-
 @MainActor
 class APIService: ObservableObject {
   static let shared = APIService()
@@ -704,37 +605,43 @@ class APIService: ObservableObject {
   }
 
   // MARK: - 短暂内存缓存 (提升二级页面和分季组件流畅度)
-  private let episodeGroupsCache = APICache<String, [EpisodeGroup]>(defaultTTL: 120, size: 20)
-  private let mediaSeasonsCache = APICache<String, [TmdbSeason]>(defaultTTL: 120, size: 20)
-  private let groupSeasonsCache = APICache<String, [TmdbSeason]>(defaultTTL: 120, size: 20)
-  private let subscriptionStatusCache = APICache<String, Bool>(defaultTTL: 120, size: 100)
-  private let subscriptionSnapshotCache = APICache<String, [Subscribe]>(
-    defaultTTL: 30,
-    size: 1,
+  private let episodeGroupsCache = CoalescingCache<String, [EpisodeGroup]>(ttl: 120, capacity: 20)
+  private let mediaSeasonsCache = CoalescingCache<String, [TmdbSeason]>(ttl: 120, capacity: 20)
+  private let groupSeasonsCache = CoalescingCache<String, [TmdbSeason]>(ttl: 120, capacity: 20)
+  private let subscriptionStatusCache = CoalescingCache<String, Bool>(ttl: 120, capacity: 100)
+  private let subscriptionSnapshotCache = CoalescingCache<String, [Subscribe]>(
+    ttl: 30,
+    capacity: 1,
     renewsTTLOnAccess: false
   )
-  private var subscriptionCacheGeneration = 0
-  private var subscriptionStatusLoadRevision: UInt64 = 0
-  private var subscriptionStatusLoadOwners: [String: UInt64] = [:]
-  private var subscriptionSnapshotFetchGeneration: Int?
-  private var subscriptionSnapshotFetchRevision = 0
-  private var subscriptionSnapshotFetchTaskRevision: Int?
-  private var subscriptionSnapshotFetchTask: Task<[Subscribe], Error>?
 
   private func invalidateSubscriptionCaches() {
-    subscriptionCacheGeneration &+= 1
-    subscriptionSnapshotFetchTask?.cancel()
-    subscriptionSnapshotFetchGeneration = nil
-    subscriptionSnapshotFetchTaskRevision = nil
-    subscriptionSnapshotFetchTask = nil
-    let snapshotCache = subscriptionSnapshotCache
-    Task {
-      await snapshotCache.clear()
+    subscriptionStatusCache.invalidateAll()
+    subscriptionSnapshotCache.invalidateAll()
+  }
+
+  /// 会话快照内读取共享缓存：调用方每次挂起前后都校验任务取消与会话，旧会话的结果不会返回给调用者；
+  /// 共享加载在真正发请求前也校验发起时的会话，排队期间切换账号时不会借用新会话的凭据执行。
+  private func sessionCachedValue<Value: Sendable>(
+    _ cache: CoalescingCache<String, Value>,
+    key: String,
+    forceRefresh: Bool = false,
+    load: @escaping @MainActor () async throws -> Value
+  ) async throws -> Value {
+    let snapshot = sessionSnapshot()
+    return try await cache.value(
+      for: key,
+      forceRefresh: forceRefresh,
+      validate: { try validateSessionSnapshot(snapshot) }
+    ) { [weak self] in
+      guard let self, self.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
+      return try await load()
     }
   }
 
-  private func invalidateSubscriptionCachesAfterSessionChange() {
-    invalidateSubscriptionCaches()
+  private func validateSessionSnapshot(_ snapshot: APIServiceSessionSnapshot) throws {
+    try Task.checkCancellation()
+    guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
   }
 
   private enum StoredCurrentUserState {
@@ -1317,15 +1224,10 @@ class APIService: ObservableObject {
   }
 
   private func invalidateAllSessionCaches() {
-    invalidateSubscriptionCachesAfterSessionChange()
-    let episodeGroupsCache = episodeGroupsCache
-    let mediaSeasonsCache = mediaSeasonsCache
-    let groupSeasonsCache = groupSeasonsCache
-    Task {
-      await episodeGroupsCache.clear()
-      await mediaSeasonsCache.clear()
-      await groupSeasonsCache.clear()
-    }
+    invalidateSubscriptionCaches()
+    episodeGroupsCache.invalidateAll()
+    mediaSeasonsCache.invalidateAll()
+    groupSeasonsCache.invalidateAll()
   }
 
   private func currentLease() -> APIServiceSessionLease {
@@ -3197,19 +3099,11 @@ class APIService: ObservableObject {
   /// - 应用场景: 在前端，有两个地方会用到：1. **季订阅弹窗**中，用于展示所有可供选择的剧集组（如“司法岛篇”）。 2. **订阅配置编辑弹窗**中，当编辑一个电视剧订阅时，作为“剧集组”下拉框的数据源，允许用户修改该订阅所属的剧集组。
   func fetchEpisodeGroups(tmdbId: Int) async throws -> [EpisodeGroup] {
     let endpoint = "/media/groups/\(tmdbId)"
-    let snapshot = sessionSnapshot()
-    let cacheKey = "\(snapshot.epoch):\(endpoint)"
-    if let cached = await episodeGroupsCache.get(cacheKey) {
-      guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
-      return cached
+    return try await sessionCachedValue(episodeGroupsCache, key: endpoint) { [weak self] in
+      guard let self else { throw CancellationError() }
+      let data = try await self.makeRequest(endpoint: endpoint)
+      return try await self.decodeOrUnwrap([EpisodeGroup].self, from: data)
     }
-    guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
-    let data = try await makeRequest(endpoint: endpoint)
-    let result = try await decodeOrUnwrap([EpisodeGroup].self, from: data)
-    guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
-    await episodeGroupsCache.set(cacheKey, value: result)
-    guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
-    return result
   }
 
   /// 获取标准电视剧的各季基础信息
@@ -3228,19 +3122,11 @@ class APIService: ObservableObject {
       "season": media.season.map(String.init),
     ]
     let endpoint = try buildEndpoint(path: "/media/seasons", params: params)
-    let snapshot = sessionSnapshot()
-    let cacheKey = "\(snapshot.epoch):\(endpoint)"
-    if let cached = await mediaSeasonsCache.get(cacheKey) {
-      guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
-      return cached
+    return try await sessionCachedValue(mediaSeasonsCache, key: endpoint) { [weak self] in
+      guard let self else { throw CancellationError() }
+      let data = try await self.makeRequest(endpoint: endpoint)
+      return try await self.decodeOrUnwrap([TmdbSeason].self, from: data)
     }
-    guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
-    let data = try await makeRequest(endpoint: endpoint)
-    let result = try await decodeOrUnwrap([TmdbSeason].self, from: data)
-    guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
-    await mediaSeasonsCache.set(cacheKey, value: result)
-    guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
-    return result
   }
 
   /// 获取特定剧集组（如长篇连载划分的部/篇）下的季信息
@@ -3248,19 +3134,11 @@ class APIService: ObservableObject {
   /// - 应用场景: 在前端的季订阅弹窗中，当用户从下拉列表中**选择**了某个“剧集组”（如“司法岛篇”）后，调用此 API 以获取该组专属的分季信息。
   func getGroupSeasons(groupId: String) async throws -> [TmdbSeason] {
     let endpoint = "/media/group/seasons/\(groupId)"
-    let snapshot = sessionSnapshot()
-    let cacheKey = "\(snapshot.epoch):\(endpoint)"
-    if let cached = await groupSeasonsCache.get(cacheKey) {
-      guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
-      return cached
+    return try await sessionCachedValue(groupSeasonsCache, key: endpoint) { [weak self] in
+      guard let self else { throw CancellationError() }
+      let data = try await self.makeRequest(endpoint: endpoint)
+      return try await self.decodeOrUnwrap([TmdbSeason].self, from: data)
     }
-    guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
-    let data = try await makeRequest(endpoint: endpoint)
-    let result = try await decodeOrUnwrap([TmdbSeason].self, from: data)
-    guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
-    await groupSeasonsCache.set(cacheKey, value: result)
-    guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
-    return result
   }
 
   /// 批量检查媒体服务器中已入库的季、集状态
@@ -3581,95 +3459,14 @@ class APIService: ObservableObject {
       // 遵循 Vue 逻辑，如果无法生成 mediaId，则不发起请求，返回 false
       return false
     }
-    subscriptionStatusLoadRevision &+= 1
-    let requestRevision = subscriptionStatusLoadRevision
-    let loadOwnerKey = "\(mediaId):\(season.map(String.init) ?? "")"
-    var ownsStatusLoad = false
-    if forceRefresh {
-      subscriptionStatusLoadOwners[loadOwnerKey] = requestRevision
-      ownsStatusLoad = true
-    }
-    defer {
-      if ownsStatusLoad,
-        subscriptionStatusLoadOwners[loadOwnerKey] == requestRevision
-      {
-        subscriptionStatusLoadOwners.removeValue(forKey: loadOwnerKey)
-      }
-    }
-    let snapshot = sessionSnapshot()
-    while true {
-      try validateSubscriptionSnapshot(snapshot)
-      let generation = subscriptionCacheGeneration
-      let cacheKey = "\(generation):\(mediaId):\(season.map(String.init) ?? "")"
-      if !forceRefresh, let cached = await subscriptionStatusCache.get(cacheKey) {
-        try validateSubscriptionSnapshot(snapshot)
-        guard generation == subscriptionCacheGeneration else { continue }
-        if ownsStatusLoad {
-          guard subscriptionStatusLoadOwners[loadOwnerKey] == requestRevision else {
-            throw CancellationError()
-          }
-        }
-        return cached
-      }
-      if !ownsStatusLoad {
-        if let currentOwner = subscriptionStatusLoadOwners[loadOwnerKey],
-          currentOwner > requestRevision
-        {
-          throw CancellationError()
-        }
-        subscriptionStatusLoadOwners[loadOwnerKey] = requestRevision
-        ownsStatusLoad = true
-        // A newer load may have populated the cache while this caller was awaiting its first read.
-        continue
-      }
-      guard subscriptionStatusLoadOwners[loadOwnerKey] == requestRevision else {
-        throw CancellationError()
-      }
-      let loadToken = await subscriptionStatusCache.beginLoad(
-        cacheKey,
-        revision: requestRevision
-      )
-
-      do {
-        guard subscriptionStatusLoadOwners[loadOwnerKey] == requestRevision else {
-          await subscriptionStatusCache.endLoadIfCurrent(cacheKey, token: loadToken)
-          throw CancellationError()
-        }
-        try validateSubscriptionSnapshot(snapshot)
-        let isSubscribed =
-          try await fetchSubscriptionLookup(
-            media: media,
-            season: season
-          ) != nil
-        try validateSubscriptionSnapshot(snapshot)
-        guard generation == subscriptionCacheGeneration else {
-          await subscriptionStatusCache.endLoadIfCurrent(cacheKey, token: loadToken)
-          continue
-        }
-        guard subscriptionStatusLoadOwners[loadOwnerKey] == requestRevision else {
-          await subscriptionStatusCache.endLoadIfCurrent(cacheKey, token: loadToken)
-          throw CancellationError()
-        }
-        guard await subscriptionStatusCache.setIfCurrent(
-          cacheKey,
-          value: isSubscribed,
-          token: loadToken
-        ) else {
-          throw CancellationError()
-        }
-        try validateSubscriptionSnapshot(snapshot)
-        guard generation == subscriptionCacheGeneration else { continue }
-        guard subscriptionStatusLoadOwners[loadOwnerKey] == requestRevision else {
-          throw CancellationError()
-        }
-        return isSubscribed
-      } catch is CancellationError {
-        await subscriptionStatusCache.endLoadIfCurrent(cacheKey, token: loadToken)
-        throw CancellationError()
-      } catch {
-        await subscriptionStatusCache.endLoadIfCurrent(cacheKey, token: loadToken)
-        throw error
-      }
+    let key = "\(mediaId):\(season.map(String.init) ?? "")"
+    return try await sessionCachedValue(
+      subscriptionStatusCache,
+      key: key,
+      forceRefresh: forceRefresh
+    ) { [weak self] in
+      guard let self else { throw CancellationError() }
+      return try await self.fetchSubscriptionLookup(media: media, season: season) != nil
     }
   }
 
@@ -3677,138 +3474,15 @@ class APIService: ObservableObject {
   /// - 对应前端: `MoviePilot-Frontend/src/views/subscribe/SubscribeListView.vue`, `MoviePilot-Frontend/src/views/subscribe/FullCalendarView.swift`
   /// - 应用场景: 1. **订阅列表页面** (`SubscribeListView`) 的核心数据源。 2. **日历视图** (`FullCalendarView`) 的数据源。 (注: 全局搜索栏不直接调用此API)
   func fetchSubscriptions(forceRefresh: Bool = false) async throws -> [Subscribe] {
-    let snapshot = sessionSnapshot()
-    var canReadCache = !forceRefresh
-    while true {
-      try validateSubscriptionSnapshot(snapshot)
-      let generation = subscriptionCacheGeneration
-      let cacheKey = "subscriptions:\(generation)"
-      if canReadCache, let cached = await subscriptionSnapshotCache.get(cacheKey) {
-        try validateSubscriptionSnapshot(snapshot)
-        guard generation == subscriptionCacheGeneration else {
-          canReadCache = true
-          continue
-        }
-        return cached
-      }
-
-      let fetch = subscriptionSnapshotFetchTask(
-        for: generation,
-        reuseInFlight: canReadCache,
-        snapshot: snapshot
-      )
-      guard let subscriptions = try await awaitSubscriptionSnapshot(
-        fetch,
-        generation: generation,
-        snapshot: snapshot
-      ) else {
-        canReadCache = true
-        continue
-      }
-      guard try await storeSubscriptionSnapshot(
-        subscriptions,
-        cacheKey: cacheKey,
-        generation: generation,
-        revision: fetch.revision,
-        snapshot: snapshot
-      ) else {
-        canReadCache = true
-        continue
-      }
-      return subscriptions
-    }
-  }
-
-  private func awaitSubscriptionSnapshot(
-    _ fetch: (revision: Int, task: Task<[Subscribe], Error>),
-    generation: Int,
-    snapshot: APIServiceSessionSnapshot
-  ) async throws -> [Subscribe]? {
-    let subscriptions: [Subscribe]
-    do {
-      subscriptions = try await fetch.task.value
-    } catch {
-      let wasSuperseded = subscriptionSnapshotFetchRevision != fetch.revision
-      clearSubscriptionSnapshotFetchTaskIfCurrent(
-        generation: generation,
-        revision: fetch.revision
-      )
-      if error is CancellationError {
-        try validateSubscriptionSnapshot(snapshot)
-      }
-      guard generation == subscriptionCacheGeneration, !wasSuperseded else { return nil }
-      if error is CancellationError { throw CancellationError() }
-      throw error
-    }
-
-    try validateSubscriptionSnapshot(snapshot)
-    guard generation == subscriptionCacheGeneration else {
-      clearSubscriptionSnapshotFetchTaskIfCurrent(
-        generation: generation,
-        revision: fetch.revision
-      )
-      return nil
-    }
-    guard fetch.revision == subscriptionSnapshotFetchTaskRevision else { return nil }
-    return subscriptions
-  }
-
-  private func storeSubscriptionSnapshot(
-    _ subscriptions: [Subscribe],
-    cacheKey: String,
-    generation: Int,
-    revision: Int,
-    snapshot: APIServiceSessionSnapshot
-  ) async throws -> Bool {
-    await subscriptionSnapshotCache.set(cacheKey, value: subscriptions)
-    try validateSubscriptionSnapshot(snapshot)
-    guard generation == subscriptionCacheGeneration else {
-      clearSubscriptionSnapshotFetchTaskIfCurrent(generation: generation, revision: revision)
-      return false
-    }
-    guard revision == subscriptionSnapshotFetchTaskRevision else { return false }
-    clearSubscriptionSnapshotFetchTaskIfCurrent(generation: generation, revision: revision)
-    return true
-  }
-
-  private func validateSubscriptionSnapshot(_ snapshot: APIServiceSessionSnapshot) throws {
-    try Task.checkCancellation()
-    guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
-  }
-
-  private func subscriptionSnapshotFetchTask(
-    for generation: Int,
-    reuseInFlight: Bool,
-    snapshot: APIServiceSessionSnapshot
-  ) -> (revision: Int, task: Task<[Subscribe], Error>) {
-    if reuseInFlight,
-      let task = subscriptionSnapshotFetchTask,
-      let revision = subscriptionSnapshotFetchTaskRevision,
-      subscriptionSnapshotFetchGeneration == generation
-    {
-      return (revision, task)
-    }
-
-    subscriptionSnapshotFetchRevision &+= 1
-    let revision = subscriptionSnapshotFetchRevision
-    let task = Task { [weak self] in
+    try await sessionCachedValue(
+      subscriptionSnapshotCache,
+      key: "subscriptions",
+      forceRefresh: forceRefresh
+    ) { [weak self] in
       guard let self else { throw CancellationError() }
-      try self.validateSubscriptionSnapshot(snapshot)
       let data = try await self.makeRequest(endpoint: "/subscribe/")
       return try await self.decodeOrUnwrap([Subscribe].self, from: data)
     }
-    subscriptionSnapshotFetchGeneration = generation
-    subscriptionSnapshotFetchTaskRevision = revision
-    subscriptionSnapshotFetchTask = task
-    return (revision, task)
-  }
-
-  private func clearSubscriptionSnapshotFetchTaskIfCurrent(generation: Int, revision: Int) {
-    guard subscriptionSnapshotFetchGeneration == generation else { return }
-    guard subscriptionSnapshotFetchTaskRevision == revision else { return }
-    subscriptionSnapshotFetchGeneration = nil
-    subscriptionSnapshotFetchTaskRevision = nil
-    subscriptionSnapshotFetchTask = nil
   }
 
   /// 添加下载任务
