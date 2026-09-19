@@ -62,7 +62,7 @@
 ### 规则
 
 - 会话数据缓存必须绑定 session namespace；切换会话时旧请求不得回填新 owner 可见的 key。
-- 同 key 并发采用 latest-wins 时，旧结果必须在“返回给调用者”和“写入共享缓存”两处都失效。这不要求每次普通读取都启动新请求；同一会话和缓存代际内、参数一致的读取可以合并复用在途请求。
+- 同 key 并发采用 latest-wins 时，旧结果必须在“返回给调用者”和“写入共享缓存”两处都失效。这不要求每次普通读取都启动新请求；同一会话和缓存代际内、参数一致的读取可以合并复用在途请求。`APIService` 的接口缓存统一经 `sessionCachedValue` 使用 `CoalescingCache`：它负责在途合并、强刷取代、代际失效与会话校验；新增同类缓存直接复用，不再手写 owner/revision/generation。
 - 多个页面或导航栈共享预载任务时，owner 必须稳定且可计数；只有最后一个 owner 离开才能释放保护。
 - 可取消的 handle 型工作必须原子交接“取消状态 + handle”：取消早于 handle 安装时，安装者也必须立即取消；发布 ready 前再检查父任务。
 - 同一 canonical 媒体可能同时存在多个 UI/cache alias。操作结果需要同步全部已知 alias 时，不得用 `first(where:)` 假定唯一命中。

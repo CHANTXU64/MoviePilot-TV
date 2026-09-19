@@ -1231,12 +1231,9 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     )
     await staleGate.open()
 
-    do {
-      _ = try await staleCheck.value
-      XCTFail("Older subscription status request should be superseded")
-    } catch is CancellationError {
-      // Expected: only the latest same-key request may publish or populate the cache.
-    }
+    // 被取代的旧请求不能返回自己的旧结果，而是跟随同 key 的最新结果。
+    let staleCallerStatus = try await staleCheck.value
+    XCTAssertTrue(staleCallerStatus)
 
     let cachedStatus = try await service.checkSubscription(media: media)
     let lookupCount = await DetailHeaderSubscriptionURLProtocol.stub.lookupRequestCount(
@@ -1292,28 +1289,6 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
       tmdbId: 665_546
     )
     XCTAssertEqual(lookupCount, 2)
-  }
-
-  func testSubscriptionStatusCacheRejectsOlderRegistrationAfterNewerRevision() async {
-    let cache = APICache<String, Bool>()
-    let newerToken = await cache.beginLoad("same-key", revision: 2)
-    let olderToken = await cache.beginLoad("same-key", revision: 1)
-
-    let olderCommitted = await cache.setIfCurrent(
-      "same-key",
-      value: false,
-      token: olderToken
-    )
-    let newerCommitted = await cache.setIfCurrent(
-      "same-key",
-      value: true,
-      token: newerToken
-    )
-    let cachedValue = await cache.get("same-key")
-
-    XCTAssertFalse(olderCommitted)
-    XCTAssertTrue(newerCommitted)
-    XCTAssertEqual(cachedValue, true)
   }
 
   @MainActor

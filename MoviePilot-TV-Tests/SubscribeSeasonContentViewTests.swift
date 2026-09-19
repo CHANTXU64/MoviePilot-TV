@@ -2105,27 +2105,6 @@ private struct SubscriptionSnapshotServiceSnapshot {
   }
 }
 
-private final class APICacheTestClock: @unchecked Sendable {
-  private let lock = NSLock()
-  private var currentDate: Date
-
-  init(start: Date) {
-    self.currentDate = start
-  }
-
-  func now() -> Date {
-    lock.lock()
-    defer { lock.unlock() }
-    return currentDate
-  }
-
-  func advance(by interval: TimeInterval) {
-    lock.lock()
-    currentDate = currentDate.addingTimeInterval(interval)
-    lock.unlock()
-  }
-}
-
 private struct SubscriptionSnapshotStubResponse: Sendable {
   let statusCode: Int
   let data: Data
