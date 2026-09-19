@@ -620,7 +620,8 @@ class APIService: ObservableObject {
     subscriptionSnapshotCache.invalidateAll()
   }
 
-  /// 会话快照内读取共享缓存：每次挂起前后都校验任务取消与会话，旧会话的结果不会返回给调用者。
+  /// 会话快照内读取共享缓存：调用方每次挂起前后都校验任务取消与会话，旧会话的结果不会返回给调用者；
+  /// 共享加载在真正发请求前也校验发起时的会话，排队期间切换账号时不会借用新会话的凭据执行。
   private func sessionCachedValue<Value: Sendable>(
     _ cache: CoalescingCache<String, Value>,
     key: String,
@@ -631,9 +632,11 @@ class APIService: ObservableObject {
     return try await cache.value(
       for: key,
       forceRefresh: forceRefresh,
-      validate: { try validateSessionSnapshot(snapshot) },
-      load: load
-    )
+      validate: { try validateSessionSnapshot(snapshot) }
+    ) { [weak self] in
+      guard let self, self.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
+      return try await load()
+    }
   }
 
   private func validateSessionSnapshot(_ snapshot: APIServiceSessionSnapshot) throws {

@@ -553,6 +553,37 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertEqual(subscribeRequestCount, 1)
   }
 
+  func testQueuedSubscriptionSnapshotLoadDoesNotRunUnderNewSession() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscriptionSnapshotURLProtocol.stub.reset()
+    try await SubscriptionSnapshotURLProtocol.stub.setDefaultSubscriptions([])
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service, userName: "first-user")
+
+    let firstSessionFetch = Task { () -> Bool in
+      do {
+        _ = try await service.fetchSubscriptions()
+        return false
+      } catch {
+        return error is CancellationError
+      }
+    }
+    // 调用方已创建共享加载任务、加载任务尚未执行时切换账号。
+    await Task.yield()
+    configureSubscriptionSnapshotAccess(service, userName: "second-user", userId: 2)
+
+    let wasCancelled = await firstSessionFetch.value
+    XCTAssertTrue(wasCancelled)
+    let subscribeRequestCount = await SubscriptionSnapshotURLProtocol.stub.subscribeRequestCount()
+    XCTAssertEqual(subscribeRequestCount, 0)
+  }
+
   func testMultiSeasonDetailCanRefreshAfterSeasonSubscriptionFailure() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }

@@ -48,6 +48,11 @@ private final class LoadProbe {
   var rejectsCaller = false
 }
 
+@MainActor
+private final class RefreshHolder {
+  var task: Task<String, Error>?
+}
+
 private final class TestClock {
   var date = Date(timeIntervalSince1970: 1_000)
 }
@@ -172,6 +177,106 @@ final class CoalescingCacheTests: XCTestCase {
     XCTAssertEqual(staleCallerValue, "latest")
     XCTAssertEqual(cachedValue, "latest")
     XCTAssertEqual(probe.loadCount, 2)
+  }
+
+  func testSupersededForcedRefreshFollowsLatestInsteadOfPreRefreshCache() async throws {
+    let cache = CoalescingCache<String, String>(ttl: 60, capacity: 10)
+    let olderGate = LoadGate()
+    let latestGate = LoadGate()
+
+    _ = try await cache.value(for: "key", validate: {}) { "pre-refresh" }
+    let older = Task {
+      try await cache.value(for: "key", forceRefresh: true, validate: {}) {
+        await olderGate.wait()
+        return "older"
+      }
+    }
+    await olderGate.waitForArrival()
+    let latest = Task {
+      try await cache.value(for: "key", forceRefresh: true, validate: {}) {
+        await latestGate.wait()
+        return "latest"
+      }
+    }
+    await latestGate.waitForArrival()
+
+    // 旧强刷先完成时，它的等待者必须继续等最新强刷，不能退回强刷前的缓存。
+    olderGate.open()
+    await Task.yield()
+    await Task.yield()
+    latestGate.open()
+
+    let olderCallerValue = try await older.value
+    let latestValue = try await latest.value
+    XCTAssertEqual(olderCallerValue, "latest")
+    XCTAssertEqual(latestValue, "latest")
+  }
+
+  func testSupersededWaiterReceivesLatestFailureWithoutAnotherLoad() async throws {
+    let cache = CoalescingCache<String, String>(ttl: 60, capacity: 10)
+    let olderGate = LoadGate()
+    let probe = LoadProbe()
+
+    let older = Task { () -> Result<String, CoalescingCacheTestError> in
+      do {
+        let value = try await cache.value(for: "key", validate: {}) {
+          probe.loadCount += 1
+          guard probe.loadCount == 1 else { return "unexpected-third-load" }
+          await olderGate.wait()
+          return "older"
+        }
+        return .success(value)
+      } catch {
+        return .failure(error as? CoalescingCacheTestError ?? .rejected)
+      }
+    }
+    await olderGate.waitForArrival()
+
+    do {
+      _ = try await cache.value(for: "key", forceRefresh: true, validate: {}) {
+        probe.loadCount += 1
+        throw CoalescingCacheTestError.latest
+      }
+      XCTFail("The latest forced refresh failure must reach its caller.")
+    } catch {
+      XCTAssertEqual(error as? CoalescingCacheTestError, .latest)
+    }
+    olderGate.open()
+
+    let olderResult = await older.value
+    XCTAssertEqual(olderResult, .failure(.latest))
+    XCTAssertEqual(probe.loadCount, 2)
+  }
+
+  func testForcedRefreshStartedBeforeCompletedWaiterResumesSupersedesIt() async throws {
+    let cache = CoalescingCache<String, String>(ttl: 60, capacity: 10)
+    let firstGate = LoadGate()
+    let refreshGate = LoadGate()
+    let holder = RefreshHolder()
+
+    let first = Task {
+      try await cache.value(for: "key", validate: {}) {
+        await firstGate.wait()
+        // 加载即将完成、其等待者尚未恢复时开始强刷：已完成的旧结果也必须被取代。
+        holder.task = Task {
+          try await cache.value(for: "key", forceRefresh: true, validate: {}) {
+            await refreshGate.wait()
+            return "refreshed"
+          }
+        }
+        return "first"
+      }
+    }
+    await firstGate.waitForArrival()
+    firstGate.open()
+    await refreshGate.waitForArrival()
+    refreshGate.open()
+
+    let firstCallerValue = try await first.value
+    let refresh = try XCTUnwrap(holder.task)
+    let refreshedValue = try await refresh.value
+    XCTAssertEqual(firstCallerValue, "refreshed")
+    XCTAssertEqual(refreshedValue, "refreshed")
   }
 
   func testSupersededFailureDoesNotReachWaitersOrReplaceLatestValue() async throws {
