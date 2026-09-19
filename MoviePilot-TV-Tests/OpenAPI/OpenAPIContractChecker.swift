@@ -809,6 +809,21 @@ enum OpenAPIContractChecker {
     }
   }
 
+  /// 递归比较的目录、联合与报警规则：
+  ///
+  /// 目录上下文属于当前层，不是整棵树共用一份根字段名。
+  /// 请求根层 `body`（含根联合分支）用已登记字段名限制范围；进入已登记对象、
+  /// 数组元素或联合分支后不再用父层字段名过滤，也不得因同名继承父层 TV 类型
+  /// 或 `alwaysSent`。没有完整子目录时继续核对该节点相对基线的结构，不能静默跳过。
+  /// 新增必填仍在当前层检查。
+  ///
+  /// 联合分支不能按下标当身份。先按 `$ref`、anyOf/oneOf 与结构指纹匹配未变化分支，
+  /// 剩余恰好 1 对 1 时再递归比较真实变化。分支数量对不上、多个剩余分支无法唯一配对、
+  /// 或 anyOf 与 oneOf 互换时报告未验证。不丢弃分支，不把合并后的 properties 当合同。
+  ///
+  /// 必须报警：已使用对象内已有字段类型不兼容、必填变化、已匹配分支内嵌套不兼容、
+  /// 成功 JSON 结构消失。不得误报：对象未变、anyOf/oneOf 仅换序、仅 description/键顺序变化、
+  /// 根层未使用可选字段变化。
   private static func compareSchemaBaseline(
     catalogID: String,
     location: String,
@@ -888,43 +903,21 @@ enum OpenAPIContractChecker {
     let liveAlts = live.alternatives
     let baselineAlts = baseline.alternatives
     if liveAlts.count >= 2 || baselineAlts.count >= 2 {
-      if liveAlts.count != baselineAlts.count {
-        report.findings.append(
-          OpenAPIFinding(
-            severity: .failure,
-            kind: .unverifiedSchema,
-            operationID: catalogID,
-            path: location,
-            message: "联合类型分支数量变化，无法可靠按分支比较嵌套合同"
-          )
-        )
-        return
-      }
-      if direction == .request {
-        return
-      }
-      for index in liveAlts.indices {
-        compareSchemaBaseline(
-          catalogID: catalogID,
-          location: "\(location)|alt\(index)",
-          live: liveAlts[index],
-          baseline: baselineAlts[index],
-          roundTrip: roundTrip,
-          direction: direction,
-          catalogFields: catalogFields,
-          expectsValue: true,
-          depth: depth + 1,
-          into: &report
-        )
-      }
+      compareUnionAlternatives(
+        catalogID: catalogID,
+        location: location,
+        live: live,
+        baseline: baseline,
+        roundTrip: roundTrip,
+        direction: direction,
+        catalogFields: catalogFields,
+        depth: depth,
+        into: &report
+      )
       return
     }
 
-    let shouldRecurseItems =
-      direction == .response
-      || tvTypeForLocation(location, fields: catalogFields) == .array
-      || tvTypeForLocation("\(location)[]", fields: catalogFields) != nil
-    if shouldRecurseItems, let liveItems = live.items?.schema, let baselineItems = baseline.items?.schema {
+    if let liveItems = live.items?.schema, let baselineItems = baseline.items?.schema {
       compareSchemaBaseline(
         catalogID: catalogID,
         location: "\(location)[]",
@@ -954,7 +947,7 @@ enum OpenAPIContractChecker {
     let liveProps = live.properties
     let baselineProps = baseline.properties
     var propertyNames = Set(liveProps.keys).union(baselineProps.keys)
-    if direction == .request, !catalogFields.isEmpty {
+    if isRequestCatalogLayer(location), !catalogFields.isEmpty {
       let catalogued = Set(catalogFields.map(\.name))
       var names = propertyNames.intersection(catalogued)
       if roundTrip {
@@ -965,10 +958,7 @@ enum OpenAPIContractChecker {
     for name in propertyNames.sorted() {
       let liveProperty = liveProps[name]
       let baselineProperty = baselineProps[name]
-      let field = catalogFields.first { $0.name == name }
-      let childPath = location == "response" || location == "body"
-        ? "\(location).\(name)"
-        : "\(location).\(name)"
+      let childPath = "\(location).\(name)"
       if let liveProperty, baselineProperty == nil {
         if direction == .request && (roundTrip || live.required.contains(name)) {
           report.findings.append(
@@ -1059,6 +1049,193 @@ enum OpenAPIContractChecker {
     }
   }
 
+  private static func isRequestCatalogLayer(_ location: String) -> Bool {
+    if location == "body" { return true }
+    return location.hasPrefix("body|alt") && !location.contains(".")
+  }
+
+  private static func compareUnionAlternatives(
+    catalogID: String,
+    location: String,
+    live: OpenAPISchema,
+    baseline: OpenAPISchema,
+    roundTrip: Bool,
+    direction: CompatibilityDirection,
+    catalogFields: [TVAPIField],
+    depth: Int,
+    into report: inout OpenAPIContractReport
+  ) {
+    if live.combinator != baseline.combinator {
+      let liveName = live.combinator ?? "missing"
+      let baselineName = baseline.combinator ?? "missing"
+      report.findings.append(
+        OpenAPIFinding(
+          severity: .failure,
+          kind: .unverifiedSchema,
+          operationID: catalogID,
+          path: location,
+          message: "联合组合方式从 \(baselineName) 变为 \(liveName)，不能当作同一集合比较"
+        )
+      )
+    }
+
+    let matched = matchUnionAlternatives(live: live.alternatives, baseline: baseline.alternatives)
+    for pair in matched.pairs {
+      compareSchemaBaseline(
+        catalogID: catalogID,
+        location: "\(location)|alt\(pair.baselineIndex)",
+        live: pair.live,
+        baseline: pair.baseline,
+        roundTrip: roundTrip,
+        direction: direction,
+        catalogFields: catalogFields,
+        expectsValue: true,
+        depth: depth + 1,
+        into: &report
+      )
+    }
+    if let reason = matched.unverifiedReason {
+      report.findings.append(
+        OpenAPIFinding(
+          severity: .failure,
+          kind: .unverifiedSchema,
+          operationID: catalogID,
+          path: location,
+          message: reason
+        )
+      )
+    }
+  }
+
+  private struct UnionBranchPair {
+    let live: OpenAPISchema
+    let baseline: OpenAPISchema
+    let baselineIndex: Int
+  }
+
+  private struct UnionMatchResult {
+    var pairs: [UnionBranchPair]
+    var unverifiedReason: String?
+  }
+
+  private static func matchUnionAlternatives(
+    live: [OpenAPISchema],
+    baseline: [OpenAPISchema]
+  ) -> UnionMatchResult {
+    var liveUnused = Set(live.indices)
+    var baselineUnused = Set(baseline.indices)
+    var pairs: [UnionBranchPair] = []
+
+    var liveByID: [String: [Int]] = [:]
+    var baselineByID: [String: [Int]] = [:]
+    for (index, schema) in live.enumerated() {
+      liveByID[schemaIdentity(schema), default: []].append(index)
+    }
+    for (index, schema) in baseline.enumerated() {
+      baselineByID[schemaIdentity(schema), default: []].append(index)
+    }
+
+    for identity in Set(liveByID.keys).intersection(baselineByID.keys).sorted() {
+      var liveIndexes = liveByID[identity] ?? []
+      var baselineIndexes = baselineByID[identity] ?? []
+      while let liveIndex = liveIndexes.first, let baselineIndex = baselineIndexes.first {
+        liveIndexes.removeFirst()
+        baselineIndexes.removeFirst()
+        liveUnused.remove(liveIndex)
+        baselineUnused.remove(baselineIndex)
+        pairs.append(
+          UnionBranchPair(
+            live: live[liveIndex],
+            baseline: baseline[baselineIndex],
+            baselineIndex: baselineIndex
+          )
+        )
+      }
+    }
+
+    if liveUnused.count == 1, baselineUnused.count == 1,
+      let liveIndex = liveUnused.first,
+      let baselineIndex = baselineUnused.first
+    {
+      pairs.append(
+        UnionBranchPair(
+          live: live[liveIndex],
+          baseline: baseline[baselineIndex],
+          baselineIndex: baselineIndex
+        )
+      )
+      liveUnused.remove(liveIndex)
+      baselineUnused.remove(baselineIndex)
+    }
+
+    let unverifiedReason: String?
+    if !liveUnused.isEmpty || !baselineUnused.isEmpty {
+      unverifiedReason =
+        "联合类型无法可靠匹配分支：当前剩余 \(liveUnused.count) 个，基线剩余 \(baselineUnused.count) 个"
+    } else {
+      unverifiedReason = nil
+    }
+    return UnionMatchResult(pairs: pairs, unverifiedReason: unverifiedReason)
+  }
+
+  private static func schemaIdentity(_ schema: OpenAPISchema) -> String {
+    var parts: [String] = []
+    if let ref = schema.ref {
+      parts.append("ref=\(ref)")
+    }
+    if let combinator = schema.combinator {
+      parts.append("comb=\(combinator)")
+    }
+    parts.append("kind=\(kindIdentity(schema.kind))")
+    parts.append("types=\(schema.types.subtracting(["null"]).sorted().joined(separator: ","))")
+    parts.append("null=\(schema.nullable)")
+    parts.append("req=\(schema.required.sorted().joined(separator: ","))")
+    if !schema.enumValues.isEmpty {
+      parts.append("enum=\(schema.enumValues.sorted().joined(separator: ","))")
+    }
+    if let format = schema.format {
+      parts.append("fmt=\(format)")
+    }
+    parts.append("addl=\(schema.additionalPropertiesAllowed)")
+    for name in schema.properties.keys.sorted() {
+      parts.append("p.\(name)={\(schemaIdentity(schema.properties[name]!))}")
+    }
+    if let items = schema.items {
+      parts.append("items={\(schemaIdentity(items.schema))}")
+    }
+    if !schema.alternatives.isEmpty {
+      parts.append("alts=[\(schema.alternatives.map(schemaIdentity).sorted().joined(separator: "|"))]")
+    }
+    return parts.joined(separator: ";")
+  }
+
+  private static func kindIdentity(_ kind: OpenAPISchema.Kind) -> String {
+    switch kind {
+    case .null:
+      return "null"
+    case .boolean:
+      return "boolean"
+    case .integer:
+      return "integer"
+    case .number:
+      return "number"
+    case .string:
+      return "string"
+    case .array:
+      return "array"
+    case .object:
+      return "object"
+    case .union:
+      return "union"
+    case .opaque:
+      return "opaque"
+    case .recursive:
+      return "recursive"
+    case .unsupported(let reason):
+      return "unsupported:\(reason)"
+    }
+  }
+
   private static func compareCurrentNode(
     catalogID: String,
     location: String,
@@ -1121,12 +1298,16 @@ enum OpenAPIContractChecker {
   }
 
   private static func tvTypeForLocation(_ location: String, fields: [TVAPIField]) -> TVJSONType? {
-    let token = location.split(separator: ".").last.map(String.init) ?? location
-    let isItems = token.hasSuffix("[]")
-    var name = token.replacingOccurrences(of: "[]", with: "")
-    if let altRange = name.range(of: "|alt") {
-      name = String(name[..<altRange.lowerBound])
+    let parts = location.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+    guard let root = parts.first, root == "body" || root == "response", parts.count == 2 else {
+      return nil
     }
+    var token = parts[1]
+    if let altRange = token.range(of: "|alt") {
+      token = String(token[..<altRange.lowerBound])
+    }
+    let isItems = token.hasSuffix("[]")
+    let name = token.replacingOccurrences(of: "[]", with: "")
     guard let field = fields.first(where: { $0.name == name }) else { return nil }
     if isItems {
       return field.itemType
@@ -1159,7 +1340,9 @@ enum OpenAPIContractChecker {
       }
     } else {
       for name in added.sorted() {
-        let alwaysSent = catalogFields.contains { $0.name == name && $0.alwaysSent }
+        let alwaysSent =
+          isRequestCatalogLayer(location)
+          && catalogFields.contains { $0.name == name && $0.alwaysSent }
         report.findings.append(
           OpenAPIFinding(
             severity: alwaysSent ? .review : .failure,
@@ -1423,7 +1606,9 @@ enum OpenAPIContractChecker {
       if schema.kind == .number { accepted.formUnion(["number", "integer"]) }
       if schema.kind == .boolean { accepted.insert("boolean") }
       if schema.kind == .array { accepted.insert("array") }
-      if schema.kind == .object || schema.kind == .opaque { accepted.insert("object") }
+      if schema.kind == .object || schema.kind == .opaque || schema.kind == .recursive {
+        accepted.insert("object")
+      }
     }
     return accepted
   }

@@ -208,6 +208,8 @@ struct OpenAPISchema: Equatable, Sendable {
   var defaultValue: JSONValue?
   var additionalPropertiesAllowed: Bool
   var format: String?
+  var ref: String?
+  var combinator: String?
 }
 
 final class OpenAPISchemaItem: Equatable, Sendable {
@@ -225,18 +227,20 @@ final class OpenAPISchemaItem: Equatable, Sendable {
 extension OpenAPISchema {
   static var opaque: OpenAPISchema {
     OpenAPISchema(
-    kind: .opaque,
-    types: ["object"],
-    nullable: true,
-    required: [],
-    properties: [:],
-    items: nil,
-    alternatives: [],
-    enumValues: [],
-    deprecated: false,
-    defaultValue: nil,
-    additionalPropertiesAllowed: true,
-    format: nil
+      kind: .opaque,
+      types: ["object"],
+      nullable: true,
+      required: [],
+      properties: [:],
+      items: nil,
+      alternatives: [],
+      enumValues: [],
+      deprecated: false,
+      defaultValue: nil,
+      additionalPropertiesAllowed: true,
+      format: nil,
+      ref: nil,
+      combinator: nil
     )
   }
 
@@ -253,7 +257,9 @@ extension OpenAPISchema {
       deprecated: false,
       defaultValue: nil,
       additionalPropertiesAllowed: true,
-      format: nil
+      format: nil,
+      ref: nil,
+      combinator: nil
     )
   }
 
@@ -297,12 +303,18 @@ enum OpenAPISchemaResolver {
           deprecated: false,
           defaultValue: nil,
           additionalPropertiesAllowed: true,
-          format: nil
+          format: nil,
+          ref: ref,
+          combinator: nil
         )
       }
       do {
         let resolved = try OpenAPIRefResolver.resolve(raw, document: document, stack: stack)
-        return resolve(resolved, document: document, depth: depth, stack: stack + [ref])
+        var schema = resolve(resolved, document: document, depth: depth, stack: stack + [ref])
+        if schema.ref == nil {
+          schema.ref = ref
+        }
+        return schema
       } catch {
         return .unsupported(String(describing: error))
       }
@@ -318,8 +330,25 @@ enum OpenAPISchemaResolver {
       return mergeAllOf(allOf, document: document, depth: depth, stack: stack, object: object)
     }
 
-    if let anyOf = object["anyOf"]?.arrayValue ?? object["oneOf"]?.arrayValue {
-      return mergeUnion(anyOf, document: document, depth: depth, stack: stack, object: object)
+    if let anyOf = object["anyOf"]?.arrayValue {
+      return mergeUnion(
+        anyOf,
+        combinator: "anyOf",
+        document: document,
+        depth: depth,
+        stack: stack,
+        object: object
+      )
+    }
+    if let oneOf = object["oneOf"]?.arrayValue {
+      return mergeUnion(
+        oneOf,
+        combinator: "oneOf",
+        document: document,
+        depth: depth,
+        stack: stack,
+        object: object
+      )
     }
 
     return schema(from: object, document: document, depth: depth, stack: stack)
@@ -353,6 +382,7 @@ enum OpenAPISchemaResolver {
 
   private static func mergeUnion(
     _ parts: [JSONValue],
+    combinator: String,
     document: OpenAPIDocument,
     depth: Int,
     stack: [String],
@@ -400,7 +430,9 @@ enum OpenAPISchemaResolver {
       deprecated: object["deprecated"]?.boolValue == true,
       defaultValue: object["default"],
       additionalPropertiesAllowed: true,
-      format: object["format"]?.stringValue
+      format: object["format"]?.stringValue,
+      ref: nil,
+      combinator: combinator
     )
   }
 
@@ -464,7 +496,9 @@ enum OpenAPISchemaResolver {
       deprecated: object["deprecated"]?.boolValue == true,
       defaultValue: object["default"],
       additionalPropertiesAllowed: additional,
-      format: format
+      format: format,
+      ref: nil,
+      combinator: nil
     )
   }
 

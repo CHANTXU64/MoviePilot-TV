@@ -769,12 +769,18 @@ final class OpenAPIContractOfflineTests: XCTestCase {
       )
     ]
     let report = OpenAPIContractChecker.check(live: live, baseline: baseline, catalog: catalog)
-    XCTAssertFalse(report.failures.isEmpty, report.formattedDescription)
     XCTAssertTrue(
       report.failures.contains {
-        $0.path.contains("alt1") && ($0.path.contains("id") || $0.kind == .unverifiedSchema)
-      }
-        || report.failures.contains { $0.kind == .unverifiedSchema },
+        $0.kind == .responseFieldTypeMismatch && $0.path.contains("id")
+      },
+      report.formattedDescription
+    )
+    XCTAssertFalse(
+      report.failures.contains { $0.kind == .unverifiedSchema },
+      report.formattedDescription
+    )
+    XCTAssertFalse(
+      report.reviews.contains { $0.kind == .unverifiedSchema },
       report.formattedDescription
     )
   }
@@ -878,6 +884,10 @@ final class OpenAPIContractOfflineTests: XCTestCase {
       report.failures.contains { $0.path.contains("used_storage") },
       report.formattedDescription
     )
+    XCTAssertFalse(
+      report.reviews.contains { $0.path.contains("used_storage") },
+      report.formattedDescription
+    )
   }
 
   func testUnionResponseRequiresEveryBranch() throws {
@@ -975,6 +985,401 @@ final class OpenAPIContractOfflineTests: XCTestCase {
       report.failures.contains {
         $0.kind == .unverifiedSchema || $0.kind == .responseStructureChanged
       },
+      report.formattedDescription
+    )
+  }
+
+  func testDownloadAddNestedOptionalFieldTypeChangeIsFailure() throws {
+    let catalog = try downloadAddCatalog()
+    let baseline = try makeDocument(
+      paths: [
+        "/api/v1/download/add": .object([
+          "post": downloadAddOperation(torrentProperties: torrentInProperties(titleType: "string"))
+        ])
+      ]
+    )
+    let live = try makeDocument(
+      paths: [
+        "/api/v1/download/add": .object([
+          "post": downloadAddOperation(torrentProperties: torrentInProperties(titleType: "integer"))
+        ])
+      ]
+    )
+    let report = OpenAPIContractChecker.check(live: live, baseline: baseline, catalog: [catalog])
+    XCTAssertTrue(
+      report.failures.contains {
+        $0.operationID == "POST /download/add"
+          && $0.kind == .bodyFieldTypeMismatch
+          && $0.path.contains("torrent_in")
+          && $0.path.contains("title")
+      },
+      report.formattedDescription
+    )
+  }
+
+  func testDownloadAddUnchangedNestedObjectHasNoBlockingFindings() throws {
+    let catalog = try downloadAddCatalog()
+    let document = try makeDocument(
+      paths: [
+        "/api/v1/download/add": .object([
+          "post": downloadAddOperation(torrentProperties: torrentInProperties(titleType: "string"))
+        ])
+      ]
+    )
+    let report = OpenAPIContractChecker.check(live: document, baseline: document, catalog: [catalog])
+    XCTAssertTrue(
+      report.failures.filter { $0.operationID == "POST /download/add" }.isEmpty,
+      report.formattedDescription
+    )
+    XCTAssertTrue(
+      report.reviews.filter { $0.operationID == "POST /download/add" }.isEmpty,
+      report.formattedDescription
+    )
+  }
+
+  func testDownloadAddNestedSameNameFieldDoesNotInheritRootType() throws {
+    let catalog = try downloadAddCatalog()
+    let nestedDownloader = nullableSchema(type: "integer")
+    let baseline = try makeDocument(
+      paths: [
+        "/api/v1/download/add": .object([
+          "post": downloadAddOperation(
+            torrentProperties: torrentInProperties(titleType: "string", extra: [
+              "downloader": nestedDownloader
+            ])
+          )
+        ])
+      ]
+    )
+    let unchanged = OpenAPIContractChecker.check(live: baseline, baseline: baseline, catalog: [catalog])
+    XCTAssertFalse(
+      unchanged.failures.contains { $0.path.contains("torrent_in") && $0.path.contains("downloader") },
+      unchanged.formattedDescription
+    )
+    XCTAssertFalse(
+      unchanged.reviews.contains { $0.path.contains("torrent_in") && $0.path.contains("downloader") },
+      unchanged.formattedDescription
+    )
+
+    let live = try makeDocument(
+      paths: [
+        "/api/v1/download/add": .object([
+          "post": downloadAddOperation(
+            torrentProperties: torrentInProperties(titleType: "string", extra: [
+              "downloader": nullableSchema(type: "string")
+            ])
+          )
+        ])
+      ]
+    )
+    let changed = OpenAPIContractChecker.check(live: live, baseline: baseline, catalog: [catalog])
+    XCTAssertTrue(
+      changed.failures.contains {
+        $0.operationID == "POST /download/add"
+          && $0.kind == .bodyFieldTypeMismatch
+          && $0.path.contains("torrent_in")
+          && $0.path.contains("downloader")
+      },
+      changed.formattedDescription
+    )
+    XCTAssertFalse(
+      changed.failures.contains {
+        $0.path == "body.downloader" || $0.path.hasSuffix(".downloader") && !$0.path.contains("torrent_in")
+      },
+      changed.formattedDescription
+    )
+  }
+
+  func testDownloadAddUncataloguedRootOptionalFieldChangeIsNotFailure() throws {
+    let catalog = try downloadAddCatalog()
+    XCTAssertFalse(catalog.bodyFields.contains { $0.name == "music_type" })
+    let baseline = try makeDocument(
+      paths: [
+        "/api/v1/download/add": .object([
+          "post": downloadAddOperation(
+            torrentProperties: torrentInProperties(titleType: "string"),
+            extraRoot: ["music_type": nullableSchema(type: "string")]
+          )
+        ])
+      ]
+    )
+    let live = try makeDocument(
+      paths: [
+        "/api/v1/download/add": .object([
+          "post": downloadAddOperation(
+            torrentProperties: torrentInProperties(titleType: "string"),
+            extraRoot: ["music_type": nullableSchema(type: "integer")]
+          )
+        ])
+      ]
+    )
+    let report = OpenAPIContractChecker.check(live: live, baseline: baseline, catalog: [catalog])
+    XCTAssertFalse(
+      report.failures.contains { $0.path.contains("music_type") },
+      report.formattedDescription
+    )
+    XCTAssertFalse(
+      report.reviews.contains { $0.path.contains("music_type") },
+      report.formattedDescription
+    )
+  }
+
+  func testDownloadAddNestedNewRequiredFieldIsFailure() throws {
+    let catalog = try downloadAddCatalog()
+    let properties = torrentInProperties(titleType: "string")
+    let baseline = try makeDocument(
+      paths: [
+        "/api/v1/download/add": .object([
+          "post": downloadAddOperation(torrentProperties: properties, torrentRequired: [])
+        ])
+      ]
+    )
+    let live = try makeDocument(
+      paths: [
+        "/api/v1/download/add": .object([
+          "post": downloadAddOperation(torrentProperties: properties, torrentRequired: ["title"])
+        ])
+      ]
+    )
+    let report = OpenAPIContractChecker.check(live: live, baseline: baseline, catalog: [catalog])
+    XCTAssertTrue(
+      report.failures.contains {
+        $0.operationID == "POST /download/add"
+          && $0.kind == .missingRequiredBodyField
+          && $0.path.contains("torrent_in")
+          && $0.path.contains("title")
+      },
+      report.formattedDescription
+    )
+  }
+
+  func testAnyOfBranchReorderIsNotBlocking() throws {
+    try assertUnionReorderIsNotBlocking(combinator: "anyOf")
+  }
+
+  func testOneOfBranchReorderIsNotBlocking() throws {
+    try assertUnionReorderIsNotBlocking(combinator: "oneOf")
+  }
+
+  func testUnionReorderDoesNotHideNestedChange() throws {
+    let baseline = try makeDocument(
+      paths: [
+        "/api/v1/sample": .object([
+          "get": unionResultGET(
+            combinator: "anyOf",
+            branches: [
+              profileBranch(idType: "integer"),
+              profileBranch(idType: "string"),
+            ]
+          )
+        ])
+      ]
+    )
+    let live = try makeDocument(
+      paths: [
+        "/api/v1/sample": .object([
+          "get": unionResultGET(
+            combinator: "anyOf",
+            branches: [
+              profileBranch(idType: "boolean"),
+              profileBranch(idType: "integer"),
+            ]
+          )
+        ])
+      ]
+    )
+    let report = OpenAPIContractChecker.check(
+      live: live,
+      baseline: baseline,
+      catalog: [sampleResultCatalog()]
+    )
+    XCTAssertTrue(
+      report.failures.contains {
+        $0.kind == .responseFieldTypeMismatch && $0.path.contains("id")
+      },
+      report.formattedDescription
+    )
+    XCTAssertFalse(
+      report.failures.contains { $0.kind == .unverifiedSchema },
+      report.formattedDescription
+    )
+  }
+
+  func testUnionBranchCountChangeIsUnverified() throws {
+    let baseline = try makeDocument(
+      paths: [
+        "/api/v1/sample": .object([
+          "get": unionResultGET(
+            combinator: "anyOf",
+            branches: [
+              profileBranch(idType: "integer"),
+              profileBranch(idType: "string"),
+            ]
+          )
+        ])
+      ]
+    )
+    let live = try makeDocument(
+      paths: [
+        "/api/v1/sample": .object([
+          "get": unionResultGET(
+            combinator: "anyOf",
+            branches: [
+              profileBranch(idType: "integer"),
+              profileBranch(idType: "string"),
+              profileBranch(idType: "boolean"),
+            ]
+          )
+        ])
+      ]
+    )
+    let report = OpenAPIContractChecker.check(
+      live: live,
+      baseline: baseline,
+      catalog: [sampleResultCatalog()]
+    )
+    XCTAssertTrue(
+      report.failures.contains {
+        $0.kind == .unverifiedSchema
+          && $0.operationID == "GET /sample"
+          && $0.path.contains("result")
+      },
+      report.formattedDescription
+    )
+  }
+
+  func testUnionDescriptionAndKeyOrderDoNotAffectBranchIdentity() throws {
+    let baseline = try makeDocument(
+      paths: [
+        "/api/v1/sample": .object([
+          "get": unionResultGET(
+            combinator: "oneOf",
+            branches: [
+              profileBranch(idType: "integer", description: "int profile", extraFirst: false),
+              profileBranch(idType: "string", description: "string profile", extraFirst: false),
+            ]
+          )
+        ])
+      ]
+    )
+    let live = try makeDocument(
+      paths: [
+        "/api/v1/sample": .object([
+          "get": unionResultGET(
+            combinator: "oneOf",
+            branches: [
+              profileBranch(idType: "string", description: "renamed string", extraFirst: true),
+              profileBranch(idType: "integer", description: "renamed int", extraFirst: true),
+            ]
+          )
+        ])
+      ]
+    )
+    let report = OpenAPIContractChecker.check(
+      live: live,
+      baseline: baseline,
+      catalog: [sampleResultCatalog()]
+    )
+    XCTAssertTrue(
+      report.failures.filter { $0.operationID == "GET /sample" }.isEmpty,
+      report.formattedDescription
+    )
+    XCTAssertTrue(
+      report.reviews.filter { $0.operationID == "GET /sample" }.isEmpty,
+      report.formattedDescription
+    )
+  }
+
+  func testAnyOfVersusOneOfSameBranchesIsUnverified() throws {
+    let branches = [
+      profileBranch(idType: "integer"),
+      profileBranch(idType: "string"),
+    ]
+    let baseline = try makeDocument(
+      paths: ["/api/v1/sample": .object(["get": unionResultGET(combinator: "anyOf", branches: branches)])]
+    )
+    let live = try makeDocument(
+      paths: ["/api/v1/sample": .object(["get": unionResultGET(combinator: "oneOf", branches: branches)])]
+    )
+    let report = OpenAPIContractChecker.check(
+      live: live,
+      baseline: baseline,
+      catalog: [sampleResultCatalog()]
+    )
+    XCTAssertTrue(
+      report.failures.contains {
+        $0.kind == .unverifiedSchema && $0.path.contains("result")
+      },
+      report.formattedDescription
+    )
+  }
+
+  func testRecursiveRequestArrayItemAgainstItselfIsNotNarrowing() throws {
+    let fileItem = JSONValue.object([
+      "type": .string("object"),
+      "properties": .object([
+        "name": .object(["type": .string("string")]),
+        "children": .object([
+          "anyOf": .array([
+            .object([
+              "type": .string("array"),
+              "items": .object(["$ref": .string("#/components/schemas/FileItem")]),
+            ]),
+            .object(["type": .string("null")]),
+          ])
+        ]),
+      ]),
+    ])
+    let document = try makeDocument(
+      paths: [
+        "/api/v1/transfer/manual": .object([
+          "post": bodyOperation(
+            properties: [
+              "fileitem": .object(["$ref": .string("#/components/schemas/FileItem")]),
+              "transfer_type": .object(["type": .string("string")]),
+            ]
+          )
+        ])
+      ],
+      schemas: ["FileItem": fileItem]
+    )
+    let catalog = [
+      TVAPIOperationBuilder.mutation(
+        "POST",
+        "/transfer/manual",
+        body: [
+          TVAPIFields.field("fileitem", .object),
+          TVAPIFields.field("transfer_type", .string, alwaysSent: true),
+        ],
+        coverage: [.urlProtocol]
+      )
+    ]
+    let report = OpenAPIContractChecker.check(live: document, baseline: document, catalog: catalog)
+    XCTAssertFalse(
+      report.failures.contains { $0.path.contains("children") || $0.kind == .bodyFieldTypeMismatch },
+      report.formattedDescription
+    )
+    XCTAssertFalse(
+      report.reviews.contains { $0.path.contains("children") || $0.kind == .bodyFieldTypeMismatch },
+      report.formattedDescription
+    )
+  }
+
+  func testUnchangedCommittedBaselineHasNoBlockingFindings() throws {
+    let baseline = try OpenAPIContractSupport.loadDocument("openapi-baseline.json")
+    let exceptions = try OpenAPIContractSupport.loadExceptions()
+    let report = OpenAPIContractChecker.check(
+      live: baseline,
+      baseline: baseline,
+      catalog: TVAPIContractCatalog.operations,
+      exceptions: exceptions
+    )
+    XCTAssertTrue(
+      report.failures.isEmpty,
+      report.formattedDescription
+    )
+    XCTAssertTrue(
+      report.reviews.isEmpty,
       report.formattedDescription
     )
   }
@@ -1133,4 +1538,152 @@ private func successResponse(schema: JSONValue) -> JSONValue {
       ])
     ])
   ])
+}
+
+private func downloadAddCatalog() throws -> TVAPIOperation {
+  try XCTUnwrap(
+    TVAPIContractCatalog.operations.first { $0.operationID == "POST /download/add" }
+  )
+}
+
+private func sampleResultCatalog() -> TVAPIOperation {
+  TVAPIOperationBuilder.get(
+    "/sample",
+    dependedResponse: [TVAPIFields.field("result", .object)],
+    coverage: [.liveReadOnly]
+  )
+}
+
+private func nullableSchema(type: String) -> JSONValue {
+  .object([
+    "anyOf": .array([
+      .object(["type": .string(type)]),
+      .object(["type": .string("null")]),
+    ])
+  ])
+}
+
+private func torrentInProperties(
+  titleType: String,
+  extra: [String: JSONValue] = [:]
+) -> [String: JSONValue] {
+  var properties: [String: JSONValue] = [
+    "site": nullableSchema(type: "string"),
+    "title": nullableSchema(type: titleType),
+    "enclosure": nullableSchema(type: "string"),
+  ]
+  for (name, schema) in extra {
+    properties[name] = schema
+  }
+  return properties
+}
+
+private func downloadAddOperation(
+  torrentProperties: [String: JSONValue],
+  extraRoot: [String: JSONValue] = [:],
+  torrentRequired: [String] = [],
+  rootRequired: [String] = ["torrent_in"]
+) -> JSONValue {
+  var properties: [String: JSONValue] = [
+    "torrent_in": .object([
+      "type": .string("object"),
+      "required": .array(torrentRequired.map { .string($0) }),
+      "properties": .object(torrentProperties),
+    ]),
+    "downloader": nullableSchema(type: "string"),
+    "save_path": nullableSchema(type: "string"),
+  ]
+  for (name, schema) in extraRoot {
+    properties[name] = schema
+  }
+  return bodyOperation(properties: properties, required: rootRequired)
+}
+
+private func unionResultGET(combinator: String, branches: [JSONValue]) -> JSONValue {
+  objectGET(
+    properties: [
+      "result": .object([
+        combinator: .array(branches)
+      ])
+    ],
+    required: []
+  )
+}
+
+private func profileBranch(
+  idType: String,
+  description: String? = nil,
+  extraFirst: Bool = false
+) -> JSONValue {
+  let idSchema: JSONValue = .object(["type": .string(idType)])
+  let nameSchema: JSONValue = .object(["type": .string("string")])
+  let profileProperties: [String: JSONValue]
+  if extraFirst {
+    profileProperties = ["name": nameSchema, "id": idSchema]
+  } else {
+    profileProperties = ["id": idSchema, "name": nameSchema]
+  }
+  var object: [String: JSONValue] = [
+    "type": .string("object"),
+    "properties": .object([
+      "profile": .object([
+        "type": .string("object"),
+        "properties": .object(profileProperties),
+      ])
+    ]),
+  ]
+  if let description {
+    object["description"] = .string(description)
+  }
+  return .object(object)
+}
+
+private func assertUnionReorderIsNotBlocking(
+  combinator: String,
+  file: StaticString = #filePath,
+  line: UInt = #line
+) throws {
+  let baseline = try makeDocument(
+    paths: [
+      "/api/v1/sample": .object([
+        "get": unionResultGET(
+          combinator: combinator,
+          branches: [
+            profileBranch(idType: "integer"),
+            profileBranch(idType: "string"),
+          ]
+        )
+      ])
+    ]
+  )
+  let live = try makeDocument(
+    paths: [
+      "/api/v1/sample": .object([
+        "get": unionResultGET(
+          combinator: combinator,
+          branches: [
+            profileBranch(idType: "string"),
+            profileBranch(idType: "integer"),
+          ]
+        )
+      ])
+    ]
+  )
+  let report = OpenAPIContractChecker.check(
+    live: live,
+    baseline: baseline,
+    catalog: [sampleResultCatalog()]
+  )
+  XCTAssertTrue(
+    report.failures.filter { $0.operationID == "GET /sample" }.isEmpty,
+    report.formattedDescription,
+    file: file,
+    line: line
+  )
+  XCTAssertTrue(
+    report.reviews.filter { $0.operationID == "GET /sample" }.isEmpty,
+    report.formattedDescription,
+    file: file,
+    line: line
+  )
 }
