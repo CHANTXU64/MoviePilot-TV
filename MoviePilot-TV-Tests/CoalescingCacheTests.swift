@@ -46,6 +46,7 @@ private final class LoadProbe {
   var loadCount = 0
   var joinedWaiterStarted = false
   var rejectsCaller = false
+  var cancelledCallerReturned = false
 }
 
 @MainActor
@@ -509,6 +510,97 @@ final class CoalescingCacheTests: XCTestCase {
 
     let error = await read.value
     XCTAssertTrue(error is CancellationError)
+  }
+
+  func testCancelledWaiterExitsPromptlyWhileSharedLoadContinues() async throws {
+    let cache = CoalescingCache<String, String>(ttl: 60, capacity: 10)
+    let gate = LoadGate()
+    let probe = LoadProbe()
+
+    let cancelledCaller = Task { () -> Bool in
+      defer { probe.cancelledCallerReturned = true }
+      do {
+        _ = try await cache.value(for: "key", validate: {}) {
+          probe.loadCount += 1
+          await gate.wait()
+          return "shared"
+        }
+        return false
+      } catch {
+        return error is CancellationError
+      }
+    }
+    await gate.waitForArrival()
+    let remainingCaller = Task {
+      try await cache.value(
+        for: "key",
+        validate: {},
+        load: countingLoad("unexpected", probe: probe)
+      )
+    }
+    await Task.yield()
+
+    // 共享加载仍被挡住时取消一个调用方：它应立即退出，而不是等加载结束。
+    cancelledCaller.cancel()
+    for _ in 0..<100 where !probe.cancelledCallerReturned {
+      await Task.yield()
+    }
+    XCTAssertTrue(probe.cancelledCallerReturned)
+    gate.open()
+
+    let wasCancelled = await cancelledCaller.value
+    let remainingValue = try await remainingCaller.value
+    let cachedValue = try await cache.value(
+      for: "key",
+      validate: {},
+      load: countingLoad("unexpected", probe: probe)
+    )
+    XCTAssertTrue(wasCancelled)
+    XCTAssertEqual(remainingValue, "shared")
+    XCTAssertEqual(cachedValue, "shared")
+    XCTAssertEqual(probe.loadCount, 1)
+  }
+
+  func testCancelledSupersededWaiterStopsFollowingSuccessor() async throws {
+    let cache = CoalescingCache<String, String>(ttl: 60, capacity: 10)
+    let olderGate = LoadGate()
+    let latestGate = LoadGate()
+    let probe = LoadProbe()
+
+    let olderCaller = Task { () -> Bool in
+      defer { probe.cancelledCallerReturned = true }
+      do {
+        _ = try await cache.value(for: "key", validate: {}) {
+          await olderGate.wait()
+          return "older"
+        }
+        return false
+      } catch {
+        return error is CancellationError
+      }
+    }
+    await olderGate.waitForArrival()
+    let latest = Task {
+      try await cache.value(for: "key", forceRefresh: true, validate: {}) {
+        await latestGate.wait()
+        return "latest"
+      }
+    }
+    await latestGate.waitForArrival()
+
+    // 被取代的调用方取消、它自己的旧加载也结束后，不应继续等仍被挡住的后继强刷。
+    olderCaller.cancel()
+    olderGate.open()
+    for _ in 0..<100 where !probe.cancelledCallerReturned {
+      await Task.yield()
+    }
+    XCTAssertTrue(probe.cancelledCallerReturned)
+    latestGate.open()
+
+    let wasCancelled = await olderCaller.value
+    let latestValue = try await latest.value
+    XCTAssertTrue(wasCancelled)
+    XCTAssertEqual(latestValue, "latest")
   }
 
   func testCancelledLoadAfterInvalidationReloadsForWaiter() async throws {
