@@ -432,15 +432,22 @@ final class CoalescingCacheTests: XCTestCase {
     XCTAssertEqual(probe.loadCount, 2)
   }
 
-  func testFailureOfInvalidatedLoadStillReachesWaiterWithoutReload() async throws {
+  func testFailureOfLoadInvalidatedWithCallerSessionReachesCallerWithoutReload() async throws {
     let cache = CoalescingCache<String, String>(ttl: 60, capacity: 10)
     let probe = LoadProbe()
 
-    // 例如权限探测在加载内部刷新了会话：缓存随之失效，但这次加载的业务错误仍要交给调用方。
+    // 例如权限探测在加载内部刷新了会话：缓存随之失效、调用方校验不再通过，
+    // 这次加载的原业务错误仍要交给调用方，而不是被重读或换成校验错误。
     do {
-      _ = try await cache.value(for: "key", validate: {}) {
+      _ = try await cache.value(
+        for: "key",
+        validate: {
+          if probe.rejectsCaller { throw CoalescingCacheTestError.rejected }
+        }
+      ) {
         probe.loadCount += 1
         guard probe.loadCount == 1 else { return "unexpected-reload" }
+        probe.rejectsCaller = true
         cache.invalidateAll()
         throw CoalescingCacheTestError.latest
       }
@@ -449,6 +456,36 @@ final class CoalescingCacheTests: XCTestCase {
       XCTAssertEqual(error as? CoalescingCacheTestError, .latest)
     }
     XCTAssertEqual(probe.loadCount, 1)
+  }
+
+  func testFailureOfLoadInvalidatedByMutationRereadsForStillValidCaller() async throws {
+    let cache = CoalescingCache<String, String>(ttl: 60, capacity: 10)
+    let staleGate = LoadGate()
+    let probe = LoadProbe()
+
+    let staleRefresh = Task {
+      try await cache.value(for: "key", forceRefresh: true, validate: {}) {
+        probe.loadCount += 1
+        await staleGate.wait()
+        throw CoalescingCacheTestError.stale
+      }
+    }
+    await staleGate.waitForArrival()
+
+    // mutation 使缓存失效后，新的刷新先成功；旧刷新随后失败时，调用方应重读到新结果。
+    cache.invalidateAll()
+    let latest = try await cache.value(
+      for: "key",
+      forceRefresh: true,
+      validate: {},
+      load: countingLoad("latest", probe: probe)
+    )
+    staleGate.open()
+
+    let staleCallerValue = try await staleRefresh.value
+    XCTAssertEqual(latest, "latest")
+    XCTAssertEqual(staleCallerValue, "latest")
+    XCTAssertEqual(probe.loadCount, 2)
   }
 
   func testCancelledWaiterReceivesCancellationInsteadOfSharedFailure() async throws {

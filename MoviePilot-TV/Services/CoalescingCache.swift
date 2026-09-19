@@ -8,7 +8,8 @@ import Foundation
 ///   只要该 key 还有调用者在等待，链尾就一直保留，之后的加载都能接上。被取代加载的成功或失败
 ///   既不写缓存，也不返回；它的等待者沿取代链走到链尾，拿到最新加载的成功或失败。
 /// - `invalidateAll()`：推进代际并清空缓存。在途加载不取消（可能正在执行重登等不可中断流程），
-///   但其成功结果不再写缓存，等待者按新代际重新读取；其失败照常抛给等待者。
+///   但其成功结果不再写缓存，等待者按新代际重新读取；其失败在调用方仍有效时同样重读，
+///   调用方已失效（`validate` 抛错，例如会话在加载内部被刷新）时把原失败交给它。
 /// - 未被取代的加载失败时直接抛给它的全部等待者，不写缓存、不自动重试。
 /// - 每次读取前与拿到成功结果后都执行调用方的 `validate`；它抛错时立即停止，不返回任何值。
 @MainActor
@@ -95,7 +96,13 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
       case .failure(let error):
         // 共享加载不随单个等待者取消；已取消的等待者只收到取消，不收到共享加载的业务错误。
         try Task.checkCancellation()
-        if error is CancellationError, flight.state.generation != generation { continue }
+        if flight.state.generation != generation {
+          if error is CancellationError { continue }
+          // 加载期间缓存已失效：调用方仍有效（例如只是 mutation 失效）时按新代际重读；
+          // 调用方已失效（例如会话在加载内部被刷新）时，原业务错误照常交给它。
+          let callerIsStillValid = (try? validate()) != nil
+          if callerIsStillValid { continue }
+        }
         throw error
       }
     }
