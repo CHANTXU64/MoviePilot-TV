@@ -431,6 +431,19 @@ enum OpenAPIContractChecker {
           )
         )
       }
+      if let itemType = field.itemType, let items = property.items?.schema,
+        !typesCompatible(tv: itemType, schema: items, direction: .request)
+      {
+        report.findings.append(
+          OpenAPIFinding(
+            severity: .failure,
+            kind: .bodyFieldTypeMismatch,
+            operationID: catalog.operationID,
+            path: "body.\(field.name)[]",
+            message: "请求数组元素类型不兼容：TV=\(itemType.rawValue)"
+          )
+        )
+      }
     }
 
     for requiredName in schema.required {
@@ -586,7 +599,31 @@ enum OpenAPIContractChecker {
           )
         )
       }
+      if let itemType = field.itemType,
+        let items = responseArrayItemSchema(schema, fieldName: field.name),
+        !typesCompatible(tv: itemType, schema: items, direction: .response)
+      {
+        report.findings.append(
+          OpenAPIFinding(
+            severity: .failure,
+            kind: .responseFieldTypeMismatch,
+            operationID: catalog.operationID,
+            path: "response.\(field.name)[]",
+            message: "响应数组元素类型不兼容：TV=\(itemType.rawValue)"
+          )
+        )
+      }
     }
+  }
+
+  private static func responseArrayItemSchema(_ schema: OpenAPISchema, fieldName: String) -> OpenAPISchema? {
+    if schema.kind == .array, let items = schema.items?.schema {
+      return responseArrayItemSchema(items, fieldName: fieldName)
+    }
+    if schema.kind == .union, !schema.alternatives.isEmpty {
+      return schema.alternatives.compactMap { responseArrayItemSchema($0, fieldName: fieldName) }.first
+    }
+    return schema.properties[fieldName]?.items?.schema
   }
 
   private static func responseDeclaresField(
@@ -838,8 +875,56 @@ enum OpenAPIContractChecker {
       catalogFields: catalogFields,
       into: &report
     )
+    compareCurrentNode(
+      catalogID: catalogID,
+      location: location,
+      live: live,
+      baseline: baseline,
+      direction: direction,
+      catalogFields: catalogFields,
+      into: &report
+    )
 
-    if let liveItems = live.items?.schema, let baselineItems = baseline.items?.schema {
+    let liveAlts = live.alternatives
+    let baselineAlts = baseline.alternatives
+    if liveAlts.count >= 2 || baselineAlts.count >= 2 {
+      if liveAlts.count != baselineAlts.count {
+        report.findings.append(
+          OpenAPIFinding(
+            severity: .failure,
+            kind: .unverifiedSchema,
+            operationID: catalogID,
+            path: location,
+            message: "联合类型分支数量变化，无法可靠按分支比较嵌套合同"
+          )
+        )
+        return
+      }
+      if direction == .request {
+        return
+      }
+      for index in liveAlts.indices {
+        compareSchemaBaseline(
+          catalogID: catalogID,
+          location: "\(location)|alt\(index)",
+          live: liveAlts[index],
+          baseline: baselineAlts[index],
+          roundTrip: roundTrip,
+          direction: direction,
+          catalogFields: catalogFields,
+          expectsValue: true,
+          depth: depth + 1,
+          into: &report
+        )
+      }
+      return
+    }
+
+    let shouldRecurseItems =
+      direction == .response
+      || tvTypeForLocation(location, fields: catalogFields) == .array
+      || tvTypeForLocation("\(location)[]", fields: catalogFields) != nil
+    if shouldRecurseItems, let liveItems = live.items?.schema, let baselineItems = baseline.items?.schema {
       compareSchemaBaseline(
         catalogID: catalogID,
         location: "\(location)[]",
@@ -866,37 +951,18 @@ enum OpenAPIContractChecker {
       )
     }
 
-    if live.kind == .union || baseline.kind == .union {
-      let liveTypes = schemaProducedJSONTypes(live)
-      let baselineTypes = schemaProducedJSONTypes(baseline)
-      if direction == .response, !liveTypes.isSubset(of: baselineTypes) {
-        report.findings.append(
-          OpenAPIFinding(
-            severity: .failure,
-            kind: .responseFieldTypeMismatch,
-            operationID: catalogID,
-            path: location,
-            message:
-              "相对基线，联合类型可产生的值变宽：\(liveTypes.sorted().joined(separator: "|"))"
-          )
-        )
-      }
-      if direction == .request, !baselineTypes.isSubset(of: schemaAcceptedJSONTypes(live)) {
-        report.findings.append(
-          OpenAPIFinding(
-            severity: .failure,
-            kind: .bodyFieldTypeMismatch,
-            operationID: catalogID,
-            path: location,
-            message: "相对基线，请求可接受的类型变窄"
-          )
-        )
-      }
-    }
-
     let liveProps = live.properties
     let baselineProps = baseline.properties
-    for name in Set(liveProps.keys).union(baselineProps.keys).sorted() {
+    var propertyNames = Set(liveProps.keys).union(baselineProps.keys)
+    if direction == .request, !catalogFields.isEmpty {
+      let catalogued = Set(catalogFields.map(\.name))
+      var names = propertyNames.intersection(catalogued)
+      if roundTrip {
+        names.formUnion(Set(liveProps.keys).subtracting(baselineProps.keys))
+      }
+      propertyNames = names
+    }
+    for name in propertyNames.sorted() {
       let liveProperty = liveProps[name]
       let baselineProperty = baselineProps[name]
       let field = catalogFields.first { $0.name == name }
@@ -955,57 +1021,6 @@ enum OpenAPIContractChecker {
       }
       guard let liveProperty, let baselineProperty else { continue }
 
-      if direction == .response {
-        if !baselineProperty.nullable && liveProperty.nullable {
-          report.findings.append(
-            OpenAPIFinding(
-              severity: .failure,
-              kind: .responseFieldNullability,
-              operationID: catalogID,
-              path: childPath,
-              message: "相对基线，响应字段值变为可 null"
-            )
-          )
-        }
-        if !schemaProducedJSONTypes(liveProperty).isSubset(of: schemaProducedJSONTypes(baselineProperty)) {
-          report.findings.append(
-            OpenAPIFinding(
-              severity: .failure,
-              kind: .responseFieldTypeMismatch,
-              operationID: catalogID,
-              path: childPath,
-              message: "相对基线，响应字段可产生的类型变宽"
-            )
-          )
-        } else if let field,
-          typesCompatible(tv: field.jsonType, schema: baselineProperty, direction: .response),
-          !typesCompatible(tv: field.jsonType, schema: liveProperty, direction: .response)
-        {
-          report.findings.append(
-            OpenAPIFinding(
-              severity: .failure,
-              kind: .responseFieldTypeMismatch,
-              operationID: catalogID,
-              path: childPath,
-              message: "相对基线，响应字段类型变为 TV 无法保证解码的集合"
-            )
-          )
-        }
-      } else {
-        if !schemaAcceptedJSONTypes(liveProperty).isSuperset(
-          of: schemaProducedJSONTypes(baselineProperty)
-        ) {
-          report.findings.append(
-            OpenAPIFinding(
-              severity: .failure,
-              kind: .bodyFieldTypeMismatch,
-              operationID: catalogID,
-              path: childPath,
-              message: "相对基线，请求字段可接受类型变窄"
-            )
-          )
-        }
-      }
       if normalizedDefault(baselineProperty.defaultValue) != normalizedDefault(liveProperty.defaultValue) {
         report.findings.append(
           OpenAPIFinding(
@@ -1036,12 +1051,87 @@ enum OpenAPIContractChecker {
         baseline: baselineProperty,
         roundTrip: roundTrip,
         direction: direction,
-        catalogFields: [],
+        catalogFields: catalogFields,
         expectsValue: true,
         depth: depth + 1,
         into: &report
       )
     }
+  }
+
+  private static func compareCurrentNode(
+    catalogID: String,
+    location: String,
+    live: OpenAPISchema,
+    baseline: OpenAPISchema,
+    direction: CompatibilityDirection,
+    catalogFields: [TVAPIField],
+    into report: inout OpenAPIContractReport
+  ) {
+    if direction == .response {
+      if !baseline.nullable && live.nullable {
+        report.findings.append(
+          OpenAPIFinding(
+            severity: .failure,
+            kind: .responseFieldNullability,
+            operationID: catalogID,
+            path: location,
+            message: "相对基线，该节点值变为可 null"
+          )
+        )
+      }
+      if isResponseTypeIncompatible(live: live, baseline: baseline, location: location, catalogFields: catalogFields)
+      {
+        report.findings.append(
+          OpenAPIFinding(
+            severity: .failure,
+            kind: .responseFieldTypeMismatch,
+            operationID: catalogID,
+            path: location,
+            message: "相对基线，该节点可产生的值超出 TV 可解码范围"
+          )
+        )
+      }
+    } else if !schemaAcceptedJSONTypes(live).isSuperset(of: responseProducedValueSet(baseline)) {
+      report.findings.append(
+        OpenAPIFinding(
+          severity: .failure,
+          kind: .bodyFieldTypeMismatch,
+          operationID: catalogID,
+          path: location,
+          message: "相对基线，该节点可接受类型变窄"
+        )
+      )
+    }
+  }
+
+  private static func isResponseTypeIncompatible(
+    live: OpenAPISchema,
+    baseline: OpenAPISchema,
+    location: String,
+    catalogFields: [TVAPIField]
+  ) -> Bool {
+    let liveSet = responseProducedValueSet(live)
+    let baselineSet = responseProducedValueSet(baseline)
+    if let tvType = tvTypeForLocation(location, fields: catalogFields) {
+      let decodable = tvDecodableJSONTypes(tvType)
+      return !liveSet.isSubset(of: decodable) && baselineSet.isSubset(of: decodable)
+    }
+    return !liveSet.isSubset(of: baselineSet)
+  }
+
+  private static func tvTypeForLocation(_ location: String, fields: [TVAPIField]) -> TVJSONType? {
+    let token = location.split(separator: ".").last.map(String.init) ?? location
+    let isItems = token.hasSuffix("[]")
+    var name = token.replacingOccurrences(of: "[]", with: "")
+    if let altRange = name.range(of: "|alt") {
+      name = String(name[..<altRange.lowerBound])
+    }
+    guard let field = fields.first(where: { $0.name == name }) else { return nil }
+    if isItems {
+      return field.itemType
+    }
+    return field.jsonType
   }
 
   private static func compareRequiredSets(
@@ -1284,6 +1374,14 @@ enum OpenAPIContractChecker {
     case .json:
       return ["string", "integer", "number", "boolean", "array", "object"]
     }
+  }
+
+  private static func responseProducedValueSet(_ schema: OpenAPISchema) -> Set<String> {
+    var types = schemaProducedJSONTypes(schema)
+    if types.contains("number") {
+      types.insert("integer")
+    }
+    return types
   }
 
   private static func schemaProducedJSONTypes(_ schema: OpenAPISchema) -> Set<String> {

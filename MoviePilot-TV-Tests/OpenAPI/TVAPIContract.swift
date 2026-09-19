@@ -32,6 +32,8 @@ struct TVAPIField: Equatable {
   let required: Bool
   /// TV 请求体每次都会写出该键，包括显式 null。
   let alwaysSent: Bool
+  /// 当 `jsonType` 为数组时，TV 实际解码/发送的元素类型。
+  let itemType: TVJSONType?
 }
 
 enum TVAPIResponseKind: Equatable {
@@ -196,13 +198,15 @@ enum TVAPIFields {
     _ name: String,
     _ type: TVJSONType,
     required: Bool = false,
-    alwaysSent: Bool? = nil
+    alwaysSent: Bool? = nil,
+    itemType: TVJSONType? = nil
   ) -> TVAPIField {
     TVAPIField(
       name: name,
       jsonType: type,
       required: required,
-      alwaysSent: alwaysSent ?? required
+      alwaysSent: alwaysSent ?? required,
+      itemType: itemType
     )
   }
 
@@ -228,10 +232,10 @@ enum TVAPIFields {
     field("poster", .string),
     field("best_version", .integer),
     field("best_version_full", .integer),
-    field("sites", .array),
+    field("sites", .array, itemType: .integer),
     field("downloader", .string),
     field("save_path", .string),
-    field("filter_groups", .array),
+    field("filter_groups", .array, itemType: .string),
     field("episode_group", .string),
     field("note", .json),
     field("current_priority", .integer),
@@ -269,13 +273,13 @@ enum TVAPIFields {
     field("effect", .string),
     field("include", .string),
     field("exclude", .string),
-    field("sites", .array),
+    field("sites", .array, itemType: .integer),
     field("downloader", .string),
     field("save_path", .string),
     field("best_version", .integer),
     field("best_version_full", .integer),
     field("current_priority", .integer),
-    field("filter_groups", .array),
+    field("filter_groups", .array, itemType: .string),
     field("custom_words", .string),
     field("description", .string),
     field("filter", .string),

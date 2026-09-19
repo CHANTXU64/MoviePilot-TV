@@ -628,6 +628,157 @@ final class OpenAPIContractOfflineTests: XCTestCase {
     )
   }
 
+  func testPrimitiveArrayItemTypeChangeIsFailure() throws {
+    func subscribeWithSiteItems(_ itemType: String) -> JSONValue {
+      arrayGET(
+        itemProperties: [
+          "sites": .object([
+            "type": .string("array"),
+            "items": .object(["type": .string(itemType)]),
+          ])
+        ],
+        required: []
+      )
+    }
+    let baseline = try makeDocument(
+      paths: ["/api/v1/subscribe/": .object(["get": subscribeWithSiteItems("integer")])]
+    )
+    let live = try makeDocument(
+      paths: ["/api/v1/subscribe/": .object(["get": subscribeWithSiteItems("string")])]
+    )
+    let catalog = [
+      TVAPIOperationBuilder.get(
+        "/subscribe/",
+        dependedResponse: [TVAPIFields.field("sites", .array, itemType: .integer)],
+        coverage: [.liveReadOnly]
+      )
+    ]
+    let withBaseline = OpenAPIContractChecker.check(live: live, baseline: baseline, catalog: catalog)
+    XCTAssertTrue(
+      withBaseline.failures.contains {
+        $0.kind == .responseFieldTypeMismatch && $0.path.contains("sites")
+      },
+      withBaseline.formattedDescription
+    )
+    let liveOnly = OpenAPIContractChecker.check(live: live, baseline: nil, catalog: catalog)
+    XCTAssertTrue(
+      liveOnly.failures.contains {
+        $0.kind == .responseFieldTypeMismatch && $0.path.contains("sites")
+      },
+      liveOnly.formattedDescription
+    )
+  }
+
+  func testPrimitiveArrayItemBecomingNullableIsFailure() throws {
+    let baseline = try makeDocument(
+      paths: [
+        "/api/v1/subscribe/": .object([
+          "get": arrayGET(
+            itemProperties: [
+              "sites": .object([
+                "type": .string("array"),
+                "items": .object(["type": .string("integer")]),
+              ])
+            ],
+            required: []
+          )
+        ])
+      ]
+    )
+    let live = try makeDocument(
+      paths: [
+        "/api/v1/subscribe/": .object([
+          "get": arrayGET(
+            itemProperties: [
+              "sites": .object([
+                "type": .string("array"),
+                "items": .object([
+                  "anyOf": .array([
+                    .object(["type": .string("integer")]),
+                    .object(["type": .string("null")]),
+                  ])
+                ]),
+              ])
+            ],
+            required: []
+          )
+        ])
+      ]
+    )
+    let catalog = [
+      TVAPIOperationBuilder.get(
+        "/subscribe/",
+        dependedResponse: [TVAPIFields.field("sites", .array, itemType: .integer)],
+        coverage: [.liveReadOnly]
+      )
+    ]
+    let report = OpenAPIContractChecker.check(live: live, baseline: baseline, catalog: catalog)
+    XCTAssertTrue(
+      report.failures.contains {
+        $0.kind == .responseFieldNullability && $0.path.contains("sites")
+      },
+      report.formattedDescription
+    )
+  }
+
+  func testUnionNonFirstBranchNestedChangeIsFailure() throws {
+    func profileUnion(secondIDType: String) -> JSONValue {
+      objectGET(
+        properties: [
+          "result": .object([
+            "anyOf": .array([
+              .object([
+                "type": .string("object"),
+                "properties": .object([
+                  "profile": .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                      "id": .object(["type": .string("integer")])
+                    ]),
+                  ])
+                ]),
+              ]),
+              .object([
+                "type": .string("object"),
+                "properties": .object([
+                  "profile": .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                      "id": .object(["type": .string(secondIDType)])
+                    ]),
+                  ])
+                ]),
+              ]),
+            ])
+          ])
+        ],
+        required: []
+      )
+    }
+    let baseline = try makeDocument(
+      paths: ["/api/v1/sample": .object(["get": profileUnion(secondIDType: "integer")])]
+    )
+    let live = try makeDocument(
+      paths: ["/api/v1/sample": .object(["get": profileUnion(secondIDType: "string")])]
+    )
+    let catalog = [
+      TVAPIOperationBuilder.get(
+        "/sample",
+        dependedResponse: [TVAPIFields.field("result", .object)],
+        coverage: [.liveReadOnly]
+      )
+    ]
+    let report = OpenAPIContractChecker.check(live: live, baseline: baseline, catalog: catalog)
+    XCTAssertFalse(report.failures.isEmpty, report.formattedDescription)
+    XCTAssertTrue(
+      report.failures.contains {
+        $0.path.contains("alt1") && ($0.path.contains("id") || $0.kind == .unverifiedSchema)
+      }
+        || report.failures.contains { $0.kind == .unverifiedSchema },
+      report.formattedDescription
+    )
+  }
+
   func testQueryStringBecomingIntegerIsFailure() throws {
     let live = try makeDocument(
       paths: [
@@ -690,6 +841,41 @@ final class OpenAPIContractOfflineTests: XCTestCase {
       report.failures.contains {
         $0.kind == .responseFieldTypeMismatch && $0.path.contains("total")
       },
+      report.formattedDescription
+    )
+  }
+
+  func testNumberNarrowingToIntegerIsCompatibleForDouble() throws {
+    let baseline = try makeDocument(
+      paths: [
+        "/api/v1/dashboard/storage": .object([
+          "get": objectGET(
+            properties: ["used_storage": .object(["type": .string("number")])],
+            required: ["used_storage"]
+          )
+        ])
+      ]
+    )
+    let live = try makeDocument(
+      paths: [
+        "/api/v1/dashboard/storage": .object([
+          "get": objectGET(
+            properties: ["used_storage": .object(["type": .string("integer")])],
+            required: ["used_storage"]
+          )
+        ])
+      ]
+    )
+    let catalog = [
+      TVAPIOperationBuilder.get(
+        "/dashboard/storage",
+        dependedResponse: [TVAPIFields.field("used_storage", .number)],
+        coverage: [.liveReadOnly]
+      )
+    ]
+    let report = OpenAPIContractChecker.check(live: live, baseline: baseline, catalog: catalog)
+    XCTAssertFalse(
+      report.failures.contains { $0.path.contains("used_storage") },
       report.formattedDescription
     )
   }
