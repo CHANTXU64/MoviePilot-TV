@@ -80,7 +80,8 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   ///   - processor: 一个闭包，接收现有项目（`inout`）和新项目，
   ///                处理它们，并在添加了新内容时返回 `true`。
   ///   - onReset: 一个可选的闭包，用于在“重置”期间运行自定义的状态清除逻辑。
-  public init(
+  /// 参数含内部类型，本 App 单模块使用，初始化器保持内部访问级别。
+  init(
     listID: UUID = UUID(),
     threshold: Int,
     fetcher: @escaping @MainActor (Int) async throws -> [ItemType],
