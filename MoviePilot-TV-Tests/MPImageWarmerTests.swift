@@ -209,14 +209,20 @@ final class MPImageWarmerTests: XCTestCase {
 
     // clear() 只取消在途预热，预热器随后仍可使用。
     let clearedURL = try warmURL("cleared")
-    XCTAssertNotNil(
-      await warmer.warm(clearedURL, baseURL: baseURL, imageCacheEnabled: true)
+    let clearedHandle = await warmer.warm(
+      clearedURL,
+      baseURL: baseURL,
+      imageCacheEnabled: true
     )
+    XCTAssertNotNil(clearedHandle)
     warmer.clear()
     let reusableURL = try warmURL("reusable")
-    XCTAssertNotNil(
-      await warmer.warm(reusableURL, baseURL: baseURL, imageCacheEnabled: true)
+    let reusableHandle = await warmer.warm(
+      reusableURL,
+      baseURL: baseURL,
+      imageCacheEnabled: true
     )
+    XCTAssertNotNil(reusableHandle)
     try await waitUntil("clear 后仍能发起预热") {
       MPImageWarmURLProtocol.requestCount(for: reusableURL) == 1
     }
