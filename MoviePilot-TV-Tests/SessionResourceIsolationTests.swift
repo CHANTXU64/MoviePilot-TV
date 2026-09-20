@@ -163,6 +163,10 @@ extension SystemSessionBehaviorTests {
   }
 
   func testNavigationCoordinatorPinsIntoCurrentSessionPreloader() {
+    // replaceSessionForTesting 即使不持久化会话，也会写全局 serverURL，退出前必须恢复。
+    let persistence = APIServicePersistenceSnapshot.capture()
+    defer { persistence.restore() }
+
     let service = APIService.testingInstance()
     let coordinator = ImageNavigationCoordinator(apiService: service)
 
