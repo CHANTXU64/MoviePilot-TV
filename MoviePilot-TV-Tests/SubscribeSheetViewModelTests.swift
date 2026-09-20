@@ -493,7 +493,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   }
 
   func testSavedSubscriptionUpdatesMatchingPreloadedTask() {
-    let preloader = MediaPreloader.shared
+    let preloader = APIService.shared.mediaPreloader
     preloader.clearAll()
     defer { preloader.clearAll() }
 

@@ -27,6 +27,7 @@
 | 分页加载、取消与重启 | `Paginator` |
 | 页面图片与导航栈生命周期 | `ImageNavigationCoordinator`、`PageImageLifecycle`、`PageManagedImage` |
 | 详情预载的 owner 计数 | `MediaPreloader.acquireNavigation` / `releaseNavigation` |
+| 会话内共享的协作对象（预载等） | `SessionScope`：`APIService` 按 `uiIdentity` 持有，同账号刷新沿用、换账号或登出时同步拆除；作用域内的对象不再各自监听会话变化自清 |
 | 会话切换后的界面重建 | `ContentView` 以 `sessionUIIdentity` 作为 TabView 身份 |
 | 用户可见失败与日志 | `NotificationManager`、`Logger`（§8） |
 

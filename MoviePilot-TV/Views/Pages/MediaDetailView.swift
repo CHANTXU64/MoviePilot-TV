@@ -578,7 +578,7 @@ struct MediaDetailView: View {
     imageLifetime.isBackgroundMounted = false
     let size = UIScreen.main.bounds.size
     let screenScale = UIScreen.main.scale
-    MediaPreloader.shared.setHeroPresented(
+    APIService.shared.mediaPreloader.setHeroPresented(
       false,
       for: viewModel.detail,
       owner: routeID,
@@ -588,7 +588,7 @@ struct MediaDetailView: View {
   }
 
   private func discardLoadedBackgroundIfAbandoned(url: URL) {
-    MediaPreloader.shared.discardLoadedBackgroundIfAbandoned(
+    APIService.shared.mediaPreloader.discardLoadedBackgroundIfAbandoned(
       url: url,
       detail: viewModel.detail,
       usingPosterAsBackdrop: viewModel.isUsingPosterAsBackdrop,
@@ -605,7 +605,7 @@ struct MediaDetailView: View {
       imageLifecycle.keepsActivePageImages,
       !showContentPage
     else { return }
-    MediaPreloader.shared.setHeroPresented(
+    APIService.shared.mediaPreloader.setHeroPresented(
       true,
       for: viewModel.detail,
       owner: routeID,
@@ -1166,7 +1166,7 @@ struct MediaDetailView: View {
           .onChange(of: focusedDirectorId) { _, newId in
             guard let newId else { return }
             directorImageAnchorId = newId
-            MediaPreloader.shared.focusDidMove(
+            APIService.shared.mediaPreloader.focusDidMove(
               to: "person:\(newId)",
               stackID: navigationCoordinator.id
             )
@@ -1228,7 +1228,7 @@ struct MediaDetailView: View {
           .onChange(of: focusedActorId) { _, newId in
             guard let newId else { return }
             actorImageAnchorId = newId
-            MediaPreloader.shared.focusDidMove(
+            APIService.shared.mediaPreloader.focusDidMove(
               to: "person:\(newId)",
               stackID: navigationCoordinator.id
             )
@@ -1295,14 +1295,14 @@ struct MediaDetailView: View {
               let item = viewModel.recommendPaginator.items.first(where: { $0.id == newId })
             {
               recommendImageAnchorId = newId
-              MediaPreloader.shared.focusDidMove(
+              APIService.shared.mediaPreloader.focusDidMove(
                 to: newId,
                 stackID: navigationCoordinator.id
               )
               recommendPreloadDebounce = Task {
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
-                MediaPreloader.shared.preloadFocusedCandidateIfNeeded(
+                APIService.shared.mediaPreloader.preloadFocusedCandidateIfNeeded(
                   for: item,
                   stackID: navigationCoordinator.id
                 )
@@ -1373,14 +1373,14 @@ struct MediaDetailView: View {
               let item = viewModel.similarPaginator.items.first(where: { $0.id == newId })
             {
               similarImageAnchorId = newId
-              MediaPreloader.shared.focusDidMove(
+              APIService.shared.mediaPreloader.focusDidMove(
                 to: newId,
                 stackID: navigationCoordinator.id
               )
               similarPreloadDebounce = Task {
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
-                MediaPreloader.shared.preloadFocusedCandidateIfNeeded(
+                APIService.shared.mediaPreloader.preloadFocusedCandidateIfNeeded(
                   for: item,
                   stackID: navigationCoordinator.id
                 )

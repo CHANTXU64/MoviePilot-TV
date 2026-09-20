@@ -524,7 +524,7 @@ final class SystemSessionBehaviorTests: XCTestCase {
     let snapshot = SystemSessionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    let preloader = MediaPreloader.shared
+    let preloader = service.mediaPreloader
     preloader.clearAll()
     defer { preloader.clearAll() }
 

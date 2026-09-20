@@ -689,14 +689,13 @@ private final class ImageRetrieveContinuationBox: @unchecked Sendable {
   }
 }
 
-// MARK: - 预加载管理器（单例）
+// MARK: - 预加载管理器
 
 /// 管理所有媒体的预加载任务缓存。
 /// MediaCard 聚焦时触发预加载，ContainerView 和右键菜单读取预加载结果。
+/// 由 `SessionScope` 按会话持有：换账号或登出时整体拆除，因此这里不再自行监听会话变化。
 @MainActor
 class MediaPreloader: ObservableObject {
-  static let shared = MediaPreloader(apiService: .shared)
-
   /// 预加载任务缓存，key = MediaInfo.id
   private var cache: [String: MediaPreloadTask] = [:]
   /// 尚未进入详情页的临时焦点候选。新候选出现时立即释放旧候选。
@@ -715,12 +714,10 @@ class MediaPreloader: ObservableObject {
   private var cancellables = Set<AnyCancellable>()
   private var subscriptionRefreshTask: Task<Void, Never>?
   private var loadingPosterWarmDownloadTask: DownloadTask?
-  private var observedSessionUIIdentity: String
   private let apiService: APIService
 
-  init(apiService: APIService = .shared) {
+  init(apiService: APIService) {
     self.apiService = apiService
-    observedSessionUIIdentity = apiService.uiIdentity
     // 监听订阅变更通知，刷新活跃详情页持有的 task 的订阅状态
     NotificationCenter.default.publisher(for: .subscriptionDidUpdate)
       .receive(on: DispatchQueue.main)
@@ -732,17 +729,12 @@ class MediaPreloader: ObservableObject {
         }
       }
       .store(in: &cancellables)
+  }
 
-    apiService.$session
-      .dropFirst()
-      .sink { [weak self] session in
-        guard let self else { return }
-        let shouldClear = session.token == nil
-          || session.uiIdentity != self.observedSessionUIIdentity
-        self.observedSessionUIIdentity = session.uiIdentity
-        if shouldClear { self.clearAll() }
-      }
-      .store(in: &cancellables)
+  /// 会话结束时同步拆除：清空缓存并停止接收订阅变更通知。
+  func tearDown() {
+    clearAll()
+    cancellables.removeAll()
   }
 
   /// 获取已有预加载任务，或创建并启动新任务
@@ -987,7 +979,6 @@ class MediaPreloader: ObservableObject {
   // MARK: - 全局清理（登出/切换服务器时调用）
 
   /// 取消所有预加载任务并清空缓存。
-  /// 用于用户退出登录或切换服务器时，避免残留旧 Cookie 的图片 URL、旧订阅状态等脏数据。
   func clearAll() {
     subscriptionRefreshTask?.cancel()
     subscriptionRefreshTask = nil

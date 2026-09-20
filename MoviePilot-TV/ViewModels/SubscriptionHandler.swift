@@ -16,7 +16,11 @@ class SubscriptionHandler: ObservableObject {
   @Published private(set) var unsubscribeConfirmationMessage: String?
 
   private let apiService: APIService
-  private let mediaPreloader: MediaPreloader
+  private let injectedMediaPreloader: MediaPreloader?
+  /// 调用时解析当前会话的预载器，避免持有已拆除作用域里的旧实例。
+  private var mediaPreloader: MediaPreloader {
+    injectedMediaPreloader ?? apiService.mediaPreloader
+  }
   private var isCheckingSubscription = false
   /// 最近一次 Fork 的成功收据：POST 已创建订阅、但编辑器（GET）尚未完成。GET 成功后才清除。
   private var pendingForkReceipt: PendingForkReceipt?
@@ -28,10 +32,10 @@ class SubscriptionHandler: ObservableObject {
 
   init(
     apiService: APIService = .shared,
-    mediaPreloader: MediaPreloader = .shared
+    mediaPreloader: MediaPreloader? = nil
   ) {
     self.apiService = apiService
-    self.mediaPreloader = mediaPreloader
+    self.injectedMediaPreloader = mediaPreloader
   }
 
   func handleSubscribe(_ item: MediaInfo, expectedSubscribed: Bool) {

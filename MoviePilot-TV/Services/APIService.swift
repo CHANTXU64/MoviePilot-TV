@@ -541,6 +541,7 @@ class APIService: ObservableObject {
   @Published private(set) var session: APIServiceSessionState
   private let sessionConfiguration: URLSessionConfiguration
   private var runtime: APIServiceSessionRuntime
+  private var activeSessionScope: SessionScope?
   private var storedUsername: String?
   private var storedPassword: String?
   private var storageLocation: StoredSessionMarker.Storage = .tombstone
@@ -1217,10 +1218,29 @@ class APIService: ObservableObject {
     storedPassword = password
     UserDefaults.standard.set(normalizedURL, forKey: "serverURL")
     oldRuntime.cancel()
+    releaseSessionScopeIfNeeded(for: nextState)
     invalidateAllSessionCaches()
     if oldUIIdentity != nextState.uiIdentity {
       settings = nil
     }
+  }
+
+  /// 当前会话的共享协作对象。首次使用时创建；拆除只发生在 `replaceSession`。
+  var sessionScope: SessionScope {
+    if let activeSessionScope { return activeSessionScope }
+    let scope = SessionScope(apiService: self, uiIdentity: session.uiIdentity)
+    activeSessionScope = scope
+    return scope
+  }
+
+  var mediaPreloader: MediaPreloader { sessionScope.mediaPreloader }
+
+  /// 会话身份变化或登出时同步拆除旧作用域，不依赖对象释放时机。
+  private func releaseSessionScopeIfNeeded(for state: APIServiceSessionState) {
+    guard let scope = activeSessionScope else { return }
+    guard scope.uiIdentity != state.uiIdentity || state.token == nil else { return }
+    activeSessionScope = nil
+    scope.tearDown()
   }
 
   private func invalidateAllSessionCaches() {

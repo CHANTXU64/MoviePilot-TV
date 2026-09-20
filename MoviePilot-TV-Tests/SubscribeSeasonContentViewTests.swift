@@ -1554,7 +1554,7 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
 
     let service = APIService.testingInstance()
     let snapshot = SubscriptionSnapshotServiceSnapshot.capture(service: service)
-    let preloader = MediaPreloader.shared
+    let preloader = APIService.shared.mediaPreloader
     preloader.clearAll()
     defer {
       preloader.clearAll()

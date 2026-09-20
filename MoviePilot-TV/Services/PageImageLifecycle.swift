@@ -270,17 +270,24 @@ final class ImageNavigationCoordinator: ObservableObject {
   private var retainsImagesForSceneReturn = false
   @Published private(set) var isStackInteractive = false
   private var navigationRevision: UInt = 0
-  private let mediaPreloader: MediaPreloader
+  private let apiService: APIService
+  private let injectedMediaPreloader: MediaPreloader?
+  /// 调用时解析当前会话的预载器，避免持有已拆除作用域里的旧实例。
+  private var mediaPreloader: MediaPreloader {
+    injectedMediaPreloader ?? apiService.mediaPreloader
+  }
   private let removedLifecycleRetention: Duration
   private let tabTransitionImageRetention: Duration
   private var cancellables = Set<AnyCancellable>()
 
   init(
-    mediaPreloader: MediaPreloader = .shared,
+    apiService: APIService = .shared,
+    mediaPreloader: MediaPreloader? = nil,
     removedLifecycleRetention: Duration = PresentationTransitionRetention.duration,
     tabTransitionImageRetention: Duration = PresentationTransitionRetention.duration
   ) {
-    self.mediaPreloader = mediaPreloader
+    self.apiService = apiService
+    self.injectedMediaPreloader = mediaPreloader
     self.removedLifecycleRetention = removedLifecycleRetention
     self.tabTransitionImageRetention = tabTransitionImageRetention
     rootLifecycle.objectWillChange
