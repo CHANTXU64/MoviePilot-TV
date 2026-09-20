@@ -8,6 +8,7 @@ import Foundation
 final class SessionScope {
   let uiIdentity: String
   let mediaPreloader: MediaPreloader
+  let imageWarmer: MPImageWarmer
 
   // MARK: - 短暂内存缓存 (提升二级页面和分季组件流畅度)
   let episodeGroupsCache = CoalescingCache<String, [EpisodeGroup]>(ttl: 120, capacity: 20)
@@ -22,6 +23,7 @@ final class SessionScope {
 
   init(apiService: APIService, uiIdentity: String) {
     self.uiIdentity = uiIdentity
+    imageWarmer = MPImageWarmer(apiService: apiService)
     mediaPreloader = MediaPreloader(apiService: apiService)
   }
 
@@ -42,6 +44,7 @@ final class SessionScope {
   /// 会话结束时同步拆除：取消在途任务、清空缓存与订阅，旧作用域不再响应任何事件。
   func tearDown() {
     invalidateAllCaches()
+    imageWarmer.clear()
     mediaPreloader.tearDown()
   }
 }

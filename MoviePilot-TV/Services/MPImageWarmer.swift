@@ -18,8 +18,7 @@ final class MPImageWarmer {
     var owners: Set<UUID>
   }
 
-  static let shared = MPImageWarmer()
-
+  private let apiService: APIService
   private let sessionDelegate: MPImageWarmSessionDelegate
   private let session: URLSession
   private let recentWarmTTL: TimeInterval
@@ -32,11 +31,13 @@ final class MPImageWarmer {
   var cachedURLCount: Int { recentlyWarmedURLs.count }
 
   init(
+    apiService: APIService = .shared,
     configuration: URLSessionConfiguration = MPImageWarmer.makeConfiguration(),
     recentWarmTTL: TimeInterval = 60 * 60,
     recentWarmLimit: Int = 512,
     now: @escaping @Sendable () -> Date = Date.init
   ) {
+    self.apiService = apiService
     let sessionDelegate = MPImageWarmSessionDelegate()
     self.sessionDelegate = sessionDelegate
     session = URLSession(
@@ -52,8 +53,7 @@ final class MPImageWarmer {
 
   @discardableResult
   func warm(_ url: URL) async -> Handle? {
-    let apiService = APIService.shared
-    return await warm(
+    await warm(
       url,
       baseURL: apiService.baseURL,
       imageCacheEnabled: apiService.useImageCache,

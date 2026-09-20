@@ -37,6 +37,7 @@ class PersonDetailViewModel: ObservableObject {
         }
         return false  // 没有新内容
       },
+      imageWarmer: apiService.imageWarmer,
       imageWarmURLsProvider: { item in
         [item.imageURLs.poster].compactMap(\.self)
       },

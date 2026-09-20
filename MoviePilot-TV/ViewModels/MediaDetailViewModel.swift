@@ -85,6 +85,7 @@ class MediaDetailViewModel: ObservableObject {
         }
         return false
       },
+      imageWarmer: apiService.imageWarmer,
       imageWarmURLsProvider: { item in
         [item.imageURLs.poster].compactMap(\.self)
       },
@@ -108,6 +109,7 @@ class MediaDetailViewModel: ObservableObject {
         }
         return false
       },
+      imageWarmer: apiService.imageWarmer,
       imageWarmURLsProvider: { @MainActor item in
         [item.imageURLs.poster].compactMap { $0 }
       },
@@ -127,6 +129,7 @@ class MediaDetailViewModel: ObservableObject {
         items = StaffManager.mergeActors(existing: items, newBatch: newItems)
         return items.count > initialCount
       },
+      imageWarmer: apiService.imageWarmer,
       imageWarmURLsProvider: { item in
         [item.imageURLs.profile].compactMap(\.self)
       }

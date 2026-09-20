@@ -52,6 +52,9 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   /// 提前触发服务端缓存的图片 URL 函数；不会在 Apple TV 下载或解码图片。
   private let imageWarmURLsProvider: (@MainActor (ItemType) -> [URL])?
 
+  /// 所属会话的图片预热器；未注入时不做预热。
+  private let imageWarmer: MPImageWarmer?
+
   /// 处理新项目并将其合并到现有项目数组的函数。
   /// 如果添加了新的、唯一的内容，它应该返回 `true`。
   private let processor: @MainActor (inout [ItemType], [ItemType]) -> Bool
@@ -82,6 +85,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     threshold: Int,
     fetcher: @escaping @MainActor (Int) async throws -> [ItemType],
     processor: @escaping @MainActor (inout [ItemType], [ItemType]) -> Bool,
+    imageWarmer: MPImageWarmer? = nil,
     imageWarmURLsProvider: (@MainActor (ItemType) -> [URL])? = nil,
     imageWarmThreshold: Int? = nil,
     onReset: (() -> Void)? = nil
@@ -91,6 +95,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     self.fetcher = fetcher
     self.processor = processor
     self.imageWarmURLsProvider = imageWarmURLsProvider
+    self.imageWarmer = imageWarmer
     self.imageWarmThreshold = imageWarmThreshold ?? ((threshold + 1) / 2)
     self.onReset = onReset
   }
@@ -122,7 +127,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
           if start < end {
             let urlsToWarm = items[start..<end].flatMap { provider($0) }
             if !urlsToWarm.isEmpty {
-              _ = await MPImageWarmer.shared.warm(urlsToWarm)
+              _ = await imageWarmer?.warm(urlsToWarm)
             }
             maxWarmedIndex = end - 1
           }

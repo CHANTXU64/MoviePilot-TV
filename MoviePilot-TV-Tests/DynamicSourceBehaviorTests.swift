@@ -259,12 +259,12 @@ final class DynamicSourceBehaviorTests: XCTestCase {
 
     XCTAssertTrue(prefetch.contains("let canWarmOnMoviePilot = MPImageWarmer.isWarmable("))
     XCTAssertTrue(prefetch.contains("if preparedAsCandidate, canWarmOnMoviePilot"))
-    XCTAssertTrue(prefetch.contains("MPImageWarmer.shared.warm(url)"))
+    XCTAssertTrue(prefetch.contains("imageWarmer.warm(url)"))
     XCTAssertTrue(prefetch.contains("activeImageWarmHandle = handle"))
     XCTAssertTrue(prefetch.contains("return"))
     XCTAssertTrue(prefetch.contains("retrieveHeroImage(url, fallbackURL: target.fallbackURL)"))
     XCTAssertTrue(prefetch.contains("guard !Task.isCancelled else { return }"))
-    XCTAssertTrue(cancel.contains("MPImageWarmer.shared.cancel(activeImageWarmHandle)"))
+    XCTAssertTrue(cancel.contains("imageWarmer.cancel(activeImageWarmHandle)"))
     XCTAssertTrue(containerSource.contains("preloadTask.cancelImageWarm()"))
   }
 

@@ -1224,6 +1224,8 @@ class APIService: ObservableObject {
 
   var mediaPreloader: MediaPreloader { sessionScope.mediaPreloader }
 
+  var imageWarmer: MPImageWarmer { sessionScope.imageWarmer }
+
   /// 会话身份变化或登出时同步拆除旧作用域，不依赖对象释放时机。
   private func releaseSessionScopeIfNeeded(for state: APIServiceSessionState) {
     guard let scope = activeSessionScope else { return }

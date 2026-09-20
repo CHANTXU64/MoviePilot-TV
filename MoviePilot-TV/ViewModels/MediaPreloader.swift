@@ -223,12 +223,15 @@ class MediaPreloadTask: ObservableObject {
   /// 该闭包可能在任意线程执行。实际写入只在 @MainActor 隔离的方法中进行，读取仅在取消时（单次），无竞争风险。
   nonisolated(unsafe) private var activeImageDownload: DownloadTask?
   private let imageRetrieveState = ImageRetrieveContinuationBox()
+  private let imageWarmer: MPImageWarmer
   private var activeImageWarmHandle: MPImageWarmer.Handle?
   private var allowsImageWarm = true
 
   init(partialMedia: MediaInfo, apiService: APIService = .shared) {
     self.partialMedia = partialMedia
     self.apiService = apiService
+    // 任务创建于所属会话内，此处解析的预热器即该会话的实例。
+    imageWarmer = apiService.imageWarmer
   }
 
   /// 启动所有预加载任务（幂等，多次调用不会重复启动）
@@ -300,7 +303,7 @@ class MediaPreloadTask: ObservableObject {
   func cancelImageWarm() {
     allowsImageWarm = false
     if let activeImageWarmHandle {
-      MPImageWarmer.shared.cancel(activeImageWarmHandle)
+      imageWarmer.cancel(activeImageWarmHandle)
       self.activeImageWarmHandle = nil
     }
     imageRetrieveState.keepResultInMemoryUnlessOwnerReleased()
@@ -391,12 +394,12 @@ class MediaPreloadTask: ObservableObject {
       imageCacheEnabled: apiService.useImageCache
     )
     if preparedAsCandidate, canWarmOnMoviePilot {
-      let handle = await MPImageWarmer.shared.warm(url)
+      let handle = await imageWarmer.warm(url)
       guard !Task.isCancelled,
         shouldWarmBackgroundImage()
       else {
         if let handle {
-          MPImageWarmer.shared.cancel(handle)
+          imageWarmer.cancel(handle)
         }
         return
       }
@@ -987,7 +990,6 @@ class MediaPreloader: ObservableObject {
     for task in cache.values {
       task.cancel()
     }
-    MPImageWarmer.shared.clear()
     cache.removeAll()
     candidateKey = nil
     navigationOwners.removeAll()

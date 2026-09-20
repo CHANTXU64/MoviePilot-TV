@@ -1217,6 +1217,7 @@ class ExploreViewModel: ObservableObject {
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
+      imageWarmer: apiService.imageWarmer,
       imageWarmURLsProvider: { item in
         [item.imageURLs.poster].compactMap(\.self)
       },

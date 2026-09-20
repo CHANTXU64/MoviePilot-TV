@@ -744,6 +744,7 @@ class SearchViewModel: ObservableObject {
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
+      imageWarmer: apiService.imageWarmer,
       imageWarmURLsProvider: { item in
         [item.imageURLs.poster].compactMap(\.self)
       },
@@ -763,6 +764,7 @@ class SearchViewModel: ObservableObject {
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
+      imageWarmer: apiService.imageWarmer,
       imageWarmURLsProvider: { @MainActor item in
         [item.imageURLs.poster].compactMap { $0 }
       },
@@ -791,6 +793,7 @@ class SearchViewModel: ObservableObject {
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
+      imageWarmer: apiService.imageWarmer,
       imageWarmURLsProvider: { @MainActor item in
         [item.imageURLs.poster].compactMap { $0 }
       },
@@ -825,6 +828,7 @@ class SearchViewModel: ObservableObject {
         currentItems.append(contentsOf: uniqueNewItems)
         return true
       },
+      imageWarmer: apiService.imageWarmer,
       imageWarmURLsProvider: { item in
         [item.imageURLs.profile].compactMap(\.self)
       },
@@ -849,6 +853,7 @@ class SearchViewModel: ObservableObject {
           currentItems.append(contentsOf: uniqueNewItems)
           return true
         },
+        imageWarmer: apiService.imageWarmer,
         imageWarmURLsProvider: { item in
           [item.imageURLs.poster].compactMap(\.self)
         },
