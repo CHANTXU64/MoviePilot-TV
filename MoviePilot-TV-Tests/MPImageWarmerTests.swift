@@ -230,7 +230,12 @@ final class MPImageWarmerTests: XCTestCase {
     // tearDown() 是终态：URLSession 失效后不再发出任何预热请求。
     warmer.tearDown()
     let afterTearDownURL = try warmURL("after-teardown")
-    _ = await warmer.warm(afterTearDownURL, baseURL: baseURL, imageCacheEnabled: true)
+    let afterTearDownHandle = await warmer.warm(
+      afterTearDownURL,
+      baseURL: baseURL,
+      imageCacheEnabled: true
+    )
+    XCTAssertNil(afterTearDownHandle)
     try await Task.sleep(for: .milliseconds(200))
     XCTAssertEqual(MPImageWarmURLProtocol.requestCount(for: afterTearDownURL), 0)
   }
