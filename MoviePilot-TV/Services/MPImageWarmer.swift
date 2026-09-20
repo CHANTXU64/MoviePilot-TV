@@ -169,6 +169,13 @@ final class MPImageWarmer {
     }
   }
 
+  /// 会话结束时的终态：清空记录后让 URLSession 失效，断开它对 delegate 的强引用。
+  /// 与 `clear()` 区分——后者可重复使用，只取消在途预热。
+  func tearDown() {
+    clear()
+    session.invalidateAndCancel()
+  }
+
   fileprivate func didReceive(_ response: URLResponse, for task: URLSessionDataTask) {
     guard let url = task.originalRequest?.url else { return }
     let urlKey = Self.warmKey(for: url)

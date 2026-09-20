@@ -44,7 +44,7 @@ final class SessionScope {
   /// 会话结束时同步拆除：取消在途任务、清空缓存与订阅，旧作用域不再响应任何事件。
   func tearDown() {
     invalidateAllCaches()
-    imageWarmer.clear()
+    imageWarmer.tearDown()
     mediaPreloader.tearDown()
   }
 }

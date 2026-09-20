@@ -192,6 +192,43 @@ final class MPImageWarmerTests: XCTestCase {
     }
   }
 
+  func testTearDownStopsWarmingWhileClearKeepsWarmerUsable() async throws {
+    MPImageWarmURLProtocol.reset(finishesImmediately: true)
+    let configuration = MPImageWarmer.makeConfiguration()
+    configuration.protocolClasses = [MPImageWarmURLProtocol.self]
+    let warmer = MPImageWarmer(configuration: configuration)
+    let baseURL = "http://192.168.1.10:3000"
+    func warmURL(_ name: String) throws -> URL {
+      try XCTUnwrap(
+        URL(
+          string:
+            "\(baseURL)/api/v1/system/cache/image?url=https%3A%2F%2Fimage.tmdb.org%2F\(name).jpg"
+        )
+      )
+    }
+
+    // clear() 只取消在途预热，预热器随后仍可使用。
+    let clearedURL = try warmURL("cleared")
+    XCTAssertNotNil(
+      await warmer.warm(clearedURL, baseURL: baseURL, imageCacheEnabled: true)
+    )
+    warmer.clear()
+    let reusableURL = try warmURL("reusable")
+    XCTAssertNotNil(
+      await warmer.warm(reusableURL, baseURL: baseURL, imageCacheEnabled: true)
+    )
+    try await waitUntil("clear 后仍能发起预热") {
+      MPImageWarmURLProtocol.requestCount(for: reusableURL) == 1
+    }
+
+    // tearDown() 是终态：URLSession 失效后不再发出任何预热请求。
+    warmer.tearDown()
+    let afterTearDownURL = try warmURL("after-teardown")
+    _ = await warmer.warm(afterTearDownURL, baseURL: baseURL, imageCacheEnabled: true)
+    try await Task.sleep(for: .milliseconds(200))
+    XCTAssertEqual(MPImageWarmURLProtocol.requestCount(for: afterTearDownURL), 0)
+  }
+
   func testPosterFallbackBlurDoesNotChangeBackdropHeroProcessor() {
     let size = CGSize(width: 1920, height: 1080)
     let screenScale: CGFloat = 1
