@@ -9,13 +9,39 @@ final class SessionScope {
   let uiIdentity: String
   let mediaPreloader: MediaPreloader
 
+  // MARK: - 短暂内存缓存 (提升二级页面和分季组件流畅度)
+  let episodeGroupsCache = CoalescingCache<String, [EpisodeGroup]>(ttl: 120, capacity: 20)
+  let mediaSeasonsCache = CoalescingCache<String, [TmdbSeason]>(ttl: 120, capacity: 20)
+  let groupSeasonsCache = CoalescingCache<String, [TmdbSeason]>(ttl: 120, capacity: 20)
+  let subscriptionStatusCache = CoalescingCache<String, Bool>(ttl: 120, capacity: 100)
+  let subscriptionSnapshotCache = CoalescingCache<String, [Subscribe]>(
+    ttl: 30,
+    capacity: 1,
+    renewsTTLOnAccess: false
+  )
+
   init(apiService: APIService, uiIdentity: String) {
     self.uiIdentity = uiIdentity
     mediaPreloader = MediaPreloader(apiService: apiService)
   }
 
+  /// 订阅相关 mutation 后失效：订阅状态与订阅列表快照。
+  func invalidateSubscriptionCaches() {
+    subscriptionStatusCache.invalidateAll()
+    subscriptionSnapshotCache.invalidateAll()
+  }
+
+  /// 会话状态变化后失效作用域内全部接口缓存。
+  func invalidateAllCaches() {
+    invalidateSubscriptionCaches()
+    episodeGroupsCache.invalidateAll()
+    mediaSeasonsCache.invalidateAll()
+    groupSeasonsCache.invalidateAll()
+  }
+
   /// 会话结束时同步拆除：取消在途任务、清空缓存与订阅，旧作用域不再响应任何事件。
   func tearDown() {
+    invalidateAllCaches()
     mediaPreloader.tearDown()
   }
 }

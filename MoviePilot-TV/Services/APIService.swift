@@ -605,20 +605,9 @@ class APIService: ObservableObject {
     return "\(baseURL)|\(useImageCache)|\(settings?.TMDB_IMAGE_DOMAIN ?? "")|\(bangumiProxyEnabled)|\(settings?.BANGUMI_IMAGE_DOMAIN ?? "")"
   }
 
-  // MARK: - 短暂内存缓存 (提升二级页面和分季组件流畅度)
-  private let episodeGroupsCache = CoalescingCache<String, [EpisodeGroup]>(ttl: 120, capacity: 20)
-  private let mediaSeasonsCache = CoalescingCache<String, [TmdbSeason]>(ttl: 120, capacity: 20)
-  private let groupSeasonsCache = CoalescingCache<String, [TmdbSeason]>(ttl: 120, capacity: 20)
-  private let subscriptionStatusCache = CoalescingCache<String, Bool>(ttl: 120, capacity: 100)
-  private let subscriptionSnapshotCache = CoalescingCache<String, [Subscribe]>(
-    ttl: 30,
-    capacity: 1,
-    renewsTTLOnAccess: false
-  )
-
+  /// 接口缓存随会话作用域存活；尚未创建作用域时没有缓存可失效。
   private func invalidateSubscriptionCaches() {
-    subscriptionStatusCache.invalidateAll()
-    subscriptionSnapshotCache.invalidateAll()
+    activeSessionScope?.invalidateSubscriptionCaches()
   }
 
   /// 会话快照内读取共享缓存：调用方每次挂起前后都校验任务取消与会话，旧会话的结果不会返回给调用者；
@@ -1244,10 +1233,7 @@ class APIService: ObservableObject {
   }
 
   private func invalidateAllSessionCaches() {
-    invalidateSubscriptionCaches()
-    episodeGroupsCache.invalidateAll()
-    mediaSeasonsCache.invalidateAll()
-    groupSeasonsCache.invalidateAll()
+    activeSessionScope?.invalidateAllCaches()
   }
 
   private func currentLease() -> APIServiceSessionLease {
@@ -3119,7 +3105,7 @@ class APIService: ObservableObject {
   /// - 应用场景: 在前端，有两个地方会用到：1. **季订阅弹窗**中，用于展示所有可供选择的剧集组（如“司法岛篇”）。 2. **订阅配置编辑弹窗**中，当编辑一个电视剧订阅时，作为“剧集组”下拉框的数据源，允许用户修改该订阅所属的剧集组。
   func fetchEpisodeGroups(tmdbId: Int) async throws -> [EpisodeGroup] {
     let endpoint = "/media/groups/\(tmdbId)"
-    return try await sessionCachedValue(episodeGroupsCache, key: endpoint) { [weak self] in
+    return try await sessionCachedValue(sessionScope.episodeGroupsCache, key: endpoint) { [weak self] in
       guard let self else { throw CancellationError() }
       let data = try await self.makeRequest(endpoint: endpoint)
       return try await self.decodeOrUnwrap([EpisodeGroup].self, from: data)
@@ -3142,7 +3128,7 @@ class APIService: ObservableObject {
       "season": media.season.map(String.init),
     ]
     let endpoint = try buildEndpoint(path: "/media/seasons", params: params)
-    return try await sessionCachedValue(mediaSeasonsCache, key: endpoint) { [weak self] in
+    return try await sessionCachedValue(sessionScope.mediaSeasonsCache, key: endpoint) { [weak self] in
       guard let self else { throw CancellationError() }
       let data = try await self.makeRequest(endpoint: endpoint)
       return try await self.decodeOrUnwrap([TmdbSeason].self, from: data)
@@ -3154,7 +3140,7 @@ class APIService: ObservableObject {
   /// - 应用场景: 在前端的季订阅弹窗中，当用户从下拉列表中**选择**了某个“剧集组”（如“司法岛篇”）后，调用此 API 以获取该组专属的分季信息。
   func getGroupSeasons(groupId: String) async throws -> [TmdbSeason] {
     let endpoint = "/media/group/seasons/\(groupId)"
-    return try await sessionCachedValue(groupSeasonsCache, key: endpoint) { [weak self] in
+    return try await sessionCachedValue(sessionScope.groupSeasonsCache, key: endpoint) { [weak self] in
       guard let self else { throw CancellationError() }
       let data = try await self.makeRequest(endpoint: endpoint)
       return try await self.decodeOrUnwrap([TmdbSeason].self, from: data)
@@ -3481,7 +3467,7 @@ class APIService: ObservableObject {
     }
     let key = "\(mediaId):\(season.map(String.init) ?? "")"
     return try await sessionCachedValue(
-      subscriptionStatusCache,
+      sessionScope.subscriptionStatusCache,
       key: key,
       forceRefresh: forceRefresh
     ) { [weak self] in
@@ -3495,7 +3481,7 @@ class APIService: ObservableObject {
   /// - 应用场景: 1. **订阅列表页面** (`SubscribeListView`) 的核心数据源。 2. **日历视图** (`FullCalendarView`) 的数据源。 (注: 全局搜索栏不直接调用此API)
   func fetchSubscriptions(forceRefresh: Bool = false) async throws -> [Subscribe] {
     try await sessionCachedValue(
-      subscriptionSnapshotCache,
+      sessionScope.subscriptionSnapshotCache,
       key: "subscriptions",
       forceRefresh: forceRefresh
     ) { [weak self] in
