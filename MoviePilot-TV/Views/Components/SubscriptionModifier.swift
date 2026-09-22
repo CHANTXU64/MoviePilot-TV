@@ -50,7 +50,7 @@ struct MediaSubscriptionModifier: ViewModifier {
   @discardableResult
   static func updatePreloadedSubscription(afterSaving saved: Subscribe) -> Bool {
     guard let mediaId = saved.apiMediaId,
-      let task = MediaPreloader.shared.findTask(byMediaId: mediaId)
+      let task = APIService.shared.mediaPreloader.findTask(byMediaId: mediaId)
     else {
       return false
     }

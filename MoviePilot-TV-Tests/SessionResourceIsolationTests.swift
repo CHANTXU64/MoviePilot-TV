@@ -130,16 +130,14 @@ extension SystemSessionBehaviorTests {
     let snapshot = SystemSessionServiceSnapshot.capture(service: service)
     defer { snapshot.restore(to: service) }
 
-    let preloader = MediaPreloader.shared
-    preloader.clearAll()
-    defer { preloader.clearAll() }
-
     let accountA = sessionToken(userId: 1, accessToken: "a-1", userName: "account-a")
     service.replaceSessionForTesting(
       baseURL: "https://account.local",
       token: accountA.access_token,
       currentUser: accountA
     )
+    let preloader = service.mediaPreloader
+    defer { preloader.clearAll() }
     let media = MediaInfo(title: "账号缓存边界", type: "collection", collection_id: 9_002)
     let cachedTask = preloader.preload(for: media)
 
@@ -149,6 +147,7 @@ extension SystemSessionBehaviorTests {
       token: refreshedAccountA.access_token,
       currentUser: refreshedAccountA
     )
+    XCTAssertTrue(service.mediaPreloader === preloader)
     XCTAssertTrue(preloader.peekTask(for: media) === cachedTask)
 
     let accountB = sessionToken(userId: 2, accessToken: "b-1", userName: "account-b")
@@ -157,6 +156,45 @@ extension SystemSessionBehaviorTests {
       token: accountB.access_token,
       currentUser: accountB
     )
+    // 换账号时旧作用域同步拆除，新作用域是另一个空缓存的实例。
     XCTAssertNil(preloader.peekTask(for: media))
+    XCTAssertFalse(service.mediaPreloader === preloader)
+    XCTAssertNil(service.mediaPreloader.peekTask(for: media))
+  }
+
+  func testNavigationCoordinatorPinsIntoCurrentSessionPreloader() {
+    // replaceSessionForTesting 即使不持久化会话，也会写全局 serverURL，退出前必须恢复。
+    let persistence = APIServicePersistenceSnapshot.capture()
+    defer { persistence.restore() }
+
+    let service = APIService.testingInstance()
+    let coordinator = ImageNavigationCoordinator(apiService: service)
+
+    let accountA = sessionToken(userId: 11, accessToken: "nav-a", userName: "nav-account-a")
+    service.replaceSessionForTesting(
+      baseURL: "https://navigation.local",
+      token: accountA.access_token,
+      currentUser: accountA
+    )
+    let preloaderA = service.mediaPreloader
+    let mediaA = MediaInfo(tmdb_id: 51_001, title: "旧会话导航", type: "电影")
+    coordinator.push(mediaA)
+    XCTAssertNotNil(preloaderA.peekTask(for: mediaA))
+
+    let accountB = sessionToken(userId: 12, accessToken: "nav-b", userName: "nav-account-b")
+    service.replaceSessionForTesting(
+      baseURL: "https://navigation.local",
+      token: accountB.access_token,
+      currentUser: accountB
+    )
+    let preloaderB = service.mediaPreloader
+    defer { preloaderB.clearAll() }
+    XCTAssertFalse(preloaderA === preloaderB)
+
+    // 协调器在调用时解析预载器：换账号后 Push 必须落在新作用域，而不是已拆除的旧实例。
+    let mediaB = MediaInfo(tmdb_id: 51_002, title: "新会话导航", type: "电影")
+    coordinator.push(mediaB)
+    XCTAssertNotNil(preloaderB.peekTask(for: mediaB))
+    XCTAssertNil(preloaderA.peekTask(for: mediaB))
   }
 }

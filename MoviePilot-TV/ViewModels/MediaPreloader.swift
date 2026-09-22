@@ -199,7 +199,7 @@ enum MediaDetailLoadingPoster {
 @MainActor
 class MediaPreloadTask: ObservableObject {
   let partialMedia: MediaInfo
-  private let apiService: APIService
+  private weak var apiService: APIService?
 
   // ⭐ 首屏可展示状态：完整详情已加载，且背景/海报已预取或等待超时
   @Published var fullDetail: MediaInfo?
@@ -223,12 +223,15 @@ class MediaPreloadTask: ObservableObject {
   /// 该闭包可能在任意线程执行。实际写入只在 @MainActor 隔离的方法中进行，读取仅在取消时（单次），无竞争风险。
   nonisolated(unsafe) private var activeImageDownload: DownloadTask?
   private let imageRetrieveState = ImageRetrieveContinuationBox()
+  private let imageWarmer: MPImageWarmer?
   private var activeImageWarmHandle: MPImageWarmer.Handle?
   private var allowsImageWarm = true
 
-  init(partialMedia: MediaInfo, apiService: APIService = .shared) {
+  init(partialMedia: MediaInfo, apiService: APIService? = .shared) {
     self.partialMedia = partialMedia
     self.apiService = apiService
+    // 任务创建于所属会话内，此处解析的预热器即该会话的实例。
+    imageWarmer = apiService?.imageWarmer
   }
 
   /// 启动所有预加载任务（幂等，多次调用不会重复启动）
@@ -299,8 +302,8 @@ class MediaPreloadTask: ObservableObject {
   /// 当前媒体即将真正显示时，停止仅用于服务器缓存的 warm，并把已解码的候选背景交给前台复用。
   func cancelImageWarm() {
     allowsImageWarm = false
-    if let activeImageWarmHandle {
-      MPImageWarmer.shared.cancel(activeImageWarmHandle)
+    if let activeImageWarmHandle, let imageWarmer {
+      imageWarmer.cancel(activeImageWarmHandle)
       self.activeImageWarmHandle = nil
     }
     imageRetrieveState.keepResultInMemoryUnlessOwnerReleased()
@@ -325,6 +328,7 @@ class MediaPreloadTask: ObservableObject {
   // MARK: - ① 加载完整媒体详情
 
   private func loadDetail() async {
+    guard let apiService else { return }
     let maxRetries = 2
     for attempt in 0...maxRetries {
       if Task.isCancelled { return }
@@ -379,6 +383,7 @@ class MediaPreloadTask: ObservableObject {
   private func prefetchBackgroundImage(for detail: MediaInfo, timeout: Duration? = nil) async {
     // 避免为已取消（生命周期释放）的任务发起无意义的图片请求
     guard !Task.isCancelled else { return }
+    guard let apiService, let imageWarmer else { return }
     // 与 MediaInfo.ImageURLs.backgroundTarget 保持一致：backdrop 优先，无则 poster
     let target = detail.imageURLs.backgroundTarget
     guard let url = target.url else { return }
@@ -391,12 +396,12 @@ class MediaPreloadTask: ObservableObject {
       imageCacheEnabled: apiService.useImageCache
     )
     if preparedAsCandidate, canWarmOnMoviePilot {
-      let handle = await MPImageWarmer.shared.warm(url)
+      let handle = await imageWarmer.warm(url)
       guard !Task.isCancelled,
         shouldWarmBackgroundImage()
       else {
         if let handle {
-          MPImageWarmer.shared.cancel(handle)
+          imageWarmer.cancel(handle)
         }
         return
       }
@@ -463,7 +468,7 @@ class MediaPreloadTask: ObservableObject {
       scaleFactor: screenScale,
       usingPosterAsBackdrop: isUsingPosterAsBackdrop
     )
-    let service = apiService
+    guard let service = apiService else { return false }
     let source = service.imageSource(for: url)
     options.append(contentsOf: service.imageOptions(for: url))
 
@@ -505,6 +510,7 @@ class MediaPreloadTask: ObservableObject {
     size: CGSize,
     screenScale: CGFloat
   ) {
+    guard let apiService else { return }
     MediaDetailBackgroundImage.removeHeroFromMemory(
       for: url,
       size: size,
@@ -517,6 +523,7 @@ class MediaPreloadTask: ObservableObject {
   // MARK: - ③ 分季信息
 
   private func loadSeasonData(for detail: MediaInfo) async {
+    guard let apiService else { return }
     guard apiService.canAccess(.subscribe) else { return }
     guard detail.type == "电视剧" else { return }
 
@@ -529,6 +536,7 @@ class MediaPreloadTask: ObservableObject {
   // MARK: - ④ 订阅状态
 
   private func checkSubscription(for detail: MediaInfo) async {
+    guard let apiService else { return }
     guard apiService.canAccess(.subscribe) else {
       self.isSubscribed = false
       return
@@ -552,6 +560,7 @@ class MediaPreloadTask: ObservableObject {
 
   /// 外部触发刷新订阅状态（收到订阅变更通知时调用）
   func refreshSubscriptionStatus(forceRefreshSeasonSnapshot: Bool = true) async {
+    guard let apiService else { return }
     guard apiService.canAccess(.subscribe) else {
       self.isSubscribed = false
       return
@@ -586,6 +595,7 @@ class MediaPreloadTask: ObservableObject {
   // MARK: - ⑤ TMDB 识别
 
   private func recognizeTmdb(using media: MediaInfo) async throws {
+    guard let apiService else { throw CancellationError() }
     defer { isTmdbRecognitionFinished = true }
     // 预加载识别失败静默处理：不弹提示，也不伪装 no-match。
     // 取消向上传播，避免取消后仍继续启动依赖任务（分季/订阅 fallback 补查）。
@@ -689,14 +699,13 @@ private final class ImageRetrieveContinuationBox: @unchecked Sendable {
   }
 }
 
-// MARK: - 预加载管理器（单例）
+// MARK: - 预加载管理器
 
 /// 管理所有媒体的预加载任务缓存。
 /// MediaCard 聚焦时触发预加载，ContainerView 和右键菜单读取预加载结果。
+/// 由 `SessionScope` 按会话持有：换账号或登出时整体拆除，因此这里不再自行监听会话变化。
 @MainActor
 class MediaPreloader: ObservableObject {
-  static let shared = MediaPreloader(apiService: .shared)
-
   /// 预加载任务缓存，key = MediaInfo.id
   private var cache: [String: MediaPreloadTask] = [:]
   /// 尚未进入详情页的临时焦点候选。新候选出现时立即释放旧候选。
@@ -715,12 +724,11 @@ class MediaPreloader: ObservableObject {
   private var cancellables = Set<AnyCancellable>()
   private var subscriptionRefreshTask: Task<Void, Never>?
   private var loadingPosterWarmDownloadTask: DownloadTask?
-  private var observedSessionUIIdentity: String
-  private let apiService: APIService
+  // 服务拥有预载缓存；缓存及其子任务只在执行操作期间保留服务。
+  private weak var apiService: APIService?
 
-  init(apiService: APIService = .shared) {
+  init(apiService: APIService) {
     self.apiService = apiService
-    observedSessionUIIdentity = apiService.uiIdentity
     // 监听订阅变更通知，刷新活跃详情页持有的 task 的订阅状态
     NotificationCenter.default.publisher(for: .subscriptionDidUpdate)
       .receive(on: DispatchQueue.main)
@@ -732,17 +740,12 @@ class MediaPreloader: ObservableObject {
         }
       }
       .store(in: &cancellables)
+  }
 
-    apiService.$session
-      .dropFirst()
-      .sink { [weak self] session in
-        guard let self else { return }
-        let shouldClear = session.token == nil
-          || session.uiIdentity != self.observedSessionUIIdentity
-        self.observedSessionUIIdentity = session.uiIdentity
-        if shouldClear { self.clearAll() }
-      }
-      .store(in: &cancellables)
+  /// 会话结束时同步拆除：清空缓存并停止接收订阅变更通知。
+  func tearDown() {
+    clearAll()
+    cancellables.removeAll()
   }
 
   /// 获取已有预加载任务，或创建并启动新任务
@@ -762,6 +765,10 @@ class MediaPreloader: ObservableObject {
 
     // 创建新任务
     let task = MediaPreloadTask(partialMedia: media, apiService: apiService)
+    guard apiService != nil else {
+      task.cancel()
+      return task
+    }
     cache[key] = task
     task.start()
 
@@ -785,7 +792,7 @@ class MediaPreloader: ObservableObject {
   func warmLoadingPoster(_ url: URL?) -> DownloadTask? {
     loadingPosterWarmDownloadTask?.cancel()
     loadingPosterWarmDownloadTask = nil
-    guard let url else { return nil }
+    guard let url, let apiService else { return nil }
     var options = apiService.imageOptions(for: url)
     options.append(.processor(MediaDetailLoadingPoster.processor))
     options.append(TransientDecodedImage.skipMemoryCache)
@@ -947,6 +954,7 @@ class MediaPreloader: ObservableObject {
     screenScale: CGFloat = UIScreen.main.scale,
     imageCache: ImageCache = .default
   ) {
+    guard let apiService else { return }
     guard isAbandoned, presentedHeroOwners[detail.id]?.isEmpty != false else { return }
     let cacheKey = apiService.imageSource(for: url).cacheKey
     MediaDetailBackgroundImage.removeHeroFromMemory(
@@ -987,7 +995,6 @@ class MediaPreloader: ObservableObject {
   // MARK: - 全局清理（登出/切换服务器时调用）
 
   /// 取消所有预加载任务并清空缓存。
-  /// 用于用户退出登录或切换服务器时，避免残留旧 Cookie 的图片 URL、旧订阅状态等脏数据。
   func clearAll() {
     subscriptionRefreshTask?.cancel()
     subscriptionRefreshTask = nil
@@ -996,7 +1003,6 @@ class MediaPreloader: ObservableObject {
     for task in cache.values {
       task.cancel()
     }
-    MPImageWarmer.shared.clear()
     cache.removeAll()
     candidateKey = nil
     navigationOwners.removeAll()
@@ -1012,6 +1018,7 @@ class MediaPreloader: ObservableObject {
   /// 收到订阅变更通知后，刷新活跃详情页持有的 task 的订阅状态。
   /// 普通海报墙预加载缓存不主动强刷，避免浏览海报墙后一次通知触发大量订阅查询。
   private func refreshAllSubscriptionStatus() async {
+    guard let apiService else { return }
     let snapshot = apiService.sessionSnapshot()
     let tasks = navigationOwners.keys.compactMap { cache[$0] }
     guard !tasks.isEmpty else { return }
@@ -1088,7 +1095,7 @@ class MediaPreloader: ObservableObject {
     url: URL?,
     imageCache: ImageCache = .default
   ) {
-    guard let url else { return }
+    guard let url, let apiService else { return }
     MediaDetailLoadingPoster.removeFromMemory(
       for: url,
       cacheKey: apiService.imageSource(for: url).cacheKey,
@@ -1102,6 +1109,7 @@ class MediaPreloader: ObservableObject {
     screenScale: CGFloat = UIScreen.main.scale,
     imageCache: ImageCache = .default
   ) {
+    guard let apiService else { return }
     let heroes = MediaDetailBackgroundImage.backgroundHeroURLs(from: detail)
     for url in heroes.urls {
       let cacheKey = apiService.imageSource(for: url).cacheKey

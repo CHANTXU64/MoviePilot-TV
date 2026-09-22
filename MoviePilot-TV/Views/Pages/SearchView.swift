@@ -502,14 +502,14 @@ private struct ResultRow: View {
           preloadDebounceTask?.cancel()
           if let newId = newId, let item = items.first(where: { $0.id == newId }) {
             imageAnchorId = newId
-            MediaPreloader.shared.focusDidMove(to: newId, stackID: navigationCoordinator.id)
+            APIService.shared.mediaPreloader.focusDidMove(to: newId, stackID: navigationCoordinator.id)
             // 只有带 collection_id 的合集走 CollectionDetailView，不预加载普通详情。
             // collection-like type 但缺少 collection_id 时仍按普通媒体处理，和 Web 保持一致。
             if item.shouldPreloadDetail {
               preloadDebounceTask = Task {
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
-                MediaPreloader.shared.preloadFocusedCandidateIfNeeded(
+                APIService.shared.mediaPreloader.preloadFocusedCandidateIfNeeded(
                   for: item,
                   stackID: navigationCoordinator.id
                 )
@@ -597,7 +597,7 @@ private struct PersonResultRow: View {
         .onChange(of: focusedItemId) { _, newId in
           if let newId = newId {
             imageAnchorId = newId
-            MediaPreloader.shared.focusDidMove(
+            APIService.shared.mediaPreloader.focusDidMove(
               to: "person:\(newId)",
               stackID: navigationCoordinator.id
             )
@@ -745,20 +745,20 @@ private struct BestResultRow: View {
           imageAnchorId = newId
           // 仅对媒体类型预加载，人物类型走 PersonDetailView，不需要 MediaPreloader
           if case .media(let media) = item, media.shouldPreloadDetail {
-            MediaPreloader.shared.focusDidMove(
+            APIService.shared.mediaPreloader.focusDidMove(
               to: media.id,
               stackID: navigationCoordinator.id
             )
             preloadDebounceTask = Task {
               try? await Task.sleep(for: .milliseconds(300))
               guard !Task.isCancelled else { return }
-              MediaPreloader.shared.preloadFocusedCandidateIfNeeded(
+              APIService.shared.mediaPreloader.preloadFocusedCandidateIfNeeded(
                 for: media,
                 stackID: navigationCoordinator.id
               )
             }
           } else {
-            MediaPreloader.shared.focusDidMove(
+            APIService.shared.mediaPreloader.focusDidMove(
               to: newId,
               stackID: navigationCoordinator.id
             )

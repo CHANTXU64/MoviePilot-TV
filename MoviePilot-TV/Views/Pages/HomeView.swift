@@ -340,7 +340,7 @@ private struct MediaSectionView: View {
             posterWarmDelayTask = Task { @MainActor in
               try? await Task.sleep(for: .milliseconds(300))
               guard !Task.isCancelled else { return }
-              posterWarmDownloadTask = MediaPreloader.shared.warmLoadingPoster(
+              posterWarmDownloadTask = APIService.shared.mediaPreloader.warmLoadingPoster(
                 item.imageURLs.image
               )
             }
@@ -445,7 +445,7 @@ private struct SubscribeSectionView: View {
           posterWarmDelayTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
-            posterWarmDownloadTask = MediaPreloader.shared.warmLoadingPoster(
+            posterWarmDownloadTask = APIService.shared.mediaPreloader.warmLoadingPoster(
               item.imageURLs.poster
             )
           }

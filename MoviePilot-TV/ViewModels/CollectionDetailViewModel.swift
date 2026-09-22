@@ -25,6 +25,7 @@ class CollectionDetailViewModel: ObservableObject {
         }
         return false
       },
+      imageWarmer: apiService.imageWarmer,
       imageWarmURLsProvider: { item in
         [item.imageURLs.poster].compactMap(\.self)
       },

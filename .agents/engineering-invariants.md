@@ -27,6 +27,7 @@
 | 分页加载、取消与重启 | `Paginator` |
 | 页面图片与导航栈生命周期 | `ImageNavigationCoordinator`、`PageImageLifecycle`、`PageManagedImage` |
 | 详情预载的 owner 计数 | `MediaPreloader.acquireNavigation` / `releaseNavigation` |
+| 会话内共享的协作对象与接口缓存 | `SessionScope`：`APIService` 按 `uiIdentity` 持有，同账号刷新沿用、换账号或登出时同步拆除；作用域内的对象不再各自监听会话变化自清 |
 | 会话切换后的界面重建 | `ContentView` 以 `sessionUIIdentity` 作为 TabView 身份 |
 | 用户可见失败与日志 | `NotificationManager`、`Logger`（§8） |
 
@@ -91,7 +92,7 @@
 ### 规则
 
 - 会话数据缓存必须绑定 session namespace；切换会话时旧请求不得回填新 owner 可见的 key。
-- 同 key 并发采用 latest-wins 时，旧结果必须在“返回给调用者”和“写入共享缓存”两处都失效。这不要求每次普通读取都启动新请求；同一会话和缓存代际内、参数一致的读取可以合并复用在途请求。`APIService` 的接口缓存统一经 `sessionCachedValue` 使用 `CoalescingCache`：它负责在途合并、强刷取代、代际失效与会话校验；新增同类缓存直接复用，不再手写 owner/revision/generation。
+- 同 key 并发采用 latest-wins 时，旧结果必须在“返回给调用者”和“写入共享缓存”两处都失效。这不要求每次普通读取都启动新请求；同一会话和缓存代际内、参数一致的读取可以合并复用在途请求。`APIService` 的接口缓存统一经 `sessionCachedValue` 使用 `SessionScope` 内的 `CoalescingCache`：它负责在途合并、强刷取代、代际失效与会话校验，并随会话作用域一起拆除；新增同类缓存直接加进作用域复用它，不再手写 owner/revision/generation。
 - 多个页面或导航栈共享预载任务时，owner 必须稳定且可计数；只有最后一个 owner 离开才能释放保护。
 - 可取消的 handle 型工作必须原子交接“取消状态 + handle”：取消早于 handle 安装时，安装者也必须立即取消；发布 ready 前再检查父任务。
 - 同一 canonical 媒体可能同时存在多个 UI/cache alias。操作结果需要同步全部已知 alias 时，不得用 `first(where:)` 假定唯一命中。

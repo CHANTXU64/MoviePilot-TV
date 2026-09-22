@@ -259,13 +259,12 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("private static let columnSpacing: CGFloat = 270"))
   }
 
-  func testSessionChangePreloaderCleanupUsesUnifiedSessionState() throws {
+  /// 会话切换时的清理已由 `SessionScope` 生命周期保证，行为回归见
+  /// `SessionResourceIsolationTests.testMediaPreloaderPreservesSameAccountRefreshAndClearsAccountSwitchSynchronously`；
+  /// 这里只保留“预载缓存不得自建并行淘汰机制”的接线守卫。
+  func testMediaPreloaderKeepsNoParallelCacheEvictionInSource() throws {
     let source = try Self.source(at: "MoviePilot-TV/ViewModels/MediaPreloader.swift")
 
-    XCTAssertTrue(source.contains("apiService.$session"))
-    XCTAssertTrue(source.contains("session.token == nil"))
-    XCTAssertTrue(source.contains("session.uiIdentity != self.observedSessionUIIdentity"))
-    XCTAssertTrue(source.contains("if shouldClear { self.clearAll() }"))
     XCTAssertFalse(source.contains("maxCacheSize"))
     XCTAssertFalse(source.contains("accessOrder"))
     XCTAssertFalse(source.contains("evictIfNeeded"))

@@ -94,7 +94,8 @@ private struct SeasonAvailabilityScope: Equatable {
 @MainActor
 class SubscribeSeasonViewModel: ObservableObject {
   let mediaInfo: MediaInfo
-  private let apiService: APIService
+  // 分季模型也可能被会话预载缓存持有，不能反向延长服务的生命周期。
+  private weak var apiService: APIService?
 
   @Published var seasonInfos: [TmdbSeason] = []
   @Published var episodeGroups: [EpisodeGroup] = []
@@ -165,7 +166,7 @@ class SubscribeSeasonViewModel: ObservableObject {
     snapshot: APIServiceSessionSnapshot
   ) -> Bool {
     isSeasonLoadOwnerCurrent(load)
-      && apiService.isSessionUnchanged(from: snapshot)
+      && apiService?.isSessionUnchanged(from: snapshot) == true
   }
 
   private func isSeasonLoadOwnerCurrent(
@@ -200,6 +201,7 @@ class SubscribeSeasonViewModel: ObservableObject {
     forceRefreshSubscriptions: Bool,
     seasonManagement: Bool
   ) async {
+    guard let apiService else { return }
     let snapshot = apiService.sessionSnapshot()
     if isSeasonManagementContext != seasonManagement {
       hasLoaded = false
@@ -259,6 +261,7 @@ class SubscribeSeasonViewModel: ObservableObject {
 
   /// 当用户在界面切换剧集组时触发重新加载
   func fetchSeasons() async {
+    guard let apiService else { return }
     let snapshot = apiService.sessionSnapshot()
     let load = beginSeasonLoad()
     isLoading = true
@@ -286,6 +289,7 @@ class SubscribeSeasonViewModel: ObservableObject {
     snapshot: APIServiceSessionSnapshot,
     load: (revision: Int, episodeGroup: String?)
   ) async throws {
+    guard let apiService else { throw CancellationError() }
     try validateSeasonLoad(load, snapshot: snapshot)
     let loadedSeasons: [TmdbSeason]
     if let episodeGroup = load.episodeGroup {
@@ -340,6 +344,7 @@ class SubscribeSeasonViewModel: ObservableObject {
 
   /// 调用后端接口，比对媒体库中已有的集数，确定每一季的完整性
   func checkSeasonsStatus() async {
+    guard let apiService else { return }
     let snapshot = apiService.sessionSnapshot()
     let episodeGroup = effectiveEpisodeGroup
     seasonAvailabilityRevision &+= 1
@@ -371,6 +376,7 @@ class SubscribeSeasonViewModel: ObservableObject {
     preserveVisibleState: Bool,
     isCurrent: () -> Bool
   ) async throws {
+    guard let apiService else { throw CancellationError() }
     guard apiService.isSessionUnchanged(from: snapshot), isCurrent() else {
       throw CancellationError()
     }
@@ -466,6 +472,7 @@ class SubscribeSeasonViewModel: ObservableObject {
     requestedScope: SeasonAvailabilityScope,
     requestIsCurrent: Bool
   ) {
+    guard let apiService else { return }
     guard requestIsCurrent else { return }
 
     let currentScope = SeasonAvailabilityScope(
@@ -501,6 +508,7 @@ class SubscribeSeasonViewModel: ObservableObject {
   /// 查询当前媒体所有分季订阅摘要，填充 seasonSubscriptions 和 subscribedSeasons
   @discardableResult
   func checkSubscriptionStatus(forceRefresh: Bool = false) async -> Bool {
+    guard let apiService else { return false }
     guard apiService.canAccess(.subscribe) else {
       seasonSubscriptions = [:]
       subscribedSeasons = []
@@ -530,6 +538,7 @@ class SubscribeSeasonViewModel: ObservableObject {
   private func loadSubscriptionSummaries(forceRefresh: Bool) async throws
     -> [Int: SeasonSubscriptionSummary]
   {
+    guard let apiService else { throw CancellationError() }
     let subscriptions = try await apiService.fetchSubscriptions(forceRefresh: forceRefresh)
     return SeasonSubscriptionSummary.indexBySeason(from: subscriptions, matching: mediaInfo)
   }
@@ -568,6 +577,7 @@ class SubscribeSeasonViewModel: ObservableObject {
   }
 
   func unsubscribeSeason(_ seasonNumber: Int) async {
+    guard let apiService else { return }
     subscribingSeasons.insert(seasonNumber)
     defer { subscribingSeasons.remove(seasonNumber) }
     let sessionSnapshot = apiService.sessionSnapshot()

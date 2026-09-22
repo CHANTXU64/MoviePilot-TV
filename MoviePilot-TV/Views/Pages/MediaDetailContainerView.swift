@@ -355,7 +355,7 @@ private struct MediaDetailContainerContent: View {
     }
     .task(id: tmdbPreloadTarget?.id) {
       guard let target = tmdbPreloadTarget else { return }
-      MediaPreloader.shared.preloadAuxiliary(
+      APIService.shared.mediaPreloader.preloadAuxiliary(
         for: target,
         owner: routeID
       )

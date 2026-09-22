@@ -18,13 +18,13 @@ final class MPImageWarmer {
     var owners: Set<UUID>
   }
 
-  static let shared = MPImageWarmer()
-
+  private weak var apiService: APIService?
   private let sessionDelegate: MPImageWarmSessionDelegate
   private let session: URLSession
   private let recentWarmTTL: TimeInterval
   private let recentWarmLimit: Int
   private let now: @Sendable () -> Date
+  private var isTornDown = false
   private var activeRequests: [String: ActiveRequest] = [:]
   private var recentlyWarmedURLs: [String: Date] = [:]
 
@@ -32,11 +32,13 @@ final class MPImageWarmer {
   var cachedURLCount: Int { recentlyWarmedURLs.count }
 
   init(
+    apiService: APIService = .shared,
     configuration: URLSessionConfiguration = MPImageWarmer.makeConfiguration(),
     recentWarmTTL: TimeInterval = 60 * 60,
     recentWarmLimit: Int = 512,
     now: @escaping @Sendable () -> Date = Date.init
   ) {
+    self.apiService = apiService
     let sessionDelegate = MPImageWarmSessionDelegate()
     self.sessionDelegate = sessionDelegate
     session = URLSession(
@@ -50,9 +52,13 @@ final class MPImageWarmer {
     sessionDelegate.owner = self
   }
 
+  isolated deinit {
+    session.invalidateAndCancel()
+  }
+
   @discardableResult
   func warm(_ url: URL) async -> Handle? {
-    let apiService = APIService.shared
+    guard let apiService else { return nil }
     return await warm(
       url,
       baseURL: apiService.baseURL,
@@ -94,6 +100,8 @@ final class MPImageWarmer {
     imageCacheEnabled: Bool,
     requestModifier: AnyModifier?
   ) async -> Handle? {
+    // 会话已拆除：URLSession 已失效，继续建任务会崩溃。
+    guard !isTornDown else { return nil }
     guard
       Self.isWarmable(
         url,
@@ -167,6 +175,15 @@ final class MPImageWarmer {
     for request in requests {
       request.task.cancel()
     }
+  }
+
+  /// 会话结束时的终态：清空记录后让 URLSession 失效，断开它对 delegate 的强引用。
+  /// 与 `clear()` 区分——后者可重复使用，只取消在途预热。
+  func tearDown() {
+    guard !isTornDown else { return }
+    isTornDown = true
+    clear()
+    session.invalidateAndCancel()
   }
 
   fileprivate func didReceive(_ response: URLResponse, for task: URLSessionDataTask) {

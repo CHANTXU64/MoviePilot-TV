@@ -43,7 +43,7 @@ struct MediaContextMenuItems: View {
           Task {
             // 优先传入预加载的 tmdbId，避免重复网络请求
             // ⚠️ 此处在 Button 操作中（非 body 渲染），可安全使用 getTask
-            let preloadedTmdbId = MediaPreloader.shared.getTask(for: item)?.tmdbId
+            let preloadedTmdbId = APIService.shared.mediaPreloader.getTask(for: item)?.tmdbId
             if let target = await mediaActionHandler.getTMDBJumpTarget(
               for: item, targetTmdbId: preloadedTmdbId)
             {
@@ -61,7 +61,7 @@ struct MediaContextMenuItems: View {
 
       // 订阅按钮：预加载状态只控制显示；点击后由 Handler 向后端复查
       // ⚠️ 使用 peekTask（纯读取），避免在 body 渲染期间修改预载任务生命周期状态
-      let preloadedSubscribed = MediaPreloader.shared.peekTask(for: item)?.isSubscribed
+      let preloadedSubscribed = APIService.shared.mediaPreloader.peekTask(for: item)?.isSubscribed
 
       if canSubscribeMedia, item.type != "音乐" {
         Button {

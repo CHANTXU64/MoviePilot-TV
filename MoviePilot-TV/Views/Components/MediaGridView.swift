@@ -12,7 +12,7 @@ final class GridPreloadDebouncer {
 
   init(
     preloadAction: @escaping @MainActor (MediaInfo, UUID) -> Void = { item, stackID in
-      MediaPreloader.shared.preloadFocusedCandidateIfNeeded(for: item, stackID: stackID)
+      APIService.shared.mediaPreloader.preloadFocusedCandidateIfNeeded(for: item, stackID: stackID)
     }
   ) {
     self.preloadAction = preloadAction
@@ -443,7 +443,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
       return
     }
 
-    MediaPreloader.shared.focusDidMove(to: item.id, stackID: navigationCoordinator.id)
+    APIService.shared.mediaPreloader.focusDidMove(to: item.id, stackID: navigationCoordinator.id)
     preloadDebouncer.cancel(itemID: item.id, listIdentity: eventIdentity)
     if item.shouldPreloadDetail {
       preloadDebouncer.schedule(

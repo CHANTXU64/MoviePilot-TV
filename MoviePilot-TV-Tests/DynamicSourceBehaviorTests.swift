@@ -203,7 +203,7 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     // 已经开始的 Kingfisher 下载都必须取消。Push 当下不再重复启动无提前量的预热。
     XCTAssertEqual(
       homeSource.components(
-        separatedBy: "posterWarmDownloadTask = MediaPreloader.shared.warmLoadingPoster("
+        separatedBy: "posterWarmDownloadTask = APIService.shared.mediaPreloader.warmLoadingPoster("
       ).count - 1,
       2
     )
@@ -259,12 +259,12 @@ final class DynamicSourceBehaviorTests: XCTestCase {
 
     XCTAssertTrue(prefetch.contains("let canWarmOnMoviePilot = MPImageWarmer.isWarmable("))
     XCTAssertTrue(prefetch.contains("if preparedAsCandidate, canWarmOnMoviePilot"))
-    XCTAssertTrue(prefetch.contains("MPImageWarmer.shared.warm(url)"))
+    XCTAssertTrue(prefetch.contains("imageWarmer.warm(url)"))
     XCTAssertTrue(prefetch.contains("activeImageWarmHandle = handle"))
     XCTAssertTrue(prefetch.contains("return"))
     XCTAssertTrue(prefetch.contains("retrieveHeroImage(url, fallbackURL: target.fallbackURL)"))
     XCTAssertTrue(prefetch.contains("guard !Task.isCancelled else { return }"))
-    XCTAssertTrue(cancel.contains("MPImageWarmer.shared.cancel(activeImageWarmHandle)"))
+    XCTAssertTrue(cancel.contains("imageWarmer.cancel(activeImageWarmHandle)"))
     XCTAssertTrue(containerSource.contains("preloadTask.cancelImageWarm()"))
   }
 
@@ -1041,7 +1041,7 @@ final class DynamicSourceBehaviorTests: XCTestCase {
         relativePath
       )
       XCTAssertFalse(
-        viewSource.contains("MediaPreloader.shared.preload(for:"),
+        viewSource.contains("mediaPreloader.preload(for:"),
         relativePath
       )
     }
@@ -1050,7 +1050,7 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     XCTAssertTrue(containerSource.contains("preloadAuxiliary("))
     XCTAssertFalse(containerSource.contains("preloadIfNeeded(for:"))
     XCTAssertFalse(
-      containerSource.contains("MediaPreloader.shared.preload(for:"),
+      containerSource.contains("mediaPreloader.preload(for:"),
       "详情 task 必须由 navigation entry 注入，destination 重求值不得创建 orphan task"
     )
   }
