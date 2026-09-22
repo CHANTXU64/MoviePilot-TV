@@ -810,6 +810,11 @@ class APIService: ObservableObject {
     }
   }
 
+  isolated deinit {
+    activeSessionScope?.tearDown()
+    runtime.cancel()
+  }
+
   var isLoggedIn: Bool {
     return token != nil
   }

@@ -104,7 +104,7 @@ final class ImageLoadWindowTests: XCTestCase {
 
   func testNavigationLifecycleUsesOneReversibleStateMachine() async throws {
     let coordinator = ImageNavigationCoordinator(
-      mediaPreloader: MediaPreloader(apiService: .testingInstance()),
+      apiService: .testingInstance(),
       removedLifecycleRetention: .milliseconds(1)
     )
     coordinator.setStackForeground(true)
@@ -139,7 +139,7 @@ final class ImageLoadWindowTests: XCTestCase {
 
   func testLifecycleSynchronouslyReleasesAndRewarmsRegisteredContentResources() {
     let coordinator = ImageNavigationCoordinator(
-      mediaPreloader: MediaPreloader(apiService: .testingInstance())
+      apiService: .testingInstance()
     )
     coordinator.setStackForeground(true)
 
@@ -353,7 +353,7 @@ final class ImageLoadWindowTests: XCTestCase {
 
   func testLifecycleRetainsImageManifestWithoutAUIViewOwner() {
     let coordinator = ImageNavigationCoordinator(
-      mediaPreloader: MediaPreloader(apiService: .testingInstance())
+      apiService: .testingInstance()
     )
     coordinator.setStackForeground(true)
     let first = coordinator.push(resourceRequest("A"))
@@ -381,7 +381,7 @@ final class ImageLoadWindowTests: XCTestCase {
 
   func testBackgroundIsActiveOnlyAndTabsGateAllImages() {
     let coordinator = ImageNavigationCoordinator(
-      mediaPreloader: MediaPreloader(apiService: .testingInstance())
+      apiService: .testingInstance()
     )
     coordinator.setStackForeground(true)
     let entry = coordinator.push(resourceRequest("detail"))
@@ -400,7 +400,7 @@ final class ImageLoadWindowTests: XCTestCase {
 
   func testTabTransitionRetainsImagesButInvalidatesNavigationImmediately() async throws {
     let coordinator = ImageNavigationCoordinator(
-      mediaPreloader: MediaPreloader(apiService: .testingInstance()),
+      apiService: .testingInstance(),
       tabTransitionImageRetention: .milliseconds(20)
     )
     coordinator.setStackForeground(true)
@@ -437,7 +437,7 @@ final class ImageLoadWindowTests: XCTestCase {
 
   func testSelectedStackRetainsImagesAcrossSceneBackgroundWithoutStayingForeground() async throws {
     let coordinator = ImageNavigationCoordinator(
-      mediaPreloader: MediaPreloader(apiService: .testingInstance()),
+      apiService: .testingInstance(),
       tabTransitionImageRetention: .milliseconds(20)
     )
     coordinator.setStackForeground(true)
@@ -486,7 +486,7 @@ final class ImageLoadWindowTests: XCTestCase {
 
   func testSelectedSceneBackgroundKeepsDecodedSurfaceForImmediateReturn() {
     let coordinator = ImageNavigationCoordinator(
-      mediaPreloader: MediaPreloader(apiService: .testingInstance())
+      apiService: .testingInstance()
     )
     coordinator.setStackForeground(true)
     let slot = makeSlot(key: "scene-return", lifecycle: coordinator.rootLifecycle)
@@ -522,7 +522,7 @@ final class ImageLoadWindowTests: XCTestCase {
 
   func testUnselectedStackStillReleasesImmediatelyWhenSceneLeavesActive() {
     let coordinator = ImageNavigationCoordinator(
-      mediaPreloader: MediaPreloader(apiService: .testingInstance())
+      apiService: .testingInstance()
     )
     coordinator.setStackForeground(true)
     let entry = coordinator.push(resourceRequest("detail"))
@@ -540,7 +540,7 @@ final class ImageLoadWindowTests: XCTestCase {
 
   func testInitiallyInactiveSelectedStackDoesNotEnableImageRetention() {
     let coordinator = ImageNavigationCoordinator(
-      mediaPreloader: MediaPreloader(apiService: .testingInstance())
+      apiService: .testingInstance()
     )
 
     coordinator.setStackPresentation(isSelected: true, scenePhase: .background)
@@ -631,7 +631,7 @@ final class ImageLoadWindowTests: XCTestCase {
 
   func testBackgroundingStackImmediatelyFinishesRetiringPage() {
     let coordinator = ImageNavigationCoordinator(
-      mediaPreloader: MediaPreloader(apiService: .testingInstance()),
+      apiService: .testingInstance(),
       removedLifecycleRetention: .seconds(10)
     )
     coordinator.setStackForeground(true)
@@ -647,7 +647,9 @@ final class ImageLoadWindowTests: XCTestCase {
   }
 
   func testSameMediaUsesIndependentRouteOwnersAcrossStacks() {
-    let preloader = MediaPreloader(apiService: .testingInstance())
+    let preloadService = APIService.testingInstance()
+    defer { withExtendedLifetime(preloadService) {} }
+    let preloader = preloadService.mediaPreloader
     defer { preloader.clearAll() }
     let firstStack = ImageNavigationCoordinator(mediaPreloader: preloader)
     let secondStack = ImageNavigationCoordinator(mediaPreloader: preloader)
@@ -667,7 +669,9 @@ final class ImageLoadWindowTests: XCTestCase {
   }
 
   func testDestinationOnlyUsesTaskAcquiredByNavigationEntry() async throws {
-    let preloader = MediaPreloader(apiService: .testingInstance())
+    let preloadService = APIService.testingInstance()
+    defer { withExtendedLifetime(preloadService) {} }
+    let preloader = preloadService.mediaPreloader
     defer { preloader.clearAll() }
     let coordinator = ImageNavigationCoordinator(
       mediaPreloader: preloader,
@@ -691,7 +695,7 @@ final class ImageLoadWindowTests: XCTestCase {
 
   func testAsyncNavigationRejectsStaleSourceToken() {
     let coordinator = ImageNavigationCoordinator(
-      mediaPreloader: MediaPreloader(apiService: .testingInstance())
+      apiService: .testingInstance()
     )
     coordinator.setStackForeground(true)
     let staleSource = coordinator.sourceToken()

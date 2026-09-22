@@ -622,7 +622,9 @@ final class MPImageWarmerTests: XCTestCase {
   }
 
   func testNewCandidateImmediatelyReleasesPreviousCandidate() {
-    let preloader = MediaPreloader(apiService: .testingInstance())
+    let preloadService = APIService.testingInstance()
+    defer { withExtendedLifetime(preloadService) {} }
+    let preloader = preloadService.mediaPreloader
     defer { preloader.clearAll() }
     let first = MediaInfo(tmdb_id: 710_001, title: "候选一", type: "合集")
     let second = MediaInfo(tmdb_id: 710_002, title: "候选二", type: "合集")
@@ -637,7 +639,9 @@ final class MPImageWarmerTests: XCTestCase {
   }
 
   func testPopReleasesTaskOnlyAfterLastNavigationOwnerLeaves() {
-    let preloader = MediaPreloader(apiService: .testingInstance())
+    let preloadService = APIService.testingInstance()
+    defer { withExtendedLifetime(preloadService) {} }
+    let preloader = preloadService.mediaPreloader
     defer { preloader.clearAll() }
     let media = MediaInfo(
       tmdb_id: 720_001,
@@ -671,7 +675,9 @@ final class MPImageWarmerTests: XCTestCase {
   }
 
   func testCandidateReplacementDoesNotReleaseNavigationOwnedTask() {
-    let preloader = MediaPreloader(apiService: .testingInstance())
+    let preloadService = APIService.testingInstance()
+    defer { withExtendedLifetime(preloadService) {} }
+    let preloader = preloadService.mediaPreloader
     defer { preloader.clearAll() }
     let navigationMedia = MediaInfo(tmdb_id: 730_001, title: "栈内详情", type: "合集")
     let candidateMedia = MediaInfo(tmdb_id: 730_002, title: "新候选", type: "合集")
@@ -686,7 +692,9 @@ final class MPImageWarmerTests: XCTestCase {
   }
 
   func testLoadingPosterReleaseKeepsDiskAndCardProcessor() async throws {
-    let preloader = MediaPreloader(apiService: .testingInstance())
+    let preloadService = APIService.testingInstance()
+    defer { withExtendedLifetime(preloadService) {} }
+    let preloader = preloadService.mediaPreloader
     defer { preloader.clearAll() }
     let cache = ImageCache(name: "loading-poster-pop-\(UUID().uuidString)")
     defer {
@@ -742,7 +750,9 @@ final class MPImageWarmerTests: XCTestCase {
     defer { snapshot.restore(to: sharedService) }
     sharedService.useImageCache = false
 
-    let preloader = MediaPreloader(apiService: .testingInstance())
+    let preloadService = APIService.testingInstance()
+    defer { withExtendedLifetime(preloadService) {} }
+    let preloader = preloadService.mediaPreloader
     defer { preloader.clearAll() }
     let cache = ImageCache(name: "abandoned-hero-\(UUID().uuidString)")
     defer {
@@ -807,7 +817,9 @@ final class MPImageWarmerTests: XCTestCase {
   }
 
   func testAuxiliaryPreloadDoesNotReplaceFocusCandidateAndReleasesOnPop() {
-    let preloader = MediaPreloader(apiService: .testingInstance())
+    let preloadService = APIService.testingInstance()
+    defer { withExtendedLifetime(preloadService) {} }
+    let preloader = preloadService.mediaPreloader
     defer { preloader.clearAll() }
     let focused = MediaInfo(tmdb_id: 760_301, title: "推荐焦点", type: "电影")
     let douban = MediaInfo(douban_id: "760302", title: "豆瓣详情", type: "电影")
@@ -840,7 +852,9 @@ final class MPImageWarmerTests: XCTestCase {
   }
 
   func testAuxiliaryPreloadKeepsTaskWhenAnotherPageOwnsIt() {
-    let preloader = MediaPreloader(apiService: .testingInstance())
+    let preloadService = APIService.testingInstance()
+    defer { withExtendedLifetime(preloadService) {} }
+    let preloader = preloadService.mediaPreloader
     defer { preloader.clearAll() }
     let parent = MediaInfo(douban_id: "760401", title: "父详情", type: "电影")
     let tmdb = MediaInfo(tmdb_id: 760_402, title: "TMDB子页", type: "电影")
@@ -873,7 +887,9 @@ final class MPImageWarmerTests: XCTestCase {
   }
 
   func testAuxiliaryPreloadKeepsSharedTaskUntilAllOwnersAndCandidateRelease() throws {
-    let preloader = MediaPreloader(apiService: .testingInstance())
+    let preloadService = APIService.testingInstance()
+    defer { withExtendedLifetime(preloadService) {} }
+    let preloader = preloadService.mediaPreloader
     defer { preloader.clearAll() }
     let firstParent = MediaInfo(douban_id: "760501", title: "父详情一", type: "电影")
     let secondParent = MediaInfo(douban_id: "760502", title: "父详情二", type: "电影")
@@ -922,7 +938,9 @@ final class MPImageWarmerTests: XCTestCase {
   }
 
   func testPoppedFocusedItemIsSuppressedUntilFocusMoves() {
-    let preloader = MediaPreloader(apiService: .testingInstance())
+    let preloadService = APIService.testingInstance()
+    defer { withExtendedLifetime(preloadService) {} }
+    let preloader = preloadService.mediaPreloader
     defer { preloader.clearAll() }
     let popped = MediaInfo(tmdb_id: 740_001, title: "刚退出的 A", type: "合集")
     let next = MediaInfo(tmdb_id: 740_002, title: "移动到 B", type: "合集")

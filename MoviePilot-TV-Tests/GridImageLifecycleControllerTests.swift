@@ -182,7 +182,7 @@ final class GridImageLifecycleControllerTests: XCTestCase {
 
   func testNavigationDepthDoesNotDisarmButActualStackReleaseDoes() {
     let coordinator = ImageNavigationCoordinator(
-      mediaPreloader: MediaPreloader(apiService: .testingInstance())
+      apiService: .testingInstance()
     )
     coordinator.setStackForeground(true)
     let listIdentity = GridListIdentity.make()
@@ -220,7 +220,7 @@ final class GridImageLifecycleControllerTests: XCTestCase {
 
   func testRapidTabRoundTripWithoutActualReleaseKeepsArmedWindow() async throws {
     let coordinator = ImageNavigationCoordinator(
-      mediaPreloader: MediaPreloader(apiService: .testingInstance()),
+      apiService: .testingInstance(),
       tabTransitionImageRetention: .milliseconds(20)
     )
     coordinator.setStackForeground(true)
@@ -247,7 +247,7 @@ final class GridImageLifecycleControllerTests: XCTestCase {
 
   func testSelectedSceneBackgroundKeepsArmedWindowWithoutAcceptingFocus() {
     let coordinator = ImageNavigationCoordinator(
-      mediaPreloader: MediaPreloader(apiService: .testingInstance())
+      apiService: .testingInstance()
     )
     coordinator.setStackForeground(true)
     let listIdentity = GridListIdentity.make()
@@ -285,7 +285,7 @@ final class GridImageLifecycleControllerTests: XCTestCase {
 
   func testTabInteractionGateUpdatesSynchronouslyWithoutViewOnChange() {
     let coordinator = ImageNavigationCoordinator(
-      mediaPreloader: MediaPreloader(apiService: .testingInstance())
+      apiService: .testingInstance()
     )
     coordinator.setStackForeground(true)
     let listIdentity = GridListIdentity.make()
@@ -326,7 +326,7 @@ final class GridImageLifecycleControllerTests: XCTestCase {
 
   func testLateFocusCannotRearmReleasedGrid() {
     let coordinator = ImageNavigationCoordinator(
-      mediaPreloader: MediaPreloader(apiService: .testingInstance())
+      apiService: .testingInstance()
     )
     coordinator.setStackForeground(true)
     let listIdentity = GridListIdentity.make()
@@ -360,7 +360,7 @@ final class GridImageLifecycleControllerTests: XCTestCase {
 
   func testReleasedStackReturnRestoresOnlyTopRowsBeforeCardFocus() {
     let coordinator = ImageNavigationCoordinator(
-      mediaPreloader: MediaPreloader(apiService: .testingInstance())
+      apiService: .testingInstance()
     )
     coordinator.setStackForeground(true)
     let listIdentity = GridListIdentity.make()
@@ -421,7 +421,7 @@ final class GridImageLifecycleControllerTests: XCTestCase {
 
   func testSlotGateStartsTopRowsButNeverOldDeepWindowBeforeNewFocus() {
     let coordinator = ImageNavigationCoordinator(
-      mediaPreloader: MediaPreloader(apiService: .testingInstance())
+      apiService: .testingInstance()
     )
     coordinator.setStackForeground(true)
     let listIdentity = GridListIdentity.make()

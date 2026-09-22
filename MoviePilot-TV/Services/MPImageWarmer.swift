@@ -18,7 +18,7 @@ final class MPImageWarmer {
     var owners: Set<UUID>
   }
 
-  private let apiService: APIService
+  private weak var apiService: APIService?
   private let sessionDelegate: MPImageWarmSessionDelegate
   private let session: URLSession
   private let recentWarmTTL: TimeInterval
@@ -52,9 +52,14 @@ final class MPImageWarmer {
     sessionDelegate.owner = self
   }
 
+  isolated deinit {
+    session.invalidateAndCancel()
+  }
+
   @discardableResult
   func warm(_ url: URL) async -> Handle? {
-    await warm(
+    guard let apiService else { return nil }
+    return await warm(
       url,
       baseURL: apiService.baseURL,
       imageCacheEnabled: apiService.useImageCache,
