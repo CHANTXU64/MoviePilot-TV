@@ -421,10 +421,26 @@ final class OpenAPIContractOfflineTests: XCTestCase {
   func testCommittedExceptionsAndBaselineParse() throws {
     let exceptions = try OpenAPIContractSupport.loadExceptions()
     XCTAssertTrue(exceptions.contains { $0.id == "media.search.media_source-query-array" })
+    XCTAssertTrue(exceptions.contains { $0.id == "subscribe.fork.id-int-or-string" })
 
     let baseline = try OpenAPIContractSupport.loadDocument("openapi-baseline.json")
     XCTAssertEqual(baseline.title, "MoviePilot")
+    XCTAssertEqual(baseline.version, "v3.0.7")
     XCTAssertFalse(baseline.paths.isEmpty)
+
+    let fork = try XCTUnwrap(
+      OpenAPIOperationLoader.load(
+        method: "POST",
+        template: "/subscribe/fork",
+        document: baseline
+      )
+    )
+    let forkData = try XCTUnwrap(fork.innerDataSchema)
+    XCTAssertEqual(forkData.ref, "#/components/schemas/IdData")
+    let forkID = try XCTUnwrap(forkData.properties["id"])
+    XCTAssertEqual(forkID.kind, .union)
+    XCTAssertEqual(forkID.types, ["integer", "string", "null"])
+    XCTAssertTrue(forkID.nullable)
   }
 
   func testSourceScannerMapsInterpolatedSubscribePath() {

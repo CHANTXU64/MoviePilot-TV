@@ -240,6 +240,13 @@
       "reason": "OpenAPI 将新增订阅 id 标为 integer|string|null，TV 成功路径按 Int 解码。"
     },
     {
+      "id": "subscribe.fork.id-int-or-string",
+      "operation": "POST /subscribe/fork",
+      "kind": "responseFieldTypeMismatch",
+      "path": "id",
+      "reason": "v3.0.7 的通用 IdData 将 id 标为 integer|string|null，但 Fork 直接返回 create_subscribe 的整数 sid；TV 成功路径继续要求正 Int。"
+    },
+    {
       "id": "subscribe.put.note-json",
       "operation": "PUT /subscribe/",
       "kind": "bodyFieldTypeMismatch",
