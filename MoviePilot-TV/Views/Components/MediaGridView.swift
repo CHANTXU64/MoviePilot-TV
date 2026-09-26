@@ -70,6 +70,7 @@ private struct GridCardView: View, Equatable {
   let itemIndex: Int
   let itemCount: Int
   let imageConfigurationIdentity: String
+  let loadsImages: Bool
   let onTap: () -> Void
   let onFocus: (Bool) -> Void
 
@@ -79,6 +80,7 @@ private struct GridCardView: View, Equatable {
       && lhs.itemIndex == rhs.itemIndex
       && lhs.itemCount == rhs.itemCount
       && lhs.imageConfigurationIdentity == rhs.imageConfigurationIdentity
+      && lhs.loadsImages == rhs.loadsImages
   }
 
   var body: some View {
@@ -91,7 +93,7 @@ private struct GridCardView: View, Equatable {
       bottomLeftText: nil,
       bottomLeftSecondaryText: nil,
       source: MediaSource.from(mediaInfo: item),
-      loadsImage: true,
+      loadsImage: loadsImages,
       action: onTap,
       onFocus: onFocus
     )
@@ -104,6 +106,7 @@ private struct GridCardViewWithMenu<MenuContent: View>: View, Equatable {
   let itemIndex: Int
   let itemCount: Int
   let imageConfigurationIdentity: String
+  let loadsImages: Bool
   let onTap: () -> Void
   let onFocus: (Bool) -> Void
   let menuBuilder: (MediaInfo) -> MenuContent
@@ -114,6 +117,7 @@ private struct GridCardViewWithMenu<MenuContent: View>: View, Equatable {
       && lhs.itemIndex == rhs.itemIndex
       && lhs.itemCount == rhs.itemCount
       && lhs.imageConfigurationIdentity == rhs.imageConfigurationIdentity
+      && lhs.loadsImages == rhs.loadsImages
   }
 
   var body: some View {
@@ -126,7 +130,7 @@ private struct GridCardViewWithMenu<MenuContent: View>: View, Equatable {
       bottomLeftText: nil,
       bottomLeftSecondaryText: nil,
       source: MediaSource.from(mediaInfo: item),
-      loadsImage: true,
+      loadsImage: loadsImages,
       action: onTap,
       onFocus: onFocus
     )
@@ -152,6 +156,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
   let contextMenu: ((MediaInfo) -> ContextMenu)?
   let onShareTapped: ((SubscribeShare) -> Void)?
   let loadMoreThreshold: Int
+  let loadsImages: Bool
   @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
 
   /// 预加载防抖器：引用类型，内部状态变化不会触发 View 刷新
@@ -167,6 +172,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     isLoadingMore: Bool,
     onLoadMore: @escaping (MediaInfo.ID?) -> Void,
     loadMoreThreshold: Int = 24,
+    loadsImages: Bool = true,
     @ViewBuilder header: () -> Header,
     @ViewBuilder contextMenu: @escaping (MediaInfo) -> ContextMenu,
     onShareTapped: ((SubscribeShare) -> Void)? = nil
@@ -178,6 +184,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     self.isLoadingMore = isLoadingMore
     self.onLoadMore = onLoadMore
     self.loadMoreThreshold = loadMoreThreshold
+    self.loadsImages = loadsImages
     self.header = header()
     self.contextMenu = contextMenu
     self.onShareTapped = onShareTapped
@@ -207,6 +214,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     isLoadingMore: Bool,
     onLoadMore: @escaping (MediaInfo.ID?) -> Void,
     loadMoreThreshold: Int = 24,
+    loadsImages: Bool = true,
     @ViewBuilder header: () -> Header,
     onShareTapped: ((SubscribeShare) -> Void)? = nil
   ) where ContextMenu == EmptyView {
@@ -217,6 +225,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
     self.isLoadingMore = isLoadingMore
     self.onLoadMore = onLoadMore
     self.loadMoreThreshold = loadMoreThreshold
+    self.loadsImages = loadsImages
     self.header = header()
     self.contextMenu = nil
     self.onShareTapped = onShareTapped
@@ -277,6 +286,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
                   itemIndex: index,
                   itemCount: items.count,
                   imageConfigurationIdentity: apiService.imageConfigurationIdentity,
+                  loadsImages: loadsImages,
                   onTap: { handleItemTap(item) },
                   onFocus: { isFocused in
                     handleFocus(
@@ -308,6 +318,7 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
                   itemIndex: index,
                   itemCount: items.count,
                   imageConfigurationIdentity: apiService.imageConfigurationIdentity,
+                  loadsImages: loadsImages,
                   onTap: { handleItemTap(item) },
                   onFocus: { isFocused in
                     handleFocus(
@@ -422,24 +433,28 @@ struct MediaGridView<Header: View, ContextMenu: View>: View {
       itemIDs: eventItemIDs
     )
     // 图片控制器同时验证页面是否可见/可交互；先过这道门，避免隐藏页面的迟到焦点扩张 DOM。
-    guard imageRetention.cardFocusChanged(
-      listIdentity: eventIdentity,
-      itemID: item.id,
-      itemIndex: index,
-      isFocused: isFocused
-    ) else {
+    guard
+      imageRetention.cardFocusChanged(
+        listIdentity: eventIdentity,
+        itemID: item.id,
+        itemIndex: index,
+        isFocused: isFocused
+      )
+    else {
       return
     }
-    guard domRetention.cardFocusChanged(
-      listIdentity: eventIdentity,
-      itemID: item.id,
-      itemIndex: index,
-      isFocused: isFocused
-    ) else {
+    guard
+      domRetention.cardFocusChanged(
+        listIdentity: eventIdentity,
+        itemID: item.id,
+        itemIndex: index,
+        isFocused: isFocused
+      )
+    else {
       return
     }
 
-    guard isFocused else {
+    guard isFocused, loadsImages else {
       return
     }
 
@@ -468,6 +483,7 @@ extension MediaGridView where Header == EmptyView {
     isLoadingMore: Bool,
     onLoadMore: @escaping (MediaInfo.ID?) -> Void,
     loadMoreThreshold: Int = 24,
+    loadsImages: Bool = true,
     @ViewBuilder contextMenu: @escaping (MediaInfo) -> ContextMenu,
     onShareTapped: ((SubscribeShare) -> Void)? = nil
   ) {
@@ -479,6 +495,7 @@ extension MediaGridView where Header == EmptyView {
       isLoadingMore: isLoadingMore,
       onLoadMore: onLoadMore,
       loadMoreThreshold: loadMoreThreshold,
+      loadsImages: loadsImages,
       header: { EmptyView() },
       contextMenu: contextMenu,
       onShareTapped: onShareTapped
@@ -495,6 +512,7 @@ extension MediaGridView where Header == EmptyView, ContextMenu == EmptyView {
     isLoadingMore: Bool,
     onLoadMore: @escaping (MediaInfo.ID?) -> Void,
     loadMoreThreshold: Int = 24,
+    loadsImages: Bool = true,
     onShareTapped: ((SubscribeShare) -> Void)? = nil
   ) {
     self.init(
@@ -505,6 +523,7 @@ extension MediaGridView where Header == EmptyView, ContextMenu == EmptyView {
       isLoadingMore: isLoadingMore,
       onLoadMore: onLoadMore,
       loadMoreThreshold: loadMoreThreshold,
+      loadsImages: loadsImages,
       header: { EmptyView() },
       onShareTapped: onShareTapped
     )

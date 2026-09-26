@@ -92,6 +92,7 @@ struct TorrentsResultView<Header: View>: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     .focusSection()
+    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in activeFilter = nil }
     .sheet(item: $activeFilter) { config in
       MultiSelectionSheet(
         options: config.options,

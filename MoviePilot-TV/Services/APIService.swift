@@ -284,34 +284,6 @@ nonisolated private func firstNonWhitespaceByte(in data: Data) -> UInt8? {
   }
 }
 
-nonisolated func encodeURIComponent(_ value: String) -> String? {
-  let allowed = CharacterSet(
-    charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
-  return value.addingPercentEncoding(withAllowedCharacters: allowed)
-}
-
-nonisolated func appendPercentEncodedQueryParams(
-  to components: inout URLComponents,
-  params: [String: String?]
-) {
-  let additions = params.compactMap { name, value -> String? in
-    guard let value,
-      let encodedName = encodeURIComponent(name),
-      let encodedValue = encodeURIComponent(value)
-    else {
-      return nil
-    }
-    return "\(encodedName)=\(encodedValue)"
-  }
-  guard !additions.isEmpty else { return }
-  let suffix = additions.joined(separator: "&")
-  if let existing = components.percentEncodedQuery, !existing.isEmpty {
-    components.percentEncodedQuery = existing + "&" + suffix
-  } else {
-    components.percentEncodedQuery = suffix
-  }
-}
-
 nonisolated private func encodeMediaIDPathSegment(_ value: String) -> String? {
   let allowed = CharacterSet(
     charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~:")
@@ -344,120 +316,6 @@ nonisolated func relativeBackendEndpoint(
   appendPercentEncodedQueryParams(to: &components, params: params)
   guard let endpoint = components.string else { throw APIError.invalidURL }
   return endpoint
-}
-
-nonisolated private func isBangumiImageHost(_ value: String) -> Bool {
-  let host = value.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
-  return ["bgm.tv", "bangumi.tv", "bangumi.lol"].contains { domain in
-    host == domain || host.hasSuffix(".\(domain)")
-  }
-}
-
-nonisolated private func isBangumiImageURL(_ value: String) -> Bool {
-  guard let host = URLComponents(string: value)?.host else { return false }
-  return isBangumiImageHost(host)
-}
-
-nonisolated private func bangumiImageProxyURL(_ imageURL: String, baseURL: String) -> String {
-  guard isBangumiImageURL(imageURL) else { return imageURL }
-  let rawBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-  guard !rawBaseURL.isEmpty else { return imageURL }
-
-  let candidate = rawBaseURL.contains("://") ? rawBaseURL : "https://\(rawBaseURL)"
-  guard let proxyComponents = URLComponents(string: candidate),
-    let proxyScheme = proxyComponents.scheme?.lowercased(),
-    ["http", "https"].contains(proxyScheme),
-    let proxyHost = proxyComponents.host,
-    !proxyHost.isEmpty,
-    proxyComponents.fragment == nil,
-    let sourceComponents = URLComponents(string: imageURL),
-    let sourceHost = sourceComponents.host
-  else {
-    return imageURL
-  }
-
-  if let query = proxyComponents.percentEncodedQuery, !query.isEmpty {
-    guard let encodedImageURL = encodeURIComponent(imageURL) else { return imageURL }
-    return candidate + encodedImageURL
-  }
-
-  var normalizedBaseURL = candidate
-  while normalizedBaseURL.hasSuffix("/") {
-    normalizedBaseURL.removeLast()
-  }
-  if rawBaseURL.hasSuffix("/") {
-    if sourceHost.caseInsensitiveCompare(proxyHost) == .orderedSame {
-      return imageURL
-    }
-    let query = sourceComponents.percentEncodedQuery.map { "?\($0)" } ?? ""
-    return normalizedBaseURL + sourceComponents.percentEncodedPath + query
-  }
-
-  return "\(normalizedBaseURL)/\(imageURL)"
-}
-
-nonisolated private func isDefaultPlaceholderImageURL(_ value: String) -> Bool {
-  guard let components = URLComponents(string: value),
-    let host = components.host?.lowercased()
-  else {
-    return false
-  }
-
-  let path = components.path.lowercased()
-  let isDoubanHost = host == "doubanio.com" || host.hasSuffix(".doubanio.com")
-  if isDoubanHost {
-    return path.contains("movie_default") || path.contains("tv_default")
-      || path.contains("personage-default") || path.contains("celebrity-default")
-  }
-
-  let isBangumiHost = isBangumiImageHost(host)
-  if isBangumiHost {
-    return path.contains("no_icon")
-  }
-
-  let isAniListHost = host == "anilist.co" || host.hasSuffix(".anilist.co")
-  return isAniListHost && path.contains("anilistcdn") && path.hasSuffix("/default.jpg")
-}
-
-nonisolated private func displayImageURL(
-  _ value: String?,
-  baseURL: String,
-  useImageCache: Bool,
-  bangumiProxyEnabled: Bool,
-  bangumiImageDomain: String?
-) -> URL? {
-  guard let value, !value.isEmpty else {
-    return nil
-  }
-
-  let lowercasedValue = value.lowercased()
-  guard lowercasedValue.hasPrefix("http://") || lowercasedValue.hasPrefix("https://") else {
-    return URL(string: value)
-  }
-
-  if isBangumiImageURL(value), bangumiProxyEnabled {
-    let proxiedValue = bangumiImageProxyURL(value, baseURL: bangumiImageDomain ?? "")
-    guard let encodedUrl = encodeURIComponent(proxiedValue) else { return nil }
-    var urlString = "\(baseURL)/api/v1/system/img/1?imgurl=\(encodedUrl)"
-    if useImageCache {
-      urlString += "&cache=true"
-    }
-    return URL(string: urlString)
-  }
-
-  guard let encodedUrl = encodeURIComponent(value) else {
-    return nil
-  }
-
-  if useImageCache {
-    return URL(string: "\(baseURL)/api/v1/system/cache/image?url=\(encodedUrl)")
-  }
-
-  if value.contains("doubanio.com") {
-    return URL(string: "\(baseURL)/api/v1/system/img/0?imgurl=\(encodedUrl)")
-  }
-
-  return URL(string: value)
 }
 
 nonisolated private func decodeOrUnwrapSync<T: Decodable>(from data: Data) throws -> T {
@@ -3654,21 +3512,70 @@ class APIService: ObservableObject {
   }
 
   func isProtectedImageURL(_ url: URL) -> Bool {
-    guard let server = URLComponents(string: baseURL),
-      let target = URLComponents(url: url, resolvingAgainstBaseURL: false),
-      server.scheme?.lowercased() == target.scheme?.lowercased(),
-      server.host?.lowercased() == target.host?.lowercased(),
-      effectivePort(server) == effectivePort(target)
-    else {
-      return false
+    isProtectedMoviePilotImageURL(url, baseURL: baseURL)
+  }
+
+  /// 为 Top Shelf 下载可直接保存到共享缓存的原图。
+  /// 认证只允许停留在发起时冻结的 MoviePilot 保护图片边界；跨边界重定向永久剥离凭据。
+  func fetchTopShelfImageResource(
+    at url: URL,
+    maximumBytes: Int = 8_000_000,
+    maximumPixels: Int = 40_000_000
+  ) async throws -> TopShelfImageResource {
+    let lease = currentLease()
+    try validate(lease)
+    let startedProtected = isProtectedMoviePilotImageURL(url, baseURL: lease.baseURL)
+    var request = URLRequest(url: url)
+    request.httpMethod = "GET"
+    request.timeoutInterval = 10
+    request.setValue("zh-CN", forHTTPHeaderField: "Accept-Language")
+    if startedProtected {
+      if let token = lease.token {
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+      }
+      if let cookie = lease.runtime.cookieVault.cookieHeader(for: url) {
+        request.setValue(cookie, forHTTPHeaderField: "Cookie")
+      }
     }
-    let serverPath = server.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-    let apiPath = serverPath.isEmpty ? "/api/v1" : "/\(serverPath)/api/v1"
-    return url.path.hasPrefix("\(apiPath)/system/img/")
-      || url.path == "\(apiPath)/system/cache/image"
+
+    let redirectDelegate = TopShelfImageRedirectDelegate(
+      startedProtected: startedProtected,
+      baseURL: lease.baseURL,
+      token: lease.token,
+      cookieHeader: { [vault = lease.runtime.cookieVault] target in
+        vault.cookieHeader(for: target)
+      }
+    )
+
+    do {
+      let resource = try await TopShelfImageLoader.downloadTopShelfImage(
+        request: request,
+        transport: lease.runtime.transport,
+        redirectDelegate: redirectDelegate,
+        maximumBytes: maximumBytes,
+        maximumPixels: maximumPixels
+      )
+      try Task.checkCancellation()
+      try validate(lease)
+      return resource
+    } catch {
+      if session.epoch != lease.epoch || error is CancellationError
+        || (error as? URLError)?.code == .cancelled
+      {
+        throw CancellationError()
+      }
+      if redirectDelegate.didBlockInsecureRedirect {
+        throw TopShelfImageError.insecureRedirect
+      }
+      if let imageError = error as? TopShelfImageError { throw imageError }
+      throw APIError.networkError(error)
+    }
   }
 
   func imageSource(for url: URL) -> Source {
+    if url.isFileURL {
+      return .provider(LocalFileImageDataProvider(fileURL: url))
+    }
     let resource: KF.ImageResource
     if isProtectedImageURL(url) {
       resource = KF.ImageResource(

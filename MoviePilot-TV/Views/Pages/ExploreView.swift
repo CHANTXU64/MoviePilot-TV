@@ -5,7 +5,7 @@ struct ExploreView: View {
   private let isSelected: Bool
   @StateObject private var viewModel = ExploreViewModel()
   @StateObject private var navigationCoordinator = ImageNavigationCoordinator()
-  @StateObject private var subscriptionHandler = SubscriptionHandler()
+  @State private var subscriptionHandler = SubscriptionHandler()
   @Environment(\.scenePhase) private var scenePhase
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
 
@@ -56,18 +56,11 @@ struct ExploreView: View {
     }
     .onChange(of: isSelected) { _, _ in updateStackForeground() }
     .onChange(of: scenePhase) { _, _ in updateStackForeground() }
-    .mediaSubscriptionAlerts(using: subscriptionHandler)
-    .sheet(item: $subscriptionHandler.forkSheetRequest) { share in
-      ForkSubscribeSheet(
-        share: share,
-        onFork: { newSubId in
-          Task {
-            await subscriptionHandler.fetchSubscriptionAndShowEditor(subId: newSubId)
-          }
-        },
-        subscriptionHandler: subscriptionHandler
-      )
+    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
+      subscriptionHandler = SubscriptionHandler()
     }
+    .mediaSubscriptionAlerts(using: subscriptionHandler)
+
     .task(id: isSelected) {
       guard isSelected else { return }
       await viewModel.refreshSources()
@@ -225,6 +218,7 @@ struct FilterPickersView: View {
         setCurrentFocusIndex(newIndex)
       }
     }
+    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in multiSelectControl = nil }
     .sheet(item: $multiSelectControl) { control in
       MultiSelectionSheet(
         options: control.options,

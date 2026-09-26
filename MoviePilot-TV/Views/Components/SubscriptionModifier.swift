@@ -9,6 +9,15 @@ struct MediaSubscriptionModifier: ViewModifier {
 
   func body(content: Content) -> some View {
     content
+      .sheet(item: $handler.forkSheetRequest) { [handler] share in
+        ForkSubscribeSheet(
+          share: share,
+          onFork: { [handler] newSubId in
+            Task { await handler.fetchSubscriptionAndShowEditor(subId: newSubId) }
+          },
+          subscriptionHandler: handler
+        )
+      }
       .sheet(item: $sheetSubscribe) { subscribe in
         SubscribeSheet(
           subscribe: subscribe,

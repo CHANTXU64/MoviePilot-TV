@@ -101,6 +101,34 @@ private func withTimeout<T: Sendable>(
 final class PaginatorTests: XCTestCase {
 
   @MainActor
+  func testPreparedFirstPageIsImmediateAndContinuesAtSecondPageUntilRefresh() async {
+    var requestedPages: [Int] = []
+    var seen = Set<Int>()
+    let paginator = Paginator<TestItem>(
+      threshold: 1,
+      fetcher: { page in
+        requestedPages.append(page)
+        return page == 2 ? [TestItem(id: 1), TestItem(id: 2)] : [TestItem(id: 3)]
+      },
+      processor: { items, incoming in
+        let unique = incoming.filter { seen.insert($0.id).inserted }
+        items.append(contentsOf: unique)
+        return !unique.isEmpty
+      },
+      preparedFirstPage: [TestItem(id: 1)],
+      onReset: { seen.removeAll() })
+
+    XCTAssertEqual(paginator.items.map(\.id), [1])
+    XCTAssertTrue(requestedPages.isEmpty)
+    await paginator.loadMore(1)
+    XCTAssertEqual(requestedPages, [2])
+    XCTAssertEqual(paginator.items.map(\.id), [1, 2])
+    await paginator.refresh()
+    XCTAssertEqual(requestedPages, [2, 1])
+    XCTAssertEqual(paginator.items.map(\.id), [3])
+  }
+
+  @MainActor
   func testListIDStaysStableButContentGenerationAdvancesAcrossRefresh() async {
     let first = Paginator<TestItem>(
       threshold: 1,

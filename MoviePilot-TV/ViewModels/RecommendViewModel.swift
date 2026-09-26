@@ -53,7 +53,7 @@ class RecommendViewModel: ObservableObject {
   private var paginatorCancellable: AnyCancellable?
   private var extraSourceSnapshot: [RecommendSourceDescriptor] = []
 
-  private static let localConfigKey = "MP_RECOMMEND"
+  nonisolated static let localConfigKey = "MP_RECOMMEND"
 
   // 所有货架配置
   nonisolated static let allShelves: [RecommendShelf] = [
@@ -327,9 +327,16 @@ class RecommendViewModel: ObservableObject {
     return out
   }
 
+  nonisolated static func storedEnableConfig(
+    defaults: UserDefaults = .standard
+  ) -> [String: Bool]? {
+    guard let data = defaults.data(forKey: localConfigKey) else { return nil }
+    return try? JSONDecoder().decode([String: Bool].self, from: data)
+  }
+
   private func loadConfig() {
-    if let data = UserDefaults.standard.data(forKey: Self.localConfigKey) {
-      if let config = try? JSONDecoder().decode([String: Bool].self, from: data) {
+    if UserDefaults.standard.data(forKey: Self.localConfigKey) != nil {
+      if let config = Self.storedEnableConfig() {
         // 初始化时只有内置货架：先让已知 id 继承旧值，但保留且不回写 title 键。
         // 动态来源成功加载后再统一消费，避免同名来源错过旧版共享配置。
         enableConfig = Self.migrateTitleKeys(

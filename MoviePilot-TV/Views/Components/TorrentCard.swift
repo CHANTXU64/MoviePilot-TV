@@ -218,6 +218,12 @@ struct TorrentCard: View {
           showDownload = false
         }
       }
+      .onReceive(
+        NotificationCenter.default.publisher(
+          for: .imageNavigationPresentationWillReset, object: APIService.shared)
+      ) { _ in
+        showDownload = false
+      }
     }
   }
 }

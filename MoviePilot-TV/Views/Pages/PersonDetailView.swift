@@ -14,7 +14,7 @@ struct PersonDetailView: View {
 
   @State private var showFullBio = false
   @State private var isImageFailed: Bool = false
-  @StateObject private var subscriptionHandler = SubscriptionHandler()
+  @State private var subscriptionHandler = SubscriptionHandler()
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
 
   @FocusState private var focusedElement: FocusField?
@@ -173,6 +173,10 @@ struct PersonDetailView: View {
         .padding(50)
         .frame(width: 1600)
       }
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
+      subscriptionHandler = SubscriptionHandler()
+      showFullBio = false
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler)
   }

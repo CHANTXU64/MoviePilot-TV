@@ -20,176 +20,6 @@ extension Notification.Name {
   static let searchDefaultsDidChange = Notification.Name("searchDefaultsDidChange")
 }
 
-nonisolated struct MediaIdentity: Hashable {
-  let source: String
-  let mediaId: String
-
-  var mediaKey: String {
-    "\(source == "themoviedb" ? "tmdb" : source):\(mediaId)"
-  }
-}
-
-nonisolated enum MediaIdentifier {
-  private static let builtInSources = ["themoviedb", "douban", "bangumi", "anilist"]
-
-  static func normalizeSource(_ source: String?) -> String? {
-    guard let source = normalizedString(source)?.lowercased() else { return nil }
-    return source == "tmdb" ? "themoviedb" : source
-  }
-
-  static func resolve(
-    mediaIdPrefix: String? = nil,
-    source: String? = nil,
-    mediaId: String? = nil,
-    tmdbId: Int? = nil,
-    doubanId: String? = nil,
-    bangumiId: Int? = nil,
-    anilistId: Int? = nil,
-    legacyMediaId: String? = nil
-  ) -> MediaIdentity? {
-    var sourceIds: [String: String] = [:]
-    // raw 数值 ID 的 0 按 Web 的 JavaScript truthy 语义视为缺失；负数仍是 truthy，保持原值。
-    sourceIds["themoviedb"] = truthyNumericIdentifier(tmdbId).map(String.init)
-    sourceIds["douban"] = truthySourceIdentifier(doubanId)
-    sourceIds["bangumi"] = truthyNumericIdentifier(bangumiId).map(String.init)
-    sourceIds["anilist"] = truthyNumericIdentifier(anilistId).map(String.init)
-
-    var declaredSources: [String] = []
-    for value in [mediaIdPrefix, source] {
-      if let normalized = normalizeSource(value), !declaredSources.contains(normalized) {
-        declaredSources.append(normalized)
-      }
-    }
-    for declaredSource in declaredSources {
-      let declaredId = mediaId == nil ? sourceIds[declaredSource] : normalizedString(mediaId)
-      if let sourceId = declaredId {
-        return MediaIdentity(source: declaredSource, mediaId: sourceId)
-      }
-    }
-    for fallbackSource in builtInSources {
-      if let fallbackId = sourceIds[fallbackSource] {
-        return MediaIdentity(source: fallbackSource, mediaId: fallbackId)
-      }
-    }
-    return identity(from: legacyMediaId)
-  }
-
-  static func resolveAuxiliaryContent(
-    tmdbId: Int?,
-    doubanId: String?,
-    bangumiId: Int?,
-    anilistId: Int?
-  ) -> MediaIdentity? {
-    if let id = truthyNumericIdentifier(tmdbId) {
-      return MediaIdentity(source: "themoviedb", mediaId: String(id))
-    }
-    if let id = normalizedString(doubanId) {
-      return MediaIdentity(source: "douban", mediaId: id)
-    }
-    if let id = truthyNumericIdentifier(bangumiId) {
-      return MediaIdentity(source: "bangumi", mediaId: String(id))
-    }
-    if let id = truthyNumericIdentifier(anilistId) {
-      return MediaIdentity(source: "anilist", mediaId: String(id))
-    }
-    return nil
-  }
-
-  static func identity(from mediaKey: String?) -> MediaIdentity? {
-    guard let components = mediaIdComponents(mediaKey),
-      let source = normalizeSource(components.prefix)
-    else {
-      return nil
-    }
-    return MediaIdentity(source: source, mediaId: components.id)
-  }
-
-  static func apiMediaId(
-    tmdbId: Int?,
-    doubanId: String?,
-    bangumiId: Int?,
-    anilistId: Int? = nil,
-    source: String? = nil,
-    mediaIdPrefix: String?,
-    mediaId: String?
-  ) -> String? {
-    resolve(
-      mediaIdPrefix: mediaIdPrefix,
-      source: source,
-      mediaId: mediaId,
-      tmdbId: tmdbId,
-      doubanId: doubanId,
-      bangumiId: bangumiId,
-      anilistId: anilistId
-    )?.mediaKey
-  }
-
-  static func apiMediaId(
-    tmdbId: Int?,
-    doubanId: String?,
-    bangumiId: Int?,
-    anilistId: Int? = nil,
-    mediaSource: String? = nil,
-    mediaId: String? = nil,
-    fallbackMediaId: String?
-  ) -> String? {
-    resolve(
-      source: mediaSource,
-      mediaId: mediaId,
-      tmdbId: tmdbId,
-      doubanId: doubanId,
-      bangumiId: bangumiId,
-      anilistId: anilistId,
-      legacyMediaId: fallbackMediaId
-    )?.mediaKey
-  }
-
-  static func validNumericIdentifier(_ id: Int?) -> Int? {
-    guard let id, id > 0 else { return nil }
-    return id
-  }
-
-  static func truthyNumericIdentifier(_ id: Int?) -> Int? {
-    guard let id, id != 0 else { return nil }
-    return id
-  }
-
-  /// 文本型来源原生 ID 的零值判据：`"0"` 在 v3 校验中非法（Web `isValidMediaSourceId` 同样拒绝），
-  /// 因此按缺失处理，让身份解析继续回退到下一个来源。
-  static func truthySourceIdentifier(_ value: String?) -> String? {
-    guard let normalized = normalizedString(value), normalized != "0" else { return nil }
-    return normalized
-  }
-
-  static func normalizedString(_ value: String?) -> String? {
-    guard let value else { return nil }
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmed.isEmpty ? nil : trimmed
-  }
-
-  static func isValidManualMediaId(_ mediaId: String?) -> Bool {
-    guard let mediaId = normalizedString(mediaId) else { return true }
-    guard mediaId.unicodeScalars.allSatisfy({ (48...57).contains(Int($0.value)) }) else {
-      return false
-    }
-    return (Int(mediaId) ?? 0) > 0
-  }
-
-  static func normalizedMediaIdentifier(_ mediaId: String?) -> String? {
-    guard let mediaId = normalizedString(mediaId), !mediaId.hasSuffix(":") else { return nil }
-
-    return mediaId
-  }
-
-  static func mediaIdComponents(_ mediaId: String?) -> (prefix: String, id: String)? {
-    guard let mediaId = normalizedMediaIdentifier(mediaId) else { return nil }
-    let parts = mediaId.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
-    guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { return nil }
-    return (String(parts[0]), String(parts[1]))
-  }
-
-}
-
 /// 包装类型，用于处理 API 响应中多种格式的布尔值
 /// 从 Bool、Int 或 String 解码，始终编码为 Bool
 struct FlexibleBool: Codable, Hashable {
@@ -237,105 +67,6 @@ struct FlexibleBool: Codable, Hashable {
   }
 }
 
-nonisolated enum JSONValue: Codable, Hashable, Sendable {
-  case null
-  case bool(Bool)
-  case int(Int)
-  case double(Double)
-  case string(String)
-  case array([JSONValue])
-  case object([String: JSONValue])
-
-  init(from decoder: Decoder) throws {
-    let container = try decoder.singleValueContainer()
-    if container.decodeNil() {
-      self = .null
-    } else if let value = try? container.decode(Bool.self) {
-      self = .bool(value)
-    } else if let value = try? container.decode(Int.self) {
-      self = .int(value)
-    } else if let value = try? container.decode(Double.self) {
-      self = .double(value)
-    } else if let value = try? container.decode(String.self) {
-      self = .string(value)
-    } else if let value = try? container.decode([JSONValue].self) {
-      self = .array(value)
-    } else {
-      self = .object(try container.decode([String: JSONValue].self))
-    }
-  }
-
-  func encode(to encoder: Encoder) throws {
-    var container = encoder.singleValueContainer()
-    switch self {
-    case .null:
-      try container.encodeNil()
-    case .bool(let value):
-      try container.encode(value)
-    case .int(let value):
-      try container.encode(value)
-    case .double(let value):
-      try container.encode(value)
-    case .string(let value):
-      try container.encode(value)
-    case .array(let value):
-      try container.encode(value)
-    case .object(let value):
-      try container.encode(value)
-    }
-  }
-
-  var queryString: String? {
-    switch self {
-    case .null:
-      return nil
-    case .bool(let value):
-      return value ? "true" : "false"
-    case .int(let value):
-      return String(value)
-    case .double(let value):
-      return String(value)
-    case .string(let value):
-      return value
-    case .array, .object:
-      guard let data = try? JSONEncoder().encode(self) else { return nil }
-      return String(data: data, encoding: .utf8)
-    }
-  }
-
-  var objectValue: [String: JSONValue]? {
-    guard case .object(let value) = self else { return nil }
-    return value
-  }
-
-  var arrayValue: [JSONValue]? {
-    guard case .array(let value) = self else { return nil }
-    return value
-  }
-
-  var stringValue: String? {
-    guard case .string(let value) = self else { return nil }
-    return value
-  }
-
-  var isTruthy: Bool {
-    switch self {
-    case .null:
-      return false
-    case .bool(let value):
-      return value
-    case .int(let value):
-      return value != 0
-    case .double(let value):
-      return value != 0 && !value.isNaN
-    case .string(let value):
-      return !value.isEmpty
-    case .array, .object:
-      return true
-    }
-  }
-}
-
 nonisolated private struct JSONCodingKey: CodingKey {
   let stringValue: String
   let intValue: Int? = nil
@@ -353,43 +84,6 @@ nonisolated private struct JSONCodingKey: CodingKey {
   }
 }
 
-nonisolated struct DiscoverSourceDescriptor: Codable, Hashable, Identifiable, Sendable {
-  let name: String
-  let mediaid_prefix: String
-  let api_path: String
-  let filter_params: [String: JSONValue]
-  let filter_ui: [JSONValue]
-  let depends: [String: [String]]?
-
-  var id: String { mediaid_prefix }
-
-  init(
-    name: String,
-    mediaid_prefix: String,
-    api_path: String,
-    filter_params: [String: JSONValue],
-    filter_ui: [JSONValue],
-    depends: [String: [String]]?
-  ) {
-    self.name = name
-    self.mediaid_prefix = mediaid_prefix
-    self.api_path = api_path
-    self.filter_params = filter_params
-    self.filter_ui = filter_ui
-    self.depends = depends
-  }
-
-  init(from decoder: Decoder) throws {
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    name = try container.decode(String.self, forKey: .name)
-    mediaid_prefix = try container.decode(String.self, forKey: .mediaid_prefix)
-    api_path = try container.decode(String.self, forKey: .api_path)
-    filter_params =
-      try container.decodeIfPresent([String: JSONValue].self, forKey: .filter_params) ?? [:]
-    filter_ui = try container.decodeIfPresent([JSONValue].self, forKey: .filter_ui) ?? []
-    depends = try container.decodeIfPresent([String: [String]].self, forKey: .depends)
-  }
-}
 
 nonisolated struct RecommendSourceDescriptor: Codable, Hashable, Sendable {
   let name: String
@@ -3212,7 +2906,7 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
 
   /// 转换为 MediaInfo 以便在通用视图中复用
   @MainActor
-  func toMediaInfo() -> MediaInfo {
+  func toMediaInfo(includeShareMetadata: Bool = true) -> MediaInfo {
     var combinedOverview = ""
     if let comment = share_comment, !comment.isEmpty {
       combinedOverview += "💬 \(comment)"
@@ -3240,16 +2934,16 @@ nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
       anilist_id: anilistid,
       source: hasCanonicalIdentity ? canonicalSource : nil,
       media_id: hasCanonicalIdentity ? canonicalMediaId : nil,
-      title: share_title ?? name,
+      title: includeShareMetadata ? (share_title ?? name) : (name ?? share_title),
       type: type,
       year: year,
       season: season,
       poster_path: poster,
       backdrop_path: backdrop,
-      overview: combinedOverview,
+      overview: includeShareMetadata ? combinedOverview : description,
       vote_average: vote,
       popularity: Double(count ?? 0),  // 复用次数映射到 popularity
-      subscribeShare: self
+      subscribeShare: includeShareMetadata ? self : nil
     )
   }
 }

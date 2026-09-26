@@ -6,7 +6,7 @@
 #
 # Required by default:
 #   - Run from a tvOS Xcode project repo, or set PROJECT_DIR.
-#   - Set BUNDLE_ID unless the Xcode project already contains the desired value.
+#   - Set BUNDLE_ID; targets must derive their identifiers from APP_BUNDLE_IDENTIFIER.
 #
 # Common example, run from this repository root:
 #   BUNDLE_ID="com.example.MoviePilotTV" ./scripts/apple-tv-renew.sh
@@ -19,6 +19,7 @@
 set -euo pipefail
 
 FORCE_RENEW=0
+PROFILE_TOOL="$(cd "$(dirname "$0")" && pwd)/apple_tv_profiles.py"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -31,13 +32,13 @@ while [ "$#" -gt 0 ]; do
 Usage: scripts/apple-tv-renew.sh [--force]
 
 Build, sign, install, and validate a tvOS app on a paired Apple TV.
-By default, the script skips work when the existing build product's
-embedded provisioning profile is still valid. Use --force to build/install
+By default, the script skips work only when the app and all embedded
+extensions have readable, unexpired provisioning profiles. Use --force to build/install
 anyway.
 Run it from the repository root, or set PROJECT_DIR to your checkout path.
 Configure with environment variables:
   PROJECT_DIR, PROJECT_FILE, WORKSPACE, SCHEME, CONFIGURATION
-  BUNDLE_ID, DEVELOPMENT_TEAM, DEVICE_ID, DEVICE_NAME_CONTAINS
+  BUNDLE_ID, APP_GROUP_IDENTIFIER, DEVELOPMENT_TEAM, DEVICE_ID, DEVICE_NAME_CONTAINS
   CLEAR_PROFILE_CACHE=1, MIN_VALID_SECONDS=432000
   CODESIGN_ENV_REPORT=1, KEYCHAIN_PATH
 
@@ -151,6 +152,10 @@ set_build_args() {
     build_args_common+=("-project" "$PROJECT_FILE")
   fi
   build_args_common+=("-scheme" "$SCHEME" "-configuration" "$CONFIGURATION")
+  build_args_common+=("APP_BUNDLE_IDENTIFIER=$BUNDLE_ID")
+  if [ -n "${APP_GROUP_IDENTIFIER:-}" ]; then
+    build_args_common+=("APP_GROUP_IDENTIFIER=$APP_GROUP_IDENTIFIER")
+  fi
   if [ -n "$DERIVED_DATA_PATH" ]; then
     build_args_common+=("-derivedDataPath" "$DERIVED_DATA_PATH")
   fi
@@ -183,80 +188,30 @@ find_destination() {
 move_cached_profiles() {
   [ "$CLEAR_PROFILE_CACHE" = "1" ] || return 0
   [ -n "$BUNDLE_ID" ] || return 0
-  python3 - "$BUNDLE_ID" <<'PY'
-import plistlib, shutil, subprocess, sys
-from datetime import datetime
-from pathlib import Path
-bundle_id = sys.argv[1]
-cache_dir = Path.home() / 'Library/Developer/Xcode/UserData/Provisioning Profiles'
-backup_dir = Path('/tmp/apple-tv-renew-profile-backups') / datetime.now().strftime('%Y%m%d_%H%M%S')
-moved = 0
-if cache_dir.exists():
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    for path in cache_dir.glob('*.mobileprovision'):
-        try:
-            data = subprocess.check_output(['security', 'cms', '-D', '-i', str(path)], stderr=subprocess.DEVNULL)
-            profile = plistlib.loads(data)
-        except Exception:
-            continue
-        app_id = (profile.get('Entitlements') or {}).get('application-identifier', '')
-        if app_id.endswith('.' + bundle_id):
-            shutil.move(str(path), str(backup_dir / path.name))
-            moved += 1
-print(f'moved {moved} cached profile(s) to {backup_dir}' if moved else 'moved 0 cached profiles')
-PY
+  python3 "$PROFILE_TOOL" clear-cache "$BUNDLE_ID"
 }
 
 profile_info_for_app() {
-  local app_path="$1"
-  python3 - "$app_path" <<'PY'
-import json, plistlib, subprocess, sys
-from datetime import datetime, timezone
-from pathlib import Path
-app = Path(sys.argv[1])
-profile = app / 'embedded.mobileprovision'
-if not profile.exists():
-    print(json.dumps({'ok': False, 'error': 'embedded.mobileprovision not found', 'path': str(profile)}))
-    sys.exit(0)
-try:
-    data = subprocess.check_output(['security', 'cms', '-D', '-i', str(profile)], stderr=subprocess.DEVNULL)
-    p = plistlib.loads(data)
-except Exception as exc:
-    print(json.dumps({'ok': False, 'error': str(exc), 'path': str(profile)}, ensure_ascii=False))
-    sys.exit(0)
-ent = p.get('Entitlements') or {}
-exp = p.get('ExpirationDate')
-if exp and exp.tzinfo is None:
-    exp = exp.replace(tzinfo=timezone.utc)
-remaining = int((exp - datetime.now(timezone.utc)).total_seconds()) if exp else None
-print(json.dumps({
-    'ok': True,
-    'name': p.get('Name'),
-    'uuid': p.get('UUID'),
-    'creationDate': p.get('CreationDate').isoformat() if p.get('CreationDate') else None,
-    'expirationDate': exp.isoformat() if exp else None,
-    'secondsRemaining': remaining,
-    'applicationIdentifier': ent.get('application-identifier'),
-    'teamIdentifier': ent.get('com.apple.developer.team-identifier'),
-    'profilePath': str(profile),
-}, ensure_ascii=False))
-PY
+  python3 "$PROFILE_TOOL" inspect "$1" "$BUNDLE_ID"
 }
 
 app_path_from_build_settings() {
-  settings_args=("${build_args_common[@]}" "-showBuildSettings")
-  if [ -n "$BUNDLE_ID" ]; then
-    settings_args+=("PRODUCT_BUNDLE_IDENTIFIER=$BUNDLE_ID")
-  fi
+  local settings_args=("${build_args_common[@]}" "-showBuildSettings" "-json")
   if [ -n "$DEVELOPMENT_TEAM" ]; then
     settings_args+=("DEVELOPMENT_TEAM=$DEVELOPMENT_TEAM")
   fi
-  settings=$(xcodebuild "${settings_args[@]}" 2>/dev/null)
-  TARGET_BUILD_DIR=$(printf '%s\n' "$settings" | awk -F ' = ' '/ TARGET_BUILD_DIR / {print $2; exit}')
-  WRAPPER_NAME=$(printf '%s\n' "$settings" | awk -F ' = ' '/ WRAPPER_NAME / {print $2; exit}')
-  [ -n "$TARGET_BUILD_DIR" ] || return 1
-  [ -n "$WRAPPER_NAME" ] || WRAPPER_NAME="$SCHEME.app"
-  printf '%s\n' "$TARGET_BUILD_DIR/$WRAPPER_NAME"
+  local settings
+  settings=$(xcodebuild "${settings_args[@]}" 2>/dev/null) || return 1
+  printf '%s\n' "$settings" | python3 -c '
+import json, sys
+from pathlib import Path
+apps = [item["buildSettings"] for item in json.load(sys.stdin)
+        if item.get("buildSettings", {}).get("PRODUCT_TYPE") == "com.apple.product-type.application"
+        and item["buildSettings"].get("PRODUCT_BUNDLE_IDENTIFIER") == sys.argv[1]]
+if len(apps) != 1:
+    sys.exit("Expected one application target matching BUNDLE_ID")
+print(Path(apps[0]["TARGET_BUILD_DIR"]) / apps[0]["FULL_PRODUCT_NAME"])
+' "$BUNDLE_ID"
 }
 
 profile_seconds_remaining() {
@@ -306,14 +261,11 @@ if [ "$FORCE_RENEW" != "1" ]; then
     profile_json="$(profile_info_for_app "$APP_PATH")"
     if [ "$(profile_ok "$profile_json")" = "yes" ]; then
       remaining="$(profile_seconds_remaining "$profile_json")"
-      if [ "$remaining" -gt 0 ]; then
-        log "Existing profile is still valid (${remaining}s remaining); skipping. Use --force to build/install anyway."
-        printf '%s\n' "$profile_json"
-        exit 0
-      fi
-      log "Existing profile is expired or has no valid expiration (${remaining}s remaining); renewing."
+      log "All embedded profiles are still valid; shortest lifetime (${remaining}s remaining); skipping. Use --force to build/install anyway."
+      printf '%s\n' "$profile_json"
+      exit 0
     else
-      log "Existing app profile is missing or unreadable; renewing."
+      log "Existing app or extension has an invalid identifier or missing, unreadable, or expired profile; renewing."
     fi
   else
     log "Existing app product not found; renewing."
@@ -335,9 +287,6 @@ fi
 if [ "$ALLOW_PROVISIONING_DEVICE_REGISTRATION" = "1" ]; then
   build_args+=("-allowProvisioningDeviceRegistration")
 fi
-if [ -n "$BUNDLE_ID" ]; then
-  build_args+=("PRODUCT_BUNDLE_IDENTIFIER=$BUNDLE_ID")
-fi
 
 log "=== Build and sign ==="
 xcodebuild clean build "${build_args[@]}" 2>&1 | tee -a "$LOG_FILE" || fail "build/sign failed"
@@ -346,22 +295,17 @@ log "=== Locate app product ==="
 APP_PATH="$(app_path_from_build_settings)"
 [ -d "$APP_PATH" ] || fail "app product not found: $APP_PATH"
 log "App path: $APP_PATH"
-
-log "=== Install on Apple TV ==="
-xcrun devicectl device install app --device "$DEVICE_ID" "$APP_PATH" 2>&1 | tee -a "$LOG_FILE" || fail "install failed"
-
-log "=== Validate embedded provisioning profile ==="
+log "=== Validate all embedded provisioning profiles before installation ==="
 profile_json=$(profile_info_for_app "$APP_PATH")
 log "Profile: $profile_json"
 [ "$(profile_ok "$profile_json")" = "yes" ] || fail "profile validation failed: $profile_json"
-remaining=$(python3 - "$profile_json" <<'PY'
-import json, sys
-print(json.loads(sys.argv[1]).get('secondsRemaining') or -1)
-PY
-)
+remaining="$(profile_seconds_remaining "$profile_json")"
 if [ "$remaining" -lt "$MIN_VALID_SECONDS" ]; then
-  fail "profile is not valid long enough: ${remaining}s remaining, need >= ${MIN_VALID_SECONDS}s"
+  fail "shortest profile lifetime is not valid long enough: ${remaining}s remaining, need >= ${MIN_VALID_SECONDS}s"
 fi
+
+log "=== Install on Apple TV ==="
+xcrun devicectl device install app --device "$DEVICE_ID" "$APP_PATH" 2>&1 | tee -a "$LOG_FILE" || fail "install failed"
 
 log "=== Renewal complete ==="
 printf '%s\n' "$profile_json"

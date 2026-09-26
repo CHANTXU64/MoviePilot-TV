@@ -2,50 +2,7 @@ import Combine
 import Foundation
 import SwiftUI
 
-// MARK: - 数据源
-nonisolated enum DiscoverSource: Hashable, Identifiable, Sendable {
-  case themoviedb
-  case douban
-  case bangumi
-  case anilist
-  case popular
-  case subscriptionShare
-  case custom(DiscoverSourceDescriptor)
-
-  static let allCases: [DiscoverSource] = [
-    .themoviedb, .douban, .bangumi, .anilist, .popular, .subscriptionShare,
-  ]
-
-  var id: String {
-    switch self {
-    case .themoviedb: "themoviedb"
-    case .douban: "douban"
-    case .bangumi: "bangumi"
-    case .anilist: "anilist"
-    case .popular: "popular"
-    case .subscriptionShare: "subscriptionShare"
-    case .custom(let source): "custom:\(source.mediaid_prefix)"
-    }
-  }
-
-  var title: String {
-    switch self {
-    case .themoviedb: "TheMovieDb"
-    case .douban: "豆瓣"
-    case .bangumi: "Bangumi"
-    case .anilist: "AniList"
-    case .popular: "热门订阅"
-    case .subscriptionShare: "订阅分享"
-    case .custom(let source): source.name
-    }
-  }
-
-  var descriptor: DiscoverSourceDescriptor? {
-    guard case .custom(let source) = self else { return nil }
-    return source
-  }
-}
-
+// MARK: - 插件筛选
 nonisolated struct PluginFilterOption: Hashable, Identifiable {
   let value: JSONValue
   let title: String
@@ -551,68 +508,139 @@ enum ExploreContent {
   case shares(Paginator<SubscribeShare>)
 }
 
-// MARK: - 类型枚举
-enum DiscoverMediaType: String, CaseIterable, Identifiable {
-  case movies = "电影"
-  case tvs = "电视剧"
-
-  var id: String { rawValue }
-
-  var apiValue: String {
-    switch self {
-    case .movies: return "movies"
-    case .tvs: return "tvs"
-    }
-  }
-}
-
 // MARK: - ViewModel
 @MainActor
 class ExploreViewModel: ObservableObject {
-  @Published var selectedSource: DiscoverSource = .themoviedb
-  @Published var selectedType: DiscoverMediaType = .movies
+  @Published var configuration: ExploreConfiguration
+  private let loadsResults: Bool
+  var selectedSource: DiscoverSource {
+    get { configuration.selectedSource }
+    set { configuration.selectedSource = newValue }
+  }
+  var selectedType: DiscoverMediaType {
+    get { configuration.selectedType }
+    set { configuration.selectedType = newValue }
+  }
   @Published private(set) var availableSources: [DiscoverSource] = []
 
   // TheMovieDb 筛选参数
-  @Published var tmdbSortBy: String = "popularity.desc"
-  @Published var tmdbGenre: String = ""
-  @Published var tmdbLanguage: String = ""
-  @Published var tmdbVoteAverage: Int = 0
-  @Published var tmdbVoteCount: Int = 10
+  var tmdbSortBy: String {
+    get { configuration.tmdbSortBy }
+    set { configuration.tmdbSortBy = newValue }
+  }
+  var tmdbGenre: String {
+    get { configuration.tmdbGenre }
+    set { configuration.tmdbGenre = newValue }
+  }
+  var tmdbLanguage: String {
+    get { configuration.tmdbLanguage }
+    set { configuration.tmdbLanguage = newValue }
+  }
+  var tmdbVoteAverage: Int {
+    get { configuration.tmdbVoteAverage }
+    set { configuration.tmdbVoteAverage = newValue }
+  }
+  var tmdbVoteCount: Int {
+    get { configuration.tmdbVoteCount }
+    set { configuration.tmdbVoteCount = newValue }
+  }
 
   // 豆瓣筛选参数
-  @Published var doubanSort: String = "U"
-  @Published var doubanCategory: String = ""
-  @Published var doubanZone: String = ""
-  @Published var doubanYear: String = ""
+  var doubanSort: String {
+    get { configuration.doubanSort }
+    set { configuration.doubanSort = newValue }
+  }
+  var doubanCategory: String {
+    get { configuration.doubanCategory }
+    set { configuration.doubanCategory = newValue }
+  }
+  var doubanZone: String {
+    get { configuration.doubanZone }
+    set { configuration.doubanZone = newValue }
+  }
+  var doubanYear: String {
+    get { configuration.doubanYear }
+    set { configuration.doubanYear = newValue }
+  }
 
   // Bangumi 筛选参数
-  @Published var bangumiCat: String = ""
-  @Published var bangumiSort: String = "rank"
-  @Published var bangumiYear: String = ""
+  var bangumiCat: String {
+    get { configuration.bangumiCat }
+    set { configuration.bangumiCat = newValue }
+  }
+  var bangumiSort: String {
+    get { configuration.bangumiSort }
+    set { configuration.bangumiSort = newValue }
+  }
+  var bangumiYear: String {
+    get { configuration.bangumiYear }
+    set { configuration.bangumiYear = newValue }
+  }
 
   // AniList 筛选参数
-  @Published var anilistSort: String = "POPULARITY_DESC"
-  @Published var anilistGenre: String = ""
-  @Published var anilistFormat: String = ""
-  @Published var anilistSeason: String = ""
-  @Published var anilistYear: Int = 0
-  @Published var anilistStatus: String = ""
-  @Published var anilistCountry: String = ""
+  var anilistSort: String {
+    get { configuration.anilistSort }
+    set { configuration.anilistSort = newValue }
+  }
+  var anilistGenre: String {
+    get { configuration.anilistGenre }
+    set { configuration.anilistGenre = newValue }
+  }
+  var anilistFormat: String {
+    get { configuration.anilistFormat }
+    set { configuration.anilistFormat = newValue }
+  }
+  var anilistSeason: String {
+    get { configuration.anilistSeason }
+    set { configuration.anilistSeason = newValue }
+  }
+  var anilistYear: Int {
+    get { configuration.anilistYear }
+    set { configuration.anilistYear = newValue }
+  }
+  var anilistStatus: String {
+    get { configuration.anilistStatus }
+    set { configuration.anilistStatus = newValue }
+  }
+  var anilistCountry: String {
+    get { configuration.anilistCountry }
+    set { configuration.anilistCountry = newValue }
+  }
 
   // 插件筛选参数
-  @Published var pluginFilterValues: [String: JSONValue] = [:]
+  var pluginFilterValues: [String: JSONValue] {
+    get { configuration.pluginFilterValues }
+    set { configuration.pluginFilterValues = newValue }
+  }
   @Published private(set) var pluginFilterControls: [PluginFilterControl] = []
 
   // 热门订阅筛选参数
-  @Published var popularSortBy: String = "count"
-  @Published var popularGenre: String = ""
-  @Published var popularMinRating: Int = 0
+  var popularSortBy: String {
+    get { configuration.popularSortBy }
+    set { configuration.popularSortBy = newValue }
+  }
+  var popularGenre: String {
+    get { configuration.popularGenre }
+    set { configuration.popularGenre = newValue }
+  }
+  var popularMinRating: Int {
+    get { configuration.popularMinRating }
+    set { configuration.popularMinRating = newValue }
+  }
 
   // 订阅分享筛选参数
-  @Published var shareSortBy: String = "count"
-  @Published var shareGenre: String = ""
-  @Published var shareMinRating: Int = 0
+  var shareSortBy: String {
+    get { configuration.shareSortBy }
+    set { configuration.shareSortBy = newValue }
+  }
+  var shareGenre: String {
+    get { configuration.shareGenre }
+    set { configuration.shareGenre = newValue }
+  }
+  var shareMinRating: Int {
+    get { configuration.shareMinRating }
+    set { configuration.shareMinRating = newValue }
+  }
 
   // 数据状态
   @Published private(set) var paginator: Paginator<MediaInfo>?
@@ -629,43 +657,19 @@ class ExploreViewModel: ObservableObject {
   /// removeDuplicates 做去重（元组不满足 Equatable 协议，无法直接入链）。
   private var lastPaginatorReloadKey: String?
 
-  init(apiService: APIService = .shared) {
+  init(
+    apiService: APIService = .shared,
+    configuration: ExploreConfiguration = ExploreConfiguration(),
+    loadsResults: Bool = true
+  ) {
     self.apiService = apiService
+    self.configuration = configuration
+    self.loadsResults = loadsResults
+    pluginFilterControls = PluginFilterControlParser.parse(configuration.selectedSource.descriptor?.filter_ui ?? [])
     applySources()
-    // 将所有筛选器的 Publisher 转换为 AnyPublisher<Void, Never>
-    let filterPublishers: [AnyPublisher<Void, Never>] = [
-      $selectedSource.map { _ in }.eraseToAnyPublisher(),
-      $selectedType.map { _ in }.eraseToAnyPublisher(),
-      $tmdbSortBy.map { _ in }.eraseToAnyPublisher(),
-      $tmdbGenre.map { _ in }.eraseToAnyPublisher(),
-      $tmdbLanguage.map { _ in }.eraseToAnyPublisher(),
-      $tmdbVoteAverage.map { _ in }.eraseToAnyPublisher(),
-      $tmdbVoteCount.map { _ in }.eraseToAnyPublisher(),
-      $doubanSort.map { _ in }.eraseToAnyPublisher(),
-      $doubanCategory.map { _ in }.eraseToAnyPublisher(),
-      $doubanZone.map { _ in }.eraseToAnyPublisher(),
-      $doubanYear.map { _ in }.eraseToAnyPublisher(),
-      $bangumiCat.map { _ in }.eraseToAnyPublisher(),
-      $bangumiSort.map { _ in }.eraseToAnyPublisher(),
-      $bangumiYear.map { _ in }.eraseToAnyPublisher(),
-      $anilistSort.map { _ in }.eraseToAnyPublisher(),
-      $anilistGenre.map { _ in }.eraseToAnyPublisher(),
-      $anilistFormat.map { _ in }.eraseToAnyPublisher(),
-      $anilistSeason.map { _ in }.eraseToAnyPublisher(),
-      $anilistYear.map { _ in }.eraseToAnyPublisher(),
-      $anilistStatus.map { _ in }.eraseToAnyPublisher(),
-      $anilistCountry.map { _ in }.eraseToAnyPublisher(),
-      $pluginFilterValues.map { _ in }.eraseToAnyPublisher(),
-      $popularSortBy.map { _ in }.eraseToAnyPublisher(),
-      $popularGenre.map { _ in }.eraseToAnyPublisher(),
-      $popularMinRating.map { _ in }.eraseToAnyPublisher(),
-      $shareSortBy.map { _ in }.eraseToAnyPublisher(),
-      $shareGenre.map { _ in }.eraseToAnyPublisher(),
-      $shareMinRating.map { _ in }.eraseToAnyPublisher(),
-    ]
-
-    // 合并所有筛选器 Publisher
-    Publishers.MergeMany(filterPublishers)
+    guard loadsResults else { return }
+    // 独立配置草稿不订阅结果加载；普通探索继续按条件刷新分页器。
+    $configuration
       // 使用 debounce 来防止快速连续的 UI 更新导致多次加载
       // 例如，当 onSourceChanged 重置多个属性时
       .debounce(for: .milliseconds(100), scheduler: DispatchQueue.main)
@@ -673,7 +677,7 @@ class ExploreViewModel: ObservableObject {
       // "不同来源、拼出相同路径"的切换，导致旧 Paginator（捕获旧
       // source 语义）继续服务新选中的来源。removeDuplicates 要求元素
       // 遵循 Equatable 协议（元组不满足），故在 sink 内按上一对键手动去重。
-      .map { [unowned self] in (sourceID: self.selectedSource.id, path: self.buildApiPath()) }
+      .map { [unowned self] _ in (sourceID: self.selectedSource.id, path: self.buildApiPath()) }
       .sink { [unowned self] ownerAndPath in
         let reloadKey = "\(ownerAndPath.sourceID)\u{0}\(ownerAndPath.path)"
         guard self.lastPaginatorReloadKey != reloadKey else { return }
@@ -976,174 +980,10 @@ class ExploreViewModel: ObservableObject {
 
   // MARK: - API 路径构建
 
-  func buildApiPath() -> String {
-    switch selectedSource {
-    case .themoviedb:
-      var path = "discover/tmdb_\(selectedType.apiValue)"
-      var params: [String] = []
+  func buildApiPath() -> String { configuration.apiPath }
 
-      if !tmdbSortBy.isEmpty {
-        params.append("sort_by=\(tmdbSortBy)")
-      }
-      if !tmdbGenre.isEmpty {
-        params.append("with_genres=\(tmdbGenre)")
-      }
-      if !tmdbLanguage.isEmpty {
-        params.append("with_original_language=\(tmdbLanguage)")
-      }
-      params.append("vote_average=\(tmdbVoteAverage)")
-      params.append("vote_count=\(tmdbVoteCount)")
-
-      if !params.isEmpty {
-        path += "?" + params.joined(separator: "&")
-      }
-      return path
-
-    case .douban:
-      var path = "discover/douban_\(selectedType.apiValue)"
-      var params: [String] = []
-
-      if !doubanSort.isEmpty {
-        params.append("sort=\(doubanSort)")
-      }
-      // 拼接 tags: 风格,地区,年代
-      let tags = [doubanCategory, doubanZone, doubanYear].filter { !$0.isEmpty }.joined(
-        separator: ",")
-      if !tags.isEmpty {
-        if let encoded = tags.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
-          params.append("tags=\(encoded)")
-        }
-      }
-
-      if !params.isEmpty {
-        path += "?" + params.joined(separator: "&")
-      }
-      return path
-
-    case .bangumi:
-      var path = "discover/bangumi"
-      var params: [String] = ["type=2"]  // 固定 type=2 表示动画
-
-      if !bangumiCat.isEmpty {
-        params.append("cat=\(bangumiCat)")
-      }
-      if !bangumiSort.isEmpty {
-        params.append("sort=\(bangumiSort)")
-      }
-      if !bangumiYear.isEmpty {
-        params.append("year=\(bangumiYear)")
-      }
-
-      path += "?" + params.joined(separator: "&")
-      return path
-
-    case .anilist:
-      return Self.appendingQuery(
-        to: "anilist/discover",
-        values: [
-          "sort": .string(anilistSort),
-          "genre": anilistGenre.isEmpty ? .null : .string(anilistGenre),
-          "format": anilistFormat.isEmpty ? .null : .string(anilistFormat),
-          "season": anilistSeason.isEmpty ? .null : .string(anilistSeason),
-          "season_year": anilistYear == 0 ? .null : .int(anilistYear),
-          "status": anilistStatus.isEmpty ? .null : .string(anilistStatus),
-          "country": anilistCountry.isEmpty ? .null : .string(anilistCountry),
-        ])
-
-    case .popular:
-      var path = "subscribe/popular"
-      var params: [String] = ["count=30"]
-      params.append("stype=\(selectedType == .movies ? "电影" : "电视剧")")
-      if !popularSortBy.isEmpty {
-        params.append("sort_type=\(popularSortBy)")
-      }
-      if !popularGenre.isEmpty {
-        params.append("genre_id=\(popularGenre)")
-      }
-      if popularMinRating > 0 {
-        params.append("min_rating=\(popularMinRating)")
-      }
-
-      if !params.isEmpty {
-        path += "?" + params.joined(separator: "&")
-      }
-      return path
-    case .subscriptionShare:
-      var path = "subscribe/shares"
-      var params: [String] = []
-      if !shareSortBy.isEmpty {
-        params.append("sort_type=\(shareSortBy)")
-      }
-      if !shareGenre.isEmpty {
-        params.append("genre_id=\(shareGenre)")
-      }
-      if shareMinRating > 0 {
-        params.append("min_rating=\(shareMinRating)")
-      }
-      if !params.isEmpty {
-        path += "?" + params.joined(separator: "&")
-      }
-      return path
-    case .custom(let source):
-      return Self.appendingQuery(to: source.api_path, values: pluginFilterValues)
-    }
-  }
-
-  nonisolated static func appendingQuery(
-    to path: String,
-    values: [String: JSONValue]
-  ) -> String {
-    guard var components = URLComponents(string: path) else { return path }
-    var additions: [String] = []
-    for (key, value) in values {
-      flattenQueryValue(key, value, into: &additions)
-    }
-    guard !additions.isEmpty else { return components.string ?? path }
-    let suffix = additions.joined(separator: "&")
-    if let existing = components.percentEncodedQuery, !existing.isEmpty {
-      components.percentEncodedQuery = existing + "&" + suffix
-    } else {
-      components.percentEncodedQuery = suffix
-    }
-    return components.string ?? path
-  }
-
-  private nonisolated static func flattenQueryValue(
-    _ key: String,
-    _ value: JSONValue,
-    into additions: inout [String]
-  ) {
-    switch value {
-    case .null:
-      return
-    case .array(let items):
-      guard !items.isEmpty else { return }
-      let isFlat = items.allSatisfy {
-        if case .object = $0 { return false }
-        if case .array = $0 { return false }
-        return true
-      }
-      if isFlat {
-        for item in items {
-          flattenQueryValue(key + "[]", item, into: &additions)
-        }
-      } else {
-        for (index, item) in items.enumerated() {
-          flattenQueryValue("\(key)[\(index)]", item, into: &additions)
-        }
-      }
-    case .object(let dictionary):
-      guard !dictionary.isEmpty else { return }
-      for (subKey, subValue) in dictionary {
-        flattenQueryValue("\(key)[\(subKey)]", subValue, into: &additions)
-      }
-    default:
-      guard let text = value.queryString,
-        let encodedName = encodeURIComponent(key),
-        let encodedValue = encodeURIComponent(text)
-      else { return }
-      additions.append("\(encodedName)=\(encodedValue)")
-    }
+  nonisolated static func appendingQuery(to path: String, values: [String: JSONValue]) -> String {
+    ExploreConfiguration.appendingQuery(to: path, values: values)
   }
 
   nonisolated static func popularSubscriptionKey(_ item: MediaInfo) -> String {
@@ -1244,33 +1084,9 @@ class ExploreViewModel: ObservableObject {
       previousSource?.id == selectedSource.id
       && previousSource?.descriptor?.filter_params == selectedSource.descriptor?.filter_params
 
-    // 重置所有筛选参数
-    selectedType = .movies
-    tmdbSortBy = "popularity.desc"
-    tmdbGenre = ""
-    tmdbLanguage = ""
-    tmdbVoteAverage = 0
-    tmdbVoteCount = 10
-    doubanSort = "U"
-    doubanCategory = ""
-    doubanZone = ""
-    doubanYear = ""
-    bangumiCat = ""
-    bangumiSort = "rank"
-    bangumiYear = ""
-    anilistSort = "POPULARITY_DESC"
-    anilistGenre = ""
-    anilistFormat = ""
-    anilistSeason = ""
-    anilistYear = 0
-    anilistStatus = ""
-    anilistCountry = ""
-    popularSortBy = "count"
-    popularGenre = ""
-    popularMinRating = 0
-    shareSortBy = "count"
-    shareGenre = ""
-    shareMinRating = 0
+    let previousPluginValues = pluginFilterValues
+    configuration = ExploreConfiguration(source: selectedSource)
+    if preservesPluginValues { pluginFilterValues = previousPluginValues }
     if let descriptor = selectedSource.descriptor {
       if !preservesPluginValues {
         pluginFilterValues = descriptor.filter_params
@@ -1301,6 +1117,12 @@ class ExploreViewModel: ObservableObject {
       // Douban category/Bangumi cat/AniList genre 等字典不随类型变化，无需清理
       break
     }
+  }
+
+  func restoreConfiguration(_ saved: ExploreConfiguration) {
+    configuration = saved
+    pluginFilterControls = PluginFilterControlParser.parse(saved.selectedSource.descriptor?.filter_ui ?? [])
+    applySources()
   }
 
   func setPluginFilter(_ field: String, value: JSONValue) {
@@ -1378,6 +1200,19 @@ class ExploreViewModel: ObservableObject {
       $0 != .subscriptionShare || apiService.canAccess(.subscribe)
     }
     sources.append(contentsOf: extraSourceSnapshot.map(DiscoverSource.custom))
+    if !loadsResults {
+      if let latest = sources.first(where: { $0.id == selectedSource.id }) {
+        selectedSource = latest
+        if let descriptor = latest.descriptor {
+          pluginFilterValues = descriptor.filter_params.merging(pluginFilterValues) { _, saved in saved }
+          pluginFilterControls = PluginFilterControlParser.parse(descriptor.filter_ui)
+        }
+      } else {
+        sources.insert(selectedSource, at: 0)
+      }
+      availableSources = sources
+      return
+    }
     availableSources = sources
     let previousSource = selectedSource
     if let source = sources.first(where: { $0.id == previousSource.id }) ?? sources.first,

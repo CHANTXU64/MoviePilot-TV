@@ -89,6 +89,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     imageWarmer: MPImageWarmer? = nil,
     imageWarmURLsProvider: (@MainActor (ItemType) -> [URL])? = nil,
     imageWarmThreshold: Int? = nil,
+    preparedFirstPage: [ItemType]? = nil,
     onReset: (() -> Void)? = nil
   ) {
     self.listIdentity = GridListIdentity.make(id: listID)
@@ -99,6 +100,11 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     self.imageWarmer = imageWarmer
     self.imageWarmThreshold = imageWarmThreshold ?? ((threshold + 1) / 2)
     self.onReset = onReset
+    if let preparedFirstPage {
+      _ = processor(&items, preparedFirstPage)
+      page = 2
+      hasMore = !preparedFirstPage.isEmpty
+    }
   }
 
   // MARK: - 公开接口

@@ -7,14 +7,18 @@ class CollectionDetailViewModel: ObservableObject {
   private let apiService: APIService
   private var cancellables = Set<AnyCancellable>()
 
-  init(collectionId: Int, title: String, apiService: APIService = .shared) {
+  init(
+    collectionId: Int, title: String, apiService: APIService = .shared,
+    preparedItems: [MediaInfo]? = nil
+  ) {
     self.apiService = apiService
     var seenKeys = Set<String>()
 
     self.paginator = Paginator<MediaInfo>(
       threshold: 12,
       fetcher: { @MainActor [apiService] page in
-        try await apiService.fetchCollection(collectionId: collectionId, page: page, title: title)
+        return try await apiService.fetchCollection(
+          collectionId: collectionId, page: page, title: title)
       },
       processor: { @MainActor items, newItems in
         // 使用现有的去重逻辑
@@ -29,10 +33,12 @@ class CollectionDetailViewModel: ObservableObject {
       imageWarmURLsProvider: { item in
         [item.imageURLs.poster].compactMap(\.self)
       },
+      preparedFirstPage: preparedItems,
       onReset: { @MainActor in
         seenKeys.removeAll()  // 重置时清空 seenKeys
       }
     )
+    hasLoaded = preparedItems != nil
 
     self.paginator.objectWillChange
       .sink { [weak self] _ in

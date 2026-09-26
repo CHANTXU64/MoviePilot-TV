@@ -19,6 +19,9 @@ class ContentViewModel: ObservableObject {
   @Published var accountPermissionWarning: AccountPermissionWarning?
   @Published private(set) var currentUser: Token?
   @Published private(set) var sessionUIIdentity: String
+  @Published private(set) var topShelfRoute: PendingTopShelfRoute?
+  @Published private(set) var isOpeningTopShelf = false
+  @Published var selectedTab: Tab = .home
 
   private let apiService: APIService
   private var cancellables = Set<AnyCancellable>()
@@ -41,9 +44,21 @@ class ContentViewModel: ObservableObject {
     apiService.$session
       .sink { [weak self] session in
         guard let self else { return }
+        let sessionChanged = self.sessionUIIdentity != session.uiIdentity
         self.isLoggedIn = session.token != nil
         self.currentUser = session.currentUser
         self.sessionUIIdentity = session.uiIdentity
+        if let route = self.topShelfRoute,
+          route.payload.sessionID != session.imageNamespace
+            || session.token == nil || session.currentUser?.canAccess(.discovery) != true
+        {
+          self.topShelfRoute = nil
+          self.isOpeningTopShelf = false
+        }
+        self.selectedTab = Self.resolvedSelectedTab(
+          sessionChanged ? (self.topShelfRoute == nil ? .home : .recommend) : self.selectedTab,
+          visibleTabs: self.visibleTabs
+        )
         let profileIdentity = session.currentUser.map {
           Self.accountProfileIdentity(
             for: $0,
@@ -82,6 +97,35 @@ class ContentViewModel: ObservableObject {
 
   func logout() {
     apiService.logout()
+  }
+
+  var canPresentContent: Bool {
+    isLoggedIn && (!isPreparingStartupSession || topShelfRoute != nil)
+  }
+
+  /// 本地归属校验允许先建详情布局；网络与操作仍由启动状态单独控制。
+  func acceptTopShelfRoute(_ route: PendingTopShelfRoute) -> TopShelfNavigationDisposition {
+    let disposition = TopShelfNavigationPolicy.disposition(
+      for: route,
+      isPreparingStartupSession: isPreparingStartupSession,
+      isLoggedIn: isLoggedIn,
+      currentSessionID: apiService.session.imageNamespace,
+      visibleTabs: visibleTabs
+    )
+    if disposition == .open || disposition == .preview {
+      NotificationCenter.default.post(
+        name: .imageNavigationPresentationWillReset, object: apiService
+      )
+      selectedTab = .recommend
+      topShelfRoute = route
+      isOpeningTopShelf = true
+    }
+    return disposition
+  }
+
+  func finishTopShelfOpening(id: UUID) {
+    guard topShelfRoute?.id == id else { return }
+    isOpeningTopShelf = false
   }
 
   var visibleTabs: [Tab] {

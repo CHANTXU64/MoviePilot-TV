@@ -5,7 +5,7 @@ struct SearchView: View {
   @StateObject private var viewModel = SearchViewModel()
   @ObservedObject private var apiService = APIService.shared
   @StateObject private var navigationCoordinator = ImageNavigationCoordinator()
-  @StateObject private var subscriptionHandler = SubscriptionHandler()
+  @State private var subscriptionHandler = SubscriptionHandler()
   @Environment(\.scenePhase) private var scenePhase
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
   @State private var showSiteSelection = false
@@ -205,18 +205,13 @@ struct SearchView: View {
       .navigationDestination(for: ImageNavigationEntry.self) { entry in
         ImageNavigationDestination(entry: entry)
       }
-      .mediaSubscriptionAlerts(using: subscriptionHandler)
-      .sheet(item: $subscriptionHandler.forkSheetRequest) { share in
-        ForkSubscribeSheet(
-          share: share,
-          onFork: { newSubId in
-            Task {
-              await subscriptionHandler.fetchSubscriptionAndShowEditor(subId: newSubId)
-            }
-          },
-          subscriptionHandler: subscriptionHandler
-        )
+      .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
+        subscriptionHandler = SubscriptionHandler()
+      showSiteSelection = false
+      showMediaSourceSelection = false
       }
+      .mediaSubscriptionAlerts(using: subscriptionHandler)
+
       .sheet(isPresented: $showSiteSelection) {
         MultiSelectionSheet(
           options: viewModel.siteFilter.availableSites,

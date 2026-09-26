@@ -39,6 +39,11 @@ jobs:
             -scheme "MoviePilot-TV" \
             -skipPackagePluginValidation
 
+      - name: Test signing script
+        run: |
+          bash -n scripts/apple-tv-renew.sh
+          python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+
       - name: Build
         run: |
           xcodebuild clean build \

@@ -70,7 +70,7 @@ private struct MediaDetailBackgroundLayer: View {
 
 struct MediaDetailView: View {
   @StateObject private var viewModel: MediaDetailViewModel
-  @StateObject private var subscriptionHandler = SubscriptionHandler()
+  @State private var subscriptionHandler = SubscriptionHandler()
   @Environment(\.scenePhase) private var scenePhase
   @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
@@ -83,6 +83,12 @@ struct MediaDetailView: View {
   let routeID: UUID
   @ObservedObject var imageLifecycle: PageImageLifecycle
   let loadingPosterURL: URL?
+  let presentationStyle: MediaDetailPresentationStyle
+  @State private var cachedBackgroundFailed = false
+  private var cachedContent: TopShelfCachedContent? {
+    cachedBackgroundFailed ? nil : preloadTask.preparedContent
+  }
+  let allowsRequests: Bool
   @State private var showSiteSelection = false
   @State private var showContentPage = false
   /// TMDB 跳转动作的同步防重入标记；预识别期间沿用原有 disabled 门禁。
@@ -239,7 +245,9 @@ struct MediaDetailView: View {
     preloadTask: MediaPreloadTask, isContentReady: Binding<Bool>,
     routeID: UUID,
     imageLifecycle: PageImageLifecycle,
-    loadingPosterURL: URL?
+    loadingPosterURL: URL?,
+    presentationStyle: MediaDetailPresentationStyle = .standard,
+    allowsRequests: Bool = true
   ) {
     let vm = MediaDetailViewModel(detail: detail)
     vm.preloadTask = preloadTask
@@ -249,6 +257,8 @@ struct MediaDetailView: View {
     self.routeID = routeID
     self.imageLifecycle = imageLifecycle
     self.loadingPosterURL = loadingPosterURL
+    self.presentationStyle = presentationStyle
+    self.allowsRequests = allowsRequests
   }
 
   nonisolated static let contentPageBackgroundFadeDuration: TimeInterval = 0.4
@@ -278,7 +288,22 @@ struct MediaDetailView: View {
       backgroundColor
         .ignoresSafeArea()
 
-      if isBackgroundMounted && imageLifecycle.keepsActivePageImages {
+      if isBackgroundMounted, imageLifecycle.keepsActivePageImages,
+        (cachedContent != nil || presentationStyle == .direct),
+        let localBackground = cachedContent?.backgroundURL ?? loadingPosterURL,
+        localBackground.isFileURL
+      {
+        MediaDetailBackgroundLayer(
+          url: localBackground, usingPosterAsBackdrop: cachedContent?.backgroundIsPoster ?? true,
+          onFailure: { _ in cachedBackgroundFailed = true }
+        )
+          .opacity(showContentPage ? 0 : 1)
+      }
+
+      if isBackgroundMounted && imageLifecycle.keepsActivePageImages,
+        cachedContent == nil,
+        presentationStyle == .standard || (allowsRequests && preloadTask.fullDetail != nil)
+      {
         MediaDetailBackgroundLayer(
           url: viewModel.backgroundUrl,
           usingPosterAsBackdrop: viewModel.isUsingPosterAsBackdrop,
@@ -392,7 +417,9 @@ struct MediaDetailView: View {
         }
       }
     }
+    .disabled(!allowsRequests)
     .onChange(of: apiService.imageConfigurationIdentity) { _, _ in
+      guard allowsRequests else { return }
       viewModel.refreshBackgroundForImageConfiguration()
     }
     .environmentObject(subscriptionHandler)
@@ -430,7 +457,8 @@ struct MediaDetailView: View {
         handleRouteRemovalIfNeeded()
       }
     }
-    .task {
+    .task(id: allowsRequests) {
+      guard allowsRequests else { return }
       if !hasAppeared, let preferredHeaderFocus {
         focusedButton = preferredHeaderFocus
         hasAppeared = true
@@ -441,7 +469,8 @@ struct MediaDetailView: View {
       hasRefreshedSubscriptionAfterFullDetail = await Self.applyReadyPreloadedDetail(
         from: preloadTask,
         to: viewModel,
-        hasRefreshedSubscription: hasRefreshedSubscriptionAfterFullDetail
+        hasRefreshedSubscription: hasRefreshedSubscriptionAfterFullDetail,
+        requiresBackgroundReady: presentationStyle.usesLoadingTransition
       )
       if canSearchResources {
         await viewModel.siteFilter.loadSites()
@@ -449,7 +478,8 @@ struct MediaDetailView: View {
       // 重新激活时自动恢复成功空终态的推荐/相似/演员区域
       await viewModel.refreshSuccessEmptySections()
     }
-    .task(id: preloadTask.partialMedia.id) {
+    .task(id: allowsRequests) {
+      guard allowsRequests else { return }
       await Self.runActiveSubscriptionRefreshLoop {
         guard Self.shouldRefreshActiveSubscriptionStatus(
           preloadTask: preloadTask,
@@ -461,6 +491,7 @@ struct MediaDetailView: View {
       }
     }
     .onChange(of: scenePhase) { _, phase in
+      guard allowsRequests else { return }
       Task { @MainActor in
         await Self.refreshActiveSubscriptionStatusOnSceneActivation(
           scenePhase: phase,
@@ -480,7 +511,7 @@ struct MediaDetailView: View {
     // MediaDetailView 从第一帧就存在于视图树中（用 partialMedia 初始化），
     // 在 fullDetail 就绪前不配置任何内容，仅由 Loading 遮罩覆盖。
     .onChange(of: preloadTask.isDetailReady) { _, isLoaded in
-      if isLoaded {
+      if isLoaded, allowsRequests, presentationStyle == .standard {
         Task { @MainActor in
           hasRefreshedSubscriptionAfterFullDetail = await Self.applyReadyPreloadedDetail(
             from: preloadTask,
@@ -488,6 +519,17 @@ struct MediaDetailView: View {
             hasRefreshedSubscription: hasRefreshedSubscriptionAfterFullDetail
           )
         }
+      }
+    }
+    .onChange(of: preloadTask.fullDetail) { _, detail in
+      guard allowsRequests, presentationStyle == .direct, detail != nil else { return }
+      Task { @MainActor in
+        hasRefreshedSubscriptionAfterFullDetail = await Self.applyReadyPreloadedDetail(
+          from: preloadTask,
+          to: viewModel,
+          hasRefreshedSubscription: hasRefreshedSubscriptionAfterFullDetail,
+          requiresBackgroundReady: false
+        )
       }
     }
     // 当 ViewModel 的 isFirstRowReady 变为 true 时，回写给 ContainerView 控制 Loading 遮罩
@@ -499,7 +541,7 @@ struct MediaDetailView: View {
     // 电视剧首行是 season，由 preloadTask 异步加载，
     // 当分季数据实际加载完毕时通知 ViewModel（applyFullDetail 时可能尚未就绪）
     .onChange(of: preloadTask.isSeasonDataLoaded) { _, isLoaded in
-      if isLoaded && canSubscribeMedia && !viewModel.isFirstRowReady
+      if allowsRequests && isLoaded && canSubscribeMedia && !viewModel.isFirstRowReady
         && viewModel.detail.type == "电视剧"
       {
         viewModel.isFirstRowReady = true
@@ -537,6 +579,12 @@ struct MediaDetailView: View {
           ? SubscriptionCancelConfirmation.headerMessage(for: viewModel.detail)
           : unsubscribeConfirmationMessage
       )
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
+      subscriptionHandler = SubscriptionHandler()
+      sheetSubscribe = nil
+      showSiteSelection = false
+      showUnsubscribeConfirm = false
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler)
     .sheet(isPresented: $showSiteSelection) {
@@ -663,9 +711,12 @@ struct MediaDetailView: View {
   static func applyReadyPreloadedDetail(
     from preloadTask: MediaPreloadTask,
     to viewModel: MediaDetailViewModel,
-    hasRefreshedSubscription: Bool
+    hasRefreshedSubscription: Bool,
+    requiresBackgroundReady: Bool = true
   ) async -> Bool {
-    guard preloadTask.isDetailReady, let fullDetail = preloadTask.fullDetail else {
+    guard !requiresBackgroundReady || preloadTask.isDetailReady,
+      let fullDetail = preloadTask.fullDetail
+    else {
       return hasRefreshedSubscription
     }
 
@@ -818,18 +869,21 @@ struct MediaDetailView: View {
   }
 
   private func handleHeaderSubscribe() {
+    let source = navigationCoordinator.sourceToken()
     Task { @MainActor in
       await Self.performHeaderSubscribeAction(
         isSubscribed: isSubscribed,
         refreshSubscribedState: {
           let didRefresh = await viewModel.refreshSubscriptionStatus()
-          guard didRefresh else { return nil }
+          guard didRefresh, navigationCoordinator.isCurrent(source) else { return nil }
           return viewModel.isSubscribed
         },
         showUnsubscribeConfirm: {
           unsubscribeConfirmationMessage = SubscriptionCancelConfirmation.headerMessage(for: viewModel.detail)
           Task { @MainActor in
-            unsubscribeConfirmationMessage = await viewModel.headerUnsubscribeConfirmationMessage()
+            let message = await viewModel.headerUnsubscribeConfirmationMessage()
+            guard navigationCoordinator.isCurrent(source) else { return }
+            unsubscribeConfirmationMessage = message
             showUnsubscribeConfirm = true
           }
         },
@@ -899,6 +953,18 @@ struct MediaDetailView: View {
           }
 
           // Action Buttons — Apple TV style: primary + icon buttons
+          if presentationStyle == .direct {
+            if !allowsRequests {
+              Label("正在验证登录状态…", systemImage: "person.crop.circle")
+                .font(.caption).foregroundStyle(.secondary)
+            } else if preloadTask.isDetailFailed {
+              Text("详情加载失败，请返回后重试")
+                .font(.caption).foregroundStyle(.secondary)
+            } else if preloadTask.fullDetail == nil {
+              ProgressView("正在加载详情…")
+                .font(.caption)
+            }
+          }
           HStack(spacing: 20) {
             // TMDB Jump Button — 复用 MediaActionHandler 逻辑，传入预加载的 tmdbId
             if canJumpToTMDB {
@@ -1031,6 +1097,7 @@ struct MediaDetailView: View {
             }
           }
           .animation(.snappy, value: shouldShowSiteFilter)
+          .disabled(!allowsRequests)
         }
         .padding(.bottom, 40)
         .frame(maxWidth: UIScreen.main.bounds.width * 0.62, alignment: .leading)

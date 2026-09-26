@@ -136,6 +136,15 @@ xcodebuild test \
   -skipPackagePluginValidation
 ```
 
+续签脚本与 Bundle ID 配置变更还应运行以下回归（CI 同步执行；真实 Xcode 环境会检查 Debug/Release 的 target 构建设置）：
+
+```bash
+bash -n scripts/apple-tv-renew.sh
+python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+```
+
+该回归包含本地命令替身和构建设置检查，不代表真实签名或设备安装验收。
+
 本机测试默认串行运行。不要移除 `-parallel-testing-enabled NO` 和 `-maximum-concurrent-test-simulator-destinations 1`，否则 XCTest 可能启动多个 `Clone N of Apple TV` 模拟器并并行执行不同测试套件。真实后端兼容测试尤其应串行执行，方便控制副作用套件的执行顺序和排查失败来源。
 
 真实后端兼容测试在 `Testing started` 后可能数分钟没有增量输出，尤其是图片巡检会实际扫描 TV 页面入口、下载图片并用 tvOS 解码。不要因为短时间无输出就判断 `xcodebuild test` 卡死；至少等待单个用例的合理超时窗口，或读取 `.xcresult` 中的测试摘要和失败详情后再下结论。
@@ -203,7 +212,7 @@ xcrun simctl list devices tvOS available
 对本仓库进行任何代码、配置、文档或工作流修改时，必须遵守：
 
 1. 禁止在未获得用户明确允许的情况下执行 `git commit`、`git push` 或创建 Pull Request；其中私自创建 PR 属于严重违规。用户要求“写好”“整理好”“提交到 GitHub”不足以自动推导为允许 commit/push/开 PR，必须先单独确认。
-2. 禁止直接向 `main` 分支提交任何修改。唯一例外是 `.agents/prompts/release.md` 定义的正式发布流程：用户确认 Release Notes 后，发布专属的新版本信息改动（`AppChangelog.swift`、对应版本断言、README 版本标记和 App target 的 `MARKETING_VERSION`）必须直接在最新 `main` 上修改，不要创建发布分支或 Pull Request；commit、Push 和创建 GitHub Release 仍分别需要用户明确授权。
+2. 禁止直接向 `main` 分支提交任何修改。唯一例外是 `.agents/prompts/release.md` 定义的正式发布流程：用户确认 Release Notes 后，发布专属的新版本信息改动（`AppChangelog.swift`、对应版本断言、README 版本标记和供主 App 与 Top Shelf 扩展继承的工程级 `MARKETING_VERSION`）必须直接在最新 `main` 上修改，不要创建发布分支或 Pull Request；commit、Push 和创建 GitHub Release 仍分别需要用户明确授权。
 3. 除上述正式发布及其新版本信息同步例外外，每次开始修改前，必须基于最新 `main` 创建独立分支。
 4. AI 创建的分支名必须使用 `ai/xxx` 格式，例如：
    - `ai/add-github-actions-ci`

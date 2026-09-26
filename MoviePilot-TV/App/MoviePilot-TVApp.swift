@@ -4,6 +4,8 @@ import SwiftUI
 struct MoviePilot_TVApp: App {
   /// 全局通知管理器，负责应用顶层的消息提示弹出
   @StateObject private var notificationManager = NotificationManager()
+  @StateObject private var topShelfManager = TopShelfManager()
+  @StateObject private var topShelfNavigationRouter = TopShelfNavigationRouter()
 
   init() {
     KingfisherCachePolicy.apply()
@@ -14,6 +16,8 @@ struct MoviePilot_TVApp: App {
     WindowGroup {
       ContentView()
         .environmentObject(notificationManager)
+        .environmentObject(topShelfManager)
+        .environmentObject(topShelfNavigationRouter)
     }
   }
 }
