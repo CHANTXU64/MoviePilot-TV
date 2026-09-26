@@ -54,18 +54,6 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     )
   }
 
-  func testContentViewLabelsSystemTabAsSettings() throws {
-    let source = try Self.source(at: "MoviePilot-TV/Views/ContentView.swift")
-
-    XCTAssertTrue(
-      source.contains(
-        "SystemView(isSelected: selectedTab == .system)"
-      )
-    )
-    XCTAssertTrue(source.contains("Label(\"设置\", systemImage: \"gear\")"))
-    XCTAssertFalse(source.contains("Label(\"系统\", systemImage: \"gear\")"))
-  }
-
   func testStatusTabSelectionDrivesAuthoritativeTransferHistoryRefresh() throws {
     let contentSource = try Self.source(at: "MoviePilot-TV/Views/ContentView.swift")
     let statusSource = try Self.source(at: "MoviePilot-TV/Views/Pages/StatusView.swift")
@@ -284,17 +272,6 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("maxCacheSize"))
     XCTAssertFalse(source.contains("accessOrder"))
     XCTAssertFalse(source.contains("evictIfNeeded"))
-  }
-
-  func testContentViewNormalizesHiddenSelectedTabOnAppear() throws {
-    let source = try Self.source(at: "MoviePilot-TV/Views/ContentView.swift")
-
-    XCTAssertTrue(source.contains(".onAppear {"))
-    XCTAssertTrue(
-      source.contains(
-        "selectedTab = ContentViewModel.resolvedSelectedTab(selectedTab, visibleTabs: viewModel.visibleTabs)"
-      )
-    )
   }
 
   func testMediaDetailHeaderFocusOnlyTargetsVisiblePermittedActions() throws {

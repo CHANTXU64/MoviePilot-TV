@@ -214,8 +214,9 @@ class MediaPreloadTask: ObservableObject {
   /// 分季数据是否已实际加载完毕（seasonViewModel 创建时 isLoading=true，loadData 完成后才设为 true）
   @Published var isSeasonDataLoaded = false
 
-  /// 所有内部异步任务（用于取消）
+  /// 编排识别、详情等待、分季与订阅的任务（用于取消）
   private var internalTasks: [Task<Void, Never>] = []
+  private var detailTask: Task<Void, Never>?
   private var isStarted = false
 
   /// 当前正在进行的 Kingfisher 图片下载任务（用于取消时中断 HTTP 请求）
@@ -241,7 +242,10 @@ class MediaPreloadTask: ObservableObject {
   private(set) var preparedContent: TopShelfCachedContent?
 
   func installPreparedContentIfNeeded(_ content: TopShelfCachedContent?) {
-    guard !isStarted, fullDetail == nil, let content, Self.hasDisplayableDetail(content.detail) else { return }
+    guard fullDetail == nil, let content, Self.hasDisplayableDetail(content.detail) else { return }
+    // 本地完整详情可接管其他导航栈的在途请求，保留共享任务及其辅助数据。
+    detailTask?.cancel()
+    detailTask = nil
     preparedContent = content
     fullDetail = content.detail
     isDetailReady = true
@@ -261,6 +265,8 @@ class MediaPreloadTask: ObservableObject {
     // type 显示为合集但缺少 collection_id 时仍按普通媒体预加载，避免空合集 ID 卡住。
     guard partialMedia.shouldPreloadDetail else { return }
 
+    let detailLoad = Task { await self.loadDetail() }
+    detailTask = detailLoad
     internalTasks.append(
       Task {
         // ⑤ TMDB 识别 — 必须先于 checkSubscription 完成，否则 fallback 查询会因 tmdbId 为 nil 而跳过
@@ -270,10 +276,10 @@ class MediaPreloadTask: ObservableObject {
             try await self.recognizeTmdb(using: self.partialMedia)
           }
         }()
-        async let detailLoad: Void = self.loadDetail()
-
-        // 等待两者都完成；识别被取消时提前结束，不再启动依赖任务
-        try? await (tmdbRecognition, detailLoad)
+        // 识别可能先抛出取消；基础详情结束前必须保留其取消句柄。
+        await detailLoad.value
+        self.detailTask = nil
+        try? await tmdbRecognition
         guard !Task.isCancelled else { return }
 
         // 无论成功还是失败，都尝试加载依赖任务（失败时用 partialMedia 做 fallback）
@@ -303,6 +309,8 @@ class MediaPreloadTask: ObservableObject {
     imageRetrieveState.markOwnerReleased()
     internalTasks.forEach { $0.cancel() }
     internalTasks.removeAll()
+    detailTask?.cancel()
+    detailTask = nil
     // 主动中断 Kingfisher 下载，释放网络资源和内存
     activeImageDownload?.cancel()
     activeImageDownload = nil
@@ -353,6 +361,7 @@ class MediaPreloadTask: ObservableObject {
       if Task.isCancelled { return }
       do {
         let fetched = try await apiService.fetchMediaDetail(media: partialMedia)
+        try Task.checkCancellation()
         // 校验返回数据有效性：API 可能返回 200 但 body 是空/残缺 JSON
         // 此时 Codable 解码成功但所有字段为 nil，导致详情页显示 "Unknown" 空白页
         if Self.hasDisplayableDetail(fetched) {
@@ -360,6 +369,7 @@ class MediaPreloadTask: ObservableObject {
           let backgroundImageTimeout: Duration =
             SystemViewModel.shouldWaitMediaDetailBackgroundImage ? .seconds(3) : .milliseconds(100)
           await self.prefetchBackgroundImage(for: fetched, timeout: backgroundImageTimeout)
+          try Task.checkCancellation()
           self.isDetailReady = true
           return
         } else {
@@ -372,6 +382,7 @@ class MediaPreloadTask: ObservableObject {
           }
         }
       } catch {
+        guard !Task.isCancelled else { return }
         Logger.error(
           "加载详情失败(attempt \(attempt + 1)): \(error)",
           metadata: ["title": partialMedia.title ?? "", "mediaId": partialMedia.id]

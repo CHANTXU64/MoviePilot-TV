@@ -123,6 +123,51 @@ final class TopShelfExploreTests: XCTestCase {
     XCTAssertTrue(TopShelfExploreURLProtocol.requests[0].url!.path.hasSuffix("discover/source"))
   }
 
+  func testSavedPluginRefreshesDefinitionInDraftWhilePreservingExplicitValues() async throws {
+    var saved = ExploreConfiguration(source: custom)
+    saved.pluginFilterValues = [
+      "category": .string("chosen"), "genres": .array([]), "company": .null,
+      "opaque": .string("保留未知值"),
+    ]
+    let manager = manager()
+    manager.select(TopShelfSelection(exploration: saved))
+    let ui = try JSONDecoder().decode([JSONValue].self, from: Data(#"""
+      [
+        {"component":"VSelect","props":{"model":"category","label":"新版分类","items":["all","chosen","new"]}},
+        {"component":"VSelect","props":{"model":"genres","label":"新版风格","multiple":true,"items":["剧情"]}},
+        {"component":"VSelect","props":{"model":"company","label":"公司","items":[12]}}
+      ]
+      """#.utf8))
+    let latest = DiscoverSourceDescriptor(
+      name: "新版片单", mediaid_prefix: "catalog", api_path: "plugin/catalog/v2",
+      filter_params: [
+        "category": .string("all"), "genres": .array([.string("剧情")]), "company": .int(12),
+        "newOption": .string("default"),
+      ], filter_ui: ui, depends: ["company": ["category"]]
+    )
+    TopShelfExploreURLProtocol.setSources([latest])
+    let draft = ExploreViewModel(apiService: service, configuration: saved, loadsResults: false)
+    await draft.refreshSources()
+    XCTAssertEqual(draft.selectedSource, .custom(latest))
+    XCTAssertEqual(draft.pluginFilterControls.first?.label, "新版分类")
+    XCTAssertTrue(draft.buildApiPath().hasPrefix("plugin/catalog/v2?"))
+    for (key, value) in saved.pluginFilterValues {
+      XCTAssertEqual(draft.pluginFilterValues[key], value, key)
+    }
+    XCTAssertEqual(draft.pluginFilterValues["newOption"], .string("default"))
+    XCTAssertEqual(manager.selection?.exploration, saved, "定义刷新仍遵守显式保存边界")
+    XCTAssertEqual(TopShelfExploreURLProtocol.requests.count, 1, "设置草稿不加载结果列表")
+
+    draft.restoreConfiguration(saved)
+    XCTAssertEqual(draft.selectedSource, .custom(latest), "重开草稿使用已发现的最新定义")
+    XCTAssertEqual(draft.pluginFilterValues["genres"], .array([]))
+    draft.setPluginFilter("company", value: .int(12))
+    try XCTUnwrap(draft.settingsFields.first { $0.id == "category" }).value.wrappedValue = .string("new")
+    XCTAssertEqual(draft.pluginFilterValues["company"], .null, "使用新版依赖定义")
+    manager.select(TopShelfSelection(exploration: draft.configuration))
+    XCTAssertEqual(self.manager().savedExploration, draft.configuration)
+  }
+
   func testNormalExploreReloadsFromFieldChangesWithoutChangingSavedShelf() async throws {
     let manager = manager()
     let saved = TopShelfSelection(exploration: ExploreConfiguration(source: .douban))
@@ -297,11 +342,14 @@ private final class TopShelfExploreURLProtocol: URLProtocol, @unchecked Sendable
   private static let lock = NSLock()
   nonisolated(unsafe) private static var recorded: [URLRequest] = []
   nonisolated(unsafe) static var duplicates = false
+  nonisolated(unsafe) private static var sources: [DiscoverSourceDescriptor] = []
   static var requests: [URLRequest] { lock.withLock { recorded } }
+  static func setSources(_ value: [DiscoverSourceDescriptor]) { lock.withLock { sources = value } }
   static func reset() {
     lock.withLock {
       recorded = []
       duplicates = false
+      sources = []
     }
   }
   override class func canInit(with request: URLRequest) -> Bool { true }
@@ -312,7 +360,7 @@ private final class TopShelfExploreURLProtocol: URLProtocol, @unchecked Sendable
     let path = url.path
     let object: Any
     if path.hasSuffix("/source") {
-      object = [] as [String]
+      object = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(Self.lock.withLock { Self.sources }))
     } else if path.hasSuffix("/subscribe/shares") {
       var share: [String: Any] = [
         "name": "影片名称", "share_title": "分享标题", "tmdbid": 42,

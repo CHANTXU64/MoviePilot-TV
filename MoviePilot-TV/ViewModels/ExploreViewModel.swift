@@ -1201,7 +1201,13 @@ class ExploreViewModel: ObservableObject {
     }
     sources.append(contentsOf: extraSourceSnapshot.map(DiscoverSource.custom))
     if !loadsResults {
-      if !sources.contains(where: { $0.id == selectedSource.id }) {
+      if let latest = sources.first(where: { $0.id == selectedSource.id }) {
+        selectedSource = latest
+        if let descriptor = latest.descriptor {
+          pluginFilterValues = descriptor.filter_params.merging(pluginFilterValues) { _, saved in saved }
+          pluginFilterControls = PluginFilterControlParser.parse(descriptor.filter_ui)
+        }
+      } else {
         sources.insert(selectedSource, at: 0)
       }
       availableSources = sources

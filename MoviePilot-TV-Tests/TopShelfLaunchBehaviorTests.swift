@@ -154,6 +154,112 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
       }
   }
 
+  func testExternalRouteSelectsRecommendationBeforePublishingItsDetail() throws {
+    let service = makeService()
+    let model = ContentViewModel(apiService: service)
+    model.selectedTab = .explore
+    let route = try XCTUnwrap(PendingTopShelfRoute(payload: payload(service: service)))
+    var selectionAtPublication: ContentViewModel.Tab?
+    let observer = model.$topShelfRoute.compactMap { $0 }.sink { _ in
+      selectionAtPublication = model.selectedTab
+    }
+    defer { observer.cancel() }
+    XCTAssertEqual(model.acceptTopShelfRoute(route), .preview)
+    XCTAssertEqual(selectionAtPublication, .recommend)
+    model.finishTopShelfOpening(id: route.id)
+    XCTAssertEqual(model.selectedTab, .recommend)
+    service.logout()
+    XCTAssertEqual(model.selectedTab, .home)
+  }
+
+  func testSelectedTabSurvivesTokenRefreshAndFallsBackWhenPermissionIsRevoked() throws {
+    let service = makeService()
+    let model = ContentViewModel(apiService: service)
+    model.selectedTab = .explore
+    service.replaceSessionForTesting(
+      baseURL: service.baseURL, token: "renewed", currentUser: service.currentUser
+    )
+    XCTAssertEqual(model.selectedTab, .explore)
+    service.replaceSessionForTesting(
+      baseURL: service.baseURL, token: "renewed",
+      currentUser: Token(
+        access_token: "renewed", token_type: "bearer", super_user: FlexibleBool(false),
+        permissions: ["discovery": false], user_id: 901, user_name: "launch-user", avatar: nil
+      )
+    )
+    XCTAssertFalse(model.visibleTabs.contains(.explore))
+    XCTAssertEqual(model.selectedTab, .home)
+  }
+
+  func testMainTabBarSelectsRecommendationOnExternalOpenAndAfterReturningToRoot() async throws {
+    let service = makeService()
+    let model = ContentViewModel(apiService: service)
+    model.selectedTab = .explore
+    // 会话准备期间使用正式 Tab 树，同时避免该宿主窗口启动 shared service 的请求。
+    let host = TopShelfFocusTestHost(rootView: MainContentView(viewModel: model)
+      .environment(\.scenePhase, .active))
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+    let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
+    let window = UIWindow(windowScene: scene)
+    window.rootViewController = host
+    window.makeKeyAndVisible()
+    defer {
+      window.isHidden = true
+      window.rootViewController = nil
+      previousKeyWindow?.makeKey()
+    }
+    try await Task.sleep(for: .milliseconds(400))
+    func tabController(in controller: UIViewController) -> UITabBarController? {
+      if let tabs = controller as? UITabBarController { return tabs }
+      return controller.children.compactMap { tabController(in: $0) }.first
+    }
+    let tabs = try XCTUnwrap(tabController(in: host))
+    XCTAssertEqual(tabs.tabBar.items?.compactMap(\.title), ["媒体库", "推荐", "探索", "搜索", "设置"])
+    XCTAssertEqual(tabs.selectedTab?.title, "探索")
+    XCTAssertEqual(tabs.tabBar.selectedItem?.title, "探索")
+    let focusTarget = UIButton(type: .system)
+    focusTarget.setTitle("探索内容焦点", for: .normal)
+    focusTarget.frame = CGRect(x: 700, y: 500, width: 400, height: 100)
+    // 启动门下探索内容尚未建立，在正式 Tab 容器中放置内容焦点 fixture。
+    tabs.view.addSubview(focusTarget)
+    host.view.layoutIfNeeded()
+    try await Task.sleep(for: .milliseconds(200))
+    let focusSystem = try XCTUnwrap(UIFocusSystem(for: focusTarget))
+    host.contentFocus = focusTarget
+    focusSystem.requestFocusUpdate(to: host)
+    focusSystem.updateFocusIfNeeded()
+    try await Task.sleep(for: .milliseconds(200))
+    XCTAssertTrue(focusTarget.isFocused, "外部入口前焦点必须位于内容内：\(UIFocusDebugger.checkFocusability(for: focusTarget))")
+    host.rootView = MainContentView(viewModel: model).environment(\.scenePhase, .background)
+    try await Task.sleep(for: .milliseconds(100))
+    let route = try XCTUnwrap(PendingTopShelfRoute(payload: payload(service: service)))
+    var transaction = Transaction()
+    transaction.disablesAnimations = true
+    withTransaction(transaction) { _ = model.acceptTopShelfRoute(route) }
+    host.rootView = MainContentView(viewModel: model).environment(\.scenePhase, .active)
+    try await Task.sleep(for: .milliseconds(500))
+    XCTAssertTrue(tabController(in: host) === tabs, "外部打开保留 Tab 容器和其他页面")
+    XCTAssertEqual(tabs.selectedTab?.title, "推荐")
+    XCTAssertEqual(tabs.tabBar.selectedItem?.title, "推荐", "内容切换时原生 Tab 栏必须同步")
+    host.contentFocus = nil
+    focusTarget.removeFromSuperview()
+    let navigation = try XCTUnwrap(navigationControllers(in: try XCTUnwrap(tabs.selectedViewController)).first)
+    XCTAssertEqual(navigation.viewControllers.count, 2)
+    navigation.popViewController(animated: false)
+    try await Task.sleep(for: .milliseconds(300))
+    XCTAssertEqual(navigation.viewControllers.count, 1)
+    XCTAssertEqual(tabs.selectedTab?.title, "推荐")
+    XCTAssertEqual(tabs.tabBar.selectedItem?.title, "推荐", "返回根页无需上移焦点才更新 Tab")
+    let screenshot = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+      window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+    }
+    let attachment = XCTAttachment(image: screenshot)
+    attachment.name = "TopShelf-returned-root-tab-selection"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+    XCTAssertEqual(TopShelfLaunchURLProtocol.detailRequestCount, 0)
+  }
+
   private func samplePixel(of image: UIImage, at point: CGPoint) throws -> [UInt8] {
     let pixel = try XCTUnwrap(
       image.cgImage?.cropping(
@@ -325,6 +431,47 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
     stack.path.removeLast()
   }
 
+  func testPreparedOpenTakesOverOtherTabsInFlightDetailWithoutRemovingItsOwner() async throws {
+    let service = makeService()
+    let viewModel = ContentViewModel(apiService: service)
+    let explore = ImageNavigationCoordinator(apiService: service)
+    let recommend = ImageNavigationCoordinator(apiService: service)
+    let media = try XCTUnwrap(TopShelfNavigationRouter.media(from: payload(service: service)))
+    TopShelfLaunchURLProtocol.holdDetailResponses()
+    let requested = expectation(description: "探索详情请求挂起")
+    let cancelled = expectation(description: "缓存接管后取消旧详情请求")
+    TopShelfLaunchURLProtocol.observe(currentUser: {}, detail: { requested.fulfill() })
+    TopShelfLaunchURLProtocol.observeDetailCancellation { cancelled.fulfill() }
+    let exploreEntry = explore.push(media)
+    let explorePath = explore.path
+    let existing = try XCTUnwrap(explore.preloadTask(for: exploreEntry))
+    await fulfillment(of: [requested], timeout: 3)
+    let prepared = TopShelfCachedContent(
+      detail: MediaInfo(tmdb_id: 42, title: "可立即展示的完整详情", type: "电影", overview: "磁盘简介"),
+      backgroundURL: URL(fileURLWithPath: "/fixture/background.jpg"), backgroundIsPoster: false
+    )
+    let route = try XCTUnwrap(PendingTopShelfRoute(
+      payload: payload(service: service), cachedContent: prepared
+    ))
+    _ = viewModel.acceptTopShelfRoute(route)
+    recommend.openExternal(route.navigationEntry, startsMediaLoad: false)
+    let task = try XCTUnwrap(recommend.preloadTask(for: route.navigationEntry))
+    XCTAssertTrue(task === existing, "其他 Tab 的 owner 继续使用同一个数据源")
+    XCTAssertTrue(task.isDetailReady)
+    XCTAssertEqual(task.fullDetail?.overview, "磁盘简介")
+    XCTAssertEqual(task.preparedContent?.backgroundURL, prepared.backgroundURL)
+    await fulfillment(of: [cancelled], timeout: 3)
+    TopShelfLaunchURLProtocol.releaseDetailResponse()
+    XCTAssertFalse(task.isDetailFailed)
+    XCTAssertEqual(TopShelfLaunchURLProtocol.detailRequestCount, 1)
+    XCTAssertEqual(TopShelfLaunchURLProtocol.imageRequestCount, 0)
+    recommend.path.removeLast()
+    XCTAssertEqual(explore.path, explorePath)
+    XCTAssertTrue(service.mediaPreloader.peekTask(for: media) === existing)
+    explore.path.removeLast()
+    XCTAssertNil(service.mediaPreloader.peekTask(for: media))
+  }
+
   func testExternalOpenClearsDeepStackButSubsequentDetailPushKeepsNormalBackOrder() throws {
     let service = makeService()
     let viewModel = ContentViewModel(apiService: service)
@@ -353,6 +500,52 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
     XCTAssertFalse(stack.lifecycle(for: latest.navigationEntry).isRemoved)
     stack.path.removeLast()
     XCTAssertEqual(stack.path.count, 0, "Top Shelf 目标只需再返回一次即到推荐根页")
+  }
+
+  func testPreparedTakeoverStillCancelsDetailAfterRecognitionLosesItsSessionLease() async throws {
+    let service = makeService()
+    let explore = ImageNavigationCoordinator(apiService: service)
+    let recommend = ImageNavigationCoordinator(apiService: service)
+    let routePayload = payload(service: service, tmdbID: nil, doubanID: "42")
+    let media = try XCTUnwrap(TopShelfNavigationRouter.media(from: routePayload))
+    let detailRequested = expectation(description: "基础详情挂起")
+    let recognitionRequested = expectation(description: "识别挂起")
+    TopShelfLaunchURLProtocol.holdDetailResponses()
+    TopShelfLaunchURLProtocol.holdRecognitionResponse { recognitionRequested.fulfill() }
+    TopShelfLaunchURLProtocol.observe(currentUser: {}, detail: { detailRequested.fulfill() })
+    let entry = explore.push(media)
+    let task = try XCTUnwrap(explore.preloadTask(for: entry))
+    await fulfillment(of: [detailRequested, recognitionRequested], timeout: 3)
+    let recognitionFinished = expectation(description: "旧会话识别已取消")
+    let observer = task.$isTmdbRecognitionFinished.filter { $0 }.prefix(1).sink { _ in
+      recognitionFinished.fulfill()
+    }
+    defer { observer.cancel() }
+    service.replaceSessionForTesting(
+      baseURL: service.baseURL, token: "renewed", currentUser: service.currentUser
+    )
+    await fulfillment(of: [recognitionFinished], timeout: 3)
+    // 让识别取消返回编排任务；基础详情此时仍处于 1.5 秒重试窗口。
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertTrue(service.mediaPreloader.peekTask(for: media) === task)
+    XCTAssertNil(task.fullDetail)
+    let prepared = TopShelfCachedContent(
+      detail: MediaInfo(douban_id: "42", title: "接管后的缓存详情", type: "电影"),
+      backgroundURL: URL(fileURLWithPath: "/fixture/background.jpg"), backgroundIsPoster: false
+    )
+    let route = try XCTUnwrap(PendingTopShelfRoute(payload: routePayload, cachedContent: prepared))
+    recommend.openExternal(route.navigationEntry, startsMediaLoad: true)
+    let unexpectedRetry = expectation(description: "缓存接管后旧详情不得重试")
+    unexpectedRetry.isInverted = true
+    TopShelfLaunchURLProtocol.observe(currentUser: {}, detail: { unexpectedRetry.fulfill() })
+    TopShelfLaunchURLProtocol.releaseDetailResponse()
+    await fulfillment(of: [unexpectedRetry], timeout: 2)
+    XCTAssertTrue(task.isDetailReady)
+    XCTAssertFalse(task.isDetailFailed)
+    XCTAssertEqual(task.fullDetail?.title, "接管后的缓存详情")
+    XCTAssertEqual(TopShelfLaunchURLProtocol.detailRequestCount, 1)
+    recommend.path.removeLast()
+    explore.path.removeLast()
   }
 
   func testExternalOpenPreservesOtherTabStackAndReplacesRecommendationWithoutEmptyPath() throws {
@@ -509,14 +702,22 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
     return service
   }
 
-  private func payload(service: APIService) -> TopShelfRoutePayload {
+  private func payload(service: APIService, tmdbID: Int? = 42, doubanID: String? = nil) -> TopShelfRoutePayload {
     TopShelfRoutePayload(
-      sessionID: service.session.imageNamespace, source: "themoviedb",
-      mediaID: nil, mediaIDPrefix: nil, tmdbID: 42, doubanID: nil, bangumiID: nil,
+      sessionID: service.session.imageNamespace, source: doubanID == nil ? "themoviedb" : "douban",
+      mediaID: nil, mediaIDPrefix: nil, tmdbID: tmdbID, doubanID: doubanID, bangumiID: nil,
       anilistID: nil, imdbID: nil, tvdbID: nil, title: "本地标题", type: "电影",
       year: "2026", season: nil, posterPath: nil, collectionID: nil,
       overview: "本地简介", voteAverage: 8.5
     )
+  }
+}
+
+@MainActor
+private final class TopShelfFocusTestHost<Content: View>: UIHostingController<Content> {
+  weak var contentFocus: UIView?
+  override var preferredFocusEnvironments: [UIFocusEnvironment] {
+    contentFocus.map { [$0] } ?? super.preferredFocusEnvironments
   }
 }
 
@@ -526,6 +727,9 @@ private final class TopShelfLaunchURLProtocol: URLProtocol, @unchecked Sendable 
   nonisolated(unsafe) private static var detailCount = 0
   nonisolated(unsafe) private static var onCurrentUser: (@Sendable () -> Void)?
   nonisolated(unsafe) private static var onDetail: (@Sendable () -> Void)?
+  nonisolated(unsafe) private static var onDetailCancelled: (@Sendable () -> Void)?
+  nonisolated(unsafe) private static var onRecognition: (@Sendable () -> Void)?
+  nonisolated(unsafe) private static var pendingRecognition: TopShelfLaunchURLProtocol?
   nonisolated(unsafe) private static var pendingDetail: TopShelfLaunchURLProtocol?
   nonisolated(unsafe) private static var holdsDetails = false
   nonisolated(unsafe) private static var imageCount = 0
@@ -567,6 +771,9 @@ private final class TopShelfLaunchURLProtocol: URLProtocol, @unchecked Sendable 
     detailCount = 0
     onCurrentUser = nil
     onDetail = nil
+    onDetailCancelled = nil
+    onRecognition = nil
+    pendingRecognition = nil
     pendingDetail = nil
     holdsDetails = false
     imageCount = 0
@@ -579,6 +786,18 @@ private final class TopShelfLaunchURLProtocol: URLProtocol, @unchecked Sendable 
     defer { lock.unlock() }
     onCurrentUser = currentUser
     onDetail = detail
+  }
+
+  static func observeDetailCancellation(_ callback: @escaping @Sendable () -> Void) {
+    lock.lock()
+    defer { lock.unlock() }
+    onDetailCancelled = callback
+  }
+
+  static func holdRecognitionResponse(_ callback: @escaping @Sendable () -> Void) {
+    lock.lock()
+    defer { lock.unlock() }
+    onRecognition = callback
   }
 
   static func releaseCurrentUser() {
@@ -607,6 +826,12 @@ private final class TopShelfLaunchURLProtocol: URLProtocol, @unchecked Sendable 
       callback?()
       return
     }
+    if path == "/api/v1/media/search", let callback = Self.onRecognition {
+      Self.pendingRecognition = self
+      Self.lock.unlock()
+      callback()
+      return
+    }
     let isDetail = path.hasPrefix("/api/v1/media/")
     if isDetail { Self.detailCount += 1 }
     if path == "/hero.jpg" { Self.imageCount += 1 }
@@ -630,9 +855,12 @@ private final class TopShelfLaunchURLProtocol: URLProtocol, @unchecked Sendable 
 
   override func stopLoading() {
     Self.lock.lock()
-    defer { Self.lock.unlock() }
     if Self.pendingUser === self { Self.pendingUser = nil }
+    if Self.pendingRecognition === self { Self.pendingRecognition = nil }
+    let callback = Self.pendingDetail === self ? Self.onDetailCancelled : nil
     if Self.pendingDetail === self { Self.pendingDetail = nil }
+    Self.lock.unlock()
+    callback?()
   }
 
   private func respond(_ text: String) {

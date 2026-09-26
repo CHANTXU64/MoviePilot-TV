@@ -21,6 +21,7 @@ class ContentViewModel: ObservableObject {
   @Published private(set) var sessionUIIdentity: String
   @Published private(set) var topShelfRoute: PendingTopShelfRoute?
   @Published private(set) var isOpeningTopShelf = false
+  @Published var selectedTab: Tab = .home
 
   private let apiService: APIService
   private var cancellables = Set<AnyCancellable>()
@@ -43,6 +44,7 @@ class ContentViewModel: ObservableObject {
     apiService.$session
       .sink { [weak self] session in
         guard let self else { return }
+        let sessionChanged = self.sessionUIIdentity != session.uiIdentity
         self.isLoggedIn = session.token != nil
         self.currentUser = session.currentUser
         self.sessionUIIdentity = session.uiIdentity
@@ -53,6 +55,10 @@ class ContentViewModel: ObservableObject {
           self.topShelfRoute = nil
           self.isOpeningTopShelf = false
         }
+        self.selectedTab = Self.resolvedSelectedTab(
+          sessionChanged ? (self.topShelfRoute == nil ? .home : .recommend) : self.selectedTab,
+          visibleTabs: self.visibleTabs
+        )
         let profileIdentity = session.currentUser.map {
           Self.accountProfileIdentity(
             for: $0,
@@ -110,6 +116,7 @@ class ContentViewModel: ObservableObject {
       NotificationCenter.default.post(
         name: .imageNavigationPresentationWillReset, object: apiService
       )
+      selectedTab = .recommend
       topShelfRoute = route
       isOpeningTopShelf = true
     }
