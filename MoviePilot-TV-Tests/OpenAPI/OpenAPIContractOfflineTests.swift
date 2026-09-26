@@ -425,7 +425,7 @@ final class OpenAPIContractOfflineTests: XCTestCase {
 
     let baseline = try OpenAPIContractSupport.loadDocument("openapi-baseline.json")
     XCTAssertEqual(baseline.title, "MoviePilot")
-    XCTAssertEqual(baseline.version, "v3.0.7")
+    XCTAssertEqual(baseline.version, "v3.0.8")
     XCTAssertFalse(baseline.paths.isEmpty)
 
     let fork = try XCTUnwrap(

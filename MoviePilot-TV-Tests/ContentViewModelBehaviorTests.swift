@@ -290,7 +290,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
 
     await viewModel?.prepareStartupIfNeeded()
 
-    XCTAssertEqual(service.settings?.BACKEND_VERSION, "v3.0.7")
+    XCTAssertEqual(service.settings?.BACKEND_VERSION, "v3.0.8")
     XCTAssertNil(viewModel?.backendVersionWarning)
 
     service.baseURLForTesting = "https://old.content-view-model-tests.local"
@@ -298,11 +298,11 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     service.currentUserForTesting = token("token-b", userName: "second-user")
 
     try await waitUntil("expected backend warning to reload from old backend") {
-      service.settings?.BACKEND_VERSION == "v3.0.6"
-        && viewModel?.backendVersionWarning?.backendVersion == "v3.0.6"
+      service.settings?.BACKEND_VERSION == "v3.0.7"
+        && viewModel?.backendVersionWarning?.backendVersion == "v3.0.7"
     }
 
-    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.6")
+    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.7")
     XCTAssertEqual(
       viewModel?.backendVersionWarning?.requiredVersion,
       AppVersionInfo.compatibleMoviePilotVersion
@@ -313,7 +313,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     service.settings = nil
     NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
     try await waitUntil("expected dismissed backend warning to stay dismissed") {
-      service.settings?.BACKEND_VERSION == "v3.0.6"
+      service.settings?.BACKEND_VERSION == "v3.0.7"
     }
     XCTAssertNil(viewModel?.backendVersionWarning)
   }
@@ -354,7 +354,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     await ContentViewModelURLProtocol.stub.setFailSettingsTransport(false)
     NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
     try await waitUntil("expected warning to clear after foreground refresh") {
-      service.settings?.BACKEND_VERSION == "v3.0.7"
+      service.settings?.BACKEND_VERSION == "v3.0.8"
         && viewModel?.backendVersionWarning == nil
     }
     XCTAssertNil(viewModel?.backendVersionWarning)
@@ -566,9 +566,9 @@ private actor ContentViewModelURLProtocolStub {
     let backendVersion: String
     switch url.host {
     case "old.content-view-model-tests.local":
-      backendVersion = "v3.0.6"
-    default:
       backendVersion = "v3.0.7"
+    default:
+      backendVersion = "v3.0.8"
     }
 
     let rejectsSettings = url.path == "/api/v1/system/global"
@@ -600,7 +600,7 @@ private actor ContentViewModelURLProtocolStub {
         .data(using: .utf8)!
     } else if url.path == "/api/v1/system/global" {
       data =
-        #"{"success":true,"data":{"TMDB_IMAGE_DOMAIN":"image.tmdb.org","GLOBAL_IMAGE_CACHE":true,"BACKEND_VERSION":"\#(backendVersion)","FRONTEND_VERSION":"v3.0.7"}}"#
+        #"{"success":true,"data":{"TMDB_IMAGE_DOMAIN":"image.tmdb.org","GLOBAL_IMAGE_CACHE":true,"BACKEND_VERSION":"\#(backendVersion)","FRONTEND_VERSION":"v3.0.8"}}"#
         .data(using: .utf8)!
     } else if url.path == "/api/v1/system/global/user" {
       data =
