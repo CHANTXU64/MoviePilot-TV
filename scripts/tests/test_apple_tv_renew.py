@@ -1,4 +1,6 @@
 import json
+from datetime import datetime, timedelta
+import importlib.util
 import os
 from pathlib import Path
 import plistlib
@@ -7,10 +9,14 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts/apple-tv-renew.sh"
+profile_spec = importlib.util.spec_from_file_location("apple_tv_profiles", REPO / "scripts/apple_tv_profiles.py")
+profiles = importlib.util.module_from_spec(profile_spec)
+profile_spec.loader.exec_module(profiles)
 
 # Exercise the real renewal entry point with local command substitutes. Real
 # Xcode artifact IDs and physical installation are validated separately.
@@ -20,6 +26,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import shutil
 import sys
 
 root = Path(os.environ["RENEW_TEST_DIR"])
@@ -30,6 +37,8 @@ with (root / "calls.jsonl").open("a") as log:
 
 def write_products(app_id, extension_id):
     app = root / "Products/MoviePilot-TV.app"
+    if app.exists():
+        shutil.rmtree(app)
     extension = app / "PlugIns/MoviePilot-TV-TopShelf.appex"
     for bundle, identifier in [(app, app_id), (extension, extension_id)]:
         bundle.mkdir(parents=True, exist_ok=True)
@@ -40,6 +49,21 @@ def write_products(app_id, extension_id):
             "Entitlements": {"application-identifier": "TEAM." + identifier},
         }
         (bundle / "embedded.mobileprovision").write_bytes(plistlib.dumps(profile))
+    path = extension / "embedded.mobileprovision"
+    mode = os.environ.get("RENEW_TEST_EXTENSION_PROFILE", "valid")
+    if mode == "missing":
+        path.unlink()
+    elif mode == "unreadable":
+        path.write_bytes(b"not a provisioning profile")
+    elif mode != "valid":
+        if mode == "missing_expiration":
+            profile.pop("ExpirationDate")
+        elif mode == "invalid_expiration":
+            profile["ExpirationDate"] = "not a date"
+        else:
+            days = {"expired": -1, "short": 2, "six_days": 6}[mode]
+            profile["ExpirationDate"] = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) + datetime.timedelta(days=days)
+        path.write_bytes(plistlib.dumps(profile))
 
 if tool == "xcodebuild":
     values = dict(arg.split("=", 1) for arg in args if "=" in arg)
@@ -89,18 +113,20 @@ class AppleTVRenewTests(unittest.TestCase):
             path.chmod(0o755)
         self.bundle_id = "com.example.MoviePilotTV"
 
-    def run_renew(self, *, force=True, collision=False):
+    def run_renew(self, *, force=True, collision=False, extension_profile="valid", app_group=""):
         env = os.environ.copy()
         env.update({
             "PATH": str(self.bin) + os.pathsep + env["PATH"],
             "PROJECT_DIR": str(REPO), "PROJECT_FILE": "MoviePilot-TV.xcodeproj",
             "WORKSPACE": "", "SCHEME": "MoviePilot-TV", "CONFIGURATION": "Release",
             "BUNDLE_ID": self.bundle_id, "DEVELOPMENT_TEAM": "TEAM",
+            "APP_GROUP_IDENTIFIER": app_group,
             "DEVICE_ID": "fixture-device", "CODESIGN_ENV_REPORT": "0",
             "CLEAR_PROFILE_CACHE": "0", "MIN_VALID_SECONDS": "432000",
             "DERIVED_DATA_PATH": str(self.root / "DerivedData"),
             "LOG_FILE": str(self.root / "renew.log"), "RENEW_TEST_DIR": str(self.root),
             "RENEW_TEST_COLLISION": "1" if collision else "0",
+            "RENEW_TEST_EXTENSION_PROFILE": extension_profile,
         })
         return subprocess.run(
             ["bash", str(SCRIPT), *(["--force"] if force else [])],
@@ -126,7 +152,7 @@ class AppleTVRenewTests(unittest.TestCase):
     def test_duplicate_extension_id_prevents_install(self):
         result = self.run_renew(collision=True)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("bundle identifier validation failed", result.stdout)
+        self.assertIn("Invalid bundle identifier", result.stdout)
         self.assertFalse(any(c["tool"] == "xcrun" for c in self.calls()))
 
     def test_valid_main_profile_does_not_skip_a_colliding_extension(self):
@@ -138,14 +164,103 @@ class AppleTVRenewTests(unittest.TestCase):
         self.assertTrue(any(c["tool"] == "xcodebuild" and "build" in c["args"] for c in self.calls()))
         self.assertTrue(any(c["tool"] == "xcrun" for c in self.calls()))
 
+    @property
+    def app(self):
+        return self.root / "Products/MoviePilot-TV.app"
+
+    def test_custom_group_override_reaches_build_and_lookup(self):
+        group = "group.com.example.ExistingSharedLibrary"
+        result = self.run_renew(app_group=group)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for call in self.calls():
+            if call["tool"] == "xcodebuild":
+                self.assertIn("APP_GROUP_IDENTIFIER=" + group, call["args"])
+
+    def test_only_all_valid_profiles_allow_skipping(self):
+        self.assertEqual(self.run_renew().returncode, 0)
+        (self.root / "calls.jsonl").write_text("")
+        result = self.run_renew(force=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("skipping", result.stdout)
+        calls = self.calls()
+        self.assertFalse(any(c["tool"] == "xcrun" or "build" in c["args"] for c in calls))
+        reads = [c["args"][-1] for c in calls if c["tool"] == "security"]
+        self.assertEqual(set(reads), {str(p) for p in self.app.rglob("embedded.mobileprovision")})
+
+    def test_invalid_cached_extension_profiles_trigger_renewal(self):
+        for mode in ("expired", "missing", "unreadable", "missing_expiration", "invalid_expiration"):
+            with self.subTest(mode=mode):
+                self.assertEqual(self.run_renew().returncode, 0)
+                path = self.app / "PlugIns/MoviePilot-TV-TopShelf.appex/embedded.mobileprovision"
+                if mode == "missing":
+                    path.unlink()
+                elif mode == "unreadable":
+                    path.write_bytes(b"unreadable")
+                else:
+                    profile = plistlib.loads(path.read_bytes())
+                    if mode == "missing_expiration":
+                        profile.pop("ExpirationDate")
+                    else:
+                        profile["ExpirationDate"] = (datetime.now() - timedelta(days=1)
+                            if mode == "expired" else "invalid")
+                    path.write_bytes(plistlib.dumps(profile))
+                (self.root / "calls.jsonl").write_text("")
+                result = self.run_renew(force=False)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn("skipping", result.stdout)
+                self.assertTrue(any("build" in c["args"] for c in self.calls()))
+                self.assertTrue(any(c["tool"] == "xcrun" for c in self.calls()))
+
+    def test_every_extension_is_checked_before_skipping(self):
+        self.assertEqual(self.run_renew().returncode, 0)
+        extra = self.app / "PlugIns/Additional.appex"
+        extra.mkdir()
+        (extra / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": self.bundle_id + ".Additional"}))
+        (self.root / "calls.jsonl").write_text("")
+        result = self.run_renew(force=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(any("build" in c["args"] for c in self.calls()))
+        self.assertNotIn("skipping", result.stdout)
+
+    def test_bad_profiles_in_new_build_cannot_be_installed_or_report_success(self):
+        for mode in ("expired", "missing", "unreadable", "missing_expiration", "invalid_expiration", "short"):
+            with self.subTest(mode=mode):
+                (self.root / "calls.jsonl").write_text("")
+                result = self.run_renew(extension_profile=mode)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn("Renewal complete", result.stdout)
+                self.assertFalse(any(c["tool"] == "xcrun" for c in self.calls()))
+
+    def test_report_uses_the_shortest_profile_lifetime(self):
+        result = self.run_renew(extension_profile="six_days")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = json.loads(result.stdout.splitlines()[-1])
+        self.assertGreater(report["secondsRemaining"], 5 * 86400)
+        self.assertLessEqual(report["secondsRemaining"], 6 * 86400)
+        self.assertEqual(report["secondsRemaining"], min(p["secondsRemaining"] for p in report["profiles"]))
+
+    def test_cache_cleanup_includes_extensions_and_preserves_other_apps(self):
+        cache, backup = self.root / "profile cache", self.root / "backup"
+        cache.mkdir()
+        identifiers = [self.bundle_id, self.bundle_id + ".TopShelf", self.bundle_id + ".Another",
+                       self.bundle_id + "Other", "com.example.Unrelated"]
+        for i, identifier in enumerate(identifiers):
+            (cache / f"{i}.mobileprovision").write_bytes(plistlib.dumps({
+                "Entitlements": {"application-identifier": "TEAM." + identifier}}))
+        with patch.object(profiles, "read_profile", side_effect=lambda path: plistlib.loads(path.read_bytes())):
+            self.assertEqual(profiles.move_cached_profiles(self.bundle_id, cache, backup), 3)
+        self.assertEqual({p.name for p in cache.iterdir()}, {"3.mobileprovision", "4.mobileprovision"})
+        self.assertEqual({p.name for p in backup.iterdir()}, {"0.mobileprovision", "1.mobileprovision", "2.mobileprovision"})
+
 
 @unittest.skipUnless(sys.platform == "darwin" and shutil.which("xcodebuild"), "requires Xcode")
 class ProjectBundleIdentifierTests(unittest.TestCase):
-    def assert_configuration(self, configuration):
+    def assert_configuration(self, configuration, group=None):
         result = subprocess.run([
             "xcodebuild", "-project", str(REPO / "MoviePilot-TV.xcodeproj"),
             "-alltargets", "-configuration", configuration, "-showBuildSettings", "-json",
             "APP_BUNDLE_IDENTIFIER=com.example.MoviePilotTV", "-skipPackagePluginValidation",
+            *(["APP_GROUP_IDENTIFIER=" + group] if group else []),
         ], capture_output=True, text=True, timeout=120)
         self.assertEqual(result.returncode, 0, result.stderr)
         identifiers = {
@@ -155,12 +270,21 @@ class ProjectBundleIdentifierTests(unittest.TestCase):
         }
         self.assertEqual(identifiers["MoviePilot-TV"], "com.example.MoviePilotTV")
         self.assertEqual(identifiers["MoviePilot-TV-TopShelf"], "com.example.MoviePilotTV.TopShelf")
+        groups = {target["target"]: target["buildSettings"].get("APP_GROUP_IDENTIFIER")
+                  for target in json.loads(result.stdout)}
+        for target in ("MoviePilot-TV", "MoviePilot-TV-TopShelf"):
+            self.assertEqual(groups[target], group or "group.com.example.MoviePilotTV")
 
     def test_debug_targets_derive_distinct_bundle_identifiers(self):
         self.assert_configuration("Debug")
 
     def test_release_targets_derive_distinct_bundle_identifiers(self):
         self.assert_configuration("Release")
+
+    def test_both_configurations_accept_a_shared_group_override(self):
+        for configuration in ("Debug", "Release"):
+            with self.subTest(configuration=configuration):
+                self.assert_configuration(configuration, "group.com.example.ExistingSharedLibrary")
 
 
 if __name__ == "__main__":

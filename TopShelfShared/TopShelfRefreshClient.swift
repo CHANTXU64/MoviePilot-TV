@@ -21,17 +21,20 @@ nonisolated struct TopShelfRefreshConfiguration: Codable, Equatable, Sendable {
 
 /// 扩展只共享当前会话的访问令牌；不保存登录密码，也不把令牌写入共享 JSON。
 nonisolated enum TopShelfCredentials {
-  private static func query(_ sessionID: String) -> [String: Any] {
-    [
+  static func query(_ sessionID: String, bundle: Bundle = .main) -> [String: Any]? {
+    guard let appGroupIdentifier = TopShelfSharedStore.appGroupIdentifier(in: bundle) else {
+      return nil
+    }
+    return [
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrService as String: "MoviePilot.TopShelf",
       kSecAttrAccount as String: sessionID,
-      kSecAttrAccessGroup as String: TopShelfSharedStore.appGroupIdentifier,
+      kSecAttrAccessGroup as String: appGroupIdentifier,
     ]
   }
 
   static func save(_ token: String, sessionID: String) -> Bool {
-    let query = query(sessionID)
+    guard let query = query(sessionID) else { return false }
     let data = Data(token.utf8)
     let result = SecItemUpdate(query as CFDictionary, [kSecValueData: data] as CFDictionary)
     if result == errSecSuccess { return true }
@@ -43,7 +46,7 @@ nonisolated enum TopShelfCredentials {
   }
 
   static func read(_ sessionID: String) -> String? {
-    var query = query(sessionID)
+    guard var query = query(sessionID) else { return nil }
     query[kSecReturnData as String] = true
     query[kSecMatchLimit as String] = kSecMatchLimitOne
     var result: CFTypeRef?
@@ -54,7 +57,8 @@ nonisolated enum TopShelfCredentials {
   }
 
   static func delete(_ sessionID: String) {
-    SecItemDelete(query(sessionID) as CFDictionary)
+    guard let query = query(sessionID) else { return }
+    SecItemDelete(query as CFDictionary)
   }
 }
 

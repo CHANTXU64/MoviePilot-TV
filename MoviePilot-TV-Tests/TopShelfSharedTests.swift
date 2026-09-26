@@ -1,9 +1,73 @@
 import Foundation
+import Security
 import XCTest
 
 @testable import MoviePilot_TV
 
+private final class AppGroupFileManager: FileManager, @unchecked Sendable {
+  let container: URL
+  var requestedGroup: String?
+
+  init(container: URL) {
+    self.container = container
+    super.init()
+  }
+
+  override func containerURL(forSecurityApplicationGroupIdentifier identifier: String) -> URL? {
+    requestedGroup = identifier
+    return container
+  }
+}
+
 final class TopShelfSharedTests: XCTestCase {
+  func testConfiguredGroupIsUsedForContainerAndCredentialAccess() throws {
+    let identifier = "group.com.example.SharedLibrary.\(UUID().uuidString)"
+    let bundle = try configurationBundle(group: identifier)
+    let fixture = try StoreFixture()
+    defer { fixture.cleanup() }
+    let fileManager = AppGroupFileManager(container: fixture.containerURL)
+
+    let store = try XCTUnwrap(TopShelfSharedStore.appGroupStore(fileManager: fileManager, bundle: bundle))
+    XCTAssertEqual(fileManager.requestedGroup, identifier)
+    XCTAssertTrue(store.stateFileURL.path.hasPrefix(fixture.containerURL.path))
+    let query = try XCTUnwrap(TopShelfCredentials.query("session", bundle: bundle))
+    XCTAssertEqual(query[kSecAttrAccessGroup as String] as? String, identifier)
+  }
+
+  func testMissingOrUnexpandedGroupDoesNotOpenAContainerOrDefaultKeychainGroup() throws {
+    let invalid: [Any?] = [nil, "", "$(APP_GROUP_IDENTIFIER)", "group.$(APP_BUNDLE_IDENTIFIER)", "group.", "group.invalid value", 42]
+    for value in invalid {
+      let bundle = try configurationBundle(group: value)
+      let fileManager = AppGroupFileManager(container: FileManager.default.temporaryDirectory)
+      XCTAssertNil(TopShelfSharedStore.appGroupStore(fileManager: fileManager, bundle: bundle))
+      XCTAssertNil(fileManager.requestedGroup)
+      XCTAssertNil(TopShelfCredentials.query("session", bundle: bundle))
+    }
+  }
+
+  func testBuiltAppAndExtensionUseTheSameExpandedGroup() throws {
+    let app = Bundle.main
+    let identifier = try XCTUnwrap(TopShelfSharedStore.appGroupIdentifier(in: app))
+    let extensionBundle = try XCTUnwrap(Bundle(url: app.bundleURL.appendingPathComponent(
+      "PlugIns/MoviePilot-TV-TopShelf.appex", isDirectory: true)))
+    XCTAssertEqual(TopShelfSharedStore.appGroupIdentifier(in: extensionBundle), identifier)
+    for bundle in [app, extensionBundle] {
+      let query = try XCTUnwrap(TopShelfCredentials.query("session", bundle: bundle))
+      XCTAssertEqual(query[kSecAttrAccessGroup as String] as? String, identifier)
+    }
+  }
+
+  private func configurationBundle(group: Any?) throws -> Bundle {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).bundle", isDirectory: true)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+    var info: [String: Any] = ["CFBundleIdentifier": "test.\(UUID().uuidString)", "CFBundlePackageType": "BNDL"]
+    info["TopShelfAppGroupIdentifier"] = group
+    try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+      .write(to: url.appendingPathComponent("Info.plist"))
+    return try XCTUnwrap(Bundle(url: url))
+  }
+
   func testOlderSnapshotWithTwelveCardsStillPresentsOnlySix() throws {
     let fixture = try StoreFixture()
     defer { fixture.cleanup() }

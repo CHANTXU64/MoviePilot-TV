@@ -95,7 +95,8 @@ https://testflight.apple.com/join/UK3qEnVU
    ```
 2. 使用 Xcode 打开 `MoviePilot-TV.xcodeproj`。
 3. 选择你的真实 Apple TV 设备（需在同一局域网并已配对）。
-4. 为主 App 和 Top Shelf 扩展在 **Signing & Capabilities** 中选择你的开发者账号，并在项目 **Build Settings** 中将 `APP_BUNDLE_IDENTIFIER` 改为唯一标识（例如 `com.yourname.MoviePilotTV`）。主 App 使用此标识，扩展自动使用其 `.TopShelf` 子标识；不要全局覆盖 `PRODUCT_BUNDLE_IDENTIFIER`。
+4. 为主 App 和 Top Shelf 扩展在 **Signing & Capabilities** 中选择自己的同一开发者团队，并在项目 **Build Settings** 中设置 `APP_BUNDLE_IDENTIFIER`（例如 `com.yourname.MoviePilotTV`）。主 App 使用此标识，扩展使用其 `.TopShelf` 子标识。
+   项目级 `APP_GROUP_IDENTIFIER` 默认派生为 `group.$(APP_BUNDLE_IDENTIFIER)`，例如 `group.com.yourname.MoviePilotTV`；两个 target 的 entitlements、共享缓存和共享 Keychain 都使用这个值。确认该 Group 已[注册到自己的团队](https://developer.apple.com/help/account/identifiers/register-an-app-group)，并为两个 App ID 启用对应的 App Groups 授权；Xcode 自动签名可管理这些配置。已有自己团队的 Group 时，只需在项目级覆盖 `APP_GROUP_IDENTIFIER`，不要分别修改 entitlements 或 Swift 常量，也不要全局覆盖 `PRODUCT_BUNDLE_IDENTIFIER`。
 5. 点击 **Run** (或 `Cmd + R`) 编译并安装。
 6. 自动续签 (可选): 免费账号签名的应用有效期通常为 7 天，可使用 [Sideloadly](https://sideloadly.io/) 或项目内的 `scripts/apple-tv-renew.sh` 续签：
    ```sh
@@ -103,9 +104,9 @@ https://testflight.apple.com/join/UK3qEnVU
    BUNDLE_ID="com.yourname.MoviePilotTV" bash scripts/apple-tv-renew.sh --force
    ```
 
-   脚本会把 `BUNDLE_ID` 传给工程的 `APP_BUNDLE_IDENTIFIER`，让主 App 与嵌入的 Top Shelf 扩展保留各自的 Bundle ID。
+   脚本会把 `BUNDLE_ID` 传给工程的 `APP_BUNDLE_IDENTIFIER`，同时派生 App Group。若项目使用了已有的 Group，可通过 `APP_GROUP_IDENTIFIER="group.yourteam.SharedLibrary"` 覆盖，构建和产物定位会沿用同一配置。更换 Group 后需打开 App，重新生成 Top Shelf 内容。
 
-   **注意：** 脚本默认只检查本机 DerivedData 中构建产物的 `embedded.mobileprovision`，不会确认 Apple TV 设备端是否仍安装成功；如果本机构建产物里的签名配置仍未过期，脚本会直接跳过。`--force` 会忽略这个本地未过期检查，直接重新构建并安装到已配对的 Apple TV，适合放进 crontab 定时保活或怀疑设备端安装状态异常时使用。
+   **注意：** 脚本检查本机 DerivedData 中主 App 和所有嵌入扩展的 `embedded.mobileprovision`，不会确认 Apple TV 设备端是否仍安装成功；只有标识正确且全部 profile 存在、可解析、未过期时才跳过。`--force` 会忽略跳过条件并重新构建。安装前会检查全部 profile，以最短剩余有效期验收 `MIN_VALID_SECONDS`（默认 5 天），不满足时失败并停止安装。`CLEAR_PROFILE_CACHE=1` 会备份并移走该 App 及其子标识的本地 profile，保留其他 App 的缓存。
 
    `--force` 只强制执行构建和安装流程，不代表 Xcode/Apple 一定会在旧的 Xcode-managed provisioning profile 过期前签发新的 profile；如果 Apple 仍复用未过期的 profile，应用的实际到期时间不会被提前延长。
 

@@ -9,7 +9,14 @@ nonisolated enum TopShelfSharedStoreError: Error, Equatable {
 }
 
 nonisolated struct TopShelfSharedStore: @unchecked Sendable {
-  static let appGroupIdentifier = "group.org.chantxu.MoviePilot-TV"
+  static func appGroupIdentifier(in bundle: Bundle = .main) -> String? {
+    guard let identifier = bundle.object(forInfoDictionaryKey: "TopShelfAppGroupIdentifier") as? String,
+      identifier.hasPrefix("group."), identifier.count > "group.".count,
+      !identifier.contains("$"),
+      identifier.rangeOfCharacter(from: .whitespacesAndNewlines) == nil
+    else { return nil }
+    return identifier
+  }
 
   typealias DataWriter = @Sendable (Data, URL) throws -> Void
 
@@ -31,9 +38,10 @@ nonisolated struct TopShelfSharedStore: @unchecked Sendable {
   }
 
   static func appGroupStore(
-    fileManager: FileManager = .default
+    fileManager: FileManager = .default, bundle: Bundle = .main
   ) -> TopShelfSharedStore? {
     guard
+      let appGroupIdentifier = appGroupIdentifier(in: bundle),
       let containerURL = fileManager.containerURL(
         forSecurityApplicationGroupIdentifier: appGroupIdentifier
       ),
