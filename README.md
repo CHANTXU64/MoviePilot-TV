@@ -95,13 +95,15 @@ https://testflight.apple.com/join/UK3qEnVU
    ```
 2. 使用 Xcode 打开 `MoviePilot-TV.xcodeproj`。
 3. 选择你的真实 Apple TV 设备（需在同一局域网并已配对）。
-4. 在 **Signing & Capabilities** 中选择你的开发者账号，修改 `Bundle Identifier` 为一个唯一的名称（例如 `com.yourname.MoviePilot-TV`）。
+4. 为主 App 和 Top Shelf 扩展在 **Signing & Capabilities** 中选择你的开发者账号，并在项目 **Build Settings** 中将 `APP_BUNDLE_IDENTIFIER` 改为唯一标识（例如 `com.yourname.MoviePilotTV`）。主 App 使用此标识，扩展自动使用其 `.TopShelf` 子标识；不要全局覆盖 `PRODUCT_BUNDLE_IDENTIFIER`。
 5. 点击 **Run** (或 `Cmd + R`) 编译并安装。
 6. 自动续签 (可选): 免费账号签名的应用有效期通常为 7 天，可使用 [Sideloadly](https://sideloadly.io/) 或项目内的 `scripts/apple-tv-renew.sh` 续签：
    ```sh
    BUNDLE_ID="com.yourname.MoviePilotTV" bash scripts/apple-tv-renew.sh
    BUNDLE_ID="com.yourname.MoviePilotTV" bash scripts/apple-tv-renew.sh --force
    ```
+
+   脚本会把 `BUNDLE_ID` 传给工程的 `APP_BUNDLE_IDENTIFIER`，让主 App 与嵌入的 Top Shelf 扩展保留各自的 Bundle ID。
 
    **注意：** 脚本默认只检查本机 DerivedData 中构建产物的 `embedded.mobileprovision`，不会确认 Apple TV 设备端是否仍安装成功；如果本机构建产物里的签名配置仍未过期，脚本会直接跳过。`--force` 会忽略这个本地未过期检查，直接重新构建并安装到已配对的 Apple TV，适合放进 crontab 定时保活或怀疑设备端安装状态异常时使用。
 

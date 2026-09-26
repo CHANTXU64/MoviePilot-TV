@@ -2,17 +2,12 @@ import Foundation
 import TVServices
 
 final class ContentProvider: TVTopShelfContentProvider {
-  override func loadTopShelfContent(
-    completionHandler: @escaping @Sendable ((any TVTopShelfContent)?) -> Void
-  ) {
-    Task {
-      guard let store = TopShelfSharedStore.appGroupStore() else {
-        completionHandler(nil)
-        return
-      }
-      try? await TopShelfRefreshClient(store: store).refresh()
-      completionHandler(Self.content(from: store))
+  nonisolated(nonsending) override func loadTopShelfContent() async -> (any TVTopShelfContent)? {
+    guard let store = TopShelfSharedStore.appGroupStore() else {
+      return nil
     }
+    try? await TopShelfRefreshClient(store: store).refresh()
+    return Self.content(from: store)
   }
 
   private static func content(from store: TopShelfSharedStore) -> (any TVTopShelfContent)? {

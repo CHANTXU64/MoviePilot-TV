@@ -136,6 +136,15 @@ xcodebuild test \
   -skipPackagePluginValidation
 ```
 
+续签脚本与 Bundle ID 配置变更还应运行以下回归（CI 同步执行；真实 Xcode 环境会检查 Debug/Release 的 target 构建设置）：
+
+```bash
+bash -n scripts/apple-tv-renew.sh
+python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+```
+
+该回归包含本地命令替身和构建设置检查，不代表真实签名或设备安装验收。
+
 本机测试默认串行运行。不要移除 `-parallel-testing-enabled NO` 和 `-maximum-concurrent-test-simulator-destinations 1`，否则 XCTest 可能启动多个 `Clone N of Apple TV` 模拟器并并行执行不同测试套件。真实后端兼容测试尤其应串行执行，方便控制副作用套件的执行顺序和排查失败来源。
 
 真实后端兼容测试在 `Testing started` 后可能数分钟没有增量输出，尤其是图片巡检会实际扫描 TV 页面入口、下载图片并用 tvOS 解码。不要因为短时间无输出就判断 `xcodebuild test` 卡死；至少等待单个用例的合理超时窗口，或读取 `.xcresult` 中的测试摘要和失败详情后再下结论。
