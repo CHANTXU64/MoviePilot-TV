@@ -210,6 +210,31 @@ extension SystemSessionBehaviorTests {
     XCTAssertEqual(UserDefaults.standard.string(forKey: "loginDraft.v1"), leftoverDraft)
   }
 
+  func testIsolatedTestingSessionDoesNotPersistFixtureServerURL() {
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { snapshot.restore(to: sharedService) }
+
+    UserDefaults.standard.set("https://user-server.local/mp", forKey: "serverURL")
+    let isolated = APIService.isolatedTestingInstance()
+    isolated.replaceSessionForTesting(
+      baseURL: "http://shelf.local/mp", token: nil, currentUser: nil)
+
+    XCTAssertEqual(isolated.baseURL, "http://shelf.local/mp")
+    XCTAssertEqual(
+      UserDefaults.standard.string(forKey: "serverURL"), "https://user-server.local/mp")
+    isolated.setStoredCredentialsForTesting(username: "test-user", password: "test-password")
+    XCTAssertEqual(
+      UserDefaults.standard.string(forKey: "serverURL"), "https://user-server.local/mp")
+
+    UserDefaults.standard.removeObject(forKey: "serverURL")
+    isolated.replaceSessionForTesting(
+      baseURL: "http://shelf.local/mp", token: nil, currentUser: nil)
+    XCTAssertNil(UserDefaults.standard.string(forKey: "serverURL"))
+    isolated.setStoredCredentialsForTesting(username: nil, password: nil)
+    XCTAssertNil(UserDefaults.standard.string(forKey: "serverURL"))
+  }
+
   func testReplaceSessionForTestingClearsInMemoryLoginDraftLoadedFromDefaults() {
     let sharedService = APIService.shared
     let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)

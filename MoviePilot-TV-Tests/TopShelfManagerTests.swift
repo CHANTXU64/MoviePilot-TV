@@ -129,6 +129,23 @@ final class TopShelfManagerTests: XCTestCase {
     XCTAssertNil(try fixture.store.loadState()?.snapshot)
   }
 
+  func testFixtureRestoresPersistentSessionAfterIsolatedLogout() throws {
+    let previous = APIServicePersistenceSnapshot.capture()
+    defer { previous.restore() }
+    let savedServerURL = "https://user-server.local/mp"
+    let savedMarker = Data(#"{"revision":23,"storage":"tombstone"}"#.utf8)
+    UserDefaults.standard.set(savedServerURL, forKey: "serverURL")
+    UserDefaults.standard.set(savedMarker, forKey: "sessionMarker.v2")
+
+    let fixture = try ManagerFixture()
+    let service = makeService(userID: 822)
+    service.logout()
+    fixture.cleanup()
+
+    XCTAssertEqual(UserDefaults.standard.string(forKey: "serverURL"), savedServerURL)
+    XCTAssertEqual(UserDefaults.standard.data(forKey: "sessionMarker.v2"), savedMarker)
+  }
+
   func testPartialImageFailurePublishesOnlyDisplayableItems() async throws {
     let fixture = try ManagerFixture()
     defer { fixture.cleanup() }
@@ -919,13 +936,16 @@ private actor AsyncRecommendationGate {
   }
 }
 
+@MainActor
 private struct ManagerFixture {
   let containerURL: URL
   let store: TopShelfSharedStore
   let defaults: UserDefaults
+  private let persistence: APIServicePersistenceSnapshot
   private let suiteName: String
 
   init() throws {
+    persistence = APIServicePersistenceSnapshot.capture()
     containerURL = FileManager.default.temporaryDirectory
       .appendingPathComponent("TopShelfManagerTests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: containerURL, withIntermediateDirectories: true)
@@ -943,5 +963,6 @@ private struct ManagerFixture {
   func cleanup() {
     try? FileManager.default.removeItem(at: containerURL)
     defaults.removePersistentDomain(forName: suiteName)
+    persistence.restore()
   }
 }

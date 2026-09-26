@@ -81,6 +81,10 @@ final class SSEStreamTests: XCTestCase {
   }
 
   func testProgressStreamSendsSessionResourceCookie() async throws {
+    let persistence = APIServicePersistenceSnapshot.capture()
+    defer { persistence.restore() }
+    let savedServerURL = "https://user-server.local/mp"
+    UserDefaults.standard.set(savedServerURL, forKey: "serverURL")
     let service = APIService.isolatedTestingInstance()
     let cookie = try XCTUnwrap(
       HTTPCookie(properties: [
@@ -91,15 +95,13 @@ final class SSEStreamTests: XCTestCase {
         .secure: "TRUE",
       ])
     )
-    service.replaceSession(
+    service.replaceSessionForTesting(
       baseURL: "https://sse-stream-tests.local",
       token: "sse-test-token",
       currentUser: nil,
-      username: nil,
-      password: nil,
-      persist: false,
       cookies: [cookie]
     )
+    XCTAssertEqual(UserDefaults.standard.string(forKey: "serverURL"), savedServerURL)
 
     var events: [SearchStreamEvent] = []
     for try await event in service.progressStream(progressKey: "progress-cookie") {

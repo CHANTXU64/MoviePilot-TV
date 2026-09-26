@@ -197,27 +197,45 @@ extension APIService {
   func replaceSessionForTesting(
     baseURL: String,
     token: String?,
-    currentUser: Token?
+    currentUser: Token?,
+    cookies: [HTTPCookie] = []
   ) {
-    replaceSession(
-      baseURL: baseURL,
-      token: token,
-      currentUser: currentUser,
-      username: nil,
-      password: nil,
-      persist: false
-    )
+    replaceSessionWithoutPersistingServerURL(
+      baseURL: baseURL, token: token, currentUser: currentUser,
+      username: nil, password: nil, cookies: cookies)
     loginDraft = nil
   }
 
   func setStoredCredentialsForTesting(username: String?, password: String?) {
+    replaceSessionWithoutPersistingServerURL(
+      baseURL: baseURL, token: token, currentUser: currentUser,
+      username: username, password: password, cookies: [])
+  }
+
+  private func replaceSessionWithoutPersistingServerURL(
+    baseURL: String,
+    token: String?,
+    currentUser: Token?,
+    username: String?,
+    password: String?,
+    cookies: [HTTPCookie]
+  ) {
+    let storedServerURL = UserDefaults.standard.string(forKey: "serverURL")
+    defer {
+      if let storedServerURL {
+        UserDefaults.standard.set(storedServerURL, forKey: "serverURL")
+      } else {
+        UserDefaults.standard.removeObject(forKey: "serverURL")
+      }
+    }
     replaceSession(
       baseURL: baseURL,
       token: token,
       currentUser: currentUser,
       username: username,
       password: password,
-      persist: false
+      persist: false,
+      cookies: cookies
     )
   }
 

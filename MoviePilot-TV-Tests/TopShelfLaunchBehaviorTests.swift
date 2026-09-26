@@ -6,8 +6,11 @@ import XCTest
 
 @MainActor
 final class TopShelfLaunchBehaviorTests: XCTestCase {
+  private var persistence: APIServicePersistenceSnapshot?
+
   override func setUp() async throws {
     try await super.setUp()
+    persistence = APIServicePersistenceSnapshot.capture()
     XCTAssertTrue(APIService.installURLProtocolForTesting(TopShelfLaunchURLProtocol.self))
     TopShelfLaunchURLProtocol.reset()
   }
@@ -15,6 +18,12 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
   override func tearDown() async throws {
     TopShelfLaunchURLProtocol.reset()
     APIService.removeURLProtocolForTesting(TopShelfLaunchURLProtocol.self)
+    if let persistence {
+      persistence.restore()
+      XCTAssertEqual(UserDefaults.standard.string(forKey: "serverURL"), persistence.serverURL)
+      XCTAssertEqual(UserDefaults.standard.data(forKey: "sessionMarker.v2"), persistence.marker)
+    }
+    persistence = nil
     try await super.tearDown()
   }
 
