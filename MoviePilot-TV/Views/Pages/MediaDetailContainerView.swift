@@ -1,6 +1,13 @@
 import Kingfisher
 import SwiftUI
 
+nonisolated enum MediaDetailPresentationStyle: Hashable {
+  case standard
+  case direct
+
+  var usesLoadingTransition: Bool { self == .standard }
+}
+
 /// 媒体详情加载占位视图（共享组件）
 /// 用于 MediaDetailContainerView 的加载状态遮罩
 /// 海报缩放进入屏幕中央 + 标题/元数据/加载指示器
@@ -191,6 +198,9 @@ struct MediaDetailContainerView: View {
   let routeID: UUID
   let loadingPosterURL: URL?
   @ObservedObject var imageLifecycle: PageImageLifecycle
+  let presentationStyle: MediaDetailPresentationStyle
+  let allowsRequests: Bool
+  let onInitialContentReady: () -> Void
 
   /// 预加载任务：在 init 中立即获取/创建，确保首帧就有数据
   /// 非 Optional，消除 if let 条件分支导致的视图结构变化
@@ -201,12 +211,18 @@ struct MediaDetailContainerView: View {
     preloadTask: MediaPreloadTask,
     routeID: UUID,
     imageLifecycle: PageImageLifecycle,
-    loadingPosterURL: URL? = nil
+    loadingPosterURL: URL? = nil,
+    presentationStyle: MediaDetailPresentationStyle = .standard,
+    allowsRequests: Bool = true,
+    onInitialContentReady: @escaping () -> Void = {}
   ) {
     self.media = media
     self.routeID = routeID
     self.loadingPosterURL = loadingPosterURL
     self.imageLifecycle = imageLifecycle
+    self.presentationStyle = presentationStyle
+    self.allowsRequests = allowsRequests
+    self.onInitialContentReady = onInitialContentReady
     // task 由导航 entry 在 Push 时取得；转场重求值不能创建无 owner task。
     preloadTask.cancelImageWarm()
     _preloadTask = State(wrappedValue: preloadTask)
@@ -239,7 +255,10 @@ struct MediaDetailContainerView: View {
       preloadTask: preloadTask,
       routeID: routeID,
       imageLifecycle: imageLifecycle,
-      loadingPosterURL: loadingPosterURL
+      loadingPosterURL: loadingPosterURL,
+      presentationStyle: presentationStyle,
+      allowsRequests: allowsRequests,
+      onInitialContentReady: onInitialContentReady
     )
   }
 }
@@ -253,6 +272,9 @@ private struct MediaDetailContainerContent: View {
   @ObservedObject var preloadTask: MediaPreloadTask
   let routeID: UUID
   @ObservedObject var imageLifecycle: PageImageLifecycle
+  let presentationStyle: MediaDetailPresentationStyle
+  let allowsRequests: Bool
+  let onInitialContentReady: () -> Void
 
   /// 第二页首行内容是否已就绪（由 MediaDetailView 回写）
   @State private var isContentReady = false
@@ -271,12 +293,18 @@ private struct MediaDetailContainerContent: View {
     preloadTask: MediaPreloadTask,
     routeID: UUID,
     imageLifecycle: PageImageLifecycle,
-    loadingPosterURL transitionPosterURL: URL?
+    loadingPosterURL transitionPosterURL: URL?,
+    presentationStyle: MediaDetailPresentationStyle,
+    allowsRequests: Bool,
+    onInitialContentReady: @escaping () -> Void
   ) {
     self.media = media
     self.preloadTask = preloadTask
     self.routeID = routeID
     self.imageLifecycle = imageLifecycle
+    self.presentationStyle = presentationStyle
+    self.allowsRequests = allowsRequests
+    self.onInitialContentReady = onInitialContentReady
     // 在 init 中判断，确保第一帧 isReady 就正确
     _wasPreloaded = State(initialValue: preloadTask.isDetailReady)
     _loadingPosterURL = State(
@@ -321,44 +349,58 @@ private struct MediaDetailContainerContent: View {
         isContentReady: $isContentReady,
         routeID: routeID,
         imageLifecycle: imageLifecycle,
-        loadingPosterURL: loadingPosterURL
+        loadingPosterURL: loadingPosterURL,
+        presentationStyle: presentationStyle,
+        allowsRequests: allowsRequests
       )
 
-      // Loading 遮罩层 — 始终存在于视图树中，通过 opacity 控制显隐
-      MediaLoadingView(
-        title: media.cleanedTitle ?? media.title,
-        posterUrl: loadingPosterURL,
-        type: media.type,
-        year: media.year,
-        rating: media.vote_average,
-        overview: media.overview,
-        isAlreadyLoaded: wasPreloaded,
-        loadsImage: keepsLoadingPosterImage && imageLifecycle.keepsActivePageImages
-      )
-      .opacity(isReady ? 0 : 1)
-      .allowsHitTesting(!isReady)
-      .accessibilityHidden(isReady)
+      if presentationStyle.usesLoadingTransition {
+        // Loading 遮罩层 — 始终存在于视图树中，通过 opacity 控制显隐
+        MediaLoadingView(
+          title: media.cleanedTitle ?? media.title,
+          posterUrl: loadingPosterURL,
+          type: media.type,
+          year: media.year,
+          rating: media.vote_average,
+          overview: media.overview,
+          isAlreadyLoaded: wasPreloaded,
+          loadsImage: keepsLoadingPosterImage && imageLifecycle.keepsActivePageImages
+        )
+        .opacity(isReady ? 0 : 1)
+        .allowsHitTesting(!isReady)
+        .accessibilityHidden(isReady)
+      }
     }
-    .animation(.easeInOut(duration: 0.3), value: isReady)
+    .animation(presentationStyle.usesLoadingTransition ? .easeInOut(duration: 0.3) : nil, value: isReady)
     .onChange(of: isReady) { _, isReady in
+      guard presentationStyle.usesLoadingTransition else { return }
       updateLoadingPosterRetention(isReady: isReady)
     }
     .onAppear {
       // 最短展示计时器（仅在需要加载时生效）
-      if !wasPreloaded {
+      if presentationStyle.usesLoadingTransition, !wasPreloaded {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
           withAnimation(.easeInOut(duration: 0.3)) {
             minTimeElapsed = true
           }
         }
       }
+      reportInitialContentReady()
     }
+    .onChange(of: preloadTask.fullDetail) { _, _ in reportInitialContentReady() }
+    .onChange(of: preloadTask.isDetailFailed) { _, _ in reportInitialContentReady() }
     .task(id: tmdbPreloadTarget?.id) {
-      guard let target = tmdbPreloadTarget else { return }
+      guard allowsRequests, let target = tmdbPreloadTarget else { return }
       APIService.shared.mediaPreloader.preloadAuxiliary(
         for: target,
         owner: routeID
       )
+    }
+  }
+
+  private func reportInitialContentReady() {
+    if preloadTask.fullDetail != nil || preloadTask.isDetailFailed {
+      onInitialContentReady()
     }
   }
 

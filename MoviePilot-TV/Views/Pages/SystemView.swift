@@ -17,9 +17,11 @@ struct SystemView: View {
 
   private let isSelected: Bool
 
-  @StateObject private var viewModel = SystemViewModel()
-  @StateObject private var recommendViewModel = RecommendViewModel(selectShelf: false)
-  @ObservedObject private var apiService = APIService.shared
+  @StateObject private var viewModel: SystemViewModel
+  @StateObject private var recommendViewModel: RecommendViewModel
+  @StateObject private var topShelfExplore: ExploreViewModel
+  @ObservedObject private var apiService: APIService
+  @EnvironmentObject private var topShelfManager: TopShelfManager
   @State private var showAppInfo = false
   @State private var selectedChangelogEntry: AppChangelogEntry?
   @State private var updateNotice: AppChangelogEntry?
@@ -30,8 +32,16 @@ struct SystemView: View {
   @State private var navigationRevision = 0
   @FocusState private var focusedItem: SystemSettingsFocus?
 
-  init(isSelected: Bool = true) {
+  init(isSelected: Bool = true, apiService: APIService = .shared, initialPage: SystemSettingsPage = .root) {
     self.isSelected = isSelected
+    self.apiService = apiService
+    _topShelfExplore = StateObject(wrappedValue: ExploreViewModel(apiService: apiService, loadsResults: false))
+    _viewModel = StateObject(wrappedValue: SystemViewModel(apiService: apiService))
+    _recommendViewModel = StateObject(wrappedValue: RecommendViewModel(selectShelf: false, apiService: apiService))
+    let pages: [SystemSettingsPage] = initialPage == .root ? [] : [initialPage]
+    _route = State(initialValue: pages)
+    _displayedRoute = State(initialValue: pages)
+    _pageOffsetDepth = State(initialValue: pages.count)
   }
 
   private var canConfigureSubscriptions: Bool {
@@ -100,6 +110,12 @@ struct SystemView: View {
       viewModel.checkKeychainStatus()
       refreshFilterRulesForEntryIfNeeded()
       presentUpdateNoticeIfNeeded()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: apiService)) { _ in
+      showAppInfo = false
+      selectedChangelogEntry = nil
+      updateNotice = nil
+      showLogoutConfirmation = false
     }
     .onChange(of: isSelected) { _, selected in
       guard selected else { return }
@@ -188,6 +204,16 @@ struct SystemView: View {
                 onSelect: { viewModel.selectedSoftFilterRuleId = $0 }
               )
             }
+          case .topShelfSelection:
+            if canConfigureRecommendations { topShelfSelectionPage }
+          case .topShelfRecommendations:
+            if canConfigureRecommendations { topShelfRecommendationsPage }
+          case .topShelfExplore:
+            if canConfigureRecommendations { topShelfExplorePage }
+          case .topShelfExploreSources:
+            if canConfigureRecommendations { topShelfExploreSourcesPage }
+          case .topShelfExploreField(let id):
+            if canConfigureRecommendations { topShelfExploreFieldPage(id) }
           case .recommendation:
             if canConfigureRecommendations {
               recommendationPage
@@ -244,6 +270,7 @@ struct SystemView: View {
           }
           .focused($focusedItem, equals: .recommendation)
         }
+        topShelfSettings
       }
 
       if canConfigureRecommendations {
@@ -498,6 +525,138 @@ struct SystemView: View {
     }
   }
 
+  private var topShelfSettings: some View {
+    section("Apple TV 主屏") {
+      Button { push(.topShelfSelection) } label: {
+        row("主屏显示内容", value: topShelfManager.selection?.title ?? "不显示", showsDisclosure: true)
+      }
+      .focused($focusedItem, equals: .topShelfRecommendation)
+    }
+  }
+
+  private var topShelfSelectionPage: some View {
+    section(nil) {
+      Button { topShelfManager.select(nil) } label: {
+        row("不显示", value: topShelfManager.selection == nil ? "已选择" : nil)
+      }
+      .focused($focusedItem, equals: .topShelfDisabled)
+      Button { push(.topShelfRecommendations) } label: {
+        row("推荐", value: topShelfManager.selection?.exploration == nil ? topShelfManager.selection?.title : nil,
+          showsDisclosure: true)
+      }
+      .focused($focusedItem, equals: .topShelfModeRecommendation)
+      Button {
+        topShelfExplore.restoreConfiguration(topShelfManager.savedExploration ?? ExploreConfiguration())
+        push(.topShelfExplore)
+      } label: {
+        row("探索", value: topShelfManager.selection?.exploration?.selectedSource.title, showsDisclosure: true)
+      }
+      .focused($focusedItem, equals: .topShelfModeExplore)
+    }
+  }
+
+  private var topShelfRecommendationsPage: some View {
+    section(nil) {
+      ForEach(topShelfSelectionOptions) { selection in
+        Button { topShelfManager.select(selection) } label: {
+          row(selection.title, value: topShelfManager.selection == selection ? "已选择" : nil)
+        }
+        .focused($focusedItem, equals: .topShelfSource(selection.shelfID))
+      }
+    }
+    .task { await recommendViewModel.refreshSources(selectShelf: false) }
+  }
+
+  private var topShelfExplorePage: some View {
+    section(nil) {
+      Button { push(.topShelfExploreSources) } label: {
+        row("数据源", value: topShelfExplore.selectedSource.title, showsDisclosure: true)
+      }
+      .focused($focusedItem, equals: .topShelfExploreSource)
+      ForEach(topShelfExplore.settingsFields) { field in
+        switch field.kind {
+        case .choice, .multiChoice:
+          Button { push(.topShelfExploreField(field.id)) } label: {
+            row(field.title, value: field.summary, showsDisclosure: true)
+          }
+          .focused($focusedItem, equals: .topShelfExploreField(field.id))
+        case .text, .number:
+          TextField(field.title, text: Binding(
+            get: { field.value.wrappedValue.queryString ?? "" },
+            set: { field.value.wrappedValue = $0.isEmpty ? .null
+              : (field.kind == .number ? Int($0).map(JSONValue.int) ?? .string($0) : .string($0)) }))
+            .focused($focusedItem, equals: .topShelfExploreField(field.id))
+        case .toggle:
+          Toggle(field.title, isOn: Binding(
+            get: { field.value.wrappedValue == .bool(true) },
+            set: { field.value.wrappedValue = .bool($0) }))
+            .focused($focusedItem, equals: .topShelfExploreField(field.id))
+        }
+      }
+      Button {
+        topShelfExplore.restoreConfiguration(ExploreConfiguration(source: topShelfExplore.selectedSource))
+      } label: { row("重置筛选") }
+        .focused($focusedItem, equals: .topShelfExploreReset)
+      Button {
+        topShelfManager.select(TopShelfSelection(exploration: topShelfExplore.configuration))
+        pop()
+      } label: { row("保存") }
+        .disabled(topShelfExplore.selectedSource == .subscriptionShare && !canConfigureSubscriptions)
+        .focused($focusedItem, equals: .topShelfExploreSave)
+    }
+  }
+
+  private var topShelfExploreSourcesPage: some View {
+    section(nil) {
+      ForEach(topShelfExplore.availableSources) { source in
+        Button {
+          if topShelfExplore.selectedSource.id != source.id {
+            topShelfExplore.restoreConfiguration(ExploreConfiguration(source: source))
+          }
+          pop()
+        } label: {
+          row(source.title, value: topShelfExplore.selectedSource.id == source.id ? "已选择" : nil)
+        }
+        .disabled(source == .subscriptionShare && !canConfigureSubscriptions)
+        .focused($focusedItem, equals: .topShelfExploreSourceOption(source.id))
+      }
+    }
+    .task { await topShelfExplore.refreshSources() }
+  }
+
+  @ViewBuilder
+  private func topShelfExploreFieldPage(_ id: String) -> some View {
+    if let field = topShelfExplore.settingsFields.first(where: { $0.id == id }) {
+      section(field.title) {
+        if field.kind == .multiChoice {
+          Button { field.value.wrappedValue = .array([]) } label: {
+            row("全部", value: field.value.wrappedValue.arrayValue?.isEmpty != false ? "已选择" : nil)
+          }
+          .focused($focusedItem, equals: .topShelfExploreOption(.null))
+        } else if !field.options.contains(where: { $0.value == field.value.wrappedValue }) {
+          Button {} label: { row(field.summary, value: "已选择") }
+            .focused($focusedItem, equals: .topShelfExploreOption(field.value.wrappedValue))
+        }
+        ForEach(field.options) { option in
+          let selected = field.kind == .multiChoice
+            ? field.value.wrappedValue.arrayValue?.contains(option.value) == true
+            : field.value.wrappedValue == option.value
+          Button {
+            if field.kind == .multiChoice {
+              var values = field.value.wrappedValue.arrayValue ?? []
+              if selected { values.removeAll { $0 == option.value } } else { values.append(option.value) }
+              field.value.wrappedValue = .array(values)
+            } else {
+              field.value.wrappedValue = option.value
+              pop()
+            }
+          } label: { row(option.title, value: selected ? "已选择" : nil) }
+            .focused($focusedItem, equals: .topShelfExploreOption(option.value))
+        }
+      }
+    }
+  }
+
   private var recommendationPage: some View {
     section(nil) {
       ForEach(recommendViewModel.shelves) { shelf in
@@ -519,6 +678,13 @@ struct SystemView: View {
     .task {
       await recommendViewModel.refreshSources(selectShelf: false)
     }
+  }
+
+  private var topShelfSelectionOptions: [TopShelfSelection] {
+    TopShelfSelectionPolicy.options(
+      saved: topShelfManager.selection,
+      shelves: recommendViewModel.shelves
+    )
   }
 
   private var siteSelectionPage: some View {
@@ -703,7 +869,16 @@ struct SystemView: View {
 
   private func focusAfterPop(from poppedPage: SystemSettingsPage, to page: SystemSettingsPage) {
     if page != .root {
-      focusFirstItem(on: page)
+      let target: SystemSettingsFocus?
+      switch poppedPage {
+      case .topShelfExploreSources: target = .topShelfExploreSource
+      case .topShelfExploreField(let id): target = .topShelfExploreField(id)
+      case .topShelfExplore: target = .topShelfModeExplore
+      case .topShelfRecommendations: target = .topShelfModeRecommendation
+      default: target = nil
+      }
+      if let target { DispatchQueue.main.async { focusedItem = target } }
+      else { focusFirstItem(on: page) }
       return
     }
 
@@ -721,6 +896,9 @@ struct SystemView: View {
       target = .hardFilter
     case .softFilter:
       target = .softFilter
+    case .topShelfSelection, .topShelfRecommendations, .topShelfExplore,
+      .topShelfExploreSources, .topShelfExploreField:
+      target = .topShelfRecommendation
     case .recommendation:
       target = .recommendation
     }
@@ -747,8 +925,22 @@ struct SystemView: View {
       target = .hardFilterNone
     case .softFilter:
       target = .softFilterNone
+    case .topShelfSelection:
+      target = topShelfManager.selection == nil ? .topShelfDisabled
+        : (topShelfManager.selection?.exploration == nil ? .topShelfModeRecommendation : .topShelfModeExplore)
+    case .topShelfRecommendations:
+      target = topShelfManager.selection.flatMap { $0.exploration == nil ? .topShelfSource($0.shelfID) : nil }
+        ?? topShelfSelectionOptions.first.map { .topShelfSource($0.shelfID) } ?? .topShelfModeRecommendation
+    case .topShelfExplore:
+      target = .topShelfExploreSource
+    case .topShelfExploreSources:
+      target = .topShelfExploreSourceOption(topShelfExplore.selectedSource.id)
+    case .topShelfExploreField(let id):
+      target = topShelfExplore.settingsFields.first(where: { $0.id == id }).map {
+        .topShelfExploreOption($0.kind == .multiChoice ? .null : $0.value.wrappedValue)
+      } ?? .topShelfExploreSource
     case .recommendation:
-      target = .recommendationShelf(RecommendViewModel.allShelves[0].id)
+      target = recommendViewModel.shelves.first.map { .recommendationShelf($0.id) } ?? .recommendation
     }
 
     DispatchQueue.main.async {
@@ -761,7 +953,8 @@ struct SystemView: View {
     case .softFilter:
       return .softFilterNone
     case .root, .connection, .changelog, .mediaSourceSelection, .siteSelection, .hardFilter,
-      .recommendation, .none:
+      .recommendation, .topShelfSelection, .topShelfRecommendations, .topShelfExplore,
+      .topShelfExploreSources, .topShelfExploreField, .none:
       return .hardFilterNone
     }
   }
@@ -771,7 +964,8 @@ struct SystemView: View {
     case .softFilter:
       return .softFilterRule(ruleId)
     case .root, .connection, .changelog, .mediaSourceSelection, .siteSelection, .hardFilter,
-      .recommendation, .none:
+      .recommendation, .topShelfSelection, .topShelfRecommendations, .topShelfExplore,
+      .topShelfExploreSources, .topShelfExploreField, .none:
       return .hardFilterRule(ruleId)
     }
   }
@@ -839,6 +1033,8 @@ struct SystemView: View {
         return "在资源搜索结果中，将不符合要求的资源灰置于结果末尾。（只影响 TV 端）"
       case .recommendation:
         return "设置推荐页面显示的内容。（只影响 TV 端）"
+      case .topShelfRecommendation:
+        return "选择 Apple TV 主屏幕显示的内容。"
       case .connection:
         return "查看当前登录状态、服务器地址和后端连接状态。"
       case .appInfo:
@@ -847,7 +1043,10 @@ struct SystemView: View {
         return "查看 MoviePilot TV 各版本的更新摘要、完整改动和后端兼容版本。"
       case .allSites, .site, .defaultMediaSource, .mediaSource, .relogin, .logout,
         .hardFilterNone, .softFilterNone, .hardFilterRule, .softFilterRule,
-        .recommendationShelf, .changelogVersion:
+        .recommendationShelf, .topShelfDisabled, .topShelfSource, .changelogVersion,
+        .topShelfModeRecommendation, .topShelfModeExplore, .topShelfExploreSource,
+        .topShelfExploreField, .topShelfExploreOption, .topShelfExploreSourceOption,
+        .topShelfExploreSave, .topShelfExploreReset:
         break
       }
     }
@@ -878,6 +1077,10 @@ struct SystemView: View {
       return "在资源搜索结果中，隐藏不符合要求的资源。（只影响 TV 端）"
     case .softFilter:
       return "在资源搜索结果中，将不符合要求的资源灰置于结果末尾。（只影响 TV 端）"
+    case .topShelfSelection, .topShelfRecommendations:
+      return "选择 Apple TV 主屏幕显示的内容。"
+    case .topShelfExplore, .topShelfExploreSources, .topShelfExploreField:
+      return "按这套探索条件更新主屏内容。保存后生效，不影响探索页的筛选。"
     case .recommendation:
       return "设置推荐页面显示的内容。（只影响 TV 端）"
     }
@@ -925,7 +1128,7 @@ struct SystemView: View {
 
 }
 
-private enum SystemSettingsPage: Hashable {
+enum SystemSettingsPage: Hashable {
   case root
   case connection
   case changelog
@@ -934,6 +1137,11 @@ private enum SystemSettingsPage: Hashable {
   case hardFilter
   case softFilter
   case recommendation
+  case topShelfSelection
+  case topShelfRecommendations
+  case topShelfExplore
+  case topShelfExploreSources
+  case topShelfExploreField(String)
 }
 
 private enum SystemSettingsFocus: Hashable {
@@ -959,6 +1167,17 @@ private enum SystemSettingsFocus: Hashable {
   case hardFilterRule(String)
   case softFilterRule(String)
   case recommendation
+  case topShelfRecommendation
+  case topShelfDisabled
+  case topShelfModeRecommendation
+  case topShelfModeExplore
+  case topShelfExploreSource
+  case topShelfExploreField(String)
+  case topShelfExploreOption(JSONValue)
+  case topShelfExploreSourceOption(String)
+  case topShelfExploreSave
+  case topShelfExploreReset
+  case topShelfSource(String)
   case recommendationShelf(String)
 }
 

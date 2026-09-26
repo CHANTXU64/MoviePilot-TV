@@ -10,7 +10,7 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     XCTAssertTrue(appSource.contains("KingfisherCachePolicy.apply()"))
   }
 
-  func testMediaGridEquatableIdentityIncludesImageConfiguration() throws {
+  func testMediaGridEquatableIdentityIncludesImageConfigurationInSource() throws {
     let gridSource = try source("MoviePilot-TV/Views/Components/MediaGridView.swift")
     XCTAssertTrue(
       gridSource.contains(
@@ -27,7 +27,8 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     XCTAssertTrue(gridSource.contains("lhs.listIdentity == rhs.listIdentity"))
     XCTAssertTrue(gridSource.contains("GridImageDemandContext("))
     XCTAssertFalse(gridSource.contains("loadsImage(at:"))
-    XCTAssertFalse(gridSource.contains("loadsImage: loadsImage"))
+    XCTAssertTrue(gridSource.contains("lhs.loadsImages == rhs.loadsImages"))
+    XCTAssertTrue(gridSource.contains("loadsImage: loadsImages"))
     XCTAssertFalse(gridSource.contains("topRestorationRevision"))
     XCTAssertFalse(
       containsTrimmedLineSequence(
@@ -1011,7 +1012,10 @@ final class DynamicSourceBehaviorTests: XCTestCase {
         viewSource.contains(".navigationDestination(for: ImageNavigationEntry.self)"),
         relativePath
       )
-      XCTAssertTrue(viewSource.contains("ImageNavigationDestination(entry: entry)"), relativePath)
+      XCTAssertNotNil(viewSource.range(
+        of: #"ImageNavigationDestination\(\s*entry: entry[,)]"#,
+        options: .regularExpression
+      ), relativePath)
     }
 
     let destinationSource = try source(

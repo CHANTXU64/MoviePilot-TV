@@ -159,6 +159,14 @@ struct TransferHistoryView: View {
       },
       alignment: .center
     )
+    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
+      itemForInfoSheet = nil
+      viewModel.mutationRetryMessage = nil
+      deleteIntent = nil
+      reorganizeIntent = nil
+      batchDeleteIntent = nil
+      batchReorganizeIntent = nil
+    }
     .sheet(item: $itemForInfoSheet) { item in
       TransferHistoryDetailSheet(item: item, storageDict: viewModel.storageDict)
     }

@@ -115,6 +115,7 @@ struct HomeView: View {
         }
       }
       // 编辑订阅 Sheet
+      .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in selectedSubscribe = nil }
       .sheet(item: $selectedSubscribe) { subscribe in
         SubscribeSheet(subscribe: subscribe)
       }
@@ -530,6 +531,7 @@ private struct SubscribeItemView: View {
         Label("取消订阅", systemImage: "trash")
       }
     }
+    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in showUnsubscribeConfirm = false }
     .alert(SubscriptionCancelConfirmation.title, isPresented: $showUnsubscribeConfirm) {
       Button("取消", role: .cancel) {}
       Button(SubscriptionCancelConfirmation.confirmButtonTitle, role: .destructive) {

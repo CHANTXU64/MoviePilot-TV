@@ -1,6 +1,12 @@
 import Combine
 import SwiftUI
 
+extension Notification.Name {
+  static let imageNavigationPresentationWillReset = Notification.Name(
+    "imageNavigationPresentationWillReset"
+  )
+}
+
 enum PageImagePhase: Equatable {
   case active
   case adjacent
@@ -231,15 +237,21 @@ struct ImageNavigationEntry: Identifiable, Hashable {
   let id: UUID
   let route: ImageNavigationRoute
   let loadingPosterURL: URL?
+  let presentationStyle: MediaDetailPresentationStyle
+  let cachedContent: TopShelfCachedContent?
 
   init(
     id: UUID = UUID(),
     route: ImageNavigationRoute,
-    loadingPosterURL: URL? = nil
+    loadingPosterURL: URL? = nil,
+    presentationStyle: MediaDetailPresentationStyle = .standard,
+    cachedContent: TopShelfCachedContent? = nil
   ) {
     self.id = id
     self.route = route
     self.loadingPosterURL = loadingPosterURL
+    self.presentationStyle = presentationStyle
+    self.cachedContent = cachedContent
   }
 }
 
@@ -267,6 +279,7 @@ final class ImageNavigationCoordinator: ObservableObject {
   private var removedLifecycleCleanupTasks: [UUID: Task<Void, Never>] = [:]
   private var stackForegroundReleaseTask: Task<Void, Never>?
   private var isStackForeground = false
+  private var isRetired = false
   private var retainsImagesForSceneReturn = false
   @Published private(set) var isStackInteractive = false
   private var navigationRevision: UInt = 0
@@ -284,7 +297,9 @@ final class ImageNavigationCoordinator: ObservableObject {
     apiService: APIService = .shared,
     mediaPreloader: MediaPreloader? = nil,
     removedLifecycleRetention: Duration = PresentationTransitionRetention.duration,
-    tabTransitionImageRetention: Duration = PresentationTransitionRetention.duration
+    tabTransitionImageRetention: Duration = PresentationTransitionRetention.duration,
+    initialEntry: ImageNavigationEntry? = nil,
+    startsInitialMediaLoad: Bool = true
   ) {
     self.apiService = apiService
     self.injectedMediaPreloader = mediaPreloader
@@ -293,10 +308,94 @@ final class ImageNavigationCoordinator: ObservableObject {
     rootLifecycle.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &cancellables)
+    NotificationCenter.default.publisher(
+      for: .imageNavigationPresentationWillReset, object: apiService
+    )
+      .sink { [weak self] _ in self?.navigationRevision &+= 1 }
+      .store(in: &cancellables)
+    if let initialEntry {
+      append(initialEntry, startsMediaLoad: startsInitialMediaLoad)
+    }
+  }
+
+  isolated deinit {
+    retire()
+  }
+
+  /// 外部导航接管时立即使旧动作和资源失效，不等待慢任务释放最后一个栈引用。
+  func retire() {
+    guard !isRetired else { return }
+    isRetired = true
+    isStackInteractive = false
+    isStackForeground = false
+    retainsImagesForSceneReturn = false
+    navigationRevision &+= 1
+    stackForegroundReleaseTask?.cancel()
+    stackForegroundReleaseTask = nil
+    removedLifecycleCleanupTasks.values.forEach { $0.cancel() }
+    // 整棵导航树被替换时不会发生 path pop，仍需释放它持有的每个 owner。
+    for entry in entries {
+      if case .media(let media) = entry.route, media.shouldPreloadDetail {
+        mediaPreloader.releaseNavigation(
+          for: media, owner: entry.id, stackID: id, size: UIScreen.main.bounds.size
+        )
+      }
+    }
+    mediaPreloader.releaseStack(id)
+    for lifecycle in [rootLifecycle] + Array(lifecycles.values) {
+      lifecycle.markRemoved()
+      lifecycle.finishRemoval()
+    }
+    entries.removeAll()
+    lifecycles.removeAll()
+    preloadTasks.removeAll()
+    removedLifecycleCleanupTasks.removeAll()
+    cancellables.removeAll()
+    path = NavigationPath()
+  }
+
+  /// 外部打开只清除详情历史，根页及其他 Tab 的页面状态继续保留。
+  func resetDetailHistory() {
+    releaseDetailHistory()
+    path = NavigationPath()
+  }
+
+  private func releaseDetailHistory() {
+    guard !isRetired else { return }
+    navigationRevision &+= 1
+    removedLifecycleCleanupTasks.values.forEach { $0.cancel() }
+    for entry in entries {
+      if case .media(let media) = entry.route, media.shouldPreloadDetail {
+        mediaPreloader.releaseNavigation(for: media, owner: entry.id, stackID: id, size: UIScreen.main.bounds.size)
+      }
+    }
+    mediaPreloader.releaseStack(id)
+    for lifecycle in lifecycles.values {
+      lifecycle.markRemoved()
+      lifecycle.finishRemoval()
+    }
+    entries.removeAll()
+    lifecycles.removeAll()
+    preloadTasks.removeAll()
+    removedLifecycleCleanupTasks.removeAll()
+  }
+
+  func openExternal(_ entry: ImageNavigationEntry, startsMediaLoad: Bool) {
+    guard !isRetired else { return }
+    releaseDetailHistory()
+    prepareEntry(entry, startsMediaLoad: startsMediaLoad)
+    var replacement = NavigationPath()
+    replacement.append(entry)
+    path = replacement
+  }
+
+  func startDeferredMediaLoads() {
+    for entry in entries { preloadTasks[entry.id]?.start() }
   }
 
   /// 测试及非 Tab 容器使用的立即切换入口。
   func setStackForeground(_ isForeground: Bool) {
+    guard !isRetired else { return }
     cancelStackForegroundRelease()
     updateStackInteraction(isForeground)
     applyStackPresentation(
@@ -307,6 +406,7 @@ final class ImageNavigationCoordinator: ObservableObject {
 
   /// Tab 切换先关闭交互并在转场后释放；App 退后台只保留当前选中栈的现有图片。
   func setStackPresentation(isSelected: Bool, scenePhase: ScenePhase) {
+    guard !isRetired else { return }
     let shouldBeInteractive = isSelected && scenePhase == .active
     updateStackInteraction(shouldBeInteractive)
 
@@ -455,21 +555,34 @@ final class ImageNavigationCoordinator: ObservableObject {
     loadingPosterURL: URL? = nil
   ) -> ImageNavigationEntry {
     let entry = ImageNavigationEntry(route: route, loadingPosterURL: loadingPosterURL)
+    append(entry, startsMediaLoad: true)
+    return entry
+  }
+
+  private func append(_ entry: ImageNavigationEntry, startsMediaLoad: Bool) {
+    guard !isRetired else { return }
+    prepareEntry(entry, startsMediaLoad: startsMediaLoad)
+    path.append(entry)
+  }
+
+  private func prepareEntry(_ entry: ImageNavigationEntry, startsMediaLoad: Bool) {
     entries.append(entry)
     lifecycles[entry.id] = PageImageLifecycle(id: entry.id)
 
-    if case .media(let media) = route, media.shouldPreloadDetail,
-      let preloadTask = mediaPreloader.acquireNavigation(for: media, owner: entry.id)
+    if case .media(let media) = entry.route, media.shouldPreloadDetail,
+      let preloadTask = mediaPreloader.acquireNavigation(
+        for: media, owner: entry.id, startImmediately: startsMediaLoad,
+        preparedContent: entry.cachedContent
+      )
     {
       preloadTasks[entry.id] = preloadTask
     }
 
     navigationRevision &+= 1
-    path.append(entry)
-    return entry
   }
 
   private func reconcilePathMutation() {
+    guard !isRetired else { return }
     guard path.count <= entries.count else {
       assertionFailure("导航路径只能通过 ImageNavigationCoordinator.push 修改")
       return
@@ -568,7 +681,7 @@ final class ImageNavigationCoordinator: ObservableObject {
     }
   }
 
-  private func isCurrent(_ source: ImageNavigationSourceToken) -> Bool {
+  func isCurrent(_ source: ImageNavigationSourceToken) -> Bool {
     isStackInteractive
       && source.stackID == id
       && source.revision == navigationRevision

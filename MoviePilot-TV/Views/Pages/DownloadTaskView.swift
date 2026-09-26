@@ -219,6 +219,7 @@ private struct DownloadTaskRow: View {
           .padding(.bottom, -7)  // 微调使进度条紧贴底部
       }
     }
+    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in showingDeleteConfirm = false }
     .alert("将永久删除任务及已下载文件，确认继续？", isPresented: $showingDeleteConfirm) {
       Button("删除", role: .destructive) {
         if let hash = item.hash {

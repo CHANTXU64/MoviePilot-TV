@@ -3,6 +3,20 @@ import XCTest
 @testable import MoviePilot_TV
 
 final class SystemViewDefaultStyleTests: XCTestCase {
+  func testTopShelfSelectionHasIndependentRootSectionInSource() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+    let start = try XCTUnwrap(source.range(of: "private var recommendationPage:"))
+    let end = try XCTUnwrap(source.range(of: "private var topShelfSelectionOptions:"))
+    let recommendationPage = source[start.lowerBound..<end.lowerBound]
+    XCTAssertFalse(recommendationPage.contains("topShelfManager"))
+    XCTAssertFalse(recommendationPage.contains("Picker("))
+    XCTAssertTrue(source.contains("section(\"Apple TV 主屏\")"))
+    XCTAssertTrue(source.contains("\"主屏显示内容\""))
+    let rootStart = try XCTUnwrap(source.range(of: "private var rootPage:"))
+    let rootEnd = try XCTUnwrap(source.range(of: "private var connectionPage:"))
+    XCTAssertTrue(source[rootStart.lowerBound..<rootEnd.lowerBound].contains("topShelfSettings"))
+  }
+
   func testSystemViewDoesNotUsePrivateSettingsImplementation() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
 
@@ -71,8 +85,10 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let contentSource = try Self.source(at: "MoviePilot-TV/Views/ContentView.swift")
     let recommendSource = try Self.source(at: "MoviePilot-TV/Views/Pages/RecommendView.swift")
 
-    XCTAssertTrue(
-      contentSource.contains("RecommendView(isSelected: selectedTab == .recommend)"))
+    XCTAssertNotNil(contentSource.range(
+      of: #"RecommendView\(\s*isSelected: selectedTab == \.recommend[,)]"#,
+      options: .regularExpression
+    ))
     XCTAssertTrue(recommendSource.contains(".task(id: isSelected)"))
     XCTAssertTrue(recommendSource.contains("guard isSelected else { return }"))
     XCTAssertTrue(recommendSource.contains("await viewModel.refreshSources()"))
@@ -731,9 +747,10 @@ final class SystemViewDefaultStyleTests: XCTestCase {
   func testMediaDetailDoesNotLoadBackgroundOnContentPageUntilHero() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
 
-    XCTAssertTrue(
-      source.contains("if isBackgroundMounted && imageLifecycle.keepsActivePageImages {")
-    )
+    XCTAssertNotNil(source.range(
+      of: #"if isBackgroundMounted && imageLifecycle.keepsActivePageImages\s*[{,]"#,
+      options: .regularExpression
+    ))
     XCTAssertFalse(
       source.contains("shouldShowBackground(isMounted: isBackgroundMounted, showingContentPage:")
     )
@@ -769,7 +786,8 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let viewSource = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
     let viewModelSource = try Self.source(at: "MoviePilot-TV/ViewModels/SystemViewModel.swift")
 
-    XCTAssertTrue(viewSource.contains("@ObservedObject private var apiService = APIService.shared"))
+    XCTAssertTrue(viewSource.contains("@ObservedObject private var apiService: APIService"))
+    XCTAssertTrue(viewSource.contains("apiService: APIService = .shared"))
     XCTAssertTrue(viewSource.contains("private var canConfigureSubscriptions: Bool"))
     XCTAssertTrue(viewSource.contains("private var canConfigureSearch: Bool"))
     XCTAssertTrue(viewSource.contains("private var canConfigureCustomFilters: Bool"))

@@ -2,6 +2,8 @@ import SwiftUI
 
 struct ImageNavigationDestination: View {
   let entry: ImageNavigationEntry
+  var allowsRequests = true
+  var onInitialContentReady: () -> Void = {}
   @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
 
   @ViewBuilder
@@ -14,7 +16,11 @@ struct ImageNavigationDestination: View {
           CollectionDetailView(
             title: media.title ?? "合集详情",
             collectionId: collectionID,
-            imageLifecycle: lifecycle
+            imageLifecycle: lifecycle,
+            allowsRequests: allowsRequests,
+            previewPosterURL: entry.loadingPosterURL,
+            preparedItems: entry.cachedContent?.collectionItems,
+            onInitialContentReady: onInitialContentReady
           )
         } else if let preloadTask = navigationCoordinator.preloadTask(for: entry) {
           MediaDetailContainerView(
@@ -22,7 +28,10 @@ struct ImageNavigationDestination: View {
             preloadTask: preloadTask,
             routeID: entry.id,
             imageLifecycle: lifecycle,
-            loadingPosterURL: entry.loadingPosterURL
+            loadingPosterURL: entry.loadingPosterURL,
+            presentationStyle: entry.presentationStyle,
+            allowsRequests: allowsRequests,
+            onInitialContentReady: onInitialContentReady
           )
         } else {
           // 仅可能发生在 Pop 转场已经完成后，绝不为已移除 route 重建无 owner task。

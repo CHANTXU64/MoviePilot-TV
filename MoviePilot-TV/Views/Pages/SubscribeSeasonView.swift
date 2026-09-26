@@ -179,6 +179,7 @@ struct SeasonGridLifecycleContext {
 }
 
 struct SubscribeSeasonContentView: View {
+  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
   @ObservedObject var viewModel: SubscribeSeasonViewModel
   var layout: SeasonLayout = .shelf
   var title: String? = nil
@@ -194,6 +195,21 @@ struct SubscribeSeasonContentView: View {
   @FocusState private var focusedSeasonId: Int?
   @FocusState private var isTopRedirectorFocused: Bool
   @FocusState private var isBottomRedirectorFocused: Bool
+
+  private func performSeasonAction(_ season: TmdbSeason, isSubscribed: Bool) {
+    let source = navigationCoordinator.sourceToken()
+    Task { @MainActor in
+      await Self.performSeasonPrimaryAction(
+        season: season, isSubscribed: isSubscribed,
+        refreshSubscribedState: { seasonNumber in
+          let refreshed = await viewModel.checkSubscriptionStatus(forceRefresh: true)
+          guard refreshed, navigationCoordinator.isCurrent(source) else { return nil }
+          return viewModel.isSeasonSubscribed(seasonNumber)
+        },
+        showUnsubscribeConfirm: { viewModel.showUnsubscribeConfirm = $0 },
+        prepareSubscription: { viewModel.prepareSubscription(seasonNumber: $0) })
+    }
+  }
 
   static func performSeasonPrimaryAction(
     season: TmdbSeason,
@@ -388,6 +404,11 @@ struct SubscribeSeasonContentView: View {
         }
       }
     }
+    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
+      selectedSeasonDetail = nil
+      viewModel.sheetSubscribe = nil
+      viewModel.showUnsubscribeConfirm = nil
+    }
     .sheet(item: $selectedSeasonDetail) { season in
       SeasonDetailSheet(season: season, mediaInfo: viewModel.mediaInfo)
     }
@@ -536,19 +557,7 @@ struct SubscribeSeasonContentView: View {
       ),
       action: {
         guard !isProcessing else { return }
-        Task { @MainActor in
-          await Self.performSeasonPrimaryAction(
-            season: season,
-            isSubscribed: isSubscribed,
-            refreshSubscribedState: { seasonNumber in
-              let didRefresh = await viewModel.checkSubscriptionStatus(forceRefresh: true)
-              guard didRefresh else { return nil }
-              return viewModel.isSeasonSubscribed(seasonNumber)
-            },
-            showUnsubscribeConfirm: { viewModel.showUnsubscribeConfirm = $0 },
-            prepareSubscription: { viewModel.prepareSubscription(seasonNumber: $0) }
-          )
-        }
+        performSeasonAction(season, isSubscribed: isSubscribed)
       },
       onFocus: onFocus
     )
@@ -557,37 +566,13 @@ struct SubscribeSeasonContentView: View {
       if isSubscribed {
         Button(role: .destructive) {
           guard !isProcessing else { return }
-          Task { @MainActor in
-            await Self.performSeasonPrimaryAction(
-              season: season,
-              isSubscribed: true,
-              refreshSubscribedState: { seasonNumber in
-                let didRefresh = await viewModel.checkSubscriptionStatus(forceRefresh: true)
-                guard didRefresh else { return nil }
-                return viewModel.isSeasonSubscribed(seasonNumber)
-              },
-              showUnsubscribeConfirm: { viewModel.showUnsubscribeConfirm = $0 },
-              prepareSubscription: { viewModel.prepareSubscription(seasonNumber: $0) }
-            )
-          }
+          performSeasonAction(season, isSubscribed: true)
         } label: {
           Label("取消订阅", systemImage: "minus.circle")
         }
       } else {
         Button {
-          Task { @MainActor in
-            await Self.performSeasonPrimaryAction(
-              season: season,
-              isSubscribed: false,
-              refreshSubscribedState: { seasonNumber in
-                let didRefresh = await viewModel.checkSubscriptionStatus(forceRefresh: true)
-                guard didRefresh else { return nil }
-                return viewModel.isSeasonSubscribed(seasonNumber)
-              },
-              showUnsubscribeConfirm: { viewModel.showUnsubscribeConfirm = $0 },
-              prepareSubscription: { viewModel.prepareSubscription(seasonNumber: $0) }
-            )
-          }
+          performSeasonAction(season, isSubscribed: false)
         } label: {
           Label("订阅", systemImage: "plus.circle")
         }
