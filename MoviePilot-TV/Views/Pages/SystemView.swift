@@ -252,6 +252,10 @@ struct SystemView: View {
 
   private var rootPage: some View {
     VStack(spacing: 38) {
+      if canConfigureRecommendations {
+        topShelfSettings
+      }
+
       if canConfigureSubscriptions {
         section("订阅") {
           Toggle(
@@ -275,7 +279,6 @@ struct SystemView: View {
           }
           .focused($focusedItem, equals: .recommendation)
         }
-        topShelfSettings
       }
 
       if canConfigureRecommendations {

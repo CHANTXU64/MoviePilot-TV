@@ -17,6 +17,19 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source[rootStart.lowerBound..<rootEnd.lowerBound].contains("topShelfSettings"))
   }
 
+  func testTopShelfSettingsLeadsRootSettingsSectionsInSource() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+    let rootStart = try XCTUnwrap(source.range(of: "private var rootPage:"))
+    let rootEnd = try XCTUnwrap(source.range(of: "private var connectionPage:"))
+    let rootPage = source[rootStart.lowerBound..<rootEnd.lowerBound]
+    let topShelf = try XCTUnwrap(rootPage.range(of: "topShelfSettings"))
+    let subscriptions = try XCTUnwrap(rootPage.range(of: "if canConfigureSubscriptions"))
+    let recommendation = try XCTUnwrap(rootPage.range(of: "section(\"推荐页\")"))
+
+    XCTAssertLessThan(topShelf.lowerBound, subscriptions.lowerBound)
+    XCTAssertLessThan(topShelf.lowerBound, recommendation.lowerBound)
+  }
+
   func testSystemViewDoesNotUsePrivateSettingsImplementation() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
 
