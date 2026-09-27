@@ -23,6 +23,9 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
     private(set) var result: Result<Value, Error>?
     private var waiters: [UUID: CheckedContinuation<Result<Value, Error>, Never>] = [:]
 
+    // 仅需 ARC 释放；显式非隔离析构避开旧版 Swift 的泛型析构优化缺陷。
+    nonisolated deinit {}
+
     var isFinished: Bool { result != nil }
 
     init(generation: UInt64) {
@@ -71,6 +74,9 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
   /// 仍阻塞在链上较早加载的调用者，之后也会沿链走到链尾。
   private var activeCallers: [Key: Int] = [:]
   private var generation: UInt64 = 0
+
+  // 与 Flight 一样，无需在 MainActor 上执行额外清理。
+  nonisolated deinit {}
 
   init(
     ttl: TimeInterval,

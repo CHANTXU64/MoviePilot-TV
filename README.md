@@ -59,12 +59,14 @@
 MoviePilot-TV-unsigned.ipa
 ```
 
-该文件为未签名 IPA，不能直接安装，需要使用自己的 Apple 账号或证书重新签名后侧载到 Apple TV。
+该文件需要使用自己的 Apple 账号或证书重新签名后，才能安装到 Apple TV。
 
 可使用支持 tvOS 应用签名和侧载的工具进行安装，例如：
 
 - [ATVloadly](https://github.com/bitxeno/atvloadly)
 - 其他支持 tvOS IPA 重签名及侧载的工具
+
+只需安装这一个 IPA，已包含 Top Shelf（Apple TV 首页推荐）功能。如果安装工具有“移除扩展”选项，请不要勾选。
 
 [Issue#1](https://github.com/CHANTXU64/MoviePilot-TV/issues/1) 中已有用户确认，通过部署在 NAS 上的 ATVloadly，可以正常完成安装并使用。
 
@@ -104,13 +106,11 @@ https://testflight.apple.com/join/UK3qEnVU
    BUNDLE_ID="com.yourname.MoviePilotTV" bash scripts/apple-tv-renew.sh --force
    ```
 
-   脚本会把 `BUNDLE_ID` 传给工程的 `APP_BUNDLE_IDENTIFIER`，同时派生 App Group。若项目使用了已有的 Group，可通过 `APP_GROUP_IDENTIFIER="group.yourteam.SharedLibrary"` 覆盖，构建和产物定位会沿用同一配置。更换 Group 后需打开 App，重新生成 Top Shelf 内容。
-
-   **注意：** 脚本检查本机 DerivedData 中主 App 和所有嵌入扩展的 `embedded.mobileprovision`，不会确认 Apple TV 设备端是否仍安装成功；只有标识正确且全部 profile 存在、可解析、未过期时才跳过。`--force` 会忽略跳过条件并重新构建。安装前会检查全部 profile，以最短剩余有效期验收 `MIN_VALID_SECONDS`（默认 5 天），不满足时失败并停止安装。`CLEAR_PROFILE_CACHE=1` 会备份并移走该 App 及其子标识的本地 profile，保留其他 App 的缓存。
-
-   `--force` 只强制执行构建和安装流程，不代表 Xcode/Apple 一定会在旧的 Xcode-managed provisioning profile 过期前签发新的 profile；如果 Apple 仍复用未过期的 profile，应用的实际到期时间不会被提前延长。
+   脚本会检查本机已有构建中主 App 和 Top Shelf 的签名，全部有效时会跳过。需要重新构建和安装时加上 `--force`；重新构建不保证延长签名有效期。高级配置见[签名与打包说明](docs/signing-and-packaging.md#源码构建与续签)。
 
 ## 开发与测试
+
+构建与测试命令见 [AGENTS.md](AGENTS.md)，签名、Top Shelf 和发布打包的技术细节见[签名与打包说明](docs/signing-and-packaging.md)。
 
 ### 后端兼容性测试
 

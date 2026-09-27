@@ -50,10 +50,9 @@ jobs:
             -project "MoviePilot-TV.xcodeproj" \
             -scheme "MoviePilot-TV" \
             -configuration Debug \
-            -destination "generic/platform=tvOS" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
+            -destination "platform=tvOS Simulator,name=Apple TV" \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGN_IDENTITY=- \
             -skipPackagePluginValidation
 
       - name: Test
@@ -67,7 +66,22 @@ jobs:
             -maximum-concurrent-test-simulator-destinations 1 \
             -skip-testing:MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests \
             -skip-testing:MoviePilot-TV-Tests/BackendCompatibilitySideEffectTests \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGN_IDENTITY=- \
+            -skipPackagePluginValidation
+
+      - name: Build and validate IPA for re-signing
+        run: |
+          xcodebuild build \
+            -project "MoviePilot-TV.xcodeproj" \
+            -scheme "MoviePilot-TV" \
+            -configuration Release \
+            -destination "generic/platform=tvOS" \
+            -derivedDataPath build/DerivedData \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             -skipPackagePluginValidation
+          python3 scripts/package-ipa.py \
+            --app "build/DerivedData/Build/Products/Release-appletvos/MoviePilot-TV.app" \
+            --output "build/MoviePilot-TV-unsigned.ipa"

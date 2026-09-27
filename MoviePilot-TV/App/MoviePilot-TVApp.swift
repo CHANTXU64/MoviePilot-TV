@@ -14,10 +14,14 @@ struct MoviePilot_TVApp: App {
   /// 应用程序主入口，挂载全局根视图
   var body: some Scene {
     WindowGroup {
-      ContentView()
-        .environmentObject(notificationManager)
-        .environmentObject(topShelfManager)
-        .environmentObject(topShelfNavigationRouter)
+      // Hosted unit tests replace shared session state. Keep their host from
+      // publishing those fixtures to the user's Home Screen or starting requests.
+      if NSClassFromString("XCTestCase") == nil {
+        ContentView()
+          .environmentObject(notificationManager)
+          .environmentObject(topShelfManager)
+          .environmentObject(topShelfNavigationRouter)
+      }
     }
   }
 }

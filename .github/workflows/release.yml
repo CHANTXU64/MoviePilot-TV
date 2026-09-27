@@ -50,21 +50,9 @@ jobs:
 
       - name: Package unsigned IPA
         run: |
-          set -euo pipefail
-          APP_PATH="build/DerivedData/Build/Products/Release-appletvos/MoviePilot-TV.app"
-          IPA_PATH="build/MoviePilot-TV-unsigned.ipa"
-
-          if [ ! -d "$APP_PATH" ]; then
-            echo "App bundle not found: $APP_PATH"
-            find build/DerivedData/Build/Products -maxdepth 3 -type d -name "*.app" -print
-            exit 1
-          fi
-
-          rm -rf build/Payload "$IPA_PATH"
-          mkdir -p build/Payload
-          cp -R "$APP_PATH" build/Payload/
-          (cd build && zip -qry "MoviePilot-TV-unsigned.ipa" Payload)
-          ls -lh "$IPA_PATH"
+          python3 scripts/package-ipa.py \
+            --app "build/DerivedData/Build/Products/Release-appletvos/MoviePilot-TV.app" \
+            --output "build/MoviePilot-TV-unsigned.ipa"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v6
