@@ -114,9 +114,8 @@ xcodebuild clean build \
   -scheme "MoviePilot-TV" \
   -configuration Debug \
   -destination "platform=tvOS Simulator,name=Apple TV" \
-  CODE_SIGNING_ALLOWED=NO \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY="" \
+  CODE_SIGNING_ALLOWED=YES \
+  CODE_SIGN_IDENTITY=- \
   -skipPackagePluginValidation
 ```
 
@@ -130,9 +129,8 @@ xcodebuild test \
   -destination "platform=tvOS Simulator,name=Apple TV" \
   -parallel-testing-enabled NO \
   -maximum-concurrent-test-simulator-destinations 1 \
-  CODE_SIGNING_ALLOWED=NO \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY="" \
+  CODE_SIGNING_ALLOWED=YES \
+  CODE_SIGN_IDENTITY=- \
   -skipPackagePluginValidation
 ```
 
@@ -146,6 +144,10 @@ python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 该回归包含本地命令替身和构建设置检查，不代表真实签名或设备安装验收。
 
 本机测试默认串行运行。不要移除 `-parallel-testing-enabled NO` 和 `-maximum-concurrent-test-simulator-destinations 1`，否则 XCTest 可能启动多个 `Clone N of Apple TV` 模拟器并并行执行不同测试套件。真实后端兼容测试尤其应串行执行，方便控制副作用套件的执行顺序和排查失败来源。
+
+模拟器构建和测试必须保留本地 ad-hoc 签名（`CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-`），不要使用 `CODE_SIGNING_ALLOWED=NO`。测试会覆盖安装主 App 和扩展；关闭签名会丢失 App Group 权限，让 Top Shelf 退回静态图片。宿主测试不启动正常 App 根视图的会话加载与 Top Shelf 同步，避免测试会话写入用户首页。修改签名、打包或共享组时，除测试通过外，还须核对测试结束后的实际共享容器访问和首页展示。
+
+发布 IPA 的真机编译仍可关闭开发者签名，但必须随后通过 `python3 scripts/package-ipa.py --app <构建出的.app> --output <目标.ipa>` 打包；该入口为主 App 和所有扩展保留本地签名的 App Group 元数据并验证一致性。不要直接把未处理的 `.app` 压成 IPA 发布，也不要把本地 ad-hoc 签名当成可直接安装到真机的开发者签名。
 
 真实后端兼容测试在 `Testing started` 后可能数分钟没有增量输出，尤其是图片巡检会实际扫描 TV 页面入口、下载图片并用 tvOS 解码。不要因为短时间无输出就判断 `xcodebuild test` 卡死；至少等待单个用例的合理超时窗口，或读取 `.xcresult` 中的测试摘要和失败详情后再下结论。
 

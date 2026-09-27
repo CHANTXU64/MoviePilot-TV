@@ -20,9 +20,8 @@ xcodebuild test \
   -destination "platform=tvOS Simulator,name=Apple TV" \
   -parallel-testing-enabled NO \
   -maximum-concurrent-test-simulator-destinations 1 \
-  CODE_SIGNING_ALLOWED=NO \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY="" \
+  CODE_SIGNING_ALLOWED=YES \
+  CODE_SIGN_IDENTITY=- \
   -skipPackagePluginValidation
 ```
 
@@ -104,9 +103,8 @@ xcodebuild test \
   -destination "platform=tvOS Simulator,name=Apple TV" \
   -parallel-testing-enabled NO \
   -maximum-concurrent-test-simulator-destinations 1 \
-  CODE_SIGNING_ALLOWED=NO \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY="" \
+  CODE_SIGNING_ALLOWED=YES \
+  CODE_SIGN_IDENTITY=- \
   -skipPackagePluginValidation \
   -only-testing:MoviePilot-TV-Tests/BackendCompatibilityPermissionBehaviorTests
 ```

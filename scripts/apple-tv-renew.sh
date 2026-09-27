@@ -33,8 +33,9 @@ Usage: scripts/apple-tv-renew.sh [--force]
 
 Build, sign, install, and validate a tvOS app on a paired Apple TV.
 By default, the script skips work only when the app and all embedded
-extensions have readable, unexpired provisioning profiles. Use --force to build/install
-anyway.
+extensions have valid signatures, matching App Group/team authorization,
+and readable, unexpired provisioning profiles. The Top Shelf extension must
+be present. Use --force to build/install anyway.
 Run it from the repository root, or set PROJECT_DIR to your checkout path.
 Configure with environment variables:
   PROJECT_DIR, PROJECT_FILE, WORKSPACE, SCHEME, CONFIGURATION
@@ -153,6 +154,7 @@ set_build_args() {
   fi
   build_args_common+=("-scheme" "$SCHEME" "-configuration" "$CONFIGURATION")
   build_args_common+=("APP_BUNDLE_IDENTIFIER=$BUNDLE_ID")
+  build_args_common+=("CODE_SIGNING_ALLOWED=YES" "CODE_SIGNING_REQUIRED=YES")
   if [ -n "${APP_GROUP_IDENTIFIER:-}" ]; then
     build_args_common+=("APP_GROUP_IDENTIFIER=$APP_GROUP_IDENTIFIER")
   fi
@@ -192,17 +194,19 @@ move_cached_profiles() {
 }
 
 profile_info_for_app() {
-  python3 "$PROFILE_TOOL" inspect "$1" "$BUNDLE_ID"
+  python3 "$PROFILE_TOOL" inspect "$1" "$BUNDLE_ID" \
+    --app-group "$EFFECTIVE_APP_GROUP" --team "$EFFECTIVE_TEAM" --require-top-shelf
 }
 
-app_path_from_build_settings() {
-  local settings_args=("${build_args_common[@]}" "-showBuildSettings" "-json")
+load_app_product() {
+  local settings_args=("${build_args_common[@]}" "-sdk" "appletvos" "-showBuildSettings" "-json")
   if [ -n "$DEVELOPMENT_TEAM" ]; then
     settings_args+=("DEVELOPMENT_TEAM=$DEVELOPMENT_TEAM")
   fi
   local settings
   settings=$(xcodebuild "${settings_args[@]}" 2>/dev/null) || return 1
-  printf '%s\n' "$settings" | python3 -c '
+  local product
+  product=$(printf '%s\n' "$settings" | python3 -c '
 import json, sys
 from pathlib import Path
 apps = [item["buildSettings"] for item in json.load(sys.stdin)
@@ -210,8 +214,16 @@ apps = [item["buildSettings"] for item in json.load(sys.stdin)
         and item["buildSettings"].get("PRODUCT_BUNDLE_IDENTIFIER") == sys.argv[1]]
 if len(apps) != 1:
     sys.exit("Expected one application target matching BUNDLE_ID")
-print(Path(apps[0]["TARGET_BUILD_DIR"]) / apps[0]["FULL_PRODUCT_NAME"])
-' "$BUNDLE_ID"
+app = apps[0]
+group = app.get("APP_GROUP_IDENTIFIER", "")
+if not group.startswith("group.") or "$" in group or any(c.isspace() for c in group):
+    sys.exit("Expected an expanded APP_GROUP_IDENTIFIER")
+print(json.dumps({"path": str(Path(app["TARGET_BUILD_DIR"]) / app["FULL_PRODUCT_NAME"]),
+                  "group": group, "team": app.get("DEVELOPMENT_TEAM", "")}))
+' "$BUNDLE_ID") || return 1
+  APP_PATH=$(printf '%s\n' "$product" | python3 -c 'import json,sys; print(json.load(sys.stdin)["path"])')
+  EFFECTIVE_APP_GROUP=$(printf '%s\n' "$product" | python3 -c 'import json,sys; print(json.load(sys.stdin)["group"])')
+  EFFECTIVE_TEAM=$(printf '%s\n' "$product" | python3 -c 'import json,sys; print(json.load(sys.stdin)["team"])')
 }
 
 profile_seconds_remaining() {
@@ -239,6 +251,7 @@ log "=== Apple TV renew started ==="
 require_cmd xcodebuild
 require_cmd xcrun
 require_cmd security
+require_cmd codesign
 require_cmd python3
 
 cd "$PROJECT_DIR"
@@ -257,7 +270,7 @@ log "Force renew: $FORCE_RENEW"
 codesign_environment_report
 
 if [ "$FORCE_RENEW" != "1" ]; then
-  if APP_PATH="$(app_path_from_build_settings 2>/dev/null)" && [ -d "$APP_PATH" ]; then
+  if load_app_product && [ -d "$APP_PATH" ]; then
     profile_json="$(profile_info_for_app "$APP_PATH")"
     if [ "$(profile_ok "$profile_json")" = "yes" ]; then
       remaining="$(profile_seconds_remaining "$profile_json")"
@@ -265,7 +278,7 @@ if [ "$FORCE_RENEW" != "1" ]; then
       printf '%s\n' "$profile_json"
       exit 0
     else
-      log "Existing app or extension has an invalid identifier or missing, unreadable, or expired profile; renewing."
+      log "Existing app or extension does not match the signing, App Group, or profile requirements; renewing."
     fi
   else
     log "Existing app product not found; renewing."
@@ -292,7 +305,7 @@ log "=== Build and sign ==="
 xcodebuild clean build "${build_args[@]}" 2>&1 | tee -a "$LOG_FILE" || fail "build/sign failed"
 
 log "=== Locate app product ==="
-APP_PATH="$(app_path_from_build_settings)"
+load_app_product || fail "unable to resolve app product and signing configuration"
 [ -d "$APP_PATH" ] || fail "app product not found: $APP_PATH"
 log "App path: $APP_PATH"
 log "=== Validate all embedded provisioning profiles before installation ==="

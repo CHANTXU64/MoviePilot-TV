@@ -10,12 +10,7 @@ nonisolated enum TopShelfSharedStoreError: Error, Equatable {
 
 nonisolated struct TopShelfSharedStore: @unchecked Sendable {
   static func appGroupIdentifier(in bundle: Bundle = .main) -> String? {
-    guard let identifier = bundle.object(forInfoDictionaryKey: "TopShelfAppGroupIdentifier") as? String,
-      identifier.hasPrefix("group."), identifier.count > "group.".count,
-      !identifier.contains("$"),
-      identifier.rangeOfCharacter(from: .whitespacesAndNewlines) == nil
-    else { return nil }
-    return identifier
+    TopShelfAppGroup.identifier(in: bundle)
   }
 
   typealias DataWriter = @Sendable (Data, URL) throws -> Void

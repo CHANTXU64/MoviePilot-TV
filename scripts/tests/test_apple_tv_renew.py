@@ -35,18 +35,28 @@ tool = Path(sys.argv[0]).name
 with (root / "calls.jsonl").open("a") as log:
     log.write(json.dumps({"tool": tool, "args": args}) + "\n")
 
-def write_products(app_id, extension_id):
+def write_products(app_id, extension_id, group, team):
     app = root / "Products/MoviePilot-TV.app"
     if app.exists():
         shutil.rmtree(app)
     extension = app / "PlugIns/MoviePilot-TV-TopShelf.appex"
     for bundle, identifier in [(app, app_id), (extension, extension_id)]:
         bundle.mkdir(parents=True, exist_ok=True)
-        (bundle / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": identifier}))
+        info = {"CFBundleIdentifier": identifier, "TopShelfAppGroupIdentifier": group}
+        if bundle == extension:
+            info["NSExtension"] = {"NSExtensionPointIdentifier": "com.apple.tv-top-shelf"}
+        (bundle / "Info.plist").write_bytes(plistlib.dumps(info))
+        entitlements = {"application-identifier": "PREFIX." + identifier,
+                        "com.apple.developer.team-identifier": team,
+                        "com.apple.security.application-groups": [group]}
+        (bundle / "signed-entitlements.plist").write_bytes(plistlib.dumps(entitlements))
+        (bundle / "signature-valid").write_text("yes")
+        (bundle / "signing-certificate").write_bytes(b"fixture developer certificate")
         profile = {
             "Name": "Renewal regression fixture", "UUID": "fixture",
             "ExpirationDate": datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) + datetime.timedelta(days=10),
-            "Entitlements": {"application-identifier": "TEAM." + identifier},
+            "Entitlements": entitlements, "TeamIdentifier": [team],
+            "DeveloperCertificates": [b"fixture developer certificate"],
         }
         (bundle / "embedded.mobileprovision").write_bytes(plistlib.dumps(profile))
     path = extension / "embedded.mobileprovision"
@@ -55,6 +65,26 @@ def write_products(app_id, extension_id):
         path.unlink()
     elif mode == "unreadable":
         path.write_bytes(b"not a provisioning profile")
+    elif mode == "wrong_app":
+        profile["Entitlements"]["application-identifier"] = "PREFIX.com.other.App"
+        path.write_bytes(plistlib.dumps(profile))
+    elif mode == "wrong_team":
+        profile["Entitlements"]["com.apple.developer.team-identifier"] = "OTHERTEAM"
+        path.write_bytes(plistlib.dumps(profile))
+    elif mode == "missing_group":
+        profile["Entitlements"].pop("com.apple.security.application-groups")
+        path.write_bytes(plistlib.dumps(profile))
+    elif mode == "unsigned_group":
+        entitlements.pop("com.apple.security.application-groups")
+        (extension / "signed-entitlements.plist").write_bytes(plistlib.dumps(entitlements))
+    elif mode == "bad_signature":
+        (extension / "signature-valid").write_text("no")
+    elif mode == "adhoc_signature":
+        (extension / "signing-certificate").unlink()
+    elif mode == "wrong_certificate":
+        (extension / "signing-certificate").write_bytes(b"unrelated developer certificate")
+    elif mode == "missing_extension":
+        shutil.rmtree(extension)
     elif mode != "valid":
         if mode == "missing_expiration":
             profile.pop("ExpirationDate")
@@ -70,11 +100,14 @@ if tool == "xcodebuild":
     base = values.get("APP_BUNDLE_IDENTIFIER", "org.chantxu.MoviePilot-TV")
     app_id = values.get("PRODUCT_BUNDLE_IDENTIFIER", base)
     extension_id = values.get("PRODUCT_BUNDLE_IDENTIFIER", base + ".TopShelf")
+    group = values.get("APP_GROUP_IDENTIFIER", "group." + base)
+    team = values.get("DEVELOPMENT_TEAM", "TEAM")
     if "-showBuildSettings" in args:
         def target(name, kind, identifier, product):
             return {"target": name, "buildSettings": {
                 "PRODUCT_TYPE": kind, "PRODUCT_BUNDLE_IDENTIFIER": identifier,
                 "TARGET_BUILD_DIR": str(root / "Products"), "FULL_PRODUCT_NAME": product,
+                "APP_GROUP_IDENTIFIER": group, "DEVELOPMENT_TEAM": team,
             }}
         # An extension may precede the app in the settings output.
         print(json.dumps([
@@ -86,11 +119,25 @@ if tool == "xcodebuild":
     elif "build" in args:
         if os.environ.get("RENEW_TEST_COLLISION") == "1":
             extension_id = app_id
-        write_products(app_id, extension_id)
+        write_products(app_id, extension_id, group, team)
     else:
         sys.exit("Unexpected xcodebuild invocation")
 elif tool == "security" and args[:1] == ["cms"]:
     sys.stdout.buffer.write(Path(args[args.index("-i") + 1]).read_bytes())
+elif tool == "codesign":
+    bundle = Path(args[-1])
+    if "--verify" in args:
+        if (bundle / "signature-valid").read_text() != "yes":
+            sys.exit(1)
+    elif any(arg.startswith("--extract-certificates=") for arg in args):
+        certificate = bundle / "signing-certificate"
+        if certificate.exists():
+            prefix = next(arg.split("=", 1)[1] for arg in args if arg.startswith("--extract-certificates="))
+            Path(prefix + "0").write_bytes(certificate.read_bytes())
+    elif "--display" in args:
+        sys.stdout.buffer.write((bundle / "signed-entitlements.plist").read_bytes())
+    else:
+        sys.exit("Unexpected codesign invocation")
 elif tool == "xcrun" and args[:4] == ["devicectl", "device", "install", "app"]:
     app = Path(args[-1])
     assert app.name == "MoviePilot-TV.app"
@@ -107,7 +154,7 @@ class AppleTVRenewTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.bin = self.root / "bin"
         self.bin.mkdir()
-        for tool in ("xcodebuild", "xcrun", "security"):
+        for tool in ("xcodebuild", "xcrun", "security", "codesign"):
             path = self.bin / tool
             path.write_text(COMMAND)
             path.chmod(0o755)
@@ -175,6 +222,49 @@ class AppleTVRenewTests(unittest.TestCase):
         for call in self.calls():
             if call["tool"] == "xcodebuild":
                 self.assertIn("APP_GROUP_IDENTIFIER=" + group, call["args"])
+
+    def test_changed_group_rebuilds_instead_of_skipping_valid_old_profiles(self):
+        self.assertEqual(self.run_renew(app_group="group.com.example.Old").returncode, 0)
+        (self.root / "calls.jsonl").write_text("")
+        result = self.run_renew(force=False, app_group="group.com.example.New")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(any("build" in call["args"] for call in self.calls()))
+        self.assertTrue(any(call["tool"] == "xcrun" for call in self.calls()))
+        report = json.loads(result.stdout.splitlines()[-1])
+        self.assertTrue(all(p["appGroupIdentifier"] == "group.com.example.New" for p in report["profiles"]))
+
+    def test_valid_dates_do_not_allow_wrong_authorization_or_broken_signatures(self):
+        for mode in ("wrong_app", "wrong_team", "missing_group", "unsigned_group", "bad_signature",
+                     "adhoc_signature", "wrong_certificate", "missing_extension"):
+            with self.subTest(mode=mode):
+                (self.root / "calls.jsonl").write_text("")
+                result = self.run_renew(extension_profile=mode)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse(any(call["tool"] == "xcrun" for call in self.calls()))
+
+    def test_bad_cached_signature_forces_rebuild(self):
+        self.assertEqual(self.run_renew().returncode, 0)
+        (self.app / "PlugIns/MoviePilot-TV-TopShelf.appex/signature-valid").write_text("no")
+        (self.root / "calls.jsonl").write_text("")
+        result = self.run_renew(force=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(any("build" in call["args"] for call in self.calls()))
+
+    def test_cached_adhoc_signature_with_valid_profile_forces_rebuild(self):
+        self.assertEqual(self.run_renew().returncode, 0)
+        (self.app / "PlugIns/MoviePilot-TV-TopShelf.appex/signing-certificate").unlink()
+        (self.root / "calls.jsonl").write_text("")
+        result = self.run_renew(force=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(any("build" in call["args"] for call in self.calls()))
+        self.assertTrue(any(call["tool"] == "xcrun" for call in self.calls()))
+
+    def test_device_build_explicitly_keeps_signing_enabled(self):
+        result = self.run_renew()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        build = next(call for call in self.calls() if "build" in call["args"])
+        self.assertIn("CODE_SIGNING_ALLOWED=YES", build["args"])
+        self.assertIn("CODE_SIGNING_REQUIRED=YES", build["args"])
 
     def test_only_all_valid_profiles_allow_skipping(self):
         self.assertEqual(self.run_renew().returncode, 0)

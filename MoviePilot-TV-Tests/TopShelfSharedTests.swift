@@ -57,15 +57,110 @@ final class TopShelfSharedTests: XCTestCase {
     }
   }
 
-  private func configurationBundle(group: Any?) throws -> Bundle {
+  func testBuiltAppCanActuallyAccessTheSharedContainerAndKeychain() throws {
+    let store = try XCTUnwrap(TopShelfSharedStore.appGroupStore())
+    XCTAssertTrue(store.stateFileURL.path.contains("/TopShelf/"))
+    let probe = "signing-test-\(UUID())"
+    defer { TopShelfCredentials.delete(probe) }
+    XCTAssertTrue(TopShelfCredentials.save("local-signing-probe", sessionID: probe))
+    XCTAssertEqual(TopShelfCredentials.read(probe), "local-signing-probe")
+  }
+
+  func testResignedGroupIsUsedByBothContainerAndKeychainFromExecutableMetadata() throws {
+    let configured = "group.com.example.SharedLibrary"
+    let renamed = configured + ".A1B2C3D4E5"
+    let bundle = try configurationBundle(group: configured, entitlements: [
+      "com.apple.security.application-groups": ["group.unrelated", renamed],
+      "com.apple.developer.team-identifier": "A1B2C3D4E5",
+    ])
+    let fileManager = AppGroupFileManager(container: FileManager.default.temporaryDirectory)
+    XCTAssertNotNil(TopShelfSharedStore.appGroupStore(fileManager: fileManager, bundle: bundle))
+    XCTAssertEqual(fileManager.requestedGroup, renamed)
+    XCTAssertEqual(TopShelfCredentials.query("probe", bundle: bundle)?[kSecAttrAccessGroup as String] as? String, renamed)
+  }
+
+  func testUnrelatedOrUnauthorizedRenamedGroupsNeverBecomeAContainerOrKeychainFallback() throws {
+    let configured = "group.com.example.SharedLibrary"
+    for groups in [["group.unrelated"], [configured + ".Z9Y8X7W6V5"], [String]()] {
+      let bundle = try configurationBundle(group: configured, entitlements: [
+        "com.apple.security.application-groups": groups,
+        "com.apple.developer.team-identifier": "A1B2C3D4E5",
+      ])
+      let fileManager = AppGroupFileManager(container: FileManager.default.temporaryDirectory)
+      XCTAssertNil(TopShelfSharedStore.appGroupStore(fileManager: fileManager, bundle: bundle))
+      XCTAssertNil(fileManager.requestedGroup)
+      XCTAssertNil(TopShelfCredentials.query("probe", bundle: bundle))
+    }
+  }
+
+  func testConfiguredCustomGroupWinsWhenItIsInTheSignature() throws {
+    let group = "group.com.example.Custom"
+    let bundle = try configurationBundle(group: group, entitlements: [
+      "com.apple.security.application-groups": [group, group + ".A1B2C3D4E5"],
+      "com.apple.developer.team-identifier": "A1B2C3D4E5",
+    ])
+    XCTAssertEqual(TopShelfSharedStore.appGroupIdentifier(in: bundle), group)
+  }
+
+  func testSigningMetadataRejectsTruncationAndInvalidOffsets() throws {
+    let executable = try signedExecutable(entitlements: ["com.apple.security.application-groups": ["group.test"]])
+    XCTAssertNotNil(TopShelfSigningMetadata.entitlements(in: executable))
+    for length in 0..<executable.count {
+      XCTAssertNil(TopShelfSigningMetadata.entitlements(in: Data(executable.prefix(length))))
+    }
+    for offset in [16, 20, 36, 40, 44, 52, 56, 64, 72] {
+      var corrupt = executable
+      corrupt.replaceSubrange(offset..<(offset + 4), with: [0xff, 0xff, 0xff, 0xff])
+      XCTAssertNil(TopShelfSigningMetadata.entitlements(in: corrupt), "offset \(offset)")
+    }
+  }
+
+  func testUniversalExecutableReadsTheMatchingArchitecture() throws {
+    let executable = try signedExecutable(entitlements: ["marker": "arm64"])
+    var fat = Data()
+    appendUInt32(0xcafebabe, to: &fat, bigEndian: true)
+    appendUInt32(1, to: &fat, bigEndian: true)
+    for value: UInt32 in [0x0100000c, 0, 28, UInt32(executable.count), 0] {
+      appendUInt32(value, to: &fat, bigEndian: true)
+    }
+    fat.append(executable)
+    XCTAssertEqual(TopShelfSigningMetadata.entitlements(in: fat, cpuType: 0x0100000c)?["marker"] as? String, "arm64")
+    XCTAssertNil(TopShelfSigningMetadata.entitlements(in: fat, cpuType: 0x01000007))
+  }
+
+  private func configurationBundle(group: Any?, entitlements: [String: Any]? = nil) throws -> Bundle {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).bundle", isDirectory: true)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     addTeardownBlock { try? FileManager.default.removeItem(at: url) }
     var info: [String: Any] = ["CFBundleIdentifier": "test.\(UUID().uuidString)", "CFBundlePackageType": "BNDL"]
     info["TopShelfAppGroupIdentifier"] = group
+    if let entitlements {
+      info["CFBundleExecutable"] = "Fixture"
+      try signedExecutable(entitlements: entitlements).write(to: url.appendingPathComponent("Fixture"))
+    }
     try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
       .write(to: url.appendingPathComponent("Info.plist"))
     return try XCTUnwrap(Bundle(url: url))
+  }
+
+  private func signedExecutable(entitlements: [String: Any]) throws -> Data {
+    let xml = try PropertyListSerialization.data(fromPropertyList: entitlements, format: .xml, options: 0)
+    var signature = Data()
+    for value: UInt32 in [0xfade0cc0, UInt32(28 + xml.count), 1, 5, 20, 0xfade7171, UInt32(8 + xml.count)] {
+      appendUInt32(value, to: &signature, bigEndian: true)
+    }
+    signature.append(xml)
+    var executable = Data()
+    for value: UInt32 in [0xfeedfacf, 0x0100000c, 0, 2, 1, 16, 0, 0, 0x1d, 16, 48, UInt32(signature.count)] {
+      appendUInt32(value, to: &executable)
+    }
+    executable.append(signature)
+    return executable
+  }
+
+  private func appendUInt32(_ value: UInt32, to data: inout Data, bigEndian: Bool = false) {
+    let shifts = bigEndian ? [24, 16, 8, 0] : [0, 8, 16, 24]
+    data.append(contentsOf: shifts.map { UInt8(truncatingIfNeeded: value >> $0) })
   }
 
   func testOlderSnapshotWithTwelveCardsStillPresentsOnlySix() throws {
