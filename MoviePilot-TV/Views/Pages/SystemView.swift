@@ -17,6 +17,7 @@ struct SystemView: View {
 
   private let isSelected: Bool
 
+  @Environment(\.topShelfPresentation) private var topShelfPresentation
   @StateObject private var viewModel: SystemViewModel
   @StateObject private var recommendViewModel: RecommendViewModel
   @StateObject private var topShelfExplore: ExploreViewModel
@@ -132,15 +133,19 @@ struct SystemView: View {
     .sheet(item: $selectedChangelogEntry) { entry in
       changelogDetailSheet(entry)
     }
-    .alert(item: $updateNotice) { entry in
-      Alert(
-        title: Text("已更新到 \(entry.version)"),
-        message: Text(AppChangelog.updateNoticeMessage(for: entry))
-          .font(.callout),
-        dismissButton: .default(Text("知道了")) {
-          AppChangelog.markPresented(entry)
-        }
-      )
+    .alert(
+      updateNotice.map { "已更新到 \($0.version)" } ?? "更新提示",
+      isPresented: Binding(
+        get: { updateNotice != nil },
+        set: { if !$0, updateNotice != nil { updateNotice = nil } }),
+      presenting: updateNotice
+    ) { entry in
+      Button("知道了", role: .cancel) {
+        AppChangelog.markPresented(entry)
+        updateNotice = nil
+      }
+    } message: { entry in
+      Text(AppChangelog.updateNoticeMessage(for: entry)).font(.callout)
     }
   }
 
@@ -166,7 +171,7 @@ struct SystemView: View {
       .frame(width: Self.listWidth, alignment: .top)
       .frame(maxHeight: .infinity, alignment: .top)
       .allowsHitTesting(isActive)
-      .systemSettingsExitCommand(isEnabled: isSelected && isActive && page != .root, perform: pop)
+      .systemSettingsExitCommand(isEnabled: !topShelfPresentation.blocksInteraction && isSelected && isActive && page != .root, perform: pop)
   }
 
   private func pageView(_ page: SystemSettingsPage, isActive: Bool) -> some View {
@@ -231,7 +236,7 @@ struct SystemView: View {
         SystemSettingsRootBackObserver(
           // Sheet / Alert 呈现期间禁用 Menu 手势：否则按 Menu 关闭弹层时
           // 会同时触发 scrollTo(top)，随后焦点恢复又滚回原行，形成"先上滑再下滑"。
-          isEnabled: isSelected && isActive && page == .root
+          isEnabled: !topShelfPresentation.blocksInteraction && isSelected && isActive && page == .root
             && !showAppInfo && updateNotice == nil && selectedChangelogEntry == nil
             && !showLogoutConfirmation,
           onExitPress: {
@@ -247,6 +252,10 @@ struct SystemView: View {
 
   private var rootPage: some View {
     VStack(spacing: 38) {
+      if canConfigureRecommendations {
+        topShelfSettings
+      }
+
       if canConfigureSubscriptions {
         section("订阅") {
           Toggle(
@@ -270,7 +279,6 @@ struct SystemView: View {
           }
           .focused($focusedItem, equals: .recommendation)
         }
-        topShelfSettings
       }
 
       if canConfigureRecommendations {

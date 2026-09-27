@@ -17,6 +17,19 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source[rootStart.lowerBound..<rootEnd.lowerBound].contains("topShelfSettings"))
   }
 
+  func testTopShelfSettingsLeadsRootSettingsSectionsInSource() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+    let rootStart = try XCTUnwrap(source.range(of: "private var rootPage:"))
+    let rootEnd = try XCTUnwrap(source.range(of: "private var connectionPage:"))
+    let rootPage = source[rootStart.lowerBound..<rootEnd.lowerBound]
+    let topShelf = try XCTUnwrap(rootPage.range(of: "topShelfSettings"))
+    let subscriptions = try XCTUnwrap(rootPage.range(of: "if canConfigureSubscriptions"))
+    let recommendation = try XCTUnwrap(rootPage.range(of: "section(\"推荐页\")"))
+
+    XCTAssertLessThan(topShelf.lowerBound, subscriptions.lowerBound)
+    XCTAssertLessThan(topShelf.lowerBound, recommendation.lowerBound)
+  }
+
   func testSystemViewDoesNotUsePrivateSettingsImplementation() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
 
@@ -112,13 +125,13 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("\"连接与版本\""))
   }
 
-  func testUpdateNoticeOnlyChecksWhenSettingsTabIsSelected() throws {
+  func testUpdateNoticeOnlyChecksWhenSettingsTabIsSelectedInSource() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
 
     XCTAssertTrue(source.contains(".onChange(of: isSelected)"))
     XCTAssertTrue(source.contains("guard isSelected, updateNotice == nil else { return }"))
     XCTAssertTrue(source.contains("AppChangelog.markPresented(entry)"))
-    XCTAssertTrue(source.contains(".alert(item: $updateNotice)"))
+    XCTAssertTrue(source.contains("presenting: updateNotice"))
   }
 
   func testChangelogSheetUsesReadableTvOSLayout() throws {
@@ -200,11 +213,11 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("bottomLeftText: bottomLeft"))
   }
 
-  func testSystemViewExitHandlersOnlyRunWhenSettingsTabIsActive() throws {
+  func testSystemViewExitHandlersOnlyRunWhenSettingsTabIsActiveInSource() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
 
     XCTAssertTrue(
-      source.contains("isEnabled: isSelected && isActive && page == .root")
+      source.contains("isEnabled: !topShelfPresentation.blocksInteraction && isSelected && isActive && page == .root")
     )
     XCTAssertTrue(
       source.contains(
@@ -214,7 +227,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("&& !showLogoutConfirmation"))
     XCTAssertTrue(source.contains("guard windowHasNoPresentedContent() else { return }"))
     XCTAssertTrue(
-      source.contains(".systemSettingsExitCommand(isEnabled: isSelected && isActive && page != .root")
+      source.contains(".systemSettingsExitCommand(isEnabled: !topShelfPresentation.blocksInteraction && isSelected && isActive && page != .root")
     )
   }
 
@@ -274,7 +287,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("evictIfNeeded"))
   }
 
-  func testMediaDetailHeaderFocusOnlyTargetsVisiblePermittedActions() throws {
+  func testMediaDetailHeaderFocusOnlyTargetsVisiblePermittedActionsInSource() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
     let containerSource = try Self.source(
       at: "MoviePilot-TV/Views/Pages/MediaDetailContainerView.swift"
@@ -283,7 +296,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("@ObservedObject private var apiService = APIService.shared"))
     XCTAssertTrue(source.contains("private var canJumpToTMDB: Bool"))
     XCTAssertTrue(source.contains("private var preferredHeaderFocus: ButtonField?"))
-    XCTAssertTrue(source.contains("if !hasAppeared, let preferredHeaderFocus"))
+    XCTAssertTrue(source.contains("if presentationStyle == .standard, !hasAppeared, let preferredHeaderFocus"))
     XCTAssertFalse(source.contains("isFocusEnabled"))
     XCTAssertFalse(source.contains("requestPreferredHeaderFocus"))
     XCTAssertFalse(source.contains(".defaultFocus($focusedButton, preferredHeaderFocus)"))

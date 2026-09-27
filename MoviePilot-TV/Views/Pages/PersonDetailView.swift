@@ -175,6 +175,7 @@ struct PersonDetailView: View {
       }
     }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
+      subscriptionHandler.cancelPresentation()
       subscriptionHandler = SubscriptionHandler()
       showFullBio = false
     }

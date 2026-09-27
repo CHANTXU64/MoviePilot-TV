@@ -21,6 +21,8 @@ class ContentViewModel: ObservableObject {
   @Published private(set) var sessionUIIdentity: String
   @Published private(set) var topShelfRoute: PendingTopShelfRoute?
   @Published private(set) var isOpeningTopShelf = false
+  @Published private(set) var recommendNavigation: ImageNavigationCoordinator
+  @Published private(set) var exploreNavigation: ImageNavigationCoordinator
   @Published var selectedTab: Tab = .home
 
   private let apiService: APIService
@@ -32,6 +34,8 @@ class ContentViewModel: ObservableObject {
 
   init(apiService: APIService = .shared) {
     self.apiService = apiService
+    recommendNavigation = ImageNavigationCoordinator(apiService: apiService)
+    exploreNavigation = ImageNavigationCoordinator(apiService: apiService)
     // 初始状态
     isLoggedIn = apiService.isLoggedIn
     // 已有持久化会话时，首帧先挡住主界面，等待权威用户信息恢复完成。
@@ -50,13 +54,20 @@ class ContentViewModel: ObservableObject {
         self.sessionUIIdentity = session.uiIdentity
         if let route = self.topShelfRoute,
           route.payload.sessionID != session.imageNamespace
-            || session.token == nil || session.currentUser?.canAccess(.discovery) != true
+            || session.token == nil
+            || (!self.isPreparingStartupSession && session.currentUser?.canAccess(.discovery) != true)
         {
           self.topShelfRoute = nil
           self.isOpeningTopShelf = false
         }
+        if sessionChanged {
+          self.recommendNavigation.retire()
+          self.exploreNavigation.retire()
+          self.recommendNavigation = ImageNavigationCoordinator(apiService: self.apiService)
+          self.exploreNavigation = ImageNavigationCoordinator(apiService: self.apiService)
+        }
         self.selectedTab = Self.resolvedSelectedTab(
-          sessionChanged ? (self.topShelfRoute == nil ? .home : .recommend) : self.selectedTab,
+          sessionChanged ? (self.topShelfRoute?.targetTab ?? .home) : self.selectedTab,
           visibleTabs: self.visibleTabs
         )
         let profileIdentity = session.currentUser.map {
@@ -100,31 +111,67 @@ class ContentViewModel: ObservableObject {
   }
 
   var canPresentContent: Bool {
-    isLoggedIn && (!isPreparingStartupSession || topShelfRoute != nil)
+    isLoggedIn && (!isPreparingStartupSession || topShelfRoute.map {
+      navigation(for: $0.targetTab).topEntryID == $0.id
+    } == true)
   }
 
-  /// 本地归属校验允许先建详情布局；网络与操作仍由启动状态单独控制。
-  func acceptTopShelfRoute(_ route: PendingTopShelfRoute) -> TopShelfNavigationDisposition {
-    let disposition = TopShelfNavigationPolicy.disposition(
+  func disposition(for route: PendingTopShelfRoute) -> TopShelfNavigationDisposition {
+    TopShelfNavigationPolicy.disposition(
       for: route,
       isPreparingStartupSession: isPreparingStartupSession,
       isLoggedIn: isLoggedIn,
       currentSessionID: apiService.session.imageNamespace,
       visibleTabs: visibleTabs
     )
+  }
+
+  /// 有效外部入口先遮住根页并取消旧弹窗；UIKit 关闭呈现后再交接导航。
+  func prepareTopShelfRoute(_ route: PendingTopShelfRoute) {
+    guard disposition(for: route) != .discard, topShelfRoute?.id != route.id else { return }
+    topShelfRoute = route
+    isOpeningTopShelf = true
+    backendVersionWarning = nil
+    accountPermissionWarning = nil
+    NotificationCenter.default.post(
+      name: .imageNavigationPresentationWillReset, object: apiService)
+  }
+
+  /// 先准备目标栈，再发布 Tab 选择；目标 View 首次挂载时路径已经包含详情。
+  func acceptTopShelfRoute(_ route: PendingTopShelfRoute) -> TopShelfNavigationDisposition {
+    let disposition = disposition(for: route)
     if disposition == .open || disposition == .preview {
-      NotificationCenter.default.post(
-        name: .imageNavigationPresentationWillReset, object: apiService
-      )
-      selectedTab = .recommend
-      topShelfRoute = route
-      isOpeningTopShelf = true
+      prepareTopShelfRoute(route)
+      navigation(for: route.targetTab).openExternal(
+        route.navigationEntry, startsMediaLoad: !isPreparingStartupSession)
+      selectedTab = route.targetTab
+    } else if disposition == .discard, topShelfRoute?.id == route.id {
+      cancelTopShelfOpening()
     }
     return disposition
   }
 
+  func navigation(for tab: Tab) -> ImageNavigationCoordinator {
+    precondition(tab == .recommend || tab == .explore)
+    return tab == .explore ? exploreNavigation : recommendNavigation
+  }
+
   func finishTopShelfOpening(id: UUID) {
     guard topShelfRoute?.id == id else { return }
+    isOpeningTopShelf = false
+  }
+
+  func cancelTopShelfOpening() {
+    if let route = topShelfRoute {
+      let navigation = navigation(for: route.targetTab)
+      if navigation.topEntryID == route.id { navigation.resetDetailHistory() }
+    }
+    endTopShelfPresentation()
+  }
+
+  func endTopShelfPresentation(id: UUID? = nil) {
+    if let id, topShelfRoute?.id != id { return }
+    topShelfRoute = nil
     isOpeningTopShelf = false
   }
 
@@ -168,6 +215,9 @@ class ContentViewModel: ObservableObject {
       isPreparingStartupSession = false
       isRefreshingStartupSession = false
       isLoggedIn = apiService.isLoggedIn
+      if let route = topShelfRoute, disposition(for: route) == .discard {
+        cancelTopShelfOpening()
+      }
     } else {
       isPreparingStartupSession = false
     }

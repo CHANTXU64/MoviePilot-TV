@@ -206,9 +206,10 @@ struct SearchView: View {
         ImageNavigationDestination(entry: entry)
       }
       .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
+        subscriptionHandler.cancelPresentation()
         subscriptionHandler = SubscriptionHandler()
-      showSiteSelection = false
-      showMediaSourceSelection = false
+        showSiteSelection = false
+        showMediaSourceSelection = false
       }
       .mediaSubscriptionAlerts(using: subscriptionHandler)
 

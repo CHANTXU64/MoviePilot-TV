@@ -46,11 +46,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
     let route = try XCTUnwrap(router.pendingRoute)
     XCTAssertEqual(viewModel.acceptTopShelfRoute(route), .preview)
     router.consume(id: route.id)
-    let coordinator = ImageNavigationCoordinator(
-      apiService: service,
-      initialEntry: route.navigationEntry,
-      startsInitialMediaLoad: !viewModel.isPreparingStartupSession
-    )
+    let coordinator = viewModel.recommendNavigation
     XCTAssertTrue(viewModel.canPresentContent)
     XCTAssertTrue(viewModel.isPreparingStartupSession)
     XCTAssertEqual(coordinator.path.count, 1, "第一棵导航树已经包含详情，无需页面出现后 push")
@@ -124,7 +120,11 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
       ))
     let presentation = TabView(selection: .constant(1)) {
       Text("媒体库根页").tabItem { Text("媒体库") }.tag(0)
-      RecommendView(isSelected: true, initialTopShelfRoute: route, allowsRequests: false)
+      RecommendView(
+        isSelected: true,
+        navigationCoordinator: ImageNavigationCoordinator(
+          apiService: service, initialEntry: route.navigationEntry, startsInitialMediaLoad: false),
+        allowsRequests: false)
         .tabItem { Text("推荐") }.tag(1)
     }
     .environmentObject(MediaActionHandler())
@@ -163,20 +163,28 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
       }
   }
 
-  func testExternalRouteSelectsRecommendationBeforePublishingItsDetail() throws {
+  func testExternalRoutePreparesTargetStackBeforeSelectingItsTab() throws {
     let service = makeService()
     let model = ContentViewModel(apiService: service)
-    model.selectedTab = .explore
-    let route = try XCTUnwrap(PendingTopShelfRoute(payload: payload(service: service)))
-    var selectionAtPublication: ContentViewModel.Tab?
-    let observer = model.$topShelfRoute.compactMap { $0 }.sink { _ in
-      selectionAtPublication = model.selectedTab
+    model.selectedTab = .home
+    for origin in [TopShelfEntryOrigin.recommend, .explore] {
+      let route = try XCTUnwrap(PendingTopShelfRoute(payload: payload(service: service, origin: origin)))
+      let target = model.navigation(for: route.targetTab)
+      let other = model.navigation(for: route.targetTab == .explore ? .recommend : .explore)
+      let otherPathCount = other.path.count
+      var countAtSelection: Int?
+      let observer = model.$selectedTab.dropFirst().sink { tab in
+        if tab == route.targetTab { countAtSelection = target.path.count }
+      }
+      XCTAssertEqual(model.acceptTopShelfRoute(route), .preview)
+      XCTAssertEqual(countAtSelection, 1)
+      XCTAssertEqual(target.topEntryID, route.id)
+      XCTAssertEqual(other.path.count, otherPathCount)
+      observer.cancel()
+      model.finishTopShelfOpening(id: route.id)
+      target.path.removeLast()
+      XCTAssertEqual(model.selectedTab, route.targetTab, "返回入口所属根页")
     }
-    defer { observer.cancel() }
-    XCTAssertEqual(model.acceptTopShelfRoute(route), .preview)
-    XCTAssertEqual(selectionAtPublication, .recommend)
-    model.finishTopShelfOpening(id: route.id)
-    XCTAssertEqual(model.selectedTab, .recommend)
     service.logout()
     XCTAssertEqual(model.selectedTab, .home)
   }
@@ -287,6 +295,154 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
     return bytes
   }
 
+  func testFirstExternalOpenFromBackgroundHomeKeepsDetailAndFocusesHero() async throws {
+    try await assertExternalOpenFocus(coldStart: false, origin: .explore)
+  }
+
+  func testColdExternalOpenFocusesHeroAfterSessionPreparation() async throws {
+    try await assertExternalOpenFocus(coldStart: true)
+  }
+
+  private func assertExternalOpenFocus(coldStart: Bool, origin: TopShelfEntryOrigin = .recommend) async throws {
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SystemSessionServiceSnapshot.capture(service: .shared)
+    defer { snapshot.restore(to: .shared) }
+    let user = Token(
+      access_token: "launch-token", token_type: "bearer", super_user: FlexibleBool(false),
+      permissions: ["discovery": true, "search": true, "subscribe": true, "manage": true],
+      user_id: 901, user_name: "launch-user", avatar: nil
+    )
+    service.replaceSessionForTesting(
+      baseURL: "https://top-shelf-launch.local", token: user.access_token, currentUser: user
+    )
+    // 界面单例仅提供权限；启动校验走可控的独立服务，不能访问真实后端。
+    APIService.shared.replaceSessionForTesting(
+      baseURL: "https://top-shelf-launch.local", token: nil, currentUser: user
+    )
+    let model = ContentViewModel(apiService: service)
+    let notifications = NotificationManager()
+    let topShelfManager = TopShelfManager(apiService: service, store: nil)
+    let router = TopShelfNavigationRouter(store: nil)
+    if !coldStart {
+      TopShelfLaunchURLProtocol.automaticallyRespondToCurrentUser()
+      await model.prepareStartupIfNeeded()
+      model.selectedTab = .home
+    }
+    let host = UIHostingController(rootView: ContentView(viewModel: model)
+      .environment(\.scenePhase, .active)
+      .environmentObject(notifications)
+      .environmentObject(topShelfManager)
+      .environmentObject(router))
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+    let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
+    let window = UIWindow(windowScene: scene)
+    window.windowLevel = .alert + 1
+    window.rootViewController = host
+    window.makeKeyAndVisible()
+    defer {
+      window.isHidden = true
+      window.rootViewController = nil
+      previousKeyWindow?.makeKey()
+    }
+    try await Task.sleep(for: .milliseconds(400))
+    for attempt in 0..<2 {
+      window.isHidden = true
+      host.rootView = ContentView(viewModel: model)
+        .environment(\.scenePhase, .background)
+        .environmentObject(notifications)
+        .environmentObject(topShelfManager)
+        .environmentObject(router)
+      try await Task.sleep(for: .milliseconds(100))
+      let url = try TopShelfDeepLink.url(for: payload(service: service, type: "电视剧", origin: origin))
+      XCTAssertTrue(router.handle(url))
+      let eventID = try XCTUnwrap(router.pendingRoute?.id)
+      // 深链先到，前台激活稍后发生。
+      try await Task.sleep(for: .milliseconds(200))
+      XCTAssertTrue(model.isOpeningTopShelf, "后台收到有效入口即准备遮罩")
+      XCTAssertNotNil(router.pendingRoute, "后台只接收事件，前台再交接导航")
+      host.rootView = ContentView(viewModel: model)
+        .environment(\.scenePhase, .active)
+        .environmentObject(notifications)
+        .environmentObject(topShelfManager)
+        .environmentObject(router)
+      window.makeKeyAndVisible()
+      if coldStart && attempt == 0 {
+        try await Task.sleep(for: .milliseconds(200))
+        TopShelfLaunchURLProtocol.releaseCurrentUser(fullPermissions: true)
+      }
+      func tabController(in controller: UIViewController) -> UITabBarController? {
+        if let tabs = controller as? UITabBarController { return tabs }
+        return controller.children.compactMap { tabController(in: $0) }.first
+      }
+      func presentationChecks(in controller: UIViewController) -> [PresentationReadyAction.Controller] {
+        (controller as? PresentationReadyAction.Controller).map { [$0] }
+          ?? controller.children.flatMap { presentationChecks(in: $0) }
+      }
+      let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+      while ContinuousClock.now < deadline {
+        if model.topShelfRoute?.id == eventID, !model.isPreparingStartupSession,
+          let selected = tabController(in: host)?.selectedViewController,
+          let navigation = navigationControllers(in: selected).first,
+          navigation.viewControllers.count == 2,
+          let focused = UIFocusSystem(for: window)?.focusedItem,
+          navigation.topViewController?.contains(focused) == true,
+          presentationChecks(in: host).allSatisfy({ !$0.isCheckingPresentation })
+        { break }
+        try await Task.sleep(for: .milliseconds(25))
+      }
+      XCTAssertFalse(model.isOpeningTopShelf, "目标实际呈现后必须解除遮罩")
+      XCTAssertTrue(presentationChecks(in: host).allSatisfy { !$0.isCheckingPresentation },
+        "Hero 已取得焦点后不得驻留逐帧重试")
+      XCTAssertFalse(model.isPreparingStartupSession)
+      XCTAssertNil(router.pendingRoute,
+        "window key=\(window.isKeyWindow) hidden=\(window.isHidden); loggedIn=\(model.isLoggedIn); permissionAlert=\(String(describing: model.accountPermissionWarning)); versionAlert=\(String(describing: model.backendVersionWarning)); presented=\(String(describing: host.presentedViewController)); children=\(host.children)")
+      XCTAssertEqual(model.topShelfRoute?.id, eventID, "重复点击同一媒体仍须交接本次事件")
+      let tabs = try XCTUnwrap(tabController(in: host))
+      XCTAssertEqual(model.selectedTab, origin == .explore ? .explore : .recommend)
+      XCTAssertEqual(tabs.selectedTab?.title, origin == .explore ? "探索" : "推荐")
+      let navigation = try XCTUnwrap(navigationControllers(in: try XCTUnwrap(tabs.selectedViewController)).first)
+      XCTAssertEqual(navigation.viewControllers.count, 2, "首次外部打开必须保留详情")
+      let detail = try XCTUnwrap(navigation.topViewController)
+      let focused = try XCTUnwrap(UIFocusSystem(for: window)?.focusedItem)
+      XCTAssertTrue(
+        detail.contains(focused),
+        "焦点应位于详情 Hero：\(String(describing: focused))"
+      )
+      var environment: (any UIFocusEnvironment)? = focused
+      while environment != nil && environment?.focusItemContainer == nil {
+        environment = environment?.parentFocusEnvironment
+      }
+      let coordinates = try XCTUnwrap(environment?.focusItemContainer?.coordinateSpace)
+      let focusFrame = coordinates.convert(focused.frame, to: window)
+      XCTAssertGreaterThan(focusFrame.midY, window.bounds.height * 0.5, "焦点应位于 Hero 底部操作区")
+      XCTAssertLessThan(focusFrame.midY, window.bounds.height)
+      XCTAssertLessThan(focusFrame.midX, window.bounds.width * 0.5, "焦点应位于 Hero 左侧主操作区")
+      let screenshot = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+        window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+      }
+      let attachment = XCTAttachment(image: screenshot)
+      attachment.name = "TopShelf-\(coldStart ? "cold" : "background")-Hero-focus-\(attempt + 1)"
+      attachment.lifetime = .keepAlways
+      add(attachment)
+      if attempt == 1 {
+        navigation.popViewController(animated: false)
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertEqual(navigation.viewControllers.count, 1)
+        XCTAssertEqual(tabs.selectedTab?.title, origin == .explore ? "探索" : "推荐")
+        XCTAssertNil(router.pendingRoute, "返回后不能重新消费旧入口")
+        XCTAssertNil(model.topShelfRoute, "原生 pop 必须清除外部呈现状态")
+        service.replaceSessionForTesting(
+          baseURL: service.baseURL, token: user.access_token,
+          currentUser: Token(
+            access_token: user.access_token, token_type: "bearer", super_user: FlexibleBool(false),
+            permissions: ["discovery": true], user_id: 901, user_name: "launch-user", avatar: nil))
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(model.exploreNavigation.path.count, 0)
+        XCTAssertEqual(model.recommendNavigation.path.count, 0, "权限变化不能重开已返回的外部详情")
+      }
+    }
+  }
+
   func testPublishedCardRestoresDetailAndBackdropFromDiskWithoutDownloadingOnOpen() async throws {
     let service = makeService()
     service.settings = try JSONDecoder().decode(GlobalSettings.self, from: Data("{}".utf8))
@@ -380,7 +536,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
   func testExternalPreparedOpenCancelsOldFocusPreloadBeforeLateResponse() async throws {
     let service = makeService()
     let viewModel = ContentViewModel(apiService: service)
-    let root = ImageNavigationCoordinator(apiService: service)
+    let root = viewModel.recommendNavigation
     root.setStackForeground(true)
     let summary = try XCTUnwrap(TopShelfNavigationRouter.media(from: payload(service: service)))
     TopShelfLaunchURLProtocol.holdDetailResponses()
@@ -400,7 +556,6 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
         payload: payload(service: service), cachedContent: prepared
       ))
     XCTAssertEqual(viewModel.acceptTopShelfRoute(route), .preview)
-    root.openExternal(route.navigationEntry, startsMediaLoad: false)
     let next = root
     let task = try XCTUnwrap(next.preloadTask(for: route.navigationEntry))
     XCTAssertFalse(task === oldTask)
@@ -601,6 +756,97 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
     XCTAssertEqual(viewModel.acceptTopShelfRoute(second), .discard)
   }
 
+  func testPermissionRefreshRevokesOpeningAndRetiresItsOldStack() throws {
+    let service = makeService()
+    let model = ContentViewModel(apiService: service)
+    let route = try XCTUnwrap(PendingTopShelfRoute(payload: payload(service: service, origin: .explore)))
+    XCTAssertEqual(model.acceptTopShelfRoute(route), .preview)
+    let retired = model.exploreNavigation
+    service.replaceSessionForTesting(
+      baseURL: service.baseURL, token: "launch-token",
+      currentUser: Token(
+        access_token: "launch-token", token_type: "bearer", super_user: FlexibleBool(false),
+        permissions: ["discovery": true, "search": true, "subscribe": false, "manage": false],
+        user_id: 901, user_name: "launch-user", avatar: nil))
+    XCTAssertFalse(retired === model.exploreNavigation)
+    XCTAssertEqual(retired.path.count, 0)
+    XCTAssertNotEqual(service.session.imageNamespace, route.payload.sessionID)
+    XCTAssertNil(model.exploreNavigation.topEntryID)
+    XCTAssertNil(model.topShelfRoute)
+    XCTAssertFalse(model.isOpeningTopShelf)
+    model.finishTopShelfOpening(id: route.id)
+    model.endTopShelfPresentation(id: route.id)
+    XCTAssertNil(model.topShelfRoute, "旧呈现和返回回调不能复活已失效的入口")
+    XCTAssertEqual(model.selectedTab, .home)
+  }
+
+  func testCancellingOpeningReleasesTargetAndRejectsLateCompletion() throws {
+    let service = makeService()
+    let model = ContentViewModel(apiService: service)
+    let route = try XCTUnwrap(PendingTopShelfRoute(payload: payload(service: service, origin: .explore)))
+    model.prepareTopShelfRoute(route)
+    XCTAssertTrue(model.isOpeningTopShelf)
+    XCTAssertEqual(model.selectedTab, .home)
+    XCTAssertEqual(model.acceptTopShelfRoute(route), .preview)
+    let task = try XCTUnwrap(model.exploreNavigation.preloadTask(for: route.navigationEntry))
+    model.cancelTopShelfOpening()
+    XCTAssertNil(model.topShelfRoute)
+    XCTAssertFalse(model.isOpeningTopShelf)
+    XCTAssertEqual(model.exploreNavigation.path.count, 0)
+    XCTAssertNil(service.mediaPreloader.peekTask(for: route.media))
+    model.finishTopShelfOpening(id: route.id)
+    XCTAssertFalse(model.isOpeningTopShelf)
+    _ = task
+  }
+
+  func testRootAlertIsCancelledBeforePendingExploreRouteIsPresented() async throws {
+    let service = makeService()
+    let model = ContentViewModel(apiService: service)
+    let router = TopShelfNavigationRouter(store: nil)
+    let host = UIHostingController(rootView: ContentView(viewModel: model)
+      .environment(\.scenePhase, .active)
+      .environmentObject(router)
+      .environmentObject(TopShelfManager(apiService: service, store: nil))
+      .environmentObject(NotificationManager()))
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+    let previous = scene.windows.first(where: \.isKeyWindow)
+    let window = UIWindow(windowScene: scene)
+    window.rootViewController = host
+    window.makeKeyAndVisible()
+    defer {
+      window.isHidden = true
+      window.rootViewController = nil
+      previous?.makeKey()
+    }
+    try await Task.sleep(for: .milliseconds(200))
+    model.backendVersionWarning = BackendVersionWarning(backendVersion: nil, requiredVersion: "test")
+    try await Task.sleep(for: .milliseconds(300))
+    XCTAssertNotNil(host.presentedViewController)
+    XCTAssertTrue(router.handle(try TopShelfDeepLink.url(for: payload(service: service, origin: .explore))))
+    let id = try XCTUnwrap(router.pendingRoute?.id)
+    let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+    var observedCancellation = false
+    while ContinuousClock.now < deadline {
+      if router.pendingRoute == nil && !model.isOpeningTopShelf { break }
+      if host.presentedViewController != nil, model.topShelfRoute?.id == id {
+        observedCancellation = true
+        XCTAssertTrue(model.isOpeningTopShelf)
+        XCTAssertEqual(model.exploreNavigation.path.count, 0, "等关闭转场结束才建栈")
+      }
+      try await Task.sleep(for: .milliseconds(25))
+    }
+    XCTAssertTrue(observedCancellation, "必须观察到接收入口后的弹窗关闭阶段")
+    XCTAssertNil(model.backendVersionWarning)
+    XCTAssertNil(host.presentedViewController)
+    XCTAssertNil(router.pendingRoute)
+    XCTAssertEqual(model.topShelfRoute?.id, id)
+    XCTAssertEqual(model.selectedTab, .explore)
+    XCTAssertEqual(model.exploreNavigation.path.count, 1)
+    XCTAssertFalse(model.isOpeningTopShelf)
+    service.logout()
+    XCTAssertNil(model.topShelfRoute)
+  }
+
   func testForeignOwnerDoesNotCreateAColdPreview() throws {
     let service = makeService()
     let viewModel = ContentViewModel(apiService: service)
@@ -682,7 +928,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
     oldStack.resetDetailHistory()
     XCTAssertTrue(lifecycle.isRemoved)
     XCTAssertEqual(oldStack.path.count, 0)
-    XCTAssertNil(service.mediaPreloader.peekTask(for: oldRoute.media))
+    XCTAssertNotNil(service.mediaPreloader.peekTask(for: oldRoute.media), "目标栈已取得同媒体的新 owner")
     oldStack.setStackPresentation(isSelected: true, scenePhase: .active)
     XCTAssertTrue(oldStack.isStackInteractive, "根页可继续交互，但旧详情动作不能复用")
     XCTAssertFalse(oldStack.rootLifecycle.isRemoved)
@@ -711,11 +957,14 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
     return service
   }
 
-  private func payload(service: APIService, tmdbID: Int? = 42, doubanID: String? = nil) -> TopShelfRoutePayload {
+  private func payload(
+    service: APIService, tmdbID: Int? = 42, doubanID: String? = nil, type: String = "电影",
+    origin: TopShelfEntryOrigin = .recommend
+  ) -> TopShelfRoutePayload {
     TopShelfRoutePayload(
-      sessionID: service.session.imageNamespace, source: doubanID == nil ? "themoviedb" : "douban",
+      sessionID: service.session.imageNamespace, entryOrigin: origin, source: doubanID == nil ? "themoviedb" : "douban",
       mediaID: nil, mediaIDPrefix: nil, tmdbID: tmdbID, doubanID: doubanID, bangumiID: nil,
-      anilistID: nil, imdbID: nil, tvdbID: nil, title: "本地标题", type: "电影",
+      anilistID: nil, imdbID: nil, tvdbID: nil, title: "本地标题", type: type,
       year: "2026", season: nil, posterPath: nil, collectionID: nil,
       overview: "本地简介", voteAverage: 8.5
     )
@@ -741,6 +990,7 @@ private final class TopShelfLaunchURLProtocol: URLProtocol, @unchecked Sendable 
   nonisolated(unsafe) private static var pendingRecognition: TopShelfLaunchURLProtocol?
   nonisolated(unsafe) private static var pendingDetail: TopShelfLaunchURLProtocol?
   nonisolated(unsafe) private static var holdsDetails = false
+  nonisolated(unsafe) private static var automaticCurrentUser = false
   nonisolated(unsafe) private static var imageCount = 0
 
   static var imageRequestCount: Int {
@@ -785,6 +1035,7 @@ private final class TopShelfLaunchURLProtocol: URLProtocol, @unchecked Sendable 
     pendingRecognition = nil
     pendingDetail = nil
     holdsDetails = false
+    automaticCurrentUser = false
     imageCount = 0
   }
 
@@ -809,14 +1060,20 @@ private final class TopShelfLaunchURLProtocol: URLProtocol, @unchecked Sendable 
     onRecognition = callback
   }
 
-  static func releaseCurrentUser() {
+  static func automaticallyRespondToCurrentUser() {
+    lock.lock()
+    automaticCurrentUser = true
+    lock.unlock()
+  }
+
+  static func releaseCurrentUser(fullPermissions: Bool = false) {
     lock.lock()
     let request = pendingUser
     pendingUser = nil
     lock.unlock()
     request?.respond(
       """
-      {"id":901,"name":"launch-user","is_superuser":false,"permissions":{"discovery":true,"search":false,"subscribe":false,"manage":false}}
+      {"id":901,"name":"launch-user","is_superuser":false,"permissions":{"discovery":true,"search":\(fullPermissions),"subscribe":\(fullPermissions),"manage":\(fullPermissions)}}
       """)
   }
 
@@ -828,6 +1085,13 @@ private final class TopShelfLaunchURLProtocol: URLProtocol, @unchecked Sendable 
   override func startLoading() {
     let path = request.url!.path
     Self.lock.lock()
+    if path == "/api/v1/user/current", Self.automaticCurrentUser {
+      Self.lock.unlock()
+      respond("""
+        {"id":901,"name":"launch-user","is_superuser":false,"permissions":{"discovery":true,"search":true,"subscribe":true,"manage":true}}
+        """)
+      return
+    }
     if path == "/api/v1/user/current" {
       Self.pendingUser = self
       let callback = Self.onCurrentUser
@@ -856,7 +1120,7 @@ private final class TopShelfLaunchURLProtocol: URLProtocol, @unchecked Sendable 
     if isDetail {
       respond("{\"tmdb_id\":42,\"title\":\"远端详情\",\"type\":\"电影\",\"source\":\"themoviedb\"}")
     } else if path.hasPrefix("/api/v1/system/global") {
-      respond("{}")
+      respond("{\"BACKEND_VERSION\":\"\(AppVersionInfo.compatibleMoviePilotVersion)\"}")
     } else {
       respond("[]")
     }

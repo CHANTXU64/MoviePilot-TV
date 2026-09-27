@@ -371,6 +371,7 @@ struct SubscribeSheet: View {
         await viewModel.loadData()
       }
     }
+    .cancelOnExternalNavigation()
     .onDisappear {
       let wasSaving = viewModel.isSaving
       Task {

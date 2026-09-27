@@ -1,28 +1,11 @@
 import SwiftUI
 
 struct RecommendView: View {
-  private let isSelected: Bool
-  private let allowsRequests: Bool
-  private let initialTopShelfRoute: PendingTopShelfRoute?
-  private let onInitialContentReady: () -> Void
-  @StateObject private var navigationCoordinator: ImageNavigationCoordinator
+  let isSelected: Bool
+  @ObservedObject var navigationCoordinator: ImageNavigationCoordinator
+  var allowsRequests = true
+  var onReturnToRoot: (UUID) -> Void = { _ in }
   @Environment(\.scenePhase) private var scenePhase
-
-  init(
-    isSelected: Bool,
-    initialTopShelfRoute: PendingTopShelfRoute? = nil,
-    allowsRequests: Bool = true,
-    onInitialContentReady: @escaping () -> Void = {}
-  ) {
-    self.isSelected = isSelected
-    self.allowsRequests = allowsRequests
-    self.initialTopShelfRoute = initialTopShelfRoute
-    self.onInitialContentReady = onInitialContentReady
-    _navigationCoordinator = StateObject(wrappedValue: ImageNavigationCoordinator(
-      initialEntry: initialTopShelfRoute?.navigationEntry,
-      startsInitialMediaLoad: allowsRequests
-    ))
-  }
 
   var body: some View {
     NavigationStack(path: $navigationCoordinator.path) {
@@ -34,32 +17,16 @@ struct RecommendView: View {
         }
       }
       .navigationDestination(for: ImageNavigationEntry.self) { entry in
-        ImageNavigationDestination(
-          entry: entry,
-          allowsRequests: allowsRequests,
-          onInitialContentReady: {
-            if entry.id == initialTopShelfRoute?.id { onInitialContentReady() }
-          }
-        )
+        ImageNavigationDestination(entry: entry, allowsRequests: allowsRequests)
       }
     }
     .environment(\.pageImageLifecycle, navigationCoordinator.rootLifecycle)
     .environmentObject(navigationCoordinator)
     .onAppear { updateStackForeground() }
-    .onChange(of: initialTopShelfRoute?.id) { _, _ in
-      guard let route = initialTopShelfRoute else { return }
-      var transaction = Transaction()
-      transaction.disablesAnimations = true
-      withTransaction(transaction) {
-        navigationCoordinator.openExternal(route.navigationEntry, startsMediaLoad: allowsRequests)
-      }
-    }
     .onChange(of: isSelected) { _, _ in updateStackForeground() }
     .onChange(of: scenePhase) { _, _ in updateStackForeground() }
-    .onChange(of: navigationCoordinator.path.count) { _, count in
-      if count == 0 {
-        onInitialContentReady()
-      }
+    .onChange(of: navigationCoordinator.topEntryID) { previous, current in
+      if current == nil, let previous { onReturnToRoot(previous) }
     }
     .task(id: allowsRequests) {
       guard allowsRequests else { return }
@@ -142,6 +109,7 @@ private struct RecommendRootContent: View {
       }
     }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
+      subscriptionHandler.cancelPresentation()
       subscriptionHandler = SubscriptionHandler()
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler)

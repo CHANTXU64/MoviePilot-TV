@@ -43,6 +43,9 @@ struct SheetPicker<Value: Hashable>: View {
         view.padding(.horizontal)
       }
     }
+    .onReceive(NotificationCenter.default.publisher(
+      for: .imageNavigationPresentationWillReset, object: APIService.shared
+    )) { _ in showingPicker = false }
     .sheet(isPresented: $showingPicker) {
       SheetPickerDetailView(
         title: title,

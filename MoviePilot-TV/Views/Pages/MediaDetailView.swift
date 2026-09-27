@@ -72,6 +72,7 @@ struct MediaDetailView: View {
   @StateObject private var viewModel: MediaDetailViewModel
   @State private var subscriptionHandler = SubscriptionHandler()
   @Environment(\.scenePhase) private var scenePhase
+  @Environment(\.topShelfPresentation) private var topShelfPresentation
   @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
   @EnvironmentObject private var notificationManager: NotificationManager
@@ -459,10 +460,10 @@ struct MediaDetailView: View {
     }
     .task(id: allowsRequests) {
       guard allowsRequests else { return }
-      if !hasAppeared, let preferredHeaderFocus {
+      if presentationStyle == .standard, !hasAppeared, let preferredHeaderFocus {
         focusedButton = preferredHeaderFocus
         hasAppeared = true
-      } else if !hasAppeared {
+      } else if presentationStyle == .standard, !hasAppeared {
         hasAppeared = true
       }
       // 如果 fullDetail 已经就绪（预加载命中），立即应用（网络加载自动在后台启动）
@@ -581,6 +582,7 @@ struct MediaDetailView: View {
       )
     }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
+      subscriptionHandler.cancelPresentation()
       subscriptionHandler = SubscriptionHandler()
       sheetSubscribe = nil
       showSiteSelection = false
@@ -600,6 +602,15 @@ struct MediaDetailView: View {
         lastFocusedButton = newValue
       }
     }
+    .background(PresentationReadyAction(
+      isEnabled: presentationStyle == .direct && !hasAppeared && allowsRequests
+        && !topShelfPresentation.blocksInteraction && scenePhase == .active
+        && navigationCoordinator.isStackInteractive && navigationCoordinator.topEntryID == routeID,
+      requiresNavigationTop: true,
+      contentFocusMatches: isHeroFocused && focusedButton == preferredHeaderFocus,
+      onContentFocus: { hasAppeared = true },
+      action: { focusedButton = preferredHeaderFocus }
+    ))
   }
 
   private func navigateFromSecondPage(to destination: Person) {

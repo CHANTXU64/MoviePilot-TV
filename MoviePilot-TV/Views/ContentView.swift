@@ -1,12 +1,17 @@
 import SwiftUI
 
 struct ContentView: View {
-  @StateObject private var viewModel = ContentViewModel()
+  @StateObject private var viewModel: ContentViewModel
+  @Environment(\.scenePhase) private var scenePhase
   @EnvironmentObject private var topShelfNavigationRouter: TopShelfNavigationRouter
   @EnvironmentObject private var topShelfManager: TopShelfManager
 
+  init(viewModel: @autoclosure @escaping () -> ContentViewModel = ContentViewModel()) {
+    _viewModel = StateObject(wrappedValue: viewModel())
+  }
+
   var body: some View {
-    Group {
+    ZStack {
       if viewModel.canPresentContent {
         MainContentView(viewModel: viewModel)
           .id(viewModel.sessionUIIdentity)
@@ -18,42 +23,70 @@ struct ContentView: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(Color(white: 0.1).ignoresSafeArea())
+    .disabled(viewModel.isOpeningTopShelf)
+    .accessibilityHidden(viewModel.isOpeningTopShelf)
+    .environment(\.topShelfPresentation, TopShelfOpeningContext(
+      routeID: viewModel.topShelfRoute?.id,
+      blocksInteraction: viewModel.isOpeningTopShelf,
+      didPresent: { viewModel.finishTopShelfOpening(id: $0) }
+    ))
+    .overlay {
+      if viewModel.isOpeningTopShelf {
+        ZStack {
+          Color(white: 0.1).ignoresSafeArea()
+          VStack(spacing: 32) {
+            ProgressView("正在打开详情…")
+            Button("取消", action: cancelTopShelfOpening)
+          }
+        }
+        .accessibilityIdentifier("top-shelf-opening")
+        .onExitCommand(perform: cancelTopShelfOpening)
+      }
+    }
     .task {
       updateTopShelfPriority()
       topShelfManager.start()
       await viewModel.prepareStartupIfNeeded()
-      reconcileTopShelfRoute()
     }
     .onOpenURL { url in
-      var transaction = Transaction()
-      transaction.disablesAnimations = true
-      withTransaction(transaction) {
-        if topShelfNavigationRouter.handle(url) { reconcileTopShelfRoute() }
+      if topShelfNavigationRouter.handle(url), let route = topShelfNavigationRouter.pendingRoute {
+        viewModel.prepareTopShelfRoute(route)
       }
     }
-    .onChange(of: topShelfNavigationRouter.pendingRoute?.id) { _, _ in
-      reconcileTopShelfRoute()
+    .onChange(of: topShelfNavigationRouter.pendingRoute?.id, initial: true) { _, _ in
+      if let route = topShelfNavigationRouter.pendingRoute { viewModel.prepareTopShelfRoute(route) }
+      updateTopShelfPriority()
     }
     .onChange(of: viewModel.isPreparingStartupSession) { _, _ in
-      reconcileTopShelfRoute()
       updateTopShelfPriority()
     }
     .onChange(of: viewModel.isOpeningTopShelf) { _, _ in updateTopShelfPriority() }
-    .onChange(of: viewModel.isLoggedIn) { _, _ in reconcileTopShelfRoute() }
-    .onChange(of: viewModel.sessionUIIdentity) { _, _ in reconcileTopShelfRoute() }
-    .alert(item: $viewModel.backendVersionWarning) { warning in
-      Alert(
-        title: Text(warning.title),
-        message: Text(warning.message),
-        dismissButton: .default(Text("继续使用"))
-      )
+    .background(PresentationReadyAction(
+      isEnabled: scenePhase == .active && topShelfNavigationRouter.pendingRoute != nil,
+      cancelsEditing: true,
+      action: reconcileTopShelfRoute
+    ))
+    .alert(
+      viewModel.backendVersionWarning?.title ?? "版本提示",
+      isPresented: Binding(
+        get: { viewModel.backendVersionWarning != nil },
+        set: { if !$0, viewModel.backendVersionWarning != nil { viewModel.backendVersionWarning = nil } }),
+      presenting: viewModel.backendVersionWarning
+    ) { _ in
+      Button("继续使用", role: .cancel) { viewModel.backendVersionWarning = nil }
+    } message: { warning in
+      Text(warning.message)
     }
-    .alert(item: $viewModel.accountPermissionWarning) { warning in
-      Alert(
-        title: Text(warning.title),
-        message: Text(warning.message),
-        dismissButton: .default(Text("继续使用"))
-      )
+    .alert(
+      viewModel.accountPermissionWarning?.title ?? "权限提示",
+      isPresented: Binding(
+        get: { viewModel.accountPermissionWarning != nil },
+        set: { if !$0, viewModel.accountPermissionWarning != nil { viewModel.accountPermissionWarning = nil } }),
+      presenting: viewModel.accountPermissionWarning
+    ) { _ in
+      Button("继续使用", role: .cancel) { viewModel.accountPermissionWarning = nil }
+    } message: { warning in
+      Text(warning.message)
     }
     .withNotification()
   }
@@ -61,12 +94,26 @@ struct ContentView: View {
   private func updateTopShelfPriority() {
     topShelfManager.setSynchronizationDeferred(
       viewModel.isPreparingStartupSession || viewModel.isOpeningTopShelf
+        || topShelfNavigationRouter.pendingRoute != nil
     )
   }
 
+  private func cancelTopShelfOpening() {
+    if let route = topShelfNavigationRouter.pendingRoute {
+      topShelfNavigationRouter.consume(id: route.id)
+    }
+    viewModel.cancelTopShelfOpening()
+    updateTopShelfPriority()
+  }
+
   private func reconcileTopShelfRoute() {
+    // 后台的 Tab 容器仍会恢复上次选择；等前台激活后再交接外部导航。
+    guard scenePhase == .active else { return }
     guard let route = topShelfNavigationRouter.pendingRoute else { return }
-    switch viewModel.acceptTopShelfRoute(route) {
+    var transaction = Transaction()
+    transaction.disablesAnimations = true
+    let disposition = withTransaction(transaction) { viewModel.acceptTopShelfRoute(route) }
+    switch disposition {
     case .wait:
       break
     case .preview, .open, .discard:
@@ -96,17 +143,19 @@ struct MainContentView: View {
         Tab("推荐", systemImage: "sparkles.tv", value: ContentViewModel.Tab.recommend) {
           RecommendView(
             isSelected: selectedTab == .recommend,
-            initialTopShelfRoute: initialTopShelfRoute,
+            navigationCoordinator: viewModel.recommendNavigation,
             allowsRequests: allowsRequests,
-            onInitialContentReady: {
-              if let id = initialTopShelfRoute?.id { viewModel.finishTopShelfOpening(id: id) }
-            }
+            onReturnToRoot: { viewModel.endTopShelfPresentation(id: $0) }
           )
         }
       }
       if viewModel.visibleTabs.contains(.explore) {
         Tab("探索", systemImage: "safari", value: ContentViewModel.Tab.explore) {
-          if allowsRequests { ExploreView(isSelected: selectedTab == .explore) }
+          ExploreView(
+            isSelected: selectedTab == .explore,
+            navigationCoordinator: viewModel.exploreNavigation,
+            allowsRequests: allowsRequests,
+            onReturnToRoot: { viewModel.endTopShelfPresentation(id: $0) })
         }
       }
       if viewModel.visibleTabs.contains(.search) {
@@ -126,12 +175,13 @@ struct MainContentView: View {
     .foregroundColor(.primary)
     .onChange(of: initialTopShelfRoute?.id) { _, id in
       if id != nil {
+        mediaActionHandler.cancelPresentation()
         mediaActionHandler = MediaActionHandler()
       }
     }
     .onChange(of: selectedTab) { _, tab in
-      if tab != .recommend, let id = initialTopShelfRoute?.id {
-        viewModel.finishTopShelfOpening(id: id)
+      if let route = initialTopShelfRoute, tab != route.targetTab {
+        viewModel.endTopShelfPresentation()
       }
       checkTask?.cancel()
       checkTask = Task {
@@ -147,4 +197,5 @@ struct MainContentView: View {
     .mediaActionAlerts()
     .environmentObject(mediaActionHandler)
   }
+
 }

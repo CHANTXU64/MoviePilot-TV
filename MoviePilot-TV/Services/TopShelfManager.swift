@@ -277,7 +277,8 @@ final class TopShelfManager: ObservableObject {
       var seenIdentifiers = Set<String>()
       for media in mediaItems {
         if snapshotItems.count >= Self.maximumItems { break }
-        let payload = Self.routePayload(for: media, sessionID: sessionID)
+        let payload = Self.routePayload(
+          for: media, sessionID: sessionID, entryOrigin: selection.entryOrigin)
         guard let identifier = payload.cardIdentifier, seenIdentifiers.insert(identifier).inserted,
           media.identity != nil || media.collection_id != nil,
           let title = media.title?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -637,10 +638,12 @@ final class TopShelfManager: ObservableObject {
 
   private static func routePayload(
     for media: MediaInfo,
-    sessionID: String
+    sessionID: String,
+    entryOrigin: TopShelfEntryOrigin
   ) -> TopShelfRoutePayload {
     TopShelfRoutePayload(
       sessionID: sessionID,
+      entryOrigin: entryOrigin,
       source: media.source,
       mediaID: media.media_id,
       mediaIDPrefix: media.mediaid_prefix,

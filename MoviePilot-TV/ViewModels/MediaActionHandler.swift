@@ -6,6 +6,10 @@ class MediaActionHandler: ObservableObject {
   @Published var isRecognizingTmdb = false
   @Published var showTMDBNotFoundAlert = false
 
+  func cancelPresentation() {
+    showTMDBNotFoundAlert = false
+  }
+
   func searchResourcesTarget(
     for item: MediaInfo, sites: String? = nil
   ) -> ResourceSearchRequest {

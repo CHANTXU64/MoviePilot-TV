@@ -274,6 +274,7 @@ final class ImageNavigationCoordinator: ObservableObject {
   }
 
   private var entries: [ImageNavigationEntry] = []
+  var topEntryID: UUID? { entries.last?.id }
   private var lifecycles: [UUID: PageImageLifecycle] = [:]
   private var preloadTasks: [UUID: MediaPreloadTask] = [:]
   private var removedLifecycleCleanupTasks: [UUID: Task<Void, Never>] = [:]
