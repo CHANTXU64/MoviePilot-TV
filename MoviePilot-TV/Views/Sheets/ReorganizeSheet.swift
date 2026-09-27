@@ -102,6 +102,7 @@ struct ReorganizeSheet: View {
         .applySheetStyles()
       }
     }
+    .cancelOnExternalNavigation()
     .sheet(isPresented: $showPreview) {
       if let preview = viewModel.previewData {
         ReorganizePreviewSheet(preview: preview)

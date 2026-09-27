@@ -94,6 +94,29 @@ final class TopShelfRefreshClientTests: XCTestCase {
       })
   }
 
+  func testExtensionExploreCardsRetainOriginWhenSelectionLaterChanges() async throws {
+    let previous = try XCTUnwrap(store.loadState())
+    var exploration = ExploreConfiguration()
+    exploration.selectedType = .tvs
+    exploration.tmdbLanguage = "zh"
+    let selection = TopShelfSelection(exploration: exploration)
+    try store.saveState(TopShelfSharedState(
+      schemaVersion: 1, activeSessionID: previous.activeSessionID, selection: selection,
+      snapshot: nil, refreshConfiguration: previous.refreshConfiguration))
+    try await refresh()
+    let card = try XCTUnwrap(store.loadState()?.snapshot?.items.first)
+    let payload = try XCTUnwrap(TopShelfDeepLink.payload(from: card.displayURL))
+    XCTAssertEqual(payload.entryOrigin, .explore)
+    XCTAssertEqual(PendingTopShelfRoute(payload: payload)?.targetTab, .explore)
+    try store.saveState(previous)
+    XCTAssertEqual(TopShelfDeepLink.payload(from: card.displayURL)?.entryOrigin, .explore)
+    let request = try XCTUnwrap(TopShelfRefreshURLProtocol.requests.first {
+      $0.url?.path.contains("discover/tmdb_tvs") == true
+    })
+    XCTAssertEqual(URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+      .queryItems?.first { $0.name == "with_original_language" }?.value, "zh")
+  }
+
   func testExtensionRecoversAfterEntireCachePurgeWithoutOpeningAppAndLogoutStaysRevoked()
     async throws
   {
@@ -353,6 +376,40 @@ final class TopShelfRefreshClientTests: XCTestCase {
     XCTAssertEqual(model.mediaInfo.title, "保留的分季页")
   }
 
+  func testExternalCancellationDismissesNestedSubscriptionAndSelectionSheets() async throws {
+    let snapshot = SystemSessionServiceSnapshot.capture(service: .shared)
+    defer { snapshot.restore(to: .shared) }
+    APIService.shared.replaceSessionForTesting(
+      baseURL: "https://nested-sheet.local", token: nil, currentUser: nil)
+    let owner = TopShelfNestedSheetOwner()
+    let host = UIHostingController(rootView: TopShelfNestedSheetHost(owner: owner))
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+    let previous = scene.windows.first(where: \.isKeyWindow)
+    let window = UIWindow(windowScene: scene)
+    window.rootViewController = host
+    window.makeKeyAndVisible()
+    defer {
+      window.isHidden = true
+      window.rootViewController = nil
+      previous?.makeKey()
+    }
+    try await Task.sleep(for: .milliseconds(100))
+    owner.outer = true
+    try await Task.sleep(for: .milliseconds(400))
+    owner.inner = true
+    try await Task.sleep(for: .milliseconds(400))
+    XCTAssertNotNil(host.presentedViewController?.presentedViewController)
+    NotificationCenter.default.post(
+      name: .imageNavigationPresentationWillReset, object: APIService.shared)
+    for _ in 0..<60 {
+      if host.presentedViewController == nil { break }
+      try await Task.sleep(for: .milliseconds(25))
+    }
+    XCTAssertNil(host.presentedViewController)
+    XCTAssertFalse(owner.outer)
+    XCTAssertFalse(owner.inner)
+  }
+
   func testSettingsRootAndSingleChoicePageRenderWithExistingRowStyle() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(TopShelfRefreshURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(TopShelfRefreshURLProtocol.self) }
@@ -439,7 +496,7 @@ private final class TopShelfRefreshURLProtocol: URLProtocol, @unchecked Sendable
     let data: Data
     if request.url!.host == "image.local" {
       data = image
-    } else if path.contains("/recommend/custom") {
+    } else if path.contains("/recommend/custom") || path.contains("/discover/tmdb_tvs") {
       callback?()
       let items: [[String: Any]] = (offset..<(offset + 10)).map { index in
         [
@@ -525,4 +582,24 @@ private final class TopShelfMemberImageURLProtocol: URLProtocol, @unchecked Send
     client?.urlProtocolDidFinishLoading(self)
   }
   override func stopLoading() {}
+}
+
+@MainActor
+private final class TopShelfNestedSheetOwner: ObservableObject {
+  @Published var outer = false
+  @Published var inner = false
+}
+
+private struct TopShelfNestedSheetHost: View {
+  @ObservedObject var owner: TopShelfNestedSheetOwner
+  var body: some View {
+    Text("底层页面")
+      .sheet(isPresented: $owner.outer) {
+        SubscribeSheet(subscribe: Subscribe(id: 42, name: "待取消编辑", type: "电影"))
+          .sheet(isPresented: $owner.inner) {
+            MultiSelectionSheet(
+              options: [1, 2], id: \.self, selected: .constant([]), label: { String($0) })
+          }
+      }
+  }
 }

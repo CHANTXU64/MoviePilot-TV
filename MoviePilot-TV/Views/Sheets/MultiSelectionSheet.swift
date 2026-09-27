@@ -102,5 +102,6 @@ struct MultiSelectionSheet<T, ID: Hashable>: View {
         .padding(28)
       }
     }
+    .cancelOnExternalNavigation()
   }
 }

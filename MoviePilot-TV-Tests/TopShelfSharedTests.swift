@@ -127,6 +127,17 @@ final class TopShelfSharedTests: XCTestCase {
     XCTAssertFalse(url.absoluteString.contains("空 格"))
   }
 
+  func testDeepLinkRequiresExplicitEntryOrigin() throws {
+    let encoded = try JSONEncoder().encode(routePayload())
+    var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+    object.removeValue(forKey: "entryOrigin")
+    let data = try JSONSerialization.data(withJSONObject: object)
+    var components = try XCTUnwrap(URLComponents(
+      url: TopShelfDeepLink.url(for: routePayload()), resolvingAgainstBaseURL: false))
+    components.queryItems = [URLQueryItem(name: "payload", value: data.base64EncodedString())]
+    XCTAssertNil(TopShelfDeepLink.payload(from: try XCTUnwrap(components.url)))
+  }
+
   func testDeepLinkRejectsUnknownBoundaryAndMalformedPayload() throws {
     let valid = try TopShelfDeepLink.url(for: routePayload())
     var components = try XCTUnwrap(URLComponents(url: valid, resolvingAgainstBaseURL: false))
@@ -449,7 +460,7 @@ final class TopShelfSharedTests: XCTestCase {
     title: String? = "Fight Club"
   ) -> TopShelfRoutePayload {
     TopShelfRoutePayload(
-      sessionID: sessionID,
+      sessionID: sessionID, entryOrigin: .recommend,
       source: source,
       mediaID: mediaID,
       mediaIDPrefix: "tmdb",

@@ -90,9 +90,9 @@ nonisolated private struct TopShelfMediaRecord: Decodable {
       anilistId: anilist_id)
   }
 
-  func payload(sessionID: String) -> TopShelfRoutePayload {
+  func payload(sessionID: String, entryOrigin: TopShelfEntryOrigin) -> TopShelfRoutePayload {
     TopShelfRoutePayload(
-      sessionID: sessionID, source: media_source ?? source,
+      sessionID: sessionID, entryOrigin: entryOrigin, source: media_source ?? source,
       mediaID: media_id, mediaIDPrefix: mediaid_prefix, tmdbID: tmdb_id, doubanID: douban_id,
       bangumiID: bangumi_id, anilistID: anilist_id, imdbID: imdb_id, tvdbID: tvdb_id,
       title: title, type: type, year: year, season: season, posterPath: poster_path,
@@ -153,7 +153,8 @@ nonisolated struct TopShelfRefreshClient: Sendable {
           TopShelfMediaRecord.self, from: JSONSerialization.data(withJSONObject: object))
         guard let title = media.title?.trimmingCharacters(in: .whitespacesAndNewlines),
           !title.isEmpty,
-          let identifier = media.payload(sessionID: configuration.sessionID).cardIdentifier
+          let identifier = media.payload(
+            sessionID: configuration.sessionID, entryOrigin: selection.entryOrigin).cardIdentifier
         else { continue }
         guard seen.insert(identifier).inserted else { continue }
         var prepared: [String: Any]
@@ -225,7 +226,8 @@ nonisolated struct TopShelfRefreshClient: Sendable {
           TopShelfSnapshotItem(
             identifier: identifier, title: title, imageRelativePath: imagePath,
             displayURL: try TopShelfDeepLink.url(
-              for: media.payload(sessionID: configuration.sessionID)),
+              for: media.payload(
+                sessionID: configuration.sessionID, entryOrigin: selection.entryOrigin)),
             detailRelativePath: detailPath, backgroundRelativePath: backgroundPath,
             backgroundIsPoster: backgroundIsPoster))
       } catch is CancellationError { throw CancellationError() } catch { continue }

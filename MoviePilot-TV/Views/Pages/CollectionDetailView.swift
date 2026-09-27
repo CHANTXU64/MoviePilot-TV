@@ -71,6 +71,7 @@ struct CollectionDetailView: View {
       }
     )
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
+      subscriptionHandler.cancelPresentation()
       subscriptionHandler = SubscriptionHandler()
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler)

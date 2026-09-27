@@ -37,6 +37,30 @@ final class TopShelfManagerTests: XCTestCase {
     XCTAssertEqual(fixture.store.presentation(at: Date())?.items.count, 6)
   }
 
+  func testRecommendationAndExploreCardsFreezeTheirOwnEntryOrigin() async throws {
+    let fixture = try ManagerFixture()
+    defer { fixture.cleanup() }
+    let service = makeService(userID: 839)
+    let item = media(id: 42, title: "中文电视剧", poster: "https://images.local/42.jpg")
+    let manager = TopShelfManager(
+      apiService: service, store: fixture.store, defaults: fixture.defaults,
+      fetchSources: { [] }, fetchRecommendations: { _ in [item] }, fetchDetail: { $0 },
+      fetchImage: { _ in TopShelfImageResource(data: TopShelfTestArtwork.data, fileExtension: "gif") },
+      notifyChange: {})
+    await manager.refreshNow()
+    let recommendation = try XCTUnwrap(fixture.store.loadState()?.snapshot?.items.first)
+    var exploration = ExploreConfiguration()
+    exploration.selectedType = .tvs
+    exploration.tmdbLanguage = "zh"
+    manager.select(TopShelfSelection(exploration: exploration))
+    await manager.refreshNow()
+    let explore = try XCTUnwrap(fixture.store.loadState()?.snapshot?.items.first)
+    XCTAssertEqual(TopShelfDeepLink.payload(from: recommendation.displayURL)?.entryOrigin, .recommend)
+    XCTAssertEqual(TopShelfDeepLink.payload(from: explore.displayURL)?.entryOrigin, .explore)
+    XCTAssertEqual(recommendation.identifier, explore.identifier, "归属与媒体身份分开")
+    XCTAssertNotEqual(recommendation.displayURL, explore.displayURL)
+  }
+
   func testBackdropOnlyMediaCachesCardAndTwoKBackgroundWithoutOriginal() async throws {
     let fixture = try ManagerFixture()
     defer { fixture.cleanup() }
@@ -221,7 +245,7 @@ final class TopShelfManagerTests: XCTestCase {
       imageRelativePath: "images/old.jpg",
       displayURL: try TopShelfDeepLink.url(
         for: TopShelfRoutePayload(
-          sessionID: service.session.imageNamespace,
+          sessionID: service.session.imageNamespace, entryOrigin: .recommend,
           source: "themoviedb",
           mediaID: "9",
           mediaIDPrefix: nil,
@@ -355,7 +379,7 @@ final class TopShelfManagerTests: XCTestCase {
           imageRelativePath: "images/existing.jpg",
           displayURL: try TopShelfDeepLink.url(
             for: TopShelfRoutePayload(
-              sessionID: service.session.imageNamespace,
+              sessionID: service.session.imageNamespace, entryOrigin: .recommend,
               source: "themoviedb",
               mediaID: "808",
               mediaIDPrefix: nil,

@@ -170,6 +170,7 @@ struct AddDownloadSheet: View {
     .task {
       await viewModel.loadData()
     }
+    .cancelOnExternalNavigation()
     .sheet(isPresented: $showMediaSearch) {
       ManualMediaSearchSheet(source: viewModel.mediaSource) { mediaId, _ in
         viewModel.mediaId = mediaId

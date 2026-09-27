@@ -116,6 +116,7 @@ struct ForkSubscribeSheet: View {
       }
       .frame(width: 900, alignment: .leading)
     }
+    .cancelOnExternalNavigation()
     .padding(50)
     .applySheetStyles()
   }

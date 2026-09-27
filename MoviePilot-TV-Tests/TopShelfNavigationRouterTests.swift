@@ -138,7 +138,7 @@ final class TopShelfNavigationRouterTests: XCTestCase {
 
   private func routePayload(sessionID: String) -> TopShelfRoutePayload {
     TopShelfRoutePayload(
-      sessionID: sessionID,
+      sessionID: sessionID, entryOrigin: .recommend,
       source: "plugin-source",
       mediaID: "plugin:42",
       mediaIDPrefix: "plugin",

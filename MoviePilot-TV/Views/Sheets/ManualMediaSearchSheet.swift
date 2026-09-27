@@ -178,6 +178,7 @@ struct ManualMediaSearchSheet: View {
     .onAppear {
       viewModel.presentationDidAppear()
     }
+    .cancelOnExternalNavigation()
     .onDisappear {
       searchTask?.cancel()
       searchTask = nil

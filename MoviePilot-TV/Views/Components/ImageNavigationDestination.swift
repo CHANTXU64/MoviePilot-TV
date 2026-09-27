@@ -5,6 +5,8 @@ struct ImageNavigationDestination: View {
   var allowsRequests = true
   var onInitialContentReady: () -> Void = {}
   @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
+  @Environment(\.scenePhase) private var scenePhase
+  @Environment(\.topShelfPresentation) private var topShelfPresentation
 
   @ViewBuilder
   var body: some View {
@@ -60,5 +62,15 @@ struct ImageNavigationDestination: View {
       }
     }
     .environment(\.pageImageLifecycle, lifecycle)
+    .background(PresentationReadyAction(
+      isEnabled: topShelfPresentation.blocksInteraction
+        && topShelfPresentation.routeID == entry.id
+        && navigationCoordinator.topEntryID == entry.id
+        && navigationCoordinator.isStackInteractive && scenePhase == .active,
+      requiresNavigationTop: true,
+      action: { topShelfPresentation.didPresent(entry.id) }
+    ))
+    // 每次外部入口都有独立的详情状态与 appearance，重复同一卡片也重新交接焦点。
+    .id(entry.id)
   }
 }

@@ -8,6 +8,10 @@ nonisolated struct PendingTopShelfRoute: Identifiable, Equatable {
   let localPosterURL: URL?
   let cachedContent: TopShelfCachedContent?
 
+  var targetTab: ContentViewModel.Tab {
+    payload.entryOrigin == .explore ? .explore : .recommend
+  }
+
   init?(
     id: UUID = UUID(), payload: TopShelfRoutePayload, localPosterURL: URL? = nil,
     cachedContent: TopShelfCachedContent? = nil
@@ -108,7 +112,7 @@ nonisolated enum TopShelfNavigationPolicy {
     guard isLoggedIn,
       route.payload.sessionID == currentSessionID
     else { return .discard }
-    guard visibleTabs.contains(.recommend) else {
+    guard visibleTabs.contains(route.targetTab) else {
       return isPreparingStartupSession ? .wait : .discard
     }
     if isPreparingStartupSession { return .preview }

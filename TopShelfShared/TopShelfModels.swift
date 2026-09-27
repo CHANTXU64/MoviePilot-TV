@@ -1,5 +1,10 @@
 import Foundation
 
+nonisolated enum TopShelfEntryOrigin: String, Codable, Sendable {
+  case recommend
+  case explore
+}
+
 nonisolated struct TopShelfSelection: Codable, Equatable, Hashable, Identifiable, Sendable {
   let shelfID: String
   let title: String
@@ -8,6 +13,7 @@ nonisolated struct TopShelfSelection: Codable, Equatable, Hashable, Identifiable
 
   var requestPath: String { exploration?.apiPath ?? shelfID }
   var isSubscriptionShare: Bool { exploration?.selectedSource == .subscriptionShare }
+  var entryOrigin: TopShelfEntryOrigin { exploration == nil ? .recommend : .explore }
 
   init(shelfID: String, title: String, exploration: ExploreConfiguration? = nil) {
     self.shelfID = shelfID
@@ -26,6 +32,7 @@ nonisolated struct TopShelfSelection: Codable, Equatable, Hashable, Identifiable
 
 nonisolated struct TopShelfRoutePayload: Codable, Equatable, Sendable {
   let sessionID: String
+  let entryOrigin: TopShelfEntryOrigin
   let source: String?
   let mediaID: String?
   let mediaIDPrefix: String?

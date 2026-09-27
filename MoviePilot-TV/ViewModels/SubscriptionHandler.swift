@@ -118,6 +118,16 @@ class SubscriptionHandler: ObservableObject {
     unsubscribeConfirmationMessage = nil
   }
 
+  func cancelPresentation() {
+    dismissUnsubscribeConfirmation()
+    sheetSubscribe = nil
+    tvSubscribeRequest = nil
+    forkSheetRequest = nil
+    activeForkOperation = nil
+    pendingForkReceipt = nil
+    forkErrorMessage = nil
+  }
+
   private func unsubscribe(
     _ item: MediaInfo,
     mediaId: String,

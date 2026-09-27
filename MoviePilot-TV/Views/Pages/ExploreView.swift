@@ -2,19 +2,51 @@ import Combine
 import SwiftUI
 
 struct ExploreView: View {
-  private let isSelected: Bool
-  @StateObject private var viewModel = ExploreViewModel()
-  @StateObject private var navigationCoordinator = ImageNavigationCoordinator()
-  @State private var subscriptionHandler = SubscriptionHandler()
+  let isSelected: Bool
+  @ObservedObject var navigationCoordinator: ImageNavigationCoordinator
+  var allowsRequests = true
+  var onReturnToRoot: (UUID) -> Void = { _ in }
   @Environment(\.scenePhase) private var scenePhase
-  @EnvironmentObject private var mediaActionHandler: MediaActionHandler
-
-  init(isSelected: Bool = true) {
-    self.isSelected = isSelected
-  }
 
   var body: some View {
     NavigationStack(path: $navigationCoordinator.path) {
+      Group {
+        if allowsRequests {
+          ExploreRootContent(isSelected: isSelected)
+        } else {
+          Color(white: 0.1).ignoresSafeArea()
+        }
+      }
+      .navigationDestination(for: ImageNavigationEntry.self) { entry in
+        ImageNavigationDestination(entry: entry, allowsRequests: allowsRequests)
+      }
+    }
+    .environment(\.pageImageLifecycle, navigationCoordinator.rootLifecycle)
+    .environmentObject(navigationCoordinator)
+    .onAppear { updateStackForeground() }
+    .onChange(of: isSelected) { _, _ in updateStackForeground() }
+    .onChange(of: scenePhase) { _, _ in updateStackForeground() }
+    .onChange(of: navigationCoordinator.topEntryID) { previous, current in
+      if current == nil, let previous { onReturnToRoot(previous) }
+    }
+    .task(id: allowsRequests) {
+      guard allowsRequests else { return }
+      navigationCoordinator.startDeferredMediaLoads()
+    }
+  }
+
+  private func updateStackForeground() {
+    navigationCoordinator.setStackPresentation(isSelected: isSelected, scenePhase: scenePhase)
+  }
+}
+
+private struct ExploreRootContent: View {
+  let isSelected: Bool
+  @StateObject private var viewModel = ExploreViewModel()
+  @State private var subscriptionHandler = SubscriptionHandler()
+  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
+
+  var body: some View {
       Group {
         if let paginator = viewModel.paginator {
           // 主内容区：媒体网格
@@ -45,22 +77,11 @@ struct ExploreView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
       }
-      .navigationDestination(for: ImageNavigationEntry.self) { entry in
-        ImageNavigationDestination(entry: entry)
-      }
-    }
-    .environment(\.pageImageLifecycle, navigationCoordinator.rootLifecycle)
-    .environmentObject(navigationCoordinator)
-    .onAppear {
-      updateStackForeground()
-    }
-    .onChange(of: isSelected) { _, _ in updateStackForeground() }
-    .onChange(of: scenePhase) { _, _ in updateStackForeground() }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
+      subscriptionHandler.cancelPresentation()
       subscriptionHandler = SubscriptionHandler()
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler)
-
     .task(id: isSelected) {
       guard isSelected else { return }
       await viewModel.refreshSources()
@@ -86,9 +107,6 @@ struct ExploreView: View {
     }
   }
 
-  private func updateStackForeground() {
-    navigationCoordinator.setStackPresentation(isSelected: isSelected, scenePhase: scenePhase)
-  }
 }
 
 // MARK: - 数据源选择器
@@ -125,7 +143,7 @@ struct FilterPickersView: View {
 
   // 插件多选筛选
   @State private var multiSelectControl: PluginFilterControl?
-  @State private var multiSelectSelection: Set<JSONValue> = []
+  @State private var multiSelectSelection: Set<JSONValue>?
 
   private var hasFocusableFilters: Bool {
     if case .custom = viewModel.selectedSource {
@@ -218,17 +236,24 @@ struct FilterPickersView: View {
         setCurrentFocusIndex(newIndex)
       }
     }
-    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in multiSelectControl = nil }
+    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
+      multiSelectSelection = nil
+      multiSelectControl = nil
+    }
     .sheet(item: $multiSelectControl) { control in
       MultiSelectionSheet(
         options: control.options,
         id: \.value,
-        selected: $multiSelectSelection,
+        selected: Binding(
+          get: { multiSelectSelection ?? [] },
+          set: { multiSelectSelection = $0 }),
         label: { $0.title }
       )
       .onDisappear {
+        guard let selection = multiSelectSelection else { return }
+        multiSelectSelection = nil
         let selected = control.options
-          .filter { multiSelectSelection.contains($0.value) }
+          .filter { selection.contains($0.value) }
           .map(\.value)
         viewModel.setPluginFilter(
           control.field,
