@@ -19,6 +19,8 @@ final class TopShelfRefreshClientTests: XCTestCase {
     store = TopShelfSharedStore(containerURL: directory)
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [TopShelfRefreshURLProtocol.self]
+    config.httpShouldSetCookies = false
+    config.httpCookieStorage = nil
     transport = URLSession(configuration: config)
     try store.saveState(
       TopShelfSharedState(
@@ -92,6 +94,164 @@ final class TopShelfRefreshClientTests: XCTestCase {
       requests.filter { $0.url?.host == "image.local" }.allSatisfy {
         $0.value(forHTTPHeaderField: "Authorization") == nil
       })
+  }
+
+  func testExtensionDownloadsCachedAndProxiedImagesWithItsOwnResourceCookie() async throws {
+    for (host, cache, bangumi, expectedPath) in [
+      ("http://image.local", true, false, "/mp/api/v1/system/cache/image"),
+      ("https://img.doubanio.com", false, false, "/mp/api/v1/system/img/0"),
+      ("https://lain.bgm.tv", false, true, "/mp/api/v1/system/img/1"),
+    ] {
+      TopShelfRefreshURLProtocol.configure(image: originalImageData)
+      TopShelfRefreshURLProtocol.imageHost = host
+      TopShelfRefreshURLProtocol.resourceCookie = "resource_cookie=owner; Path=/mp/api/v1/system"
+      try configureImages(cache: cache, bangumi: bangumi)
+      try await refresh()
+      XCTAssertEqual(store.presentation(at: Date())?.items.count, 6, expectedPath)
+      let images = TopShelfRefreshURLProtocol.requests.filter { $0.url?.path == expectedPath }
+      XCTAssertEqual(images.count, 6, expectedPath)
+      for image in images {
+        XCTAssertEqual(image.value(forHTTPHeaderField: "Cookie"), "resource_cookie=owner")
+        XCTAssertEqual(image.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
+      }
+    }
+  }
+
+  func testExtensionDoesNotReuseResourceCookiesFromPreviousRefresh() async throws {
+    try configureImages(cache: true)
+    TopShelfRefreshURLProtocol.resourceCookie = "resource_cookie=owner; Path=/"
+    try await refresh()
+    let previous = try XCTUnwrap(store.loadState())
+    XCTAssertEqual(previous.snapshot?.items.count, 6)
+    TopShelfRefreshURLProtocol.configure(image: originalImageData)
+    try await refresh()
+    XCTAssertEqual(try store.loadState(), previous)
+    XCTAssertTrue(
+      TopShelfRefreshURLProtocol.requests.allSatisfy {
+        $0.value(forHTTPHeaderField: "Cookie") == nil
+      })
+  }
+
+  func testExtensionImageRedirectKeepsCookieOnlyInsideProtectedBoundary() async throws {
+    for target in [
+      "http://shelf.local/mp/api/v1/system/img/0?redirected=true",
+      "http://image.local/redirected.jpg",
+    ] {
+      TopShelfRefreshURLProtocol.configure(image: originalImageData)
+      TopShelfRefreshURLProtocol.resourceCookie = "resource_cookie=owner; Path=/"
+      TopShelfRefreshURLProtocol.imageRedirectTarget = URL(string: target)
+      try configureImages(cache: true)
+      try await refresh()
+      XCTAssertEqual(store.presentation(at: Date())?.items.count, 6)
+      let redirected = try XCTUnwrap(
+        TopShelfRefreshURLProtocol.requests.first {
+          $0.url?.absoluteString == target
+        })
+      let protected = target.contains("/api/v1/system/")
+      XCTAssertEqual(
+        redirected.value(forHTTPHeaderField: "Cookie"),
+        protected ? "resource_cookie=owner" : nil)
+      XCTAssertEqual(
+        redirected.value(forHTTPHeaderField: "Authorization"),
+        protected ? "Bearer test-token" : nil)
+    }
+  }
+
+  func testPresentationDeadlineCancelsStalledRequestsAndReturnsExistingCards() async throws {
+    try await refresh()
+    let previous = try XCTUnwrap(store.loadState())
+    let cached = try XCTUnwrap(store.presentation(at: Date()))
+    for stall in [TopShelfRefreshURLProtocol.Stall.recommendation, .imageHeaders, .imageBody] {
+      TopShelfRefreshURLProtocol.configure(image: originalImageData)
+      TopShelfRefreshURLProtocol.stall = stall
+      let start = ContinuousClock.now
+      let presentation = await refreshClient().loadPresentation(refreshTimeout: .milliseconds(150))
+      XCTAssertLessThan(start.duration(to: .now), .seconds(1))
+      XCTAssertEqual(presentation, cached)
+      XCTAssertEqual(try store.loadState(), previous)
+      XCTAssertFalse(TopShelfRefreshURLProtocol.stoppedRequests.isEmpty)
+      let count = TopShelfRefreshURLProtocol.requests.count
+      try await Task.sleep(for: .milliseconds(100))
+      XCTAssertEqual(
+        TopShelfRefreshURLProtocol.requests.count, count,
+        "返回缓存后不能继续请求海报 fallback 或后续卡片")
+    }
+  }
+
+  func testPresentationDeadlineAppliesToEntireBatchNotEachRequest() async throws {
+    try await refresh()
+    let previous = try XCTUnwrap(store.loadState())
+    let cached = try XCTUnwrap(store.presentation(at: Date()))
+    TopShelfRefreshURLProtocol.configure(image: TopShelfTestArtwork.data)
+    TopShelfRefreshURLProtocol.offset = 100
+    TopShelfRefreshURLProtocol.responseDelay = 0.04
+    let start = ContinuousClock.now
+    let presentation = await refreshClient().loadPresentation(refreshTimeout: .milliseconds(150))
+    XCTAssertLessThan(start.duration(to: .now), .seconds(1))
+    XCTAssertGreaterThanOrEqual(TopShelfRefreshURLProtocol.requests.count, 2)
+    XCTAssertLessThan(TopShelfRefreshURLProtocol.requests.count, 13)
+    XCTAssertEqual(presentation, cached)
+    XCTAssertEqual(try store.loadState(), previous, "超时后的半批内容不能替换已有整批")
+  }
+
+  func testPresentationReturnsRefreshedCardsWhenBatchFinishesWithinBudget() async throws {
+    try await refresh()
+    TopShelfRefreshURLProtocol.offset = 100
+    let presentation = await refreshClient().loadPresentation()
+    XCTAssertEqual(presentation?.items.count, 6)
+    XCTAssertEqual(presentation?.items.first?.title, "卡片100")
+    XCTAssertEqual(store.presentation(at: Date()), presentation)
+  }
+
+  func testPresentationWithoutCacheReturnsNilAfterDeadline() async throws {
+    TopShelfRefreshURLProtocol.stall = .recommendation
+    let start = ContinuousClock.now
+    let presentation = await refreshClient().loadPresentation(refreshTimeout: .milliseconds(150))
+    XCTAssertLessThan(start.duration(to: .now), .seconds(1))
+    XCTAssertNil(presentation)
+    XCTAssertNil(try store.loadState()?.snapshot)
+  }
+
+  func testPresentationCancellationStopsRefreshAndRetainsExistingCards() async throws {
+    try await refresh()
+    let previous = try XCTUnwrap(store.loadState())
+    let stalled = expectation(description: "刷新已开始等待网络")
+    TopShelfRefreshURLProtocol.stall = .recommendation
+    TopShelfRefreshURLProtocol.onStall = { stalled.fulfill() }
+    let client = refreshClient()
+    let task = Task { await client.loadPresentation(refreshTimeout: .seconds(5)) }
+    await fulfillment(of: [stalled], timeout: 1)
+    let start = ContinuousClock.now
+    task.cancel()
+    let presentation = await task.value
+    XCTAssertLessThan(start.duration(to: .now), .seconds(1))
+    XCTAssertEqual(presentation?.items.count, 6)
+    XCTAssertEqual(try store.loadState(), previous)
+  }
+
+  func testPresentationNeverReturnsRevokedCacheAfterTimeout() async throws {
+    try await refresh()
+    let store = try XCTUnwrap(store)
+    TopShelfRefreshURLProtocol.stall = .recommendation
+    TopShelfRefreshURLProtocol.onStall = {
+      try? store.invalidatePublishedState(.disabled(selection: nil))
+    }
+    let presentation = await refreshClient().loadPresentation(refreshTimeout: .milliseconds(150))
+    XCTAssertNil(presentation)
+    XCTAssertNil(try store.loadState()?.activeSessionID)
+  }
+
+  private func refreshClient() -> TopShelfRefreshClient {
+    TopShelfRefreshClient(store: store, transport: transport, readToken: { _ in "test-token" })
+  }
+
+  private func configureImages(cache: Bool, bangumi: Bool = false) throws {
+    try store.saveState(
+      TopShelfSharedState(
+        schemaVersion: 1, activeSessionID: "owner", selection: selection, snapshot: nil,
+        refreshConfiguration: TopShelfRefreshConfiguration(
+          sessionID: "owner", baseURL: "http://shelf.local/mp", useImageCache: cache,
+          bangumiProxyEnabled: bangumi, bangumiImageDomain: nil)))
   }
 
   func testExtensionExploreCardsRetainOriginWhenSelectionLaterChanges() async throws {
@@ -395,9 +555,9 @@ final class TopShelfRefreshClientTests: XCTestCase {
     }
     try await Task.sleep(for: .milliseconds(100))
     owner.outer = true
-    try await Task.sleep(for: .milliseconds(400))
+    let outer = try await waitForPresentedController(on: host)
     owner.inner = true
-    try await Task.sleep(for: .milliseconds(400))
+    _ = try await waitForPresentedController(on: outer)
     XCTAssertNotNil(host.presentedViewController?.presentedViewController)
     NotificationCenter.default.post(
       name: .imageNavigationPresentationWillReset, object: APIService.shared)
@@ -408,6 +568,21 @@ final class TopShelfRefreshClientTests: XCTestCase {
     XCTAssertNil(host.presentedViewController)
     XCTAssertFalse(owner.outer)
     XCTAssertFalse(owner.inner)
+  }
+
+  private func waitForPresentedController(on presenter: UIViewController) async throws
+    -> UIViewController
+  {
+    for _ in 0..<60 {
+      if let presented = presenter.presentedViewController,
+        presented.viewIfLoaded?.window != nil, !presented.isBeingPresented,
+        presented.transitionCoordinator == nil
+      {
+        return presented
+      }
+      try await Task.sleep(for: .milliseconds(50))
+    }
+    return try XCTUnwrap(nil as UIViewController?, "前置弹窗必须实际完成呈现")
   }
 
   func testSettingsRootAndSingleChoicePageRenderWithExistingRowStyle() async throws {
@@ -454,11 +629,22 @@ final class TopShelfRefreshClientTests: XCTestCase {
 }
 
 private final class TopShelfRefreshURLProtocol: URLProtocol, @unchecked Sendable {
+  enum Stall { case recommendation, imageHeaders, imageBody }
+  private let workLock = NSLock()
+  private var pendingResponse: DispatchWorkItem?
   private static let lock = NSLock()
+  nonisolated(unsafe) static var responseDelay: TimeInterval = 0
+  nonisolated(unsafe) static var stall: Stall?
+  nonisolated(unsafe) static var onStall: (@Sendable () -> Void)?
+  nonisolated(unsafe) private static var stopped: [URLRequest] = []
+  static var stoppedRequests: [URLRequest] { lock.withLock { stopped } }
   nonisolated(unsafe) private static var image = Data()
   nonisolated(unsafe) private static var recorded: [URLRequest] = []
   nonisolated(unsafe) static var failRequests = false
   nonisolated(unsafe) static var redirectTarget: URL?
+  nonisolated(unsafe) static var imageHost = "http://image.local"
+  nonisolated(unsafe) static var resourceCookie: String?
+  nonisolated(unsafe) static var imageRedirectTarget: URL?
   nonisolated(unsafe) static var offset = 0
   nonisolated(unsafe) static var onRecommendation: (@Sendable () -> Void)?
   static var requests: [URLRequest] { lock.withLock { recorded } }
@@ -466,7 +652,14 @@ private final class TopShelfRefreshURLProtocol: URLProtocol, @unchecked Sendable
     lock.withLock {
       self.image = image
       recorded = []
+      stopped = []
+      responseDelay = 0
+      stall = nil
+      onStall = nil
       failRequests = false
+      imageHost = "http://image.local"
+      resourceCookie = nil
+      imageRedirectTarget = nil
       offset = 0
       redirectTarget = nil
       onRecommendation = nil
@@ -476,10 +669,37 @@ private final class TopShelfRefreshURLProtocol: URLProtocol, @unchecked Sendable
   override class func canInit(with request: URLRequest) -> Bool { true }
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
   override func startLoading() {
-    let (image, failure, offset, callback, redirectTarget) = Self.lock.withLock {
+    let (delay, stall, onStall, image) = Self.lock.withLock {
       Self.recorded.append(request)
+      return (Self.responseDelay, Self.stall, Self.onStall, Self.image)
+    }
+    let isImage = request.url?.host == "image.local"
+    if (stall == .recommendation && request.url!.path.contains("/recommend/"))
+      || (isImage && (stall == .imageHeaders || stall == .imageBody))
+    {
+      if stall == .imageBody {
+        client?.urlProtocol(
+          self,
+          didReceive: HTTPURLResponse(
+            url: request.url!, statusCode: 200, httpVersion: nil,
+            headerFields: ["Content-Length": String(image.count)])!, cacheStoragePolicy: .notAllowed
+        )
+        client?.urlProtocol(self, didLoad: image.prefix(64))
+      }
+      onStall?()
+      return
+    }
+    let work = DispatchWorkItem { [weak self] in self?.finishResponse() }
+    workLock.withLock { pendingResponse = work }
+    DispatchQueue.global().asyncAfter(deadline: .now() + delay, execute: work)
+  }
+
+  private func finishResponse() {
+    let (image, failure, offset, callback, redirectTarget, imageHost, cookie, imageRedirect) = Self
+      .lock.withLock {
       return (
-        Self.image, Self.failRequests, Self.offset, Self.onRecommendation, Self.redirectTarget
+          Self.image, Self.failRequests, Self.offset, Self.onRecommendation, Self.redirectTarget,
+          Self.imageHost, Self.resourceCookie, Self.imageRedirectTarget
       )
     }
     let path = request.url!.path
@@ -493,8 +713,18 @@ private final class TopShelfRefreshURLProtocol: URLProtocol, @unchecked Sendable
         self, wasRedirectedTo: URLRequest(url: redirectTarget), redirectResponse: response)
       return
     }
+    let protectedImage = path.hasPrefix("/mp/api/v1/system/")
+    let authenticatedImage = request.value(forHTTPHeaderField: "Cookie") == "resource_cookie=owner"
+    if protectedImage, authenticatedImage, let imageRedirect, request.url != imageRedirect {
+      let response = HTTPURLResponse(
+        url: request.url!, statusCode: 302, httpVersion: nil,
+        headerFields: ["Location": imageRedirect.absoluteString])!
+      client?.urlProtocol(
+        self, wasRedirectedTo: URLRequest(url: imageRedirect), redirectResponse: response)
+      return
+    }
     let data: Data
-    if request.url!.host == "image.local" {
+    if protectedImage || request.url!.host == "image.local" {
       data = image
     } else if path.contains("/recommend/custom") || path.contains("/discover/tmdb_tvs") {
       callback?()
@@ -502,7 +732,7 @@ private final class TopShelfRefreshURLProtocol: URLProtocol, @unchecked Sendable
         [
           "tmdb_id": index + 1, "media_source": "custom", "media_id": "id+\(index)/中文",
           "title": "卡片\(index)",
-          "type": "电影+原声", "poster_path": "http://image.local/\(index).jpg",
+          "type": "电影+原声", "poster_path": "\(imageHost)/\(index).jpg"
         ]
       }
       data = try! JSONSerialization.data(withJSONObject: ["success": true, "data": items])
@@ -513,7 +743,7 @@ private final class TopShelfRefreshURLProtocol: URLProtocol, @unchecked Sendable
         "success": true,
         "data": [
           "title": "完整详情", "media_source": "custom", "media_id": "详情",
-          "backdrop_path": "http://image.local" + imagePath + ".jpg",
+          "backdrop_path": imageHost + imagePath + ".jpg"
         ],
       ])
     } else {
@@ -522,12 +752,18 @@ private final class TopShelfRefreshURLProtocol: URLProtocol, @unchecked Sendable
     client?.urlProtocol(
       self,
       didReceive: HTTPURLResponse(
-        url: request.url!, statusCode: failure ? 503 : 200,
-        httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+        url: request.url!,
+        statusCode: failure ? 503 : (protectedImage && !authenticatedImage ? 401 : 200),
+        httpVersion: nil,
+        headerFields: !protectedImage && path.contains("/recommend/")
+          ? cookie.map { ["Set-Cookie": $0] } : nil)!, cacheStoragePolicy: .notAllowed)
     client?.urlProtocol(self, didLoad: data)
     client?.urlProtocolDidFinishLoading(self)
   }
-  override func stopLoading() {}
+  override func stopLoading() {
+    workLock.withLock { pendingResponse?.cancel() }
+    Self.lock.withLock { Self.stopped.append(request) }
+  }
 }
 
 @MainActor

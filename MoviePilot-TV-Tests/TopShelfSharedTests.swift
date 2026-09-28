@@ -57,6 +57,20 @@ final class TopShelfSharedTests: XCTestCase {
     }
   }
 
+  func testBuiltAppAndExtensionUseTheSameTransportSecurityPolicy() throws {
+    let app = Bundle.main
+    let extensionBundle = try XCTUnwrap(
+      Bundle(
+        url: app.bundleURL.appendingPathComponent(
+          "PlugIns/MoviePilot-TV-TopShelf.appex", isDirectory: true)))
+    let appPolicy =
+      app.object(forInfoDictionaryKey: "NSAppTransportSecurity") as? NSDictionary ?? [:]
+    let extensionPolicy =
+      extensionBundle.object(forInfoDictionaryKey: "NSAppTransportSecurity") as? NSDictionary ?? [:]
+    XCTAssertEqual(extensionPolicy, appPolicy)
+    XCTAssertNotEqual(extensionPolicy["NSAllowsArbitraryLoads"] as? Bool, true)
+  }
+
   func testBuiltAppCanActuallyAccessTheSharedContainerAndKeychain() throws {
     let store = try XCTUnwrap(TopShelfSharedStore.appGroupStore())
     XCTAssertTrue(store.stateFileURL.path.contains("/TopShelf/"))
