@@ -7,6 +7,7 @@ class StatusViewModel: ObservableObject {
   @Published var statistic: Statistic?
   @Published var storage: Storage?
   @Published var downloader: DownloaderInfo?
+  @Published private(set) var hasCompletedInitialLoad = false
 
   private let apiService: APIService
 
@@ -18,11 +19,16 @@ class StatusViewModel: ObservableObject {
     apiService.canRequestSuperUserEndpoints
   }
 
+  var unavailableValueText: String {
+    hasCompletedInitialLoad ? "未获取" : "获取中…"
+  }
+
   func refreshAllData() async {
     guard apiService.canRequestSuperUserEndpoints else {
       statistic = nil
       storage = nil
       downloader = nil
+      hasCompletedInitialLoad = true
       return
     }
 
@@ -41,10 +47,15 @@ class StatusViewModel: ObservableObject {
       statistic = values.0
       storage = values.1
       downloader = values.2
+      hasCompletedInitialLoad = true
     } catch is CancellationError {
       return
     } catch {
-      guard !Task.isCancelled else { return }
+      guard !Task.isCancelled,
+        apiService.isSessionUnchanged(from: sessionSnapshot),
+        apiService.canRequestSuperUserEndpoints
+      else { return }
+      hasCompletedInitialLoad = true
       Logger.error("Error fetching dashboard data: \(error)")
     }
   }
