@@ -6,13 +6,7 @@ final class ContentProvider: TVTopShelfContentProvider {
     guard let store = TopShelfSharedStore.appGroupStore() else {
       return nil
     }
-    try? await TopShelfRefreshClient(store: store).refresh()
-    return Self.content(from: store)
-  }
-
-  private static func content(from store: TopShelfSharedStore) -> (any TVTopShelfContent)? {
-    guard let presentation = store.presentation(at: Date())
-    else {
+    guard let presentation = await TopShelfRefreshClient(store: store).loadPresentation() else {
       return nil
     }
 

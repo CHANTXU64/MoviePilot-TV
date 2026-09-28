@@ -267,6 +267,12 @@ final class TopShelfManager: ObservableObject {
     let expectedPublication = try? store.loadState()
     status = .syncing
     do {
+      let resources = try store.beginResourcePreparation()
+      defer {
+        do { try resources.finish(now: now()) } catch {
+          Logger.warning("[TopShelf] Failed to reclaim prepared resources: \(error)")
+        }
+      }
       let mediaItems = try await (selection.isSubscriptionShare
         ? fetchSubscriptionShares(selection.requestPath)
         : fetchRecommendations(selection.requestPath))
@@ -329,14 +335,14 @@ final class TopShelfManager: ObservableObject {
           }
           try validateRefresh(
             sessionSnapshot, sessionID: sessionID, selection: selection, revision: revision)
-          let relativePath = try store.writeImage(
+          let relativePath = try resources.writeImage(
             images.card, cacheKey: "\(sessionID)|hdtv-card|\(backgroundURL.absoluteString)")
-          let backgroundPath = try store.writeImage(
+          let backgroundPath = try resources.writeImage(
             images.background,
             cacheKey:
               "\(sessionID)|detail-\(Int(MediaDetailImageSizing.longEdgePixels))|\(backgroundURL.absoluteString)"
           )
-          let detailPath = try store.writeDetailData(
+          let detailPath = try resources.writeDetailData(
             JSONEncoder().encode(
               TopShelfPreparedContent(detail: detail, collectionItems: collectionItems)),
             cacheKey: "\(sessionID)|\(media.id)"
@@ -374,18 +380,7 @@ final class TopShelfManager: ObservableObject {
         refreshConfiguration: preparationConfiguration
       )
       guard let expectedPublication else { throw CancellationError() }
-      try store.publish(snapshot, replacing: expectedPublication)
-      let previousPaths = store.resourcePaths(for: previousState?.snapshot?.items ?? [])
-      let retainedPaths = Set(store.resourcePaths(for: snapshot.items) + previousPaths)
-      do {
-        try store.pruneResources(
-          keepingRelativePaths: retainedPaths,
-          now: now(),
-          gracePeriod: TopShelfSnapshot.imageCleanupGracePeriod
-        )
-      } catch {
-        Logger.warning("[TopShelf] Failed to prune stale posters: \(error)")
-      }
+      try resources.publish(snapshot, replacing: expectedPublication)
       notifyChange()
       status = .ready
     } catch is CancellationError {

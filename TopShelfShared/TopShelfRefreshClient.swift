@@ -120,11 +120,25 @@ nonisolated struct TopShelfRefreshClient: Sendable {
     self.readToken = readToken
   }
 
+  /// 在扩展请求的生命周期内完成有界刷新，网络过慢时保留当前会话的本地内容。
+  func loadPresentation(refreshTimeout: Duration = .seconds(10)) async -> TopShelfPresentation? {
+    await withTaskGroup(of: Void.self) { group in
+      group.addTask { try? await refresh() }
+      group.addTask { try? await Task.sleep(for: refreshTimeout) }
+      await group.next()
+      group.cancelAll()
+    }
+    return store.presentation(at: Date())
+  }
+
+  @concurrent
   func refresh() async throws {
     guard let expected = try store.loadState(), let configuration = expected.refreshConfiguration,
       let selection = expected.selection, expected.activeSessionID == configuration.sessionID,
       let token = readToken(configuration.sessionID)
     else { return }
+    let resources = try store.beginResourcePreparation()
+    defer { try? resources.finish() }
     let session: URLSession
     if let transport {
       session = transport
@@ -196,6 +210,7 @@ nonisolated struct TopShelfRefreshClient: Sendable {
             backgroundURL = backdropURL
             backgroundIsPoster = false
           } catch is CancellationError { throw CancellationError() } catch {
+            try Task.checkCancellation()
             guard let posterURL else { throw error }
             let original = try await context.image(posterURL)
             images = try await TopShelfImageLoader.prepareImages(from: original.data)
@@ -211,15 +226,15 @@ nonisolated struct TopShelfRefreshClient: Sendable {
         }
         try Task.checkCancellation()
         guard try store.loadState() == expected else { throw CancellationError() }
-        let imagePath = try store.writeImage(
+        let imagePath = try resources.writeImage(
           images.card,
           cacheKey: "\(configuration.sessionID)|hdtv-card|\(backgroundURL.absoluteString)")
-        let backgroundPath = try store.writeImage(
+        let backgroundPath = try resources.writeImage(
           images.background,
           cacheKey:
             "\(configuration.sessionID)|detail-\(Int(MediaDetailImageSizing.longEdgePixels))|\(backgroundURL.absoluteString)"
         )
-        let detailPath = try store.writeDetailData(
+        let detailPath = try resources.writeDetailData(
           JSONSerialization.data(withJSONObject: prepared),
           cacheKey: "\(configuration.sessionID)|\(identifier)")
         items.append(
@@ -230,19 +245,18 @@ nonisolated struct TopShelfRefreshClient: Sendable {
                 sessionID: configuration.sessionID, entryOrigin: selection.entryOrigin)),
             detailRelativePath: detailPath, backgroundRelativePath: backgroundPath,
             backgroundIsPoster: backgroundIsPoster))
-      } catch is CancellationError { throw CancellationError() } catch { continue }
+      } catch is CancellationError { throw CancellationError() } catch {
+        try Task.checkCancellation()
+        continue
+      }
     }
+    try Task.checkCancellation()
     guard !items.isEmpty else { return }
-    try store.publish(
+    try resources.publish(
       TopShelfSnapshot(
         sessionID: configuration.sessionID, selection: selection,
         generatedAt: Date(), items: items, refreshConfiguration: configuration), replacing: expected
     )
-    let retained = Set(
-      store.resourcePaths(for: items) + store.resourcePaths(for: expected.snapshot?.items ?? []))
-    try? store.pruneResources(
-      keepingRelativePaths: retained, now: Date(),
-      gracePeriod: TopShelfSnapshot.imageCleanupGracePeriod)
   }
 
   /// 分享记录只提供对应媒体身份；分享人的标题和复用入口不进入主屏卡片。
@@ -270,6 +284,7 @@ nonisolated struct TopShelfRefreshClient: Sendable {
     let configuration: TopShelfRefreshConfiguration
     let token: String
     let transport: URLSession
+    let cookieVault = ResourceCookieVault()
 
     func json(path: String, params: [String: String?]) async throws -> Any {
       guard var relative = URLComponents(string: path), relative.scheme == nil,
@@ -286,11 +301,18 @@ nonisolated struct TopShelfRefreshClient: Sendable {
       var request = URLRequest(url: url, timeoutInterval: 10)
       request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
       request.setValue("zh-CN", forHTTPHeaderField: "Accept-Language")
+      request.setValue(cookieVault.cookieHeader(for: url), forHTTPHeaderField: "Cookie")
       let (data, response) = try await transport.data(
         for: request,
-        delegate: TopShelfAPIRedirectDelegate(baseURL: configuration.baseURL, token: token))
+        delegate: TopShelfAPIRedirectDelegate(
+          baseURL: configuration.baseURL, token: token, cookieVault: cookieVault))
       guard let response = response as? HTTPURLResponse, (200...299).contains(response.statusCode)
       else { throw TopShelfRefreshError.invalidResponse }
+      if let responseURL = response.url,
+        isMoviePilotAPIURL(responseURL, baseURL: configuration.baseURL)
+      {
+        cookieVault.update(from: response, for: responseURL)
+      }
       let object = try JSONSerialization.jsonObject(with: data)
       if let envelope = object as? [String: Any] {
         if envelope["success"] as? Bool == false { throw TopShelfRefreshError.invalidResponse }
@@ -303,10 +325,13 @@ nonisolated struct TopShelfRefreshClient: Sendable {
       let isProtected = isProtectedMoviePilotImageURL(url, baseURL: configuration.baseURL)
       var request = URLRequest(url: url, timeoutInterval: 10)
       request.setValue("zh-CN", forHTTPHeaderField: "Accept-Language")
-      if isProtected { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+      if isProtected {
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(cookieVault.cookieHeader(for: url), forHTTPHeaderField: "Cookie")
+      }
       let delegate = TopShelfImageRedirectDelegate(
         startedProtected: isProtected, baseURL: configuration.baseURL,
-        token: token, cookieHeader: { _ in nil })
+        token: token, cookieHeader: { [cookieVault] in cookieVault.cookieHeader(for: $0) })
       return try await TopShelfImageLoader.downloadTopShelfImage(
         request: request, transport: transport,
         redirectDelegate: delegate, maximumBytes: 8_000_000,
@@ -320,10 +345,12 @@ nonisolated private final class TopShelfAPIRedirectDelegate: NSObject, URLSessio
 {
   private let baseURL: String
   private let token: String
+  private let cookieVault: ResourceCookieVault
 
-  init(baseURL: String, token: String) {
+  init(baseURL: String, token: String, cookieVault: ResourceCookieVault) {
     self.baseURL = baseURL
     self.token = token
+    self.cookieVault = cookieVault
   }
 
   func urlSession(
@@ -335,9 +362,12 @@ nonisolated private final class TopShelfAPIRedirectDelegate: NSObject, URLSessio
       completionHandler(nil)
       return
     }
+    if let source = response.url, isMoviePilotAPIURL(source, baseURL: baseURL) {
+      cookieVault.update(from: response, for: source)
+    }
     var redirected = request
     redirected.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-    redirected.setValue(nil, forHTTPHeaderField: "Cookie")
+    redirected.setValue(cookieVault.cookieHeader(for: destination), forHTTPHeaderField: "Cookie")
     completionHandler(redirected)
   }
 }

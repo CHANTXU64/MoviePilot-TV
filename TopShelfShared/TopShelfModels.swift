@@ -151,6 +151,8 @@ nonisolated struct TopShelfSharedState: Codable, Equatable, Sendable {
   let selection: TopShelfSelection?
   var snapshot: TopShelfSnapshot?
   var refreshConfiguration: TopShelfRefreshConfiguration? = nil
+  /// 清理时保留上一批资源，不依赖调用者可能已经过期的快照。
+  var previousSnapshot: TopShelfSnapshot? = nil
 
   static func disabled(selection: TopShelfSelection?) -> TopShelfSharedState {
     TopShelfSharedState(
