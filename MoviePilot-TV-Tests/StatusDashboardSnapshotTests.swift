@@ -56,6 +56,7 @@ final class StatusDashboardSnapshotTests: XCTestCase {
     let viewModel = StatusViewModel(apiService: service)
 
     await viewModel.refreshAllData()
+    XCTAssertEqual(viewModel.unavailableValueText, "未获取")
     XCTAssertEqual(viewModel.statistic?.movie_count, 2)
     XCTAssertEqual(viewModel.storage?.total_storage, 100)
     XCTAssertEqual(viewModel.downloader?.download_speed, 7)
@@ -68,6 +69,7 @@ final class StatusDashboardSnapshotTests: XCTestCase {
     XCTAssertEqual(viewModel.statistic?.movie_count, 2)
     XCTAssertEqual(viewModel.storage?.total_storage, 100)
     XCTAssertEqual(viewModel.downloader?.download_speed, 7)
+    XCTAssertEqual(viewModel.unavailableValueText, "未获取")
   }
 
   func testFirstLoadPartialFailurePublishesNothing() async throws {
@@ -76,12 +78,45 @@ final class StatusDashboardSnapshotTests: XCTestCase {
 
     let service = makeService()
     let viewModel = StatusViewModel(apiService: service)
+    XCTAssertEqual(viewModel.unavailableValueText, "获取中…")
 
     await viewModel.refreshAllData()
 
+    XCTAssertEqual(viewModel.unavailableValueText, "未获取")
     XCTAssertNil(viewModel.statistic)
     XCTAssertNil(viewModel.storage)
     XCTAssertNil(viewModel.downloader)
+
+    StatusDashboardURLProtocol.stub.setStatusCode(for: "/api/v1/dashboard/storage", 200)
+    await viewModel.refreshAllData()
+
+    XCTAssertEqual(viewModel.statistic?.movie_count, 2)
+    XCTAssertEqual(viewModel.storage?.total_storage, 100)
+    XCTAssertEqual(viewModel.downloader?.download_speed, 7)
+  }
+
+  func testInitialLoadingTextRemainsUntilCompleteSnapshotArrives() async throws {
+    StatusDashboardURLProtocol.stub.setDownloaderDelay(nanoseconds: 500_000_000)
+
+    let service = makeService()
+    let viewModel = StatusViewModel(apiService: service)
+
+    let task = Task { await viewModel.refreshAllData() }
+    try await waitUntil("downloader request in flight") {
+      StatusDashboardURLProtocol.stub.requestPaths().contains("/api/v1/dashboard/downloader")
+    }
+
+    XCTAssertEqual(viewModel.unavailableValueText, "获取中…")
+    XCTAssertNil(viewModel.statistic)
+    XCTAssertNil(viewModel.storage)
+    XCTAssertNil(viewModel.downloader)
+
+    await task.value
+
+    XCTAssertEqual(viewModel.unavailableValueText, "未获取")
+    XCTAssertEqual(viewModel.statistic?.movie_count, 2)
+    XCTAssertEqual(viewModel.storage?.total_storage, 100)
+    XCTAssertEqual(viewModel.downloader?.download_speed, 7)
   }
 
   func testStatisticMissingFieldStillPublishesWholeDashboard() async throws {
@@ -136,6 +171,27 @@ final class StatusDashboardSnapshotTests: XCTestCase {
     service.tokenForTesting = "other-token"
     await task.value
 
+    XCTAssertFalse(viewModel.hasCompletedInitialLoad)
+    XCTAssertNil(viewModel.statistic)
+    XCTAssertNil(viewModel.storage)
+    XCTAssertNil(viewModel.downloader)
+  }
+
+  func testCancellationDoesNotPublishResults() async throws {
+    StatusDashboardURLProtocol.stub.setDownloaderDelay(nanoseconds: 500_000_000)
+
+    let service = makeService()
+    let viewModel = StatusViewModel(apiService: service)
+
+    let task = Task { await viewModel.refreshAllData() }
+    try await waitUntil("downloader request in flight") {
+      StatusDashboardURLProtocol.stub.requestPaths().contains("/api/v1/dashboard/downloader")
+    }
+
+    task.cancel()
+    await task.value
+
+    XCTAssertFalse(viewModel.hasCompletedInitialLoad)
     XCTAssertNil(viewModel.statistic)
     XCTAssertNil(viewModel.storage)
     XCTAssertNil(viewModel.downloader)

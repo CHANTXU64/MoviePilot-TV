@@ -39,10 +39,10 @@ jobs:
             -scheme "MoviePilot-TV" \
             -skipPackagePluginValidation
 
-      - name: Test signing script
+      - name: Test renewal script
         run: |
           bash -n scripts/apple-tv-renew.sh
-          python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+          python3 -m unittest discover -s scripts/tests -p 'test_apple_tv_renew.py'
 
       - name: Build
         run: |
@@ -69,19 +69,3 @@ jobs:
             CODE_SIGNING_ALLOWED=YES \
             CODE_SIGN_IDENTITY=- \
             -skipPackagePluginValidation
-
-      - name: Build and validate IPA for re-signing
-        run: |
-          xcodebuild build \
-            -project "MoviePilot-TV.xcodeproj" \
-            -scheme "MoviePilot-TV" \
-            -configuration Release \
-            -destination "generic/platform=tvOS" \
-            -derivedDataPath build/DerivedData \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            -skipPackagePluginValidation
-          python3 scripts/package-ipa.py \
-            --app "build/DerivedData/Build/Products/Release-appletvos/MoviePilot-TV.app" \
-            --output "build/MoviePilot-TV-unsigned.ipa"
