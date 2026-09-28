@@ -178,6 +178,36 @@ final class TopShelfRefreshClientTests: XCTestCase {
     }
   }
 
+  func testCancelledPartialRefreshKeepsPublishedImageBytesAndReclaimsUnpublishedFiles() async throws
+  {
+    try await refresh()
+    let published = try XCTUnwrap(store.loadState())
+    let files = try TopShelfTestArtwork.resourceFiles(in: directory)
+    for round in 1...3 {
+      TopShelfRefreshURLProtocol.configure(image: TopShelfTestArtwork.data)
+      TopShelfRefreshURLProtocol.detailTitle = "新详情\(round)"
+      TopShelfRefreshURLProtocol.stall = .secondDetail
+      let prepared = expectation(description: "第一张已落盘，第二张详情阻塞")
+      TopShelfRefreshURLProtocol.onStall = { prepared.fulfill() }
+      let client = refreshClient()
+      let task = Task { await client.loadPresentation(refreshTimeout: .seconds(2)) }
+      await fulfillment(of: [prepared], timeout: 3)
+      let result = await task.value
+      XCTAssertEqual(result?.items.count, 6)
+      XCTAssertEqual(try store.loadState(), published)
+      let remaining = try TopShelfTestArtwork.resourceFiles(in: directory)
+      for (path, data) in files {
+        XCTAssertTrue(remaining[path] == data, "旧资源实际字节必须保持不变：\(path)")
+      }
+      try TopShelfTestArtwork.ageResources(in: directory, by: 3 * 86400)
+      TopShelfRefreshURLProtocol.failRequests = true
+      _ = await client.loadPresentation()
+      XCTAssertEqual(
+        Set(try TopShelfTestArtwork.resourceFiles(in: directory).keys), Set(files.keys),
+        "超过宽限期的孤立文件必须在失败刷新中回收，不能等待成功发布")
+    }
+  }
+
   func testPresentationDeadlineAppliesToEntireBatchNotEachRequest() async throws {
     try await refresh()
     let previous = try XCTUnwrap(store.loadState())
@@ -629,7 +659,7 @@ final class TopShelfRefreshClientTests: XCTestCase {
 }
 
 private final class TopShelfRefreshURLProtocol: URLProtocol, @unchecked Sendable {
-  enum Stall { case recommendation, imageHeaders, imageBody }
+  enum Stall { case recommendation, imageHeaders, imageBody, secondDetail }
   private let workLock = NSLock()
   private var pendingResponse: DispatchWorkItem?
   private static let lock = NSLock()
@@ -642,6 +672,7 @@ private final class TopShelfRefreshURLProtocol: URLProtocol, @unchecked Sendable
   nonisolated(unsafe) private static var recorded: [URLRequest] = []
   nonisolated(unsafe) static var failRequests = false
   nonisolated(unsafe) static var redirectTarget: URL?
+  nonisolated(unsafe) static var detailTitle = "完整详情"
   nonisolated(unsafe) static var imageHost = "http://image.local"
   nonisolated(unsafe) static var resourceCookie: String?
   nonisolated(unsafe) static var imageRedirectTarget: URL?
@@ -657,6 +688,7 @@ private final class TopShelfRefreshURLProtocol: URLProtocol, @unchecked Sendable
       stall = nil
       onStall = nil
       failRequests = false
+      detailTitle = "完整详情"
       imageHost = "http://image.local"
       resourceCookie = nil
       imageRedirectTarget = nil
@@ -676,6 +708,7 @@ private final class TopShelfRefreshURLProtocol: URLProtocol, @unchecked Sendable
     let isImage = request.url?.host == "image.local"
     if (stall == .recommendation && request.url!.path.contains("/recommend/"))
       || (isImage && (stall == .imageHeaders || stall == .imageBody))
+      || (stall == .secondDetail && !isImage && request.url!.path.contains("/media/id+1/"))
     {
       if stall == .imageBody {
         client?.urlProtocol(
@@ -732,7 +765,7 @@ private final class TopShelfRefreshURLProtocol: URLProtocol, @unchecked Sendable
         [
           "tmdb_id": index + 1, "media_source": "custom", "media_id": "id+\(index)/中文",
           "title": "卡片\(index)",
-          "type": "电影+原声", "poster_path": "\(imageHost)/\(index).jpg"
+          "type": "电影+原声", "poster_path": "\(imageHost)/\(index).jpg",
         ]
       }
       data = try! JSONSerialization.data(withJSONObject: ["success": true, "data": items])
@@ -742,8 +775,9 @@ private final class TopShelfRefreshURLProtocol: URLProtocol, @unchecked Sendable
       data = try! JSONSerialization.data(withJSONObject: [
         "success": true,
         "data": [
-          "title": "完整详情", "media_source": "custom", "media_id": "详情",
-          "backdrop_path": imageHost + imagePath + ".jpg"
+          "title": Self.lock.withLock { Self.detailTitle }, "media_source": "custom",
+          "media_id": "详情",
+          "backdrop_path": imageHost + imagePath + ".jpg",
         ],
       ])
     } else {

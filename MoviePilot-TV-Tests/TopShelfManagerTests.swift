@@ -37,6 +37,68 @@ final class TopShelfManagerTests: XCTestCase {
     XCTAssertEqual(fixture.store.presentation(at: Date())?.items.count, 6)
   }
 
+  func testCancelledPreparationPreservesCurrentAndPreviousBytesAndReclaimsEachFailedBatch()
+    async throws
+  {
+    let fixture = try ManagerFixture()
+    defer { fixture.cleanup() }
+    let service = makeService(userID: 850)
+    let items = (1...2).map {
+      media(id: $0, title: "原卡片\($0)", poster: "https://images.local/\($0).jpg")
+    }
+    let original = TopShelfTestArtwork.landscapeData()
+    var round = 0
+    var failList = false
+    var gate = AsyncRecommendationGate()
+    let manager = TopShelfManager(
+      apiService: service, store: fixture.store, defaults: fixture.defaults,
+      fetchSources: { [] },
+      fetchRecommendations: { _ in
+        if failList { throw TestManagerError.imageFailed }
+        return items
+      },
+      fetchDetail: { item in
+        if round > 0 && item.tmdb_id == 2 {
+          _ = await gate.wait()
+          try Task.checkCancellation()
+        }
+        return MediaInfo(
+          tmdb_id: item.tmdb_id, source: item.source, title: item.title, type: item.type,
+          poster_path: item.poster_path, overview: "详情轮次\(round)")
+      },
+      fetchImage: { _ in
+        try TopShelfImageLoader.originalImage(
+          from: round == 0 ? original : TopShelfTestArtwork.data)
+      }, storeToken: { _, _ in true }, notifyChange: {})
+    await manager.refreshNow()
+    round = -1
+    await manager.refreshNow()
+    let published = try XCTUnwrap(fixture.store.loadState())
+    XCTAssertNotNil(published.previousSnapshot)
+    let files = try TopShelfTestArtwork.resourceFiles(in: fixture.containerURL)
+    try TopShelfTestArtwork.ageResources(in: fixture.containerURL, by: 3 * 86400)
+    for value in 1...3 {
+      round = value
+      gate = AsyncRecommendationGate()
+      let task = Task { await manager.refreshNow() }
+      await gate.waitUntilStarted()
+      task.cancel()
+      await gate.release([])
+      await task.value
+      XCTAssertEqual(try fixture.store.loadState(), published)
+      let remaining = try TopShelfTestArtwork.resourceFiles(in: fixture.containerURL)
+      for (path, data) in files {
+        XCTAssertTrue(remaining[path] == data, "取消不能改写或回收已发布资源：\(path)")
+      }
+      try TopShelfTestArtwork.ageResources(in: fixture.containerURL, by: 3 * 86400)
+      failList = true
+      await manager.refreshNow()
+      failList = false
+      XCTAssertEqual(
+        Set(try TopShelfTestArtwork.resourceFiles(in: fixture.containerURL).keys), Set(files.keys))
+    }
+  }
+
   func testRecommendationAndExploreCardsFreezeTheirOwnEntryOrigin() async throws {
     let fixture = try ManagerFixture()
     defer { fixture.cleanup() }

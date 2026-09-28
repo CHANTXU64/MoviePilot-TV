@@ -89,6 +89,7 @@ nonisolated struct TopShelfSharedStore: @unchecked Sendable {
     if let persistentDefaults {
       var recovery = state
       recovery.snapshot = nil
+      recovery.previousSnapshot = nil
       persistentDefaults.set(try JSONEncoder().encode(recovery), forKey: Self.recoveryKey)
       guard persistentDefaults.synchronize() else {
         throw TopShelfSharedStoreError.persistenceFailed
@@ -114,7 +115,7 @@ nonisolated struct TopShelfSharedStore: @unchecked Sendable {
     return cardRootURL.appendingPathComponent(digest + ".json")
   }
 
-  private func withPublicationLock<T>(_ body: () throws -> T) throws -> T {
+  fileprivate func withPublicationLock<T>(_ body: () throws -> T) throws -> T {
     try ensureStorageRoot()
     let fd = open(
       storageRootURL.appendingPathComponent("publication.lock").path, O_CREAT | O_RDWR, 0o600)
@@ -128,7 +129,9 @@ nonisolated struct TopShelfSharedStore: @unchecked Sendable {
   /// App 和扩展共享同一发布边界；改选、登出或另一轮发布后，旧请求不能写回。
   func publish(_ snapshot: TopShelfSnapshot, replacing expected: TopShelfSharedState) throws {
     try withPublicationLock {
+      try Task.checkCancellation()
       guard var current = try loadState(), current == expected else { throw CancellationError() }
+      current.previousSnapshot = current.snapshot
       current.snapshot = snapshot
       try writeState(current)
     }
@@ -158,7 +161,8 @@ nonisolated struct TopShelfSharedStore: @unchecked Sendable {
         TopShelfSharedState(
           schemaVersion: state.schemaVersion, activeSessionID: sessionID,
           selection: selection, snapshot: state.snapshot,
-          refreshConfiguration: state.refreshConfiguration))
+          refreshConfiguration: state.refreshConfiguration, previousSnapshot: state.previousSnapshot
+        ))
     }
   }
 
@@ -313,7 +317,7 @@ nonisolated struct TopShelfSharedStore: @unchecked Sendable {
       at: imageRootURL,
       withIntermediateDirectories: true
     )
-    let digest = SHA256.hash(data: Data(cacheKey.utf8))
+    let digest = SHA256.hash(data: Data(cacheKey.utf8) + resource.data)
       .map { String(format: "%02x", $0) }
       .joined()
     let fileName = "\(digest).\(ext)"
@@ -326,32 +330,101 @@ nonisolated struct TopShelfSharedStore: @unchecked Sendable {
     items.flatMap { $0.resourcePaths + ["cards/" + cardURL(for: $0.displayURL).lastPathComponent] }
   }
 
+  fileprivate var preparationRootURL: URL {
+    storageRootURL.appendingPathComponent("preparations", isDirectory: true)
+  }
+
+  func beginResourcePreparation() throws -> TopShelfResourcePreparation {
+    try withPublicationLock {
+      try? pruneResourcesLocked(
+        keepingRelativePaths: [], now: Date(), gracePeriod: TopShelfSnapshot.imageCleanupGracePeriod
+      )
+      return try TopShelfResourcePreparation(store: self)
+    }
+  }
+
   func pruneResources(
-    keepingRelativePaths: Set<String>,
-    now: Date,
-    gracePeriod: TimeInterval
+    keepingRelativePaths: Set<String>, now: Date, gracePeriod: TimeInterval
+  ) throws {
+    try withPublicationLock {
+      try pruneResourcesLocked(
+        keepingRelativePaths: keepingRelativePaths, now: now, gracePeriod: gracePeriod)
+    }
+  }
+
+  /// 写入、发布和回收共用跨进程锁；引用集合必须从锁内的最新状态读取。
+  fileprivate func pruneResourcesLocked(
+    keepingRelativePaths: Set<String>, now: Date, gracePeriod: TimeInterval,
+    excludingPreparation: URL? = nil
   ) throws {
     let fileManager = FileManager.default
+    let state = try loadState()
+    var retained = keepingRelativePaths.union(resourcePaths(for: state?.snapshot?.items ?? []))
+    retained.formUnion(resourcePaths(for: state?.previousSnapshot?.items ?? []))
+    var abandoned: [URL] = []
+    if fileManager.fileExists(atPath: preparationRootURL.path) {
+      for directory in try fileManager.contentsOfDirectory(
+        at: preparationRootURL, includingPropertiesForKeys: [.isDirectoryKey])
+      {
+        guard directory != excludingPreparation,
+          try directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true
+        else { continue }
+        let lease = directory.appendingPathComponent("lease.lock")
+        let fd = open(lease.path, O_RDWR)
+        let active: Bool
+        if fd < 0 {
+          guard errno == ENOENT else { throw CocoaError(.fileReadUnknown) }
+          active = false
+        } else {
+          let result = flock(fd, LOCK_EX | LOCK_NB)
+          let lockError = errno
+          close(fd)
+          guard result == 0 || lockError == EWOULDBLOCK else {
+            throw CocoaError(.fileReadUnknown)
+          }
+          active = result != 0
+        }
+        let manifest = directory.appendingPathComponent("resources.json")
+        if active {
+          let paths = try JSONDecoder().decode(Set<String>.self, from: Data(contentsOf: manifest))
+          retained.formUnion(paths)
+        } else {
+          abandoned.append(directory)
+        }
+      }
+    }
+
+    var resources: [(url: URL, path: String, modifiedAt: Date)] = []
     for root in [imageRootURL, detailRootURL, cardRootURL] {
       guard fileManager.fileExists(atPath: root.path) else { continue }
-      let files = try fileManager.contentsOfDirectory(
-        at: root,
-        includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
-        options: [.skipsHiddenFiles]
-      )
-      for file in files {
+      for file in try fileManager.contentsOfDirectory(
+        at: root, includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+        options: [.skipsHiddenFiles])
+      {
         let values = try file.resourceValues(forKeys: [
           .contentModificationDateKey,
           .isRegularFileKey,
         ])
         guard values.isRegularFile == true else { continue }
-        let relativePath = "\(root.lastPathComponent)/\(file.lastPathComponent)"
-        guard !keepingRelativePaths.contains(relativePath) else { continue }
+        let path = "\(root.lastPathComponent)/\(file.lastPathComponent)"
         let modifiedAt = values.contentModificationDate ?? .distantPast
-        guard now.timeIntervalSince(modifiedAt) >= gracePeriod else { continue }
-        try fileManager.removeItem(at: file)
+        resources.append((file, path, modifiedAt))
+        // 系统可能仍在使用最近展示过的旧卡片，宽限期内连同图片和详情一起保留。
+        if root == cardRootURL,
+          retained.contains(path) || now.timeIntervalSince(modifiedAt) < gracePeriod
+        {
+          let data = try Data(contentsOf: file)
+          if let item = try? JSONDecoder().decode(TopShelfSnapshotItem.self, from: data) {
+            retained.formUnion(item.resourcePaths)
+          }
+        }
       }
     }
+    for resource in resources where !retained.contains(resource.path) {
+      guard now.timeIntervalSince(resource.modifiedAt) >= gracePeriod else { continue }
+      try fileManager.removeItem(at: resource.url)
+    }
+    for directory in abandoned { try fileManager.removeItem(at: directory) }
   }
 
   private func ensureStorageRoot() throws {
@@ -359,5 +432,80 @@ nonisolated struct TopShelfSharedStore: @unchecked Sendable {
       at: storageRootURL,
       withIntermediateDirectories: true
     )
+  }
+}
+
+/// 每轮持有独立的资源清单和文件锁；进程退出后锁自动释放，下一轮可回收遗留资源。
+nonisolated final class TopShelfResourcePreparation: @unchecked Sendable {
+  private let store: TopShelfSharedStore
+  private let directory: URL
+  private let lock = NSLock()
+  private var descriptor: Int32?
+  private var paths: Set<String> = []
+
+  fileprivate init(store: TopShelfSharedStore) throws {
+    self.store = store
+    directory = store.preparationRootURL.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let fd = open(
+      directory.appendingPathComponent("lease.lock").path, O_CREAT | O_EXCL | O_RDWR, 0o600)
+    guard fd >= 0 else {
+      try? FileManager.default.removeItem(at: directory)
+      throw CocoaError(.fileWriteUnknown)
+    }
+    guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+      close(fd)
+      try? FileManager.default.removeItem(at: directory)
+      throw CocoaError(.fileWriteUnknown)
+    }
+    do {
+      try JSONEncoder().encode(paths).write(
+        to: directory.appendingPathComponent("resources.json"), options: .atomic)
+    } catch {
+      close(fd)
+      try? FileManager.default.removeItem(at: directory)
+      throw error
+    }
+    descriptor = fd
+  }
+
+  deinit { try? finish() }
+
+  func writeImage(_ resource: TopShelfImageResource, cacheKey: String) throws -> String {
+    try record { try store.writeImage(resource, cacheKey: cacheKey) }
+  }
+
+  func writeDetailData(_ data: Data, cacheKey: String) throws -> String {
+    try record { try store.writeDetailData(data, cacheKey: cacheKey) }
+  }
+
+  private func record(_ write: () throws -> String) throws -> String {
+    try lock.withLock {
+      guard descriptor != nil else { throw CancellationError() }
+      return try store.withPublicationLock {
+        let path = try write()
+        paths.insert(path)
+        try JSONEncoder().encode(paths).write(
+          to: directory.appendingPathComponent("resources.json"), options: .atomic)
+        return path
+      }
+    }
+  }
+
+  func finish(now: Date = Date()) throws {
+    try lock.withLock {
+      guard let fd = descriptor else { return }
+      defer {
+        close(fd)
+        descriptor = nil
+      }
+      try store.withPublicationLock {
+        try store.pruneResourcesLocked(
+          keepingRelativePaths: [], now: now, gracePeriod: TopShelfSnapshot.imageCleanupGracePeriod,
+          excludingPreparation: directory)
+        try FileManager.default.removeItem(at: directory)
+      }
+    }
   }
 }

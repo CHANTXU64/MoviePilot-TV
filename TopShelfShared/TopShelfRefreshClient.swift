@@ -137,6 +137,8 @@ nonisolated struct TopShelfRefreshClient: Sendable {
       let selection = expected.selection, expected.activeSessionID == configuration.sessionID,
       let token = readToken(configuration.sessionID)
     else { return }
+    let resources = try store.beginResourcePreparation()
+    defer { try? resources.finish() }
     let session: URLSession
     if let transport {
       session = transport
@@ -224,15 +226,15 @@ nonisolated struct TopShelfRefreshClient: Sendable {
         }
         try Task.checkCancellation()
         guard try store.loadState() == expected else { throw CancellationError() }
-        let imagePath = try store.writeImage(
+        let imagePath = try resources.writeImage(
           images.card,
           cacheKey: "\(configuration.sessionID)|hdtv-card|\(backgroundURL.absoluteString)")
-        let backgroundPath = try store.writeImage(
+        let backgroundPath = try resources.writeImage(
           images.background,
           cacheKey:
             "\(configuration.sessionID)|detail-\(Int(MediaDetailImageSizing.longEdgePixels))|\(backgroundURL.absoluteString)"
         )
-        let detailPath = try store.writeDetailData(
+        let detailPath = try resources.writeDetailData(
           JSONSerialization.data(withJSONObject: prepared),
           cacheKey: "\(configuration.sessionID)|\(identifier)")
         items.append(
@@ -255,11 +257,6 @@ nonisolated struct TopShelfRefreshClient: Sendable {
         sessionID: configuration.sessionID, selection: selection,
         generatedAt: Date(), items: items, refreshConfiguration: configuration), replacing: expected
     )
-    let retained = Set(
-      store.resourcePaths(for: items) + store.resourcePaths(for: expected.snapshot?.items ?? []))
-    try? store.pruneResources(
-      keepingRelativePaths: retained, now: Date(),
-      gracePeriod: TopShelfSnapshot.imageCleanupGracePeriod)
   }
 
   /// 分享记录只提供对应媒体身份；分享人的标题和复用入口不进入主屏卡片。

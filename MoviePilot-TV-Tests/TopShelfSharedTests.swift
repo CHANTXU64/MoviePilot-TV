@@ -204,6 +204,170 @@ final class TopShelfSharedTests: XCTestCase {
     XCTAssertEqual(store.presentation(at: Date())?.items.count, 6)
   }
 
+  func testImagesWithSameKeyAndDifferentBytesDoNotOverwritePublishedFiles() throws {
+    let fixture = try StoreFixture()
+    defer { fixture.cleanup() }
+    let store = TopShelfSharedStore(containerURL: fixture.containerURL)
+    let original = Data([1, 2, 3])
+    let replacement = Data([4, 5, 6])
+    let old = try store.writeImage(
+      TopShelfImageResource(data: original, fileExtension: "jpg"), cacheKey: "owner|same-url")
+    let new = try store.writeImage(
+      TopShelfImageResource(data: replacement, fileExtension: "jpg"), cacheKey: "owner|same-url")
+    XCTAssertNotEqual(old, new)
+    XCTAssertEqual(try Data(contentsOf: XCTUnwrap(store.imageURL(relativePath: old))), original)
+    XCTAssertEqual(try Data(contentsOf: XCTUnwrap(store.imageURL(relativePath: new))), replacement)
+  }
+
+  func testFinishingFailedBatchPreservesAnotherActiveWriterAndReclaimsSharedOrphans() throws {
+    let fixture = try StoreFixture()
+    defer { fixture.cleanup() }
+    let store = TopShelfSharedStore(containerURL: fixture.containerURL)
+    let loser = try store.beginResourcePreparation()
+    let winner = try store.beginResourcePreparation()
+    let shared = TopShelfImageResource(data: Data([1]), fileExtension: "jpg")
+    let first = try loser.writeImage(shared, cacheKey: "same")
+    let second = try winner.writeImage(shared, cacheKey: "same")
+    XCTAssertEqual(first, second)
+    let privateImage = try loser.writeImage(
+      TopShelfImageResource(data: Data([2]), fileExtension: "jpg"), cacheKey: "loser")
+    let activeDetail = try winner.writeDetailData(Data("active".utf8), cacheKey: "detail")
+    try TopShelfTestArtwork.ageResources(in: fixture.containerURL, by: 3 * 86400)
+    try loser.finish()
+    XCTAssertNotNil(try store.detailData(relativePath: activeDetail))
+    XCTAssertTrue(
+      FileManager.default.fileExists(
+        atPath: try XCTUnwrap(store.imageURL(relativePath: first)).path))
+    XCTAssertFalse(
+      FileManager.default.fileExists(
+        atPath: try XCTUnwrap(store.imageURL(relativePath: privateImage)).path))
+    let anotherStore = TopShelfSharedStore(containerURL: fixture.containerURL)
+    try anotherStore.pruneResources(keepingRelativePaths: [], now: Date(), gracePeriod: 0)
+    XCTAssertNotNil(try store.detailData(relativePath: activeDetail), "另一个存储实例也必须识别活跃文件锁")
+    try winner.finish()
+    XCTAssertTrue(try TopShelfTestArtwork.resourceFiles(in: fixture.containerURL).isEmpty)
+  }
+
+  func testRejectedPublisherCleanupPreservesLatestAndPreviousSnapshotsAfterGracePeriod() throws {
+    let fixture = try StoreFixture()
+    defer { fixture.cleanup() }
+    let store = TopShelfSharedStore(containerURL: fixture.containerURL)
+    let initial = try store.writeImage(
+      TopShelfImageResource(data: Data([1]), fileExtension: "jpg"), cacheKey: "same-url")
+    try store.saveState(sharedState(imagePath: initial))
+    let previous = try XCTUnwrap(store.loadState())
+    let loser = try store.beginResourcePreparation()
+    let unused = try loser.writeImage(
+      TopShelfImageResource(data: Data([2]), fileExtension: "jpg"), cacheKey: "same-url")
+    let winner = try store.beginResourcePreparation()
+    let current = try winner.writeImage(
+      TopShelfImageResource(data: Data([3]), fileExtension: "jpg"), cacheKey: "same-url")
+    try store.publish(try XCTUnwrap(sharedState(imagePath: current).snapshot), replacing: previous)
+    try winner.finish()
+    let published = try XCTUnwrap(store.loadState())
+    XCTAssertEqual(published.previousSnapshot, previous.snapshot)
+    try TopShelfTestArtwork.ageResources(in: fixture.containerURL, by: 3 * 86400)
+    XCTAssertThrowsError(
+      try store.publish(try XCTUnwrap(sharedState(imagePath: unused).snapshot), replacing: previous)
+    )
+    try loser.finish()
+    XCTAssertEqual(try store.loadState(), published)
+    let paths = Set(try TopShelfTestArtwork.resourceFiles(in: fixture.containerURL).keys)
+    XCTAssertTrue(paths.contains(initial))
+    XCTAssertTrue(paths.contains(current))
+    XCTAssertFalse(paths.contains(unused))
+    try store.pruneResources(keepingRelativePaths: [], now: Date(), gracePeriod: 0)
+    XCTAssertEqual(Set(try TopShelfTestArtwork.resourceFiles(in: fixture.containerURL).keys), paths)
+  }
+
+  func testNextPreparationReclaimsAbandonedFilesWithoutDeletingPublishedReferences() throws {
+    let fixture = try StoreFixture()
+    defer { fixture.cleanup() }
+    let store = TopShelfSharedStore(containerURL: fixture.containerURL)
+    let published = try store.writeImage(
+      TopShelfImageResource(data: Data([1]), fileExtension: "jpg"), cacheKey: "published")
+    try store.saveState(sharedState(imagePath: published))
+    let orphan = try store.writeDetailData(Data("abandoned".utf8), cacheKey: "orphan")
+    let directory = fixture.containerURL.appendingPathComponent(
+      "Library/Caches/TopShelf/preparations/abandoned")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try Data().write(to: directory.appendingPathComponent("lease.lock"))
+    try JSONEncoder().encode([orphan, published]).write(
+      to: directory.appendingPathComponent("resources.json"))
+    try TopShelfTestArtwork.ageResources(in: fixture.containerURL, by: 3 * 86400)
+    let resources = try store.beginResourcePreparation()
+    defer { try? resources.finish() }
+    XCTAssertNil(try store.detailData(relativePath: orphan))
+    XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+    XCTAssertEqual(
+      try Data(contentsOf: XCTUnwrap(store.imageURL(relativePath: published))), Data([1]))
+  }
+
+  func testCancelledReuseKeepsOlderPublishedImageForGracePeriod() throws {
+    let fixture = try StoreFixture()
+    defer { fixture.cleanup() }
+    let store = TopShelfSharedStore(containerURL: fixture.containerURL)
+    var paths: [String] = []
+    for value in [UInt8(1), 2, 3] {
+      let path = try store.writeImage(
+        TopShelfImageResource(data: Data([value]), fileExtension: "jpg"), cacheKey: "same-url")
+      let state = sharedState(imagePath: path)
+      if let previous = try store.loadState() {
+        try store.publish(try XCTUnwrap(state.snapshot), replacing: previous)
+      } else {
+        try store.saveState(state)
+      }
+      paths.append(path)
+    }
+    let preparation = try store.beginResourcePreparation()
+    let reused = try preparation.writeImage(
+      TopShelfImageResource(data: Data([1]), fileExtension: "jpg"), cacheKey: "same-url")
+    XCTAssertEqual(reused, paths[0])
+    try preparation.finish()
+    let oldest = try XCTUnwrap(store.imageURL(relativePath: paths[0]))
+    XCTAssertTrue(
+      FileManager.default.fileExists(atPath: oldest.path),
+      "同一深链已更新三批，系统仍可能持有更早批次的图片 URL")
+    try store.pruneResources(
+      keepingRelativePaths: [], now: Date().addingTimeInterval(2 * 86400), gracePeriod: 86400)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: oldest.path))
+    for path in paths.dropFirst() {
+      XCTAssertTrue(
+        FileManager.default.fileExists(
+          atPath: try XCTUnwrap(store.imageURL(relativePath: path)).path))
+    }
+  }
+
+  func testCreatorFinishingAfterAnotherPublisherKeepsRetiredImageForGracePeriod() throws {
+    let fixture = try StoreFixture()
+    defer { fixture.cleanup() }
+    let store = TopShelfSharedStore(containerURL: fixture.containerURL)
+    var base = sharedState()
+    base.snapshot = nil
+    try store.saveState(base)
+    let delayed = try store.beginResourcePreparation()
+    let original = try delayed.writeImage(
+      TopShelfImageResource(data: Data([1]), fileExtension: "jpg"), cacheKey: "same-url")
+    let publisher = try store.beginResourcePreparation()
+    let shared = try publisher.writeImage(
+      TopShelfImageResource(data: Data([1]), fileExtension: "jpg"), cacheKey: "same-url")
+    XCTAssertEqual(shared, original)
+    try store.publish(try XCTUnwrap(sharedState(imagePath: shared).snapshot), replacing: base)
+    try publisher.finish()
+    for value in [UInt8(2), 3] {
+      let next = try store.beginResourcePreparation()
+      let path = try next.writeImage(
+        TopShelfImageResource(data: Data([value]), fileExtension: "jpg"), cacheKey: "same-url")
+      try store.publish(
+        try XCTUnwrap(sharedState(imagePath: path).snapshot),
+        replacing: XCTUnwrap(store.loadState()))
+      try next.finish()
+    }
+    try delayed.finish()
+    XCTAssertEqual(
+      try Data(contentsOf: XCTUnwrap(store.imageURL(relativePath: original))), Data([1]))
+  }
+
   func testPreparedDataUsesImmutableFilesAndIsPrunedWithItsImages() throws {
     let fixture = try StoreFixture()
     defer { fixture.cleanup() }
