@@ -61,6 +61,7 @@ struct ContentView: View {
       updateTopShelfPriority()
     }
     .onChange(of: viewModel.isOpeningTopShelf) { _, _ in updateTopShelfPriority() }
+    .onChange(of: scenePhase) { _, _ in updateTopShelfPriority() }
     .background(PresentationReadyAction(
       isEnabled: scenePhase == .active && topShelfNavigationRouter.pendingRoute != nil,
       cancelsEditing: true,
@@ -93,7 +94,7 @@ struct ContentView: View {
 
   private func updateTopShelfPriority() {
     topShelfManager.setSynchronizationDeferred(
-      viewModel.isPreparingStartupSession || viewModel.isOpeningTopShelf
+      scenePhase != .active || viewModel.isPreparingStartupSession || viewModel.isOpeningTopShelf
         || topShelfNavigationRouter.pendingRoute != nil
     )
   }

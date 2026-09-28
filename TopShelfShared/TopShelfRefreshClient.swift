@@ -252,7 +252,7 @@ nonisolated struct TopShelfRefreshClient: Sendable {
     }
     try Task.checkCancellation()
     guard !items.isEmpty else { return }
-    try store.publish(
+    try resources.publish(
       TopShelfSnapshot(
         sessionID: configuration.sessionID, selection: selection,
         generatedAt: Date(), items: items, refreshConfiguration: configuration), replacing: expected

@@ -299,6 +299,112 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
     try await assertExternalOpenFocus(coldStart: false, origin: .explore)
   }
 
+  func testBackgroundDuringSlowRefreshHoldsNoFileLocksAndRejectsLateResult() async throws {
+    let service = makeService()
+    let sharedSession = SystemSessionServiceSnapshot.capture(service: .shared)
+    defer { sharedSession.restore(to: .shared) }
+    APIService.shared.replaceSessionForTesting(
+      baseURL: service.baseURL, token: nil, currentUser: service.currentUser)
+    TopShelfLaunchURLProtocol.automaticallyRespondToCurrentUser()
+    let model = ContentViewModel(apiService: service)
+    await model.prepareStartupIfNeeded()
+    service.settings = try JSONDecoder().decode(GlobalSettings.self, from: Data("{}".utf8))
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let suite = "TopShelfBackground-\(UUID())"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+    defer {
+      try? FileManager.default.removeItem(at: directory)
+      defaults.removePersistentDomain(forName: suite)
+    }
+    let store = TopShelfSharedStore(containerURL: directory)
+    let item = MediaInfo(tmdb_id: 42, title: "已发布", type: "电影", poster_path: "https://image.local/42.jpg")
+    let waiting = expectation(description: "刷新正在等待慢请求")
+    let backgroundApplied = expectation(description: "视图已进入后台")
+    let cancelledRequestReturned = expectation(description: "后台取消传递至原任务")
+    let foregroundRefresh = expectation(description: "返回前台后恢复刷新")
+    var shouldWait = false
+    var observeResume = false
+    var requests = 0
+    var pending: CheckedContinuation<[MediaInfo], Never>?
+    let manager = TopShelfManager(
+      apiService: service, store: store, defaults: defaults,
+      fetchSources: { [] }, fetchRecommendations: { _ in
+        requests += 1
+        guard shouldWait else {
+          if observeResume { foregroundRefresh.fulfill() }
+          return [item]
+        }
+        let result: [MediaInfo] = await withCheckedContinuation { continuation in
+          pending = continuation
+          waiting.fulfill()
+        }
+        if Task.isCancelled { cancelledRequestReturned.fulfill() }
+        return result
+      }, fetchDetail: { $0 },
+      fetchImage: { _ in TopShelfImageResource(data: TopShelfTestArtwork.data, fileExtension: "gif") },
+      storeToken: { _, _ in true }, notifyChange: {})
+    await manager.refreshNow()
+    let original = try XCTUnwrap(store.loadState())
+    let originalFiles = try TopShelfTestArtwork.resourceFiles(in: directory)
+    shouldWait = true
+    let notifications = NotificationManager()
+    let router = TopShelfNavigationRouter(store: nil)
+    func content(_ phase: ScenePhase) -> some View {
+      ContentView(viewModel: model)
+        .environment(\.scenePhase, phase)
+        .environmentObject(notifications)
+        .environmentObject(manager)
+        .environmentObject(router)
+        .onChange(of: phase) { _, phase in
+          if phase == .background { backgroundApplied.fulfill() }
+        }
+    }
+    let host = UIHostingController(rootView: content(.active))
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+    let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
+    let window = UIWindow(windowScene: scene)
+    window.rootViewController = host
+    window.makeKeyAndVisible()
+    defer {
+      manager.setSynchronizationDeferred(true)
+      pending?.resume(returning: [])
+      window.isHidden = true
+      window.rootViewController = nil
+      previousKeyWindow?.makeKey()
+    }
+    await fulfillment(of: [waiting], timeout: 3)
+    XCTAssertEqual(try TopShelfTestArtwork.heldFileLocks(in: directory), [])
+    host.rootView = content(.background)
+    await fulfillment(of: [backgroundApplied], timeout: 3)
+    XCTAssertEqual(try TopShelfTestArtwork.heldFileLocks(in: directory), [])
+    let requestCount = requests
+    shouldWait = false
+    await manager.refreshNow()
+    XCTAssertEqual(requests, requestCount, "后台不能启动另一轮刷新")
+    pending?.resume(returning: [item])
+    pending = nil
+    await fulfillment(of: [cancelledRequestReturned], timeout: 3)
+    let preparations = directory.appendingPathComponent("Library/Caches/TopShelf/preparations")
+    let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+    while !(try FileManager.default.contentsOfDirectory(atPath: preparations.path)).isEmpty,
+      ContinuousClock.now < deadline
+    {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: preparations.path).isEmpty)
+    XCTAssertEqual(try store.loadState(), original)
+    let remaining = try TopShelfTestArtwork.resourceFiles(in: directory)
+    XCTAssertTrue(originalFiles.allSatisfy { remaining[$0.key] == $0.value })
+    observeResume = true
+    host.rootView = content(.active)
+    await fulfillment(of: [foregroundRefresh], timeout: 3)
+    let resumeDeadline = ContinuousClock.now.advanced(by: .seconds(3))
+    while manager.status != .ready, ContinuousClock.now < resumeDeadline {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertEqual(manager.status, .ready)
+  }
+
   func testColdExternalOpenFocusesHeroAfterSessionPreparation() async throws {
     try await assertExternalOpenFocus(coldStart: true)
   }

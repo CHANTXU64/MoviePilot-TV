@@ -380,7 +380,7 @@ final class TopShelfManager: ObservableObject {
         refreshConfiguration: preparationConfiguration
       )
       guard let expectedPublication else { throw CancellationError() }
-      try store.publish(snapshot, replacing: expectedPublication)
+      try resources.publish(snapshot, replacing: expectedPublication)
       notifyChange()
       status = .ready
     } catch is CancellationError {

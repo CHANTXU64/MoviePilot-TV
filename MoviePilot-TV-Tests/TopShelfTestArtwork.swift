@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import UIKit
 
@@ -29,6 +30,27 @@ enum TopShelfTestArtwork {
         [.modificationDate: Date().addingTimeInterval(-age)],
         ofItemAtPath: root.appendingPathComponent(path).path)
     }
+  }
+
+  static func heldFileLocks(in container: URL) throws -> [String] {
+    let root = container.appendingPathComponent("Library/Caches/TopShelf")
+    guard let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)
+    else { return [] }
+    var held: [String] = []
+    for case let file as URL in files where file.pathExtension == "lock" {
+      let fd = open(file.path, O_RDWR)
+      guard fd >= 0 else { throw CocoaError(.fileReadUnknown) }
+      defer { close(fd) }
+      let result = flock(fd, LOCK_EX | LOCK_NB)
+      if result == 0 {
+        flock(fd, LOCK_UN)
+      } else if errno == EWOULDBLOCK {
+        held.append(file.lastPathComponent)
+      } else {
+        throw CocoaError(.fileReadUnknown)
+      }
+    }
+    return held
   }
 
   @MainActor
