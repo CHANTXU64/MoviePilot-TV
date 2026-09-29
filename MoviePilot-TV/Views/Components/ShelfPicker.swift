@@ -56,6 +56,29 @@ struct ShelfPicker: View {
   }
 }
 
+/// 货架胶囊的底色和字色。未聚焦时不使用实心白，也不另画边框。
+/// 亮白色只留给系统焦点。
+struct ShelfChipAppearance: Equatable {
+  var tint: Color?
+  var foreground: Color
+
+  static let selectedTint = Color(white: 0.34)
+  static let selectedForeground = Color.white
+  static let unselectedTint = Color(white: 0.16)
+  static let unselectedForeground = Color.white.opacity(0.62)
+  static let focusedForeground = Color.black
+
+  static func resolve(isSelected: Bool, isFocused: Bool) -> ShelfChipAppearance {
+    if isFocused {
+      return ShelfChipAppearance(tint: nil, foreground: focusedForeground)
+    }
+    if isSelected {
+      return ShelfChipAppearance(tint: selectedTint, foreground: selectedForeground)
+    }
+    return ShelfChipAppearance(tint: unselectedTint, foreground: unselectedForeground)
+  }
+}
+
 /// 单个 Shelf Chip - 胶囊样式
 struct ShelfChip: View {
   let title: String
@@ -63,12 +86,11 @@ struct ShelfChip: View {
   let isFocused: Bool
   let action: () -> Void
 
-  /// F-169：把「当前正驱动下方结果的货架」这层语义交给 VoiceOver。
+  /// F-169：把「当前正驱动下方结果的货架」交给 VoiceOver。
   ///
-  /// 原先只有 `overlay` 的视觉压暗，而**焦点与持久选择是两种状态**：`isFocused` 是
-  /// 「遥控器现在停在这个 chip 上」，`isSelected` 是「下方结果正由这个货架驱动」。
-  /// 用户把焦点移到别的 chip 但还没按下去时，结果仍归原来的货架 —— 此时 VoiceOver
-  /// 只能听到 chip 名称，无从判断哪个货架在生效。默认 Button 只提供名称与动作语义。
+  /// 焦点和持久选择是两种状态：`isFocused` 是遥控器停在这个 chip 上，`isSelected`
+  /// 是下方结果正由这个货架驱动。用户把焦点移到别的 chip 但还没按下去时，结果仍归原来的货架。
+  /// 默认 Button 只有名称和动作，VoiceOver 分不清哪个货架在生效。
   ///
   /// 按审计裁决只加这一个 trait：不加自定义 label/value（名称已由 `Text(title)` 提供），
   /// 也不引入 selection/focus 框架。抽成属性而非内联三元是为了让「只有选中项才带、
@@ -78,20 +100,15 @@ struct ShelfChip: View {
   }
 
   var body: some View {
+    let appearance = ShelfChipAppearance.resolve(isSelected: isSelected, isFocused: isFocused)
     Button(action: action) {
       Text(title)
+        .foregroundStyle(appearance.foreground)
     }
     .buttonStyle(.borderedProminent)
-    .foregroundColor(.primary)
     .buttonBorderShape(.capsule)
-    .overlay {
-      if !isSelected && !isFocused {
-        Capsule()
-          .fill(Color.black.opacity(0.2))
-          .allowsHitTesting(false)
-      }
-    }
-    // 放在链尾：`overlay` 会再包一层，此处确保 trait 落在最终的可访问元素上。
+    .tint(appearance.tint)
+    // 放在链尾：样式会再包一层，此处确保 trait 落在最终的可访问元素上。
     .accessibilityAddTraits(accessibilityTraits)
   }
 }

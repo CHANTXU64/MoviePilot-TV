@@ -7,7 +7,7 @@ import XCTest
 ///
 /// 关键前提是**焦点与持久选择是两种状态**：`isFocused` 表示「遥控器现在停在这个 chip
 /// 上」，`isSelected` 表示「下方结果正由这个货架驱动」。两者可以分离 —— 用户把焦点移到
-/// 别的 chip 但还没按下去时，驱动结果的仍是原来那个货架，视觉上也只有它在高亮。
+/// 别的 chip 但还没按下去时，驱动结果的仍是原来那个货架，未聚焦的选中项也不会变成亮白。
 /// 修复前默认 Button 只提供名称与动作语义，这个区别对 VoiceOver 用户完全不可见。
 ///
 /// SwiftUI 的 trait 无法在 XCTest 里从渲染树读回，所以这里分两层：本文件断言
@@ -55,6 +55,31 @@ final class ShelfChipAccessibilityTests: XCTestCase {
   }
 }
 
+/// 未聚焦的选中项要比未选中更亮，但不能是实心白。这些断言只锁颜色规则，读不到电视上的像素。
+@MainActor
+final class ShelfChipAppearanceTests: XCTestCase {
+  func testUnfocusedSelectedChipIsBrighterThanUnselectedButNotWhite() {
+    let selected = ShelfChipAppearance.resolve(isSelected: true, isFocused: false)
+    let unselected = ShelfChipAppearance.resolve(isSelected: false, isFocused: false)
+
+    XCTAssertEqual(selected.tint, ShelfChipAppearance.selectedTint)
+    XCTAssertEqual(unselected.tint, ShelfChipAppearance.unselectedTint)
+    XCTAssertNotEqual(selected.tint, Color.white)
+    XCTAssertNotEqual(selected.tint, unselected.tint)
+    XCTAssertNotEqual(selected.foreground, unselected.foreground)
+  }
+
+  func testFocusUsesTheSystemPlateInsteadOfTheRestingTint() {
+    let focusedSelected = ShelfChipAppearance.resolve(isSelected: true, isFocused: true)
+    let focusedUnselected = ShelfChipAppearance.resolve(isSelected: false, isFocused: true)
+
+    XCTAssertNil(focusedSelected.tint)
+    XCTAssertNil(focusedUnselected.tint)
+    XCTAssertEqual(focusedSelected.foreground, ShelfChipAppearance.focusedForeground)
+    XCTAssertEqual(focusedUnselected.foreground, ShelfChipAppearance.focusedForeground)
+  }
+}
+
 /// 接线守卫：`accessibilityTraits` 定义对了却没挂到 Button 上，上面四条会全过而
 /// VoiceOver 什么也听不到。trait 无法从渲染树读回，故按本仓库既有做法
 /// （见 `TMDBJumpAlertCallSiteTests`）直接断言源码。
@@ -73,6 +98,10 @@ final class ShelfChipTraitWiringTests: XCTestCase {
     XCTAssertTrue(
       shelfPicker.contains(".accessibilityAddTraits(accessibilityTraits)"),
       "accessibilityTraits 必须真的挂到 ShelfChip 的 Button 上")
+    XCTAssertTrue(
+      shelfPicker.contains("ShelfChipAppearance.resolve(isSelected: isSelected, isFocused: isFocused)"),
+      "选中和未选中的底色必须走 ShelfChipAppearance")
+    XCTAssertFalse(shelfPicker.contains("Capsule()"), "不要在系统按钮外面再套一层胶囊框")
   }
 
   /// 审计裁决的边界：不加自定义 label/value。名称已由 `Text(title)` 提供，
