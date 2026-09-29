@@ -318,6 +318,176 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     XCTAssertNil(viewModel?.backendVersionWarning)
   }
 
+  func testAcknowledgedBackendVersionWarningDoesNotReappearAfterAppRelaunch() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ContentViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ContentViewModelURLProtocol.self) }
+
+    await ContentViewModelURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
+    let markerKey = APIService.sessionRefreshAppVersionKey
+    let originalMarker = UserDefaults.standard.string(forKey: markerKey)
+    let warningSuite = "ContentViewModelBehaviorTests.\(UUID().uuidString)"
+    let warningDefaults = try XCTUnwrap(UserDefaults(suiteName: warningSuite))
+    var viewModel: ContentViewModel?
+    defer {
+      viewModel = nil
+      snapshot.restore(to: service)
+      restoreUserDefaultsString(originalMarker, forKey: markerKey)
+      warningDefaults.removePersistentDomain(forName: warningSuite)
+    }
+
+    clearCredential(account: "username")
+    clearCredential(account: "password")
+    UserDefaults.standard.set(AppVersionInfo.currentAppVersion(), forKey: markerKey)
+    service.baseURLForTesting = "https://old.content-view-model-tests.local"
+    service.tokenForTesting = "token-a"
+    service.currentUserForTesting = token("token-a", userName: "first-user")
+    service.settings = nil
+
+    viewModel = ContentViewModel(apiService: service, warningDefaults: warningDefaults)
+    await viewModel?.prepareStartupIfNeeded()
+    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.8")
+
+    viewModel?.dismissBackendVersionWarning()
+    viewModel = nil
+    let restoredDefaults = try XCTUnwrap(UserDefaults(suiteName: warningSuite))
+    viewModel = ContentViewModel(apiService: service, warningDefaults: restoredDefaults)
+    await viewModel?.prepareStartupIfNeeded()
+
+    XCTAssertNil(viewModel?.backendVersionWarning)
+
+    service.settings = nil
+    service.setStoredCredentialsForTesting(username: "startup-user", password: "startup-password")
+    _ = try await service.reloginStoredSession()
+    try await waitUntil("renewal should finish loading settings with the new token") {
+      service.settings?.BACKEND_VERSION == "v3.0.8"
+    }
+    let refreshedRequests = await ContentViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/system/global", authorization: "Bearer fresh-startup-token")
+    XCTAssertGreaterThan(refreshedRequests, 0, "续期后必须用新 token 重新检查版本")
+    XCTAssertNil(viewModel?.backendVersionWarning, "续期不应让已确认的警告重弹")
+
+    viewModel = nil
+    viewModel = ContentViewModel(
+      apiService: service, warningDefaults: restoredDefaults, appVersion: "v0.3.2")
+    await viewModel?.prepareStartupIfNeeded()
+    XCTAssertNil(viewModel?.backendVersionWarning, "TV 端更新但兼容门槛不变时不应重弹")
+
+    viewModel = nil
+    service.baseURLForTesting = "https://other-old.content-view-model-tests.local"
+    viewModel = ContentViewModel(
+      apiService: service, warningDefaults: restoredDefaults, appVersion: "v0.3.2")
+    await viewModel?.prepareStartupIfNeeded()
+    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.8")
+
+    viewModel = nil
+    service.baseURLForTesting = "https://old.content-view-model-tests.local"
+    viewModel = ContentViewModel(
+      apiService: service,
+      warningDefaults: restoredDefaults,
+      appVersion: "v0.3.3",
+      requiredBackendVersion: "v3.0.10"
+    )
+    await viewModel?.prepareStartupIfNeeded()
+    XCTAssertEqual(viewModel?.backendVersionWarning?.requiredVersion, "v3.0.10")
+  }
+
+  func testBackendUpgradeClearsVisibleWarningAfterForegroundRefresh() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ContentViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ContentViewModelURLProtocol.self) }
+
+    await ContentViewModelURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
+    let markerKey = APIService.sessionRefreshAppVersionKey
+    let originalMarker = UserDefaults.standard.string(forKey: markerKey)
+    let warningSuite = "ContentViewModelBehaviorTests.\(UUID().uuidString)"
+    let warningDefaults = try XCTUnwrap(UserDefaults(suiteName: warningSuite))
+    var viewModel: ContentViewModel?
+    defer {
+      viewModel = nil
+      snapshot.restore(to: service)
+      restoreUserDefaultsString(originalMarker, forKey: markerKey)
+      warningDefaults.removePersistentDomain(forName: warningSuite)
+    }
+
+    clearCredential(account: "username")
+    clearCredential(account: "password")
+    UserDefaults.standard.set(AppVersionInfo.currentAppVersion(), forKey: markerKey)
+    service.baseURLForTesting = "https://old.content-view-model-tests.local"
+    service.tokenForTesting = "token-a"
+    service.currentUserForTesting = token("token-a", userName: "first-user")
+    service.settings = nil
+
+    viewModel = ContentViewModel(apiService: service, warningDefaults: warningDefaults)
+    await viewModel?.prepareStartupIfNeeded()
+    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.8")
+
+    await ContentViewModelURLProtocol.stub.setBackendVersionOverride("v3.0.9")
+    NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+    try await waitUntil("backend upgrade should clear the visible warning") {
+      service.settings?.BACKEND_VERSION == "v3.0.9"
+        && viewModel?.backendVersionWarning == nil
+    }
+    XCTAssertNil(viewModel?.backendVersionWarning)
+  }
+
+  func testVisibleWarningStaysOpenDuringRenewalAndClearsAfterBackendUpgrade() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ContentViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ContentViewModelURLProtocol.self) }
+
+    await ContentViewModelURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
+    let markerKey = APIService.sessionRefreshAppVersionKey
+    let originalMarker = UserDefaults.standard.string(forKey: markerKey)
+    let warningSuite = "ContentViewModelBehaviorTests.\(UUID().uuidString)"
+    let warningDefaults = try XCTUnwrap(UserDefaults(suiteName: warningSuite))
+    var viewModel: ContentViewModel?
+    defer {
+      viewModel = nil
+      snapshot.restore(to: service)
+      restoreUserDefaultsString(originalMarker, forKey: markerKey)
+      warningDefaults.removePersistentDomain(forName: warningSuite)
+      Task { await ContentViewModelURLProtocol.stub.releaseSettingsResponses() }
+    }
+
+    clearCredential(account: "username")
+    clearCredential(account: "password")
+    UserDefaults.standard.set(AppVersionInfo.currentAppVersion(), forKey: markerKey)
+    service.baseURLForTesting = "https://old.content-view-model-tests.local"
+    service.tokenForTesting = "token-a"
+    service.currentUserForTesting = token("token-a", userName: "first-user")
+    service.settings = nil
+
+    viewModel = ContentViewModel(apiService: service, warningDefaults: warningDefaults)
+    await viewModel?.prepareStartupIfNeeded()
+    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.8")
+
+    await ContentViewModelURLProtocol.stub.setHoldSettingsResponses(true)
+    await ContentViewModelURLProtocol.stub.setBackendVersionOverride("v3.0.9")
+    service.settings = nil
+    service.setStoredCredentialsForTesting(username: "startup-user", password: "startup-password")
+    _ = try await service.reloginStoredSession()
+    for _ in 0..<200 {
+      let requests = await ContentViewModelURLProtocol.stub.requestCount(
+        path: "/api/v1/system/global", authorization: "Bearer fresh-startup-token")
+      if requests > 0 { break }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    let renewedRequests = await ContentViewModelURLProtocol.stub.requestCount(
+      path: "/api/v1/system/global", authorization: "Bearer fresh-startup-token")
+    XCTAssertGreaterThan(renewedRequests, 0)
+    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.8")
+
+    await ContentViewModelURLProtocol.stub.releaseSettingsResponses()
+    try await waitUntil("renewal should clear the warning after the backend upgrade") {
+      service.settings?.BACKEND_VERSION == "v3.0.9"
+        && viewModel?.backendVersionWarning == nil
+    }
+  }
+
   func testTransientSettingsFailureWarningClearsAfterForegroundRefresh() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(ContentViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(ContentViewModelURLProtocol.self) }
@@ -497,6 +667,9 @@ private actor ContentViewModelURLProtocolStub {
   private var currentUserStatusCode = 200
   private var rejectedSettingsToken: String?
   private var failSettingsTransport = false
+  private var backendVersionOverride: String?
+  private var holdSettingsResponses = false
+  private var settingsWaiters: [CheckedContinuation<Void, Never>] = []
   private var holdLoginResponses = false
   private var loginWaiters: [CheckedContinuation<Void, Never>] = []
 
@@ -505,6 +678,10 @@ private actor ContentViewModelURLProtocolStub {
     currentUserStatusCode = 200
     rejectedSettingsToken = nil
     failSettingsTransport = false
+    backendVersionOverride = nil
+    holdSettingsResponses = false
+    settingsWaiters.forEach { $0.resume() }
+    settingsWaiters.removeAll()
     holdLoginResponses = false
     loginWaiters.forEach { $0.resume() }
     loginWaiters.removeAll()
@@ -520,6 +697,20 @@ private actor ContentViewModelURLProtocolStub {
 
   func setFailSettingsTransport(_ fail: Bool) {
     failSettingsTransport = fail
+  }
+
+  func setBackendVersionOverride(_ version: String?) {
+    backendVersionOverride = version
+  }
+
+  func setHoldSettingsResponses(_ enabled: Bool) {
+    holdSettingsResponses = enabled
+  }
+
+  func releaseSettingsResponses() {
+    holdSettingsResponses = false
+    settingsWaiters.forEach { $0.resume() }
+    settingsWaiters.removeAll()
   }
 
   func setHoldLoginResponses(_ enabled: Bool) {
@@ -559,16 +750,25 @@ private actor ContentViewModelURLProtocolStub {
         loginWaiters.append(continuation)
       }
     }
+    if url.path == "/api/v1/system/global", holdSettingsResponses {
+      await withCheckedContinuation { continuation in
+        settingsWaiters.append(continuation)
+      }
+    }
     if url.path == "/api/v1/system/global", failSettingsTransport {
       throw URLError(.notConnectedToInternet)
     }
 
     let backendVersion: String
-    switch url.host {
-    case "old.content-view-model-tests.local":
-      backendVersion = "v3.0.8"
-    default:
-      backendVersion = "v3.0.9"
+    if let backendVersionOverride {
+      backendVersion = backendVersionOverride
+    } else {
+      switch url.host {
+      case "old.content-view-model-tests.local", "other-old.content-view-model-tests.local":
+        backendVersion = "v3.0.8"
+      default:
+        backendVersion = "v3.0.9"
+      }
     }
 
     let rejectsSettings = url.path == "/api/v1/system/global"

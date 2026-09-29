@@ -71,10 +71,10 @@ struct ContentView: View {
       viewModel.backendVersionWarning?.title ?? "版本提示",
       isPresented: Binding(
         get: { viewModel.backendVersionWarning != nil },
-        set: { if !$0, viewModel.backendVersionWarning != nil { viewModel.backendVersionWarning = nil } }),
+        set: { if !$0 { viewModel.dismissBackendVersionWarning() } }),
       presenting: viewModel.backendVersionWarning
     ) { _ in
-      Button("继续使用", role: .cancel) { viewModel.backendVersionWarning = nil }
+      Button("继续使用", role: .cancel) { viewModel.dismissBackendVersionWarning() }
     } message: { warning in
       Text(warning.message)
     }
