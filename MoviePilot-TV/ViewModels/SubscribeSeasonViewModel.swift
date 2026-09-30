@@ -93,6 +93,9 @@ private struct SeasonAvailabilityScope: Equatable {
 
 @MainActor
 class SubscribeSeasonViewModel: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   let mediaInfo: MediaInfo
   // 分季模型也可能被会话预载缓存持有，不能反向延长服务的生命周期。
   private weak var apiService: APIService?

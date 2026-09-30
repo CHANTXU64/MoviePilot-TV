@@ -4,6 +4,9 @@ import Combine
 
 @MainActor
 class StatusViewModel: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   @Published var statistic: Statistic?
   @Published var storage: Storage?
   @Published var downloader: DownloaderInfo?

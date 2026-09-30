@@ -1237,6 +1237,9 @@ private struct SystemSettingsRootBackObserver: UIViewRepresentable {
   }
 
   final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+    // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+    nonisolated deinit {}
+
     weak var view: UIView?
     var isEnabled = false
     var onExitPress: (() -> Void)?

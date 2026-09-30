@@ -3,6 +3,9 @@ import SwiftUI
 
 @MainActor
 class SubscriptionHandler: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   @Published var sheetSubscribe: Subscribe?
   @Published var sheetIsNewSubscription = false
   @Published var tvSubscribeRequest: SubscribeSeasonRequest?

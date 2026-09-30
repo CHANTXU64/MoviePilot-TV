@@ -3,6 +3,9 @@ import Foundation
 
 @MainActor
 class CollectionDetailViewModel: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   let paginator: Paginator<MediaInfo>
   private let apiService: APIService
   private var cancellables = Set<AnyCancellable>()

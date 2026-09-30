@@ -4,6 +4,9 @@ import SwiftUI
 
 @MainActor
 class PersonDetailViewModel: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   @Published var person: Person
   @Published var isLoadingDetails = true  // 用于控制个人简介加载状态的新属性
 

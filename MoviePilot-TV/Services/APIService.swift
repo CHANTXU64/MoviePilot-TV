@@ -129,6 +129,9 @@ private struct APIServiceSessionLease {
 }
 
 private final class APIServiceSessionRuntime: @unchecked Sendable {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   let transport: URLSession
   let cookieVault = ResourceCookieVault()
   let imageDownloader: ImageDownloader
@@ -613,9 +616,12 @@ class APIService: ObservableObject {
     }
   }
 
-  isolated deinit {
-    activeSessionScope?.tearDown()
-    runtime.cancel()
+  // 显式非隔离析构。tvOS 18 的隔离析构回部署会在 TaskLocal 里释放未分配指针。
+  nonisolated deinit {
+    MainActor.assumeIsolated {
+      activeSessionScope?.tearDown()
+      runtime.cancel()
+    }
   }
 
   var isLoggedIn: Bool {

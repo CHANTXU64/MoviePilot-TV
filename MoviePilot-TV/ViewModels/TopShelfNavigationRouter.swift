@@ -37,6 +37,9 @@ nonisolated struct PendingTopShelfRoute: Identifiable, Equatable {
 
 @MainActor
 final class TopShelfNavigationRouter: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   @Published private(set) var pendingRoute: PendingTopShelfRoute?
   private let store: TopShelfSharedStore?
 

@@ -3,6 +3,9 @@ import Foundation
 
 @MainActor
 class SubscribeSheetViewModel: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   @Published var subscribe: Subscribe
   @Published var sites: [Site] = []
   @Published var downloaders: [DownloaderConf] = []

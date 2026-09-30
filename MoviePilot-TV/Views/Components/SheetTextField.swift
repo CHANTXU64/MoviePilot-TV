@@ -36,6 +36,9 @@ struct SheetTextField: View {
 /// 3. **最底层 (Bottom):** `backgroundView` (我们手动添加的 UIView)
 ///    - **Background:** 负责 "背景颜色" (Color) 和 "圆角" (CornerRadius)
 class NoBlurTextField: UITextField {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
 
   private let backgroundView = UIView()
 
@@ -208,6 +211,9 @@ struct SheetTextFieldRepresentable: UIViewRepresentable {
   }
 
   class Coordinator: NSObject, UITextFieldDelegate {
+    // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+    nonisolated deinit {}
+
     @Binding var text: String
 
     init(text: Binding<String>) {

@@ -4,6 +4,9 @@ import Combine
 
 @MainActor
 class LoginViewModel: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   @Published var serverURL: String = ""
   @Published var username: String = ""
   @Published var password: String = ""

@@ -36,6 +36,9 @@ enum NotificationType {
 
 @MainActor
 class NotificationManager: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   @Published private(set) var isShowing: Bool = false
   @Published private(set) var message: String = ""
   @Published private(set) var type: NotificationType = .info

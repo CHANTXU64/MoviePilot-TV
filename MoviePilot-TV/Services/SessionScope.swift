@@ -6,6 +6,9 @@ import Foundation
 /// 因此作用域内的对象不需要各自监听会话变化再自清，生命周期本身保证它们不跨会话存活。
 @MainActor
 final class SessionScope {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   let uiIdentity: String
   let mediaPreloader: MediaPreloader
   let imageWarmer: MPImageWarmer

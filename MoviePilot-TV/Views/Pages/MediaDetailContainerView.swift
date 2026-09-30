@@ -24,6 +24,9 @@ private struct MediaLoadingView: View {
   let loadsImage: Bool
 
   private final class LoadingPosterLifetime {
+    // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+    nonisolated deinit {}
+
     var hasDisappeared = false
     let releaseScheduler = PresentationReleaseScheduler()
   }

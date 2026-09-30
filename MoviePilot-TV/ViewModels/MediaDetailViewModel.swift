@@ -13,6 +13,9 @@ struct GroupedStaff: Identifiable {
 /// 订阅状态、TMDB 识别、分季信息全部由 MediaPreloadTask 提供。
 @MainActor
 class MediaDetailViewModel: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   @Published var detail: MediaInfo
 
   // 界面背景稳定性控制
@@ -45,6 +48,9 @@ class MediaDetailViewModel: ObservableObject {
   /// init 时可能传入 partial data，applyFullDetail 会更新 box 内的值，
   /// 闭包通过 capture 这个 box（引用类型）自动读到 applyFullDetail 后的 detail。
   private final class DetailBox {
+    // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+    nonisolated deinit {}
+
     var value: MediaInfo
     init(_ v: MediaInfo) { value = v }
   }

@@ -4,6 +4,9 @@ import SwiftUI
 
 @MainActor
 class DownloadTaskViewModel: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   @Published var clients: [DownloaderConf] = []
   @Published var selectedClient: String = ""
   @Published var downloads: [DownloadingInfo] = []
