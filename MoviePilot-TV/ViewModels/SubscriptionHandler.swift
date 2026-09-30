@@ -268,7 +268,7 @@ class SubscriptionHandler: ObservableObject {
     )
   }
 
-  /// 回答当前媒体是否存在订阅。v3.0.4 的状态查询允许按标题、年份、类型跨来源匹配。
+  /// 回答当前媒体是否存在订阅。状态查询按配套 Web 附带标题、年份和类型，由后端做跨来源回退。
   private func subscriptionExists(
     for item: MediaInfo,
     snapshot: APIServiceSessionSnapshot
