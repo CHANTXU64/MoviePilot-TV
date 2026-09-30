@@ -97,7 +97,6 @@ private struct MiniStat: View {
     HStack(spacing: 10) {
       Image(systemName: icon)
       Text(title)
-      Spacer(minLength: 10)
       Text(value)
         .foregroundColor(.primary)
         .lineLimit(1)

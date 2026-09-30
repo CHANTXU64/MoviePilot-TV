@@ -78,6 +78,8 @@ private struct RecommendRootContent: View {
                 selectedShelf: $viewModel.selectedShelf
               )
             }
+            // 货架光晕会进入下方海报，页头画在网格上面。
+            .zIndex(1)
           },
           contextMenu: { item in
             MediaContextMenuItems(

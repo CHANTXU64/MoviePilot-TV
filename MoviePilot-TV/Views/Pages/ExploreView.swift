@@ -105,6 +105,8 @@ private struct ExploreRootContent: View {
           viewModel.onTypeChanged()
         }
     }
+    // 筛选行光晕会进入下方海报，页头画在网格上面。
+    .zIndex(1)
   }
 
 }
@@ -216,8 +218,9 @@ struct FilterPickersView: View {
               .foregroundColor(.primary)
           }
         }
+        .lineLimit(1)
       }
-      .lineLimit(1)
+      .scrollClipDisabled()
 
       // 底部焦点重定向器 - 捕获来自下方媒体网格的焦点
       Color.clear
@@ -240,6 +243,8 @@ struct FilterPickersView: View {
       multiSelectSelection = nil
       multiSelectControl = nil
     }
+    // 焦点光晕超出按钮，盖住上方数据源选择器。层级只抬这一行，不改按钮和焦点条的位置。
+    .zIndex(1)
     .sheet(item: $multiSelectControl) { control in
       MultiSelectionSheet(
         options: control.options,

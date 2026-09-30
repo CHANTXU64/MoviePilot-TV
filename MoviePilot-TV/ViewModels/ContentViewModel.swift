@@ -4,6 +4,8 @@ import SwiftUI
 
 @MainActor
 class ContentViewModel: ObservableObject {
+  private static let backendVersionAcknowledgementsKey = "acknowledgedBackendVersionWarnings"
+
   enum Tab: Int, Equatable, Hashable {
     case home = 0
     case recommend = 1
@@ -16,6 +18,7 @@ class ContentViewModel: ObservableObject {
   @Published var isLoggedIn = false
   @Published var isPreparingStartupSession = false
   @Published var backendVersionWarning: BackendVersionWarning?
+  @Published private(set) var pendingBackendVersionWarning: BackendVersionWarningPresentation?
   @Published var accountPermissionWarning: AccountPermissionWarning?
   @Published private(set) var currentUser: Token?
   @Published private(set) var sessionUIIdentity: String
@@ -26,14 +29,26 @@ class ContentViewModel: ObservableObject {
   @Published var selectedTab: Tab = .home
 
   private let apiService: APIService
+  private let warningDefaults: UserDefaults
+  private let appVersion: String
+  private let requiredBackendVersion: String
   private var cancellables = Set<AnyCancellable>()
   private var didPrepareStartup = false
   private var isRefreshingStartupSession = false
   private var backendVersionCheckKey: BackendVersionCheckKey?
+  private var backendVersionWarningBaseURL: String?
   private var lastAccountPermissionWarningKey: AccountPermissionWarningKey?
 
-  init(apiService: APIService = .shared) {
+  init(
+    apiService: APIService = .shared,
+    warningDefaults: UserDefaults = .standard,
+    appVersion: String = AppVersionInfo.currentAppVersion(),
+    requiredBackendVersion: String = AppVersionInfo.compatibleMoviePilotVersion
+  ) {
     self.apiService = apiService
+    self.warningDefaults = warningDefaults
+    self.appVersion = appVersion
+    self.requiredBackendVersion = requiredBackendVersion
     recommendNavigation = ImageNavigationCoordinator(apiService: apiService)
     exploreNavigation = ImageNavigationCoordinator(apiService: apiService)
     // 初始状态
@@ -110,6 +125,42 @@ class ContentViewModel: ObservableObject {
     apiService.logout()
   }
 
+  var backendVersionWarningPresentation: BackendVersionWarningPresentation? {
+    backendVersionWarning.map {
+      BackendVersionWarningPresentation(warning: $0, baseURL: backendVersionWarningBaseURL)
+    }
+  }
+
+  func acknowledgeBackendVersionWarning(_ presentation: BackendVersionWarningPresentation) {
+    if let baseURL = presentation.baseURL {
+      var acknowledgements = backendVersionAcknowledgements()
+      var warningIDs = Set(acknowledgements[baseURL] ?? [])
+      warningIDs.insert(presentation.warning.id)
+      acknowledgements[baseURL] = warningIDs.sorted()
+      warningDefaults.set(acknowledgements, forKey: Self.backendVersionAcknowledgementsKey)
+    }
+    if backendVersionWarning == presentation.warning,
+      backendVersionWarningBaseURL == presentation.baseURL
+    {
+      clearPresentedBackendVersionWarning()
+    }
+  }
+
+  private func clearPresentedBackendVersionWarning() {
+    backendVersionWarning = nil
+    backendVersionWarningBaseURL = nil
+  }
+
+  func presentPendingBackendVersionWarning() {
+    guard backendVersionWarning == nil, let pending = pendingBackendVersionWarning else { return }
+    pendingBackendVersionWarning = nil
+    guard let baseURL = pending.baseURL,
+      currentBackendVersionCheckKey().baseURL == baseURL,
+      isLoggedIn
+    else { return }
+    presentBackendVersionWarning(pending.warning, baseURL: baseURL)
+  }
+
   var canPresentContent: Bool {
     isLoggedIn && (!isPreparingStartupSession || topShelfRoute.map {
       navigation(for: $0.targetTab).topEntryID == $0.id
@@ -131,7 +182,7 @@ class ContentViewModel: ObservableObject {
     guard disposition(for: route) != .discard, topShelfRoute?.id != route.id else { return }
     topShelfRoute = route
     isOpeningTopShelf = true
-    backendVersionWarning = nil
+    clearBackendVersionWarning()
     accountPermissionWarning = nil
     NotificationCenter.default.post(
       name: .imageNavigationPresentationWillReset, object: apiService)
@@ -229,17 +280,26 @@ class ContentViewModel: ObservableObject {
 
   private func loadGlobalSettings(checkBackendVersion: Bool) async {
     let checkKey = currentBackendVersionCheckKey()
-    if checkBackendVersion, backendVersionCheckKey != checkKey {
-      backendVersionWarning = nil
+    if checkBackendVersion, backendVersionCheckKey != checkKey,
+      backendVersionWarningBaseURL != checkKey.baseURL
+    {
+      clearBackendVersionWarning()
     }
 
     do {
       let settings = try await apiService.fetchSettings()
       guard currentBackendVersionCheckKey() == checkKey else { return }
       let shouldUpdateWarning =
-        checkBackendVersion ? backendVersionCheckKey != checkKey : backendVersionWarning != nil
+        (checkBackendVersion ? backendVersionCheckKey != checkKey : backendVersionWarning != nil)
+          || pendingBackendVersionWarning != nil
       if shouldUpdateWarning {
-        backendVersionWarning = Self.backendVersionWarning(for: settings.BACKEND_VERSION)
+        presentBackendVersionWarning(
+          Self.backendVersionWarning(
+            for: settings.BACKEND_VERSION,
+            requiredVersion: requiredBackendVersion
+          ),
+          baseURL: checkKey.baseURL
+        )
       }
       if checkBackendVersion {
         backendVersionCheckKey = checkKey
@@ -250,16 +310,52 @@ class ContentViewModel: ObservableObject {
       let sessionIsCurrent = currentBackendVersionCheckKey() == checkKey
       guard checkBackendVersion, backendVersionCheckKey != checkKey else { return }
       guard sessionIsCurrent else { return }
-      backendVersionWarning = BackendVersionWarning(
-        backendVersion: nil,
-        requiredVersion: AppVersionInfo.compatibleMoviePilotVersion
+      presentBackendVersionWarning(
+        BackendVersionWarning(
+          backendVersion: nil,
+          requiredVersion: requiredBackendVersion
+        ),
+        baseURL: checkKey.baseURL
       )
     }
   }
 
   private func resetBackendVersionCheck() {
     backendVersionCheckKey = nil
-    backendVersionWarning = nil
+    clearBackendVersionWarning()
+  }
+
+  private func presentBackendVersionWarning(_ warning: BackendVersionWarning?, baseURL: String) {
+    guard let warning,
+      backendVersionAcknowledgements()[baseURL]?.contains(warning.id) != true
+    else {
+      clearBackendVersionWarning()
+      return
+    }
+    let presentation = BackendVersionWarningPresentation(warning: warning, baseURL: baseURL)
+    if let displayed = backendVersionWarning,
+      displayed != warning || backendVersionWarningBaseURL != baseURL
+    {
+      pendingBackendVersionWarning = presentation
+      return
+    }
+    if pendingBackendVersionWarning != nil, backendVersionWarning == nil {
+      pendingBackendVersionWarning = presentation
+      return
+    }
+    pendingBackendVersionWarning = nil
+    backendVersionWarningBaseURL = baseURL
+    backendVersionWarning = warning
+  }
+
+  private func clearBackendVersionWarning() {
+    clearPresentedBackendVersionWarning()
+    pendingBackendVersionWarning = nil
+  }
+
+  private func backendVersionAcknowledgements() -> [String: [String]] {
+    warningDefaults.dictionary(forKey: Self.backendVersionAcknowledgementsKey) as? [String: [String]]
+      ?? [:]
   }
 
   private func updateAccountPermissionWarning(
@@ -315,16 +411,24 @@ class ContentViewModel: ObservableObject {
     BackendVersionCheckKey(
       baseURL: session.baseURL,
       token: session.token,
-      appVersion: AppVersionInfo.currentAppVersion()
+      appVersion: appVersion
     )
   }
 
-  static func backendVersionWarning(for backendVersion: String?) -> BackendVersionWarning? {
+  static func backendVersionWarning(
+    for backendVersion: String?,
+    requiredVersion: String = AppVersionInfo.compatibleMoviePilotVersion
+  ) -> BackendVersionWarning? {
     BackendVersionWarning(
       backendVersion: backendVersion,
-      requiredVersion: AppVersionInfo.compatibleMoviePilotVersion
+      requiredVersion: requiredVersion
     )
   }
+}
+
+struct BackendVersionWarningPresentation {
+  let warning: BackendVersionWarning
+  let baseURL: String?
 }
 
 private struct BackendVersionCheckKey: Equatable {

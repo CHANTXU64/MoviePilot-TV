@@ -11,7 +11,8 @@ struct ContentView: View {
   }
 
   var body: some View {
-    ZStack {
+    let presentedBackendWarning = viewModel.backendVersionWarningPresentation
+    return ZStack {
       if viewModel.canPresentContent {
         MainContentView(viewModel: viewModel)
           .id(viewModel.sessionUIIdentity)
@@ -63,20 +64,35 @@ struct ContentView: View {
     .onChange(of: viewModel.isOpeningTopShelf) { _, _ in updateTopShelfPriority() }
     .onChange(of: scenePhase) { _, _ in updateTopShelfPriority() }
     .background(PresentationReadyAction(
-      isEnabled: scenePhase == .active && topShelfNavigationRouter.pendingRoute != nil,
+      isEnabled: scenePhase == .active && (
+        topShelfNavigationRouter.pendingRoute != nil
+          || viewModel.pendingBackendVersionWarning != nil
+      ),
       cancelsEditing: true,
-      action: reconcileTopShelfRoute
+      action: {
+        if topShelfNavigationRouter.pendingRoute != nil {
+          reconcileTopShelfRoute()
+        } else {
+          viewModel.presentPendingBackendVersionWarning()
+        }
+      }
     ))
     .alert(
-      viewModel.backendVersionWarning?.title ?? "版本提示",
+      presentedBackendWarning?.warning.title ?? "版本提示",
       isPresented: Binding(
         get: { viewModel.backendVersionWarning != nil },
-        set: { if !$0, viewModel.backendVersionWarning != nil { viewModel.backendVersionWarning = nil } }),
-      presenting: viewModel.backendVersionWarning
-    ) { _ in
-      Button("继续使用", role: .cancel) { viewModel.backendVersionWarning = nil }
-    } message: { warning in
-      Text(warning.message)
+        set: {
+          if !$0, let presentation = presentedBackendWarning {
+            viewModel.acknowledgeBackendVersionWarning(presentation)
+          }
+        }),
+      presenting: presentedBackendWarning
+    ) { presentation in
+      Button("继续使用", role: .cancel) {
+        viewModel.acknowledgeBackendVersionWarning(presentation)
+      }
+    } message: { presentation in
+      Text(presentation.warning.message)
     }
     .alert(
       viewModel.accountPermissionWarning?.title ?? "权限提示",
