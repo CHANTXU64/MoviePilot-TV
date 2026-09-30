@@ -52,7 +52,8 @@ final class MPImageWarmer {
     sessionDelegate.owner = self
   }
 
-  isolated deinit {
+  // 显式非隔离析构。tvOS 18 的隔离析构回部署会在 TaskLocal 里释放未分配指针。
+  nonisolated deinit {
     session.invalidateAndCancel()
   }
 
@@ -299,6 +300,9 @@ final class MPImageWarmer {
 final class MPImageWarmSessionDelegate: NSObject, URLSessionDataDelegate,
   @unchecked Sendable
 {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   weak var owner: MPImageWarmer?
 
   func urlSession(

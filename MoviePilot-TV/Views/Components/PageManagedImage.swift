@@ -118,13 +118,19 @@ final class PageImageDemandLease {
     slot = nil
   }
 
-  isolated deinit {
-    slot?.removeDemand(id: id)
+  // 显式非隔离析构。tvOS 18 的隔离析构回部署会在 TaskLocal 里释放未分配指针。
+  nonisolated deinit {
+    MainActor.assumeIsolated {
+      slot?.removeDemand(id: id)
+    }
   }
 }
 
 @MainActor
 final class PageImageSlot: PageImageResource, GridImageDemandResource {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   let key: String
 
   private let url: URL
@@ -409,6 +415,9 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
 }
 
 private final class WeakPageManagedImageView {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   weak var value: PageManagedImageView?
 
   init(_ value: PageManagedImageView) {
@@ -418,6 +427,9 @@ private final class WeakPageManagedImageView {
 
 @MainActor
 final class PageManagedImageView: UIImageView {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   private weak var lifecycle: PageImageLifecycle?
   private var slot: PageImageSlot?
   private weak var demandLease: PageImageDemandLease?

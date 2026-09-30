@@ -50,6 +50,9 @@ final class GridImageLifecycleController: ObservableObject, PageImageStackObserv
   }
 
   private final class WeakResource {
+    // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+    nonisolated deinit {}
+
     weak var value: (any GridImageDemandResource)?
     let listIdentity: GridListIdentity
     let itemIndex: Int
@@ -96,8 +99,11 @@ final class GridImageLifecycleController: ObservableObject, PageImageStackObserv
     imageLifecycle.registerStackObserver(self)
   }
 
-  isolated deinit {
-    imageLifecycle?.unregisterStackObserver(self)
+  // 显式非隔离析构。tvOS 18 的隔离析构回部署会在 TaskLocal 里释放未分配指针。
+  nonisolated deinit {
+    MainActor.assumeIsolated {
+      imageLifecycle?.unregisterStackObserver(self)
+    }
   }
 
   /// 同一 Paginator 的尾部追加保留窗口；新 listID 或非追加变化立即关闭旧窗口。

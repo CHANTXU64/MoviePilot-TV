@@ -4,6 +4,9 @@ import SwiftUI
 
 @MainActor
 class HomeViewModel: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   /// 媒体服务器最近播放/新增的项目
   @Published var latestMedia: [MediaServerPlayItem] = []
   /// 可选的媒体服务器（用于首页最近添加筛选）

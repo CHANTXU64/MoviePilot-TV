@@ -33,6 +33,9 @@ protocol PageImageStackObserver: AnyObject {
 }
 
 private final class WeakPageImageStackObserver {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   weak var value: (any PageImageStackObserver)?
 
   init(_ value: any PageImageStackObserver) {
@@ -43,6 +46,9 @@ private final class WeakPageImageStackObserver {
 /// 一个可导航页面唯一的图片生命周期。页面只读取保留策略，不自行判断 Push 或 Pop。
 @MainActor
 final class PageImageLifecycle: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   let id: UUID
 
   @Published private(set) var phase: PageImagePhase
@@ -319,8 +325,11 @@ final class ImageNavigationCoordinator: ObservableObject {
     }
   }
 
-  isolated deinit {
-    retire()
+  // 显式非隔离析构。tvOS 18 的隔离析构回部署会在 TaskLocal 里释放未分配指针。
+  nonisolated deinit {
+    MainActor.assumeIsolated {
+      retire()
+    }
   }
 
   /// 外部导航接管时立即使旧动作和资源失效，不等待慢任务释放最后一个栈引用。

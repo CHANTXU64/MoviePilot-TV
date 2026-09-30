@@ -986,6 +986,9 @@ nonisolated struct DownloadingMediaInfo: Codable, Equatable {
 /// 实时下载任务详细信息
 @MainActor
 class DownloadingInfo: Codable, Identifiable, ObservableObject, Equatable {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   static func == (lhs: DownloadingInfo, rhs: DownloadingInfo) -> Bool {
     lhs.id == rhs.id
   }

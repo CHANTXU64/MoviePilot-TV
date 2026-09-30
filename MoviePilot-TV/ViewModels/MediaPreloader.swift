@@ -198,6 +198,9 @@ enum MediaDetailLoadingPoster {
 /// 作为 DetailView 和右键菜单的唯一数据源 (Single Source of Truth)。
 @MainActor
 class MediaPreloadTask: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   let partialMedia: MediaInfo
   private weak var apiService: APIService?
 
@@ -648,6 +651,9 @@ class MediaPreloadTask: ObservableObject {
 }
 
 private final class ImageRetrieveContinuationBox: @unchecked Sendable {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   private let lock = NSLock()
   nonisolated(unsafe) private var continuation: CheckedContinuation<Bool, Never>?
   nonisolated(unsafe) private var pendingResult: Bool?
@@ -736,6 +742,9 @@ private final class ImageRetrieveContinuationBox: @unchecked Sendable {
 /// 由 `SessionScope` 按会话持有：换账号或登出时整体拆除，因此这里不再自行监听会话变化。
 @MainActor
 class MediaPreloader: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   /// 预加载任务缓存，key = MediaInfo.id
   private var cache: [String: MediaPreloadTask] = [:]
   /// 尚未进入详情页的临时焦点候选。新候选出现时立即释放旧候选。

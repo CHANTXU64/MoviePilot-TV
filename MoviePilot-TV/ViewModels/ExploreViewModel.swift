@@ -511,6 +511,9 @@ enum ExploreContent {
 // MARK: - ViewModel
 @MainActor
 class ExploreViewModel: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   @Published var configuration: ExploreConfiguration
   private let loadsResults: Bool
   var selectedSource: DiscoverSource {

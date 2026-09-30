@@ -2,6 +2,9 @@ import SwiftUI
 
 @MainActor
 final class GridPreloadDebouncer {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   private struct TaskKey: Hashable {
     let listIdentity: GridListIdentity
     let itemID: MediaInfo.ID

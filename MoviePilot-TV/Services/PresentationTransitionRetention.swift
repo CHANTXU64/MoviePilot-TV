@@ -30,7 +30,8 @@ final class PresentationReleaseScheduler {
     releaseTask = nil
   }
 
-  isolated deinit {
+  // 显式非隔离析构。tvOS 18 的隔离析构回部署会在 TaskLocal 里释放未分配指针。
+  nonisolated deinit {
     releaseTask?.cancel()
   }
 }

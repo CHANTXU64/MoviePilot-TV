@@ -129,6 +129,9 @@ private struct APIServiceSessionLease {
 }
 
 private final class APIServiceSessionRuntime: @unchecked Sendable {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   let transport: URLSession
   let cookieVault = ResourceCookieVault()
   let imageDownloader: ImageDownloader
@@ -613,9 +616,12 @@ class APIService: ObservableObject {
     }
   }
 
-  isolated deinit {
-    activeSessionScope?.tearDown()
-    runtime.cancel()
+  // 显式非隔离析构。tvOS 18 的隔离析构回部署会在 TaskLocal 里释放未分配指针。
+  nonisolated deinit {
+    MainActor.assumeIsolated {
+      activeSessionScope?.tearDown()
+      runtime.cancel()
+    }
   }
 
   var isLoggedIn: Bool {
@@ -3189,7 +3195,9 @@ class APIService: ObservableObject {
   /// 查询特定媒体（及特定季）命中的订阅摘要
   /// - 对应前端: `MoviePilot-Frontend/src/components/cards/MediaCard.vue` 和 `MoviePilot-Frontend/src/views/discover/MediaDetailView.vue` 的 `checkSubscribe`
   /// - 应用场景: 状态检查、编辑定位，以及详情页 Header 取消订阅前的严格身份确认。
-  /// - 备注: v3.0.4 可用标题、年份和类型跨来源回退；解析媒体级删除目标时必须关闭该回退，
+  /// - 备注: 状态查询附带标题、年份和类型。v3.0.10-1 起，电影和电视剧（含 TMDB）
+  ///   在精确身份未命中时都会回退：有年份时优先精确年份，其次匹配年份为空的订阅；
+  ///   没有年份时只匹配年份为空的订阅。解析媒体级删除目标时必须关闭该回退，
   ///   因为 DELETE 仍只接受精确来源身份。`mediaId` 恒为本次查询使用的媒体身份，
   ///   响应回显的身份只用来判断“归属是否已被确认”（`isResolvedMediaId`），不再充当删除目标。
   ///   原始 ID + fallback TMDB 的解析顺序由调用方控制。

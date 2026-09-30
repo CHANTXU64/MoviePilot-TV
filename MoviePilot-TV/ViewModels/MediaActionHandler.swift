@@ -3,6 +3,9 @@ import Combine
 
 @MainActor
 class MediaActionHandler: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   @Published var isRecognizingTmdb = false
   @Published var showTMDBNotFoundAlert = false
 

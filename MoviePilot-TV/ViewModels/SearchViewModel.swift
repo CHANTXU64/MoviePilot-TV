@@ -125,6 +125,9 @@ func popularityBoost(source: String?, popularity: Double) -> Int {
 
 @MainActor
 class SearchViewModel: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   @Published var query: String = ""
   @Published var submittedQuery: String = ""  // 记录点击搜索时的关键词，用于分页请求
   @Published var hasSearched: Bool = false
@@ -957,6 +960,9 @@ class SearchViewModel: ObservableObject {
 
 /// 负责统筹抓取 `searchMedia` API，并按需拆分给各自分页器
 actor SharedMediaFetcher {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   private let query: String
   private let source: MediaSearchSource?
   private let apiService: APIService

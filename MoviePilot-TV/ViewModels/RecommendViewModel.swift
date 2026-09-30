@@ -41,6 +41,9 @@ nonisolated struct RecommendShelf: Identifiable, Hashable, Sendable {
 // MARK: - ViewModel
 @MainActor
 class RecommendViewModel: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   @Published var selectedCategory: RecommendCategory = .all
   @Published var selectedShelf: RecommendShelf?
   @Published private(set) var paginator: Paginator<MediaInfo>?

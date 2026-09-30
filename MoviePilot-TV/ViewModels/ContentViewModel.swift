@@ -4,6 +4,9 @@ import SwiftUI
 
 @MainActor
 class ContentViewModel: ObservableObject {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   private static let backendVersionAcknowledgementsKey = "acknowledgedBackendVersionWarnings"
 
   enum Tab: Int, Equatable, Hashable {

@@ -108,10 +108,14 @@ struct PresentationReadyAction: UIViewControllerRepresentable {
       }
     }
 
-    isolated deinit { displayLink?.invalidate() }
+    // 显式非隔离析构。tvOS 18 的隔离析构回部署会在 TaskLocal 里释放未分配指针。
+    nonisolated deinit { displayLink?.invalidate() }
   }
 
   private final class FrameObserver: NSObject {
+    // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+    nonisolated deinit {}
+
     weak var controller: Controller?
     init(_ controller: Controller) { self.controller = controller }
     @objc func tick() { controller?.checkPresentation() }
