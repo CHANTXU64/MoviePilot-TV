@@ -18,6 +18,7 @@ class ContentViewModel: ObservableObject {
   @Published var isLoggedIn = false
   @Published var isPreparingStartupSession = false
   @Published var backendVersionWarning: BackendVersionWarning?
+  @Published private(set) var pendingBackendVersionWarning: BackendVersionWarningPresentation?
   @Published var accountPermissionWarning: AccountPermissionWarning?
   @Published private(set) var currentUser: Token?
   @Published private(set) var sessionUIIdentity: String
@@ -124,16 +125,40 @@ class ContentViewModel: ObservableObject {
     apiService.logout()
   }
 
-  func dismissBackendVersionWarning() {
-    guard let warning = backendVersionWarning else { return }
-    if let baseURL = backendVersionWarningBaseURL {
+  var backendVersionWarningPresentation: BackendVersionWarningPresentation? {
+    backendVersionWarning.map {
+      BackendVersionWarningPresentation(warning: $0, baseURL: backendVersionWarningBaseURL)
+    }
+  }
+
+  func acknowledgeBackendVersionWarning(_ presentation: BackendVersionWarningPresentation) {
+    if let baseURL = presentation.baseURL {
       var acknowledgements = backendVersionAcknowledgements()
       var warningIDs = Set(acknowledgements[baseURL] ?? [])
-      warningIDs.insert(warning.id)
+      warningIDs.insert(presentation.warning.id)
       acknowledgements[baseURL] = warningIDs.sorted()
       warningDefaults.set(acknowledgements, forKey: Self.backendVersionAcknowledgementsKey)
     }
-    clearBackendVersionWarning()
+    if backendVersionWarning == presentation.warning,
+      backendVersionWarningBaseURL == presentation.baseURL
+    {
+      clearPresentedBackendVersionWarning()
+    }
+  }
+
+  private func clearPresentedBackendVersionWarning() {
+    backendVersionWarning = nil
+    backendVersionWarningBaseURL = nil
+  }
+
+  func presentPendingBackendVersionWarning() {
+    guard backendVersionWarning == nil, let pending = pendingBackendVersionWarning else { return }
+    pendingBackendVersionWarning = nil
+    guard let baseURL = pending.baseURL,
+      currentBackendVersionCheckKey().baseURL == baseURL,
+      isLoggedIn
+    else { return }
+    presentBackendVersionWarning(pending.warning, baseURL: baseURL)
   }
 
   var canPresentContent: Bool {
@@ -306,13 +331,25 @@ class ContentViewModel: ObservableObject {
       clearBackendVersionWarning()
       return
     }
+    let presentation = BackendVersionWarningPresentation(warning: warning, baseURL: baseURL)
+    if let displayed = backendVersionWarning,
+      displayed != warning || backendVersionWarningBaseURL != baseURL
+    {
+      pendingBackendVersionWarning = presentation
+      return
+    }
+    if pendingBackendVersionWarning != nil, backendVersionWarning == nil {
+      pendingBackendVersionWarning = presentation
+      return
+    }
+    pendingBackendVersionWarning = nil
     backendVersionWarningBaseURL = baseURL
     backendVersionWarning = warning
   }
 
   private func clearBackendVersionWarning() {
-    backendVersionWarning = nil
-    backendVersionWarningBaseURL = nil
+    clearPresentedBackendVersionWarning()
+    pendingBackendVersionWarning = nil
   }
 
   private func backendVersionAcknowledgements() -> [String: [String]] {
@@ -386,6 +423,11 @@ class ContentViewModel: ObservableObject {
       requiredVersion: requiredVersion
     )
   }
+}
+
+struct BackendVersionWarningPresentation {
+  let warning: BackendVersionWarning
+  let baseURL: String?
 }
 
 private struct BackendVersionCheckKey: Equatable {

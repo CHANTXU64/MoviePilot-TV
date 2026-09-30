@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 
 @testable import MoviePilot_TV
@@ -349,7 +350,8 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     await viewModel?.prepareStartupIfNeeded()
     XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.8")
 
-    viewModel?.dismissBackendVersionWarning()
+    let displayedWarning = try XCTUnwrap(viewModel?.backendVersionWarningPresentation)
+    viewModel?.acknowledgeBackendVersionWarning(displayedWarning)
     viewModel = nil
     let restoredDefaults = try XCTUnwrap(UserDefaults(suiteName: warningSuite))
     viewModel = ContentViewModel(apiService: service, warningDefaults: restoredDefaults)
@@ -528,6 +530,87 @@ final class ContentViewModelBehaviorTests: XCTestCase {
         && viewModel?.backendVersionWarning == nil
     }
     XCTAssertNil(viewModel?.backendVersionWarning)
+  }
+
+  func testDisplayedBackendWarningAcknowledgesOnlyItsOwnVersionAfterForegroundRefresh() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ContentViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ContentViewModelURLProtocol.self) }
+
+    await ContentViewModelURLProtocol.stub.reset()
+    await ContentViewModelURLProtocol.stub.setFailSettingsTransport(true)
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
+    let markerKey = APIService.sessionRefreshAppVersionKey
+    let originalMarker = UserDefaults.standard.string(forKey: markerKey)
+    let warningSuite = "ContentViewModelBehaviorTests.\(UUID().uuidString)"
+    let warningDefaults = try XCTUnwrap(UserDefaults(suiteName: warningSuite))
+    defer {
+      snapshot.restore(to: service)
+      restoreUserDefaultsString(originalMarker, forKey: markerKey)
+      warningDefaults.removePersistentDomain(forName: warningSuite)
+    }
+
+    clearCredential(account: "username")
+    clearCredential(account: "password")
+    UserDefaults.standard.set(AppVersionInfo.currentAppVersion(), forKey: markerKey)
+    let baseURL = "https://warning-presentation.content-view-model-tests.local"
+    service.baseURLForTesting = baseURL
+    service.tokenForTesting = "token-a"
+    service.currentUserForTesting = token("token-a", userName: "first-user")
+    service.settings = nil
+
+    let model = ContentViewModel(apiService: service, warningDefaults: warningDefaults)
+    await model.prepareStartupIfNeeded()
+    let unknown = try XCTUnwrap(model.backendVersionWarning)
+    XCTAssertNil(unknown.backendVersion)
+    model.accountPermissionWarning = nil
+
+    let host = UIHostingController(rootView: ContentView(viewModel: model)
+      .environment(\.scenePhase, .active)
+      .environmentObject(TopShelfNavigationRouter(store: nil))
+      .environmentObject(TopShelfManager(apiService: service, store: nil))
+      .environmentObject(NotificationManager()))
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+    let previous = scene.windows.first(where: \.isKeyWindow)
+    let window = UIWindow(windowScene: scene)
+    window.rootViewController = host
+    window.makeKeyAndVisible()
+    defer {
+      window.isHidden = true
+      window.rootViewController = nil
+      previous?.makeKey()
+    }
+    try await waitUntil("unknown alert should be shown") {
+      host.presentedViewController?.title == unknown.title
+    }
+    XCTAssertEqual((host.presentedViewController as? UIAlertController)?.message, unknown.message)
+
+    await ContentViewModelURLProtocol.stub.setBackendVersionOverride("v3.0.8")
+    await ContentViewModelURLProtocol.stub.setFailSettingsTransport(false)
+    NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+    try await waitUntil("new version should wait behind the displayed alert") {
+      model.pendingBackendVersionWarning?.warning.backendVersion == "v3.0.8"
+    }
+    XCTAssertEqual(host.presentedViewController?.title, unknown.title)
+    XCTAssertEqual((host.presentedViewController as? UIAlertController)?.message, unknown.message)
+    XCTAssertEqual(model.backendVersionWarning, unknown)
+
+    let displayed = try XCTUnwrap(model.backendVersionWarningPresentation)
+    model.acknowledgeBackendVersionWarning(displayed)
+    try await waitUntil("the new warning should appear after the first alert closes", timeout: 5) {
+      host.presentedViewController?.title == "MoviePilot 后端版本过低"
+        && model.backendVersionWarning?.backendVersion == "v3.0.8"
+    }
+    XCTAssertEqual((host.presentedViewController as? UIAlertController)?.message,
+      model.backendVersionWarning?.message)
+    model.acknowledgeBackendVersionWarning(displayed)
+    XCTAssertEqual(model.backendVersionWarning?.backendVersion, "v3.0.8",
+      "旧弹窗的迟到关闭回调不能关闭新警告")
+    let recorded = try XCTUnwrap(
+      warningDefaults.dictionary(forKey: "acknowledgedBackendVersionWarnings") as? [String: [String]]
+    )
+    XCTAssertTrue(recorded[baseURL]?.contains(unknown.id) == true)
+    XCTAssertFalse(recorded[baseURL]?.contains(model.backendVersionWarning?.id ?? "") == true)
   }
 
   func testMalformedBackendVersionBuildsUnconfirmedWarning() {
