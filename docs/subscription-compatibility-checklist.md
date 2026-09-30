@@ -2,7 +2,7 @@
 
 本文档只记录 MoviePilot 后端或配套 Web 前端发生变化时，可能让 TV 端现有订阅路径产生运行错误、状态误判或错误操作的跨端契约。通用 API、下载、资源搜索和客户端并发/状态安全边界分别由 `.agents/prompts/frontend-update.md`、`.agents/engineering-invariants.md` 与测试代码负责，不在这里重复。
 
-当前 TV 端声明的最低兼容 MoviePilot 版本为 `v3.0.9`。每次更新必须以后端目标标签及其 `FRONTEND_VERSION` 指定的 Web 版本为准，重新核对实际调用链；本文记录的既有行为不是对未来版本的永久假设。
+当前 TV 端声明的最低兼容 MoviePilot 版本为 `v3.0.10-1`。每次更新必须以后端目标标签及其 `FRONTEND_VERSION` 指定的 Web 版本为准，重新核对实际调用链；本文记录的既有行为不是对未来版本的永久假设。
 
 ## 使用原则
 
@@ -49,7 +49,7 @@
 
 ## 订阅匹配与取消
 
-- MoviePilot v3.0.4 起，非 TMDB 影视的 `GET /subscribe/media/{media_id}` 在精确身份未命中时，可以用 `title`、`year`、`mtype` 和可选 `season` 按规范标题、精确年份、类型与季号跨来源回退；配套 Web 的状态检查和编辑定位会发送这些元数据。TMDB 查询保持严格身份匹配，音乐也不进入该回退。TV 的读取与编辑入口必须发送相同元数据，避免把已有跨来源订阅误判为未订阅或重复创建。
+- MoviePilot v3.0.4 起，`GET /subscribe/media/{media_id}` 在精确身份未命中时可以用 `title`、`year`、`mtype` 和可选 `season` 跨来源回退。v3.0.10-1 起，电影和电视剧不再排除 TMDB，也不再要求卡片必须带年份：先按规范标题、类型和季号取候选；卡片有年份时优先精确年份，其次匹配订阅年份为空的记录；卡片没有年份时只匹配年份也为空的订阅，不能串到已有明确年份的订阅。音乐仍只按精确身份查询。配套 Web 的状态检查和编辑定位会发送 `title`、`year`、`mtype`。TV 的读取与编辑入口必须发送相同元数据，避免把已有跨来源订阅误判为未订阅或重复创建。
 - 上述元数据回退只属于 GET 查询合同。`DELETE /subscribe/media/{media_id}` 在 v3.0.7 仍按 `media_source`、原生 ID、可选 `season`/`music_type` 精确删除，而且没有命中时仍返回 `success:true`。因此媒体级删除目标不能直接复用一次跨来源 GET 的查询身份；应使用严格身份查询、已识别的真实 TMDB 身份，或明确的订阅业务 ID。
 - 分季已订阅状态必须来自 `/subscribe/` 快照中的真实记录，并按目标 Web 的身份优先级匹配；较高优先级身份存在时，不相等后不能继续用辅助 ID 误匹配。
 - TV 分季页展示的剧集组来自已订阅记录，不来自当前 Picker；Picker 只影响新建订阅 payload。
@@ -87,7 +87,7 @@
   - `/subscribe/` 快照、创建/更新、媒体查询、媒体级/精确删除、状态、搜索、重置及 Fork 的参数、owner 范围和响应 envelope 是否变化。`GET /subscribe/` 在省略 `page`/`count` 时仍应返回完整快照。
   - `PUT /subscribe/` 是否仍用 `exclude_unset=True` 裁剪公共写入字段；TV 编辑未暴露的新可写字段（如 `search_interval`、音质过滤、`media_category_id`）依赖省略来保留。
   - `GET|DELETE /subscribe/media/{media_id}?media_source=` 是否仍支持目标版本的各类身份，并统一应用 `season`；未传 season 时的范围是否变化。
-  - GET 的非 TMDB 影视元数据回退是否仍要求 `title`、`year`、`mtype`，匹配范围是否仍是规范标题、精确年份、类型和季号；DELETE 是否仍不采用该回退。
+  - GET 的影视元数据回退是否仍覆盖电影和电视剧的全部来源（含 TMDB），是否仍在精确身份未命中且有规范标题时回退，并按“精确年份优先、空年份次之；卡片无年份只匹配空年份”选择；音乐是否仍不回退。DELETE 是否仍不采用该回退。
 - 订阅分享和目录/存储相关 schema、端点
   - Share → Fork 实际消费字段、业务 ID，以及 `save_path` 可用值是否变化。
 

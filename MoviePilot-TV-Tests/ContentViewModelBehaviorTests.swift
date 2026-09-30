@@ -291,7 +291,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
 
     await viewModel?.prepareStartupIfNeeded()
 
-    XCTAssertEqual(service.settings?.BACKEND_VERSION, "v3.0.9")
+    XCTAssertEqual(service.settings?.BACKEND_VERSION, "v3.0.10-1")
     XCTAssertNil(viewModel?.backendVersionWarning)
 
     service.baseURLForTesting = "https://old.content-view-model-tests.local"
@@ -299,11 +299,11 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     service.currentUserForTesting = token("token-b", userName: "second-user")
 
     try await waitUntil("expected backend warning to reload from old backend") {
-      service.settings?.BACKEND_VERSION == "v3.0.8"
-        && viewModel?.backendVersionWarning?.backendVersion == "v3.0.8"
+      service.settings?.BACKEND_VERSION == "v3.0.9"
+        && viewModel?.backendVersionWarning?.backendVersion == "v3.0.9"
     }
 
-    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.8")
+    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.9")
     XCTAssertEqual(
       viewModel?.backendVersionWarning?.requiredVersion,
       AppVersionInfo.compatibleMoviePilotVersion
@@ -314,7 +314,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     service.settings = nil
     NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
     try await waitUntil("expected dismissed backend warning to stay dismissed") {
-      service.settings?.BACKEND_VERSION == "v3.0.8"
+      service.settings?.BACKEND_VERSION == "v3.0.9"
     }
     XCTAssertNil(viewModel?.backendVersionWarning)
   }
@@ -348,7 +348,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
 
     viewModel = ContentViewModel(apiService: service, warningDefaults: warningDefaults)
     await viewModel?.prepareStartupIfNeeded()
-    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.8")
+    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.9")
 
     let displayedWarning = try XCTUnwrap(viewModel?.backendVersionWarningPresentation)
     viewModel?.acknowledgeBackendVersionWarning(displayedWarning)
@@ -363,7 +363,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     service.setStoredCredentialsForTesting(username: "startup-user", password: "startup-password")
     _ = try await service.reloginStoredSession()
     try await waitUntil("renewal should finish loading settings with the new token") {
-      service.settings?.BACKEND_VERSION == "v3.0.8"
+      service.settings?.BACKEND_VERSION == "v3.0.9"
     }
     let refreshedRequests = await ContentViewModelURLProtocol.stub.requestCount(
       path: "/api/v1/system/global", authorization: "Bearer fresh-startup-token")
@@ -381,7 +381,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     viewModel = ContentViewModel(
       apiService: service, warningDefaults: restoredDefaults, appVersion: "v0.3.2")
     await viewModel?.prepareStartupIfNeeded()
-    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.8")
+    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.9")
 
     viewModel = nil
     service.baseURLForTesting = "https://old.content-view-model-tests.local"
@@ -424,12 +424,12 @@ final class ContentViewModelBehaviorTests: XCTestCase {
 
     viewModel = ContentViewModel(apiService: service, warningDefaults: warningDefaults)
     await viewModel?.prepareStartupIfNeeded()
-    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.8")
+    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.9")
 
-    await ContentViewModelURLProtocol.stub.setBackendVersionOverride("v3.0.9")
+    await ContentViewModelURLProtocol.stub.setBackendVersionOverride("v3.0.10-1")
     NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
     try await waitUntil("backend upgrade should clear the visible warning") {
-      service.settings?.BACKEND_VERSION == "v3.0.9"
+      service.settings?.BACKEND_VERSION == "v3.0.10-1"
         && viewModel?.backendVersionWarning == nil
     }
     XCTAssertNil(viewModel?.backendVersionWarning)
@@ -465,10 +465,10 @@ final class ContentViewModelBehaviorTests: XCTestCase {
 
     viewModel = ContentViewModel(apiService: service, warningDefaults: warningDefaults)
     await viewModel?.prepareStartupIfNeeded()
-    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.8")
+    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.9")
 
     await ContentViewModelURLProtocol.stub.setHoldSettingsResponses(true)
-    await ContentViewModelURLProtocol.stub.setBackendVersionOverride("v3.0.9")
+    await ContentViewModelURLProtocol.stub.setBackendVersionOverride("v3.0.10-1")
     service.settings = nil
     service.setStoredCredentialsForTesting(username: "startup-user", password: "startup-password")
     _ = try await service.reloginStoredSession()
@@ -481,11 +481,11 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     let renewedRequests = await ContentViewModelURLProtocol.stub.requestCount(
       path: "/api/v1/system/global", authorization: "Bearer fresh-startup-token")
     XCTAssertGreaterThan(renewedRequests, 0)
-    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.8")
+    XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.9")
 
     await ContentViewModelURLProtocol.stub.releaseSettingsResponses()
     try await waitUntil("renewal should clear the warning after the backend upgrade") {
-      service.settings?.BACKEND_VERSION == "v3.0.9"
+      service.settings?.BACKEND_VERSION == "v3.0.10-1"
         && viewModel?.backendVersionWarning == nil
     }
   }
@@ -526,7 +526,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     await ContentViewModelURLProtocol.stub.setFailSettingsTransport(false)
     NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
     try await waitUntil("expected warning to clear after foreground refresh") {
-      service.settings?.BACKEND_VERSION == "v3.0.9"
+      service.settings?.BACKEND_VERSION == "v3.0.10-1"
         && viewModel?.backendVersionWarning == nil
     }
     XCTAssertNil(viewModel?.backendVersionWarning)
@@ -565,21 +565,21 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     let displayed = try XCTUnwrap(model?.backendVersionWarningPresentation)
     XCTAssertNil(displayed.warning.backendVersion)
 
-    await ContentViewModelURLProtocol.stub.setBackendVersionOverride("v3.0.8")
+    await ContentViewModelURLProtocol.stub.setBackendVersionOverride("v3.0.9")
     await ContentViewModelURLProtocol.stub.setFailSettingsTransport(false)
     NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
     try await waitUntil("old backend warning should be queued") {
-      model?.pendingBackendVersionWarning?.warning.backendVersion == "v3.0.8"
+      model?.pendingBackendVersionWarning?.warning.backendVersion == "v3.0.9"
     }
     model?.acknowledgeBackendVersionWarning(displayed)
     XCTAssertNil(model?.backendVersionWarning)
-    XCTAssertEqual(model?.pendingBackendVersionWarning?.warning.backendVersion, "v3.0.8")
+    XCTAssertEqual(model?.pendingBackendVersionWarning?.warning.backendVersion, "v3.0.9")
 
     // 不挂载呈现协调器，保持关闭转场期间尚未展示 pending 的状态。
-    await ContentViewModelURLProtocol.stub.setBackendVersionOverride("v3.0.9")
+    await ContentViewModelURLProtocol.stub.setBackendVersionOverride("v3.0.10-1")
     NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
     try await waitUntil("foreground refresh should observe the backend upgrade") {
-      service.settings?.BACKEND_VERSION == "v3.0.9"
+      service.settings?.BACKEND_VERSION == "v3.0.10-1"
         && model?.pendingBackendVersionWarning == nil
     }
     XCTAssertNil(model?.backendVersionWarning)
@@ -642,11 +642,11 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     }
     XCTAssertEqual((host.presentedViewController as? UIAlertController)?.message, unknown.message)
 
-    await ContentViewModelURLProtocol.stub.setBackendVersionOverride("v3.0.8")
+    await ContentViewModelURLProtocol.stub.setBackendVersionOverride("v3.0.9")
     await ContentViewModelURLProtocol.stub.setFailSettingsTransport(false)
     NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
     try await waitUntil("new version should wait behind the displayed alert") {
-      model.pendingBackendVersionWarning?.warning.backendVersion == "v3.0.8"
+      model.pendingBackendVersionWarning?.warning.backendVersion == "v3.0.9"
     }
     XCTAssertEqual(host.presentedViewController?.title, unknown.title)
     XCTAssertEqual((host.presentedViewController as? UIAlertController)?.message, unknown.message)
@@ -656,12 +656,12 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     model.acknowledgeBackendVersionWarning(displayed)
     try await waitUntil("the new warning should appear after the first alert closes", timeout: 5) {
       host.presentedViewController?.title == "MoviePilot 后端版本过低"
-        && model.backendVersionWarning?.backendVersion == "v3.0.8"
+        && model.backendVersionWarning?.backendVersion == "v3.0.9"
     }
     XCTAssertEqual((host.presentedViewController as? UIAlertController)?.message,
       model.backendVersionWarning?.message)
     model.acknowledgeBackendVersionWarning(displayed)
-    XCTAssertEqual(model.backendVersionWarning?.backendVersion, "v3.0.8",
+    XCTAssertEqual(model.backendVersionWarning?.backendVersion, "v3.0.9",
       "旧弹窗的迟到关闭回调不能关闭新警告")
     let recorded = try XCTUnwrap(
       warningDefaults.dictionary(forKey: "acknowledgedBackendVersionWarnings") as? [String: [String]]
@@ -905,9 +905,9 @@ private actor ContentViewModelURLProtocolStub {
     } else {
       switch url.host {
       case "old.content-view-model-tests.local", "other-old.content-view-model-tests.local":
-        backendVersion = "v3.0.8"
-      default:
         backendVersion = "v3.0.9"
+      default:
+        backendVersion = "v3.0.10-1"
       }
     }
 
@@ -940,7 +940,7 @@ private actor ContentViewModelURLProtocolStub {
         .data(using: .utf8)!
     } else if url.path == "/api/v1/system/global" {
       data =
-        #"{"success":true,"data":{"TMDB_IMAGE_DOMAIN":"image.tmdb.org","GLOBAL_IMAGE_CACHE":true,"BACKEND_VERSION":"\#(backendVersion)","FRONTEND_VERSION":"v3.0.9"}}"#
+        #"{"success":true,"data":{"TMDB_IMAGE_DOMAIN":"image.tmdb.org","GLOBAL_IMAGE_CACHE":true,"BACKEND_VERSION":"\#(backendVersion)","FRONTEND_VERSION":"v3.0.10"}}"#
         .data(using: .utf8)!
     } else if url.path == "/api/v1/system/global/user" {
       data =
