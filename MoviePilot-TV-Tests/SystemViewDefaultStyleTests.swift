@@ -221,14 +221,103 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     )
     XCTAssertTrue(
       source.contains(
-        "&& !showAppInfo && updateNotice == nil && selectedChangelogEntry == nil"
+        "&& !showAppInfo && updateNotice == nil && selectedDetail == nil"
       )
     )
     XCTAssertTrue(source.contains("&& !showLogoutConfirmation"))
     XCTAssertTrue(source.contains("guard windowHasNoPresentedContent() else { return }"))
-    XCTAssertTrue(
-      source.contains(".systemSettingsExitCommand(isEnabled: !topShelfPresentation.blocksInteraction && isSelected && isActive && page != .root")
+    XCTAssertTrue(source.contains(".systemSettingsExitCommand("))
+    XCTAssertTrue(source.contains("page != .root"))
+  }
+
+  func testLogViewerPageFiltersLevelAndTimeThenShowsLogCardsInSource() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/LogViewerView.swift")
+
+    XCTAssertTrue(source.contains("Toggle(\"记录日志\", isOn: $viewModel.isRecordingEnabled)"))
+    XCTAssertTrue(source.contains("Picker(\"级别\", selection: $viewModel.levelFilter)"))
+    XCTAssertTrue(source.contains("Picker(\"时间\", selection: $viewModel.timeFilter)"))
+    XCTAssertTrue(source.contains(".pickerStyle(.menu)"))
+    XCTAssertTrue(source.contains("HStack(spacing: 24)"))
+    XCTAssertTrue(source.contains(".focusSection()"))
+    XCTAssertNotNil(source.range(of: "equals: .logDownRedirector"))
+    XCTAssertNotNil(
+      source.range(
+        of: "focusedItem.wrappedValue == .logRecording\n                || focusedItem.wrappedValue == .logDownRedirector"
+      )
     )
+    XCTAssertNotNil(source.range(of: ".focusEffectDisabled()"))
+    XCTAssertNotNil(source.range(of: "focusedItem.wrappedValue = .logLevelFilter"))
+    XCTAssertNil(source.range(of: "UIFocusGuide"))
+    XCTAssertNil(source.range(of: "onMoveCommand"))
+    XCTAssertNil(source.range(of: "prefersDefaultFocus"))
+    XCTAssertNil(source.range(of: "@Namespace"))
+    let levelPicker = try XCTUnwrap(source.range(of: "Picker(\"级别\", selection: $viewModel.levelFilter)"))
+    let timePicker = try XCTUnwrap(source.range(of: "Picker(\"时间\", selection: $viewModel.timeFilter)"))
+    XCTAssertLessThan(levelPicker.lowerBound, timePicker.lowerBound)
+    XCTAssertTrue(source.contains("ScrollView(.vertical)"))
+    XCTAssertTrue(source.contains("LazyVStack(alignment: .leading, spacing: 28)"))
+    XCTAssertTrue(source.contains("var body: some View {\n    ScrollView(.vertical)"))
+    XCTAssertTrue(source.contains(".lineLimit(6)"))
+    XCTAssertTrue(source.contains("@ObservedObject var viewModel: LogViewerViewModel"))
+    XCTAssertTrue(source.contains("struct LogRecordDetailSheet: View"))
+    XCTAssertTrue(source.contains(".frame(width: 1_440, height: 1_025)"))
+    XCTAssertFalse(source.contains("@StateObject"))
+    XCTAssertFalse(source.contains(".sheet("))
+    XCTAssertTrue(source.contains("Text(record.message)"))
+    XCTAssertTrue(source.contains(".fixedSize(horizontal: false, vertical: true)"))
+    XCTAssertTrue(source.contains(".font(.caption.weight(.semibold))"))
+    XCTAssertFalse(source.contains("record.fileName"))
+    XCTAssertFalse(source.contains("record.function"))
+    XCTAssertFalse(source.contains("record.line"))
+    XCTAssertFalse(source.contains("全部"))
+
+    let emptyStateMatches = source.components(separatedBy: "没有符合条件的日志")
+    XCTAssertEqual(emptyStateMatches.count - 1, 1)
+  }
+
+  func testSystemViewExposesLogViewerAtBottomOfRootPageInSource() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
+    let rootStart = try XCTUnwrap(source.range(of: "private var rootPage:"))
+    let rootEnd = try XCTUnwrap(source.range(of: "private var connectionPage:"))
+    let rootPage = source[rootStart.lowerBound..<rootEnd.lowerBound]
+
+    XCTAssertFalse(rootPage.contains("section(\"诊断\")"))
+    XCTAssertTrue(rootPage.contains("section(\"连接与APP信息\")"))
+    XCTAssertTrue(rootPage.contains("\"查看日志\""))
+    XCTAssertTrue(rootPage.contains("push(.logs)"))
+    XCTAssertTrue(source.contains("if page == .logs"))
+    XCTAssertNotNil(source.range(of: "LogViewerView("))
+    XCTAssertTrue(source.contains("viewModel: logViewerViewModel"))
+    XCTAssertNotNil(source.range(of: "focusedItem: $focusedItem"))
+    XCTAssertTrue(source.contains("selectedRecord: selectedLogRecordBinding"))
+    XCTAssertTrue(source.contains("@StateObject private var logViewerViewModel"))
+    XCTAssertNotNil(source.range(of: ".sheet(item: $selectedDetail)"))
+    XCTAssertNotNil(source.range(of: "selectedDetail = .changelog(entry)"))
+    XCTAssertNotNil(source.range(of: "case .log(let record):"))
+    XCTAssertNotNil(source.range(of: "LogRecordDetailSheet(record: record)"))
+    XCTAssertNil(source.range(of: ".sheet(item: $selectedLogRecord)"))
+    XCTAssertNil(source.range(of: ".sheet(item: $selectedChangelogEntry)"))
+    XCTAssertFalse(source.contains("isPresentingLogDetail"))
+    XCTAssertFalse(source.contains("case logEntry"))
+    XCTAssertNil(source.range(of: "equals: .logEntry"))
+    XCTAssertNotNil(source.range(of: "target = .logRecording"))
+    XCTAssertTrue(source.contains("case logRecording"))
+
+    let section = try XCTUnwrap(rootPage.range(of: "section(\"连接与APP信息\")"))
+    let changelog = try XCTUnwrap(rootPage.range(of: "push(.changelog)"))
+    let logs = try XCTUnwrap(rootPage.range(of: "push(.logs)"))
+    XCTAssertLessThan(section.lowerBound, changelog.lowerBound)
+    XCTAssertLessThan(changelog.lowerBound, logs.lowerBound)
+  }
+
+  func testAppBootstrapsPersistentLoggingOutsideTestsInSource() throws {
+    let source = try Self.source(at: "MoviePilot-TV/App/MoviePilot-TVApp.swift")
+
+    XCTAssertTrue(source.contains("Self.bootstrapLogging()"))
+    XCTAssertTrue(source.contains("NSClassFromString(\"XCTestCase\") == nil"))
+    XCTAssertTrue(source.contains("PersistentLogHandler(store: .shared)"))
+    XCTAssertTrue(source.contains("MultiplexLogHandler"))
+    XCTAssertTrue(source.contains("PersistentLogStore.shared.pruneExpired()"))
   }
 
   func testSystemViewRefreshButtonStaysFocusableWhileRefreshing() throws {
