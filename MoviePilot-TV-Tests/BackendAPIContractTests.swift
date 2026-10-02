@@ -6,8 +6,8 @@ import XCTest
 final class BackendAPIContractTests: XCTestCase {
   func testV304LookupPreservesOriginalCrossSourceBoundary() {
     let contract = BackendAPIContract(profile: .v304)
-    let tmdb = MediaInfo(tmdb_id: 42, title: "测试电影", year: "2026", type: "电影")
-    let douban = MediaInfo(douban_id: "42", title: "测试电影", year: "2026", type: "电影")
+    let tmdb = MediaInfo(tmdb_id: 42, title: "测试电影", type: "电影", year: "2026")
+    let douban = MediaInfo(douban_id: "42", title: "测试电影", type: "电影", year: "2026")
     let noYear = MediaInfo(douban_id: "42", title: "测试电影", type: "电影")
 
     XCTAssertNil(contract.subscriptionLookupParameters(
@@ -29,7 +29,7 @@ final class BackendAPIContractTests: XCTestCase {
 
   func testDeletionLookupNeverEnablesMetadataFallbackForEitherProfile() {
     for profile in [BackendContractProfile.v304, .v30101] {
-      let media = MediaInfo(douban_id: "42", title: "测试电影", year: "2026", type: "电影")
+      let media = MediaInfo(douban_id: "42", title: "测试电影", type: "电影", year: "2026")
       let params = BackendAPIContract(profile: profile).subscriptionLookupParameters(
         media: media, season: 2, includeVideoMetadataFallback: false)
       XCTAssertEqual(params["season"] ?? nil, "2")

@@ -739,7 +739,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
       subscribe.quality = nil
       let result = try await service.saveSubscription(subscribe)
       XCTAssertTrue(result.success)
-      let body = try Self.jsonObject(await CompatibilityEndpointURLProtocol.stub.requestBody(suffix: "/subscribe/"))
+      let body = try Self.jsonObject(await CompatibilityEndpointURLProtocol.stub.requestBody(suffix: "/subscribe"))
       XCTAssertEqual(body["id"] as? Int, 44)
       XCTAssertEqual(body["media_category_id"] as? String, "tv-drama")
       XCTAssertEqual(body["search_interval"] as? Int, 24)
@@ -775,7 +775,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
       let saved = await model.save()
       XCTAssertTrue(saved, scenario)
       XCTAssertTrue(model.isSaved, scenario)
-      let body = try Self.jsonObject(await CompatibilityEndpointURLProtocol.stub.requestBody(suffix: "/subscribe/"))
+      let body = try Self.jsonObject(await CompatibilityEndpointURLProtocol.stub.requestBody(suffix: "/subscribe"))
       if scenario == "restore" {
         XCTAssertEqual(body["media_category_id"] as? String, "tv-drama")
         XCTAssertEqual(body["media_category"] as? String, "原分类")
