@@ -43,6 +43,23 @@ nonisolated struct LogQuery: Equatable, Sendable {
 nonisolated struct LogQueryResult: Equatable, Sendable {
   var records: [LogRecord]
   var isTruncated: Bool
+  var storageIssues: Set<LogStorageIssue> = []
+}
+
+nonisolated enum LogStorageIssue: CaseIterable, Hashable, Sendable {
+  case readFailed
+  case writeFailed
+  case maintenanceFailed
+  case recordTooLarge
+
+  var message: String {
+    switch self {
+    case .readFailed: return "部分日志读取失败，请重试。"
+    case .writeFailed: return "日志保存失败，部分新日志可能未记录。"
+    case .maintenanceFailed: return "日志清理失败，请重试。"
+    case .recordTooLarge: return "有日志超过单条大小限制，未保存。"
+    }
+  }
 }
 
 nonisolated struct PersistentLogHandler: LogHandler {
@@ -77,6 +94,8 @@ nonisolated class PersistentLogStore: @unchecked Sendable {
   static let retention: TimeInterval = 7 * 24 * 60 * 60
   static let maxTotalBytes = 8 * 1_024 * 1_024
   static let maxMessageLength = 8_192
+  /// 包含来源、metadata、JSON 转义和行尾，避免单条记录撑破总容量。
+  static let maxRecordBytes = 64 * 1_024
   static let recordingEnabledKey = "moviepilot.persistentLog.recordingEnabled"
 
   static let shared = PersistentLogStore(directory: defaultDirectory())
@@ -120,6 +139,9 @@ nonisolated class PersistentLogStore: @unchecked Sendable {
   /// 与文件 IO 队列分离，避免读盘时卡住 Logger 热路径。
   private let recordingLock = NSLock()
   private var recordingEnabledValue = true
+  /// 仅在 IO 队列访问；读成功不能掩盖之前的写失败。
+  private var writeIssue: LogStorageIssue?
+  private var maintenanceFailed = false
 
   var isRecordingEnabled: Bool {
     recordingLock.lock()
@@ -171,8 +193,8 @@ nonisolated class PersistentLogStore: @unchecked Sendable {
     self.now = now
     self.calendar = calendar
     self.retention = retention
-    self.maxTotalBytes = maxTotalBytes
-    self.maxMessageLength = maxMessageLength
+    self.maxTotalBytes = max(0, maxTotalBytes)
+    self.maxMessageLength = max(0, maxMessageLength)
     if defaults.object(forKey: Self.recordingEnabledKey) != nil {
       recordingEnabledValue = defaults.bool(forKey: Self.recordingEnabledKey)
     } else {
@@ -214,14 +236,15 @@ nonisolated class PersistentLogStore: @unchecked Sendable {
   func records(matching query: LogQuery) async -> LogQueryResult {
     await withCheckedContinuation { continuation in
       queue.async {
-        self.pruneExpiredLocked(now: self.now())
+        self.maintainLocked()
         continuation.resume(returning: self.loadLocked(query: query))
       }
     }
   }
 
   func pruneExpired() {
-    queue.async { self.pruneExpiredLocked(now: self.now()) }
+    // 启动时即使关闭了记录，也执行年龄和容量清理。
+    queue.async { self.maintainLocked() }
   }
 
   func synchronize() {
@@ -230,39 +253,71 @@ nonisolated class PersistentLogStore: @unchecked Sendable {
 
   private func write(_ record: LogRecord) {
     let current = now()
-    pruneExpiredLocked(now: current)
     guard record.timestamp >= current.addingTimeInterval(-retention) else { return }
-    prepareDirectory()
-    let url = fileURL(for: record.timestamp)
-    guard let data = encodeLine(record) else { return }
-    if fileManager.fileExists(atPath: url.path) {
-      do {
-        let handle = try FileHandle(forWritingTo: url)
+    do {
+      let data = try encodeLine(record)
+      try prepareDirectory()
+      try pruneExpiredLocked(now: current)
+      // 断尾可能需要一个分隔符；整条等于上限时会先清空所有旧内容。
+      try enforceSizeCapLocked(reservingBytes: min(maxTotalBytes, data.count + 1))
+      let url = fileURL(for: record.timestamp)
+      if fileManager.fileExists(atPath: url.path) {
+        // 容量清理可能替换 inode，必须在清理之后才打开句柄。
+        let handle = try FileHandle(forUpdating: url)
         defer { try? handle.close() }
+        let end = try handle.seekToEnd()
+        var payload = Data()
+        if end > 0 {
+          try handle.seek(toOffset: end - 1)
+          guard let lastByte = try handle.read(upToCount: 1), lastByte.count == 1 else {
+            throw CocoaError(.fileReadUnknown)
+          }
+          if lastByte.first != 0x0A { payload.append(0x0A) }
+        }
+        payload.append(data)
         try handle.seekToEnd()
-        try handle.write(contentsOf: data)
-      } catch {
-        return
-      }
-    } else {
-      do {
+        try handle.write(contentsOf: payload)
+        try handle.close()
+      } else {
         try data.write(to: url, options: .atomic)
-      } catch {
-        return
       }
+      writeIssue = nil
+      maintenanceFailed = false
+    } catch RecordError.tooLarge {
+      writeIssue = .recordTooLarge
+    } catch {
+      writeIssue = .writeFailed
     }
-    enforceSizeCapLocked()
   }
 
-  private func encodeLine(_ record: LogRecord) -> Data? {
-    guard var data = try? encoder.encode(record) else { return nil }
+  nonisolated private enum RecordError: Error { case tooLarge }
+
+  private func encodeLine(_ record: LogRecord) throws -> Data {
+    let budget = min(Self.maxRecordBytes, maxTotalBytes)
+    // 先限制原始字段，避免为明显超限的 metadata 分配巨大的编码缓冲。
+    var remaining = budget
+    func consume(_ text: String) throws {
+      let count = text.utf8.prefix(remaining + 1).count
+      guard count <= remaining else { throw RecordError.tooLarge }
+      remaining -= count
+    }
+    try consume(record.message)
+    try consume(record.fileName)
+    try consume(record.function)
+    for (key, value) in record.metadata ?? [:] {
+      try consume(key)
+      try consume(value)
+      guard remaining >= 6 else { throw RecordError.tooLarge }
+      remaining -= 6
+    }
+    var data = try encoder.encode(record)
     data.append(0x0A)
+    guard data.count <= budget else { throw RecordError.tooLarge }
     return data
   }
 
-  private func prepareDirectory() {
-    guard !fileManager.fileExists(atPath: directory.path) else { return }
-    try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+  private func prepareDirectory() throws {
+    try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
   }
 
   private func fileURL(for date: Date) -> URL {
@@ -279,16 +334,23 @@ nonisolated class PersistentLogStore: @unchecked Sendable {
     )
   }
 
-  private func pruneExpiredLocked(now: Date) {
+  private func maintainLocked() {
+    do {
+      try pruneExpiredLocked(now: now())
+      try enforceSizeCapLocked()
+      maintenanceFailed = false
+    } catch {
+      maintenanceFailed = true
+    }
+  }
+
+  private func pruneExpiredLocked(now: Date) throws {
     let cutoff = now.addingTimeInterval(-retention)
-    for url in dayFiles() {
-      guard let fileDay = day(from: url) else {
-        try? fileManager.removeItem(at: url)
-        continue
-      }
+    for url in try dayFiles() {
+      guard let fileDay = day(from: url) else { continue }
       let nextDay = calendar.date(byAdding: .day, value: 1, to: fileDay) ?? fileDay
       if nextDay <= cutoff {
-        try? fileManager.removeItem(at: url)
+        try fileManager.removeItem(at: url)
       }
     }
   }
@@ -296,36 +358,50 @@ nonisolated class PersistentLogStore: @unchecked Sendable {
   private func loadLocked(query: LogQuery) -> LogQueryResult {
     let current = now()
     let fetchLimit = max(query.limit, 0)
+    var issues: Set<LogStorageIssue> = []
+    if let writeIssue { issues.insert(writeIssue) }
+    if maintenanceFailed { issues.insert(.maintenanceFailed) }
     guard fetchLimit > 0 else {
-      return LogQueryResult(records: [], isTruncated: false)
+      return LogQueryResult(records: [], isTruncated: false, storageIssues: issues)
     }
 
     var collected: [LogRecord] = []
-    fileLoop: for url in dayFiles().reversed() {
-      for record in decodeFile(url).reversed() {
-        guard query.matches(record, now: current, retention: retention) else { continue }
-        collected.append(record)
-        if collected.count > fetchLimit {
-          break fileLoop
+    do {
+      fileLoop: for url in try dayFiles().reversed() {
+        do {
+          for record in try decodeFile(url).reversed() {
+            guard query.matches(record, now: current, retention: retention) else { continue }
+            collected.append(record)
+            if collected.count > fetchLimit { break fileLoop }
+          }
+        } catch {
+          issues.insert(.readFailed)
         }
       }
+    } catch {
+      issues.insert(.readFailed)
     }
 
     let truncated = collected.count > fetchLimit
     if truncated {
       collected.removeLast()
     }
-    return LogQueryResult(records: collected, isTruncated: truncated)
+    return LogQueryResult(records: collected, isTruncated: truncated, storageIssues: issues)
   }
 
-  private func dayFiles() -> [URL] {
-    guard
-      let contents = try? fileManager.contentsOfDirectory(
+  private func dayFiles() throws -> [URL] {
+    let contents: [URL]
+    do {
+      contents = try fileManager.contentsOfDirectory(
         at: directory,
-        includingPropertiesForKeys: [.fileSizeKey],
+        includingPropertiesForKeys: nil,
         options: [.skipsHiddenFiles]
       )
-    else { return [] }
+    } catch let error as NSError where error.domain == NSCocoaErrorDomain
+      && [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(error.code)
+    {
+      return []
+    }
 
     return contents
       .filter { isDayFile($0) }
@@ -347,54 +423,57 @@ nonisolated class PersistentLogStore: @unchecked Sendable {
     return calendar.date(from: DateComponents(year: year, month: month, day: day))
   }
 
-  private func decodeFile(_ url: URL) -> [LogRecord] {
-    guard let data = try? Data(contentsOf: url), !data.isEmpty else { return [] }
-    guard let text = String(data: data, encoding: .utf8) else { return [] }
-    var records: [LogRecord] = []
-    for line in text.split(whereSeparator: \.isNewline) {
-      let trimmed = line.trimmingCharacters(in: .whitespaces)
-      guard !trimmed.isEmpty, let lineData = trimmed.data(using: .utf8) else { continue }
-      if let record = try? decoder.decode(LogRecord.self, from: lineData) {
-        records.append(record)
-      }
+  private func decodeFile(_ url: URL) throws -> [LogRecord] {
+    let data = try Data(contentsOf: url)
+    // JSONL 只使用 LF 分行；Unicode 换行字符属于 JSON 字符串内容。
+    // 单行损坏（包括断裂的 UTF-8 尾部）不能拖垮其他已完成记录。
+    return data.split(separator: 0x0A).compactMap { line in
+      try? decoder.decode(LogRecord.self, from: Data(line))
     }
-    return records
   }
 
-  private func enforceSizeCapLocked() {
-    var files = dayFiles()
-    var total = files.reduce(0) { $0 + fileSize($1) }
-    while total > maxTotalBytes, files.count > 1, let oldest = files.first {
-      let size = fileSize(oldest)
-      try? fileManager.removeItem(at: oldest)
+  private func enforceSizeCapLocked(reservingBytes: Int = 0) throws {
+    var files = try dayFiles()
+    var total = try files.reduce(0) { try $0 + fileSize($1) }
+    guard total > maxTotalBytes - reservingBytes else { return }
+    // 一次回收至少 25%，避免单日满额后每追加一条就重写整个文件。
+    let target = maxTotalBytes - max(maxTotalBytes / 4, reservingBytes)
+    while total > target, files.count > 1, let oldest = files.first {
+      let size = try fileSize(oldest)
+      try fileManager.removeItem(at: oldest)
       files.removeFirst()
-      total -= max(size, 0)
+      total -= size
     }
-    guard let newest = files.last, total > maxTotalBytes else { return }
-    trimFileLocked(newest, keepingBytes: maxTotalBytes)
+    guard let newest = files.last, total > target else { return }
+    try trimFileLocked(newest, keepingBytes: target)
   }
 
-  private func trimFileLocked(_ url: URL, keepingBytes maxBytes: Int) {
-    let records = decodeFile(url)
-    guard !records.isEmpty else {
-      try? fileManager.removeItem(at: url)
-      return
-    }
-
-    var kept: [LogRecord] = []
+  private func trimFileLocked(_ url: URL, keepingBytes maxBytes: Int) throws {
+    // 先完整读成功再修改；按原始行裁剪，不把解码失败当成空文件删除。
+    let data = try Data(contentsOf: url)
+    var kept: [Data.SubSequence] = []
     var bytes = 0
-    for record in records.reversed() {
-      guard let data = encodeLine(record) else { continue }
-      if bytes + data.count > maxBytes && !kept.isEmpty { break }
-      kept.append(record)
-      bytes += data.count
+    for line in data.split(separator: 0x0A).reversed() {
+      let size = line.count + 1
+      if size > maxBytes, kept.isEmpty { continue }
+      guard size <= maxBytes - bytes else { break }
+      kept.append(line)
+      bytes += size
     }
-    kept.reverse()
-    let payload = kept.compactMap { encodeLine($0) }.reduce(Data(), +)
-    try? payload.write(to: url, options: .atomic)
+    var payload = Data()
+    payload.reserveCapacity(bytes)
+    for line in kept.reversed() {
+      payload.append(line)
+      payload.append(0x0A)
+    }
+    try payload.write(to: url, options: .atomic)
   }
 
-  private func fileSize(_ url: URL) -> Int {
-    (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+  private func fileSize(_ url: URL) throws -> Int {
+    let attributes = try fileManager.attributesOfItem(atPath: url.path)
+    guard let size = attributes[.size] as? NSNumber else {
+      throw CocoaError(.fileReadUnknown)
+    }
+    return size.intValue
   }
 }

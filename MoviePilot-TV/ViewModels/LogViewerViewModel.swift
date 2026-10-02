@@ -82,6 +82,7 @@ final class LogViewerViewModel: ObservableObject {
   @Published private(set) var records: [LogRecord] = []
   @Published private(set) var isTruncated = false
   @Published private(set) var isLoading = false
+  @Published private(set) var storageIssues: Set<LogStorageIssue> = []
 
   private let store: PersistentLogStore
   private let now: () -> Date
@@ -106,6 +107,15 @@ final class LogViewerViewModel: ObservableObject {
     return "共 \(records.count) 条"
   }
 
+  var storageErrorMessage: String? {
+    let messages = LogStorageIssue.allCases.filter { storageIssues.contains($0) }.map(\.message)
+    return messages.isEmpty ? nil : messages.joined(separator: "\n")
+  }
+
+  var showsEmptyState: Bool {
+    records.isEmpty && !isLoading && !storageIssues.contains(.readFailed)
+  }
+
   func makeQuery() -> LogQuery {
     let current = now()
     let interval = timeFilter.interval(now: current, calendar: calendar)
@@ -127,6 +137,7 @@ final class LogViewerViewModel: ObservableObject {
     guard generation == reloadGeneration else { return }
     records = result.records
     isTruncated = result.isTruncated
+    storageIssues = result.storageIssues
     isLoading = false
   }
 }

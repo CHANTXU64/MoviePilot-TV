@@ -48,18 +48,30 @@ struct LogViewerView: View {
           .focusSection()
         }
 
+        if let message = viewModel.storageErrorMessage {
+          VStack(alignment: .leading, spacing: 12) {
+            Text(message)
+              .font(.callout)
+              .foregroundStyle(.orange)
+            Button("重新读取") {
+              Task { await viewModel.reloadRecords() }
+            }
+          }
+          .padding(.leading, 16)
+        }
+
         if viewModel.isLoading {
           ProgressView()
             .frame(maxWidth: .infinity)
             .padding(.top, 40)
-        } else if viewModel.records.isEmpty {
+        } else if viewModel.showsEmptyState {
           Text("没有符合条件的日志")
             .font(.body.weight(.semibold))
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.leading, 16)
             .padding(.top, 12)
-        } else {
+        } else if !viewModel.records.isEmpty {
           Text(viewModel.summaryText)
             .font(.callout)
             .foregroundStyle(.secondary)
