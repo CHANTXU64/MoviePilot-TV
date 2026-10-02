@@ -18,7 +18,7 @@
 | v3.0.4 | e195cc164fc8ff869ffee0ea44a49c7ec475310c | v3.0.4 | fork 可能已创建却响应校验失败，事前阻止；lookup 仅非 TMDB 且有标题/年份的影视可跨源回退 |
 | v3.0.5 | ce3489ae75ff06119f076550f72df57e6f92a6bf | v3.0.5 | fork 响应恢复有效 ID；lookup 仍为旧合同 |
 | v3.0.10-1 | 0aa857173f77de31c7c8d9d2e12052d99f37bcc1 | v3.0.10 | lookup 扩展到 TMDB 与无年份影视，未命中不在客户端模拟后端查询 |
-| v3.1.0 | 31537bb89dddd3813037c05c4ed0fb939c885813 | v3.1.0 | 整理预览增加 source_storage/source_item，跨存储相同路径不可去重掉 |
+| v3.1.0 | 0a7368bce8d28f60ee795b38da0ac7a844c7e085 | v3.1.0 | 整理预览增加 source_storage/source_item，跨存储相同路径不可去重掉；订阅刷新修复 TV 缺少 scope 时的上游处理，未改变 TV 请求/响应合同 |
 
 三类运行时证据分别记录：
 
@@ -26,23 +26,23 @@
 2. `fixtureValidation`：必须记录 Swift fixture/URLProtocol 测试实际执行结果；本次 Mac/Xcode 验收见 [Mac验收-2026-10-02](#mac验收-2026-10-02)，只覆盖离线 fixture，不代替 `liveValidation`。测试代码存在不算测试通过
 3. `liveValidation`：必须记录确切后端版本、环境、日期、只读/副作用范围和实际结果；本次未连接真实 MoviePilot 实例，全部 pending
 
-本次另外执行了隔离的 Python 源码模型/响应序列化验证，其原始证据在 [compatibility-evidence/manifest.json](compatibility-evidence/manifest.json)。该检查实际加载官方 schema 与 ResponseAPIRouter，但使用本地无害计数器替代创建订阅，不启动 MoviePilot、不登录、不访问数据库，也不代表 Swift 或真实实例验收。v3.0.4 返回本地 500 且计数器已增加；v3.0.5、v3.0.10-1、v3.1.0 返回有效 ID。fixture 的来源、固定 commit、SHA256、Python/依赖版本均随文件保存。
+本次另外执行了隔离的 Python 源码模型/响应序列化验证，其原始证据在 [compatibility-evidence/manifest.json](compatibility-evidence/manifest.json)。该检查实际加载官方 schema 与 ResponseAPIRouter，但使用本地无害计数器替代创建订阅，不启动 MoviePilot、不登录、不访问数据库，也不代表 Swift 或真实实例验收。v3.0.4 返回本地 500 且计数器已增加；v3.0.5、v3.0.10-1、v3.1.0 返回有效 ID。fixture 的来源、固定 commit、SHA256、Python/依赖版本均随文件保存；本次 v3.1.0 以官方后端 commit `0a7368bce8d28f60ee795b38da0ac7a844c7e085`、配套前端 commit `c593e630b288bddc99c421c1af1a593072f69932` 重新生成。
 
 ## Mac验收-2026-10-02
 
-本次测试修正提交为 `438f6338eb55d2c668703f0b6b776e4af192fc81`。在 Xcode 27.0 (`27A266`)、`platform=tvOS Simulator,name=Apple TV,OS=18.5`（tvOS 18.5）上执行，结果如下：
+本次测试修正及兼容证据更新会在最终提交中固定；在 Xcode 27.0 (`27A266`)、`platform=tvOS Simulator,name=Apple TV,OS=18.5`（tvOS 18.5）上执行，结果如下：
 
-- 兼容性定向测试：165/165 通过，0 失败，0 跳过；结果包为 `.build/results/backend-compatibility-targeted-final.xcresult`。
-- 完整适用测试：1377/1377 通过，0 失败，0 跳过；结果包为 `.build/results/backend-compatibility-full-applicable.xcresult`。
+- 兼容性定向测试：186/186 通过，0 失败，0 跳过；结果包路径为 `.build/results/backend-compatibility-current-targeted-final.xcresult`。
+- 完整适用测试：1380/1380 通过，0 失败，0 跳过；结果包路径为 `.build/results/backend-compatibility-current-full-final.xcresult`。
 - 完整适用测试明确排除 `BackendCompatibilityPermissionBehaviorTests`（1 个方法）、`BackendCompatibilityReadOnlyTests`（11 个方法）和 `BackendCompatibilitySideEffectTests`（6 个方法），合计 18 个真实后端方法。
-- 两次执行均使用 Swift fixture、URLProtocol 和本地测试替身，不访问真实 MoviePilot 后端或凭据；Python 源码探针同样不构成真实后端实测。因此本节只为四个登记节点提供 `fixtureValidation` 证据，`liveValidation` 全部保持 pending。
+- 两次执行均使用 Swift fixture、URLProtocol 和本地测试替身，不访问真实 MoviePilot 后端或凭据；Python 源码探针同样不构成真实后端实测。因此本节只为四个登记节点提供 `fixtureValidation` 证据，`liveValidation` 全部保持 pending。OpenAPI 合同检查先通过 `/system/global` 核实精确后端版本；已确认的 v3.1.0 若只返回合法 JSON 404，会标记为“未验证”并跳过该项，404 不被当成通过，也不能反推 `API_DOCS_ENABLE` 的运行时状态；旧版本、HTML、401/403 或非法 JSON 仍为失败。
 
 主要上游证据：
 
 - [fork 响应模型修复](https://github.com/jxxghp/MoviePilot/commit/2e2a037eb81d1b8f1fd1bcbf3bdf2c945429e776)
 - [v3.0.4 订阅公共写入 schema](https://github.com/jxxghp/MoviePilot/blob/e195cc164fc8ff869ffee0ea44a49c7ec475310c/app/schemas/subscribe.py)
 - [v3.0.10-1 lookup 合同](https://github.com/jxxghp/MoviePilot/blob/0aa857173f77de31c7c8d9d2e12052d99f37bcc1/app/api/endpoints/subscribe.py)
-- [v3.1.0 整理预览 schema](https://github.com/jxxghp/MoviePilot/blob/31537bb89dddd3813037c05c4ed0fb939c885813/app/schemas/transfer.py)
+- [v3.1.0 整理预览 schema](https://github.com/jxxghp/MoviePilot/blob/0a7368bce8d28f60ee795b38da0ac7a844c7e085/app/schemas/transfer.py)
 
 ## 生产调用与写回
 
@@ -59,7 +59,7 @@
 - 分类路径未编辑时保留稳定 ID；改路径时省略旧 ID，避免它覆盖用户修改；显式清空 ID 依官方语义清空分类
 - 详情必须返回与请求匹配的正 ID，避免稀疏展示降级掩盖错误 mutation 身份
 
-3.1.0 预览响应的新字段是可选投影，旧响应仍能解码。去重身份由存储域、来源、目标和结果组成，优先 source_storage，再用 source_item.storage；未提供存储域时保持旧版语义。
+3.1.0 预览响应的新字段是可选投影，旧响应仍能解码。去重身份由存储域、来源、目标和结果组成，优先 source_storage，再用 source_item.storage；未提供存储域时保持旧版语义。传输历史列表可能包含音乐项：`from_history=true` 继续只复用历史 `logid`，由后端按历史恢复类型和媒体身份；`from_history=false` 继续按文件重新识别。TV 不新增音乐纠正 UI，也不依赖可选的 `musicbrainz_release_id`；本地 URLProtocol 回归覆盖两种请求形态，不能等同真实后端实测。
 
 ## 更新一个版本
 

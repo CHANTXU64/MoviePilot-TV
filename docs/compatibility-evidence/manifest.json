@@ -1,12 +1,12 @@
 {
   "scope": "Isolated schema/response-serialization checks. No live backend, DB, login or mutation verification.",
-  "python": "3.12.14",
+  "python": "3.12.13",
   "dependencies": {
-    "fastapi": "0.141.1",
-    "pydantic": "2.13.4",
+    "fastapi": "0.115.14",
+    "pydantic": "2.12.5",
     "httpx": "0.28.1",
-    "typing_extensions": "4.16.0",
-    "starlette": "1.6.0"
+    "typing_extensions": "4.15.0",
+    "starlette": "0.46.2"
   },
   "results": [
     {
@@ -68,7 +68,7 @@
     },
     {
       "tag": "v3.1.0",
-      "backend_commit": "31537bb89dddd3813037c05c4ed0fb939c885813",
+      "backend_commit": "0a7368bce8d28f60ee795b38da0ac7a844c7e085",
       "frontend_tag": "v3.1.0",
       "fixture": "v3.1.0.json",
       "source_sha256": {

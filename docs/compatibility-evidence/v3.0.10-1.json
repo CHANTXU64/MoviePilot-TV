@@ -6,13 +6,13 @@
     "frontend_tag": "v3.0.10",
     "not_live_backend": true,
     "localization_stubbed": true,
-    "python": "3.12.14",
+    "python": "3.12.13",
     "dependencies": {
-      "fastapi": "0.141.1",
-      "pydantic": "2.13.4",
+      "fastapi": "0.115.14",
+      "pydantic": "2.12.5",
       "httpx": "0.28.1",
-      "typing_extensions": "4.16.0",
-      "starlette": "1.6.0"
+      "typing_extensions": "4.15.0",
+      "starlette": "0.46.2"
     },
     "source_sha256": {
       "app/schemas/types.py": "556407dff01f77ecf4e256651158a1417fdcc8fe74e8d5212a06cb68266f61de",

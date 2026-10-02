@@ -41,7 +41,7 @@
 - MoviePilot v2.15.3 起，新增订阅和存在性查重已按媒体身份、季号与 `episode_group` 区分；同一媒体同一季可以存在不同剧集组的订阅。创建请求必须保留所选剧集组。
 - MoviePilot Web v3.0.7 仍按媒体与 `season` 汇总已订阅状态，媒体级查询和取消传 `media_source`，仍没有传 `episode_group`；TV 跟随 Web 保持相同状态与操作范围，不擅自改成按剧集组取消。
 - `best_version` / `best_version_full` 的省略值当前表示使用后端默认配置，显式 `0` 表示普通订阅或关闭洗版。目标版本若改变空值、默认值或数值语义，TV 创建 payload 必须同步。
-- Web 快速新增当前发送精简配置；编辑当前先 GET 完整 `Subscribe`，再完整 PUT，并由后端裁剪不可写运行字段。MoviePilot v3.0.7 的 PUT 仍使用 `exclude_unset=True`：省略表示不修改，显式 `null` 才清空字符串过滤条件，站点/过滤规则组则发空数组 `[]`（与 Web `v-model` 空选择一致），不能 `encodeIfPresent` 省略。TV 编辑页用户可清空的字段（包含/排除词、关键词、识别词、剧集组、保存路径、站点、规则组等）必须带上清空值；未暴露的新可写字段（`search_interval`、音质过滤、`media_category_id`）继续省略以保留。每次 schema 更新都要逐字段对照 Web 请求体、后端公共可写/排除字段、TV `CodingKeys` 与最终编码，避免新可写字段在无关编辑后丢失，也不得盲目回传 owner、运行状态等不可写字段。
+- Web 快速新增当前发送精简配置；编辑当前先 GET 完整 `Subscribe`，再完整 PUT，并由后端裁剪不可写运行字段。MoviePilot v3.0.7 的 PUT 仍使用 `exclude_unset=True`：省略表示不修改，显式 `null` 才清空字符串过滤条件，站点/过滤规则组则发空数组 `[]`（与 Web `v-model` 空选择一致），不能 `encodeIfPresent` 省略。TV 编辑页用户可清空的字段（包含/排除词、关键词、识别词、剧集组、保存路径、站点、规则组等）必须带上清空值；未暴露的新可写字段（`search_interval`、音质过滤、`media_category_id`）在当前 TV 编辑请求中继续省略，表示不主动修改；如果完整 GET 已提供这些字段，`SubscriptionWriteDTO` 必须保留其原值，不能因缺少 UI 编辑控件而写成空值。每次 schema 更新都要逐字段对照 Web 请求体、后端公共可写/排除字段、TV `CodingKeys` 与最终编码，避免新可写字段在无关编辑后丢失，也不得盲目回传 owner、运行状态等不可写字段。
 - `total_episode` 需要保留 `null`、`0`、正数三态及后端的人工集数语义。未修改保存不应把 `null` 变为 `0` 或意外切换人工模式；若后端默认值、更新逻辑或 Web 表单行为变化，TV 编码需同步。
 - `save_path == nil` 当前表示自动目录；非空值是后端可直接消费的本地路径或带 storage 的远程 URI。编辑时保留既有合法值并允许清空；若目录接口、存储 URI 格式或后端允许范围变化，TV 选择器与请求值必须一起复核。
 - 订阅写入、状态修改、搜索、重置、删除和 Fork 是否成功，必须按各端点在目标版本声明的响应 envelope 判断，不能只用 HTTP 2xx 推断。只有端点明确改为 `204` 或无正文成功时，TV 才接受空响应。
@@ -55,7 +55,7 @@
 - TV 分季页展示的剧集组来自已订阅记录，不来自当前 Picker；Picker 只影响新建订阅 payload。
 - 取消前的严格身份查询响应如果仍返回 canonical 身份、专用 ID 和遗留 `mediaid`，必须核对它们各自是“确认状态”还是“删除键”。当前 Web 的媒体级删除键来自当前媒体的 `getMediaId()`；TV 为避免 v3.0.4 跨来源 GET 回退产生空删除，只在严格身份查询或已识别的 TMDB 身份上使用媒体级删除，必要时按响应的订阅业务 ID 精确删除。
 - 当前 Web 使用 `DELETE /subscribe/media/{media_id}?media_source=&season=` 进行媒体级取消，不按 `episode_group` 删除；TV 保持相同请求形式。这与后端已按剧集组区分查重/存在性的行为并不对称。
-- `GET /subscribe/` 可能混入 `type=="音乐"`。音乐订阅不是 TV 现有影视路径的兼容必修项；TV 不得把音乐当电影直接订阅，也不得把音乐送进分季流程。
+- `GET /subscribe/` 可能混入 `type=="音乐"`。音乐订阅不是 TV 现有影视路径的兼容必修项；TV 不得把音乐当电影直接订阅，也不得把音乐送进分季流程。传输历史则可能包含音乐项并进入既有整理入口：`from_history=true` 发送历史 `logid` 复用后端记录，`from_history=false` 按文件重新识别；本地回归覆盖两种模式，不新增音乐纠正 UI 或强制透传可选 `musicbrainz_release_id`。
 - `DELETE /subscribe/{id}` 在目标不存在或无权限时改为 HTTP 404/403，不再返回 `success:true`。
 - **已知上游风险（跟随 Web）**：媒体级删除会命中当前用户可管理范围内同媒体、同季的多条剧集组订阅。每次更新都要复核 Web 的确认信息、后端 owner/season 过滤和实际命中范围；官方若提供按剧集组或精确订阅 ID 删除、或返回命中范围，TV 再同步对齐，不单独发明不同语义。
 - 若外部客户端已经删除或替换订阅，取消前的权威查询应决定是否继续。这里记录的是上游查询与删除契约，不把具体请求代际和按钮禁用实现写入本清单。
@@ -63,7 +63,7 @@
 ## 订阅分享与 Fork
 
 - `GET /subscribe/shares` 返回的业务标识必须稳定且能定位 `POST /subscribe/fork` 的来源；若 ID 类型、字段名或唯一性变化，需同步 TV 列表身份和 Fork 请求。
-- MoviePilot v3.0.7 将 `POST /subscribe/fork` 的 OpenAPI 响应模型修正为 `Response<IdData>`，与端点一直返回新订阅 `data.id` 的实际行为一致。通用 `IdData` 为复用其他端点而声明成 `integer|string|null`，但 Fork 直接返回 `create_subscribe` 的整数 `sid`；TV 仍须同时验证显式 `success:true` 和正整数 ID，并将这项声明宽化保留为带证据的契约例外，不放宽现有 Fork 解码。
+- MoviePilot v3.0.5 将 `POST /subscribe/fork` 的 OpenAPI 响应模型修正为 `Response<IdData>`（上游提交 `2e2a037eb81d1b8f1fd1bcbf3bdf2c945429e776`），与端点一直返回新订阅 `data.id` 的实际行为一致。通用 `IdData` 为复用其他端点而声明成 `integer|string|null`，但 Fork 直接返回 `create_subscribe` 的整数 `sid`；TV 仍须同时验证显式 `success:true` 和正整数 ID，并将这项声明宽化保留为带证据的契约例外，不放宽现有 Fork 解码。
 - Share → Fork 当前需要保留后端 schema 中实际消费的 `media_source`、`media_id` 及订阅配置字段。v3 已删除分享对象上的 `tmdbid`/`doubanid`/`bangumiid`/`anilistid`，并新增 `music_type`、`total_tracks`、音质过滤字段和 `media_category_id`。Fork 按 Web 把 GET 到的分享对象原样 POST；TV 必须解码并回传这些可写字段，不能在 Codable 往返中丢掉。字段再新增、删除或改名时，按 Web 实际请求和后端消费逻辑更新 TV，不要求透传未声明的未知字段。
 - Share 转为媒体展示时，主身份仍按 canonical 后再按专用 ID 的目标版本规则投影；辅助 ID 不能覆盖已声明的主身份。
 - 确认页展示哪些配置属于产品交互，不作为后端更新契约；只有字段会影响用户确认后的实际写入且 Web 行为发生变化时，才评估 TV 是否跟进。
@@ -85,7 +85,7 @@
   - 公共写入排除字段是否仍保护后端运行事实；Web 使用的可编辑字段是否仍允许写入。
 - `app/api/endpoints/subscribe.py`
   - `/subscribe/` 快照、创建/更新、媒体查询、媒体级/精确删除、状态、搜索、重置及 Fork 的参数、owner 范围和响应 envelope 是否变化。`GET /subscribe/` 在省略 `page`/`count` 时仍应返回完整快照。
-  - `PUT /subscribe/` 是否仍用 `exclude_unset=True` 裁剪公共写入字段；TV 编辑未暴露的新可写字段（如 `search_interval`、音质过滤、`media_category_id`）依赖省略来保留。
+  - `PUT /subscribe/` 是否仍用 `exclude_unset=True` 裁剪公共写入字段；TV 编辑未暴露的新可写字段（如 `search_interval`、音质过滤、`media_category_id`）在请求缺键时依赖省略来保持不修改，完整 GET 已返回且存在的值则由 `SubscriptionWriteDTO` 保留。
   - `GET|DELETE /subscribe/media/{media_id}?media_source=` 是否仍支持目标版本的各类身份，并统一应用 `season`；未传 season 时的范围是否变化。
   - GET 的影视元数据回退是否仍覆盖电影和电视剧的全部来源（含 TMDB），是否仍在精确身份未命中且有规范标题时回退，并按“精确年份优先、空年份次之；卡片无年份只匹配空年份”选择；音乐是否仍不回退。DELETE 是否仍不采用该回退。
 - 订阅分享和目录/存储相关 schema、端点

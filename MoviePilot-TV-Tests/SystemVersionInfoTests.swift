@@ -68,7 +68,7 @@ final class SystemVersionInfoTests: XCTestCase {
   }
 
   func testProductionRegistryDoesNotInventExecutionOrLiveEvidence() throws {
-    XCTAssertEqual(BackendCompatibilityRegistry.current.revision, "2026-10-02.2")
+    XCTAssertEqual(BackendCompatibilityRegistry.current.revision, "2026-10-02.3")
     XCTAssertNil(BackendCompatibilityRegistry.current.latestValidatedVersion)
     for record in BackendCompatibilityRegistry.current.records {
       XCTAssertTrue(record.sourceReview.isVerified)

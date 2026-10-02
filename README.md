@@ -44,7 +44,7 @@
 
 - **tvOS 版本**: 支持 **tvOS 18.0+**。本项目主要在 **tvOS 26.0+** 环境下开发，建议使用最新的 tvOS 系统获得最佳体验。
 - **MoviePilot 版本**: 最早维护 **v3.0.4**，最新登记 **v3.1.0**。兼容记录按精确版本稀疏登记，目前为 **v3.0.4**、**v3.0.5**、**v3.0.10-1**、**v3.1.0**，不表示登记节点之间或更高版本全部兼容。`v3.0.10-1` 是稳定热修复，排序高于 `v3.0.10`；预发布、metadata 和未知后缀不会归入稳定版本。维护范围内的未登记版本仍会按已知合同边界选择请求协议，但不会因此显示为已验证；v3.0.4 的订阅复用接口受上游缺陷限制，v3.0.5 起修复。
-- **验证状态**: 源码合同审查、合同 fixture 实际执行、真实后端实测分别登记；截至登记 revision `2026-10-02.2`，四个登记节点的离线合同 fixture 已在 commit `438f6338eb55d2c668703f0b6b776e4af192fc81` 的 Xcode 27.0 (`27A266`) / Apple TV tvOS Simulator 18.5 上通过，定向 165/165、完整适用测试 1377/1377。完整适用测试明确排除 `BackendCompatibilityPermissionBehaviorTests`、`BackendCompatibilityReadOnlyTests`、`BackendCompatibilitySideEffectTests` 共 18 个真实后端方法；本次未访问真实后端或凭据。`liveValidation` 仍为 pending，因此 fixture 通过不等同于真实后端验收，App 仍可能显示“兼容性待验证”。未登记、低于维护下限、高于最新登记或无法解析时，App 会说明状态、更新的登记记录与限制；仍可继续使用。确认记录包含登记修订及证据内容，后续限制或证据变化会重新提示。详见[版本登记与证据](docs/backend-version-compatibility.md)。
+- **验证状态**: 源码合同审查、合同 fixture 实际执行、真实后端实测分别登记；截至登记 revision `2026-10-02.3`，四个登记节点的离线合同 fixture 已在本次 Xcode 27.0 (`27A266`) / Apple TV tvOS Simulator 18.5 上通过，定向 186/186、完整适用测试 1380/1380。完整适用测试明确排除 `BackendCompatibilityPermissionBehaviorTests`、`BackendCompatibilityReadOnlyTests`、`BackendCompatibilitySideEffectTests` 共 18 个真实后端方法；本次未访问真实后端或凭据。`liveValidation` 仍为 pending，因此 fixture 通过不等同于真实后端验收，App 仍可能显示“兼容性待验证”。未登记、低于维护下限、高于最新登记或无法解析时，App 会说明状态、更新的登记记录与限制；仍可继续使用。确认记录包含登记修订及证据内容，后续限制或证据变化会重新提示。详见[版本登记与证据](docs/backend-version-compatibility.md)。
 - **兼容原则**: TV 端以 MoviePilot Web 前端和 MoviePilot 后端当前行为为准；如果 Web 本来也不显示，或后端/第三方数据源同样异常，本项目通常不会在 TV 端额外兜底修复。
 - **更新节奏**: 本应用更新频率可能低于 MoviePilot 原版，不保证长期兼容旧版 API 或旧版后端已知问题。
 - **账号登录**: **不支持**已开启双因素认证 (MFA/2FA) 的账号，请在关闭双因素认证后再登录。

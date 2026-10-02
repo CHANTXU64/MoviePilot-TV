@@ -189,7 +189,7 @@ nonisolated struct BackendCompatibilityRegistry: Equatable, Sendable {
   }
 
   static let current = BackendCompatibilityRegistry(
-    revision: "2026-10-02.2",
+    revision: "2026-10-02.3",
     minimumMaintainedVersion: MoviePilotVersion("v3.0.4")!,
     records: [
       BackendCompatibilityRecord(
@@ -199,7 +199,7 @@ nonisolated struct BackendCompatibilityRegistry: Equatable, Sendable {
           reference: "docs/backend-version-compatibility.md#登记与证据; MoviePilot e195cc164fc8ff869ffee0ea44a49c7ec475310c; Frontend v3.0.4; TV 使用端点、Subscribe 写回、fork、lookup、整理预览"
         ),
         fixtureValidation: .verified(
-          reference: "docs/backend-version-compatibility.md#mac验收-2026-10-02; test-fix commit 438f6338eb55d2c668703f0b6b776e4af192fc81; offline fixture run"
+          reference: "docs/backend-version-compatibility.md#mac验收-2026-10-02; current Xcode 27 tvOS 18.5 fixture run"
         ),
         liveValidation: .pending,
         limitations: ["订阅复用（fork）接口存在上游响应声明问题；该问题的后端合同在 v3.0.5 修复", "兼容适配待真实后端实测"]
@@ -211,7 +211,7 @@ nonisolated struct BackendCompatibilityRegistry: Equatable, Sendable {
           reference: "docs/backend-version-compatibility.md#登记与证据; MoviePilot ce3489ae75ff06119f076550f72df57e6f92a6bf; Frontend v3.0.5; TV 使用端点、Subscribe 写回、fork、lookup、整理预览"
         ),
         fixtureValidation: .verified(
-          reference: "docs/backend-version-compatibility.md#mac验收-2026-10-02; test-fix commit 438f6338eb55d2c668703f0b6b776e4af192fc81; offline fixture run"
+          reference: "docs/backend-version-compatibility.md#mac验收-2026-10-02; current Xcode 27 tvOS 18.5 fixture run"
         ),
         liveValidation: .pending,
         limitations: ["兼容适配待真实后端实测"]
@@ -223,7 +223,7 @@ nonisolated struct BackendCompatibilityRegistry: Equatable, Sendable {
           reference: "docs/backend-version-compatibility.md#登记与证据; MoviePilot 0aa857173f77de31c7c8d9d2e12052d99f37bcc1; Frontend v3.0.10; TV 使用端点、Subscribe 写回、fork、lookup、整理预览"
         ),
         fixtureValidation: .verified(
-          reference: "docs/backend-version-compatibility.md#mac验收-2026-10-02; test-fix commit 438f6338eb55d2c668703f0b6b776e4af192fc81; offline fixture run"
+          reference: "docs/backend-version-compatibility.md#mac验收-2026-10-02; current Xcode 27 tvOS 18.5 fixture run"
         ),
         liveValidation: .pending,
         limitations: ["兼容适配待真实后端实测"]
@@ -232,10 +232,10 @@ nonisolated struct BackendCompatibilityRegistry: Equatable, Sendable {
         version: MoviePilotVersion("v3.1.0")!,
         profile: .v30101,
         sourceReview: .verified(
-          reference: "docs/backend-version-compatibility.md#登记与证据; MoviePilot 31537bb89dddd3813037c05c4ed0fb939c885813; Frontend v3.1.0; TV 使用端点、Subscribe 写回、fork、lookup、整理预览"
+          reference: "docs/backend-version-compatibility.md#登记与证据; MoviePilot 0a7368bce8d28f60ee795b38da0ac7a844c7e085; Frontend c593e630b288bddc99c421c1af1a593072f69932 (v3.1.0); TV 使用端点、Subscribe 写回、fork、lookup、整理预览"
         ),
         fixtureValidation: .verified(
-          reference: "docs/backend-version-compatibility.md#mac验收-2026-10-02; test-fix commit 438f6338eb55d2c668703f0b6b776e4af192fc81; offline fixture run"
+          reference: "docs/backend-version-compatibility.md#mac验收-2026-10-02; current Xcode 27 tvOS 18.5 fixture run"
         ),
         liveValidation: .pending,
         limitations: ["兼容适配待真实后端实测"]

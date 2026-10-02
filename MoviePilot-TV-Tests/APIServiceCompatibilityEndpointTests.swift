@@ -1113,6 +1113,81 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     XCTAssertTrue(allBodiesOmitPreview)
   }
 
+  func testMusicTransferSupportsHistoryReuseAndFileRecognitionModesLocally() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    await CompatibilityEndpointURLProtocol.stub.setManualTransferResponses([
+      Data(#"{"success":true,"message_i18n":"历史音乐整理已开始"}"#.utf8),
+      Data(#"{"success":true,"message_i18n":"文件音乐识别已开始"}"#.utf8),
+    ])
+
+    let service = APIService.testingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    configureManageUser(service)
+
+    let historyReuse = ReorganizeForm(
+      fileitem: nil,
+      logid: 901,
+      target_storage: "local",
+      transfer_type: "copy",
+      target_path: "/music",
+      min_filesize: 0,
+      scrape: false,
+      from_history: true,
+      type_name: "音乐"
+    )
+    let fileRecognition = ReorganizeForm(
+      fileitem: FileItem(
+        name: "track.mp3",
+        path: "/downloads/music/track.mp3",
+        type: "file",
+        size: 1
+      ),
+      logid: 902,
+      target_storage: "local",
+      transfer_type: "copy",
+      target_path: "/music",
+      min_filesize: 0,
+      scrape: true,
+      from_history: false,
+      type_name: "音乐"
+    )
+
+    let historyResult = try await service.manualTransfer(form: historyReuse, background: true)
+    let fileResult = try await service.manualTransfer(form: fileRecognition, background: true)
+    XCTAssertTrue(historyResult.success)
+    XCTAssertTrue(fileResult.success)
+
+    let queries =
+      await CompatibilityEndpointURLProtocol.stub.matchingQueries(suffix: "/transfer/manual")
+        .map(Self.queryValues)
+    XCTAssertEqual(queries, [["background": "true"], ["background": "true"]])
+
+    let bodies = await CompatibilityEndpointURLProtocol.stub.matchingBodies(suffix: "/transfer/manual")
+    XCTAssertEqual(bodies.count, 2)
+    let encodedBodies = try bodies.map(Self.jsonObject)
+
+    XCTAssertEqual(encodedBodies[0]["logid"] as? Int, 901)
+    XCTAssertEqual(encodedBodies[0]["type_name"] as? String, "音乐")
+    XCTAssertEqual(encodedBodies[0]["from_history"] as? Bool, true)
+    XCTAssertNil(encodedBodies[0]["fileitem"])
+    XCTAssertNil(encodedBodies[0]["media_source"])
+    XCTAssertNil(encodedBodies[0]["media_id"])
+
+    XCTAssertEqual(encodedBodies[1]["logid"] as? Int, 902)
+    XCTAssertEqual(encodedBodies[1]["type_name"] as? String, "音乐")
+    XCTAssertEqual(encodedBodies[1]["from_history"] as? Bool, false)
+    XCTAssertEqual(
+      (encodedBodies[1]["fileitem"] as? [String: Any])?["path"] as? String,
+      "/downloads/music/track.mp3"
+    )
+    XCTAssertNil(encodedBodies[1]["media_source"])
+    XCTAssertNil(encodedBodies[1]["media_id"])
+  }
+
   func testReorganizeSubmitStopsBeforeFirstMutationWhenHistoryValidationRejects() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }

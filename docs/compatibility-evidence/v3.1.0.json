@@ -2,17 +2,17 @@
   "provenance": {
     "kind": "upstream-schema-generated; isolated stub endpoint",
     "backend_tag": "v3.1.0",
-    "backend_commit": "31537bb89dddd3813037c05c4ed0fb939c885813",
+    "backend_commit": "0a7368bce8d28f60ee795b38da0ac7a844c7e085",
     "frontend_tag": "v3.1.0",
     "not_live_backend": true,
     "localization_stubbed": true,
-    "python": "3.12.14",
+    "python": "3.12.13",
     "dependencies": {
-      "fastapi": "0.141.1",
-      "pydantic": "2.13.4",
+      "fastapi": "0.115.14",
+      "pydantic": "2.12.5",
       "httpx": "0.28.1",
-      "typing_extensions": "4.16.0",
-      "starlette": "1.6.0"
+      "typing_extensions": "4.15.0",
+      "starlette": "0.46.2"
     },
     "source_sha256": {
       "app/schemas/types.py": "2c4c0a3f73579f4ca4b888ef5773302f7d46fd955d2b3d95883c97f6bf01afc9",
@@ -26,17 +26,17 @@
       "app/api/response.py": "2ed1a713c2590fee911e7d7417192a60d11b49e733988ce7d3bd0b5d407d7c9d"
     },
     "source_urls": {
-      "app/schemas/types.py": "https://github.com/jxxghp/MoviePilot/blob/31537bb89dddd3813037c05c4ed0fb939c885813/app/schemas/types.py",
-      "app/schemas/media.py": "https://github.com/jxxghp/MoviePilot/blob/31537bb89dddd3813037c05c4ed0fb939c885813/app/schemas/media.py",
-      "app/schemas/common.py": "https://github.com/jxxghp/MoviePilot/blob/31537bb89dddd3813037c05c4ed0fb939c885813/app/schemas/common.py",
-      "app/schemas/response.py": "https://github.com/jxxghp/MoviePilot/blob/31537bb89dddd3813037c05c4ed0fb939c885813/app/schemas/response.py",
-      "app/schemas/subscribe.py": "https://github.com/jxxghp/MoviePilot/blob/31537bb89dddd3813037c05c4ed0fb939c885813/app/schemas/subscribe.py",
-      "app/schemas/category.py": "https://github.com/jxxghp/MoviePilot/blob/31537bb89dddd3813037c05c4ed0fb939c885813/app/schemas/category.py",
-      "app/schemas/music.py": "https://github.com/jxxghp/MoviePilot/blob/31537bb89dddd3813037c05c4ed0fb939c885813/app/schemas/music.py",
-      "app/schemas/context.py": "https://github.com/jxxghp/MoviePilot/blob/31537bb89dddd3813037c05c4ed0fb939c885813/app/schemas/context.py",
-      "app/api/response.py": "https://github.com/jxxghp/MoviePilot/blob/31537bb89dddd3813037c05c4ed0fb939c885813/app/api/response.py",
-      "app/api/endpoints/subscribe.py": "https://github.com/jxxghp/MoviePilot/blob/31537bb89dddd3813037c05c4ed0fb939c885813/app/api/endpoints/subscribe.py",
-      "version.py": "https://github.com/jxxghp/MoviePilot/blob/31537bb89dddd3813037c05c4ed0fb939c885813/version.py"
+      "app/schemas/types.py": "https://github.com/jxxghp/MoviePilot/blob/0a7368bce8d28f60ee795b38da0ac7a844c7e085/app/schemas/types.py",
+      "app/schemas/media.py": "https://github.com/jxxghp/MoviePilot/blob/0a7368bce8d28f60ee795b38da0ac7a844c7e085/app/schemas/media.py",
+      "app/schemas/common.py": "https://github.com/jxxghp/MoviePilot/blob/0a7368bce8d28f60ee795b38da0ac7a844c7e085/app/schemas/common.py",
+      "app/schemas/response.py": "https://github.com/jxxghp/MoviePilot/blob/0a7368bce8d28f60ee795b38da0ac7a844c7e085/app/schemas/response.py",
+      "app/schemas/subscribe.py": "https://github.com/jxxghp/MoviePilot/blob/0a7368bce8d28f60ee795b38da0ac7a844c7e085/app/schemas/subscribe.py",
+      "app/schemas/category.py": "https://github.com/jxxghp/MoviePilot/blob/0a7368bce8d28f60ee795b38da0ac7a844c7e085/app/schemas/category.py",
+      "app/schemas/music.py": "https://github.com/jxxghp/MoviePilot/blob/0a7368bce8d28f60ee795b38da0ac7a844c7e085/app/schemas/music.py",
+      "app/schemas/context.py": "https://github.com/jxxghp/MoviePilot/blob/0a7368bce8d28f60ee795b38da0ac7a844c7e085/app/schemas/context.py",
+      "app/api/response.py": "https://github.com/jxxghp/MoviePilot/blob/0a7368bce8d28f60ee795b38da0ac7a844c7e085/app/api/response.py",
+      "app/api/endpoints/subscribe.py": "https://github.com/jxxghp/MoviePilot/blob/0a7368bce8d28f60ee795b38da0ac7a844c7e085/app/api/endpoints/subscribe.py",
+      "version.py": "https://github.com/jxxghp/MoviePilot/blob/0a7368bce8d28f60ee795b38da0ac7a844c7e085/version.py"
     }
   },
   "checks": {
