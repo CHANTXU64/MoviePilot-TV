@@ -45,12 +45,43 @@ nonisolated public struct PrintLogHandler: LogHandler {
   }
 }
 
+/// 把一条日志同时交给多个 handler。`message` 只求值一次。
+nonisolated public struct MultiplexLogHandler: LogHandler {
+  public let handlers: [any LogHandler]
+
+  public init(handlers: [any LogHandler]) {
+    self.handlers = handlers
+  }
+
+  public func log(
+    level: Logger.Level,
+    message: @autoclosure () -> Any,
+    metadata: [String: Any]?,
+    file: String,
+    function: String,
+    line: UInt
+  ) {
+    let rendered = message()
+    for handler in handlers {
+      handler.log(
+        level: level,
+        message: rendered,
+        metadata: metadata,
+        file: file,
+        function: function,
+        line: line
+      )
+    }
+  }
+}
+
 // MARK: - 公开的日志 API
 
 /// 一个集中的、可适配的应用程序日志记录工具。
 ///
 /// 此枚举充当外观（facade），将所有日志调用转发到可配置的 `LogHandler`。
 /// 默认情况下，它使用 `PrintLogHandler`，该处理器仅在 `DEBUG` 构建中向控制台打印。
+/// 应用启动后会再挂上持久化 handler，把同一条日志写入本机文件供设置页查看。
 /// 这种架构使得更换底层日志引擎变得容易，而无需更改整个应用程序中的任何日志调用代码。
 ///
 /// **基本用法：**
@@ -72,8 +103,7 @@ nonisolated public struct PrintLogHandler: LogHandler {
 nonisolated public enum Logger {
 
   /// 代表日志消息的严重级别。
-  nonisolated public enum Level {
-    case verbose
+  nonisolated public enum Level: String, Codable, CaseIterable, Sendable, Comparable {
     case debug
     case info
     case warning
@@ -82,12 +112,24 @@ nonisolated public enum Logger {
     /// 用于日志消息的简短描述性前缀。
     var prefix: String {
       switch self {
-      case .verbose: return "VERBOSE"
       case .debug: return "DEBUG"
       case .info: return "INFO"
       case .warning: return "WARN"
       case .error: return "ERROR"
       }
+    }
+
+    var rank: Int {
+      switch self {
+      case .debug: return 0
+      case .info: return 1
+      case .warning: return 2
+      case .error: return 3
+      }
+    }
+
+    public static func < (lhs: Level, rhs: Level) -> Bool {
+      lhs.rank < rhs.rank
     }
   }
 
@@ -103,17 +145,6 @@ nonisolated public enum Logger {
   /// - Parameter handler: 一个遵守 `LogHandler` 协议的类型的实例。
   public static func bootstrap(handler: LogHandler) {
     self.handler = handler
-  }
-
-  /// 记录一条详细消息。用于比调试更详细的诊断信息。
-  public static func verbose(
-    _ message: @autoclosure () -> Any,
-    metadata: [String: Any]? = nil,
-    file: String = #file,
-    function: String = #function,
-    line: UInt = #line
-  ) {
-    handler.log(level: .verbose, message: message(), metadata: metadata, file: file, function: function, line: line)
   }
 
   /// 记录一条调试消息。用于详细的、临时的调试信息。

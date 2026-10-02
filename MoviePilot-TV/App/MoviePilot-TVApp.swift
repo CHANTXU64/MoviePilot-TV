@@ -9,6 +9,17 @@ struct MoviePilot_TVApp: App {
 
   init() {
     KingfisherCachePolicy.apply()
+    Self.bootstrapLogging()
+  }
+
+  private static func bootstrapLogging() {
+    guard NSClassFromString("XCTestCase") == nil else { return }
+    Logger.bootstrap(
+      handler: MultiplexLogHandler(handlers: [
+        PrintLogHandler(),
+        PersistentLogHandler(store: .shared),
+      ]))
+    PersistentLogStore.shared.pruneExpired()
   }
 
   /// 应用程序主入口，挂载全局根视图

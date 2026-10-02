@@ -21,10 +21,11 @@ struct SystemView: View {
   @StateObject private var viewModel: SystemViewModel
   @StateObject private var recommendViewModel: RecommendViewModel
   @StateObject private var topShelfExplore: ExploreViewModel
+  @StateObject private var logViewerViewModel: LogViewerViewModel
   @ObservedObject private var apiService: APIService
   @EnvironmentObject private var topShelfManager: TopShelfManager
   @State private var showAppInfo = false
-  @State private var selectedChangelogEntry: AppChangelogEntry?
+  @State private var selectedDetail: SystemSettingsDetailItem?
   @State private var updateNotice: AppChangelogEntry?
   @State private var showLogoutConfirmation = false
   @State private var route: [SystemSettingsPage] = []
@@ -39,6 +40,7 @@ struct SystemView: View {
     _topShelfExplore = StateObject(wrappedValue: ExploreViewModel(apiService: apiService, loadsResults: false))
     _viewModel = StateObject(wrappedValue: SystemViewModel(apiService: apiService))
     _recommendViewModel = StateObject(wrappedValue: RecommendViewModel(selectShelf: false, apiService: apiService))
+    _logViewerViewModel = StateObject(wrappedValue: LogViewerViewModel())
     let pages: [SystemSettingsPage] = initialPage == .root ? [] : [initialPage]
     _route = State(initialValue: pages)
     _displayedRoute = State(initialValue: pages)
@@ -59,6 +61,22 @@ struct SystemView: View {
 
   private var canConfigureCustomFilters: Bool {
     apiService.canRequestSuperUserEndpoints
+  }
+
+  private var selectedLogRecordBinding: Binding<LogRecord?> {
+    Binding(
+      get: {
+        if case .log(let record) = selectedDetail { return record }
+        return nil
+      },
+      set: { record in
+        if let record {
+          selectedDetail = .log(record)
+        } else if case .log = selectedDetail {
+          selectedDetail = nil
+        }
+      }
+    )
   }
 
   var body: some View {
@@ -114,7 +132,7 @@ struct SystemView: View {
     }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: apiService)) { _ in
       showAppInfo = false
-      selectedChangelogEntry = nil
+      selectedDetail = nil
       updateNotice = nil
       showLogoutConfirmation = false
     }
@@ -130,8 +148,14 @@ struct SystemView: View {
     .sheet(isPresented: $showAppInfo) {
       appInfoSheet
     }
-    .sheet(item: $selectedChangelogEntry) { entry in
-      changelogDetailSheet(entry)
+    .sheet(item: $selectedDetail) { detail in
+      // 更新历史和日志详情共用这一个 item sheet，写法与版本更新历史相同。
+      switch detail {
+      case .changelog(let entry):
+        changelogDetailSheet(entry)
+      case .log(let record):
+        LogRecordDetailSheet(record: record)
+      }
     }
     .alert(
       updateNotice.map { "已更新到 \($0.version)" } ?? "更新提示",
@@ -171,65 +195,82 @@ struct SystemView: View {
       .frame(width: Self.listWidth, alignment: .top)
       .frame(maxHeight: .infinity, alignment: .top)
       .allowsHitTesting(isActive)
-      .systemSettingsExitCommand(isEnabled: !topShelfPresentation.blocksInteraction && isSelected && isActive && page != .root, perform: pop)
+      .systemSettingsExitCommand(
+        isEnabled: !topShelfPresentation.blocksInteraction && isSelected && isActive && page != .root,
+        perform: pop
+      )
   }
 
   private func pageView(_ page: SystemSettingsPage, isActive: Bool) -> some View {
     ScrollViewReader { scrollProxy in
-      ScrollView(.vertical) {
-        VStack(alignment: .leading, spacing: 30) {
-          Color.clear
-            .frame(height: 1)
-            .id(Self.topAnchorID)
+      Group {
+        if page == .logs {
+          // 日志页自己用 ScrollView + LazyVStack。再包进外层 VStack 会让卡片一次性全部实例化。
+          LogViewerView(
+            viewModel: logViewerViewModel,
+            focusedItem: $focusedItem,
+            selectedRecord: selectedLogRecordBinding
+          )
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        } else {
+          ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 30) {
+              Color.clear
+                .frame(height: 1)
+                .id(Self.topAnchorID)
 
-          switch page {
-          case .root:
-            rootPage
-          case .connection:
-            connectionPage
-          case .mediaSourceSelection:
-            if canConfigureRecommendations {
-              mediaSourceSelectionPage
+              switch page {
+              case .root:
+                rootPage
+              case .connection:
+                connectionPage
+              case .mediaSourceSelection:
+                if canConfigureRecommendations {
+                  mediaSourceSelectionPage
+                }
+              case .siteSelection:
+                if canConfigureSearch {
+                  siteSelectionPage
+                }
+              case .hardFilter:
+                if canConfigureCustomFilters {
+                  filterPage(
+                    selectedRuleId: viewModel.selectedHardFilterRuleId,
+                    onSelect: { viewModel.selectedHardFilterRuleId = $0 }
+                  )
+                }
+              case .softFilter:
+                if canConfigureCustomFilters {
+                  filterPage(
+                    selectedRuleId: viewModel.selectedSoftFilterRuleId,
+                    onSelect: { viewModel.selectedSoftFilterRuleId = $0 }
+                  )
+                }
+              case .topShelfSelection:
+                if canConfigureRecommendations { topShelfSelectionPage }
+              case .topShelfRecommendations:
+                if canConfigureRecommendations { topShelfRecommendationsPage }
+              case .topShelfExplore:
+                if canConfigureRecommendations { topShelfExplorePage }
+              case .topShelfExploreSources:
+                if canConfigureRecommendations { topShelfExploreSourcesPage }
+              case .topShelfExploreField(let id):
+                if canConfigureRecommendations { topShelfExploreFieldPage(id) }
+              case .recommendation:
+                if canConfigureRecommendations {
+                  recommendationPage
+                }
+              case .changelog:
+                changelogPage
+              case .logs:
+                EmptyView()
+              }
             }
-          case .siteSelection:
-            if canConfigureSearch {
-              siteSelectionPage
-            }
-          case .hardFilter:
-            if canConfigureCustomFilters {
-              filterPage(
-                selectedRuleId: viewModel.selectedHardFilterRuleId,
-                onSelect: { viewModel.selectedHardFilterRuleId = $0 }
-              )
-            }
-          case .softFilter:
-            if canConfigureCustomFilters {
-              filterPage(
-                selectedRuleId: viewModel.selectedSoftFilterRuleId,
-                onSelect: { viewModel.selectedSoftFilterRuleId = $0 }
-              )
-            }
-          case .topShelfSelection:
-            if canConfigureRecommendations { topShelfSelectionPage }
-          case .topShelfRecommendations:
-            if canConfigureRecommendations { topShelfRecommendationsPage }
-          case .topShelfExplore:
-            if canConfigureRecommendations { topShelfExplorePage }
-          case .topShelfExploreSources:
-            if canConfigureRecommendations { topShelfExploreSourcesPage }
-          case .topShelfExploreField(let id):
-            if canConfigureRecommendations { topShelfExploreFieldPage(id) }
-          case .recommendation:
-            if canConfigureRecommendations {
-              recommendationPage
-            }
-          case .changelog:
-            changelogPage
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 8)
+            .padding(.bottom, Self.contentBottomPadding)
           }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, 8)
-        .padding(.bottom, Self.contentBottomPadding)
       }
       .scrollClipDisabled()
       .background(
@@ -237,7 +278,7 @@ struct SystemView: View {
           // Sheet / Alert 呈现期间禁用 Menu 手势：否则按 Menu 关闭弹层时
           // 会同时触发 scrollTo(top)，随后焦点恢复又滚回原行，形成"先上滑再下滑"。
           isEnabled: !topShelfPresentation.blocksInteraction && isSelected && isActive && page == .root
-            && !showAppInfo && updateNotice == nil && selectedChangelogEntry == nil
+            && !showAppInfo && updateNotice == nil && selectedDetail == nil
             && !showLogoutConfirmation,
           onExitPress: {
             focusedItem = nil
@@ -377,6 +418,13 @@ struct SystemView: View {
           row("版本更新历史", showsDisclosure: true)
         }
         .focused($focusedItem, equals: .changelog)
+
+        Button {
+          push(.logs)
+        } label: {
+          row("查看日志", showsDisclosure: true)
+        }
+        .focused($focusedItem, equals: .logs)
       }
     }
   }
@@ -474,7 +522,7 @@ struct SystemView: View {
     section(nil) {
       ForEach(AppChangelog.entries) { entry in
         Button {
-          selectedChangelogEntry = entry
+          selectedDetail = .changelog(entry)
         } label: {
           row(
             entry.version,
@@ -909,6 +957,8 @@ struct SystemView: View {
       target = .topShelfRecommendation
     case .recommendation:
       target = .recommendation
+    case .logs:
+      target = .logs
     }
 
     DispatchQueue.main.async {
@@ -949,6 +999,8 @@ struct SystemView: View {
       } ?? .topShelfExploreSource
     case .recommendation:
       target = recommendViewModel.shelves.first.map { .recommendationShelf($0.id) } ?? .recommendation
+    case .logs:
+      target = .logRecording
     }
 
     DispatchQueue.main.async {
@@ -960,7 +1012,7 @@ struct SystemView: View {
     switch route.last {
     case .softFilter:
       return .softFilterNone
-    case .root, .connection, .changelog, .mediaSourceSelection, .siteSelection, .hardFilter,
+    case .root, .connection, .changelog, .logs, .mediaSourceSelection, .siteSelection, .hardFilter,
       .recommendation, .topShelfSelection, .topShelfRecommendations, .topShelfExplore,
       .topShelfExploreSources, .topShelfExploreField, .none:
       return .hardFilterNone
@@ -971,7 +1023,7 @@ struct SystemView: View {
     switch route.last {
     case .softFilter:
       return .softFilterRule(ruleId)
-    case .root, .connection, .changelog, .mediaSourceSelection, .siteSelection, .hardFilter,
+    case .root, .connection, .changelog, .logs, .mediaSourceSelection, .siteSelection, .hardFilter,
       .recommendation, .topShelfSelection, .topShelfRecommendations, .topShelfExplore,
       .topShelfExploreSources, .topShelfExploreField, .none:
       return .hardFilterRule(ruleId)
@@ -1049,12 +1101,15 @@ struct SystemView: View {
         return nil
       case .changelog:
         return "查看 MoviePilot TV 各版本的更新摘要、完整改动和后端兼容版本。"
+      case .logs:
+        return "查看本机保存的应用日志，可按级别和时间筛选，最长保留 7 天。"
       case .allSites, .site, .defaultMediaSource, .mediaSource, .relogin, .logout,
         .hardFilterNone, .softFilterNone, .hardFilterRule, .softFilterRule,
         .recommendationShelf, .topShelfDisabled, .topShelfSource, .changelogVersion,
         .topShelfModeRecommendation, .topShelfModeExplore, .topShelfExploreSource,
         .topShelfExploreField, .topShelfExploreOption, .topShelfExploreSourceOption,
-        .topShelfExploreSave, .topShelfExploreReset:
+        .topShelfExploreSave, .topShelfExploreReset, .logRecording, .logDownRedirector, .logLevelFilter,
+        .logTimeFilter:
         break
       }
     }
@@ -1066,6 +1121,8 @@ struct SystemView: View {
       return "不对资源搜索结果应用硬过滤。（只影响 TV 端）"
     case (.softFilter, .softFilterNone):
       return "不对资源搜索结果应用软过滤。（只影响 TV 端）"
+    case (.logs, .logRecording):
+      return "关闭后不再把新日志写入本机，已保存的记录仍可查看。"
     default:
       break
     }
@@ -1077,6 +1134,8 @@ struct SystemView: View {
       return "查看当前登录状态、服务器地址和后端连接状态。"
     case .changelog:
       return "查看 MoviePilot TV 各版本的更新摘要、完整改动和后端兼容版本。"
+    case .logs:
+      return "查看本机保存的应用日志，可按级别和时间筛选，最长保留 7 天。"
     case .mediaSourceSelection:
       return "设置聚合搜索默认使用的媒体来源。（只影响 TV 端）"
     case .siteSelection:
@@ -1136,10 +1195,25 @@ struct SystemView: View {
 
 }
 
+private enum SystemSettingsDetailItem: Identifiable {
+  case changelog(AppChangelogEntry)
+  case log(LogRecord)
+
+  var id: String {
+    switch self {
+    case .changelog(let entry):
+      return "changelog-\(entry.id)"
+    case .log(let record):
+      return "log-\(record.id.uuidString)"
+    }
+  }
+}
+
 enum SystemSettingsPage: Hashable {
   case root
   case connection
   case changelog
+  case logs
   case mediaSourceSelection
   case siteSelection
   case hardFilter
@@ -1152,10 +1226,15 @@ enum SystemSettingsPage: Hashable {
   case topShelfExploreField(String)
 }
 
-private enum SystemSettingsFocus: Hashable {
+enum SystemSettingsFocus: Hashable {
   case connection
   case changelog
   case changelogVersion(String)
+  case logs
+  case logRecording
+  case logDownRedirector
+  case logLevelFilter
+  case logTimeFilter
   case mediaSourceSelection
   case defaultMediaSource
   case mediaSource(MediaSearchSource)
