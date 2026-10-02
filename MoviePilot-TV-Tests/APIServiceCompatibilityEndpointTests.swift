@@ -641,6 +641,155 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     XCTAssertEqual(query["type_name"], "电影")
   }
 
+  func testVersionedLookupUsesTheSelectedContractThroughAPIService() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    let media = MediaInfo(tmdb_id: 42, title: "缺年份电影", type: "电影")
+    for version in ["v3.0.4", "v3.0.7", "v3.0.10-1", "v3.1.0"] {
+      service.settings = GlobalSettings(BACKEND_VERSION: version)
+      _ = try await service.fetchSubscriptionLookup(media: media)
+    }
+    let queries = await CompatibilityEndpointURLProtocol.stub.matchingQueries(suffix: "/subscribe/media/42")
+    XCTAssertEqual(queries.count, 4)
+    for index in queries.indices {
+      let values = Self.queryValues(queries[index])
+      XCTAssertEqual(values["media_source"], "themoviedb")
+      XCTAssertEqual(values["mtype"], index < 2 ? nil : "电影")
+      XCTAssertNil(values["year"])
+    }
+  }
+
+  func testForkPreflightStopsV304BeforeCreatingAnything() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    await CompatibilityEndpointURLProtocol.stub.setPublicSettingsResponse(Data(
+      #"{"BACKEND_VERSION":"v3.0.4"}"#.utf8))
+    let service = APIService.isolatedTestingInstance()
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    let shares = try await service.fetchSubscriptionShares(path: "/subscribe/shares")
+    let share = try XCTUnwrap(shares.first)
+    do {
+      _ = try await service.forkSubscription(share: share)
+      XCTFail("旧版 fork 必须在 POST 前停止")
+    } catch is BackendCapabilityError {
+      // 返回可供现有复用弹窗显示的能力说明。
+    }
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    XCTAssertTrue(paths.contains("/api/v1/system/global"))
+    XCTAssertFalse(paths.contains("/api/v1/subscribe/fork"))
+
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.0.5")
+    let id = try await service.forkSubscription(share: share)
+    XCTAssertEqual(id, 901, "v3.0.5 的修复边界不能被 v3.0.4 协议组误禁用")
+  }
+
+  func testForkPreflightCannotContinueAfterServerChangesWhileVersionLoads() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    let gate = CompatibilityEndpointAsyncGate()
+    await CompatibilityEndpointURLProtocol.stub.setPublicSettingsResponse(
+      Data(#"{"BACKEND_VERSION":"v3.0.10-1"}"#.utf8), waitFor: gate)
+    let service = APIService.isolatedTestingInstance()
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    let shares = try await service.fetchSubscriptionShares(path: "/subscribe/shares")
+    let share = try XCTUnwrap(shares.first)
+    XCTAssertNil(service.settings)
+
+    let oldFork = Task { @MainActor in
+      do {
+        _ = try await service.forkSubscription(share: share)
+        XCTFail("旧会话的 fork 不得在版本探测后继续")
+        return false
+      } catch is CancellationError {
+        return true
+      } catch {
+        XCTFail("预期会话取消，得到 \(error)")
+        return false
+      }
+    }
+    await gate.waitForWaiter()
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local/server-b"
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.1.0")
+    await gate.open()
+    let wasCancelled = await oldFork.value
+
+    XCTAssertTrue(wasCancelled)
+    XCTAssertEqual(service.settings?.BACKEND_VERSION, "v3.1.0")
+    XCTAssertEqual(service.backendContractProfile, .v30101)
+    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
+    XCTAssertEqual(paths.filter { $0.hasSuffix("/subscribe/fork") }.count, 0)
+    XCTAssertFalse(paths.contains("/server-b/api/v1/system/global"), "旧操作不得用新服务器继续探测")
+  }
+
+  func testSaveSubscriptionUsesPublicWriteDTOForAllMaintainedContracts() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let service = APIService.isolatedTestingInstance()
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    for version in ["v3.0.4", "v3.0.5", "v3.0.10-1", "v3.1.0"] {
+      await CompatibilityEndpointURLProtocol.stub.reset()
+      service.settings = GlobalSettings(BACKEND_VERSION: version)
+      var subscribe = try JSONDecoder().decode(Subscribe.self, from: Data(
+        #"{"id":44,"name":"原订阅","type":"电视剧","media_source":"themoviedb","media_id":"42","media_category_id":"tv-drama","media_category":"剧集","search_interval":24,"quality":"原规则","state":"R","username":"owner","episode_priority":{"1":100}}"#.utf8))
+      subscribe.quality = nil
+      let result = try await service.saveSubscription(subscribe)
+      XCTAssertTrue(result.success)
+      let body = try Self.jsonObject(await CompatibilityEndpointURLProtocol.stub.requestBody(suffix: "/subscribe/"))
+      XCTAssertEqual(body["id"] as? Int, 44)
+      XCTAssertEqual(body["media_category_id"] as? String, "tv-drama")
+      XCTAssertEqual(body["search_interval"] as? Int, 24)
+      XCTAssertTrue(body["quality"] is NSNull)
+      XCTAssertNil(body["state"])
+      XCTAssertNil(body["username"])
+      XCTAssertNil(body["episode_priority"])
+    }
+  }
+
+  func testSubscribeSheetSavePreservesCategoryEditingIntentThroughRequestBody() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+    let service = APIService.isolatedTestingInstance()
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    service.tokenForTesting = "category-test-token"
+    service.currentUserForTesting = Token(
+      access_token: "category-test-token", token_type: "bearer",
+      super_user: FlexibleBool(false), permissions: ["subscribe": true],
+      user_id: 42, user_name: "category-test", avatar: nil)
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.0.4")
+
+    for scenario in ["change", "clear", "restore"] {
+      await CompatibilityEndpointURLProtocol.stub.reset()
+      await CompatibilityEndpointURLProtocol.stub.setSubscriptionActionsFail(false)
+      let original = try JSONDecoder().decode(Subscribe.self, from: Data(
+        #"{"id":44,"name":"分类编辑","type":"电视剧","media_category_id":"tv-drama","media_category":"原分类"}"#.utf8))
+      let model = SubscribeSheetViewModel(subscribe: original, apiService: service)
+      model.subscribe.media_category = "新分类"
+      if scenario == "clear" { model.subscribe.media_category = nil }
+      if scenario == "restore" { model.subscribe.media_category = "原分类" }
+
+      let saved = await model.save()
+      XCTAssertTrue(saved, scenario)
+      XCTAssertTrue(model.isSaved, scenario)
+      let body = try Self.jsonObject(await CompatibilityEndpointURLProtocol.stub.requestBody(suffix: "/subscribe/"))
+      if scenario == "restore" {
+        XCTAssertEqual(body["media_category_id"] as? String, "tv-drama")
+        XCTAssertEqual(body["media_category"] as? String, "原分类")
+      } else {
+        XCTAssertFalse(body.keys.contains("media_category_id"), "不能发送旧 ID 或 null ID 覆盖路径意图")
+        if scenario == "clear" {
+          XCTAssertTrue(body["media_category"] is NSNull)
+        } else {
+          XCTAssertEqual(body["media_category"] as? String, "新分类")
+        }
+      }
+    }
+  }
+
   func testSubscriptionShareGETThenForkPreservesCurrentIdentitySchema() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
@@ -662,6 +811,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     XCTAssertEqual(share.media_id, "154587")
     XCTAssertEqual(share.toMediaInfo().apiMediaId, "anilist:154587")
 
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.0.10-1")
     let subscriptionId = try await service.forkSubscription(share: share)
 
     XCTAssertEqual(subscriptionId, 901)
@@ -1300,6 +1450,7 @@ private actor CompatibilityEndpointURLProtocolStub {
   private var requests: [URLRequest] = []
   private var requestBodies: [Data?] = []
   private var publicSettingsResponse: Data?
+  private var publicSettingsGate: CompatibilityEndpointAsyncGate?
   private var manualTransferResponses: [Data] = []
   private var userSettingsFailureStatusCode: Int?
   private var manualTransferOmitsSuccess = false
@@ -1312,6 +1463,7 @@ private actor CompatibilityEndpointURLProtocolStub {
     requests.removeAll()
     requestBodies.removeAll()
     publicSettingsResponse = nil
+    publicSettingsGate = nil
     manualTransferResponses.removeAll()
     userSettingsFailureStatusCode = nil
     manualTransferOmitsSuccess = false
@@ -1329,8 +1481,9 @@ private actor CompatibilityEndpointURLProtocolStub {
     userSettingsFailureStatusCode = statusCode
   }
 
-  func setPublicSettingsResponse(_ response: Data?) {
+  func setPublicSettingsResponse(_ response: Data?, waitFor gate: CompatibilityEndpointAsyncGate? = nil) {
     publicSettingsResponse = response
+    publicSettingsGate = gate
   }
 
   func setManualTransferOmitsSuccess(_ enabled: Bool) {
@@ -1428,6 +1581,7 @@ private actor CompatibilityEndpointURLProtocolStub {
     let data: Data
     let statusCode: Int
     if url.path == "/api/v1/system/global" {
+      if let publicSettingsGate { await publicSettingsGate.wait() }
       statusCode = 200
       data = publicSettingsResponse
         ?? #"{"success":true,"data":{"TMDB_IMAGE_DOMAIN":"image.tmdb.org","GLOBAL_IMAGE_CACHE":true,"BACKEND_VERSION":"v2.13.14","FRONTEND_VERSION":"v2.13.15"}}"#

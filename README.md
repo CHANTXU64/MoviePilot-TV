@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://github.com/CHANTXU64/MoviePilot-TV/releases"><img src="https://img.shields.io/badge/Release-v0.3.9-blue?style=flat-square" alt="release"></a>
-  <a href="https://github.com/jxxghp/MoviePilot"><img src="https://img.shields.io/badge/MoviePilot-v3.0.10--1-darkviolet?style=flat-square" alt="MoviePilot Backend Version"></a>
+  <a href="https://github.com/jxxghp/MoviePilot"><img src="https://img.shields.io/badge/MoviePilot_Registered-v3.1.0-darkviolet?style=flat-square" alt="MoviePilot Latest Registered Version"></a>
   <img src="https://img.shields.io/badge/platform-tvOS_18%2B-lightgrey.svg" alt="Platform">
   <img src="https://img.shields.io/badge/language-Swift-orange.svg?style=flat-square" alt="Language">
   <img src="https://img.shields.io/badge/UI-SwiftUI-blue.svg?style=flat-square" alt="UI Framework">
@@ -43,7 +43,8 @@
 ## ⚠️ 兼容性与已知问题
 
 - **tvOS 版本**: 支持 **tvOS 18.0+**。本项目主要在 **tvOS 26.0+** 环境下开发，建议使用最新的 tvOS 系统获得最佳体验。
-- **MoviePilot 版本**: 支持 **v3.0.10-1**，不保持向后兼容，版本过低可能出现严重功能异常或数据丢失；打开 App 时会提示，仍可继续使用。
+- **MoviePilot 版本**: 最早维护 **v3.0.4**，最新登记 **v3.1.0**。兼容记录按精确版本稀疏登记，目前为 **v3.0.4**、**v3.0.5**、**v3.0.10-1**、**v3.1.0**，不表示登记节点之间或更高版本全部兼容。`v3.0.10-1` 是稳定热修复，排序高于 `v3.0.10`；预发布、metadata 和未知后缀不会归入稳定版本。维护范围内的未登记版本仍会按已知合同边界选择请求协议，但不会因此显示为已验证；v3.0.4 的订阅复用接口受上游缺陷限制，v3.0.5 起修复。
+- **验证状态**: 源码合同审查、合同 fixture 实际执行、真实后端实测分别登记；当前已完成所用合同的源码审查，fixture 和真实后端实测仍待执行，不能据此宣称已验证支持。未登记、低于维护下限、高于最新登记、无法解析或已登记待验证时，App 会说明状态、更新的登记记录与限制；仍可继续使用。确认记录包含登记修订及证据内容，后续限制或证据变化会重新提示。详见[版本登记与证据](docs/backend-version-compatibility.md)。
 - **兼容原则**: TV 端以 MoviePilot Web 前端和 MoviePilot 后端当前行为为准；如果 Web 本来也不显示，或后端/第三方数据源同样异常，本项目通常不会在 TV 端额外兜底修复。
 - **更新节奏**: 本应用更新频率可能低于 MoviePilot 原版，不保证长期兼容旧版 API 或旧版后端已知问题。
 - **账号登录**: **不支持**已开启双因素认证 (MFA/2FA) 的账号，请在关闭双因素认证后再登录。

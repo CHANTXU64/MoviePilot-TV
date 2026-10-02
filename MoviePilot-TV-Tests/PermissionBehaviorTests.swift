@@ -644,6 +644,7 @@ private func configurePermissionBehaviorUser(
     user_name: "permission-behavior",
     avatar: nil
   )
+  service.settings = GlobalSettings(BACKEND_VERSION: "v3.0.10-1")
 }
 
 @MainActor

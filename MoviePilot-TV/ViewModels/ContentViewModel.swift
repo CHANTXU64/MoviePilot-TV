@@ -34,7 +34,7 @@ class ContentViewModel: ObservableObject {
   private let apiService: APIService
   private let warningDefaults: UserDefaults
   private let appVersion: String
-  private let requiredBackendVersion: String
+  private let compatibilityRegistry: BackendCompatibilityRegistry
   private var cancellables = Set<AnyCancellable>()
   private var didPrepareStartup = false
   private var isRefreshingStartupSession = false
@@ -46,12 +46,12 @@ class ContentViewModel: ObservableObject {
     apiService: APIService = .shared,
     warningDefaults: UserDefaults = .standard,
     appVersion: String = AppVersionInfo.currentAppVersion(),
-    requiredBackendVersion: String = AppVersionInfo.compatibleMoviePilotVersion
+    compatibilityRegistry: BackendCompatibilityRegistry = .current
   ) {
     self.apiService = apiService
     self.warningDefaults = warningDefaults
     self.appVersion = appVersion
-    self.requiredBackendVersion = requiredBackendVersion
+    self.compatibilityRegistry = compatibilityRegistry
     recommendNavigation = ImageNavigationCoordinator(apiService: apiService)
     exploreNavigation = ImageNavigationCoordinator(apiService: apiService)
     // 初始状态
@@ -292,18 +292,11 @@ class ContentViewModel: ObservableObject {
     do {
       let settings = try await apiService.fetchSettings()
       guard currentBackendVersionCheckKey() == checkKey else { return }
-      let shouldUpdateWarning =
-        (checkBackendVersion ? backendVersionCheckKey != checkKey : backendVersionWarning != nil)
-          || pendingBackendVersionWarning != nil
-      if shouldUpdateWarning {
-        presentBackendVersionWarning(
-          Self.backendVersionWarning(
-            for: settings.BACKEND_VERSION,
-            requiredVersion: requiredBackendVersion
-          ),
-          baseURL: checkKey.baseURL
-        )
-      }
+      // 每次刷新重新评估精确版本；同一登记证据的已确认提示由持久化记录去重。
+      presentBackendVersionWarning(
+        Self.backendVersionWarning(for: settings.BACKEND_VERSION, registry: compatibilityRegistry),
+        baseURL: checkKey.baseURL
+      )
       if checkBackendVersion {
         backendVersionCheckKey = checkKey
       }
@@ -316,7 +309,7 @@ class ContentViewModel: ObservableObject {
       presentBackendVersionWarning(
         BackendVersionWarning(
           backendVersion: nil,
-          requiredVersion: requiredBackendVersion
+          registry: compatibilityRegistry
         ),
         baseURL: checkKey.baseURL
       )
@@ -420,11 +413,11 @@ class ContentViewModel: ObservableObject {
 
   static func backendVersionWarning(
     for backendVersion: String?,
-    requiredVersion: String = AppVersionInfo.compatibleMoviePilotVersion
+    registry: BackendCompatibilityRegistry = .current
   ) -> BackendVersionWarning? {
     BackendVersionWarning(
       backendVersion: backendVersion,
-      requiredVersion: requiredVersion
+      registry: registry
     )
   }
 }

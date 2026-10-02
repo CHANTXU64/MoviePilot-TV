@@ -507,7 +507,8 @@ struct SystemView: View {
       VStack(spacing: 32) {
         staticRow("作者", "CHANTXU64")
         staticRow("版本", viewModel.appVersion)
-        staticRow("兼容 MoviePilot 版本", viewModel.compatibleMoviePilotVersion)
+        staticRow("最早维护 MoviePilot 版本", viewModel.minimumMaintainedMoviePilotVersion)
+        staticRow("最新登记 MoviePilot 版本", viewModel.latestRegisteredMoviePilotVersion)
         staticRow("GitHub", "CHANTXU64/MoviePilot-TV")
         staticRow("分发协议", "CC0 1.0 Universal")
       }

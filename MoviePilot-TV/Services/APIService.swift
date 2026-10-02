@@ -406,6 +406,15 @@ class APIService: ObservableObject {
   }
   @Published var useImageCache: Bool = false
 
+  /// 版本与全局配置共用现有会话 owner；切服/切账号时随 settings 一起清空。
+  var backendContractProfile: BackendContractProfile? {
+    BackendCompatibilityRegistry.current.assessment(for: settings?.BACKEND_VERSION).profile
+  }
+
+  private var backendContract: BackendAPIContract {
+    BackendAPIContract(profile: backendContractProfile, version: MoviePilotVersion(settings?.BACKEND_VERSION))
+  }
+
   var imageConfigurationIdentity: String {
     let bangumiProxyEnabled = settings?.BANGUMI_PROXY_ENABLE?.value == true
     return "\(baseURL)|\(useImageCache)|\(settings?.TMDB_IMAGE_DOMAIN ?? "")|\(bangumiProxyEnabled)|\(settings?.BANGUMI_IMAGE_DOMAIN ?? "")"
@@ -1009,6 +1018,7 @@ class APIService: ObservableObject {
     }
 
     let oldUIIdentity = session.uiIdentity
+    let oldBaseURL = session.baseURL
     let oldRuntime = runtime
     let newRuntime = APIServiceSessionRuntime(
       identifier: nextState.imageNamespace,
@@ -1023,7 +1033,7 @@ class APIService: ObservableObject {
     oldRuntime.cancel()
     releaseSessionScopeIfNeeded(for: nextState)
     invalidateAllSessionCaches()
-    if oldUIIdentity != nextState.uiIdentity {
+    if oldUIIdentity != nextState.uiIdentity || oldBaseURL != nextState.baseURL {
       settings = nil
     }
   }
@@ -2982,7 +2992,7 @@ class APIService: ObservableObject {
   func saveSubscription(_ subscribe: Subscribe) async throws -> (
     success: Bool, message: String?
   ) {
-    let body = try JSONEncoder().encode(subscribe)
+    let body = try JSONEncoder().encode(SubscriptionWriteDTO(subscribe))
     let endpoint = "/subscribe/"
     // 如果存在 ID，则很可能是更新 (PUT)，但 API 可能同时处理 POST 或有其他逻辑。
     // 基于 Vue：更新是 PUT /subscribe/，创建是 POST /subscribe/ (或默认配置)
@@ -3111,6 +3121,17 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/ForkSubscribeDialog.vue (doFork)
   /// - 应用场景: 在"订阅分享"中，点击"复用"按钮，基于分享的配置创建一个新的个人订阅。
   func forkSubscription(share: SubscribeShare) async throws -> Int {
+    let snapshot = sessionSnapshot()
+    if MoviePilotVersion(settings?.BACKEND_VERSION) == nil {
+      _ = try await fetchSettings()
+      guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
+    }
+    guard MoviePilotVersion(settings?.BACKEND_VERSION) != nil else {
+      throw BackendCapabilityError.unavailable("无法确认后端版本，暂不能安全复用订阅。请刷新连接信息后重试，普通订阅与编辑仍可使用。")
+    }
+    if let reason = backendContract.subscriptionForkUnavailableReason {
+      throw BackendCapabilityError.unavailable(reason)
+    }
     let body = try JSONEncoder().encode(share)
     let data = try await makeRequest(
       endpoint: "/subscribe/fork",
@@ -3189,7 +3210,11 @@ class APIService: ObservableObject {
   /// - 应用场景: 编辑订阅前获取完整订阅配置
   func fetchSubscription(id: Int) async throws -> Subscribe {
     let data = try await makeRequest(endpoint: "/subscribe/\(id)")
-    return try await decodeOrUnwrap(Subscribe.self, from: data)
+    let subscription = try await decodeOrUnwrap(Subscribe.self, from: data)
+    guard id > 0, subscription.id == id else {
+      throw APIError.serverMessage("订阅详情缺少匹配的有效 ID，请刷新后重试")
+    }
+    return subscription
   }
 
   /// 查询特定媒体（及特定季）命中的订阅摘要
@@ -3237,17 +3262,14 @@ class APIService: ObservableObject {
       // 遵循 Vue 逻辑，如果无法生成媒体身份，则不发起请求
       return nil
     }
-    let usesVideoMetadataFallback = includeVideoMetadataFallback
-      && (media.type == "电影" || media.type == "电视剧")
     let endpoint = try endpointForMediaIdentity(
       pathPrefix: "/subscribe/media",
       identity: identity,
-      extraParams: [
-        "season": season.map(String.init),
-        "title": media.title,
-        "year": usesVideoMetadataFallback ? media.year : nil,
-        "mtype": usesVideoMetadataFallback ? media.type : nil,
-      ]
+      extraParams: backendContract.subscriptionLookupParameters(
+        media: media,
+        season: season,
+        includeVideoMetadataFallback: includeVideoMetadataFallback
+      )
     )
     let data = try await makeRequest(endpoint: endpoint)
     let resp = try await decodeOrUnwrap(SubscribeLookupResp.self, from: data)

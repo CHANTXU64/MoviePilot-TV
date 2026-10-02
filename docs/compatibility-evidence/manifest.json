@@ -1,0 +1,89 @@
+{
+  "scope": "Isolated schema/response-serialization checks. No live backend, DB, login or mutation verification.",
+  "python": "3.12.14",
+  "dependencies": {
+    "fastapi": "0.141.1",
+    "pydantic": "2.13.4",
+    "httpx": "0.28.1",
+    "typing_extensions": "4.16.0",
+    "starlette": "1.6.0"
+  },
+  "results": [
+    {
+      "tag": "v3.0.4",
+      "backend_commit": "e195cc164fc8ff869ffee0ea44a49c7ec475310c",
+      "frontend_tag": "v3.0.4",
+      "fixture": "v3.0.4.json",
+      "source_sha256": {
+        "app/schemas/types.py": "cdcccad9cee32355d619b8d06bffcf55504d84d45871158da0dec37a1c2749d5",
+        "app/schemas/media.py": "c3ae68743cdb43090a0182d6180709ad0762e7cb998a133bcaabf59528b41d0e",
+        "app/schemas/common.py": "2f32b505d821c9a541097cc21cf2777852c2160046b33adc30f710ed91e119c6",
+        "app/schemas/response.py": "2e95d14016125a5d2456baa58912b0d456bb02674304db6a1b12fa5334a751e0",
+        "app/schemas/subscribe.py": "95b2a6755575ac7ed403b6795b68f0daee41b1034e1ff3cf2453e370d0433099",
+        "app/schemas/category.py": "d9f1733d0f7a8c46c387ff81cc228b4043e68275f1a961aad365c06a620bacdf",
+        "app/schemas/music.py": "1478e62c9e38c56f2118debf0711a96f7f98e59a9b9485fd651c56ff64977c23",
+        "app/schemas/context.py": "3da9579fcd7abbcd040e336c2990572f3232d9cc657d63d39f5b33ce35bb88cb",
+        "app/api/response.py": "e2f8405312f36f45e02b8fcd67648e9ac9815e714637f71567441ad250f522d4"
+      },
+      "fork_status": 500,
+      "subscription_field_count": 58
+    },
+    {
+      "tag": "v3.0.5",
+      "backend_commit": "ce3489ae75ff06119f076550f72df57e6f92a6bf",
+      "frontend_tag": "v3.0.5",
+      "fixture": "v3.0.5.json",
+      "source_sha256": {
+        "app/schemas/types.py": "cdcccad9cee32355d619b8d06bffcf55504d84d45871158da0dec37a1c2749d5",
+        "app/schemas/media.py": "c3ae68743cdb43090a0182d6180709ad0762e7cb998a133bcaabf59528b41d0e",
+        "app/schemas/common.py": "2f32b505d821c9a541097cc21cf2777852c2160046b33adc30f710ed91e119c6",
+        "app/schemas/response.py": "2e95d14016125a5d2456baa58912b0d456bb02674304db6a1b12fa5334a751e0",
+        "app/schemas/subscribe.py": "95b2a6755575ac7ed403b6795b68f0daee41b1034e1ff3cf2453e370d0433099",
+        "app/schemas/category.py": "d9f1733d0f7a8c46c387ff81cc228b4043e68275f1a961aad365c06a620bacdf",
+        "app/schemas/music.py": "1478e62c9e38c56f2118debf0711a96f7f98e59a9b9485fd651c56ff64977c23",
+        "app/schemas/context.py": "3da9579fcd7abbcd040e336c2990572f3232d9cc657d63d39f5b33ce35bb88cb",
+        "app/api/response.py": "e2f8405312f36f45e02b8fcd67648e9ac9815e714637f71567441ad250f522d4"
+      },
+      "fork_status": 200,
+      "subscription_field_count": 58
+    },
+    {
+      "tag": "v3.0.10-1",
+      "backend_commit": "0aa857173f77de31c7c8d9d2e12052d99f37bcc1",
+      "frontend_tag": "v3.0.10",
+      "fixture": "v3.0.10-1.json",
+      "source_sha256": {
+        "app/schemas/types.py": "556407dff01f77ecf4e256651158a1417fdcc8fe74e8d5212a06cb68266f61de",
+        "app/schemas/media.py": "c3ae68743cdb43090a0182d6180709ad0762e7cb998a133bcaabf59528b41d0e",
+        "app/schemas/common.py": "2f32b505d821c9a541097cc21cf2777852c2160046b33adc30f710ed91e119c6",
+        "app/schemas/response.py": "2e95d14016125a5d2456baa58912b0d456bb02674304db6a1b12fa5334a751e0",
+        "app/schemas/subscribe.py": "95b2a6755575ac7ed403b6795b68f0daee41b1034e1ff3cf2453e370d0433099",
+        "app/schemas/category.py": "d9f1733d0f7a8c46c387ff81cc228b4043e68275f1a961aad365c06a620bacdf",
+        "app/schemas/music.py": "1478e62c9e38c56f2118debf0711a96f7f98e59a9b9485fd651c56ff64977c23",
+        "app/schemas/context.py": "3da9579fcd7abbcd040e336c2990572f3232d9cc657d63d39f5b33ce35bb88cb",
+        "app/api/response.py": "e2f8405312f36f45e02b8fcd67648e9ac9815e714637f71567441ad250f522d4"
+      },
+      "fork_status": 200,
+      "subscription_field_count": 58
+    },
+    {
+      "tag": "v3.1.0",
+      "backend_commit": "31537bb89dddd3813037c05c4ed0fb939c885813",
+      "frontend_tag": "v3.1.0",
+      "fixture": "v3.1.0.json",
+      "source_sha256": {
+        "app/schemas/types.py": "2c4c0a3f73579f4ca4b888ef5773302f7d46fd955d2b3d95883c97f6bf01afc9",
+        "app/schemas/media.py": "c3ae68743cdb43090a0182d6180709ad0762e7cb998a133bcaabf59528b41d0e",
+        "app/schemas/common.py": "2f32b505d821c9a541097cc21cf2777852c2160046b33adc30f710ed91e119c6",
+        "app/schemas/response.py": "2e95d14016125a5d2456baa58912b0d456bb02674304db6a1b12fa5334a751e0",
+        "app/schemas/subscribe.py": "95b2a6755575ac7ed403b6795b68f0daee41b1034e1ff3cf2453e370d0433099",
+        "app/schemas/category.py": "d9f1733d0f7a8c46c387ff81cc228b4043e68275f1a961aad365c06a620bacdf",
+        "app/schemas/music.py": "19ed2ffe2900885afcebb73153d7a80c2fc4f30193c6a1de54b3166e00bf06b6",
+        "app/schemas/context.py": "3da9579fcd7abbcd040e336c2990572f3232d9cc657d63d39f5b33ce35bb88cb",
+        "app/api/response.py": "2ed1a713c2590fee911e7d7417192a60d11b49e733988ce7d3bd0b5d407d7c9d"
+      },
+      "fork_status": 200,
+      "subscription_field_count": 58
+    }
+  ]
+}

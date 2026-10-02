@@ -256,6 +256,39 @@ final class ReorganizeViewModelTests: XCTestCase {
     XCTAssertEqual(viewModel.previewData?.message, "refreshed-preview")
   }
 
+  func testPreviewRetainsSamePathsFromDifferentV310Storages() async throws {
+    let items = try JSONDecoder().decode([ManualTransferPreviewItem].self, from: Data(
+      #"[{"source":"/same.mkv","target":"/target.mkv","success":true,"source_storage":"local"},{"source":"/same.mkv","target":"/target.mkv","success":true,"source_storage":"alist"},{"source":"/same.mkv","target":"/target.mkv","success":true,"source_storage":"local"}]"#.utf8))
+    let service = APIService.isolatedTestingInstance()
+    service.currentUserForTesting = Token(
+      access_token: "preview-storage-token", token_type: "bearer",
+      super_user: FlexibleBool(true), permissions: nil, user_id: 902,
+      user_name: "preview-storage", avatar: nil)
+    let viewModel = ReorganizeViewModel(
+      logIds: [1, 2], fileItem: nil,
+      previewRequest: { _ in
+        ManualTransferPreviewData(
+          summary: ManualTransferPreviewSummary(total: 3, success: 3, failed: 0),
+          items: items, message: nil)
+      }, apiService: service)
+
+    let outcome = await viewModel.preview()
+
+    XCTAssertEqual(outcome, .generated(allSucceeded: true))
+    XCTAssertEqual(viewModel.previewData?.items.map(\.source_storage), ["local", "alist"])
+    XCTAssertEqual(viewModel.previewData?.summary.total, 2)
+  }
+
+  func testPreviewStorageFallbackAndOldDTOStayDecodable() throws {
+    let old = try JSONDecoder().decode(ManualTransferPreviewItem.self, from: Data(
+      #"{"source":"/same.mkv","target":"/target.mkv","success":true}"#.utf8))
+    XCTAssertNil(old.source_storage)
+    XCTAssertNil(old.source_item)
+    let current = try JSONDecoder().decode(ManualTransferPreviewItem.self, from: Data(
+      #"{"source":"/same.mkv","target":"/target.mkv","success":true,"source_item":{"storage":"alist","type":"file","path":"/same.mkv","name":"same.mkv"}}"#.utf8))
+    XCTAssertEqual(current.source_item?.storage, "alist")
+  }
+
   private func directory(path: String, storage: String) -> TransferDirectoryConf {
     TransferDirectoryConf(
       name: "电影",

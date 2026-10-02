@@ -1546,15 +1546,25 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
   /// 订阅ID
   var id: Int?
   /// 订阅名称
-  var name: String
+  var name: String {
+    didSet { markWriteField(.name) }
+  }
   /// 订阅年份
-  var year: String?
+  var year: String? {
+    didSet { markWriteField(.year) }
+  }
   /// 订阅类型 电影/电视剧
-  var type: String
+  var type: String {
+    didSet { markWriteField(.type) }
+  }
   /// 搜索关键字
-  var keyword: String?
+  var keyword: String? {
+    didSet { markWriteField(.keyword) }
+  }
   /// 季号
-  var season: Int?
+  var season: Int? {
+    didSet { markWriteField(.season) }
+  }
   /// 海报
   var poster: String?
   // 背景图
@@ -1570,14 +1580,18 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
   /// 创建时间
   var date: String?
   /// 总集数
-  var total_episode: Int?
+  var total_episode: Int? {
+    didSet { markWriteField(.total_episode) }
+  }
   /// 开始集数
-  var start_episode: Int?
+  var start_episode: Int? {
+    didSet { markWriteField(.start_episode) }
+  }
   /// 缺失集数
   var lack_episode: Int?
   /// 已完成集数，后端响应派生字段，保存订阅时不写回。
   var completed_episode: Int?
-  /// 后端维护的已下载/状态附加信息，保存原详情时需要原样保留。
+  /// 后端维护的已下载/状态附加信息；公共写入 DTO 不发送。
   var note: JSONValue?
   /// TMDB ID
   var tmdbid: Int?
@@ -1588,71 +1602,157 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
   /// AniList ID
   var anilistid: Int?
   /// 统一媒体来源
-  var media_source: String?
+  var media_source: String? {
+    didSet { markWriteField(.media_source) }
+  }
   /// 来源原生 ID
-  var media_id: String?
+  var media_id: String? {
+    didSet { markWriteField(.media_id) }
+  }
   /// 质量
-  var quality: String?
+  var quality: String? {
+    didSet { markWriteField(.quality) }
+  }
   /// 分辨率
-  var resolution: String?
+  var resolution: String? {
+    didSet { markWriteField(.resolution) }
+  }
   /// 特效
-  var effect: String?
+  var effect: String? {
+    didSet { markWriteField(.effect) }
+  }
   /// 包含
-  var include: String?
+  var include: String? {
+    didSet { markWriteField(.include) }
+  }
   /// 排除
-  var exclude: String?
+  var exclude: String? {
+    didSet { markWriteField(.exclude) }
+  }
   /// 订阅站点
-  var sites: [Int]?
+  var sites: [Int]? {
+    didSet { markWriteField(.sites) }
+  }
   /// 下载器
-  var downloader: String?
+  var downloader: String? {
+    didSet { markWriteField(.downloader) }
+  }
   /// 保存目录
-  var save_path: String?
+  var save_path: String? {
+    didSet { markWriteField(.save_path) }
+  }
   /// 是否洗版 (后端返回 0/1 整数作为布尔值使用)
-  var best_version: Int?
+  var best_version: Int? {
+    didSet { markWriteField(.best_version) }
+  }
   /// 是否仅洗全集 (后端返回 0/1 整数作为布尔值使用)
-  var best_version_full: Int?
-  /// 当前洗版优先级，后端维护，保存订阅时需要原样保留。
+  var best_version_full: Int? {
+    didSet { markWriteField(.best_version_full) }
+  }
+  /// 当前洗版优先级，后端维护；公共写入 DTO 不发送。
   var current_priority: Int?
   /// 过滤规则组
-  var filter_groups: [String]?
+  var filter_groups: [String]? {
+    didSet { markWriteField(.filter_groups) }
+  }
   /// 自定义识别词
-  var custom_words: String?
+  var custom_words: String? {
+    didSet { markWriteField(.custom_words) }
+  }
   /// 描述
   var description: String?
   /// 用户可编辑的过滤规则配置；编辑保存时保留或更新。
-  var filter: String?
+  var filter: String? {
+    didSet { markWriteField(.filter) }
+  }
   /// 自定义剧集组
-  var episode_group: String?
+  var episode_group: String? {
+    didSet { markWriteField(.episode_group) }
+  }
   /// 使用 imdbid 搜索
-  var search_imdbid: Int?
+  var search_imdbid: Int? {
+    didSet { markWriteField(.search_imdbid) }
+  }
   /// 自定义媒体类别
-  var media_category: String?
+  var media_category: String? {
+    didSet { markWriteField(.media_category) }
+  }
 
   /// 媒体ID标识 (如 tmdb:1234)
   var mediaid: String?
-  /// 洗版订阅的剧集优先级状态，保存原详情时需要原样保留。
+  /// 洗版订阅的剧集优先级状态；公共写入 DTO 不发送。
   var episode_priority: [String: Int]?
+
+  /// 定时搜索间隔（小时），nil 跟随系统设置
+  var search_interval: Int? {
+    didSet { markWriteField(.search_interval) }
+  }
+  /// 音乐实体类型：recording 单曲、album 专辑
+  var music_type: String? {
+    didSet { markWriteField(.music_type) }
+  }
+  /// 专辑预期总曲目数
+  var total_tracks: Int? {
+    didSet { markWriteField(.total_tracks) }
+  }
+  /// 音乐音质等级
+  var audio_quality: String? {
+    didSet { markWriteField(.audio_quality) }
+  }
+  /// 音频格式正则
+  var audio_format: String? {
+    didSet { markWriteField(.audio_format) }
+  }
+  /// 最低码率（bps）
+  var min_bitrate: Int? {
+    didSet { markWriteField(.min_bitrate) }
+  }
+  /// 最低位深（bit）
+  var min_bit_depth: Int? {
+    didSet { markWriteField(.min_bit_depth) }
+  }
+  /// 最低采样率（Hz）
+  var min_sample_rate: Int? {
+    didSet { markWriteField(.min_sample_rate) }
+  }
+  /// 自定义媒体类别稳定标识
+  var media_category_id: String? {
+    didSet { markWriteField(.media_category_id) }
+  }
+
+  /// 只保存键的存在性和编辑意图，不保存或透传原始 JSON。缺键与显式 null 的 PUT 语义不同。
+  private(set) var writeFieldPresence: Set<CodingKeys> = []
+  private(set) var editedWriteFields: Set<CodingKeys> = []
+  private(set) var decodedNullWriteFields: Set<CodingKeys> = []
+  /// 分类路径编辑时不能继续发送旧稳定 ID；恢复原路径则仍保留原 ID。
+  private(set) var originalMediaCategory: String?
+
+  private mutating func markWriteField(_ key: CodingKeys) {
+    editedWriteFields.insert(key)
+  }
 
   /// 图片 URL 在主线程按当前图片设置计算，避免后台 JSON 解码访问主线程 APIService。
   @MainActor var imageURLs: ImageURLs {
     ImageURLs(poster: APIService.shared.getSubscribePosterImageUrl(poster: poster))
   }
 
-  enum CodingKeys: String, CodingKey {
+  enum CodingKeys: String, CodingKey, Hashable {
     case id, name, year, type, keyword, season, poster, backdrop, state, last_update,
       vote, total_episode, start_episode, lack_episode, completed_episode, note, tmdbid, doubanid,
       bangumiid, anilistid, media_source, media_id,
       quality, resolution, effect, include, exclude, sites, downloader, save_path, best_version,
       best_version_full, current_priority, filter_groups, custom_words, description, filter,
-      episode_group, search_imdbid, media_category, mediaid, episode_priority, username, date
+      episode_group, search_imdbid, media_category, mediaid, episode_priority, username, date,
+      search_interval, music_type, total_tracks, audio_quality, audio_format, min_bitrate,
+      min_bit_depth, min_sample_rate, media_category_id
   }
 
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     id = try container.decodeIfPresent(Int.self, forKey: .id)
-    name = try container.decode(String.self, forKey: .name)
+    name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
     year = try container.decodeIfPresent(String.self, forKey: .year)
-    type = try container.decode(String.self, forKey: .type)
+    type = try container.decodeIfPresent(String.self, forKey: .type) ?? ""
     keyword = try container.decodeIfPresent(String.self, forKey: .keyword)
     season = try container.decodeIfPresent(Int.self, forKey: .season)
     poster = try container.decodeIfPresent(String.self, forKey: .poster)
@@ -1700,6 +1800,22 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
     media_category = try container.decodeIfPresent(String.self, forKey: .media_category)
     mediaid = try container.decodeIfPresent(String.self, forKey: .mediaid)
     episode_priority = try container.decodeIfPresent([String: Int].self, forKey: .episode_priority)
+    search_interval = try container.decodeIfPresent(Int.self, forKey: .search_interval)
+    music_type = try container.decodeIfPresent(String.self, forKey: .music_type)
+    total_tracks = try container.decodeIfPresent(Int.self, forKey: .total_tracks)
+    audio_quality = try container.decodeIfPresent(String.self, forKey: .audio_quality)
+    audio_format = try container.decodeIfPresent(String.self, forKey: .audio_format)
+    min_bitrate = try container.decodeIfPresent(Int.self, forKey: .min_bitrate)
+    min_bit_depth = try container.decodeIfPresent(Int.self, forKey: .min_bit_depth)
+    min_sample_rate = try container.decodeIfPresent(Int.self, forKey: .min_sample_rate)
+    media_category_id = try container.decodeIfPresent(String.self, forKey: .media_category_id)
+    writeFieldPresence = Set(container.allKeys)
+    for key in container.allKeys {
+      if try container.decodeNil(forKey: key) {
+        decodedNullWriteFields.insert(key)
+      }
+    }
+    originalMediaCategory = media_category
 
   }
 
@@ -1753,6 +1869,15 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
     try encodeUserClearableString(media_category, forKey: .media_category, to: &container)
     try container.encodeIfPresent(mediaid, forKey: .mediaid)
     try container.encodeIfPresent(episode_priority, forKey: .episode_priority)
+    try container.encodeIfPresent(search_interval, forKey: .search_interval)
+    try container.encodeIfPresent(music_type, forKey: .music_type)
+    try container.encodeIfPresent(total_tracks, forKey: .total_tracks)
+    try container.encodeIfPresent(audio_quality, forKey: .audio_quality)
+    try container.encodeIfPresent(audio_format, forKey: .audio_format)
+    try container.encodeIfPresent(min_bitrate, forKey: .min_bitrate)
+    try container.encodeIfPresent(min_bit_depth, forKey: .min_bit_depth)
+    try container.encodeIfPresent(min_sample_rate, forKey: .min_sample_rate)
+    try container.encodeIfPresent(media_category_id, forKey: .media_category_id)
   }
 
   /// 已落库订阅的更新必须区分“未提交”和“用户明确清空”。
@@ -1827,7 +1952,10 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
     save_path: String? = nil, filter_groups: [String]? = nil,
     custom_words: String? = nil, description: String? = nil,
     search_imdbid: Int? = nil, media_category: String? = nil, mediaid: String? = nil,
-    episode_priority: [String: Int]? = nil, current_priority: Int? = nil, filter: String? = nil
+    episode_priority: [String: Int]? = nil, current_priority: Int? = nil, filter: String? = nil,
+    search_interval: Int? = nil, music_type: String? = nil, total_tracks: Int? = nil,
+    audio_quality: String? = nil, audio_format: String? = nil, min_bitrate: Int? = nil,
+    min_bit_depth: Int? = nil, min_sample_rate: Int? = nil, media_category_id: String? = nil
   ) {
     self.id = id
     self.name = name
@@ -1873,6 +2001,18 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
     self.media_category = media_category
     self.mediaid = mediaid
     self.episode_priority = episode_priority
+    self.search_interval = search_interval
+    self.music_type = music_type
+    self.total_tracks = total_tracks
+    self.audio_quality = audio_quality
+    self.audio_format = audio_format
+    self.min_bitrate = min_bitrate
+    self.min_bit_depth = min_bit_depth
+    self.min_sample_rate = min_sample_rate
+    self.media_category_id = media_category_id
+    // 手动构造时默认 nil 表示未提供；构造后显式赋 nil 才表达清空。
+    self.writeFieldPresence = [.name, .type]
+    self.originalMediaCategory = media_category
 
   }
 
@@ -3088,6 +3228,11 @@ nonisolated struct ManualTransferPreviewSummary: Codable, Hashable {
   let failed: Int
 }
 
+/// 手动整理预览的来源对象只投影用于寻址的存储域。
+nonisolated struct ManualTransferPreviewSourceItem: Codable, Hashable {
+  let storage: String?
+}
+
 nonisolated struct ManualTransferPreviewItem: Codable, Hashable {
   let source: String?
   let target: String?
@@ -3104,6 +3249,9 @@ nonisolated struct ManualTransferPreviewItem: Codable, Hashable {
   let apply_words: [String]?
   let resource_team: String?
   let customization: String?
+  /// v3.1 起提供来源存储域，用于区分同路径的跨存储预览项。
+  var source_storage: String? = nil
+  var source_item: ManualTransferPreviewSourceItem? = nil
 }
 
 nonisolated struct ManualTransferPreviewData: Codable, Hashable {

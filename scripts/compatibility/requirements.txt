@@ -1,0 +1,6 @@
+# Tested isolated probe dependencies; not a MoviePilot production environment.
+fastapi==0.141.1
+pydantic==2.13.4
+httpx==0.28.1
+typing_extensions==4.16.0
+starlette==1.6.0

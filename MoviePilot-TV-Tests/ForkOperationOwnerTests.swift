@@ -173,6 +173,7 @@ private func configureForkOwnerUser(_ service: APIService) {
     user_name: "fork-owner",
     avatar: nil
   )
+  service.settings = GlobalSettings(BACKEND_VERSION: "v3.0.10-1")
 }
 
 @MainActor
