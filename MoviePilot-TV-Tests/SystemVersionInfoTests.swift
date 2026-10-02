@@ -68,15 +68,16 @@ final class SystemVersionInfoTests: XCTestCase {
   }
 
   func testProductionRegistryDoesNotInventExecutionOrLiveEvidence() throws {
+    XCTAssertEqual(BackendCompatibilityRegistry.current.revision, "2026-10-02.2")
     XCTAssertNil(BackendCompatibilityRegistry.current.latestValidatedVersion)
     for record in BackendCompatibilityRegistry.current.records {
       XCTAssertTrue(record.sourceReview.isVerified)
-      XCTAssertFalse(record.fixtureValidation.isVerified)
+      XCTAssertTrue(record.fixtureValidation.isVerified)
       XCTAssertFalse(record.liveValidation.isVerified)
       XCTAssertFalse(record.isFullyValidated)
       let warning = try XCTUnwrap(BackendVersionWarning(backendVersion: record.version.description))
       XCTAssertEqual(warning.title, "MoviePilot 后端兼容性待验证")
-      XCTAssertTrue(warning.message.contains("合同 fixture 待执行"))
+      XCTAssertTrue(warning.message.contains("合同 fixture 已通过"))
       XCTAssertTrue(warning.message.contains("真实后端未实测"))
       XCTAssertTrue(warning.message.contains("暂无已验证升级目标"))
       XCTAssertFalse(warning.message.contains("不支持"))

@@ -23,10 +23,19 @@
 三类运行时证据分别记录：
 
 1. `sourceReview`：上述标签及配套 Web 的 TV 可达端点、订阅公开可写字段、分类引用、fork、lookup 和整理预览源码合同已审查
-2. `fixtureValidation`：必须记录 Swift fixture/URLProtocol 测试实际执行结果；当前云端没有 Swift/Xcode，暂为 pending。测试代码存在不算测试通过
+2. `fixtureValidation`：必须记录 Swift fixture/URLProtocol 测试实际执行结果；本次 Mac/Xcode 验收见 [Mac验收-2026-10-02](#mac验收-2026-10-02)，只覆盖离线 fixture，不代替 `liveValidation`。测试代码存在不算测试通过
 3. `liveValidation`：必须记录确切后端版本、环境、日期、只读/副作用范围和实际结果；本次未连接真实 MoviePilot 实例，全部 pending
 
 本次另外执行了隔离的 Python 源码模型/响应序列化验证，其原始证据在 [compatibility-evidence/manifest.json](compatibility-evidence/manifest.json)。该检查实际加载官方 schema 与 ResponseAPIRouter，但使用本地无害计数器替代创建订阅，不启动 MoviePilot、不登录、不访问数据库，也不代表 Swift 或真实实例验收。v3.0.4 返回本地 500 且计数器已增加；v3.0.5、v3.0.10-1、v3.1.0 返回有效 ID。fixture 的来源、固定 commit、SHA256、Python/依赖版本均随文件保存。
+
+## Mac验收-2026-10-02
+
+本次测试修正提交为 `438f6338eb55d2c668703f0b6b776e4af192fc81`。在 Xcode 27.0 (`27A266`)、`platform=tvOS Simulator,name=Apple TV,OS=18.5`（tvOS 18.5）上执行，结果如下：
+
+- 兼容性定向测试：165/165 通过，0 失败，0 跳过；结果包为 `.build/results/backend-compatibility-targeted-final.xcresult`。
+- 完整适用测试：1377/1377 通过，0 失败，0 跳过；结果包为 `.build/results/backend-compatibility-full-applicable.xcresult`。
+- 完整适用测试明确排除 `BackendCompatibilityPermissionBehaviorTests`（1 个方法）、`BackendCompatibilityReadOnlyTests`（11 个方法）和 `BackendCompatibilitySideEffectTests`（6 个方法），合计 18 个真实后端方法。
+- 两次执行均使用 Swift fixture、URLProtocol 和本地测试替身，不访问真实 MoviePilot 后端或凭据；Python 源码探针同样不构成真实后端实测。因此本节只为四个登记节点提供 `fixtureValidation` 证据，`liveValidation` 全部保持 pending。
 
 主要上游证据：
 
@@ -76,4 +85,4 @@ python3 -m venv .venv-contract
 
 云端实际通过：官方 schema/本地响应序列化探针、`python3 -m unittest discover -s scripts/tests -p 'test_backend_contract_probe.py'`（4 项证据回归）、JSON 证据可解析、`git diff --check`。探针会产生 Starlette 关于未来 HTTPX 迁移的弃用提示，不影响本次断言。
 
-未运行：Swift 编译、XCTest、tvOS Simulator、真实 MoviePilot 实例。合并前必须在 Mac/Xcode 补跑标准完整构建与测试；没有真实后端配置时应保持 liveValidation pending，不能改成 verified。
+Mac/Xcode 的离线 fixture 验收已按上节记录完成，四个登记节点的 `fixtureValidation` 可标记为 verified。真实 MoviePilot 实例仍未连接，`liveValidation` 全部 pending；因此 `isFullyValidated` 和 `latestValidatedVersion` 仍不会因本次 fixture 回归而变为已验证。没有真实后端配置时继续保持该门槛，不能改成 verified。
