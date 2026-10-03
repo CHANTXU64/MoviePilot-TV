@@ -292,7 +292,7 @@ class ContentViewModel: ObservableObject {
     do {
       let settings = try await apiService.fetchSettings()
       guard currentBackendVersionCheckKey() == checkKey else { return }
-      // 每次刷新重新评估精确版本；同一登记证据的已确认提示由持久化记录去重。
+      // 每次刷新重新评估精确版本；同一服务器、同一后端版本的已确认提示由持久化记录去重。
       presentBackendVersionWarning(
         Self.backendVersionWarning(for: settings.BACKEND_VERSION, registry: compatibilityRegistry),
         baseURL: checkKey.baseURL

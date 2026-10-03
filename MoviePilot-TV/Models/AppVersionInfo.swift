@@ -1,12 +1,12 @@
 import Foundation
 
 enum AppVersionInfo {
-  nonisolated static var minimumMaintainedMoviePilotVersion: String {
-    BackendCompatibilityRegistry.current.minimumMaintainedVersion.description
+  nonisolated static var minimumCompatibleMoviePilotVersion: String {
+    BackendCompatibilityRegistry.current.minimumVersion.description
   }
 
-  nonisolated static var latestRegisteredMoviePilotVersion: String {
-    BackendCompatibilityRegistry.current.latestRegisteredVersion?.description ?? "暂无登记"
+  nonisolated static var latestCompatibleMoviePilotVersion: String {
+    BackendCompatibilityRegistry.current.latestVersion.description
   }
 
   nonisolated static func currentAppVersion(bundle: Bundle = .main) -> String {
@@ -21,24 +21,53 @@ enum AppVersionInfo {
     return trimmedVersion.hasPrefix("v") ? trimmedVersion : "v\(trimmedVersion)"
   }
 
-  nonisolated static func compareMoviePilotVersion(_ lhs: String?, to rhs: String) -> ComparisonResult? {
-    guard let lhs = MoviePilotVersion(lhs), let rhs = MoviePilotVersion(rhs) else { return nil }
-    if lhs < rhs { return .orderedAscending }
-    if lhs > rhs { return .orderedDescending }
+  /// 比较 MoviePilot-TV 自身的版本号（更新说明使用）。App 版本可能只有两段，
+  /// 缺少的段按 0 处理；不能用只接受三段的 MoviePilot 后端版本解析。
+  nonisolated static func compareAppVersion(_ lhs: String?, to rhs: String) -> ComparisonResult? {
+    guard let lhsComponents = appVersionComponents(lhs),
+      let rhsComponents = appVersionComponents(rhs)
+    else { return nil }
+    let length = max(lhsComponents.count, rhsComponents.count)
+    for index in 0..<length {
+      let lhsValue = index < lhsComponents.count ? lhsComponents[index] : 0
+      let rhsValue = index < rhsComponents.count ? rhsComponents[index] : 0
+      if lhsValue < rhsValue { return .orderedAscending }
+      if lhsValue > rhsValue { return .orderedDescending }
+    }
     return .orderedSame
+  }
+
+  nonisolated private static func appVersionComponents(_ version: String?) -> [Int]? {
+    guard let version else { return nil }
+    var normalized = version.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    guard !normalized.isEmpty, normalized != "未知" else { return nil }
+    if normalized.hasPrefix("v") { normalized.removeFirst() }
+    let core = normalized.split(
+      omittingEmptySubsequences: false,
+      whereSeparator: { $0 == "-" || $0 == "+" || $0 == " " }
+    ).first
+    guard let core, core.first?.isNumber == true else { return nil }
+    let components = core.split(separator: ".", omittingEmptySubsequences: false).map { part -> Int? in
+      guard !part.isEmpty, part.allSatisfy(\.isNumber) else { return nil }
+      return Int(part)
+    }
+    guard components.allSatisfy({ $0 != nil }) else { return nil }
+    let numericComponents = components.compactMap { $0 }
+    return numericComponents.isEmpty ? nil : numericComponents
   }
 }
 
+/// 已登记的兼容版本不提示；其余情况提示一次，确认后同一服务器的同一后端版本不再提示。
 nonisolated struct BackendVersionWarning: Identifiable, Equatable {
   let backendVersion: String?
-  let assessment: BackendCompatibilityAssessment
+  let status: BackendCompatibilityStatus
   private let registry: BackendCompatibilityRegistry
 
   init?(backendVersion: String?, registry: BackendCompatibilityRegistry = .current) {
-    let assessment = registry.assessment(for: backendVersion)
-    guard !assessment.isFullyValidated || assessment.record?.limitations.isEmpty == false else { return nil }
+    let status = registry.status(for: backendVersion)
+    guard status != .registered else { return nil }
     self.backendVersion = backendVersion
-    self.assessment = assessment
+    self.status = status
     self.registry = registry
   }
 
@@ -49,60 +78,41 @@ nonisolated struct BackendVersionWarning: Identifiable, Equatable {
     return trimmed
   }
 
+  /// 只由后端版本决定：新增兼容版本或修改提示文字都不会让已确认的同一版本重新提示。
   var id: String {
-    let version = assessment.version?.description ?? normalizedBackendVersion ?? "unknown"
-    return "\(version)|\(assessment.status.rawValue)|\(registry.acknowledgementIdentity)"
+    MoviePilotVersion(backendVersion)?.description ?? normalizedBackendVersion ?? "unknown"
   }
 
   var title: String {
-    switch assessment.status {
-    case .belowMinimum: return "MoviePilot 后端版本低于维护下限"
-    case .unregistered: return "MoviePilot 后端版本尚未登记"
-    case .newerThanRegistry: return "MoviePilot 后端版本高于最新登记"
+    switch status {
+    case .belowMinimum: return "MoviePilot 后端版本过低"
+    case .unregistered: return "MoviePilot 后端版本尚未核对"
+    case .newerThanRegistry: return "MoviePilot 后端版本较新"
     case .unparseable: return "无法确认 MoviePilot 后端版本"
-    case .registered:
-      return assessment.isFullyValidated ? "MoviePilot 后端兼容性提示" : "MoviePilot 后端兼容性待验证"
+    case .registered: return "MoviePilot 后端版本"
     }
   }
 
   var message: String {
     var lines = ["当前后端版本：\(normalizedBackendVersion ?? "无法确认")"]
-    switch assessment.status {
+    switch status {
     case .belowMinimum:
-      lines.append("低于最早维护版本 \(registry.minimumMaintainedVersion)，不在当前维护范围内。")
+      lines.append("MoviePilot-TV 最早兼容 \(registry.minimumVersion)，低版本后端可能出现功能异常，建议升级后端。")
     case .unregistered:
-      lines.append("该精确版本未登记，不能依据版本区间确认兼容。")
+      lines.append("该版本尚未核对兼容性。已兼容的版本：\(compatibleVersionList)。")
     case .newerThanRegistry:
-      lines.append("高于最新登记版本 \(registry.latestRegisteredVersion?.description ?? "暂无登记")，尚无该版本的兼容记录。请更新 MoviePilot-TV 客户端后重新检查兼容记录。")
+      lines.append("该版本高于已兼容的最新版本 \(registry.latestVersion)，可能存在兼容问题，可留意 MoviePilot-TV 更新。")
     case .unparseable:
-      let reason = normalizedBackendVersion == nil ? "未取得可解析的后端版本号" : "无法解析该版本号"
-      lines.append("\(reason)，预发布或未知后缀不能视为已登记的稳定版本。")
+      let reason = normalizedBackendVersion == nil ? "未取得后端版本号" : "无法识别该版本号"
+      lines.append("\(reason)，无法确认是否兼容。已兼容的版本：\(compatibleVersionList)。")
     case .registered:
-      if let record = assessment.record { lines.append(record.summary) }
+      break
     }
-    if !assessment.newerRecords.isEmpty {
-      lines.append("比当前版本更新的登记记录（不代表中间版本均兼容）：")
-      lines.append(contentsOf: assessment.newerRecords.map(\.summary))
-    } else if assessment.status == .unparseable {
-      lines.append("现有登记记录（无法与当前版本比较）：")
-      lines.append(contentsOf: registry.records.map(\.summary))
-    }
-    if let validated = registry.latestValidatedVersion {
-      if let version = assessment.version, validated > version {
-        lines.append("建议升级到已完成源码审查、合同 fixture 和真实后端实测的 \(validated)。")
-      } else {
-        lines.append("已完成上述验证的最新登记版本：\(validated)；请核对当前版本后再决定是否切换。")
-      }
-    } else {
-      lines.append("当前暂无完成全部验证的真实后端实测记录，暂无已验证升级目标。")
-      if let current = assessment.version,
-        let reviewed = registry.records.last(where: { $0.sourceReview.isVerified }),
-        reviewed.version > current
-      {
-        lines.append("如需更新，建议选择较新的源码已审查登记版本 \(reviewed.version)；其状态为：\(reviewed.validationSummary)。源码审查不能替代真实后端实测。")
-      }
-    }
-    lines.append("仍可继续使用；具体功能限制以登记说明为准。")
+    lines.append("仍可继续使用。")
     return lines.joined(separator: "\n")
+  }
+
+  private var compatibleVersionList: String {
+    registry.versions.map(\.description).joined(separator: "、")
   }
 }

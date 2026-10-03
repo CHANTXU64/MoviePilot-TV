@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 /// MoviePilot 的纯数字后缀表示稳定热修复；预发布和未知后缀不推断为稳定版本。
@@ -53,72 +52,6 @@ nonisolated struct MoviePilotVersion: Hashable, Comparable, Sendable, CustomStri
   }
 }
 
-nonisolated enum BackendContractProfile: String, Sendable {
-  case v304
-  case v30101
-}
-
-/// 三类证据互不代替。reference 指向对应版本、范围与执行结果，不能以测试源码代替执行证据。
-nonisolated enum BackendCompatibilityEvidence: Equatable, Sendable {
-  case pending
-  case verified(reference: String)
-  case failed(reference: String)
-
-  var isVerified: Bool {
-    if case .verified(let reference) = self {
-      return !reference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-    return false
-  }
-
-  fileprivate var identity: String {
-    switch self {
-    case .pending: return "pending"
-    case .verified(let reference): return "verified:\(reference)"
-    case .failed(let reference): return "failed:\(reference)"
-    }
-  }
-
-  fileprivate func summary(pending: String, verified: String, failed: String) -> String {
-    switch self {
-    case .pending: return pending
-    case .verified: return isVerified ? verified : pending
-    case .failed: return failed
-    }
-  }
-}
-
-nonisolated struct BackendCompatibilityRecord: Equatable, Sendable {
-  let version: MoviePilotVersion
-  let profile: BackendContractProfile
-  let sourceReview: BackendCompatibilityEvidence
-  let fixtureValidation: BackendCompatibilityEvidence
-  let liveValidation: BackendCompatibilityEvidence
-  let limitations: [String]
-
-  var isFullyValidated: Bool {
-    sourceReview.isVerified && fixtureValidation.isVerified && liveValidation.isVerified
-  }
-
-  var validationSummary: String {
-    [
-      sourceReview.summary(pending: "源码合同待审查", verified: "源码合同已审查", failed: "源码合同审查未通过"),
-      fixtureValidation.summary(pending: "合同 fixture 待执行", verified: "合同 fixture 已通过", failed: "合同 fixture 未通过"),
-      liveValidation.summary(pending: "真实后端未实测", verified: "真实后端实测已通过", failed: "真实后端实测未通过"),
-    ].joined(separator: "；")
-  }
-
-  var summary: String {
-    let limitationText = limitations.isEmpty ? "未登记额外限制" : limitations.joined(separator: "；")
-    return "\(version)：\(validationSummary)。限制：\(limitationText)"
-  }
-
-  fileprivate var identityComponents: [String] {
-    [version.description, profile.rawValue, sourceReview.identity, fixtureValidation.identity,
-      liveValidation.identity, String(limitations.count)] + limitations
-  }
-}
-
 nonisolated enum BackendCompatibilityStatus: String, Sendable {
   case belowMinimum
   case unregistered
@@ -127,119 +60,30 @@ nonisolated enum BackendCompatibilityStatus: String, Sendable {
   case registered
 }
 
-nonisolated struct BackendCompatibilityAssessment: Equatable, Sendable {
-  let status: BackendCompatibilityStatus
-  let version: MoviePilotVersion?
-  let record: BackendCompatibilityRecord?
-  let newerRecords: [BackendCompatibilityRecord]
-
-  /// 在维护范围内按已知合同边界选协议；有协议不等于该精确版本已登记或验证。
-  let profile: BackendContractProfile?
-  var isFullyValidated: Bool { record?.isFullyValidated == true }
-}
-
+/// 已兼容的 MoviePilot 精确版本。按官方源码核对 TV 实际用到的接口和写回字段没有影响即可登记，
+/// 不要求真实后端实测；未登记的中间版本不推断为兼容。核对依据见 docs/backend-version-compatibility.md。
 nonisolated struct BackendCompatibilityRegistry: Equatable, Sendable {
-  let revision: String
-  let minimumMaintainedVersion: MoviePilotVersion
-  let records: [BackendCompatibilityRecord]
+  let versions: [MoviePilotVersion]
 
-  init(revision: String, minimumMaintainedVersion: MoviePilotVersion, records: [BackendCompatibilityRecord]) {
-    precondition(Set(records.map(\.version)).count == records.count, "登记版本不能重复")
-    precondition(records.allSatisfy { $0.version >= minimumMaintainedVersion }, "登记版本不能低于维护下限")
-    self.revision = revision
-    self.minimumMaintainedVersion = minimumMaintainedVersion
-    self.records = records.sorted { $0.version < $1.version }
+  init(versions: [MoviePilotVersion]) {
+    precondition(!versions.isEmpty, "至少登记一个兼容版本")
+    precondition(Set(versions).count == versions.count, "兼容版本不能重复")
+    self.versions = versions.sorted()
   }
 
-  var latestRegisteredVersion: MoviePilotVersion? { records.last?.version }
-  var latestValidatedVersion: MoviePilotVersion? { records.last(where: \.isFullyValidated)?.version }
+  var minimumVersion: MoviePilotVersion { versions[0] }
+  var latestVersion: MoviePilotVersion { versions[versions.count - 1] }
 
-  func assessment(for rawVersion: String?) -> BackendCompatibilityAssessment {
-    guard let version = MoviePilotVersion(rawVersion) else {
-      return BackendCompatibilityAssessment(status: .unparseable, version: nil, record: nil, newerRecords: [], profile: nil)
-    }
-    let newerRecords = records.filter { $0.version > version }
-    let record = records.first { $0.version == version }
-    let status: BackendCompatibilityStatus
-    if version < minimumMaintainedVersion {
-      status = .belowMinimum
-    } else if record != nil {
-      status = .registered
-    } else if let latestRegisteredVersion, version > latestRegisteredVersion {
-      status = .newerThanRegistry
-    } else {
-      status = .unregistered
-    }
-    let profile: BackendContractProfile?
-    if version >= minimumMaintainedVersion, let latestRegisteredVersion, version <= latestRegisteredVersion {
-      profile = records.last(where: { $0.version <= version })?.profile
-    } else {
-      profile = nil
-    }
-    return BackendCompatibilityAssessment(status: status, version: version, record: record,
-      newerRecords: newerRecords, profile: profile)
-  }
-
-  /// 含证据内容及限制，避免维护者更新证据却漏改 revision 时仍抑制新提示。
-  var acknowledgementIdentity: String {
-    let components = [revision, minimumMaintainedVersion.description, String(records.count)]
-      + records.flatMap(\.identityComponents)
-    let payload = components.map { "\($0.utf8.count):\($0)" }.joined()
-    return SHA256.hash(data: Data(payload.utf8)).map { String(format: "%02x", $0) }.joined()
+  func status(for rawVersion: String?) -> BackendCompatibilityStatus {
+    guard let version = MoviePilotVersion(rawVersion) else { return .unparseable }
+    if versions.contains(version) { return .registered }
+    if version < minimumVersion { return .belowMinimum }
+    if version > latestVersion { return .newerThanRegistry }
+    return .unregistered
   }
 
   static let current = BackendCompatibilityRegistry(
-    revision: "2026-10-02.3",
-    minimumMaintainedVersion: MoviePilotVersion("v3.0.4")!,
-    records: [
-      BackendCompatibilityRecord(
-        version: MoviePilotVersion("v3.0.4")!,
-        profile: .v304,
-        sourceReview: .verified(
-          reference: "docs/backend-version-compatibility.md#登记与证据; MoviePilot e195cc164fc8ff869ffee0ea44a49c7ec475310c; Frontend v3.0.4; TV 使用端点、Subscribe 写回、fork、lookup、整理预览"
-        ),
-        fixtureValidation: .verified(
-          reference: "docs/backend-version-compatibility.md#mac验收-2026-10-02; current Xcode 27 tvOS 18.5 fixture run"
-        ),
-        liveValidation: .pending,
-        limitations: ["订阅复用（fork）接口存在上游响应声明问题；该问题的后端合同在 v3.0.5 修复", "兼容适配待真实后端实测"]
-      ),
-      BackendCompatibilityRecord(
-        version: MoviePilotVersion("v3.0.5")!,
-        profile: .v304,
-        sourceReview: .verified(
-          reference: "docs/backend-version-compatibility.md#登记与证据; MoviePilot ce3489ae75ff06119f076550f72df57e6f92a6bf; Frontend v3.0.5; TV 使用端点、Subscribe 写回、fork、lookup、整理预览"
-        ),
-        fixtureValidation: .verified(
-          reference: "docs/backend-version-compatibility.md#mac验收-2026-10-02; current Xcode 27 tvOS 18.5 fixture run"
-        ),
-        liveValidation: .pending,
-        limitations: ["兼容适配待真实后端实测"]
-      ),
-      BackendCompatibilityRecord(
-        version: MoviePilotVersion("v3.0.10-1")!,
-        profile: .v30101,
-        sourceReview: .verified(
-          reference: "docs/backend-version-compatibility.md#登记与证据; MoviePilot 0aa857173f77de31c7c8d9d2e12052d99f37bcc1; Frontend v3.0.10; TV 使用端点、Subscribe 写回、fork、lookup、整理预览"
-        ),
-        fixtureValidation: .verified(
-          reference: "docs/backend-version-compatibility.md#mac验收-2026-10-02; current Xcode 27 tvOS 18.5 fixture run"
-        ),
-        liveValidation: .pending,
-        limitations: ["兼容适配待真实后端实测"]
-      ),
-      BackendCompatibilityRecord(
-        version: MoviePilotVersion("v3.1.0")!,
-        profile: .v30101,
-        sourceReview: .verified(
-          reference: "docs/backend-version-compatibility.md#登记与证据; MoviePilot 0a7368bce8d28f60ee795b38da0ac7a844c7e085; Frontend c593e630b288bddc99c421c1af1a593072f69932 (v3.1.0); TV 使用端点、Subscribe 写回、fork、lookup、整理预览"
-        ),
-        fixtureValidation: .verified(
-          reference: "docs/backend-version-compatibility.md#mac验收-2026-10-02; current Xcode 27 tvOS 18.5 fixture run"
-        ),
-        liveValidation: .pending,
-        limitations: ["兼容适配待真实后端实测"]
-      ),
-    ]
+    versions: ["v3.0.4", "v3.0.5", "v3.0.7", "v3.0.10", "v3.0.10-1", "v3.1.0"]
+      .map { MoviePilotVersion($0)! }
   )
 }

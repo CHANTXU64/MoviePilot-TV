@@ -65,7 +65,7 @@ final class SubscriptionWriteDTOTests: XCTestCase {
     XCTAssertEqual(try payload(subscription)["media_category_id"] as? String, "stable-category")
   }
 
-  func testExplicitClearsPreserveNullEmptyArrayAndZeroSemantics() throws {
+  func testClearsSendNullEmptyArrayAndKeepEmptyStringsLikeWeb() throws {
     var source = try fixtureObject()
     source["include"] = " WEB-DL "
     source["exclude"] = " CAM "
@@ -76,6 +76,7 @@ final class SubscriptionWriteDTOTests: XCTestCase {
     var subscription = try decode(source)
     subscription.include = nil
     subscription.exclude = ""
+    // 下拉框选“全部/默认”写入空字符串；Web 同样原样发送，后端按空值回落到默认。
     subscription.quality = ""
     subscription.downloader = ""
     subscription.save_path = nil
@@ -83,18 +84,20 @@ final class SubscriptionWriteDTOTests: XCTestCase {
     subscription.search_interval = nil
     subscription.total_episode = nil
     subscription.episode_group = nil
-    subscription.sites = nil
+    subscription.sites = []
     subscription.filter_groups = []
     subscription.start_episode = 0
     subscription.best_version_full = 0
 
     var expected = writableProjection(source)
     for key in [
-      "include", "exclude", "quality", "downloader", "save_path", "custom_words",
-      "search_interval", "total_episode", "episode_group",
+      "include", "save_path", "custom_words", "search_interval", "total_episode", "episode_group",
     ] {
       expected[key] = NSNull()
     }
+    expected["exclude"] = ""
+    expected["quality"] = ""
+    expected["downloader"] = ""
     expected["sites"] = [Int]()
     expected["filter_groups"] = [String]()
     expected["start_episode"] = 0
@@ -102,22 +105,17 @@ final class SubscriptionWriteDTOTests: XCTestCase {
     assertEqual(try payload(subscription), expected)
   }
 
-  func testSparseMissingFieldsStayOmittedAndExplicitNilAssignmentsClearThem() throws {
+  func testSparseMissingFieldsStayOmittedEvenWhenAssignedNil() throws {
     var subscription = try decode(["id": 43])
     assertEqual(try payload(subscription), ["id": 43])
 
+    // 没读到的键表示后端未提供，保存时不能凭空发 null 清掉后端的值；有值才发送。
     subscription.search_interval = nil
     subscription.total_episode = nil
     subscription.include = nil
-    subscription.sites = nil
-    subscription.filter_groups = nil
-    assertEqual(
-      try payload(subscription),
-      [
-        "id": 43, "search_interval": NSNull(), "total_episode": NSNull(),
-        "include": NSNull(), "sites": [Int](), "filter_groups": [String](),
-      ]
-    )
+    subscription.sites = []
+    subscription.keyword = "4K"
+    assertEqual(try payload(subscription), ["id": 43, "sites": [Int](), "keyword": "4K"])
   }
 
   func testSparseNullsAndZeroAreNotInventedDefaults() throws {
@@ -133,33 +131,27 @@ final class SubscriptionWriteDTOTests: XCTestCase {
     subscription.name = "新名称"
     subscription.type = "电视剧"
     subscription.sites = []
-    subscription.filter_groups = nil
     let result = try payload(subscription)
     XCTAssertEqual(result["name"] as? String, "新名称")
     XCTAssertEqual(result["type"] as? String, "电视剧")
     XCTAssertEqual(result["sites"] as? [Int], [])
-    XCTAssertEqual(result["filter_groups"] as? [String], [])
+    XCTAssertTrue(result["filter_groups"] is NSNull)
     XCTAssertTrue(result["total_episode"] is NSNull)
   }
 
-  func testManualInitializerOmitsDefaultNilButRetainsExplicitValuesAndLaterClears() throws {
-    var subscription = Subscribe(
+  func testManualInitializerOnlySendsProvidedValues() throws {
+    let subscription = Subscribe(
       id: 45, name: "手动构造", type: "电视剧", season: 0, sites: [],
       search_interval: 12, music_type: "album", total_tracks: 0
     )
-    let initial = try payload(subscription)
-    XCTAssertFalse(initial.keys.contains("total_episode"))
-    XCTAssertFalse(initial.keys.contains("filter_groups"))
-    XCTAssertEqual(initial["sites"] as? [Int], [])
-    XCTAssertEqual(initial["season"] as? Int, 0)
-    XCTAssertEqual(initial["total_tracks"] as? Int, 0)
-    XCTAssertEqual(initial["search_interval"] as? Int, 12)
-
-    subscription.search_interval = nil
-    subscription.total_episode = nil
-    let cleared = try payload(subscription)
-    XCTAssertTrue(cleared["search_interval"] is NSNull)
-    XCTAssertTrue(cleared["total_episode"] is NSNull)
+    let result = try payload(subscription)
+    XCTAssertFalse(result.keys.contains("total_episode"))
+    XCTAssertFalse(result.keys.contains("filter_groups"))
+    XCTAssertEqual(result["name"] as? String, "手动构造")
+    XCTAssertEqual(result["sites"] as? [Int], [])
+    XCTAssertEqual(result["season"] as? Int, 0)
+    XCTAssertEqual(result["total_tracks"] as? Int, 0)
+    XCTAssertEqual(result["search_interval"] as? Int, 12)
   }
 
   func testOtherEditsDoNotTrimPatternsPathsOrCustomWords() throws {
@@ -175,63 +167,39 @@ final class SubscriptionWriteDTOTests: XCTestCase {
     assertEqual(try payload(subscription), expected)
   }
 
-  func testChangingCategoryPathOmitsOldStableIDInsteadOfSendingNullID() throws {
-    var subscription = try decode(fixtureObject())
-    subscription.media_category = "电视剧/新分类"
-    let result = try payload(subscription)
-
-    XCTAssertFalse(result.keys.contains("media_category_id"))
-    XCTAssertEqual(result["media_category"] as? String, "电视剧/新分类")
-  }
-
-  func testClearingCategoryPathDoesNotSendOldStableID() throws {
-    let clearedPaths: [String?] = [nil, ""]
-    for clearedPath in clearedPaths {
+  func testStableCategoryIDIsSentTogetherWithPathLikeWeb() throws {
+    // 有分类编号时与 Web 一致：编号和路径一起回传，后端以编号为准。
+    for path in ["电视剧/契约", "电视剧/新分类"] {
       var subscription = try decode(fixtureObject())
-      subscription.media_category = clearedPath
+      subscription.media_category = path
       let result = try payload(subscription)
-
-      XCTAssertFalse(result.keys.contains("media_category_id"))
-      XCTAssertTrue(result["media_category"] is NSNull)
+      XCTAssertEqual(result["media_category_id"] as? String, "stable-category")
+      XCTAssertEqual(result["media_category"] as? String, path)
     }
-  }
-
-  func testExplicitPathClearAlsoClearsAStableIDWithoutAPathSnapshot() throws {
-    var subscription = try decode(["id": 47, "media_category_id": "stable-category"])
-    subscription.media_category = nil
-    let result = try payload(subscription)
-
-    XCTAssertFalse(result.keys.contains("media_category_id"))
+    var cleared = try decode(fixtureObject())
+    cleared.media_category = nil
+    let result = try payload(cleared)
+    XCTAssertEqual(result["media_category_id"] as? String, "stable-category")
     XCTAssertTrue(result["media_category"] is NSNull)
   }
 
-  func testRestoringOriginalCategoryPathPreservesStableID() throws {
-    var subscription = try decode(fixtureObject())
-    let originalPath = subscription.media_category
-    subscription.media_category = "电视剧/临时分类"
-    subscription.media_category = originalPath
+  func testLegacyCategoryPathWithoutIDDoesNotSendID() throws {
+    // 旧订阅没有分类编号：发 media_category_id:null 会让后端把类别一起清掉，所以不发编号键。
+    let sources: [[String: Any]] = [
+      ["id": 46, "media_category_id": NSNull(), "media_category": "电影/旧目录"],
+      ["id": 46, "media_category_id": "", "media_category": "电影/旧目录"],
+      ["id": 46, "media_category": "电影/旧目录"],
+    ]
+    for source in sources {
+      var subscription = try decode(source)
+      XCTAssertEqual(try payload(subscription)["media_category"] as? String, "电影/旧目录")
+      XCTAssertFalse(try payload(subscription).keys.contains("media_category_id"))
 
-    XCTAssertEqual(try payload(subscription)["media_category_id"] as? String, "stable-category")
-    XCTAssertEqual(try payload(subscription)["media_category"] as? String, originalPath)
-  }
-
-  func testLegacyCategoryPathWithNullIDIsNotAccidentallyCleared() throws {
-    let subscription = try decode([
-      "id": 46, "media_category_id": NSNull(), "media_category": "电影/旧目录",
-    ])
-    let result = try payload(subscription)
-
-    XCTAssertFalse(result.keys.contains("media_category_id"))
-    XCTAssertEqual(result["media_category"] as? String, "电影/旧目录")
-  }
-
-  func testExplicitlyClearingCategoryIDClearsThePair() throws {
-    var subscription = try decode(fixtureObject())
-    subscription.media_category_id = nil
-    let result = try payload(subscription)
-
-    XCTAssertTrue(result["media_category_id"] is NSNull)
-    XCTAssertTrue(result["media_category"] is NSNull)
+      subscription.media_category = "电影/新目录"
+      let edited = try payload(subscription)
+      XCTAssertFalse(edited.keys.contains("media_category_id"))
+      XCTAssertEqual(edited["media_category"] as? String, "电影/新目录")
+    }
   }
 
   func testIdentityCanBeClearedWithoutLegacyIDsBeingWrittenBack() throws {
@@ -319,11 +287,7 @@ final class SubscriptionWriteDTOTests: XCTestCase {
     "media_category", "filter_groups", "episode_group",
   ]
 
-  // 由官方 v3.0.4 Subscribe schema 在隔离 Python 环境 model_validate/model_dump 生成。
-  // v3.0.10-1 与 v3.1.0 的 Subscribe schema blob 同为 d1269dae08f61d91db29f73c1686873c099eb394。
-  // 来源固定 commit：e195cc164fc8ff869ffee0ea44a49c7ec475310c；可用 scripts/compatibility/probe_contracts.py 重建。
-  // 完整 provenance 见 docs/compatibility-evidence/v3.0.4.json。
-  // 这是源码派生 fixture，不是实际部署后端响应；稀疏和编辑案例是上方手工补充的边界输入。
+  // 按官方 app/schemas/subscribe.py（v3.0.4 至 v3.1.0 内容一致）的完整字段整理的订阅详情响应。
   private static let fullFixture = """
     {
       "id": 42,

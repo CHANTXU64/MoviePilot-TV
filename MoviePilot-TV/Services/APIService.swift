@@ -39,6 +39,17 @@ extension APIError: LocalizedError {
   }
 }
 
+/// 后端某项能力在当前版本上已确认不可用；只用于已证实有缺陷的精确版本范围。
+nonisolated enum BackendCapabilityError: LocalizedError {
+  case unavailable(String)
+
+  var errorDescription: String? {
+    switch self {
+    case .unavailable(let reason): return reason
+    }
+  }
+}
+
 enum SessionRefreshResult: Equatable {
   case alreadyRefreshed
   case noStoredSession
@@ -405,15 +416,6 @@ class APIService: ObservableObject {
     }
   }
   @Published var useImageCache: Bool = false
-
-  /// 版本与全局配置共用现有会话 owner；切服/切账号时随 settings 一起清空。
-  var backendContractProfile: BackendContractProfile? {
-    BackendCompatibilityRegistry.current.assessment(for: settings?.BACKEND_VERSION).profile
-  }
-
-  private var backendContract: BackendAPIContract {
-    BackendAPIContract(profile: backendContractProfile, version: MoviePilotVersion(settings?.BACKEND_VERSION))
-  }
 
   var imageConfigurationIdentity: String {
     let bangumiProxyEnabled = settings?.BANGUMI_PROXY_ENABLE?.value == true
@@ -3117,19 +3119,35 @@ class APIService: ObservableObject {
     return result
   }
 
+  /// v3.0.1–v3.0.4 把复用接口的响应声明为不带数据，后端创建成功后会在响应校验处报错，
+  /// v3.0.5 修复（上游提交 2e2a037）。只在已确认的这几个版本上事前阻止；读不出版本时照常复用。
+  nonisolated static func subscriptionForkUnavailableReason(backendVersion: String?) -> String? {
+    guard let version = MoviePilotVersion(backendVersion),
+      let firstAffected = MoviePilotVersion("v3.0.1"),
+      let fixed = MoviePilotVersion("v3.0.5"),
+      version >= firstAffected, version < fixed
+    else { return nil }
+    return "当前 MoviePilot \(version) 的复用订阅接口存在已知问题，可能创建成功却返回失败。为避免重复创建，此版本暂不可复用；升级到 v3.0.5 或更高版本后即可使用。普通订阅与编辑仍可使用。"
+  }
+
   /// 复用（Fork）一个订阅分享
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/ForkSubscribeDialog.vue (doFork)
   /// - 应用场景: 在"订阅分享"中，点击"复用"按钮，基于分享的配置创建一个新的个人订阅。
   func forkSubscription(share: SubscribeShare) async throws -> Int {
     let snapshot = sessionSnapshot()
+    // 版本与全局配置共用会话 owner；切服/切账号会清空 settings。先补读一次版本，
+    // 补读期间会话变化即取消；补读失败或仍读不出版本时照常复用。
     if MoviePilotVersion(settings?.BACKEND_VERSION) == nil {
-      _ = try await fetchSettings()
+      do {
+        _ = try await fetchSettings()
+      } catch is CancellationError {
+        throw CancellationError()
+      } catch {
+        Logger.error("[forkSubscription] Failed to refresh backend version: \(error)")
+      }
       guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
     }
-    guard MoviePilotVersion(settings?.BACKEND_VERSION) != nil else {
-      throw BackendCapabilityError.unavailable("无法确认后端版本，暂不能安全复用订阅。请刷新连接信息后重试，普通订阅与编辑仍可使用。")
-    }
-    if let reason = backendContract.subscriptionForkUnavailableReason {
+    if let reason = Self.subscriptionForkUnavailableReason(backendVersion: settings?.BACKEND_VERSION) {
       throw BackendCapabilityError.unavailable(reason)
     }
     let body = try JSONEncoder().encode(share)
@@ -3262,14 +3280,19 @@ class APIService: ObservableObject {
       // 遵循 Vue 逻辑，如果无法生成媒体身份，则不发起请求
       return nil
     }
+    // 各版本 Web 都附带 title/year/mtype；v3.0.10-1 前的后端只在自身条件满足时使用回退参数，
+    // 多发的参数会被忽略，所以这里不按后端版本区分。
+    let usesVideoMetadataFallback = includeVideoMetadataFallback
+      && (media.type == "电影" || media.type == "电视剧")
     let endpoint = try endpointForMediaIdentity(
       pathPrefix: "/subscribe/media",
       identity: identity,
-      extraParams: backendContract.subscriptionLookupParameters(
-        media: media,
-        season: season,
-        includeVideoMetadataFallback: includeVideoMetadataFallback
-      )
+      extraParams: [
+        "season": season.map(String.init),
+        "title": media.title,
+        "year": usesVideoMetadataFallback ? media.year : nil,
+        "mtype": usesVideoMetadataFallback ? media.type : nil,
+      ]
     )
     let data = try await makeRequest(endpoint: endpoint)
     let resp = try await decodeOrUnwrap(SubscribeLookupResp.self, from: data)

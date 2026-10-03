@@ -1546,25 +1546,15 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
   /// 订阅ID
   var id: Int?
   /// 订阅名称
-  var name: String {
-    didSet { markWriteField(.name) }
-  }
+  var name: String
   /// 订阅年份
-  var year: String? {
-    didSet { markWriteField(.year) }
-  }
+  var year: String?
   /// 订阅类型 电影/电视剧
-  var type: String {
-    didSet { markWriteField(.type) }
-  }
+  var type: String
   /// 搜索关键字
-  var keyword: String? {
-    didSet { markWriteField(.keyword) }
-  }
+  var keyword: String?
   /// 季号
-  var season: Int? {
-    didSet { markWriteField(.season) }
-  }
+  var season: Int?
   /// 海报
   var poster: String?
   // 背景图
@@ -1580,13 +1570,9 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
   /// 创建时间
   var date: String?
   /// 总集数
-  var total_episode: Int? {
-    didSet { markWriteField(.total_episode) }
-  }
+  var total_episode: Int?
   /// 开始集数
-  var start_episode: Int? {
-    didSet { markWriteField(.start_episode) }
-  }
+  var start_episode: Int?
   /// 缺失集数
   var lack_episode: Int?
   /// 已完成集数，后端响应派生字段，保存订阅时不写回。
@@ -1602,81 +1588,45 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
   /// AniList ID
   var anilistid: Int?
   /// 统一媒体来源
-  var media_source: String? {
-    didSet { markWriteField(.media_source) }
-  }
+  var media_source: String?
   /// 来源原生 ID
-  var media_id: String? {
-    didSet { markWriteField(.media_id) }
-  }
+  var media_id: String?
   /// 质量
-  var quality: String? {
-    didSet { markWriteField(.quality) }
-  }
+  var quality: String?
   /// 分辨率
-  var resolution: String? {
-    didSet { markWriteField(.resolution) }
-  }
+  var resolution: String?
   /// 特效
-  var effect: String? {
-    didSet { markWriteField(.effect) }
-  }
+  var effect: String?
   /// 包含
-  var include: String? {
-    didSet { markWriteField(.include) }
-  }
+  var include: String?
   /// 排除
-  var exclude: String? {
-    didSet { markWriteField(.exclude) }
-  }
+  var exclude: String?
   /// 订阅站点
-  var sites: [Int]? {
-    didSet { markWriteField(.sites) }
-  }
+  var sites: [Int]?
   /// 下载器
-  var downloader: String? {
-    didSet { markWriteField(.downloader) }
-  }
+  var downloader: String?
   /// 保存目录
-  var save_path: String? {
-    didSet { markWriteField(.save_path) }
-  }
+  var save_path: String?
   /// 是否洗版 (后端返回 0/1 整数作为布尔值使用)
-  var best_version: Int? {
-    didSet { markWriteField(.best_version) }
-  }
+  var best_version: Int?
   /// 是否仅洗全集 (后端返回 0/1 整数作为布尔值使用)
-  var best_version_full: Int? {
-    didSet { markWriteField(.best_version_full) }
-  }
+  var best_version_full: Int?
   /// 当前洗版优先级，后端维护；公共写入 DTO 不发送。
   var current_priority: Int?
   /// 过滤规则组
-  var filter_groups: [String]? {
-    didSet { markWriteField(.filter_groups) }
-  }
+  var filter_groups: [String]?
   /// 自定义识别词
-  var custom_words: String? {
-    didSet { markWriteField(.custom_words) }
-  }
+  var custom_words: String?
   /// 描述
   var description: String?
   /// 用户可编辑的过滤规则配置；编辑保存时保留或更新。
-  var filter: String? {
-    didSet { markWriteField(.filter) }
-  }
+  var filter: String?
   /// 自定义剧集组
-  var episode_group: String? {
-    didSet { markWriteField(.episode_group) }
-  }
+  var episode_group: String?
   /// 使用 imdbid 搜索
-  var search_imdbid: Int? {
-    didSet { markWriteField(.search_imdbid) }
-  }
+  var search_imdbid: Int?
   /// 自定义媒体类别
-  var media_category: String? {
-    didSet { markWriteField(.media_category) }
-  }
+  var media_category: String?
 
   /// 媒体ID标识 (如 tmdb:1234)
   var mediaid: String?
@@ -1684,59 +1634,34 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
   var episode_priority: [String: Int]?
 
   /// 定时搜索间隔（小时），nil 跟随系统设置
-  var search_interval: Int? {
-    didSet { markWriteField(.search_interval) }
-  }
+  var search_interval: Int?
   /// 音乐实体类型：recording 单曲、album 专辑
-  var music_type: String? {
-    didSet { markWriteField(.music_type) }
-  }
+  var music_type: String?
   /// 专辑预期总曲目数
-  var total_tracks: Int? {
-    didSet { markWriteField(.total_tracks) }
-  }
+  var total_tracks: Int?
   /// 音乐音质等级
-  var audio_quality: String? {
-    didSet { markWriteField(.audio_quality) }
-  }
+  var audio_quality: String?
   /// 音频格式正则
-  var audio_format: String? {
-    didSet { markWriteField(.audio_format) }
-  }
+  var audio_format: String?
   /// 最低码率（bps）
-  var min_bitrate: Int? {
-    didSet { markWriteField(.min_bitrate) }
-  }
+  var min_bitrate: Int?
   /// 最低位深（bit）
-  var min_bit_depth: Int? {
-    didSet { markWriteField(.min_bit_depth) }
-  }
+  var min_bit_depth: Int?
   /// 最低采样率（Hz）
-  var min_sample_rate: Int? {
-    didSet { markWriteField(.min_sample_rate) }
-  }
+  var min_sample_rate: Int?
   /// 自定义媒体类别稳定标识
-  var media_category_id: String? {
-    didSet { markWriteField(.media_category_id) }
-  }
+  var media_category_id: String?
 
-  /// 只保存键的存在性和编辑意图，不保存或透传原始 JSON。缺键与显式 null 的 PUT 语义不同。
-  private(set) var writeFieldPresence: Set<CodingKeys> = []
-  private(set) var editedWriteFields: Set<CodingKeys> = []
-  private(set) var decodedNullWriteFields: Set<CodingKeys> = []
-  /// 分类路径编辑时不能继续发送旧稳定 ID；恢复原路径则仍保留原 ID。
-  private(set) var originalMediaCategory: String?
-
-  private mutating func markWriteField(_ key: CodingKeys) {
-    editedWriteFields.insert(key)
-  }
+  /// 解码时读到的键（含值为 null 的键）。保存时只回传读到的键：缺键表示不修改，
+  /// 读到后变为 nil 表示清空。手动构造的订阅没有读到的键。
+  private(set) var decodedKeys: Set<CodingKeys> = []
 
   /// 图片 URL 在主线程按当前图片设置计算，避免后台 JSON 解码访问主线程 APIService。
   @MainActor var imageURLs: ImageURLs {
     ImageURLs(poster: APIService.shared.getSubscribePosterImageUrl(poster: poster))
   }
 
-  enum CodingKeys: String, CodingKey, Hashable {
+  enum CodingKeys: String, CodingKey {
     case id, name, year, type, keyword, season, poster, backdrop, state, last_update,
       vote, total_episode, start_episode, lack_episode, completed_episode, note, tmdbid, doubanid,
       bangumiid, anilistid, media_source, media_id,
@@ -1809,132 +1734,10 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
     min_bit_depth = try container.decodeIfPresent(Int.self, forKey: .min_bit_depth)
     min_sample_rate = try container.decodeIfPresent(Int.self, forKey: .min_sample_rate)
     media_category_id = try container.decodeIfPresent(String.self, forKey: .media_category_id)
-    writeFieldPresence = Set(container.allKeys)
-    for key in container.allKeys {
-      if try container.decodeNil(forKey: key) {
-        decodedNullWriteFields.insert(key)
-      }
-    }
-    originalMediaCategory = media_category
-
+    decodedKeys = Set(container.allKeys)
   }
 
-  func encode(to encoder: Encoder) throws {
-    var container = encoder.container(keyedBy: CodingKeys.self)
-    try container.encodeIfPresent(id, forKey: .id)
-    try container.encode(name, forKey: .name)
-    try container.encodeIfPresent(year, forKey: .year)
-    try container.encode(type, forKey: .type)
-    try encodeUserClearableString(keyword, forKey: .keyword, to: &container)
-    try encodeUserClearableValue(season, forKey: .season, to: &container)
-    try container.encodeIfPresent(poster, forKey: .poster)
-    try container.encodeIfPresent(backdrop, forKey: .backdrop)
-    try container.encodeIfPresent(vote, forKey: .vote)
-    try container.encodeIfPresent(state, forKey: .state)
-    try container.encodeIfPresent(last_update, forKey: .last_update)
-    try container.encodeIfPresent(username, forKey: .username)
-    try container.encodeIfPresent(date, forKey: .date)
-    if let totalEpisode = total_episode {
-      try container.encode(totalEpisode, forKey: .total_episode)
-    } else if (id ?? 0) > 0 {
-      // 现有订阅的 nil 必须显式写为 null；省略会被后端默认成 0 并误置人工集数。
-      try container.encodeNil(forKey: .total_episode)
-    }
-    try container.encodeIfPresent(start_episode, forKey: .start_episode)
-    try container.encodeIfPresent(lack_episode, forKey: .lack_episode)
-    try container.encodeIfPresent(note, forKey: .note)
-    try container.encodeIfPresent(tmdbid, forKey: .tmdbid)
-    try container.encodeIfPresent(doubanid, forKey: .doubanid)
-    try container.encodeIfPresent(bangumiid, forKey: .bangumiid)
-    try container.encodeIfPresent(anilistid, forKey: .anilistid)
-    try container.encodeIfPresent(media_source, forKey: .media_source)
-    try container.encodeIfPresent(media_id, forKey: .media_id)
-    try encodeUserClearableString(quality, forKey: .quality, to: &container)
-    try encodeUserClearableString(resolution, forKey: .resolution, to: &container)
-    try encodeUserClearableString(effect, forKey: .effect, to: &container)
-    try encodeUserClearablePattern(include, forKey: .include, to: &container)
-    try encodeUserClearablePattern(exclude, forKey: .exclude, to: &container)
-    try encodeUserClearableArray(sites, forKey: .sites, to: &container)
-    try encodeUserClearableString(downloader, forKey: .downloader, to: &container)
-    try encodeUserClearableString(save_path, forKey: .save_path, to: &container)
-    try container.encodeIfPresent(best_version, forKey: .best_version)
-    try container.encodeIfPresent(best_version_full, forKey: .best_version_full)
-    try container.encodeIfPresent(current_priority, forKey: .current_priority)
-    try encodeUserClearableArray(filter_groups, forKey: .filter_groups, to: &container)
-    try encodeUserClearableString(custom_words, forKey: .custom_words, to: &container)
-    try container.encodeIfPresent(description, forKey: .description)
-    try encodeUserClearableString(filter, forKey: .filter, to: &container)
-    try encodeUserClearableString(episode_group, forKey: .episode_group, to: &container)
-    try container.encodeIfPresent(search_imdbid, forKey: .search_imdbid)
-    try encodeUserClearableString(media_category, forKey: .media_category, to: &container)
-    try container.encodeIfPresent(mediaid, forKey: .mediaid)
-    try container.encodeIfPresent(episode_priority, forKey: .episode_priority)
-    try container.encodeIfPresent(search_interval, forKey: .search_interval)
-    try container.encodeIfPresent(music_type, forKey: .music_type)
-    try container.encodeIfPresent(total_tracks, forKey: .total_tracks)
-    try container.encodeIfPresent(audio_quality, forKey: .audio_quality)
-    try container.encodeIfPresent(audio_format, forKey: .audio_format)
-    try container.encodeIfPresent(min_bitrate, forKey: .min_bitrate)
-    try container.encodeIfPresent(min_bit_depth, forKey: .min_bit_depth)
-    try container.encodeIfPresent(min_sample_rate, forKey: .min_sample_rate)
-    try container.encodeIfPresent(media_category_id, forKey: .media_category_id)
-  }
-
-  /// 已落库订阅的更新必须区分“未提交”和“用户明确清空”。
-  /// v3 PUT 使用 `exclude_unset=True`：省略表示不修改；字符串发 `null`，站点/规则组发 `[]`。
-  private var encodesExplicitNullsForClearedFields: Bool {
-    (id ?? 0) > 0
-  }
-
-  private func encodeUserClearableString(
-    _ value: String?,
-    forKey key: CodingKeys,
-    to container: inout KeyedEncodingContainer<CodingKeys>
-  ) throws {
-    if let value = MediaIdentifier.normalizedString(value) {
-      try container.encode(value, forKey: key)
-    } else if encodesExplicitNullsForClearedFields {
-      try container.encodeNil(forKey: key)
-    }
-  }
-
-  /// 包含/排除词按原始字符串提交。首尾空格可能是正则边界，不能用 ID 规范化裁掉。
-  private func encodeUserClearablePattern(
-    _ value: String?,
-    forKey key: CodingKeys,
-    to container: inout KeyedEncodingContainer<CodingKeys>
-  ) throws {
-    if let value, !value.isEmpty {
-      try container.encode(value, forKey: key)
-    } else if encodesExplicitNullsForClearedFields {
-      try container.encodeNil(forKey: key)
-    }
-  }
-
-  private func encodeUserClearableValue<Value: Encodable>(
-    _ value: Value?,
-    forKey key: CodingKeys,
-    to container: inout KeyedEncodingContainer<CodingKeys>
-  ) throws {
-    if let value {
-      try container.encode(value, forKey: key)
-    } else if encodesExplicitNullsForClearedFields {
-      try container.encodeNil(forKey: key)
-    }
-  }
-
-  private func encodeUserClearableArray<Value: Encodable>(
-    _ value: [Value]?,
-    forKey key: CodingKeys,
-    to container: inout KeyedEncodingContainer<CodingKeys>
-  ) throws {
-    if let value {
-      try container.encode(value, forKey: key)
-    } else if encodesExplicitNullsForClearedFields {
-      // Web 清空多选项发 `[]`，不是 `null`。
-      try container.encode([Value](), forKey: key)
-    }
-  }
+  // 编码使用编译器合成的实现，只供测试替身生成接口响应；保存订阅走 SubscriptionWriteDTO。
 
   /// 成员初始化器，用于手动创建订阅。
   init(
@@ -2010,9 +1813,6 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
     self.min_bit_depth = min_bit_depth
     self.min_sample_rate = min_sample_rate
     self.media_category_id = media_category_id
-    // 手动构造时默认 nil 表示未提供；构造后显式赋 nil 才表达清空。
-    self.writeFieldPresence = [.name, .type]
-    self.originalMediaCategory = media_category
 
   }
 

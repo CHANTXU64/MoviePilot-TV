@@ -44,12 +44,12 @@
 - 兼容修复必须以 MoviePilot Web 前端和 MoviePilot 后端的当前可观察行为为准。真实后端测试失败时，先复现或推导 MP Web 等价行为：若 MP Web 同样失败、同样不展示、或按前端逻辑本来就不会发起请求，则这不是 TV 端必须修的问题，不要在 TV 端替 MoviePilot 官方后端、前端或第三方数据源兜底修 Bug。只有 MP Web 能正常工作而 TV 端失败，才归类为 **必须修**。
 - 长期更新清单只记录可定位的上游变化信号：具体字段、参数、响应、默认值或业务范围变化，以及它会影响的 TV 现有路径。session epoch、请求乱序、缓存 namespace、SwiftUI 身份和畸形输入矩阵属于客户端实现或测试，不要包装成后端更新契约；测试结果也不能替代 Web/后端源码合同。
 - 所有 Checklist 都只是历次已发现风险的补充，不是审查范围的穷举。即使全部条目均未命中，也必须完整检查目标后端及其 `FRONTEND_VERSION` 配套 Web 在版本跨度内的提交和 Diff，并映射到 TV 全部已使用路径；禁止只对 Checklist 打勾后直接得出兼容结论。
-- 更新适配完成后，必须使用真实后端兼容测试作为后端/API 适配校验；具体说明见 `docs/backend-compatibility-tests.md`。如果本地没有 `.env.compatibility` 或用户未提供真实后端配置，必须在最终回复中明确说明未运行真实后端兼容测试，不能把普通构建/单元测试说成已验证真实后端兼容。
+- 登记标准是 AI 对照官方源码确认 TV 实际用到的接口、字段和写回没有受影响；真实后端兼容测试是可选补充（说明见 `docs/backend-compatibility-tests.md`），有 `.env.compatibility` 时可以跑，没有就在最终回复中如实说明未运行，这不影响登记。不能把普通构建/单元测试说成已跑过真实后端兼容测试。
 
 ### 1. 确认当前兼容版本
-- 读取 `MoviePilot-TV/Models/BackendCompatibility.swift` 中的精确版本登记表，以最新登记节点作为 `<当前兼容版本>`，同时保留最早维护版本、各节点能力限制及三类验证证据。遵循 `docs/backend-version-compatibility.md`，不得把区间内所有版本都认定为已验证。
+- 读取 `MoviePilot-TV/Models/BackendCompatibility.swift` 中的精确版本登记表，以最新登记节点作为 `<当前兼容版本>`；各版本的差异说明和功能限制见 `docs/backend-version-compatibility.md` 的版本表。遵循 `docs/backend-version-compatibility.md`，只登记精确版本，不推断区间内未登记的版本兼容。
 - 读取 `README.md` 中的 MoviePilot 版本徽章和兼容性说明，确认它们与 `<当前兼容版本>` 一致；README 只用于展示，不能反向覆盖运行时基线。
-- 检查 `SystemVersionInfoTests` 和 `ContentViewModelBehaviorTests` 是否覆盖同一兼容版本及紧邻的过低版本。常量、README 或测试不一致时，必须先列为 **必须修**，不能继续得出“兼容版本已更新”的结论。
+- 检查 `SystemVersionInfoTests` 的登记表断言是否与登记表、README 和 `docs/backend-version-compatibility.md` 的版本表一致。不一致时，必须先列为 **必须修**，不能继续得出“兼容版本已更新”的结论。
 - 按本次变更实际涉及的主题，读取 `.agents/engineering-invariants.md` 中对应章节；不读取已归档的全量审计计划作为默认上下文。
 - 读取 `docs/subscription-compatibility-checklist.md`，后续只要上游变更涉及订阅管理、媒体 ID、详情页 Header 订阅按钮、分季订阅、`episode_group`、`/subscribe/` 缓存或刷新语义，必须按该文档逐项复核。
 - 读取 `docs/frontend-update-todo.md`，了解此前记录的后续功能候选。若本次上游更新让其中某项变成必须修、已不再适合 TV、或出现新的可评估功能，只能先在报告中提出 TODO 更新建议；未经用户明确同意，不要修改该文件。
@@ -173,7 +173,7 @@
 
 ## 📝 文档更新
 
-- [ ] 只要兼容目标版本变化，必须同步更新 `BackendCompatibilityRegistry.current`、`README.md` 中的版本徽章和兼容性说明、`SystemVersionInfoTests` 的常量断言，以及 `ContentViewModelBehaviorTests` 的精确登记/未登记/低于下限/高于最新及证据变化边界场景；不得只更新 README。若 README 单独记录配套前端版本，则使用 `<目标前端版本>`。
+- [ ] 只要兼容目标版本变化，AI 对照官方源码确认无影响后，在 `BackendCompatibilityRegistry.current` 加入精确版本，并同步更新 `README.md` 的版本徽章和兼容说明、`docs/backend-version-compatibility.md` 的版本表、`SystemVersionInfoTests` 的登记表断言；不得只更新 README。若 README 单独记录配套前端版本，则使用 `<目标前端版本>`。
 - [ ] 如果真实后端兼容测试流程、环境变量或覆盖范围发生变化，必须同步更新 `docs/backend-compatibility-tests.md`；不要把测试说明写回 `README.md`。
 - [ ] 如果订阅契约、媒体 ID、`episode_group`、Header 取消、订阅缓存或刷新时机发生变化，必须同步更新 `docs/subscription-compatibility-checklist.md`，并在报告中说明本次是否触发订阅专项风险。
 - [ ] 如果后续功能候选发生变化，必须先向用户说明建议如何更新 `docs/frontend-update-todo.md`；只有得到用户明确同意后，才可以修改该文件。
@@ -185,8 +185,8 @@
 - [ ] 确认连续模糊认证挑战仍按同一会话限流提醒一次，认证恢复或会话替换后才重新计数；该提醒只引导用户前往设置的连接信息刷新登录凭据，不得自动清除会话。
 - [ ] 确认 TV 端仍不支持 MFA 登录流程；只能检测 MFA、保留 URL/用户名/密码并提示不支持，不得未经产品决策新增验证码步骤。
 
-## ✅ 真实后端兼容验证
-- [ ] 若存在 `.env.compatibility` 或用户提供了 `MOVIEPILOT_COMPAT_ENV_FILE`，必须运行真实后端兼容测试，至少覆盖 `BackendCompatibilityReadOnlyTests`。
+## ✅ 真实后端兼容验证（可选）
+- [ ] 真实后端兼容测试不是登记前提。若存在 `.env.compatibility` 或用户提供了 `MOVIEPILOT_COMPAT_ENV_FILE`，可以运行，至少覆盖 `BackendCompatibilityReadOnlyTests`；没有就如实说明未运行。
 - [ ] 运行真实后端兼容测试时，必须使用串行 XCTest 参数：`-parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1`。如果看到多个 `Clone N of Apple TV`，说明测试被并行分发到了多个模拟器，应重新按串行方式运行，尤其不要并行执行副作用套件。
 - [ ] `xcodebuild test` 在 `Testing started` 后数分钟没有增量输出不等于卡死；真实后端图片巡检会扫描多个 TV 页面入口、下载图片并等待 tvOS 解码。必须等待合理超时窗口，或查看 `.xcresult` 摘要后再判断是否卡住。
 - [ ] 订阅搜索、原参数更新订阅、暂停正在订阅项后恢复、重置订阅后立即搜索、手动重新整理、AI 重新整理属于真实后端副作用套件；默认不得执行，只有 `.env.compatibility` 中显式设置 `MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS=true` 后，才按对应测试开关运行。
@@ -203,7 +203,7 @@
   - 哪些前端变化判断为可继续沿用或暂不跟进。
   - 哪些后端变化判断为可继续沿用或暂不跟进。
   - README 是否已同步更新。
-  - `BackendCompatibilityRegistry.current` 及对应版本边界测试是否已同步更新。
+  - `BackendCompatibilityRegistry.current`、README、`docs/backend-version-compatibility.md` 版本表及 `SystemVersionInfoTests` 登记表断言是否已同步更新。
   - `docs/backend-compatibility-tests.md` 是否需要同步更新。
   - `docs/subscription-compatibility-checklist.md` 是否需要同步更新；如果不需要，说明订阅专项契约未变化。
   - `docs/frontend-update-todo.md` 是否有建议更新、是否已获得用户同意、是否实际更新。

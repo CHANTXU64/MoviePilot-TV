@@ -1366,10 +1366,10 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         "\u{002F}system\u{002F}global 未返回 BACKEND_VERSION，不能判定 OpenAPI 404 的语义。"
       )
       verifiedBackendVersion = backendVersion
-      let assessment = BackendCompatibilityRegistry.current.assessment(for: backendVersion)
-      guard assessment.status == .registered else {
+      let status = BackendCompatibilityRegistry.current.status(for: backendVersion)
+      guard status == .registered else {
         XCTFail(
-          "OpenAPI 检查前端点版本必须是已登记精确版本：\(backendVersion)，状态为 \(assessment.status.rawValue)。"
+          "OpenAPI 检查前端点版本必须是已登记精确版本：\(backendVersion)，状态为 \(status.rawValue)。"
         )
         return
       }
@@ -1466,12 +1466,11 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
           settings.BACKEND_VERSION?.nilIfBlank,
           "Global settings should expose BACKEND_VERSION for \(config.activeAccountDiagnostic)."
         )
-        let assessment = BackendCompatibilityRegistry.current.assessment(for: backendVersion)
+        let status = BackendCompatibilityRegistry.current.status(for: backendVersion)
         XCTAssertEqual(
-          assessment.status, .registered,
-          "Backend \(backendVersion) must have an exact compatibility record for \(config.activeAccountDiagnostic); status: \(assessment.status.rawValue)."
+          status, .registered,
+          "Backend \(backendVersion) must be a registered compatible version for \(config.activeAccountDiagnostic); status: \(status.rawValue)."
         )
-        // 真实测试本身用于补足实测证据，不要求登记已标记为实测通过。
       }
       await runBackendCompatibilityStep(
         "settings page backend version",
