@@ -332,7 +332,7 @@ nonisolated enum AppChangelog {
     }
     guard presentedVersion != current.version else { return nil }
     guard
-      AppVersionInfo.compareMoviePilotVersion(current.version, to: presentedVersion)
+      AppVersionInfo.compareAppVersion(current.version, to: presentedVersion)
         == .orderedDescending
     else {
       return nil

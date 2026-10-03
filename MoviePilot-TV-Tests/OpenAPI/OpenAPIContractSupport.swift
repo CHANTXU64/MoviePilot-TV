@@ -1,5 +1,7 @@
 import Foundation
 
+@testable import MoviePilot_TV
+
 enum OpenAPIContractSupport {
   static func repositoryRoot(from filePath: String = #filePath) -> URL? {
     var url = URL(fileURLWithPath: filePath).deletingLastPathComponent()
@@ -49,6 +51,29 @@ enum OpenAPIContractSupport {
     return text.hasPrefix("<!doctype html") || text.hasPrefix("<html")
   }
 
+  /// 只把明确的 JSON 对象响应视为 API 文档端点的 JSON 错误响应。
+  /// Content-Type 缺失或 body 不是 JSON 时不能用 404 推断文档配置。
+  static func isJSONErrorResponse(data: Data, contentType: String?) -> Bool {
+    guard contentType?.lowercased().contains("json") == true else { return false }
+    guard let object = try? JSONSerialization.jsonObject(with: data) else { return false }
+    return object is [String: Any]
+  }
+
+  /// v3.1.0 的 OpenAPI 文档是可选能力；只有业务端点已确认该精确版本，
+  /// 且文档端点返回合法 JSON 404 时，才把该项标记为未验证并允许测试 skip。
+  /// 404 本身不能证明 API_DOCS_ENABLE 的实际运行时开关状态。
+  static func isExpectedUnavailableDocument(
+    _ error: Error,
+    backendVersion: String?
+  ) -> Bool {
+    guard MoviePilotVersion(backendVersion)?.description == "v3.1.0",
+      case let OpenAPIFetchError.httpStatus(statusCode, isJSON) = error
+    else {
+      return false
+    }
+    return statusCode == 404 && isJSON
+  }
+
   static func openAPIURL(baseURL: String) throws -> URL {
     let trimmed = baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL
     guard let url = URL(string: "\(trimmed)/api/v1/openapi.json") else {
@@ -78,7 +103,10 @@ enum OpenAPIContractSupport {
       throw OpenAPIFetchError.htmlLoginPage(statusCode: http.statusCode)
     }
     guard (200..<300).contains(http.statusCode) else {
-      throw OpenAPIFetchError.httpStatus(http.statusCode)
+      throw OpenAPIFetchError.httpStatus(
+        http.statusCode,
+        isJSON: Self.isJSONErrorResponse(data: data, contentType: contentType)
+      )
     }
     let document = try OpenAPIDocument.parse(data: data)
     return (document, data, document.version)
@@ -88,7 +116,7 @@ enum OpenAPIContractSupport {
 enum OpenAPIFetchError: Error, Equatable, CustomStringConvertible {
   case invalidResponse
   case htmlLoginPage(statusCode: Int)
-  case httpStatus(Int)
+  case httpStatus(Int, isJSON: Bool)
 
   var description: String {
     switch self {
@@ -96,8 +124,8 @@ enum OpenAPIFetchError: Error, Equatable, CustomStringConvertible {
       return "OpenAPI 请求没有返回 HTTP 响应"
     case .htmlLoginPage(let statusCode):
       return "读取 OpenAPI 时得到登录页或 HTML（HTTP \(statusCode)），不能当作契约通过，也不改走公共文档站"
-    case .httpStatus(let code):
-      return "读取 OpenAPI 失败：HTTP \(code)"
+    case .httpStatus(let code, let isJSON):
+      return "读取 OpenAPI 失败：HTTP \(code)（JSON=\(isJSON)）"
     }
   }
 }

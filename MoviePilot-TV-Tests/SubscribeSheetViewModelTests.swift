@@ -1085,13 +1085,13 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     service.baseURLForTesting = "http://subscribe-sheet-tests.local"
     configureSubscriber(service)
 
+    // 生产中可编辑的现有订阅都来自后端响应解码；保存只回传读到的键。
+    let existing = try JSONDecoder().decode(
+      Subscribe.self,
+      from: Data(#"{"id":788,"name":"清空包含词","type":"电影","include":"WEB-DL"}"#.utf8)
+    )
     let viewModel = SubscribeSheetViewModel(
-      subscribe: Subscribe(
-        id: 788,
-        name: "清空包含词",
-        type: "电影",
-        include: "WEB-DL"
-      ),
+      subscribe: existing,
       apiService: service
     )
     viewModel.subscribe.include = nil

@@ -201,6 +201,12 @@ class SubscriptionHandler: ObservableObject {
       return subscriptionId
     } catch is CancellationError {
       return nil
+    } catch let error as BackendCapabilityError {
+      guard activeForkOperation == operationID,
+        apiService.isSessionUnchanged(from: snapshot)
+      else { return nil }
+      forkErrorMessage = error.localizedDescription
+      return nil
     } catch {
       guard activeForkOperation == operationID else { return nil }
       Logger.error("Failed to fork subscription: \(error)")

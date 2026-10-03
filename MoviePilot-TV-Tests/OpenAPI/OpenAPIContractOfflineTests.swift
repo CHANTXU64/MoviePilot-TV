@@ -365,6 +365,94 @@ final class OpenAPIContractOfflineTests: XCTestCase {
     )
   }
 
+  func testOpenAPIFetchOnlyMarksKnownJSON404AsUnavailable() async throws {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [OpenAPIResponseURLProtocol.self]
+    let session = URLSession(configuration: configuration)
+    defer { OpenAPIResponseURLProtocol.reset() }
+
+    let scenarios: [(version: String, status: Int, contentType: String, body: Data, expected: Bool)] = [
+      (
+        version: "v3.1.0",
+        status: 404,
+        contentType: "application/json",
+        body: Data(#"{"detail":"Not Found"}"#.utf8),
+        expected: true
+      ),
+      (
+        version: "v3.0.10-1",
+        status: 404,
+        contentType: "application/json",
+        body: Data(#"{"detail":"Not Found"}"#.utf8),
+        expected: false
+      ),
+      (
+        version: "v3.1.0",
+        status: 404,
+        contentType: "text/html",
+        body: Data("<!DOCTYPE html><html>login</html>".utf8),
+        expected: false
+      ),
+      (
+        version: "v3.1.0",
+        status: 401,
+        contentType: "application/json",
+        body: Data(#"{"detail":"Unauthorized"}"#.utf8),
+        expected: false
+      ),
+      (
+        version: "v3.1.0",
+        status: 404,
+        contentType: "application/json",
+        body: Data("not-json".utf8),
+        expected: false
+      ),
+    ]
+
+    for scenario in scenarios {
+      OpenAPIResponseURLProtocol.configure(
+        statusCode: scenario.status,
+        contentType: scenario.contentType,
+        body: scenario.body
+      )
+      do {
+        _ = try await OpenAPIContractSupport.fetchOpenAPI(
+          baseURL: "https://openapi-offline.local",
+          session: session
+        )
+        XCTFail("HTTP \(scenario.status) should not produce an OpenAPI document")
+      } catch {
+        XCTAssertEqual(
+          OpenAPIContractSupport.isExpectedUnavailableDocument(
+            error,
+            backendVersion: scenario.version
+          ),
+          scenario.expected,
+          "\(scenario.version) HTTP \(scenario.status) \(scenario.contentType)"
+        )
+      }
+    }
+  }
+
+  func testOpenAPIFetchStillParsesSuccessfulDocument() async throws {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [OpenAPIResponseURLProtocol.self]
+    let session = URLSession(configuration: configuration)
+    defer { OpenAPIResponseURLProtocol.reset() }
+    OpenAPIResponseURLProtocol.configure(
+      statusCode: 200,
+      contentType: "application/json",
+      body: Data(#"{"openapi":"3.1.0","paths":{}}"#.utf8)
+    )
+
+    let fetched = try await OpenAPIContractSupport.fetchOpenAPI(
+      baseURL: "https://openapi-offline.local",
+      session: session
+    )
+    XCTAssertEqual(fetched.document.openAPIVersion, "3.1.0")
+    XCTAssertEqual(fetched.document.paths, [:])
+  }
+
   func testUnsupportedSchemaIsFailureNotPass() throws {
     let live = try makeDocument(
       paths: [
@@ -1702,4 +1790,43 @@ private func assertUnionReorderIsNotBlocking(
     file: file,
     line: line
   )
+}
+
+private final class OpenAPIResponseURLProtocol: URLProtocol, @unchecked Sendable {
+  nonisolated(unsafe) private static var statusCode = 200
+  nonisolated(unsafe) private static var contentType = "application/json"
+  nonisolated(unsafe) private static var body = Data()
+
+  static func configure(statusCode: Int, contentType: String, body: Data) {
+    Self.statusCode = statusCode
+    Self.contentType = contentType
+    Self.body = body
+  }
+
+  static func reset() {
+    configure(statusCode: 200, contentType: "application/json", body: Data())
+  }
+
+  override class func canInit(with request: URLRequest) -> Bool { true }
+
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+  override func startLoading() {
+    guard let url = request.url,
+      let response = HTTPURLResponse(
+        url: url,
+        statusCode: Self.statusCode,
+        httpVersion: nil,
+        headerFields: ["Content-Type": Self.contentType]
+      )
+    else {
+      client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+      return
+    }
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    client?.urlProtocol(self, didLoad: Self.body)
+    client?.urlProtocolDidFinishLoading(self)
+  }
+
+  override func stopLoading() {}
 }

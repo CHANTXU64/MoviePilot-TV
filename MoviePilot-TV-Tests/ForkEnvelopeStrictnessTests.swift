@@ -29,6 +29,7 @@ final class ForkEnvelopeStrictnessTests: XCTestCase {
       avatar: nil
     )
 
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.0.10-1")
     let share = try ForkEnvelopeFixtures.share(id: 88)
 
     // 1) 规范成功：success == true 且正 ID → 原样返回 ID。

@@ -1349,7 +1349,31 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
   @MainActor
   func testReadOnlyOpenAPIContractCompatibility() async throws {
     let config = try BackendCompatibilityConfig.loadOrSkip()
+
+    let service = APIService.shared
+    let snapshot = BackendServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    service.baseURLForTesting = config.baseURL
+    service.tokenForTesting = nil
+    service.currentUserForTesting = nil
+
+    var verifiedBackendVersion: String?
     do {
+      // OpenAPI 是否可用不能反过来证明后端身份；先从业务全局设置核实精确版本。
+      let settings = try await service.fetchSettings()
+      let backendVersion = try XCTUnwrap(
+        settings.BACKEND_VERSION?.nilIfBlank,
+        "\u{002F}system\u{002F}global 未返回 BACKEND_VERSION，不能判定 OpenAPI 404 的语义。"
+      )
+      verifiedBackendVersion = backendVersion
+      let status = BackendCompatibilityRegistry.current.status(for: backendVersion)
+      guard status == .registered else {
+        XCTFail(
+          "OpenAPI 检查前端点版本必须是已登记精确版本：\(backendVersion)，状态为 \(status.rawValue)。"
+        )
+        return
+      }
+
       let fetched = try await OpenAPIContractSupport.fetchOpenAPI(baseURL: config.baseURL)
       let baseline = try OpenAPIContractSupport.loadDocument("openapi-baseline.json")
       let exceptions = try OpenAPIContractSupport.loadExceptions()
@@ -1366,7 +1390,23 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       if report.hasBlockingFindings {
         XCTFail(report.formattedDescription)
       }
+    } catch let skip as XCTSkip {
+      throw skip
     } catch {
+      if OpenAPIContractSupport.isExpectedUnavailableDocument(
+        error,
+        backendVersion: verifiedBackendVersion
+      )
+      {
+        let version = verifiedBackendVersion ?? "unknown"
+        print(
+          "OpenAPI contract unverified/skipped for backend version=\(version): "
+            + "document endpoint returned JSON 404; this does not prove API_DOCS_ENABLE state."
+        )
+        throw XCTSkip(
+          "\(version) 的 OpenAPI 文档端点返回合法 JSON 404；文档项标记为未验证，不视为契约通过。"
+        )
+      }
       XCTFail("OpenAPI 契约检查未完成，不能当作通过：\(error)")
     }
   }
@@ -1426,18 +1466,11 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
           settings.BACKEND_VERSION?.nilIfBlank,
           "Global settings should expose BACKEND_VERSION for \(config.activeAccountDiagnostic)."
         )
-        switch AppVersionInfo.moviePilotVersionCompatibility(backendVersion) {
-        case .supported:
-          break
-        case .unsupported:
-          XCTFail(
-            "Backend \(backendVersion) is older than \(AppVersionInfo.compatibleMoviePilotVersion) for \(config.activeAccountDiagnostic)."
-          )
-        case .unparseable:
-          XCTFail(
-            "Backend version \(backendVersion) cannot be parsed for \(config.activeAccountDiagnostic)."
-          )
-        }
+        let status = BackendCompatibilityRegistry.current.status(for: backendVersion)
+        XCTAssertEqual(
+          status, .registered,
+          "Backend \(backendVersion) must be a registered compatible version for \(config.activeAccountDiagnostic); status: \(status.rawValue)."
+        )
       }
       await runBackendCompatibilityStep(
         "settings page backend version",

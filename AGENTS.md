@@ -64,6 +64,7 @@
 | 分页、轮询、SSE、多阶段加载 | 排序不稳定；过滤空批当终页；EOF 当成功；辅助失败/慢请求阻断主流程 | §5 |
 | tvOS 控件、Sheet、焦点、图片与长文本 | 模态与底层同时处理 Menu；不可达/无语义控件；静态测试冒充真机验收 | §6 |
 | 上游接口、权限、来源、站点、筛选能力 | 用错版本或权威域；把默认当全部；把未知当启用；以客户端隐藏代替授权 | §7 |
+| 按后端版本阻止某功能（已知缺陷版本门禁） | 范围写宽成 `< 某版本`；版本读不出或未登记时误禁用；把“未知放行”套到权限判断上 | §7“已知缺陷版本门禁” |
 | 日志、用户反馈、回归测试 | 失败静默或反馈不可见；测试绕过真实入口；把未运行写成通过 | §8 |
 | baseURL、动态 path、query、表单编码、图片 URL | 特殊字符变参数；重复转义；丢反代前缀；整串替换破坏第三方 URL | §9 |
 | 表单、Picker、筛选/排序、派生显示与子观察对象 | 隐藏值偷偷提交；无法恢复默认/清空；归一化破坏原值；状态改变但画面不更新 | §10 |
@@ -134,14 +135,14 @@ xcodebuild test \
   -skipPackagePluginValidation
 ```
 
-续签脚本与 Bundle ID 配置变更还应运行以下回归（PR CI 同步执行；真实 Xcode 环境会检查 Debug/Release 的 target 构建设置）：
+续签脚本、打包脚本与 Bundle ID 配置变更还应运行以下回归（PR CI 同步执行；真实 Xcode 环境会检查 Debug/Release 的 target 构建设置）：
 
 ```bash
 bash -n scripts/apple-tv-renew.sh
-python3 -m unittest discover -s scripts/tests -p 'test_apple_tv_renew.py'
+python3 -m unittest discover -s scripts/tests
 ```
 
-该回归包含本地命令替身和构建设置检查，不代表真实签名或设备安装验收。`test_package_ipa.py` 及实际 IPA 构建、打包只在 `Release` 工作流执行。
+该命令运行 `scripts/tests` 下全部 Python 测试（含续签脚本的本地命令替身和构建设置检查），不代表真实签名或设备安装验收。实际 IPA 构建、打包只在 `Release` 工作流执行，该工作流只跑打包相关测试。
 
 本机测试默认串行运行。不要移除 `-parallel-testing-enabled NO` 和 `-maximum-concurrent-test-simulator-destinations 1`，否则 XCTest 可能启动多个 `Clone N of Apple TV` 模拟器并并行执行不同测试套件。真实后端兼容测试尤其应串行执行，方便控制副作用套件的执行顺序和排查失败来源。
 
@@ -266,3 +267,4 @@ xcrun simctl list devices tvOS available
 4. `AGENTS.md` 只维护入口、路由、通用项目约束和 Git 工作流。
 5. 如果新增专项 Prompt 或工程指南，应同步更新本文件的任务路由表。
 6. 如果修改专项 Prompt 的行为规则，应优先修改 `.agents/prompts/` 对应文件，再检查本文件是否需要更新路由描述。
+7. `README.md` 面向用户，只写用户需要看的信息，不写测试数量、测试类名、内部实现或验证流水。
