@@ -22,15 +22,34 @@ nonisolated struct TopShelfRefreshConfiguration: Codable, Equatable, Sendable {
 /// 扩展只共享当前会话的访问令牌；不保存登录密码，也不把令牌写入共享 JSON。
 nonisolated enum TopShelfCredentials {
   static func query(_ sessionID: String, bundle: Bundle = .main) -> [String: Any]? {
-    guard let appGroupIdentifier = TopShelfSharedStore.appGroupIdentifier(in: bundle) else {
+    guard let appGroupIdentifier = TopShelfSharedStore.appGroupIdentifier(in: bundle),
+      let keychainAccessGroup = keychainAccessGroup(
+        for: appGroupIdentifier, bundle: bundle)
+    else {
       return nil
     }
     return [
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrService as String: "MoviePilot.TopShelf",
       kSecAttrAccount as String: sessionID,
-      kSecAttrAccessGroup as String: appGroupIdentifier,
+      kSecAttrAccessGroup as String: keychainAccessGroup,
     ]
+  }
+
+  private static func keychainAccessGroup(for appGroupIdentifier: String, bundle: Bundle) -> String? {
+    guard let executableURL = bundle.executableURL,
+      let executable = try? Data(contentsOf: executableURL, options: .mappedIfSafe),
+      let entitlements = TopShelfSigningMetadata.entitlements(in: executable),
+      let groups = entitlements["keychain-access-groups"] as? [String]
+    else {
+      return nil
+    }
+
+    if groups.contains(appGroupIdentifier) {
+      return appGroupIdentifier
+    }
+    let matches = groups.filter { $0.hasSuffix(".\(appGroupIdentifier)") }
+    return matches.count == 1 ? matches[0] : nil
   }
 
   static func save(_ token: String, sessionID: String) -> Bool {

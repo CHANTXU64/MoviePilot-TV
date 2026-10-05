@@ -18,6 +18,7 @@ nonisolated struct TopShelfSharedStore: @unchecked Sendable {
   private let containerURL: URL
   private let writeData: DataWriter
   private let persistentDefaults: UserDefaults?
+  private let synchronizeDefaults: @Sendable (UserDefaults) -> Void
   private static let recoveryKey = "TopShelfRecoveryState"
 
   init(
@@ -25,11 +26,13 @@ nonisolated struct TopShelfSharedStore: @unchecked Sendable {
     persistentDefaults: UserDefaults? = nil,
     writeData: @escaping DataWriter = { data, url in
       try data.write(to: url, options: .atomic)
-    }
+    },
+    synchronizeDefaults: @escaping @Sendable (UserDefaults) -> Void = { _ = $0.synchronize() }
   ) {
     self.containerURL = containerURL.standardizedFileURL
     self.writeData = writeData
     self.persistentDefaults = persistentDefaults
+    self.synchronizeDefaults = synchronizeDefaults
   }
 
   static func appGroupStore(
@@ -67,9 +70,7 @@ nonisolated struct TopShelfSharedStore: @unchecked Sendable {
       data = try Data(contentsOf: stateFileURL)
     } else {
       guard let persistentDefaults else { return nil }
-      guard persistentDefaults.synchronize() else {
-        throw TopShelfSharedStoreError.persistenceFailed
-      }
+      synchronizeDefaults(persistentDefaults)
       guard let saved = persistentDefaults.data(forKey: Self.recoveryKey) else { return nil }
       data = saved
     }
@@ -91,9 +92,7 @@ nonisolated struct TopShelfSharedStore: @unchecked Sendable {
       recovery.snapshot = nil
       recovery.previousSnapshot = nil
       persistentDefaults.set(try JSONEncoder().encode(recovery), forKey: Self.recoveryKey)
-      guard persistentDefaults.synchronize() else {
-        throw TopShelfSharedStoreError.persistenceFailed
-      }
+      synchronizeDefaults(persistentDefaults)
     }
     if let snapshot = state.snapshot {
       try FileManager.default.createDirectory(at: cardRootURL, withIntermediateDirectories: true)
@@ -190,9 +189,7 @@ nonisolated struct TopShelfSharedStore: @unchecked Sendable {
   private func invalidateState(_ disabledState: TopShelfSharedState) throws {
     if let persistentDefaults {
       persistentDefaults.removeObject(forKey: Self.recoveryKey)
-      guard persistentDefaults.synchronize() else {
-        throw TopShelfSharedStoreError.persistenceFailed
-      }
+      synchronizeDefaults(persistentDefaults)
     }
     try ensureStorageRoot()
     let fileManager = FileManager.default

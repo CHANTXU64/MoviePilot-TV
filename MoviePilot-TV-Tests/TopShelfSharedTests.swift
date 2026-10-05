@@ -22,7 +22,12 @@ private final class AppGroupFileManager: FileManager, @unchecked Sendable {
 final class TopShelfSharedTests: XCTestCase {
   func testConfiguredGroupIsUsedForContainerAndCredentialAccess() throws {
     let identifier = "group.com.example.SharedLibrary.\(UUID().uuidString)"
-    let bundle = try configurationBundle(group: identifier)
+    let keychainGroup = "A1B2C3D4E5.\(identifier)"
+    let bundle = try configurationBundle(group: identifier, entitlements: [
+      "com.apple.security.application-groups": [identifier],
+      "com.apple.developer.team-identifier": "A1B2C3D4E5",
+      "keychain-access-groups": [keychainGroup],
+    ])
     let fixture = try StoreFixture()
     defer { fixture.cleanup() }
     let fileManager = AppGroupFileManager(container: fixture.containerURL)
@@ -31,7 +36,7 @@ final class TopShelfSharedTests: XCTestCase {
     XCTAssertEqual(fileManager.requestedGroup, identifier)
     XCTAssertTrue(store.stateFileURL.path.hasPrefix(fixture.containerURL.path))
     let query = try XCTUnwrap(TopShelfCredentials.query("session", bundle: bundle))
-    XCTAssertEqual(query[kSecAttrAccessGroup as String] as? String, identifier)
+    XCTAssertEqual(query[kSecAttrAccessGroup as String] as? String, keychainGroup)
   }
 
   func testMissingOrUnexpandedGroupDoesNotOpenAContainerOrDefaultKeychainGroup() throws {
@@ -45,15 +50,38 @@ final class TopShelfSharedTests: XCTestCase {
     }
   }
 
+  func testCredentialQueryUsesFullyQualifiedSharedKeychainGroup() throws {
+    let group = "group.com.example.SharedLibrary"
+    let keychainGroup = "A1B2C3D4E5.\(group)"
+    let bundle = try configurationBundle(group: group, entitlements: [
+      "com.apple.security.application-groups": [group],
+      "com.apple.developer.team-identifier": "A1B2C3D4E5",
+      "keychain-access-groups": [keychainGroup],
+    ])
+
+    XCTAssertEqual(
+      TopShelfCredentials.query("session", bundle: bundle)?[kSecAttrAccessGroup as String] as? String,
+      keychainGroup
+    )
+  }
+
   func testBuiltAppAndExtensionUseTheSameExpandedGroup() throws {
     let app = Bundle.main
     let identifier = try XCTUnwrap(TopShelfSharedStore.appGroupIdentifier(in: app))
     let extensionBundle = try XCTUnwrap(Bundle(url: app.bundleURL.appendingPathComponent(
       "PlugIns/MoviePilot-TV-TopShelf.appex", isDirectory: true)))
     XCTAssertEqual(TopShelfSharedStore.appGroupIdentifier(in: extensionBundle), identifier)
-    for bundle in [app, extensionBundle] {
+    let keychainGroups = try [app, extensionBundle].map { bundle -> String in
+      let executable = try XCTUnwrap(bundle.executableURL)
+      let entitlements = try XCTUnwrap(
+        TopShelfSigningMetadata.entitlements(in: try Data(contentsOf: executable)))
+      let groups = try XCTUnwrap(entitlements["keychain-access-groups"] as? [String])
+      return try XCTUnwrap(groups.first)
+    }
+    XCTAssertEqual(keychainGroups[0], keychainGroups[1])
+    for (bundle, keychainGroup) in zip([app, extensionBundle], keychainGroups) {
       let query = try XCTUnwrap(TopShelfCredentials.query("session", bundle: bundle))
-      XCTAssertEqual(query[kSecAttrAccessGroup as String] as? String, identifier)
+      XCTAssertEqual(query[kSecAttrAccessGroup as String] as? String, keychainGroup)
     }
   }
 
@@ -86,6 +114,7 @@ final class TopShelfSharedTests: XCTestCase {
     let bundle = try configurationBundle(group: configured, entitlements: [
       "com.apple.security.application-groups": ["group.unrelated", renamed],
       "com.apple.developer.team-identifier": "A1B2C3D4E5",
+      "keychain-access-groups": [renamed],
     ])
     let fileManager = AppGroupFileManager(container: FileManager.default.temporaryDirectory)
     XCTAssertNotNil(TopShelfSharedStore.appGroupStore(fileManager: fileManager, bundle: bundle))
@@ -815,6 +844,28 @@ final class TopShelfSharedTests: XCTestCase {
       )
     )
     XCTAssertNil(store.presentation(at: now))
+  }
+
+  func testRecoveryDoesNotRequireUserDefaultsSynchronizeToReturnTrue() throws {
+    let fixture = try StoreFixture()
+    defer { fixture.cleanup() }
+    let suiteName = "TopShelfSharedTests-\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let store = TopShelfSharedStore(
+      containerURL: fixture.containerURL,
+      persistentDefaults: defaults,
+      synchronizeDefaults: { _ in }
+    )
+    let state = sharedState(sessionID: "recovered-session")
+
+    try store.saveState(state)
+    try FileManager.default.removeItem(at: store.stateFileURL)
+
+    let recovered = try XCTUnwrap(store.loadState())
+    XCTAssertEqual(recovered.activeSessionID, state.activeSessionID)
+    XCTAssertEqual(recovered.selection, state.selection)
+    XCTAssertNil(recovered.snapshot)
   }
 
   func testSharedStateAndImagesLiveUnderSharedCachesAndPreviewChecksOwner() throws {
