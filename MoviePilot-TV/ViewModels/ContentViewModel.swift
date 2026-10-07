@@ -350,8 +350,26 @@ class ContentViewModel: ObservableObject {
   }
 
   private func backendVersionAcknowledgements() -> [String: [String]] {
-    warningDefaults.dictionary(forKey: Self.backendVersionAcknowledgementsKey) as? [String: [String]]
-      ?? [:]
+    let stored =
+      warningDefaults.dictionary(forKey: Self.backendVersionAcknowledgementsKey)
+      as? [String: [String]] ?? [:]
+    let migrated = stored.mapValues { ids in
+      Array(
+        Set(
+          ids.map { id in
+            let parts = id.split(separator: "|", omittingEmptySubsequences: false)
+            // 旧格式为 后端版本|最低版本，只有合法的旧最低版本后缀才按迁移处理。
+            let version =
+              parts.count == 2 && MoviePilotVersion(String(parts[1])) != nil
+              ? String(parts[0]) : id
+            return MoviePilotVersion(version)?.description ?? version
+          })
+      ).sorted()
+    }
+    if migrated != stored {
+      warningDefaults.set(migrated, forKey: Self.backendVersionAcknowledgementsKey)
+    }
+    return migrated
   }
 
   private func updateAccountPermissionWarning(

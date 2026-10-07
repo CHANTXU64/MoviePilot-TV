@@ -1538,7 +1538,7 @@ struct SubscribeRequest: Codable {
 }
 
 /// 订阅详细配置数据
-nonisolated struct Subscribe: Codable, Identifiable, Hashable {
+nonisolated struct Subscribe: Decodable, Identifiable, Hashable {
   struct ImageURLs: Hashable {
     let poster: URL?
   }
@@ -1626,18 +1626,7 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
   /// 使用 imdbid 搜索
   var search_imdbid: Int?
   /// 自定义媒体类别
-  var media_category: String? {
-    didSet {
-      if media_category != oldValue {
-        mediaCategoryWasEdited = media_category != originalMediaCategory
-          || (media_category == nil && media_category_id?.isEmpty == false)
-      }
-    }
-  }
-
-  /// 明确修改路径时只提交路径，让后端重新解析分类；解码和初始化不会标记编辑。
-  private(set) var mediaCategoryWasEdited = false
-  private var originalMediaCategory: String?
+  var media_category: String?
 
   /// 媒体ID标识 (如 tmdb:1234)
   var mediaid: String?
@@ -1662,10 +1651,6 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
   var min_sample_rate: Int?
   /// 自定义媒体类别稳定标识
   var media_category_id: String?
-
-  /// 解码时读到的键（含值为 null 的键）。保存时只回传读到的键：缺键表示不修改，
-  /// 读到后变为 nil 表示清空。手动构造的订阅没有读到的键。
-  private(set) var decodedKeys: Set<CodingKeys> = []
 
   /// 图片 URL 在主线程按当前图片设置计算，避免后台 JSON 解码访问主线程 APIService。
   @MainActor var imageURLs: ImageURLs {
@@ -1734,7 +1719,6 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
     episode_group = try container.decodeIfPresent(String.self, forKey: .episode_group)
     search_imdbid = try container.decodeIfPresent(Int.self, forKey: .search_imdbid)
     media_category = try container.decodeIfPresent(String.self, forKey: .media_category)
-    originalMediaCategory = media_category
     mediaid = try container.decodeIfPresent(String.self, forKey: .mediaid)
     episode_priority = try container.decodeIfPresent([String: Int].self, forKey: .episode_priority)
     search_interval = try container.decodeIfPresent(Int.self, forKey: .search_interval)
@@ -1746,10 +1730,7 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
     min_bit_depth = try container.decodeIfPresent(Int.self, forKey: .min_bit_depth)
     min_sample_rate = try container.decodeIfPresent(Int.self, forKey: .min_sample_rate)
     media_category_id = try container.decodeIfPresent(String.self, forKey: .media_category_id)
-    decodedKeys = Set(container.allKeys)
   }
-
-  // 编码使用编译器合成的实现，只供测试替身生成接口响应；保存订阅走 SubscriptionWriteDTO。
 
   /// 成员初始化器，用于手动创建订阅。
   init(
@@ -1814,7 +1795,6 @@ nonisolated struct Subscribe: Codable, Identifiable, Hashable {
     self.filter = filter
     self.search_imdbid = search_imdbid
     self.media_category = media_category
-    self.originalMediaCategory = media_category
     self.mediaid = mediaid
     self.episode_priority = episode_priority
     self.search_interval = search_interval

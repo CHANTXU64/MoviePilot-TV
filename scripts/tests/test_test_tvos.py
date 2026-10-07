@@ -13,7 +13,7 @@ import unittest
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts/test-tvos.py"
-OWNED_DEVICE = "11111111-2222-4333-8444-555555555555"
+OWNED_DEVICE = "11111111-22AA-4333-8444-555555555555"
 COMMAND = r'''#!/usr/bin/env python3
 import json
 import os
@@ -27,7 +27,7 @@ tool = Path(sys.argv[0]).name
 with (root / "calls.jsonl").open("a") as log:
     log.write(json.dumps({"tool": tool, "args": args}) + "\n")
 mode = os.environ.get("TVOS_RUNNER_TEST_MODE", "success")
-owned = "11111111-2222-4333-8444-555555555555"
+owned = "11111111-22AA-4333-8444-555555555555"
 if tool == "xcrun":
     if args == ["simctl", "list", "runtimes", "-j"]:
         runtime = {"identifier": "com.apple.CoreSimulator.SimRuntime.tvOS-27-0",
@@ -36,7 +36,23 @@ if tool == "xcrun":
                                               "productFamily": "Apple TV"}]}
         print(json.dumps({"runtimes": [] if mode == "no_runtime" else [runtime]}))
     elif args[:2] == ["simctl", "create"]:
-        print(owned)
+        (root / "created.json").write_text(json.dumps({"name":args[2], "udid":owned,
+            "deviceTypeIdentifier":args[3], "runtime":args[4]}))
+        if mode == "create_failure_after_creation":
+            sys.exit(1)
+        if mode == "interrupt_during_create":
+            (root / "create-started").touch()
+            time.sleep(60)
+        print("all" if mode in ("invalid_create_output", "ambiguous_create_output") else owned)
+    elif args == ["simctl", "list", "devices", "-j"]:
+        device=json.loads((root / "created.json").read_text())
+        runtime=device.pop("runtime")
+        daily={"name":"Daily Apple TV", "udid":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+               "deviceTypeIdentifier":device["deviceTypeIdentifier"]}
+        matches=[device, daily]
+        if mode == "ambiguous_create_output":
+            matches.append(dict(device,udid="bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"))
+        print(json.dumps({"devices":{runtime:matches}}))
     elif args in [["simctl", "shutdown", owned], ["simctl", "delete", owned]]:
         pass
     else:
@@ -144,6 +160,43 @@ class TestTVOSRunnerTests(unittest.TestCase):
         self.assertFalse(any(arg.startswith("-skip-testing:") for arg in test))
         self.assertIn("-only-testing:MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests", test)
         self.assert_owned_cleanup()
+
+    def test_cancellation_during_create_recovers_only_owned_device(self):
+        self.environment["TVOS_RUNNER_TEST_MODE"]="interrupt_during_create"
+        process=subprocess.Popen([sys.executable,str(SCRIPT),"--skip-build"],env=self.environment,
+                                 stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        try:
+            deadline=time.monotonic()+10
+            while not (self.root / "create-started").exists() and time.monotonic()<deadline:
+                time.sleep(0.02)
+            self.assertTrue((self.root / "create-started").exists())
+            process.send_signal(signal.SIGTERM)
+            _,errors=process.communicate(timeout=10)
+            self.assertEqual(process.returncode,130,errors)
+            self.assert_owned_cleanup()
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+
+    def test_invalid_create_output_recovers_only_owned_device(self):
+        result=self.run_script("invalid_create_output", "--skip-build")
+        self.assertEqual(result.returncode,1)
+        self.assert_owned_cleanup()
+        self.assertTrue(any(call["args"]==["simctl","list","devices","-j"] for call in self.calls()))
+
+    def test_create_failure_after_creation_recovers_owned_device(self):
+        result=self.run_script("create_failure_after_creation", "--skip-build")
+        self.assertEqual(result.returncode,1)
+        self.assert_owned_cleanup()
+
+    def test_ambiguous_device_identity_does_not_delete_any_device(self):
+        result=self.run_script("ambiguous_create_output", "--skip-build")
+        self.assertEqual(result.returncode,1)
+        self.assertIn("身份不唯一",result.stderr)
+        self.assertFalse(any(call["args"][1] in ("shutdown","delete","erase")
+                             for call in self.calls() if call["tool"]=="xcrun"))
+        self.assertEqual(self.sentinel.read_text(),"saved session and password")
 
     def test_existing_destination_cannot_be_passed_to_runner(self):
         result = self.run_script("success", "--destination", "platform=tvOS Simulator,name=Apple TV")

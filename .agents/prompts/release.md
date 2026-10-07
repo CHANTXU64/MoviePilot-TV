@@ -54,11 +54,11 @@
 1. `README.md`
    - 顶部 Release 徽章必须改为用户提供的版本号，例如 `v0.3.1`。
    - 安装示例中的 `git checkout tags/v...` 必须改为用户提供的版本号。
-2. `MoviePilot-TV.xcodeproj/project.pbxproj`
-   - 只修改工程级的 Debug / Release 共享构建配置，主 App 和 Top Shelf 扩展从工程继承版本号。
-   - 两处 `MARKETING_VERSION` 必须改为不带 `v` 的版本号，例如发布 `v0.3.1` 时写 `0.3.1`。
+2. `Configuration/Base.xcconfig`
+   - 只修改共享版本配置，Debug / Release / Testing 的主 App 和 Top Shelf 扩展共同继承版本号。
+   - 唯一一处 `MARKETING_VERSION` 必须改为不带 `v` 的版本号，例如发布 `v0.3.1` 时写 `0.3.1`；不要在工程或配置覆盖文件重复定义。
    - 默认不要修改工程级 `CURRENT_PROJECT_VERSION`，除非用户明确要求递增 build number；递增时主 App 与扩展仍共同继承，不能单独覆盖。
-   - 不要修改 `MoviePilot-TV-Tests` test target 的 `MARKETING_VERSION = 1.0`。
+   - 不要修改 `Configuration/Tests.xcconfig` 中测试 target 的 `MARKETING_VERSION = 1.0`。
 3. `MoviePilot-TV/Models/AppChangelog.swift`
    - 对应版本条目必须在用户确认内容后直接作为第一项写入最新 `main`，不要另建分支或 Pull Request。
    - `version` 必须与发布版本号完全一致，`releaseDate` 使用发布日期。
@@ -145,7 +145,7 @@ Release Notes 必须使用下面的固定 Markdown 格式。不得自行更改�
 4. 待发布的业务功能相关 PR 是否已经合并；发布专属的新版本信息改动本身不得另建 PR。
 5. CI 是否通过。
 6. README Release 徽章和安装示例 tag 是否已经同步到用户提供的版本号。
-7. `MoviePilot-TV` App target 的 Debug / Release `MARKETING_VERSION` 是否已经同步到用户提供的不带 `v` 版本号。
+7. `MoviePilot-TV` 主 App 与 Top Shelf 扩展的 Debug / Release / Testing `MARKETING_VERSION` 是否已经同步到用户提供的不带 `v` 版本号。
 8. `main` 中是否已有版本号、发布日期和兼容后端版本一致的 `AppChangelogEntry`，且更新摘要和完整小节已经用户确认。
 9. GitHub Release Notes 草稿是否逐项复用了该条目，而不是重新从提交记录生成。
 10. 如果运行在真实 Mac/Xcode 环境，必须按 `AGENTS.md` 的标准 `xcodebuild` 命令完成本地构建/测试。

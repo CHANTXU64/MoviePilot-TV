@@ -1,90 +1,92 @@
 import Foundation
 
-/// 订阅保存（PUT /subscribe/）的请求体。已登记的 MoviePilot 版本（v3.0.4 至 v3.1.0）订阅数据结构一致，
-/// 后端只更新请求里出现的键：
-/// - 解码时读到的键都回传：有值发值，值为 nil 发 null（表示清空）；没读到的键省略，表示不修改。
-/// - 字符串原样发送，不 trim 正则、路径或识别词；下载器“默认”由编辑边界表达为 nil。
-/// - 只发送用户可编辑的字段，不回写状态、计数、洗版运行优先级等后端维护字段，也不回写旧的 tmdbid / doubanid / mediaid。
-/// id 用于定位 PUT 目标。
+/// PUT /subscribe/ 只更新请求中出现的字段。编辑会话提供原始值与草稿，未改字段省略，
+/// 改为 nil 的字段发 null；正则、路径和识别词保留原值。后端维护字段不参与写入。
 nonisolated struct SubscriptionWriteDTO: Encodable {
-  private let subscription: Subscribe
+  let original: Subscribe
+  let draft: Subscribe
   private typealias CodingKeys = Subscribe.CodingKeys
 
-  init(_ subscription: Subscribe) {
-    self.subscription = subscription
-  }
-
   func encode(to encoder: Encoder) throws {
+    guard let id = original.id, id > 0, draft.id == id else {
+      throw EncodingError.invalidValue(
+        draft.id as Any,
+        .init(
+          codingPath: encoder.codingPath, debugDescription: "订阅编辑目标必须保持有效且一致。"))
+    }
     var container = encoder.container(keyedBy: CodingKeys.self)
-    let s = subscription
-    try container.encodeIfPresent(s.id, forKey: .id)
-    try encodeRequired(s.name, forKey: .name, to: &container)
-    try encode(s.year, forKey: .year, to: &container)
-    try encodeRequired(s.type, forKey: .type, to: &container)
-    try encode(s.search_interval, forKey: .search_interval, to: &container)
-    try encode(s.keyword, forKey: .keyword, to: &container)
-    try encode(s.media_source, forKey: .media_source, to: &container)
-    try encode(s.media_id, forKey: .media_id, to: &container)
-    try encode(s.music_type, forKey: .music_type, to: &container)
-    try encode(s.total_tracks, forKey: .total_tracks, to: &container)
-    try encode(s.season, forKey: .season, to: &container)
-    try encode(s.filter, forKey: .filter, to: &container)
-    try encode(s.include, forKey: .include, to: &container)
-    try encode(s.exclude, forKey: .exclude, to: &container)
-    try encode(s.quality, forKey: .quality, to: &container)
-    try encode(s.resolution, forKey: .resolution, to: &container)
-    try encode(s.effect, forKey: .effect, to: &container)
-    try encode(s.audio_quality, forKey: .audio_quality, to: &container)
-    try encode(s.audio_format, forKey: .audio_format, to: &container)
-    try encode(s.min_bitrate, forKey: .min_bitrate, to: &container)
-    try encode(s.min_bit_depth, forKey: .min_bit_depth, to: &container)
-    try encode(s.min_sample_rate, forKey: .min_sample_rate, to: &container)
-    try encode(s.total_episode, forKey: .total_episode, to: &container)
-    try encode(s.start_episode, forKey: .start_episode, to: &container)
-    try encode(s.sites, forKey: .sites, to: &container)
-    try encode(s.downloader, forKey: .downloader, to: &container)
-    try encode(s.best_version, forKey: .best_version, to: &container)
-    try encode(s.best_version_full, forKey: .best_version_full, to: &container)
-    try encode(s.save_path, forKey: .save_path, to: &container)
-    try encode(s.search_imdbid, forKey: .search_imdbid, to: &container)
-    try encode(s.custom_words, forKey: .custom_words, to: &container)
+    try container.encode(id, forKey: .id)
+    try encodeChange(original.name, draft.name, forKey: .name, to: &container)
+    try encodeChange(original.year, draft.year, forKey: .year, to: &container)
+    try encodeChange(original.type, draft.type, forKey: .type, to: &container)
+    try encodeChange(
+      original.search_interval, draft.search_interval, forKey: .search_interval, to: &container)
+    try encodeChange(original.keyword, draft.keyword, forKey: .keyword, to: &container)
+    try encodeChange(original.music_type, draft.music_type, forKey: .music_type, to: &container)
+    try encodeChange(
+      original.total_tracks, draft.total_tracks, forKey: .total_tracks, to: &container)
+    try encodeChange(original.season, draft.season, forKey: .season, to: &container)
+    try encodeChange(original.filter, draft.filter, forKey: .filter, to: &container)
+    try encodeChange(original.include, draft.include, forKey: .include, to: &container)
+    try encodeChange(original.exclude, draft.exclude, forKey: .exclude, to: &container)
+    try encodeChange(original.quality, draft.quality, forKey: .quality, to: &container)
+    try encodeChange(original.resolution, draft.resolution, forKey: .resolution, to: &container)
+    try encodeChange(original.effect, draft.effect, forKey: .effect, to: &container)
+    try encodeChange(
+      original.audio_quality, draft.audio_quality, forKey: .audio_quality, to: &container)
+    try encodeChange(
+      original.audio_format, draft.audio_format, forKey: .audio_format, to: &container)
+    try encodeChange(original.min_bitrate, draft.min_bitrate, forKey: .min_bitrate, to: &container)
+    try encodeChange(
+      original.min_bit_depth, draft.min_bit_depth, forKey: .min_bit_depth, to: &container)
+    try encodeChange(
+      original.min_sample_rate, draft.min_sample_rate, forKey: .min_sample_rate, to: &container)
+    try encodeChange(
+      original.total_episode, draft.total_episode, forKey: .total_episode, to: &container)
+    try encodeChange(
+      original.start_episode, draft.start_episode, forKey: .start_episode, to: &container)
+    try encodeChange(original.sites, draft.sites, forKey: .sites, to: &container)
+    try encodeChange(original.downloader, draft.downloader, forKey: .downloader, to: &container)
+    try encodeChange(
+      original.best_version, draft.best_version, forKey: .best_version, to: &container)
+    try encodeChange(
+      original.best_version_full, draft.best_version_full, forKey: .best_version_full,
+      to: &container)
+    try encodeChange(original.save_path, draft.save_path, forKey: .save_path, to: &container)
+    try encodeChange(
+      original.search_imdbid, draft.search_imdbid, forKey: .search_imdbid, to: &container)
+    try encodeChange(
+      original.custom_words, draft.custom_words, forKey: .custom_words, to: &container)
+    try encodeChange(
+      original.filter_groups, draft.filter_groups, forKey: .filter_groups, to: &container)
+    try encodeChange(
+      original.episode_group, draft.episode_group, forKey: .episode_group, to: &container)
+    // 后端要求媒体身份的两个键共同出现，避免只改来源或 ID 形成半个身份。
+    if original.media_source != draft.media_source || original.media_id != draft.media_id {
+      try container.encode(draft.media_source, forKey: .media_source)
+      try container.encode(draft.media_id, forKey: .media_id)
+    }
     try encodeCategory(to: &container)
-    try encode(s.filter_groups, forKey: .filter_groups, to: &container)
-    try encode(s.episode_group, forKey: .episode_group, to: &container)
   }
 
-  private func encode<Value: Encodable>(
-    _ value: Value?,
+  private func encodeChange<Value: Encodable & Equatable>(
+    _ original: Value, _ draft: Value,
     forKey key: CodingKeys,
     to container: inout KeyedEncodingContainer<CodingKeys>
   ) throws {
-    if let value {
-      try container.encode(value, forKey: key)
-    } else if subscription.decodedKeys.contains(key) {
-      try container.encodeNil(forKey: key)
-    }
+    guard original != draft else { return }
+    try container.encode(draft, forKey: key)
   }
 
-  /// name / type 在模型里是非可选字符串，缺键或 null 解码为空串；空串按 nil 处理，不虚构空名称。
-  private func encodeRequired(
-    _ value: String,
-    forKey key: CodingKeys,
-    to container: inout KeyedEncodingContainer<CodingKeys>
-  ) throws {
-    try encode(value.isEmpty ? nil : value, forKey: key, to: &container)
-  }
-
-  /// 未编辑时保留稳定 ID；编辑路径时省略旧 ID，避免后端用旧分类覆盖新路径。
-  /// ID:null 会同时清空路径，因此路径编辑和清空都只发送路径键。
   private func encodeCategory(to container: inout KeyedEncodingContainer<CodingKeys>) throws {
-    if subscription.mediaCategoryWasEdited {
-      let path = subscription.media_category
+    if original.media_category != draft.media_category {
+      // 分类 ID 优先于路径；路径修改必须省略旧 ID。ID:null 会同时清空路径。
+      let path = draft.media_category
       try container.encode(path == "" ? nil : path, forKey: .media_category)
-      return
+    } else {
+      try encodeChange(
+        original.media_category_id, draft.media_category_id,
+        forKey: .media_category_id, to: &container)
     }
-    if let categoryID = subscription.media_category_id, !categoryID.isEmpty {
-      try container.encode(categoryID, forKey: .media_category_id)
-    }
-    try encode(subscription.media_category, forKey: .media_category, to: &container)
   }
 }

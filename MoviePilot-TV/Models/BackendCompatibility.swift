@@ -87,3 +87,47 @@ nonisolated struct BackendCompatibilityRegistry: Equatable, Sendable {
       .map { MoviePilotVersion($0)! }
   )
 }
+
+nonisolated enum BackendFeature: Equatable, Sendable {
+  case forkSubscription
+}
+
+nonisolated struct BackendCapability: Equatable, Sendable {
+  let unavailableReason: String?
+  let unavailableHint: String?
+  var isAvailable: Bool { unavailableReason == nil }
+}
+
+/// 已证实的功能缺陷独立于兼容登记：未登记、未知或未来版本不因此禁用。
+nonisolated enum BackendCapabilities {
+  private struct KnownDefect: Sendable {
+    let feature: BackendFeature
+    let firstAffected: MoviePilotVersion
+    let firstFixed: MoviePilotVersion
+    let reason: @Sendable (MoviePilotVersion) -> String
+    /// 入口置灰时替代原标题的短提示。
+    let hint: String
+  }
+
+  private static let knownDefects = [
+    KnownDefect(
+      feature: .forkSubscription,
+      firstAffected: MoviePilotVersion("v3.0.1")!,
+      firstFixed: MoviePilotVersion("v3.0.5")!,
+      reason: { version in
+        "当前 MoviePilot \(version) 的复用订阅接口存在已知问题，可能创建成功却返回失败。为避免重复创建，此版本暂不可复用；升级到 v3.0.5 或更高版本后即可使用。普通订阅与编辑仍可使用。"
+      },
+      hint: "复用订阅（需升级至 v3.0.5）"
+    )
+  ]
+
+  static func capability(for feature: BackendFeature, backendVersion: String?) -> BackendCapability
+  {
+    guard let version = MoviePilotVersion(backendVersion),
+      let defect = knownDefects.first(where: {
+        $0.feature == feature && version >= $0.firstAffected && version < $0.firstFixed
+      })
+    else { return BackendCapability(unavailableReason: nil, unavailableHint: nil) }
+    return BackendCapability(unavailableReason: defect.reason(version), unavailableHint: defect.hint)
+  }
+}

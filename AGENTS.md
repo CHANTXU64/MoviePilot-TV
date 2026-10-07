@@ -115,9 +115,9 @@ python3 scripts/test-tvos.py --skip-build \
 
 `--skip-build` 仅跳过依赖解析和 Debug clean build，不能将它单独当作完整验证。可用 `--derived-data-path <目录>` 和 `--result-bundle-path <新的.xcresult路径>` 保存构建与测试产物。
 
-Xcode 的 Test action 使用独立 `Testing` 配置，安装 `org.chantxu.MoviePilot-TV.Testing` 和对应的 Top Shelf 扩展，使用独立 App Group、钥匙串访问组与偏好/缓存容器。Run action 继续使用正常 Debug App。测试目标拒绝在普通 Debug/Release 配置编译，以免误用 `xcodebuild test -configuration Debug` 覆盖日常 App。命令行测试统一使用上面的入口；需要手动诊断时，必须使用自己新建的测试设备、`-configuration Testing` 和串行参数。
+Xcode 的 Test action 使用独立 `Testing` 配置，安装 `org.chantxu.MoviePilot-TV.Testing` 和对应的 Top Shelf 扩展，使用独立 App Group、钥匙串访问组与偏好/缓存容器。Run action 继续使用正常 Debug App。共享版本和默认身份由 `Configuration/Base.xcconfig` 定义，Testing 继承 Debug 并覆盖独立身份；深链 scheme 由主 App 与扩展 Info.plist 的 `TopShelfURLScheme` 读取，不在代码中写死。测试目标拒绝在普通 Debug/Release 配置编译，以免误用 `xcodebuild test -configuration Debug` 覆盖日常 App。命令行测试统一使用上面的入口；需要手动诊断时，必须使用自己新建的测试设备、`-configuration Testing` 和串行参数。
 
-续签脚本、打包脚本与 Bundle ID 配置变更还应运行以下回归（PR CI 同步执行；真实 Xcode 环境会检查 Debug/Release 的 target 构建设置）：
+续签脚本、打包脚本与 Bundle ID 配置变更还应运行以下回归（PR CI 同步执行；真实 Xcode 环境会检查 Debug/Release/Testing 的 target 构建设置）：
 
 ```bash
 bash -n scripts/apple-tv-renew.sh
@@ -195,7 +195,7 @@ PR CI 只执行 Simulator 构建、测试和脚本回归，不编译或打包发
 对本仓库进行任何代码、配置、文档或工作流修改时，必须遵守：
 
 1. 禁止在未获得用户明确允许的情况下执行 `git commit`、`git push` 或创建 Pull Request；其中私自创建 PR 属于严重违规。用户要求“写好”“整理好”“提交到 GitHub”不足以自动推导为允许 commit/push/开 PR，必须先单独确认。
-2. 禁止直接向 `main` 分支提交任何修改。唯一例外是 `.agents/prompts/release.md` 定义的正式发布流程：用户确认 Release Notes 后，发布专属的新版本信息改动（`AppChangelog.swift`、对应版本断言、README 版本标记和供主 App 与 Top Shelf 扩展继承的工程级 `MARKETING_VERSION`）必须直接在最新 `main` 上修改，不要创建发布分支或 Pull Request；commit、Push 和创建 GitHub Release 仍分别需要用户明确授权。
+2. 禁止直接向 `main` 分支提交任何修改。唯一例外是 `.agents/prompts/release.md` 定义的正式发布流程：用户确认 Release Notes 后，发布专属的新版本信息改动（`AppChangelog.swift`、对应版本断言、README 版本标记和供三种配置的主 App 与 Top Shelf 扩展继承的 `Configuration/Base.xcconfig` 版本号）必须直接在最新 `main` 上修改，不要创建发布分支或 Pull Request；commit、Push 和创建 GitHub Release 仍分别需要用户明确授权。
 3. 除上述正式发布及其新版本信息同步例外外，每次开始修改前，必须基于最新 `main` 创建独立分支。
 4. AI 创建的分支名必须使用 `ai/xxx` 格式，例如：
    - `ai/add-github-actions-ci`

@@ -3351,7 +3351,7 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
         for id in ids {
           let detail = try await service.fetchSubscription(id: id)
           XCTAssertEqual(detail.id, id, "Subscription detail ID changed before unchanged update.")
-          let success = try await service.saveSubscription(detail).success
+          let success = try await service.saveSubscription(original: detail, draft: detail).success
           XCTAssertTrue(success, "Unchanged subscription update was rejected for subscription \(id).")
         }
       }

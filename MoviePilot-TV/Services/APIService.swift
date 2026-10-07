@@ -39,17 +39,6 @@ extension APIError: LocalizedError {
   }
 }
 
-/// 后端某项能力在当前版本上已确认不可用；只用于已证实有缺陷的精确版本范围。
-nonisolated enum BackendCapabilityError: LocalizedError {
-  case unavailable(String)
-
-  var errorDescription: String? {
-    switch self {
-    case .unavailable(let reason): return reason
-    }
-  }
-}
-
 enum SessionRefreshResult: Equatable {
   case alreadyRefreshed
   case noStoredSession
@@ -2994,22 +2983,15 @@ class APIService: ObservableObject {
     return try await decodeOrUnwrap([NotExistMediaInfo].self, from: data)
   }
 
-  /// 保存（更新）订阅配置
-  /// - 对应前端: 1. `MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue` (更新) 2. `MoviePilot-Frontend/src/components/cards/MediaCard.vue` (新增)
-  /// - 应用场景: 1. 在订阅编辑弹窗中点击“保存”，对现有订阅进行修改 (PUT)。 2. 在媒体卡片或详情页上点击订阅，创建新的订阅记录 (POST)。
-  func saveSubscription(_ subscribe: Subscribe) async throws -> (
+  /// 更新订阅编辑草稿（PUT /subscribe/）；新增订阅使用 addSubscription。
+  func saveSubscription(original: Subscribe, draft: Subscribe) async throws -> (
     success: Bool, message: String?
   ) {
-    let body = try JSONEncoder().encode(SubscriptionWriteDTO(subscribe))
+    let body = try JSONEncoder().encode(SubscriptionWriteDTO(original: original, draft: draft))
     let endpoint = "/subscribe/"
-    // 如果存在 ID，则很可能是更新 (PUT)，但 API 可能同时处理 POST 或有其他逻辑。
-    // 基于 Vue：更新是 PUT /subscribe/，创建是 POST /subscribe/ (或默认配置)
-    // 由于 Subscribe 结构体有 ID，如果它 > 0 或不为 nil，则使用 PUT。
-    let method = (subscribe.id != nil && subscribe.id != 0) ? "PUT" : "POST"
-
     let data = try await makeRequest(
       endpoint: endpoint,
-      method: method,
+      method: "PUT",
       body: body
     )
     let result = try decodeStrictActionResponseSync(from: data)
@@ -3125,37 +3107,10 @@ class APIService: ObservableObject {
     return result
   }
 
-  /// v3.0.1–v3.0.4 把复用接口的响应声明为不带数据，后端创建成功后会在响应校验处报错，
-  /// v3.0.5 修复（上游提交 2e2a037）。只在已确认的这几个版本上事前阻止；读不出版本时照常复用。
-  nonisolated static func subscriptionForkUnavailableReason(backendVersion: String?) -> String? {
-    guard let version = MoviePilotVersion(backendVersion),
-      let firstAffected = MoviePilotVersion("v3.0.1"),
-      let fixed = MoviePilotVersion("v3.0.5"),
-      version >= firstAffected, version < fixed
-    else { return nil }
-    return "当前 MoviePilot \(version) 的复用订阅接口存在已知问题，可能创建成功却返回失败。为避免重复创建，此版本暂不可复用；升级到 v3.0.5 或更高版本后即可使用。普通订阅与编辑仍可使用。"
-  }
-
   /// 复用（Fork）一个订阅分享
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/ForkSubscribeDialog.vue (doFork)
   /// - 应用场景: 在"订阅分享"中，点击"复用"按钮，基于分享的配置创建一个新的个人订阅。
   func forkSubscription(share: SubscribeShare) async throws -> Int {
-    let snapshot = sessionSnapshot()
-    // 版本与全局配置共用会话 owner；切服/切账号会清空 settings。先补读一次版本，
-    // 补读期间会话变化即取消；补读失败或仍读不出版本时照常复用。
-    if MoviePilotVersion(settings?.BACKEND_VERSION) == nil {
-      do {
-        _ = try await fetchSettings()
-      } catch is CancellationError {
-        throw CancellationError()
-      } catch {
-        Logger.error("[forkSubscription] Failed to refresh backend version: \(error)")
-      }
-      guard isSessionUnchanged(from: snapshot) else { throw CancellationError() }
-    }
-    if let reason = Self.subscriptionForkUnavailableReason(backendVersion: settings?.BACKEND_VERSION) {
-      throw BackendCapabilityError.unavailable(reason)
-    }
     let body = try JSONEncoder().encode(share)
     let data = try await makeRequest(
       endpoint: "/subscribe/fork",

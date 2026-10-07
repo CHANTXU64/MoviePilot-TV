@@ -23,8 +23,11 @@ struct MediaContextMenuItems: View {
       Button {
         subscriptionHandler.forkSheetRequest = share
       } label: {
-        Label("复用订阅", systemImage: "document.on.document")
+        Label(
+          subscriptionHandler.forkCapability.unavailableHint ?? "复用订阅",
+          systemImage: "document.on.document")
       }
+      .disabled(!subscriptionHandler.forkCapability.isAvailable)
     }
 
     Button {

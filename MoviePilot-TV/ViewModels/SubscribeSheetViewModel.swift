@@ -7,6 +7,7 @@ class SubscribeSheetViewModel: ObservableObject {
   nonisolated deinit {}
 
   @Published var subscribe: Subscribe
+  private var original: Subscribe
   @Published var sites: [Site] = []
   @Published var downloaders: [DownloaderConf] = []
   @Published var directories: [TransferDirectoryConf] = []
@@ -81,7 +82,13 @@ class SubscribeSheetViewModel: ObservableObject {
 
   var mediaCategoryText: String {
     get { subscribe.media_category ?? "" }
-    set { subscribe.media_category = newValue.isEmpty ? nil : newValue }
+    set {
+      // 输入框确认时会回写原文本；内容未变时不能顺带清掉隐藏的分类 ID。
+      guard newValue != mediaCategoryText else { return }
+      subscribe.media_category = newValue.isEmpty ? nil : newValue
+      subscribe.media_category_id =
+        subscribe.media_category == nil ? nil : original.media_category_id
+    }
   }
 
   // F-135：与 `AddDownloadViewModel.targetDirectories` 同一套规范化 —— 先 trim、再丢空、
@@ -101,6 +108,7 @@ class SubscribeSheetViewModel: ObservableObject {
     apiService: APIService = .shared
   ) {
     self.subscribe = subscribe
+    self.original = subscribe
     self.isNewSubscription = isNewSubscription && subscribe.id == nil
     self.apiService = apiService
   }
@@ -160,6 +168,7 @@ class SubscribeSheetViewModel: ObservableObject {
               return
             }
             self.subscribe = fullSubscribe
+            self.original = fullSubscribe
             isNewSubscription = false
             isCreatedAndPaused = true
           } else {
@@ -303,6 +312,7 @@ class SubscribeSheetViewModel: ObservableObject {
       return false
     }
     self.subscribe = fullSubscribe
+    self.original = fullSubscribe
     isCreatedAndPaused = true
     return true
   }
@@ -330,7 +340,8 @@ class SubscribeSheetViewModel: ObservableObject {
         return false
       }
       let snapshot = apiService.sessionSnapshot()
-      let result = try await apiService.saveSubscription(subscribe)
+      let savedDraft = subscribe
+      let result = try await apiService.saveSubscription(original: original, draft: savedDraft)
       guard apiService.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
       guard result.success else {
         errorMessage =
@@ -339,6 +350,7 @@ class SubscribeSheetViewModel: ObservableObject {
         return false
       }
 
+      original = savedDraft
       isSaved = true
       publishDeferredSaveSuccessIfNeeded()
       // 保存完成后只在同一账号内继续启用、搜索和刷新订阅状态。

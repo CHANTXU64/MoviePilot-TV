@@ -41,8 +41,8 @@
 - MoviePilot v2.15.3 起，新增订阅和存在性查重已按媒体身份、季号与 `episode_group` 区分；同一媒体同一季可以存在不同剧集组的订阅。创建请求必须保留所选剧集组。
 - MoviePilot Web v3.0.7 仍按媒体与 `season` 汇总已订阅状态，媒体级查询和取消传 `media_source`，仍没有传 `episode_group`；TV 跟随 Web 保持相同状态与操作范围，不擅自改成按剧集组取消。
 - `best_version` / `best_version_full` 的省略值当前表示使用后端默认配置，显式 `0` 表示普通订阅或关闭洗版。目标版本若改变空值、默认值或数值语义，TV 创建 payload 必须同步。
-- Web 快速新增当前发送精简配置；编辑当前先 GET 完整 `Subscribe`，再完整 PUT，并由后端裁剪不可写运行字段。订阅保存唯一走 `SubscriptionWriteDTO`：PUT 使用 `exclude_unset=True`，只更新请求里出现的键；解码时读到的键都回传，有值发值，值为 nil 发 `null` 表示清空，没读到的键省略表示不修改。字符串原样发送，不 trim 正则、路径或识别词；下载器选“默认”时在编辑边界转换为 nil，发送 `downloader:null` 清除已有指定值，不能发送会被后端删键的空字符串。只发用户可编辑字段（包括 `search_interval`、音质过滤等 GET 返回的值），不回写状态、计数、洗版运行优先级、owner 等后端维护字段。
-- 类别（`media_category_id` + `media_category`）：有效稳定 ID 优先路径，ID 键为空会同时清空 ID 和路径。未编辑类别时保留非空稳定 ID；明确修改路径时省略旧 ID，只发新路径；清空类别时省略旧 ID，只发 `media_category:null`。仅路径写入由后端保存为兼容路径，不反向推断新的稳定 ID。历史订阅的 ID 为空或缺失时仍只回传路径。每次 schema 更新都要逐字段对照 Web 请求体、后端公共可写/排除字段、TV `CodingKeys` 与最终编码，并从已有值验证原样保存、修改和清空的实际结果。
+- Web 快速新增当前发送精简配置；编辑当前先 GET 完整 `Subscribe`，再完整 PUT，并由后端裁剪不可写运行字段。订阅保存唯一走 `SubscriptionWriteDTO`：PUT 使用 `exclude_unset=True`，只更新请求里出现的键；编辑会话持有 original 与 draft，DTO 仅发送变化的可写字段；原样保存只发定位 ID，显式改为 nil 发 `null`，不依赖解码键或模型编辑标志。媒体身份变化时两个身份键一起提交。字符串原样发送，不 trim 正则、路径或识别词；下载器选“默认”时在编辑边界转换为 nil，发送 `downloader:null` 清除已有指定值，不能发送会被后端删键的空字符串。只发用户可编辑字段（包括 `search_interval`、音质过滤等 GET 返回的值），不回写状态、计数、洗版运行优先级、owner 等后端维护字段。
+- 类别（`media_category_id` + `media_category`）：有效稳定 ID 优先路径，ID 键为空会同时清空 ID 和路径。未编辑类别时省略两个类别字段，由后端保留原有稳定 ID；明确修改路径时省略旧 ID，只发新路径；清空类别时省略旧 ID，只发 `media_category:null`。仅路径写入由后端保存为兼容路径，不反向推断新的稳定 ID。历史订阅的 ID 为空或缺失时，修改路径仍只发送路径；详情只有稳定 ID 没有路径时，输入框显示为空；内容未改（含输入框确认时回写原文本）不得改动 ID，与 Web 一样保留原分类。每次 schema 更新都要逐字段对照 Web 请求体、后端公共可写/排除字段、TV `CodingKeys` 与最终编码，并从已有值验证原样保存、修改和清空的实际结果。
 - `total_episode` 需要保留 `null`、`0`、正数三态及后端的人工集数语义。未修改保存不应把 `null` 变为 `0` 或意外切换人工模式；若后端默认值、更新逻辑或 Web 表单行为变化，TV 编码需同步。
 - `save_path == nil` 当前表示自动目录；非空值是后端可直接消费的本地路径或带 storage 的远程 URI。编辑时保留既有合法值并允许清空；若目录接口、存储 URI 格式或后端允许范围变化，TV 选择器与请求值必须一起复核。
 - 复用订阅（`/subscribe/fork`）只在 v3.0.1–v3.0.4 上事前禁止（上游响应声明缺陷，v3.0.5 修复）；版本读不出、无法识别或高于登记版本时照常允许。
@@ -87,7 +87,7 @@
   - 公共写入排除字段是否仍保护后端运行事实；Web 使用的可编辑字段是否仍允许写入。
 - `app/api/endpoints/subscribe.py`
   - `/subscribe/` 快照、创建/更新、媒体查询、媒体级/精确删除、状态、搜索、重置及 Fork 的参数、owner 范围和响应 envelope 是否变化。`GET /subscribe/` 在省略 `page`/`count` 时仍应返回完整快照。
-  - `PUT /subscribe/` 是否仍用 `exclude_unset=True` 裁剪公共写入字段；`SubscriptionWriteDTO` 对 GET 已返回的键（含 `search_interval`、音质过滤等）原样回传，没读到的键省略；`media_category_id` 与路径的优先级、空编号清空行为是否变化。
+  - `PUT /subscribe/` 是否仍用 `exclude_unset=True` 裁剪公共写入字段；`SubscriptionWriteDTO` 按原始值与草稿差异提交（含 `search_interval`、音质过滤等）；`media_category_id` 与路径的优先级、空编号清空行为是否变化。
   - `GET|DELETE /subscribe/media/{media_id}?media_source=` 是否仍支持目标版本的各类身份，并统一应用 `season`；未传 season 时的范围是否变化。
   - GET 的影视元数据回退是否仍覆盖电影和电视剧的全部来源（含 TMDB），是否仍在精确身份未命中且有规范标题时回退，并按“精确年份优先、空年份次之；卡片无年份只匹配空年份”选择；音乐是否仍不回退。DELETE 是否仍不采用该回退。
 - 订阅分享和目录/存储相关 schema、端点

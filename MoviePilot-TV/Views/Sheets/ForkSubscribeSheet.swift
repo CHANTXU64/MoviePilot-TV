@@ -91,6 +91,13 @@ struct ForkSubscribeSheet: View {
 
         Spacer()
 
+        if let reason = subscriptionHandler.forkCapability.unavailableReason {
+          Text(reason)
+            .font(.body)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+
         HStack {
           Spacer()
           SheetActionButton(
@@ -110,6 +117,7 @@ struct ForkSubscribeSheet: View {
               }
             }
           }
+          .disabled(!subscriptionHandler.forkCapability.isAvailable)
           .frame(width: 520)
           Spacer()
         }

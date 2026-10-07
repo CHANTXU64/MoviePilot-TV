@@ -65,12 +65,25 @@ nonisolated struct TopShelfRoutePayload: Codable, Equatable, Sendable {
 }
 
 nonisolated enum TopShelfDeepLink {
-  private static let scheme = "moviepilot-tv"
+  static func scheme(in bundle: Bundle = .main) -> String? {
+    guard let value = bundle.object(forInfoDictionaryKey: "TopShelfURLScheme") as? String else {
+      return nil
+    }
+    let scheme = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    guard let first = scheme.utf8.first, (97...122).contains(first),
+      scheme.utf8.allSatisfy({
+        (97...122).contains($0) || (48...57).contains($0)
+          || [43, 45, 46].contains($0)
+      })
+    else { return nil }
+    return scheme
+  }
   private static let host = "top-shelf"
   private static let mediaPath = "/media"
   private static let payloadName = "payload"
 
-  static func url(for payload: TopShelfRoutePayload) throws -> URL {
+  static func url(for payload: TopShelfRoutePayload, bundle: Bundle = .main) throws -> URL {
+    guard let scheme = scheme(in: bundle) else { throw TopShelfDeepLinkError.invalidURL }
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
     let encoded = try encoder.encode(payload)
@@ -87,8 +100,9 @@ nonisolated enum TopShelfDeepLink {
     return url
   }
 
-  static func payload(from url: URL) -> TopShelfRoutePayload? {
-    guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+  static func payload(from url: URL, bundle: Bundle = .main) -> TopShelfRoutePayload? {
+    guard let scheme = scheme(in: bundle),
+      let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
       components.scheme?.lowercased() == scheme,
       components.host?.lowercased() == host,
       components.path == mediaPath

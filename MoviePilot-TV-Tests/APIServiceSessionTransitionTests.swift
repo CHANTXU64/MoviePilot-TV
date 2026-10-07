@@ -176,7 +176,9 @@ extension SystemSessionBehaviorTests {
     service.setStoredCredentialsForTesting(username: "account-a", password: "password")
 
     do {
-      _ = try await service.saveSubscription(Subscribe(name: "测试", type: "电影"))
+      _ = try await service.saveSubscription(
+        original: Subscribe(id: 42, name: "测试", type: "电影"),
+        draft: Subscribe(id: 42, name: "测试", type: "电影"))
       XCTFail("Expected an unauthorized response")
     } catch is CancellationError {
       // Expected: the old request ends after the session is replaced.

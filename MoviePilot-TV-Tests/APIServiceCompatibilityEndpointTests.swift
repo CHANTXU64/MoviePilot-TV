@@ -663,97 +663,62 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     }
   }
 
-  func testForkPreflightOnlyStopsVersionsWithTheKnownForkBug() async throws {
+  func testHandlerStopsKnownForkBugBeforeSendingRequest() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
     await CompatibilityEndpointURLProtocol.stub.reset()
-    await CompatibilityEndpointURLProtocol.stub.setPublicSettingsResponse(Data(
-      #"{"BACKEND_VERSION":"v3.0.4"}"#.utf8))
     let service = APIService.isolatedTestingInstance()
     service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    configureForkUser(service)
     let shares = try await service.fetchSubscriptionShares(path: "/subscribe/shares")
     let share = try XCTUnwrap(shares.first)
-    do {
-      _ = try await service.forkSubscription(share: share)
-      XCTFail("v3.0.4 的复用必须在 POST 前停止")
-    } catch is BackendCapabilityError {
-      // 返回可供现有复用弹窗显示的能力说明。
-    }
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.0.4")
+    let handler = SubscriptionHandler(apiService: service)
+    XCTAssertFalse(handler.forkCapability.isAvailable)
+    let result = await handler.fork(share: share)
+    XCTAssertNil(result)
+    XCTAssertEqual(handler.forkErrorMessage, handler.forkCapability.unavailableReason)
     let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
-    XCTAssertTrue(paths.contains("/api/v1/system/global"))
     XCTAssertFalse(paths.contains("/api/v1/subscribe/fork"))
+    XCTAssertFalse(paths.contains("/api/v1/system/global"))
 
-    // 读不出版本时会补读一次设置；补读结果也不带版本号，确保这里测的是放行逻辑。
-    await CompatibilityEndpointURLProtocol.stub.setPublicSettingsResponse(Data(#"{}"#.utf8))
-    for version in ["v3.0.5", "v3.0.0", "v2.15.6", "v3.0.10-1-beta", "v9.0.0"] {
-      service.settings = GlobalSettings(BACKEND_VERSION: version)
-      let id = try await service.forkSubscription(share: share)
-      XCTAssertEqual(id, 901, "\(version) 没有已证实的复用缺陷，不能禁用")
-    }
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.0.5")
+    XCTAssertTrue(handler.forkCapability.isAvailable)
+    let allowed = await handler.fork(share: share)
+    XCTAssertEqual(allowed, 901)
   }
 
-  func testForkPreflightTreatsAffectedRangeExactly() {
+  func testCentralForkCapabilityKeepsAffectedRangeExactAndUnknownAllowed() {
     for version in ["v3.0.1", "v3.0.3", "v3.0.4", "3.0.4-1"] {
-      XCTAssertNotNil(APIService.subscriptionForkUnavailableReason(backendVersion: version), version)
+      XCTAssertFalse(
+        BackendCapabilities.capability(for: .forkSubscription, backendVersion: version).isAvailable)
     }
-    for version in [nil, "", "v3.0.0", "v3.0.5", "v3.1.0", "v3.0.4-beta", "v2.15.6"] {
-      XCTAssertNil(APIService.subscriptionForkUnavailableReason(backendVersion: version), version ?? "nil")
+    for version in [nil, "", "v3.0.0", "v3.0.5", "v3.1.0", "v3.0.4-beta", "v2.15.6", "v9.0.0"] {
+      XCTAssertTrue(
+        BackendCapabilities.capability(for: .forkSubscription, backendVersion: version).isAvailable)
     }
   }
 
-  func testForkContinuesWhenBackendVersionCannotBeLoaded() async throws {
+  func testUnknownVersionForkDoesNotRefreshOrOverwriteSharedSettings() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
     await CompatibilityEndpointURLProtocol.stub.reset()
-    await CompatibilityEndpointURLProtocol.stub.setPublicSettingsResponse(Data(#"{}"#.utf8))
     let service = APIService.isolatedTestingInstance()
     service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+    configureForkUser(service)
     let shares = try await service.fetchSubscriptionShares(path: "/subscribe/shares")
     let share = try XCTUnwrap(shares.first)
-
-    let id = try await service.forkSubscription(share: share)
-    XCTAssertEqual(id, 901, "读不出版本时照常复用")
-    let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
-    XCTAssertTrue(paths.contains("/api/v1/system/global"), "读不出版本时先补读一次")
-    XCTAssertTrue(paths.contains("/api/v1/subscribe/fork"))
-  }
-
-  func testForkPreflightCannotContinueAfterServerChangesWhileVersionLoads() async throws {
-    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
-    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
-    await CompatibilityEndpointURLProtocol.stub.reset()
-    let gate = CompatibilityEndpointAsyncGate()
-    await CompatibilityEndpointURLProtocol.stub.setPublicSettingsResponse(
-      Data(#"{"BACKEND_VERSION":"v3.0.10-1"}"#.utf8), waitFor: gate)
-    let service = APIService.isolatedTestingInstance()
-    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
-    let shares = try await service.fetchSubscriptionShares(path: "/subscribe/shares")
-    let share = try XCTUnwrap(shares.first)
-    XCTAssertNil(service.settings)
-
-    let oldFork = Task { @MainActor in
-      do {
-        _ = try await service.forkSubscription(share: share)
-        XCTFail("旧会话的 fork 不得在版本探测后继续")
-        return false
-      } catch is CancellationError {
-        return true
-      } catch {
-        XCTFail("预期会话取消，得到 \(error)")
-        return false
-      }
+    for version in [nil, "v3.0.4-beta"] {
+      service.settings = GlobalSettings(BACKEND_VERSION: version)
+      let handler = SubscriptionHandler(apiService: service)
+      let result = await handler.fork(share: share)
+      XCTAssertEqual(result, 901)
+      XCTAssertEqual(service.settings?.BACKEND_VERSION, version)
     }
-    await gate.waitForWaiter()
-    service.baseURLForTesting = "https://compatibility-endpoint-tests.local/server-b"
-    service.settings = GlobalSettings(BACKEND_VERSION: "v3.1.0")
-    await gate.open()
-    let wasCancelled = await oldFork.value
-
-    XCTAssertTrue(wasCancelled)
-    XCTAssertEqual(service.settings?.BACKEND_VERSION, "v3.1.0")
     let paths = await CompatibilityEndpointURLProtocol.stub.requestPaths()
-    XCTAssertEqual(paths.filter { $0.hasSuffix("/subscribe/fork") }.count, 0)
-    XCTAssertFalse(paths.contains("/server-b/api/v1/system/global"), "旧操作不得用新服务器继续探测")
+    XCTAssertEqual(paths.filter { $0.hasSuffix("/subscribe/fork") }.count, 2)
+    XCTAssertFalse(paths.contains("/api/v1/system/global"))
+    XCTAssertFalse(paths.contains("/api/v1/system/global/user"))
   }
 
   func testSaveSubscriptionSendsOnlyWritableFields() async throws {
@@ -763,16 +728,20 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
     await CompatibilityEndpointURLProtocol.stub.reset()
     service.settings = GlobalSettings(BACKEND_VERSION: "v3.1.0")
-    var subscribe = try JSONDecoder().decode(Subscribe.self, from: Data(
-      #"{"id":44,"name":"原订阅","type":"电视剧","media_source":"themoviedb","media_id":"42","media_category_id":"tv-drama","media_category":"剧集","search_interval":24,"quality":"原规则","state":"R","username":"owner","episode_priority":{"1":100}}"#.utf8))
+    var subscribe = try JSONDecoder().decode(
+      Subscribe.self,
+      from: Data(
+        #"{"id":44,"name":"原订阅","type":"电视剧","media_source":"themoviedb","media_id":"42","media_category_id":"tv-drama","media_category":"剧集","search_interval":24,"quality":"原规则","state":"R","username":"owner","episode_priority":{"1":100}}"#
+          .utf8))
+    let original = subscribe
     subscribe.quality = nil
-    let result = try await service.saveSubscription(subscribe)
+    let result = try await service.saveSubscription(original: original, draft: subscribe)
     XCTAssertTrue(result.success)
     let body = try Self.jsonObject(await CompatibilityEndpointURLProtocol.stub.requestBody(suffix: "/subscribe"))
     XCTAssertEqual(body["id"] as? Int, 44)
-    XCTAssertEqual(body["media_category_id"] as? String, "tv-drama")
-    XCTAssertEqual(body["media_category"] as? String, "剧集")
-    XCTAssertEqual(body["search_interval"] as? Int, 24)
+    XCTAssertNil(body["media_category_id"])
+    XCTAssertNil(body["media_category"])
+    XCTAssertNil(body["search_interval"])
     XCTAssertTrue(body["quality"] is NSNull)
     XCTAssertNil(body["state"])
     XCTAssertNil(body["username"])
@@ -814,7 +783,14 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
 
       let saved = await model.save()
       XCTAssertTrue(saved, "case \(index)")
-      let body = try Self.jsonObject(await CompatibilityEndpointURLProtocol.stub.requestBody(suffix: "/subscribe"))
+      let body = try Self.jsonObject(
+        await CompatibilityEndpointURLProtocol.stub.requestBody(suffix: "/subscribe"))
+      if testCase.edit == nil {
+        XCTAssertEqual(Set(body.keys), ["id"], "case \(index)：未编辑类别不重复提交")
+        XCTAssertEqual(model.subscribe.media_category_id, testCase.expectedID)
+        XCTAssertEqual(model.subscribe.media_category, testCase.expectedPath)
+        continue
+      }
       if let expectedID = testCase.expectedID {
         XCTAssertEqual(body["media_category_id"] as? String, expectedID, "case \(index)")
       } else {
@@ -1441,6 +1417,19 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     if !KeychainHelper.shared.save(value, service: "MoviePilot-TV", account: account) {
       UserDefaults.standard.set(value, forKey: account)
     }
+  }
+
+  private func configureForkUser(_ service: APIService) {
+    service.tokenForTesting = "fork-user-token"
+    service.currentUserForTesting = Token(
+      access_token: "fork-user-token",
+      token_type: "bearer",
+      super_user: FlexibleBool(false),
+      permissions: ["subscribe": true],
+      user_id: 42,
+      user_name: "fork-user",
+      avatar: nil
+    )
   }
 
   private func configureManageUser(_ service: APIService) {

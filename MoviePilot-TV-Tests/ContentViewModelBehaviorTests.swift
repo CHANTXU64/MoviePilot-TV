@@ -328,6 +328,39 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     XCTAssertNotEqual(viewModel?.backendVersionWarning?.id, displayed.warning.id)
   }
 
+  func testLegacyAcknowledgementMigratesWithoutShowingWarningAgain() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ContentViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ContentViewModelURLProtocol.self) }
+    await ContentViewModelURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
+    let markerKey = APIService.sessionRefreshAppVersionKey
+    let marker = UserDefaults.standard.string(forKey: markerKey)
+    let suite = "ContentViewModelMigration.\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+    defer {
+      snapshot.restore(to: service)
+      restoreUserDefaultsString(marker, forKey: markerKey)
+      defaults.removePersistentDomain(forName: suite)
+    }
+    clearCredential(account: "username")
+    clearCredential(account: "password")
+    UserDefaults.standard.set(AppVersionInfo.currentAppVersion(), forKey: markerKey)
+    service.baseURLForTesting = "https://old.content-view-model-tests.local"
+    service.tokenForTesting = "token-a"
+    service.currentUserForTesting = token("token-a", userName: "first-user")
+    let key = "acknowledgedBackendVersionWarnings"
+    defaults.set([service.baseURL: ["3.0.9|v3.0.10-1", "v3.0.9|v3.0.10"]], forKey: key)
+    let model = ContentViewModel(
+      apiService: service, warningDefaults: defaults,
+      compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
+    await model.prepareStartupIfNeeded()
+    XCTAssertEqual(service.settings?.BACKEND_VERSION, "v3.0.9")
+    XCTAssertNil(model.backendVersionWarning)
+    let migrated = defaults.dictionary(forKey: key) as? [String: [String]]
+    XCTAssertEqual(migrated?[service.baseURL], ["v3.0.9"])
+  }
+
   func testAcknowledgedBackendVersionWarningDoesNotReappearAfterAppRelaunch() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(ContentViewModelURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(ContentViewModelURLProtocol.self) }

@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 
 @testable import MoviePilot_TV
@@ -7,6 +8,19 @@ import XCTest
 /// GET 单独失败后同一分享只重试 GET（POST 总数保持 1）、不同分享退休旧收据。
 @MainActor
 final class ForkOperationOwnerTests: XCTestCase {
+  func testCapabilityChangesPublishToSubscribedViews() {
+    let service = APIService.isolatedTestingInstance()
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.0.4")
+    let handler = SubscriptionHandler(apiService: service)
+    XCTAssertFalse(handler.forkCapability.isAvailable)
+    var published = false
+    let observation = handler.objectWillChange.sink { published = true }
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.0.5")
+    XCTAssertTrue(published)
+    XCTAssertTrue(handler.forkCapability.isAvailable)
+    withExtendedLifetime(observation) {}
+  }
+
   func testLateForkSuccessDoesNotReplaceNewerEditorInSameProfile() async throws {
     try await withForkOperationOwnerBackend { service in
       configureForkOwnerUser(service)

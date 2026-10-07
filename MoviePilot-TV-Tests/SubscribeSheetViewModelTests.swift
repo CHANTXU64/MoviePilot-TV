@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 
 @testable import MoviePilot_TV
@@ -1078,12 +1079,23 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     try await checkSubscriptionEdit(
       edit: { $0.subscribe.keyword = "2160p" },
       check: { body, saved in
-        XCTAssertEqual(body["media_category_id"] as? String, "category-a")
+        XCTAssertNil(body["media_category_id"])
         XCTAssertEqual(saved.media_category_id, "category-a")
         XCTAssertEqual(saved.media_category, "电影/类别 A")
         XCTAssertEqual(saved.keyword, "2160p")
       }
     )
+  }
+
+  func testUnrelatedEditDoesNotResubmitDeletedCategoryReference() async throws {
+    try await checkSubscriptionEdit(
+      initialCategoryID: "deleted-category",
+      edit: { $0.subscribe.keyword = "2160p" },
+      check: { body, saved in
+        XCTAssertEqual(Set(body.keys), ["id", "keyword"])
+        XCTAssertEqual(saved.media_category_id, "deleted-category")
+        XCTAssertEqual(saved.keyword, "2160p")
+      })
   }
 
   func testEditingCategoryPathReplacesPreviouslySelectedStableCategory() async throws {
@@ -1112,17 +1124,40 @@ final class SubscribeSheetViewModelTests: XCTestCase {
   func testUnchangedEmptyCategoryTextPreservesStableIDWhenTheOriginalPathIsNull() async throws {
     try await checkSubscriptionEdit(
       initialCategoryPath: nil,
-      edit: { $0.mediaCategoryText = "" },
+      edit: { viewModel in
+        // 走输入框真实的确认路径：内容未改，确认键仍会回写一次原文本。
+        let coordinator = SheetTextFieldRepresentable.Coordinator(
+          text: Binding(
+            get: { viewModel.mediaCategoryText },
+            set: { viewModel.mediaCategoryText = $0 }))
+        let field = NoBlurTextField()
+        field.text = viewModel.mediaCategoryText
+        _ = coordinator.textFieldShouldReturn(field)
+      },
       check: { body, saved in
-        XCTAssertEqual(body["media_category_id"] as? String, "category-a")
+        XCTAssertEqual(Set(body.keys), ["id"])
         XCTAssertEqual(saved.media_category_id, "category-a")
-        XCTAssertEqual(saved.media_category, "电影/类别 A")
       }
     )
   }
 
+  func testRestoringCategoryAfterClearingDoesNotEraseOriginalIdentity() async throws {
+    try await checkSubscriptionEdit(
+      edit: {
+        $0.mediaCategoryText = ""
+        $0.mediaCategoryText = "电影/类别 A"
+      },
+      check: { body, saved in
+        XCTAssertNil(body["media_category_id"])
+        XCTAssertNil(body["media_category"])
+        XCTAssertEqual(saved.media_category_id, "category-a")
+        XCTAssertEqual(saved.media_category, "电影/类别 A")
+      })
+  }
+
   private func checkSubscriptionEdit(
     initialCategoryPath: String? = "电影/类别 A",
+    initialCategoryID: String = "category-a",
     edit: (SubscribeSheetViewModel) -> Void,
     check: ([String: Any], Subscribe) -> Void
   ) async throws {
@@ -1135,7 +1170,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     let initial: [String: Any] = [
       "id": 790, "name": "已有分类订阅", "type": "电影",
       "media_source": "themoviedb", "media_id": "100", "downloader": "downloader-a",
-      "media_category_id": "category-a",
+      "media_category_id": initialCategoryID,
       "media_category": initialCategoryPath.map { $0 as Any } ?? NSNull(),
     ]
     try await SubscribeSheetURLProtocol.stub.storeEditableSubscription(
@@ -1146,7 +1181,7 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
     let original = try await service.fetchSubscription(id: 790)
     XCTAssertEqual(original.downloader, "downloader-a")
-    XCTAssertEqual(original.media_category_id, "category-a")
+    XCTAssertEqual(original.media_category_id, initialCategoryID)
     let viewModel = SubscribeSheetViewModel(subscribe: original, apiService: service)
     edit(viewModel)
     let didSave = await viewModel.save()
@@ -2143,7 +2178,10 @@ private actor SubscribeSheetURLProtocolStub {
     }
     let categories = ["category-a": "电影/类别 A", "category-b": "电影/类别 B"]
     if let id = update["media_category_id"] {
-      if let id = id as? String, let path = categories[id] {
+      if let id = id as? String {
+        guard let path = categories[id] else {
+          return Data(#"{"success":false,"message":"订阅分类设置无效，请重新选择分类后重试"}"#.utf8)
+        }
         update["media_category"] = path
       } else {
         update["media_category_id"] = NSNull()
@@ -2239,8 +2277,10 @@ private actor SubscribeSheetURLProtocolStub {
       case ("POST", "/api/v1/subscribe/"), ("POST", "/api/v1/subscribe"):
         data = #"{"success":true,"data":{"id":801}}"#.data(using: .utf8)!
       case ("GET", "/api/v1/subscribe/801"):
-        data = #"{"id":801,"name":"默认配置新订阅","type":"电视剧","season":1,"doubanid":"douban-new","mediaid":"douban:douban-new","state":"S"}"#.data(using: .utf8)!
-      case let (_, path) where path.hasPrefix("/api/v1/subscribe"):
+        data =
+          #"{"id":801,"name":"默认配置新订阅","type":"电视剧","season":1,"doubanid":"douban-new","mediaid":"douban:douban-new","state":"S"}"#
+          .data(using: .utf8)!
+      case (_, let path) where path.hasPrefix("/api/v1/subscribe"):
         data = #"{"success":true}"#.data(using: .utf8)!
       default:
         throw URLError(.badServerResponse)
