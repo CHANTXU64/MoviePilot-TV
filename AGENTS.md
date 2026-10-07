@@ -98,42 +98,24 @@ xcodebuild -list -project "MoviePilot-TV.xcodeproj"
 xcrun simctl list devices tvOS available
 ```
 
-解析依赖：
+标准本机验证入口（依赖解析、Debug 完整构建、Testing 测试）：
 
 ```bash
-xcodebuild -resolvePackageDependencies \
-  -project "MoviePilot-TV.xcodeproj" \
-  -scheme "MoviePilot-TV" \
-  -skipPackagePluginValidation
+python3 scripts/test-tvos.py
 ```
 
-本机完整构建（优先使用 tvOS Simulator，不要默认改成 `generic/platform=tvOS`）：
+该入口新建一台临时 Apple TV 模拟器，使用最新可用 tvOS runtime，以本次返回的 UDID 执行构建和测试；成功、失败或取消后只关闭并删除自己创建的设备。不要用日常模拟器的名称或 UDID 执行测试，也不要使用 `erase`、`shutdown all` 或 `delete all`。可用 `--runtime 27.0` 指定已安装的 runtime；实际使用的型号、版本和 UDID 会输出在日志中。
+
+脚本保留 `CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-` 和串行测试参数，默认跳过三个真实后端套件。定向验证示例：
 
 ```bash
-xcodebuild clean build \
-  -project "MoviePilot-TV.xcodeproj" \
-  -scheme "MoviePilot-TV" \
-  -configuration Debug \
-  -destination "platform=tvOS Simulator,name=Apple TV" \
-  CODE_SIGNING_ALLOWED=YES \
-  CODE_SIGN_IDENTITY=- \
-  -skipPackagePluginValidation
+python3 scripts/test-tvos.py --skip-build \
+  --only-testing MoviePilot-TV-Tests/TestIsolationTests
 ```
 
-本机测试：
+`--skip-build` 仅跳过依赖解析和 Debug clean build，不能将它单独当作完整验证。可用 `--derived-data-path <目录>` 和 `--result-bundle-path <新的.xcresult路径>` 保存构建与测试产物。
 
-```bash
-xcodebuild test \
-  -project "MoviePilot-TV.xcodeproj" \
-  -scheme "MoviePilot-TV" \
-  -configuration Debug \
-  -destination "platform=tvOS Simulator,name=Apple TV" \
-  -parallel-testing-enabled NO \
-  -maximum-concurrent-test-simulator-destinations 1 \
-  CODE_SIGNING_ALLOWED=YES \
-  CODE_SIGN_IDENTITY=- \
-  -skipPackagePluginValidation
-```
+Xcode 的 Test action 使用独立 `Testing` 配置，安装 `org.chantxu.MoviePilot-TV.Testing` 和对应的 Top Shelf 扩展，使用独立 App Group、钥匙串访问组与偏好/缓存容器。Run action 继续使用正常 Debug App。测试目标拒绝在普通 Debug/Release 配置编译，以免误用 `xcodebuild test -configuration Debug` 覆盖日常 App。命令行测试统一使用上面的入口；需要手动诊断时，必须使用自己新建的测试设备、`-configuration Testing` 和串行参数。
 
 续签脚本、打包脚本与 Bundle ID 配置变更还应运行以下回归（PR CI 同步执行；真实 Xcode 环境会检查 Debug/Release 的 target 构建设置）：
 
@@ -158,11 +140,7 @@ PR CI 只执行 Simulator 构建、测试和脚本回归，不编译或打包发
 
 真实后端兼容测试可能包含副作用。新增或修改任何会访问真实 MoviePilot 后端的测试前，必须先明确它是否会改变真实数据或触发后台动作，包括但不限于订阅搜索、订阅 reset、暂停/恢复订阅、保存订阅、手动/AI 重新整理、添加/删除下载或订阅。默认优先写只读测试；确实需要副作用测试时，必须放在 `BackendCompatibilitySideEffectTests` 或等价的显式副作用套件中，提供独立开关，限制目标范围，记录目标对象原始状态，并在成功、失败和取消路径中尽力恢复原状态。不要在用户个人后端上用“全量测试”名义新增隐式副作用。
 
-如果本机没有名为 `Apple TV` 的 tvOS Simulator，先用下面命令列出可用模拟器，并选择一个可用 tvOS 目标替换 `-destination`，同时在回复或提交说明中写清楚实际使用的目标：
-
-```bash
-xcrun simctl list devices tvOS available
-```
+真实后端测试也必须通过专用测试设备运行。只有明确要求真实后端验证时才加 `--include-backend-tests`，并用 `--only-testing` 限定所需套件；该参数不替代真实后端副作用套件的独立开关和恢复约束，具体命令见 `docs/backend-compatibility-tests.md`。
 
 `generic/platform=tvOS` 属于 CI/设备归档风格的编译检查，可能触发本机 SDK、runtime 或设备支持校验；它可以作为 GitHub Actions 或额外设备构建检查使用，但不要用它替代本机 Simulator 构建/测试。
 

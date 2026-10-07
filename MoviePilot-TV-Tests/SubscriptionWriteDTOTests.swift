@@ -65,7 +65,7 @@ final class SubscriptionWriteDTOTests: XCTestCase {
     XCTAssertEqual(try payload(subscription)["media_category_id"] as? String, "stable-category")
   }
 
-  func testClearsSendNullEmptyArrayAndKeepEmptyStringsLikeWeb() throws {
+  func testClearsSendNullEmptyArrayAndPreserveOtherEmptyStrings() throws {
     var source = try fixtureObject()
     source["include"] = " WEB-DL "
     source["exclude"] = " CAM "
@@ -76,9 +76,9 @@ final class SubscriptionWriteDTOTests: XCTestCase {
     var subscription = try decode(source)
     subscription.include = nil
     subscription.exclude = ""
-    // 下拉框选“全部/默认”写入空字符串；Web 同样原样发送，后端按空值回落到默认。
+    // 筛选空串保留；下载器恢复默认由编辑边界表达为 nil，才能清除已有指定值。
     subscription.quality = ""
-    subscription.downloader = ""
+    subscription.downloader = nil
     subscription.save_path = nil
     subscription.custom_words = nil
     subscription.search_interval = nil
@@ -91,13 +91,13 @@ final class SubscriptionWriteDTOTests: XCTestCase {
 
     var expected = writableProjection(source)
     for key in [
-      "include", "save_path", "custom_words", "search_interval", "total_episode", "episode_group",
+      "include", "downloader", "save_path", "custom_words", "search_interval", "total_episode",
+      "episode_group",
     ] {
       expected[key] = NSNull()
     }
     expected["exclude"] = ""
     expected["quality"] = ""
-    expected["downloader"] = ""
     expected["sites"] = [Int]()
     expected["filter_groups"] = [String]()
     expected["start_episode"] = 0
@@ -167,19 +167,64 @@ final class SubscriptionWriteDTOTests: XCTestCase {
     assertEqual(try payload(subscription), expected)
   }
 
-  func testStableCategoryIDIsSentTogetherWithPathLikeWeb() throws {
-    // 有分类编号时与 Web 一致：编号和路径一起回传，后端以编号为准。
-    for path in ["电视剧/契约", "电视剧/新分类"] {
+  func testUnchangedCategoryPreservesStableID() throws {
+    var subscription = try decode(fixtureObject())
+    let originalPath = subscription.media_category
+    subscription.media_category = originalPath
+    subscription.keyword = "新关键词"
+    let result = try payload(subscription)
+    XCTAssertEqual(result["media_category_id"] as? String, "stable-category")
+    XCTAssertEqual(result["media_category"] as? String, "电视剧/契约")
+  }
+
+  func testChangingCategoryPathOmitsOldStableID() throws {
+    var subscription = try decode(fixtureObject())
+    subscription.media_category = "电视剧/新分类"
+    let result = try payload(subscription)
+    XCTAssertFalse(result.keys.contains("media_category_id"))
+    XCTAssertEqual(result["media_category"] as? String, "电视剧/新分类")
+  }
+
+  func testClearingCategoryPathOnlySendsNullPath() throws {
+    let clearedPaths: [String?] = [nil, ""]
+    for path in clearedPaths {
       var subscription = try decode(fixtureObject())
       subscription.media_category = path
       let result = try payload(subscription)
-      XCTAssertEqual(result["media_category_id"] as? String, "stable-category")
-      XCTAssertEqual(result["media_category"] as? String, path)
+      XCTAssertFalse(result.keys.contains("media_category_id"))
+      XCTAssertTrue(result["media_category"] is NSNull)
     }
-    var cleared = try decode(fixtureObject())
-    cleared.media_category = nil
-    let result = try payload(cleared)
-    XCTAssertEqual(result["media_category_id"] as? String, "stable-category")
+  }
+
+  func testRestoringOriginalCategoryPathPreservesStableID() throws {
+    var subscription = try decode(fixtureObject())
+    let originalPath = subscription.media_category
+    subscription.media_category = "电视剧/临时分类"
+    subscription.media_category = originalPath
+    XCTAssertEqual(try payload(subscription)["media_category_id"] as? String, "stable-category")
+  }
+
+  func testReassigningAnUnchangedSparseCategoryPreservesStableID() throws {
+    let sources: [[String: Any]] = [
+      ["id": 47, "media_category_id": "stable-category"],
+      ["id": 47, "media_category_id": "stable-category", "media_category": NSNull()],
+    ]
+    for source in sources {
+      var subscription = try decode(source)
+      subscription.media_category = nil
+      assertEqual(try payload(subscription), source)
+    }
+  }
+
+  func testClearingSparseCategoryAfterAPathChangeKeepsExplicitClearAcrossRepeatedAssignments()
+    throws
+  {
+    var subscription = try decode(["id": 47, "media_category_id": "stable-category"])
+    subscription.media_category = "电影/临时分类"
+    subscription.media_category = nil
+    subscription.media_category = nil
+    let result = try payload(subscription)
+    XCTAssertFalse(result.keys.contains("media_category_id"))
     XCTAssertTrue(result["media_category"] is NSNull)
   }
 

@@ -369,6 +369,12 @@ class APIService: ObservableObject {
   private var ambiguousAuthenticationChallengeCount = 0
   private var didNotifyAmbiguousAuthenticationChallenge = false
 
+  #if TESTING
+    var storedCredentialsForTesting: (username: String?, password: String?) {
+      (storedUsername, storedPassword)
+    }
+  #endif
+
   var baseURL: String { session.baseURL }
   var token: String? { session.token }
   var currentUser: Token? { session.currentUser }

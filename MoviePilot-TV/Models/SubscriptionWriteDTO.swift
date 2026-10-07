@@ -1,9 +1,9 @@
 import Foundation
 
 /// 订阅保存（PUT /subscribe/）的请求体。已登记的 MoviePilot 版本（v3.0.4 至 v3.1.0）订阅数据结构一致，
-/// 后端只更新请求里出现的键。规则与 Web 订阅编辑一致：
+/// 后端只更新请求里出现的键：
 /// - 解码时读到的键都回传：有值发值，值为 nil 发 null（表示清空）；没读到的键省略，表示不修改。
-/// - 字符串原样发送，不 trim 正则、路径或识别词；下拉框选“全部/默认”时和 Web 一样发空字符串。
+/// - 字符串原样发送，不 trim 正则、路径或识别词；下载器“默认”由编辑边界表达为 nil。
 /// - 只发送用户可编辑的字段，不回写状态、计数、洗版运行优先级等后端维护字段，也不回写旧的 tmdbid / doubanid / mediaid。
 /// id 用于定位 PUT 目标。
 nonisolated struct SubscriptionWriteDTO: Encodable {
@@ -74,10 +74,14 @@ nonisolated struct SubscriptionWriteDTO: Encodable {
     try encode(value.isEmpty ? nil : value, forKey: key, to: &container)
   }
 
-  /// 后端以稳定分类编号为准，带了编号就忽略路径；带编号键但值为空时会把编号和路径一起清空。
-  /// 读到非空编号：和 Web 一样回传编号和路径（此时改路径不生效，与 Web 相同）。
-  /// 编号为空或缺失（旧订阅只有路径）：不发编号键，只回传路径，避免把旧订阅的类别清掉。
+  /// 未编辑时保留稳定 ID；编辑路径时省略旧 ID，避免后端用旧分类覆盖新路径。
+  /// ID:null 会同时清空路径，因此路径编辑和清空都只发送路径键。
   private func encodeCategory(to container: inout KeyedEncodingContainer<CodingKeys>) throws {
+    if subscription.mediaCategoryWasEdited {
+      let path = subscription.media_category
+      try container.encode(path == "" ? nil : path, forKey: .media_category)
+      return
+    }
     if let categoryID = subscription.media_category_id, !categoryID.isEmpty {
       try container.encode(categoryID, forKey: .media_category_id)
     }

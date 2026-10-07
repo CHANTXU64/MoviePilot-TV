@@ -110,7 +110,7 @@ https://testflight.apple.com/join/UK3qEnVU
 
 ## 开发与测试
 
-构建与测试命令见 [AGENTS.md](AGENTS.md)，签名、Top Shelf 和发布打包的技术细节见[签名与打包说明](docs/signing-and-packaging.md)。
+本机验证运行 `python3 scripts/test-tvos.py`，自动使用临时测试模拟器；Xcode Test 也使用独立测试 App，避免覆盖日常登录数据。完整命令见 [AGENTS.md](AGENTS.md)，签名、Top Shelf 和发布打包的技术细节见[签名与打包说明](docs/signing-and-packaging.md)。
 
 ### 后端兼容性测试
 

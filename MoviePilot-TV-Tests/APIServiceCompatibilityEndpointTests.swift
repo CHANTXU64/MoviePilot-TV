@@ -779,7 +779,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     XCTAssertNil(body["episode_priority"])
   }
 
-  func testSubscribeSheetSaveSendsCategoryLikeWebAndProtectsLegacyPath() async throws {
+  func testSubscribeSheetSavePreservesUnchangedCategoryAndAppliesPathEdits() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
     let service = APIService.isolatedTestingInstance()
@@ -793,18 +793,24 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
 
     let cases: [(response: String, edit: String?, expectedID: String?, expectedPath: String?)] = [
       (#"{"id":44,"name":"有编号","type":"电视剧","media_category_id":"tv-drama","media_category":"原分类"}"#,
-       "新分类", "tv-drama", "新分类"),
+       nil, "tv-drama", "原分类"),
+      (#"{"id":44,"name":"有编号","type":"电视剧","media_category_id":"tv-drama","media_category":"原分类"}"#,
+       "新分类", nil, "新分类"),
+      (#"{"id":44,"name":"有编号","type":"电视剧","media_category_id":"tv-drama","media_category":"原分类"}"#,
+       "", nil, nil),
       (#"{"id":44,"name":"旧订阅","type":"电视剧","media_category_id":null,"media_category":"原分类"}"#,
        nil, nil, "原分类"),
       (#"{"id":44,"name":"旧订阅","type":"电视剧","media_category_id":null,"media_category":"原分类"}"#,
        "新分类", nil, "新分类"),
+      (#"{"id":44,"name":"旧订阅","type":"电视剧","media_category_id":null,"media_category":"原分类"}"#,
+       "", nil, nil),
     ]
     for (index, testCase) in cases.enumerated() {
       await CompatibilityEndpointURLProtocol.stub.reset()
       await CompatibilityEndpointURLProtocol.stub.setSubscriptionActionsFail(false)
       let original = try JSONDecoder().decode(Subscribe.self, from: Data(testCase.response.utf8))
       let model = SubscribeSheetViewModel(subscribe: original, apiService: service)
-      if let edit = testCase.edit { model.subscribe.media_category = edit }
+      if let edit = testCase.edit { model.mediaCategoryText = edit }
 
       let saved = await model.save()
       XCTAssertTrue(saved, "case \(index)")
@@ -812,9 +818,13 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
       if let expectedID = testCase.expectedID {
         XCTAssertEqual(body["media_category_id"] as? String, expectedID, "case \(index)")
       } else {
-        XCTAssertFalse(body.keys.contains("media_category_id"), "case \(index)：旧订阅不能发空编号")
+        XCTAssertFalse(body.keys.contains("media_category_id"), "case \(index)：仅路径写入不能发旧或空编号")
       }
-      XCTAssertEqual(body["media_category"] as? String, testCase.expectedPath, "case \(index)")
+      if let expectedPath = testCase.expectedPath {
+        XCTAssertEqual(body["media_category"] as? String, expectedPath, "case \(index)")
+      } else {
+        XCTAssertTrue(body["media_category"] is NSNull, "case \(index)")
+      }
     }
   }
 

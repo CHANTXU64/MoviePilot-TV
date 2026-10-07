@@ -1,3 +1,7 @@
+#if !TESTING
+  #error("Hosted tests require the Testing configuration to isolate App data and Keychain.")
+#endif
+
 import Foundation
 
 @testable import MoviePilot_TV
@@ -55,7 +59,7 @@ struct APIServicePersistenceSnapshot {
     )
   }
 
-  /// 测试实例启动前清空会话与登录草稿，避免读到模拟器 App 容器里的残留。
+  /// 仅在独立测试 App 的存储内清空 fixture，避免测试实例继承上一用例的会话。
   @MainActor
   static func clearForTesting() {
     UserDefaults.standard.removeObject(forKey: "sessionMarker.v2")
@@ -198,11 +202,13 @@ extension APIService {
     baseURL: String,
     token: String?,
     currentUser: Token?,
+    username: String? = nil,
+    password: String? = nil,
     cookies: [HTTPCookie] = []
   ) {
     replaceSessionWithoutPersistingServerURL(
       baseURL: baseURL, token: token, currentUser: currentUser,
-      username: nil, password: nil, cookies: cookies)
+      username: username, password: password, cookies: cookies)
     loginDraft = nil
   }
 
@@ -270,6 +276,8 @@ struct SystemSessionServiceSnapshot {
   let token: String?
   let currentUser: Token?
   let loginDraft: LoginDraft?
+  let storedUsername: String?
+  let storedPassword: String?
   let tokenKeychain: String?
   let tokenDefaults: String?
   let currentUserKeychain: String?
@@ -289,6 +297,8 @@ struct SystemSessionServiceSnapshot {
       token: service.token,
       currentUser: service.currentUser,
       loginDraft: service.loginDraft,
+      storedUsername: service.storedCredentialsForTesting.username,
+      storedPassword: service.storedCredentialsForTesting.password,
       tokenKeychain: KeychainHelper.shared.read(service: "MoviePilot-TV", account: "accessToken"),
       tokenDefaults: UserDefaults.standard.string(forKey: "accessToken"),
       currentUserKeychain: KeychainHelper.shared.read(
@@ -311,7 +321,9 @@ struct SystemSessionServiceSnapshot {
     service.replaceSessionForTesting(
       baseURL: baseURL,
       token: token,
-      currentUser: currentUser
+      currentUser: currentUser,
+      username: storedUsername,
+      password: storedPassword
     )
     service.loginDraft = loginDraft
     service.settings = settings
