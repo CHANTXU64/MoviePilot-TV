@@ -296,12 +296,8 @@ class ReorganizeViewModel: ObservableObject {
       }
     }
 
-    var seenItems = Set<String>()
-    merged.items = merged.items.filter {
-      let key = [$0.source ?? "", $0.target ?? "", $0.success == false ? "failed" : "success"]
-        .joined(separator: "|")
-      return seenItems.insert(key).inserted
-    }
+    var seenItems = Set<PreviewItemIdentity>()
+    merged.items = merged.items.filter { seenItems.insert(PreviewItemIdentity($0)).inserted }
     let failures = merged.items.filter { $0.success == false }.count
     merged.summary = ManualTransferPreviewSummary(
       total: merged.items.count,
@@ -314,6 +310,21 @@ class ReorganizeViewModel: ObservableObject {
       errorMessage = "预览完成，其中 \(failures) 项无法整理。"
     }
     return .generated(allSucceeded: failures == 0)
+  }
+
+  private struct PreviewItemIdentity: Hashable {
+    let storage: String
+    let source: String
+    let target: String
+    let success: Bool
+
+    init(_ item: ManualTransferPreviewItem) {
+      // v3.1.0 的源存储是身份的一部分；旧响应缺少它时保持原来的单存储语义。
+      storage = item.source_storage ?? item.source_item?.storage ?? ""
+      source = item.source ?? ""
+      target = item.target ?? ""
+      success = item.success
+    }
   }
 
   func selectTargetPath(_ path: String) {

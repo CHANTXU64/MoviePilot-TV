@@ -29,7 +29,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
 
   func testColdLinkBuildsDetailBeforeSlowSessionCheckWithoutStartingMediaRequests() async throws {
     let service = makeService()
-    let viewModel = ContentViewModel(apiService: service)
+    let viewModel = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     let currentUserRequested = expectation(description: "启动校验已挂起")
     let prematureDetail = expectation(description: "会话校验前不得加载详情")
     prematureDetail.isInverted = true
@@ -165,7 +165,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
 
   func testExternalRoutePreparesTargetStackBeforeSelectingItsTab() throws {
     let service = makeService()
-    let model = ContentViewModel(apiService: service)
+    let model = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     model.selectedTab = .home
     for origin in [TopShelfEntryOrigin.recommend, .explore] {
       let route = try XCTUnwrap(PendingTopShelfRoute(payload: payload(service: service, origin: origin)))
@@ -191,7 +191,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
 
   func testSelectedTabSurvivesTokenRefreshAndFallsBackWhenPermissionIsRevoked() throws {
     let service = makeService()
-    let model = ContentViewModel(apiService: service)
+    let model = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     model.selectedTab = .explore
     service.replaceSessionForTesting(
       baseURL: service.baseURL, token: "renewed", currentUser: service.currentUser
@@ -210,7 +210,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
 
   func testMainTabBarSelectsRecommendationOnExternalOpenAndAfterReturningToRoot() async throws {
     let service = makeService()
-    let model = ContentViewModel(apiService: service)
+    let model = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     model.selectedTab = .explore
     // 会话准备期间使用正式 Tab 树，同时避免该宿主窗口启动 shared service 的请求。
     let host = TopShelfFocusTestHost(rootView: MainContentView(viewModel: model)
@@ -306,7 +306,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
     APIService.shared.replaceSessionForTesting(
       baseURL: service.baseURL, token: nil, currentUser: service.currentUser)
     TopShelfLaunchURLProtocol.automaticallyRespondToCurrentUser()
-    let model = ContentViewModel(apiService: service)
+    let model = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     await model.prepareStartupIfNeeded()
     service.settings = try JSONDecoder().decode(GlobalSettings.self, from: Data("{}".utf8))
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -425,7 +425,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
     APIService.shared.replaceSessionForTesting(
       baseURL: "https://top-shelf-launch.local", token: nil, currentUser: user
     )
-    let model = ContentViewModel(apiService: service)
+    let model = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     let notifications = NotificationManager()
     let topShelfManager = TopShelfManager(apiService: service, store: nil)
     let router = TopShelfNavigationRouter(store: nil)
@@ -641,7 +641,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
 
   func testExternalPreparedOpenCancelsOldFocusPreloadBeforeLateResponse() async throws {
     let service = makeService()
-    let viewModel = ContentViewModel(apiService: service)
+    let viewModel = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     let root = viewModel.recommendNavigation
     root.setStackForeground(true)
     let summary = try XCTUnwrap(TopShelfNavigationRouter.media(from: payload(service: service)))
@@ -703,7 +703,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
 
   func testPreparedOpenTakesOverOtherTabsInFlightDetailWithoutRemovingItsOwner() async throws {
     let service = makeService()
-    let viewModel = ContentViewModel(apiService: service)
+    let viewModel = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     let explore = ImageNavigationCoordinator(apiService: service)
     let recommend = ImageNavigationCoordinator(apiService: service)
     let media = try XCTUnwrap(TopShelfNavigationRouter.media(from: payload(service: service)))
@@ -744,7 +744,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
 
   func testExternalOpenClearsDeepStackButSubsequentDetailPushKeepsNormalBackOrder() throws {
     let service = makeService()
-    let viewModel = ContentViewModel(apiService: service)
+    let viewModel = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     let first = try XCTUnwrap(PendingTopShelfRoute(payload: payload(service: service)))
     let oldStack = ImageNavigationCoordinator(
       apiService: service, initialEntry: first.navigationEntry, startsInitialMediaLoad: false
@@ -820,7 +820,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
 
   func testExternalOpenPreservesOtherTabStackAndReplacesRecommendationWithoutEmptyPath() throws {
     let service = makeService()
-    let viewModel = ContentViewModel(apiService: service)
+    let viewModel = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     let route = try XCTUnwrap(PendingTopShelfRoute(payload: payload(service: service)))
     let recommend = ImageNavigationCoordinator(
       apiService: service, initialEntry: route.navigationEntry, startsInitialMediaLoad: false)
@@ -845,7 +845,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
 
   func testNewExternalEventReplacesPresentationAndLogoutRevokesCachedPreview() throws {
     let service = makeService()
-    let viewModel = ContentViewModel(apiService: service)
+    let viewModel = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     let first = try XCTUnwrap(PendingTopShelfRoute(payload: payload(service: service)))
     let second = try XCTUnwrap(PendingTopShelfRoute(payload: payload(service: service)))
     XCTAssertEqual(viewModel.acceptTopShelfRoute(first), .preview)
@@ -864,7 +864,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
 
   func testPermissionRefreshRevokesOpeningAndRetiresItsOldStack() throws {
     let service = makeService()
-    let model = ContentViewModel(apiService: service)
+    let model = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     let route = try XCTUnwrap(PendingTopShelfRoute(payload: payload(service: service, origin: .explore)))
     XCTAssertEqual(model.acceptTopShelfRoute(route), .preview)
     let retired = model.exploreNavigation
@@ -888,7 +888,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
 
   func testCancellingOpeningReleasesTargetAndRejectsLateCompletion() throws {
     let service = makeService()
-    let model = ContentViewModel(apiService: service)
+    let model = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     let route = try XCTUnwrap(PendingTopShelfRoute(payload: payload(service: service, origin: .explore)))
     model.prepareTopShelfRoute(route)
     XCTAssertTrue(model.isOpeningTopShelf)
@@ -907,7 +907,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
 
   func testRootAlertIsCancelledBeforePendingExploreRouteIsPresented() async throws {
     let service = makeService()
-    let model = ContentViewModel(apiService: service)
+    let model = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     let router = TopShelfNavigationRouter(store: nil)
     let host = UIHostingController(rootView: ContentView(viewModel: model)
       .environment(\.scenePhase, .active)
@@ -925,7 +925,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
       previous?.makeKey()
     }
     try await Task.sleep(for: .milliseconds(200))
-    model.backendVersionWarning = BackendVersionWarning(backendVersion: nil, requiredVersion: "test")
+    model.backendVersionWarning = BackendVersionWarning(backendVersion: nil, registry: BackendCompatibilityTestFixtures.registry())
     try await Task.sleep(for: .milliseconds(300))
     XCTAssertNotNil(host.presentedViewController)
     XCTAssertTrue(router.handle(try TopShelfDeepLink.url(for: payload(service: service, origin: .explore))))
@@ -955,7 +955,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
 
   func testForeignOwnerDoesNotCreateAColdPreview() throws {
     let service = makeService()
-    let viewModel = ContentViewModel(apiService: service)
+    let viewModel = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     let other = makeService()
     let route = try XCTUnwrap(PendingTopShelfRoute(payload: payload(service: other)))
     XCTAssertNotEqual(service.session.imageNamespace, other.session.imageNamespace)
@@ -1017,7 +1017,7 @@ final class TopShelfLaunchBehaviorTests: XCTestCase {
 
   func testAcceptedExternalEventImmediatelyRejectsLateActionsFromRetainedOldStack() throws {
     let service = makeService()
-    let viewModel = ContentViewModel(apiService: service)
+    let viewModel = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     let oldRoute = try XCTUnwrap(PendingTopShelfRoute(payload: payload(service: service)))
     let oldStack = ImageNavigationCoordinator(
       apiService: service, initialEntry: oldRoute.navigationEntry, startsInitialMediaLoad: false
@@ -1226,7 +1226,7 @@ private final class TopShelfLaunchURLProtocol: URLProtocol, @unchecked Sendable 
     if isDetail {
       respond("{\"tmdb_id\":42,\"title\":\"远端详情\",\"type\":\"电影\",\"source\":\"themoviedb\"}")
     } else if path.hasPrefix("/api/v1/system/global") {
-      respond("{\"BACKEND_VERSION\":\"\(AppVersionInfo.compatibleMoviePilotVersion)\"}")
+      respond("{\"BACKEND_VERSION\":\"v3.0.10-1\"}")
     } else {
       respond("[]")
     }

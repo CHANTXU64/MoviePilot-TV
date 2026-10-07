@@ -162,10 +162,7 @@ struct SubscribeSheet: View {
 
                   SheetPicker(
                     title: "下载器",
-                    selection: Binding(
-                      get: { viewModel.subscribe.downloader ?? "" },
-                      set: { viewModel.subscribe.downloader = $0 }
-                    ),
+                    selection: $viewModel.downloaderSelection,
                     options: [PickerOption(title: "默认", value: "")]
                       + viewModel.downloaders.map {
                         PickerOption(title: $0.name, value: $0.name)
@@ -301,10 +298,7 @@ struct SubscribeSheet: View {
                   SheetTextField(
                     title: "自定义类别",
                     placeholder: "",
-                    text: Binding(
-                      get: { viewModel.subscribe.media_category ?? "" },
-                      set: { viewModel.subscribe.media_category = $0.isEmpty ? nil : $0 }
-                    ))
+                    text: $viewModel.mediaCategoryText)
 
                   SheetTextField(
                     title: "自定义识别词",

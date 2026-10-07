@@ -2275,7 +2275,7 @@ private actor SubscriptionSnapshotURLProtocolStub {
     _ subscriptions: [Subscribe],
     waitFor gate: SubscriptionSnapshotAsyncGate? = nil
   ) throws {
-    let data = try JSONEncoder().encode(subscriptions)
+    let data = try SubscribeResponseFixture.data(for: subscriptions)
     queuedResponses.append(SubscriptionSnapshotStubResponse(statusCode: 200, data: data, gate: gate))
   }
 
@@ -2289,7 +2289,7 @@ private actor SubscriptionSnapshotURLProtocolStub {
   }
 
   func setDefaultSubscriptions(_ subscriptions: [Subscribe]) throws {
-    defaultSubscriptionsData = try JSONEncoder().encode(subscriptions)
+    defaultSubscriptionsData = try SubscribeResponseFixture.data(for: subscriptions)
   }
 
   func setMediaDeleteResponse(_ json: String) {

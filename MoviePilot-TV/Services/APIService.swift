@@ -358,6 +358,12 @@ class APIService: ObservableObject {
   private var ambiguousAuthenticationChallengeCount = 0
   private var didNotifyAmbiguousAuthenticationChallenge = false
 
+  #if TESTING
+    var storedCredentialsForTesting: (username: String?, password: String?) {
+      (storedUsername, storedPassword)
+    }
+  #endif
+
   var baseURL: String { session.baseURL }
   var token: String? { session.token }
   var currentUser: Token? { session.currentUser }
@@ -1009,6 +1015,7 @@ class APIService: ObservableObject {
     }
 
     let oldUIIdentity = session.uiIdentity
+    let oldBaseURL = session.baseURL
     let oldRuntime = runtime
     let newRuntime = APIServiceSessionRuntime(
       identifier: nextState.imageNamespace,
@@ -1023,7 +1030,7 @@ class APIService: ObservableObject {
     oldRuntime.cancel()
     releaseSessionScopeIfNeeded(for: nextState)
     invalidateAllSessionCaches()
-    if oldUIIdentity != nextState.uiIdentity {
+    if oldUIIdentity != nextState.uiIdentity || oldBaseURL != nextState.baseURL {
       settings = nil
     }
   }
@@ -2976,22 +2983,15 @@ class APIService: ObservableObject {
     return try await decodeOrUnwrap([NotExistMediaInfo].self, from: data)
   }
 
-  /// 保存（更新）订阅配置
-  /// - 对应前端: 1. `MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue` (更新) 2. `MoviePilot-Frontend/src/components/cards/MediaCard.vue` (新增)
-  /// - 应用场景: 1. 在订阅编辑弹窗中点击“保存”，对现有订阅进行修改 (PUT)。 2. 在媒体卡片或详情页上点击订阅，创建新的订阅记录 (POST)。
-  func saveSubscription(_ subscribe: Subscribe) async throws -> (
+  /// 更新订阅编辑草稿（PUT /subscribe/）；新增订阅使用 addSubscription。
+  func saveSubscription(original: Subscribe, draft: Subscribe) async throws -> (
     success: Bool, message: String?
   ) {
-    let body = try JSONEncoder().encode(subscribe)
+    let body = try JSONEncoder().encode(SubscriptionWriteDTO(original: original, draft: draft))
     let endpoint = "/subscribe/"
-    // 如果存在 ID，则很可能是更新 (PUT)，但 API 可能同时处理 POST 或有其他逻辑。
-    // 基于 Vue：更新是 PUT /subscribe/，创建是 POST /subscribe/ (或默认配置)
-    // 由于 Subscribe 结构体有 ID，如果它 > 0 或不为 nil，则使用 PUT。
-    let method = (subscribe.id != nil && subscribe.id != 0) ? "PUT" : "POST"
-
     let data = try await makeRequest(
       endpoint: endpoint,
-      method: method,
+      method: "PUT",
       body: body
     )
     let result = try decodeStrictActionResponseSync(from: data)
@@ -3189,7 +3189,11 @@ class APIService: ObservableObject {
   /// - 应用场景: 编辑订阅前获取完整订阅配置
   func fetchSubscription(id: Int) async throws -> Subscribe {
     let data = try await makeRequest(endpoint: "/subscribe/\(id)")
-    return try await decodeOrUnwrap(Subscribe.self, from: data)
+    let subscription = try await decodeOrUnwrap(Subscribe.self, from: data)
+    guard id > 0, subscription.id == id else {
+      throw APIError.serverMessage("订阅详情缺少匹配的有效 ID，请刷新后重试")
+    }
+    return subscription
   }
 
   /// 查询特定媒体（及特定季）命中的订阅摘要
@@ -3237,6 +3241,8 @@ class APIService: ObservableObject {
       // 遵循 Vue 逻辑，如果无法生成媒体身份，则不发起请求
       return nil
     }
+    // 各版本 Web 都附带 title/year/mtype；v3.0.10-1 前的后端只在自身条件满足时使用回退参数，
+    // 多发的参数会被忽略，所以这里不按后端版本区分。
     let usesVideoMetadataFallback = includeVideoMetadataFallback
       && (media.type == "电影" || media.type == "电视剧")
     let endpoint = try endpointForMediaIdentity(

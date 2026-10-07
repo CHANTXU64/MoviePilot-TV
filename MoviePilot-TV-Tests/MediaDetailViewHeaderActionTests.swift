@@ -1900,7 +1900,8 @@ private actor DetailHeaderSubscriptionURLProtocolStub {
       if let subscriptionSnapshotGate {
         await subscriptionSnapshotGate.wait()
       }
-      return try jsonResponse(subscriptionSnapshot)
+      return DetailHeaderSubscriptionStubResponse(
+        statusCode: 200, data: try SubscribeResponseFixture.data(for: subscriptionSnapshot))
     }
 
     if method == "GET", path.hasPrefix("/api/v1/subscribe/media/") {

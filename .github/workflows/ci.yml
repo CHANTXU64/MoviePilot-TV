@@ -32,40 +32,10 @@ jobs:
       - name: List available tvOS simulators
         run: xcrun simctl list devices tvOS available
 
-      - name: Resolve Swift packages
-        run: |
-          xcodebuild -resolvePackageDependencies \
-            -project "MoviePilot-TV.xcodeproj" \
-            -scheme "MoviePilot-TV" \
-            -skipPackagePluginValidation
-
-      - name: Test renewal script
+      - name: Test scripts
         run: |
           bash -n scripts/apple-tv-renew.sh
-          python3 -m unittest discover -s scripts/tests -p 'test_apple_tv_renew.py'
+          python3 -m unittest discover -s scripts/tests
 
-      - name: Build
-        run: |
-          xcodebuild clean build \
-            -project "MoviePilot-TV.xcodeproj" \
-            -scheme "MoviePilot-TV" \
-            -configuration Debug \
-            -destination "platform=tvOS Simulator,name=Apple TV" \
-            CODE_SIGNING_ALLOWED=YES \
-            CODE_SIGN_IDENTITY=- \
-            -skipPackagePluginValidation
-
-      - name: Test
-        run: |
-          xcodebuild test \
-            -project "MoviePilot-TV.xcodeproj" \
-            -scheme "MoviePilot-TV" \
-            -configuration Debug \
-            -destination "platform=tvOS Simulator,name=Apple TV" \
-            -parallel-testing-enabled NO \
-            -maximum-concurrent-test-simulator-destinations 1 \
-            -skip-testing:MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests \
-            -skip-testing:MoviePilot-TV-Tests/BackendCompatibilitySideEffectTests \
-            CODE_SIGNING_ALLOWED=YES \
-            CODE_SIGN_IDENTITY=- \
-            -skipPackagePluginValidation
+      - name: Build and test on a disposable simulator
+        run: python3 scripts/test-tvos.py

@@ -142,12 +142,13 @@ final class TopShelfSharedTests: XCTestCase {
     XCTAssertNil(TopShelfSigningMetadata.entitlements(in: fat, cpuType: 0x01000007))
   }
 
-  private func configurationBundle(group: Any?, entitlements: [String: Any]? = nil) throws -> Bundle {
+  private func configurationBundle(group: Any?, entitlements: [String: Any]? = nil, scheme: Any? = nil) throws -> Bundle {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).bundle", isDirectory: true)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     addTeardownBlock { try? FileManager.default.removeItem(at: url) }
     var info: [String: Any] = ["CFBundleIdentifier": "test.\(UUID().uuidString)", "CFBundlePackageType": "BNDL"]
     info["TopShelfAppGroupIdentifier"] = group
+    info["TopShelfURLScheme"] = scheme
     if let entitlements {
       info["CFBundleExecutable"] = "Fixture"
       try signedExecutable(entitlements: entitlements).write(to: url.appendingPathComponent("Fixture"))
@@ -497,6 +498,49 @@ final class TopShelfSharedTests: XCTestCase {
     XCTAssertEqual(try store.loadState(), expected)
   }
 
+  func testBuiltAppAndExtensionGenerateLinksForRegisteredTestingScheme() throws {
+    let extensionBundle = try XCTUnwrap(
+      Bundle(
+        url: Bundle.main.bundleURL.appendingPathComponent(
+          "PlugIns/MoviePilot-TV-TopShelf.appex", isDirectory: true)))
+    let registered = try XCTUnwrap(
+      Bundle.main.object(forInfoDictionaryKey: "CFBundleURLTypes")
+        as? [[String: Any]])
+    let schemes = registered.flatMap { $0["CFBundleURLSchemes"] as? [String] ?? [] }
+    XCTAssertEqual(schemes, ["moviepilot-tv-tests"])
+    let payload = routePayload()
+    for bundle in [Bundle.main, extensionBundle] {
+      let url = try TopShelfDeepLink.url(for: payload, bundle: bundle)
+      XCTAssertEqual(url.scheme, schemes.first)
+      XCTAssertEqual(TopShelfDeepLink.payload(from: url), payload)
+      XCTAssertEqual(TopShelfDeepLink.payload(from: url, bundle: extensionBundle), payload)
+    }
+  }
+
+  func testTestingAndDailySchemesDoNotAcceptEachOthersLinks() throws {
+    let daily = try configurationBundle(group: nil, scheme: "moviepilot-tv")
+    let testing = try configurationBundle(group: nil, scheme: "moviepilot-tv-tests")
+    let payload = routePayload()
+    let dailyURL = try TopShelfDeepLink.url(for: payload, bundle: daily)
+    let testingURL = try TopShelfDeepLink.url(for: payload, bundle: testing)
+    XCTAssertEqual(dailyURL.scheme, "moviepilot-tv")
+    XCTAssertEqual(testingURL.scheme, "moviepilot-tv-tests")
+    XCTAssertNil(TopShelfDeepLink.payload(from: dailyURL, bundle: testing))
+    XCTAssertNil(TopShelfDeepLink.payload(from: testingURL, bundle: daily))
+    XCTAssertEqual(TopShelfDeepLink.payload(from: testingURL, bundle: testing), payload)
+  }
+
+  func testMissingOrUnexpandedSchemeDoesNotGenerateADeepLink() throws {
+    let invalid: [Any?] = [nil, "", "$(APP_URL_SCHEME)", "invalid scheme", 42]
+    for value in invalid {
+      let bundle = try configurationBundle(group: nil, scheme: value)
+      XCTAssertThrowsError(try TopShelfDeepLink.url(for: routePayload(), bundle: bundle))
+      XCTAssertNil(
+        TopShelfDeepLink.payload(
+          from: try TopShelfDeepLink.url(for: routePayload()), bundle: bundle))
+    }
+  }
+
   func testDeepLinkRoundTripsUnicodeAndReservedCharactersExactlyOnce() throws {
     let payload = routePayload(
       source: "插件/豆瓣+bangumi&x=y%25",
@@ -506,7 +550,7 @@ final class TopShelfSharedTests: XCTestCase {
 
     let url = try TopShelfDeepLink.url(for: payload)
 
-    XCTAssertEqual(url.scheme, "moviepilot-tv")
+    XCTAssertEqual(url.scheme, TopShelfDeepLink.scheme())
     XCTAssertEqual(url.host, "top-shelf")
     XCTAssertEqual(url.path, "/media")
     XCTAssertEqual(TopShelfDeepLink.payload(from: url), payload)
@@ -531,7 +575,7 @@ final class TopShelfSharedTests: XCTestCase {
     components.scheme = "https"
     XCTAssertNil(TopShelfDeepLink.payload(from: try XCTUnwrap(components.url)))
 
-    components.scheme = "moviepilot-tv"
+    components.scheme = valid.scheme
     components.host = "other"
     XCTAssertNil(TopShelfDeepLink.payload(from: try XCTUnwrap(components.url)))
 

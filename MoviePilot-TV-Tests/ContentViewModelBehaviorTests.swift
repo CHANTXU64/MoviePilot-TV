@@ -26,7 +26,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
       permissions: ["discovery": false, "search": false, "subscribe": false, "manage": true]
     )
 
-    viewModel = ContentViewModel(apiService: service)
+    viewModel = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
 
     XCTAssertNotNil(viewModel?.accountPermissionWarning)
   }
@@ -58,7 +58,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
       permissions: ["discovery": true, "search": false, "subscribe": false, "manage": false]
     )
 
-    viewModel = ContentViewModel(apiService: service)
+    viewModel = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     XCTAssertTrue(viewModel?.isLoggedIn == true)
     XCTAssertTrue(viewModel?.isPreparingStartupSession == true)
     await viewModel?.prepareStartupIfNeeded()
@@ -106,7 +106,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     service.setStoredCredentialsForTesting(
       username: "startup-user", password: "startup-password")
 
-    viewModel = ContentViewModel(apiService: service)
+    viewModel = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
     for _ in 0..<50 { await Task.yield() }
 
@@ -169,7 +169,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     service.tokenForTesting = "expired-token"
     service.currentUserForTesting = nil
 
-    viewModel = ContentViewModel(apiService: service)
+    viewModel = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     await viewModel?.prepareStartupIfNeeded()
 
     XCTAssertNil(service.token)
@@ -196,7 +196,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     service.tokenForTesting = "limited-token"
     service.currentUserForTesting = nil
 
-    viewModel = ContentViewModel(apiService: service)
+    viewModel = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     service.currentUserForTesting = token(
       "limited-token",
       userName: "limited-user",
@@ -243,7 +243,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
       token: accountA.access_token,
       currentUser: accountA
     )
-    viewModel = ContentViewModel(apiService: service)
+    viewModel = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     let accountAWarningID = try XCTUnwrap(viewModel?.accountPermissionWarning?.id)
 
     viewModel?.accountPermissionWarning = nil
@@ -272,9 +272,12 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
     let markerKey = APIService.sessionRefreshAppVersionKey
     let originalMarker = UserDefaults.standard.string(forKey: markerKey)
+    let warningSuite = "ContentViewModelBehaviorTests.\(UUID().uuidString)"
+    let warningDefaults = try XCTUnwrap(UserDefaults(suiteName: warningSuite))
     var viewModel: ContentViewModel?
     defer {
       viewModel = nil
+      warningDefaults.removePersistentDomain(forName: warningSuite)
       snapshot.restore(to: service)
       restoreUserDefaultsString(originalMarker, forKey: markerKey)
     }
@@ -287,7 +290,8 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     service.currentUserForTesting = token("token-a", userName: "first-user")
     service.settings = nil
 
-    viewModel = ContentViewModel(apiService: service)
+    viewModel = ContentViewModel(apiService: service, warningDefaults: warningDefaults,
+      compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
 
     await viewModel?.prepareStartupIfNeeded()
 
@@ -304,19 +308,57 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     }
 
     XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.9")
-    XCTAssertEqual(
-      viewModel?.backendVersionWarning?.requiredVersion,
-      AppVersionInfo.compatibleMoviePilotVersion
-    )
+    XCTAssertEqual(viewModel?.backendVersionWarning?.status, .unregistered)
 
-    // 用户已确认继续使用后，同一会话的前台被动刷新不得重新发布同一低版本警告。
-    viewModel?.backendVersionWarning = nil
+    // 用户已确认继续使用后，同一后端版本的前台刷新不得重新弹出。
+    let displayed = try XCTUnwrap(viewModel?.backendVersionWarningPresentation)
+    viewModel?.acknowledgeBackendVersionWarning(displayed)
     service.settings = nil
     NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
     try await waitUntil("expected dismissed backend warning to stay dismissed") {
       service.settings?.BACKEND_VERSION == "v3.0.9"
     }
     XCTAssertNil(viewModel?.backendVersionWarning)
+
+    await ContentViewModelURLProtocol.stub.setBackendVersionOverride("v3.0.8")
+    NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+    try await waitUntil("a different exact version must be assessed after acknowledgement") {
+      viewModel?.backendVersionWarning?.backendVersion == "v3.0.8"
+    }
+    XCTAssertNotEqual(viewModel?.backendVersionWarning?.id, displayed.warning.id)
+  }
+
+  func testLegacyAcknowledgementMigratesWithoutShowingWarningAgain() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ContentViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ContentViewModelURLProtocol.self) }
+    await ContentViewModelURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
+    let markerKey = APIService.sessionRefreshAppVersionKey
+    let marker = UserDefaults.standard.string(forKey: markerKey)
+    let suite = "ContentViewModelMigration.\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+    defer {
+      snapshot.restore(to: service)
+      restoreUserDefaultsString(marker, forKey: markerKey)
+      defaults.removePersistentDomain(forName: suite)
+    }
+    clearCredential(account: "username")
+    clearCredential(account: "password")
+    UserDefaults.standard.set(AppVersionInfo.currentAppVersion(), forKey: markerKey)
+    service.baseURLForTesting = "https://old.content-view-model-tests.local"
+    service.tokenForTesting = "token-a"
+    service.currentUserForTesting = token("token-a", userName: "first-user")
+    let key = "acknowledgedBackendVersionWarnings"
+    defaults.set([service.baseURL: ["3.0.9|v3.0.10-1", "v3.0.9|v3.0.10"]], forKey: key)
+    let model = ContentViewModel(
+      apiService: service, warningDefaults: defaults,
+      compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
+    await model.prepareStartupIfNeeded()
+    XCTAssertEqual(service.settings?.BACKEND_VERSION, "v3.0.9")
+    XCTAssertNil(model.backendVersionWarning)
+    let migrated = defaults.dictionary(forKey: key) as? [String: [String]]
+    XCTAssertEqual(migrated?[service.baseURL], ["v3.0.9"])
   }
 
   func testAcknowledgedBackendVersionWarningDoesNotReappearAfterAppRelaunch() async throws {
@@ -346,7 +388,8 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     service.currentUserForTesting = token("token-a", userName: "first-user")
     service.settings = nil
 
-    viewModel = ContentViewModel(apiService: service, warningDefaults: warningDefaults)
+    viewModel = ContentViewModel(apiService: service, warningDefaults: warningDefaults,
+      compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     await viewModel?.prepareStartupIfNeeded()
     XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.9")
 
@@ -354,7 +397,8 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     viewModel?.acknowledgeBackendVersionWarning(displayedWarning)
     viewModel = nil
     let restoredDefaults = try XCTUnwrap(UserDefaults(suiteName: warningSuite))
-    viewModel = ContentViewModel(apiService: service, warningDefaults: restoredDefaults)
+    viewModel = ContentViewModel(apiService: service, warningDefaults: restoredDefaults,
+      compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     await viewModel?.prepareStartupIfNeeded()
 
     XCTAssertNil(viewModel?.backendVersionWarning)
@@ -372,14 +416,16 @@ final class ContentViewModelBehaviorTests: XCTestCase {
 
     viewModel = nil
     viewModel = ContentViewModel(
-      apiService: service, warningDefaults: restoredDefaults, appVersion: "v0.3.2")
+      apiService: service, warningDefaults: restoredDefaults, appVersion: "v0.3.2",
+      compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     await viewModel?.prepareStartupIfNeeded()
     XCTAssertNil(viewModel?.backendVersionWarning, "TV 端更新但兼容门槛不变时不应重弹")
 
     viewModel = nil
     service.baseURLForTesting = "https://other-old.content-view-model-tests.local"
     viewModel = ContentViewModel(
-      apiService: service, warningDefaults: restoredDefaults, appVersion: "v0.3.2")
+      apiService: service, warningDefaults: restoredDefaults, appVersion: "v0.3.2",
+      compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     await viewModel?.prepareStartupIfNeeded()
     XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.9")
 
@@ -389,10 +435,19 @@ final class ContentViewModelBehaviorTests: XCTestCase {
       apiService: service,
       warningDefaults: restoredDefaults,
       appVersion: "v0.3.3",
-      requiredBackendVersion: "v3.0.10"
+      compatibilityRegistry: BackendCompatibilityTestFixtures.registry(extraVersions: ["v3.0.7", "v3.1.0"])
     )
     await viewModel?.prepareStartupIfNeeded()
-    XCTAssertEqual(viewModel?.backendVersionWarning?.requiredVersion, "v3.0.10")
+    XCTAssertNil(viewModel?.backendVersionWarning, "新增其他兼容版本后，同一后端版本的已确认提示不应重弹")
+
+    viewModel = nil
+    service.baseURLForTesting = "https://other-old.content-view-model-tests.local"
+    viewModel = ContentViewModel(
+      apiService: service, warningDefaults: restoredDefaults, appVersion: "v0.3.3",
+      compatibilityRegistry: BackendCompatibilityTestFixtures.registry(extraVersions: ["v3.0.9"]))
+    await viewModel?.prepareStartupIfNeeded()
+    XCTAssertEqual(service.settings?.BACKEND_VERSION, "v3.0.9")
+    XCTAssertNil(viewModel?.backendVersionWarning, "该版本登记后，未确认过的服务器也不再提示")
   }
 
   func testBackendUpgradeClearsVisibleWarningAfterForegroundRefresh() async throws {
@@ -422,7 +477,8 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     service.currentUserForTesting = token("token-a", userName: "first-user")
     service.settings = nil
 
-    viewModel = ContentViewModel(apiService: service, warningDefaults: warningDefaults)
+    viewModel = ContentViewModel(apiService: service, warningDefaults: warningDefaults,
+      compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     await viewModel?.prepareStartupIfNeeded()
     XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.9")
 
@@ -463,7 +519,8 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     service.currentUserForTesting = token("token-a", userName: "first-user")
     service.settings = nil
 
-    viewModel = ContentViewModel(apiService: service, warningDefaults: warningDefaults)
+    viewModel = ContentViewModel(apiService: service, warningDefaults: warningDefaults,
+      compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     await viewModel?.prepareStartupIfNeeded()
     XCTAssertEqual(viewModel?.backendVersionWarning?.backendVersion, "v3.0.9")
 
@@ -515,7 +572,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     service.currentUserForTesting = token("token-a", userName: "first-user")
     service.settings = nil
 
-    viewModel = ContentViewModel(apiService: service)
+    viewModel = ContentViewModel(apiService: service, compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     await viewModel?.prepareStartupIfNeeded()
 
     // 首次 settings 失败：显示 unknown 警告，但不占用已检查终态。
@@ -560,7 +617,8 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     service.currentUserForTesting = token("token-a", userName: "first-user")
     service.settings = nil
 
-    model = ContentViewModel(apiService: service, warningDefaults: warningDefaults)
+    model = ContentViewModel(apiService: service, warningDefaults: warningDefaults,
+      compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     await model?.prepareStartupIfNeeded()
     let displayed = try XCTUnwrap(model?.backendVersionWarningPresentation)
     XCTAssertNil(displayed.warning.backendVersion)
@@ -616,7 +674,8 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     service.currentUserForTesting = token("token-a", userName: "first-user")
     service.settings = nil
 
-    let model = ContentViewModel(apiService: service, warningDefaults: warningDefaults)
+    let model = ContentViewModel(apiService: service, warningDefaults: warningDefaults,
+      compatibilityRegistry: BackendCompatibilityTestFixtures.registry())
     await model.prepareStartupIfNeeded()
     let unknown = try XCTUnwrap(model.backendVersionWarning)
     XCTAssertNil(unknown.backendVersion)
@@ -655,7 +714,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     let displayed = try XCTUnwrap(model.backendVersionWarningPresentation)
     model.acknowledgeBackendVersionWarning(displayed)
     try await waitUntil("the new warning should appear after the first alert closes", timeout: 5) {
-      host.presentedViewController?.title == "MoviePilot 后端版本过低"
+      host.presentedViewController?.title == "MoviePilot 后端版本尚未核对"
         && model.backendVersionWarning?.backendVersion == "v3.0.9"
     }
     XCTAssertEqual((host.presentedViewController as? UIAlertController)?.message,
@@ -670,11 +729,44 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     XCTAssertFalse(recorded[baseURL]?.contains(model.backendVersionWarning?.id ?? "") == true)
   }
 
+  func testProductionRegisteredVersionDoesNotWarnAtStartup() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(ContentViewModelURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(ContentViewModelURLProtocol.self) }
+    await ContentViewModelURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = ContentViewModelServiceSnapshot.capture(service: service)
+    let markerKey = APIService.sessionRefreshAppVersionKey
+    let originalMarker = UserDefaults.standard.string(forKey: markerKey)
+    let warningSuite = "ContentViewModelBehaviorTests.\(UUID().uuidString)"
+    let warningDefaults = try XCTUnwrap(UserDefaults(suiteName: warningSuite))
+    var model: ContentViewModel?
+    defer {
+      model = nil
+      snapshot.restore(to: service)
+      restoreUserDefaultsString(originalMarker, forKey: markerKey)
+      warningDefaults.removePersistentDomain(forName: warningSuite)
+    }
+    clearCredential(account: "username")
+    clearCredential(account: "password")
+    UserDefaults.standard.set(AppVersionInfo.currentAppVersion(), forKey: markerKey)
+    service.baseURLForTesting = "https://registered.content-view-model-tests.local"
+    service.tokenForTesting = "token-a"
+    service.currentUserForTesting = token("token-a", userName: "first-user")
+    service.settings = nil
+
+    model = ContentViewModel(apiService: service, warningDefaults: warningDefaults)
+    await model?.prepareStartupIfNeeded()
+    XCTAssertEqual(service.settings?.BACKEND_VERSION, "v3.0.10-1")
+    XCTAssertNil(model?.backendVersionWarning, "源码核对后登记的版本不提示")
+    XCTAssertNil(model?.pendingBackendVersionWarning)
+    XCTAssertTrue(model?.isLoggedIn == true)
+  }
+
   func testMalformedBackendVersionBuildsUnconfirmedWarning() {
     let warning = ContentViewModel.backendVersionWarning(for: "v2.beta.14")
 
     XCTAssertEqual(warning?.title, "无法确认 MoviePilot 后端版本")
-    XCTAssertTrue(warning?.message.contains("无法解析该版本号") == true)
+    XCTAssertTrue(warning?.message.contains("无法识别该版本号") == true)
     XCTAssertFalse(warning?.message.contains("低版本后端") == true)
   }
 

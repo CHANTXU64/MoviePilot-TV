@@ -19,6 +19,13 @@ class SubscriptionHandler: ObservableObject {
   @Published private(set) var unsubscribeConfirmationMessage: String?
 
   private let apiService: APIService
+  private var cancellables = Set<AnyCancellable>()
+
+  var forkCapability: BackendCapability {
+    BackendCapabilities.capability(
+      for: .forkSubscription,
+      backendVersion: apiService.settings?.BACKEND_VERSION)
+  }
   private let injectedMediaPreloader: MediaPreloader?
   /// 调用时解析当前会话的预载器，避免持有已拆除作用域里的旧实例。
   private var mediaPreloader: MediaPreloader {
@@ -39,6 +46,9 @@ class SubscriptionHandler: ObservableObject {
   ) {
     self.apiService = apiService
     self.injectedMediaPreloader = mediaPreloader
+    apiService.$settings.sink { [weak self] _ in
+      self?.objectWillChange.send()
+    }.store(in: &cancellables)
   }
 
   func handleSubscribe(_ item: MediaInfo, expectedSubscribed: Bool) {
@@ -173,6 +183,11 @@ class SubscriptionHandler: ObservableObject {
       receipt.shareID == share.id
     {
       return receipt.subscriptionId
+    }
+
+    if let reason = forkCapability.unavailableReason {
+      forkErrorMessage = reason
+      return nil
     }
 
     let operationID = UUID()

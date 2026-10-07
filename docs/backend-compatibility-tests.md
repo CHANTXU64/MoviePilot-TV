@@ -10,22 +10,16 @@
 
 只读套件还包含独立的 OpenAPI 契约检查：对配置的同一个后端读取一次 `GET {baseURL}/api/v1/openapi.json`，核对 TV 已用接口的路径、方法、参数、必填性和响应结构，并输出覆盖缺口与待审查变更。它不执行保存、删除、下载等写操作，也不能代替真实调用测试。读取失败、返回登录页或遇到暂不支持的 schema 记为该项失败，不会改走公共文档站。已确认兼容的 OpenAPI 基线保存在 `MoviePilot-TV-Tests/OpenAPI/Fixtures/openapi-baseline.json`；发现差异后必须经审查再更新基线，测试本身不会自动覆盖。解析、分级和基线比较的离线用例走普通 CI，不访问真实后端。
 
-配置完成后运行 Xcode 测试：
+配置完成后，通过临时测试模拟器运行只读套件：
 
 ```sh
-xcodebuild test \
-  -project "MoviePilot-TV.xcodeproj" \
-  -scheme "MoviePilot-TV" \
-  -configuration Debug \
-  -destination "platform=tvOS Simulator,name=Apple TV" \
-  -parallel-testing-enabled NO \
-  -maximum-concurrent-test-simulator-destinations 1 \
-  CODE_SIGNING_ALLOWED=YES \
-  CODE_SIGN_IDENTITY=- \
-  -skipPackagePluginValidation
+python3 scripts/test-tvos.py --include-backend-tests \
+  --only-testing MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests
 ```
 
-这里默认关闭 XCTest 并行。未关闭时，Xcode 可能启动多个 `Clone N of Apple TV` 模拟器，把不同测试套件并行分发执行；串行运行更容易确认执行顺序、定位失败，并防止显式启用的副作用套件被并行执行。
+入口先解析依赖并完整构建，再新建/使用本次专用模拟器串行测试，结束后只清理该设备。测试宿主使用独立 `Testing` App 身份和共享组，不覆盖日常 App 的登录、偏好或首页缓存。已有构建可加 `--skip-build` 做定向测试；完整验证不能仅使用这个参数。普通 `python3 scripts/test-tvos.py` 显式跳过全部真实后端套件，即使工作区已有 `.env.compatibility` 也不会自动访问。
+
+需要副作用验证时，用 `--only-testing MoviePilot-TV-Tests/BackendCompatibilitySideEffectTests` 指定套件，并按下文显式启用独立副作用开关。模拟器与 App 存储隔离不能隔离真实后端的数据修改。
 
 真实后端巡检在 `Testing started` 后可能数分钟没有增量输出。图片巡检会扫描多个 TV 页面入口、实际下载海报/背景图/头像并等待 tvOS 解码；不要只因为短时间无输出就判断卡死，应等待用例结束或查看 `.xcresult` 中的测试摘要和失败详情。
 
@@ -35,7 +29,7 @@ xcodebuild test \
 
 图片巡检尤其要遵守这一点。TV 图片请求失败时，测试应按 MP Web 的图片 URL 规则生成等价请求；若 Web 等价请求也失败，或原始图片值为空、非可请求 URL，导致 Web 本来也没有可下载图片，则应计入 Web 对齐失败并继续。只有 MP Web 等价图片能正常获取，而 TV 端图片失败，才应判定为 TV 端兼容问题。
 
-GitHub CI 没有真实后端账号，`ci.yml` 会显式跳过 `BackendCompatibilityReadOnlyTests` 和 `BackendCompatibilitySideEffectTests`。真实后端兼容测试应在本机或用户指定的带后端配置环境中运行。OpenAPI 离线契约测试属于普通 XCTest，CI 会运行；针对真实实例的 `testReadOnlyOpenAPIContractCompatibility` 仍留在只读套件内，随真实后端配置执行。
+GitHub CI 没有真实后端账号，`ci.yml` 通过标准入口显式跳过只读、权限行为和副作用三个真实后端套件。真实后端兼容测试应在本机或用户指定的带后端配置环境中运行。OpenAPI 离线契约测试属于普通 XCTest，CI 会运行；针对真实实例的 `testReadOnlyOpenAPIContractCompatibility` 仍留在只读套件内，随真实后端配置执行。
 
 ## 真实后端只读套件
 
@@ -96,17 +90,8 @@ MOVIEPILOT_COMPAT_PERMISSION_PASSWORDS=discovery-password,search-password,subscr
 `MOVIEPILOT_COMPAT_PERMISSION_PASSWORDS` 按 `MOVIEPILOT_COMPAT_PERMISSION_BEHAVIOR_ACCOUNTS` 的顺序对应；留空项会回退使用 `MOVIEPILOT_COMPAT_PASSWORD`。只想验证权限行为时，直接跑这一小组即可：
 
 ```sh
-xcodebuild test \
-  -project "MoviePilot-TV.xcodeproj" \
-  -scheme "MoviePilot-TV" \
-  -configuration Debug \
-  -destination "platform=tvOS Simulator,name=Apple TV" \
-  -parallel-testing-enabled NO \
-  -maximum-concurrent-test-simulator-destinations 1 \
-  CODE_SIGNING_ALLOWED=YES \
-  CODE_SIGN_IDENTITY=- \
-  -skipPackagePluginValidation \
-  -only-testing:MoviePilot-TV-Tests/BackendCompatibilityPermissionBehaviorTests
+python3 scripts/test-tvos.py --include-backend-tests \
+  --only-testing MoviePilot-TV-Tests/BackendCompatibilityPermissionBehaviorTests
 ```
 
 ## 副作用套件

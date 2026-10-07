@@ -50,8 +50,12 @@ class SystemViewModel: ObservableObject {
     AppVersionInfo.currentAppVersion()
   }
 
-  var compatibleMoviePilotVersion: String {
-    AppVersionInfo.compatibleMoviePilotVersion
+  var minimumCompatibleMoviePilotVersion: String {
+    AppVersionInfo.minimumCompatibleMoviePilotVersion
+  }
+
+  var latestCompatibleMoviePilotVersion: String {
+    AppVersionInfo.latestCompatibleMoviePilotVersion
   }
 
   // MARK: - 详情页设置

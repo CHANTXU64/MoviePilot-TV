@@ -64,6 +64,7 @@
 | 分页、轮询、SSE、多阶段加载 | 排序不稳定；过滤空批当终页；EOF 当成功；辅助失败/慢请求阻断主流程 | §5 |
 | tvOS 控件、Sheet、焦点、图片与长文本 | 模态与底层同时处理 Menu；不可达/无语义控件；静态测试冒充真机验收 | §6 |
 | 上游接口、权限、来源、站点、筛选能力 | 用错版本或权威域；把默认当全部；把未知当启用；以客户端隐藏代替授权 | §7 |
+| 按后端版本阻止某功能（已知缺陷版本门禁） | 范围写宽成 `< 某版本`；版本读不出或未登记时误禁用；把“未知放行”套到权限判断上 | §7“已知缺陷版本门禁” |
 | 日志、用户反馈、回归测试 | 失败静默或反馈不可见；测试绕过真实入口；把未运行写成通过 | §8 |
 | baseURL、动态 path、query、表单编码、图片 URL | 特殊字符变参数；重复转义；丢反代前缀；整串替换破坏第三方 URL | §9 |
 | 表单、Picker、筛选/排序、派生显示与子观察对象 | 隐藏值偷偷提交；无法恢复默认/清空；归一化破坏原值；状态改变但画面不更新 | §10 |
@@ -97,51 +98,33 @@ xcodebuild -list -project "MoviePilot-TV.xcodeproj"
 xcrun simctl list devices tvOS available
 ```
 
-解析依赖：
+标准本机验证入口（依赖解析、Debug 完整构建、Testing 测试）：
 
 ```bash
-xcodebuild -resolvePackageDependencies \
-  -project "MoviePilot-TV.xcodeproj" \
-  -scheme "MoviePilot-TV" \
-  -skipPackagePluginValidation
+python3 scripts/test-tvos.py
 ```
 
-本机完整构建（优先使用 tvOS Simulator，不要默认改成 `generic/platform=tvOS`）：
+该入口新建一台临时 Apple TV 模拟器，使用最新可用 tvOS runtime，以本次返回的 UDID 执行构建和测试；成功、失败或取消后只关闭并删除自己创建的设备。不要用日常模拟器的名称或 UDID 执行测试，也不要使用 `erase`、`shutdown all` 或 `delete all`。可用 `--runtime 27.0` 指定已安装的 runtime；实际使用的型号、版本和 UDID 会输出在日志中。
+
+脚本保留 `CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-` 和串行测试参数，默认跳过三个真实后端套件。定向验证示例：
 
 ```bash
-xcodebuild clean build \
-  -project "MoviePilot-TV.xcodeproj" \
-  -scheme "MoviePilot-TV" \
-  -configuration Debug \
-  -destination "platform=tvOS Simulator,name=Apple TV" \
-  CODE_SIGNING_ALLOWED=YES \
-  CODE_SIGN_IDENTITY=- \
-  -skipPackagePluginValidation
+python3 scripts/test-tvos.py --skip-build \
+  --only-testing MoviePilot-TV-Tests/TestIsolationTests
 ```
 
-本机测试：
+`--skip-build` 仅跳过依赖解析和 Debug clean build，不能将它单独当作完整验证。可用 `--derived-data-path <目录>` 和 `--result-bundle-path <新的.xcresult路径>` 保存构建与测试产物。
 
-```bash
-xcodebuild test \
-  -project "MoviePilot-TV.xcodeproj" \
-  -scheme "MoviePilot-TV" \
-  -configuration Debug \
-  -destination "platform=tvOS Simulator,name=Apple TV" \
-  -parallel-testing-enabled NO \
-  -maximum-concurrent-test-simulator-destinations 1 \
-  CODE_SIGNING_ALLOWED=YES \
-  CODE_SIGN_IDENTITY=- \
-  -skipPackagePluginValidation
-```
+Xcode 的 Test action 使用独立 `Testing` 配置，安装 `org.chantxu.MoviePilot-TV.Testing` 和对应的 Top Shelf 扩展，使用独立 App Group、钥匙串访问组与偏好/缓存容器。Run action 继续使用正常 Debug App。共享版本和默认身份由 `Configuration/Base.xcconfig` 定义，Testing 继承 Debug 并覆盖独立身份；深链 scheme 由主 App 与扩展 Info.plist 的 `TopShelfURLScheme` 读取，不在代码中写死。测试目标拒绝在普通 Debug/Release 配置编译，以免误用 `xcodebuild test -configuration Debug` 覆盖日常 App。命令行测试统一使用上面的入口；需要手动诊断时，必须使用自己新建的测试设备、`-configuration Testing` 和串行参数。
 
-续签脚本与 Bundle ID 配置变更还应运行以下回归（PR CI 同步执行；真实 Xcode 环境会检查 Debug/Release 的 target 构建设置）：
+续签脚本、打包脚本与 Bundle ID 配置变更还应运行以下回归（PR CI 同步执行；真实 Xcode 环境会检查 Debug/Release/Testing 的 target 构建设置）：
 
 ```bash
 bash -n scripts/apple-tv-renew.sh
-python3 -m unittest discover -s scripts/tests -p 'test_apple_tv_renew.py'
+python3 -m unittest discover -s scripts/tests
 ```
 
-该回归包含本地命令替身和构建设置检查，不代表真实签名或设备安装验收。`test_package_ipa.py` 及实际 IPA 构建、打包只在 `Release` 工作流执行。
+该命令运行 `scripts/tests` 下全部 Python 测试（含续签脚本的本地命令替身和构建设置检查），不代表真实签名或设备安装验收。实际 IPA 构建、打包只在 `Release` 工作流执行，该工作流只跑打包相关测试。
 
 本机测试默认串行运行。不要移除 `-parallel-testing-enabled NO` 和 `-maximum-concurrent-test-simulator-destinations 1`，否则 XCTest 可能启动多个 `Clone N of Apple TV` 模拟器并并行执行不同测试套件。真实后端兼容测试尤其应串行执行，方便控制副作用套件的执行顺序和排查失败来源。
 
@@ -157,11 +140,7 @@ PR CI 只执行 Simulator 构建、测试和脚本回归，不编译或打包发
 
 真实后端兼容测试可能包含副作用。新增或修改任何会访问真实 MoviePilot 后端的测试前，必须先明确它是否会改变真实数据或触发后台动作，包括但不限于订阅搜索、订阅 reset、暂停/恢复订阅、保存订阅、手动/AI 重新整理、添加/删除下载或订阅。默认优先写只读测试；确实需要副作用测试时，必须放在 `BackendCompatibilitySideEffectTests` 或等价的显式副作用套件中，提供独立开关，限制目标范围，记录目标对象原始状态，并在成功、失败和取消路径中尽力恢复原状态。不要在用户个人后端上用“全量测试”名义新增隐式副作用。
 
-如果本机没有名为 `Apple TV` 的 tvOS Simulator，先用下面命令列出可用模拟器，并选择一个可用 tvOS 目标替换 `-destination`，同时在回复或提交说明中写清楚实际使用的目标：
-
-```bash
-xcrun simctl list devices tvOS available
-```
+真实后端测试也必须通过专用测试设备运行。只有明确要求真实后端验证时才加 `--include-backend-tests`，并用 `--only-testing` 限定所需套件；该参数不替代真实后端副作用套件的独立开关和恢复约束，具体命令见 `docs/backend-compatibility-tests.md`。
 
 `generic/platform=tvOS` 属于 CI/设备归档风格的编译检查，可能触发本机 SDK、runtime 或设备支持校验；它可以作为 GitHub Actions 或额外设备构建检查使用，但不要用它替代本机 Simulator 构建/测试。
 
@@ -216,7 +195,7 @@ xcrun simctl list devices tvOS available
 对本仓库进行任何代码、配置、文档或工作流修改时，必须遵守：
 
 1. 禁止在未获得用户明确允许的情况下执行 `git commit`、`git push` 或创建 Pull Request；其中私自创建 PR 属于严重违规。用户要求“写好”“整理好”“提交到 GitHub”不足以自动推导为允许 commit/push/开 PR，必须先单独确认。
-2. 禁止直接向 `main` 分支提交任何修改。唯一例外是 `.agents/prompts/release.md` 定义的正式发布流程：用户确认 Release Notes 后，发布专属的新版本信息改动（`AppChangelog.swift`、对应版本断言、README 版本标记和供主 App 与 Top Shelf 扩展继承的工程级 `MARKETING_VERSION`）必须直接在最新 `main` 上修改，不要创建发布分支或 Pull Request；commit、Push 和创建 GitHub Release 仍分别需要用户明确授权。
+2. 禁止直接向 `main` 分支提交任何修改。唯一例外是 `.agents/prompts/release.md` 定义的正式发布流程：用户确认 Release Notes 后，发布专属的新版本信息改动（`AppChangelog.swift`、对应版本断言、README 版本标记和供三种配置的主 App 与 Top Shelf 扩展继承的 `Configuration/Base.xcconfig` 版本号）必须直接在最新 `main` 上修改，不要创建发布分支或 Pull Request；commit、Push 和创建 GitHub Release 仍分别需要用户明确授权。
 3. 除上述正式发布及其新版本信息同步例外外，每次开始修改前，必须基于最新 `main` 创建独立分支。
 4. AI 创建的分支名必须使用 `ai/xxx` 格式，例如：
    - `ai/add-github-actions-ci`
@@ -266,3 +245,4 @@ xcrun simctl list devices tvOS available
 4. `AGENTS.md` 只维护入口、路由、通用项目约束和 Git 工作流。
 5. 如果新增专项 Prompt 或工程指南，应同步更新本文件的任务路由表。
 6. 如果修改专项 Prompt 的行为规则，应优先修改 `.agents/prompts/` 对应文件，再检查本文件是否需要更新路由描述。
+7. `README.md` 面向用户，只写用户需要看的信息，不写测试数量、测试类名、内部实现或验证流水。

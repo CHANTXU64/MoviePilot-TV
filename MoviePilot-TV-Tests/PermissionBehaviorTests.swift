@@ -252,6 +252,7 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
         token: accountA.access_token,
         currentUser: accountA
       )
+      service.settings = GlobalSettings(BACKEND_VERSION: "v3.0.10-1")
       let handler = SubscriptionHandler(apiService: service)
       let forkResult = await handler.fork(share: try PermissionBehaviorFixtures.subscribeShare())
       let forkedId = try XCTUnwrap(forkResult)
@@ -644,6 +645,7 @@ private func configurePermissionBehaviorUser(
     user_name: "permission-behavior",
     avatar: nil
   )
+  service.settings = GlobalSettings(BACKEND_VERSION: "v3.0.10-1")
 }
 
 @MainActor
