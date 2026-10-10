@@ -4,6 +4,7 @@ import SwiftUI
 
 @MainActor
 class ResourceResultViewModel: ObservableObject {
+  @Published private(set) var pagedSearch: ResourceSearchSession?
   @Published var results: [Context] = []
   @Published var isLoading = false
   private var hasSearched = false
@@ -46,6 +47,7 @@ class ResourceResultViewModel: ObservableObject {
   }
 
   func cancelSearch() {
+    pagedSearch?.cancel()
     searchGeneration += 1
     searchStreamTask?.cancel()
     searchStreamTask = nil
@@ -55,6 +57,7 @@ class ResourceResultViewModel: ObservableObject {
 
   /// 页面退场时立即使请求失效，但保留当前公开展示状态，避免 Pop 动画第一帧切换 UI。
   func cancelInFlightSearch() {
+    if let pagedSearch { pagedSearch.deactivate(); return }
     let wasInFlight = isLoading
     searchGeneration += 1
     searchStreamTask?.cancel()
@@ -69,6 +72,19 @@ class ResourceResultViewModel: ObservableObject {
     guard apiService.canAccess(.search) else { return }
     guard !hasSearched else { return }
     hasSearched = true
+    let isMediaSearch = isResourceMediaSearchKeyword(keyword)
+    // 音乐媒体搜索仍返回旧 SSE 协议，不包含手动分页的来源事实。
+    if ResourceSearchQuery.supportsPaging(backendVersion: apiService.settings?.BACKEND_VERSION),
+      !(isMediaSearch && type == "音乐")
+    {
+      let search = ResourceSearchSession(query: ResourceSearchQuery(
+        keyword: keyword, type: type, area: area, title: title, year: year, season: season, sites: sites,
+        isMediaSearch: isMediaSearch
+      ), apiService: apiService)
+      pagedSearch = search
+      search.start()
+      return
+    }
     isLoading = true
     searchGeneration += 1
     let currentSearchGeneration = searchGeneration

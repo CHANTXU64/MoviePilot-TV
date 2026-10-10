@@ -3075,6 +3075,12 @@ nonisolated struct SearchStreamEvent: Codable, @unchecked Sendable {
   let message: String?
   let message_i18n: String?
 
+  var sources: [ResourceSearchSource]? = nil
+  var stage: String? = nil
+  var replace_batch: Bool? = nil
+  var batch_index: Int? = nil
+  var batch_count: Int? = nil
+
   /// 统一错误文本选择器：逐项 trim 后优先 message_i18n，再回退 message。
   var localizedMessage: String? {
     trimmedNonEmpty([message_i18n, message])

@@ -10,19 +10,40 @@ nonisolated enum SSEEventReader {
     as _: Event.Type,
     receive: @MainActor @Sendable (Event) throws -> Void
   ) async throws {
+    try await consume(from: bytes, as: Event.self, maximumEventBytes: nil) { event, _ in
+      try receive(event)
+    }
+  }
+
+  /// await 交付提供背压；资源搜索不经过无界 AsyncThrowingStream 队列。
+  @concurrent
+  static func consume<Event: Decodable & Sendable>(
+    from bytes: URLSession.AsyncBytes,
+    as _: Event.Type,
+    maximumEventBytes: Int?,
+    configureDecoder: (@Sendable (JSONDecoder) -> Void)? = nil,
+    receive: @MainActor @Sendable (Event, Int) async throws -> Void
+  ) async throws {
+    var frameBytes = 0
     var framer = SSEFramer()
     let decoder = JSONDecoder()
+    configureDecoder?(decoder)
     for try await byte in bytes {
       try Task.checkCancellation()
+      frameBytes += 1
+      if let maximumEventBytes, frameBytes > maximumEventBytes {
+        throw ResourceSearchFailure.capacity
+      }
       if let payload = framer.consume(byte: byte) {
         let event = try decoder.decode(Event.self, from: Data(payload.utf8))
-        try await receive(event)
+        try await receive(event, frameBytes)
+        frameBytes = 0
       }
     }
     try Task.checkCancellation()
     if let tail = framer.flush() {
       let event = try decoder.decode(Event.self, from: Data(tail.utf8))
-      try await receive(event)
+      try await receive(event, frameBytes)
     }
   }
 }

@@ -9,6 +9,7 @@ struct SearchView: View {
   @Environment(\.scenePhase) private var scenePhase
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
   @State private var showSiteSelection = false
+  @State private var siteSelectionSource: ImageNavigationSourceToken?
   @State private var showMediaSourceSelection = false
 
   init(isSelected: Bool = true) {
@@ -118,6 +119,7 @@ struct SearchView: View {
           // B. 站点筛选按钮：仅在资源搜索模式且满足显示条件时可见
           if shouldShowSiteFilter {
             Button(action: {
+              siteSelectionSource = navigationCoordinator.sourceToken()
               showSiteSelection = true
             }) {
               HStack(spacing: 8) {
@@ -156,7 +158,11 @@ struct SearchView: View {
   var body: some View {
     NavigationStack(path: $navigationCoordinator.path) {
       Group {
-        if viewModel.isLoading {
+        if viewModel.searchType == .resource, let search = viewModel.pagedSearch {
+          PagedResourceResultsView(search: search, onCancel: { viewModel.cancelPagedSearch() }) {
+            searchHeader
+          }
+        } else if viewModel.isLoading {
           VStack {
             searchHeader
             Spacer()
@@ -213,7 +219,11 @@ struct SearchView: View {
       }
       .mediaSubscriptionAlerts(using: subscriptionHandler)
 
-      .sheet(isPresented: $showSiteSelection) {
+      .sheet(isPresented: $showSiteSelection, onDismiss: {
+        guard let source = siteSelectionSource else { return }
+        siteSelectionSource = nil
+        Task { await viewModel.applyPagedSearchSites(from: source, in: navigationCoordinator) }
+      }) {
         MultiSelectionSheet(
           options: viewModel.siteFilter.availableSites,
           id: \.id,
@@ -242,7 +252,12 @@ struct SearchView: View {
     .environmentObject(navigationCoordinator)
     .environmentObject(subscriptionHandler)
     .onAppear { updateStackForeground() }
-    .onChange(of: isSelected) { _, _ in updateStackForeground() }
+    .onChange(of: isSelected) { _, selected in
+      updateStackForeground()
+      if !selected { viewModel.pagedSearch?.deactivate() }
+      else { viewModel.pagedSearch?.refreshRuleAvailability() }
+    }
+    .onDisappear { viewModel.pagedSearch?.deactivate() }
     .onChange(of: scenePhase) { _, _ in updateStackForeground() }
   }
 

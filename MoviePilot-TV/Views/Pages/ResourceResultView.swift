@@ -28,7 +28,14 @@ struct ResourceResultView: View {
 
   var body: some View {
     Group {
-      if viewModel.isLoading {
+      if let search = viewModel.pagedSearch {
+        PagedResourceResultsView(search: search, overrideMediaInfo: mediaInfo, onCancel: {
+          viewModel.cancelSearch()
+          dismiss()
+        }) {
+          if mediaInfo != nil { Text(title).font(.largeTitle.bold()).foregroundColor(.secondary) }
+        }
+      } else if viewModel.isLoading {
         VStack(spacing: 20) {
           ProgressView(viewModel.searchProgressText)
           if viewModel.searchProgress > 0 {

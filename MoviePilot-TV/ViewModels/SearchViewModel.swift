@@ -380,6 +380,7 @@ class SearchViewModel: ObservableObject {
     SearchType.allCases.filter(canAccess)
   }
 
+  @Published private(set) var pagedSearch: ResourceSearchSession?
   @Published var resourceResults: [Context] = []
   @Published var appliedFilterRuleName: String?
   @Published var siteFilter: SiteFilterViewModel
@@ -431,7 +432,7 @@ class SearchViewModel: ObservableObject {
   }
 
   /// 执行初始搜索：根据 searchType 决定是资源搜索还是聚合元数据搜索
-  func autoSearch() async {
+  func autoSearch(resourceKeyword: String? = nil) async {
     // F-140：提交口先把搜索词规范化一次（去掉首尾空白与换行），之后**请求与本地评分
     // 共用这一个串**。
     //
@@ -445,8 +446,10 @@ class SearchViewModel: ObservableObject {
     // 刻意不写回 `query`：搜索框保留用户输入原样，提交后就地改写文本更突兀。
     // 也刻意只去首尾、不压缩内部空白 —— 内部空白的匹配质量属于评分层的分档问题，
     // 不是「提交词身份」问题，动它会波及 `hasPrefix`/`contains` 的既有分档。
-    let searchQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    let searchQuery = (resourceKeyword ?? query).trimmingCharacters(in: .whitespacesAndNewlines)
     guard !searchQuery.isEmpty else { return }
+    pagedSearch?.cancel()
+    pagedSearch = nil
     let currentSearchType = searchType
     guard canAccess(currentSearchType) else { return }
     searchGeneration += 1
@@ -463,6 +466,15 @@ class SearchViewModel: ObservableObject {
     case .resource:
       // 资源搜索：查询站点种子信息
       let sitesStr = siteFilter.sitesString
+      if ResourceSearchQuery.supportsPaging(backendVersion: apiService.settings?.BACKEND_VERSION) {
+        let search = ResourceSearchSession(
+          query: ResourceSearchQuery(keyword: searchQuery, sites: sitesStr), apiService: apiService)
+        pagedSearch = search
+        isLoading = false
+        hasSearched = true
+        search.start()
+        return
+      }
       searchProgressText = "正在搜索..."
       searchProgress = 0.0
       resourceErrorMessage = nil
@@ -718,6 +730,22 @@ class SearchViewModel: ObservableObject {
     case .resource:
       apiService.canAccess(.search)
     }
+  }
+
+  /// 站点选择完成后才应用新的请求范围；旧版本继续使用原来的提交方式。
+  func applyPagedSearchSites(
+    from source: ImageNavigationSourceToken, in navigationCoordinator: ImageNavigationCoordinator
+  ) async {
+    guard navigationCoordinator.isCurrent(source), searchType == .resource, let pagedSearch,
+      pagedSearch.query.sites != siteFilter.sitesString else { return }
+    await autoSearch(resourceKeyword: pagedSearch.query.keyword)
+  }
+
+  func cancelPagedSearch() {
+    pagedSearch?.cancel()
+    pagedSearch = nil
+    hasSearched = false
+    isLoading = false
   }
 
   // MARK: - Paginator 创建
