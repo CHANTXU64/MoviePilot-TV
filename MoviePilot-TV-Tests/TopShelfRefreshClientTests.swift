@@ -311,7 +311,8 @@ final class TopShelfRefreshClientTests: XCTestCase {
     async throws
   {
     let suite = "top-shelf-recovery-\(UUID())"
-    let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+    // 实体 Apple TV 上 synchronize() 返回 false，但值仍会写入；恢复不能依赖它的返回值。
+    let defaults = try XCTUnwrap(UnsynchronizedDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
     let initial = try XCTUnwrap(store.loadState())
     store = TopShelfSharedStore(containerURL: directory, persistentDefaults: defaults)
@@ -319,7 +320,8 @@ final class TopShelfRefreshClientTests: XCTestCase {
     try await refresh()
     try FileManager.default.removeItem(at: directory.appendingPathComponent("Library/Caches"))
     store = TopShelfSharedStore(
-      containerURL: directory, persistentDefaults: try XCTUnwrap(UserDefaults(suiteName: suite)))
+      containerURL: directory,
+      persistentDefaults: try XCTUnwrap(UnsynchronizedDefaults(suiteName: suite)))
     let recovered = try XCTUnwrap(store.loadState())
     XCTAssertEqual(recovered.activeSessionID, "owner")
     XCTAssertEqual(recovered.selection, selection)
@@ -329,7 +331,8 @@ final class TopShelfRefreshClientTests: XCTestCase {
     try store.invalidatePublishedState(.disabled(selection: nil))
     try FileManager.default.removeItem(at: directory.appendingPathComponent("Library/Caches"))
     store = TopShelfSharedStore(
-      containerURL: directory, persistentDefaults: try XCTUnwrap(UserDefaults(suiteName: suite)))
+      containerURL: directory,
+      persistentDefaults: try XCTUnwrap(UnsynchronizedDefaults(suiteName: suite)))
     let requestCount = TopShelfRefreshURLProtocol.requests.count
     try await refresh()
     XCTAssertEqual(TopShelfRefreshURLProtocol.requests.count, requestCount)
@@ -656,6 +659,10 @@ final class TopShelfRefreshClientTests: XCTestCase {
     }
     previous?.makeKey()
   }
+}
+
+private final class UnsynchronizedDefaults: UserDefaults, @unchecked Sendable {
+  override func synchronize() -> Bool { false }
 }
 
 private final class TopShelfRefreshURLProtocol: URLProtocol, @unchecked Sendable {

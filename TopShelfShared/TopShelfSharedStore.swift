@@ -5,7 +5,6 @@ import Foundation
 nonisolated enum TopShelfSharedStoreError: Error, Equatable {
   case unsupportedSchema
   case invalidImagePath
-  case persistenceFailed
 }
 
 nonisolated struct TopShelfSharedStore: @unchecked Sendable {
@@ -67,9 +66,6 @@ nonisolated struct TopShelfSharedStore: @unchecked Sendable {
       data = try Data(contentsOf: stateFileURL)
     } else {
       guard let persistentDefaults else { return nil }
-      guard persistentDefaults.synchronize() else {
-        throw TopShelfSharedStoreError.persistenceFailed
-      }
       guard let saved = persistentDefaults.data(forKey: Self.recoveryKey) else { return nil }
       data = saved
     }
@@ -91,9 +87,6 @@ nonisolated struct TopShelfSharedStore: @unchecked Sendable {
       recovery.snapshot = nil
       recovery.previousSnapshot = nil
       persistentDefaults.set(try JSONEncoder().encode(recovery), forKey: Self.recoveryKey)
-      guard persistentDefaults.synchronize() else {
-        throw TopShelfSharedStoreError.persistenceFailed
-      }
     }
     if let snapshot = state.snapshot {
       try FileManager.default.createDirectory(at: cardRootURL, withIntermediateDirectories: true)
@@ -190,9 +183,6 @@ nonisolated struct TopShelfSharedStore: @unchecked Sendable {
   private func invalidateState(_ disabledState: TopShelfSharedState) throws {
     if let persistentDefaults {
       persistentDefaults.removeObject(forKey: Self.recoveryKey)
-      guard persistentDefaults.synchronize() else {
-        throw TopShelfSharedStoreError.persistenceFailed
-      }
     }
     try ensureStorageRoot()
     let fileManager = FileManager.default
