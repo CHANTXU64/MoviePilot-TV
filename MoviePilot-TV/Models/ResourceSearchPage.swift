@@ -33,6 +33,11 @@ struct ResourceSearchPage {
   private var batchCount: Int?
   private var totalItems: Int?
 
+  init(source: String?, page: Int) {
+    self.source = source
+    self.page = page
+  }
+
   mutating func receive(_ event: SearchStreamEvent) throws {
     if event.type == "error" {
       throw ResourceSearchFailure.source(event.localizedMessage ?? "搜索失败")
