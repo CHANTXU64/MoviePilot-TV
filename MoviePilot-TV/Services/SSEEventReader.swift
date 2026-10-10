@@ -20,21 +20,27 @@ nonisolated enum SSEEventReader {
   static func consume<Event: Decodable & Sendable>(
     from bytes: URLSession.AsyncBytes,
     as _: Event.Type,
-    maximumEventBytes: Int?,
-    configureDecoder: (@Sendable (JSONDecoder) -> Void)? = nil,
+    maximumEventBytes: (@MainActor @Sendable () throws -> Int)? = nil,
+    configureDecoder: (@Sendable (JSONDecoder, Int?, Int) -> Void)? = nil,
     receive: @MainActor @Sendable (Event, Int) async throws -> Void
   ) async throws {
     var frameBytes = 0
-    var framer = SSEFramer()
+    var frameLimit: Int?
+    // 有界读取不保留历史大帧的数组容量，以免预算收紧后仍占用旧缓冲。
+    var framer = SSEFramer(reusesBuffers: maximumEventBytes == nil)
     let decoder = JSONDecoder()
-    configureDecoder?(decoder)
     for try await byte in bytes {
       try Task.checkCancellation()
+      // 上一帧已消费后才取下一帧预算；逐字节读取仍在后台执行。
+      if frameBytes == 0 {
+        frameLimit = try await maximumEventBytes?()
+      }
       frameBytes += 1
-      if let maximumEventBytes, frameBytes > maximumEventBytes {
+      if let frameLimit, frameBytes > frameLimit {
         throw ResourceSearchFailure.capacity
       }
       if let payload = framer.consume(byte: byte) {
+        configureDecoder?(decoder, frameLimit, frameBytes)
         let event = try decoder.decode(Event.self, from: Data(payload.utf8))
         try await receive(event, frameBytes)
         frameBytes = 0
@@ -42,6 +48,7 @@ nonisolated enum SSEEventReader {
     }
     try Task.checkCancellation()
     if let tail = framer.flush() {
+      configureDecoder?(decoder, frameLimit, frameBytes)
       let event = try decoder.decode(Event.self, from: Data(tail.utf8))
       try await receive(event, frameBytes)
     }

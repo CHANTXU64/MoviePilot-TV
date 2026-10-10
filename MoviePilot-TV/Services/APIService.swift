@@ -2692,7 +2692,8 @@ class APIService: ObservableObject {
 
   /// 显式单页资源搜索：逐事件等待消费者完成，既不缓存事件队列，也不重连或 HTTP 重搜。
   func readResourceSearchPage(
-    query: ResourceSearchQuery, source: String?, page: Int, maximumEventBytes: Int,
+    query: ResourceSearchQuery, source: String?, page: Int,
+    maximumEventBytes: @escaping @MainActor @Sendable () throws -> Int,
     receive: @escaping @MainActor @Sendable (SearchStreamEvent, Int) async throws -> Void
   ) async throws {
     let lease = currentLease()
@@ -2718,8 +2719,11 @@ class APIService: ObservableObject {
     defer { bytes.task.cancel() }
     try await SSEEventReader.consume(
       from: bytes, as: BoundedResourceSearchEvent.self, maximumEventBytes: maximumEventBytes,
-      configureDecoder: { decoder in
-        decoder.userInfo[BoundedResourceSearchEvent.itemLimitKey] = max(1, maximumEventBytes * 8 / 4096)
+      configureDecoder: { decoder, frameLimit, frameBytes in
+        if let frameLimit {
+          // 帧上限按剩余预算 / 16 推导；扣除本帧实际临时占用后再限制对象数。
+          decoder.userInfo[BoundedResourceSearchEvent.itemLimitKey] = max(0, frameLimit * 16 - frameBytes * 8) / 4096
+        }
       }
     ) { bounded, byteCount in
       try Task.checkCancellation()

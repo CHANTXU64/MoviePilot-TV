@@ -41,7 +41,6 @@ final class ResourceSearchSession: ObservableObject {
   let query: ResourceSearchQuery
   let processor = ResourceSearchProcessor()
   let capacityBytes: Int
-  let maximumEventBytes: Int
   private let apiService: APIService
   private let session: APIServiceSessionSnapshot
   private var ruleTask: Task<Void, Never>?
@@ -87,7 +86,6 @@ final class ResourceSearchSession: ObservableObject {
     self.session = apiService.sessionSnapshot()
     // 以字节预算限制整次收集，另留系统和 UI 余量；不按某个资源条数假定对象大小。
     self.capacityBytes = capacityBytes ?? min(64 * 1024 * 1024, Int(ProcessInfo.processInfo.physicalMemory / 32))
-    self.maximumEventBytes = min(2 * 1024 * 1024, self.capacityBytes / 32)
     // UI 作用域按账号和权限复用；同账号刷新令牌也会更换请求 epoch，需收尾旧搜索。
     sessionSubscription = apiService.$session.map(\.epoch).removeDuplicates().sink { [weak self] epoch in
       guard let self, epoch != self.session.epoch else { return }
@@ -252,7 +250,7 @@ final class ResourceSearchSession: ObservableObject {
     errorMessage = nil
     collectionStartCount = retainedCount
     newCount = 0; progress = 0; progressText = "正在搜索…"
-    let api = apiService, query = query, frameLimit = maximumEventBytes
+    let api = apiService, query = query
     let processor = processor
     networkTask = Task { [weak self] in
       if resetProcessor { await processor.reset() }
@@ -262,7 +260,12 @@ final class ResourceSearchSession: ObservableObject {
         do {
           try await api.readResourceSearchPage(
             query: query, source: attempt.transaction.source, page: attempt.transaction.page,
-            maximumEventBytes: frameLimit
+            maximumEventBytes: { [weak self] in
+              guard let self, self.isCurrent(current) else { throw CancellationError() }
+              // 原始帧/解码临时占用和本帧对象均按至少 8 倍字节估算。
+              // 后端预览不保证分块，因此不另设与收集预算无关的固定帧上限。
+              return self.remainingCapacity(attempt: attempt) / 16
+            }
           ) { [weak self] event, bytes in
             guard let self, self.isCurrent(current) else { throw CancellationError() }
             try await self.receive(event, bytes: bytes, attempt: attempt)
@@ -295,6 +298,11 @@ final class ResourceSearchSession: ObservableObject {
     return PageAttempt(key: key, hadSnapshot: pages[key]?.rows.isEmpty == false, source: source, page: page)
   }
 
+  private func remainingCapacity(attempt: PageAttempt) -> Int {
+    let retained = pages.values.reduce(0) { $0 + $1.cost }
+    return max(0, capacityBytes - retained - detachedPublishedCost - attempt.finalCost)
+  }
+
   private func receive(_ event: SearchStreamEvent, bytes: Int, attempt: PageAttempt) async throws {
     if let text = event.text_i18n ?? event.text { progressText = text }
     if let value = event.value { progress = value }
@@ -311,11 +319,9 @@ final class ResourceSearchSession: ObservableObject {
     let items = event.items ?? []
     if isFinal || (keepsPreview && !items.isEmpty) {
       let cost = max(bytes * 8, items.count * 4096)
-      let retained = pages.values.reduce(0) { $0 + $1.cost }
       // 原页（含预览）只计一次；8 倍字节估算含 Context、投影数组和过滤派生值。
-      // 另计已脱离原页的旧展示和待提交最终包。逐事件等待消费，只留一帧解码余量，
-      // 不保留的重试预览也由这份余量覆盖，不再算作新增保留数据。
-      guard retained + detachedPublishedCost + attempt.finalCost + cost + maximumEventBytes * 8 <= capacityBytes else {
+      // 当前帧的临时占用随消费释放，下一帧按新的剩余预算读取。
+      guard cost + bytes * 8 <= remainingCapacity(attempt: attempt) else {
         throw ResourceSearchFailure.capacity
       }
       if isFinal { attempt.finalCost += cost }

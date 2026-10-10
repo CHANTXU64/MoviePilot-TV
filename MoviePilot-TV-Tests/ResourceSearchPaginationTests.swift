@@ -615,14 +615,14 @@ final class ResourceSearchPaginationTests: XCTestCase {
     XCTAssertFalse(session.initialComplete)
   }
 
-  func testRetainedBudgetReservesTheNextDecodeAndCannotBeBypassed() async throws {
+  func testRetainedBudgetBoundsEachDecodeAndCannotBeBypassed() async throws {
     let api = try service()
     PaginationURLProtocol.enqueue(source: nil, page: 0, body:
-      (0..<12).map { frame("append", items: [item("keep\($0)")]) }.joined() + frame("append", items: [item("too much")]))
+      (0..<15).map { frame("append", items: [item("keep\($0)")]) }.joined() + frame("append", items: [item("too much")]))
     let session = ResourceSearchSession(query: .init(keyword: "test"), apiService: api, capacityBytes: 64 * 1024)
     session.start(); try await settled(session)
     XCTAssertTrue(session.reachedCapacity)
-    XCTAssertEqual(session.rows.count, 12)
+    XCTAssertEqual(session.rows.count, 15)
     session.continueSearch(); session.restart()
     XCTAssertEqual(PaginationURLProtocol.requests.count, 1)
     let capacityMessage = try XCTUnwrap(session.resultErrorMessage)
@@ -631,9 +631,9 @@ final class ResourceSearchPaginationTests: XCTestCase {
     XCTAssertEqual(session.resultErrorMessage, capacityMessage, "重新应用过滤不能隐藏仍然生效的容量终态")
   }
 
-  func testDefaultBudgetAccepts500RealSizePreviewsFinalChunksAndFurtherPages() async throws {
+  func testDefaultBudgetAcceptsLargeUnsplitPreviewFinalChunksAndFurtherPages() async throws {
     let api = try service()
-    let values = (0..<500).map { index -> [String: Any] in
+    let values = (0..<600).map { index -> [String: Any] in
       var value = item("Resource \(index)")
       var torrent = value["torrent_info"] as! [String: Any]
       torrent["description"] = String(repeating: "x", count: 3900)
@@ -642,7 +642,8 @@ final class ResourceSearchPaginationTests: XCTestCase {
     }
     XCTAssertGreaterThan(try json(values[0]).count, 4000)
     let chunks = stride(from: 0, to: values.count, by: 48).map { Array(values[$0..<min($0 + 48, values.count)]) }
-    let preview = chunks.map { frame("append", items: $0) }.joined()
+    let preview = frame("append", items: values)
+    XCTAssertGreaterThan(preview.utf8.count, 2 * 1024 * 1024)
     let final = chunks.enumerated().map { index, chunk in
       frame(index == 0 ? "replace" : "append", items: chunk,
         sources: [fact("a", page: 0)], batch: (index, chunks.count), total: values.count)
@@ -651,8 +652,9 @@ final class ResourceSearchPaginationTests: XCTestCase {
     let session = ResourceSearchSession(query: .init(keyword: "large"), apiService: api)
     session.start(); try await settled(session)
     XCTAssertTrue(session.initialComplete)
-    XCTAssertEqual(session.rows.count, 500)
+    XCTAssertEqual(session.rows.count, 600)
     XCTAssertFalse(session.reachedCapacity)
+    XCTAssertTrue(session.canContinue)
     // 发布后的数据仍由原页持有，后续页不能再把整份展示按完整载荷重复计费。
     for page in 1...3 {
       let items = Array(values.prefix(100))
@@ -660,7 +662,7 @@ final class ResourceSearchPaginationTests: XCTestCase {
         frame("append", items: items) + frame("replace", items: items, sources: [fact("a", page: page)]))
       session.continueSearch(); try await settled(session)
       XCTAssertFalse(session.reachedCapacity)
-      XCTAssertEqual(session.rows.count, 500 + page * 100)
+      XCTAssertEqual(session.rows.count, 600 + page * 100)
     }
     XCTAssertEqual(PaginationURLProtocol.requests.count, 4)
   }
@@ -674,10 +676,10 @@ final class ResourceSearchPaginationTests: XCTestCase {
     session.stop(); try await settled(session)
     XCTAssertEqual(session.rows.count, 7)
     PaginationURLProtocol.enqueue(source: nil, page: 0,
-      body: (0..<7).map { frame("append", items: [item("new\($0)")]) }.joined())
+      body: (0..<9).map { frame("append", items: [item("new\($0)")]) }.joined())
     session.restart(); try await settled(session)
     XCTAssertTrue(session.reachedCapacity, "旧展示与新预览是两份数据，仍需计入容量")
-    XCTAssertEqual(session.rows.count, 5)
+    XCTAssertEqual(session.rows.count, 8)
     XCTAssertEqual(session.rows.first?.context.torrent_info?.title, "new0")
   }
 
@@ -848,7 +850,7 @@ final class ResourceSearchPaginationTests: XCTestCase {
       PaginationURLProtocol.enqueue(source: nil, page: 0, body: frame("replace", items: [], sources: []),
         headers: ["Set-Cookie": "resource_token=updated; Path=/mp/api/v1; Secure"])
       if paged {
-        try await api.readResourceSearchPage(query: query, source: nil, page: 0, maximumEventBytes: 8192) { _, _ in }
+        try await api.readResourceSearchPage(query: query, source: nil, page: 0, maximumEventBytes: { 8192 }) { _, _ in }
       } else {
         for try await _ in api.searchTitleStream(keyword: query.keyword, sites: query.sites) {}
       }
@@ -865,7 +867,7 @@ final class ResourceSearchPaginationTests: XCTestCase {
         PaginationURLProtocol.enqueue(source: nil, page: 0, body: "", status: status)
         do {
           if paged {
-            try await api.readResourceSearchPage(query: query, source: nil, page: 0, maximumEventBytes: 8192) { _, _ in XCTFail("错误响应不能交付事件") }
+            try await api.readResourceSearchPage(query: query, source: nil, page: 0, maximumEventBytes: { 8192 }) { _, _ in XCTFail("错误响应不能交付事件") }
           } else {
             for try await _ in api.searchTitleStream(keyword: query.keyword, sites: nil) { XCTFail("错误响应不能交付事件") }
           }
@@ -883,6 +885,46 @@ final class ResourceSearchPaginationTests: XCTestCase {
     XCTAssertEqual(PaginationURLProtocol.requests.count, 8, "资源搜索错误不能自动重连")
   }
 
+  func testPageReaderRechecksByteAndItemLimitsAfterEachEvent() async throws {
+    let api = try service()
+    let firstTitle = String(repeating: "a", count: 1200)
+    let first = item(firstTitle)
+    for second in [[item(String(repeating: "b", count: 600))], [item("b"), item("c")]] {
+      PaginationURLProtocol.enqueue(source: nil, page: 0, body:
+        frame("append", items: [first]) + frame("append", items: second))
+      var received = 0
+      do {
+        try await api.readResourceSearchPage(query: .init(keyword: "limits"), source: nil, page: 0,
+          maximumEventBytes: { received == 0 ? 8192 : 512 }
+        ) { event, _ in
+          received += 1
+          XCTAssertEqual(event.items?.first?.torrent_info?.title, firstTitle)
+        }
+        XCTFail("下一帧必须使用收紧后的字节和对象数量预算")
+      } catch {
+        guard case ResourceSearchFailure.capacity = error else { XCTFail("\(error)"); continue }
+      }
+      XCTAssertEqual(received, 1)
+    }
+  }
+
+  func testBoundedPageReaderPreservesBOMLineEndingsMultilineAndTail() async throws {
+    let api = try service()
+    for newline in ["\n", "\r\n", "\r"] {
+      let body = "\u{FEFF}data: {\"type\":\"progress\",\(newline)data: \"text\":\"中文\"}\(newline)\(newline)"
+        + "data: {\"type\":\"progress\",\"text\":\"second\"}\(newline)\(newline)"
+        + "data: {\"type\":\"done\",\"text\":\"tail\"}"
+      PaginationURLProtocol.enqueue(source: nil, page: 0, body: body)
+      var texts: [String] = []
+      try await api.readResourceSearchPage(query: .init(keyword: "framing"), source: nil, page: 0,
+        maximumEventBytes: { 8192 }
+      ) { event, _ in
+        if let text = event.text { texts.append(text) }
+      }
+      XCTAssertEqual(texts, ["中文", "second", "tail"])
+    }
+  }
+
   func testProductionPageReaderBackpressureAndCompleteEventCount() async throws {
     let api = try service()
     let body = (0..<200).map { frame("append", items: [item("item\($0)")]) }.joined()
@@ -894,7 +936,7 @@ final class ResourceSearchPaginationTests: XCTestCase {
     PaginationURLProtocol.enqueue(source: nil, page: 0, body: body)
     var received = 0
     let start = ContinuousClock.now
-    try await api.readResourceSearchPage(query: .init(keyword: "throughput"), source: nil, page: 0, maximumEventBytes: 8192) { _, _ in
+    try await api.readResourceSearchPage(query: .init(keyword: "throughput"), source: nil, page: 0, maximumEventBytes: { 8192 }) { _, _ in
       received += 1
       await Task.yield()
     }
