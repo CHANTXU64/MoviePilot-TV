@@ -105,7 +105,9 @@ if tool == "xcodebuild":
     scheme = args[args.index("-scheme") + 1] if "-scheme" in args else ""
     if "-list" in args:
         # Swift package schemes are listed before the app scheme, as in Xcode.
-        print(json.dumps({"project": {"schemes": ["Flow", "MoviePilot-TV", "MoviePilot-TV-TopShelf"]}}))
+        print(json.dumps({"project": {"schemes": json.loads(os.environ["RENEW_TEST_SCHEMES"])}}))
+    elif "-showBuildSettings" in args and scheme == os.environ["RENEW_TEST_FAILED_SCHEME"]:
+        sys.exit(65)
     elif "-showBuildSettings" in args and scheme == "Flow":
         print(json.dumps([{"target": "Flow", "buildSettings": {
             "PRODUCT_TYPE": "com.apple.product-type.library.static", "PRODUCT_BUNDLE_IDENTIFIER": "Flow",
@@ -208,6 +210,8 @@ class AppleTVRenewTests(unittest.TestCase):
             "RENEW_TEST_EXTENSION_PROFILE": extension_profile,
             "RENEW_TEST_DESTINATION_ID": "fixture-device",
             "RENEW_TEST_DEVICE_TABLE": DEVICE_TABLE, "RENEW_TEST_XCODE_TEAMS": XCODE_TEAMS,
+            "RENEW_TEST_SCHEMES": json.dumps(["Flow", "MoviePilot-TV", "MoviePilot-TV-TopShelf"]),
+            "RENEW_TEST_FAILED_SCHEME": "",
         })
         env.update(overrides or {})
         return subprocess.run(
@@ -247,6 +251,44 @@ class AppleTVRenewTests(unittest.TestCase):
         self.assertEqual(build["args"][build["args"].index("-destination") + 1], "platform=tvOS,id=" + PHYSICAL_UDID)
         install = next(c for c in calls if c["tool"] == "xcrun" and c["args"][:2] == ["devicectl", "device"])
         self.assertEqual(install["args"][install["args"].index("--device") + 1], PHYSICAL_UDID)
+
+    def test_scheme_detection_continues_after_build_settings_failure(self):
+        result = self.run_renew(overrides={
+            "SCHEME": "",
+            "RENEW_TEST_SCHEMES": json.dumps(["Unavailable", "MoviePilot-TV"]),
+            "RENEW_TEST_FAILED_SCHEME": "Unavailable",
+        })
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Scheme: MoviePilot-TV\n", result.stdout)
+        calls = self.calls()
+        lookups = [c for c in calls if c["tool"] == "xcodebuild" and "-showBuildSettings" in c["args"]]
+        schemes = [c["args"][c["args"].index("-scheme") + 1] for c in lookups]
+        self.assertEqual(schemes[:2], ["Unavailable", "MoviePilot-TV"])
+        builds = [c for c in calls if c["tool"] == "xcodebuild" and "build" in c["args"]]
+        self.assertEqual(len(builds), 1)
+        self.assertEqual(builds[0]["args"][builds[0]["args"].index("-scheme") + 1], "MoviePilot-TV")
+        installs = [c for c in calls if c["tool"] == "xcrun"
+                    and c["args"][:4] == ["devicectl", "device", "install", "app"]]
+        self.assertEqual(len(installs), 1)
+        self.assertEqual(installs[0]["args"][-1], str(self.root / "Products/MoviePilot-TV.app"))
+
+    def test_scheme_detection_stops_when_no_app_scheme_matches(self):
+        for schemes in (["Flow"], []):
+            with self.subTest(schemes=schemes):
+                (self.root / "calls.jsonl").write_text("")
+                result = self.run_renew(overrides={
+                    "SCHEME": "", "RENEW_TEST_SCHEMES": json.dumps(schemes),
+                })
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("no scheme in MoviePilot-TV.xcodeproj builds an app with bundle ID "
+                              + self.bundle_id, result.stdout)
+                calls = self.calls()
+                lookups = [c for c in calls if c["tool"] == "xcodebuild" and "-showBuildSettings" in c["args"]]
+                self.assertEqual([c["args"][c["args"].index("-scheme") + 1] for c in lookups], schemes)
+                self.assertFalse(any(c["tool"] == "xcodebuild" and "build" in c["args"] for c in calls))
+                self.assertFalse(any(c["tool"] == "xcrun" and c["args"][:4] == ["devicectl", "device", "install", "app"]
+                                     for c in calls))
+                self.assertNotIn("Renewal complete", result.stdout)
 
     def test_device_detection_still_accepts_36_character_identifiers(self):
         identifier = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
