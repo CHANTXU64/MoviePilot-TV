@@ -129,19 +129,29 @@ find_scheme() {
   if [ -n "$SCHEME" ]; then
     return
   fi
-  SCHEME=$(xcodebuild -list -json -project "$PROJECT_DIR/$PROJECT_FILE" 2>/dev/null \
-    | python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("project",{}).get("schemes") or [""])[0])' || true)
-  [ -n "$SCHEME" ] || fail "SCHEME not set and no scheme found in $PROJECT_FILE"
+  # Package schemes may be listed first; use the first scheme that builds the BUNDLE_ID app.
+  local candidate
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    SCHEME="$candidate"
+    set_build_args
+    if load_app_product 2>/dev/null; then
+      return
+    fi
+  done < <(xcodebuild -list -json -project "$PROJECT_DIR/$PROJECT_FILE" 2>/dev/null \
+    | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin).get("project",{}).get("schemes") or []))' || true)
+  fail "SCHEME not set and no scheme in $PROJECT_FILE builds an app with bundle ID $BUNDLE_ID"
 }
 
 find_team() {
   if [ -n "$DEVELOPMENT_TEAM" ]; then
     return
   fi
+  # Xcode may write the team ID with or without quotes.
   DEVELOPMENT_TEAM=$(defaults read com.apple.dt.Xcode IDEProvisioningTeamByIdentifier 2>/dev/null \
-    | grep -oE 'teamID = "([A-Z0-9]+)"' \
+    | grep -oE 'teamID = "?[A-Z0-9]+' \
     | head -1 \
-    | sed 's/teamID = "\([^"]*\)"/\1/' || true)
+    | sed -E 's/teamID = "?//' || true)
 }
 
 build_args_common=()
@@ -167,11 +177,19 @@ find_device() {
   if [ -n "$DEVICE_ID" ]; then
     return
   fi
-  DEVICE_ID=$(xcrun devicectl list devices 2>/dev/null \
-    | awk -v needle="$DEVICE_NAME_CONTAINS" 'tolower($0) ~ tolower(needle) && $0 ~ /available \(paired\)/ { for (i=1; i<=NF; i++) if ($i ~ /^[0-9A-Fa-f-]{36}$/) { print $i; exit } }' || true)
+  # devicectl lists either a 36-character identifier or a physical device UDID
+  # such as 00008110-XXXXXXXXXXXXXXXX, depending on the Xcode version.
+  local id_pattern='^([0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})$'
+  # Match the Model column after State, not the user-editable device name.
+  # Older device tables omit Reality; newer tables explicitly mark simulators.
+  local devices
+  devices=$(xcrun devicectl list devices 2>/dev/null \
+    | awk '$0 ~ /available \(paired\)[[:space:]]+Apple TV([[:space:]]|$)/ && $NF != "simulated"' || true)
+  DEVICE_ID=$(printf '%s\n' "$devices" \
+    | awk -v needle="$DEVICE_NAME_CONTAINS" -v id="$id_pattern" 'tolower($0) ~ tolower(needle) { for (i=1; i<=NF; i++) if ($i ~ id) { print $i; exit } }' || true)
   if [ -z "$DEVICE_ID" ]; then
-    DEVICE_ID=$(xcrun devicectl list devices 2>/dev/null \
-      | awk '$0 ~ /available \(paired\)/ { for (i=1; i<=NF; i++) if ($i ~ /^[0-9A-Fa-f-]{36}$/) { print $i; exit } }' || true)
+    DEVICE_ID=$(printf '%s\n' "$devices" \
+      | awk -v id="$id_pattern" '{ for (i=1; i<=NF; i++) if ($i ~ id) { print $i; exit } }' || true)
   fi
   [ -n "$DEVICE_ID" ] || fail "no available paired Apple TV device found; set DEVICE_ID or DEVICE_NAME_CONTAINS"
 }

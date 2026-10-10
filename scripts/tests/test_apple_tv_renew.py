@@ -102,7 +102,15 @@ if tool == "xcodebuild":
     extension_id = values.get("PRODUCT_BUNDLE_IDENTIFIER", base + ".TopShelf")
     group = values.get("APP_GROUP_IDENTIFIER", "group." + base)
     team = values.get("DEVELOPMENT_TEAM", "TEAM")
-    if "-showBuildSettings" in args:
+    scheme = args[args.index("-scheme") + 1] if "-scheme" in args else ""
+    if "-list" in args:
+        # Swift package schemes are listed before the app scheme, as in Xcode.
+        print(json.dumps({"project": {"schemes": ["Flow", "MoviePilot-TV", "MoviePilot-TV-TopShelf"]}}))
+    elif "-showBuildSettings" in args and scheme == "Flow":
+        print(json.dumps([{"target": "Flow", "buildSettings": {
+            "PRODUCT_TYPE": "com.apple.product-type.library.static", "PRODUCT_BUNDLE_IDENTIFIER": "Flow",
+        }}]))
+    elif "-showBuildSettings" in args:
         def target(name, kind, identifier, product):
             return {"target": name, "buildSettings": {
                 "PRODUCT_TYPE": kind, "PRODUCT_BUNDLE_IDENTIFIER": identifier,
@@ -115,7 +123,7 @@ if tool == "xcodebuild":
             target("MoviePilot-TV", "com.apple.product-type.application", app_id, "MoviePilot-TV.app"),
         ]))
     elif "-showdestinations" in args:
-        print("{ platform:tvOS, arch:arm64, id:fixture-device, name:Apple TV }")
+        print("{ platform:tvOS, arch:arm64, id:" + os.environ["RENEW_TEST_DESTINATION_ID"] + ", name:Apple TV }")
     elif "build" in args:
         if os.environ.get("RENEW_TEST_COLLISION") == "1":
             extension_id = app_id
@@ -138,13 +146,37 @@ elif tool == "codesign":
         sys.stdout.buffer.write((bundle / "signed-entitlements.plist").read_bytes())
     else:
         sys.exit("Unexpected codesign invocation")
+elif tool == "xcrun" and args[:3] == ["devicectl", "list", "devices"]:
+    print(os.environ["RENEW_TEST_DEVICE_TABLE"])
 elif tool == "xcrun" and args[:4] == ["devicectl", "device", "install", "app"]:
     app = Path(args[-1])
     assert app.name == "MoviePilot-TV.app"
     print("Installed fixture app")
+elif tool == "defaults" and args == ["read", "com.apple.dt.Xcode", "IDEProvisioningTeamByIdentifier"]:
+    print(os.environ["RENEW_TEST_XCODE_TEAMS"])
 else:
     sys.exit("Unexpected command: " + tool + " " + repr(args))
 '''
+
+# Layout of `xcrun devicectl list devices` on Xcode 26: simulators show a
+# 36-character identifier, a physical Apple TV shows its 25-character UDID.
+PHYSICAL_UDID = "00008110-0123456789ABCDEF"
+DEVICE_TABLE = f"""Name                                      Hostname   Identifier                                    State                Model                                        Reality
+---------------------------------------   --------   -------------------------------------------   ------------------   ------------------------------------------   ---------
+Apple TV                                             11111111-2222-3333-4444-555555555555 (UDID)   shutdown             Apple TV (AppleTV5,3)                        simulated
+Living Room Apple TV                                 {PHYSICAL_UDID} (UDID)              available (paired)   Apple TV 4K (3rd generation) (AppleTV14,1)   physical"""
+
+# `defaults read` output for a free Personal Team; Xcode writes the ID unquoted.
+XCODE_TEAMS = """{
+    "user@example.com" =     (
+                {
+            isFreeProvisioningTeam = 1;
+            teamID = ABCDE12345;
+            teamName = "Example User (Personal Team)";
+            teamType = "Personal Team";
+        }
+    );
+}"""
 
 
 class AppleTVRenewTests(unittest.TestCase):
@@ -154,13 +186,13 @@ class AppleTVRenewTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.bin = self.root / "bin"
         self.bin.mkdir()
-        for tool in ("xcodebuild", "xcrun", "security", "codesign"):
+        for tool in ("xcodebuild", "xcrun", "security", "codesign", "defaults"):
             path = self.bin / tool
             path.write_text(COMMAND)
             path.chmod(0o755)
         self.bundle_id = "com.example.MoviePilotTV"
 
-    def run_renew(self, *, force=True, collision=False, extension_profile="valid", app_group=""):
+    def run_renew(self, *, force=True, collision=False, extension_profile="valid", app_group="", overrides=None):
         env = os.environ.copy()
         env.update({
             "PATH": str(self.bin) + os.pathsep + env["PATH"],
@@ -174,7 +206,10 @@ class AppleTVRenewTests(unittest.TestCase):
             "LOG_FILE": str(self.root / "renew.log"), "RENEW_TEST_DIR": str(self.root),
             "RENEW_TEST_COLLISION": "1" if collision else "0",
             "RENEW_TEST_EXTENSION_PROFILE": extension_profile,
+            "RENEW_TEST_DESTINATION_ID": "fixture-device",
+            "RENEW_TEST_DEVICE_TABLE": DEVICE_TABLE, "RENEW_TEST_XCODE_TEAMS": XCODE_TEAMS,
         })
+        env.update(overrides or {})
         return subprocess.run(
             ["bash", str(SCRIPT), *(["--force"] if force else [])],
             env=env, capture_output=True, text=True, timeout=20,
@@ -195,6 +230,104 @@ class AppleTVRenewTests(unittest.TestCase):
         install = next(c for c in calls if c["tool"] == "xcrun")
         self.assertEqual(install["args"][-1], str(self.root / "Products/MoviePilot-TV.app"))
         self.assertIn(self.bundle_id + ".TopShelf", result.stdout)
+
+    def test_readme_usage_detects_app_scheme_paired_device_and_personal_team(self):
+        # README usage sets only BUNDLE_ID; detection must work with current Xcode output.
+        result = self.run_renew(overrides={
+            "SCHEME": "", "DEVICE_ID": "", "DEVELOPMENT_TEAM": "",
+            "RENEW_TEST_DESTINATION_ID": PHYSICAL_UDID,
+        })
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Scheme: MoviePilot-TV\n", result.stdout)
+        self.assertIn("Development team: ABCDE12345\n", result.stdout)
+        calls = self.calls()
+        build = next(c for c in calls if c["tool"] == "xcodebuild" and "build" in c["args"])
+        self.assertEqual(build["args"][build["args"].index("-scheme") + 1], "MoviePilot-TV")
+        self.assertIn("DEVELOPMENT_TEAM=ABCDE12345", build["args"])
+        self.assertEqual(build["args"][build["args"].index("-destination") + 1], "platform=tvOS,id=" + PHYSICAL_UDID)
+        install = next(c for c in calls if c["tool"] == "xcrun" and c["args"][:2] == ["devicectl", "device"])
+        self.assertEqual(install["args"][install["args"].index("--device") + 1], PHYSICAL_UDID)
+
+    def test_device_detection_still_accepts_36_character_identifiers(self):
+        identifier = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+        table = DEVICE_TABLE.replace(PHYSICAL_UDID + " (UDID)   ", identifier + " (UDID)")
+        result = self.run_renew(overrides={"DEVICE_ID": "", "RENEW_TEST_DEVICE_TABLE": table})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        install = next(c for c in self.calls() if c["tool"] == "xcrun" and c["args"][:2] == ["devicectl", "device"])
+        self.assertEqual(install["args"][install["args"].index("--device") + 1], identifier)
+
+    def test_device_detection_rejects_non_apple_tv_devices(self):
+        for name in ("My iPhone", "Apple TV"):
+            with self.subTest(name=name):
+                (self.root / "calls.jsonl").write_text("")
+                result = self.run_renew(overrides={
+                    "DEVICE_ID": "",
+                    "RENEW_TEST_DEVICE_TABLE": (
+                        f"{name}   {PHYSICAL_UDID} (UDID)   available (paired)   iPhone 15 (iPhone15,4)   physical"
+                    ),
+                })
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("no available paired Apple TV device found", result.stdout)
+                self.assertFalse(any("build" in c["args"] or c["tool"] == "xcrun"
+                                     and c["args"][:2] == ["devicectl", "device"] for c in self.calls()))
+
+    def test_device_detection_rejects_simulated_apple_tv(self):
+        result = self.run_renew(overrides={
+            "DEVICE_ID": "",
+            "RENEW_TEST_DEVICE_TABLE": (
+                "Apple TV   AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE (UDID)   "
+                "available (paired)   Apple TV (AppleTV5,3)   simulated"
+            ),
+        })
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("no available paired Apple TV device found", result.stdout)
+        self.assertFalse(any("build" in c["args"] or c["tool"] == "xcrun"
+                             and c["args"][:2] == ["devicectl", "device"] for c in self.calls()))
+
+    def test_device_detection_selects_only_apple_tv_in_mixed_tables(self):
+        den_id = "00008110-FEDCBA9876543210"
+        for reality_column in (True, False):
+            suffix = "   physical" if reality_column else ""
+            table = "\n".join([
+                f"Apple TV iPhone   00008110-AAAAAAAAAAAAAAAA (UDID)   available (paired)   iPhone 15{suffix}",
+                f"Living Room   {PHYSICAL_UDID} (UDID)   available (paired)   Apple TV 4K (3rd generation){suffix}",
+                f"Den   {den_id} (UDID)   available (paired)   Apple TV 4K (3rd generation){suffix}",
+            ])
+            for needle, expected in (("Den", den_id), ("iPhone", PHYSICAL_UDID), ("Missing", PHYSICAL_UDID)):
+                with self.subTest(reality_column=reality_column, needle=needle):
+                    (self.root / "calls.jsonl").write_text("")
+                    result = self.run_renew(overrides={
+                        "DEVICE_ID": "", "DEVICE_NAME_CONTAINS": needle,
+                        "RENEW_TEST_DEVICE_TABLE": table, "RENEW_TEST_DESTINATION_ID": expected,
+                    })
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    calls = self.calls()
+                    install = next(c for c in calls if c["tool"] == "xcrun"
+                                   and c["args"][:2] == ["devicectl", "device"])
+                    self.assertEqual(install["args"][install["args"].index("--device") + 1], expected)
+                    build = next(c for c in calls if c["tool"] == "xcodebuild" and "build" in c["args"])
+                    self.assertEqual(build["args"][build["args"].index("-destination") + 1], "platform=tvOS,id=" + expected)
+
+    def test_team_detection_still_accepts_quoted_team_ids(self):
+        result = self.run_renew(overrides={
+            "DEVELOPMENT_TEAM": "", "RENEW_TEST_XCODE_TEAMS": XCODE_TEAMS.replace("ABCDE12345", '"ABCDE12345"'),
+        })
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        build = next(c for c in self.calls() if c["tool"] == "xcodebuild" and "build" in c["args"])
+        self.assertIn("DEVELOPMENT_TEAM=ABCDE12345", build["args"])
+
+    def test_explicit_scheme_device_and_team_skip_detection(self):
+        result = self.run_renew()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = self.calls()
+        self.assertFalse(any(c["tool"] == "defaults" for c in calls))
+        self.assertFalse(any(c["tool"] == "xcodebuild" and "-list" in c["args"] for c in calls))
+        self.assertFalse(any(c["tool"] == "xcrun" and c["args"][:2] == ["devicectl", "list"] for c in calls))
+        build = next(c for c in calls if c["tool"] == "xcodebuild" and "build" in c["args"])
+        self.assertEqual(build["args"][build["args"].index("-scheme") + 1], "MoviePilot-TV")
+        self.assertIn("DEVELOPMENT_TEAM=TEAM", build["args"])
+        install = next(c for c in calls if c["tool"] == "xcrun")
+        self.assertEqual(install["args"][install["args"].index("--device") + 1], "fixture-device")
 
     def test_duplicate_extension_id_prevents_install(self):
         result = self.run_renew(collision=True)
