@@ -107,8 +107,7 @@ class ResourceResultViewModel: ObservableObject {
     let sessionSnapshot = apiService.sessionSnapshot()
 
     searchStreamTask = Task { @MainActor [weak self] in
-      var accumulatedResults: [Context] = []
-      var finalResultApplied = false
+      var collectedResults = ResourceSearchResultCollector()
       // 只有收到端点认可的 done 才允许 missingSites 补偿与发布；业务 error 与无终止 EOF 均不发布。
       var receivedDone = false
       defer {
@@ -155,10 +154,7 @@ class ResourceResultViewModel: ObservableObject {
             self?.searchProgress = value
           }
 
-          event.applyResourceItems(
-            to: &accumulatedResults,
-            finalResultApplied: &finalResultApplied
-          )
+          try collectedResults.receive(event)
 
           if event.type == "error" {
             self?.errorMessage = event.localizedMessage ?? "未找到相关资源"
@@ -180,6 +176,7 @@ class ResourceResultViewModel: ObservableObject {
           guard receivedDone else {
             throw URLError(.networkConnectionLost)
           }
+          var accumulatedResults = collectedResults.items
           // 获取所有本次搜索的目标站点
           var targetSites: Set<Int> = []
           if let specificSites = sites, !specificSites.isEmpty {

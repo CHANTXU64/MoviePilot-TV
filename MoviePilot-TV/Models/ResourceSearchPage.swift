@@ -22,6 +22,37 @@ nonisolated enum ResourceSearchFailure: Error, LocalizedError {
   }
 }
 
+/// 新旧搜索共用最终分块的顺序和数量校验，资源数组仍由各自的收集器持有。
+struct SearchReplaceBatchState {
+  private var nextBatch = 0
+  private var batchCount: Int?
+  private var totalItems: Int?
+
+  var hasStarted: Bool { batchCount != nil }
+  var isPending: Bool { batchCount.map { nextBatch < $0 } ?? false }
+
+  mutating func receive(_ event: SearchStreamEvent, into results: inout [Context]) throws -> Bool {
+    guard event.replace_batch == true,
+      let index = event.batch_index, let count = event.batch_count,
+      let total = event.total_items, let items = event.items,
+      count > 0, total >= 0, index == nextBatch, index < count,
+      event.type == (index == 0 ? "replace" : "append"),
+      batchCount == nil || batchCount == count,
+      totalItems == nil || totalItems == total
+    else { throw ResourceSearchFailure.incompletePage }
+    batchCount = count
+    totalItems = total
+    results.append(contentsOf: items)
+    nextBatch += 1
+    guard results.count <= total else { throw ResourceSearchFailure.incompletePage }
+    if nextBatch == count {
+      guard results.count == total else { throw ResourceSearchFailure.incompletePage }
+      return true
+    }
+    return false
+  }
+}
+
 /// 页事务只保存待提交的最终分块；可停止查看的预览由搜索会话持有。
 struct ResourceSearchPage {
   let source: String?
@@ -29,9 +60,7 @@ struct ResourceSearchPage {
   private(set) var finalItems: [Context] = []
   private(set) var sources: [ResourceSearchSource]?
   private(set) var isComplete = false
-  private var nextBatch = 0
-  private var batchCount: Int?
-  private var totalItems: Int?
+  private var finalBatch = SearchReplaceBatchState()
 
   init(source: String?, page: Int) {
     self.source = source
@@ -44,27 +73,15 @@ struct ResourceSearchPage {
     }
     if isComplete { return }
     if event.replace_batch == true {
-      guard let index = event.batch_index, let count = event.batch_count,
-        let total = event.total_items, let items = event.items,
-        count > 0, total >= 0, index == nextBatch, index < count,
-        event.type == (index == 0 ? "replace" : "append"),
-        batchCount == nil || batchCount == count,
-        totalItems == nil || totalItems == total,
-        sources == nil || sources == event.sources
+      guard sources == nil || sources == event.sources
       else { throw ResourceSearchFailure.incompletePage }
-      batchCount = count
-      totalItems = total
       sources = event.sources
-      finalItems.append(contentsOf: items)
-      nextBatch += 1
-      guard finalItems.count <= total else { throw ResourceSearchFailure.incompletePage }
-      if nextBatch == count {
-        guard finalItems.count == total else { throw ResourceSearchFailure.incompletePage }
+      if try finalBatch.receive(event, into: &finalItems) {
         try validateSources()
         isComplete = true
       }
     } else if event.type == "replace" {
-      guard batchCount == nil, let items = event.items,
+      guard !finalBatch.hasStarted, let items = event.items,
         event.total_items == items.count
       else { throw ResourceSearchFailure.incompletePage }
       finalItems = items
@@ -72,7 +89,7 @@ struct ResourceSearchPage {
       try validateSources()
       isComplete = true
     } else if event.type == "append" {
-      guard batchCount == nil else { throw ResourceSearchFailure.incompletePage }
+      guard !finalBatch.hasStarted else { throw ResourceSearchFailure.incompletePage }
     } else if event.type == "done" {
       // done 不携带完整资源，不能代替最终包。
       throw ResourceSearchFailure.incompletePage

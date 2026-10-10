@@ -482,8 +482,7 @@ class SearchViewModel: ObservableObject {
       resourceResults = []
       
       searchStreamTask = Task { @MainActor in
-        var accumulatedResults: [Context] = []
-        var finalResultApplied = false
+        var collectedResults = ResourceSearchResultCollector()
         // 只有收到端点认可的 done 才把结果按成功收尾发布；业务 error 与无终止 EOF 均不发布。
         var receivedDone = false
         defer {
@@ -517,10 +516,7 @@ class SearchViewModel: ObservableObject {
               self.searchProgress = value
             }
             
-            event.applyResourceItems(
-              to: &accumulatedResults,
-              finalResultApplied: &finalResultApplied
-            )
+            try collectedResults.receive(event)
             
             if event.type == "error" {
               self.resourceErrorMessage =
@@ -551,6 +547,7 @@ class SearchViewModel: ObservableObject {
           guard receivedDone else {
             throw URLError(.networkConnectionLost)
           }
+          let accumulatedResults = collectedResults.items
 
           // 应用自定义过滤规则（规则内容非法时显式提示；拉取规则网络失败时放行不过滤）
           let filteredResults: [Context]

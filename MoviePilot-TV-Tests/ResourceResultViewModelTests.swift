@@ -82,37 +82,28 @@ final class ResourceResultViewModelTests: XCTestCase {
   func testSearchStreamAggregationMatchesWebOrderingAndFinalResultRules() throws {
     func event(_ type: String, title: String?) throws -> SearchStreamEvent {
       let items = title.map { "[\(resourceContextJSON(title: $0))]" } ?? "[]"
-      let batchMetadata =
-        type == "replace"
-        ? #","replace_batch":true,"batch_index":0,"batch_count":2"#
-        : ""
       return try JSONDecoder().decode(
         SearchStreamEvent.self,
-        from: Data(#"{"type":"\#(type)","items":\#(items)\#(batchMetadata)}"#.utf8)
+        from: Data(#"{"type":"\#(type)","items":\#(items)}"#.utf8)
       )
     }
 
-    var preview: [Context] = []
-    var previewFinalApplied = false
-    try event("append", title: "Older").applyResourceItems(
-      to: &preview, finalResultApplied: &previewFinalApplied)
-    try event("append", title: "Newer").applyResourceItems(
-      to: &preview, finalResultApplied: &previewFinalApplied)
-    try event("done", title: nil).applyResourceItems(
-      to: &preview, finalResultApplied: &previewFinalApplied)
-    XCTAssertEqual(preview.compactMap(\.torrent_info?.title), ["Newer", "Older"])
+    var preview = ResourceSearchResultCollector()
+    try preview.receive(event("append", title: "Older"))
+    try preview.receive(event("append", title: "Newer"))
+    try preview.receive(event("done", title: nil))
+    XCTAssertEqual(preview.items.compactMap(\.torrent_info?.title), ["Newer", "Older"])
 
-    var final: [Context] = []
-    var finalApplied = false
-    try event("replace", title: "Final").applyResourceItems(
-      to: &final, finalResultApplied: &finalApplied)
-    try event("append", title: "Post Replace").applyResourceItems(
-      to: &final, finalResultApplied: &finalApplied)
-    try event("heartbeat", title: nil).applyResourceItems(
-      to: &final, finalResultApplied: &finalApplied)
-    try event("done", title: "Stale Done").applyResourceItems(
-      to: &final, finalResultApplied: &finalApplied)
-    XCTAssertEqual(final.compactMap(\.torrent_info?.title), ["Final"])
+    var final = ResourceSearchResultCollector()
+    try final.receive(event("replace", title: "Final"))
+    try final.receive(event("append", title: "Post Replace"))
+    try final.receive(event("heartbeat", title: nil))
+    try final.receive(event("done", title: "Stale Done"))
+    XCTAssertEqual(final.items.compactMap(\.torrent_info?.title), ["Final"])
+
+    var doneOnly = ResourceSearchResultCollector()
+    try doneOnly.receive(event("done", title: "Done Final"))
+    XCTAssertEqual(doneOnly.items.compactMap(\.torrent_info?.title), ["Done Final"])
   }
 
   func testDeinitCancelsInFlightSearchStream() async throws {

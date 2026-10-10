@@ -55,6 +55,106 @@ final class ResourceSearchPaginationTests: XCTestCase {
     XCTAssertEqual(page.finalItems.last?.torrent_info?.title, "last")
   }
 
+  func testLegacyCollectorKeepsPreviewUntilFinalBatchIsComplete() throws {
+    let values = legacyBatchItems()
+    var collector = ResourceSearchResultCollector()
+    try collector.receive(event("append", items: [item("preview")]))
+    try collector.receive(event("replace", items: Array(values.prefix(48)), batch: (0, 2), total: 60))
+    XCTAssertEqual(collector.items.compactMap { $0.torrent_info?.title }, ["preview"])
+    try collector.receive(event("heartbeat", items: []))
+    try collector.receive(event("append", items: Array(values.suffix(12)), batch: (1, 2), total: 60))
+    try collector.receive(event("append", items: [item("late preview")]))
+    try collector.receive(event("done", items: [item("stale done")]))
+    XCTAssertEqual(collector.items.compactMap { $0.torrent_info?.title }, (0..<60).map { "r\($0)" })
+  }
+
+  private func legacySearch(_ body: String, version: String, media: Bool,
+    fallbackSucceeds: Bool = true
+  ) async throws -> (items: [Context], error: String?) {
+    PaginationURLProtocol.reset()
+    let api = try service(version: version)
+    PaginationURLProtocol.enqueue(source: nil, page: 0, body: body)
+    PaginationURLProtocol.enqueue(source: nil, page: 0,
+      body: String(data: try json([item("fallback")]), encoding: .utf8)!,
+      status: fallbackSucceeds ? 200 : 500)
+    let result: ([Context], String?)
+    if media {
+      let vm = ResourceResultViewModel(keyword: "tmdb:123", type: "电影", sites: "1", apiService: api)
+      await vm.search()
+      try await until { !vm.isLoading }
+      XCTAssertNil(vm.pagedSearch)
+      result = (vm.results, vm.errorMessage)
+    } else {
+      let vm = SearchViewModel(apiService: api)
+      vm.searchType = .resource; vm.query = "legacy"
+      await vm.autoSearch()
+      try await until { !vm.isLoading }
+      XCTAssertNil(vm.pagedSearch)
+      result = (vm.resourceResults, vm.resourceErrorMessage)
+    }
+    XCTAssertEqual(PaginationURLProtocol.requests.first?.path,
+      media ? "/api/v1/search/media/123/stream" : "/api/v1/search/title/stream")
+    XCTAssertNil(PaginationURLProtocol.requests.first?.manual)
+    return result
+  }
+
+  private func legacyBatchItems() -> [[String: Any]] {
+    (0..<60).map { index in
+      var value = item("r\(index)")
+      var torrent = value["torrent_info"] as! [String: Any]
+      torrent["site"] = 1
+      value["torrent_info"] = torrent
+      return value
+    }
+  }
+
+  func testLegacyVersionsCommitAllFinalBatchesThroughBothSearchEntries() async throws {
+    let values = legacyBatchItems()
+    let body = frame("append", items: [item("preview")])
+      + frame("replace", items: Array(values.prefix(48)), batch: (0, 2), total: 60)
+      + frame("append", items: Array(values.suffix(12)), batch: (1, 2), total: 60)
+      + "data: {\"type\":\"done\"}\n\n"
+    for version in ["v3.1.1", "v3.1.2"] {
+      for media in [false, true] {
+        let result = try await legacySearch(body, version: version, media: media)
+        XCTAssertEqual(result.items.compactMap { $0.torrent_info?.title }, (0..<60).map { "r\($0)" })
+        XCTAssertNil(result.error)
+        XCTAssertEqual(PaginationURLProtocol.requests.count, 1, "完整分块不能触发 HTTP 回退或缺站补偿")
+      }
+    }
+  }
+
+  func testLegacyIncompleteFinalBatchesUseFallbackWithoutPublishingPartialResults() async throws {
+    let values = legacyBatchItems()
+    let first = frame("replace", items: Array(values.prefix(48)), batch: (0, 2), total: 60)
+    let done = "data: {\"type\":\"done\"}\n\n"
+    let malformed = [
+      first + done,
+      first,
+      first + frame("append", items: Array(values.suffix(12)), batch: (2, 3), total: 60) + done,
+      first + first + done,
+      first + frame("append", items: Array(values.suffix(11)), batch: (1, 2), total: 60) + done,
+      first + frame("append", items: Array(values.suffix(12)), batch: (1, 3), total: 60) + done,
+      first + frame("append", items: [item("preview mixed into final")]) + done,
+      first + frame("done", items: values),
+    ]
+    for version in ["v3.1.1", "v3.1.2"] {
+      for media in [false, true] {
+        for body in malformed {
+          let result = try await legacySearch(body, version: version, media: media)
+          XCTAssertEqual(result.items.compactMap { $0.torrent_info?.title }, ["fallback"])
+          XCTAssertNil(result.error)
+          XCTAssertEqual(PaginationURLProtocol.requests.count, 2)
+          XCTAssertEqual(PaginationURLProtocol.requests.last?.path,
+            media ? "/api/v1/search/media/123" : "/api/v1/search/title")
+        }
+        let failed = try await legacySearch(first + done, version: version, media: media, fallbackSucceeds: false)
+        XCTAssertTrue(failed.items.isEmpty)
+        XCTAssertNotNil(failed.error)
+      }
+    }
+  }
+
   func testProductionFinalChunksPublishAllRowsWithDuplicateBackendIDs() async throws {
     let api = try service()
     let facts = [fact("opaque", page: 0, more: false)]
