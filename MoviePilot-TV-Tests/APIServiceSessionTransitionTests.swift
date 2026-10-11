@@ -296,6 +296,72 @@ extension SystemSessionBehaviorTests {
     XCTAssertNil(service.loginDraft)
   }
 
+  func testLoginThrottlingPreservesSessionAndAllowsRecoveryAcrossEntryPoints() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SessionRefreshURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SessionRefreshURLProtocol.self) }
+
+    let messages = [
+      "登录尝试过于频繁，请稍后重试",
+      "Too many login attempts, please try again later",
+      "登入嘗試過於頻繁，請稍後重試",
+    ]
+    for message in messages {
+      for entry in ["login", "automatic", "settings"] {
+        await SessionRefreshURLProtocol.stub.reset()
+        await SessionRefreshURLProtocol.stub.setUnauthorizedPath("/api/v1/dashboard/storage")
+        await SessionRefreshURLProtocol.stub.setCurrentUserFailure(statusCode: 403)
+        await SessionRefreshURLProtocol.stub.setLoginFailure(
+          statusCode: 429,
+          json: "{\"success\":false,\"message\":\"\(message)\",\"data\":null}",
+          headers: ["Retry-After": "30"]
+        )
+        let service = APIService.isolatedTestingInstance()
+        let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+        defer { snapshot.restore(to: service) }
+        let user = sessionToken(userId: 1, accessToken: "expired-token", userName: "test-user")
+        service.replaceSessionForTesting(
+          baseURL: "https://session-refresh-tests.local",
+          token: user.access_token,
+          currentUser: user
+        )
+        service.setStoredCredentialsForTesting(username: "test-user", password: "saved-password")
+
+        if entry == "settings" {
+          let viewModel = SystemViewModel(apiService: service)
+          await viewModel.relogin()
+          XCTAssertTrue(viewModel.refreshMessage?.contains("429: \(message)") == true)
+        } else {
+          do {
+            if entry == "automatic" {
+              _ = try await service.fetchStorage()
+            } else {
+              _ = try await service.login(username: "test-user", password: "saved-password")
+            }
+            XCTFail("Expected login throttling: \(entry), \(message)")
+          } catch APIError.serverMessage(let description) {
+            XCTAssertEqual(description, "429: \(message)")
+          } catch {
+            XCTFail("Unexpected error: \(error)")
+          }
+        }
+
+        XCTAssertEqual(service.token, "expired-token", entry)
+        XCTAssertEqual(service.currentUser?.user_name, "test-user", entry)
+        XCTAssertEqual(service.baseURL, "https://session-refresh-tests.local", entry)
+        XCTAssertNil(service.loginDraft, entry)
+        let paths = await SessionRefreshURLProtocol.stub.requestPaths()
+        XCTAssertEqual(paths.filter { $0 == "/api/v1/login/access-token" }.count, 1, entry)
+
+        // 后端解除限流后，用保存的凭据恢复，证明失败没有清空凭据或锁死登录入口。
+        await SessionRefreshURLProtocol.stub.setLoginFailure(statusCode: nil)
+        let recovered = try await service.reloginStoredSession()
+        XCTAssertEqual(recovered.access_token, "fresh-token", entry)
+        XCTAssertEqual(service.token, "fresh-token", entry)
+        XCTAssertNil(service.loginDraft, entry)
+      }
+    }
+  }
+
   func testAutomaticReloginRecognizesCredentialRejectionAcrossBackendLanguagesAndFields()
     async throws
   {
