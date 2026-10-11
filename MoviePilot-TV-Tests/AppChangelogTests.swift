@@ -5,11 +5,11 @@ import XCTest
 final class AppChangelogTests: XCTestCase {
   func testHistoryContainsEveryPublishedVersionAndCompatibilityBaseline() {
     let expectedVersions = [
-      "v0.3.9", "v0.3.8", "v0.3.7", "v0.3.6", "v0.3.5", "v0.3.4", "v0.3.3",
+      "v0.4.0", "v0.3.9", "v0.3.8", "v0.3.7", "v0.3.6", "v0.3.5", "v0.3.4", "v0.3.3",
       "v0.3.2", "v0.3.1", "v0.3.0", "v0.2.0", "v0.1.2", "v0.1.1", "v0.1.0",
     ]
     let expectedCompatibility = [
-      "v3.0.4", "v2.15.6", "v2.15.6", "v2.15.6", "v2.14.6", "v2.14.4", "v2.14.0",
+      "v3.1.4", "v3.0.4", "v2.15.6", "v2.15.6", "v2.15.6", "v2.14.6", "v2.14.4", "v2.14.0",
       "v2.13.14", "v2.13.2", "v2.10.9", "v2.9.13", "v2.9.13", "v2.9.13", "v2.9.7",
     ]
 
@@ -18,25 +18,45 @@ final class AppChangelogTests: XCTestCase {
       AppChangelog.entries.map(\.compatibleMoviePilotVersion),
       expectedCompatibility
     )
-    XCTAssertEqual(AppChangelog.entries[0].highlights, ["兼容 MoviePilot 后端 v3.0.4。"])
-    XCTAssertTrue(AppChangelog.entries[2].highlights.contains(
+    XCTAssertEqual(AppChangelog.entries[1].highlights, ["兼容 MoviePilot 后端 v3.0.4。"])
+    XCTAssertTrue(AppChangelog.entries[3].highlights.contains(
       "降低 77% 内存占用，减少 MoviePilot-TV 或其他 App 因内存压力被系统终止的情况。"
     ))
-    XCTAssertFalse(AppChangelog.entries[1].highlights.contains("兼容 MoviePilot 后端 v2.15.6。"))
     XCTAssertFalse(AppChangelog.entries[2].highlights.contains("兼容 MoviePilot 后端 v2.15.6。"))
-    XCTAssertTrue(AppChangelog.entries[3].highlights.contains("兼容 MoviePilot 后端 v2.15.6。"))
-    XCTAssertTrue(AppChangelog.entries[3].highlights.contains("探索页兼容 MoviePilot 探索来源插件。"))
-    XCTAssertTrue(AppChangelog.entries[3].highlights.contains("支持 AniList 媒体来源。"))
-    XCTAssertTrue(AppChangelog.entries[4].highlights.contains("兼容 MoviePilot 后端 v2.14.6。"))
-    XCTAssertTrue(AppChangelog.entries[5].highlights.contains("兼容 MoviePilot 后端 v2.14.4。"))
-    XCTAssertFalse(AppChangelog.entries[10].highlights.contains("兼容 MoviePilot 后端 v2.9.13。"))
+    XCTAssertFalse(AppChangelog.entries[3].highlights.contains("兼容 MoviePilot 后端 v2.15.6。"))
+    XCTAssertTrue(AppChangelog.entries[4].highlights.contains("兼容 MoviePilot 后端 v2.15.6。"))
+    XCTAssertTrue(AppChangelog.entries[4].highlights.contains("探索页兼容 MoviePilot 探索来源插件。"))
+    XCTAssertTrue(AppChangelog.entries[4].highlights.contains("支持 AniList 媒体来源。"))
+    XCTAssertTrue(AppChangelog.entries[5].highlights.contains("兼容 MoviePilot 后端 v2.14.6。"))
+    XCTAssertTrue(AppChangelog.entries[6].highlights.contains("兼容 MoviePilot 后端 v2.14.4。"))
     XCTAssertFalse(AppChangelog.entries[11].highlights.contains("兼容 MoviePilot 后端 v2.9.13。"))
-    XCTAssertTrue(AppChangelog.entries[12].highlights.contains("兼容 MoviePilot 后端 v2.9.13。"))
-    XCTAssertFalse(AppChangelog.entries[13].highlights.contains("兼容 MoviePilot 后端 v2.9.7。"))
+    XCTAssertFalse(AppChangelog.entries[12].highlights.contains("兼容 MoviePilot 后端 v2.9.13。"))
+    XCTAssertTrue(AppChangelog.entries[13].highlights.contains("兼容 MoviePilot 后端 v2.9.13。"))
+    XCTAssertFalse(AppChangelog.entries[14].highlights.contains("兼容 MoviePilot 后端 v2.9.7。"))
   }
 
-  func testLatestReleaseMatchesApprovedV039Notes() throws {
+  func testLatestReleaseMatchesApprovedV040Notes() throws {
     let entry = try XCTUnwrap(AppChangelog.entries.first)
+    XCTAssertEqual(entry.version, "v0.4.0")
+    XCTAssertEqual(entry.releaseDate, "2026-10-11")
+    XCTAssertEqual(entry.compatibleMoviePilotVersion, "v3.1.4")
+    XCTAssertEqual(entry.highlights, [
+      "兼容 MoviePilot 后端 v3.1.4。",
+      "新增 Apple TV 主屏推荐，支持直接进入影片详情。",
+      "设置页新增本机日志查看。",
+      "支持向后兼容已登记的 MoviePilot 版本，最低为 v3.0.4。",
+    ])
+    XCTAssertEqual(entry.updates.count, 3)
+    XCTAssertEqual(entry.fixes.count, 8)
+    XCTAssertEqual(entry.optimizations.count, 3)
+    let message = AppChangelog.updateNoticeMessage(for: entry)
+    XCTAssertTrue(entry.highlights.allSatisfy { message.contains($0) })
+    XCTAssertFalse(message.contains("分页"))
+    XCTAssertFalse(message.contains("停止搜索"))
+  }
+
+  func testV039ReleaseMatchesApprovedNotes() throws {
+    let entry = try XCTUnwrap(AppChangelog.entry(for: "v0.3.9"))
 
     XCTAssertEqual(entry.version, "v0.3.9")
     XCTAssertEqual(entry.releaseDate, "2026-09-18")
