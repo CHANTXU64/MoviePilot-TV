@@ -9,6 +9,7 @@ nonisolated enum RecommendCategory: String, CaseIterable, Identifiable, Sendable
   case tv = "电视剧"
   case anime = "动画"
   case chart = "榜单"
+  case other = "其他"
 
   var id: String { rawValue }
 
@@ -19,6 +20,7 @@ nonisolated enum RecommendCategory: String, CaseIterable, Identifiable, Sendable
     case .tv: return "tv"
     case .anime: return "sparkles"
     case .chart: return "chart.bar"
+    case .other: return "square.stack"
     }
   }
 }
@@ -225,6 +227,7 @@ class RecommendViewModel: ObservableObject {
       Logger.error("动态推荐来源加载失败: \(error)")
     }
     shelves = Self.mergedShelves(extras: extraSourceSnapshot)
+    loadConfig()
     if loadedExtraSourcesSuccessfully {
       // 只有完整来源请求成功后才消费旧 title 键：把旧“共享开关”值平铺到本轮全部
       // 同名货架，再切换为稳定 id 持久化。失败时保留 title，供下次刷新继续迁移。
@@ -232,10 +235,6 @@ class RecommendViewModel: ObservableObject {
       if migrated != enableConfig {
         saveEnableConfig(migrated)
       }
-    }
-    // 配置早于新版内置货架创建时默认开启（与旧 title 键逻辑等价）。
-    for id in ["anilist/trending", "anilist/popular-this-season"] where enableConfig[id] == nil {
-      enableConfig[id] = true
     }
     guard selectShelf else { return }
     reconcileSelection()
@@ -291,12 +290,12 @@ class RecommendViewModel: ObservableObject {
   }
 
   nonisolated static func category(for type: String) -> RecommendCategory {
-    switch type {
-    case RecommendCategory.movie.rawValue: .movie
-    case RecommendCategory.tv.rawValue: .tv
-    case RecommendCategory.anime.rawValue: .anime
-    case RecommendCategory.chart.rawValue: .chart
-    default: .all
+    switch type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "电影", "電影", "movies": .movie
+    case "电视剧", "電視劇", "tv shows": .tv
+    case "动画", "動漫", "动漫", "動畫", "anime": .anime
+    case "榜单", "榜單", "rankings": .chart
+    default: .other
     }
   }
 
@@ -338,19 +337,22 @@ class RecommendViewModel: ObservableObject {
   }
 
   private func loadConfig() {
-    if UserDefaults.standard.data(forKey: Self.localConfigKey) != nil {
-      if let config = Self.storedEnableConfig() {
-        // 初始化时只有内置货架：先让已知 id 继承旧值，但保留且不回写 title 键。
-        // 动态来源成功加载后再统一消费，避免同名来源错过旧版共享配置。
-        enableConfig = Self.migrateTitleKeys(
-          in: config,
-          shelves: shelves,
-          consumeMatchedTitles: false
-        )
-        return
-      }
+    var config: [String: Bool]
+    if let stored = Self.storedEnableConfig() {
+      // 来源尚未完整加载时暂留旧 title 键，让随后出现的同名来源继承开关。
+      config = Self.migrateTitleKeys(in: stored, shelves: shelves, consumeMatchedTitles: false)
+    } else {
       UserDefaults.standard.removeObject(forKey: Self.localConfigKey)
+      config = Dictionary(uniqueKeysWithValues: Self.allShelves.map { ($0.id, true) })
     }
-    enableConfig = Dictionary(uniqueKeysWithValues: Self.allShelves.map { ($0.id, true) })
+
+    // 插件来源默认显示；已保存的关闭选择优先，旧版内置货架的缺省语义保持不变。
+    let builtInIDs = Set(Self.allShelves.map(\.id))
+    let addedBuiltInIDs: Set<String> = ["anilist/trending", "anilist/popular-this-season"]
+    for shelf in shelves
+    where !builtInIDs.contains(shelf.id) || addedBuiltInIDs.contains(shelf.id) {
+      if config[shelf.id] == nil { config[shelf.id] = true }
+    }
+    enableConfig = config
   }
 }
