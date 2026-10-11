@@ -64,7 +64,8 @@ if tool == "xcrun":
             matches.append(dict(device,udid="bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"))
         print(json.dumps({"devices":{runtime:matches}}))
     elif args in [["simctl", "shutdown", owned], ["simctl", "delete", owned]]:
-        pass
+        if args[1] == "delete" and os.environ.get("TVOS_RUNNER_TEST_DELETE_FAILURE"):
+            sys.exit(1)
     else:
         raise SystemExit("Unexpected simulator operation: " + str(args))
 elif tool == "xcodebuild":
@@ -77,7 +78,7 @@ elif tool == "xcodebuild":
     if "test" in args:
         if mode == "test_failure":
             sys.exit(65)
-        if mode == "interrupt":
+        if mode == "interrupt" and not (root / "test-started").exists():
             (root / "test-started").touch()
             time.sleep(60)
 '''
@@ -219,6 +220,20 @@ class TestTVOSRunnerTests(unittest.TestCase):
         self.assert_owned_cleanup()
 
     def test_cancellation_does_not_start_remaining_matrix_versions(self):
+        self.assert_matrix_cancellation(signal.SIGTERM)
+
+    def test_sigint_does_not_start_remaining_matrix_versions(self):
+        self.assert_matrix_cancellation(signal.SIGINT)
+
+    def test_sigterm_with_delete_failure_does_not_start_remaining_matrix_versions(self):
+        self.environment["TVOS_RUNNER_TEST_DELETE_FAILURE"] = "1"
+        self.assert_matrix_cancellation(signal.SIGTERM)
+
+    def test_sigint_with_delete_failure_does_not_start_remaining_matrix_versions(self):
+        self.environment["TVOS_RUNNER_TEST_DELETE_FAILURE"] = "1"
+        self.assert_matrix_cancellation(signal.SIGINT)
+
+    def assert_matrix_cancellation(self, signum):
         self.environment["TVOS_RUNNER_TEST_MODE"] = "interrupt"
         process = subprocess.Popen([sys.executable, str(SCRIPT), "--skip-build"],
                                    env=self.environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -227,15 +242,37 @@ class TestTVOSRunnerTests(unittest.TestCase):
             while not (self.root / "test-started").exists() and time.monotonic() < deadline:
                 time.sleep(0.02)
             self.assertTrue((self.root / "test-started").exists())
-            process.send_signal(signal.SIGTERM)
-            process.communicate(timeout=10)
-            self.assertEqual(process.returncode, 130)
-            self.assertEqual(sum(call["args"][:2] == ["simctl", "create"] for call in self.calls()), 1)
+            process.send_signal(signum)
+            output, errors = process.communicate(timeout=10)
+            creates = [call["args"] for call in self.calls() if call["args"][:2] == ["simctl", "create"]]
+            self.assertEqual(process.returncode, 130, f"{creates}\n{errors}")
+            self.assertEqual([args[4] for args in creates], ["com.apple.CoreSimulator.SimRuntime.tvOS-18-5"])
+            self.assertEqual(sum(call["tool"] == "xcodebuild" for call in self.calls()), 1)
             self.assert_owned_cleanup()
+            if self.environment.get("TVOS_RUNNER_TEST_DELETE_FAILURE"):
+                self.assertIn("无法清理本次测试模拟器", errors)
+                self.assertIn(OWNED_DEVICE, errors)
+                self.assertNotIn("已清理本次创建的测试模拟器", output)
         finally:
             if process.poll() is None:
                 process.kill()
                 process.communicate()
+
+    def test_cleanup_failure_is_reported_as_failure(self):
+        self.environment["TVOS_RUNNER_TEST_DELETE_FAILURE"] = "1"
+        result = self.run_script("success", "--skip-build")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("无法清理本次测试模拟器", result.stderr)
+        self.assertIn(OWNED_DEVICE, result.stderr)
+        self.assertNotIn("已清理本次创建的测试模拟器", result.stdout)
+        self.assert_owned_cleanup()
+
+    def test_test_failure_is_not_replaced_by_cleanup_failure(self):
+        self.environment["TVOS_RUNNER_TEST_DELETE_FAILURE"] = "1"
+        result = self.run_script("test_failure", "--skip-build")
+        self.assertEqual(result.returncode, 65)
+        self.assertIn("无法清理本次测试模拟器", result.stderr)
+        self.assert_owned_cleanup()
 
     def test_build_failure_cleans_only_owned_device_without_starting_tests(self):
         result = self.run_script("build_failure")
