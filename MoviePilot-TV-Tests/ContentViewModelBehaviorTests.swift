@@ -714,7 +714,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
     let displayed = try XCTUnwrap(model.backendVersionWarningPresentation)
     model.acknowledgeBackendVersionWarning(displayed)
     try await waitUntil("the new warning should appear after the first alert closes", timeout: 5) {
-      host.presentedViewController?.title == "MoviePilot 后端版本尚未核对"
+      host.presentedViewController?.title == "兼容性尚未验证"
         && model.backendVersionWarning?.backendVersion == "v3.0.9"
     }
     XCTAssertEqual((host.presentedViewController as? UIAlertController)?.message,

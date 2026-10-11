@@ -86,7 +86,7 @@ nonisolated struct BackendVersionWarning: Identifiable, Equatable {
   var title: String {
     switch status {
     case .belowMinimum: return "MoviePilot 后端版本过低"
-    case .unregistered: return "MoviePilot 后端版本尚未核对"
+    case .unregistered: return "兼容性尚未验证"
     case .newerThanRegistry: return "MoviePilot 后端版本较新"
     case .unparseable: return "无法确认 MoviePilot 后端版本"
     case .registered: return "MoviePilot 后端版本"
@@ -98,21 +98,26 @@ nonisolated struct BackendVersionWarning: Identifiable, Equatable {
     switch status {
     case .belowMinimum:
       lines.append("MoviePilot-TV 最早兼容 \(registry.minimumVersion)，低版本后端可能出现功能异常，建议升级后端。")
-    case .unregistered:
-      lines.append("该版本尚未核对兼容性。已兼容的版本：\(compatibleVersionList)。")
-    case .newerThanRegistry:
-      lines.append("该版本高于已兼容的最新版本 \(registry.latestVersion)，可能存在兼容问题，可留意 MoviePilot-TV 更新。")
+    case .unregistered, .newerThanRegistry:
+      lines.append("已兼容的版本：\(compatibleVersionSummary)")
     case .unparseable:
       let reason = normalizedBackendVersion == nil ? "未取得后端版本号" : "无法识别该版本号"
-      lines.append("\(reason)，无法确认是否兼容。已兼容的版本：\(compatibleVersionList)。")
+      lines.append("\(reason)，无法确认是否兼容。")
+      lines.append("已兼容的版本：\(compatibleVersionSummary)")
     case .registered:
       break
     }
-    lines.append("仍可继续使用。")
     return lines.joined(separator: "\n")
   }
 
-  private var compatibleVersionList: String {
-    registry.versions.map(\.description).joined(separator: "、")
+  private var compatibleVersionSummary: String {
+    let firstVersion: MoviePilotVersion
+    if status == .unregistered, let version = MoviePilotVersion(backendVersion) {
+      firstVersion = registry.versions.first(where: { $0 > version }) ?? registry.latestVersion
+    } else {
+      firstVersion = registry.minimumVersion
+    }
+    return firstVersion == registry.latestVersion
+      ? firstVersion.description : "\(firstVersion)...\(registry.latestVersion)"
   }
 }

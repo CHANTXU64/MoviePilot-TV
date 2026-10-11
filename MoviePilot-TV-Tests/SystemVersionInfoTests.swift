@@ -83,14 +83,15 @@ final class SystemVersionInfoTests: XCTestCase {
     XCTAssertTrue(below.message.contains("最早兼容 v3.0.4"))
 
     let unregistered = try XCTUnwrap(BackendVersionWarning(backendVersion: "v3.0.8"))
-    XCTAssertEqual(unregistered.title, "MoviePilot 后端版本尚未核对")
-    XCTAssertTrue(
-      unregistered.message.contains(
-        "v3.0.4、v3.0.5、v3.0.7、v3.0.10、v3.0.10-1、v3.1.0、v3.1.1、v3.1.2、v3.1.2-1、v3.1.4"))
+    XCTAssertEqual(unregistered.title, "兼容性尚未验证")
+    XCTAssertEqual(
+      unregistered.message,
+      "当前后端版本：v3.0.8\n已兼容的版本：v3.0.10...v3.1.4"
+    )
 
     let newer = try XCTUnwrap(BackendVersionWarning(backendVersion: "v3.1.4-1"))
     XCTAssertEqual(newer.title, "MoviePilot 后端版本较新")
-    XCTAssertTrue(newer.message.contains("最新版本 v3.1.4"))
+    XCTAssertEqual(newer.message, "当前后端版本：v3.1.4-1\n已兼容的版本：v3.0.4...v3.1.4")
 
     let unparseable = try XCTUnwrap(BackendVersionWarning(backendVersion: "v3.0.10-1-beta"))
     XCTAssertEqual(unparseable.title, "无法确认 MoviePilot 后端版本")
@@ -101,9 +102,42 @@ final class SystemVersionInfoTests: XCTestCase {
     XCTAssertTrue(missing.message.contains("未取得后端版本号"))
 
     for warning in [below, unregistered, newer, unparseable, missing] {
-      XCTAssertTrue(warning.message.contains("仍可继续使用"))
+      XCTAssertFalse(warning.message.contains("仍可继续使用"))
+      XCTAssertFalse(warning.message.contains("可留意 MoviePilot-TV 更新"))
       XCTAssertFalse(warning.message.contains("实测"))
     }
+    for warning in [unparseable, missing] {
+      XCTAssertTrue(warning.message.hasSuffix("已兼容的版本：v3.0.4...v3.1.4"))
+    }
+  }
+
+  func testUnverifiedWarningSelectsNearestHigherVersionUsingNumericHotfixOrder() throws {
+    let registry = BackendCompatibilityRegistry(
+      versions: ["v3.1.4", "v3.0.10-10", "v3.0.4", "v3.0.10", "v3.0.10-1", "v3.1.0"]
+        .map { MoviePilotVersion($0)! }
+    )
+    for (version, nextVersion) in [
+      ("v3.0.9", "v3.0.10"),
+      ("v3.0.10-2", "v3.0.10-10"),
+      ("v3.0.10-11", "v3.1.0"),
+    ] {
+      let warning = try XCTUnwrap(BackendVersionWarning(backendVersion: version, registry: registry))
+      XCTAssertEqual(
+        warning.message,
+        "当前后端版本：\(version)\n已兼容的版本：\(nextVersion)...v3.1.4"
+      )
+    }
+  }
+
+  func testUnverifiedWarningListsLatestVersionOnceWhenItIsAlsoNearestHigherVersion() throws {
+    let registry = BackendCompatibilityTestFixtures.registry(extraVersions: ["v3.1.4"])
+    let warning = try XCTUnwrap(
+      BackendVersionWarning(backendVersion: " v3.1.3\n", registry: registry)
+    )
+    XCTAssertEqual(
+      warning.message,
+      "当前后端版本：v3.1.3\n已兼容的版本：v3.1.4"
+    )
   }
 
   func testAcknowledgementIdentityOnlyDependsOnBackendVersion() throws {
