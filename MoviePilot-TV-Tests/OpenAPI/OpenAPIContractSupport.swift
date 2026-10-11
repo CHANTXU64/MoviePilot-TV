@@ -59,14 +59,16 @@ enum OpenAPIContractSupport {
     return object is [String: Any]
   }
 
-  /// v3.1.0 的 OpenAPI 文档是可选能力；只有业务端点已确认该精确版本，
+  /// 已核对版本的 OpenAPI 文档是可选能力；只有业务端点已确认精确版本，
   /// 且文档端点返回合法 JSON 404 时，才把该项标记为未验证并允许测试 skip。
   /// 404 本身不能证明 API_DOCS_ENABLE 的实际运行时开关状态。
   static func isExpectedUnavailableDocument(
     _ error: Error,
     backendVersion: String?
   ) -> Bool {
-    guard MoviePilotVersion(backendVersion)?.description == "v3.1.0",
+    let optionalDocsVersions: Set<String> = ["v3.1.0", "v3.1.1", "v3.1.2", "v3.1.2-1", "v3.1.4"]
+    guard let version = MoviePilotVersion(backendVersion)?.description,
+      optionalDocsVersions.contains(version),
       case let OpenAPIFetchError.httpStatus(statusCode, isJSON) = error
     else {
       return false

@@ -50,10 +50,6 @@ class SystemViewModel: ObservableObject {
     AppVersionInfo.currentAppVersion()
   }
 
-  var minimumCompatibleMoviePilotVersion: String {
-    AppVersionInfo.minimumCompatibleMoviePilotVersion
-  }
-
   var latestCompatibleMoviePilotVersion: String {
     AppVersionInfo.latestCompatibleMoviePilotVersion
   }

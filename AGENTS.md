@@ -104,7 +104,9 @@ xcrun simctl list devices tvOS available
 python3 scripts/test-tvos.py
 ```
 
-该入口新建一台临时 Apple TV 模拟器，使用最新可用 tvOS runtime，以本次返回的 UDID 执行构建和测试；成功、失败或取消后只关闭并删除自己创建的设备。不要用日常模拟器的名称或 UDID 执行测试，也不要使用 `erase`、`shutdown all` 或 `delete all`。可用 `--runtime 27.0` 指定已安装的 runtime；实际使用的型号、版本和 UDID 会输出在日志中。
+本地默认依次在 **tvOS 18.5、26.5、最新已安装的 27.x** 上运行完整验证，包括定向测试。开始前必须确认三个 runtime 都可用，缺少任何一个就报错，不允许悄悄只跑最新版本。普通测试中某个版本失败后继续检查其余版本，最终返回失败并列出未通过版本；取消立即停止。每个版本单独创建临时 Apple TV 模拟器，按本次返回的 UDID 执行构建和测试；成功、失败或取消后只关闭并删除自己创建的设备。不要用日常模拟器的名称或 UDID 执行测试，也不要使用 `erase`、`shutdown all` 或 `delete all`。
+
+CI 使用 GitHub 提供的 `xcode-27` runner，并固定执行 `python3 scripts/test-tvos.py --runtime 27.0`；该镜像提供 Xcode 27 与 tvOS 27.0 runtime，见[官方镜像说明](https://github.com/actions/runner-images/issues/14404)。本地常规验收必须跑默认三版本矩阵；只有明确诊断某个系统问题时才用 `--runtime <版本>` 单独指定，单版本通过不能替代三版本验收。实际使用的型号、版本和 UDID 会输出在日志中。矩阵模式下，`--result-bundle-path /tmp/tests.xcresult` 会分别生成 `tests-tvos-18.5.xcresult`、`tests-tvos-26.5.xcresult` 和对应 27.x 的结果包。
 
 脚本保留 `CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-` 和串行测试参数，默认跳过三个真实后端套件。定向验证示例：
 

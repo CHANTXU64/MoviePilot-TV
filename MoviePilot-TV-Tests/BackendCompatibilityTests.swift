@@ -1,4 +1,5 @@
 import Foundation
+import Kingfisher
 import UIKit
 import XCTest
 
@@ -474,6 +475,42 @@ extension Collection {
 }
 
 final class BackendCompatibilityEnvironmentParsingTests: XCTestCase {
+  @MainActor
+  func testCompatibilityStepsPreserveResourceCookieOnlyForCurrentAccount() async throws {
+    let persistence = APIServicePersistenceSnapshot.capture()
+    defer { persistence.restore() }
+    let service = APIService.isolatedTestingInstance()
+    let cookie = try XCTUnwrap(HTTPCookie(properties: [
+      .domain: "backend-compatibility-tests.local", .path: "/api/v1",
+      .name: "resource_token", .value: "account-a-cookie", .secure: "TRUE",
+    ]))
+    let token = Token(access_token: "account-a-token", token_type: "bearer",
+      super_user: FlexibleBool(true), permissions: nil, user_name: "account-a", avatar: nil)
+    let config = BackendCompatibilityConfig.testValue().activating(
+      account: BackendCompatibilityAccount(label: "primary", username: "account-a", password: "password"),
+      token: token)
+    service.replaceSessionForTesting(baseURL: config.baseURL, token: token.access_token,
+      currentUser: token, cookies: [cookie])
+    let url = try XCTUnwrap(URL(string: "\(config.baseURL)/api/v1/system/img/0"))
+    let epoch = service.sessionSnapshot().epoch
+    let observed: String? = await runBackendCompatibilityStep("resource cookie", service: service, config: config) {
+      XCTAssertEqual(service.sessionSnapshot().epoch, epoch)
+      return service.imageRequestModifier(for: url)?.modified(for: URLRequest(url: url))?
+        .value(forHTTPHeaderField: "Cookie") ?? "missing"
+    }
+    XCTAssertEqual(observed, "resource_token=account-a-cookie")
+    XCTAssertEqual(service.sessionSnapshot().epoch, epoch)
+
+    let other = Token(access_token: "account-b-token", token_type: "bearer",
+      super_user: FlexibleBool(true), permissions: nil, user_name: "account-b", avatar: nil)
+    pinBackendCompatibilityAccount(service: service, config: config.activating(
+      account: BackendCompatibilityAccount(label: "additional", username: "account-b", password: "password"),
+      token: other))
+    XCTAssertEqual(service.token, other.access_token)
+    XCTAssertNil(service.imageRequestModifier(for: url)?.modified(for: URLRequest(url: url))?
+      .value(forHTTPHeaderField: "Cookie"))
+  }
+
   func testListValueKeepsEscapedCommasInsideItems() {
     let value = #"ordinary-password,pa\,ss\,word,another-password"#
 
@@ -955,8 +992,10 @@ private func pinBackendCompatibilityAccount(
 ) {
   guard let token = config.activeAccount?.token else { return }
   clearBackendCompatibilityStoredCredentials()
-  service.tokenForTesting = token.access_token
-  service.currentUserForTesting = token
+  // 登录后的同一会话保留资源 Cookie；重建 runtime 会让 SSE 丢失认证。
+  guard service.baseURL != config.baseURL || service.token != token.access_token else { return }
+  service.replaceSessionForTesting(
+    baseURL: config.baseURL, token: token.access_token, currentUser: token)
 }
 
 @discardableResult
@@ -1345,6 +1384,31 @@ private struct BackendCompatibilityCollector {
   }
 }
 
+@MainActor
+private final class BackendResourcePageProbe {
+  struct Finished: Error {}
+  var page: ResourceSearchPage
+
+  init(source: String?, page: Int) {
+    self.page = ResourceSearchPage(source: source, page: page)
+  }
+
+  func read(service: APIService, query: ResourceSearchQuery) async throws {
+    do {
+      try await service.readResourceSearchPage(
+        query: query, source: page.source, page: page.page,
+        maximumEventBytes: { 4 * 1024 * 1024 }
+      ) { event, _ in
+        try self.page.receive(event)
+        if self.page.isComplete { throw Finished() }
+      }
+      throw ResourceSearchFailure.incompletePage
+    } catch is Finished {
+      // 与生产搜索会话一样，完整最终包提交后即可关闭 SSE。
+    }
+  }
+}
+
 final class BackendCompatibilityReadOnlyTests: XCTestCase {
   @MainActor
   func testReadOnlyOpenAPIContractCompatibility() async throws {
@@ -1380,6 +1444,7 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
       let report = OpenAPIContractChecker.check(
         live: fetched.document,
         baseline: baseline,
+        catalog: TVAPIContractCatalog.operations(backendVersion: backendVersion),
         exceptions: exceptions,
         sourceGaps: TVAPIContractSourceScanner.coverageGaps()
       )
@@ -1637,6 +1702,81 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         "No accessible backend compatibility account has transfer history with a source file item."
       )
     }
+  }
+
+  @MainActor
+  func testReadOnlyResourceTitlePagingCompatibility() async throws {
+    try await assertResourcePagingCompatibility(mediaSearch: false)
+  }
+
+  @MainActor
+  func testReadOnlyResourceMediaPagingCompatibility() async throws {
+    try await assertResourcePagingCompatibility(mediaSearch: true)
+  }
+
+  @MainActor
+  private func assertResourcePagingCompatibility(mediaSearch: Bool) async throws {
+    let label = mediaSearch ? "resource media paging" : "resource title paging"
+    try await withReadOnlyBackend(requiring: [label]) { service, config in
+      guard config.testResourceSearchStreams else {
+        throw XCTSkip("Enable MOVIEPILOT_COMPAT_TEST_RESOURCE_SEARCH_STREAMS to verify manual paging.")
+      }
+      let keywords = uniqueStrings(mediaSearch ? config.resourceMediaIDs : config.resourceQueries)
+      let settings = try await service.fetchSettings()
+      guard ResourceSearchQuery.supportsPaging(backendVersion: settings.BACKEND_VERSION) else {
+        throw XCTSkip("TV uses legacy search on backend \(settings.BACKEND_VERSION ?? "unknown").")
+      }
+      print("Manual paging backend=\(settings.BACKEND_VERSION ?? "unknown"), entry=\(label)")
+      await runBackendCompatibilityStep(label, service: service, config: config, requirement: .permission(.search)) {
+        guard !keywords.isEmpty else {
+          XCTFail("Manual paging is enabled but resource \(mediaSearch ? "media IDs" : "title queries") are missing; coverage is incomplete.")
+          return
+        }
+        for keyword in keywords {
+          let query = ResourceSearchQuery(
+            keyword: keyword, sites: config.resourceSites, isMediaSearch: mediaSearch)
+          let initial = try await readResourcePage(service: service, query: query, source: nil, page: 0)
+          assertResourceSearchResults(initial.finalItems, label: "\(label) initial page")
+          let sources = try XCTUnwrap(initial.sources)
+          let successful = sources.filter { $0.error == nil }
+          let source = try XCTUnwrap(
+            successful.first(where: \.can_continue) ?? successful.first,
+            "Initial page must contain a successful source for \(label).")
+          let requestedPage = source.can_continue ? source.page + 1 : source.page
+          let page = try await readResourcePage(
+            service: service, query: query, source: source.source, page: requestedPage)
+          // source 原样回传；同来源、同页重试应读取同一页摘要，不推进游标。
+          let replay = try await readResourcePage(
+            service: service, query: query, source: source.source, page: requestedPage)
+          XCTAssertEqual(replay.sources, page.sources, "Same-page retry changed source/page state.")
+          XCTAssertTrue(replay.finalItems.map(\.id) == page.finalItems.map(\.id),
+            "Same-page retry changed the cached result identities or order.")
+          print("Manual paging entry=\(label), initialItems=\(initial.finalItems.count), "
+            + "sources=\(sources.count), sourceErrors=\(sources.count - successful.count), "
+            + "requestedPage=\(requestedPage), pageItems=\(page.finalItems.count), replay=verified, "
+            + "continuation=\(source.can_continue ? "verified" : "unavailable; all successful sources exhausted")")
+        }
+      }
+    }
+  }
+
+  @MainActor
+  private func readResourcePage(
+    service: APIService, query: ResourceSearchQuery, source: String?, page: Int
+  ) async throws -> ResourceSearchPage {
+    let probe = BackendResourcePageProbe(source: source, page: page)
+    try await withThrowingTaskGroup(of: Void.self) { group in
+      group.addTask {
+        try await probe.read(service: service, query: query)
+      }
+      group.addTask {
+        try await Task.sleep(for: .seconds(180))
+        throw URLError(.timedOut)
+      }
+      defer { group.cancelAll() }
+      try await group.next()
+    }
+    return probe.page
   }
 
   @MainActor

@@ -17,7 +17,9 @@ python3 scripts/test-tvos.py --include-backend-tests \
   --only-testing MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests
 ```
 
-入口先解析依赖并完整构建，再新建/使用本次专用模拟器串行测试，结束后只清理该设备。测试宿主使用独立 `Testing` App 身份和共享组，不覆盖日常 App 的登录、偏好或首页缓存。已有构建可加 `--skip-build` 做定向测试；完整验证不能仅使用这个参数。普通 `python3 scripts/test-tvos.py` 显式跳过全部真实后端套件，即使工作区已有 `.env.compatibility` 也不会自动访问。
+本地入口默认依次使用 tvOS 18.5、26.5 和最新已安装的 27.x，每个版本解析依赖、完整构建并在独立临时模拟器上串行测试，结束后只清理该设备。三个 runtime 必须全部可用，不能缺省跳过；只有明确诊断单一系统时才用 `--runtime <版本>` 限定。测试宿主使用独立 `Testing` App 身份和共享组，不覆盖日常 App 的登录、偏好或首页缓存。已有构建可加 `--skip-build` 做定向测试；完整验证不能仅使用这个参数。普通 `python3 scripts/test-tvos.py` 显式跳过全部真实后端套件，即使工作区已有 `.env.compatibility` 也不会自动访问。CI 固定运行 tvOS 27.0。
+
+显式包含真实后端测试时，同一配置会在所选各系统上分别执行；副作用套件启用后也会重复相应动作，仍须遵守独立开关和目标范围。后端测试在某个系统失败会立即停止，不继续向其余系统发起真实请求；普通离线矩阵则继续汇总各系统结果。矩阵模式指定 `--result-bundle-path` 时，脚本自动在文件名中加入 tvOS 版本，避免结果包互相覆盖。
 
 需要副作用验证时，用 `--only-testing MoviePilot-TV-Tests/BackendCompatibilitySideEffectTests` 指定套件，并按下文显式启用独立副作用开关。模拟器与 App 存储隔离不能隔离真实后端的数据修改。
 
@@ -71,6 +73,23 @@ MoviePilot v3.0.4 媒体业务只读巡检还会覆盖：
 - `/user/current` 成功体可能包在 `{success,data}` 中。
 - 资源搜索“全部站点”由真实后端巡检验证 `SiteFilterViewModel`/API 返回的全部启用站点域；`SearchViewModel` 到 `sites` 参数的透传另由 URLProtocol 单元测试覆盖，目前不是一条完整的真实后端端到端验收。
 - 订阅状态查询保留 v3.0.4 的标题/年份/类型跨来源回退；取消订阅定位关闭该回退，避免查询命中与精确删除身份不一致。
+
+MoviePilot v3.1.2 新增手动资源分页参数，TV 从 v3.1.2-1 起使用。`testReadOnlyResourceTitlePagingCompatibility` 和 `testReadOnlyResourceMediaPagingCompatibility` 分别通过生产 `APIService.readResourceSearchPage` 和 `ResourceSearchPage` 验证两个 SSE 端点：第 0 页完整最终包、分块顺序与总数、`sources` 的不透明来源、页号和 `can_continue`，再选择一个成功来源读取下一页并原页重试。若所有成功来源均已结束，则仅验证该来源第 0 页重试，并在日志中明确续页未覆盖；下一页合法空结果不算失败。测试使用已有的 `MOVIEPILOT_COMPAT_TEST_RESOURCE_SEARCH_STREAMS` 开关，两个入口各自要求配置标题查询、媒体 ID，单次请求最多等待 180 秒。它们不验证完整页面交互，不触发下载或订阅，但会访问站点并更新后端搜索缓存和上次搜索记录。
+
+仅运行这次新增的分页检查及 OpenAPI 检查：
+
+```sh
+MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS=false python3 scripts/test-tvos.py --include-backend-tests \
+  --only-testing MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests/testReadOnlyResourceTitlePagingCompatibility \
+  --only-testing MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests/testReadOnlyResourceMediaPagingCompatibility \
+  --only-testing MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests/testReadOnlyOpenAPIContractCompatibility
+```
+
+OpenAPI 清单按 `/system/global` 返回的后端版本选择搜索参数；v3.1.2-1 及以上核对 `manual_paging`（布尔）、`page`（整数）和 `source`（字符串），旧版仍按 TV 实际使用的旧协议检查。OpenAPI 不能描述完整 SSE 事件，事件契约由上述真实调用测试验证。
+
+分页用例属于固定的只读套件，新后端版本无需另加一份测试。开启 SSE 检查且后端支持分页时，缺少标题查询或媒体 ID 会明确失败，不能以跳过代替覆盖。关闭该开关或连接旧后端仍会按说明跳过分页项；普通离线/CI 测试继续不访问真实后端。测试脚本将命令行 `MOVIEPILOT_COMPAT_*` 覆盖传入 XCTest，包括外部配置路径和副作用关闭开关，不改写工作区的 `.env.compatibility`。
+
+已核对的 v3.1.0、v3.1.1、v3.1.2、v3.1.2-1、v3.1.4 将 OpenAPI 文档设为可选能力。这些精确版本的文档端点返回合法 JSON 404 时，该项标记为跳过、未验证；401、HTML、畸形响应及未知版本仍失败。只读测试各步骤保留当前登录会话的资源 Cookie，以便 SSE 使用与 Web 一致的认证；切换账号时不沿用上一账号 Cookie。
 
 如果在独立 worktree 中运行测试，可以用 `MOVIEPILOT_COMPAT_ENV_FILE=/absolute/path/.env.compatibility` 指向已有配置文件；命令行环境变量会覆盖配置文件中的同名值。`MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS=false` 时会强制关闭所有副作用子项，即使配置文件中某个 `MOVIEPILOT_COMPAT_TEST_*` 仍为 `true`，也不会发起真实后台动作；这只是总开关的关闭优先级，不是禁止副作用测试，副作用套件仍可在明确接受真实后台影响时启用。
 
