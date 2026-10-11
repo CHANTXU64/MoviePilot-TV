@@ -72,6 +72,23 @@ MoviePilot v3.0.4 媒体业务只读巡检还会覆盖：
 - 资源搜索“全部站点”由真实后端巡检验证 `SiteFilterViewModel`/API 返回的全部启用站点域；`SearchViewModel` 到 `sites` 参数的透传另由 URLProtocol 单元测试覆盖，目前不是一条完整的真实后端端到端验收。
 - 订阅状态查询保留 v3.0.4 的标题/年份/类型跨来源回退；取消订阅定位关闭该回退，避免查询命中与精确删除身份不一致。
 
+MoviePilot v3.1.2 新增手动资源分页参数，TV 从 v3.1.2-1 起使用。`testReadOnlyResourceTitlePagingCompatibility` 和 `testReadOnlyResourceMediaPagingCompatibility` 分别通过生产 `APIService.readResourceSearchPage` 和 `ResourceSearchPage` 验证两个 SSE 端点：第 0 页完整最终包、分块顺序与总数、`sources` 的不透明来源、页号和 `can_continue`，再选择一个成功来源读取下一页并原页重试。若所有成功来源均已结束，则仅验证该来源第 0 页重试，并在日志中明确续页未覆盖；下一页合法空结果不算失败。测试使用已有的 `MOVIEPILOT_COMPAT_TEST_RESOURCE_SEARCH_STREAMS` 开关，两个入口各自要求配置标题查询、媒体 ID，单次请求最多等待 180 秒。它们不验证完整页面交互，不触发下载或订阅，但会访问站点并更新后端搜索缓存和上次搜索记录。
+
+仅运行这次新增的分页检查及 OpenAPI 检查：
+
+```sh
+MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS=false python3 scripts/test-tvos.py --include-backend-tests \
+  --only-testing MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests/testReadOnlyResourceTitlePagingCompatibility \
+  --only-testing MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests/testReadOnlyResourceMediaPagingCompatibility \
+  --only-testing MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests/testReadOnlyOpenAPIContractCompatibility
+```
+
+OpenAPI 清单按 `/system/global` 返回的后端版本选择搜索参数；v3.1.2-1 及以上核对 `manual_paging`（布尔）、`page`（整数）和 `source`（字符串），旧版仍按 TV 实际使用的旧协议检查。OpenAPI 不能描述完整 SSE 事件，事件契约由上述真实调用测试验证。
+
+分页用例属于固定的只读套件，新后端版本无需另加一份测试。开启 SSE 检查且后端支持分页时，缺少标题查询或媒体 ID 会明确失败，不能以跳过代替覆盖。关闭该开关或连接旧后端仍会按说明跳过分页项；普通离线/CI 测试继续不访问真实后端。测试脚本将命令行 `MOVIEPILOT_COMPAT_*` 覆盖传入 XCTest，包括外部配置路径和副作用关闭开关，不改写工作区的 `.env.compatibility`。
+
+已核对的 v3.1.0、v3.1.1、v3.1.2、v3.1.2-1、v3.1.4 将 OpenAPI 文档设为可选能力。这些精确版本的文档端点返回合法 JSON 404 时，该项标记为跳过、未验证；401、HTML、畸形响应及未知版本仍失败。只读测试各步骤保留当前登录会话的资源 Cookie，以便 SSE 使用与 Web 一致的认证；切换账号时不沿用上一账号 Cookie。
+
 如果在独立 worktree 中运行测试，可以用 `MOVIEPILOT_COMPAT_ENV_FILE=/absolute/path/.env.compatibility` 指向已有配置文件；命令行环境变量会覆盖配置文件中的同名值。`MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS=false` 时会强制关闭所有副作用子项，即使配置文件中某个 `MOVIEPILOT_COMPAT_TEST_*` 仍为 `true`，也不会发起真实后台动作；这只是总开关的关闭优先级，不是禁止副作用测试，副作用套件仍可在明确接受真实后台影响时启用。
 
 ## 多账号兼容矩阵

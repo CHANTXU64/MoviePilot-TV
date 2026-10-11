@@ -371,6 +371,18 @@ final class OpenAPIContractOfflineTests: XCTestCase {
     let session = URLSession(configuration: configuration)
     defer { OpenAPIResponseURLProtocol.reset() }
 
+    for version in ["v3.1.1", "v3.1.2", "v3.1.2-1", "v3.1.4"] {
+      XCTAssertTrue(OpenAPIContractSupport.isExpectedUnavailableDocument(
+        OpenAPIFetchError.httpStatus(404, isJSON: true), backendVersion: version))
+      for error in [OpenAPIFetchError.httpStatus(404, isJSON: false), .httpStatus(401, isJSON: true)] {
+        XCTAssertFalse(OpenAPIContractSupport.isExpectedUnavailableDocument(error, backendVersion: version))
+      }
+    }
+    for version: String? in [nil, "unknown", "v3.1.3", "v3.1.5"] {
+      XCTAssertFalse(OpenAPIContractSupport.isExpectedUnavailableDocument(
+        OpenAPIFetchError.httpStatus(404, isJSON: true), backendVersion: version))
+    }
+
     let scenarios: [(version: String, status: Int, contentType: String, body: Data, expected: Bool)] = [
       (
         version: "v3.1.0",
@@ -1475,7 +1487,7 @@ final class OpenAPIContractOfflineTests: XCTestCase {
     let report = OpenAPIContractChecker.check(
       live: baseline,
       baseline: baseline,
-      catalog: TVAPIContractCatalog.operations,
+      catalog: TVAPIContractCatalog.operations(backendVersion: baseline.version),
       exceptions: exceptions
     )
     XCTAssertTrue(
@@ -1487,10 +1499,70 @@ final class OpenAPIContractOfflineTests: XCTestCase {
       report.formattedDescription
     )
   }
+
+  func testManualPagingContractRejectsMissingOrMistypedParameters() throws {
+    let catalog = TVAPIContractCatalog.operations(backendVersion: "v3.1.2-1")
+      .filter { $0.pathTemplate.hasPrefix("/search/") && $0.pathTemplate.hasSuffix("/stream") }
+    let valid = try pagingDocument()
+    let validReport = OpenAPIContractChecker.check(live: valid, baseline: nil, catalog: catalog)
+    XCTAssertTrue(validReport.failures.isEmpty, validReport.formattedDescription)
+    XCTAssertEqual(catalog.count, 2)
+
+    for parameter in ["manual_paging", "page", "source"] {
+      let missing = try pagingDocument(omitting: parameter)
+      let missingReport = OpenAPIContractChecker.check(live: missing, baseline: nil, catalog: catalog)
+      XCTAssertEqual(Set(missingReport.failures.filter { $0.kind == .undeclaredParameter }.map(\.operationID)),
+        Set(catalog.map(\.operationID)), missingReport.formattedDescription)
+
+      let mistyped = try pagingDocument(mistyping: parameter)
+      let typeReport = OpenAPIContractChecker.check(live: mistyped, baseline: nil, catalog: catalog)
+      XCTAssertEqual(Set(typeReport.failures.filter { $0.kind == .parameterTypeMismatch }.map(\.operationID)),
+        Set(catalog.map(\.operationID)), typeReport.formattedDescription)
+    }
+  }
+
+  private func pagingDocument(omitting: String? = nil, mistyping: String? = nil) throws -> OpenAPIDocument {
+    // 官方 v3.1.2 的两个 SSE 端点增加这些参数；TV 从 v3.1.2-1 开始使用。
+    var paths: [String: JSONValue] = [:]
+    for media in [false, true] {
+      let names = media
+        ? ["media_id", "media_source", "mtype", "area", "title", "year", "season", "sites"]
+        : ["keyword", "sites"]
+      let parameters: [JSONValue] = (names + ["manual_paging", "page", "source"])
+        .filter { $0 != omitting }.map { name in
+          let type = name == "manual_paging" ? "boolean" : (["page", "season"].contains(name) ? "integer" : "string")
+          return .object([
+            "name": .string(name), "in": .string(name == "media_id" ? "path" : "query"),
+            "required": .bool(name == "media_id" || name == "media_source"),
+            "schema": .object(["type": .string(name == mistyping ? "array" : type)]),
+          ])
+        }
+      paths[media ? "/api/v1/search/media/{media_id}/stream" : "/api/v1/search/title/stream"] = .object([
+        "get": .object([
+          "parameters": .array(parameters),
+          "responses": .object(["200": .object(["content": .object([
+            "text/event-stream": .object(["schema": .object(["type": .string("string")])])
+          ])])]),
+        ])
+      ])
+    }
+    return try makeDocument(paths: paths)
+  }
 }
 
 @MainActor
 final class OpenAPIContractCatalogIntegrityTests: XCTestCase {
+  func testManualPagingCatalogMatchesProductionVersionGate() {
+    for version: String? in [nil, "unknown", "v3.0.8", "v3.1.2", "v3.1.2-1", "v3.1.4", "v3.1.5"] {
+      let search = TVAPIContractCatalog.operations(backendVersion: version)
+        .filter { $0.pathTemplate.hasPrefix("/search/") && $0.pathTemplate.hasSuffix("/stream") }
+      for operation in search {
+        XCTAssertEqual(operation.parameters.contains { $0.name == "manual_paging" },
+          ResourceSearchQuery.supportsPaging(backendVersion: version))
+      }
+    }
+  }
+
   func testProductionAPIPathsAreRegisteredInCatalog() {
     let gaps = TVAPIContractSourceScanner.coverageGaps()
     XCTAssertTrue(

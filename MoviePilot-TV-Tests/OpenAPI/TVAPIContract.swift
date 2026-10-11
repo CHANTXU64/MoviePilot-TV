@@ -1,5 +1,7 @@
 import Foundation
 
+@testable import MoviePilot_TV
+
 struct TVAPIParameter: Equatable {
   enum Location: String {
     case query
@@ -349,7 +351,9 @@ enum TVAPIFields {
 }
 
 enum TVAPIContractCatalog {
-  static let operations: [TVAPIOperation] = {
+  static let operations = operations(backendVersion: BackendCompatibilityRegistry.current.latestVersion.description)
+
+  static func operations(backendVersion: String?) -> [TVAPIOperation] {
     var items: [TVAPIOperation] = []
     items.append(contentsOf: sessionOperations)
     items.append(contentsOf: systemOperations)
@@ -357,14 +361,14 @@ enum TVAPIContractCatalog {
     items.append(contentsOf: mediaOperations)
     items.append(contentsOf: discoverOperations)
     items.append(contentsOf: personOperations)
-    items.append(contentsOf: searchOperations)
+    items.append(contentsOf: searchOperations(backendVersion: backendVersion))
     items.append(contentsOf: downloadOperations)
     items.append(contentsOf: transferOperations)
     items.append(contentsOf: siteOperations)
     items.append(contentsOf: subscribeOperations)
     items.append(contentsOf: imageOperations)
     return items
-  }()
+  }
 
   static let dynamicFamilies: [TVAPIDynamicFamily] = [
     TVAPIDynamicFamily(
@@ -732,8 +736,14 @@ enum TVAPIContractCatalog {
     }
   }
 
-  private static var searchOperations: [TVAPIOperation] {
-    [
+  private static func searchOperations(backendVersion: String?) -> [TVAPIOperation] {
+    let supportsPaging = MoviePilotVersion(backendVersion).map { $0 >= MoviePilotVersion("v3.1.2-1")! } ?? false
+    let paging: [TVAPIParameter] = supportsPaging ? [
+      TVAPIParam.query("manual_paging", type: .boolean),
+      TVAPIParam.query("page", type: .integer),
+      TVAPIParam.query("source"),
+    ] : []
+    return [
       TVAPIOperationBuilder.get(
         "/search/title",
         query: [
@@ -761,7 +771,7 @@ enum TVAPIContractCatalog {
         query: [
           TVAPIParam.query("keyword"),
           TVAPIParam.query("sites"),
-        ],
+        ] + paging,
         response: .sse,
         coverage: read
       ),
@@ -775,7 +785,7 @@ enum TVAPIContractCatalog {
           TVAPIParam.query("year"),
           TVAPIParam.query("season", type: .integer),
           TVAPIParam.query("sites"),
-        ],
+        ] + paging,
         pathParams: [TVAPIParam.path("media_id")],
         response: .sse,
         coverage: read

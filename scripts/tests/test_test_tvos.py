@@ -25,7 +25,9 @@ root = Path(os.environ["TVOS_RUNNER_TEST_DIR"])
 args = sys.argv[1:]
 tool = Path(sys.argv[0]).name
 with (root / "calls.jsonl").open("a") as log:
-    log.write(json.dumps({"tool": tool, "args": args}) + "\n")
+    log.write(json.dumps({"tool": tool, "args": args, "test_environment": {
+        key: value for key, value in os.environ.items() if key.startswith("TEST_RUNNER_MOVIEPILOT_COMPAT_")
+    }}) + "\n")
 mode = os.environ.get("TVOS_RUNNER_TEST_MODE", "success")
 owned = "11111111-22AA-4333-8444-555555555555"
 if tool == "xcrun":
@@ -121,6 +123,18 @@ class TestTVOSRunnerTests(unittest.TestCase):
         result = self.run_script("build_failure")
         self.assertEqual(result.returncode, 65)
         self.assertFalse(any("test" in call["args"] for call in self.calls()))
+        self.assert_owned_cleanup()
+
+    def test_compatibility_overrides_reach_xctest_without_rewriting_env_file(self):
+        self.environment["MOVIEPILOT_COMPAT_ENV_FILE"] = "/tmp/config with spaces.env"
+        self.environment["MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS"] = "false"
+        result = self.run_script("success", "--skip-build", "--include-backend-tests",
+                                 "--only-testing", "MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        test = next(call for call in self.calls() if call["tool"] == "xcodebuild" and "test" in call["args"])
+        self.assertEqual(test["test_environment"]["TEST_RUNNER_MOVIEPILOT_COMPAT_ENV_FILE"],
+                         "/tmp/config with spaces.env")
+        self.assertEqual(test["test_environment"]["TEST_RUNNER_MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS"], "false")
         self.assert_owned_cleanup()
 
     def test_test_failure_cleans_only_owned_device(self):

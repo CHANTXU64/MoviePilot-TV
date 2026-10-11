@@ -19,11 +19,11 @@ BACKEND_SUITES = (
 )
 
 
-def run(command, *, capture=False, check=True, quiet=False):
+def run(command, *, capture=False, check=True, quiet=False, env=None):
     process = subprocess.Popen(
         command, cwd=REPO, start_new_session=True,
         stdout=subprocess.PIPE if capture else (subprocess.DEVNULL if quiet else None),
-        stderr=subprocess.DEVNULL if quiet else None, text=True,
+        stderr=subprocess.DEVNULL if quiet else None, text=True, env=env,
     )
     try:
         output, _ = process.communicate()
@@ -117,7 +117,12 @@ def main(argv=None):
         test += [f"-only-testing:{test_id}" for test_id in args.only_testing]
         if args.result_bundle_path:
             test += ["-resultBundlePath", str(Path(args.result_bundle_path).resolve())]
-        run(test)
+        test_environment = dict(os.environ)
+        # xcodebuild forwards TEST_RUNNER_ variables to the XCTest process.
+        for key, value in os.environ.items():
+            if key.startswith("MOVIEPILOT_COMPAT_"):
+                test_environment[f"TEST_RUNNER_{key}"] = value
+        run(test, env=test_environment)
     finally:
         if creation_started and simulator is None:
             # Creation may have succeeded before stdout validation or interruption failed.
