@@ -44,15 +44,17 @@ def run(command, *, capture=False, check=True, quiet=False, env=None):
     return output if capture else process.returncode
 
 
-def select_runtime(runtimes, requested_version=None):
+def select_runtime(runtimes, requested_version=None, latest_major=None):
     candidates = [
         runtime for runtime in runtimes
         if runtime.get("isAvailable")
         and ".tvOS-" in runtime["identifier"]
         and (requested_version is None or runtime["version"] == requested_version)
+        and (latest_major is None or int(runtime["version"].split(".")[0]) == latest_major)
     ]
     if not candidates:
-        raise RuntimeError("没有可用的 tvOS Simulator runtime。")
+        target = requested_version or f"{latest_major}.x"
+        raise RuntimeError(f"没有可用的 tvOS {target} Simulator runtime。")
     runtime = max(candidates, key=lambda value: tuple(map(int, value["version"].split("."))))
     devices = [
         device for device in runtime.get("supportedDeviceTypes", [])
@@ -75,7 +77,7 @@ def find_created_simulator(name, runtime_identifier, device_type_identifier):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--runtime", help="tvOS 版本，如 27.0；默认使用最新可用版本")
+    parser.add_argument("--runtime", help="仅运行指定 tvOS 版本；默认依次运行 18.5、26.5 和最新已安装的 27.x")
     parser.add_argument("--only-testing", action="append", default=[], metavar="TEST_ID")
     parser.add_argument("--include-backend-tests", action="store_true",
                         help="包含真实后端套件；仍遵守其独立开关与目标限制")
@@ -86,9 +88,36 @@ def main(argv=None):
     args = parser.parse_args(argv)
     # Selection happens before any device is created. No existing device ID is accepted.
     runtimes = json.loads(run(["xcrun", "simctl", "list", "runtimes", "-j"], capture=True))
-    runtime, device = select_runtime(runtimes["runtimes"], args.runtime)
+    selections = (
+        [select_runtime(runtimes["runtimes"], args.runtime)] if args.runtime else [
+            select_runtime(runtimes["runtimes"], "18.5"),
+            select_runtime(runtimes["runtimes"], "26.5"),
+            select_runtime(runtimes["runtimes"], latest_major=27),
+        ]
+    )
+    print("tvOS 测试版本：" + "、".join(runtime["version"] for runtime, _ in selections), flush=True)
+    failures = []
+    for runtime, device in selections:
+        result_path = Path(args.result_bundle_path).resolve() if args.result_bundle_path else None
+        if result_path and len(selections) > 1:
+            result_path = result_path.with_name(
+                f"{result_path.stem}-tvos-{runtime['version']}{result_path.suffix}")
+        try:
+            run_on_simulator(args, runtime, device, result_path)
+        except subprocess.CalledProcessError as error:
+            if args.include_backend_tests:
+                raise
+            failures.append((runtime["version"], error.returncode))
+            print(f"tvOS {runtime['version']} 验证失败（退出码 {error.returncode}）。", file=sys.stderr)
+    if failures:
+        print("未通过的 tvOS 版本：" + "、".join(version for version, _ in failures), file=sys.stderr)
+        return failures[0][1]
+    return 0
+
+
+def run_on_simulator(args, runtime, device, result_path):
     simulator = None
-    simulator_name = f"MoviePilot-TV Tests {uuid.uuid4().hex}"
+    simulator_name = f"MoviePilot-TV Tests tvOS {runtime['version']} {uuid.uuid4().hex}"
     creation_started = False
     try:
         creation_started = True
@@ -115,8 +144,8 @@ def main(argv=None):
         if not args.include_backend_tests:
             test += [f"-skip-testing:MoviePilot-TV-Tests/{suite}" for suite in BACKEND_SUITES]
         test += [f"-only-testing:{test_id}" for test_id in args.only_testing]
-        if args.result_bundle_path:
-            test += ["-resultBundlePath", str(Path(args.result_bundle_path).resolve())]
+        if result_path:
+            test += ["-resultBundlePath", str(result_path)]
         test_environment = dict(os.environ)
         # xcodebuild forwards TEST_RUNNER_ variables to the XCTest process.
         for key, value in os.environ.items():
@@ -137,7 +166,6 @@ def main(argv=None):
             run(["xcrun", "simctl", "shutdown", simulator], check=False, quiet=True)
             run(["xcrun", "simctl", "delete", simulator])
             print(f"已清理本次创建的测试模拟器：{simulator}", flush=True)
-    return 0
 
 
 def interrupted(signum, _frame):

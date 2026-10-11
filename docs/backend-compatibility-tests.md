@@ -17,7 +17,9 @@ python3 scripts/test-tvos.py --include-backend-tests \
   --only-testing MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests
 ```
 
-入口先解析依赖并完整构建，再新建/使用本次专用模拟器串行测试，结束后只清理该设备。测试宿主使用独立 `Testing` App 身份和共享组，不覆盖日常 App 的登录、偏好或首页缓存。已有构建可加 `--skip-build` 做定向测试；完整验证不能仅使用这个参数。普通 `python3 scripts/test-tvos.py` 显式跳过全部真实后端套件，即使工作区已有 `.env.compatibility` 也不会自动访问。
+本地入口默认依次使用 tvOS 18.5、26.5 和最新已安装的 27.x，每个版本解析依赖、完整构建并在独立临时模拟器上串行测试，结束后只清理该设备。三个 runtime 必须全部可用，不能缺省跳过；只有明确诊断单一系统时才用 `--runtime <版本>` 限定。测试宿主使用独立 `Testing` App 身份和共享组，不覆盖日常 App 的登录、偏好或首页缓存。已有构建可加 `--skip-build` 做定向测试；完整验证不能仅使用这个参数。普通 `python3 scripts/test-tvos.py` 显式跳过全部真实后端套件，即使工作区已有 `.env.compatibility` 也不会自动访问。CI 固定运行 tvOS 27.0。
+
+显式包含真实后端测试时，同一配置会在所选各系统上分别执行；副作用套件启用后也会重复相应动作，仍须遵守独立开关和目标范围。后端测试在某个系统失败会立即停止，不继续向其余系统发起真实请求；普通离线矩阵则继续汇总各系统结果。矩阵模式指定 `--result-bundle-path` 时，脚本自动在文件名中加入 tvOS 版本，避免结果包互相覆盖。
 
 需要副作用验证时，用 `--only-testing MoviePilot-TV-Tests/BackendCompatibilitySideEffectTests` 指定套件，并按下文显式启用独立副作用开关。模拟器与 App 存储隔离不能隔离真实后端的数据修改。
 
