@@ -27,6 +27,12 @@ import Foundation
 /// 而不是丢弃（规范建议丢弃）。本项目此前就是「data 行一到即处理」，断线前最后
 /// 一个事件（可能是 `done`）一直收得到；严格丢弃会静默降低容错，故保留该行为。
 nonisolated struct SSEFramer {
+  private let reusesBuffers: Bool
+
+  init(reusesBuffers: Bool = true) {
+    self.reusesBuffers = reusesBuffers
+  }
+
   /// 当前事件已累积的 `data` 字段值（尚未成帧）。
   private var pendingDataLines: [String] = []
 
@@ -86,7 +92,7 @@ nonisolated struct SSEFramer {
     if byte == 0x0D { lastByteWasCR = true }
 
     let line = String(decoding: currentLine, as: UTF8.self)
-    currentLine.removeAll(keepingCapacity: true)
+    currentLine.removeAll(keepingCapacity: reusesBuffers)
     return consume(line: line)
   }
 
@@ -117,12 +123,12 @@ nonisolated struct SSEFramer {
     // 流可能停在一个没有换行收尾的半行上，先把这半行补进来再交付。
     if !currentLine.isEmpty {
       let line = String(decoding: currentLine, as: UTF8.self)
-      currentLine.removeAll(keepingCapacity: true)
+      currentLine.removeAll(keepingCapacity: reusesBuffers)
       if let payload = consume(line: line) { return payload }
     }
 
     guard !pendingDataLines.isEmpty else { return nil }
-    defer { pendingDataLines.removeAll(keepingCapacity: true) }
+    defer { pendingDataLines.removeAll(keepingCapacity: reusesBuffers) }
     return pendingDataLines.joined(separator: "\n")
   }
 }

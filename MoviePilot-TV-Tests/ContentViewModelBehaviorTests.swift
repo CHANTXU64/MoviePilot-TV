@@ -696,7 +696,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
       window.rootViewController = nil
       previous?.makeKey()
     }
-    try await waitUntil("unknown alert should be shown") {
+    try await waitUntil("unknown alert should be shown", timeout: 5) {
       host.presentedViewController?.title == unknown.title
     }
     XCTAssertEqual((host.presentedViewController as? UIAlertController)?.message, unknown.message)
@@ -810,7 +810,7 @@ final class ContentViewModelBehaviorTests: XCTestCase {
       if condition() { return }
       try await Task.sleep(nanoseconds: 10_000_000)
     }
-    XCTFail(failureMessage)
+    XCTAssertTrue(condition(), failureMessage)
   }
 }
 

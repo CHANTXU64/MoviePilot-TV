@@ -3075,6 +3075,12 @@ nonisolated struct SearchStreamEvent: Codable, @unchecked Sendable {
   let message: String?
   let message_i18n: String?
 
+  var sources: [ResourceSearchSource]? = nil
+  var stage: String? = nil
+  var replace_batch: Bool? = nil
+  var batch_index: Int? = nil
+  var batch_count: Int? = nil
+
   /// 统一错误文本选择器：逐项 trim 后优先 message_i18n，再回退 message。
   var localizedMessage: String? {
     trimmedNonEmpty([message_i18n, message])
@@ -3092,20 +3098,39 @@ nonisolated struct SearchStreamEvent: Codable, @unchecked Sendable {
     }
   }
   let data: AiRedoData?
+}
 
-  func applyResourceItems(
-    to results: inout [Context],
-    finalResultApplied: inout Bool
-  ) {
-    guard let items else { return }
-    switch type {
+/// 旧搜索保持预览顺序；最终分块独立收集，完整后才替换预览。
+struct ResourceSearchResultCollector {
+  private(set) var items: [Context] = []
+  private var finalResultApplied = false
+  private var pendingFinalItems: [Context] = []
+  private var finalBatch = SearchReplaceBatchState()
+
+  mutating func receive(_ event: SearchStreamEvent) throws {
+    if event.replace_batch == true {
+      guard !finalResultApplied else { return }
+      if try finalBatch.receive(event, into: &pendingFinalItems) {
+        items = pendingFinalItems
+        pendingFinalItems = []
+        finalResultApplied = true
+      }
+      return
+    }
+    if finalBatch.isPending,
+      event.type == "append" || event.type == "replace" || event.type == "done"
+    {
+      throw ResourceSearchFailure.incompletePage
+    }
+    guard let eventItems = event.items else { return }
+    switch event.type {
     case "append" where !finalResultApplied:
-      results.insert(contentsOf: items, at: 0)
+      items.insert(contentsOf: eventItems, at: 0)
     case "replace":
-      results = items
+      items = eventItems
       finalResultApplied = true
-    case "done" where !items.isEmpty && !finalResultApplied:
-      results = items
+    case "done" where !eventItems.isEmpty && !finalResultApplied:
+      items = eventItems
       finalResultApplied = true
     default:
       break

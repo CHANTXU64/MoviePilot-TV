@@ -9,10 +9,18 @@ struct TorrentCard: View {
   let torrent: TorrentInfo?
   private let apiService = APIService.shared
 
-  init(context: Context, overrideMediaInfo: MediaInfo? = nil) {
+  let isCandidate: Bool
+  var onContinueSearch: (() -> Void)?
+  var onDownloadPresentationChange: ((Bool) -> Void)?
+
+  init(context: Context, overrideMediaInfo: MediaInfo? = nil, isCandidate: Bool = false,
+    onContinueSearch: (() -> Void)? = nil, onDownloadPresentationChange: ((Bool) -> Void)? = nil) {
+    self.isCandidate = isCandidate
+    self.onContinueSearch = onContinueSearch
+    self.onDownloadPresentationChange = onDownloadPresentationChange
     self.context = context
     // 如果提供了 overrideMediaInfo，则使用它，否则使用 context.media_info
-    media = overrideMediaInfo ?? context.media_info
+    media = isCandidate ? nil : overrideMediaInfo ?? context.media_info
     meta = context.meta_info
     torrent = context.torrent_info
   }
@@ -89,6 +97,9 @@ struct TorrentCard: View {
           }
         }
 
+        if isCandidate {
+          Text("未完成匹配").font(.caption2).foregroundColor(.secondary)
+        }
         let descriptionText = Self.descriptionText(meta: meta, torrent: torrent)
 
         // 种子内容
@@ -196,6 +207,7 @@ struct TorrentCard: View {
         guard canAddDownload else { return }
         showDownload = true
       }
+      .onChange(of: showDownload) { _, visible in onDownloadPresentationChange?(visible) }
       .contextMenu {
         if canAddDownload {
           Button {
@@ -203,6 +215,9 @@ struct TorrentCard: View {
           } label: {
             Label("下载", systemImage: "arrow.down.circle")
           }
+        }
+        if let onContinueSearch, !showDownload {
+          Button("继续搜索", systemImage: "magnifyingglass", action: onContinueSearch)
         }
       }
       .sheet(

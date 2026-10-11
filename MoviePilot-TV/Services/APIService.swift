@@ -2529,6 +2529,37 @@ class APIService: ObservableObject {
 
   private struct SSETerminalEvent: Error {}
 
+  /// 连接统一使用调用开始时的会话租约；消费方式和重连策略由各端点决定。
+  private func openSSE(endpoint: String, lease: APIServiceSessionLease) async throws -> URLSession.AsyncBytes {
+    try Task.checkCancellation()
+    try validate(lease)
+    guard let url = URL(string: "\(lease.baseURL)/api/v1\(endpoint)") else { throw APIError.invalidURL }
+    var request = URLRequest(url: url)
+    request.timeoutInterval = 300
+    request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+    if let token = lease.token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+    if let cookie = lease.runtime.cookieVault.cookieHeader(for: url) {
+      request.setValue(cookie, forHTTPHeaderField: "Cookie")
+    }
+    request.setValue("zh-CN", forHTTPHeaderField: "X-MoviePilot-Locale")
+    request.setValue("zh-CN", forHTTPHeaderField: "Accept-Language")
+    let (bytes, response) = try await lease.runtime.transport.bytes(for: request)
+    do {
+      try Task.checkCancellation()
+      try validate(lease)
+      guard let response = response as? HTTPURLResponse else { throw APIError.serverMessage("无效响应") }
+      lease.runtime.cookieVault.update(from: response, for: url)
+      guard response.statusCode == 200 else {
+        if response.statusCode == 401 || response.statusCode == 403 { throw APIError.unauthorized }
+        throw APIError.serverMessage("HTTP Error \(response.statusCode)")
+      }
+      return bytes
+    } catch {
+      bytes.task.cancel()
+      throw error
+    }
+  }
+
   /// 通用 SSE 流式请求
   private func streamSSE<Event: Decodable & Sendable>(
     endpoint: String,
@@ -2546,37 +2577,8 @@ class APIService: ObservableObject {
           var shouldReconnect = false
 
           do {
-            try self.validate(lease)
-            guard let url = URL(string: "\(lease.baseURL)/api/v1\(endpoint)") else {
-              throw APIError.invalidURL
-            }
-            var request = URLRequest(url: url)
-            request.timeoutInterval = 300 // 长连接
-            request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-
-            if let authToken = lease.token {
-              request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
-            }
-            if let cookie = lease.runtime.cookieVault.cookieHeader(for: url) {
-              request.setValue(cookie, forHTTPHeaderField: "Cookie")
-            }
-            request.setValue("zh-CN", forHTTPHeaderField: "X-MoviePilot-Locale")
-            request.setValue("zh-CN", forHTTPHeaderField: "Accept-Language")
-
-            let (result, response) = try await lease.runtime.transport.bytes(for: request)
-            try self.validate(lease)
-
-            guard let httpResponse = response as? HTTPURLResponse else {
-              throw APIError.serverMessage("无效响应")
-            }
-            lease.runtime.cookieVault.update(from: httpResponse, for: url)
-
-            if httpResponse.statusCode != 200 {
-              if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
-                throw APIError.unauthorized
-              }
-              throw APIError.serverMessage("HTTP Error \(httpResponse.statusCode)")
-            }
+            let result = try await self.openSSE(endpoint: endpoint, lease: lease)
+            defer { result.task.cancel() }
 
             // 字节读取/组帧/解码在后台完成，避免每个字节都往返 MainActor。
             // 交付回调在 MainActor 上原子地校验会话并发布，保留切服及取消边界。
@@ -2685,6 +2687,48 @@ class APIService: ObservableObject {
       return streamSSE(endpoint: endpoint, as: SearchStreamEvent.self)
     } catch {
       return AsyncThrowingStream { $0.finish(throwing: error) }
+    }
+  }
+
+  /// 显式单页资源搜索：逐事件等待消费者完成，既不缓存事件队列，也不重连或 HTTP 重搜。
+  func readResourceSearchPage(
+    query: ResourceSearchQuery, source: String?, page: Int,
+    maximumEventBytes: @escaping @MainActor @Sendable () throws -> Int,
+    receive: @escaping @MainActor @Sendable (SearchStreamEvent, Int) async throws -> Void
+  ) async throws {
+    let lease = currentLease()
+    var params: [String: String?] = [
+      "sites": query.sites, "manual_paging": "true", "page": String(page), "source": source,
+    ]
+    let path: String
+    if query.isMediaSearch {
+      guard let identity = MediaIdentifier.identity(from: query.keyword),
+        let mediaID = encodeMediaIDPathSegment(identity.mediaId), !mediaID.isEmpty
+      else { throw APIError.invalidURL }
+      path = "/search/media/\(mediaID)/stream"
+      params.merge([
+        "media_source": identity.source, "mtype": query.type, "area": query.area,
+        "title": query.title, "year": query.year, "season": query.season.map(String.init),
+      ]) { _, value in value }
+    } else {
+      path = "/search/title/stream"
+      params["keyword"] = query.keyword
+    }
+    let endpoint = try buildEndpoint(path: path, params: params)
+    let bytes = try await openSSE(endpoint: endpoint, lease: lease)
+    defer { bytes.task.cancel() }
+    try await SSEEventReader.consume(
+      from: bytes, as: BoundedResourceSearchEvent.self, maximumEventBytes: maximumEventBytes,
+      configureDecoder: { decoder, frameLimit, frameBytes in
+        if let frameLimit {
+          // 帧上限按剩余预算 / 16 推导；扣除本帧实际临时占用后再限制对象数。
+          decoder.userInfo[BoundedResourceSearchEvent.itemLimitKey] = max(0, frameLimit * 16 - frameBytes * 8) / 4096
+        }
+      }
+    ) { bounded, byteCount in
+      try Task.checkCancellation()
+      try self.validate(lease)
+      try await receive(bounded.event, byteCount)
     }
   }
 
