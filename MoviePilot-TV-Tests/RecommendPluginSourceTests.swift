@@ -133,6 +133,43 @@ final class RecommendPluginSourceTests: XCTestCase {
     assertNoWebConfigRequests()
   }
 
+  func testSourceResponsePreservesPluginDisabledByAnotherModelWhileRequestIsPending() async {
+    let pluginID = "plugin/ImdbSource/imdb-top-250"
+    RecommendPluginURLProtocol.setSources("""
+      [{"name":"IMDb Top 250 Movies","api_path":"\(pluginID)","type":"Movies"}]
+      """)
+    let service = makeService()
+    let settingsModel = RecommendViewModel(selectShelf: false, apiService: service)
+    await settingsModel.refreshSources(selectShelf: false)
+    settingsModel.saveEnableConfig(settingsModel.enableConfig)
+
+    let pageModel = RecommendViewModel(selectShelf: false, apiService: service)
+    let sourceRequested = expectation(description: "来源请求已挂起，尚未返回")
+    RecommendPluginURLProtocol.holdNextSourceResponse { sourceRequested.fulfill() }
+    let refresh = Task { await pageModel.refreshSources(selectShelf: false) }
+    defer {
+      refresh.cancel()
+      RecommendPluginURLProtocol.releaseSourceResponse()
+    }
+    await fulfillment(of: [sourceRequested], timeout: 3)
+    XCTAssertEqual(pageModel.enableConfig[pluginID], true)
+
+    var config = settingsModel.enableConfig
+    config[pluginID] = false
+    settingsModel.saveEnableConfig(config)
+    XCTAssertEqual(RecommendViewModel.storedEnableConfig()?[pluginID], false)
+    XCTAssertEqual(pageModel.enableConfig[pluginID], true)
+
+    RecommendPluginURLProtocol.releaseSourceResponse()
+    await refresh.value
+
+    XCTAssertTrue(pageModel.shelves.contains { $0.id == pluginID })
+    XCTAssertEqual(pageModel.enableConfig[pluginID], false)
+    XCTAssertFalse(pageModel.filteredShelves.contains { $0.id == pluginID })
+    XCTAssertEqual(RecommendViewModel.storedEnableConfig()?[pluginID], false)
+    assertNoWebConfigRequests()
+  }
+
   func testLegacyDisabledTitleWinsOverPluginDefaultAndPreservesExplicitID() async {
     seedConfig(["IMDb榜单": false, "plugin/b": true])
     RecommendPluginURLProtocol.setSources("""
@@ -190,6 +227,9 @@ private final class RecommendPluginURLProtocol: URLProtocol {
   nonisolated(unsafe) private static var sources = "[]"
   nonisolated(unsafe) private static var sourceStatusCode = 200
   nonisolated(unsafe) private static var capturedRequests: [URLRequest] = []
+  nonisolated(unsafe) private static var onHeldSourceRequest: (@Sendable () -> Void)?
+  nonisolated(unsafe) private static var pendingSourceResponse:
+    (loader: RecommendPluginURLProtocol, status: Int, body: String)?
 
   static var requests: [URLRequest] { lock.withLock { capturedRequests } }
 
@@ -198,6 +238,8 @@ private final class RecommendPluginURLProtocol: URLProtocol {
       sources = "[]"
       sourceStatusCode = 200
       capturedRequests = []
+      onHeldSourceRequest = nil
+      pendingSourceResponse = nil
     }
   }
 
@@ -205,6 +247,22 @@ private final class RecommendPluginURLProtocol: URLProtocol {
     lock.withLock {
       sources = json
       sourceStatusCode = statusCode
+    }
+  }
+
+  static func holdNextSourceResponse(_ onRequest: @escaping @Sendable () -> Void) {
+    lock.withLock { onHeldSourceRequest = onRequest }
+  }
+
+  static func releaseSourceResponse() {
+    let pending = lock.withLock {
+      let response = pendingSourceResponse
+      pendingSourceResponse = nil
+      onHeldSourceRequest = nil
+      return response
+    }
+    if let pending {
+      pending.loader.respond(status: pending.status, body: pending.body)
     }
   }
 
@@ -216,11 +274,34 @@ private final class RecommendPluginURLProtocol: URLProtocol {
 
   override func startLoading() {
     guard let url = request.url else { return }
-    let (status, body) = Self.lock.withLock {
+    let (status, body, onHeldRequest) = Self.lock.withLock {
+      () -> (Int, String, (@Sendable () -> Void)?) in
       Self.capturedRequests.append(request)
-      if url.path == "/api/v1/recommend/source" { return (Self.sourceStatusCode, Self.sources) }
-      return (200, #"[{"tmdb_id":501,"title":"插件电影结果","type":"电影"}]"#)
+      if url.path == "/api/v1/recommend/source" {
+        let callback = Self.onHeldSourceRequest
+        if callback != nil {
+          Self.pendingSourceResponse = (self, Self.sourceStatusCode, Self.sources)
+          Self.onHeldSourceRequest = nil
+        }
+        return (Self.sourceStatusCode, Self.sources, callback)
+      }
+      return (200, #"[{"tmdb_id":501,"title":"插件电影结果","type":"电影"}]"#, nil)
     }
+    if let onHeldRequest {
+      onHeldRequest()
+      return
+    }
+    respond(status: status, body: body)
+  }
+
+  override func stopLoading() {
+    Self.lock.withLock {
+      if Self.pendingSourceResponse?.loader === self { Self.pendingSourceResponse = nil }
+    }
+  }
+
+  private func respond(status: Int, body: String) {
+    guard let url = request.url else { return }
     let response = HTTPURLResponse(
       url: url, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"]
     )!
@@ -228,6 +309,4 @@ private final class RecommendPluginURLProtocol: URLProtocol {
     client?.urlProtocol(self, didLoad: Data(body.utf8))
     client?.urlProtocolDidFinishLoading(self)
   }
-
-  override func stopLoading() {}
 }
