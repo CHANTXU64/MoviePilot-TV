@@ -125,7 +125,7 @@ struct MediaDetailView: View {
   @FocusState private var isHeroFocused: Bool
   @FocusState private var isContentFocused: Bool
   enum ButtonField {
-    case subscribe, search, sites, otherInfo
+    case subscribe, search, subtitleSearch, sites, otherInfo
   }
   @FocusState private var focusedButton: ButtonField?
   @State private var lastFocusedButton: ButtonField?
@@ -138,6 +138,11 @@ struct MediaDetailView: View {
 
   private var canSearchResources: Bool {
     apiService.canAccess(.search)
+  }
+
+  private var canSearchSubtitles: Bool {
+    canSearchResources && SubtitleSearchRequest.supportsSubtitleSearch(viewModel.detail)
+      && viewModel.detail.identity != nil
   }
 
   private var canJumpToTMDB: Bool {
@@ -177,10 +182,13 @@ struct MediaDetailView: View {
 
   private var shouldShowSiteFilter: Bool {
     guard canSearchResources else { return false }
-    if focusedButton == .search || focusedButton == .sites {
+    if focusedButton == .search || focusedButton == .subtitleSearch || focusedButton == .sites {
       return true
     }
-    if focusedButton == nil && (lastFocusedButton == .search || lastFocusedButton == .sites) {
+    if focusedButton == nil
+      && (lastFocusedButton == .search || lastFocusedButton == .subtitleSearch
+        || lastFocusedButton == .sites)
+    {
       return true
     }
     return false
@@ -593,12 +601,7 @@ struct MediaDetailView: View {
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler)
     .sheet(isPresented: $showSiteSelection) {
-      MultiSelectionSheet(
-        options: viewModel.siteFilter.availableSites,
-        id: \.id,
-        selected: $viewModel.siteFilter.selectedSites,
-        label: { $0.name }
-      )
+      SearchSiteSelectionSheet(viewModel: viewModel.siteFilter)
     }
     .onChange(of: focusedButton) { _, newValue in
       if let newValue = newValue {
@@ -621,6 +624,10 @@ struct MediaDetailView: View {
   }
 
   private func navigateFromSecondPage(to destination: ResourceSearchRequest) {
+    navigationCoordinator.push(destination)
+  }
+
+  private func navigateFromSecondPage(to destination: SubtitleSearchRequest) {
     navigationCoordinator.push(destination)
   }
 
@@ -1072,7 +1079,7 @@ struct MediaDetailView: View {
               Button(action: {
                 let request = mediaActionHandler.searchResourcesTarget(
                   for: viewModel.detail,
-                  sites: viewModel.siteFilter.sitesString
+                  sites: viewModel.siteFilter.sitesString(for: .resource)
                 )
                 navigateFromSecondPage(to: request)
               }) {
@@ -1080,6 +1087,20 @@ struct MediaDetailView: View {
                   .foregroundColor(.primary)
               }
               .focused($focusedButton, equals: .search)
+            }
+
+            if canSearchSubtitles {
+              Button(action: {
+                guard let request = mediaActionHandler.subtitleSearchRequest(
+                  for: viewModel.detail,
+                  sites: viewModel.siteFilter.sitesString(for: .subtitle)
+                ) else { return }
+                navigateFromSecondPage(to: request)
+              }) {
+                Label("搜索字幕", systemImage: "captions.bubble")
+                  .foregroundColor(.primary)
+              }
+              .focused($focusedButton, equals: .subtitleSearch)
             }
 
             // Site selection button

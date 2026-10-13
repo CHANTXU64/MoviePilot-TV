@@ -23,7 +23,8 @@ nonisolated enum ResourceSearchFailure: Error, LocalizedError {
 }
 
 /// 新旧搜索共用最终分块的顺序和数量校验，资源数组仍由各自的收集器持有。
-struct SearchReplaceBatchState {
+/// 字幕搜索的最终列表使用同一套顺序和数量规则，不另写第三套分块守卫。
+nonisolated struct SearchReplaceBatchState<Item> {
   private var nextBatch = 0
   private var batchCount: Int?
   private var totalItems: Int?
@@ -31,12 +32,20 @@ struct SearchReplaceBatchState {
   var hasStarted: Bool { batchCount != nil }
   var isPending: Bool { batchCount.map { nextBatch < $0 } ?? false }
 
-  mutating func receive(_ event: SearchStreamEvent, into results: inout [Context]) throws -> Bool {
-    guard event.replace_batch == true,
-      let index = event.batch_index, let count = event.batch_count,
-      let total = event.total_items, let items = event.items,
+  mutating func receive(
+    type: String?,
+    isReplaceBatch: Bool,
+    batchIndex: Int?,
+    batchCount incomingCount: Int?,
+    totalItems incomingTotal: Int?,
+    items: [Item]?,
+    into results: inout [Item]
+  ) throws -> Bool {
+    guard isReplaceBatch,
+      let index = batchIndex, let count = incomingCount,
+      let total = incomingTotal, let items,
       count > 0, total >= 0, index == nextBatch, index < count,
-      event.type == (index == 0 ? "replace" : "append"),
+      type == (index == 0 ? "replace" : "append"),
       batchCount == nil || batchCount == count,
       totalItems == nil || totalItems == total
     else { throw ResourceSearchFailure.incompletePage }
@@ -53,6 +62,20 @@ struct SearchReplaceBatchState {
   }
 }
 
+extension SearchReplaceBatchState where Item == Context {
+  mutating func receive(_ event: SearchStreamEvent, into results: inout [Context]) throws -> Bool {
+    try receive(
+      type: event.type,
+      isReplaceBatch: event.replace_batch == true,
+      batchIndex: event.batch_index,
+      batchCount: event.batch_count,
+      totalItems: event.total_items,
+      items: event.items,
+      into: &results
+    )
+  }
+}
+
 /// 页事务只保存待提交的最终分块；可停止查看的预览由搜索会话持有。
 struct ResourceSearchPage {
   let source: String?
@@ -60,7 +83,7 @@ struct ResourceSearchPage {
   private(set) var finalItems: [Context] = []
   private(set) var sources: [ResourceSearchSource]?
   private(set) var isComplete = false
-  private var finalBatch = SearchReplaceBatchState()
+  private var finalBatch = SearchReplaceBatchState<Context>()
 
   init(source: String?, page: Int) {
     self.source = source

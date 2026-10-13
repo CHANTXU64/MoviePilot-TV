@@ -6,6 +6,12 @@ class MediaActionHandler: ObservableObject {
   // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
   nonisolated deinit {}
 
+  private let apiService: APIService
+
+  init(apiService: APIService = .shared) {
+    self.apiService = apiService
+  }
+
   @Published var isRecognizingTmdb = false
   @Published var showTMDBNotFoundAlert = false
 
@@ -29,10 +35,60 @@ class MediaActionHandler: ObservableObject {
   }
 
   func searchResourcesTargetUsingDefaultSites(for item: MediaInfo) async -> ResourceSearchRequest? {
-    let snapshot = APIService.shared.sessionSnapshot()
-    let sites = await SystemViewModel.normalizedDefaultSearchSitesString()
-    guard APIService.shared.isSessionUnchanged(from: snapshot) else { return nil }
+    let snapshot = apiService.sessionSnapshot()
+    let sites = await SystemViewModel.normalizedDefaultSearchSitesString(apiService: apiService)
+    guard apiService.isSessionUnchanged(from: snapshot), !Task.isCancelled else { return nil }
     return searchResourcesTarget(for: item, sites: sites)
+  }
+
+  /// 有媒体身份时按精确字幕搜索。季号只沿用条目上已经存在的值，0 保留，缺失不补当前季。
+  func subtitleSearchRequest(for item: MediaInfo, sites: String?) -> SubtitleSearchRequest? {
+    guard SubtitleSearchRequest.supportsSubtitleSearch(item), let identity = item.identity else {
+      return nil
+    }
+    let season = item.season.flatMap { $0 >= 0 ? $0 : nil }
+    return SubtitleSearchRequest(
+      kind: .media(
+        source: identity.source,
+        mediaId: identity.mediaId,
+        type: item.type,
+        season: season,
+        episode: nil
+      ),
+      sites: sites,
+      displayTitle: item.title,
+      mediaInfo: item
+    )
+  }
+
+  /// 快捷入口共用：可选识别、默认站点、标题回退都属于同一次动作。
+  func subtitleSearchRequestUsingDefaultSites(
+    for item: MediaInfo, recognizeIfNeeded: Bool = false
+  ) async -> SubtitleSearchRequest? {
+    guard apiService.canAccess(.search), SubtitleSearchRequest.supportsSubtitleSearch(item) else { return nil }
+    let snapshot = apiService.sessionSnapshot()
+    var target = item
+    if recognizeIfNeeded, item.identity == nil,
+      let recognized = await getTMDBJumpTarget(for: item, notifyWhenUnrecognized: false)
+    {
+      target = recognized
+    }
+    guard apiService.isSessionUnchanged(from: snapshot), !Task.isCancelled else { return nil }
+    let sites = await SystemViewModel.normalizedDefaultSubtitleSearchSitesString(apiService: apiService)
+    guard apiService.isSessionUnchanged(from: snapshot), !Task.isCancelled else { return nil }
+    return subtitleSearchRequest(for: target, sites: sites)
+      ?? Self.titleSubtitleSearchRequest(keyword: item.title ?? "", sites: sites)
+  }
+
+  static func titleSubtitleSearchRequest(keyword: String, sites: String?) -> SubtitleSearchRequest? {
+    let keyword = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !keyword.isEmpty else { return nil }
+    return SubtitleSearchRequest(
+      kind: .title(keyword: keyword),
+      sites: sites,
+      displayTitle: keyword,
+      mediaInfo: nil
+    )
   }
 
   /// 解析出可用于跳转/搜索的 TMDB 目标。
@@ -40,13 +96,13 @@ class MediaActionHandler: ObservableObject {
   /// - Parameter notifyWhenUnrecognized: 真正无匹配时是否弹「未识别到此媒体的TMDB信息」。
   ///   默认 `true`，适用于「TMDB详情页」这类**以 TMDB 为目标**的动作 —— 找不到就该告诉用户。
   ///   取 `false` 适用于「搜索资源」这类**识别失败可自愈**的调用方：拿不到 ID 会退回按标题
-  ///   搜索，动作照样完成，此时弹窗只会白白拦住用户，且与跳转同时发生（F-122）。
+  ///   搜索，避免识别提示与结果跳转同时发生。
   func getTMDBJumpTarget(
     for item: MediaInfo,
     targetTmdbId: Int? = nil,
     notifyWhenUnrecognized: Bool = true
   ) async -> MediaInfo? {
-    let snapshot = APIService.shared.sessionSnapshot()
+    let snapshot = apiService.sessionSnapshot()
     var tmdbIdToUse: Int? = targetTmdbId ?? item.tmdb_id
 
     if tmdbIdToUse == nil {
@@ -55,7 +111,7 @@ class MediaActionHandler: ObservableObject {
       guard !title.isEmpty else { return nil }
       isRecognizingTmdb = true
       do {
-        tmdbIdToUse = try await APIService.shared.recognizeTmdbId(
+        tmdbIdToUse = try await apiService.recognizeTmdbId(
           title: title,
           year: item.year,
           type: item.type
@@ -72,7 +128,7 @@ class MediaActionHandler: ObservableObject {
       isRecognizingTmdb = false
     }
 
-    guard APIService.shared.isSessionUnchanged(from: snapshot) else { return nil }
+    guard apiService.isSessionUnchanged(from: snapshot), !Task.isCancelled else { return nil }
 
     guard let tmdbId = tmdbIdToUse else {
       // 识别确实无匹配。但「搜索资源」这类调用方会自愈为标题搜索，弹窗只会拦住用户（F-122）。

@@ -187,9 +187,10 @@ enum SortType: String, CaseIterable, Identifiable {
 
 struct TorrentResultCount: View {
   let count: Int
+  var unit = "个资源"
 
   var body: some View {
-    Text("\(count) 个资源")
+    Text("\(count) \(unit)")
       .font(.caption)
       .padding(.horizontal, 12)
       .padding(.vertical, 6)

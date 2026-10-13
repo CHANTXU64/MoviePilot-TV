@@ -179,6 +179,38 @@ extension SystemSessionBehaviorTests {
     XCTAssertEqual(viewModel.defaultSearchSites, [1, 999])
   }
 
+  func testSubtitleSearchSitesStaySeparateFromResourceSearchSites() {
+    let sharedService = APIService.shared
+    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
+    defer { snapshot.restore(to: sharedService) }
+    let service = APIService.isolatedTestingInstance()
+    let account = sessionToken(userId: 11, accessToken: "site-user", userName: "site-user")
+    service.replaceSessionForTesting(
+      baseURL: "http://site-load-state.local",
+      token: account.access_token,
+      currentUser: account
+    )
+    let resourceKey = "defaultSearchSites_\(service.profileKey!)"
+    let subtitleKey = "defaultSubtitleSearchSites_\(service.profileKey!)"
+    let oldResource = UserDefaults.standard.array(forKey: resourceKey)
+    let oldSubtitle = UserDefaults.standard.array(forKey: subtitleKey)
+    defer {
+      restoreUserDefaultsArray(oldResource, forKey: resourceKey)
+      restoreUserDefaultsArray(oldSubtitle, forKey: subtitleKey)
+    }
+
+    let viewModel = SystemViewModel(apiService: service)
+    viewModel.defaultSearchSites = [1, 2]
+    viewModel.defaultSubtitleSearchSites = [4]
+    XCTAssertEqual(viewModel.defaultSearchSites, [1, 2])
+    XCTAssertEqual(viewModel.defaultSubtitleSearchSites, [4])
+
+    viewModel.defaultSearchSites = []
+    XCTAssertTrue(viewModel.defaultSearchSites.isEmpty)
+    XCTAssertEqual(viewModel.defaultSubtitleSearchSites, [4])
+    XCTAssertEqual(SystemViewModel.currentDefaultSubtitleSearchSites(apiService: service), [4])
+  }
+
   func testSiteFilterViewModelSiteLoadSuccessEmptyClearsStaleSelection() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SiteListURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SiteListURLProtocol.self) }
@@ -201,7 +233,7 @@ extension SystemSessionBehaviorTests {
     await viewModel.loadSites()
 
     XCTAssertTrue(viewModel.availableSites.isEmpty)
-    XCTAssertTrue(viewModel.selectedSites.isEmpty)
+    XCTAssertEqual(viewModel.selectedSites, [])
   }
 }
 

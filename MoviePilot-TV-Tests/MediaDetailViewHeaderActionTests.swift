@@ -84,10 +84,12 @@ final class MediaDetailViewHeaderActionTests: XCTestCase {
     let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
     let settings = SystemViewModel(apiService: service)
 
-    XCTAssertEqual(viewModel.siteFilter.selectedSites, [1])
+    XCTAssertNil(viewModel.siteFilter.selectedSites)
+    XCTAssertEqual(viewModel.siteFilter.siteButtonLabel, "默认")
+    XCTAssertEqual(viewModel.siteFilter.sitesString(for: .resource), "1")
     settings.defaultSearchSites = [2]
     await drainDetailSearchDefaultsNotifications()
-    XCTAssertEqual(viewModel.siteFilter.selectedSites, [2])
+    XCTAssertEqual(viewModel.siteFilter.sitesString(for: .resource), "2")
 
     viewModel.siteFilter.selectedSites = [9]
     settings.defaultSearchSites = [9]

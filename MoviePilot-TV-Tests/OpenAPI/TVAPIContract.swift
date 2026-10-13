@@ -790,6 +790,54 @@ enum TVAPIContractCatalog {
         response: .sse,
         coverage: read
       ),
+    ] + subtitleSearchOperations
+  }
+
+  /// 字幕搜索从 v2 就存在，不使用资源搜索的 manual_paging，也不按版本门禁隐藏。
+  private static var subtitleSearchOperations: [TVAPIOperation] {
+    [
+      TVAPIOperationBuilder.get(
+        "/search/subtitle/title",
+        query: [
+          TVAPIParam.query("keyword", alwaysSent: true),
+          TVAPIParam.query("sites"),
+        ],
+        coverage: [.unitDecoding]
+      ),
+      TVAPIOperationBuilder.get(
+        "/search/subtitle/title/stream",
+        query: [
+          TVAPIParam.query("keyword", alwaysSent: true),
+          TVAPIParam.query("sites"),
+        ],
+        response: .sse,
+        coverage: [.unitDecoding]
+      ),
+      TVAPIOperationBuilder.get(
+        "/search/subtitle/media/{media_id}",
+        query: [
+          TVAPIParam.query("media_source", alwaysSent: true),
+          TVAPIParam.query("mtype"),
+          TVAPIParam.query("season"),
+          TVAPIParam.query("episode"),
+          TVAPIParam.query("sites"),
+        ],
+        pathParams: [TVAPIParam.path("media_id")],
+        coverage: [.unitDecoding]
+      ),
+      TVAPIOperationBuilder.get(
+        "/search/subtitle/media/{media_id}/stream",
+        query: [
+          TVAPIParam.query("media_source", alwaysSent: true),
+          TVAPIParam.query("mtype"),
+          TVAPIParam.query("season"),
+          TVAPIParam.query("episode"),
+          TVAPIParam.query("sites"),
+        ],
+        pathParams: [TVAPIParam.path("media_id")],
+        response: .sse,
+        coverage: [.unitDecoding]
+      ),
     ]
   }
 
@@ -840,6 +888,24 @@ enum TVAPIContractCatalog {
           TVAPIFields.field("media_in", .object, required: true),
         ],
         coverage: mutationUnit
+      ),
+      TVAPIOperationBuilder.get(
+        "/download/paths",
+        coverage: [.unitDecoding]
+      ),
+      TVAPIOperationBuilder.mutation(
+        "POST",
+        "/download/subtitle",
+        body: [
+          TVAPIFields.field("subtitle_in", .object, required: true, alwaysSent: true),
+          TVAPIFields.field("media_source", .string, required: true, alwaysSent: true),
+          TVAPIFields.field("media_id", .string, required: true, alwaysSent: true),
+          TVAPIFields.field("save_path", .string, alwaysSent: true),
+        ],
+        dependedResponse: [
+          TVAPIFields.field("files", .array, itemType: .string),
+        ],
+        coverage: [.unitDecoding]
       ),
     ]
   }

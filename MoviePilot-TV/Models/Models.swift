@@ -22,7 +22,7 @@ extension Notification.Name {
 
 /// 包装类型，用于处理 API 响应中多种格式的布尔值
 /// 从 Bool、Int 或 String 解码，始终编码为 Bool
-struct FlexibleBool: Codable, Hashable {
+nonisolated struct FlexibleBool: Codable, Hashable, Sendable {
   let value: Bool
 
   init(_ value: Bool) {
@@ -3105,7 +3105,7 @@ struct ResourceSearchResultCollector {
   private(set) var items: [Context] = []
   private var finalResultApplied = false
   private var pendingFinalItems: [Context] = []
-  private var finalBatch = SearchReplaceBatchState()
+  private var finalBatch = SearchReplaceBatchState<Context>()
 
   mutating func receive(_ event: SearchStreamEvent) throws {
     if event.replace_batch == true {

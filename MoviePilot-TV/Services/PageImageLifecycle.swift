@@ -236,6 +236,7 @@ enum ImageNavigationRoute: Hashable {
   case media(MediaInfo)
   case person(Person)
   case resourceSearch(ResourceSearchRequest)
+  case subtitleSearch(SubtitleSearchRequest)
   case subscribeSeason(SubscribeSeasonRequest)
 }
 
@@ -527,6 +528,20 @@ final class ImageNavigationCoordinator: ObservableObject {
   @discardableResult
   func push(
     _ request: ResourceSearchRequest,
+    ifCurrent source: ImageNavigationSourceToken
+  ) -> ImageNavigationEntry? {
+    guard isCurrent(source) else { return nil }
+    return push(request)
+  }
+
+  @discardableResult
+  func push(_ request: SubtitleSearchRequest) -> ImageNavigationEntry {
+    push(.subtitleSearch(request))
+  }
+
+  @discardableResult
+  func push(
+    _ request: SubtitleSearchRequest,
     ifCurrent source: ImageNavigationSourceToken
   ) -> ImageNavigationEntry? {
     guard isCurrent(source) else { return nil }

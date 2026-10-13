@@ -322,6 +322,21 @@ private struct MediaSectionView: View {
                     Label("搜索资源", systemImage: "magnifyingglass")
                   }
                 }
+                if canSearchResources, SubtitleSearchRequest.supportsSubtitleSearch(type: item.type) {
+                  Button {
+                    let navigationSource = navigationCoordinator.sourceToken()
+                    Task {
+                      let info = MediaInfo(title: item.title, type: item.type, year: item.subtitle)
+                      if let request = await mediaActionHandler.subtitleSearchRequestUsingDefaultSites(
+                        for: info, recognizeIfNeeded: true
+                      ) {
+                        navigationCoordinator.push(request, ifCurrent: navigationSource)
+                      }
+                    }
+                  } label: {
+                    Label("搜索字幕", systemImage: "captions.bubble")
+                  }
+                }
               }
             }
           }

@@ -100,6 +100,18 @@ struct MediaContextMenuItems: View {
         } label: {
           Label("搜索资源", systemImage: "magnifyingglass")
         }
+        if SubtitleSearchRequest.supportsSubtitleSearch(item) {
+          Button {
+            let navigationSource = navigationCoordinator.sourceToken()
+            Task { @MainActor in
+              if let request = await mediaActionHandler.subtitleSearchRequestUsingDefaultSites(for: item) {
+                navigationCoordinator.push(request, ifCurrent: navigationSource)
+              }
+            }
+          } label: {
+            Label("搜索字幕", systemImage: "captions.bubble")
+          }
+        }
       }
     }
   }

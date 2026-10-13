@@ -66,7 +66,7 @@ final class PermissionScopedLoadViewModelTests: XCTestCase {
     await loadTask.value
 
     XCTAssertTrue(viewModel.availableSites.isEmpty)
-    XCTAssertTrue(viewModel.selectedSites.isEmpty)
+    XCTAssertNil(viewModel.selectedSites)
   }
 
   func testSiteFilterSessionRefreshCancellationKeepsSelectionWhenPermissionRemains()

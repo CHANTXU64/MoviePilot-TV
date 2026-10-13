@@ -87,8 +87,8 @@ final class ResourceSearchSession: ObservableObject {
     // 以字节预算限制整次收集，另留系统和 UI 余量；不按某个资源条数假定对象大小。
     self.capacityBytes = capacityBytes ?? min(64 * 1024 * 1024, Int(ProcessInfo.processInfo.physicalMemory / 32))
     // UI 作用域按账号和权限复用；同账号刷新令牌也会更换请求 epoch，需收尾旧搜索。
-    sessionSubscription = apiService.$session.map(\.epoch).removeDuplicates().sink { [weak self] epoch in
-      guard let self, epoch != self.session.epoch else { return }
+    sessionSubscription = apiService.sessionInvalidationPublisher(for: session).sink { [weak self] in
+      guard let self else { return }
       self.cancel()
       self.rulePending = false
       self.canReapplyRules = false

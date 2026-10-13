@@ -5,6 +5,7 @@ import SwiftUI
 enum SearchType: String, CaseIterable, Identifiable {
   case unified = "聚合搜索"
   case resource = "资源搜索"
+  case subtitle = "字幕搜索"
   var id: String { self.rawValue }
 }
 
@@ -381,6 +382,7 @@ class SearchViewModel: ObservableObject {
   }
 
   @Published private(set) var pagedSearch: ResourceSearchSession?
+  @Published private(set) var subtitleSearch: SubtitleSearchSession?
   @Published var resourceResults: [Context] = []
   @Published var appliedFilterRuleName: String?
   @Published var siteFilter: SiteFilterViewModel
@@ -450,6 +452,8 @@ class SearchViewModel: ObservableObject {
     guard !searchQuery.isEmpty else { return }
     pagedSearch?.cancel()
     pagedSearch = nil
+    subtitleSearch?.cancel()
+    subtitleSearch = nil
     let currentSearchType = searchType
     guard canAccess(currentSearchType) else { return }
     searchGeneration += 1
@@ -465,7 +469,7 @@ class SearchViewModel: ObservableObject {
     switch currentSearchType {
     case .resource:
       // 资源搜索：查询站点种子信息
-      let sitesStr = siteFilter.sitesString
+      let sitesStr = siteFilter.sitesString(for: .resource)
       if ResourceSearchQuery.supportsPaging(backendVersion: apiService.settings?.BACKEND_VERSION) {
         let search = ResourceSearchSession(
           query: ResourceSearchQuery(keyword: searchQuery, sites: sitesStr), apiService: apiService)
@@ -670,6 +674,22 @@ class SearchViewModel: ObservableObject {
         persons: personPag.items,
         shares: sharePag?.items ?? []
       )
+
+    case .subtitle:
+      let search = SubtitleSearchSession(
+        request: SubtitleSearchRequest(
+          kind: .title(keyword: searchQuery),
+          sites: siteFilter.sitesString(for: .subtitle),
+          displayTitle: searchQuery,
+          mediaInfo: nil
+        ),
+        apiService: apiService
+      )
+      subtitleSearch = search
+      isLoading = false
+      hasSearched = true
+      search.start()
+      return
     }
   }
 
@@ -724,7 +744,7 @@ class SearchViewModel: ObservableObject {
     switch searchType {
     case .unified:
       apiService.canAccess(.discovery)
-    case .resource:
+    case .resource, .subtitle:
       apiService.canAccess(.search)
     }
   }
@@ -733,14 +753,29 @@ class SearchViewModel: ObservableObject {
   func applyPagedSearchSites(
     from source: ImageNavigationSourceToken, in navigationCoordinator: ImageNavigationCoordinator
   ) async {
-    guard navigationCoordinator.isCurrent(source), searchType == .resource, let pagedSearch,
-      pagedSearch.query.sites != siteFilter.sitesString else { return }
-    await autoSearch(resourceKeyword: pagedSearch.query.keyword)
+    guard navigationCoordinator.isCurrent(source) else { return }
+    if searchType == .resource, let pagedSearch,
+      pagedSearch.query.sites != siteFilter.sitesString(for: .resource)
+    {
+      await autoSearch(resourceKeyword: pagedSearch.query.keyword)
+    } else if searchType == .subtitle, let subtitleSearch,
+      subtitleSearch.request.sites != siteFilter.sitesString(for: .subtitle),
+      let keyword = subtitleSearch.request.titleKeyword
+    {
+      await autoSearch(resourceKeyword: keyword)
+    }
   }
 
   func cancelPagedSearch() {
     pagedSearch?.cancel()
     pagedSearch = nil
+    hasSearched = false
+    isLoading = false
+  }
+
+  func cancelSubtitleSearch() {
+    subtitleSearch?.cancel()
+    subtitleSearch = nil
     hasSearched = false
     isLoading = false
   }

@@ -18,7 +18,7 @@ struct SearchView: View {
 
   // 焦点管理枚举：定义页面内可获得焦点的区域
   enum Field: Hashable {
-    case searchType(SearchType)  // 搜索类型切换按钮（聚合/资源）
+    case searchType(SearchType)
     case site(Int)  // 站点筛选按钮
     case mediaSource
   }
@@ -34,7 +34,7 @@ struct SearchView: View {
     case .searchType(let type):
       return type
     case .site:
-      return .resource
+      return viewModel.searchType == .subtitle ? .subtitle : .resource
     case .mediaSource:
       return .unified
     case nil:
@@ -43,7 +43,7 @@ struct SearchView: View {
   }
 
   private var shouldShowSiteFilter: Bool {
-    visibleFilterSearchType == .resource
+    visibleFilterSearchType == .resource || visibleFilterSearchType == .subtitle
   }
 
   private var shouldShowMediaSourceFilter: Bool {
@@ -92,7 +92,7 @@ struct SearchView: View {
         }
         .frame(width: 300, alignment: .trailing)
 
-        // A. 搜索类型按钮组 (聚合 / 资源)
+        // 搜索类型按钮组
         HStack(spacing: 20) {
           ForEach(availableSearchTypes.indices, id: \.self) { index in
             let type = availableSearchTypes[index]
@@ -116,7 +116,7 @@ struct SearchView: View {
         }
 
         ZStack(alignment: .leading) {
-          // B. 站点筛选按钮：仅在资源搜索模式且满足显示条件时可见
+          // 资源与字幕共用当前页面的站点选择。
           if shouldShowSiteFilter {
             Button(action: {
               siteSelectionSource = navigationCoordinator.sourceToken()
@@ -162,6 +162,13 @@ struct SearchView: View {
           PagedResourceResultsView(search: search, onCancel: { viewModel.cancelPagedSearch() }) {
             searchHeader
           }
+        } else if viewModel.searchType == .subtitle, let search = viewModel.subtitleSearch {
+          SubtitleResultsBody(
+            search: search, imageLifecycle: navigationCoordinator.rootLifecycle,
+            onCancel: { viewModel.cancelSubtitleSearch() }
+          ) {
+            searchHeader
+          }
         } else if viewModel.isLoading {
           VStack {
             searchHeader
@@ -195,6 +202,11 @@ struct SearchView: View {
                 Spacer()
               }
             }
+          case .subtitle:
+            VStack {
+              searchHeader
+              Spacer()
+            }
           case .unified:
             UnifiedSearchResult(
               viewModel: viewModel,
@@ -224,12 +236,7 @@ struct SearchView: View {
         siteSelectionSource = nil
         Task { await viewModel.applyPagedSearchSites(from: source, in: navigationCoordinator) }
       }) {
-        MultiSelectionSheet(
-          options: viewModel.siteFilter.availableSites,
-          id: \.id,
-          selected: $viewModel.siteFilter.selectedSites,
-          label: { $0.name }
-        )
+        SearchSiteSelectionSheet(viewModel: viewModel.siteFilter)
       }
       .sheet(isPresented: $showMediaSourceSelection) {
         MediaSourceSelectionSheet(selected: $viewModel.mediaSearchSource)
@@ -238,7 +245,9 @@ struct SearchView: View {
       .searchable(text: $viewModel.query, placement: .automatic, prompt: "电影、节目、演职人员等")
       .task {
         viewModel.normalizeSearchTypeForPermissions()
-        if viewModel.availableSearchTypes.contains(.resource) {
+        if viewModel.availableSearchTypes.contains(.resource)
+          || viewModel.availableSearchTypes.contains(.subtitle)
+        {
           await viewModel.siteFilter.loadSites()
         }
       }
@@ -254,10 +263,15 @@ struct SearchView: View {
     .onAppear { updateStackForeground() }
     .onChange(of: isSelected) { _, selected in
       updateStackForeground()
-      if !selected { viewModel.pagedSearch?.deactivate() }
-      else { viewModel.pagedSearch?.refreshRuleAvailability() }
+      if !selected {
+        viewModel.pagedSearch?.deactivate()
+      } else {
+        viewModel.pagedSearch?.refreshRuleAvailability()
+      }
     }
-    .onDisappear { viewModel.pagedSearch?.deactivate() }
+    .onDisappear {
+      viewModel.pagedSearch?.deactivate()
+    }
     .onChange(of: scenePhase) { _, _ in updateStackForeground() }
   }
 

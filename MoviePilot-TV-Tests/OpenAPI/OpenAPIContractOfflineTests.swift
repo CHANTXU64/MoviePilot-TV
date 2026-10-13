@@ -1502,7 +1502,7 @@ final class OpenAPIContractOfflineTests: XCTestCase {
 
   func testManualPagingContractRejectsMissingOrMistypedParameters() throws {
     let catalog = TVAPIContractCatalog.operations(backendVersion: "v3.1.2-1")
-      .filter { $0.pathTemplate.hasPrefix("/search/") && $0.pathTemplate.hasSuffix("/stream") }
+      .filter(isTorrentResourceStream)
     let valid = try pagingDocument()
     let validReport = OpenAPIContractChecker.check(live: valid, baseline: nil, catalog: catalog)
     XCTAssertTrue(validReport.failures.isEmpty, validReport.formattedDescription)
@@ -1550,15 +1550,34 @@ final class OpenAPIContractOfflineTests: XCTestCase {
   }
 }
 
+private func isTorrentResourceStream(_ operation: TVAPIOperation) -> Bool {
+  operation.pathTemplate == "/search/title/stream"
+    || operation.pathTemplate == "/search/media/{media_id}/stream"
+}
+
 @MainActor
 final class OpenAPIContractCatalogIntegrityTests: XCTestCase {
   func testManualPagingCatalogMatchesProductionVersionGate() {
     for version: String? in [nil, "unknown", "v3.0.8", "v3.1.2", "v3.1.2-1", "v3.1.4", "v3.1.5"] {
       let search = TVAPIContractCatalog.operations(backendVersion: version)
-        .filter { $0.pathTemplate.hasPrefix("/search/") && $0.pathTemplate.hasSuffix("/stream") }
+        .filter(isTorrentResourceStream)
       for operation in search {
         XCTAssertEqual(operation.parameters.contains { $0.name == "manual_paging" },
           ResourceSearchQuery.supportsPaging(backendVersion: version))
+      }
+    }
+  }
+
+  func testSubtitleStreamsNeverUseTorrentPagingParameters() {
+    for version: String? in [nil, "unknown", "v3.0.8", "v3.1.2-1", "v3.1.5"] {
+      let streams = TVAPIContractCatalog.operations(backendVersion: version).filter {
+        $0.pathTemplate == "/search/subtitle/title/stream"
+          || $0.pathTemplate == "/search/subtitle/media/{media_id}/stream"
+      }
+      XCTAssertEqual(streams.count, 2, version ?? "nil")
+      for operation in streams {
+        XCTAssertFalse(operation.parameters.contains { $0.name == "manual_paging" || $0.name == "source" })
+        XCTAssertFalse(operation.parameters.contains { $0.name == "page" || $0.name == "title" || $0.name == "year" })
       }
     }
   }

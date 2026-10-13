@@ -22,7 +22,7 @@
 | 问题 | 已有机制 |
 | --- | --- |
 | 单个 API 请求的会话归属 | `APIService` 请求 lease：发起时冻结会话，返回前校验 epoch，切会话时旧 runtime 整体取消 |
-| 跨多个 `await` 后发布页面状态 | `sessionSnapshot()` / `isSessionUnchanged(from:)`，在发布点校验（§1） |
+| 跨多个 `await` 后发布页面状态 | `sessionSnapshot()` / `isSessionUnchanged(from:)`，在发布点校验；冻结会话的失效通知复用 `sessionInvalidationPublisher(for:)`（§1） |
 | 同 key 缓存、在途请求合并、latest-wins | 见 §3 |
 | 分页加载、取消与重启 | `Paginator` |
 | 页面图片与导航栈生命周期 | `ImageNavigationCoordinator`、`PageImageLifecycle`、`PageManagedImage` |

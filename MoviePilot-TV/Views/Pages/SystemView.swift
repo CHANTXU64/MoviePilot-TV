@@ -232,6 +232,10 @@ struct SystemView: View {
                 if canConfigureSearch {
                   siteSelectionPage
                 }
+              case .subtitleSiteSelection:
+                if canConfigureSearch {
+                  subtitleSiteSelectionPage
+                }
               case .hardFilter:
                 if canConfigureCustomFilters {
                   filterPage(
@@ -394,6 +398,17 @@ struct SystemView: View {
                 .foregroundStyle(.secondary)
             }
           }
+        }
+      }
+
+      if canConfigureSearch {
+        section("字幕搜索") {
+          Button {
+            push(.subtitleSiteSelection)
+          } label: {
+            row("默认搜索站点", value: subtitleSiteButtonLabel, showsDisclosure: true)
+          }
+          .focused($focusedItem, equals: .subtitleSiteSelection)
         }
       }
 
@@ -744,13 +759,37 @@ struct SystemView: View {
   }
 
   private var siteSelectionPage: some View {
+    siteChoicePage(
+      selected: viewModel.defaultSearchSites,
+      selectAll: { viewModel.defaultSearchSites = [] },
+      toggle: toggleDefaultSearchSite,
+      allFocus: .allSites,
+      siteFocus: { .site($0) }
+    )
+  }
+
+  private var subtitleSiteSelectionPage: some View {
+    siteChoicePage(
+      selected: viewModel.defaultSubtitleSearchSites,
+      selectAll: { viewModel.defaultSubtitleSearchSites = [] },
+      toggle: toggleDefaultSubtitleSearchSite,
+      allFocus: .allSubtitleSites,
+      siteFocus: { .subtitleSite($0) }
+    )
+  }
+
+  private func siteChoicePage(
+    selected: Set<Int>,
+    selectAll: @escaping () -> Void,
+    toggle: @escaping (Int) -> Void,
+    allFocus: SystemSettingsFocus,
+    siteFocus: @escaping (Int) -> SystemSettingsFocus
+  ) -> some View {
     section(nil) {
-      Button {
-        viewModel.defaultSearchSites = []
-      } label: {
-        row("全部站点", value: viewModel.defaultSearchSites.isEmpty ? "已选择" : nil)
+      Button(action: selectAll) {
+        row("全部站点", value: selected.isEmpty ? "已选择" : nil)
       }
-      .focused($focusedItem, equals: .allSites)
+      .focused($focusedItem, equals: allFocus)
 
       if viewModel.isLoadingSites {
         row("站点状态", value: "正在加载")
@@ -769,11 +808,11 @@ struct SystemView: View {
 
       ForEach(viewModel.availableSites, id: \.id) { site in
         Button {
-          toggleDefaultSearchSite(site.id)
+          toggle(site.id)
         } label: {
-          row(site.name, value: viewModel.defaultSearchSites.contains(site.id) ? "已选择" : nil)
+          row(site.name, value: selected.contains(site.id) ? "已选择" : nil)
         }
-        .focused($focusedItem, equals: .site(site.id))
+        .focused($focusedItem, equals: siteFocus(site.id))
       }
     }
   }
@@ -948,6 +987,8 @@ struct SystemView: View {
       target = .mediaSourceSelection
     case .siteSelection:
       target = .siteSelection
+    case .subtitleSiteSelection:
+      target = .subtitleSiteSelection
     case .hardFilter:
       target = .hardFilter
     case .softFilter:
@@ -979,6 +1020,8 @@ struct SystemView: View {
       target = .defaultMediaSource
     case .siteSelection:
       target = .allSites
+    case .subtitleSiteSelection:
+      target = .allSubtitleSites
     case .hardFilter:
       target = .hardFilterNone
     case .softFilter:
@@ -1012,7 +1055,8 @@ struct SystemView: View {
     switch route.last {
     case .softFilter:
       return .softFilterNone
-    case .root, .connection, .changelog, .logs, .mediaSourceSelection, .siteSelection, .hardFilter,
+    case .root, .connection, .changelog, .logs, .mediaSourceSelection, .siteSelection,
+      .subtitleSiteSelection, .hardFilter,
       .recommendation, .topShelfSelection, .topShelfRecommendations, .topShelfExplore,
       .topShelfExploreSources, .topShelfExploreField, .none:
       return .hardFilterNone
@@ -1023,7 +1067,8 @@ struct SystemView: View {
     switch route.last {
     case .softFilter:
       return .softFilterRule(ruleId)
-    case .root, .connection, .changelog, .logs, .mediaSourceSelection, .siteSelection, .hardFilter,
+    case .root, .connection, .changelog, .logs, .mediaSourceSelection, .siteSelection,
+      .subtitleSiteSelection, .hardFilter,
       .recommendation, .topShelfSelection, .topShelfRecommendations, .topShelfExplore,
       .topShelfExploreSources, .topShelfExploreField, .none:
       return .hardFilterRule(ruleId)
@@ -1069,6 +1114,16 @@ struct SystemView: View {
     viewModel.defaultSearchSites = selectedSites
   }
 
+  private func toggleDefaultSubtitleSearchSite(_ siteId: Int) {
+    var selectedSites = viewModel.defaultSubtitleSearchSites
+    if selectedSites.contains(siteId) {
+      selectedSites.remove(siteId)
+    } else {
+      selectedSites.insert(siteId)
+    }
+    viewModel.defaultSubtitleSearchSites = selectedSites
+  }
+
   private func previewDescription(
     for page: SystemSettingsPage,
     focusedItem: SystemSettingsFocus?
@@ -1087,6 +1142,8 @@ struct SystemView: View {
         return "设置聚合搜索默认使用的媒体来源；未选择时沿用 MoviePilot 后端搜索设置。（只影响 TV 端）"
       case .siteSelection:
         return "设置资源搜索默认使用的站点。（只影响 TV 端）"
+      case .subtitleSiteSelection:
+        return "设置字幕搜索默认使用的站点。（只影响 TV 端）"
       case .hardFilter:
         return "在资源搜索结果中，隐藏不符合要求的资源。（只影响 TV 端）"
       case .softFilter:
@@ -1103,7 +1160,8 @@ struct SystemView: View {
         return "查看 MoviePilot TV 各版本的更新摘要、完整改动和后端兼容版本。"
       case .logs:
         return "查看本机保存的应用日志，可按级别和时间筛选，最长保留 7 天。"
-      case .allSites, .site, .defaultMediaSource, .mediaSource, .relogin, .logout,
+      case .allSites, .site, .allSubtitleSites, .subtitleSite, .defaultMediaSource, .mediaSource,
+        .relogin, .logout,
         .hardFilterNone, .softFilterNone, .hardFilterRule, .softFilterRule,
         .recommendationShelf, .topShelfDisabled, .topShelfSource, .changelogVersion,
         .topShelfModeRecommendation, .topShelfModeExplore, .topShelfExploreSource,
@@ -1140,6 +1198,8 @@ struct SystemView: View {
       return "设置聚合搜索默认使用的媒体来源。（只影响 TV 端）"
     case .siteSelection:
       return "设置资源搜索默认使用的站点。（只影响 TV 端）"
+    case .subtitleSiteSelection:
+      return "设置字幕搜索默认使用的站点。（只影响 TV 端）"
     case .hardFilter:
       return "在资源搜索结果中，隐藏不符合要求的资源。（只影响 TV 端）"
     case .softFilter:
@@ -1175,17 +1235,23 @@ struct SystemView: View {
   }
 
   private var siteButtonLabel: String {
-    if viewModel.defaultSearchSites.isEmpty {
+    siteChoiceLabel(viewModel.defaultSearchSites)
+  }
+
+  private var subtitleSiteButtonLabel: String {
+    siteChoiceLabel(viewModel.defaultSubtitleSearchSites)
+  }
+
+  private func siteChoiceLabel(_ sites: Set<Int>) -> String {
+    if sites.isEmpty {
       return "全部站点"
-    } else if viewModel.defaultSearchSites.count == 1 {
-      if let site = viewModel.availableSites.first(where: {
-        viewModel.defaultSearchSites.contains($0.id)
-      }) {
+    } else if sites.count == 1 {
+      if let site = viewModel.availableSites.first(where: { sites.contains($0.id) }) {
         return site.name
       }
       return "1 个站点"
     } else {
-      return "\(viewModel.defaultSearchSites.count) 个站点"
+      return "\(sites.count) 个站点"
     }
   }
 
@@ -1216,6 +1282,7 @@ enum SystemSettingsPage: Hashable {
   case logs
   case mediaSourceSelection
   case siteSelection
+  case subtitleSiteSelection
   case hardFilter
   case softFilter
   case recommendation
@@ -1241,6 +1308,9 @@ enum SystemSettingsFocus: Hashable {
   case siteSelection
   case allSites
   case site(Int)
+  case subtitleSiteSelection
+  case allSubtitleSites
+  case subtitleSite(Int)
   case appInfo
   case autoSearch
   case preloadTMDBDetails

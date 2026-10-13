@@ -1,43 +1,29 @@
 import Combine
 import Foundation
-import SwiftUI
 
 @MainActor
 class SiteFilterViewModel: ObservableObject {
   // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
   nonisolated deinit {}
 
-  @Published var selectedSites: Set<Int> {
-    didSet {
-      guard !isUpdatingSelectionInternally, selectedSites != oldValue else { return }
-      followsDefaultSites = false
-    }
+  enum Preference {
+    case resource
+    case subtitle
   }
+
+  /// nil 跟随各自的默认设置；空集合显式选择全部站点；非空集合由两种搜索共用。
+  @Published var selectedSites: Set<Int>? = nil
   @Published var availableSites: [Site] = []
-  var hasLoadedSites: Bool = false
-  /// 是否拿到了权威搜索站点域（/site/）。降级为订阅域（/site/rss）时不能用来裁剪已保存选择（F-210）。
-  var loadedSitesAuthoritative: Bool = false
+  @Published private(set) var isLoadingSites = false
+  @Published private(set) var siteLoadError: String?
+  var hasLoadedSites = false
+  /// 降级为订阅域（/site/rss）时不能用它裁剪搜索站点选择。
+  var loadedSitesAuthoritative = false
 
   private let apiService: APIService
-  private var lastAppliedDefaultSites: Set<Int>
-  private var followsDefaultSites = true
-  private var isUpdatingSelectionInternally = false
-  private var cancellables = Set<AnyCancellable>()
 
   init(apiService: APIService = .shared) {
     self.apiService = apiService
-    let defaultSites = SystemViewModel.currentDefaultSearchSites(apiService: apiService)
-    self.selectedSites = defaultSites
-    self.lastAppliedDefaultSites = defaultSites
-
-    NotificationCenter.default.publisher(for: .searchDefaultsDidChange)
-      .compactMap { $0.object as? SearchDefaultsChange }
-      .receive(on: DispatchQueue.main)
-      .sink { [weak self] change in
-        guard let self, change.profileKey == self.apiService.profileKey else { return }
-        self.applyDefaultSites(change.defaultSearchSites)
-      }
-      .store(in: &cancellables)
   }
 
   func loadSites() async {
@@ -45,87 +31,93 @@ class SiteFilterViewModel: ObservableObject {
       clearLoadedSites()
       return
     }
+    guard !isLoadingSites else { return }
+    isLoadingSites = true
+    siteLoadError = nil
+    defer { isLoadingSites = false }
     do {
       let (sites, authoritative) = try await apiService.fetchSearchableSites()
-      self.availableSites = sites
-      self.loadedSitesAuthoritative = authoritative
+      availableSites = sites
+      loadedSitesAuthoritative = authoritative
       hasLoadedSites = true
-      applyDefaultSites(SystemViewModel.currentDefaultSearchSites(apiService: apiService))
       normalizeSelectedSites()
     } catch is CancellationError {
       if !apiService.canAccess(.search) {
         clearLoadedSites()
       }
-      return
     } catch {
+      siteLoadError = "站点加载失败，请重试。"
       Logger.error("Failed to load sites: \(error)")
     }
   }
 
   var siteButtonLabel: String {
+    guard let selectedSites else { return "默认" }
     if selectedSites.isEmpty {
       return "全部站点"
     } else if selectedSites.count == 1 {
-      if let site = availableSites.first(where: { selectedSites.contains($0.id) }) {
-        return site.name
-      }
-      return "1 个站点"
+      return availableSites.first { selectedSites.contains($0.id) }?.name ?? "1 个站点"
     } else {
       return "\(selectedSites.count) 个站点"
     }
   }
 
-  /// 站点过滤参数的请求编码：有具体选择时发选中的 ID 串；
-  /// 选「全部站点」（空选择）时显式发送全部启用站点 ID，避免后端把空/nil 回退成
-  /// 「搜索站点范围」默认子集而漏搜（F-209）。只有权威站点列表可以安全展开；
-  /// 未加载、降级订阅域或启用站点为空时保留 nil 的后端默认语义。
-  var sitesString: String? {
-    if selectedSites.isEmpty {
-      guard hasLoadedSites, loadedSitesAuthoritative else { return nil }
-      let allActiveIds = availableSites
-        .filter { $0.is_active?.value == true }
-        .map(\.id)
-        .sorted()
-      guard !allActiveIds.isEmpty else { return nil }
-      return allActiveIds.map(String.init).joined(separator: ",")
+  var sitesString: String? { sitesString(for: .resource) }
+
+  /// 只在请求时解析默认值，不让焦点或搜索类型改变页面上的共享选择。
+  func sitesString(for preference: Preference) -> String? {
+    let sites: Set<Int>
+    if let selectedSites {
+      sites = selectedSites
+    } else {
+      let defaults = switch preference {
+      case .resource: SystemViewModel.currentDefaultSearchSites(apiService: apiService)
+      case .subtitle: SystemViewModel.currentDefaultSubtitleSearchSites(apiService: apiService)
+      }
+      sites = clipped(defaults)
     }
-    return selectedSites.sorted().map { String($0) }.joined(separator: ",")
+    return siteScope.query(for: sites)
+  }
+
+  private var siteScope: SearchSiteScope {
+    SearchSiteScope(sites: availableSites, authoritative: hasLoadedSites && loadedSitesAuthoritative)
   }
 
   func normalizeSelectedSites() {
-    guard hasLoadedSites, loadedSitesAuthoritative else { return }
-
-    let availableSiteIds = Set(availableSites.map(\.id))
-    lastAppliedDefaultSites.formIntersection(availableSiteIds)
-    let normalizedSelection = selectedSites.intersection(availableSiteIds)
-    let nextSelection = followsDefaultSites ? lastAppliedDefaultSites : normalizedSelection
-    updateSelectionInternally(nextSelection)
+    guard let selectedSites else { return }
+    let normalized = clipped(selectedSites)
+    if normalized != selectedSites {
+      self.selectedSites = normalized
+    }
   }
 
-  private func applyDefaultSites(_ sites: Set<Int>) {
-    let nextDefault =
-      hasLoadedSites && loadedSitesAuthoritative
-        ? sites.intersection(Set(availableSites.map(\.id)))
-        : sites
-    lastAppliedDefaultSites = nextDefault
-    if followsDefaultSites {
-      updateSelectionInternally(nextDefault)
-    }
+  private func clipped(_ sites: Set<Int>) -> Set<Int> {
+    siteScope.normalized(sites)
   }
 
   private func clearLoadedSites() {
     availableSites = []
-    lastAppliedDefaultSites = []
-    followsDefaultSites = true
-    updateSelectionInternally([])
+    selectedSites = nil
     hasLoadedSites = false
     loadedSitesAuthoritative = false
+    siteLoadError = nil
+  }
+}
+
+
+/// 页面选择与无筛选控件的快捷入口使用同一站点域规则。
+struct SearchSiteScope {
+  let sites: [Site]
+  let authoritative: Bool
+
+  func normalized(_ selection: Set<Int>) -> Set<Int> {
+    authoritative ? selection.intersection(Set(sites.map(\.id))) : selection
   }
 
-  private func updateSelectionInternally(_ sites: Set<Int>) {
-    guard selectedSites != sites else { return }
-    isUpdatingSelectionInternally = true
-    selectedSites = sites
-    isUpdatingSelectionInternally = false
+  func query(for selection: Set<Int>) -> String? {
+    if !selection.isEmpty { return selection.sorted().map(String.init).joined(separator: ",") }
+    guard authoritative else { return nil }
+    let activeIDs = sites.filter { $0.is_active?.value == true }.map(\.id).sorted()
+    return activeIDs.isEmpty ? nil : activeIDs.map(String.init).joined(separator: ",")
   }
 }

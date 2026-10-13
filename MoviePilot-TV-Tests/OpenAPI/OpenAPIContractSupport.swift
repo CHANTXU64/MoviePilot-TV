@@ -244,6 +244,11 @@ enum TVAPIContractSourceScanner {
       return ["/media/{media_id}"]
     case "/search/media":
       return ["/search/media/{media_id}"]
+    case "/search/subtitle/media":
+      return [
+        "/search/subtitle/media/{media_id}",
+        "/search/subtitle/media/{media_id}/stream",
+      ]
     case "/subscribe/media":
       return ["/subscribe/media/{media_id}"]
     case "/{param}/person/{param}":

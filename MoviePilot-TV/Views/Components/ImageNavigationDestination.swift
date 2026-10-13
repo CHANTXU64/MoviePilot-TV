@@ -52,6 +52,12 @@ struct ImageNavigationDestination: View {
           imageLifecycle: lifecycle
         )
 
+      case .subtitleSearch(let request):
+        SubtitleResultView(
+          request: request,
+          imageLifecycle: lifecycle
+        )
+
       case .subscribeSeason(let request):
         SubscribeSeasonView(
           mediaInfo: request.mediaInfo,

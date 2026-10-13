@@ -4,7 +4,20 @@ import Foundation
 struct SearchDefaultsChange {
   let profileKey: String
   let defaultSearchSites: Set<Int>
+  let defaultSubtitleSearchSites: Set<Int>
   let defaultMediaSearchSource: MediaSearchSource?
+
+  init(
+    profileKey: String,
+    defaultSearchSites: Set<Int>,
+    defaultSubtitleSearchSites: Set<Int> = [],
+    defaultMediaSearchSource: MediaSearchSource?
+  ) {
+    self.profileKey = profileKey
+    self.defaultSearchSites = defaultSearchSites
+    self.defaultSubtitleSearchSites = defaultSubtitleSearchSites
+    self.defaultMediaSearchSource = defaultMediaSearchSource
+  }
 
   @MainActor
   static func post(apiService: APIService) {
@@ -14,6 +27,9 @@ struct SearchDefaultsChange {
       object: SearchDefaultsChange(
         profileKey: profileKey,
         defaultSearchSites: SystemViewModel.currentDefaultSearchSites(apiService: apiService),
+        defaultSubtitleSearchSites: SystemViewModel.currentDefaultSubtitleSearchSites(
+          apiService: apiService
+        ),
         defaultMediaSearchSource: SystemViewModel.currentDefaultMediaSearchSource(
           apiService: apiService
         )
@@ -89,25 +105,16 @@ class SystemViewModel: ObservableObject {
   @Published private(set) var loadedSitesAuthoritative: Bool = false
   @Published private(set) var siteLoadError: String?
 
-  /// 默认搜索站点（绑定服务器 + 稳定用户 ID）
+  /// 资源搜索默认站点（绑定服务器 + 稳定用户 ID）
   var defaultSearchSites: Set<Int> {
-    get {
-      guard let key = defaultSearchSitesUserDefaultsKey else { return [] }
-      let array = UserDefaults.standard.array(forKey: key) as? [Int] ?? []
-      return Set(array)
-    }
-    set {
-      guard let key = defaultSearchSitesUserDefaultsKey else { return }
-      let normalizedSites = normalizeDefaultSearchSites(newValue)
-      let array = normalizedSites.sorted()
-      if array.isEmpty {
-        UserDefaults.standard.removeObject(forKey: key)
-      } else {
-        UserDefaults.standard.set(array, forKey: key)
-      }
-      objectWillChange.send()
-      SearchDefaultsChange.post(apiService: apiService)
-    }
+    get { storedSiteIDs(prefix: "defaultSearchSites") }
+    set { updateStoredSiteIDs(newValue, prefix: "defaultSearchSites") }
+  }
+
+  /// 字幕搜索默认站点。和资源搜索分开保存，避免资源站点把字幕搜索带空。
+  var defaultSubtitleSearchSites: Set<Int> {
+    get { storedSiteIDs(prefix: "defaultSubtitleSearchSites") }
+    set { updateStoredSiteIDs(newValue, prefix: "defaultSubtitleSearchSites") }
   }
 
   /// 聚合搜索默认来源（绑定服务器 + 稳定用户 ID）；nil 表示沿用后端设置。
@@ -207,10 +214,6 @@ class SystemViewModel: ObservableObject {
 
   private var softFilterRuleUserDefaultsKey: String? {
     Self.userDefaultsKey("selectedSoftFilterRuleId", apiService: apiService)
-  }
-
-  private var defaultSearchSitesUserDefaultsKey: String? {
-    Self.userDefaultsKey("defaultSearchSites", apiService: apiService)
   }
 
   private var defaultMediaSearchSourceUserDefaultsKey: String? {
@@ -345,6 +348,7 @@ class SystemViewModel: ObservableObject {
       loadedSitesAuthoritative = authoritative
       hasLoadedSites = true
       defaultSearchSites = defaultSearchSites
+      defaultSubtitleSearchSites = defaultSubtitleSearchSites
       Logger.info("[SystemViewModel] 加载到 \(availableSites.count) 个站点\(authoritative ? "" : "（订阅域）")")
     } catch is CancellationError {
       return
@@ -408,11 +412,14 @@ class SystemViewModel: ObservableObject {
       .flatMap { UserDefaults.standard.string(forKey: $0) }
   }
 
-  /// 获取当前用户+服务器绑定的默认搜索站点
+  /// 获取当前用户+服务器绑定的资源搜索默认站点
   static func currentDefaultSearchSites(apiService: APIService = .shared) -> Set<Int> {
-    guard let key = userDefaultsKey("defaultSearchSites", apiService: apiService) else { return [] }
-    let array = UserDefaults.standard.array(forKey: key) as? [Int] ?? []
-    return Set(array)
+    storedSiteIDs(prefix: "defaultSearchSites", apiService: apiService)
+  }
+
+  /// 获取当前用户+服务器绑定的字幕搜索默认站点
+  static func currentDefaultSubtitleSearchSites(apiService: APIService = .shared) -> Set<Int> {
+    storedSiteIDs(prefix: "defaultSubtitleSearchSites", apiService: apiService)
   }
 
   /// 获取当前用户+服务器绑定的聚合搜索默认来源；nil 表示沿用后端设置。
@@ -422,39 +429,43 @@ class SystemViewModel: ObservableObject {
       .flatMap(MediaSearchSource.init(rawValue:))
   }
 
-  /// 获取已按当前可用站点清理后的默认搜索站点。
+  /// 获取已按当前可用站点清理后的资源搜索默认站点。
   static func normalizedCurrentDefaultSearchSites(
     apiService: APIService = .shared
   ) async -> Set<Int> {
-    let storedSites = currentDefaultSearchSites(apiService: apiService)
-    guard !storedSites.isEmpty else { return [] }
-    guard apiService.canAccess(.search) else { return [] }
-    let snapshot = apiService.sessionSnapshot()
-
-    do {
-      let (availableSites, authoritative) = try await apiService.fetchSearchableSites()
-      guard apiService.isSessionUnchanged(from: snapshot) else { return [] }
-      // 降级为订阅域时不能裁剪已保存的合法站点选择（F-210 破坏性副作用）。
-      guard authoritative else { return storedSites }
-      let availableSiteIds = Set(availableSites.map(\.id))
-      let normalizedSites = storedSites.intersection(availableSiteIds)
-      if normalizedSites != storedSites {
-        persistDefaultSearchSites(normalizedSites, apiService: apiService)
-      }
-      return normalizedSites
-    } catch is CancellationError {
-      return []
-    } catch {
-      Logger.error("[SystemViewModel] 默认搜索站点归一化失败: \(error)")
-      return storedSites
-    }
+    await normalizedStoredSiteIDs(prefix: "defaultSearchSites", apiService: apiService)
   }
 
-  /// 获取已按当前可用站点清理后的默认搜索站点字符串。
+  /// 获取已按当前可用站点清理后的资源搜索默认站点字符串。
   static func normalizedDefaultSearchSitesString(
     apiService: APIService = .shared
   ) async -> String? {
-    siteIdsString(from: await normalizedCurrentDefaultSearchSites(apiService: apiService))
+    await resolvedDefaultSearchSitesString(prefix: "defaultSearchSites", apiService: apiService)
+  }
+
+  /// 获取已按当前可用站点清理后的字幕搜索默认站点字符串。
+  static func normalizedDefaultSubtitleSearchSitesString(
+    apiService: APIService = .shared
+  ) async -> String? {
+    await resolvedDefaultSearchSitesString(prefix: "defaultSubtitleSearchSites", apiService: apiService)
+  }
+
+  private static func resolvedDefaultSearchSitesString(prefix: String, apiService: APIService) async -> String? {
+    guard apiService.canAccess(.search) else { return nil }
+    let snapshot = apiService.sessionSnapshot()
+    let selection = storedSiteIDs(prefix: prefix, apiService: apiService)
+    do {
+      let (sites, authoritative) = try await apiService.fetchSearchableSites()
+      guard apiService.isSessionUnchanged(from: snapshot), !Task.isCancelled else { return nil }
+      let scope = SearchSiteScope(sites: sites, authoritative: authoritative)
+      return scope.query(for: scope.normalized(selection))
+    } catch is CancellationError {
+      return nil
+    } catch {
+      guard apiService.isSessionUnchanged(from: snapshot), !Task.isCancelled else { return nil }
+      Logger.error("[SystemViewModel] 加载默认搜索站点失败: \(error)")
+      return SearchSiteScope(sites: [], authoritative: false).query(for: selection)
+    }
   }
 
   /// 获取默认搜索站点的逗号分隔字符串
@@ -485,6 +496,16 @@ class SystemViewModel: ObservableObject {
     return UserDefaults.standard.bool(forKey: autoSearchNewSubscriptionsKey)
   }
 
+  private func storedSiteIDs(prefix: String) -> Set<Int> {
+    Self.storedSiteIDs(prefix: prefix, apiService: apiService)
+  }
+
+  private func updateStoredSiteIDs(_ sites: Set<Int>, prefix: String) {
+    guard Self.userDefaultsKey(prefix, apiService: apiService) != nil else { return }
+    Self.persistSiteIDs(normalizeDefaultSearchSites(sites), prefix: prefix, apiService: apiService)
+    objectWillChange.send()
+  }
+
   private func normalizeDefaultSearchSites(_ sites: Set<Int>) -> Set<Int> {
     guard hasLoadedSites, loadedSitesAuthoritative else { return sites }
 
@@ -492,11 +513,46 @@ class SystemViewModel: ObservableObject {
     return sites.intersection(availableSiteIds)
   }
 
-  private static func persistDefaultSearchSites(
+  private static func storedSiteIDs(prefix: String, apiService: APIService) -> Set<Int> {
+    guard let key = userDefaultsKey(prefix, apiService: apiService) else { return [] }
+    let array = UserDefaults.standard.array(forKey: key) as? [Int] ?? []
+    return Set(array)
+  }
+
+  /// 降级为订阅域时不能裁剪已保存的合法站点选择。
+  private static func normalizedStoredSiteIDs(
+    prefix: String,
+    apiService: APIService
+  ) async -> Set<Int> {
+    let storedSites = storedSiteIDs(prefix: prefix, apiService: apiService)
+    guard !storedSites.isEmpty else { return [] }
+    guard apiService.canAccess(.search) else { return [] }
+    let snapshot = apiService.sessionSnapshot()
+
+    do {
+      let (availableSites, authoritative) = try await apiService.fetchSearchableSites()
+      guard apiService.isSessionUnchanged(from: snapshot) else { return [] }
+      guard authoritative else { return storedSites }
+      let availableSiteIds = Set(availableSites.map(\.id))
+      let normalizedSites = storedSites.intersection(availableSiteIds)
+      if normalizedSites != storedSites {
+        persistSiteIDs(normalizedSites, prefix: prefix, apiService: apiService)
+      }
+      return normalizedSites
+    } catch is CancellationError {
+      return []
+    } catch {
+      Logger.error("[SystemViewModel] 默认搜索站点归一化失败: \(error)")
+      return storedSites
+    }
+  }
+
+  private static func persistSiteIDs(
     _ sites: Set<Int>,
-    apiService: APIService = .shared
+    prefix: String,
+    apiService: APIService
   ) {
-    guard let key = userDefaultsKey("defaultSearchSites", apiService: apiService) else { return }
+    guard let key = userDefaultsKey(prefix, apiService: apiService) else { return }
     let array = sites.sorted()
     if array.isEmpty {
       UserDefaults.standard.removeObject(forKey: key)

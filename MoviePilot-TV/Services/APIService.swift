@@ -722,6 +722,14 @@ class APIService: ObservableObject {
     session.epoch == snapshot.epoch
   }
 
+  /// 冻结会话的操作只消费一次失效通知；已过期的快照在订阅时立即失效。
+  func sessionInvalidationPublisher(for snapshot: APIServiceSessionSnapshot) -> AnyPublisher<Void, Never> {
+    $session
+      .first { $0.epoch != snapshot.epoch }
+      .map { _ in () }
+      .eraseToAnyPublisher()
+  }
+
   private struct InitialSession {
     let state: APIServiceSessionState
     let username: String?
@@ -1612,7 +1620,8 @@ class APIService: ObservableObject {
   private func endpointForMediaIdentity(
     pathPrefix: String,
     identity: MediaIdentity,
-    extraParams: [String: String?] = [:]
+    extraParams: [String: String?] = [:],
+    suffix: String = ""
   ) throws -> String {
     guard let encodedMediaId = encodeMediaIDPathSegment(identity.mediaId), !encodedMediaId.isEmpty
     else {
@@ -1620,19 +1629,21 @@ class APIService: ObservableObject {
     }
     var params = extraParams
     params["media_source"] = identity.source
-    return try buildEndpoint(path: "\(pathPrefix)/\(encodedMediaId)", params: params)
+    return try buildEndpoint(path: "\(pathPrefix)/\(encodedMediaId)\(suffix)", params: params)
   }
 
   private func endpointForMediaIdentity(
     pathPrefix: String,
     media: MediaInfo,
-    extraParams: [String: String?] = [:]
+    extraParams: [String: String?] = [:],
+    suffix: String = ""
   ) throws -> String {
     guard let identity = media.identity else { throw APIError.invalidURL }
     return try endpointForMediaIdentity(
       pathPrefix: pathPrefix,
       identity: identity,
-      extraParams: extraParams
+      extraParams: extraParams,
+      suffix: suffix
     )
   }
 
@@ -2785,6 +2796,100 @@ class APIService: ObservableObject {
     }
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([Context].self, from: data)
+  }
+
+  /// 季号或集号只有明确给出且非负时才进入查询。0 是有效季，必须编码成 "0"；缺失则省略。
+  static func subtitleSeasonEpisodeQuery(_ value: Int?) -> String? {
+    guard let value, value >= 0 else { return nil }
+    return String(value)
+  }
+
+  func subtitleSearchEndpoint(for request: SubtitleSearchRequest, streaming: Bool) throws -> String {
+    switch request.kind {
+    case .title(let keyword):
+      return try buildEndpoint(
+        path: streaming ? "/search/subtitle/title/stream" : "/search/subtitle/title",
+        params: [
+          "keyword": keyword,
+          "sites": request.sites,
+        ])
+    case .media(let source, let mediaId, let type, let season, let episode):
+      return try endpointForMediaIdentity(
+        pathPrefix: "/search/subtitle/media",
+        identity: MediaIdentity(source: source, mediaId: mediaId),
+        extraParams: [
+          "mtype": type,
+          "season": Self.subtitleSeasonEpisodeQuery(season),
+          "episode": Self.subtitleSeasonEpisodeQuery(episode),
+          "sites": request.sites,
+        ],
+        suffix: streaming ? "/stream" : ""
+      )
+    }
+  }
+
+  /// 字幕 SSE 不重连。心跳由收集器忽略；断流回退由会话决定，不在传输层重搜。
+  func openSubtitleSearchStream(
+    _ request: SubtitleSearchRequest
+  ) -> AsyncThrowingStream<SubtitleSearchEvent, Error> {
+    do {
+      let endpoint = try subtitleSearchEndpoint(for: request, streaming: true)
+      return streamSSE(endpoint: endpoint, as: SubtitleSearchEvent.self)
+    } catch {
+      return AsyncThrowingStream { $0.finish(throwing: error) }
+    }
+  }
+
+  func searchSubtitles(_ request: SubtitleSearchRequest) async throws -> [SubtitleInfo] {
+    let endpoint = try subtitleSearchEndpoint(for: request, streaming: false)
+    let data = try await makeRequest(endpoint: endpoint)
+    return try await decodeOrUnwrap([SubtitleInfo].self, from: data)
+  }
+
+  func fetchDownloadDirectories() async throws -> [DownloadDirectory] {
+    let data = try await makeRequest(endpoint: "/download/paths")
+    return try await decodeOrUnwrap([DownloadDirectory].self, from: data)
+  }
+
+  /// 服务端按签名链接自行下载字幕到媒体下载目录，不创建下载器任务。
+  /// 自动目录传 JSON null；空 body 或 success 不为 true 都不是成功。
+  func downloadSubtitle(
+    subtitle: SubtitleInfo,
+    mediaSource: String,
+    mediaId: String,
+    savePath: String?
+  ) async throws -> [String] {
+    let payload = SubtitleDownloadRequest(
+      subtitle: subtitle,
+      mediaSource: mediaSource,
+      mediaId: mediaId,
+      savePath: savePath
+    )
+    let body = try JSONEncoder().encode(payload)
+    let data = try await makeRequest(endpoint: "/download/subtitle", method: "POST", body: body)
+    return try Self.decodeSubtitleDownloadResponse(from: data)
+  }
+
+  private static func decodeSubtitleDownloadResponse(from data: Data) throws -> [String] {
+    struct Response: Decodable {
+      let success: Bool?
+      let message: String?
+      let message_i18n: String?
+      let data: Payload?
+      struct Payload: Decodable {
+        let files: [String]?
+      }
+    }
+    guard !data.isEmpty else {
+      throw APIError.serverMessage("字幕下载失败")
+    }
+    let response = try JSONDecoder().decode(Response.self, from: data)
+    guard response.success == true, let files = response.data?.files else {
+      throw APIError.serverMessage(
+        trimmedNonEmpty([response.message_i18n, response.message]) ?? "字幕下载失败"
+      )
+    }
+    return files
   }
 
   // MARK: - 详情与订阅

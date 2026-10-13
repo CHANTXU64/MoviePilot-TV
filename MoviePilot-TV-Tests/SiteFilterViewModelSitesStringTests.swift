@@ -134,6 +134,75 @@ final class SiteFilterViewModelSitesStringTests: XCTestCase {
     XCTAssertEqual(viewModel.selectedSites, [5])
   }
 
+  func testDefaultLabelResolvesEachSearchPreferenceWithoutChangingSelection() throws {
+    let (viewModel, settings) = try makeDefaultedViewModel()
+    settings.defaultSearchSites = []
+    settings.defaultSubtitleSearchSites = [2]
+
+    XCTAssertEqual(viewModel.sitesString(for: .resource), "1,2")
+    XCTAssertEqual(viewModel.sitesString(for: .subtitle), "2")
+    XCTAssertNil(viewModel.selectedSites)
+    XCTAssertEqual(viewModel.siteButtonLabel, "默认")
+
+    settings.defaultSearchSites = [1]
+    settings.defaultSubtitleSearchSites = []
+    XCTAssertEqual(viewModel.sitesString(for: .resource), "1")
+    XCTAssertEqual(viewModel.sitesString(for: .subtitle), "1,2")
+    XCTAssertNil(viewModel.selectedSites)
+    XCTAssertEqual(viewModel.siteButtonLabel, "默认")
+  }
+
+  func testExplicitSelectionIsSharedAndRestoringDefaultUsesLatestSettings() throws {
+    let (viewModel, settings) = try makeDefaultedViewModel()
+    settings.defaultSearchSites = []
+    settings.defaultSubtitleSearchSites = [2]
+
+    let choices: [(Set<Int>, String, String)] = [
+      ([1], "站点1", "1"),
+      ([1, 2], "2 个站点", "1,2"),
+      ([], "全部站点", "1,2"),
+    ]
+    for (sites, label, query) in choices {
+      viewModel.selectedSites = sites
+      XCTAssertEqual(viewModel.siteButtonLabel, label)
+      XCTAssertEqual(viewModel.sitesString(for: .resource), query)
+      XCTAssertEqual(viewModel.sitesString(for: .subtitle), query)
+      XCTAssertEqual(viewModel.selectedSites, sites)
+    }
+    XCTAssertEqual(settings.defaultSearchSites, [])
+    XCTAssertEqual(settings.defaultSubtitleSearchSites, [2])
+
+    settings.defaultSearchSites = [1]
+    settings.defaultSubtitleSearchSites = [2]
+    XCTAssertEqual(viewModel.siteButtonLabel, "全部站点")
+    XCTAssertEqual(viewModel.sitesString(for: .resource), "1,2")
+    XCTAssertEqual(viewModel.sitesString(for: .subtitle), "1,2")
+
+    viewModel.selectedSites = nil
+    XCTAssertEqual(viewModel.siteButtonLabel, "默认")
+    XCTAssertEqual(viewModel.sitesString(for: .resource), "1")
+    XCTAssertEqual(viewModel.sitesString(for: .subtitle), "2")
+  }
+
+  func testDefaultSitesOnlyClipAgainstAuthoritativeDomainWithoutEditingSettings() throws {
+    let (viewModel, settings) = try makeDefaultedViewModel()
+    settings.defaultSearchSites = [1, 9]
+    settings.defaultSubtitleSearchSites = [2, 9]
+    viewModel.loadedSitesAuthoritative = false
+    viewModel.normalizeSelectedSites()
+    XCTAssertEqual(viewModel.sitesString(for: .resource), "1,9")
+    XCTAssertEqual(viewModel.sitesString(for: .subtitle), "2,9")
+
+    viewModel.loadedSitesAuthoritative = true
+    viewModel.normalizeSelectedSites()
+    XCTAssertEqual(viewModel.sitesString(for: .resource), "1")
+    XCTAssertEqual(viewModel.sitesString(for: .subtitle), "2")
+    XCTAssertNil(viewModel.selectedSites)
+    XCTAssertEqual(viewModel.siteButtonLabel, "默认")
+    XCTAssertEqual(settings.defaultSearchSites, [1, 9])
+    XCTAssertEqual(settings.defaultSubtitleSearchSites, [2, 9])
+  }
+
   func testNotLoadedDoesNotClipSelection() {
     let viewModel = makeViewModel(available: [
       makeSite(id: 1, isActive: true),
@@ -144,5 +213,30 @@ final class SiteFilterViewModelSitesStringTests: XCTestCase {
     viewModel.selectedSites = [9]
     viewModel.normalizeSelectedSites()
     XCTAssertEqual(viewModel.selectedSites, [9])
+  }
+
+  private func makeDefaultedViewModel() throws -> (SiteFilterViewModel, SystemViewModel) {
+    let api = APIService.isolatedTestingInstance()
+    let user = Token(
+      access_token: "site-defaults", token_type: "bearer", super_user: FlexibleBool(true),
+      permissions: nil, user_id: 330, user_name: "site-defaults", avatar: nil
+    )
+    api.replaceSessionForTesting(
+      baseURL: "http://site-filter-defaults.local", token: user.access_token, currentUser: user
+    )
+    let profile = try XCTUnwrap(api.profileKey)
+    for prefix in ["defaultSearchSites", "defaultSubtitleSearchSites"] {
+      let key = "\(prefix)_\(profile)"
+      let previous = UserDefaults.standard.array(forKey: key) as? [Int]
+      addTeardownBlock {
+        if let previous { UserDefaults.standard.set(previous, forKey: key) }
+        else { UserDefaults.standard.removeObject(forKey: key) }
+      }
+    }
+    let viewModel = SiteFilterViewModel(apiService: api)
+    viewModel.availableSites = [makeSite(id: 1, isActive: true), makeSite(id: 2, isActive: true)]
+    viewModel.hasLoadedSites = true
+    viewModel.loadedSitesAuthoritative = true
+    return (viewModel, SystemViewModel(apiService: api))
   }
 }

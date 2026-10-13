@@ -1,4 +1,3 @@
-import Kingfisher
 import SwiftUI
 
 struct ResourceResultView: View {
@@ -65,21 +64,7 @@ struct ResourceResultView: View {
       }
     }
     .background {
-      PageManagedImage(
-        url: mediaInfo?.imageURLs.backdrop,
-        processor: BlurImageProcessor(blurRadius: 60)
-          |> ResizingImageProcessor(
-            referenceSize: UIScreen.main.bounds.size,
-            mode: .aspectFill
-          ),
-        isEnabled: true,
-        role: .activePage,
-        participatesInPageLifecycle: true,
-        skipsMemoryCache: true,
-        fadeDuration: 0
-      )
-      .opacity(0.3)
-      .ignoresSafeArea()
+      SearchResultBackdrop(url: mediaInfo?.imageURLs.backdrop)
     }
     .task {
       await viewModel.search()

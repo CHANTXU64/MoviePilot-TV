@@ -415,7 +415,7 @@ final class SearchViewModelTests: XCTestCase {
     XCTAssertEqual(forbiddenResourceRequestCount, 0)
 
     configureSearchPermissionSession(service)
-    XCTAssertEqual(viewModel.availableSearchTypes, [.resource])
+    XCTAssertEqual(viewModel.availableSearchTypes, [.resource, .subtitle])
     viewModel.normalizeSearchTypeForPermissions()
     XCTAssertEqual(viewModel.searchType, .resource)
 
@@ -576,14 +576,16 @@ final class SearchViewModelTests: XCTestCase {
     let viewModel = SearchViewModel(apiService: service)
     let settings = SystemViewModel(apiService: service)
 
-    XCTAssertEqual(viewModel.siteFilter.selectedSites, [1])
+    XCTAssertNil(viewModel.siteFilter.selectedSites)
+    XCTAssertEqual(viewModel.siteFilter.siteButtonLabel, "默认")
+    XCTAssertEqual(viewModel.siteFilter.sitesString(for: .resource), "1")
     XCTAssertEqual(viewModel.mediaSearchSource, .douban)
 
     settings.defaultSearchSites = [2]
     settings.defaultMediaSearchSource = .anilist
     await drainSearchDefaultsNotifications()
 
-    XCTAssertEqual(viewModel.siteFilter.selectedSites, [2])
+    XCTAssertEqual(viewModel.siteFilter.sitesString(for: .resource), "2")
     XCTAssertEqual(viewModel.mediaSearchSource, .anilist)
 
     NotificationCenter.default.post(
@@ -596,7 +598,7 @@ final class SearchViewModelTests: XCTestCase {
     )
     await drainSearchDefaultsNotifications()
 
-    XCTAssertEqual(viewModel.siteFilter.selectedSites, [2])
+    XCTAssertEqual(viewModel.siteFilter.sitesString(for: .resource), "2")
     XCTAssertEqual(viewModel.mediaSearchSource, .anilist)
 
     viewModel.siteFilter.selectedSites = [9]
