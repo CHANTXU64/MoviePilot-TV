@@ -1,5 +1,6 @@
 """Exercise the test entry point with command substitutes; no user's simulator is touched."""
 
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -71,11 +72,15 @@ if tool == "xcrun":
 elif tool == "xcodebuild":
     current_runtime = json.loads(state.read_text())["runtime"]
     selected_failure = os.environ.get("TVOS_RUNNER_TEST_FAIL_RUNTIME")
-    if selected_failure and current_runtime.endswith(selected_failure.replace(".", "-")) and "test" in args:
+    if selected_failure and current_runtime.endswith(selected_failure.replace(".", "-")) and "test-without-building" in args:
         sys.exit(65)
     if mode == "build_failure" and "build" in args:
         sys.exit(65)
-    if "test" in args:
+    if mode == "test_build_failure" and "build-for-testing" in args:
+        sys.exit(65)
+    if mode == "resolve_failure" and "-resolvePackageDependencies" in args:
+        sys.exit(65)
+    if "test-without-building" in args:
         if mode == "test_failure":
             sys.exit(65)
         if mode == "interrupt" and not (root / "test-started").exists():
@@ -94,7 +99,7 @@ class TestTVOSRunnerTests(unittest.TestCase):
             path.write_text(COMMAND)
             path.chmod(0o755)
         self.environment = dict(os.environ, TVOS_RUNNER_TEST_DIR=str(self.root),
-                                PATH=str(self.root) + os.pathsep + os.environ["PATH"])
+                                PATH=str(self.root) + os.pathsep + os.environ["PATH"], TMPDIR=str(self.root))
         # A user's persistent state must survive every run, including failure and cancellation.
         self.sentinel = self.root / "daily-simulator-data"
         self.sentinel.write_text("saved session and password")
@@ -103,10 +108,11 @@ class TestTVOSRunnerTests(unittest.TestCase):
         path = self.root / "calls.jsonl"
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
-    def run_script(self, mode="success", *arguments, matrix=False):
+    def run_script(self, mode="success", *arguments, matrix=False, full=True):
         self.environment["TVOS_RUNNER_TEST_MODE"] = mode
         runtime_args = [] if matrix or "--runtime" in arguments else ["--runtime", "27.0"]
-        return subprocess.run([sys.executable, str(SCRIPT), *runtime_args, *arguments], env=self.environment,
+        full_args = ["--full"] if full and "--only-testing" not in arguments else []
+        return subprocess.run([sys.executable, str(SCRIPT), *runtime_args, *full_args, *arguments], env=self.environment,
                               capture_output=True, text=True, timeout=20)
 
     def assert_owned_cleanup(self):
@@ -116,13 +122,72 @@ class TestTVOSRunnerTests(unittest.TestCase):
                                      ["simctl", "delete", OWNED_DEVICE]])
         self.assertEqual(self.sentinel.read_text(), "saved session and password")
 
+    def test_default_only_builds_latest_runtime_in_separate_incremental_directory(self):
+        result = self.run_script(full=False, matrix=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        builds = [call["args"] for call in self.calls() if call["tool"] == "xcodebuild"]
+        self.assertEqual(len(builds), 1)
+        self.assertEqual(builds[0][0], "build")
+        self.assertIn("Debug", builds[0])
+        self.assertNotIn("clean", builds[0])
+        self.assertNotIn("test-without-building", builds[0])
+        derived = Path(builds[0][builds[0].index("-derivedDataPath") + 1])
+        self.assertIn("MoviePilot-TV-tests", derived.parts)
+        self.assertTrue(derived.is_relative_to(self.root.resolve()))
+        creates = [call["args"] for call in self.calls() if call["args"][:2] == ["simctl", "create"]]
+        self.assertEqual(len(creates), 1)
+        self.assertTrue(creates[0][4].endswith("tvOS-28-0"))
+        self.assert_owned_cleanup()
+
+    def test_targeted_tests_use_one_runtime_and_do_not_build_debug(self):
+        result = self.run_script("success", "--only-testing", "MoviePilot-TV-Tests/TestIsolationTests", matrix=True, full=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        builds = [call["args"] for call in self.calls() if call["tool"] == "xcodebuild"]
+        self.assertEqual([args[0] for args in builds], ["build-for-testing", "test-without-building"])
+        self.assertIn("-only-testing:MoviePilot-TV-Tests/TestIsolationTests", builds[1])
+        self.assertTrue(all("Testing" in args for args in builds))
+        self.assert_owned_cleanup()
+
+    def test_all_build_stages_fail_fast_before_later_versions_or_tests(self):
+        for mode in ("resolve_failure", "build_failure", "test_build_failure"):
+            with self.subTest(mode=mode):
+                (self.root / "calls.jsonl").unlink(missing_ok=True)
+                result = self.run_script(mode, matrix=True)
+                self.assertEqual(result.returncode, 65, result.stderr)
+                self.assertEqual(sum(call["args"][:2] == ["simctl", "create"] for call in self.calls()), 1)
+                self.assertFalse(any("test-without-building" in call["args"] for call in self.calls()))
+                self.assert_owned_cleanup()
+
+    def test_custom_derived_data_is_shared_by_stages_and_lock_is_released(self):
+        derived = self.root / "build-cache"
+        for mode in ("build_failure", "success"):
+            result = self.run_script(mode, "--derived-data-path", str(derived))
+            self.assertEqual(result.returncode, 65 if mode == "build_failure" else 0, result.stderr)
+        builds = [call["args"] for call in self.calls() if call["tool"] == "xcodebuild"]
+        self.assertTrue(all(args[args.index("-derivedDataPath") + 1] == str(derived.resolve()) for args in builds))
+
+    def test_busy_build_directory_exits_before_creating_simulator(self):
+        derived = self.root / "build-cache"
+        with (self.root / "build-cache.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = self.run_script("success", "--derived-data-path", str(derived), full=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("构建目录正在使用", result.stderr)
+        self.assertEqual(self.calls(), [])
+
+    def test_skip_build_cannot_implicitly_start_full_tests(self):
+        result = self.run_script("success", "--skip-build", full=False)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(self.calls(), [])
+
     def test_success_builds_debug_and_tests_isolated_configuration(self):
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
         builds = [call["args"] for call in self.calls() if call["tool"] == "xcodebuild"]
         self.assertIn("-resolvePackageDependencies", builds[0])
         self.assertIn("Debug", builds[1])
-        test = builds[2]
+        self.assertIn("build-for-testing", builds[2])
+        test = builds[3]
         self.assertEqual(test[test.index("-configuration") + 1], "Testing")
         self.assertEqual(test[test.index("-destination") + 1],
                          f"platform=tvOS Simulator,id={OWNED_DEVICE}")
@@ -142,8 +207,8 @@ class TestTVOSRunnerTests(unittest.TestCase):
         self.assertEqual([args[4] for args in creates],
                          ["com.apple.CoreSimulator.SimRuntime.tvOS-" + v.replace(".", "-") for v in versions])
         builds = [call["args"] for call in calls if call["tool"] == "xcodebuild"]
-        self.assertEqual(len(builds), 9)
-        tests = [args for args in builds if "test" in args]
+        self.assertEqual(len(builds), 12)
+        tests = [args for args in builds if "test-without-building" in args]
         destinations = [args[args.index("-destination") + 1] for args in tests]
         self.assertEqual(len(set(destinations)), 3)
         for index, (version, test) in enumerate(zip(versions, tests)):
@@ -155,9 +220,9 @@ class TestTVOSRunnerTests(unittest.TestCase):
             self.assertEqual(test[test.index("-parallel-testing-enabled") + 1], "NO")
             self.assertEqual(test[test.index("-maximum-concurrent-test-simulator-destinations") + 1], "1")
             self.assertEqual(len([arg for arg in test if arg.startswith("-skip-testing:")]), 3)
-            self.assertIn("-resolvePackageDependencies", builds[index * 3])
-            self.assertIn("Debug", builds[index * 3 + 1])
-            self.assertEqual(builds[index * 3 + 1][builds[index * 3 + 1].index("-destination") + 1], destinations[index])
+            self.assertIn("-resolvePackageDependencies", builds[index * 4])
+            self.assertIn("Debug", builds[index * 4 + 1])
+            self.assertEqual(builds[index * 4 + 1][builds[index * 4 + 1].index("-destination") + 1], destinations[index])
         mutations = [call["args"] for call in calls if call["args"][:2] in (
             ["simctl", "shutdown"], ["simctl", "delete"], ["simctl", "erase"])]
         self.assertEqual(mutations, [action for destination in destinations for action in (
@@ -178,7 +243,7 @@ class TestTVOSRunnerTests(unittest.TestCase):
         creates = [call["args"] for call in self.calls() if call["args"][:2] == ["simctl", "create"]]
         self.assertEqual(len(creates), 1)
         self.assertTrue(creates[0][4].endswith("tvOS-27-0"))
-        test = next(call["args"] for call in self.calls() if call["tool"] == "xcodebuild")
+        test = next(call["args"] for call in self.calls() if "test-without-building" in call["args"])
         self.assertEqual(test[test.index("-resultBundlePath") + 1], result_path)
         self.assert_owned_cleanup()
 
@@ -204,12 +269,11 @@ class TestTVOSRunnerTests(unittest.TestCase):
 
     def test_matrix_continues_after_offline_failure_and_returns_failure(self):
         self.environment["TVOS_RUNNER_TEST_FAIL_RUNTIME"] = "26.5"
-        result = self.run_script("success", "--skip-build", "--only-testing", "MoviePilot-TV-Tests/TestIsolationTests", matrix=True)
+        result = self.run_script("success", "--skip-build", matrix=True)
         self.assertEqual(result.returncode, 65)
         self.assertIn("未通过的 tvOS 版本：26.5", result.stderr)
-        tests = [call["args"] for call in self.calls() if call["tool"] == "xcodebuild"]
+        tests = [call["args"] for call in self.calls() if "test-without-building" in call["args"]]
         self.assertEqual(len(tests), 3)
-        self.assertTrue(all("-only-testing:MoviePilot-TV-Tests/TestIsolationTests" in args for args in tests))
         self.assertEqual(sum(call["args"][:2] == ["simctl", "delete"] for call in self.calls()), 3)
 
     def test_backend_matrix_stops_after_first_failure(self):
@@ -235,7 +299,7 @@ class TestTVOSRunnerTests(unittest.TestCase):
 
     def assert_matrix_cancellation(self, signum):
         self.environment["TVOS_RUNNER_TEST_MODE"] = "interrupt"
-        process = subprocess.Popen([sys.executable, str(SCRIPT), "--skip-build"],
+        process = subprocess.Popen([sys.executable, str(SCRIPT), "--full", "--skip-build"],
                                    env=self.environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
             deadline = time.monotonic() + 10
@@ -247,7 +311,7 @@ class TestTVOSRunnerTests(unittest.TestCase):
             creates = [call["args"] for call in self.calls() if call["args"][:2] == ["simctl", "create"]]
             self.assertEqual(process.returncode, 130, f"{creates}\n{errors}")
             self.assertEqual([args[4] for args in creates], ["com.apple.CoreSimulator.SimRuntime.tvOS-18-5"])
-            self.assertEqual(sum(call["tool"] == "xcodebuild" for call in self.calls()), 1)
+            self.assertEqual(sum(call["tool"] == "xcodebuild" for call in self.calls()), 2)
             self.assert_owned_cleanup()
             if self.environment.get("TVOS_RUNNER_TEST_DELETE_FAILURE"):
                 self.assertIn("无法清理本次测试模拟器", errors)
@@ -277,7 +341,7 @@ class TestTVOSRunnerTests(unittest.TestCase):
     def test_build_failure_cleans_only_owned_device_without_starting_tests(self):
         result = self.run_script("build_failure")
         self.assertEqual(result.returncode, 65)
-        self.assertFalse(any("test" in call["args"] for call in self.calls()))
+        self.assertFalse(any("test-without-building" in call["args"] for call in self.calls()))
         self.assert_owned_cleanup()
 
     def test_compatibility_overrides_reach_xctest_without_rewriting_env_file(self):
@@ -286,7 +350,7 @@ class TestTVOSRunnerTests(unittest.TestCase):
         result = self.run_script("success", "--skip-build", "--include-backend-tests",
                                  "--only-testing", "MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests")
         self.assertEqual(result.returncode, 0, result.stderr)
-        test = next(call for call in self.calls() if call["tool"] == "xcodebuild" and "test" in call["args"])
+        test = next(call for call in self.calls() if call["tool"] == "xcodebuild" and "test-without-building" in call["args"])
         self.assertEqual(test["test_environment"]["TEST_RUNNER_MOVIEPILOT_COMPAT_ENV_FILE"],
                          "/tmp/config with spaces.env")
         self.assertEqual(test["test_environment"]["TEST_RUNNER_MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS"], "false")
@@ -299,7 +363,7 @@ class TestTVOSRunnerTests(unittest.TestCase):
 
     def test_cancellation_stops_child_and_cleans_only_owned_device(self):
         self.environment["TVOS_RUNNER_TEST_MODE"] = "interrupt"
-        process = subprocess.Popen([sys.executable, str(SCRIPT), "--runtime", "27.0", "--skip-build"],
+        process = subprocess.Popen([sys.executable, str(SCRIPT), "--full", "--runtime", "27.0", "--skip-build"],
                                    env=self.environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    text=True)
         try:
@@ -325,14 +389,14 @@ class TestTVOSRunnerTests(unittest.TestCase):
         result = self.run_script("success", "--skip-build", "--include-backend-tests",
                                  "--only-testing", "MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests")
         self.assertEqual(result.returncode, 0, result.stderr)
-        test = next(call["args"] for call in self.calls() if call["tool"] == "xcodebuild")
+        test = next(call["args"] for call in self.calls() if "test-without-building" in call["args"])
         self.assertFalse(any(arg.startswith("-skip-testing:") for arg in test))
         self.assertIn("-only-testing:MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests", test)
         self.assert_owned_cleanup()
 
     def test_cancellation_during_create_recovers_only_owned_device(self):
         self.environment["TVOS_RUNNER_TEST_MODE"]="interrupt_during_create"
-        process=subprocess.Popen([sys.executable,str(SCRIPT),"--runtime","27.0","--skip-build"],env=self.environment,
+        process=subprocess.Popen([sys.executable,str(SCRIPT),"--full","--runtime","27.0","--skip-build"],env=self.environment,
                                  stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         try:
             deadline=time.monotonic()+10

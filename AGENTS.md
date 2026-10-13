@@ -98,24 +98,36 @@ xcodebuild -list -project "MoviePilot-TV.xcodeproj"
 xcrun simctl list devices tvOS available
 ```
 
-标准本机验证入口（依赖解析、Debug 完整构建、Testing 测试）：
+日常修改先让用户能构建、运行和查看效果；只做必要的单版本构建或相关用例验证。**只有用户明确说提交时，才运行完整三版本构建和全套测试**。普通修改、修 Bug、Review、看效果不构成全量测试授权；不要以提前验收为由反复跑全套。构建失败先修构建，不继续后续版本或测试。
+
+日常入口（单版本增量 Debug 构建，不运行测试）：
 
 ```bash
 python3 scripts/test-tvos.py
 ```
 
-本地默认依次在 **tvOS 18.5、26.5、最新已安装的 27.x** 上运行完整验证，包括定向测试。开始前必须确认三个 runtime 都可用，缺少任何一个就报错，不允许悄悄只跑最新版本。普通测试中某个版本失败后继续检查其余版本，最终返回失败并列出未通过版本；取消立即停止。每个版本单独创建临时 Apple TV 模拟器，按本次返回的 UDID 执行构建和测试；成功、失败或取消后只关闭并删除自己创建的设备。不要用日常模拟器的名称或 UDID 执行测试，也不要使用 `erase`、`shutdown all` 或 `delete all`。
+日常默认选择最新可用 tvOS runtime，也可用 `--runtime <版本>` 指定当前调试版本。需要定向回归时使用 `--only-testing <用例或套件>`，只构建 Testing 宿主并运行指定用例。
 
-CI 使用 GitHub 提供的 `xcode-27` runner，并固定执行 `python3 scripts/test-tvos.py --runtime 27.0`；该镜像提供 Xcode 27 与 tvOS 27.0 runtime，见[官方镜像说明](https://github.com/actions/runner-images/issues/14404)。本地常规验收必须跑默认三版本矩阵；只有明确诊断某个系统问题时才用 `--runtime <版本>` 单独指定，单版本通过不能替代三版本验收。实际使用的型号、版本和 UDID 会输出在日志中。矩阵模式下，`--result-bundle-path /tmp/tests.xcresult` 会分别生成 `tests-tvos-18.5.xcresult`、`tests-tvos-26.5.xcresult` 和对应 27.x 的结果包。
+用户明确要求提交后的完整验收入口：
+
+```bash
+python3 scripts/test-tvos.py --full
+```
+
+`--full` 依次在 **tvOS 18.5、26.5、最新已安装的 27.x** 上运行完整验证。开始前必须确认三个 runtime 都可用，缺少任何一个就报错，不允许悄悄只跑最新版本。依赖解析、Debug 构建或 Testing 宿主构建失败立即停止整个流程；只有测试执行阶段的普通离线用例失败才继续其余版本，最终汇总失败。取消立即停止。每个版本单独创建临时 Apple TV 模拟器，按本次返回的 UDID 执行构建和测试；成功、失败或取消后只关闭并删除自己创建的设备。不要用日常模拟器的名称或 UDID 执行测试，也不要使用 `erase`、`shutdown all` 或 `delete all`。
+
+CI 使用 GitHub 提供的 `xcode-27` runner，并固定执行 `python3 scripts/test-tvos.py --full --runtime 27.0`；该镜像提供 Xcode 27 与 tvOS 27.0 runtime，见[官方镜像说明](https://github.com/actions/runner-images/issues/14404)。提交前完整验收使用三版本矩阵；日常构建与定向测试使用单版本，不要求提前完成提交验收。实际使用的型号、版本和 UDID 会输出在日志中。矩阵模式下，`--result-bundle-path /tmp/tests.xcresult` 会分别生成 `tests-tvos-18.5.xcresult`、`tests-tvos-26.5.xcresult` 和对应 27.x 的结果包。
 
 脚本保留 `CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-` 和串行测试参数，默认跳过三个真实后端套件。定向验证示例：
 
 ```bash
-python3 scripts/test-tvos.py --skip-build \
+python3 scripts/test-tvos.py --runtime 27.0 \
   --only-testing MoviePilot-TV-Tests/TestIsolationTests
 ```
 
-`--skip-build` 仅跳过依赖解析和 Debug clean build，不能将它单独当作完整验证。可用 `--derived-data-path <目录>` 和 `--result-bundle-path <新的.xcresult路径>` 保存构建与测试产物。
+测试分为 `build-for-testing` 和 `test-without-building`，宿主构建失败后不启动测试。`--skip-build` 仅在测试模式使用；全量模式下跳过依赖解析和 Debug clean build，不能将它单独当作完整验证。
+
+脚本始终传入专用 `-derivedDataPath`，默认在系统临时目录的 `MoviePilot-TV-tests/<仓库标识>/DerivedData` 复用增量缓存，与日常 Xcode 的 DerivedData 隔离。同一专用目录已有脚本运行时立即退出，不并发争抢 build.db。手动调用 xcodebuild 也必须指定独立构建目录，不得占用用户正在使用的目录；不要清理、删除用户日常 DerivedData。可用 `--derived-data-path <专用目录>` 指定其他隔离目录，或用 `--result-bundle-path <新的.xcresult路径>` 保存测试结果。
 
 Xcode 的 Test action 使用独立 `Testing` 配置，安装 `org.chantxu.MoviePilot-TV.Testing` 和对应的 Top Shelf 扩展，使用独立 App Group、钥匙串访问组与偏好/缓存容器。Run action 继续使用正常 Debug App。共享版本和默认身份由 `Configuration/Base.xcconfig` 定义，Testing 继承 Debug 并覆盖独立身份；深链 scheme 由主 App 与扩展 Info.plist 的 `TopShelfURLScheme` 读取，不在代码中写死。测试目标拒绝在普通 Debug/Release 配置编译，以免误用 `xcodebuild test -configuration Debug` 覆盖日常 App。命令行测试统一使用上面的入口；需要手动诊断时，必须使用自己新建的测试设备、`-configuration Testing` 和串行参数。
 
@@ -159,8 +171,8 @@ PR CI 只执行 Simulator 构建、测试和脚本回归，不编译或打包发
 
 在真实开发环境中：
 
-1. 只要修改了代码、配置、文档或工作流，提交前都必须运行完整验证流程。
-2. 对 Swift / tvOS 代码修改，提交前必须至少运行上方【本项目标准验证命令】中的依赖解析、Simulator 完整构建和测试。
+1. 日常修改不自动运行全量；只有用户明确要求提交后，才进入提交前完整验证。用户查看效果期间优先保障日常 Xcode 可用，不并发占用其构建目录。
+2. 用户明确要求提交 Swift / tvOS 修改时，运行上方 `python3 scripts/test-tvos.py --full` 完成依赖解析、Simulator 完整构建和测试；提交前的单版本定向验证不能替代这一步。
 3. 对文档或 Prompt 修改，也应运行仓库可用的轻量检查；如果没有适用检查，必须说明“文档-only 变更，无可运行测试”。
 4. 测试失败时禁止提交，除非用户明确要求保留失败状态用于审查，并且提交说明中必须写清楚失败命令与失败原因。
 5. Commit 前必须在最终回复或提交说明中列出实际运行过的命令和结果。

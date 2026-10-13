@@ -17,7 +17,7 @@ python3 scripts/test-tvos.py --include-backend-tests \
   --only-testing MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests
 ```
 
-本地入口默认依次使用 tvOS 18.5、26.5 和最新已安装的 27.x，每个版本解析依赖、完整构建并在独立临时模拟器上串行测试，结束后只清理该设备。三个 runtime 必须全部可用，不能缺省跳过；只有明确诊断单一系统时才用 `--runtime <版本>` 限定。测试宿主使用独立 `Testing` App 身份和共享组，不覆盖日常 App 的登录、偏好或首页缓存。已有构建可加 `--skip-build` 做定向测试；完整验证不能仅使用这个参数。普通 `python3 scripts/test-tvos.py` 显式跳过全部真实后端套件，即使工作区已有 `.env.compatibility` 也不会自动访问。CI 固定运行 tvOS 27.0。
+日常定向验证默认使用最新可用 tvOS runtime，可用 `--runtime <版本>` 指定；只构建 Testing 宿主并执行 `--only-testing` 指定套件。只有用户明确要求提交时才运行 `python3 scripts/test-tvos.py --full` 做 18.5、26.5 和最新已安装 27.x 的完整验收。每次使用独立临时模拟器和专用 DerivedData，不占用日常 Xcode 的构建数据库，结束后只清理本次设备。依赖或宿主构建失败立即停止，不能继续跑其他版本。Testing App 使用独立身份和共享组，不覆盖日常 App 的登录、偏好或首页缓存。普通 `python3 scripts/test-tvos.py` 只做单版本 Debug 构建；本地离线测试显式跳过全部真实后端套件，即使工作区已有 `.env.compatibility` 也不会自动访问。CI 固定执行 `--full --runtime 27.0`。
 
 显式包含真实后端测试时，同一配置会在所选各系统上分别执行；副作用套件启用后也会重复相应动作，仍须遵守独立开关和目标范围。后端测试在某个系统失败会立即停止，不继续向其余系统发起真实请求；普通离线矩阵则继续汇总各系统结果。矩阵模式指定 `--result-bundle-path` 时，脚本自动在文件名中加入 tvOS 版本，避免结果包互相覆盖。
 
