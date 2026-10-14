@@ -15,8 +15,9 @@ class AddDownloadViewModel: ObservableObject {
   @Published var loadErrorMessage: String?
   @Published var errorMessage: String?
 
-  // 高级选项
-  @Published var mediaSource: MediaSearchSource
+  // 高级选项。媒体类型只决定能否手填 ID，不进入请求；来源与 ID 优先沿用媒体自带的完整身份。
+  @Published var mediaType = ""
+  @Published private(set) var mediaSource: MediaSearchSource
   @Published var mediaId: String = ""
 
   let torrent: TorrentInfo
@@ -34,10 +35,11 @@ class AddDownloadViewModel: ObservableObject {
     self.media = media
     self.onSuccess = onSuccess
     self.apiService = apiService
-    self.mediaSource =
-      MediaSearchSource(
-        rawValue: apiService.settings?.RECOGNIZE_SOURCE ?? ""
-      ) ?? .themoviedb
+    let ownSource = media?.source.flatMap(MediaSearchSource.init(rawValue:))
+    self.mediaSource = ownSource
+      ?? MediaSearchSource(rawValue: apiService.settings?.RECOGNIZE_SOURCE ?? "") ?? .themoviedb
+    self.mediaId = ownSource == nil ? "" : MediaIdentifier.normalizedString(media?.media_id) ?? ""
+    self.mediaType = media.flatMap(ManualMediaSelection.typeName(for:)) ?? ""
   }
 
   // 目标目录的计算属性（URI 格式）
@@ -61,7 +63,22 @@ class AddDownloadViewModel: ObservableObject {
   }
 
   var isMediaIdValid: Bool {
-    MediaIdentifier.isValidManualMediaId(mediaId)
+    mediaSource.isValidManualId(mediaId)
+  }
+
+  /// 切换来源时清空上一来源的 ID，避免同一编号被当作新来源提交。
+  func selectMediaSource(_ source: MediaSearchSource) {
+    guard mediaSource != source else { return }
+    mediaSource = source
+    mediaId = ""
+  }
+
+  /// 按名称查询选中后，同步媒体类型，保持类型与 ID 一致。
+  func selectManualMedia(_ media: MediaInfo, mediaId: String) {
+    self.mediaId = mediaId
+    if let typeName = ManualMediaSelection.typeName(for: media) {
+      mediaType = typeName
+    }
   }
 
   func loadData() async {
@@ -107,7 +124,7 @@ class AddDownloadViewModel: ObservableObject {
     guard !isSubmitting else { return }
     errorMessage = nil
     guard isMediaIdValid else {
-      errorMessage = "媒体 ID 只能包含数字。"
+      errorMessage = "媒体 ID 格式无效。"
       return
     }
     isSubmitting = true

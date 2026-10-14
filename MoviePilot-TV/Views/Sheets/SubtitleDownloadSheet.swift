@@ -3,6 +3,7 @@ import SwiftUI
 struct SubtitleDownloadSheet: View {
   @Environment(\.dismiss) private var dismiss
   @ObservedObject var viewModel: SubtitleDownloadViewModel
+  @StateObject private var sources = MediaSourceOptionsModel()
   @State private var showAdvanced: Bool
   @FocusState private var isAdvancedButtonFocused: Bool
 
@@ -95,12 +96,13 @@ struct SubtitleDownloadSheet: View {
               SheetPicker(
                 title: "媒体来源",
                 selection: Binding(get: { viewModel.mediaSource }, set: viewModel.selectSource),
-                options: MediaSearchSource.allowed(for: .media).map {
-                  PickerOption(title: $0.title, value: $0)
+                options: sources.options(including: viewModel.mediaSource).map {
+                  PickerOption(title: $0.title, value: $0.source)
                 }
               )
               ManualMediaIdField(
-                source: viewModel.mediaSource, mediaId: $viewModel.mediaId, placeholder: ""
+                source: viewModel.mediaSource, sourceTitle: sources.title(for: viewModel.mediaSource),
+                mediaId: $viewModel.mediaId, placeholder: ""
               ) { mediaId, _ in
                 viewModel.mediaId = mediaId
               }
@@ -132,6 +134,7 @@ struct SubtitleDownloadSheet: View {
       }
     }
     .task { await viewModel.loadDirectories() }
+    .task { await sources.load() }
     .onChange(of: viewModel.state) { _, state in
       if state == .completed { close() }
     }

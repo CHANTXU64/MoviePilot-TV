@@ -732,11 +732,11 @@ final class SubtitleSearchTests: XCTestCase {
     XCTAssertFalse(model.canSubmit)
   }
 
-  func testManualMediaIdMustBeValidAndIsSubmittedTrimmedWithoutTypeRestriction() async throws {
+  func testManualMediaIdIsRequiredAndSubmittedTrimmedWithoutTypeRestriction() async throws {
     let api = service()
     let model = downloadModel(api: api)
     XCTAssertFalse(model.canSubmit)
-    for invalid in ["  ", "0", "abc", "-5"] {
+    for invalid in ["  ", "0"] {
       model.mediaId = invalid
       XCTAssertFalse(model.canSubmit, invalid)
     }
@@ -1060,6 +1060,101 @@ final class SubtitleSearchTests: XCTestCase {
     XCTAssertEqual(model.state, .completed)
   }
 
+  func testMediaSourceIdentifiersAndManualIdsFollowSourceFormat() {
+    XCTAssertEqual(MediaSearchSource(rawValue: " IMDb "), .imdb)
+    XCTAssertEqual(MediaSearchSource(rawValue: "plugin.source-1")?.rawValue, "plugin.source-1")
+    XCTAssertNil(MediaSearchSource(rawValue: ""))
+    XCTAssertNil(MediaSearchSource(rawValue: "1abc"))
+    XCTAssertNil(MediaSearchSource(rawValue: "has space"))
+
+    // 与 Web 一致：除 IMDb 外不限制格式，以后新增非数字 ID 的来源也无需改动。
+    let plugin = MediaSearchSource(rawValue: "myplugin")!
+    for source in [MediaSearchSource.themoviedb, .douban, .tvdb, plugin] {
+      XCTAssertTrue(source.isValidManualId(" 550 "))
+      XCTAssertTrue(source.isValidManualId("abc-1"))
+      XCTAssertFalse(source.isValidManualId(" 0 "))
+    }
+    XCTAssertTrue(MediaSearchSource.imdb.isValidManualId("tt0133093"))
+    XCTAssertFalse(MediaSearchSource.imdb.isValidManualId("0133093"))
+    for source in [MediaSearchSource.themoviedb, .imdb, plugin] {
+      XCTAssertTrue(source.isValidManualId("  "), "空值表示未填写，由调用方决定是否必填")
+    }
+  }
+
+  func testMediaSourceCatalogKeepsBackendOrderVideoSourcesAndNames() throws {
+    let catalog = try JSONDecoder().decode([MediaSourceInfo].self, from: Data(#"""
+      [{"name":"TheMovieDb","media_source":"themoviedb","media_types":["电影","电视剧"]},
+       {"name":"IMDb","media_source":"imdb","media_types":["电影","电视剧"]},
+       {"name":"MusicBrainz","media_source":"musicbrainz","media_types":["音乐"]},
+       {"name":"重复","media_source":"IMDB","media_types":["电影"]},
+       {"name":"非法","media_source":"9bad","media_types":["电影"]},
+       {"name":"","media_source":"tvdb","media_types":["tv"]},
+       {"name":"插件","media_source":"myplugin","media_types":["电视剧"]}]
+      """#.utf8))
+    let options = MediaSourceInfo.videoSources(from: catalog)
+    XCTAssertEqual(options.map(\.source.rawValue), ["themoviedb", "imdb", "tvdb", "myplugin"])
+    XCTAssertEqual(options.map(\.title), ["TheMovieDb", "IMDb", "TVDB", "插件"])
+  }
+
+  func testMediaSourceOptionsLoadBackendCatalogAndKeepBuiltinsOnFailure() async throws {
+    let api = service()
+    SubtitleSearchURLProtocol.mediaSourceBody = Data(
+      #"[{"name":"TheMovieDb","media_source":"themoviedb","media_types":["电影","电视剧"]},{"name":"IMDb","media_source":"imdb","media_types":["电影","电视剧"]},{"name":"TVDB","media_source":"tvdb","media_types":["电影","电视剧"]}]"#.utf8
+    )
+    let model = MediaSourceOptionsModel(apiService: api)
+    XCTAssertEqual(model.options, MediaSourceOption.builtinMedia)
+    await model.load()
+    XCTAssertEqual(model.options.map(\.source), [.themoviedb, .imdb, .tvdb])
+    XCTAssertEqual(model.title(for: .imdb), "IMDb")
+    let plugin = MediaSearchSource(rawValue: "disabledplugin")!
+    XCTAssertEqual(model.options(including: plugin).map(\.source), [.themoviedb, .imdb, .tvdb, plugin])
+    XCTAssertEqual(model.options(including: .imdb).count, 3)
+    XCTAssertEqual(SubtitleSearchURLProtocol.requests.filter { $0.path == "/api/v1/media/source" }.count, 1)
+
+    SubtitleSearchURLProtocol.mediaSourceBody = Data(#"{"detail":"Not Found"}"#.utf8)
+    let fallback = MediaSourceOptionsModel(apiService: service())
+    await fallback.load()
+    XCTAssertEqual(fallback.options, MediaSourceOption.builtinMedia)
+  }
+
+  func testSubtitleDownloadKeepsRegisteredSourceAndValidatesItsIdFormat() async throws {
+    let api = service()
+    let request = SubtitleSearchRequest(
+      kind: .media(source: "imdb", mediaId: "tt0133093", type: "电影", season: nil, episode: nil),
+      sites: nil, displayTitle: "黑客帝国", mediaInfo: nil
+    )
+    let model = SubtitleDownloadViewModel(subtitle: SubtitleInfo(title: "字幕"), request: request, apiService: api)
+    XCTAssertEqual(model.mediaSource, .imdb)
+    XCTAssertEqual(model.mediaId, "tt0133093")
+    XCTAssertTrue(model.canSubmit)
+    model.mediaId = "133093"
+    XCTAssertFalse(model.canSubmit)
+    model.mediaId = "tt0133093"
+    await model.submit()?.value
+    let payload = try jsonObject(XCTUnwrap(SubtitleSearchURLProtocol.requests.last?.body))
+    XCTAssertEqual(payload["media_source"] as? String, "imdb")
+    XCTAssertEqual(payload["media_id"] as? String, "tt0133093")
+    XCTAssertEqual(model.state, .completed)
+
+    let invalidSource = SubtitleDownloadViewModel(
+      subtitle: SubtitleInfo(title: "字幕"),
+      request: SubtitleSearchRequest(
+        kind: .media(source: "坏来源", mediaId: "42", type: "电影", season: nil, episode: nil),
+        sites: nil, displayTitle: nil, mediaInfo: nil),
+      apiService: api
+    )
+    XCTAssertEqual(invalidSource.mediaSource, .themoviedb)
+    XCTAssertEqual(invalidSource.mediaId, "", "无法识别的来源不能把 ID 挪到默认来源下提交")
+  }
+
+  func testManualSelectionForRegisteredSourcesOnlyAcceptsItsOwnResults() {
+    let imdbItem = MediaInfo(imdb_id: "tt0133093", source: "imdb", media_id: "tt0133093", title: "黑客帝国", type: "电影")
+    let tmdbItem = MediaInfo(tmdb_id: 603, source: "themoviedb", media_id: "603", title: "黑客帝国", type: "电影")
+    XCTAssertEqual(ManualMediaSelection.mediaId(for: imdbItem, source: .imdb), "tt0133093")
+    XCTAssertNil(ManualMediaSelection.mediaId(for: tmdbItem, source: .imdb))
+    XCTAssertEqual(ManualMediaSelection.mediaId(for: tmdbItem, source: .themoviedb), "603")
+  }
+
   private func downloadModel(api: APIService) -> SubtitleDownloadViewModel {
     SubtitleDownloadViewModel(
       subtitle: SubtitleInfo(title: "字幕", enclosure: "https://sub.example/a#mp_sig=signature"),
@@ -1201,6 +1296,7 @@ nonisolated private final class SubtitleSearchURLProtocol: URLProtocol, @uncheck
   nonisolated(unsafe) private static var heldDownloads: [SubtitleSearchURLProtocol] = []
   nonisolated(unsafe) private static var directoryData = Data("[]".utf8)
   nonisolated(unsafe) private static var recognitionData = Data("[]".utf8)
+  nonisolated(unsafe) private static var mediaSourceData = Data("[]".utf8)
   private static let defaultSites = Data(#"[{"id":1,"name":"站点1","is_active":true},{"id":2,"name":"站点2","is_active":true},{"id":3,"name":"停用","is_active":false}]"#.utf8)
   nonisolated(unsafe) private static var siteData = defaultSites
 
@@ -1224,6 +1320,10 @@ nonisolated private final class SubtitleSearchURLProtocol: URLProtocol, @uncheck
   static var recognitionBody: Data {
     get { lock.withLock { recognitionData } }
     set { lock.withLock { recognitionData = newValue } }
+  }
+  static var mediaSourceBody: Data {
+    get { lock.withLock { mediaSourceData } }
+    set { lock.withLock { mediaSourceData = newValue } }
   }
   static func releaseHeldDownloads() {
     let pending = lock.withLock { let value = heldDownloads; heldDownloads = []; return value }
@@ -1289,6 +1389,7 @@ nonisolated private final class SubtitleSearchURLProtocol: URLProtocol, @uncheck
       heldDownloads = []
       directoryData = Data("[]".utf8)
       recognitionData = Data("[]".utf8)
+      mediaSourceData = Data("[]".utf8)
       siteData = defaultSites
     }
   }
@@ -1327,6 +1428,7 @@ nonisolated private final class SubtitleSearchURLProtocol: URLProtocol, @uncheck
       if path.hasSuffix("/site") || path.contains("/site/") { return .sites }
       if path.contains("/media/search") { return Self.holdingRecognition ? .hold : .recognition }
       if path.hasSuffix("/media/recognize") { return .unrecognized }
+      if path.hasSuffix("/media/source") { return .mediaSources }
       if Self.holdingFallback && path.contains("/search/subtitle/") {
         Self.held.append(self)
         return .hold
@@ -1353,6 +1455,8 @@ nonisolated private final class SubtitleSearchURLProtocol: URLProtocol, @uncheck
       respond(status: 200, data: Data(#"{"media_info":null,"meta_info":null}"#.utf8), failAfter: false, contentType: "application/json")
     case .recognition:
       respond(status: 200, data: Self.recognitionBody, failAfter: false, contentType: "application/json")
+    case .mediaSources:
+      respond(status: 200, data: Self.mediaSourceBody, failAfter: false, contentType: "application/json")
     case .fallback:
       respond(status: 200, data: Self.fallbackBody, failAfter: false, contentType: "application/json")
     }
@@ -1362,7 +1466,9 @@ nonisolated private final class SubtitleSearchURLProtocol: URLProtocol, @uncheck
     deliveryLock.withLock { stopped = true }
   }
 
-  private enum Plan { case stream, download, fallback, hold, directories, sites, recognition, unrecognized }
+  private enum Plan {
+    case stream, download, fallback, hold, directories, sites, recognition, unrecognized, mediaSources
+  }
 
   private func respond(status: Int, data: Data, failAfter: Bool, contentType: String) {
     deliveryLock.lock()

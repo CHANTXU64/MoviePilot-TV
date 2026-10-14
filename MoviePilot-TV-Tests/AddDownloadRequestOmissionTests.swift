@@ -152,6 +152,43 @@ final class AddDownloadRequestOmissionTests: XCTestCase {
     XCTAssertEqual(count, 3)
   }
 
+  func testMediaIdentityPrefillsSourceIdAndTypeAndSourceSwitchClearsId() async throws {
+    let service = makeService()
+    let media = MediaInfo(source: "imdb", media_id: " tt0133093 ", title: "黑客帝国", type: "电影")
+    let viewModel = AddDownloadViewModel(torrent: Self.torrentFixture(), media: media, apiService: service)
+    XCTAssertEqual(viewModel.mediaSource, .imdb)
+    XCTAssertEqual(viewModel.mediaId, "tt0133093")
+    XCTAssertEqual(viewModel.mediaType, "电影")
+
+    await viewModel.addDownload()
+    let prefilled = try await Self.topLevelBody(at: 0)
+    XCTAssertEqual(prefilled["media_source"] as? String, "imdb")
+    XCTAssertEqual(prefilled["media_id"] as? String, "tt0133093")
+
+    viewModel.selectMediaSource(.tvdb)
+    XCTAssertEqual(viewModel.mediaId, "")
+    await viewModel.addDownload()
+    let switched = try await Self.topLevelBody(at: 1)
+    XCTAssertNil(switched["media_source"])
+    XCTAssertNil(switched["media_id"])
+
+    viewModel.mediaType = ""
+    viewModel.selectManualMedia(MediaInfo(tvdb_id: 81189, title: "绝命毒师", type: "电视剧"), mediaId: "81189")
+    XCTAssertEqual(viewModel.mediaType, "电视剧")
+    XCTAssertEqual(viewModel.mediaId, "81189")
+
+    let plain = AddDownloadViewModel(
+      torrent: Self.torrentFixture(), media: MediaInfo(tmdb_id: 603, title: "无来源", type: "未知"), apiService: service)
+    XCTAssertEqual(plain.mediaSource, .themoviedb)
+    XCTAssertEqual(plain.mediaId, "")
+    XCTAssertEqual(plain.mediaType, "")
+  }
+
+  private static func topLevelBody(at index: Int) async throws -> [String: Any] {
+    let text = await AddDownloadRequestStub.shared.bodyText(at: index)
+    return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+  }
+
   private static func torrentFixture() -> TorrentInfo {
     TorrentInfo(
       site: 1,

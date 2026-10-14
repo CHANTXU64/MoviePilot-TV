@@ -2093,6 +2093,15 @@ class APIService: ObservableObject {
     return nil
   }
 
+  /// 宿主内置与启用插件注册的媒体来源目录，与 Web `useMediaSources` 同源。
+  func fetchMediaSources() async throws -> [MediaSourceInfo] {
+    try await sessionCachedValue(sessionScope.mediaSourceCatalogCache, key: "sources") { [weak self] in
+      guard let self else { throw CancellationError() }
+      let data = try await self.makeRequest(endpoint: "/media/source")
+      return try await self.decodeOrUnwrap([MediaSourceInfo].self, from: data)
+    }
+  }
+
   /// 手动写入表单的媒体 ID 选择器，与 Web MediaIdSelector 请求保持一致。
   func searchManualMedia(
     title: String,

@@ -147,14 +147,6 @@ nonisolated enum MediaIdentifier {
     return trimmed.isEmpty ? nil : trimmed
   }
 
-  static func isValidManualMediaId(_ mediaId: String?) -> Bool {
-    guard let mediaId = normalizedString(mediaId) else { return true }
-    guard mediaId.unicodeScalars.allSatisfy({ (48...57).contains(Int($0.value)) }) else {
-      return false
-    }
-    return (Int(mediaId) ?? 0) > 0
-  }
-
   static func normalizedMediaIdentifier(_ mediaId: String?) -> String? {
     guard let mediaId = normalizedString(mediaId), !mediaId.hasSuffix(":") else { return nil }
 

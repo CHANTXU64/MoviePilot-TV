@@ -3,13 +3,17 @@ import SwiftUI
 
 enum ManualMediaSelection {
   static func mediaId(for media: MediaInfo, source: MediaSearchSource) -> String? {
-    let nativeId: String? =
-      switch source {
-      case .themoviedb: MediaIdentifier.validNumericIdentifier(media.tmdb_id).map(String.init)
-      case .douban: media.douban_id
-      case .bangumi: MediaIdentifier.validNumericIdentifier(media.bangumi_id).map(String.init)
-      case .anilist: MediaIdentifier.validNumericIdentifier(media.anilist_id).map(String.init)
-      }
+    let nativeId: String?
+    switch source {
+    case .themoviedb: nativeId = MediaIdentifier.validNumericIdentifier(media.tmdb_id).map(String.init)
+    case .douban: nativeId = media.douban_id
+    case .bangumi: nativeId = MediaIdentifier.validNumericIdentifier(media.bangumi_id).map(String.init)
+    case .anilist: nativeId = MediaIdentifier.validNumericIdentifier(media.anilist_id).map(String.init)
+    default:
+      // 其余来源与 Web MediaIdSelector 一致：只认该来源返回的条目及其 media_id。
+      guard media.source.flatMap(MediaSearchSource.init(rawValue:)) == source else { return nil }
+      nativeId = nil
+    }
     for candidate in [nativeId, media.media_id] {
       let normalized = candidate?.trimmingCharacters(in: .whitespacesAndNewlines)
       if normalized?.isEmpty == false {
@@ -198,6 +202,7 @@ struct ManualMediaSearchSheet: View {
 /// 手动填写所选来源的媒体 ID；放大镜按标题查询后回填。整理、添加下载与字幕下载共用。
 struct ManualMediaIdField: View {
   let source: MediaSearchSource
+  var sourceTitle: String? = nil
   @Binding var mediaId: String
   var placeholder = "自动判断"
   var onSelect: (String, MediaInfo) -> Void
@@ -207,10 +212,9 @@ struct ManualMediaIdField: View {
     Group {
       HStack(spacing: 20) {
         SheetTextField(
-          title: "\(source.title) ID",
+          title: "\(sourceTitle ?? source.title) ID",
           placeholder: placeholder,
-          text: $mediaId,
-          keyboardType: .numberPad
+          text: $mediaId
         )
 
         Button {
@@ -220,8 +224,8 @@ struct ManualMediaIdField: View {
         }
         .accessibilityLabel("搜索媒体")
       }
-      if !MediaIdentifier.isValidManualMediaId(mediaId) {
-        Text("媒体 ID 只能包含数字")
+      if !source.isValidManualId(mediaId) {
+        Text("媒体 ID 格式无效")
           .foregroundStyle(.red)
       }
     }

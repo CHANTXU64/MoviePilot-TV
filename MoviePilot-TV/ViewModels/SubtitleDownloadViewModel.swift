@@ -21,8 +21,6 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
   @Published private(set) var directoryError: String?
   @Published private(set) var isLoadingDirectories = false
 
-  /// 提交的媒体来源。预填身份沿用搜索时的来源，切换来源后改用所选来源。
-  private var submissionSource: String
   private let onDownloaded: (String?) -> Void
   private let apiService: APIService
   private let session: APIServiceSessionSnapshot
@@ -38,12 +36,12 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
     self.onDownloaded = onDownloaded
     self.apiService = apiService
     self.session = session ?? apiService.sessionSnapshot()
+    // 预填身份的来源与 ID 成对使用；来源无法识别时不把 ID 挪到别的来源下。
     let identity = request.initialMediaIdentity
-    let source = identity.flatMap { MediaSearchSource(rawValue: $0.source) }
+    let initialSource = identity.flatMap { MediaSearchSource(rawValue: $0.source) }
+    mediaSource = initialSource
       ?? MediaSearchSource(rawValue: apiService.settings?.RECOGNIZE_SOURCE ?? "") ?? .themoviedb
-    mediaSource = source
-    mediaId = identity?.mediaId ?? ""
-    submissionSource = identity?.source ?? source.rawValue
+    mediaId = initialSource == nil ? "" : identity?.mediaId ?? ""
     sessionSubscription = apiService.sessionInvalidationPublisher(for: self.session).sink { [weak self] in
       guard let self, self.state != .closed, self.state != .completed else { return }
       self.state = .invalidated
@@ -78,7 +76,7 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
     mediaId.trimmingCharacters(in: .whitespacesAndNewlines)
   }
   var canSubmit: Bool {
-    canEdit && !normalizedMediaId.isEmpty && MediaIdentifier.isValidManualMediaId(normalizedMediaId)
+    canEdit && !normalizedMediaId.isEmpty && mediaSource.isValidManualId(normalizedMediaId)
   }
 
   var savePathChoices: [String] {
@@ -94,7 +92,6 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
   func selectSource(_ source: MediaSearchSource) {
     guard canEdit, source != mediaSource else { return }
     mediaSource = source
-    submissionSource = source.rawValue
     mediaId = ""
   }
 
@@ -125,7 +122,7 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
   func submit() -> Task<Void, Never>? {
     guard canSubmit else { return nil }
     let target = Target(
-      identity: MediaIdentity(source: submissionSource, mediaId: normalizedMediaId),
+      identity: MediaIdentity(source: mediaSource.rawValue, mediaId: normalizedMediaId),
       savePath: selectedSavePath
     )
     state = .submitting(target)

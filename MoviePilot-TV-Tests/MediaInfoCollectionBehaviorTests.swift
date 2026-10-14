@@ -288,17 +288,6 @@ final class MediaInfoCollectionBehaviorTests: XCTestCase {
     )
   }
 
-  func testManualMediaIdAllowsEmptyAndPositiveASCIIDigitsOnly() {
-    XCTAssertTrue(MediaIdentifier.isValidManualMediaId(nil))
-    XCTAssertTrue(MediaIdentifier.isValidManualMediaId("  "))
-    XCTAssertTrue(MediaIdentifier.isValidManualMediaId(" 33674 "))
-    XCTAssertFalse(MediaIdentifier.isValidManualMediaId("0"))
-    XCTAssertFalse(MediaIdentifier.isValidManualMediaId("000"))
-    XCTAssertFalse(MediaIdentifier.isValidManualMediaId("-5"))
-    XCTAssertFalse(MediaIdentifier.isValidManualMediaId("33x"))
-    XCTAssertFalse(MediaIdentifier.isValidManualMediaId("１２３"))
-  }
-
   func testDeclaredSourceWithoutOwnIdentityFallsBackLikeWeb() {
     let media = MediaInfo(tmdb_id: 42, source: "anilist")
 

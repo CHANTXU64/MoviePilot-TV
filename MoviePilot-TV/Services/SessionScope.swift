@@ -23,6 +23,7 @@ final class SessionScope {
     capacity: 1,
     renewsTTLOnAccess: false
   )
+  let mediaSourceCatalogCache = CoalescingCache<String, [MediaSourceInfo]>(ttl: 300, capacity: 1)
 
   init(apiService: APIService, uiIdentity: String) {
     self.uiIdentity = uiIdentity
@@ -42,6 +43,7 @@ final class SessionScope {
     episodeGroupsCache.invalidateAll()
     mediaSeasonsCache.invalidateAll()
     groupSeasonsCache.invalidateAll()
+    mediaSourceCatalogCache.invalidateAll()
   }
 
   /// 会话结束时同步拆除：取消在途任务、清空缓存与订阅，旧作用域不再响应任何事件。

@@ -50,7 +50,7 @@ class ReorganizeViewModel: ObservableObject {
   }
 
   var isMediaIdValid: Bool {
-    MediaIdentifier.isValidManualMediaId(mediaId)
+    mediaSource.isValidManualId(mediaId)
   }
 
   init(
@@ -174,7 +174,7 @@ class ReorganizeViewModel: ObservableObject {
     errorMessage = nil
     mutationRetryMessage = nil
     guard isMediaIdValid else {
-      errorMessage = "媒体 ID 只能包含数字。"
+      errorMessage = "媒体 ID 格式无效。"
       return false
     }
     isSubmitting = true
@@ -248,7 +248,7 @@ class ReorganizeViewModel: ObservableObject {
     guard apiService.canAccess(.manage) else { return .notGenerated }
     errorMessage = nil
     guard isMediaIdValid else {
-      errorMessage = "媒体 ID 只能包含数字。"
+      errorMessage = "媒体 ID 格式无效。"
       return .notGenerated
     }
     isPreviewing = true

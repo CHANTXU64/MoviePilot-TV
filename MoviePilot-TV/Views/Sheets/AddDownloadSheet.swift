@@ -4,6 +4,7 @@ struct AddDownloadSheet: View {
   @Environment(\.dismiss) var dismiss
   @ObservedObject private var apiService = APIService.shared
   @StateObject private var viewModel: AddDownloadViewModel
+  @StateObject private var sources = MediaSourceOptionsModel()
   @State private var showAdvanced = false
   @FocusState private var isInfoSectionFocused: Bool
   @FocusState private var isAdvancedButtonFocused: Bool
@@ -116,9 +117,31 @@ struct AddDownloadSheet: View {
               .focused($isAdvancedButtonFocused)
 
               if showAdvanced {
-                ManualMediaIdField(source: viewModel.mediaSource, mediaId: $viewModel.mediaId) { mediaId, _ in
-                  viewModel.mediaId = mediaId
+                SheetPicker(
+                  title: "媒体类型",
+                  selection: $viewModel.mediaType,
+                  options: [
+                    PickerOption(title: "自动", value: ""),
+                    PickerOption(title: "电影", value: "电影"),
+                    PickerOption(title: "电视剧", value: "电视剧"),
+                  ]
+                )
+
+                SheetPicker(
+                  title: "媒体来源",
+                  selection: Binding(get: { viewModel.mediaSource }, set: viewModel.selectMediaSource),
+                  options: sources.options(including: viewModel.mediaSource).map {
+                    PickerOption(title: $0.title, value: $0.source)
+                  }
+                )
+
+                ManualMediaIdField(
+                  source: viewModel.mediaSource, sourceTitle: sources.title(for: viewModel.mediaSource),
+                  mediaId: $viewModel.mediaId
+                ) { mediaId, media in
+                  viewModel.selectManualMedia(media, mediaId: mediaId)
                 }
+                .disabled(viewModel.mediaType.isEmpty)
               }
 
               SheetActionButton(
@@ -153,6 +176,7 @@ struct AddDownloadSheet: View {
     .task {
       await viewModel.loadData()
     }
+    .task { await sources.load() }
     .cancelOnExternalNavigation()
     .frame(width: 1200)
   }

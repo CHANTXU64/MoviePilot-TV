@@ -186,7 +186,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(searchSource.contains("visibleFilterSearchType == .resource"))
     XCTAssertTrue(searchSource.contains("visibleFilterSearchType == .unified"))
     XCTAssertTrue(
-      searchSource.contains("Text(\"搜索来源：\\(viewModel.mediaSourceButtonLabel)\")")
+      searchSource.contains("Text(\"搜索来源：\\(viewModel.mediaSearchSource.map(mediaSources.title(for:)) ?? \"默认\")\")")
     )
   }
 
@@ -530,7 +530,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(
       containsTokensInOrder(source, ["SheetPicker(", "title: \"媒体来源\""])
     )
-    XCTAssertTrue(source.contains("MediaSearchSource.allowed(for: .media).map"))
+    XCTAssertTrue(source.contains("sources.options(including: viewModel.mediaSource).map"))
     XCTAssertTrue(
       source.contains(
         "ignoresInteractionWhileDisabled: viewModel.isEpisodeGroupsLoading"
@@ -540,7 +540,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("private var sourceButtons: some View"))
     XCTAssertFalse(source.contains(".disabled((viewModel.form.type_name ?? \"\").isEmpty)"))
     let idFieldSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/ManualMediaSearchSheet.swift")
-    XCTAssertTrue(source.contains("ManualMediaIdField(source: viewModel.mediaSource, mediaId: $viewModel.mediaId)"))
+    XCTAssertTrue(source.contains("ManualMediaIdField("))
     XCTAssertTrue(idFieldSource.contains("var placeholder = \"自动判断\""))
     XCTAssertFalse(idFieldSource.contains("留空自动识别"))
     XCTAssertTrue(idFieldSource.contains("Image(systemName: \"magnifyingglass\")"))

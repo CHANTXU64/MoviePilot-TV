@@ -518,6 +518,7 @@ enum TVAPIContractCatalog {
         dependedResponse: TVAPIFields.mediaIdentity,
         coverage: readDecode
       ),
+      TVAPIOperationBuilder.get("/media/source", coverage: [.urlProtocol, .unitDecoding]),
       TVAPIOperationBuilder.get(
         "/media/recognize",
         query: [

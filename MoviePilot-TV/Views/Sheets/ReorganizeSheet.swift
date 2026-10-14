@@ -13,6 +13,7 @@ struct ReorganizeSheet: View {
   let onDone: () -> Void
 
   @StateObject private var viewModel: ReorganizeViewModel
+  @StateObject private var sources = MediaSourceOptionsModel()
   @State private var showAdvanced = false
   @State private var showPreview = false
   @FocusState private var isAdvancedButtonFocused: Bool
@@ -50,6 +51,7 @@ struct ReorganizeSheet: View {
       .task {
         await viewModel.loadConfig()
       }
+      .task { await sources.load() }
       .alert(
         "操作未执行",
         isPresented: Binding(
@@ -168,12 +170,15 @@ struct ReorganizeSheet: View {
           get: { viewModel.mediaSource },
           set: { viewModel.selectMediaSource($0) }
         ),
-        options: MediaSearchSource.allowed(for: .media).map {
-          PickerOption(title: $0.title, value: $0)
+        options: sources.options(including: viewModel.mediaSource).map {
+          PickerOption(title: $0.title, value: $0.source)
         }
       )
 
-      ManualMediaIdField(source: viewModel.mediaSource, mediaId: $viewModel.mediaId) { mediaId, media in
+      ManualMediaIdField(
+        source: viewModel.mediaSource, sourceTitle: sources.title(for: viewModel.mediaSource),
+        mediaId: $viewModel.mediaId
+      ) { mediaId, media in
         viewModel.selectManualMedia(media, mediaId: mediaId)
       }
     }

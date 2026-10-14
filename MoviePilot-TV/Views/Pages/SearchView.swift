@@ -3,6 +3,7 @@ import SwiftUI
 struct SearchView: View {
   private let isSelected: Bool
   @StateObject private var viewModel = SearchViewModel()
+  @StateObject private var mediaSources = MediaSourceOptionsModel()
   @ObservedObject private var apiService = APIService.shared
   @StateObject private var navigationCoordinator = ImageNavigationCoordinator()
   @State private var subscriptionHandler = SubscriptionHandler()
@@ -80,7 +81,7 @@ struct SearchView: View {
             }) {
               HStack(spacing: 8) {
                 Image(systemName: "server.rack")
-                Text("搜索来源：\(viewModel.mediaSourceButtonLabel)")
+                Text("搜索来源：\(viewModel.mediaSearchSource.map(mediaSources.title(for:)) ?? "默认")")
               }
               .font(.caption)
               .foregroundColor(.primary)
@@ -239,7 +240,7 @@ struct SearchView: View {
         SearchSiteSelectionSheet(viewModel: viewModel.siteFilter)
       }
       .sheet(isPresented: $showMediaSourceSelection) {
-        MediaSourceSelectionSheet(selected: $viewModel.mediaSearchSource)
+        MediaSourceSelectionSheet(selected: $viewModel.mediaSearchSource, sources: mediaSources)
       }
       // 使用原生搜索栏
       .searchable(text: $viewModel.query, placement: .automatic, prompt: "电影、节目、演职人员等")
@@ -250,6 +251,9 @@ struct SearchView: View {
         {
           await viewModel.siteFilter.loadSites()
         }
+      }
+      .task {
+        if viewModel.availableSearchTypes.contains(.unified) { await mediaSources.load() }
       }
       .onChange(of: focusedField) { _, newValue in
         if let newValue = newValue {
@@ -284,14 +288,15 @@ struct SearchView: View {
 private struct MediaSourceSelectionSheet: View {
   @Binding var selected: MediaSearchSource?
   @Environment(\.dismiss) private var dismiss
+  @ObservedObject var sources: MediaSourceOptionsModel
 
   var body: some View {
     NavigationStack {
       ScrollView {
         VStack {
           sourceButton("默认", source: nil)
-          ForEach(MediaSearchSource.allowed(for: .media)) { source in
-            sourceButton(source.title, source: source)
+          ForEach(sources.options(including: selected)) { option in
+            sourceButton(option.title, source: option.source)
           }
         }
         .applySheetStyles()

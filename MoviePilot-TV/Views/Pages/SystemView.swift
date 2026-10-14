@@ -22,6 +22,7 @@ struct SystemView: View {
   @StateObject private var recommendViewModel: RecommendViewModel
   @StateObject private var topShelfExplore: ExploreViewModel
   @StateObject private var logViewerViewModel: LogViewerViewModel
+  @StateObject private var mediaSources = MediaSourceOptionsModel()
   @ObservedObject private var apiService: APIService
   @EnvironmentObject private var topShelfManager: TopShelfManager
   @State private var showAppInfo = false
@@ -829,18 +830,19 @@ struct SystemView: View {
       }
       .focused($focusedItem, equals: .defaultMediaSource)
 
-      ForEach(MediaSearchSource.allowed(for: .media)) { source in
+      ForEach(mediaSources.options(including: viewModel.defaultMediaSearchSource)) { option in
         Button {
-          viewModel.defaultMediaSearchSource = source
+          viewModel.defaultMediaSearchSource = option.source
         } label: {
           row(
-            source.title,
-            value: viewModel.defaultMediaSearchSource == source ? "已选择" : nil
+            option.title,
+            value: viewModel.defaultMediaSearchSource == option.source ? "已选择" : nil
           )
         }
-        .focused($focusedItem, equals: .mediaSource(source))
+        .focused($focusedItem, equals: .mediaSource(option.source))
       }
     }
+    .task { await mediaSources.load() }
   }
 
   private func filterPage(
@@ -1256,7 +1258,7 @@ struct SystemView: View {
   }
 
   private var mediaSourceButtonLabel: String {
-    viewModel.defaultMediaSearchSource?.title ?? "默认"
+    viewModel.defaultMediaSearchSource.map(mediaSources.title(for:)) ?? "默认"
   }
 
 }

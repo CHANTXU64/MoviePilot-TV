@@ -15,29 +15,97 @@ nonisolated enum MetadataSearchKind: Sendable {
   case person
 }
 
-nonisolated enum MediaSearchSource: String, CaseIterable, Identifiable, Hashable, Sendable {
-  case themoviedb
-  case douban
-  case bangumi
-  case anilist
+/// 媒体数据源的规范标识。内置来源提供常量，插件来源由后端 `/media/source` 动态注册。
+nonisolated struct MediaSearchSource: RawRepresentable, Identifiable, Hashable, Sendable {
+  let rawValue: String
+
+  /// 与后端来源标识规则一致：去空白后转小写，只接受字母开头的短标识。
+  init?(rawValue: String) {
+    let normalized = rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    guard normalized.range(of: #"^[a-z][a-z0-9._-]{0,63}$"#, options: .regularExpression) != nil
+    else { return nil }
+    self.rawValue = normalized
+  }
+
+  private init(builtin rawValue: String) {
+    self.rawValue = rawValue
+  }
+
+  static let themoviedb = Self(builtin: "themoviedb")
+  static let douban = Self(builtin: "douban")
+  static let bangumi = Self(builtin: "bangumi")
+  static let anilist = Self(builtin: "anilist")
+  static let imdb = Self(builtin: "imdb")
+  static let tvdb = Self(builtin: "tvdb")
+
+  /// 来源目录不可用时沿用的影视来源。
+  static let builtinMediaSources: [MediaSearchSource] = [.themoviedb, .douban, .bangumi, .anilist]
 
   var id: String { rawValue }
 
   var title: String {
-    switch self {
-    case .themoviedb: "TMDB"
-    case .douban: "豆瓣"
-    case .bangumi: "Bangumi"
-    case .anilist: "AniList"
+    switch rawValue {
+    case "themoviedb": "TMDB"
+    case "douban": "豆瓣"
+    case "bangumi": "Bangumi"
+    case "anilist": "AniList"
+    case "imdb": "IMDb"
+    case "tvdb": "TVDB"
+    default: rawValue
     }
+  }
+
+  /// 与 Web `isValidMediaSourceId` 一致：空值表示未填写；IMDb 有固定格式，其余来源只排除 "0"。
+  func isValidManualId(_ value: String?) -> Bool {
+    let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !normalized.isEmpty else { return true }
+    guard normalized != "0" else { return false }
+    if self == .imdb {
+      return normalized.range(of: #"^tt\d+$"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+    return true
   }
 
   static func allowed(for kind: MetadataSearchKind) -> [MediaSearchSource] {
     switch kind {
-    case .media: [.themoviedb, .douban, .bangumi, .anilist]
+    case .media: builtinMediaSources
     case .collection: [.themoviedb]
     case .person: [.themoviedb, .douban]
     }
+  }
+}
+
+/// `/media/source` 返回的来源目录项。
+nonisolated struct MediaSourceInfo: Decodable, Hashable, Sendable {
+  let name: String?
+  let media_source: String?
+  let media_types: [String]?
+
+  /// 声明了电影或电视剧能力的来源才进入影视来源选择。
+  var supportsVideo: Bool {
+    (media_types ?? []).contains {
+      ["电影", "电视剧", "movie", "tv"].contains($0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+  }
+
+  /// 按后端顺序保留合法、去重的影视来源；目录为空或不可用时由调用方回退内置来源。
+  static func videoSources(from catalog: [MediaSourceInfo]) -> [MediaSourceOption] {
+    var seen = Set<MediaSearchSource>()
+    return catalog.compactMap { info in
+      guard info.supportsVideo, let source = info.media_source.flatMap(MediaSearchSource.init(rawValue:)),
+        seen.insert(source).inserted else { return nil }
+      return MediaSourceOption(source: source, title: MediaIdentifier.normalizedString(info.name) ?? source.title)
+    }
+  }
+}
+
+nonisolated struct MediaSourceOption: Identifiable, Hashable, Sendable {
+  let source: MediaSearchSource
+  let title: String
+  var id: MediaSearchSource { source }
+
+  static let builtinMedia = MediaSearchSource.builtinMediaSources.map {
+    MediaSourceOption(source: $0, title: $0.title)
   }
 }
 
@@ -140,10 +208,6 @@ class SearchViewModel: ObservableObject {
       else { return }
       followsDefaultMediaSearchSource = false
     }
-  }
-
-  var mediaSourceButtonLabel: String {
-    mediaSearchSource?.title ?? "默认"
   }
 
   // MARK: - Paginator 实例
