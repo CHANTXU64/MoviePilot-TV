@@ -812,7 +812,7 @@ enum TVAPIContractCatalog {
           TVAPIParam.query("sites"),
         ],
         response: .sse,
-        coverage: [.unitDecoding]
+        coverage: [.liveReadOnly, .unitDecoding]
       ),
       TVAPIOperationBuilder.get(
         "/search/subtitle/media/{media_id}",
@@ -837,7 +837,7 @@ enum TVAPIContractCatalog {
         ],
         pathParams: [TVAPIParam.path("media_id")],
         response: .sse,
-        coverage: [.unitDecoding]
+        coverage: [.liveReadOnly, .unitDecoding]
       ),
     ]
   }
@@ -892,7 +892,7 @@ enum TVAPIContractCatalog {
       ),
       TVAPIOperationBuilder.get(
         "/download/paths",
-        coverage: [.unitDecoding]
+        coverage: [.liveReadOnly, .unitDecoding]
       ),
       TVAPIOperationBuilder.mutation(
         "POST",
@@ -906,7 +906,7 @@ enum TVAPIContractCatalog {
         dependedResponse: [
           TVAPIFields.field("files", .array, itemType: .string),
         ],
-        coverage: [.unitDecoding]
+        coverage: [.liveSideEffect, .unitDecoding]
       ),
     ]
   }

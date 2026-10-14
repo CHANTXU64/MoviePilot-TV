@@ -4,9 +4,9 @@
 
 ## 快速配置
 
-`.env.compatibility` 会被 Git 忽略，不要提交真实账号密码。复制 `.env.compatibility.example` 为 `.env.compatibility` 后，填写后端地址、用户名和密码；媒体服务器、元数据、资源搜索、分季状态、副作用套件等可选开关按 `.env.compatibility.example` 中的注释调整。
+`.env.compatibility` 会被 Git 忽略，不要提交真实账号密码。复制 `.env.compatibility.example` 为 `.env.compatibility` 后，填写后端地址、用户名和密码；媒体服务器、元数据、资源搜索、字幕搜索、分季状态、副作用套件等可选开关按 `.env.compatibility.example` 中的注释调整。
 
-真实后端兼容测试分为只读套件和副作用套件。副作用套件默认关闭；只有显式设置 `MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS=true` 才会触发订阅搜索、原参数保存订阅、暂停/恢复订阅、重置订阅、手动重新整理和 AI 重新整理等真实后台动作。
+真实后端兼容测试分为只读套件和副作用套件。副作用套件默认关闭；只有显式设置 `MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS=true` 才会触发订阅搜索、原参数保存订阅、暂停/恢复订阅、重置订阅、手动重新整理和 AI 重新整理等真实后台动作。字幕下载另外要求 `MOVIEPILOT_COMPAT_TEST_SUBTITLE_DOWNLOAD=true`，总开关打开时它仍然默认关闭。
 
 只读套件还包含独立的 OpenAPI 契约检查：对配置的同一个后端读取一次 `GET {baseURL}/api/v1/openapi.json`，核对 TV 已用接口的路径、方法、参数、必填性和响应结构，并输出覆盖缺口与待审查变更。它不执行保存、删除、下载等写操作，也不能代替真实调用测试。读取失败、返回登录页或遇到暂不支持的 schema 记为该项失败，不会改走公共文档站。已确认兼容的 OpenAPI 基线保存在 `MoviePilot-TV-Tests/OpenAPI/Fixtures/openapi-baseline.json`；发现差异后必须经审查再更新基线，测试本身不会自动覆盖。解析、分级和基线比较的离线用例走普通 CI，不访问真实后端。
 
@@ -74,6 +74,15 @@ MoviePilot v3.0.4 媒体业务只读巡检还会覆盖：
 - 资源搜索“全部站点”由真实后端巡检验证 `SiteFilterViewModel`/API 返回的全部启用站点域；`SearchViewModel` 到 `sites` 参数的透传另由 URLProtocol 单元测试覆盖，目前不是一条完整的真实后端端到端验收。
 - 订阅状态查询保留 v3.0.4 的标题/年份/类型跨来源回退；取消订阅定位关闭该回退，避免查询命中与精确删除身份不一致。
 
+字幕搜索由 `testReadOnlySubtitleSearchCompatibility` 覆盖。配置 `MOVIEPILOT_COMPAT_SUBTITLE_QUERY` / `MOVIEPILOT_COMPAT_SUBTITLE_QUERIES` 或 `MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_ID` / `MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_IDS` 后，测试经生产 `MediaActionHandler` 组装请求，再由 `SubtitleSearchSession` 走 SSE；未配置则跳过。媒体 ID 使用 `来源:原生ID`，例如 `tmdb:603`。`MOVIEPILOT_COMPAT_SUBTITLE_SITES` 和 `MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_TYPE` 可选；`MOVIEPILOT_COMPAT_SUBTITLE_SEASON` 省略则不传季号，`0` 会原样发送。TV 的媒体字幕搜索不传集号。每个显式配置的查询都必须收到至少一条字幕，否则失败。结果须带标题、语言、站点、非零大小，以及 HTTP 链接上的 `mp_sig` 签名片段。单次搜索最多等待 180 秒。同一次检查还会读取 `/download/paths` 并解码目录，不提交下载。搜索会访问字幕站点，并覆盖后端上一次字幕搜索缓存、取消进行中的 AI 推荐；它不下载字幕文件，也不创建下载器任务。普通 GET 回退只在流没有交付 `done` 时由会话调用，离线用例覆盖该路径。
+
+仅运行字幕搜索：
+
+```sh
+python3 scripts/test-tvos.py --include-backend-tests \
+  --only-testing MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests/testReadOnlySubtitleSearchCompatibility
+```
+
 MoviePilot v3.1.2 新增手动资源分页参数，TV 从 v3.1.2-1 起使用。`testReadOnlyResourceTitlePagingCompatibility` 和 `testReadOnlyResourceMediaPagingCompatibility` 分别通过生产 `APIService.readResourceSearchPage` 和 `ResourceSearchPage` 验证两个 SSE 端点：第 0 页完整最终包、分块顺序与总数、`sources` 的不透明来源、页号和 `can_continue`，再选择一个成功来源读取下一页并原页重试。若所有成功来源均已结束，则仅验证该来源第 0 页重试，并在日志中明确续页未覆盖；下一页合法空结果不算失败。测试使用已有的 `MOVIEPILOT_COMPAT_TEST_RESOURCE_SEARCH_STREAMS` 开关，两个入口各自要求配置标题查询、媒体 ID，单次请求最多等待 180 秒。它们不验证完整页面交互，不触发下载或订阅，但会访问站点并更新后端搜索缓存和上次搜索记录。
 
 仅运行这次新增的分页检查及 OpenAPI 检查：
@@ -125,8 +134,18 @@ python3 scripts/test-tvos.py --include-backend-tests \
 - `MOVIEPILOT_COMPAT_TEST_SUBSCRIPTION_RESET_SEARCH=true`：取现有订阅列表中有 ID 且 `state=R/S` 的条目，重置订阅后立即触发同一条订阅搜索；执行后只会把订阅的 `state` 字段写回测试前的值，包括原本已暂停的 `state=S`。reset 清除的已下载/已入库记录无法恢复，search 触发的后台搜索或下载任务也无法撤销。
 - `MOVIEPILOT_COMPAT_TEST_MANUAL_REORGANIZE=true`：取整理历史第一页最近几条，通过 TV 端 `ReorganizeViewModel.submit(background: true)` 生产入口并发触发后台手动重新整理。
 - `MOVIEPILOT_COMPAT_TEST_AI_REORGANIZE=true`：取整理历史第一页最近几条，批量触发 AI 重新整理，并通过 TV 端 `APIService.progressStream`（含当前会话的资源 Cookie）检查返回的进度流。
+- `MOVIEPILOT_COMPAT_TEST_SUBTITLE_DOWNLOAD=true`：即使总开关已打开，此项仍默认关闭。它使用第一条 `MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_ID` 通过生产字幕会话搜索，再经 `SubtitleDownloadViewModel.submit()` 下载第一条字幕。`MOVIEPILOT_COMPAT_SUBTITLE_DOWNLOAD_SAVE_PATH` 必须与 `/download/paths` 返回的某个 `save_path` 完全一致。测试先在该目录下创建 `mp-tv-subtitle-compat-<uuid>`，把字幕写进这个子目录，然后在成功、失败和取消路径删除整个子目录。账号需要同时具备搜索和管理权限，管理权限用于创建和删除目录；只有搜索权限的账号会在请求前跳过。这不是下载器任务。清理失败时日志会留下子目录路径，需要手工删除。搜索同样会覆盖上一次字幕搜索缓存。每个具备权限的账号各下载一条。
 
-这些测试不会新增订阅、删除订阅、添加下载、删除下载或删除整理历史。订阅重置、订阅搜索、暂停/恢复订阅、手动/AI 重新整理都会触发真实后台动作；只应在你接受这些影响的后端上运行副作用套件。
+这些测试不会新增订阅、删除订阅、添加下载器任务、删除下载或删除整理历史。订阅重置、订阅搜索、暂停/恢复订阅、手动/AI 重新整理和字幕文件下载都会触发真实后台动作；只应在你接受这些影响的后端上运行副作用套件。
+
+字幕下载示例：
+
+```sh
+MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS=true \
+MOVIEPILOT_COMPAT_TEST_SUBTITLE_DOWNLOAD=true \
+python3 scripts/test-tvos.py --include-backend-tests \
+  --only-testing MoviePilot-TV-Tests/BackendCompatibilitySideEffectTests/testSubtitleDownloadCompatibility
+```
 
 `MOVIEPILOT_COMPAT_SIDE_EFFECT_SUBSCRIPTION_LIMIT` 控制订阅测试取几条现有订阅，默认 `3`。`MOVIEPILOT_COMPAT_REORGANIZE_HISTORY_LIMIT` 控制整理测试取几条最近历史，默认 `2`。`MOVIEPILOT_COMPAT_REORGANIZE_CONCURRENT_COUNT` 控制手动重新整理的并发数量，默认 `2`。
 
@@ -138,4 +157,4 @@ python3 scripts/test-tvos.py --include-backend-tests \
 
 如果确实需要覆盖有副作用的接口，必须放进 `BackendCompatibilitySideEffectTests` 或等价的显式副作用套件，并满足以下条件：提供独立环境变量开关；限制目标数量和选择条件；保存目标原始状态并在成功、失败和取消路径中尽力恢复；在本文件说明真实影响。不要把会改变用户个人后端状态的检查混进“只读”或普通全量测试说明里。
 
-新增/删除订阅、下载任务增删改、删除整理历史等更强破坏性流程仍不在个人后端兼容套件内；如果后续要测，应使用可丢弃数据库、测试下载器和测试媒体目录的隔离 MoviePilot 后端。
+新增/删除订阅、下载器任务增删改、删除整理历史等更强破坏性流程仍不在个人后端兼容套件内；如果后续要测，应使用可丢弃数据库、测试下载器和测试媒体目录的隔离 MoviePilot 后端。字幕下载只写入并删除当次创建的隔离目录，不删除目录里原有的文件。

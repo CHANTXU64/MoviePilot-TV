@@ -55,6 +55,13 @@ private struct BackendCompatibilityConfig {
   let resourceQueries: [String]
   let resourceMediaIDs: [String]
   let resourceSites: String?
+  let subtitleQueries: [String]
+  let subtitleMediaIDs: [String]
+  let subtitleSites: String?
+  let subtitleMediaType: String?
+  let subtitleSeason: Int?
+  let subtitleSeasonInvalid: Bool
+  let subtitleDownloadSavePath: String?
   let checkSeasonAvailability: Bool
   let collectionIDs: [Int]
   let testResourceSearchStreams: Bool
@@ -66,6 +73,7 @@ private struct BackendCompatibilityConfig {
   let sideEffectSubscriptionLimit: Int
   let testManualReorganize: Bool
   let testAIReorganize: Bool
+  let testSubtitleDownload: Bool
   let reorganizeHistoryLimit: Int
   let reorganizeConcurrentCount: Int
 
@@ -96,6 +104,13 @@ private struct BackendCompatibilityConfig {
       resourceQueries: [],
       resourceMediaIDs: [],
       resourceSites: nil,
+      subtitleQueries: [],
+      subtitleMediaIDs: [],
+      subtitleSites: nil,
+      subtitleMediaType: nil,
+      subtitleSeason: nil,
+      subtitleSeasonInvalid: false,
+      subtitleDownloadSavePath: nil,
       checkSeasonAvailability: false,
       collectionIDs: [],
       testResourceSearchStreams: false,
@@ -107,6 +122,7 @@ private struct BackendCompatibilityConfig {
       sideEffectSubscriptionLimit: 3,
       testManualReorganize: true,
       testAIReorganize: true,
+      testSubtitleDownload: false,
       reorganizeHistoryLimit: 2,
       reorganizeConcurrentCount: 2
     )
@@ -150,6 +166,16 @@ private struct BackendCompatibilityConfig {
       values["MOVIEPILOT_COMPAT_RESOURCE_MEDIA_IDS"]?.listValue
       ?? values["MOVIEPILOT_COMPAT_RESOURCE_MEDIA_ID"]?.nilIfBlank.map { [$0] }
       ?? []
+    let subtitleQueries =
+      values["MOVIEPILOT_COMPAT_SUBTITLE_QUERIES"]?.listValue
+      ?? values["MOVIEPILOT_COMPAT_SUBTITLE_QUERY"]?.nilIfBlank.map { [$0] }
+      ?? []
+    let subtitleMediaIDs =
+      values["MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_IDS"]?.listValue
+      ?? values["MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_ID"]?.nilIfBlank.map { [$0] }
+      ?? []
+    let subtitleSeasonRaw = values["MOVIEPILOT_COMPAT_SUBTITLE_SEASON"]?.nilIfBlank
+    let subtitleSeason = subtitleSeasonRaw?.intValue.flatMap { $0 >= 0 ? $0 : nil }
     let collectionIDs =
       values["MOVIEPILOT_COMPAT_COLLECTION_IDS"]?.intListValue
       ?? values["MOVIEPILOT_COMPAT_COLLECTION_ID"]?.intValue.map { [$0] }
@@ -198,6 +224,13 @@ private struct BackendCompatibilityConfig {
       resourceQueries: resourceQueries,
       resourceMediaIDs: resourceMediaIDs,
       resourceSites: values["MOVIEPILOT_COMPAT_RESOURCE_SITES"]?.nilIfBlank,
+      subtitleQueries: subtitleQueries,
+      subtitleMediaIDs: subtitleMediaIDs,
+      subtitleSites: values["MOVIEPILOT_COMPAT_SUBTITLE_SITES"]?.nilIfBlank,
+      subtitleMediaType: values["MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_TYPE"]?.nilIfBlank,
+      subtitleSeason: subtitleSeason,
+      subtitleSeasonInvalid: subtitleSeasonRaw != nil && subtitleSeason == nil,
+      subtitleDownloadSavePath: values["MOVIEPILOT_COMPAT_SUBTITLE_DOWNLOAD_SAVE_PATH"]?.nilIfBlank,
       checkSeasonAvailability: values["MOVIEPILOT_COMPAT_CHECK_SEASON_AVAILABILITY"]?.boolValue(
         fallback: false) ?? false,
       collectionIDs: collectionIDs,
@@ -224,6 +257,10 @@ private struct BackendCompatibilityConfig {
       testAIReorganize: enableSideEffects
         && (values["MOVIEPILOT_COMPAT_TEST_AI_REORGANIZE"]?.boolValue(
           fallback: true) ?? true),
+      // 字幕下载会写入文件。总开关打开时仍默认关闭，必须单独设为 true。
+      testSubtitleDownload: enableSideEffects
+        && (values["MOVIEPILOT_COMPAT_TEST_SUBTITLE_DOWNLOAD"]?.boolValue(
+          fallback: false) ?? false),
       reorganizeHistoryLimit: values["MOVIEPILOT_COMPAT_REORGANIZE_HISTORY_LIMIT"]?
         .clampedIntValue(minimum: 1, maximum: 10) ?? 2,
       reorganizeConcurrentCount: values["MOVIEPILOT_COMPAT_REORGANIZE_CONCURRENT_COUNT"]?
@@ -1409,6 +1446,406 @@ private final class BackendResourcePageProbe {
   }
 }
 
+@MainActor
+private struct BackendSubtitleSearchSample {
+  let label: String
+  let request: SubtitleSearchRequest
+}
+
+private struct BackendSubtitleDownloadFolder {
+  let storage: String
+  let path: String
+  let savePath: String
+}
+
+private enum BackendSubtitleDownloadError: LocalizedError {
+  case unmatchedSavePath(String)
+  case missingDownloadPath
+  case storageRejected(String, String)
+
+  var errorDescription: String? {
+    switch self {
+    case .unmatchedSavePath(let available):
+      return "MOVIEPILOT_COMPAT_SUBTITLE_DOWNLOAD_SAVE_PATH does not match a /download/paths save_path. Available: \(available)"
+    case .missingDownloadPath:
+      return "The matched download directory has no download_path, so the isolated folder cannot be created."
+    case .storageRejected(let action, let message):
+      return "Storage \(action) failed: \(message)"
+    }
+  }
+}
+
+private struct BackendStorageActionEnvelope: Decodable {
+  let success: Bool?
+  let message: String?
+  let message_i18n: String?
+}
+
+private struct BackendStorageMutation {
+  let success: Bool
+  let message: String
+}
+
+/// 标题和媒体样本都走详情、首页使用的生产请求构造，不另写一套参数。
+@MainActor
+private func backendSubtitleSearchSamples(
+  titleQueries: [String],
+  mediaIDs: [String],
+  mediaType: String?,
+  season: Int?,
+  sites: String?
+) -> (samples: [BackendSubtitleSearchSample], rejectedMediaIDs: [String]) {
+  let handler = MediaActionHandler(apiService: .shared)
+  var samples: [BackendSubtitleSearchSample] = []
+  for query in titleQueries {
+    guard let request = MediaActionHandler.titleSubtitleSearchRequest(keyword: query, sites: sites) else {
+      continue
+    }
+    samples.append(BackendSubtitleSearchSample(label: "subtitle title \(query)", request: request))
+  }
+  var rejectedMediaIDs: [String] = []
+  for mediaID in mediaIDs {
+    guard let identity = MediaIdentifier.identity(from: mediaID) else {
+      rejectedMediaIDs.append(mediaID)
+      continue
+    }
+    let item = MediaInfo(
+      source: identity.source,
+      media_id: identity.mediaId,
+      title: mediaID,
+      type: mediaType,
+      season: season
+    )
+    guard let request = handler.subtitleSearchRequest(for: item, sites: sites) else {
+      rejectedMediaIDs.append(mediaID)
+      continue
+    }
+    samples.append(BackendSubtitleSearchSample(label: "subtitle media \(mediaID)", request: request))
+  }
+  return (samples, rejectedMediaIDs)
+}
+
+@MainActor
+private func runSubtitleSearch(
+  service: APIService,
+  sample: BackendSubtitleSearchSample
+) async throws {
+  let session = SubtitleSearchSession(request: sample.request, apiService: service)
+  session.start()
+  if session.state == .idle {
+    XCTFail("\(sample.label) did not start.")
+    return
+  }
+  do {
+    try await waitForSubtitleSearch(session)
+  } catch {
+    session.deactivate()
+    throw error
+  }
+  assertSubtitleSearchCompleted(session, label: sample.label)
+}
+
+@MainActor
+private func waitForSubtitleSearch(
+  _ session: SubtitleSearchSession,
+  timeoutSeconds: Double = 180
+) async throws {
+  let deadline = ContinuousClock.now.advanced(by: .seconds(timeoutSeconds))
+  while !session.didFinish {
+    try Task.checkCancellation()
+    if ContinuousClock.now >= deadline {
+      session.deactivate()
+      return
+    }
+    try await Task.sleep(for: .milliseconds(200))
+  }
+}
+
+@MainActor
+private func assertSubtitleSearchCompleted(
+  _ session: SubtitleSearchSession,
+  label: String,
+  file: StaticString = #filePath,
+  line: UInt = #line
+) {
+  switch session.state {
+  case .completed:
+    break
+  case .failed(let message):
+    XCTFail("\(label) failed: \(message)", file: file, line: line)
+    return
+  default:
+    let detail = session.state == .interrupted
+      ? "timed out or was interrupted before a final subtitle list"
+      : "ended in \(subtitleSearchStateLabel(session.state))"
+    XCTFail("\(label) \(detail)", file: file, line: line)
+    return
+  }
+  XCTAssertFalse(
+    session.rows.isEmpty,
+    "\(label) completed without subtitles. The backend may have no subtitle-capable site for this query.",
+    file: file,
+    line: line
+  )
+  for (index, row) in session.rows.enumerated() {
+    let subtitle = row.subtitle
+    let rowLabel = "\(label) row \(index)"
+    XCTAssertNotNil(
+      MediaIdentifier.normalizedString(subtitle.title),
+      "\(rowLabel) is missing a title.",
+      file: file,
+      line: line
+    )
+    XCTAssertNotNil(
+      MediaIdentifier.normalizedString(subtitle.language),
+      "\(rowLabel) is missing a language.",
+      file: file,
+      line: line
+    )
+    let enclosure = MediaIdentifier.normalizedString(subtitle.enclosure)
+    XCTAssertNotNil(enclosure, "\(rowLabel) is missing an enclosure.", file: file, line: line)
+    if let enclosure {
+      let scheme = enclosure.lowercased()
+      if scheme.hasPrefix("http://") || scheme.hasPrefix("https://") {
+        XCTAssertTrue(
+          enclosure.contains("mp_sig="),
+          "\(rowLabel) lost the signed enclosure fragment.",
+          file: file,
+          line: line
+        )
+      }
+    }
+    XCTAssertNotNil(subtitle.site, "\(rowLabel) is missing a site id.", file: file, line: line)
+    XCTAssertGreaterThan(
+      subtitle.size ?? 0,
+      0,
+      "\(rowLabel) must keep a non-zero size.",
+      file: file,
+      line: line
+    )
+  }
+  let languages = Set(session.rows.compactMap { MediaIdentifier.normalizedString($0.subtitle.language) })
+    .sorted()
+    .joined(separator: ",")
+  print("Subtitle search \(label): rows=\(session.rows.count), languages=\(languages)")
+}
+
+@MainActor
+private func subtitleSearchStateLabel(_ state: SubtitleSearchSession.State) -> String {
+  switch state {
+  case .idle: "idle"
+  case .searching: "searching"
+  case .interrupted: "interrupted"
+  case .completed: "completed"
+  case .cancelled: "cancelled"
+  case .invalidated: "invalidated"
+  case .failed(let message): "failed(\(message))"
+  }
+}
+
+@MainActor
+private func subtitleDownloadStateLabel(_ state: SubtitleDownloadViewModel.State) -> String {
+  switch state {
+  case .editing: "editing"
+  case .submitting(_): "submitting"
+  case .completed: "completed"
+  case .failed(let message): "failed(\(message))"
+  case .invalidated: "invalidated"
+  case .closed: "closed"
+  }
+}
+
+@MainActor
+private func makeSubtitleDownloadFolder(
+  service: APIService,
+  configuredSavePath: String
+) async throws -> BackendSubtitleDownloadFolder {
+  let directories = try await service.fetchDownloadDirectories()
+  guard let directory = directories.first(where: {
+    $0.save_path?.trimmingCharacters(in: .whitespacesAndNewlines) == configuredSavePath
+  }) else {
+    let available = directories.compactMap { $0.save_path?.nilIfBlank }.prefix(8).joined(separator: ", ")
+    throw BackendSubtitleDownloadError.unmatchedSavePath(available.isEmpty ? "<none>" : available)
+  }
+  guard let parentPath = directory.download_path?.nilIfBlank else {
+    throw BackendSubtitleDownloadError.missingDownloadPath
+  }
+  let storage = directory.storage?.nilIfBlank ?? "local"
+  let name = "mp-tv-subtitle-compat-\(UUID().uuidString.lowercased())"
+  let created = await mutateBackendStorage(
+    service: service, action: "mkdir", name: name, storage: storage, path: parentPath)
+  guard created.success else {
+    throw BackendSubtitleDownloadError.storageRejected("mkdir", created.message)
+  }
+  let path = parentPath.hasSuffix("/") ? parentPath + name : parentPath + "/" + name
+  let savePath = storage == "local" ? path : "\(storage):\(path)"
+  return BackendSubtitleDownloadFolder(storage: storage, path: path, savePath: savePath)
+}
+
+@MainActor
+private func removeSubtitleDownloadFolder(
+  service: APIService,
+  folder: BackendSubtitleDownloadFolder
+) async -> Bool {
+  let result = await mutateBackendStorage(
+    service: service, action: "delete", name: nil, storage: folder.storage, path: folder.path)
+  if !result.success {
+    print("Subtitle download cleanup failed for \(folder.savePath): \(result.message)")
+  }
+  return result.success
+}
+
+@MainActor
+private func downloadFirstSubtitle(
+  session: SubtitleSearchSession,
+  savePath: String
+) async throws {
+  guard let row = session.rows.first else {
+    XCTFail("Subtitle search completed without a row that can be downloaded.")
+    return
+  }
+  let model = session.downloadModel(for: row.subtitle)
+  await model.loadDirectories()
+  if let directoryError = model.directoryError {
+    XCTFail("Subtitle download directories failed: \(directoryError)")
+    return
+  }
+  model.selectSavePath(savePath)
+  guard model.canSubmit, let task = model.submit() else {
+    XCTFail(
+      "Subtitle download did not start for media \(model.mediaSource.rawValue):\(model.mediaId)."
+    )
+    return
+  }
+  let finished = await waitForVoidTask(task, seconds: 180)
+  try Task.checkCancellation()
+  if !finished {
+    model.close()
+    XCTFail("Subtitle download timed out before the server accepted the file.")
+    return
+  }
+  guard case .completed = model.state else {
+    XCTFail(
+      "Subtitle download ended in \(subtitleDownloadStateLabel(model.state)). \(model.failure ?? "")"
+    )
+    return
+  }
+  guard let enclosure = row.subtitle.enclosure else {
+    XCTFail("Downloaded subtitle row lost its enclosure.")
+    return
+  }
+  XCTAssertTrue(
+    session.downloadedEnclosures.contains(enclosure),
+    "A successful subtitle download must mark that enclosure as downloaded."
+  )
+}
+
+private func waitForVoidTask(_ task: Task<Void, Never>, seconds: Double) async -> Bool {
+  await withTaskGroup(of: Bool.self) { group in
+    group.addTask {
+      await task.value
+      return true
+    }
+    group.addTask {
+      try? await Task.sleep(for: .seconds(seconds))
+      return false
+    }
+    let finished = await group.next() ?? false
+    group.cancelAll()
+    return finished
+  }
+}
+
+@MainActor
+private func mutateBackendStorage(
+  service: APIService,
+  action: String,
+  name: String?,
+  storage: String,
+  path: String
+) async -> BackendStorageMutation {
+  guard let token = service.token?.nilIfBlank else {
+    return BackendStorageMutation(success: false, message: "missing access token")
+  }
+  guard var components = URLComponents(string: "\(service.baseURL)/api/v1/storage/\(action)") else {
+    return BackendStorageMutation(success: false, message: "invalid storage URL")
+  }
+  if let name {
+    components.queryItems = [URLQueryItem(name: "name", value: name)]
+  }
+  guard let url = components.url else {
+    return BackendStorageMutation(success: false, message: "invalid storage URL")
+  }
+  var request = URLRequest(url: url)
+  request.httpMethod = "POST"
+  request.timeoutInterval = 60
+  request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+  request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+  request.httpBody = try? JSONSerialization.data(withJSONObject: [
+    "path": path,
+    "storage": storage,
+    "type": "dir",
+  ])
+  do {
+    let (data, response) = try await URLSession.shared.data(for: request)
+    let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+    let envelope = try? JSONDecoder().decode(BackendStorageActionEnvelope.self, from: data)
+    let message = trimmedNonEmpty([envelope?.message_i18n, envelope?.message]) ?? "HTTP \(status)"
+    let success = (200...299).contains(status) && envelope?.success == true
+    return BackendStorageMutation(success: success, message: message)
+  } catch {
+    return BackendStorageMutation(success: false, message: error.localizedDescription)
+  }
+}
+
+@MainActor
+final class BackendSubtitleSearchSampleTests: XCTestCase {
+  func testTitleAndMediaSamplesUseProductionSubtitleRequests() {
+    let built = backendSubtitleSearchSamples(
+      titleQueries: ["流浪地球", "  "],
+      mediaIDs: ["tmdb:603", "not-an-id"],
+      mediaType: "电影",
+      season: 0,
+      sites: "1,2"
+    )
+    XCTAssertEqual(built.rejectedMediaIDs, ["not-an-id"])
+    XCTAssertEqual(
+      built.samples.map(\.label),
+      ["subtitle title 流浪地球", "subtitle media tmdb:603"]
+    )
+    guard built.samples.count == 2 else { return }
+    guard case .title(let keyword) = built.samples[0].request.kind else {
+      return XCTFail("Expected a title subtitle search.")
+    }
+    XCTAssertEqual(keyword, "流浪地球")
+    XCTAssertEqual(built.samples[0].request.sites, "1,2")
+    XCTAssertNil(built.samples[0].request.initialMediaIdentity)
+    guard case .media(let source, let mediaId, let type, let season, let episode) =
+      built.samples[1].request.kind
+    else {
+      return XCTFail("Expected a media subtitle search.")
+    }
+    XCTAssertEqual(source, "themoviedb")
+    XCTAssertEqual(mediaId, "603")
+    XCTAssertEqual(type, "电影")
+    XCTAssertEqual(season, 0)
+    XCTAssertNil(episode)
+    XCTAssertEqual(built.samples[1].request.sites, "1,2")
+  }
+
+  func testCollectionMediaIsNotASubtitleSample() {
+    let built = backendSubtitleSearchSamples(
+      titleQueries: [],
+      mediaIDs: ["douban:123"],
+      mediaType: "合集",
+      season: nil,
+      sites: nil
+    )
+    XCTAssertTrue(built.samples.isEmpty)
+    XCTAssertEqual(built.rejectedMediaIDs, ["douban:123"])
+  }
+}
+
 final class BackendCompatibilityReadOnlyTests: XCTestCase {
   @MainActor
   func testReadOnlyOpenAPIContractCompatibility() async throws {
@@ -1816,6 +2253,62 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         if config.testResourceSearchStreams {
           await assertResourceSearchStreamsReadable(service: service, config: config)
         }
+      }
+    }
+  }
+
+  @MainActor
+  func testReadOnlySubtitleSearchCompatibility() async throws {
+    try await withReadOnlyBackend(requiring: ["subtitle search"]) { service, config in
+      let titleQueries = uniqueStrings(config.subtitleQueries)
+      let mediaIDs = uniqueStrings(config.subtitleMediaIDs)
+      guard !titleQueries.isEmpty || !mediaIDs.isEmpty else {
+        throw XCTSkip(
+          "Set MOVIEPILOT_COMPAT_SUBTITLE_QUERY or MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_ID to run read-only subtitle search compatibility checks."
+        )
+      }
+
+      await runBackendCompatibilityStep(
+        "subtitle search",
+        service: service,
+        config: config,
+        requirement: .permission(.search)
+      ) {
+        if config.subtitleSeasonInvalid {
+          XCTFail("MOVIEPILOT_COMPAT_SUBTITLE_SEASON must be a non-negative integer. Season 0 is valid.")
+          return
+        }
+        let directories = try await service.fetchDownloadDirectories()
+        for directory in directories {
+          if let savePath = directory.save_path {
+            XCTAssertNotNil(
+              savePath.nilIfBlank,
+              "Download directory save_path must be empty or a usable path, not blank padding."
+            )
+          }
+        }
+        let built = backendSubtitleSearchSamples(
+          titleQueries: titleQueries,
+          mediaIDs: mediaIDs,
+          mediaType: config.subtitleMediaType,
+          season: config.subtitleSeason,
+          sites: config.subtitleSites
+        )
+        if !built.rejectedMediaIDs.isEmpty {
+          XCTFail(
+            "Subtitle media IDs must use source:id and a movie or TV type. Rejected: \(built.rejectedMediaIDs.joined(separator: ", "))"
+          )
+        }
+        guard !built.samples.isEmpty else {
+          XCTFail("Configured subtitle queries did not produce a TV subtitle search request.")
+          return
+        }
+        for sample in built.samples {
+          try await runSubtitleSearch(service: service, sample: sample)
+        }
+        print(
+          "Subtitle search directories=\(directories.count), samples=\(built.samples.count)"
+        )
       }
     }
   }
@@ -3690,6 +4183,83 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
           progress.errorMessage,
           "AI reorganize progress stream reported error: \(progress.errorMessage ?? "")"
         )
+      }
+    }
+  }
+
+  @MainActor
+  func testSubtitleDownloadCompatibility() async throws {
+    try await withSideEffectBackend(
+      flagName: "MOVIEPILOT_COMPAT_TEST_SUBTITLE_DOWNLOAD",
+      requiredStep: "subtitle download side-effect",
+      isEnabled: { $0.testSubtitleDownload }
+    ) { service, config in
+      await runBackendCompatibilityStep(
+        "subtitle download side-effect",
+        service: service,
+        config: config,
+        requirement: .permissions([.search, .manage])
+      ) {
+        if config.subtitleSeasonInvalid {
+          XCTFail("MOVIEPILOT_COMPAT_SUBTITLE_SEASON must be a non-negative integer. Season 0 is valid.")
+          return
+        }
+        guard let savePath = config.subtitleDownloadSavePath else {
+          XCTFail(
+            "Set MOVIEPILOT_COMPAT_SUBTITLE_DOWNLOAD_SAVE_PATH to a save_path returned by /download/paths."
+          )
+          return
+        }
+        guard let mediaID = config.subtitleMediaIDs.compactMap(\.nilIfBlank).first else {
+          XCTFail(
+            "Subtitle download needs MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_ID so the file is attached to one movie or TV item."
+          )
+          return
+        }
+        let built = backendSubtitleSearchSamples(
+          titleQueries: [],
+          mediaIDs: [mediaID],
+          mediaType: config.subtitleMediaType,
+          season: config.subtitleSeason,
+          sites: config.subtitleSites
+        )
+        guard built.rejectedMediaIDs.isEmpty, let sample = built.samples.first else {
+          XCTFail("Subtitle download media ID is not a TV subtitle search target: \(mediaID)")
+          return
+        }
+
+        let session = SubtitleSearchSession(request: sample.request, apiService: service)
+        session.start()
+        if session.state == .idle {
+          XCTFail("Subtitle download search did not start for \(sample.label).")
+          return
+        }
+        try await waitForSubtitleSearch(session)
+        assertSubtitleSearchCompleted(session, label: sample.label)
+        guard case .completed = session.state, !session.rows.isEmpty else { return }
+
+        let folder: BackendSubtitleDownloadFolder
+        do {
+          folder = try await makeSubtitleDownloadFolder(service: service, configuredSavePath: savePath)
+        } catch {
+          XCTFail("Could not create the isolated subtitle directory: \(error.localizedDescription)")
+          return
+        }
+        do {
+          try await downloadFirstSubtitle(session: session, savePath: folder.savePath)
+        } catch {
+          let removed = await removeSubtitleDownloadFolder(service: service, folder: folder)
+          if !removed {
+            XCTFail("Failed to delete isolated subtitle directory \(folder.savePath) after \(error.localizedDescription)")
+          }
+          throw error
+        }
+        let removed = await removeSubtitleDownloadFolder(service: service, folder: folder)
+        XCTAssertTrue(
+          removed,
+          "Failed to delete isolated subtitle directory \(folder.savePath). Remove that directory on the backend."
+        )
+        print("Subtitle download media=\(mediaID), directory=\(folder.savePath), removed=\(removed)")
       }
     }
   }
