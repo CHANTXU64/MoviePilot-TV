@@ -1461,6 +1461,7 @@ private struct BackendSubtitleDownloadFolder {
 private enum BackendSubtitleDownloadError: LocalizedError {
   case unmatchedSavePath(String)
   case missingDownloadPath
+  case remoteStorageUnsupported(String)
   case storageRejected(String, String)
 
   var errorDescription: String? {
@@ -1469,6 +1470,8 @@ private enum BackendSubtitleDownloadError: LocalizedError {
       return "MOVIEPILOT_COMPAT_SUBTITLE_DOWNLOAD_SAVE_PATH does not match a /download/paths save_path. Available: \(available)"
     case .missingDownloadPath:
       return "The matched download directory has no download_path, so the isolated folder cannot be created."
+    case .remoteStorageUnsupported(let storage):
+      return "Subtitle download isolation only supports local storage. \(storage) needs the parent directory id, so this test will not create a folder there."
     case .storageRejected(let action, let message):
       return "Storage \(action) failed: \(message)"
     }
@@ -1481,9 +1484,17 @@ private struct BackendStorageActionEnvelope: Decodable {
   let message_i18n: String?
 }
 
-private struct BackendStorageMutation {
+private struct BackendStorageMutation: Sendable {
   let success: Bool
   let message: String
+}
+
+private func localSubtitleDownloadStorage(_ storage: String?) throws -> String {
+  let value = storage?.nilIfBlank ?? "local"
+  guard value == "local" else {
+    throw BackendSubtitleDownloadError.remoteStorageUnsupported(value)
+  }
+  return value
 }
 
 /// 标题和媒体样本都走详情、首页使用的生产请求构造，不另写一套参数。
@@ -1588,46 +1599,31 @@ private func assertSubtitleSearchCompleted(
     line: line
   )
   for (index, row) in session.rows.enumerated() {
-    let subtitle = row.subtitle
-    let rowLabel = "\(label) row \(index)"
-    XCTAssertNotNil(
-      MediaIdentifier.normalizedString(subtitle.title),
-      "\(rowLabel) is missing a title.",
-      file: file,
-      line: line
-    )
-    XCTAssertNotNil(
-      MediaIdentifier.normalizedString(subtitle.language),
-      "\(rowLabel) is missing a language.",
-      file: file,
-      line: line
-    )
-    let enclosure = MediaIdentifier.normalizedString(subtitle.enclosure)
-    XCTAssertNotNil(enclosure, "\(rowLabel) is missing an enclosure.", file: file, line: line)
-    if let enclosure {
-      let scheme = enclosure.lowercased()
-      if scheme.hasPrefix("http://") || scheme.hasPrefix("https://") {
-        XCTAssertTrue(
-          enclosure.contains("mp_sig="),
-          "\(rowLabel) lost the signed enclosure fragment.",
-          file: file,
-          line: line
-        )
-      }
+    if let issue = subtitleSearchCompatibilityIssue(row.subtitle) {
+      XCTFail("\(label) row \(index) \(issue)", file: file, line: line)
     }
-    XCTAssertNotNil(subtitle.site, "\(rowLabel) is missing a site id.", file: file, line: line)
-    XCTAssertGreaterThan(
-      subtitle.size ?? 0,
-      0,
-      "\(rowLabel) must keep a non-zero size.",
-      file: file,
-      line: line
-    )
   }
   let languages = Set(session.rows.compactMap { MediaIdentifier.normalizedString($0.subtitle.language) })
     .sorted()
     .joined(separator: ",")
-  print("Subtitle search \(label): rows=\(session.rows.count), languages=\(languages)")
+  let missingLanguage = session.rows.filter {
+    MediaIdentifier.normalizedString($0.subtitle.language) == nil
+  }.count
+  let zeroSize = session.rows.filter { ($0.subtitle.size ?? 0) == 0 }.count
+  print(
+    "Subtitle search \(label): rows=\(session.rows.count), languages=\(languages), missingLanguage=\(missingLanguage), zeroSize=\(zeroSize)"
+  )
+}
+
+/// 语言和大小在后端合同里可缺省。真实结果只拒绝 HTTP 链接丢失签名片段；完整字段是否被解码丢掉由离线样本证明。
+private func subtitleSearchCompatibilityIssue(_ subtitle: SubtitleInfo) -> String? {
+  guard let enclosure = MediaIdentifier.normalizedString(subtitle.enclosure) else { return nil }
+  let scheme = enclosure.lowercased()
+  guard scheme.hasPrefix("http://") || scheme.hasPrefix("https://") else { return nil }
+  guard enclosure.contains("mp_sig=") else {
+    return "lost the signed enclosure fragment."
+  }
+  return nil
 }
 
 @MainActor
@@ -1670,7 +1666,7 @@ private func makeSubtitleDownloadFolder(
   guard let parentPath = directory.download_path?.nilIfBlank else {
     throw BackendSubtitleDownloadError.missingDownloadPath
   }
-  let storage = directory.storage?.nilIfBlank ?? "local"
+  let storage = try localSubtitleDownloadStorage(directory.storage)
   let name = "mp-tv-subtitle-compat-\(UUID().uuidString.lowercased())"
   let created = await mutateBackendStorage(
     service: service, action: "mkdir", name: name, storage: storage, path: parentPath)
@@ -1678,8 +1674,7 @@ private func makeSubtitleDownloadFolder(
     throw BackendSubtitleDownloadError.storageRejected("mkdir", created.message)
   }
   let path = parentPath.hasSuffix("/") ? parentPath + name : parentPath + "/" + name
-  let savePath = storage == "local" ? path : "\(storage):\(path)"
-  return BackendSubtitleDownloadFolder(storage: storage, path: path, savePath: savePath)
+  return BackendSubtitleDownloadFolder(storage: storage, path: path, savePath: path)
 }
 
 @MainActor
@@ -1687,8 +1682,13 @@ private func removeSubtitleDownloadFolder(
   service: APIService,
   folder: BackendSubtitleDownloadFolder
 ) async -> Bool {
-  let result = await mutateBackendStorage(
-    service: service, action: "delete", name: nil, storage: folder.storage, path: folder.path)
+  guard let request = storageMutationRequest(
+    service: service, action: "delete", name: nil, storage: folder.storage, path: folder.path
+  ) else {
+    print("Subtitle download cleanup failed for \(folder.savePath): missing access token or storage URL")
+    return false
+  }
+  let result = await performStorageRequestDespiteCancellation(request, timeoutSeconds: 60)
   if !result.success {
     print("Subtitle download cleanup failed for \(folder.savePath): \(result.message)")
   }
@@ -1700,8 +1700,10 @@ private func downloadFirstSubtitle(
   session: SubtitleSearchSession,
   savePath: String
 ) async throws {
-  guard let row = session.rows.first else {
-    XCTFail("Subtitle search completed without a row that can be downloaded.")
+  guard let row = session.rows.first(where: {
+    MediaIdentifier.normalizedString($0.subtitle.enclosure) != nil
+  }) else {
+    XCTFail("Subtitle search completed without a row that has an enclosure.")
     return
   }
   let model = session.downloadModel(for: row.subtitle)
@@ -1741,18 +1743,25 @@ private func downloadFirstSubtitle(
 }
 
 private func waitForVoidTask(_ task: Task<Void, Never>, seconds: Double) async -> Bool {
-  await withTaskGroup(of: Bool.self) { group in
-    group.addTask {
-      await task.value
-      return true
+  await withTaskCancellationHandler {
+    await withTaskGroup(of: Bool.self) { group in
+      group.addTask {
+        await task.value
+        return !task.isCancelled
+      }
+      group.addTask {
+        try? await Task.sleep(for: .seconds(seconds))
+        return false
+      }
+      let finished = await group.next() ?? false
+      if !finished {
+        task.cancel()
+      }
+      group.cancelAll()
+      return finished
     }
-    group.addTask {
-      try? await Task.sleep(for: .seconds(seconds))
-      return false
-    }
-    let finished = await group.next() ?? false
-    group.cancelAll()
-    return finished
+  } onCancel: {
+    task.cancel()
   }
 }
 
@@ -1764,18 +1773,34 @@ private func mutateBackendStorage(
   storage: String,
   path: String
 ) async -> BackendStorageMutation {
-  guard let token = service.token?.nilIfBlank else {
-    return BackendStorageMutation(success: false, message: "missing access token")
+  guard let request = storageMutationRequest(
+    service: service, action: action, name: name, storage: storage, path: path
+  ) else {
+    let missingToken = service.token?.nilIfBlank == nil
+    return BackendStorageMutation(
+      success: false,
+      message: missingToken ? "missing access token" : "invalid storage URL"
+    )
   }
+  return await executeStorageRequest(request)
+}
+
+@MainActor
+private func storageMutationRequest(
+  service: APIService,
+  action: String,
+  name: String?,
+  storage: String,
+  path: String
+) -> URLRequest? {
+  guard service.token?.nilIfBlank != nil else { return nil }
   guard var components = URLComponents(string: "\(service.baseURL)/api/v1/storage/\(action)") else {
-    return BackendStorageMutation(success: false, message: "invalid storage URL")
+    return nil
   }
   if let name {
     components.queryItems = [URLQueryItem(name: "name", value: name)]
   }
-  guard let url = components.url else {
-    return BackendStorageMutation(success: false, message: "invalid storage URL")
-  }
+  guard let url = components.url, let token = service.token?.nilIfBlank else { return nil }
   var request = URLRequest(url: url)
   request.httpMethod = "POST"
   request.timeoutInterval = 60
@@ -1786,6 +1811,39 @@ private func mutateBackendStorage(
     "storage": storage,
     "type": "dir",
   ])
+  return request
+}
+
+private enum StorageRequestRace: Sendable {
+  case finished(BackendStorageMutation)
+  case timedOut
+}
+
+/// 父任务取消不能带走清理请求。请求在独立任务里发出，超时会取消该请求并等它结束。
+private func performStorageRequestDespiteCancellation(
+  _ request: URLRequest,
+  timeoutSeconds: Double
+) async -> BackendStorageMutation {
+  await Task.detached {
+    await withTaskGroup(of: StorageRequestRace.self) { group in
+      group.addTask {
+        .finished(await executeStorageRequest(request))
+      }
+      group.addTask {
+        try? await Task.sleep(for: .seconds(timeoutSeconds))
+        return .timedOut
+      }
+      let first = await group.next() ?? .timedOut
+      group.cancelAll()
+      if case .finished(let mutation) = first {
+        return mutation
+      }
+      return BackendStorageMutation(success: false, message: "storage request timed out")
+    }
+  }.value
+}
+
+private func executeStorageRequest(_ request: URLRequest) async -> BackendStorageMutation {
   do {
     let (data, response) = try await URLSession.shared.data(for: request)
     let status = (response as? HTTPURLResponse)?.statusCode ?? -1
@@ -1843,6 +1901,47 @@ final class BackendSubtitleSearchSampleTests: XCTestCase {
     )
     XCTAssertTrue(built.samples.isEmpty)
     XCTAssertEqual(built.rejectedMediaIDs, ["douban:123"])
+  }
+
+  func testCompleteSubtitleFieldsSurviveDecodingAndSparseRowsStayCompatible() throws {
+    let complete = try decodeSubtitleFixture(
+      #"{"site":1,"title":"流浪地球","language":"中文","size":1200,"enclosure":"https://example.test/a.srt#mp_sig=abc"}"#
+    )
+    XCTAssertEqual(complete.site, 1)
+    XCTAssertEqual(complete.title, "流浪地球")
+    XCTAssertEqual(complete.language, "中文")
+    XCTAssertEqual(complete.size, 1200)
+    XCTAssertEqual(complete.enclosure, "https://example.test/a.srt#mp_sig=abc")
+    XCTAssertNil(subtitleSearchCompatibilityIssue(complete))
+
+    let sparse = try decodeSubtitleFixture(
+      #"{"language":null,"size":0.0,"title":null,"enclosure":"magnet:?xt=urn:btih:abc"}"#
+    )
+    XCTAssertNil(sparse.language)
+    XCTAssertNil(sparse.title)
+    XCTAssertEqual(sparse.size, 0)
+    XCTAssertNil(subtitleSearchCompatibilityIssue(sparse))
+
+    let unsigned = try decodeSubtitleFixture(#"{"enclosure":"https://example.test/a.srt"}"#)
+    XCTAssertEqual(
+      subtitleSearchCompatibilityIssue(unsigned),
+      "lost the signed enclosure fragment."
+    )
+  }
+
+  func testSubtitleDownloadIsolationRejectsCloudStorageBeforeCreatingAFolder() {
+    XCTAssertEqual(try localSubtitleDownloadStorage(nil), "local")
+    XCTAssertEqual(try localSubtitleDownloadStorage(" local "), "local")
+    XCTAssertThrowsError(try localSubtitleDownloadStorage("u115")) { error in
+      XCTAssertEqual(
+        (error as? BackendSubtitleDownloadError)?.errorDescription,
+        "Subtitle download isolation only supports local storage. u115 needs the parent directory id, so this test will not create a folder there."
+      )
+    }
+  }
+
+  private func decodeSubtitleFixture(_ json: String) throws -> SubtitleInfo {
+    try JSONDecoder().decode(SubtitleInfo.self, from: Data(json.utf8))
   }
 }
 
@@ -3896,6 +3995,136 @@ final class BackendCompatibilityCleanupTests: XCTestCase {
     XCTAssertTrue(didFinishRestore)
     XCTAssertGreaterThanOrEqual(start.duration(to: .now), .milliseconds(250))
   }
+
+  func testSlowDownloadTimeoutCancelsTheDownloadTask() async {
+    let download = Task<Void, Never> {
+      do { try await Task.sleep(for: .seconds(1.5)) } catch {}
+    }
+    let started = ContinuousClock.now
+    let finished = await waitForVoidTask(download, seconds: 0.2)
+    XCTAssertFalse(finished)
+    XCTAssertTrue(download.isCancelled)
+    XCTAssertLessThan(started.duration(to: .now), .milliseconds(900))
+  }
+
+  func testParentCancellationCancelsTheDownloadTask() async {
+    let download = Task<Void, Never> {
+      do { try await Task.sleep(for: .seconds(5)) } catch {}
+    }
+    let parent = Task {
+      await waitForVoidTask(download, seconds: 30)
+    }
+    try? await Task.sleep(for: .milliseconds(30))
+    parent.cancel()
+    let started = ContinuousClock.now
+    let finished = await parent.value
+    XCTAssertFalse(finished)
+    XCTAssertTrue(download.isCancelled)
+    XCTAssertLessThan(started.duration(to: .now), .seconds(1))
+  }
+
+  func testCancelledCallerDoesNotStartStorageRequest() async {
+    let probe = SubtitleCleanupProbe.install()
+    defer { probe.uninstall() }
+    let parent = Task {
+      try? await Task.sleep(nanoseconds: 1_000_000)
+      return await executeStorageRequest(probe.request)
+    }
+    parent.cancel()
+    let result = await parent.value
+    XCTAssertFalse(result.success)
+    XCTAssertFalse(probe.didStart)
+  }
+
+  func testStorageCleanupRequestSurvivesCallerCancellation() async {
+    let probe = SubtitleCleanupProbe.install()
+    defer { probe.uninstall() }
+    let parent = Task {
+      try? await Task.sleep(nanoseconds: 1_000_000)
+      return await performStorageRequestDespiteCancellation(probe.request, timeoutSeconds: 5)
+    }
+    parent.cancel()
+    let result = await parent.value
+    XCTAssertTrue(result.success, result.message)
+    XCTAssertTrue(probe.didStart)
+  }
+}
+
+private struct SubtitleCleanupProbe {
+  var request: URLRequest {
+    var request = URLRequest(url: URL(string: "mptv-subtitle-cleanup://cleanup/delete")!)
+    request.httpMethod = "POST"
+    return request
+  }
+
+  var didStart: Bool { SubtitleCleanupURLProtocol.didStart }
+
+  static func install() -> SubtitleCleanupProbe {
+    SubtitleCleanupURLProtocol.reset()
+    URLProtocol.registerClass(SubtitleCleanupURLProtocol.self)
+    return SubtitleCleanupProbe()
+  }
+
+  func uninstall() {
+    URLProtocol.unregisterClass(SubtitleCleanupURLProtocol.self)
+  }
+}
+
+private final class SubtitleCleanupStartCounter: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value = 0
+
+  func reset() {
+    lock.lock()
+    value = 0
+    lock.unlock()
+  }
+
+  func increment() {
+    lock.lock()
+    value += 1
+    lock.unlock()
+  }
+
+  var didStart: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return value > 0
+  }
+}
+
+private final class SubtitleCleanupURLProtocol: URLProtocol, @unchecked Sendable {
+  private static let starts = SubtitleCleanupStartCounter()
+
+  static func reset() {
+    starts.reset()
+  }
+
+  static var didStart: Bool { starts.didStart }
+
+  override class func canInit(with request: URLRequest) -> Bool {
+    request.url?.scheme == "mptv-subtitle-cleanup"
+  }
+
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+  override func startLoading() {
+    Self.starts.increment()
+    guard let url = request.url,
+      let response = HTTPURLResponse(
+        url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+        headerFields: ["Content-Type": "application/json"]
+      )
+    else {
+      client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+      return
+    }
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    client?.urlProtocol(self, didLoad: Data(#"{"success":true}"#.utf8))
+    client?.urlProtocolDidFinishLoading(self)
+  }
+
+  override func stopLoading() {}
 }
 
 final class BackendCompatibilitySideEffectTests: XCTestCase {
