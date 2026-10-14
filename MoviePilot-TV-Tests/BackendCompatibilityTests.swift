@@ -1463,6 +1463,7 @@ private enum BackendSubtitleDownloadError: LocalizedError {
   case missingDownloadPath
   case remoteStorageUnsupported(String)
   case storageRejected(String, String)
+  case cleanupUncertain(path: String, detail: String)
 
   var errorDescription: String? {
     switch self {
@@ -1474,6 +1475,8 @@ private enum BackendSubtitleDownloadError: LocalizedError {
       return "Subtitle download isolation only supports local storage. \(storage) needs the parent directory id, so this test will not create a folder there."
     case .storageRejected(let action, let message):
       return "Storage \(action) failed: \(message)"
+    case .cleanupUncertain(let path, let detail):
+      return "Subtitle directory cleanup is uncertain for \(path). \(detail)"
     }
   }
 }
@@ -1487,6 +1490,9 @@ private struct BackendStorageActionEnvelope: Decodable {
 private struct BackendStorageMutation: Sendable {
   let success: Bool
   let message: String
+  /// 请求已发出但没有拿到服务端响应时为 false。未发出请求也是 false。
+  let serverAnswered: Bool
+  let requestSent: Bool
 }
 
 private func localSubtitleDownloadStorage(_ storage: String?) throws -> String {
@@ -1668,13 +1674,50 @@ private func makeSubtitleDownloadFolder(
   }
   let storage = try localSubtitleDownloadStorage(directory.storage)
   let name = "mp-tv-subtitle-compat-\(UUID().uuidString.lowercased())"
+  let path = parentPath.hasSuffix("/") ? parentPath + name : parentPath + "/" + name
+  let folder = BackendSubtitleDownloadFolder(storage: storage, path: path, savePath: path)
+  return try await createPlannedSubtitleFolder(service: service, folder: folder, name: name, parentPath: parentPath)
+}
+
+/// 目录记录在 mkdir 发出前就固定。请求已发出但成功与否未知时，仍删除该路径并留下完整路径。
+@MainActor
+private func createPlannedSubtitleFolder(
+  service: APIService,
+  folder: BackendSubtitleDownloadFolder,
+  name: String,
+  parentPath: String
+) async throws -> BackendSubtitleDownloadFolder {
   let created = await mutateBackendStorage(
-    service: service, action: "mkdir", name: name, storage: storage, path: parentPath)
+    service: service, action: "mkdir", name: name, storage: folder.storage, path: parentPath)
   guard created.success else {
+    try await throwAfterUnsuccessfulCreate(service: service, folder: folder, created: created)
+  }
+  return folder
+}
+
+@MainActor
+private func throwAfterUnsuccessfulCreate(
+  service: APIService,
+  folder: BackendSubtitleDownloadFolder,
+  created: BackendStorageMutation
+) async throws -> Never {
+  guard created.requestSent else {
     throw BackendSubtitleDownloadError.storageRejected("mkdir", created.message)
   }
-  let path = parentPath.hasSuffix("/") ? parentPath + name : parentPath + "/" + name
-  return BackendSubtitleDownloadFolder(storage: storage, path: path, savePath: path)
+  let removed = await removeSubtitleDownloadFolder(service: service, folder: folder)
+  if created.serverAnswered && removed {
+    throw BackendSubtitleDownloadError.storageRejected(
+      "mkdir", "\(created.message) Checked \(folder.savePath)."
+    )
+  }
+  let delete = removed ? "delete request succeeded" : "delete request failed"
+  let reason = created.serverAnswered
+    ? "server rejected mkdir (\(created.message)) and \(delete)"
+    : "mkdir outcome unknown (\(created.message)); \(delete)"
+  throw BackendSubtitleDownloadError.cleanupUncertain(
+    path: folder.savePath,
+    detail: "\(reason). The server may still finish creating this directory. Check this path."
+  )
 }
 
 @MainActor
@@ -1695,56 +1738,100 @@ private func removeSubtitleDownloadFolder(
   return result.success
 }
 
+private enum SubtitleDownloadEnd: Equatable {
+  case accepted
+  case serverRejected(String)
+  /// requestSent 为 false 时下载请求还没发出，删除隔离目录就是最终清理。
+  case interrupted(String, requestSent: Bool)
+
+  var remoteFinished: Bool {
+    switch self {
+    case .accepted, .serverRejected, .interrupted(_, false): true
+    case .interrupted(_, true): false
+    }
+  }
+}
+
+private struct SubtitleIsolationCleanup: Equatable {
+  let path: String
+  let deleteSucceeded: Bool
+  let remoteFinished: Bool
+
+  var sceneRestored: Bool { remoteFinished && deleteSucceeded }
+
+  var logLine: String {
+    if !remoteFinished {
+      let delete = deleteSucceeded ? "delete request succeeded" : "delete request failed"
+      return "Subtitle cleanup is uncertain for \(path); \(delete). The server may still recreate this directory and write the subtitle. Check this path after the backend request ends."
+    }
+    if deleteSucceeded {
+      return "Subtitle isolation removed \(path)."
+    }
+    return "Failed to delete isolated subtitle directory \(path). Remove that directory on the backend."
+  }
+}
+
+private func finishSubtitleIsolation(
+  folder: BackendSubtitleDownloadFolder,
+  remoteFinished: Bool,
+  remove: () async -> Bool
+) async -> SubtitleIsolationCleanup {
+  let deleteSucceeded = await remove()
+  return SubtitleIsolationCleanup(
+    path: folder.savePath, deleteSucceeded: deleteSucceeded, remoteFinished: remoteFinished)
+}
+
 @MainActor
 private func downloadFirstSubtitle(
   session: SubtitleSearchSession,
   savePath: String
-) async throws {
+) async -> SubtitleDownloadEnd {
   guard let row = session.rows.first(where: {
     MediaIdentifier.normalizedString($0.subtitle.enclosure) != nil
   }) else {
-    XCTFail("Subtitle search completed without a row that has an enclosure.")
-    return
+    return .interrupted(
+      "Subtitle search completed without a row that has an enclosure.", requestSent: false)
   }
   let model = session.downloadModel(for: row.subtitle)
   await model.loadDirectories()
   if let directoryError = model.directoryError {
-    XCTFail("Subtitle download directories failed: \(directoryError)")
-    return
+    return .interrupted("Subtitle download directories failed: \(directoryError)", requestSent: false)
   }
   model.selectSavePath(savePath)
   guard model.canSubmit, let task = model.submit() else {
-    XCTFail(
-      "Subtitle download did not start for media \(model.mediaSource.rawValue):\(model.mediaId)."
+    return .interrupted(
+      "Subtitle download did not start for media \(model.mediaSource.rawValue):\(model.mediaId).",
+      requestSent: false
     )
-    return
   }
   let finished = await waitForVoidTask(task, seconds: 180)
-  try Task.checkCancellation()
-  if !finished {
+  // 等下载任务自己结束后再读 remoteExchange。超时取消和响应同时到达时，以接口是否已经返回为准。
+  if model.remoteExchange != .serverFinished {
     model.close()
-    XCTFail("Subtitle download timed out before the server accepted the file.")
-    return
+    let reason = Task.isCancelled
+      ? "cancelled before the server response"
+      : (!finished
+        ? "timed out before the server response"
+        : "ended without a finished server response")
+    return .interrupted(reason, requestSent: true)
   }
   guard case .completed = model.state else {
-    XCTFail(
+    return .serverRejected(
       "Subtitle download ended in \(subtitleDownloadStateLabel(model.state)). \(model.failure ?? "")"
     )
-    return
   }
   guard let enclosure = row.subtitle.enclosure else {
-    XCTFail("Downloaded subtitle row lost its enclosure.")
-    return
+    return .serverRejected("Downloaded subtitle row lost its enclosure.")
   }
-  XCTAssertTrue(
-    session.downloadedEnclosures.contains(enclosure),
-    "A successful subtitle download must mark that enclosure as downloaded."
-  )
+  guard session.downloadedEnclosures.contains(enclosure) else {
+    return .serverRejected("A successful subtitle download must mark that enclosure as downloaded.")
+  }
+  return .accepted
 }
 
 private func waitForVoidTask(_ task: Task<Void, Never>, seconds: Double) async -> Bool {
   await withTaskCancellationHandler {
-    await withTaskGroup(of: Bool.self) { group in
+    let finished = await withTaskGroup(of: Bool.self) { group in
       group.addTask {
         await task.value
         return !task.isCancelled
@@ -1760,6 +1847,10 @@ private func waitForVoidTask(_ task: Task<Void, Never>, seconds: Double) async -
       group.cancelAll()
       return finished
     }
+    if !finished {
+      await task.value
+    }
+    return finished && !task.isCancelled
   } onCancel: {
     task.cancel()
   }
@@ -1779,7 +1870,9 @@ private func mutateBackendStorage(
     let missingToken = service.token?.nilIfBlank == nil
     return BackendStorageMutation(
       success: false,
-      message: missingToken ? "missing access token" : "invalid storage URL"
+      message: missingToken ? "missing access token" : "invalid storage URL",
+      serverAnswered: false,
+      requestSent: false
     )
   }
   return await executeStorageRequest(request)
@@ -1838,7 +1931,12 @@ private func performStorageRequestDespiteCancellation(
       if case .finished(let mutation) = first {
         return mutation
       }
-      return BackendStorageMutation(success: false, message: "storage request timed out")
+      return BackendStorageMutation(
+        success: false,
+        message: "storage request timed out",
+        serverAnswered: false,
+        requestSent: true
+      )
     }
   }.value
 }
@@ -1850,9 +1948,15 @@ private func executeStorageRequest(_ request: URLRequest) async -> BackendStorag
     let envelope = try? JSONDecoder().decode(BackendStorageActionEnvelope.self, from: data)
     let message = trimmedNonEmpty([envelope?.message_i18n, envelope?.message]) ?? "HTTP \(status)"
     let success = (200...299).contains(status) && envelope?.success == true
-    return BackendStorageMutation(success: success, message: message)
+    return BackendStorageMutation(
+      success: success, message: message, serverAnswered: true, requestSent: true)
   } catch {
-    return BackendStorageMutation(success: false, message: error.localizedDescription)
+    return BackendStorageMutation(
+      success: false,
+      message: error.localizedDescription,
+      serverAnswered: false,
+      requestSent: true
+    )
   }
 }
 
@@ -4048,6 +4152,232 @@ final class BackendCompatibilityCleanupTests: XCTestCase {
     XCTAssertTrue(result.success, result.message)
     XCTAssertTrue(probe.didStart)
   }
+
+  @MainActor
+  func testMkdirLostResponseStillDeletesThePreparedDirectory() async throws {
+    let probe = SubtitleMkdirRaceProbe.install()
+    defer { probe.uninstall() }
+    let service = APIService.isolatedTestingInstance()
+    service.replaceSessionForTesting(
+      baseURL: "https://mptv-subtitle-mkdir.test", token: "token", currentUser: nil)
+    XCTAssertEqual(
+      service.baseURL, "https://mptv-subtitle-mkdir.test",
+      "mkdir race probe must stay on the intercepted host"
+    )
+    let folder = BackendSubtitleDownloadFolder(
+      storage: "local",
+      path: "/downloads/mp-tv-subtitle-compat-lost",
+      savePath: "/downloads/mp-tv-subtitle-compat-lost"
+    )
+    let parent = Task { () throws -> BackendSubtitleDownloadFolder in
+      try await createPlannedSubtitleFolder(
+        service: service, folder: folder, name: "mp-tv-subtitle-compat-lost", parentPath: "/downloads")
+    }
+    for _ in 0..<50 {
+      if probe.mkdirStarted { break }
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    XCTAssertTrue(probe.mkdirStarted)
+    XCTAssertTrue(probe.directoryExists, "the server created the directory before delivering success")
+    parent.cancel()
+    do {
+      _ = try await parent.value
+      XCTFail("a lost mkdir response must not return the folder as ready")
+    } catch {
+      let description = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+      XCTAssertTrue(
+        description.contains(folder.savePath),
+        "lost mkdir must keep the prepared path, got: \(description)"
+      )
+      XCTAssertTrue(description.contains("uncertain"), description)
+    }
+    XCTAssertGreaterThan(probe.deleteCount, 0)
+    XCTAssertFalse(probe.directoryExists)
+  }
+
+  func testLateServerWriteDoesNotCountDeletedDirectoryAsRestored() async {
+    let server = LateSubtitleWrite()
+    let folder = BackendSubtitleDownloadFolder(
+      storage: "local",
+      path: "/downloads/mp-tv-subtitle-compat-late",
+      savePath: "/downloads/mp-tv-subtitle-compat-late"
+    )
+    let writer = Task {
+      await server.waitUntilDeleted()
+      server.writeFile()
+    }
+    let cleanup = await finishSubtitleIsolation(folder: folder, remoteFinished: false) {
+      server.deleteDirectory()
+    }
+    XCTAssertTrue(cleanup.deleteSucceeded)
+    XCTAssertFalse(cleanup.sceneRestored)
+    XCTAssertTrue(cleanup.logLine.contains("uncertain"))
+    XCTAssertTrue(cleanup.logLine.contains(folder.savePath))
+    await writer.value
+    XCTAssertTrue(server.directoryExists)
+    XCTAssertFalse(cleanup.sceneRestored)
+  }
+}
+
+/// 服务端在 mkdir 一开始就把目录建好，但成功响应一直不交付。取消后客户端必须按预定路径删除。
+private struct SubtitleMkdirRaceProbe {
+  var mkdirStarted: Bool { SubtitleMkdirRaceState.shared.mkdirStarted }
+  var directoryExists: Bool { SubtitleMkdirRaceState.shared.directoryExists }
+  var deleteCount: Int { SubtitleMkdirRaceState.shared.deleteCount }
+
+  static func install() -> SubtitleMkdirRaceProbe {
+    SubtitleMkdirRaceState.shared.reset()
+    URLProtocol.registerClass(SubtitleMkdirRaceURLProtocol.self)
+    return SubtitleMkdirRaceProbe()
+  }
+
+  func uninstall() {
+    URLProtocol.unregisterClass(SubtitleMkdirRaceURLProtocol.self)
+    SubtitleMkdirRaceState.shared.reset()
+  }
+}
+
+private final class SubtitleMkdirRaceState: @unchecked Sendable {
+  static let shared = SubtitleMkdirRaceState()
+
+  private let lock = NSLock()
+  private var started = false
+  private var exists = false
+  private var deletes = 0
+
+  func reset() {
+    lock.lock()
+    started = false
+    exists = false
+    deletes = 0
+    lock.unlock()
+  }
+
+  func noteCreated() {
+    lock.lock()
+    started = true
+    exists = true
+    lock.unlock()
+  }
+
+  func noteDeleted() {
+    lock.lock()
+    exists = false
+    deletes += 1
+    lock.unlock()
+  }
+
+  var mkdirStarted: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return started
+  }
+
+  var directoryExists: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return exists
+  }
+
+  var deleteCount: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return deletes
+  }
+}
+
+private final class SubtitleMkdirRaceURLProtocol: URLProtocol, @unchecked Sendable {
+  private let deliveryLock = NSLock()
+  private var stopped = false
+
+  override class func canInit(with request: URLRequest) -> Bool {
+    request.url?.host == "mptv-subtitle-mkdir.test"
+  }
+
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+  override func startLoading() {
+    let path = request.url?.path ?? ""
+    if path.hasSuffix("/storage/mkdir") {
+      SubtitleMkdirRaceState.shared.noteCreated()
+      return
+    }
+    if path.hasSuffix("/storage/delete") {
+      SubtitleMkdirRaceState.shared.noteDeleted()
+      finishJSON(#"{"success":true}"#)
+      return
+    }
+    client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+  }
+
+  override func stopLoading() {
+    // 取消由 URLSession 结束 data(for:)。这里不能再回调 client，否则会和系统的取消完成重复。
+    deliveryLock.withLock { stopped = true }
+  }
+
+  private func finishJSON(_ body: String) {
+    let shouldSend = deliveryLock.withLock { () -> Bool in
+      if stopped { return false }
+      stopped = true
+      return true
+    }
+    guard shouldSend, let url = request.url,
+      let response = HTTPURLResponse(
+        url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+        headerFields: ["Content-Type": "application/json"]
+      )
+    else { return }
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    client?.urlProtocol(self, didLoad: Data(body.utf8))
+    client?.urlProtocolDidFinishLoading(self)
+  }
+}
+
+/// 下载任务已经结束并删除目录后，服务端工作线程仍可能把目录和字幕文件写回来。
+private final class LateSubtitleWrite: @unchecked Sendable {
+  private let lock = NSLock()
+  private var exists = false
+  private var deleted = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+
+  var directoryExists: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return exists
+  }
+
+  func deleteDirectory() -> Bool {
+    let pending: [CheckedContinuation<Void, Never>]
+    lock.lock()
+    exists = false
+    deleted = true
+    pending = waiters
+    waiters = []
+    lock.unlock()
+    for waiter in pending {
+      waiter.resume()
+    }
+    return true
+  }
+
+  func waitUntilDeleted() async {
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      lock.lock()
+      if deleted {
+        lock.unlock()
+        continuation.resume()
+      } else {
+        waiters.append(continuation)
+        lock.unlock()
+      }
+    }
+  }
+
+  func writeFile() {
+    lock.lock()
+    exists = true
+    lock.unlock()
+  }
 }
 
 private struct SubtitleCleanupProbe {
@@ -4471,24 +4801,33 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
         do {
           folder = try await makeSubtitleDownloadFolder(service: service, configuredSavePath: savePath)
         } catch {
-          XCTFail("Could not create the isolated subtitle directory: \(error.localizedDescription)")
+          XCTFail(error.localizedDescription)
           return
         }
-        do {
-          try await downloadFirstSubtitle(session: session, savePath: folder.savePath)
-        } catch {
-          let removed = await removeSubtitleDownloadFolder(service: service, folder: folder)
-          if !removed {
-            XCTFail("Failed to delete isolated subtitle directory \(folder.savePath) after \(error.localizedDescription)")
-          }
-          throw error
+        let end = await downloadFirstSubtitle(session: session, savePath: folder.savePath)
+        let cleanup = await finishSubtitleIsolation(
+          folder: folder, remoteFinished: end.remoteFinished
+        ) {
+          await removeSubtitleDownloadFolder(service: service, folder: folder)
         }
-        let removed = await removeSubtitleDownloadFolder(service: service, folder: folder)
-        XCTAssertTrue(
-          removed,
-          "Failed to delete isolated subtitle directory \(folder.savePath). Remove that directory on the backend."
-        )
-        print("Subtitle download media=\(mediaID), directory=\(folder.savePath), removed=\(removed)")
+        print("Subtitle download media=\(mediaID), \(cleanup.logLine)")
+        switch end {
+        case .accepted:
+          XCTAssertTrue(cleanup.sceneRestored, cleanup.logLine)
+        case .serverRejected(let message):
+          XCTFail(message)
+          XCTAssertTrue(
+            cleanup.sceneRestored,
+            "\(cleanup.logLine) The server had already answered, so the directory should be gone."
+          )
+        case .interrupted(let message, let requestSent):
+          if requestSent {
+            XCTFail("\(message) \(cleanup.logLine)")
+          } else {
+            XCTFail(message)
+            XCTAssertTrue(cleanup.sceneRestored, cleanup.logLine)
+          }
+        }
       }
     }
   }

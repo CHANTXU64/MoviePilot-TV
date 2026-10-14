@@ -878,6 +878,7 @@ final class SubtitleSearchTests: XCTestCase {
     SubtitleSearchURLProtocol.downloadBody = Data(#"{"success":false,"message":"保存失败"}"#.utf8)
     await model.submit()?.value
     XCTAssertEqual(model.failure, "保存失败")
+    XCTAssertEqual(model.remoteExchange, .serverFinished)
     XCTAssertTrue(model.canEdit)
     model.selectSource(.douban)
     XCTAssertFalse(model.canSubmit)
@@ -892,6 +893,18 @@ final class SubtitleSearchTests: XCTestCase {
     XCTAssertEqual(model.state, .completed)
   }
 
+  func testDroppedDownloadResponseDoesNotFinishOnTheServer() async throws {
+    SubtitleSearchURLProtocol.holdDownload = true
+    let model = downloadModel(api: service())
+    model.mediaId = "550"
+    let task = try XCTUnwrap(model.submit())
+    try await until { SubtitleSearchURLProtocol.requests.contains { $0.path.hasSuffix("/download/subtitle") } }
+    SubtitleSearchURLProtocol.failHeldDownloads()
+    await task.value
+    XCTAssertEqual(model.remoteExchange, .interrupted)
+    XCTAssertNotEqual(model.state, .completed)
+  }
+
   func testClosedDownloadCancelsAndCannotPublishOrSubmitAgain() async throws {
     SubtitleSearchURLProtocol.holdDownload = true
     let model = downloadModel(api: service())
@@ -902,6 +915,7 @@ final class SubtitleSearchTests: XCTestCase {
     SubtitleSearchURLProtocol.releaseHeldDownloads()
     await task.value
     XCTAssertEqual(model.state, .closed)
+    XCTAssertEqual(model.remoteExchange, .interrupted)
     XCTAssertNotEqual(model.state, .completed)
     XCTAssertNil(model.submit())
   }
@@ -1135,6 +1149,7 @@ final class SubtitleSearchTests: XCTestCase {
     XCTAssertEqual(payload["media_source"] as? String, "imdb")
     XCTAssertEqual(payload["media_id"] as? String, "tt0133093")
     XCTAssertEqual(model.state, .completed)
+    XCTAssertEqual(model.remoteExchange, .serverFinished)
 
     let invalidSource = SubtitleDownloadViewModel(
       subtitle: SubtitleInfo(title: "字幕"),
@@ -1329,6 +1344,13 @@ nonisolated private final class SubtitleSearchURLProtocol: URLProtocol, @uncheck
     let pending = lock.withLock { let value = heldDownloads; heldDownloads = []; return value }
     for entry in pending {
       entry.respond(status: 200, data: downloadBody, failAfter: false, contentType: "application/json")
+    }
+  }
+
+  static func failHeldDownloads() {
+    let pending = lock.withLock { let value = heldDownloads; heldDownloads = []; return value }
+    for entry in pending {
+      entry.client?.urlProtocol(entry, didFailWithError: URLError(.networkConnectionLost))
     }
   }
 
