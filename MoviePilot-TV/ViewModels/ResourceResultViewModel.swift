@@ -22,7 +22,7 @@ class ResourceResultViewModel: ObservableObject {
   @Published var errorMessage: String?
 
   private var searchStreamTask: Task<Void, Never>?
-  private var searchGeneration = 0
+  private let runs: SearchRunGate
   private let searchStreamDoneCloseDelay: UInt64 = 1_500_000_000
 
   private let apiService: APIService
@@ -40,6 +40,7 @@ class ResourceResultViewModel: ObservableObject {
     self.season = season
     self.sites = sites
     self.apiService = apiService
+    self.runs = SearchRunGate(apiService: apiService)
   }
 
   deinit {
@@ -48,7 +49,7 @@ class ResourceResultViewModel: ObservableObject {
 
   func cancelSearch() {
     pagedSearch?.cancel()
-    searchGeneration += 1
+    runs.end()
     searchStreamTask?.cancel()
     searchStreamTask = nil
     hasSearched = false
@@ -59,7 +60,7 @@ class ResourceResultViewModel: ObservableObject {
   func cancelInFlightSearch() {
     if let pagedSearch { pagedSearch.deactivate(); return }
     let wasInFlight = isLoading
-    searchGeneration += 1
+    runs.end()
     searchStreamTask?.cancel()
     searchStreamTask = nil
     if wasInFlight {
@@ -86,8 +87,7 @@ class ResourceResultViewModel: ObservableObject {
       return
     }
     isLoading = true
-    searchGeneration += 1
-    let currentSearchGeneration = searchGeneration
+    let run = runs.begin()
 
     // 取消可能正在进行的流式搜索
     searchStreamTask?.cancel()
@@ -104,25 +104,16 @@ class ResourceResultViewModel: ObservableObject {
     let sites = self.sites
     let apiService = self.apiService
     let doneCloseDelay = searchStreamDoneCloseDelay
-    let sessionSnapshot = apiService.sessionSnapshot()
+    let runs = runs
 
     searchStreamTask = Task { @MainActor [weak self] in
       var collectedResults = ResourceSearchResultCollector()
       // 只有收到端点认可的 done 才允许 missingSites 补偿与发布；业务 error 与无终止 EOF 均不发布。
       var receivedDone = false
-      defer {
-        self?.finishSearchIfCurrent(
-          generation: currentSearchGeneration,
-          sessionSnapshot: sessionSnapshot
-        )
-      }
+      defer { self?.finishSearchIfCurrent(run) }
 
       let canContinue: @MainActor () -> Bool = { [weak self] in
-        guard let self else { return false }
-        return self.searchGeneration == currentSearchGeneration
-          && apiService.isSessionUnchanged(from: sessionSnapshot)
-          && apiService.canAccess(.search)
-          && !Task.isCancelled
+        self != nil && runs.isCurrent(run)
       }
 
       do {
@@ -277,17 +268,11 @@ class ResourceResultViewModel: ObservableObject {
     }
   }
 
-  private func finishSearchIfCurrent(
-    generation: Int,
-    sessionSnapshot: APIServiceSessionSnapshot
-  ) {
-    guard searchGeneration == generation else { return }
+  private func finishSearchIfCurrent(_ run: SearchRunGate.Run) {
+    guard runs.owns(run) else { return }
     isLoading = false
     searchStreamTask = nil
-    if Task.isCancelled
-      || !apiService.isSessionUnchanged(from: sessionSnapshot)
-      || !apiService.canAccess(.search)
-    {
+    if !runs.isCurrent(run) {
       hasSearched = false
     }
   }

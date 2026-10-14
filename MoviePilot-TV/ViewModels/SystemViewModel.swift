@@ -1,23 +1,10 @@
 import Combine
 import Foundation
 
+/// 默认站点在发起搜索时读取，只有聚合搜索来源需要通知已打开的页面。
 struct SearchDefaultsChange {
   let profileKey: String
-  let defaultSearchSites: Set<Int>
-  let defaultSubtitleSearchSites: Set<Int>
   let defaultMediaSearchSource: MediaSearchSource?
-
-  init(
-    profileKey: String,
-    defaultSearchSites: Set<Int>,
-    defaultSubtitleSearchSites: Set<Int> = [],
-    defaultMediaSearchSource: MediaSearchSource?
-  ) {
-    self.profileKey = profileKey
-    self.defaultSearchSites = defaultSearchSites
-    self.defaultSubtitleSearchSites = defaultSubtitleSearchSites
-    self.defaultMediaSearchSource = defaultMediaSearchSource
-  }
 
   @MainActor
   static func post(apiService: APIService) {
@@ -26,10 +13,6 @@ struct SearchDefaultsChange {
       name: .searchDefaultsDidChange,
       object: SearchDefaultsChange(
         profileKey: profileKey,
-        defaultSearchSites: SystemViewModel.currentDefaultSearchSites(apiService: apiService),
-        defaultSubtitleSearchSites: SystemViewModel.currentDefaultSubtitleSearchSites(
-          apiService: apiService
-        ),
         defaultMediaSearchSource: SystemViewModel.currentDefaultMediaSearchSource(
           apiService: apiService
         )
@@ -429,13 +412,6 @@ class SystemViewModel: ObservableObject {
       .flatMap(MediaSearchSource.init(rawValue:))
   }
 
-  /// 获取已按当前可用站点清理后的资源搜索默认站点。
-  static func normalizedCurrentDefaultSearchSites(
-    apiService: APIService = .shared
-  ) async -> Set<Int> {
-    await normalizedStoredSiteIDs(prefix: "defaultSearchSites", apiService: apiService)
-  }
-
   /// 获取已按当前可用站点清理后的资源搜索默认站点字符串。
   static func normalizedDefaultSearchSitesString(
     apiService: APIService = .shared
@@ -468,12 +444,6 @@ class SystemViewModel: ObservableObject {
     }
   }
 
-  /// 获取默认搜索站点的逗号分隔字符串
-  @available(*, deprecated, message: "搜索前请使用 normalizedDefaultSearchSitesString()，避免发送已删除站点。")
-  static var defaultSearchSitesString: String? {
-    siteIdsString(from: currentDefaultSearchSites())
-  }
-
   /// 当前是否等待 MediaDetail 背景/海报预加载完成。
   static var shouldWaitMediaDetailBackgroundImage: Bool {
     guard UserDefaults.standard.object(forKey: waitMediaDetailBackgroundImageKey) != nil else {
@@ -501,68 +471,24 @@ class SystemViewModel: ObservableObject {
   }
 
   private func updateStoredSiteIDs(_ sites: Set<Int>, prefix: String) {
-    guard Self.userDefaultsKey(prefix, apiService: apiService) != nil else { return }
-    Self.persistSiteIDs(normalizeDefaultSearchSites(sites), prefix: prefix, apiService: apiService)
+    guard let key = Self.userDefaultsKey(prefix, apiService: apiService) else { return }
+    let array = normalizeDefaultSearchSites(sites).sorted()
+    if array.isEmpty {
+      UserDefaults.standard.removeObject(forKey: key)
+    } else {
+      UserDefaults.standard.set(array, forKey: key)
+    }
     objectWillChange.send()
   }
 
   private func normalizeDefaultSearchSites(_ sites: Set<Int>) -> Set<Int> {
-    guard hasLoadedSites, loadedSitesAuthoritative else { return sites }
-
-    let availableSiteIds = Set(availableSites.map(\.id))
-    return sites.intersection(availableSiteIds)
+    SearchSiteScope(sites: availableSites, authoritative: hasLoadedSites && loadedSitesAuthoritative)
+      .normalized(sites)
   }
 
   private static func storedSiteIDs(prefix: String, apiService: APIService) -> Set<Int> {
     guard let key = userDefaultsKey(prefix, apiService: apiService) else { return [] }
     let array = UserDefaults.standard.array(forKey: key) as? [Int] ?? []
     return Set(array)
-  }
-
-  /// 降级为订阅域时不能裁剪已保存的合法站点选择。
-  private static func normalizedStoredSiteIDs(
-    prefix: String,
-    apiService: APIService
-  ) async -> Set<Int> {
-    let storedSites = storedSiteIDs(prefix: prefix, apiService: apiService)
-    guard !storedSites.isEmpty else { return [] }
-    guard apiService.canAccess(.search) else { return [] }
-    let snapshot = apiService.sessionSnapshot()
-
-    do {
-      let (availableSites, authoritative) = try await apiService.fetchSearchableSites()
-      guard apiService.isSessionUnchanged(from: snapshot) else { return [] }
-      guard authoritative else { return storedSites }
-      let availableSiteIds = Set(availableSites.map(\.id))
-      let normalizedSites = storedSites.intersection(availableSiteIds)
-      if normalizedSites != storedSites {
-        persistSiteIDs(normalizedSites, prefix: prefix, apiService: apiService)
-      }
-      return normalizedSites
-    } catch is CancellationError {
-      return []
-    } catch {
-      Logger.error("[SystemViewModel] 默认搜索站点归一化失败: \(error)")
-      return storedSites
-    }
-  }
-
-  private static func persistSiteIDs(
-    _ sites: Set<Int>,
-    prefix: String,
-    apiService: APIService
-  ) {
-    guard let key = userDefaultsKey(prefix, apiService: apiService) else { return }
-    let array = sites.sorted()
-    if array.isEmpty {
-      UserDefaults.standard.removeObject(forKey: key)
-    } else {
-      UserDefaults.standard.set(array, forKey: key)
-    }
-    SearchDefaultsChange.post(apiService: apiService)
-  }
-
-  private static func siteIdsString(from sites: Set<Int>) -> String? {
-    sites.isEmpty ? nil : sites.sorted().map { String($0) }.joined(separator: ",")
   }
 }

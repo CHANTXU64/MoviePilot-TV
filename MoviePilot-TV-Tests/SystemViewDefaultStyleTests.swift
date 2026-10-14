@@ -391,7 +391,6 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains(".defaultFocus($focusedButton, preferredHeaderFocus)"))
     XCTAssertTrue(source.contains("private var shouldShowOtherInfo: Bool"))
     XCTAssertTrue(source.contains("case subscribe, search, subtitleSearch, sites, otherInfo"))
-    XCTAssertTrue(source.contains(".focused($focusedButton, equals: .subtitleSearch)"))
     XCTAssertFalse(source.contains("equals: .tmdbJump"))
     XCTAssertTrue(source.contains(".focused($focusedButton, equals: .otherInfo)"))
     XCTAssertTrue(containerSource.contains(".allowsHitTesting(!isReady)"))
@@ -540,11 +539,13 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("Picker(\"媒体来源\""))
     XCTAssertFalse(source.contains("private var sourceButtons: some View"))
     XCTAssertFalse(source.contains(".disabled((viewModel.form.type_name ?? \"\").isEmpty)"))
-    XCTAssertTrue(source.contains("placeholder: \"自动判断\""))
-    XCTAssertFalse(source.contains("placeholder: \"留空自动识别\""))
-    XCTAssertTrue(source.contains("Image(systemName: \"magnifyingglass\")"))
-    XCTAssertTrue(source.contains(".accessibilityLabel(\"搜索媒体\")"))
-    XCTAssertFalse(source.contains("Label(\"搜索媒体\", systemImage: \"magnifyingglass\")"))
+    let idFieldSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/ManualMediaSearchSheet.swift")
+    XCTAssertTrue(source.contains("ManualMediaIdField(source: viewModel.mediaSource, mediaId: $viewModel.mediaId)"))
+    XCTAssertTrue(idFieldSource.contains("var placeholder = \"自动判断\""))
+    XCTAssertFalse(idFieldSource.contains("留空自动识别"))
+    XCTAssertTrue(idFieldSource.contains("Image(systemName: \"magnifyingglass\")"))
+    XCTAssertTrue(idFieldSource.contains(".accessibilityLabel(\"搜索媒体\")"))
+    XCTAssertFalse(idFieldSource.contains("Label(\"搜索媒体\", systemImage: \"magnifyingglass\")"))
     XCTAssertTrue(source.contains(".sheet(isPresented: $showPreview)"))
     XCTAssertTrue(
       containsTokensInOrder(
@@ -600,16 +601,16 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("title: \"立即整理\""))
     XCTAssertTrue(source.contains("submit(background: true)"))
     XCTAssertFalse(source.contains("submit(background: false)"))
-    XCTAssertTrue(source.contains("showMediaSearch = false"))
+    XCTAssertTrue(idFieldSource.contains("showMediaSearch = false"))
   }
 
   func testManualMediaSearchSheetKeepsSearchExplicitAndFocusable() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Sheets/ManualMediaSearchSheet.swift")
 
     XCTAssertTrue(source.contains("NavigationStack {"))
-    XCTAssertTrue(source.contains("Text(\"按名称查询 \\(viewModel.source.title) 媒体编号\")"))
+    XCTAssertTrue(source.contains("Text(\"查询 \\(viewModel.source.title) ID\")"))
     XCTAssertFalse(source.contains("Text(\"搜索 \\(viewModel.source.title) 媒体\")"))
-    XCTAssertTrue(source.contains("placeholder: \"输入电影或电视剧名称后搜索\""))
+    XCTAssertTrue(source.contains("placeholder: \"输入媒体标题后搜索\""))
     XCTAssertFalse(source.contains("placeholder: \"输入标题后搜索\""))
     XCTAssertTrue(source.contains(".labelsHidden()"))
     XCTAssertTrue(source.contains(".focusSection()"))

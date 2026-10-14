@@ -173,17 +173,9 @@ final class DynamicSourceBehaviorTests: XCTestCase {
         ]
       )
     )
-    XCTAssertTrue(
-      containsTokensInOrder(
-        homeSource,
-        [
-          "if canSearchResources, SubtitleSearchRequest.supportsSubtitleSearch(type: item.type) {",
-          "Button {",
-          "let navigationSource = navigationCoordinator.sourceToken()",
-          "Task {",
-          "Label(\"搜索字幕\"",
-        ]
-      )
+    XCTAssertEqual(
+      homeSource.components(separatedBy: "ifCurrent: navigationSource").count - 1,
+      4
     )
     XCTAssertFalse(homeSource.contains("onTMDBDetail"))
     XCTAssertFalse(homeSource.contains("onSearchResource"))

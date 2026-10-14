@@ -1,6 +1,33 @@
 import Combine
 import SwiftUI
 
+enum ManualMediaSelection {
+  static func mediaId(for media: MediaInfo, source: MediaSearchSource) -> String? {
+    let nativeId: String? =
+      switch source {
+      case .themoviedb: MediaIdentifier.validNumericIdentifier(media.tmdb_id).map(String.init)
+      case .douban: media.douban_id
+      case .bangumi: MediaIdentifier.validNumericIdentifier(media.bangumi_id).map(String.init)
+      case .anilist: MediaIdentifier.validNumericIdentifier(media.anilist_id).map(String.init)
+      }
+    for candidate in [nativeId, media.media_id] {
+      let normalized = candidate?.trimmingCharacters(in: .whitespacesAndNewlines)
+      if normalized?.isEmpty == false {
+        return normalized
+      }
+    }
+    return nil
+  }
+
+  static func typeName(for media: MediaInfo) -> String? {
+    switch media.type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "电影", "movie": "电影"
+    case "电视剧", "tv", "series": "电视剧"
+    default: nil
+    }
+  }
+}
+
 @MainActor
 final class ManualMediaSearchViewModel: ObservableObject {
   // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
@@ -9,17 +36,14 @@ final class ManualMediaSearchViewModel: ObservableObject {
   @Published var keyword = ""
   @Published var items: [MediaInfo] = []
   @Published var isLoading = false
-  @Published private(set) var searchedKeyword: String?
-  @Published private(set) var errorMessage: String?
 
   let source: MediaSearchSource
   private let apiService: APIService
   private var searchRevision = 0
   private let dismissalReleaseScheduler = PresentationReleaseScheduler()
 
-  init(source: MediaSearchSource, keyword: String = "", apiService: APIService = .shared) {
+  init(source: MediaSearchSource, apiService: APIService = .shared) {
     self.source = source
-    self.keyword = keyword
     self.apiService = apiService
   }
 
@@ -27,8 +51,6 @@ final class ManualMediaSearchViewModel: ObservableObject {
     searchRevision &+= 1
     let revision = searchRevision
     let title = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
-    searchedKeyword = title.isEmpty ? nil : title
-    errorMessage = nil
     items = []
     guard !title.isEmpty else {
       isLoading = false
@@ -48,7 +70,6 @@ final class ManualMediaSearchViewModel: ObservableObject {
       items = results
     } catch {
       guard searchRevision == revision else { return }
-      errorMessage = error.localizedDescription
       Logger.error("Failed to search manual media ID: \(error)")
     }
   }
@@ -83,25 +104,24 @@ struct ManualMediaSearchSheet: View {
 
   init(
     source: MediaSearchSource,
-    keyword: String = "",
     onSelect: @escaping (String, MediaInfo) -> Void
   ) {
-    _viewModel = StateObject(wrappedValue: ManualMediaSearchViewModel(source: source, keyword: keyword))
+    _viewModel = StateObject(wrappedValue: ManualMediaSearchViewModel(source: source))
     self.onSelect = onSelect
   }
 
   var body: some View {
     NavigationStack {
       VStack(spacing: 24) {
-        Text("按名称查询 \(viewModel.source.title) 媒体编号")
+        Text("查询 \(viewModel.source.title) ID")
           .font(.headline)
           .frame(maxWidth: .infinity)
           .padding(.horizontal, 28)
 
         HStack(spacing: 20) {
           SheetTextField(
-            title: "电影或电视剧名称",
-            placeholder: "输入电影或电视剧名称后搜索",
+            title: "媒体标题",
+            placeholder: "输入媒体标题后搜索",
             text: $viewModel.keyword
           )
           .labelsHidden()
@@ -122,14 +142,8 @@ struct ManualMediaSearchSheet: View {
         if viewModel.isLoading {
           ProgressView("搜索中…")
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if let error = viewModel.errorMessage {
-          EmptyDataView(title: "媒体查询失败", description: "\(error)\n请使用上方搜索按钮重试。")
         } else if viewModel.items.isEmpty {
-          EmptyDataView(
-            title: viewModel.searchedKeyword == nil ? "输入名称查询媒体编号" : "未找到匹配的电影或电视剧",
-            description: viewModel.searchedKeyword == nil
-              ? "选中搜索结果后，会自动填写对应的媒体编号。" : "请更换名称后重新搜索。"
-          )
+          EmptyDataView(title: "输入标题搜索媒体")
         } else {
           ScrollView {
             LazyVGrid(
@@ -144,7 +158,7 @@ struct ManualMediaSearchSheet: View {
                   for: item, source: viewModel.source
                 ) {
                   BestResultCard(
-                    title: ManualMediaSelection.displayTitle(for: item),
+                    title: displayTitle(for: item),
                     type: item.displayTypeText,
                     posterUrl: item.imageURLs.poster,
                     posterFallbackUrl: item.imageURLs.posterFallback,
@@ -175,4 +189,47 @@ struct ManualMediaSearchSheet: View {
     }
   }
 
+  private func displayTitle(for item: MediaInfo) -> String {
+    guard let year = item.year, !year.isEmpty else { return item.title ?? "" }
+    return "\(item.title ?? "")（\(year)）"
+  }
+}
+
+/// 手动填写所选来源的媒体 ID；放大镜按标题查询后回填。整理、添加下载与字幕下载共用。
+struct ManualMediaIdField: View {
+  let source: MediaSearchSource
+  @Binding var mediaId: String
+  var placeholder = "自动判断"
+  var onSelect: (String, MediaInfo) -> Void
+  @State private var showMediaSearch = false
+
+  var body: some View {
+    Group {
+      HStack(spacing: 20) {
+        SheetTextField(
+          title: "\(source.title) ID",
+          placeholder: placeholder,
+          text: $mediaId,
+          keyboardType: .numberPad
+        )
+
+        Button {
+          showMediaSearch = true
+        } label: {
+          Image(systemName: "magnifyingglass")
+        }
+        .accessibilityLabel("搜索媒体")
+      }
+      if !MediaIdentifier.isValidManualMediaId(mediaId) {
+        Text("媒体 ID 只能包含数字")
+          .foregroundStyle(.red)
+      }
+    }
+    .sheet(isPresented: $showMediaSearch) {
+      ManualMediaSearchSheet(source: source) { mediaId, media in
+        showMediaSearch = false
+        onSelect(mediaId, media)
+      }
+    }
+  }
 }

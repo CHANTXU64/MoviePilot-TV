@@ -180,6 +180,14 @@ class TestTVOSRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertEqual(self.calls(), [])
 
+    def test_options_without_effect_are_rejected_before_any_command(self):
+        for arguments in (("--skip-build", "--only-testing", "MoviePilot-TV-Tests/TestIsolationTests"),
+                          ("--result-bundle-path", str(self.root / "results.xcresult"))):
+            with self.subTest(arguments=arguments):
+                result = self.run_script("success", *arguments, full=False)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertEqual(self.calls(), [])
+
     def test_success_builds_debug_and_tests_isolated_configuration(self):
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -347,7 +355,7 @@ class TestTVOSRunnerTests(unittest.TestCase):
     def test_compatibility_overrides_reach_xctest_without_rewriting_env_file(self):
         self.environment["MOVIEPILOT_COMPAT_ENV_FILE"] = "/tmp/config with spaces.env"
         self.environment["MOVIEPILOT_COMPAT_ENABLE_SIDE_EFFECTS"] = "false"
-        result = self.run_script("success", "--skip-build", "--include-backend-tests",
+        result = self.run_script("success", "--include-backend-tests",
                                  "--only-testing", "MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests")
         self.assertEqual(result.returncode, 0, result.stderr)
         test = next(call for call in self.calls() if call["tool"] == "xcodebuild" and "test-without-building" in call["args"])
@@ -386,7 +394,7 @@ class TestTVOSRunnerTests(unittest.TestCase):
         self.assertEqual(len(self.calls()), 1)
 
     def test_backend_suites_require_explicit_opt_in(self):
-        result = self.run_script("success", "--skip-build", "--include-backend-tests",
+        result = self.run_script("success", "--include-backend-tests",
                                  "--only-testing", "MoviePilot-TV-Tests/BackendCompatibilityReadOnlyTests")
         self.assertEqual(result.returncode, 0, result.stderr)
         test = next(call["args"] for call in self.calls() if "test-without-building" in call["args"])

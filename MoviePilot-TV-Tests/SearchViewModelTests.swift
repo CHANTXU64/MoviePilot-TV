@@ -592,7 +592,6 @@ final class SearchViewModelTests: XCTestCase {
       name: .searchDefaultsDidChange,
       object: SearchDefaultsChange(
         profileKey: "another-profile",
-        defaultSearchSites: [8],
         defaultMediaSearchSource: .bangumi
       )
     )

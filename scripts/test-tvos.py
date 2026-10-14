@@ -105,12 +105,15 @@ def main(argv=None):
     parser.add_argument("--include-backend-tests", action="store_true",
                         help="包含真实后端套件；仍遵守其独立开关与目标限制")
     parser.add_argument("--skip-build", action="store_true",
-                        help="全量模式跳过依赖解析与 Debug clean build；测试宿主仍会构建")
+                        help="仅用于 --full：跳过依赖解析与 Debug clean build；测试宿主仍会构建")
     parser.add_argument("--derived-data-path", help="专用构建缓存目录，默认与日常 Xcode 隔离")
-    parser.add_argument("--result-bundle-path")
+    parser.add_argument("--result-bundle-path", help="测试结果包路径；只构建时不产生结果包")
     args = parser.parse_args(argv)
-    if not args.full and not args.only_testing and (args.skip_build or args.include_backend_tests):
+    runs_tests = args.full or args.only_testing
+    if not runs_tests and (args.skip_build or args.include_backend_tests or args.result_bundle_path):
         parser.error("运行测试须指定 --only-testing；仅提交验收使用 --full")
+    if args.skip_build and not args.full:
+        parser.error("--skip-build 只用于 --full；定向测试始终构建测试宿主")
     with build_directory(args.derived_data_path) as directory:
         args.derived_data_path = directory
         return run_selected(args)

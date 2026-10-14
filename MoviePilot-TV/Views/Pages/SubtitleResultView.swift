@@ -57,11 +57,9 @@ struct SubtitleResultsBody<Header: View>: View {
               progressContent
             } else if search.didFinish || search.state == .interrupted {
               EmptyDataView(
-                title: search.state == .interrupted
-                  ? "搜索已中断"
-                  : (search.errorMessage == nil ? "未搜索到字幕" : "字幕搜索失败"),
+                title: "未找到相关字幕",
                 systemImage: "captions.bubble",
-                description: search.state == .interrupted ? "可重新搜索。" : search.errorMessage,
+                description: search.errorMessage,
                 actionTitle: search.canRestart ? "重新搜索" : nil,
                 action: { search.restart() }
               )
@@ -104,18 +102,10 @@ struct SubtitleResultsBody<Header: View>: View {
         if search.isSearching {
           progressContent
         }
-        if search.state == .interrupted {
-          Text("搜索未完成，已有结果已保留。")
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-        } else if let error = search.errorMessage {
-          Text(error).foregroundStyle(.orange)
-            .multilineTextAlignment(.center)
+        if let error = search.errorMessage {
+          Text(error).font(.caption).foregroundColor(.orange)
         }
         HStack(spacing: 24) {
-          if search.isSearching {
-            Text("搜索预览").font(.caption).foregroundStyle(.secondary)
-          }
           TorrentResultCount(count: search.rows.count, unit: "个字幕")
           if search.canRestart {
             Button("重新搜索") { search.restart() }

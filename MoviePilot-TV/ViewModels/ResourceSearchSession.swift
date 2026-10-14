@@ -62,7 +62,6 @@ final class ResourceSearchSession: ObservableObject {
     var name: String
     var failed: Bool
   }
-  private final class Run {}
   private final class PageAttempt {
     let key: String
     let hadSnapshot: Bool
@@ -74,7 +73,7 @@ final class ResourceSearchSession: ObservableObject {
     }
   }
   private struct PageFinished: Error {}
-  private var run: Run?
+  private let runs: SearchRunGate
   private var pages: [String: StoredPage] = [:]
   private var pageOrder: [String] = []
   private var cursors: [String: Cursor] = [:]
@@ -84,6 +83,7 @@ final class ResourceSearchSession: ObservableObject {
     self.query = query
     self.apiService = apiService
     self.session = apiService.sessionSnapshot()
+    self.runs = SearchRunGate(apiService: apiService)
     // 以字节预算限制整次收集，另留系统和 UI 余量；不按某个资源条数假定对象大小。
     self.capacityBytes = capacityBytes ?? min(64 * 1024 * 1024, Int(ProcessInfo.processInfo.physicalMemory / 32))
     // UI 作用域按账号和权限复用；同账号刷新令牌也会更换请求 epoch，需收尾旧搜索。
@@ -121,7 +121,6 @@ final class ResourceSearchSession: ObservableObject {
   private var isSessionValid: Bool {
     apiService.isSessionUnchanged(from: session) && apiService.canAccess(.search)
   }
-  private func isCurrent(_ candidate: Run) -> Bool { run === candidate && isSessionValid && !Task.isCancelled }
   private var settings: ResourceProjectionSettings {
     .init(filters: filterForm, sortField: sortField.rawValue, sortType: sortType.rawValue)
   }
@@ -161,7 +160,7 @@ final class ResourceSearchSession: ObservableObject {
     guard isCollecting else { return }
     networkTask?.cancel()
     networkTask = nil
-    run = nil
+    runs.end()
     collectionPhase = nil
     publishSnapshot(refreshTime: true)
   }
@@ -172,7 +171,7 @@ final class ResourceSearchSession: ObservableObject {
   }
 
   func cancel() {
-    run = nil
+    runs.end()
     networkTask?.cancel(); ruleTask?.cancel(); projectionTask?.cancel()
     networkTask = nil; ruleTask = nil; projectionTask = nil
     collectionPhase = nil; isPreparing = false
@@ -244,30 +243,29 @@ final class ResourceSearchSession: ObservableObject {
   private func collect(initial: Bool, resetProcessor: Bool = false) {
     guard isSessionValid, !isBusy, !reachedCapacity else { return }
     projectionTask?.cancel()
-    let current = Run()
-    run = current
+    let current = runs.begin()
     collectionPhase = .searching
     errorMessage = nil
     collectionStartCount = retainedCount
     newCount = 0; progress = 0; progressText = "正在搜索…"
-    let api = apiService, query = query
+    let api = apiService, query = query, runs = runs
     let processor = processor
     networkTask = Task { [weak self] in
       if resetProcessor { await processor.reset() }
-      if self?.isCurrent(current) == true,
+      if runs.isCurrent(current),
         let attempt = self?.nextAttempt(initial: initial)
       {
         do {
           try await api.readResourceSearchPage(
             query: query, source: attempt.transaction.source, page: attempt.transaction.page,
             maximumEventBytes: { [weak self] in
-              guard let self, self.isCurrent(current) else { throw CancellationError() }
+              guard let self, runs.isCurrent(current) else { throw CancellationError() }
               // 原始帧/解码临时占用和本帧对象均按至少 8 倍字节估算。
               // 后端预览不保证分块，因此不另设与收集预算无关的固定帧上限。
               return self.remainingCapacity(attempt: attempt) / 16
             }
           ) { [weak self] event, bytes in
-            guard let self, self.isCurrent(current) else { throw CancellationError() }
+            guard let self, runs.isCurrent(current) else { throw CancellationError() }
             try await self.receive(event, bytes: bytes, attempt: attempt)
             if attempt.transaction.isComplete { throw PageFinished() }
           }
@@ -275,12 +273,12 @@ final class ResourceSearchSession: ObservableObject {
         } catch is PageFinished {
           // 完整结果和页事实已一起提交，可以关闭该连接。
         } catch {
-          guard self?.isCurrent(current) == true else { return }
+          guard runs.isCurrent(current) else { return }
           self?.fail(error, attempt: attempt)
         }
       }
-      guard let self, self.isCurrent(current) else { return }
-      self.run = nil; self.networkTask = nil; self.collectionPhase = nil
+      guard let self, runs.isCurrent(current) else { return }
+      runs.end(current); self.networkTask = nil; self.collectionPhase = nil
       self.publishSnapshot(refreshTime: true)
     }
   }

@@ -14,7 +14,6 @@ struct ReorganizeSheet: View {
 
   @StateObject private var viewModel: ReorganizeViewModel
   @State private var showAdvanced = false
-  @State private var showMediaSearch = false
   @State private var showPreview = false
   @FocusState private var isAdvancedButtonFocused: Bool
 
@@ -174,30 +173,8 @@ struct ReorganizeSheet: View {
         }
       )
 
-      HStack(spacing: 20) {
-        SheetTextField(
-          title: "\(viewModel.mediaSource.title) ID",
-          placeholder: "自动判断",
-          text: $viewModel.mediaId,
-          keyboardType: .numberPad
-        )
-
-        Button {
-          showMediaSearch = true
-        } label: {
-          Image(systemName: "magnifyingglass")
-        }
-        .accessibilityLabel("搜索媒体")
-      }
-      if !viewModel.isMediaIdValid {
-        Text("媒体 ID 只能包含数字")
-          .foregroundStyle(.red)
-      }
-    }
-    .sheet(isPresented: $showMediaSearch) {
-      ManualMediaSearchSheet(source: viewModel.mediaSource) { mediaId, media in
+      ManualMediaIdField(source: viewModel.mediaSource, mediaId: $viewModel.mediaId) { mediaId, media in
         viewModel.selectManualMedia(media, mediaId: mediaId)
-        showMediaSearch = false
       }
     }
   }

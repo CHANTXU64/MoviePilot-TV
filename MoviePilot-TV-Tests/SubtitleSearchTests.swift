@@ -129,20 +129,6 @@ final class SubtitleSearchTests: XCTestCase {
     XCTAssertEqual(subtitle["site_cookie"] as? String, "secret")
   }
 
-  func testEmptySavePathThrowsInsteadOfBecomingNull() {
-    let info = SubtitleInfo(title: "中字", enclosure: "https://sub.example/a.zip")
-    XCTAssertThrowsError(
-      try JSONEncoder().encode(
-        SubtitleDownloadRequest(
-          subtitle: info, mediaSource: "themoviedb", mediaId: "550", savePath: " \n ")
-      )
-    ) { error in
-      guard case SubtitleSearchFailure.emptySavePath = error else {
-        return XCTFail("空白目录必须失败，不能编成 null：\(error)")
-      }
-    }
-  }
-
   func testNonEmptySavePathIsSentUnchanged() throws {
     let info = SubtitleInfo(title: "中字")
     let data = try JSONEncoder().encode(
@@ -332,40 +318,46 @@ final class SubtitleSearchTests: XCTestCase {
     )
   }
 
-  func testFinalReplaceSurvivesCleanCloseBeforeDone() async throws {
+  func testFinalReplaceWithoutDoneFallsBackOnCleanClose() async throws {
     let api = service()
     SubtitleSearchURLProtocol.streamBody = sse(
-      #"data: {"type":"replace","items":[{"title":"最终"}]}"#
+      #"data: {"type":"replace","items":[{"title":"流内最终"}]}"#
+    )
+    SubtitleSearchURLProtocol.fallbackBody = Data(
+      #"{"success":true,"message":"","data":[{"title":"普通请求"}]}"#.utf8
     )
     let session = session(api: api, keyword: "收尾")
     session.start()
     try await until { session.didFinish }
-    XCTAssertEqual(session.rows.map(\.subtitle.title), ["最终"])
+    XCTAssertEqual(session.rows.map(\.subtitle.title), ["普通请求"])
     XCTAssertNil(session.errorMessage)
     XCTAssertEqual(
       SubtitleSearchURLProtocol.requests.map(\.path),
-      ["/api/v1/search/subtitle/title/stream"]
+      ["/api/v1/search/subtitle/title/stream", "/api/v1/search/subtitle/title"]
     )
   }
 
-  func testFinalReplaceSurvivesDisconnectBeforeDone() async throws {
+  func testFinalReplaceWithoutDoneFallsBackOnDisconnect() async throws {
     let api = service()
     SubtitleSearchURLProtocol.streamBody = sse(
-      #"data: {"type":"replace","items":[{"title":"最终"}]}"#
+      #"data: {"type":"replace","items":[{"title":"流内最终"}]}"#
+    )
+    SubtitleSearchURLProtocol.fallbackBody = Data(
+      #"{"success":true,"message":"","data":[{"title":"普通请求"}]}"#.utf8
     )
     // 同一轮里先 didLoad 再 didFail 时，URLSession 会丢掉还没被读走的事件。
-    // 先等最终列表发布，再断开，才能覆盖“最终列表之后的传输失败不再回退”。
+    // 先等最终列表发布，再断开，覆盖“最终列表之后断流仍按 Web 改用普通请求”。
     SubtitleSearchURLProtocol.holdStreamAfterBody = true
     let session = session(api: api, keyword: "断开")
     session.start()
-    try await until { session.rows.map(\.subtitle.title) == ["最终"] }
+    try await until { session.rows.map(\.subtitle.title) == ["流内最终"] }
     SubtitleSearchURLProtocol.failHeldStreams()
     try await until { session.didFinish }
-    XCTAssertEqual(session.rows.map(\.subtitle.title), ["最终"])
+    XCTAssertEqual(session.rows.map(\.subtitle.title), ["普通请求"])
     XCTAssertNil(session.errorMessage)
     XCTAssertEqual(
       SubtitleSearchURLProtocol.requests.map(\.path),
-      ["/api/v1/search/subtitle/title/stream"]
+      ["/api/v1/search/subtitle/title/stream", "/api/v1/search/subtitle/title"]
     )
   }
 
@@ -539,16 +531,15 @@ final class SubtitleSearchTests: XCTestCase {
     viewModel.loadedSitesAuthoritative = true
   }
 
-  func testDownloadSuccessRequiresExplicitFilesAndKeepsSignedEnclosure() async throws {
+  func testDownloadSuccessKeepsSignedEnclosureAndSavePath() async throws {
     let api = service()
     let enclosure = "https://sub.example/a.zip#mp_sig=abc&mp_purpose=subtitle_download:9"
     let info = try decodeSubtitle(#"{"title":"中字","enclosure":"\#(enclosure)"}"#)
     SubtitleSearchURLProtocol.downloadBody = Data(
       #"{"success":true,"message":"","data":{"files":["/media/a.srt","/media/b.srt"]}}"#.utf8
     )
-    let files = try await api.downloadSubtitle(
+    try await api.downloadSubtitle(
       subtitle: info, mediaSource: "themoviedb", mediaId: "550", savePath: nil)
-    XCTAssertEqual(files, ["/media/a.srt", "/media/b.srt"])
     let body = try XCTUnwrap(SubtitleSearchURLProtocol.requests.last?.body)
     let json = try jsonObject(body)
     XCTAssertTrue(json["save_path"] is NSNull)
@@ -558,36 +549,26 @@ final class SubtitleSearchTests: XCTestCase {
     SubtitleSearchURLProtocol.downloadBody = Data(
       #"{"success":true,"message":"","data":{"files":["/media/kept.srt"]}}"#.utf8
     )
-    let saved = try await api.downloadSubtitle(
+    try await api.downloadSubtitle(
       subtitle: info, mediaSource: "themoviedb", mediaId: "550", savePath: "/downloads/movie")
-    XCTAssertEqual(saved, ["/media/kept.srt"])
     let savedBody = try jsonObject(try XCTUnwrap(SubtitleSearchURLProtocol.requests.last?.body))
     XCTAssertEqual(savedBody["save_path"] as? String, "/downloads/movie")
   }
 
-  func testDownloadFailsClosedForRejectedEmptyOrIncompleteResponses() async throws {
+  func testDownloadFailsClosedForRejectedOrEmptyResponses() async throws {
     let api = service()
     let info = SubtitleInfo(title: "中字", enclosure: "https://sub.example/a.zip")
-    do {
-      _ = try await api.downloadSubtitle(
-        subtitle: info, mediaSource: "themoviedb", mediaId: "550", savePath: " ")
-      XCTFail("空白目录不应发出请求")
-    } catch SubtitleSearchFailure.emptySavePath {
-    }
-    XCTAssertTrue(SubtitleSearchURLProtocol.requests.isEmpty)
-
     for (body, expected) in [
       (#"{"success":false,"message":"字幕下载链接签名无效","data":null}"#, "字幕下载链接签名无效"),
       ("", "字幕下载失败"),
-      (#"{"success":true,"message":"","data":{}}"#, "字幕下载失败"),
-      (#"{"success":true,"message":"","data":null}"#, "字幕下载失败"),
+      (#"{"message":"缺少成功标记"}"#, "缺少成功标记"),
     ] {
       SubtitleSearchURLProtocol.reset()
       SubtitleSearchURLProtocol.downloadBody = Data(body.utf8)
       do {
-        _ = try await api.downloadSubtitle(
+        try await api.downloadSubtitle(
           subtitle: info, mediaSource: "themoviedb", mediaId: "550", savePath: nil)
-        XCTFail("不完整响应不应当成下载成功：\(body)")
+        XCTFail("没有明确成功的响应不应当成下载成功：\(body)")
       } catch let error as APIError {
         XCTAssertEqual(error.localizedDescription, expected)
       }
@@ -710,16 +691,16 @@ final class SubtitleSearchTests: XCTestCase {
   func testDownloadFreezesTargetAndSuccessStopsRepeatSubmission() async throws {
     SubtitleSearchURLProtocol.holdDownload = true
     let model = downloadModel(api: service())
-    model.selectMedia(id: "550", media: MediaInfo(title: "A", type: "电影"))
+    model.mediaId = "550"
     model.selectSavePath(" /media/A ")
     let task = try XCTUnwrap(model.submit())
     XCTAssertTrue(model.isSubmitting)
     XCTAssertFalse(model.canEdit)
     XCTAssertNil(model.submit())
-    model.selectMedia(id: "42", media: MediaInfo(title: "B", type: "电影"))
+    model.mediaId = "42"
     model.selectSource(.douban)
     model.selectSavePath("/media/B")
-    XCTAssertEqual(model.selectedIdentity?.mediaId, "550")
+    XCTAssertEqual(model.mediaSource, .themoviedb)
     XCTAssertEqual(model.selectedSavePath, " /media/A ")
     try await until { SubtitleSearchURLProtocol.requests.contains { $0.path.hasSuffix("/download/subtitle") } }
     let record = try XCTUnwrap(SubtitleSearchURLProtocol.requests.last)
@@ -731,56 +712,48 @@ final class SubtitleSearchTests: XCTestCase {
     SubtitleSearchURLProtocol.releaseHeldDownloads()
     await task.value
     XCTAssertEqual(model.state, .completed)
-    XCTAssertEqual(model.submitTitle, "已下载")
     XCTAssertFalse(model.canSubmit)
     XCTAssertFalse(model.canEdit)
     XCTAssertNil(model.submit())
   }
 
-  func testSelectingCurrentSubtitleSourceKeepsChosenMedia() {
+  func testSelectingCurrentSubtitleSourceKeepsMediaId() {
     let model = downloadModel(api: service())
-    model.selectMedia(id: "550", media: MediaInfo(title: "已选电影", type: "电影"))
+    model.mediaId = "550"
     model.selectSavePath(" /media/A ")
-    let identity = model.selectedIdentity
     model.selectSource(model.mediaSource)
-    XCTAssertEqual(model.selectedIdentity, identity)
-    XCTAssertEqual(model.selectedTitle, "已选电影")
+    XCTAssertEqual(model.mediaId, "550")
     XCTAssertEqual(model.selectedSavePath, " /media/A ")
     XCTAssertTrue(model.canSubmit)
 
     model.selectSource(.douban)
     XCTAssertEqual(model.mediaSource, .douban)
-    XCTAssertNil(model.selectedIdentity)
-    XCTAssertNil(model.selectedTitle)
+    XCTAssertEqual(model.mediaId, "")
     XCTAssertFalse(model.canSubmit)
   }
 
-  func testSubtitleMediaSelectionKeepsSearchKeywordAndDisambiguatesYear() async throws {
+  func testManualMediaIdMustBeValidAndIsSubmittedTrimmedWithoutTypeRestriction() async throws {
     let api = service()
     let model = downloadModel(api: api)
-    let lookup = ManualMediaSearchViewModel(
-      source: model.mediaSource, keyword: model.mediaSearchKeyword, apiService: api
-    )
-    XCTAssertTrue(SubtitleSearchURLProtocol.requests.isEmpty)
-    SubtitleSearchURLProtocol.recognitionBody = Data(
-      #"[{"tmdb_id":550,"title":"同名电影","year":"2026","type":"电影"}]"#.utf8
-    )
-    await lookup.search()
-    let result = try XCTUnwrap(lookup.items.first)
-    XCTAssertEqual(SubtitleSearchURLProtocol.requests.first?.query["title"], model.mediaSearchKeyword)
-    let identity = try XCTUnwrap(ManualMediaSelection.mediaId(for: result, source: lookup.source))
-    model.selectMedia(id: identity, media: result)
-    XCTAssertEqual(model.selectedTitle, "同名电影（2026）")
-    XCTAssertEqual(model.mediaSearchKeyword, "同名电影（2026）")
-    XCTAssertEqual(model.selectedTitle, ManualMediaSelection.displayTitle(for: result))
+    XCTAssertFalse(model.canSubmit)
+    for invalid in ["  ", "0", "abc", "-5"] {
+      model.mediaId = invalid
+      XCTAssertFalse(model.canSubmit, invalid)
+    }
+    model.mediaId = " 550 "
+    XCTAssertTrue(model.canSubmit)
     await model.submit()?.value
     let body = try jsonObject(XCTUnwrap(SubtitleSearchURLProtocol.requests.last?.body))
     XCTAssertEqual(body["media_id"] as? String, "550")
+    XCTAssertEqual(model.state, .completed)
 
-    let request = try XCTUnwrap(MediaActionHandler(apiService: api).subtitleSearchRequest(for: result, sites: nil))
+    let request = try XCTUnwrap(MediaActionHandler(apiService: api).subtitleSearchRequest(
+      for: MediaInfo(tmdb_id: 550, title: "同名电影", type: "电影", year: "2026"), sites: nil))
+    XCTAssertEqual(request.navigationTitle, "同名电影")
     let prefilled = SubtitleDownloadViewModel(subtitle: SubtitleInfo(title: "字幕"), request: request, apiService: api)
-    XCTAssertEqual(prefilled.selectedTitle, "同名电影（2026）")
-    XCTAssertEqual(prefilled.selectedIdentity?.mediaId, "550")
+    XCTAssertEqual(prefilled.mediaSource, .themoviedb)
+    XCTAssertEqual(prefilled.mediaId, "550")
+    XCTAssertTrue(prefilled.canSubmit)
   }
 
   func testSiteFilterFailureAndRetryKeepExplicitSelection() async {
@@ -828,7 +801,7 @@ final class SubtitleSearchTests: XCTestCase {
   func testIdleSubtitleDownloadPublishesInvalidationOnSameAccountRefresh() {
     let api = service()
     let model = downloadModel(api: api)
-    model.selectMedia(id: "550", media: MediaInfo(title: "已选电影", type: "电影"))
+    model.mediaId = "550"
     let uiIdentity = api.uiIdentity
     var states: [SubtitleDownloadViewModel.State] = []
     let observation = model.$state.sink { states.append($0) }
@@ -841,7 +814,8 @@ final class SubtitleSearchTests: XCTestCase {
     XCTAssertFalse(model.canEdit)
     XCTAssertNil(model.submit())
     model.selectSource(.douban)
-    XCTAssertEqual(model.selectedIdentity?.mediaId, "550")
+    XCTAssertEqual(model.mediaSource, .themoviedb)
+    XCTAssertEqual(model.mediaId, "550")
     XCTAssertTrue(SubtitleSearchURLProtocol.requests.isEmpty)
   }
 
@@ -900,15 +874,14 @@ final class SubtitleSearchTests: XCTestCase {
 
   func testFailedDownloadCanEditAndRetryWithNewFrozenTarget() async throws {
     let model = downloadModel(api: service())
-    model.selectMedia(id: "550", media: MediaInfo(title: "A", type: "电影"))
+    model.mediaId = "550"
     SubtitleSearchURLProtocol.downloadBody = Data(#"{"success":false,"message":"保存失败"}"#.utf8)
     await model.submit()?.value
     XCTAssertEqual(model.failure, "保存失败")
-    XCTAssertEqual(model.submitTitle, "重试下载")
     XCTAssertTrue(model.canEdit)
     model.selectSource(.douban)
     XCTAssertFalse(model.canSubmit)
-    model.selectMedia(id: "42", media: MediaInfo(title: "B", type: "电影"))
+    model.mediaId = "42"
     model.selectSavePath(nil)
     SubtitleSearchURLProtocol.downloadBody = Data(#"{"success":true,"data":{"files":[]}}"#.utf8)
     await model.submit()?.value
@@ -922,7 +895,7 @@ final class SubtitleSearchTests: XCTestCase {
   func testClosedDownloadCancelsAndCannotPublishOrSubmitAgain() async throws {
     SubtitleSearchURLProtocol.holdDownload = true
     let model = downloadModel(api: service())
-    model.selectMedia(id: "550", media: MediaInfo(title: "A", type: "电影"))
+    model.mediaId = "550"
     let task = try XCTUnwrap(model.submit())
     try await until { SubtitleSearchURLProtocol.requests.contains { $0.path.hasSuffix("/download/subtitle") } }
     model.close()
@@ -937,7 +910,7 @@ final class SubtitleSearchTests: XCTestCase {
     let api = service()
     SubtitleSearchURLProtocol.holdDownload = true
     let model = downloadModel(api: api)
-    model.selectMedia(id: "550", media: MediaInfo(title: "A", type: "电影"))
+    model.mediaId = "550"
     let task = try XCTUnwrap(model.submit())
     try await until { SubtitleSearchURLProtocol.requests.contains { $0.path.hasSuffix("/download/subtitle") } }
     api.replaceSessionForTesting(baseURL: "https://subtitle-tests.local", token: "new", currentUser: searchUser(enabled: true, token: "new", userID: 881))
@@ -952,10 +925,9 @@ final class SubtitleSearchTests: XCTestCase {
     let api = service()
     let request = MediaActionHandler(apiService: api).subtitleSearchRequest(for: MediaInfo(tmdb_id: 550, title: "预填媒体", type: "电影"), sites: nil)!
     let model = SubtitleDownloadViewModel(subtitle: SubtitleInfo(title: "字幕"), request: request, apiService: api)
-    XCTAssertEqual(model.selectedIdentity, request.initialMediaIdentity)
+    XCTAssertEqual(model.mediaId, "550")
     model.selectSource(.douban)
-    model.selectMedia(id: "42", media: MediaInfo(title: "B", type: "电影"))
-    XCTAssertEqual(model.selectedIdentity, MediaIdentity(source: "douban", mediaId: "42"))
+    model.mediaId = "42"
     SubtitleSearchURLProtocol.directoryBody = Data(#"[{"name":"电影","save_path":" /media/A "},{"save_path":""},{"save_path":" /media/A "}]"#.utf8)
     await model.loadDirectories()
     XCTAssertEqual(model.savePathChoices, [" /media/A "])
@@ -976,8 +948,7 @@ final class SubtitleSearchTests: XCTestCase {
     let model = SubtitleDownloadViewModel(subtitle: SubtitleInfo(title: "字幕"), request: request, apiService: api)
     XCTAssertEqual(model.mediaSource, .douban)
     model.selectSource(.douban)
-    XCTAssertEqual(model.selectedIdentity, request.initialMediaIdentity)
-    XCTAssertEqual(model.selectedTitle, "预填电影")
+    XCTAssertEqual(model.mediaId, "1291843")
     await model.submit()?.value
     let payload = try jsonObject(XCTUnwrap(SubtitleSearchURLProtocol.requests.last?.body))
     XCTAssertEqual(payload["media_source"] as? String, "douban")
@@ -1068,7 +1039,7 @@ final class SubtitleSearchTests: XCTestCase {
       if state == .completed { downloadedAtCompletion = search.downloadedEnclosures }
     }
     defer { observation.cancel() }
-    model.selectMedia(id: "550", media: MediaInfo(title: "A", type: "电影"))
+    model.mediaId = "550"
     await model.submit()?.value
     XCTAssertEqual(model.state, .completed)
     XCTAssertEqual(downloadedAtCompletion, ["https://sub.example/a#signature"])
@@ -1084,7 +1055,7 @@ final class SubtitleSearchTests: XCTestCase {
     let model = search!.downloadModel(for: SubtitleInfo(title: "字幕", enclosure: "a"))
     search = nil
     XCTAssertNil(released)
-    model.selectMedia(id: "550", media: MediaInfo(title: "A", type: "电影"))
+    model.mediaId = "550"
     await model.submit()?.value
     XCTAssertEqual(model.state, .completed)
   }

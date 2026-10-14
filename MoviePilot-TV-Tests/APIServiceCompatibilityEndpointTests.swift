@@ -562,8 +562,6 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
 
     XCTAssertTrue(viewModel.items.isEmpty)
     XCTAssertFalse(viewModel.isLoading)
-    XCTAssertNil(viewModel.searchedKeyword)
-    XCTAssertNil(viewModel.errorMessage)
   }
 
   func testManualMediaSearchOlderFailureCannotStopNewerLoading() async {
@@ -603,41 +601,11 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     await oldSearch.value
     XCTAssertTrue(viewModel.isLoading)
     XCTAssertTrue(viewModel.items.isEmpty)
-    XCTAssertNil(viewModel.errorMessage)
-    XCTAssertEqual(viewModel.searchedKeyword, "新搜索")
 
     await newGate.open()
     await newSearch.value
     XCTAssertFalse(viewModel.isLoading)
     XCTAssertEqual(viewModel.items.map(\.title), ["新结果"])
-  }
-
-  func testManualMediaSearchShowsFailureAndClearsItWhenRetryHasNoMatches() async {
-    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
-    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
-    let service = APIService.isolatedTestingInstance()
-    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
-    defer { snapshot.restore(to: service) }
-    await CompatibilityEndpointURLProtocol.stub.reset()
-    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
-    await CompatibilityEndpointURLProtocol.stub.setManualMediaResponse(
-      title: "示例电影", statusCode: 500,
-      data: Data(#"{"message":"查询服务暂不可用"}"#.utf8)
-    )
-    let viewModel = ManualMediaSearchViewModel(source: .themoviedb, apiService: service)
-    viewModel.keyword = "示例电影"
-    await viewModel.search()
-    XCTAssertNotNil(viewModel.errorMessage)
-    XCTAssertFalse(viewModel.isLoading)
-    XCTAssertEqual(viewModel.searchedKeyword, "示例电影")
-
-    await CompatibilityEndpointURLProtocol.stub.setManualMediaResponse(
-      title: "示例电影", data: Data("[]".utf8)
-    )
-    await viewModel.search()
-    XCTAssertNil(viewModel.errorMessage)
-    XCTAssertTrue(viewModel.items.isEmpty)
-    XCTAssertEqual(viewModel.searchedKeyword, "示例电影")
   }
 
   func testSubscribeNavigationMediaInfoUsesCanonicalMediaDetailRequestID() async throws {

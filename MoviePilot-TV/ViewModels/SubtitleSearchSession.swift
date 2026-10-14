@@ -21,8 +21,7 @@ final class SubtitleSearchSession: ObservableObject, PageImageStackObserver {
   private let doneCloseDelayNanoseconds: UInt64
   private var networkTask: Task<Void, Never>?
   private var sessionSubscription: AnyCancellable?
-  private final class Run {}
-  private var run: Run?
+  private let runs: SearchRunGate
 
   init(
     request: SubtitleSearchRequest,
@@ -33,6 +32,7 @@ final class SubtitleSearchSession: ObservableObject, PageImageStackObserver {
     self.apiService = apiService
     self.doneCloseDelayNanoseconds = doneCloseDelayNanoseconds
     self.session = apiService.sessionSnapshot()
+    self.runs = SearchRunGate(apiService: apiService)
     sessionSubscription = apiService.sessionInvalidationPublisher(for: session).sink { [weak self] in
       guard let self else { return }
       self.cancel()
@@ -106,7 +106,7 @@ final class SubtitleSearchSession: ObservableObject, PageImageStackObserver {
   }
 
   private func invalidateRun() {
-    run = nil
+    runs.end()
     networkTask?.cancel()
     networkTask = nil
   }
@@ -115,34 +115,29 @@ final class SubtitleSearchSession: ObservableObject, PageImageStackObserver {
     apiService.isSessionUnchanged(from: session) && apiService.canAccess(.search)
   }
 
-  private func isCurrent(_ candidate: Run) -> Bool {
-    run === candidate && isSessionValid && !Task.isCancelled
-  }
-
   private func publish(_ items: [SubtitleInfo]) {
     rows = SubtitleSearchRow.makeRows(from: items)
   }
 
   private func collect() {
-    let run = Run()
-    self.run = run
+    let run = runs.begin()
     state = .searching
     progress = 0
     progressText = "正在搜索…"
     // 每次发布才短暂取得 owner，网络等待不能让页面和任务互相持有。
-    networkTask = Task { [weak self, apiService, request, doneCloseDelayNanoseconds] in
-      guard self?.isCurrent(run) == true else { return }
+    networkTask = Task { [weak self, apiService, request, runs, doneCloseDelayNanoseconds] in
+      guard runs.isCurrent(run) else { return }
       var collector = SubtitleSearchCollector()
       defer {
-        if self?.run === run {
+        if runs.owns(run) {
           self?.networkTask = nil
-          self?.run = nil
+          runs.end(run)
         }
       }
       do {
         var receivedDone = false
         for try await event in apiService.openSubtitleSearchStream(request) {
-          guard self?.isCurrent(run) == true else { return }
+          guard runs.isCurrent(run) else { return }
           if event.type == "heartbeat" { continue }
           if let text = event.localizedProgress { self?.progressText = text }
           if let value = event.value { self?.progress = value }
@@ -150,18 +145,18 @@ final class SubtitleSearchSession: ObservableObject, PageImageStackObserver {
           if event.type == "done" {
             receivedDone = true
             try await Task.sleep(nanoseconds: doneCloseDelayNanoseconds)
-            guard self?.isCurrent(run) == true else { return }
+            guard runs.isCurrent(run) else { return }
             break
           }
         }
-        guard self?.isCurrent(run) == true else { return }
-        if !receivedDone && !collector.finalApplied { throw URLError(.networkConnectionLost) }
+        guard runs.isCurrent(run) else { return }
+        if !receivedDone { throw URLError(.networkConnectionLost) }
         self?.publish(collector.publishedItems)
         self?.state = .completed
       } catch is CancellationError {
-        if self?.isCurrent(run) == true { self?.state = .interrupted }
+        if runs.isCurrent(run) { self?.state = .interrupted }
       } catch let failure as SubtitleSearchFailure {
-        guard self?.isCurrent(run) == true else { return }
+        guard runs.isCurrent(run) else { return }
         // 服务端已交付最终列表时，后续终态错误不撤销已交付的结果。
         if collector.finalApplied, !collector.publishedItems.isEmpty {
           Logger.error("字幕搜索在最终列表后收到错误: \(failure.localizedDescription)")
@@ -171,22 +166,17 @@ final class SubtitleSearchSession: ObservableObject, PageImageStackObserver {
           self?.state = .failed(failure.localizedDescription)
         }
       } catch {
-        guard self?.isCurrent(run) == true else { return }
-        if collector.finalApplied {
-          self?.publish(collector.publishedItems)
-          self?.state = .completed
-          return
-        }
+        guard runs.isCurrent(run) else { return }
         Logger.error("字幕搜索流中断，改用普通请求: \(error.localizedDescription)")
         do {
           let items = try await apiService.searchSubtitles(request)
-          guard self?.isCurrent(run) == true else { return }
+          guard runs.isCurrent(run) else { return }
           self?.publish(items)
           self?.state = .completed
         } catch is CancellationError {
-          if self?.isCurrent(run) == true { self?.state = .interrupted }
+          if runs.isCurrent(run) { self?.state = .interrupted }
         } catch {
-          guard self?.isCurrent(run) == true else { return }
+          guard runs.isCurrent(run) else { return }
           self?.state = .failed(error.localizedDescription)
         }
       }

@@ -2858,38 +2858,19 @@ class APIService: ObservableObject {
     mediaSource: String,
     mediaId: String,
     savePath: String?
-  ) async throws -> [String] {
-    let payload = SubtitleDownloadRequest(
+  ) async throws {
+    let body = try JSONEncoder().encode(SubtitleDownloadRequest(
       subtitle: subtitle,
       mediaSource: mediaSource,
       mediaId: mediaId,
       savePath: savePath
-    )
-    let body = try JSONEncoder().encode(payload)
+    ))
     let data = try await makeRequest(endpoint: "/download/subtitle", method: "POST", body: body)
-    return try Self.decodeSubtitleDownloadResponse(from: data)
-  }
-
-  private static func decodeSubtitleDownloadResponse(from data: Data) throws -> [String] {
-    struct Response: Decodable {
-      let success: Bool?
-      let message: String?
-      let message_i18n: String?
-      let data: Payload?
-      struct Payload: Decodable {
-        let files: [String]?
-      }
+    guard !data.isEmpty else { throw APIError.serverMessage("字幕下载失败") }
+    let response = try decodeStrictActionResponseSync(from: data)
+    guard response.success else {
+      throw APIError.serverMessage(response.message ?? "字幕下载失败")
     }
-    guard !data.isEmpty else {
-      throw APIError.serverMessage("字幕下载失败")
-    }
-    let response = try JSONDecoder().decode(Response.self, from: data)
-    guard response.success == true, let files = response.data?.files else {
-      throw APIError.serverMessage(
-        trimmedNonEmpty([response.message_i18n, response.message]) ?? "字幕下载失败"
-      )
-    }
-    return files
   }
 
   // MARK: - 详情与订阅

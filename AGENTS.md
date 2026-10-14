@@ -125,7 +125,7 @@ python3 scripts/test-tvos.py --runtime 27.0 \
   --only-testing MoviePilot-TV-Tests/TestIsolationTests
 ```
 
-测试分为 `build-for-testing` 和 `test-without-building`，宿主构建失败后不启动测试。`--skip-build` 仅在测试模式使用；全量模式下跳过依赖解析和 Debug clean build，不能将它单独当作完整验证。
+测试分为 `build-for-testing` 和 `test-without-building`，宿主构建失败后不启动测试。`--skip-build` 只能与 `--full` 一起使用，跳过依赖解析和 Debug clean build，不能将它单独当作完整验证；只构建模式不接受 `--result-bundle-path`。
 
 脚本始终传入专用 `-derivedDataPath`，默认在系统临时目录的 `MoviePilot-TV-tests/<仓库标识>/DerivedData` 复用增量缓存，与日常 Xcode 的 DerivedData 隔离。同一专用目录已有脚本运行时立即退出，不并发争抢 build.db。手动调用 xcodebuild 也必须指定独立构建目录，不得占用用户正在使用的目录；不要清理、删除用户日常 DerivedData。可用 `--derived-data-path <专用目录>` 指定其他隔离目录，或用 `--result-bundle-path <新的.xcresult路径>` 保存测试结果。
 

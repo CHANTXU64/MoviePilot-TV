@@ -13,16 +13,16 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
   }
 
   let subtitle: SubtitleInfo
-  private let query: String
   @Published private(set) var state: State = .editing
-  @Published private(set) var selectedIdentity: MediaIdentity?
-  @Published private(set) var selectedTitle: String?
   @Published private(set) var mediaSource: MediaSearchSource
+  @Published var mediaId: String
   @Published private(set) var selectedSavePath: String?
   @Published private(set) var directories: [DownloadDirectory] = []
   @Published private(set) var directoryError: String?
   @Published private(set) var isLoadingDirectories = false
 
+  /// 提交的媒体来源。预填身份沿用搜索时的来源，切换来源后改用所选来源。
+  private var submissionSource: String
   private let onDownloaded: (String?) -> Void
   private let apiService: APIService
   private let session: APIServiceSessionSnapshot
@@ -38,11 +38,12 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
     self.onDownloaded = onDownloaded
     self.apiService = apiService
     self.session = session ?? apiService.sessionSnapshot()
-    selectedIdentity = request.initialMediaIdentity
-    selectedTitle = request.initialMediaIdentity == nil ? nil : request.navigationTitle
-    query = request.titleKeyword ?? request.navigationTitle
-    mediaSource = request.initialMediaIdentity.flatMap { MediaSearchSource(rawValue: $0.source) }
+    let identity = request.initialMediaIdentity
+    let source = identity.flatMap { MediaSearchSource(rawValue: $0.source) }
       ?? MediaSearchSource(rawValue: apiService.settings?.RECOGNIZE_SOURCE ?? "") ?? .themoviedb
+    mediaSource = source
+    mediaId = identity?.mediaId ?? ""
+    submissionSource = identity?.source ?? source.rawValue
     sessionSubscription = apiService.sessionInvalidationPublisher(for: self.session).sink { [weak self] in
       guard let self, self.state != .closed, self.state != .completed else { return }
       self.state = .invalidated
@@ -73,16 +74,12 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
     default: nil
     }
   }
-  var submitTitle: String {
-    switch state {
-    case .submitting: "下载中"
-    case .completed: "已下载"
-    case .failed: "重试下载"
-    default: "下载字幕"
-    }
+  private var normalizedMediaId: String {
+    mediaId.trimmingCharacters(in: .whitespacesAndNewlines)
   }
-  var canSubmit: Bool { canEdit && selectedIdentity != nil }
-  var mediaSearchKeyword: String { selectedTitle ?? query }
+  var canSubmit: Bool {
+    canEdit && !normalizedMediaId.isEmpty && MediaIdentifier.isValidManualMediaId(normalizedMediaId)
+  }
 
   var savePathChoices: [String] {
     var seen = Set<String>()
@@ -97,28 +94,13 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
   func selectSource(_ source: MediaSearchSource) {
     guard canEdit, source != mediaSource else { return }
     mediaSource = source
-    selectedIdentity = nil
-    selectedTitle = nil
-    state = .editing
-  }
-
-  func selectMedia(id: String, media: MediaInfo) {
-    guard canEdit else { return }
-    guard ManualMediaSelection.typeName(for: media) != nil else {
-      selectedIdentity = nil
-      selectedTitle = nil
-      state = .failed("字幕下载仅支持电影和电视剧")
-      return
-    }
-    selectedIdentity = MediaIdentity(source: mediaSource.rawValue, mediaId: id)
-    selectedTitle = ManualMediaSelection.displayTitle(for: media)
-    state = .editing
+    submissionSource = source.rawValue
+    mediaId = ""
   }
 
   func selectSavePath(_ path: String?) {
     guard canEdit else { return }
     selectedSavePath = path
-    state = .editing
   }
 
   func loadDirectories() async {
@@ -141,17 +123,16 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
 
   @discardableResult
   func submit() -> Task<Void, Never>? {
-    guard canSubmit, let identity = selectedIdentity else { return nil }
-    if let selectedSavePath, selectedSavePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      state = .failed("保存目录不能是空字符串")
-      return nil
-    }
-    let target = Target(identity: identity, savePath: selectedSavePath)
+    guard canSubmit else { return nil }
+    let target = Target(
+      identity: MediaIdentity(source: submissionSource, mediaId: normalizedMediaId),
+      savePath: selectedSavePath
+    )
     state = .submitting(target)
     let task = Task { [weak self, apiService, session, subtitle] in
       defer { self?.downloadTask = nil }
       do {
-        _ = try await apiService.downloadSubtitle(
+        try await apiService.downloadSubtitle(
           subtitle: subtitle, mediaSource: target.identity.source,
           mediaId: target.identity.mediaId, savePath: target.savePath
         )

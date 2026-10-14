@@ -27,9 +27,7 @@ struct SubtitleSearchRequest: Hashable {
   }
 
   var navigationTitle: String {
-    if let mediaInfo { return ManualMediaSelection.displayTitle(for: mediaInfo) }
-    let title = displayTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    return title.isEmpty ? "字幕搜索" : title
+    MediaIdentifier.normalizedString(displayTitle) ?? "字幕搜索"
   }
 
   /// 字幕下载只接受电影和电视剧。合集、系列和音乐不提供入口。
@@ -126,12 +124,10 @@ nonisolated struct SubtitleSearchEvent: Decodable, Sendable {
 
 nonisolated enum SubtitleSearchFailure: Error, LocalizedError {
   case business(String)
-  case emptySavePath
 
   var errorDescription: String? {
     switch self {
     case .business(let message): message
-    case .emptySavePath: "保存目录不能是空字符串"
     }
   }
 }
@@ -211,7 +207,7 @@ nonisolated struct SubtitleSearchCollector {
   }
 }
 
-/// 自动目录必须写出 JSON null。空字符串不是自动，编码直接失败。
+/// 自动目录必须写出 JSON null，不能省略 save_path。
 nonisolated struct SubtitleDownloadRequest: Encodable {
   let subtitle: SubtitleInfo
   let mediaSource: String
@@ -226,11 +222,6 @@ nonisolated struct SubtitleDownloadRequest: Encodable {
   }
 
   func encode(to encoder: Encoder) throws {
-    if let savePath,
-      savePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    {
-      throw SubtitleSearchFailure.emptySavePath
-    }
     var container = encoder.container(keyedBy: CodingKeys.self)
     try container.encode(subtitle, forKey: .subtitle_in)
     try container.encode(mediaSource, forKey: .media_source)

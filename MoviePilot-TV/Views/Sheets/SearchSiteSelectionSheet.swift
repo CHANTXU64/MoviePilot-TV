@@ -11,11 +11,6 @@ struct SearchSiteSelectionSheet: View {
           Text("搜索站点")
             .font(.headline)
             .padding(.bottom, 12)
-          Text("默认分别使用资源搜索和字幕搜索各自的设置；手动选择同时用于两种搜索。")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-            .padding(.bottom, 20)
           Button {
             viewModel.selectedSites = nil
           } label: {
@@ -37,13 +32,6 @@ struct SearchSiteSelectionSheet: View {
             Text("暂无可选站点").foregroundStyle(.secondary).padding()
           }
 
-          if !viewModel.availableSites.isEmpty {
-            Text("指定站点（清空勾选表示全部站点）")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-              .frame(maxWidth: .infinity, alignment: .leading)
-              .padding(.top, 20)
-          }
           MultiSelectionRows(
             options: viewModel.availableSites, id: \.id,
             selected: Binding(

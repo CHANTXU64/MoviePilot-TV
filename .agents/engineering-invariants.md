@@ -25,6 +25,7 @@
 | 跨多个 `await` 后发布页面状态 | `sessionSnapshot()` / `isSessionUnchanged(from:)`，在发布点校验；冻结会话的失效通知复用 `sessionInvalidationPublisher(for:)`（§1） |
 | 同 key 缓存、在途请求合并、latest-wins | 见 §3 |
 | 分页加载、取消与重启 | `Paginator` |
+| 搜索流的运行代际与发布门禁 | `SearchRunGate`：每次运行冻结会话；被取代、结束、切会话、撤权或任务取消后旧运行不再发布 |
 | 页面图片与导航栈生命周期 | `ImageNavigationCoordinator`、`PageImageLifecycle`、`PageManagedImage` |
 | 详情预载的 owner 计数 | `MediaPreloader.acquireNavigation` / `releaseNavigation` |
 | 会话内共享的协作对象与接口缓存 | `SessionScope`：`APIService` 按 `uiIdentity` 持有，同账号刷新沿用、换账号或登出时同步拆除；作用域内的对象不再各自监听会话变化自清 |
