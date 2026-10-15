@@ -7,6 +7,8 @@ enum APIError: Error {
   case networkError(Error)
   case decodingError(Error)
   case serverMessage(String)
+  /// 502/503/504 可由反向代理在源站仍继续处理时返回，不是业务终态。
+  case gatewayStatus(Int, String)
   case authenticationChallenge(statusCode: Int, message: String?)
   case credentialsRejected
   case mfaUnsupported
@@ -23,7 +25,7 @@ extension APIError: LocalizedError {
       return error.localizedDescription
     case .decodingError:
       return "响应解析失败"
-    case .serverMessage(let message):
+    case .serverMessage(let message), .gatewayStatus(_, let message):
       return message
     case .authenticationChallenge(let statusCode, let message):
       return trimmedNonEmpty([message]) ?? "HTTP \(statusCode)"
@@ -1533,6 +1535,9 @@ class APIService: ObservableObject {
       .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
       .filter { !$0.isEmpty }
       .joined(separator: ": ")
+    if statusCode == 502 || statusCode == 503 || statusCode == 504 {
+      return .gatewayStatus(statusCode, description)
+    }
     return APIError.serverMessage(description)
   }
 

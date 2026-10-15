@@ -180,10 +180,18 @@ extension APIService {
   }
 
   static func isolatedTestingInstance() -> APIService {
+    isolatedTestingInstance { APIService(sessionConfiguration: $0) }
+  }
+
+  static func isolatedTestingInstance(
+    make: @MainActor (URLSessionConfiguration) -> APIService
+  ) -> APIService {
     let persistence = APIServicePersistenceSnapshot.capture()
     APIServicePersistenceSnapshot.clearForTesting()
     defer { persistence.restore() }
-    return testingInstance()
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = apiServiceProtocolClasses
+    return make(configuration)
   }
 
   static func installURLProtocolForTesting(_ protocolClass: URLProtocol.Type) -> Bool {

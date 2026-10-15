@@ -488,7 +488,7 @@ private extension Error {
         return message.contains("权限") || message.localizedCaseInsensitiveContains("permission")
           || message.localizedCaseInsensitiveContains("forbidden")
           || message.localizedCaseInsensitiveContains("unauthorized")
-      case .unknown:
+      case .unknown, .gatewayStatus:
         return false
       case .invalidURL, .networkError, .decodingError:
         return false

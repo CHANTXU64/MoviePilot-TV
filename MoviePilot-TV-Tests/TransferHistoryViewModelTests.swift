@@ -1080,6 +1080,70 @@ final class TransferHistoryViewModelTests: XCTestCase {
     )
   }
 
+  func testAIRedoGatewayStatusShowsProxyTextAndTransportFailureStaysGeneric() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
+
+    let service = APIService.testingInstance()
+    let snapshot = TransferHistoryServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "http://transfer-history-tests.local"
+    configureManageUser(service)
+    service.settings = try JSONDecoder().decode(
+      GlobalSettings.self,
+      from: Data(#"{"AI_AGENT_ENABLE":true}"#.utf8)
+    )
+    let history = try JSONDecoder().decode(
+      TransferHistory.self,
+      from: Data(#"{"id":10,"title":"History","type":"电影","status":true}"#.utf8)
+    )
+    let historyList = Data(
+      #"{"list":[{"id":10,"title":"History","type":"电影","status":true}],"total":1}"#.utf8
+    )
+
+    for status in [502, 503, 504] {
+      await TransferHistoryURLProtocol.stub.reset()
+      await TransferHistoryURLProtocol.stub.setHistoryResponseData(historyList)
+      await TransferHistoryURLProtocol.stub.setAiRedoStatusCode(status)
+      let viewModel = TransferHistoryViewModel(apiService: service)
+      viewModel.errorMessage = "旧提示"
+      await viewModel.triggerAiRedo(
+        for: history,
+        sourceSession: viewModel.captureMutationSession()
+      )
+      let expected = "\(status): Gateway Timeout"
+      let deadline = Date().addingTimeInterval(2)
+      while viewModel.errorMessage != expected, Date() < deadline {
+        try? await Task.sleep(nanoseconds: 1_000_000)
+      }
+      XCTAssertEqual(viewModel.errorMessage, expected)
+      XCTAssertFalse(viewModel.isAiRedoing)
+      XCTAssertTrue(viewModel.aiRedoingIds.isEmpty)
+      let paths = await TransferHistoryURLProtocol.stub.requestPaths()
+      XCTAssertTrue(paths.contains("/api/v1/history/transfer/10/ai-redo"))
+    }
+
+    await TransferHistoryURLProtocol.stub.reset()
+    await TransferHistoryURLProtocol.stub.setHistoryResponseData(historyList)
+    await TransferHistoryURLProtocol.stub.setAiRedoTransportFailure(true)
+    let viewModel = TransferHistoryViewModel(apiService: service)
+    viewModel.errorMessage = "旧提示"
+    await viewModel.triggerAiRedo(
+      for: history,
+      sourceSession: viewModel.captureMutationSession()
+    )
+    let deadline = Date().addingTimeInterval(2)
+    while viewModel.errorMessage != "AI 整理失败", Date() < deadline {
+      try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTAssertEqual(viewModel.errorMessage, "AI 整理失败")
+    XCTAssertFalse(viewModel.isAiRedoing)
+    XCTAssertTrue(viewModel.aiRedoingIds.isEmpty)
+    let paths = await TransferHistoryURLProtocol.stub.requestPaths()
+    XCTAssertTrue(paths.contains("/api/v1/history/transfer/10/ai-redo"))
+  }
+
   func testAIRedoCleanEOFWithoutTerminalEventShowsRetryableFailure() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(TransferHistoryURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(TransferHistoryURLProtocol.self) }
@@ -1462,6 +1526,8 @@ private actor TransferHistoryURLProtocolStub {
   private var deleteResponseData: Data?
   private var recordedDeleteRequestCount = 0
   private var progressGate: TransferHistoryAsyncGate?
+  private var aiRedoStatusCode: Int?
+  private var aiRedoTransportFailure = false
   private var progressResponseData = Data(
     #"data: {"enable":false,"data":{"success":false,"error_i18n":"AI 整理业务失败"}}"#
       .appending("\n\n").utf8
@@ -1478,6 +1544,8 @@ private actor TransferHistoryURLProtocolStub {
     deleteResponseData = nil
     recordedDeleteRequestCount = 0
     progressGate = nil
+    aiRedoStatusCode = nil
+    aiRedoTransportFailure = false
     progressResponseData = Data(
       #"data: {"enable":false,"data":{"success":false,"error_i18n":"AI 整理业务失败"}}"#
         .appending("\n\n").utf8
@@ -1511,6 +1579,14 @@ private actor TransferHistoryURLProtocolStub {
 
   func setProgressResponseData(_ data: Data) {
     progressResponseData = data
+  }
+
+  func setAiRedoStatusCode(_ code: Int?) {
+    aiRedoStatusCode = code
+  }
+
+  func setAiRedoTransportFailure(_ failed: Bool) {
+    aiRedoTransportFailure = failed
   }
 
   func response(for request: URLRequest) async throws -> TransferHistoryHTTPStubResponse {
@@ -1570,6 +1646,16 @@ private actor TransferHistoryURLProtocolStub {
       }
       return response
     case "/api/v1/history/transfer/10/ai-redo":
+      if aiRedoTransportFailure {
+        throw URLError(.cannotConnectToHost)
+      }
+      if let aiRedoStatusCode {
+        return TransferHistoryHTTPStubResponse(
+          statusCode: aiRedoStatusCode,
+          data: Data(#"{"detail":"Gateway Timeout"}"#.utf8),
+          gate: nil
+        )
+      }
       return TransferHistoryHTTPStubResponse(
         statusCode: 200,
         data: Data(#"{"success":true,"data":{"progress_key":"single-progress"}}"#.utf8),

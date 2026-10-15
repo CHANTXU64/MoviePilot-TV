@@ -12,7 +12,7 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
     case editing, submitting(Target), completed, failed(String), invalidated, closed
   }
 
-  /// 只有收到字幕下载接口的响应才算服务端处理结束。取消、超时和断线都还可能继续落盘。
+  /// 只有字幕下载接口返回业务结果才算服务端处理结束。代理 502/503/504、取消、超时和断线都还可能继续落盘。
   enum RemoteExchange: Equatable {
     case pending
     case serverFinished
@@ -148,6 +148,11 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
         self.remoteExchange = .serverFinished
         guard apiService.isSessionUnchanged(from: session),
           self.state == .submitting(target) else { return }
+        // 超时会直接取消任务。响应已经回来也不能把已取消的下载显示成成功。
+        guard !Task.isCancelled else {
+          self.state = .failed(Self.interruptedDownloadMessage)
+          return
+        }
         self.onDownloaded(subtitle.enclosure)
         self.state = .completed
       } catch {
@@ -159,7 +164,7 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
         }
         guard self.state == .submitting(target) else { return }
         if error is CancellationError || Task.isCancelled {
-          self.state = .failed("下载请求已中断，请检查保存结果后再重试。")
+          self.state = .failed(Self.interruptedDownloadMessage)
         } else {
           self.state = .failed(error.localizedDescription)
         }
@@ -178,12 +183,14 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
     downloadTask = nil
   }
 
+  private static let interruptedDownloadMessage = "下载请求已中断，请检查保存结果后再重试。"
+
   private static func serverFinished(_ error: Error) -> Bool {
     switch error as? APIError {
     case .serverMessage, .authenticationChallenge, .unauthorized, .credentialsRejected,
       .decodingError, .mfaUnsupported:
       return true
-    case .networkError, .invalidURL, .unknown, .none:
+    case .gatewayStatus, .networkError, .invalidURL, .unknown, .none:
       return false
     }
   }

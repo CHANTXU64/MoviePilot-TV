@@ -1359,6 +1359,31 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     XCTAssertEqual(message, "422: 目标目录不可用")
   }
 
+  func testGatewayStatusesStayDistinctFromFinishedServerMessages() {
+    for status in [400, 422, 500] {
+      let error = APIService.serverMessageError(
+        statusCode: status,
+        data: Data(#"{"detail":"业务拒绝"}"#.utf8)
+      )
+      guard case APIError.serverMessage(let message) = error else {
+        return XCTFail("HTTP \(status) 仍是源站给出的结果，得到 \(error)")
+      }
+      XCTAssertEqual(message, "\(status): 业务拒绝")
+    }
+    for status in [502, 503, 504] {
+      let error = APIService.serverMessageError(
+        statusCode: status,
+        data: Data(#"{"detail":"Gateway Timeout"}"#.utf8)
+      )
+      guard case APIError.gatewayStatus(let code, let message) = error else {
+        return XCTFail("HTTP \(status) 不是业务终态，得到 \(error)")
+      }
+      XCTAssertEqual(code, status)
+      XCTAssertEqual(message, "\(status): Gateway Timeout")
+      XCTAssertEqual(error.localizedDescription, "\(status): Gateway Timeout")
+    }
+  }
+
   func testReorganizeSubmitFallsBackToMessageWhenMessageI18nIsBlank() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
