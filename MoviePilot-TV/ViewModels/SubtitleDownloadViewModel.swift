@@ -134,6 +134,8 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
       savePath: selectedSavePath
     )
     state = .submitting(target)
+    // 重试必须从 pending 重新计，否则取消和断线会沿用上一次的已结束状态。
+    remoteExchange = .pending
     let task = Task { [weak self, apiService, session, subtitle] in
       defer { self?.downloadTask = nil }
       do {

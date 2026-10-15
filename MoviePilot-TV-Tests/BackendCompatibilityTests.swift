@@ -1942,6 +1942,15 @@ private func performStorageRequestDespiteCancellation(
 }
 
 private func executeStorageRequest(_ request: URLRequest) async -> BackendStorageMutation {
+  // 调用 data(for:) 之前已经取消的，请求还没发出。进入 data(for:) 之后的取消仍算已发出。
+  if Task.isCancelled {
+    return BackendStorageMutation(
+      success: false,
+      message: "cancelled before the storage request started",
+      serverAnswered: false,
+      requestSent: false
+    )
+  }
   do {
     let (data, response) = try await URLSession.shared.data(for: request)
     let status = (response as? HTTPURLResponse)?.statusCode ?? -1
@@ -4137,6 +4146,8 @@ final class BackendCompatibilityCleanupTests: XCTestCase {
     parent.cancel()
     let result = await parent.value
     XCTAssertFalse(result.success)
+    XCTAssertFalse(result.requestSent)
+    XCTAssertFalse(result.serverAnswered)
     XCTAssertFalse(probe.didStart)
   }
 
@@ -4193,6 +4204,41 @@ final class BackendCompatibilityCleanupTests: XCTestCase {
     }
     XCTAssertGreaterThan(probe.deleteCount, 0)
     XCTAssertFalse(probe.directoryExists)
+  }
+
+  @MainActor
+  func testCancelBeforeMkdirDoesNotDelete() async {
+    let probe = SubtitleMkdirRaceProbe.install()
+    defer { probe.uninstall() }
+    let service = APIService.isolatedTestingInstance()
+    service.replaceSessionForTesting(
+      baseURL: "https://mptv-subtitle-mkdir.test", token: "token", currentUser: nil)
+    XCTAssertEqual(
+      service.baseURL, "https://mptv-subtitle-mkdir.test",
+      "unsent mkdir must stay on the intercepted host"
+    )
+    let folder = BackendSubtitleDownloadFolder(
+      storage: "local",
+      path: "/downloads/mp-tv-subtitle-compat-unsent",
+      savePath: "/downloads/mp-tv-subtitle-compat-unsent"
+    )
+    let parent = Task { () throws -> BackendSubtitleDownloadFolder in
+      try? await Task.sleep(nanoseconds: 1_000_000)
+      return try await createPlannedSubtitleFolder(
+        service: service, folder: folder, name: "mp-tv-subtitle-compat-unsent", parentPath: "/downloads")
+    }
+    parent.cancel()
+    do {
+      _ = try await parent.value
+      XCTFail("mkdir cancelled before it is sent must not return the folder as ready")
+    } catch {
+      let description = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+      XCTAssertTrue(description.hasPrefix("Storage mkdir failed"), description)
+      XCTAssertFalse(description.contains("uncertain"), description)
+      XCTAssertFalse(description.contains(folder.savePath), description)
+    }
+    XCTAssertFalse(probe.mkdirStarted)
+    XCTAssertEqual(probe.deleteCount, 0)
   }
 
   func testLateServerWriteDoesNotCountDeletedDirectoryAsRestored() async {

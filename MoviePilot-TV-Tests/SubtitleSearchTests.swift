@@ -893,6 +893,30 @@ final class SubtitleSearchTests: XCTestCase {
     XCTAssertEqual(model.state, .completed)
   }
 
+  func testRetryCloseBeforeResponseDoesNotKeepPreviousServerFinish() async throws {
+    let model = downloadModel(api: service())
+    model.mediaId = "550"
+    SubtitleSearchURLProtocol.downloadBody = Data(#"{"success":false,"message":"保存失败"}"#.utf8)
+    await model.submit()?.value
+    XCTAssertEqual(model.failure, "保存失败")
+    XCTAssertEqual(model.remoteExchange, .serverFinished)
+    XCTAssertTrue(model.canSubmit)
+
+    let sent = SubtitleSearchURLProtocol.requests.count
+    SubtitleSearchURLProtocol.holdDownload = true
+    let task = try XCTUnwrap(model.submit())
+    XCTAssertEqual(model.remoteExchange, .pending)
+    try await until {
+      SubtitleSearchURLProtocol.requests.count > sent
+    }
+    model.close()
+    SubtitleSearchURLProtocol.releaseHeldDownloads()
+    await task.value
+    XCTAssertEqual(model.state, .closed)
+    XCTAssertEqual(model.remoteExchange, .interrupted)
+    XCTAssertNotEqual(model.state, .completed)
+  }
+
   func testDroppedDownloadResponseDoesNotFinishOnTheServer() async throws {
     SubtitleSearchURLProtocol.holdDownload = true
     let model = downloadModel(api: service())
