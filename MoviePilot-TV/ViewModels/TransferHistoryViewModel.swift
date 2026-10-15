@@ -799,9 +799,11 @@ class TransferHistoryViewModel: ObservableObject {
         return
       } catch {
         if !Task.isCancelled {
-          if case APIError.serverMessage(let message) = error {
+          // 代理 502/503/504 仍带状态原文；断线和未知错误不展示传输层描述。
+          switch error {
+          case APIError.serverMessage(let message), APIError.gatewayStatus(_, let message):
             self.errorMessage = message
-          } else {
+          default:
             self.errorMessage = "AI 整理失败"
           }
           for id in pendingIds {

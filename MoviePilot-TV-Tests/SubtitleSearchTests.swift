@@ -878,6 +878,7 @@ final class SubtitleSearchTests: XCTestCase {
     SubtitleSearchURLProtocol.downloadBody = Data(#"{"success":false,"message":"保存失败"}"#.utf8)
     await model.submit()?.value
     XCTAssertEqual(model.failure, "保存失败")
+    XCTAssertEqual(model.remoteExchange, .serverFinished)
     XCTAssertTrue(model.canEdit)
     model.selectSource(.douban)
     XCTAssertFalse(model.canSubmit)
@@ -892,6 +893,89 @@ final class SubtitleSearchTests: XCTestCase {
     XCTAssertEqual(model.state, .completed)
   }
 
+  func testRetryCloseBeforeResponseDoesNotKeepPreviousServerFinish() async throws {
+    let model = downloadModel(api: service())
+    model.mediaId = "550"
+    SubtitleSearchURLProtocol.downloadBody = Data(#"{"success":false,"message":"保存失败"}"#.utf8)
+    await model.submit()?.value
+    XCTAssertEqual(model.failure, "保存失败")
+    XCTAssertEqual(model.remoteExchange, .serverFinished)
+    XCTAssertTrue(model.canSubmit)
+
+    let sent = SubtitleSearchURLProtocol.requests.count
+    SubtitleSearchURLProtocol.holdDownload = true
+    let task = try XCTUnwrap(model.submit())
+    XCTAssertEqual(model.remoteExchange, .pending)
+    try await until {
+      SubtitleSearchURLProtocol.requests.count > sent
+    }
+    model.close()
+    SubtitleSearchURLProtocol.releaseHeldDownloads()
+    await task.value
+    XCTAssertEqual(model.state, .closed)
+    XCTAssertEqual(model.remoteExchange, .interrupted)
+    XCTAssertNotEqual(model.state, .completed)
+  }
+
+  func testDroppedDownloadResponseDoesNotFinishOnTheServer() async throws {
+    SubtitleSearchURLProtocol.holdDownload = true
+    let model = downloadModel(api: service())
+    model.mediaId = "550"
+    let task = try XCTUnwrap(model.submit())
+    try await until { SubtitleSearchURLProtocol.requests.contains { $0.path.hasSuffix("/download/subtitle") } }
+    SubtitleSearchURLProtocol.failHeldDownloads()
+    await task.value
+    XCTAssertEqual(model.remoteExchange, .interrupted)
+    XCTAssertNotEqual(model.state, .completed)
+  }
+
+  func testGatewayDownloadStatusDoesNotFinishOnTheServer() async throws {
+    for status in [502, 503, 504] {
+      let probe = SubtitleDownloadCallbackProbe()
+      SubtitleSearchURLProtocol.reset()
+      SubtitleSearchURLProtocol.downloadStatus = status
+      SubtitleSearchURLProtocol.downloadBody = Data(#"{"detail":"Gateway Timeout"}"#.utf8)
+      let model = downloadModel(api: service(), onDownloaded: probe.record)
+      model.mediaId = "550"
+      await model.submit()?.value
+      XCTAssertEqual(model.remoteExchange, .interrupted, "HTTP \(status)")
+      XCTAssertEqual(model.failure, "\(status): Gateway Timeout", "HTTP \(status)")
+      XCTAssertNotEqual(model.state, .completed, "HTTP \(status)")
+      XCTAssertTrue(probe.enclosures.isEmpty, "HTTP \(status)")
+    }
+  }
+
+  func testOriginServerErrorStillFinishesTheDownloadExchange() async throws {
+    let probe = SubtitleDownloadCallbackProbe()
+    SubtitleSearchURLProtocol.downloadStatus = 500
+    SubtitleSearchURLProtocol.downloadBody = Data(#"{"detail":"内部错误"}"#.utf8)
+    let model = downloadModel(api: service(), onDownloaded: probe.record)
+    model.mediaId = "550"
+    await model.submit()?.value
+    XCTAssertEqual(model.remoteExchange, .serverFinished)
+    XCTAssertEqual(model.failure, "500: 内部错误")
+    XCTAssertNotEqual(model.state, .completed)
+    XCTAssertTrue(probe.enclosures.isEmpty)
+  }
+
+  func testSuccessArrivingAfterCancellationDoesNotPublishDownload() async throws {
+    let api = APIService.isolatedTestingInstance { configuration in
+      CancelAfterSubtitleDownload(sessionConfiguration: configuration)
+    }
+    api.replaceSessionForTesting(
+      baseURL: "https://subtitle-tests.local",
+      token: "subtitle-token",
+      currentUser: searchUser(enabled: true, token: "subtitle-token", userID: 880)
+    )
+    let probe = SubtitleDownloadCallbackProbe()
+    let model = downloadModel(api: api, onDownloaded: probe.record)
+    model.mediaId = "550"
+    await model.submit()?.value
+    XCTAssertEqual(model.remoteExchange, .serverFinished)
+    XCTAssertEqual(model.state, .failed("下载请求已中断，请检查保存结果后再重试。"))
+    XCTAssertTrue(probe.enclosures.isEmpty)
+  }
+
   func testClosedDownloadCancelsAndCannotPublishOrSubmitAgain() async throws {
     SubtitleSearchURLProtocol.holdDownload = true
     let model = downloadModel(api: service())
@@ -902,6 +986,7 @@ final class SubtitleSearchTests: XCTestCase {
     SubtitleSearchURLProtocol.releaseHeldDownloads()
     await task.value
     XCTAssertEqual(model.state, .closed)
+    XCTAssertEqual(model.remoteExchange, .interrupted)
     XCTAssertNotEqual(model.state, .completed)
     XCTAssertNil(model.submit())
   }
@@ -1135,6 +1220,7 @@ final class SubtitleSearchTests: XCTestCase {
     XCTAssertEqual(payload["media_source"] as? String, "imdb")
     XCTAssertEqual(payload["media_id"] as? String, "tt0133093")
     XCTAssertEqual(model.state, .completed)
+    XCTAssertEqual(model.remoteExchange, .serverFinished)
 
     let invalidSource = SubtitleDownloadViewModel(
       subtitle: SubtitleInfo(title: "字幕"),
@@ -1155,11 +1241,15 @@ final class SubtitleSearchTests: XCTestCase {
     XCTAssertEqual(ManualMediaSelection.mediaId(for: tmdbItem, source: .themoviedb), "603")
   }
 
-  private func downloadModel(api: APIService) -> SubtitleDownloadViewModel {
+  private func downloadModel(
+    api: APIService,
+    onDownloaded: @escaping (String?) -> Void = { _ in }
+  ) -> SubtitleDownloadViewModel {
     SubtitleDownloadViewModel(
       subtitle: SubtitleInfo(title: "字幕", enclosure: "https://sub.example/a#mp_sig=signature"),
       request: SubtitleSearchRequest(kind: .title(keyword: "搜索"), sites: nil, displayTitle: "搜索", mediaInfo: nil),
-      apiService: api
+      apiService: api,
+      onDownloaded: onDownloaded
     )
   }
 
@@ -1268,6 +1358,31 @@ final class SubtitleSearchTests: XCTestCase {
   }
 }
 
+@MainActor
+private final class SubtitleDownloadCallbackProbe {
+  var enclosures: [String?] = []
+  func record(_ enclosure: String?) { enclosures.append(enclosure) }
+}
+
+/// 成功响应已经返回后立刻取消当前任务，用来卡住发布成功之前的窗口。
+@MainActor
+private final class CancelAfterSubtitleDownload: APIService {
+  override func downloadSubtitle(
+    subtitle: SubtitleInfo,
+    mediaSource: String,
+    mediaId: String,
+    savePath: String?
+  ) async throws {
+    try await super.downloadSubtitle(
+      subtitle: subtitle,
+      mediaSource: mediaSource,
+      mediaId: mediaId,
+      savePath: savePath
+    )
+    withUnsafeCurrentTask { $0?.cancel() }
+  }
+}
+
 nonisolated private final class SubtitleSessionReleaseBox: @unchecked Sendable {
   var value: SubtitleSearchSession?
   init(_ value: SubtitleSearchSession) { self.value = value }
@@ -1288,6 +1403,7 @@ nonisolated private final class SubtitleSearchURLProtocol: URLProtocol, @uncheck
   nonisolated(unsafe) private static var heldStreams: [SubtitleSearchURLProtocol] = []
   nonisolated(unsafe) private static var fallbackData = Data(#"{"success":true,"message":"","data":[]}"#.utf8)
   nonisolated(unsafe) private static var downloadData = Data(#"{"success":true,"message":"","data":{"files":[]}}"#.utf8)
+  nonisolated(unsafe) private static var downloadStatusCode = 200
   nonisolated(unsafe) private static var holdingFallback = false
   nonisolated(unsafe) private static var held: [SubtitleSearchURLProtocol] = []
 
@@ -1332,6 +1448,13 @@ nonisolated private final class SubtitleSearchURLProtocol: URLProtocol, @uncheck
     }
   }
 
+  static func failHeldDownloads() {
+    let pending = lock.withLock { let value = heldDownloads; heldDownloads = []; return value }
+    for entry in pending {
+      entry.client?.urlProtocol(entry, didFailWithError: URLError(.networkConnectionLost))
+    }
+  }
+
   private let deliveryLock = NSLock()
   private var stopped = false
 
@@ -1369,6 +1492,11 @@ nonisolated private final class SubtitleSearchURLProtocol: URLProtocol, @uncheck
     set { lock.withLock { downloadData = newValue } }
   }
 
+  static var downloadStatus: Int {
+    get { lock.withLock { downloadStatusCode } }
+    set { lock.withLock { downloadStatusCode = newValue } }
+  }
+
   static var holdFallback: Bool {
     get { lock.withLock { holdingFallback } }
     set { lock.withLock { holdingFallback = newValue } }
@@ -1382,6 +1510,7 @@ nonisolated private final class SubtitleSearchURLProtocol: URLProtocol, @uncheck
       heldStreams = []
       fallbackData = Data(#"{"success":true,"message":"","data":[]}"#.utf8)
       downloadData = Data(#"{"success":true,"message":"","data":{"files":[]}}"#.utf8)
+      downloadStatusCode = 200
       holdingFallback = false
       held = []
       holdingDownload = false
@@ -1422,7 +1551,7 @@ nonisolated private final class SubtitleSearchURLProtocol: URLProtocol, @uncheck
       if path.contains("/stream") { return .stream }
       if path.hasSuffix("/download/subtitle") {
         if Self.holdingDownload { Self.heldDownloads.append(self); return .hold }
-        return .download
+        return .download(Self.downloadStatusCode)
       }
       if path.hasSuffix("/download/paths") { return .directories }
       if path.hasSuffix("/site") || path.contains("/site/") { return .sites }
@@ -1445,8 +1574,8 @@ nonisolated private final class SubtitleSearchURLProtocol: URLProtocol, @uncheck
         failAfter: Self.failStreamAfterBody,
         contentType: "text/event-stream"
       )
-    case .download:
-      respond(status: 200, data: Self.downloadBody, failAfter: false, contentType: "application/json")
+    case .download(let status):
+      respond(status: status, data: Self.downloadBody, failAfter: false, contentType: "application/json")
     case .directories:
       respond(status: 200, data: Self.directoryBody, failAfter: false, contentType: "application/json")
     case .sites:
@@ -1467,7 +1596,7 @@ nonisolated private final class SubtitleSearchURLProtocol: URLProtocol, @uncheck
   }
 
   private enum Plan {
-    case stream, download, fallback, hold, directories, sites, recognition, unrecognized, mediaSources
+    case stream, download(Int), fallback, hold, directories, sites, recognition, unrecognized, mediaSources
   }
 
   private func respond(status: Int, data: Data, failAfter: Bool, contentType: String) {

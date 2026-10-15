@@ -10,7 +10,7 @@
 		7E925C012F377CCF006AA4B3 /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = 7E925C002F377CCF006AA4B3 /* Kingfisher */; };
 		7EEC865E2F27CB99001AD31C /* SwiftDate in Frameworks */ = {isa = PBXBuildFile; productRef = 7EEC865D2F27CB99001AD31C /* SwiftDate */; };
 		7EEC86612F27DE58001AD31C /* Flow in Frameworks */ = {isa = PBXBuildFile; productRef = 7EEC86602F27DE58001AD31C /* Flow */; };
-		C0D3A0032F9A000100000008 /* MoviePilot-TV-TopShelf.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = C0D3A0032F9A000100000003 /* MoviePilot-TV-TopShelf.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		C0D3A0032F9A000100000008 /* MoviePilot-TV-TopShelf.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C0D3A0032F9A000100000003 /* MoviePilot-TV-TopShelf.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		C0D3A0042F9A000100000001 /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = 7E925C002F377CCF006AA4B3 /* Kingfisher */; };
 /* End PBXBuildFile section */
 
@@ -32,15 +32,15 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
-		C0D3A0032F9A000100000007 /* Embed App Extensions */ = {
+		C0D3A0032F9A000100000007 /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
 			dstPath = "";
 			dstSubfolderSpec = 13;
 			files = (
-				C0D3A0032F9A000100000008 /* MoviePilot-TV-TopShelf.appex in Embed App Extensions */,
+				C0D3A0032F9A000100000008 /* MoviePilot-TV-TopShelf.appex in Embed Foundation Extensions */,
 			);
-			name = "Embed App Extensions";
+			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -156,7 +156,7 @@
 				7EEC86152F23C6C4001AD31C /* Sources */,
 				7EEC86162F23C6C4001AD31C /* Frameworks */,
 				7EEC86172F23C6C4001AD31C /* Resources */,
-				C0D3A0032F9A000100000007 /* Embed App Extensions */,
+				C0D3A0032F9A000100000007 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
@@ -232,7 +232,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 2620;
-				LastUpgradeCheck = 2630;
+				LastUpgradeCheck = 2700;
 				TargetAttributes = {
 					7EEC86182F23C6C4001AD31C = {
 						CreatedOnToolsVersion = 26.2;

@@ -55,6 +55,13 @@ private struct BackendCompatibilityConfig {
   let resourceQueries: [String]
   let resourceMediaIDs: [String]
   let resourceSites: String?
+  let subtitleQueries: [String]
+  let subtitleMediaIDs: [String]
+  let subtitleSites: String?
+  let subtitleMediaType: String?
+  let subtitleSeason: Int?
+  let subtitleSeasonInvalid: Bool
+  let subtitleDownloadSavePath: String?
   let checkSeasonAvailability: Bool
   let collectionIDs: [Int]
   let testResourceSearchStreams: Bool
@@ -66,6 +73,7 @@ private struct BackendCompatibilityConfig {
   let sideEffectSubscriptionLimit: Int
   let testManualReorganize: Bool
   let testAIReorganize: Bool
+  let testSubtitleDownload: Bool
   let reorganizeHistoryLimit: Int
   let reorganizeConcurrentCount: Int
 
@@ -96,6 +104,13 @@ private struct BackendCompatibilityConfig {
       resourceQueries: [],
       resourceMediaIDs: [],
       resourceSites: nil,
+      subtitleQueries: [],
+      subtitleMediaIDs: [],
+      subtitleSites: nil,
+      subtitleMediaType: nil,
+      subtitleSeason: nil,
+      subtitleSeasonInvalid: false,
+      subtitleDownloadSavePath: nil,
       checkSeasonAvailability: false,
       collectionIDs: [],
       testResourceSearchStreams: false,
@@ -107,6 +122,7 @@ private struct BackendCompatibilityConfig {
       sideEffectSubscriptionLimit: 3,
       testManualReorganize: true,
       testAIReorganize: true,
+      testSubtitleDownload: false,
       reorganizeHistoryLimit: 2,
       reorganizeConcurrentCount: 2
     )
@@ -150,6 +166,16 @@ private struct BackendCompatibilityConfig {
       values["MOVIEPILOT_COMPAT_RESOURCE_MEDIA_IDS"]?.listValue
       ?? values["MOVIEPILOT_COMPAT_RESOURCE_MEDIA_ID"]?.nilIfBlank.map { [$0] }
       ?? []
+    let subtitleQueries =
+      values["MOVIEPILOT_COMPAT_SUBTITLE_QUERIES"]?.listValue
+      ?? values["MOVIEPILOT_COMPAT_SUBTITLE_QUERY"]?.nilIfBlank.map { [$0] }
+      ?? []
+    let subtitleMediaIDs =
+      values["MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_IDS"]?.listValue
+      ?? values["MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_ID"]?.nilIfBlank.map { [$0] }
+      ?? []
+    let subtitleSeasonRaw = values["MOVIEPILOT_COMPAT_SUBTITLE_SEASON"]?.nilIfBlank
+    let subtitleSeason = subtitleSeasonRaw?.intValue.flatMap { $0 >= 0 ? $0 : nil }
     let collectionIDs =
       values["MOVIEPILOT_COMPAT_COLLECTION_IDS"]?.intListValue
       ?? values["MOVIEPILOT_COMPAT_COLLECTION_ID"]?.intValue.map { [$0] }
@@ -198,6 +224,13 @@ private struct BackendCompatibilityConfig {
       resourceQueries: resourceQueries,
       resourceMediaIDs: resourceMediaIDs,
       resourceSites: values["MOVIEPILOT_COMPAT_RESOURCE_SITES"]?.nilIfBlank,
+      subtitleQueries: subtitleQueries,
+      subtitleMediaIDs: subtitleMediaIDs,
+      subtitleSites: values["MOVIEPILOT_COMPAT_SUBTITLE_SITES"]?.nilIfBlank,
+      subtitleMediaType: values["MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_TYPE"]?.nilIfBlank,
+      subtitleSeason: subtitleSeason,
+      subtitleSeasonInvalid: subtitleSeasonRaw != nil && subtitleSeason == nil,
+      subtitleDownloadSavePath: values["MOVIEPILOT_COMPAT_SUBTITLE_DOWNLOAD_SAVE_PATH"]?.nilIfBlank,
       checkSeasonAvailability: values["MOVIEPILOT_COMPAT_CHECK_SEASON_AVAILABILITY"]?.boolValue(
         fallback: false) ?? false,
       collectionIDs: collectionIDs,
@@ -224,6 +257,10 @@ private struct BackendCompatibilityConfig {
       testAIReorganize: enableSideEffects
         && (values["MOVIEPILOT_COMPAT_TEST_AI_REORGANIZE"]?.boolValue(
           fallback: true) ?? true),
+      // 字幕下载会写入文件。总开关打开时仍默认关闭，必须单独设为 true。
+      testSubtitleDownload: enableSideEffects
+        && (values["MOVIEPILOT_COMPAT_TEST_SUBTITLE_DOWNLOAD"]?.boolValue(
+          fallback: false) ?? false),
       reorganizeHistoryLimit: values["MOVIEPILOT_COMPAT_REORGANIZE_HISTORY_LIMIT"]?
         .clampedIntValue(minimum: 1, maximum: 10) ?? 2,
       reorganizeConcurrentCount: values["MOVIEPILOT_COMPAT_REORGANIZE_CONCURRENT_COUNT"]?
@@ -451,7 +488,7 @@ private extension Error {
         return message.contains("权限") || message.localizedCaseInsensitiveContains("permission")
           || message.localizedCaseInsensitiveContains("forbidden")
           || message.localizedCaseInsensitiveContains("unauthorized")
-      case .unknown:
+      case .unknown, .gatewayStatus:
         return false
       case .invalidURL, .networkError, .decodingError:
         return false
@@ -1409,6 +1446,618 @@ private final class BackendResourcePageProbe {
   }
 }
 
+@MainActor
+private struct BackendSubtitleSearchSample {
+  let label: String
+  let request: SubtitleSearchRequest
+}
+
+private struct BackendSubtitleDownloadFolder {
+  let storage: String
+  let path: String
+  let savePath: String
+}
+
+private enum BackendSubtitleDownloadError: LocalizedError {
+  case unmatchedSavePath(String)
+  case missingDownloadPath
+  case remoteStorageUnsupported(String)
+  case storageRejected(String, String)
+  case cleanupUncertain(path: String, detail: String)
+
+  var errorDescription: String? {
+    switch self {
+    case .unmatchedSavePath(let available):
+      return "MOVIEPILOT_COMPAT_SUBTITLE_DOWNLOAD_SAVE_PATH does not match a /download/paths save_path. Available: \(available)"
+    case .missingDownloadPath:
+      return "The matched download directory has no download_path, so the isolated folder cannot be created."
+    case .remoteStorageUnsupported(let storage):
+      return "Subtitle download isolation only supports local storage. \(storage) needs the parent directory id, so this test will not create a folder there."
+    case .storageRejected(let action, let message):
+      return "Storage \(action) failed: \(message)"
+    case .cleanupUncertain(let path, let detail):
+      return "Subtitle directory cleanup is uncertain for \(path). \(detail)"
+    }
+  }
+}
+
+private struct BackendStorageActionEnvelope: Decodable {
+  let success: Bool?
+  let message: String?
+  let message_i18n: String?
+}
+
+private struct BackendStorageMutation: Sendable {
+  let success: Bool
+  let message: String
+  /// 请求已发出但没有拿到服务端响应时为 false。未发出请求也是 false。
+  let serverAnswered: Bool
+  let requestSent: Bool
+}
+
+private func localSubtitleDownloadStorage(_ storage: String?) throws -> String {
+  let value = storage?.nilIfBlank ?? "local"
+  guard value == "local" else {
+    throw BackendSubtitleDownloadError.remoteStorageUnsupported(value)
+  }
+  return value
+}
+
+/// 标题和媒体样本都走详情、首页使用的生产请求构造，不另写一套参数。
+@MainActor
+private func backendSubtitleSearchSamples(
+  titleQueries: [String],
+  mediaIDs: [String],
+  mediaType: String?,
+  season: Int?,
+  sites: String?
+) -> (samples: [BackendSubtitleSearchSample], rejectedMediaIDs: [String]) {
+  let handler = MediaActionHandler(apiService: .shared)
+  var samples: [BackendSubtitleSearchSample] = []
+  for query in titleQueries {
+    guard let request = MediaActionHandler.titleSubtitleSearchRequest(keyword: query, sites: sites) else {
+      continue
+    }
+    samples.append(BackendSubtitleSearchSample(label: "subtitle title \(query)", request: request))
+  }
+  var rejectedMediaIDs: [String] = []
+  for mediaID in mediaIDs {
+    guard let identity = MediaIdentifier.identity(from: mediaID) else {
+      rejectedMediaIDs.append(mediaID)
+      continue
+    }
+    let item = MediaInfo(
+      source: identity.source,
+      media_id: identity.mediaId,
+      title: mediaID,
+      type: mediaType,
+      season: season
+    )
+    guard let request = handler.subtitleSearchRequest(for: item, sites: sites) else {
+      rejectedMediaIDs.append(mediaID)
+      continue
+    }
+    samples.append(BackendSubtitleSearchSample(label: "subtitle media \(mediaID)", request: request))
+  }
+  return (samples, rejectedMediaIDs)
+}
+
+@MainActor
+private func runSubtitleSearch(
+  service: APIService,
+  sample: BackendSubtitleSearchSample
+) async throws {
+  let session = SubtitleSearchSession(request: sample.request, apiService: service)
+  session.start()
+  if session.state == .idle {
+    XCTFail("\(sample.label) did not start.")
+    return
+  }
+  do {
+    try await waitForSubtitleSearch(session)
+  } catch {
+    session.deactivate()
+    throw error
+  }
+  assertSubtitleSearchCompleted(session, label: sample.label)
+}
+
+@MainActor
+private func waitForSubtitleSearch(
+  _ session: SubtitleSearchSession,
+  timeoutSeconds: Double = 180
+) async throws {
+  let deadline = ContinuousClock.now.advanced(by: .seconds(timeoutSeconds))
+  while !session.didFinish {
+    try Task.checkCancellation()
+    if ContinuousClock.now >= deadline {
+      session.deactivate()
+      return
+    }
+    try await Task.sleep(for: .milliseconds(200))
+  }
+}
+
+@MainActor
+private func assertSubtitleSearchCompleted(
+  _ session: SubtitleSearchSession,
+  label: String,
+  file: StaticString = #filePath,
+  line: UInt = #line
+) {
+  switch session.state {
+  case .completed:
+    break
+  case .failed(let message):
+    XCTFail("\(label) failed: \(message)", file: file, line: line)
+    return
+  default:
+    let detail = session.state == .interrupted
+      ? "timed out or was interrupted before a final subtitle list"
+      : "ended in \(subtitleSearchStateLabel(session.state))"
+    XCTFail("\(label) \(detail)", file: file, line: line)
+    return
+  }
+  XCTAssertFalse(
+    session.rows.isEmpty,
+    "\(label) completed without subtitles. The backend may have no subtitle-capable site for this query.",
+    file: file,
+    line: line
+  )
+  for (index, row) in session.rows.enumerated() {
+    if let issue = subtitleSearchCompatibilityIssue(row.subtitle) {
+      XCTFail("\(label) row \(index) \(issue)", file: file, line: line)
+    }
+  }
+  let languages = Set(session.rows.compactMap { MediaIdentifier.normalizedString($0.subtitle.language) })
+    .sorted()
+    .joined(separator: ",")
+  let missingLanguage = session.rows.filter {
+    MediaIdentifier.normalizedString($0.subtitle.language) == nil
+  }.count
+  let zeroSize = session.rows.filter { ($0.subtitle.size ?? 0) == 0 }.count
+  print(
+    "Subtitle search \(label): rows=\(session.rows.count), languages=\(languages), missingLanguage=\(missingLanguage), zeroSize=\(zeroSize)"
+  )
+}
+
+/// 语言和大小在后端合同里可缺省。真实结果只拒绝 HTTP 链接丢失签名片段；完整字段是否被解码丢掉由离线样本证明。
+private func subtitleSearchCompatibilityIssue(_ subtitle: SubtitleInfo) -> String? {
+  guard let enclosure = MediaIdentifier.normalizedString(subtitle.enclosure) else { return nil }
+  let scheme = enclosure.lowercased()
+  guard scheme.hasPrefix("http://") || scheme.hasPrefix("https://") else { return nil }
+  guard enclosure.contains("mp_sig=") else {
+    return "lost the signed enclosure fragment."
+  }
+  return nil
+}
+
+@MainActor
+private func subtitleSearchStateLabel(_ state: SubtitleSearchSession.State) -> String {
+  switch state {
+  case .idle: "idle"
+  case .searching: "searching"
+  case .interrupted: "interrupted"
+  case .completed: "completed"
+  case .cancelled: "cancelled"
+  case .invalidated: "invalidated"
+  case .failed(let message): "failed(\(message))"
+  }
+}
+
+@MainActor
+private func subtitleDownloadStateLabel(_ state: SubtitleDownloadViewModel.State) -> String {
+  switch state {
+  case .editing: "editing"
+  case .submitting(_): "submitting"
+  case .completed: "completed"
+  case .failed(let message): "failed(\(message))"
+  case .invalidated: "invalidated"
+  case .closed: "closed"
+  }
+}
+
+@MainActor
+private func makeSubtitleDownloadFolder(
+  service: APIService,
+  configuredSavePath: String
+) async throws -> BackendSubtitleDownloadFolder {
+  let directories = try await service.fetchDownloadDirectories()
+  guard let directory = directories.first(where: {
+    $0.save_path?.trimmingCharacters(in: .whitespacesAndNewlines) == configuredSavePath
+  }) else {
+    let available = directories.compactMap { $0.save_path?.nilIfBlank }.prefix(8).joined(separator: ", ")
+    throw BackendSubtitleDownloadError.unmatchedSavePath(available.isEmpty ? "<none>" : available)
+  }
+  guard let parentPath = directory.download_path?.nilIfBlank else {
+    throw BackendSubtitleDownloadError.missingDownloadPath
+  }
+  let storage = try localSubtitleDownloadStorage(directory.storage)
+  let name = "mp-tv-subtitle-compat-\(UUID().uuidString.lowercased())"
+  let path = parentPath.hasSuffix("/") ? parentPath + name : parentPath + "/" + name
+  let folder = BackendSubtitleDownloadFolder(storage: storage, path: path, savePath: path)
+  return try await createPlannedSubtitleFolder(service: service, folder: folder, name: name, parentPath: parentPath)
+}
+
+/// 目录记录在 mkdir 发出前就固定。请求已发出但成功与否未知时，仍删除该路径并留下完整路径。
+@MainActor
+private func createPlannedSubtitleFolder(
+  service: APIService,
+  folder: BackendSubtitleDownloadFolder,
+  name: String,
+  parentPath: String
+) async throws -> BackendSubtitleDownloadFolder {
+  let created = await mutateBackendStorage(
+    service: service, action: "mkdir", name: name, storage: folder.storage, path: parentPath)
+  guard created.success else {
+    try await throwAfterUnsuccessfulCreate(service: service, folder: folder, created: created)
+  }
+  return folder
+}
+
+@MainActor
+private func throwAfterUnsuccessfulCreate(
+  service: APIService,
+  folder: BackendSubtitleDownloadFolder,
+  created: BackendStorageMutation
+) async throws -> Never {
+  guard created.requestSent else {
+    throw BackendSubtitleDownloadError.storageRejected("mkdir", created.message)
+  }
+  let removed = await removeSubtitleDownloadFolder(service: service, folder: folder)
+  if created.serverAnswered && removed {
+    throw BackendSubtitleDownloadError.storageRejected(
+      "mkdir", "\(created.message) Checked \(folder.savePath)."
+    )
+  }
+  let delete = removed ? "delete request succeeded" : "delete request failed"
+  let reason = created.serverAnswered
+    ? "server rejected mkdir (\(created.message)) and \(delete)"
+    : "mkdir outcome unknown (\(created.message)); \(delete)"
+  throw BackendSubtitleDownloadError.cleanupUncertain(
+    path: folder.savePath,
+    detail: "\(reason). The server may still finish creating this directory. Check this path."
+  )
+}
+
+@MainActor
+private func removeSubtitleDownloadFolder(
+  service: APIService,
+  folder: BackendSubtitleDownloadFolder
+) async -> Bool {
+  guard let request = storageMutationRequest(
+    service: service, action: "delete", name: nil, storage: folder.storage, path: folder.path
+  ) else {
+    print("Subtitle download cleanup failed for \(folder.savePath): missing access token or storage URL")
+    return false
+  }
+  let result = await performStorageRequestDespiteCancellation(request, timeoutSeconds: 60)
+  if !result.success {
+    print("Subtitle download cleanup failed for \(folder.savePath): \(result.message)")
+  }
+  return result.success
+}
+
+private enum SubtitleDownloadEnd: Equatable {
+  case accepted
+  case serverRejected(String)
+  /// requestSent 为 false 时下载请求还没发出，删除隔离目录就是最终清理。
+  case interrupted(String, requestSent: Bool)
+
+  var remoteFinished: Bool {
+    switch self {
+    case .accepted, .serverRejected, .interrupted(_, false): true
+    case .interrupted(_, true): false
+    }
+  }
+}
+
+private struct SubtitleIsolationCleanup: Equatable {
+  let path: String
+  let deleteSucceeded: Bool
+  let remoteFinished: Bool
+
+  var sceneRestored: Bool { remoteFinished && deleteSucceeded }
+
+  var logLine: String {
+    if !remoteFinished {
+      let delete = deleteSucceeded ? "delete request succeeded" : "delete request failed"
+      return "Subtitle cleanup is uncertain for \(path); \(delete). The server may still recreate this directory and write the subtitle. Check this path after the backend request ends."
+    }
+    if deleteSucceeded {
+      return "Subtitle isolation removed \(path)."
+    }
+    return "Failed to delete isolated subtitle directory \(path). Remove that directory on the backend."
+  }
+}
+
+private func finishSubtitleIsolation(
+  folder: BackendSubtitleDownloadFolder,
+  remoteFinished: Bool,
+  remove: () async -> Bool
+) async -> SubtitleIsolationCleanup {
+  let deleteSucceeded = await remove()
+  return SubtitleIsolationCleanup(
+    path: folder.savePath, deleteSucceeded: deleteSucceeded, remoteFinished: remoteFinished)
+}
+
+@MainActor
+private func downloadFirstSubtitle(
+  session: SubtitleSearchSession,
+  savePath: String
+) async -> SubtitleDownloadEnd {
+  guard let row = session.rows.first(where: {
+    MediaIdentifier.normalizedString($0.subtitle.enclosure) != nil
+  }) else {
+    return .interrupted(
+      "Subtitle search completed without a row that has an enclosure.", requestSent: false)
+  }
+  let model = session.downloadModel(for: row.subtitle)
+  await model.loadDirectories()
+  if let directoryError = model.directoryError {
+    return .interrupted("Subtitle download directories failed: \(directoryError)", requestSent: false)
+  }
+  model.selectSavePath(savePath)
+  guard model.canSubmit, let task = model.submit() else {
+    return .interrupted(
+      "Subtitle download did not start for media \(model.mediaSource.rawValue):\(model.mediaId).",
+      requestSent: false
+    )
+  }
+  let finished = await waitForVoidTask(task, seconds: 180)
+  // 等下载任务自己结束后再读 remoteExchange。超时取消和响应同时到达时，以接口是否已经返回为准。
+  if model.remoteExchange != .serverFinished {
+    model.close()
+    let reason = Task.isCancelled
+      ? "cancelled before the server response"
+      : (!finished
+        ? "timed out before the server response"
+        : "ended without a finished server response")
+    return .interrupted(reason, requestSent: true)
+  }
+  guard case .completed = model.state else {
+    return .serverRejected(
+      "Subtitle download ended in \(subtitleDownloadStateLabel(model.state)). \(model.failure ?? "")"
+    )
+  }
+  guard let enclosure = row.subtitle.enclosure else {
+    return .serverRejected("Downloaded subtitle row lost its enclosure.")
+  }
+  guard session.downloadedEnclosures.contains(enclosure) else {
+    return .serverRejected("A successful subtitle download must mark that enclosure as downloaded.")
+  }
+  return .accepted
+}
+
+private func waitForVoidTask(_ task: Task<Void, Never>, seconds: Double) async -> Bool {
+  await withTaskCancellationHandler {
+    let finished = await withTaskGroup(of: Bool.self) { group in
+      group.addTask {
+        await task.value
+        return !task.isCancelled
+      }
+      group.addTask {
+        try? await Task.sleep(for: .seconds(seconds))
+        return false
+      }
+      let finished = await group.next() ?? false
+      if !finished {
+        task.cancel()
+      }
+      group.cancelAll()
+      return finished
+    }
+    if !finished {
+      await task.value
+    }
+    return finished && !task.isCancelled
+  } onCancel: {
+    task.cancel()
+  }
+}
+
+@MainActor
+private func mutateBackendStorage(
+  service: APIService,
+  action: String,
+  name: String?,
+  storage: String,
+  path: String
+) async -> BackendStorageMutation {
+  guard let request = storageMutationRequest(
+    service: service, action: action, name: name, storage: storage, path: path
+  ) else {
+    let missingToken = service.token?.nilIfBlank == nil
+    return BackendStorageMutation(
+      success: false,
+      message: missingToken ? "missing access token" : "invalid storage URL",
+      serverAnswered: false,
+      requestSent: false
+    )
+  }
+  return await executeStorageRequest(request)
+}
+
+@MainActor
+private func storageMutationRequest(
+  service: APIService,
+  action: String,
+  name: String?,
+  storage: String,
+  path: String
+) -> URLRequest? {
+  guard service.token?.nilIfBlank != nil else { return nil }
+  guard var components = URLComponents(string: "\(service.baseURL)/api/v1/storage/\(action)") else {
+    return nil
+  }
+  if let name {
+    components.queryItems = [URLQueryItem(name: "name", value: name)]
+  }
+  guard let url = components.url, let token = service.token?.nilIfBlank else { return nil }
+  var request = URLRequest(url: url)
+  request.httpMethod = "POST"
+  request.timeoutInterval = 60
+  request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+  request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+  request.httpBody = try? JSONSerialization.data(withJSONObject: [
+    "path": path,
+    "storage": storage,
+    "type": "dir",
+  ])
+  return request
+}
+
+private enum StorageRequestRace: Sendable {
+  case finished(BackendStorageMutation)
+  case timedOut
+}
+
+/// 父任务取消不能带走清理请求。请求在独立任务里发出，超时会取消该请求并等它结束。
+private func performStorageRequestDespiteCancellation(
+  _ request: URLRequest,
+  timeoutSeconds: Double
+) async -> BackendStorageMutation {
+  await Task.detached {
+    await withTaskGroup(of: StorageRequestRace.self) { group in
+      group.addTask {
+        .finished(await executeStorageRequest(request))
+      }
+      group.addTask {
+        try? await Task.sleep(for: .seconds(timeoutSeconds))
+        return .timedOut
+      }
+      let first = await group.next() ?? .timedOut
+      group.cancelAll()
+      if case .finished(let mutation) = first {
+        return mutation
+      }
+      return BackendStorageMutation(
+        success: false,
+        message: "storage request timed out",
+        serverAnswered: false,
+        requestSent: true
+      )
+    }
+  }.value
+}
+
+private func executeStorageRequest(_ request: URLRequest) async -> BackendStorageMutation {
+  // 调用 data(for:) 之前已经取消的，请求还没发出。进入 data(for:) 之后的取消仍算已发出。
+  if Task.isCancelled {
+    return BackendStorageMutation(
+      success: false,
+      message: "cancelled before the storage request started",
+      serverAnswered: false,
+      requestSent: false
+    )
+  }
+  do {
+    let (data, response) = try await URLSession.shared.data(for: request)
+    let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+    let envelope = try? JSONDecoder().decode(BackendStorageActionEnvelope.self, from: data)
+    let message = trimmedNonEmpty([envelope?.message_i18n, envelope?.message]) ?? "HTTP \(status)"
+    let success = (200...299).contains(status) && envelope?.success == true
+    return BackendStorageMutation(
+      success: success, message: message, serverAnswered: true, requestSent: true)
+  } catch {
+    return BackendStorageMutation(
+      success: false,
+      message: error.localizedDescription,
+      serverAnswered: false,
+      requestSent: true
+    )
+  }
+}
+
+@MainActor
+final class BackendSubtitleSearchSampleTests: XCTestCase {
+  func testTitleAndMediaSamplesUseProductionSubtitleRequests() {
+    let built = backendSubtitleSearchSamples(
+      titleQueries: ["流浪地球", "  "],
+      mediaIDs: ["tmdb:603", "not-an-id"],
+      mediaType: "电影",
+      season: 0,
+      sites: "1,2"
+    )
+    XCTAssertEqual(built.rejectedMediaIDs, ["not-an-id"])
+    XCTAssertEqual(
+      built.samples.map(\.label),
+      ["subtitle title 流浪地球", "subtitle media tmdb:603"]
+    )
+    guard built.samples.count == 2 else { return }
+    guard case .title(let keyword) = built.samples[0].request.kind else {
+      return XCTFail("Expected a title subtitle search.")
+    }
+    XCTAssertEqual(keyword, "流浪地球")
+    XCTAssertEqual(built.samples[0].request.sites, "1,2")
+    XCTAssertNil(built.samples[0].request.initialMediaIdentity)
+    guard case .media(let source, let mediaId, let type, let season, let episode) =
+      built.samples[1].request.kind
+    else {
+      return XCTFail("Expected a media subtitle search.")
+    }
+    XCTAssertEqual(source, "themoviedb")
+    XCTAssertEqual(mediaId, "603")
+    XCTAssertEqual(type, "电影")
+    XCTAssertEqual(season, 0)
+    XCTAssertNil(episode)
+    XCTAssertEqual(built.samples[1].request.sites, "1,2")
+  }
+
+  func testCollectionMediaIsNotASubtitleSample() {
+    let built = backendSubtitleSearchSamples(
+      titleQueries: [],
+      mediaIDs: ["douban:123"],
+      mediaType: "合集",
+      season: nil,
+      sites: nil
+    )
+    XCTAssertTrue(built.samples.isEmpty)
+    XCTAssertEqual(built.rejectedMediaIDs, ["douban:123"])
+  }
+
+  func testCompleteSubtitleFieldsSurviveDecodingAndSparseRowsStayCompatible() throws {
+    let complete = try decodeSubtitleFixture(
+      #"{"site":1,"title":"流浪地球","language":"中文","size":1200,"enclosure":"https://example.test/a.srt#mp_sig=abc"}"#
+    )
+    XCTAssertEqual(complete.site, 1)
+    XCTAssertEqual(complete.title, "流浪地球")
+    XCTAssertEqual(complete.language, "中文")
+    XCTAssertEqual(complete.size, 1200)
+    XCTAssertEqual(complete.enclosure, "https://example.test/a.srt#mp_sig=abc")
+    XCTAssertNil(subtitleSearchCompatibilityIssue(complete))
+
+    let sparse = try decodeSubtitleFixture(
+      #"{"language":null,"size":0.0,"title":null,"enclosure":"magnet:?xt=urn:btih:abc"}"#
+    )
+    XCTAssertNil(sparse.language)
+    XCTAssertNil(sparse.title)
+    XCTAssertEqual(sparse.size, 0)
+    XCTAssertNil(subtitleSearchCompatibilityIssue(sparse))
+
+    let unsigned = try decodeSubtitleFixture(#"{"enclosure":"https://example.test/a.srt"}"#)
+    XCTAssertEqual(
+      subtitleSearchCompatibilityIssue(unsigned),
+      "lost the signed enclosure fragment."
+    )
+  }
+
+  func testSubtitleDownloadIsolationRejectsCloudStorageBeforeCreatingAFolder() {
+    XCTAssertEqual(try localSubtitleDownloadStorage(nil), "local")
+    XCTAssertEqual(try localSubtitleDownloadStorage(" local "), "local")
+    XCTAssertThrowsError(try localSubtitleDownloadStorage("u115")) { error in
+      XCTAssertEqual(
+        (error as? BackendSubtitleDownloadError)?.errorDescription,
+        "Subtitle download isolation only supports local storage. u115 needs the parent directory id, so this test will not create a folder there."
+      )
+    }
+  }
+
+  private func decodeSubtitleFixture(_ json: String) throws -> SubtitleInfo {
+    try JSONDecoder().decode(SubtitleInfo.self, from: Data(json.utf8))
+  }
+}
+
 final class BackendCompatibilityReadOnlyTests: XCTestCase {
   @MainActor
   func testReadOnlyOpenAPIContractCompatibility() async throws {
@@ -1816,6 +2465,62 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
         if config.testResourceSearchStreams {
           await assertResourceSearchStreamsReadable(service: service, config: config)
         }
+      }
+    }
+  }
+
+  @MainActor
+  func testReadOnlySubtitleSearchCompatibility() async throws {
+    try await withReadOnlyBackend(requiring: ["subtitle search"]) { service, config in
+      let titleQueries = uniqueStrings(config.subtitleQueries)
+      let mediaIDs = uniqueStrings(config.subtitleMediaIDs)
+      guard !titleQueries.isEmpty || !mediaIDs.isEmpty else {
+        throw XCTSkip(
+          "Set MOVIEPILOT_COMPAT_SUBTITLE_QUERY or MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_ID to run read-only subtitle search compatibility checks."
+        )
+      }
+
+      await runBackendCompatibilityStep(
+        "subtitle search",
+        service: service,
+        config: config,
+        requirement: .permission(.search)
+      ) {
+        if config.subtitleSeasonInvalid {
+          XCTFail("MOVIEPILOT_COMPAT_SUBTITLE_SEASON must be a non-negative integer. Season 0 is valid.")
+          return
+        }
+        let directories = try await service.fetchDownloadDirectories()
+        for directory in directories {
+          if let savePath = directory.save_path {
+            XCTAssertNotNil(
+              savePath.nilIfBlank,
+              "Download directory save_path must be empty or a usable path, not blank padding."
+            )
+          }
+        }
+        let built = backendSubtitleSearchSamples(
+          titleQueries: titleQueries,
+          mediaIDs: mediaIDs,
+          mediaType: config.subtitleMediaType,
+          season: config.subtitleSeason,
+          sites: config.subtitleSites
+        )
+        if !built.rejectedMediaIDs.isEmpty {
+          XCTFail(
+            "Subtitle media IDs must use source:id and a movie or TV type. Rejected: \(built.rejectedMediaIDs.joined(separator: ", "))"
+          )
+        }
+        guard !built.samples.isEmpty else {
+          XCTFail("Configured subtitle queries did not produce a TV subtitle search request.")
+          return
+        }
+        for sample in built.samples {
+          try await runSubtitleSearch(service: service, sample: sample)
+        }
+        print(
+          "Subtitle search directories=\(directories.count), samples=\(built.samples.count)"
+        )
       }
     }
   }
@@ -3403,6 +4108,399 @@ final class BackendCompatibilityCleanupTests: XCTestCase {
     XCTAssertTrue(didFinishRestore)
     XCTAssertGreaterThanOrEqual(start.duration(to: .now), .milliseconds(250))
   }
+
+  func testSlowDownloadTimeoutCancelsTheDownloadTask() async {
+    let download = Task<Void, Never> {
+      do { try await Task.sleep(for: .seconds(1.5)) } catch {}
+    }
+    let started = ContinuousClock.now
+    let finished = await waitForVoidTask(download, seconds: 0.2)
+    XCTAssertFalse(finished)
+    XCTAssertTrue(download.isCancelled)
+    XCTAssertLessThan(started.duration(to: .now), .milliseconds(900))
+  }
+
+  func testParentCancellationCancelsTheDownloadTask() async {
+    let download = Task<Void, Never> {
+      do { try await Task.sleep(for: .seconds(5)) } catch {}
+    }
+    let parent = Task {
+      await waitForVoidTask(download, seconds: 30)
+    }
+    try? await Task.sleep(for: .milliseconds(30))
+    parent.cancel()
+    let started = ContinuousClock.now
+    let finished = await parent.value
+    XCTAssertFalse(finished)
+    XCTAssertTrue(download.isCancelled)
+    XCTAssertLessThan(started.duration(to: .now), .seconds(1))
+  }
+
+  func testCancelledCallerDoesNotStartStorageRequest() async {
+    let probe = SubtitleCleanupProbe.install()
+    defer { probe.uninstall() }
+    let parent = Task {
+      try? await Task.sleep(nanoseconds: 1_000_000)
+      return await executeStorageRequest(probe.request)
+    }
+    parent.cancel()
+    let result = await parent.value
+    XCTAssertFalse(result.success)
+    XCTAssertFalse(result.requestSent)
+    XCTAssertFalse(result.serverAnswered)
+    XCTAssertFalse(probe.didStart)
+  }
+
+  func testStorageCleanupRequestSurvivesCallerCancellation() async {
+    let probe = SubtitleCleanupProbe.install()
+    defer { probe.uninstall() }
+    let parent = Task {
+      try? await Task.sleep(nanoseconds: 1_000_000)
+      return await performStorageRequestDespiteCancellation(probe.request, timeoutSeconds: 5)
+    }
+    parent.cancel()
+    let result = await parent.value
+    XCTAssertTrue(result.success, result.message)
+    XCTAssertTrue(probe.didStart)
+  }
+
+  @MainActor
+  func testMkdirLostResponseStillDeletesThePreparedDirectory() async throws {
+    let probe = SubtitleMkdirRaceProbe.install()
+    defer { probe.uninstall() }
+    let service = APIService.isolatedTestingInstance()
+    service.replaceSessionForTesting(
+      baseURL: "https://mptv-subtitle-mkdir.test", token: "token", currentUser: nil)
+    XCTAssertEqual(
+      service.baseURL, "https://mptv-subtitle-mkdir.test",
+      "mkdir race probe must stay on the intercepted host"
+    )
+    let folder = BackendSubtitleDownloadFolder(
+      storage: "local",
+      path: "/downloads/mp-tv-subtitle-compat-lost",
+      savePath: "/downloads/mp-tv-subtitle-compat-lost"
+    )
+    let parent = Task { () throws -> BackendSubtitleDownloadFolder in
+      try await createPlannedSubtitleFolder(
+        service: service, folder: folder, name: "mp-tv-subtitle-compat-lost", parentPath: "/downloads")
+    }
+    for _ in 0..<50 {
+      if probe.mkdirStarted { break }
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    XCTAssertTrue(probe.mkdirStarted)
+    XCTAssertTrue(probe.directoryExists, "the server created the directory before delivering success")
+    parent.cancel()
+    do {
+      _ = try await parent.value
+      XCTFail("a lost mkdir response must not return the folder as ready")
+    } catch {
+      let description = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+      XCTAssertTrue(
+        description.contains(folder.savePath),
+        "lost mkdir must keep the prepared path, got: \(description)"
+      )
+      XCTAssertTrue(description.contains("uncertain"), description)
+    }
+    XCTAssertGreaterThan(probe.deleteCount, 0)
+    XCTAssertFalse(probe.directoryExists)
+  }
+
+  @MainActor
+  func testCancelBeforeMkdirDoesNotDelete() async {
+    let probe = SubtitleMkdirRaceProbe.install()
+    defer { probe.uninstall() }
+    let service = APIService.isolatedTestingInstance()
+    service.replaceSessionForTesting(
+      baseURL: "https://mptv-subtitle-mkdir.test", token: "token", currentUser: nil)
+    XCTAssertEqual(
+      service.baseURL, "https://mptv-subtitle-mkdir.test",
+      "unsent mkdir must stay on the intercepted host"
+    )
+    let folder = BackendSubtitleDownloadFolder(
+      storage: "local",
+      path: "/downloads/mp-tv-subtitle-compat-unsent",
+      savePath: "/downloads/mp-tv-subtitle-compat-unsent"
+    )
+    let parent = Task { () throws -> BackendSubtitleDownloadFolder in
+      try? await Task.sleep(nanoseconds: 1_000_000)
+      return try await createPlannedSubtitleFolder(
+        service: service, folder: folder, name: "mp-tv-subtitle-compat-unsent", parentPath: "/downloads")
+    }
+    parent.cancel()
+    do {
+      _ = try await parent.value
+      XCTFail("mkdir cancelled before it is sent must not return the folder as ready")
+    } catch {
+      let description = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+      XCTAssertTrue(description.hasPrefix("Storage mkdir failed"), description)
+      XCTAssertFalse(description.contains("uncertain"), description)
+      XCTAssertFalse(description.contains(folder.savePath), description)
+    }
+    XCTAssertFalse(probe.mkdirStarted)
+    XCTAssertEqual(probe.deleteCount, 0)
+  }
+
+  func testLateServerWriteDoesNotCountDeletedDirectoryAsRestored() async {
+    let server = LateSubtitleWrite()
+    let folder = BackendSubtitleDownloadFolder(
+      storage: "local",
+      path: "/downloads/mp-tv-subtitle-compat-late",
+      savePath: "/downloads/mp-tv-subtitle-compat-late"
+    )
+    let writer = Task {
+      await server.waitUntilDeleted()
+      server.writeFile()
+    }
+    let cleanup = await finishSubtitleIsolation(folder: folder, remoteFinished: false) {
+      server.deleteDirectory()
+    }
+    XCTAssertTrue(cleanup.deleteSucceeded)
+    XCTAssertFalse(cleanup.sceneRestored)
+    XCTAssertTrue(cleanup.logLine.contains("uncertain"))
+    XCTAssertTrue(cleanup.logLine.contains(folder.savePath))
+    await writer.value
+    XCTAssertTrue(server.directoryExists)
+    XCTAssertFalse(cleanup.sceneRestored)
+  }
+}
+
+/// 服务端在 mkdir 一开始就把目录建好，但成功响应一直不交付。取消后客户端必须按预定路径删除。
+private struct SubtitleMkdirRaceProbe {
+  var mkdirStarted: Bool { SubtitleMkdirRaceState.shared.mkdirStarted }
+  var directoryExists: Bool { SubtitleMkdirRaceState.shared.directoryExists }
+  var deleteCount: Int { SubtitleMkdirRaceState.shared.deleteCount }
+
+  static func install() -> SubtitleMkdirRaceProbe {
+    SubtitleMkdirRaceState.shared.reset()
+    URLProtocol.registerClass(SubtitleMkdirRaceURLProtocol.self)
+    return SubtitleMkdirRaceProbe()
+  }
+
+  func uninstall() {
+    URLProtocol.unregisterClass(SubtitleMkdirRaceURLProtocol.self)
+    SubtitleMkdirRaceState.shared.reset()
+  }
+}
+
+private final class SubtitleMkdirRaceState: @unchecked Sendable {
+  static let shared = SubtitleMkdirRaceState()
+
+  private let lock = NSLock()
+  private var started = false
+  private var exists = false
+  private var deletes = 0
+
+  func reset() {
+    lock.lock()
+    started = false
+    exists = false
+    deletes = 0
+    lock.unlock()
+  }
+
+  func noteCreated() {
+    lock.lock()
+    started = true
+    exists = true
+    lock.unlock()
+  }
+
+  func noteDeleted() {
+    lock.lock()
+    exists = false
+    deletes += 1
+    lock.unlock()
+  }
+
+  var mkdirStarted: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return started
+  }
+
+  var directoryExists: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return exists
+  }
+
+  var deleteCount: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return deletes
+  }
+}
+
+private final class SubtitleMkdirRaceURLProtocol: URLProtocol, @unchecked Sendable {
+  private let deliveryLock = NSLock()
+  private var stopped = false
+
+  override class func canInit(with request: URLRequest) -> Bool {
+    request.url?.host == "mptv-subtitle-mkdir.test"
+  }
+
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+  override func startLoading() {
+    let path = request.url?.path ?? ""
+    if path.hasSuffix("/storage/mkdir") {
+      SubtitleMkdirRaceState.shared.noteCreated()
+      return
+    }
+    if path.hasSuffix("/storage/delete") {
+      SubtitleMkdirRaceState.shared.noteDeleted()
+      finishJSON(#"{"success":true}"#)
+      return
+    }
+    client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+  }
+
+  override func stopLoading() {
+    // 取消由 URLSession 结束 data(for:)。这里不能再回调 client，否则会和系统的取消完成重复。
+    deliveryLock.withLock { stopped = true }
+  }
+
+  private func finishJSON(_ body: String) {
+    let shouldSend = deliveryLock.withLock { () -> Bool in
+      if stopped { return false }
+      stopped = true
+      return true
+    }
+    guard shouldSend, let url = request.url,
+      let response = HTTPURLResponse(
+        url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+        headerFields: ["Content-Type": "application/json"]
+      )
+    else { return }
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    client?.urlProtocol(self, didLoad: Data(body.utf8))
+    client?.urlProtocolDidFinishLoading(self)
+  }
+}
+
+/// 下载任务已经结束并删除目录后，服务端工作线程仍可能把目录和字幕文件写回来。
+private final class LateSubtitleWrite: @unchecked Sendable {
+  private let lock = NSLock()
+  private var exists = false
+  private var deleted = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+
+  var directoryExists: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return exists
+  }
+
+  func deleteDirectory() -> Bool {
+    let pending: [CheckedContinuation<Void, Never>]
+    lock.lock()
+    exists = false
+    deleted = true
+    pending = waiters
+    waiters = []
+    lock.unlock()
+    for waiter in pending {
+      waiter.resume()
+    }
+    return true
+  }
+
+  func waitUntilDeleted() async {
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      lock.lock()
+      if deleted {
+        lock.unlock()
+        continuation.resume()
+      } else {
+        waiters.append(continuation)
+        lock.unlock()
+      }
+    }
+  }
+
+  func writeFile() {
+    lock.lock()
+    exists = true
+    lock.unlock()
+  }
+}
+
+private struct SubtitleCleanupProbe {
+  var request: URLRequest {
+    var request = URLRequest(url: URL(string: "mptv-subtitle-cleanup://cleanup/delete")!)
+    request.httpMethod = "POST"
+    return request
+  }
+
+  var didStart: Bool { SubtitleCleanupURLProtocol.didStart }
+
+  static func install() -> SubtitleCleanupProbe {
+    SubtitleCleanupURLProtocol.reset()
+    URLProtocol.registerClass(SubtitleCleanupURLProtocol.self)
+    return SubtitleCleanupProbe()
+  }
+
+  func uninstall() {
+    URLProtocol.unregisterClass(SubtitleCleanupURLProtocol.self)
+  }
+}
+
+private final class SubtitleCleanupStartCounter: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value = 0
+
+  func reset() {
+    lock.lock()
+    value = 0
+    lock.unlock()
+  }
+
+  func increment() {
+    lock.lock()
+    value += 1
+    lock.unlock()
+  }
+
+  var didStart: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return value > 0
+  }
+}
+
+private final class SubtitleCleanupURLProtocol: URLProtocol, @unchecked Sendable {
+  private static let starts = SubtitleCleanupStartCounter()
+
+  static func reset() {
+    starts.reset()
+  }
+
+  static var didStart: Bool { starts.didStart }
+
+  override class func canInit(with request: URLRequest) -> Bool {
+    request.url?.scheme == "mptv-subtitle-cleanup"
+  }
+
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+  override func startLoading() {
+    Self.starts.increment()
+    guard let url = request.url,
+      let response = HTTPURLResponse(
+        url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+        headerFields: ["Content-Type": "application/json"]
+      )
+    else {
+      client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+      return
+    }
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    client?.urlProtocol(self, didLoad: Data(#"{"success":true}"#.utf8))
+    client?.urlProtocolDidFinishLoading(self)
+  }
+
+  override func stopLoading() {}
 }
 
 final class BackendCompatibilitySideEffectTests: XCTestCase {
@@ -3690,6 +4788,92 @@ final class BackendCompatibilitySideEffectTests: XCTestCase {
           progress.errorMessage,
           "AI reorganize progress stream reported error: \(progress.errorMessage ?? "")"
         )
+      }
+    }
+  }
+
+  @MainActor
+  func testSubtitleDownloadCompatibility() async throws {
+    try await withSideEffectBackend(
+      flagName: "MOVIEPILOT_COMPAT_TEST_SUBTITLE_DOWNLOAD",
+      requiredStep: "subtitle download side-effect",
+      isEnabled: { $0.testSubtitleDownload }
+    ) { service, config in
+      await runBackendCompatibilityStep(
+        "subtitle download side-effect",
+        service: service,
+        config: config,
+        requirement: .permissions([.search, .manage])
+      ) {
+        if config.subtitleSeasonInvalid {
+          XCTFail("MOVIEPILOT_COMPAT_SUBTITLE_SEASON must be a non-negative integer. Season 0 is valid.")
+          return
+        }
+        guard let savePath = config.subtitleDownloadSavePath else {
+          XCTFail(
+            "Set MOVIEPILOT_COMPAT_SUBTITLE_DOWNLOAD_SAVE_PATH to a save_path returned by /download/paths."
+          )
+          return
+        }
+        guard let mediaID = config.subtitleMediaIDs.compactMap(\.nilIfBlank).first else {
+          XCTFail(
+            "Subtitle download needs MOVIEPILOT_COMPAT_SUBTITLE_MEDIA_ID so the file is attached to one movie or TV item."
+          )
+          return
+        }
+        let built = backendSubtitleSearchSamples(
+          titleQueries: [],
+          mediaIDs: [mediaID],
+          mediaType: config.subtitleMediaType,
+          season: config.subtitleSeason,
+          sites: config.subtitleSites
+        )
+        guard built.rejectedMediaIDs.isEmpty, let sample = built.samples.first else {
+          XCTFail("Subtitle download media ID is not a TV subtitle search target: \(mediaID)")
+          return
+        }
+
+        let session = SubtitleSearchSession(request: sample.request, apiService: service)
+        session.start()
+        if session.state == .idle {
+          XCTFail("Subtitle download search did not start for \(sample.label).")
+          return
+        }
+        try await waitForSubtitleSearch(session)
+        assertSubtitleSearchCompleted(session, label: sample.label)
+        guard case .completed = session.state, !session.rows.isEmpty else { return }
+
+        let folder: BackendSubtitleDownloadFolder
+        do {
+          folder = try await makeSubtitleDownloadFolder(service: service, configuredSavePath: savePath)
+        } catch {
+          XCTFail(error.localizedDescription)
+          return
+        }
+        let end = await downloadFirstSubtitle(session: session, savePath: folder.savePath)
+        let cleanup = await finishSubtitleIsolation(
+          folder: folder, remoteFinished: end.remoteFinished
+        ) {
+          await removeSubtitleDownloadFolder(service: service, folder: folder)
+        }
+        print("Subtitle download media=\(mediaID), \(cleanup.logLine)")
+        switch end {
+        case .accepted:
+          XCTAssertTrue(cleanup.sceneRestored, cleanup.logLine)
+        case .serverRejected(let message):
+          XCTFail(message)
+          XCTAssertTrue(
+            cleanup.sceneRestored,
+            "\(cleanup.logLine) The server had already answered, so the directory should be gone."
+          )
+        case .interrupted(let message, let requestSent):
+          if requestSent {
+            XCTFail("\(message) \(cleanup.logLine)")
+          } else {
+            XCTFail(message)
+            XCTAssertTrue(cleanup.sceneRestored, cleanup.logLine)
+          }
+        }
       }
     }
   }

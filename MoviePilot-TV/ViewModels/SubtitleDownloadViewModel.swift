@@ -12,8 +12,16 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
     case editing, submitting(Target), completed, failed(String), invalidated, closed
   }
 
+  /// 只有字幕下载接口返回业务结果才算服务端处理结束。代理 502/503/504、取消、超时和断线都还可能继续落盘。
+  enum RemoteExchange: Equatable {
+    case pending
+    case serverFinished
+    case interrupted
+  }
+
   let subtitle: SubtitleInfo
   @Published private(set) var state: State = .editing
+  @Published private(set) var remoteExchange: RemoteExchange = .pending
   @Published private(set) var mediaSource: MediaSearchSource
   @Published var mediaId: String
   @Published private(set) var selectedSavePath: String?
@@ -126,6 +134,8 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
       savePath: selectedSavePath
     )
     state = .submitting(target)
+    // 重试必须从 pending 重新计，否则取消和断线会沿用上一次的已结束状态。
+    remoteExchange = .pending
     let task = Task { [weak self, apiService, session, subtitle] in
       defer { self?.downloadTask = nil }
       do {
@@ -133,16 +143,30 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
           subtitle: subtitle, mediaSource: target.identity.source,
           mediaId: target.identity.mediaId, savePath: target.savePath
         )
-        guard let self, !Task.isCancelled, apiService.isSessionUnchanged(from: session),
+        // 正常返回说明同步下载接口已经结束。先记下这个事实，再决定能否把成功显示出来。
+        guard let self else { return }
+        self.remoteExchange = .serverFinished
+        guard apiService.isSessionUnchanged(from: session),
           self.state == .submitting(target) else { return }
+        // 超时会直接取消任务。响应已经回来也不能把已取消的下载显示成成功。
+        guard !Task.isCancelled else {
+          self.state = .failed(Self.interruptedDownloadMessage)
+          return
+        }
         self.onDownloaded(subtitle.enclosure)
         self.state = .completed
       } catch {
-        guard self?.state == .submitting(target) else { return }
+        guard let self else { return }
+        if Self.serverFinished(error) {
+          self.remoteExchange = .serverFinished
+        } else if self.remoteExchange == .pending {
+          self.remoteExchange = .interrupted
+        }
+        guard self.state == .submitting(target) else { return }
         if error is CancellationError || Task.isCancelled {
-          self?.state = .failed("下载请求已中断，请检查保存结果后再重试。")
+          self.state = .failed(Self.interruptedDownloadMessage)
         } else {
-          self?.state = .failed(error.localizedDescription)
+          self.state = .failed(error.localizedDescription)
         }
       }
     }
@@ -151,8 +175,23 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
   }
 
   func close() {
+    if remoteExchange == .pending {
+      remoteExchange = .interrupted
+    }
     state = .closed
     downloadTask?.cancel()
     downloadTask = nil
+  }
+
+  private static let interruptedDownloadMessage = "下载请求已中断，请检查保存结果后再重试。"
+
+  private static func serverFinished(_ error: Error) -> Bool {
+    switch error as? APIError {
+    case .serverMessage, .authenticationChallenge, .unauthorized, .credentialsRejected,
+      .decodingError, .mfaUnsupported:
+      return true
+    case .gatewayStatus, .networkError, .invalidURL, .unknown, .none:
+      return false
+    }
   }
 }
