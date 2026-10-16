@@ -148,7 +148,7 @@ Release Notes 必须使用下面的固定 Markdown 格式。不得自行更改�
 7. `MoviePilot-TV` 主 App 与 Top Shelf 扩展的 Debug / Release / Testing `MARKETING_VERSION` 是否已经同步到用户提供的不带 `v` 版本号。
 8. `main` 中是否已有版本号、发布日期和兼容后端版本一致的 `AppChangelogEntry`，且更新摘要和完整小节已经用户确认。
 9. GitHub Release Notes 草稿是否逐项复用了该条目，而不是重新从提交记录生成。
-10. 如果运行在真实 Mac/Xcode 环境，必须按 `AGENTS.md` 的标准 `xcodebuild` 命令完成本地构建/测试。
+10. 如果运行在真实 Mac/Xcode 环境，按 `AGENTS.md` 完成本地验证。发布专属的版本信息改动先看业务提交的记录和对应 PR CI。那些提交已经通过 CI，或本机已经对它们跑过三版本全套时，不要再跑三版本全套；改为 `python3 scripts/test-tvos.py --only-testing MoviePilot-TV-Tests/AppChangelogTests`，只在最新一个 tvOS 上跑更新说明测试。汇报时写明提交、CI 结果和这次只跑了这个测试，不能写成三版本全套刚刚又通过。对不上已通过的提交、CI 未通过，或还有版本信息以外的改动时，必须跑 `python3 scripts/test-tvos.py --full` 并等它结束。
 11. 如果运行在非真实开发环境，必须说明无法本地测试，并确认 GitHub Actions 或真实 Mac/Xcode 环境已经完成验证。
 12. 如果检查失败，必须停止发布，并向用户列出阻塞项。
 
@@ -173,7 +173,7 @@ Release Notes 必须使用下面的固定 Markdown 格式。不得自行更改�
 2. 确认待发布的业务功能已经按普通分支/PR 流程合并到最新 `main`；不要为新版本信息另建分支或 Pull Request。
 3. 确认用户已审核并批准 Release Notes 内容。
 4. 直接在最新 `main` 写入对应 `AppChangelogEntry`，同步 README、工程级共享的 `MARKETING_VERSION`（主 App 与 Top Shelf 扩展继承） 和对应版本断言。
-5. 确认测试/CI 状态满足发布门禁。
+5. 确认测试/CI 状态满足发布门禁。版本信息改动先看业务提交和对应 PR CI；已经通过时只跑 `python3 scripts/test-tvos.py --only-testing MoviePilot-TV-Tests/AppChangelogTests`。按实际看到的提交、CI 和这次测试范围记录。对不上或还有其他改动时，等 `python3 scripts/test-tvos.py --full` 结束。
 6. 取得用户对 commit、Push 的明确授权后，将新版本信息直接提交并推送 `main`。
 7. 再次取得用户创建 GitHub Release 的明确确认。
 8. 使用 `main` 中 Changelog 的对应内容创建 GitHub Release。
