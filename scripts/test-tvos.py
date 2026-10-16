@@ -43,13 +43,32 @@ class Gate:
     def __init__(self):
         self._lock = threading.Lock()
         self._groups = set()
+        self._starting = 0
         self.setup_error = None
         self.cleanup_error = None
         self.cancelling = False
 
+    def begin(self):
+        """Reserve a start. False means cancellation already won."""
+        with self._lock:
+            if self.cancelling:
+                return False
+            self._starting += 1
+            return True
+
+    def abort_start(self):
+        with self._lock:
+            self._starting -= 1
+
     def add(self, pid):
         with self._lock:
+            self._starting -= 1
             self._groups.add(pid)
+            kill = self.cancelling
+        # Registration and cancellation share this lock. A cancel that already
+        # observed an empty set still has to stop a process that registers now.
+        if kill:
+            _signal_groups([pid], signal.SIGTERM)
 
     def discard(self, pid):
         with self._lock:
@@ -79,19 +98,26 @@ class Gate:
             return "test"
 
     def cancel_children(self):
-        # Keep signalling until the groups exit. One SIGTERM misses a process
-        # that ignores it, and also misses a command that starts during the wait.
+        # A start reserved by begin() has no pid yet. Returning while that count
+        # is non-zero drops the process that is between Popen and add().
         with self._lock:
             self.cancelling = True
         deadline = time.monotonic() + 15
         while True:
             with self._lock:
                 pids = list(self._groups)
-            if not pids:
+                starting = self._starting
+            if not pids and os.environ.get("TVOS_RUNNER_TEST_DIR"):
+                marker = os.environ.get("TVOS_RUNNER_TEST_CANCEL_EMPTY")
+                if marker:
+                    Path(marker).write_text("empty\n")
+            if pids:
+                _signal_groups(pids, signal.SIGTERM)
+            if not pids and starting == 0:
                 return
-            _signal_groups(pids, signal.SIGTERM)
             if time.monotonic() >= deadline:
-                _signal_groups(pids, signal.SIGKILL)
+                if pids:
+                    _signal_groups(pids, signal.SIGKILL)
                 return
             time.sleep(0.05)
 
@@ -134,10 +160,50 @@ def _wait_for_test_gap(command, gate):
         time.sleep(0.01)
 
 
+def _wait_to_register(command):
+    # Holds the runner after Popen and before Gate.add, while cancellation can
+    # observe an empty registry. Only the substitute sets these variables.
+    # Each spawned process appends one line so a peer can wait until every
+    # version is inside this window, not merely until the first one arrives.
+    needle = os.environ.get("TVOS_RUNNER_TEST_REGISTER_GAP_ON")
+    gap = os.environ.get("TVOS_RUNNER_TEST_REGISTER_GAP_FILE")
+    if not needle or not gap or not os.environ.get("TVOS_RUNNER_TEST_DIR") or needle not in command:
+        return
+    with Path(gap).open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        handle.write("spawned\n")
+        handle.flush()
+    release = os.environ.get("TVOS_RUNNER_TEST_CANCEL_EMPTY")
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if release and Path(release).exists():
+            return
+        time.sleep(0.01)
+
+
+def _stop_process(process):
+    # The child is its own session. Kill the group, then force it if it stays.
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except OSError:
+        pass
+    try:
+        process.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        process.wait()
+
+
 def run(command, *, capture=False, check=True, quiet=False, env=None, gate=None, prefix=None):
     _wait_for_test_gap(command, gate)
-    if gate is not None and gate.is_cancelling():
+    if gate is not None and not gate.begin():
         raise subprocess.CalledProcessError(-signal.SIGTERM, command)
+    # begin() reserved a slot. Any exit before add() must release it, and must
+    # also stop a process that already exists but is not registered yet.
+    reservation = gate is not None
     stdout = subprocess.PIPE if capture or prefix else None
     if quiet:
         stderr = subprocess.DEVNULL
@@ -145,13 +211,18 @@ def run(command, *, capture=False, check=True, quiet=False, env=None, gate=None,
         stderr = subprocess.STDOUT
     else:
         stderr = None
-    process = subprocess.Popen(
-        command, cwd=REPO, start_new_session=True, stdout=stdout, stderr=stderr,
-        text=True, env=env,
-    )
-    if gate:
-        gate.add(process.pid)
+    process = None
+    registered = False
     try:
+        process = subprocess.Popen(
+            command, cwd=REPO, start_new_session=True, stdout=stdout, stderr=stderr,
+            text=True, env=env,
+        )
+        _wait_to_register(command)
+        if gate is not None:
+            gate.add(process.pid)
+            reservation = False
+            registered = True
         if prefix and process.stdout is not None:
             for line in process.stdout:
                 with PRINT_LOCK:
@@ -163,19 +234,13 @@ def run(command, *, capture=False, check=True, quiet=False, env=None, gate=None,
             output, _ = process.communicate()
             returncode = process.returncode
     except BaseException:
-        # Stop our entire build process group before deleting its simulator.
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except OSError:
-            pass
-        try:
-            process.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
+        if reservation and gate is not None:
+            gate.abort_start()
+        if process is not None:
+            _stop_process(process)
         raise
     finally:
-        if gate:
+        if registered and gate is not None:
             gate.discard(process.pid)
     if check and returncode:
         raise subprocess.CalledProcessError(returncode, command)

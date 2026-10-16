@@ -138,14 +138,27 @@ elif tool == "xcodebuild":
         while time.time() < deadline and len((root / "build-arrived").read_text().splitlines()) < 3:
             time.sleep(0.01)
     if is_debug_build and fail_build and current_runtime.endswith(fail_build.replace(".", "-")):
-        gap = os.environ.get("TVOS_RUNNER_TEST_GAP_FILE")
-        if gap:
+        for key in ("TVOS_RUNNER_TEST_GAP_FILE", "TVOS_RUNNER_TEST_REGISTER_GAP_FILE"):
+            gap = os.environ.get(key)
+            if not gap:
+                continue
+            expected = 1
+            if key == "TVOS_RUNNER_TEST_REGISTER_GAP_FILE":
+                expected = int(os.environ.get("TVOS_RUNNER_TEST_REGISTER_GAP_COUNT", "1"))
             deadline = time.time() + 5
-            while time.time() < deadline and not Path(gap).exists():
+            while time.time() < deadline:
+                try:
+                    ready = len(Path(gap).read_text().splitlines()) >= expected
+                except FileNotFoundError:
+                    ready = False
+                if ready:
+                    break
                 time.sleep(0.01)
         sys.exit(65)
     if is_debug_build and os.environ.get("TVOS_RUNNER_TEST_SLOW_BUILD") == "1":
         (root / "build-started").touch()
+        time.sleep(60)
+    if "build-for-testing" in args and os.environ.get("TVOS_RUNNER_TEST_SLOW_TEST_BUILD") == "1":
         time.sleep(60)
     if "test-without-building" in args:
         if os.environ.get("TVOS_RUNNER_TEST_HOLD_TESTS") == "1" and not current_runtime.endswith("18-5"):
@@ -271,6 +284,24 @@ class TestTVOSRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 65, result.stderr)
         self.assertTrue((self.root / "gap").exists())
         self.assertFalse(any("build-for-testing" in call["args"] for call in self.calls()))
+        self.assertFalse(any("test-without-building" in call["args"] for call in self.calls()))
+        self.assertIn("停止其余版本", result.stderr)
+        self.assert_cleanup_pairs()
+
+    def test_process_started_during_cancel_is_signalled_when_registered(self):
+        self.environment["TVOS_RUNNER_TEST_FAIL_BUILD_RUNTIME"] = "18.5"
+        self.environment["TVOS_RUNNER_TEST_BUILD_BARRIER"] = "1"
+        self.environment["TVOS_RUNNER_TEST_REGISTER_GAP_ON"] = "build-for-testing"
+        self.environment["TVOS_RUNNER_TEST_REGISTER_GAP_FILE"] = str(self.root / "spawned")
+        self.environment["TVOS_RUNNER_TEST_REGISTER_GAP_COUNT"] = "2"
+        self.environment["TVOS_RUNNER_TEST_CANCEL_EMPTY"] = str(self.root / "cancel-empty")
+        self.environment["TVOS_RUNNER_TEST_SLOW_TEST_BUILD"] = "1"
+        result = self.run_script("success", matrix=True)
+        self.assertEqual(result.returncode, 65, result.stderr)
+        self.assertEqual((self.root / "spawned").read_text().splitlines(), ["spawned", "spawned"])
+        self.assertTrue((self.root / "cancel-empty").exists())
+        started = [call["args"] for call in self.calls() if "build-for-testing" in call["args"]]
+        self.assertEqual(len(started), 2)
         self.assertFalse(any("test-without-building" in call["args"] for call in self.calls()))
         self.assertIn("停止其余版本", result.stderr)
         self.assert_cleanup_pairs()
