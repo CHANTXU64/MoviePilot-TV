@@ -66,7 +66,7 @@ enum OpenAPIContractSupport {
     _ error: Error,
     backendVersion: String?
   ) -> Bool {
-    let optionalDocsVersions: Set<String> = ["v3.1.0", "v3.1.1", "v3.1.2", "v3.1.2-1", "v3.1.4"]
+    let optionalDocsVersions: Set<String> = ["v3.1.0", "v3.1.1", "v3.1.2", "v3.1.2-1", "v3.1.4", "v3.1.6"]
     guard let version = MoviePilotVersion(backendVersion)?.description,
       optionalDocsVersions.contains(version),
       case let OpenAPIFetchError.httpStatus(statusCode, isJSON) = error
