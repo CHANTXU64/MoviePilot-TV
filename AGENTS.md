@@ -114,7 +114,7 @@ python3 scripts/test-tvos.py
 python3 scripts/test-tvos.py --full
 ```
 
-`--full` 依次在 **tvOS 18.5、26.5、最新已安装的 27.x** 上运行完整验证。开始前必须确认三个 runtime 都可用，缺少任何一个就报错，不允许悄悄只跑最新版本。依赖解析、Debug 构建或 Testing 宿主构建失败立即停止整个流程；只有测试执行阶段的普通离线用例失败才继续其余版本，最终汇总失败。取消立即停止。每个版本单独创建临时 Apple TV 模拟器，按本次返回的 UDID 执行构建和测试；成功、失败或取消后只关闭并删除自己创建的设备。不要用日常模拟器的名称或 UDID 执行测试，也不要使用 `erase`、`shutdown all` 或 `delete all`。
+`--full` 在 **tvOS 18.5、26.5、最新已安装的 27.x** 上运行完整验证，三个版本同时进行。开始前必须确认三个 runtime 都可用，缺少任何一个就报错，不允许悄悄只跑最新版本。依赖只解析一次，每个版本使用独立的 `tvos-<版本>` 构建目录，避免争用 `build.db`。某一版本的依赖解析、Debug 构建或 Testing 宿主构建失败时，停止其余仍在运行的版本；只有测试执行阶段的普通离线用例失败才等其余版本跑完并汇总。取消会停掉本次已经启动的全部版本。每个版本单独创建临时 Apple TV 模拟器，按本次返回的 UDID 执行构建和测试；成功、失败或取消后只关闭并删除自己创建的设备。不要用日常模拟器的名称或 UDID 执行测试，也不要使用 `erase`、`shutdown all` 或 `delete all`。机器内存紧张时加 `--serial`，改回逐个版本运行。
 
 CI 使用 GitHub 提供的 `xcode-27` runner，并固定执行 `python3 scripts/test-tvos.py --full --runtime 27.0`；该镜像提供 Xcode 27 与 tvOS 27.0 runtime，见[官方镜像说明](https://github.com/actions/runner-images/issues/14404)。提交前完整验收使用三版本矩阵；日常构建与定向测试使用单版本，不要求提前完成提交验收。实际使用的型号、版本和 UDID 会输出在日志中。矩阵模式下，`--result-bundle-path /tmp/tests.xcresult` 会分别生成 `tests-tvos-18.5.xcresult`、`tests-tvos-26.5.xcresult` 和对应 27.x 的结果包。
 
@@ -125,9 +125,17 @@ python3 scripts/test-tvos.py --runtime 27.0 \
   --only-testing MoviePilot-TV-Tests/TestIsolationTests
 ```
 
-测试分为 `build-for-testing` 和 `test-without-building`，宿主构建失败后不启动测试。`--skip-build` 只能与 `--full` 一起使用，跳过依赖解析和 Debug clean build，不能将它单独当作完整验证；只构建模式不接受 `--result-bundle-path`。
+测试分为 `build-for-testing` 和 `test-without-building`，宿主构建失败后不启动测试。`--skip-build` 只能与 `--full` 一起使用，跳过依赖解析与 Debug 构建，不能将它单独当作完整验证；只构建模式不接受 `--result-bundle-path`。全套验收复用专用构建目录里的增量产物，不再每次 `clean`。怀疑缓存失真时，只删除这次脚本打印的构建目录，不要删除用户日常的 Xcode DerivedData。
 
-脚本始终传入专用 `-derivedDataPath`，默认在系统临时目录的 `MoviePilot-TV-tests/<仓库标识>/DerivedData` 复用增量缓存，与日常 Xcode 的 DerivedData 隔离。同一专用目录已有脚本运行时立即退出，不并发争抢 build.db。手动调用 xcodebuild 也必须指定独立构建目录，不得占用用户正在使用的目录；不要清理、删除用户日常 DerivedData。可用 `--derived-data-path <专用目录>` 指定其他隔离目录，或用 `--result-bundle-path <新的.xcresult路径>` 保存测试结果。
+脚本始终传入专用 `-derivedDataPath`，默认在系统临时目录的 `MoviePilot-TV-tests/<仓库标识>/DerivedData` 复用增量缓存，与日常 Xcode 的 DerivedData 隔离。每次运行都把该版本的产物放在 `tvos-<版本>` 子目录，所以日常单版本构建和后来的三版本矩阵可以共用同一份增量结果。整次运行仍共用一把锁：这个目录已有脚本在跑时，新的一次会立即退出。手动调用 xcodebuild 也必须指定独立构建目录，不得占用用户正在使用的目录；不要清理、删除用户日常 DerivedData。可用 `--derived-data-path <专用目录>` 指定其他隔离目录，或用 `--result-bundle-path <新的.xcresult路径>` 保存测试结果。
+
+发布专属的版本信息改动不要再跑三版本全套。先看业务提交的记录和对应 PR 的 CI。那些提交已经通过 CI，或本机已经对它们跑过三版本全套，就只在最新一个 tvOS 上兜底：
+
+```bash
+python3 scripts/test-tvos.py --only-testing MoviePilot-TV-Tests/AppChangelogTests
+```
+
+这次只覆盖更新说明和对应断言。汇报时写明看过的提交、CI 结果，以及这次只跑了这个测试，不能写成三版本全套刚刚又通过。对不上已通过的提交、CI 未通过，或改动里还有版本信息以外的代码时，改为上面的 `--full`。
 
 Xcode 的 Test action 使用独立 `Testing` 配置，安装 `org.chantxu.MoviePilot-TV.Testing` 和对应的 Top Shelf 扩展，使用独立 App Group、钥匙串访问组与偏好/缓存容器。Run action 继续使用正常 Debug App。共享版本和默认身份由 `Configuration/Base.xcconfig` 定义，Testing 继承 Debug 并覆盖独立身份；深链 scheme 由主 App 与扩展 Info.plist 的 `TopShelfURLScheme` 读取，不在代码中写死。测试目标拒绝在普通 Debug/Release 配置编译，以免误用 `xcodebuild test -configuration Debug` 覆盖日常 App。命令行测试统一使用上面的入口；需要手动诊断时，必须使用自己新建的测试设备、`-configuration Testing` 和串行参数。
 
@@ -140,7 +148,7 @@ python3 -m unittest discover -s scripts/tests
 
 该命令运行 `scripts/tests` 下全部 Python 测试（含续签脚本的本地命令替身和构建设置检查），不代表真实签名或设备安装验收。实际 IPA 构建、打包只在 `Release` 工作流执行，该工作流只跑打包相关测试。
 
-本机测试默认串行运行。不要移除 `-parallel-testing-enabled NO` 和 `-maximum-concurrent-test-simulator-destinations 1`，否则 XCTest 可能启动多个 `Clone N of Apple TV` 模拟器并并行执行不同测试套件。真实后端兼容测试尤其应串行执行，方便控制副作用套件的执行顺序和排查失败来源。
+每个版本内部保持 XCTest 串行。不要移除 `-parallel-testing-enabled NO` 和 `-maximum-concurrent-test-simulator-destinations 1`，否则 XCTest 可能启动多个 `Clone N of Apple TV` 模拟器并并行执行不同测试套件。这和三个 tvOS 版本同时跑是两件事：版本之间可以并行，同一个版本里的用例仍然逐个跑。真实后端兼容测试连版本之间也逐个执行，方便控制副作用套件的执行顺序和排查失败来源；带 `--include-backend-tests` 的矩阵不会并行。测试命令带 `-collect-test-diagnostics never`，失败细节看 `.xcresult`，不再等待 `simctl diagnose`。
 
 模拟器构建和测试必须保留本地 ad-hoc 签名（`CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-`），不要使用 `CODE_SIGNING_ALLOWED=NO`。测试会覆盖安装主 App 和扩展；关闭签名会丢失 App Group 权限，让 Top Shelf 退回静态图片。宿主测试不启动正常 App 根视图的会话加载与 Top Shelf 同步，避免测试会话写入用户首页。修改签名、打包或共享组时，除测试通过外，还须核对测试结束后的实际共享容器访问和首页展示。
 
@@ -172,7 +180,7 @@ PR CI 只执行 Simulator 构建、测试和脚本回归，不编译或打包发
 在真实开发环境中：
 
 1. 日常修改不自动运行全量；只有用户明确要求提交后，才进入提交前完整验证。用户查看效果期间优先保障日常 Xcode 可用，不并发占用其构建目录。
-2. 用户明确要求提交 Swift / tvOS 修改时，运行上方 `python3 scripts/test-tvos.py --full` 完成依赖解析、Simulator 完整构建和测试；提交前的单版本定向验证不能替代这一步。
+2. 用户明确要求提交 Swift / tvOS 修改时，运行上方 `python3 scripts/test-tvos.py --full` 完成依赖解析、Simulator 完整构建和测试；提交前的单版本定向验证不能替代这一步。发布专属的版本信息改动除外：先看业务提交和对应 PR CI，已经通过时只跑上一节的 `AppChangelogTests`，并按实际范围汇报。对不上已通过的提交、CI 未通过，或还有其他代码改动时，仍跑 `--full`。
 3. 对文档或 Prompt 修改，也应运行仓库可用的轻量检查；如果没有适用检查，必须说明“文档-only 变更，无可运行测试”。
 4. 测试失败时禁止提交，除非用户明确要求保留失败状态用于审查，并且提交说明中必须写清楚失败命令与失败原因。
 5. Commit 前必须在最终回复或提交说明中列出实际运行过的命令和结果。
