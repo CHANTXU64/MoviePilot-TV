@@ -40,15 +40,20 @@ struct PagedResourceResultsView<Header: View>: View {
   private var loadingContent: some View {
     VStack(spacing: 20) {
       header()
-      Spacer()
-      ProgressView(search.progressText)
-      if search.isCollecting && search.progress > 0 {
-        ProgressView(value: search.progress, total: 100).frame(width: 360)
+      // 焦点区域不含标题，从偏离中线的搜索类型按钮下移也能进入。
+      VStack(spacing: 20) {
+        Spacer()
+        ProgressView(search.progressText)
+        if search.isCollecting && search.progress > 0 {
+          ProgressView(value: search.progress, total: 100).frame(width: 360)
+        }
+        Text("已保留 \(search.retainedCount) 条 · 本次新增 \(search.newCount) 条")
+          .font(.caption).foregroundColor(.secondary)
+        Button(loadingAction.title) { loadingAction.perform() }
+        Spacer()
       }
-      Text("已保留 \(search.retainedCount) 条 · 本次新增 \(search.newCount) 条")
-        .font(.caption).foregroundColor(.secondary)
-      Button(loadingAction.title) { loadingAction.perform() }
-      Spacer()
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .focusSection()
     }
   }
 

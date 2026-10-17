@@ -139,6 +139,8 @@ nonisolated struct SubtitleSearchCollector {
   static let previewBufferLimit = 96
 
   private(set) var finalApplied = false
+  /// 本次实际收到的条数。预览只显示前几条，不能拿显示行数当收到数。
+  private(set) var receivedCount = 0
   private var preview: [SubtitleInfo] = []
   private var finalItems: [SubtitleInfo] = []
   private var pendingFinalItems: [SubtitleInfo] = []
@@ -173,6 +175,7 @@ nonisolated struct SubtitleSearchCollector {
         pendingFinalItems = []
         preview = []
         finalApplied = true
+        receivedCount = finalItems.count
         return true
       }
       return false
@@ -186,6 +189,7 @@ nonisolated struct SubtitleSearchCollector {
     switch event.type {
     case "append" where !finalApplied:
       guard !items.isEmpty else { return false }
+      receivedCount += items.count
       preview.insert(contentsOf: items, at: 0)
       if preview.count > Self.previewBufferLimit {
         preview.removeLast(preview.count - Self.previewBufferLimit)
@@ -195,11 +199,13 @@ nonisolated struct SubtitleSearchCollector {
       finalItems = items
       preview = []
       finalApplied = true
+      receivedCount = items.count
       return true
     case "done" where !items.isEmpty && !finalApplied:
       finalItems = items
       preview = []
       finalApplied = true
+      receivedCount = items.count
       return true
     default:
       return false
