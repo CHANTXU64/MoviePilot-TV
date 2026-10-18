@@ -14,20 +14,6 @@
 
 ## 待评估功能
 
-### 字幕搜索与下载
-
-- 来源：MoviePilot Web / Backend `v2.13.6 -> v2.13.14` 新增字幕搜索、字幕结果展示和字幕下载相关能力；Backend `v2.14.0 -> v2.14.4` 要求字幕下载使用搜索结果返回的签名链接。
-- 当前判断：不是现有 TV 核心兼容必修项；TV 当前没有字幕搜索/下载入口。
-- 可评估方向：
-  - 是否在媒体详情页提供字幕搜索入口。
-  - 是否在资源搜索结果页增加“字幕”模式或筛选。
-  - 是否需要支持字幕下载保存路径选择。
-  - 下载时必须原样保留搜索结果 `enclosure` 中的签名 fragment；后端重启或密钥轮换导致签名失效时，应重新搜索获取链接，不要由客户端自行拼接站点凭据或签名。
-  - 字幕下载属于副作用操作，若实现必须加入显式副作用兼容测试开关。
-- 相关上游接口/路径：
-  - Backend：`/search/subtitle/title`、`/search/subtitle/title/stream`、`/search/subtitle/media/{mediaid}`、`/download/subtitle`
-  - Frontend：`SubtitleCard.vue`、`SubtitleItem.vue`、`AddSubtitleDownloadDialog.vue`
-
 ### 后端连接状态与自动重连
 
 - 来源：MoviePilot Web `v2.14.0 -> v2.14.4` 增加 `system/ping` 服务探测、在线/检查中/离线状态、退避重试和手动重试提示。
