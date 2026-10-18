@@ -24,6 +24,7 @@ final class SubtitleSearchTests: XCTestCase {
     XCTAssertFalse(collector.finalApplied)
     XCTAssertEqual(collector.bufferedPreviewCount, SubtitleSearchCollector.previewBufferLimit)
     XCTAssertEqual(collector.publishedItems.count, SubtitleSearchCollector.previewDisplayLimit)
+    XCTAssertEqual(collector.receivedCount, 100)
     XCTAssertEqual(
       collector.publishedItems.map(\.title),
       (76...99).reversed().map(String.init)
@@ -38,6 +39,28 @@ final class SubtitleSearchTests: XCTestCase {
     XCTAssertEqual(collector.bufferedPreviewCount, 0)
     XCTAssertFalse(try collector.receive(event(type: "done", items: [item(title: "重复")])))
     XCTAssertEqual(collector.publishedItems.map(\.title), ["最终"])
+    XCTAssertEqual(collector.receivedCount, 1)
+  }
+
+  func testSearchingCountsReceivedItemsBeyondPreviewDisplay() async throws {
+    SubtitleSearchURLProtocol.holdStreamAfterBody = true
+    let total = SubtitleSearchCollector.previewDisplayLimit + 6
+    let items = (0..<total).map { #"{"title":"\#($0)","enclosure":"https://sub.example/\#($0)"}"# }
+    SubtitleSearchURLProtocol.streamBody = sse(
+      #"data: {"type":"append","items":["# + items.joined(separator: ",") + "]}"
+    )
+    let search = session(api: service(), keyword: "超过预览")
+    search.start()
+    try await until { search.receivedCount == total }
+    XCTAssertEqual(search.rows.count, SubtitleSearchCollector.previewDisplayLimit)
+    XCTAssertEqual(
+      search.receivedSummary,
+      "已收到 \(total) 个字幕 · 停止后显示最新 \(SubtitleSearchCollector.previewDisplayLimit) 个"
+    )
+    XCTAssertTrue(search.canStopAndView)
+    search.stopAndView()
+    XCTAssertEqual(search.receivedCount, total)
+    XCTAssertEqual(search.rows.count, SubtitleSearchCollector.previewDisplayLimit)
   }
 
   func testDoneWithoutReplaceReplacesPreview() throws {
@@ -268,7 +291,112 @@ final class SubtitleSearchTests: XCTestCase {
     XCTAssertEqual(session.rows.map(\.subtitle.title), ["预览"])
     XCTAssertTrue(session.canRestart)
     XCTAssertEqual(session.errorMessage, "没有可用字幕站点")
+    XCTAssertTrue(session.showsResultCards)
+    XCTAssertFalse(session.showsIncompleteMatch)
     XCTAssertEqual(SubtitleSearchURLProtocol.requests.map(\.path), ["/api/v1/search/subtitle/title/stream"])
+  }
+
+  func testCardsStayHiddenUntilSearchStops() async throws {
+    SubtitleSearchURLProtocol.holdStreamAfterBody = true
+    SubtitleSearchURLProtocol.streamBody = sse(
+      #"data: {"type":"append","items":[{"title":"候选","enclosure":"https://sub.example/preview"}]}"#
+    )
+    let search = session(api: service(), keyword: "进行中")
+    search.start()
+    try await until { search.receivedCount == 1 }
+    XCTAssertTrue(search.isSearching)
+    XCTAssertTrue(search.showsLoading)
+    XCTAssertEqual(search.receivedSummary, "已收到 1 个字幕")
+    XCTAssertFalse(search.showsResultCards)
+    XCTAssertTrue(search.canStopAndView)
+    XCTAssertEqual(SubtitleSearchSession.loadingButtonTitle(canStopAndView: true), "停止并查看")
+    XCTAssertEqual(SubtitleSearchSession.loadingButtonTitle(canStopAndView: false), "取消")
+    search.stopAndView()
+    XCTAssertEqual(search.state, .interrupted)
+    XCTAssertFalse(search.showsLoading)
+    XCTAssertTrue(search.showsResultCards)
+    XCTAssertFalse(search.showsIncompleteMatch)
+    XCTAssertEqual(search.rows.map(\.subtitle.title), ["候选"])
+  }
+
+  func testNotStartedShowsLoadingAndCancelledShowsNoEmptyState() async throws {
+    SubtitleSearchURLProtocol.holdStreamAfterBody = true
+    SubtitleSearchURLProtocol.streamBody = sse(#"data: {"type":"progress","value":10}"#)
+    let search = session(api: service(), keyword: "首帧")
+    XCTAssertEqual(search.state, .idle)
+    XCTAssertTrue(search.showsLoading)
+    XCTAssertFalse(search.showsEmptyState)
+    search.start()
+    try await until { SubtitleSearchURLProtocol.requests.count == 1 }
+    search.cancel()
+    XCTAssertEqual(search.state, .cancelled)
+    XCTAssertFalse(search.showsLoading)
+    XCTAssertFalse(search.showsEmptyState)
+  }
+
+  func testMediaSearchStopBeforeMatchDoesNotBindCurrentMedia() async throws {
+    SubtitleSearchURLProtocol.holdStreamAfterBody = true
+    SubtitleSearchURLProtocol.streamBody = sse(
+      #"data: {"type":"append","items":[{"title":"未匹配","enclosure":"https://sub.example/early"}]}"#
+    )
+    let search = mediaSession(api: service())
+    search.start()
+    try await until { search.receivedCount == 1 }
+    XCTAssertFalse(search.showsResultCards)
+    search.stopAndView()
+    XCTAssertTrue(search.showsIncompleteMatch)
+    XCTAssertFalse(search.resultsAreFinal)
+    let model = search.downloadModel(for: search.rows[0].subtitle)
+    XCTAssertEqual(model.mediaId, "")
+    XCTAssertFalse(model.canSubmit)
+  }
+
+  func testMediaSearchFinalListBindsCurrentMedia() async throws {
+    SubtitleSearchURLProtocol.streamBody = sse(
+      #"data: {"type":"append","items":[{"title":"候选","enclosure":"https://sub.example/early"}]}"#,
+      #"data: {"type":"replace","items":[{"title":"匹配","enclosure":"https://sub.example/final"}]}"#,
+      #"data: {"type":"done"}"#
+    )
+    let search = mediaSession(api: service())
+    search.start()
+    try await until { search.state == .completed }
+    XCTAssertTrue(search.showsResultCards)
+    XCTAssertTrue(search.resultsAreFinal)
+    XCTAssertFalse(search.showsIncompleteMatch)
+    XCTAssertEqual(search.rows.map(\.subtitle.title), ["匹配"])
+    XCTAssertEqual(search.downloadModel(for: search.rows[0].subtitle).mediaId, "550")
+    XCTAssertEqual(search.emptyStateTitle, SubtitleSearchSession.emptyTitle(hasError: false))
+  }
+
+  func testMediaBusinessErrorBeforeFinalKeepsUnmatchedRows() async throws {
+    SubtitleSearchURLProtocol.streamBody = sse(
+      #"data: {"type":"append","items":[{"title":"候选","enclosure":"https://sub.example/early"}]}"#,
+      #"data: {"type":"error","message":"搜索失败，请稍后重试"}"#
+    )
+    let search = mediaSession(api: service())
+    search.start()
+    try await until { search.didFinish }
+    XCTAssertEqual(search.rows.map(\.subtitle.title), ["候选"])
+    XCTAssertTrue(search.showsResultCards)
+    XCTAssertTrue(search.showsIncompleteMatch)
+    XCTAssertEqual(search.errorMessage, "搜索失败，请稍后重试")
+    XCTAssertEqual(search.downloadModel(for: search.rows[0].subtitle).mediaId, "")
+    XCTAssertEqual(
+      SubtitleSearchURLProtocol.requests.map(\.path),
+      ["/api/v1/search/subtitle/media/550/stream"]
+    )
+  }
+
+  func testFailureWithoutRowsUsesFailedTitle() async throws {
+    SubtitleSearchURLProtocol.streamBody = sse(#"data: {"type":"error","message":"媒体信息识别失败"}"#)
+    let search = mediaSession(api: service())
+    search.start()
+    try await until { search.didFinish }
+    XCTAssertTrue(search.rows.isEmpty)
+    XCTAssertFalse(search.showsResultCards)
+    XCTAssertTrue(search.showsEmptyState)
+    XCTAssertEqual(search.emptyStateTitle, "字幕搜索失败")
+    XCTAssertEqual(search.errorMessage, "媒体信息识别失败")
   }
 
   func testSSEIntegerProxyFlagsMatchResourceDecodingWithoutHTTPFallback() async throws {
@@ -337,6 +465,62 @@ final class SubtitleSearchTests: XCTestCase {
     )
   }
 
+  func testFinalReplaceKeepsRowsWhenFallbackFails() async throws {
+    let api = service()
+    SubtitleSearchURLProtocol.streamBody = sse(
+      #"data: {"type":"replace","items":[{"title":"流内最终","enclosure":"https://sub.example/final"}]}"#
+    )
+    SubtitleSearchURLProtocol.fallbackBody = Data(
+      #"{"success":false,"message":"未搜索到任何字幕"}"#.utf8
+    )
+    let session = session(api: api, keyword: "回退失败")
+    session.start()
+    try await until { session.didFinish }
+    XCTAssertEqual(session.state, .completed)
+    XCTAssertEqual(session.rows.map(\.subtitle.title), ["流内最终"])
+    XCTAssertTrue(session.resultsAreFinal)
+    XCTAssertTrue(session.showsResultCards)
+    XCTAssertNil(session.errorMessage)
+    XCTAssertFalse(session.canRestart)
+    XCTAssertEqual(
+      SubtitleSearchURLProtocol.requests.map(\.path),
+      ["/api/v1/search/subtitle/title/stream", "/api/v1/search/subtitle/title"]
+    )
+  }
+
+  func testEmptyFinalReplaceFallbackFailureStaysFailed() async throws {
+    let api = service()
+    SubtitleSearchURLProtocol.streamBody = sse(#"data: {"type":"replace","items":[]}"#)
+    SubtitleSearchURLProtocol.fallbackBody = Data(
+      #"{"success":false,"message":"未搜索到任何字幕"}"#.utf8
+    )
+    let session = session(api: api, keyword: "空最终回退失败")
+    session.start()
+    try await until { session.didFinish }
+    XCTAssertEqual(session.state, .failed("未搜索到任何字幕"))
+    XCTAssertTrue(session.rows.isEmpty)
+    XCTAssertEqual(session.emptyStateTitle, "字幕搜索失败")
+    XCTAssertTrue(session.canRestart)
+  }
+
+  func testPreviewFallbackFailureStaysFailed() async throws {
+    let api = service()
+    SubtitleSearchURLProtocol.streamBody = sse(
+      #"data: {"type":"append","items":[{"title":"预览","enclosure":"https://sub.example/preview"}]}"#
+    )
+    SubtitleSearchURLProtocol.fallbackBody = Data(
+      #"{"success":false,"message":"未搜索到任何字幕"}"#.utf8
+    )
+    let session = session(api: api, keyword: "预览回退失败")
+    session.start()
+    try await until { session.didFinish }
+    XCTAssertEqual(session.state, .failed("未搜索到任何字幕"))
+    XCTAssertEqual(session.rows.map(\.subtitle.title), ["预览"])
+    XCTAssertFalse(session.resultsAreFinal)
+    XCTAssertEqual(session.errorMessage, "未搜索到任何字幕")
+    XCTAssertTrue(session.canRestart)
+  }
+
   func testFinalReplaceWithoutDoneFallsBackOnDisconnect() async throws {
     let api = service()
     SubtitleSearchURLProtocol.streamBody = sse(
@@ -351,6 +535,9 @@ final class SubtitleSearchTests: XCTestCase {
     let session = session(api: api, keyword: "断开")
     session.start()
     try await until { session.rows.map(\.subtitle.title) == ["流内最终"] }
+    XCTAssertTrue(session.isSearching)
+    XCTAssertFalse(session.showsResultCards)
+    XCTAssertTrue(session.resultsAreFinal)
     SubtitleSearchURLProtocol.failHeldStreams()
     try await until { session.didFinish }
     XCTAssertEqual(session.rows.map(\.subtitle.title), ["普通请求"])
@@ -646,12 +833,14 @@ final class SubtitleSearchTests: XCTestCase {
     search.restart()
     try await until { search.didFinish }
     XCTAssertEqual(search.state, .failed("站点失败"))
+    XCTAssertEqual(search.emptyStateTitle, "字幕搜索失败")
     XCTAssertTrue(search.canRestart)
     SubtitleSearchURLProtocol.streamBody = sse(#"data: {"type":"done","items":[]}"#)
     search.restart()
     try await until { search.state == .completed }
     XCTAssertNil(search.errorMessage)
     XCTAssertTrue(search.rows.isEmpty)
+    XCTAssertEqual(search.emptyStateTitle, "未搜索到字幕")
   }
 
   func testSessionRefreshPreventsRestartOfOldSearch() async throws {
@@ -1278,6 +1467,19 @@ final class SubtitleSearchTests: XCTestCase {
       user_id: userID,
       user_name: "subtitle-test",
       avatar: nil
+    )
+  }
+
+  private func mediaSession(api: APIService) -> SubtitleSearchSession {
+    SubtitleSearchSession(
+      request: SubtitleSearchRequest(
+        kind: .media(source: "themoviedb", mediaId: "550", type: "电影", season: nil, episode: nil),
+        sites: nil,
+        displayTitle: "搏击俱乐部",
+        mediaInfo: nil
+      ),
+      apiService: api,
+      doneCloseDelayNanoseconds: 0
     )
   }
 

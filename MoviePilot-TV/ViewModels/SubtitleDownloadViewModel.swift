@@ -38,6 +38,7 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
   init(
     subtitle: SubtitleInfo, request: SubtitleSearchRequest,
     apiService: APIService = .shared, session: APIServiceSessionSnapshot? = nil,
+    bindsCurrentMedia: Bool = true,
     onDownloaded: @escaping (String?) -> Void = { _ in }
   ) {
     self.subtitle = subtitle
@@ -45,7 +46,8 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
     self.apiService = apiService
     self.session = session ?? apiService.sessionSnapshot()
     // 预填身份的来源与 ID 成对使用；来源无法识别时不把 ID 挪到别的来源下。
-    let identity = request.initialMediaIdentity
+    // 未完成匹配的候选不绑定当前媒体，避免把字幕下进尚未对上的片子。
+    let identity = bindsCurrentMedia ? request.initialMediaIdentity : nil
     let initialSource = identity.flatMap { MediaSearchSource(rawValue: $0.source) }
     mediaSource = initialSource
       ?? MediaSearchSource(rawValue: apiService.settings?.RECOGNIZE_SOURCE ?? "") ?? .themoviedb

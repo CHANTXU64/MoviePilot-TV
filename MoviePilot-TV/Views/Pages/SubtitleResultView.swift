@@ -22,7 +22,9 @@ struct SubtitleResultsBody<Header: View>: View {
 
   var body: some View {
     Group {
-      if search.rows.isEmpty {
+      if search.showsLoading {
+        loadingContent
+      } else if search.rows.isEmpty {
         emptyContent
       } else {
         resultsContent
@@ -53,11 +55,9 @@ struct SubtitleResultsBody<Header: View>: View {
       GeometryReader { geometry in
         ScrollView(.vertical) {
           Group {
-            if search.isSearching {
-              progressContent
-            } else if search.didFinish || search.state == .interrupted {
+            if search.showsEmptyState {
               EmptyDataView(
-                title: "未找到相关字幕",
+                title: search.emptyStateTitle,
                 systemImage: "captions.bubble",
                 description: search.errorMessage,
                 actionTitle: search.canRestart ? "重新搜索" : nil,
@@ -72,36 +72,48 @@ struct SubtitleResultsBody<Header: View>: View {
     }
   }
 
-  private var progressContent: some View {
+  private var loadingContent: some View {
     VStack(spacing: 20) {
-      ProgressView {
-        Text(search.progressText)
-          .multilineTextAlignment(.center)
-          .fixedSize(horizontal: false, vertical: true)
+      header
+      // 焦点区域不含标题，从偏离中线的搜索类型按钮下移也能进入。
+      VStack(spacing: 20) {
+        Spacer()
+        ProgressView {
+          Text(search.progressText)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 40)
+        if search.progress > 0 {
+          ProgressView(value: search.progress, total: 100)
+            .progressViewStyle(.linear)
+            .frame(width: 420)
+        }
+        Text(search.receivedSummary)
+          .font(.caption)
+          .foregroundColor(.secondary)
+        if let loadingAction {
+          Button(loadingAction.title, action: loadingAction.perform)
+        }
+        Spacer()
       }
-      if search.progress > 0 {
-        ProgressView(value: search.progress, total: 100)
-          .progressViewStyle(.linear)
-          .frame(width: 420)
-      }
-      if !search.rows.isEmpty {
-        Button("停止并查看") { search.deactivate() }
-      } else if let onCancel {
-        Button("取消", action: onCancel)
-      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .focusSection()
     }
-    .padding(.horizontal, 40)
-    .frame(maxWidth: .infinity)
-    .focusSection()
+  }
+
+  private var loadingAction: (title: String, perform: () -> Void)? {
+    if search.canStopAndView {
+      return (SubtitleSearchSession.loadingButtonTitle(canStopAndView: true), { search.stopAndView() })
+    }
+    guard let onCancel else { return nil }
+    return (SubtitleSearchSession.loadingButtonTitle(canStopAndView: false), onCancel)
   }
 
   private var resultsContent: some View {
     ScrollView(.vertical) {
       VStack(spacing: 24) {
         header
-        if search.isSearching {
-          progressContent
-        }
         if let error = search.errorMessage {
           Text(error).font(.caption).foregroundColor(.orange)
         }
@@ -119,7 +131,8 @@ struct SubtitleResultsBody<Header: View>: View {
             subtitle: row.subtitle,
             downloaded: row.subtitle.enclosure.map {
               search.downloadedEnclosures.contains($0)
-            } ?? false
+            } ?? false,
+            showsIncompleteMatch: search.showsIncompleteMatch
           ) {
             downloadTarget = search.downloadModel(for: row.subtitle)
           }
@@ -134,6 +147,7 @@ struct SubtitleResultsBody<Header: View>: View {
 private struct SubtitleResultCard: View {
   let subtitle: SubtitleInfo
   let downloaded: Bool
+  let showsIncompleteMatch: Bool
   let onSelect: () -> Void
 
   var body: some View {
@@ -163,6 +177,12 @@ private struct SubtitleResultCard: View {
                 .fill(.secondary.opacity(0.2))
             )
         }
+      }
+
+      if showsIncompleteMatch {
+        Text("未完成匹配")
+          .font(.caption2)
+          .foregroundColor(.secondary)
       }
 
       if let description = MediaIdentifier.normalizedString(subtitle.description) {
