@@ -371,7 +371,7 @@ final class OpenAPIContractOfflineTests: XCTestCase {
     let session = URLSession(configuration: configuration)
     defer { OpenAPIResponseURLProtocol.reset() }
 
-    for version in ["v3.1.1", "v3.1.2", "v3.1.2-1", "v3.1.4", "v3.1.6"] {
+    for version in ["v3.1.1", "v3.1.2", "v3.1.2-1", "v3.1.4", "v3.1.6", "v3.1.7"] {
       XCTAssertTrue(OpenAPIContractSupport.isExpectedUnavailableDocument(
         OpenAPIFetchError.httpStatus(404, isJSON: true), backendVersion: version))
       for error in [OpenAPIFetchError.httpStatus(404, isJSON: false), .httpStatus(401, isJSON: true)] {
@@ -1558,7 +1558,7 @@ private func isTorrentResourceStream(_ operation: TVAPIOperation) -> Bool {
 @MainActor
 final class OpenAPIContractCatalogIntegrityTests: XCTestCase {
   func testManualPagingCatalogMatchesProductionVersionGate() {
-    for version: String? in [nil, "unknown", "v3.0.8", "v3.1.2", "v3.1.2-1", "v3.1.4", "v3.1.5", "v3.1.6"] {
+    for version: String? in [nil, "unknown", "v3.0.8", "v3.1.2", "v3.1.2-1", "v3.1.4", "v3.1.5", "v3.1.6", "v3.1.7"] {
       let search = TVAPIContractCatalog.operations(backendVersion: version)
         .filter(isTorrentResourceStream)
       for operation in search {
