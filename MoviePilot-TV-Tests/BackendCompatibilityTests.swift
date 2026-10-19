@@ -2107,19 +2107,14 @@ final class BackendCompatibilityReadOnlyTests: XCTestCase {
     } catch let skip as XCTSkip {
       throw skip
     } catch {
-      if OpenAPIContractSupport.isExpectedUnavailableDocument(
-        error,
-        backendVersion: verifiedBackendVersion
-      )
+      if case let OpenAPIFetchError.httpStatus(statusCode, isJSON) = error,
+        statusCode == 404, isJSON
       {
         let version = verifiedBackendVersion ?? "unknown"
-        print(
-          "OpenAPI contract unverified/skipped for backend version=\(version): "
-            + "document endpoint returned JSON 404; this does not prove API_DOCS_ENABLE state."
+        XCTFail(
+          "\(version) 的 OpenAPI 文档端点返回 JSON 404。兼容检查要求开启 API 文档，不能跳过。"
         )
-        throw XCTSkip(
-          "\(version) 的 OpenAPI 文档端点返回合法 JSON 404；文档项标记为未验证，不视为契约通过。"
-        )
+        return
       }
       XCTFail("OpenAPI 契约检查未完成，不能当作通过：\(error)")
     }

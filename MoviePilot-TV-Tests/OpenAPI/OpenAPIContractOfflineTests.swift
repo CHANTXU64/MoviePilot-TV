@@ -365,63 +365,19 @@ final class OpenAPIContractOfflineTests: XCTestCase {
     )
   }
 
-  func testOpenAPIFetchOnlyMarksKnownJSON404AsUnavailable() async throws {
+  func testOpenAPIFetchRejectsMissingDocument() async throws {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [OpenAPIResponseURLProtocol.self]
     let session = URLSession(configuration: configuration)
     defer { OpenAPIResponseURLProtocol.reset() }
 
-    for version in ["v3.1.1", "v3.1.2", "v3.1.2-1", "v3.1.4", "v3.1.6"] {
-      XCTAssertTrue(OpenAPIContractSupport.isExpectedUnavailableDocument(
-        OpenAPIFetchError.httpStatus(404, isJSON: true), backendVersion: version))
-      for error in [OpenAPIFetchError.httpStatus(404, isJSON: false), .httpStatus(401, isJSON: true)] {
-        XCTAssertFalse(OpenAPIContractSupport.isExpectedUnavailableDocument(error, backendVersion: version))
-      }
-    }
-    for version: String? in [nil, "unknown", "v3.1.3", "v3.1.5"] {
-      XCTAssertFalse(OpenAPIContractSupport.isExpectedUnavailableDocument(
-        OpenAPIFetchError.httpStatus(404, isJSON: true), backendVersion: version))
-    }
-
-    let scenarios: [(version: String, status: Int, contentType: String, body: Data, expected: Bool)] = [
-      (
-        version: "v3.1.0",
-        status: 404,
-        contentType: "application/json",
-        body: Data(#"{"detail":"Not Found"}"#.utf8),
-        expected: true
-      ),
-      (
-        version: "v3.0.10-1",
-        status: 404,
-        contentType: "application/json",
-        body: Data(#"{"detail":"Not Found"}"#.utf8),
-        expected: false
-      ),
-      (
-        version: "v3.1.0",
-        status: 404,
-        contentType: "text/html",
-        body: Data("<!DOCTYPE html><html>login</html>".utf8),
-        expected: false
-      ),
-      (
-        version: "v3.1.0",
-        status: 401,
-        contentType: "application/json",
-        body: Data(#"{"detail":"Unauthorized"}"#.utf8),
-        expected: false
-      ),
-      (
-        version: "v3.1.0",
-        status: 404,
-        contentType: "application/json",
-        body: Data("not-json".utf8),
-        expected: false
-      ),
+    let statusScenarios: [(status: Int, contentType: String, body: Data, isJSON: Bool)] = [
+      (404, "application/json", Data(#"{"detail":"Not Found"}"#.utf8), true),
+      (401, "application/json", Data(#"{"detail":"Unauthorized"}"#.utf8), true),
+      (404, "application/json", Data("not-json".utf8), false),
     ]
 
-    for scenario in scenarios {
+    for scenario in statusScenarios {
       OpenAPIResponseURLProtocol.configure(
         statusCode: scenario.status,
         contentType: scenario.contentType,
@@ -433,16 +389,33 @@ final class OpenAPIContractOfflineTests: XCTestCase {
           session: session
         )
         XCTFail("HTTP \(scenario.status) should not produce an OpenAPI document")
+      } catch let error as OpenAPIFetchError {
+        guard case let .httpStatus(statusCode, isJSON) = error else {
+          XCTFail("HTTP \(scenario.status) should surface as an HTTP status, got \(error)")
+          continue
+        }
+        XCTAssertEqual(statusCode, scenario.status)
+        XCTAssertEqual(isJSON, scenario.isJSON)
       } catch {
-        XCTAssertEqual(
-          OpenAPIContractSupport.isExpectedUnavailableDocument(
-            error,
-            backendVersion: scenario.version
-          ),
-          scenario.expected,
-          "\(scenario.version) HTTP \(scenario.status) \(scenario.contentType)"
-        )
+        XCTFail("HTTP \(scenario.status) should surface as OpenAPIFetchError, got \(error)")
       }
+    }
+
+    OpenAPIResponseURLProtocol.configure(
+      statusCode: 404,
+      contentType: "text/html",
+      body: Data("<!DOCTYPE html><html>login</html>".utf8)
+    )
+    do {
+      _ = try await OpenAPIContractSupport.fetchOpenAPI(
+        baseURL: "https://openapi-offline.local",
+        session: session
+      )
+      XCTFail("HTML 404 should not produce an OpenAPI document")
+    } catch let error as OpenAPIFetchError {
+      XCTAssertEqual(error, .htmlLoginPage(statusCode: 404))
+    } catch {
+      XCTFail("HTML 404 should surface as OpenAPIFetchError, got \(error)")
     }
   }
 
@@ -1558,7 +1531,7 @@ private func isTorrentResourceStream(_ operation: TVAPIOperation) -> Bool {
 @MainActor
 final class OpenAPIContractCatalogIntegrityTests: XCTestCase {
   func testManualPagingCatalogMatchesProductionVersionGate() {
-    for version: String? in [nil, "unknown", "v3.0.8", "v3.1.2", "v3.1.2-1", "v3.1.4", "v3.1.5", "v3.1.6"] {
+    for version: String? in [nil, "unknown", "v3.0.8", "v3.1.2", "v3.1.2-1", "v3.1.4", "v3.1.5", "v3.1.6", "v3.1.7"] {
       let search = TVAPIContractCatalog.operations(backendVersion: version)
         .filter(isTorrentResourceStream)
       for operation in search {
