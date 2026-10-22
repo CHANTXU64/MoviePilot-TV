@@ -111,6 +111,25 @@ struct ReorganizeSheet: View {
     }
   }
 
+  /// 整理方式由后端版本能力决定，这里只负责值到中文标题的映射。
+  private var transferTypeOptions: [PickerOption<String>] {
+    viewModel.transferTypes.map { value in
+      PickerOption(title: Self.transferTypeTitle(for: value), value: value)
+    }
+  }
+
+  private static func transferTypeTitle(for value: String) -> String {
+    switch value {
+    case "": return "自动"
+    case "copy": return "复制"
+    case "move": return "移动"
+    case "link": return "硬链接"
+    case "softlink": return "软链接"
+    case "reflink": return "引用链接"
+    default: return value
+    }
+  }
+
   private var basicSettings: some View {
     Group {
       SheetPicker(
@@ -129,13 +148,7 @@ struct ReorganizeSheet: View {
           get: { viewModel.form.transfer_type ?? "" },
           set: { viewModel.form.transfer_type = $0.isEmpty ? nil : $0 }
         ),
-        options: [
-          PickerOption(title: "自动", value: ""),
-          PickerOption(title: "复制", value: "copy"),
-          PickerOption(title: "移动", value: "move"),
-          PickerOption(title: "硬链接", value: "link"),
-          PickerOption(title: "软链接", value: "softlink"),
-        ]
+        options: transferTypeOptions
       )
 
       SheetPicker(

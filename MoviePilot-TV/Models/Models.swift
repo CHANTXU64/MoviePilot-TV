@@ -2443,7 +2443,7 @@ struct TransferHistory: Codable, Identifiable {
   let src_storage: String?
   // 目标存储
   let dest_storage: String?
-  // 转移模式link/copy/move/softlink/rclone_copy/rclone_move
+  // 转移模式link/copy/move/softlink/reflink/rclone_copy/rclone_move
   let mode: String?
   // 状态 1-成功，0-失败
   let status: FlexibleBool

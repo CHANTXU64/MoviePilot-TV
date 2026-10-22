@@ -11,6 +11,28 @@ enum ReorganizePreviewOutcome: Equatable {
   }
 }
 
+/// 手动整理方式的版本能力。`reflink`（引用链接）从后端 v3.1.9 起由整理链路支持；
+/// 更早的版本会以「不支持的整理方式」拒绝执行，因此不在旧后端上展示该选项。
+enum ReorganizeTransferCapability {
+  static let reflinkMinimumBackendVersion = "v3.1.9"
+
+  static func supportsReflink(backendVersion: String?) -> Bool {
+    guard let version = MoviePilotVersion(backendVersion),
+      let minimum = MoviePilotVersion(reflinkMinimumBackendVersion)
+    else { return false }
+    return version >= minimum
+  }
+
+  /// 手动整理可选的整理方式，顺序与 Web 整理对话框一致；`reflink` 仅在 v3.1.9+ 出现。
+  static func availableTransferTypes(backendVersion: String?) -> [String] {
+    var types = ["", "copy", "move", "link", "softlink"]
+    if supportsReflink(backendVersion: backendVersion) {
+      types.append("reflink")
+    }
+    return types
+  }
+}
+
 @MainActor
 class ReorganizeViewModel: ObservableObject {
   // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
@@ -51,6 +73,12 @@ class ReorganizeViewModel: ObservableObject {
 
   var isMediaIdValid: Bool {
     mediaSource.isValidManualId(mediaId)
+  }
+
+  /// 手动整理可选的整理方式；`reflink` 仅后端 v3.1.9 起出现，旧版本或版本未知时不展示。
+  var transferTypes: [String] {
+    ReorganizeTransferCapability.availableTransferTypes(
+      backendVersion: apiService.settings?.BACKEND_VERSION)
   }
 
   init(
@@ -118,6 +146,11 @@ class ReorganizeViewModel: ObservableObject {
 
     // 初始化禁用状态
     updateEpisodeDetailDisabledState()
+
+    // 后端版本来自全局设置；设置迟到时也要刷新整理方式选项。
+    apiService.$settings.sink { [weak self] _ in
+      self?.objectWillChange.send()
+    }.store(in: &cancellables)
   }
 
   func loadConfig() async {

@@ -289,6 +289,33 @@ final class ReorganizeViewModelTests: XCTestCase {
     XCTAssertEqual(current.source_item?.storage, "alist")
   }
 
+  func testReflinkTransferTypeRequiresBackendV319() {
+    XCTAssertFalse(ReorganizeTransferCapability.supportsReflink(backendVersion: nil))
+    XCTAssertFalse(ReorganizeTransferCapability.supportsReflink(backendVersion: ""))
+    XCTAssertFalse(ReorganizeTransferCapability.supportsReflink(backendVersion: "unknown"))
+    XCTAssertFalse(ReorganizeTransferCapability.supportsReflink(backendVersion: "v3.1"))
+    XCTAssertFalse(ReorganizeTransferCapability.supportsReflink(backendVersion: "v3.1.9.1"))
+    XCTAssertFalse(ReorganizeTransferCapability.supportsReflink(backendVersion: "v3.1.9-0"))
+    XCTAssertFalse(ReorganizeTransferCapability.supportsReflink(backendVersion: "v3.1.9-beta"))
+    XCTAssertFalse(ReorganizeTransferCapability.supportsReflink(backendVersion: "v3.1.7"))
+    XCTAssertFalse(ReorganizeTransferCapability.supportsReflink(backendVersion: "v3.1.8"))
+    XCTAssertTrue(ReorganizeTransferCapability.supportsReflink(backendVersion: "v3.1.9"))
+    XCTAssertTrue(ReorganizeTransferCapability.supportsReflink(backendVersion: "3.1.9"))
+    XCTAssertTrue(ReorganizeTransferCapability.supportsReflink(backendVersion: "v3.1.9-1"))
+    XCTAssertTrue(ReorganizeTransferCapability.supportsReflink(backendVersion: "v3.1.10"))
+    XCTAssertTrue(ReorganizeTransferCapability.supportsReflink(backendVersion: "v4.0.0"))
+  }
+
+  func testTransferTypesFollowBackendVersion() {
+    let service = APIService.isolatedTestingInstance()
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.1.8")
+    let viewModel = ReorganizeViewModel(fileItem: nil, apiService: service)
+    XCTAssertEqual(viewModel.transferTypes, ["", "copy", "move", "link", "softlink"])
+
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.1.9")
+    XCTAssertEqual(viewModel.transferTypes, ["", "copy", "move", "link", "softlink", "reflink"])
+  }
+
   private func directory(path: String, storage: String) -> TransferDirectoryConf {
     TransferDirectoryConf(
       name: "电影",
