@@ -202,6 +202,24 @@ final class ReorganizeFormEncodingTests: XCTestCase {
     XCTAssertEqual(intPart.part, .int(1))
   }
 
+  /// 整理方式由后端校验，TV 只负责原样透传；`reflink` 不能被编码层丢弃或改写。
+  func testReflinkTransferTypeEncodesVerbatim() throws {
+    let form = ReorganizeForm(
+      fileitem: nil,
+      logid: 42,
+      target_storage: nil,
+      transfer_type: "reflink",
+      target_path: "",
+      min_filesize: 0,
+      scrape: nil,
+      from_history: true
+    )
+
+    let json = try encodedJSONObject(form)
+
+    XCTAssertEqual(json["transfer_type"] as? String, "reflink")
+  }
+
   private func encodedJSONObject(_ form: ReorganizeForm) throws -> [String: Any] {
     let data = try JSONEncoder().encode(form)
     return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])

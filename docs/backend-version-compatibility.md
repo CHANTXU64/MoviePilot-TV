@@ -9,7 +9,7 @@
 - 版本号只识别官方稳定版本：三段数字加可选的正整数热修复后缀，例如 `v3.0.10 < v3.0.10-1 < v3.1.0`。beta 等其他后缀按“无法识别”处理。
 - 已知缺陷的功能、版本范围与文案集中在 `BackendCapabilities.knownDefects`，入口和操作 Handler 统一通过 `capability(for:backendVersion:)` 判断。已知不可用版本在入口置灰并显示原因；未知版本放行，点击复用不额外刷新全局配置。
 - 旧的“后端版本|最低版本”确认记录在读取时迁移为版本 ID，升级 App 不会重复提示已经确认的同一版本。
-- 不按版本复制接口或模型。只有某个功能在确定的版本范围内有已证实的上游缺陷时，才按版本阻止该功能，规则见 `.agents/engineering-invariants.md` 的“已知缺陷版本门禁”。
+- 不按版本复制接口或模型。只有某个功能在确定的版本范围内有已证实的上游缺陷时，才按版本阻止该功能，规则见 `.agents/engineering-invariants.md` 的“已知缺陷版本门禁”。新增取值或新能力的可用性门禁（如新整理方式 `reflink`）按 `>= 目标版本` 在入口显隐，读不出或低于目标版本时不展示，可解析且 `>=` 目标版本（含热修复和尚未登记的更新版本）仍展示；这类门禁不做接口复制，也不适用缺陷门禁的“未知放行”。
 
 ## 已登记版本
 
@@ -27,6 +27,8 @@
 | v3.1.4 | 09f62ff87e196df9e39a6422f23c23860610d96a | v3.1.4 | 新增登录限流，调整订阅身份转换、暂停与补全搜索，修复下载凭据、空白目录及站点冷却；TV 现有接口继续沿用，跨来源订阅状态保留下述 Web 共同限制 |
 | v3.1.6 | dd4d83a00933d21772709212dc24d1b80f0e48ad | v3.1.6 | 订阅进度与首次整包下载由后端调整，并新增活动与执行日志；TV 现有接口继续沿用，不登记 v3.1.5。官方标签后来从 `bc1cae80` 改到当前提交，差异只有插件市场快照和 Telegram 通知排版 |
 | v3.1.7 | 1f7bddc8372d7ff63d10122efb2b0873b2bfd499 | v3.1.7 | 下载任务查询与启停改为要求管理权限，与 TV 现有入口一致；豆瓣短评影评、勋章和站点冷却不进入 TV 调用 |
+| v3.1.8 | 015df3826503329f3b185847bd8a3e0b13c8559f | v3.1.8 | 修复热门订阅年份整数导致的 500，媒体服务器新增调用方可控查询投影；TV 现有接口继续沿用，整理 AI 接管与 reflink 见 v3.1.9 |
+| v3.1.9 | 811503b709f6207ee12ce17fd3a1a113effee723 | v3.1.9 | 订阅分类写回修正（保留自定义文本分类）、整理 AI 接管与 replan、reflink 整理方式和订阅批次下载来源统计；TV 现有接口与写回继续兼容，整理面板按后端版本追加 reflink 选项，历史标签已识别。此前误记的 `50cfcbe` 是同一父提交上的另一份插件市场快照，不在标签历史上；当前标签相对它多了音乐双语艺名与标题别名匹配，插件市场快照也不同，TV 无对应入口 |
 
 订阅数据结构（`app/schemas/subscribe.py`）在 v3.0.4 到 v3.1.0 之间一致。保存订阅的写回规则写在 `SubscriptionWriteDTO.swift` 的注释和 `docs/subscription-compatibility-checklist.md` 中。
 
@@ -61,10 +63,29 @@ v3.1.2 与 v3.1.2-1 均精确登记为兼容，配套 Web 均为 v3.1.2。TV 在
 
 - **认证**：`POST /login/access-token` 的 401 文案、`X-MFA-Required` 和 `/user/current` 的失效路径未改。令牌缺少主体时按认证失败处理，正常登录令牌不受影响。MFA 仍仅提示不支持。英文文案只新增订阅分享参数不完整，不进入登录匹配表。
 - **订阅**：`Subscribe` 公共字段、默认值、写回排除、分享/Fork、完整列表、媒体查询、删除、搜索和重置的请求与成功响应未变。洗版电视剧的新集改用普通过滤规则，发生在后端搜索任务内；`POST /subscribe/search/{id}` 仍只表示受理。分享参数不完整时返回 `success:false`，TV 不调用该分享写入。配套 Web 的订阅列表不再让洗版状态盖住暂停、待定和进度，TV 本来就按记录状态操作，不复制这套列表筛选。
-- **热门订阅**：v3.1.7 的 `GET /subscribe/popular` 把共享统计里的 `year` 转成整数后写入 `MediaInfo.to_dict()`，响应模型 `year` 仍是可选字符串。FastAPI 校验失败，异常被收成 `500`、消息为「未知错误」。电影和电视剧、带或不带 `sort_type` 都会这样。配套 Web 的热门订阅页调用同一接口。这是后端缺陷，TV 不做单独转换。
+- **热门订阅**：v3.1.7 的 `GET /subscribe/popular` 把共享统计里的 `year` 转成整数后写入 `MediaInfo.to_dict()`，响应模型 `year` 仍是可选字符串。FastAPI 校验失败，异常被收成 `500`、消息为「未知错误」。电影和电视剧、带或不带 `sort_type` 都会这样。配套 Web 的热门订阅页调用同一接口。这是后端缺陷，TV 不做单独转换。该缺陷已在 v3.1.8 的 `4f98486e` 中修复，从登记 v3.1.8 起不再出现。
 - **下载**：`GET /download/`、开始、暂停和删除改为要求 `permissions.manage` 或超级用户。TV 这些入口已经只对管理权限开放。添加下载、字幕下载、下载器列表和保存路径仍是已登录用户。任务字段、状态默认值和删除参数未变。Transmission 排队状态只影响下载器内部过滤。
 - **搜索、图片与媒体库**：手动资源搜索和字幕搜索的 SSE、分页参数与 `can_continue` 未变。站点长冷却在本轮达到 3 次、单次至少 10 分钟后跳过该来源，由后端执行。Emby 主图 URL 在有封面标签时追加 `tag` 查询参数；TV 继续使用返回的地址，并用与 `encodeURIComponent` 等价的编码交给图片代理。Plex 继续观看不再为缺字段逐条拉详情，响应结构未变。媒体识别、季信息和图片代理路径未变。
 - **可选 Web 功能**：媒体详情在有豆瓣 ID 时展示短评和影评，接口为 `GET /douban/interests/{id}/{type}` 与 `GET /douban/reviews/{id}/{type}`。社区勋章增加后台刷新标记。这些不进入 TV 调用。`API_DOCS_ENABLE` 默认仍为关闭。兼容测试要求文档端点可用，JSON 404 记为失败，不再跳过。
+
+### v3.1.8 核对范围与边界
+
+对照官方后端 [v3.1.7 → v3.1.8](https://github.com/jxxghp/MoviePilot/compare/v3.1.7...v3.1.8) 及各标签 `version.py` 指定的 Web [v3.1.7 → v3.1.8](https://github.com/jxxghp/MoviePilot-Frontend/compare/v3.1.7...v3.1.8)。Web 基准提交为 `809631cd707ef34190df90efa83285d2dac96691`，目标提交为 `8a97f5c0a02d64a216dd7d04f7ca9b836c45cadf`。只新增目标精确版本 v3.1.8，不推断未登记热修复版本兼容。
+
+- **订阅与热门订阅**：`GET /subscribe/popular` 把共享统计的 `year` 还原为字符串（`4f98486e`），v3.1.7 记录的 500 缺陷不再出现；Transmission 选集回退的同批修复只影响下载器内部。订阅 schema、公共可写字段、分享/Fork、搜索和重置的请求与响应未变。
+- **媒体服务器**：新增调用方可控的查询投影（`MediaServerField`、`MediaServerQueryOptions`，`bf4ef421`），由调用方按内容组裁剪远端字段；`MediaServerPlayItem` 与 `/mediaserver/exists` 的 `data.item` 字段未变。`/latest|/playing|/library` 的失败仍是 502 并带明确文案（v3.1.5 起即如此），TV 按通用非 2xx 展示。未声明支持投影的插件媒体服务器会被降级回全字段查询。
+- **其他**：文件管理器跳过本地列目录期间消失的子项、音乐歌词侧车 umask、自动整理同步本地封面、Agent 图资源归属集中管理。TV 不调用文件管理器和音乐整理入口，现有接口与返回格式未变。
+
+### v3.1.9 核对范围与边界
+
+对照官方后端 [v3.1.8 → v3.1.9](https://github.com/jxxghp/MoviePilot/compare/v3.1.8...v3.1.9) 及各标签 `version.py` 指定的 Web [v3.1.8 → v3.1.9](https://github.com/jxxghp/MoviePilot-Frontend/compare/v3.1.8...v3.1.9)。Web 基准提交为 `8a97f5c0a02d64a216dd7d04f7ca9b836c45cadf`，目标提交为 `795c975850289ac2e0146b18c05cf63541cb352a`。只新增目标精确版本 v3.1.9，不推断未登记热修复版本兼容。
+
+- **订阅**：`0a429cd8` 把 `media_category` 和 `media_category_id` 加入可清空可选字段，并把“文本分类表单带回空稳定 ID、同时提交非空路径”按旧路径输入处理，避免分类规范化误判为清空。TV 的 `SubscriptionWriteDTO.encodeCategory` 在分类路径变化时只发送 `media_category` 并省略旧 `media_category_id`，路径未变时才按 ID 变化单独发送，不会出现“空 ID + 非空路径”组合，因此不触发该分支。TV 调用的订阅 schema、写回、分享/Fork、搜索和重置未变；`SubscriptionBatchStatus` 新增的 `downloads`/`download_counts` 只出现在 TV 不调用的批次与活动接口。共享 `Context` 增加可选 `subscription_download`（提交类型、全集洗版、新增和升级集数；非订阅下载为空）。Web 只在订阅活动/执行对话框里显示下载类型。TV 搜索和识别仍只解码 `media_info`、`torrent_info`、`meta_info`，不展示该字段；OpenAPI 基线已登记。
+- **搜索与媒体**：SSE 事件字段、分页参数与 `can_continue` 未变；`9d534d19` 让完整包优先于初始分片返回，结果顺序由后端决定；`453a9568` 让声明的 TMDB 请求超时真正生效；字幕签名在“有 enclosure 但站点 ID 非整数”时直接报错，正常结果的站点 ID 必为整数；`4df028d4` 修正副标题中被否定的季集号识别。媒体识别与刮削字段未变。
+- **媒体服务器**：`04e7cebb` 在 Emby 投影中请求生产年份；查询投影仍是新增可选能力，`MediaServerPlayItem` 与 `NotExistMediaInfo` 字段未变，`/mediaserver/exists` 无结果仍返回 `{}`，`/mediaserver/latest` 的卡片字段裁剪不影响 TV 已有键。
+- **整理与下载**：`17a866f4` 恢复失败整理的 AI 接管；`/history/transfer/{id}/ai-redo` 在已有接管时返回 `success:false` 和原因，TV 按 success/message 展示；后端新增 `POST /history/transfer/{history_id}/replan`（保留原任务与证据、只允许无文件副作用的识别失败重规划），TV 不调用；`POST /history/transfer/{history_id}/cleanup-resolved` 在 v3.1.7 已存在，同样不调用。整理方式新增 `reflink`（`114c2ceb`、`8b5e5364`、`e3d32e49`），后端 `transfer_type` 仍是自由字符串；TV 按 `>= v3.1.9` 的版本门禁在整理面板追加“引用链接”（版本读不出或低于 v3.1.9 时不展示，避免旧后端预览通过、提交执行时才报“不支持的整理方式”），历史模式标签的 `reflink` 显示不做门禁。`4bf11c32` 在选集前后确认 Transmission 状态、`d57af797` 对零新增交付的重复种子退避，均在后台执行。
+- **站点、图片与系统**：`842320a2`、`ec7e4acf`、`2c0f1ac9` 保留 MTorrent 角色名和可空分享率、按站点协议路由连通性检查，返回结构未变；`38d7ca3f` 图片跳转校验沿用已配置的非公网放行网段，局域网 Emby 图片更易成功；`ec922865` 系统更新要求镜像系统基线 `MIN_SYSTEM_BASELINE='2026-01-01'`，只影响 `/system/update*`，TV 无更新入口；`85af231b` 部署 secrets 只在部署层；`c85f9b26`、`75ee313f`、`14b9ea6d` 属 Agent/LLM 内部。
+- **暂不跟进**：订阅活动/执行日志、整理人工复核队列页、插件版本历史、站点统计弹窗、四个刮削设置开关、音乐双语艺名与标题别名匹配（`5fc4f2ef`）、依赖/CI/发布流程，TV 均无对应入口或端点调用。
 
 ## 跟进一个新版本
 

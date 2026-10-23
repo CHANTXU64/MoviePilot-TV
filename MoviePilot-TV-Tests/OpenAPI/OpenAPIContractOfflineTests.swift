@@ -1531,7 +1531,7 @@ private func isTorrentResourceStream(_ operation: TVAPIOperation) -> Bool {
 @MainActor
 final class OpenAPIContractCatalogIntegrityTests: XCTestCase {
   func testManualPagingCatalogMatchesProductionVersionGate() {
-    for version: String? in [nil, "unknown", "v3.0.8", "v3.1.2", "v3.1.2-1", "v3.1.4", "v3.1.5", "v3.1.6", "v3.1.7"] {
+    for version: String? in [nil, "unknown", "v3.0.8", "v3.1.2", "v3.1.2-1", "v3.1.4", "v3.1.5", "v3.1.6", "v3.1.7", "v3.1.8", "v3.1.9"] {
       let search = TVAPIContractCatalog.operations(backendVersion: version)
         .filter(isTorrentResourceStream)
       for operation in search {

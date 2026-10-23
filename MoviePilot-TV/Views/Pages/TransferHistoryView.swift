@@ -493,6 +493,7 @@ private func transferModeDisplayName(for mode: String) -> String {
   case "move": return "移动"
   case "link": return "硬链接"
   case "softlink": return "软链接"
+  case "reflink": return "引用链接"
   case "rclone_copy": return "Rclone 拷贝"
   case "rclone_move": return "Rclone 移动"
   default: return mode.capitalized

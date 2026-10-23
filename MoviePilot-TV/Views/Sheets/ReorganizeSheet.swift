@@ -111,6 +111,13 @@ struct ReorganizeSheet: View {
     }
   }
 
+  /// 选项随后端版本变化；目录方式不可用时不再提供「自动」。
+  private var transferTypeOptions: [PickerOption<String>] {
+    viewModel.selectableTransferTypes.map { value in
+      PickerOption(title: ReorganizeTransferCapability.title(for: value), value: value)
+    }
+  }
+
   private var basicSettings: some View {
     Group {
       SheetPicker(
@@ -129,13 +136,7 @@ struct ReorganizeSheet: View {
           get: { viewModel.form.transfer_type ?? "" },
           set: { viewModel.form.transfer_type = $0.isEmpty ? nil : $0 }
         ),
-        options: [
-          PickerOption(title: "自动", value: ""),
-          PickerOption(title: "复制", value: "copy"),
-          PickerOption(title: "移动", value: "move"),
-          PickerOption(title: "硬链接", value: "link"),
-          PickerOption(title: "软链接", value: "softlink"),
-        ]
+        options: transferTypeOptions
       )
 
       SheetPicker(
@@ -336,13 +337,23 @@ struct ReorganizeSheet: View {
     }
   }
 
+  private var isTransferActionDisabled: Bool {
+    viewModel.loadErrorMessage != nil
+      || !viewModel.isMediaIdValid
+      || viewModel.transferTypeGateMessage != nil
+  }
+
   private var actionButtons: some View {
     Group {
+      if let message = viewModel.transferTypeGateMessage {
+        SheetFeedbackView(message: message)
+      }
+
       SheetActionButton(
         title: "预览整理结果",
         loadingTitle: "预览中",
         isLoading: viewModel.isPreviewing,
-        isDisabled: viewModel.loadErrorMessage != nil || !viewModel.isMediaIdValid,
+        isDisabled: isTransferActionDisabled,
         feedbackMessage: nil
       ) {
         Task {
@@ -356,7 +367,7 @@ struct ReorganizeSheet: View {
         title: "开始整理",
         loadingTitle: "整理中",
         isLoading: viewModel.isSubmitting,
-        isDisabled: viewModel.loadErrorMessage != nil || !viewModel.isMediaIdValid,
+        isDisabled: isTransferActionDisabled,
         feedbackMessage: nil
       ) {
         Task {
@@ -375,7 +386,7 @@ struct ReorganizeSheet: View {
       }
       .disabled(viewModel.isSubmitting)
 
-      if let message = viewModel.errorMessage {
+      if let message = viewModel.errorMessage, message != viewModel.transferTypeGateMessage {
         SheetFeedbackView(message: message)
       }
     }
