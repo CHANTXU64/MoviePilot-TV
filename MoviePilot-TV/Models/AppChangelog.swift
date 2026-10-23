@@ -17,6 +17,25 @@ nonisolated enum AppChangelog {
 
   static let entries: [AppChangelogEntry] = [
     AppChangelogEntry(
+      version: "v0.4.1",
+      releaseDate: "2026-10-23",
+      compatibleMoviePilotVersion: "v3.1.9",
+      highlights: [
+        "兼容 MoviePilot 后端 v3.0.4 至 v3.1.9。",
+        "新增字幕搜索与下载。",
+        "手动整理支持引用链接。",
+      ],
+      updates: [
+        "搜索页、媒体详情、首页长按和媒体菜单可以搜索字幕并下载。设置页可以单独选择字幕的默认搜索站点。搜索过程中可以停止并查看已收到的结果。",
+        "手动整理在 MoviePilot v3.1.9 及以上可以选择引用链接，整理历史里也会显示。",
+        "添加下载可以选择媒体类型。",
+      ],
+      fixes: [
+        "修复 AI 整理在服务暂时不可用时只显示「AI 整理失败」、看不到具体原因的问题。",
+      ],
+      optimizations: []
+    ),
+    AppChangelogEntry(
       version: "v0.4.0",
       releaseDate: "2026-10-11",
       compatibleMoviePilotVersion: "v3.1.4",
