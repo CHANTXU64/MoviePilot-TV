@@ -111,22 +111,10 @@ struct ReorganizeSheet: View {
     }
   }
 
-  /// 整理方式由后端版本能力决定，这里只负责值到中文标题的映射。
+  /// 选项随后端版本变化；目录方式不可用时不再提供「自动」。
   private var transferTypeOptions: [PickerOption<String>] {
-    viewModel.transferTypes.map { value in
-      PickerOption(title: Self.transferTypeTitle(for: value), value: value)
-    }
-  }
-
-  private static func transferTypeTitle(for value: String) -> String {
-    switch value {
-    case "": return "自动"
-    case "copy": return "复制"
-    case "move": return "移动"
-    case "link": return "硬链接"
-    case "softlink": return "软链接"
-    case "reflink": return "引用链接"
-    default: return value
+    viewModel.selectableTransferTypes.map { value in
+      PickerOption(title: ReorganizeTransferCapability.title(for: value), value: value)
     }
   }
 
@@ -349,13 +337,23 @@ struct ReorganizeSheet: View {
     }
   }
 
+  private var isTransferActionDisabled: Bool {
+    viewModel.loadErrorMessage != nil
+      || !viewModel.isMediaIdValid
+      || viewModel.transferTypeGateMessage != nil
+  }
+
   private var actionButtons: some View {
     Group {
+      if let message = viewModel.transferTypeGateMessage {
+        SheetFeedbackView(message: message)
+      }
+
       SheetActionButton(
         title: "预览整理结果",
         loadingTitle: "预览中",
         isLoading: viewModel.isPreviewing,
-        isDisabled: viewModel.loadErrorMessage != nil || !viewModel.isMediaIdValid,
+        isDisabled: isTransferActionDisabled,
         feedbackMessage: nil
       ) {
         Task {
@@ -369,7 +367,7 @@ struct ReorganizeSheet: View {
         title: "开始整理",
         loadingTitle: "整理中",
         isLoading: viewModel.isSubmitting,
-        isDisabled: viewModel.loadErrorMessage != nil || !viewModel.isMediaIdValid,
+        isDisabled: isTransferActionDisabled,
         feedbackMessage: nil
       ) {
         Task {
@@ -388,7 +386,7 @@ struct ReorganizeSheet: View {
       }
       .disabled(viewModel.isSubmitting)
 
-      if let message = viewModel.errorMessage {
+      if let message = viewModel.errorMessage, message != viewModel.transferTypeGateMessage {
         SheetFeedbackView(message: message)
       }
     }

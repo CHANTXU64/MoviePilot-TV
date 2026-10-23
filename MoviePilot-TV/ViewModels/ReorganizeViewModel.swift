@@ -31,6 +31,30 @@ enum ReorganizeTransferCapability {
     }
     return types
   }
+
+  static func normalizedTransferType(_ transferType: String?) -> String {
+    transferType?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+  }
+
+  /// 空字符串表示「自动」，始终视为当前可选；具体方式必须出现在当前版本的选项里。
+  static func allows(_ transferType: String?, backendVersion: String?) -> Bool {
+    availableTransferTypes(backendVersion: backendVersion)
+      .contains(normalizedTransferType(transferType))
+  }
+
+  static func title(for transferType: String) -> String {
+    switch normalizedTransferType(transferType) {
+    case "": return "自动"
+    case "copy": return "复制"
+    case "move": return "移动"
+    case "link": return "硬链接"
+    case "softlink": return "软链接"
+    case "reflink": return "引用链接"
+    default:
+      let normalized = normalizedTransferType(transferType)
+      return normalized.isEmpty ? transferType : normalized
+    }
+  }
 }
 
 @MainActor
@@ -65,6 +89,11 @@ class ReorganizeViewModel: ObservableObject {
   private var logIds: [Int] = []
   private let explicitTargetStorage: String?
   private var directoryInferredTargetStorage: String?
+  /// 已经处理过的后端版本。同版本的设置刷新不是“刚变为支持”，不能借此覆盖用户的「自动」。
+  private var didObserveBackendVersion = false
+  private var observedBackendVersion: String?
+  /// 上一轮门禁文案。用户改到合法方式后，只清掉仍然等于这句的底部错误，避免提示残留。
+  private var presentedTransferTypeGateMessage: String?
 
   // 用于视图判断当前是否是对历史记录发起整理
   var isFromHistory: Bool {
@@ -79,6 +108,28 @@ class ReorganizeViewModel: ObservableObject {
   var transferTypes: [String] {
     ReorganizeTransferCapability.availableTransferTypes(
       backendVersion: apiService.settings?.BACKEND_VERSION)
+  }
+
+  /// 选择器实际列出的整理方式。目录配置的方式当前不可用时去掉「自动」：
+  /// 请求省略整理方式后，服务端会改用该目录的 `transfer_type`。
+  var selectableTransferTypes: [String] {
+    var types = transferTypes
+    if unavailableDirectoryTransferType != nil {
+      types.removeAll { $0.isEmpty }
+    }
+    let explicit = ReorganizeTransferCapability.normalizedTransferType(form.transfer_type)
+    if !explicit.isEmpty, !types.contains(explicit) {
+      types.append(explicit)
+    }
+    return types
+  }
+
+  /// 选了当前后端不支持的整理方式，或目录配置的方式不受支持且表单仍是「自动」时，阻止预览和提交。
+  var transferTypeGateMessage: String? {
+    transferTypeGateMessage(
+      transferType: form.transfer_type,
+      backendVersion: apiService.settings?.BACKEND_VERSION
+    )
   }
 
   init(
@@ -120,8 +171,14 @@ class ReorganizeViewModel: ObservableObject {
 
     $form
       .dropFirst()
-      .sink { [weak self] _ in
-        self?.previewData = nil
+      .sink { [weak self] form in
+        guard let self else { return }
+        self.previewData = nil
+        // 用发布出来的表单。订阅回调里再读 `self.form` 可能仍是写入前的值。
+        self.syncTransferTypeGateFeedback(
+          transferType: form.transfer_type,
+          backendVersion: self.apiService.settings?.BACKEND_VERSION
+        )
       }
       .store(in: &cancellables)
 
@@ -147,9 +204,16 @@ class ReorganizeViewModel: ObservableObject {
     // 初始化禁用状态
     updateEpisodeDetailDisabledState()
 
-    // 后端版本来自全局设置；设置迟到时也要刷新整理方式选项。
-    apiService.$settings.sink { [weak self] _ in
-      self?.objectWillChange.send()
+    // 用这次发布的版本判断是否刚变为支持。同版本的设置刷新不能覆盖用户选的「自动」。
+    apiService.$settings.sink { [weak self] settings in
+      guard let self else { return }
+      let backendVersion = settings?.BACKEND_VERSION
+      self.reapplySupportedDirectoryTransferType(backendVersion: backendVersion)
+      self.syncTransferTypeGateFeedback(
+        transferType: self.form.transfer_type,
+        backendVersion: backendVersion
+      )
+      self.objectWillChange.send()
     }.store(in: &cancellables)
   }
 
@@ -206,6 +270,9 @@ class ReorganizeViewModel: ObservableObject {
     else { return false }
     errorMessage = nil
     mutationRetryMessage = nil
+    if blockedTransferTypeMessage() != nil {
+      return false
+    }
     guard isMediaIdValid else {
       errorMessage = "媒体 ID 格式无效。"
       return false
@@ -280,6 +347,9 @@ class ReorganizeViewModel: ObservableObject {
     guard !isPreviewing else { return .notGenerated }
     guard apiService.canAccess(.manage) else { return .notGenerated }
     errorMessage = nil
+    if blockedTransferTypeMessage() != nil {
+      return .notGenerated
+    }
     guard isMediaIdValid else {
       errorMessage = "媒体 ID 格式无效。"
       return .notGenerated
@@ -490,8 +560,16 @@ class ReorganizeViewModel: ObservableObject {
     if let directory = directories.first(where: { $0.library_path == newPath }) {
       form.target_storage = directory.library_storage
       directoryInferredTargetStorage = directory.library_storage
-      if (form.transfer_type ?? "").isEmpty {
-        form.transfer_type = directory.transfer_type
+      // 不改目录配置本身。当前后端不支持该目录的整理方式时也不写入表单：
+      // 留空会被服务端当成「用目录里的方式」，旧后端会在执行时拒绝 reflink。
+      if ReorganizeTransferCapability.normalizedTransferType(form.transfer_type).isEmpty {
+        let directoryType = ReorganizeTransferCapability.normalizedTransferType(
+          directory.transfer_type)
+        if directoryType.isEmpty
+          || ReorganizeTransferCapability.allows(directoryType, backendVersion: backendVersion)
+        {
+          form.transfer_type = directoryType.isEmpty ? nil : directoryType
+        }
       }
       form.scrape = directory.scraping?.value ?? false
       form.library_category_folder = directory.library_category_folder?.value ?? false
@@ -501,13 +579,90 @@ class ReorganizeViewModel: ObservableObject {
         form.target_storage = explicitTargetStorage
       }
       directoryInferredTargetStorage = nil
-      if (form.transfer_type ?? "").isEmpty {
+      if ReorganizeTransferCapability.normalizedTransferType(form.transfer_type).isEmpty {
         form.transfer_type = "copy"
       }
       form.scrape = false
       form.library_category_folder = false
       form.library_type_folder = false
     }
+  }
+
+  private var backendVersion: String? {
+    apiService.settings?.BACKEND_VERSION
+  }
+
+  private var matchedDirectory: TransferDirectoryConf? {
+    let path = form.target_path
+    guard !path.isEmpty else { return nil }
+    return directories.first { $0.library_path == path }
+  }
+
+  /// 目录配置里非空、且当前版本不能提交的整理方式。
+  private var unavailableDirectoryTransferType: String? {
+    unavailableDirectoryTransferType(for: backendVersion)
+  }
+
+  private func unavailableDirectoryTransferType(for backendVersion: String?) -> String? {
+    guard let directory = matchedDirectory else { return nil }
+    let directoryType = ReorganizeTransferCapability.normalizedTransferType(directory.transfer_type)
+    guard !directoryType.isEmpty,
+      !ReorganizeTransferCapability.allows(directoryType, backendVersion: backendVersion)
+    else { return nil }
+    return directoryType
+  }
+
+  private func transferTypeGateMessage(
+    transferType: String?,
+    backendVersion: String?
+  ) -> String? {
+    let explicit = ReorganizeTransferCapability.normalizedTransferType(transferType)
+    if !explicit.isEmpty,
+      !ReorganizeTransferCapability.allows(explicit, backendVersion: backendVersion)
+    {
+      let title = ReorganizeTransferCapability.title(for: explicit)
+      return "当前后端不支持整理方式「\(title)」，请改选其他方式。"
+    }
+    if explicit.isEmpty, let directoryType = unavailableDirectoryTransferType(for: backendVersion) {
+      let title = ReorganizeTransferCapability.title(for: directoryType)
+      return "该目录的整理方式是「\(title)」，当前后端不支持。请改选其他整理方式。"
+    }
+    return nil
+  }
+
+  /// 版本变为支持目录里的整理方式时，只补写仍为空的表单。不重跑 `updateForm`，以免覆盖刮削和目录开关。
+  private func reapplySupportedDirectoryTransferType(backendVersion: String?) {
+    let previous = didObserveBackendVersion ? observedBackendVersion : nil
+    let versionChanged = didObserveBackendVersion && previous != backendVersion
+    didObserveBackendVersion = true
+    observedBackendVersion = backendVersion
+    guard versionChanged,
+      ReorganizeTransferCapability.normalizedTransferType(form.transfer_type).isEmpty,
+      let directoryType = unavailableDirectoryTransferType(for: previous),
+      ReorganizeTransferCapability.allows(directoryType, backendVersion: backendVersion)
+    else { return }
+    form.transfer_type = directoryType
+  }
+
+  private func syncTransferTypeGateFeedback(transferType: String?, backendVersion: String?) {
+    let message = transferTypeGateMessage(
+      transferType: transferType,
+      backendVersion: backendVersion
+    )
+    if let previous = presentedTransferTypeGateMessage,
+      errorMessage == previous,
+      message != previous
+    {
+      errorMessage = nil
+    }
+    presentedTransferTypeGateMessage = message
+  }
+
+  private func blockedTransferTypeMessage() -> String? {
+    guard let message = transferTypeGateMessage else { return nil }
+    errorMessage = message
+    presentedTransferTypeGateMessage = message
+    return message
   }
 
   /// 根据表单状态更新“指定集数”输入框的禁用状态
