@@ -150,7 +150,15 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("## 更新内容"))
     XCTAssertTrue(source.contains("### 新增功能"))
     XCTAssertFalse(source.contains("## 主要更新"))
-    XCTAssertTrue(source.contains("只有兼容 MoviePilot 后端基线相对上一发布版本发生变化时"))
+    XCTAssertTrue(
+      source.contains(
+        "兼容摘要按下一节「兼容范围」写。最高版本相对上一发布版没有变化时，省略兼容摘要。"
+      )
+    )
+    XCTAssertTrue(source.contains("写成：`兼容 MoviePilot 后端 v最低 至 v最高。`"))
+    XCTAssertTrue(
+      source.contains("`compatibleMoviePilotVersion` 仍然只保存最高版本这一个版本号。")
+    )
     XCTAssertTrue(source.contains("`highlights` → `更新内容` 标题下最前面的摘要条目"))
     XCTAssertTrue(source.contains("新版本信息未提交并推送到 `main` 前，不得创建 GitHub Release"))
     XCTAssertTrue(source.contains("保持文字和顺序一致"))
