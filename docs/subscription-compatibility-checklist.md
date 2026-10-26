@@ -57,6 +57,7 @@
 - MoviePilot v3.1.6 对尚无已有剧集的普通电视剧订阅，首次下载先尝试完整包，失败后再按集下载；站点本地流控按限流窗口退避。这发生在后端搜索任务内。`POST /subscribe/search/{id}` 仍只表示受理，TV 不写入页码、策略或活动记录。
 - MoviePilot v3.1.8 修复 `GET /subscribe/popular` 把共享统计的 `year` 写成整数导致的 500（`4f98486e`）；响应模型 `year` 仍是可选字符串，TV 使用同一接口，不需要客户端转换，从 v3.1.8 起不再出错。
 - MoviePilot v3.1.9 把 `media_category`、`media_category_id` 加入公共可写可选字段，并把文本表单带回的“空稳定 ID + 非空路径”按旧路径输入处理（`0a429cd8`）。TV 的 `SubscriptionWriteDTO.encodeCategory` 在路径变化时只发送 `media_category` 并省略旧 ID，路径未变时才按 ID 变化单独发送，不会产生该组合，分类写回语义不变。
+- MoviePilot v3.2.0 为订阅新增派生的身份唯一键（`951cdc5`）：身份由 `type`、`media_source`+`media_id`、`season`、`episode_group`、`music_type` 组成；目标身份已被其他订阅占用时，`PUT /subscribe/` 返回 HTTP 200、`success:false` 和「目标媒体身份已有订阅，当前修改已取消」，后端事务回滚，不会部分写入；修改任一身份字段会重置该订阅进度。迁移只为历史重复记录保留 NULL 键，不删除数据。TV 编辑 Sheet 已按 `success`/`message` 展示失败原因，不新增本地预判；剧集组和指定季仍允许修改，用户可见结果是进度清零。`GET /subscribe/media/{media_id}` 仍未按 `episode_group` 过滤，TV 继续与 Web 保持同一查询和删除范围。
 
 ## 订阅匹配与取消
 
