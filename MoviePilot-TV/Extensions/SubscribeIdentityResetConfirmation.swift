@@ -15,8 +15,9 @@ enum SubscribeIdentityResetConfirmation {
   }
 
   static let title = "修改季或剧集组会重置进度"
+  /// 已有订阅的保存不调用搜索；下一次搜索由后端调度。
   static let message =
-    "保存后，MoviePilot 会清空该订阅已有的下载进度、优先级和搜索状态，并按新的媒体身份重新搜索。此操作不可撤销。"
+    "保存后，MoviePilot 会清空该订阅已有的下载进度、优先级和搜索状态。后续搜索将按新的媒体身份执行。此操作不可撤销。"
   static let cancelButtonTitle = "取消"
   static let confirmButtonTitle = "继续保存"
 }
