@@ -10,6 +10,7 @@ struct SubscribeSheet: View {
   @State private var showBasic = false
   @State private var showAdvanced = false
   @State private var isSaveAttemptInFlight = false
+  @State private var showingIdentityResetConfirmation = false
   @FocusState private var isBasicButtonFocused: Bool
   @FocusState private var isAdvancedButtonFocused: Bool
 
@@ -326,18 +327,7 @@ struct SubscribeSheet: View {
                     isDisabled: viewModel.loadErrorMessage != nil,
                     feedbackMessage: viewModel.errorMessage
                   ) {
-                    guard !isSaveAttemptInFlight else { return }
-                    isSaveAttemptInFlight = true
-                    Task {
-                      if await viewModel.save() {
-                        onSave?(viewModel.subscribe)
-                        if viewModel.errorMessage == nil {
-                          dismiss()
-                          return
-                        }
-                      }
-                      isSaveAttemptInFlight = false
-                    }
+                    attemptSave()
                   }
 
                   Button {
@@ -356,6 +346,20 @@ struct SubscribeSheet: View {
             }
           }
         }
+      }
+      .alert(
+        SubscribeIdentityResetConfirmation.title,
+        isPresented: $showingIdentityResetConfirmation
+      ) {
+        Button(SubscribeIdentityResetConfirmation.cancelButtonTitle, role: .cancel) {
+          showingIdentityResetConfirmation = false
+        }
+        Button(SubscribeIdentityResetConfirmation.confirmButtonTitle, role: .destructive) {
+          showingIdentityResetConfirmation = false
+          performSave()
+        }
+      } message: {
+        Text(SubscribeIdentityResetConfirmation.message)
       }
     }
     .onAppear {
@@ -421,5 +425,29 @@ struct SubscribeSheet: View {
       return selectedGroups[0]
     }
     return "已选 \(selectedGroups.count) 个"
+  }
+
+  private func attemptSave() {
+    guard !isSaveAttemptInFlight else { return }
+    if viewModel.willResetSubscriptionProgressOnSave {
+      showingIdentityResetConfirmation = true
+      return
+    }
+    performSave()
+  }
+
+  private func performSave() {
+    guard !isSaveAttemptInFlight else { return }
+    isSaveAttemptInFlight = true
+    Task {
+      if await viewModel.save() {
+        onSave?(viewModel.subscribe)
+        if viewModel.errorMessage == nil {
+          dismiss()
+          return
+        }
+      }
+      isSaveAttemptInFlight = false
+    }
   }
 }

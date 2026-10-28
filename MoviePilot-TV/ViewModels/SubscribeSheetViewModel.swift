@@ -91,6 +91,21 @@ class SubscribeSheetViewModel: ObservableObject {
     }
   }
 
+  /// 身份字段与 `SubscriptionWriteDTO` 的差量写入一致。新建订阅不确认。
+  /// 已解析且低于 v3.2.0 的后端不会清空进度，直接保存。
+  var willResetSubscriptionProgressOnSave: Bool {
+    guard !isNewSubscription, (subscribe.id ?? 0) > 0 else { return false }
+    guard SubscribeIdentityResetConfirmation.backendResetsProgress(
+      backendVersion: apiService.settings?.BACKEND_VERSION
+    ) else { return false }
+    return subscribe.type != original.type
+      || subscribe.media_source != original.media_source
+      || subscribe.media_id != original.media_id
+      || subscribe.season != original.season
+      || subscribe.episode_group != original.episode_group
+      || subscribe.music_type != original.music_type
+  }
+
   // F-135：与 `AddDownloadViewModel.targetDirectories` 同一套规范化 —— 先 trim、再丢空、
   // 最后去重。原实现先去重、从不 trim，于是纯空白路径会被当成合法项留在列表里。
   var savePathOptions: [String] {

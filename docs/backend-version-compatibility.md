@@ -9,7 +9,7 @@
 - 版本号只识别官方稳定版本：三段数字加可选的正整数热修复后缀，例如 `v3.0.10 < v3.0.10-1 < v3.1.0`。beta 等其他后缀按“无法识别”处理。
 - 已知缺陷的功能、版本范围与文案集中在 `BackendCapabilities.knownDefects`，入口和操作 Handler 统一通过 `capability(for:backendVersion:)` 判断。已知不可用版本在入口置灰并显示原因；未知版本放行，点击复用不额外刷新全局配置。
 - 旧的“后端版本|最低版本”确认记录在读取时迁移为版本 ID，升级 App 不会重复提示已经确认的同一版本。
-- 不按版本复制接口或模型。只有某个功能在确定的版本范围内有已证实的上游缺陷时，才按版本阻止该功能，规则见 `.agents/engineering-invariants.md` 的“已知缺陷版本门禁”。新增取值或新能力的可用性门禁（如新整理方式 `reflink`）按 `>= 目标版本` 在入口显隐，读不出或低于目标版本时不展示，可解析且 `>=` 目标版本（含热修复和尚未登记的更新版本）仍展示；这类门禁不做接口复制，也不适用缺陷门禁的“未知放行”。
+- 不按版本复制接口或模型。只有某个功能在确定的版本范围内有已证实的上游缺陷时，才按版本阻止该功能，规则见 `.agents/engineering-invariants.md` 的“已知缺陷版本门禁”。新增取值或新能力的可用性门禁（如新整理方式 `reflink`）按 `>= 目标版本` 在入口显隐，读不出或低于目标版本时不展示，可解析且 `>=` 目标版本（含热修复和尚未登记的更新版本）仍展示；这类门禁不做接口复制，也不适用缺陷门禁的“未知放行”。只在某个版本起才成立的新功能、新入口或提示，按同一文档的“新行为版本限制”处理：已解析的更低版本不得走这条新行为。破坏性副作用确认在版本缺失或无法解析时仍提示。
 
 ## 已登记版本
 
@@ -92,7 +92,7 @@ v3.1.2 与 v3.1.2-1 均精确登记为兼容，配套 Web 均为 v3.1.2。TV 在
 
 对照官方后端 [v3.1.9 → v3.2.0](https://github.com/jxxghp/MoviePilot/compare/v3.1.9...v3.2.0) 及各标签 `version.py` 指定的 Web [v3.1.9 → v3.2.0](https://github.com/jxxghp/MoviePilot-Frontend/compare/v3.1.9...v3.2.0)。Web 基准提交为 `795c975850289ac2e0146b18c05cf63541cb352a`，目标提交为 `32d881f0f863c309f3b99ad6866e3d5eb2bca689`。只新增目标精确版本 v3.2.0，不推断未登记热修复版本兼容。
 
-- **订阅**：`951cdc5` 为 `subscribe` 新增派生的 `identity_key`（唯一索引 `uq_subscribe_identity_key`，迁移 `c9e2f6a04173_subscription_identity`；历史重复记录保留，键为 NULL，不删除数据）。目标身份已被占用时，`PUT /subscribe/` 返回 HTTP 200、`success:false` 和「目标媒体身份已有订阅，当前修改已取消」，事务回滚，不会部分写入；TV 编辑 Sheet 已按 `success`/`message` 展示，不新增客户端预判。身份由 `type`、`media_source`+`media_id`、`season`、`episode_group`、`music_type` 组成，修改任一身份字段会重置订阅进度；TV 的剧集组/指定季选择器本来就允许修改这些字段，属上游既定语义。`GET /subscribe/media/{media_id}` 仍未按 `episode_group` 过滤，与配套 Web 保持同一查询和删除范围。订阅公开 schema、公共可写字段、分享/Fork、搜索和重置未变。
+- **订阅**：`951cdc5` 为 `subscribe` 新增派生的 `identity_key`（唯一索引 `uq_subscribe_identity_key`，迁移 `c9e2f6a04173_subscription_identity`；历史重复记录保留，键为 NULL，不删除数据）。目标身份已被占用时，`PUT /subscribe/` 返回 HTTP 200、`success:false` 和「目标媒体身份已有订阅，当前修改已取消」，事务回滚，不会部分写入；TV 编辑 Sheet 已按 `success`/`message` 展示，冲突仍由后端判定、不新增客户端预判。身份由 `type`、`media_source`+`media_id`、`season`、`episode_group`、`music_type` 组成，修改任一身份字段会重置订阅进度；这是 v3.2.0 起的副作用。TV 在编辑已有订阅且这些字段发生变化时，仅当后端版本可解析且 `>= v3.2.0`（含热修复和尚未登记的更新版本），或版本缺失、无法解析时，保存前才二次确认「进度与搜索状态将被清空」，确认后才提交。已解析且低于 v3.2.0 时直接保存。新建订阅不弹。`GET /subscribe/media/{media_id}` 仍未按 `episode_group` 过滤，与配套 Web 保持同一查询和删除范围。订阅公开 schema、公共可写字段、分享/Fork、搜索和重置未变。
 - **搜索与媒体**：`bcbf79f` 让音乐媒体搜索按 `page*count` 作为上限、`/media/scrape` 返回 `success`/`message`、推荐结果按 `media_type` 过滤（过滤在 Agent 推荐路径，`/recommend/source` 只返回来源描述，TV 不调用被过滤的接口）；`tmdbapi._project_search_results` 不再按本地化标题二次过滤。TV 的资源搜索、媒体搜索和推荐来源请求未变。
 - **下载与字幕**：`598d166` 的 `/download/subtitle` 只在站点与字幕 URL 同源时下发 `site_cookie`；qBittorrent 5.3、rTorrent/Transmission 修复和 `/download/` 列表、启停、删除参数未变。下载链的严格来源模式只供小组件使用，TV 普通列表行为不变。
 - **整理与转移**：`transhandler.__assert_file_identity` 对本地存储要求大小和优先纳秒级的修改时间证据，缺少证据抛 `StorageQueryError`（转人工复核），证据不一致抛 `TransferExecutionConflictError`；TV 手动整理和历史重做经 `logid` 读取后端快照，v3.1.9 的本地适配器已写 `modify_time`。冲突或人工复核最终返回 `success:false` 和「整理任务已转入人工复核，请打开整理队列查看详情」，不是 500，TV 按 success/message 展示。`POST /transfer/tasks/{task_id}/manual-review/discard` 和既有复核端点 TV 不调用；批量还原补 `episode_group`、dashboard 采样重构不改变 TV 读取的响应结构。
