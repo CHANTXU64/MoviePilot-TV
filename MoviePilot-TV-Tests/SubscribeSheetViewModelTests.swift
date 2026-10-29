@@ -493,6 +493,163 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(viewModel.savePathOptions, ["/downloads", "/media"])
   }
 
+  func testEditingSeasonOrEpisodeGroupRequiresResetConfirmation() {
+    let viewModel = identityResetViewModel(
+      subscribe: Subscribe(
+        id: 61,
+        name: "已有订阅",
+        type: "电视剧",
+        season: 1,
+        episode_group: "group-a"
+      )
+    )
+
+    XCTAssertFalse(viewModel.willResetSubscriptionProgressOnSave)
+
+    viewModel.subscribe.season = 2
+    XCTAssertTrue(viewModel.willResetSubscriptionProgressOnSave)
+
+    viewModel.subscribe.season = 1
+    XCTAssertFalse(viewModel.willResetSubscriptionProgressOnSave)
+
+    viewModel.subscribe.episode_group = "group-b"
+    XCTAssertTrue(viewModel.willResetSubscriptionProgressOnSave)
+
+    viewModel.subscribe.episode_group = nil
+    XCTAssertTrue(viewModel.willResetSubscriptionProgressOnSave)
+  }
+
+  func testEditingNonIdentityFieldsDoesNotRequireResetConfirmation() {
+    let viewModel = identityResetViewModel(
+      subscribe: Subscribe(
+        id: 62,
+        name: "已有订阅",
+        type: "电影",
+        season: 1,
+        keyword: "旧关键词",
+        total_episode: 12
+      )
+    )
+
+    viewModel.subscribe.name = "改名"
+    viewModel.subscribe.keyword = "新关键词"
+    viewModel.subscribe.total_episode = 24
+    viewModel.subscribe.sites = [1, 2]
+    viewModel.subscribe.quality = "WEB-DL"
+
+    XCTAssertFalse(viewModel.willResetSubscriptionProgressOnSave)
+  }
+
+  func testEditingMediaIdentityFieldsRequiresResetConfirmation() {
+    let viewModel = identityResetViewModel(
+      subscribe: Subscribe(
+        id: 63,
+        name: "已有订阅",
+        type: "电影",
+        media_source: "tmdb",
+        media_id: "123456"
+      )
+    )
+
+    XCTAssertFalse(viewModel.willResetSubscriptionProgressOnSave)
+
+    viewModel.subscribe.media_id = "654321"
+    XCTAssertTrue(viewModel.willResetSubscriptionProgressOnSave)
+
+    viewModel.subscribe.media_id = "123456"
+    viewModel.subscribe.media_source = "douban"
+    XCTAssertTrue(viewModel.willResetSubscriptionProgressOnSave)
+
+    viewModel.subscribe.media_source = "tmdb"
+    viewModel.subscribe.type = "电视剧"
+    XCTAssertTrue(viewModel.willResetSubscriptionProgressOnSave)
+
+    viewModel.subscribe.type = "电影"
+    viewModel.subscribe.music_type = "album"
+    XCTAssertTrue(viewModel.willResetSubscriptionProgressOnSave)
+  }
+
+  func testNewSubscriptionNeverRequiresResetConfirmation() {
+    let viewModel = identityResetViewModel(
+      subscribe: Subscribe(name: "新增订阅", type: "电视剧", season: 1),
+      isNewSubscription: true
+    )
+
+    viewModel.subscribe.season = 2
+    viewModel.subscribe.media_source = "tmdb"
+    viewModel.subscribe.media_id = "123456"
+
+    XCTAssertFalse(viewModel.willResetSubscriptionProgressOnSave)
+  }
+
+  func testIdentityResetConfirmationFollowsBackendVersion() {
+    for version in ["v3.2.0", "v3.2.0-1", "v3.2.1", " V3.2.0 \n"] {
+      XCTAssertTrue(
+        SubscribeIdentityResetConfirmation.backendResetsProgress(backendVersion: version),
+        version
+      )
+    }
+    for version in ["v3.1.9", "v3.1.9-1", "v3.0.4"] {
+      XCTAssertFalse(
+        SubscribeIdentityResetConfirmation.backendResetsProgress(backendVersion: version),
+        version
+      )
+    }
+    for version in [nil, "", "unknown", "v3.2.0-beta"] {
+      XCTAssertTrue(
+        SubscribeIdentityResetConfirmation.backendResetsProgress(backendVersion: version),
+        version ?? "nil"
+      )
+    }
+
+    let service = APIService.testingInstance()
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.1.9")
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(id: 70, name: "版本门禁", type: "电视剧", season: 1),
+      apiService: service
+    )
+    viewModel.subscribe.season = 2
+    XCTAssertFalse(viewModel.willResetSubscriptionProgressOnSave)
+
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.0")
+    XCTAssertTrue(viewModel.willResetSubscriptionProgressOnSave)
+
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.0-1")
+    XCTAssertTrue(viewModel.willResetSubscriptionProgressOnSave)
+
+    service.settings = GlobalSettings(BACKEND_VERSION: "not-a-version")
+    XCTAssertTrue(viewModel.willResetSubscriptionProgressOnSave)
+
+    service.settings = nil
+    XCTAssertTrue(viewModel.willResetSubscriptionProgressOnSave)
+  }
+
+  func testSuccessfulSaveMovesIdentityBaselineForward() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.0")
+    configureSubscriber(service)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(id: 781, name: "身份变更", type: "电视剧", season: 1, tmdbid: 123_460),
+      apiService: service
+    )
+    viewModel.subscribe.season = 2
+    XCTAssertTrue(viewModel.willResetSubscriptionProgressOnSave)
+
+    let didSave = await viewModel.save()
+
+    XCTAssertTrue(didSave)
+    XCTAssertFalse(viewModel.willResetSubscriptionProgressOnSave)
+  }
+
   func testSavedSubscriptionUpdatesMatchingPreloadedTask() {
     let preloader = APIService.shared.mediaPreloader
     preloader.clearAll()
@@ -1957,6 +2114,22 @@ final class SubscribeSheetViewModelTests: XCTestCase {
       try await Task.sleep(nanoseconds: 10_000_000)
     }
     XCTFail("Timed out waiting for \(description)")
+  }
+
+  private func identityResetViewModel(
+    subscribe: Subscribe,
+    isNewSubscription: Bool = false,
+    backendVersion: String? = "v3.2.0"
+  ) -> SubscribeSheetViewModel {
+    let service = APIService.testingInstance()
+    if let backendVersion {
+      service.settings = GlobalSettings(BACKEND_VERSION: backendVersion)
+    }
+    return SubscribeSheetViewModel(
+      subscribe: subscribe,
+      isNewSubscription: isNewSubscription,
+      apiService: service
+    )
   }
 
   private func configureSubscriber(_ service: APIService) {

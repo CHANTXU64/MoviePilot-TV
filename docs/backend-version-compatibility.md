@@ -9,7 +9,7 @@
 - 版本号只识别官方稳定版本：三段数字加可选的正整数热修复后缀，例如 `v3.0.10 < v3.0.10-1 < v3.1.0`。beta 等其他后缀按“无法识别”处理。
 - 已知缺陷的功能、版本范围与文案集中在 `BackendCapabilities.knownDefects`，入口和操作 Handler 统一通过 `capability(for:backendVersion:)` 判断。已知不可用版本在入口置灰并显示原因；未知版本放行，点击复用不额外刷新全局配置。
 - 旧的“后端版本|最低版本”确认记录在读取时迁移为版本 ID，升级 App 不会重复提示已经确认的同一版本。
-- 不按版本复制接口或模型。只有某个功能在确定的版本范围内有已证实的上游缺陷时，才按版本阻止该功能，规则见 `.agents/engineering-invariants.md` 的“已知缺陷版本门禁”。新增取值或新能力的可用性门禁（如新整理方式 `reflink`）按 `>= 目标版本` 在入口显隐，读不出或低于目标版本时不展示，可解析且 `>=` 目标版本（含热修复和尚未登记的更新版本）仍展示；这类门禁不做接口复制，也不适用缺陷门禁的“未知放行”。
+- 不按版本复制接口或模型。只有某个功能在确定的版本范围内有已证实的上游缺陷时，才按版本阻止该功能，规则见 `.agents/engineering-invariants.md` 的“已知缺陷版本门禁”。新增取值或新能力的可用性门禁（如新整理方式 `reflink`）按 `>= 目标版本` 在入口显隐，读不出或低于目标版本时不展示，可解析且 `>=` 目标版本（含热修复和尚未登记的更新版本）仍展示；这类门禁不做接口复制，也不适用缺陷门禁的“未知放行”。只在某个版本起才成立的新功能、新入口或提示，按同一文档的“新行为版本限制”处理：已解析的更低版本不得走这条新行为。破坏性副作用确认在版本缺失或无法解析时仍提示。
 
 ## 已登记版本
 
@@ -29,6 +29,7 @@
 | v3.1.7 | 1f7bddc8372d7ff63d10122efb2b0873b2bfd499 | v3.1.7 | 下载任务查询与启停改为要求管理权限，与 TV 现有入口一致；豆瓣短评影评、勋章和站点冷却不进入 TV 调用 |
 | v3.1.8 | 015df3826503329f3b185847bd8a3e0b13c8559f | v3.1.8 | 修复热门订阅年份整数导致的 500，媒体服务器新增调用方可控查询投影；TV 现有接口继续沿用，整理 AI 接管与 reflink 见 v3.1.9 |
 | v3.1.9 | 811503b709f6207ee12ce17fd3a1a113effee723 | v3.1.9 | 订阅分类写回修正（保留自定义文本分类）、整理 AI 接管与 replan、reflink 整理方式和订阅批次下载来源统计；TV 现有接口与写回继续兼容，整理面板按后端版本追加 reflink 选项，历史标签已识别。此前误记的 `50cfcbe` 是同一父提交上的另一份插件市场快照，不在标签历史上；当前标签相对它多了音乐双语艺名与标题别名匹配，插件市场快照也不同，TV 无对应入口 |
+| v3.2.0 | 94b0681cfc62d2e6b6577594f9ad6ae1e6aa5478 | v3.2.0 | 订阅新增身份唯一约束（目标身份已被占用时拒绝修改并回滚、修改身份字段重置订阅进度、迁移不删除历史重复记录）、整理链路按文件大小与修改时间校验并转人工复核、下载与媒体服务器内部加固、新增小组件与 App Push；TV 现有接口、写回和成功响应继续兼容，无新增 TV 入口 |
 
 订阅数据结构（`app/schemas/subscribe.py`）在 v3.0.4 到 v3.1.0 之间一致。保存订阅的写回规则写在 `SubscriptionWriteDTO.swift` 的注释和 `docs/subscription-compatibility-checklist.md` 中。
 
@@ -86,6 +87,17 @@ v3.1.2 与 v3.1.2-1 均精确登记为兼容，配套 Web 均为 v3.1.2。TV 在
 - **整理与下载**：`17a866f4` 恢复失败整理的 AI 接管；`/history/transfer/{id}/ai-redo` 在已有接管时返回 `success:false` 和原因，TV 按 success/message 展示；后端新增 `POST /history/transfer/{history_id}/replan`（保留原任务与证据、只允许无文件副作用的识别失败重规划），TV 不调用；`POST /history/transfer/{history_id}/cleanup-resolved` 在 v3.1.7 已存在，同样不调用。整理方式新增 `reflink`（`114c2ceb`、`8b5e5364`、`e3d32e49`），后端 `transfer_type` 仍是自由字符串；TV 按 `>= v3.1.9` 的版本门禁在整理面板追加“引用链接”（版本读不出或低于 v3.1.9 时不展示，避免旧后端预览通过、提交执行时才报“不支持的整理方式”），历史模式标签的 `reflink` 显示不做门禁。`4bf11c32` 在选集前后确认 Transmission 状态、`d57af797` 对零新增交付的重复种子退避，均在后台执行。
 - **站点、图片与系统**：`842320a2`、`ec7e4acf`、`2c0f1ac9` 保留 MTorrent 角色名和可空分享率、按站点协议路由连通性检查，返回结构未变；`38d7ca3f` 图片跳转校验沿用已配置的非公网放行网段，局域网 Emby 图片更易成功；`ec922865` 系统更新要求镜像系统基线 `MIN_SYSTEM_BASELINE='2026-01-01'`，只影响 `/system/update*`，TV 无更新入口；`85af231b` 部署 secrets 只在部署层；`c85f9b26`、`75ee313f`、`14b9ea6d` 属 Agent/LLM 内部。
 - **暂不跟进**：订阅活动/执行日志、整理人工复核队列页、插件版本历史、站点统计弹窗、四个刮削设置开关、音乐双语艺名与标题别名匹配（`5fc4f2ef`）、依赖/CI/发布流程，TV 均无对应入口或端点调用。
+
+### v3.2.0 核对范围与边界
+
+对照官方后端 [v3.1.9 → v3.2.0](https://github.com/jxxghp/MoviePilot/compare/v3.1.9...v3.2.0) 及各标签 `version.py` 指定的 Web [v3.1.9 → v3.2.0](https://github.com/jxxghp/MoviePilot-Frontend/compare/v3.1.9...v3.2.0)。Web 基准提交为 `795c975850289ac2e0146b18c05cf63541cb352a`，目标提交为 `32d881f0f863c309f3b99ad6866e3d5eb2bca689`。只新增目标精确版本 v3.2.0，不推断未登记热修复版本兼容。
+
+- **订阅**：`951cdc5` 为 `subscribe` 新增派生的 `identity_key`（唯一索引 `uq_subscribe_identity_key`，迁移 `c9e2f6a04173_subscription_identity`；历史重复记录保留，键为 NULL，不删除数据）。目标身份已被占用时，`PUT /subscribe/` 返回 HTTP 200、`success:false` 和「目标媒体身份已有订阅，当前修改已取消」，事务回滚，不会部分写入；TV 编辑 Sheet 已按 `success`/`message` 展示，冲突仍由后端判定、不新增客户端预判。身份由 `type`、`media_source`+`media_id`、`season`、`episode_group`、`music_type` 组成，修改任一身份字段会重置订阅进度；这是 v3.2.0 起的副作用。TV 在编辑已有订阅且这些字段发生变化时，仅当后端版本可解析且 `>= v3.2.0`（含热修复和尚未登记的更新版本），或版本缺失、无法解析时，保存前才二次确认「进度与搜索状态将被清空」，确认后才提交。已解析且低于 v3.2.0 时直接保存。新建订阅不弹。`GET /subscribe/media/{media_id}` 仍未按 `episode_group` 过滤，与配套 Web 保持同一查询和删除范围。订阅公开 schema、公共可写字段、分享/Fork、搜索和重置未变。
+- **搜索与媒体**：`bcbf79f` 让音乐媒体搜索按 `page*count` 作为上限、`/media/scrape` 返回 `success`/`message`、推荐结果按 `media_type` 过滤（过滤在 Agent 推荐路径，`/recommend/source` 只返回来源描述，TV 不调用被过滤的接口）；`tmdbapi._project_search_results` 不再按本地化标题二次过滤。TV 的资源搜索、媒体搜索和推荐来源请求未变。
+- **下载与字幕**：`598d166` 的 `/download/subtitle` 只在站点与字幕 URL 同源时下发 `site_cookie`；qBittorrent 5.3、rTorrent/Transmission 修复和 `/download/` 列表、启停、删除参数未变。下载链的严格来源模式只供小组件使用，TV 普通列表行为不变。
+- **整理与转移**：`transhandler.__assert_file_identity` 对本地存储要求大小和优先纳秒级的修改时间证据，缺少证据抛 `StorageQueryError`（转人工复核），证据不一致抛 `TransferExecutionConflictError`；TV 手动整理和历史重做经 `logid` 读取后端快照，v3.1.9 的本地适配器已写 `modify_time`。冲突或人工复核最终返回 `success:false` 和「整理任务已转入人工复核，请打开整理队列查看详情」，不是 500，TV 按 success/message 展示。`POST /transfer/tasks/{task_id}/manual-review/discard` 和既有复核端点 TV 不调用；批量还原补 `episode_group`、dashboard 采样重构不改变 TV 读取的响应结构。
+- **媒体服务器与其他**：`last_played_date` 改用 `datetime.fromisoformat`、Emby 展开 `IndexNumber..IndexNumberEnd`、Plex 空摘要保护、缓存按 `server_identity` 隔离、`/mediaserver/notexists` 合并多服务器已确认剧集；TV 读取的字段未变，结果更准。新增 `Message.poster`、`NotificationConf.type`/App Push 渠道和 `/widget/*` 端点，TV 均无调用。登录与权限信号未变，`MIN_SYSTEM_BASELINE` 仍为 `2026-01-01`。
+- **暂不跟进**：小组件端点与 `mpw_` 凭据、App Push 渠道与通知实例、消息海报图、整理人工复核队列与放弃端点、插件市场与站点统计等后台能力，TV 均无对应入口或端点调用。
 
 ## 跟进一个新版本
 
