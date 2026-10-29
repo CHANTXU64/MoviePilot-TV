@@ -30,6 +30,7 @@
 | v3.1.8 | 015df3826503329f3b185847bd8a3e0b13c8559f | v3.1.8 | 修复热门订阅年份整数导致的 500，媒体服务器新增调用方可控查询投影；TV 现有接口继续沿用，整理 AI 接管与 reflink 见 v3.1.9 |
 | v3.1.9 | 811503b709f6207ee12ce17fd3a1a113effee723 | v3.1.9 | 订阅分类写回修正（保留自定义文本分类）、整理 AI 接管与 replan、reflink 整理方式和订阅批次下载来源统计；TV 现有接口与写回继续兼容，整理面板按后端版本追加 reflink 选项，历史标签已识别。此前误记的 `50cfcbe` 是同一父提交上的另一份插件市场快照，不在标签历史上；当前标签相对它多了音乐双语艺名与标题别名匹配，插件市场快照也不同，TV 无对应入口 |
 | v3.2.0 | 94b0681cfc62d2e6b6577594f9ad6ae1e6aa5478 | v3.2.0 | 订阅新增身份唯一约束（目标身份已被占用时拒绝修改并回滚、修改身份字段重置订阅进度、迁移不删除历史重复记录）、整理链路按文件大小与修改时间校验并转人工复核、下载与媒体服务器内部加固、新增小组件与 App Push；TV 现有接口、写回和成功响应继续兼容，无新增 TV 入口 |
+| v3.2.1 | daa9212ba161d4573baf3744e2f13b99c2a90516 | v3.2.2 | 新增媒体状态批量查询与订阅日历窗口端点、插件文档入口和种子缓存分页，订阅与搜索性能调整，安全与存储内部加固；TV 已调用接口的参数、返回结构和写回均未变，新端点 TV 暂不调用（见下节） |
 
 订阅数据结构（`app/schemas/subscribe.py`）在 v3.0.4 到 v3.1.0 之间一致。保存订阅的写回规则写在 `SubscriptionWriteDTO.swift` 的注释和 `docs/subscription-compatibility-checklist.md` 中。
 
@@ -98,6 +99,16 @@ v3.1.2 与 v3.1.2-1 均精确登记为兼容，配套 Web 均为 v3.1.2。TV 在
 - **整理与转移**：`transhandler.__assert_file_identity` 对本地存储要求大小和优先纳秒级的修改时间证据，缺少证据抛 `StorageQueryError`（转人工复核），证据不一致抛 `TransferExecutionConflictError`；TV 手动整理和历史重做经 `logid` 读取后端快照，v3.1.9 的本地适配器已写 `modify_time`。冲突或人工复核最终返回 `success:false` 和「整理任务已转入人工复核，请打开整理队列查看详情」，不是 500，TV 按 success/message 展示。`POST /transfer/tasks/{task_id}/manual-review/discard` 和既有复核端点 TV 不调用；批量还原补 `episode_group`、dashboard 采样重构不改变 TV 读取的响应结构。
 - **媒体服务器与其他**：`last_played_date` 改用 `datetime.fromisoformat`、Emby 展开 `IndexNumber..IndexNumberEnd`、Plex 空摘要保护、缓存按 `server_identity` 隔离、`/mediaserver/notexists` 合并多服务器已确认剧集；TV 读取的字段未变，结果更准。新增 `Message.poster`、`NotificationConf.type`/App Push 渠道和 `/widget/*` 端点，TV 均无调用。登录与权限信号未变，`MIN_SYSTEM_BASELINE` 仍为 `2026-01-01`。
 - **暂不跟进**：小组件端点与 `mpw_` 凭据、App Push 渠道与通知实例、消息海报图、整理人工复核队列与放弃端点、插件市场与站点统计等后台能力，TV 均无对应入口或端点调用。
+
+### v3.2.1 核对范围与边界
+
+对照官方后端 [v3.2.0 → v3.2.1](https://github.com/jxxghp/MoviePilot/compare/v3.2.0...v3.2.1) 及各标签 `version.py` 指定的 Web [v3.2.0 → v3.2.2](https://github.com/jxxghp/MoviePilot-Frontend/compare/v3.2.0...v3.2.2)。Web 基准提交为 `ba5883fc29f70202771d06b32b90c06851ca40d2`，目标提交为 `3e92547ba85c7d4f9fb350a9ed14626812510840`。后端 `v3.2.1` 的 `FRONTEND_VERSION` 为 `v3.2.2`，与发布提交 `c30b861a3` 里的 `v3.2.1` 不同，这里以标签内 `version.py` 为准。只新增目标精确版本 v3.2.1，不推断未登记热修复版本兼容。
+
+- **订阅**：`/subscribe/`（省略 `page`/`count` 仍返回完整快照）、`PUT /subscribe/` 的 `exclude_unset=True` 裁剪、`/subscribe/media/{media_id}` 的精确身份与标题年份回退、`/subscribe/{id}`、状态、搜索、重置、Fork 和 `/subscribe/shares` 的参数、owner 范围与响应 envelope 均未变；`app/schemas/subscribe.py` 与该次提交的数据库迁移没有变化，v3.2.0 的身份唯一约束和「修改身份字段重置进度」继续适用，TV 已有的 `>= v3.2.0` 确认门禁不受影响。新增 `GET /subscribe/calendar`（日期窗口不超过 93 天、分页最多 200 条，返回精简日历事件），TV 没有订阅日历页，不调用。`GET /subscribe/list` 的 API_TOKEN 校验从可空依赖改为必填依赖，TV 从不对该端点外发 `token` 查询参数。
+- **搜索与媒体**：`/search/title/stream`、`/search/media/{media_id}/stream`、`/search/subtitle/*` 的事件字段与 `can_continue` 未变，`/search/recommend/*` 只是合并取状态、去掉 `check_only` 的缓存读取；`/media/status` 是新增的可选批量端点（最多 50 项，`media_source`/`media_id` 必须成对且不能为 `0`，只查本地库、不访问外部媒体服务器），TV 详情页仍用 `/mediaserver/exists` + `/subscribe/media/{media_id}`，是否切换到批量端点记在 `docs/frontend-update-todo.md`。`/recommend/source`、`/discover/*` 与 TMDB 组合接口未变。
+- **下载、整理与站点**：`/download/*`、`/download/subtitle` 的字段与参数未变，TTG 签名下载链接识别（`is_expiring_download_url`）、115 嵌套目录变更检测、绿联海报墙 `null` 列表容错和下载临时文件不再触发未稳定告警都在后端内部执行，只会提高现有路径成功率。`app/chain/storage.py` 的严格查询新增 `FileItemQueryResult` 区分「已确认不存在」与「本提供方不支持」，`/history/transfer*`、`/transfer/*` 的响应结构未变，整理失败仍走 `success:false` + `message`。`/site/{id}/userdata` 新增可选 `latest_seeding_only`（默认 `false`，保持旧合同），TV 不传该参数。
+- **系统、认证与其他**：登录限流、`/user/current`、MFA 提示、`/system/global`、`/system/env`、图片代理和权限信号未变，`MIN_SYSTEM_BASELINE` 仍为 `2026-01-01`；Redis 缓存键日志遮盖凭据、事件 handler 所有权释放、SQLite 凭据表访问校验和 nginx keepalive 都是部署侧加固。新增 `/plugin/readme/{plugin_id}`（插件文档入口）与插件市场快照同步，`torrents/cache` 新增可选分页、`title`/`site` 筛选和 `brief` 投影，TV 均无对应入口。
+- **暂不跟进**：`POST /media/status` 批量状态、`/subscribe/calendar` 订阅日历、插件文档入口、种子缓存分页与筛选、站点做种明细投影、Agent 技能与 MCP 工具改动，TV 均无对应入口或端点调用。
 
 ## 跟进一个新版本
 

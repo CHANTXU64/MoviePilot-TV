@@ -57,7 +57,7 @@
 - MoviePilot v3.1.6 对尚无已有剧集的普通电视剧订阅，首次下载先尝试完整包，失败后再按集下载；站点本地流控按限流窗口退避。这发生在后端搜索任务内。`POST /subscribe/search/{id}` 仍只表示受理，TV 不写入页码、策略或活动记录。
 - MoviePilot v3.1.8 修复 `GET /subscribe/popular` 把共享统计的 `year` 写成整数导致的 500（`4f98486e`）；响应模型 `year` 仍是可选字符串，TV 使用同一接口，不需要客户端转换，从 v3.1.8 起不再出错。
 - MoviePilot v3.1.9 把 `media_category`、`media_category_id` 加入公共可写可选字段，并把文本表单带回的“空稳定 ID + 非空路径”按旧路径输入处理（`0a429cd8`）。TV 的 `SubscriptionWriteDTO.encodeCategory` 在路径变化时只发送 `media_category` 并省略旧 ID，路径未变时才按 ID 变化单独发送，不会产生该组合，分类写回语义不变。
-- MoviePilot v3.2.0 为订阅新增派生的身份唯一键（`951cdc5`）：身份由 `type`、`media_source`+`media_id`、`season`、`episode_group`、`music_type` 组成；目标身份已被其他订阅占用时，`PUT /subscribe/` 返回 HTTP 200、`success:false` 和「目标媒体身份已有订阅，当前修改已取消」，后端事务回滚，不会部分写入；修改任一身份字段会重置该订阅进度。迁移只为历史重复记录保留 NULL 键，不删除数据。TV 编辑 Sheet 已按 `success`/`message` 展示失败原因，冲突仍由后端判定；剧集组和指定季仍允许修改。编辑已有订阅且身份字段变化时，仅当后端版本可解析且 `>= v3.2.0`（含热修复和尚未登记的更新版本），或版本缺失、无法解析时，保存前才二次确认「进度与搜索状态将被清空」，确认后才提交。已解析且低于 v3.2.0 时直接保存，不把 v3.2.0 才有的清空说成旧后端也会发生。`GET /subscribe/media/{media_id}` 仍未按 `episode_group` 过滤，TV 继续与 Web 保持同一查询和删除范围。
+- MoviePilot v3.2.1 没有改动订阅 schema、数据库迁移和写入契约：`GET /subscribe/` 省略 `page`/`count` 仍返回完整快照并保持原有 owner 范围，`PUT /subscribe/` 的 `exclude_unset=True` 裁剪、`GET|DELETE /subscribe/media/{media_id}` 的身份与标题年份回退、`/subscribe/{id}`、状态、搜索、重置、Fork 与分享均未变，因此 v3.2.0 的身份唯一键和进度重置副作用继续按原门禁生效。同期新增的 `GET /subscribe/calendar` 只返回日期窗口内的精简日历事件，没有订阅记录 ID，不能替代 TV 依赖的 `/subscribe/` 快照或取消订阅前的严格身份确认；`GET /subscribe/list` 的 API_TOKEN 校验改为必填依赖，TV 不调用该端点。Web v3.2.2 的订阅列表与日历改用 `/media/status` 批量状态和 `/subscribe/calendar`，TV 继续沿用 `/subscribe/media/{media_id}` 与 `/mediaserver/exists`，批量端点是否跟进记在 `docs/frontend-update-todo.md`。
 
 ## 订阅匹配与取消
 
