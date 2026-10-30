@@ -31,6 +31,7 @@
 | v3.1.9 | 811503b709f6207ee12ce17fd3a1a113effee723 | v3.1.9 | 订阅分类写回修正（保留自定义文本分类）、整理 AI 接管与 replan、reflink 整理方式和订阅批次下载来源统计；TV 现有接口与写回继续兼容，整理面板按后端版本追加 reflink 选项，历史标签已识别。此前误记的 `50cfcbe` 是同一父提交上的另一份插件市场快照，不在标签历史上；当前标签相对它多了音乐双语艺名与标题别名匹配，插件市场快照也不同，TV 无对应入口 |
 | v3.2.0 | 94b0681cfc62d2e6b6577594f9ad6ae1e6aa5478 | v3.2.0 | 订阅新增身份唯一约束（目标身份已被占用时拒绝修改并回滚、修改身份字段重置订阅进度、迁移不删除历史重复记录）、整理链路按文件大小与修改时间校验并转人工复核、下载与媒体服务器内部加固、新增小组件与 App Push；TV 现有接口、写回和成功响应继续兼容，无新增 TV 入口 |
 | v3.2.1 | daa9212ba161d4573baf3744e2f13b99c2a90516 | v3.2.2 | 新增媒体状态批量查询与订阅日历窗口端点、插件文档入口和种子缓存分页，订阅与搜索性能调整，安全与存储内部加固；TV 已调用接口的参数、返回结构和写回均未变，新端点 TV 暂不调用（见下节） |
+| v3.2.2 | f2857c35b2a6b10134a843dfa216560f1e0d3d2c | v3.2.2 | 自动发现整理跳过已有持久任务、重放与旧整理结果兼容、站点重定向失败不再中止请求、插件 Release 镜像下载、Agent 执行账号与命令回执、AppPush 全量投递及依赖安全升级；TV 已调用接口的参数、返回结构和写回均未变，无新增 TV 入口（见下节） |
 
 订阅数据结构（`app/schemas/subscribe.py`）在 v3.0.4 到 v3.1.0 之间一致。保存订阅的写回规则写在 `SubscriptionWriteDTO.swift` 的注释和 `docs/subscription-compatibility-checklist.md` 中。
 
@@ -109,6 +110,16 @@ v3.1.2 与 v3.1.2-1 均精确登记为兼容，配套 Web 均为 v3.1.2。TV 在
 - **下载、整理与站点**：`/download/*`、`/download/subtitle` 的字段与参数未变，TTG 签名下载链接识别（`is_expiring_download_url`）、115 嵌套目录变更检测、绿联海报墙 `null` 列表容错和下载临时文件不再触发未稳定告警都在后端内部执行，只会提高现有路径成功率。`app/chain/storage.py` 的严格查询新增 `FileItemQueryResult` 区分「已确认不存在」与「本提供方不支持」，`/history/transfer*`、`/transfer/*` 的响应结构未变，整理失败仍走 `success:false` + `message`。`/site/{id}/userdata` 新增可选 `latest_seeding_only`（默认 `false`，保持旧合同），TV 不传该参数。
 - **系统、认证与其他**：登录限流、`/user/current`、MFA 提示、`/system/global`、`/system/env`、图片代理和权限信号未变，`MIN_SYSTEM_BASELINE` 仍为 `2026-01-01`；Redis 缓存键日志遮盖凭据、事件 handler 所有权释放、SQLite 凭据表访问校验和 nginx keepalive 都是部署侧加固。新增 `/plugin/readme/{plugin_id}`（插件文档入口）与插件市场快照同步，`torrents/cache` 新增可选分页、`title`/`site` 筛选和 `brief` 投影，TV 均无对应入口。
 - **暂不跟进**：`POST /media/status` 批量状态、`/subscribe/calendar` 订阅日历、插件文档入口、种子缓存分页与筛选、站点做种明细投影、Agent 技能与 MCP 工具改动，TV 均无对应入口或端点调用。
+
+### v3.2.2 核对范围与边界
+
+对照官方后端 [v3.2.1 → v3.2.2](https://github.com/jxxghp/MoviePilot/compare/v3.2.1...v3.2.2) 及各标签 `version.py` 指定的 Web [v3.2.2 → v3.2.2](https://github.com/jxxghp/MoviePilot-Frontend/compare/v3.2.2...v3.2.2)（前端无变化，基准与目标提交均为 `3e92547ba85c7d4f9fb350a9ed14626812510840`）。后端 `v3.2.2` 的 `FRONTEND_VERSION` 与 v3.2.1 相同（`v3.2.2`），本次是纯后端变更。只新增目标精确版本 v3.2.2，不推断未登记热修复版本兼容。
+
+- **订阅**：`/subscribe/`、`PUT /subscribe/` 的 `exclude_unset=True` 裁剪、`/subscribe/media/{media_id}`、`/subscribe/{id}`、状态、搜索、重置、Fork 与 `/subscribe/shares` 的参数、owner 范围、响应 envelope 与写回均未变，`app/schemas/subscribe.py` 和数据库迁移没有变化，v3.2.0 的身份唯一键与「修改身份字段重置进度」确认继续按原极性生效。
+- **搜索与媒体**：`/search/*`、`/media/*`、`/mediaserver/*`、`/recommend/*`、`/discover/*` 与图片代理未变；`app/schemas/token.py` 只给令牌增加可选 `agent_channel`/`agent_channel_user`，普通登录、`/user/current` 和 TV 的凭据刷新不需要解析令牌载荷。
+- **下载、整理与站点**：`/download/*`、`/history/transfer*`、`/transfer/manual` 的请求与响应结构未变。`app/chain/transfer/workflow.py` 新增的「自动发现整理跳过已有持久任务」按 `not (manual or preview or recovery_admission)` 排除手动整理、预览和历史重做，TV 这三条路径都在排除范围内；`app/application/transfer/jobs.py` 允许整理任务在 `task.meta` 为空时重放（`__get_meta_id`、`add_task` 的参数调整），只影响后端整理队列内部记录，TV 不调用 `/transfer/queue`。`settlement.py` 对旧快照补齐空时间字段只提高旧记录重试的结算成功率，失败仍返回 `success:false` + `message`。站点 HTTP 适配器的 GET 改为逐跳跟随重定向，重定向缺少目标、目标无效、出现环路或超过跳数上限时只记录告警并返回空，不再抛错中断 CookieCloud 同步等批量流程；TV 读取的 `/site/`、`/site/rss` 响应结构未变。
+- **系统、认证与其他**：登录、权限信号、`/system/global`、`/system/env`、`/system/progress` 和 `MIN_SYSTEM_BASELINE`（仍为 `2026-01-01`）未变；新增的 `PLUGIN_INSTALL_FROM_RELEASE`、`PLUGIN_RELEASE_TIMEOUT` 只出现在后端配置与插件市场安装路径，`/system/global` 按白名单投影不会外泄给 TV。Agent 定时任务执行账号、命令回执、AppPush 全量投递、LLM provider 与 langgraph 依赖升级都是后台能力或部署侧变化。
+- **暂不跟进**：Agent 执行身份与回执、AppPush 全量投递、插件 Release 镜像安装、站点重定向加固、LLM provider 与依赖安全升级，TV 均无对应入口或端点调用。
 
 ## 跟进一个新版本
 
