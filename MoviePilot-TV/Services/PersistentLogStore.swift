@@ -106,9 +106,10 @@ nonisolated class PersistentLogStore: @unchecked Sendable {
     return calendar
   }
 
+  /// tvOS 应用只能写 Caches 和 tmp，Application Support 不可写，日志只能放在系统可清理的缓存目录。
   static func defaultDirectory() -> URL {
     let base =
-      FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+      FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
       ?? FileManager.default.temporaryDirectory
     return base
       .appendingPathComponent("MoviePilot-TV", isDirectory: true)
