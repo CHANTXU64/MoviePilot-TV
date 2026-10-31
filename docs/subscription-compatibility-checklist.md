@@ -58,7 +58,7 @@
 - MoviePilot v3.1.8 修复 `GET /subscribe/popular` 把共享统计的 `year` 写成整数导致的 500（`4f98486e`）；响应模型 `year` 仍是可选字符串，TV 使用同一接口，不需要客户端转换，从 v3.1.8 起不再出错。
 - MoviePilot v3.1.9 把 `media_category`、`media_category_id` 加入公共可写可选字段，并把文本表单带回的“空稳定 ID + 非空路径”按旧路径输入处理（`0a429cd8`）。TV 的 `SubscriptionWriteDTO.encodeCategory` 在路径变化时只发送 `media_category` 并省略旧 ID，路径未变时才按 ID 变化单独发送，不会产生该组合，分类写回语义不变。
 - MoviePilot v3.2.1 没有改动订阅 schema、数据库迁移和写入契约：`GET /subscribe/` 省略 `page`/`count` 仍返回完整快照并保持原有 owner 范围，`PUT /subscribe/` 的 `exclude_unset=True` 裁剪、`GET|DELETE /subscribe/media/{media_id}` 的身份与标题年份回退、`/subscribe/{id}`、状态、搜索、重置、Fork 与分享均未变，因此 v3.2.0 的身份唯一键和进度重置副作用继续按原门禁生效。同期新增的 `GET /subscribe/calendar` 只返回日期窗口内的精简日历事件，没有订阅记录 ID，不能替代 TV 依赖的 `/subscribe/` 快照或取消订阅前的严格身份确认；`GET /subscribe/list` 的 API_TOKEN 校验改为必填依赖，TV 不调用该端点。Web v3.2.2 的订阅列表与日历改用 `/media/status` 批量状态和 `/subscribe/calendar`，TV 继续沿用 `/subscribe/media/{media_id}` 与 `/mediaserver/exists`，批量端点是否跟进记在 `docs/frontend-update-todo.md`。
-- MoviePilot v3.2.2 同样没有改动订阅端点、`app/schemas/subscribe.py`、数据库迁移和写入契约，v3.2.0 的身份唯一键与「修改身份字段重置进度」确认继续按原极性生效；该版本的整理链路去重只作用于自动发现整理（`not (manual or preview or recovery_admission)`），不改变 TV 的订阅搜索、取消订阅与整理历史重做路径。
+- MoviePilot v3.2.2 同样没有改动订阅端点、`app/schemas/subscribe.py`、数据库迁移和写入契约，v3.2.0 的身份唯一键与「修改身份字段重置进度」确认继续按原极性生效；该版本的整理链路去重只作用于自动发现整理（`not (manual or preview or recovery_admission)`），不改变 TV 的订阅搜索、取消订阅与整理历史重做路径。上游于 2026-10-31 重指 v3.2.2 标签（后端 `f2857c35b` → `c609abc78`，Web `3e92547b` → `a533457e`）后追加的改动仍不影响 TV：`/subscribe/share/{id}` DELETE 与 `/subscribe/follow` 收紧为 manage 用户权限（TV 只调用 `/subscribe/shares` 与 `/subscribe/fork`），`app/chain/subscribe/match.py` 改为严格核对候选媒体身份与类型，属后端自动匹配策略，不改变订阅搜索的请求与返回结构。
 
 ## 订阅匹配与取消
 
