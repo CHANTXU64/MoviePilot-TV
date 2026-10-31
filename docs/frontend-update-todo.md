@@ -77,7 +77,7 @@
 - 可评估方向：
   - “字幕”是大屏浏览资源时的常见筛选诉求，但 TV 过滤条已有 7 个维度，再加两个会拉长过滤条或依赖“全部筛选”弹层；需要先确认遥控器焦点顺序与可达性，可优先只做“字幕”，并考虑“中字/特效”多选在遥控器上的交互（Web 是多选按钮组），“源”按实际使用频率再定。
   - “字幕”判定必须与 Web 口径一致：只认 `torrent_info.labels`，不从标题、描述或国语标签推断；同时确认 labels 缺失、大小写或空白差异时的取值和 Web 一致，避免出现 Web 没有的合并/推断选项。
-  - `web_source` 可能为空，Web 会把空值归入“无”选项；TV 若增加维度需保留“无”选项，并让它参与现有的级联收敛（`disabledOptions`），而不是只在无过滤时出现。
+  - `web_source` 可能为空或缺失。Web 的 `getFilterValues` 读 `meta_info.web_source`，空值返回空数组，不生成「无」；资源卡片也只在有值时展示。TV 若增加该维度，空值和缺失值不进入选项，也不提供「无」，只有非空平台名参与级联收敛（`disabledOptions`）。未选该维度时，这些资源仍保留在结果里。现有维度用 `ResourceResultSemantics.normalized` 把空值收成「无」，不能照搬到这里。
   - 实现落点：在 `ResourceResultSemantics.fields` 增加键并同步 `matches` 与过滤选项生成；Web 的筛选键已从 `chineseSubtitle` 改为 `subtitle`，TV 内部语义键可自行命名，但选项取值必须与 Web 一致。过滤状态保持内存态，不新增持久化或跨会话恢复逻辑。
   - `meta_info.web_source` 与 `torrent_info.labels` 在已登记版本区间内一直存在，不需要新增后端版本门禁；后续若发现某个来源恒不返回 labels，只影响该维度选项是否出现，不阻断主流程。
 
