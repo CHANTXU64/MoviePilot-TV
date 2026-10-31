@@ -299,6 +299,17 @@ nonisolated enum TopShelfImageLoader {
     return TopShelfImageResource(data: data, fileExtension: fileExtension)
   }
 
+  /// Top Shelf 扩展的内存上限约 25 MB，缩放会让峰值越过上限而被系统终止。
+  /// 扩展因此不解码、不缩放：下载的原文件同时作卡片图和详情背景图，
+  /// 详情页显示时本来就会从原始数据降采样，系统也会自行缩放卡片图。
+  static func passthroughImages(from data: Data) throws -> (
+    card: TopShelfImageResource, background: TopShelfImageResource
+  ) {
+    try Task.checkCancellation()
+    let original = try originalImage(from: data)
+    return (original, original)
+  }
+
   /// 两份图片分别从下载数据直接降采样，不展开原图或把原图写入缓存。
   @concurrent
   static func prepareImages(from data: Data) async throws -> (

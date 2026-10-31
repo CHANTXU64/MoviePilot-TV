@@ -56,24 +56,17 @@ final class TopShelfRefreshClientTests: XCTestCase {
       XCTAssertEqual(content.detail.source, "custom")
       XCTAssertEqual(content.detail.title, "完整详情")
       XCTAssertFalse(content.backgroundIsPoster)
-      let background = try XCTUnwrap(UIImage(contentsOfFile: content.backgroundURL.path)?.cgImage)
-      XCTAssertEqual(background.width, 2560)
-      XCTAssertEqual(background.height, 1440)
+      // 扩展内存上限约 25 MB，不缩放：卡片图和详情背景图都是下载的原文件。
+      XCTAssertEqual(try Data(contentsOf: content.backgroundURL), originalImageData)
       let thumbnailURL = try XCTUnwrap(store.imageURL(relativePath: item.imageRelativePath))
-      XCTAssertNotEqual(thumbnailURL, content.backgroundURL)
-      let thumbnail = try XCTUnwrap(UIImage(contentsOfFile: thumbnailURL.path))
-      XCTAssertLessThanOrEqual(
-        try XCTUnwrap(thumbnail.cgImage).width, Int(ceil(TopShelfImageLoader.cardSize.width * 2)))
-      XCTAssertGreaterThan(thumbnail.size.width, thumbnail.size.height)
+      XCTAssertEqual(try Data(contentsOf: thumbnailURL), originalImageData)
       XCTAssertTrue(FileManager.default.fileExists(atPath: content.backgroundURL.path))
     }
     let imageDirectory = directory.appendingPathComponent("Library/Caches/TopShelf/images")
     let cachedFiles = try FileManager.default.contentsOfDirectory(
       at: imageDirectory, includingPropertiesForKeys: nil)
-    XCTAssertEqual(cachedFiles.count, 12, "六张卡片各保存两份处理结果")
-    for file in cachedFiles {
-      XCTAssertNotEqual(try Data(contentsOf: file), originalImageData)
-    }
+    XCTAssertGreaterThanOrEqual(cachedFiles.count, 1)
+    XCTAssertLessThanOrEqual(cachedFiles.count, 12)
     let requests = TopShelfRefreshURLProtocol.requests
     let recommendation = try XCTUnwrap(
       requests.first { $0.url?.path == "/mp/api/v1/recommend/custom" })
@@ -94,6 +87,14 @@ final class TopShelfRefreshClientTests: XCTestCase {
       requests.filter { $0.url?.host == "image.local" }.allSatisfy {
         $0.value(forHTTPHeaderField: "Authorization") == nil
       })
+  }
+
+  func testExtensionSkipsCardWhoseImageExceedsMemoryBudgetAndKeepsOldContent() async throws {
+    TopShelfRefreshURLProtocol.configure(
+      image: Data(count: TopShelfRefreshClient.maximumImageBytes + 1))
+    try await refresh()
+    let state = try XCTUnwrap(store.loadState())
+    XCTAssertNil(state.snapshot, "全部图片超限时没有可发布的卡片，不应发布空批次")
   }
 
   func testExtensionDownloadsCachedAndProxiedImagesWithItsOwnResourceCookie() async throws {

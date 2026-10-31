@@ -206,21 +206,21 @@ nonisolated struct TopShelfRefreshClient: Sendable {
         if let backdropURL {
           do {
             let original = try await context.image(backdropURL)
-            images = try await TopShelfImageLoader.prepareImages(from: original.data)
+            images = try TopShelfImageLoader.passthroughImages(from: original.data)
             backgroundURL = backdropURL
             backgroundIsPoster = false
           } catch is CancellationError { throw CancellationError() } catch {
             try Task.checkCancellation()
             guard let posterURL else { throw error }
             let original = try await context.image(posterURL)
-            images = try await TopShelfImageLoader.prepareImages(from: original.data)
+            images = try TopShelfImageLoader.passthroughImages(from: original.data)
             backgroundURL = posterURL
             backgroundIsPoster = true
           }
         } else {
           guard let posterURL else { continue }
           let original = try await context.image(posterURL)
-          images = try await TopShelfImageLoader.prepareImages(from: original.data)
+          images = try TopShelfImageLoader.passthroughImages(from: original.data)
           backgroundURL = posterURL
           backgroundIsPoster = true
         }
@@ -280,6 +280,10 @@ nonisolated struct TopShelfRefreshClient: Sendable {
     return media
   }
 
+  /// 扩展内存上限约 25 MB，图片整张读入内存并原样写盘，单张上限取 2 MB；
+  /// 超限的卡片跳过，不拖垮整批刷新。
+  static let maximumImageBytes = 2_000_000
+
   nonisolated private struct RequestContext {
     let configuration: TopShelfRefreshConfiguration
     let token: String
@@ -334,7 +338,7 @@ nonisolated struct TopShelfRefreshClient: Sendable {
         token: token, cookieHeader: { [cookieVault] in cookieVault.cookieHeader(for: $0) })
       return try await TopShelfImageLoader.downloadTopShelfImage(
         request: request, transport: transport,
-        redirectDelegate: delegate, maximumBytes: 8_000_000,
+        redirectDelegate: delegate, maximumBytes: TopShelfRefreshClient.maximumImageBytes,
         maximumPixels: 40_000_000)
     }
   }
