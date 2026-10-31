@@ -162,6 +162,13 @@ final class TopShelfImageRequestTests: XCTestCase {
     XCTAssertEqual(Double(thumbnail.width) / Double(thumbnail.height), 16.0 / 9.0, accuracy: 0.01)
   }
 
+  func testPassthroughImagesKeepOriginalBytesWithoutDecodingOrResizing() throws {
+    let data = TopShelfTestArtwork.landscapeData()
+    let images = try TopShelfImageLoader.passthroughImages(from: data)
+    XCTAssertEqual(images.card.data, data)
+    XCTAssertEqual(images.background.data, data)
+  }
+
   func testPreparedImagesDoNotUpscaleSmallSources() async throws {
     let images = try await TopShelfImageLoader.prepareImages(from: TopShelfTestArtwork.data)
     for data in [images.card.data, images.background.data] {

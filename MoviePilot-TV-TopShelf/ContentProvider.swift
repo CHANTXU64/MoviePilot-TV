@@ -6,9 +6,7 @@ final class ContentProvider: TVTopShelfContentProvider {
     guard let store = TopShelfSharedStore.appGroupStore() else {
       return nil
     }
-    // 真机实测：先联网刷新再交出内容时，扩展会在交出前被系统收走，主屏退回静态图。
-    // 这里只读本地缓存并立刻返回；缓存由主 App 打开时刷新。
-    guard let presentation = store.presentation(at: Date()) else {
+    guard let presentation = await TopShelfRefreshClient(store: store).loadPresentation() else {
       return nil
     }
 
