@@ -32,6 +32,7 @@
 | v3.2.0 | 94b0681cfc62d2e6b6577594f9ad6ae1e6aa5478 | v3.2.0 | 订阅新增身份唯一约束（目标身份已被占用时拒绝修改并回滚、修改身份字段重置订阅进度、迁移不删除历史重复记录）、整理链路按文件大小与修改时间校验并转人工复核、下载与媒体服务器内部加固、新增小组件与 App Push；TV 现有接口、写回和成功响应继续兼容，无新增 TV 入口 |
 | v3.2.1 | daa9212ba161d4573baf3744e2f13b99c2a90516 | v3.2.2 | 新增媒体状态批量查询与订阅日历窗口端点、插件文档入口和种子缓存分页，订阅与搜索性能调整，安全与存储内部加固；TV 已调用接口的参数、返回结构和写回均未变，新端点 TV 暂不调用（见下节） |
 | v3.2.2 | c609abc782978eb81efe1da1dcf259bd3ff6e635 | v3.2.2 | 自动发现整理跳过已有持久任务、重放与旧整理结果兼容、站点重定向失败不再中止请求、插件 Release 镜像下载、Agent 执行账号与命令回执、AppPush 全量投递及依赖安全升级；标签于 2026-10-31 重指后追加订阅严格身份匹配、共享站点流控与频控错误、整理缺元数据安全结算、API 权限收紧与存储绑定校验、AppPush 正文/海报保留、插件市场默认列表刷新，Web 同步追加 7 个提交（含字幕筛选“中字/特效”）；TV 已调用接口的参数、返回结构和写回均未变，无新增 TV 入口（见下节） |
+| v3.2.3 | 5662004dca2be1151de7b50784e3aca6a81544d5 | v3.2.3 | 站点分类返回保留文本标识并跳过搜索参数、下载缺失季集按所选剧集组重新计算、Web 智能助手临时附件按用户隔离、插件市场默认仓库新增一个来源、数据库操作技能改用 psycopg 3 同步引擎；TV 已调用接口的参数、返回结构和写回均未变，无新增 TV 入口（见下节） |
 
 订阅数据结构（`app/schemas/subscribe.py`）在 v3.0.4 到 v3.1.0 之间一致。保存订阅的写回规则写在 `SubscriptionWriteDTO.swift` 的注释和 `docs/subscription-compatibility-checklist.md` 中。
 
@@ -121,6 +122,17 @@ v3.1.2 与 v3.1.2-1 均精确登记为兼容，配套 Web 均为 v3.1.2。TV 在
 - **系统、认证与其他**：登录、MFA 提示、`/system/global`、`/system/env`、`/system/progress`、图片代理和 `MIN_SYSTEM_BASELINE`（仍为 `2026-01-01`）未变；`914abf627`、`674c4aef6`、`80a76dee5` 收紧 `/message`、`/storage/*`、`/agent/*` 以及存储管理操作的权限并绑定目标，TV 不调用这些端点。`a9c992d9b`、`d8fbabaa6` 只保留 AppPush 通知的完整正文与海报，TV 没有 AppPush 通道；`c609abc78` 只刷新插件市场默认仓库列表（`PLUGIN_MARKET` 在 v3.2.1 已存在），`/system/global` 白名单投影与 `/system/setting/*` 结构不变；新增的 `PLUGIN_INSTALL_FROM_RELEASE`、`PLUGIN_RELEASE_TIMEOUT` 只出现在后端配置与插件市场安装路径，不通过 `/system/global` 外泄。
 - **Web 配套**：`3e92547b..a533457e` 的 7 个提交已按当时范围核对。其中 `1da03170 feat(search): 字幕筛选支持中字与特效`（#890）把资源搜索字幕筛选从 `chineseSubtitle` 改名为 `subtitle`，选项由「中字」扩为「中字/特效」并支持多选；TV 没有该筛选维度，不影响运行，候选记录在 `docs/frontend-update-todo.md`。其余提交（浅色主题媒体卡片对比度、Web 系统更新按钮文案与忙碌态、AppPush 绑定重启保留、Web 原生壳搜索导航 sheet 清理、系统更新按钮避免重复状态文案、插件作者主页头像兼容）均为 Web 界面或后台能力，TV 无对应入口。其后的 #897、#898 见本节开头，不改变 TV 合同。
 - **暂不跟进**：Agent 执行身份与回执、AppPush 全量投递与通知正文/海报、插件 Release 镜像安装、站点重定向加固、存储管理与 API 权限收紧、插件市场默认列表，TV 均无对应入口或端点调用；Web 的字幕筛选（中字/特效）与其余 Web 界面调整作为功能候选记录在 `docs/frontend-update-todo.md`。
+
+### v3.2.3 核对范围与边界
+
+对照官方后端 [v3.2.2 → v3.2.3](https://github.com/jxxghp/MoviePilot/compare/v3.2.2...v3.2.3) 及各标签 `version.py` 指定的 Web [v3.2.2 → v3.2.3](https://github.com/jxxghp/MoviePilot-Frontend/compare/v3.2.2...v3.2.3)。后端基准提交 `c609abc782978eb81efe1da1dcf259bd3ff6e635`，目标提交 `5662004dca2be1151de7b50784e3aca6a81544d5`（`git log` 10 个提交）；Web 基准提交 `7c695cf767a69349b8e8db7a7d5da5a100e804f9`，目标提交 `12555631ce5346dddffab2cfa329da7c8d8bf996`（2 个提交）。核对前用 `git ls-remote` 复核：后端 `v3.2.2`/`v3.2.3` 与 Web `v3.2.2`/`v3.2.3` 的标签哈希与上方登记的提交一致，没有再次重指。后端 `v3.2.3` 的 `FRONTEND_VERSION` 为 `v3.2.3`。只新增目标精确版本 v3.2.3，不推断未登记热修复版本兼容。
+
+- **订阅**：`/subscribe/`、`PUT /subscribe/` 的 `exclude_unset=True` 裁剪、`/subscribe/media/{media_id}`、`/subscribe/{id}`、状态、搜索、重置、Fork 与 `/subscribe/shares` 的参数、owner 范围、响应 envelope 与写回均未变，`app/schemas/subscribe.py` 与数据库迁移没有变化，v3.2.0 的身份唯一键与「修改身份字段重置进度」确认继续按原极性生效。`app/chain/download/existence.py` 的缺失季集重算只在请求携带剧集组时按该组重新识别季集结构（此前直接复用可能来自默认排序的季集），属于后端下载存在性判断的内部修正，不改变 `/subscribe/*`、`/download/*` 的请求与返回结构；TV 订阅写回携带的 `episode_group` 继续按原字段发送，行为只会更准确。
+- **搜索与媒体**：`/search/*`、`/media/*`、`/mediaserver/*`、`/recommend/*`、`/discover/*`、`/site/`、`/site/rss` 与图片代理未变；`git diff` 中没有新增路由方法。`app/schemas/site.py` 唯一的模型改动 `SiteCategory` 只被 `/site/category/{site_id}` 引用，不在 `/site/` 或 `/site/rss` 的响应里。
+- **站点分类（TV 未调用）**：`GET /site/category/{site_id}` 的 `SiteCategory.id` 从 `int` 放宽为 `int | str`（数字字符串仍按整数返回、纯文本标识保留原值），并跳过 `field`/`delimiter`/`param` 等搜索参数、按配置顺序合并去重。TV 只调用 `/site/` 与 `/site/rss`，没有站点分类入口，不涉及该端点。
+- **系统、认证与其他**：登录、MFA 提示、`/system/global`、`/system/env`、`/system/progress`、图片代理与 `MIN_SYSTEM_BASELINE`（仍为 `2026-01-01`）未变。`aea8cf11c` 给 Web 智能助手临时附件的上传与下载补上登录用户归属校验（挂在 `/message/agent` 前缀下），TV 没有 Agent 入口，不调用。插件市场默认列表新增一个仓库来源并同步默认快照（`PLUGIN_MARKET` 默认值；该键只在 `/system/setting/public/PLUGIN_MARKET` 对普通用户只读，`/system/global` 白名单不含它，TV 都不调用），数据库操作技能改用 psycopg 3 同步引擎、站点技能文档措辞调整也是技能或部署侧变化。
+- **Web 配套**：Web `7c695cf7 → 12555631` 只有 2 个提交：`d8f27bf5 chore(release): prepare frontend v3.2.3` 只改版本号；`12555631 fix: keep health check summary readable in light mode` 只调整 Web 系统模块测试页健康检查摘要的浅色主题配色与文字颜色。TV 没有 Web 的系统健康检查页和模块测试入口，不涉及。
+- **暂不跟进**：`/site/category/{site_id}` 文本分类标识、Web 智能助手附件用户隔离、插件市场默认仓库与快照同步、psycopg 3 同步引擎、Web 系统模块测试页浅色主题调整，TV 均无对应入口或端点调用；本轮没有需要写进 `docs/frontend-update-todo.md` 的新增功能候选。
 
 ## 跟进一个新版本
 
