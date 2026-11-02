@@ -3,6 +3,14 @@ import XCTest
 @testable import MoviePilot_TV
 
 final class PersistentLogStoreTests: XCTestCase {
+  /// tvOS 只允许写 Caches 和 tmp；默认日志目录落在其他位置会让真机上所有写入失败。
+  func testDefaultDirectoryIsInsideCachesDirectory() throws {
+    let caches = try XCTUnwrap(
+      FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first)
+    let directory = PersistentLogStore.defaultDirectory()
+    XCTAssertTrue(directory.standardizedFileURL.path.hasPrefix(caches.standardizedFileURL.path))
+  }
+
   func testAppendReturnsNewestFirstAndKeepsSourceLocation() async throws {
     let (store, directory) = try makeStore()
     defer { removeDirectory(directory) }

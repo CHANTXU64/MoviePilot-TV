@@ -198,42 +198,25 @@ nonisolated struct TopShelfRefreshClient: Sendable {
         } else {
           continue
         }
-        let posterURL = configuration.imageURL(detail.poster_path ?? media.poster_path)
-        let backdropURL = configuration.imageURL(detail.backdrop_path ?? media.backdrop_path)
-        let images: (card: TopShelfImageResource, background: TopShelfImageResource)
-        let backgroundURL: URL
-        let backgroundIsPoster: Bool
-        if let backdropURL {
-          do {
-            let original = try await context.image(backdropURL)
-            images = try await TopShelfImageLoader.prepareImages(from: original.data)
-            backgroundURL = backdropURL
-            backgroundIsPoster = false
-          } catch is CancellationError { throw CancellationError() } catch {
-            try Task.checkCancellation()
-            guard let posterURL else { throw error }
-            let original = try await context.image(posterURL)
-            images = try await TopShelfImageLoader.prepareImages(from: original.data)
-            backgroundURL = posterURL
-            backgroundIsPoster = true
-          }
-        } else {
-          guard let posterURL else { continue }
-          let original = try await context.image(posterURL)
-          images = try await TopShelfImageLoader.prepareImages(from: original.data)
-          backgroundURL = posterURL
-          backgroundIsPoster = true
-        }
+        let backdropPath = detail.backdrop_path ?? media.backdrop_path
+        let candidates: [ImageCandidate] = [
+          configuration.imageURL(backdropPath).map {
+            ImageCandidate(url: $0, isPoster: false, onlyAfterTooLarge: false)
+          },
+          configuration.imageURL(Self.reducedTMDBBackdropPath(backdropPath)).map {
+            ImageCandidate(url: $0, isPoster: false, onlyAfterTooLarge: true)
+          },
+          configuration.imageURL(detail.poster_path ?? media.poster_path).map {
+            ImageCandidate(url: $0, isPoster: true, onlyAfterTooLarge: false)
+          },
+        ].compactMap { $0 }
+        guard let picked = try await context.firstImage(of: candidates) else { continue }
+        let (image, chosen) = picked
         try Task.checkCancellation()
         guard try store.loadState() == expected else { throw CancellationError() }
+        // 扩展不缩放，卡片图与详情背景图是同一份原文件，只写一次。
         let imagePath = try resources.writeImage(
-          images.card,
-          cacheKey: "\(configuration.sessionID)|hdtv-card|\(backgroundURL.absoluteString)")
-        let backgroundPath = try resources.writeImage(
-          images.background,
-          cacheKey:
-            "\(configuration.sessionID)|detail-\(Int(MediaDetailImageSizing.longEdgePixels))|\(backgroundURL.absoluteString)"
-        )
+          image, cacheKey: "\(configuration.sessionID)|original|\(chosen.url.absoluteString)")
         let detailPath = try resources.writeDetailData(
           JSONSerialization.data(withJSONObject: prepared),
           cacheKey: "\(configuration.sessionID)|\(identifier)")
@@ -243,8 +226,8 @@ nonisolated struct TopShelfRefreshClient: Sendable {
             displayURL: try TopShelfDeepLink.url(
               for: media.payload(
                 sessionID: configuration.sessionID, entryOrigin: selection.entryOrigin)),
-            detailRelativePath: detailPath, backgroundRelativePath: backgroundPath,
-            backgroundIsPoster: backgroundIsPoster))
+            detailRelativePath: detailPath, backgroundRelativePath: imagePath,
+            backgroundIsPoster: chosen.isPoster))
       } catch is CancellationError { throw CancellationError() } catch {
         try Task.checkCancellation()
         continue
@@ -278,6 +261,28 @@ nonisolated struct TopShelfRefreshClient: Sendable {
       media["media_id"] = id
     }
     return media
+  }
+
+  /// 扩展内存上限约 25 MB，图片整张读入内存并原样写盘，单张上限取 2 MB。
+  /// 超限时依次改用 TMDB 小一档背景图和海报；都不可用的卡片跳过，不拖垮整批刷新。
+  static let maximumImageBytes = 2_000_000
+
+  /// TMDB 原尺寸背景图常超过扩展的单张上限。图片尺寸位于 `/t/p/<size>/` 路径段，
+  /// 只改写这一段为官方背景图尺寸 w1280；其它来源、host 与 query 保持原样。
+  static func reducedTMDBBackdropPath(_ path: String?) -> String? {
+    let original = "/t/p/original/"
+    guard let path, var components = URLComponents(string: path), components.host != nil,
+      let range = components.percentEncodedPath.range(of: original)
+    else { return nil }
+    components.percentEncodedPath.replaceSubrange(range, with: "/t/p/w1280/")
+    return components.string
+  }
+
+  nonisolated fileprivate struct ImageCandidate {
+    let url: URL
+    let isPoster: Bool
+    /// 只在前一张图片因超过字节上限失败时才尝试，其它失败不多发请求。
+    let onlyAfterTooLarge: Bool
   }
 
   nonisolated private struct RequestContext {
@@ -334,8 +339,28 @@ nonisolated struct TopShelfRefreshClient: Sendable {
         token: token, cookieHeader: { [cookieVault] in cookieVault.cookieHeader(for: $0) })
       return try await TopShelfImageLoader.downloadTopShelfImage(
         request: request, transport: transport,
-        redirectDelegate: delegate, maximumBytes: 8_000_000,
+        redirectDelegate: delegate, maximumBytes: TopShelfRefreshClient.maximumImageBytes,
         maximumPixels: 40_000_000)
+    }
+
+    /// 按顺序返回第一张可用图片；全部失败时抛出最后一个错误，没有候选时返回 nil。
+    func firstImage(of candidates: [ImageCandidate]) async throws
+      -> (TopShelfImageResource, ImageCandidate)?
+    {
+      var lastError: (any Error)?
+      for candidate in candidates {
+        if candidate.onlyAfterTooLarge,
+          (lastError as? TopShelfImageError) != .tooLarge
+        { continue }
+        do {
+          return (try await image(candidate.url), candidate)
+        } catch is CancellationError { throw CancellationError() } catch {
+          try Task.checkCancellation()
+          lastError = error
+        }
+      }
+      if let lastError { throw lastError }
+      return nil
     }
   }
 }

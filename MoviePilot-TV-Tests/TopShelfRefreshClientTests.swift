@@ -56,24 +56,17 @@ final class TopShelfRefreshClientTests: XCTestCase {
       XCTAssertEqual(content.detail.source, "custom")
       XCTAssertEqual(content.detail.title, "完整详情")
       XCTAssertFalse(content.backgroundIsPoster)
-      let background = try XCTUnwrap(UIImage(contentsOfFile: content.backgroundURL.path)?.cgImage)
-      XCTAssertEqual(background.width, 2560)
-      XCTAssertEqual(background.height, 1440)
+      // 扩展内存上限约 25 MB，不缩放：卡片图和详情背景图是同一份下载原文件。
+      XCTAssertEqual(item.backgroundRelativePath, item.imageRelativePath)
+      XCTAssertEqual(try Data(contentsOf: content.backgroundURL), originalImageData)
       let thumbnailURL = try XCTUnwrap(store.imageURL(relativePath: item.imageRelativePath))
-      XCTAssertNotEqual(thumbnailURL, content.backgroundURL)
-      let thumbnail = try XCTUnwrap(UIImage(contentsOfFile: thumbnailURL.path))
-      XCTAssertLessThanOrEqual(
-        try XCTUnwrap(thumbnail.cgImage).width, Int(ceil(TopShelfImageLoader.cardSize.width * 2)))
-      XCTAssertGreaterThan(thumbnail.size.width, thumbnail.size.height)
+      XCTAssertEqual(try Data(contentsOf: thumbnailURL), originalImageData)
       XCTAssertTrue(FileManager.default.fileExists(atPath: content.backgroundURL.path))
     }
     let imageDirectory = directory.appendingPathComponent("Library/Caches/TopShelf/images")
     let cachedFiles = try FileManager.default.contentsOfDirectory(
       at: imageDirectory, includingPropertiesForKeys: nil)
-    XCTAssertEqual(cachedFiles.count, 12, "六张卡片各保存两份处理结果")
-    for file in cachedFiles {
-      XCTAssertNotEqual(try Data(contentsOf: file), originalImageData)
-    }
+    XCTAssertEqual(cachedFiles.count, 6, "六张卡片各保存一份原文件")
     let requests = TopShelfRefreshURLProtocol.requests
     let recommendation = try XCTUnwrap(
       requests.first { $0.url?.path == "/mp/api/v1/recommend/custom" })
@@ -94,6 +87,118 @@ final class TopShelfRefreshClientTests: XCTestCase {
       requests.filter { $0.url?.host == "image.local" }.allSatisfy {
         $0.value(forHTTPHeaderField: "Authorization") == nil
       })
+  }
+
+  /// 合法图片尾部补零到指定字节数；ImageIO 仍能读出尺寸，下载失败只能来自字节上限。
+  private func validImage(byteCount: Int) throws -> Data {
+    var data = originalImageData
+    XCTAssertLessThan(data.count, byteCount)
+    data.append(Data(count: byteCount - data.count))
+    XCTAssertNoThrow(try TopShelfImageLoader.originalImage(from: data))
+    return data
+  }
+
+  private func imageRequestPaths() -> [String] {
+    TopShelfRefreshURLProtocol.requests.compactMap {
+      $0.url?.host == "image.local" ? $0.url?.path : nil
+    }
+  }
+
+  func testExtensionSkipsOnlyOversizedCardsAndAcceptsImagesAtTheByteLimit() async throws {
+    let limit = TopShelfRefreshClient.maximumImageBytes
+    let atLimit = try validImage(byteCount: limit)
+    let oversized = try validImage(byteCount: limit + 1)
+    for sendsContentLength in [false, true] {
+      try configureImages(cache: false)
+      TopShelfRefreshURLProtocol.configure(image: atLimit)
+      TopShelfRefreshURLProtocol.sendsImageContentLength = sendsContentLength
+      // 卡片 0、1 的背景图与海报都超限，其余卡片的图片恰好等于上限。
+      TopShelfRefreshURLProtocol.imageOverride = { url in
+        ["/0.jpg", "/1.jpg"].contains(url.path)
+          || url.path.hasPrefix("/mp/api/v1/media/id+0/")
+          || url.path.hasPrefix("/mp/api/v1/media/id+1/") ? oversized : nil
+      }
+      try await refresh()
+      let items = try XCTUnwrap(store.loadState()?.snapshot?.items)
+      XCTAssertEqual(
+        items.map(\.title), (2...7).map { "卡片\($0)" }, "Content-Length: \(sendsContentLength)")
+      for item in items {
+        let url = try XCTUnwrap(store.imageURL(relativePath: item.imageRelativePath))
+        XCTAssertEqual(try Data(contentsOf: url), atLimit)
+        XCTAssertEqual(item.backgroundIsPoster, false)
+      }
+      XCTAssertTrue(imageRequestPaths().contains("/0.jpg"), "超限背景图之后确实尝试过海报")
+    }
+  }
+
+  func testExtensionKeepsPublishedBatchWhenEveryNewImageExceedsByteLimit() async throws {
+    try await refresh()
+    let published = try XCTUnwrap(store.loadState())
+    XCTAssertEqual(published.snapshot?.items.count, 6)
+    let files = try TopShelfTestArtwork.resourceFiles(in: directory)
+
+    TopShelfRefreshURLProtocol.configure(
+      image: try validImage(byteCount: TopShelfRefreshClient.maximumImageBytes + 1))
+    TopShelfRefreshURLProtocol.detailTitle = "新详情"
+    try await refresh()
+
+    XCTAssertFalse(imageRequestPaths().isEmpty, "新一轮刷新确实下载过图片")
+    XCTAssertEqual(try store.loadState(), published, "全部图片超限时不得发布空批次或替换旧批次")
+    XCTAssertEqual(try TopShelfTestArtwork.resourceFiles(in: directory), files)
+  }
+
+  func testExtensionRetriesSmallerTMDBBackdropBeforeFallingBackToPoster() async throws {
+    let oversized = try validImage(byteCount: TopShelfRefreshClient.maximumImageBytes + 1)
+    TopShelfRefreshURLProtocol.imageHost = "http://image.local/t/p/original"
+    TopShelfRefreshURLProtocol.imageOverride = { url in
+      url.path.hasPrefix("/t/p/original/mp/api/v1/media/") ? oversized : nil
+    }
+    try await refresh()
+    let items = try XCTUnwrap(store.loadState()?.snapshot?.items)
+    XCTAssertEqual(items.count, 6)
+    for item in items {
+      let payload = try XCTUnwrap(TopShelfDeepLink.payload(from: item.displayURL))
+      let content = try XCTUnwrap(store.cachedContent(for: payload, at: Date()))
+      XCTAssertFalse(content.backgroundIsPoster)
+      XCTAssertEqual(try Data(contentsOf: content.backgroundURL), originalImageData)
+    }
+    let paths = imageRequestPaths()
+    XCTAssertEqual(paths.filter { $0.hasPrefix("/t/p/w1280/mp/api/v1/media/") }.count, 6)
+    XCTAssertFalse(paths.contains { $0.hasSuffix("/0.jpg") }, "小一档背景图可用时不应退回海报")
+  }
+
+  func testExtensionUsesPosterWhenNonTMDBBackdropExceedsByteLimit() async throws {
+    let oversized = try validImage(byteCount: TopShelfRefreshClient.maximumImageBytes + 1)
+    TopShelfRefreshURLProtocol.imageOverride = { url in
+      url.path.hasPrefix("/mp/api/v1/media/") ? oversized : nil
+    }
+    try await refresh()
+    let items = try XCTUnwrap(store.loadState()?.snapshot?.items)
+    XCTAssertEqual(items.count, 6)
+    for item in items {
+      let payload = try XCTUnwrap(TopShelfDeepLink.payload(from: item.displayURL))
+      let content = try XCTUnwrap(store.cachedContent(for: payload, at: Date()))
+      XCTAssertTrue(content.backgroundIsPoster)
+      XCTAssertEqual(try Data(contentsOf: content.backgroundURL), originalImageData)
+    }
+    XCTAssertFalse(imageRequestPaths().contains { $0.contains("/t/p/w1280/") })
+  }
+
+  func testReducedTMDBBackdropPathOnlyRewritesOriginalSizeSegment() {
+    XCTAssertEqual(
+      TopShelfRefreshClient.reducedTMDBBackdropPath("https://image.tmdb.org/t/p/original/a.jpg"),
+      "https://image.tmdb.org/t/p/w1280/a.jpg")
+    XCTAssertEqual(
+      TopShelfRefreshClient.reducedTMDBBackdropPath(
+        "https://mirror.local/t/p/original/a.jpg?sig=%2Ft%2Fp%2Foriginal%2F&x=1"),
+      "https://mirror.local/t/p/w1280/a.jpg?sig=%2Ft%2Fp%2Foriginal%2F&x=1")
+    for unchanged in [
+      "https://image.tmdb.org/t/p/w500/a.jpg", "https://img1.doubanio.com/view/photo/l/p1.jpg",
+      "/t/p/original/a.jpg", "https://img.local/a.jpg?u=/t/p/original/a.jpg",
+    ] {
+      XCTAssertNil(TopShelfRefreshClient.reducedTMDBBackdropPath(unchanged), unchanged)
+    }
+    XCTAssertNil(TopShelfRefreshClient.reducedTMDBBackdropPath(nil))
   }
 
   func testExtensionDownloadsCachedAndProxiedImagesWithItsOwnResourceCookie() async throws {
@@ -685,6 +790,10 @@ private final class TopShelfRefreshURLProtocol: URLProtocol, @unchecked Sendable
   nonisolated(unsafe) static var imageRedirectTarget: URL?
   nonisolated(unsafe) static var offset = 0
   nonisolated(unsafe) static var onRecommendation: (@Sendable () -> Void)?
+  /// 按图片地址返回不同字节；返回 nil 时使用默认图片。
+  nonisolated(unsafe) static var imageOverride: (@Sendable (URL) -> Data?)?
+  /// 图片响应是否带 Content-Length，用来分别覆盖按响应头拒绝与边下载边计数两条路径。
+  nonisolated(unsafe) static var sendsImageContentLength = false
   static var requests: [URLRequest] { lock.withLock { recorded } }
   static func configure(image: Data) {
     lock.withLock {
@@ -702,6 +811,8 @@ private final class TopShelfRefreshURLProtocol: URLProtocol, @unchecked Sendable
       offset = 0
       redirectTarget = nil
       onRecommendation = nil
+      imageOverride = nil
+      sendsImageContentLength = false
     }
   }
   static func reset() { configure(image: Data()) }
@@ -742,6 +853,9 @@ private final class TopShelfRefreshURLProtocol: URLProtocol, @unchecked Sendable
           Self.imageHost, Self.resourceCookie, Self.imageRedirectTarget
       )
     }
+    let (imageOverride, sendsImageContentLength) = Self.lock.withLock {
+      (Self.imageOverride, Self.sendsImageContentLength)
+    }
     let path = request.url!.path
     if URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.path
       == "/mp/api/v1/recommend/custom", let redirectTarget
@@ -764,8 +878,9 @@ private final class TopShelfRefreshURLProtocol: URLProtocol, @unchecked Sendable
       return
     }
     let data: Data
-    if protectedImage || request.url!.host == "image.local" {
-      data = image
+    let isImage = protectedImage || request.url!.host == "image.local"
+    if isImage {
+      data = imageOverride?(request.url!) ?? image
     } else if path.contains("/recommend/custom") || path.contains("/discover/tmdb_tvs") {
       callback?()
       let items: [[String: Any]] = (offset..<(offset + 10)).map { index in
@@ -797,7 +912,9 @@ private final class TopShelfRefreshURLProtocol: URLProtocol, @unchecked Sendable
         statusCode: failure ? 503 : (protectedImage && !authenticatedImage ? 401 : 200),
         httpVersion: nil,
         headerFields: !protectedImage && path.contains("/recommend/")
-          ? cookie.map { ["Set-Cookie": $0] } : nil)!, cacheStoragePolicy: .notAllowed)
+          ? cookie.map { ["Set-Cookie": $0] }
+          : (isImage && sendsImageContentLength ? ["Content-Length": String(data.count)] : nil))!,
+      cacheStoragePolicy: .notAllowed)
     client?.urlProtocol(self, didLoad: data)
     client?.urlProtocolDidFinishLoading(self)
   }
