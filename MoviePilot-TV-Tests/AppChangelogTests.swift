@@ -5,12 +5,13 @@ import XCTest
 final class AppChangelogTests: XCTestCase {
   func testHistoryContainsEveryPublishedVersionAndCompatibilityBaseline() {
     let expectedVersions = [
-      "v0.4.1", "v0.4.0", "v0.3.9", "v0.3.8", "v0.3.7", "v0.3.6", "v0.3.5", "v0.3.4",
+      "v0.4.2", "v0.4.1", "v0.4.0", "v0.3.9", "v0.3.8", "v0.3.7", "v0.3.6", "v0.3.5", "v0.3.4",
       "v0.3.3", "v0.3.2", "v0.3.1", "v0.3.0", "v0.2.0", "v0.1.2", "v0.1.1", "v0.1.0",
     ]
     let expectedCompatibility = [
-      "v3.1.9", "v3.1.4", "v3.0.4", "v2.15.6", "v2.15.6", "v2.15.6", "v2.14.6", "v2.14.4",
-      "v2.14.0", "v2.13.14", "v2.13.2", "v2.10.9", "v2.9.13", "v2.9.13", "v2.9.13", "v2.9.7",
+      "v3.2.3", "v3.1.9", "v3.1.4", "v3.0.4", "v2.15.6", "v2.15.6", "v2.15.6", "v2.14.6",
+      "v2.14.4", "v2.14.0", "v2.13.14", "v2.13.2", "v2.10.9", "v2.9.13", "v2.9.13", "v2.9.13",
+      "v2.9.7",
     ]
 
     XCTAssertEqual(AppChangelog.entries.map(\.version), expectedVersions)
@@ -18,25 +19,57 @@ final class AppChangelogTests: XCTestCase {
       AppChangelog.entries.map(\.compatibleMoviePilotVersion),
       expectedCompatibility
     )
-    XCTAssertEqual(AppChangelog.entries[2].highlights, ["兼容 MoviePilot 后端 v3.0.4。"])
-    XCTAssertTrue(AppChangelog.entries[4].highlights.contains(
+    XCTAssertEqual(AppChangelog.entries[3].highlights, ["兼容 MoviePilot 后端 v3.0.4。"])
+    XCTAssertTrue(AppChangelog.entries[5].highlights.contains(
       "降低 77% 内存占用，减少 MoviePilot-TV 或其他 App 因内存压力被系统终止的情况。"
     ))
-    XCTAssertFalse(AppChangelog.entries[3].highlights.contains("兼容 MoviePilot 后端 v2.15.6。"))
     XCTAssertFalse(AppChangelog.entries[4].highlights.contains("兼容 MoviePilot 后端 v2.15.6。"))
-    XCTAssertTrue(AppChangelog.entries[5].highlights.contains("兼容 MoviePilot 后端 v2.15.6。"))
-    XCTAssertTrue(AppChangelog.entries[5].highlights.contains("探索页兼容 MoviePilot 探索来源插件。"))
-    XCTAssertTrue(AppChangelog.entries[5].highlights.contains("支持 AniList 媒体来源。"))
-    XCTAssertTrue(AppChangelog.entries[6].highlights.contains("兼容 MoviePilot 后端 v2.14.6。"))
-    XCTAssertTrue(AppChangelog.entries[7].highlights.contains("兼容 MoviePilot 后端 v2.14.4。"))
-    XCTAssertFalse(AppChangelog.entries[12].highlights.contains("兼容 MoviePilot 后端 v2.9.13。"))
+    XCTAssertFalse(AppChangelog.entries[5].highlights.contains("兼容 MoviePilot 后端 v2.15.6。"))
+    XCTAssertTrue(AppChangelog.entries[6].highlights.contains("兼容 MoviePilot 后端 v2.15.6。"))
+    XCTAssertTrue(AppChangelog.entries[6].highlights.contains("探索页兼容 MoviePilot 探索来源插件。"))
+    XCTAssertTrue(AppChangelog.entries[6].highlights.contains("支持 AniList 媒体来源。"))
+    XCTAssertTrue(AppChangelog.entries[7].highlights.contains("兼容 MoviePilot 后端 v2.14.6。"))
+    XCTAssertTrue(AppChangelog.entries[8].highlights.contains("兼容 MoviePilot 后端 v2.14.4。"))
     XCTAssertFalse(AppChangelog.entries[13].highlights.contains("兼容 MoviePilot 后端 v2.9.13。"))
-    XCTAssertTrue(AppChangelog.entries[14].highlights.contains("兼容 MoviePilot 后端 v2.9.13。"))
-    XCTAssertFalse(AppChangelog.entries[15].highlights.contains("兼容 MoviePilot 后端 v2.9.7。"))
+    XCTAssertFalse(AppChangelog.entries[14].highlights.contains("兼容 MoviePilot 后端 v2.9.13。"))
+    XCTAssertTrue(AppChangelog.entries[15].highlights.contains("兼容 MoviePilot 后端 v2.9.13。"))
+    XCTAssertFalse(AppChangelog.entries[16].highlights.contains("兼容 MoviePilot 后端 v2.9.7。"))
   }
 
-  func testLatestReleaseMatchesApprovedV041Notes() throws {
+  func testLatestReleaseMatchesApprovedV042Notes() throws {
     let entry = try XCTUnwrap(AppChangelog.entries.first)
+    XCTAssertEqual(entry.version, "v0.4.2")
+    XCTAssertEqual(entry.releaseDate, "2026-11-03")
+    XCTAssertEqual(entry.compatibleMoviePilotVersion, "v3.2.3")
+    XCTAssertEqual(entry.highlights, [
+      "兼容 MoviePilot 后端 v3.0.4 至 v3.2.3。",
+      "媒体详情页新增豆瓣短评与影评。",
+      "修复 Apple TV 主屏推荐在真机上无法更新、退回静态图的问题。",
+    ])
+    XCTAssertEqual(entry.updates, [
+      "媒体详情页新增「短评 / 影评」区块：MoviePilot v3.2.1 及以上、带豆瓣 ID 的电影和电视剧可以查看豆瓣短评与影评；默认显示短评，短评为空时自动显示影评。",
+    ])
+    XCTAssertEqual(entry.fixes, [
+      "修复 Apple TV 主屏推荐在真机上无法更新、退回静态图的问题。",
+      "修复 Apple TV 真机无法保存本机日志的问题。",
+      "修复豆瓣等非 TMDB 来源的媒体详情页按钮行过宽、TMDB 跳转按钮折成两行的问题。",
+    ])
+    XCTAssertEqual(entry.optimizations, [
+      "编辑已有订阅并修改身份（类型、来源、季或剧集组等）时，MoviePilot v3.2.0 及以上会在保存前提示进度、优先级和搜索状态会被清空，可以取消。",
+      "媒体详情页的演员与职员合并为同一行，用胶囊切换，切换后按需加载。",
+      "人物简介、版本更新历史、日志详情和整理历史详情改为统一的大屏阅读面板，长内容可以分页翻看。",
+    ])
+    let message = AppChangelog.updateNoticeMessage(for: entry)
+    XCTAssertTrue(entry.highlights.allSatisfy { message.contains($0) })
+    XCTAssertTrue(entry.updates.allSatisfy { !message.contains($0) })
+    XCTAssertTrue(
+      entry.fixes.filter { !entry.highlights.contains($0) }
+        .allSatisfy { !message.contains($0) }
+    )
+  }
+
+  func testV041ReleaseMatchesApprovedNotes() throws {
+    let entry = try XCTUnwrap(AppChangelog.entry(for: "v0.4.1"))
     XCTAssertEqual(entry.version, "v0.4.1")
     XCTAssertEqual(entry.releaseDate, "2026-10-23")
     XCTAssertEqual(entry.compatibleMoviePilotVersion, "v3.1.9")

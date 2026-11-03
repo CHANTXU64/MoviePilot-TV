@@ -17,6 +17,29 @@ nonisolated enum AppChangelog {
 
   static let entries: [AppChangelogEntry] = [
     AppChangelogEntry(
+      version: "v0.4.2",
+      releaseDate: "2026-11-03",
+      compatibleMoviePilotVersion: "v3.2.3",
+      highlights: [
+        "兼容 MoviePilot 后端 v3.0.4 至 v3.2.3。",
+        "媒体详情页新增豆瓣短评与影评。",
+        "修复 Apple TV 主屏推荐在真机上无法更新、退回静态图的问题。",
+      ],
+      updates: [
+        "媒体详情页新增「短评 / 影评」区块：MoviePilot v3.2.1 及以上、带豆瓣 ID 的电影和电视剧可以查看豆瓣短评与影评；默认显示短评，短评为空时自动显示影评。",
+      ],
+      fixes: [
+        "修复 Apple TV 主屏推荐在真机上无法更新、退回静态图的问题。",
+        "修复 Apple TV 真机无法保存本机日志的问题。",
+        "修复豆瓣等非 TMDB 来源的媒体详情页按钮行过宽、TMDB 跳转按钮折成两行的问题。",
+      ],
+      optimizations: [
+        "编辑已有订阅并修改身份（类型、来源、季或剧集组等）时，MoviePilot v3.2.0 及以上会在保存前提示进度、优先级和搜索状态会被清空，可以取消。",
+        "媒体详情页的演员与职员合并为同一行，用胶囊切换，切换后按需加载。",
+        "人物简介、版本更新历史、日志详情和整理历史详情改为统一的大屏阅读面板，长内容可以分页翻看。",
+      ]
+    ),
+    AppChangelogEntry(
       version: "v0.4.1",
       releaseDate: "2026-10-23",
       compatibleMoviePilotVersion: "v3.1.9",
