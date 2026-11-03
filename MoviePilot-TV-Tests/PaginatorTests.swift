@@ -945,51 +945,142 @@ final class PaginatorTests: XCTestCase {
 
   @MainActor
   private func totalPaginator(
-    pageSize: Int?,
-    probe: PageProbe,
-    response: @escaping @MainActor (Int) -> PaginatedBatch<TestItem>
+    probe: CursorProbe,
+    response: @escaping @MainActor (PageCursor) -> PaginatedBatch<TestItem>
   ) -> Paginator<TestItem> {
     Paginator<TestItem>(
       threshold: 1,
-      pageSize: pageSize,
-      pageFetcher: { page in
-        await probe.record(page)
-        return response(page)
+      cursorFetcher: { cursor in
+        probe.cursors.append(cursor)
+        return response(cursor)
       },
       processor: { items, newItems in
-        items.append(contentsOf: newItems)
-        return !newItems.isEmpty
+        let known = Set(items.map(\.id))
+        let unique = newItems.filter { !known.contains($0.id) }
+        items.append(contentsOf: unique)
+        return !unique.isEmpty
       }
     )
   }
 
-  /// 已取页数 × 每页条数达到 total 时到底：不再多发一次空请求，并公布 total。
+  /// 累计返回条数达到 total 时到底：不再多发一次空请求，并公布 total。
   @MainActor
   func testReachingTotalStopsWithoutExtraRequest() async {
-    let probe = PageProbe()
-    let paginator = totalPaginator(pageSize: 2, probe: probe) { page in
-      PaginatedBatch(items: [TestItem(id: page * 10), TestItem(id: page * 10 + 1)], total: 4)
+    let probe = CursorProbe()
+    let paginator = totalPaginator(probe: probe) { cursor in
+      PaginatedBatch(
+        items: [TestItem(id: cursor.offset), TestItem(id: cursor.offset + 1)], total: 4)
     }
 
     await paginator.refresh()
     XCTAssertTrue(paginator.hasMore)
     XCTAssertEqual(paginator.total, 4)
     await paginator.loadMore()
-    XCTAssertFalse(paginator.hasMore, "第 2 页已覆盖 total=4")
+    XCTAssertFalse(paginator.hasMore, "累计 4 条已覆盖 total=4")
     await paginator.loadMore()
 
-    let pages = await probe.snapshot()
-    XCTAssertEqual(pages, [1, 2])
+    XCTAssertEqual(probe.cursors, [PageCursor(page: 1, offset: 0), PageCursor(page: 2, offset: 2)])
     XCTAssertEqual(paginator.items.count, 4)
     XCTAssertFalse(paginator.hasError)
+  }
+
+  /// 某批返回不足请求条数时，偏移按实际条数推进，不跳过剩余条目、不提前判到底。
+  @MainActor
+  func testShortBatchAdvancesOffsetByActualCount() async {
+    let probe = CursorProbe()
+    let total = 7
+    let paginator = totalPaginator(probe: probe) { cursor in
+      // 服务端每次只给 1~3 条（少于请求的 10 条）。
+      let count = min(cursor.page == 1 ? 1 : 3, total - cursor.offset)
+      return PaginatedBatch(
+        items: (cursor.offset..<cursor.offset + count).map { TestItem(id: $0) }, total: total)
+    }
+
+    await paginator.refresh()
+    XCTAssertTrue(paginator.hasMore, "只返回 1 条、total=7，还没到底")
+    while paginator.hasMore {
+      await paginator.loadMore()
+    }
+
+    XCTAssertEqual(paginator.items.map(\.id), Array(0..<7))
+    XCTAssertEqual(probe.cursors.map(\.offset), [0, 1, 4])
+  }
+
+  /// 去重丢掉的条目仍计入偏移：下一批从服务端的下一个位置开始，不与上一批重叠。
+  @MainActor
+  func testDeduplicatedItemsStillAdvanceOffset() async {
+    let probe = CursorProbe()
+    let paginator = totalPaginator(probe: probe) { cursor in
+      switch cursor.offset {
+      case 0: return PaginatedBatch(items: [TestItem(id: 1), TestItem(id: 2)], total: 5)
+      case 2: return PaginatedBatch(items: [TestItem(id: 2), TestItem(id: 3)], total: 5)
+      default: return PaginatedBatch(items: [TestItem(id: 4)], total: 5)
+      }
+    }
+
+    await paginator.refresh()
+    await paginator.loadMore()
+    await paginator.loadMore()
+
+    XCTAssertEqual(probe.cursors.map(\.offset), [0, 2, 4])
+    XCTAssertEqual(paginator.items.map(\.id), [1, 2, 3, 4])
+    XCTAssertFalse(paginator.hasMore)
+  }
+
+  /// 加载更多连续失败到上限后 `hasMore` 变成 false；用户手动重试能恢复加载。
+  @MainActor
+  func testRetryAfterErrorResumesAfterErrorLimit() async {
+    let probe = CursorProbe()
+    var failsAfterFirstPage = true
+    let paginator = Paginator<TestItem>(
+      threshold: 1,
+      cursorFetcher: { cursor in
+        probe.cursors.append(cursor)
+        if cursor.page >= 2, failsAfterFirstPage { throw TestFailure.expected }
+        return PaginatedBatch(items: [TestItem(id: cursor.page)], total: 3)
+      },
+      processor: { items, newItems in
+        items.append(contentsOf: newItems)
+        return !newItems.isEmpty
+      }
+    )
+
+    await paginator.refresh()
+    for _ in 0..<3 { await paginator.loadMore() }
+    XCTAssertTrue(paginator.hasError)
+    XCTAssertFalse(paginator.hasMore, "连续失败 3 次后停止加载")
+    await paginator.loadMore()
+    XCTAssertEqual(probe.cursors.count, 4, "到上限后普通加载更多不再发请求")
+
+    failsAfterFirstPage = false
+    await paginator.retryAfterError()
+    XCTAssertEqual(paginator.items.map(\.id), [1, 2])
+    XCTAssertFalse(paginator.hasError)
+    XCTAssertTrue(paginator.hasMore)
+    XCTAssertEqual(probe.cursors.last, PageCursor(page: 2, offset: 1))
+  }
+
+  /// 没有错误时手动重试不发请求：成功到底的列表不会被重新打开。
+  @MainActor
+  func testRetryAfterErrorIgnoresSuccessfulEnd() async {
+    let probe = CursorProbe()
+    let paginator = totalPaginator(probe: probe) { cursor in
+      PaginatedBatch(items: [TestItem(id: cursor.offset)], total: 1)
+    }
+
+    await paginator.refresh()
+    XCTAssertFalse(paginator.hasMore)
+    await paginator.retryAfterError()
+    XCTAssertFalse(paginator.hasMore)
+    XCTAssertEqual(probe.cursors.count, 1)
   }
 
   /// total 缺失时仍按空批次判终。
   @MainActor
   func testMissingTotalFallsBackToEmptyBatch() async {
-    let probe = PageProbe()
-    let paginator = totalPaginator(pageSize: 2, probe: probe) { page in
-      PaginatedBatch(items: page <= 2 ? [TestItem(id: page)] : [], total: nil)
+    let probe = CursorProbe()
+    let paginator = totalPaginator(probe: probe) { cursor in
+      PaginatedBatch(items: cursor.page <= 2 ? [TestItem(id: cursor.page)] : [], total: nil)
     }
 
     await paginator.refresh()
@@ -997,33 +1088,16 @@ final class PaginatorTests: XCTestCase {
     await paginator.loadMore()
     XCTAssertFalse(paginator.hasMore)
     XCTAssertNil(paginator.total)
-    let pages = await probe.snapshot()
-    XCTAssertEqual(pages, [1, 2, 3])
+    XCTAssertEqual(probe.cursors.map(\.page), [1, 2, 3])
   }
 
-  /// 不传 pageSize 时 total 只公布、不参与判终。
+  /// 刷新时清空旧 total 与偏移，新一轮从头按新返回的 total 判终。
   @MainActor
-  func testTotalWithoutPageSizeDoesNotStopEarly() async {
-    let probe = PageProbe()
-    let paginator = totalPaginator(pageSize: nil, probe: probe) { page in
-      PaginatedBatch(items: [TestItem(id: page)], total: 1)
-    }
-
-    await paginator.refresh()
-    XCTAssertTrue(paginator.hasMore)
-    XCTAssertEqual(paginator.total, 1)
-    await paginator.loadMore()
-    let pages = await probe.snapshot()
-    XCTAssertEqual(pages, [1, 2])
-  }
-
-  /// 刷新时清空旧 total，新一轮按新返回的 total 判终。
-  @MainActor
-  func testRefreshResetsTotal() async {
-    let probe = PageProbe()
+  func testRefreshResetsTotalAndOffset() async {
+    let probe = CursorProbe()
     var currentTotal = 1
-    let paginator = totalPaginator(pageSize: 1, probe: probe) { page in
-      PaginatedBatch(items: [TestItem(id: page)], total: currentTotal)
+    let paginator = totalPaginator(probe: probe) { cursor in
+      PaginatedBatch(items: [TestItem(id: cursor.offset + 1)], total: currentTotal)
     }
 
     await paginator.refresh()
@@ -1031,6 +1105,7 @@ final class PaginatorTests: XCTestCase {
     XCTAssertEqual(paginator.total, 1)
 
     currentTotal = 3
+    probe.cursors.removeAll()
     await paginator.refresh()
     XCTAssertEqual(paginator.total, 3)
     XCTAssertTrue(paginator.hasMore)
@@ -1038,5 +1113,11 @@ final class PaginatorTests: XCTestCase {
     await paginator.loadMore()
     XCTAssertFalse(paginator.hasMore)
     XCTAssertEqual(paginator.items.map(\.id), [1, 2, 3])
+    XCTAssertEqual(probe.cursors.map(\.offset), [0, 1, 2])
   }
+}
+
+@MainActor
+private final class CursorProbe {
+  var cursors: [PageCursor] = []
 }

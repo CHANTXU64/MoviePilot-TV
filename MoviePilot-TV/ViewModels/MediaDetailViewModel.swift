@@ -186,11 +186,12 @@ class MediaDetailViewModel: ObservableObject {
 
   // MARK: - 豆瓣短评 / 影评
 
-  /// 短评与影评共用的分页器：后端是偏移分页，`start = (页码 - 1) × pageSize`。
+  /// 短评与影评共用的分页器：后端是偏移分页，`start` 取此前各批实际返回的条数（去重前）。
   ///
-  /// 偏移按页码推算而不是按去重后的条数推算：去重丢掉的条目仍占用服务端的位置，
-  /// 按条数推算会让下一页与上一页重叠。入口条件在请求前重新求值，详情或设置变化后
-  /// 不会用失效的条件发请求。
+  /// 与 Web 的 `start = 已加载条数` 一致。不按「页码 × 每页条数」推算：豆瓣某批返回不足
+  /// 每页条数时会跳过条目或提前判到底。也不按去重后的条数推算：去重丢掉的条目仍占用服务端
+  /// 的位置，按去重后条数推算会让下一批与上一批重叠。入口条件在请求前重新求值，详情或设置
+  /// 变化后不会用失效的条件发请求。
   private static func makeDoubanDiscussionPaginator(
     kind: DoubanDiscussionEntry.Kind,
     detailBox box: DetailBox,
@@ -200,8 +201,7 @@ class MediaDetailViewModel: ObservableObject {
     return Paginator<DoubanDiscussionEntry>(
       threshold: DoubanDiscussionAvailability.loadMoreThreshold,
       // 豆瓣返回 total：分页器据此判到底，不再多发一次空请求；胶囊数量也读它。
-      pageSize: DoubanDiscussionAvailability.pageSize,
-      pageFetcher: { @MainActor [apiService, box] page in
+      cursorFetcher: { @MainActor [apiService, box] cursor in
         let detail = box.value
         guard
           DoubanDiscussionAvailability.isEligible(
@@ -213,7 +213,7 @@ class MediaDetailViewModel: ObservableObject {
         // 入口条件中途失效时按「取消」处理：不能返回空数组，否则会被当成确认为空的终页。
         else { throw CancellationError() }
         let pageSize = DoubanDiscussionAvailability.pageSize
-        let start = (page - 1) * pageSize
+        let start = cursor.offset
         switch kind {
         case .comment:
           let page = try await apiService.fetchDoubanComments(
@@ -298,6 +298,13 @@ class MediaDetailViewModel: ObservableObject {
     guard isDoubanDiscussionEligible else { return }
     requestedDoubanKinds.insert(kind)
     runDoubanDiscussionFirstPage(kind)
+  }
+
+  /// 已有内容、加载更多失败时行尾的「重试」按钮：只重试当前分类的下一批。
+  func retryDoubanDiscussionNextPage() {
+    guard isDoubanDiscussionEligible else { return }
+    let paginator = doubanPaginator(for: doubanDiscussionKind)
+    Task { await paginator.retryAfterError() }
   }
 
   private var isDoubanDiscussionEligible: Bool {

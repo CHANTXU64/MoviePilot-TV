@@ -59,6 +59,47 @@ final class ReadingSheetLayoutTests: XCTestCase {
     XCTAssertEqual(pieces.last?.style, .field(label: "状态"))
   }
 
+  /// 行数估算计入显式换行：多行短文本按行数算，不按总字数除以列宽算。
+  func testLineCountCountsExplicitNewlines() {
+    XCTAssertEqual(ReadingSheetLayout.lineCount(AttributedString("a\nb\nc"), charactersPerLine: 40), 3)
+    XCTAssertEqual(ReadingSheetLayout.lineCount(AttributedString("a\n\nb"), charactersPerLine: 40), 3)
+    XCTAssertEqual(
+      ReadingSheetLayout.lineCount(
+        AttributedString(String(repeating: "x", count: 81) + "\nend"), charactersPerLine: 40),
+      4)
+  }
+
+  /// 整段传入的 40 行失败原因拆成多个停靠块，每块不超过行数预算；
+  /// 在换行处断开，行首缩进与全部内容都保留。
+  func testMultilineFieldValueSplitsAtNewlines() {
+    let lines = (1...40).map { "  第\($0)行 Traceback" }
+    let reason = lines.joined(separator: "\n")
+    let perLine = 60
+    let valueWidth = ReadingSheetLayout.valueCharactersPerLine(perLine)
+    let chunks = ReadingSheetLayout.chunks(
+      [.field("失败原因", reason)], charactersPerLine: perLine, maxLines: 9)
+
+    XCTAssertGreaterThan(chunks.count, 1, "40 行不能挤在一个停靠块里")
+    for chunk in chunks {
+      let chunkLines = chunk.reduce(0) {
+        $0 + ReadingSheetLayout.lineCount($1.text, charactersPerLine: valueWidth)
+      }
+      XCTAssertLessThanOrEqual(chunkLines, 9)
+    }
+    let pieces = chunks.flatMap { $0 }
+    XCTAssertEqual(pieces.map(\.startsParagraph), [true] + Array(repeating: false, count: pieces.count - 1))
+    XCTAssertTrue(pieces.allSatisfy { String($0.text.characters).hasPrefix("  第") }, "断开处保留行首缩进")
+    XCTAssertEqual(pieces.map { String($0.text.characters) }.joined(separator: "\n"), reason)
+  }
+
+  /// 多行文本里单独一行就超出预算时，那一行再按字数拆，其余行仍按换行分组。
+  func testOverlongLineInsideMultilineTextIsSplitByCharacters() {
+    let long = String(repeating: "z", count: 100)
+    let text = "head\n" + long + "\ntail"
+    let pieces = ReadingSheetLayout.splitLines(AttributedString(text), charactersPerLine: 10, maxLines: 3)
+    XCTAssertEqual(pieces.map { String($0.characters) }, ["head", String(repeating: "z", count: 30), String(repeating: "z", count: 30), String(repeating: "z", count: 30), String(repeating: "z", count: 10), "tail"])
+  }
+
   /// 超长的单行日志拆开后，第一片保留行首缩进；后续片段只去掉断点处的空白。
   func testSplitKeepsLeadingIndentation() {
     // 4 个空格缩进 + 36 个 x 正好 40 字，在第 40 字处硬切，断点后面是一串空格。

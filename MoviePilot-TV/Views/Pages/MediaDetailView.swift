@@ -1564,6 +1564,17 @@ struct MediaDetailView: View {
                 }
                 if paginator.isLoadingMore {
                   posterCenteredLoadingIndicator(height: DoubanDiscussionCard.cardHeight)
+                } else if paginator.hasError {
+                  // 加载更多失败：连续失败到上限后移动焦点不会再请求，这里给一个手动恢复入口。
+                  Button {
+                    // 先把焦点交给最后一张卡：按下后按钮换成加载指示，焦点不能跟着掉出本区块。
+                    if let lastId = paginator.items.last?.id {
+                      focusedDiscussionId = lastId
+                    }
+                    viewModel.retryDoubanDiscussionNextPage()
+                  } label: {
+                    Label("重试", systemImage: "arrow.clockwise")
+                  }
                 }
               }
             }

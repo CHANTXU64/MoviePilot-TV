@@ -1,6 +1,15 @@
 import Combine
 import Foundation
 
+/// 下一次请求的位置：页码，以及此前各批实际返回的条数之和（去重前）。
+///
+/// 偏移分页（`start` / `count`）的接口用 `offset`：某一批返回不足请求条数时，
+/// 按「页码 × 每页条数」推算会跳过条目，按实际返回条数推进才不会漏。
+struct PageCursor: Equatable {
+  let page: Int
+  let offset: Int
+}
+
 /// 一页分页结果：条目，以及后端声明的总条数（可选）。
 struct PaginatedBatch<Item> {
   let items: [Item]
@@ -52,6 +61,8 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   // MARK: - 私有状态
 
   private var page: Int = 1
+  /// 此前各批实际返回的条数之和（去重前）；与 `total` 一起判断是否到底。
+  private var sourceOffset: Int = 0
   private var consecutiveErrorCount: Int = 0
   private let maxConsecutiveErrors: Int = 3
   private var generation: Int = 0
@@ -61,11 +72,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   private let maxRestartRoundsPerSequence: Int = 5
 
   /// 获取一页项目的函数。
-  private let fetcher: @MainActor (Int) async throws -> PaginatedBatch<ItemType>
-
-  /// 每页条数。与 `total` 一起判断是否已到底：已取页数 × 每页条数 ≥ total 时不再请求。
-  /// 为 nil 时只按空批次判终。
-  private let pageSize: Int?
+  private let fetcher: @MainActor (PageCursor) async throws -> PaginatedBatch<ItemType>
 
   /// 提前触发服务端缓存的图片 URL 函数；不会在 Apple TV 下载或解码图片。
   private let imageWarmURLsProvider: (@MainActor (ItemType) -> [URL])?
@@ -113,8 +120,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     self.init(
       listID: listID,
       threshold: threshold,
-      pageSize: nil,
-      pageFetcher: { page in PaginatedBatch(items: try await fetcher(page)) },
+      cursorFetcher: { cursor in PaginatedBatch(items: try await fetcher(cursor.page)) },
       processor: processor,
       imageWarmer: imageWarmer,
       imageWarmURLsProvider: imageWarmURLsProvider,
@@ -124,13 +130,14 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     )
   }
 
-  /// 接口返回总条数时使用：`pageSize` 与每页 `total` 一起判断是否已到底，
-  /// 到底后不再多发一次空请求；`total` 缺失时仍按空批次判终。
+  /// 偏移分页或接口返回总条数时使用：`fetcher` 拿到页码与偏移，偏移按此前各批实际返回的
+  /// 条数推进。批次带 `total` 时，累计返回条数达到 total 即到底，不再多发一次空请求；
+  /// `total` 缺失时仍按空批次判终。
+  /// 注意：`advancePageCursor` / `rewindPageCursor` 只调整页码，不调整偏移，偏移分页不要使用。
   init(
     listID: UUID = UUID(),
     threshold: Int,
-    pageSize: Int?,
-    pageFetcher: @escaping @MainActor (Int) async throws -> PaginatedBatch<ItemType>,
+    cursorFetcher: @escaping @MainActor (PageCursor) async throws -> PaginatedBatch<ItemType>,
     processor: @escaping @MainActor (inout [ItemType], [ItemType]) -> Bool,
     imageWarmer: MPImageWarmer? = nil,
     imageWarmURLsProvider: (@MainActor (ItemType) -> [URL])? = nil,
@@ -140,8 +147,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   ) {
     self.listIdentity = GridListIdentity.make(id: listID)
     self.threshold = threshold
-    self.fetcher = pageFetcher
-    self.pageSize = pageSize.flatMap { $0 > 0 ? $0 : nil }
+    self.fetcher = cursorFetcher
     self.processor = processor
     self.imageWarmURLsProvider = imageWarmURLsProvider
     self.imageWarmer = imageWarmer
@@ -150,6 +156,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     if let preparedFirstPage {
       _ = processor(&items, preparedFirstPage)
       page = 2
+      sourceOffset = preparedFirstPage.count
       hasMore = !preparedFirstPage.isEmpty
     }
   }
@@ -191,6 +198,17 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
       let thresholdIndex = max(0, items.count - threshold)
       guard itemIndex >= thresholdIndex else { return }
     }
+    await runLoadSequence()
+  }
+
+  /// 加载更多失败后由用户手动重试：清零连续失败计数，重新允许向后加载。
+  ///
+  /// 连续失败达到上限后 `hasMore` 会变成 false，移动焦点不再触发请求；网络恢复后需要这个入口。
+  /// 只在当前处于错误状态时生效，成功到底时不会多发请求。
+  public func retryAfterError() async {
+    guard hasError, !isLoading else { return }
+    consecutiveErrorCount = 0
+    hasMore = true
     await runLoadSequence()
   }
 
@@ -308,7 +326,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
       pagesScannedForNewContent += 1
 
       do {
-        let batch = try await fetcher(page)
+        let batch = try await fetcher(PageCursor(page: page, offset: sourceOffset))
         let newItems = batch.items
 
         // 挂起恢复后检查：generation 变化说明已被 reset，丢弃结果
@@ -331,10 +349,12 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
         }
 
         page += 1
+        // 按实际返回条数推进偏移；去重丢掉的条目在服务端仍占位，照样计入。
+        sourceOffset += newItems.count
         currentError = nil
 
-        // 已取的页数覆盖了后端声明的总数：到底了，不再多发一次空请求。
-        if let pageSize, let total, (page - 1) * pageSize >= total {
+        // 累计返回条数达到后端声明的总数：到底了，不再多发一次空请求。
+        if let total, sourceOffset >= total {
           hasMore = false
         }
       } catch {
@@ -396,6 +416,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     }
     clearErrorState()
     page = 1
+    sourceOffset = 0
     consecutiveErrorCount = 0
     maxWarmedIndex = -1
     onReset?()

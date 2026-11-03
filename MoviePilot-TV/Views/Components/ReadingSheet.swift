@@ -102,7 +102,8 @@ nonisolated enum ReadingSheetLayout {
     }
     let pieces = blocks.flatMap { block -> [ReadingBlock] in
       if block.style == .divider { return [block] }
-      return split(block.text, maxCharacters: lineWidth(block.style) * lineBudget).enumerated().map { index, text in
+      return splitLines(block.text, charactersPerLine: lineWidth(block.style), maxLines: lineBudget)
+        .enumerated().map { index, text in
         ReadingBlock(
           text,
           style: block.style,
@@ -115,9 +116,7 @@ nonisolated enum ReadingSheetLayout {
     var current: [ReadingBlock] = []
     var currentLines = 0
     for piece in pieces {
-      let count = piece.text.characters.count
-      let width = lineWidth(piece.style)
-      let lines = max(1, (count + width - 1) / width)
+      let lines = lineCount(piece.text, charactersPerLine: lineWidth(piece.style))
       if !current.isEmpty, currentLines + lines > lineBudget {
         chunks.append(current)
         current = []
@@ -128,6 +127,71 @@ nonisolated enum ReadingSheetLayout {
     }
     if !current.isEmpty { chunks.append(current) }
     return chunks
+  }
+
+  /// 估算文本显示的行数：显式换行各起一行，每行再按列宽折行；空行也算一行。
+  static func lineCount(_ text: AttributedString, charactersPerLine: Int) -> Int {
+    let width = max(1, charactersPerLine)
+    func wrapped(_ count: Int) -> Int { max(1, (count + width - 1) / width) }
+    var lines = 0
+    var current = 0
+    for character in text.characters {
+      if character.isNewline {
+        lines += wrapped(current)
+        current = 0
+      } else {
+        current += 1
+      }
+    }
+    return lines + wrapped(current)
+  }
+
+  /// 把超过行数预算的文本拆成多片，每片不超过 `maxLines` 行。
+  ///
+  /// 先在显式换行处断开（整段传入的失败原因、日志 metadata 常是多行短文本），
+  /// 断开处保留下一行的行首缩进；单独一行就超出预算时，再交给 `split(_:maxCharacters:)` 按字数拆。
+  static func splitLines(
+    _ text: AttributedString,
+    charactersPerLine: Int,
+    maxLines: Int
+  ) -> [AttributedString] {
+    let width = max(1, charactersPerLine)
+    let budget = max(1, maxLines)
+    guard lineCount(text, charactersPerLine: width) > budget else { return [text] }
+
+    let characters = text.characters
+    var pieces: [AttributedString] = []
+    var pieceStart: AttributedString.Index?
+    var pieceEnd = characters.startIndex
+    var pieceLines = 0
+
+    func flush() {
+      if let start = pieceStart, let piece = nonBlank(text[start..<pieceEnd]) {
+        pieces.append(piece)
+      }
+      pieceStart = nil
+      pieceLines = 0
+    }
+
+    var lineStart = characters.startIndex
+    while lineStart < characters.endIndex {
+      let lineEnd = characters[lineStart...].firstIndex(where: \.isNewline) ?? characters.endIndex
+      let length = characters.distance(from: lineStart, to: lineEnd)
+      let lines = max(1, (length + width - 1) / width)
+      if lines > budget {
+        flush()
+        pieces.append(
+          contentsOf: split(AttributedString(text[lineStart..<lineEnd]), maxCharacters: width * budget))
+      } else {
+        if pieceStart != nil, pieceLines + lines > budget { flush() }
+        if pieceStart == nil { pieceStart = lineStart }
+        pieceEnd = lineEnd
+        pieceLines += lines
+      }
+      lineStart = lineEnd < characters.endIndex ? characters.index(after: lineEnd) : lineEnd
+    }
+    flush()
+    return pieces
   }
 
   /// 把超长文本拆成不超过 `maxCharacters` 的片段，优先在句末断开；找不到句末时硬切。

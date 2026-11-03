@@ -217,6 +217,29 @@ final class DoubanDiscussionViewModelTests: XCTestCase {
     XCTAssertEqual(ids.count, Set(ids).count, "重复条目未被去重")
   }
 
+  /// 豆瓣某批返回不足请求条数时，下一批从实际返回的条数继续（与 Web 的 `start = 已加载条数` 一致），
+  /// 不跳过剩余条目、不提前判到底。
+  func testShortBatchContinuesFromActualReturnedCount() async throws {
+    DoubanDetailStubURLProtocol.commentBodies = [
+      0: commentPageJSON(start: 0, count: 3, total: 5, ids: ["c1", "c2", "c3"]),
+      3: commentPageJSON(start: 3, count: 2, total: 5, ids: ["c4", "c5"]),
+    ]
+    let detail = eligibleMovieDetail()
+    let viewModel = makeViewModel(detail: detail, backendVersion: "v3.2.1")
+    viewModel.applyFullDetail(detail)
+    try await waitUntil("短评第一批") { viewModel.doubanCommentsPaginator.items.count == 3 }
+    XCTAssertTrue(viewModel.doubanCommentsPaginator.hasMore, "只返回 3 条、total=5，还没到底")
+
+    let lastID = try XCTUnwrap(viewModel.doubanCommentsPaginator.items.last?.id)
+    await viewModel.doubanCommentsPaginator.loadMore(lastID)
+    try await waitUntil("短评第二批") { viewModel.doubanCommentsPaginator.items.count == 5 }
+
+    let starts = DoubanDetailStubURLProtocol.calls(matching: "/api/v1/douban/interests/")
+      .map(\.start)
+    XCTAssertEqual(starts, [0, 3])
+    XCTAssertFalse(viewModel.doubanCommentsPaginator.hasMore)
+  }
+
   /// 已加载达到 `total` 时直接判到底：不再多发一次请求（与 Web 用 total 判断同口径）。
   func testReachingTotalStopsWithoutExtraRequest() async throws {
     DoubanDetailStubURLProtocol.commentBodies = [
