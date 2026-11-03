@@ -359,7 +359,7 @@ enum TVAPIContractCatalog {
     items.append(contentsOf: systemOperations)
     items.append(contentsOf: dashboardOperations)
     items.append(contentsOf: mediaOperations)
-    items.append(contentsOf: discoverOperations)
+    items.append(contentsOf: discoverOperations(backendVersion: backendVersion))
     items.append(contentsOf: personOperations)
     items.append(contentsOf: searchOperations(backendVersion: backendVersion))
     items.append(contentsOf: downloadOperations)
@@ -594,7 +594,8 @@ enum TVAPIContractCatalog {
     ]
   }
 
-  private static var discoverOperations: [TVAPIOperation] {
+  private static func discoverOperations(backendVersion: String?) -> [TVAPIOperation] {
+    let supportsDoubanDiscussion = DoubanDiscussionAvailability.supports(backendVersion: backendVersion)
     let page = [TVAPIParam.query("page", type: .integer)]
     let discoverPaths = [
       "/discover/tmdb_movies",
@@ -715,6 +716,36 @@ enum TVAPIContractCatalog {
         coverage: read
       ),
     ]
+    // 豆瓣短评/影评：分页只发偏移量 start 与固定条数 count。目录直接复用运行时门禁，
+    // 门禁之外（低于启用版本或版本读不出）TV 不调用，不能登记为已调用端点。
+    if supportsDoubanDiscussion {
+      items += [
+        TVAPIOperationBuilder.get(
+          "/douban/interests/{doubanid}/{type_name}",
+          query: [
+            TVAPIParam.query("start", alwaysSent: true, type: .integer),
+            TVAPIParam.query("count", alwaysSent: true, type: .integer),
+          ],
+          pathParams: [
+            TVAPIParam.path("doubanid"),
+            TVAPIParam.path("type_name"),
+          ],
+          coverage: read
+        ),
+        TVAPIOperationBuilder.get(
+          "/douban/reviews/{doubanid}/{type_name}",
+          query: [
+            TVAPIParam.query("start", alwaysSent: true, type: .integer),
+            TVAPIParam.query("count", alwaysSent: true, type: .integer),
+          ],
+          pathParams: [
+            TVAPIParam.path("doubanid"),
+            TVAPIParam.path("type_name"),
+          ],
+          coverage: read
+        ),
+      ]
+    }
     return items
   }
 

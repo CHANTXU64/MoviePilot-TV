@@ -2993,6 +2993,72 @@ class APIService: ObservableObject {
     return try await decodeOrUnwrap([Person].self, from: data)
   }
 
+  /// 获取豆瓣短评
+  /// - 对应前端: `MoviePilot-Frontend/src/views/discover/MediaCommentView.vue`
+  ///   （`start` 是条目偏移量，不是页码；`count` 固定 10）。
+  /// - 对应后端: `app/api/endpoints/douban.py` 的 `douban_interests`，只要求登录态。
+  /// - 应用场景: 媒体详情页「短评 / 影评」区块默认的短评分类，进入详情页即拉第一页。
+  func fetchDoubanComments(
+    doubanId: String,
+    typeName: String,
+    start: Int,
+    count: Int = DoubanDiscussionAvailability.pageSize
+  ) async throws -> DoubanCommentPage {
+    let endpoint = try doubanDiscussionEndpoint(
+      kind: "interests",
+      doubanId: doubanId,
+      typeName: typeName,
+      start: start,
+      count: count
+    )
+    let data = try await makeRequest(endpoint: endpoint)
+    return try await decodeOrUnwrap(DoubanCommentPage.self, from: data)
+  }
+
+  /// 获取豆瓣影评
+  /// - 对应后端: `app/api/endpoints/douban.py` 的 `douban_reviews`。
+  /// - 应用场景: 与 Web 一样按需加载，用户切到「影评」胶囊（或短评为空自动切换）时才请求。
+  /// - 注意: `abstract` 只是豆瓣返回的摘要，不是影评全文。
+  func fetchDoubanReviews(
+    doubanId: String,
+    typeName: String,
+    start: Int,
+    count: Int = DoubanDiscussionAvailability.pageSize
+  ) async throws -> DoubanReviewPage {
+    let endpoint = try doubanDiscussionEndpoint(
+      kind: "reviews",
+      doubanId: doubanId,
+      typeName: typeName,
+      start: start,
+      count: count
+    )
+    let data = try await makeRequest(endpoint: endpoint)
+    return try await decodeOrUnwrap(DoubanReviewPage.self, from: data)
+  }
+
+  /// 短评/影评共用的分页端点：`/douban/{kind}/{doubanid}/{type_name}?start=&count=`。
+  /// 豆瓣 ID 与中文类型各自按单个路径段编码一次（`/` 等分隔符也会被转义）。
+  private func doubanDiscussionEndpoint(
+    kind: String,
+    doubanId: String,
+    typeName: String,
+    start: Int,
+    count: Int
+  ) throws -> String {
+    guard
+      let encodedId = encodeMediaIDPathSegment(doubanId),
+      !encodedId.isEmpty,
+      let encodedType = encodeMediaIDPathSegment(typeName),
+      !encodedType.isEmpty
+    else {
+      throw APIError.invalidURL
+    }
+    return try buildEndpoint(
+      path: "/douban/\(kind)/\(encodedId)/\(encodedType)",
+      params: ["start": String(max(0, start)), "count": String(max(1, count))]
+    )
+  }
+
   /// 获取 RSS 站点列表
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue
   /// - 应用场景: 在 **订阅编辑对话框** 中，作为“订阅站点”下拉菜单的数据源。
@@ -3493,6 +3559,14 @@ class APIService: ObservableObject {
   func getSubscribePosterImageUrl(poster: String?) -> URL? {
     guard let poster, !isDefaultPlaceholderImageURL(poster) else { return nil }
     return configuredDisplayImageURL(poster)
+  }
+
+  /// 豆瓣评论作者头像的可显示地址。
+  /// - 豆瓣头像域名对非同源 Referer 返回 418，必须统一走后端图片代理（与 Web 的
+  ///   `getDisplayImageUrl` 一致），绝不能把原始地址直接交给图片组件。
+  func getDoubanCommentAvatarImageUrl(_ avatar: String?) -> URL? {
+    guard let avatar = DoubanDiscussionIdentity.normalized(avatar) else { return nil }
+    return configuredDisplayImageURL(avatar)
   }
 
   /// 获取订阅分享的海报图片 URL

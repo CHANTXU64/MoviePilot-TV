@@ -163,15 +163,12 @@ struct PersonDetailView: View {
     .sheet(isPresented: $showFullBio) {
       let person = viewModel.person
       if let biography = person.biography {
-        VStack(alignment: .leading, spacing: 20) {
-          Text(person.name ?? "个人简介")
-            .font(.title2.bold())
-
-          Text(Self.biographyText(biography, source: person.source))
-            .font(.footnote)
-        }
-        .padding(50)
-        .frame(width: 1600)
+        ReadingSheet(
+          title: person.name ?? "个人简介",
+          blocks: ReadingSheetLayout.paragraphs(
+            Self.biographyText(biography, source: person.source)
+          ).map { ReadingBlock($0) }
+        )
       }
     }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in

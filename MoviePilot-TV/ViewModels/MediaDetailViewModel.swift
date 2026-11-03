@@ -27,6 +27,12 @@ class MediaDetailViewModel: ObservableObject {
   let recommendPaginator: Paginator<MediaInfo>
   let similarPaginator: Paginator<MediaInfo>
   let actorsPaginator: Paginator<Person>
+  /// 豆瓣短评（进入详情页即拉第一页，条件见 `DoubanDiscussionAvailability`）
+  let doubanCommentsPaginator: Paginator<DoubanDiscussionEntry>
+  /// 豆瓣影评（与 Web 一样按需加载：切到「影评」或短评为空时才请求）
+  let doubanReviewsPaginator: Paginator<DoubanDiscussionEntry>
+  /// 「短评 / 影评」区块当前展示的分类。
+  @Published private(set) var doubanDiscussionKind: DoubanDiscussionEntry.Kind = .comment
 
   // 演职人员信息
   @Published var heroTopActors: [Person] = []
@@ -59,6 +65,11 @@ class MediaDetailViewModel: ObservableObject {
   private var mediaServerExistsTask: Task<Void, Never>?
   private var relatedContentTask: Task<Void, Never>?
   private var relatedContentChildTasks: [Task<Void, Never>] = []
+  private var doubanDiscussionTasks: [DoubanDiscussionEntry.Kind: Task<Void, Never>] = [:]
+  /// 已发起过首屏请求的分类；离页前不会自动重发，失败只能由用户在状态卡上重试。
+  private var requestedDoubanKinds: Set<DoubanDiscussionEntry.Kind> = []
+  /// 用户亲手切换过分类后，不再因为短评为空自动改看影评。
+  private var hasUserChosenDoubanKind = false
 
   init(detail: MediaInfo, apiService: APIService = .shared) {
     self.detail = detail
@@ -141,6 +152,11 @@ class MediaDetailViewModel: ObservableObject {
       }
     )
 
+    self.doubanCommentsPaginator = Self.makeDoubanDiscussionPaginator(
+      kind: .comment, detailBox: box, apiService: apiService)
+    self.doubanReviewsPaginator = Self.makeDoubanDiscussionPaginator(
+      kind: .review, detailBox: box, apiService: apiService)
+
     // --- Forward Paginator Updates ---
     self.recommendPaginator.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
@@ -154,9 +170,147 @@ class MediaDetailViewModel: ObservableObject {
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &cancellables)
 
+    self.doubanCommentsPaginator.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
+
+    self.doubanReviewsPaginator.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
+
     self.siteFilter.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &cancellables)
+  }
+
+  // MARK: - 豆瓣短评 / 影评
+
+  /// 短评与影评共用的分页器：后端是偏移分页，`start = (页码 - 1) × pageSize`。
+  ///
+  /// 偏移按页码推算而不是按去重后的条数推算：去重丢掉的条目仍占用服务端的位置，
+  /// 按条数推算会让下一页与上一页重叠。入口条件在请求前重新求值，详情或设置变化后
+  /// 不会用失效的条件发请求。
+  private static func makeDoubanDiscussionPaginator(
+    kind: DoubanDiscussionEntry.Kind,
+    detailBox box: DetailBox,
+    apiService: APIService
+  ) -> Paginator<DoubanDiscussionEntry> {
+    var seenKeys = Set<String>()
+    return Paginator<DoubanDiscussionEntry>(
+      threshold: DoubanDiscussionAvailability.pageSize,
+      fetcher: { @MainActor [apiService, box] page in
+        let detail = box.value
+        guard
+          DoubanDiscussionAvailability.isEligible(
+            detail: detail,
+            backendVersion: apiService.settings?.BACKEND_VERSION
+          ),
+          let doubanId = DoubanDiscussionAvailability.normalizedDoubanID(detail.douban_id),
+          let typeName = DoubanDiscussionAvailability.normalizedMediaType(detail.type)
+        else { return [] }
+        let pageSize = DoubanDiscussionAvailability.pageSize
+        let start = (page - 1) * pageSize
+        switch kind {
+        case .comment:
+          return try await apiService.fetchDoubanComments(
+            doubanId: doubanId, typeName: typeName, start: start, count: pageSize
+          ).resolvedItems.map(DoubanDiscussionEntry.init(comment:))
+        case .review:
+          return try await apiService.fetchDoubanReviews(
+            doubanId: doubanId, typeName: typeName, start: start, count: pageSize
+          ).resolvedItems.map(DoubanDiscussionEntry.init(review:))
+        }
+      },
+      processor: { @MainActor items, newItems in
+        let unique = newItems.filter { seenKeys.insert($0.id).inserted }
+        guard !unique.isEmpty else { return false }
+        items.append(contentsOf: unique)
+        return true
+      },
+      onReset: { @MainActor in
+        seenKeys.removeAll()
+      }
+    )
+  }
+
+  func doubanPaginator(for kind: DoubanDiscussionEntry.Kind) -> Paginator<DoubanDiscussionEntry> {
+    switch kind {
+    case .comment: return doubanCommentsPaginator
+    case .review: return doubanReviewsPaginator
+    }
+  }
+
+  func doubanRowState(for kind: DoubanDiscussionEntry.Kind) -> DoubanDiscussionRowState {
+    let paginator = doubanPaginator(for: kind)
+    return DoubanDiscussionAvailability.rowState(
+      hasRequested: requestedDoubanKinds.contains(kind),
+      itemCount: paginator.items.count,
+      isLoadingFirstPage: paginator.isFirstLoading,
+      hasError: paginator.hasError,
+      hasMore: paginator.hasMore
+    )
+  }
+
+  /// 区块是否可见（不含入口条件；入口条件由视图结合当前设置判断）。
+  var isDoubanDiscussionSectionVisible: Bool {
+    DoubanDiscussionAvailability.isSectionVisible(
+      comments: doubanRowState(for: .comment),
+      reviews: doubanRowState(for: .review)
+    )
+  }
+
+  /// 进入详情页即拉取短评第一页；影评等用户切过去再拉（与 Web 一致，避免同时请求两个豆瓣接口）。
+  ///
+  /// - 不参与首屏预载、不阻塞 `isFirstRowReady`，区块异步渐进显示。
+  /// - 版本 / 豆瓣 ID / 媒体类型任一不满足时**不发请求**。
+  /// - 条件在调用时重新求值，「设置晚到」时后续调用仍能补发；发起后不再重发。
+  /// - 调用方负责 `allowsRequests` 门禁：启动会话准备期间不得调用。
+  func loadDoubanDiscussionIfNeeded() {
+    startDoubanDiscussionIfNeeded(.comment)
+  }
+
+  /// 用户点了分类胶囊。
+  func selectDoubanDiscussion(_ kind: DoubanDiscussionEntry.Kind) {
+    hasUserChosenDoubanKind = true
+    doubanDiscussionKind = kind
+    startDoubanDiscussionIfNeeded(kind)
+  }
+
+  /// 状态卡上的「重新加载」：只重试当前分类。
+  func retryDoubanDiscussion() {
+    let kind = doubanDiscussionKind
+    guard isDoubanDiscussionEligible else { return }
+    requestedDoubanKinds.insert(kind)
+    runDoubanDiscussionFirstPage(kind)
+  }
+
+  private var isDoubanDiscussionEligible: Bool {
+    DoubanDiscussionAvailability.isEligible(
+      detail: detail,
+      backendVersion: apiService.settings?.BACKEND_VERSION
+    )
+  }
+
+  private func startDoubanDiscussionIfNeeded(_ kind: DoubanDiscussionEntry.Kind) {
+    guard !requestedDoubanKinds.contains(kind), isDoubanDiscussionEligible else { return }
+    requestedDoubanKinds.insert(kind)
+    runDoubanDiscussionFirstPage(kind)
+  }
+
+  private func runDoubanDiscussionFirstPage(_ kind: DoubanDiscussionEntry.Kind) {
+    doubanDiscussionTasks[kind]?.cancel()
+    doubanDiscussionTasks[kind] = Task { @MainActor [weak self] in
+      guard let self else { return }
+      await doubanPaginator(for: kind).refresh()
+      guard !Task.isCancelled else { return }
+      doubanDiscussionTasks[kind] = nil
+      // 短评确认为空时自动改看影评，否则整个区块没有可看的内容；
+      // 用户已经亲手选过分类就尊重用户的选择。
+      if kind == .comment, !hasUserChosenDoubanKind, doubanRowState(for: .comment) == .empty {
+        doubanDiscussionKind = .review
+        startDoubanDiscussionIfNeeded(.review)
+      }
+    }
   }
 
   private var hasAppliedFullDetail = false
@@ -235,6 +389,9 @@ class MediaDetailViewModel: ObservableObject {
       self?.mediaServerExistsTask = nil
     }
 
+    // 进入详情页就拉豆瓣短评/影评第一页：独立任务、不参与首屏就绪判断、不做任何预载。
+    loadDoubanDiscussionIfNeeded()
+
     // ── 判断第二页首行类型 ──
     // 电视剧首行固定是 season（由 preloadTask 异步加载，在 View 层通过 onChange 监听）
     let isSeasonFirst =
@@ -311,9 +468,13 @@ class MediaDetailViewModel: ObservableObject {
     relatedContentTask = nil
     relatedContentChildTasks.forEach { $0.cancel() }
     relatedContentChildTasks.removeAll()
+    doubanDiscussionTasks.values.forEach { $0.cancel() }
+    doubanDiscussionTasks.removeAll()
     actorsPaginator.cancel()
     recommendPaginator.cancel()
     similarPaginator.cancel()
+    doubanCommentsPaginator.cancel()
+    doubanReviewsPaginator.cancel()
     preloadTask = nil
   }
 

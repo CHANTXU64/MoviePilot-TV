@@ -109,6 +109,8 @@ struct MediaDetailView: View {
   @State private var sheetSubscribe: Subscribe?
   @State private var showUnsubscribeConfirm = false
   @State private var unsubscribeConfirmationMessage = ""
+  /// 当前打开的豆瓣短评/影评详情
+  @State private var selectedDoubanDiscussion: DoubanDiscussionEntry?
   /// 推荐区预加载防抖任务
   @State private var recommendPreloadDebounce: Task<Void, Never>?
   /// 相似区预加载防抖任务
@@ -122,6 +124,9 @@ struct MediaDetailView: View {
   @FocusState private var focusedRecommendId: MediaInfo.ID?
   @FocusState private var focusedSimilarId: MediaInfo.ID?
   @FocusState private var focusedActorId: Person.ID?
+  /// 豆瓣区块的焦点：条目 ID，或没有条目时的状态卡 `doubanStatusFocusID`。
+  @FocusState private var focusedDiscussionId: String?
+  @FocusState private var focusedDiscussionKind: DoubanDiscussionEntry.Kind?
   @FocusState private var isHeroFocused: Bool
   @FocusState private var isContentFocused: Bool
   enum ButtonField {
@@ -155,6 +160,23 @@ struct MediaDetailView: View {
       canSearchResources: canSearchResources
     )
   }
+
+  /// 豆瓣短评/影评的入口条件：后端版本 >= v3.2.1、有豆瓣 ID、类型是电影或电视剧。
+  /// 条件在请求前后都会重新求值，读不出版本时按「隐藏并不可发请求」处理。
+  private var isDoubanDiscussionEligible: Bool {
+    DoubanDiscussionAvailability.isEligible(
+      detail: viewModel.detail,
+      backendVersion: apiService.settings?.BACKEND_VERSION
+    )
+  }
+
+  /// 区块实际是否渲染：入口条件满足，且至少一类处于加载中、失败或有内容。
+  private var showsDoubanDiscussionSection: Bool {
+    isDoubanDiscussionEligible && viewModel.isDoubanDiscussionSectionVisible
+  }
+
+  private static let doubanStatusFocusID = "douban-discussion-status"
+  private static let doubanRowStartID = "douban-discussion-row-start"
 
   private var preferredHeaderFocus: ButtonField? {
     if canSubscribeMedia { return .subscribe }
@@ -203,6 +225,9 @@ struct MediaDetailView: View {
     }
     if !viewModel.uniqueDirectors.isEmpty {
       return "directors"
+    }
+    if showsDoubanDiscussionSection {
+      return "doubanDiscussion"
     }
     if !viewModel.recommendPaginator.items.isEmpty {
       return "recommendations"
@@ -399,6 +424,7 @@ struct MediaDetailView: View {
               seasonSubscriptionSection
               actorsSection
               directorsSection
+              doubanDiscussionSection
               recommendationsSection
               similarSection
             }
@@ -489,6 +515,8 @@ struct MediaDetailView: View {
       }
       // 重新激活时自动恢复成功空终态的推荐/相似/演员区域
       await viewModel.refreshSuccessEmptySections()
+      // 进详情页就拉短评/影评第一页（不预载）；版本等条件晚到时由这里补发。
+      viewModel.loadDoubanDiscussionIfNeeded()
     }
     .task(id: allowsRequests) {
       guard allowsRequests else { return }
@@ -598,15 +626,29 @@ struct MediaDetailView: View {
       sheetSubscribe = nil
       showSiteSelection = false
       showUnsubscribeConfirm = false
+      selectedDoubanDiscussion = nil
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler)
     .sheet(isPresented: $showSiteSelection) {
       SearchSiteSelectionSheet(viewModel: viewModel.siteFilter)
     }
+    // 短评/影评详情：正文长文靠段落焦点停靠点驱动纵向滚动，不用浏览器打开豆瓣链接。
+    .sheet(item: $selectedDoubanDiscussion) { entry in
+      DoubanDiscussionDetailSheet(
+        entry: entry,
+        avatarURL: apiService.getDoubanCommentAvatarImageUrl(entry.avatar)
+      )
+    }
     .onChange(of: focusedButton) { _, newValue in
       if let newValue = newValue {
         lastFocusedButton = newValue
       }
+    }
+    // 设置为晚到（例如启动后才拿到 BACKEND_VERSION）或详情后到时补发首屏请求；
+    // 请求成功后 `loadDoubanDiscussionIfNeeded` 自己不会再重发。
+    .onChange(of: isDoubanDiscussionEligible) { _, eligible in
+      guard eligible, allowsRequests else { return }
+      viewModel.loadDoubanDiscussionIfNeeded()
     }
     .background(PresentationReadyAction(
       isEnabled: presentationStyle == .direct && !hasAppeared && allowsRequests
@@ -1277,6 +1319,95 @@ struct MediaDetailView: View {
         .scrollClipDisabled()
         .focusSection()
       }
+    }
+  }
+
+  /// 豆瓣「短评 / 影评」区块：顶部胶囊切换分类，下面是当前分类的横向卡片。
+  /// 入口条件（版本 / 豆瓣 ID / 类型）不满足时整块不渲染，也不会发请求。
+  @ViewBuilder
+  private var doubanDiscussionSection: some View {
+    if showsDoubanDiscussionSection {
+      let kind = viewModel.doubanDiscussionKind
+      let paginator = viewModel.doubanPaginator(for: kind)
+      VStack(alignment: .leading, spacing: 0) {
+        if showContentPage || firstVisibleRow != "doubanDiscussion" {
+          HStack(spacing: 20) {
+            ForEach(DoubanDiscussionEntry.Kind.allCases, id: \.self) { option in
+              ShelfChip(
+                title: option.title,
+                isSelected: option == kind,
+                isFocused: focusedDiscussionKind == option
+              ) {
+                viewModel.selectDoubanDiscussion(option)
+              }
+              .focused($focusedDiscussionKind, equals: option)
+            }
+          }
+          .font(.callout)
+          .padding(.leading, 81)
+          // 撑满整行再设 focusSection：从右侧卡片向上移时，正上方也属于胶囊区，焦点不会越过它。
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .focusSection()
+          .transition(.opacity.combined(with: .move(edge: .bottom)))
+        }
+
+        ScrollViewReader { proxy in
+          ScrollView(.horizontal, showsIndicators: false) {
+            LazyHStack(spacing: 40) {
+              if paginator.items.isEmpty {
+                // 加载中 / 失败 / 为空共用同一个状态卡，状态变化时焦点不丢。
+                DoubanDiscussionStatusCard(
+                  kind: kind,
+                  status: doubanStatus(for: viewModel.doubanRowState(for: kind)),
+                  onRetry: { viewModel.retryDoubanDiscussion() }
+                )
+                .focused($focusedDiscussionId, equals: Self.doubanStatusFocusID)
+              } else {
+                ForEach(paginator.items) { entry in
+                  DoubanDiscussionCard(
+                    entry: entry,
+                    avatarURL: apiService.getDoubanCommentAvatarImageUrl(entry.avatar),
+                    onTap: { selectedDoubanDiscussion = entry }
+                  )
+                  .focused($focusedDiscussionId, equals: entry.id)
+                }
+                if paginator.isLoadingMore {
+                  posterCenteredLoadingIndicator(height: DoubanDiscussionCard.cardHeight)
+                }
+              }
+            }
+            .id(Self.doubanRowStartID)
+            .padding(.horizontal, 81)
+            .padding(.top, 30)
+            .padding(.bottom, 40)
+          }
+          .scrollClipDisabled()
+          .focusSection()
+          // 切换分类后从头展示，避免沿用上一类的横向滚动位置。
+          .onChange(of: kind) { _, _ in
+            proxy.scrollTo(Self.doubanRowStartID, anchor: .leading)
+          }
+        }
+        .onChange(of: focusedDiscussionId) { _, newId in
+          guard let newId, newId != Self.doubanStatusFocusID else { return }
+          Task { await viewModel.doubanPaginator(for: kind).loadMore(newId) }
+        }
+        // 焦点停在状态卡上时内容到了：把焦点交给第一张卡，状态卡被移除时焦点不会跳出本区块。
+        .onChange(of: paginator.items.first?.id) { _, firstId in
+          guard let firstId, focusedDiscussionId == Self.doubanStatusFocusID else { return }
+          focusedDiscussionId = firstId
+        }
+      }
+    }
+  }
+
+  private func doubanStatus(
+    for state: DoubanDiscussionRowState
+  ) -> DoubanDiscussionStatusCard.Status {
+    switch state {
+    case .failed: return .failed
+    case .empty: return .empty
+    case .idle, .loading, .ready: return .loading
     }
   }
 

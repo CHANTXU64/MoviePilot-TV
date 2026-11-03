@@ -134,14 +134,27 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("presenting: updateNotice"))
   }
 
-  func testChangelogSheetUsesReadableTvOSLayout() throws {
+  func testChangelogSheetUsesSharedReadingSheetInSource() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
 
-    XCTAssertTrue(source.contains(".frame(width: 1_440, height: 1_025)"))
-    XCTAssertTrue(source.contains(".font(.callout)"))
-    XCTAssertTrue(source.contains(".font(isPrimary ? .headline.bold() : .subheadline.bold())"))
-    XCTAssertTrue(source.contains("Text(entry.releaseDate)"))
+    XCTAssertTrue(source.contains("ReadingSheet(title: entry.version, blocks: Self.changelogBlocks(entry))"))
     XCTAssertTrue(source.contains("value: \"\\(entry.releaseDate) · MoviePilot \\(entry.compatibleMoviePilotVersion)\""))
+  }
+
+  /// 更新历史详情：发布日期在最前，空小节不出现，条目带「•」前缀。
+  func testChangelogBlocksListDateThenNonEmptySections() {
+    let entry = AppChangelogEntry(
+      version: "v9.9.9",
+      releaseDate: "2026-11-03",
+      compatibleMoviePilotVersion: "v3.2.3",
+      highlights: ["亮点"],
+      updates: [],
+      fixes: ["修复一", "修复二"],
+      optimizations: []
+    )
+    let blocks = SystemView.changelogBlocks(entry)
+    XCTAssertEqual(blocks.map { String($0.text.characters) }, ["2026-11-03", "更新内容", "• 亮点", "修复", "• 修复一", "• 修复二"])
+    XCTAssertEqual(blocks.map(\.style), [.secondary, .heading, .secondary, .heading, .secondary, .secondary])
   }
 
   func testReleaseWorkflowUsesMainChangelogAsReleaseNotesSource() throws {
@@ -268,11 +281,10 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains(".lineLimit(6)"))
     XCTAssertTrue(source.contains("@ObservedObject var viewModel: LogViewerViewModel"))
     XCTAssertTrue(source.contains("struct LogRecordDetailSheet: View"))
-    XCTAssertTrue(source.contains(".frame(width: 1_440, height: 1_025)"))
+    XCTAssertTrue(source.contains("ReadingSheet("))
     XCTAssertFalse(source.contains("@StateObject"))
     XCTAssertFalse(source.contains(".sheet("))
     XCTAssertTrue(source.contains("Text(record.message)"))
-    XCTAssertTrue(source.contains(".fixedSize(horizontal: false, vertical: true)"))
     XCTAssertTrue(source.contains(".font(.caption.weight(.semibold))"))
     XCTAssertFalse(source.contains("record.fileName"))
     XCTAssertFalse(source.contains("record.function"))

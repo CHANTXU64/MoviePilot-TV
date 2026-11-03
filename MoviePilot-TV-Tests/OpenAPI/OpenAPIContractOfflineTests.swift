@@ -1541,6 +1541,29 @@ final class OpenAPIContractCatalogIntegrityTests: XCTestCase {
     }
   }
 
+  /// 豆瓣短评/影评只在 TV 实际会调用的后端版本（v3.2.1 起）登记；更低、缺失或读不出的版本
+  /// TV 不调用，登记了会把「未登记后端版本」误报成已调用端点。
+  func testDoubanDiscussionCatalogFollowsVersionGate() {
+    let expectations: [(String?, Bool)] = [
+      (nil, false), ("unknown", false), ("v3.0.8", false), ("v3.1.7", false), ("v3.2.0", false),
+      ("v3.2.1", true), ("v3.2.1-1", true), ("v3.2.3", true), ("v3.3.0", true),
+    ]
+    for (version, registered) in expectations {
+      let discussion = TVAPIContractCatalog.operations(backendVersion: version).filter {
+        $0.pathTemplate == "/douban/interests/{doubanid}/{type_name}"
+          || $0.pathTemplate == "/douban/reviews/{doubanid}/{type_name}"
+      }
+      XCTAssertEqual(discussion.count, registered ? 2 : 0, version ?? "nil")
+      for operation in discussion {
+        XCTAssertEqual(
+          Set(operation.parameters.filter { $0.location == .query }.map(\.name)),
+          ["start", "count"],
+          version ?? "nil"
+        )
+      }
+    }
+  }
+
   func testSubtitleStreamsNeverUseTorrentPagingParameters() {
     for version: String? in [nil, "unknown", "v3.0.8", "v3.1.2-1", "v3.1.5"] {
       let streams = TVAPIContractCatalog.operations(backendVersion: version).filter {

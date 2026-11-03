@@ -126,43 +126,34 @@ struct LogRecordDetailSheet: View {
   let record: LogRecord
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 24) {
-        HStack(alignment: .firstTextBaseline) {
-          Text(record.level.prefix)
-            .font(.title2.bold())
-            .foregroundStyle(logLevelColor(record.level))
-          Spacer()
-          Text(LogDisplayFormatting.timestamp.string(from: record.timestamp))
-            .font(.callout)
-            .foregroundStyle(.secondary)
-        }
+    ReadingSheet(
+      title: record.level.prefix,
+      titleColor: logLevelColor(record.level),
+      blocks: Self.blocks(for: record)
+    )
+  }
 
-        Divider()
-
-        Text(record.message)
-          .font(.callout)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .fixedSize(horizontal: false, vertical: true)
-
-        if let metadata = record.metadata, !metadata.isEmpty {
-          VStack(alignment: .leading, spacing: 8) {
-            Text("metadata")
-              .font(.subheadline.bold())
-            ForEach(metadata.keys.sorted(), id: \.self) { key in
-              Text("\(key): \(metadata[key] ?? "")")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-          }
-        }
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.horizontal, 72)
-      .padding(.vertical, 54)
+  /// 日志详情的正文：时间在最前，然后是消息，最后是 metadata 的「键: 值」。
+  static func blocks(for record: LogRecord) -> [ReadingBlock] {
+    var blocks = [
+      ReadingBlock(LogDisplayFormatting.timestamp.string(from: record.timestamp), style: .secondary)
+    ]
+    // 消息按行拆成连续的续段：保留行首缩进（堆栈、JSON），行与行之间不加段落间距。
+    let lines = record.message
+      .replacingOccurrences(of: "\r\n", with: "\n")
+      .split(separator: "\n", omittingEmptySubsequences: false)
+      .map(String.init)
+      .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+    blocks += lines.enumerated().map { index, line in
+      ReadingBlock(AttributedString(line), style: .body, startsParagraph: index == 0)
     }
-    .frame(width: 1_440, height: 1_025)
+    if let metadata = record.metadata, !metadata.isEmpty {
+      blocks.append(ReadingBlock("metadata", style: .heading))
+      blocks += metadata.keys.sorted().map {
+        ReadingBlock("\($0): \(metadata[$0] ?? "")", style: .secondary)
+      }
+    }
+    return blocks
   }
 }
 
