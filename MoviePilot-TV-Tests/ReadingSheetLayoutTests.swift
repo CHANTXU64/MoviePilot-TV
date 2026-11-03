@@ -92,6 +92,14 @@ final class ReadingSheetLayoutTests: XCTestCase {
     XCTAssertEqual(pieces.map { String($0.text.characters) }.joined(separator: "\n"), reason)
   }
 
+  /// 换行处拆块时片内空行原样保留，各片用换行拼回去就是原文。
+  func testSplitLinesKeepsBlankLines() {
+    let text = "请求失败\n\nTraceback:\n  at foo()\n\n  at bar()\n  at baz()"
+    let pieces = ReadingSheetLayout.splitLines(AttributedString(text), charactersPerLine: 40, maxLines: 3)
+    XCTAssertGreaterThan(pieces.count, 1)
+    XCTAssertEqual(pieces.map { String($0.characters) }.joined(separator: "\n"), text)
+  }
+
   /// 多行文本里单独一行就超出预算时，那一行再按字数拆，其余行仍按换行分组。
   func testOverlongLineInsideMultilineTextIsSplitByCharacters() {
     let long = String(repeating: "z", count: 100)
@@ -100,18 +108,25 @@ final class ReadingSheetLayoutTests: XCTestCase {
     XCTAssertEqual(pieces.map { String($0.characters) }, ["head", String(repeating: "z", count: 30), String(repeating: "z", count: 30), String(repeating: "z", count: 30), String(repeating: "z", count: 10), "tail"])
   }
 
-  /// 超长的单行日志拆开后，第一片保留行首缩进；后续片段只去掉断点处的空白。
-  func testSplitKeepsLeadingIndentation() {
+  /// 超长的单行日志拆开后不删任何字符：第一片保留行首缩进，断点处的空白留在上一片末尾，
+  /// 下一片从非空白字符开始，拼起来与原文逐字相同。
+  func testSplitKeepsEveryCharacter() {
     // 4 个空格缩进 + 36 个 x 正好 40 字，在第 40 字处硬切，断点后面是一串空格。
     let line = "    " + String(repeating: "x", count: 36) + "    " + String(repeating: "y", count: 20)
     let pieces = ReadingSheetLayout.split(AttributedString(line), maxCharacters: 40)
     XCTAssertEqual(pieces.count, 2)
-    XCTAssertEqual(String(pieces[0].characters), "    " + String(repeating: "x", count: 36))
+    XCTAssertEqual(String(pieces[0].characters), "    " + String(repeating: "x", count: 36) + "    ")
     XCTAssertEqual(String(pieces[1].characters), String(repeating: "y", count: 20))
-    XCTAssertEqual(
-      pieces.map { String($0.characters) }.joined().filter { !$0.isWhitespace },
-      line.filter { !$0.isWhitespace }
-    )
+    XCTAssertEqual(pieces.map { String($0.characters) }.joined(), line)
+  }
+
+  /// 在两个单词之间断开时，单词间的空格不丢（路径、日志要能逐字核对）。
+  func testSplitBetweenWordsKeepsSpace() {
+    let text = "/volume1/Movies/Some Title (2024)/Some Title (2024) - 2160p.mkv"
+    let pieces = ReadingSheetLayout.split(AttributedString(text), maxCharacters: 20)
+    XCTAssertGreaterThan(pieces.count, 1)
+    XCTAssertEqual(pieces.map { String($0.characters) }.joined(), text)
+    XCTAssertTrue(pieces.dropFirst().allSatisfy { $0.characters.first?.isWhitespace == false })
   }
 
   /// 富文本按换行拆段时保留属性（AniList 简介是 Markdown）。
@@ -123,15 +138,18 @@ final class ReadingSheetLayoutTests: XCTestCase {
     XCTAssertEqual(bold, .stronglyEmphasized)
   }
 
-  /// 纯文本拆段：统一换行符，去掉空段与首尾空白。
+  /// 纯文本拆段：只在空行处分段，单个换行留在段内；统一换行符，去掉每段首尾空白。
   func testPlainParagraphs() {
-    XCTAssertEqual(ReadingSheetLayout.paragraphs("一\r\n\r\n  二 \r三\n"), ["一", "二", "三"])
+    XCTAssertEqual(ReadingSheetLayout.paragraphs("一\r\n\r\n  二 \r三\n"), ["一", "二 \n三"])
     XCTAssertEqual(ReadingSheetLayout.paragraphs("   \n"), [])
+    XCTAssertEqual(ReadingSheetLayout.paragraphs("A\nB"), ["A\nB"])
+    XCTAssertEqual(ReadingSheetLayout.paragraphs("A\n\nB"), ["A", "B"])
+    XCTAssertEqual(ReadingSheetLayout.paragraphs("A\n \n\n\nB"), ["A", "B"])
     XCTAssertEqual(ReadingSheetLayout.chunks([], charactersPerLine: 10), [])
   }
 
-  /// 日志详情：时间在前，消息按行成为连续续段并保留缩进，metadata 按键排序。
-  func testLogDetailBlocksKeepMessageLines() {
+  /// 日志详情：时间在前，消息整段原样（空行、缩进都保留），metadata 按键排序。
+  func testLogDetailBlocksKeepMessageVerbatim() {
     let record = LogRecord(
       id: UUID(),
       timestamp: Date(timeIntervalSince1970: 0),
@@ -144,8 +162,7 @@ final class ReadingSheetLayoutTests: XCTestCase {
     )
     let blocks = LogRecordDetailSheet.blocks(for: record)
     let bodies = blocks.filter { $0.style == .body }
-    XCTAssertEqual(bodies.map { String($0.text.characters) }, ["请求失败", "  at foo()", "  at bar()"])
-    XCTAssertEqual(bodies.map(\.startsParagraph), [true, false, false])
+    XCTAssertEqual(bodies.map { String($0.text.characters) }, ["请求失败\n  at foo()\n\n  at bar()"])
     XCTAssertEqual(blocks.first?.style, .secondary)
     XCTAssertEqual(blocks.suffix(3).map { String($0.text.characters) }, ["metadata", "a: 1", "b: 2"])
   }

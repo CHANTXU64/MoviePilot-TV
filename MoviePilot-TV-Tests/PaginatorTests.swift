@@ -1075,6 +1075,26 @@ final class PaginatorTests: XCTestCase {
     XCTAssertEqual(probe.cursors.count, 1)
   }
 
+  /// 有 total 时整批都是已见过的条目也不判到底：偏移照样推进，继续向后取到新内容为止。
+  @MainActor
+  func testDuplicateBatchesDoNotEndListBeforeTotal() async {
+    let probe = CursorProbe()
+    let paginator = totalPaginator(probe: probe) { cursor in
+      // 偏移 10、20 两批都是第一批的重复，偏移 30 才有新评论。
+      let base = (cursor.offset == 10 || cursor.offset == 20) ? 0 : cursor.offset
+      return PaginatedBatch(items: (base..<base + 10).map { TestItem(id: $0) }, total: 40)
+    }
+
+    await paginator.refresh()
+    XCTAssertEqual(paginator.items.count, 10)
+    await paginator.loadMore()
+
+    XCTAssertEqual(probe.cursors.map(\.offset), [0, 10, 20, 30])
+    XCTAssertEqual(paginator.items.map(\.id), Array(0..<10) + Array(30..<40))
+    XCTAssertFalse(paginator.hasMore, "累计 40 条达到 total")
+    XCTAssertFalse(paginator.hasError)
+  }
+
   /// total 缺失时仍按空批次判终。
   @MainActor
   func testMissingTotalFallsBackToEmptyBatch() async {

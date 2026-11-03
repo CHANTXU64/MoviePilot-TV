@@ -71,21 +71,44 @@ nonisolated enum ReadingSheetLayout {
     return max(1, charactersPerLine - labelCharacters)
   }
 
-  /// 按换行拆段，去掉首尾空白与空段。
+  /// 按空行拆段：空行（含只有空白的行）是段落边界，单个换行留在段内作为换行，
+  /// 与 Web 评论正文的 `white-space: pre-line` 一致，`A\nB` 与 `A\n\nB` 显示不同。
+  /// 每段去掉首尾空白；连续多个空行按一个段落间距显示。
   static func paragraphs(_ text: String) -> [String] {
-    text
+    let normalized = text
       .replacingOccurrences(of: "\r\n", with: "\n")
       .replacingOccurrences(of: "\r", with: "\n")
-      .split(separator: "\n", omittingEmptySubsequences: false)
-      .map { $0.trimmingCharacters(in: .whitespaces) }
-      .filter { !$0.isEmpty }
+    return paragraphs(AttributedString(normalized)).map { String($0.characters) }
   }
 
   /// 富文本版本：保留 AniList Markdown 等富文本属性。
   static func paragraphs(_ text: AttributedString) -> [AttributedString] {
-    text.characters
-      .split(whereSeparator: \.isNewline)
-      .compactMap { slice in trimmed(text[slice.startIndex..<slice.endIndex]) }
+    let characters = text.characters
+    var result: [AttributedString] = []
+    var paragraphStart: AttributedString.Index?
+    var paragraphEnd = characters.startIndex
+
+    func flush() {
+      if let start = paragraphStart, let paragraph = trimmed(text[start..<paragraphEnd]) {
+        result.append(paragraph)
+      }
+      paragraphStart = nil
+    }
+
+    var lineStart = characters.startIndex
+    while true {
+      let lineEnd = characters[lineStart...].firstIndex(where: \.isNewline) ?? characters.endIndex
+      if characters[lineStart..<lineEnd].contains(where: { !$0.isWhitespace }) {
+        if paragraphStart == nil { paragraphStart = lineStart }
+        paragraphEnd = lineEnd
+      } else {
+        flush()
+      }
+      guard lineEnd < characters.endIndex else { break }
+      lineStart = characters.index(after: lineEnd)
+    }
+    flush()
+    return result
   }
 
   /// 把内容分成焦点停靠块：先拆超长段落，再把相邻段落按行数预算合并。
@@ -149,7 +172,8 @@ nonisolated enum ReadingSheetLayout {
   /// 把超过行数预算的文本拆成多片，每片不超过 `maxLines` 行。
   ///
   /// 先在显式换行处断开（整段传入的失败原因、日志 metadata 常是多行短文本），
-  /// 断开处保留下一行的行首缩进；单独一行就超出预算时，再交给 `split(_:maxCharacters:)` 按字数拆。
+  /// 断开处保留下一行的行首缩进，片内的空行原样保留；单独一行就超出预算时，再交给
+  /// `split(_:maxCharacters:)` 按字数拆。各片用换行拼回去就是原文。
   static func splitLines(
     _ text: AttributedString,
     charactersPerLine: Int,
@@ -166,8 +190,8 @@ nonisolated enum ReadingSheetLayout {
     var pieceLines = 0
 
     func flush() {
-      if let start = pieceStart, let piece = nonBlank(text[start..<pieceEnd]) {
-        pieces.append(piece)
+      if let start = pieceStart {
+        pieces.append(AttributedString(text[start..<pieceEnd]))
       }
       pieceStart = nil
       pieceLines = 0
@@ -196,8 +220,8 @@ nonisolated enum ReadingSheetLayout {
 
   /// 把超长文本拆成不超过 `maxCharacters` 的片段，优先在句末断开；找不到句末时硬切。
   ///
-  /// 只去掉断点处的空白：第一片保留原有行首缩进（日志里的 JSON、堆栈），
-  /// 后续片段去掉断点后的前导空白，片尾空白不影响显示。
+  /// 不删任何字符：各片按顺序拼起来就是原文（日志、路径要能逐字核对）。断点后紧跟的空白
+  /// 留在上一片末尾，下一片从非空白字符开始；片尾空白不占显示宽度。
   static func split(_ text: AttributedString, maxCharacters: Int) -> [AttributedString] {
     let limit = max(1, maxCharacters)
     let characters = text.characters
@@ -206,13 +230,9 @@ nonisolated enum ReadingSheetLayout {
     var pieces: [AttributedString] = []
     var start = characters.startIndex
     while start < characters.endIndex {
-      if !pieces.isEmpty {
-        guard let next = characters[start...].firstIndex(where: { !$0.isWhitespace }) else { break }
-        start = next
-      }
       let remaining = characters.distance(from: start, to: characters.endIndex)
       if remaining <= limit {
-        if let piece = nonBlank(text[start..<characters.endIndex]) { pieces.append(piece) }
+        pieces.append(AttributedString(text[start..<characters.endIndex]))
         break
       }
       let hardEnd = characters.index(start, offsetBy: limit)
@@ -227,7 +247,10 @@ nonisolated enum ReadingSheetLayout {
         }
         index = previous
       }
-      if let piece = nonBlank(text[start..<cut]) { pieces.append(piece) }
+      while cut < characters.endIndex, characters[cut].isWhitespace {
+        cut = characters.index(after: cut)
+      }
+      pieces.append(AttributedString(text[start..<cut]))
       start = cut
     }
     return pieces
@@ -236,12 +259,6 @@ nonisolated enum ReadingSheetLayout {
   private static let sentenceTerminators: Set<Character> = [
     "。", "！", "？", "；", "…", ".", "!", "?", ";",
   ]
-
-  /// 原样保留片段（含空白），整段都是空白时丢弃。
-  private static func nonBlank(_ substring: AttributedSubstring) -> AttributedString? {
-    guard substring.characters.contains(where: { !$0.isWhitespace }) else { return nil }
-    return AttributedString(substring)
-  }
 
   private static func trimmed(_ substring: AttributedSubstring) -> AttributedString? {
     let characters = substring.characters

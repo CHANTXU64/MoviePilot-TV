@@ -203,7 +203,8 @@ final class DoubanDiscussionAvailabilityTests: XCTestCase {
     XCTAssertEqual(entry.kind, .review)
     XCTAssertEqual(entry.title, "标题在作者名下面")
     XCTAssertEqual(entry.body, "摘要第一段\n摘要第二段")
-    XCTAssertEqual(entry.paragraphs, ["摘要第一段", "摘要第二段"])
+    // 单个换行留在段内（与 Web 的 pre-line 一致），只有空行才分段。
+    XCTAssertEqual(entry.paragraphs, ["摘要第一段\n摘要第二段"])
     XCTAssertEqual(entry.ratingText, "3.5")
     XCTAssertEqual(entry.usefulText, "5 有用")
     XCTAssertEqual(entry.id, "review:r1")

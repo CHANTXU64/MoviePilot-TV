@@ -317,12 +317,19 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     }
 
     // 不是错误重试次数；用于跳过少量只包含已知项目的页面，继续向后寻找新内容。
+    // 没有 total 时连续两批都是已知项目就当作到底（无法判断后面还有没有）；
+    // 有 total 时偏移每批都在前进，继续向后扫描直到取到新内容或累计达到 total，
+    // 上限只是防止异常数据长时间连发请求，到达上限也不判到底。
     let maxPagesToScanForNewContent = 2
+    let maxPagesToScanTowardTotal = 20
     var pagesScannedForNewContent = 0
     var hasNewContent = false
     var currentError: Error? = nil
 
-    while pagesScannedForNewContent < maxPagesToScanForNewContent, hasMore, !hasNewContent {
+    while pagesScannedForNewContent
+      < (total == nil ? maxPagesToScanForNewContent : maxPagesToScanTowardTotal),
+      hasMore, !hasNewContent
+    {
       pagesScannedForNewContent += 1
 
       do {
@@ -370,7 +377,10 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     }
 
     if !hasNewContent && currentError == nil {
-      hasMore = false
+      // 有 total 时是否到底只看累计条数与空批次（循环内已处理），不因整批重复而终止。
+      if total == nil {
+        hasMore = false
+      }
     } else if let error = currentError {
       if !hasError {
         hasError = true

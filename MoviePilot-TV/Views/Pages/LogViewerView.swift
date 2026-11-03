@@ -138,15 +138,10 @@ struct LogRecordDetailSheet: View {
     var blocks = [
       ReadingBlock(LogDisplayFormatting.timestamp.string(from: record.timestamp), style: .secondary)
     ]
-    // 消息按行拆成连续的续段：保留行首缩进（堆栈、JSON），行与行之间不加段落间距。
-    let lines = record.message
-      .replacingOccurrences(of: "\r\n", with: "\n")
-      .split(separator: "\n", omittingEmptySubsequences: false)
-      .map(String.init)
-      .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-    blocks += lines.enumerated().map { index, line in
-      ReadingBlock(AttributedString(line), style: .body, startsParagraph: index == 0)
-    }
+    // 消息整段原样显示：空行、行首缩进（堆栈、JSON）都保留；
+    // 太长时由 `ReadingSheetLayout.chunks` 在换行处拆成焦点块。
+    let message = record.message.replacingOccurrences(of: "\r\n", with: "\n")
+    blocks.append(ReadingBlock(AttributedString(message), style: .body))
     if let metadata = record.metadata, !metadata.isEmpty {
       blocks.append(ReadingBlock("metadata", style: .heading))
       blocks += metadata.keys.sorted().map {
