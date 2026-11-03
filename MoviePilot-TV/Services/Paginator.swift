@@ -1,6 +1,17 @@
 import Combine
 import Foundation
 
+/// 一页分页结果：条目，以及后端声明的总条数（可选）。
+struct PaginatedBatch<Item> {
+  let items: [Item]
+  let total: Int?
+
+  init(items: [Item], total: Int? = nil) {
+    self.items = items
+    self.total = total
+  }
+}
+
 @MainActor
 public class Paginator<ItemType: Identifiable>: ObservableObject {
   /// Paginator 实例保持稳定 UUID；reset/refresh 推进内容代际，普通尾部追加保持不变。
@@ -35,6 +46,9 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   /// 记录最后一次发生的错误，用于向用户展示或日志排查。
   @Published public private(set) var lastError: Error?
 
+  /// 后端最近一次声明的总条数；接口不提供或尚未加载时为 nil，刷新时清空。
+  @Published private(set) var total: Int?
+
   // MARK: - 私有状态
 
   private var page: Int = 1
@@ -47,7 +61,11 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   private let maxRestartRoundsPerSequence: Int = 5
 
   /// 获取一页项目的函数。
-  private let fetcher: @MainActor (Int) async throws -> [ItemType]
+  private let fetcher: @MainActor (Int) async throws -> PaginatedBatch<ItemType>
+
+  /// 每页条数。与 `total` 一起判断是否已到底：已取页数 × 每页条数 ≥ total 时不再请求。
+  /// 为 nil 时只按空批次判终。
+  private let pageSize: Int?
 
   /// 提前触发服务端缓存的图片 URL 函数；不会在 Apple TV 下载或解码图片。
   private let imageWarmURLsProvider: (@MainActor (ItemType) -> [URL])?
@@ -81,7 +99,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   ///                处理它们，并在添加了新内容时返回 `true`。
   ///   - onReset: 一个可选的闭包，用于在“重置”期间运行自定义的状态清除逻辑。
   /// 参数含内部类型，本 App 单模块使用，初始化器保持内部访问级别。
-  init(
+  convenience init(
     listID: UUID = UUID(),
     threshold: Int,
     fetcher: @escaping @MainActor (Int) async throws -> [ItemType],
@@ -92,9 +110,38 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     preparedFirstPage: [ItemType]? = nil,
     onReset: (() -> Void)? = nil
   ) {
+    self.init(
+      listID: listID,
+      threshold: threshold,
+      pageSize: nil,
+      pageFetcher: { page in PaginatedBatch(items: try await fetcher(page)) },
+      processor: processor,
+      imageWarmer: imageWarmer,
+      imageWarmURLsProvider: imageWarmURLsProvider,
+      imageWarmThreshold: imageWarmThreshold,
+      preparedFirstPage: preparedFirstPage,
+      onReset: onReset
+    )
+  }
+
+  /// 接口返回总条数时使用：`pageSize` 与每页 `total` 一起判断是否已到底，
+  /// 到底后不再多发一次空请求；`total` 缺失时仍按空批次判终。
+  init(
+    listID: UUID = UUID(),
+    threshold: Int,
+    pageSize: Int?,
+    pageFetcher: @escaping @MainActor (Int) async throws -> PaginatedBatch<ItemType>,
+    processor: @escaping @MainActor (inout [ItemType], [ItemType]) -> Bool,
+    imageWarmer: MPImageWarmer? = nil,
+    imageWarmURLsProvider: (@MainActor (ItemType) -> [URL])? = nil,
+    imageWarmThreshold: Int? = nil,
+    preparedFirstPage: [ItemType]? = nil,
+    onReset: (() -> Void)? = nil
+  ) {
     self.listIdentity = GridListIdentity.make(id: listID)
     self.threshold = threshold
-    self.fetcher = fetcher
+    self.fetcher = pageFetcher
+    self.pageSize = pageSize.flatMap { $0 > 0 ? $0 : nil }
     self.processor = processor
     self.imageWarmURLsProvider = imageWarmURLsProvider
     self.imageWarmer = imageWarmer
@@ -261,10 +308,15 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
       pagesScannedForNewContent += 1
 
       do {
-        let newItems = try await fetcher(page)
+        let batch = try await fetcher(page)
+        let newItems = batch.items
 
         // 挂起恢复后检查：generation 变化说明已被 reset，丢弃结果
         guard currentGeneration == generation, !Task.isCancelled else { return }
+
+        if let batchTotal = batch.total, batchTotal >= 0, total != batchTotal {
+          total = batchTotal
+        }
 
         consecutiveErrorCount = 0
         clearErrorState()
@@ -280,6 +332,11 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
 
         page += 1
         currentError = nil
+
+        // 已取的页数覆盖了后端声明的总数：到底了，不再多发一次空请求。
+        if let pageSize, let total, (page - 1) * pageSize >= total {
+          hasMore = false
+        }
       } catch {
         if Task.isCancelled || error is CancellationError {
           return
@@ -334,6 +391,9 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     isFirstLoading = false
     isLoadingMore = false
     hasMore = true
+    if total != nil {
+      total = nil
+    }
     clearErrorState()
     page = 1
     consecutiveErrorCount = 0

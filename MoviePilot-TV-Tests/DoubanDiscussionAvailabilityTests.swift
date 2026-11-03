@@ -65,6 +65,7 @@ final class DoubanDiscussionAvailabilityTests: XCTestCase {
 
   private func state(
     requested: Bool = true,
+    inFlight: Bool = false,
     items: Int = 0,
     firstLoading: Bool = false,
     error: Bool = false,
@@ -72,6 +73,7 @@ final class DoubanDiscussionAvailabilityTests: XCTestCase {
   ) -> DoubanDiscussionRowState {
     DoubanDiscussionAvailability.rowState(
       hasRequested: requested,
+      isFirstPageInFlight: inFlight,
       itemCount: items,
       isLoadingFirstPage: firstLoading,
       hasError: error,
@@ -82,15 +84,17 @@ final class DoubanDiscussionAvailabilityTests: XCTestCase {
   /// 未请求 / 加载中 / 失败 / 空 / 有内容 必须是互不折叠的五种状态。
   func testRowStateMatrix() {
     XCTAssertEqual(state(requested: false), .idle)
-    XCTAssertEqual(state(firstLoading: true), .loading)
+    XCTAssertEqual(state(inFlight: true, firstLoading: true), .loading)
     XCTAssertEqual(state(error: true), .failed)
     XCTAssertEqual(state(hasMore: false), .empty)
     XCTAssertEqual(state(items: 3), .ready)
     // loadMore 失败时不清空已加载内容，仍按 ready 展示。
     XCTAssertEqual(state(items: 3, error: true), .ready)
-    // 已请求但分页器刚 reset、加载任务还没跑起来：按加载中处理，
+    // 首屏请求进行中、分页器刚 reset 还没开始加载：按加载中处理，
     // 重试时状态卡不会闪成「未请求」而把焦点带出区块。
-    XCTAssertEqual(state(), .loading)
+    XCTAssertEqual(state(inFlight: true), .loading)
+    // 首屏请求已结束却没有结果（被中途取消）：按失败处理，可以重试，不会一直转圈。
+    XCTAssertEqual(state(), .failed)
   }
 
   /// 两类都未请求或都确认为空时整块隐藏；任一类加载中、失败或有内容时展示。
@@ -105,6 +109,16 @@ final class DoubanDiscussionAvailabilityTests: XCTestCase {
     XCTAssertTrue(visible(.empty, .loading))
     XCTAssertTrue(visible(.empty, .ready))
     XCTAssertTrue(visible(.ready, .empty))
+  }
+
+  /// 胶囊文字与 Web 页签一致：优先用 `total`，没有时用已加载条数，0 不显示数量。
+  func testChipTitleShowsCountLikeWeb() {
+    let title = DoubanDiscussionAvailability.chipTitle
+    XCTAssertEqual(title(.comment, 128, 10), "短评 128")
+    XCTAssertEqual(title(.review, nil, 3), "影评 3")
+    XCTAssertEqual(title(.review, nil, 0), "影评")
+    XCTAssertEqual(title(.comment, 0, 0), "短评")
+    XCTAssertEqual(title(.comment, 12873, 10), "短评 12873", "与 Web 一致，原样显示，不加千分位")
   }
 
   // MARK: - 模型与展示

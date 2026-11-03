@@ -131,6 +131,9 @@ nonisolated enum ReadingSheetLayout {
   }
 
   /// 把超长文本拆成不超过 `maxCharacters` 的片段，优先在句末断开；找不到句末时硬切。
+  ///
+  /// 只去掉断点处的空白：第一片保留原有行首缩进（日志里的 JSON、堆栈），
+  /// 后续片段去掉断点后的前导空白，片尾空白不影响显示。
   static func split(_ text: AttributedString, maxCharacters: Int) -> [AttributedString] {
     let limit = max(1, maxCharacters)
     let characters = text.characters
@@ -139,9 +142,13 @@ nonisolated enum ReadingSheetLayout {
     var pieces: [AttributedString] = []
     var start = characters.startIndex
     while start < characters.endIndex {
+      if !pieces.isEmpty {
+        guard let next = characters[start...].firstIndex(where: { !$0.isWhitespace }) else { break }
+        start = next
+      }
       let remaining = characters.distance(from: start, to: characters.endIndex)
       if remaining <= limit {
-        if let piece = trimmed(text[start..<characters.endIndex]) { pieces.append(piece) }
+        if let piece = nonBlank(text[start..<characters.endIndex]) { pieces.append(piece) }
         break
       }
       let hardEnd = characters.index(start, offsetBy: limit)
@@ -156,7 +163,7 @@ nonisolated enum ReadingSheetLayout {
         }
         index = previous
       }
-      if let piece = trimmed(text[start..<cut]) { pieces.append(piece) }
+      if let piece = nonBlank(text[start..<cut]) { pieces.append(piece) }
       start = cut
     }
     return pieces
@@ -165,6 +172,12 @@ nonisolated enum ReadingSheetLayout {
   private static let sentenceTerminators: Set<Character> = [
     "。", "！", "？", "；", "…", ".", "!", "?", ";",
   ]
+
+  /// 原样保留片段（含空白），整段都是空白时丢弃。
+  private static func nonBlank(_ substring: AttributedSubstring) -> AttributedString? {
+    guard substring.characters.contains(where: { !$0.isWhitespace }) else { return nil }
+    return AttributedString(substring)
+  }
 
   private static func trimmed(_ substring: AttributedSubstring) -> AttributedString? {
     let characters = substring.characters

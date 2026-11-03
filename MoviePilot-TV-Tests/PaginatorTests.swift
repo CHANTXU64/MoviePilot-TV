@@ -940,4 +940,103 @@ final class PaginatorTests: XCTestCase {
 
     XCTAssertFalse(paginator.isLoading)
   }
+
+  // MARK: - total 判终
+
+  @MainActor
+  private func totalPaginator(
+    pageSize: Int?,
+    probe: PageProbe,
+    response: @escaping @MainActor (Int) -> PaginatedBatch<TestItem>
+  ) -> Paginator<TestItem> {
+    Paginator<TestItem>(
+      threshold: 1,
+      pageSize: pageSize,
+      pageFetcher: { page in
+        await probe.record(page)
+        return response(page)
+      },
+      processor: { items, newItems in
+        items.append(contentsOf: newItems)
+        return !newItems.isEmpty
+      }
+    )
+  }
+
+  /// 已取页数 × 每页条数达到 total 时到底：不再多发一次空请求，并公布 total。
+  @MainActor
+  func testReachingTotalStopsWithoutExtraRequest() async {
+    let probe = PageProbe()
+    let paginator = totalPaginator(pageSize: 2, probe: probe) { page in
+      PaginatedBatch(items: [TestItem(id: page * 10), TestItem(id: page * 10 + 1)], total: 4)
+    }
+
+    await paginator.refresh()
+    XCTAssertTrue(paginator.hasMore)
+    XCTAssertEqual(paginator.total, 4)
+    await paginator.loadMore()
+    XCTAssertFalse(paginator.hasMore, "第 2 页已覆盖 total=4")
+    await paginator.loadMore()
+
+    let pages = await probe.snapshot()
+    XCTAssertEqual(pages, [1, 2])
+    XCTAssertEqual(paginator.items.count, 4)
+    XCTAssertFalse(paginator.hasError)
+  }
+
+  /// total 缺失时仍按空批次判终。
+  @MainActor
+  func testMissingTotalFallsBackToEmptyBatch() async {
+    let probe = PageProbe()
+    let paginator = totalPaginator(pageSize: 2, probe: probe) { page in
+      PaginatedBatch(items: page <= 2 ? [TestItem(id: page)] : [], total: nil)
+    }
+
+    await paginator.refresh()
+    await paginator.loadMore()
+    await paginator.loadMore()
+    XCTAssertFalse(paginator.hasMore)
+    XCTAssertNil(paginator.total)
+    let pages = await probe.snapshot()
+    XCTAssertEqual(pages, [1, 2, 3])
+  }
+
+  /// 不传 pageSize 时 total 只公布、不参与判终。
+  @MainActor
+  func testTotalWithoutPageSizeDoesNotStopEarly() async {
+    let probe = PageProbe()
+    let paginator = totalPaginator(pageSize: nil, probe: probe) { page in
+      PaginatedBatch(items: [TestItem(id: page)], total: 1)
+    }
+
+    await paginator.refresh()
+    XCTAssertTrue(paginator.hasMore)
+    XCTAssertEqual(paginator.total, 1)
+    await paginator.loadMore()
+    let pages = await probe.snapshot()
+    XCTAssertEqual(pages, [1, 2])
+  }
+
+  /// 刷新时清空旧 total，新一轮按新返回的 total 判终。
+  @MainActor
+  func testRefreshResetsTotal() async {
+    let probe = PageProbe()
+    var currentTotal = 1
+    let paginator = totalPaginator(pageSize: 1, probe: probe) { page in
+      PaginatedBatch(items: [TestItem(id: page)], total: currentTotal)
+    }
+
+    await paginator.refresh()
+    XCTAssertFalse(paginator.hasMore)
+    XCTAssertEqual(paginator.total, 1)
+
+    currentTotal = 3
+    await paginator.refresh()
+    XCTAssertEqual(paginator.total, 3)
+    XCTAssertTrue(paginator.hasMore)
+    await paginator.loadMore()
+    await paginator.loadMore()
+    XCTAssertFalse(paginator.hasMore)
+    XCTAssertEqual(paginator.items.map(\.id), [1, 2, 3])
+  }
 }

@@ -134,9 +134,11 @@ nonisolated struct DoubanReviewPage: Decodable, Sendable {
 /// 影评只是多了 `title` 这一行，避免两套视觉。`usefulCount` 展示为「N 有用」，
 /// 与 Web 的 `media.usefulCount`（`{count} 有用`）一致；Web 不展示回应数，这里同样不展示。
 nonisolated struct DoubanDiscussionEntry: Identifiable, Hashable, Sendable {
-  nonisolated enum Kind: String, CaseIterable, Sendable {
+  nonisolated enum Kind: String, CaseIterable, Identifiable, Sendable {
     case comment
     case review
+
+    var id: String { rawValue }
 
     var title: String {
       switch self {
@@ -272,6 +274,8 @@ nonisolated enum DoubanDiscussionAvailability {
   static let supportedMediaTypes: Set<String> = ["电影", "电视剧"]
   /// 与 Web `MediaCommentView` 的 `PAGE_SIZE` 一致。
   static let pageSize = 10
+  /// 焦点落到已加载列表的最后几张卡之内时加载下一页；一屏约显示 3 张卡。
+  static let loadMoreThreshold = 4
 
   static func supports(backendVersion: String?) -> Bool {
     guard let version = MoviePilotVersion(backendVersion),
@@ -300,10 +304,13 @@ nonisolated enum DoubanDiscussionAvailability {
 
   /// 单个分类（短评或影评）的状态。
   ///
-  /// 已请求但分页器还没真正开始（`refresh()` 刚重置、加载任务尚未运行）也算 `.loading`，
-  /// 这样重试时状态卡不会闪成「未请求」而被移出视图树、带走焦点。
+  /// - 首屏请求还在进行（含 `refresh()` 刚重置、分页任务尚未运行的间隙）算 `.loading`，
+  ///   重试时状态卡不会闪成「未请求」而被移出视图树、带走焦点。
+  /// - 首屏请求已结束，却既没有内容、没有报错、也没确认为空：请求被中途取消
+  ///   （会话切换、入口条件失效等），按 `.failed` 处理，用户可以重试，不会一直转圈。
   static func rowState(
     hasRequested: Bool,
+    isFirstPageInFlight: Bool,
     itemCount: Int,
     isLoadingFirstPage: Bool,
     hasError: Bool,
@@ -312,9 +319,21 @@ nonisolated enum DoubanDiscussionAvailability {
     guard hasRequested else { return .idle }
     if itemCount > 0 { return .ready }
     if hasError { return .failed }
-    if isLoadingFirstPage { return .loading }
+    if isLoadingFirstPage || isFirstPageInFlight { return .loading }
     if !hasMore { return .empty }
-    return .loading
+    return .failed
+  }
+
+  /// 胶囊文字：与 Web 页签一致，分类名后面跟总条数。总数取豆瓣返回的 `total`，
+  /// 没有时用已加载条数；为 0 或还没加载时只显示分类名。
+  static func chipTitle(
+    for kind: DoubanDiscussionEntry.Kind,
+    total: Int?,
+    loadedCount: Int
+  ) -> String {
+    let count = total ?? loadedCount
+    guard count > 0 else { return kind.title }
+    return "\(kind.title) \(count)"
   }
 
   /// 区块可见性：两类都还没请求或都确认为空时整块隐藏；其余情况（加载中、失败可重试、有内容）展示。
@@ -334,6 +353,6 @@ nonisolated enum DoubanDiscussionRowState: Hashable, Sendable {
   case ready
   /// 首屏成功但为空。
   case empty
-  /// 首屏失败，展示可重试状态卡。
+  /// 首屏失败或被中途取消，状态卡后面显示「重试」按钮。
   case failed
 }

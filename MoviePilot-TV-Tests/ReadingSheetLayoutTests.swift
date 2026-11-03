@@ -59,6 +59,20 @@ final class ReadingSheetLayoutTests: XCTestCase {
     XCTAssertEqual(pieces.last?.style, .field(label: "状态"))
   }
 
+  /// 超长的单行日志拆开后，第一片保留行首缩进；后续片段只去掉断点处的空白。
+  func testSplitKeepsLeadingIndentation() {
+    // 4 个空格缩进 + 36 个 x 正好 40 字，在第 40 字处硬切，断点后面是一串空格。
+    let line = "    " + String(repeating: "x", count: 36) + "    " + String(repeating: "y", count: 20)
+    let pieces = ReadingSheetLayout.split(AttributedString(line), maxCharacters: 40)
+    XCTAssertEqual(pieces.count, 2)
+    XCTAssertEqual(String(pieces[0].characters), "    " + String(repeating: "x", count: 36))
+    XCTAssertEqual(String(pieces[1].characters), String(repeating: "y", count: 20))
+    XCTAssertEqual(
+      pieces.map { String($0.characters) }.joined().filter { !$0.isWhitespace },
+      line.filter { !$0.isWhitespace }
+    )
+  }
+
   /// 富文本按换行拆段时保留属性（AniList 简介是 Markdown）。
   func testAttributedParagraphsKeepAttributes() throws {
     let text = try AttributedString(markdown: "**粗体**开头\n\n  第二段  ", options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))

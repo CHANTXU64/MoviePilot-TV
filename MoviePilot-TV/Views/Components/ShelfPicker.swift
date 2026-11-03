@@ -1,11 +1,15 @@
 import SwiftUI
 
-/// 货架选择器 - 横向滚动的胶囊样式选择器
-struct ShelfPicker: View {
-  let shelves: [RecommendShelf]
-  @Binding var selectedShelf: RecommendShelf?
+/// 横向滚动的胶囊选择器：推荐页货架、详情页「短评 / 影评」共用。
+///
+/// 上下各有一条 1pt 的焦点重定向条：焦点从相邻行移进来时，落到当前选中的胶囊上，
+/// 而不是几何上离得最近的那颗。
+struct ShelfPicker<Item: Identifiable>: View {
+  let items: [Item]
+  @Binding var selection: Item?
+  let title: (Item) -> String
 
-  @FocusState private var focusedShelfId: String?
+  @FocusState private var focusedShelfId: Item.ID?
   @FocusState private var isTopRedirectorFocused: Bool
   @FocusState private var isBottomRedirectorFocused: Bool
 
@@ -18,20 +22,20 @@ struct ShelfPicker: View {
         .focused($isTopRedirectorFocused)
         .onChange(of: isTopRedirectorFocused) { _, isFocused in
           if isFocused {
-            focusedShelfId = selectedShelf?.id ?? shelves.first?.id
+            focusedShelfId = selection?.id ?? items.first?.id
             isTopRedirectorFocused = false
           }
         }
 
       ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 20) {
-          ForEach(shelves) { shelf in
+          ForEach(items) { shelf in
             ShelfChip(
-              title: shelf.title,
-              isSelected: selectedShelf?.id == shelf.id,
+              title: title(shelf),
+              isSelected: selection?.id == shelf.id,
               isFocused: focusedShelfId == shelf.id
             ) {
-              selectedShelf = shelf
+              selection = shelf
             }
             .focused($focusedShelfId, equals: shelf.id)
           }
@@ -46,7 +50,7 @@ struct ShelfPicker: View {
         .focused($isBottomRedirectorFocused)
         .onChange(of: isBottomRedirectorFocused) { _, isFocused in
           if isFocused {
-            focusedShelfId = selectedShelf?.id ?? shelves.first?.id
+            focusedShelfId = selection?.id ?? items.first?.id
             isBottomRedirectorFocused = false
           }
         }

@@ -73,6 +73,28 @@ final class DoubanDiscussionViewModelTests: XCTestCase {
     XCTAssertEqual(reviewCalls.map(\.start), [0])
   }
 
+  /// 胶囊数量：短评进入详情页即显示总数；影评切过去加载后才显示（与 Web 页签一致）。
+  func testChipTitlesShowTotalsAfterLoading() async throws {
+    DoubanDetailStubURLProtocol.commentBodies = [
+      0: commentPageJSON(start: 0, count: 10, total: 30, ids: (1...10).map { "c\($0)" })
+    ]
+    DoubanDetailStubURLProtocol.reviewBodies = [
+      0: reviewPageJSON(start: 0, count: 1, total: 7)
+    ]
+    let detail = eligibleMovieDetail()
+    let viewModel = makeViewModel(detail: detail, backendVersion: "v3.2.1")
+    XCTAssertEqual(viewModel.doubanChipTitle(for: .comment), "短评")
+
+    viewModel.applyFullDetail(detail)
+    try await waitUntil("短评第一页") { viewModel.doubanCommentsPaginator.items.count == 10 }
+    XCTAssertEqual(viewModel.doubanChipTitle(for: .comment), "短评 30")
+    XCTAssertEqual(viewModel.doubanChipTitle(for: .review), "影评")
+
+    viewModel.selectDoubanDiscussion(.review)
+    try await waitUntil("影评第一页") { viewModel.doubanReviewsPaginator.items.count == 1 }
+    XCTAssertEqual(viewModel.doubanChipTitle(for: .review), "影评 7")
+  }
+
   /// 短评确认为空时自动改看影评，区块仍有内容可看。
   func testEmptyCommentsSwitchToReviewsAutomatically() async throws {
     DoubanDetailStubURLProtocol.reviewBodies = [
@@ -195,11 +217,48 @@ final class DoubanDiscussionViewModelTests: XCTestCase {
     XCTAssertEqual(ids.count, Set(ids).count, "重复条目未被去重")
   }
 
-  /// 空批次是终页而不是错误：继续滚动不得再发请求。
+  /// 已加载达到 `total` 时直接判到底：不再多发一次请求（与 Web 用 total 判断同口径）。
+  func testReachingTotalStopsWithoutExtraRequest() async throws {
+    DoubanDetailStubURLProtocol.commentBodies = [
+      0: commentPageJSON(start: 0, count: 10, total: 10, ids: (1...10).map { "c\($0)" })
+    ]
+    let detail = eligibleMovieDetail()
+    let viewModel = makeViewModel(detail: detail, backendVersion: "v3.2.1")
+    viewModel.applyFullDetail(detail)
+    try await waitUntil("短评第一页") { viewModel.doubanCommentsPaginator.items.count == 10 }
+
+    let lastID = try XCTUnwrap(viewModel.doubanCommentsPaginator.items.last?.id)
+    await viewModel.doubanCommentsPaginator.loadMore(lastID)
+    try await waitUntil("终页") { !viewModel.doubanCommentsPaginator.hasMore }
+    XCTAssertEqual(DoubanDetailStubURLProtocol.calls(matching: "/api/v1/douban/interests/").count, 1)
+    XCTAssertFalse(viewModel.doubanCommentsPaginator.hasError)
+  }
+
+  /// 焦点只有落到最后 4 张卡之内才加载下一页。
+  func testLoadMoreTriggersOnlyWithinLastFourCards() async throws {
+    DoubanDetailStubURLProtocol.commentBodies = [
+      0: commentPageJSON(start: 0, count: 10, total: 30, ids: (1...10).map { "c\($0)" }),
+      10: commentPageJSON(start: 10, count: 10, total: 30, ids: (11...20).map { "c\($0)" }),
+    ]
+    let detail = eligibleMovieDetail()
+    let viewModel = makeViewModel(detail: detail, backendVersion: "v3.2.1")
+    viewModel.applyFullDetail(detail)
+    try await waitUntil("短评第一页") { viewModel.doubanCommentsPaginator.items.count == 10 }
+
+    let items = viewModel.doubanCommentsPaginator.items
+    await viewModel.doubanCommentsPaginator.loadMore(items[5].id)  // 第 6 张，不在最后 4 张内
+    try await Task.sleep(for: .milliseconds(150))
+    XCTAssertEqual(DoubanDetailStubURLProtocol.calls(matching: "/api/v1/douban/interests/").count, 1)
+
+    await viewModel.doubanCommentsPaginator.loadMore(items[6].id)  // 第 7 张，倒数第 4 张
+    try await waitUntil("短评第二页") { viewModel.doubanCommentsPaginator.items.count == 20 }
+  }
+
+  /// 后端没给 total 时以空批次判终：空批次是终页而不是错误，继续滚动不得再发请求。
   func testEmptyBatchTerminatesPaginationAsSuccess() async throws {
     DoubanDetailStubURLProtocol.commentBodies = [
-      0: commentPageJSON(start: 0, count: 10, total: 10, ids: (1...10).map { "c\($0)" }),
-      10: #"{"success":true,"data":{"start":10,"count":0,"total":10,"items":[]}}"#.data(using: .utf8)!,
+      0: commentPageJSON(start: 0, count: 10, total: nil, ids: (1...10).map { "c\($0)" }),
+      10: #"{"success":true,"data":{"start":10,"count":0,"items":[]}}"#.data(using: .utf8)!,
     ]
 
     let detail = eligibleMovieDetail()
@@ -256,6 +315,59 @@ final class DoubanDiscussionViewModelTests: XCTestCase {
     XCTAssertEqual(DoubanDetailStubURLProtocol.calls(matching: "/api/v1/douban/reviews/").count, 1)
   }
 
+  /// 首屏请求被中途取消（会话切换导致 epoch 不符）时显示为失败，重试后能正常加载，不会一直转圈。
+  func testCancelledFirstPageBecomesRetryableFailure() async throws {
+    DoubanDetailStubURLProtocol.interestsDelay = .milliseconds(300)
+    DoubanDetailStubURLProtocol.commentBodies = [
+      0: commentPageJSON(start: 0, count: 2, total: 2, ids: ["c1", "c2"])
+    ]
+
+    let detail = eligibleMovieDetail()
+    let viewModel = makeViewModel(detail: detail, backendVersion: "v3.2.1")
+    viewModel.applyFullDetail(detail)
+    try await waitUntil("首屏请求已发出") {
+      !DoubanDetailStubURLProtocol.calls(matching: "/api/v1/douban/interests/").isEmpty
+    }
+    XCTAssertEqual(viewModel.doubanRowState(for: .comment), .loading)
+
+    service.replaceSessionForTesting(
+      baseURL: "http://douban-detail.local",
+      token: account.access_token,
+      currentUser: account
+    )
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.1")
+
+    try await waitUntil("取消后变成失败") { viewModel.doubanRowState(for: .comment) == .failed }
+    XCTAssertTrue(viewModel.isDoubanDiscussionSectionVisible)
+    XCTAssertEqual(viewModel.doubanDiscussionKind, .comment, "取消不是空结果，不得自动切到影评")
+
+    DoubanDetailStubURLProtocol.interestsDelay = nil
+    viewModel.retryDoubanDiscussion()
+    try await waitUntil("重试成功") { viewModel.doubanCommentsPaginator.items.count == 2 }
+    XCTAssertEqual(viewModel.doubanRowState(for: .comment), .ready)
+  }
+
+  /// 入口条件中途失效时，加载更多不发请求，也不把列表当成已到终页。
+  func testIneligibleLoadMoreDoesNotTerminateList() async throws {
+    DoubanDetailStubURLProtocol.commentBodies = [
+      0: commentPageJSON(start: 0, count: 10, total: 30, ids: (1...10).map { "c\($0)" })
+    ]
+    let detail = eligibleMovieDetail()
+    let viewModel = makeViewModel(detail: detail, backendVersion: "v3.2.1")
+    viewModel.applyFullDetail(detail)
+    try await waitUntil("短评第一页") { viewModel.doubanCommentsPaginator.items.count == 10 }
+
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.0")
+    let lastID = try XCTUnwrap(viewModel.doubanCommentsPaginator.items.last?.id)
+    await viewModel.doubanCommentsPaginator.loadMore(lastID)
+    try await Task.sleep(for: .milliseconds(150))
+
+    XCTAssertEqual(DoubanDetailStubURLProtocol.calls(matching: "/api/v1/douban/interests/").count, 1)
+    XCTAssertTrue(viewModel.doubanCommentsPaginator.hasMore)
+    XCTAssertFalse(viewModel.doubanCommentsPaginator.hasError)
+    XCTAssertEqual(viewModel.doubanCommentsPaginator.items.count, 10)
+  }
+
   // MARK: - Helpers
 
   private func makeViewModel(
@@ -293,7 +405,7 @@ final class DoubanDiscussionViewModelTests: XCTestCase {
   private func commentPageJSON(
     start: Int,
     count: Int,
-    total: Int,
+    total: Int?,
     ids: [String]
   ) -> Data {
     let items = ids.enumerated().map { index, id in
@@ -309,7 +421,7 @@ final class DoubanDiscussionViewModelTests: XCTestCase {
       """
     }
     let json = """
-      {"success":true,"data":{"start":\(start),"count":\(count),"total":\(total),"items":[\(items.joined(separator: ","))]}}
+      {"success":true,"data":{"start":\(start),"count":\(count),\(total.map { "\"total\":\($0)," } ?? "")"items":[\(items.joined(separator: ","))]}}
       """
     return Data(json.utf8)
   }

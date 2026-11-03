@@ -65,7 +65,8 @@ class MediaDetailViewModel: ObservableObject {
   private var mediaServerExistsTask: Task<Void, Never>?
   private var relatedContentTask: Task<Void, Never>?
   private var relatedContentChildTasks: [Task<Void, Never>] = []
-  private var doubanDiscussionTasks: [DoubanDiscussionEntry.Kind: Task<Void, Never>] = [:]
+  /// 各分类正在进行的首屏请求；有值即「首屏请求进行中」，结束后清掉。
+  @Published private var doubanDiscussionTasks: [DoubanDiscussionEntry.Kind: Task<Void, Never>] = [:]
   /// 已发起过首屏请求的分类；离页前不会自动重发，失败只能由用户在状态卡上重试。
   private var requestedDoubanKinds: Set<DoubanDiscussionEntry.Kind> = []
   /// 用户亲手切换过分类后，不再因为短评为空自动改看影评。
@@ -197,8 +198,10 @@ class MediaDetailViewModel: ObservableObject {
   ) -> Paginator<DoubanDiscussionEntry> {
     var seenKeys = Set<String>()
     return Paginator<DoubanDiscussionEntry>(
-      threshold: DoubanDiscussionAvailability.pageSize,
-      fetcher: { @MainActor [apiService, box] page in
+      threshold: DoubanDiscussionAvailability.loadMoreThreshold,
+      // 豆瓣返回 total：分页器据此判到底，不再多发一次空请求；胶囊数量也读它。
+      pageSize: DoubanDiscussionAvailability.pageSize,
+      pageFetcher: { @MainActor [apiService, box] page in
         let detail = box.value
         guard
           DoubanDiscussionAvailability.isEligible(
@@ -207,18 +210,21 @@ class MediaDetailViewModel: ObservableObject {
           ),
           let doubanId = DoubanDiscussionAvailability.normalizedDoubanID(detail.douban_id),
           let typeName = DoubanDiscussionAvailability.normalizedMediaType(detail.type)
-        else { return [] }
+        // 入口条件中途失效时按「取消」处理：不能返回空数组，否则会被当成确认为空的终页。
+        else { throw CancellationError() }
         let pageSize = DoubanDiscussionAvailability.pageSize
         let start = (page - 1) * pageSize
         switch kind {
         case .comment:
-          return try await apiService.fetchDoubanComments(
-            doubanId: doubanId, typeName: typeName, start: start, count: pageSize
-          ).resolvedItems.map(DoubanDiscussionEntry.init(comment:))
+          let page = try await apiService.fetchDoubanComments(
+            doubanId: doubanId, typeName: typeName, start: start, count: pageSize)
+          return PaginatedBatch(
+            items: page.resolvedItems.map(DoubanDiscussionEntry.init(comment:)), total: page.total)
         case .review:
-          return try await apiService.fetchDoubanReviews(
-            doubanId: doubanId, typeName: typeName, start: start, count: pageSize
-          ).resolvedItems.map(DoubanDiscussionEntry.init(review:))
+          let page = try await apiService.fetchDoubanReviews(
+            doubanId: doubanId, typeName: typeName, start: start, count: pageSize)
+          return PaginatedBatch(
+            items: page.resolvedItems.map(DoubanDiscussionEntry.init(review:)), total: page.total)
         }
       },
       processor: { @MainActor items, newItems in
@@ -233,6 +239,15 @@ class MediaDetailViewModel: ObservableObject {
     )
   }
 
+  /// 胶囊文字，例如「短评 128」；规则见 `DoubanDiscussionAvailability.chipTitle`。
+  func doubanChipTitle(for kind: DoubanDiscussionEntry.Kind) -> String {
+    DoubanDiscussionAvailability.chipTitle(
+      for: kind,
+      total: doubanPaginator(for: kind).total,
+      loadedCount: doubanPaginator(for: kind).items.count
+    )
+  }
+
   func doubanPaginator(for kind: DoubanDiscussionEntry.Kind) -> Paginator<DoubanDiscussionEntry> {
     switch kind {
     case .comment: return doubanCommentsPaginator
@@ -244,6 +259,7 @@ class MediaDetailViewModel: ObservableObject {
     let paginator = doubanPaginator(for: kind)
     return DoubanDiscussionAvailability.rowState(
       hasRequested: requestedDoubanKinds.contains(kind),
+      isFirstPageInFlight: doubanDiscussionTasks[kind] != nil,
       itemCount: paginator.items.count,
       isLoadingFirstPage: paginator.isFirstLoading,
       hasError: paginator.hasError,
@@ -276,7 +292,7 @@ class MediaDetailViewModel: ObservableObject {
     startDoubanDiscussionIfNeeded(kind)
   }
 
-  /// 状态卡上的「重新加载」：只重试当前分类。
+  /// 状态卡后面的「重试」按钮：只重试当前分类。
   func retryDoubanDiscussion() {
     let kind = doubanDiscussionKind
     guard isDoubanDiscussionEligible else { return }

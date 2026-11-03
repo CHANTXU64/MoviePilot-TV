@@ -103,8 +103,8 @@ struct DoubanDiscussionCardContent: View {
 
 /// 区块里没有可展示条目时的状态卡：加载中、加载失败（可重试）、暂无内容。
 ///
-/// 三种状态是同一个可聚焦按钮，状态切换时视图身份不变，焦点留在原地；
-/// 只有失败状态响应选择键。尺寸与普通卡片一致，避免行高跳动。
+/// 三种状态是同一个可聚焦按钮，状态切换时视图身份不变，焦点留在原地。卡片本身不响应
+/// 选择键，失败时由行里紧跟其后的「重试」按钮重新加载。尺寸与普通卡片一致，避免行高跳动。
 struct DoubanDiscussionStatusCard: View {
   enum Status: Equatable {
     case loading
@@ -114,12 +114,9 @@ struct DoubanDiscussionStatusCard: View {
 
   let kind: DoubanDiscussionEntry.Kind
   let status: Status
-  let onRetry: () -> Void
 
   var body: some View {
     Button {
-      guard status == .failed else { return }
-      onRetry()
     } label: {
       VStack(spacing: 14) {
         switch status {
@@ -129,14 +126,11 @@ struct DoubanDiscussionStatusCard: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         case .failed:
-          Image(systemName: "arrow.clockwise")
+          Image(systemName: "exclamationmark.triangle")
             .font(.title3)
             .foregroundStyle(.secondary)
           Text(kind.failureText)
             .font(.caption.bold())
-          Text("按下重新加载")
-            .font(.caption2)
-            .foregroundStyle(.secondary)
         case .empty:
           Image(systemName: "text.bubble")
             .font(.title3)
@@ -155,7 +149,7 @@ struct DoubanDiscussionStatusCard: View {
   private var accessibilityText: String {
     switch status {
     case .loading: return "正在加载\(kind.title)"
-    case .failed: return "\(kind.failureText)，按下重新加载"
+    case .failed: return kind.failureText
     case .empty: return kind.emptyText
     }
   }

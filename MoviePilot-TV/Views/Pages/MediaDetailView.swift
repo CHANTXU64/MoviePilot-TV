@@ -126,7 +126,6 @@ struct MediaDetailView: View {
   @FocusState private var focusedActorId: Person.ID?
   /// 豆瓣区块的焦点：条目 ID，或没有条目时的状态卡 `doubanStatusFocusID`。
   @FocusState private var focusedDiscussionId: String?
-  @FocusState private var focusedDiscussionKind: DoubanDiscussionEntry.Kind?
   @FocusState private var isHeroFocused: Bool
   @FocusState private var isContentFocused: Bool
   enum ButtonField {
@@ -1331,23 +1330,17 @@ struct MediaDetailView: View {
       let paginator = viewModel.doubanPaginator(for: kind)
       VStack(alignment: .leading, spacing: 0) {
         if showContentPage || firstVisibleRow != "doubanDiscussion" {
-          HStack(spacing: 20) {
-            ForEach(DoubanDiscussionEntry.Kind.allCases, id: \.self) { option in
-              ShelfChip(
-                title: option.title,
-                isSelected: option == kind,
-                isFocused: focusedDiscussionKind == option
-              ) {
-                viewModel.selectDoubanDiscussion(option)
-              }
-              .focused($focusedDiscussionKind, equals: option)
-            }
-          }
+          // 与推荐页货架同一个选择器：焦点从上下相邻行移进来时落到当前选中的分类上。
+          ShelfPicker(
+            items: DoubanDiscussionEntry.Kind.allCases,
+            selection: Binding(
+              get: { viewModel.doubanDiscussionKind },
+              set: { if let option = $0 { viewModel.selectDoubanDiscussion(option) } }
+            ),
+            title: { viewModel.doubanChipTitle(for: $0) }
+          )
           .font(.callout)
           .padding(.leading, 81)
-          // 撑满整行再设 focusSection：从右侧卡片向上移时，正上方也属于胶囊区，焦点不会越过它。
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .focusSection()
           .transition(.opacity.combined(with: .move(edge: .bottom)))
         }
 
@@ -1356,12 +1349,18 @@ struct MediaDetailView: View {
             LazyHStack(spacing: 40) {
               if paginator.items.isEmpty {
                 // 加载中 / 失败 / 为空共用同一个状态卡，状态变化时焦点不丢。
-                DoubanDiscussionStatusCard(
-                  kind: kind,
-                  status: doubanStatus(for: viewModel.doubanRowState(for: kind)),
-                  onRetry: { viewModel.retryDoubanDiscussion() }
-                )
-                .focused($focusedDiscussionId, equals: Self.doubanStatusFocusID)
+                let status = doubanStatus(for: viewModel.doubanRowState(for: kind))
+                DoubanDiscussionStatusCard(kind: kind, status: status)
+                  .focused($focusedDiscussionId, equals: Self.doubanStatusFocusID)
+                if status == .failed {
+                  Button {
+                    // 先把焦点交给状态卡：按下后按钮随即消失，焦点不能跟着掉出本区块。
+                    focusedDiscussionId = Self.doubanStatusFocusID
+                    viewModel.retryDoubanDiscussion()
+                  } label: {
+                    Label("重试", systemImage: "arrow.clockwise")
+                  }
+                }
               } else {
                 ForEach(paginator.items) { entry in
                   DoubanDiscussionCard(
