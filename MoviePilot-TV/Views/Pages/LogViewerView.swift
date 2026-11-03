@@ -10,7 +10,7 @@ struct LogViewerView: View {
       LazyVStack(alignment: .leading, spacing: 28) {
         VStack(alignment: .leading, spacing: 0) {
           Toggle("记录日志", isOn: $viewModel.isRecordingEnabled)
-            .font(.body.weight(.semibold))
+            .font(.body.bold())
             .focused(focusedItem, equals: .logRecording)
 
           Color.clear
@@ -66,7 +66,7 @@ struct LogViewerView: View {
             .padding(.top, 40)
         } else if viewModel.showsEmptyState {
           Text("没有符合条件的日志")
-            .font(.body.weight(.semibold))
+            .font(.body.bold())
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.leading, 16)
@@ -117,7 +117,7 @@ struct LogViewerView: View {
         .lineLimit(6)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
-    .font(.caption.weight(.semibold))
+    .font(.caption.bold())
     .padding(.vertical, 10)
   }
 }
@@ -126,43 +126,29 @@ struct LogRecordDetailSheet: View {
   let record: LogRecord
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 24) {
-        HStack(alignment: .firstTextBaseline) {
-          Text(record.level.prefix)
-            .font(.title2.bold())
-            .foregroundStyle(logLevelColor(record.level))
-          Spacer()
-          Text(LogDisplayFormatting.timestamp.string(from: record.timestamp))
-            .font(.callout)
-            .foregroundStyle(.secondary)
-        }
+    ReadingSheet(
+      title: record.level.prefix,
+      titleColor: logLevelColor(record.level),
+      blocks: Self.blocks(for: record)
+    )
+  }
 
-        Divider()
-
-        Text(record.message)
-          .font(.callout)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .fixedSize(horizontal: false, vertical: true)
-
-        if let metadata = record.metadata, !metadata.isEmpty {
-          VStack(alignment: .leading, spacing: 8) {
-            Text("metadata")
-              .font(.subheadline.bold())
-            ForEach(metadata.keys.sorted(), id: \.self) { key in
-              Text("\(key): \(metadata[key] ?? "")")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-          }
-        }
+  /// 日志详情的正文：时间在最前，然后是消息，最后是 metadata 的「键: 值」。
+  static func blocks(for record: LogRecord) -> [ReadingBlock] {
+    var blocks = [
+      ReadingBlock(LogDisplayFormatting.timestamp.string(from: record.timestamp), style: .secondary)
+    ]
+    // 消息整段原样显示：空行、行首缩进（堆栈、JSON）都保留；
+    // 太长时由 `ReadingSheetLayout.chunks` 在换行处拆成焦点块。
+    let message = record.message.replacingOccurrences(of: "\r\n", with: "\n")
+    blocks.append(ReadingBlock(AttributedString(message), style: .body))
+    if let metadata = record.metadata, !metadata.isEmpty {
+      blocks.append(ReadingBlock("metadata", style: .heading))
+      blocks += metadata.keys.sorted().map {
+        ReadingBlock("\($0): \(metadata[$0] ?? "")", style: .secondary)
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.horizontal, 72)
-      .padding(.vertical, 54)
     }
-    .frame(width: 1_440, height: 1_025)
+    return blocks
   }
 }
 

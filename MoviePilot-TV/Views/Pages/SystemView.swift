@@ -311,7 +311,7 @@ struct SystemView: View {
               set: { viewModel.autoSearchNewSubscriptions = $0 }
             )
           )
-          .font(.body.weight(.semibold))
+          .font(.body.bold())
           .focused($focusedItem, equals: .autoSearch)
         }
       }
@@ -346,7 +346,7 @@ struct SystemView: View {
             set: { viewModel.preloadTMDBDetails = $0 }
           )
         )
-        .font(.body.weight(.semibold))
+        .font(.body.bold())
         .focused($focusedItem, equals: .preloadTMDBDetails)
 
         Toggle(
@@ -356,7 +356,7 @@ struct SystemView: View {
             set: { viewModel.waitMediaDetailBackgroundImage = $0 }
           )
         )
-        .font(.body.weight(.semibold))
+        .font(.body.bold())
         .focused($focusedItem, equals: .waitBackgroundImage)
       }
 
@@ -490,7 +490,7 @@ struct SystemView: View {
         Text(
           "密码安全提示：请勿将 MoviePilot 密码与其他服务共用。Apple 钥匙串不可用时，本 App 会自动降级为明文持久化密码；即使 Apple TV 环境相对封闭，仍存在密码泄露风险。"
         )
-        .font(.body.weight(.semibold))
+        .font(.body.bold())
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -552,49 +552,23 @@ struct SystemView: View {
   }
 
   private func changelogDetailSheet(_ entry: AppChangelogEntry) -> some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 28) {
-        VStack(alignment: .leading, spacing: 10) {
-          Text(entry.version)
-            .font(.title2.bold())
-          Text(entry.releaseDate)
-            .font(.callout)
-            .foregroundStyle(.secondary)
-        }
-
-        Divider()
-
-        changelogSection("更新内容", items: entry.highlights, isPrimary: true)
-        changelogSection("新增功能", items: entry.updates)
-        changelogSection("修复", items: entry.fixes)
-        changelogSection("优化", items: entry.optimizations)
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.horizontal, 72)
-      .padding(.vertical, 54)
-    }
-    .frame(width: 1_440, height: 1_025)
+    ReadingSheet(title: entry.version, blocks: Self.changelogBlocks(entry))
   }
 
-  @ViewBuilder
-  private func changelogSection(
-    _ title: String,
-    items: [String],
-    isPrimary: Bool = false
-  ) -> some View {
-    if !items.isEmpty {
-      VStack(alignment: .leading, spacing: 16) {
-        Text(title)
-          .font(isPrimary ? .headline.bold() : .subheadline.bold())
-
-        ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-          Text("• \(item)")
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-      }
+  /// 更新历史详情的正文：发布日期在最前，各小节为「小节标题 + • 条目」。
+  static func changelogBlocks(_ entry: AppChangelogEntry) -> [ReadingBlock] {
+    var blocks = [ReadingBlock(entry.releaseDate, style: .secondary)]
+    let sections: [(String, [String])] = [
+      ("更新内容", entry.highlights),
+      ("新增功能", entry.updates),
+      ("修复", entry.fixes),
+      ("优化", entry.optimizations),
+    ]
+    for (title, items) in sections where !items.isEmpty {
+      blocks.append(ReadingBlock(title, style: .heading))
+      blocks += items.map { ReadingBlock("• \($0)", style: .secondary) }
     }
+    return blocks
   }
 
   private var topShelfSettings: some View {
@@ -743,7 +717,7 @@ struct SystemView: View {
             }
           )
         )
-        .font(.body.weight(.semibold))
+        .font(.body.bold())
         .focused($focusedItem, equals: .recommendationShelf(shelf.id))
       }
     }
@@ -894,7 +868,7 @@ struct SystemView: View {
   ) -> some View {
     HStack {
       Text(title)
-        .font(.body.weight(.semibold))
+        .font(.body.bold())
         .lineLimit(1)
 
       Spacer()
@@ -906,7 +880,7 @@ struct SystemView: View {
 
         if let value {
           Text(value)
-            .font(.body.weight(.semibold))
+            .font(.body.bold())
             .foregroundStyle(.secondary)
             .lineLimit(1)
             .multilineTextAlignment(.trailing)
@@ -928,7 +902,7 @@ struct SystemView: View {
       Text(value)
         .foregroundStyle(.secondary)
     }
-    .font(.body.weight(.semibold))
+    .font(.body.bold())
     .lineLimit(1)
   }
 

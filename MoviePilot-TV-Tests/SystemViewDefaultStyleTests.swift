@@ -134,14 +134,27 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("presenting: updateNotice"))
   }
 
-  func testChangelogSheetUsesReadableTvOSLayout() throws {
+  func testChangelogSheetUsesSharedReadingSheetInSource() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
 
-    XCTAssertTrue(source.contains(".frame(width: 1_440, height: 1_025)"))
-    XCTAssertTrue(source.contains(".font(.callout)"))
-    XCTAssertTrue(source.contains(".font(isPrimary ? .headline.bold() : .subheadline.bold())"))
-    XCTAssertTrue(source.contains("Text(entry.releaseDate)"))
+    XCTAssertTrue(source.contains("ReadingSheet(title: entry.version, blocks: Self.changelogBlocks(entry))"))
     XCTAssertTrue(source.contains("value: \"\\(entry.releaseDate) · MoviePilot \\(entry.compatibleMoviePilotVersion)\""))
+  }
+
+  /// 更新历史详情：发布日期在最前，空小节不出现，条目带「•」前缀。
+  func testChangelogBlocksListDateThenNonEmptySections() {
+    let entry = AppChangelogEntry(
+      version: "v9.9.9",
+      releaseDate: "2026-11-03",
+      compatibleMoviePilotVersion: "v3.2.3",
+      highlights: ["亮点"],
+      updates: [],
+      fixes: ["修复一", "修复二"],
+      optimizations: []
+    )
+    let blocks = SystemView.changelogBlocks(entry)
+    XCTAssertEqual(blocks.map { String($0.text.characters) }, ["2026-11-03", "更新内容", "• 亮点", "修复", "• 修复一", "• 修复二"])
+    XCTAssertEqual(blocks.map(\.style), [.secondary, .heading, .secondary, .heading, .secondary, .secondary])
   }
 
   func testReleaseWorkflowUsesMainChangelogAsReleaseNotesSource() throws {
@@ -268,12 +281,11 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains(".lineLimit(6)"))
     XCTAssertTrue(source.contains("@ObservedObject var viewModel: LogViewerViewModel"))
     XCTAssertTrue(source.contains("struct LogRecordDetailSheet: View"))
-    XCTAssertTrue(source.contains(".frame(width: 1_440, height: 1_025)"))
+    XCTAssertTrue(source.contains("ReadingSheet("))
     XCTAssertFalse(source.contains("@StateObject"))
     XCTAssertFalse(source.contains(".sheet("))
     XCTAssertTrue(source.contains("Text(record.message)"))
-    XCTAssertTrue(source.contains(".fixedSize(horizontal: false, vertical: true)"))
-    XCTAssertTrue(source.contains(".font(.caption.weight(.semibold))"))
+    XCTAssertTrue(source.contains(".font(.caption.bold())"))
     XCTAssertFalse(source.contains("record.fileName"))
     XCTAssertFalse(source.contains("record.function"))
     XCTAssertFalse(source.contains("record.line"))
@@ -566,11 +578,12 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains(".focusable()"))
     XCTAssertFalse(source.contains(".focused($focusedPreviewIndex, equals: index)"))
     XCTAssertTrue(source.contains("Button(action: {})"))
-    XCTAssertTrue(source.contains(".buttonStyle(.card)"))
+    XCTAssertTrue(source.contains(".buttonStyle(TextCardButtonStyle())"))
     XCTAssertFalse(source.contains(".scaleEffect(isFocused"))
     XCTAssertTrue(source.contains("color: item.success == false ? .red : .primary"))
     XCTAssertFalse(source.contains("color: item.success == false ? .red : .green"))
-    XCTAssertTrue(source.contains(".contentMargins(28, for: .scrollContent)"))
+    XCTAssertTrue(
+      source.contains(".contentMargins(.horizontal, Self.horizontalPadding, for: .scrollContent)"))
     XCTAssertFalse(source.contains(".scrollClipDisabled()"))
     XCTAssertFalse(source.contains(".padding(20)"))
     XCTAssertTrue(source.contains("Text(\"整理预览\")"))
@@ -590,17 +603,13 @@ final class SystemViewDefaultStyleTests: XCTestCase {
         ["Image(systemName: \"arrow.right\")", ".font("]
       )
     )
-    XCTAssertFalse(source.contains(".font(.title3.bold())"))
+    XCTAssertTrue(containsTrimmedLineSequence(source, ["Text(\"整理预览\")", ".font(.title3.bold())"]))
     XCTAssertTrue(source.contains("HStack(spacing: 16)"))
     XCTAssertTrue(
       containsTrimmedLineSequence(source, [".padding(14)", ".padding(.leading, 10)"])
     )
-    XCTAssertTrue(
-      containsTrimmedLineSequence(
-        source,
-        [".padding(.top, 28)", ".frame(width: 1400, height: 820)"]
-      )
-    )
+    XCTAssertTrue(source.contains(".padding(.top, ReadingSheetLayout.verticalPadding)"))
+    XCTAssertTrue(source.contains("width: ReadingSheetLayout.sheetWidth"))
     XCTAssertTrue(source.contains("manualTransferPreviewFileName(from: item.source)"))
     XCTAssertTrue(source.contains("title: \"开始整理\""))
     XCTAssertTrue(source.contains("loadingTitle: \"整理中\""))
@@ -854,7 +863,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
         source,
         [
           "remountBackgroundForHeroIfNeeded()",
-          "withAnimation(.easeInOut(duration: 0.6)) {",
+          "withAnimation(Self.pageTransitionAnimation) {",
           "showContentPage = false",
         ]
       )

@@ -45,7 +45,7 @@ struct PersonDetailView: View {
                 .fill(Color(white: 0.12))
                 .overlay(
                   Image(systemName: "person.fill")
-                    .font(.system(size: 100))
+                    .font(.title)
                     .foregroundColor(.gray)
                 )
 
@@ -74,7 +74,7 @@ struct PersonDetailView: View {
 
             VStack(alignment: .leading, spacing: 20) {
               Text(person.name ?? "未知")
-                .font(.title.bold())
+                .font(.title2.bold())
 
               if let originalName = person.original_name, originalName != person.name {
                 Text(originalName)
@@ -95,12 +95,11 @@ struct PersonDetailView: View {
               if viewModel.isLoadingDetails {
                 // 加载期间保持布局稳定的可聚焦占位符
                 Button(action: {}) {
-                  RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.secondary.opacity(0.1))
-                    .frame(height: 150)
-                    .overlay(ProgressView())
+                  ProgressView()
+                    .frame(maxWidth: 1100, minHeight: 150)
+                    .padding()
                 }
-                .buttonStyle(.card)
+                .buttonStyle(TextCardButtonStyle())
                 .focused($focusedElement, equals: .biography)
               } else if let biography = person.biography, !biography.isEmpty {
                 Button(action: {
@@ -114,10 +113,10 @@ struct PersonDetailView: View {
                       .font(.caption)
                       .multilineTextAlignment(.leading)
                   }
-                  .frame(maxWidth: 1100)
+                  .frame(maxWidth: 1100, alignment: .leading)
                   .padding()
                 }
-                .buttonStyle(.card)
+                .buttonStyle(TextCardButtonStyle())
                 .focused($focusedElement, equals: .biography)
               } else {
                 // 无简介时的可聚焦占位符 — 确保头部有焦点目标
@@ -128,7 +127,7 @@ struct PersonDetailView: View {
                     .frame(maxWidth: 1100, alignment: .leading)
                     .padding()
                 }
-                .buttonStyle(.card)
+                .buttonStyle(TextCardButtonStyle())
                 .focused($focusedElement, equals: .biography)
               }
               Spacer(minLength: 0)
@@ -142,7 +141,7 @@ struct PersonDetailView: View {
           VStack(alignment: .leading, spacing: 20) {
             Text("参演作品")
               .font(.callout)
-              .fontWeight(.bold)
+              .bold()
               .foregroundStyle(.secondary)
               .padding(.leading, 8)
           }
@@ -163,15 +162,12 @@ struct PersonDetailView: View {
     .sheet(isPresented: $showFullBio) {
       let person = viewModel.person
       if let biography = person.biography {
-        VStack(alignment: .leading, spacing: 20) {
-          Text(person.name ?? "个人简介")
-            .font(.title2.bold())
-
-          Text(Self.biographyText(biography, source: person.source))
-            .font(.footnote)
-        }
-        .padding(50)
-        .frame(width: 1600)
+        ReadingSheet(
+          title: person.name ?? "个人简介",
+          blocks: ReadingSheetLayout.paragraphs(
+            Self.biographyText(biography, source: person.source)
+          ).map { ReadingBlock($0) }
+        )
       }
     }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in

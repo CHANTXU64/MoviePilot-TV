@@ -25,7 +25,7 @@ struct EmptyDataView: View {
     VStack(spacing: 40) {
       VStack(spacing: 20) {
         Image(systemName: systemImage)
-          .font(.system(size: 100))
+          .font(.title)
           .foregroundColor(.secondary)
 
         Text(title)

@@ -64,7 +64,6 @@ struct MoreCard: View {
           // 对齐 title
           Text(" ")
             .font(.caption)
-            .fontWeight(.medium)
 
           // 固定占位对齐 footerLabel
           HStack(spacing: 4) {
@@ -72,7 +71,6 @@ struct MoreCard: View {
             Text(" ")
           }
           .font(.caption)
-          .fontWeight(.medium)
           .opacity(0)
         }
         .lineLimit(1)

@@ -70,7 +70,7 @@ private struct MediaLoadingView: View {
             .fill(Color(white: 0.12))
             .overlay(
               Image(systemName: "film")
-                .font(.largeTitle)
+                .font(.title)
                 .foregroundStyle(.gray.opacity(0.5))
             )
 

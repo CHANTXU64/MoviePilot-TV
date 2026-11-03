@@ -365,7 +365,6 @@ struct MediaCard: View {
       VStack {
         Text(title)
           .font(.caption)
-          .fontWeight(.medium)
           .foregroundStyle(isFocused ? .primary : .secondary)
 
         // 仅在明确提供 subTitleBelow 时显示
@@ -382,7 +381,6 @@ struct MediaCard: View {
             Text(footer.text)
           }
           .font(.caption)
-          .fontWeight(.medium)
           .foregroundStyle(.primary)
           .opacity(isFocused ? 1 : 0)
         }

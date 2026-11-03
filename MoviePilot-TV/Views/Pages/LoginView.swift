@@ -13,8 +13,8 @@ struct LoginView: View {
           .frame(width: 500, height: 300)
 
         Text("MoviePilot")
-          .font(.largeTitle)
-          .fontWeight(.bold)
+          .font(.title)
+          .bold()
 
         VStack(spacing: 20) {
           TextField("服务器地址 (例如 http://192.168.1.5:3000)", text: $viewModel.serverURL)

@@ -32,7 +32,7 @@ struct ResourceResultView: View {
           viewModel.cancelSearch()
           dismiss()
         }) {
-          if mediaInfo != nil { Text(title).font(.largeTitle.bold()).foregroundColor(.secondary) }
+          if mediaInfo != nil { Text(title).font(.title2.bold()).foregroundColor(.secondary) }
         }
       } else if viewModel.isLoading {
         VStack(spacing: 20) {
@@ -56,7 +56,7 @@ struct ResourceResultView: View {
           header: {
             if mediaInfo != nil {
               Text(title)
-                .font(.largeTitle.bold())
+                .font(.title2.bold())
                 .foregroundColor(.secondary)
             }
           }

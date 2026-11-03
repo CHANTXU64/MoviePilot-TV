@@ -396,13 +396,16 @@ struct ReorganizeSheet: View {
 private struct ReorganizePreviewSheet: View {
   let preview: ManualTransferPreviewData
 
+  /// 与统一阅读 Sheet 同规格：1500×900，左右边距 72、顶部 64，标题 `.title3` 加粗。
+  /// 列表卡片的左右边距放在滚动内容上，卡片与标题对齐，聚焦放大时也不会被裁掉。
+  private static let horizontalPadding = ReadingSheetLayout.horizontalPadding
+
   var body: some View {
-    VStack(spacing: 24) {
+    VStack(alignment: .leading, spacing: 24) {
       Text("整理预览")
-        .font(.headline)
-        .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 28)
+        .font(.title3.bold())
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, Self.horizontalPadding)
 
       HStack(spacing: 12) {
         summaryCard(
@@ -424,14 +427,14 @@ private struct ReorganizePreviewSheet: View {
           color: .red
         )
       }
-      .padding(.horizontal, 28)
+      .padding(.horizontal, Self.horizontalPadding)
 
       if let message = preview.message, !message.isEmpty {
         Label(message, systemImage: "info.circle")
-          .font(.callout)
+          .font(.body)
           .foregroundStyle(.secondary)
           .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.horizontal, 28)
+          .padding(.horizontal, Self.horizontalPadding)
       }
 
       if preview.items.isEmpty {
@@ -444,16 +447,22 @@ private struct ReorganizePreviewSheet: View {
               Button(action: {}) {
                 previewRow(item)
               }
-              .buttonStyle(.card)
+              .buttonStyle(TextCardButtonStyle())
             }
           }
         }
-        .contentMargins(28, for: .scrollContent)
+        .contentMargins(.horizontal, Self.horizontalPadding, for: .scrollContent)
+        .contentMargins(.top, 4, for: .scrollContent)
+        .contentMargins(.bottom, ReadingSheetLayout.verticalPadding, for: .scrollContent)
         .focusSection()
       }
     }
-    .padding(.top, 28)
-    .frame(width: 1400, height: 820)
+    .padding(.top, ReadingSheetLayout.verticalPadding)
+    .frame(
+      width: ReadingSheetLayout.sheetWidth,
+      height: ReadingSheetLayout.sheetHeight,
+      alignment: .topLeading
+    )
   }
 
   private func summaryCard(

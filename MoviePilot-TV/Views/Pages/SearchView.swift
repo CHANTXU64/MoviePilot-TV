@@ -479,7 +479,7 @@ private struct ResultRow: View {
     VStack(alignment: .leading, spacing: 0) {
       Text(title)
         .font(.callout)
-        .fontWeight(.bold)
+        .bold()
         .foregroundStyle(.secondary)
         .padding(.leading, 8)
 
@@ -584,7 +584,7 @@ private struct PersonResultRow: View {
     VStack(alignment: .leading, spacing: 0) {
       Text(title)
         .font(.callout)
-        .fontWeight(.bold)
+        .bold()
         .foregroundStyle(.secondary)
         .padding(.leading, 8)
 
@@ -687,7 +687,7 @@ private struct BestResultRow: View {
     VStack(alignment: .leading, spacing: 0) {
       Text(title)
         .font(.callout)
-        .fontWeight(.bold)
+        .bold()
         .foregroundStyle(.secondary)
         .padding(.leading, 8)
 

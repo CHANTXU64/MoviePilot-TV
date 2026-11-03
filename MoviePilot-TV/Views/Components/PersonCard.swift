@@ -63,7 +63,6 @@ struct PersonCard: View {
       VStack {
         Text(person.name ?? "未知")
           .font(.caption)
-          .fontWeight(.medium)
           .foregroundStyle(isFocused ? .primary : .secondary)
 
         if let subtitle = (person.job != nil && !person.job!.isEmpty)
@@ -91,7 +90,7 @@ struct PersonCard: View {
         .fill(Color(white: 0.12))
         .overlay(
           Image(systemName: "person.fill")
-            .font(.largeTitle)
+            .font(.title2)
             .foregroundColor(.gray)
         )
 

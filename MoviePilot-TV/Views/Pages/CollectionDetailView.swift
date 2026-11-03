@@ -59,7 +59,7 @@ struct CollectionDetailView: View {
               .frame(width: 120, height: 180)
           }
           Text(title)
-            .font(.largeTitle.bold())
+            .font(.title2.bold())
             .foregroundColor(.secondary)
         }
       },

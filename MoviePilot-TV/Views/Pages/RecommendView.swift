@@ -74,8 +74,9 @@ private struct RecommendRootContent: View {
 
               // 货架选择器 - 横向滚动 chips
               ShelfPicker(
-                shelves: viewModel.filteredShelves,
-                selectedShelf: $viewModel.selectedShelf
+                items: viewModel.filteredShelves,
+                selection: $viewModel.selectedShelf,
+                title: \.title
               )
             }
             // 货架光晕会进入下方海报，页头画在网格上面。

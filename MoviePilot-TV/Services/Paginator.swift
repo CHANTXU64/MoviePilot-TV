@@ -1,6 +1,26 @@
 import Combine
 import Foundation
 
+/// 下一次请求的位置：页码，以及此前各批实际返回的条数之和（去重前）。
+///
+/// 偏移分页（`start` / `count`）的接口用 `offset`：某一批返回不足请求条数时，
+/// 按「页码 × 每页条数」推算会跳过条目，按实际返回条数推进才不会漏。
+struct PageCursor: Equatable {
+  let page: Int
+  let offset: Int
+}
+
+/// 一页分页结果：条目，以及后端声明的总条数（可选）。
+struct PaginatedBatch<Item> {
+  let items: [Item]
+  let total: Int?
+
+  init(items: [Item], total: Int? = nil) {
+    self.items = items
+    self.total = total
+  }
+}
+
 @MainActor
 public class Paginator<ItemType: Identifiable>: ObservableObject {
   /// Paginator 实例保持稳定 UUID；reset/refresh 推进内容代际，普通尾部追加保持不变。
@@ -35,9 +55,17 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   /// 记录最后一次发生的错误，用于向用户展示或日志排查。
   @Published public private(set) var lastError: Error?
 
+  /// 后端最近一次声明、且不少于累计已返回条数的总条数；接口不提供或尚未加载时为 nil，刷新时清空。
+  @Published private(set) var total: Int?
+
   // MARK: - 私有状态
 
   private var page: Int = 1
+  /// 此前各批实际返回的条数之和（去重前）；与 `total` 一起判断是否到底。
+  private var sourceOffset: Int = 0
+  /// 有 total 时连续只拿到已知条目的批次数，跨多次加载累计；取到新内容或刷新时清零。
+  private var duplicateBatchesInARow: Int = 0
+  private let maxDuplicateBatchesTowardTotal: Int = 3
   private var consecutiveErrorCount: Int = 0
   private let maxConsecutiveErrors: Int = 3
   private var generation: Int = 0
@@ -47,7 +75,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   private let maxRestartRoundsPerSequence: Int = 5
 
   /// 获取一页项目的函数。
-  private let fetcher: @MainActor (Int) async throws -> [ItemType]
+  private let fetcher: @MainActor (PageCursor) async throws -> PaginatedBatch<ItemType>
 
   /// 提前触发服务端缓存的图片 URL 函数；不会在 Apple TV 下载或解码图片。
   private let imageWarmURLsProvider: (@MainActor (ItemType) -> [URL])?
@@ -81,7 +109,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   ///                处理它们，并在添加了新内容时返回 `true`。
   ///   - onReset: 一个可选的闭包，用于在“重置”期间运行自定义的状态清除逻辑。
   /// 参数含内部类型，本 App 单模块使用，初始化器保持内部访问级别。
-  init(
+  convenience init(
     listID: UUID = UUID(),
     threshold: Int,
     fetcher: @escaping @MainActor (Int) async throws -> [ItemType],
@@ -92,9 +120,37 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     preparedFirstPage: [ItemType]? = nil,
     onReset: (() -> Void)? = nil
   ) {
+    self.init(
+      listID: listID,
+      threshold: threshold,
+      cursorFetcher: { cursor in PaginatedBatch(items: try await fetcher(cursor.page)) },
+      processor: processor,
+      imageWarmer: imageWarmer,
+      imageWarmURLsProvider: imageWarmURLsProvider,
+      imageWarmThreshold: imageWarmThreshold,
+      preparedFirstPage: preparedFirstPage,
+      onReset: onReset
+    )
+  }
+
+  /// 偏移分页或接口返回总条数时使用：`fetcher` 拿到页码与偏移，偏移按此前各批实际返回的
+  /// 条数推进。批次带 `total` 时，累计返回条数达到 total 即到底，不再多发一次空请求；
+  /// `total` 缺失时仍按空批次判终。
+  /// 注意：`advancePageCursor` / `rewindPageCursor` 只调整页码，不调整偏移，偏移分页不要使用。
+  init(
+    listID: UUID = UUID(),
+    threshold: Int,
+    cursorFetcher: @escaping @MainActor (PageCursor) async throws -> PaginatedBatch<ItemType>,
+    processor: @escaping @MainActor (inout [ItemType], [ItemType]) -> Bool,
+    imageWarmer: MPImageWarmer? = nil,
+    imageWarmURLsProvider: (@MainActor (ItemType) -> [URL])? = nil,
+    imageWarmThreshold: Int? = nil,
+    preparedFirstPage: [ItemType]? = nil,
+    onReset: (() -> Void)? = nil
+  ) {
     self.listIdentity = GridListIdentity.make(id: listID)
     self.threshold = threshold
-    self.fetcher = fetcher
+    self.fetcher = cursorFetcher
     self.processor = processor
     self.imageWarmURLsProvider = imageWarmURLsProvider
     self.imageWarmer = imageWarmer
@@ -103,6 +159,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     if let preparedFirstPage {
       _ = processor(&items, preparedFirstPage)
       page = 2
+      sourceOffset = preparedFirstPage.count
       hasMore = !preparedFirstPage.isEmpty
     }
   }
@@ -112,8 +169,22 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   /// 将分页器重置到其初始状态并加载第一页内容。
   /// 适用于初始加载或“下拉刷新”操作。
   public func refresh() async {
-    reset()
+    beginRefresh()
     await runLoadSequence()
+  }
+
+  /// 同步重置并进入首屏加载中，再在后台加载第一页；返回的任务结束即本轮加载结束。
+  ///
+  /// 调用返回时 `isFirstLoading` 已经是 true，界面不会在「已发起、任务还没跑起来」的间隙
+  /// 看到既不在加载、也没有结果的状态。任务开始前被 `cancel()` 或再次刷新取代时不再加载。
+  @discardableResult
+  func startRefresh() -> Task<Void, Never> {
+    beginRefresh()
+    let startGeneration = generation
+    return Task { @MainActor [weak self] in
+      guard let self, self.generation == startGeneration else { return }
+      await self.runLoadSequence()
+    }
   }
 
   /// 加载下一页内容。
@@ -144,6 +215,17 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
       let thresholdIndex = max(0, items.count - threshold)
       guard itemIndex >= thresholdIndex else { return }
     }
+    await runLoadSequence()
+  }
+
+  /// 加载更多失败后由用户手动重试：清零连续失败计数，重新允许向后加载。
+  ///
+  /// 连续失败达到上限后 `hasMore` 会变成 false，移动焦点不再触发请求；网络恢复后需要这个入口。
+  /// 只在当前处于错误状态时生效，成功到底时不会多发请求。
+  public func retryAfterError() async {
+    guard hasError, !isLoading else { return }
+    consecutiveErrorCount = 0
+    hasMore = true
     await runLoadSequence()
   }
 
@@ -252,16 +334,25 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     }
 
     // 不是错误重试次数；用于跳过少量只包含已知项目的页面，继续向后寻找新内容。
+    // 没有 total 时本轮连续两批都是已知项目就当作到底（无法判断后面还有没有）；
+    // 有 total 时偏移每批都在前进，继续向后找，直到取到新内容、累计达到 total，
+    // 或连续 `maxDuplicateBatchesTowardTotal` 批都是已知项目（上游异常地重复返回）才判到底，
+    // 请求总量有界。
     let maxPagesToScanForNewContent = 2
     var pagesScannedForNewContent = 0
     var hasNewContent = false
     var currentError: Error? = nil
 
-    while pagesScannedForNewContent < maxPagesToScanForNewContent, hasMore, !hasNewContent {
+    while (total == nil
+      ? pagesScannedForNewContent < maxPagesToScanForNewContent
+      : duplicateBatchesInARow < maxDuplicateBatchesTowardTotal),
+      hasMore, !hasNewContent
+    {
       pagesScannedForNewContent += 1
 
       do {
-        let newItems = try await fetcher(page)
+        let batch = try await fetcher(PageCursor(page: page, offset: sourceOffset))
+        let newItems = batch.items
 
         // 挂起恢复后检查：generation 变化说明已被 reset，丢弃结果
         guard currentGeneration == generation, !Task.isCancelled else { return }
@@ -276,10 +367,26 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
 
         if processor(&self.items, newItems) {
           hasNewContent = true
+          duplicateBatchesInARow = 0
+        } else {
+          duplicateBatchesInARow += 1
         }
 
         page += 1
+        // 按实际返回条数推进偏移；去重丢掉的条目在服务端仍占位，照样计入。
+        sourceOffset += newItems.count
         currentError = nil
+
+        // 声明的总数比累计已返回的条数还少，说明这一批的 total 不可信（例如后端缺 total 时
+        // 回填成本批条数），不能据此提前判到底，沿用此前的 total；真到底时由空批次判终。
+        if let batchTotal = batch.total, batchTotal >= sourceOffset, total != batchTotal {
+          total = batchTotal
+        }
+
+        // 累计返回条数达到后端声明的总数：到底了，不再多发一次空请求。
+        if let total, sourceOffset >= total {
+          hasMore = false
+        }
       } catch {
         if Task.isCancelled || error is CancellationError {
           return
@@ -293,7 +400,15 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     }
 
     if !hasNewContent && currentError == nil {
-      hasMore = false
+      // 有 total 时累计条数与空批次已在循环内判终；这里只剩连续重复达到上限一种情况。
+      if total == nil {
+        hasMore = false
+      } else if duplicateBatchesInARow >= maxDuplicateBatchesTowardTotal {
+        Logger.warning(
+          "[Paginator] 连续 \(duplicateBatchesInARow) 批都是已加载的条目，累计 \(sourceOffset) 条未达 total，按到底处理"
+        )
+        hasMore = false
+      }
     } else if let error = currentError {
       if !hasError {
         hasError = true
@@ -322,6 +437,11 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     return hasMore
   }
 
+  private func beginRefresh() {
+    reset()
+    isFirstLoading = true
+  }
+
   /// 重置分页器的状态，清除所有项目并重置标志。
   private func reset() {
     generation += 1
@@ -334,8 +454,13 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     isFirstLoading = false
     isLoadingMore = false
     hasMore = true
+    if total != nil {
+      total = nil
+    }
     clearErrorState()
     page = 1
+    sourceOffset = 0
+    duplicateBatchesInARow = 0
     consecutiveErrorCount = 0
     maxWarmedIndex = -1
     onReset?()

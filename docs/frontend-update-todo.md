@@ -50,15 +50,6 @@
   - 是否增加限速、标签、后缀等高级操作。
   - 是否保持 TV 下载页轻量，避免变成完整下载器管理后台。
 
-### 媒体详情豆瓣短评与影评
-
-- 来源：MoviePilot Web / Backend v3.1.7 在有豆瓣 ID 的媒体详情页展示短评和影评。接口是 `GET /douban/interests/{doubanid}/{type_name}` 与 `GET /douban/reviews/{doubanid}/{type_name}`，分页参数为 `start` 和 `count`。
-- 当前判断：不属于兼容必修。TV 详情页没有评论区，现有浏览、订阅和搜索不依赖这两项。
-- 可评估方向：
-  - 遥控器上的长文本分页是否适合放在详情页，而不是做成独立管理页。
-  - 作者头像使用后端返回的代理地址，不在客户端拼接豆瓣图片。
-  - 没有豆瓣 ID 时不显示入口。
-
 ### 媒体卡片状态批量查询
 
 - 来源：MoviePilot Backend `v3.2.1` 新增 `POST /media/status`（单次最多 50 项，按输入顺序返回 `item_id`、`subscribed` 和同来源各季订阅模式）；配套 Web `v3.2.2` 用它把媒体详情页和首页/探索页卡片的入库与订阅状态合并成一次请求，并在 `v3.2.1` 以下回退旧的 `/mediaserver/exists` + `/subscribe/media/{media_id}`。

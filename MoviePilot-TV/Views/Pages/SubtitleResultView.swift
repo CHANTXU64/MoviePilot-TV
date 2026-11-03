@@ -154,7 +154,7 @@ private struct SubtitleResultCard: View {
     Button(action: onSelect) {
       cardContent
     }
-    .buttonStyle(.card)
+    .buttonStyle(TextCardButtonStyle())
   }
 
   private var cardContent: some View {
@@ -162,14 +162,14 @@ private struct SubtitleResultCard: View {
       HStack(alignment: .top, spacing: 12) {
         Text(subtitle.displayTitle)
           .font(.headline)
-          .fontWeight(.bold)
+          .bold()
           .lineLimit(2)
           .multilineTextAlignment(.leading)
         Spacer(minLength: 0)
         if let season = MediaIdentifier.normalizedString(subtitle.season_episode) {
           Text(season.formattedSeasonEpisode())
             .font(.caption2)
-            .fontWeight(.semibold)
+            .bold()
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(
@@ -236,8 +236,6 @@ private struct SubtitleResultCard: View {
     }
     .padding(20)
     .frame(maxWidth: .infinity, alignment: .topLeading)
-    .background(.ultraThinMaterial)
-    .clipShape(RoundedRectangle(cornerRadius: 20))
   }
 }
 
@@ -259,7 +257,7 @@ struct SubtitleResultView: View {
       dismiss()
     }) {
       Text(search.request.navigationTitle)
-        .font(.largeTitle.bold())
+        .font(.title2.bold())
         .foregroundColor(.secondary)
     }
     .background {
