@@ -1142,7 +1142,7 @@ struct MediaDetailView: View {
                 }
               }) {
                 Label(
-                  title: { Text("TMDB详情页") },
+                  title: { Text("TMDB") },
                   icon: {
                     if isButtonLoading {
                       ProgressView().controlSize(.small)
@@ -1261,6 +1261,8 @@ struct MediaDetailView: View {
               .focused($focusedButton, equals: .otherInfo)
             }
           }
+          // 按钮文字一律单行：按钮多时宁可截断，也不折成两行撑高按钮。
+          .lineLimit(1)
           .animation(.snappy, value: shouldShowSiteFilter)
           .disabled(!allowsRequests)
         }
