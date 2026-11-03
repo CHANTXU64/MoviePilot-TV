@@ -137,6 +137,45 @@ final class DoubanDiscussionViewModelTests: XCTestCase {
     XCTAssertEqual(viewModel.doubanDiscussionKind, .comment)
   }
 
+  /// 短评加载中再点一次已选中的「短评」不算改选：短评为空时仍自动切到影评，区块不会消失。
+  func testPressingSelectedChipStillSwitchesToReviewsWhenCommentsEmpty() async throws {
+    DoubanDetailStubURLProtocol.interestsDelay = .milliseconds(200)
+    DoubanDetailStubURLProtocol.reviewBodies = [
+      0: reviewPageJSON(start: 0, count: 2, total: 2)
+    ]
+
+    let detail = eligibleMovieDetail()
+    let viewModel = makeViewModel(detail: detail, backendVersion: "v3.2.1")
+    viewModel.applyFullDetail(detail)
+    viewModel.selectDoubanDiscussion(.comment)
+
+    try await waitUntil("自动切到影评") { viewModel.doubanReviewsPaginator.items.count == 2 }
+    XCTAssertEqual(viewModel.doubanDiscussionKind, .review)
+    XCTAssertTrue(viewModel.isDoubanDiscussionSectionVisible)
+  }
+
+  /// 完整详情应用之前不发请求；之后按完整详情里的豆瓣 ID 请求，不沿用入口卡片的部分详情。
+  func testNoRequestBeforeFullDetailAndUsesFullDetailDoubanID() async throws {
+    DoubanDetailStubURLProtocol.commentBodies = [
+      0: commentPageJSON(start: 0, count: 2, total: 2, ids: ["c1", "c2"])
+    ]
+
+    let partial = MediaInfo(douban_id: "111", source: "douban", title: "部分详情", type: "电影")
+    let viewModel = makeViewModel(detail: partial, backendVersion: "v3.2.1")
+    viewModel.loadDoubanDiscussionIfNeeded()
+    try await Task.sleep(for: .milliseconds(150))
+    XCTAssertTrue(DoubanDetailStubURLProtocol.calls(matching: "/api/v1/douban/").isEmpty)
+    XCTAssertEqual(viewModel.doubanRowState(for: .comment), .idle)
+
+    let full = MediaInfo(douban_id: "222", source: "douban", title: "完整详情", type: "电影")
+    viewModel.applyFullDetail(full)
+    try await waitUntil("短评第一页") { viewModel.doubanCommentsPaginator.items.count == 2 }
+
+    let paths = DoubanDetailStubURLProtocol.calls(matching: "/api/v1/douban/").map(\.path)
+    XCTAssertFalse(paths.isEmpty)
+    XCTAssertTrue(paths.allSatisfy { $0.contains("/222/") }, "\(paths)")
+  }
+
   /// 后端低于启用版本 v3.2.1 时：整块隐藏且一个请求都不发。
   func testBackendBelow321HidesSectionAndSendsNoRequest() async throws {
     DoubanDetailStubURLProtocol.commentBodies = [
@@ -333,6 +372,8 @@ final class DoubanDiscussionViewModelTests: XCTestCase {
     viewModel.selectDoubanDiscussion(.comment)
     DoubanDetailStubURLProtocol.failInterests = false
     viewModel.retryDoubanDiscussion()
+    // 重试一发起就是加载中，状态卡不会先闪成别的状态。
+    XCTAssertEqual(viewModel.doubanRowState(for: .comment), .loading)
     try await waitUntil("短评重试成功") { viewModel.doubanCommentsPaginator.items.count == 2 }
     XCTAssertEqual(viewModel.doubanRowState(for: .comment), .ready)
     XCTAssertEqual(DoubanDetailStubURLProtocol.calls(matching: "/api/v1/douban/reviews/").count, 1)

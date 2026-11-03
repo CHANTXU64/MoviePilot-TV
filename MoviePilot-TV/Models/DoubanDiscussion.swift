@@ -7,12 +7,9 @@ import Foundation
 /// 优先用后端透传的 `id`，退化为条目 `url`，最后用「作者 + 时间 + 正文前缀」兜底，
 /// 避免同一页内多条空 id 被折叠成一条。
 nonisolated enum DoubanDiscussionIdentity {
-  /// 去掉首尾空白；纯空白视同缺失。
+  /// 去掉首尾空白；纯空白视同缺失。与媒体身份共用同一规则。
   static func normalized(_ value: String?) -> String? {
-    guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
-      !trimmed.isEmpty
-    else { return nil }
-    return trimmed
+    MediaIdentifier.normalizedString(value)
   }
 
   static func stableID(
@@ -211,7 +208,8 @@ nonisolated struct DoubanDiscussionEntry: Identifiable, Hashable, Sendable {
     return String(format: "%.1f", rating)
   }
 
-  /// 五颗星的填充状态，按 0.5 星取整；没有评分时返回 nil（不画空星，避免误读成 0 分）。
+  /// 五颗星的填充状态，按 0.5 星取整；没有评分时返回 nil，整行星星不显示。
+  /// 不足 0.25 的极低评分取整后五颗都是空星，Web 的 `VRating` 同样如此，不另作处理。
   var starFills: [StarFill]? {
     guard let rating, rating > 0 else { return nil }
     let halves = Int((min(rating, 5) * 2).rounded())
@@ -284,8 +282,9 @@ nonisolated enum DoubanDiscussionAvailability {
     return version >= minimum
   }
 
+  /// 与媒体身份的来源 ID 判据一致：空白与 `"0"` 都按缺失处理，不发请求。
   static func normalizedDoubanID(_ raw: String?) -> String? {
-    DoubanDiscussionIdentity.normalized(raw)
+    MediaIdentifier.truthySourceIdentifier(raw)
   }
 
   static func normalizedMediaType(_ raw: String?) -> String? {
@@ -304,13 +303,12 @@ nonisolated enum DoubanDiscussionAvailability {
 
   /// 单个分类（短评或影评）的状态。
   ///
-  /// - 首屏请求还在进行（含 `refresh()` 刚重置、分页任务尚未运行的间隙）算 `.loading`，
-  ///   重试时状态卡不会闪成「未请求」而被移出视图树、带走焦点。
-  /// - 首屏请求已结束，却既没有内容、没有报错、也没确认为空：请求被中途取消
+  /// - 首屏加载中算 `.loading`；分页器的 `startRefresh()` 同步进入加载中，
+  ///   重试时状态卡不会闪成其他状态而被移出视图树、带走焦点。
+  /// - 首屏已不在加载，却既没有内容、没有报错、也没确认为空：请求被中途取消
   ///   （会话切换、入口条件失效等），按 `.failed` 处理，用户可以重试，不会一直转圈。
   static func rowState(
     hasRequested: Bool,
-    isFirstPageInFlight: Bool,
     itemCount: Int,
     isLoadingFirstPage: Bool,
     hasError: Bool,
@@ -319,7 +317,7 @@ nonisolated enum DoubanDiscussionAvailability {
     guard hasRequested else { return .idle }
     if itemCount > 0 { return .ready }
     if hasError { return .failed }
-    if isLoadingFirstPage || isFirstPageInFlight { return .loading }
+    if isLoadingFirstPage { return .loading }
     if !hasMore { return .empty }
     return .failed
   }

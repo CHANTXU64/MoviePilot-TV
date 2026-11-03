@@ -65,8 +65,6 @@ class MediaDetailViewModel: ObservableObject {
   private var mediaServerExistsTask: Task<Void, Never>?
   private var relatedContentTask: Task<Void, Never>?
   private var relatedContentChildTasks: [Task<Void, Never>] = []
-  /// 各分类正在进行的首屏请求；有值即「首屏请求进行中」，结束后清掉。
-  @Published private var doubanDiscussionTasks: [DoubanDiscussionEntry.Kind: Task<Void, Never>] = [:]
   /// 已发起过首屏请求的分类；离页前不会自动重发，失败只能由用户在状态卡上重试。
   private var requestedDoubanKinds: Set<DoubanDiscussionEntry.Kind> = []
   /// 用户亲手切换过分类后，不再因为短评为空自动改看影评。
@@ -259,7 +257,6 @@ class MediaDetailViewModel: ObservableObject {
     let paginator = doubanPaginator(for: kind)
     return DoubanDiscussionAvailability.rowState(
       hasRequested: requestedDoubanKinds.contains(kind),
-      isFirstPageInFlight: doubanDiscussionTasks[kind] != nil,
       itemCount: paginator.items.count,
       isLoadingFirstPage: paginator.isFirstLoading,
       hasError: paginator.hasError,
@@ -278,6 +275,7 @@ class MediaDetailViewModel: ObservableObject {
   /// 进入详情页即拉取短评第一页；影评等用户切过去再拉（与 Web 一致，避免同时请求两个豆瓣接口）。
   ///
   /// - 不参与首屏预载、不阻塞 `isFirstRowReady`，区块异步渐进显示。
+  /// - 完整详情应用之前不发请求：入口卡片带来的部分详情里的豆瓣 ID / 类型可能与完整详情不同。
   /// - 版本 / 豆瓣 ID / 媒体类型任一不满足时**不发请求**。
   /// - 条件在调用时重新求值，「设置晚到」时后续调用仍能补发；发起后不再重发。
   /// - 调用方负责 `allowsRequests` 门禁：启动会话准备期间不得调用。
@@ -285,8 +283,9 @@ class MediaDetailViewModel: ObservableObject {
     startDoubanDiscussionIfNeeded(.comment)
   }
 
-  /// 用户点了分类胶囊。
+  /// 用户点了分类胶囊。点当前已选中的分类不算改选，短评为空时仍会自动改看影评。
   func selectDoubanDiscussion(_ kind: DoubanDiscussionEntry.Kind) {
+    guard kind != doubanDiscussionKind else { return }
     hasUserChosenDoubanKind = true
     doubanDiscussionKind = kind
     startDoubanDiscussionIfNeeded(kind)
@@ -308,10 +307,11 @@ class MediaDetailViewModel: ObservableObject {
   }
 
   private var isDoubanDiscussionEligible: Bool {
-    DoubanDiscussionAvailability.isEligible(
-      detail: detail,
-      backendVersion: apiService.settings?.BACKEND_VERSION
-    )
+    hasAppliedFullDetail
+      && DoubanDiscussionAvailability.isEligible(
+        detail: detail,
+        backendVersion: apiService.settings?.BACKEND_VERSION
+      )
   }
 
   private func startDoubanDiscussionIfNeeded(_ kind: DoubanDiscussionEntry.Kind) {
@@ -320,16 +320,17 @@ class MediaDetailViewModel: ObservableObject {
     runDoubanDiscussionFirstPage(kind)
   }
 
+  /// 重新拉取某一类的第一页。分页器同步进入首屏加载中，状态卡不会在任务启动前闪成失败；
+  /// 再次重试或离页取消会让上一轮加载提前结束，结束时的状态不是「空」，不会误切分类。
   private func runDoubanDiscussionFirstPage(_ kind: DoubanDiscussionEntry.Kind) {
-    doubanDiscussionTasks[kind]?.cancel()
-    doubanDiscussionTasks[kind] = Task { @MainActor [weak self] in
+    let load = doubanPaginator(for: kind).startRefresh()
+    guard kind == .comment else { return }
+    Task { @MainActor [weak self] in
+      await load.value
       guard let self else { return }
-      await doubanPaginator(for: kind).refresh()
-      guard !Task.isCancelled else { return }
-      doubanDiscussionTasks[kind] = nil
       // 短评确认为空时自动改看影评，否则整个区块没有可看的内容；
       // 用户已经亲手选过分类就尊重用户的选择。
-      if kind == .comment, !hasUserChosenDoubanKind, doubanRowState(for: .comment) == .empty {
+      if !hasUserChosenDoubanKind, doubanRowState(for: .comment) == .empty {
         doubanDiscussionKind = .review
         startDoubanDiscussionIfNeeded(.review)
       }
@@ -491,8 +492,6 @@ class MediaDetailViewModel: ObservableObject {
     relatedContentTask = nil
     relatedContentChildTasks.forEach { $0.cancel() }
     relatedContentChildTasks.removeAll()
-    doubanDiscussionTasks.values.forEach { $0.cancel() }
-    doubanDiscussionTasks.removeAll()
     actorsPaginator.cancel()
     recommendPaginator.cancel()
     similarPaginator.cancel()

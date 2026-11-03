@@ -55,7 +55,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   /// 记录最后一次发生的错误，用于向用户展示或日志排查。
   @Published public private(set) var lastError: Error?
 
-  /// 后端最近一次声明的总条数；接口不提供或尚未加载时为 nil，刷新时清空。
+  /// 后端最近一次声明、且不少于累计已返回条数的总条数；接口不提供或尚未加载时为 nil，刷新时清空。
   @Published private(set) var total: Int?
 
   // MARK: - 私有状态
@@ -63,6 +63,9 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   private var page: Int = 1
   /// 此前各批实际返回的条数之和（去重前）；与 `total` 一起判断是否到底。
   private var sourceOffset: Int = 0
+  /// 有 total 时连续只拿到已知条目的批次数，跨多次加载累计；取到新内容或刷新时清零。
+  private var duplicateBatchesInARow: Int = 0
+  private let maxDuplicateBatchesTowardTotal: Int = 3
   private var consecutiveErrorCount: Int = 0
   private let maxConsecutiveErrors: Int = 3
   private var generation: Int = 0
@@ -166,8 +169,22 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
   /// 将分页器重置到其初始状态并加载第一页内容。
   /// 适用于初始加载或“下拉刷新”操作。
   public func refresh() async {
-    reset()
+    beginRefresh()
     await runLoadSequence()
+  }
+
+  /// 同步重置并进入首屏加载中，再在后台加载第一页；返回的任务结束即本轮加载结束。
+  ///
+  /// 调用返回时 `isFirstLoading` 已经是 true，界面不会在「已发起、任务还没跑起来」的间隙
+  /// 看到既不在加载、也没有结果的状态。任务开始前被 `cancel()` 或再次刷新取代时不再加载。
+  @discardableResult
+  func startRefresh() -> Task<Void, Never> {
+    beginRefresh()
+    let startGeneration = generation
+    return Task { @MainActor [weak self] in
+      guard let self, self.generation == startGeneration else { return }
+      await self.runLoadSequence()
+    }
   }
 
   /// 加载下一页内容。
@@ -317,17 +334,18 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     }
 
     // 不是错误重试次数；用于跳过少量只包含已知项目的页面，继续向后寻找新内容。
-    // 没有 total 时连续两批都是已知项目就当作到底（无法判断后面还有没有）；
-    // 有 total 时偏移每批都在前进，继续向后扫描直到取到新内容或累计达到 total，
-    // 上限只是防止异常数据长时间连发请求，到达上限也不判到底。
+    // 没有 total 时本轮连续两批都是已知项目就当作到底（无法判断后面还有没有）；
+    // 有 total 时偏移每批都在前进，继续向后找，直到取到新内容、累计达到 total，
+    // 或连续 `maxDuplicateBatchesTowardTotal` 批都是已知项目（上游异常地重复返回）才判到底，
+    // 请求总量有界。
     let maxPagesToScanForNewContent = 2
-    let maxPagesToScanTowardTotal = 20
     var pagesScannedForNewContent = 0
     var hasNewContent = false
     var currentError: Error? = nil
 
-    while pagesScannedForNewContent
-      < (total == nil ? maxPagesToScanForNewContent : maxPagesToScanTowardTotal),
+    while (total == nil
+      ? pagesScannedForNewContent < maxPagesToScanForNewContent
+      : duplicateBatchesInARow < maxDuplicateBatchesTowardTotal),
       hasMore, !hasNewContent
     {
       pagesScannedForNewContent += 1
@@ -339,10 +357,6 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
         // 挂起恢复后检查：generation 变化说明已被 reset，丢弃结果
         guard currentGeneration == generation, !Task.isCancelled else { return }
 
-        if let batchTotal = batch.total, batchTotal >= 0, total != batchTotal {
-          total = batchTotal
-        }
-
         consecutiveErrorCount = 0
         clearErrorState()
 
@@ -353,12 +367,21 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
 
         if processor(&self.items, newItems) {
           hasNewContent = true
+          duplicateBatchesInARow = 0
+        } else {
+          duplicateBatchesInARow += 1
         }
 
         page += 1
         // 按实际返回条数推进偏移；去重丢掉的条目在服务端仍占位，照样计入。
         sourceOffset += newItems.count
         currentError = nil
+
+        // 声明的总数比累计已返回的条数还少，说明这一批的 total 不可信（例如后端缺 total 时
+        // 回填成本批条数），不能据此提前判到底，沿用此前的 total；真到底时由空批次判终。
+        if let batchTotal = batch.total, batchTotal >= sourceOffset, total != batchTotal {
+          total = batchTotal
+        }
 
         // 累计返回条数达到后端声明的总数：到底了，不再多发一次空请求。
         if let total, sourceOffset >= total {
@@ -377,8 +400,13 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     }
 
     if !hasNewContent && currentError == nil {
-      // 有 total 时是否到底只看累计条数与空批次（循环内已处理），不因整批重复而终止。
+      // 有 total 时累计条数与空批次已在循环内判终；这里只剩连续重复达到上限一种情况。
       if total == nil {
+        hasMore = false
+      } else if duplicateBatchesInARow >= maxDuplicateBatchesTowardTotal {
+        Logger.warning(
+          "[Paginator] 连续 \(duplicateBatchesInARow) 批都是已加载的条目，累计 \(sourceOffset) 条未达 total，按到底处理"
+        )
         hasMore = false
       }
     } else if let error = currentError {
@@ -409,6 +437,11 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     return hasMore
   }
 
+  private func beginRefresh() {
+    reset()
+    isFirstLoading = true
+  }
+
   /// 重置分页器的状态，清除所有项目并重置标志。
   private func reset() {
     generation += 1
@@ -427,6 +460,7 @@ public class Paginator<ItemType: Identifiable>: ObservableObject {
     clearErrorState()
     page = 1
     sourceOffset = 0
+    duplicateBatchesInARow = 0
     consecutiveErrorCount = 0
     maxWarmedIndex = -1
     onReset?()

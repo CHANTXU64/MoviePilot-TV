@@ -100,6 +100,34 @@ final class ReadingSheetLayoutTests: XCTestCase {
     XCTAssertEqual(pieces.map { String($0.characters) }.joined(separator: "\n"), text)
   }
 
+  /// 断点后有一长串空白时，空白留在上一片末尾但不计入行数：每块仍在行数预算内，原文不丢。
+  func testLongWhitespaceRunStaysWithinLineBudget() {
+    let text = String(repeating: "a", count: 40) + String(repeating: " ", count: 600)
+      + String(repeating: "b", count: 20)
+    let chunks = ReadingSheetLayout.chunks([ReadingBlock(text)], charactersPerLine: 10, maxLines: 4)
+    for chunk in chunks {
+      let lines = chunk.reduce(0) { $0 + ReadingSheetLayout.lineCount($1.text, charactersPerLine: 10) }
+      XCTAssertLessThanOrEqual(lines, 4)
+    }
+    XCTAssertEqual(chunks.flatMap { $0 }.map { String($0.text.characters) }.joined(), text)
+  }
+
+  /// 文本以换行结尾时拆块后末尾换行不丢：各片用换行拼回去与原文一致。
+  func testSplitLinesKeepsTrailingNewline() {
+    let text = "a\nb\n"
+    let pieces = ReadingSheetLayout.splitLines(AttributedString(text), charactersPerLine: 10, maxLines: 2)
+    XCTAssertEqual(pieces.map { String($0.characters) }, ["a\nb", ""])
+    XCTAssertEqual(pieces.map { String($0.characters) }.joined(separator: "\n"), text)
+  }
+
+  /// 行尾空白不计入行数，行首缩进照常计入。
+  func testLineCountIgnoresTrailingWhitespace() {
+    XCTAssertEqual(
+      ReadingSheetLayout.lineCount(AttributedString("abc" + String(repeating: " ", count: 50)), charactersPerLine: 10), 1)
+    XCTAssertEqual(
+      ReadingSheetLayout.lineCount(AttributedString(String(repeating: " ", count: 15) + "x"), charactersPerLine: 10), 2)
+  }
+
   /// 多行文本里单独一行就超出预算时，那一行再按字数拆，其余行仍按换行分组。
   func testOverlongLineInsideMultilineTextIsSplitByCharacters() {
     let long = String(repeating: "z", count: 100)

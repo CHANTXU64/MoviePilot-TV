@@ -153,20 +153,28 @@ nonisolated enum ReadingSheetLayout {
   }
 
   /// 估算文本显示的行数：显式换行各起一行，每行再按列宽折行；空行也算一行。
+  ///
+  /// 行尾空白在折行处悬挂、不占显示宽度，不计入（`split` 会把断点后的空白留在片尾）；
+  /// 行首缩进照常计入。
   static func lineCount(_ text: AttributedString, charactersPerLine: Int) -> Int {
     let width = max(1, charactersPerLine)
     func wrapped(_ count: Int) -> Int { max(1, (count + width - 1) / width) }
     var lines = 0
-    var current = 0
+    var visible = 0
+    var pendingWhitespace = 0
     for character in text.characters {
       if character.isNewline {
-        lines += wrapped(current)
-        current = 0
+        lines += wrapped(visible)
+        visible = 0
+        pendingWhitespace = 0
+      } else if character.isWhitespace {
+        pendingWhitespace += 1
       } else {
-        current += 1
+        visible += pendingWhitespace + 1
+        pendingWhitespace = 0
       }
     }
-    return lines + wrapped(current)
+    return lines + wrapped(visible)
   }
 
   /// 把超过行数预算的文本拆成多片，每片不超过 `maxLines` 行。
@@ -197,11 +205,11 @@ nonisolated enum ReadingSheetLayout {
       pieceLines = 0
     }
 
+    // 逐行处理到最后一行为止，包括末尾换行之后的空行，各片用换行拼回去才与原文一致。
     var lineStart = characters.startIndex
-    while lineStart < characters.endIndex {
+    while true {
       let lineEnd = characters[lineStart...].firstIndex(where: \.isNewline) ?? characters.endIndex
-      let length = characters.distance(from: lineStart, to: lineEnd)
-      let lines = max(1, (length + width - 1) / width)
+      let lines = lineCount(AttributedString(text[lineStart..<lineEnd]), charactersPerLine: width)
       if lines > budget {
         flush()
         pieces.append(
@@ -212,7 +220,8 @@ nonisolated enum ReadingSheetLayout {
         pieceEnd = lineEnd
         pieceLines += lines
       }
-      lineStart = lineEnd < characters.endIndex ? characters.index(after: lineEnd) : lineEnd
+      guard lineEnd < characters.endIndex else { break }
+      lineStart = characters.index(after: lineEnd)
     }
     flush()
     return pieces
@@ -277,7 +286,8 @@ nonisolated enum ReadingSheetLayout {
 struct ReadingSheet<Sidebar: View>: View {
   let title: String?
   var titleColor: Color = .primary
-  let blocks: [ReadingBlock]
+  /// 正文焦点块。只在初始化时拆一次：焦点在块之间移动会重算 body，不能每次都对全文重新拆块。
+  private let chunks: [[ReadingBlock]]
   let sidebar: Sidebar?
 
   @FocusState private var focusedChunkIndex: Int?
@@ -290,7 +300,7 @@ struct ReadingSheet<Sidebar: View>: View {
   ) {
     self.title = title
     self.titleColor = titleColor
-    self.blocks = blocks
+    self.chunks = Self.chunks(for: blocks, hasSidebar: true)
     self.sidebar = sidebar()
   }
 
@@ -350,27 +360,32 @@ struct ReadingSheet<Sidebar: View>: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
   }
 
-  private var chunks: [[ReadingBlock]] {
+  private static func chunks(for blocks: [ReadingBlock], hasSidebar: Bool) -> [[ReadingBlock]] {
     ReadingSheetLayout.chunks(
       blocks.isEmpty ? [ReadingBlock("（暂无内容）", style: .secondary)] : blocks,
-      charactersPerLine: ReadingSheetLayout.charactersPerLine(hasSidebar: sidebar != nil)
+      charactersPerLine: ReadingSheetLayout.charactersPerLine(hasSidebar: hasSidebar)
     )
+  }
+
+  /// 空片（拆块时落单的空行）显示为一行空白，与 `lineCount` 把空行算一行一致。
+  private static func displayText(_ text: AttributedString) -> AttributedString {
+    text.characters.isEmpty ? AttributedString(" ") : text
   }
 
   @ViewBuilder
   private func blockView(_ block: ReadingBlock) -> some View {
     switch block.style {
     case .body:
-      Text(block.text)
+      Text(Self.displayText(block.text))
         .font(.body)
         .modifier(ReadingTextLayout())
     case .secondary:
-      Text(block.text)
+      Text(Self.displayText(block.text))
         .font(.body)
         .foregroundStyle(.secondary)
         .modifier(ReadingTextLayout())
     case .heading:
-      Text(block.text)
+      Text(Self.displayText(block.text))
         .font(.headline)
         .modifier(ReadingTextLayout())
     case .field(let label):
@@ -378,7 +393,7 @@ struct ReadingSheet<Sidebar: View>: View {
         Text(block.startsParagraph ? label : "")
           .font(.body.bold())
           .frame(width: ReadingSheetLayout.fieldLabelWidth, alignment: .leading)
-        Text(block.text)
+        Text(Self.displayText(block.text))
           .font(.body)
           .foregroundStyle(.secondary)
           .modifier(ReadingTextLayout())
@@ -403,7 +418,7 @@ extension ReadingSheet where Sidebar == EmptyView {
   init(title: String?, titleColor: Color = .primary, blocks: [ReadingBlock]) {
     self.title = title
     self.titleColor = titleColor
-    self.blocks = blocks
+    self.chunks = Self.chunks(for: blocks, hasSidebar: false)
     self.sidebar = nil
   }
 }
