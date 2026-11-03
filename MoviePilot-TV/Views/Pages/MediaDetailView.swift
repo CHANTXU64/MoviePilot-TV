@@ -9,6 +9,47 @@ private final class MediaDetailImageLifetime {
   var didReleaseAfterPop = false
 }
 
+/// 详情页「演员 / 职员」合并行当前展示的分类。
+enum MediaDetailCreditKind: String, CaseIterable, Identifiable {
+  case cast
+  case crew
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .cast: return "演员"
+    case .crew: return "职员"
+    }
+  }
+
+  /// 有内容的分类，按「演员、职员」的顺序。
+  static func available(hasCast: Bool, hasCrew: Bool) -> [MediaDetailCreditKind] {
+    allCases.filter { $0 == .cast ? hasCast : hasCrew }
+  }
+
+  /// 实际展示的分类；返回 nil 时整行不渲染。
+  ///
+  /// 所选分类有内容就展示它。默认的演员没有内容时，要等演员首轮加载结束（确认为空或失败）
+  /// 才退到职员：职员随详情同步到达、演员要等网络，不等的话几乎每次进页都会先渲染职员行、
+  /// 白白请求一批职员头像，演员一到又换回来。
+  static func resolved(
+    selected: MediaDetailCreditKind,
+    hasCast: Bool,
+    hasCrew: Bool,
+    isCastSettled: Bool
+  ) -> MediaDetailCreditKind? {
+    switch selected {
+    case .cast:
+      if hasCast { return .cast }
+      return isCastSettled && hasCrew ? .crew : nil
+    case .crew:
+      if hasCrew { return .crew }
+      return hasCast ? .cast : nil
+    }
+  }
+}
+
 private struct MediaDetailBackgroundLayer: View {
   let url: URL?
   let usingPosterAsBackdrop: Bool
@@ -111,6 +152,9 @@ struct MediaDetailView: View {
   @State private var unsubscribeConfirmationMessage = ""
   /// 当前打开的豆瓣短评/影评详情
   @State private var selectedDoubanDiscussion: DoubanDiscussionEntry?
+  /// 「演员 / 职员」行选中的分类。默认演员；演员确认为空、退到职员后记成职员，
+  /// 之后演员重新加载（如页面重新激活时重试空结果）也不会让这一行消失或被换掉。
+  @State private var selectedCreditKind: MediaDetailCreditKind = .cast
   /// 推荐区预加载防抖任务
   @State private var recommendPreloadDebounce: Task<Void, Never>?
   /// 相似区预加载防抖任务
@@ -128,6 +172,8 @@ struct MediaDetailView: View {
   @FocusState private var focusedDiscussionId: String?
   @FocusState private var isHeroFocused: Bool
   @FocusState private var isContentFocused: Bool
+  /// 第二页当前含焦点的行，取值与 `firstVisibleRow` 相同。
+  @FocusState private var focusedContentRow: String?
   enum ButtonField {
     case subscribe, search, subtitleSearch, sites, otherInfo
   }
@@ -176,12 +222,44 @@ struct MediaDetailView: View {
 
   private static let doubanStatusFocusID = "douban-discussion-status"
   private static let doubanRowStartID = "douban-discussion-row-start"
+  private static let creditsRowStartID = "credits-row-start"
+
+  /// 「演员 / 职员」行实际展示的分类；两类都没有时为 nil，整行不渲染。
+  private var creditKind: MediaDetailCreditKind? {
+    let actors = viewModel.actorsPaginator
+    return MediaDetailCreditKind.resolved(
+      selected: selectedCreditKind,
+      hasCast: !actors.items.isEmpty,
+      hasCrew: !viewModel.uniqueDirectors.isEmpty,
+      isCastSettled: !actors.isLoading && (actors.hasError || !actors.hasMore)
+    )
+  }
 
   private var preferredHeaderFocus: ButtonField? {
     if canSubscribeMedia { return .subscribe }
     if canSearchResources { return .search }
     if shouldShowOtherInfo { return .otherInfo }
     return nil
+  }
+
+  private static let pageTransitionAnimation = Animation.easeInOut(duration: 0.6)
+
+  /// 第一页 ⇄ 第二页的滚动放到下一轮主线程再开始。
+  ///
+  /// 切页会插入（或移除）第二页大标题、首行标题等内容，这段布局动画要等本轮更新提交后才起步；
+  /// 滚动若在同一轮发起会先跑，先到终点后卡片又被还在长高的标题挤下去，看起来往上弹一下。
+  /// 推迟一轮让两段动画同时起步、按同一条曲线走完。期间焦点已换页时放弃这次滚动。
+  private func scrollAfterPageLayout(
+    _ proxy: ScrollViewProxy,
+    to id: String,
+    whenContentPage expectedContentPage: Bool
+  ) {
+    DispatchQueue.main.async {
+      guard showContentPage == expectedContentPage else { return }
+      withAnimation(Self.pageTransitionAnimation) {
+        proxy.scrollTo(id, anchor: .top)
+      }
+    }
   }
 
   private func loadsHorizontalImage<Item: Identifiable>(
@@ -219,11 +297,8 @@ struct MediaDetailView: View {
     if shouldShowSeasonSubscriptionSection {
       return "season"
     }
-    if !viewModel.actorsPaginator.items.isEmpty {
-      return "actors"
-    }
-    if !viewModel.uniqueDirectors.isEmpty {
-      return "directors"
+    if creditKind != nil {
+      return "credits"
     }
     if showsDoubanDiscussionSection {
       return "doubanDiscussion"
@@ -421,29 +496,43 @@ struct MediaDetailView: View {
               }
 
               seasonSubscriptionSection
-              actorsSection
-              directorsSection
+                .focused($focusedContentRow, equals: "season")
+              creditsSection
+                .focused($focusedContentRow, equals: "credits")
               doubanDiscussionSection
+                .focused($focusedContentRow, equals: "doubanDiscussion")
               recommendationsSection
+                .focused($focusedContentRow, equals: "recommendations")
               similarSection
+                .focused($focusedContentRow, equals: "similar")
             }
             .id("contentTop")
-            .padding(.top, showContentPage ? 60 : 0)
+            // tvOS 会把聚焦控件保持在离滚动区顶部约 180pt 以外。60pt 时首行可聚焦标题（胶囊、
+            // 分季的剧集组按钮）离顶部不到 180pt，焦点从卡片移上去会再滚几 pt；实测 72pt 起不再滚。
+            .padding(.top, showContentPage ? 72 : 0)
             .padding(.bottom, 80)
             .focused($isContentFocused)
-            .animation(.easeInOut(duration: 0.6), value: showContentPage)
+            .animation(Self.pageTransitionAnimation, value: showContentPage)
             .onChange(of: isHeroFocused) { _, focused in
               guard focused else { return }
               remountBackgroundForHeroIfNeeded()
-              withAnimation(.easeInOut(duration: 0.6)) {
+              withAnimation(Self.pageTransitionAnimation) {
                 showContentPage = false
-                proxy.scrollTo("top", anchor: .top)
               }
+              scrollAfterPageLayout(proxy, to: "top", whenContentPage: false)
             }
             .onChange(of: isContentFocused) { _, focused in
               guard focused, !showContentPage else { return }
-              withAnimation(.easeInOut(duration: 0.6)) {
+              withAnimation(Self.pageTransitionAnimation) {
                 showContentPage = true
+              }
+              scrollAfterPageLayout(proxy, to: "contentTop", whenContentPage: true)
+            }
+            // 第二页从下面的行回到首行时，系统只把聚焦的卡片滚进可视区，首行上方的胶囊标题
+            // 和页面大标题会被截掉。焦点一进首行就回到第二页顶部，与从 Hero 进来时位置一致。
+            .onChange(of: focusedContentRow) { _, row in
+              guard showContentPage, let row, row == firstVisibleRow else { return }
+              withAnimation(Self.pageTransitionAnimation) {
                 proxy.scrollTo("contentTop", anchor: .top)
               }
             }
@@ -1261,64 +1350,167 @@ struct MediaDetailView: View {
     }
   }
 
+  /// 「演员 / 职员」合并成一行，顶部胶囊切换；只有一类有内容时直接显示标题。
+  ///
+  /// 只渲染选中的那一类：另一类的卡片不在视图树里，不会加载头像，切走时已加载的图片随卡片一起释放。
+  /// 切换后行回到开头，图片窗口的锚点同步清空，否则窗口仍停在上次浏览的位置，开头几张卡片拿不到图。
   @ViewBuilder
-  private var directorsSection: some View {
-    let directors = viewModel.uniqueDirectors
-    if !directors.isEmpty {
+  private var creditsSection: some View {
+    if let kind = creditKind {
+      let kinds = MediaDetailCreditKind.available(
+        hasCast: !viewModel.actorsPaginator.items.isEmpty,
+        hasCrew: !viewModel.uniqueDirectors.isEmpty
+      )
       VStack(alignment: .leading, spacing: 0) {
-        if showContentPage || firstVisibleRow != "directors" {
-          Text("职员")
-            .font(.callout)
-            .bold()
-            .foregroundStyle(.secondary)
-            .padding(.leading, 89)
-            .transition(.opacity.combined(with: .move(edge: .bottom)))
-        }
-
-        ScrollView(.horizontal, showsIndicators: false) {
-          LazyHStack(spacing: 40) {
-            ForEach(Array(directors.enumerated()), id: \.element.id) { entry in
-              let index = entry.offset
-              let director = entry.element
-              PersonCard(
-                person: director,
-                staffImageUrl: director.imageURLs.profile,
-                loadsImage: loadsHorizontalImage(
-                  at: index,
-                  in: directors,
-                  anchorID: directorImageAnchorId,
-                  cardKind: .person
-                )
-              ) {
-                navigateFromSecondPage(to: director)
-              }
-              .focused($focusedDirectorId, equals: director.id)
-              .compositingGroup()
-              .contextMenu {
-                Button {
-                  navigateFromSecondPage(to: director)
-                } label: {
-                  Label("详情", systemImage: "info.circle")
-                }
-              }
+        if showContentPage || firstVisibleRow != "credits" {
+          Group {
+            if kinds.count > 1 {
+              ShelfPicker(
+                items: kinds,
+                selection: Binding(
+                  get: { creditKind },
+                  set: { if let option = $0 { selectCreditKind(option) } }
+                ),
+                title: \.title
+              )
+              .font(.callout)
+              .padding(.leading, 81)
+            } else {
+              Text(kind.title)
+                .font(.callout)
+                .bold()
+                .foregroundStyle(.secondary)
+                .padding(.leading, 89)
             }
           }
-          .padding(.horizontal, 81)
-          .padding(.top, 25)
-          .padding(.bottom, 30)
-          .onChange(of: focusedDirectorId) { _, newId in
-            guard let newId else { return }
-            directorImageAnchorId = newId
-            APIService.shared.mediaPreloader.focusDidMove(
-              to: "person:\(newId)",
-              stackID: navigationCoordinator.id
-            )
+          .transition(.opacity.combined(with: .move(edge: .bottom)))
+        }
+
+        ScrollViewReader { proxy in
+          ScrollView(.horizontal, showsIndicators: false) {
+            LazyHStack(spacing: 40) {
+              switch kind {
+              case .cast:
+                actorCards
+              case .crew:
+                directorCards
+              }
+            }
+            .padding(.horizontal, 81)
+            // 锚点包含左右内边距：滚回开头时保留 81pt 左边距，不让第一张卡贴着屏幕左边。
+            .id(Self.creditsRowStartID)
+            .padding(.top, 25)
+            .padding(.bottom, 30)
+            .onChange(of: focusedActorId) { _, newId in
+              guard let newId else { return }
+              actorImageAnchorId = newId
+              APIService.shared.mediaPreloader.focusDidMove(
+                to: "person:\(newId)",
+                stackID: navigationCoordinator.id
+              )
+              Task {
+                await viewModel.actorsPaginator.loadMore(newId)
+              }
+            }
+            .onChange(of: focusedDirectorId) { _, newId in
+              guard let newId else { return }
+              directorImageAnchorId = newId
+              APIService.shared.mediaPreloader.focusDidMove(
+                to: "person:\(newId)",
+                stackID: navigationCoordinator.id
+              )
+            }
+          }
+          .scrollClipDisabled()
+          .focusSection()
+          .onChange(of: kind) { _, _ in
+            resetCreditImageAnchors()
+            proxy.scrollTo(Self.creditsRowStartID, anchor: .leading)
+          }
+          // 退到职员后记住这个选择（含首次出现就是职员的情况）。
+          .onChange(of: kind, initial: true) { _, newKind in
+            if newKind == .crew, selectedCreditKind != .crew { selectedCreditKind = .crew }
           }
         }
-        .scrollClipDisabled()
-        .focusSection()
+        // 胶囊自带 zIndex(1)。翻到第二页时它从卡片位置往上滑入，卡片行必须盖在它上面，
+        // 否则实心胶囊会在滑动途中挡住头像；纯文字标题本来就画在卡片下面，效果与之一致。
+        .zIndex(2)
       }
     }
+  }
+
+  @ViewBuilder
+  private var actorCards: some View {
+    let actors = viewModel.actorsPaginator.items
+    ForEach(Array(actors.enumerated()), id: \.element.id) { entry in
+      let index = entry.offset
+      let actor = entry.element
+      PersonCard(
+        person: actor,
+        loadsImage: loadsHorizontalImage(
+          at: index,
+          in: actors,
+          anchorID: actorImageAnchorId,
+          cardKind: .person
+        )
+      ) {
+        navigateFromSecondPage(to: actor)
+      }
+      .focused($focusedActorId, equals: actor.id)
+      .compositingGroup()
+      .contextMenu {
+        Button {
+          navigateFromSecondPage(to: actor)
+        } label: {
+          Label("详情", systemImage: "info.circle")
+        }
+      }
+    }
+    if viewModel.actorsPaginator.isLoadingMore {
+      posterCenteredLoadingIndicator(height: 315)
+    }
+  }
+
+  @ViewBuilder
+  private var directorCards: some View {
+    let directors = viewModel.uniqueDirectors
+    ForEach(Array(directors.enumerated()), id: \.element.id) { entry in
+      let index = entry.offset
+      let director = entry.element
+      PersonCard(
+        person: director,
+        staffImageUrl: director.imageURLs.profile,
+        loadsImage: loadsHorizontalImage(
+          at: index,
+          in: directors,
+          anchorID: directorImageAnchorId,
+          cardKind: .person
+        )
+      ) {
+        navigateFromSecondPage(to: director)
+      }
+      .focused($focusedDirectorId, equals: director.id)
+      .compositingGroup()
+      .contextMenu {
+        Button {
+          navigateFromSecondPage(to: director)
+        } label: {
+          Label("详情", systemImage: "info.circle")
+        }
+      }
+    }
+  }
+
+  private func selectCreditKind(_ kind: MediaDetailCreditKind) {
+    guard kind != creditKind else { return }
+    // 同一次更新里先清锚点：新一行首次求值时就按开头计算图片窗口。
+    resetCreditImageAnchors()
+    selectedCreditKind = kind
+  }
+
+  private func resetCreditImageAnchors() {
+    actorImageAnchorId = nil
+    directorImageAnchorId = nil
   }
 
   /// 豆瓣「短评 / 影评」区块：顶部胶囊切换分类，下面是当前分类的横向卡片。
@@ -1375,8 +1567,9 @@ struct MediaDetailView: View {
                 }
               }
             }
-            .id(Self.doubanRowStartID)
             .padding(.horizontal, 81)
+            // 锚点包含左右内边距：滚回开头时保留 81pt 左边距，不让第一张卡贴着屏幕左边。
+            .id(Self.doubanRowStartID)
             .padding(.top, 30)
             .padding(.bottom, 40)
           }
@@ -1387,6 +1580,8 @@ struct MediaDetailView: View {
             proxy.scrollTo(Self.doubanRowStartID, anchor: .leading)
           }
         }
+        // 同演员行：滑入中的胶囊画在卡片下面，不挡卡片。
+        .zIndex(2)
         .onChange(of: focusedDiscussionId) { _, newId in
           guard let newId, newId != Self.doubanStatusFocusID else { return }
           Task { await viewModel.doubanPaginator(for: kind).loadMore(newId) }
@@ -1407,71 +1602,6 @@ struct MediaDetailView: View {
     case .failed: return .failed
     case .empty: return .empty
     case .idle, .loading, .ready: return .loading
-    }
-  }
-
-  @ViewBuilder
-  private var actorsSection: some View {
-    let actors = viewModel.actorsPaginator.items
-    if !actors.isEmpty {
-      VStack(alignment: .leading, spacing: 0) {
-        if showContentPage || firstVisibleRow != "actors" {
-          Text("演员")
-            .font(.callout)
-            .bold()
-            .foregroundStyle(.secondary)
-            .padding(.leading, 89)
-            .transition(.opacity.combined(with: .move(edge: .bottom)))
-        }
-
-        ScrollView(.horizontal, showsIndicators: false) {
-          LazyHStack(spacing: 40) {
-            ForEach(Array(actors.enumerated()), id: \.element.id) { entry in
-              let index = entry.offset
-              let actor = entry.element
-              PersonCard(
-                person: actor,
-                loadsImage: loadsHorizontalImage(
-                  at: index,
-                  in: actors,
-                  anchorID: actorImageAnchorId,
-                  cardKind: .person
-                )
-              ) {
-                navigateFromSecondPage(to: actor)
-              }
-              .focused($focusedActorId, equals: actor.id)
-              .compositingGroup()
-              .contextMenu {
-                Button {
-                  navigateFromSecondPage(to: actor)
-                } label: {
-                  Label("详情", systemImage: "info.circle")
-                }
-              }
-            }
-            if viewModel.actorsPaginator.isLoadingMore {
-              posterCenteredLoadingIndicator(height: 315)
-            }
-          }
-          .padding(.horizontal, 81)
-          .padding(.top, 25)
-          .padding(.bottom, 30)
-          .onChange(of: focusedActorId) { _, newId in
-            guard let newId else { return }
-            actorImageAnchorId = newId
-            APIService.shared.mediaPreloader.focusDidMove(
-              to: "person:\(newId)",
-              stackID: navigationCoordinator.id
-            )
-            Task {
-              await viewModel.actorsPaginator.loadMore(newId)
-            }
-          }
-        }
-        .scrollClipDisabled()
-        .focusSection()
-      }
     }
   }
 

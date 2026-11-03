@@ -863,7 +863,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
         source,
         [
           "remountBackgroundForHeroIfNeeded()",
-          "withAnimation(.easeInOut(duration: 0.6)) {",
+          "withAnimation(Self.pageTransitionAnimation) {",
           "showContentPage = false",
         ]
       )
