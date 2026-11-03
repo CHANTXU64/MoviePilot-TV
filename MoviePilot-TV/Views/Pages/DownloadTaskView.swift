@@ -16,7 +16,7 @@ struct DownloadTaskView: View {
       HStack {
         Text("下载任务")
           .font(.body)
-          .fontWeight(.bold)
+          .bold()
           .foregroundStyle(.secondary)
           .padding(.leading, 8)
 
@@ -333,7 +333,6 @@ private struct StateBadge: View {
   var body: some View {
     Text(state.displayText)
       .font(.caption)
-      .fontWeight(.medium)
       .padding(.horizontal, 10)
       .padding(.vertical, 3)
       .background(state.color.opacity(0.3))

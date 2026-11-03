@@ -45,7 +45,7 @@ struct BestResultCard: View {
         VStack(alignment: .leading, spacing: 8) {
           Text(title)
             .font(.caption)
-            .fontWeight(.bold)
+            .bold()
             .lineLimit(3)
             .foregroundStyle(isFocused ? .primary : .secondary)
           if let subtitle = subtitle, !subtitle.isEmpty {
@@ -58,7 +58,7 @@ struct BestResultCard: View {
       .padding(20)
       .frame(width: 500, alignment: .leading)
     }
-    .buttonStyle(.card)
+    .buttonStyle(TextCardButtonStyle())
     .focused($isFocused)
     .frame(width: 500, height: 190)
     .animation(.easeInOut(duration: 0.2), value: isFocused)
@@ -70,7 +70,7 @@ struct BestResultCard: View {
         .fill(Color(white: 0.12))
         .overlay(
           Image(systemName: MediaTypePresentation.placeholderIconName(for: type))
-            .font(.largeTitle)
+            .font(.title2)
             .foregroundColor(.gray)
         )
 

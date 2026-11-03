@@ -4,7 +4,7 @@ import SwiftUI
 /// 豆瓣短评/影评卡片。
 ///
 /// 一种模板覆盖两类内容：影评标题（仅影评）→ 星级与日期 → 正文 → 作者与「有用」数。
-/// 用原生 `Button` 承载选择键与无障碍语义，焦点外观由 `DoubanDiscussionCardButtonStyle` 自绘。
+/// 用原生 `Button` 承载选择键与无障碍语义，焦点外观用统一的 `TextCardButtonStyle`。
 struct DoubanDiscussionCard: View {
   let entry: DoubanDiscussionEntry
   /// 已经过图片代理包装的头像地址（豆瓣头像不能直连，会 418）。
@@ -18,7 +18,7 @@ struct DoubanDiscussionCard: View {
     Button(action: onTap) {
       DoubanDiscussionCardContent(entry: entry, avatarURL: avatarURL)
     }
-    .buttonStyle(DoubanDiscussionCardButtonStyle())
+    .buttonStyle(TextCardButtonStyle())
     .accessibilityLabel(entry.accessibilityLabel)
   }
 }
@@ -32,7 +32,7 @@ struct DoubanDiscussionCardContent: View {
     VStack(alignment: .leading, spacing: 0) {
       if let title = entry.title {
         Text(title)
-          .font(.callout.weight(.semibold))
+          .font(.callout.bold())
           .foregroundStyle(.primary)
           .lineLimit(2)
           .multilineTextAlignment(.leading)
@@ -58,7 +58,7 @@ struct DoubanDiscussionCardContent: View {
 
       Text(bodyText)
         .font(.caption)
-        .foregroundStyle(.primary.opacity(0.82))
+        .foregroundStyle(.secondary)
         .lineSpacing(4)
         .multilineTextAlignment(.leading)
         // 不写死行数：正文占满标题、星级与底栏之外的高度，能放几行放几行，放不下的整行截断加省略号。
@@ -70,7 +70,7 @@ struct DoubanDiscussionCardContent: View {
         DoubanDiscussionAvatar(url: avatarURL, initial: entry.authorInitial, size: 36)
 
         Text(entry.displayAuthorName)
-          .font(.caption2.weight(.semibold))
+          .font(.caption2.bold())
           .foregroundStyle(.secondary)
           .lineLimit(1)
 
@@ -133,7 +133,7 @@ struct DoubanDiscussionStatusCard: View {
             .font(.title3)
             .foregroundStyle(.secondary)
           Text(kind.failureText)
-            .font(.caption.weight(.semibold))
+            .font(.caption.bold())
           Text("按下重新加载")
             .font(.caption2)
             .foregroundStyle(.secondary)
@@ -148,7 +148,7 @@ struct DoubanDiscussionStatusCard: View {
       }
       .frame(width: DoubanDiscussionCard.cardWidth, height: DoubanDiscussionCard.cardHeight)
     }
-    .buttonStyle(DoubanDiscussionCardButtonStyle())
+    .buttonStyle(TextCardButtonStyle())
     .accessibilityLabel(accessibilityText)
   }
 
@@ -157,32 +157,6 @@ struct DoubanDiscussionStatusCard: View {
     case .loading: return "正在加载\(kind.title)"
     case .failed: return "\(kind.failureText)，按下重新加载"
     case .empty: return kind.emptyText
-    }
-  }
-}
-
-/// 卡片的焦点外观：未聚焦是贴近背景的深色面板，聚焦时提亮、放大并投影。
-/// 不画描边——描边在虚化剧照上会显得廉价。
-struct DoubanDiscussionCardButtonStyle: ButtonStyle {
-  func makeBody(configuration: Configuration) -> some View {
-    CardBody(configuration: configuration)
-  }
-
-  private struct CardBody: View {
-    let configuration: Configuration
-    @Environment(\.isFocused) private var isFocused
-
-    var body: some View {
-      configuration.label
-        .background(
-          RoundedRectangle(cornerRadius: 24, style: .continuous)
-            .fill(Color.white.opacity(isFocused ? 0.2 : 0.08))
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .scaleEffect(isFocused ? (configuration.isPressed ? 1.02 : 1.06) : 1)
-        .shadow(color: .black.opacity(isFocused ? 0.45 : 0), radius: 24, y: 14)
-        .animation(.easeOut(duration: 0.18), value: isFocused)
-        .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
     }
   }
 }
@@ -245,7 +219,7 @@ struct DoubanDiscussionAvatar: View {
 
   private var initialText: some View {
     Text(initial)
-      .font(.system(size: size * 0.42, weight: .semibold))
+      .font(.caption2.bold())
       .foregroundStyle(.secondary)
   }
 }

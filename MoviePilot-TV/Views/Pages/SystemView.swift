@@ -311,7 +311,7 @@ struct SystemView: View {
               set: { viewModel.autoSearchNewSubscriptions = $0 }
             )
           )
-          .font(.body.weight(.semibold))
+          .font(.body.bold())
           .focused($focusedItem, equals: .autoSearch)
         }
       }
@@ -346,7 +346,7 @@ struct SystemView: View {
             set: { viewModel.preloadTMDBDetails = $0 }
           )
         )
-        .font(.body.weight(.semibold))
+        .font(.body.bold())
         .focused($focusedItem, equals: .preloadTMDBDetails)
 
         Toggle(
@@ -356,7 +356,7 @@ struct SystemView: View {
             set: { viewModel.waitMediaDetailBackgroundImage = $0 }
           )
         )
-        .font(.body.weight(.semibold))
+        .font(.body.bold())
         .focused($focusedItem, equals: .waitBackgroundImage)
       }
 
@@ -490,7 +490,7 @@ struct SystemView: View {
         Text(
           "密码安全提示：请勿将 MoviePilot 密码与其他服务共用。Apple 钥匙串不可用时，本 App 会自动降级为明文持久化密码；即使 Apple TV 环境相对封闭，仍存在密码泄露风险。"
         )
-        .font(.body.weight(.semibold))
+        .font(.body.bold())
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -717,7 +717,7 @@ struct SystemView: View {
             }
           )
         )
-        .font(.body.weight(.semibold))
+        .font(.body.bold())
         .focused($focusedItem, equals: .recommendationShelf(shelf.id))
       }
     }
@@ -868,7 +868,7 @@ struct SystemView: View {
   ) -> some View {
     HStack {
       Text(title)
-        .font(.body.weight(.semibold))
+        .font(.body.bold())
         .lineLimit(1)
 
       Spacer()
@@ -880,7 +880,7 @@ struct SystemView: View {
 
         if let value {
           Text(value)
-            .font(.body.weight(.semibold))
+            .font(.body.bold())
             .foregroundStyle(.secondary)
             .lineLimit(1)
             .multilineTextAlignment(.trailing)
@@ -902,7 +902,7 @@ struct SystemView: View {
       Text(value)
         .foregroundStyle(.secondary)
     }
-    .font(.body.weight(.semibold))
+    .font(.body.bold())
     .lineLimit(1)
   }
 

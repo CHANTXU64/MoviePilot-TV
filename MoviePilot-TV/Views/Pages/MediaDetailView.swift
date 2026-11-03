@@ -415,7 +415,7 @@ struct MediaDetailView: View {
               // Centered media title — only visible on second page
               if showContentPage {
                 Text(viewModel.detail.cleanedTitle ?? "")
-                  .font(.largeTitle.bold())
+                  .font(.title2.bold())
                   .frame(maxWidth: .infinity, alignment: .center)
                   .padding(.bottom, 10)
                   .transition(.opacity)
@@ -967,7 +967,7 @@ struct MediaDetailView: View {
         VStack(alignment: .leading, spacing: 20) {
           // Title
           Text(detail.cleanedTitle ?? "Unknown")
-            .font(.largeTitle.bold())
+            .font(.title2.bold())
             .lineLimit(3)
             .multilineTextAlignment(.leading)
             .shadow(color: .black.opacity(0.4), radius: 4, x: 0, y: 2)
@@ -999,7 +999,7 @@ struct MediaDetailView: View {
               .font(.caption)
               .lineLimit(5)
               .frame(maxWidth: 740, alignment: .leading)
-              .foregroundColor(.primary.opacity(0.8))
+              .foregroundColor(.secondary)
               .shadow(color: .black.opacity(0.4), radius: 4, x: 0, y: 2)
           }
 
@@ -1188,7 +1188,7 @@ struct MediaDetailView: View {
 
           if !topActors.isEmpty {
             (Text("主演  ")
-              .foregroundColor(.primary.opacity(0.8))
+              .foregroundColor(.secondary)
               + Text(topActors.compactMap { $0.name }.joined(separator: ", "))
               .foregroundColor(.primary))
               .font(.caption)
@@ -1198,7 +1198,7 @@ struct MediaDetailView: View {
           if !topStaff.isEmpty {
             ForEach(topStaff) { staff in
               (Text("\(staff.job)  ")
-                .foregroundColor(.primary.opacity(0.8))
+                .foregroundColor(.secondary)
                 + Text(staff.names.joined(separator: ", "))
                 .foregroundColor(.primary))
                 .font(.caption)
@@ -1270,7 +1270,7 @@ struct MediaDetailView: View {
         if showContentPage || firstVisibleRow != "directors" {
           Text("职员")
             .font(.callout)
-            .fontWeight(.bold)
+            .bold()
             .foregroundStyle(.secondary)
             .padding(.leading, 89)
             .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -1419,7 +1419,7 @@ struct MediaDetailView: View {
         if showContentPage || firstVisibleRow != "actors" {
           Text("演员")
             .font(.callout)
-            .fontWeight(.bold)
+            .bold()
             .foregroundStyle(.secondary)
             .padding(.leading, 89)
             .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -1483,7 +1483,7 @@ struct MediaDetailView: View {
         if showContentPage || firstVisibleRow != "recommendations" {
           Text("推荐")
             .font(.callout)
-            .fontWeight(.bold)
+            .bold()
             .foregroundStyle(.secondary)
             .padding(.leading, 89)
             .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -1561,7 +1561,7 @@ struct MediaDetailView: View {
         if showContentPage || firstVisibleRow != "similar" {
           Text("类似")
             .font(.callout)
-            .fontWeight(.bold)
+            .bold()
             .foregroundStyle(.secondary)
             .padding(.leading, 89)
             .transition(.opacity.combined(with: .move(edge: .bottom)))

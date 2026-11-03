@@ -269,7 +269,7 @@ struct SubscribeSeasonContentView: View {
       VStack(spacing: 0) {
         if layout == .grid {
           Text("订阅   \(viewModel.mediaInfo.title ?? "")")
-            .font(.largeTitle.bold())
+            .font(.title2.bold())
             .foregroundColor(.secondary)
         }
         headerSection
@@ -482,7 +482,7 @@ struct SubscribeSeasonContentView: View {
       let content = HStack {
         Text(title)
           .font(.callout)
-          .fontWeight(.bold)
+          .bold()
           .foregroundStyle(.secondary)
 
         Spacer()

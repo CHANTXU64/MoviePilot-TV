@@ -31,7 +31,7 @@ struct HomeView: View {
             if viewModel.latestLoadFailed || viewModel.subscriptionsLoadFailed {
               HStack {
                 Text("部分数据加载失败，当前显示的是旧数据")
-                  .font(.footnote)
+                  .font(.body)
                   .foregroundColor(.secondary)
                 Button("重试") {
                   Task { await viewModel.refreshData() }
@@ -194,7 +194,7 @@ private struct MediaSectionView: View {
       HStack(spacing: 12) {
         Text(title)
           .font(.callout)
-          .fontWeight(.bold)
+          .bold()
           .foregroundStyle(.secondary)
 
         Spacer()
@@ -399,7 +399,7 @@ private struct SubscribeSectionView: View {
     VStack(alignment: .leading, spacing: 0) {
       Text(title)
         .font(.callout)
-        .fontWeight(.bold)
+        .bold()
         .foregroundStyle(.secondary)
         .padding(.leading, 8)
 

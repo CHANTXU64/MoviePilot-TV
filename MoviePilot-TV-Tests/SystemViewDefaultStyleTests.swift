@@ -285,7 +285,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("@StateObject"))
     XCTAssertFalse(source.contains(".sheet("))
     XCTAssertTrue(source.contains("Text(record.message)"))
-    XCTAssertTrue(source.contains(".font(.caption.weight(.semibold))"))
+    XCTAssertTrue(source.contains(".font(.caption.bold())"))
     XCTAssertFalse(source.contains("record.fileName"))
     XCTAssertFalse(source.contains("record.function"))
     XCTAssertFalse(source.contains("record.line"))
@@ -578,11 +578,12 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains(".focusable()"))
     XCTAssertFalse(source.contains(".focused($focusedPreviewIndex, equals: index)"))
     XCTAssertTrue(source.contains("Button(action: {})"))
-    XCTAssertTrue(source.contains(".buttonStyle(.card)"))
+    XCTAssertTrue(source.contains(".buttonStyle(TextCardButtonStyle())"))
     XCTAssertFalse(source.contains(".scaleEffect(isFocused"))
     XCTAssertTrue(source.contains("color: item.success == false ? .red : .primary"))
     XCTAssertFalse(source.contains("color: item.success == false ? .red : .green"))
-    XCTAssertTrue(source.contains(".contentMargins(28, for: .scrollContent)"))
+    XCTAssertTrue(
+      source.contains(".contentMargins(.horizontal, Self.horizontalPadding, for: .scrollContent)"))
     XCTAssertFalse(source.contains(".scrollClipDisabled()"))
     XCTAssertFalse(source.contains(".padding(20)"))
     XCTAssertTrue(source.contains("Text(\"整理预览\")"))
@@ -602,17 +603,13 @@ final class SystemViewDefaultStyleTests: XCTestCase {
         ["Image(systemName: \"arrow.right\")", ".font("]
       )
     )
-    XCTAssertFalse(source.contains(".font(.title3.bold())"))
+    XCTAssertTrue(containsTrimmedLineSequence(source, ["Text(\"整理预览\")", ".font(.title3.bold())"]))
     XCTAssertTrue(source.contains("HStack(spacing: 16)"))
     XCTAssertTrue(
       containsTrimmedLineSequence(source, [".padding(14)", ".padding(.leading, 10)"])
     )
-    XCTAssertTrue(
-      containsTrimmedLineSequence(
-        source,
-        [".padding(.top, 28)", ".frame(width: 1400, height: 820)"]
-      )
-    )
+    XCTAssertTrue(source.contains(".padding(.top, ReadingSheetLayout.verticalPadding)"))
+    XCTAssertTrue(source.contains("width: ReadingSheetLayout.sheetWidth"))
     XCTAssertTrue(source.contains("manualTransferPreviewFileName(from: item.source)"))
     XCTAssertTrue(source.contains("title: \"开始整理\""))
     XCTAssertTrue(source.contains("loadingTitle: \"整理中\""))

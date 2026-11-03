@@ -34,7 +34,7 @@ struct TransferHistoryView: View {
       HStack {
         Text("媒体整理历史")
           .font(.body)
-          .fontWeight(.bold)
+          .bold()
           .foregroundStyle(.secondary)
           .padding(.leading, 8)
 
@@ -579,7 +579,6 @@ private struct TransferHistoryRowView: View {
     if item.status.value {
       Text("成功")
         .font(.caption)
-        .fontWeight(.medium)
         .padding(.horizontal, 10)
         .padding(.vertical, 3)
         .background(Color.green.opacity(0.3))
@@ -588,7 +587,6 @@ private struct TransferHistoryRowView: View {
     } else {
       Text("失败")
         .font(.caption)
-        .fontWeight(.medium)
         .padding(.horizontal, 10)
         .padding(.vertical, 3)
         .background(Color.red.opacity(0.3))
@@ -598,79 +596,49 @@ private struct TransferHistoryRowView: View {
   }
 }
 
-private struct TransferHistoryDetailSheet: View {
+/// 转移历史详情：统一阅读 Sheet 的单栏形式。
+struct TransferHistoryDetailSheet: View {
   let item: TransferHistory
   let storageDict: [String: String]
-  @Environment(\.dismiss) var dismiss
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 30) {
-      HStack(spacing: 40) {
-        Text(item.title ?? "详情")
-          .fontWeight(.bold)
-          .foregroundColor(.primary)
-        if item.type == "电视剧" {
-          Text("\(item.seasons ?? "") \(item.episodes ?? "")")
-            .foregroundColor(.secondary)
-        }
-      }
-      .font(.title2)
+    ReadingSheet(title: Self.title(for: item), blocks: Self.blocks(for: item, storageDict: storageDict))
+  }
 
-      VStack(alignment: .leading, spacing: 20) {
-        let srcStorageName = item.src_storage.flatMap { storageDict[$0] ?? $0 } ?? "未知"
-        let srcContent = "[\(srcStorageName)] \(item.src ?? "N/A")"
-        TransferInfoRow(label: "源文件", content: srcContent)
-        Divider()
+  /// 片名；电视剧在后面附上季集。
+  static func title(for item: TransferHistory) -> String {
+    let name = item.title ?? "详情"
+    guard item.type == "电视剧" else { return name }
+    let seasonEpisode = [item.seasons, item.episodes]
+      .compactMap { $0?.trimmingCharacters(in: .whitespaces) }
+      .filter { !$0.isEmpty }
+      .joined(separator: " ")
+    return seasonEpisode.isEmpty ? name : "\(name) \(seasonEpisode)"
+  }
 
-        let destStorageName = item.dest_storage.flatMap { storageDict[$0] ?? $0 } ?? "未知"
-        let destContent = "[\(destStorageName)] \(item.dest ?? "N/A")"
-        TransferInfoRow(label: "目标文件", content: destContent)
-        if let reason = item.failureReason() {
-          Divider()
-          TransferInfoRow(label: "失败原因", content: reason)
-        }
-      }
-
-      HStack(spacing: 30) {
-        Text("状态：")
-          .fontWeight(.bold)
-          + Text(item.status.value ? "成功" : "失败")
-        Text("分类：")
-          .fontWeight(.bold)
-          + Text(item.category ?? "未知")
-        Text("转移方式：")
-          .fontWeight(.bold)
-          + Text(transferModeDisplayName(for: item.mode ?? "未知"))
-        Text("日期：")
-          .fontWeight(.bold)
-          + Text(item.date ?? "N/A")
-        if let size = item.src_fileitem?.size {
-          Text("大小：")
-            .fontWeight(.bold)
-            + Text(size.formattedBytes())
-        }
-      }
-      .foregroundColor(.secondary)
-      .font(.footnote)
+  /// 正文：「标签 + 值」两列。源文件、目标文件、失败原因（仅失败记录）一组，
+  /// 分隔线后是状态、分类、转移方式、日期、大小。
+  static func blocks(for item: TransferHistory, storageDict: [String: String]) -> [ReadingBlock] {
+    let srcStorageName = item.src_storage.flatMap { storageDict[$0] ?? $0 } ?? "未知"
+    let destStorageName = item.dest_storage.flatMap { storageDict[$0] ?? $0 } ?? "未知"
+    var blocks: [ReadingBlock] = [
+      .field("源文件", "[\(srcStorageName)] \(item.src ?? "N/A")"),
+      .field("目标文件", "[\(destStorageName)] \(item.dest ?? "N/A")"),
+    ]
+    if let reason = item.failureReason() {
+      blocks.append(.field("失败原因", reason))
     }
-    .frame(width: 1600)
-    .padding(50)
+    blocks.append(.divider)
+    blocks += [
+      .field("状态", item.status.value ? "成功" : "失败"),
+      .field("分类", item.category ?? "未知"),
+      .field("转移方式", transferModeDisplayName(for: item.mode ?? "未知")),
+      .field("日期", item.date ?? "N/A"),
+    ]
+    if let size = item.src_fileitem?.size {
+      blocks.append(.field("大小", size.formattedBytes()))
+    }
+    return blocks
   }
 }
 
-private struct TransferInfoRow: View {
-  let label: String
-  let content: String
-
-  var body: some View {
-    HStack(alignment: .top, spacing: 10) {
-      Text(label)
-        .fontWeight(.bold)
-        .foregroundColor(.primary)
-        .frame(width: 130, alignment: .leading)
-      Text(content)
-        .foregroundColor(.secondary)
-    }
-    .font(.footnote)
-  }
-}

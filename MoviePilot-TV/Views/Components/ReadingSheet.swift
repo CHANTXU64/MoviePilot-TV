@@ -9,6 +9,10 @@ nonisolated struct ReadingBlock: Hashable, Sendable {
     case secondary
     /// 小节标题。
     case heading
+    /// 「标签 + 值」一行：左列是加粗标签，右列是次要色的值；拆开的续片不重复标签。
+    case field(label: String)
+    /// 分组之间的分隔线（`text` 为空）。
+    case divider
   }
 
   var text: AttributedString
@@ -25,6 +29,12 @@ nonisolated struct ReadingBlock: Hashable, Sendable {
   init(_ text: String, style: Style = .body) {
     self.init(AttributedString(text), style: style)
   }
+
+  static func field(_ label: String, _ value: String) -> ReadingBlock {
+    ReadingBlock(value, style: .field(label: label))
+  }
+
+  static let divider = ReadingBlock(AttributedString(), style: .divider)
 }
 
 /// 阅读型 Sheet 的分段与焦点停靠块计算。
@@ -39,10 +49,10 @@ nonisolated enum ReadingSheetLayout {
   static let verticalPadding: CGFloat = 64
   static let sidebarWidth: CGFloat = 340
   static let columnSpacing: CGFloat = 64
-  /// 每块约 9 行（`.callout` 31pt 默认行距），按一下大约翻半屏。
+  /// 每块约 9 行（`.body` 29pt 默认行距），按一下大约翻半屏。
   static let maxLinesPerChunk = 9
-  /// `.callout` 中文字宽约等于字号。
-  static let bodyCharacterWidth: CGFloat = 31
+  /// `.body` 中文字宽约等于字号。
+  static let bodyCharacterWidth: CGFloat = 29
 
   static func charactersPerLine(hasSidebar: Bool) -> Int {
     var width = sheetWidth - horizontalPadding * 2 - scrollTrailingPadding
@@ -51,6 +61,15 @@ nonisolated enum ReadingSheetLayout {
   }
 
   static let scrollTrailingPadding: CGFloat = 24
+  /// 字段行左列（标签）的宽度与列间距。
+  static let fieldLabelWidth: CGFloat = 170
+  static let fieldSpacing: CGFloat = 24
+
+  /// 字段行右列能放的字数：扣掉标签列。
+  static func valueCharactersPerLine(_ charactersPerLine: Int) -> Int {
+    let labelCharacters = Int(((fieldLabelWidth + fieldSpacing) / bodyCharacterWidth).rounded(.up))
+    return max(1, charactersPerLine - labelCharacters)
+  }
 
   /// 按换行拆段，去掉首尾空白与空段。
   static func paragraphs(_ text: String) -> [String] {
@@ -77,8 +96,13 @@ nonisolated enum ReadingSheetLayout {
   ) -> [[ReadingBlock]] {
     let perLine = max(1, charactersPerLine)
     let lineBudget = max(1, maxLines)
+    func lineWidth(_ style: ReadingBlock.Style) -> Int {
+      if case .field = style { return valueCharactersPerLine(perLine) }
+      return perLine
+    }
     let pieces = blocks.flatMap { block -> [ReadingBlock] in
-      split(block.text, maxCharacters: perLine * lineBudget).enumerated().map { index, text in
+      if block.style == .divider { return [block] }
+      return split(block.text, maxCharacters: lineWidth(block.style) * lineBudget).enumerated().map { index, text in
         ReadingBlock(
           text,
           style: block.style,
@@ -92,7 +116,8 @@ nonisolated enum ReadingSheetLayout {
     var currentLines = 0
     for piece in pieces {
       let count = piece.text.characters.count
-      let lines = max(1, (count + perLine - 1) / perLine)
+      let width = lineWidth(piece.style)
+      let lines = max(1, (count + width - 1) / width)
       if !current.isEmpty, currentLines + lines > lineBudget {
         chunks.append(current)
         current = []
@@ -150,7 +175,7 @@ nonisolated enum ReadingSheetLayout {
   }
 }
 
-/// 统一的阅读型 Sheet：1500×900，内边距 72/64，标题 `.title3` 不限行数，正文 `.callout` 默认行距。
+/// 统一的阅读型 Sheet：1500×900，内边距 72/64，标题 `.title3` 不限行数，正文 `.body` 默认行距。
 ///
 /// 单栏是「标题 + 正文」；传入左栏时变成两栏，标题与正文在右栏。正文按
 /// `ReadingSheetLayout.chunks` 分成焦点停靠块（关闭焦点高亮），默认焦点在第一块，
@@ -243,23 +268,39 @@ struct ReadingSheet<Sidebar: View>: View {
     switch block.style {
     case .body:
       Text(block.text)
-        .font(.callout)
+        .font(.body)
         .modifier(ReadingTextLayout())
     case .secondary:
       Text(block.text)
-        .font(.callout)
+        .font(.body)
         .foregroundStyle(.secondary)
         .modifier(ReadingTextLayout())
     case .heading:
       Text(block.text)
         .font(.headline)
         .modifier(ReadingTextLayout())
+    case .field(let label):
+      HStack(alignment: .firstTextBaseline, spacing: ReadingSheetLayout.fieldSpacing) {
+        Text(block.startsParagraph ? label : "")
+          .font(.body.bold())
+          .frame(width: ReadingSheetLayout.fieldLabelWidth, alignment: .leading)
+        Text(block.text)
+          .font(.body)
+          .foregroundStyle(.secondary)
+          .modifier(ReadingTextLayout())
+      }
+    case .divider:
+      Divider()
     }
   }
 
   private func spacing(before block: ReadingBlock) -> CGFloat {
     guard block.startsParagraph else { return 0 }
-    return block.style == .heading ? 36 : 18
+    switch block.style {
+    case .heading: return 36
+    case .divider: return 24
+    default: return 18
+    }
   }
 }
 

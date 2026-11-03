@@ -41,6 +41,24 @@ final class ReadingSheetLayoutTests: XCTestCase {
     XCTAssertEqual(pieces.map { $0.characters.count }, [50, 50, 20])
   }
 
+  /// 字段行按扣掉标签列后的宽度拆分：续片保留字段样式但不重复标签，分隔线原样保留。
+  func testFieldValueSplitsWithinValueColumn() {
+    let perLine = 40
+    let valueWidth = ReadingSheetLayout.valueCharactersPerLine(perLine)
+    XCTAssertLessThan(valueWidth, perLine)
+    let longPath = String(repeating: "a", count: valueWidth * 3 * 2)
+    let chunks = ReadingSheetLayout.chunks(
+      [.field("源文件", longPath), .divider, .field("状态", "成功")],
+      charactersPerLine: perLine, maxLines: 3)
+    let pieces = chunks.flatMap { $0 }
+    let pathPieces = pieces.filter { $0.style == .field(label: "源文件") }
+    XCTAssertEqual(pathPieces.count, 2)
+    XCTAssertTrue(pathPieces.allSatisfy { $0.text.characters.count <= valueWidth * 3 })
+    XCTAssertEqual(pathPieces.map(\.startsParagraph), [true, false])
+    XCTAssertEqual(pieces.filter { $0.style == .divider }.count, 1)
+    XCTAssertEqual(pieces.last?.style, .field(label: "状态"))
+  }
+
   /// 富文本按换行拆段时保留属性（AniList 简介是 Markdown）。
   func testAttributedParagraphsKeepAttributes() throws {
     let text = try AttributedString(markdown: "**粗体**开头\n\n  第二段  ", options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))

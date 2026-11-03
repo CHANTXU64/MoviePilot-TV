@@ -10,7 +10,7 @@ struct LogViewerView: View {
       LazyVStack(alignment: .leading, spacing: 28) {
         VStack(alignment: .leading, spacing: 0) {
           Toggle("记录日志", isOn: $viewModel.isRecordingEnabled)
-            .font(.body.weight(.semibold))
+            .font(.body.bold())
             .focused(focusedItem, equals: .logRecording)
 
           Color.clear
@@ -66,7 +66,7 @@ struct LogViewerView: View {
             .padding(.top, 40)
         } else if viewModel.showsEmptyState {
           Text("没有符合条件的日志")
-            .font(.body.weight(.semibold))
+            .font(.body.bold())
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.leading, 16)
@@ -117,7 +117,7 @@ struct LogViewerView: View {
         .lineLimit(6)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
-    .font(.caption.weight(.semibold))
+    .font(.caption.bold())
     .padding(.vertical, 10)
   }
 }

@@ -79,7 +79,7 @@ struct TorrentCard: View {
             }
             Text(displayTitle)
               .font(.headline)
-              .fontWeight(.bold)
+              .bold()
               .lineLimit(2)
               .multilineTextAlignment(.leading)
           }
@@ -87,7 +87,7 @@ struct TorrentCard: View {
           if let seasonEpisode = MediaIdentifier.normalizedString(meta?.season_episode) {
             Text(seasonEpisode.formattedSeasonEpisode())
               .font(.caption2)
-              .fontWeight(.semibold)
+              .bold()
               .padding(.horizontal, 8)
               .padding(.vertical, 4)
               .background(
@@ -190,15 +190,7 @@ struct TorrentCard: View {
       }
       .padding(20)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(.ultraThinMaterial)
-      .clipShape(RoundedRectangle(cornerRadius: 20))
-      .shadow(
-        color: .black.opacity(isButtonFocused ? 0.5 : 0),
-        radius: 20,
-        y: 10
-      )
-      .scaleEffect(isButtonFocused ? 1.08 : 1.0)
-      .animation(.easeInOut(duration: 0.2), value: isButtonFocused)
+      .textCardFocusAppearance(isFocused: isButtonFocused)
       .opacity(context.isFilteredOut ? 0.6 : 1.0)
       .grayscale(context.isFilteredOut ? 0.7 : 0.0)
       .focusable(true)
