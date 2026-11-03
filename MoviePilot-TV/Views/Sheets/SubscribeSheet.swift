@@ -5,8 +5,6 @@ struct SubscribeSheet: View {
   @StateObject private var viewModel: SubscribeSheetViewModel
   @State private var hasAppeared = false
   @State private var isRetryingLoad = false
-  @State private var showingSiteSelection = false
-  @State private var showingFilterGroupSelection = false
   @State private var showBasic = false
   @State private var showAdvanced = false
   @State private var isSaveAttemptInFlight = false
@@ -152,14 +150,18 @@ struct SubscribeSheet: View {
                     }
                   )
 
-                  Button(action: { showingSiteSelection = true }) {
-                    LabeledContent("站点") {
-                      Text(siteButtonLabel)
-                    }
-                    .if(SheetStyleFix.shouldApply) { view in
-                      view.padding(.horizontal)
-                    }
-                  }
+                  SheetMultiPicker(
+                    title: "站点",
+                    summary: siteButtonLabel,
+                    emptySelectionTitle: "全部站点",
+                    options: viewModel.sites,
+                    id: \.id,
+                    selected: Binding(
+                      get: { Set(viewModel.subscribe.sites ?? []) },
+                      set: { viewModel.subscribe.sites = Array($0) }
+                    ),
+                    label: { $0.name }
+                  )
 
                   SheetPicker(
                     title: "下载器",
@@ -256,14 +258,18 @@ struct SubscribeSheet: View {
                       set: { viewModel.subscribe.exclude = $0.isEmpty ? nil : $0 }
                     ))
 
-                  Button(action: { showingFilterGroupSelection = true }) {
-                    LabeledContent("优先级规则组") {
-                      Text(filterGroupButtonLabel)
-                    }
-                    .if(SheetStyleFix.shouldApply) { view in
-                      view.padding(.horizontal)
-                    }
-                  }
+                  SheetMultiPicker(
+                    title: "优先级规则组",
+                    summary: filterGroupButtonLabel,
+                    emptySelectionTitle: "无",
+                    options: viewModel.filterGroups,
+                    id: \.name,
+                    selected: Binding(
+                      get: { Set(viewModel.subscribe.filter_groups ?? []) },
+                      set: { viewModel.subscribe.filter_groups = Array($0) }
+                    ),
+                    label: { $0.name }
+                  )
 
                   if viewModel.subscribe.type == "电视剧" {
                     SheetPicker(
@@ -375,28 +381,6 @@ struct SubscribeSheet: View {
       Task {
         await viewModel.cancel(wasSavingOnDismiss: wasSaving)
       }
-    }
-    .sheet(isPresented: $showingSiteSelection) {
-      MultiSelectionSheet(
-        options: viewModel.sites,
-        id: \.id,
-        selected: Binding(
-          get: { Set(viewModel.subscribe.sites ?? []) },
-          set: { viewModel.subscribe.sites = Array($0) }
-        ),
-        label: { $0.name }
-      )
-    }
-    .sheet(isPresented: $showingFilterGroupSelection) {
-      MultiSelectionSheet(
-        options: viewModel.filterGroups,
-        id: \.name,
-        selected: Binding(
-          get: { Set(viewModel.subscribe.filter_groups ?? []) },
-          set: { viewModel.subscribe.filter_groups = Array($0) }
-        ),
-        label: { $0.name }
-      )
     }
   }
 

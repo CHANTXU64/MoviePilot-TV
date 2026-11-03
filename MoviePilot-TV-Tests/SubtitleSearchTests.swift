@@ -658,39 +658,6 @@ final class SubtitleSearchTests: XCTestCase {
     XCTAssertEqual(settings.defaultSubtitleSearchSites, [2])
   }
 
-  func testApplyingSubtitleSiteSelectionCanRestoreItsOwnDefault() async throws {
-    let api = service()
-    _ = try configureSiteDefaults(api: api)
-    let navigation = ImageNavigationCoordinator(apiService: api)
-    navigation.setStackPresentation(isSelected: true, scenePhase: .active)
-    let source = navigation.sourceToken()
-    let viewModel = SearchViewModel(apiService: api)
-    configureAvailableSites(viewModel.siteFilter)
-    viewModel.searchType = .subtitle
-    viewModel.query = "已提交的字幕搜索"
-    SubtitleSearchURLProtocol.streamBody = sse(#"data: {"type":"done","items":[]}"#)
-    defer { viewModel.cancelSubtitleSearch() }
-    await viewModel.autoSearch()
-    try await until { SubtitleSearchURLProtocol.requests.count == 1 }
-
-    viewModel.query = "尚未提交的草稿"
-    viewModel.siteFilter.selectedSites = [1]
-    XCTAssertEqual(SubtitleSearchURLProtocol.requests.count, 1)
-    await viewModel.applyPagedSearchSites(from: source, in: navigation)
-    try await until { SubtitleSearchURLProtocol.requests.count == 2 }
-
-    viewModel.siteFilter.selectedSites = nil
-    await viewModel.applyPagedSearchSites(from: source, in: navigation)
-    try await until { SubtitleSearchURLProtocol.requests.count == 3 }
-    XCTAssertEqual(SubtitleSearchURLProtocol.requests.map { $0.query["sites"] }, ["2", "1", "2"])
-    XCTAssertTrue(SubtitleSearchURLProtocol.requests.allSatisfy {
-      $0.query["keyword"] == "已提交的字幕搜索"
-    })
-    XCTAssertEqual(viewModel.siteFilter.siteButtonLabel, "默认")
-    await viewModel.applyPagedSearchSites(from: source, in: navigation)
-    XCTAssertEqual(SubtitleSearchURLProtocol.requests.count, 3)
-  }
-
   private func configureSiteDefaults(api: APIService) throws -> SystemViewModel {
     let profile = try XCTUnwrap(api.profileKey)
     for prefix in ["defaultSearchSites", "defaultSubtitleSearchSites"] {

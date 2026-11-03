@@ -6,8 +6,7 @@ struct PagedResourceResultsView<Header: View>: View {
   var overrideMediaInfo: MediaInfo? = nil
   var onCancel: () -> Void
   @ViewBuilder var header: () -> Header
-  @State private var activeFilter: FilterConfig?
-  @State private var selection = Set<String>()
+  @State private var disabledFilterOptions: [String: Set<String>] = [:]
   @State private var downloadPresented = false
 
   var body: some View {
@@ -16,15 +15,14 @@ struct PagedResourceResultsView<Header: View>: View {
       else { resultsContent }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    .sheet(item: $activeFilter) { config in
-      PagedResourceFilterSheet(search: search, config: config, selection: $selection)
-        .onDisappear {
-          search.filterForm[config.id] = selection.isEmpty ? nil : selection
-          search.updateProjection()
-        }
-    }
-    .onChange(of: search.isCollecting) { _, collecting in
-      if collecting { activeFilter = nil }
+    // 筛选菜单里的「已被其他条件筛选」随结果和其他条件变化，变化后统一刷新。
+    .task(id: DisabledOptionsKey(filters: search.filterForm, options: search.filterOptions)) {
+      var disabled: [String: Set<String>] = [:]
+      for key in search.filterOptions.keys {
+        disabled[key] = await search.disabledOptions(for: key)
+      }
+      guard !Task.isCancelled else { return }
+      disabledFilterOptions = disabled
     }
     .onAppear { search.refreshRuleAvailability() }
     .onChange(of: scenePhase) { _, phase in
@@ -32,7 +30,6 @@ struct PagedResourceResultsView<Header: View>: View {
       else { search.refreshRuleAvailability() }
     }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
-      activeFilter = nil
       search.deactivate()
     }
   }
@@ -101,9 +98,9 @@ struct PagedResourceResultsView<Header: View>: View {
   private var filterBar: some View {
     TorrentFilterBar(
       filterOptions: search.filterOptions, filterForm: $search.filterForm,
-      sortField: $search.sortField, sortType: $search.sortType, activeFilter: $activeFilter,
-      onFilterClick: { key in selection = search.filterForm[key] ?? []; return [] },
-      onSortChange: { search.updateProjection() },
+      sortField: $search.sortField, sortType: $search.sortType,
+      disabledOptions: disabledFilterOptions,
+      onFilterChange: { search.updateProjection() },
       onReapplyRules: search.canReapplyRules ? { search.reapplyRules() } : nil
     )
     .disabled(downloadPresented)
@@ -124,20 +121,11 @@ struct PagedResourceResultsView<Header: View>: View {
 
   private func continueSearch() {
     guard !downloadPresented else { return }
-    activeFilter = nil
     search.continueSearch()
   }
 }
 
-private struct PagedResourceFilterSheet: View {
-  @ObservedObject var search: ResourceSearchSession
-  let config: FilterConfig
-  @Binding var selection: Set<String>
-  @State private var disabled = Set<String>()
-
-  var body: some View {
-    MultiSelectionSheet(options: config.options, id: \.self, selected: $selection,
-      label: { $0 }, disabledOptions: disabled, disabledOptionsTitle: "已被其他条件筛选")
-      .task { disabled = await search.disabledOptions(for: config.id) }
-  }
+private struct DisabledOptionsKey: Equatable {
+  let filters: [String: Set<String>]
+  let options: [String: [String]]
 }

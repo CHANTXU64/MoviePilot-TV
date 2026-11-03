@@ -674,7 +674,7 @@ final class TopShelfRefreshClientTests: XCTestCase {
     XCTAssertEqual(model.mediaInfo.title, "保留的分季页")
   }
 
-  func testExternalCancellationDismissesNestedSubscriptionAndSelectionSheets() async throws {
+  func testExternalCancellationDismissesSheetNestedAboveSubscription() async throws {
     let snapshot = SystemSessionServiceSnapshot.capture(service: .shared)
     defer { snapshot.restore(to: .shared) }
     APIService.shared.replaceSessionForTesting(
@@ -991,8 +991,9 @@ private struct TopShelfNestedSheetHost: View {
       .sheet(isPresented: $owner.outer) {
         SubscribeSheet(subscribe: Subscribe(id: 42, name: "待取消编辑", type: "电影"))
           .sheet(isPresented: $owner.inner) {
-            MultiSelectionSheet(
-              options: [1, 2], id: \.self, selected: .constant([]), label: { String($0) })
+            // 订阅 Sheet 上叠的任意 Sheet（如整理预览）都靠 cancelOnExternalNavigation 一起关闭。
+            Text("内层 Sheet")
+              .cancelOnExternalNavigation()
           }
       }
   }

@@ -2,7 +2,7 @@ import XCTest
 
 @testable import MoviePilot_TV
 
-final class MultiSelectionSheetUnavailableTests: XCTestCase {
+final class MultiSelectionUnavailableTests: XCTestCase {
   private struct Option: Equatable {
     let id: Int
     let name: String
@@ -14,7 +14,7 @@ final class MultiSelectionSheetUnavailableTests: XCTestCase {
   ]
 
   func testUnavailableSelectionsEmptyWhenAllSelectedInOptions() {
-    let unavailable = MultiSelectionSheet<Option, Int>.unavailableSelections(
+    let unavailable = MultiSelection.unavailableSelections(
       in: [1, 2],
       options: options,
       id: \.id
@@ -23,7 +23,7 @@ final class MultiSelectionSheetUnavailableTests: XCTestCase {
   }
 
   func testUnavailableSelectionsOnlyContainsOutsideOptionIDs() {
-    let unavailable = MultiSelectionSheet<Option, Int>.unavailableSelections(
+    let unavailable = MultiSelection.unavailableSelections(
       in: [1, 3, 4],
       options: options,
       id: \.id
@@ -32,31 +32,20 @@ final class MultiSelectionSheetUnavailableTests: XCTestCase {
   }
 
   func testUnavailableSelectionsKeepsStaleValueWhenOptionsEmpty() {
-    let unavailable = MultiSelectionSheet<Option, Int>.unavailableSelections(
+    let unavailable = MultiSelection.unavailableSelections(
       in: [7],
-      options: [],
+      options: [Option](),
       id: \.id
     )
     XCTAssertEqual(unavailable, [7])
   }
 
   func testUnavailableSelectionsEmptySelection() {
-    let unavailable = MultiSelectionSheet<Option, Int>.unavailableSelections(
+    let unavailable = MultiSelection.unavailableSelections(
       in: [],
       options: options,
       id: \.id
     )
     XCTAssertTrue(unavailable.isEmpty)
-  }
-
-  func testMultiSelectionUsesCompletionLabelForImmediateSelection() throws {
-    let sourceURL = URL(fileURLWithPath: #filePath)
-      .deletingLastPathComponent()
-      .deletingLastPathComponent()
-      .appendingPathComponent("MoviePilot-TV/Views/Sheets/MultiSelectionSheet.swift")
-    let source = try String(contentsOf: sourceURL, encoding: .utf8)
-
-    XCTAssertTrue(source.contains("Text(\"完成\")"))
-    XCTAssertFalse(source.contains("Text(\"确认\")"))
   }
 }

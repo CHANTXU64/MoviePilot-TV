@@ -560,54 +560,6 @@ final class ResourceSearchPaginationTests: XCTestCase {
     XCTAssertEqual(PaginationURLProtocol.requests.count, 1)
   }
 
-  func testSiteSelectionOnlyRestartsAtApplyBoundary() async throws {
-    let api = try service()
-    let navigation = ImageNavigationCoordinator(apiService: api)
-    navigation.setStackPresentation(isSelected: true, scenePhase: .active)
-    let source = navigation.sourceToken()
-    let vm = SearchViewModel(apiService: api)
-    vm.searchType = .resource; vm.query = "test"; vm.siteFilter.selectedSites = [2]
-    PaginationURLProtocol.enqueue(source: nil, page: 0, body: frame("replace", items: [], sources: [fact("old-source", page: 0)]))
-    await vm.autoSearch(); try await settled(XCTUnwrap(vm.pagedSearch))
-    vm.siteFilter.selectedSites = [1]
-    vm.query = ""
-    XCTAssertEqual(PaginationURLProtocol.requests.count, 1)
-    PaginationURLProtocol.enqueue(source: nil, page: 0, body: frame("replace", items: [item("new")], sources: []))
-    await vm.applyPagedSearchSites(from: source, in: navigation)
-    try await settled(XCTUnwrap(vm.pagedSearch))
-    XCTAssertEqual(PaginationURLProtocol.requests.map(\.sites), ["2", "1"])
-    XCTAssertEqual(PaginationURLProtocol.requests.map(\.keyword), ["test", "test"], "只应用站点范围，不提交尚未确认的搜索框草稿")
-    XCTAssertTrue(PaginationURLProtocol.requests.allSatisfy { $0.source == nil })
-    await vm.applyPagedSearchSites(from: source, in: navigation)
-    XCTAssertEqual(PaginationURLProtocol.requests.count, 2)
-  }
-
-  func testExternalNavigationOrTabDeparturePreventsDismissedSiteSheetFromRestartingSearch() async throws {
-    let api = try service()
-    let navigation = ImageNavigationCoordinator(apiService: api)
-    navigation.setStackPresentation(isSelected: true, scenePhase: .active)
-    let vm = SearchViewModel(apiService: api)
-    vm.searchType = .resource; vm.query = "test"; vm.siteFilter.selectedSites = [2]
-    PaginationURLProtocol.enqueue(source: nil, page: 0, body: frame("replace", items: [], sources: [fact("old", page: 0)]))
-    await vm.autoSearch()
-    let original = try XCTUnwrap(vm.pagedSearch)
-    try await settled(original)
-    let externalSource = navigation.sourceToken()
-    vm.siteFilter.selectedSites = [1]
-    original.deactivate()
-    NotificationCenter.default.post(name: .imageNavigationPresentationWillReset, object: api)
-    await vm.applyPagedSearchSites(from: externalSource, in: navigation)
-    XCTAssertTrue(vm.pagedSearch === original)
-    XCTAssertEqual(PaginationURLProtocol.requests.count, 1)
-
-    let tabSource = navigation.sourceToken()
-    navigation.setStackPresentation(isSelected: false, scenePhase: .active)
-    navigation.setStackPresentation(isSelected: true, scenePhase: .active)
-    await vm.applyPagedSearchSites(from: tabSource, in: navigation)
-    XCTAssertTrue(vm.pagedSearch === original)
-    XCTAssertEqual(PaginationURLProtocol.requests.count, 1)
-  }
-
   func testReapplyingRulesCancelsOlderProjectionWithoutEndingRulePreparation() async throws {
     let api = try service(admin: true)
     let key = "selectedCustomFilterRuleId_\(try XCTUnwrap(api.profileKey))"
