@@ -8,6 +8,8 @@ struct SheetTextField: View {
   let placeholder: String
   @Binding var text: String
   var keyboardType: UIKeyboardType = .default
+  /// 同一列几个输入框需要对齐起点时传入固定的标签宽度。
+  var labelWidth: CGFloat? = nil
 
   var body: some View {
     LabeledContent {
@@ -27,6 +29,7 @@ struct SheetTextField: View {
       Text(title)
         .lineLimit(1)
         .fixedSize()
+        .frame(width: labelWidth, alignment: .leading)
     }
   }
 }
