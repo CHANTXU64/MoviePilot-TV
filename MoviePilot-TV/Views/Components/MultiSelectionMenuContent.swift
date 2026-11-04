@@ -117,8 +117,8 @@ extension MultiSelectionMenuContent where Header == EmptyView {
 ///
 /// 菜单打开时焦点移进菜单、按钮失去焦点，关闭后焦点回到按钮（tvOS 18.5 / 26.5 / 27 实测一致）。
 /// 用在提交代价高的入口（重新请求、整页重新过滤），避免每勾一项就刷新一次。
-/// 兜底：万一焦点没在按钮上停留就直接移走（SwiftUI 可能合并两次焦点变化），只要 UIKit 报告
-/// 焦点回到了按钮所在的页面视图树，也提交；菜单项不在页面视图树里，菜单开着时不会误提交。
+/// 兜底：万一焦点没在按钮上停留就直接移到同页其他控件，只要 UIKit 报告焦点回到了按钮所在
+/// 页面控制器的视图里，也提交；菜单项不在其中，菜单开着时不会误提交。
 /// 菜单开着时页面被移除，也在消失时提交。
 struct DeferredMultiSelectionMenu<T, ID: Hashable, ButtonLabel: View>: View {
   let options: [T]
@@ -165,8 +165,8 @@ struct DeferredMultiSelectionMenu<T, ID: Hashable, ButtonLabel: View>: View {
 
 /// 焦点回到自己所在的视图树时回调，用来发现「菜单已关闭」。
 ///
-/// 菜单打开时焦点在系统菜单项上，菜单项不属于页面的视图树；关闭后焦点回到页面，
-/// 这时页面的承载视图包含这个空视图（tvOS 18.5 / 27 页面与 Sheet 内实测一致）。
+/// 菜单打开时焦点在系统菜单项上，菜单项不在页面控制器的视图里；关闭后焦点回到页面
+/// （按钮本身或同页其他控件），就落在页面控制器的视图里（tvOS 18.5 / 27 页面与 Sheet 内实测一致）。
 private struct MenuFocusReturnObserver: UIViewRepresentable {
   let onFocusReturned: () -> Void
 
@@ -203,9 +203,21 @@ private struct MenuFocusReturnObserver: UIViewRepresentable {
       guard
         let context = notification.userInfo?[UIFocusSystem.focusUpdateContextUserInfoKey] as? UIFocusUpdateContext,
         let next = context.nextFocusedView,
-        isDescendant(of: next) || next.isDescendant(of: self)
+        let pageView = owningViewController?.view,
+        next.isDescendant(of: pageView)
       else { return }
       onFocusReturned?()
+    }
+
+    /// 承载这个按钮的页面控制器（沿响应链向上找）。同一页面的其他控件都在它的视图里，
+    /// 系统菜单项不在（另挂在窗口上）。
+    private var owningViewController: UIViewController? {
+      var responder: UIResponder? = next
+      while let current = responder {
+        if let controller = current as? UIViewController { return controller }
+        responder = current.next
+      }
+      return nil
     }
   }
 }

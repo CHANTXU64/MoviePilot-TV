@@ -33,6 +33,9 @@ final class ResourceSearchSession: ObservableObject {
   @Published private(set) var canReapplyRules = false
   @Published private(set) var initialComplete = false
   @Published private(set) var filterOptions: [String: [String]] = [:]
+  /// 每发布一次整理结果加一。「已被其他条件筛选」按全部已收集资源计算，
+  /// 继续搜索新增的资源可能都被当前筛选挡住、显示列表不变，仍要据此重算。
+  @Published private(set) var projectionRevision = 0
   @Published private(set) var hardAllowedCount = 0
   @Published var filterForm: [String: Set<String>] = [:]
   @Published var sortField: SortField = .default
@@ -418,6 +421,7 @@ final class ResourceSearchSession: ObservableObject {
           page.rows.reduce(0) { $0 + (visibleIDs.contains($1.id) ? $1.estimatedBytes : 0) }
         }
         self.detachedPublishedCost = 0
+        self.projectionRevision &+= 1
         self.isPreparing = false
       } catch {
         guard !Task.isCancelled, self.isSessionValid else { return }
