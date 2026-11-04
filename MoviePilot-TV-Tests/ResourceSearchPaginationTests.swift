@@ -195,6 +195,33 @@ final class ResourceSearchPaginationTests: XCTestCase {
     XCTAssertEqual(session.sortField, .seeders)
   }
 
+  func testContinuedResultsHiddenByFilterStillRefreshDisabledOptions() async throws {
+    let api = try service()
+    PaginationURLProtocol.enqueue(source: nil, page: 0, body: frame("replace",
+      items: [item("A", resolution: "1080p", site: "s1"), item("B", resolution: "4K", site: "s2")],
+      sources: [fact("a", page: 0)]))
+    let session = ResourceSearchSession(query: .init(keyword: "test"), apiService: api)
+    session.start(); try await settled(session)
+    session.filterForm = ["site": ["s1"], "resolution": ["1080p"]]
+    session.updateProjection(); try await until { session.rows.count == 1 }
+    let disabledBefore = await session.disabledOptions(for: "resolution")
+    XCTAssertEqual(disabledBefore, ["4K"])
+    let rowsBefore = session.rows.map(\.id)
+    let optionsBefore = session.filterOptions
+    let revisionBefore = session.projectionRevision
+
+    // 新资源满足站点条件、被分辨率条件挡住：显示列表和选项集合都不变，但 4K 应变为可选。
+    PaginationURLProtocol.enqueue(source: "a", page: 1, body: frame("replace",
+      items: [item("C", resolution: "4K", site: "s1")], sources: [fact("a", page: 1, more: false)]))
+    session.continueSearch(); try await until { session.retainedCount == 3 }
+    try await settled(session)
+    XCTAssertEqual(session.rows.map(\.id), rowsBefore)
+    XCTAssertEqual(session.filterOptions, optionsBefore)
+    XCTAssertNotEqual(session.projectionRevision, revisionBefore, "显示列表不变时也要通知界面重算禁用项")
+    let disabledAfter = await session.disabledOptions(for: "resolution")
+    XCTAssertEqual(disabledAfter, [])
+  }
+
   func testCandidateDoesNotInheritDownloadTarget() throws {
     let original = try context(item("candidate"))
     let target = try JSONDecoder().decode(MediaInfo.self, from: json(["title": "target", "tmdb_id": 123]))
@@ -557,54 +584,6 @@ final class ResourceSearchPaginationTests: XCTestCase {
     session.deactivate(); try await settled(session)
     XCTAssertEqual(session.rows.map { $0.context.torrent_info?.title }, ["preview"])
     XCTAssertTrue(session.canRestart)
-    XCTAssertEqual(PaginationURLProtocol.requests.count, 1)
-  }
-
-  func testSiteSelectionOnlyRestartsAtApplyBoundary() async throws {
-    let api = try service()
-    let navigation = ImageNavigationCoordinator(apiService: api)
-    navigation.setStackPresentation(isSelected: true, scenePhase: .active)
-    let source = navigation.sourceToken()
-    let vm = SearchViewModel(apiService: api)
-    vm.searchType = .resource; vm.query = "test"; vm.siteFilter.selectedSites = [2]
-    PaginationURLProtocol.enqueue(source: nil, page: 0, body: frame("replace", items: [], sources: [fact("old-source", page: 0)]))
-    await vm.autoSearch(); try await settled(XCTUnwrap(vm.pagedSearch))
-    vm.siteFilter.selectedSites = [1]
-    vm.query = ""
-    XCTAssertEqual(PaginationURLProtocol.requests.count, 1)
-    PaginationURLProtocol.enqueue(source: nil, page: 0, body: frame("replace", items: [item("new")], sources: []))
-    await vm.applyPagedSearchSites(from: source, in: navigation)
-    try await settled(XCTUnwrap(vm.pagedSearch))
-    XCTAssertEqual(PaginationURLProtocol.requests.map(\.sites), ["2", "1"])
-    XCTAssertEqual(PaginationURLProtocol.requests.map(\.keyword), ["test", "test"], "只应用站点范围，不提交尚未确认的搜索框草稿")
-    XCTAssertTrue(PaginationURLProtocol.requests.allSatisfy { $0.source == nil })
-    await vm.applyPagedSearchSites(from: source, in: navigation)
-    XCTAssertEqual(PaginationURLProtocol.requests.count, 2)
-  }
-
-  func testExternalNavigationOrTabDeparturePreventsDismissedSiteSheetFromRestartingSearch() async throws {
-    let api = try service()
-    let navigation = ImageNavigationCoordinator(apiService: api)
-    navigation.setStackPresentation(isSelected: true, scenePhase: .active)
-    let vm = SearchViewModel(apiService: api)
-    vm.searchType = .resource; vm.query = "test"; vm.siteFilter.selectedSites = [2]
-    PaginationURLProtocol.enqueue(source: nil, page: 0, body: frame("replace", items: [], sources: [fact("old", page: 0)]))
-    await vm.autoSearch()
-    let original = try XCTUnwrap(vm.pagedSearch)
-    try await settled(original)
-    let externalSource = navigation.sourceToken()
-    vm.siteFilter.selectedSites = [1]
-    original.deactivate()
-    NotificationCenter.default.post(name: .imageNavigationPresentationWillReset, object: api)
-    await vm.applyPagedSearchSites(from: externalSource, in: navigation)
-    XCTAssertTrue(vm.pagedSearch === original)
-    XCTAssertEqual(PaginationURLProtocol.requests.count, 1)
-
-    let tabSource = navigation.sourceToken()
-    navigation.setStackPresentation(isSelected: false, scenePhase: .active)
-    navigation.setStackPresentation(isSelected: true, scenePhase: .active)
-    await vm.applyPagedSearchSites(from: tabSource, in: navigation)
-    XCTAssertTrue(vm.pagedSearch === original)
     XCTAssertEqual(PaginationURLProtocol.requests.count, 1)
   }
 
@@ -1294,8 +1273,8 @@ final class ResourceSearchProcessorTests: XCTestCase {
 }
 
 private func json(_ value: Any) throws -> Data { try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) }
-private func item(_ title: String, resolution: String = "4K", seeders: Int = 1, date: String = "2026-01-01 12:00:00") -> [String: Any] {
-  ["torrent_info": ["title": title, "site_name": "site", "size": 1024, "seeders": seeders,
+private func item(_ title: String, resolution: String = "4K", seeders: Int = 1, date: String = "2026-01-01 12:00:00", site: String = "site") -> [String: Any] {
+  ["torrent_info": ["title": title, "site_name": site, "size": 1024, "seeders": seeders,
     "page_url": "same-id", "pubdate": date], "meta_info": ["resource_pix": resolution]]
 }
 @MainActor private func context(_ item: [String: Any]) throws -> Context { try JSONDecoder().decode(Context.self, from: json(item)) }

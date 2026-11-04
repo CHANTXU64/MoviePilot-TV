@@ -813,23 +813,6 @@ class SearchViewModel: ObservableObject {
     }
   }
 
-  /// 站点选择完成后才应用新的请求范围；旧版本继续使用原来的提交方式。
-  func applyPagedSearchSites(
-    from source: ImageNavigationSourceToken, in navigationCoordinator: ImageNavigationCoordinator
-  ) async {
-    guard navigationCoordinator.isCurrent(source) else { return }
-    if searchType == .resource, let pagedSearch,
-      pagedSearch.query.sites != siteFilter.sitesString(for: .resource)
-    {
-      await autoSearch(resourceKeyword: pagedSearch.query.keyword)
-    } else if searchType == .subtitle, let subtitleSearch,
-      subtitleSearch.request.sites != siteFilter.sitesString(for: .subtitle),
-      let keyword = subtitleSearch.request.titleKeyword
-    {
-      await autoSearch(resourceKeyword: keyword)
-    }
-  }
-
   func cancelPagedSearch() {
     pagedSearch?.cancel()
     pagedSearch = nil

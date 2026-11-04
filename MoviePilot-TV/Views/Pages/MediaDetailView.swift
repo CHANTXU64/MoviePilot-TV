@@ -134,7 +134,6 @@ struct MediaDetailView: View {
     cachedBackgroundFailed ? nil : preloadTask.preparedContent
   }
   let allowsRequests: Bool
-  @State private var showSiteSelection = false
   @State private var showContentPage = false
   /// TMDB 跳转动作的同步防重入标记；预识别期间沿用原有 disabled 门禁。
   @State private var isTMDBJumpInFlight = false
@@ -712,14 +711,10 @@ struct MediaDetailView: View {
       subscriptionHandler.cancelPresentation()
       subscriptionHandler = SubscriptionHandler()
       sheetSubscribe = nil
-      showSiteSelection = false
       showUnsubscribeConfirm = false
       selectedDoubanDiscussion = nil
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler)
-    .sheet(isPresented: $showSiteSelection) {
-      SearchSiteSelectionSheet(viewModel: viewModel.siteFilter)
-    }
     // 短评/影评详情：正文长文靠段落焦点停靠点驱动纵向滚动，不用浏览器打开豆瓣链接。
     .sheet(item: $selectedDoubanDiscussion) { entry in
       DoubanDiscussionDetailSheet(
@@ -1235,9 +1230,7 @@ struct MediaDetailView: View {
 
             // Site selection button
             if canSearchResources && shouldShowSiteFilter {
-              Button(action: {
-                showSiteSelection = true
-              }) {
+              SearchSiteSelectionMenu(viewModel: viewModel.siteFilter) {
                 HStack(spacing: 8) {
                   Image(systemName: "server.rack")
                   Text(viewModel.siteFilter.siteButtonLabel)

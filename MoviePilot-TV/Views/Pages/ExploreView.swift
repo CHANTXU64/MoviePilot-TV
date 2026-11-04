@@ -143,10 +143,6 @@ struct FilterPickersView: View {
   @FocusState private var isTopRedirectorFocused: Bool
   @FocusState private var isBottomRedirectorFocused: Bool
 
-  // 插件多选筛选
-  @State private var multiSelectControl: PluginFilterControl?
-  @State private var multiSelectSelection: Set<JSONValue>?
-
   private var hasFocusableFilters: Bool {
     if case .custom = viewModel.selectedSource {
       return !viewModel.pluginFilterControls.isEmpty
@@ -239,33 +235,8 @@ struct FilterPickersView: View {
         setCurrentFocusIndex(newIndex)
       }
     }
-    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
-      multiSelectSelection = nil
-      multiSelectControl = nil
-    }
     // 焦点光晕超出按钮，盖住上方数据源选择器。层级只抬这一行，不改按钮和焦点条的位置。
     .zIndex(1)
-    .sheet(item: $multiSelectControl) { control in
-      MultiSelectionSheet(
-        options: control.options,
-        id: \.value,
-        selected: Binding(
-          get: { multiSelectSelection ?? [] },
-          set: { multiSelectSelection = $0 }),
-        label: { $0.title }
-      )
-      .onDisappear {
-        guard let selection = multiSelectSelection else { return }
-        multiSelectSelection = nil
-        let selected = control.options
-          .filter { selection.contains($0.value) }
-          .map(\.value)
-        viewModel.setPluginFilter(
-          control.field,
-          value: .array(selected)
-        )
-      }
-    }
   }
 
   // MARK: - TheMovieDb 筛选器
@@ -521,12 +492,23 @@ struct FilterPickersView: View {
     }
   }
 
+  /// 插件多选筛选：系统菜单，菜单关闭时才提交一次，避免每勾一项都重新请求。
   @ViewBuilder
   private func multiSelectButton(for control: PluginFilterControl, index: Int) -> some View {
-    Button {
-      multiSelectSelection = Set(pluginBindingValue(control.field).arrayValue ?? [])
-      multiSelectControl = control
-    } label: {
+    DeferredMultiSelectionMenu(
+      options: control.options,
+      id: \.value,
+      selected: Set(pluginBindingValue(control.field).arrayValue ?? []),
+      label: { $0.title },
+      emptySelectionTitle: "全部",
+      onCommit: { selection in
+        // 按选项顺序写回；不在选项里的旧值一并去掉。
+        let selected = control.options
+          .filter { selection.contains($0.value) }
+          .map(\.value)
+        viewModel.setPluginFilter(control.field, value: .array(selected))
+      }
+    ) {
       Text(multiSelectSummary(for: control))
     }
     .focused($focusedPickerIndex, equals: index)

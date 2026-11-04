@@ -11,7 +11,7 @@ final class SecondRowFocusClipTests: XCTestCase {
 
     let recommendHeader = try slice(recommend, from: "header: {", to: "contextMenu:")
     let exploreHeader = try slice(explore, from: "private var headerView", to: "// MARK: - 数据源选择器")
-    let filters = try slice(explore, from: "struct FilterPickersView", to: ".sheet(item:")
+    let filters = try slice(explore, from: "struct FilterPickersView", to: "// MARK: - TheMovieDb 筛选器")
 
     for row in [shelf, filters] {
       XCTAssertTrue(

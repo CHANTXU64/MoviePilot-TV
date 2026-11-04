@@ -9,9 +9,6 @@ struct SearchView: View {
   @State private var subscriptionHandler = SubscriptionHandler()
   @Environment(\.scenePhase) private var scenePhase
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
-  @State private var showSiteSelection = false
-  @State private var siteSelectionSource: ImageNavigationSourceToken?
-  @State private var showMediaSourceSelection = false
 
   init(isSelected: Bool = true) {
     self.isSelected = isSelected
@@ -76,9 +73,15 @@ struct SearchView: View {
         ZStack(alignment: .trailing) {
           // 聚合搜索来源按钮放在左侧，不影响中间搜索类型按钮的位置。
           if shouldShowMediaSourceFilter {
-            Button(action: {
-              showMediaSourceSelection = true
-            }) {
+            Menu {
+              Picker("搜索来源", selection: $viewModel.mediaSearchSource) {
+                Text("默认").tag(MediaSearchSource?.none)
+                ForEach(mediaSources.options(including: viewModel.mediaSearchSource)) { option in
+                  Text(option.title).tag(Optional(option.source))
+                }
+              }
+              .pickerStyle(.inline)
+            } label: {
               HStack(spacing: 8) {
                 Image(systemName: "server.rack")
                 Text("搜索来源：\(viewModel.mediaSearchSource.map(mediaSources.title(for:)) ?? "默认")")
@@ -86,6 +89,7 @@ struct SearchView: View {
               .font(.caption)
               .foregroundColor(.primary)
             }
+            .menuStyle(.button)
             .controlSize(.small)
             .focused($focusedField, equals: .mediaSource)
             .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -119,10 +123,8 @@ struct SearchView: View {
         ZStack(alignment: .leading) {
           // 资源与字幕共用当前页面的站点选择。
           if shouldShowSiteFilter {
-            Button(action: {
-              siteSelectionSource = navigationCoordinator.sourceToken()
-              showSiteSelection = true
-            }) {
+            // 站点改了只影响下一次点搜索，不自动重搜。
+            SearchSiteSelectionMenu(viewModel: viewModel.siteFilter) {
               HStack(spacing: 8) {
                 Image(systemName: "server.rack")
                 Text(viewModel.siteFilter.siteButtonLabel)
@@ -227,21 +229,9 @@ struct SearchView: View {
       .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
         subscriptionHandler.cancelPresentation()
         subscriptionHandler = SubscriptionHandler()
-        showSiteSelection = false
-        showMediaSourceSelection = false
       }
       .mediaSubscriptionAlerts(using: subscriptionHandler)
 
-      .sheet(isPresented: $showSiteSelection, onDismiss: {
-        guard let source = siteSelectionSource else { return }
-        siteSelectionSource = nil
-        Task { await viewModel.applyPagedSearchSites(from: source, in: navigationCoordinator) }
-      }) {
-        SearchSiteSelectionSheet(viewModel: viewModel.siteFilter)
-      }
-      .sheet(isPresented: $showMediaSourceSelection) {
-        MediaSourceSelectionSheet(selected: $viewModel.mediaSearchSource, sources: mediaSources)
-      }
       // 使用原生搜索栏
       .searchable(text: $viewModel.query, placement: .automatic, prompt: "电影、节目、演职人员等")
       .task {
@@ -283,42 +273,6 @@ struct SearchView: View {
     navigationCoordinator.setStackPresentation(isSelected: isSelected, scenePhase: scenePhase)
   }
 
-}
-
-private struct MediaSourceSelectionSheet: View {
-  @Binding var selected: MediaSearchSource?
-  @Environment(\.dismiss) private var dismiss
-  @ObservedObject var sources: MediaSourceOptionsModel
-
-  var body: some View {
-    NavigationStack {
-      ScrollView {
-        VStack {
-          sourceButton("默认", source: nil)
-          ForEach(sources.options(including: selected)) { option in
-            sourceButton(option.title, source: option.source)
-          }
-        }
-        .applySheetStyles()
-        .padding(28)
-      }
-    }
-  }
-
-  private func sourceButton(_ title: String, source: MediaSearchSource?) -> some View {
-    Button {
-      selected = source
-      dismiss()
-    } label: {
-      HStack {
-        Text(title)
-        Spacer()
-        if selected == source {
-          Image(systemName: "checkmark")
-        }
-      }
-    }
-  }
 }
 
 // MARK: - 聚合搜索结果

@@ -11,12 +11,9 @@ struct TorrentsResultView<Header: View>: View {
   @State private var sortField: SortField = .default
   @State private var sortType: SortType = .default
 
-  // Sheet 状态
-  @State private var activeFilter: FilterConfig?
-  @State private var tempFilterSelection: Set<String> = []
-
   // 计算/缓存状态
   @State private var filterOptions: [String: [String]] = [:]
+  @State private var disabledFilterOptions: [String: Set<String>] = [:]
   @State private var filteredResults: [Context] = []
 
   init(
@@ -44,13 +41,8 @@ struct TorrentsResultView<Header: View>: View {
             filterForm: $filterForm,
             sortField: $sortField,
             sortType: $sortType,
-            activeFilter: $activeFilter,
-            onFilterClick: { key in
-              // 打开 sheet 时初始化临时选择
-              tempFilterSelection = filterForm[key] ?? []
-              return computeDisabledOptions(for: key)
-            },
-            onSortChange: {
+            disabledOptions: disabledFilterOptions,
+            onFilterChange: {
               updateFilteredResults()
             }
           )
@@ -72,33 +64,16 @@ struct TorrentsResultView<Header: View>: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     .focusSection()
-    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in activeFilter = nil }
-    .sheet(item: $activeFilter) { config in
-      MultiSelectionSheet(
-        options: config.options,
-        id: \.self,
-        selected: $tempFilterSelection,
-        label: { $0 },
-        disabledOptions: config.disabledOptions,
-        disabledOptionsTitle: "已被其他条件筛选"
-      )
-      .onDisappear {
-        // 当 sheet 消失时提交选择
-        if tempFilterSelection.isEmpty {
-          filterForm.removeValue(forKey: config.id)
-        } else {
-          filterForm[config.id] = tempFilterSelection
-        }
-        updateFilteredResults()
-      }
-    }
+    .onChange(of: filterForm) { _, _ in updateDisabledFilterOptions() }
     .onChange(of: result.map { $0.id }) { _, _ in
       updateFilterOptions()
       updateFilteredResults()
+      updateDisabledFilterOptions()
     }
     .onAppear {
       updateFilterOptions()
       updateFilteredResults()
+      updateDisabledFilterOptions()
     }
   }
 
@@ -126,7 +101,16 @@ struct TorrentsResultView<Header: View>: View {
       let fields = ResourceResultSemantics.fields(context)
       return ResourceResultSemantics.matches(fields, filters: other) ? fields[targetKey] : nil
     })
+    // 当前已选项始终可取消，与分页结果的筛选规则一致。
     return Set(filterOptions[targetKey] ?? []).subtracting(available)
+      .subtracting(filterForm[targetKey] ?? [])
+  }
+
+  /// 「已被其他条件筛选」只随结果和筛选条件变化，排序变化不用重算。
+  private func updateDisabledFilterOptions() {
+    disabledFilterOptions = Dictionary(
+      uniqueKeysWithValues: filterOptions.keys.map { ($0, computeDisabledOptions(for: $0)) }
+    )
   }
 
   private func updateFilteredResults() {
@@ -153,15 +137,6 @@ extension TorrentsResultView where Header == EmptyView {
   init(result: [Context], overrideMediaInfo: MediaInfo? = nil) {
     self.init(result: result, overrideMediaInfo: overrideMediaInfo, header: { EmptyView() })
   }
-}
-
-// MARK: - 模型
-
-struct FilterConfig: Identifiable {
-  let id: String
-  let title: String
-  let options: [String]
-  let disabledOptions: Set<String>
 }
 
 // MARK: - 枚举
@@ -205,10 +180,11 @@ struct TorrentFilterBar: View {
   @Binding var filterForm: [String: Set<String>]
   @Binding var sortField: SortField
   @Binding var sortType: SortType
-  @Binding var activeFilter: FilterConfig?
+  /// 每个筛选项里「已被其他条件筛选」的选项，由结果页预先算好。
+  var disabledOptions: [String: Set<String>] = [:]
 
-  var onFilterClick: (String) -> Set<String>
-  var onSortChange: () -> Void
+  /// 筛选或排序变化后调用，结果页据此重新过滤。
+  var onFilterChange: () -> Void
   var onReapplyRules: (() -> Void)? = nil
 
   var body: some View {
@@ -238,24 +214,29 @@ struct TorrentFilterBar: View {
           .font(.caption)
           .foregroundColor(.primary)
         }
-        .onChange(of: sortField) { _, _ in onSortChange() }
-        .onChange(of: sortType) { _, _ in onSortChange() }
+        .onChange(of: sortField) { _, _ in onFilterChange() }
+        .onChange(of: sortType) { _, _ in onFilterChange() }
 
         Divider()
           .frame(height: 20)
 
-        // 筛选器
+        // 筛选器：系统菜单多选，菜单关闭时才提交并重新过滤一次。
         ForEach(filterKeys, id: \.self) { key in
           if let options = filterOptions[key], !options.isEmpty {
-            Button {
-              let disabled = onFilterClick(key)
-              activeFilter = FilterConfig(
-                id: key,
-                title: filterTitles[key] ?? key,
-                options: options,
-                disabledOptions: disabled
-              )
-            } label: {
+            DeferredMultiSelectionMenu(
+              options: options,
+              id: \.self,
+              selected: filterForm[key] ?? [],
+              label: { $0 },
+              disabledOptions: disabledOptions[key] ?? [],
+              disabledOptionsTitle: "已被其他条件筛选",
+              emptySelectionTitle: "全部",
+              onCommit: { selection in
+                // 空选择从表单里移除，与「未筛选」同一语义。
+                filterForm[key] = selection.isEmpty ? nil : selection
+                onFilterChange()
+              }
+            ) {
               HStack(spacing: 4) {
                 if let selected = filterForm[key], !selected.isEmpty {
                   Image(systemName: "line.3.horizontal.decrease.circle.fill")
@@ -278,7 +259,7 @@ struct TorrentFilterBar: View {
         if hasActiveFilters {
           Button(action: {
             filterForm = [:]
-            onSortChange()  // 触发更新
+            onFilterChange()
           }) {
             Text("清除筛选")
               .font(.caption)
