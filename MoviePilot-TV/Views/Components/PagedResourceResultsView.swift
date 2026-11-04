@@ -15,8 +15,10 @@ struct PagedResourceResultsView<Header: View>: View {
       else { resultsContent }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    // 筛选菜单里的「已被其他条件筛选」随结果和其他条件变化，变化后统一刷新。
-    .task(id: DisabledOptionsKey(filters: search.filterForm, options: search.filterOptions)) {
+    // 「已被其他条件筛选」随筛选条件和结果（继续搜索、重新应用规则）变化，变化后统一刷新。
+    .task(id: DisabledOptionsKey(
+      filters: search.filterForm, options: search.filterOptions, rowIDs: search.rows.map(\.id)
+    )) {
       var disabled: [String: Set<String>] = [:]
       for key in search.filterOptions.keys {
         disabled[key] = await search.disabledOptions(for: key)
@@ -128,4 +130,5 @@ struct PagedResourceResultsView<Header: View>: View {
 private struct DisabledOptionsKey: Equatable {
   let filters: [String: Set<String>]
   let options: [String: [String]]
+  let rowIDs: [String]
 }

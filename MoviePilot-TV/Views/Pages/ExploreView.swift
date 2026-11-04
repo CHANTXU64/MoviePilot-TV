@@ -143,8 +143,6 @@ struct FilterPickersView: View {
   @FocusState private var isTopRedirectorFocused: Bool
   @FocusState private var isBottomRedirectorFocused: Bool
 
-  // 插件多选筛选
-
   private var hasFocusableFilters: Bool {
     if case .custom = viewModel.selectedSource {
       return !viewModel.pluginFilterControls.isEmpty
@@ -494,35 +492,26 @@ struct FilterPickersView: View {
     }
   }
 
-  /// 插件多选筛选：系统菜单，点一项立即生效（与其他插件筛选一致），菜单不收起。
+  /// 插件多选筛选：系统菜单，菜单关闭时才提交一次，避免每勾一项都重新请求。
   @ViewBuilder
   private func multiSelectButton(for control: PluginFilterControl, index: Int) -> some View {
-    Menu {
-      MultiSelectionMenuContent(
-        options: control.options,
-        id: \.value,
-        selected: pluginMultiSelectionBinding(for: control),
-        label: { $0.title },
-        emptySelectionTitle: "全部"
-      )
-    } label: {
-      Text(multiSelectSummary(for: control))
-    }
-    .menuActionDismissBehavior(.disabled)
-    .focused($focusedPickerIndex, equals: index)
-  }
-
-  /// 按选项顺序写回；不在选项里的旧值随下一次修改去掉，与原先关闭弹窗时提交的结果一致。
-  private func pluginMultiSelectionBinding(for control: PluginFilterControl) -> Binding<Set<JSONValue>> {
-    Binding(
-      get: { Set(pluginBindingValue(control.field).arrayValue ?? []) },
-      set: { selection in
+    DeferredMultiSelectionMenu(
+      options: control.options,
+      id: \.value,
+      selected: Set(pluginBindingValue(control.field).arrayValue ?? []),
+      label: { $0.title },
+      emptySelectionTitle: "全部",
+      onCommit: { selection in
+        // 按选项顺序写回；不在选项里的旧值一并去掉。
         let selected = control.options
           .filter { selection.contains($0.value) }
           .map(\.value)
         viewModel.setPluginFilter(control.field, value: .array(selected))
       }
-    )
+    ) {
+      Text(multiSelectSummary(for: control))
+    }
+    .focused($focusedPickerIndex, equals: index)
   }
 
   private func multiSelectSummary(for control: PluginFilterControl) -> String {

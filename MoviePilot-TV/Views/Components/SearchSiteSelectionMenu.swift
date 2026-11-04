@@ -47,9 +47,7 @@ struct SearchSiteSelectionMenu<Label: View>: View {
     }
     // 多选：点一项不收起菜单。
     .menuActionDismissBehavior(.disabled)
+    // 站点由所在页面负责加载（遵守页面的请求时机）；加载失败可在菜单里重试。
     .menuStyle(.button)
-    .task {
-      if !viewModel.hasLoadedSites { await viewModel.loadSites() }
-    }
   }
 }

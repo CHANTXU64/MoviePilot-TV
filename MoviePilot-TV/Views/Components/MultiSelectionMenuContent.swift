@@ -61,9 +61,10 @@ struct MultiSelectionMenuContent<T, ID: Hashable, Header: View>: View {
       }
     }
 
-    let unavailableSelections = MultiSelection.unavailableSelections(
-      in: selected, options: options, id: id
-    )
+    // 可选项为空（还没加载或加载失败）时无法判断哪些已失效，不提供清除，免得误删有效选择。
+    let unavailableSelections = options.isEmpty
+      ? []
+      : MultiSelection.unavailableSelections(in: selected, options: options, id: id)
     if !unavailableSelections.isEmpty {
       Section {
         Button(role: .destructive) {
@@ -109,5 +110,102 @@ extension MultiSelectionMenuContent where Header == EmptyView {
       emptySelectionTitle: emptySelectionTitle,
       header: { EmptyView() }
     )
+  }
+}
+
+/// 页面上的多选筛选菜单：菜单里勾选只改草稿，菜单关闭、焦点回到按钮时才提交一次。
+///
+/// 菜单打开时焦点移进菜单、按钮失去焦点，关闭后焦点回到按钮（tvOS 18.5 / 26.5 / 27 实测一致）。
+/// 用在提交代价高的入口（重新请求、整页重新过滤），避免每勾一项就刷新一次。
+/// 兜底：万一焦点没在按钮上停留就直接移走（SwiftUI 可能合并两次焦点变化），只要 UIKit 报告
+/// 焦点回到了按钮所在的页面视图树，也提交；菜单项不在页面视图树里，菜单开着时不会误提交。
+/// 菜单开着时页面被移除，也在消失时提交。
+struct DeferredMultiSelectionMenu<T, ID: Hashable, ButtonLabel: View>: View {
+  let options: [T]
+  let id: KeyPath<T, ID>
+  /// 已提交的选择；菜单里显示的是草稿。
+  let selected: Set<ID>
+  let label: (T) -> String
+  var disabledOptions: Set<ID> = []
+  var disabledOptionsTitle: String? = nil
+  var emptySelectionTitle: String? = nil
+  let onCommit: (Set<ID>) -> Void
+  @ViewBuilder let buttonLabel: () -> ButtonLabel
+
+  @State private var draft: Set<ID>?
+  @FocusState private var isFocused: Bool
+
+  var body: some View {
+    Menu {
+      MultiSelectionMenuContent(
+        options: options, id: id,
+        selected: Binding(get: { draft ?? selected }, set: { draft = $0 }),
+        label: label,
+        disabledOptions: disabledOptions, disabledOptionsTitle: disabledOptionsTitle,
+        emptySelectionTitle: emptySelectionTitle
+      )
+    } label: {
+      buttonLabel()
+    }
+    .menuActionDismissBehavior(.disabled)
+    .focused($isFocused)
+    .onChange(of: isFocused) { _, focused in
+      if focused { commit() }
+    }
+    .background(MenuFocusReturnObserver(onFocusReturned: commit))
+    .onDisappear { commit() }
+  }
+
+  private func commit() {
+    guard let pending = draft else { return }
+    draft = nil
+    if pending != selected { onCommit(pending) }
+  }
+}
+
+/// 焦点回到自己所在的视图树时回调，用来发现「菜单已关闭」。
+///
+/// 菜单打开时焦点在系统菜单项上，菜单项不属于页面的视图树；关闭后焦点回到页面，
+/// 这时页面的承载视图包含这个空视图（tvOS 18.5 / 27 页面与 Sheet 内实测一致）。
+private struct MenuFocusReturnObserver: UIViewRepresentable {
+  let onFocusReturned: () -> Void
+
+  func makeUIView(context _: UIViewRepresentableContext<MenuFocusReturnObserver>) -> ObserverView {
+    ObserverView()
+  }
+
+  func updateUIView(_ view: ObserverView, context _: UIViewRepresentableContext<MenuFocusReturnObserver>) {
+    view.onFocusReturned = onFocusReturned
+  }
+
+  final class ObserverView: UIView {
+    var onFocusReturned: (() -> Void)?
+
+    override init(frame: CGRect) {
+      super.init(frame: frame)
+      isUserInteractionEnabled = false
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func didMoveToWindow() {
+      super.didMoveToWindow()
+      let center = NotificationCenter.default
+      center.removeObserver(self, name: UIFocusSystem.didUpdateNotification, object: nil)
+      guard window != nil else { return }
+      center.addObserver(
+        self, selector: #selector(focusDidUpdate(_:)),
+        name: UIFocusSystem.didUpdateNotification, object: nil
+      )
+    }
+
+    @objc private func focusDidUpdate(_ notification: Notification) {
+      guard
+        let context = notification.userInfo?[UIFocusSystem.focusUpdateContextUserInfoKey] as? UIFocusUpdateContext,
+        let next = context.nextFocusedView,
+        isDescendant(of: next) || next.isDescendant(of: self)
+      else { return }
+      onFocusReturned?()
+    }
   }
 }

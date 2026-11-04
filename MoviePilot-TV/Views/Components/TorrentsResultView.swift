@@ -64,13 +64,16 @@ struct TorrentsResultView<Header: View>: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     .focusSection()
+    .onChange(of: filterForm) { _, _ in updateDisabledFilterOptions() }
     .onChange(of: result.map { $0.id }) { _, _ in
       updateFilterOptions()
       updateFilteredResults()
+      updateDisabledFilterOptions()
     }
     .onAppear {
       updateFilterOptions()
       updateFilteredResults()
+      updateDisabledFilterOptions()
     }
   }
 
@@ -98,7 +101,16 @@ struct TorrentsResultView<Header: View>: View {
       let fields = ResourceResultSemantics.fields(context)
       return ResourceResultSemantics.matches(fields, filters: other) ? fields[targetKey] : nil
     })
+    // 当前已选项始终可取消，与分页结果的筛选规则一致。
     return Set(filterOptions[targetKey] ?? []).subtracting(available)
+      .subtracting(filterForm[targetKey] ?? [])
+  }
+
+  /// 「已被其他条件筛选」只随结果和筛选条件变化，排序变化不用重算。
+  private func updateDisabledFilterOptions() {
+    disabledFilterOptions = Dictionary(
+      uniqueKeysWithValues: filterOptions.keys.map { ($0, computeDisabledOptions(for: $0)) }
+    )
   }
 
   private func updateFilteredResults() {
@@ -106,10 +118,6 @@ struct TorrentsResultView<Header: View>: View {
       ResourceResultSemantics.matches(ResourceResultSemantics.fields($0), filters: filterForm)
     }
     filteredResults = Self.orderResults(results, by: sortField, type: sortType)
-    // 筛选菜单里的「已被其他条件筛选」随结果和其他条件变化，在这里统一刷新，不在菜单渲染时现算。
-    disabledFilterOptions = Dictionary(
-      uniqueKeysWithValues: filterOptions.keys.map { ($0, computeDisabledOptions(for: $0)) }
-    )
   }
 
   static func orderResults(_ results: [Context], by sortField: SortField, type sortType: SortType) -> [Context] {
@@ -130,9 +138,6 @@ extension TorrentsResultView where Header == EmptyView {
     self.init(result: result, overrideMediaInfo: overrideMediaInfo, header: { EmptyView() })
   }
 }
-
-// MARK: - 模型
-
 
 // MARK: - 枚举
 enum SortField: String, CaseIterable, Identifiable {
@@ -215,20 +220,23 @@ struct TorrentFilterBar: View {
         Divider()
           .frame(height: 20)
 
-        // 筛选器：系统菜单多选，点一项立即重新过滤，菜单不收起。
+        // 筛选器：系统菜单多选，菜单关闭时才提交并重新过滤一次。
         ForEach(filterKeys, id: \.self) { key in
           if let options = filterOptions[key], !options.isEmpty {
-            Menu {
-              MultiSelectionMenuContent(
-                options: options,
-                id: \.self,
-                selected: selectionBinding(for: key),
-                label: { $0 },
-                disabledOptions: disabledOptions[key] ?? [],
-                disabledOptionsTitle: "已被其他条件筛选",
-                emptySelectionTitle: "全部"
-              )
-            } label: {
+            DeferredMultiSelectionMenu(
+              options: options,
+              id: \.self,
+              selected: filterForm[key] ?? [],
+              label: { $0 },
+              disabledOptions: disabledOptions[key] ?? [],
+              disabledOptionsTitle: "已被其他条件筛选",
+              emptySelectionTitle: "全部",
+              onCommit: { selection in
+                // 空选择从表单里移除，与「未筛选」同一语义。
+                filterForm[key] = selection.isEmpty ? nil : selection
+                onFilterChange()
+              }
+            ) {
               HStack(spacing: 4) {
                 if let selected = filterForm[key], !selected.isEmpty {
                   Image(systemName: "line.3.horizontal.decrease.circle.fill")
@@ -243,7 +251,6 @@ struct TorrentFilterBar: View {
               .font(.caption)
               .foregroundColor((filterForm[key]?.isEmpty ?? true) ? .primary : .blue)
             }
-            .menuActionDismissBehavior(.disabled)
           }
         }
 
@@ -267,17 +274,6 @@ struct TorrentFilterBar: View {
       .padding(.vertical, 8)
     }
     .scrollClipDisabled()
-  }
-
-  /// 空选择从表单里移除，与「未筛选」同一语义。
-  private func selectionBinding(for key: String) -> Binding<Set<String>> {
-    Binding(
-      get: { filterForm[key] ?? [] },
-      set: { selection in
-        filterForm[key] = selection.isEmpty ? nil : selection
-        onFilterChange()
-      }
-    )
   }
 
   private var filterKeys: [String] {

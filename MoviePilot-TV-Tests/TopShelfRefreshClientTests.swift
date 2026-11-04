@@ -674,7 +674,7 @@ final class TopShelfRefreshClientTests: XCTestCase {
     XCTAssertEqual(model.mediaInfo.title, "保留的分季页")
   }
 
-  func testExternalCancellationDismissesSheetNestedAboveSubscription() async throws {
+  func testExternalCancellationDismissesMediaSearchSheetNestedAboveDownload() async throws {
     let snapshot = SystemSessionServiceSnapshot.capture(service: .shared)
     defer { snapshot.restore(to: .shared) }
     APIService.shared.replaceSessionForTesting(
@@ -989,11 +989,16 @@ private struct TopShelfNestedSheetHost: View {
   var body: some View {
     Text("底层页面")
       .sheet(isPresented: $owner.outer) {
-        SubscribeSheet(subscribe: Subscribe(id: 42, name: "待取消编辑", type: "电影"))
+        // 真实的嵌套：添加下载 Sheet 里的「媒体 ID」行会再弹出媒体搜索 Sheet。
+        AddDownloadSheet(torrent: TorrentInfo(
+          site: 1, site_name: "嵌套站点", site_order: 1, title: "待取消下载", description: "",
+          enclosure: "https://example.test/nested", page_url: "https://example.test/nested",
+          size: 1024, seeders: 1, peers: 0, pubdate: "2026-06-16 10:00:00",
+          uploadvolumefactor: 1.0, downloadvolumefactor: 1.0, pri_order: 1, labels: [],
+          volume_factor: "1x"
+        ))
           .sheet(isPresented: $owner.inner) {
-            // 订阅 Sheet 上叠的任意 Sheet（如整理预览）都靠 cancelOnExternalNavigation 一起关闭。
-            Text("内层 Sheet")
-              .cancelOnExternalNavigation()
+            ManualMediaSearchSheet(source: .themoviedb) { _, _ in }
           }
       }
   }
