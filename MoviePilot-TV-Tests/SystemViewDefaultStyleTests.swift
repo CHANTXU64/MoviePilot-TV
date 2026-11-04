@@ -500,7 +500,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let subscriptionModifierSource = try Self.source(at: "MoviePilot-TV/Views/Components/SubscriptionModifier.swift")
     let forkSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/ForkSubscribeSheet.swift")
 
-    XCTAssertTrue(sheetStyleSource.contains("struct SheetFeedbackView: View"))
+    XCTAssertFalse(sheetStyleSource.contains("struct SheetFeedbackView: View"))
     XCTAssertTrue(sheetStyleSource.contains("struct SheetActionButton: View"))
     XCTAssertTrue(sheetStyleSource.contains("guard !isLoading else { return }"))
     XCTAssertTrue(sheetStyleSource.contains(".disabled(isDisabled)"))
@@ -508,7 +508,14 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(subscribePanelSource.contains("SheetActionButton("))
     XCTAssertTrue(reorganizeSheetSource.contains("SheetActionButton("))
     XCTAssertTrue(addDownloadSheetSource.contains("SheetActionButton("))
-    XCTAssertTrue(addDownloadSheetSource.contains("SheetFeedbackView(message: message, actionTitle: \"重新加载\")"))
+    // 出错提示统一用同一个组件，放在主按钮上方。
+    let subtitleSheetSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/SubtitleDownloadSheet.swift")
+    for source in [
+      addDownloadSheetSource, reorganizeSheetSource, subscribePanelSource, forkSource, subtitleSheetSource,
+    ] {
+      XCTAssertTrue(source.contains("SheetRetryingMessage("))
+      XCTAssertFalse(source.contains("feedbackMessage:"))
+    }
     XCTAssertTrue(forkSource.contains("SheetActionButton("))
     XCTAssertTrue(forkSource.contains(".applySheetStyles()"))
     XCTAssertTrue(subscribePanelSource.contains("title: isNew ? \"订阅\" : \"保存\""))

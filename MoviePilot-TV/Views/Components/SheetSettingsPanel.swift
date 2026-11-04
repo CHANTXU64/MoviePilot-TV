@@ -1,3 +1,4 @@
+import Flow
 import SwiftUI
 
 /// 三栏设置大面板（订阅、整理共用）。
@@ -103,14 +104,171 @@ struct SheetMessageBlock: View {
 }
 
 /// 一项带图标的小字信息，例如「🌐 默认站点」「✓ 整理成功」。
+/// 颜色跟随外层（见 `SheetInfoTags`）；需要提醒时（如做种数少）传入 `tint`。
 struct SheetInfoTag: View {
   let systemImage: String
   let text: String
+  var tint: Color? = nil
 
   var body: some View {
-    HStack(spacing: 6) {
+    let label = HStack(spacing: 6) {
       Image(systemName: systemImage)
       Text(text)
+    }
+    if let tint {
+      label.foregroundStyle(tint)
+    } else {
+      label
+    }
+  }
+}
+
+/// 一排信息标签：小字、灰色，放不下时换行，单项不折行。
+struct SheetInfoTags<Content: View>: View {
+  @ViewBuilder let content: () -> Content
+
+  var body: some View {
+    HFlow(itemSpacing: 24, rowSpacing: 8) {
+      content()
+    }
+    .font(.caption2)
+    .foregroundStyle(.secondary)
+    .lineLimit(1)
+  }
+}
+
+/// 快速确认面板（添加下载、下载字幕共用）：宽 1400，左栏是这条资源的信息（不可聚焦），
+/// 右栏 600 宽放少量设置和主按钮。
+struct SheetQuickPanel<Info: View, Controls: View>: View {
+  @ViewBuilder let info: () -> Info
+  @ViewBuilder let controls: () -> Controls
+
+  static var width: CGFloat { 1400 }
+  /// 设置项和主按钮只占右边，不随 Sheet 拉成整行。
+  static var controlsWidth: CGFloat { 600 }
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 56) {
+      info()
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+
+      VStack(alignment: .leading, spacing: 0) {
+        controls()
+      }
+      .frame(width: Self.controlsWidth)
+      .fixedSize(horizontal: false, vertical: true)
+    }
+    .padding(.horizontal, 56)
+    .padding(.vertical, 52)
+    .frame(width: Self.width, alignment: .topLeading)
+    .applySheetStyles()
+  }
+}
+
+/// 快速确认面板左栏：标题（加粗，最多 3 行）、副标题（最多 8 行）和一排信息标签。
+struct SheetItemHeader<Tags: View>: View {
+  let title: String
+  let subtitle: String?
+  @ViewBuilder let tags: () -> Tags
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      VStack(alignment: .leading, spacing: 8) {
+        Text(title)
+          .font(.callout.bold())
+          .lineLimit(3)
+        if let subtitle {
+          Text(subtitle)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(8)
+        }
+      }
+      SheetInfoTags(content: tags)
+        .padding(.top, 16)
+    }
+  }
+}
+
+/// 出错提示的保留规则（`SheetRetryingMessage` 用；纯逻辑，便于直接测试）。
+///
+/// 重试、保存时 ViewModel 往往先清掉出错原因再开始；忙的这段时间继续显示上一条。
+/// 不在忙时出错原因变空（用户自己改好了，或重试没有真正开始），就同时忘掉，
+/// 下次再忙时不会把已经解决的旧提示翻出来。
+struct SheetMessageRetention: Equatable {
+  private(set) var retainedMessage: String?
+  private(set) var retainedHasRetry = false
+
+  /// 当前要显示的提示。
+  func shownMessage(current: String?, isBusy: Bool) -> String? {
+    current ?? (isBusy ? retainedMessage : nil)
+  }
+
+  /// 显示的是保留下来的提示时，按当时有没有「重试」决定。
+  func showsRetry(current: String?, currentHasRetry: Bool) -> Bool {
+    current == nil ? retainedHasRetry : currentHasRetry
+  }
+
+  mutating func update(current: String?, hasRetry: Bool, isBusy: Bool) {
+    if let current {
+      retainedMessage = current
+      retainedHasRetry = hasRetry
+    } else if !isBusy {
+      retainedMessage = nil
+      retainedHasRetry = false
+    }
+  }
+}
+
+/// 面板里的出错提示（各 Sheet 共用）：显示 `SheetMessageBlock`，并处理重试期间的焦点。
+///
+/// 保留规则见 `SheetMessageRetention`。提示消失时焦点还在「重试」上，就调用 `onRecovered`，
+/// 由面板把焦点移到主按钮，不让系统随便挪。
+struct SheetRetryingMessage: View {
+  /// ViewModel 当前的出错原因。
+  let message: String?
+  /// 加载、保存或提交进行中。
+  let isBusy: Bool
+  /// 当前出错能重试时传入；整理失败这类直接再按主按钮的情况传 nil。
+  let retry: (() -> Void)?
+  /// 显示提示时与相邻按钮的间距；不显示时不占位，面板高度不跟着忙闲变化。
+  var spacingEdges: Edge.Set = .bottom
+  var spacing: CGFloat = 20
+  var onRecovered: () -> Void = {}
+
+  @State private var retention = SheetMessageRetention()
+  @FocusState private var isRetryFocused: Bool
+
+  private struct Input: Equatable {
+    let message: String?
+    let hasRetry: Bool
+    let isBusy: Bool
+  }
+
+  private var shownMessage: String? {
+    retention.shownMessage(current: message, isBusy: isBusy)
+  }
+
+  var body: some View {
+    VStack(spacing: 0) {
+      if let shownMessage {
+        let showsRetry = retention.showsRetry(current: message, currentHasRetry: retry != nil)
+        SheetMessageBlock(
+          message: shownMessage,
+          // 显示的是保留下来的提示时，「重试」照样留着（忙的时候按了不响应）。
+          retry: showsRetry ? (message == nil ? {} : retry) : nil,
+          isRetrying: isBusy,
+          retryFocus: $isRetryFocused
+        )
+        .padding(spacingEdges, spacing)
+      }
+    }
+    .onChange(of: Input(message: message, hasRetry: retry != nil, isBusy: isBusy), initial: true) {
+      _, input in
+      retention.update(current: input.message, hasRetry: input.hasRetry, isBusy: input.isBusy)
+    }
+    .onChange(of: shownMessage) { old, new in
+      if old != nil, new == nil, isRetryFocused { onRecovered() }
     }
   }
 }

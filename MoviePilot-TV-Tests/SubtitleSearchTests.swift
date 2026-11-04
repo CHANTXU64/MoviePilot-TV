@@ -1085,6 +1085,34 @@ final class SubtitleSearchTests: XCTestCase {
     XCTAssertNotEqual(model.state, .completed)
   }
 
+  /// 面板提示的优先级：下载失败盖过保存路径加载失败，此时不提供重新加载目录的「重试」；
+  /// 没有出错时按媒体 ID 提示，和「下载」能否点击用同一套判断。
+  func testDownloadStatusMessagePrefersFailureOverDirectoryError() async throws {
+    let model = downloadModel(api: service())
+    XCTAssertEqual(model.statusMessage, SubtitleDownloadViewModel.missingMediaIdMessage)
+    XCTAssertFalse(model.canSubmit)
+
+    model.mediaId = "0"
+    XCTAssertEqual(model.statusMessage, MediaSearchSource.invalidManualIdMessage)
+    XCTAssertFalse(model.canSubmit)
+
+    model.mediaId = "550"
+    XCTAssertNil(model.statusMessage)
+    XCTAssertTrue(model.canSubmit)
+
+    SubtitleSearchURLProtocol.directoryBody = Data(#"{"success":false,"message":"目录暂时不可用"}"#.utf8)
+    await model.loadDirectories()
+    let directoryError = try XCTUnwrap(model.directoryError)
+    XCTAssertEqual(model.statusMessage, directoryError)
+    XCTAssertTrue(model.canRetryDirectories)
+
+    SubtitleSearchURLProtocol.downloadStatus = 500
+    SubtitleSearchURLProtocol.downloadBody = Data(#"{"detail":"内部错误"}"#.utf8)
+    await model.submit()?.value
+    XCTAssertEqual(model.statusMessage, "500: 内部错误")
+    XCTAssertFalse(model.canRetryDirectories)
+  }
+
   func testGatewayDownloadStatusDoesNotFinishOnTheServer() async throws {
     for status in [502, 503, 504] {
       let probe = SubtitleDownloadCallbackProbe()

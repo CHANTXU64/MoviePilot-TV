@@ -68,4 +68,52 @@ final class SheetSettingsLayoutTests: XCTestCase {
     XCTAssertGreaterThan(
       inline.textRect(forBounds: bounds).minX, SheetInlineTextField.horizontalInset)
   }
+
+  // MARK: - 出错提示的保留规则
+
+  /// 重试：ViewModel 先清掉原因、再进入忙碌；忙的时候继续显示原来的提示和「重试」，
+  /// 忙完没有新的出错就消失。
+  func testRetainedMessageStaysDuringRetryAndClearsAfterSuccess() {
+    var retention = SheetMessageRetention()
+    retention.update(current: "加载失败", hasRetry: true, isBusy: false)
+    XCTAssertEqual(retention.shownMessage(current: "加载失败", isBusy: false), "加载失败")
+
+    retention.update(current: nil, hasRetry: false, isBusy: true)
+    XCTAssertEqual(retention.shownMessage(current: nil, isBusy: true), "加载失败")
+    XCTAssertTrue(retention.showsRetry(current: nil, currentHasRetry: false))
+
+    retention.update(current: nil, hasRetry: false, isBusy: false)
+    XCTAssertNil(retention.shownMessage(current: nil, isBusy: false))
+    XCTAssertNil(retention.retainedMessage)
+  }
+
+  /// 重试后又出错：显示新的原因。
+  func testRetainedMessageIsReplacedByNewFailure() {
+    var retention = SheetMessageRetention()
+    retention.update(current: "加载失败", hasRetry: true, isBusy: false)
+    retention.update(current: nil, hasRetry: false, isBusy: true)
+    retention.update(current: "网络超时", hasRetry: true, isBusy: false)
+    XCTAssertEqual(retention.shownMessage(current: "网络超时", isBusy: false), "网络超时")
+  }
+
+  /// 用户自己把问题改好（不在忙时提示变空），保留的旧提示一起忘掉；
+  /// 之后按主按钮进入忙碌，不会把已经解决的提示翻出来。
+  func testResolvedMessageIsNotShownAgainOnNextBusyPeriod() {
+    var retention = SheetMessageRetention()
+    retention.update(current: "请填写媒体 ID", hasRetry: false, isBusy: false)
+    retention.update(current: nil, hasRetry: false, isBusy: false)
+    XCTAssertNil(retention.retainedMessage)
+
+    retention.update(current: nil, hasRetry: false, isBusy: true)
+    XCTAssertNil(retention.shownMessage(current: nil, isBusy: true))
+  }
+
+  /// 不能重试的提示（如整理失败）在忙的时候保留，但不会凭空多出「重试」。
+  func testRetainedMessageKeepsItsRetryAvailability() {
+    var retention = SheetMessageRetention()
+    retention.update(current: "整理没有开始", hasRetry: false, isBusy: false)
+    retention.update(current: nil, hasRetry: false, isBusy: true)
+    XCTAssertEqual(retention.shownMessage(current: nil, isBusy: true), "整理没有开始")
+    XCTAssertFalse(retention.showsRetry(current: nil, currentHasRetry: false))
+  }
 }

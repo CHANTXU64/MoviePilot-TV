@@ -8,28 +8,6 @@ enum SheetStyleFix {
   }
 }
 
-struct SheetFeedbackView: View {
-  let message: String
-  var actionTitle: String?
-  var action: (() -> Void)?
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      Label(message, systemImage: "exclamationmark.circle.fill")
-        .font(.callout)
-        .foregroundStyle(.orange)
-        .lineLimit(3)
-        .minimumScaleFactor(0.75)
-
-      if let actionTitle, let action {
-        Button(actionTitle, action: action)
-      }
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .padding(.horizontal)
-  }
-}
-
 struct SheetActionButton: View {
   let title: String
   /// 主操作的图标（如下载），只在非加载状态显示。
@@ -37,7 +15,6 @@ struct SheetActionButton: View {
   let loadingTitle: String
   let isLoading: Bool
   var isDisabled = false
-  var feedbackMessage: String?
   /// 需要默认聚焦或由外部控制焦点时传入。
   var focus: FocusState<Bool>.Binding? = nil
   let action: () -> Void
@@ -48,38 +25,32 @@ struct SheetActionButton: View {
   static let spinnerScale: CGFloat = 0.85
 
   var body: some View {
-    VStack(spacing: 10) {
-      Button(action: {
-        // 加载中保持按钮可聚焦：tvOS 上聚焦元素一旦被 disabled，
-        // 焦点引擎会把焦点移走，ScrollView 随即滚回顶部（“保存后自动上滑”）。
-        // 这里只忽略点击，不让焦点状态发生变化。
-        guard !isLoading else { return }
-        action()
-      }) {
-        HStack(spacing: 8) {
-          if isLoading || systemImage != nil {
-            // 图标位的尺寸始终由同字号的图标决定：系统转圈图标（40pt）比一行文字高，
-            // 直接放进来会把按钮撑高，加载结束又缩回。转圈图标叠在上面、缩到和图标一样大。
-            Image(systemName: systemImage ?? "circle")
-              .opacity(isLoading ? 0 : 1)
-              .overlay {
-                if isLoading {
-                  ProgressView()
-                    .scaleEffect(Self.spinnerScale)
-                }
+    Button(action: {
+      // 加载中保持按钮可聚焦：tvOS 上聚焦元素一旦被 disabled，
+      // 焦点引擎会把焦点移走，ScrollView 随即滚回顶部（“保存后自动上滑”）。
+      // 这里只忽略点击，不让焦点状态发生变化。
+      guard !isLoading else { return }
+      action()
+    }) {
+      HStack(spacing: 8) {
+        if isLoading || systemImage != nil {
+          // 图标位的尺寸始终由同字号的图标决定：系统转圈图标（40pt）比一行文字高，
+          // 直接放进来会把按钮撑高，加载结束又缩回。转圈图标叠在上面、缩到和图标一样大。
+          Image(systemName: systemImage ?? "circle")
+            .opacity(isLoading ? 0 : 1)
+            .overlay {
+              if isLoading {
+                ProgressView()
+                  .scaleEffect(Self.spinnerScale)
               }
-          }
-          Text(isLoading ? loadingTitle : title)
+            }
         }
-        .frame(maxWidth: .infinity)
+        Text(isLoading ? loadingTitle : title)
       }
-      .disabled(isDisabled)
-      .focused(focus ?? $ownFocus)
-
-      if let feedbackMessage {
-        SheetFeedbackView(message: feedbackMessage)
-      }
+      .frame(maxWidth: .infinity)
     }
+    .disabled(isDisabled)
+    .focused(focus ?? $ownFocus)
   }
 }
 

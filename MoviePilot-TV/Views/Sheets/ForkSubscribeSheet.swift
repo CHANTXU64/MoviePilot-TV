@@ -100,24 +100,28 @@ struct ForkSubscribeSheet: View {
 
         HStack {
           Spacer()
-          SheetActionButton(
-            title: "复用订阅",
-            loadingTitle: "复用中",
-            isLoading: isForking,
-            feedbackMessage: subscriptionHandler.forkErrorMessage
-          ) {
-            Task {
-              guard !isForking else { return }
-              isForking = true
-              defer { isForking = false }
-              let newSubId = await subscriptionHandler.fork(share: share)
-              if let newSubId = newSubId {
-                onFork(newSubId)
-                dismiss()
+          VStack(spacing: 0) {
+            // 出错提示和其他面板一样放在主按钮上方。
+            SheetRetryingMessage(
+              message: subscriptionHandler.forkErrorMessage, isBusy: isForking, retry: nil)
+            SheetActionButton(
+              title: "复用订阅",
+              loadingTitle: "复用中",
+              isLoading: isForking
+            ) {
+              Task {
+                guard !isForking else { return }
+                isForking = true
+                defer { isForking = false }
+                let newSubId = await subscriptionHandler.fork(share: share)
+                if let newSubId = newSubId {
+                  onFork(newSubId)
+                  dismiss()
+                }
               }
             }
+            .disabled(!subscriptionHandler.forkCapability.isAvailable)
           }
-          .disabled(!subscriptionHandler.forkCapability.isAvailable)
           .frame(width: 520)
           Spacer()
         }

@@ -277,7 +277,7 @@ class ReorganizeViewModel: ObservableObject {
       return false
     }
     guard isMediaIdValid else {
-      errorMessage = "媒体 ID 格式无效。"
+      errorMessage = MediaSearchSource.invalidManualIdMessage
       return false
     }
     isSubmitting = true
@@ -354,7 +354,7 @@ class ReorganizeViewModel: ObservableObject {
       return .notGenerated
     }
     guard isMediaIdValid else {
-      errorMessage = "媒体 ID 格式无效。"
+      errorMessage = MediaSearchSource.invalidManualIdMessage
       return .notGenerated
     }
     isPreviewing = true

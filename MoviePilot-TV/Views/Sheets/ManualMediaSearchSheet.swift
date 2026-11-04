@@ -234,7 +234,7 @@ struct ManualMediaIdField: View {
       }
       // 设置面板里由面板统一显示出错原因，不在设置列里插行。
       if !isInline, !source.isValidManualId(mediaId) {
-        Text("媒体 ID 格式无效")
+        Text(MediaSearchSource.invalidManualIdMessage)
           .foregroundStyle(.red)
       }
     }

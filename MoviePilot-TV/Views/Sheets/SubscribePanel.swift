@@ -1,4 +1,3 @@
-import Flow
 import SwiftUI
 
 /// 订阅面板。新增订阅：先是只看的快速面板，点「订阅设置」后同一个 Sheet 原地变成三栏大面板。
@@ -24,10 +23,7 @@ struct SubscribePanel: View {
   @State private var isReloading = false
   /// 面板还在显示；关掉后迟到的重新加载结果不再接着订阅。
   @State private var isActive = true
-  /// 重试、保存期间 ViewModel 会先清掉出错原因；这段时间继续显示上一条，提示和「重试」不消失。
-  @State private var retainedMessage: String?
   @FocusState private var isConfirmFocused: Bool
-  @FocusState private var isRetryFocused: Bool
   @FocusState private var focusedField: SubscribeSettingField?
 
   static let quickWidth: CGFloat = 860
@@ -45,15 +41,6 @@ struct SubscribePanel: View {
     }
     .scaleEffect(isContentVisible ? 1 : 0.97)
     .opacity(isContentVisible ? 1 : 0)
-    .onChange(of: viewModelMessage) { _, message in
-      if let message { retainedMessage = message }
-    }
-    .onChange(of: isBusy) { _, busy in
-      guard !busy, viewModelMessage == nil else { return }
-      // 重试成功：提示要消失了，焦点还在「重试」上时移到主按钮，不让系统随便挪。
-      if retainedMessage != nil, isRetryFocused { isConfirmFocused = true }
-      retainedMessage = nil
-    }
     .onAppear { isActive = true }
     .onDisappear { isActive = false }
   }
@@ -76,10 +63,7 @@ struct SubscribePanel: View {
     VStack(alignment: .leading, spacing: 0) {
       header(titleLineLimit: 6, showsTags: true)
 
-      if let message = statusMessage {
-        messageBlock(message)
-          .padding(.top, 24)
-      }
+      messageBlock(spacingEdges: .top, spacing: 24)
 
       VStack(spacing: 18) {
         subscribeButton(focus: $isConfirmFocused)
@@ -113,10 +97,7 @@ struct SubscribePanel: View {
     ) {
       header(titleLineLimit: 10, showsTags: viewModel.isNewSubscription)
     } actions: {
-      if let message = statusMessage {
-        messageBlock(message)
-          .padding(.bottom, 20)
-      }
+      messageBlock(spacingEdges: .bottom, spacing: 20)
       subscribeButton(focus: $isConfirmFocused)
     } row: { field in
       row(field)
@@ -162,15 +143,12 @@ struct SubscribePanel: View {
 
   /// 编辑订阅的固定信息，样式同设置标签。
   private var savedInfo: some View {
-    HFlow(itemSpacing: 24, rowSpacing: 8) {
+    SheetInfoTags {
       if let progress = viewModel.progressText {
         SheetInfoTag(systemImage: "checklist", text: progress)
       }
       SheetInfoTag(systemImage: viewModel.savedState.systemImage, text: viewModel.savedState.title)
     }
-    .font(.caption2)
-    .foregroundStyle(.secondary)
-    .lineLimit(1)
   }
 
   /// 这次订阅的设置，样式同「添加下载」的信息行：带图标的小字，放不下时换行。
@@ -178,7 +156,7 @@ struct SubscribePanel: View {
   private var tags: some View {
     let subscribe = viewModel.subscribe
     let isTV = subscribe.type == "电视剧"
-    return HFlow(itemSpacing: 24, rowSpacing: 8) {
+    return SheetInfoTags {
       if isTV, let season = subscribe.season {
         SheetInfoTag(systemImage: "tv", text: "第 \(season) 季")
       }
@@ -197,22 +175,15 @@ struct SubscribePanel: View {
         systemImage: "arrow.down.circle",
         text: MediaIdentifier.normalizedString(subscribe.downloader) ?? "默认下载器")
     }
-    .font(.caption2)
-    .foregroundStyle(.secondary)
-    .lineLimit(1)
   }
 
-  /// ViewModel 当前的出错原因：加载失败优先，其次是订阅时的失败。
-  private var viewModelMessage: String? {
+  /// 出错原因：加载失败优先，其次是订阅时的失败。
+  private var statusMessage: String? {
     viewModel.loadErrorMessage ?? viewModel.errorMessage
   }
 
   private var isBusy: Bool { isSaving || isReloading || viewModel.isLoading }
 
-  /// 要显示的出错原因；重试、保存进行中继续显示上一条，结束后按结果更新或消失。
-  private var statusMessage: String? {
-    viewModelMessage ?? (isBusy ? retainedMessage : nil)
-  }
 
   /// 加载失败且不能重试（需要关掉重开）时，按钮不再可用；其余情况按钮都能按。
   private var canAct: Bool {
@@ -241,8 +212,6 @@ struct SubscribePanel: View {
   /// 「重试」做什么：加载失败且能重试时重新加载；订阅（保存）失败或之后启用、搜索失败时再提交一次。
   /// 加载失败但不能重试（需要关掉重开）时没有「重试」。
   private var retryAction: (() -> Void)? {
-    // 重试进行中：按钮留着（显示「重试中」，按了不响应）。
-    if viewModelMessage == nil, isBusy, retainedMessage != nil { return {} }
     if viewModel.loadErrorMessage != nil {
       guard viewModel.canRetryLoad else { return nil }
       return {
@@ -261,9 +230,13 @@ struct SubscribePanel: View {
     }
   }
 
-  private func messageBlock(_ message: String) -> some View {
-    SheetMessageBlock(
-      message: message, retry: retryAction, isRetrying: isBusy, retryFocus: $isRetryFocused)
+  private func messageBlock(spacingEdges: Edge.Set, spacing: CGFloat) -> some View {
+    SheetRetryingMessage(
+      message: statusMessage, isBusy: isBusy, retry: retryAction,
+      spacingEdges: spacingEdges, spacing: spacing
+    ) {
+      isConfirmFocused = true
+    }
   }
 
   private func subscribeButton(focus: FocusState<Bool>.Binding?) -> some View {

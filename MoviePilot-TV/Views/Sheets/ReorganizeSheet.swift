@@ -1,4 +1,3 @@
-import Flow
 import SwiftUI
 
 nonisolated func manualTransferPreviewFileName(from path: String?) -> String? {
@@ -24,9 +23,6 @@ struct ReorganizeSheet: View {
   @State private var showPreview = false
   @FocusState private var focusedField: ReorganizeSettingField?
   @FocusState private var isStartFocused: Bool
-  @FocusState private var isRetryFocused: Bool
-  /// 重新加载期间 ViewModel 会先清掉加载失败的原因；这段时间继续显示，提示和「重试」不消失。
-  @State private var retainedLoadError: String?
 
   init(
     records: [TransferHistory],
@@ -65,15 +61,6 @@ struct ReorganizeSheet: View {
     }
     .task {
       await viewModel.loadConfig()
-    }
-    .onChange(of: viewModel.loadErrorMessage) { _, message in
-      if let message { retainedLoadError = message }
-    }
-    .onChange(of: viewModel.isLoading) { _, isLoading in
-      guard !isLoading, viewModel.loadErrorMessage == nil else { return }
-      // 重试成功：提示要消失了，焦点还在「重试」上时移到「开始整理」，不让系统随便挪。
-      if retainedLoadError != nil, isRetryFocused { isStartFocused = true }
-      retainedLoadError = nil
     }
     .task { await sources.load() }
     .cancelOnExternalNavigation()
@@ -164,7 +151,7 @@ struct ReorganizeSheet: View {
         }
       }
 
-      HFlow(itemSpacing: 24, rowSpacing: 8) {
+      SheetInfoTags {
         statusTag(isSuccess: record.status.value, text: record.status.value ? "整理成功" : "整理失败")
         if let mode = MediaIdentifier.normalizedString(record.mode) {
           SheetInfoTag(systemImage: "arrow.right.doc.on.clipboard", text: transferModeDisplayName(for: mode))
@@ -173,9 +160,6 @@ struct ReorganizeSheet: View {
           SheetInfoTag(systemImage: "internaldrive", text: size.formattedBytes())
         }
       }
-      .font(.caption2)
-      .foregroundStyle(.secondary)
-      .lineLimit(1)
       .padding(.top, 16)
 
       // 失败原因和上面的标签同样是小字，属于记录信息，不和居中的说明混淆。
@@ -210,7 +194,7 @@ struct ReorganizeSheet: View {
         }
       }
 
-      HFlow(itemSpacing: 24, rowSpacing: 8) {
+      SheetInfoTags {
         if successCount > 0 {
           statusTag(isSuccess: true, text: "\(successCount) 条成功")
         }
@@ -218,9 +202,6 @@ struct ReorganizeSheet: View {
           statusTag(isSuccess: false, text: "\(failureCount) 条失败")
         }
       }
-      .font(.caption2)
-      .foregroundStyle(.secondary)
-      .lineLimit(1)
       .padding(.top, 16)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -232,13 +213,12 @@ struct ReorganizeSheet: View {
   }
 
   /// 出错原因：加载失败优先，其次是当前整理方式不受支持，最后是整理或预览的结果。
-  /// 加载失败（重新加载期间继续显示）、整理方式不受支持、媒体 ID 格式不对，最后是整理或预览的结果。
+  /// 加载失败、整理方式不受支持、媒体 ID 格式不对，最后是整理或预览的结果。
   /// 媒体 ID 的问题也放在这里，不在设置列里插一行红字，免得后面的行跟着跳。
   private var statusMessage: String? {
     viewModel.loadErrorMessage
-      ?? (viewModel.isLoading ? retainedLoadError : nil)
       ?? viewModel.transferTypeGateMessage
-      ?? (viewModel.isMediaIdValid ? nil : "媒体 ID 格式无效。")
+      ?? (viewModel.isMediaIdValid ? nil : MediaSearchSource.invalidManualIdMessage)
       ?? viewModel.errorMessage
   }
 
@@ -250,8 +230,7 @@ struct ReorganizeSheet: View {
 
   /// 只有加载失败时提供「重试」。整理失败时直接再按「开始整理」，不另设按钮重复提交。
   private var retryAction: (() -> Void)? {
-    guard viewModel.loadErrorMessage != nil || (viewModel.isLoading && retainedLoadError != nil)
-    else { return nil }
+    guard viewModel.loadErrorMessage != nil else { return nil }
     return {
       guard !viewModel.isLoading else { return }
       Task { await viewModel.loadConfig() }
@@ -260,12 +239,12 @@ struct ReorganizeSheet: View {
 
   @ViewBuilder
   private var actions: some View {
-    if let message = statusMessage {
-      SheetMessageBlock(
-        message: message, retry: retryAction, isRetrying: viewModel.isLoading,
-        retryFocus: $isRetryFocused
-      )
-      .padding(.bottom, 20)
+    SheetRetryingMessage(
+      message: statusMessage,
+      isBusy: viewModel.isLoading || viewModel.isSubmitting || viewModel.isPreviewing,
+      retry: retryAction
+    ) {
+      isStartFocused = true
     }
 
     VStack(spacing: 18) {

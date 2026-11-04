@@ -85,6 +85,25 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
   private var normalizedMediaId: String {
     mediaId.trimmingCharacters(in: .whitespacesAndNewlines)
   }
+  /// 字幕必须对应到一部媒体才能下载；还没有媒体 ID 时提示怎么填。
+  static let missingMediaIdMessage = "请填写字幕对应的媒体 ID，可点击放大镜按名称查询。"
+
+  /// 面板上显示的提示：下载失败或登录失效优先；其次是保存路径加载失败（能编辑时才有意义，可重试）；
+  /// 最后是媒体 ID 还没填好。和 `canSubmit` 用同一套判断，按钮不可用时一定有原因可看。
+  var statusMessage: String? {
+    if let failure { return failure }
+    guard canEdit else { return nil }
+    if let directoryError { return directoryError }
+    if normalizedMediaId.isEmpty { return Self.missingMediaIdMessage }
+    return mediaSource.isValidManualId(normalizedMediaId)
+      ? nil : MediaSearchSource.invalidManualIdMessage
+  }
+
+  /// 显示的是保存路径加载失败时，「重试」重新加载目录。
+  var canRetryDirectories: Bool {
+    failure == nil && canEdit && directoryError != nil
+  }
+
   var canSubmit: Bool {
     canEdit && !normalizedMediaId.isEmpty && mediaSource.isValidManualId(normalizedMediaId)
   }

@@ -82,6 +82,8 @@ class AddDownloadViewModel: ObservableObject {
   }
 
   func loadData() async {
+    // 连按「重试」只跑一轮，迟到的失败不会盖掉已经加载好的结果。
+    guard !isLoading else { return }
     loadErrorMessage = nil
     guard apiService.canAccess(.search) else {
       clearLoadedOptions()
@@ -124,7 +126,7 @@ class AddDownloadViewModel: ObservableObject {
     guard !isSubmitting else { return }
     errorMessage = nil
     guard isMediaIdValid else {
-      errorMessage = "媒体 ID 格式无效。"
+      errorMessage = MediaSearchSource.invalidManualIdMessage
       return
     }
     isSubmitting = true
