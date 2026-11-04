@@ -222,6 +222,8 @@ struct ManualMediaIdField: View {
         } label: {
           Image(systemName: "magnifyingglass")
         }
+        // 只有图标的按钮用正圆，系统默认是胶囊。
+        .buttonBorderShape(.circle)
         .accessibilityLabel("搜索媒体")
       }
       if !source.isValidManualId(mediaId) {

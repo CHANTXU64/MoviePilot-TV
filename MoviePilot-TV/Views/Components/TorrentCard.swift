@@ -10,13 +10,11 @@ struct TorrentCard: View {
   private let apiService = APIService.shared
 
   let isCandidate: Bool
-  var onContinueSearch: (() -> Void)?
   var onDownloadPresentationChange: ((Bool) -> Void)?
 
   init(context: Context, overrideMediaInfo: MediaInfo? = nil, isCandidate: Bool = false,
-    onContinueSearch: (() -> Void)? = nil, onDownloadPresentationChange: ((Bool) -> Void)? = nil) {
+    onDownloadPresentationChange: ((Bool) -> Void)? = nil) {
     self.isCandidate = isCandidate
-    self.onContinueSearch = onContinueSearch
     self.onDownloadPresentationChange = onDownloadPresentationChange
     self.context = context
     // 如果提供了 overrideMediaInfo，则使用它，否则使用 context.media_info
@@ -208,9 +206,6 @@ struct TorrentCard: View {
             Label("下载", systemImage: "arrow.down.circle")
           }
         }
-        if let onContinueSearch, !showDownload {
-          Button("继续搜索", systemImage: "magnifyingglass", action: onContinueSearch)
-        }
       }
       .sheet(
         isPresented: $showDownload,
@@ -221,7 +216,7 @@ struct TorrentCard: View {
           }
         }
       ) {
-        AddDownloadSheet(torrent: torrent, media: media) {
+        AddDownloadSheet(torrent: torrent, media: media, meta: meta) {
           showDownload = false
         }
       }

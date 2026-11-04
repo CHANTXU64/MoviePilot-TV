@@ -520,7 +520,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(subscribeSheetSource.contains("isLoading: isSaveAttemptInFlight"))
     XCTAssertTrue(subscribeSheetSource.contains("guard !isSaveAttemptInFlight else { return }"))
     XCTAssertTrue(reorganizeSheetSource.contains("title: \"开始整理\""))
-    XCTAssertTrue(addDownloadSheetSource.contains("title: \"确定\""))
+    XCTAssertTrue(addDownloadSheetSource.contains("title: \"下载\""))
     XCTAssertTrue(forkSource.contains("title: \"复用订阅\""))
     XCTAssertFalse([subscribeSheetSource, reorganizeSheetSource, addDownloadSheetSource, forkSource].contains { $0.contains("失败，重试") })
     XCTAssertFalse(subscribeSheetSource.contains("NotificationManager"))

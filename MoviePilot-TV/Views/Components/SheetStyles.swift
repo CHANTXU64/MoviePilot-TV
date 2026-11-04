@@ -32,11 +32,17 @@ struct SheetFeedbackView: View {
 
 struct SheetActionButton: View {
   let title: String
+  /// 主操作的图标（如下载），只在非加载状态显示。
+  var systemImage: String? = nil
   let loadingTitle: String
   let isLoading: Bool
   var isDisabled = false
   var feedbackMessage: String?
+  /// 需要默认聚焦或由外部控制焦点时传入。
+  var focus: FocusState<Bool>.Binding? = nil
   let action: () -> Void
+
+  @FocusState private var ownFocus: Bool
 
   var body: some View {
     VStack(spacing: 10) {
@@ -50,12 +56,15 @@ struct SheetActionButton: View {
         HStack(spacing: 8) {
           if isLoading {
             ProgressView()
+          } else if let systemImage {
+            Image(systemName: systemImage)
           }
           Text(isLoading ? loadingTitle : title)
         }
         .frame(maxWidth: .infinity)
       }
       .disabled(isDisabled)
+      .focused(focus ?? $ownFocus)
 
       if let feedbackMessage {
         SheetFeedbackView(message: feedbackMessage)

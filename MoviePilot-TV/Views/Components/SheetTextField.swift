@@ -10,7 +10,7 @@ struct SheetTextField: View {
   var keyboardType: UIKeyboardType = .default
 
   var body: some View {
-    LabeledContent(title) {
+    LabeledContent {
       if SheetStyleFix.shouldApply {
         SheetTextFieldRepresentable(
           placeholder: placeholder,
@@ -22,6 +22,11 @@ struct SheetTextField: View {
         TextField(placeholder, text: $text)
           .keyboardType(keyboardType)
       }
+    } label: {
+      // 标题不折行（如「TheMovieDb ID」），空间不够时由输入框让出宽度。
+      Text(title)
+        .lineLimit(1)
+        .fixedSize()
     }
   }
 }

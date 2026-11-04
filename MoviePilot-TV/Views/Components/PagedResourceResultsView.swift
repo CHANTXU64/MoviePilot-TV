@@ -113,9 +113,8 @@ struct PagedResourceResultsView<Header: View>: View {
   }
 
   private func card(_ row: ResourceSearchRow) -> some View {
-    let continuation: (() -> Void)? = search.canContinue ? { continueSearch() } : nil
-    return TorrentCard(context: row.context, overrideMediaInfo: row.downloadMedia(override: overrideMediaInfo),
-      isCandidate: row.isCandidate, onContinueSearch: continuation,
+    TorrentCard(context: row.context, overrideMediaInfo: row.downloadMedia(override: overrideMediaInfo),
+      isCandidate: row.isCandidate,
       onDownloadPresentationChange: { downloadPresented = $0 })
   }
 
