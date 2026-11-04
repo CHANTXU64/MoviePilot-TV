@@ -529,7 +529,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(subscribeViewModelSource.contains("guard !isSaving else { return false }"))
     XCTAssertTrue(reorganizeViewModelSource.contains("guard !isSubmitting else { return false }"))
     XCTAssertTrue(
-      reorganizeViewModelSource.contains("guard !isPreviewing else { return .notGenerated }")
+      reorganizeViewModelSource.contains("guard !isPreviewing, !isSubmitting else { return .notGenerated }")
     )
     XCTAssertTrue(reorganizeSheetSource.contains("(await viewModel.preview()).shouldPresent"))
     XCTAssertTrue(addDownloadViewModelSource.contains("guard !isSubmitting else { return }"))
@@ -547,12 +547,12 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let source = try Self.source(at: "MoviePilot-TV/Views/Sheets/ReorganizeSheet.swift")
 
     XCTAssertTrue(
-      containsTokensInOrder(source, ["SheetPicker(", "title: \"媒体来源\""])
+      containsTokensInOrder(source, ["case .mediaSource:", "SheetPicker(", "case .mediaId:"])
     )
     XCTAssertTrue(source.contains("sources.options(including: viewModel.mediaSource).map"))
     XCTAssertTrue(
       source.contains(
-        "ignoresInteractionWhileDisabled: viewModel.isEpisodeGroupsLoading"
+        "viewModel.isEpisodeGroupsLoading ? \"正在加载…\" : nil"
       )
     )
     XCTAssertFalse(source.contains("Picker(\"媒体来源\""))
@@ -611,7 +611,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("width: ReadingSheetLayout.sheetWidth"))
     XCTAssertTrue(source.contains("manualTransferPreviewFileName(from: item.source)"))
     XCTAssertTrue(source.contains("title: \"开始整理\""))
-    XCTAssertTrue(source.contains("loadingTitle: \"整理中\""))
+    XCTAssertTrue(source.contains("loadingTitle: viewModel.isLoading ? \"加载中\" : \"整理中\""))
     XCTAssertFalse(source.contains("title: \"加入整理队列\""))
     XCTAssertFalse(source.contains("loadingTitle: \"加入中\""))
     XCTAssertFalse(source.contains("title: \"立即整理\""))

@@ -24,14 +24,13 @@ struct SubscribePanel: View {
   @State private var isReloading = false
   /// 面板还在显示；关掉后迟到的重新加载结果不再接着订阅。
   @State private var isActive = true
+  /// 重试、保存期间 ViewModel 会先清掉出错原因；这段时间继续显示上一条，提示和「重试」不消失。
+  @State private var retainedMessage: String?
   @FocusState private var isConfirmFocused: Bool
+  @FocusState private var isRetryFocused: Bool
   @FocusState private var focusedField: SubscribeSettingField?
 
   static let quickWidth: CGFloat = 860
-  static let expandedWidth: CGFloat = 1640
-  static let sidebarWidth: CGFloat = 440
-  /// 输入行标签宽度：放得下「自定义识别词」，同一列的输入框起点对齐。
-  static let textLabelWidth: CGFloat = 180
 
   var body: some View {
     // 不单独显示加载页：系统 sheet 换尺寸没有动画，加载页和面板来回切会连闪几下。
@@ -46,6 +45,15 @@ struct SubscribePanel: View {
     }
     .scaleEffect(isContentVisible ? 1 : 0.97)
     .opacity(isContentVisible ? 1 : 0)
+    .onChange(of: viewModelMessage) { _, message in
+      if let message { retainedMessage = message }
+    }
+    .onChange(of: isBusy) { _, busy in
+      guard !busy, viewModelMessage == nil else { return }
+      // 重试成功：提示要消失了，焦点还在「重试」上时移到主按钮，不让系统随便挪。
+      if retainedMessage != nil, isRetryFocused { isConfirmFocused = true }
+      retainedMessage = nil
+    }
     .onAppear { isActive = true }
     .onDisappear { isActive = false }
   }
@@ -98,55 +106,21 @@ struct SubscribePanel: View {
   /// 左侧栏：媒体区、信息（新增是随设置变化的标签，编辑是固定信息）、居中的当前项说明，主按钮固定在底部。
   /// 右边设置不分组，平铺成两列，一次全部显示、不滚动；改完任意一项往左就能订阅。
   private var expandedPanel: some View {
-    let fields = SubscribeSettingField.visibleFields(isTV: viewModel.subscribe.type == "电视剧")
-    let half = (fields.count + 1) / 2
-    let columns = [Array(fields.prefix(half)), Array(fields.dropFirst(half))]
-
-    return HStack(alignment: .top, spacing: 56) {
-      VStack(alignment: .leading, spacing: 0) {
-        header(titleLineLimit: 10, showsTags: viewModel.isNewSubscription)
-
-        // 说明放在标签和「订阅」之间的空白正中、文字居中，和上面的信息区分开；
-        // 固定占两行，焦点换到说明更短的项时左栏高度不变。
-        Spacer(minLength: 32)
-        Text(focusedField?.help ?? " ")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .multilineTextAlignment(.center)
-          .lineLimit(2, reservesSpace: true)
-          .fixedSize(horizontal: false, vertical: true)
-          .frame(maxWidth: .infinity)
-          .animation(.easeOut(duration: 0.2), value: focusedField)
-        Spacer(minLength: 32)
-
-        if let message = statusMessage {
-          messageBlock(message)
-            .padding(.bottom, 20)
-        }
-        subscribeButton(focus: nil)
+    SheetSettingsPanel(
+      fields: SubscribeSettingField.visibleFields(isTV: viewModel.subscribe.type == "电视剧"),
+      focusedField: $focusedField,
+      helpText: focusedField?.help
+    ) {
+      header(titleLineLimit: 10, showsTags: viewModel.isNewSubscription)
+    } actions: {
+      if let message = statusMessage {
+        messageBlock(message)
+          .padding(.bottom, 20)
       }
-      .frame(width: Self.sidebarWidth, alignment: .topLeading)
-      .frame(maxHeight: .infinity, alignment: .topLeading)
-      .focusSection()
-
-      ForEach(columns.indices, id: \.self) { index in
-        VStack(alignment: .leading, spacing: 18) {
-          ForEach(columns[index], id: \.self) { field in
-            row(field)
-              .focused($focusedField, equals: field)
-          }
-        }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .focusSection()
-      }
+      subscribeButton(focus: $isConfirmFocused)
+    } row: { field in
+      row(field)
     }
-    .fixedSize(horizontal: false, vertical: true)
-    .padding(.horizontal, 56)
-    .padding(.vertical, 52)
-    .frame(width: Self.expandedWidth, alignment: .topLeading)
-    .applySheetStyles()
-    // 进大面板就是要改，焦点落在第一项设置（新增从「订阅设置」进来，编辑直接打开）。
-    .defaultFocus($focusedField, fields.first)
   }
 
   // MARK: - 共用部分
@@ -190,9 +164,9 @@ struct SubscribePanel: View {
   private var savedInfo: some View {
     HFlow(itemSpacing: 24, rowSpacing: 8) {
       if let progress = viewModel.progressText {
-        SubscribeTag(systemImage: "checklist", text: progress)
+        SheetInfoTag(systemImage: "checklist", text: progress)
       }
-      SubscribeTag(systemImage: viewModel.savedState.systemImage, text: viewModel.savedState.title)
+      SheetInfoTag(systemImage: viewModel.savedState.systemImage, text: viewModel.savedState.title)
     }
     .font(.caption2)
     .foregroundStyle(.secondary)
@@ -206,20 +180,20 @@ struct SubscribePanel: View {
     let isTV = subscribe.type == "电视剧"
     return HFlow(itemSpacing: 24, rowSpacing: 8) {
       if isTV, let season = subscribe.season {
-        SubscribeTag(systemImage: "tv", text: "第 \(season) 季")
+        SheetInfoTag(systemImage: "tv", text: "第 \(season) 季")
       }
       if let episodes = viewModel.episodeRangeText {
-        SubscribeTag(systemImage: "list.number", text: episodes)
+        SheetInfoTag(systemImage: "list.number", text: episodes)
       }
       if viewModel.subscribeMode != .normal {
-        SubscribeTag(systemImage: "arrow.triangle.2.circlepath", text: viewModel.subscribeModeTitle)
+        SheetInfoTag(systemImage: "arrow.triangle.2.circlepath", text: viewModel.subscribeModeTitle)
       }
       if let resolution = viewModel.resolutionTitle {
-        SubscribeTag(systemImage: "sparkles.tv", text: resolution)
+        SheetInfoTag(systemImage: "sparkles.tv", text: resolution)
       }
-      SubscribeTag(
+      SheetInfoTag(
         systemImage: "globe", text: viewModel.sitesSummary(empty: "默认站点") { "\($0) 个站点" })
-      SubscribeTag(
+      SheetInfoTag(
         systemImage: "arrow.down.circle",
         text: MediaIdentifier.normalizedString(subscribe.downloader) ?? "默认下载器")
     }
@@ -228,9 +202,16 @@ struct SubscribePanel: View {
     .lineLimit(1)
   }
 
-  /// 要显示的出错原因：加载失败优先，其次是订阅时的失败。
-  private var statusMessage: String? {
+  /// ViewModel 当前的出错原因：加载失败优先，其次是订阅时的失败。
+  private var viewModelMessage: String? {
     viewModel.loadErrorMessage ?? viewModel.errorMessage
+  }
+
+  private var isBusy: Bool { isSaving || isReloading || viewModel.isLoading }
+
+  /// 要显示的出错原因；重试、保存进行中继续显示上一条，结束后按结果更新或消失。
+  private var statusMessage: String? {
+    viewModelMessage ?? (isBusy ? retainedMessage : nil)
   }
 
   /// 加载失败且不能重试（需要关掉重开）时，按钮不再可用；其余情况按钮都能按。
@@ -260,6 +241,8 @@ struct SubscribePanel: View {
   /// 「重试」做什么：加载失败且能重试时重新加载；订阅（保存）失败或之后启用、搜索失败时再提交一次。
   /// 加载失败但不能重试（需要关掉重开）时没有「重试」。
   private var retryAction: (() -> Void)? {
+    // 重试进行中：按钮留着（显示「重试中」，按了不响应）。
+    if viewModelMessage == nil, isBusy, retainedMessage != nil { return {} }
     if viewModel.loadErrorMessage != nil {
       guard viewModel.canRetryLoad else { return nil }
       return {
@@ -278,32 +261,9 @@ struct SubscribePanel: View {
     }
   }
 
-  /// 出错原因：居中的一行小字，只有图标用橙色提醒；能重试时下面放整行宽的「重试」。
-  /// 所有出错情况都用这一种样子。
   private func messageBlock(_ message: String) -> some View {
-    VStack(spacing: 14) {
-      HStack(alignment: .firstTextBaseline, spacing: 10) {
-        Image(systemName: "exclamationmark.circle.fill")
-          .foregroundStyle(.orange)
-        // 后端的长错误最多三行，放不下时略缩小字号，和其他 Sheet 的提示一致。
-        Text(message)
-          .foregroundStyle(.secondary)
-          .multilineTextAlignment(.center)
-          .lineLimit(3)
-          .minimumScaleFactor(0.75)
-      }
-      .font(.caption)
-      .frame(maxWidth: .infinity)
-
-      if let retryAction {
-        Button(action: retryAction) {
-          Label("重试", systemImage: "arrow.clockwise")
-            .frame(maxWidth: .infinity)
-        }
-        .disabled(isSaving || isReloading || viewModel.isLoading)
-      }
-    }
-    .frame(maxWidth: .infinity)
+    SheetMessageBlock(
+      message: message, retry: retryAction, isRetrying: isBusy, retryFocus: $isRetryFocused)
   }
 
   private func subscribeButton(focus: FocusState<Bool>.Binding?) -> some View {
@@ -327,14 +287,14 @@ struct SubscribePanel: View {
         field,
         text: Binding(
           get: { viewModel.totalEpisodeText }, set: { viewModel.totalEpisodeText = $0 }),
-        placeholder: field.title, keyboardType: .numberPad)
+        keyboardType: .numberPad)
     case .startEpisode:
       textRow(
         field,
         text: Binding(
           get: { String(viewModel.subscribe.start_episode ?? 0) },
           set: { viewModel.subscribe.start_episode = Int($0) }),
-        placeholder: field.title, keyboardType: .numberPad)
+        keyboardType: .numberPad)
     case .quality:
       SheetPicker(
         title: field.title,
@@ -390,22 +350,19 @@ struct SubscribePanel: View {
         field,
         text: Binding(
           get: { viewModel.subscribe.keyword ?? "" },
-          set: { viewModel.subscribe.keyword = $0.isEmpty ? nil : $0 }),
-        placeholder: "片名")
+          set: { viewModel.subscribe.keyword = $0.isEmpty ? nil : $0 }))
     case .include:
       textRow(
         field,
         text: Binding(
           get: { viewModel.subscribe.include ?? "" },
-          set: { viewModel.subscribe.include = $0.isEmpty ? nil : $0 }),
-        placeholder: "关键字")
+          set: { viewModel.subscribe.include = $0.isEmpty ? nil : $0 }))
     case .exclude:
       textRow(
         field,
         text: Binding(
           get: { viewModel.subscribe.exclude ?? "" },
-          set: { viewModel.subscribe.exclude = $0.isEmpty ? nil : $0 }),
-        placeholder: "关键字")
+          set: { viewModel.subscribe.exclude = $0.isEmpty ? nil : $0 }))
     case .filterGroups:
       SheetMultiPicker(
         title: field.title, summary: viewModel.filterGroupsSummary, emptySelectionTitle: "默认规则",
@@ -434,28 +391,21 @@ struct SubscribePanel: View {
         options: [PickerOption(title: "全部", value: "")]
           + viewModel.seasonOptions.map { PickerOption(title: "第 \($0) 季", value: String($0)) })
     case .mediaCategory:
-      textRow(field, text: $viewModel.mediaCategoryText, placeholder: "自动")
+      textRow(field, text: $viewModel.mediaCategoryText)
     case .customWords:
       textRow(
         field,
         text: Binding(
           get: { viewModel.subscribe.custom_words ?? "" },
-          set: { viewModel.subscribe.custom_words = $0.isEmpty ? nil : $0 }),
-        placeholder: "识别词")
+          set: { viewModel.subscribe.custom_words = $0.isEmpty ? nil : $0 }))
     }
   }
 
-  /// 输入行：标签固定宽度、与菜单行文字左对齐，同一列的输入框起点对齐。
-  /// tvOS 全屏键盘把占位字当标题显示，所以占位字要能说明在填什么。
   private func textRow(
-    _ field: SubscribeSettingField, text: Binding<String>, placeholder: String,
+    _ field: SubscribeSettingField, text: Binding<String>,
     keyboardType: UIKeyboardType = .default
   ) -> some View {
-    SheetTextField(
-      title: field.title, placeholder: placeholder, text: text, keyboardType: keyboardType,
-      labelWidth: Self.textLabelWidth
-    )
-    .padding(.leading, 20)
+    SheetInlineTextField(title: field.title, text: text, keyboardType: keyboardType)
   }
 }
 
@@ -526,19 +476,6 @@ enum SubscribeSettingField: Hashable, CaseIterable {
     case .season: "订阅的季，一般无需修改。"
     case .mediaCategory: "整理时使用的类别名称；留空则自动识别。"
     case .customWords: "仅对此订阅生效的识别词，用于纠正识别结果。"
-    }
-  }
-}
-
-/// 一项带图标的订阅设置，例如「🌐 默认站点」。
-private struct SubscribeTag: View {
-  let systemImage: String
-  let text: String
-
-  var body: some View {
-    HStack(spacing: 6) {
-      Image(systemName: systemImage)
-      Text(text)
     }
   }
 }

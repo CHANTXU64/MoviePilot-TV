@@ -203,6 +203,8 @@ struct ManualMediaSearchSheet: View {
 struct ManualMediaIdField: View {
   let source: MediaSearchSource
   var sourceTitle: String? = nil
+  /// 放在设置面板里时用整行输入框，项名在框内；格式错误由面板统一提示。
+  var isInline = false
   @Binding var mediaId: String
   var placeholder = "自动判断"
   var onSelect: (String, MediaInfo) -> Void
@@ -211,11 +213,15 @@ struct ManualMediaIdField: View {
   var body: some View {
     Group {
       HStack(spacing: 20) {
-        SheetTextField(
-          title: "\(sourceTitle ?? source.title) ID",
-          placeholder: placeholder,
-          text: $mediaId
-        )
+        if isInline {
+          SheetInlineTextField(title: "\(sourceTitle ?? source.title) ID", text: $mediaId)
+        } else {
+          SheetTextField(
+            title: "\(sourceTitle ?? source.title) ID",
+            placeholder: placeholder,
+            text: $mediaId
+          )
+        }
 
         Button {
           showMediaSearch = true
@@ -226,7 +232,8 @@ struct ManualMediaIdField: View {
         .buttonBorderShape(.circle)
         .accessibilityLabel("搜索媒体")
       }
-      if !source.isValidManualId(mediaId) {
+      // 设置面板里由面板统一显示出错原因，不在设置列里插行。
+      if !isInline, !source.isValidManualId(mediaId) {
         Text("媒体 ID 格式无效")
           .foregroundStyle(.red)
       }

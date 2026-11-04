@@ -21,8 +21,9 @@ struct SheetPicker<Value: Hashable>: View {
   let title: String
   @Binding var selection: Value
   let options: [PickerOption<Value>]
-  /// 动态加载期间保持可聚焦，菜单里只显示「正在加载」：tvOS 上聚焦元素变 disabled 会导致焦点跳走。
-  var ignoresInteractionWhileDisabled = false
+  /// 暂时不能选时菜单里只显示这句话（如「正在加载…」「请先填写 TMDB ID」），行仍可聚焦。
+  /// 不用 `.disabled`：tvOS 上聚焦的元素变成禁用会让焦点跳走，禁用的行也移不上去、看不到说明。
+  var unavailableMessage: String? = nil
 
   /// 行右侧显示的值。当前值不在选项里（旧配置、已停用项）时照原样显示，不悄悄当成默认。
   static func displayTitle(for selection: Value, in options: [PickerOption<Value>]) -> String {
@@ -35,8 +36,8 @@ struct SheetPicker<Value: Hashable>: View {
 
   var body: some View {
     Menu {
-      if ignoresInteractionWhileDisabled {
-        Text("正在加载…")
+      if let unavailableMessage {
+        Text(unavailableMessage)
       } else {
         Picker(title, selection: $selection) {
           ForEach(options) { option in

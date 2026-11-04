@@ -175,7 +175,7 @@ struct TransferHistoryView: View {
       onDismiss: restoreHistoryFocus
     ) { intent in
       ReorganizeSheet(
-        logIds: [intent.item.id],
+        records: [intent.item],
         fileItem: intent.item.src_fileitem,
         targetStorage: intent.item.dest_storage,
         sourceSession: intent.sourceSession,
@@ -198,7 +198,7 @@ struct TransferHistoryView: View {
       item: $batchReorganizeIntent
     ) { intent in
       ReorganizeSheet(
-        logIds: intent.items.map(\.id),
+        records: intent.items,
         fileItem: nil,
         sourceSession: intent.sourceSession,
         validateBeforeSubmit: {
@@ -487,7 +487,7 @@ private struct TransferHistoryBatchMutationIntent: Identifiable {
   let sourceSession: APIServiceSessionSnapshot
 }
 
-private func transferModeDisplayName(for mode: String) -> String {
+func transferModeDisplayName(for mode: String) -> String {
   switch mode {
   case "copy": return "拷贝"
   case "move": return "移动"

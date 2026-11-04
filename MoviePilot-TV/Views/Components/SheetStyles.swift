@@ -44,6 +44,9 @@ struct SheetActionButton: View {
 
   @FocusState private var ownFocus: Bool
 
+  /// 系统转圈图标约 40pt，同字号的图标约 34pt。
+  static let spinnerScale: CGFloat = 0.85
+
   var body: some View {
     VStack(spacing: 10) {
       Button(action: {
@@ -54,10 +57,17 @@ struct SheetActionButton: View {
         action()
       }) {
         HStack(spacing: 8) {
-          if isLoading {
-            ProgressView()
-          } else if let systemImage {
-            Image(systemName: systemImage)
+          if isLoading || systemImage != nil {
+            // 图标位的尺寸始终由同字号的图标决定：系统转圈图标（40pt）比一行文字高，
+            // 直接放进来会把按钮撑高，加载结束又缩回。转圈图标叠在上面、缩到和图标一样大。
+            Image(systemName: systemImage ?? "circle")
+              .opacity(isLoading ? 0 : 1)
+              .overlay {
+                if isLoading {
+                  ProgressView()
+                    .scaleEffect(Self.spinnerScale)
+                }
+              }
           }
           Text(isLoading ? loadingTitle : title)
         }

@@ -256,6 +256,52 @@ final class ReorganizeViewModelTests: XCTestCase {
     XCTAssertEqual(viewModel.previewData?.message, "refreshed-preview")
   }
 
+  /// 预览和整理不同时进行：预览请求还没返回时按「开始整理」不发起提交，
+  /// 提交中也不再开始预览。
+  func testSubmitIsIgnoredWhilePreviewIsRunning() async {
+    let service = manageService(version: "v3.1.9")
+    let gate = ReorganizePreviewRequestGate()
+    let validation = PreviewTransferCapture()
+    let viewModel = ReorganizeViewModel(
+      logIds: [42],
+      fileItem: nil,
+      validateBeforeSubmit: {
+        validation.calls.append("validate")
+        return nil
+      },
+      previewRequest: { _ in
+        await gate.run()
+        return ManualTransferPreviewData.empty
+      },
+      apiService: service
+    )
+
+    let preview = Task { await viewModel.preview() }
+    await gate.waitUntilStarted()
+    XCTAssertTrue(viewModel.isPreviewing)
+
+    let submitted = await viewModel.submit(background: true)
+    XCTAssertFalse(submitted)
+    XCTAssertFalse(viewModel.isSubmitting)
+    // 提交在任何校验和请求之前就被拒绝。
+    XCTAssertTrue(validation.calls.isEmpty)
+
+    await gate.open()
+    let outcome = await preview.value
+    XCTAssertEqual(outcome, .generated(allSucceeded: true))
+  }
+
+  /// 目录还没加载出来时，「目的目录」也有「自动」可显示，不会显示成「未选择」。
+  func testTargetDirectoryShowsAutomaticBeforeConfigLoads() {
+    let viewModel = reorganizeViewModel(service: manageService(version: "v3.1.9"))
+    XCTAssertEqual(viewModel.targetDirectoryOptions.map(\.value), [""])
+    XCTAssertEqual(
+      SheetPicker<String>.displayTitle(
+        for: viewModel.form.target_path, in: viewModel.targetDirectoryOptions),
+      "自动"
+    )
+  }
+
   func testPreviewRetainsSamePathsFromDifferentV310Storages() async throws {
     let items = try JSONDecoder().decode([ManualTransferPreviewItem].self, from: Data(
       #"[{"source":"/same.mkv","target":"/target.mkv","success":true,"source_storage":"local"},{"source":"/same.mkv","target":"/target.mkv","success":true,"source_storage":"alist"},{"source":"/same.mkv","target":"/target.mkv","success":true,"source_storage":"local"}]"#.utf8))

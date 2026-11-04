@@ -70,7 +70,7 @@ struct SubtitleDownloadSheet: View {
             selection: Binding(get: { viewModel.selectedSavePath }, set: viewModel.selectSavePath),
             options: [PickerOption<String?>(title: "自动", value: nil)]
               + viewModel.savePathChoices.map { PickerOption(title: $0, value: Optional($0)) },
-            ignoresInteractionWhileDisabled: viewModel.isLoadingDirectories
+            unavailableMessage: viewModel.isLoadingDirectories ? "正在加载…" : nil
           )
           .disabled(!viewModel.canEdit)
 
