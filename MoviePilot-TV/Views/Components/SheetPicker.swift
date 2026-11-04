@@ -47,9 +47,7 @@ struct SheetPicker<Value: Hashable>: View {
       }
     } label: {
       LabeledContent(title) {
-        Text(Self.displayTitle(for: selection, in: options))
-          .lineLimit(1)
-          .minimumScaleFactor(0.7)
+        MenuRowValue(text: Self.displayTitle(for: selection, in: options))
       }
       .if(SheetStyleFix.shouldApply) { view in
         view.padding(.horizontal)
@@ -79,9 +77,7 @@ struct SheetMultiPicker<T, ID: Hashable>: View {
       )
     } label: {
       LabeledContent(title) {
-        Text(summary)
-          .lineLimit(1)
-          .minimumScaleFactor(0.7)
+        MenuRowValue(text: summary)
       }
       .if(SheetStyleFix.shouldApply) { view in
         view.padding(.horizontal)
@@ -91,5 +87,23 @@ struct SheetMultiPicker<T, ID: Hashable>: View {
     .menuActionDismissBehavior(.disabled)
     // 同 SheetPicker：沿用环境里的按钮样式。
     .menuStyle(.button)
+  }
+}
+
+/// 菜单行右侧：当前值 + 上下箭头。箭头是系统菜单按钮的通用标记，表示点开是选项菜单，
+/// 区别于跳转下一页（右箭头）和输入框。
+private struct MenuRowValue: View {
+  let text: String
+
+  var body: some View {
+    HStack(spacing: 12) {
+      Text(text)
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
+      Image(systemName: "chevron.up.chevron.down")
+        .font(.caption.bold())
+        .foregroundStyle(.secondary)
+        .accessibilityHidden(true)
+    }
   }
 }
