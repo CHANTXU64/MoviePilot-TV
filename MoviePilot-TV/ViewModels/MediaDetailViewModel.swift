@@ -40,6 +40,8 @@ class MediaDetailViewModel: ObservableObject {
   @Published var uniqueDirectors: [Person] = []
 
   @Published private(set) var isInLibrary = false
+  /// 管理员且 MoviePilot 配置了可用的 Emby 时，可以在应用内播放的媒体库条目 ID。
+  @Published private(set) var inAppPlaybackItemID: String?
 
   /// 第二页首行数据是否已就绪。
   /// 用于控制 Loading 遮罩的显隐——必须等首行数据加载完才能移除遮罩，
@@ -501,13 +503,30 @@ class MediaDetailViewModel: ObservableObject {
   }
 
   private func loadMediaServerExists() async {
-    guard apiService.canAccess(.subscribe), detail.type == "电影", detail.identity != nil else {
-      return
-    }
+    guard detail.identity != nil else { return }
+    let isMovie = detail.type == "电影"
+    // 电影的入库状态显示在订阅按钮上；剧集只用于管理员的应用内播放（从第一集开始）。
+    let showsLibraryState = isMovie && apiService.canAccess(.subscribe)
+    let offersPlayback =
+      (isMovie || detail.type == "电视剧") && apiService.canRequestSuperUserEndpoints
+    guard showsLibraryState || offersPlayback else { return }
+    let itemID: String?
     do {
-      isInLibrary = try await apiService.fetchMediaServerExists(media: detail)
+      itemID = try await apiService.fetchMediaServerItemID(media: detail)
     } catch {
       Logger.error("检查媒体入库状态失败: \(error)")
+      return
+    }
+    if showsLibraryState { isInLibrary = itemID != nil }
+    guard let itemID, offersPlayback else { return }
+    do {
+      let servers = try await apiService.fetchCachedMediaServers()
+      if servers.contains(where: \.supportsInAppPlayback) {
+        inAppPlaybackItemID = itemID
+      }
+    } catch is CancellationError {
+    } catch {
+      Logger.warning("读取媒体服务器配置失败: \(error.localizedDescription)")
     }
   }
 

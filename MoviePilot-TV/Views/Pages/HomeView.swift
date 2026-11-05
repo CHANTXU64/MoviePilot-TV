@@ -255,13 +255,20 @@ private struct MediaSectionView: View {
                     },
                     cardKind: .media
                   ),
-                action: canOpenMediaLibrary(item)
-                  ? { openMediaItem(item) }
+                action: canPlayInApp(item) || canOpenMediaLibrary(item)
+                  ? { activateMediaItem(item) }
                   : nil
               )
               .focused($focusedItemId, equals: item.id)
               .compositingGroup()
               .contextMenu {
+                if canPlayInApp(item) {
+                  Button {
+                    playInApp(item)
+                  } label: {
+                    Label("播放", systemImage: AppSymbol.play)
+                  }
+                }
                 if canOpenMediaLibrary(item) {
                   Button {
                     openMediaItem(item)
@@ -370,6 +377,29 @@ private struct MediaSectionView: View {
 
   private func canOpenMediaLibrary(_ item: MediaServerPlayItem) -> Bool {
     HomeViewModel.supportsMediaLibraryDeepLink(serverType: item.server_type)
+  }
+
+  /// 管理员看到的 Emby 电影和剧集可以在应用内直接播放。
+  private func canPlayInApp(_ item: MediaServerPlayItem) -> Bool {
+    HomeViewModel.supportsInAppPlayback(
+      item, canRequestSuperUserEndpoints: APIService.shared.canRequestSuperUserEndpoints)
+  }
+
+  /// 点击卡片：按设置决定在应用内播放还是跳转媒体服务器 App。
+  private func activateMediaItem(_ item: MediaServerPlayItem) {
+    if canPlayInApp(item), SystemViewModel.shouldPlayHomeMediaInApp || !canOpenMediaLibrary(item) {
+      playInApp(item)
+    } else {
+      openMediaItem(item)
+    }
+  }
+
+  private func playInApp(_ item: MediaServerPlayItem) {
+    guard let itemID = item.item_id?.value.trimmingCharacters(in: .whitespacesAndNewlines),
+      !itemID.isEmpty
+    else { return }
+    APIService.shared.sessionScope.playbackCoordinator.play(
+      .serverItem(serverName: selectedServer, itemID: itemID))
   }
 
   private func openMediaItem(_ item: MediaServerPlayItem) {

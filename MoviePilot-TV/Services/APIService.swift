@@ -234,7 +234,8 @@ nonisolated private func firstNonWhitespaceByte(in data: Data) -> UInt8? {
   }
 }
 
-nonisolated private func encodeMediaIDPathSegment(_ value: String) -> String? {
+/// 不透明 ID 按单个路径段编码一次（MoviePilot 媒体 ID、Emby 条目 ID 共用）。
+nonisolated func encodeMediaIDPathSegment(_ value: String) -> String? {
   let allowed = CharacterSet(
     charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~:")
   return value.addingPercentEncoding(withAllowedCharacters: allowed)
@@ -2509,6 +2510,15 @@ class APIService: ObservableObject {
     return config.value
   }
 
+  /// 会话内短暂缓存的媒体服务器配置，供详情页判断能否应用内播放；配置里有密钥，只保存在内存。
+  func fetchCachedMediaServers() async throws -> [MediaServerConf] {
+    try await sessionCachedValue(sessionScope.mediaServerConfigCache, key: "MediaServers") {
+      [weak self] in
+      guard let self else { throw CancellationError() }
+      return try await self.fetchMediaServers()
+    }
+  }
+
   /// 获取媒体服务器最新入库
   /// - 对应前端: MoviePilot-Frontend/src/views/dashboard/MediaServerLatest.vue
   /// - 应用场景: 首页仪表盘展示最近添加的影片
@@ -2524,6 +2534,13 @@ class APIService: ObservableObject {
   /// - 备注: v3.0.1 起该接口的 `success` 恒为 `true`，命中与否只体现在 `data.item`
   ///   （Web 读 `result.item?.id`）；v2 才把命中结果放在 `success` 上。两者都以 `data.item.id` 为准。
   func fetchMediaServerExists(media: MediaInfo) async throws -> Bool {
+    try await fetchMediaServerItemID(media: media) != nil
+  }
+
+  /// 查询媒体在媒体服务器中的条目 ID（MoviePilot 媒体库同步表）。
+  /// - 对应前端: MoviePilot-Frontend/src/views/discover/MediaDetailView.vue（`existsItemId`，用于“播放”按钮）
+  /// - 备注: 返回值不包含服务器名称；配置多台服务器时需要调用方逐台确认归属。
+  func fetchMediaServerItemID(media: MediaInfo) async throws -> String? {
     struct MediaServerExistsData: Decodable {
       let item: [String: String]?
     }
@@ -2540,7 +2557,9 @@ class APIService: ObservableObject {
       ])
     let data = try await makeRequest(endpoint: endpoint)
     let result = try await decodeOrUnwrap(MediaServerExistsData.self, from: data)
-    return !(result.item?["id"] ?? "").isEmpty
+    guard let id = result.item?["id"]?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty
+    else { return nil }
+    return id
   }
 
   // MARK: - 资源搜索

@@ -174,7 +174,7 @@ struct MediaDetailView: View {
   /// 第二页当前含焦点的行，取值与 `firstVisibleRow` 相同。
   @FocusState private var focusedContentRow: String?
   enum ButtonField {
-    case subscribe, search, subtitleSearch, sites, otherInfo
+    case play, subscribe, search, subtitleSearch, sites, otherInfo
   }
   @FocusState private var focusedButton: ButtonField?
   @State private var lastFocusedButton: ButtonField?
@@ -1112,6 +1112,16 @@ struct MediaDetailView: View {
             }
           }
           HStack(spacing: 20) {
+            if let playbackItemID = viewModel.inAppPlaybackItemID {
+              Button(action: {
+                apiService.sessionScope.playbackCoordinator.play(.libraryItem(itemID: playbackItemID))
+              }) {
+                Label("播放", systemImage: AppSymbol.play)
+                  .foregroundColor(.primary)
+              }
+              .focused($focusedButton, equals: .play)
+            }
+
             // TMDB Jump Button — 复用 MediaActionHandler 逻辑，传入预加载的 tmdbId
             if canJumpToTMDB {
               let targetTmdbId = preloadTask.tmdbId ?? viewModel.detail.tmdb_id

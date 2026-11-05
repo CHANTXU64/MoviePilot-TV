@@ -407,12 +407,16 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
       #"{"success":true,"data":{"item":{}}}"#.data(using: .utf8)!)
     let missing = try await service.fetchMediaServerExists(media: media)
     XCTAssertFalse(missing, "v3 的 success=true + 空 item 必须判为未入库")
+    let missingItemID = try await service.fetchMediaServerItemID(media: media)
+    XCTAssertNil(missingItemID)
 
     // 命中时 `data.item.id` 非空。
     await CompatibilityEndpointURLProtocol.stub.setMediaServerExistsResponse(
       #"{"success":true,"data":{"item":{"id":"library/42"}}}"#.data(using: .utf8)!)
     let exists = try await service.fetchMediaServerExists(media: media)
     XCTAssertTrue(exists)
+    let itemID = try await service.fetchMediaServerItemID(media: media)
+    XCTAssertEqual(itemID, "library/42", "播放入口需要原样拿到条目 ID")
 
     // v2 的 `success:false` 不是“未入库”，而是失败 envelope：严格解包必须抛错，
     // 不能把失败悄悄当成“未入库”。（v3 该端点已不再返回这种形态。）

@@ -327,6 +327,19 @@ class HomeViewModel: ObservableObject {
     return trimmed
   }
 
+  /// 应用内播放：管理员、Emby、电影或剧集（剧集从第一集开始），且有条目 ID。
+  static func supportsInAppPlayback(
+    _ item: MediaServerPlayItem, canRequestSuperUserEndpoints: Bool
+  ) -> Bool {
+    guard canRequestSuperUserEndpoints, item.server_type == .emby,
+      item.type == "电影" || item.type == "电视剧"
+    else {
+      return false
+    }
+    let itemID = item.item_id?.value.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return !itemID.isEmpty
+  }
+
   /// 该服务器类型是否已知支持在 tvOS 打开媒体库深链（静态能力，不依赖具体链接）
   static func supportsMediaLibraryDeepLink(serverType: MediaServerType?) -> Bool {
     guard let serverType else { return true }

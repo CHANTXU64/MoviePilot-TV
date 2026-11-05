@@ -58,6 +58,7 @@ class SystemViewModel: ObservableObject {
   private static let waitMediaDetailBackgroundImageKey = "waitMediaDetailBackgroundImage"
   private static let preloadTMDBDetailsKey = "preloadTMDBDetails"
   private static let autoSearchNewSubscriptionsKey = "autoSearchNewSubscriptions"
+  private static let homeMediaTapPlaysInAppKey = "homeMediaTapPlaysInApp"
 
   /// 是否在 MediaDetail 首屏等待背景/海报预加载完成。默认开启。
   @Published var waitMediaDetailBackgroundImage: Bool = true {
@@ -77,6 +78,13 @@ class SystemViewModel: ObservableObject {
   @Published var autoSearchNewSubscriptions: Bool = true {
     didSet {
       UserDefaults.standard.set(autoSearchNewSubscriptions, forKey: Self.autoSearchNewSubscriptionsKey)
+    }
+  }
+
+  /// 首页“最近添加”的 Emby 电影和剧集点击后直接在应用内播放；关闭时跳转媒体服务器 App。默认关闭。
+  @Published var homeMediaTapPlaysInApp: Bool = false {
+    didSet {
+      UserDefaults.standard.set(homeMediaTapPlaysInApp, forKey: Self.homeMediaTapPlaysInAppKey)
     }
   }
 
@@ -208,6 +216,7 @@ class SystemViewModel: ObservableObject {
     waitMediaDetailBackgroundImage = Self.shouldWaitMediaDetailBackgroundImage
     preloadTMDBDetails = Self.shouldPreloadTMDBDetails
     autoSearchNewSubscriptions = Self.shouldAutoSearchNewSubscriptions
+    homeMediaTapPlaysInApp = Self.shouldPlayHomeMediaInApp
     checkKeychainStatus()
     apiService.$session
       .sink { [weak self] session in
@@ -457,6 +466,10 @@ class SystemViewModel: ObservableObject {
       return true
     }
     return UserDefaults.standard.bool(forKey: preloadTMDBDetailsKey)
+  }
+
+  static var shouldPlayHomeMediaInApp: Bool {
+    UserDefaults.standard.bool(forKey: homeMediaTapPlaysInAppKey)
   }
 
   static var shouldAutoSearchNewSubscriptions: Bool {

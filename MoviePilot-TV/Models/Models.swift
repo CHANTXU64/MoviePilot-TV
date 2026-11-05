@@ -1309,13 +1309,44 @@ struct Context: Codable, Identifiable {
   }
 }
 
-struct MediaServerConf: Codable {
+nonisolated struct MediaServerConf: Decodable, Sendable {
   /// 名称
   let name: String
   /// 类型 emby/jellyfin/plex
   let type: String
   /// 是否启用
   let enabled: FlexibleBool?
+  /// 连接配置；结构不符时按未配置处理，不影响服务器列表。
+  let config: MediaServerConnectionConfig?
+
+  init(name: String, type: String, enabled: FlexibleBool?, config: MediaServerConnectionConfig? = nil) {
+    self.name = name
+    self.type = type
+    self.enabled = enabled
+    self.config = config
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case name, type, enabled, config
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    name = try container.decode(String.self, forKey: .name)
+    type = try container.decode(String.self, forKey: .type)
+    enabled = try container.decodeIfPresent(FlexibleBool.self, forKey: .enabled)
+    config = try? container.decodeIfPresent(MediaServerConnectionConfig.self, forKey: .config)
+  }
+
+  var isEnabled: Bool { enabled?.value ?? false }
+
+  /// 已启用、类型为 Emby 且有密钥和至少一个地址，才能在应用内播放。
+  var supportsInAppPlayback: Bool {
+    guard isEnabled, type.lowercased() == "emby", let config, config.apiKey != nil else {
+      return false
+    }
+    return !config.candidateBaseURLs.isEmpty
+  }
 }
 
 /// 媒体服务器类型（采用结构体模拟枚举，以保证向后兼容性）

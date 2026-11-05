@@ -212,6 +212,7 @@ struct MainContentView: View {
     }
     .onDisappear { checkTask?.cancel() }
     .mediaActionAlerts()
+    .playbackPresentation(APIService.shared.sessionScope.playbackCoordinator)
     .environmentObject(mediaActionHandler)
   }
 

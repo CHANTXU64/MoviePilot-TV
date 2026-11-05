@@ -48,6 +48,8 @@ nonisolated enum AppSymbol {
   static let searchSubtitles = "captions.bubble"
   static let reorganize = "folder.badge.gearshape"
   static let aiReorganize = "wand.and.stars"
+  /// 应用内播放影片；订阅的“恢复”用 `resume`，两者不混用。
+  static let play = "play.fill"
   static let openInLibrary = "arrow.up.right.square"
   static let link = "link"
   static let filter = "line.3.horizontal.decrease.circle"
