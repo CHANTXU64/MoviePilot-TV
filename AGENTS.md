@@ -100,7 +100,7 @@ xcodebuild -list -project "MoviePilot-TV.xcodeproj"
 xcrun simctl list devices tvOS available
 ```
 
-日常修改先让用户能构建、运行和查看效果；只做必要的单版本构建或相关用例验证。**只有用户明确说提交时，才运行完整三版本构建和全套测试**。普通修改、修 Bug、Review、看效果不构成全量测试授权；不要以提前验收为由反复跑全套。构建失败先修构建，不继续后续版本或测试。
+日常修改先让用户能构建、运行和查看效果；只做必要的单版本构建或相关用例验证。**只有用户明确说 Push（推送）时，才运行完整三版本构建和全套测试**；用户说提交（commit）时只做单版本构建或相关用例验证，不跑三版本矩阵。普通修改、修 Bug、Review、看效果不构成全量测试授权；不要以提前验收为由反复跑全套。构建失败先修构建，不继续后续版本或测试。
 
 日常入口（单版本增量 Debug 构建，不运行测试）：
 
@@ -110,7 +110,7 @@ python3 scripts/test-tvos.py
 
 日常默认选择最新可用 tvOS runtime，也可用 `--runtime <版本>` 指定当前调试版本。需要定向回归时使用 `--only-testing <用例或套件>`，只构建 Testing 宿主并运行指定用例。
 
-用户明确要求提交后的完整验收入口：
+用户明确要求 Push 前的完整验收入口：
 
 ```bash
 python3 scripts/test-tvos.py --full
@@ -118,7 +118,7 @@ python3 scripts/test-tvos.py --full
 
 `--full` 在 **tvOS 18.5、26.5、最新已安装的 27.x** 上运行完整验证，三个版本同时进行。开始前必须确认三个 runtime 都可用，缺少任何一个就报错，不允许悄悄只跑最新版本。依赖只解析一次，每个版本使用独立的 `tvos-<版本>` 构建目录，避免争用 `build.db`。某一版本的依赖解析、Debug 构建或 Testing 宿主构建失败时，停止其余仍在运行的版本；只有测试执行阶段的普通离线用例失败才等其余版本跑完并汇总。取消会停掉本次已经启动的全部版本。每个版本单独创建临时 Apple TV 模拟器，按本次返回的 UDID 执行构建和测试；成功、失败或取消后只关闭并删除自己创建的设备。不要用日常模拟器的名称或 UDID 执行测试，也不要使用 `erase`、`shutdown all` 或 `delete all`。机器内存紧张时加 `--serial`，改回逐个版本运行。
 
-CI 使用 GitHub 提供的 `xcode-27` runner，并固定执行 `python3 scripts/test-tvos.py --full --runtime 27.0`；该镜像提供 Xcode 27 与 tvOS 27.0 runtime，见[官方镜像说明](https://github.com/actions/runner-images/issues/14404)。提交前完整验收使用三版本矩阵；日常构建与定向测试使用单版本，不要求提前完成提交验收。实际使用的型号、版本和 UDID 会输出在日志中。矩阵模式下，`--result-bundle-path /tmp/tests.xcresult` 会分别生成 `tests-tvos-18.5.xcresult`、`tests-tvos-26.5.xcresult` 和对应 27.x 的结果包。
+CI 使用 GitHub 提供的 `xcode-27` runner，并固定执行 `python3 scripts/test-tvos.py --full --runtime 27.0`；该镜像提供 Xcode 27 与 tvOS 27.0 runtime，见[官方镜像说明](https://github.com/actions/runner-images/issues/14404)。Push 前完整验收使用三版本矩阵；日常构建、定向测试与提交（commit）使用单版本，不要求提前完成提交验收。实际使用的型号、版本和 UDID 会输出在日志中。矩阵模式下，`--result-bundle-path /tmp/tests.xcresult` 会分别生成 `tests-tvos-18.5.xcresult`、`tests-tvos-26.5.xcresult` 和对应 27.x 的结果包。
 
 脚本保留 `CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-` 和串行测试参数，默认跳过三个真实后端套件。定向验证示例：
 
@@ -181,11 +181,11 @@ PR CI 只执行 Simulator 构建、测试和脚本回归，不编译或打包发
 
 在真实开发环境中：
 
-1. 日常修改不自动运行全量；只有用户明确要求提交后，才进入提交前完整验证。用户查看效果期间优先保障日常 Xcode 可用，不并发占用其构建目录。
-2. 用户明确要求提交 Swift / tvOS 修改时，运行上方 `python3 scripts/test-tvos.py --full` 完成依赖解析、Simulator 完整构建和测试；提交前的单版本定向验证不能替代这一步。发布专属的版本信息改动除外：先看业务提交和对应 PR CI，已经通过时只跑上一节的 `AppChangelogTests`，并按实际范围汇报。对不上已通过的提交、CI 未通过，或还有其他代码改动时，仍跑 `--full`。
+1. 日常修改不自动运行全量；只有用户明确要求 Push 后，才进入推送前完整验证。用户查看效果期间优先保障日常 Xcode 可用，不并发占用其构建目录。
+2. 用户明确要求 Push Swift / tvOS 修改时，运行上方 `python3 scripts/test-tvos.py --full` 完成依赖解析、Simulator 完整构建和测试；单版本定向验证不能替代这一步。只要求提交（commit）时，只做默认单版本构建或相关用例验证，不跑 `--full`。发布专属的版本信息改动除外：先看业务提交和对应 PR CI，已经通过时只跑上一节的 `AppChangelogTests`，并按实际范围汇报。对不上已通过的提交、CI 未通过，或还有其他代码改动时，仍跑 `--full`。
 3. 对文档或 Prompt 修改，也应运行仓库可用的轻量检查；如果没有适用检查，必须说明“文档-only 变更，无可运行测试”。
-4. 测试失败时禁止提交，除非用户明确要求保留失败状态用于审查，并且提交说明中必须写清楚失败命令与失败原因。
-5. Commit 前必须在最终回复或提交说明中列出实际运行过的命令和结果。
+4. 单版本构建或定向测试失败时禁止提交；三版本验收失败时禁止 Push。除非用户明确要求保留失败状态用于审查，并且提交说明中必须写清楚失败命令与失败原因。
+5. Commit 与 Push 前必须在最终回复或提交说明中列出实际运行过的命令和结果。
 6. 只运行 `swift build`、只运行 `swift test`、只运行依赖解析、只打开 Xcode 不构建，都不能视为通过验证。
 
 ### 2. 非真实开发环境（无 Xcode、只读代码平台、GitHub API、网页编辑器、Linux 容器等）
