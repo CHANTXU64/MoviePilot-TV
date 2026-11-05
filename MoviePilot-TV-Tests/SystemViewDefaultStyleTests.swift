@@ -651,11 +651,11 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let source = try Self.source(at: "MoviePilot-TV/Views/Sheets/ManualMediaSearchSheet.swift")
 
     XCTAssertTrue(source.contains("NavigationStack {"))
-    XCTAssertTrue(source.contains("Text(\"查询 \\(viewModel.source.title) ID\")"))
+    // 不放大标题，顶部是整行的「片名」输入框和「搜索」。
+    XCTAssertFalse(source.contains("Text(\"查询 \\(viewModel.source.title) ID\")"))
+    XCTAssertTrue(source.contains("SheetInlineTextField(title: \"片名\", text: $viewModel.keyword)"))
     XCTAssertFalse(source.contains("Text(\"搜索 \\(viewModel.source.title) 媒体\")"))
-    XCTAssertTrue(source.contains("placeholder: \"输入媒体标题后搜索\""))
     XCTAssertFalse(source.contains("placeholder: \"输入标题后搜索\""))
-    XCTAssertTrue(source.contains(".labelsHidden()"))
     XCTAssertTrue(source.contains(".focusSection()"))
     XCTAssertFalse(source.contains("Button(\"关闭\")"))
     XCTAssertEqual(source.components(separatedBy: "viewModel.search()").count - 1, 1)
@@ -663,7 +663,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
       containsTokensInOrder(
         source,
         [
-          "Button {",
+          "private func startSearch() {",
           "guard !viewModel.isLoading else { return }",
           "searchTask?.cancel()",
           "searchTask = Task { await viewModel.search() }",
@@ -699,14 +699,14 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains(".contentMargins(.vertical, 28, for: .scrollContent)"))
     XCTAssertFalse(source.contains(".scrollClipDisabled()"))
     XCTAssertEqual(
-      source.components(separatedBy: ".padding(.horizontal, 28)").count - 1,
+      source.components(separatedBy: ".padding(.horizontal, 56)").count - 1,
       2
     )
     XCTAssertFalse(source.contains(".padding(.horizontal, 40)"))
     XCTAssertTrue(
       containsTrimmedLineSequence(
         source,
-        [".padding(.top, 40)", "}", ".frame(width: 1092, height: 820)"]
+        [".padding(.top, 52)", "}", ".frame(width: 1148, height: 820)"]
       )
     )
     XCTAssertFalse(source.contains(".frame(width: 1120, height: 780)"))

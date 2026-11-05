@@ -37,9 +37,18 @@ final class ManualMediaSearchViewModel: ObservableObject {
   // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
   nonisolated deinit {}
 
+  /// 最近一次搜索的结果状态，面板据此显示提示；有结果时直接显示结果。
+  enum Outcome: Equatable {
+    /// 还没搜索，或输入为空。
+    case idle
+    case noResults(keyword: String)
+    case failed
+  }
+
   @Published var keyword = ""
   @Published var items: [MediaInfo] = []
   @Published var isLoading = false
+  @Published private(set) var outcome: Outcome = .idle
 
   let source: MediaSearchSource
   private let apiService: APIService
@@ -56,6 +65,7 @@ final class ManualMediaSearchViewModel: ObservableObject {
     let revision = searchRevision
     let title = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
     items = []
+    outcome = .idle
     guard !title.isEmpty else {
       isLoading = false
       return
@@ -72,9 +82,14 @@ final class ManualMediaSearchViewModel: ObservableObject {
         .filter { ManualMediaSelection.mediaId(for: $0, source: source) != nil }
       guard searchRevision == revision else { return }
       items = results
+      outcome = results.isEmpty ? .noResults(keyword: title) : .idle
+    } catch is CancellationError {
+      return
     } catch {
       guard searchRevision == revision else { return }
       Logger.error("Failed to search manual media ID: \(error)")
+      // 失败不能看起来像「没有结果」，面板会显示原因和「重试」。
+      outcome = .failed
     }
   }
 
@@ -95,6 +110,7 @@ final class ManualMediaSearchViewModel: ObservableObject {
       guard searchRevision == revision else { return }
       items = []
       isLoading = false
+      outcome = .idle
     }
   }
 }
@@ -103,6 +119,9 @@ struct ManualMediaSearchSheet: View {
   @ObservedObject private var apiService = APIService.shared
   @StateObject private var viewModel: ManualMediaSearchViewModel
   @State private var searchTask: Task<Void, Never>?
+  /// 上一次搜索失败、正在重试：继续显示失败提示（「重试中」），不切到「正在搜索…」。
+  @State private var isRetryingAfterFailure = false
+  @FocusState private var isSearchFocused: Bool
 
   let onSelect: (String, MediaInfo) -> Void
 
@@ -114,40 +133,29 @@ struct ManualMediaSearchSheet: View {
     self.onSelect = onSelect
   }
 
+  /// 查询媒体 ID：只在添加下载、重新整理、下载字幕的媒体 ID 旁按🔍打开，选中结果后自动填入。
+  ///
+  /// 不放大标题：顶部一行是整行的「片名」输入框和「搜索」，下面是结果；还没搜、搜索中、
+  /// 没有结果时在结果区居中显示一行说明，搜索失败用统一的出错提示和「重试」。尺寸固定，状态切换时不跳。
   var body: some View {
     NavigationStack {
       VStack(spacing: 24) {
-        Text("查询 \(viewModel.source.title) ID")
-          .font(.headline)
-          .frame(maxWidth: .infinity)
-          .padding(.horizontal, 28)
-
         HStack(spacing: 20) {
-          SheetTextField(
-            title: "媒体标题",
-            placeholder: "输入媒体标题后搜索",
-            text: $viewModel.keyword
-          )
-          .labelsHidden()
+          SheetInlineTextField(title: "片名", text: $viewModel.keyword)
 
-          Button {
-            // 搜索中保持可聚焦：tvOS 上聚焦元素变 disabled 会导致焦点跳走；
-            // 点击在加载中被忽略，防重入由 guard 完成。
-            guard !viewModel.isLoading else { return }
-            searchTask?.cancel()
-            searchTask = Task { await viewModel.search() }
-          } label: {
-            Label("搜索", systemImage: AppSymbol.search)
-          }
+          SheetActionButton(
+            title: "搜索", systemImage: AppSymbol.search, loadingTitle: "搜索中",
+            isLoading: viewModel.isLoading, focus: $isSearchFocused, action: startSearch
+          )
+          .frame(width: 240)
         }
         .focusSection()
-        .padding(.horizontal, 28)
+        .padding(.horizontal, 56)
 
-        if viewModel.isLoading {
-          ProgressView("搜索中…")
+        if viewModel.items.isEmpty {
+          statusArea
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if viewModel.items.isEmpty {
-          EmptyDataView(title: "输入标题搜索媒体")
+            .padding(.horizontal, 56)
         } else {
           ScrollView {
             LazyVGrid(
@@ -161,14 +169,13 @@ struct ManualMediaSearchSheet: View {
                 if let mediaId = ManualMediaSelection.mediaId(
                   for: item, source: viewModel.source
                 ) {
+                  // 与搜索页「最佳结果」同一张卡片、同一种写法：片名，下面是类型 · 年份 · 来源。
                   BestResultCard(
-                    title: displayTitle(for: item),
+                    title: item.title ?? "",
                     type: item.displayTypeText,
                     posterUrl: item.imageURLs.poster,
                     posterFallbackUrl: item.imageURLs.posterFallback,
-                    subtitle: [item.type, item.overview]
-                      .compactMap { $0?.isEmpty == false ? $0 : nil }
-                      .joined(separator: " · ")
+                    subtitle: BestResultCard.mediaSubtitle(for: item)
                   ) {
                     onSelect(mediaId, item)
                   }
@@ -179,9 +186,10 @@ struct ManualMediaSearchSheet: View {
           .contentMargins(.vertical, 28, for: .scrollContent)
         }
       }
-      .padding(.top, 40)
+      // 边距与其他面板一致（左右 56、上 52）；两列 500 宽的结果卡片加间距 36 正好放下。
+      .padding(.top, 52)
     }
-    .frame(width: 1092, height: 820)
+    .frame(width: 1148, height: 820)
     .onAppear {
       viewModel.presentationDidAppear()
     }
@@ -193,10 +201,48 @@ struct ManualMediaSearchSheet: View {
     }
   }
 
-  private func displayTitle(for item: MediaInfo) -> String {
-    guard let year = item.year, !year.isEmpty else { return item.title ?? "" }
-    return "\(item.title ?? "")（\(year)）"
+  /// 搜索中按钮保持可聚焦、按了不响应（tvOS 上聚焦元素变禁用会让焦点跳走），防重入由 guard 完成。
+  private func startSearch() {
+    guard !viewModel.isLoading else { return }
+    isRetryingAfterFailure = viewModel.outcome == .failed
+    searchTask?.cancel()
+    searchTask = Task { await viewModel.search() }
   }
+
+  /// 没有结果可显示时的说明：还没搜、搜索中、没找到用一行居中小字；搜索失败用统一的出错提示。
+  private var statusArea: some View {
+    VStack(spacing: 0) {
+      // 重试期间保留提示和「重试」（显示「重试中」）；成功后焦点回到「搜索」。
+      SheetRetryingMessage(
+        message: viewModel.outcome == .failed ? "搜索失败，请稍后重试。" : nil,
+        isBusy: viewModel.isLoading,
+        retry: startSearch,
+        spacingEdges: [], spacing: 0
+      ) {
+        isSearchFocused = true
+      }
+      .frame(maxWidth: 600)
+
+      if viewModel.outcome != .failed, !(viewModel.isLoading && isRetryingAfterFailure) {
+        Text(statusText)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .multilineTextAlignment(.center)
+      }
+    }
+    .onChange(of: viewModel.isLoading) { _, isLoading in
+      if !isLoading { isRetryingAfterFailure = false }
+    }
+  }
+
+  private var statusText: String {
+    if viewModel.isLoading { return "正在搜索…" }
+    if case .noResults(let keyword) = viewModel.outcome {
+      return "没有找到「\(keyword)」，请换个片名再试。"
+    }
+    return "输入片名后搜索，选择结果即可填入 \(viewModel.source.title) ID。"
+  }
+
 }
 
 /// 手动填写所选来源的媒体 ID；放大镜按标题查询后回填。整理、添加下载与字幕下载共用。

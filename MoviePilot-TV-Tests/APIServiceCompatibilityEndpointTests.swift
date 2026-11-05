@@ -564,6 +564,50 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     XCTAssertFalse(viewModel.isLoading)
   }
 
+  /// 搜索失败不能看起来像「没有结果」：失败、没结果、有结果分别给出不同状态；关闭后回到初始状态。
+  func testManualMediaSearchReportsFailureAndNoResultsSeparately() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = CompatibilityEndpointServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await CompatibilityEndpointURLProtocol.stub.reset()
+    await CompatibilityEndpointURLProtocol.stub.setManualMediaResponse(
+      title: "失败搜索", statusCode: 500, data: Data(#"{"message":"failed"}"#.utf8), waitFor: nil)
+    await CompatibilityEndpointURLProtocol.stub.setManualMediaResponse(
+      title: "没有的片", data: Data("[]".utf8), waitFor: nil)
+    await CompatibilityEndpointURLProtocol.stub.setManualMediaResponse(
+      title: "有的片", data: Data(#"[{"tmdb_id":300,"title":"有的片","type":"电影"}]"#.utf8),
+      waitFor: nil)
+    service.baseURLForTesting = "https://compatibility-endpoint-tests.local"
+
+    let viewModel = ManualMediaSearchViewModel(source: .themoviedb, apiService: service)
+    XCTAssertEqual(viewModel.outcome, .idle)
+
+    viewModel.keyword = "失败搜索"
+    await viewModel.search()
+    XCTAssertEqual(viewModel.outcome, .failed)
+    XCTAssertTrue(viewModel.items.isEmpty)
+
+    viewModel.keyword = " 没有的片 "
+    await viewModel.search()
+    XCTAssertEqual(viewModel.outcome, .noResults(keyword: "没有的片"))
+
+    viewModel.keyword = "有的片"
+    await viewModel.search()
+    XCTAssertEqual(viewModel.outcome, .idle)
+    XCTAssertEqual(viewModel.items.map(\.title), ["有的片"])
+
+    viewModel.keyword = "失败搜索"
+    await viewModel.search()
+    XCTAssertEqual(viewModel.outcome, .failed)
+    viewModel.presentationDidDisappear(retention: .milliseconds(1))
+    try await Task.sleep(nanoseconds: 100_000_000)
+    XCTAssertEqual(viewModel.outcome, .idle)
+  }
+
   func testManualMediaSearchOlderFailureCannotStopNewerLoading() async {
     XCTAssertTrue(APIService.installURLProtocolForTesting(CompatibilityEndpointURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(CompatibilityEndpointURLProtocol.self) }

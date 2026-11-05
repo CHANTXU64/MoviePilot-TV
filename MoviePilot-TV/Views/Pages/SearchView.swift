@@ -627,16 +627,6 @@ private struct BestResultRow: View {
     }
   }
 
-  private func sourceText(for source: String?) -> String {
-    switch source {
-    case "themoviedb": return "TMDB"
-    case "douban": return "豆瓣"
-    case "bangumi": return "Bangumi"
-    case "anilist": return "AniList"
-    default: return source ?? ""
-    }
-  }
-
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       Text(title)
@@ -661,12 +651,7 @@ private struct BestResultRow: View {
               )
             switch item {
             case .media(let media):
-              let sourceStr = sourceText(for: media.source)
-              let typeStr = media.subscribeShare != nil ? "订阅分享" : media.type
-              let subtitleParts = [typeStr, media.year, sourceStr].compactMap { $0 }.filter {
-                !$0.isEmpty
-              }
-              let subtitle = subtitleParts.joined(separator: " · ")
+              let subtitle = BestResultCard.mediaSubtitle(for: media)
 
               BestResultCard(
                 title: media.cleanedTitle ?? "",
@@ -689,7 +674,7 @@ private struct BestResultRow: View {
                 item: media
               )
             case .person(let person):
-              let sourceStr = sourceText(for: person.source)
+              let sourceStr = BestResultCard.sourceTitle(for: person.source)
               let jobOrChar =
                 (person.job != nil && !person.job!.isEmpty) ? person.job : person.character
               let subtitleParts = ["人物", jobOrChar, sourceStr].compactMap { $0 }.filter {

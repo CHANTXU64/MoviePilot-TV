@@ -116,4 +116,16 @@ final class SheetSettingsLayoutTests: XCTestCase {
     XCTAssertEqual(retention.shownMessage(current: nil, isBusy: true), "整理没有开始")
     XCTAssertFalse(retention.showsRetry(current: nil, currentHasRetry: false))
   }
+
+  /// 搜索页「最佳结果」和查询媒体 ID 的卡片第二行用同一种写法：类型 · 年份 · 来源，缺的项跳过。
+  func testBestResultCardSubtitleUsesTypeYearAndSource() throws {
+    let media = try JSONDecoder().decode(
+      MediaInfo.self,
+      from: Data(#"{"tmdb_id":1,"title":"七王国的骑士","year":"2026","type":"电视剧","source":"themoviedb"}"#.utf8))
+    XCTAssertEqual(BestResultCard.mediaSubtitle(for: media), "电视剧 · 2026 · TMDB")
+
+    let noYear = try JSONDecoder().decode(
+      MediaInfo.self, from: Data(#"{"douban_id":"2","title":"无年份","type":"电影","source":"douban"}"#.utf8))
+    XCTAssertEqual(BestResultCard.mediaSubtitle(for: noYear), "电影 · 豆瓣")
+  }
 }
