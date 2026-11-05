@@ -1,0 +1,69 @@
+//
+// Swiftfin is subject to the terms of the Mozilla Public
+// License, v2.0. If a copy of the MPL was not distributed with this
+// file, you can obtain one at https://mozilla.org/MPL/2.0/.
+//
+// Copyright (c) 2026 Jellyfin & Jellyfin Contributors
+//
+// 本文件改自 Swiftfin：Shared/Views/VideoPlayer/Components/Toolbar/ActionButtons/AudioActionButton.swift
+//
+
+import SwiftUI
+
+extension VideoPlayer.PlaybackControls.Toolbar.ActionButtons {
+
+    struct Audio: View {
+
+        @ViewContextContains(.isInMenu)
+        private var isInMenu
+
+        @Environment(MediaSession.self)
+        private var mediaSession
+
+        private var selectedAudioStreamIndex: Int? {
+            mediaSession.playbackItem?.selectedAudioStreamIndex
+        }
+
+        private var systemImage: String {
+            if selectedAudioStreamIndex == nil {
+                VideoPlayerActionButton.audio.secondarySystemImage
+            } else {
+                VideoPlayerActionButton.audio.systemImage
+            }
+        }
+
+        @ViewBuilder
+        private func content(playbackItem: MediaPlayerItem) -> some View {
+            @Bindable
+            var playbackItem = playbackItem
+
+            Picker(selection: $playbackItem.selectedAudioStreamIndex) {
+                ForEach(playbackItem.audioStreams, id: \.index) { stream in
+                    Text(stream.displayTitle ?? L10n.unknown)
+                        .tag(stream.index as Int?)
+                }
+            } label: {
+                Text(L10n.audio)
+
+                if let selectedAudioStream = playbackItem.audioStreams.first(where: { $0.index == selectedAudioStreamIndex }) {
+                    Text(selectedAudioStream.displayTitle ?? L10n.unknown)
+                }
+            }
+        }
+
+        var body: some View {
+            if let playbackItem = mediaSession.playbackItem {
+                Menu(L10n.audio, systemImage: systemImage) {
+                    if isInMenu {
+                        content(playbackItem: playbackItem)
+                    } else {
+                        Section(L10n.audio) {
+                            content(playbackItem: playbackItem)
+                        }
+                    }
+                }
+                .menuOrder(.fixed)
+            }
+        }
+    }
+}

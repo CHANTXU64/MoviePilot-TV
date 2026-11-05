@@ -1,4 +1,3 @@
-import AVFoundation
 import XCTest
 
 @testable import MoviePilot_TV
@@ -88,7 +87,7 @@ final class InAppPlaybackModelTests: XCTestCase {
         from: [EmbyUser(id: "1", name: "guest", isAdministrator: false)], preferredNames: ["x"]))
   }
 
-  func testDirectPlayOnlyAcceptsWhatAVPlayerPlaysNatively() {
+  func testEveryLocalFilePlaysDirectlyWithContainerExtension() {
     func source(
       _ container: String?, video: String? = "h264", audio: [String] = ["aac"],
       protocol sourceProtocol: String? = "File", id: String = "s"
@@ -98,27 +97,37 @@ final class InAppPlaybackModelTests: XCTestCase {
       streams += audio.map { EmbyMediaStream(type: "Audio", codec: $0) }
       return EmbyMediaSource(id: id, container: container, protocol: sourceProtocol, mediaStreams: streams)
     }
+    func fileExtension(_ source: EmbyMediaSource) -> String? {
+      guard case .success(let selection) = EmbyDirectPlay.evaluate(source) else { return nil }
+      return selection.fileExtension
+    }
 
-    XCTAssertEqual(try EmbyDirectPlay.evaluate(source("mp4")).get().fileExtension, "mp4")
-    XCTAssertEqual(
-      try EmbyDirectPlay.evaluate(source("mov,mp4,m4a,3gp,3g2,mj2", video: "hevc")).get().fileExtension, "mp4")
-    XCTAssertEqual(try EmbyDirectPlay.evaluate(source("mov")).get().fileExtension, "mov")
-    XCTAssertEqual(EmbyDirectPlay.evaluate(source("mkv")), .failure(.container("mkv")))
-    XCTAssertEqual(EmbyDirectPlay.evaluate(source(nil)), .failure(.container(nil)))
+    XCTAssertEqual(fileExtension(source("mp4")), "mp4")
+    XCTAssertEqual(fileExtension(source("mov,mp4,m4a,3gp,3g2,mj2", video: "hevc")), "mp4")
+    XCTAssertEqual(fileExtension(source("mov")), "mov")
+    XCTAssertEqual(fileExtension(source("mkv")), "mkv")
+    XCTAssertEqual(fileExtension(source("matroska,webm", video: "hevc", audio: ["dts"])), "mkv")
+    XCTAssertEqual(fileExtension(source("mp4", video: "vp9")), "mp4")
+    XCTAssertEqual(fileExtension(source("avi")), "avi")
+    XCTAssertEqual(fileExtension(source(nil)), "mkv")
+    XCTAssertEqual(fileExtension(source("a/b")), "mkv", "扩展名只保留字母数字")
     XCTAssertEqual(EmbyDirectPlay.evaluate(source("mp4", protocol: "Http")), .failure(.remoteSource))
-    XCTAssertEqual(EmbyDirectPlay.evaluate(source("mp4", video: "vp9")), .failure(.videoCodec("vp9")))
-    XCTAssertEqual(EmbyDirectPlay.evaluate(source("mp4", video: nil)), .failure(.videoCodec(nil)))
-    XCTAssertEqual(EmbyDirectPlay.evaluate(source("mp4", audio: ["dts"])), .failure(.audioCodec("dts")))
-    XCTAssertNoThrow(try EmbyDirectPlay.evaluate(source("mp4", audio: ["truehd", "ac3"])).get())
-    XCTAssertNoThrow(try EmbyDirectPlay.evaluate(source("mp4", audio: [])).get())
 
-    let picked = EmbyDirectPlay.select(from: [source("mkv", id: "a"), source("mp4", id: "b")])
-    XCTAssertEqual(try picked.get().source.id, "b")
+    // 多个版本时取第一个本地文件版本。
+    XCTAssertEqual(try EmbyDirectPlay.select(from: [source("mkv", id: "a"), source("mp4", id: "b")]).get().source.id, "a")
     XCTAssertEqual(
-      EmbyDirectPlay.select(from: [source("mkv", id: "a"), source("avi", id: "b")]),
-      .failure(.container("mkv")))
+      try EmbyDirectPlay.select(from: [source("mp4", protocol: "Http", id: "a"), source("mkv", id: "b")]).get().source.id,
+      "b")
+    XCTAssertEqual(EmbyDirectPlay.select(from: [source("mp4", protocol: "Http")]), .failure(.remoteSource))
     XCTAssertEqual(EmbyDirectPlay.select(from: []), .failure(.noSource))
-    XCTAssertTrue(EmbyDirectPlay.Unsupported.container("mkv").message.contains("MKV"))
+  }
+
+  @MainActor
+  func testMPVErrorLogsDropAPIKey() {
+    XCTAssertEqual(
+      PlaybackSession.redacted("open https://e/Videos/1/stream.mkv?Static=true&api_key=abc123&DeviceId=d failed"),
+      "open https://e/Videos/1/stream.mkv?Static=true&api_key=<redacted>&DeviceId=d failed")
+    XCTAssertEqual(PlaybackSession.seconds(.milliseconds(1500)), 1.5)
   }
 
   func testResumePolicySkipsStartAndNearEnd() {
@@ -166,8 +175,30 @@ final class InAppPlaybackModelTests: XCTestCase {
       EmbyItem.self,
       #"{"Id":"e","Type":"Episode","Name":"开端","SeriesName":"某剧","ParentIndexNumber":1,"IndexNumber":1}"#)
     XCTAssertEqual(episode.displayTitle, "某剧 · 第 1 季 第 1 集 · 开端")
+    XCTAssertEqual(episode.playerTitles.primary, "第 1 季 第 1 集 · 开端")
+    XCTAssertEqual(episode.playerTitles.secondary, "某剧")
     let movie = try decode(EmbyItem.self, #"{"Id":"m","Type":"Movie","Name":"电影名"}"#)
     XCTAssertEqual(movie.displayTitle, "电影名")
+    XCTAssertNil(movie.playerTitles.secondary)
+
+    // 集名只是占位时不重复显示。
+    for placeholder in ["第1集", "第 1 集", "第一集", "第12话", "Episode 1", "EP01", "e3", "1"] {
+      let item = try decode(
+        EmbyItem.self,
+        #"{"Id":"e","Type":"Episode","Name":"\#(placeholder)","SeriesName":"小城良方","ParentIndexNumber":1,"IndexNumber":1}"#)
+      XCTAssertEqual(item.displayTitle, "小城良方 · 第 1 季 第 1 集", placeholder)
+    }
+    XCTAssertFalse(EmbyItem.isPlaceholderEpisodeName("第一集 重逢", episodeNumber: 1))
+    // 纯数字只在等于集号时算占位，真实的数字集名保留。
+    XCTAssertTrue(EmbyItem.isPlaceholderEpisodeName("03", episodeNumber: 3))
+    let numbered = try decode(
+      EmbyItem.self,
+      #"{"Id":"e","Type":"Episode","Name":"1984","SeriesName":"某剧","ParentIndexNumber":1,"IndexNumber":3}"#)
+    XCTAssertEqual(numbered.displayTitle, "某剧 · 第 1 季 第 3 集 · 1984")
+    XCTAssertFalse(EmbyItem.isPlaceholderEpisodeName("12", episodeNumber: nil))
+    // 没有季集号时，占位集名仍然保留，否则标题是空的。
+    let bare = try decode(EmbyItem.self, #"{"Id":"e","Type":"Episode","Name":"第1集"}"#)
+    XCTAssertEqual(bare.displayTitle, "第1集")
   }
 
   @MainActor
@@ -275,6 +306,8 @@ final class EmbyClientTests: XCTestCase {
 final class PlaybackCoordinatorTests: XCTestCase {
   private static let mpBase = "https://mp.playback-tests.local"
   private static let twoHours: Int64 = 7200 * 10_000_000
+  /// 协调器弱引用 `APIService`（生产中由 `APIService` 经 `SessionScope` 持有协调器），测试期间由这里持有。
+  private var services: [APIService] = []
 
   override func setUp() {
     super.setUp()
@@ -283,6 +316,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
   }
 
   override func tearDown() {
+    services = []
     APIService.removeURLProtocolForTesting(PlaybackURLProtocol.self)
     PlaybackURLProtocol.stub.reset()
     super.tearDown()
@@ -299,7 +333,8 @@ final class PlaybackCoordinatorTests: XCTestCase {
   }
 
   private func makeCoordinator(_ service: APIService) -> PlaybackCoordinator {
-    PlaybackCoordinator(apiService: service, embySession: PlaybackURLProtocol.session)
+    services.append(service)
+    return PlaybackCoordinator(apiService: service, embySession: PlaybackURLProtocol.session)
   }
 
   private static func movie(
@@ -318,7 +353,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
   }
 
   private func streamURL(_ coordinator: PlaybackCoordinator) -> URL? {
-    (coordinator.session?.player.currentItem?.asset as? AVURLAsset)?.url
+    coordinator.session?.streamURL
   }
 
   private func run(_ coordinator: PlaybackCoordinator, _ target: PlaybackTarget) async {
@@ -389,7 +424,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     coordinator.endSession()
   }
 
-  func testUnsupportedContainerExplainsWhyWithoutPresenting() async {
+  func testMKVPlaysThroughMPVWithoutTranscoding() async throws {
     PlaybackURLProtocol.stub.configure {
       $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "lan.playback-tests.local"))]"
       $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
@@ -398,7 +433,25 @@ final class PlaybackCoordinatorTests: XCTestCase {
     }
     let coordinator = makeCoordinator(makeService())
     await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
-    XCTAssertTrue(coordinator.failure?.message.contains("MKV") == true)
+    XCTAssertNil(coordinator.failure)
+    let session = try XCTUnwrap(coordinator.session)
+    XCTAssertNil(session.mpvPlayer, "mpv 等播放界面出现再创建")
+    XCTAssertEqual(session.streamURL.path, "/Videos/m1/stream.mkv")
+    let query = URLComponents(url: session.streamURL, resolvingAgainstBaseURL: false)?.queryItems ?? []
+    XCTAssertTrue(query.contains(URLQueryItem(name: "Static", value: "true")))
+    coordinator.endSession()
+  }
+
+  func testRemoteSourceExplainsWhyWithoutPresenting() async {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "lan.playback-tests.local"))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = ["lan.playback-tests.local|m1": Self.movie()]
+      $0.playbackInfo = #"{"PlaySessionId":"ps1","MediaSources":[{"Id":"src1","Container":"mp4","Protocol":"Http","MediaStreams":[]}]}"#
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    XCTAssertEqual(coordinator.failure?.message, EmbyDirectPlay.Unsupported.remoteSource.message)
     XCTAssertNil(coordinator.session)
     XCTAssertFalse(coordinator.isResolving)
   }
@@ -515,6 +568,98 @@ final class PlaybackCoordinatorTests: XCTestCase {
     XCTAssertFalse(PlaybackURLProtocol.stub.requests().contains { $0.url.path.hasSuffix("/PlaybackInfo") })
   }
 
+  private func startEpisodeSession(_ coordinator: PlaybackCoordinator) async throws -> PlaybackSession {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "lan.playback-tests.local"))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = [
+        "lan.playback-tests.local|e1": #"{"Id":"e1","Type":"Episode","Name":"一","SeriesId":"s1","ParentIndexNumber":1,"IndexNumber":1}"#,
+        "lan.playback-tests.local|e2": #"{"Id":"e2","Type":"Episode","Name":"二","SeriesId":"s1","ParentIndexNumber":1,"IndexNumber":2}"#,
+      ]
+      $0.playbackInfo = Self.playbackInfo(container: "mkv")
+    }
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "e1"))
+    return try XCTUnwrap(coordinator.session)
+  }
+
+  func testSwitchingEpisodeStopsOldSessionAndKeepsPlayerScreen() async throws {
+    let coordinator = makeCoordinator(makeService())
+    let first = try await startEpisodeSession(coordinator)
+    let player = first.makeMPVPlayer()
+    var result: PlaybackCoordinator.SwitchResult?
+
+    coordinator.switchItem(to: "e2", startPosition: 0, from: first) { result = $0 }
+    await coordinator.switchTaskForTesting?.value
+
+    guard case .switched(let next) = result else { return XCTFail("应切到下一集，实际 \(String(describing: result))") }
+    XCTAssertTrue(first.isStopped, "旧会话停止并上报")
+    XCTAssertTrue(coordinator.session === next)
+    XCTAssertEqual(next.id, first.id, "沿用播放界面身份，全屏界面不重新弹出")
+    XCTAssertTrue(next.mpvPlayer === player, "复用同一个 mpv 播放器")
+    XCTAssertEqual(next.streamURL.path, "/Videos/e2/stream.mkv")
+    XCTAssertEqual(next.item.id, "e2")
+    XCTAssertNil(coordinator.failure)
+
+    // 旧会话的退出回调不能结束新会话。
+    coordinator.endSession(first)
+    XCTAssertTrue(coordinator.session === next)
+    coordinator.endSession(next)
+    XCTAssertNil(coordinator.session)
+  }
+
+  func testRapidSecondSwitchSupersedesFirstWithoutEarlyCompletion() async throws {
+    let coordinator = makeCoordinator(makeService())
+    let first = try await startEpisodeSession(coordinator)
+    let gate = DispatchSemaphore(value: 0)
+    PlaybackURLProtocol.stub.configure { $0.playbackInfoGate = gate }
+    var results: [PlaybackCoordinator.SwitchResult] = []
+
+    coordinator.switchItem(to: "e2", from: first) { results.append($0) }
+    let replaced = try XCTUnwrap(coordinator.switchTaskForTesting)
+    coordinator.switchItem(to: "e2", from: first) { results.append($0) }
+    let latest = try XCTUnwrap(coordinator.switchTaskForTesting)
+    await replaced.value
+
+    XCTAssertTrue(results.isEmpty, "被替换的切换不回报，界面保持加载状态")
+    XCTAssertEqual(coordinator.switchTaskForTesting, latest, "旧任务结束不能清掉新任务")
+    XCTAssertTrue(coordinator.session === first)
+    gate.signal()
+    gate.signal()
+    await latest.value
+
+    XCTAssertEqual(results.count, 1)
+    guard case .switched(let next) = results.first else { return XCTFail("应切到下一集，实际 \(results)") }
+    XCTAssertTrue(coordinator.session === next)
+    XCTAssertEqual(next.item.id, "e2")
+    XCTAssertNil(coordinator.switchTaskForTesting)
+    coordinator.endSession()
+  }
+
+  func testAccountChangeDuringSwitchPublishesNothing() async throws {
+    let service = makeService()
+    let coordinator = makeCoordinator(service)
+    let first = try await startEpisodeSession(coordinator)
+    let gate = DispatchSemaphore(value: 0)
+    PlaybackURLProtocol.stub.configure { $0.playbackInfoGate = gate }
+    let before = PlaybackURLProtocol.stub.requests().count
+    var result: PlaybackCoordinator.SwitchResult?
+
+    coordinator.switchItem(to: "e2", from: first) { result = $0 }
+    let task = try XCTUnwrap(coordinator.switchTaskForTesting)
+    for _ in 0..<200
+    where !PlaybackURLProtocol.stub.requests().dropFirst(before).contains(where: { $0.url.path.hasSuffix("/PlaybackInfo") }) {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    service.tokenForTesting = "another-token"
+    gate.signal()
+    await task.value
+
+    guard case .discarded = result else { return XCTFail("账号切换后不应发布，实际 \(String(describing: result))") }
+    XCTAssertTrue(coordinator.session === first, "没有发布新会话")
+    XCTAssertFalse(first.isStopped)
+    coordinator.endSession()
+  }
+
   func testCancelDuringResolveKeepsNothing() async throws {
     let gate = DispatchSemaphore(value: 0)
     PlaybackURLProtocol.stub.configure {
@@ -558,6 +703,7 @@ private final class PlaybackStub: @unchecked Sendable {
     /// `host|seriesID` → 剧集列表 JSON
     var episodes: [String: String] = [:]
     var usersGate: DispatchSemaphore?
+    var playbackInfoGate: DispatchSemaphore?
   }
 
   private let lock = NSLock()
@@ -643,6 +789,7 @@ private final class PlaybackURLProtocol: URLProtocol {
       let seriesID = url.deletingLastPathComponent().lastPathComponent
       respond(200, scenario.episodes["\(host)|\(seriesID)"] ?? #"{"Items":[]}"#)
     } else if path.hasSuffix("/PlaybackInfo") {
+      scenario.playbackInfoGate?.wait()
       respond(200, scenario.playbackInfo)
     } else if recorded.method == "GET", path.contains("/Items/") {
       let itemID = url.lastPathComponent

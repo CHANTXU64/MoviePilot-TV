@@ -81,7 +81,7 @@ struct EmbyClient {
     return url
   }
 
-  /// 直接播放原文件的流地址。AVPlayer 不能附带请求头，密钥只能放在 query 里，此地址不得写入日志。
+  /// 直接播放原文件的流地址。密钥放在 query 里，此地址不得写入日志。
   func directStreamURL(
     itemID: String, selection: EmbyDirectPlay.Selection, playSessionID: String?
   ) throws -> URL {
@@ -127,7 +127,8 @@ struct EmbyClient {
     return try decode(EmbyItemsPage.self, from: data).items
   }
 
-  /// 只申报 AVPlayer 能直接播放的格式，并关闭重新封装和转码，Emby 不会为此启动转码任务。
+  /// 声明任何视频都可以直接播放（mpv 直连原文件），并关闭重新封装和转码，
+  /// Emby 不会为此启动转码任务。
   func playbackInfo(itemID: String, userID: String) async throws -> EmbyPlaybackInfo {
     let bitrate = "200000000"
     let target = try url(
@@ -146,19 +147,16 @@ struct EmbyClient {
         "Name": .string("MoviePilot-TV"),
         "MaxStreamingBitrate": .int(200_000_000),
         "MaxStaticBitrate": .int(200_000_000),
-        "DirectPlayProfiles": .array([
-          .object([
-            "Type": .string("Video"),
-            "Container": .string(EmbyDirectPlay.containers.sorted().joined(separator: ",")),
-            "VideoCodec": .string(EmbyDirectPlay.videoCodecs.sorted().joined(separator: ",")),
-            "AudioCodec": .string(EmbyDirectPlay.audioCodecs.sorted().joined(separator: ",")),
-          ])
-        ]),
+        "DirectPlayProfiles": .array([.object(["Type": .string("Video")])]),
         "TranscodingProfiles": .array([]),
         "ContainerProfiles": .array([]),
         "CodecProfiles": .array([]),
         "SubtitleProfiles": .array([
-          .object(["Format": .string("mov_text"), "Method": .string("Embed")])
+          .object(["Format": .string("srt"), "Method": .string("Embed")]),
+          .object(["Format": .string("ass"), "Method": .string("Embed")]),
+          .object(["Format": .string("ssa"), "Method": .string("Embed")]),
+          .object(["Format": .string("pgssub"), "Method": .string("Embed")]),
+          .object(["Format": .string("mov_text"), "Method": .string("Embed")]),
         ]),
       ])
     ])

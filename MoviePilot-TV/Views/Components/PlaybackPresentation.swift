@@ -1,25 +1,4 @@
-import AVKit
 import SwiftUI
-
-/// 系统播放器：进度条、快进快退、音轨与字幕菜单、信息面板都使用 tvOS 原生控件。
-struct PlayerView: UIViewControllerRepresentable {
-  let session: PlaybackSession
-
-  func makeUIViewController(context: UIViewControllerRepresentableContext<Self>) -> AVPlayerViewController {
-    let controller = AVPlayerViewController()
-    controller.player = session.player
-    // 按影片切换 HDR/帧率（需用户在系统设置里开启“匹配内容”）。
-    controller.appliesPreferredDisplayCriteriaAutomatically = true
-    session.start()
-    return controller
-  }
-
-  func updateUIViewController(_ controller: AVPlayerViewController, context: UIViewControllerRepresentableContext<Self>) {}
-
-  static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: ()) {
-    controller.player = nil
-  }
-}
 
 /// 挂在主界面上的播放呈现：解析中的遮罩、续播询问、全屏播放器和失败提示。
 struct PlaybackPresentationModifier: ViewModifier {
@@ -64,8 +43,14 @@ struct PlaybackPresentationModifier: ViewModifier {
           set: { if $0 == nil { coordinator.endSession() } }),
         onDismiss: { coordinator.endSession() }
       ) { session in
-        PlayerView(session: session)
-          .ignoresSafeArea()
+        MPVPlaybackScreen(
+          session: session,
+          onExit: { coordinator.endSession($0) },
+          onSwitchItem: { itemID, sourceID, position, current, completion in
+            coordinator.switchItem(
+              to: itemID, mediaSourceID: sourceID, startPosition: position, from: current,
+              completion: completion)
+          })
       }
       .onChange(of: coordinator.failure) { _, failure in
         guard let failure else { return }

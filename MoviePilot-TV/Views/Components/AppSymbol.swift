@@ -97,6 +97,22 @@ nonisolated enum AppSymbol {
   static let noComments = "text.bubble"
   static let noResults = "doc.text.magnifyingglass"
 
+  // MARK: 播放器（沿用 Swiftfin 播放界面的图标）
+
+  static let playbackError = "exclamationmark.triangle"
+  static let playbackPaused = pause
+  static let autoPlayOn = "play.circle.fill"
+  static let autoPlayOff = "stop.circle"
+  /// 跳过片头、片尾等片段。
+  static let skipSegment = "forward.end.fill"
+  /// 长按加速的倍率提示。
+  static let speedBoost = "forward.fill"
+  static let jumpForward = "goforward"
+  static let jumpBackward = "gobackward"
+  /// 音频、字幕偏移的增减。
+  static let decrease = "minus"
+  static let increase = "plus"
+
   // MARK: 控件
 
   static let selected = "checkmark.circle.fill"

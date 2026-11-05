@@ -1,7 +1,6 @@
-import AVFoundation
-import AVKit
 import Combine
 import Foundation
+import MPVUI
 
 /// 应用内播放的入口目标。
 enum PlaybackTarget: Equatable {
@@ -59,6 +58,8 @@ struct PreparedPlayback {
   let selection: EmbyDirectPlay.Selection
   let playSessionID: String?
   let streamURL: URL
+  /// Emby 返回的全部版本，供播放界面的“版本”选择。
+  var mediaSources: [EmbyMediaSource] = []
 
   var title: String { item.displayTitle }
   var resumePosition: Double? {
@@ -89,9 +90,11 @@ final class PlaybackCoordinator: ObservableObject {
   @Published private(set) var session: PlaybackSession?
   @Published var failure: Failure?
 
-  private let apiService: APIService
+  /// 弱引用：`APIService` → `SessionScope` → 本对象，强引用会让整个会话在登出后无法释放。
+  private weak var apiService: APIService?
   private let embySession: URLSession
   private var resolveTask: Task<Void, Never>?
+  private var switchTask: Task<Void, Never>?
   /// 每台服务器上次连通的地址，下次优先探测。
   private var preferredBaseURL: [String: URL] = [:]
   private var isTornDown = false
@@ -108,7 +111,7 @@ final class PlaybackCoordinator: ObservableObject {
   var isBusy: Bool { isResolving || resumePrompt != nil || session != nil }
 
   func play(_ target: PlaybackTarget) {
-    guard !isTornDown, !isBusy else { return }
+    guard !isTornDown, !isBusy, let apiService else { return }
     guard apiService.canRequestSuperUserEndpoints else {
       fail(PlaybackError.notAllowed)
       return
@@ -132,7 +135,7 @@ final class PlaybackCoordinator: ObservableObject {
         guard !Task.isCancelled else { return }
         self.isResolving = false
         self.resolveTask = nil
-        guard self.apiService.isSessionUnchanged(from: snapshot), !(error is CancellationError)
+        guard self.apiService?.isSessionUnchanged(from: snapshot) == true, !(error is CancellationError)
         else { return }
         self.fail(error)
       }
@@ -157,13 +160,23 @@ final class PlaybackCoordinator: ObservableObject {
 
   /// 播放器关闭（Menu、播放结束或出错）后统一收尾。
   func endSession() {
+    switchTask?.cancel()
+    switchTask = nil
     guard let session else { return }
     self.session = nil
     session.stop()
   }
 
+  /// 只在给定会话仍是当前会话时收尾：播放界面换集后，旧会话的退出回调不能结束新会话。
+  func endSession(_ expected: PlaybackSession) {
+    guard session === expected else { return }
+    endSession()
+  }
+
   func tearDown() {
     isTornDown = true
+    switchTask?.cancel()
+    switchTask = nil
     cancelResolving()
     resumePrompt = nil
     endSession()
@@ -173,7 +186,7 @@ final class PlaybackCoordinator: ObservableObject {
 
   private func ensureCurrent(_ snapshot: APIServiceSessionSnapshot) throws {
     try Task.checkCancellation()
-    guard !isTornDown, apiService.isSessionUnchanged(from: snapshot) else {
+    guard !isTornDown, apiService?.isSessionUnchanged(from: snapshot) == true else {
       throw CancellationError()
     }
   }
@@ -181,6 +194,7 @@ final class PlaybackCoordinator: ObservableObject {
   private func prepare(
     _ target: PlaybackTarget, snapshot: APIServiceSessionSnapshot
   ) async throws -> PreparedPlayback {
+    guard let apiService else { throw CancellationError() }
     let servers = try await apiService.fetchMediaServers()
     try ensureCurrent(snapshot)
 
@@ -228,7 +242,8 @@ final class PlaybackCoordinator: ObservableObject {
   }
 
   private func preparePlayback(
-    client: EmbyClient, userID: String, item requested: EmbyItem, snapshot: APIServiceSessionSnapshot
+    client: EmbyClient, userID: String, item requested: EmbyItem, snapshot: APIServiceSessionSnapshot,
+    preferredSourceID: String? = nil
   ) async throws -> PreparedPlayback {
     // 剧集先简单处理：从第 1 季第 1 集开始。
     let item: EmbyItem
@@ -251,7 +266,8 @@ final class PlaybackCoordinator: ObservableObject {
       throw PlaybackError.server("Emby 拒绝播放：\(code)")
     }
     let selection: EmbyDirectPlay.Selection
-    switch EmbyDirectPlay.select(from: info.mediaSources) {
+    let preferred = preferredSourceID.flatMap { id in info.mediaSources.first { $0.id == id } }
+    switch preferred.map({ EmbyDirectPlay.evaluate($0) }) ?? EmbyDirectPlay.select(from: info.mediaSources) {
     case .success(let value): selection = value
     case .failure(let reason): throw PlaybackError.unsupported(reason)
     }
@@ -259,7 +275,7 @@ final class PlaybackCoordinator: ObservableObject {
       itemID: item.id, selection: selection, playSessionID: info.playSessionID)
     return PreparedPlayback(
       client: client, userID: userID, item: item, selection: selection,
-      playSessionID: info.playSessionID, streamURL: streamURL)
+      playSessionID: info.playSessionID, streamURL: streamURL, mediaSources: info.mediaSources)
   }
 
   /// 按「上次可用 → 内网 → 外网」探测，第一个响应的地址即用于本次播放。
@@ -296,12 +312,82 @@ final class PlaybackCoordinator: ObservableObject {
   private func start(_ prepared: PreparedPlayback, at position: Double) {
     guard !isTornDown else { return }
     let session = PlaybackSession(prepared: prepared, startPosition: position)
+    attachFinishHandler(to: session)
+    self.session = session
+  }
+
+  private func attachFinishHandler(to session: PlaybackSession) {
     session.onFinish = { [weak self, weak session] message in
       guard let self, let session, self.session === session else { return }
       self.endSession()
       if let message { self.failure = Failure(message: message) }
     }
-    self.session = session
+  }
+
+  // MARK: - 播放中换集、换版本
+
+  /// 换集或换版本的结果，交给播放界面提示。
+  enum SwitchResult {
+    case switched(PlaybackSession)
+    case failed(String)
+    /// 期间会话已结束、账号已切换或又发起了新的切换。
+    case discarded
+  }
+
+  #if TESTING
+    var switchTaskForTesting: Task<Void, Never>? { switchTask }
+  #endif
+
+  /// 在当前 mpv 播放界面里改播另一集或另一个版本（对应 Swiftfin 的 `playNewItem`）。
+  /// 沿用当前会话的 Emby 客户端和用户，为新条目重新取 PlaybackInfo、选版本。
+  /// 旧会话照常停止并上报进度，新会话复用同一个 mpv 播放器和界面。
+  func switchItem(
+    to itemID: String, mediaSourceID: String? = nil, startPosition: Double = 0,
+    from current: PlaybackSession, completion: @escaping (SwitchResult) -> Void = { _ in }
+  ) {
+    guard !isTornDown, session === current, let apiService else {
+      completion(.discarded)
+      return
+    }
+    let snapshot = apiService.sessionSnapshot()
+    switchTask?.cancel()
+    switchTask = Task { [weak self] in
+      guard let self else { return }
+      let result: SwitchResult
+      do {
+        let client = current.client
+        let userID = current.userID
+        guard let item = try await client.item(id: itemID, userID: userID) else {
+          throw PlaybackError.notFound
+        }
+        try self.ensureCurrent(snapshot)
+        let prepared = try await self.preparePlayback(
+          client: client, userID: userID, item: item, snapshot: snapshot, preferredSourceID: mediaSourceID)
+        try self.ensureCurrent(snapshot)
+        guard !Task.isCancelled, self.session === current, !current.isStopped else { throw CancellationError() }
+        current.stop()
+        let next = PlaybackSession(
+          prepared: prepared, startPosition: startPosition, id: current.id, mpvPlayer: current.mpvPlayer)
+        self.attachFinishHandler(to: next)
+        self.session = next
+        result = .switched(next)
+      } catch {
+        if Task.isCancelled || error is CancellationError
+          || self.apiService?.isSessionUnchanged(from: snapshot) != true || self.session !== current
+        {
+          result = .discarded
+        } else {
+          let message = (error as? LocalizedError)?.errorDescription ?? "播放失败"
+          Logger.warning("[Playback] 切换条目失败: \(message)")
+          result = .failed(message)
+        }
+      }
+      // 取消只来自新的切换、结束会话或登出：`switchTask` 已归新任务或已清空，也不再回报，
+      // 免得旧任务清掉新任务的引用、让界面在新切换完成前就结束加载状态。
+      guard !Task.isCancelled else { return }
+      self.switchTask = nil
+      completion(result)
+    }
   }
 
   private func fail(_ error: Error) {
@@ -311,7 +397,7 @@ final class PlaybackCoordinator: ObservableObject {
   }
 }
 
-/// 一次播放：持有 AVPlayer，负责起播位置、进度上报和结束收尾。`stop()` 可重复调用。
+/// 一次播放：持有 mpv 播放器，负责起播位置、进度上报和结束收尾。`stop()` 可重复调用。
 @MainActor
 final class PlaybackSession: Identifiable {
   // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
@@ -319,8 +405,34 @@ final class PlaybackSession: Identifiable {
 
   static let progressInterval: Double = 10
 
-  let id = UUID()
-  let player: AVPlayer
+  /// mpv 默认优先选中文字幕；没有中文字幕时按片源默认轨道。
+  static let mpvConfiguration = MPVPlayerConfiguration(
+    additionalOptions: ["slang": "chi,zho,zh,chs,cht,sc,tc,cn,zh-Hans,zh-Hant"].merging(
+      subtitleFontOptions, uniquingKeysWith: { current, _ in current }),
+    automaticallyPlays: true
+  )
+
+  /// ASS 等由 mpv（libass）绘制的字幕用内置的思源黑体（Noto Sans SC）。
+  /// libass 自带的 FreeType 打不开 tvOS 的系统中文字体（PingFang 是 `hvgl` 字形，Hiragino 是 CFF 字形），
+  /// 按系统字体回退只会画出方块；因此不查系统字体，只用内置字体和片源 MKV 附带的字体，找不到的字体名一律落到内置字体。
+  /// SRT 等文字字幕由界面用系统字体绘制，不经过这里。
+  private static var subtitleFontOptions: [String: String] {
+    guard let directory = Bundle.main.url(forResource: "SubtitleFonts", withExtension: "bundle") else {
+      return [:]
+    }
+    return [
+      "sub-fonts-dir": directory.path(percentEncoded: false),
+      "sub-font": "Noto Sans SC",
+      "sub-font-provider": "none",
+    ]
+  }
+
+  /// 播放界面的身份。播放中换集时新会话沿用旧会话的 id，全屏播放界面不重新弹出。
+  let id: UUID
+  /// 直连原文件的地址，含密钥，不得写入日志。
+  let streamURL: URL
+  /// 在播放界面出现时创建，未展示就不启动解码。
+  private(set) var mpvPlayer: MPVPlayer?
   /// 正常结束传 nil，出错传提示文字。
   var onFinish: ((String?) -> Void)?
 
@@ -328,36 +440,58 @@ final class PlaybackSession: Identifiable {
   private let startPosition: Double
   private var hasStarted = false
   private(set) var isStopped = false
-  private var timeObserver: Any?
-  private var statusObservation: NSKeyValueObservation?
-  private var pauseObservation: NSKeyValueObservation?
-  private var notificationObservers: [NSObjectProtocol] = []
+  private var lastReportedPause = false
+  private var mpvEventTask: Task<Void, Never>?
+  private var mpvProgressTask: Task<Void, Never>?
 
-  init(prepared: PreparedPlayback, startPosition: Double) {
+  init(prepared: PreparedPlayback, startPosition: Double, id: UUID = UUID(), mpvPlayer: MPVPlayer? = nil) {
+    self.id = id
     self.prepared = prepared
     self.startPosition = startPosition
-    let item = AVPlayerItem(url: prepared.streamURL)
-    item.externalMetadata = Self.metadata(for: prepared.item)
-    player = AVPlayer(playerItem: item)
+    self.mpvPlayer = mpvPlayer
+    streamURL = prepared.streamURL
   }
 
   var title: String { prepared.title }
+  var titles: (primary: String, secondary: String?) { prepared.item.playerTitles }
+  /// 以下供播放界面的信息、章节、队列等面板使用。
+  var client: EmbyClient { prepared.client }
+  var userID: String { prepared.userID }
+  var item: EmbyItem { prepared.item }
+  var mediaSource: EmbyMediaSource { prepared.selection.source }
+  var mediaSources: [EmbyMediaSource] { prepared.mediaSources }
+  var startSeconds: Double { startPosition }
+  /// Emby 记录的片长；mpv 读出文件时长前，播放界面用它显示进度。
+  var runtime: Duration? {
+    guard let ticks = prepared.item.runTimeTicks, ticks > 0 else { return nil }
+    return .microseconds(ticks / 10)
+  }
+
+  func makeMPVPlayer() -> MPVPlayer {
+    if let mpvPlayer { return mpvPlayer }
+    let player = MPVPlayer(configuration: Self.mpvConfiguration)
+    mpvPlayer = player
+    return player
+  }
 
   private var currentSeconds: Double {
-    let seconds = player.currentTime().seconds
+    let seconds = mpvPlayer.map { Self.seconds($0.position) } ?? 0
     return seconds.isFinite ? max(0, seconds) : 0
+  }
+
+  static func seconds(_ duration: Duration) -> Double {
+    let components = duration.components
+    return Double(components.seconds) + Double(components.attoseconds) / 1e18
   }
 
   func start() {
     guard !hasStarted, !isStopped else { return }
     hasStarted = true
-    if startPosition > 0 {
-      player.seek(
-        to: CMTime(seconds: startPosition, preferredTimescale: 600),
-        toleranceBefore: .zero, toleranceAfter: .zero)
-    }
-    observe()
-    player.play()
+    let player = makeMPVPlayer()
+    observe(player)
+    player.load(
+      streamURL, playAutomatically: true,
+      startTime: startPosition > 0 ? .milliseconds(Int64(startPosition * 1000)) : nil)
     report(.start, isPaused: false, position: startPosition)
   }
 
@@ -365,65 +499,62 @@ final class PlaybackSession: Identifiable {
     guard !isStopped else { return }
     isStopped = true
     let position = currentSeconds
-    player.pause()
-    if let timeObserver { player.removeTimeObserver(timeObserver) }
-    timeObserver = nil
-    statusObservation = nil
-    pauseObservation = nil
-    notificationObservers.forEach(NotificationCenter.default.removeObserver)
-    notificationObservers = []
-    player.replaceCurrentItem(with: nil)
+    mpvEventTask?.cancel()
+    mpvEventTask = nil
+    mpvProgressTask?.cancel()
+    mpvProgressTask = nil
+    mpvPlayer?.stop()
     onFinish = nil
     guard hasStarted else { return }
     report(.stopped, isPaused: true, position: position)
     saveUserData(position: position)
   }
 
-  private func observe() {
-    let interval = CMTime(seconds: Self.progressInterval, preferredTimescale: 1)
-    timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) {
-      [weak self] _ in
-      MainActor.assumeIsolated {
-        guard let self, !self.isStopped, self.player.timeControlStatus == .playing else { return }
-        self.report(.progress, isPaused: false, position: self.currentSeconds)
+  // MARK: - mpv
+
+  private func observe(_ player: MPVPlayer) {
+    let events = player.makeEventStream()
+    mpvEventTask = Task { [weak self] in
+      for await event in events {
+        guard let self, !self.isStopped else { return }
+        self.handle(event.change)
       }
     }
-    statusObservation = player.currentItem?.observe(\.status, options: [.new]) { [weak self] _, _ in
-      Task { @MainActor [weak self] in self?.handleItemStatus() }
+    mpvProgressTask = Task { [weak self] in
+      while !Task.isCancelled {
+        try? await Task.sleep(for: .seconds(Self.progressInterval))
+        guard let self, !self.isStopped, !Task.isCancelled else { return }
+        if self.mpvPlayer?.state == .playing {
+          self.report(.progress, isPaused: false, position: self.currentSeconds)
+        }
+      }
     }
-    pauseObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
-      Task { @MainActor [weak self] in self?.handlePauseChange() }
-    }
-    let center = NotificationCenter.default
-    notificationObservers = [
-      center.addObserver(
-        forName: AVPlayerItem.didPlayToEndTimeNotification, object: player.currentItem, queue: .main
-      ) { [weak self] _ in
-        MainActor.assumeIsolated { self?.finish(message: nil) }
-      },
-      center.addObserver(
-        forName: AVPlayerItem.failedToPlayToEndTimeNotification, object: player.currentItem,
-        queue: .main
-      ) { [weak self] _ in
-        MainActor.assumeIsolated { self?.finish(message: "播放中断，请检查与 Emby 的网络连接") }
-      },
-    ]
   }
 
-  private func handleItemStatus() {
-    guard !isStopped, let item = player.currentItem, item.status == .failed else { return }
-    if let error = item.error as NSError? {
-      Logger.error("[Playback] AVPlayer 起播失败: \(error.domain) \(error.code)")
+  private func handle(_ change: MPVPlaybackEvent.Change) {
+    switch change {
+    case .stateChanged(.ended):
+      finish(message: nil)
+    case .stateChanged(.failed(let error)), .error(let error, fatal: true):
+      Logger.error("[Playback] mpv 播放失败: \(Self.redacted(String(describing: error)))")
+      finish(message: "无法播放该影片，请检查与 Emby 的网络连接")
+    case .pauseChanged(let isPaused):
+      handlePauseChange(isPaused: isPaused)
+    default:
+      break
     }
-    finish(message: "无法播放该影片，可能是编码不受 Apple TV 支持或网络无法访问 Emby")
   }
 
-  private var lastReportedPause = false
+  /// mpv 的错误信息可能带出流地址，日志里去掉密钥。
+  static func redacted(_ text: String) -> String {
+    text.replacingOccurrences(
+      of: #"api_key=[^&\s"']*"#, with: "api_key=<redacted>", options: .regularExpression)
+  }
 
-  private func handlePauseChange() {
-    guard !isStopped, hasStarted else { return }
-    let isPaused = player.timeControlStatus == .paused
-    guard isPaused != lastReportedPause else { return }
+  // MARK: - 共用
+
+  private func handlePauseChange(isPaused: Bool) {
+    guard !isStopped, hasStarted, isPaused != lastReportedPause else { return }
     lastReportedPause = isPaused
     report(.progress, isPaused: isPaused, position: currentSeconds)
   }
@@ -476,20 +607,5 @@ final class PlaybackSession: Identifiable {
         Logger.warning("[Playback] 保存观看进度失败: \(error.localizedDescription)")
       }
     }
-  }
-
-  private static func metadata(for item: EmbyItem) -> [AVMetadataItem] {
-    var result: [AVMetadataItem] = []
-    func add(_ identifier: AVMetadataIdentifier, _ value: String?) {
-      guard let value, !value.isEmpty else { return }
-      let entry = AVMutableMetadataItem()
-      entry.identifier = identifier
-      entry.value = value as NSString
-      entry.extendedLanguageTag = "und"
-      result.append(entry)
-    }
-    add(.commonIdentifierTitle, item.displayTitle)
-    add(.commonIdentifierDescription, item.overview)
-    return result
   }
 }

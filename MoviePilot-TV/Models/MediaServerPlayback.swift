@@ -178,18 +178,46 @@ nonisolated struct EmbyItem: Decodable, Sendable {
     locationType = try? container.decodeIfPresent(String.self, forKey: .locationType)
   }
 
-  /// 播放器和续播询问里显示的标题；剧集带上剧名和季集号。
-  var displayTitle: String {
-    guard type == "Episode" else { return name ?? "" }
+  /// 播放器标题：电影只有片名；剧集主标题是「第 N 季 第 M 集 · 集名」，副标题是剧名。
+  /// 集名只是「第 M 集」「Episode M」这类占位时省略，避免重复。
+  var playerTitles: (primary: String, secondary: String?) {
+    guard type == "Episode" else { return (name ?? "", nil) }
     var parts: [String] = []
-    if let seriesName, !seriesName.isEmpty { parts.append(seriesName) }
     if let season = parentIndexNumber, let episode = indexNumber {
       parts.append("第 \(season) 季 第 \(episode) 集")
     } else if let episode = indexNumber {
       parts.append("第 \(episode) 集")
     }
-    if let name, !name.isEmpty { parts.append(name) }
-    return parts.joined(separator: " · ")
+    if let name = name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty,
+      parts.isEmpty || !Self.isPlaceholderEpisodeName(name, episodeNumber: indexNumber)
+    {
+      parts.append(name)
+    }
+    let series = seriesName?.trimmingCharacters(in: .whitespacesAndNewlines)
+    return (parts.joined(separator: " · "), series?.isEmpty == false ? series : nil)
+  }
+
+  /// 续播询问等单行场景用的完整标题。
+  var displayTitle: String {
+    let titles = playerTitles
+    return [titles.secondary, titles.primary]
+      .compactMap { $0 }
+      .filter { !$0.isEmpty }
+      .joined(separator: " · ")
+  }
+
+  /// 「第1集」「第一集」「第 1 话」「Episode 1」「EP01」「E1」这类没有信息量的集名。
+  /// 纯数字只在等于本集集号时算占位（如第 3 集叫「3」「03」），「1984」这类真实集名保留。
+  static func isPlaceholderEpisodeName(_ name: String, episodeNumber: Int?) -> Bool {
+    let compact = name.replacingOccurrences(of: " ", with: "")
+    if compact.allSatisfy(\.isASCII), compact.allSatisfy(\.isNumber), !compact.isEmpty {
+      return episodeNumber != nil && Int(compact) == episodeNumber
+    }
+    let patterns = [
+      #"^第[0-9一二三四五六七八九十百零〇两]+[集话話]$"#,
+      #"^(?i)(episode|ep|e)\.?0*[0-9]+$"#,
+    ]
+    return patterns.contains { compact.range(of: $0, options: .regularExpression) != nil }
   }
 
   var playbackPositionTicks: Int64 {
@@ -205,7 +233,6 @@ nonisolated struct EmbyMediaStream: Decodable, Sendable, Equatable {
   let type: String?
   let codec: String?
   let isDefault: Bool?
-
   init(type: String?, codec: String?, isDefault: Bool? = nil) {
     self.type = type
     self.codec = codec
@@ -231,7 +258,6 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
   let container: String?
   let `protocol`: String?
   let mediaStreams: [EmbyMediaStream]
-
   init(id: String, container: String?, protocol: String? = "File", mediaStreams: [EmbyMediaStream]) {
     self.id = id
     self.container = container
@@ -318,24 +344,17 @@ nonisolated private struct LossyDecodable<Value: Decodable & Sendable>: Decodabl
 
 // MARK: - 直接播放判定
 
-/// 应用内播放只做 AVPlayer 原生直连：Emby 不转码、不重新封装。
+/// 应用内播放都直连原文件，Emby 不转码、不重新封装，统一由 mpv 播放。
 nonisolated enum EmbyDirectPlay {
-  static let containers: Set<String> = ["mp4", "m4v", "mov"]
-  static let videoCodecs: Set<String> = ["h264", "avc", "hevc", "h265"]
-  static let audioCodecs: Set<String> = ["aac", "ac3", "eac3", "mp3", "alac", "flac"]
-
   struct Selection: Equatable, Sendable {
     let source: EmbyMediaSource
-    /// 流地址扩展名，帮助 AVPlayer 识别容器
+    /// 流地址扩展名，帮助播放器识别容器
     let fileExtension: String
   }
 
   enum Unsupported: Error, Equatable, Sendable {
     case noSource
     case remoteSource
-    case container(String?)
-    case videoCodec(String?)
-    case audioCodec(String?)
 
     var message: String {
       switch self {
@@ -343,24 +362,19 @@ nonisolated enum EmbyDirectPlay {
         return "媒体服务器没有返回可播放的文件"
       case .remoteSource:
         return "该影片是远程链接（如 strm），暂不支持应用内播放"
-      case .container(let container):
-        let name = container.map { $0.uppercased() } ?? "未知格式"
-        return "应用内播放暂只支持 MP4/MOV，该影片为 \(name)"
-      case .videoCodec(let codec):
-        return "视频编码 \(codec?.uppercased() ?? "未知") 暂不支持应用内播放"
-      case .audioCodec(let codec):
-        return "音频编码 \(codec?.uppercased() ?? "未知") 暂不支持应用内播放"
       }
     }
   }
 
-  /// 按服务器返回顺序选第一个能直接交给 AVPlayer 的版本；都不行时返回第一个版本的原因。
+  /// 取第一个本地文件版本。
   static func select(from sources: [EmbyMediaSource]) -> Result<Selection, Unsupported> {
     var firstReason: Unsupported?
     for source in sources {
       switch evaluate(source) {
-      case .success(let selection): return .success(selection)
-      case .failure(let reason): if firstReason == nil { firstReason = reason }
+      case .success(let selection):
+        return .success(selection)
+      case .failure(let reason):
+        if firstReason == nil { firstReason = reason }
       }
     }
     return .failure(firstReason ?? .noSource)
@@ -370,32 +384,24 @@ nonisolated enum EmbyDirectPlay {
     if let sourceProtocol = source.protocol, sourceProtocol.lowercased() != "file" {
       return .failure(.remoteSource)
     }
-    // Emby 可能返回 ffprobe 的格式名，例如 `mov,mp4,m4a,3gp,3g2,mj2`。
+    // Emby 可能返回 ffprobe 的格式名，例如 `mov,mp4,m4a,3gp,3g2,mj2`、`matroska,webm`。
     let containerNames = (source.container ?? "")
       .lowercased()
       .split(separator: ",")
       .map { $0.trimmingCharacters(in: .whitespaces) }
-    guard containerNames.contains(where: containers.contains) else {
-      return .failure(.container(source.container))
-    }
-    let fileExtension = containerNames.contains("mov") && !containerNames.contains("mp4") ? "mov" : "mp4"
+      .filter { !$0.isEmpty }
+    return .success(Selection(source: source, fileExtension: fileExtension(containerNames)))
+  }
 
-    let videoStreams = source.mediaStreams.filter { $0.type?.lowercased() == "video" }
-    guard let video = videoStreams.first(where: { $0.isDefault == true }) ?? videoStreams.first else {
-      return .failure(.videoCodec(nil))
+  private static func fileExtension(_ containerNames: [String]) -> String {
+    if containerNames.contains(where: { $0 == "matroska" || $0 == "mkv" }) { return "mkv" }
+    if containerNames.contains("mp4") { return "mp4" }
+    let candidate = containerNames.first ?? ""
+    let allowed = CharacterSet.alphanumerics
+    guard !candidate.isEmpty, candidate.unicodeScalars.allSatisfy(allowed.contains) else {
+      return "mkv"
     }
-    guard let videoCodec = video.codec?.lowercased(), videoCodecs.contains(videoCodec) else {
-      return .failure(.videoCodec(video.codec))
-    }
-
-    let audioStreams = source.mediaStreams.filter { $0.type?.lowercased() == "audio" }
-    if !audioStreams.isEmpty,
-      !audioStreams.contains(where: { audioCodecs.contains($0.codec?.lowercased() ?? "") })
-    {
-      let preferred = audioStreams.first(where: { $0.isDefault == true }) ?? audioStreams[0]
-      return .failure(.audioCodec(preferred.codec))
-    }
-    return .success(Selection(source: source, fileExtension: fileExtension))
+    return candidate
   }
 }
 
