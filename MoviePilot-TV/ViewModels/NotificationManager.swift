@@ -23,13 +23,13 @@ enum NotificationType {
   var icon: String {
     switch self {
     case .info:
-      "info.circle.fill"
+      AppSymbol.info
     case .success:
-      "checkmark.circle.fill"
+      AppSymbol.success
     case .warning:
-      "exclamationmark.triangle.fill"
+      AppSymbol.warning
     case .error:
-      "xmark.circle.fill"
+      AppSymbol.failure
     }
   }
 }

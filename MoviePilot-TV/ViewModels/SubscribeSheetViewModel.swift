@@ -153,9 +153,9 @@ class SubscribeSheetViewModel: ObservableObject {
 
     var systemImage: String {
       switch self {
-      case .active: "dot.radiowaves.left.and.right"
-      case .paused: "pause.circle"
-      case .pending: "clock"
+      case .active: AppSymbol.subscriptionActive
+      case .paused: AppSymbol.subscriptionPaused
+      case .pending: AppSymbol.subscriptionPending
       }
     }
   }

@@ -154,10 +154,10 @@ struct ReorganizeSheet: View {
       SheetInfoTags {
         statusTag(isSuccess: record.status.value, text: record.status.value ? "整理成功" : "整理失败")
         if let mode = MediaIdentifier.normalizedString(record.mode) {
-          SheetInfoTag(systemImage: "arrow.right.doc.on.clipboard", text: transferModeDisplayName(for: mode))
+          SheetInfoTag(systemImage: AppSymbol.transferMode, text: transferModeDisplayName(for: mode))
         }
         if let size = record.src_fileitem?.size {
-          SheetInfoTag(systemImage: "internaldrive", text: size.formattedBytes())
+          SheetInfoTag(systemImage: AppSymbol.size, text: size.formattedBytes())
         }
       }
       .padding(.top, 16)
@@ -209,7 +209,7 @@ struct ReorganizeSheet: View {
 
   private func statusTag(isSuccess: Bool, text: String) -> some View {
     SheetInfoTag(
-      systemImage: isSuccess ? "checkmark.circle" : "xmark.circle", text: text)
+      systemImage: isSuccess ? AppSymbol.success : AppSymbol.failure, text: text)
   }
 
   /// 出错原因：加载失败优先，其次是当前整理方式不受支持，最后是整理或预览的结果。
@@ -250,7 +250,7 @@ struct ReorganizeSheet: View {
     VStack(spacing: 18) {
       SheetActionButton(
         title: "开始整理",
-        systemImage: "arrow.triangle.2.circlepath",
+        systemImage: AppSymbol.reorganize,
         loadingTitle: viewModel.isLoading ? "加载中" : "整理中",
         isLoading: viewModel.isSubmitting || viewModel.isLoading,
         isDisabled: isTransferActionDisabled,
@@ -538,26 +538,26 @@ private struct ReorganizePreviewSheet: View {
         summaryCard(
           title: "全部",
           value: preview.summary.total,
-          icon: "doc.on.doc",
+          icon: AppSymbol.allItems,
           color: .blue
         )
         summaryCard(
           title: "可整理",
           value: preview.summary.success,
-          icon: "checkmark.circle.fill",
+          icon: AppSymbol.success,
           color: .green
         )
         summaryCard(
           title: "失败",
           value: preview.summary.failed,
-          icon: "exclamationmark.triangle.fill",
+          icon: AppSymbol.failure,
           color: .red
         )
       }
       .padding(.horizontal, Self.horizontalPadding)
 
       if let message = preview.message, !message.isEmpty {
-        Label(message, systemImage: "info.circle")
+        Label(message, systemImage: AppSymbol.info)
           .font(.body)
           .foregroundStyle(.secondary)
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -624,7 +624,7 @@ private struct ReorganizePreviewSheet: View {
         color: .primary
       )
 
-      Image(systemName: "arrow.right")
+      Image(systemName: AppSymbol.arrowRight)
         .foregroundStyle(item.success == false ? .red : .secondary)
 
       pathCard(

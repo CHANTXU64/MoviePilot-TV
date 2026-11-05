@@ -65,7 +65,7 @@ struct TorrentCard: View {
         HStack(alignment: .top, spacing: 12) {
           HStack(spacing: 8) {
             if context.isFilteredOut {
-              Image(systemName: "line.3.horizontal.decrease.circle")
+              Image(systemName: AppSymbol.filter)
                 .font(.caption)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
@@ -141,7 +141,7 @@ struct TorrentCard: View {
             }
             if let seeders = torrent.seeders {
               if seeders > 0 {
-                Image(systemName: "arrow.up")
+                Image(systemName: AppSymbol.uploads)
                   .foregroundColor(seeders <= 5 ? .orange : .green)
                 Text("\(seeders)")
                   .foregroundColor(seeders <= 5 ? .orange : .green)
@@ -203,7 +203,7 @@ struct TorrentCard: View {
           Button {
             showDownload = true
           } label: {
-            Label("下载", systemImage: "arrow.down.circle")
+            Label("下载", systemImage: AppSymbol.download)
           }
         }
       }

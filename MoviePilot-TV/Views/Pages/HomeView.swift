@@ -266,7 +266,7 @@ private struct MediaSectionView: View {
                   Button {
                     openMediaItem(item)
                   } label: {
-                    Label("跳转媒体库", systemImage: "arrow.up.right.square")
+                    Label("跳转媒体库", systemImage: AppSymbol.openInLibrary)
                   }
                 }
                 Button {
@@ -284,7 +284,7 @@ private struct MediaSectionView: View {
                     }
                   }
                 } label: {
-                  Label("TMDB详情页", systemImage: "link")
+                  Label("TMDB详情页", systemImage: AppSymbol.link)
                 }
                 if canSearchResources {
                   Button {
@@ -319,7 +319,7 @@ private struct MediaSectionView: View {
                       }
                     }
                   } label: {
-                    Label("搜索资源", systemImage: "magnifyingglass")
+                    Label("搜索资源", systemImage: AppSymbol.search)
                   }
                 }
                 if canSearchResources, SubtitleSearchRequest.supportsSubtitleSearch(type: item.type) {
@@ -334,7 +334,7 @@ private struct MediaSectionView: View {
                       }
                     }
                   } label: {
-                    Label("搜索字幕", systemImage: "captions.bubble")
+                    Label("搜索字幕", systemImage: AppSymbol.searchSubtitles)
                   }
                 }
               }
@@ -502,21 +502,21 @@ private struct SubscribeItemView: View {
       Button {
         onEdit()
       } label: {
-        Label("编辑订阅", systemImage: "pencil")
+        Label("编辑订阅", systemImage: AppSymbol.editSubscription)
       }
 
       // 2. 详情
       Button {
         onViewDetail()
       } label: {
-        Label("详情", systemImage: "info.circle")
+        Label("详情", systemImage: AppSymbol.details)
       }
 
       // 3. 搜索订阅
       Button {
         searchSubscribe()
       } label: {
-        Label("搜索订阅", systemImage: "magnifyingglass")
+        Label("搜索订阅", systemImage: AppSymbol.search)
       }
 
       // 4. 启用/暂停
@@ -524,9 +524,9 @@ private struct SubscribeItemView: View {
         toggleSubscribeStatus()
       } label: {
         if item.state == "S" {
-          Label("启用订阅", systemImage: "play.fill")
+          Label("启用订阅", systemImage: AppSymbol.resume)
         } else {
-          Label("暂停订阅", systemImage: "pause.fill")
+          Label("暂停订阅", systemImage: AppSymbol.pause)
         }
       }
 
@@ -534,7 +534,7 @@ private struct SubscribeItemView: View {
       Button {
         resetSubscribe()
       } label: {
-        Label("重置订阅", systemImage: "arrow.counterclockwise")
+        Label("重置订阅", systemImage: AppSymbol.resetSubscription)
       }
 
       Divider()
@@ -543,7 +543,7 @@ private struct SubscribeItemView: View {
       Button(role: .destructive) {
         showUnsubscribeConfirm = true
       } label: {
-        Label("取消订阅", systemImage: "trash")
+        Label("取消订阅", systemImage: AppSymbol.unsubscribe)
       }
     }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in showUnsubscribeConfirm = false }

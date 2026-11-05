@@ -88,7 +88,7 @@ struct TransferHistoryView: View {
                 // 多选勾选框
                 Image(
                   systemName: viewModel.selectedIds.contains(item.id)
-                    ? "checkmark.circle.fill" : "circle"
+                    ? AppSymbol.selected : AppSymbol.unselected
                 )
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -393,7 +393,7 @@ struct TransferHistoryView: View {
         ActionDescriptor(
           id: "ai-redo",
           title: title,
-          icon: "sparkles",
+          icon: AppSymbol.aiReorganize,
           isEnabled: !viewModel.isMutatingHistory,
           action: {
             if viewModel.selectedIds.isEmpty {
@@ -422,7 +422,7 @@ struct TransferHistoryView: View {
         id: "redo",
         title: viewModel.selectedIds.isEmpty
           ? "重新整理" : "重新批量整理(\(viewModel.selectedIds.count))",
-        icon: "arrow.clockwise",
+        icon: AppSymbol.retry,
         isEnabled: !viewModel.isMutatingHistory,
         action: {
           if viewModel.selectedIds.isEmpty {
@@ -448,7 +448,7 @@ struct TransferHistoryView: View {
         id: "delete",
         title: viewModel.selectedIds.isEmpty
           ? "删除" : "批量删除(\(viewModel.selectedIds.count))",
-        icon: "trash",
+        icon: AppSymbol.delete,
         isEnabled: !viewModel.isMutatingHistory,
         role: .destructive,
         action: {

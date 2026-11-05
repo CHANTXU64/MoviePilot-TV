@@ -57,7 +57,7 @@ struct SubtitleDownloadSheet: View {
 
       SheetActionButton(
         title: "下载",
-        systemImage: "arrow.down.circle.fill",
+        systemImage: AppSymbol.download,
         loadingTitle: "下载中",
         isLoading: viewModel.isSubmitting,
         isDisabled: !viewModel.canSubmit && !viewModel.isSubmitting,
@@ -95,22 +95,22 @@ struct SubtitleDownloadSheet: View {
       subtitle: MediaIdentifier.normalizedString(subtitle.description)
     ) {
       if let seasonEpisode {
-        SheetInfoTag(systemImage: "tv", text: seasonEpisode.formattedSeasonEpisode())
+        SheetInfoTag(systemImage: AppSymbol.season, text: seasonEpisode.formattedSeasonEpisode())
       }
       if let size = subtitle.sizeInBytes, size > 0 {
-        SheetInfoTag(systemImage: "internaldrive", text: size.formattedBytes())
+        SheetInfoTag(systemImage: AppSymbol.size, text: size.formattedBytes())
       }
       if let published {
-        SheetInfoTag(systemImage: "clock", text: published.toRelativeDateString())
+        SheetInfoTag(systemImage: AppSymbol.time, text: published.toRelativeDateString())
       }
       if let grabs = subtitle.grabs {
-        SheetInfoTag(systemImage: "arrow.down", text: "\(grabs) 次下载")
+        SheetInfoTag(systemImage: AppSymbol.downloads, text: "\(grabs) 次下载")
       }
       if let language = MediaIdentifier.normalizedString(subtitle.language) {
-        SheetInfoTag(systemImage: "captions.bubble", text: language)
+        SheetInfoTag(systemImage: AppSymbol.language, text: language)
       }
       if let site = MediaIdentifier.normalizedString(subtitle.site_name) {
-        SheetInfoTag(systemImage: "globe", text: site)
+        SheetInfoTag(systemImage: AppSymbol.site, text: site)
       }
     }
   }

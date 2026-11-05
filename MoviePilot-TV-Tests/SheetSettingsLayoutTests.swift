@@ -13,7 +13,7 @@ final class SheetSettingsLayoutTests: XCTestCase {
 
   /// 加载中插入的转圈图标不能把按钮撑高：有图标、没图标的按钮，加载前后高度都一样。
   func testActionButtonKeepsHeightWhileLoading() {
-    for systemImage in [nil, "arrow.triangle.2.circlepath"] {
+    for systemImage in [nil, AppSymbol.reorganize] {
       let idle = fittingSize(
         SheetActionButton(
           title: "预览整理结果", systemImage: systemImage, loadingTitle: "预览中", isLoading: false

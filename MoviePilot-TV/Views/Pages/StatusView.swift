@@ -116,20 +116,20 @@ private struct MediaStatCard: View {
       MiniStat(
         title: "电影",
         value: statistic.map { String($0.movie_count) } ?? unavailableValueText,
-        icon: "film"
+        icon: AppSymbol.movie
       )
         .frame(maxWidth: .infinity)
       MiniStat(
         title: "电视剧",
         value: statistic.map { String($0.tv_count) } ?? unavailableValueText,
-        icon: "tv"
+        icon: AppSymbol.tv
       )
         .frame(maxWidth: .infinity)
       MiniStat(
         title: "剧集",
         value: statistic.map { StatusView.episodeCountText($0.episode_count) }
           ?? unavailableValueText,
-        icon: "film.stack"
+        icon: AppSymbol.episodes
       )
         .frame(maxWidth: .infinity)
     }
@@ -146,19 +146,19 @@ private struct DownloaderCard: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       HStack {
-        Label("下载", systemImage: "arrow.down")
+        Label("下载", systemImage: AppSymbol.downloads)
         Spacer()
         Text(info.map { "\(Int64($0.download_speed).formattedBytes())/s" }
           ?? unavailableValueText)
       }
       HStack {
-        Label("上传", systemImage: "arrow.up")
+        Label("上传", systemImage: AppSymbol.uploads)
         Spacer()
         Text(info.map { "\(Int64($0.upload_speed).formattedBytes())/s" }
           ?? unavailableValueText)
       }
       HStack {
-        Label("总量", systemImage: "arrow.up.arrow.down")
+        Label("总量", systemImage: AppSymbol.transferTotal)
           .lineLimit(1)
         Spacer()
         Text(info.map {

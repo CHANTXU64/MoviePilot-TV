@@ -487,6 +487,26 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(detailSource.contains("message: SubscriptionCancelConfirmation.failureMessage"))
   }
 
+  /// 整个 App 的图标都从 AppSymbol 取：除了 AppSymbol.swift，源码里不直接写 SF Symbols 图标名，
+  /// 同一个意思在卡片、菜单、详情页和 Sheet 里不会用出两个图标。
+  func testAllSymbolsComeFromAppSymbol() throws {
+    let testFileURL = URL(fileURLWithPath: #filePath)
+    let appRoot = testFileURL.deletingLastPathComponent().deletingLastPathComponent()
+      .appendingPathComponent("MoviePilot-TV")
+    let enumerator = try XCTUnwrap(FileManager.default.enumerator(at: appRoot, includingPropertiesForKeys: nil))
+    let literalSymbol = #"(systemName|systemImage|icon)\s*:\s*"[a-z]"#
+    var checked = 0
+    for case let url as URL in enumerator where url.pathExtension == "swift" {
+      guard url.lastPathComponent != "AppSymbol.swift" else { continue }
+      let source = try String(contentsOf: url, encoding: .utf8)
+      XCTAssertNil(
+        source.range(of: literalSymbol, options: .regularExpression),
+        "\(url.lastPathComponent) 里直接写了图标名，请改用 AppSymbol。")
+      checked += 1
+    }
+    XCTAssertGreaterThan(checked, 50)
+  }
+
   func testSheetFeedbackAndLoadingStateUseSharedPatterns() throws {
     let sheetStyleSource = try Self.source(at: "MoviePilot-TV/Views/Components/SheetStyles.swift")
     let subscribeSheetSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/SubscribeSheet.swift")
@@ -569,7 +589,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("ManualMediaIdField("))
     XCTAssertTrue(idFieldSource.contains("var placeholder = \"自动判断\""))
     XCTAssertFalse(idFieldSource.contains("留空自动识别"))
-    XCTAssertTrue(idFieldSource.contains("Image(systemName: \"magnifyingglass\")"))
+    XCTAssertTrue(idFieldSource.contains("Image(systemName: AppSymbol.search)"))
     XCTAssertTrue(idFieldSource.contains(".accessibilityLabel(\"搜索媒体\")"))
     XCTAssertFalse(idFieldSource.contains("Label(\"搜索媒体\", systemImage: \"magnifyingglass\")"))
     XCTAssertTrue(source.contains(".sheet(isPresented: $showPreview)"))
@@ -606,7 +626,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(
       containsTrimmedLineSequence(
         source,
-        ["Image(systemName: \"arrow.right\")", ".font("]
+        ["Image(systemName: AppSymbol.arrowRight)", ".font("]
       )
     )
     XCTAssertTrue(containsTrimmedLineSequence(source, ["Text(\"整理预览\")", ".font(.title3.bold())"]))

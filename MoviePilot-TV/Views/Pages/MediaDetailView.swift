@@ -1101,7 +1101,7 @@ struct MediaDetailView: View {
           // Action Buttons — Apple TV style: primary + icon buttons
           if presentationStyle == .direct {
             if !allowsRequests {
-              Label("正在验证登录状态…", systemImage: "person.crop.circle")
+              Label("正在验证登录状态…", systemImage: AppSymbol.account)
                 .font(.caption).foregroundStyle(.secondary)
             } else if preloadTask.isDetailFailed {
               Text("详情加载失败，请返回后重试")
@@ -1142,7 +1142,7 @@ struct MediaDetailView: View {
                     if isButtonLoading {
                       ProgressView().controlSize(.small)
                     } else {
-                      Image(systemName: "link")
+                      Image(systemName: AppSymbol.link)
                     }
                   }
                 )
@@ -1179,14 +1179,14 @@ struct MediaDetailView: View {
                   )
                   let icon =
                     isDirect
-                    ? (isSubscribed ? "checkmark.circle.fill" : "plus.circle")
+                    ? (isSubscribed ? AppSymbol.subscribed : "plus.circle")
                     : (
                       isSeasonLoading
                         ? "arrow.triangle.2.circlepath"
                         : (
                           hasSeasonLoadError
                             ? "exclamationmark.circle"
-                            : (isSeasonInformationUnavailable ? "info.circle" : "list.bullet.circle")
+                            : (isSeasonInformationUnavailable ? AppSymbol.info : "list.bullet.circle")
                         )
                     )
 
@@ -1208,7 +1208,7 @@ struct MediaDetailView: View {
                 )
                 navigateFromSecondPage(to: request)
               }) {
-                Label("搜索资源", systemImage: "magnifyingglass")
+                Label("搜索资源", systemImage: AppSymbol.search)
                   .foregroundColor(.primary)
               }
               .focused($focusedButton, equals: .search)
@@ -1222,7 +1222,7 @@ struct MediaDetailView: View {
                 ) else { return }
                 navigateFromSecondPage(to: request)
               }) {
-                Label("搜索字幕", systemImage: "captions.bubble")
+                Label("搜索字幕", systemImage: AppSymbol.searchSubtitles)
                   .foregroundColor(.primary)
               }
               .focused($focusedButton, equals: .subtitleSearch)
@@ -1232,7 +1232,7 @@ struct MediaDetailView: View {
             if canSearchResources && shouldShowSiteFilter {
               SearchSiteSelectionMenu(viewModel: viewModel.siteFilter) {
                 HStack(spacing: 8) {
-                  Image(systemName: "server.rack")
+                  Image(systemName: AppSymbol.site)
                   Text(viewModel.siteFilter.siteButtonLabel)
                 }
                 .font(.caption)
@@ -1248,7 +1248,7 @@ struct MediaDetailView: View {
               Button(action: {
                 isContentFocused = true
               }) {
-                Label("其他信息", systemImage: "info.circle")
+                Label("其他信息", systemImage: AppSymbol.details)
                   .foregroundColor(.primary)
               }
               .focused($focusedButton, equals: .otherInfo)
@@ -1457,7 +1457,7 @@ struct MediaDetailView: View {
         Button {
           navigateFromSecondPage(to: actor)
         } label: {
-          Label("详情", systemImage: "info.circle")
+          Label("详情", systemImage: AppSymbol.details)
         }
       }
     }
@@ -1490,7 +1490,7 @@ struct MediaDetailView: View {
         Button {
           navigateFromSecondPage(to: director)
         } label: {
-          Label("详情", systemImage: "info.circle")
+          Label("详情", systemImage: AppSymbol.details)
         }
       }
     }
@@ -1545,7 +1545,7 @@ struct MediaDetailView: View {
                     focusedDiscussionId = Self.doubanStatusFocusID
                     viewModel.retryDoubanDiscussion()
                   } label: {
-                    Label("重试", systemImage: "arrow.clockwise")
+                    Label("重试", systemImage: AppSymbol.retry)
                   }
                 }
               } else {
@@ -1568,7 +1568,7 @@ struct MediaDetailView: View {
                     }
                     viewModel.retryDoubanDiscussionNextPage()
                   } label: {
-                    Label("重试", systemImage: "arrow.clockwise")
+                    Label("重试", systemImage: AppSymbol.retry)
                   }
                 }
               }

@@ -81,7 +81,7 @@ struct SheetMessageBlock: View {
   var body: some View {
     VStack(spacing: 14) {
       HStack(alignment: .firstTextBaseline, spacing: 10) {
-        Image(systemName: "exclamationmark.circle.fill")
+        Image(systemName: AppSymbol.warning)
           .foregroundStyle(.orange)
         // 后端的长错误最多三行，放不下时略缩小字号，和其他 Sheet 的提示一致。
         Text(message)
@@ -95,7 +95,7 @@ struct SheetMessageBlock: View {
 
       if let retry {
         SheetActionButton(
-          title: "重试", systemImage: "arrow.clockwise", loadingTitle: "重试中",
+          title: "重试", systemImage: AppSymbol.retry, loadingTitle: "重试中",
           isLoading: isRetrying, focus: retryFocus, action: retry)
       }
     }

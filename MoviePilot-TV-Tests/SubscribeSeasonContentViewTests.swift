@@ -1702,26 +1702,20 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertTrue(source.contains("SeasonDisplayFormatter.nonEmpty(season.overview)"))
   }
 
-  func testSeasonSheetPosterKeepsStableTwoToThreeFrame() throws {
-    let testFileURL = URL(fileURLWithPath: #filePath)
-    let repositoryRoot = testFileURL.deletingLastPathComponent().deletingLastPathComponent()
-    let sources = [
-      (
-        name: "SeasonDetailSheet",
-        path: "MoviePilot-TV/Views/Pages/SubscribeSeasonView.swift"
-      ),
-    ]
+  /// 季详情正文：有简介时按空行分段；简介为空或只有空白时写「暂无简介」，不留空白页。
+  func testSeasonDetailBlocksUseOverviewOrPlaceholder() throws {
+    let withOverview = try JSONDecoder().decode(
+      TmdbSeason.self,
+      from: Data(#"{"season_number":1,"overview":"第一段。\n\n第二段。"}"#.utf8))
+    XCTAssertEqual(
+      SeasonDetailSheet.blocks(for: withOverview).map { String($0.text.characters) },
+      ["第一段。", "第二段。"])
 
-    for source in sources {
-      let contents = try String(
-        contentsOf: repositoryRoot.appendingPathComponent(source.path),
-        encoding: .utf8
-      )
-      XCTAssertTrue(
-        contents.contains(".frame(width: 360, height: 540)"),
-        "\(source.name) 海报外层必须固定为 360×540，保证缺图、加载和失败态布局稳定。"
-      )
-    }
+    let blank = try JSONDecoder().decode(
+      TmdbSeason.self, from: Data(#"{"season_number":1,"overview":"  "}"#.utf8))
+    let placeholder = SeasonDetailSheet.blocks(for: blank)
+    XCTAssertEqual(placeholder.map { String($0.text.characters) }, ["暂无简介"])
+    XCTAssertEqual(placeholder.first?.style, .secondary)
   }
 
   func testPrepareSubscriptionUsesSelectedPickerGroupForNewSubscriptionOnly() {

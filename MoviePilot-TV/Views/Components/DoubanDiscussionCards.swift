@@ -126,13 +126,13 @@ struct DoubanDiscussionStatusCard: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         case .failed:
-          Image(systemName: "exclamationmark.triangle")
+          Image(systemName: AppSymbol.warning)
             .font(.title3)
             .foregroundStyle(.secondary)
           Text(kind.failureText)
             .font(.caption.bold())
         case .empty:
-          Image(systemName: "text.bubble")
+          Image(systemName: AppSymbol.noComments)
             .font(.title3)
             .foregroundStyle(.secondary)
           Text(kind.emptyText)
@@ -175,9 +175,9 @@ struct DoubanRatingStars: View {
 
   private func symbol(for fill: DoubanDiscussionEntry.StarFill) -> String {
     switch fill {
-    case .full: return "star.fill"
-    case .half: return "star.leadinghalf.filled"
-    case .empty: return "star.fill"
+    case .full: return AppSymbol.rating
+    case .half: return AppSymbol.ratingHalf
+    case .empty: return AppSymbol.rating
     }
   }
 }

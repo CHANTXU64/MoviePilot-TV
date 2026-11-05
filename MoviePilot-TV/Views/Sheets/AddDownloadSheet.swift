@@ -111,7 +111,7 @@ struct AddDownloadSheet: View {
 
       SheetActionButton(
         title: "下载",
-        systemImage: "arrow.down.circle.fill",
+        systemImage: AppSymbol.download,
         loadingTitle: viewModel.isLoading ? "加载中" : "添加中",
         isLoading: viewModel.isSubmitting || viewModel.isLoading,
         isDisabled: viewModel.loadErrorMessage != nil || !apiService.canAccess(.search)
@@ -151,22 +151,22 @@ struct AddDownloadSheet: View {
       subtitle: TorrentCard.descriptionText(meta: meta, torrent: torrent)
     ) {
       if let seasonEpisode {
-        SheetInfoTag(systemImage: "tv", text: seasonEpisode.formattedSeasonEpisode())
+        SheetInfoTag(systemImage: AppSymbol.season, text: seasonEpisode.formattedSeasonEpisode())
       }
-      SheetInfoTag(systemImage: "internaldrive", text: torrent.size.formattedBytes())
+      SheetInfoTag(systemImage: AppSymbol.size, text: torrent.size.formattedBytes())
       if let pubdate = MediaIdentifier.normalizedString(torrent.pubdate) {
-        SheetInfoTag(systemImage: "clock", text: pubdate.toRelativeDateString())
+        SheetInfoTag(systemImage: AppSymbol.time, text: pubdate.toRelativeDateString())
       }
       if let seeders = torrent.seeders {
         SheetInfoTag(
-          systemImage: "arrow.up", text: "\(seeders) 做种",
+          systemImage: AppSymbol.uploads, text: "\(seeders) 做种",
           tint: seeders <= 5 ? .orange : .green)
       }
       if let peers = torrent.peers {
-        SheetInfoTag(systemImage: "arrow.down", text: "\(peers) 下载")
+        SheetInfoTag(systemImage: AppSymbol.downloads, text: "\(peers) 下载")
       }
       if let site = MediaIdentifier.normalizedString(torrent.site_name) {
-        SheetInfoTag(systemImage: "globe", text: site)
+        SheetInfoTag(systemImage: AppSymbol.site, text: site)
       }
     }
   }

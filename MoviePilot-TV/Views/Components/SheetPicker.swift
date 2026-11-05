@@ -101,7 +101,7 @@ private struct MenuRowValue: View {
       Text(text)
         .lineLimit(1)
         .minimumScaleFactor(0.7)
-      Image(systemName: "chevron.up.chevron.down")
+      Image(systemName: AppSymbol.menuDisclosure)
         .font(.caption.bold())
         .foregroundStyle(.secondary)
         .accessibilityHidden(true)

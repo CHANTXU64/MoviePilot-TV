@@ -125,7 +125,7 @@ struct SubscribePanel: View {
   private var savedInfo: some View {
     SheetInfoTags {
       if let progress = viewModel.progressText {
-        SheetInfoTag(systemImage: "checklist", text: progress)
+        SheetInfoTag(systemImage: AppSymbol.progress, text: progress)
       }
       SheetInfoTag(systemImage: viewModel.savedState.systemImage, text: viewModel.savedState.title)
     }
@@ -138,21 +138,21 @@ struct SubscribePanel: View {
     let isTV = subscribe.type == "电视剧"
     return SheetInfoTags {
       if isTV, let season = subscribe.season {
-        SheetInfoTag(systemImage: "tv", text: "第 \(season) 季")
+        SheetInfoTag(systemImage: AppSymbol.season, text: "第 \(season) 季")
       }
       if let episodes = viewModel.episodeRangeText {
-        SheetInfoTag(systemImage: "list.number", text: episodes)
+        SheetInfoTag(systemImage: AppSymbol.episodes, text: episodes)
       }
       if viewModel.subscribeMode != .normal {
-        SheetInfoTag(systemImage: "arrow.triangle.2.circlepath", text: viewModel.subscribeModeTitle)
+        SheetInfoTag(systemImage: AppSymbol.subscribeMode, text: viewModel.subscribeModeTitle)
       }
       if let resolution = viewModel.resolutionTitle {
-        SheetInfoTag(systemImage: "sparkles.tv", text: resolution)
+        SheetInfoTag(systemImage: AppSymbol.resolution, text: resolution)
       }
       SheetInfoTag(
-        systemImage: "globe", text: viewModel.sitesSummary(empty: "默认站点") { "\($0) 个站点" })
+        systemImage: AppSymbol.site, text: viewModel.sitesSummary(empty: "默认站点") { "\($0) 个站点" })
       SheetInfoTag(
-        systemImage: "arrow.down.circle",
+        systemImage: AppSymbol.downloader,
         text: MediaIdentifier.normalizedString(subscribe.downloader) ?? "默认下载器")
     }
   }
@@ -222,7 +222,7 @@ struct SubscribePanel: View {
   private func subscribeButton(focus: FocusState<Bool>.Binding?) -> some View {
     let isNew = viewModel.isNewSubscription
     return SheetActionButton(
-      title: isNew ? "订阅" : "保存", systemImage: isNew ? "heart.fill" : "checkmark",
+      title: isNew ? "订阅" : "保存", systemImage: isNew ? AppSymbol.subscribe : AppSymbol.save,
       loadingTitle: viewModel.isLoading ? "加载中" : isNew ? "订阅中" : "保存中",
       isLoading: isSaving || isReloading || viewModel.isLoading, isDisabled: !canAct, focus: focus
     ) {

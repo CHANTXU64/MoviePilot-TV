@@ -152,12 +152,12 @@ struct MainContentView: View {
 
   var body: some View {
     TabView(selection: $viewModel.selectedTab) {
-      Tab("媒体库", systemImage: "play.tv", value: ContentViewModel.Tab.home) {
+      Tab("媒体库", systemImage: AppSymbol.tabHome, value: ContentViewModel.Tab.home) {
         if allowsRequests { HomeView(isSelected: selectedTab == .home) }
       }
 
       if viewModel.visibleTabs.contains(.recommend) {
-        Tab("推荐", systemImage: "sparkles.tv", value: ContentViewModel.Tab.recommend) {
+        Tab("推荐", systemImage: AppSymbol.tabRecommend, value: ContentViewModel.Tab.recommend) {
           RecommendView(
             isSelected: selectedTab == .recommend,
             navigationCoordinator: viewModel.recommendNavigation,
@@ -167,7 +167,7 @@ struct MainContentView: View {
         }
       }
       if viewModel.visibleTabs.contains(.explore) {
-        Tab("探索", systemImage: "safari", value: ContentViewModel.Tab.explore) {
+        Tab("探索", systemImage: AppSymbol.tabExplore, value: ContentViewModel.Tab.explore) {
           ExploreView(
             isSelected: selectedTab == .explore,
             navigationCoordinator: viewModel.exploreNavigation,
@@ -176,16 +176,16 @@ struct MainContentView: View {
         }
       }
       if viewModel.visibleTabs.contains(.search) {
-        Tab("搜索", systemImage: "magnifyingglass", value: ContentViewModel.Tab.search) {
+        Tab("搜索", systemImage: AppSymbol.search, value: ContentViewModel.Tab.search) {
           if allowsRequests { SearchView(isSelected: selectedTab == .search) }
         }
       }
       if viewModel.visibleTabs.contains(.status) {
-        Tab("状态", systemImage: "slider.horizontal.3", value: ContentViewModel.Tab.status) {
+        Tab("状态", systemImage: AppSymbol.tabStatus, value: ContentViewModel.Tab.status) {
           if allowsRequests { StatusView(isSelected: selectedTab == .status) }
         }
       }
-      Tab("设置", systemImage: "gear", value: ContentViewModel.Tab.system) {
+      Tab("设置", systemImage: AppSymbol.tabSettings, value: ContentViewModel.Tab.system) {
         if allowsRequests { SystemView(isSelected: selectedTab == .system) }
       }
     }

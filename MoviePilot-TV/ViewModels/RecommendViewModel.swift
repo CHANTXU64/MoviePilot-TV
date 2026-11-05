@@ -15,12 +15,12 @@ nonisolated enum RecommendCategory: String, CaseIterable, Identifiable, Sendable
 
   var icon: String {
     switch self {
-    case .all: return "square.grid.2x2"
-    case .movie: return "film"
-    case .tv: return "tv"
-    case .anime: return "sparkles"
-    case .chart: return "chart.bar"
-    case .other: return "square.stack"
+    case .all: return AppSymbol.allCategories
+    case .movie: return AppSymbol.movie
+    case .tv: return AppSymbol.tv
+    case .anime: return AppSymbol.anime
+    case .chart: return AppSymbol.chart
+    case .other: return AppSymbol.otherCategory
     }
   }
 }

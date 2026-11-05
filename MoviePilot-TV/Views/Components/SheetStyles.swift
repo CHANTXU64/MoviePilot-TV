@@ -36,7 +36,7 @@ struct SheetActionButton: View {
         if isLoading || systemImage != nil {
           // 图标位的尺寸始终由同字号的图标决定：系统转圈图标（40pt）比一行文字高，
           // 直接放进来会把按钮撑高，加载结束又缩回。转圈图标叠在上面、缩到和图标一样大。
-          Image(systemName: systemImage ?? "circle")
+          Image(systemName: systemImage ?? AppSymbol.unselected)
             .opacity(isLoading ? 0 : 1)
             .overlay {
               if isLoading {
@@ -92,7 +92,7 @@ struct SheetToggleStyle: ToggleStyle {
       HStack {
         configuration.label
         Spacer()
-        Image(systemName: configuration.isOn ? "checkmark.circle.fill" : "circle")
+        Image(systemName: configuration.isOn ? AppSymbol.selected : AppSymbol.unselected)
       }
       .padding(.horizontal)
     }

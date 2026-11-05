@@ -137,7 +137,7 @@ struct ManualMediaSearchSheet: View {
             searchTask?.cancel()
             searchTask = Task { await viewModel.search() }
           } label: {
-            Label("搜索", systemImage: "magnifyingglass")
+            Label("搜索", systemImage: AppSymbol.search)
           }
         }
         .focusSection()
@@ -226,7 +226,7 @@ struct ManualMediaIdField: View {
         Button {
           showMediaSearch = true
         } label: {
-          Image(systemName: "magnifyingglass")
+          Image(systemName: AppSymbol.search)
         }
         // 只有图标的按钮用正圆，系统默认是胶囊。
         .buttonBorderShape(.circle)

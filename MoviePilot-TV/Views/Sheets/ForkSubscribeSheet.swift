@@ -30,7 +30,7 @@ struct ForkSubscribeSheet: View {
       // 后端不支持复用时也不禁用：禁用后面板里没有能聚焦的东西。按下时会被拦下，原因已显示在上方。
       SheetActionButton(
         title: "复用订阅",
-        systemImage: "heart.fill",
+        systemImage: AppSymbol.forkSubscription,
         loadingTitle: "复用中",
         isLoading: isForking,
         focus: $isConfirmFocused
@@ -75,16 +75,16 @@ struct ForkSubscribeSheet: View {
 
       SheetInfoTags {
         SheetInfoTag(
-          systemImage: "person",
+          systemImage: AppSymbol.person,
           text: MediaIdentifier.normalizedString(share.share_user) ?? "未知分享人")
         if let date = MediaIdentifier.normalizedString(share.date) {
-          SheetInfoTag(systemImage: "clock", text: date.toRelativeDateString())
+          SheetInfoTag(systemImage: AppSymbol.time, text: date.toRelativeDateString())
         }
         if let count = share.count, count > 0 {
-          SheetInfoTag(systemImage: "flame", text: "\(count.formatted()) 次复用")
+          SheetInfoTag(systemImage: AppSymbol.popularity, text: "\(count.formatted()) 次复用")
         }
         if share.type == "电视剧", let season = share.season {
-          SheetInfoTag(systemImage: "tv", text: "第 \(season) 季")
+          SheetInfoTag(systemImage: AppSymbol.season, text: "第 \(season) 季")
         }
       }
       .padding(.top, 16)

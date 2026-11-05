@@ -154,7 +154,7 @@ private struct DownloadTaskRow: View {
   /// 根据当前状态生成的操作按钮描述。
   private var actionDescriptors: [ActionDescriptor] {
     let toggleActionTitle = isDownloading ? "暂停" : "继续"
-    let toggleActionIcon = isDownloading ? "pause.fill" : "play.fill"
+    let toggleActionIcon = isDownloading ? AppSymbol.pause : AppSymbol.resume
 
     return [
       ActionDescriptor(
@@ -168,7 +168,7 @@ private struct DownloadTaskRow: View {
       ActionDescriptor(
         id: "delete",
         title: "删除",
-        icon: "trash.fill",
+        icon: AppSymbol.delete,
         role: .destructive,
         action: { showingDeleteConfirm = true }
       ),

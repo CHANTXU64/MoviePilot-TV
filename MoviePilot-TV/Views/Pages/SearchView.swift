@@ -83,7 +83,7 @@ struct SearchView: View {
               .pickerStyle(.inline)
             } label: {
               HStack(spacing: 8) {
-                Image(systemName: "server.rack")
+                Image(systemName: AppSymbol.mediaSource)
                 Text("搜索来源：\(viewModel.mediaSearchSource.map(mediaSources.title(for:)) ?? "默认")")
               }
               .font(.caption)
@@ -106,7 +106,7 @@ struct SearchView: View {
               Task { await viewModel.autoSearch() }
             }) {
               HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
+                Image(systemName: AppSymbol.search)
                 Text(type.rawValue)
               }
             }
@@ -126,7 +126,7 @@ struct SearchView: View {
             // 站点改了只影响下一次点搜索，不自动重搜。
             SearchSiteSelectionMenu(viewModel: viewModel.siteFilter) {
               HStack(spacing: 8) {
-                Image(systemName: "server.rack")
+                Image(systemName: AppSymbol.site)
                 Text(viewModel.siteFilter.siteButtonLabel)
               }
               .font(.caption)
@@ -567,7 +567,7 @@ private struct PersonResultRow: View {
               Button {
                 navigationCoordinator.push(item)
               } label: {
-                Label("详情", systemImage: "info.circle")
+                Label("详情", systemImage: AppSymbol.details)
               }
             }
           }
@@ -711,7 +711,7 @@ private struct BestResultRow: View {
                 Button {
                   navigationCoordinator.push(person)
                 } label: {
-                  Label("详情", systemImage: "info.circle")
+                  Label("详情", systemImage: AppSymbol.details)
                 }
               }
             }

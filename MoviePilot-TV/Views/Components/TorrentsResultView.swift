@@ -51,7 +51,7 @@ struct TorrentsResultView<Header: View>: View {
         if result.isEmpty {
           EmptyDataView(
             title: "未找到相关资源",
-            systemImage: "magnifyingglass",
+            systemImage: AppSymbol.search,
             description: emptyDescription
           )
           .padding(.top, 50)
@@ -205,9 +205,9 @@ struct TorrentFilterBar: View {
         } label: {
           HStack(spacing: 4) {
             if sortType == .asc {
-              Image(systemName: "arrow.up")
+              Image(systemName: AppSymbol.uploads)
             } else if sortType == .desc {
-              Image(systemName: "arrow.down")
+              Image(systemName: AppSymbol.downloads)
             }
             Text(sortField.rawValue)
           }
@@ -239,9 +239,9 @@ struct TorrentFilterBar: View {
             ) {
               HStack(spacing: 4) {
                 if let selected = filterForm[key], !selected.isEmpty {
-                  Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                  Image(systemName: AppSymbol.filterActive)
                 } else {
-                  Image(systemName: "line.3.horizontal.decrease.circle")
+                  Image(systemName: AppSymbol.filter)
                 }
                 Text(filterTitles[key] ?? key)
                 if let selected = filterForm[key], !selected.isEmpty {

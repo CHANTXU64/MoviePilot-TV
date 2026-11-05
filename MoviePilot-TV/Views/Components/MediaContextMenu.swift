@@ -25,7 +25,7 @@ struct MediaContextMenuItems: View {
       } label: {
         Label(
           subscriptionHandler.forkCapability.unavailableHint ?? "复用订阅",
-          systemImage: "document.on.document")
+          systemImage: AppSymbol.forkSubscription)
       }
       .disabled(!subscriptionHandler.forkCapability.isAvailable)
     }
@@ -34,7 +34,7 @@ struct MediaContextMenuItems: View {
       // 点击"详情"时立即触发预加载
       navigationCoordinator.push(item)
     } label: {
-      Label("详情", systemImage: "info.circle")
+      Label("详情", systemImage: AppSymbol.details)
     }
 
     if !item.isCollection {
@@ -58,7 +58,7 @@ struct MediaContextMenuItems: View {
             }
           }
         } label: {
-          Label("TMDB详情页", systemImage: "link")
+          Label("TMDB详情页", systemImage: AppSymbol.link)
         }
       }
 
@@ -78,11 +78,11 @@ struct MediaContextMenuItems: View {
           }
         } label: {
           if item.canDirectlySubscribe, let subscribed = preloadedSubscribed, subscribed {
-            Label("已订阅", systemImage: "checkmark.circle.fill")
+            Label("已订阅", systemImage: AppSymbol.subscribed)
           } else {
             Label(
               item.canDirectlySubscribe ? "订阅" : "分季订阅",
-              systemImage: item.canDirectlySubscribe ? "plus.circle" : "list.bullet.circle")
+              systemImage: item.canDirectlySubscribe ? AppSymbol.subscribe : AppSymbol.chooseSeasons)
           }
         }
       }
@@ -98,7 +98,7 @@ struct MediaContextMenuItems: View {
             }
           }
         } label: {
-          Label("搜索资源", systemImage: "magnifyingglass")
+          Label("搜索资源", systemImage: AppSymbol.search)
         }
         if SubtitleSearchRequest.supportsSubtitleSearch(item) {
           Button {
@@ -109,7 +109,7 @@ struct MediaContextMenuItems: View {
               }
             }
           } label: {
-            Label("搜索字幕", systemImage: "captions.bubble")
+            Label("搜索字幕", systemImage: AppSymbol.searchSubtitles)
           }
         }
       }

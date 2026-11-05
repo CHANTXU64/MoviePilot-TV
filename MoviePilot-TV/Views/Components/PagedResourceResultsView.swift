@@ -73,7 +73,7 @@ struct PagedResourceResultsView<Header: View>: View {
           Text(error).font(.caption).foregroundColor(.orange)
         }
         if search.rows.isEmpty {
-          EmptyDataView(title: "未找到相关资源", systemImage: "magnifyingglass", description: search.emptyDescription)
+          EmptyDataView(title: "未找到相关资源", systemImage: AppSymbol.search, description: search.emptyDescription)
             .padding(.top, 50)
         } else { resourceGrid }
       }
@@ -85,7 +85,7 @@ struct PagedResourceResultsView<Header: View>: View {
     HStack(spacing: 24) {
       TorrentResultCount(count: search.rows.count)
       if search.canContinue {
-        Button(action: continueSearch) { Label(search.continueTitle, systemImage: "magnifyingglass") }
+        Button(action: continueSearch) { Label(search.continueTitle, systemImage: AppSymbol.search) }
           .disabled(downloadPresented)
       } else if search.canRestart {
         Button("重新搜索") { search.restart() }.disabled(downloadPresented)
