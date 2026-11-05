@@ -517,7 +517,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
       XCTAssertFalse(source.contains("feedbackMessage:"))
     }
     XCTAssertTrue(forkSource.contains("SheetActionButton("))
-    XCTAssertTrue(forkSource.contains(".applySheetStyles()"))
+    XCTAssertTrue(forkSource.contains("SheetCompactPanel {"))
     XCTAssertTrue(subscribePanelSource.contains("title: isNew ? \"订阅\" : \"保存\""))
     XCTAssertTrue(subscribeSheetSource.contains("@State private var isSaveAttemptInFlight = false"))
     XCTAssertTrue(subscribeSheetSource.contains("isSaving: isSaveAttemptInFlight"))

@@ -92,6 +92,55 @@ final class ForkOperationOwnerTests: XCTestCase {
     }
   }
 
+  /// 复用 A 失败后关掉，再打开分享 B：B 的面板不能带着 A 的失败提示。
+  func testOpeningAnotherShareClearsPreviousForkError() async throws {
+    try await withForkOperationOwnerBackend { service in
+      configureForkOwnerUser(service)
+      await ForkOperationOwnerURLProtocol.stub.setForkResponses([.failure(gate: nil)])
+      let handler = SubscriptionHandler(apiService: service)
+      let shareA = try ForkOperationOwnerFixtures.share(id: 88)
+      handler.forkSheetRequest = shareA
+
+      let result = await handler.fork(share: shareA)
+      XCTAssertNil(result)
+      XCTAssertEqual(handler.forkErrorMessage, "暂时无法复用订阅《分享88》，请稍后重试。")
+
+      // 同一个分享的面板还开着时，提示保留。
+      handler.forkSheetRequest = shareA
+      XCTAssertNotNil(handler.forkErrorMessage)
+
+      handler.forkSheetRequest = nil
+      handler.forkSheetRequest = try ForkOperationOwnerFixtures.share(id: 99)
+      XCTAssertNil(handler.forkErrorMessage)
+    }
+  }
+
+  /// 分享标题为空白时，面板标题用片名，失败提示里的名字也一样，不会出现「《》」。
+  func testForkErrorUsesSameTitleAsPanelWhenShareTitleIsBlank() async throws {
+    try await withForkOperationOwnerBackend { service in
+      configureForkOwnerUser(service)
+      await ForkOperationOwnerURLProtocol.stub.setForkResponses([.failure(gate: nil)])
+      let handler = SubscriptionHandler(apiService: service)
+      let share = try ForkOperationOwnerFixtures.share(id: 77, shareTitle: "  ")
+      XCTAssertEqual(share.displayTitle, "分享77")
+
+      _ = await handler.fork(share: share)
+      XCTAssertEqual(handler.forkErrorMessage, "暂时无法复用订阅《分享77》，请稍后重试。")
+    }
+  }
+
+  /// 识别词与 Web 一样列出原文：保留每行（含注释），只去掉空行和首尾空白；没有内容时不显示。
+  func testDisplayCustomWordsKeepsLinesAndDropsBlankOnes() throws {
+    let data = Data(
+      ##"{"id":1,"custom_words":"# 说明\n\n  A => B  \nKotSK => 七王国的骑士"}"##.utf8)
+    let share = try JSONDecoder().decode(SubscribeShare.self, from: data)
+    XCTAssertEqual(share.displayCustomWords, "# 说明\nA => B\nKotSK => 七王国的骑士")
+
+    let blank = try JSONDecoder().decode(
+      SubscribeShare.self, from: Data(##"{"id":2,"custom_words":"  \n\n"}"##.utf8))
+    XCTAssertNil(blank.displayCustomWords)
+  }
+
   func testForkGetFailureRetriesGetOnlyWithoutDuplicatePost() async throws {
     try await withForkOperationOwnerBackend { service in
       configureForkOwnerUser(service)
@@ -235,13 +284,15 @@ private struct ForkOperationOwnerServiceSnapshot {
 
 private enum ForkOperationOwnerFixtures {
   @MainActor
-  static func share(id: Int) throws -> SubscribeShare {
+  static func share(id: Int, shareTitle: String? = nil) throws -> SubscribeShare {
+    let titleJSON = String(
+      data: try JSONEncoder().encode(shareTitle ?? "分享\(id)"), encoding: .utf8)!
     let data = Data(
       """
       {
         "id": \(id),
         "subscribe_id": \(id),
-        "share_title": "分享\(id)",
+        "share_title": \(titleJSON),
         "share_user": "tester",
         "name": "分享\(id)",
         "year": "2026",

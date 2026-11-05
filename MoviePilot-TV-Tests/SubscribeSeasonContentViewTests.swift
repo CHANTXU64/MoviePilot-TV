@@ -1702,17 +1702,13 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertTrue(source.contains("SeasonDisplayFormatter.nonEmpty(season.overview)"))
   }
 
-  func testSeasonAndForkSheetPostersKeepStableTwoToThreeFrame() throws {
+  func testSeasonSheetPosterKeepsStableTwoToThreeFrame() throws {
     let testFileURL = URL(fileURLWithPath: #filePath)
     let repositoryRoot = testFileURL.deletingLastPathComponent().deletingLastPathComponent()
     let sources = [
       (
         name: "SeasonDetailSheet",
         path: "MoviePilot-TV/Views/Pages/SubscribeSeasonView.swift"
-      ),
-      (
-        name: "ForkSubscribeSheet",
-        path: "MoviePilot-TV/Views/Sheets/ForkSubscribeSheet.swift"
       ),
     ]
 

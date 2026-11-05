@@ -26,8 +26,6 @@ struct SubscribePanel: View {
   @FocusState private var isConfirmFocused: Bool
   @FocusState private var focusedField: SubscribeSettingField?
 
-  static let quickWidth: CGFloat = 860
-
   var body: some View {
     // 不单独显示加载页：系统 sheet 换尺寸没有动画，加载页和面板来回切会连闪几下。
     // 一打开就是最终尺寸的面板，加载中只让主按钮显示「加载中」。
@@ -60,7 +58,7 @@ struct SubscribePanel: View {
   // MARK: - 快速面板
 
   private var quickPanel: some View {
-    VStack(alignment: .leading, spacing: 0) {
+    SheetCompactPanel {
       header(titleLineLimit: 6, showsTags: true)
 
       messageBlock(spacingEdges: .top, spacing: 24)
@@ -78,10 +76,6 @@ struct SubscribePanel: View {
       }
       .padding(.top, 32)
     }
-    .padding(.horizontal, 56)
-    .padding(.vertical, 52)
-    .frame(width: Self.quickWidth, alignment: .topLeading)
-    .applySheetStyles()
     .defaultFocus($isConfirmFocused, true)
   }
 
@@ -111,24 +105,10 @@ struct SubscribePanel: View {
   /// 编辑订阅下面只放固定信息：已有集数、订阅状态，不随正在改的设置变化。
   private func header(titleLineLimit: Int, showsTags: Bool) -> some View {
     let subscribe = viewModel.subscribe
-    let mediaLine = [
-      MediaIdentifier.normalizedString(subscribe.type),
-      MediaIdentifier.normalizedString(subscribe.year),
-    ].compactMap { $0 }.joined(separator: " · ")
-
     return VStack(alignment: .leading, spacing: 0) {
-      VStack(alignment: .leading, spacing: 8) {
-        Text(MediaIdentifier.normalizedString(subscribe.name) ?? "未知")
-          .font(.headline.bold())
-          .lineLimit(titleLineLimit)
-          .fixedSize(horizontal: false, vertical: true)
-        if !mediaLine.isEmpty {
-          Text(mediaLine)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-        }
-      }
+      SheetMediaTitle(
+        title: MediaIdentifier.normalizedString(subscribe.name) ?? "未知",
+        type: subscribe.type, year: subscribe.year, lineLimit: titleLineLimit)
       Group {
         if showsTags {
           tags

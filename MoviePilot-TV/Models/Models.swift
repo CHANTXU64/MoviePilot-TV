@@ -2531,6 +2531,22 @@ struct StorageConf: Codable, Hashable {
 }
 
 /// 订阅分享
+extension SubscribeShare {
+  /// 面板标题和出错提示里用的名字：分享标题，没有（或只有空白）时用片名。
+  var displayTitle: String? {
+    MediaIdentifier.normalizedString(share_title) ?? MediaIdentifier.normalizedString(name)
+  }
+
+  /// 面板里列出的识别词原文：与 Web 一样保留每行（含注释行），只去掉空行和行首尾空白。
+  var displayCustomWords: String? {
+    let lines = (custom_words ?? "")
+      .split(whereSeparator: \.isNewline)
+      .map { $0.trimmingCharacters(in: .whitespaces) }
+      .filter { !$0.isEmpty }
+    return lines.isEmpty ? nil : lines.joined(separator: "\n")
+  }
+}
+
 nonisolated struct SubscribeShare: Codable, Identifiable, Hashable {
   struct ImageURLs: Hashable {
     let poster: URL?

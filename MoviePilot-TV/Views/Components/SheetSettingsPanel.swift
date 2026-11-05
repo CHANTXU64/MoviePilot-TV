@@ -165,6 +165,51 @@ struct SheetQuickPanel<Info: View, Controls: View>: View {
   }
 }
 
+/// 单列快速面板（新增订阅、复用订阅共用）：宽 860，只看信息、按一下主按钮就完成。
+struct SheetCompactPanel<Content: View>: View {
+  @ViewBuilder let content: () -> Content
+
+  static var width: CGFloat { 860 }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      content()
+    }
+    .padding(.horizontal, 56)
+    .padding(.vertical, 52)
+    .frame(width: Self.width, alignment: .topLeading)
+    .applySheetStyles()
+  }
+}
+
+/// 媒体标题区（订阅面板、复用订阅共用）：片名加粗，下面一行「类型 · 年份」。
+struct SheetMediaTitle: View {
+  let title: String
+  var type: String?
+  var year: String?
+  var lineLimit: Int
+
+  var body: some View {
+    let mediaLine = [
+      MediaIdentifier.normalizedString(type),
+      MediaIdentifier.normalizedString(year),
+    ].compactMap { $0 }.joined(separator: " · ")
+
+    VStack(alignment: .leading, spacing: 8) {
+      Text(title)
+        .font(.headline.bold())
+        .lineLimit(lineLimit)
+        .fixedSize(horizontal: false, vertical: true)
+      if !mediaLine.isEmpty {
+        Text(mediaLine)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
+    }
+  }
+}
+
 /// 快速确认面板左栏：标题（加粗，最多 3 行）、副标题（最多 8 行）和一排信息标签。
 struct SheetItemHeader<Tags: View>: View {
   let title: String
