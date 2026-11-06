@@ -379,10 +379,9 @@ private struct MediaSectionView: View {
     HomeViewModel.supportsMediaLibraryDeepLink(serverType: item.server_type)
   }
 
-  /// 管理员看到的 Emby 电影和剧集可以在应用内直接播放。
+  /// 管理员看到的、MoviePilot 已配置好的 Emby 上的电影和剧集可以在应用内直接播放。
   private func canPlayInApp(_ item: MediaServerPlayItem) -> Bool {
-    HomeViewModel.supportsInAppPlayback(
-      item, canRequestSuperUserEndpoints: APIService.shared.canRequestSuperUserEndpoints)
+    viewModel.inAppPlaybackItemID(item) != nil
   }
 
   /// 点击卡片：按设置决定在应用内播放还是跳转媒体服务器 App。
@@ -395,9 +394,7 @@ private struct MediaSectionView: View {
   }
 
   private func playInApp(_ item: MediaServerPlayItem) {
-    guard let itemID = item.item_id?.value.trimmingCharacters(in: .whitespacesAndNewlines),
-      !itemID.isEmpty
-    else { return }
+    guard let itemID = viewModel.inAppPlaybackItemID(item) else { return }
     APIService.shared.sessionScope.playbackCoordinator.play(
       .serverItem(serverName: selectedServer, itemID: itemID))
   }

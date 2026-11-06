@@ -96,6 +96,15 @@ struct EmbyClient {
       ])
   }
 
+  /// 日志里去掉地址和密钥：mpv 等组件的错误信息可能带出含密钥的流地址。
+  nonisolated static func redactedForLogging(_ text: String) -> String {
+    text
+      .replacingOccurrences(
+        of: #"(?i)\b(?:https?|rtsp|rtmp|ftp|file)://[^\s]+"#, with: "<URL>", options: .regularExpression)
+      .replacingOccurrences(
+        of: #"api_key=[^&\s"']*"#, with: "api_key=<redacted>", options: .regularExpression)
+  }
+
   // MARK: - 接口
 
   func publicSystemInfo(timeout: TimeInterval = 3) async throws -> EmbyPublicSystemInfo {
@@ -123,7 +132,7 @@ struct EmbyClient {
     let data = try await send(
       url(
         ["Shows", seriesID, "Episodes"],
-        query: ["UserId": userID, "Fields": "Overview", "IsMissing": "false"]))
+        query: ["UserId": userID, "IsMissing": "false"]))
     return try decode(EmbyItemsPage.self, from: data).items
   }
 
@@ -189,10 +198,14 @@ struct EmbyClient {
 
   // MARK: - 传输
 
+  private static let encoder = JSONEncoder()
+  private static let decoder = JSONDecoder()
+
+  private static let clientVersion = AppVersionInfo.currentAppVersion()
+    .trimmingCharacters(in: CharacterSet(charactersIn: "v"))
+
   private var authorizationHeader: String {
-    let version = AppVersionInfo.currentAppVersion().trimmingCharacters(in: CharacterSet(charactersIn: "v"))
-    return
-      "MediaBrowser Client=\"MoviePilot-TV\", Device=\"Apple TV\", DeviceId=\"\(deviceID)\", Version=\"\(version)\", Token=\"\(apiKey)\""
+    "MediaBrowser Client=\"MoviePilot-TV\", Device=\"Apple TV\", DeviceId=\"\(deviceID)\", Version=\"\(Self.clientVersion)\", Token=\"\(apiKey)\""
   }
 
   private func send(
@@ -206,7 +219,7 @@ struct EmbyClient {
     if let timeout { request.timeoutInterval = timeout }
     if let body {
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-      request.httpBody = try JSONEncoder().encode(body)
+      request.httpBody = try Self.encoder.encode(body)
     }
 
     let data: Data
@@ -226,7 +239,7 @@ struct EmbyClient {
 
   private func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
     do {
-      return try JSONDecoder().decode(type, from: data)
+      return try Self.decoder.decode(type, from: data)
     } catch {
       throw EmbyClientError.invalidResponse
     }

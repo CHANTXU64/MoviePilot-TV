@@ -2510,10 +2510,12 @@ class APIService: ObservableObject {
     return config.value
   }
 
-  /// 会话内短暂缓存的媒体服务器配置，供详情页判断能否应用内播放；配置里有密钥，只保存在内存。
-  func fetchCachedMediaServers() async throws -> [MediaServerConf] {
-    try await sessionCachedValue(sessionScope.mediaServerConfigCache, key: "MediaServers") {
-      [weak self] in
+  /// 会话内缓存的媒体服务器配置，供首页、详情页判断能否应用内播放，以及播放时连接 Emby。
+  /// 配置里有密钥，只保存在内存。`forceRefresh` 重新读取并写回缓存（首页加载、播放失败后核对配置）。
+  func fetchCachedMediaServers(forceRefresh: Bool = false) async throws -> [MediaServerConf] {
+    try await sessionCachedValue(
+      sessionScope.mediaServerConfigCache, key: "MediaServers", forceRefresh: forceRefresh
+    ) { [weak self] in
       guard let self else { throw CancellationError() }
       return try await self.fetchMediaServers()
     }
@@ -2528,18 +2530,13 @@ class APIService: ObservableObject {
     return try await decodeOrUnwrap([MediaServerPlayItem].self, from: data)
   }
 
-  /// 查询媒体是否已入库
-  /// - 对应前端: MoviePilot-Frontend/src/components/cards/MediaCard.vue (handleCheckExists)
-  /// - 应用场景: 电影详情页订阅按钮展示入库状态
+  /// 查询媒体是否已入库，返回媒体服务器中的条目 ID（MoviePilot 媒体库同步表），未入库为 nil。
+  /// - 对应前端: MoviePilot-Frontend/src/components/cards/MediaCard.vue (handleCheckExists)、
+  ///   MoviePilot-Frontend/src/views/discover/MediaDetailView.vue（`existsItemId`，用于“播放”按钮）
+  /// - 应用场景: 电影详情页订阅按钮展示入库状态；管理员的应用内播放入口
   /// - 备注: v3.0.1 起该接口的 `success` 恒为 `true`，命中与否只体现在 `data.item`
   ///   （Web 读 `result.item?.id`）；v2 才把命中结果放在 `success` 上。两者都以 `data.item.id` 为准。
-  func fetchMediaServerExists(media: MediaInfo) async throws -> Bool {
-    try await fetchMediaServerItemID(media: media) != nil
-  }
-
-  /// 查询媒体在媒体服务器中的条目 ID（MoviePilot 媒体库同步表）。
-  /// - 对应前端: MoviePilot-Frontend/src/views/discover/MediaDetailView.vue（`existsItemId`，用于“播放”按钮）
-  /// - 备注: 返回值不包含服务器名称；配置多台服务器时需要调用方逐台确认归属。
+  ///   返回值不包含服务器名称；配置多台服务器时需要调用方逐台确认归属。
   func fetchMediaServerItemID(media: MediaInfo) async throws -> String? {
     struct MediaServerExistsData: Decodable {
       let item: [String: String]?
@@ -2557,9 +2554,7 @@ class APIService: ObservableObject {
       ])
     let data = try await makeRequest(endpoint: endpoint)
     let result = try await decodeOrUnwrap(MediaServerExistsData.self, from: data)
-    guard let id = result.item?["id"]?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty
-    else { return nil }
-    return id
+    return trimmedNonEmpty([result.item?["id"]])
   }
 
   // MARK: - 资源搜索

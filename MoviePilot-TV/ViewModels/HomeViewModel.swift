@@ -29,6 +29,8 @@ class HomeViewModel: ObservableObject {
   @Published var subscriptionsLoadFailed = false
   /// 加载状态
   @Published var isLoading = true
+  /// 能在应用内播放的媒体服务器名称（已启用的 Emby，且配置了地址和密钥）
+  @Published private(set) var inAppPlayableServers: Set<String> = []
 
   private let apiService: APIService
   private var latestMediaSelectedServerKey: String? {
@@ -102,6 +104,7 @@ class HomeViewModel: ObservableObject {
       latestMediaByServer = [:]
       latestMediaServers = []
       latestLoadFailed = false
+      if !inAppPlayableServers.isEmpty { inAppPlayableServers = [] }
       if selectedLatestMediaServer != "" { selectedLatestMediaServer = "" }
       if !latestMedia.isEmpty { latestMedia = [] }
       return
@@ -109,9 +112,11 @@ class HomeViewModel: ObservableObject {
     let sessionSnapshot = apiService.sessionSnapshot()
 
     do {
-      // 1. 获取所有配置的媒体服务器（如 Jellyfin/Emby/Plex）
-      let servers = try await apiService.fetchMediaServers()
+      // 1. 获取所有配置的媒体服务器（如 Jellyfin/Emby/Plex）；每次现拉并写回会话缓存，详情页和播放沿用同一份
+      let servers = try await apiService.fetchCachedMediaServers(forceRefresh: true)
       guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
+      let playableServers = Set(servers.filter(\.supportsInAppPlayback).map(\.name))
+      if inAppPlayableServers != playableServers { inAppPlayableServers = playableServers }
 
       // 只保留启用服务器（保持后端返回顺序）
       let enabledServers = servers.filter { $0.enabled?.value ?? false }
@@ -327,17 +332,22 @@ class HomeViewModel: ObservableObject {
     return trimmed
   }
 
-  /// 应用内播放：管理员、Emby、电影或剧集（剧集从第一集开始），且有条目 ID。
-  static func supportsInAppPlayback(
-    _ item: MediaServerPlayItem, canRequestSuperUserEndpoints: Bool
-  ) -> Bool {
-    guard canRequestSuperUserEndpoints, item.server_type == .emby,
-      item.type == "电影" || item.type == "电视剧"
-    else {
-      return false
-    }
-    let itemID = item.item_id?.value.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    return !itemID.isEmpty
+  /// 当前服务器“最近添加”里能在应用内播放的条目 ID；不能播放时为 nil。
+  func inAppPlaybackItemID(_ item: MediaServerPlayItem) -> String? {
+    Self.inAppPlaybackItemID(
+      item, server: selectedLatestMediaServer, playableServers: inAppPlayableServers,
+      canRequestSuperUserEndpoints: apiService.canRequestSuperUserEndpoints)
+  }
+
+  static func inAppPlaybackItemID(
+    _ item: MediaServerPlayItem, server: String, playableServers: Set<String>,
+    canRequestSuperUserEndpoints: Bool
+  ) -> String? {
+    guard playableServers.contains(server),
+      InAppPlaybackAvailability.offers(
+        mediaType: item.type, canRequestSuperUserEndpoints: canRequestSuperUserEndpoints)
+    else { return nil }
+    return trimmedNonEmpty([item.item_id?.value])
   }
 
   /// 该服务器类型是否已知支持在 tvOS 打开媒体库深链（静态能力，不依赖具体链接）

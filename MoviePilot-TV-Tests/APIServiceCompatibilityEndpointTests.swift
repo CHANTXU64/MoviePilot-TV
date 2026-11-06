@@ -319,8 +319,8 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
         .data(using: .utf8)!
     )
 
-    let exists = try await service.fetchMediaServerExists(media: media)
-    XCTAssertTrue(exists)
+    let exists = try await service.fetchMediaServerItemID(media: media)
+    XCTAssertNotNil(exists)
 
     let capturedExistsQuery =
       await CompatibilityEndpointURLProtocol.stub.requestQuery(suffix: "/mediaserver/exists")
@@ -405,16 +405,12 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     // v3.0.1 起 `success` 恒为 true，未入库时只有 `data.item` 为空对象。
     await CompatibilityEndpointURLProtocol.stub.setMediaServerExistsResponse(
       #"{"success":true,"data":{"item":{}}}"#.data(using: .utf8)!)
-    let missing = try await service.fetchMediaServerExists(media: media)
-    XCTAssertFalse(missing, "v3 的 success=true + 空 item 必须判为未入库")
-    let missingItemID = try await service.fetchMediaServerItemID(media: media)
-    XCTAssertNil(missingItemID)
+    let missing = try await service.fetchMediaServerItemID(media: media)
+    XCTAssertNil(missing, "v3 的 success=true + 空 item 必须判为未入库")
 
     // 命中时 `data.item.id` 非空。
     await CompatibilityEndpointURLProtocol.stub.setMediaServerExistsResponse(
       #"{"success":true,"data":{"item":{"id":"library/42"}}}"#.data(using: .utf8)!)
-    let exists = try await service.fetchMediaServerExists(media: media)
-    XCTAssertTrue(exists)
     let itemID = try await service.fetchMediaServerItemID(media: media)
     XCTAssertEqual(itemID, "library/42", "播放入口需要原样拿到条目 ID")
 
@@ -423,7 +419,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     await CompatibilityEndpointURLProtocol.stub.setMediaServerExistsResponse(
       #"{"success":false,"data":{"item":{}}}"#.data(using: .utf8)!)
     do {
-      _ = try await service.fetchMediaServerExists(media: media)
+      _ = try await service.fetchMediaServerItemID(media: media)
       XCTFail("success:false 必须按失败 envelope 抛错")
     } catch let error as APIError {
       guard case .serverMessage = error else {

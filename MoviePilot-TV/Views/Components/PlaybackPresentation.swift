@@ -29,7 +29,7 @@ struct PlaybackPresentationModifier: ViewModifier {
         titleVisibility: .visible,
         presenting: coordinator.resumePrompt
       ) { prompt in
-        Button("从 \(PlaybackResumePolicy.formatted(prompt.position)) 继续播放") {
+        Button("从 \(Duration.seconds(Int(prompt.position)).formatted(.runtime)) 继续播放") {
           coordinator.resume(prompt, fromBeginning: false)
         }
         Button("从头播放") {

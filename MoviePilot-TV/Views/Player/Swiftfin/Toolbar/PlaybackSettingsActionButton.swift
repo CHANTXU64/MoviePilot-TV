@@ -9,8 +9,9 @@
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
 // 修改：去掉 `import JellyfinAPI`；条目、片源换成 MoviePilot-TV 的同名 Emby 适配类型。MoviePilot-TV 只直连原文件：
-// 适配层不提供可选码率，也不把条目报告为可转码的视频（`mediaType` 为 nil），码率与分辨率两项按原逻辑自然隐藏；
-// 多版本时“版本”项可用（切换走 `playNewItem`）。
+// 适配层不提供可选码率，也不把条目报告为可转码的视频（`mediaType` 为 nil），码率与分辨率两项按原逻辑自然隐藏。
+// 适配层目前也不填 `mediaSources`，因此整个按钮暂不显示。接入版本切换（走 `playNewItem`）时只需给条目填上
+// `mediaSources`，多于一个版本即显示“版本”项；不要填 `mediaType = .video`，否则会露出只对转码有效的分辨率选项。
 //
 
 import SwiftUI

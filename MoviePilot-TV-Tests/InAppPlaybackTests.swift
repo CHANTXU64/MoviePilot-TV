@@ -122,12 +122,13 @@ final class InAppPlaybackModelTests: XCTestCase {
     XCTAssertEqual(EmbyDirectPlay.select(from: []), .failure(.noSource))
   }
 
-  @MainActor
-  func testMPVErrorLogsDropAPIKey() {
+  func testPlayerLogsDropStreamURLAndAPIKey() {
     XCTAssertEqual(
-      PlaybackSession.redacted("open https://e/Videos/1/stream.mkv?Static=true&api_key=abc123&DeviceId=d failed"),
-      "open https://e/Videos/1/stream.mkv?Static=true&api_key=<redacted>&DeviceId=d failed")
-    XCTAssertEqual(PlaybackSession.seconds(.milliseconds(1500)), 1.5)
+      EmbyClient.redactedForLogging("open https://e/Videos/1/stream.mkv?Static=true&api_key=abc123&DeviceId=d failed"),
+      "open <URL> failed")
+    XCTAssertEqual(
+      EmbyClient.redactedForLogging("lavf: Static=true&api_key=abc123&DeviceId=d"),
+      "lavf: Static=true&api_key=<redacted>&DeviceId=d")
   }
 
   func testResumePolicySkipsStartAndNearEnd() {
@@ -141,8 +142,8 @@ final class InAppPlaybackModelTests: XCTestCase {
     XCTAssertTrue(PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runTimeTicks: twoHours))
     XCTAssertFalse(PlaybackResumePolicy.isCompleted(positionSeconds: 6400, runTimeTicks: twoHours))
     XCTAssertFalse(PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runTimeTicks: nil))
-    XCTAssertEqual(PlaybackResumePolicy.formatted(754), "12:34")
-    XCTAssertEqual(PlaybackResumePolicy.formatted(3754), "1:02:34")
+    XCTAssertEqual(Duration.seconds(754).formatted(.runtime), "12:34")
+    XCTAssertEqual(Duration.seconds(3754).formatted(.runtime), "1:02:34")
   }
 
   func testSeriesStartsFromFirstRegularEpisodeThatHasAFile() throws {
@@ -202,20 +203,26 @@ final class InAppPlaybackModelTests: XCTestCase {
   }
 
   @MainActor
-  func testHomeCardsOfferInAppPlaybackOnlyForAdministratorEmbyMoviesAndSeries() throws {
-    func item(_ type: String, server: String, itemID: String? = "m1") throws -> MediaServerPlayItem {
+  func testHomeCardsOfferInAppPlaybackOnlyForAdministratorMoviesAndSeriesOnPlayableEmby() throws {
+    func item(_ type: String, itemID: String? = "m1") throws -> MediaServerPlayItem {
       let idField = itemID.map { #","item_id":"\#($0)""# } ?? ""
       return try JSONDecoder().decode(
         MediaServerPlayItem.self,
-        from: Data(#"{"id":"x","title":"t","type":"\#(type)","server_type":"\#(server)"\#(idField)}"#.utf8))
+        from: Data(#"{"id":"x","title":"t","type":"\#(type)","server_type":"emby"\#(idField)}"#.utf8))
     }
-    XCTAssertTrue(HomeViewModel.supportsInAppPlayback(try item("电影", server: "emby"), canRequestSuperUserEndpoints: true))
-    XCTAssertFalse(HomeViewModel.supportsInAppPlayback(try item("电影", server: "emby"), canRequestSuperUserEndpoints: false))
-    XCTAssertTrue(HomeViewModel.supportsInAppPlayback(try item("电视剧", server: "emby"), canRequestSuperUserEndpoints: true))
-    XCTAssertFalse(HomeViewModel.supportsInAppPlayback(try item("音乐", server: "emby"), canRequestSuperUserEndpoints: true))
-    XCTAssertFalse(HomeViewModel.supportsInAppPlayback(try item("电影", server: "plex"), canRequestSuperUserEndpoints: true))
-    XCTAssertFalse(
-      HomeViewModel.supportsInAppPlayback(try item("电影", server: "emby", itemID: nil), canRequestSuperUserEndpoints: true))
+    func itemID(
+      _ item: MediaServerPlayItem, server: String = "emby", admin: Bool = true
+    ) -> String? {
+      HomeViewModel.inAppPlaybackItemID(
+        item, server: server, playableServers: ["emby"], canRequestSuperUserEndpoints: admin)
+    }
+    XCTAssertEqual(itemID(try item("电影")), "m1")
+    XCTAssertEqual(itemID(try item("电视剧", itemID: " m2 ")), "m2")
+    XCTAssertNil(itemID(try item("电影"), admin: false))
+    XCTAssertNil(itemID(try item("音乐")))
+    XCTAssertNil(itemID(try item("电影"), server: "emby-unconfigured"), "服务器未配置地址和密钥时不显示播放")
+    XCTAssertNil(itemID(try item("电影", itemID: nil)))
+    XCTAssertNil(itemID(try item("电影", itemID: "  ")))
   }
 }
 
@@ -399,6 +406,56 @@ final class PlaybackCoordinatorTests: XCTestCase {
     coordinator.endSession()
     XCTAssertNil(coordinator.session)
     XCTAssertFalse(PlaybackURLProtocol.stub.requests().contains { $0.url.path.contains("/Sessions/") })
+  }
+
+  private func mediaServerFetchCount() -> Int {
+    PlaybackURLProtocol.stub.requests().filter { $0.url.path == "/api/v1/system/setting/MediaServers" }.count
+  }
+
+  func testStaleCachedServerConfigIsRefreshedOnceAfterFailure() async throws {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "old.playback-tests.local"))]"
+      $0.unreachableHosts = ["old.playback-tests.local"]
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = ["lan.playback-tests.local|m1": Self.movie()]
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    let service = makeService()
+    let coordinator = makeCoordinator(service)
+    _ = try await service.fetchCachedMediaServers()
+    // MoviePilot 里改了 Emby 地址，缓存仍是旧的。
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "lan.playback-tests.local"))]"
+    }
+
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(streamURL(coordinator)?.host, "lan.playback-tests.local")
+    XCTAssertEqual(mediaServerFetchCount(), 2, "缓存命中一次，失败后重新读取一次")
+    coordinator.endSession()
+
+    // 新配置已写回缓存，下次播放不再读取。
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    XCTAssertNotNil(coordinator.session)
+    XCTAssertEqual(mediaServerFetchCount(), 2)
+    coordinator.endSession()
+  }
+
+  func testUnchangedServerConfigDoesNotRetryFailedPlayback() async throws {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "lan.playback-tests.local"))]"
+      $0.unreachableHosts = ["lan.playback-tests.local"]
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+
+    XCTAssertEqual(
+      coordinator.failure?.message,
+      PlaybackError.unreachable(server: "emby", transportSecurity: false).errorDescription)
+    XCTAssertEqual(mediaServerFetchCount(), 2)
+    let probes = PlaybackURLProtocol.stub.requests().filter { $0.url.host == "lan.playback-tests.local" }
+    XCTAssertEqual(probes.count, 1, "配置没变时不再重新探测")
   }
 
   func testSavedPositionAsksBeforePlaying() async throws {

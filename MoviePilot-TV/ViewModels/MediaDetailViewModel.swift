@@ -507,8 +507,8 @@ class MediaDetailViewModel: ObservableObject {
     let isMovie = detail.type == "电影"
     // 电影的入库状态显示在订阅按钮上；剧集只用于管理员的应用内播放（从第一集开始）。
     let showsLibraryState = isMovie && apiService.canAccess(.subscribe)
-    let offersPlayback =
-      (isMovie || detail.type == "电视剧") && apiService.canRequestSuperUserEndpoints
+    let offersPlayback = InAppPlaybackAvailability.offers(
+      mediaType: detail.type, canRequestSuperUserEndpoints: apiService.canRequestSuperUserEndpoints)
     guard showsLibraryState || offersPlayback else { return }
     let itemID: String?
     do {

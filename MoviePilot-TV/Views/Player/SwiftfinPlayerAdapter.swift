@@ -162,8 +162,8 @@ final class MediaSession {
 
   /// 与 Swiftfin `mediaSession.logger` 相同的调用方式，写入工程日志。
   struct SessionLogger {
-    func debug(_ message: String) { Logger.debug("[Playback] \(MediaSession.redacted(message))") }
-    func error(_ message: String) { Logger.error("[Playback] \(MediaSession.redacted(message))") }
+    func debug(_ message: String) { Logger.debug("[Playback] \(EmbyClient.redactedForLogging(message))") }
+    func error(_ message: String) { Logger.error("[Playback] \(EmbyClient.redactedForLogging(message))") }
   }
 
   let mpvPlayer: MPVPlayer
@@ -523,12 +523,6 @@ final class MediaSession {
     }
   }
 
-  /// 日志里去掉地址（可能带密钥）。
-  static func redacted(_ text: String) -> String {
-    PlaybackSession.redacted(
-      text.replacingOccurrences(
-        of: #"(?i)\b(?:https?|rtsp|rtmp|ftp|file)://[^\s]+"#, with: "<URL>", options: .regularExpression))
-  }
 }
 
 // MARK: - MediaPlayerItem
@@ -638,7 +632,7 @@ final class MediaPlayerItem {
       } else {
         disabledSubtitleTrackIndex ?? defaultSubtitleTrackIndex
       }
-    guard subtitleStreams.contains(where: { $0.index == index }) else { return -1 }
+    guard player.subtitleTracks.contains(where: { $0.mpvID == index }) else { return -1 }
     return index
   }
 
@@ -649,7 +643,7 @@ final class MediaPlayerItem {
   /// 字幕开着时切换轨道（选“无”即关闭）；关着时只记住，下次打开用它。
   func setSubtitleTrack(index: Int, secondary: Bool) {
     guard !secondary, canSelectTracks,
-      index == -1 || subtitleStreams.contains(where: { $0.index == index })
+      index == -1 || player.subtitleTracks.contains(where: { $0.mpvID == index })
     else { return }
     let wasEnabled = subtitlesEnabled
     disabledSubtitleTrackIndex = index
@@ -718,7 +712,7 @@ final class PreviewImageCache {
 enum MPVTrackLabel {
   static func text(for track: MPVMediaTrack, index: Int) -> String {
     var parts: [String] = []
-    if let title = track.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+    if let title = trimmedNonEmpty([track.title]) {
       parts.append(title)
     } else {
       if let language = track.language.map({ code in

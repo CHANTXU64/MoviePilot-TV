@@ -25,8 +25,9 @@ final class SessionScope {
     renewsTTLOnAccess: false
   )
   let mediaSourceCatalogCache = CoalescingCache<String, [MediaSourceInfo]>(ttl: 300, capacity: 1)
-  /// 媒体服务器配置含密钥，只在内存里短暂保存。
-  let mediaServerConfigCache = CoalescingCache<String, [MediaServerConf]>(ttl: 60, capacity: 1)
+  /// 媒体服务器配置含密钥，只在内存里保存；读取不续期，到期后重新读取。播放失败时另行强制核对。
+  let mediaServerConfigCache = CoalescingCache<String, [MediaServerConf]>(
+    ttl: 300, capacity: 1, renewsTTLOnAccess: false)
 
   init(apiService: APIService, uiIdentity: String) {
     self.uiIdentity = uiIdentity

@@ -79,6 +79,14 @@ nonisolated enum EmbyBaseURL {
   }
 }
 
+/// 应用内播放入口的统一判断，首页和详情页共用；单台服务器能否播放见 `MediaServerConf.supportsInAppPlayback`。
+nonisolated enum InAppPlaybackAvailability {
+  /// 只有管理员能读取 Emby 地址和密钥；目前支持电影和剧集（剧集从第一集开始）。
+  static func offers(mediaType: String?, canRequestSuperUserEndpoints: Bool) -> Bool {
+    canRequestSuperUserEndpoints && (mediaType == "电影" || mediaType == "电视剧")
+  }
+}
+
 // MARK: - Emby 接口数据
 
 nonisolated struct EmbyPublicSystemInfo: Decodable, Sendable {
@@ -193,8 +201,7 @@ nonisolated struct EmbyItem: Decodable, Sendable {
     {
       parts.append(name)
     }
-    let series = seriesName?.trimmingCharacters(in: .whitespacesAndNewlines)
-    return (parts.joined(separator: " · "), series?.isEmpty == false ? series : nil)
+    return (parts.joined(separator: " · "), trimmedNonEmpty([seriesName]))
   }
 
   /// 续播询问等单行场景用的完整标题。
@@ -405,13 +412,21 @@ nonisolated enum EmbyDirectPlay {
   }
 }
 
+/// Emby 的时间单位 tick 为 100 纳秒。
+nonisolated enum EmbyTicks {
+  static let perSecond: Double = 10_000_000
+
+  static func from(seconds: Double) -> Int { Int(seconds * perSecond) }
+  static func seconds(_ ticks: Int64) -> Double { Double(ticks) / perSecond }
+}
+
 /// 续播点：太靠前或接近片尾时直接从头播放。
 nonisolated enum PlaybackResumePolicy {
   static let minimumSeconds: Double = 60
   static let maximumProgress: Double = 0.9
 
   static func resumePosition(positionTicks: Int64, runTimeTicks: Int64?) -> Double? {
-    let seconds = Double(positionTicks) / 10_000_000
+    let seconds = EmbyTicks.seconds(positionTicks)
     guard seconds >= minimumSeconds else { return nil }
     if let runTimeTicks, runTimeTicks > 0, Double(positionTicks) / Double(runTimeTicks) >= maximumProgress {
       return nil
@@ -422,16 +437,6 @@ nonisolated enum PlaybackResumePolicy {
   /// 播放结束位置达到时长的 90% 视为看完。
   static func isCompleted(positionSeconds: Double, runTimeTicks: Int64?) -> Bool {
     guard let runTimeTicks, runTimeTicks > 0 else { return false }
-    return positionSeconds * 10_000_000 / Double(runTimeTicks) >= maximumProgress
-  }
-
-  static func formatted(_ seconds: Double) -> String {
-    let total = Int(seconds.rounded(.down))
-    let hours = total / 3600
-    let minutes = (total % 3600) / 60
-    let secs = total % 60
-    return hours > 0
-      ? String(format: "%d:%02d:%02d", hours, minutes, secs)
-      : String(format: "%d:%02d", minutes, secs)
+    return positionSeconds / EmbyTicks.seconds(runTimeTicks) >= maximumProgress
   }
 }

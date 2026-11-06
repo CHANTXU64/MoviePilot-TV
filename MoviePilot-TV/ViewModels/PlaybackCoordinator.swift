@@ -191,13 +191,28 @@ final class PlaybackCoordinator: ObservableObject {
     }
   }
 
+  /// 媒体服务器配置很少变化，平时用会话缓存；解析失败时重新读一次，
+  /// 地址、密钥或服务器列表确实变了才用新配置重试，没变就原样报告失败。
   private func prepare(
     _ target: PlaybackTarget, snapshot: APIServiceSessionSnapshot
   ) async throws -> PreparedPlayback {
     guard let apiService else { throw CancellationError() }
-    let servers = try await apiService.fetchMediaServers()
+    let servers = try await apiService.fetchCachedMediaServers()
     try ensureCurrent(snapshot)
+    do {
+      return try await prepare(target, servers: servers, snapshot: snapshot)
+    } catch let error where !(error is CancellationError) {
+      let fresh = try? await apiService.fetchCachedMediaServers(forceRefresh: true)
+      try ensureCurrent(snapshot)
+      guard let fresh, fresh != servers else { throw error }
+      return try await prepare(target, servers: fresh, snapshot: snapshot)
+    }
+  }
 
+  private func prepare(
+    _ target: PlaybackTarget, servers: [MediaServerConf], snapshot: APIServiceSessionSnapshot
+  ) async throws -> PreparedPlayback {
+    guard let apiService else { throw CancellationError() }
     let itemID: String
     let candidates: [MediaServerConf]
     switch target {
@@ -452,7 +467,6 @@ final class PlaybackSession: Identifiable {
     streamURL = prepared.streamURL
   }
 
-  var title: String { prepared.title }
   var titles: (primary: String, secondary: String?) { prepared.item.playerTitles }
   /// 以下供播放界面的信息、章节、队列等面板使用。
   var client: EmbyClient { prepared.client }
@@ -461,11 +475,6 @@ final class PlaybackSession: Identifiable {
   var mediaSource: EmbyMediaSource { prepared.selection.source }
   var mediaSources: [EmbyMediaSource] { prepared.mediaSources }
   var startSeconds: Double { startPosition }
-  /// Emby 记录的片长；mpv 读出文件时长前，播放界面用它显示进度。
-  var runtime: Duration? {
-    guard let ticks = prepared.item.runTimeTicks, ticks > 0 else { return nil }
-    return .microseconds(ticks / 10)
-  }
 
   func makeMPVPlayer() -> MPVPlayer {
     if let mpvPlayer { return mpvPlayer }
@@ -475,13 +484,8 @@ final class PlaybackSession: Identifiable {
   }
 
   private var currentSeconds: Double {
-    let seconds = mpvPlayer.map { Self.seconds($0.position) } ?? 0
+    let seconds = mpvPlayer?.position.seconds ?? 0
     return seconds.isFinite ? max(0, seconds) : 0
-  }
-
-  static func seconds(_ duration: Duration) -> Double {
-    let components = duration.components
-    return Double(components.seconds) + Double(components.attoseconds) / 1e18
   }
 
   func start() {
@@ -536,19 +540,13 @@ final class PlaybackSession: Identifiable {
     case .stateChanged(.ended):
       finish(message: nil)
     case .stateChanged(.failed(let error)), .error(let error, fatal: true):
-      Logger.error("[Playback] mpv 播放失败: \(Self.redacted(String(describing: error)))")
+      Logger.error("[Playback] mpv 播放失败: \(EmbyClient.redactedForLogging(String(describing: error)))")
       finish(message: "无法播放该影片，请检查与 Emby 的网络连接")
     case .pauseChanged(let isPaused):
       handlePauseChange(isPaused: isPaused)
     default:
       break
     }
-  }
-
-  /// mpv 的错误信息可能带出流地址，日志里去掉密钥。
-  static func redacted(_ text: String) -> String {
-    text.replacingOccurrences(
-      of: #"api_key=[^&\s"']*"#, with: "api_key=<redacted>", options: .regularExpression)
   }
 
   // MARK: - 共用
@@ -566,13 +564,11 @@ final class PlaybackSession: Identifiable {
 
   // MARK: - 上报（只发不等，失败只记日志）
 
-  private static func ticks(_ seconds: Double) -> Int { Int(seconds * 10_000_000) }
-
   private func report(_ event: EmbyClient.PlaybackEvent, isPaused: Bool, position: Double) {
     var body: [String: JSONValue] = [
       "ItemId": .string(prepared.item.id),
       "MediaSourceId": .string(prepared.selection.source.id),
-      "PositionTicks": .int(Self.ticks(position)),
+      "PositionTicks": .int(EmbyTicks.from(seconds: position)),
       "IsPaused": .bool(isPaused),
       "CanSeek": .bool(true),
       "PlayMethod": .string("DirectPlay"),
@@ -594,7 +590,7 @@ final class PlaybackSession: Identifiable {
     let completed = PlaybackResumePolicy.isCompleted(
       positionSeconds: position, runTimeTicks: prepared.item.runTimeTicks)
     var userData = prepared.item.userData ?? [:]
-    userData["PlaybackPositionTicks"] = .int(completed ? 0 : Self.ticks(position))
+    userData["PlaybackPositionTicks"] = .int(completed ? 0 : EmbyTicks.from(seconds: position))
     if completed { userData["Played"] = .bool(true) }
     userData["LastPlayedDate"] = .string(ISO8601DateFormatter().string(from: Date()))
     let client = prepared.client

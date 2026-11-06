@@ -1309,7 +1309,7 @@ struct Context: Codable, Identifiable {
   }
 }
 
-nonisolated struct MediaServerConf: Decodable, Sendable {
+nonisolated struct MediaServerConf: Decodable, Equatable, Sendable {
   /// 名称
   let name: String
   /// 类型 emby/jellyfin/plex
