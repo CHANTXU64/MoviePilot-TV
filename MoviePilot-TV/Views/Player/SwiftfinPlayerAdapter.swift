@@ -317,10 +317,16 @@ final class MediaSession {
     onExit()
   }
 
+  /// 播放设置里可选的版本：只列能直接播放的片源，多于一个时才显示版本选择。
+  static func versions(of sources: [EmbyMediaSource]) -> [PlaybackMediaSourceInfo] {
+    sources.filter { (try? EmbyDirectPlay.evaluate($0).get()) != nil }.map(PlaybackMediaSourceInfo.init(emby:))
+  }
+
   /// 为当前条目建立 `MediaPlayerItem`、片段与队列观察。
   private func prepareItem() {
     itemObservations.removeAll()
-    let baseItem = BaseItemDto(emby: session.item)
+    var baseItem = BaseItemDto(emby: session.item)
+    baseItem.mediaSources = Self.versions(of: session.mediaSources)
     let item = MediaPlayerItem(
       baseItem: baseItem,
       source: session.mediaSource,
@@ -568,7 +574,7 @@ final class MediaPlayerItem {
 
   init(baseItem: BaseItemDto, source: EmbyMediaSource, player: MPVPlayer, client: EmbyClient, startSeconds: Double) {
     self.baseItem = baseItem
-    mediaSource = PlaybackMediaSourceInfo(id: source.id)
+    mediaSource = PlaybackMediaSourceInfo(emby: source)
     self.player = player
     chapters = baseItem.fullChapterInfo
     var configuration = MediaPlaybackConfiguration()

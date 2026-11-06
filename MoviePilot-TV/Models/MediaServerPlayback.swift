@@ -278,11 +278,16 @@ nonisolated struct EmbyMediaStream: Decodable, Sendable, Equatable {
 
 nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
   let id: String
+  /// 版本名（如「4K HDR」「1080p」），播放设置里的版本选择用它。
+  let name: String?
   let container: String?
   let `protocol`: String?
   let mediaStreams: [EmbyMediaStream]
-  init(id: String, container: String?, protocol: String? = "File", mediaStreams: [EmbyMediaStream]) {
+  init(
+    id: String, name: String? = nil, container: String?, protocol: String? = "File", mediaStreams: [EmbyMediaStream]
+  ) {
     self.id = id
+    self.name = name
     self.container = container
     self.protocol = `protocol`
     self.mediaStreams = mediaStreams
@@ -290,6 +295,7 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
 
   private enum CodingKeys: String, CodingKey {
     case id = "Id"
+    case name = "Name"
     case container = "Container"
     case `protocol` = "Protocol"
     case mediaStreams = "MediaStreams"
@@ -298,6 +304,7 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     id = try container.decode(String.self, forKey: .id)
+    name = try? container.decodeIfPresent(String.self, forKey: .name)
     self.container = try? container.decodeIfPresent(String.self, forKey: .container)
     self.protocol = try? container.decodeIfPresent(String.self, forKey: .protocol)
     mediaStreams =

@@ -30,6 +30,16 @@ final class InAppPlaybackModelTests: XCTestCase {
     XCTAssertTrue(expect([:]).accepts(bare, strict: true), "详情页没有外部编号时只能比类型")
   }
 
+  @MainActor
+  func testPlaybackVersionsListOnlyDirectlyPlayableSourcesWithNames() throws {
+    let info = try decode(
+      EmbyPlaybackInfo.self,
+      #"{"MediaSources":[{"Id":"a","Name":"4K HDR","Container":"mkv","Protocol":"File","MediaStreams":[]},{"Id":"b","Name":"远程","Protocol":"Http","MediaStreams":[]},{"Id":"c","Name":"1080p","Container":"mp4","Protocol":"File","MediaStreams":[]}]}"#)
+    let versions = MediaSession.versions(of: info.mediaSources)
+    XCTAssertEqual(versions.map(\.id), ["a", "c"], "远程片源不能直连，不列出")
+    XCTAssertEqual(versions.map(\.displayTitle), ["4K HDR", "1080p"])
+  }
+
   func testLibraryItemExpectationCollectsDetailExternalIDs() {
     let media = MediaInfo(
       tmdb_id: 222, douban_id: "35", imdb_id: " tt0001 ", tvdb_id: 9, source: "themoviedb", media_id: "222",
@@ -1112,6 +1122,32 @@ final class PlaybackCoordinatorTests: XCTestCase {
     XCTAssertFalse(
       PlaybackURLProtocol.stub.requests().contains { $0.url.path.hasSuffix("/UserData") },
       "读不到用户数据时不写回")
+  }
+
+  func testSwitchingToAnotherVersionPlaysThatSource() async throws {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "lan.playback-tests.local"))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = ["lan.playback-tests.local|m1": Self.movie()]
+      $0.playbackInfo =
+        #"{"PlaySessionId":"ps1","MediaSources":[{"Id":"src1","Name":"1080p","Container":"mp4","Protocol":"File","MediaStreams":[]},{"Id":"src2","Name":"4K","Container":"mkv","Protocol":"File","MediaStreams":[]}]}"#
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    let session = try XCTUnwrap(coordinator.session)
+    XCTAssertEqual(session.mediaSource.id, "src1")
+    XCTAssertEqual(session.mediaSources.map(\.name), ["1080p", "4K"])
+
+    var result: PlaybackCoordinator.SwitchResult?
+    coordinator.switchItem(to: "m1", mediaSourceID: "src2", startPosition: 30, in: session) { result = $0 }
+    await coordinator.switchTaskForTesting?.value
+
+    guard case .switched = result else { return XCTFail("应切到另一个版本，实际 \(String(describing: result))") }
+    XCTAssertTrue(coordinator.session === session, "同一个会话，全屏界面不重新弹出")
+    XCTAssertEqual(session.mediaSource.id, "src2")
+    XCTAssertEqual(session.streamURL.path, "/Videos/m1/stream.mkv")
+    XCTAssertEqual(session.startSeconds, 30)
+    coordinator.endSession(session)
   }
 
   private func requestPaths(after count: Int) -> [String] {
