@@ -64,6 +64,25 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual(movieModel.subscribeModeTitle, "洗版")
   }
 
+  /// 只有「加载失败且不能重试」才需要关掉重开（面板据此把主按钮换成「关闭」）；能重试或没出错时都不是。
+  /// 只验证判断本身；生产路径上这个状态很难构造，按钮焦点需真机确认。
+  func testRequiresReopenOnlyWhenLoadFailedWithoutRetry() {
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(id: nil, name: "重开", type: "电影"), isNewSubscription: true)
+    XCTAssertFalse(viewModel.requiresReopen)
+
+    viewModel.loadErrorMessage = "订阅准备失败，请重试。"
+    viewModel.canRetryLoad = true
+    XCTAssertFalse(viewModel.requiresReopen)
+
+    viewModel.loadErrorMessage = "订阅没有准备完成，请关闭后重新打开。"
+    viewModel.canRetryLoad = false
+    XCTAssertTrue(viewModel.requiresReopen)
+
+    viewModel.loadErrorMessage = nil
+    XCTAssertFalse(viewModel.requiresReopen)
+  }
+
   func testEditInfoUsesSavedProgressAndState() {
     var tv = Subscribe(id: 48, name: "已有订阅", type: "电视剧")
     tv.total_episode = 6
@@ -107,9 +126,10 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     viewModel.subscribe.start_episode = 3
     XCTAssertEqual(viewModel.episodeRangeText, "3–6 集")
 
-    // 开始集数越界时从 1 算，不写出「9–6 集」。
+    // 开始集数越界时照实写出，和要保存的值一致；不写成「9–6 集」，也不悄悄改成「1–6 集」。
     viewModel.subscribe.start_episode = 9
-    XCTAssertEqual(viewModel.episodeRangeText, "1–6 集")
+    XCTAssertEqual(viewModel.episodeRangeText, "第 9 集起，共 6 集")
+    XCTAssertEqual(viewModel.subscribe.start_episode, 9)
 
     viewModel.subscribe.type = "电影"
     XCTAssertNil(viewModel.episodeRangeText)

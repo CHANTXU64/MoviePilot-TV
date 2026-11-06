@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 @testable import MoviePilot_TV
@@ -487,24 +488,55 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(detailSource.contains("message: SubscriptionCancelConfirmation.failureMessage"))
   }
 
-  /// 整个 App 的图标都从 AppSymbol 取：除了 AppSymbol.swift，源码里不直接写 SF Symbols 图标名，
-  /// 同一个意思在卡片、菜单、详情页和 Sheet 里不会用出两个图标。
-  func testAllSymbolsComeFromAppSymbol() throws {
+  /// 除了 AppSymbol.swift，源码里不直接写 SF Symbols 图标名。只检查源码写法，不代表图标的实际显示。
+  /// 两种写法都查：传给 `systemName:` / `systemImage:` / `icon:` 的字面量（含单个单词的图标名），
+  /// 以及任何位置出现、在当前系统确实是图标的带点名字（如三元表达式里的 `"plus.circle"`）。
+  func testAllSymbolsComeFromAppSymbolInSource() throws {
     let testFileURL = URL(fileURLWithPath: #filePath)
     let appRoot = testFileURL.deletingLastPathComponent().deletingLastPathComponent()
       .appendingPathComponent("MoviePilot-TV")
     let enumerator = try XCTUnwrap(FileManager.default.enumerator(at: appRoot, includingPropertiesForKeys: nil))
-    let literalSymbol = #"(systemName|systemImage|icon)\s*:\s*"[a-z]"#
+    let labeledLiteral = try NSRegularExpression(
+      pattern: #"(systemName|systemImage|icon)\s*:\s*"[a-z0-9]"#)
+    let dottedLiteral = try NSRegularExpression(pattern: #""([a-z0-9]+(?:\.[a-z0-9]+)+)""#)
     var checked = 0
     for case let url as URL in enumerator where url.pathExtension == "swift" {
       guard url.lastPathComponent != "AppSymbol.swift" else { continue }
       let source = try String(contentsOf: url, encoding: .utf8)
+      let range = NSRange(source.startIndex..., in: source)
       XCTAssertNil(
-        source.range(of: literalSymbol, options: .regularExpression),
+        labeledLiteral.firstMatch(in: source, range: range),
         "\(url.lastPathComponent) 里直接写了图标名，请改用 AppSymbol。")
+      let bareSymbols = dottedLiteral.matches(in: source, range: range).compactMap { match in
+        Range(match.range(at: 1), in: source).map { String(source[$0]) }
+      }.filter { UIImage(systemName: $0) != nil }
+      XCTAssertEqual(bareSymbols, [], "\(url.lastPathComponent) 里直接写了图标名，请改用 AppSymbol。")
       checked += 1
     }
     XCTAssertGreaterThan(checked, 50)
+  }
+
+  /// AppSymbol 里每个图标名只出现一次，并且在当前系统能取到图标。
+  /// 确实同一个意思的地方写成别名（`static let season = tv`），不重复写图标名。
+  func testAppSymbolNamesAreUniqueAndResolvableInSource() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Components/AppSymbol.swift")
+    let declaration = try NSRegularExpression(pattern: #"static let (\w+) = "([^"]+)""#)
+    let names = declaration.matches(in: source, range: NSRange(source.startIndex..., in: source))
+      .compactMap { match -> (constant: String, symbol: String)? in
+        guard let constant = Range(match.range(at: 1), in: source),
+          let symbol = Range(match.range(at: 2), in: source)
+        else { return nil }
+        return (String(source[constant]), String(source[symbol]))
+      }
+    XCTAssertGreaterThan(names.count, 50)
+
+    let duplicates = Dictionary(grouping: names, by: \.symbol).filter { $0.value.count > 1 }
+      .mapValues { $0.map(\.constant) }
+    XCTAssertEqual(duplicates, [:], "同一个图标名写了多次，同义请写成别名，不同意思请换图标。")
+
+    for name in names {
+      XCTAssertNotNil(UIImage(systemName: name.symbol), "AppSymbol.\(name.constant)（\(name.symbol)）取不到图标。")
+    }
   }
 
   func testSheetFeedbackAndLoadingStateUseSharedPatterns() throws {
@@ -538,7 +570,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     }
     XCTAssertTrue(forkSource.contains("SheetActionButton("))
     XCTAssertTrue(forkSource.contains("SheetCompactPanel {"))
-    XCTAssertTrue(subscribePanelSource.contains("title: isNew ? \"订阅\" : \"保存\""))
+    XCTAssertTrue(subscribePanelSource.contains("title: mustClose ? \"关闭\" : isNew ? \"订阅\" : \"保存\""))
     XCTAssertTrue(subscribeSheetSource.contains("@State private var isSaveAttemptInFlight = false"))
     XCTAssertTrue(subscribeSheetSource.contains("isSaving: isSaveAttemptInFlight"))
     XCTAssertTrue(subscribeSheetSource.contains("guard !isSaveAttemptInFlight else { return }"))

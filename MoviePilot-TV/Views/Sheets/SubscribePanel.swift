@@ -13,7 +13,9 @@ import SwiftUI
 /// 出错统一处理：加载失败、订阅（保存）失败、之后启用或搜索失败，都在按钮上方显示一行原因，
 /// 能重试时下面再放一个「重试」；「订阅」「订阅设置」不换不藏，默认焦点仍在「订阅」。
 /// 加载失败时直接按「订阅」或「订阅设置」也会先重新加载，成功后接着做。
+/// 加载失败又不能重试（需要关掉重开）时，主按钮改成「关闭」，面板里始终有能聚焦的按钮。
 struct SubscribePanel: View {
+  @Environment(\.dismiss) private var dismiss
   @ObservedObject var viewModel: SubscribeSheetViewModel
   let isSaving: Bool
   let onSubscribe: () -> Void
@@ -71,8 +73,8 @@ struct SubscribePanel: View {
           Text("订阅设置")
             .frame(maxWidth: .infinity)
         }
-        // 保存中不再进入设置。
-        .disabled(isSaving || !canAct)
+        // 保存中、只能关掉重开时不再进入设置。
+        .disabled(isSaving || viewModel.requiresReopen)
       }
       .padding(.top, 32)
     }
@@ -165,11 +167,6 @@ struct SubscribePanel: View {
   private var isBusy: Bool { isSaving || isReloading || viewModel.isLoading }
 
 
-  /// 加载失败且不能重试（需要关掉重开）时，按钮不再可用；其余情况按钮都能按。
-  private var canAct: Bool {
-    viewModel.loadErrorMessage == nil || viewModel.canRetryLoad
-  }
-
   /// 加载失败时先重新加载，真正加载完成后再执行；没失败就直接执行。
   /// 加载中、面板正在放大（内容透明）时按了不做事；焦点不受限制。
   /// 重新加载后发现这部片已经订阅过（新增变成编辑），停下来让用户先看编辑面板，不自动保存。
@@ -219,14 +216,21 @@ struct SubscribePanel: View {
     }
   }
 
+  /// 只能关掉重开时变成「关闭」：仍是同一个按钮，焦点不跳。
   private func subscribeButton(focus: FocusState<Bool>.Binding?) -> some View {
     let isNew = viewModel.isNewSubscription
+    let mustClose = viewModel.requiresReopen
     return SheetActionButton(
-      title: isNew ? "订阅" : "保存", systemImage: isNew ? AppSymbol.subscribe : AppSymbol.save,
+      title: mustClose ? "关闭" : isNew ? "订阅" : "保存",
+      systemImage: mustClose ? nil : isNew ? AppSymbol.subscribe : AppSymbol.save,
       loadingTitle: viewModel.isLoading ? "加载中" : isNew ? "订阅中" : "保存中",
-      isLoading: isSaving || isReloading || viewModel.isLoading, isDisabled: !canAct, focus: focus
+      isLoading: isSaving || isReloading || viewModel.isLoading, focus: focus
     ) {
-      afterLoaded(onSubscribe)
+      if viewModel.requiresReopen {
+        dismiss()
+      } else {
+        afterLoaded(onSubscribe)
+      }
     }
   }
 

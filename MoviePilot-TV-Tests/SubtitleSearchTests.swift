@@ -962,12 +962,16 @@ final class SubtitleSearchTests: XCTestCase {
     var states: [SubtitleDownloadViewModel.State] = []
     let observation = model.$state.sink { states.append($0) }
     defer { observation.cancel() }
+    XCTAssertFalse(model.mustClose)
 
     api.replaceSessionForTesting(baseURL: api.baseURL, token: "refreshed", currentUser: api.currentUser)
     XCTAssertEqual(api.uiIdentity, uiIdentity)
     XCTAssertEqual(states, [.editing, .invalidated])
     XCTAssertEqual(model.failure, "登录状态已更新，请关闭后重新搜索字幕。")
     XCTAssertFalse(model.canEdit)
+    // 设置全部不可用时主按钮改成「关闭」，面板里仍有能聚焦的按钮。
+    XCTAssertTrue(model.mustClose)
+    XCTAssertEqual(model.statusMessage, SubtitleDownloadViewModel.invalidatedMessage)
     XCTAssertNil(model.submit())
     model.selectSource(.douban)
     XCTAssertEqual(model.mediaSource, .themoviedb)
@@ -983,6 +987,18 @@ final class SubtitleSearchTests: XCTestCase {
     XCTAssertEqual(model.state, .invalidated)
     XCTAssertNotNil(model.failure)
     XCTAssertFalse(model.canSubmit)
+    XCTAssertTrue(model.mustClose)
+  }
+
+  /// 没有搜索权限（登录没变）时同样只能关掉：主按钮是「关闭」，提示写明原因。
+  func testSubtitleDownloadWithoutSearchPermissionMustClose() {
+    let model = downloadModel(api: service(search: false))
+    model.mediaId = "550"
+    XCTAssertEqual(model.state, .editing)
+    XCTAssertFalse(model.canEdit)
+    XCTAssertFalse(model.canSubmit)
+    XCTAssertTrue(model.mustClose)
+    XCTAssertEqual(model.statusMessage, SubtitleDownloadViewModel.invalidatedMessage)
   }
 
   func testSubtitleResultsObserveRootAndDetailLifecycleAfterReplacingSearch() async throws {

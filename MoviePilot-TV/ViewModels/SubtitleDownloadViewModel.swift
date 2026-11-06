@@ -75,11 +75,23 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
     if case .submitting = state { return true }
     return false
   }
+  static let invalidatedMessage = "登录状态已更新，请关闭后重新搜索字幕。"
+
   var failure: String? {
     switch state {
     case .failed(let message): message
-    case .invalidated: "登录状态已更新，请关闭后重新搜索字幕。"
+    case .invalidated: Self.invalidatedMessage
     default: nil
+    }
+  }
+
+  /// 登录已变或没有了搜索权限：这个面板只能关掉重新搜索。设置都不可用，主按钮改成「关闭」，
+  /// 保证面板里还有能聚焦的东西。
+  var mustClose: Bool {
+    switch state {
+    case .invalidated: true
+    case .editing, .failed: !isSessionValid
+    default: false
     }
   }
   private var normalizedMediaId: String {
@@ -92,7 +104,7 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
   /// 最后是媒体 ID 还没填好。和 `canSubmit` 用同一套判断，按钮不可用时一定有原因可看。
   var statusMessage: String? {
     if let failure { return failure }
-    guard canEdit else { return nil }
+    guard canEdit else { return mustClose ? Self.invalidatedMessage : nil }
     if let directoryError { return directoryError }
     if normalizedMediaId.isEmpty { return Self.missingMediaIdMessage }
     return mediaSource.isValidManualId(normalizedMediaId)
