@@ -14,14 +14,9 @@ struct ForkSubscribeSheet: View {
   @Environment(\.dismiss) private var dismiss
   @ObservedObject var subscriptionHandler: SubscriptionHandler
   @State private var isForking = false
-  @State private var truncatedParts: Set<TextPart> = []
+  @State private var hasTruncatedText = false
   @State private var showsFullText = false
   @FocusState private var isConfirmFocused: Bool
-
-  /// 面板里限定行数显示的几段文字。
-  private enum TextPart: Hashable {
-    case comment, keyword, customWords
-  }
 
   var body: some View {
     SheetCompactPanel {
@@ -55,7 +50,7 @@ struct ForkSubscribeSheet: View {
       }
       .padding(.top, 32)
 
-      if !truncatedParts.isEmpty {
+      if hasTruncatedText {
         Button {
           showsFullText = true
         } label: {
@@ -75,10 +70,10 @@ struct ForkSubscribeSheet: View {
   /// 「查看完整说明」的正文：分享说明全文，下面是关键词、识别词原文。
   static func fullTextBlocks(for share: SubscribeShare) -> [ReadingBlock] {
     var blocks: [ReadingBlock] = []
-    if let comment = MediaIdentifier.normalizedString(share.share_comment) {
+    if let comment = share.displayComment {
       blocks += ReadingSheetLayout.paragraphs(comment).map { ReadingBlock($0) }
     }
-    let keyword = MediaIdentifier.normalizedString(share.keyword)
+    let keyword = share.displayKeyword
     let customWords = share.displayCustomWords
     if !blocks.isEmpty, keyword != nil || customWords != nil {
       blocks.append(.divider)
@@ -92,26 +87,13 @@ struct ForkSubscribeSheet: View {
     return blocks
   }
 
-  private func truncation(_ part: TextPart) -> Binding<Bool> {
-    Binding(
-      get: { truncatedParts.contains(part) },
-      set: { isTruncated in
-        if isTruncated {
-          truncatedParts.insert(part)
-        } else {
-          truncatedParts.remove(part)
-        }
-      }
-    )
-  }
-
   // MARK: - 分享信息
 
   private var header: some View {
     // 分享说明里连续的空行压成一个换行，避免说明被撑得很高。
-    let comment = MediaIdentifier.normalizedString(share.share_comment)?
+    let comment = share.displayComment?
       .replacingOccurrences(of: #"\n{2,}"#, with: "\n", options: .regularExpression)
-    let keyword = MediaIdentifier.normalizedString(share.keyword)
+    let keyword = share.displayKeyword
     let customWords = share.displayCustomWords
 
     return VStack(alignment: .leading, spacing: 0) {
@@ -119,7 +101,7 @@ struct ForkSubscribeSheet: View {
         title: share.displayTitle ?? "复用订阅", type: share.type, year: share.year, lineLimit: 6)
 
       if let comment {
-        ClampedText(text: comment, lineLimit: 4, isTruncated: truncation(.comment))
+        ClampedText(text: comment, lineLimit: 4)
           .font(.caption)
           .foregroundStyle(.secondary)
           .padding(.top, 16)
@@ -145,13 +127,10 @@ struct ForkSubscribeSheet: View {
       // 识别词按行列出原文，最多 4 行。放不下的部分在「查看完整说明」里看。
       VStack(alignment: .leading, spacing: 8) {
         if let keyword {
-          ClampedText(
-            text: "关键词：\(keyword)", lineLimit: 2, truncationMode: .middle,
-            isTruncated: truncation(.keyword))
+          ClampedText(text: "关键词：\(keyword)", lineLimit: 2, truncationMode: .middle)
         }
         if let customWords {
-          ClampedText(
-            text: "识别词：\n\(customWords)", lineLimit: 5, isTruncated: truncation(.customWords))
+          ClampedText(text: "识别词：\n\(customWords)", lineLimit: 5)
         }
       }
       .font(.caption2)
@@ -159,16 +138,24 @@ struct ForkSubscribeSheet: View {
       .padding(.top, keyword == nil && customWords == nil ? 0 : 8)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
+    .onPreferenceChange(TextTruncatedKey.self) { hasTruncatedText = $0 }
   }
 }
 
-/// 限定行数显示的文字，并告诉调用方有没有被截断：背后放一份不限行数、看不见的同样文字，
-/// 两者高度不同就是放不下。字体、颜色跟随外层。
+/// 面板里有没有文字被截断：任一段被截断即为 true。
+private struct TextTruncatedKey: PreferenceKey {
+  static let defaultValue = false
+  static func reduce(value: inout Bool, nextValue: () -> Bool) {
+    value = value || nextValue()
+  }
+}
+
+/// 限定行数显示的文字，并通过 `TextTruncatedKey` 报告有没有被截断：背后放一份不限行数、
+/// 看不见的同样文字，两者高度不同就是放不下。字体、颜色跟随外层。
 private struct ClampedText: View {
   let text: String
   let lineLimit: Int
   var truncationMode: Text.TruncationMode = .tail
-  @Binding var isTruncated: Bool
 
   @State private var shownHeight: CGFloat = 0
   @State private var fullHeight: CGFloat = 0
@@ -178,24 +165,15 @@ private struct ClampedText: View {
       .lineLimit(lineLimit)
       .truncationMode(truncationMode)
       .fixedSize(horizontal: false, vertical: true)
-      .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-        shownHeight = $0
-        updateTruncation()
-      }
+      .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { shownHeight = $0 }
       .background(alignment: .topLeading) {
         Text(text)
           .fixedSize(horizontal: false, vertical: true)
           .hidden()
           .accessibilityHidden(true)
-          .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-            fullHeight = $0
-            updateTruncation()
-          }
+          .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { fullHeight = $0 }
       }
-  }
-
-  private func updateTruncation() {
-    let truncated = fullHeight > shownHeight + 1
-    if isTruncated != truncated { isTruncated = truncated }
+      // 两份都量出来以后才比较，免得只量到一份时误报。
+      .preference(key: TextTruncatedKey.self, value: shownHeight > 0 && fullHeight > shownHeight + 1)
   }
 }

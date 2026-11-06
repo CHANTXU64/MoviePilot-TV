@@ -66,21 +66,21 @@ final class SubscribeSheetViewModelTests: XCTestCase {
 
   /// 只有「加载失败且不能重试」才需要关掉重开（面板据此把主按钮换成「关闭」）；能重试或没出错时都不是。
   /// 只验证判断本身；生产路径上这个状态很难构造，按钮焦点需真机确认。
-  func testRequiresReopenOnlyWhenLoadFailedWithoutRetry() {
+  func testMustCloseOnlyWhenLoadFailedWithoutRetry() {
     let viewModel = SubscribeSheetViewModel(
       subscribe: Subscribe(id: nil, name: "重开", type: "电影"), isNewSubscription: true)
-    XCTAssertFalse(viewModel.requiresReopen)
+    XCTAssertFalse(viewModel.mustClose)
 
     viewModel.loadErrorMessage = "订阅准备失败，请重试。"
     viewModel.canRetryLoad = true
-    XCTAssertFalse(viewModel.requiresReopen)
+    XCTAssertFalse(viewModel.mustClose)
 
     viewModel.loadErrorMessage = "订阅没有准备完成，请关闭后重新打开。"
     viewModel.canRetryLoad = false
-    XCTAssertTrue(viewModel.requiresReopen)
+    XCTAssertTrue(viewModel.mustClose)
 
     viewModel.loadErrorMessage = nil
-    XCTAssertFalse(viewModel.requiresReopen)
+    XCTAssertFalse(viewModel.mustClose)
   }
 
   func testEditInfoUsesSavedProgressAndState() {

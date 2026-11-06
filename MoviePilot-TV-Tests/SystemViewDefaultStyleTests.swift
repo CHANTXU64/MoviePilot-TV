@@ -496,21 +496,16 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let appRoot = testFileURL.deletingLastPathComponent().deletingLastPathComponent()
       .appendingPathComponent("MoviePilot-TV")
     let enumerator = try XCTUnwrap(FileManager.default.enumerator(at: appRoot, includingPropertiesForKeys: nil))
-    let labeledLiteral = try NSRegularExpression(
-      pattern: #"(systemName|systemImage|icon)\s*:\s*"[a-z0-9]"#)
-    let dottedLiteral = try NSRegularExpression(pattern: #""([a-z0-9]+(?:\.[a-z0-9]+)+)""#)
     var checked = 0
     for case let url as URL in enumerator where url.pathExtension == "swift" {
       guard url.lastPathComponent != "AppSymbol.swift" else { continue }
       let source = try String(contentsOf: url, encoding: .utf8)
-      let range = NSRange(source.startIndex..., in: source)
-      XCTAssertNil(
-        labeledLiteral.firstMatch(in: source, range: range),
-        "\(url.lastPathComponent) 里直接写了图标名，请改用 AppSymbol。")
-      let bareSymbols = dottedLiteral.matches(in: source, range: range).compactMap { match in
-        Range(match.range(at: 1), in: source).map { String(source[$0]) }
-      }.filter { UIImage(systemName: $0) != nil }
-      XCTAssertEqual(bareSymbols, [], "\(url.lastPathComponent) 里直接写了图标名，请改用 AppSymbol。")
+      let message = "\(url.lastPathComponent) 里直接写了图标名，请改用 AppSymbol。"
+      XCTAssertFalse(source.contains(#/(systemName|systemImage|icon)\s*:\s*"[a-z0-9]/#), message)
+      let bareSymbols = source.matches(of: #/"([a-z0-9]+(?:\.[a-z0-9]+)+)"/#)
+        .map { String($0.1) }
+        .filter { UIImage(systemName: $0) != nil }
+      XCTAssertEqual(bareSymbols, [], message)
       checked += 1
     }
     XCTAssertGreaterThan(checked, 50)
@@ -520,14 +515,8 @@ final class SystemViewDefaultStyleTests: XCTestCase {
   /// 确实同一个意思的地方写成别名（`static let season = tv`），不重复写图标名。
   func testAppSymbolNamesAreUniqueAndResolvableInSource() throws {
     let source = try Self.source(at: "MoviePilot-TV/Views/Components/AppSymbol.swift")
-    let declaration = try NSRegularExpression(pattern: #"static let (\w+) = "([^"]+)""#)
-    let names = declaration.matches(in: source, range: NSRange(source.startIndex..., in: source))
-      .compactMap { match -> (constant: String, symbol: String)? in
-        guard let constant = Range(match.range(at: 1), in: source),
-          let symbol = Range(match.range(at: 2), in: source)
-        else { return nil }
-        return (String(source[constant]), String(source[symbol]))
-      }
+    let names = source.matches(of: #/static let (\w+) = "([^"]+)"/#)
+      .map { (constant: String($0.1), symbol: String($0.2)) }
     XCTAssertGreaterThan(names.count, 50)
 
     let duplicates = Dictionary(grouping: names, by: \.symbol).filter { $0.value.count > 1 }
@@ -555,7 +544,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(sheetStyleSource.contains("struct SheetFeedbackView: View"))
     XCTAssertTrue(sheetStyleSource.contains("struct SheetActionButton: View"))
     XCTAssertTrue(sheetStyleSource.contains("guard !isLoading else { return }"))
-    XCTAssertTrue(sheetStyleSource.contains(".disabled(isDisabled)"))
+    XCTAssertTrue(sheetStyleSource.contains(".disabled(isDisabled && !closesSheet)"))
     XCTAssertFalse(sheetStyleSource.contains(".disabled(isLoading || isDisabled)"))
     XCTAssertTrue(subscribePanelSource.contains("SheetActionButton("))
     XCTAssertTrue(reorganizeSheetSource.contains("SheetActionButton("))
@@ -570,7 +559,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     }
     XCTAssertTrue(forkSource.contains("SheetActionButton("))
     XCTAssertTrue(forkSource.contains("SheetCompactPanel {"))
-    XCTAssertTrue(subscribePanelSource.contains("title: mustClose ? \"关闭\" : isNew ? \"订阅\" : \"保存\""))
+    XCTAssertTrue(subscribePanelSource.contains("title: isNew ? \"订阅\" : \"保存\""))
     XCTAssertTrue(subscribeSheetSource.contains("@State private var isSaveAttemptInFlight = false"))
     XCTAssertTrue(subscribeSheetSource.contains("isSaving: isSaveAttemptInFlight"))
     XCTAssertTrue(subscribeSheetSource.contains("guard !isSaveAttemptInFlight else { return }"))

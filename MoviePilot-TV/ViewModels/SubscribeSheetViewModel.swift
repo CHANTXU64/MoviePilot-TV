@@ -127,10 +127,8 @@ class SubscribeSheetViewModel: ObservableObject {
   /// 不改成别的范围，免得和实际保存的开始集数对不上。
   var episodeRangeText: String? {
     guard isTV, let total = subscribe.total_episode, total > 0 else { return nil }
-    let start = subscribe.start_episode ?? 0
-    if start == 0 { return "1–\(total) 集" }
-    if (1...total).contains(start) { return "\(start)–\(total) 集" }
-    return "第 \(start) 集起，共 \(total) 集"
+    let start = subscribe.start_episode.flatMap { $0 == 0 ? nil : $0 } ?? 1
+    return (1...total).contains(start) ? "\(start)–\(total) 集" : "第 \(start) 集起，共 \(total) 集"
   }
 
   /// 编辑订阅的进度，例如「已有 3 / 6 集」，按已保存的记录算，不随正在改的设置变化。
@@ -388,7 +386,7 @@ class SubscribeSheetViewModel: ObservableObject {
   }
 
   /// 加载失败且不能重试（已创建的订阅不再属于当前登录），只能关掉重新打开。
-  var requiresReopen: Bool {
+  var mustClose: Bool {
     loadErrorMessage != nil && !canRetryLoad
   }
 

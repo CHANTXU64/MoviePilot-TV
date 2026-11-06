@@ -76,23 +76,25 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
     return false
   }
   static let invalidatedMessage = "登录状态已更新，请关闭后重新搜索字幕。"
+  static let noSearchPermissionMessage = "当前账号没有搜索权限，无法下载字幕。"
 
-  var failure: String? {
-    switch state {
-    case .failed(let message): message
-    case .invalidated: Self.invalidatedMessage
-    default: nil
-    }
-  }
-
-  /// 登录已变或没有了搜索权限：这个面板只能关掉重新搜索。设置都不可用，主按钮改成「关闭」，
-  /// 保证面板里还有能聚焦的东西。
+  /// 登录已变或没有了搜索权限：这个面板只能关掉。设置都不可用，主按钮变成「关闭」。
   var mustClose: Bool {
     switch state {
     case .invalidated: true
     case .editing, .failed: !isSessionValid
     default: false
     }
+  }
+
+  /// 面板上优先显示的原因：只能关掉时说明是登录变了还是没有权限，其次是下载失败。
+  var failure: String? {
+    if mustClose {
+      return apiService.isSessionUnchanged(from: session)
+        ? Self.noSearchPermissionMessage : Self.invalidatedMessage
+    }
+    if case .failed(let message) = state { return message }
+    return nil
   }
   private var normalizedMediaId: String {
     mediaId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -104,7 +106,7 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
   /// 最后是媒体 ID 还没填好。和 `canSubmit` 用同一套判断，按钮不可用时一定有原因可看。
   var statusMessage: String? {
     if let failure { return failure }
-    guard canEdit else { return mustClose ? Self.invalidatedMessage : nil }
+    guard canEdit else { return nil }
     if let directoryError { return directoryError }
     if normalizedMediaId.isEmpty { return Self.missingMediaIdMessage }
     return mediaSource.isValidManualId(normalizedMediaId)

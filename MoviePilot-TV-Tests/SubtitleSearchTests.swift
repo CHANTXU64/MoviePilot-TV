@@ -990,7 +990,7 @@ final class SubtitleSearchTests: XCTestCase {
     XCTAssertTrue(model.mustClose)
   }
 
-  /// 没有搜索权限（登录没变）时同样只能关掉：主按钮是「关闭」，提示写明原因。
+  /// 没有搜索权限（登录没变）时同样只能关掉：主按钮是「关闭」，提示说的是没有权限，不说登录变了。
   func testSubtitleDownloadWithoutSearchPermissionMustClose() {
     let model = downloadModel(api: service(search: false))
     model.mediaId = "550"
@@ -998,7 +998,7 @@ final class SubtitleSearchTests: XCTestCase {
     XCTAssertFalse(model.canEdit)
     XCTAssertFalse(model.canSubmit)
     XCTAssertTrue(model.mustClose)
-    XCTAssertEqual(model.statusMessage, SubtitleDownloadViewModel.invalidatedMessage)
+    XCTAssertEqual(model.statusMessage, SubtitleDownloadViewModel.noSearchPermissionMessage)
   }
 
   func testSubtitleResultsObserveRootAndDetailLifecycleAfterReplacingSearch() async throws {

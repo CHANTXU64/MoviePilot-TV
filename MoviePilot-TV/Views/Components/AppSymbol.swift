@@ -60,6 +60,7 @@ nonisolated enum AppSymbol {
 
   // MARK: 信息
 
+  /// 季属于电视剧，和电视剧同一个图标。
   static let season = tv
   /// 集数、集数范围、剧集数。
   static let episodes = "list.number"
@@ -95,7 +96,7 @@ nonisolated enum AppSymbol {
   static let subscriptionPending = "hourglass"
   /// 正在加载（如详情页按季订阅按钮在等季信息）。
   static let loading = "ellipsis.circle"
-  /// 对勾表示「是 / 已完成」：操作成功、已订阅、已勾选都用它（见 `subscribed`、`selected`）。
+  /// 对勾表示「是 / 已完成」。
   static let success = "checkmark.circle.fill"
   static let failure = "xmark.circle.fill"
   /// 警告，也用于「没加载出来」这类可以重试的失败。

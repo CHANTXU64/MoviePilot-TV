@@ -11,11 +11,10 @@ import SwiftUI
 /// 变大后按 Menu 关闭整个 Sheet（系统行为），不退回快速面板。
 ///
 /// 出错统一处理：加载失败、订阅（保存）失败、之后启用或搜索失败，都在按钮上方显示一行原因，
-/// 能重试时下面再放一个「重试」；「订阅」「订阅设置」不换不藏，默认焦点仍在「订阅」。
+/// 能重试时下面再放一个「重试」；「订阅」「订阅设置」不藏，默认焦点仍在「订阅」。
 /// 加载失败时直接按「订阅」或「订阅设置」也会先重新加载，成功后接着做。
-/// 加载失败又不能重试（需要关掉重开）时，主按钮改成「关闭」，面板里始终有能聚焦的按钮。
+/// 加载失败又不能重试（需要关掉重开）时，「订阅设置」不可用，主按钮变成「关闭」。
 struct SubscribePanel: View {
-  @Environment(\.dismiss) private var dismiss
   @ObservedObject var viewModel: SubscribeSheetViewModel
   let isSaving: Bool
   let onSubscribe: () -> Void
@@ -74,7 +73,7 @@ struct SubscribePanel: View {
             .frame(maxWidth: .infinity)
         }
         // 保存中、只能关掉重开时不再进入设置。
-        .disabled(isSaving || viewModel.requiresReopen)
+        .disabled(isSaving || viewModel.mustClose)
       }
       .padding(.top, 32)
     }
@@ -216,21 +215,14 @@ struct SubscribePanel: View {
     }
   }
 
-  /// 只能关掉重开时变成「关闭」：仍是同一个按钮，焦点不跳。
   private func subscribeButton(focus: FocusState<Bool>.Binding?) -> some View {
     let isNew = viewModel.isNewSubscription
-    let mustClose = viewModel.requiresReopen
     return SheetActionButton(
-      title: mustClose ? "关闭" : isNew ? "订阅" : "保存",
-      systemImage: mustClose ? nil : isNew ? AppSymbol.subscribe : AppSymbol.save,
+      title: isNew ? "订阅" : "保存", systemImage: isNew ? AppSymbol.subscribe : AppSymbol.save,
       loadingTitle: viewModel.isLoading ? "加载中" : isNew ? "订阅中" : "保存中",
-      isLoading: isSaving || isReloading || viewModel.isLoading, focus: focus
+      isLoading: isBusy, closesSheet: viewModel.mustClose, focus: focus
     ) {
-      if viewModel.requiresReopen {
-        dismiss()
-      } else {
-        afterLoaded(onSubscribe)
-      }
+      afterLoaded(onSubscribe)
     }
   }
 

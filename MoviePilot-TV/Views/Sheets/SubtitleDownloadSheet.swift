@@ -55,21 +55,17 @@ struct SubtitleDownloadSheet: View {
         isConfirmFocused = true
       }
 
-      // 登录失效后设置全部不可用，「下载」改成「关闭」：仍是同一个按钮，焦点不跳，面板里也总有能按的东西。
+      // 登录失效或没有搜索权限时设置都不可用，「下载」变成「关闭」；收尾由打开它的页面做。
       SheetActionButton(
-        title: viewModel.mustClose ? "关闭" : "下载",
-        systemImage: viewModel.mustClose ? nil : AppSymbol.download,
+        title: "下载",
+        systemImage: AppSymbol.download,
         loadingTitle: "下载中",
         isLoading: viewModel.isSubmitting,
-        isDisabled: !viewModel.mustClose && !viewModel.canSubmit && !viewModel.isSubmitting,
+        isDisabled: !viewModel.canSubmit && !viewModel.isSubmitting,
+        closesSheet: viewModel.mustClose,
         focus: $isConfirmFocused
       ) {
-        if viewModel.mustClose {
-          viewModel.close()
-          dismiss()
-        } else {
-          viewModel.submit()
-        }
+        viewModel.submit()
       }
       .padding(.top, 28)
     }
