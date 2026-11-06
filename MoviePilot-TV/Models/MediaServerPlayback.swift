@@ -328,27 +328,63 @@ nonisolated struct EmbyPlaybackInfo: Decodable, Sendable {
 }
 
 /// Emby 列表接口的分页结构（`/Shows/{id}/Episodes` 等）。
-/// 详情页条目在服务器上应有的样子：Emby 条目类型，以及 MoviePilot 入库查询所用的外部编号（如 TMDB）。
-/// 详情页只拿到不带服务器名的条目 ID，不同服务器的数字 ID 会撞号：类型不符，或带着同来源编号却对不上的条目，
-/// 都不是要播的那一个。条目没有这个来源的编号时只比类型。
+/// 详情页条目在服务器上应有的样子：Emby 条目类型，以及详情里已知的外部编号（TMDB、IMDb、TVDB、豆瓣、Bangumi）。
+/// 详情页只拿到 MoviePilot 入库表里不带服务器名的条目 ID，它可能来自别的服务器，不同服务器的数字 ID 还会撞号。
 nonisolated struct LibraryItemExpectation: Equatable, Sendable {
   /// Emby 条目类型（`Movie` / `Series`）；MoviePilot 媒体类型无法对应时为 nil，不比类型。
   let type: String?
-  let identity: MediaIdentity?
+  /// 来源（小写，`themoviedb` 记作 `tmdb`）→ 编号。
+  let externalIDs: [String: String]
 
-  init(mediaType: String?, identity: MediaIdentity?) {
+  init(mediaType: String?, externalIDs: [String: String]) {
     switch mediaType {
     case "电影": type = "Movie"
     case "电视剧": type = "Series"
     default: type = nil
     }
-    self.identity = identity
+    var normalized: [String: String] = [:]
+    for (source, value) in externalIDs {
+      let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !value.isEmpty else { continue }
+      normalized[Self.normalizedSource(source)] = value
+    }
+    self.externalIDs = normalized
   }
 
-  func matches(_ item: EmbyItem) -> Bool {
+  /// 详情页：详情里的各个外部编号，加上入库查询所用的主身份（两者不一致时以主身份为准）。
+  init(media: MediaInfo) {
+    var ids: [String: String] = [:]
+    ids["tmdb"] = media.tmdb_id.map(String.init)
+    ids["imdb"] = media.imdb_id
+    ids["tvdb"] = media.tvdb_id.map(String.init)
+    ids["douban"] = media.douban_id
+    ids["bangumi"] = media.bangumi_id.map(String.init)
+    if let identity = media.identity { ids[Self.normalizedSource(identity.source)] = identity.mediaId }
+    self.init(mediaType: media.type, externalIDs: ids)
+  }
+
+  private static func normalizedSource(_ source: String) -> String {
+    let source = source.lowercased()
+    return source == "themoviedb" ? "tmdb" : source
+  }
+
+  /// 条目是不是要播的那一个。类型不符，或带着同来源编号却对不上的，都不是。
+  /// `strict`（启用了多台服务器）时还须至少有一个外部编号对得上：别的服务器上同号的条目常常没刮削、没有编号，
+  /// 只看类型会播错片。详情页本来就没有外部编号时只能比类型。
+  func accepts(_ item: EmbyItem, strict: Bool) -> Bool {
     if let type, item.type != type { return false }
-    guard let identity, let providerID = item.providerID(for: identity.source) else { return true }
-    return providerID.caseInsensitiveCompare(identity.mediaId) == .orderedSame
+    var matched = false
+    for (source, value) in externalIDs {
+      guard let id = item.providerID(for: source) else { continue }
+      guard id.caseInsensitiveCompare(value) == .orderedSame else { return false }
+      matched = true
+    }
+    return matched || !strict || externalIDs.isEmpty
+  }
+
+  /// 按外部编号搜索用的参数（Emby `AnyProviderIdEquals`，如 `tmdb.12345`），只取 Emby 自带刮削器会写的来源。
+  var providerSearchKeys: [String] {
+    ["tmdb", "imdb", "tvdb"].compactMap { source in externalIDs[source].map { "\(source).\($0)" } }
   }
 }
 

@@ -130,6 +130,25 @@ struct EmbyClient {
     }
   }
 
+  /// 按外部编号找条目（`AnyProviderIdEquals`，如 `tmdb.12345`），返回的是这台服务器自己的条目 ID。
+  /// 不认识这个参数的服务器会返回不相干的条目，调用方须再核对返回条目的类型和编号。
+  func items(
+    withAnyProviderID keys: [String], type: String?, userID: String, timeout: TimeInterval? = nil
+  ) async throws -> [EmbyItem] {
+    let data = try await send(
+      url(
+        ["Users", userID, "Items"],
+        query: [
+          "Recursive": "true",
+          "AnyProviderIdEquals": keys.joined(separator: ","),
+          "IncludeItemTypes": type,
+          "Fields": "ProviderIds",
+          "Limit": "20",
+        ]),
+      timeout: timeout)
+    return try decode(EmbyItemsPage.self, from: data).items
+  }
+
   /// 剧集的全部集（按 Emby 顺序，带用户观看数据），不含缺失的集。
   func episodes(seriesID: String, userID: String) async throws -> [EmbyItem] {
     let data = try await send(

@@ -4,10 +4,10 @@ import MPVUI
 
 /// 应用内播放的入口目标。
 enum PlaybackTarget: Equatable {
-  /// 详情页：MoviePilot 媒体库同步表里的条目 ID，不知道属于哪台服务器。
-  /// 不同服务器的数字 ID 会撞号，起播时只认符合 `expected`（类型、外部编号）的条目。
+  /// 详情页：MoviePilot 媒体库同步表里的条目 ID，不知道属于哪台服务器，也可能是别的服务器上的 ID。
+  /// 起播时在各台 Emby 上按 `expected`（类型、外部编号）找条目，见 `PlaybackCoordinator.findLibraryItem`。
   case libraryItem(itemID: String, expected: LibraryItemExpectation)
-  /// 已知服务器名称和条目 ID（首页“最近添加”，或详情页已在 Emby 上确认归属）。
+  /// 已知服务器名称和这台服务器自己的条目 ID（首页“最近添加”，或详情页已在 Emby 上找到）。
   case serverItem(serverName: String, itemID: String)
 }
 
@@ -243,9 +243,9 @@ final class PlaybackCoordinator: ObservableObject {
   }
 
   /// 详情页的条目 ID 不带服务器名，可能来自任何一台媒体服务器，不同服务器的数字 ID 还会撞号（多台 Emby 之间也会）。
-  /// 只启用了一台服务器（且是可播放的 Emby）时 ID 只可能来自它，不必确认，起播时仍按 `expected` 核对；
-  /// 否则在每台可播放的 Emby 上确认归属，按类型和外部编号核对，第一台相符的为准。
-  /// 确认不在任何一台上时返回 nil（不显示播放）；无法确认（连不上等）时仍返回媒体库条目，起播时再逐台核对。
+  /// 只启用了一台服务器（且是可播放的 Emby）时 ID 只可能来自它，不必确认，起播时再找；
+  /// 否则在每台可播放的 Emby 上找这个条目（见 `findLibraryItem`），第一台找到的为准，用它自己的条目 ID。
+  /// 确认不在任何一台上时返回 nil（不显示播放）；无法确认（连不上等）时仍返回媒体库条目，起播时再逐台找。
   func locateLibraryItem(
     _ itemID: String, expected: LibraryItemExpectation, in servers: [MediaServerConf]
   ) async -> PlaybackTarget? {
@@ -260,16 +260,38 @@ final class PlaybackCoordinator: ObservableObject {
     for server in playable {
       do {
         let found = try await withConnection(to: server, preferredUserName: userName) {
-          let item = try await $0.client.item(id: itemID, userID: $0.userID, timeout: EmbyClient.quickTimeout)
-          return item.map(expected.matches) ?? false
+          try await Self.findLibraryItem(itemID, expected: expected, strict: true, on: $0)
         }
-        if found { return .serverItem(serverName: server.name, itemID: itemID) }
+        if let found { return .serverItem(serverName: server.name, itemID: found.id) }
       } catch {
         if error is CancellationError || Task.isCancelled { return nil }
         isUncertain = true
       }
     }
     return isUncertain ? libraryItem : nil
+  }
+
+  /// 在一台 Emby 上找详情页的条目，返回这台服务器自己的条目（ID 可能与 MoviePilot 给的不同）。
+  /// 先按外部编号搜索，同一部片在各台服务器上的 ID 不同也能找到；搜不到再看 MoviePilot 给的 ID 在这台上是不是它。
+  /// `strict`（启用了多台服务器）时外部编号必须对得上，见 `LibraryItemExpectation.accepts`。
+  private static func findLibraryItem(
+    _ itemID: String, expected: LibraryItemExpectation, strict: Bool, on connection: EmbyConnection
+  ) async throws -> EmbyItem? {
+    let keys = expected.providerSearchKeys
+    if !keys.isEmpty {
+      do {
+        let found = try await connection.client.items(
+          withAnyProviderID: keys, type: expected.type, userID: connection.userID, timeout: EmbyClient.quickTimeout)
+        if let item = found.first(where: { expected.accepts($0, strict: true) }) { return item }
+      } catch EmbyClientError.http(_) {
+        // 搜索被拒绝时退回按 ID 查；连不上等错误照常抛出。
+      }
+    }
+    guard
+      let item = try await connection.client.item(
+        id: itemID, userID: connection.userID, timeout: EmbyClient.quickTimeout)
+    else { return nil }
+    return expected.accepts(item, strict: strict) ? item : nil
   }
 
   // MARK: - 解析
@@ -319,18 +341,22 @@ final class PlaybackCoordinator: ObservableObject {
       candidates = [server]
     }
 
-    // 媒体库条目逐台确认归属，第一台找到且类型、外部编号相符的为准。MoviePilot `/mediaserver/play` 只认第一台找到的，
-    // 这里多做核对：撞号到别的服务器上不相符的条目时继续找，不播错片。
+    // 媒体库条目逐台找，第一台找到的为准。MoviePilot `/mediaserver/play` 只拿 ID 逐台试、认第一台有这个 ID 的，
+    // 这里按外部编号找、核对类型，撞号时不播错片，各台 ID 不同也能找到。
+    let strict = servers.filter(\.isEnabled).count > 1
     var firstError: Error?
     for server in candidates {
       do {
         let prepared = try await withConnection(to: server, preferredUserName: preferredUserName) {
           connection -> PreparedPlayback? in
-          guard
-            let item = try await connection.client.item(
-              id: itemID, userID: connection.userID, timeout: EmbyClient.quickTimeout),
-            expected?.matches(item) ?? true
-          else { return nil }
+          let found: EmbyItem?
+          if let expected {
+            found = try await Self.findLibraryItem(itemID, expected: expected, strict: strict, on: connection)
+          } else {
+            found = try await connection.client.item(
+              id: itemID, userID: connection.userID, timeout: EmbyClient.quickTimeout)
+          }
+          guard let item = found else { return nil }
           return try await Self.preparePlayback(client: connection.client, userID: connection.userID, item: item)
         }
         if let prepared { return prepared }

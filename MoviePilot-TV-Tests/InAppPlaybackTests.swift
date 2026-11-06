@@ -12,19 +12,31 @@ final class InAppPlaybackModelTests: XCTestCase {
   func testLibraryItemExpectationComparesTypeAndExternalID() throws {
     let movie = try decode(
       EmbyItem.self, #"{"Id":"7","Type":"Movie","ProviderIds":{"Tmdb":"222","IMDB":"tt0001","douban_id":" 35 "}}"#)
-    func expect(_ mediaType: String, _ source: String?, _ id: String = "") -> Bool {
-      LibraryItemExpectation(
-        mediaType: mediaType, identity: source.map { MediaIdentity(source: $0, mediaId: id) }
-      ).matches(movie)
+    let bare = try decode(EmbyItem.self, #"{"Id":"8","Type":"Movie"}"#)
+    func expect(_ ids: [String: String], type mediaType: String = "电影") -> LibraryItemExpectation {
+      LibraryItemExpectation(mediaType: mediaType, externalIDs: ids)
     }
-    XCTAssertTrue(expect("电影", "tmdb", "222"))
-    XCTAssertTrue(expect("电影", "themoviedb", "222"), "themoviedb 与 tmdb 是同一来源")
-    XCTAssertFalse(expect("电影", "tmdb", "111"), "同来源编号对不上")
-    XCTAssertTrue(expect("电影", "imdb", "TT0001"), "键名和编号不区分大小写")
-    XCTAssertTrue(expect("电影", "douban", "35"), "认 douban_id 写法，去掉首尾空白")
-    XCTAssertTrue(expect("电影", "bangumi", "9"), "条目没有这个来源的编号时只比类型")
-    XCTAssertTrue(expect("电影", nil))
-    XCTAssertFalse(expect("电视剧", "tmdb", "222"), "类型不符")
+    XCTAssertTrue(expect(["tmdb": "222"]).accepts(movie, strict: true))
+    XCTAssertTrue(expect(["themoviedb": "222"]).accepts(movie, strict: true), "themoviedb 与 tmdb 是同一来源")
+    XCTAssertFalse(expect(["tmdb": "111"]).accepts(movie, strict: false), "同来源编号对不上")
+    XCTAssertFalse(expect(["tmdb": "222", "imdb": "tt9999"]).accepts(movie, strict: false), "任一编号冲突都不算")
+    XCTAssertTrue(expect(["imdb": "TT0001"]).accepts(movie, strict: true), "键名和编号不区分大小写")
+    XCTAssertTrue(expect(["douban": "35"]).accepts(movie, strict: true), "认 douban_id 写法，去掉首尾空白")
+    XCTAssertFalse(expect(["tmdb": "222"], type: "电视剧").accepts(movie, strict: false), "类型不符")
+
+    XCTAssertTrue(expect(["tmdb": "222"]).accepts(bare, strict: false), "一台服务器：没有编号也算")
+    XCTAssertFalse(expect(["tmdb": "222"]).accepts(bare, strict: true), "多台服务器：没有编号能对上不算")
+    XCTAssertTrue(expect([:]).accepts(bare, strict: true), "详情页没有外部编号时只能比类型")
+  }
+
+  func testLibraryItemExpectationCollectsDetailExternalIDs() {
+    let media = MediaInfo(
+      tmdb_id: 222, douban_id: "35", imdb_id: " tt0001 ", tvdb_id: 9, source: "themoviedb", media_id: "222",
+      type: "电视剧")
+    let expected = LibraryItemExpectation(media: media)
+    XCTAssertEqual(expected.type, "Series")
+    XCTAssertEqual(expected.externalIDs, ["tmdb": "222", "douban": "35", "imdb": "tt0001", "tvdb": "9"])
+    XCTAssertEqual(expected.providerSearchKeys, ["tmdb.222", "imdb.tt0001", "tvdb.9"], "只搜 Emby 刮削器会写的来源")
   }
 
   func testConnectionConfigReadsAlternateKeyNamesAndIgnoresBlankOrMistypedFields() throws {
@@ -683,6 +695,36 @@ final class PlaybackCoordinatorTests: XCTestCase {
     coordinator.endSession()
   }
 
+  func testLibraryItemPlaysEmbyItemFoundByExternalID() async throws {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "a", host: "lan.playback-tests.local")),\(Self.plexServer)]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.providerSearch = ["lan.playback-tests.local|tmdb.222": Self.movie(id: "731", tmdb: "222")]
+      $0.items = ["lan.playback-tests.local|731": Self.movie(id: "731", tmdb: "222")]
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .libraryItem(itemID: "42", expected: expectation(tmdb: "222")))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(streamURL(coordinator)?.path, "/Videos/731/stream.mp4")
+    coordinator.endSession()
+  }
+
+  func testSingleServerPlaysLibraryItemWithoutExternalID() async throws {
+    // 只启用了一台服务器时 ID 只可能来自它，条目没刮削编号也照常播放。
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "a", host: "lan.playback-tests.local"))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = ["lan.playback-tests.local|m1": Self.movie()]
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .libraryItem(itemID: "m1", expected: expectation(tmdb: "222")))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(coordinator.session?.item.id, "m1")
+    coordinator.endSession()
+  }
+
   func testLibraryItemSkipsSameIDAndTypeWithOtherExternalID() async throws {
     PlaybackURLProtocol.stub.configure {
       $0.mediaServers =
@@ -801,11 +843,12 @@ final class PlaybackCoordinatorTests: XCTestCase {
 
   /// 详情页条目的期望：默认电影、不带外部编号（只比类型）。
   private func expectation(_ mediaType: String = "电影", tmdb: String? = nil) -> LibraryItemExpectation {
-    LibraryItemExpectation(mediaType: mediaType, identity: tmdb.map { MediaIdentity(source: "tmdb", mediaId: $0) })
+    LibraryItemExpectation(mediaType: mediaType, externalIDs: tmdb.map { ["tmdb": $0] } ?? [:])
   }
 
-  private static func movie(id: String, tmdb: String) -> String {
-    #"{"Id":"\#(id)","Name":"测试电影","Type":"Movie","RunTimeTicks":\#(twoHours),"ProviderIds":{"Tmdb":"\#(tmdb)"}}"#
+  private static func movie(id: String, tmdb: String?) -> String {
+    let providerIDs = tmdb.map { #","ProviderIds":{"Tmdb":"\#($0)"}"# } ?? ""
+    return #"{"Id":"\#(id)","Name":"测试电影","Type":"Movie","RunTimeTicks":\#(twoHours)\#(providerIDs)}"#
   }
 
   func testDetailPageMatchesExternalIDWhenSameIDAndTypeCollide() async throws {
@@ -830,17 +873,53 @@ final class PlaybackCoordinatorTests: XCTestCase {
     XCTAssertNil(neither, "两台都对不上就不显示播放")
   }
 
-  func testDetailPageFallsBackToTypeWhenItemHasNoExternalID() async throws {
+  func testSeveralServersRequireExternalIDMatchNotJustType() async throws {
     let servers = try servers(
       Self.embyServer(name: "a", host: "lan.playback-tests.local"),
       Self.embyServer(name: "b", host: "wan.playback-tests.local"))
     PlaybackURLProtocol.stub.configure {
       $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
-      $0.items = ["wan.playback-tests.local|m1": Self.movie()]
+      // a 上的 7 是没刮削的电影（没有 TMDB 编号），b 上的 7 才是 TMDB 222。
+      $0.items = [
+        "lan.playback-tests.local|7": Self.movie(id: "7"),
+        "wan.playback-tests.local|7": Self.movie(id: "7", tmdb: "222"),
+      ]
     }
     let coordinator = makeCoordinator(makeService())
-    let target = await coordinator.locateLibraryItem("m1", expected: expectation(tmdb: "222"), in: servers)
-    XCTAssertEqual(target, .serverItem(serverName: "b", itemID: "m1"), "条目没有 TMDB 编号时只比类型")
+    let target = await coordinator.locateLibraryItem("7", expected: expectation(tmdb: "222"), in: servers)
+    XCTAssertEqual(target, .serverItem(serverName: "b", itemID: "7"), "多台服务器时只有类型相符不算找到")
+
+    PlaybackURLProtocol.stub.configure { $0.items = ["lan.playback-tests.local|7": Self.movie(id: "7")] }
+    let unconfirmed = await coordinator.locateLibraryItem("7", expected: expectation(tmdb: "222"), in: servers)
+    XCTAssertNil(unconfirmed, "编号对不上的条目不显示播放")
+  }
+
+  func testDetailPageFindsEmbyItemByExternalIDWhenServerIDsDiffer() async throws {
+    // MoviePilot 给的 42 是 Plex 上的 ID；同一部片在 Emby 上是 731。
+    let servers = try servers(Self.embyServer(name: "a", host: "lan.playback-tests.local"), Self.plexServer)
+    PlaybackURLProtocol.stub.configure {
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.providerSearch = ["lan.playback-tests.local|tmdb.222": Self.movie(id: "731", tmdb: "222")]
+    }
+    let coordinator = makeCoordinator(makeService())
+    let target = await coordinator.locateLibraryItem("42", expected: expectation(tmdb: "222"), in: servers)
+    XCTAssertEqual(target, .serverItem(serverName: "a", itemID: "731"), "用 Emby 自己的条目 ID")
+    let search = try XCTUnwrap(PlaybackURLProtocol.stub.requests().first { $0.url.path.hasSuffix("/Items") })
+    let query = URLComponents(url: search.url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+    XCTAssertTrue(query.contains(URLQueryItem(name: "AnyProviderIdEquals", value: "tmdb.222")))
+    XCTAssertTrue(query.contains(URLQueryItem(name: "IncludeItemTypes", value: "Movie")))
+  }
+
+  func testDetailPageIgnoresSearchResultsThatDoNotMatch() async throws {
+    // 不认识搜索参数的服务器会返回不相干的条目，要再核对编号。
+    let servers = try servers(Self.embyServer(name: "a", host: "lan.playback-tests.local"), Self.plexServer)
+    PlaybackURLProtocol.stub.configure {
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.providerSearch = ["lan.playback-tests.local|tmdb.222": Self.movie(id: "5", tmdb: "999")]
+    }
+    let coordinator = makeCoordinator(makeService())
+    let target = await coordinator.locateLibraryItem("42", expected: expectation(tmdb: "222"), in: servers)
+    XCTAssertNil(target)
   }
 
   func testDetailPageSkipsEmbyLookupWhenOnlyEnabledServerIsPlayableEmby() async throws {
@@ -1151,6 +1230,8 @@ private final class PlaybackStub: @unchecked Sendable {
     var playbackInfo = #"{"MediaSources":[]}"#
     /// `host|seriesID` → 剧集列表 JSON
     var episodes: [String: String] = [:]
+    /// `host|tmdb.123` → 按外部编号搜索（`AnyProviderIdEquals`）能找到的条目 JSON
+    var providerSearch: [String: String] = [:]
     var usersGate: DispatchSemaphore?
     var playbackInfoGate: DispatchSemaphore?
   }
@@ -1240,6 +1321,11 @@ private final class PlaybackURLProtocol: URLProtocol {
     } else if path.hasSuffix("/PlaybackInfo") {
       scenario.playbackInfoGate?.wait()
       respond(200, scenario.playbackInfo)
+    } else if recorded.method == "GET", path.hasSuffix("/Items") {
+      let keys = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+        .first { $0.name == "AnyProviderIdEquals" }?.value?.split(separator: ",") ?? []
+      let found = keys.compactMap { scenario.providerSearch["\(host)|\($0)"] }
+      respond(200, #"{"Items":[\#(found.joined(separator: ","))]}"#)
     } else if recorded.method == "GET", path.contains("/Items/") {
       let itemID = url.lastPathComponent
       if let item = scenario.items["\(host)|\(itemID)"] {

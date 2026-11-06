@@ -522,11 +522,10 @@ class MediaDetailViewModel: ObservableObject {
     if showsLibraryState { isInLibrary = itemID != nil }
     guard let itemID, offersPlayback else { return }
     do {
-      // 入库查询返回的条目 ID 不带服务器名，也可能属于 Plex、Jellyfin：需要时先在 Emby 上确认归属。
-      // 入库查询按这个身份匹配，服务器上的真条目带着同一个外部编号。
+      // 入库查询返回的条目 ID 不带服务器名，也可能属于 Plex、Jellyfin：需要时先在 Emby 上按外部编号找到它。
       let servers = try await apiService.fetchCachedMediaServers()
       guard servers.contains(where: \.supportsInAppPlayback) else { return }
-      let expected = LibraryItemExpectation(mediaType: detail.type, identity: detail.identity)
+      let expected = LibraryItemExpectation(media: detail)
       let target = await coordinator.locateLibraryItem(itemID, expected: expected, in: servers)
       guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot) else { return }
       inAppPlaybackTarget = target
