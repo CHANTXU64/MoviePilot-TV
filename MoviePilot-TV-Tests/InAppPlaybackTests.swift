@@ -1,3 +1,4 @@
+import MPVUI
 import XCTest
 
 @testable import MoviePilot_TV
@@ -1113,6 +1114,43 @@ final class PlaybackCoordinatorTests: XCTestCase {
       "读不到用户数据时不写回")
   }
 
+  private func requestPaths(after count: Int) -> [String] {
+    PlaybackURLProtocol.stub.requests().dropFirst(count).map { "\($0.method) \($0.url.path)" }
+  }
+
+  func testReportsOfOnePlaybackAreSentInOrderWithEventNames() async throws {
+    let coordinator = makeCoordinator(makeService())
+    let session = try await startEpisodeSession(coordinator)
+    let gate = DispatchSemaphore(value: 0)
+    PlaybackURLProtocol.stub.configure {
+      $0.reportStartGate = gate
+      $0.items["lan.playback-tests.local|e1"] = #"{"Id":"e1","Type":"Episode","UserData":{"PlayCount":1}}"#
+    }
+    let before = PlaybackURLProtocol.stub.requests().count
+
+    // 起播后马上暂停、继续、退出，而“开始”上报还卡在网络上。
+    session.itemDidLoadForTesting()
+    session.handle(.pauseChanged(true))
+    session.handle(.pauseChanged(false))
+    coordinator.endSession(session)
+    try await Task.sleep(for: .milliseconds(300))
+    let whileBlocked = requestPaths(after: before)
+    gate.signal()
+    await session.pendingReportsForTesting?.value
+
+    XCTAssertEqual(whileBlocked, ["POST /Sessions/Playing"], "开始上报没完成前，后面的上报都不能先发")
+    XCTAssertEqual(
+      requestPaths(after: before),
+      [
+        "POST /Sessions/Playing", "POST /Sessions/Playing/Progress", "POST /Sessions/Playing/Progress",
+        "POST /Sessions/Playing/Stopped", "GET /Users/u-admin/Items/e1", "POST /Users/u-admin/Items/e1/UserData",
+      ])
+    let events = PlaybackURLProtocol.stub.requests().dropFirst(before)
+      .filter { $0.url.path.hasSuffix("/Progress") }
+      .map { (try? JSONSerialization.jsonObject(with: $0.body) as? [String: Any])?["EventName"] as? String }
+    XCTAssertEqual(events, ["Pause", "Unpause"])
+  }
+
   func testSwitchingEpisodeReplacesItemAndKeepsPlayerScreen() async throws {
     let coordinator = makeCoordinator(makeService())
     let session = try await startEpisodeSession(coordinator)
@@ -1233,6 +1271,8 @@ private final class PlaybackStub: @unchecked Sendable {
     /// `host|tmdb.123` → 按外部编号搜索（`AnyProviderIdEquals`）能找到的条目 JSON
     var providerSearch: [String: String] = [:]
     var usersGate: DispatchSemaphore?
+    /// 卡住“开始播放”上报（模拟网络慢）
+    var reportStartGate: DispatchSemaphore?
     var playbackInfoGate: DispatchSemaphore?
   }
 
@@ -1321,6 +1361,9 @@ private final class PlaybackURLProtocol: URLProtocol {
     } else if path.hasSuffix("/PlaybackInfo") {
       scenario.playbackInfoGate?.wait()
       respond(200, scenario.playbackInfo)
+    } else if path.hasSuffix("/Sessions/Playing") {
+      scenario.reportStartGate?.wait()
+      respond(204, "")
     } else if recorded.method == "GET", path.hasSuffix("/Items") {
       let keys = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
         .first { $0.name == "AnyProviderIdEquals" }?.value?.split(separator: ",") ?? []

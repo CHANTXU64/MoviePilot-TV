@@ -664,6 +664,9 @@ final class PlaybackSession: Identifiable {
   private var lastReportedPause = false
   private var mpvEventTask: Task<Void, Never>?
   private var mpvProgressTask: Task<Void, Never>?
+  /// 最后排进队的上报。同一次播放的开始、进度、暂停/继续、停止和观看进度写回按顺序逐条发送：
+  /// 各自另起请求时，后发的停止可能先到 Emby，后台就一直显示“正在播放”，或停止后又收到旧进度。
+  private var lastReport: Task<Void, Never>?
 
   init(prepared: PreparedPlayback, startPosition: Double) {
     self.prepared = prepared
@@ -698,12 +701,23 @@ final class PlaybackSession: Identifiable {
     guard !isStopped, !isItemLoaded else { return }
     let player = makeMPVPlayer()
     if mpvEventTask == nil { observe(player) }
-    isItemLoaded = true
     player.load(
       streamURL, playAutomatically: true,
       startTime: startPosition > 0 ? .milliseconds(Int64(startPosition * 1000)) : nil)
+    itemDidLoad()
+  }
+
+  /// 当前条目已交给 mpv：上报开始，之后的暂停、进度和停止也要上报。
+  private func itemDidLoad() {
+    isItemLoaded = true
     report(.start, isPaused: false, position: startPosition)
   }
+
+  /// 测试用：不启动 mpv，直接进入条目已交给 mpv 之后的上报流程。
+  func itemDidLoadForTesting() { itemDidLoad() }
+
+  /// 测试用：等已排队的上报全部发完。
+  var pendingReportsForTesting: Task<Void, Never>? { lastReport }
 
   /// 换成另一集或另一个版本：当前条目照常上报停止并保存进度，新条目等播放界面调用 `start()` 后起播。
   func replaceItem(with next: PreparedPlayback, startPosition: Double) {
@@ -741,7 +755,7 @@ final class PlaybackSession: Identifiable {
       positionTicks: EmbyTicks.from(seconds: position),
       playedAt: Date())
     let client = prepared.client
-    Task { await Self.finishItem(ending, client: client) }
+    enqueueReport { await Self.finishItem(ending, client: client) }
   }
 
   // MARK: - mpv
@@ -759,13 +773,14 @@ final class PlaybackSession: Identifiable {
         try? await Task.sleep(for: .seconds(Self.progressInterval))
         guard let self, !self.isStopped, !Task.isCancelled else { return }
         if self.isItemLoaded, self.mpvPlayer?.state == .playing {
-          self.report(.progress, isPaused: false, position: self.currentSeconds)
+          self.report(.progress, isPaused: false, position: self.currentSeconds, progressEvent: .timeUpdate)
         }
       }
     }
   }
 
-  private func handle(_ change: MPVPlaybackEvent.Change) {
+  /// 处理 mpv 事件（测试也直接调用它模拟 mpv）。
+  func handle(_ change: MPVPlaybackEvent.Change) {
     switch change {
     case .stateChanged(.failed(let error)), .error(let error, fatal: true):
       Logger.error("[Playback] mpv 播放失败: \(EmbyClient.redactedForLogging(String(describing: error)))")
@@ -780,15 +795,33 @@ final class PlaybackSession: Identifiable {
   private func handlePauseChange(isPaused: Bool) {
     guard isItemLoaded, isPaused != lastReportedPause else { return }
     lastReportedPause = isPaused
-    report(.progress, isPaused: isPaused, position: currentSeconds)
+    report(.progress, isPaused: isPaused, position: currentSeconds, progressEvent: isPaused ? .pause : .unpause)
   }
 
-  // MARK: - 上报（只发不等，失败只记日志）
+  // MARK: - 上报（同一次播放按顺序逐条发送，调用方不等结果，失败只记日志）
 
-  private func report(_ event: EmbyClient.PlaybackEvent, isPaused: Bool, position: Double) {
-    let body = reportBody(isPaused: isPaused, position: position)
+  /// 进度上报的 `EventName`：周期进度为 TimeUpdate，暂停、继续为 Pause、Unpause（省略时 Emby 一律按 TimeUpdate 处理）。
+  private enum ProgressEvent: String {
+    case timeUpdate = "TimeUpdate"
+    case pause = "Pause"
+    case unpause = "Unpause"
+  }
+
+  private func enqueueReport(_ work: @escaping @MainActor () async -> Void) {
+    let previous = lastReport
+    lastReport = Task {
+      await previous?.value
+      await work()
+    }
+  }
+
+  private func report(
+    _ event: EmbyClient.PlaybackEvent, isPaused: Bool, position: Double, progressEvent: ProgressEvent? = nil
+  ) {
+    var body = reportBody(isPaused: isPaused, position: position)
+    if let progressEvent { body["EventName"] = .string(progressEvent.rawValue) }
     let client = prepared.client
-    Task { await Self.send(event, body: body, client: client) }
+    enqueueReport { await Self.send(event, body: body, client: client) }
   }
 
   private func reportBody(isPaused: Bool, position: Double) -> [String: JSONValue] {
