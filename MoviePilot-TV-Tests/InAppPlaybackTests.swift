@@ -1,3 +1,4 @@
+import AVFoundation
 import MPVUI
 import XCTest
 
@@ -48,6 +49,14 @@ final class InAppPlaybackModelTests: XCTestCase {
     XCTAssertEqual(expected.type, "Series")
     XCTAssertEqual(expected.externalIDs, ["tmdb": "222", "douban": "35", "imdb": "tt0001", "tvdb": "9"])
     XCTAssertEqual(expected.providerSearchKeys, ["tmdb.222", "imdb.tt0001", "tvdb.9"], "只搜 Emby 刮削器会写的来源")
+  }
+
+  func testDolbyDecodingDependsOnAudioOutput() {
+    // 经 HDMI 原样输出、保留 Atmos；HomePod（AirPlay）、蓝牙和读不到输出时由 mpv 解码，避免带 Atmos 的 E-AC-3 无声。
+    XCTAssertEqual(PlaybackSession.dolbyDecoding(for: [.HDMI]), .automatic)
+    XCTAssertEqual(PlaybackSession.dolbyDecoding(for: [.airPlay]), .software)
+    XCTAssertEqual(PlaybackSession.dolbyDecoding(for: [.bluetoothA2DP]), .software)
+    XCTAssertEqual(PlaybackSession.dolbyDecoding(for: []), .software)
   }
 
   func testLibraryItemExpectationIgnoresInvalidExternalIDs() throws {

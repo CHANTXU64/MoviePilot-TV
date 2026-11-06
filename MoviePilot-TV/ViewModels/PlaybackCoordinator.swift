@@ -1,3 +1,4 @@
+import AVFoundation
 import Combine
 import Foundation
 import MPVUI
@@ -628,15 +629,22 @@ final class PlaybackSession: Identifiable {
 
   static let progressInterval: Double = 10
 
-  /// mpv 默认优先选中文字幕；没有中文字幕时按片源默认轨道。
-  /// 杜比数字（AC-3 / E-AC-3）由 mpv 解码成 PCM，不原样交给系统：MPVUI 的原样输出没在真实设备和 Atmos 上验证过，
-  /// 带 Atmos 的 E-AC-3 经 HomePod 播放时没有声音，也没有回退。代价是不输出 Atmos 对象，5.1 等多声道照常。
-  static let mpvConfiguration = MPVPlayerConfiguration(
-    additionalOptions: ["slang": "chi,zho,zh,chs,cht,sc,tc,cn,zh-Hans,zh-Hant"].merging(
-      subtitleFontOptions, uniquingKeysWith: { current, _ in current }),
-    audio: MPVAudioConfiguration(dolbyDecoding: .software),
-    automaticallyPlays: true
-  )
+  /// mpv 默认优先选中文字幕；没有中文字幕时按片源默认轨道。杜比数字的解码方式见 `dolbyDecoding(for:)`。
+  static func mpvConfiguration(dolbyDecoding: MPVAudioConfiguration.DolbyDecoding) -> MPVPlayerConfiguration {
+    MPVPlayerConfiguration(
+      additionalOptions: ["slang": "chi,zho,zh,chs,cht,sc,tc,cn,zh-Hans,zh-Hant"].merging(
+        subtitleFontOptions, uniquingKeysWith: { current, _ in current }),
+      audio: MPVAudioConfiguration(dolbyDecoding: dolbyDecoding),
+      automaticallyPlays: true
+    )
+  }
+
+  /// 杜比数字（AC-3 / E-AC-3）按创建播放器时的音频输出决定怎么解码。经 HDMI（电视、功放、回音壁）原样交给系统，
+  /// 保留 Atmos；其他输出（HomePod 等 AirPlay、蓝牙）和读不到输出时由 mpv 解码成 PCM：MPVUI 原样输出带 Atmos 的
+  /// E-AC-3 时，经 HomePod 没有声音，也不回退。播放中途换输出不会重新判断。
+  nonisolated static func dolbyDecoding(for outputs: [AVAudioSession.Port]) -> MPVAudioConfiguration.DolbyDecoding {
+    outputs.contains(.HDMI) ? .automatic : .software
+  }
 
   /// ASS 等由 mpv（libass）绘制的字幕用内置的思源黑体（Noto Sans SC）。
   /// libass 自带的 FreeType 打不开 tvOS 的系统中文字体（PingFang 是 `hvgl` 字形，Hiragino 是 CFF 字形），
@@ -689,7 +697,8 @@ final class PlaybackSession: Identifiable {
 
   func makeMPVPlayer() -> MPVPlayer {
     if let mpvPlayer { return mpvPlayer }
-    let player = MPVPlayer(configuration: Self.mpvConfiguration)
+    let outputs = AVAudioSession.sharedInstance().currentRoute.outputs.map(\.portType)
+    let player = MPVPlayer(configuration: Self.mpvConfiguration(dolbyDecoding: Self.dolbyDecoding(for: outputs)))
     mpvPlayer = player
     return player
   }
