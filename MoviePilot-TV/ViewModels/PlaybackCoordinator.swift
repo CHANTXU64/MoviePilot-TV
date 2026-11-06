@@ -629,9 +629,12 @@ final class PlaybackSession: Identifiable {
   static let progressInterval: Double = 10
 
   /// mpv 默认优先选中文字幕；没有中文字幕时按片源默认轨道。
+  /// 杜比数字（AC-3 / E-AC-3）由 mpv 解码成 PCM，不原样交给系统：MPVUI 的原样输出没在真实设备和 Atmos 上验证过，
+  /// 带 Atmos 的 E-AC-3 经 HomePod 播放时没有声音，也没有回退。代价是不输出 Atmos 对象，5.1 等多声道照常。
   static let mpvConfiguration = MPVPlayerConfiguration(
     additionalOptions: ["slang": "chi,zho,zh,chs,cht,sc,tc,cn,zh-Hans,zh-Hant"].merging(
       subtitleFontOptions, uniquingKeysWith: { current, _ in current }),
+    audio: MPVAudioConfiguration(dolbyDecoding: .software),
     automaticallyPlays: true
   )
 
