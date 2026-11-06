@@ -50,6 +50,31 @@ final class InAppPlaybackModelTests: XCTestCase {
     XCTAssertEqual(expected.providerSearchKeys, ["tmdb.222", "imdb.tt0001", "tvdb.9"], "只搜 Emby 刮削器会写的来源")
   }
 
+  func testLibraryItemExpectationIgnoresInvalidExternalIDs() throws {
+    // 详情里 TMDB 为 0、TVDB 为负数：都是占位，不能拿去和 Emby 上的真实编号比。
+    let media = MediaInfo(tmdb_id: 0, douban_id: "0", imdb_id: "tt123456", tvdb_id: -3, source: "themoviedb", type: "电影")
+    let expected = LibraryItemExpectation(media: media)
+    XCTAssertEqual(expected.externalIDs, ["imdb": "tt123456"])
+    XCTAssertEqual(expected.providerSearchKeys, ["imdb.tt123456"], "不搜 tmdb.0")
+    let movie = try decode(EmbyItem.self, #"{"Id":"7","Type":"Movie","ProviderIds":{"Tmdb":"222","Imdb":"tt123456"}}"#)
+    XCTAssertTrue(expected.accepts(movie, strict: true), "IMDb 对上了，TMDB 的 0 不算冲突")
+
+    let negativeIdentity = LibraryItemExpectation(
+      media: MediaInfo(tmdb_id: -5, imdb_id: "tt123456", source: "themoviedb", type: "电影"))
+    XCTAssertEqual(negativeIdentity.externalIDs, ["imdb": "tt123456"], "主身份是负数编号时也不收")
+    XCTAssertEqual(
+      LibraryItemExpectation(mediaType: "电影", externalIDs: ["tvdb": "abc", "bangumi": " 0 ", "imdb": " "]).externalIDs,
+      [:], "数字来源要正整数，空白与 0 都不收")
+
+    // Emby 那边写成 0 的编号同样按没有处理。
+    let zeroOnServer = try decode(
+      EmbyItem.self, #"{"Id":"8","Type":"Movie","ProviderIds":{"Tmdb":"0","Imdb":"tt123456"}}"#)
+    XCTAssertNil(zeroOnServer.providerID(for: "tmdb"))
+    XCTAssertTrue(
+      LibraryItemExpectation(mediaType: "电影", externalIDs: ["tmdb": "222", "imdb": "tt123456"])
+        .accepts(zeroOnServer, strict: true))
+  }
+
   func testConnectionConfigReadsAlternateKeyNamesAndIgnoresBlankOrMistypedFields() throws {
     let standard = try decode(
       MediaServerConnectionConfig.self,
@@ -931,6 +956,23 @@ final class PlaybackCoordinatorTests: XCTestCase {
     let coordinator = makeCoordinator(makeService())
     let target = await coordinator.locateLibraryItem("42", expected: expectation(tmdb: "222"), in: servers)
     XCTAssertNil(target)
+  }
+
+  func testDetailPageFindsItemByValidExternalIDWhenDetailHasPlaceholderTMDB() async throws {
+    // 详情的 TMDB 是 0、IMDb 有效；Emby 上的那部片 TMDB 222、IMDb 相同，要能找到。
+    let servers = try servers(Self.embyServer(name: "a", host: "lan.playback-tests.local"), Self.plexServer)
+    let found = #"{"Id":"731","Name":"测试电影","Type":"Movie","ProviderIds":{"Tmdb":"222","Imdb":"tt123456"}}"#
+    PlaybackURLProtocol.stub.configure {
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.providerSearch = ["lan.playback-tests.local|imdb.tt123456": found]
+    }
+    let coordinator = makeCoordinator(makeService())
+    let media = MediaInfo(tmdb_id: 0, imdb_id: "tt123456", type: "电影")
+    let target = await coordinator.locateLibraryItem("42", expected: LibraryItemExpectation(media: media), in: servers)
+    XCTAssertEqual(target, .serverItem(serverName: "a", itemID: "731"))
+    let search = try XCTUnwrap(PlaybackURLProtocol.stub.requests().first { $0.url.path.hasSuffix("/Items") })
+    let query = URLComponents(url: search.url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+    XCTAssertTrue(query.contains(URLQueryItem(name: "AnyProviderIdEquals", value: "imdb.tt123456")))
   }
 
   func testDetailPageSkipsEmbyLookupWhenOnlyEnabledServerIsPlayableEmby() async throws {

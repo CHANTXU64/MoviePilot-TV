@@ -192,14 +192,15 @@ nonisolated struct EmbyItem: Decodable, Sendable {
   }
 
   /// 指定来源（MoviePilot 的 `tmdb`、`douban` 等）的外部编号；键名不区分大小写，也认 `tmdb_id` 这种写法
-  /// （与 MoviePilot `MediaServerIdentityHelper` 读取 ProviderIds 的规则一致）。没有或为空时返回 nil。
+  /// （与 MoviePilot `MediaServerIdentityHelper` 读取 ProviderIds 的规则一致）。没有或无效时返回 nil，
+  /// 有效值的规则见 `ExternalMediaID.valid`。
   func providerID(for source: String) -> String? {
-    let source = source.lowercased() == "themoviedb" ? "tmdb" : source.lowercased()
+    let source = ExternalMediaID.normalizedSource(source)
     let value = providerIDs?.first { key, _ in
       let key = key.lowercased()
       return key == source || key == source + "_id"
-    }?.value.trimmingCharacters(in: .whitespacesAndNewlines)
-    return value?.isEmpty == false ? value : nil
+    }?.value
+    return ExternalMediaID.valid(value, source: source)
   }
 
   /// 播放器标题：电影只有片名；剧集主标题是「第 N 季 第 M 集 · 集名」，副标题是剧名。
@@ -334,13 +335,31 @@ nonisolated struct EmbyPlaybackInfo: Decodable, Sendable {
   }
 }
 
-/// Emby 列表接口的分页结构（`/Shows/{id}/Episodes` 等）。
+/// 外部编号（TMDB、IMDb、TVDB、豆瓣、Bangumi）的来源名与有效值，详情页和 Emby 条目两边按同一规则读取。
+nonisolated enum ExternalMediaID {
+  /// 来源名小写，`themoviedb` 记作 `tmdb`。
+  static func normalizedSource(_ source: String) -> String {
+    let source = source.lowercased()
+    return source == "themoviedb" ? "tmdb" : source
+  }
+
+  /// `source` 须已经过 `normalizedSource`。去掉首尾空白；空值和 `0` 无效，数字来源只认正整数
+  /// （同 `MediaIdentifier.validNumericIdentifier`）。无效时返回 nil，按没有这个编号处理，不拿去比对或搜索。
+  static func valid(_ value: String?, source: String) -> String? {
+    guard let value = MediaIdentifier.truthySourceIdentifier(value) else { return nil }
+    guard numericSources.contains(source) else { return value }
+    return MediaIdentifier.validNumericIdentifier(Int(value)).map(String.init)
+  }
+
+  private static let numericSources: Set<String> = ["tmdb", "tvdb", "bangumi", "anilist"]
+}
+
 /// 详情页条目在服务器上应有的样子：Emby 条目类型，以及详情里已知的外部编号（TMDB、IMDb、TVDB、豆瓣、Bangumi）。
 /// 详情页只拿到 MoviePilot 入库表里不带服务器名的条目 ID，它可能来自别的服务器，不同服务器的数字 ID 还会撞号。
 nonisolated struct LibraryItemExpectation: Equatable, Sendable {
   /// Emby 条目类型（`Movie` / `Series`）；MoviePilot 媒体类型无法对应时为 nil，不比类型。
   let type: String?
-  /// 来源（小写，`themoviedb` 记作 `tmdb`）→ 编号。
+  /// 来源（小写，`themoviedb` 记作 `tmdb`）→ 编号；0、负数等无效编号不收（见 `ExternalMediaID.valid`）。
   let externalIDs: [String: String]
 
   init(mediaType: String?, externalIDs: [String: String]) {
@@ -351,14 +370,14 @@ nonisolated struct LibraryItemExpectation: Equatable, Sendable {
     }
     var normalized: [String: String] = [:]
     for (source, value) in externalIDs {
-      let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !value.isEmpty else { continue }
-      normalized[Self.normalizedSource(source)] = value
+      let source = ExternalMediaID.normalizedSource(source)
+      guard let value = ExternalMediaID.valid(value, source: source) else { continue }
+      normalized[source] = value
     }
     self.externalIDs = normalized
   }
 
-  /// 详情页：详情里的各个外部编号，加上入库查询所用的主身份（两者不一致时以主身份为准）。
+  /// 详情页：详情里的各个外部编号，加上入库查询所用的主身份（两者不一致时以有效的主身份为准）。
   init(media: MediaInfo) {
     var ids: [String: String] = [:]
     ids["tmdb"] = media.tmdb_id.map(String.init)
@@ -366,13 +385,11 @@ nonisolated struct LibraryItemExpectation: Equatable, Sendable {
     ids["tvdb"] = media.tvdb_id.map(String.init)
     ids["douban"] = media.douban_id
     ids["bangumi"] = media.bangumi_id.map(String.init)
-    if let identity = media.identity { ids[Self.normalizedSource(identity.source)] = identity.mediaId }
+    if let identity = media.identity {
+      let source = ExternalMediaID.normalizedSource(identity.source)
+      if ExternalMediaID.valid(identity.mediaId, source: source) != nil { ids[source] = identity.mediaId }
+    }
     self.init(mediaType: media.type, externalIDs: ids)
-  }
-
-  private static func normalizedSource(_ source: String) -> String {
-    let source = source.lowercased()
-    return source == "themoviedb" ? "tmdb" : source
   }
 
   /// 条目是不是要播的那一个。类型不符，或带着同来源编号却对不上的，都不是。
@@ -395,6 +412,7 @@ nonisolated struct LibraryItemExpectation: Equatable, Sendable {
   }
 }
 
+/// Emby 列表接口的分页结构（`/Shows/{id}/Episodes` 等）。
 nonisolated struct EmbyItemsPage: Decodable, Sendable {
   let items: [EmbyItem]
 
