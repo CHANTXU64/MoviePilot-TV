@@ -10,12 +10,13 @@
 //
 // 修改：
 // - 去掉 `Defaults`、`JellyfinAPI`；条目换成 MoviePilot-TV 的同名 Emby 适配类型。
-// - 同季分集列表原版用 Swiftfin 的分页库（`PagingLibraryViewModel<EpisodeLibrary>`）加载，这里改为
-//   `UserSession.seasonEpisodes(seriesID:seasonID:)` 一次取完（Emby `/Shows/{id}/Episodes?SeasonId=`），状态映射与原版相同。
-// - 相邻集原版请求 Jellyfin `getEpisodes(adjacentTo:limit: 3)`，这里改为 `UserSession.adjacentEpisodes(seriesID:itemID:)`
-//   （Emby `/Shows/{id}/Episodes?AdjacentTo=`），之后的“四种情况”判断与原版相同。
+// - 同季分集列表不用 Swiftfin 的分页库（`PagingLibraryViewModel<EpisodeLibrary>`），由接入点
+//   `UserSession.seasonEpisodes(seriesID:seasonID:)` 一次取完，状态映射与原版相同；相邻集由接入点
+//   `UserSession.adjacentEpisodes(seriesID:itemID:)` 提供（原版为 Jellyfin `getEpisodes(adjacentTo:limit: 3)`），
+//   之后的“四种情况”判断与原版相同。两个接入点尚未接数据（返回空），条目也不带 `seriesID` / `seasonID`，
+//   所以目前队列为空、没有上一集/下一集，自动播放不会接着播。
 // - 码率设置 `appMaximumBitrate` 换成 `VideoPlayerDefaults.appMaximumBitrate`。
-// 补显式非隔离析构 `nonisolated deinit`，避开 tvOS 18 的隔离析构回部署崩溃。
+// - 析构显式标为 `nonisolated`（tvOS 18.4–26.2 上，隔离析构在主线程、Task 之外执行会崩溃）。
 //
 
 import Combine

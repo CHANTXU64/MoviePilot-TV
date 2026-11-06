@@ -8,7 +8,7 @@
 // 本文件改自 Swiftfin：Swiftfin tvOS/Components/SliderContainer/UISliderContainer.swift
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
-// 修改：补显式非隔离析构 `nonisolated deinit`，避开 tvOS 18 的隔离析构回部署崩溃。
+// 修改：析构显式标为 `nonisolated`（tvOS 18.4–26.2 上，隔离析构在主线程、Task 之外执行会崩溃）。
 //
 
 import SwiftUI

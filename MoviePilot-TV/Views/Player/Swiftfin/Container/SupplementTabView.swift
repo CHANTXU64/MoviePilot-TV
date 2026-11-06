@@ -11,7 +11,7 @@
 // 修改：`PlatformViewControllerRepresentable` 换成 `UIViewControllerRepresentable`，上下文写成
 // `UIViewControllerRepresentableContext<Self>`（工程里已有名为 `Context` 的模型类型）；`HostingController` 用 MoviePilot-TV 的同名替身；
 // 焦点离开回调标为 `@MainActor`（Swift 6 下才能交给 `DispatchQueue.main.async`）。
-// 补显式非隔离析构 `nonisolated deinit`，避开 tvOS 18 的隔离析构回部署崩溃。
+// 析构显式标为 `nonisolated`（tvOS 18.4–26.2 上，隔离析构在主线程、Task 之外执行会崩溃）。
 //
 
 import SwiftUI

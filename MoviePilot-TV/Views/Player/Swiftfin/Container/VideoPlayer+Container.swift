@@ -17,7 +17,7 @@
 // - `updateProperties()` 是 tvOS 26 的 UIKit 观察回调，部署到 tvOS 18 改用 `ObservationToken` 在可见元素变化时同步补充面板的交互开关。
 // - 日志改用工程的 `Logger`；关闭确认（Swiftfin 设置项 `confirmClose`，默认关）换成常量 `VideoPlayerDefaults.confirmClose`。
 // - MoviePilot-TV 的 mpv 播放不提供画中画，收尾时不再判断 PiP，直接 `mediaSession.stop()`。
-// 补显式非隔离析构 `nonisolated deinit`，避开 tvOS 18 的隔离析构回部署崩溃。
+// - 析构显式标为 `nonisolated`（tvOS 18.4–26.2 上，隔离析构在主线程、Task 之外执行会崩溃）。
 //
 
 import SwiftUI

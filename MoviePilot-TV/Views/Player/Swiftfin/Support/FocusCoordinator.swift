@@ -9,7 +9,7 @@
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
 // 修改：工程开启 MemberImportVisibility，补 `import Combine`。
-// 补显式非隔离析构 `nonisolated deinit`，避开 tvOS 18 的隔离析构回部署崩溃。
+// 析构显式标为 `nonisolated`（tvOS 18.4–26.2 上，隔离析构在主线程、Task 之外执行会崩溃）。
 //
 
 import Combine
