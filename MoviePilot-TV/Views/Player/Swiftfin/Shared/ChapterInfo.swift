@@ -11,7 +11,8 @@
 // 修改：去掉 `import JellyfinAPI`，`ChapterInfo` 为 MoviePilot-TV 的同名 Emby 适配类型（见 SwiftfinPlayerModels.swift）；
 // 选中描边 `PosterSelectionOverlay`（原定义于 Shared/Components/PosterIndicators/PosterIndicatorsOverlay.swift）一并移入本文件，
 // 其主题色（Swiftfin 设置项 `accentColor`）取默认值 `jellyfinPurple`。
-// `FullInfo` 与扩展标为 `nonisolated`（工程默认 MainActor 隔离，海报协议的视图成员仍在主线程）。
+// `FullInfo` 与扩展标为 `nonisolated`（工程默认 MainActor 隔离，海报协议的视图成员仍在主线程）；
+// 章节缺图占位改用 `AppSymbol.movie`。
 //
 
 import Foundation
@@ -45,7 +46,7 @@ extension ChapterInfo {
         let id: Int
         let imageSource: ImageSource?
         let preferredPosterDisplayType: PosterDisplayType = .landscape
-        let systemImage: String = "film"
+        let systemImage: String = AppSymbol.movie
 
         var startSeconds: Duration {
             chapterInfo.startSeconds ?? .zero

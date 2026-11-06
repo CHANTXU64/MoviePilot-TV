@@ -10,7 +10,8 @@
 //
 // 修改：去掉 `import JellyfinAPI` 与 Router（关闭按钮只调 `mediaSession.stop()`，由外部退出闭包关闭界面；
 // tvOS 大屏布局本来就不显示关闭按钮）；`@SharedBaseItem` 换成普通存储属性，条目为 MoviePilot-TV 的同名 Emby 适配类型；
-// 删去 `#if os(iOS)` 分支；按钮组去掉左右内边距，右边与进度条右端对齐。
+// 删去 `#if os(iOS)` 分支；按钮组去掉左右内边距，右边与进度条右端对齐；图标名改从 `AppSymbol` 取
+// （收起面板用 `chevron.compact.down`，`chevron.down` 已是降序排序）。
 //
 
 import SwiftUI
@@ -39,7 +40,7 @@ extension VideoPlayer.PlaybackControls {
             } label: {
                 Label(
                     L10n.close,
-                    systemImage: viewState.isPresentingSupplement ? "chevron.down" : "xmark"
+                    systemImage: viewState.isPresentingSupplement ? AppSymbol.collapsePanel : AppSymbol.closePlayer
                 )
                 .labelStyle(.iconOnly)
             }

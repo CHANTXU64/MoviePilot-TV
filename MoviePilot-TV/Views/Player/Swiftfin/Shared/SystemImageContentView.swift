@@ -6,6 +6,9 @@
 // Copyright (c) 2026 Jellyfin & Jellyfin Contributors
 //
 // 本文件改自 Swiftfin：Shared/Components/SystemImageContentView.swift
+// Modifications for MoviePilot-TV are also licensed under MPL-2.0.
+//
+// 修改：没给图标时的兜底改用 `AppSymbol.imagePlaceholder`。
 //
 
 import SwiftUI
@@ -66,7 +69,7 @@ struct SystemImageContentView: View {
 
     var body: some View {
         ContainerRelativeView(ratio: ratio) {
-            Image(systemName: systemName ?? "circle")
+            Image(systemName: systemName ?? AppSymbol.imagePlaceholder)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .foregroundStyle(.secondary)

@@ -9,7 +9,8 @@
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
 // 修改：删去 iOS 分支（投屏）；按钮列表的 Swiftfin 设置项 `barActionButtons` / `menuActionButtons` 换成
-// `VideoPlayerDefaults` 里的同名常量（取值即 Swiftfin 默认值），过滤规则不变。
+// `VideoPlayerDefaults` 里的同名常量（取值即 Swiftfin 默认值），过滤规则不变；菜单按钮一律用不带圈的省略号
+// （`AppSymbol.playerMenu`，带圈的已是加载中）。
 //
 
 import SwiftUI
@@ -95,16 +96,8 @@ extension VideoPlayer.PlaybackControls.Toolbar {
             resolvedActionButtons(rawMenuActionButtons)
         }
 
-        private var menuSystemImage: String {
-            if viewLayout.isLarge || UIDevice.supportsLiquidGlass {
-                "ellipsis"
-            } else {
-                "ellipsis.circle"
-            }
-        }
-
         private var menuLabel: some View {
-            Label(L10n.menu, systemImage: menuSystemImage)
+            Label(L10n.menu, systemImage: AppSymbol.playerMenu)
         }
 
         @ViewBuilder

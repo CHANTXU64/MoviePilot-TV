@@ -8,12 +8,13 @@
 // 本文件改自 Swiftfin：Shared/Objects/PosterDisplayType.swift
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
-// 修改：去掉 Swiftfin 设置存储用的 `Storable` 一致性；标为 `nonisolated`，可在环境值默认值中使用。
+// 修改：去掉 Swiftfin 设置存储用的 `Storable` 一致性；标为 `nonisolated`，可在环境值默认值中使用；
+// 删去没有读取方的 `systemImage` 与 `SystemImageable` 一致性（原用于 Swiftfin 设置页的海报样式选项）。
 //
 
 import Foundation
 
-nonisolated enum PosterDisplayType: String, CaseIterable, Displayable, SystemImageable {
+nonisolated enum PosterDisplayType: String, CaseIterable, Displayable {
 
     enum Size: Equatable, Hashable {
 
@@ -67,17 +68,6 @@ nonisolated enum PosterDisplayType: String, CaseIterable, Displayable, SystemIma
             L10n.portrait
         case .square:
             L10n.square
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .landscape:
-            "rectangle.fill"
-        case .portrait:
-            "rectangle.portrait.fill"
-        case .square:
-            "square.fill"
         }
     }
 }

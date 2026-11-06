@@ -205,15 +205,14 @@ extension BaseItemDto: Poster {
     }
   }
 
+  /// 海报没图时的占位，和 App 其他页面的媒体类型图标一致；播放器用不到的类型（音乐等）显示通用缺图占位。
   var systemImage: String {
     switch type {
-    case .audio, .musicAlbum: "music.note"
-    case .boxSet: "film.stack"
-    case .program: "tv"
-    case .episode, .movie, .season, .series, .video: "film"
-    case .musicVideo: "music.note.tv.fill"
-    case .person: "person.fill"
-    default: "circle"
+    case .movie, .video: AppSymbol.movie
+    case .series, .season, .episode, .program: AppSymbol.tv
+    case .boxSet: AppSymbol.collection
+    case .person: AppSymbol.person
+    default: AppSymbol.imagePlaceholder
     }
   }
 
@@ -282,7 +281,7 @@ extension BaseItemPerson: Poster {
 
   var subtitle: String? { displayRole }
 
-  var systemImage: String { "person.fill" }
+  var systemImage: String { AppSymbol.person }
 
   var posterLabel: some View {
     VStack(alignment: .leading, spacing: 2) {

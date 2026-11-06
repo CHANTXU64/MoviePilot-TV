@@ -8,10 +8,11 @@
 // 本文件改自 Swiftfin：Shared/Objects/VideoPlayerSupplementKind.swift
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
-// 修改：去掉 Swiftfin 设置存储相关的 `Storable`、`SupportedCaseIterable` 一致性（设置项由 `VideoPlayerDefaults` 提供）。
+// 修改：去掉 Swiftfin 设置存储相关的 `Storable`、`SupportedCaseIterable` 一致性（设置项由 `VideoPlayerDefaults` 提供）；
+// 页签只显示文字，删去没有读取方的 `systemImage` 与 `SystemImageable` 一致性。
 //
 
-enum VideoPlayerSupplementType: String, CaseIterable, Displayable, Equatable, Identifiable, SystemImageable {
+enum VideoPlayerSupplementType: String, CaseIterable, Displayable, Equatable, Identifiable {
 
     case info
     case chapters
@@ -36,21 +37,6 @@ enum VideoPlayerSupplementType: String, CaseIterable, Displayable, Equatable, Id
 
     var id: String {
         rawValue
-    }
-
-    var systemImage: String {
-        switch self {
-        case .info:
-            "info.circle.fill"
-        case .chapters:
-            "list.bullet.rectangle.fill"
-        case .queue:
-            "list.triangle"
-        case .people:
-            "person.2.fill"
-        case .playbackInformation:
-            "waveform.circle.fill"
-        }
     }
 
     static let supportedCases: [VideoPlayerSupplementType] = [.info, .chapters, .queue]

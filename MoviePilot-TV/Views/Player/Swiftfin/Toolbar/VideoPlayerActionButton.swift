@@ -8,7 +8,7 @@
 // 本文件改自 Swiftfin：Shared/Objects/VideoPlayerActionButton.swift
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
-// 修改：删去 iOS 分支；去掉 Swiftfin 设置存储用的 `Storable` 一致性。
+// 修改：删去 iOS 分支；去掉 Swiftfin 设置存储用的 `Storable` 一致性；图标名改从 `AppSymbol` 取。
 //
 
 enum VideoPlayerActionButton: String, CaseIterable, Displayable, Equatable, Identifiable, SystemImageable {
@@ -64,29 +64,28 @@ enum VideoPlayerActionButton: String, CaseIterable, Displayable, Equatable, Iden
 
     var systemImage: String {
         switch self {
-        case .aspectFill: "arrow.up.left.and.arrow.down.right"
-        case .audio: "speaker.wave.2"
-        case .audioOffset: "waveform.path"
-        case .autoPlay: "play.fill"
-        case .pictureInPicture: "pip.enter"
-        case .playbackSpeed: "speedometer"
-        case .playbackSettings: "tv"
-        case .playNextItem: "forward.end.fill"
-        case .playPreviousItem: "backward.end.fill"
-        case .nextChapter: "forward.frame.fill"
-        case .previousChapter: "backward.frame.fill"
-        case .subtitles: "captions.bubble.fill"
-        case .subtitleOffset: "textformat.abc"
+        case .aspectFill: AppSymbol.aspectFill
+        case .audio: AppSymbol.audioTrack
+        case .audioOffset: AppSymbol.audioOffset
+        case .autoPlay: AppSymbol.autoPlayOn
+        case .pictureInPicture: AppSymbol.pictureInPicture
+        case .playbackSpeed: AppSymbol.playbackSpeed
+        case .playbackSettings: AppSymbol.playbackSettings
+        case .playNextItem: AppSymbol.nextItem
+        case .playPreviousItem: AppSymbol.previousItem
+        case .nextChapter: AppSymbol.nextChapter
+        case .previousChapter: AppSymbol.previousChapter
+        case .subtitles: AppSymbol.subtitlesOn
+        case .subtitleOffset: AppSymbol.subtitleOffset
         }
     }
 
     var secondarySystemImage: String {
         switch self {
-        case .aspectFill: "arrow.down.right.and.arrow.up.left"
-        case .audio: "speaker.wave.2"
-        case .autoPlay: "stop.fill"
-        case .pictureInPicture: "pip.exit"
-        case .subtitles: "captions.bubble"
+        case .aspectFill: AppSymbol.aspectFit
+        case .autoPlay: AppSymbol.autoPlayOff
+        case .pictureInPicture: AppSymbol.exitPictureInPicture
+        case .subtitles: AppSymbol.subtitlesOff
         default:
             systemImage
         }

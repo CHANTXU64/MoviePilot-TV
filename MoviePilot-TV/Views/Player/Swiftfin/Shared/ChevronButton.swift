@@ -8,7 +8,7 @@
 // 本文件改自 Swiftfin：Shared/Components/ChevronButton.swift
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
-// 修改：只保留播放器用到的 `init(_:external:action:)`；去掉列表编辑状态（`isEditing` / `ListRowCheckbox`）分支。
+// 修改：只保留播放器用到的 `init(_:external:action:)`；去掉列表编辑状态（`isEditing` / `ListRowCheckbox`）分支；图标名改从 `AppSymbol` 取。
 //
 
 import SwiftUI
@@ -28,7 +28,7 @@ struct ChevronButton<Label: View>: View {
                 label
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                Image(systemName: isExternal ? "arrow.up.forward" : "chevron.right")
+                Image(systemName: isExternal ? AppSymbol.openExternal : AppSymbol.disclosure)
                     .font(.body)
                     .fontWeight(.regular)
                     .foregroundStyle(.secondary)
