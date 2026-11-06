@@ -9,6 +9,24 @@ final class InAppPlaybackModelTests: XCTestCase {
     try JSONDecoder().decode(type, from: Data(json.utf8))
   }
 
+  func testLibraryItemExpectationComparesTypeAndExternalID() throws {
+    let movie = try decode(
+      EmbyItem.self, #"{"Id":"7","Type":"Movie","ProviderIds":{"Tmdb":"222","IMDB":"tt0001","douban_id":" 35 "}}"#)
+    func expect(_ mediaType: String, _ source: String?, _ id: String = "") -> Bool {
+      LibraryItemExpectation(
+        mediaType: mediaType, identity: source.map { MediaIdentity(source: $0, mediaId: id) }
+      ).matches(movie)
+    }
+    XCTAssertTrue(expect("电影", "tmdb", "222"))
+    XCTAssertTrue(expect("电影", "themoviedb", "222"), "themoviedb 与 tmdb 是同一来源")
+    XCTAssertFalse(expect("电影", "tmdb", "111"), "同来源编号对不上")
+    XCTAssertTrue(expect("电影", "imdb", "TT0001"), "键名和编号不区分大小写")
+    XCTAssertTrue(expect("电影", "douban", "35"), "认 douban_id 写法，去掉首尾空白")
+    XCTAssertTrue(expect("电影", "bangumi", "9"), "条目没有这个来源的编号时只比类型")
+    XCTAssertTrue(expect("电影", nil))
+    XCTAssertFalse(expect("电视剧", "tmdb", "222"), "类型不符")
+  }
+
   func testConnectionConfigReadsAlternateKeyNamesAndIgnoresBlankOrMistypedFields() throws {
     let standard = try decode(
       MediaServerConnectionConfig.self,
@@ -639,7 +657,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
       $0.playbackInfo = Self.playbackInfo()
     }
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .libraryItem(itemID: "m1", itemType: "Movie"))
+    await run(coordinator, .libraryItem(itemID: "m1", expected: expectation()))
     XCTAssertNil(coordinator.failure)
     XCTAssertEqual(streamURL(coordinator)?.host, "wan.playback-tests.local")
     coordinator.endSession()
@@ -658,10 +676,28 @@ final class PlaybackCoordinatorTests: XCTestCase {
       $0.playbackInfo = Self.playbackInfo()
     }
     let coordinator = makeCoordinator(makeService())
-    await run(coordinator, .libraryItem(itemID: "m1", itemType: "Movie"))
+    await run(coordinator, .libraryItem(itemID: "m1", expected: expectation()))
     XCTAssertNil(coordinator.failure)
     XCTAssertEqual(streamURL(coordinator)?.host, "wan.playback-tests.local", "不能播 a 上同号的剧集")
     XCTAssertEqual(coordinator.session?.item.type, "Movie")
+    coordinator.endSession()
+  }
+
+  func testLibraryItemSkipsSameIDAndTypeWithOtherExternalID() async throws {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers =
+        "[\(Self.embyServer(name: "a", host: "lan.playback-tests.local")),\(Self.embyServer(name: "b", host: "wan.playback-tests.local"))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = [
+        "lan.playback-tests.local|7": Self.movie(id: "7", tmdb: "111"),
+        "wan.playback-tests.local|7": Self.movie(id: "7", tmdb: "222"),
+      ]
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .libraryItem(itemID: "7", expected: expectation(tmdb: "222")))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(streamURL(coordinator)?.host, "wan.playback-tests.local", "不能播 a 上同号、外部编号不同的电影")
     coordinator.endSession()
   }
 
@@ -763,13 +799,57 @@ final class PlaybackCoordinatorTests: XCTestCase {
     try JSONDecoder().decode([MediaServerConf].self, from: Data("[\(entries.joined(separator: ","))]".utf8))
   }
 
+  /// 详情页条目的期望：默认电影、不带外部编号（只比类型）。
+  private func expectation(_ mediaType: String = "电影", tmdb: String? = nil) -> LibraryItemExpectation {
+    LibraryItemExpectation(mediaType: mediaType, identity: tmdb.map { MediaIdentity(source: "tmdb", mediaId: $0) })
+  }
+
+  private static func movie(id: String, tmdb: String) -> String {
+    #"{"Id":"\#(id)","Name":"测试电影","Type":"Movie","RunTimeTicks":\#(twoHours),"ProviderIds":{"Tmdb":"\#(tmdb)"}}"#
+  }
+
+  func testDetailPageMatchesExternalIDWhenSameIDAndTypeCollide() async throws {
+    let servers = try servers(
+      Self.embyServer(name: "a", host: "lan.playback-tests.local"),
+      Self.embyServer(name: "b", host: "wan.playback-tests.local"))
+    PlaybackURLProtocol.stub.configure {
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      // 两台 Emby 上的 7 都是电影，只有外部编号能分清。
+      $0.items = [
+        "lan.playback-tests.local|7": Self.movie(id: "7", tmdb: "111"),
+        "wan.playback-tests.local|7": Self.movie(id: "7", tmdb: "222"),
+      ]
+    }
+    let coordinator = makeCoordinator(makeService())
+
+    let second = await coordinator.locateLibraryItem("7", expected: expectation(tmdb: "222"), in: servers)
+    XCTAssertEqual(second, .serverItem(serverName: "b", itemID: "7"), "a 上同号的电影外部编号对不上，不能选它")
+    let first = await coordinator.locateLibraryItem("7", expected: expectation(tmdb: "111"), in: servers)
+    XCTAssertEqual(first, .serverItem(serverName: "a", itemID: "7"))
+    let neither = await coordinator.locateLibraryItem("7", expected: expectation(tmdb: "333"), in: servers)
+    XCTAssertNil(neither, "两台都对不上就不显示播放")
+  }
+
+  func testDetailPageFallsBackToTypeWhenItemHasNoExternalID() async throws {
+    let servers = try servers(
+      Self.embyServer(name: "a", host: "lan.playback-tests.local"),
+      Self.embyServer(name: "b", host: "wan.playback-tests.local"))
+    PlaybackURLProtocol.stub.configure {
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = ["wan.playback-tests.local|m1": Self.movie()]
+    }
+    let coordinator = makeCoordinator(makeService())
+    let target = await coordinator.locateLibraryItem("m1", expected: expectation(tmdb: "222"), in: servers)
+    XCTAssertEqual(target, .serverItem(serverName: "b", itemID: "m1"), "条目没有 TMDB 编号时只比类型")
+  }
+
   func testDetailPageSkipsEmbyLookupWhenOnlyEnabledServerIsPlayableEmby() async throws {
     let servers = try servers(
       Self.embyServer(name: "a", host: "lan.playback-tests.local"),
       #"{"name":"off","type":"plex","enabled":false}"#)
     let coordinator = makeCoordinator(makeService())
-    let target = await coordinator.locateLibraryItem("m1", mediaType: "电影", in: servers)
-    XCTAssertEqual(target, .libraryItem(itemID: "m1", itemType: "Movie"), "起播时仍按类型确认")
+    let target = await coordinator.locateLibraryItem("m1", expected: expectation(), in: servers)
+    XCTAssertEqual(target, .libraryItem(itemID: "m1", expected: expectation()), "起播时仍按类型确认")
     XCTAssertTrue(PlaybackURLProtocol.stub.requests().isEmpty, "条目 ID 只可能来自这台 Emby，不必确认")
   }
 
@@ -787,9 +867,9 @@ final class PlaybackCoordinatorTests: XCTestCase {
     }
     let coordinator = makeCoordinator(makeService())
 
-    let movie = await coordinator.locateLibraryItem("7", mediaType: "电影", in: servers)
+    let movie = await coordinator.locateLibraryItem("7", expected: expectation(), in: servers)
     XCTAssertEqual(movie, .serverItem(serverName: "b", itemID: "7"), "全是 Emby 也要逐台核对，不能播 a 上同号的剧集")
-    let series = await coordinator.locateLibraryItem("7", mediaType: "电视剧", in: servers)
+    let series = await coordinator.locateLibraryItem("7", expected: expectation("电视剧"), in: servers)
     XCTAssertEqual(series, .serverItem(serverName: "a", itemID: "7"))
   }
 
@@ -807,18 +887,18 @@ final class PlaybackCoordinatorTests: XCTestCase {
     }
     let coordinator = makeCoordinator(makeService())
 
-    let found = await coordinator.locateLibraryItem("m1", mediaType: "电影", in: servers)
+    let found = await coordinator.locateLibraryItem("m1", expected: expectation(), in: servers)
     XCTAssertEqual(found, .serverItem(serverName: "b", itemID: "m1"))
     // 只在 Plex 上的条目：所有 Emby 都确认没有，不显示播放。
-    let missing = await coordinator.locateLibraryItem("plex-only", mediaType: "电影", in: servers)
+    let missing = await coordinator.locateLibraryItem("plex-only", expected: expectation(), in: servers)
     XCTAssertNil(missing)
     // Plex 的数字 ID 在 Emby 上撞到类型不符的条目，不算找到。
-    let collided = await coordinator.locateLibraryItem("42", mediaType: "电影", in: servers)
+    let collided = await coordinator.locateLibraryItem("42", expected: expectation(), in: servers)
     XCTAssertNil(collided)
     // 连不上时无法确认，仍显示播放，点击后再说明原因。
     PlaybackURLProtocol.stub.configure { $0.unreachableHosts = ["lan.playback-tests.local", "wan.playback-tests.local"] }
-    let uncertain = await coordinator.locateLibraryItem("x", mediaType: "电影", in: servers)
-    XCTAssertEqual(uncertain, .libraryItem(itemID: "x", itemType: "Movie"))
+    let uncertain = await coordinator.locateLibraryItem("x", expected: expectation(), in: servers)
+    XCTAssertEqual(uncertain, .libraryItem(itemID: "x", expected: expectation()))
   }
 
   func testConnectionExpiresAndReselectsUser() async throws {

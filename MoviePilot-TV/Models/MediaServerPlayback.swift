@@ -157,6 +157,8 @@ nonisolated struct EmbyItem: Decodable, Sendable {
   let seriesName: String?
   /// `Virtual` 表示 Emby 只有元数据、没有文件（缺失的集）。
   let locationType: String?
+  /// 外部编号，如 `{"Tmdb": "12345", "Imdb": "tt…"}`。MoviePilot 同步媒体库时读的就是它。
+  let providerIDs: [String: String]?
 
   private enum CodingKeys: String, CodingKey {
     case id = "Id"
@@ -170,6 +172,7 @@ nonisolated struct EmbyItem: Decodable, Sendable {
     case parentIndexNumber = "ParentIndexNumber"
     case seriesName = "SeriesName"
     case locationType = "LocationType"
+    case providerIDs = "ProviderIds"
   }
 
   init(from decoder: Decoder) throws {
@@ -185,6 +188,18 @@ nonisolated struct EmbyItem: Decodable, Sendable {
     parentIndexNumber = try? container.decodeIfPresent(Int.self, forKey: .parentIndexNumber)
     seriesName = try? container.decodeIfPresent(String.self, forKey: .seriesName)
     locationType = try? container.decodeIfPresent(String.self, forKey: .locationType)
+    providerIDs = try? container.decodeIfPresent([String: String].self, forKey: .providerIDs)
+  }
+
+  /// 指定来源（MoviePilot 的 `tmdb`、`douban` 等）的外部编号；键名不区分大小写，也认 `tmdb_id` 这种写法
+  /// （与 MoviePilot `MediaServerIdentityHelper` 读取 ProviderIds 的规则一致）。没有或为空时返回 nil。
+  func providerID(for source: String) -> String? {
+    let source = source.lowercased() == "themoviedb" ? "tmdb" : source.lowercased()
+    let value = providerIDs?.first { key, _ in
+      let key = key.lowercased()
+      return key == source || key == source + "_id"
+    }?.value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return value?.isEmpty == false ? value : nil
   }
 
   /// 播放器标题：电影只有片名；剧集主标题是「第 N 季 第 M 集 · 集名」，副标题是剧名。
@@ -313,6 +328,30 @@ nonisolated struct EmbyPlaybackInfo: Decodable, Sendable {
 }
 
 /// Emby 列表接口的分页结构（`/Shows/{id}/Episodes` 等）。
+/// 详情页条目在服务器上应有的样子：Emby 条目类型，以及 MoviePilot 入库查询所用的外部编号（如 TMDB）。
+/// 详情页只拿到不带服务器名的条目 ID，不同服务器的数字 ID 会撞号：类型不符，或带着同来源编号却对不上的条目，
+/// 都不是要播的那一个。条目没有这个来源的编号时只比类型。
+nonisolated struct LibraryItemExpectation: Equatable, Sendable {
+  /// Emby 条目类型（`Movie` / `Series`）；MoviePilot 媒体类型无法对应时为 nil，不比类型。
+  let type: String?
+  let identity: MediaIdentity?
+
+  init(mediaType: String?, identity: MediaIdentity?) {
+    switch mediaType {
+    case "电影": type = "Movie"
+    case "电视剧": type = "Series"
+    default: type = nil
+    }
+    self.identity = identity
+  }
+
+  func matches(_ item: EmbyItem) -> Bool {
+    if let type, item.type != type { return false }
+    guard let identity, let providerID = item.providerID(for: identity.source) else { return true }
+    return providerID.caseInsensitiveCompare(identity.mediaId) == .orderedSame
+  }
+}
+
 nonisolated struct EmbyItemsPage: Decodable, Sendable {
   let items: [EmbyItem]
 
