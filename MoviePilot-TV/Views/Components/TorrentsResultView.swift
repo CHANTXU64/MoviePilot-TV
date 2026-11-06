@@ -205,9 +205,9 @@ struct TorrentFilterBar: View {
         } label: {
           HStack(spacing: 4) {
             if sortType == .asc {
-              Image(systemName: AppSymbol.uploads)
+              Image(systemName: AppSymbol.sortAscending)
             } else if sortType == .desc {
-              Image(systemName: AppSymbol.downloads)
+              Image(systemName: AppSymbol.sortDescending)
             }
             Text(sortField.rawValue)
           }

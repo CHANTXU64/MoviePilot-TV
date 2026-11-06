@@ -141,6 +141,31 @@ final class ForkOperationOwnerTests: XCTestCase {
     XCTAssertNil(blank.displayCustomWords)
   }
 
+  /// 「查看完整说明」给出面板里截断的全部内容：分享说明每段、关键词和识别词原文都不截短。
+  func testForkFullTextKeepsWholeCommentKeywordAndCustomWords() throws {
+    let longComment = (1...12).map { "第\($0)行说明" }.joined(separator: "\n")
+    let keyword = String(repeating: "(Knight|骑士)", count: 20)
+    let payload: [String: Any] = [
+      "id": 3,
+      "share_comment": longComment + "\n\n最后一段",
+      "keyword": keyword,
+      "custom_words": (1...9).map { "词\($0) => 替换\($0)" }.joined(separator: "\n"),
+    ]
+    let share = try JSONDecoder().decode(
+      SubscribeShare.self, from: JSONSerialization.data(withJSONObject: payload))
+
+    let blocks = ForkSubscribeSheet.fullTextBlocks(for: share)
+    let texts = blocks.map { String($0.text.characters) }
+    XCTAssertEqual(texts.first, longComment)
+    XCTAssertTrue(texts.contains("最后一段"))
+    XCTAssertTrue(blocks.contains(.divider))
+    XCTAssertTrue(blocks.contains(.field("关键词", keyword)))
+    XCTAssertTrue(blocks.contains(.field("识别词", try XCTUnwrap(share.displayCustomWords))))
+
+    let empty = try JSONDecoder().decode(SubscribeShare.self, from: Data(#"{"id":4}"#.utf8))
+    XCTAssertEqual(ForkSubscribeSheet.fullTextBlocks(for: empty), [])
+  }
+
   func testForkGetFailureRetriesGetOnlyWithoutDuplicatePost() async throws {
     try await withForkOperationOwnerBackend { service in
       configureForkOwnerUser(service)

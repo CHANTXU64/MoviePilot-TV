@@ -253,7 +253,8 @@ struct ReorganizeSheet: View {
         systemImage: AppSymbol.reorganize,
         loadingTitle: viewModel.isLoading ? "加载中" : "整理中",
         isLoading: viewModel.isSubmitting || viewModel.isLoading,
-        isDisabled: isTransferActionDisabled,
+        // 预览和整理不同时进行。预览是按下面的按钮开始的，焦点在那边，这里禁用不会让焦点跳走。
+        isDisabled: isTransferActionDisabled || viewModel.isPreviewing,
         focus: $isStartFocused
       ) {
         Task {

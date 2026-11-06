@@ -1189,14 +1189,14 @@ struct MediaDetailView: View {
                   )
                   let icon =
                     isDirect
-                    ? (isSubscribed ? AppSymbol.subscribed : "plus.circle")
+                    ? (isSubscribed ? AppSymbol.subscribed : AppSymbol.subscribe)
                     : (
                       isSeasonLoading
-                        ? "arrow.triangle.2.circlepath"
+                        ? AppSymbol.loading
                         : (
                           hasSeasonLoadError
-                            ? "exclamationmark.circle"
-                            : (isSeasonInformationUnavailable ? AppSymbol.info : "list.bullet.circle")
+                            ? AppSymbol.warning
+                            : (isSeasonInformationUnavailable ? AppSymbol.info : AppSymbol.chooseSeasons)
                         )
                     )
 

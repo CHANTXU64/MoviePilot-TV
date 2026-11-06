@@ -2568,6 +2568,10 @@ extension SubscribeShare {
     MediaIdentifier.normalizedString(share_title) ?? MediaIdentifier.normalizedString(name)
   }
 
+  /// 分享说明、关键词：去掉首尾空白，没有内容时为 nil。面板和「查看完整说明」用同一份。
+  var displayComment: String? { MediaIdentifier.normalizedString(share_comment) }
+  var displayKeyword: String? { MediaIdentifier.normalizedString(keyword) }
+
   /// 面板里列出的识别词原文：与 Web 一样保留每行（含注释行），只去掉空行和行首尾空白。
   var displayCustomWords: String? {
     let lines = (custom_words ?? "")

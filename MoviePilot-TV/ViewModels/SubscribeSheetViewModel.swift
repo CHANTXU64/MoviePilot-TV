@@ -122,11 +122,13 @@ class SubscribeSheetViewModel: ObservableObject {
     return subscribeModeOptions.first { $0.value == mode }?.title ?? "普通订阅"
   }
 
-  /// 集数范围，例如「1–6 集」「3–6 集」；没有总集数时不显示。开始集数缺失或越界时从 1 算。
+  /// 集数范围，例如「1–6 集」「3–6 集」；没有总集数时不显示。
+  /// 开始集数没填或为 0 时从 1 算（后端同样按 1 处理）；超出 1…总集数时照实写出，
+  /// 不改成别的范围，免得和实际保存的开始集数对不上。
   var episodeRangeText: String? {
     guard isTV, let total = subscribe.total_episode, total > 0 else { return nil }
-    let first = subscribe.start_episode.flatMap { (1...total).contains($0) ? $0 : nil } ?? 1
-    return "\(first)–\(total) 集"
+    let start = subscribe.start_episode.flatMap { $0 == 0 ? nil : $0 } ?? 1
+    return (1...total).contains(start) ? "\(start)–\(total) 集" : "第 \(start) 集起，共 \(total) 集"
   }
 
   /// 编辑订阅的进度，例如「已有 3 / 6 集」，按已保存的记录算，不随正在改的设置变化。
@@ -381,6 +383,11 @@ class SubscribeSheetViewModel: ObservableObject {
       return false
     }
     return true
+  }
+
+  /// 加载失败且不能重试（已创建的订阅不再属于当前登录），只能关掉重新打开。
+  var mustClose: Bool {
+    loadErrorMessage != nil && !canRetryLoad
   }
 
   /// 出错后按「订阅」「订阅设置」时先重新加载。只有真正加载完成、并且没有从新增变成编辑

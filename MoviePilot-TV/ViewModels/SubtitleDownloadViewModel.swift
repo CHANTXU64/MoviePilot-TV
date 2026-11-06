@@ -75,12 +75,26 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
     if case .submitting = state { return true }
     return false
   }
-  var failure: String? {
+  static let invalidatedMessage = "登录状态已更新，请关闭后重新搜索字幕。"
+  static let noSearchPermissionMessage = "当前账号没有搜索权限，无法下载字幕。"
+
+  /// 登录已变或没有了搜索权限：这个面板只能关掉。设置都不可用，主按钮变成「关闭」。
+  var mustClose: Bool {
     switch state {
-    case .failed(let message): message
-    case .invalidated: "登录状态已更新，请关闭后重新搜索字幕。"
-    default: nil
+    case .invalidated: true
+    case .editing, .failed: !isSessionValid
+    default: false
     }
+  }
+
+  /// 面板上优先显示的原因：只能关掉时说明是登录变了还是没有权限，其次是下载失败。
+  var failure: String? {
+    if mustClose {
+      return apiService.isSessionUnchanged(from: session)
+        ? Self.noSearchPermissionMessage : Self.invalidatedMessage
+    }
+    if case .failed(let message) = state { return message }
+    return nil
   }
   private var normalizedMediaId: String {
     mediaId.trimmingCharacters(in: .whitespacesAndNewlines)

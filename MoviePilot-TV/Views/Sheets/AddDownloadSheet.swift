@@ -7,7 +7,6 @@ import SwiftUI
 /// 关闭交给 Menu 键，不放「取消」按钮。
 /// 不放导航栈：tvOS 26 起 sheet 按内容宽高显示；tvOS 18 的 sheet 是全屏，内容居中。
 struct AddDownloadSheet: View {
-  @Environment(\.dismiss) var dismiss
   @ObservedObject private var apiService = APIService.shared
   @StateObject private var viewModel: AddDownloadViewModel
   @StateObject private var sources = MediaSourceOptionsModel()
@@ -52,7 +51,8 @@ struct AddDownloadSheet: View {
           options: [PickerOption(title: "自动", value: "")]
             + viewModel.downloaders.map {
               PickerOption(title: $0.name, value: $0.name)
-            }
+            },
+          unavailableMessage: viewModel.isLoading ? "正在加载…" : nil
         )
 
         SheetPicker(
@@ -64,7 +64,8 @@ struct AddDownloadSheet: View {
           options: [PickerOption(title: "自动", value: "")]
             + viewModel.targetDirectories.map {
               PickerOption(title: $0, value: $0)
-            }
+            },
+          unavailableMessage: viewModel.isLoading ? "正在加载…" : nil
         )
 
         SheetPicker(
