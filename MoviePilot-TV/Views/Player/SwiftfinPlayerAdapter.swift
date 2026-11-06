@@ -1,3 +1,4 @@
+import AVKit
 import Combine
 import MPVUI
 import SwiftUI
@@ -188,6 +189,8 @@ final class MediaSession {
   private var hasStarted = false
   /// 正在为换集、换版本解析新条目。
   private var isSwitchingItem = false
+  /// 开了「匹配内容」时，从起播到电视切好显示模式整屏盖黑（见 `coverUntilDisplaySettles`）。只是遮挡，不影响播放。
+  private(set) var isCoveringForDisplay: Bool
 
   @ObservationIgnored private let playerAdapter: MPVPlayerAdapter
   @ObservationIgnored private let onExit: () -> Void
@@ -198,6 +201,9 @@ final class MediaSession {
   @ObservationIgnored private var timingTask: Task<Void, Never>?
   @ObservationIgnored private var itemObservations: [AnyCancellable] = []
   @ObservationIgnored private var queueObservation: AnyCancellable?
+  @ObservationIgnored private var displayTask: Task<Void, Never>?
+  /// 已按片源信息向电视申请过显示模式，退出时要还原。
+  @ObservationIgnored private var hasRequestedDisplayMode = false
 
   init(
     session: PlaybackSession,
@@ -211,6 +217,7 @@ final class MediaSession {
     mpvPlayer = player
     playerAdapter = MPVPlayerAdapter(player: player)
     userSession = UserSession(client: session.client, userID: session.userID)
+    isCoveringForDisplay = Self.displayManager?.isDisplayCriteriaMatchingEnabled == true
   }
 
   var player: (any MediaPlayer)? { playerAdapter }
@@ -280,7 +287,9 @@ final class MediaSession {
     prepareItem()
     textSubtitles.start(mpvPlayer)
     observeEvents()
+    let requested = requestDisplayMode()
     session.start()
+    coverUntilDisplaySettles(afterRequest: requested)
     refreshPlaybackState()
   }
 
@@ -296,14 +305,60 @@ final class MediaSession {
     prepareItem()
     textSubtitles.start(mpvPlayer)
     mpvPlayer.setPlaybackRate(effectiveRate)
+    let requested = requestDisplayMode()
     session.start()
+    coverUntilDisplaySettles(afterRequest: requested)
     refreshPlaybackState()
+  }
+
+  /// 开了「匹配内容」时，按 Emby 片源信息在起播前向电视申请显示模式（见 `DisplayModeHint`），切换与载入同时进行；
+  /// 切换期间 MPVUI 会暂停时钟。认不准格式时不申请，交给 MPVUI 开播后自己申请。返回是否已申请。
+  private func requestDisplayMode() -> Bool {
+    guard let display = Self.displayManager, display.isDisplayCriteriaMatchingEnabled,
+      let criteria = DisplayModeHint(source: session.mediaSource)?.makeCriteria()
+    else { return false }
+    display.preferredDisplayCriteria = criteria
+    hasRequestedDisplayMode = true
+    return true
+  }
+
+  /// 开了「匹配内容」时，从起播到电视切好显示模式整屏盖黑：切换时 HDMI 黑屏约 1 秒，之前露出的首帧和控件就像闪了一下。
+  /// 只是遮挡，播放照常进行。已提前申请过模式时，MPVUI 再申请同一模式不会再切，就绪后只留很短的时间确认。
+  private func coverUntilDisplaySettles(afterRequest requested: Bool) {
+    displayTask?.cancel()
+    guard let display = Self.displayManager, display.isDisplayCriteriaMatchingEnabled else {
+      isCoveringForDisplay = false
+      return
+    }
+    isCoveringForDisplay = true
+    var timing = DisplayModeGate.Timing()
+    if requested { timing.settle = .milliseconds(200) }
+    displayTask = Task { [weak self] in
+      await DisplayModeGate.wait(for: display, timing: timing) { [weak self] in
+        guard let self else { return true }
+        return DisplayModeGate.isSettled(self.mpvPlayer)
+      }
+      guard let self, !Task.isCancelled else { return }
+      self.isCoveringForDisplay = false
+    }
+  }
+
+  /// 前台窗口的显示管理器。MPVUI 也是向播放画面所在窗口的这个对象申请显示模式。
+  private static var displayManager: (any DisplayModeSwitching)? {
+    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+    return (scene?.keyWindow ?? scene?.windows.first)?.avDisplayManager
   }
 
   /// 退出播放。可重复调用；实际停止和进度上报由外部的退出闭包（结束 `PlaybackSession`）完成。
   func stop() {
     guard !isStopped else { return }
     isStopped = true
+    displayTask?.cancel()
+    displayTask = nil
+    if hasRequestedDisplayMode {
+      Self.displayManager?.preferredDisplayCriteria = nil
+    }
     seekTask?.cancel()
     seekTask = nil
     pendingSeek = nil

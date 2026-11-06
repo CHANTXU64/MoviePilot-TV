@@ -15,6 +15,7 @@
 // - 不用 Router：会话停止时由 `MediaSession` 调外部传入的退出闭包，去掉 `router.dismiss()`。
 // - 起播失败由 `PlaybackSession` 结束会话并在外层提示，去掉原版的错误重试弹窗；去掉投屏、iOS 状态栏与屏幕方向相关修饰。
 // - 图标名改从 AppSymbol 取（项目统一图标来源），图标本身不变。
+// - 等电视切换显示模式（`MediaSession.isCoveringForDisplay`）时整屏盖黑，画面和控制层切好后一起出现。
 //
 
 import MPVUI
@@ -41,6 +42,13 @@ struct VideoPlayer: View {
             )
         } playbackControls: {
             PlaybackControls()
+        }
+        .overlay {
+            // 切换显示模式时 HDMI 会黑屏，切换前露出的画面或控件都会像闪了一下，所以整屏保持黑色。
+            if mediaSession.isCoveringForDisplay {
+                Color.black
+                    .ignoresSafeArea()
+            }
         }
         .onAppear {
             mediaSession.start()

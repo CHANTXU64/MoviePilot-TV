@@ -257,6 +257,18 @@ nonisolated struct EmbyMediaStream: Decodable, Sendable, Equatable {
   let type: String?
   let codec: String?
   let isDefault: Bool?
+  /// 以下只有视频流有，开播前向电视申请显示模式用（见 `DisplayModeHint`）。
+  var width: Int?
+  var height: Int?
+  /// Emby 读到的帧率，如 23.976025。
+  var frameRate: Double?
+  /// `SDR`、`HDR 10`、`HLG`、`DolbyVision` 等。
+  var videoRange: String?
+  /// `Hdr10`、`Hdr10Plus`、`HyperLogGamma`、`DolbyVision` 等。
+  var extendedVideoType: String?
+  /// 杜比视界的配置，如 `DoviProfile50`、`DoviProfile81`。
+  var extendedVideoSubType: String?
+
   init(type: String?, codec: String?, isDefault: Bool? = nil) {
     self.type = type
     self.codec = codec
@@ -267,6 +279,13 @@ nonisolated struct EmbyMediaStream: Decodable, Sendable, Equatable {
     case type = "Type"
     case codec = "Codec"
     case isDefault = "IsDefault"
+    case width = "Width"
+    case height = "Height"
+    case realFrameRate = "RealFrameRate"
+    case averageFrameRate = "AverageFrameRate"
+    case videoRange = "VideoRange"
+    case extendedVideoType = "ExtendedVideoType"
+    case extendedVideoSubType = "ExtendedVideoSubType"
   }
 
   init(from decoder: Decoder) throws {
@@ -274,6 +293,14 @@ nonisolated struct EmbyMediaStream: Decodable, Sendable, Equatable {
     type = try? container.decodeIfPresent(String.self, forKey: .type)
     codec = try? container.decodeIfPresent(String.self, forKey: .codec)
     isDefault = try? container.decodeIfPresent(Bool.self, forKey: .isDefault)
+    width = try? container.decodeIfPresent(Int.self, forKey: .width)
+    height = try? container.decodeIfPresent(Int.self, forKey: .height)
+    frameRate =
+      (try? container.decodeIfPresent(Double.self, forKey: .realFrameRate))
+      ?? (try? container.decodeIfPresent(Double.self, forKey: .averageFrameRate))
+    videoRange = try? container.decodeIfPresent(String.self, forKey: .videoRange)
+    extendedVideoType = try? container.decodeIfPresent(String.self, forKey: .extendedVideoType)
+    extendedVideoSubType = try? container.decodeIfPresent(String.self, forKey: .extendedVideoSubType)
   }
 }
 
