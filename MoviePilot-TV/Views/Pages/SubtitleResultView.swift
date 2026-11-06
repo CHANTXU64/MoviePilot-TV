@@ -58,7 +58,7 @@ struct SubtitleResultsBody<Header: View>: View {
             if search.showsEmptyState {
               EmptyDataView(
                 title: search.emptyStateTitle,
-                systemImage: "captions.bubble",
+                systemImage: AppSymbol.searchSubtitles,
                 description: search.errorMessage,
                 actionTitle: search.canRestart ? "重新搜索" : nil,
                 action: { search.restart() }
@@ -207,7 +207,7 @@ private struct SubtitleResultCard: View {
         }
         Spacer(minLength: 12)
         if let grabs = subtitle.grabs {
-          Label("\(grabs) 次", systemImage: "arrow.down")
+          Label("\(grabs) 次", systemImage: AppSymbol.downloads)
             .accessibilityLabel("下载 \(grabs) 次")
             .fixedSize()
         }

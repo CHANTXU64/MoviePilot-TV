@@ -9,7 +9,12 @@ class SubscriptionHandler: ObservableObject {
   @Published var sheetSubscribe: Subscribe?
   @Published var sheetIsNewSubscription = false
   @Published var tvSubscribeRequest: SubscribeSeasonRequest?
-  @Published var forkSheetRequest: SubscribeShare?
+  /// 打开另一个分享时清掉上一个分享的复用失败提示，免得新面板一打开就显示别人的错误。
+  @Published var forkSheetRequest: SubscribeShare? {
+    didSet {
+      if forkSheetRequest?.id != oldValue?.id { forkErrorMessage = nil }
+    }
+  }
   @Published private(set) var isUnsubscribing = false
 
   @Published var notificationMessage = ""
@@ -219,7 +224,7 @@ class SubscriptionHandler: ObservableObject {
     } catch {
       guard activeForkOperation == operationID else { return nil }
       Logger.error("Failed to fork subscription: \(error)")
-      let title = share.share_title ?? share.name ?? "该订阅"
+      let title = share.displayTitle ?? "该订阅"
       forkErrorMessage = "暂时无法复用订阅《\(title)》，请稍后重试。"
       return nil
     }

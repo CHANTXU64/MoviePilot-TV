@@ -888,7 +888,7 @@ struct SystemView: View {
         }
 
         if showsDisclosure {
-          Image(systemName: "chevron.right")
+          Image(systemName: AppSymbol.disclosure)
             .foregroundStyle(.secondary)
         }
       }

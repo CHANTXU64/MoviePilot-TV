@@ -32,10 +32,10 @@ enum MediaSource: String {
 /// 统一卡片媒体类型图标，未知类型只用于缺图占位，不冒充电影。
 enum MediaTypePresentation {
   private static let iconMap: [String: String] = [
-    "电影": "film",
-    "电视剧": "tv",
-    "合集": "rectangle.stack",
-    "人物": "person.fill",
+    "电影": AppSymbol.movie,
+    "电视剧": AppSymbol.tv,
+    "合集": AppSymbol.collection,
+    "人物": AppSymbol.person,
   ]
 
   static func iconName(for typeText: String?) -> String? {
@@ -52,7 +52,7 @@ enum MediaTypePresentation {
   }
 
   static func placeholderIconName(for typeText: String?) -> String {
-    iconName(for: typeText) ?? "photo"
+    iconName(for: typeText) ?? AppSymbol.imagePlaceholder
   }
 }
 
@@ -200,7 +200,7 @@ private struct BadgeOverlay: View, Equatable {
       .tag("typeIcon")
 
       if let rating = ratingText, !rating.isEmpty, let score = Double(rating), score > 0 {
-        Image(systemName: "star.fill")
+        Image(systemName: AppSymbol.rating)
           .font(.caption2)
           .foregroundStyle(.yellow)
           .tag("ratingStar")

@@ -4,13 +4,8 @@ struct SubscribeSheet: View {
   @Environment(\.dismiss) var dismiss
   @StateObject private var viewModel: SubscribeSheetViewModel
   @State private var hasAppeared = false
-  @State private var isRetryingLoad = false
-  @State private var showBasic = false
-  @State private var showAdvanced = false
   @State private var isSaveAttemptInFlight = false
   @State private var showingIdentityResetConfirmation = false
-  @FocusState private var isBasicButtonFocused: Bool
-  @FocusState private var isAdvancedButtonFocused: Bool
 
   var onSave: ((Subscribe) -> Void)?
 
@@ -40,333 +35,26 @@ struct SubscribeSheet: View {
     self.onSave = { _ in onSave() }
   }
 
+  /// 新增和编辑都用 `SubscribePanel`：新增先是快速面板，编辑直接是大面板。
   var body: some View {
-    NavigationStack {
-      Group {
-        if viewModel.isLoading {
-          ProgressView("加载配置中...")
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-          VStack {
-            Text(
-              (viewModel.isNewSubscription ? "新增" : "编辑") + "：\(viewModel.subscribe.name)"
-            )
-            .font(.headline)
-            .lineLimit(1)
-            .frame(maxWidth: .infinity)
-            .foregroundColor(.secondary)
-            .padding(.horizontal, 48)
-            .padding(.top, 28)
-            .padding(.bottom, 0)
-
-            ScrollView {
-              VStack {
-                if let message = viewModel.loadErrorMessage {
-                  if viewModel.canRetryLoad {
-                    SheetFeedbackView(message: message, actionTitle: "重新加载") {
-                      guard !isRetryingLoad else { return }
-                      isRetryingLoad = true
-                      Task {
-                        await viewModel.loadData()
-                        isRetryingLoad = false
-                      }
-                    }
-                    .disabled(isRetryingLoad)
-                  } else {
-                    SheetFeedbackView(message: message)
-                  }
-                }
-
-                Button {
-                  withAnimation {
-                    showBasic.toggle()
-                  }
-                } label: {
-                  HStack {
-                    Text("基本设置")
-                    Spacer()
-                    Image(systemName: showBasic ? "chevron.down" : "chevron.right")
-                  }
-                  .foregroundColor(isBasicButtonFocused ? .black : .secondary)
-                  .if(SheetStyleFix.shouldApply) { view in
-                    view.padding(.horizontal)
-                  }
-                }
-                .focused($isBasicButtonFocused)
-
-                if showBasic {
-                  if viewModel.subscribe.type == "电视剧" {
-                    SheetTextField(
-                      title: "电视剧总集数",
-                      placeholder: "0",
-                      text: Binding(
-                        get: { viewModel.totalEpisodeText },
-                        set: { viewModel.totalEpisodeText = $0 }
-                      ),
-                      keyboardType: .numberPad
-                    )
-
-                    SheetTextField(
-                      title: "开始订阅集数",
-                      placeholder: "0",
-                      text: Binding(
-                        get: { String(viewModel.subscribe.start_episode ?? 0) },
-                        set: { viewModel.subscribe.start_episode = Int($0) }
-                      ),
-                      keyboardType: .numberPad
-                    )
-                  }
-
-                  SheetPicker(
-                    title: "质量",
-                    selection: Binding(
-                      get: { viewModel.subscribe.quality ?? "" },
-                      set: { viewModel.subscribe.quality = $0 }
-                    ),
-                    options: viewModel.qualityOptions.map {
-                      PickerOption(title: $0.title, value: $0.value)
-                    }
-                  )
-
-                  SheetPicker(
-                    title: "分辨率",
-                    selection: Binding(
-                      get: { viewModel.subscribe.resolution ?? "" },
-                      set: { viewModel.subscribe.resolution = $0 }
-                    ),
-                    options: viewModel.resolutionOptions.map {
-                      PickerOption(title: $0.title, value: $0.value)
-                    }
-                  )
-
-                  SheetPicker(
-                    title: "特效",
-                    selection: Binding(
-                      get: { viewModel.subscribe.effect ?? "" },
-                      set: { viewModel.subscribe.effect = $0 }
-                    ),
-                    options: viewModel.effectOptions.map {
-                      PickerOption(title: $0.title, value: $0.value)
-                    }
-                  )
-
-                  SheetMultiPicker(
-                    title: "站点",
-                    summary: siteButtonLabel,
-                    emptySelectionTitle: "全部站点",
-                    options: viewModel.sites,
-                    id: \.id,
-                    selected: Binding(
-                      get: { Set(viewModel.subscribe.sites ?? []) },
-                      set: { viewModel.subscribe.sites = Array($0) }
-                    ),
-                    label: { $0.name }
-                  )
-
-                  SheetPicker(
-                    title: "下载器",
-                    selection: $viewModel.downloaderSelection,
-                    options: [PickerOption(title: "默认", value: "")]
-                      + viewModel.downloaders.map {
-                        PickerOption(title: $0.name, value: $0.name)
-                      }
-                  )
-
-                  SheetPicker(
-                    title: "保存路径",
-                    selection: Binding(
-                      get: { viewModel.subscribe.save_path ?? "" },
-                      set: { viewModel.subscribe.save_path = $0.isEmpty ? nil : $0 }
-                    ),
-                    options: [PickerOption(title: "自动", value: "")]
-                      + viewModel.savePathOptions.map {
-                        PickerOption(title: $0, value: $0)
-                      }
-                  )
-
-                  Toggle(
-                    "洗版",
-                    isOn: Binding(
-                      get: { (viewModel.subscribe.best_version ?? 0) == 1 },
-                      set: {
-                        let newValue = $0 ? 1 : 0
-                        viewModel.subscribe.best_version = newValue
-                        if newValue == 0 {
-                          viewModel.subscribe.best_version_full = 0
-                        }
-                      }
-                    ))
-
-                  if viewModel.subscribe.type == "电视剧"
-                    && (viewModel.subscribe.best_version ?? 0) == 1
-                  {
-                    Toggle(
-                      "仅洗全集",
-                      isOn: Binding(
-                        get: { (viewModel.subscribe.best_version_full ?? 0) == 1 },
-                        set: { viewModel.subscribe.best_version_full = $0 ? 1 : 0 }
-                      ))
-                  }
-
-                  Toggle(
-                    "使用IMDB搜索",
-                    isOn: Binding(
-                      get: { (viewModel.subscribe.search_imdbid ?? 0) == 1 },
-                      set: { viewModel.subscribe.search_imdbid = $0 ? 1 : 0 }
-                    ))
-                }
-
-                Button {
-                  withAnimation {
-                    showAdvanced.toggle()
-                  }
-                } label: {
-                  HStack {
-                    Text("高级配置")
-                    Spacer()
-                    Image(systemName: showAdvanced ? "chevron.down" : "chevron.right")
-                  }
-                  .foregroundColor(isAdvancedButtonFocused ? .black : .secondary)
-                  .if(SheetStyleFix.shouldApply) { view in
-                    view.padding(.horizontal)
-                  }
-                }
-                .focused($isAdvancedButtonFocused)
-
-                if showAdvanced {
-                  SheetTextField(
-                    title: "搜索关键词",
-                    placeholder: "",
-                    text: Binding(
-                      get: { viewModel.subscribe.keyword ?? "" },
-                      set: { viewModel.subscribe.keyword = $0.isEmpty ? nil : $0 }
-                    ))
-
-                  SheetTextField(
-                    title: "包含词",
-                    placeholder: "",
-                    text: Binding(
-                      get: { viewModel.subscribe.include ?? "" },
-                      set: { viewModel.subscribe.include = $0.isEmpty ? nil : $0 }
-                    ))
-
-                  SheetTextField(
-                    title: "排除词",
-                    placeholder: "",
-                    text: Binding(
-                      get: { viewModel.subscribe.exclude ?? "" },
-                      set: { viewModel.subscribe.exclude = $0.isEmpty ? nil : $0 }
-                    ))
-
-                  SheetMultiPicker(
-                    title: "优先级规则组",
-                    summary: filterGroupButtonLabel,
-                    emptySelectionTitle: "无",
-                    options: viewModel.filterGroups,
-                    id: \.name,
-                    selected: Binding(
-                      get: { Set(viewModel.subscribe.filter_groups ?? []) },
-                      set: { viewModel.subscribe.filter_groups = Array($0) }
-                    ),
-                    label: { $0.name }
-                  )
-
-                  if viewModel.subscribe.type == "电视剧" {
-                    SheetPicker(
-                      title: "剧集组",
-                      selection: Binding(
-                        get: { viewModel.subscribe.episode_group ?? "" },
-                        set: { viewModel.subscribe.episode_group = $0.isEmpty ? nil : $0 }
-                      ),
-                      options: [PickerOption(title: "默认", value: "")]
-                        + viewModel.episodeGroups.map {
-                          PickerOption(
-                            title: "\($0.name) (\($0.group_count)季 \($0.episode_count)集)",
-                            value: $0.id)
-                        }
-                    )
-
-                    SheetPicker(
-                      title: "指定季",
-                      selection: Binding(
-                        get: {
-                          if let s = viewModel.subscribe.season { return String(s) }
-                          return ""
-                        },
-                        set: { viewModel.subscribe.season = Int($0) }
-                      ),
-                      options: [PickerOption(title: "全部", value: "")]
-                        + viewModel.seasonOptions.map {
-                          PickerOption(title: "第 \($0) 季", value: String($0))
-                        }
-                    )
-                  }
-
-                  SheetTextField(
-                    title: "自定义类别",
-                    placeholder: "",
-                    text: $viewModel.mediaCategoryText)
-
-                  SheetTextField(
-                    title: "自定义识别词",
-                    placeholder: "",
-                    text: Binding(
-                      get: { viewModel.subscribe.custom_words ?? "" },
-                      set: { viewModel.subscribe.custom_words = $0.isEmpty ? nil : $0 }
-                    ))
-                }
-
-                if viewModel.isSaved && !isSaveAttemptInFlight {
-                  SheetActionButton(
-                    title: "关闭",
-                    loadingTitle: "关闭",
-                    isLoading: false,
-                    feedbackMessage: viewModel.errorMessage
-                  ) {
-                    dismiss()
-                  }
-                } else {
-                  SheetActionButton(
-                    title: viewModel.isNewSubscription ? "确定" : "保存",
-                    loadingTitle: viewModel.isNewSubscription ? "确定中" : "保存中",
-                    isLoading: isSaveAttemptInFlight,
-                    isDisabled: viewModel.loadErrorMessage != nil,
-                    feedbackMessage: viewModel.errorMessage
-                  ) {
-                    attemptSave()
-                  }
-
-                  Button {
-                    dismiss()
-                  } label: {
-                    Text(viewModel.isNewSubscription ? "取消订阅" : "取消修改")
-                      .frame(maxWidth: .infinity)
-                  }
-                  .disabled(isSaveAttemptInFlight)
-                }
-              }
-              .padding(.horizontal, 28)
-              .padding(.top, 10)
-              .padding(.bottom, 28)
-              .applySheetStyles()
-            }
-          }
-        }
+    SubscribePanel(
+      viewModel: viewModel,
+      isSaving: isSaveAttemptInFlight,
+      onSubscribe: attemptSave
+    )
+    .alert(
+      SubscribeIdentityResetConfirmation.title,
+      isPresented: $showingIdentityResetConfirmation
+    ) {
+      Button(SubscribeIdentityResetConfirmation.cancelButtonTitle, role: .cancel) {
+        showingIdentityResetConfirmation = false
       }
-      .alert(
-        SubscribeIdentityResetConfirmation.title,
-        isPresented: $showingIdentityResetConfirmation
-      ) {
-        Button(SubscribeIdentityResetConfirmation.cancelButtonTitle, role: .cancel) {
-          showingIdentityResetConfirmation = false
-        }
-        Button(SubscribeIdentityResetConfirmation.confirmButtonTitle, role: .destructive) {
-          showingIdentityResetConfirmation = false
-          performSave()
-        }
-      } message: {
-        Text(SubscribeIdentityResetConfirmation.message)
+      Button(SubscribeIdentityResetConfirmation.confirmButtonTitle, role: .destructive) {
+        showingIdentityResetConfirmation = false
+        performSave()
       }
+    } message: {
+      Text(SubscribeIdentityResetConfirmation.message)
     }
     .onAppear {
       guard !hasAppeared else { return }
@@ -384,33 +72,6 @@ struct SubscribeSheet: View {
     }
   }
 
-  /// Site selection button label
-  private var siteButtonLabel: String {
-    let selectedSiteIds = viewModel.subscribe.sites ?? []
-    if selectedSiteIds.isEmpty {
-      return "全部"
-    }
-    if selectedSiteIds.count == 1 {
-      let siteId = selectedSiteIds[0]
-      if let site = viewModel.sites.first(where: { $0.id == siteId }) {
-        return site.name
-      }
-      return "已选 1 个"
-    }
-    return "已选 \(selectedSiteIds.count) 个"
-  }
-
-  private var filterGroupButtonLabel: String {
-    let selectedGroups = viewModel.subscribe.filter_groups ?? []
-    if selectedGroups.isEmpty {
-      return "无"
-    }
-    if selectedGroups.count == 1 {
-      return selectedGroups[0]
-    }
-    return "已选 \(selectedGroups.count) 个"
-  }
-
   private func attemptSave() {
     guard !isSaveAttemptInFlight else { return }
     if viewModel.willResetSubscriptionProgressOnSave {
@@ -425,7 +86,10 @@ struct SubscribeSheet: View {
     isSaveAttemptInFlight = true
     Task {
       if await viewModel.save() {
-        onSave?(viewModel.subscribe)
+        // 保存后只补做启用、搜索时没有写入，不再回写缓存。
+        if viewModel.didWriteInLastSave {
+          onSave?(viewModel.subscribe)
+        }
         if viewModel.errorMessage == nil {
           dismiss()
           return

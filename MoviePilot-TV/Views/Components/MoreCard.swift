@@ -67,7 +67,7 @@ struct MoreCard: View {
 
           // 固定占位对齐 footerLabel
           HStack(spacing: 4) {
-            Image(systemName: "plus.circle")
+            Image(systemName: AppSymbol.subscribe)
             Text(" ")
           }
           .font(.caption)

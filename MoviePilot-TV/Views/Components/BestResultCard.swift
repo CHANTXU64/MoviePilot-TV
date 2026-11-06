@@ -1,7 +1,26 @@
 import Kingfisher
 import SwiftUI
 
+/// 媒体结果卡片（搜索页「最佳结果」、查询媒体 ID 共用）：第一行片名，第二行「类型 · 年份 · 来源」。
 struct BestResultCard: View {
+  /// 第二行信息的统一写法，两处结果列表都用它。
+  static func mediaSubtitle(for media: MediaInfo) -> String {
+    let type = media.subscribeShare != nil ? "订阅分享" : media.type
+    return [type, media.year, sourceTitle(for: media.source)]
+      .compactMap { MediaIdentifier.normalizedString($0) }
+      .joined(separator: " · ")
+  }
+
+  static func sourceTitle(for source: String?) -> String? {
+    switch source {
+    case "themoviedb": "TMDB"
+    case "douban": "豆瓣"
+    case "bangumi": "Bangumi"
+    case "anilist": "AniList"
+    default: source
+    }
+  }
+
   let title: String
   let type: String?
   let posterUrl: URL?
@@ -69,8 +88,9 @@ struct BestResultCard: View {
       Rectangle()
         .fill(Color(white: 0.12))
         .overlay(
+          // 缺图占位只是提示类型，图标不宜比海报里的内容还显眼。
           Image(systemName: MediaTypePresentation.placeholderIconName(for: type))
-            .font(.title2)
+            .font(.body)
             .foregroundColor(.gray)
         )
 

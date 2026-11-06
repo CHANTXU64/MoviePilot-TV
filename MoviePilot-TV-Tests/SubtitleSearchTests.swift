@@ -962,12 +962,16 @@ final class SubtitleSearchTests: XCTestCase {
     var states: [SubtitleDownloadViewModel.State] = []
     let observation = model.$state.sink { states.append($0) }
     defer { observation.cancel() }
+    XCTAssertFalse(model.mustClose)
 
     api.replaceSessionForTesting(baseURL: api.baseURL, token: "refreshed", currentUser: api.currentUser)
     XCTAssertEqual(api.uiIdentity, uiIdentity)
     XCTAssertEqual(states, [.editing, .invalidated])
     XCTAssertEqual(model.failure, "登录状态已更新，请关闭后重新搜索字幕。")
     XCTAssertFalse(model.canEdit)
+    // 设置全部不可用时主按钮改成「关闭」，面板里仍有能聚焦的按钮。
+    XCTAssertTrue(model.mustClose)
+    XCTAssertEqual(model.statusMessage, SubtitleDownloadViewModel.invalidatedMessage)
     XCTAssertNil(model.submit())
     model.selectSource(.douban)
     XCTAssertEqual(model.mediaSource, .themoviedb)
@@ -983,6 +987,18 @@ final class SubtitleSearchTests: XCTestCase {
     XCTAssertEqual(model.state, .invalidated)
     XCTAssertNotNil(model.failure)
     XCTAssertFalse(model.canSubmit)
+    XCTAssertTrue(model.mustClose)
+  }
+
+  /// 没有搜索权限（登录没变）时同样只能关掉：主按钮是「关闭」，提示说的是没有权限，不说登录变了。
+  func testSubtitleDownloadWithoutSearchPermissionMustClose() {
+    let model = downloadModel(api: service(search: false))
+    model.mediaId = "550"
+    XCTAssertEqual(model.state, .editing)
+    XCTAssertFalse(model.canEdit)
+    XCTAssertFalse(model.canSubmit)
+    XCTAssertTrue(model.mustClose)
+    XCTAssertEqual(model.statusMessage, SubtitleDownloadViewModel.noSearchPermissionMessage)
   }
 
   func testSubtitleResultsObserveRootAndDetailLifecycleAfterReplacingSearch() async throws {
@@ -1083,6 +1099,34 @@ final class SubtitleSearchTests: XCTestCase {
     await task.value
     XCTAssertEqual(model.remoteExchange, .interrupted)
     XCTAssertNotEqual(model.state, .completed)
+  }
+
+  /// 面板提示的优先级：下载失败盖过保存路径加载失败，此时不提供重新加载目录的「重试」；
+  /// 没有出错时按媒体 ID 提示，和「下载」能否点击用同一套判断。
+  func testDownloadStatusMessagePrefersFailureOverDirectoryError() async throws {
+    let model = downloadModel(api: service())
+    XCTAssertEqual(model.statusMessage, SubtitleDownloadViewModel.missingMediaIdMessage)
+    XCTAssertFalse(model.canSubmit)
+
+    model.mediaId = "0"
+    XCTAssertEqual(model.statusMessage, MediaSearchSource.invalidManualIdMessage)
+    XCTAssertFalse(model.canSubmit)
+
+    model.mediaId = "550"
+    XCTAssertNil(model.statusMessage)
+    XCTAssertTrue(model.canSubmit)
+
+    SubtitleSearchURLProtocol.directoryBody = Data(#"{"success":false,"message":"目录暂时不可用"}"#.utf8)
+    await model.loadDirectories()
+    let directoryError = try XCTUnwrap(model.directoryError)
+    XCTAssertEqual(model.statusMessage, directoryError)
+    XCTAssertTrue(model.canRetryDirectories)
+
+    SubtitleSearchURLProtocol.downloadStatus = 500
+    SubtitleSearchURLProtocol.downloadBody = Data(#"{"detail":"内部错误"}"#.utf8)
+    await model.submit()?.value
+    XCTAssertEqual(model.statusMessage, "500: 内部错误")
+    XCTAssertFalse(model.canRetryDirectories)
   }
 
   func testGatewayDownloadStatusDoesNotFinishOnTheServer() async throws {

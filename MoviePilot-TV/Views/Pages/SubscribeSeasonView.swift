@@ -281,7 +281,7 @@ struct SubscribeSeasonContentView: View {
           .frame(maxWidth: .infinity, minHeight: 200)
       } else if viewModel.hasSeasonLoadError {
         VStack(spacing: 16) {
-          Image(systemName: "exclamationmark.triangle.fill")
+          Image(systemName: AppSymbol.warning)
             .font(.system(size: 48))
             .foregroundColor(.secondary)
           Text("分季信息加载失败")
@@ -292,7 +292,7 @@ struct SubscribeSeasonContentView: View {
             }
           } label: {
             HStack(spacing: 8) {
-              Image(systemName: "arrow.clockwise")
+              Image(systemName: AppSymbol.retry)
               Text("重试")
             }
           }
@@ -301,7 +301,7 @@ struct SubscribeSeasonContentView: View {
         .focusSection()
       } else if viewModel.seasonInfos.isEmpty {
         VStack(spacing: 16) {
-          Image(systemName: "doc.text.magnifyingglass")
+          Image(systemName: AppSymbol.noResults)
             .font(.system(size: 48))
             .foregroundColor(.gray)
           Text("未查询到季集信息")
@@ -552,7 +552,7 @@ struct SubscribeSeasonContentView: View {
       showBadges: showBadges,
       loadsImage: loadsImages,
       footerLabel: (
-        icon: isSubscribed ? "minus.circle" : "plus.circle",
+        icon: isSubscribed ? AppSymbol.unsubscribe : AppSymbol.subscribe,
         text: footerText
       ),
       action: {
@@ -568,20 +568,20 @@ struct SubscribeSeasonContentView: View {
           guard !isProcessing else { return }
           performSeasonAction(season, isSubscribed: true)
         } label: {
-          Label("取消订阅", systemImage: "minus.circle")
+          Label("取消订阅", systemImage: AppSymbol.unsubscribe)
         }
       } else {
         Button {
           performSeasonAction(season, isSubscribed: false)
         } label: {
-          Label("订阅", systemImage: "plus.circle")
+          Label("订阅", systemImage: AppSymbol.subscribe)
         }
       }
 
       Button {
         selectedSeasonDetail = season
       } label: {
-        Label("详情", systemImage: "info.circle")
+        Label("详情", systemImage: AppSymbol.details)
       }
     }
   }
@@ -602,84 +602,56 @@ struct SubscribeSeasonContentView: View {
   }
 }
 
+/// 季详情：统一阅读 Sheet 的两栏形式（与豆瓣短评详情一致）。
+///
+/// 左栏是这一季的固定信息：剧名、首播日期、集数、评分；右栏是季简介，长简介可以往下翻。
+/// 不放海报：只会从季卡片的长按菜单进来，卡片上已经有这一季的海报。
 struct SeasonDetailSheet: View {
   let season: TmdbSeason
   let mediaInfo: MediaInfo
-  @State private var isImageFailed = false
 
   var body: some View {
-    HStack(alignment: .top, spacing: 60) {
-      // Poster
-      ZStack {
-        Rectangle()
-          .fill(Color(white: 0.12))
-          .overlay(
-            Image(systemName: "film")
-              .font(.title2)
-              .foregroundColor(.gray)
-          )
-
-        PageManagedImage(
-          url: APIService.shared.getSeasonPosterURL(
-            posterPath: season.poster_path,
-            mediaPosterPath: mediaInfo.poster_path
-          ),
-          processor: ResizingImageProcessor(
-            referenceSize: CGSize(width: 360, height: 540),
-            mode: .aspectFill
-          ),
-          isEnabled: !isImageFailed,
-          role: .activePage,
-          participatesInPageLifecycle: true,
-          skipsMemoryCache: true,
-          fadeDuration: 0,
-          onFailure: {
-            isImageFailed = true
-          }
-        )
-        .frame(width: 360)
-        .clipped()
-      }
-      .frame(width: 360, height: 540)
-      .cornerRadius(20)
-
-      // Info
-      VStack(alignment: .leading, spacing: 30) {
-        VStack(alignment: .leading, spacing: 10) {
-          Text(mediaInfo.title ?? "")
-            .font(.title3)
-            .foregroundColor(.secondary)
-          Text(
-            SeasonDisplayFormatter.name(
-              seasonNumber: season.season_number,
-              rawName: season.name
-            )
-          )
-            .font(.headline)
-        }
-
-        HStack(spacing: 30) {
-          if let date = SeasonDisplayFormatter.nonEmpty(season.air_date) {
-            Label(date, systemImage: "calendar")
-          }
-          if let count = season.episode_count {
-            Label("共 \(count) 集", systemImage: "play.circle")
-          }
-          if let vote = season.vote_average, vote > 0 {
-            Label(String(format: "%.1f", vote), systemImage: "star.fill")
-              .foregroundColor(.yellow)
-          }
-        }
-        .font(.body)
-
-        if let overview = SeasonDisplayFormatter.nonEmpty(season.overview) {
-          Text(overview)
-            .font(.body)
-            .foregroundColor(.secondary)
-        }
-      }
-      .frame(width: 900, alignment: .leading)
+    ReadingSheet(
+      title: SeasonDisplayFormatter.name(seasonNumber: season.season_number, rawName: season.name),
+      blocks: Self.blocks(for: season)
+    ) {
+      sidebar
     }
-    .padding(50)
+  }
+
+  /// 正文是季简介；没有简介时写明，不留空白页。
+  static func blocks(for season: TmdbSeason) -> [ReadingBlock] {
+    guard let overview = SeasonDisplayFormatter.nonEmpty(season.overview) else {
+      return [ReadingBlock("暂无简介", style: .secondary)]
+    }
+    return ReadingSheetLayout.paragraphs(AttributedString(overview)).map { ReadingBlock($0) }
+  }
+
+  private var sidebar: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      if let title = SeasonDisplayFormatter.nonEmpty(mediaInfo.title) {
+        Text(title)
+          .font(.headline)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.bottom, 28)
+      }
+
+      // 与其他面板的信息标签同一组件、同一套图标；阅读 Sheet 左栏竖排，字号与豆瓣短评详情一致。
+      VStack(alignment: .leading, spacing: 14) {
+        if let date = SeasonDisplayFormatter.nonEmpty(season.air_date) {
+          SheetInfoTag(systemImage: AppSymbol.time, text: date)
+        }
+        if let count = season.episode_count {
+          SheetInfoTag(systemImage: AppSymbol.episodes, text: "共 \(count) 集")
+        }
+        if let vote = season.vote_average, vote > 0 {
+          SheetInfoTag(systemImage: AppSymbol.rating, text: String(format: "%.1f", vote))
+        }
+      }
+      .font(.caption)
+      .foregroundStyle(.secondary)
+      .monospacedDigit()
+    }
+    .accessibilityElement(children: .combine)
   }
 }

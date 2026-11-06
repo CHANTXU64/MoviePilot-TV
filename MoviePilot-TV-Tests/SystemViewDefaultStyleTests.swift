@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 @testable import MoviePilot_TV
@@ -487,9 +488,50 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(detailSource.contains("message: SubscriptionCancelConfirmation.failureMessage"))
   }
 
+  /// 除了 AppSymbol.swift，源码里不直接写 SF Symbols 图标名。只检查源码写法，不代表图标的实际显示。
+  /// 两种写法都查：传给 `systemName:` / `systemImage:` / `icon:` 的字面量（含单个单词的图标名），
+  /// 以及任何位置出现、在当前系统确实是图标的带点名字（如三元表达式里的 `"plus.circle"`）。
+  func testAllSymbolsComeFromAppSymbolInSource() throws {
+    let testFileURL = URL(fileURLWithPath: #filePath)
+    let appRoot = testFileURL.deletingLastPathComponent().deletingLastPathComponent()
+      .appendingPathComponent("MoviePilot-TV")
+    let enumerator = try XCTUnwrap(FileManager.default.enumerator(at: appRoot, includingPropertiesForKeys: nil))
+    var checked = 0
+    for case let url as URL in enumerator where url.pathExtension == "swift" {
+      guard url.lastPathComponent != "AppSymbol.swift" else { continue }
+      let source = try String(contentsOf: url, encoding: .utf8)
+      let message = "\(url.lastPathComponent) 里直接写了图标名，请改用 AppSymbol。"
+      XCTAssertFalse(source.contains(#/(systemName|systemImage|icon)\s*:\s*"[a-z0-9]/#), message)
+      let bareSymbols = source.matches(of: #/"([a-z0-9]+(?:\.[a-z0-9]+)+)"/#)
+        .map { String($0.1) }
+        .filter { UIImage(systemName: $0) != nil }
+      XCTAssertEqual(bareSymbols, [], message)
+      checked += 1
+    }
+    XCTAssertGreaterThan(checked, 50)
+  }
+
+  /// AppSymbol 里每个图标名只出现一次，并且在当前系统能取到图标。
+  /// 确实同一个意思的地方写成别名（`static let season = tv`），不重复写图标名。
+  func testAppSymbolNamesAreUniqueAndResolvableInSource() throws {
+    let source = try Self.source(at: "MoviePilot-TV/Views/Components/AppSymbol.swift")
+    let names = source.matches(of: #/static let (\w+) = "([^"]+)"/#)
+      .map { (constant: String($0.1), symbol: String($0.2)) }
+    XCTAssertGreaterThan(names.count, 50)
+
+    let duplicates = Dictionary(grouping: names, by: \.symbol).filter { $0.value.count > 1 }
+      .mapValues { $0.map(\.constant) }
+    XCTAssertEqual(duplicates, [:], "同一个图标名写了多次，同义请写成别名，不同意思请换图标。")
+
+    for name in names {
+      XCTAssertNotNil(UIImage(systemName: name.symbol), "AppSymbol.\(name.constant)（\(name.symbol)）取不到图标。")
+    }
+  }
+
   func testSheetFeedbackAndLoadingStateUseSharedPatterns() throws {
     let sheetStyleSource = try Self.source(at: "MoviePilot-TV/Views/Components/SheetStyles.swift")
     let subscribeSheetSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/SubscribeSheet.swift")
+    let subscribePanelSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/SubscribePanel.swift")
     let subscribeViewModelSource = try Self.source(at: "MoviePilot-TV/ViewModels/SubscribeSheetViewModel.swift")
     let reorganizeSheetSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/ReorganizeSheet.swift")
     let reorganizeViewModelSource = try Self.source(at: "MoviePilot-TV/ViewModels/ReorganizeViewModel.swift")
@@ -499,38 +541,43 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let subscriptionModifierSource = try Self.source(at: "MoviePilot-TV/Views/Components/SubscriptionModifier.swift")
     let forkSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/ForkSubscribeSheet.swift")
 
-    XCTAssertTrue(sheetStyleSource.contains("struct SheetFeedbackView: View"))
+    XCTAssertFalse(sheetStyleSource.contains("struct SheetFeedbackView: View"))
     XCTAssertTrue(sheetStyleSource.contains("struct SheetActionButton: View"))
     XCTAssertTrue(sheetStyleSource.contains("guard !isLoading else { return }"))
-    XCTAssertTrue(sheetStyleSource.contains(".disabled(isDisabled)"))
+    XCTAssertTrue(sheetStyleSource.contains(".disabled(isDisabled && !closesSheet)"))
     XCTAssertFalse(sheetStyleSource.contains(".disabled(isLoading || isDisabled)"))
-    XCTAssertTrue(subscribeSheetSource.contains("SheetActionButton("))
+    XCTAssertTrue(subscribePanelSource.contains("SheetActionButton("))
     XCTAssertTrue(reorganizeSheetSource.contains("SheetActionButton("))
     XCTAssertTrue(addDownloadSheetSource.contains("SheetActionButton("))
-    XCTAssertTrue(addDownloadSheetSource.contains("SheetFeedbackView(message: message, actionTitle: \"重新加载\")"))
+    // 出错提示统一用同一个组件，放在主按钮上方。
+    let subtitleSheetSource = try Self.source(at: "MoviePilot-TV/Views/Sheets/SubtitleDownloadSheet.swift")
+    for source in [
+      addDownloadSheetSource, reorganizeSheetSource, subscribePanelSource, forkSource, subtitleSheetSource,
+    ] {
+      XCTAssertTrue(source.contains("SheetRetryingMessage("))
+      XCTAssertFalse(source.contains("feedbackMessage:"))
+    }
     XCTAssertTrue(forkSource.contains("SheetActionButton("))
-    XCTAssertTrue(forkSource.contains(".applySheetStyles()"))
-    XCTAssertTrue(subscribeSheetSource.contains("title: viewModel.isNewSubscription ? \"确定\" : \"保存\""))
-    XCTAssertTrue(subscribeSheetSource.contains("@State private var showBasic = false"))
-    XCTAssertTrue(subscribeSheetSource.contains("Text(\"基本设置\")"))
-    XCTAssertTrue(subscribeSheetSource.contains("if showBasic {"))
-    XCTAssertTrue(subscribeSheetSource.contains(".padding(.horizontal, 48)"))
+    XCTAssertTrue(forkSource.contains("SheetCompactPanel {"))
+    XCTAssertTrue(subscribePanelSource.contains("title: isNew ? \"订阅\" : \"保存\""))
     XCTAssertTrue(subscribeSheetSource.contains("@State private var isSaveAttemptInFlight = false"))
-    XCTAssertTrue(subscribeSheetSource.contains("if viewModel.isSaved && !isSaveAttemptInFlight"))
-    XCTAssertTrue(subscribeSheetSource.contains("isLoading: isSaveAttemptInFlight"))
+    XCTAssertTrue(subscribeSheetSource.contains("isSaving: isSaveAttemptInFlight"))
     XCTAssertTrue(subscribeSheetSource.contains("guard !isSaveAttemptInFlight else { return }"))
+    // 出错时按钮不换不藏：保存后失败不再把主按钮换成「关闭」。
+    XCTAssertFalse(subscribePanelSource.contains("title: \"关闭\""))
     XCTAssertTrue(reorganizeSheetSource.contains("title: \"开始整理\""))
-    XCTAssertTrue(addDownloadSheetSource.contains("title: \"确定\""))
+    XCTAssertTrue(addDownloadSheetSource.contains("title: \"下载\""))
     XCTAssertTrue(forkSource.contains("title: \"复用订阅\""))
-    XCTAssertFalse([subscribeSheetSource, reorganizeSheetSource, addDownloadSheetSource, forkSource].contains { $0.contains("失败，重试") })
+    XCTAssertFalse([subscribeSheetSource, subscribePanelSource, reorganizeSheetSource, addDownloadSheetSource, forkSource].contains { $0.contains("失败，重试") })
     XCTAssertFalse(subscribeSheetSource.contains("NotificationManager"))
+    XCTAssertFalse(subscribePanelSource.contains("NotificationManager"))
     XCTAssertFalse(reorganizeSheetSource.contains("NotificationManager"))
     XCTAssertFalse(addDownloadSheetSource.contains("NotificationManager"))
     XCTAssertFalse(addDownloadSheetSource.contains(".onChange(of: viewModel.errorMessage"))
     XCTAssertTrue(subscribeViewModelSource.contains("guard !isSaving else { return false }"))
     XCTAssertTrue(reorganizeViewModelSource.contains("guard !isSubmitting else { return false }"))
     XCTAssertTrue(
-      reorganizeViewModelSource.contains("guard !isPreviewing else { return .notGenerated }")
+      reorganizeViewModelSource.contains("guard !isPreviewing, !isSubmitting else { return .notGenerated }")
     )
     XCTAssertTrue(reorganizeSheetSource.contains("(await viewModel.preview()).shouldPresent"))
     XCTAssertTrue(addDownloadViewModelSource.contains("guard !isSubmitting else { return }"))
@@ -548,12 +595,12 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let source = try Self.source(at: "MoviePilot-TV/Views/Sheets/ReorganizeSheet.swift")
 
     XCTAssertTrue(
-      containsTokensInOrder(source, ["SheetPicker(", "title: \"媒体来源\""])
+      containsTokensInOrder(source, ["case .mediaSource:", "SheetPicker(", "case .mediaId:"])
     )
     XCTAssertTrue(source.contains("sources.options(including: viewModel.mediaSource).map"))
     XCTAssertTrue(
       source.contains(
-        "ignoresInteractionWhileDisabled: viewModel.isEpisodeGroupsLoading"
+        "viewModel.isEpisodeGroupsLoading ? \"正在加载…\" : nil"
       )
     )
     XCTAssertFalse(source.contains("Picker(\"媒体来源\""))
@@ -563,7 +610,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("ManualMediaIdField("))
     XCTAssertTrue(idFieldSource.contains("var placeholder = \"自动判断\""))
     XCTAssertFalse(idFieldSource.contains("留空自动识别"))
-    XCTAssertTrue(idFieldSource.contains("Image(systemName: \"magnifyingglass\")"))
+    XCTAssertTrue(idFieldSource.contains("Image(systemName: AppSymbol.search)"))
     XCTAssertTrue(idFieldSource.contains(".accessibilityLabel(\"搜索媒体\")"))
     XCTAssertFalse(idFieldSource.contains("Label(\"搜索媒体\", systemImage: \"magnifyingglass\")"))
     XCTAssertTrue(source.contains(".sheet(isPresented: $showPreview)"))
@@ -600,7 +647,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(
       containsTrimmedLineSequence(
         source,
-        ["Image(systemName: \"arrow.right\")", ".font("]
+        ["Image(systemName: AppSymbol.arrowRight)", ".font("]
       )
     )
     XCTAssertTrue(containsTrimmedLineSequence(source, ["Text(\"整理预览\")", ".font(.title3.bold())"]))
@@ -612,7 +659,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains("width: ReadingSheetLayout.sheetWidth"))
     XCTAssertTrue(source.contains("manualTransferPreviewFileName(from: item.source)"))
     XCTAssertTrue(source.contains("title: \"开始整理\""))
-    XCTAssertTrue(source.contains("loadingTitle: \"整理中\""))
+    XCTAssertTrue(source.contains("loadingTitle: viewModel.isLoading ? \"加载中\" : \"整理中\""))
     XCTAssertFalse(source.contains("title: \"加入整理队列\""))
     XCTAssertFalse(source.contains("loadingTitle: \"加入中\""))
     XCTAssertFalse(source.contains("title: \"立即整理\""))
@@ -625,11 +672,11 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     let source = try Self.source(at: "MoviePilot-TV/Views/Sheets/ManualMediaSearchSheet.swift")
 
     XCTAssertTrue(source.contains("NavigationStack {"))
-    XCTAssertTrue(source.contains("Text(\"查询 \\(viewModel.source.title) ID\")"))
+    // 不放大标题，顶部是整行的「片名」输入框和「搜索」。
+    XCTAssertFalse(source.contains("Text(\"查询 \\(viewModel.source.title) ID\")"))
+    XCTAssertTrue(source.contains("SheetInlineTextField(title: \"片名\", text: $viewModel.keyword)"))
     XCTAssertFalse(source.contains("Text(\"搜索 \\(viewModel.source.title) 媒体\")"))
-    XCTAssertTrue(source.contains("placeholder: \"输入媒体标题后搜索\""))
     XCTAssertFalse(source.contains("placeholder: \"输入标题后搜索\""))
-    XCTAssertTrue(source.contains(".labelsHidden()"))
     XCTAssertTrue(source.contains(".focusSection()"))
     XCTAssertFalse(source.contains("Button(\"关闭\")"))
     XCTAssertEqual(source.components(separatedBy: "viewModel.search()").count - 1, 1)
@@ -637,7 +684,7 @@ final class SystemViewDefaultStyleTests: XCTestCase {
       containsTokensInOrder(
         source,
         [
-          "Button {",
+          "private func startSearch() {",
           "guard !viewModel.isLoading else { return }",
           "searchTask?.cancel()",
           "searchTask = Task { await viewModel.search() }",
@@ -673,14 +720,14 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertTrue(source.contains(".contentMargins(.vertical, 28, for: .scrollContent)"))
     XCTAssertFalse(source.contains(".scrollClipDisabled()"))
     XCTAssertEqual(
-      source.components(separatedBy: ".padding(.horizontal, 28)").count - 1,
+      source.components(separatedBy: ".padding(.horizontal, 56)").count - 1,
       2
     )
     XCTAssertFalse(source.contains(".padding(.horizontal, 40)"))
     XCTAssertTrue(
       containsTrimmedLineSequence(
         source,
-        [".padding(.top, 40)", "}", ".frame(width: 1092, height: 820)"]
+        [".padding(.top, 52)", "}", ".frame(width: 1148, height: 820)"]
       )
     )
     XCTAssertFalse(source.contains(".frame(width: 1120, height: 780)"))

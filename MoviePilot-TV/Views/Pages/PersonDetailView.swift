@@ -44,7 +44,7 @@ struct PersonDetailView: View {
               Rectangle()
                 .fill(Color(white: 0.12))
                 .overlay(
-                  Image(systemName: "person.fill")
+                  Image(systemName: AppSymbol.person)
                     .font(.title)
                     .foregroundColor(.gray)
                 )

@@ -65,7 +65,8 @@ class ReorganizeViewModel: ObservableObject {
   @Published var form: ReorganizeForm
   @Published var directories: [TransferDirectoryConf] = []
   @Published var storages: [StorageConf] = []
-  @Published var targetDirectoryOptions: [PickerOption<String>] = []
+  /// 目录加载出来之前也有「自动」，菜单行不会显示成「未选择」。
+  @Published var targetDirectoryOptions: [PickerOption<String>] = [PickerOption(title: "自动", value: "")]
   @Published var isLoading = true
   @Published var isSubmitting = false
   @Published var isPreviewing = false
@@ -265,6 +266,8 @@ class ReorganizeViewModel: ObservableObject {
 
   func submit(background: Bool) async -> Bool {
     guard !isSubmitting else { return false }
+    // 预览和整理不同时进行：整理成功会关闭面板，迟到的预览结果没有地方显示。
+    guard !isPreviewing else { return false }
     guard sourceSession.map({ apiService.isSessionUnchanged(from: $0) }) ?? true,
       apiService.canAccess(.manage)
     else { return false }
@@ -274,7 +277,7 @@ class ReorganizeViewModel: ObservableObject {
       return false
     }
     guard isMediaIdValid else {
-      errorMessage = "媒体 ID 格式无效。"
+      errorMessage = MediaSearchSource.invalidManualIdMessage
       return false
     }
     isSubmitting = true
@@ -344,14 +347,14 @@ class ReorganizeViewModel: ObservableObject {
 
   @discardableResult
   func preview() async -> ReorganizePreviewOutcome {
-    guard !isPreviewing else { return .notGenerated }
+    guard !isPreviewing, !isSubmitting else { return .notGenerated }
     guard apiService.canAccess(.manage) else { return .notGenerated }
     errorMessage = nil
     if blockedTransferTypeMessage() != nil {
       return .notGenerated
     }
     guard isMediaIdValid else {
-      errorMessage = "媒体 ID 格式无效。"
+      errorMessage = MediaSearchSource.invalidManualIdMessage
       return .notGenerated
     }
     isPreviewing = true

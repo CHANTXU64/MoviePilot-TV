@@ -75,16 +75,49 @@ final class SubtitleDownloadViewModel: ObservableObject, Identifiable {
     if case .submitting = state { return true }
     return false
   }
-  var failure: String? {
+  static let invalidatedMessage = "登录状态已更新，请关闭后重新搜索字幕。"
+  static let noSearchPermissionMessage = "当前账号没有搜索权限，无法下载字幕。"
+
+  /// 登录已变或没有了搜索权限：这个面板只能关掉。设置都不可用，主按钮变成「关闭」。
+  var mustClose: Bool {
     switch state {
-    case .failed(let message): message
-    case .invalidated: "登录状态已更新，请关闭后重新搜索字幕。"
-    default: nil
+    case .invalidated: true
+    case .editing, .failed: !isSessionValid
+    default: false
     }
+  }
+
+  /// 面板上优先显示的原因：只能关掉时说明是登录变了还是没有权限，其次是下载失败。
+  var failure: String? {
+    if mustClose {
+      return apiService.isSessionUnchanged(from: session)
+        ? Self.noSearchPermissionMessage : Self.invalidatedMessage
+    }
+    if case .failed(let message) = state { return message }
+    return nil
   }
   private var normalizedMediaId: String {
     mediaId.trimmingCharacters(in: .whitespacesAndNewlines)
   }
+  /// 字幕必须对应到一部媒体才能下载；还没有媒体 ID 时提示怎么填。
+  static let missingMediaIdMessage = "请填写字幕对应的媒体 ID，可点击放大镜按名称查询。"
+
+  /// 面板上显示的提示：下载失败或登录失效优先；其次是保存路径加载失败（能编辑时才有意义，可重试）；
+  /// 最后是媒体 ID 还没填好。和 `canSubmit` 用同一套判断，按钮不可用时一定有原因可看。
+  var statusMessage: String? {
+    if let failure { return failure }
+    guard canEdit else { return nil }
+    if let directoryError { return directoryError }
+    if normalizedMediaId.isEmpty { return Self.missingMediaIdMessage }
+    return mediaSource.isValidManualId(normalizedMediaId)
+      ? nil : MediaSearchSource.invalidManualIdMessage
+  }
+
+  /// 显示的是保存路径加载失败时，「重试」重新加载目录。
+  var canRetryDirectories: Bool {
+    failure == nil && canEdit && directoryError != nil
+  }
+
   var canSubmit: Bool {
     canEdit && !normalizedMediaId.isEmpty && mediaSource.isValidManualId(normalizedMediaId)
   }

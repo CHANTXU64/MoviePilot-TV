@@ -69,7 +69,7 @@ private struct MediaLoadingView: View {
           RoundedRectangle(cornerRadius: 20)
             .fill(Color(white: 0.12))
             .overlay(
-              Image(systemName: "film")
+              Image(systemName: AppSymbol.movie)
                 .font(.title)
                 .foregroundStyle(.gray.opacity(0.5))
             )
@@ -118,7 +118,7 @@ private struct MediaLoadingView: View {
             }
 
             if let ratingString {
-              Image(systemName: "star.fill")
+              Image(systemName: AppSymbol.rating)
                 .foregroundStyle(.yellow)
               Text(ratingString)
             }

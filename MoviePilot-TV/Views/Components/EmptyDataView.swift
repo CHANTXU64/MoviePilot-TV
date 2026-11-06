@@ -9,7 +9,7 @@ struct EmptyDataView: View {
 
   init(
     title: String = "暂无数据",
-    systemImage: String = "tray",
+    systemImage: String = AppSymbol.empty,
     description: String? = nil,
     actionTitle: String? = nil,
     action: (() -> Void)? = nil

@@ -88,7 +88,7 @@ struct TransferHistoryView: View {
                 // 多选勾选框
                 Image(
                   systemName: viewModel.selectedIds.contains(item.id)
-                    ? "checkmark.circle.fill" : "circle"
+                    ? AppSymbol.selected : AppSymbol.unselected
                 )
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -175,7 +175,7 @@ struct TransferHistoryView: View {
       onDismiss: restoreHistoryFocus
     ) { intent in
       ReorganizeSheet(
-        logIds: [intent.item.id],
+        records: [intent.item],
         fileItem: intent.item.src_fileitem,
         targetStorage: intent.item.dest_storage,
         sourceSession: intent.sourceSession,
@@ -198,7 +198,7 @@ struct TransferHistoryView: View {
       item: $batchReorganizeIntent
     ) { intent in
       ReorganizeSheet(
-        logIds: intent.items.map(\.id),
+        records: intent.items,
         fileItem: nil,
         sourceSession: intent.sourceSession,
         validateBeforeSubmit: {
@@ -393,7 +393,7 @@ struct TransferHistoryView: View {
         ActionDescriptor(
           id: "ai-redo",
           title: title,
-          icon: "sparkles",
+          icon: AppSymbol.aiReorganize,
           isEnabled: !viewModel.isMutatingHistory,
           action: {
             if viewModel.selectedIds.isEmpty {
@@ -422,7 +422,7 @@ struct TransferHistoryView: View {
         id: "redo",
         title: viewModel.selectedIds.isEmpty
           ? "重新整理" : "重新批量整理(\(viewModel.selectedIds.count))",
-        icon: "arrow.clockwise",
+        icon: AppSymbol.retry,
         isEnabled: !viewModel.isMutatingHistory,
         action: {
           if viewModel.selectedIds.isEmpty {
@@ -448,7 +448,7 @@ struct TransferHistoryView: View {
         id: "delete",
         title: viewModel.selectedIds.isEmpty
           ? "删除" : "批量删除(\(viewModel.selectedIds.count))",
-        icon: "trash",
+        icon: AppSymbol.delete,
         isEnabled: !viewModel.isMutatingHistory,
         role: .destructive,
         action: {
@@ -487,7 +487,7 @@ private struct TransferHistoryBatchMutationIntent: Identifiable {
   let sourceSession: APIServiceSessionSnapshot
 }
 
-private func transferModeDisplayName(for mode: String) -> String {
+func transferModeDisplayName(for mode: String) -> String {
   switch mode {
   case "copy": return "拷贝"
   case "move": return "移动"

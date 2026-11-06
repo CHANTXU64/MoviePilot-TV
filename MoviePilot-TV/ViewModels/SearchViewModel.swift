@@ -55,6 +55,9 @@ nonisolated struct MediaSearchSource: RawRepresentable, Identifiable, Hashable, 
     }
   }
 
+  /// 手动填写的媒体 ID 不符合 `isValidManualId` 时，各 Sheet 统一显示的提示。
+  static let invalidManualIdMessage = "媒体 ID 格式无效。"
+
   /// 与 Web `isValidMediaSourceId` 一致：空值表示未填写；IMDb 有固定格式，其余来源只排除 "0"。
   func isValidManualId(_ value: String?) -> Bool {
     let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
