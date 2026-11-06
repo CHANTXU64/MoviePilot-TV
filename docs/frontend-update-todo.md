@@ -72,6 +72,25 @@
   - 实现落点：在 `ResourceResultSemantics.fields` 增加键并同步 `matches` 与过滤选项生成；Web 的筛选键已从 `chineseSubtitle` 改为 `subtitle`，TV 内部语义键可自行命名，但选项取值必须与 Web 一致。过滤状态保持内存态，不新增持久化或跨会话恢复逻辑。
   - `meta_info.web_source` 与 `torrent_info.labels` 在已登记版本区间内一直存在，不需要新增后端版本门禁；后续若发现某个来源恒不返回 labels，只影响该维度选项是否出现，不阻断主流程。
 
+### 资源搜索诊断面板
+
+- 来源：MoviePilot Backend `v3.2.4` 的搜索诊断：`app/schemas/search.py` 新增 `SearchDiagnostics` 等模型，SSE `done` 事件携带可选 `diagnostics`（各来源 outcome/`raw_count`、被过滤规则拒绝的原因、规则组是否适用、警告），`/search/last/context` 返回可选 `diagnostics` 并把上次搜索上下文改为按登录用户保存/读取。配套 Web `v3.2.4` 已实现诊断面板：`c1341f5d feat(resource): 显示搜索原因和规则未适用提示`（#901），随后 `4963ab48` 调整了诊断条的视觉权重。
+- 当前判断：不属于兼容必修。TV 的 `MoviePilot-TV/Models/Models.swift` 中 `SearchStreamEvent` 未声明 `diagnostics`，SSE 解码时安全忽略新增字段，`/search/last/context` 也没有调用。TV 资源搜索的空状态（`PagedResourceResultsView` 的「未找到相关资源」）只能通过 `ResourceSearchSession.emptyDescription` 区分「本次尚未找到资源」「已收到的资源均被 TV 本地过滤规则排除」「没有符合当前筛选条件的资源」三种客户端原因，无法解释站点级别或后端过滤规则级别的「为什么没有」。
+- 可评估方向：
+  - 在资源搜索结果页的空状态里展示后端诊断摘要：各来源是否返回、原始条数，被后端过滤规则拒绝的数量与原因分布，未适用的规则组，以及警告；有结果时是否展示按实际高频问题再定，避免占用大屏首屏空间。
+  - 这是 `v3.2.4` 起才成立的新行为，必须按后端版本做 `>= v3.2.4` 门禁：低于该版本、版本读不出或无法解析时不展示诊断区，沿用现有 `emptyDescription` 文案；已解析且 `>= v3.2.4`（含热修复和未登记的更新版本）才展示。
+  - 诊断是纯展示信息，不得改变资源列表的过滤、排序、「没有更多」判定和重试逻辑；`done` 事件缺失 `diagnostics` 时按「暂无诊断信息」降级，不能当成搜索失败或触发错误提示。
+  - 若同时评估「继续上次搜索」：`/search/last/context` 现在按登录用户隔离，TV 必须同时处理登录身份切换后的上下文隔离，不能跨账号复用同一份上次搜索结果。
+
+### 订阅执行状态与最近搜索状态
+
+- 来源：MoviePilot Backend `v3.2.4` 给 `SubscriptionExecutionStatus` 新增 `submitted_count`（`int = 0`，「本次任务已添加的下载数量」，用于区分「已添加下载」与「暂无资源」）；配套 Web `v3.2.4` 在订阅卡片上显示可操作的搜索状态（`226dd892 fix(subscribe): show actionable search status on subscription cards`，即 #904）。
+- 当前判断：不属于兼容必修。TV 的 `Subscribe` 模型只解码订阅记录本体，完全不读 `execution_status`（Swift 源码中没有该字段引用，只有写回测试夹具里作为 `null` 出现），订阅列表目前只显示订阅状态与进度，用户看不出「刚搜过但没有资源」「站点还在等待」「已提交下载 N 个」的区别。
+- 可评估方向：
+  - 在订阅卡片或订阅详情展示最近一次执行结果：状态（等待中/执行中/失败）、已提交下载数量、上次搜索时间与错误摘要；Web 的三种状态文案可作为对照。
+  - `submitted_count` 只在 `v3.2.4` 起存在，旧后端会缺该字段或返回默认 0；「已添加下载 N 个」必须按后端版本做 `>= v3.2.4` 门禁，低版本或版本读不出时不展示该行，不能把默认 0 当成「暂无资源」。「上次执行时间/错误」等既有字段可评估放宽到更低版本，但要先确认旧后端字段完整。
+  - `execution_status` 是后端自动调度的执行快照，不是订阅记录本身：展示时要区分「等待下次执行/正在执行/执行失败」，不要把状态文案写回订阅，也不要据此触发新的搜索或取消。
+
 ### 订阅日历与特殊季显示
 
 - 来源：Web 在订阅日历、特殊季标签、订阅进度展示上有持续优化。
