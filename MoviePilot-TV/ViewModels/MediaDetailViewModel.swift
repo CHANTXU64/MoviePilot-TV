@@ -40,8 +40,8 @@ class MediaDetailViewModel: ObservableObject {
   @Published var uniqueDirectors: [Person] = []
 
   @Published private(set) var isInLibrary = false
-  /// 管理员且 MoviePilot 配置了可用的 Emby 时，可以在应用内播放的媒体库条目 ID。
-  @Published private(set) var inAppPlaybackItemID: String?
+  /// 管理员且条目在（或无法确认不在）可播放的 Emby 上时，应用内播放的目标。
+  @Published private(set) var inAppPlaybackTarget: PlaybackTarget?
 
   /// 第二页首行数据是否已就绪。
   /// 用于控制 Loading 遮罩的显隐——必须等首行数据加载完才能移除遮罩，
@@ -510,6 +510,8 @@ class MediaDetailViewModel: ObservableObject {
     let offersPlayback = InAppPlaybackAvailability.offers(
       mediaType: detail.type, canRequestSuperUserEndpoints: apiService.canRequestSuperUserEndpoints)
     guard showsLibraryState || offersPlayback else { return }
+    let snapshot = apiService.sessionSnapshot()
+    let coordinator = apiService.sessionScope.playbackCoordinator
     let itemID: String?
     do {
       itemID = try await apiService.fetchMediaServerItemID(media: detail)
@@ -520,10 +522,12 @@ class MediaDetailViewModel: ObservableObject {
     if showsLibraryState { isInLibrary = itemID != nil }
     guard let itemID, offersPlayback else { return }
     do {
+      // 入库查询返回的条目 ID 不带服务器名，也可能属于 Plex、Jellyfin：需要时先在 Emby 上确认归属。
       let servers = try await apiService.fetchCachedMediaServers()
-      if servers.contains(where: \.supportsInAppPlayback) {
-        inAppPlaybackItemID = itemID
-      }
+      guard servers.contains(where: \.supportsInAppPlayback) else { return }
+      let target = await coordinator.locateLibraryItem(itemID, mediaType: detail.type, in: servers)
+      guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot) else { return }
+      inAppPlaybackTarget = target
     } catch is CancellationError {
     } catch {
       Logger.warning("读取媒体服务器配置失败: \(error.localizedDescription)")

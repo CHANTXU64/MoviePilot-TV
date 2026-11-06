@@ -6,7 +6,7 @@ import MPVUI
 enum PlaybackTarget: Equatable {
   /// 详情页：MoviePilot 媒体库同步表里的条目 ID，不知道属于哪台服务器。
   case libraryItem(itemID: String)
-  /// 首页“最近添加”：已知服务器名称和条目 ID。
+  /// 已知服务器名称和条目 ID（首页“最近添加”，或详情页已在 Emby 上确认归属）。
   case serverItem(serverName: String, itemID: String)
 }
 
@@ -68,6 +68,14 @@ struct PreparedPlayback {
   }
 }
 
+/// 一台 Emby 上已连通的地址和选中的用户。MoviePilot 配置或 MoviePilot 用户名变了就不再沿用。
+struct EmbyConnection {
+  let config: MediaServerConnectionConfig
+  let preferredUserName: String?
+  let client: EmbyClient
+  let userID: String
+}
+
 /// 应用内播放的唯一 owner。由 `SessionScope` 持有：换账号或登出时随作用域拆除，正在解析的任务取消、播放器停止。
 @MainActor
 final class PlaybackCoordinator: ObservableObject {
@@ -85,30 +93,75 @@ final class PlaybackCoordinator: ObservableObject {
     let message: String
   }
 
-  @Published private(set) var isResolving = false
-  @Published var resumePrompt: ResumePrompt?
-  @Published private(set) var session: PlaybackSession?
+  /// 解析、询问续播、播放三者互斥，同一时间只处于一个阶段。
+  enum Phase {
+    case idle
+    case resolving(Task<Void, Never>)
+    case prompting(ResumePrompt)
+    case playing(PlaybackSession)
+  }
+
+  /// 换集或换版本的结果，交给播放界面提示。
+  enum SwitchResult {
+    case switched
+    case failed(String)
+    /// 期间播放已结束或账号已切换。
+    case discarded
+  }
+
+  /// 多个地址都连通时，排在前面的（内网）可以晚到这么久仍被选中。
+  static let preferredAddressGrace: Duration = .milliseconds(500)
+  /// 连接（地址和 Emby 用户）沿用的时长；到期重新探测、重选用户，Emby 端删改用户后能自行恢复。
+  static let connectionTTL: TimeInterval = 600
+
+  @Published private(set) var phase: Phase = .idle
   @Published var failure: Failure?
 
   /// 弱引用：`APIService` → `SessionScope` → 本对象，强引用会让整个会话在登出后无法释放。
   private weak var apiService: APIService?
   private let embySession: URLSession
-  private var resolveTask: Task<Void, Never>?
   private var switchTask: Task<Void, Never>?
-  /// 每台服务器上次连通的地址，下次优先探测。
-  private var preferredBaseURL: [String: URL] = [:]
+  /// 按服务器名称缓存的连接：下次播放不再探测地址、查询用户；同一台同时发起的连接合并为一次。
+  private let connections: CoalescingCache<String, EmbyConnection>
   private var isTornDown = false
 
-  init(apiService: APIService, embySession: URLSession = EmbyClient.sharedSession) {
+  init(
+    apiService: APIService, embySession: URLSession = EmbyClient.sharedSession,
+    now: @escaping () -> Date = Date.init
+  ) {
     self.apiService = apiService
     self.embySession = embySession
+    connections = CoalescingCache(
+      ttl: Self.connectionTTL, capacity: 8, renewsTTLOnAccess: false, now: now)
+  }
+
+  var isResolving: Bool {
+    guard case .resolving = phase else { return false }
+    return true
+  }
+
+  var resumePrompt: ResumePrompt? {
+    guard case .prompting(let prompt) = phase else { return nil }
+    return prompt
+  }
+
+  var session: PlaybackSession? {
+    guard case .playing(let session) = phase else { return nil }
+    return session
+  }
+
+  var isBusy: Bool {
+    guard case .idle = phase else { return true }
+    return false
   }
 
   #if TESTING
-    var resolveTaskForTesting: Task<Void, Never>? { resolveTask }
+    var resolveTaskForTesting: Task<Void, Never>? {
+      guard case .resolving(let task) = phase else { return nil }
+      return task
+    }
+    var switchTaskForTesting: Task<Void, Never>? { switchTask }
   #endif
-
-  var isBusy: Bool { isResolving || resumePrompt != nil || session != nil }
 
   func play(_ target: PlaybackTarget) {
     guard !isTornDown, !isBusy, let apiService else { return }
@@ -116,103 +169,141 @@ final class PlaybackCoordinator: ObservableObject {
       fail(PlaybackError.notAllowed)
       return
     }
+    // 只在发布结果时复核会话：中间的 Emby 请求与 MoviePilot 会话无关，换账号时由作用域拆除取消。
     let snapshot = apiService.sessionSnapshot()
-    isResolving = true
-    resolveTask = Task { [weak self] in
-      guard let self else { return }
+    let userName = apiService.currentOrStoredUserName
+    let task = Task { [weak self] in
+      let outcome: Result<PreparedPlayback, Error>
       do {
-        let prepared = try await self.prepare(target, snapshot: snapshot)
-        try self.ensureCurrent(snapshot)
-        self.isResolving = false
-        self.resolveTask = nil
+        guard let self else { return }
+        outcome = .success(try await self.prepare(target, preferredUserName: userName))
+      } catch {
+        outcome = .failure(error)
+      }
+      // 取消来自取消按钮或作用域拆除，阶段已由取消方复位。
+      guard let self, !Task.isCancelled else { return }
+      self.phase = .idle
+      guard self.apiService?.isSessionUnchanged(from: snapshot) == true else { return }
+      switch outcome {
+      case .success(let prepared):
         if let position = prepared.resumePosition {
-          self.resumePrompt = ResumePrompt(prepared: prepared, position: position)
+          self.phase = .prompting(ResumePrompt(prepared: prepared, position: position))
         } else {
           self.start(prepared, at: 0)
         }
-      } catch {
-        // 任务被取消时，状态已由取消方（取消按钮、作用域拆除）复位。
-        guard !Task.isCancelled else { return }
-        self.isResolving = false
-        self.resolveTask = nil
-        guard self.apiService?.isSessionUnchanged(from: snapshot) == true, !(error is CancellationError)
-        else { return }
-        self.fail(error)
+      case .failure(let error):
+        if !(error is CancellationError) { self.fail(error) }
       }
     }
+    phase = .resolving(task)
   }
 
   func cancelResolving() {
-    resolveTask?.cancel()
-    resolveTask = nil
-    isResolving = false
+    guard case .resolving(let task) = phase else { return }
+    task.cancel()
+    phase = .idle
   }
 
   func resume(_ prompt: ResumePrompt, fromBeginning: Bool) {
-    guard resumePrompt?.id == prompt.id else { return }
-    resumePrompt = nil
+    guard case .prompting(let current) = phase, current.id == prompt.id else { return }
     start(prompt.prepared, at: fromBeginning ? 0 : prompt.position)
   }
 
   func dismissResumePrompt() {
-    resumePrompt = nil
+    guard case .prompting = phase else { return }
+    phase = .idle
   }
 
-  /// 播放器关闭（Menu、播放结束或出错）后统一收尾。
+  /// 播放界面关闭后收尾。
   func endSession() {
+    if let session { endSession(session) }
+  }
+
+  /// 只结束给定的会话：界面的关闭回调可能晚于下一次播放开始。
+  func endSession(_ session: PlaybackSession) {
+    guard isPlaying(session) else { return }
     switchTask?.cancel()
     switchTask = nil
-    guard let session else { return }
-    self.session = nil
+    phase = .idle
     session.stop()
-  }
-
-  /// 只在给定会话仍是当前会话时收尾：播放界面换集后，旧会话的退出回调不能结束新会话。
-  func endSession(_ expected: PlaybackSession) {
-    guard session === expected else { return }
-    endSession()
   }
 
   func tearDown() {
     isTornDown = true
     switchTask?.cancel()
     switchTask = nil
-    cancelResolving()
-    resumePrompt = nil
-    endSession()
+    switch phase {
+    case .resolving(let task): task.cancel()
+    case .playing(let session): session.stop()
+    case .idle, .prompting: break
+    }
+    phase = .idle
+    connections.invalidateAll()
+  }
+
+  /// 详情页的条目 ID 不带服务器名。启用的服务器全是可播放的 Emby 时，ID 只可能来自它们，直接播放媒体库条目；
+  /// 还启用了 Plex、Jellyfin 等时，在可播放的 Emby 上确认归属并核对类型（不同服务器的数字 ID 可能撞号）。
+  /// 确认不在任何一台上时返回 nil（不显示播放）；无法确认（连不上等）时仍返回媒体库条目，点播放时再说明原因。
+  func locateLibraryItem(
+    _ itemID: String, mediaType: String?, in servers: [MediaServerConf]
+  ) async -> PlaybackTarget? {
+    guard !isTornDown, let apiService, apiService.canRequestSuperUserEndpoints else { return nil }
+    let enabled = servers.filter(\.isEnabled)
+    let playable = enabled.filter(\.supportsInAppPlayback)
+    guard !playable.isEmpty else { return nil }
+    if playable.count == enabled.count { return .libraryItem(itemID: itemID) }
+    let expectedType = Self.embyItemType(forMediaType: mediaType)
+    let userName = apiService.currentOrStoredUserName
+    var isUncertain = false
+    for server in playable {
+      do {
+        let found = try await withConnection(to: server, preferredUserName: userName) {
+          let item = try await $0.client.item(id: itemID, userID: $0.userID, timeout: EmbyClient.quickTimeout)
+          return item != nil && (expectedType == nil || item?.type == expectedType)
+        }
+        if found { return .serverItem(serverName: server.name, itemID: itemID) }
+      } catch {
+        if error is CancellationError || Task.isCancelled { return nil }
+        isUncertain = true
+      }
+    }
+    return isUncertain ? .libraryItem(itemID: itemID) : nil
+  }
+
+  /// MoviePilot 媒体类型对应的 Emby 条目类型。
+  static func embyItemType(forMediaType mediaType: String?) -> String? {
+    switch mediaType {
+    case "电影": return "Movie"
+    case "电视剧": return "Series"
+    default: return nil
+    }
   }
 
   // MARK: - 解析
 
-  private func ensureCurrent(_ snapshot: APIServiceSessionSnapshot) throws {
-    try Task.checkCancellation()
-    guard !isTornDown, apiService?.isSessionUnchanged(from: snapshot) == true else {
-      throw CancellationError()
-    }
+  private func isPlaying(_ session: PlaybackSession) -> Bool {
+    guard case .playing(let current) = phase else { return false }
+    return current === session
   }
 
   /// 媒体服务器配置很少变化，平时用会话缓存；解析失败时重新读一次，
   /// 地址、密钥或服务器列表确实变了才用新配置重试，没变就原样报告失败。
-  private func prepare(
-    _ target: PlaybackTarget, snapshot: APIServiceSessionSnapshot
-  ) async throws -> PreparedPlayback {
+  private func prepare(_ target: PlaybackTarget, preferredUserName: String?) async throws -> PreparedPlayback {
     guard let apiService else { throw CancellationError() }
     let servers = try await apiService.fetchCachedMediaServers()
-    try ensureCurrent(snapshot)
     do {
-      return try await prepare(target, servers: servers, snapshot: snapshot)
+      return try await prepare(target, servers: servers, preferredUserName: preferredUserName)
     } catch let error where !(error is CancellationError) {
       let fresh = try? await apiService.fetchCachedMediaServers(forceRefresh: true)
-      try ensureCurrent(snapshot)
+      try Task.checkCancellation()
       guard let fresh, fresh != servers else { throw error }
-      return try await prepare(target, servers: fresh, snapshot: snapshot)
+      return try await prepare(target, servers: fresh, preferredUserName: preferredUserName)
     }
   }
 
   private func prepare(
-    _ target: PlaybackTarget, servers: [MediaServerConf], snapshot: APIServiceSessionSnapshot
+    _ target: PlaybackTarget, servers: [MediaServerConf], preferredUserName: String?
   ) async throws -> PreparedPlayback {
-    guard let apiService else { throw CancellationError() }
     let itemID: String
     let candidates: [MediaServerConf]
     switch target {
@@ -232,21 +323,19 @@ final class PlaybackCoordinator: ObservableObject {
       candidates = [server]
     }
 
-    // 详情页的条目 ID 不带服务器名：逐台确认归属，第一台找到的为准（与 MoviePilot `/mediaserver/play` 相同）。
+    // 媒体库条目逐台确认归属，第一台找到的为准（与 MoviePilot `/mediaserver/play` 相同）。
     var firstError: Error?
     for server in candidates {
       do {
-        let client = try await connect(server, snapshot: snapshot)
-        let users = try await client.users()
-        try ensureCurrent(snapshot)
-        guard
-          let user = EmbyUser.select(
-            from: users,
-            preferredNames: [server.config?.username, apiService.currentUser?.user_name])
-        else { throw PlaybackError.noEmbyUser }
-        guard let item = try await client.item(id: itemID, userID: user.id) else { continue }
-        try ensureCurrent(snapshot)
-        return try await preparePlayback(client: client, userID: user.id, item: item, snapshot: snapshot)
+        let prepared = try await withConnection(to: server, preferredUserName: preferredUserName) {
+          connection -> PreparedPlayback? in
+          guard
+            let item = try await connection.client.item(
+              id: itemID, userID: connection.userID, timeout: EmbyClient.quickTimeout)
+          else { return nil }
+          return try await Self.preparePlayback(client: connection.client, userID: connection.userID, item: item)
+        }
+        if let prepared { return prepared }
       } catch let error where error is CancellationError {
         throw error
       } catch {
@@ -256,9 +345,8 @@ final class PlaybackCoordinator: ObservableObject {
     throw firstError ?? PlaybackError.notFound
   }
 
-  private func preparePlayback(
-    client: EmbyClient, userID: String, item requested: EmbyItem, snapshot: APIServiceSessionSnapshot,
-    preferredSourceID: String? = nil
+  private static func preparePlayback(
+    client: EmbyClient, userID: String, item requested: EmbyItem, preferredSourceID: String? = nil
   ) async throws -> PreparedPlayback {
     // 剧集先简单处理：从第 1 季第 1 集开始。
     let item: EmbyItem
@@ -267,7 +355,6 @@ final class PlaybackCoordinator: ObservableObject {
       item = requested
     case "Series":
       let episodes = try await client.episodes(seriesID: requested.id, userID: userID)
-      try ensureCurrent(snapshot)
       guard let first = EmbyEpisodeOrder.firstEpisode(in: episodes) else {
         throw PlaybackError.noEpisodes
       }
@@ -276,7 +363,6 @@ final class PlaybackCoordinator: ObservableObject {
       throw PlaybackError.unsupportedItemType
     }
     let info = try await client.playbackInfo(itemID: item.id, userID: userID)
-    try ensureCurrent(snapshot)
     if let code = info.errorCode, !code.isEmpty, info.mediaSources.isEmpty {
       throw PlaybackError.server("Emby 拒绝播放：\(code)")
     }
@@ -293,114 +379,136 @@ final class PlaybackCoordinator: ObservableObject {
       playSessionID: info.playSessionID, streamURL: streamURL, mediaSources: info.mediaSources)
   }
 
-  /// 按「上次可用 → 内网 → 外网」探测，第一个响应的地址即用于本次播放。
+  // MARK: - 连接
+
+  /// 用缓存的连接执行；地址连不上时（如离开了内网）重新探测一次再执行。
+  private func withConnection<T>(
+    to server: MediaServerConf, preferredUserName: String?,
+    _ body: (EmbyConnection) async throws -> T
+  ) async throws -> T {
+    do {
+      return try await body(try await connection(to: server, preferredUserName: preferredUserName))
+    } catch EmbyClientError.unreachable {
+      try Task.checkCancellation()
+    }
+    return try await body(
+      try await connection(to: server, preferredUserName: preferredUserName, forceRefresh: true))
+  }
+
+  /// 取缓存的连接；缓存是按旧配置或旧 MoviePilot 用户名建立的，就重新连接。
+  private func connection(
+    to server: MediaServerConf, preferredUserName: String?, forceRefresh: Bool = false
+  ) async throws -> EmbyConnection {
+    guard let config = server.config, config.apiKey != nil else { throw PlaybackError.noEmbyServer }
+    let validate = { [weak self] in
+      try Task.checkCancellation()
+      guard self?.isTornDown == false else { throw CancellationError() }
+    }
+    let load: @MainActor () async throws -> EmbyConnection = { [weak self] in
+      guard let self else { throw CancellationError() }
+      return try await self.connect(server, config: config, preferredUserName: preferredUserName)
+    }
+    let cached = try await connections.value(
+      for: server.name, forceRefresh: forceRefresh, validate: validate, load: load)
+    guard !forceRefresh, cached.config != config || cached.preferredUserName != preferredUserName else {
+      return cached
+    }
+    return try await connections.value(for: server.name, forceRefresh: true, validate: validate, load: load)
+  }
+
+  /// 同时探测内网和外网地址（内网优先），再按 MoviePilot 的规则选 Emby 用户。
   private func connect(
-    _ server: MediaServerConf, snapshot: APIServiceSessionSnapshot
-  ) async throws -> EmbyClient {
-    guard let config = server.config, let apiKey = config.apiKey else {
-      throw PlaybackError.noEmbyServer
+    _ server: MediaServerConf, config: MediaServerConnectionConfig, preferredUserName: String?
+  ) async throws -> EmbyConnection {
+    guard let apiKey = config.apiKey else { throw PlaybackError.noEmbyServer }
+    let clients = config.candidateBaseURLs.map {
+      EmbyClient(baseURL: $0, apiKey: apiKey, session: embySession)
     }
-    var candidates = config.candidateBaseURLs
-    if let preferred = preferredBaseURL[server.name], let index = candidates.firstIndex(of: preferred) {
-      candidates.insert(candidates.remove(at: index), at: 0)
+    let probe = await PreferredReachability.first(of: clients, grace: Self.preferredAddressGrace) {
+      _ = try await $0.publicSystemInfo()
     }
-    var blockedByTransportSecurity = false
-    for baseURL in candidates {
-      let client = EmbyClient(baseURL: baseURL, apiKey: apiKey, session: embySession)
-      do {
-        _ = try await client.publicSystemInfo()
-        try ensureCurrent(snapshot)
-        preferredBaseURL[server.name] = baseURL
-        return client
-      } catch EmbyClientError.unreachable(let transportSecurity) {
-        blockedByTransportSecurity = blockedByTransportSecurity || transportSecurity
-      } catch let error as EmbyClientError {
-        Logger.warning("[Playback] 探测 \(server.name) 地址失败: \(error.localizedDescription)")
+    let client: EmbyClient
+    switch probe {
+    case .success(let reachable):
+      client = reachable
+    case .failure(let failures):
+      try Task.checkCancellation()
+      var blockedByTransportSecurity = false
+      for error in failures.errors {
+        if case EmbyClientError.unreachable(let transportSecurity) = error {
+          blockedByTransportSecurity = blockedByTransportSecurity || transportSecurity
+        } else {
+          Logger.warning("[Playback] 探测 \(server.name) 地址失败: \(error.localizedDescription)")
+        }
       }
+      throw PlaybackError.unreachable(server: server.name, transportSecurity: blockedByTransportSecurity)
     }
-    preferredBaseURL[server.name] = nil
-    throw PlaybackError.unreachable(server: server.name, transportSecurity: blockedByTransportSecurity)
+    let users = try await client.users()
+    guard let user = EmbyUser.select(from: users, preferredNames: [config.username, preferredUserName]) else {
+      throw PlaybackError.noEmbyUser
+    }
+    return EmbyConnection(
+      config: config, preferredUserName: preferredUserName, client: client, userID: user.id)
   }
 
   // MARK: - 播放
 
   private func start(_ prepared: PreparedPlayback, at position: Double) {
-    guard !isTornDown else { return }
     let session = PlaybackSession(prepared: prepared, startPosition: position)
-    attachFinishHandler(to: session)
-    self.session = session
-  }
-
-  private func attachFinishHandler(to session: PlaybackSession) {
-    session.onFinish = { [weak self, weak session] message in
-      guard let self, let session, self.session === session else { return }
-      self.endSession()
-      if let message { self.failure = Failure(message: message) }
+    session.onFailure = { [weak self, weak session] message in
+      guard let self, let session else { return }
+      self.endSession(session)
+      self.failure = Failure(message: message)
     }
+    phase = .playing(session)
   }
 
   // MARK: - 播放中换集、换版本
 
-  /// 换集或换版本的结果，交给播放界面提示。
-  enum SwitchResult {
-    case switched(PlaybackSession)
-    case failed(String)
-    /// 期间会话已结束、账号已切换或又发起了新的切换。
-    case discarded
-  }
-
-  #if TESTING
-    var switchTaskForTesting: Task<Void, Never>? { switchTask }
-  #endif
-
   /// 在当前 mpv 播放界面里改播另一集或另一个版本（对应 Swiftfin 的 `playNewItem`）。
-  /// 沿用当前会话的 Emby 客户端和用户，为新条目重新取 PlaybackInfo、选版本。
-  /// 旧会话照常停止并上报进度，新会话复用同一个 mpv 播放器和界面。
+  /// 沿用当前会话的 Emby 客户端和用户，为新条目重新取 PlaybackInfo、选版本；成功后会话换成新条目，
+  /// 上一条目照常上报停止，播放界面随后起播新条目。新的切换会取代仍在进行的切换，被取代的不再回报。
   func switchItem(
     to itemID: String, mediaSourceID: String? = nil, startPosition: Double = 0,
-    from current: PlaybackSession, completion: @escaping (SwitchResult) -> Void = { _ in }
+    in session: PlaybackSession, completion: @escaping (SwitchResult) -> Void = { _ in }
   ) {
-    guard !isTornDown, session === current, let apiService else {
+    guard let apiService, isPlaying(session) else {
       completion(.discarded)
       return
     }
     let snapshot = apiService.sessionSnapshot()
     switchTask?.cancel()
     switchTask = Task { [weak self] in
-      guard let self else { return }
-      let result: SwitchResult
+      let outcome: Result<PreparedPlayback, Error>
       do {
-        let client = current.client
-        let userID = current.userID
-        guard let item = try await client.item(id: itemID, userID: userID) else {
+        guard let item = try await session.client.item(id: itemID, userID: session.userID) else {
           throw PlaybackError.notFound
         }
-        try self.ensureCurrent(snapshot)
-        let prepared = try await self.preparePlayback(
-          client: client, userID: userID, item: item, snapshot: snapshot, preferredSourceID: mediaSourceID)
-        try self.ensureCurrent(snapshot)
-        guard !Task.isCancelled, self.session === current, !current.isStopped else { throw CancellationError() }
-        current.stop()
-        let next = PlaybackSession(
-          prepared: prepared, startPosition: startPosition, id: current.id, mpvPlayer: current.mpvPlayer)
-        self.attachFinishHandler(to: next)
-        self.session = next
-        result = .switched(next)
+        outcome = .success(
+          try await Self.preparePlayback(
+            client: session.client, userID: session.userID, item: item, preferredSourceID: mediaSourceID))
       } catch {
-        if Task.isCancelled || error is CancellationError
-          || self.apiService?.isSessionUnchanged(from: snapshot) != true || self.session !== current
-        {
+        outcome = .failure(error)
+      }
+      // 取消只来自新的切换、结束会话或登出：`switchTask` 已归新任务或已清空。
+      guard let self, !Task.isCancelled else { return }
+      self.switchTask = nil
+      let result: SwitchResult
+      if !self.isPlaying(session) || self.apiService?.isSessionUnchanged(from: snapshot) != true {
+        result = .discarded
+      } else {
+        switch outcome {
+        case .success(let prepared):
+          session.replaceItem(with: prepared, startPosition: startPosition)
+          result = .switched
+        case .failure(let error) where error is CancellationError:
           result = .discarded
-        } else {
+        case .failure(let error):
           let message = (error as? LocalizedError)?.errorDescription ?? "播放失败"
           Logger.warning("[Playback] 切换条目失败: \(message)")
           result = .failed(message)
         }
       }
-      // 取消只来自新的切换、结束会话或登出：`switchTask` 已归新任务或已清空，也不再回报，
-      // 免得旧任务清掉新任务的引用、让界面在新切换完成前就结束加载状态。
-      guard !Task.isCancelled else { return }
-      self.switchTask = nil
       completion(result)
     }
   }
@@ -412,7 +520,83 @@ final class PlaybackCoordinator: ObservableObject {
   }
 }
 
-/// 一次播放：持有 mpv 播放器，负责起播位置、进度上报和结束收尾。`stop()` 可重复调用。
+/// 同时探测多个候选，按给定顺序优先：排在前面的连通即用；后面的先连通时，再给前面仍在探测的候选一段宽限，
+/// 到时取已连通里最靠前的。全部失败时返回各候选的错误。
+nonisolated enum PreferredReachability {
+  struct Failures: Error {
+    let errors: [any Error]
+  }
+
+  private enum ProbeState {
+    case pending
+    case reachable
+    case failed(any Error)
+  }
+
+  private enum Event: Sendable {
+    case probed(Int, (any Error)?)
+    case graceElapsed
+  }
+
+  static func first<Candidate: Sendable>(
+    of candidates: [Candidate], grace: Duration,
+    probe: @escaping @Sendable (Candidate) async throws -> Void
+  ) async -> Result<Candidate, Failures> {
+    await withTaskGroup(of: Event.self) { group in
+      for (index, candidate) in candidates.enumerated() {
+        group.addTask {
+          do {
+            try await probe(candidate)
+            return .probed(index, nil)
+          } catch {
+            return .probed(index, error)
+          }
+        }
+      }
+      var states = [ProbeState](repeating: .pending, count: candidates.count)
+      var isGraceStarted = false
+      var isGraceElapsed = false
+      while let event = await group.next() {
+        switch event {
+        case .probed(let index, .none): states[index] = .reachable
+        case .probed(let index, .some(let error)): states[index] = .failed(error)
+        case .graceElapsed: isGraceElapsed = true
+        }
+        var waitsForEarlier = false
+        scan: for (index, state) in states.enumerated() {
+          switch state {
+          case .pending:
+            waitsForEarlier = true
+          case .failed:
+            continue
+          case .reachable:
+            if !waitsForEarlier || isGraceElapsed {
+              group.cancelAll()
+              return .success(candidates[index])
+            }
+            if !isGraceStarted {
+              isGraceStarted = true
+              group.addTask {
+                try? await Task.sleep(for: grace)
+                return .graceElapsed
+              }
+            }
+            break scan
+          }
+        }
+      }
+      return .failure(
+        Failures(
+          errors: states.compactMap {
+            guard case .failed(let error) = $0 else { return nil }
+            return error
+          }))
+    }
+  }
+}
+
+/// 一次全屏播放：持有 mpv 播放器，负责起播位置、进度上报和收尾。播放中换集、换版本只替换条目，界面不重新弹出。
+/// `stop()` 可重复调用。
 @MainActor
 final class PlaybackSession: Identifiable {
   // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
@@ -442,31 +626,28 @@ final class PlaybackSession: Identifiable {
     ]
   }
 
-  /// 播放界面的身份。播放中换集时新会话沿用旧会话的 id，全屏播放界面不重新弹出。
-  let id: UUID
-  /// 直连原文件的地址，含密钥，不得写入日志。
-  let streamURL: URL
+  let id = UUID()
   /// 在播放界面出现时创建，未展示就不启动解码。
   private(set) var mpvPlayer: MPVPlayer?
-  /// 正常结束传 nil，出错传提示文字。
-  var onFinish: ((String?) -> Void)?
+  /// mpv 播放出错时回调提示文字。正常播完由播放界面处理（自动播下一集或退出）。
+  var onFailure: ((String) -> Void)?
 
-  private let prepared: PreparedPlayback
-  private let startPosition: Double
-  private var hasStarted = false
+  private var prepared: PreparedPlayback
+  private var startPosition: Double
+  /// 当前条目已交给 mpv；换条目后等播放界面再次调用 `start()`。
+  private var isItemLoaded = false
   private(set) var isStopped = false
   private var lastReportedPause = false
   private var mpvEventTask: Task<Void, Never>?
   private var mpvProgressTask: Task<Void, Never>?
 
-  init(prepared: PreparedPlayback, startPosition: Double, id: UUID = UUID(), mpvPlayer: MPVPlayer? = nil) {
-    self.id = id
+  init(prepared: PreparedPlayback, startPosition: Double) {
     self.prepared = prepared
     self.startPosition = startPosition
-    self.mpvPlayer = mpvPlayer
-    streamURL = prepared.streamURL
   }
 
+  /// 直连原文件的地址，含密钥，不得写入日志。
+  var streamURL: URL { prepared.streamURL }
   var titles: (primary: String, secondary: String?) { prepared.item.playerTitles }
   /// 以下供播放界面的信息、章节、队列等面板使用。
   var client: EmbyClient { prepared.client }
@@ -488,28 +669,45 @@ final class PlaybackSession: Identifiable {
     return seconds.isFinite ? max(0, seconds) : 0
   }
 
+  /// 起播当前条目：播放界面出现时，以及换条目后各调用一次。
   func start() {
-    guard !hasStarted, !isStopped else { return }
-    hasStarted = true
+    guard !isStopped, !isItemLoaded else { return }
     let player = makeMPVPlayer()
-    observe(player)
+    if mpvEventTask == nil { observe(player) }
+    isItemLoaded = true
     player.load(
       streamURL, playAutomatically: true,
       startTime: startPosition > 0 ? .milliseconds(Int64(startPosition * 1000)) : nil)
     report(.start, isPaused: false, position: startPosition)
   }
 
+  /// 换成另一集或另一个版本：当前条目照常上报停止并保存进度，新条目等播放界面调用 `start()` 后起播。
+  func replaceItem(with next: PreparedPlayback, startPosition: Double) {
+    guard !isStopped else { return }
+    endCurrentItem()
+    mpvPlayer?.stop()
+    prepared = next
+    self.startPosition = startPosition
+    lastReportedPause = false
+  }
+
   func stop() {
     guard !isStopped else { return }
     isStopped = true
-    let position = currentSeconds
+    endCurrentItem()
     mpvEventTask?.cancel()
     mpvEventTask = nil
     mpvProgressTask?.cancel()
     mpvProgressTask = nil
     mpvPlayer?.stop()
-    onFinish = nil
-    guard hasStarted else { return }
+    onFailure = nil
+  }
+
+  /// 上报当前条目停止并保存观看进度；位置须在 mpv 停止前读取。
+  private func endCurrentItem() {
+    guard isItemLoaded else { return }
+    isItemLoaded = false
+    let position = currentSeconds
     report(.stopped, isPaused: true, position: position)
     saveUserData(position: position)
   }
@@ -528,7 +726,7 @@ final class PlaybackSession: Identifiable {
       while !Task.isCancelled {
         try? await Task.sleep(for: .seconds(Self.progressInterval))
         guard let self, !self.isStopped, !Task.isCancelled else { return }
-        if self.mpvPlayer?.state == .playing {
+        if self.isItemLoaded, self.mpvPlayer?.state == .playing {
           self.report(.progress, isPaused: false, position: self.currentSeconds)
         }
       }
@@ -537,11 +735,9 @@ final class PlaybackSession: Identifiable {
 
   private func handle(_ change: MPVPlaybackEvent.Change) {
     switch change {
-    case .stateChanged(.ended):
-      finish(message: nil)
     case .stateChanged(.failed(let error)), .error(let error, fatal: true):
       Logger.error("[Playback] mpv 播放失败: \(EmbyClient.redactedForLogging(String(describing: error)))")
-      finish(message: "无法播放该影片，请检查与 Emby 的网络连接")
+      onFailure?("无法播放该影片，请检查与 Emby 的网络连接")
     case .pauseChanged(let isPaused):
       handlePauseChange(isPaused: isPaused)
     default:
@@ -549,17 +745,10 @@ final class PlaybackSession: Identifiable {
     }
   }
 
-  // MARK: - 共用
-
   private func handlePauseChange(isPaused: Bool) {
-    guard !isStopped, hasStarted, isPaused != lastReportedPause else { return }
+    guard isItemLoaded, isPaused != lastReportedPause else { return }
     lastReportedPause = isPaused
     report(.progress, isPaused: isPaused, position: currentSeconds)
-  }
-
-  private func finish(message: String?) {
-    guard !isStopped else { return }
-    onFinish?(message)
   }
 
   // MARK: - 上报（只发不等，失败只记日志）

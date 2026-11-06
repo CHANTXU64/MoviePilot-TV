@@ -7,18 +7,18 @@ import UIKit
 // Swiftfin 界面读写的是它自己的 `MediaSession`（依赖 Jellyfin），这里按同名提供只实现界面用到成员的适配对象，
 // 底层是 `PlaybackSession` 与它创建的 `MPVPlayer`；条目、章节等数据类型见 SwiftfinPlayerModels.swift。
 
-/// mpv 内核的全屏播放界面。播放中换集时 `session` 换成新会话，界面不重建。
+/// mpv 内核的全屏播放界面。播放中换集、换版本只替换会话里的条目，界面不重建。
 /// `MediaSession` 在界面出现时创建一次：外层状态变化会让 SwiftUI 反复执行本视图的 init，
 /// 在 init 里创建会每次多建一套再丢掉。
 struct MPVPlaybackScreen: View {
   let session: PlaybackSession
-  let onExit: (PlaybackSession) -> Void
+  let onExit: () -> Void
   let onSwitchItem: MediaSession.SwitchItem
   @State private var mediaSession: MediaSession?
 
   init(
     session: PlaybackSession,
-    onExit: @escaping (PlaybackSession) -> Void,
+    onExit: @escaping () -> Void,
     onSwitchItem: @escaping MediaSession.SwitchItem
   ) {
     self.session = session
@@ -37,9 +37,6 @@ struct MPVPlaybackScreen: View {
     .onAppear {
       guard mediaSession == nil else { return }
       mediaSession = MediaSession(session: session, onExit: onExit, onSwitchItem: onSwitchItem)
-    }
-    .onChange(of: ObjectIdentifier(session)) {
-      mediaSession?.attach(session)
     }
   }
 }
@@ -128,7 +125,7 @@ final class MediaSession {
 
   /// 换集、换版本：交给 `PlaybackCoordinator.switchItem`。
   typealias SwitchItem = (
-    _ itemID: String, _ mediaSourceID: String?, _ startPosition: Double, _ from: PlaybackSession,
+    _ itemID: String, _ mediaSourceID: String?, _ startPosition: Double,
     _ completion: @escaping (PlaybackCoordinator.SwitchResult) -> Void
   ) -> Void
 
@@ -169,9 +166,9 @@ final class MediaSession {
   let mpvPlayer: MPVPlayer
   let textSubtitles = TextSubtitlePresentation()
   let logger = SessionLogger()
-  private(set) var session: PlaybackSession
+  let session: PlaybackSession
   private(set) var playbackItem: MediaPlayerItem?
-  private(set) var userSession: UserSession
+  let userSession: UserSession
   private(set) var queue: (any MediaPlayerQueue)?
   private(set) var playbackRequestStatus: PlaybackRequestStatus = .playing
   var commandError: String?
@@ -193,7 +190,7 @@ final class MediaSession {
   private var isSwitchingItem = false
 
   @ObservationIgnored private let playerAdapter: MPVPlayerAdapter
-  @ObservationIgnored private let onExit: (PlaybackSession) -> Void
+  @ObservationIgnored private let onExit: () -> Void
   @ObservationIgnored private let onSwitchItem: SwitchItem
   @ObservationIgnored private var pendingPlaybackStatus: PlaybackRequestStatus?
   @ObservationIgnored private var seekTask: Task<Void, Never>?
@@ -204,7 +201,7 @@ final class MediaSession {
 
   init(
     session: PlaybackSession,
-    onExit: @escaping (PlaybackSession) -> Void,
+    onExit: @escaping () -> Void,
     onSwitchItem: @escaping SwitchItem
   ) {
     self.session = session
@@ -287,24 +284,19 @@ final class MediaSession {
     refreshPlaybackState()
   }
 
-  /// 换成新的会话（播放中换集、换版本后）。旧会话已由协调器停止。
-  func attach(_ newSession: PlaybackSession) {
-    guard newSession !== session, !isStopped else { return }
+  /// 会话已换成新条目（播放中换集、换版本后），上一条目已由会话上报停止：重建条目状态并起播。
+  private func itemDidChange() {
     isSwitchingItem = false
     seekTask?.cancel()
     seekTask = nil
     pendingSeek = nil
     pendingPlaybackStatus = nil
     playbackRequestStatus = .playing
-    session = newSession
-    if newSession.client.baseURL != userSession.client.baseURL || newSession.userID != userSession.userID {
-      userSession = UserSession(client: newSession.client, userID: newSession.userID)
-    }
     guard hasStarted else { return }
     prepareItem()
     textSubtitles.start(mpvPlayer)
     mpvPlayer.setPlaybackRate(effectiveRate)
-    newSession.start()
+    session.start()
     refreshPlaybackState()
   }
 
@@ -322,10 +314,10 @@ final class MediaSession {
     itemObservations.removeAll()
     queueObservation = nil
     textSubtitles.clear()
-    onExit(session)
+    onExit()
   }
 
-  /// 为当前会话建立 `MediaPlayerItem`、片段与队列观察，并接管播放结束回调（自动播下一集）。
+  /// 为当前条目建立 `MediaPlayerItem`、片段与队列观察。
   private func prepareItem() {
     itemObservations.removeAll()
     let baseItem = BaseItemDto(emby: session.item)
@@ -350,21 +342,35 @@ final class MediaSession {
       queueObservation = nil
       queue = nil
     }
-
-    let finish = session.onFinish
-    session.onFinish = { [weak self] message in
-      if message == nil, let self, self.ended() { return }
-      finish?(message)
-    }
   }
 
-  /// 正常播完：与 Swiftfin `MediaSession.ended` 相同，开了自动播放且有下一集就接着播，否则结束。
-  /// 返回 true 表示已接管（正在切到下一集）。
-  private func ended() -> Bool {
-    guard canControlPlayback, !isSeeking, !item.isLiveStream else { return false }
-    guard let queue, userSession.isAutoPlayEnabled, let next = queue.nextItem else { return false }
-    playNewItem(intent: next)
-    return true
+  enum EndAction {
+    /// 正在换集，上一集刚好播完：等切换完成。
+    case waitForSwitch
+    case playNext(PlaybackIntent)
+    case exit
+  }
+
+  /// 播完后怎么做：开了自动播放且有下一集就接着播，否则退出（与 Swiftfin `MediaSession.ended` 相同）。
+  /// 不看“能否控制播放”：mpv 先报告就绪变为否、再报告播完，到这里时它总是否。
+  static func endAction(
+    isSwitchingItem: Bool, isSeeking: Bool, isLiveStream: Bool, isAutoPlayEnabled: Bool,
+    nextItem: PlaybackIntent?
+  ) -> EndAction {
+    if isSwitchingItem { return .waitForSwitch }
+    guard !isSeeking, !isLiveStream, isAutoPlayEnabled, let nextItem else { return .exit }
+    return .playNext(nextItem)
+  }
+
+  private func ended() {
+    switch Self.endAction(
+      isSwitchingItem: isSwitchingItem, isSeeking: isSeeking, isLiveStream: item.isLiveStream,
+      isAutoPlayEnabled: userSession.isAutoPlayEnabled, nextItem: queue?.nextItem)
+    {
+    case .waitForSwitch: break
+    case .playNext(let next): playNewItem(intent: next)
+    case .exit: stop()
+    }
   }
 
   // MARK: 播放控制
@@ -436,13 +442,12 @@ final class MediaSession {
   func playNewItem(intent: PlaybackIntent) {
     guard state != .stopped, let itemID = intent.item.id else { return }
     isSwitchingItem = true
-    let current = session
     let start = intent.configuration.startSeconds.map { $0.seconds } ?? 0
-    onSwitchItem(itemID, intent.configuration.mediaSourceID, start, current) { [weak self] result in
-      guard let self, self.session === current else { return }
+    onSwitchItem(itemID, intent.configuration.mediaSourceID, start) { [weak self] result in
+      guard let self, !self.isStopped else { return }
       switch result {
-      case .switched(let next):
-        self.attach(next)
+      case .switched:
+        self.itemDidChange()
       case .failed(let message):
         self.isSwitchingItem = false
         self.commandError = message
@@ -471,6 +476,11 @@ final class MediaSession {
       for await event in events {
         guard let self, !Task.isCancelled, !self.isStopped else { return }
         switch event.change {
+        case .stateChanged(.ended):
+          self.ended()
+          guard !self.isStopped else { return }
+          self.refreshPlaybackState()
+          self.syncPlaybackRequestStatus()
         case .snapshot, .pauseChanged, .readinessChanged, .stateChanged:
           self.refreshPlaybackState()
           self.syncPlaybackRequestStatus()

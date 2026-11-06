@@ -1112,9 +1112,9 @@ struct MediaDetailView: View {
             }
           }
           HStack(spacing: 20) {
-            if let playbackItemID = viewModel.inAppPlaybackItemID {
+            if let playbackTarget = viewModel.inAppPlaybackTarget {
               Button(action: {
-                apiService.sessionScope.playbackCoordinator.play(.libraryItem(itemID: playbackItemID))
+                apiService.sessionScope.playbackCoordinator.play(playbackTarget)
               }) {
                 Label("播放", systemImage: AppSymbol.play)
                   .foregroundColor(.primary)

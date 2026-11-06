@@ -226,6 +226,74 @@ final class InAppPlaybackModelTests: XCTestCase {
   }
 }
 
+// MARK: - 播完后的动作
+
+@MainActor
+final class PlaybackEndActionTests: XCTestCase {
+  private func action(
+    switching: Bool = false, seeking: Bool = false, autoPlay: Bool = true, hasNext: Bool = true
+  ) -> MediaSession.EndAction {
+    MediaSession.endAction(
+      isSwitchingItem: switching, isSeeking: seeking, isLiveStream: false, isAutoPlayEnabled: autoPlay,
+      nextItem: hasNext ? PlaybackIntent(item: BaseItemDto(id: "e2")) : nil)
+  }
+
+  func testAutoPlayContinuesWithNextEpisode() {
+    guard case .playNext(let next) = action() else { return XCTFail("应接着播下一集") }
+    XCTAssertEqual(next.item.id, "e2")
+  }
+
+  func testEndingDuringManualSwitchWaitsForIt() {
+    guard case .waitForSwitch = action(switching: true) else { return XCTFail("正在换集时不能退出") }
+  }
+
+  func testExitsWithoutNextEpisodeOrAutoPlay() {
+    guard case .exit = action(hasNext: false) else { return XCTFail("没有下一集应退出") }
+    guard case .exit = action(autoPlay: false) else { return XCTFail("关了自动播放应退出") }
+    guard case .exit = action(seeking: true) else { return XCTFail("拖动中播完应退出") }
+  }
+}
+
+// MARK: - 地址探测
+
+final class PreferredReachabilityTests: XCTestCase {
+  private struct Unreachable: Error {}
+
+  private func probe(_ delays: [String: Duration], failing: Set<String> = []) -> @Sendable (String) async throws -> Void {
+    { candidate in
+      try await Task.sleep(for: delays[candidate] ?? .zero)
+      if failing.contains(candidate) { throw Unreachable() }
+    }
+  }
+
+  func testEarlierCandidateWinsWhenItAnswersWithinGrace() async {
+    let result = await PreferredReachability.first(
+      of: ["lan", "wan"], grace: .milliseconds(500), probe: probe(["lan": .milliseconds(100)]))
+    XCTAssertEqual(try result.get(), "lan")
+  }
+
+  func testLaterCandidateIsUsedWhenEarlierFails() async {
+    let result = await PreferredReachability.first(
+      of: ["lan", "wan"], grace: .seconds(5), probe: probe(["lan": .milliseconds(50)], failing: ["lan"]))
+    XCTAssertEqual(try result.get(), "wan")
+  }
+
+  func testLaterCandidateIsUsedAfterGraceWhenEarlierHangs() async {
+    let started = ContinuousClock.now
+    let result = await PreferredReachability.first(
+      of: ["lan", "wan"], grace: .milliseconds(100), probe: probe(["lan": .seconds(10)]))
+    XCTAssertEqual(try result.get(), "wan")
+    XCTAssertLessThan(ContinuousClock.now - started, .seconds(5), "不等内网超时")
+  }
+
+  func testAllFailuresAreReported() async {
+    let result = await PreferredReachability.first(
+      of: ["lan", "wan"], grace: .milliseconds(100), probe: probe([:], failing: ["lan", "wan"]))
+    guard case .failure(let failures) = result else { return XCTFail("应全部失败") }
+    XCTAssertEqual(failures.errors.count, 2)
+  }
+}
+
 // MARK: - Emby 客户端
 
 @MainActor
@@ -618,11 +686,151 @@ final class PlaybackCoordinatorTests: XCTestCase {
     gate.signal()
     await task.value
 
+    // Emby 请求与 MoviePilot 会话无关，可以跑完；结果在发布前按会话丢弃。
     XCTAssertNil(coordinator.session)
     XCTAssertNil(coordinator.resumePrompt)
     XCTAssertNil(coordinator.failure)
     XCTAssertFalse(coordinator.isResolving)
-    XCTAssertFalse(PlaybackURLProtocol.stub.requests().contains { $0.url.path.hasSuffix("/PlaybackInfo") })
+  }
+
+  func testConnectionIsReusedAcrossPlays() async throws {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "lan.playback-tests.local"))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = ["lan.playback-tests.local|m1": Self.movie()]
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    coordinator.endSession()
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    XCTAssertNotNil(coordinator.session)
+    coordinator.endSession()
+
+    let paths = PlaybackURLProtocol.stub.requests().map(\.url.path)
+    XCTAssertEqual(paths.filter { $0.hasSuffix("/System/Info/Public") }.count, 1, "第二次播放不再探测地址")
+    XCTAssertEqual(paths.filter { $0.hasSuffix("/Users") }.count, 1, "第二次播放不再查询用户")
+  }
+
+  func testCachedAddressThatStopsRespondingIsReprobed() async throws {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers =
+        "[\(Self.embyServer(name: "emby", host: "lan.playback-tests.local", playHost: "https://wan.playback-tests.local"))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = [
+        "lan.playback-tests.local|m1": Self.movie(),
+        "wan.playback-tests.local|m1": Self.movie(),
+      ]
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    XCTAssertEqual(streamURL(coordinator)?.host, "lan.playback-tests.local", "内网和外网都通时用内网")
+    coordinator.endSession()
+
+    // 离开内网：缓存的内网地址连不上，重新探测后改用外网。
+    PlaybackURLProtocol.stub.configure { $0.unreachableHosts = ["lan.playback-tests.local"] }
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(streamURL(coordinator)?.host, "wan.playback-tests.local")
+    coordinator.endSession()
+  }
+
+  private static let plexServer =
+    #"{"name":"plex","type":"plex","enabled":true,"config":{"host":"plex.playback-tests.local","token":"k"}}"#
+
+  private func servers(_ entries: String...) throws -> [MediaServerConf] {
+    try JSONDecoder().decode([MediaServerConf].self, from: Data("[\(entries.joined(separator: ","))]".utf8))
+  }
+
+  func testDetailPageSkipsEmbyLookupWhenAllEnabledServersArePlayableEmby() async throws {
+    let servers = try servers(
+      Self.embyServer(name: "a", host: "lan.playback-tests.local"),
+      #"{"name":"off","type":"plex","enabled":false}"#)
+    let coordinator = makeCoordinator(makeService())
+    let target = await coordinator.locateLibraryItem("m1", mediaType: "电影", in: servers)
+    XCTAssertEqual(target, .libraryItem(itemID: "m1"))
+    XCTAssertTrue(PlaybackURLProtocol.stub.requests().isEmpty, "条目 ID 只可能来自 Emby，不必确认")
+  }
+
+  func testDetailPageLocatesLibraryItemOnEmbyWhenOtherServersAreEnabled() async throws {
+    let servers = try servers(
+      Self.embyServer(name: "a", host: "lan.playback-tests.local"),
+      Self.embyServer(name: "b", host: "wan.playback-tests.local"),
+      Self.plexServer)
+    PlaybackURLProtocol.stub.configure {
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = [
+        "wan.playback-tests.local|m1": Self.movie(),
+        "lan.playback-tests.local|42": #"{"Id":"42","Type":"BoxSet"}"#,
+      ]
+    }
+    let coordinator = makeCoordinator(makeService())
+
+    let found = await coordinator.locateLibraryItem("m1", mediaType: "电影", in: servers)
+    XCTAssertEqual(found, .serverItem(serverName: "b", itemID: "m1"))
+    // 只在 Plex 上的条目：所有 Emby 都确认没有，不显示播放。
+    let missing = await coordinator.locateLibraryItem("plex-only", mediaType: "电影", in: servers)
+    XCTAssertNil(missing)
+    // Plex 的数字 ID 在 Emby 上撞到类型不符的条目，不算找到。
+    let collided = await coordinator.locateLibraryItem("42", mediaType: "电影", in: servers)
+    XCTAssertNil(collided)
+    // 连不上时无法确认，仍显示播放，点击后再说明原因。
+    PlaybackURLProtocol.stub.configure { $0.unreachableHosts = ["lan.playback-tests.local", "wan.playback-tests.local"] }
+    let uncertain = await coordinator.locateLibraryItem("x", mediaType: "电影", in: servers)
+    XCTAssertEqual(uncertain, .libraryItem(itemID: "x"))
+  }
+
+  func testConnectionExpiresAndReselectsUser() async throws {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "lan.playback-tests.local"))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = ["lan.playback-tests.local|m1": Self.movie()]
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    var now = Date(timeIntervalSince1970: 1_000_000)
+    let service = makeService()
+    services.append(service)
+    let coordinator = PlaybackCoordinator(
+      apiService: service, embySession: PlaybackURLProtocol.session, now: { now })
+    func userLookups() -> Int {
+      PlaybackURLProtocol.stub.requests().filter { $0.url.path.hasSuffix("/Users") }.count
+    }
+
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    coordinator.endSession()
+    now += PlaybackCoordinator.connectionTTL - 1
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    coordinator.endSession()
+    XCTAssertEqual(userLookups(), 1)
+
+    // 到期后重新连接，Emby 端删改用户后能自行恢复。
+    now += 2
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    coordinator.endSession()
+    XCTAssertEqual(userLookups(), 2)
+  }
+
+  func testChangedMoviePilotUserNameReselectsEmbyUser() async throws {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers =
+        #"[{"name":"emby","type":"emby","enabled":true,"config":{"host":"lan.playback-tests.local","apikey":"k"}}]"#
+      $0.users = #"[{"Id":"u-root","Name":"root","Policy":{"IsAdministrator":true}},{"Id":"u-bob","Name":"bob"}]"#
+      $0.items = ["lan.playback-tests.local|m1": Self.movie()]
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    let service = makeService()
+    let coordinator = makeCoordinator(service)
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    coordinator.endSession()
+
+    service.currentUserForTesting = Token(
+      access_token: "mp-token", token_type: "bearer", super_user: FlexibleBool(true),
+      permissions: nil, user_id: 1, user_name: "bob", avatar: nil)
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    let itemRequest = PlaybackURLProtocol.stub.requests().last { $0.url.path.contains("/Items/m1") && $0.method == "GET" }
+    XCTAssertEqual(itemRequest?.url.path, "/Users/u-bob/Items/m1", "MoviePilot 用户名变了，重选同名 Emby 用户")
+    coordinator.endSession()
   }
 
   private func startEpisodeSession(_ coordinator: PlaybackCoordinator) async throws -> PlaybackSession {
@@ -639,29 +847,26 @@ final class PlaybackCoordinatorTests: XCTestCase {
     return try XCTUnwrap(coordinator.session)
   }
 
-  func testSwitchingEpisodeStopsOldSessionAndKeepsPlayerScreen() async throws {
+  func testSwitchingEpisodeReplacesItemAndKeepsPlayerScreen() async throws {
     let coordinator = makeCoordinator(makeService())
-    let first = try await startEpisodeSession(coordinator)
-    let player = first.makeMPVPlayer()
+    let session = try await startEpisodeSession(coordinator)
+    let player = session.makeMPVPlayer()
     var result: PlaybackCoordinator.SwitchResult?
 
-    coordinator.switchItem(to: "e2", startPosition: 0, from: first) { result = $0 }
+    coordinator.switchItem(to: "e2", startPosition: 0, in: session) { result = $0 }
     await coordinator.switchTaskForTesting?.value
 
-    guard case .switched(let next) = result else { return XCTFail("应切到下一集，实际 \(String(describing: result))") }
-    XCTAssertTrue(first.isStopped, "旧会话停止并上报")
-    XCTAssertTrue(coordinator.session === next)
-    XCTAssertEqual(next.id, first.id, "沿用播放界面身份，全屏界面不重新弹出")
-    XCTAssertTrue(next.mpvPlayer === player, "复用同一个 mpv 播放器")
-    XCTAssertEqual(next.streamURL.path, "/Videos/e2/stream.mkv")
-    XCTAssertEqual(next.item.id, "e2")
+    guard case .switched = result else { return XCTFail("应切到下一集，实际 \(String(describing: result))") }
+    XCTAssertTrue(coordinator.session === session, "同一个会话，全屏界面不重新弹出")
+    XCTAssertFalse(session.isStopped)
+    XCTAssertTrue(session.mpvPlayer === player, "复用同一个 mpv 播放器")
+    XCTAssertEqual(session.streamURL.path, "/Videos/e2/stream.mkv")
+    XCTAssertEqual(session.item.id, "e2")
     XCTAssertNil(coordinator.failure)
 
-    // 旧会话的退出回调不能结束新会话。
-    coordinator.endSession(first)
-    XCTAssertTrue(coordinator.session === next)
-    coordinator.endSession(next)
+    coordinator.endSession(session)
     XCTAssertNil(coordinator.session)
+    XCTAssertTrue(session.isStopped)
   }
 
   func testRapidSecondSwitchSupersedesFirstWithoutEarlyCompletion() async throws {
@@ -671,23 +876,23 @@ final class PlaybackCoordinatorTests: XCTestCase {
     PlaybackURLProtocol.stub.configure { $0.playbackInfoGate = gate }
     var results: [PlaybackCoordinator.SwitchResult] = []
 
-    coordinator.switchItem(to: "e2", from: first) { results.append($0) }
+    coordinator.switchItem(to: "e2", in: first) { results.append($0) }
     let replaced = try XCTUnwrap(coordinator.switchTaskForTesting)
-    coordinator.switchItem(to: "e2", from: first) { results.append($0) }
+    coordinator.switchItem(to: "e2", in: first) { results.append($0) }
     let latest = try XCTUnwrap(coordinator.switchTaskForTesting)
     await replaced.value
 
     XCTAssertTrue(results.isEmpty, "被替换的切换不回报，界面保持加载状态")
     XCTAssertEqual(coordinator.switchTaskForTesting, latest, "旧任务结束不能清掉新任务")
-    XCTAssertTrue(coordinator.session === first)
+    XCTAssertEqual(first.item.id, "e1")
     gate.signal()
     gate.signal()
     await latest.value
 
     XCTAssertEqual(results.count, 1)
-    guard case .switched(let next) = results.first else { return XCTFail("应切到下一集，实际 \(results)") }
-    XCTAssertTrue(coordinator.session === next)
-    XCTAssertEqual(next.item.id, "e2")
+    guard case .switched = results.first else { return XCTFail("应切到下一集，实际 \(results)") }
+    XCTAssertTrue(coordinator.session === first)
+    XCTAssertEqual(first.item.id, "e2")
     XCTAssertNil(coordinator.switchTaskForTesting)
     coordinator.endSession()
   }
@@ -701,7 +906,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     let before = PlaybackURLProtocol.stub.requests().count
     var result: PlaybackCoordinator.SwitchResult?
 
-    coordinator.switchItem(to: "e2", from: first) { result = $0 }
+    coordinator.switchItem(to: "e2", in: first) { result = $0 }
     let task = try XCTUnwrap(coordinator.switchTaskForTesting)
     for _ in 0..<200
     where !PlaybackURLProtocol.stub.requests().dropFirst(before).contains(where: { $0.url.path.hasSuffix("/PlaybackInfo") }) {
@@ -712,7 +917,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     await task.value
 
     guard case .discarded = result else { return XCTFail("账号切换后不应发布，实际 \(String(describing: result))") }
-    XCTAssertTrue(coordinator.session === first, "没有发布新会话")
+    XCTAssertEqual(first.item.id, "e1", "没有换成新条目")
     XCTAssertFalse(first.isStopped)
     coordinator.endSession()
   }

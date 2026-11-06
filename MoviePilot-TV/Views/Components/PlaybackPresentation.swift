@@ -40,15 +40,15 @@ struct PlaybackPresentationModifier: ViewModifier {
       .fullScreenCover(
         item: Binding(
           get: { coordinator.session },
-          set: { if $0 == nil { coordinator.endSession() } }),
-        onDismiss: { coordinator.endSession() }
+          // 系统自行关闭时在这里收尾（此时旧会话仍是当前会话）；按键退出由 `onExit` 收尾。
+          set: { if $0 == nil { coordinator.endSession() } })
       ) { session in
         MPVPlaybackScreen(
           session: session,
-          onExit: { coordinator.endSession($0) },
-          onSwitchItem: { itemID, sourceID, position, current, completion in
+          onExit: { coordinator.endSession(session) },
+          onSwitchItem: { itemID, sourceID, position, completion in
             coordinator.switchItem(
-              to: itemID, mediaSourceID: sourceID, startPosition: position, from: current,
+              to: itemID, mediaSourceID: sourceID, startPosition: position, in: session,
               completion: completion)
           })
       }

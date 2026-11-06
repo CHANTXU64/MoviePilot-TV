@@ -713,6 +713,11 @@ class APIService: ObservableObject {
     currentOrStoredUser?.canRequestSuperUserEndpoints == true
   }
 
+  /// 与权限判断同源的用户名：冷启动时 `/user/current` 尚未返回也能读到已保存的账号。
+  var currentOrStoredUserName: String? {
+    currentOrStoredUser?.user_name
+  }
+
   func canAccess(_ permission: UserPermissionKey) -> Bool {
     currentOrStoredUser?.canAccess(permission) == true
   }

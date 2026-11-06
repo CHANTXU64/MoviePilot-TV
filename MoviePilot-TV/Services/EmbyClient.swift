@@ -107,7 +107,10 @@ struct EmbyClient {
 
   // MARK: - 接口
 
-  func publicSystemInfo(timeout: TimeInterval = 3) async throws -> EmbyPublicSystemInfo {
+  /// 探测地址、用缓存连接发出的第一个请求所用的超时：地址失效时尽快改用其他地址，不等普通请求的 15 秒。
+  static let quickTimeout: TimeInterval = 3
+
+  func publicSystemInfo(timeout: TimeInterval = quickTimeout) async throws -> EmbyPublicSystemInfo {
     let data = try await send(url(["System", "Info", "Public"]), timeout: timeout)
     return try decode(EmbyPublicSystemInfo.self, from: data)
   }
@@ -118,9 +121,9 @@ struct EmbyClient {
   }
 
   /// 条目不在这台服务器上时返回 nil。
-  func item(id: String, userID: String) async throws -> EmbyItem? {
+  func item(id: String, userID: String, timeout: TimeInterval? = nil) async throws -> EmbyItem? {
     do {
-      let data = try await send(url(["Users", userID, "Items", id]))
+      let data = try await send(url(["Users", userID, "Items", id]), timeout: timeout)
       return try decode(EmbyItem.self, from: data)
     } catch EmbyClientError.http(let status) where status == 400 || status == 404 {
       return nil
