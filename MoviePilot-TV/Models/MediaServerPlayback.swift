@@ -148,7 +148,8 @@ nonisolated struct EmbyItem: Decodable, Sendable {
   let overview: String?
   let productionYear: Int?
   let runTimeTicks: Int64?
-  /// 原样保留用户数据，回写进度时只改进度相关字段，不丢收藏等其他字段。
+  /// 原样保留的用户数据（续播位置等）。剧集列表里的 `PlayCount` 恒为 0，停播写回以重新读取的单条条目为准
+  /// （见 `PlaybackSession.finishItem`）。
   let userData: [String: JSONValue]?
   /// 剧集：集号、季号、剧名
   let indexNumber: Int?

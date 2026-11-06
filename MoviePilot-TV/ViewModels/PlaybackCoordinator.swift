@@ -721,8 +721,16 @@ final class PlaybackSession: Identifiable {
     guard isItemLoaded else { return }
     isItemLoaded = false
     let position = currentSeconds
-    report(.stopped, isPaused: true, position: position)
-    saveUserData(position: position)
+    let ending = EndedItem(
+      userID: prepared.userID,
+      itemID: prepared.item.id,
+      stopReport: reportBody(isPaused: true, position: position),
+      completed: PlaybackResumePolicy.isCompleted(
+        positionSeconds: position, runTimeTicks: prepared.item.runTimeTicks),
+      positionTicks: EmbyTicks.from(seconds: position),
+      playedAt: Date())
+    let client = prepared.client
+    Task { await Self.finishItem(ending, client: client) }
   }
 
   // MARK: - mpv
@@ -767,6 +775,12 @@ final class PlaybackSession: Identifiable {
   // MARK: - 上报（只发不等，失败只记日志）
 
   private func report(_ event: EmbyClient.PlaybackEvent, isPaused: Bool, position: Double) {
+    let body = reportBody(isPaused: isPaused, position: position)
+    let client = prepared.client
+    Task { await Self.send(event, body: body, client: client) }
+  }
+
+  private func reportBody(isPaused: Bool, position: Double) -> [String: JSONValue] {
     var body: [String: JSONValue] = [
       "ItemId": .string(prepared.item.id),
       "MediaSourceId": .string(prepared.selection.source.id),
@@ -778,32 +792,47 @@ final class PlaybackSession: Identifiable {
     if let playSessionID = prepared.playSessionID {
       body["PlaySessionId"] = .string(playSessionID)
     }
-    let client = prepared.client
-    Task {
-      do {
-        try await client.report(event, body: body)
-      } catch {
-        Logger.warning("[Playback] 播放状态上报失败: \(error.localizedDescription)")
-      }
+    return body
+  }
+
+  private static func send(
+    _ event: EmbyClient.PlaybackEvent, body: [String: JSONValue], client: EmbyClient
+  ) async {
+    do {
+      try await client.report(event, body: body)
+    } catch {
+      Logger.warning("[Playback] 播放状态上报失败: \(error.localizedDescription)")
     }
   }
 
-  private func saveUserData(position: Double) {
-    let completed = PlaybackResumePolicy.isCompleted(
-      positionSeconds: position, runTimeTicks: prepared.item.runTimeTicks)
-    var userData = prepared.item.userData ?? [:]
-    userData["PlaybackPositionTicks"] = .int(completed ? 0 : EmbyTicks.from(seconds: position))
-    if completed { userData["Played"] = .bool(true) }
-    userData["LastPlayedDate"] = .string(ISO8601DateFormatter().string(from: Date()))
-    let client = prepared.client
-    let userID = prepared.userID
-    let itemID = prepared.item.id
-    Task {
-      do {
-        try await client.updateUserData(userID: userID, itemID: itemID, userData: userData)
-      } catch {
-        Logger.warning("[Playback] 保存观看进度失败: \(error.localizedDescription)")
+  /// 停止播放的条目：停止上报的内容和要写回的观看进度。
+  struct EndedItem {
+    let userID: String
+    let itemID: String
+    let stopReport: [String: JSONValue]
+    let completed: Bool
+    let positionTicks: Int
+    let playedAt: Date
+  }
+
+  /// 先上报停止，再写回观看进度。写回前重新读取单条条目的用户数据，只改续播位置、已看完和最后播放时间：
+  /// 开播时的条目可能来自剧集列表，Emby 列表里的 `PlayCount` 恒为 0、也没有最后播放时间，整份写回会把真实播放次数改成 0；
+  /// 按顺序发也不会盖掉停止上报刚更新的数据。读不到用户数据就不写，不用残缺对象覆盖收藏等字段。
+  static func finishItem(_ ending: EndedItem, client: EmbyClient) async {
+    await send(.stopped, body: ending.stopReport, client: client)
+    do {
+      guard let item = try await client.item(id: ending.itemID, userID: ending.userID),
+        var userData = item.userData
+      else {
+        Logger.warning("[Playback] 读不到条目的用户数据，未保存观看进度")
+        return
       }
+      userData["PlaybackPositionTicks"] = .int(ending.completed ? 0 : ending.positionTicks)
+      if ending.completed { userData["Played"] = .bool(true) }
+      userData["LastPlayedDate"] = .string(ISO8601DateFormatter().string(from: ending.playedAt))
+      try await client.updateUserData(userID: ending.userID, itemID: ending.itemID, userData: userData)
+    } catch {
+      Logger.warning("[Playback] 保存观看进度失败: \(error.localizedDescription)")
     }
   }
 }

@@ -887,6 +887,73 @@ final class PlaybackCoordinatorTests: XCTestCase {
     return try XCTUnwrap(coordinator.session)
   }
 
+  private func stoppedItem(completed: Bool = false) -> PlaybackSession.EndedItem {
+    PlaybackSession.EndedItem(
+      userID: "u-admin", itemID: "e1", stopReport: ["ItemId": .string("e1")], completed: completed,
+      positionTicks: 600_000_000, playedAt: Date(timeIntervalSince1970: 0))
+  }
+
+  private var stubEmbyClient: EmbyClient {
+    EmbyClient(
+      baseURL: URL(string: "http://lan.playback-tests.local")!, apiKey: "emby-key", deviceID: "device",
+      session: PlaybackURLProtocol.session)
+  }
+
+  func testStoppingWritesProgressOnTopOfFreshUserData() async throws {
+    // 开播时的剧集来自剧集列表（Emby 列表里 PlayCount 恒为 0）；写回要以单条条目的真实数据为底，只改进度相关字段。
+    PlaybackURLProtocol.stub.configure {
+      $0.items = [
+        "lan.playback-tests.local|e1":
+          #"{"Id":"e1","Type":"Episode","UserData":{"PlayCount":3,"Played":true,"IsFavorite":true,"PlaybackPositionTicks":0,"Key":"k1"}}"#
+      ]
+    }
+    await PlaybackSession.finishItem(stoppedItem(), client: stubEmbyClient)
+
+    let requests = PlaybackURLProtocol.stub.requests()
+    XCTAssertEqual(
+      requests.map { "\($0.method) \($0.url.path)" },
+      ["POST /Sessions/Playing/Stopped", "GET /Users/u-admin/Items/e1", "POST /Users/u-admin/Items/e1/UserData"],
+      "先上报停止，再读最新用户数据，最后写回")
+    let body = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: XCTUnwrap(requests.last).body) as? [String: Any])
+    XCTAssertEqual(body["PlayCount"] as? Int, 3, "不能把真实播放次数写成列表里的 0")
+    XCTAssertEqual(body["IsFavorite"] as? Bool, true)
+    XCTAssertEqual(body["Played"] as? Bool, true)
+    XCTAssertEqual(body["Key"] as? String, "k1")
+    XCTAssertEqual(body["PlaybackPositionTicks"] as? Int, 600_000_000)
+    XCTAssertEqual(body["LastPlayedDate"] as? String, "1970-01-01T00:00:00Z")
+  }
+
+  func testStoppingAfterFinishingMarksPlayedAndClearsResumePoint() async throws {
+    PlaybackURLProtocol.stub.configure {
+      $0.items = [
+        "lan.playback-tests.local|e1":
+          #"{"Id":"e1","Type":"Episode","UserData":{"PlayCount":1,"Played":false,"PlaybackPositionTicks":5000}}"#
+      ]
+    }
+    await PlaybackSession.finishItem(stoppedItem(completed: true), client: stubEmbyClient)
+
+    let body = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: XCTUnwrap(PlaybackURLProtocol.stub.requests().last).body) as? [String: Any])
+    XCTAssertEqual(body["Played"] as? Bool, true)
+    XCTAssertEqual(body["PlaybackPositionTicks"] as? Int, 0)
+    XCTAssertEqual(body["PlayCount"] as? Int, 1)
+  }
+
+  func testStoppingDoesNotWriteWhenUserDataCannotBeRead() async {
+    // 条目读不到，或回包里没有用户数据：不提交残缺对象，免得覆盖收藏等字段。
+    PlaybackURLProtocol.stub.configure {
+      $0.items = ["lan.playback-tests.local|e1": #"{"Id":"e1","Type":"Episode"}"#]
+    }
+    await PlaybackSession.finishItem(stoppedItem(), client: stubEmbyClient)
+    PlaybackURLProtocol.stub.configure { $0.items = [:] }
+    await PlaybackSession.finishItem(stoppedItem(), client: stubEmbyClient)
+
+    XCTAssertFalse(
+      PlaybackURLProtocol.stub.requests().contains { $0.url.path.hasSuffix("/UserData") },
+      "读不到用户数据时不写回")
+  }
+
   func testSwitchingEpisodeReplacesItemAndKeepsPlayerScreen() async throws {
     let coordinator = makeCoordinator(makeService())
     let session = try await startEpisodeSession(coordinator)
