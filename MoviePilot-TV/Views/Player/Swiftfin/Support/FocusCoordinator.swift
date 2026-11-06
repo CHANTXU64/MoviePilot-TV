@@ -9,6 +9,7 @@
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
 // 修改：工程开启 MemberImportVisibility，补 `import Combine`。
+// 补显式非隔离析构 `nonisolated deinit`，避开 tvOS 18 的隔离析构回部署崩溃。
 //
 
 import Combine
@@ -16,6 +17,9 @@ import SwiftUI
 
 @MainActor
 final class FocusCoordinator: ObservableObject {
+
+    // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+    nonisolated deinit {}
 
     fileprivate struct Request: Equatable {
 

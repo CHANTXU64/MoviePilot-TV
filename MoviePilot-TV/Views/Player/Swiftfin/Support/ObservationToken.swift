@@ -6,6 +6,9 @@
 // Copyright (c) 2026 Jellyfin & Jellyfin Contributors
 //
 // 本文件改自 Swiftfin：Shared/Objects/ObservationToken.swift
+// Modifications for MoviePilot-TV are also licensed under MPL-2.0.
+//
+// 修改：补显式非隔离析构 `nonisolated deinit`，避开 tvOS 18 的隔离析构回部署崩溃。
 //
 
 import Combine
@@ -15,6 +18,9 @@ import Observation
 /// Only reads establish dependencies. Changes are delivered after mutation.
 @MainActor
 final class ObservationToken: @preconcurrency Cancellable {
+
+    // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+    nonisolated deinit {}
 
     private var update: (() -> Void)?
 

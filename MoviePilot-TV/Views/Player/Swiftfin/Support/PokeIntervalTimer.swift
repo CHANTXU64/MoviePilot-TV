@@ -9,12 +9,16 @@
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
 // 修改：工程默认 MainActor 隔离且开启完整并发检查，延时任务在主队列执行，用 `MainActor.assumeIsolated` 访问状态。
+// 补显式非隔离析构 `nonisolated deinit`，避开 tvOS 18 的隔离析构回部署崩溃。
 //
 
 import Combine
 import Foundation
 
 class PokeIntervalTimer: ObservableObject, Publisher {
+
+    // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+    nonisolated deinit {}
 
     typealias Output = Void
     typealias Failure = Never

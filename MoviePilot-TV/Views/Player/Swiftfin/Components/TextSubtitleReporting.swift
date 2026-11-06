@@ -9,6 +9,7 @@
 // Modifications for MoviePilot-TV are also licensed under MPL-2.0.
 //
 // 修改：`partitioned(by:)` 来自 swift-algorithms（未引入），换成等价的两次过滤。
+// 补显式非隔离析构 `nonisolated deinit`，避开 tvOS 18 的隔离析构回部署崩溃。
 //
 
 import MediaAccessibilityKit
@@ -20,6 +21,9 @@ struct TextSubtitleReporting: ViewModifier {
     // Class to prevent view evaluations
     @MainActor
     private final class CaptionReportState {
+
+        // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+        nonisolated deinit {}
 
         var isPresented = false
         var lastCaptions: [String]?

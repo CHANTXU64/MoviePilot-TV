@@ -15,6 +15,7 @@
 // - 相邻集原版请求 Jellyfin `getEpisodes(adjacentTo:limit: 3)`，这里改为 `UserSession.adjacentEpisodes(seriesID:itemID:)`
 //   （Emby `/Shows/{id}/Episodes?AdjacentTo=`），之后的“四种情况”判断与原版相同。
 // - 码率设置 `appMaximumBitrate` 换成 `VideoPlayerDefaults.appMaximumBitrate`。
+// 补显式非隔离析构 `nonisolated deinit`，避开 tvOS 18 的隔离析构回部署崩溃。
 //
 
 import Combine
@@ -24,6 +25,9 @@ import Observation
 @MainActor
 @Observable
 final class EpisodeMediaPlayerQueue: MediaPlayerQueue {
+
+    // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+    nonisolated deinit {}
 
     private weak var mediaSession: MediaSession?
     private(set) var state: MediaPlayerQueueState = .initial

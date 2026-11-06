@@ -11,6 +11,9 @@ import UIKit
 
 class HostingController<Content: View>: UIHostingController<Content> {
 
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
   /// 与 Engine 的 `HostingController.content` 相同：读写根视图。
   var content: Content {
     get { rootView }

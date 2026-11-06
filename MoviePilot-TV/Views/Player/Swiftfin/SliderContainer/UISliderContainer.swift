@@ -6,11 +6,17 @@
 // Copyright (c) 2026 Jellyfin & Jellyfin Contributors
 //
 // 本文件改自 Swiftfin：Swiftfin tvOS/Components/SliderContainer/UISliderContainer.swift
+// Modifications for MoviePilot-TV are also licensed under MPL-2.0.
+//
+// 修改：补显式非隔离析构 `nonisolated deinit`，避开 tvOS 18 的隔离析构回部署崩溃。
 //
 
 import SwiftUI
 
 final class UISliderContainer<Value: BinaryFloatingPoint>: UIControl {
+
+    // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+    nonisolated deinit {}
 
     private let decelerationMaxVelocity: CGFloat = 1000.0
     private let fineTuningVelocityThreshold: CGFloat = 1000.0

@@ -11,6 +11,7 @@
 // 修改：去掉 `import JellyfinAPI`；默认加载器由 Jellyfin 的 `/MediaSegments` 请求换成 `UserSession.mediaSegments(itemID:)`
 // （MoviePilot-TV 的适配：取 Emby 章节里的片头/片尾标记）。
 // 图标名改从 AppSymbol 取（项目统一图标来源），图标本身不变。
+// 补显式非隔离析构 `nonisolated deinit`，避开 tvOS 18 的隔离析构回部署崩溃。
 //
 
 import Combine
@@ -20,6 +21,9 @@ import Observation
 @MainActor
 @Observable
 final class MediaSegmentObserver: MediaSessionObserver, VideoPlayerOverlayActionProviding {
+
+    // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+    nonisolated deinit {}
 
     typealias Loader = @MainActor (String, UserSession) async throws -> [MediaSegmentDto]
 

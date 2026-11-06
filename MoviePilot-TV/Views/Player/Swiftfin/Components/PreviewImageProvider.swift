@@ -10,12 +10,16 @@
 //
 // 修改：去掉 `import JellyfinAPI`；条目、章节、客户端换成 MoviePilot-TV 的同名 Emby 适配类型；
 // trickplay 图集地址由 Jellyfin 的 `Paths.getTrickplayTileImage` 换成适配客户端的 `trickplayTileURL(...)`。
+// 补显式非隔离析构 `nonisolated deinit`，避开 tvOS 18 的隔离析构回部署崩溃。
 //
 
 import UIKit
 
 @MainActor
 final class PreviewImageProvider {
+
+    // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+    nonisolated deinit {}
 
     private enum Source {
 
