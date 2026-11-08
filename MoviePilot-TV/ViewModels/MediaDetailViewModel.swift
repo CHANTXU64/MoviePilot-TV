@@ -515,10 +515,13 @@ class MediaDetailViewModel: ObservableObject {
     let itemID: String?
     do {
       itemID = try await apiService.fetchMediaServerItemID(media: detail)
+    } catch is CancellationError {
+      return
     } catch {
       Logger.error("检查媒体入库状态失败: \(error)")
       return
     }
+    guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot) else { return }
     if showsLibraryState { isInLibrary = itemID != nil }
     guard let itemID, offersPlayback else { return }
     do {

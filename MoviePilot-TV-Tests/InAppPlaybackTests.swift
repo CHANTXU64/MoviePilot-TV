@@ -214,11 +214,32 @@ final class InAppPlaybackModelTests: XCTestCase {
       PlaybackResumePolicy.resumePosition(positionTicks: 1800 * 10_000_000, runTimeTicks: twoHours), 1800)
     XCTAssertNil(PlaybackResumePolicy.resumePosition(positionTicks: 6500 * 10_000_000, runTimeTicks: twoHours))
     XCTAssertEqual(PlaybackResumePolicy.resumePosition(positionTicks: 600 * 10_000_000, runTimeTicks: nil), 600)
-    XCTAssertTrue(PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runTimeTicks: twoHours))
-    XCTAssertFalse(PlaybackResumePolicy.isCompleted(positionSeconds: 6400, runTimeTicks: twoHours))
-    XCTAssertFalse(PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runTimeTicks: nil))
+    XCTAssertTrue(
+      PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runTimeTicks: twoHours, playerDurationSeconds: nil))
+    XCTAssertFalse(
+      PlaybackResumePolicy.isCompleted(positionSeconds: 6400, runTimeTicks: twoHours, playerDurationSeconds: nil))
+    XCTAssertFalse(
+      PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runTimeTicks: nil, playerDurationSeconds: nil))
     XCTAssertEqual(Duration.seconds(754).formatted(.runtime), "12:34")
     XCTAssertEqual(Duration.seconds(3754).formatted(.runtime), "1:02:34")
+  }
+
+  func testCompletionUsesPlayerDurationWhenEmbyHasNone() {
+    // 刚入库、Emby 还没分析出时长：按播放器读到的时长判断，播到片尾不会把片尾写成续播点。
+    XCTAssertTrue(
+      PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runTimeTicks: nil, playerDurationSeconds: 7200))
+    XCTAssertTrue(
+      PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runTimeTicks: 0, playerDurationSeconds: 7200))
+    XCTAssertFalse(
+      PlaybackResumePolicy.isCompleted(positionSeconds: 3600, runTimeTicks: nil, playerDurationSeconds: 7200))
+    // 播放器也读不到时长（0 或非有限值）就不算看完。
+    XCTAssertFalse(PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runTimeTicks: nil, playerDurationSeconds: 0))
+    XCTAssertFalse(
+      PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runTimeTicks: nil, playerDurationSeconds: .infinity))
+    // Emby 有时长时以它为准。
+    let fourHours: Int64 = 14_400 * 10_000_000
+    XCTAssertFalse(
+      PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runTimeTicks: fourHours, playerDurationSeconds: 7200))
   }
 
   func testSeriesStartsFromFirstRegularEpisodeThatHasAFile() throws {
@@ -546,7 +567,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     XCTAssertEqual(itemRequest?.url.path, "/emby/Users/u-admin/Items/m1", "按 MoviePilot 配置的用户名选 Emby 用户")
 
     // 未起播就关闭不上报任何播放状态。
-    coordinator.endSession()
+    coordinator.endCurrentSession()
     XCTAssertNil(coordinator.session)
     XCTAssertFalse(PlaybackURLProtocol.stub.requests().contains { $0.url.path.contains("/Sessions/") })
   }
@@ -576,13 +597,13 @@ final class PlaybackCoordinatorTests: XCTestCase {
     XCTAssertNil(coordinator.failure)
     XCTAssertEqual(streamURL(coordinator)?.host, "lan.playback-tests.local")
     XCTAssertEqual(mediaServerFetchCount(), 2, "缓存命中一次，失败后重新读取一次")
-    coordinator.endSession()
+    coordinator.endCurrentSession()
 
     // 新配置已写回缓存，下次播放不再读取。
     await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
     XCTAssertNotNil(coordinator.session)
     XCTAssertEqual(mediaServerFetchCount(), 2)
-    coordinator.endSession()
+    coordinator.endCurrentSession()
   }
 
   func testUnchangedServerConfigDoesNotRetryFailedPlayback() async throws {
@@ -621,7 +642,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     coordinator.resume(prompt, fromBeginning: false)
     XCTAssertNil(coordinator.resumePrompt)
     XCTAssertNotNil(coordinator.session)
-    coordinator.endSession()
+    coordinator.endCurrentSession()
   }
 
   func testMKVPlaysThroughMPVWithoutTranscoding() async throws {
@@ -639,7 +660,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     XCTAssertEqual(session.streamURL.path, "/Videos/m1/stream.mkv")
     let query = URLComponents(url: session.streamURL, resolvingAgainstBaseURL: false)?.queryItems ?? []
     XCTAssertTrue(query.contains(URLQueryItem(name: "Static", value: "true")))
-    coordinator.endSession()
+    coordinator.endCurrentSession()
   }
 
   func testRemoteSourceExplainsWhyWithoutPresenting() async {
@@ -678,7 +699,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     XCTAssertTrue(query.contains(URLQueryItem(name: "UserId", value: "u-admin")))
     let playbackInfoRequest = PlaybackURLProtocol.stub.requests().first { $0.url.path.hasSuffix("/PlaybackInfo") }
     XCTAssertEqual(playbackInfoRequest?.url.path, "/Items/e1/PlaybackInfo")
-    coordinator.endSession()
+    coordinator.endCurrentSession()
   }
 
   func testSeriesWithoutPlayableEpisodesExplains() async {
@@ -717,7 +738,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     await run(coordinator, .libraryItem(itemID: "m1", expected: expectation()))
     XCTAssertNil(coordinator.failure)
     XCTAssertEqual(streamURL(coordinator)?.host, "wan.playback-tests.local")
-    coordinator.endSession()
+    coordinator.endCurrentSession()
   }
 
   func testLibraryItemSkipsSameIDOfAnotherTypeOnEarlierServer() async throws {
@@ -737,7 +758,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     XCTAssertNil(coordinator.failure)
     XCTAssertEqual(streamURL(coordinator)?.host, "wan.playback-tests.local", "不能播 a 上同号的剧集")
     XCTAssertEqual(coordinator.session?.item.type, "Movie")
-    coordinator.endSession()
+    coordinator.endCurrentSession()
   }
 
   func testLibraryItemPlaysEmbyItemFoundByExternalID() async throws {
@@ -752,7 +773,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     await run(coordinator, .libraryItem(itemID: "42", expected: expectation(tmdb: "222")))
     XCTAssertNil(coordinator.failure)
     XCTAssertEqual(streamURL(coordinator)?.path, "/Videos/731/stream.mp4")
-    coordinator.endSession()
+    coordinator.endCurrentSession()
   }
 
   func testSingleServerPlaysLibraryItemWithoutExternalID() async throws {
@@ -767,7 +788,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     await run(coordinator, .libraryItem(itemID: "m1", expected: expectation(tmdb: "222")))
     XCTAssertNil(coordinator.failure)
     XCTAssertEqual(coordinator.session?.item.id, "m1")
-    coordinator.endSession()
+    coordinator.endCurrentSession()
   }
 
   func testLibraryItemSkipsSameIDAndTypeWithOtherExternalID() async throws {
@@ -785,7 +806,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     await run(coordinator, .libraryItem(itemID: "7", expected: expectation(tmdb: "222")))
     XCTAssertNil(coordinator.failure)
     XCTAssertEqual(streamURL(coordinator)?.host, "wan.playback-tests.local", "不能播 a 上同号、外部编号不同的电影")
-    coordinator.endSession()
+    coordinator.endCurrentSession()
   }
 
   func testHTTPDomainBlockedByTransportSecurityExplainsFix() async {
@@ -845,10 +866,10 @@ final class PlaybackCoordinatorTests: XCTestCase {
     }
     let coordinator = makeCoordinator(makeService())
     await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
-    coordinator.endSession()
+    coordinator.endCurrentSession()
     await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
     XCTAssertNotNil(coordinator.session)
-    coordinator.endSession()
+    coordinator.endCurrentSession()
 
     let paths = PlaybackURLProtocol.stub.requests().map(\.url.path)
     XCTAssertEqual(paths.filter { $0.hasSuffix("/System/Info/Public") }.count, 1, "第二次播放不再探测地址")
@@ -869,14 +890,14 @@ final class PlaybackCoordinatorTests: XCTestCase {
     let coordinator = makeCoordinator(makeService())
     await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
     XCTAssertEqual(streamURL(coordinator)?.host, "lan.playback-tests.local", "内网和外网都通时用内网")
-    coordinator.endSession()
+    coordinator.endCurrentSession()
 
     // 离开内网：缓存的内网地址连不上，重新探测后改用外网。
     PlaybackURLProtocol.stub.configure { $0.unreachableHosts = ["lan.playback-tests.local"] }
     await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
     XCTAssertNil(coordinator.failure)
     XCTAssertEqual(streamURL(coordinator)?.host, "wan.playback-tests.local")
-    coordinator.endSession()
+    coordinator.endCurrentSession()
   }
 
   private static let plexServer =
@@ -1059,16 +1080,16 @@ final class PlaybackCoordinatorTests: XCTestCase {
     }
 
     await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
-    coordinator.endSession()
+    coordinator.endCurrentSession()
     now += PlaybackCoordinator.connectionTTL - 1
     await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
-    coordinator.endSession()
+    coordinator.endCurrentSession()
     XCTAssertEqual(userLookups(), 1)
 
     // 到期后重新连接，Emby 端删改用户后能自行恢复。
     now += 2
     await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
-    coordinator.endSession()
+    coordinator.endCurrentSession()
     XCTAssertEqual(userLookups(), 2)
   }
 
@@ -1083,7 +1104,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     let service = makeService()
     let coordinator = makeCoordinator(service)
     await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
-    coordinator.endSession()
+    coordinator.endCurrentSession()
 
     service.currentUserForTesting = Token(
       access_token: "mp-token", token_type: "bearer", super_user: FlexibleBool(true),
@@ -1091,7 +1112,29 @@ final class PlaybackCoordinatorTests: XCTestCase {
     await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
     let itemRequest = PlaybackURLProtocol.stub.requests().last { $0.url.path.contains("/Items/m1") && $0.method == "GET" }
     XCTAssertEqual(itemRequest?.url.path, "/Users/u-bob/Items/m1", "MoviePilot 用户名变了，重选同名 Emby 用户")
-    coordinator.endSession()
+    coordinator.endCurrentSession()
+  }
+
+  func testLoggedInMoviePilotUserComesBeforeConfiguredUserName() async throws {
+    // 与 MoviePilot 首页的继续观看相同：登录用户名和服务器配置的用户名在 Emby 里都有时，用登录的那个，
+    // 播放写回的进度才会出现在首页的继续观看里。
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "lan.playback-tests.local"))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin","Policy":{"IsAdministrator":true}},{"Id":"u-bob","Name":"bob"}]"#
+      $0.items = ["lan.playback-tests.local|m1": Self.movie()]
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    let service = makeService()
+    service.currentUserForTesting = Token(
+      access_token: "mp-token", token_type: "bearer", super_user: FlexibleBool(true),
+      permissions: nil, user_id: 1, user_name: "bob", avatar: nil)
+    let coordinator = makeCoordinator(service)
+
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+
+    let session = try XCTUnwrap(coordinator.session)
+    XCTAssertEqual(session.userID, "u-bob", "服务器配置的用户名是 admin，但登录的是 bob")
+    coordinator.endCurrentSession()
   }
 
   private func startEpisodeSession(_ coordinator: PlaybackCoordinator) async throws -> PlaybackSession {
@@ -1110,8 +1153,10 @@ final class PlaybackCoordinatorTests: XCTestCase {
 
   private func stoppedItem(completed: Bool = false) -> PlaybackSession.EndedItem {
     PlaybackSession.EndedItem(
-      userID: "u-admin", itemID: "e1", stopReport: ["ItemId": .string("e1")], completed: completed,
-      positionTicks: 600_000_000, playedAt: Date(timeIntervalSince1970: 0))
+      stopReport: ["ItemId": .string("e1")],
+      progress: PlaybackSession.WatchProgress(
+        userID: "u-admin", itemID: "e1", completed: completed, positionTicks: 600_000_000,
+        playedAt: Date(timeIntervalSince1970: 0)))
   }
 
   private var stubEmbyClient: EmbyClient {
@@ -1205,37 +1250,192 @@ final class PlaybackCoordinatorTests: XCTestCase {
     PlaybackURLProtocol.stub.requests().dropFirst(count).map { "\($0.method) \($0.url.path)" }
   }
 
+  /// 等被卡住的请求到达替身（最多 2 秒），再多等一会儿，让不该提前发出的请求有机会出现。
+  /// 不用固定时长：机器忙时请求可能晚到，固定等待会误判。
+  private func waitUntilBlocked(on path: String, after count: Int) async throws {
+    for _ in 0..<200 where !requestPaths(after: count).contains(path) {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    try await Task.sleep(for: .milliseconds(200))
+  }
+
+  private func progressEvents(after count: Int) -> [String?] {
+    PlaybackURLProtocol.stub.requests().dropFirst(count)
+      .filter { $0.url.path.hasSuffix("/Progress") }
+      .map { (try? JSONSerialization.jsonObject(with: $0.body) as? [String: Any])?["EventName"] as? String }
+  }
+
+  /// 起播一集并让剧集回包带用户数据（停止后才写得回进度）。
+  private func startEpisodeSessionWithUserData(
+    _ coordinator: PlaybackCoordinator
+  ) async throws -> PlaybackSession {
+    let session = try await startEpisodeSession(coordinator)
+    PlaybackURLProtocol.stub.configure {
+      $0.items["lan.playback-tests.local|e1"] =
+        #"{"Id":"e1","Type":"Episode","Name":"一","SeriesId":"s1","ParentIndexNumber":1,"IndexNumber":1,"UserData":{"PlayCount":1}}"#
+    }
+    return session
+  }
+
   func testReportsOfOnePlaybackAreSentInOrderWithEventNames() async throws {
     let coordinator = makeCoordinator(makeService())
-    let session = try await startEpisodeSession(coordinator)
-    let gate = DispatchSemaphore(value: 0)
-    PlaybackURLProtocol.stub.configure {
-      $0.reportStartGate = gate
-      $0.items["lan.playback-tests.local|e1"] = #"{"Id":"e1","Type":"Episode","UserData":{"PlayCount":1}}"#
-    }
+    let reporter = coordinator.reporterForTesting
+    let session = try await startEpisodeSessionWithUserData(coordinator)
     let before = PlaybackURLProtocol.stub.requests().count
 
-    // 起播后马上暂停、继续、退出，而“开始”上报还卡在网络上。
     session.itemDidLoadForTesting()
+    await reporter.waitForQueued()
     session.handle(.pauseChanged(true))
+    await reporter.waitForQueued()
     session.handle(.pauseChanged(false))
+    await reporter.waitForQueued()
     coordinator.endSession(session)
-    try await Task.sleep(for: .milliseconds(300))
-    let whileBlocked = requestPaths(after: before)
-    gate.signal()
-    await session.pendingReportsForTesting?.value
+    await reporter.waitForQueued()
 
-    XCTAssertEqual(whileBlocked, ["POST /Sessions/Playing"], "开始上报没完成前，后面的上报都不能先发")
     XCTAssertEqual(
       requestPaths(after: before),
       [
         "POST /Sessions/Playing", "POST /Sessions/Playing/Progress", "POST /Sessions/Playing/Progress",
         "POST /Sessions/Playing/Stopped", "GET /Users/u-admin/Items/e1", "POST /Users/u-admin/Items/e1/UserData",
       ])
-    let events = PlaybackURLProtocol.stub.requests().dropFirst(before)
-      .filter { $0.url.path.hasSuffix("/Progress") }
-      .map { (try? JSONSerialization.jsonObject(with: $0.body) as? [String: Any])?["EventName"] as? String }
-    XCTAssertEqual(events, ["Pause", "Unpause"])
+    XCTAssertEqual(progressEvents(after: before), ["Pause", "Unpause"])
+  }
+
+  func testStopIsNotQueuedBehindStaleProgressWhileStartIsSlow() async throws {
+    let coordinator = makeCoordinator(makeService())
+    let reporter = coordinator.reporterForTesting
+    let session = try await startEpisodeSessionWithUserData(coordinator)
+    let gate = DispatchSemaphore(value: 0)
+    PlaybackURLProtocol.stub.configure { $0.reportStartGate = gate }
+    let before = PlaybackURLProtocol.stub.requests().count
+
+    // “开始”上报卡在网络上时连续暂停、继续，再退出。
+    session.itemDidLoadForTesting()
+    session.handle(.pauseChanged(true))
+    session.handle(.pauseChanged(false))
+    session.handle(.pauseChanged(true))
+    coordinator.endSession(session)
+    try await waitUntilBlocked(on: "POST /Sessions/Playing", after: before)
+    let whileBlocked = requestPaths(after: before)
+    gate.signal()
+    await reporter.waitForQueued()
+
+    XCTAssertEqual(whileBlocked, ["POST /Sessions/Playing"], "开始上报没完成前，后面的上报都不能先发")
+    XCTAssertEqual(
+      requestPaths(after: before),
+      [
+        "POST /Sessions/Playing", "POST /Sessions/Playing/Stopped", "GET /Users/u-admin/Items/e1",
+        "POST /Users/u-admin/Items/e1/UserData",
+      ],
+      "还没发出的进度被停止取代，停止上报不排在过期进度后面")
+  }
+
+  func testQueuedProgressKeepsOnlyTheLatest() async throws {
+    let coordinator = makeCoordinator(makeService())
+    let reporter = coordinator.reporterForTesting
+    let session = try await startEpisodeSessionWithUserData(coordinator)
+    let gate = DispatchSemaphore(value: 0)
+    PlaybackURLProtocol.stub.configure { $0.reportStartGate = gate }
+    let before = PlaybackURLProtocol.stub.requests().count
+
+    session.itemDidLoadForTesting()
+    for isPaused in [true, false, true, false] {
+      session.handle(.pauseChanged(isPaused))
+    }
+    gate.signal()
+    await reporter.waitForQueued()
+
+    XCTAssertEqual(
+      requestPaths(after: before), ["POST /Sessions/Playing", "POST /Sessions/Playing/Progress"],
+      "Emby 慢时积压的进度只发最新一条")
+    XCTAssertEqual(progressEvents(after: before), ["Unpause"])
+    coordinator.endSession(session)
+    await reporter.waitForQueued()
+  }
+
+  func testNextPlaybackWaitsForPreviousWriteBack() async throws {
+    let coordinator = makeCoordinator(makeService())
+    let reporter = coordinator.reporterForTesting
+    let first = try await startEpisodeSessionWithUserData(coordinator)
+    first.itemDidLoadForTesting()
+    await reporter.waitForQueued()
+    let gate = DispatchSemaphore(value: 0)
+    PlaybackURLProtocol.stub.configure { $0.reportStoppedGate = gate }
+    let before = PlaybackURLProtocol.stub.requests().count
+
+    // 退出后马上重新播放同一集，而上一次的停止上报还卡在网络上。
+    coordinator.endSession(first)
+    coordinator.play(.serverItem(serverName: "emby", itemID: "e1"))
+    let resolve = try XCTUnwrap(coordinator.resolveTaskForTesting)
+    try await waitUntilBlocked(on: "POST /Sessions/Playing/Stopped", after: before)
+    let whileBlocked = requestPaths(after: before)
+    PlaybackURLProtocol.stub.configure { $0.reportStoppedGate = nil }
+    gate.signal()
+    await resolve.value
+    let second = try XCTUnwrap(coordinator.session)
+    second.itemDidLoadForTesting()
+    await reporter.waitForQueued()
+
+    XCTAssertEqual(whileBlocked, ["POST /Sessions/Playing/Stopped"], "上一次的写回没发完，这次不能先读条目的续播点")
+    XCTAssertEqual(
+      requestPaths(after: before),
+      [
+        "POST /Sessions/Playing/Stopped", "GET /Users/u-admin/Items/e1", "POST /Users/u-admin/Items/e1/UserData",
+        "GET /Users/u-admin/Items/e1", "POST /Items/e1/PlaybackInfo", "POST /Sessions/Playing",
+      ])
+    coordinator.endSession(second)
+    await reporter.waitForQueued()
+  }
+
+  func testCancellingWhileWaitingForPreviousWriteBackStopsAtOnce() async throws {
+    let coordinator = makeCoordinator(makeService())
+    let reporter = coordinator.reporterForTesting
+    let first = try await startEpisodeSessionWithUserData(coordinator)
+    first.itemDidLoadForTesting()
+    await reporter.waitForQueued()
+    let gate = DispatchSemaphore(value: 0)
+    PlaybackURLProtocol.stub.configure { $0.reportStoppedGate = gate }
+
+    coordinator.endSession(first)
+    coordinator.play(.serverItem(serverName: "emby", itemID: "e1"))
+    let resolve = try XCTUnwrap(coordinator.resolveTaskForTesting)
+    try await Task.sleep(for: .milliseconds(100))
+    let clock = ContinuousClock()
+    let cancelledAt = clock.now
+    coordinator.cancelResolving()
+    await resolve.value
+    let elapsed = clock.now - cancelledAt
+    gate.signal()
+    await reporter.waitForQueued()
+
+    XCTAssertLessThan(elapsed, .seconds(2), "取消不必等上一次的写回（最多 \(PlaybackCoordinator.pendingReportWait)）")
+    XCTAssertNil(coordinator.session)
+    XCTAssertNil(coordinator.failure)
+  }
+
+  func testLeavingForegroundSavesProgressWithoutStopping() async throws {
+    let coordinator = makeCoordinator(makeService())
+    let reporter = coordinator.reporterForTesting
+    let session = try await startEpisodeSessionWithUserData(coordinator)
+    session.itemDidLoadForTesting()
+    await reporter.waitForQueued()
+    let before = PlaybackURLProtocol.stub.requests().count
+
+    coordinator.saveProgressForBackground()
+    await reporter.waitForQueued()
+
+    XCTAssertEqual(
+      requestPaths(after: before), ["GET /Users/u-admin/Items/e1", "POST /Users/u-admin/Items/e1/UserData"],
+      "只写回观看进度，不上报停止")
+    XCTAssertTrue(coordinator.session === session, "播放继续")
+    XCTAssertFalse(session.isStopped)
+
+    coordinator.endSession(session)
+    await reporter.waitForQueued()
+    XCTAssertEqual(
+      requestPaths(after: before).suffix(3),
+      ["POST /Sessions/Playing/Stopped", "GET /Users/u-admin/Items/e1", "POST /Users/u-admin/Items/e1/UserData"],
+      "之后退出照常上报停止并写回")
   }
 
   func testSwitchingEpisodeReplacesItemAndKeepsPlayerScreen() async throws {
@@ -1285,7 +1485,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     XCTAssertTrue(coordinator.session === first)
     XCTAssertEqual(first.item.id, "e2")
     XCTAssertNil(coordinator.switchTaskForTesting)
-    coordinator.endSession()
+    coordinator.endCurrentSession()
   }
 
   func testAccountChangeDuringSwitchPublishesNothing() async throws {
@@ -1310,7 +1510,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     guard case .discarded = result else { return XCTFail("账号切换后不应发布，实际 \(String(describing: result))") }
     XCTAssertEqual(first.item.id, "e1", "没有换成新条目")
     XCTAssertFalse(first.isStopped)
-    coordinator.endSession()
+    coordinator.endCurrentSession()
   }
 
   func testCancelDuringResolveKeepsNothing() async throws {
@@ -1332,6 +1532,13 @@ final class PlaybackCoordinatorTests: XCTestCase {
     XCTAssertNil(coordinator.session)
     XCTAssertNil(coordinator.failure)
     XCTAssertFalse(coordinator.isResolving)
+  }
+}
+
+private extension PlaybackCoordinator {
+  /// 测试收尾：结束当前会话（生产代码只按会话结束，见 `endSession(_:)`）。
+  func endCurrentSession() {
+    if let session { endSession(session) }
   }
 }
 
@@ -1360,6 +1567,8 @@ private final class PlaybackStub: @unchecked Sendable {
     var usersGate: DispatchSemaphore?
     /// 卡住“开始播放”上报（模拟网络慢）
     var reportStartGate: DispatchSemaphore?
+    /// 卡住“停止播放”上报
+    var reportStoppedGate: DispatchSemaphore?
     var playbackInfoGate: DispatchSemaphore?
   }
 
@@ -1440,16 +1649,19 @@ private final class PlaybackURLProtocol: URLProtocol {
     if path.hasSuffix("/System/Info/Public") {
       respond(200, #"{"Id":"server","Version":"4.8.0.0"}"#)
     } else if path.hasSuffix("/Users") {
-      scenario.usersGate?.wait()
+      Self.pass(scenario.usersGate)
       respond(200, scenario.users)
     } else if path.hasSuffix("/Episodes") {
       let seriesID = url.deletingLastPathComponent().lastPathComponent
       respond(200, scenario.episodes["\(host)|\(seriesID)"] ?? #"{"Items":[]}"#)
     } else if path.hasSuffix("/PlaybackInfo") {
-      scenario.playbackInfoGate?.wait()
+      Self.pass(scenario.playbackInfoGate)
       respond(200, scenario.playbackInfo)
     } else if path.hasSuffix("/Sessions/Playing") {
-      scenario.reportStartGate?.wait()
+      Self.pass(scenario.reportStartGate)
+      respond(204, "")
+    } else if path.hasSuffix("/Sessions/Playing/Stopped") {
+      Self.pass(scenario.reportStoppedGate)
       respond(204, "")
     } else if recorded.method == "GET", path.hasSuffix("/Items") {
       let keys = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
@@ -1469,6 +1681,11 @@ private final class PlaybackURLProtocol: URLProtocol {
   }
 
   override func stopLoading() {}
+
+  /// 等测试放行卡住的请求。所有请求共用替身的同一个线程，漏放行时最多卡 10 秒，只让这个测试自己失败。
+  private static func pass(_ gate: DispatchSemaphore?) {
+    _ = gate?.wait(timeout: .now() + 10)
+  }
 
   private func respond(_ status: Int, _ body: String) {
     let response = HTTPURLResponse(

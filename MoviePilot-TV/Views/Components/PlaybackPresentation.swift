@@ -4,6 +4,13 @@ import SwiftUI
 struct PlaybackPresentationModifier: ViewModifier {
   @ObservedObject var coordinator: PlaybackCoordinator
   @EnvironmentObject private var notificationManager: NotificationManager
+  @Environment(\.scenePhase) private var scenePhase
+  /// 全屏播放器正在显示的会话，播放界面出现时记下。
+  @State private var presented = PresentedSession()
+
+  private final class PresentedSession {
+    weak var session: PlaybackSession?
+  }
 
   func body(content: Content) -> some View {
     content
@@ -40,8 +47,12 @@ struct PlaybackPresentationModifier: ViewModifier {
       .fullScreenCover(
         item: Binding(
           get: { coordinator.session },
-          // 系统自行关闭时在这里收尾（此时旧会话仍是当前会话）；按键退出由 `onExit` 收尾。
-          set: { if $0 == nil { coordinator.endSession() } })
+          // 系统自行关闭时在这里收尾；按键退出由 `onExit` 收尾。只结束这个播放器显示的会话：
+          // 关闭回调可能晚于下一次播放开始，那时的当前会话已是新的一次。
+          set: {
+            guard $0 == nil, let session = presented.session else { return }
+            coordinator.endSession(session)
+          })
       ) { session in
         MPVPlaybackScreen(
           session: session,
@@ -50,7 +61,12 @@ struct PlaybackPresentationModifier: ViewModifier {
             coordinator.switchItem(
               to: itemID, mediaSourceID: sourceID, startPosition: position, in: session,
               completion: completion)
-          })
+          }
+        )
+        .onAppear { presented.session = session }
+      }
+      .onChange(of: scenePhase) { _, phase in
+        if phase != .active { coordinator.saveProgressForBackground() }
       }
       .onChange(of: coordinator.failure) { _, failure in
         guard let failure else { return }

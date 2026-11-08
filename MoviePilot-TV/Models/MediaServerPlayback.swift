@@ -149,7 +149,7 @@ nonisolated struct EmbyItem: Decodable, Sendable {
   let productionYear: Int?
   let runTimeTicks: Int64?
   /// 原样保留的用户数据（续播位置等）。剧集列表里的 `PlayCount` 恒为 0，停播写回以重新读取的单条条目为准
-  /// （见 `PlaybackSession.finishItem`）。
+  /// （见 `PlaybackSession.saveWatchProgress`）。
   let userData: [String: JSONValue]?
   /// 剧集：集号、季号、剧名
   let indexNumber: Int?
@@ -562,9 +562,17 @@ nonisolated enum PlaybackResumePolicy {
     return seconds
   }
 
-  /// 播放结束位置达到时长的 90% 视为看完。
-  static func isCompleted(positionSeconds: Double, runTimeTicks: Int64?) -> Bool {
-    guard let runTimeTicks, runTimeTicks > 0 else { return false }
-    return positionSeconds / EmbyTicks.seconds(runTimeTicks) >= maximumProgress
+  /// 播放结束位置达到时长的 90% 视为看完。时长以 Emby 记录为准；Emby 还没有（刚入库、未分析完）时用播放器读到的时长，
+  /// 两者都没有就不算看完。
+  static func isCompleted(positionSeconds: Double, runTimeTicks: Int64?, playerDurationSeconds: Double?) -> Bool {
+    let duration: Double
+    if let runTimeTicks, runTimeTicks > 0 {
+      duration = EmbyTicks.seconds(runTimeTicks)
+    } else if let playerDurationSeconds, playerDurationSeconds.isFinite, playerDurationSeconds > 0 {
+      duration = playerDurationSeconds
+    } else {
+      return false
+    }
+    return positionSeconds / duration >= maximumProgress
   }
 }

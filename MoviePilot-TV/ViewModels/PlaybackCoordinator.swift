@@ -2,6 +2,7 @@ import AVFoundation
 import Combine
 import Foundation
 import MPVUI
+import UIKit
 
 /// 应用内播放的入口目标。
 enum PlaybackTarget: Equatable {
@@ -115,6 +116,9 @@ final class PlaybackCoordinator: ObservableObject {
   static let preferredAddressGrace: Duration = .milliseconds(500)
   /// 连接（地址和 Emby 用户）沿用的时长；到期重新探测、重选用户，Emby 端删改用户后能自行恢复。
   static let connectionTTL: TimeInterval = 600
+  /// 起播前最多等这么久，让上一次播放的停止上报和进度写回先发完，续播询问才读得到刚保存的位置。
+  /// Emby 连不上时不会一直卡在“正在准备播放”。
+  static let pendingReportWait: Duration = .seconds(5)
 
   @Published private(set) var phase: Phase = .idle
   @Published var failure: Failure?
@@ -122,6 +126,8 @@ final class PlaybackCoordinator: ObservableObject {
   /// 弱引用：`APIService` → `SessionScope` → 本对象，强引用会让整个会话在登出后无法释放。
   private weak var apiService: APIService?
   private let embySession: URLSession
+  /// 所有播放会话共用的上报队列：上一次播放的写回不会晚于下一次播放的上报和写回。
+  private let reporter = PlaybackReporter()
   private var switchTask: Task<Void, Never>?
   /// 按服务器名称缓存的连接：下次播放不再探测地址、查询用户；同一台同时发起的连接合并为一次。
   private let connections: CoalescingCache<String, EmbyConnection>
@@ -163,6 +169,7 @@ final class PlaybackCoordinator: ObservableObject {
       return task
     }
     var switchTaskForTesting: Task<Void, Never>? { switchTask }
+    var reporterForTesting: PlaybackReporter { reporter }
   #endif
 
   func play(_ target: PlaybackTarget) {
@@ -216,18 +223,22 @@ final class PlaybackCoordinator: ObservableObject {
     phase = .idle
   }
 
-  /// 播放界面关闭后收尾。
-  func endSession() {
-    if let session { endSession(session) }
-  }
-
-  /// 只结束给定的会话：界面的关闭回调可能晚于下一次播放开始。
+  /// 播放界面关闭后收尾。只结束给定的会话：界面的关闭回调可能晚于下一次播放开始。
   func endSession(_ session: PlaybackSession) {
     guard isPlaying(session) else { return }
     switchTask?.cancel()
     switchTask = nil
     phase = .idle
     session.stop()
+  }
+
+  /// App 离开前台（回主屏、打开 App 切换器）时保存正在播放条目的观看进度，播放不结束。
+  /// 之后 App 可能被系统回收或被用户关掉，停止上报和写回就再也发不出去；申请一段后台执行时间等写回发完。
+  func saveProgressForBackground() {
+    guard let session else { return }
+    session.saveProgress()
+    let reporter = reporter
+    BackgroundExecution.run(named: "保存播放进度") { await reporter.waitForQueued() }
   }
 
   func tearDown() {
@@ -305,6 +316,8 @@ final class PlaybackCoordinator: ObservableObject {
   /// 媒体服务器配置很少变化，平时用会话缓存；解析失败时重新读一次，
   /// 地址、密钥或服务器列表确实变了才用新配置重试，没变就原样报告失败。
   private func prepare(_ target: PlaybackTarget, preferredUserName: String?) async throws -> PreparedPlayback {
+    await reporter.waitForQueued(atMost: Self.pendingReportWait)
+    try Task.checkCancellation()
     guard let apiService else { throw CancellationError() }
     let servers = try await apiService.fetchCachedMediaServers()
     do {
@@ -441,7 +454,7 @@ final class PlaybackCoordinator: ObservableObject {
     return try await connections.value(for: server.name, forceRefresh: true, validate: validate, load: load)
   }
 
-  /// 同时探测内网和外网地址（内网优先），再按 MoviePilot 的规则选 Emby 用户。
+  /// 同时探测内网和外网地址（内网优先），再按 MoviePilot `Emby.get_user` 的规则选 Emby 用户。
   private func connect(
     _ server: MediaServerConf, config: MediaServerConnectionConfig, preferredUserName: String?
   ) async throws -> EmbyConnection {
@@ -468,8 +481,10 @@ final class PlaybackCoordinator: ObservableObject {
       }
       throw PlaybackError.unreachable(server: server.name, transportSecurity: blockedByTransportSecurity)
     }
+    // 候选顺序与 MoviePilot 首页的继续观看、最近添加相同：先当前登录的 MoviePilot 用户名，再服务器配置里的用户名。
+    // 播放读写的续播点、已看状态因此和首页显示的是同一个 Emby 用户。
     let users = try await client.users()
-    guard let user = EmbyUser.select(from: users, preferredNames: [config.username, preferredUserName]) else {
+    guard let user = EmbyUser.select(from: users, preferredNames: [preferredUserName, config.username]) else {
       throw PlaybackError.noEmbyUser
     }
     return EmbyConnection(
@@ -479,7 +494,7 @@ final class PlaybackCoordinator: ObservableObject {
   // MARK: - 播放
 
   private func start(_ prepared: PreparedPlayback, at position: Double) {
-    let session = PlaybackSession(prepared: prepared, startPosition: position)
+    let session = PlaybackSession(prepared: prepared, startPosition: position, reporter: reporter)
     session.onFailure = { [weak self, weak session] message in
       guard let self, let session else { return }
       self.endSession(session)
@@ -675,13 +690,13 @@ final class PlaybackSession: Identifiable {
   private var lastReportedPause = false
   private var mpvEventTask: Task<Void, Never>?
   private var mpvProgressTask: Task<Void, Never>?
-  /// 最后排进队的上报。同一次播放的开始、进度、暂停/继续、停止和观看进度写回按顺序逐条发送：
-  /// 各自另起请求时，后发的停止可能先到 Emby，后台就一直显示“正在播放”，或停止后又收到旧进度。
-  private var lastReport: Task<Void, Never>?
+  /// 开始、进度、停止和观看进度写回都排进协调器的队列，按顺序发送，见 `PlaybackReporter`。
+  private let reporter: PlaybackReporter
 
-  init(prepared: PreparedPlayback, startPosition: Double) {
+  init(prepared: PreparedPlayback, startPosition: Double, reporter: PlaybackReporter) {
     self.prepared = prepared
     self.startPosition = startPosition
+    self.reporter = reporter
   }
 
   /// 直连原文件的地址，含密钥，不得写入日志。
@@ -728,9 +743,6 @@ final class PlaybackSession: Identifiable {
   /// 测试用：不启动 mpv，直接进入条目已交给 mpv 之后的上报流程。
   func itemDidLoadForTesting() { itemDidLoad() }
 
-  /// 测试用：等已排队的上报全部发完。
-  var pendingReportsForTesting: Task<Void, Never>? { lastReport }
-
   /// 换成另一集或另一个版本：当前条目照常上报停止并保存进度，新条目等播放界面调用 `start()` 后起播。
   func replaceItem(with next: PreparedPlayback, startPosition: Double) {
     guard !isStopped else { return }
@@ -753,21 +765,38 @@ final class PlaybackSession: Identifiable {
     onFailure = nil
   }
 
-  /// 上报当前条目停止并保存观看进度；位置须在 mpv 停止前读取。
+  /// 上报当前条目停止并保存观看进度；位置和时长须在 mpv 停止前读取。
   private func endCurrentItem() {
     guard isItemLoaded else { return }
     isItemLoaded = false
     let position = currentSeconds
     let ending = EndedItem(
+      stopReport: reportBody(isPaused: true, position: position), progress: watchProgress(at: position))
+    let client = prepared.client
+    reporter.enqueue(.finish, for: reportedItem) { await Self.finishItem(ending, client: client) }
+  }
+
+  /// 不结束播放，只写回当前条目的观看进度（App 离开前台时）。
+  func saveProgress() {
+    guard !isStopped, isItemLoaded else { return }
+    let progress = watchProgress(at: currentSeconds)
+    let client = prepared.client
+    reporter.enqueue(.saveProgress, for: reportedItem) { await Self.saveWatchProgress(progress, client: client) }
+  }
+
+  private var reportedItem: PlaybackReporter.Item {
+    PlaybackReporter.Item(server: prepared.client.baseURL, userID: prepared.userID, itemID: prepared.item.id)
+  }
+
+  private func watchProgress(at position: Double) -> WatchProgress {
+    let playerDuration = mpvPlayer.map { $0.duration.seconds }
+    return WatchProgress(
       userID: prepared.userID,
       itemID: prepared.item.id,
-      stopReport: reportBody(isPaused: true, position: position),
       completed: PlaybackResumePolicy.isCompleted(
-        positionSeconds: position, runTimeTicks: prepared.item.runTimeTicks),
+        positionSeconds: position, runTimeTicks: prepared.item.runTimeTicks, playerDurationSeconds: playerDuration),
       positionTicks: EmbyTicks.from(seconds: position),
       playedAt: Date())
-    let client = prepared.client
-    enqueueReport { await Self.finishItem(ending, client: client) }
   }
 
   // MARK: - mpv
@@ -810,7 +839,7 @@ final class PlaybackSession: Identifiable {
     report(.progress, isPaused: isPaused, position: currentSeconds, progressEvent: isPaused ? .pause : .unpause)
   }
 
-  // MARK: - 上报（同一次播放按顺序逐条发送，调用方不等结果，失败只记日志）
+  // MARK: - 上报（排进 `PlaybackReporter` 按顺序发送，调用方不等结果，失败只记日志）
 
   /// 进度上报的 `EventName`：周期进度为 TimeUpdate，暂停、继续为 Pause、Unpause（省略时 Emby 一律按 TimeUpdate 处理）。
   private enum ProgressEvent: String {
@@ -819,21 +848,14 @@ final class PlaybackSession: Identifiable {
     case unpause = "Unpause"
   }
 
-  private func enqueueReport(_ work: @escaping @MainActor () async -> Void) {
-    let previous = lastReport
-    lastReport = Task {
-      await previous?.value
-      await work()
-    }
-  }
-
   private func report(
     _ event: EmbyClient.PlaybackEvent, isPaused: Bool, position: Double, progressEvent: ProgressEvent? = nil
   ) {
     var body = reportBody(isPaused: isPaused, position: position)
     if let progressEvent { body["EventName"] = .string(progressEvent.rawValue) }
     let client = prepared.client
-    enqueueReport { await Self.send(event, body: body, client: client) }
+    let kind: PlaybackReporter.Kind = event == .start ? .start : .progress
+    reporter.enqueue(kind, for: reportedItem) { await Self.send(event, body: body, client: client) }
   }
 
   private func reportBody(isPaused: Bool, position: Double) -> [String: JSONValue] {
@@ -861,34 +883,193 @@ final class PlaybackSession: Identifiable {
     }
   }
 
-  /// 停止播放的条目：停止上报的内容和要写回的观看进度。
-  struct EndedItem {
+  /// 要写回 Emby 的观看进度。
+  struct WatchProgress {
     let userID: String
     let itemID: String
-    let stopReport: [String: JSONValue]
     let completed: Bool
     let positionTicks: Int
     let playedAt: Date
   }
 
-  /// 先上报停止，再写回观看进度。写回前重新读取单条条目的用户数据，只改续播位置、已看完和最后播放时间：
-  /// 开播时的条目可能来自剧集列表，Emby 列表里的 `PlayCount` 恒为 0、也没有最后播放时间，整份写回会把真实播放次数改成 0；
-  /// 按顺序发也不会盖掉停止上报刚更新的数据。读不到用户数据就不写，不用残缺对象覆盖收藏等字段。
+  /// 停止播放的条目：停止上报的内容和要写回的观看进度。
+  struct EndedItem {
+    let stopReport: [String: JSONValue]
+    let progress: WatchProgress
+  }
+
+  /// 先上报停止，再写回观看进度；按顺序发，写回不会被停止上报刚更新的数据盖掉。
   static func finishItem(_ ending: EndedItem, client: EmbyClient) async {
     await send(.stopped, body: ending.stopReport, client: client)
+    await saveWatchProgress(ending.progress, client: client)
+  }
+
+  /// 写回前重新读取单条条目的用户数据，只改续播位置、已看完和最后播放时间：开播时的条目可能来自剧集列表，
+  /// Emby 列表里的 `PlayCount` 恒为 0、也没有最后播放时间，整份写回会把真实播放次数改成 0。
+  /// 读不到用户数据就不写，不用残缺对象覆盖收藏等字段。
+  static func saveWatchProgress(_ progress: WatchProgress, client: EmbyClient) async {
     do {
-      guard let item = try await client.item(id: ending.itemID, userID: ending.userID),
+      guard let item = try await client.item(id: progress.itemID, userID: progress.userID),
         var userData = item.userData
       else {
         Logger.warning("[Playback] 读不到条目的用户数据，未保存观看进度")
         return
       }
-      userData["PlaybackPositionTicks"] = .int(ending.completed ? 0 : ending.positionTicks)
-      if ending.completed { userData["Played"] = .bool(true) }
-      userData["LastPlayedDate"] = .string(ISO8601DateFormatter().string(from: ending.playedAt))
-      try await client.updateUserData(userID: ending.userID, itemID: ending.itemID, userData: userData)
+      userData["PlaybackPositionTicks"] = .int(progress.completed ? 0 : progress.positionTicks)
+      if progress.completed { userData["Played"] = .bool(true) }
+      userData["LastPlayedDate"] = .string(ISO8601DateFormatter().string(from: progress.playedAt))
+      try await client.updateUserData(userID: progress.userID, itemID: progress.itemID, userData: userData)
     } catch {
       Logger.warning("[Playback] 保存观看进度失败: \(error.localizedDescription)")
+    }
+  }
+}
+
+/// 向 Emby 发送播放状态上报和观看进度写回的队列。由协调器持有，所有播放会话共用，按排队顺序逐条发送：
+/// 同一次播放的开始、进度、停止、写回不会乱序（后发的停止先到，Emby 后台就一直显示“正在播放”），
+/// 上一次播放的写回也不会晚于下一次播放的写回，把较新的续播点盖回旧值。
+/// 每个请求最多等 15 秒（`EmbyClient.sharedSession`），所以不能让积压无限增长：还没发出的进度只留同一条目最新的一条，
+/// 排进停止或保存进度时，同一条目还没发出的进度（和更早的保存进度）直接丢弃，停止上报不必排在一串过期进度后面。
+@MainActor
+final class PlaybackReporter {
+  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+  nonisolated deinit {}
+
+  enum Kind {
+    case start
+    case progress
+    /// 只写回观看进度，播放继续。
+    case saveProgress
+    /// 停止上报和观看进度写回。
+    case finish
+  }
+
+  /// 上报针对的条目：同一台服务器、同一个 Emby 用户的同一个条目。
+  struct Item: Hashable {
+    let server: URL
+    let userID: String
+    let itemID: String
+  }
+
+  private struct Job {
+    let sequence: Int
+    let kind: Kind
+    let item: Item
+    let work: @MainActor () async -> Void
+  }
+
+  private struct Waiter {
+    let id: UUID
+    let sequence: Int
+    let continuation: CheckedContinuation<Void, Never>
+  }
+
+  private var pending: [Job] = []
+  private var runningSequence: Int?
+  private var nextSequence = 0
+  private var drainTask: Task<Void, Never>?
+  private var waiters: [Waiter] = []
+
+  func enqueue(_ kind: Kind, for item: Item, _ work: @escaping @MainActor () async -> Void) {
+    let superseded: Set<Kind>
+    switch kind {
+    case .start: superseded = []
+    case .progress: superseded = [.progress]
+    case .saveProgress, .finish: superseded = [.progress, .saveProgress]
+    }
+    if !superseded.isEmpty {
+      pending.removeAll { $0.item == item && superseded.contains($0.kind) }
+    }
+    pending.append(Job(sequence: nextSequence, kind: kind, item: item, work: work))
+    nextSequence += 1
+    resumeFinishedWaiters()
+    if drainTask == nil {
+      drainTask = Task { await self.drain() }
+    }
+  }
+
+  /// 等此刻已排进队的上报和写回发完（或被同一条目更新的一条取代）。任务取消时立即返回。
+  func waitForQueued() async {
+    await wait(through: nextSequence - 1)
+  }
+
+  /// 同 `waitForQueued()`，但最多等 `limit`。
+  func waitForQueued(atMost limit: Duration) async {
+    let sequence = nextSequence - 1
+    guard !isFinished(through: sequence) else { return }
+    await withTaskGroup(of: Void.self) { group in
+      group.addTask { await self.wait(through: sequence) }
+      group.addTask { try? await Task.sleep(for: limit) }
+      await group.next()
+      group.cancelAll()
+    }
+  }
+
+  private func drain() async {
+    while !pending.isEmpty {
+      let job = pending.removeFirst()
+      runningSequence = job.sequence
+      await job.work()
+      runningSequence = nil
+      resumeFinishedWaiters()
+    }
+    drainTask = nil
+  }
+
+  /// 队列先进先出：序号不大于 `sequence` 的都已发完或被丢弃，等价于正在发送的和排在最前的都比它新。
+  private func isFinished(through sequence: Int) -> Bool {
+    if let runningSequence, runningSequence <= sequence { return false }
+    guard let first = pending.first else { return true }
+    return first.sequence > sequence
+  }
+
+  private func wait(through sequence: Int) async {
+    guard !isFinished(through: sequence) else { return }
+    let id = UUID()
+    await withTaskCancellationHandler {
+      await withCheckedContinuation { continuation in
+        if Task.isCancelled || isFinished(through: sequence) {
+          continuation.resume()
+        } else {
+          waiters.append(Waiter(id: id, sequence: sequence, continuation: continuation))
+        }
+      }
+    } onCancel: {
+      Task { @MainActor in self.resumeWaiter(id) }
+    }
+  }
+
+  private func resumeFinishedWaiters() {
+    let finished = waiters.filter { isFinished(through: $0.sequence) }
+    guard !finished.isEmpty else { return }
+    waiters.removeAll { isFinished(through: $0.sequence) }
+    finished.forEach { $0.continuation.resume() }
+  }
+
+  private func resumeWaiter(_ id: UUID) {
+    guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+    waiters.remove(at: index).continuation.resume()
+  }
+}
+
+/// 申请一段后台执行时间，`work` 完成或系统收回时结束。
+enum BackgroundExecution {
+  private final class Assertion {
+    var id = UIBackgroundTaskIdentifier.invalid
+
+    func end() {
+      guard id != .invalid else { return }
+      UIApplication.shared.endBackgroundTask(id)
+      id = .invalid
+    }
+  }
+
+  static func run(named name: String, _ work: @escaping @MainActor () async -> Void) {
+    let assertion = Assertion()
+    assertion.id = UIApplication.shared.beginBackgroundTask(withName: name) { assertion.end() }
+    Task {
+      await work()
+      assertion.end()
     }
   }
 }
