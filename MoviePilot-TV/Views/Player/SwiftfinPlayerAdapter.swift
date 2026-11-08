@@ -124,9 +124,9 @@ final class MediaSession {
   // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
   nonisolated deinit {}
 
-  /// 换集、换版本：交给 `PlaybackCoordinator.switchItem`。按集播放时带上 MoviePilot 集列表里的那一集。
+  /// 换集、换版本：交给 `PlaybackCoordinator.switchItem`。按集播放时带上 MoviePilot 集列表里的那一集和它所在那一季的列表。
   typealias SwitchItem = (
-    _ itemID: String, _ mediaSourceID: String?, _ startPosition: Double, _ episode: MoviePilotEpisode?,
+    _ itemID: String, _ mediaSourceID: String?, _ startPosition: Double, _ episode: QueuedEpisode?,
     _ completion: @escaping (PlaybackCoordinator.SwitchResult) -> Void
   ) -> Void
 
@@ -207,6 +207,8 @@ final class MediaSession {
   @ObservationIgnored private var displayTask: Task<Void, Never>?
   /// 播完时重新查下一集。
   @ObservationIgnored private var nextLookupTask: Task<Void, Never>?
+  /// 当前条目已经播完（之后要么接着播下一集，要么退出）。这时换集失败，就没有画面可以留在原处。
+  @ObservationIgnored private var currentItemEnded = false
   /// 已按片源信息向电视申请过显示模式，退出时要还原。
   @ObservationIgnored private var hasRequestedDisplayMode = false
 
@@ -301,6 +303,7 @@ final class MediaSession {
   /// 会话已换成新条目（播放中换集、换版本后），上一条目已由会话上报停止：重建条目状态并起播。
   private func itemDidChange() {
     isSwitchingItem = false
+    currentItemEnded = false
     seekTask?.cancel()
     seekTask = nil
     pendingSeek = nil
@@ -441,6 +444,7 @@ final class MediaSession {
   }
 
   private func ended() {
+    currentItemEnded = true
     let episodeQueue = queue as? MoviePilotEpisodeQueue
     switch Self.endAction(
       isSwitchingItem: isSwitchingItem, isSeeking: isSeeking, isLiveStream: item.isLiveStream,
@@ -546,6 +550,17 @@ final class MediaSession {
     }
   }
 
+  /// 换集、换版本没成功时怎么办：当前条目还在播，就留在原处、提示原因；已经播完（自动接下一集，或手动换集时刚好播完），
+  /// 画面停在片尾、一直显示加载中，只能退出并说明原因。被丢弃（播放已结束、账号已切换）时没有原因可说。
+  enum SwitchFailureAction: Equatable {
+    case stay(error: String?)
+    case exit(notice: String?)
+  }
+
+  static func afterFailedSwitch(message: String?, currentItemEnded: Bool) -> SwitchFailureAction {
+    currentItemEnded ? .exit(notice: message) : .stay(error: message)
+  }
+
   /// 改播另一集或另一个版本（Swiftfin 的 `playNewItem`）。取代仍在进行的播完查询。
   func playNewItem(intent: PlaybackIntent) {
     guard state != .stopped, let itemID = intent.item.id else { return }
@@ -553,17 +568,21 @@ final class MediaSession {
     nextLookupTask = nil
     isSwitchingItem = true
     let start = intent.configuration.startSeconds.map { $0.seconds } ?? 0
-    onSwitchItem(itemID, intent.configuration.mediaSourceID, start, intent.item.moviePilotEpisode) {
+    onSwitchItem(itemID, intent.configuration.mediaSourceID, start, intent.item.queuedEpisode) {
       [weak self] result in
       guard let self, !self.isStopped else { return }
+      let message: String?
       switch result {
       case .switched:
         self.itemDidChange()
-      case .failed(let message):
-        self.isSwitchingItem = false
-        self.commandError = message
-      case .discarded:
-        self.isSwitchingItem = false
+        return
+      case .failed(let reason): message = reason
+      case .discarded: message = nil
+      }
+      self.isSwitchingItem = false
+      switch Self.afterFailedSwitch(message: message, currentItemEnded: self.currentItemEnded) {
+      case .stay(let error): if let error { self.commandError = error }
+      case .exit(let notice): self.finish(notice: notice)
       }
     }
   }

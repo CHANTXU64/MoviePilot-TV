@@ -80,8 +80,8 @@ nonisolated struct BaseItemDto: Identifiable {
   /// 竖版海报、横版缩略图地址（不带密钥）。
   var portraitImageURL: URL?
   var landscapeImageURL: URL?
-  /// 从详情页按集播放时，MoviePilot 集列表里的这一集；换集时随条目交给协调器。
-  var moviePilotEpisode: MoviePilotEpisode?
+  /// 从详情页按集播放时，MoviePilot 集列表里的这一集和它所在那一季的列表；换集时随条目交给协调器。
+  var queuedEpisode: QueuedEpisode?
 
   // 直播、节目、附加内容相关，直连播放不出现。
   var currentProgram: ProgramInfo? { nil }
@@ -109,7 +109,7 @@ nonisolated struct BaseItemDto: Identifiable {
       indexNumber = episode.episode.episodeNumber
       parentIndexNumber = episode.episode.seasonNumber
       seriesName = episode.context.seriesName ?? item.seriesName
-      moviePilotEpisode = episode.episode
+      queuedEpisode = episode
       seriesID = String(episode.context.tmdbID)
       seasonID = UserSession.queueSeasonID(episode.episode.seasonNumber)
     } else {
@@ -544,7 +544,9 @@ final class UserSession {
       let season = Self.season(fromQueueSeasonID: seasonID)
     else { return [] }
     return try await queue.playableEpisodes(inSeason: season, from: session.playback).map {
-      BaseItemDto(item: $0.item, episode: QueuedEpisode(context: context, episode: $0.episode))
+      BaseItemDto(
+        item: $0.item,
+        episode: QueuedEpisode(context: context, episode: $0.episode, seasonEpisodes: $0.seasonEpisodes))
     }
   }
 
@@ -559,7 +561,9 @@ final class UserSession {
     switch try await queue.adjacentEpisode(direction, from: session.playback, refresh: refresh) {
     case .play(let entry, let skippedMissing):
       return .episode(
-        BaseItemDto(item: entry.item, episode: QueuedEpisode(context: context, episode: entry.episode)),
+        BaseItemDto(
+          item: entry.item,
+          episode: QueuedEpisode(context: context, episode: entry.episode, seasonEpisodes: entry.seasonEpisodes)),
         skippedMissing: skippedMissing)
     case .stop(let reason):
       return .unavailable(reason)

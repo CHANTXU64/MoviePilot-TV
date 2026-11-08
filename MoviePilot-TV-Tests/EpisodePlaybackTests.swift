@@ -73,6 +73,48 @@ final class EpisodePlaybackModelTests: XCTestCase {
     XCTAssertEqual(items[2].externalID(for: "tvdb"), "9")
   }
 
+  func testEmbyListWithoutItemsIsNotAnEmptyList() throws {
+    // 只有确实读到 Items: [] 才是空列表；缺字段、类型不对是回包无法识别，不能当作“这部剧没有集”。
+    XCTAssertEqual(try decode(EmbyItemsPage.self, #"{"Items":[]}"#).items.count, 0)
+    XCTAssertThrowsError(try decode(EmbyItemsPage.self, #"{}"#))
+    XCTAssertThrowsError(try decode(EmbyItemsPage.self, #"{"Items":"x"}"#))
+    XCTAssertThrowsError(try decode(EmbyItemsPage.self, #"{"Items":[{}]}"#))
+    XCTAssertEqual(
+      try decode(EmbyItemsPage.self, #"{"Items":[{"Id":"e1"},{"Name":"没有 Id"}]}"#).items.map(\.id), ["e1"],
+      "单个条目坏掉只丢它")
+
+    XCTAssertThrowsError(try decode(EmbyPlaybackInfo.self, #"{"PlaySessionId":"p"}"#), "缺少片源列表不当作没有可播放的文件")
+    XCTAssertEqual(
+      try decode(EmbyPlaybackInfo.self, #"{"ErrorCode":"NotAllowed"}"#).errorCode, "NotAllowed", "带错误码时可以没有片源列表")
+  }
+
+  func testEmbyPlaybackInfoDistinguishesEmptySourcesFromMalformedEntries() throws {
+    XCTAssertTrue(try decode(EmbyPlaybackInfo.self, #"{"MediaSources":[]}"#).mediaSources.isEmpty)
+    XCTAssertThrowsError(try decode(EmbyPlaybackInfo.self, #"{"MediaSources":[{}]}"#))
+    XCTAssertEqual(
+      try decode(EmbyPlaybackInfo.self, #"{"MediaSources":[{},{"Id":"valid"}]}"#).mediaSources.map(\.id), ["valid"])
+    XCTAssertEqual(
+      try decode(EmbyPlaybackInfo.self, #"{"MediaSources":[{}],"ErrorCode":"NotAllowed"}"#).errorCode, "NotAllowed")
+  }
+
+  func testEmbyErrorsAreClassifiedByWhatToDoNext() {
+    XCTAssertEqual(EmbyClientError.unreachable(transportSecurity: false).reason, .unreachable)
+    XCTAssertEqual(EmbyClientError.unreachable(transportSecurity: true).reason, .transportSecurity)
+    XCTAssertEqual(EmbyClientError.certificate.reason, .certificate)
+    XCTAssertEqual(EmbyClientError.http(400).reason, .badRequest)
+    XCTAssertEqual(EmbyClientError.http(401).reason, .unauthorized)
+    XCTAssertEqual(EmbyClientError.http(403).reason, .forbidden)
+    XCTAssertEqual(EmbyClientError.http(404).reason, .notFound)
+    XCTAssertEqual(EmbyClientError.http(502).reason, .serverError(502))
+    XCTAssertEqual(EmbyClientError.http(409).reason, .status(409))
+    XCTAssertEqual(EmbyClientError.invalidResponse.reason, .invalidResponse)
+    XCTAssertTrue(MediaServerError.Reason.unauthorized.isServerWide, "密钥无效：换一份副本也没用")
+    XCTAssertFalse(MediaServerError.Reason.serverError(500).isServerWide, "服务器出错：先试其他副本")
+    XCTAssertEqual(
+      MediaServerError(server: "家里", operation: .readEpisodes, reason: .serverError(500)).errorDescription,
+      "媒体服务器“家里”读取剧集列表失败：服务器出错（HTTP 500），请稍后重试")
+  }
+
   func testEpisodeContextNeedsTMDBSeries() {
     let series = MediaInfo(tmdb_id: 100, source: "themoviedb", media_id: "100", title: " 长风渡 ", type: "电视剧")
     let context = EpisodePlaybackContext(
@@ -148,9 +190,56 @@ final class EpisodePlaybackModelTests: XCTestCase {
   func testServerEpisodesWithoutTMDBIDsAreNotMatchedByNumbers() {
     // 服务器上第 1 季第 1 集就在那里，但没有 TMDB 单集 ID：不能按季集号认，可能是另一套编号的另一集。
     let noIDs = ServerMediaItem(id: "x", kind: .episode, seasonNumber: 1, episodeNumber: 1, externalIDs: ["tvdb": "9"])
+    let availability = EpisodeAvailability.resolve(episode(1, number: 1), lookups: [index("a", [noIDs])])
+    XCTAssertEqual(availability, .unidentifiable(.serverHasNoEpisodeIDs(server: "a")))
+    XCTAssertEqual(availability.message, "媒体服务器“a”上这部剧的文件都没有 TMDB 编号，无法确认对应哪一集，可刷新元数据后重试")
+  }
+
+  func testAFileWithoutTMDBIDIsTreatedAsUnmatchedAndExplained() {
+    // 第 1、3 集有 TMDB 单集 ID，第 2 集的文件刚入库还没刮削到：第 2 集按没有处理，队列照常往后找；说明里提示可以刷新元数据。
+    let lookup = index(
+      "a",
+      [
+        serverEpisode("a1", tmdb: 1), serverEpisode("a2", tmdb: nil), serverEpisode("a3", tmdb: 3),
+        serverEpisode("virtual", tmdb: nil, hasFile: false),
+      ])
+    XCTAssertEqual(EpisodeAvailability.resolve(episode(1), lookups: [lookup]), .playable(server: "a"))
+    let unmatched = EpisodeAvailability.resolve(episode(2), lookups: [lookup])
+    XCTAssertEqual(unmatched, .unmatched(server: "a"))
+    XCTAssertEqual(unmatched.message, "未匹配到这一集，媒体服务器“a”上部分文件缺少 TMDB 编号，可刷新元数据后重试")
+    XCTAssertEqual(EpisodeQueueStatus.resolve(episode(2), current: lookup, others: []), .unmatched(server: "a"))
     XCTAssertEqual(
-      EpisodeAvailability.resolve(episode(1, number: 1), lookups: [index("a", [noIDs])]),
-      .unidentifiable(.serverHasNoEpisodeIDs))
+      EpisodeAvailability.resolve(episode(4), lookups: [index("a", [serverEpisode("a1", tmdb: 1)])]), .notOnServer,
+      "文件都带编号：确认没有")
+    let onlyVirtualWithoutID = index("a", [serverEpisode("a1", tmdb: 1), serverEpisode("v", tmdb: nil, hasFile: false)])
+    XCTAssertEqual(EpisodeAvailability.resolve(episode(2), lookups: [onlyVirtualWithoutID]), .notOnServer, "没有文件的缺集不算")
+  }
+
+  func testEachKindOfFailureHasItsOwnExplanation() {
+    // 目标集本身缺 TMDB 编号、服务器读取失败、个别文件没编号，三种原因各说各的。
+    let unmatched = index("a", [serverEpisode("a1", tmdb: 1), serverEpisode("a2", tmdb: nil)])
+    let failed = ServerEpisodeLookup.failed(
+      server: "b", message: "媒体服务器“b”读取剧集列表失败：服务器出错（HTTP 500），请稍后重试")
+    XCTAssertEqual(
+      EpisodeAvailability.resolve(episode(nil), lookups: [unmatched]).message,
+      "MoviePilot 没有提供这一集的 TMDB 编号，无法确认媒体服务器上对应哪一集")
+    XCTAssertEqual(
+      EpisodeAvailability.resolve(episode(2), lookups: [unmatched, failed]).message,
+      "媒体服务器“b”读取剧集列表失败：服务器出错（HTTP 500），请稍后重试", "读取失败在前：稍后重试可能就有")
+    XCTAssertEqual(
+      EpisodeAvailability.resolve(episode(2), lookups: [unmatched]).message,
+      "未匹配到这一集，媒体服务器“a”上部分文件缺少 TMDB 编号，可刷新元数据后重试")
+  }
+
+  func testIncompleteServerIndexIsNotTreatedAsMissing() {
+    // 同一部剧在两个媒体库各有一份，其中一份读取失败：读到的那份里没有这一集，也不能说服务器上没有。
+    let reason = "媒体服务器“a”读取剧集列表失败：服务器出错（HTTP 500），请稍后重试"
+    let partial = ServerEpisodeLookup.loaded(
+      ServerEpisodeIndex(
+        serverName: "a", hasSeries: true, episodes: [serverEpisode("a1", tmdb: 1)], incompleteReason: reason))
+    XCTAssertEqual(EpisodeAvailability.resolve(episode(1), lookups: [partial]), .playable(server: "a"))
+    XCTAssertEqual(EpisodeAvailability.resolve(episode(2), lookups: [partial]), .failed(reason))
+    XCTAssertEqual(EpisodeQueueStatus.resolve(episode(2), current: partial, others: []), .unknown(reason))
   }
 
   func testReadFailureIsNotTreatedAsMissing() {
@@ -163,27 +252,54 @@ final class EpisodePlaybackModelTests: XCTestCase {
   }
 
   func testQueueStatusIsRelativeToCurrentServer() {
-    let lookups = [
-      index("a", [serverEpisode("a1", tmdb: 1)]),
-      index("b", [serverEpisode("b2", tmdb: 2)]),
-    ]
+    let current = index("a", [serverEpisode("a1", tmdb: 1)])
+    let others = [index("b", [serverEpisode("b2", tmdb: 2)])]
     XCTAssertEqual(
-      EpisodeQueueStatus.resolve(episode(1), currentServer: "a", lookups: lookups), .playable(serverEpisode("a1", tmdb: 1)))
-    XCTAssertEqual(EpisodeQueueStatus.resolve(episode(2), currentServer: "a", lookups: lookups), .elsewhere)
-    XCTAssertEqual(EpisodeQueueStatus.resolve(episode(3), currentServer: "a", lookups: lookups), .absent)
-    guard case .unknown = EpisodeQueueStatus.resolve(episode(nil), currentServer: "a", lookups: lookups) else {
+      EpisodeQueueStatus.resolve(episode(1), current: current, others: others), .playable(serverEpisode("a1", tmdb: 1)))
+    XCTAssertEqual(EpisodeQueueStatus.resolve(episode(2), current: current, others: others), .elsewhere(server: "b"))
+    XCTAssertEqual(EpisodeQueueStatus.resolve(episode(3), current: current, others: others), .absent)
+    guard case .unknown = EpisodeQueueStatus.resolve(episode(nil), current: current, others: others) else {
       return XCTFail("缺少编号不能当作没有")
     }
   }
 
   func testQueueStatusIsUnknownWhenTheCurrentServerFailedToLoad() {
     // 当前服务器读取超时、另一台有这一集：可能当前服务器上也有，不能说“只在另一台上”。
-    let lookups = [
-      ServerEpisodeLookup.failed(server: "a", message: "无法连接“a”"),
-      index("b", [serverEpisode("b2", tmdb: 2)]),
-    ]
+    let current = ServerEpisodeLookup.failed(server: "a", message: "无法连接“a”")
+    XCTAssertEqual(EpisodeQueueStatus.onCurrentServer(episode(2), lookup: current), .unknown("无法连接“a”"))
     XCTAssertEqual(
-      EpisodeQueueStatus.resolve(episode(2), currentServer: "a", lookups: lookups), .unknown("无法连接“a”"))
+      EpisodeQueueStatus.resolve(episode(2), current: current, others: [index("b", [serverEpisode("b2", tmdb: 2)])]),
+      .unknown("无法连接“a”"))
+  }
+
+  func testQueueStatusOnlyNeedsOtherServersWhenTheCurrentOneHasNoMatch() {
+    let identified = index("a", [serverEpisode("a1", tmdb: 1)])
+    XCTAssertNil(EpisodeQueueStatus.onCurrentServer(episode(2), lookup: identified), "当前服务器上没有：要看其他服务器")
+    let unidentified = index("a", [serverEpisode("a1", tmdb: 1), serverEpisode("a2", tmdb: nil)])
+    XCTAssertNil(EpisodeQueueStatus.onCurrentServer(episode(2), lookup: unidentified), "个别文件没编号也按没有，再看其他服务器")
+    XCTAssertEqual(
+      EpisodeQueueStatus.onCurrentServer(episode(nil), lookup: identified),
+      .unknown(EpisodeAvailability.UnidentifiableReason.missingEpisodeID.message))
+  }
+
+  @MainActor
+  func testLibraryItemIDIsOnlyTriedOnTheServerThatOwnsIt() {
+    XCTAssertEqual(PlaybackCoordinator.idFallbackStrictness(on: "a", owner: "a", strict: true), false, "所属服务器上不要求外部编号")
+    XCTAssertNil(PlaybackCoordinator.idFallbackStrictness(on: "b", owner: "a", strict: true), "别的服务器上同号的是另一部")
+    XCTAssertNil(PlaybackCoordinator.idFallbackStrictness(on: "b", owner: "a", strict: false), "只启用一台也不拿别处的 ID 找")
+    XCTAssertEqual(PlaybackCoordinator.idFallbackStrictness(on: "a", owner: nil, strict: true), true)
+    XCTAssertEqual(PlaybackCoordinator.idFallbackStrictness(on: "a", owner: nil, strict: false), false)
+  }
+
+  @MainActor
+  func testFailedSwitchExitsOnlyAfterTheEpisodeEnded() {
+    XCTAssertEqual(
+      MediaSession.afterFailedSwitch(message: "没有找到", currentItemEnded: false), .stay(error: "没有找到"),
+      "还在播：留在原处提示")
+    XCTAssertEqual(
+      MediaSession.afterFailedSwitch(message: "没有找到", currentItemEnded: true), .exit(notice: "没有找到"),
+      "片尾自动接下一集失败：退出并说明，不停在加载中")
+    XCTAssertEqual(MediaSession.afterFailedSwitch(message: nil, currentItemEnded: true), .exit(notice: nil))
   }
 }
 
@@ -203,20 +319,36 @@ final class EpisodeNavigatorTests: XCTestCase {
 
   private func item(_ id: String) -> ServerMediaItem { ServerMediaItem(id: id, kind: .episode) }
 
-  /// `statuses`：TMDB 单集 ID → 状态；没写的按确认没有。
+  /// 正在播的一集。`known` 是它所在那一季的列表（选中这一集时的那份），默认取 `lists` 里的那一季。
+  private func queued(
+    _ episode: MoviePilotEpisode, seasons: [Int], known: [MoviePilotEpisode]
+  ) -> QueuedEpisode {
+    let context = EpisodePlaybackContext(
+      media: MediaInfo(tmdb_id: 100, source: "themoviedb", media_id: "100", title: "长风渡", type: "电视剧"),
+      episodeGroup: nil, seasons: seasons, libraryItem: nil)!
+    return QueuedEpisode(context: context, episode: episode, seasonEpisodes: known)
+  }
+
+  /// `statuses`：TMDB 单集 ID → 状态；没写的按确认没有。`lists` 是重新读到的各季集列表。
   private func navigate(
     _ direction: EpisodeNavigator.Direction, from current: MoviePilotEpisode, currentItemID: String = "current",
-    seasons: [Int], lists: [Int: [MoviePilotEpisode]], statuses: [Int: EpisodeQueueStatus],
-    failingSeasons: Set<Int> = [], loads: SeasonLoads? = nil
+    seasons: [Int], lists: [Int: [MoviePilotEpisode]], known: [MoviePilotEpisode]? = nil,
+    statuses: [Int: EpisodeQueueStatus], failingSeasons: Set<Int> = [], episodeIDsOnServer: Set<Int>? = nil,
+    loads: SeasonLoads? = nil
   ) async throws -> EpisodeNavigator.Outcome {
     try await EpisodeNavigator.adjacent(
-      direction, from: current, currentItemID: currentItemID, seasons: seasons,
+      direction, from: queued(current, seasons: seasons, known: known ?? lists[current.seasonNumber] ?? []),
+      currentItemID: currentItemID, episodeIDsOnServer: episodeIDsOnServer,
       loadSeason: { season in
         loads?.seasons.append(season)
         if failingSeasons.contains(season) { throw LoadFailure() }
         return lists[season] ?? []
       },
       status: { episode in episode.tmdbEpisodeID.flatMap { statuses[$0] } ?? .absent })
+  }
+
+  private func entry(_ episode: MoviePilotEpisode, _ itemID: String, in list: [MoviePilotEpisode]) -> EpisodeQueueEntry {
+    EpisodeQueueEntry(episode: episode, item: item(itemID), seasonEpisodes: list)
   }
 
   func testNextSkipsMissingEpisodesAndTheSameFile() async throws {
@@ -226,7 +358,7 @@ final class EpisodeNavigatorTests: XCTestCase {
       lists: [1: season1],
       statuses: [10: .playable(item("file-1")), 11: .playable(item("file-1")), 13: .playable(item("file-3"))])
     XCTAssertEqual(
-      outcome, .play(EpisodeQueueEntry(episode: season1[3], item: item("file-3")), skippedMissing: true),
+      outcome, .play(entry(season1[3], "file-3", in: season1), skippedMissing: true),
       "第 11 集和当前是同一个文件，第 12 集确认没有，都跳过；跳过了缺集，播完时要复查")
   }
 
@@ -234,9 +366,8 @@ final class EpisodeNavigatorTests: XCTestCase {
     let season1 = list(season: 1, ids: [10, 11, 12])
     let elsewhere = try await navigate(
       .next, from: season1[0], seasons: [1], lists: [1: season1],
-      statuses: [11: .elsewhere, 12: .playable(item("e12"))])
-    guard case .stop(let reason) = elsewhere else { return XCTFail("在别的服务器上要停下，实际 \(elsewhere)") }
-    XCTAssertTrue(reason.contains("另一台媒体服务器"), reason)
+      statuses: [11: .elsewhere(server: "b"), 12: .playable(item("e12"))])
+    XCTAssertEqual(elsewhere, .stop("下一集在另一台媒体服务器“b”上，请回到详情页选择"))
 
     let unknown = try await navigate(
       .next, from: season1[0], seasons: [1], lists: [1: season1],
@@ -250,8 +381,7 @@ final class EpisodeNavigatorTests: XCTestCase {
     let outcome = try await navigate(
       .next, from: season1[1], seasons: [0, 1, 2], lists: [1: season1, 2: season2],
       statuses: [21: .playable(item("e21"))])
-    XCTAssertEqual(
-      outcome, .play(EpisodeQueueEntry(episode: season2[1], item: item("e21")), skippedMissing: true), "特别篇不参与跨季")
+    XCTAssertEqual(outcome, .play(entry(season2[1], "e21", in: season2), skippedMissing: true), "特别篇不参与跨季")
 
     let end = try await navigate(.next, from: season2[1], seasons: [0, 1, 2], lists: [1: season1, 2: season2], statuses: [:])
     XCTAssertEqual(end, .end)
@@ -272,9 +402,28 @@ final class EpisodeNavigatorTests: XCTestCase {
     let outcome = try await navigate(
       .previous, from: season2[0], seasons: [1, 2], lists: [1: season1, 2: season2],
       statuses: [10: .playable(item("e10"))])
-    XCTAssertEqual(
-      outcome, .play(EpisodeQueueEntry(episode: season1[0], item: item("e10")), skippedMissing: true),
-      "第 11 集确认没有，跳到第 10 集")
+    XCTAssertEqual(outcome, .play(entry(season1[0], "e10", in: season1), skippedMissing: true), "第 11 集确认没有，跳到第 10 集")
+  }
+
+  func testPreviousStopsReadingSeasonsOnceNothingEarlierIsOnTheServer() async throws {
+    // 服务器上只有第 5 季：往前找不再为前面几季逐季读 MoviePilot 的集列表。
+    let seasons = Array(1...5)
+    var lists: [Int: [MoviePilotEpisode]] = [:]
+    for season in seasons { lists[season] = list(season: season, ids: [season * 100, season * 100 + 1]) }
+    let loads = SeasonLoads()
+    let outcome = try await navigate(
+      .previous, from: lists[5]![0], seasons: seasons, lists: lists, statuses: [501: .playable(item("e501"))],
+      episodeIDsOnServer: [500, 501], loads: loads)
+    XCTAssertEqual(outcome, .end)
+    XCTAssertEqual(loads.seasons, [5])
+
+    // 第 3 季也在服务器上：照常读到第 3 季为止。
+    let earlier = SeasonLoads()
+    let found = try await navigate(
+      .previous, from: lists[5]![0], seasons: seasons, lists: lists, statuses: [301: .playable(item("e301"))],
+      episodeIDsOnServer: [301, 500], loads: earlier)
+    XCTAssertEqual(found, .play(entry(lists[3]![1], "e301", in: lists[3]!), skippedMissing: true))
+    XCTAssertEqual(earlier.seasons, [5, 4, 3])
   }
 
   func testSpecialsOnlyMoveWithinSeasonZero() async throws {
@@ -289,7 +438,24 @@ final class EpisodeNavigatorTests: XCTestCase {
     let season1 = list(season: 1, ids: [10])
     let outcome = try await navigate(
       .next, from: season1[0], seasons: [1, 2], lists: [1: season1], statuses: [:], failingSeasons: [2])
-    XCTAssertEqual(outcome, .stop("没能读取第 2 季的集列表"))
+    XCTAssertEqual(outcome, .stop("没能从 MoviePilot 读取第 2 季的集列表：请稍后重试"))
+  }
+
+  func testEmptySeasonListStopsInsteadOfSkippingTheSeason() async throws {
+    // MoviePilot 读 TMDB 失败时返回空列表：当作没有第 2 季、接着找第 3 季，就会把第 2 季整季跳过。
+    let season1 = list(season: 1, ids: [10])
+    let season3 = list(season: 3, ids: [30])
+    let outcome = try await navigate(
+      .next, from: season1[0], seasons: [1, 2, 3], lists: [1: season1, 2: [], 3: season3],
+      statuses: [30: .playable(item("e30"))])
+    XCTAssertEqual(outcome, .stop("第 2 季集列表暂不可用，请重试"))
+
+    // 前面跳过了还不在服务器上的第 11 集：空列表也不能说成“下一集还不在”，照样请用户重试。
+    let season1WithGap = list(season: 1, ids: [10, 11])
+    let afterGap = try await navigate(
+      .next, from: season1WithGap[0], seasons: [1, 2, 3], lists: [1: season1WithGap, 2: [], 3: season3],
+      statuses: [30: .playable(item("e30"))])
+    XCTAssertEqual(afterGap, .stop("第 2 季集列表暂不可用，请重试"))
   }
 
   func testScanningStopsAfterAFewEmptySeasons() async throws {
@@ -305,12 +471,46 @@ final class EpisodeNavigatorTests: XCTestCase {
 
   func testCurrentEpisodeIsRelocatedByTMDBIDAfterTheListChanges() async throws {
     // 开播时这一集在第 0 位，之后列表前面插入了一集。
-    let opened = list(season: 1, ids: [10, 11])[0]
+    let opened = list(season: 1, ids: [10, 11])
     let refreshed = list(season: 1, ids: [9, 10, 11])
     let outcome = try await navigate(
-      .next, from: opened, seasons: [1], lists: [1: refreshed],
+      .next, from: opened[0], seasons: [1], lists: [1: refreshed], known: opened,
       statuses: [9: .playable(item("e9")), 11: .playable(item("e11"))])
-    XCTAssertEqual(outcome, .play(EpisodeQueueEntry(episode: refreshed[2], item: item("e11")), skippedMissing: false))
+    XCTAssertEqual(outcome, .play(entry(refreshed[2], "e11", in: refreshed), skippedMissing: false))
+  }
+
+  func testUnreliableCurrentSeasonListFallsBackToTheKnownOne() async throws {
+    // 播完重新读到的本季列表是空的（MoviePilot 读 TMDB 失败）、读不到、或里面没有正在播的这一集：
+    // 下一集是谁开播时就知道，服务器上有就接着播，不跳到下一季，也不停下。
+    let opened = list(season: 1, ids: [10, 11, 12])
+    let season2 = list(season: 2, ids: [20])
+    let statuses: [Int: EpisodeQueueStatus] = [11: .playable(item("e11")), 20: .playable(item("e20"))]
+    let expected = EpisodeNavigator.Outcome.play(entry(opened[1], "e11", in: opened), skippedMissing: false)
+
+    let empty = try await navigate(
+      .next, from: opened[0], seasons: [1, 2], lists: [1: [], 2: season2], known: opened, statuses: statuses)
+    XCTAssertEqual(empty, expected)
+    let failed = try await navigate(
+      .next, from: opened[0], seasons: [1, 2], lists: [2: season2], known: opened, statuses: statuses,
+      failingSeasons: [1])
+    XCTAssertEqual(failed, expected)
+    let other = try await navigate(
+      .next, from: opened[0], seasons: [1, 2], lists: [1: list(season: 1, ids: [70, 71]), 2: season2], known: opened,
+      statuses: statuses)
+    XCTAssertEqual(other, expected)
+  }
+
+  func testCurrentEpisodeMissingFromBothListsStops() async throws {
+    let opened = list(season: 1, ids: [10, 11])
+    let outcome = try await navigate(
+      .next, from: opened[0], seasons: [1], lists: [1: []], known: [], statuses: [11: .playable(item("e11"))])
+    XCTAssertEqual(outcome, .stop("第 1 季集列表暂不可用，请重试"))
+    let other = try await navigate(
+      .next, from: opened[0], seasons: [1], lists: [1: list(season: 1, ids: [70])], known: [], statuses: [:])
+    XCTAssertEqual(other, .stop("MoviePilot 返回的第 1 季集列表里没有正在播的这一集，无法确认下一集，请重试"))
+    let failed = try await navigate(
+      .next, from: opened[0], seasons: [1], lists: [:], known: [], statuses: [:], failingSeasons: [1])
+    XCTAssertEqual(failed, .stop("没能从 MoviePilot 读取第 1 季的集列表：请稍后重试"))
   }
 
   func testQueuePanelListsEachFileOnce() async throws {

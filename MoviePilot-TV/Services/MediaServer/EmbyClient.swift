@@ -1,9 +1,11 @@
 import Foundation
 
 /// Emby 请求失败。错误里不带 URL：流地址和请求可能含密钥，不能经错误描述进入日志或提示。
-enum EmbyClientError: LocalizedError, Equatable {
+nonisolated enum EmbyClientError: LocalizedError, Equatable {
   /// 连接失败；`transportSecurity` 表示被系统 ATS 拦截（http 域名地址）。
   case unreachable(transportSecurity: Bool)
+  /// https 证书不受信任，或加密连接建立失败。
+  case certificate
   case http(Int)
   case invalidResponse
   case invalidURL
@@ -14,12 +16,31 @@ enum EmbyClientError: LocalizedError, Equatable {
       return "系统不允许连接 http 域名地址，请为 Emby 配置 https 地址或内网 IP"
     case .unreachable(false):
       return "无法连接 Emby"
+    case .certificate:
+      return "Emby 的 https 证书不受信任或加密连接失败"
     case .http(let status):
       return "Emby 返回错误（HTTP \(status)）"
     case .invalidResponse:
       return "Emby 返回的数据无法识别"
     case .invalidURL:
       return "Emby 地址无效"
+    }
+  }
+
+  /// 按接下来怎么处理分类，见 `MediaServerError.Reason`。
+  var reason: MediaServerError.Reason {
+    switch self {
+    case .unreachable(true): .transportSecurity
+    case .unreachable(false): .unreachable
+    case .certificate: .certificate
+    case .http(400): .badRequest
+    case .http(401): .unauthorized
+    case .http(403): .forbidden
+    case .http(404): .notFound
+    case .http(let status) where (500..<600).contains(status): .serverError(status)
+    case .http(let status): .status(status)
+    case .invalidResponse: .invalidResponse
+    case .invalidURL: .invalidURL
     }
   }
 }
@@ -96,20 +117,20 @@ struct EmbyClient {
 
   func publicSystemInfo(timeout: TimeInterval = quickTimeout) async throws -> EmbyPublicSystemInfo {
     let data = try await send(url(["System", "Info", "Public"]), timeout: timeout)
-    return try decode(EmbyPublicSystemInfo.self, from: data)
+    return try await Self.decode(EmbyPublicSystemInfo.self, from: data)
   }
 
   func users() async throws -> [EmbyUser] {
     let data = try await send(url(["Users"]))
-    return try decode([EmbyUser].self, from: data)
+    return try await Self.decode([EmbyUser].self, from: data)
   }
 
-  /// 条目不在这台服务器上时返回 nil。
+  /// 条目不在这台服务器上（HTTP 404）时返回 nil。400 等其他错误照常抛出，不当作不在。
   func item(id: String, userID: String, timeout: TimeInterval? = nil) async throws -> EmbyItem? {
     do {
       let data = try await send(url(["Users", userID, "Items", id]), timeout: timeout)
-      return try decode(EmbyItem.self, from: data)
-    } catch EmbyClientError.http(let status) where status == 400 || status == 404 {
+      return try await Self.decode(EmbyItem.self, from: data)
+    } catch EmbyClientError.http(404) {
       return nil
     }
   }
@@ -130,7 +151,7 @@ struct EmbyClient {
           "Limit": "20",
         ]),
       timeout: timeout)
-    return try decode(EmbyItemsPage.self, from: data).items
+    return try await Self.decode(EmbyItemsPage.self, from: data).items
   }
 
   /// 剧集的全部集（按 Emby 顺序，带用户观看数据和外部编号），不含缺失的集。
@@ -140,7 +161,7 @@ struct EmbyClient {
       url(
         ["Shows", seriesID, "Episodes"],
         query: ["UserId": userID, "IsMissing": "false", "Fields": "ProviderIds"]))
-    return try decode(EmbyItemsPage.self, from: data).items
+    return try await Self.decode(EmbyItemsPage.self, from: data).items
   }
 
   /// 声明任何视频都可以直接播放（mpv 直连原文件），并关闭重新封装和转码，
@@ -177,7 +198,7 @@ struct EmbyClient {
       ])
     ])
     let data = try await send(target, method: "POST", body: profile)
-    return try decode(EmbyPlaybackInfo.self, from: data)
+    return try await Self.decode(EmbyPlaybackInfo.self, from: data)
   }
 
   enum PlaybackEvent {
@@ -206,7 +227,13 @@ struct EmbyClient {
   // MARK: - 传输
 
   private static let encoder = JSONEncoder()
-  private static let decoder = JSONDecoder()
+
+  /// 证书和加密连接问题：地址是通的，换地址重试不会好，要换证书或改用别的地址。
+  private static let certificateErrors: Set<URLError.Code> = [
+    .secureConnectionFailed, .serverCertificateHasBadDate, .serverCertificateUntrusted,
+    .serverCertificateHasUnknownRoot, .serverCertificateNotYetValid, .clientCertificateRejected,
+    .clientCertificateRequired,
+  ]
 
   private static let clientVersion = AppVersionInfo.currentAppVersion()
     .trimmingCharacters(in: CharacterSet(charactersIn: "v"))
@@ -235,6 +262,7 @@ struct EmbyClient {
       (data, response) = try await session.data(for: request)
     } catch let error as URLError {
       if error.code == .cancelled { throw CancellationError() }
+      if Self.certificateErrors.contains(error.code) { throw EmbyClientError.certificate }
       throw EmbyClientError.unreachable(
         transportSecurity: error.code == .appTransportSecurityRequiresSecureConnection)
     }
@@ -244,9 +272,11 @@ struct EmbyClient {
     return data
   }
 
-  private func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+  /// 解码放到后台：一部长篇剧的全部集可能有上千条，播完每一集都要重读一次，在主线程解析会卡界面。
+  @concurrent
+  nonisolated private static func decode<T: Decodable & Sendable>(_ type: T.Type, from data: Data) async throws -> T {
     do {
-      return try Self.decoder.decode(type, from: data)
+      return try JSONDecoder().decode(type, from: data)
     } catch {
       throw EmbyClientError.invalidResponse
     }

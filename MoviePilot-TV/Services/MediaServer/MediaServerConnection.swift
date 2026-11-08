@@ -14,8 +14,8 @@ protocol MediaServerConnection: Sendable {
 
   /// 条目不在这台服务器上时返回 nil。
   func item(id: String, timeout: TimeInterval?) async throws -> ServerMediaItem?
-  /// 按外部编号搜索的候选条目，调用方须再用 `LibraryItemExpectation.accepts` 核对。
-  /// 服务器拒绝这类搜索或不支持时返回空，连不上等错误照常抛出。
+  /// 按外部编号搜索的候选条目，调用方须再用 `LibraryItemExpectation.accepts` 核对。没有能搜的编号时返回空。
+  /// 服务器报错、连不上等照常抛出，不能当作搜不到：调用方据此区分“这台上没有”和“无法确认”。
   func items(matching expected: LibraryItemExpectation) async throws -> [ServerMediaItem]
   /// 剧集的全部集（服务器顺序，带外部编号），不含缺失的集。
   func episodes(seriesID: String) async throws -> [ServerMediaItem]
@@ -59,9 +59,81 @@ enum MediaServerAdapters {
   }
 }
 
-/// 连接层的地址不通错误。协调器据此判断要不要重新探测地址（比如离开了内网）。
-protocol MediaServerReachabilityError: Error {
-  var isUnreachable: Bool { get }
+/// 访问一台媒体服务器失败：哪台、哪一步、什么原因。各适配器把自己的错误转成它；协调器按 `reason` 决定接下来怎么做，
+/// 给用户的说明写明服务器和那一步。
+nonisolated struct MediaServerError: LocalizedError, Equatable, Sendable {
+  enum Operation: Equatable, Sendable {
+    case connect, listUsers, search, readItem, readEpisodes, readPlaybackInfo, report, saveProgress
+
+    var text: String {
+      switch self {
+      case .connect: "连接"
+      case .listUsers: "读取用户"
+      case .search: "按外部编号查找"
+      case .readItem: "读取条目"
+      case .readEpisodes: "读取剧集列表"
+      case .readPlaybackInfo: "读取播放信息"
+      case .report: "上报播放状态"
+      case .saveProgress: "保存观看进度"
+      }
+    }
+  }
+
+  /// 失败的原因，按接下来怎么处理分类。
+  enum Reason: Equatable, Sendable {
+    /// 连不上（超时、拒绝连接、域名解析失败）：换地址重新探测一次（离开内网等）。
+    case unreachable
+    /// 系统不允许连接 http 域名地址：不重试，要改地址。
+    case transportSecurity
+    /// https 证书不受信任，或加密连接建立失败：不重试，要换证书或地址。
+    case certificate
+    /// HTTP 401，服务器不接受配置里的密钥：重读一次 MoviePilot 的服务器配置（可能刚改过），没变就停。
+    case unauthorized
+    /// HTTP 403，密钥或所选用户没有权限：停。
+    case forbidden
+    /// HTTP 404。读条目、读一份剧的集时适配器按“不在”处理，到这里的是其他接口，照常报错。
+    case notFound
+    /// HTTP 400，服务器不接受这个请求（参数不支持、ID 格式不对等）：停，不当作不在。
+    case badRequest
+    /// HTTP 5xx（含反向代理的 502/503/504），临时故障：不当作没有，先试已找到的其他副本，都不行请用户稍后重试。
+    case serverError(Int)
+    /// 其他 HTTP 状态码
+    case status(Int)
+    /// 回包不是预期的数据（反向代理的登录页、地址不是媒体服务器、缺字段）：停。
+    case invalidResponse
+    /// 配置的地址拼不成有效的请求地址：停。
+    case invalidURL
+
+    /// 影响整台服务器、换一份副本也没用的失败：读一部剧的集时不当作“这一份没读到”接着试别的，直接交给 `withConnection` 处理。
+    var isServerWide: Bool {
+      switch self {
+      case .unreachable, .transportSecurity, .certificate, .unauthorized, .invalidURL: true
+      case .forbidden, .notFound, .badRequest, .serverError, .status, .invalidResponse: false
+      }
+    }
+
+    var text: String {
+      switch self {
+      case .unreachable: "连不上服务器"
+      case .transportSecurity: "系统不允许连接 http 域名地址，请为媒体服务器配置 https 地址或内网 IP"
+      case .certificate: "https 证书不受信任或加密连接失败，请换受信任的证书或改用内网地址"
+      case .unauthorized: "不接受 MoviePilot 中配置的 API Key，请检查媒体服务器设置里的密钥"
+      case .forbidden: "没有权限（HTTP 403），请检查 API Key 和所选用户的权限"
+      case .notFound: "找不到（HTTP 404）"
+      case .badRequest: "服务器不接受这个请求（HTTP 400）"
+      case .serverError(let status): "服务器出错（HTTP \(status)），请稍后重试"
+      case .status(let status): "服务器返回 HTTP \(status)"
+      case .invalidResponse: "返回的不是媒体服务器的数据，请检查地址或反向代理设置"
+      case .invalidURL: "地址无效，请检查 MoviePilot 中的媒体服务器地址"
+      }
+    }
+  }
+
+  let server: String
+  let operation: Operation
+  let reason: Reason
+
+  var errorDescription: String? { "媒体服务器“\(server)”\(operation.text)失败：\(reason.text)" }
 }
 
 /// 选定版本、可以交给播放器的流。

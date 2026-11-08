@@ -40,7 +40,7 @@ class MediaDetailViewModel: ObservableObject {
   @Published var uniqueDirectors: [Person] = []
 
   @Published private(set) var isInLibrary = false
-  /// 管理员且条目在（或无法确认不在）可播放的 Emby 上时，应用内播放的目标。
+  /// 管理员且条目在（或无法确认不在）可在应用内播放的服务器上时，应用内播放的目标。
   @Published private(set) var inAppPlaybackTarget: PlaybackTarget?
   /// MoviePilot 入库查询给的条目（含所属服务器），有播放入口时才有。电视剧按集播放用它在服务器上找这部剧，
   /// 见 `episodePlaybackContext(episodeGroup:seasons:)`。界面不直接显示它，和 `inAppPlaybackTarget` 一起更新，不单独触发重绘。

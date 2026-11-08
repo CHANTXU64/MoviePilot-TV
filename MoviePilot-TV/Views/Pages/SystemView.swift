@@ -1252,7 +1252,7 @@ struct SystemView: View {
         let version = apiService.settings?.BACKEND_VERSION ?? "未读取到"
         return "当前 MoviePilot 版本（\(version)）不支持应用内播放，需要 \(InAppPlaybackAvailability.minimumBackendVersion) 及以上。升级后按一下这里重新检查，通过后就能在这里设置。"
       }
-      return "开启后，管理员可以在应用内直接播放 Emby 中的电影和剧集；关闭后详情页和首页都不再提供应用内播放。（只影响 TV 端）"
+      return "开启后，管理员可以在应用内直接播放 \(MediaServerAdapters.supportedNames) 中的电影和剧集；关闭后详情页和首页都不再提供应用内播放。（只影响 TV 端）"
     case (.playback, .homeMediaTapPlaysInApp):
       return "开启后，首页“最近添加”中的电影和剧集点击后直接在应用内播放（剧集从第一集开始）；关闭时跳转媒体服务器 App。长按卡片两种方式都可以选。（只影响 TV 端）"
     case (.playback, .autoPlayNextEpisode):

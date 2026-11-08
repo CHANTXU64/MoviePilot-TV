@@ -234,6 +234,34 @@ nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
   }
 }
 
+nonisolated extension DisplayModeHint {
+  /// Emby 片源的第一条视频流。
+  init?(source: EmbyMediaSource) {
+    guard let video = source.mediaStreams.first(where: { $0.type?.lowercased() == "video" }) else { return nil }
+    self.init(
+      width: video.width, height: video.height, framesPerSecond: video.frameRate, codec: video.codec,
+      range: Self.dynamicRange(of: video))
+  }
+
+  /// Emby 的 `VideoRange`、`ExtendedVideoType`、`ExtendedVideoSubType` 对应的动态范围；认不准时为 nil。
+  private static func dynamicRange(of video: EmbyMediaStream) -> DynamicRange? {
+    let extended = video.extendedVideoType?.lowercased() ?? ""
+    let range = video.videoRange?.lowercased() ?? ""
+    if extended == "dolbyvision" || range == "dolbyvision" {
+      switch video.extendedVideoSubType?.lowercased() {
+      case "doviprofile50": return .dolbyVision(profile: 5, compatibilityID: 0)
+      case "doviprofile81": return .dolbyVision(profile: 8, compatibilityID: 1)
+      case "doviprofile84": return .dolbyVision(profile: 8, compatibilityID: 4)
+      default: return nil
+      }
+    }
+    if extended.hasPrefix("hdr10") || range.contains("hdr 10") || range.contains("hdr10") { return .hdr10 }
+    if extended == "hyperloggamma" || extended == "hlg" || range.contains("hlg") { return .hlg }
+    if range == "sdr" || extended == "none" || (extended.isEmpty && range.isEmpty) { return .sdr }
+    return nil
+  }
+}
+
 nonisolated struct EmbyPlaybackInfo: Decodable, Sendable {
   let mediaSources: [EmbyMediaSource]
   let playSessionID: String?
@@ -245,17 +273,21 @@ nonisolated struct EmbyPlaybackInfo: Decodable, Sendable {
     case errorCode = "ErrorCode"
   }
 
+  /// `MediaSources` 读不到有效列表时报告解码失败；有 Emby 错误码则交给调用方报告。
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    mediaSources =
-      (try? container.decodeIfPresent([LossyDecodable<EmbyMediaSource>].self, forKey: .mediaSources))?
-      .compactMap(\.value) ?? []
     playSessionID = try? container.decodeIfPresent(String.self, forKey: .playSessionID)
     errorCode = try? container.decodeIfPresent(String.self, forKey: .errorCode)
+    do {
+      mediaSources = try LossyDecodable<EmbyMediaSource>.decodeArray(in: container, forKey: .mediaSources)
+    } catch where errorCode?.isEmpty == false {
+      mediaSources = []
+    }
   }
 }
 
 /// Emby 列表接口的分页结构（`/Shows/{id}/Episodes` 等）。
+/// 只有确实读到 `Items: []` 才是空列表。部分条目坏掉时保留能读到的条目。
 nonisolated struct EmbyItemsPage: Decodable, Sendable {
   let items: [EmbyItem]
 
@@ -263,9 +295,7 @@ nonisolated struct EmbyItemsPage: Decodable, Sendable {
 
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    items =
-      (try? container.decodeIfPresent([LossyDecodable<EmbyItem>].self, forKey: .items))?
-      .compactMap(\.value) ?? []
+    items = try LossyDecodable<EmbyItem>.decodeArray(in: container, forKey: .items)
   }
 }
 
@@ -274,6 +304,16 @@ nonisolated private struct LossyDecodable<Value: Decodable & Sendable>: Decodabl
   let value: Value?
   init(from decoder: Decoder) throws {
     value = try? Value(from: decoder)
+  }
+
+  /// 读必需的数组字段。数组非空但没有一个有效元素时，整份数据无法识别。
+  static func decodeArray<Key: CodingKey>(in container: KeyedDecodingContainer<Key>, forKey key: Key) throws -> [Value] {
+    let entries = try container.decode([Self].self, forKey: key)
+    let values = entries.compactMap(\.value)
+    guard entries.isEmpty || !values.isEmpty else {
+      throw DecodingError.dataCorruptedError(forKey: key, in: container, debugDescription: "数组中的元素全部无法解码")
+    }
+    return values
   }
 }
 

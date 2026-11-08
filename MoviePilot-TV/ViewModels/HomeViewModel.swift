@@ -29,7 +29,7 @@ class HomeViewModel: ObservableObject {
   @Published var subscriptionsLoadFailed = false
   /// 加载状态
   @Published var isLoading = true
-  /// 能在应用内播放的媒体服务器名称（已启用的 Emby，且配置了地址和密钥）
+  /// 能在应用内播放的媒体服务器名称（已启用、类型支持应用内播放，且配置了地址和密钥）
   @Published private(set) var inAppPlayableServers: Set<String> = []
 
   private let apiService: APIService
