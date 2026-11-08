@@ -64,7 +64,8 @@ enum DisplayModeGate {
   }
 }
 
-/// 按 Emby 片源信息提前向电视申请的显示模式（帧率、动态范围）。
+/// 按片源信息提前向电视申请的显示模式（帧率、动态范围）。各服务器适配器读出视频流参数后用 `init(width:height:...)` 建它，
+/// 见 `ServerMediaSource.displayModeHint`（Emby 的解析在 EmbyModels.swift）。
 /// MPVUI 要等开播、读出视频格式后才申请，电视这时切换会让已经出声的播放停一下。开播前先按这里申请，
 /// 等 MPVUI 再申请同一个模式时电视已经切好，不会再切。规则照 MPVUI `MPVDisplayMatchingContent`：
 /// 帧率按标准帧率族取（23.976 不当 24），杜比视界只认 MPVUI 能原样输出的 Profile 5、8.1、8.4。
@@ -83,13 +84,13 @@ nonisolated struct DisplayModeHint: Equatable {
   let codec: CMVideoCodecType
   let range: DynamicRange
 
-  init?(source: EmbyMediaSource) {
-    guard let video = source.mediaStreams.first(where: { $0.type?.lowercased() == "video" }),
-      let width = video.width.flatMap({ Int32(exactly: $0) }), width > 0,
-      let height = video.height.flatMap({ Int32(exactly: $0) }), height > 0,
-      let refreshRate = Self.refreshRate(for: video.frameRate),
-      let codec = Self.codecType(for: video.codec),
-      let range = Self.dynamicRange(of: video)
+  /// 视频流的分辨率、帧率、编码名（如 `hevc`、`h264`）和适配器认出的动态范围；任一项缺失或认不准时为 nil。
+  init?(width: Int?, height: Int?, framesPerSecond: Double?, codec: String?, range: DynamicRange?) {
+    guard let width = width.flatMap({ Int32(exactly: $0) }), width > 0,
+      let height = height.flatMap({ Int32(exactly: $0) }), height > 0,
+      let refreshRate = Self.refreshRate(for: framesPerSecond),
+      let codec = Self.codecType(for: codec),
+      let range
     else { return nil }
     if case .dolbyVision = range, codec != kCMVideoCodecType_HEVC { return nil }
     self.width = width
@@ -117,23 +118,6 @@ nonisolated struct DisplayModeHint: Equatable {
     case "vp9", "vp09": kCMVideoCodecType_VP9
     default: nil
     }
-  }
-
-  private static func dynamicRange(of video: EmbyMediaStream) -> DynamicRange? {
-    let extended = video.extendedVideoType?.lowercased() ?? ""
-    let range = video.videoRange?.lowercased() ?? ""
-    if extended == "dolbyvision" || range == "dolbyvision" {
-      switch video.extendedVideoSubType?.lowercased() {
-      case "doviprofile50": return .dolbyVision(profile: 5, compatibilityID: 0)
-      case "doviprofile81": return .dolbyVision(profile: 8, compatibilityID: 1)
-      case "doviprofile84": return .dolbyVision(profile: 8, compatibilityID: 4)
-      default: return nil
-      }
-    }
-    if extended.hasPrefix("hdr10") || range.contains("hdr 10") || range.contains("hdr10") { return .hdr10 }
-    if extended == "hyperloggamma" || extended == "hlg" || range.contains("hlg") { return .hlg }
-    if range == "sdr" || extended == "none" || (extended.isEmpty && range.isEmpty) { return .sdr }
-    return nil
   }
 
   /// 杜比视界等级：按每秒像素数取能容纳的最低等级（Dolby Vision Levels 表）。

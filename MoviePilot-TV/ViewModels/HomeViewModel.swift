@@ -29,7 +29,7 @@ class HomeViewModel: ObservableObject {
   @Published var subscriptionsLoadFailed = false
   /// 加载状态
   @Published var isLoading = true
-  /// 能在应用内播放的媒体服务器名称（已启用的 Emby，且配置了地址和密钥）
+  /// 能在应用内播放的媒体服务器名称（已启用、类型支持应用内播放，且配置了地址和密钥）
   @Published private(set) var inAppPlayableServers: Set<String> = []
 
   private let apiService: APIService
@@ -51,6 +51,12 @@ class HomeViewModel: ObservableObject {
       }
       self.selectedLatestMediaServer = defaults.string(forKey: key) ?? ""
     }
+
+    // 设置里的应用内播放开关变了：重绘卡片的点击方式和长按菜单（是否能在应用内播放每次都现读）。
+    NotificationCenter.default.publisher(for: PlaybackPreferences.inAppPlaybackDidChangeNotification)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
 
     // 监听订阅变更通知，从其他页面订阅后首页立即刷新
     NotificationCenter.default.publisher(for: .subscriptionDidUpdate)
@@ -336,16 +342,18 @@ class HomeViewModel: ObservableObject {
   func inAppPlaybackItemID(_ item: MediaServerPlayItem) -> String? {
     Self.inAppPlaybackItemID(
       item, server: selectedLatestMediaServer, playableServers: inAppPlayableServers,
-      canRequestSuperUserEndpoints: apiService.canRequestSuperUserEndpoints)
+      canRequestSuperUserEndpoints: apiService.canRequestSuperUserEndpoints,
+      backendVersion: apiService.settings?.BACKEND_VERSION)
   }
 
   static func inAppPlaybackItemID(
     _ item: MediaServerPlayItem, server: String, playableServers: Set<String>,
-    canRequestSuperUserEndpoints: Bool
+    canRequestSuperUserEndpoints: Bool, backendVersion: String?
   ) -> String? {
     guard playableServers.contains(server),
       InAppPlaybackAvailability.offers(
-        mediaType: item.type, canRequestSuperUserEndpoints: canRequestSuperUserEndpoints)
+        mediaType: item.type, canRequestSuperUserEndpoints: canRequestSuperUserEndpoints,
+        backendVersion: backendVersion)
     else { return nil }
     return trimmedNonEmpty([item.item_id?.value])
   }

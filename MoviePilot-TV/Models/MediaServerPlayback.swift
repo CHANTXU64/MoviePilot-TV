@@ -1,5 +1,8 @@
 import Foundation
 
+// 应用内播放与具体媒体服务器无关的部分：连接配置、入口条件，以及协调器、播放会话和播放界面使用的条目、片源模型。
+// 各类服务器（目前是 Emby）在各自的适配器里把接口数据转换成这里的类型，见 `MediaServerConnection`。
+
 /// MoviePilot `MediaServers` 配置里的连接信息，只有超管读取 `/system/setting/MediaServers` 时才有。
 ///
 /// Emby/Jellyfin 的键是 `host`、`play_host`、`apikey`、`username`（MoviePilot v3.0.4 至 v3.2.4 一致）。
@@ -41,7 +44,7 @@ nonisolated struct MediaServerConnectionConfig: Decodable, Equatable, Sendable {
   var candidateBaseURLs: [URL] {
     var result: [URL] = []
     for raw in [host, playHost] {
-      guard let url = EmbyBaseURL.normalized(raw), !result.contains(url) else { continue }
+      guard let url = MediaServerBaseURL.normalized(raw), !result.contains(url) else { continue }
       result.append(url)
     }
     return result
@@ -57,8 +60,21 @@ extension MediaServerConnectionConfig: CustomStringConvertible, CustomDebugStrin
   var debugDescription: String { description }
 }
 
-/// Emby 服务器根地址：补全协议、去掉结尾斜杠，保留反代路径前缀（与 MoviePilot `standardize_base_url` 一致，缺协议按 http）。
-nonisolated enum EmbyBaseURL {
+/// 媒体服务器根地址：补全协议、去掉结尾斜杠，保留反代路径前缀（与 MoviePilot `standardize_base_url` 一致，缺协议按 http）。
+nonisolated enum MediaServerBaseURL {
+  /// 反代路径和默认端口的写法不影响 TLS 连接所用的地址。
+  struct Origin: Hashable, Sendable {
+    let scheme: String?
+    let host: String?
+    let port: Int
+
+    init(_ url: URL) {
+      scheme = url.scheme?.lowercased()
+      host = url.host?.lowercased()
+      port = url.port ?? (scheme == "https" ? 443 : 80)
+    }
+  }
+
   static func normalized(_ raw: String?) -> URL? {
     guard var value = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
       return nil
@@ -79,152 +95,221 @@ nonisolated enum EmbyBaseURL {
   }
 }
 
+/// 直连媒体服务器共用的网络会话：不缓存、不存 Cookie，单个请求最多等 15 秒。
+nonisolated enum MediaServerHTTP {
+  /// 探测地址、用缓存连接发出的第一个请求所用的超时：地址失效时尽快改用其他地址，不等普通请求的 15 秒。
+  static let quickTimeout: TimeInterval = 3
+  /// 内网、外网地址都连通时，排在前面的（内网）可以晚到这么久仍被选中（见 `PreferredReachability`）。
+  static let preferredAddressGrace: Duration = .milliseconds(500)
+
+  static let sharedSession: URLSession = {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+    configuration.urlCache = nil
+    configuration.httpCookieStorage = nil
+    configuration.timeoutIntervalForRequest = 15
+    return URLSession(configuration: configuration)
+  }()
+}
+
+/// 播放相关日志去掉地址和密钥：mpv 等组件的错误信息可能带出含密钥的流地址。
+nonisolated enum PlaybackLog {
+  static func redacted(_ text: String) -> String {
+    text
+      .replacingOccurrences(
+        of: #"(?i)\b(?:https?|rtsp|rtmp|ftp|file)://[^\s]+"#, with: "<URL>", options: .regularExpression)
+      .replacingOccurrences(
+        of: #"api_key=[^&\s"']*"#, with: "api_key=<redacted>", options: .regularExpression)
+  }
+}
+
 /// 应用内播放入口的统一判断，首页和详情页共用；单台服务器能否播放见 `MediaServerConf.supportsInAppPlayback`。
 nonisolated enum InAppPlaybackAvailability {
-  /// 只有管理员能读取 Emby 地址和密钥；目前支持电影和剧集（剧集从第一集开始）。
-  static func offers(mediaType: String?, canRequestSuperUserEndpoints: Bool) -> Bool {
-    canRequestSuperUserEndpoints && (mediaType == "电影" || mediaType == "电视剧")
+  /// 应用内播放从 MoviePilot v3.2.6 起开放：按集播放依赖这个版本起季集列表返回的 TMDB 单集 ID，
+  /// 入库查询返回条目所属服务器也从这个版本起才有。
+  /// 极性属于「新行为版本限制」：低于该版本、读不出或无法解析时不提供，设置里也打不开；可解析且不低于该版本（含热修复）时
+  /// 默认提供，用户可以在设置里关掉（`PlaybackPreferences.isInAppPlaybackEnabled`）。
+  static let minimumBackendVersion = "v3.2.6"
+
+  static func supports(backendVersion: String?) -> Bool {
+    BackendVersionGate.isAvailable(since: minimumBackendVersion, backendVersion: backendVersion)
+  }
+
+  /// 后端支持且用户没在设置里关掉。
+  static func isEnabled(backendVersion: String?, userEnabled: Bool) -> Bool {
+    userEnabled && supports(backendVersion: backendVersion)
+  }
+
+  /// 只有管理员能读取媒体服务器地址和密钥；支持电影和剧集。
+  static func offers(
+    mediaType: String?, canRequestSuperUserEndpoints: Bool, backendVersion: String?,
+    userEnabled: Bool = PlaybackPreferences.isInAppPlaybackEnabled
+  ) -> Bool {
+    canRequestSuperUserEndpoints && isEnabled(backendVersion: backendVersion, userEnabled: userEnabled)
+      && (mediaType == "电影" || mediaType == "电视剧")
   }
 }
 
-// MARK: - Emby 接口数据
+/// 播放相关的本机设置（只影响 TV 端），设置页「播放」和播放界面共用。
+nonisolated enum PlaybackPreferences {
+  static let inAppPlaybackKey = "inAppPlaybackEnabled"
+  /// 应用内播放开关变化后发出，已打开的页面据此收起或补回播放入口。
+  static let inAppPlaybackDidChangeNotification = Notification.Name("InAppPlaybackPreferenceDidChange")
+  /// 自动播放变化后发出：播放界面工具栏也能改，设置页据此同步。
+  static let autoPlayDidChangeNotification = Notification.Name("AutoPlayNextEpisodePreferenceDidChange")
+  /// 播放界面工具栏的“自动播放”按钮读写同一个键（沿用移植 Swiftfin 时的键名）。
+  static let autoPlayNextEpisodeKey = "swiftfin.enableNextEpisodeAutoPlay"
 
-nonisolated struct EmbyPublicSystemInfo: Decodable, Sendable {
-  let id: String?
-  let serverName: String?
-  let version: String?
+  /// 应用内播放开关，默认开。后端低于 `InAppPlaybackAvailability.minimumBackendVersion` 时不管它是什么都不提供。
+  static var isInAppPlaybackEnabled: Bool { bool(forKey: inAppPlaybackKey, default: true) }
 
-  private enum CodingKeys: String, CodingKey {
-    case id = "Id"
-    case serverName = "ServerName"
-    case version = "Version"
+  static func setInAppPlaybackEnabled(_ enabled: Bool) {
+    UserDefaults.standard.set(enabled, forKey: inAppPlaybackKey)
+    NotificationCenter.default.post(name: inAppPlaybackDidChangeNotification, object: nil)
+  }
+
+  /// 播完自动播下一集，默认开（与 Jellyfin/Emby 用户默认值相同）。
+  static var autoPlaysNextEpisode: Bool { bool(forKey: autoPlayNextEpisodeKey, default: true) }
+
+  static func setAutoPlaysNextEpisode(_ enabled: Bool) {
+    UserDefaults.standard.set(enabled, forKey: autoPlayNextEpisodeKey)
+    NotificationCenter.default.post(name: autoPlayDidChangeNotification, object: nil)
+  }
+
+  private static func bool(forKey key: String, default defaultValue: Bool) -> Bool {
+    UserDefaults.standard.object(forKey: key) as? Bool ?? defaultValue
   }
 }
 
-nonisolated struct EmbyUser: Decodable, Sendable {
-  let id: String
-  let name: String?
-  let isAdministrator: Bool
-
-  private enum CodingKeys: String, CodingKey {
-    case id = "Id"
-    case name = "Name"
-    case policy = "Policy"
+/// 外部编号（TMDB、IMDb、TVDB、豆瓣、Bangumi）的来源名与有效值，详情页和服务器条目两边按同一规则读取。
+nonisolated enum ExternalMediaID {
+  /// 来源名小写，`themoviedb` 记作 `tmdb`。
+  static func normalizedSource(_ source: String) -> String {
+    let source = source.lowercased()
+    return source == "themoviedb" ? "tmdb" : source
   }
 
-  private struct Policy: Decodable {
-    let isAdministrator: Bool?
-    private enum CodingKeys: String, CodingKey { case isAdministrator = "IsAdministrator" }
+  /// `source` 须已经过 `normalizedSource`。去掉首尾空白；空值和 `0` 无效，数字来源只认正整数
+  /// （同 `MediaIdentifier.validNumericIdentifier`）。无效时返回 nil，按没有这个编号处理，不拿去比对或搜索。
+  static func valid(_ value: String?, source: String) -> String? {
+    guard let value = MediaIdentifier.truthySourceIdentifier(value) else { return nil }
+    guard numericSources.contains(source) else { return value }
+    return MediaIdentifier.validNumericIdentifier(Int(value)).map(String.init)
   }
 
-  init(id: String, name: String?, isAdministrator: Bool) {
-    self.id = id
-    self.name = name
-    self.isAdministrator = isAdministrator
-  }
-
-  init(from decoder: Decoder) throws {
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    id = try container.decode(String.self, forKey: .id)
-    name = try? container.decodeIfPresent(String.self, forKey: .name)
-    let policy = try? container.decodeIfPresent(Policy.self, forKey: .policy)
-    isAdministrator = policy?.isAdministrator ?? false
-  }
-
-  /// 与 MoviePilot `Emby.get_user` 相同的选择顺序：依次匹配候选用户名，都不匹配时取第一个管理员。
-  static func select(from users: [EmbyUser], preferredNames: [String?]) -> EmbyUser? {
-    for name in preferredNames {
-      guard let name, !name.isEmpty else { continue }
-      if let user = users.first(where: { $0.name == name }) { return user }
-    }
-    return users.first { $0.isAdministrator }
-  }
-}
-
-nonisolated struct EmbyItem: Decodable, Sendable {
-  let id: String
-  let name: String?
-  let type: String?
-  let overview: String?
-  let productionYear: Int?
-  let runTimeTicks: Int64?
-  /// 原样保留的用户数据（续播位置等）。剧集列表里的 `PlayCount` 恒为 0，停播写回以重新读取的单条条目为准
-  /// （见 `PlaybackSession.saveWatchProgress`）。
-  let userData: [String: JSONValue]?
-  /// 剧集：集号、季号、剧名
-  let indexNumber: Int?
-  let parentIndexNumber: Int?
-  let seriesName: String?
-  /// `Virtual` 表示 Emby 只有元数据、没有文件（缺失的集）。
-  let locationType: String?
-  /// 外部编号，如 `{"Tmdb": "12345", "Imdb": "tt…"}`。MoviePilot 同步媒体库时读的就是它。
-  let providerIDs: [String: String]?
-
-  private enum CodingKeys: String, CodingKey {
-    case id = "Id"
-    case name = "Name"
-    case type = "Type"
-    case overview = "Overview"
-    case productionYear = "ProductionYear"
-    case runTimeTicks = "RunTimeTicks"
-    case userData = "UserData"
-    case indexNumber = "IndexNumber"
-    case parentIndexNumber = "ParentIndexNumber"
-    case seriesName = "SeriesName"
-    case locationType = "LocationType"
-    case providerIDs = "ProviderIds"
-  }
-
-  init(from decoder: Decoder) throws {
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    id = try container.decode(String.self, forKey: .id)
-    name = try? container.decodeIfPresent(String.self, forKey: .name)
-    type = try? container.decodeIfPresent(String.self, forKey: .type)
-    overview = try? container.decodeIfPresent(String.self, forKey: .overview)
-    productionYear = try? container.decodeIfPresent(Int.self, forKey: .productionYear)
-    runTimeTicks = try? container.decodeIfPresent(Int64.self, forKey: .runTimeTicks)
-    userData = try? container.decodeIfPresent([String: JSONValue].self, forKey: .userData)
-    indexNumber = try? container.decodeIfPresent(Int.self, forKey: .indexNumber)
-    parentIndexNumber = try? container.decodeIfPresent(Int.self, forKey: .parentIndexNumber)
-    seriesName = try? container.decodeIfPresent(String.self, forKey: .seriesName)
-    locationType = try? container.decodeIfPresent(String.self, forKey: .locationType)
-    providerIDs = try? container.decodeIfPresent([String: String].self, forKey: .providerIDs)
-  }
-
-  /// 指定来源（MoviePilot 的 `tmdb`、`douban` 等）的外部编号；键名不区分大小写，也认 `tmdb_id` 这种写法
-  /// （与 MoviePilot `MediaServerIdentityHelper` 读取 ProviderIds 的规则一致）。没有或无效时返回 nil，
-  /// 有效值的规则见 `ExternalMediaID.valid`。
-  func providerID(for source: String) -> String? {
-    let source = ExternalMediaID.normalizedSource(source)
-    let value = providerIDs?.first { key, _ in
+  /// 服务器条目的外部编号表（如 Emby 的 `ProviderIds`）转成「规范来源 → 有效编号」。键名不区分大小写，
+  /// 也认 `tmdb_id` 这种写法（与 MoviePilot `MediaServerIdentityHelper` 读取 ProviderIds 的规则一致）；
+  /// 同一来源两种写法都有时以不带 `_id` 的为准。无效编号不收。
+  static func normalizedTable(_ raw: [String: String]?) -> [String: String] {
+    var exact: [String: String] = [:]
+    var suffixed: [String: String] = [:]
+    for (key, value) in raw ?? [:] {
       let key = key.lowercased()
-      return key == source || key == source + "_id"
-    }?.value
-    return ExternalMediaID.valid(value, source: source)
+      if key.hasSuffix("_id") {
+        let source = normalizedSource(String(key.dropLast(3)))
+        if let value = valid(value, source: source) { suffixed[source] = value }
+      } else {
+        let source = normalizedSource(key)
+        if let value = valid(value, source: source) { exact[source] = value }
+      }
+    }
+    return suffixed.merging(exact) { _, exact in exact }
+  }
+
+  private static let numericSources: Set<String> = ["tmdb", "tvdb", "bangumi", "anilist"]
+}
+
+// MARK: - 服务器条目与片源
+
+/// 媒体服务器上的一个条目。各类服务器的接口数据都转换成它，协调器和播放界面只认这个类型。
+nonisolated struct ServerMediaItem: Equatable, Sendable {
+  enum Kind: Equatable, Sendable {
+    case movie, series, episode, other
+  }
+
+  /// 服务器自己的条目 ID
+  let id: String
+  let kind: Kind
+  let name: String?
+  /// 剧集所属剧名
+  let seriesName: String?
+  /// 服务器上的季号、集号（来自文件名或 NFO，不一定是 MoviePilot 详情页显示的编号）。
+  /// 一个文件包含多集时，`episodeNumberEnd` 是其中最后一集。
+  let seasonNumber: Int?
+  let episodeNumber: Int?
+  let episodeNumberEnd: Int?
+  /// 片长（秒）；服务器还没分析出时为 nil。
+  let runtimeSeconds: Double?
+  /// 服务器记录的续播位置（秒），没有时为 0。
+  let resumePositionSeconds: Double
+  /// 服务器上只有元数据、没有文件（缺失的集）时为 false。
+  let hasFile: Bool
+  /// 外部编号：规范来源（见 `ExternalMediaID.normalizedSource`）→ 有效编号。
+  /// 剧集的单集条目上，`tmdb` 是 TMDB 单集 ID，不是剧的 ID。
+  let externalIDs: [String: String]
+
+  init(
+    id: String, kind: Kind, name: String? = nil, seriesName: String? = nil, seasonNumber: Int? = nil,
+    episodeNumber: Int? = nil, episodeNumberEnd: Int? = nil, runtimeSeconds: Double? = nil,
+    resumePositionSeconds: Double = 0, hasFile: Bool = true, externalIDs: [String: String] = [:]
+  ) {
+    self.id = id
+    self.kind = kind
+    self.name = name
+    self.seriesName = seriesName
+    self.seasonNumber = seasonNumber
+    self.episodeNumber = episodeNumber
+    self.episodeNumberEnd = episodeNumberEnd
+    self.runtimeSeconds = runtimeSeconds
+    self.resumePositionSeconds = resumePositionSeconds
+    self.hasFile = hasFile
+    self.externalIDs = externalIDs
+  }
+
+  /// 指定来源的外部编号，没有或无效时为 nil。
+  func externalID(for source: String) -> String? {
+    externalIDs[ExternalMediaID.normalizedSource(source)]
+  }
+
+  /// 单集条目上的 TMDB 单集 ID。
+  var tmdbEpisodeID: Int? {
+    guard kind == .episode else { return nil }
+    return externalIDs["tmdb"].flatMap(Int.init)
   }
 
   /// 播放器标题：电影只有片名；剧集主标题是「第 N 季 第 M 集 · 集名」，副标题是剧名。
-  /// 集名只是「第 M 集」「Episode M」这类占位时省略，避免重复。
   var playerTitles: (primary: String, secondary: String?) {
-    guard type == "Episode" else { return (name ?? "", nil) }
+    guard kind == .episode else { return (name ?? "", nil) }
+    return PlaybackTitles.episode(
+      name: name, seasonNumber: seasonNumber, episodeNumber: episodeNumber, seriesName: seriesName)
+  }
+
+  /// 续播询问等单行场景用的完整标题。
+  var displayTitle: String { PlaybackTitles.singleLine(playerTitles) }
+}
+
+/// 剧集标题的拼法，服务器条目和 MoviePilot 集列表共用。
+nonisolated enum PlaybackTitles {
+  /// 主标题是「第 N 季 第 M 集 · 集名」，副标题是剧名。集名只是「第 M 集」「Episode M」这类占位时省略，避免重复。
+  static func episode(
+    name: String?, seasonNumber: Int?, episodeNumber: Int?, seriesName: String?
+  ) -> (primary: String, secondary: String?) {
     var parts: [String] = []
-    if let season = parentIndexNumber, let episode = indexNumber {
+    if let season = seasonNumber, let episode = episodeNumber {
       parts.append("第 \(season) 季 第 \(episode) 集")
-    } else if let episode = indexNumber {
+    } else if let episode = episodeNumber {
       parts.append("第 \(episode) 集")
     }
     if let name = name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty,
-      parts.isEmpty || !Self.isPlaceholderEpisodeName(name, episodeNumber: indexNumber)
+      parts.isEmpty || !isPlaceholderEpisodeName(name, episodeNumber: episodeNumber)
     {
       parts.append(name)
     }
     return (parts.joined(separator: " · "), trimmedNonEmpty([seriesName]))
   }
 
-  /// 续播询问等单行场景用的完整标题。
-  var displayTitle: String {
-    let titles = playerTitles
-    return [titles.secondary, titles.primary]
+  static func singleLine(_ titles: (primary: String, secondary: String?)) -> String {
+    [titles.secondary, titles.primary]
       .compactMap { $0 }
       .filter { !$0.isEmpty }
       .joined(separator: " · ")
@@ -243,157 +328,61 @@ nonisolated struct EmbyItem: Decodable, Sendable {
     ]
     return patterns.contains { compact.range(of: $0, options: .regularExpression) != nil }
   }
+}
 
-  var playbackPositionTicks: Int64 {
-    switch userData?["PlaybackPositionTicks"] {
-    case .int(let value): return Int64(value)
-    case .double(let value): return Int64(value)
-    default: return 0
+/// 不能直连原文件的原因。
+nonisolated enum PlaybackUnsupported: Error, Equatable, Sendable {
+  case noSource
+  case remoteSource
+
+  var message: String {
+    switch self {
+    case .noSource:
+      return "媒体服务器没有返回可播放的文件"
+    case .remoteSource:
+      return "该影片是远程链接（如 strm），暂不支持应用内播放"
     }
   }
 }
 
-nonisolated struct EmbyMediaStream: Decodable, Sendable, Equatable {
-  let type: String?
-  let codec: String?
-  let isDefault: Bool?
-  /// 以下只有视频流有，开播前向电视申请显示模式用（见 `DisplayModeHint`）。
-  var width: Int?
-  var height: Int?
-  /// Emby 读到的帧率，如 23.976025。
-  var frameRate: Double?
-  /// `SDR`、`HDR 10`、`HLG`、`DolbyVision` 等。
-  var videoRange: String?
-  /// `Hdr10`、`Hdr10Plus`、`HyperLogGamma`、`DolbyVision` 等。
-  var extendedVideoType: String?
-  /// 杜比视界的配置，如 `DoviProfile50`、`DoviProfile81`。
-  var extendedVideoSubType: String?
-
-  init(type: String?, codec: String?, isDefault: Bool? = nil) {
-    self.type = type
-    self.codec = codec
-    self.isDefault = isDefault
-  }
-
-  private enum CodingKeys: String, CodingKey {
-    case type = "Type"
-    case codec = "Codec"
-    case isDefault = "IsDefault"
-    case width = "Width"
-    case height = "Height"
-    case realFrameRate = "RealFrameRate"
-    case averageFrameRate = "AverageFrameRate"
-    case videoRange = "VideoRange"
-    case extendedVideoType = "ExtendedVideoType"
-    case extendedVideoSubType = "ExtendedVideoSubType"
-  }
-
-  init(from decoder: Decoder) throws {
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    type = try? container.decodeIfPresent(String.self, forKey: .type)
-    codec = try? container.decodeIfPresent(String.self, forKey: .codec)
-    isDefault = try? container.decodeIfPresent(Bool.self, forKey: .isDefault)
-    width = try? container.decodeIfPresent(Int.self, forKey: .width)
-    height = try? container.decodeIfPresent(Int.self, forKey: .height)
-    frameRate =
-      (try? container.decodeIfPresent(Double.self, forKey: .realFrameRate))
-      ?? (try? container.decodeIfPresent(Double.self, forKey: .averageFrameRate))
-    videoRange = try? container.decodeIfPresent(String.self, forKey: .videoRange)
-    extendedVideoType = try? container.decodeIfPresent(String.self, forKey: .extendedVideoType)
-    extendedVideoSubType = try? container.decodeIfPresent(String.self, forKey: .extendedVideoSubType)
-  }
-}
-
-nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
+/// 条目的一个版本（片源）。
+nonisolated struct ServerMediaSource: Equatable, Sendable, Identifiable {
   let id: String
   /// 版本名（如「4K HDR」「1080p」），播放设置里的版本选择用它。
   let name: String?
   let container: String?
-  let `protocol`: String?
-  let mediaStreams: [EmbyMediaStream]
+  /// 不能直连原文件的原因；nil 表示可以直连。
+  let unsupportedReason: PlaybackUnsupported?
+  /// 开了「匹配内容」时开播前向电视申请的显示模式；读不准片源格式时为 nil，交给 MPVUI 开播后自己申请。
+  let displayModeHint: DisplayModeHint?
+
   init(
-    id: String, name: String? = nil, container: String?, protocol: String? = "File", mediaStreams: [EmbyMediaStream]
+    id: String, name: String? = nil, container: String? = nil, unsupportedReason: PlaybackUnsupported? = nil,
+    displayModeHint: DisplayModeHint? = nil
   ) {
     self.id = id
     self.name = name
     self.container = container
-    self.protocol = `protocol`
-    self.mediaStreams = mediaStreams
+    self.unsupportedReason = unsupportedReason
+    self.displayModeHint = displayModeHint
   }
 
-  private enum CodingKeys: String, CodingKey {
-    case id = "Id"
-    case name = "Name"
-    case container = "Container"
-    case `protocol` = "Protocol"
-    case mediaStreams = "MediaStreams"
-  }
-
-  init(from decoder: Decoder) throws {
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    id = try container.decode(String.self, forKey: .id)
-    name = try? container.decodeIfPresent(String.self, forKey: .name)
-    self.container = try? container.decodeIfPresent(String.self, forKey: .container)
-    self.protocol = try? container.decodeIfPresent(String.self, forKey: .protocol)
-    mediaStreams =
-      (try? container.decodeIfPresent([LossyDecodable<EmbyMediaStream>].self, forKey: .mediaStreams))?
-      .compactMap(\.value) ?? []
-  }
+  var isDirectlyPlayable: Bool { unsupportedReason == nil }
 }
 
-nonisolated struct EmbyPlaybackInfo: Decodable, Sendable {
-  let mediaSources: [EmbyMediaSource]
-  let playSessionID: String?
-  let errorCode: String?
-
-  private enum CodingKeys: String, CodingKey {
-    case mediaSources = "MediaSources"
-    case playSessionID = "PlaySessionId"
-    case errorCode = "ErrorCode"
-  }
-
-  init(from decoder: Decoder) throws {
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    mediaSources =
-      (try? container.decodeIfPresent([LossyDecodable<EmbyMediaSource>].self, forKey: .mediaSources))?
-      .compactMap(\.value) ?? []
-    playSessionID = try? container.decodeIfPresent(String.self, forKey: .playSessionID)
-    errorCode = try? container.decodeIfPresent(String.self, forKey: .errorCode)
-  }
-}
-
-/// 外部编号（TMDB、IMDb、TVDB、豆瓣、Bangumi）的来源名与有效值，详情页和 Emby 条目两边按同一规则读取。
-nonisolated enum ExternalMediaID {
-  /// 来源名小写，`themoviedb` 记作 `tmdb`。
-  static func normalizedSource(_ source: String) -> String {
-    let source = source.lowercased()
-    return source == "themoviedb" ? "tmdb" : source
-  }
-
-  /// `source` 须已经过 `normalizedSource`。去掉首尾空白；空值和 `0` 无效，数字来源只认正整数
-  /// （同 `MediaIdentifier.validNumericIdentifier`）。无效时返回 nil，按没有这个编号处理，不拿去比对或搜索。
-  static func valid(_ value: String?, source: String) -> String? {
-    guard let value = MediaIdentifier.truthySourceIdentifier(value) else { return nil }
-    guard numericSources.contains(source) else { return value }
-    return MediaIdentifier.validNumericIdentifier(Int(value)).map(String.init)
-  }
-
-  private static let numericSources: Set<String> = ["tmdb", "tvdb", "bangumi", "anilist"]
-}
-
-/// 详情页条目在服务器上应有的样子：Emby 条目类型，以及详情里已知的外部编号（TMDB、IMDb、TVDB、豆瓣、Bangumi）。
-/// 详情页只拿到 MoviePilot 入库表里不带服务器名的条目 ID，它可能来自别的服务器，不同服务器的数字 ID 还会撞号。
+/// 详情页条目在服务器上应有的样子：条目类型，以及详情里已知的外部编号（TMDB、IMDb、TVDB、豆瓣、Bangumi）。
+/// 详情页只拿到 MoviePilot 入库表里的条目 ID，它可能来自别的服务器，不同服务器的数字 ID 还会撞号。
 nonisolated struct LibraryItemExpectation: Equatable, Sendable {
-  /// Emby 条目类型（`Movie` / `Series`）；MoviePilot 媒体类型无法对应时为 nil，不比类型。
-  let type: String?
+  /// 条目类型（电影 / 剧集）；MoviePilot 媒体类型无法对应时为 nil，不比类型。
+  let kind: ServerMediaItem.Kind?
   /// 来源（小写，`themoviedb` 记作 `tmdb`）→ 编号；0、负数等无效编号不收（见 `ExternalMediaID.valid`）。
   let externalIDs: [String: String]
 
   init(mediaType: String?, externalIDs: [String: String]) {
     switch mediaType {
-    case "电影": type = "Movie"
-    case "电视剧": type = "Series"
-    default: type = nil
+    case "电影": kind = .movie
+    case "电视剧": kind = .series
+    default: kind = nil
     }
     var normalized: [String: String] = [:]
     for (source, value) in externalIDs {
@@ -422,130 +411,30 @@ nonisolated struct LibraryItemExpectation: Equatable, Sendable {
   /// 条目是不是要播的那一个。类型不符，或带着同来源编号却对不上的，都不是。
   /// `strict`（启用了多台服务器）时还须至少有一个外部编号对得上：别的服务器上同号的条目常常没刮削、没有编号，
   /// 只看类型会播错片。详情页本来就没有外部编号时只能比类型。
-  func accepts(_ item: EmbyItem, strict: Bool) -> Bool {
-    if let type, item.type != type { return false }
+  func accepts(_ item: ServerMediaItem, strict: Bool) -> Bool {
+    if let kind, item.kind != kind { return false }
     var matched = false
     for (source, value) in externalIDs {
-      guard let id = item.providerID(for: source) else { continue }
+      guard let id = item.externalID(for: source) else { continue }
       guard id.caseInsensitiveCompare(value) == .orderedSame else { return false }
       matched = true
     }
     return matched || !strict || externalIDs.isEmpty
   }
-
-  /// 按外部编号搜索用的参数（Emby `AnyProviderIdEquals`，如 `tmdb.12345`），只取 Emby 自带刮削器会写的来源。
-  var providerSearchKeys: [String] {
-    ["tmdb", "imdb", "tvdb"].compactMap { source in externalIDs[source].map { "\(source).\($0)" } }
-  }
-}
-
-/// Emby 列表接口的分页结构（`/Shows/{id}/Episodes` 等）。
-nonisolated struct EmbyItemsPage: Decodable, Sendable {
-  let items: [EmbyItem]
-
-  private enum CodingKeys: String, CodingKey { case items = "Items" }
-
-  init(from decoder: Decoder) throws {
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    items =
-      (try? container.decodeIfPresent([LossyDecodable<EmbyItem>].self, forKey: .items))?
-      .compactMap(\.value) ?? []
-  }
 }
 
 /// 剧集“从头播放”选哪一集：跳过特别篇（第 0 季）和没有文件的缺失集，取季号、集号最小的一集。
-nonisolated enum EmbyEpisodeOrder {
-  static func firstEpisode(in items: [EmbyItem]) -> EmbyItem? {
-    let available = items.filter {
-      ($0.type == nil || $0.type == "Episode") && $0.locationType?.lowercased() != "virtual"
-    }
-    let regular = available.filter { ($0.parentIndexNumber ?? 1) > 0 }
+nonisolated enum PlaybackEpisodeOrder {
+  static func firstEpisode(in items: [ServerMediaItem]) -> ServerMediaItem? {
+    let available = items.filter { $0.kind == .episode && $0.hasFile }
+    let regular = available.filter { ($0.seasonNumber ?? 1) > 0 }
     let pool = regular.isEmpty ? available : regular
     return pool.enumerated().min { lhs, rhs in
-      let left = (lhs.element.parentIndexNumber ?? Int.max, lhs.element.indexNumber ?? Int.max, lhs.offset)
-      let right = (rhs.element.parentIndexNumber ?? Int.max, rhs.element.indexNumber ?? Int.max, rhs.offset)
+      let left = (lhs.element.seasonNumber ?? Int.max, lhs.element.episodeNumber ?? Int.max, lhs.offset)
+      let right = (rhs.element.seasonNumber ?? Int.max, rhs.element.episodeNumber ?? Int.max, rhs.offset)
       return left < right
     }?.element
   }
-}
-
-/// 数组里单个元素坏掉时只丢弃该元素。
-nonisolated private struct LossyDecodable<Value: Decodable & Sendable>: Decodable, Sendable {
-  let value: Value?
-  init(from decoder: Decoder) throws {
-    value = try? Value(from: decoder)
-  }
-}
-
-// MARK: - 直接播放判定
-
-/// 应用内播放都直连原文件，Emby 不转码、不重新封装，统一由 mpv 播放。
-nonisolated enum EmbyDirectPlay {
-  struct Selection: Equatable, Sendable {
-    let source: EmbyMediaSource
-    /// 流地址扩展名，帮助播放器识别容器
-    let fileExtension: String
-  }
-
-  enum Unsupported: Error, Equatable, Sendable {
-    case noSource
-    case remoteSource
-
-    var message: String {
-      switch self {
-      case .noSource:
-        return "媒体服务器没有返回可播放的文件"
-      case .remoteSource:
-        return "该影片是远程链接（如 strm），暂不支持应用内播放"
-      }
-    }
-  }
-
-  /// 取第一个本地文件版本。
-  static func select(from sources: [EmbyMediaSource]) -> Result<Selection, Unsupported> {
-    var firstReason: Unsupported?
-    for source in sources {
-      switch evaluate(source) {
-      case .success(let selection):
-        return .success(selection)
-      case .failure(let reason):
-        if firstReason == nil { firstReason = reason }
-      }
-    }
-    return .failure(firstReason ?? .noSource)
-  }
-
-  static func evaluate(_ source: EmbyMediaSource) -> Result<Selection, Unsupported> {
-    if let sourceProtocol = source.protocol, sourceProtocol.lowercased() != "file" {
-      return .failure(.remoteSource)
-    }
-    // Emby 可能返回 ffprobe 的格式名，例如 `mov,mp4,m4a,3gp,3g2,mj2`、`matroska,webm`。
-    let containerNames = (source.container ?? "")
-      .lowercased()
-      .split(separator: ",")
-      .map { $0.trimmingCharacters(in: .whitespaces) }
-      .filter { !$0.isEmpty }
-    return .success(Selection(source: source, fileExtension: fileExtension(containerNames)))
-  }
-
-  private static func fileExtension(_ containerNames: [String]) -> String {
-    if containerNames.contains(where: { $0 == "matroska" || $0 == "mkv" }) { return "mkv" }
-    if containerNames.contains("mp4") { return "mp4" }
-    let candidate = containerNames.first ?? ""
-    let allowed = CharacterSet.alphanumerics
-    guard !candidate.isEmpty, candidate.unicodeScalars.allSatisfy(allowed.contains) else {
-      return "mkv"
-    }
-    return candidate
-  }
-}
-
-/// Emby 的时间单位 tick 为 100 纳秒。
-nonisolated enum EmbyTicks {
-  static let perSecond: Double = 10_000_000
-
-  static func from(seconds: Double) -> Int { Int(seconds * perSecond) }
-  static func seconds(_ ticks: Int64) -> Double { Double(ticks) / perSecond }
 }
 
 /// 续播点：太靠前或接近片尾时直接从头播放。
@@ -553,21 +442,20 @@ nonisolated enum PlaybackResumePolicy {
   static let minimumSeconds: Double = 60
   static let maximumProgress: Double = 0.9
 
-  static func resumePosition(positionTicks: Int64, runTimeTicks: Int64?) -> Double? {
-    let seconds = EmbyTicks.seconds(positionTicks)
-    guard seconds >= minimumSeconds else { return nil }
-    if let runTimeTicks, runTimeTicks > 0, Double(positionTicks) / Double(runTimeTicks) >= maximumProgress {
+  static func resumePosition(positionSeconds: Double, runtimeSeconds: Double?) -> Double? {
+    guard positionSeconds >= minimumSeconds else { return nil }
+    if let runtimeSeconds, runtimeSeconds > 0, positionSeconds / runtimeSeconds >= maximumProgress {
       return nil
     }
-    return seconds
+    return positionSeconds
   }
 
-  /// 播放结束位置达到时长的 90% 视为看完。时长以 Emby 记录为准；Emby 还没有（刚入库、未分析完）时用播放器读到的时长，
+  /// 播放结束位置达到时长的 90% 视为看完。时长以服务器记录为准；服务器还没有（刚入库、未分析完）时用播放器读到的时长，
   /// 两者都没有就不算看完。
-  static func isCompleted(positionSeconds: Double, runTimeTicks: Int64?, playerDurationSeconds: Double?) -> Bool {
+  static func isCompleted(positionSeconds: Double, runtimeSeconds: Double?, playerDurationSeconds: Double?) -> Bool {
     let duration: Double
-    if let runTimeTicks, runTimeTicks > 0 {
-      duration = EmbyTicks.seconds(runTimeTicks)
+    if let runtimeSeconds, runtimeSeconds > 0 {
+      duration = runtimeSeconds
     } else if let playerDurationSeconds, playerDurationSeconds.isFinite, playerDurationSeconds > 0 {
       duration = playerDurationSeconds
     } else {

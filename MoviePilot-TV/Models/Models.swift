@@ -1340,9 +1340,9 @@ nonisolated struct MediaServerConf: Decodable, Equatable, Sendable {
 
   var isEnabled: Bool { enabled?.value ?? false }
 
-  /// 已启用、类型为 Emby 且有密钥和至少一个地址，才能在应用内播放。
+  /// 已启用、类型支持应用内播放（见 `MediaServerAdapters`）且有密钥和至少一个地址，才能在应用内播放。
   var supportsInAppPlayback: Bool {
-    guard isEnabled, type.lowercased() == "emby", let config, config.apiKey != nil else {
+    guard isEnabled, MediaServerAdapters.supportsInAppPlayback(type: type), let config, config.apiKey != nil else {
       return false
     }
     return !config.candidateBaseURLs.isEmpty

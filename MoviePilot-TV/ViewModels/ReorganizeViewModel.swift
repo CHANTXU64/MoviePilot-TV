@@ -17,10 +17,7 @@ enum ReorganizeTransferCapability {
   static let reflinkMinimumBackendVersion = "v3.1.9"
 
   static func supportsReflink(backendVersion: String?) -> Bool {
-    guard let version = MoviePilotVersion(backendVersion),
-      let minimum = MoviePilotVersion(reflinkMinimumBackendVersion)
-    else { return false }
-    return version >= minimum
+    BackendVersionGate.isAvailable(since: reflinkMinimumBackendVersion, backendVersion: backendVersion)
   }
 
   /// 手动整理可选的整理方式，顺序与 Web 整理对话框一致；`reflink` 仅在 v3.1.9+ 出现。

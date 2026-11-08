@@ -40,8 +40,11 @@ class MediaDetailViewModel: ObservableObject {
   @Published var uniqueDirectors: [Person] = []
 
   @Published private(set) var isInLibrary = false
-  /// 管理员且条目在（或无法确认不在）可播放的 Emby 上时，应用内播放的目标。
+  /// 管理员且条目在（或无法确认不在）可在应用内播放的服务器上时，应用内播放的目标。
   @Published private(set) var inAppPlaybackTarget: PlaybackTarget?
+  /// MoviePilot 入库查询给的条目（含所属服务器），有播放入口时才有。电视剧按集播放用它在服务器上找这部剧，
+  /// 见 `episodePlaybackContext(episodeGroup:seasons:)`。界面不直接显示它，和 `inAppPlaybackTarget` 一起更新，不单独触发重绘。
+  private(set) var mediaServerItemRef: MediaServerItemRef?
 
   /// 第二页首行数据是否已就绪。
   /// 用于控制 Loading 遮罩的显隐——必须等首行数据加载完才能移除遮罩，
@@ -64,6 +67,8 @@ class MediaDetailViewModel: ObservableObject {
   }
   private let detailBox: DetailBox
   private var cancellables = Set<AnyCancellable>()
+  /// 跟随应用内播放开关和后端版本的变化，出栈时停止。
+  private var playbackAvailabilityObservation: AnyCancellable?
   private var mediaServerExistsTask: Task<Void, Never>?
   private var relatedContentTask: Task<Void, Never>?
   private var relatedContentChildTasks: [Task<Void, Never>] = []
@@ -182,6 +187,38 @@ class MediaDetailViewModel: ObservableObject {
     self.siteFilter.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &cancellables)
+
+    // 详情页可能留在另一个标签页的导航栈里，也可能在读到后端设置之前就打开了（比如从 Top Shelf 冷启动直接进来），
+    // 设置里的开关或后端版本变了都要重新判断播放入口。
+    playbackAvailabilityObservation = Publishers.Merge(
+      NotificationCenter.default.publisher(for: PlaybackPreferences.inAppPlaybackDidChangeNotification).map { _ in () },
+      apiService.$settings.map { $0?.BACKEND_VERSION }.removeDuplicates().dropFirst().map { _ in () }
+    )
+    .receive(on: DispatchQueue.main)
+    .sink { [weak self] in self?.inAppPlaybackAvailabilityDidChange() }
+  }
+
+  /// 应用内播放开关或后端版本变了：不再提供时立即收起播放入口；再重新查一次入库状态和播放目标，
+  /// 可以提供时补回入口。正在进行的上一次查询被取代。
+  private func inAppPlaybackAvailabilityDidChange() {
+    let isEnabled = InAppPlaybackAvailability.isEnabled(
+      backendVersion: apiService.settings?.BACKEND_VERSION, userEnabled: PlaybackPreferences.isInAppPlaybackEnabled)
+    if !isEnabled {
+      mediaServerItemRef = nil
+      inAppPlaybackTarget = nil
+    }
+    guard hasAppliedFullDetail else { return }
+    startMediaServerExistsCheck()
+  }
+
+  private func startMediaServerExistsCheck() {
+    mediaServerExistsTask?.cancel()
+    mediaServerExistsTask = Task { [weak self] in
+      await self?.loadMediaServerExists()
+      // 被取代的查询已取消，不能清掉新查询的句柄。
+      guard !Task.isCancelled else { return }
+      self?.mediaServerExistsTask = nil
+    }
   }
 
   // MARK: - 豆瓣短评 / 影评
@@ -410,10 +447,7 @@ class MediaDetailViewModel: ObservableObject {
         .filter { !($0.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         .prefix(4))
 
-    mediaServerExistsTask = Task { [weak self] in
-      await self?.loadMediaServerExists()
-      self?.mediaServerExistsTask = nil
-    }
+    startMediaServerExistsCheck()
 
     // 进入详情页就拉豆瓣短评/影评第一页：独立任务、不参与首屏就绪判断、不做任何预载。
     loadDoubanDiscussionIfNeeded()
@@ -488,6 +522,7 @@ class MediaDetailViewModel: ObservableObject {
 
   /// 仅在页面已确认被 Pop 出 NavigationPath 后调用。
   func cancelForPop() {
+    playbackAvailabilityObservation = nil
     mediaServerExistsTask?.cancel()
     mediaServerExistsTask = nil
     relatedContentTask?.cancel()
@@ -502,19 +537,28 @@ class MediaDetailViewModel: ObservableObject {
     preloadTask = nil
   }
 
+  /// 详情页集列表按集播放用的上下文：电视剧有播放入口时才有。`episodeGroup` 是详情页当前选的剧集组（nil 为默认顺序），
+  /// `seasons` 是详情页的季顺序（剧集组下是组内季号）。每集能不能播见 `PlaybackCoordinator.episodeAvailability`。
+  func episodePlaybackContext(episodeGroup: String?, seasons: [Int]) -> EpisodePlaybackContext? {
+    guard inAppPlaybackTarget != nil else { return nil }
+    return EpisodePlaybackContext(
+      media: detail, episodeGroup: episodeGroup, seasons: seasons, libraryItem: mediaServerItemRef)
+  }
+
   private func loadMediaServerExists() async {
     guard detail.identity != nil else { return }
     let isMovie = detail.type == "电影"
-    // 电影的入库状态显示在订阅按钮上；剧集只用于管理员的应用内播放（从第一集开始）。
+    // 电影的入库状态显示在订阅按钮上；剧集只用于管理员的应用内播放。
     let showsLibraryState = isMovie && apiService.canAccess(.subscribe)
     let offersPlayback = InAppPlaybackAvailability.offers(
-      mediaType: detail.type, canRequestSuperUserEndpoints: apiService.canRequestSuperUserEndpoints)
+      mediaType: detail.type, canRequestSuperUserEndpoints: apiService.canRequestSuperUserEndpoints,
+      backendVersion: apiService.settings?.BACKEND_VERSION)
     guard showsLibraryState || offersPlayback else { return }
     let snapshot = apiService.sessionSnapshot()
     let coordinator = apiService.sessionScope.playbackCoordinator
-    let itemID: String?
+    let itemRef: MediaServerItemRef?
     do {
-      itemID = try await apiService.fetchMediaServerItemID(media: detail)
+      itemRef = try await apiService.fetchMediaServerItemRef(media: detail)
     } catch is CancellationError {
       return
     } catch {
@@ -522,15 +566,17 @@ class MediaDetailViewModel: ObservableObject {
       return
     }
     guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot) else { return }
-    if showsLibraryState { isInLibrary = itemID != nil }
-    guard let itemID, offersPlayback else { return }
+    if showsLibraryState { isInLibrary = itemRef != nil }
+    guard let itemRef, offersPlayback else { return }
     do {
-      // 入库查询返回的条目 ID 不带服务器名，也可能属于 Plex、Jellyfin：需要时先在 Emby 上按外部编号找到它。
+      // 入库条目可能属于不能在应用内播放的服务器，ID 也可能和别的服务器撞号：需要时在可播放的服务器上按外部编号找到它。
       let servers = try await apiService.fetchCachedMediaServers()
       guard servers.contains(where: \.supportsInAppPlayback) else { return }
       let expected = LibraryItemExpectation(media: detail)
-      let target = await coordinator.locateLibraryItem(itemID, expected: expected, in: servers)
+      let target = await coordinator.locateLibraryItem(
+        itemRef.itemID, expected: expected, in: servers, preferredServer: itemRef.server)
       guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot) else { return }
+      mediaServerItemRef = target == nil ? nil : itemRef
       inAppPlaybackTarget = target
     } catch is CancellationError {
     } catch {

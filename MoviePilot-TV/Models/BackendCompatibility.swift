@@ -52,6 +52,26 @@ nonisolated struct MoviePilotVersion: Hashable, Comparable, Sendable, CustomStri
   }
 }
 
+/// 按后端版本开放新行为、或提示从某版本起才有的副作用。两种极性相反，不能混用（`.agents/engineering-invariants.md` §7）；
+/// 起始版本登记在各自的使用处。已知缺陷版本门禁按缺陷区间判断，不走这里（见 `BackendCapability`）。
+nonisolated enum BackendVersionGate {
+  /// 新行为、新取值从 `minimum` 起才成立：可解析且不低于它（含热修复和尚未登记的更新版本）才开放；读不出或无法解析时不开放。
+  static func isAvailable(since minimum: String, backendVersion: String?) -> Bool {
+    guard let version = MoviePilotVersion(backendVersion), let minimum = MoviePilotVersion(minimum) else {
+      return false
+    }
+    return version >= minimum
+  }
+
+  /// 破坏性副作用从 `minimum` 起才发生：只有已解析且低于它时才确定不会发生；读不出或无法解析时按会发生处理，照常提示。
+  static func mayHaveSideEffect(since minimum: String, backendVersion: String?) -> Bool {
+    guard let version = MoviePilotVersion(backendVersion), let minimum = MoviePilotVersion(minimum) else {
+      return true
+    }
+    return version >= minimum
+  }
+}
+
 nonisolated enum BackendCompatibilityStatus: String, Sendable {
   case belowMinimum
   case unregistered

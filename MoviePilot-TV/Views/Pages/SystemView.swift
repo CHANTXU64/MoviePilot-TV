@@ -270,6 +270,10 @@ struct SystemView: View {
                 if canConfigureRecommendations {
                   recommendationPage
                 }
+              case .playback:
+                if canConfigurePlayback {
+                  playbackPage
+                }
               case .changelog:
                 changelogPage
               case .logs:
@@ -345,15 +349,13 @@ struct SystemView: View {
 
       if canConfigurePlayback {
         section("播放") {
-          Toggle(
-            "点击首页媒体直接播放",
-            isOn: Binding(
-              get: { viewModel.homeMediaTapPlaysInApp },
-              set: { viewModel.homeMediaTapPlaysInApp = $0 }
-            )
-          )
-          .font(.body.bold())
-          .focused($focusedItem, equals: .homeMediaTapPlaysInApp)
+          Button {
+            viewModel.reloadPlaybackSettings()
+            push(.playback)
+          } label: {
+            row("播放设置", value: playbackSummary, showsDisclosure: true)
+          }
+          .focused($focusedItem, equals: .playbackSettings)
         }
       }
 
@@ -861,6 +863,68 @@ struct SystemView: View {
     }
   }
 
+  /// 「播放」设置页，显示哪些行见 `SystemViewModel.playbackSettingRows`。
+  private var playbackPage: some View {
+    section("播放") {
+      ForEach(viewModel.playbackSettingRows, id: \.self) { item in
+        switch item {
+        case .versionRequirement:
+          Button {
+            Task { await viewModel.recheckBackendVersion() }
+          } label: {
+            row("应用内播放", value: versionRequirementValue, showsProgress: viewModel.isCheckingBackendVersion)
+          }
+          .accessibilityHint("重新检查 MoviePilot 版本")
+          .focused($focusedItem, equals: .inAppPlayback)
+        case .inAppPlayback:
+          Toggle(
+            "应用内播放",
+            isOn: Binding(
+              get: { viewModel.inAppPlaybackEnabled },
+              set: { viewModel.inAppPlaybackEnabled = $0 }
+            )
+          )
+          .font(.body.bold())
+          .focused($focusedItem, equals: .inAppPlayback)
+        case .homeMediaTap:
+          Toggle(
+            "点击首页媒体直接播放",
+            isOn: Binding(
+              get: { viewModel.homeMediaTapPlaysInApp },
+              set: { viewModel.homeMediaTapPlaysInApp = $0 }
+            )
+          )
+          .font(.body.bold())
+          .focused($focusedItem, equals: .homeMediaTapPlaysInApp)
+        case .autoPlayNextEpisode:
+          Toggle(
+            "自动播放下一集",
+            isOn: Binding(
+              get: { viewModel.autoPlayNextEpisode },
+              set: { viewModel.autoPlayNextEpisode = $0 }
+            )
+          )
+          .font(.body.bold())
+          .focused($focusedItem, equals: .autoPlayNextEpisode)
+        }
+      }
+    }
+  }
+
+  private var versionRequirementValue: String {
+    if viewModel.isCheckingBackendVersion { return "正在检查" }
+    if viewModel.backendVersionCheckFailed { return "检查失败，按下重试" }
+    return "需要 MoviePilot \(InAppPlaybackAvailability.minimumBackendVersion)"
+  }
+
+  private var playbackSummary: String {
+    guard viewModel.backendSupportsInAppPlayback else {
+      return apiService.settings?.BACKEND_VERSION == nil
+        ? "未读取到后端版本" : "需要 \(InAppPlaybackAvailability.minimumBackendVersion)"
+    }
+    return viewModel.inAppPlaybackEnabled ? "已开启" : "已关闭"
+  }
+
   private func section<Content: View>(
     _ title: String?,
     @ViewBuilder content: () -> Content
@@ -993,6 +1057,8 @@ struct SystemView: View {
       target = .topShelfRecommendation
     case .recommendation:
       target = .recommendation
+    case .playback:
+      target = .playbackSettings
     case .logs:
       target = .logs
     }
@@ -1037,6 +1103,8 @@ struct SystemView: View {
       } ?? .topShelfExploreSource
     case .recommendation:
       target = recommendViewModel.shelves.first.map { .recommendationShelf($0.id) } ?? .recommendation
+    case .playback:
+      target = .inAppPlayback
     case .logs:
       target = .logRecording
     }
@@ -1051,7 +1119,7 @@ struct SystemView: View {
     case .softFilter:
       return .softFilterNone
     case .root, .connection, .changelog, .logs, .mediaSourceSelection, .siteSelection,
-      .subtitleSiteSelection, .hardFilter,
+      .subtitleSiteSelection, .hardFilter, .playback,
       .recommendation, .topShelfSelection, .topShelfRecommendations, .topShelfExplore,
       .topShelfExploreSources, .topShelfExploreField, .none:
       return .hardFilterNone
@@ -1063,7 +1131,7 @@ struct SystemView: View {
     case .softFilter:
       return .softFilterRule(ruleId)
     case .root, .connection, .changelog, .logs, .mediaSourceSelection, .siteSelection,
-      .subtitleSiteSelection, .hardFilter,
+      .subtitleSiteSelection, .hardFilter, .playback,
       .recommendation, .topShelfSelection, .topShelfRecommendations, .topShelfExplore,
       .topShelfExploreSources, .topShelfExploreField, .none:
       return .hardFilterRule(ruleId)
@@ -1131,8 +1199,8 @@ struct SystemView: View {
         return "新增订阅后立即开始搜索，无需等待 MoviePilot 稍后自动处理。（只影响 TV 端）"
       case .waitBackgroundImage:
         return "进入媒体详情页前的加载动画会等待背景海报就绪实现平滑过渡，网络较慢时可关闭以更快进入详情页。（只影响 TV 端）"
-      case .homeMediaTapPlaysInApp:
-        return "开启后，首页“最近添加”中的 Emby 电影和剧集点击后直接在应用内播放（剧集从第一集开始）；关闭时跳转媒体服务器 App。长按卡片两种方式都可以选。（只影响 TV 端）"
+      case .playbackSettings:
+        return "设置应用内播放、首页点击行为和自动播放下一集。（只影响 TV 端）"
       case .preloadTMDBDetails:
         return "进入豆瓣、Bangumi 或 AniList 详情页并识别到对应 TMDB 条目后，提前加载其详情，以缩短后续跳转等待时间。（只影响 TV 端）"
       case .mediaSourceSelection:
@@ -1164,6 +1232,7 @@ struct SystemView: View {
         .topShelfModeRecommendation, .topShelfModeExplore, .topShelfExploreSource,
         .topShelfExploreField, .topShelfExploreOption, .topShelfExploreSourceOption,
         .topShelfExploreSave, .topShelfExploreReset, .logRecording, .logDownRedirector, .logLevelFilter,
+        .homeMediaTapPlaysInApp, .inAppPlayback, .autoPlayNextEpisode,
         .logTimeFilter:
         break
       }
@@ -1178,6 +1247,16 @@ struct SystemView: View {
       return "不对资源搜索结果应用软过滤。（只影响 TV 端）"
     case (.logs, .logRecording):
       return "关闭后不再把新日志写入本机，已保存的记录仍可查看。"
+    case (.playback, .inAppPlayback):
+      guard viewModel.backendSupportsInAppPlayback else {
+        let version = apiService.settings?.BACKEND_VERSION ?? "未读取到"
+        return "当前 MoviePilot 版本（\(version)）不支持应用内播放，需要 \(InAppPlaybackAvailability.minimumBackendVersion) 及以上。升级后按一下这里重新检查，通过后就能在这里设置。"
+      }
+      return "开启后，管理员可以在应用内直接播放 \(MediaServerAdapters.supportedNames) 中的电影和剧集；关闭后详情页和首页都不再提供应用内播放。（只影响 TV 端）"
+    case (.playback, .homeMediaTapPlaysInApp):
+      return "开启后，首页“最近添加”中的电影和剧集点击后直接在应用内播放（剧集从第一集开始）；关闭时跳转媒体服务器 App。长按卡片两种方式都可以选。（只影响 TV 端）"
+    case (.playback, .autoPlayNextEpisode):
+      return "从详情页按集播放时，播完一集自动接着播下一集；播放期间刚入库的下一集也能接上。播放界面里的“自动播放”按钮是同一个设置。（只影响 TV 端）"
     default:
       break
     }
@@ -1207,6 +1286,8 @@ struct SystemView: View {
       return "按这套探索条件更新主屏内容。保存后生效，不影响探索页的筛选。"
     case .recommendation:
       return "设置推荐页面显示的内容。（只影响 TV 端）"
+    case .playback:
+      return "设置应用内播放。（只影响 TV 端）"
     }
   }
 
@@ -1288,6 +1369,7 @@ enum SystemSettingsPage: Hashable {
   case topShelfExplore
   case topShelfExploreSources
   case topShelfExploreField(String)
+  case playback
 }
 
 enum SystemSettingsFocus: Hashable {
@@ -1311,6 +1393,9 @@ enum SystemSettingsFocus: Hashable {
   case appInfo
   case autoSearch
   case homeMediaTapPlaysInApp
+  case playbackSettings
+  case inAppPlayback
+  case autoPlayNextEpisode
   case preloadTMDBDetails
   case waitBackgroundImage
   case hardFilter

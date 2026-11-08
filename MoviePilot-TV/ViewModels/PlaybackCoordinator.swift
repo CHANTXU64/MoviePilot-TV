@@ -6,45 +6,57 @@ import UIKit
 
 /// 应用内播放的入口目标。
 enum PlaybackTarget: Equatable {
-  /// 详情页：MoviePilot 媒体库同步表里的条目 ID，不知道属于哪台服务器，也可能是别的服务器上的 ID。
-  /// 起播时在各台 Emby 上按 `expected`（类型、外部编号）找条目，见 `PlaybackCoordinator.findLibraryItem`。
-  case libraryItem(itemID: String, expected: LibraryItemExpectation)
-  /// 已知服务器名称和这台服务器自己的条目 ID（首页“最近添加”，或详情页已在 Emby 上找到）。
+  /// 详情页：MoviePilot 媒体库同步表里的条目 ID，可能是别的服务器上的 ID。
+  /// 起播时在各台可播放的服务器上按 `expected`（类型、外部编号）找条目，见 `PlaybackCoordinator.findLibraryItem`。
+  /// `owner` 是入库查询给的所属服务器（不知道时为 nil）：先找它，只在它上面按 ID 兜底。
+  case libraryItem(itemID: String, expected: LibraryItemExpectation, owner: String? = nil)
+  /// 已知服务器名称和这台服务器自己的条目 ID（首页“最近添加”，或详情页已在服务器上找到）。
   case serverItem(serverName: String, itemID: String)
+  /// 详情页集列表里的一集，带着它所在那一季的集列表：在各台可播放的服务器上按 TMDB 单集 ID 找，见 `EpisodeAvailability`。
+  case episode(QueuedEpisode)
 }
 
 enum PlaybackError: LocalizedError, Equatable {
   case notAllowed
-  case noEmbyServer
+  case backendTooOld
+  case disabledInSettings
+  case noPlayableServer
   case serverNotSupported(String)
   case unreachable(server: String, transportSecurity: Bool)
-  case noEmbyUser
+  case noServerUser(server: String)
   case notFound
+  case episodeUnavailable(String)
   case unsupportedItemType
   case noEpisodes
-  case unsupported(EmbyDirectPlay.Unsupported)
+  case unsupported(PlaybackUnsupported)
   case server(String)
 
   var errorDescription: String? {
     switch self {
     case .notAllowed:
       return "只有管理员账号可以在应用内播放"
-    case .noEmbyServer:
-      return "MoviePilot 中没有可用的 Emby 服务器（需启用并填写地址和 API 密钥）"
+    case .backendTooOld:
+      return "应用内播放需要 MoviePilot \(InAppPlaybackAvailability.minimumBackendVersion) 及以上版本"
+    case .disabledInSettings:
+      return "应用内播放已在设置中关闭"
+    case .noPlayableServer:
+      return "MoviePilot 中没有能在应用内播放的媒体服务器（目前支持 \(MediaServerAdapters.supportedNames)，需启用并填写地址和密钥）"
     case .serverNotSupported(let name):
-      return "媒体服务器“\(name)”暂不支持应用内播放，目前只支持 Emby"
+      return "媒体服务器“\(name)”暂不支持应用内播放，目前只支持 \(MediaServerAdapters.supportedNames)"
     case .unreachable(let server, true):
-      return "无法连接“\(server)”：系统不允许连接 http 域名地址，请为 Emby 配置 https 地址或内网 IP"
+      return "无法连接“\(server)”：系统不允许连接 http 域名地址，请为媒体服务器配置 https 地址或内网 IP"
     case .unreachable(let server, false):
       return "无法连接“\(server)”，已尝试 MoviePilot 中配置的内网和外网地址"
-    case .noEmbyUser:
-      return "未找到可用的 Emby 用户"
+    case .noServerUser(let server):
+      return "在“\(server)”上没有找到可用的用户"
     case .notFound:
-      return "未在 Emby 中找到该条目，可能 MoviePilot 媒体库同步尚未更新"
+      return "未在媒体服务器中找到该条目，可能 MoviePilot 媒体库同步尚未更新"
+    case .episodeUnavailable(let message):
+      return message
     case .unsupportedItemType:
       return "应用内播放暂只支持电影和剧集"
     case .noEpisodes:
-      return "这部剧在 Emby 中还没有可播放的剧集"
+      return "这部剧在媒体服务器中还没有可播放的剧集"
     case .unsupported(let reason):
       return reason.message
     case .server(let message):
@@ -55,33 +67,41 @@ enum PlaybackError: LocalizedError, Equatable {
 
 /// 解析完成、可以交给播放器的结果。
 struct PreparedPlayback {
-  let client: EmbyClient
-  let userID: String
-  let item: EmbyItem
-  let selection: EmbyDirectPlay.Selection
-  let playSessionID: String?
-  let streamURL: URL
-  /// Emby 返回的全部版本，供播放界面的“版本”选择。
-  var mediaSources: [EmbyMediaSource] = []
+  let connection: any MediaServerConnection
+  let stream: PreparedStream
+  /// 按集播放时有：播放器标题按详情页的编号显示，上一集、下一集从它往前后找。
+  var episode: QueuedEpisode?
 
-  var title: String { item.displayTitle }
+  var item: ServerMediaItem { stream.item }
+  var streamURL: URL { stream.streamURL }
+
+  var titles: (primary: String, secondary: String?) {
+    guard let episode else { return item.playerTitles }
+    return episode.episode.playerTitles(seriesName: episode.context.seriesName ?? item.seriesName)
+  }
+
+  var title: String { PlaybackTitles.singleLine(titles) }
+
   var resumePosition: Double? {
     PlaybackResumePolicy.resumePosition(
-      positionTicks: item.playbackPositionTicks, runTimeTicks: item.runTimeTicks)
+      positionSeconds: item.resumePositionSeconds, runtimeSeconds: item.runtimeSeconds)
   }
 }
 
-/// 一台 Emby 上已连通的地址和选中的用户。MoviePilot 配置或 MoviePilot 用户名变了就不再沿用。
-struct EmbyConnection {
-  let config: MediaServerConnectionConfig
-  let preferredUserName: String?
-  let client: EmbyClient
-  let userID: String
+/// 播放界面的队列（上一集、下一集、同季列表）从这里取数据。
+@MainActor
+protocol EpisodeQueueProviding: AnyObject {
+  /// `refresh` 时先重新读当前服务器上这部剧的集和当前季的集列表（播完一集要接着播时），不沿用缓存。
+  func adjacentEpisode(
+    _ direction: EpisodeNavigator.Direction, from playback: PreparedPlayback, refresh: Bool
+  ) async throws -> EpisodeNavigator.Outcome
+  func playableEpisodes(inSeason season: Int, from playback: PreparedPlayback) async throws -> [EpisodeQueueEntry]
 }
 
 /// 应用内播放的唯一 owner。由 `SessionScope` 持有：换账号或登出时随作用域拆除，正在解析的任务取消、播放器停止。
+/// 只通过 `MediaServerConnection` 访问媒体服务器，不关心是哪一类服务器。
 @MainActor
-final class PlaybackCoordinator: ObservableObject {
+final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
   nonisolated deinit {}
 
@@ -112,35 +132,50 @@ final class PlaybackCoordinator: ObservableObject {
     case discarded
   }
 
-  /// 多个地址都连通时，排在前面的（内网）可以晚到这么久仍被选中。
-  static let preferredAddressGrace: Duration = .milliseconds(500)
-  /// 连接（地址和 Emby 用户）沿用的时长；到期重新探测、重选用户，Emby 端删改用户后能自行恢复。
+  /// 连接（地址和服务器用户）沿用的时长；到期重新探测、重选用户，服务器端删改用户后能自行恢复。
   static let connectionTTL: TimeInterval = 600
+  /// 服务器上一部剧的集索引沿用的时长：详情页的每集状态、起播和上一集/下一集共用，短时间内不重复读整部剧的集。
+  static let episodeIndexTTL: TimeInterval = 60
   /// 起播前最多等这么久，让上一次播放的停止上报和进度写回先发完，续播询问才读得到刚保存的位置。
-  /// Emby 连不上时不会一直卡在“正在准备播放”。
+  /// 服务器连不上时不会一直卡在“正在准备播放”。
   static let pendingReportWait: Duration = .seconds(5)
 
   @Published private(set) var phase: Phase = .idle
   @Published var failure: Failure?
+  /// 播放结束时的说明（比如下一集在另一台服务器上），不是错误。
+  @Published var notice: Failure?
 
   /// 弱引用：`APIService` → `SessionScope` → 本对象，强引用会让整个会话在登出后无法释放。
   private weak var apiService: APIService?
-  private let embySession: URLSession
+  private let mediaServerSession: URLSession
   /// 所有播放会话共用的上报队列：上一次播放的写回不会晚于下一次播放的上报和写回。
   private let reporter = PlaybackReporter()
   private var switchTask: Task<Void, Never>?
-  /// 按服务器名称缓存的连接：下次播放不再探测地址、查询用户；同一台同时发起的连接合并为一次。
-  private let connections: CoalescingCache<String, EmbyConnection>
+  private nonisolated struct ConnectionKey: Hashable, Sendable {
+    let type: String
+    let name: String
+    let restrictedAddresses: [URL]?
+  }
+
+  /// 同一服务器的连接可复用。限制地址的恢复请求只与同样限制的请求共用连接。
+  private let connections: CoalescingCache<ConnectionKey, any MediaServerConnection>
+  private let episodeIndexes: CoalescingCache<String, ServerEpisodeIndex>
+  /// 设置页「播放」里的应用内播放开关。
+  private let isEnabledInSettings: () -> Bool
   private var isTornDown = false
 
   init(
-    apiService: APIService, embySession: URLSession = EmbyClient.sharedSession,
+    apiService: APIService, mediaServerSession: URLSession = MediaServerHTTP.sharedSession,
+    isEnabledInSettings: @escaping () -> Bool = { PlaybackPreferences.isInAppPlaybackEnabled },
     now: @escaping () -> Date = Date.init
   ) {
     self.apiService = apiService
-    self.embySession = embySession
+    self.mediaServerSession = mediaServerSession
+    self.isEnabledInSettings = isEnabledInSettings
     connections = CoalescingCache(
       ttl: Self.connectionTTL, capacity: 8, renewsTTLOnAccess: false, now: now)
+    episodeIndexes = CoalescingCache(
+      ttl: Self.episodeIndexTTL, capacity: 16, renewsTTLOnAccess: false, now: now)
   }
 
   var isResolving: Bool {
@@ -172,13 +207,29 @@ final class PlaybackCoordinator: ObservableObject {
     var reporterForTesting: PlaybackReporter { reporter }
   #endif
 
+  /// 当前会话能否在应用内播放：管理员、后端版本支持、设置里没关。各入口另外判断媒体类型和服务器。
+  private var allowsPlayback: Bool {
+    guard let apiService else { return false }
+    return apiService.canRequestSuperUserEndpoints
+      && InAppPlaybackAvailability.isEnabled(
+        backendVersion: apiService.settings?.BACKEND_VERSION, userEnabled: isEnabledInSettings())
+  }
+
   func play(_ target: PlaybackTarget) {
     guard !isTornDown, !isBusy, let apiService else { return }
     guard apiService.canRequestSuperUserEndpoints else {
       fail(PlaybackError.notAllowed)
       return
     }
-    // 只在发布结果时复核会话：中间的 Emby 请求与 MoviePilot 会话无关，换账号时由作用域拆除取消。
+    guard InAppPlaybackAvailability.supports(backendVersion: apiService.settings?.BACKEND_VERSION) else {
+      fail(PlaybackError.backendTooOld)
+      return
+    }
+    guard isEnabledInSettings() else {
+      fail(PlaybackError.disabledInSettings)
+      return
+    }
+    // 只在发布结果时复核会话：中间的服务器请求与 MoviePilot 会话无关，换账号时由作用域拆除取消。
     let snapshot = apiService.sessionSnapshot()
     let userName = apiService.currentOrStoredUserName
     let task = Task { [weak self] in
@@ -224,12 +275,14 @@ final class PlaybackCoordinator: ObservableObject {
   }
 
   /// 播放界面关闭后收尾。只结束给定的会话：界面的关闭回调可能晚于下一次播放开始。
-  func endSession(_ session: PlaybackSession) {
+  /// `notice` 是播放结束时要告诉用户的说明（比如下一集在另一台服务器上）。
+  func endSession(_ session: PlaybackSession, notice: String? = nil) {
     guard isPlaying(session) else { return }
     switchTask?.cancel()
     switchTask = nil
     phase = .idle
     session.stop()
+    if let notice { self.notice = Failure(message: notice) }
   }
 
   /// App 离开前台（回主屏、打开 App 切换器）时保存正在播放条目的观看进度，播放不结束。
@@ -252,27 +305,32 @@ final class PlaybackCoordinator: ObservableObject {
     }
     phase = .idle
     connections.invalidateAll()
+    episodeIndexes.invalidateAll()
+    knownSeasons = nil
   }
 
-  /// 详情页的条目 ID 不带服务器名，可能来自任何一台媒体服务器，不同服务器的数字 ID 还会撞号（多台 Emby 之间也会）。
-  /// 只启用了一台服务器（且是可播放的 Emby）时 ID 只可能来自它，不必确认，起播时再找；
-  /// 否则在每台可播放的 Emby 上找这个条目（见 `findLibraryItem`），第一台找到的为准，用它自己的条目 ID。
-  /// 确认不在任何一台上时返回 nil（不显示播放）；无法确认（连不上等）时仍返回媒体库条目，起播时再逐台找。
+  /// 详情页的条目 ID 不带服务器名，可能来自任何一台媒体服务器，不同服务器的数字 ID 还会撞号（同类服务器之间也会）。
+  /// 只启用了一台服务器（且可在应用内播放）、入库查询也没说条目属于别的服务器时，ID 只可能来自它，不必确认，起播时再找；
+  /// 否则在每台可播放的服务器上找这个条目（见 `findLibraryItem`），第一台找到的为准，用它自己的条目 ID。
+  /// `preferredServer` 是 MoviePilot 入库查询给的所属服务器，先查它。
+  /// 确认不在任何一台上时返回 nil（不显示播放）；无法确认（连不上、服务器报错等）时仍返回媒体库条目，起播时再逐台找。
   func locateLibraryItem(
-    _ itemID: String, expected: LibraryItemExpectation, in servers: [MediaServerConf]
+    _ itemID: String, expected: LibraryItemExpectation, in servers: [MediaServerConf],
+    preferredServer: String? = nil
   ) async -> PlaybackTarget? {
-    guard !isTornDown, let apiService, apiService.canRequestSuperUserEndpoints else { return nil }
+    guard !isTornDown, allowsPlayback, let apiService else { return nil }
     let enabled = servers.filter(\.isEnabled)
-    let playable = enabled.filter(\.supportsInAppPlayback)
+    let playable = Self.playableServers(in: servers, preferring: preferredServer)
     guard !playable.isEmpty else { return nil }
-    let libraryItem = PlaybackTarget.libraryItem(itemID: itemID, expected: expected)
-    if enabled.count == 1 { return libraryItem }
+    let libraryItem = PlaybackTarget.libraryItem(itemID: itemID, expected: expected, owner: preferredServer)
+    if enabled.count == 1, preferredServer == nil || preferredServer == enabled[0].name { return libraryItem }
+    let strict = Self.requiresStrictMatch(servers)
     let userName = apiService.currentOrStoredUserName
     var isUncertain = false
     for server in playable {
       do {
         let found = try await withConnection(to: server, preferredUserName: userName) {
-          try await Self.findLibraryItem(itemID, expected: expected, strict: true, on: $0)
+          try await Self.findLibraryItem(itemID, expected: expected, owner: preferredServer, strict: strict, on: $0)
         }
         if let found { return .serverItem(serverName: server.name, itemID: found.id) }
       } catch {
@@ -283,27 +341,505 @@ final class PlaybackCoordinator: ObservableObject {
     return isUncertain ? libraryItem : nil
   }
 
-  /// 在一台 Emby 上找详情页的条目，返回这台服务器自己的条目（ID 可能与 MoviePilot 给的不同）。
-  /// 先按外部编号搜索，同一部片在各台服务器上的 ID 不同也能找到；搜不到再看 MoviePilot 给的 ID 在这台上是不是它。
-  /// `strict`（启用了多台服务器）时外部编号必须对得上，见 `LibraryItemExpectation.accepts`。
+  /// 启用了多台服务器时，不知道属于哪台的条目 ID 可能来自任何一台、还会撞号，按 ID 找到的条目要外部编号对得上才算
+  /// （见 `idFallbackStrictness`）。也是集索引缓存键的一部分，各处必须用同一个判断。
+  private static func requiresStrictMatch(_ servers: [MediaServerConf]) -> Bool {
+    servers.filter(\.isEnabled).count > 1
+  }
+
+  /// 按 MoviePilot 给的条目 ID 在一台服务器上兜底时，找到的条目要不要外部编号对上；nil 表示不在这台上按 ID 找。
+  /// 条目 ID 只在所属服务器内有意义，不同服务器的数字 ID 会撞号：
+  /// - 知道所属服务器（入库查询给的）：只在它上面按 ID 找，不要求外部编号对上（服务器没刮到编号也能认）；
+  ///   其他服务器上同号的条目是别的片，只按外部编号找。
+  /// - 不知道所属服务器（旧缓存）：`strict`（启用了多台服务器）时要外部编号对上；只启用了一台时 ID 只可能来自它，只比类型。
+  static func idFallbackStrictness(on server: String, owner: String?, strict: Bool) -> Bool? {
+    guard let owner else { return strict }
+    return owner == server ? false : nil
+  }
+
+  /// 可恢复的失败交给调用方记下、接着试别的（另一份副本、按 ID 补查）：服务器报错、回包无法识别、条目读取被拒等。
+  /// 影响整台服务器的失败（连不上、证书、密钥无效等，见 `MediaServerError.Reason.isServerWide`）和取消照常抛出，
+  /// 由 `withConnection` 换地址或重读配置后重试，或者直接报给用户。
+  private static func recovering<T>(_ work: () async throws -> T) async throws -> Result<T, Error> {
+    do {
+      return .success(try await work())
+    } catch let error where error is CancellationError || (error as? MediaServerError)?.reason.isServerWide == true {
+      throw error
+    } catch {
+      return .failure(error)
+    }
+  }
+
+  /// 可在应用内播放的服务器，`preferring` 指定的排在最前，其余保持 MoviePilot 配置顺序。
+  private static func playableServers(in servers: [MediaServerConf], preferring name: String?) -> [MediaServerConf] {
+    let playable = servers.filter(\.supportsInAppPlayback)
+    guard let name, let index = playable.firstIndex(where: { $0.name == name }) else { return playable }
+    var ordered = playable
+    ordered.insert(ordered.remove(at: index), at: 0)
+    return ordered
+  }
+
+  /// 在一台服务器上找详情页的条目（电影或整部剧），返回这台服务器自己的条目（ID 可能与 MoviePilot 给的不同）。
+  /// 先按外部编号找（同一部片在各台服务器上 ID 不同也能找到），找到就用；找不到再按 MoviePilot 给的 ID 兜底（见 `idFallbackStrictness`）。
+  /// 都没找到、但其中一步出错时抛出那个错误（先报按外部编号查找的）：无法确认这台上没有。
   private static func findLibraryItem(
-    _ itemID: String, expected: LibraryItemExpectation, strict: Bool, on connection: EmbyConnection
-  ) async throws -> EmbyItem? {
-    let keys = expected.providerSearchKeys
-    if !keys.isEmpty {
-      do {
-        let found = try await connection.client.items(
-          withAnyProviderID: keys, type: expected.type, userID: connection.userID, timeout: EmbyClient.quickTimeout)
-        if let item = found.first(where: { expected.accepts($0, strict: true) }) { return item }
-      } catch EmbyClientError.http(_) {
-        // 搜索被拒绝时退回按 ID 查；连不上等错误照常抛出。
+    _ itemID: String, expected: LibraryItemExpectation, owner: String?, strict: Bool,
+    on connection: any MediaServerConnection
+  ) async throws -> ServerMediaItem? {
+    var searchFailure: Error?
+    switch try await recovering({ try await connection.items(matching: expected) }) {
+    case .success(let items):
+      if let item = items.first(where: { expected.accepts($0, strict: true) }) { return item }
+    case .failure(let error):
+      searchFailure = error
+    }
+    guard let strictness = idFallbackStrictness(on: connection.serverName, owner: owner, strict: strict) else {
+      if let searchFailure { throw searchFailure }
+      return nil
+    }
+    switch try await recovering({ try await connection.item(id: itemID, timeout: MediaServerHTTP.quickTimeout) }) {
+    case .success(let item?) where expected.accepts(item, strict: strictness):
+      return item
+    case .success:
+      if let searchFailure { throw searchFailure }
+      return nil
+    case .failure(let error):
+      throw searchFailure ?? error
+    }
+  }
+
+  // MARK: - 按集播放
+
+  /// 详情页每一集能不能播，与 `episodes` 一一对应：在各台可播放的服务器上按 TMDB 单集 ID 找，第一台有的为准。
+  /// 不提供应用内播放（非管理员、后端版本过低、没有可播放的服务器）时返回 nil，详情页不显示播放状态。
+  /// 结果不含会话校验，调用方在发布时复核会话。
+  /// `forceRefresh` 时重新读各服务器上这部剧的集（比如重新进入详情页），不沿用缓存。
+  func episodeAvailability(
+    for episodes: [MoviePilotEpisode], context: EpisodePlaybackContext, forceRefresh: Bool = false
+  ) async -> [EpisodeAvailability]? {
+    guard !isTornDown, allowsPlayback, let apiService else { return nil }
+    let servers: [MediaServerConf]
+    do {
+      servers = try await apiService.fetchCachedMediaServers()
+    } catch {
+      if error is CancellationError || Task.isCancelled { return nil }
+      let failure = EpisodeAvailability.failed("没能从 MoviePilot 读取媒体服务器配置：\(Self.message(for: error))")
+      return episodes.map { _ in failure }
+    }
+    guard servers.contains(where: \.supportsInAppPlayback) else { return nil }
+    let lookups = await episodeLookups(
+      context, servers: servers, preferredUserName: apiService.currentOrStoredUserName, forceRefresh: forceRefresh)
+    guard !Task.isCancelled else { return nil }
+    return episodes.map { EpisodeAvailability.resolve($0, lookups: lookups) }
+  }
+
+  /// 在每台可播放的服务器上读这部剧的集索引，单台失败只记在它自己的结果里。各台互不依赖，同时读；
+  /// 结果按服务器顺序排（所属服务器在前，第一台有的为准）。取消时只返回已经读到的。
+  private func episodeLookups(
+    _ context: EpisodePlaybackContext, servers: [MediaServerConf], preferredUserName: String?,
+    excluding excluded: String? = nil, forceRefresh: Bool = false
+  ) async -> [ServerEpisodeLookup] {
+    let strict = Self.requiresStrictMatch(servers)
+    let targets = Self.playableServers(in: servers, preferring: context.libraryItem?.server)
+      .filter { $0.name != excluded }
+    var lookups = [ServerEpisodeLookup?](repeating: nil, count: targets.count)
+    await withTaskGroup(of: (Int, ServerEpisodeLookup?).self) { group in
+      for position in targets.indices {
+        let server = targets[position]
+        group.addTask {
+          let lookup = await self.episodeLookup(
+            context, on: server, strict: strict, preferredUserName: preferredUserName, forceRefresh: forceRefresh)
+          return (position, lookup)
+        }
+      }
+      for await result in group {
+        lookups[result.0] = result.1
       }
     }
-    guard
-      let item = try await connection.client.item(
-        id: itemID, userID: connection.userID, timeout: EmbyClient.quickTimeout)
-    else { return nil }
-    return expected.accepts(item, strict: strict) ? item : nil
+    return lookups.compactMap { $0 }
+  }
+
+  /// 一台服务器上这部剧的集索引；取消时为 nil。失败的说明已写明服务器和那一步（见 `MediaServerError`）。
+  private func episodeLookup(
+    _ context: EpisodePlaybackContext, on server: MediaServerConf, strict: Bool, preferredUserName: String?,
+    forceRefresh: Bool
+  ) async -> ServerEpisodeLookup? {
+    do {
+      let index = try await withConnection(to: server, preferredUserName: preferredUserName) {
+        try await self.episodeIndex(context, on: $0, strict: strict, forceRefresh: forceRefresh)
+      }
+      return .loaded(index)
+    } catch {
+      if error is CancellationError || Task.isCancelled { return nil }
+      return .failed(server: server.name, message: Self.message(for: error))
+    }
+  }
+
+  /// 一台服务器上这部剧的集索引，缓存 `episodeIndexTTL`，见 `loadEpisodeIndex`。
+  private func episodeIndex(
+    _ context: EpisodePlaybackContext, on connection: any MediaServerConnection, strict: Bool,
+    forceRefresh: Bool = false
+  ) async throws -> ServerEpisodeIndex {
+    let key = [
+      connection.serverName, connection.reportingServer.absoluteString, connection.userID, context.seriesLookupKey,
+      strict ? "strict" : "",
+    ].joined(separator: "|")
+    return try await episodeIndexes.value(for: key, forceRefresh: forceRefresh, validate: validateNotTornDown) {
+      try await Self.loadEpisodeIndex(context, on: connection, strict: strict)
+    }
+  }
+
+  /// 播放中的当前服务器上这部剧的集索引，`strict` 按当前的服务器配置。
+  private func sessionEpisodeIndex(
+    _ context: EpisodePlaybackContext, on connection: any MediaServerConnection, forceRefresh: Bool = false
+  ) async throws -> ServerEpisodeIndex {
+    guard let apiService else { throw CancellationError() }
+    let servers = try await apiService.fetchCachedMediaServers()
+    return try await episodeIndex(
+      context, on: connection, strict: Self.requiresStrictMatch(servers), forceRefresh: forceRefresh)
+  }
+
+  /// 读一台服务器上这部剧的集。先找出对得上的整剧条目：按外部编号找到的（同一部剧可能在几个媒体库里各有一个）都留着，
+  /// 再按入库记录里的 ID 补上那一份（见 `idFallbackStrictness`）；然后逐份读集。
+  /// 某一步失败（按外部编号查找、按 ID 补查、某一份的集）时用读到的那些，并记下没读全；一份都没读到时抛出错误。
+  private static func loadEpisodeIndex(
+    _ context: EpisodePlaybackContext, on connection: any MediaServerConnection, strict: Bool
+  ) async throws -> ServerEpisodeIndex {
+    var failures: [Error] = []
+    var series: [ServerMediaItem] = []
+    switch try await recovering({ try await connection.items(matching: context.expected) }) {
+    case .success(let items): series = items.filter { context.expected.accepts($0, strict: true) }
+    case .failure(let error): failures.append(error)
+    }
+    if let ref = context.libraryItem, !series.contains(where: { $0.id == ref.itemID }),
+      let strictness = idFallbackStrictness(on: connection.serverName, owner: ref.server, strict: strict)
+    {
+      switch try await recovering({ try await connection.item(id: ref.itemID, timeout: MediaServerHTTP.quickTimeout) }) {
+      case .success(let item?) where context.expected.accepts(item, strict: strictness): series.append(item)
+      case .success: break
+      case .failure(let error): failures.append(error)
+      }
+    }
+    if series.isEmpty, let failure = failures.first { throw failure }
+    var episodes: [ServerMediaItem] = []
+    var copyFailures: [Error] = []
+    for copy in series {
+      switch try await recovering({ try await connection.episodes(seriesID: copy.id) }) {
+      case .success(let items): episodes += items
+      case .failure(let error): copyFailures.append(error)
+      }
+    }
+    if let failure = copyFailures.first, copyFailures.count == series.count { throw failure }
+    let incomplete = (failures + copyFailures).first.map { message(for: $0) }
+    if let incomplete {
+      Logger.warning("[Playback] “\(connection.serverName)”上这部剧没有读全: \(incomplete)")
+    }
+    return ServerEpisodeIndex(
+      serverName: connection.serverName, hasSeries: !series.isEmpty, episodes: episodes, incompleteReason: incomplete)
+  }
+
+  /// 按集起播：先用缓存的集索引逐台试（入库查询给的所属服务器在前），第一台能播的为准。都不行时，重读缓存里有这部剧、
+  /// 却没能播这一集的服务器再试一次：这一集可能刚入库，缓存给的条目可能已经删了或重新刮削成了别的集，也可能上次没读全。
+  /// 别的服务器缓存里就能播时，不为所属服务器上刚入库的可能先重读一遍整部剧。服务器报错不自动重试（先试其他副本和服务器）。
+  /// 每台服务器的读取和起播都在 `withConnection` 里，缓存的地址连不上时换地址重试。
+  private func prepareEpisode(
+    _ queued: QueuedEpisode, servers: [MediaServerConf], preferredUserName: String?,
+    certificateFailures: inout [String: MediaServerError]
+  ) async throws -> PreparedPlayback {
+    guard let tmdbEpisodeID = queued.episode.tmdbEpisodeID else {
+      throw PlaybackError.episodeUnavailable(EpisodeAvailability.UnidentifiableReason.missingEpisodeID.message)
+    }
+    let candidates = Self.playableServers(in: servers, preferring: queued.context.libraryItem?.server)
+    guard !candidates.isEmpty else { throw PlaybackError.noPlayableServer }
+    let strict = Self.requiresStrictMatch(servers)
+    var lookups: [String: ServerEpisodeLookup] = [:]
+    var firstError: Error?
+    var missingIdentity: PlaybackError?
+    var outdated: [MediaServerConf] = []
+    for refresh in [false, true] {
+      for server in refresh ? outdated : candidates {
+        do {
+          let (index, attempt) = try await withPreparationConnection(
+            to: server, preferredUserName: preferredUserName, certificateFailures: &certificateFailures
+          ) {
+            connection in
+            let index = try await self.episodeIndex(
+              queued.context, on: connection, strict: strict, forceRefresh: refresh)
+            let attempt = try await Self.prepareFirstPlayable(
+              index.playableEpisodes(tmdbEpisodeID: tmdbEpisodeID), on: connection, episode: queued,
+              tmdbEpisodeID: tmdbEpisodeID)
+            return (index, attempt)
+          }
+          if let prepared = attempt.prepared { return prepared }
+          lookups[server.name] = .loaded(index)
+          if firstError == nil { firstError = attempt.error }
+          if missingIdentity == nil { missingIdentity = attempt.missingIdentity }
+          let isMissing = index.playableEpisodes(tmdbEpisodeID: tmdbEpisodeID).isEmpty
+          if !refresh, index.hasSeries, isMissing || attempt.foundStale || index.incompleteReason != nil {
+            outdated.append(server)
+          }
+        } catch let error where error is CancellationError {
+          throw error
+        } catch {
+          if firstError == nil { firstError = error }
+          lookups[server.name] = .failed(server: server.name, message: Self.message(for: error))
+        }
+      }
+    }
+    if let firstError { throw firstError }
+    let availability = EpisodeAvailability.resolve(
+      queued.episode, lookups: candidates.compactMap { lookups[$0.name] })
+    if case .failed(let reason) = availability { throw PlaybackError.episodeUnavailable(reason) }
+    throw missingIdentity
+      ?? PlaybackError.episodeUnavailable(availability.message ?? EpisodeAvailability.notOnServerMessage)
+  }
+
+  /// 在一台服务器上起播一集的结果。
+  struct EpisodeAttempt {
+    var prepared: PreparedPlayback?
+    /// 第一份读取失败的原因（服务器报错、拒绝播放等，已写明服务器和那一步）
+    var failure: Error?
+    /// 都不能直连时，第一份的原因
+    var unsupported: PlaybackError?
+    /// 集索引里有匹配，重新读取条目却拿不到它的单集编号。
+    var missingIdentity: PlaybackError?
+    /// 重新读取条目时未能确认索引里的匹配，需要刷新集索引。
+    var foundStale = false
+
+    /// 都没播成时报给用户的原因：读取失败在前（稍后重试可能就好），不能直连在后；都没有时为 nil。
+    var error: Error? { failure ?? unsupported }
+  }
+
+  private enum EpisodeCandidate {
+    case prepared(PreparedPlayback)
+    case stale
+    case missingEpisodeID
+  }
+
+  /// 同一集在一台服务器上的各个条目（不同媒体库各一个）逐个试：先重新读条目，续播点以服务器此刻为准；
+  /// 重新确认 TMDB 单集 ID 一致后才准备播放。无法确认、读取失败或不能直连时，继续试其他副本。
+  private static func prepareFirstPlayable(
+    _ candidates: [ServerMediaItem], on connection: any MediaServerConnection, episode: QueuedEpisode,
+    tmdbEpisodeID: Int
+  ) async throws -> EpisodeAttempt {
+    var attempt = EpisodeAttempt()
+    for candidate in candidates {
+      let result = try await recovering { () -> EpisodeCandidate in
+        guard let fresh = try await connection.item(id: candidate.id, timeout: nil), fresh.kind == .episode
+        else { return .stale }
+        guard let freshID = fresh.tmdbEpisodeID else { return .missingEpisodeID }
+        guard freshID == tmdbEpisodeID else { return .stale }
+        return .prepared(try await preparePlayback(fresh, on: connection, episode: episode))
+      }
+      switch result {
+      case .success(.prepared(let prepared)):
+        attempt.prepared = prepared
+        return attempt
+      case .success(.stale):
+        attempt.foundStale = true
+      case .success(.missingEpisodeID):
+        attempt.foundStale = true
+        attempt.missingIdentity = .episodeUnavailable(
+          "无法确认这一集：媒体服务器“\(connection.serverName)”重新读取的剧集条目缺少 TMDB 编号，可刷新元数据后重试")
+      case .failure(let error):
+        if case .unsupported(let reason)? = error as? PlaybackError {
+          if attempt.unsupported == nil { attempt.unsupported = .unsupported(reason) }
+        } else if attempt.failure == nil {
+          attempt.failure = error
+        }
+      }
+    }
+    return attempt
+  }
+
+  /// 播放中换到另一集：先试要求的条目；它已经不在、对不上、读取失败或不能直连（比如远程链接）时，才读集索引，
+  /// 试同一集在这台服务器上的其他条目（要求的条目过时了就重读集索引）。
+  /// 都没播成时：有读取失败或不能直连就报它；否则按集索引说明（没读全时说是哪一步失败，见 `ServerEpisodeIndex.availability`）。
+  private func prepareSwitchedEpisode(
+    _ itemID: String, _ queued: QueuedEpisode, on connection: any MediaServerConnection
+  ) async throws -> PreparedPlayback {
+    guard let tmdbEpisodeID = queued.episode.tmdbEpisodeID else {
+      throw PlaybackError.episodeUnavailable(EpisodeAvailability.UnidentifiableReason.missingEpisodeID.message)
+    }
+    let requested = try await Self.prepareFirstPlayable(
+      [ServerMediaItem(id: itemID, kind: .episode)], on: connection, episode: queued, tmdbEpisodeID: tmdbEpisodeID)
+    if let prepared = requested.prepared { return prepared }
+    let index: ServerEpisodeIndex
+    do {
+      index = try await sessionEpisodeIndex(queued.context, on: connection, forceRefresh: requested.foundStale)
+    } catch let error where !(error is CancellationError) {
+      throw requested.error ?? error
+    }
+    let alternates = index.playableEpisodes(tmdbEpisodeID: tmdbEpisodeID).filter { $0.id != itemID }
+    let alternate = try await Self.prepareFirstPlayable(
+      alternates, on: connection, episode: queued, tmdbEpisodeID: tmdbEpisodeID)
+    if let prepared = alternate.prepared { return prepared }
+    if let error = requested.failure ?? alternate.failure ?? requested.unsupported ?? alternate.unsupported {
+      throw error
+    }
+    let availability = index.availability(of: tmdbEpisodeID)
+    if case .failed(let reason) = availability { throw PlaybackError.episodeUnavailable(reason) }
+    if let missingIdentity = requested.missingIdentity ?? alternate.missingIdentity { throw missingIdentity }
+    switch availability {
+    case .playable, .notOnServer:
+      throw PlaybackError.episodeUnavailable("媒体服务器“\(connection.serverName)”上已经找不到这一集")
+    case let other:
+      throw PlaybackError.episodeUnavailable(other.message ?? EpisodeAvailability.notOnServerMessage)
+    }
+  }
+
+  // MARK: - 播放队列（上一集、下一集）
+
+  func adjacentEpisode(
+    _ direction: EpisodeNavigator.Direction, from playback: PreparedPlayback, refresh: Bool = false
+  ) async throws -> EpisodeNavigator.Outcome {
+    guard let queued = playback.episode else { return .end }
+    var refreshedIndex: ServerEpisodeIndex?
+    var refreshedSeason: [MoviePilotEpisode]?
+    if refresh {
+      // 播完一集要接着播时重新读一次：播放期间下一集可能刚入库（订阅还在下载后面的集），不能沿用开播时的结果。
+      // 只刷新当前服务器和当前季。两项互不依赖，同时发出、分别等结果，一项失败不影响另一项；成功的直接用于这次找下一集，
+      // 失败的照常用缓存。当前季重新读到的列表不可信时，按这一集所在的那份找（见 `EpisodeNavigator.currentSeasonList`）。
+      async let index = refreshedEpisodeIndex(queued.context, on: playback.connection)
+      async let season = refreshedSeasonEpisodes(queued.context, season: queued.episode.seasonNumber)
+      (refreshedIndex, refreshedSeason) = await (index, season)
+      try Task.checkCancellation()
+    }
+    var episodeIDsOnServer: Set<Int>?
+    if direction == .previous {
+      let index =
+        if let refreshedIndex { refreshedIndex } else {
+          try? await sessionEpisodeIndex(queued.context, on: playback.connection)
+        }
+      episodeIDsOnServer = index.map { Set($0.episodesByTMDBID.keys) }
+    }
+    return try await EpisodeNavigator.adjacent(
+      direction, from: queued, currentItemID: playback.item.id, episodeIDsOnServer: episodeIDsOnServer,
+      loadSeason: { [weak self] season in
+        guard let self else { throw CancellationError() }
+        if season == queued.episode.seasonNumber, let refreshedSeason { return refreshedSeason }
+        return try await self.seasonEpisodes(queued.context, season: season)
+      },
+      status: { [weak self] episode in
+        guard let self else { throw CancellationError() }
+        return try await self.queueStatus(
+          episode, context: queued.context, current: playback.connection, currentIndex: refreshedIndex)
+      })
+  }
+
+  /// 播完时重读当前服务器上这部剧的集；失败记日志、返回 nil，照常用缓存。
+  private func refreshedEpisodeIndex(
+    _ context: EpisodePlaybackContext, on connection: any MediaServerConnection
+  ) async -> ServerEpisodeIndex? {
+    do {
+      return try await sessionEpisodeIndex(context, on: connection, forceRefresh: true)
+    } catch {
+      if !(error is CancellationError) {
+        Logger.warning("[Playback] 重新读取当前服务器上的剧集失败: \(Self.message(for: error))")
+      }
+      return nil
+    }
+  }
+
+  /// 播完时重读当前季的 MoviePilot 集列表；失败记日志、返回 nil，照常用缓存。
+  private func refreshedSeasonEpisodes(_ context: EpisodePlaybackContext, season: Int) async -> [MoviePilotEpisode]? {
+    do {
+      return try await seasonEpisodes(context, season: season, forceRefresh: true)
+    } catch {
+      if !(error is CancellationError) {
+        Logger.warning("[Playback] 重新读取第 \(season) 季集列表失败: \(Self.message(for: error))")
+      }
+      return nil
+    }
+  }
+
+  /// 队列面板只列当前服务器上能播的集，不必连其他服务器；读不到当前服务器的集时报错。
+  /// 正在播的那一季读不到、或读到的列表里没有这一集时，用这一集所在的那份（见 `EpisodeNavigator.currentSeasonList`）。
+  func playableEpisodes(inSeason season: Int, from playback: PreparedPlayback) async throws -> [EpisodeQueueEntry] {
+    guard let queued = playback.episode else { return [] }
+    let isCurrentSeason = season == queued.episode.seasonNumber
+    let list: [MoviePilotEpisode]
+    do {
+      let loaded = try await seasonEpisodes(queued.context, season: season)
+      list = isCurrentSeason ? EpisodeNavigator.currentSeasonList(queued, loaded: loaded) ?? loaded : loaded
+    } catch let error where isCurrentSeason && !(error is CancellationError) {
+      guard let known = EpisodeNavigator.currentSeasonList(queued, loaded: nil) else { throw error }
+      list = known
+    }
+    let current = ServerEpisodeLookup.loaded(try await sessionEpisodeIndex(queued.context, on: playback.connection))
+    return try await EpisodeNavigator.playableEntries(in: list) { episode in
+      EpisodeQueueStatus.onCurrentServer(episode, lookup: current) ?? .absent
+    }
+  }
+
+  /// 正在播的这部剧在这次会话里读到过的非空集列表，按季。
+  private struct KnownSeasons {
+    let series: String
+    var lists: [Int: [MoviePilotEpisode]] = [:]
+  }
+
+  /// MoviePilot 在这一季确实没有集和读 TMDB 失败时都返回空列表；接口缓存过期或被空列表覆盖后就没有旧值了，所以另外记一份。
+  /// 只记正在播的这部剧（换剧就清掉），随作用域拆除。
+  private var knownSeasons: KnownSeasons?
+
+  /// 一季的 MoviePilot 集列表。读到非空列表就记下；读到空列表或读取失败时，有这次会话里读到过的那份（可信的旧列表）就用它。
+  /// 没有旧列表时空列表照常返回、读取失败照常抛出，由调用方说明（见 `EpisodeNavigator.adjacent`）。
+  private func seasonEpisodes(
+    _ context: EpisodePlaybackContext, season: Int, forceRefresh: Bool = false
+  ) async throws -> [MoviePilotEpisode] {
+    let series = "\(context.tmdbID)|\(context.episodeGroup ?? "")"
+    let known = knownSeasons?.series == series ? knownSeasons?.lists[season] : nil
+    let list: [MoviePilotEpisode]
+    do {
+      list = try await moviePilotEpisodes(context, season: season, forceRefresh: forceRefresh)
+    } catch let error where !(error is CancellationError) {
+      guard let known else { throw error }
+      Logger.warning("[Playback] 第 \(season) 季集列表读取失败，用之前读到的: \(Self.message(for: error))")
+      return known
+    }
+    guard !list.isEmpty else {
+      if known != nil { Logger.warning("[Playback] MoviePilot 返回的第 \(season) 季集列表是空的，用之前读到的") }
+      return known ?? []
+    }
+    if knownSeasons?.series != series { knownSeasons = KnownSeasons(series: series) }
+    knownSeasons?.lists[season] = list
+    return list
+  }
+
+  private func moviePilotEpisodes(
+    _ context: EpisodePlaybackContext, season: Int, forceRefresh: Bool = false
+  ) async throws -> [MoviePilotEpisode] {
+    guard let apiService else { throw CancellationError() }
+    let episodes = try await apiService.fetchTmdbEpisodes(
+      tmdbID: context.tmdbID, season: season, episodeGroup: context.episodeGroup, forceRefresh: forceRefresh)
+    return MoviePilotEpisode.list(episodes, season: season)
+  }
+
+  /// 一集相对当前服务器的状态。先只看当前服务器：能播、或当前服务器就无法确认时，不必连其他服务器
+  /// （见 `EpisodeQueueStatus.onCurrentServer`）；当前服务器上没有时，再看其他服务器以区分“在别处”和“确认没有”。
+  /// `currentIndex` 是刚重读到的当前服务器的集索引（播完时），没有时读缓存。
+  private func queueStatus(
+    _ episode: MoviePilotEpisode, context: EpisodePlaybackContext, current: any MediaServerConnection,
+    currentIndex: ServerEpisodeIndex? = nil
+  ) async throws -> EpisodeQueueStatus {
+    guard let apiService else { throw CancellationError() }
+    let servers = try await apiService.fetchCachedMediaServers()
+    let currentLookup: ServerEpisodeLookup
+    if let currentIndex {
+      currentLookup = .loaded(currentIndex)
+    } else {
+      do {
+        currentLookup = .loaded(
+          try await episodeIndex(context, on: current, strict: Self.requiresStrictMatch(servers)))
+      } catch let error where !(error is CancellationError) {
+        currentLookup = .failed(server: current.serverName, message: Self.message(for: error))
+      }
+    }
+    if let status = EpisodeQueueStatus.onCurrentServer(episode, lookup: currentLookup) { return status }
+    let others = await episodeLookups(
+      context, servers: servers, preferredUserName: apiService.currentOrStoredUserName, excluding: current.serverName)
+    try Task.checkCancellation()
+    return EpisodeQueueStatus.resolve(episode, current: currentLookup, others: others)
   }
 
   // MARK: - 解析
@@ -314,64 +850,75 @@ final class PlaybackCoordinator: ObservableObject {
   }
 
   /// 媒体服务器配置很少变化，平时用会话缓存；解析失败时重新读一次，
-  /// 地址、密钥或服务器列表确实变了才用新配置重试，没变就原样报告失败。
+  /// 配置确实变了才用新配置重试。遇到证书错误的服务器只尝试用户新配置的连接地址。
   private func prepare(_ target: PlaybackTarget, preferredUserName: String?) async throws -> PreparedPlayback {
     await reporter.waitForQueued(atMost: Self.pendingReportWait)
     try Task.checkCancellation()
     guard let apiService else { throw CancellationError() }
     let servers = try await apiService.fetchCachedMediaServers()
+    var certificateFailures: [String: MediaServerError] = [:]
     do {
-      return try await prepare(target, servers: servers, preferredUserName: preferredUserName)
+      return try await prepare(
+        target, servers: servers, preferredUserName: preferredUserName, certificateFailures: &certificateFailures)
     } catch let error where !(error is CancellationError) {
       let fresh = try? await apiService.fetchCachedMediaServers(forceRefresh: true)
       try Task.checkCancellation()
       guard let fresh, fresh != servers else { throw error }
-      return try await prepare(target, servers: fresh, preferredUserName: preferredUserName)
+      return try await prepare(
+        target, servers: fresh, preferredUserName: preferredUserName, certificateFailures: &certificateFailures)
     }
   }
 
   private func prepare(
-    _ target: PlaybackTarget, servers: [MediaServerConf], preferredUserName: String?
+    _ target: PlaybackTarget, servers: [MediaServerConf], preferredUserName: String?,
+    certificateFailures: inout [String: MediaServerError]
   ) async throws -> PreparedPlayback {
     let itemID: String
     let expected: LibraryItemExpectation?
+    var owner: String?
     let candidates: [MediaServerConf]
     switch target {
-    case .libraryItem(let id, let expectation):
+    case .libraryItem(let id, let expectation, let libraryOwner):
       itemID = id
       expected = expectation
-      candidates = servers.filter(\.supportsInAppPlayback)
-      guard !candidates.isEmpty else { throw PlaybackError.noEmbyServer }
+      owner = libraryOwner
+      candidates = Self.playableServers(in: servers, preferring: libraryOwner)
+      guard !candidates.isEmpty else { throw PlaybackError.noPlayableServer }
     case .serverItem(let serverName, let id):
       itemID = id
       expected = nil
       guard let server = servers.first(where: { $0.name == serverName }) else {
-        throw PlaybackError.noEmbyServer
+        throw PlaybackError.noPlayableServer
       }
       guard server.supportsInAppPlayback else {
-        throw server.type.lowercased() == "emby"
-          ? PlaybackError.noEmbyServer : PlaybackError.serverNotSupported(server.name)
+        throw MediaServerAdapters.supportsInAppPlayback(type: server.type)
+          ? PlaybackError.noPlayableServer : PlaybackError.serverNotSupported(server.name)
       }
       candidates = [server]
+    case .episode(let queued):
+      return try await prepareEpisode(
+        queued, servers: servers, preferredUserName: preferredUserName, certificateFailures: &certificateFailures)
     }
 
-    // 媒体库条目逐台找，第一台找到的为准。MoviePilot `/mediaserver/play` 只拿 ID 逐台试、认第一台有这个 ID 的，
-    // 这里按外部编号找、核对类型，撞号时不播错片，各台 ID 不同也能找到。
-    let strict = servers.filter(\.isEnabled).count > 1
+    // 媒体库条目逐台找（所属服务器在前），第一台找到的为准。MoviePilot `/mediaserver/play` 只拿 ID 逐台试、
+    // 认第一台有这个 ID 的；这里按外部编号找、只在所属服务器上按 ID 兜底，撞号时不播错片，各台 ID 不同也能找到。
+    let strict = Self.requiresStrictMatch(servers)
     var firstError: Error?
     for server in candidates {
       do {
-        let prepared = try await withConnection(to: server, preferredUserName: preferredUserName) {
+        let prepared = try await withPreparationConnection(
+          to: server, preferredUserName: preferredUserName, certificateFailures: &certificateFailures
+        ) {
           connection -> PreparedPlayback? in
-          let found: EmbyItem?
+          let found: ServerMediaItem?
           if let expected {
-            found = try await Self.findLibraryItem(itemID, expected: expected, strict: strict, on: connection)
+            found = try await Self.findLibraryItem(
+              itemID, expected: expected, owner: owner, strict: strict, on: connection)
           } else {
-            found = try await connection.client.item(
-              id: itemID, userID: connection.userID, timeout: EmbyClient.quickTimeout)
+            found = try await connection.item(id: itemID, timeout: MediaServerHTTP.quickTimeout)
           }
           guard let item = found else { return nil }
-          return try await Self.preparePlayback(client: connection.client, userID: connection.userID, item: item)
+          return try await Self.preparePlayback(item, on: connection)
         }
         if let prepared { return prepared }
       } catch let error where error is CancellationError {
@@ -383,118 +930,119 @@ final class PlaybackCoordinator: ObservableObject {
     throw firstError ?? PlaybackError.notFound
   }
 
+  /// 电影、单集直接播；整部剧从第一集开始（不带集列表上下文，没有上一集、下一集）。
   private static func preparePlayback(
-    client: EmbyClient, userID: String, item requested: EmbyItem, preferredSourceID: String? = nil
+    _ requested: ServerMediaItem, on connection: any MediaServerConnection, preferredSourceID: String? = nil,
+    episode: QueuedEpisode? = nil
   ) async throws -> PreparedPlayback {
-    // 剧集先简单处理：从第 1 季第 1 集开始。
-    let item: EmbyItem
-    switch requested.type {
-    case "Movie", "Episode":
+    let item: ServerMediaItem
+    switch requested.kind {
+    case .movie, .episode:
       item = requested
-    case "Series":
-      let episodes = try await client.episodes(seriesID: requested.id, userID: userID)
-      guard let first = EmbyEpisodeOrder.firstEpisode(in: episodes) else {
+    case .series:
+      let episodes = try await connection.episodes(seriesID: requested.id)
+      guard let first = PlaybackEpisodeOrder.firstEpisode(in: episodes) else {
         throw PlaybackError.noEpisodes
       }
       item = first
-    default:
+    case .other:
       throw PlaybackError.unsupportedItemType
     }
-    let info = try await client.playbackInfo(itemID: item.id, userID: userID)
-    if let code = info.errorCode, !code.isEmpty, info.mediaSources.isEmpty {
-      throw PlaybackError.server("Emby 拒绝播放：\(code)")
-    }
-    let selection: EmbyDirectPlay.Selection
-    let preferred = preferredSourceID.flatMap { id in info.mediaSources.first { $0.id == id } }
-    switch preferred.map({ EmbyDirectPlay.evaluate($0) }) ?? EmbyDirectPlay.select(from: info.mediaSources) {
-    case .success(let value): selection = value
-    case .failure(let reason): throw PlaybackError.unsupported(reason)
-    }
-    let streamURL = try client.directStreamURL(
-      itemID: item.id, selection: selection, playSessionID: info.playSessionID)
-    return PreparedPlayback(
-      client: client, userID: userID, item: item, selection: selection,
-      playSessionID: info.playSessionID, streamURL: streamURL, mediaSources: info.mediaSources)
+    let stream = try await connection.prepareStream(for: item, preferredSourceID: preferredSourceID)
+    return PreparedPlayback(connection: connection, stream: stream, episode: episode)
   }
 
   // MARK: - 连接
 
-  /// 用缓存的连接执行；地址连不上时（如离开了内网）重新探测一次再执行。
-  private func withConnection<T>(
-    to server: MediaServerConf, preferredUserName: String?,
-    _ body: (EmbyConnection) async throws -> T
-  ) async throws -> T {
-    do {
-      return try await body(try await connection(to: server, preferredUserName: preferredUserName))
-    } catch EmbyClientError.unreachable {
-      try Task.checkCancellation()
-    }
-    return try await body(
-      try await connection(to: server, preferredUserName: preferredUserName, forceRefresh: true))
-  }
-
-  /// 取缓存的连接；缓存是按旧配置或旧 MoviePilot 用户名建立的，就重新连接。
-  private func connection(
-    to server: MediaServerConf, preferredUserName: String?, forceRefresh: Bool = false
-  ) async throws -> EmbyConnection {
-    guard let config = server.config, config.apiKey != nil else { throw PlaybackError.noEmbyServer }
-    let validate = { [weak self] in
+  private var validateNotTornDown: () throws -> Void {
+    { [weak self] in
       try Task.checkCancellation()
       guard self?.isTornDown == false else { throw CancellationError() }
     }
-    let load: @MainActor () async throws -> EmbyConnection = { [weak self] in
-      guard let self else { throw CancellationError() }
-      return try await self.connect(server, config: config, preferredUserName: preferredUserName)
+  }
+
+  /// 证书失败后只尝试不在原候选地址中的新地址，即使原地址仍保留在配置中。
+  private func withPreparationConnection<T>(
+    to server: MediaServerConf, preferredUserName: String?, certificateFailures: inout [String: MediaServerError],
+    _ body: (any MediaServerConnection) async throws -> T
+  ) async throws -> T {
+    if let failure = certificateFailures[server.name] {
+      let newAddresses = (server.config?.candidateBaseURLs ?? []).filter { address in
+        !failure.certificateOrigins.contains(MediaServerBaseURL.Origin(address))
+      }
+      guard !newAddresses.isEmpty else { throw failure }
+      let connection = try await connection(
+        to: server, preferredUserName: preferredUserName, restrictedAddresses: newAddresses)
+      return try await body(connection)
     }
+    do {
+      return try await withConnection(to: server, preferredUserName: preferredUserName, body)
+    } catch let failure as MediaServerError where failure.reason == .certificate {
+      certificateFailures[server.name] = failure
+      throw failure
+    }
+  }
+
+  /// 用缓存的连接执行，按失败原因（见 `MediaServerError.Reason`）各重试一次：
+  /// - 连不上（如离开了内网）：重新探测地址再执行。
+  /// - 密钥无效（HTTP 401）：密钥可能刚在 MoviePilot 里改过，重读一次服务器配置，变了就用新配置再执行，没变就照常报错。
+  /// 其他失败（证书、权限、服务器报错等）不重试。
+  private func withConnection<T>(
+    to server: MediaServerConf, preferredUserName: String?,
+    _ body: (any MediaServerConnection) async throws -> T
+  ) async throws -> T {
+    func attempt(_ target: MediaServerConf, forceRefresh: Bool = false) async throws -> T {
+      do {
+        return try await body(
+          try await connection(to: target, preferredUserName: preferredUserName, forceRefresh: forceRefresh))
+      } catch var failure as MediaServerError where failure.reason == .certificate {
+        let addresses = (server.config?.candidateBaseURLs ?? []) + (target.config?.candidateBaseURLs ?? [])
+        failure.certificateOrigins.formUnion(addresses.map(MediaServerBaseURL.Origin.init))
+        throw failure
+      }
+    }
+    do {
+      return try await attempt(server)
+    } catch let error as MediaServerError where error.reason == .unreachable {
+      try Task.checkCancellation()
+      return try await attempt(server, forceRefresh: true)
+    } catch let error as MediaServerError where error.reason == .unauthorized {
+      try Task.checkCancellation()
+      guard let fresh = try? await apiService?.fetchCachedMediaServers(forceRefresh: true),
+        let updated = fresh.first(where: { $0.name == server.name }), updated.config != server.config
+      else { throw error }
+      return try await attempt(updated)
+    }
+  }
+
+  /// 取缓存的连接；缓存是按旧配置或旧 MoviePilot 用户名建立的，就重新连接。
+  /// 按服务器类型和名称缓存：同名服务器改了类型（比如 Emby 换成 Jellyfin）时换用新类型的适配器。
+  private func connection(
+    to server: MediaServerConf, preferredUserName: String?, forceRefresh: Bool = false, restrictedAddresses: [URL]? = nil
+  ) async throws -> any MediaServerConnection {
+    guard let config = server.config, config.apiKey != nil,
+      let connector = MediaServerAdapters.connector(for: server.type)
+    else { throw PlaybackError.noPlayableServer }
+    let session = mediaServerSession
+    let load: @MainActor () async throws -> any MediaServerConnection = {
+      try await connector.connect(
+        server: server, config: config, candidateBaseURLs: restrictedAddresses ?? config.candidateBaseURLs,
+        preferredUserName: preferredUserName, session: session)
+    }
+    let key = ConnectionKey(type: server.type.lowercased(), name: server.name, restrictedAddresses: restrictedAddresses)
     let cached = try await connections.value(
-      for: server.name, forceRefresh: forceRefresh, validate: validate, load: load)
+      for: key, forceRefresh: forceRefresh, validate: validateNotTornDown, load: load)
     guard !forceRefresh, cached.config != config || cached.preferredUserName != preferredUserName else {
       return cached
     }
-    return try await connections.value(for: server.name, forceRefresh: true, validate: validate, load: load)
-  }
-
-  /// 同时探测内网和外网地址（内网优先），再按 MoviePilot `Emby.get_user` 的规则选 Emby 用户。
-  private func connect(
-    _ server: MediaServerConf, config: MediaServerConnectionConfig, preferredUserName: String?
-  ) async throws -> EmbyConnection {
-    guard let apiKey = config.apiKey else { throw PlaybackError.noEmbyServer }
-    let clients = config.candidateBaseURLs.map {
-      EmbyClient(baseURL: $0, apiKey: apiKey, session: embySession)
-    }
-    let probe = await PreferredReachability.first(of: clients, grace: Self.preferredAddressGrace) {
-      _ = try await $0.publicSystemInfo()
-    }
-    let client: EmbyClient
-    switch probe {
-    case .success(let reachable):
-      client = reachable
-    case .failure(let failures):
-      try Task.checkCancellation()
-      var blockedByTransportSecurity = false
-      for error in failures.errors {
-        if case EmbyClientError.unreachable(let transportSecurity) = error {
-          blockedByTransportSecurity = blockedByTransportSecurity || transportSecurity
-        } else {
-          Logger.warning("[Playback] 探测 \(server.name) 地址失败: \(error.localizedDescription)")
-        }
-      }
-      throw PlaybackError.unreachable(server: server.name, transportSecurity: blockedByTransportSecurity)
-    }
-    // 候选顺序与 MoviePilot 首页的继续观看、最近添加相同：先当前登录的 MoviePilot 用户名，再服务器配置里的用户名。
-    // 播放读写的续播点、已看状态因此和首页显示的是同一个 Emby 用户。
-    let users = try await client.users()
-    guard let user = EmbyUser.select(from: users, preferredNames: [preferredUserName, config.username]) else {
-      throw PlaybackError.noEmbyUser
-    }
-    return EmbyConnection(
-      config: config, preferredUserName: preferredUserName, client: client, userID: user.id)
+    return try await connections.value(for: key, forceRefresh: true, validate: validateNotTornDown, load: load)
   }
 
   // MARK: - 播放
 
   private func start(_ prepared: PreparedPlayback, at position: Double) {
     let session = PlaybackSession(prepared: prepared, startPosition: position, reporter: reporter)
+    session.episodeQueue = self
     session.onFailure = { [weak self, weak session] message in
       guard let self, let session else { return }
       self.endSession(session)
@@ -506,10 +1054,11 @@ final class PlaybackCoordinator: ObservableObject {
   // MARK: - 播放中换集、换版本
 
   /// 在当前 mpv 播放界面里改播另一集或另一个版本（对应 Swiftfin 的 `playNewItem`）。
-  /// 沿用当前会话的 Emby 客户端和用户，为新条目重新取 PlaybackInfo、选版本；成功后会话换成新条目，
+  /// 沿用当前会话的服务器连接，为新条目重新取播放信息、选版本；成功后会话换成新条目，
   /// 上一条目照常上报停止，播放界面随后起播新条目。新的切换会取代仍在进行的切换，被取代的不再回报。
+  /// `episode` 是详情页集列表里的那一集和它所在那一季的列表（按集播放时），上下文沿用当前会话冻结的。
   func switchItem(
-    to itemID: String, mediaSourceID: String? = nil, startPosition: Double = 0,
+    to itemID: String, mediaSourceID: String? = nil, startPosition: Double = 0, episode: QueuedEpisode? = nil,
     in session: PlaybackSession, completion: @escaping (SwitchResult) -> Void = { _ in }
   ) {
     guard let apiService, isPlaying(session) else {
@@ -517,16 +1066,27 @@ final class PlaybackCoordinator: ObservableObject {
       return
     }
     let snapshot = apiService.sessionSnapshot()
+    let connection = session.connection
+    let queued = episode.flatMap { requested in
+      session.episode.map {
+        QueuedEpisode(context: $0.context, episode: requested.episode, seasonEpisodes: requested.seasonEpisodes)
+      }
+    }
     switchTask?.cancel()
     switchTask = Task { [weak self] in
       let outcome: Result<PreparedPlayback, Error>
       do {
-        guard let item = try await session.client.item(id: itemID, userID: session.userID) else {
-          throw PlaybackError.notFound
+        if let queued, mediaSourceID == nil {
+          guard let coordinator = self else { throw CancellationError() }
+          outcome = .success(try await coordinator.prepareSwitchedEpisode(itemID, queued, on: connection))
+        } else {
+          guard let item = try await connection.item(id: itemID, timeout: nil) else {
+            throw PlaybackError.notFound
+          }
+          outcome = .success(
+            try await Self.preparePlayback(
+              item, on: connection, preferredSourceID: mediaSourceID, episode: queued))
         }
-        outcome = .success(
-          try await Self.preparePlayback(
-            client: session.client, userID: session.userID, item: item, preferredSourceID: mediaSourceID))
       } catch {
         outcome = .failure(error)
       }
@@ -544,7 +1104,7 @@ final class PlaybackCoordinator: ObservableObject {
         case .failure(let error) where error is CancellationError:
           result = .discarded
         case .failure(let error):
-          let message = (error as? LocalizedError)?.errorDescription ?? "播放失败"
+          let message = Self.message(for: error)
           Logger.warning("[Playback] 切换条目失败: \(message)")
           result = .failed(message)
         }
@@ -553,8 +1113,12 @@ final class PlaybackCoordinator: ObservableObject {
     }
   }
 
+  private static func message(for error: Error) -> String {
+    (error as? LocalizedError)?.errorDescription ?? "播放失败"
+  }
+
   private func fail(_ error: Error) {
-    let message = (error as? LocalizedError)?.errorDescription ?? "播放失败"
+    let message = Self.message(for: error)
     Logger.error("[Playback] 应用内播放失败: \(message)")
     failure = Failure(message: message)
   }
@@ -681,6 +1245,8 @@ final class PlaybackSession: Identifiable {
   private(set) var mpvPlayer: MPVPlayer?
   /// mpv 播放出错时回调提示文字。正常播完由播放界面处理（自动播下一集或退出）。
   var onFailure: ((String) -> Void)?
+  /// 按集播放时，播放界面的队列从这里取上一集、下一集和同季列表。
+  weak var episodeQueue: (any EpisodeQueueProviding)?
 
   private var prepared: PreparedPlayback
   private var startPosition: Double
@@ -699,15 +1265,17 @@ final class PlaybackSession: Identifiable {
     self.reporter = reporter
   }
 
-  /// 直连原文件的地址，含密钥，不得写入日志。
+  /// 直连原文件的地址，可能含密钥，不得写入日志。
   var streamURL: URL { prepared.streamURL }
-  var titles: (primary: String, secondary: String?) { prepared.item.playerTitles }
+  var titles: (primary: String, secondary: String?) { prepared.titles }
   /// 以下供播放界面的信息、章节、队列等面板使用。
-  var client: EmbyClient { prepared.client }
-  var userID: String { prepared.userID }
-  var item: EmbyItem { prepared.item }
-  var mediaSource: EmbyMediaSource { prepared.selection.source }
-  var mediaSources: [EmbyMediaSource] { prepared.mediaSources }
+  var playback: PreparedPlayback { prepared }
+  var connection: any MediaServerConnection { prepared.connection }
+  var userID: String { prepared.connection.userID }
+  var item: ServerMediaItem { prepared.item }
+  var episode: QueuedEpisode? { prepared.episode }
+  var mediaSource: ServerMediaSource { prepared.stream.source }
+  var mediaSources: [ServerMediaSource] { prepared.stream.sources }
   var startSeconds: Double { startPosition }
 
   func makeMPVPlayer() -> MPVPlayer {
@@ -770,32 +1338,34 @@ final class PlaybackSession: Identifiable {
     guard isItemLoaded else { return }
     isItemLoaded = false
     let position = currentSeconds
-    let ending = EndedItem(
-      stopReport: reportBody(isPaused: true, position: position), progress: watchProgress(at: position))
-    let client = prepared.client
-    reporter.enqueue(.finish, for: reportedItem) { await Self.finishItem(ending, client: client) }
+    let ending = EndedItem(stream: prepared.stream, positionSeconds: position, progress: watchProgress(at: position))
+    let connection = prepared.connection
+    reporter.enqueue(.finish, for: reportedItem) { await Self.finishItem(ending, connection: connection) }
   }
 
   /// 不结束播放，只写回当前条目的观看进度（App 离开前台时）。
   func saveProgress() {
     guard !isStopped, isItemLoaded else { return }
     let progress = watchProgress(at: currentSeconds)
-    let client = prepared.client
-    reporter.enqueue(.saveProgress, for: reportedItem) { await Self.saveWatchProgress(progress, client: client) }
+    let connection = prepared.connection
+    reporter.enqueue(.saveProgress, for: reportedItem) {
+      await Self.saveWatchProgress(progress, connection: connection)
+    }
   }
 
   private var reportedItem: PlaybackReporter.Item {
-    PlaybackReporter.Item(server: prepared.client.baseURL, userID: prepared.userID, itemID: prepared.item.id)
+    PlaybackReporter.Item(
+      server: prepared.connection.reportingServer, userID: prepared.connection.userID, itemID: prepared.item.id)
   }
 
   private func watchProgress(at position: Double) -> WatchProgress {
     let playerDuration = mpvPlayer.map { $0.duration.seconds }
     return WatchProgress(
-      userID: prepared.userID,
       itemID: prepared.item.id,
       completed: PlaybackResumePolicy.isCompleted(
-        positionSeconds: position, runTimeTicks: prepared.item.runTimeTicks, playerDurationSeconds: playerDuration),
-      positionTicks: EmbyTicks.from(seconds: position),
+        positionSeconds: position, runtimeSeconds: prepared.item.runtimeSeconds,
+        playerDurationSeconds: playerDuration),
+      positionSeconds: position,
       playedAt: Date())
   }
 
@@ -814,7 +1384,7 @@ final class PlaybackSession: Identifiable {
         try? await Task.sleep(for: .seconds(Self.progressInterval))
         guard let self, !self.isStopped, !Task.isCancelled else { return }
         if self.isItemLoaded, self.mpvPlayer?.state == .playing {
-          self.report(.progress, isPaused: false, position: self.currentSeconds, progressEvent: .timeUpdate)
+          self.report(.progress(.timeUpdate), isPaused: false, position: self.currentSeconds)
         }
       }
     }
@@ -824,8 +1394,8 @@ final class PlaybackSession: Identifiable {
   func handle(_ change: MPVPlaybackEvent.Change) {
     switch change {
     case .stateChanged(.failed(let error)), .error(let error, fatal: true):
-      Logger.error("[Playback] mpv 播放失败: \(EmbyClient.redactedForLogging(String(describing: error)))")
-      onFailure?("无法播放该影片，请检查与 Emby 的网络连接")
+      Logger.error("[Playback] mpv 播放失败: \(PlaybackLog.redacted(String(describing: error)))")
+      onFailure?("无法播放该影片，请检查与媒体服务器的网络连接")
     case .pauseChanged(let isPaused):
       handlePauseChange(isPaused: isPaused)
     default:
@@ -836,99 +1406,57 @@ final class PlaybackSession: Identifiable {
   private func handlePauseChange(isPaused: Bool) {
     guard isItemLoaded, isPaused != lastReportedPause else { return }
     lastReportedPause = isPaused
-    report(.progress, isPaused: isPaused, position: currentSeconds, progressEvent: isPaused ? .pause : .unpause)
+    report(.progress(isPaused ? .pause : .unpause), isPaused: isPaused, position: currentSeconds)
   }
 
   // MARK: - 上报（排进 `PlaybackReporter` 按顺序发送，调用方不等结果，失败只记日志）
 
-  /// 进度上报的 `EventName`：周期进度为 TimeUpdate，暂停、继续为 Pause、Unpause（省略时 Emby 一律按 TimeUpdate 处理）。
-  private enum ProgressEvent: String {
-    case timeUpdate = "TimeUpdate"
-    case pause = "Pause"
-    case unpause = "Unpause"
-  }
-
-  private func report(
-    _ event: EmbyClient.PlaybackEvent, isPaused: Bool, position: Double, progressEvent: ProgressEvent? = nil
-  ) {
-    var body = reportBody(isPaused: isPaused, position: position)
-    if let progressEvent { body["EventName"] = .string(progressEvent.rawValue) }
-    let client = prepared.client
+  private func report(_ event: PlaybackReportEvent, isPaused: Bool, position: Double) {
+    let stream = prepared.stream
+    let connection = prepared.connection
     let kind: PlaybackReporter.Kind = event == .start ? .start : .progress
-    reporter.enqueue(kind, for: reportedItem) { await Self.send(event, body: body, client: client) }
-  }
-
-  private func reportBody(isPaused: Bool, position: Double) -> [String: JSONValue] {
-    var body: [String: JSONValue] = [
-      "ItemId": .string(prepared.item.id),
-      "MediaSourceId": .string(prepared.selection.source.id),
-      "PositionTicks": .int(EmbyTicks.from(seconds: position)),
-      "IsPaused": .bool(isPaused),
-      "CanSeek": .bool(true),
-      "PlayMethod": .string("DirectPlay"),
-    ]
-    if let playSessionID = prepared.playSessionID {
-      body["PlaySessionId"] = .string(playSessionID)
+    reporter.enqueue(kind, for: reportedItem) {
+      await Self.send(event, for: stream, positionSeconds: position, isPaused: isPaused, connection: connection)
     }
-    return body
   }
 
   private static func send(
-    _ event: EmbyClient.PlaybackEvent, body: [String: JSONValue], client: EmbyClient
+    _ event: PlaybackReportEvent, for stream: PreparedStream, positionSeconds: Double, isPaused: Bool,
+    connection: any MediaServerConnection
   ) async {
     do {
-      try await client.report(event, body: body)
+      try await connection.report(event, for: stream, positionSeconds: positionSeconds, isPaused: isPaused)
     } catch {
       Logger.warning("[Playback] 播放状态上报失败: \(error.localizedDescription)")
     }
   }
 
-  /// 要写回 Emby 的观看进度。
-  struct WatchProgress {
-    let userID: String
-    let itemID: String
-    let completed: Bool
-    let positionTicks: Int
-    let playedAt: Date
-  }
-
-  /// 停止播放的条目：停止上报的内容和要写回的观看进度。
+  /// 停止播放的条目：停止上报用的流和位置，以及要写回的观看进度。
   struct EndedItem {
-    let stopReport: [String: JSONValue]
+    let stream: PreparedStream
+    let positionSeconds: Double
     let progress: WatchProgress
   }
 
   /// 先上报停止，再写回观看进度；按顺序发，写回不会被停止上报刚更新的数据盖掉。
-  static func finishItem(_ ending: EndedItem, client: EmbyClient) async {
-    await send(.stopped, body: ending.stopReport, client: client)
-    await saveWatchProgress(ending.progress, client: client)
+  static func finishItem(_ ending: EndedItem, connection: any MediaServerConnection) async {
+    await send(.stopped, for: ending.stream, positionSeconds: ending.positionSeconds, isPaused: true, connection: connection)
+    await saveWatchProgress(ending.progress, connection: connection)
   }
 
-  /// 写回前重新读取单条条目的用户数据，只改续播位置、已看完和最后播放时间：开播时的条目可能来自剧集列表，
-  /// Emby 列表里的 `PlayCount` 恒为 0、也没有最后播放时间，整份写回会把真实播放次数改成 0。
-  /// 读不到用户数据就不写，不用残缺对象覆盖收藏等字段。
-  static func saveWatchProgress(_ progress: WatchProgress, client: EmbyClient) async {
+  static func saveWatchProgress(_ progress: WatchProgress, connection: any MediaServerConnection) async {
     do {
-      guard let item = try await client.item(id: progress.itemID, userID: progress.userID),
-        var userData = item.userData
-      else {
-        Logger.warning("[Playback] 读不到条目的用户数据，未保存观看进度")
-        return
-      }
-      userData["PlaybackPositionTicks"] = .int(progress.completed ? 0 : progress.positionTicks)
-      if progress.completed { userData["Played"] = .bool(true) }
-      userData["LastPlayedDate"] = .string(ISO8601DateFormatter().string(from: progress.playedAt))
-      try await client.updateUserData(userID: progress.userID, itemID: progress.itemID, userData: userData)
+      try await connection.saveWatchProgress(progress)
     } catch {
       Logger.warning("[Playback] 保存观看进度失败: \(error.localizedDescription)")
     }
   }
 }
 
-/// 向 Emby 发送播放状态上报和观看进度写回的队列。由协调器持有，所有播放会话共用，按排队顺序逐条发送：
-/// 同一次播放的开始、进度、停止、写回不会乱序（后发的停止先到，Emby 后台就一直显示“正在播放”），
+/// 向媒体服务器发送播放状态上报和观看进度写回的队列。由协调器持有，所有播放会话共用，按排队顺序逐条发送：
+/// 同一次播放的开始、进度、停止、写回不会乱序（后发的停止先到，服务器后台就一直显示“正在播放”），
 /// 上一次播放的写回也不会晚于下一次播放的写回，把较新的续播点盖回旧值。
-/// 每个请求最多等 15 秒（`EmbyClient.sharedSession`），所以不能让积压无限增长：还没发出的进度只留同一条目最新的一条，
+/// 每个请求最多等 15 秒（`MediaServerHTTP.sharedSession`），所以不能让积压无限增长：还没发出的进度只留同一条目最新的一条，
 /// 排进停止或保存进度时，同一条目还没发出的进度（和更早的保存进度）直接丢弃，停止上报不必排在一串过期进度后面。
 @MainActor
 final class PlaybackReporter {
@@ -944,7 +1472,7 @@ final class PlaybackReporter {
     case finish
   }
 
-  /// 上报针对的条目：同一台服务器、同一个 Emby 用户的同一个条目。
+  /// 上报针对的条目：同一台服务器、同一个服务器用户的同一个条目。
   struct Item: Hashable {
     let server: URL
     let userID: String

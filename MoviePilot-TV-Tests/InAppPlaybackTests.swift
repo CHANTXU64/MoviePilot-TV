@@ -11,10 +11,15 @@ final class InAppPlaybackModelTests: XCTestCase {
     try JSONDecoder().decode(type, from: Data(json.utf8))
   }
 
+  /// Emby 条目经适配器转换后的样子：协调器只认 `ServerMediaItem`。
+  private func embyItem(_ json: String, defaultKind: ServerMediaItem.Kind = .other) throws -> ServerMediaItem {
+    try decode(EmbyItem.self, json).serverItem(defaultKind: defaultKind)
+  }
+
   func testLibraryItemExpectationComparesTypeAndExternalID() throws {
-    let movie = try decode(
-      EmbyItem.self, #"{"Id":"7","Type":"Movie","ProviderIds":{"Tmdb":"222","IMDB":"tt0001","douban_id":" 35 "}}"#)
-    let bare = try decode(EmbyItem.self, #"{"Id":"8","Type":"Movie"}"#)
+    let movie = try embyItem(
+      #"{"Id":"7","Type":"Movie","ProviderIds":{"Tmdb":"222","IMDB":"tt0001","douban_id":" 35 "}}"#)
+    let bare = try embyItem(#"{"Id":"8","Type":"Movie"}"#)
     func expect(_ ids: [String: String], type mediaType: String = "电影") -> LibraryItemExpectation {
       LibraryItemExpectation(mediaType: mediaType, externalIDs: ids)
     }
@@ -36,7 +41,7 @@ final class InAppPlaybackModelTests: XCTestCase {
     let info = try decode(
       EmbyPlaybackInfo.self,
       #"{"MediaSources":[{"Id":"a","Name":"4K HDR","Container":"mkv","Protocol":"File","MediaStreams":[]},{"Id":"b","Name":"远程","Protocol":"Http","MediaStreams":[]},{"Id":"c","Name":"1080p","Container":"mp4","Protocol":"File","MediaStreams":[]}]}"#)
-    let versions = MediaSession.versions(of: info.mediaSources)
+    let versions = MediaSession.versions(of: info.mediaSources.map(\.serverSource))
     XCTAssertEqual(versions.map(\.id), ["a", "c"], "远程片源不能直连，不列出")
     XCTAssertEqual(versions.map(\.displayTitle), ["4K HDR", "1080p"])
   }
@@ -46,9 +51,11 @@ final class InAppPlaybackModelTests: XCTestCase {
       tmdb_id: 222, douban_id: "35", imdb_id: " tt0001 ", tvdb_id: 9, source: "themoviedb", media_id: "222",
       type: "电视剧")
     let expected = LibraryItemExpectation(media: media)
-    XCTAssertEqual(expected.type, "Series")
+    XCTAssertEqual(expected.kind, .series)
     XCTAssertEqual(expected.externalIDs, ["tmdb": "222", "douban": "35", "imdb": "tt0001", "tvdb": "9"])
-    XCTAssertEqual(expected.providerSearchKeys, ["tmdb.222", "imdb.tt0001", "tvdb.9"], "只搜 Emby 刮削器会写的来源")
+    XCTAssertEqual(
+      EmbyServerConnection.providerSearchKeys(for: expected), ["tmdb.222", "imdb.tt0001", "tvdb.9"],
+      "只搜 Emby 刮削器会写的来源")
   }
 
   func testDolbyDecodingDependsOnAudioOutput() {
@@ -64,8 +71,8 @@ final class InAppPlaybackModelTests: XCTestCase {
     let media = MediaInfo(tmdb_id: 0, douban_id: "0", imdb_id: "tt123456", tvdb_id: -3, source: "themoviedb", type: "电影")
     let expected = LibraryItemExpectation(media: media)
     XCTAssertEqual(expected.externalIDs, ["imdb": "tt123456"])
-    XCTAssertEqual(expected.providerSearchKeys, ["imdb.tt123456"], "不搜 tmdb.0")
-    let movie = try decode(EmbyItem.self, #"{"Id":"7","Type":"Movie","ProviderIds":{"Tmdb":"222","Imdb":"tt123456"}}"#)
+    XCTAssertEqual(EmbyServerConnection.providerSearchKeys(for: expected), ["imdb.tt123456"], "不搜 tmdb.0")
+    let movie = try embyItem(#"{"Id":"7","Type":"Movie","ProviderIds":{"Tmdb":"222","Imdb":"tt123456"}}"#)
     XCTAssertTrue(expected.accepts(movie, strict: true), "IMDb 对上了，TMDB 的 0 不算冲突")
 
     let negativeIdentity = LibraryItemExpectation(
@@ -76,9 +83,8 @@ final class InAppPlaybackModelTests: XCTestCase {
       [:], "数字来源要正整数，空白与 0 都不收")
 
     // Emby 那边写成 0 的编号同样按没有处理。
-    let zeroOnServer = try decode(
-      EmbyItem.self, #"{"Id":"8","Type":"Movie","ProviderIds":{"Tmdb":"0","Imdb":"tt123456"}}"#)
-    XCTAssertNil(zeroOnServer.providerID(for: "tmdb"))
+    let zeroOnServer = try embyItem(#"{"Id":"8","Type":"Movie","ProviderIds":{"Tmdb":"0","Imdb":"tt123456"}}"#)
+    XCTAssertNil(zeroOnServer.externalID(for: "tmdb"))
     XCTAssertTrue(
       LibraryItemExpectation(mediaType: "电影", externalIDs: ["tmdb": "222", "imdb": "tt123456"])
         .accepts(zeroOnServer, strict: true))
@@ -133,15 +139,15 @@ final class InAppPlaybackModelTests: XCTestCase {
   }
 
   func testBaseURLNormalizationKeepsReverseProxyPrefix() {
-    XCTAssertEqual(EmbyBaseURL.normalized("192.168.1.2:8096")?.absoluteString, "http://192.168.1.2:8096")
+    XCTAssertEqual(MediaServerBaseURL.normalized("192.168.1.2:8096")?.absoluteString, "http://192.168.1.2:8096")
     XCTAssertEqual(
-      EmbyBaseURL.normalized(" https://media.example.com/emby/ ")?.absoluteString,
+      MediaServerBaseURL.normalized(" https://media.example.com/emby/ ")?.absoluteString,
       "https://media.example.com/emby")
     XCTAssertEqual(
-      EmbyBaseURL.normalized("HTTPS://media.example.com/emby/?x=1#web")?.absoluteString,
+      MediaServerBaseURL.normalized("HTTPS://media.example.com/emby/?x=1#web")?.absoluteString,
       "HTTPS://media.example.com/emby")
-    XCTAssertNil(EmbyBaseURL.normalized("   "))
-    XCTAssertNil(EmbyBaseURL.normalized(nil))
+    XCTAssertNil(MediaServerBaseURL.normalized("   "))
+    XCTAssertNil(MediaServerBaseURL.normalized(nil))
 
     let config = MediaServerConnectionConfig(
       host: "http://10.0.0.2:8096/", playHost: "10.0.0.2:8096", apiKey: "k", username: nil)
@@ -199,27 +205,26 @@ final class InAppPlaybackModelTests: XCTestCase {
 
   func testPlayerLogsDropStreamURLAndAPIKey() {
     XCTAssertEqual(
-      EmbyClient.redactedForLogging("open https://e/Videos/1/stream.mkv?Static=true&api_key=abc123&DeviceId=d failed"),
+      PlaybackLog.redacted("open https://e/Videos/1/stream.mkv?Static=true&api_key=abc123&DeviceId=d failed"),
       "open <URL> failed")
     XCTAssertEqual(
-      EmbyClient.redactedForLogging("lavf: Static=true&api_key=abc123&DeviceId=d"),
+      PlaybackLog.redacted("lavf: Static=true&api_key=abc123&DeviceId=d"),
       "lavf: Static=true&api_key=<redacted>&DeviceId=d")
   }
 
   func testResumePolicySkipsStartAndNearEnd() {
-    let twoHours: Int64 = 7200 * 10_000_000
-    XCTAssertNil(PlaybackResumePolicy.resumePosition(positionTicks: 0, runTimeTicks: twoHours))
-    XCTAssertNil(PlaybackResumePolicy.resumePosition(positionTicks: 59 * 10_000_000, runTimeTicks: twoHours))
-    XCTAssertEqual(
-      PlaybackResumePolicy.resumePosition(positionTicks: 1800 * 10_000_000, runTimeTicks: twoHours), 1800)
-    XCTAssertNil(PlaybackResumePolicy.resumePosition(positionTicks: 6500 * 10_000_000, runTimeTicks: twoHours))
-    XCTAssertEqual(PlaybackResumePolicy.resumePosition(positionTicks: 600 * 10_000_000, runTimeTicks: nil), 600)
+    let twoHours: Double = 7200
+    XCTAssertNil(PlaybackResumePolicy.resumePosition(positionSeconds: 0, runtimeSeconds: twoHours))
+    XCTAssertNil(PlaybackResumePolicy.resumePosition(positionSeconds: 59, runtimeSeconds: twoHours))
+    XCTAssertEqual(PlaybackResumePolicy.resumePosition(positionSeconds: 1800, runtimeSeconds: twoHours), 1800)
+    XCTAssertNil(PlaybackResumePolicy.resumePosition(positionSeconds: 6500, runtimeSeconds: twoHours))
+    XCTAssertEqual(PlaybackResumePolicy.resumePosition(positionSeconds: 600, runtimeSeconds: nil), 600)
     XCTAssertTrue(
-      PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runTimeTicks: twoHours, playerDurationSeconds: nil))
+      PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runtimeSeconds: twoHours, playerDurationSeconds: nil))
     XCTAssertFalse(
-      PlaybackResumePolicy.isCompleted(positionSeconds: 6400, runTimeTicks: twoHours, playerDurationSeconds: nil))
+      PlaybackResumePolicy.isCompleted(positionSeconds: 6400, runtimeSeconds: twoHours, playerDurationSeconds: nil))
     XCTAssertFalse(
-      PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runTimeTicks: nil, playerDurationSeconds: nil))
+      PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runtimeSeconds: nil, playerDurationSeconds: nil))
     XCTAssertEqual(Duration.seconds(754).formatted(.runtime), "12:34")
     XCTAssertEqual(Duration.seconds(3754).formatted(.runtime), "1:02:34")
   }
@@ -227,19 +232,18 @@ final class InAppPlaybackModelTests: XCTestCase {
   func testCompletionUsesPlayerDurationWhenEmbyHasNone() {
     // 刚入库、Emby 还没分析出时长：按播放器读到的时长判断，播到片尾不会把片尾写成续播点。
     XCTAssertTrue(
-      PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runTimeTicks: nil, playerDurationSeconds: 7200))
+      PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runtimeSeconds: nil, playerDurationSeconds: 7200))
     XCTAssertTrue(
-      PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runTimeTicks: 0, playerDurationSeconds: 7200))
+      PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runtimeSeconds: 0, playerDurationSeconds: 7200))
     XCTAssertFalse(
-      PlaybackResumePolicy.isCompleted(positionSeconds: 3600, runTimeTicks: nil, playerDurationSeconds: 7200))
+      PlaybackResumePolicy.isCompleted(positionSeconds: 3600, runtimeSeconds: nil, playerDurationSeconds: 7200))
     // 播放器也读不到时长（0 或非有限值）就不算看完。
-    XCTAssertFalse(PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runTimeTicks: nil, playerDurationSeconds: 0))
+    XCTAssertFalse(PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runtimeSeconds: nil, playerDurationSeconds: 0))
     XCTAssertFalse(
-      PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runTimeTicks: nil, playerDurationSeconds: .infinity))
-    // Emby 有时长时以它为准。
-    let fourHours: Int64 = 14_400 * 10_000_000
+      PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runtimeSeconds: nil, playerDurationSeconds: .infinity))
+    // 服务器有时长时以它为准。
     XCTAssertFalse(
-      PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runTimeTicks: fourHours, playerDurationSeconds: 7200))
+      PlaybackResumePolicy.isCompleted(positionSeconds: 6500, runtimeSeconds: 14_400, playerDurationSeconds: 7200))
   }
 
   func testSeriesStartsFromFirstRegularEpisodeThatHasAFile() throws {
@@ -251,7 +255,7 @@ final class InAppPlaybackModelTests: XCTestCase {
     }
     func first(_ episodes: [String]) throws -> String? {
       let page = try decode(EmbyItemsPage.self, #"{"Items":[\#(episodes.joined(separator: ","))]}"#)
-      return EmbyEpisodeOrder.firstEpisode(in: page.items)?.id
+      return PlaybackEpisodeOrder.firstEpisode(in: page.items.map { $0.serverItem(defaultKind: .episode) })?.id
     }
     XCTAssertEqual(
       try first([
@@ -268,33 +272,30 @@ final class InAppPlaybackModelTests: XCTestCase {
   }
 
   func testEpisodeTitleShowsSeriesAndNumbers() throws {
-    let episode = try decode(
-      EmbyItem.self,
+    let episode = try embyItem(
       #"{"Id":"e","Type":"Episode","Name":"开端","SeriesName":"某剧","ParentIndexNumber":1,"IndexNumber":1}"#)
     XCTAssertEqual(episode.displayTitle, "某剧 · 第 1 季 第 1 集 · 开端")
     XCTAssertEqual(episode.playerTitles.primary, "第 1 季 第 1 集 · 开端")
     XCTAssertEqual(episode.playerTitles.secondary, "某剧")
-    let movie = try decode(EmbyItem.self, #"{"Id":"m","Type":"Movie","Name":"电影名"}"#)
+    let movie = try embyItem(#"{"Id":"m","Type":"Movie","Name":"电影名"}"#)
     XCTAssertEqual(movie.displayTitle, "电影名")
     XCTAssertNil(movie.playerTitles.secondary)
 
     // 集名只是占位时不重复显示。
     for placeholder in ["第1集", "第 1 集", "第一集", "第12话", "Episode 1", "EP01", "e3", "1"] {
-      let item = try decode(
-        EmbyItem.self,
+      let item = try embyItem(
         #"{"Id":"e","Type":"Episode","Name":"\#(placeholder)","SeriesName":"小城良方","ParentIndexNumber":1,"IndexNumber":1}"#)
       XCTAssertEqual(item.displayTitle, "小城良方 · 第 1 季 第 1 集", placeholder)
     }
-    XCTAssertFalse(EmbyItem.isPlaceholderEpisodeName("第一集 重逢", episodeNumber: 1))
+    XCTAssertFalse(PlaybackTitles.isPlaceholderEpisodeName("第一集 重逢", episodeNumber: 1))
     // 纯数字只在等于集号时算占位，真实的数字集名保留。
-    XCTAssertTrue(EmbyItem.isPlaceholderEpisodeName("03", episodeNumber: 3))
-    let numbered = try decode(
-      EmbyItem.self,
+    XCTAssertTrue(PlaybackTitles.isPlaceholderEpisodeName("03", episodeNumber: 3))
+    let numbered = try embyItem(
       #"{"Id":"e","Type":"Episode","Name":"1984","SeriesName":"某剧","ParentIndexNumber":1,"IndexNumber":3}"#)
     XCTAssertEqual(numbered.displayTitle, "某剧 · 第 1 季 第 3 集 · 1984")
-    XCTAssertFalse(EmbyItem.isPlaceholderEpisodeName("12", episodeNumber: nil))
+    XCTAssertFalse(PlaybackTitles.isPlaceholderEpisodeName("12", episodeNumber: nil))
     // 没有季集号时，占位集名仍然保留，否则标题是空的。
-    let bare = try decode(EmbyItem.self, #"{"Id":"e","Type":"Episode","Name":"第1集"}"#)
+    let bare = try embyItem(#"{"Id":"e","Type":"Episode","Name":"第1集"}"#)
     XCTAssertEqual(bare.displayTitle, "第1集")
   }
 
@@ -307,10 +308,11 @@ final class InAppPlaybackModelTests: XCTestCase {
         from: Data(#"{"id":"x","title":"t","type":"\#(type)","server_type":"emby"\#(idField)}"#.utf8))
     }
     func itemID(
-      _ item: MediaServerPlayItem, server: String = "emby", admin: Bool = true
+      _ item: MediaServerPlayItem, server: String = "emby", admin: Bool = true, backendVersion: String? = "v3.2.6"
     ) -> String? {
       HomeViewModel.inAppPlaybackItemID(
-        item, server: server, playableServers: ["emby"], canRequestSuperUserEndpoints: admin)
+        item, server: server, playableServers: ["emby"], canRequestSuperUserEndpoints: admin,
+        backendVersion: backendVersion)
     }
     XCTAssertEqual(itemID(try item("电影")), "m1")
     XCTAssertEqual(itemID(try item("电视剧", itemID: " m2 ")), "m2")
@@ -319,6 +321,9 @@ final class InAppPlaybackModelTests: XCTestCase {
     XCTAssertNil(itemID(try item("电影"), server: "emby-unconfigured"), "服务器未配置地址和密钥时不显示播放")
     XCTAssertNil(itemID(try item("电影", itemID: nil)))
     XCTAssertNil(itemID(try item("电影", itemID: "  ")))
+    XCTAssertNil(itemID(try item("电影"), backendVersion: "v3.2.5"), "v3.2.6 以前的后端不提供应用内播放")
+    XCTAssertNil(itemID(try item("电影"), backendVersion: nil), "读不出版本时不提供")
+    XCTAssertEqual(itemID(try item("电影"), backendVersion: "v3.2.6-1"), "m1")
   }
 }
 
@@ -327,11 +332,12 @@ final class InAppPlaybackModelTests: XCTestCase {
 @MainActor
 final class PlaybackEndActionTests: XCTestCase {
   private func action(
-    switching: Bool = false, seeking: Bool = false, autoPlay: Bool = true, hasNext: Bool = true
+    switching: Bool = false, seeking: Bool = false, autoPlay: Bool = true, hasNext: Bool = true,
+    canLookUpNext: Bool = false
   ) -> MediaSession.EndAction {
     MediaSession.endAction(
       isSwitchingItem: switching, isSeeking: seeking, isLiveStream: false, isAutoPlayEnabled: autoPlay,
-      nextItem: hasNext ? PlaybackIntent(item: BaseItemDto(id: "e2")) : nil)
+      nextItem: hasNext ? PlaybackIntent(item: BaseItemDto(id: "e2")) : nil, canLookUpNext: canLookUpNext)
   }
 
   func testAutoPlayContinuesWithNextEpisode() {
@@ -347,6 +353,39 @@ final class PlaybackEndActionTests: XCTestCase {
     guard case .exit = action(hasNext: false) else { return XCTFail("没有下一集应退出") }
     guard case .exit = action(autoPlay: false) else { return XCTFail("关了自动播放应退出") }
     guard case .exit = action(seeking: true) else { return XCTFail("拖动中播完应退出") }
+  }
+
+  func testEpisodeQueueLooksUpNextAgainWhenItWasNotKnown() {
+    // 按集播放：开播时下一集还没入库（或查询还没回来），播完时重新查一次，不直接退出。
+    guard case .lookUpNext = action(hasNext: false, canLookUpNext: true) else { return XCTFail("应重新查下一集") }
+    guard case .playNext = action(canLookUpNext: true) else { return XCTFail("已知下一集时直接播") }
+    guard case .exit = action(autoPlay: false, hasNext: false, canLookUpNext: true) else {
+      return XCTFail("关了自动播放不再查")
+    }
+  }
+
+  func testNextFoundBySkippingMissingEpisodesIsRecheckedAtTheEnd() {
+    // 开播时第 2 集还没入库，队列记下的是第 3 集；播完时第 2 集可能已经入库，要按顺序先播它。
+    let recheck = MediaSession.endAction(
+      isSwitchingItem: false, isSeeking: false, isLiveStream: false, isAutoPlayEnabled: true,
+      nextItem: PlaybackIntent(item: BaseItemDto(id: "e3")), canLookUpNext: true, nextNeedsRecheck: true)
+    guard case .lookUpNext = recheck else { return XCTFail("应重新确认下一集，实际 \(recheck)") }
+  }
+
+  func testAutoPlayTurnedOffDuringTheEndLookupExitsNormally() {
+    // 片尾正在重新查下一集时，用户从工具栏关掉了自动播放：查到了也不起播，和平常播完一样退出、不说明原因。
+    let found = MoviePilotEpisodeQueue.NextLookup.play(PlaybackIntent(item: BaseItemDto(id: "e3")))
+    guard case .unavailable(nil) = MediaSession.resultAfterLookUp(found, isAutoPlayEnabled: false) else {
+      return XCTFail("关了自动播放不能起播")
+    }
+    let missing = MoviePilotEpisodeQueue.NextLookup.unavailable(EpisodeNavigator.nextMissingMessage)
+    guard case .unavailable(nil) = MediaSession.resultAfterLookUp(missing, isAutoPlayEnabled: false) else {
+      return XCTFail("关了自动播放不再说明下一集的情况")
+    }
+    guard case .play(let next) = MediaSession.resultAfterLookUp(found, isAutoPlayEnabled: true) else {
+      return XCTFail("开着自动播放照常接着播")
+    }
+    XCTAssertEqual(next.item.id, "e3")
   }
 }
 
@@ -500,12 +539,22 @@ final class PlaybackCoordinatorTests: XCTestCase {
     service.currentUserForTesting = Token(
       access_token: "mp-token", token_type: "bearer", super_user: FlexibleBool(superUser),
       permissions: nil, user_id: 1, user_name: "admin", avatar: nil)
+    service.settings = GlobalSettings(BACKEND_VERSION: backendVersion)
     return service
   }
 
-  private func makeCoordinator(_ service: APIService) -> PlaybackCoordinator {
+  private var backendVersion: String? = "v3.2.6"
+  /// 设置页「播放」里的应用内播放开关；不读真实的本机设置，免得测试之间互相影响。
+  private var enabledInSettings = true
+
+  private func makeCoordinator(
+    _ service: APIService, now: @escaping () -> Date = Date.init
+  ) -> PlaybackCoordinator {
     services.append(service)
-    return PlaybackCoordinator(apiService: service, embySession: PlaybackURLProtocol.session)
+    let enabled = enabledInSettings
+    return PlaybackCoordinator(
+      apiService: service, mediaServerSession: PlaybackURLProtocol.session, isEnabledInSettings: { enabled },
+      now: now)
   }
 
   private static func movie(
@@ -518,9 +567,9 @@ final class PlaybackCoordinatorTests: XCTestCase {
     #"{"PlaySessionId":"ps1","MediaSources":[{"Id":"src1","Container":"\#(container)","Protocol":"File","MediaStreams":[{"Type":"Video","Codec":"hevc"},{"Type":"Audio","Codec":"eac3"}]}]}"#
   }
 
-  private static func embyServer(name: String, host: String, playHost: String? = nil) -> String {
+  private static func embyServer(name: String, host: String, playHost: String? = nil, key: String = "emby-key") -> String {
     let play = playHost.map { #","play_host":"\#($0)""# } ?? ""
-    return #"{"name":"\#(name)","type":"emby","enabled":true,"config":{"host":"\#(host)"\#(play),"apikey":"emby-key","username":"admin"}}"#
+    return #"{"name":"\#(name)","type":"emby","enabled":true,"config":{"host":"\#(host)"\#(play),"apikey":"\#(key)","username":"admin"}}"#
   }
 
   private func streamURL(_ coordinator: PlaybackCoordinator) -> URL? {
@@ -757,7 +806,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
     await run(coordinator, .libraryItem(itemID: "m1", expected: expectation()))
     XCTAssertNil(coordinator.failure)
     XCTAssertEqual(streamURL(coordinator)?.host, "wan.playback-tests.local", "不能播 a 上同号的剧集")
-    XCTAssertEqual(coordinator.session?.item.type, "Movie")
+    XCTAssertEqual(coordinator.session?.item.kind, .movie)
     coordinator.endCurrentSession()
   }
 
@@ -1074,7 +1123,8 @@ final class PlaybackCoordinatorTests: XCTestCase {
     let service = makeService()
     services.append(service)
     let coordinator = PlaybackCoordinator(
-      apiService: service, embySession: PlaybackURLProtocol.session, now: { now })
+      apiService: service, mediaServerSession: PlaybackURLProtocol.session, isEnabledInSettings: { true },
+      now: { now })
     func userLookups() -> Int {
       PlaybackURLProtocol.stub.requests().filter { $0.url.path.hasSuffix("/Users") }.count
     }
@@ -1152,17 +1202,25 @@ final class PlaybackCoordinatorTests: XCTestCase {
   }
 
   private func stoppedItem(completed: Bool = false) -> PlaybackSession.EndedItem {
-    PlaybackSession.EndedItem(
-      stopReport: ["ItemId": .string("e1")],
-      progress: PlaybackSession.WatchProgress(
-        userID: "u-admin", itemID: "e1", completed: completed, positionTicks: 600_000_000,
-        playedAt: Date(timeIntervalSince1970: 0)))
+    let item = ServerMediaItem(id: "e1", kind: .episode)
+    let source = ServerMediaSource(id: "src1", container: "mkv")
+    return PlaybackSession.EndedItem(
+      stream: PreparedStream(
+        item: item, source: source, sources: [source], playSessionID: "ps1",
+        streamURL: URL(string: "http://lan.playback-tests.local/Videos/e1/stream.mkv")!),
+      positionSeconds: 60,
+      progress: WatchProgress(
+        itemID: "e1", completed: completed, positionSeconds: 60, playedAt: Date(timeIntervalSince1970: 0)))
   }
 
-  private var stubEmbyClient: EmbyClient {
-    EmbyClient(
-      baseURL: URL(string: "http://lan.playback-tests.local")!, apiKey: "emby-key", deviceID: "device",
-      session: PlaybackURLProtocol.session)
+  private var stubEmbyConnection: EmbyServerConnection {
+    EmbyServerConnection(
+      serverName: "emby", config: MediaServerConnectionConfig(host: nil, playHost: nil, apiKey: "emby-key", username: nil),
+      preferredUserName: nil,
+      client: EmbyClient(
+        baseURL: URL(string: "http://lan.playback-tests.local")!, apiKey: "emby-key", deviceID: "device",
+        session: PlaybackURLProtocol.session),
+      userID: "u-admin")
   }
 
   func testStoppingWritesProgressOnTopOfFreshUserData() async throws {
@@ -1173,7 +1231,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
           #"{"Id":"e1","Type":"Episode","UserData":{"PlayCount":3,"Played":true,"IsFavorite":true,"PlaybackPositionTicks":0,"Key":"k1"}}"#
       ]
     }
-    await PlaybackSession.finishItem(stoppedItem(), client: stubEmbyClient)
+    await PlaybackSession.finishItem(stoppedItem(), connection: stubEmbyConnection)
 
     let requests = PlaybackURLProtocol.stub.requests()
     XCTAssertEqual(
@@ -1197,7 +1255,7 @@ final class PlaybackCoordinatorTests: XCTestCase {
           #"{"Id":"e1","Type":"Episode","UserData":{"PlayCount":1,"Played":false,"PlaybackPositionTicks":5000}}"#
       ]
     }
-    await PlaybackSession.finishItem(stoppedItem(completed: true), client: stubEmbyClient)
+    await PlaybackSession.finishItem(stoppedItem(completed: true), connection: stubEmbyConnection)
 
     let body = try XCTUnwrap(
       JSONSerialization.jsonObject(with: XCTUnwrap(PlaybackURLProtocol.stub.requests().last).body) as? [String: Any])
@@ -1211,9 +1269,9 @@ final class PlaybackCoordinatorTests: XCTestCase {
     PlaybackURLProtocol.stub.configure {
       $0.items = ["lan.playback-tests.local|e1": #"{"Id":"e1","Type":"Episode"}"#]
     }
-    await PlaybackSession.finishItem(stoppedItem(), client: stubEmbyClient)
+    await PlaybackSession.finishItem(stoppedItem(), connection: stubEmbyConnection)
     PlaybackURLProtocol.stub.configure { $0.items = [:] }
-    await PlaybackSession.finishItem(stoppedItem(), client: stubEmbyClient)
+    await PlaybackSession.finishItem(stoppedItem(), connection: stubEmbyConnection)
 
     XCTAssertFalse(
       PlaybackURLProtocol.stub.requests().contains { $0.url.path.hasSuffix("/UserData") },
@@ -1535,6 +1593,1099 @@ final class PlaybackCoordinatorTests: XCTestCase {
   }
 }
 
+// MARK: - 按集播放（MoviePilot 集列表 + Emby 替身）
+
+extension PlaybackCoordinatorTests {
+  private static let lan = "lan.playback-tests.local"
+
+  private static func series(id: String = "s1", tmdb: String = "100") -> String {
+    #"{"Id":"\#(id)","Type":"Series","Name":"长风渡","ProviderIds":{"Tmdb":"\#(tmdb)"}}"#
+  }
+
+  /// Emby 上的一集：`tmdb` 是 TMDB 单集 ID，`season`/`episode` 是文件的季集号。
+  private static func embyEpisode(_ id: String, season: Int, episode: Int, tmdb: Int?) -> String {
+    let ids = tmdb.map { #","ProviderIds":{"Tmdb":"\#($0)"}"# } ?? ""
+    return #"{"Id":"\#(id)","Type":"Episode","Name":"Emby 集名","SeriesName":"长风渡","ParentIndexNumber":\#(season),"IndexNumber":\#(episode)\#(ids)}"#
+  }
+
+  /// 适配器转换后的同一集。
+  private static func serverEpisode(_ id: String, season: Int, episode: Int, tmdb: Int?) throws -> ServerMediaItem {
+    try JSONDecoder().decode(EmbyItem.self, from: Data(embyEpisode(id, season: season, episode: episode, tmdb: tmdb).utf8))
+      .serverItem(defaultKind: .episode)
+  }
+
+  private static func embyEpisodes(_ episodes: String...) -> String {
+    #"{"Items":[\#(episodes.joined(separator: ","))]}"#
+  }
+
+  /// 剧集组第 1 季：组内第 10 集是 TMDB 单集 555（原第 2 季第 3 集），第 11 集是 556，第 12 集是 557。
+  private static let groupSeason1 =
+    #"[{"id":555,"season_number":2,"episode_number":10,"name":"重逢"},{"id":556,"season_number":2,"episode_number":11,"name":"离别"},{"id":557,"season_number":2,"episode_number":12,"name":"归来"}]"#
+
+  /// 剧集组第 2 季：第 1 集（TMDB 601）还不在服务器上。
+  private static let groupSeason2 = #"[{"id":601,"season_number":3,"episode_number":1,"name":"新篇"}]"#
+
+  private func context(
+    group: String? = "g1", libraryServer: String? = nil, libraryItemID: String = "s1"
+  ) -> EpisodePlaybackContext {
+    EpisodePlaybackContext(
+      media: MediaInfo(tmdb_id: 100, source: "themoviedb", media_id: "100", title: "长风渡", type: "电视剧"),
+      episodeGroup: group, seasons: [1, 2],
+      libraryItem: libraryServer.map { MediaServerItemRef(itemID: libraryItemID, server: $0) })!
+  }
+
+  private func groupEpisode(_ index: Int) throws -> MoviePilotEpisode {
+    try groupSeason1()[index]
+  }
+
+  /// 详情页剧集组第 1 季的集列表。
+  private func groupSeason1() throws -> [MoviePilotEpisode] {
+    let episodes = try JSONDecoder().decode([TmdbEpisode].self, from: Data(Self.groupSeason1.utf8))
+    return MoviePilotEpisode.list(episodes, season: 1)
+  }
+
+  /// 详情页上选的组内第 `index` 集，带着它所在的那一季。
+  private func queued(_ index: Int, _ context: EpisodePlaybackContext? = nil) throws -> QueuedEpisode {
+    QueuedEpisode(context: context ?? self.context(), episode: try groupEpisode(index), seasonEpisodes: try groupSeason1())
+  }
+
+  private func queueEntry(_ index: Int, item: ServerMediaItem) throws -> EpisodeQueueEntry {
+    EpisodeQueueEntry(episode: try groupEpisode(index), item: item, seasonEpisodes: try groupSeason1())
+  }
+
+  /// 一台 Emby：剧 s1 的文件按 TMDB 默认顺序命名，S1E10 是另一集（TMDB 777），S2E3 才是组内第 10 集（555）。
+  private func configureDefaultOrderLibrary() {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: Self.lan))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.providerSearch = ["\(Self.lan)|tmdb.100": Self.series()]
+      $0.episodes = [
+        "\(Self.lan)|s1": Self.embyEpisodes(
+          Self.embyEpisode("e-s1e10", season: 1, episode: 10, tmdb: 777),
+          Self.embyEpisode("e-s2e3", season: 2, episode: 3, tmdb: 555),
+          Self.embyEpisode("e-s2e5", season: 2, episode: 5, tmdb: 557))
+      ]
+      // 起播前会重新读单条条目（续播点以此为准）。
+      $0.items = [
+        "\(Self.lan)|e-s1e10": Self.embyEpisode("e-s1e10", season: 1, episode: 10, tmdb: 777),
+        "\(Self.lan)|e-s2e3": Self.embyEpisode("e-s2e3", season: 2, episode: 3, tmdb: 555),
+        "\(Self.lan)|e-s2e5": Self.embyEpisode("e-s2e5", season: 2, episode: 5, tmdb: 557),
+      ]
+      $0.tmdbEpisodes = ["/api/v1/tmdb/100/1": Self.groupSeason1, "/api/v1/tmdb/100/2": Self.groupSeason2]
+      $0.playbackInfo = Self.playbackInfo(container: "mkv")
+    }
+  }
+
+  func testEpisodePlaysTheServerEpisodeWithTheSameTMDBEpisodeID() async throws {
+    configureDefaultOrderLibrary()
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(try queued(0)))
+
+    XCTAssertNil(coordinator.failure)
+    let session = try XCTUnwrap(coordinator.session)
+    XCTAssertEqual(session.item.id, "e-s2e3", "按 TMDB 单集 ID 找，不按页面上的第 1 季第 10 集找")
+    XCTAssertEqual(session.streamURL.path, "/Videos/e-s2e3/stream.mkv")
+    XCTAssertEqual(session.titles.primary, "第 1 季 第 10 集 · 重逢", "播放器标题与详情页编号一致")
+    XCTAssertEqual(session.titles.secondary, "长风渡")
+    let episodesRequest = try XCTUnwrap(
+      PlaybackURLProtocol.stub.requests().first { $0.url.path.hasSuffix("/Episodes") })
+    let fields = URLComponents(url: episodesRequest.url, resolvingAgainstBaseURL: false)?.queryItems?
+      .first { $0.name == "Fields" }?.value
+    XCTAssertEqual(fields, "ProviderIds", "集列表要带外部编号")
+    coordinator.endCurrentSession()
+  }
+
+  func testEpisodeNotOnServerExplainsWithoutPlaying() async throws {
+    configureDefaultOrderLibrary()
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(try queued(1)))
+
+    XCTAssertNil(coordinator.session)
+    XCTAssertEqual(coordinator.failure?.message, "没有在媒体服务器上找到这一集")
+    XCTAssertFalse(PlaybackURLProtocol.stub.requests().contains { $0.url.path.hasSuffix("/PlaybackInfo") })
+  }
+
+  func testServerEpisodesWithoutTMDBIDsAreNotGuessedByNumbers() async throws {
+    configureDefaultOrderLibrary()
+    PlaybackURLProtocol.stub.configure {
+      // 文件按剧集组命名、正好有第 1 季第 10 集，但服务器没有 TMDB 单集 ID：不能按编号猜。
+      $0.episodes = ["\(Self.lan)|s1": Self.embyEpisodes(Self.embyEpisode("e1", season: 1, episode: 10, tmdb: nil))]
+    }
+    let coordinator = makeCoordinator(makeService())
+    let episodes = [try groupEpisode(0)]
+    let availability = await coordinator.episodeAvailability(for: episodes, context: context())
+    let reason = EpisodeAvailability.UnidentifiableReason.serverHasNoEpisodeIDs(server: "emby")
+    XCTAssertEqual(availability, [.unidentifiable(reason)])
+
+    await run(coordinator, .episode(try queued(0)))
+    XCTAssertNil(coordinator.session)
+    XCTAssertEqual(
+      coordinator.failure?.message, reason.message)
+  }
+
+  func testAvailabilityMarksEachEpisodeAndReusesTheServerIndex() async throws {
+    configureDefaultOrderLibrary()
+    let coordinator = makeCoordinator(makeService())
+    let missingID = MoviePilotEpisode(TmdbEpisode(id: nil, episodeNumber: 13), season: 1, index: 3)
+    let episodes = [try groupEpisode(0), try groupEpisode(1), try groupEpisode(2), missingID]
+    let availability = await coordinator.episodeAvailability(for: episodes, context: context())
+    XCTAssertEqual(
+      availability, [.playable(server: "emby"), .notOnServer, .playable(server: "emby"), .unidentifiable(.missingEpisodeID)])
+
+    _ = await coordinator.episodeAvailability(for: episodes, context: context())
+    await run(coordinator, .episode(try queued(0)))
+    XCTAssertEqual(
+      PlaybackURLProtocol.stub.requests().filter { $0.url.path.hasSuffix("/Episodes") }.count, 1,
+      "详情页的每集状态和起播共用这部剧的集索引")
+    coordinator.endCurrentSession()
+  }
+
+  func testEpisodePlaybackNeedsBackend326() async throws {
+    configureDefaultOrderLibrary()
+    backendVersion = "v3.2.5"
+    let coordinator = makeCoordinator(makeService())
+    let availability = await coordinator.episodeAvailability(for: [try groupEpisode(0)], context: context())
+    XCTAssertNil(availability, "旧后端不显示每集的播放状态")
+    await run(coordinator, .episode(try queued(0)))
+    XCTAssertEqual(coordinator.failure?.message, PlaybackError.backendTooOld.errorDescription)
+    XCTAssertTrue(PlaybackURLProtocol.stub.requests().isEmpty, "不发任何请求")
+  }
+
+  func testEpisodeIsLookedUpOnTheServerMoviePilotNamesFirst() async throws {
+    configureDefaultOrderLibrary()
+    let second = "lan2.playback-tests.local"
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers =
+        "[\(Self.embyServer(name: "emby", host: Self.lan)),\(Self.embyServer(name: "emby2", host: second))]"
+      $0.providerSearch["\(second)|tmdb.100"] = Self.series(id: "t1")
+      $0.episodes["\(second)|t1"] = Self.embyEpisodes(Self.embyEpisode("f1", season: 1, episode: 10, tmdb: 555))
+      $0.items["\(second)|f1"] = Self.embyEpisode("f1", season: 1, episode: 10, tmdb: 555)
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(try queued(0, context(libraryServer: "emby2"))))
+
+    XCTAssertEqual(coordinator.session?.item.id, "f1")
+    XCTAssertFalse(
+      PlaybackURLProtocol.stub.requests().contains { $0.url.host == Self.lan && $0.url.path.hasSuffix("/Episodes") },
+      "入库查询说在 emby2，先查它，找到了就不再查别的服务器")
+    coordinator.endCurrentSession()
+  }
+
+  func testNextEpisodeFollowsMoviePilotOrderOnTheCurrentServer() async throws {
+    configureDefaultOrderLibrary()
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(try queued(0)))
+    let session = try XCTUnwrap(coordinator.session)
+
+    let next = try await coordinator.adjacentEpisode(.next, from: session.playback)
+    XCTAssertEqual(
+      next,
+      .play(
+        try queueEntry(2, item: try Self.serverEpisode("e-s2e5", season: 2, episode: 5, tmdb: 557)),
+        skippedMissing: true),
+      "组内第 11 集服务器上没有，跳到第 12 集；不用 Emby 自己的相邻集（S2E4）")
+    let previous = try await coordinator.adjacentEpisode(.previous, from: session.playback)
+    XCTAssertEqual(previous, .end)
+    let tmdbRequest = try XCTUnwrap(
+      PlaybackURLProtocol.stub.requests().first { $0.url.path == "/api/v1/tmdb/100/1" })
+    XCTAssertTrue(tmdbRequest.url.query?.contains("episode_group=g1") == true, "沿用开播时冻结的剧集组")
+
+    // 换到下一集：沿用冻结的上下文，标题按详情页编号。
+    var result: PlaybackCoordinator.SwitchResult?
+    coordinator.switchItem(to: "e-s2e5", episode: try queued(2), in: session) { result = $0 }
+    await coordinator.switchTaskForTesting?.value
+    guard case .switched = result else { return XCTFail("应换到下一集，实际 \(String(describing: result))") }
+    XCTAssertEqual(session.episode?.episode, try groupEpisode(2))
+    XCTAssertEqual(session.episode?.context, context())
+    XCTAssertEqual(session.titles.primary, "第 1 季 第 12 集 · 归来")
+    coordinator.endCurrentSession()
+  }
+
+  func testNextEpisodeOnAnotherServerStopsTheQueue() async throws {
+    configureDefaultOrderLibrary()
+    let second = "lan2.playback-tests.local"
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers =
+        "[\(Self.embyServer(name: "emby", host: Self.lan)),\(Self.embyServer(name: "emby2", host: second))]"
+      $0.providerSearch["\(second)|tmdb.100"] = Self.series(id: "t1")
+      $0.episodes["\(second)|t1"] = Self.embyEpisodes(Self.embyEpisode("f2", season: 1, episode: 11, tmdb: 556))
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(try queued(0)))
+    let session = try XCTUnwrap(coordinator.session)
+
+    let next = try await coordinator.adjacentEpisode(.next, from: session.playback)
+    guard case .stop(let reason) = next else { return XCTFail("下一集只在另一台服务器上，要停下，实际 \(next)") }
+    XCTAssertTrue(reason.contains("另一台媒体服务器"), reason)
+
+    coordinator.endSession(session, notice: reason)
+    XCTAssertNil(coordinator.session)
+    XCTAssertEqual(coordinator.notice?.message, reason, "退出后告诉用户为什么没有接着播")
+  }
+
+  func testInAppPlaybackTurnedOffInSettingsOffersNothing() async throws {
+    configureDefaultOrderLibrary()
+    enabledInSettings = false
+    let coordinator = makeCoordinator(makeService())
+    let availability = await coordinator.episodeAvailability(for: [try groupEpisode(0)], context: context())
+    XCTAssertNil(availability)
+    let target = await coordinator.locateLibraryItem(
+      "s1", expected: context().expected, in: try servers(Self.embyServer(name: "emby", host: Self.lan)))
+    XCTAssertNil(target, "设置里关掉后详情页不显示播放")
+    await run(coordinator, .episode(try queued(0)))
+    XCTAssertEqual(coordinator.failure?.message, PlaybackError.disabledInSettings.errorDescription)
+    XCTAssertTrue(PlaybackURLProtocol.stub.requests().isEmpty, "不发任何请求")
+  }
+
+  func testEpisodeResumePointIsReadFreshBeforeStarting() async throws {
+    configureDefaultOrderLibrary()
+    let coordinator = makeCoordinator(makeService())
+    _ = await coordinator.episodeAvailability(for: [try groupEpisode(0)], context: context())
+    // 集索引是刚才读的（没有续播点）；之后在别处看到 30 分钟，Emby 上的单条条目已经更新。
+    PlaybackURLProtocol.stub.configure {
+      $0.items["\(Self.lan)|e-s2e3"] =
+        #"{"Id":"e-s2e3","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"ProviderIds":{"Tmdb":"555"},"RunTimeTicks":\#(Self.twoHours),"UserData":{"PlaybackPositionTicks":18000000000}}"#
+    }
+    await run(coordinator, .episode(try queued(0)))
+    XCTAssertEqual(coordinator.resumePrompt?.position, 1800, "续播点以起播前重新读到的为准，不用集索引里的旧值")
+    XCTAssertEqual(coordinator.resumePrompt?.prepared.title, "长风渡 · 第 1 季 第 10 集 · 重逢")
+  }
+
+  func testUnplayableCopyFallsBackToAnotherCopyOnTheSameServer() async throws {
+    configureDefaultOrderLibrary()
+    PlaybackURLProtocol.stub.configure {
+      // 同一部剧在两个媒体库：strm 库排在前面，本地文件库在后面。
+      $0.providerSearch["\(Self.lan)|tmdb.100"] = [Self.series(id: "strm"), Self.series(id: "local")].joined(separator: ",")
+      $0.episodes = [
+        "\(Self.lan)|strm": Self.embyEpisodes(Self.embyEpisode("x-strm", season: 2, episode: 3, tmdb: 555)),
+        "\(Self.lan)|local": Self.embyEpisodes(Self.embyEpisode("x-local", season: 2, episode: 3, tmdb: 555)),
+      ]
+      $0.items = [
+        "\(Self.lan)|x-strm": Self.embyEpisode("x-strm", season: 2, episode: 3, tmdb: 555),
+        "\(Self.lan)|x-local": Self.embyEpisode("x-local", season: 2, episode: 3, tmdb: 555),
+      ]
+      $0.playbackInfoByItem["\(Self.lan)|x-strm"] =
+        #"{"MediaSources":[{"Id":"remote","Container":"mkv","Protocol":"Http","MediaStreams":[]}]}"#
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(try queued(0)))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(coordinator.session?.item.id, "x-local", "第一份不能直连时换同一台服务器上的另一份")
+    coordinator.endCurrentSession()
+  }
+
+  func testJustArrivedEpisodeIsFoundWhenPlayedFromDetail() async throws {
+    configureDefaultOrderLibrary()
+    let coordinator = makeCoordinator(makeService())
+    let availability = await coordinator.episodeAvailability(for: [try groupEpisode(1)], context: context())
+    XCTAssertEqual(availability, [.notOnServer])
+    PlaybackURLProtocol.stub.configure {
+      $0.episodes["\(Self.lan)|s1"] = Self.embyEpisodes(Self.embyEpisode("e-new", season: 2, episode: 4, tmdb: 556))
+      $0.items["\(Self.lan)|e-new"] = Self.embyEpisode("e-new", season: 2, episode: 4, tmdb: 556)
+    }
+    await run(coordinator, .episode(try queued(1)))
+    XCTAssertEqual(coordinator.session?.item.id, "e-new", "缓存里没有时重新读一次服务器")
+    coordinator.endCurrentSession()
+  }
+
+  func testServerWithoutTheSeriesIsNotReadAgainWhenStarting() async throws {
+    // 两台服务器，这部剧只在第二台上：第一台确认没有这部剧，起播时不再强制重读它。
+    configureDefaultOrderLibrary()
+    let second = "lan2.playback-tests.local"
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers =
+        "[\(Self.embyServer(name: "emby", host: Self.lan)),\(Self.embyServer(name: "emby2", host: second))]"
+      $0.providerSearch = ["\(second)|tmdb.100": Self.series(id: "t1")]
+      $0.episodes = ["\(second)|t1": Self.embyEpisodes(Self.embyEpisode("f1", season: 2, episode: 3, tmdb: 555))]
+      $0.items = ["\(second)|f1": Self.embyEpisode("f1", season: 2, episode: 3, tmdb: 555)]
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(try queued(0)))
+    XCTAssertEqual(coordinator.session?.item.id, "f1")
+    let searchesOnFirst = PlaybackURLProtocol.stub.requests().filter {
+      $0.url.host == Self.lan && ($0.url.query ?? "").contains("AnyProviderIdEquals")
+    }
+    XCTAssertEqual(searchesOnFirst.count, 1, "第一台只搜一次")
+    coordinator.endCurrentSession()
+  }
+
+  func testQueuePanelOnlyReadsTheCurrentServer() async throws {
+    // 另一台服务器关机：面板只列当前服务器上的集，不为每个没入库的集去连它。
+    configureDefaultOrderLibrary()
+    let second = "lan2.playback-tests.local"
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers =
+        "[\(Self.embyServer(name: "emby", host: Self.lan)),\(Self.embyServer(name: "emby2", host: second))]"
+      $0.unreachableHosts = [second]
+      $0.episodes["\(Self.lan)|s1"] = Self.embyEpisodes(Self.embyEpisode("e-s2e3", season: 2, episode: 3, tmdb: 555))
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(try queued(0)))
+    let session = try XCTUnwrap(coordinator.session)
+    let requestsToSecond = { PlaybackURLProtocol.stub.requests().filter { $0.url.host == second }.count }
+    let before = requestsToSecond()
+
+    let entries = try await coordinator.playableEpisodes(inSeason: 1, from: session.playback)
+    XCTAssertEqual(entries.map(\.item.id), ["e-s2e3"])
+    XCTAssertEqual(requestsToSecond(), before, "第 11、12 集不在当前服务器上，也不去连另一台")
+    coordinator.endCurrentSession()
+  }
+
+  func testSwitchingEpisodePlaysTheRequestedItemWithoutRereadingTheSeries() async throws {
+    // 看完一集（早过了集索引的 60 秒缓存）换下一集：要求的条目能直接播，就不先重读整部剧的集。
+    configureDefaultOrderLibrary()
+    var clock = Date()
+    let coordinator = makeCoordinator(makeService(), now: { clock })
+    await run(coordinator, .episode(try queued(0)))
+    let session = try XCTUnwrap(coordinator.session)
+    clock += 45 * 60
+    let seriesReads = {
+      PlaybackURLProtocol.stub.requests().filter {
+        $0.url.path.hasSuffix("/Episodes") || ($0.url.query ?? "").contains("AnyProviderIdEquals")
+      }.count
+    }
+    let before = seriesReads()
+
+    var result: PlaybackCoordinator.SwitchResult?
+    coordinator.switchItem(to: "e-s2e5", episode: try queued(2), in: session) { result = $0 }
+    await coordinator.switchTaskForTesting?.value
+    guard case .switched = result else { return XCTFail("应换到第 12 集，实际 \(String(describing: result))") }
+    XCTAssertEqual(session.item.id, "e-s2e5")
+    XCTAssertEqual(seriesReads(), before)
+    coordinator.endCurrentSession()
+  }
+
+  func testSwitchingToAnUnplayableCopyFallsBackToAnotherCopy() async throws {
+    // 第 12 集在两个媒体库各有一份，队列给的是不能直连的 strm 那份：换同一台服务器上的另一份。
+    configureDefaultOrderLibrary()
+    PlaybackURLProtocol.stub.configure {
+      $0.providerSearch["\(Self.lan)|tmdb.100"] = [Self.series(), Self.series(id: "strm")].joined(separator: ",")
+      $0.episodes["\(Self.lan)|strm"] = Self.embyEpisodes(Self.embyEpisode("x-strm", season: 2, episode: 5, tmdb: 557))
+      $0.items["\(Self.lan)|x-strm"] = Self.embyEpisode("x-strm", season: 2, episode: 5, tmdb: 557)
+      $0.playbackInfoByItem["\(Self.lan)|x-strm"] =
+        #"{"MediaSources":[{"Id":"remote","Container":"mkv","Protocol":"Http","MediaStreams":[]}]}"#
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(try queued(0)))
+    let session = try XCTUnwrap(coordinator.session)
+
+    var result: PlaybackCoordinator.SwitchResult?
+    coordinator.switchItem(to: "x-strm", episode: try queued(2), in: session) { result = $0 }
+    await coordinator.switchTaskForTesting?.value
+    guard case .switched = result else { return XCTFail("应换到另一份，实际 \(String(describing: result))") }
+    XCTAssertEqual(session.item.id, "e-s2e5")
+    coordinator.endCurrentSession()
+  }
+
+  func testOwnerServerIsStillPreferredWhenTheDetailPageCouldNotConfirm() async throws {
+    // 两台 Emby，入库查询说 7 属于 a，a 上的电影没刮到外部编号。进详情页时 a 连不上，只能判为不确定。
+    let a = Self.embyServer(name: "a", host: "lan.playback-tests.local")
+    let b = Self.embyServer(name: "b", host: "wan.playback-tests.local")
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(a),\(b)]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = ["lan.playback-tests.local|7": Self.movie(id: "7", tmdb: nil)]
+      $0.playbackInfo = Self.playbackInfo()
+      $0.unreachableHosts = ["lan.playback-tests.local"]
+    }
+    let coordinator = makeCoordinator(makeService())
+    let target = await coordinator.locateLibraryItem(
+      "7", expected: expectation(tmdb: "222"), in: try servers(a, b), preferredServer: "a")
+    XCTAssertEqual(target, .libraryItem(itemID: "7", expected: expectation(tmdb: "222"), owner: "a"))
+
+    // 点播放时 a 已经能连上：它自己的条目不要求外部编号对上。
+    PlaybackURLProtocol.stub.configure { $0.unreachableHosts = [] }
+    await run(coordinator, try XCTUnwrap(target))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(coordinator.session?.item.id, "7")
+    XCTAssertEqual(coordinator.session?.connection.serverName, "a")
+    coordinator.endCurrentSession()
+  }
+
+  func testNextEpisodeThatArrivesDuringPlaybackIsFoundWhenRefreshed() async throws {
+    // 订阅还在下载：开播时第 11、12 集都不在，播放期间第 11 集下载入库。
+    configureDefaultOrderLibrary()
+    PlaybackURLProtocol.stub.configure {
+      $0.episodes["\(Self.lan)|s1"] = Self.embyEpisodes(Self.embyEpisode("e-s2e3", season: 2, episode: 3, tmdb: 555))
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(try queued(0)))
+    let session = try XCTUnwrap(coordinator.session)
+    let before = try await coordinator.adjacentEpisode(.next, from: session.playback)
+    XCTAssertEqual(before, .missing, "后面还有集，只是还没入库")
+
+    PlaybackURLProtocol.stub.configure {
+      $0.episodes["\(Self.lan)|s1"] = Self.embyEpisodes(
+        Self.embyEpisode("e-s2e3", season: 2, episode: 3, tmdb: 555),
+        Self.embyEpisode("e-s2e4", season: 2, episode: 4, tmdb: 556))
+    }
+    let cached = try await coordinator.adjacentEpisode(.next, from: session.playback)
+    XCTAssertEqual(cached, .missing, "不刷新时沿用缓存")
+    let refreshed = try await coordinator.adjacentEpisode(.next, from: session.playback, refresh: true)
+    XCTAssertEqual(
+      refreshed,
+      .play(
+        try queueEntry(1, item: try Self.serverEpisode("e-s2e4", season: 2, episode: 4, tmdb: 556)),
+        skippedMissing: false),
+      "播完时重新读服务器，刚入库的下一集能接着播")
+    coordinator.endCurrentSession()
+  }
+
+  func testNextIsFoundFromTheKnownSeasonWhenTheRefreshedListComesBackEmpty() async throws {
+    // 播完时重新读集列表，MoviePilot 读 TMDB 失败、返回了空列表：下一集是组内第 12 集开播时就知道，服务器上有就接着播。
+    configureDefaultOrderLibrary()
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(try queued(0)))
+    let session = try XCTUnwrap(coordinator.session)
+    PlaybackURLProtocol.stub.configure { $0.tmdbEpisodes["/api/v1/tmdb/100/1"] = "[]" }
+
+    let next = try await coordinator.adjacentEpisode(.next, from: session.playback, refresh: true)
+    XCTAssertEqual(
+      next, .play(try queueEntry(2, item: try Self.serverEpisode("e-s2e5", season: 2, episode: 5, tmdb: 557)), skippedMissing: true))
+    let panel = try await coordinator.playableEpisodes(inSeason: 1, from: session.playback)
+    XCTAssertEqual(panel.map(\.item.id), ["e-s2e3", "e-s2e5"], "队列面板同样按开播时的那份列")
+    coordinator.endCurrentSession()
+  }
+
+  func testEpisodeStartReprobesACachedAddressThatStoppedResponding() async throws {
+    // 详情页刚用内网地址读过集索引，点播放时已经离开内网：起播也要换外网地址重试，不能报“无法连接”。
+    configureDefaultOrderLibrary()
+    let wan = "wan.playback-tests.local"
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: Self.lan, playHost: "https://\(wan)"))]"
+      $0.providerSearch["\(wan)|tmdb.100"] = Self.series()
+      $0.episodes["\(wan)|s1"] = $0.episodes["\(Self.lan)|s1"]
+      for (key, value) in $0.items where key.hasPrefix(Self.lan) {
+        $0.items[key.replacingOccurrences(of: Self.lan, with: wan)] = value
+      }
+    }
+    let coordinator = makeCoordinator(makeService())
+    let availability = await coordinator.episodeAvailability(for: [try groupEpisode(0)], context: context())
+    XCTAssertEqual(availability, [.playable(server: "emby")])
+
+    PlaybackURLProtocol.stub.configure { $0.unreachableHosts = [Self.lan] }
+    await run(coordinator, .episode(try queued(0)))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(streamURL(coordinator)?.host, wan)
+    coordinator.endCurrentSession()
+  }
+
+  func testEpisodeFileWithoutTMDBIDIsSkippedAndExplainedWhenNothingFollows() async throws {
+    // 组内第 11 集的文件刚入库，Emby 还没刮削到 TMDB 单集 ID：照常往后找，接着播第 12 集；
+    // 第 12 集之后再也接不上时，提示部分文件缺少编号，可以刷新元数据。
+    configureDefaultOrderLibrary()
+    PlaybackURLProtocol.stub.configure {
+      $0.episodes["\(Self.lan)|s1"] = Self.embyEpisodes(
+        Self.embyEpisode("e-s2e3", season: 2, episode: 3, tmdb: 555),
+        Self.embyEpisode("e-s2e4", season: 2, episode: 4, tmdb: nil),
+        Self.embyEpisode("e-s2e5", season: 2, episode: 5, tmdb: 557))
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(try queued(0)))
+    let session = try XCTUnwrap(coordinator.session)
+    let next = try await coordinator.adjacentEpisode(.next, from: session.playback)
+    XCTAssertEqual(
+      next, .play(try queueEntry(2, item: try Self.serverEpisode("e-s2e5", season: 2, episode: 5, tmdb: 557)), skippedMissing: true))
+    coordinator.endCurrentSession()
+
+    await run(coordinator, .episode(try queued(2)))
+    let last = try XCTUnwrap(coordinator.session)
+    let afterLast = try await coordinator.adjacentEpisode(.next, from: last.playback)
+    XCTAssertEqual(afterLast, .stop("未匹配到下一集，媒体服务器“emby”上部分文件缺少 TMDB 编号，可刷新元数据后重试"))
+    coordinator.endCurrentSession()
+
+    await run(coordinator, .episode(try queued(1)))
+    XCTAssertEqual(
+      coordinator.failure?.message, "未匹配到这一集，媒体服务器“emby”上部分文件缺少 TMDB 编号，可刷新元数据后重试")
+  }
+
+  func testNextKeepsTheOtherServerNameWhenSomeFilesLackEpisodeIDs() async throws {
+    configureDefaultOrderLibrary()
+    let second = "lan2.playback-tests.local"
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers =
+        "[\(Self.embyServer(name: "emby", host: Self.lan)),\(Self.embyServer(name: "emby2", host: second))]"
+      $0.providerSearch["\(second)|tmdb.100"] = Self.series(id: "t1")
+      $0.episodes["\(second)|t1"] = Self.embyEpisodes(
+        Self.embyEpisode("f1", season: 1, episode: 10, tmdb: 555),
+        Self.embyEpisode("f2", season: 1, episode: 11, tmdb: nil))
+    }
+    let coordinator = makeCoordinator(makeService())
+    let owned = context(libraryServer: "emby")
+    await run(coordinator, .episode(try queued(0, owned)))
+    let first = try XCTUnwrap(coordinator.session)
+    let next = try await coordinator.adjacentEpisode(.next, from: first.playback)
+    XCTAssertEqual(
+      next, .play(try queueEntry(2, item: try Self.serverEpisode("e-s2e5", season: 2, episode: 5, tmdb: 557)), skippedMissing: true))
+    coordinator.endCurrentSession()
+
+    await run(coordinator, .episode(try queued(2, owned)))
+    let last = try XCTUnwrap(coordinator.session)
+    let afterLast = try await coordinator.adjacentEpisode(.next, from: last.playback)
+    XCTAssertEqual(afterLast, .stop("未匹配到下一集，媒体服务器“emby2”上部分文件缺少 TMDB 编号，可刷新元数据后重试"))
+    coordinator.endCurrentSession()
+  }
+
+  func testServerErrorWhileSearchingAnotherServerIsNotTreatedAsMissing() async throws {
+    // 另一台服务器按外部编号搜索时报 500：不能当作它没有这部剧，把下一集当作哪里都没有而跳过。
+    configureDefaultOrderLibrary()
+    let second = "lan2.playback-tests.local"
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers =
+        "[\(Self.embyServer(name: "emby", host: Self.lan)),\(Self.embyServer(name: "emby2", host: second))]"
+      $0.searchStatus[second] = 500
+    }
+    let coordinator = makeCoordinator(makeService())
+    let owned = context(libraryServer: "emby")
+    await run(coordinator, .episode(try queued(0, owned)))
+    let session = try XCTUnwrap(coordinator.session)
+
+    let failure = "媒体服务器“emby2”按外部编号查找失败：服务器出错（HTTP 500），请稍后重试"
+    let next = try await coordinator.adjacentEpisode(.next, from: session.playback)
+    XCTAssertEqual(next, .stop("无法确认下一集：\(failure)"))
+    let availability = await coordinator.episodeAvailability(for: [try groupEpisode(1)], context: owned)
+    XCTAssertEqual(availability, [.failed(failure)])
+    coordinator.endCurrentSession()
+  }
+
+  func testOneLibraryCopyFailingToLoadDoesNotHideTheOtherCopy() async throws {
+    // 同一部剧在两个媒体库各有一份，第一份的集读取失败：照样用第二份播；第二份里没有的集不能说服务器上没有。
+    configureDefaultOrderLibrary()
+    PlaybackURLProtocol.stub.configure {
+      $0.providerSearch["\(Self.lan)|tmdb.100"] = [Self.series(id: "broken"), Self.series()].joined(separator: ",")
+      $0.episodesStatus["\(Self.lan)|broken"] = 500
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(try queued(0)))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(coordinator.session?.item.id, "e-s2e3")
+    coordinator.endCurrentSession()
+
+    let availability = await coordinator.episodeAvailability(for: [try groupEpisode(1)], context: context())
+    XCTAssertEqual(availability, [.failed("媒体服务器“emby”读取剧集列表失败：服务器出错（HTTP 500），请稍后重试")])
+  }
+
+  func testRescrapedItemThatIsNowAnotherEpisodeIsNotPlayed() async throws {
+    // 集索引是刚才读的：e-s2e3 是 TMDB 555。之后 Emby 重新刮削，e-s2e3 成了 999，555 是新条目 e-new。
+    configureDefaultOrderLibrary()
+    let coordinator = makeCoordinator(makeService())
+    _ = await coordinator.episodeAvailability(for: [try groupEpisode(0)], context: context())
+    PlaybackURLProtocol.stub.configure {
+      $0.items["\(Self.lan)|e-s2e3"] = Self.embyEpisode("e-s2e3", season: 2, episode: 3, tmdb: 999)
+      $0.episodes["\(Self.lan)|s1"] = Self.embyEpisodes(
+        Self.embyEpisode("e-s2e3", season: 2, episode: 3, tmdb: 999),
+        Self.embyEpisode("e-new", season: 2, episode: 3, tmdb: 555))
+      $0.items["\(Self.lan)|e-new"] = Self.embyEpisode("e-new", season: 2, episode: 3, tmdb: 555)
+    }
+    await run(coordinator, .episode(try queued(0)))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(coordinator.session?.item.id, "e-new", "重新读到的已经是另一集：重读集索引，播现在的那一条")
+    coordinator.endCurrentSession()
+  }
+
+  func testSwitchingToARescrapedItemPlaysTheCurrentCopy() async throws {
+    // 队列给的第 12 集是 e-s2e5，换集前 Emby 重新刮削，它成了 999，557 换成了 e-557。
+    configureDefaultOrderLibrary()
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(try queued(0)))
+    let session = try XCTUnwrap(coordinator.session)
+    PlaybackURLProtocol.stub.configure {
+      $0.items["\(Self.lan)|e-s2e5"] = Self.embyEpisode("e-s2e5", season: 2, episode: 5, tmdb: 999)
+      $0.episodes["\(Self.lan)|s1"] = Self.embyEpisodes(
+        Self.embyEpisode("e-s2e3", season: 2, episode: 3, tmdb: 555),
+        Self.embyEpisode("e-s2e5", season: 2, episode: 5, tmdb: 999),
+        Self.embyEpisode("e-557", season: 2, episode: 6, tmdb: 557))
+      $0.items["\(Self.lan)|e-557"] = Self.embyEpisode("e-557", season: 2, episode: 6, tmdb: 557)
+    }
+    var result: PlaybackCoordinator.SwitchResult?
+    coordinator.switchItem(to: "e-s2e5", episode: try queued(2), in: session) { result = $0 }
+    await coordinator.switchTaskForTesting?.value
+    guard case .switched = result else { return XCTFail("应换到第 12 集现在的条目，实际 \(String(describing: result))") }
+    XCTAssertEqual(session.item.id, "e-557")
+    coordinator.endCurrentSession()
+  }
+
+  func testEpisodeWithoutAnIDOnTheFreshItemUsesTheConfirmedCopy() async throws {
+    configureDefaultOrderLibrary()
+    let coordinator = makeCoordinator(makeService())
+    _ = await coordinator.episodeAvailability(for: [try groupEpisode(0)], context: context())
+    PlaybackURLProtocol.stub.configure {
+      let unidentified = Self.embyEpisode("e-s2e3", season: 2, episode: 3, tmdb: nil)
+      let confirmed = Self.embyEpisode("e-new", season: 2, episode: 3, tmdb: 555)
+      $0.episodes["\(Self.lan)|s1"] = Self.embyEpisodes(unidentified, confirmed)
+      $0.items["\(Self.lan)|e-s2e3"] = unidentified
+      $0.items["\(Self.lan)|e-new"] = confirmed
+    }
+
+    await run(coordinator, .episode(try queued(0)))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(coordinator.session?.item.id, "e-new")
+    XCTAssertFalse(PlaybackURLProtocol.stub.requests().contains { $0.url.path == "/Items/e-s2e3/PlaybackInfo" })
+    coordinator.endCurrentSession()
+  }
+
+  func testSwitchingEpisodeExplainsWhenTheFreshItemLacksAnIDAndHasNoConfirmedCopy() async throws {
+    configureDefaultOrderLibrary()
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(try queued(0)))
+    let session = try XCTUnwrap(coordinator.session)
+    // 集列表仍把条目列为 TMDB 557，单条详情已读不到这个编号。
+    PlaybackURLProtocol.stub.configure {
+      $0.items["\(Self.lan)|e-s2e5"] = Self.embyEpisode("e-s2e5", season: 2, episode: 5, tmdb: nil)
+    }
+
+    var result: PlaybackCoordinator.SwitchResult?
+    coordinator.switchItem(to: "e-s2e5", episode: try queued(2), in: session) { result = $0 }
+    await coordinator.switchTaskForTesting?.value
+    guard case .failed(let reason) = result else { return XCTFail("无法确认时应报告切集失败") }
+    let message = "无法确认这一集：媒体服务器“emby”重新读取的剧集条目缺少 TMDB 编号，可刷新元数据后重试"
+    XCTAssertEqual(reason, message)
+    XCTAssertEqual(session.item.id, "e-s2e3")
+    XCTAssertEqual(PlaybackURLProtocol.stub.requests().filter { $0.url.path == "/Shows/s1/Episodes" }.count, 2)
+    coordinator.endCurrentSession()
+
+    await run(coordinator, .episode(try queued(2)))
+    XCTAssertNil(coordinator.session)
+    XCTAssertEqual(coordinator.failure?.message, message)
+    XCTAssertFalse(PlaybackURLProtocol.stub.requests().contains { $0.url.path == "/Items/e-s2e5/PlaybackInfo" })
+  }
+
+  func testEpisodeCachedOnAnotherServerStartsWithoutRereadingTheOwner() async throws {
+    // 所属服务器 emby 上有这部剧、没有组内第 11 集，emby2 上有。详情页刚读过两台：起播直接用 emby2，不先把 emby 上的整部剧重读一遍。
+    configureDefaultOrderLibrary()
+    let second = "lan2.playback-tests.local"
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers =
+        "[\(Self.embyServer(name: "emby", host: Self.lan)),\(Self.embyServer(name: "emby2", host: second))]"
+      $0.providerSearch["\(second)|tmdb.100"] = Self.series(id: "t1")
+      $0.episodes["\(second)|t1"] = Self.embyEpisodes(Self.embyEpisode("f2", season: 1, episode: 11, tmdb: 556))
+      $0.items["\(second)|f2"] = Self.embyEpisode("f2", season: 1, episode: 11, tmdb: 556)
+    }
+    let coordinator = makeCoordinator(makeService())
+    let owned = context(libraryServer: "emby")
+    let availability = await coordinator.episodeAvailability(for: [try groupEpisode(1)], context: owned)
+    XCTAssertEqual(availability, [.playable(server: "emby2")])
+    let ownerReads = {
+      PlaybackURLProtocol.stub.requests().filter { $0.url.host == Self.lan && $0.url.path.hasSuffix("/Episodes") }.count
+    }
+    let before = ownerReads()
+
+    await run(coordinator, .episode(try queued(1, owned)))
+    XCTAssertEqual(coordinator.session?.item.id, "f2")
+    XCTAssertEqual(ownerReads(), before)
+    coordinator.endCurrentSession()
+  }
+
+  func testLibraryItemIDOwnedByAnotherServerIsNotLookedUpByIDElsewhere() async throws {
+    // 入库缓存说条目 7 属于已经停用的 a，只启用了 b。b 上的 7 是另一部没刮削编号的电影：不能按 ID 播它。
+    let a = #"{"name":"a","type":"emby","enabled":false,"config":{"host":"lan.playback-tests.local","apikey":"k"}}"#
+    let b = Self.embyServer(name: "b", host: "wan.playback-tests.local")
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(a),\(b)]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = ["wan.playback-tests.local|7": Self.movie(id: "7", tmdb: nil)]
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    let coordinator = makeCoordinator(makeService())
+    let target = await coordinator.locateLibraryItem(
+      "7", expected: expectation(tmdb: "222"), in: try servers(a, b), preferredServer: "a")
+    XCTAssertNil(target, "b 上按外部编号找不到，就不显示播放")
+
+    await run(coordinator, .libraryItem(itemID: "7", expected: expectation(tmdb: "222"), owner: "a"))
+    XCTAssertNil(coordinator.session)
+    XCTAssertEqual(coordinator.failure?.message, PlaybackError.notFound.errorDescription)
+    XCTAssertFalse(
+      PlaybackURLProtocol.stub.requests().contains { $0.url.path.hasSuffix("/Items/7") }, "不在 b 上拿 a 的 ID 找")
+  }
+
+  // MARK: 错误分类
+
+  func testSeasonListThatComesBackEmptyFallsBackToTheOneReadEarlier() async throws {
+    configureDefaultOrderLibrary()
+    let service = makeService()
+    let coordinator = makeCoordinator(service)
+    await run(coordinator, .episode(try queued(2)))
+    let session = try XCTUnwrap(coordinator.session)
+    let first = try await coordinator.adjacentEpisode(.next, from: session.playback)
+    XCTAssertEqual(first, .missing, "第 2 季第 1 集还不在服务器上")
+
+    // 之后 MoviePilot 读 TMDB 失败，第 2 季返回了空列表：用之前读到的那份，不停下。
+    PlaybackURLProtocol.stub.configure { $0.tmdbEpisodes["/api/v1/tmdb/100/2"] = "[]" }
+    _ = try await service.fetchTmdbEpisodes(tmdbID: 100, season: 2, episodeGroup: "g1", forceRefresh: true)
+    let later = try await coordinator.adjacentEpisode(.next, from: session.playback)
+    XCTAssertEqual(later, .missing)
+    coordinator.endCurrentSession()
+
+    // 从没读到过第 2 季：停下请用户重试，不说成“下一集还不在”。
+    let fresh = makeCoordinator(makeService())
+    await run(fresh, .episode(try queued(2)))
+    let freshSession = try XCTUnwrap(fresh.session)
+    let unavailable = try await fresh.adjacentEpisode(.next, from: freshSession.playback)
+    XCTAssertEqual(unavailable, .stop("第 2 季集列表暂不可用，请重试"))
+    fresh.endCurrentSession()
+  }
+
+  func testRejectedKeyIsExplainedAndAKeyChangedInMoviePilotIsPickedUp() async throws {
+    configureDefaultOrderLibrary()
+    let service = makeService()
+    let coordinator = makeCoordinator(service)
+    _ = try await service.fetchCachedMediaServers()
+
+    // MoviePilot 里的密钥没变，Emby 拒绝它：说明是密钥的问题。
+    PlaybackURLProtocol.stub.configure { $0.rejectedKeys = ["emby-key"] }
+    await run(coordinator, .episode(try queued(0)))
+    XCTAssertNil(coordinator.session)
+    XCTAssertEqual(
+      coordinator.failure?.message,
+      "媒体服务器“emby”读取用户失败：不接受 MoviePilot 中配置的 API Key，请检查媒体服务器设置里的密钥")
+
+    // 密钥刚在 MoviePilot 里改过、TV 端缓存的还是旧的：重读一次配置，用新密钥接着读。
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: Self.lan, key: "new-key"))]"
+    }
+    let availability = await coordinator.episodeAvailability(for: [try groupEpisode(0)], context: context())
+    XCTAssertEqual(availability, [.playable(server: "emby")])
+  }
+
+  func testServerErrorOnOneCopyTriesTheOtherCopy() async throws {
+    // 同一集在两个媒体库各有一份，第一份读条目时服务器出错：先试第二份；两份都出错时说明哪台、哪一步，请稍后重试。
+    configureDefaultOrderLibrary()
+    PlaybackURLProtocol.stub.configure {
+      $0.providerSearch["\(Self.lan)|tmdb.100"] = [Self.series(id: "a"), Self.series(id: "b")].joined(separator: ",")
+      $0.episodes = [
+        "\(Self.lan)|a": Self.embyEpisodes(Self.embyEpisode("x-a", season: 2, episode: 3, tmdb: 555)),
+        "\(Self.lan)|b": Self.embyEpisodes(Self.embyEpisode("x-b", season: 2, episode: 3, tmdb: 555)),
+      ]
+      $0.items = [
+        "\(Self.lan)|x-a": Self.embyEpisode("x-a", season: 2, episode: 3, tmdb: 555),
+        "\(Self.lan)|x-b": Self.embyEpisode("x-b", season: 2, episode: 3, tmdb: 555),
+      ]
+      $0.itemStatus["\(Self.lan)|x-a"] = 500
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(try queued(0)))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(coordinator.session?.item.id, "x-b")
+    coordinator.endCurrentSession()
+
+    PlaybackURLProtocol.stub.configure { $0.itemStatus["\(Self.lan)|x-b"] = 500 }
+    await run(coordinator, .episode(try queued(0)))
+    XCTAssertNil(coordinator.session)
+    XCTAssertEqual(coordinator.failure?.message, "媒体服务器“emby”读取条目失败：服务器出错（HTTP 500），请稍后重试")
+  }
+
+  func testBadRequestForAnItemIsNotTreatedAsMissing() async throws {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: Self.lan))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.itemStatus["\(Self.lan)|m1"] = 400
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    XCTAssertEqual(coordinator.failure?.message, "媒体服务器“emby”读取条目失败：服务器不接受这个请求（HTTP 400）")
+  }
+
+  func testEpisodeListWithoutItemsIsAnUnrecognizedResponse() async throws {
+    // 剧集列表回包里没有 Items：不当作这部剧没有集。
+    configureDefaultOrderLibrary()
+    PlaybackURLProtocol.stub.configure { $0.episodes["\(Self.lan)|s1"] = "{}" }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(try queued(0)))
+    XCTAssertEqual(
+      coordinator.failure?.message, "媒体服务器“emby”读取剧集列表失败：返回的不是媒体服务器的数据，请检查地址或反向代理设置")
+  }
+
+  func testCertificateProblemAndLoginPageAreExplainedInsteadOfUnreachable() async throws {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "https://\(Self.lan)"))]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.certificateErrorHosts = [Self.lan]
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    XCTAssertEqual(
+      coordinator.failure?.message, "媒体服务器“emby”连接失败：https 证书不受信任或加密连接失败，请换受信任的证书或改用内网地址")
+
+    PlaybackURLProtocol.stub.configure {
+      $0.certificateErrorHosts = []
+      $0.htmlHosts = [Self.lan]
+    }
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    XCTAssertEqual(
+      coordinator.failure?.message, "媒体服务器“emby”连接失败：返回的不是媒体服务器的数据，请检查地址或反向代理设置")
+  }
+
+  func testCertificateFailureTriesOnlyTheNewlyConfiguredAddress() async throws {
+    let oldHost = "old.playback-tests.local"
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "https://\(oldHost)"))]"
+      $0.certificateErrorHosts = [oldHost]
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items["\(Self.lan)|m1"] = Self.movie()
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    let service = makeService()
+    let coordinator = makeCoordinator(service)
+    _ = try await service.fetchCachedMediaServers()
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "https://\(oldHost)", playHost: "https://\(Self.lan)"))]"
+    }
+
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(streamURL(coordinator)?.host, Self.lan)
+    XCTAssertEqual(mediaServerFetchCount(), 2)
+    XCTAssertEqual(PlaybackURLProtocol.stub.requests().filter { $0.url.host == oldHost }.count, 1)
+    coordinator.endCurrentSession()
+  }
+
+  func testCertificateFailureDoesNotRetryTheSameEndpointAfterSettingsChange() async throws {
+    let oldHost = "old.playback-tests.local"
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "https://\(oldHost)"))]"
+      $0.certificateErrorHosts = [oldHost]
+    }
+    let service = makeService()
+    let coordinator = makeCoordinator(service)
+    _ = try await service.fetchCachedMediaServers()
+    PlaybackURLProtocol.stub.configure {
+      let sameEndpoint = Self.embyServer(name: "emby", host: "https://\(oldHost):443/emby", key: "new-key")
+      $0.mediaServers = "[\(sameEndpoint),\(Self.embyServer(name: "other", host: Self.lan))]"
+    }
+
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    XCTAssertNil(coordinator.session)
+    XCTAssertEqual(
+      coordinator.failure?.message, "媒体服务器“emby”连接失败：https 证书不受信任或加密连接失败，请换受信任的证书或改用内网地址")
+    XCTAssertEqual(mediaServerFetchCount(), 2)
+    XCTAssertEqual(PlaybackURLProtocol.stub.requests().filter { $0.url.host == oldHost }.count, 1)
+    XCTAssertFalse(PlaybackURLProtocol.stub.requests().contains { $0.url.host == Self.lan })
+  }
+
+  func testEpisodeStartRecoversWithTheChangedAddressAfterMixedFailures() async throws {
+    configureDefaultOrderLibrary()
+    let oldHost = "old.playback-tests.local"
+    let newHost = "new.playback-tests.local"
+    let first = Self.embyServer(name: "emby", host: Self.lan)
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(first),\(Self.embyServer(name: "emby2", host: "https://\(oldHost)"))]"
+      $0.certificateErrorHosts = [oldHost]
+      $0.searchStatus[Self.lan] = 500
+    }
+    let service = makeService()
+    let coordinator = makeCoordinator(service)
+    _ = try await service.fetchCachedMediaServers()
+    PlaybackURLProtocol.stub.configure {
+      let updatedFirst = Self.embyServer(name: "emby", host: "updated.playback-tests.local")
+      $0.mediaServers = "[\(updatedFirst),\(Self.embyServer(name: "emby2", host: newHost))]"
+      $0.providerSearch["\(newHost)|tmdb.100"] = Self.series(id: "t1")
+      let episode = Self.embyEpisode("f1", season: 1, episode: 10, tmdb: 555)
+      $0.episodes["\(newHost)|t1"] = Self.embyEpisodes(episode)
+      $0.items["\(newHost)|f1"] = episode
+    }
+
+    await run(coordinator, .episode(try queued(0, context(libraryServer: "emby"))))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(coordinator.session?.item.id, "f1")
+    XCTAssertEqual(streamURL(coordinator)?.host, newHost)
+    XCTAssertEqual(mediaServerFetchCount(), 2)
+    XCTAssertEqual(PlaybackURLProtocol.stub.requests().filter { $0.url.host == oldHost }.count, 1)
+    coordinator.endCurrentSession()
+  }
+
+  func testItemFoundByExternalIDIsKeptWhenTheOldLibraryIDFails() async throws {
+    // 按外部编号已经在 a 上找到了 731；MoviePilot 缓存的旧 ID 42 读取会报 500，不能因此丢掉 731。
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "a", host: Self.lan)),\(Self.plexServer)]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.providerSearch = ["\(Self.lan)|tmdb.222": Self.movie(id: "731", tmdb: "222")]
+      $0.items = ["\(Self.lan)|731": Self.movie(id: "731", tmdb: "222")]
+      $0.itemStatus = ["\(Self.lan)|42": 500]
+      $0.playbackInfo = Self.playbackInfo()
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .libraryItem(itemID: "42", expected: expectation(tmdb: "222"), owner: "a"))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(coordinator.session?.item.id, "731")
+    XCTAssertFalse(PlaybackURLProtocol.stub.requests().contains { $0.url.path.hasSuffix("/Items/42") }, "已经找到就不再按旧 ID 查")
+    coordinator.endCurrentSession()
+
+    // 读一部剧的集时，按旧 ID 补查失败只记下，按外部编号找到的那一份照常用。
+    configureDefaultOrderLibrary()
+    PlaybackURLProtocol.stub.configure { $0.itemStatus = ["\(Self.lan)|old-s": 500] }
+    let episodes = makeCoordinator(makeService())
+    await run(episodes, .episode(try queued(0, context(libraryServer: "emby", libraryItemID: "old-s"))))
+    XCTAssertNil(episodes.failure)
+    XCTAssertEqual(episodes.session?.item.id, "e-s2e3")
+    XCTAssertTrue(
+      PlaybackURLProtocol.stub.requests().contains { $0.url.path.hasSuffix("/Items/old-s") }, "所属服务器上照常按旧 ID 补查")
+    episodes.endCurrentSession()
+  }
+
+  func testSwitchExplainsAnIncompleteIndexInsteadOfSayingTheEpisodeIsGone() async throws {
+    // 队列给的第 12 集条目删了，重读集索引时一个媒体库报 500、另一个里没有第 12 集：说明是哪一步失败，不说“已经找不到”。
+    configureDefaultOrderLibrary()
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(try queued(0)))
+    let session = try XCTUnwrap(coordinator.session)
+    PlaybackURLProtocol.stub.configure {
+      $0.items["\(Self.lan)|e-s2e5"] = nil
+      $0.providerSearch["\(Self.lan)|tmdb.100"] = [Self.series(), Self.series(id: "b")].joined(separator: ",")
+      $0.episodesStatus["\(Self.lan)|s1"] = 500
+      $0.episodes["\(Self.lan)|b"] = Self.embyEpisodes(Self.embyEpisode("x-b", season: 2, episode: 3, tmdb: 555))
+    }
+    var result: PlaybackCoordinator.SwitchResult?
+    coordinator.switchItem(to: "e-s2e5", episode: try queued(2), in: session) { result = $0 }
+    await coordinator.switchTaskForTesting?.value
+    guard case .failed(let message) = result else { return XCTFail("应换集失败，实际 \(String(describing: result))") }
+    XCTAssertEqual(message, "媒体服务器“emby”读取剧集列表失败：服务器出错（HTTP 500），请稍后重试")
+    coordinator.endCurrentSession()
+  }
+
+  func testRefreshedSeasonIsUsedWhenRereadingTheServerFails() async throws {
+    // 播完时重读 Emby 报错，MoviePilot 的季列表却读到了新顺序（第 12 集排到了第 11 集前面）：按新列表找下一集，
+    // 不因为另一项失败退回旧列表。（本用例固定两项的结果，不复现两项先后完成的时序。）
+    configureDefaultOrderLibrary()
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(try queued(0)))
+    let session = try XCTUnwrap(coordinator.session)
+    let reordered =
+      #"[{"id":555,"season_number":2,"episode_number":10,"name":"重逢"},{"id":557,"season_number":2,"episode_number":11,"name":"归来"},{"id":556,"season_number":2,"episode_number":12,"name":"离别"}]"#
+    PlaybackURLProtocol.stub.configure {
+      $0.episodesStatus["\(Self.lan)|s1"] = 500
+      $0.tmdbEpisodes["/api/v1/tmdb/100/1"] = reordered
+    }
+    let next = try await coordinator.adjacentEpisode(.next, from: session.playback, refresh: true)
+    let list = MoviePilotEpisode.list(
+      try JSONDecoder().decode([TmdbEpisode].self, from: Data(reordered.utf8)), season: 1)
+    XCTAssertEqual(
+      next,
+      .play(
+        EpisodeQueueEntry(
+          episode: list[1], item: try Self.serverEpisode("e-s2e5", season: 2, episode: 5, tmdb: 557), seasonEpisodes: list),
+        skippedMissing: false))
+    coordinator.endCurrentSession()
+  }
+
+  func testItemOwnedByTheNamedServerIsAcceptedWithoutExternalIDs() async throws {
+    // 启用了两台服务器（另一台是不能在应用内播放的 Plex），Emby 上的剧没刮到外部编号，按编号也搜不到。
+    // 入库查询已说明这个 ID 属于 emby，按 ID 兜底时不再要求编号对上。
+    configureDefaultOrderLibrary()
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers =
+        "[\(Self.embyServer(name: "emby", host: Self.lan)),{\"name\":\"plex\",\"type\":\"plex\",\"enabled\":true}]"
+      $0.providerSearch = [:]
+      $0.items["\(Self.lan)|s1"] = #"{"Id":"s1","Type":"Series","Name":"长风渡"}"#
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(try queued(0, context(libraryServer: "emby"))))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(coordinator.session?.item.id, "e-s2e3")
+    coordinator.endCurrentSession()
+  }
+
+  func testDetailPageFollowsTheInAppPlaybackSwitch() async throws {
+    // 详情页留在别的标签页里时，在设置里关掉或打开应用内播放，播放入口要跟着变。
+    let key = PlaybackPreferences.inAppPlaybackKey
+    let saved = UserDefaults.standard.object(forKey: key)
+    defer {
+      if let saved { UserDefaults.standard.set(saved, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+    }
+    UserDefaults.standard.set(true, forKey: key)
+    configureDefaultOrderLibrary()
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServerExists = #"{"success":true,"data":{"item":{"id":"s1","server":"emby"}}}"#
+    }
+    let service = makeService()
+    services.append(service)
+    let detail = MediaInfo(tmdb_id: 100, source: "themoviedb", media_id: "100", title: "长风渡", type: "电视剧")
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
+    viewModel.applyFullDetail(detail)
+    try await waitUntil { viewModel.inAppPlaybackTarget != nil }
+    XCTAssertEqual(viewModel.mediaServerItemRef, MediaServerItemRef(itemID: "s1", server: "emby"))
+
+    PlaybackPreferences.setInAppPlaybackEnabled(false)
+    try await waitUntil { viewModel.inAppPlaybackTarget == nil }
+    XCTAssertNil(viewModel.episodePlaybackContext(episodeGroup: nil, seasons: [1]))
+
+    PlaybackPreferences.setInAppPlaybackEnabled(true)
+    try await waitUntil { viewModel.inAppPlaybackTarget != nil }
+    XCTAssertNotNil(viewModel.episodePlaybackContext(episodeGroup: nil, seasons: [1]), "重新打开后补回入口")
+    viewModel.cancelForPop()
+  }
+
+  /// 详情页读真实的本机开关：测试期间设为开，结束后还原。
+  private func enableInAppPlaybackPreferenceForTest() {
+    let key = PlaybackPreferences.inAppPlaybackKey
+    let saved = UserDefaults.standard.object(forKey: key) as? Bool
+    addTeardownBlock {
+      if let saved { UserDefaults.standard.set(saved, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+    }
+    UserDefaults.standard.set(true, forKey: key)
+  }
+
+  private func makeSeriesDetailViewModel(_ service: APIService) -> MediaDetailViewModel {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServerExists = #"{"success":true,"data":{"item":{"id":"s1","server":"emby"}}}"#
+    }
+    services.append(service)
+    let detail = MediaInfo(tmdb_id: 100, source: "themoviedb", media_id: "100", title: "长风渡", type: "电视剧")
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
+    viewModel.applyFullDetail(detail)
+    return viewModel
+  }
+
+  func testDetailPageOpenedBeforeSettingsArriveAddsPlaybackLater() async throws {
+    // 从 Top Shelf 冷启动直接进详情页时，后端设置还没读到：先不显示播放，读到支持的版本后补回。
+    enableInAppPlaybackPreferenceForTest()
+    configureDefaultOrderLibrary()
+    backendVersion = nil
+    let service = makeService()
+    let viewModel = makeSeriesDetailViewModel(service)
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertNil(viewModel.inAppPlaybackTarget)
+
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.6")
+    try await waitUntil { viewModel.inAppPlaybackTarget != nil }
+    XCTAssertNotNil(viewModel.episodePlaybackContext(episodeGroup: nil, seasons: [1]))
+    viewModel.cancelForPop()
+  }
+
+  func testPoppedDetailPageNoLongerFollowsPlaybackSettings() async throws {
+    enableInAppPlaybackPreferenceForTest()
+    configureDefaultOrderLibrary()
+    let viewModel = makeSeriesDetailViewModel(makeService())
+    try await waitUntil { viewModel.inAppPlaybackTarget != nil }
+
+    viewModel.cancelForPop()
+    let requestCount = PlaybackURLProtocol.stub.requests().count
+    PlaybackPreferences.setInAppPlaybackEnabled(false)
+    PlaybackPreferences.setInAppPlaybackEnabled(true)
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertEqual(PlaybackURLProtocol.stub.requests().count, requestCount, "出栈后不再查入库状态、不连媒体服务器")
+  }
+
+  /// 最多等 2 秒。
+  private func waitUntil(_ condition: () -> Bool) async throws {
+    for _ in 0..<200 where !condition() {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertTrue(condition(), "等待超时")
+  }
+
+  func testOtherEntriesHaveNoEpisodeQueue() async throws {
+    configureDefaultOrderLibrary()
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "e-s2e5"))
+    let session = try XCTUnwrap(coordinator.session)
+    XCTAssertNil(session.episode)
+    let next = try await coordinator.adjacentEpisode(.next, from: session.playback)
+    XCTAssertEqual(next, .end)
+    XCTAssertEqual(session.titles.primary, "第 2 季 第 5 集 · Emby 集名", "没有集列表时按服务器的编号和集名")
+    coordinator.endCurrentSession()
+  }
+}
+
 private extension PlaybackCoordinator {
   /// 测试收尾：结束当前会话（生产代码只按会话结束，见 `endSession(_:)`）。
   func endCurrentSession() {
@@ -1560,10 +2711,28 @@ private final class PlaybackStub: @unchecked Sendable {
     /// `host|itemID` → 条目 JSON
     var items: [String: String] = [:]
     var playbackInfo = #"{"MediaSources":[]}"#
+    /// `host|itemID` → 这个条目自己的 PlaybackInfo（没有时用 `playbackInfo`）
+    var playbackInfoByItem: [String: String] = [:]
     /// `host|seriesID` → 剧集列表 JSON
     var episodes: [String: String] = [:]
     /// `host|tmdb.123` → 按外部编号搜索（`AnyProviderIdEquals`）能找到的条目 JSON
     var providerSearch: [String: String] = [:]
+    /// host → 按外部编号搜索时回的 HTTP 错误码（模拟服务器报错）
+    var searchStatus: [String: Int] = [:]
+    /// `host|seriesID` → 读这部剧的集时回的 HTTP 错误码
+    var episodesStatus: [String: Int] = [:]
+    /// `host|itemID` → 读单个条目时回的 HTTP 错误码
+    var itemStatus: [String: Int] = [:]
+    /// 带这些密钥的 Emby 请求回 401（探测地址用的公开接口除外）
+    var rejectedKeys: Set<String> = []
+    /// 这些主机的 https 证书不受信任
+    var certificateErrorHosts: Set<String> = []
+    /// 这些主机回的是网页（比如反向代理的登录页）
+    var htmlHosts: Set<String> = []
+    /// MoviePilot 路径（如 `/api/v1/tmdb/100/1`）→ 季集列表 JSON
+    var tmdbEpisodes: [String: String] = [:]
+    /// MoviePilot `/mediaserver/exists` 的回包
+    var mediaServerExists = #"{"success":true,"data":{"item":{}}}"#
     var usersGate: DispatchSemaphore?
     /// 卡住“开始播放”上报（模拟网络慢）
     var reportStartGate: DispatchSemaphore?
@@ -1594,6 +2763,7 @@ private final class PlaybackStub: @unchecked Sendable {
     defer { lock.unlock() }
     return recorded
   }
+
 
   func record(_ request: Recorded) -> Scenario {
     lock.lock()
@@ -1631,6 +2801,10 @@ private final class PlaybackURLProtocol: URLProtocol {
     if host == "mp.playback-tests.local" {
       if url.path == "/api/v1/system/setting/MediaServers" {
         respond(200, #"{"value":\#(scenario.mediaServers)}"#)
+      } else if let episodes = scenario.tmdbEpisodes[url.path] {
+        respond(200, episodes)
+      } else if url.path == "/api/v1/mediaserver/exists" {
+        respond(200, scenario.mediaServerExists)
       } else {
         respond(404, "{}")
       }
@@ -1644,6 +2818,20 @@ private final class PlaybackURLProtocol: URLProtocol {
       client?.urlProtocol(self, didFailWithError: URLError(.appTransportSecurityRequiresSecureConnection))
       return
     }
+    if scenario.certificateErrorHosts.contains(host) {
+      client?.urlProtocol(self, didFailWithError: URLError(.serverCertificateUntrusted))
+      return
+    }
+    if scenario.htmlHosts.contains(host) {
+      respond(200, "<html><body>请先登录</body></html>")
+      return
+    }
+    if !url.path.hasSuffix("/System/Info/Public"), let key = request.value(forHTTPHeaderField: "X-Emby-Token"),
+      scenario.rejectedKeys.contains(key)
+    {
+      respond(401, "")
+      return
+    }
 
     let path = url.path
     if path.hasSuffix("/System/Info/Public") {
@@ -1653,10 +2841,15 @@ private final class PlaybackURLProtocol: URLProtocol {
       respond(200, scenario.users)
     } else if path.hasSuffix("/Episodes") {
       let seriesID = url.deletingLastPathComponent().lastPathComponent
+      if let status = scenario.episodesStatus["\(host)|\(seriesID)"] {
+        respond(status, "{}")
+        return
+      }
       respond(200, scenario.episodes["\(host)|\(seriesID)"] ?? #"{"Items":[]}"#)
     } else if path.hasSuffix("/PlaybackInfo") {
       Self.pass(scenario.playbackInfoGate)
-      respond(200, scenario.playbackInfo)
+      let itemID = url.deletingLastPathComponent().lastPathComponent
+      respond(200, scenario.playbackInfoByItem["\(host)|\(itemID)"] ?? scenario.playbackInfo)
     } else if path.hasSuffix("/Sessions/Playing") {
       Self.pass(scenario.reportStartGate)
       respond(204, "")
@@ -1664,13 +2857,19 @@ private final class PlaybackURLProtocol: URLProtocol {
       Self.pass(scenario.reportStoppedGate)
       respond(204, "")
     } else if recorded.method == "GET", path.hasSuffix("/Items") {
+      if let status = scenario.searchStatus[host] {
+        respond(status, "{}")
+        return
+      }
       let keys = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
         .first { $0.name == "AnyProviderIdEquals" }?.value?.split(separator: ",") ?? []
       let found = keys.compactMap { scenario.providerSearch["\(host)|\($0)"] }
       respond(200, #"{"Items":[\#(found.joined(separator: ","))]}"#)
     } else if recorded.method == "GET", path.contains("/Items/") {
       let itemID = url.lastPathComponent
-      if let item = scenario.items["\(host)|\(itemID)"] {
+      if let status = scenario.itemStatus["\(host)|\(itemID)"] {
+        respond(status, "{}")
+      } else if let item = scenario.items["\(host)|\(itemID)"] {
         respond(200, item)
       } else {
         respond(404, "")

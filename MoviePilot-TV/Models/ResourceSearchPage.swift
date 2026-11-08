@@ -143,8 +143,7 @@ struct ResourceSearchQuery {
   var isMediaSearch = false
 
   static func supportsPaging(backendVersion: String?) -> Bool {
-    guard let version = MoviePilotVersion(backendVersion) else { return false }
-    return version >= MoviePilotVersion("v3.1.2-1")!
+    BackendVersionGate.isAvailable(since: "v3.1.2-1", backendVersion: backendVersion)
   }
 }
 

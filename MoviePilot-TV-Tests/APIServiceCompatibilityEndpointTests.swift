@@ -319,7 +319,7 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
         .data(using: .utf8)!
     )
 
-    let exists = try await service.fetchMediaServerItemID(media: media)
+    let exists = try await service.fetchMediaServerItemRef(media: media)
     XCTAssertNotNil(exists)
 
     let capturedExistsQuery =
@@ -405,21 +405,31 @@ final class APIServiceCompatibilityEndpointTests: XCTestCase {
     // v3.0.1 起 `success` 恒为 true，未入库时只有 `data.item` 为空对象。
     await CompatibilityEndpointURLProtocol.stub.setMediaServerExistsResponse(
       #"{"success":true,"data":{"item":{}}}"#.data(using: .utf8)!)
-    let missing = try await service.fetchMediaServerItemID(media: media)
+    let missing = try await service.fetchMediaServerItemRef(media: media)
     XCTAssertNil(missing, "v3 的 success=true + 空 item 必须判为未入库")
 
     // 命中时 `data.item.id` 非空。
     await CompatibilityEndpointURLProtocol.stub.setMediaServerExistsResponse(
       #"{"success":true,"data":{"item":{"id":"library/42"}}}"#.data(using: .utf8)!)
-    let itemID = try await service.fetchMediaServerItemID(media: media)
-    XCTAssertEqual(itemID, "library/42", "播放入口需要原样拿到条目 ID")
+    let itemRef = try await service.fetchMediaServerItemRef(media: media)
+    XCTAssertEqual(itemRef, MediaServerItemRef(itemID: "library/42", server: nil), "播放入口需要原样拿到条目 ID")
+
+    // v3.2.6 起同一条记录还带条目所属服务器的配置名称；空白名称按没有处理。
+    await CompatibilityEndpointURLProtocol.stub.setMediaServerExistsResponse(
+      #"{"success":true,"data":{"item":{"id":"7","server":"家里的 Emby"}}}"#.data(using: .utf8)!)
+    let withServer = try await service.fetchMediaServerItemRef(media: media)
+    XCTAssertEqual(withServer, MediaServerItemRef(itemID: "7", server: "家里的 Emby"))
+    await CompatibilityEndpointURLProtocol.stub.setMediaServerExistsResponse(
+      #"{"success":true,"data":{"item":{"id":"7","server":"  "}}}"#.data(using: .utf8)!)
+    let blankServer = try await service.fetchMediaServerItemRef(media: media)
+    XCTAssertEqual(blankServer, MediaServerItemRef(itemID: "7", server: nil))
 
     // v2 的 `success:false` 不是“未入库”，而是失败 envelope：严格解包必须抛错，
     // 不能把失败悄悄当成“未入库”。（v3 该端点已不再返回这种形态。）
     await CompatibilityEndpointURLProtocol.stub.setMediaServerExistsResponse(
       #"{"success":false,"data":{"item":{}}}"#.data(using: .utf8)!)
     do {
-      _ = try await service.fetchMediaServerItemID(media: media)
+      _ = try await service.fetchMediaServerItemRef(media: media)
       XCTFail("success:false 必须按失败 envelope 抛错")
     } catch let error as APIError {
       guard case .serverMessage = error else {
