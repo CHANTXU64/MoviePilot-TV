@@ -43,8 +43,8 @@ class MediaDetailViewModel: ObservableObject {
   /// 管理员且条目在（或无法确认不在）可播放的 Emby 上时，应用内播放的目标。
   @Published private(set) var inAppPlaybackTarget: PlaybackTarget?
   /// MoviePilot 入库查询给的条目（含所属服务器），有播放入口时才有。电视剧按集播放用它在服务器上找这部剧，
-  /// 见 `episodePlaybackContext(episodeGroup:seasons:)`。
-  @Published private(set) var mediaServerItemRef: MediaServerItemRef?
+  /// 见 `episodePlaybackContext(episodeGroup:seasons:)`。界面不直接显示它，和 `inAppPlaybackTarget` 一起更新，不单独触发重绘。
+  private(set) var mediaServerItemRef: MediaServerItemRef?
 
   /// 第二页首行数据是否已就绪。
   /// 用于控制 Loading 遮罩的显隐——必须等首行数据加载完才能移除遮罩，
@@ -67,6 +67,8 @@ class MediaDetailViewModel: ObservableObject {
   }
   private let detailBox: DetailBox
   private var cancellables = Set<AnyCancellable>()
+  /// 跟随应用内播放开关和后端版本的变化，出栈时停止。
+  private var playbackAvailabilityObservation: AnyCancellable?
   private var mediaServerExistsTask: Task<Void, Never>?
   private var relatedContentTask: Task<Void, Never>?
   private var relatedContentChildTasks: [Task<Void, Never>] = []
@@ -186,18 +188,24 @@ class MediaDetailViewModel: ObservableObject {
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &cancellables)
 
-    NotificationCenter.default.publisher(for: PlaybackPreferences.didChangeNotification)
-      .receive(on: DispatchQueue.main)
-      .sink { [weak self] _ in self?.inAppPlaybackPreferenceDidChange() }
-      .store(in: &cancellables)
+    // 详情页可能留在另一个标签页的导航栈里，也可能在读到后端设置之前就打开了（比如从 Top Shelf 冷启动直接进来），
+    // 设置里的开关或后端版本变了都要重新判断播放入口。
+    playbackAvailabilityObservation = Publishers.Merge(
+      NotificationCenter.default.publisher(for: PlaybackPreferences.didChangeNotification).map { _ in () },
+      apiService.$settings.map { $0?.BACKEND_VERSION }.removeDuplicates().dropFirst().map { _ in () }
+    )
+    .receive(on: DispatchQueue.main)
+    .sink { [weak self] in self?.inAppPlaybackAvailabilityDidChange() }
   }
 
-  /// 设置里的应用内播放开关变了（详情页可能留在另一个标签页的导航栈里）：关掉时立即收起播放入口，
-  /// 再重新查一次入库状态和播放目标，开启时补回入口。正在进行的上一次查询被取代。
-  private func inAppPlaybackPreferenceDidChange() {
-    if !PlaybackPreferences.isInAppPlaybackEnabled {
-      inAppPlaybackTarget = nil
+  /// 应用内播放开关或后端版本变了：不再提供时立即收起播放入口；再重新查一次入库状态和播放目标，
+  /// 可以提供时补回入口。正在进行的上一次查询被取代。
+  private func inAppPlaybackAvailabilityDidChange() {
+    let isEnabled = InAppPlaybackAvailability.isEnabled(
+      backendVersion: apiService.settings?.BACKEND_VERSION, userEnabled: PlaybackPreferences.isInAppPlaybackEnabled)
+    if !isEnabled {
       mediaServerItemRef = nil
+      inAppPlaybackTarget = nil
     }
     guard hasAppliedFullDetail else { return }
     startMediaServerExistsCheck()
@@ -514,6 +522,7 @@ class MediaDetailViewModel: ObservableObject {
 
   /// 仅在页面已确认被 Pop 出 NavigationPath 后调用。
   func cancelForPop() {
+    playbackAvailabilityObservation = nil
     mediaServerExistsTask?.cancel()
     mediaServerExistsTask = nil
     relatedContentTask?.cancel()
@@ -567,8 +576,8 @@ class MediaDetailViewModel: ObservableObject {
       let target = await coordinator.locateLibraryItem(
         itemRef.itemID, expected: expected, in: servers, preferredServer: itemRef.server)
       guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot) else { return }
-      inAppPlaybackTarget = target
       mediaServerItemRef = target == nil ? nil : itemRef
+      inAppPlaybackTarget = target
     } catch is CancellationError {
     } catch {
       Logger.warning("读取媒体服务器配置失败: \(error.localizedDescription)")

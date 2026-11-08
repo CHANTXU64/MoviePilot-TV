@@ -156,6 +156,10 @@ nonisolated enum PlaybackPreferences {
   /// 播完自动播下一集，默认开（与 Jellyfin/Emby 用户默认值相同）。
   static var autoPlaysNextEpisode: Bool { bool(forKey: autoPlayNextEpisodeKey, default: true) }
 
+  static func setAutoPlaysNextEpisode(_ enabled: Bool) {
+    UserDefaults.standard.set(enabled, forKey: autoPlayNextEpisodeKey)
+  }
+
   private static func bool(forKey key: String, default defaultValue: Bool) -> Bool {
     UserDefaults.standard.object(forKey: key) as? Bool ?? defaultValue
   }

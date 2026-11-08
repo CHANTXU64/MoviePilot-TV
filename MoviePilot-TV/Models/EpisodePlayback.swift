@@ -261,11 +261,16 @@ nonisolated enum EpisodeQueueStatus: Equatable, Sendable {
   static func resolve(
     _ episode: MoviePilotEpisode, currentServer: String, lookups: [ServerEpisodeLookup]
   ) -> EpisodeQueueStatus {
-    if let tmdbEpisodeID = episode.tmdbEpisodeID,
-      case .loaded(let index)? = lookups.first(where: { $0.serverName == currentServer }),
-      let item = index.playableEpisode(tmdbEpisodeID: tmdbEpisodeID)
-    {
-      return .playable(item)
+    switch lookups.first(where: { $0.serverName == currentServer }) {
+    case .loaded(let index):
+      if let tmdbEpisodeID = episode.tmdbEpisodeID, let item = index.playableEpisode(tmdbEpisodeID: tmdbEpisodeID) {
+        return .playable(item)
+      }
+    case .failed(_, let message):
+      // 当前服务器读取失败：这一集可能就在它上面，别的服务器有也不能说“只在别处”。
+      return .unknown(message)
+    case nil:
+      break
     }
     switch EpisodeAvailability.resolve(episode, lookups: lookups) {
     case .playable: return .elsewhere

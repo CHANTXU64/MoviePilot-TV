@@ -531,11 +531,14 @@ final class PlaybackCoordinatorTests: XCTestCase {
   /// 设置页「播放」里的应用内播放开关；不读真实的本机设置，免得测试之间互相影响。
   private var enabledInSettings = true
 
-  private func makeCoordinator(_ service: APIService) -> PlaybackCoordinator {
+  private func makeCoordinator(
+    _ service: APIService, now: @escaping () -> Date = Date.init
+  ) -> PlaybackCoordinator {
     services.append(service)
     let enabled = enabledInSettings
     return PlaybackCoordinator(
-      apiService: service, mediaServerSession: PlaybackURLProtocol.session, isEnabledInSettings: { enabled })
+      apiService: service, mediaServerSession: PlaybackURLProtocol.session, isEnabledInSettings: { enabled },
+      now: now)
   }
 
   private static func movie(
@@ -1850,6 +1853,120 @@ extension PlaybackCoordinatorTests {
     coordinator.endCurrentSession()
   }
 
+  func testServerWithoutTheSeriesIsNotReadAgainWhenStarting() async throws {
+    // 两台服务器，这部剧只在第二台上：第一台确认没有这部剧，起播时不再强制重读它。
+    configureDefaultOrderLibrary()
+    let second = "lan2.playback-tests.local"
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers =
+        "[\(Self.embyServer(name: "emby", host: Self.lan)),\(Self.embyServer(name: "emby2", host: second))]"
+      $0.providerSearch = ["\(second)|tmdb.100": Self.series(id: "t1")]
+      $0.episodes = ["\(second)|t1": Self.embyEpisodes(Self.embyEpisode("f1", season: 2, episode: 3, tmdb: 555))]
+      $0.items = ["\(second)|f1": Self.embyEpisode("f1", season: 2, episode: 3, tmdb: 555)]
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(context(), try groupEpisode(0)))
+    XCTAssertEqual(coordinator.session?.item.id, "f1")
+    let searchesOnFirst = PlaybackURLProtocol.stub.requests().filter {
+      $0.url.host == Self.lan && ($0.url.query ?? "").contains("AnyProviderIdEquals")
+    }
+    XCTAssertEqual(searchesOnFirst.count, 1, "第一台只搜一次")
+    coordinator.endCurrentSession()
+  }
+
+  func testQueuePanelOnlyReadsTheCurrentServer() async throws {
+    // 另一台服务器关机：面板只列当前服务器上的集，不为每个没入库的集去连它。
+    configureDefaultOrderLibrary()
+    let second = "lan2.playback-tests.local"
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers =
+        "[\(Self.embyServer(name: "emby", host: Self.lan)),\(Self.embyServer(name: "emby2", host: second))]"
+      $0.unreachableHosts = [second]
+      $0.episodes["\(Self.lan)|s1"] = Self.embyEpisodes(Self.embyEpisode("e-s2e3", season: 2, episode: 3, tmdb: 555))
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(context(), try groupEpisode(0)))
+    let session = try XCTUnwrap(coordinator.session)
+    let requestsToSecond = { PlaybackURLProtocol.stub.requests().filter { $0.url.host == second }.count }
+    let before = requestsToSecond()
+
+    let entries = try await coordinator.playableEpisodes(inSeason: 1, from: session.playback)
+    XCTAssertEqual(entries.map(\.item.id), ["e-s2e3"])
+    XCTAssertEqual(requestsToSecond(), before, "第 11、12 集不在当前服务器上，也不去连另一台")
+    coordinator.endCurrentSession()
+  }
+
+  func testSwitchingEpisodePlaysTheRequestedItemWithoutRereadingTheSeries() async throws {
+    // 看完一集（早过了集索引的 60 秒缓存）换下一集：要求的条目能直接播，就不先重读整部剧的集。
+    configureDefaultOrderLibrary()
+    var clock = Date()
+    let coordinator = makeCoordinator(makeService(), now: { clock })
+    await run(coordinator, .episode(context(), try groupEpisode(0)))
+    let session = try XCTUnwrap(coordinator.session)
+    clock += 45 * 60
+    let seriesReads = {
+      PlaybackURLProtocol.stub.requests().filter {
+        $0.url.path.hasSuffix("/Episodes") || ($0.url.query ?? "").contains("AnyProviderIdEquals")
+      }.count
+    }
+    let before = seriesReads()
+
+    var result: PlaybackCoordinator.SwitchResult?
+    coordinator.switchItem(to: "e-s2e5", episode: try groupEpisode(2), in: session) { result = $0 }
+    await coordinator.switchTaskForTesting?.value
+    guard case .switched = result else { return XCTFail("应换到第 12 集，实际 \(String(describing: result))") }
+    XCTAssertEqual(session.item.id, "e-s2e5")
+    XCTAssertEqual(seriesReads(), before)
+    coordinator.endCurrentSession()
+  }
+
+  func testSwitchingToAnUnplayableCopyFallsBackToAnotherCopy() async throws {
+    // 第 12 集在两个媒体库各有一份，队列给的是不能直连的 strm 那份：换同一台服务器上的另一份。
+    configureDefaultOrderLibrary()
+    PlaybackURLProtocol.stub.configure {
+      $0.providerSearch["\(Self.lan)|tmdb.100"] = [Self.series(), Self.series(id: "strm")].joined(separator: ",")
+      $0.episodes["\(Self.lan)|strm"] = Self.embyEpisodes(Self.embyEpisode("x-strm", season: 2, episode: 5, tmdb: 557))
+      $0.items["\(Self.lan)|x-strm"] = Self.embyEpisode("x-strm", season: 2, episode: 5, tmdb: 557)
+      $0.playbackInfoByItem["\(Self.lan)|x-strm"] =
+        #"{"MediaSources":[{"Id":"remote","Container":"mkv","Protocol":"Http","MediaStreams":[]}]}"#
+    }
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(context(), try groupEpisode(0)))
+    let session = try XCTUnwrap(coordinator.session)
+
+    var result: PlaybackCoordinator.SwitchResult?
+    coordinator.switchItem(to: "x-strm", episode: try groupEpisode(2), in: session) { result = $0 }
+    await coordinator.switchTaskForTesting?.value
+    guard case .switched = result else { return XCTFail("应换到另一份，实际 \(String(describing: result))") }
+    XCTAssertEqual(session.item.id, "e-s2e5")
+    coordinator.endCurrentSession()
+  }
+
+  func testOwnerServerIsStillPreferredWhenTheDetailPageCouldNotConfirm() async throws {
+    // 两台 Emby，入库查询说 7 属于 a，a 上的电影没刮到外部编号。进详情页时 a 连不上，只能判为不确定。
+    let a = Self.embyServer(name: "a", host: "lan.playback-tests.local")
+    let b = Self.embyServer(name: "b", host: "wan.playback-tests.local")
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(a),\(b)]"
+      $0.users = #"[{"Id":"u-admin","Name":"admin"}]"#
+      $0.items = ["lan.playback-tests.local|7": Self.movie(id: "7", tmdb: nil)]
+      $0.playbackInfo = Self.playbackInfo()
+      $0.unreachableHosts = ["lan.playback-tests.local"]
+    }
+    let coordinator = makeCoordinator(makeService())
+    let target = await coordinator.locateLibraryItem(
+      "7", expected: expectation(tmdb: "222"), in: try servers(a, b), preferredServer: "a")
+    XCTAssertEqual(target, .libraryItem(itemID: "7", expected: expectation(tmdb: "222"), owner: "a"))
+
+    // 点播放时 a 已经能连上：它自己的条目不要求外部编号对上。
+    PlaybackURLProtocol.stub.configure { $0.unreachableHosts = [] }
+    await run(coordinator, try XCTUnwrap(target))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(coordinator.session?.item.id, "7")
+    XCTAssertEqual(coordinator.session?.connection.serverName, "a")
+    coordinator.endCurrentSession()
+  }
+
   func testNextEpisodeThatArrivesDuringPlaybackIsFoundWhenRefreshed() async throws {
     // 订阅还在下载：开播时第 11、12 集都不在，播放期间第 11 集下载入库。
     configureDefaultOrderLibrary()
@@ -1925,6 +2042,57 @@ extension PlaybackCoordinatorTests {
     try await waitUntil { viewModel.inAppPlaybackTarget != nil }
     XCTAssertNotNil(viewModel.episodePlaybackContext(episodeGroup: nil, seasons: [1]), "重新打开后补回入口")
     viewModel.cancelForPop()
+  }
+
+  /// 详情页读真实的本机开关：测试期间设为开，结束后还原。
+  private func enableInAppPlaybackPreferenceForTest() {
+    let key = PlaybackPreferences.inAppPlaybackKey
+    let saved = UserDefaults.standard.object(forKey: key) as? Bool
+    addTeardownBlock {
+      if let saved { UserDefaults.standard.set(saved, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+    }
+    UserDefaults.standard.set(true, forKey: key)
+  }
+
+  private func makeSeriesDetailViewModel(_ service: APIService) -> MediaDetailViewModel {
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServerExists = #"{"success":true,"data":{"item":{"id":"s1","server":"emby"}}}"#
+    }
+    services.append(service)
+    let detail = MediaInfo(tmdb_id: 100, source: "themoviedb", media_id: "100", title: "长风渡", type: "电视剧")
+    let viewModel = MediaDetailViewModel(detail: detail, apiService: service)
+    viewModel.applyFullDetail(detail)
+    return viewModel
+  }
+
+  func testDetailPageOpenedBeforeSettingsArriveAddsPlaybackLater() async throws {
+    // 从 Top Shelf 冷启动直接进详情页时，后端设置还没读到：先不显示播放，读到支持的版本后补回。
+    enableInAppPlaybackPreferenceForTest()
+    configureDefaultOrderLibrary()
+    backendVersion = nil
+    let service = makeService()
+    let viewModel = makeSeriesDetailViewModel(service)
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertNil(viewModel.inAppPlaybackTarget)
+
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.6")
+    try await waitUntil { viewModel.inAppPlaybackTarget != nil }
+    XCTAssertNotNil(viewModel.episodePlaybackContext(episodeGroup: nil, seasons: [1]))
+    viewModel.cancelForPop()
+  }
+
+  func testPoppedDetailPageNoLongerFollowsPlaybackSettings() async throws {
+    enableInAppPlaybackPreferenceForTest()
+    configureDefaultOrderLibrary()
+    let viewModel = makeSeriesDetailViewModel(makeService())
+    try await waitUntil { viewModel.inAppPlaybackTarget != nil }
+
+    viewModel.cancelForPop()
+    let requestCount = PlaybackURLProtocol.stub.requests().count
+    PlaybackPreferences.setInAppPlaybackEnabled(false)
+    PlaybackPreferences.setInAppPlaybackEnabled(true)
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertEqual(PlaybackURLProtocol.stub.requests().count, requestCount, "出栈后不再查入库状态、不连媒体服务器")
   }
 
   /// 最多等 2 秒。

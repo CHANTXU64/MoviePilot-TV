@@ -84,6 +84,31 @@ extension SystemSessionBehaviorTests {
     XCTAssertTrue(paths.contains("/api/v1/system/global"))
   }
 
+  func testRecheckingBackendVersionAlsoUpdatesTheVersionRow() async throws {
+    // 播放设置页按“重新检查”后，连接信息里的「MoviePilot 版本」也要显示新版本。
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SystemInfoURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SystemInfoURLProtocol.self) }
+
+    await SystemInfoURLProtocol.stub.reset()
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "https://system-info-tests.local"
+    service.tokenForTesting = "limited-token"
+    service.currentUserForTesting = nonManageToken()
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.5")
+
+    let viewModel = SystemViewModel(apiService: service)
+    viewModel.backendVersion = "v3.2.5"
+
+    await viewModel.recheckBackendVersion()
+
+    XCTAssertEqual(service.settings?.BACKEND_VERSION, "v9.9.9")
+    XCTAssertEqual(viewModel.backendVersion, "v9.9.9")
+    XCTAssertFalse(viewModel.isCheckingBackendVersion)
+  }
+
   func testLoadSystemInfoUsesPublicBackendVersionForManageNonSuperuser() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SystemInfoURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SystemInfoURLProtocol.self) }

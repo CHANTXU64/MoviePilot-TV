@@ -525,16 +525,13 @@ final class UserSession {
 
   /// 播放界面持有会话，这里不延长它的生命周期。
   @ObservationIgnored private weak var session: PlaybackSession?
-  @ObservationIgnored let connection: any MediaServerConnection
-
   /// 播完自动播下一集。Swiftfin 读写服务器上的用户配置；这里存在本机，与设置页「播放」的开关是同一个。
   var isAutoPlayEnabled: Bool {
-    didSet { UserDefaults.standard.set(isAutoPlayEnabled, forKey: PlaybackPreferences.autoPlayNextEpisodeKey) }
+    didSet { PlaybackPreferences.setAutoPlaysNextEpisode(isAutoPlayEnabled) }
   }
 
   init(session: PlaybackSession) {
     self.session = session
-    connection = session.connection
     isAutoPlayEnabled = PlaybackPreferences.autoPlaysNextEpisode
   }
 

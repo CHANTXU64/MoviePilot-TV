@@ -175,6 +175,16 @@ final class EpisodePlaybackModelTests: XCTestCase {
       return XCTFail("缺少编号不能当作没有")
     }
   }
+
+  func testQueueStatusIsUnknownWhenTheCurrentServerFailedToLoad() {
+    // 当前服务器读取超时、另一台有这一集：可能当前服务器上也有，不能说“只在另一台上”。
+    let lookups = [
+      ServerEpisodeLookup.failed(server: "a", message: "无法连接“a”"),
+      index("b", [serverEpisode("b2", tmdb: 2)]),
+    ]
+    XCTAssertEqual(
+      EpisodeQueueStatus.resolve(episode(2), currentServer: "a", lookups: lookups), .unknown("无法连接“a”"))
+  }
 }
 
 // MARK: - 上一集、下一集

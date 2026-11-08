@@ -95,9 +95,7 @@ class SystemViewModel: ObservableObject {
 
   /// 播完自动播下一集，和播放界面工具栏的“自动播放”是同一个设置。
   @Published var autoPlayNextEpisode: Bool = true {
-    didSet {
-      UserDefaults.standard.set(autoPlayNextEpisode, forKey: PlaybackPreferences.autoPlayNextEpisodeKey)
-    }
+    didSet { PlaybackPreferences.setAutoPlaysNextEpisode(autoPlayNextEpisode) }
   }
 
   /// 后端版本是否支持应用内播放。
@@ -127,13 +125,16 @@ class SystemViewModel: ObservableObject {
 
   @Published private(set) var isCheckingBackendVersion = false
 
-  /// 重新读取后端版本：后端升级到支持的版本后，回到这里按一下就能打开应用内播放。
+  /// 重新读取后端版本：后端升级到支持的版本后，回到这里按一下就能设置应用内播放；「MoviePilot 版本」那一行也跟着更新。
   func recheckBackendVersion() async {
     guard !isCheckingBackendVersion else { return }
     isCheckingBackendVersion = true
     defer { isCheckingBackendVersion = false }
+    let sessionSnapshot = apiService.sessionSnapshot()
     do {
-      _ = try await apiService.fetchSettings()
+      let settings = try await apiService.fetchSettings()
+      guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
+      backendVersion = normalizedBackendVersion(settings.BACKEND_VERSION) ?? backendVersion
     } catch {
       Logger.warning("重新读取后端版本失败: \(error.localizedDescription)")
     }
