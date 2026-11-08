@@ -4,6 +4,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
 import subprocess
 import sys
@@ -103,7 +104,8 @@ elif tool == "xcodebuild":
         udid = args[args.index("-destination") + 1].split("id=")[1]
         matches = [device["runtime"] for device in load_devices() if device["udid"] == udid]
         current_runtime = matches[0] if matches else ""
-        if os.environ.get("TVOS_RUNNER_EXPECT_CONCURRENT") == "1" and not (root / "concurrent-released").exists():
+        expected_concurrent = int(os.environ.get("TVOS_RUNNER_EXPECT_CONCURRENT", "0"))
+        if expected_concurrent and not (root / "concurrent-released").exists():
             deadline = time.time() + 5
             while time.time() < deadline:
                 created = 0
@@ -112,7 +114,7 @@ elif tool == "xcodebuild":
                         created += json.loads(line)["args"][:2] == ["simctl", "create"]
                     except json.JSONDecodeError:
                         pass
-                if created >= 3:
+                if created >= expected_concurrent:
                     break
                 time.sleep(0.01)
             (root / "concurrent-released").touch()
@@ -135,7 +137,7 @@ elif tool == "xcodebuild":
             return devices
         locked(arrive)
         deadline = time.time() + 5
-        while time.time() < deadline and len((root / "build-arrived").read_text().splitlines()) < 3:
+        while time.time() < deadline and len((root / "build-arrived").read_text().splitlines()) < 2:
             time.sleep(0.01)
     if is_debug_build and fail_build and current_runtime.endswith(fail_build.replace(".", "-")):
         for key in ("TVOS_RUNNER_TEST_GAP_FILE", "TVOS_RUNNER_TEST_REGISTER_GAP_FILE"):
@@ -179,6 +181,10 @@ class TestTVOSRunnerTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
+        # Run a copy so the default cache, which lives in the checkout, lands in this temporary directory.
+        self.script = self.root / "scripts" / "test-tvos.py"
+        self.script.parent.mkdir()
+        shutil.copy(SCRIPT, self.script)
         for tool in ("xcrun", "xcodebuild"):
             path = self.root / tool
             path.write_text(COMMAND)
@@ -197,7 +203,7 @@ class TestTVOSRunnerTests(unittest.TestCase):
         self.environment["TVOS_RUNNER_TEST_MODE"] = mode
         runtime_args = [] if matrix or "--runtime" in arguments else ["--runtime", "27.0"]
         full_args = ["--full"] if full and "--only-testing" not in arguments else []
-        return subprocess.run([sys.executable, str(SCRIPT), *runtime_args, *full_args, *arguments], env=self.environment,
+        return subprocess.run([sys.executable, str(self.script), *runtime_args, *full_args, *arguments], env=self.environment,
                               capture_output=True, text=True, timeout=20)
 
     def assert_owned_cleanup(self):
@@ -230,8 +236,12 @@ class TestTVOSRunnerTests(unittest.TestCase):
         self.assertNotIn("clean", builds[0])
         self.assertNotIn("test-without-building", builds[0])
         derived = Path(builds[0][builds[0].index("-derivedDataPath") + 1])
-        self.assertIn("MoviePilot-TV-tests", derived.parts)
-        self.assertTrue(derived.is_relative_to(self.root.resolve()))
+        # The default cache lives in the checkout, so it goes away with the clone and macOS does not expire it.
+        cache = self.root / ".test-tvos-cache"
+        self.assertTrue(derived.is_relative_to(cache.resolve()))
+        excluded = subprocess.run(["xattr", "-p", "com.apple.metadata:com_apple_backup_excludeItem", str(cache)],
+                                  capture_output=True, text=True)
+        self.assertEqual(excluded.returncode, 0, "the rebuildable cache is kept out of Time Machine backups")
         creates = [call["args"] for call in self.calls() if call["args"][:2] == ["simctl", "create"]]
         self.assertEqual(len(creates), 1)
         self.assertTrue(creates[0][4].endswith("tvOS-28-0"))
@@ -260,7 +270,8 @@ class TestTVOSRunnerTests(unittest.TestCase):
                 (self.root / "devices.json").unlink(missing_ok=True)
                 result = self.run_script(mode, matrix=True)
                 self.assertEqual(result.returncode, 65, result.stderr)
-                self.assertEqual(sum(call["args"][:2] == ["simctl", "create"] for call in self.calls()), 3)
+                # Only the two running versions create simulators; the queued one never starts.
+                self.assertEqual(sum(call["args"][:2] == ["simctl", "create"] for call in self.calls()), 2)
                 self.assertFalse(any("test-without-building" in call["args"] for call in self.calls()))
                 self.assert_cleanup_pairs()
 
@@ -270,7 +281,7 @@ class TestTVOSRunnerTests(unittest.TestCase):
         self.environment["TVOS_RUNNER_TEST_BUILD_BARRIER"] = "1"
         result = self.run_script("success", matrix=True)
         self.assertEqual(result.returncode, 65, result.stderr)
-        self.assertEqual(sum(call["args"][:2] == ["simctl", "create"] for call in self.calls()), 3)
+        self.assertEqual(sum(call["args"][:2] == ["simctl", "create"] for call in self.calls()), 2)
         self.assertFalse(any("test-without-building" in call["args"] for call in self.calls()))
         self.assertIn("停止其余版本", result.stderr)
         self.assert_cleanup_pairs()
@@ -293,15 +304,15 @@ class TestTVOSRunnerTests(unittest.TestCase):
         self.environment["TVOS_RUNNER_TEST_BUILD_BARRIER"] = "1"
         self.environment["TVOS_RUNNER_TEST_REGISTER_GAP_ON"] = "build-for-testing"
         self.environment["TVOS_RUNNER_TEST_REGISTER_GAP_FILE"] = str(self.root / "spawned")
-        self.environment["TVOS_RUNNER_TEST_REGISTER_GAP_COUNT"] = "2"
+        self.environment["TVOS_RUNNER_TEST_REGISTER_GAP_COUNT"] = "1"
         self.environment["TVOS_RUNNER_TEST_CANCEL_EMPTY"] = str(self.root / "cancel-empty")
         self.environment["TVOS_RUNNER_TEST_SLOW_TEST_BUILD"] = "1"
         result = self.run_script("success", matrix=True)
         self.assertEqual(result.returncode, 65, result.stderr)
-        self.assertEqual((self.root / "spawned").read_text().splitlines(), ["spawned", "spawned"])
+        self.assertEqual((self.root / "spawned").read_text().splitlines(), ["spawned"])
         self.assertTrue((self.root / "cancel-empty").exists())
         started = [call["args"] for call in self.calls() if "build-for-testing" in call["args"]]
-        self.assertEqual(len(started), 2)
+        self.assertEqual(len(started), 1)
         self.assertFalse(any("test-without-building" in call["args"] for call in self.calls()))
         self.assertIn("停止其余版本", result.stderr)
         self.assert_cleanup_pairs()
@@ -369,7 +380,7 @@ class TestTVOSRunnerTests(unittest.TestCase):
         self.assert_owned_cleanup()
 
     def test_default_matrix_builds_and_tests_each_runtime_with_separate_results(self):
-        self.environment["TVOS_RUNNER_EXPECT_CONCURRENT"] = "1"
+        self.environment["TVOS_RUNNER_EXPECT_CONCURRENT"] = "2"
         result = self.run_script("success", "--result-bundle-path", str(self.root / "results.xcresult"), matrix=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.calls()
@@ -385,8 +396,7 @@ class TestTVOSRunnerTests(unittest.TestCase):
         self.assertIn("SourcePackages", resolve[0][resolve[0].index("-clonedSourcePackagesDirPath") + 1])
         package_derived = Path(resolve[0][resolve[0].index("-derivedDataPath") + 1])
         self.assertEqual(package_derived.name, "package-resolution")
-        self.assertIn("MoviePilot-TV-tests", package_derived.parts)
-        self.assertTrue(package_derived.is_relative_to(self.root.resolve()))
+        self.assertTrue(package_derived.is_relative_to((self.root / ".test-tvos-cache").resolve()))
         tests = [args for args in builds if "test-without-building" in args]
         self.assertEqual(len(tests), 3)
         destinations = [args[args.index("-destination") + 1] for args in tests]
@@ -415,7 +425,10 @@ class TestTVOSRunnerTests(unittest.TestCase):
         self.assertEqual(set(cleaned), {destination.split("id=")[1] for destination in destinations})
         lifecycle = [call["args"][1] for call in calls if call["args"][:2] in (
             ["simctl", "create"], ["simctl", "delete"])]
-        self.assertEqual(lifecycle, ["create"] * 3 + ["delete"] * 3)
+        self.assertEqual(sorted(lifecycle), ["create"] * 3 + ["delete"] * 3)
+        existing = [lifecycle[:index + 1].count("create") - lifecycle[:index + 1].count("delete")
+                    for index in range(len(lifecycle))]
+        self.assertEqual(max(existing), 2, f"two versions run together, never three: {lifecycle}")
         self.assertEqual(self.sentinel.read_text(), "saved session and password")
 
     def test_explicit_runtime_runs_only_exact_version_and_keeps_result_path(self):
@@ -483,23 +496,23 @@ class TestTVOSRunnerTests(unittest.TestCase):
 
     def assert_matrix_cancellation(self, signum):
         self.environment["TVOS_RUNNER_TEST_MODE"] = "interrupt"
-        process = subprocess.Popen([sys.executable, str(SCRIPT), "--full", "--skip-build"],
+        process = subprocess.Popen([sys.executable, str(self.script), "--full", "--skip-build"],
                                    env=self.environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
             deadline = time.monotonic() + 10
             while time.monotonic() < deadline:
                 started = sum("test-without-building" in call["args"] for call in self.calls())
-                if started >= 3:
+                if started >= 2:
                     break
                 time.sleep(0.02)
-            self.assertGreaterEqual(sum("test-without-building" in call["args"] for call in self.calls()), 3)
+            self.assertGreaterEqual(sum("test-without-building" in call["args"] for call in self.calls()), 2)
             process.send_signal(signum)
             output, errors = process.communicate(timeout=10)
             creates = [call["args"] for call in self.calls() if call["args"][:2] == ["simctl", "create"]]
             self.assertEqual(process.returncode, 130, f"{creates}\n{errors}")
-            self.assertEqual(len(creates), 3)
+            self.assertEqual(len(creates), 2, "the queued third version does not start after cancellation")
             cleaned = self.assert_cleanup_pairs()
-            self.assertEqual(len(cleaned), 3)
+            self.assertEqual(len(cleaned), 2)
             if self.environment.get("TVOS_RUNNER_TEST_DELETE_FAILURE"):
                 self.assertIn("无法清理本次测试模拟器", errors)
                 self.assertNotIn("已清理本次创建的测试模拟器", output)
@@ -549,7 +562,7 @@ class TestTVOSRunnerTests(unittest.TestCase):
 
     def test_cancellation_stops_child_and_cleans_only_owned_device(self):
         self.environment["TVOS_RUNNER_TEST_MODE"] = "interrupt"
-        process = subprocess.Popen([sys.executable, str(SCRIPT), "--full", "--runtime", "27.0", "--skip-build"],
+        process = subprocess.Popen([sys.executable, str(self.script), "--full", "--runtime", "27.0", "--skip-build"],
                                    env=self.environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    text=True)
         try:
@@ -582,7 +595,7 @@ class TestTVOSRunnerTests(unittest.TestCase):
 
     def test_cancellation_during_create_recovers_only_owned_device(self):
         self.environment["TVOS_RUNNER_TEST_MODE"]="interrupt_during_create"
-        process=subprocess.Popen([sys.executable,str(SCRIPT),"--full","--runtime","27.0","--skip-build"],env=self.environment,
+        process=subprocess.Popen([sys.executable,str(self.script),"--full","--runtime","27.0","--skip-build"],env=self.environment,
                                  stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         try:
             deadline=time.monotonic()+10
