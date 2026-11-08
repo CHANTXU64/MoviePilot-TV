@@ -456,8 +456,15 @@ final class MediaSession {
     }
   }
 
+  /// 片尾重新查下一集的结果怎么用：查询期间从工具栏关掉了自动播放，就和平常播完一样退出，不起播、也不说明原因。
+  static func resultAfterLookUp(
+    _ result: MoviePilotEpisodeQueue.NextLookup, isAutoPlayEnabled: Bool
+  ) -> MoviePilotEpisodeQueue.NextLookup {
+    isAutoPlayEnabled ? result : .unavailable(nil)
+  }
+
   /// 重新查下一集，查询期间显示加载中；查到就接着播，查不到就退出并说明原因（已是最后一集时不说明）。
-  /// 期间用户退出，或手动换了集（`playNewItem` 取消这次查询），结果都丢弃。
+  /// 期间用户退出，或手动换了集（`playNewItem` 取消这次查询），结果都丢弃；关掉了自动播放见 `resultAfterLookUp`。
   private func lookUpNextAfterEnd(_ episodeQueue: MoviePilotEpisodeQueue) {
     isSwitchingItem = true
     nextLookupTask?.cancel()
@@ -467,7 +474,7 @@ final class MediaSession {
       guard let self, !Task.isCancelled, !self.isStopped, self.session.item.id == endedItemID else { return }
       self.nextLookupTask = nil
       self.isSwitchingItem = false
-      switch result {
+      switch Self.resultAfterLookUp(result, isAutoPlayEnabled: self.userSession.isAutoPlayEnabled) {
       case .play(let intent): self.playNewItem(intent: intent)
       case .unavailable(let reason): self.finish(notice: reason)
       }

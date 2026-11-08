@@ -872,11 +872,7 @@ struct SystemView: View {
           Button {
             Task { await viewModel.recheckBackendVersion() }
           } label: {
-            row(
-              "应用内播放",
-              value: viewModel.isCheckingBackendVersion
-                ? "正在检查" : "需要 MoviePilot \(InAppPlaybackAvailability.minimumBackendVersion)",
-              showsProgress: viewModel.isCheckingBackendVersion)
+            row("应用内播放", value: versionRequirementValue, showsProgress: viewModel.isCheckingBackendVersion)
           }
           .accessibilityHint("重新检查 MoviePilot 版本")
           .focused($focusedItem, equals: .inAppPlayback)
@@ -913,6 +909,12 @@ struct SystemView: View {
         }
       }
     }
+  }
+
+  private var versionRequirementValue: String {
+    if viewModel.isCheckingBackendVersion { return "正在检查" }
+    if viewModel.backendVersionCheckFailed { return "检查失败，按下重试" }
+    return "需要 MoviePilot \(InAppPlaybackAvailability.minimumBackendVersion)"
   }
 
   private var playbackSummary: String {

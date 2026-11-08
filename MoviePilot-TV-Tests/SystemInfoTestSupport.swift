@@ -5,10 +5,16 @@ import Foundation
 actor SystemInfoURLProtocolStub {
   private var requests: [URLRequest] = []
   private var systemEnvStatusCode = 200
+  private var globalSettingsStatusCode = 200
 
   func reset() {
     requests.removeAll()
     systemEnvStatusCode = 200
+    globalSettingsStatusCode = 200
+  }
+
+  func setGlobalSettingsStatusCode(_ statusCode: Int) {
+    globalSettingsStatusCode = statusCode
   }
 
   func setSystemEnvStatusCode(_ statusCode: Int) {
@@ -29,10 +35,12 @@ actor SystemInfoURLProtocolStub {
     let data: Data
     switch url.path {
     case "/api/v1/system/global":
-      statusCode = 200
+      statusCode = globalSettingsStatusCode
       data =
-        #"{"success":true,"data":{"BACKEND_VERSION":"v9.9.9","FRONTEND_VERSION":"v2.13.15","TMDB_IMAGE_DOMAIN":"image.tmdb.org"}}"#
-        .data(using: .utf8)!
+        globalSettingsStatusCode == 200
+        ? #"{"success":true,"data":{"BACKEND_VERSION":"v9.9.9","FRONTEND_VERSION":"v2.13.15","TMDB_IMAGE_DOMAIN":"image.tmdb.org"}}"#
+          .data(using: .utf8)!
+        : #"{"success":false,"message":"unavailable"}"#.data(using: .utf8)!
     case "/api/v1/system/global/user":
       statusCode = 200
       data = #"{"success":true,"data":{}}"#.data(using: .utf8)!

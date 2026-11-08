@@ -109,6 +109,51 @@ extension SystemSessionBehaviorTests {
     XCTAssertFalse(viewModel.isCheckingBackendVersion)
   }
 
+  func testFailedBackendVersionRecheckIsShownAndCanBeRetried() async throws {
+    // 后端升级后重新检查时请求失败：要和“版本确实过低”分开显示，按一下可以重试。
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SystemInfoURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SystemInfoURLProtocol.self) }
+
+    await SystemInfoURLProtocol.stub.reset()
+    await SystemInfoURLProtocol.stub.setGlobalSettingsStatusCode(503)
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SystemSessionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    service.baseURLForTesting = "https://system-info-tests.local"
+    service.tokenForTesting = "limited-token"
+    service.currentUserForTesting = nonManageToken()
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.5")
+    let viewModel = SystemViewModel(apiService: service)
+
+    await viewModel.recheckBackendVersion()
+    XCTAssertTrue(viewModel.backendVersionCheckFailed)
+    XCTAssertEqual(viewModel.playbackSettingRows, [.versionRequirement])
+
+    await SystemInfoURLProtocol.stub.setGlobalSettingsStatusCode(200)
+    await viewModel.recheckBackendVersion()
+    XCTAssertFalse(viewModel.backendVersionCheckFailed)
+    XCTAssertEqual(service.settings?.BACKEND_VERSION, "v9.9.9")
+  }
+
+  func testPlaybackSettingsFollowAutoPlayChangedInThePlayer() async throws {
+    // 设置页停在「播放」子页，用户在播放界面工具栏改了自动播放，切回来要显示新值。
+    let key = PlaybackPreferences.autoPlayNextEpisodeKey
+    let saved = UserDefaults.standard.object(forKey: key) as? Bool
+    defer {
+      if let saved { UserDefaults.standard.set(saved, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+    }
+    PlaybackPreferences.setAutoPlaysNextEpisode(true)
+    let viewModel = SystemViewModel(apiService: APIService.isolatedTestingInstance())
+    XCTAssertTrue(viewModel.autoPlayNextEpisode)
+
+    PlaybackPreferences.setAutoPlaysNextEpisode(false)
+    for _ in 0..<200 where viewModel.autoPlayNextEpisode {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertFalse(viewModel.autoPlayNextEpisode)
+  }
+
   func testLoadSystemInfoUsesPublicBackendVersionForManageNonSuperuser() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SystemInfoURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SystemInfoURLProtocol.self) }

@@ -191,7 +191,7 @@ class MediaDetailViewModel: ObservableObject {
     // 详情页可能留在另一个标签页的导航栈里，也可能在读到后端设置之前就打开了（比如从 Top Shelf 冷启动直接进来），
     // 设置里的开关或后端版本变了都要重新判断播放入口。
     playbackAvailabilityObservation = Publishers.Merge(
-      NotificationCenter.default.publisher(for: PlaybackPreferences.didChangeNotification).map { _ in () },
+      NotificationCenter.default.publisher(for: PlaybackPreferences.inAppPlaybackDidChangeNotification).map { _ in () },
       apiService.$settings.map { $0?.BACKEND_VERSION }.removeDuplicates().dropFirst().map { _ in () }
     )
     .receive(on: DispatchQueue.main)

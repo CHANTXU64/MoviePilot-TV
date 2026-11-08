@@ -371,6 +371,22 @@ final class PlaybackEndActionTests: XCTestCase {
       nextItem: PlaybackIntent(item: BaseItemDto(id: "e3")), canLookUpNext: true, nextNeedsRecheck: true)
     guard case .lookUpNext = recheck else { return XCTFail("应重新确认下一集，实际 \(recheck)") }
   }
+
+  func testAutoPlayTurnedOffDuringTheEndLookupExitsNormally() {
+    // 片尾正在重新查下一集时，用户从工具栏关掉了自动播放：查到了也不起播，和平常播完一样退出、不说明原因。
+    let found = MoviePilotEpisodeQueue.NextLookup.play(PlaybackIntent(item: BaseItemDto(id: "e3")))
+    guard case .unavailable(nil) = MediaSession.resultAfterLookUp(found, isAutoPlayEnabled: false) else {
+      return XCTFail("关了自动播放不能起播")
+    }
+    let missing = MoviePilotEpisodeQueue.NextLookup.unavailable(EpisodeNavigator.nextMissingMessage)
+    guard case .unavailable(nil) = MediaSession.resultAfterLookUp(missing, isAutoPlayEnabled: false) else {
+      return XCTFail("关了自动播放不再说明下一集的情况")
+    }
+    guard case .play(let next) = MediaSession.resultAfterLookUp(found, isAutoPlayEnabled: true) else {
+      return XCTFail("开着自动播放照常接着播")
+    }
+    XCTAssertEqual(next.item.id, "e3")
+  }
 }
 
 // MARK: - 地址探测

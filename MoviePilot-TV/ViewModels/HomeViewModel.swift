@@ -53,7 +53,7 @@ class HomeViewModel: ObservableObject {
     }
 
     // 设置里的应用内播放开关变了：重绘卡片的点击方式和长按菜单（是否能在应用内播放每次都现读）。
-    NotificationCenter.default.publisher(for: PlaybackPreferences.didChangeNotification)
+    NotificationCenter.default.publisher(for: PlaybackPreferences.inAppPlaybackDidChangeNotification)
       .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &cancellables)

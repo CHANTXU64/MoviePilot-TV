@@ -124,11 +124,14 @@ class SystemViewModel: ObservableObject {
   }
 
   @Published private(set) var isCheckingBackendVersion = false
+  /// 上一次重新检查版本没有读到结果（请求失败），和“版本确实过低”区分开显示。
+  @Published private(set) var backendVersionCheckFailed = false
 
   /// 重新读取后端版本：后端升级到支持的版本后，回到这里按一下就能设置应用内播放；「MoviePilot 版本」那一行也跟着更新。
   func recheckBackendVersion() async {
     guard !isCheckingBackendVersion else { return }
     isCheckingBackendVersion = true
+    backendVersionCheckFailed = false
     defer { isCheckingBackendVersion = false }
     let sessionSnapshot = apiService.sessionSnapshot()
     do {
@@ -136,11 +139,13 @@ class SystemViewModel: ObservableObject {
       guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
       backendVersion = normalizedBackendVersion(settings.BACKEND_VERSION) ?? backendVersion
     } catch {
+      guard !(error is CancellationError), apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
       Logger.warning("重新读取后端版本失败: \(error.localizedDescription)")
+      backendVersionCheckFailed = true
     }
   }
 
-  /// 进入「播放」设置页时重读：播放界面里也能改自动播放。
+  /// 进入「播放」设置页、或播放界面改了自动播放时重读。
   func reloadPlaybackSettings() {
     let enabled = PlaybackPreferences.isInAppPlaybackEnabled
     if inAppPlaybackEnabled != enabled { inAppPlaybackEnabled = enabled }
@@ -286,6 +291,11 @@ class SystemViewModel: ObservableObject {
       .sink { [weak self] session in
         self?.updateStorageStatus(for: session)
       }
+      .store(in: &cancellables)
+    // 播放界面工具栏也能改自动播放；设置页留在「播放」子页时切回来要显示新值。
+    NotificationCenter.default.publisher(for: PlaybackPreferences.autoPlayDidChangeNotification)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.reloadPlaybackSettings() }
       .store(in: &cancellables)
   }
 
