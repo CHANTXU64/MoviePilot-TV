@@ -1844,7 +1844,7 @@ extension PlaybackCoordinatorTests {
     // 集索引是刚才读的（没有续播点）；之后在别处看到 30 分钟，Emby 上的单条条目已经更新。
     PlaybackURLProtocol.stub.configure {
       $0.items["\(Self.lan)|e-s2e3"] =
-        #"{"Id":"e-s2e3","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"RunTimeTicks":\#(Self.twoHours),"UserData":{"PlaybackPositionTicks":18000000000}}"#
+        #"{"Id":"e-s2e3","Type":"Episode","ParentIndexNumber":2,"IndexNumber":3,"ProviderIds":{"Tmdb":"555"},"RunTimeTicks":\#(Self.twoHours),"UserData":{"PlaybackPositionTicks":18000000000}}"#
     }
     await run(coordinator, .episode(try queued(0)))
     XCTAssertEqual(coordinator.resumePrompt?.position, 1800, "续播点以起播前重新读到的为准，不用集索引里的旧值")
@@ -2205,6 +2205,51 @@ extension PlaybackCoordinatorTests {
     coordinator.endCurrentSession()
   }
 
+  func testEpisodeWithoutAnIDOnTheFreshItemUsesTheConfirmedCopy() async throws {
+    configureDefaultOrderLibrary()
+    let coordinator = makeCoordinator(makeService())
+    _ = await coordinator.episodeAvailability(for: [try groupEpisode(0)], context: context())
+    PlaybackURLProtocol.stub.configure {
+      let unidentified = Self.embyEpisode("e-s2e3", season: 2, episode: 3, tmdb: nil)
+      let confirmed = Self.embyEpisode("e-new", season: 2, episode: 3, tmdb: 555)
+      $0.episodes["\(Self.lan)|s1"] = Self.embyEpisodes(unidentified, confirmed)
+      $0.items["\(Self.lan)|e-s2e3"] = unidentified
+      $0.items["\(Self.lan)|e-new"] = confirmed
+    }
+
+    await run(coordinator, .episode(try queued(0)))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(coordinator.session?.item.id, "e-new")
+    XCTAssertFalse(PlaybackURLProtocol.stub.requests().contains { $0.url.path == "/Items/e-s2e3/PlaybackInfo" })
+    coordinator.endCurrentSession()
+  }
+
+  func testSwitchingEpisodeExplainsWhenTheFreshItemLacksAnIDAndHasNoConfirmedCopy() async throws {
+    configureDefaultOrderLibrary()
+    let coordinator = makeCoordinator(makeService())
+    await run(coordinator, .episode(try queued(0)))
+    let session = try XCTUnwrap(coordinator.session)
+    // 集列表仍把条目列为 TMDB 557，单条详情已读不到这个编号。
+    PlaybackURLProtocol.stub.configure {
+      $0.items["\(Self.lan)|e-s2e5"] = Self.embyEpisode("e-s2e5", season: 2, episode: 5, tmdb: nil)
+    }
+
+    var result: PlaybackCoordinator.SwitchResult?
+    coordinator.switchItem(to: "e-s2e5", episode: try queued(2), in: session) { result = $0 }
+    await coordinator.switchTaskForTesting?.value
+    guard case .failed(let reason) = result else { return XCTFail("无法确认时应报告切集失败") }
+    let message = "无法确认这一集：媒体服务器“emby”重新读取的剧集条目缺少 TMDB 编号，可刷新元数据后重试"
+    XCTAssertEqual(reason, message)
+    XCTAssertEqual(session.item.id, "e-s2e3")
+    XCTAssertEqual(PlaybackURLProtocol.stub.requests().filter { $0.url.path == "/Shows/s1/Episodes" }.count, 2)
+    coordinator.endCurrentSession()
+
+    await run(coordinator, .episode(try queued(2)))
+    XCTAssertNil(coordinator.session)
+    XCTAssertEqual(coordinator.failure?.message, message)
+    XCTAssertFalse(PlaybackURLProtocol.stub.requests().contains { $0.url.path == "/Items/e-s2e5/PlaybackInfo" })
+  }
+
   func testEpisodeCachedOnAnotherServerStartsWithoutRereadingTheOwner() async throws {
     // 所属服务器 emby 上有这部剧、没有组内第 11 集，emby2 上有。详情页刚读过两台：起播直接用 emby2，不先把 emby 上的整部剧重读一遍。
     configureDefaultOrderLibrary()
@@ -2370,7 +2415,7 @@ extension PlaybackCoordinatorTests {
       coordinator.failure?.message, "媒体服务器“emby”连接失败：返回的不是媒体服务器的数据，请检查地址或反向代理设置")
   }
 
-  func testCertificateFailureDoesNotRetryWithAChangedAddress() async throws {
+  func testCertificateFailureTriesOnlyTheNewlyConfiguredAddress() async throws {
     let oldHost = "old.playback-tests.local"
     PlaybackURLProtocol.stub.configure {
       $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "https://\(oldHost)"))]"
@@ -2383,18 +2428,41 @@ extension PlaybackCoordinatorTests {
     let coordinator = makeCoordinator(service)
     _ = try await service.fetchCachedMediaServers()
     PlaybackURLProtocol.stub.configure {
-      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: Self.lan))]"
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "https://\(oldHost)", playHost: "https://\(Self.lan)"))]"
+    }
+
+    await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(streamURL(coordinator)?.host, Self.lan)
+    XCTAssertEqual(mediaServerFetchCount(), 2)
+    XCTAssertEqual(PlaybackURLProtocol.stub.requests().filter { $0.url.host == oldHost }.count, 1)
+    coordinator.endCurrentSession()
+  }
+
+  func testCertificateFailureDoesNotRetryTheSameEndpointAfterSettingsChange() async throws {
+    let oldHost = "old.playback-tests.local"
+    PlaybackURLProtocol.stub.configure {
+      $0.mediaServers = "[\(Self.embyServer(name: "emby", host: "https://\(oldHost)"))]"
+      $0.certificateErrorHosts = [oldHost]
+    }
+    let service = makeService()
+    let coordinator = makeCoordinator(service)
+    _ = try await service.fetchCachedMediaServers()
+    PlaybackURLProtocol.stub.configure {
+      let sameEndpoint = Self.embyServer(name: "emby", host: "https://\(oldHost):443/emby", key: "new-key")
+      $0.mediaServers = "[\(sameEndpoint),\(Self.embyServer(name: "other", host: Self.lan))]"
     }
 
     await run(coordinator, .serverItem(serverName: "emby", itemID: "m1"))
     XCTAssertNil(coordinator.session)
     XCTAssertEqual(
       coordinator.failure?.message, "媒体服务器“emby”连接失败：https 证书不受信任或加密连接失败，请换受信任的证书或改用内网地址")
-    XCTAssertEqual(mediaServerFetchCount(), 1)
+    XCTAssertEqual(mediaServerFetchCount(), 2)
+    XCTAssertEqual(PlaybackURLProtocol.stub.requests().filter { $0.url.host == oldHost }.count, 1)
     XCTAssertFalse(PlaybackURLProtocol.stub.requests().contains { $0.url.host == Self.lan })
   }
 
-  func testRetryAfterAnotherServerFailsSkipsTheServerWithACertificateError() async throws {
+  func testEpisodeStartRecoversWithTheChangedAddressAfterMixedFailures() async throws {
     configureDefaultOrderLibrary()
     let oldHost = "old.playback-tests.local"
     let newHost = "new.playback-tests.local"
@@ -2417,14 +2485,12 @@ extension PlaybackCoordinatorTests {
     }
 
     await run(coordinator, .episode(try queued(0, context(libraryServer: "emby"))))
-    XCTAssertNil(coordinator.session)
-    XCTAssertEqual(
-      coordinator.failure?.message,
-      "媒体服务器“emby2”连接失败：https 证书不受信任或加密连接失败，请换受信任的证书或改用内网地址")
+    XCTAssertNil(coordinator.failure)
+    XCTAssertEqual(coordinator.session?.item.id, "f1")
+    XCTAssertEqual(streamURL(coordinator)?.host, newHost)
     XCTAssertEqual(mediaServerFetchCount(), 2)
-    let requests = PlaybackURLProtocol.stub.requests()
-    XCTAssertTrue(requests.contains { $0.url.host == oldHost })
-    XCTAssertFalse(requests.contains { $0.url.host == newHost })
+    XCTAssertEqual(PlaybackURLProtocol.stub.requests().filter { $0.url.host == oldHost }.count, 1)
+    coordinator.endCurrentSession()
   }
 
   func testItemFoundByExternalIDIsKeptWhenTheOldLibraryIDFails() async throws {

@@ -33,7 +33,8 @@ protocol MediaServerConnection: Sendable {
 /// 按 MoviePilot 的服务器配置建立连接：探测地址、选用户。
 protocol MediaServerConnector: Sendable {
   func connect(
-    server: MediaServerConf, config: MediaServerConnectionConfig, preferredUserName: String?, session: URLSession
+    server: MediaServerConf, config: MediaServerConnectionConfig, candidateBaseURLs: [URL],
+    preferredUserName: String?, session: URLSession
   ) async throws -> any MediaServerConnection
 }
 
@@ -132,6 +133,8 @@ nonisolated struct MediaServerError: LocalizedError, Equatable, Sendable {
   let server: String
   let operation: Operation
   let reason: Reason
+  /// 证书错误时这一轮连接使用的候选地址，仅用于判断新配置能否恢复连接。
+  var certificateOrigins: Set<MediaServerBaseURL.Origin> = []
 
   var errorDescription: String? { "媒体服务器“\(server)”\(operation.text)失败：\(reason.text)" }
 }

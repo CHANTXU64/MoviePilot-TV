@@ -3,10 +3,11 @@ import Foundation
 /// Emby：同时探测内网和外网地址（内网优先），再按 MoviePilot `Emby.get_user` 的规则选 Emby 用户。
 struct EmbyConnector: MediaServerConnector {
   func connect(
-    server: MediaServerConf, config: MediaServerConnectionConfig, preferredUserName: String?, session: URLSession
+    server: MediaServerConf, config: MediaServerConnectionConfig, candidateBaseURLs: [URL],
+    preferredUserName: String?, session: URLSession
   ) async throws -> any MediaServerConnection {
     guard let apiKey = config.apiKey else { throw PlaybackError.noPlayableServer }
-    let clients = config.candidateBaseURLs.map {
+    let clients = candidateBaseURLs.map {
       EmbyClient(baseURL: $0, apiKey: apiKey, session: session)
     }
     let probe = await PreferredReachability.first(of: clients, grace: MediaServerHTTP.preferredAddressGrace) {

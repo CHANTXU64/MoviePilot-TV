@@ -62,6 +62,19 @@ extension MediaServerConnectionConfig: CustomStringConvertible, CustomDebugStrin
 
 /// 媒体服务器根地址：补全协议、去掉结尾斜杠，保留反代路径前缀（与 MoviePilot `standardize_base_url` 一致，缺协议按 http）。
 nonisolated enum MediaServerBaseURL {
+  /// 反代路径和默认端口的写法不影响 TLS 连接所用的地址。
+  struct Origin: Hashable, Sendable {
+    let scheme: String?
+    let host: String?
+    let port: Int
+
+    init(_ url: URL) {
+      scheme = url.scheme?.lowercased()
+      host = url.host?.lowercased()
+      port = url.port ?? (scheme == "https" ? 443 : 80)
+    }
+  }
+
   static func normalized(_ raw: String?) -> URL? {
     guard var value = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
       return nil
