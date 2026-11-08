@@ -31,6 +31,7 @@
 | 会话内共享的协作对象与接口缓存 | `SessionScope`：`APIService` 按 `uiIdentity` 持有，同账号刷新沿用、换账号或登出时同步拆除；作用域内的对象不再各自监听会话变化自清 |
 | 会话切换后的界面重建 | `ContentView` 以 `sessionUIIdentity` 作为 TabView 身份 |
 | 用户可见失败与日志 | `NotificationManager`、`Logger`（§8） |
+| 按后端版本开放新行为、提示新副作用 | `BackendVersionGate`：`isAvailable(since:)` 读不出版本时不开放，`mayHaveSideEffect(since:)` 读不出时照常提示；起始版本登记在使用处（§7） |
 
 - 同一类手写守卫第三次出现时，优先抽取或扩展共享机制，并补充上表；抽取须保持现有测试钉住的语义，确需改变的逐条说明理由并同步测试。只出现一次的问题不预先建框架。
 - 批量修复或新一轮审计时，先按根因聚类 finding；同一根因的多个 finding 以一次结构性修复关闭，不逐条加守卫。

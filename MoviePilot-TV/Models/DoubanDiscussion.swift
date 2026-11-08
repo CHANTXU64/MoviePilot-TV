@@ -276,10 +276,7 @@ nonisolated enum DoubanDiscussionAvailability {
   static let loadMoreThreshold = 4
 
   static func supports(backendVersion: String?) -> Bool {
-    guard let version = MoviePilotVersion(backendVersion),
-      let minimum = MoviePilotVersion(minimumBackendVersion)
-    else { return false }
-    return version >= minimum
+    BackendVersionGate.isAvailable(since: minimumBackendVersion, backendVersion: backendVersion)
   }
 
   /// 与媒体身份的来源 ID 判据一致：空白与 `"0"` 都按缺失处理，不发请求。

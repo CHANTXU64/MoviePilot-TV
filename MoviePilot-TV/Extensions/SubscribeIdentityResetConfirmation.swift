@@ -8,10 +8,7 @@ enum SubscribeIdentityResetConfirmation {
   /// 已解析且低于 v3.2.0 时返回 false。版本缺失或无法解析时返回 true，
   /// 避免实际跑在 v3.2.0 及以上的会话在没有警告时清掉进度。
   static func backendResetsProgress(backendVersion: String?) -> Bool {
-    guard let version = MoviePilotVersion(backendVersion),
-      let minimum = MoviePilotVersion(minimumBackendVersion)
-    else { return true }
-    return version >= minimum
+    BackendVersionGate.mayHaveSideEffect(since: minimumBackendVersion, backendVersion: backendVersion)
   }
 
   static let title = "修改季或剧集组会重置进度"

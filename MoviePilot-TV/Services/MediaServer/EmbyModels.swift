@@ -1,0 +1,337 @@
+import Foundation
+
+// Emby 接口的数据结构，只在 Emby 适配器（`EmbyServerConnection`）内使用；对外一律转换成 `ServerMediaItem`、`ServerMediaSource`。
+
+nonisolated struct EmbyPublicSystemInfo: Decodable, Sendable {
+  let id: String?
+  let serverName: String?
+  let version: String?
+
+  private enum CodingKeys: String, CodingKey {
+    case id = "Id"
+    case serverName = "ServerName"
+    case version = "Version"
+  }
+}
+
+nonisolated struct EmbyUser: Decodable, Sendable {
+  let id: String
+  let name: String?
+  let isAdministrator: Bool
+
+  private enum CodingKeys: String, CodingKey {
+    case id = "Id"
+    case name = "Name"
+    case policy = "Policy"
+  }
+
+  private struct Policy: Decodable {
+    let isAdministrator: Bool?
+    private enum CodingKeys: String, CodingKey { case isAdministrator = "IsAdministrator" }
+  }
+
+  init(id: String, name: String?, isAdministrator: Bool) {
+    self.id = id
+    self.name = name
+    self.isAdministrator = isAdministrator
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    name = try? container.decodeIfPresent(String.self, forKey: .name)
+    let policy = try? container.decodeIfPresent(Policy.self, forKey: .policy)
+    isAdministrator = policy?.isAdministrator ?? false
+  }
+
+  /// 与 MoviePilot `Emby.get_user` 相同的选择顺序：依次匹配候选用户名，都不匹配时取第一个管理员。
+  static func select(from users: [EmbyUser], preferredNames: [String?]) -> EmbyUser? {
+    for name in preferredNames {
+      guard let name, !name.isEmpty else { continue }
+      if let user = users.first(where: { $0.name == name }) { return user }
+    }
+    return users.first { $0.isAdministrator }
+  }
+}
+
+nonisolated struct EmbyItem: Decodable, Sendable {
+  let id: String
+  let name: String?
+  let type: String?
+  let runTimeTicks: Int64?
+  /// 原样保留的用户数据（续播位置等）。剧集列表里的 `PlayCount` 恒为 0，写回观看进度以重新读取的单条条目为准
+  /// （见 `EmbyServerConnection.saveWatchProgress`）。
+  let userData: [String: JSONValue]?
+  /// 剧集：集号、季号、剧名。一个文件包含多集时 `IndexNumberEnd` 是最后一集。
+  let indexNumber: Int?
+  let indexNumberEnd: Int?
+  let parentIndexNumber: Int?
+  let seriesName: String?
+  /// `Virtual` 表示 Emby 只有元数据、没有文件（缺失的集）。
+  let locationType: String?
+  /// 外部编号，如 `{"Tmdb": "12345", "Imdb": "tt…"}`。MoviePilot 同步媒体库时读的就是它；单集条目上的 `Tmdb` 是 TMDB 单集 ID。
+  let providerIDs: [String: String]?
+
+  private enum CodingKeys: String, CodingKey {
+    case id = "Id"
+    case name = "Name"
+    case type = "Type"
+    case runTimeTicks = "RunTimeTicks"
+    case userData = "UserData"
+    case indexNumber = "IndexNumber"
+    case indexNumberEnd = "IndexNumberEnd"
+    case parentIndexNumber = "ParentIndexNumber"
+    case seriesName = "SeriesName"
+    case locationType = "LocationType"
+    case providerIDs = "ProviderIds"
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    name = try? container.decodeIfPresent(String.self, forKey: .name)
+    type = try? container.decodeIfPresent(String.self, forKey: .type)
+    runTimeTicks = try? container.decodeIfPresent(Int64.self, forKey: .runTimeTicks)
+    userData = try? container.decodeIfPresent([String: JSONValue].self, forKey: .userData)
+    indexNumber = try? container.decodeIfPresent(Int.self, forKey: .indexNumber)
+    indexNumberEnd = try? container.decodeIfPresent(Int.self, forKey: .indexNumberEnd)
+    parentIndexNumber = try? container.decodeIfPresent(Int.self, forKey: .parentIndexNumber)
+    seriesName = try? container.decodeIfPresent(String.self, forKey: .seriesName)
+    locationType = try? container.decodeIfPresent(String.self, forKey: .locationType)
+    providerIDs = try? container.decodeIfPresent([String: String].self, forKey: .providerIDs)
+  }
+
+  var playbackPositionTicks: Int64 {
+    switch userData?["PlaybackPositionTicks"] {
+    case .int(let value): return Int64(value)
+    case .double(let value): return Int64(value)
+    default: return 0
+    }
+  }
+
+  /// 转成与服务器无关的条目。没有 `Type` 时按 `defaultKind`（剧集列表里的都是单集）。
+  func serverItem(defaultKind: ServerMediaItem.Kind = .other) -> ServerMediaItem {
+    let kind: ServerMediaItem.Kind
+    switch type {
+    case "Movie": kind = .movie
+    case "Series": kind = .series
+    case "Episode": kind = .episode
+    case nil: kind = defaultKind
+    default: kind = .other
+    }
+    return ServerMediaItem(
+      id: id,
+      kind: kind,
+      name: name,
+      seriesName: seriesName,
+      seasonNumber: parentIndexNumber,
+      episodeNumber: indexNumber,
+      episodeNumberEnd: indexNumberEnd,
+      runtimeSeconds: runTimeTicks.map(EmbyTicks.seconds),
+      resumePositionSeconds: EmbyTicks.seconds(playbackPositionTicks),
+      hasFile: locationType?.lowercased() != "virtual",
+      externalIDs: ExternalMediaID.normalizedTable(providerIDs))
+  }
+}
+
+nonisolated struct EmbyMediaStream: Decodable, Sendable, Equatable {
+  let type: String?
+  let codec: String?
+  let isDefault: Bool?
+  /// 以下只有视频流有，开播前向电视申请显示模式用（见 `DisplayModeHint`）。
+  var width: Int?
+  var height: Int?
+  /// Emby 读到的帧率，如 23.976025。
+  var frameRate: Double?
+  /// `SDR`、`HDR 10`、`HLG`、`DolbyVision` 等。
+  var videoRange: String?
+  /// `Hdr10`、`Hdr10Plus`、`HyperLogGamma`、`DolbyVision` 等。
+  var extendedVideoType: String?
+  /// 杜比视界的配置，如 `DoviProfile50`、`DoviProfile81`。
+  var extendedVideoSubType: String?
+
+  init(type: String?, codec: String?, isDefault: Bool? = nil) {
+    self.type = type
+    self.codec = codec
+    self.isDefault = isDefault
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case type = "Type"
+    case codec = "Codec"
+    case isDefault = "IsDefault"
+    case width = "Width"
+    case height = "Height"
+    case realFrameRate = "RealFrameRate"
+    case averageFrameRate = "AverageFrameRate"
+    case videoRange = "VideoRange"
+    case extendedVideoType = "ExtendedVideoType"
+    case extendedVideoSubType = "ExtendedVideoSubType"
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    type = try? container.decodeIfPresent(String.self, forKey: .type)
+    codec = try? container.decodeIfPresent(String.self, forKey: .codec)
+    isDefault = try? container.decodeIfPresent(Bool.self, forKey: .isDefault)
+    width = try? container.decodeIfPresent(Int.self, forKey: .width)
+    height = try? container.decodeIfPresent(Int.self, forKey: .height)
+    frameRate =
+      (try? container.decodeIfPresent(Double.self, forKey: .realFrameRate))
+      ?? (try? container.decodeIfPresent(Double.self, forKey: .averageFrameRate))
+    videoRange = try? container.decodeIfPresent(String.self, forKey: .videoRange)
+    extendedVideoType = try? container.decodeIfPresent(String.self, forKey: .extendedVideoType)
+    extendedVideoSubType = try? container.decodeIfPresent(String.self, forKey: .extendedVideoSubType)
+  }
+}
+
+nonisolated struct EmbyMediaSource: Decodable, Sendable, Equatable {
+  let id: String
+  /// 版本名（如「4K HDR」「1080p」），播放设置里的版本选择用它。
+  let name: String?
+  let container: String?
+  let `protocol`: String?
+  let mediaStreams: [EmbyMediaStream]
+  init(
+    id: String, name: String? = nil, container: String?, protocol: String? = "File", mediaStreams: [EmbyMediaStream]
+  ) {
+    self.id = id
+    self.name = name
+    self.container = container
+    self.protocol = `protocol`
+    self.mediaStreams = mediaStreams
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case id = "Id"
+    case name = "Name"
+    case container = "Container"
+    case `protocol` = "Protocol"
+    case mediaStreams = "MediaStreams"
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    name = try? container.decodeIfPresent(String.self, forKey: .name)
+    self.container = try? container.decodeIfPresent(String.self, forKey: .container)
+    self.protocol = try? container.decodeIfPresent(String.self, forKey: .protocol)
+    mediaStreams =
+      (try? container.decodeIfPresent([LossyDecodable<EmbyMediaStream>].self, forKey: .mediaStreams))?
+      .compactMap(\.value) ?? []
+  }
+
+  /// 转成与服务器无关的片源：能否直连、显示模式提示都在这里按 Emby 的数据算好。
+  var serverSource: ServerMediaSource {
+    let unsupported: PlaybackUnsupported?
+    switch EmbyDirectPlay.evaluate(self) {
+    case .success: unsupported = nil
+    case .failure(let reason): unsupported = reason
+    }
+    return ServerMediaSource(
+      id: id, name: name, container: container, unsupportedReason: unsupported,
+      displayModeHint: DisplayModeHint(source: self))
+  }
+}
+
+nonisolated struct EmbyPlaybackInfo: Decodable, Sendable {
+  let mediaSources: [EmbyMediaSource]
+  let playSessionID: String?
+  let errorCode: String?
+
+  private enum CodingKeys: String, CodingKey {
+    case mediaSources = "MediaSources"
+    case playSessionID = "PlaySessionId"
+    case errorCode = "ErrorCode"
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    mediaSources =
+      (try? container.decodeIfPresent([LossyDecodable<EmbyMediaSource>].self, forKey: .mediaSources))?
+      .compactMap(\.value) ?? []
+    playSessionID = try? container.decodeIfPresent(String.self, forKey: .playSessionID)
+    errorCode = try? container.decodeIfPresent(String.self, forKey: .errorCode)
+  }
+}
+
+/// Emby 列表接口的分页结构（`/Shows/{id}/Episodes` 等）。
+nonisolated struct EmbyItemsPage: Decodable, Sendable {
+  let items: [EmbyItem]
+
+  private enum CodingKeys: String, CodingKey { case items = "Items" }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    items =
+      (try? container.decodeIfPresent([LossyDecodable<EmbyItem>].self, forKey: .items))?
+      .compactMap(\.value) ?? []
+  }
+}
+
+/// 数组里单个元素坏掉时只丢弃该元素。
+nonisolated private struct LossyDecodable<Value: Decodable & Sendable>: Decodable, Sendable {
+  let value: Value?
+  init(from decoder: Decoder) throws {
+    value = try? Value(from: decoder)
+  }
+}
+
+// MARK: - 直接播放判定
+
+/// 应用内播放都直连原文件，Emby 不转码、不重新封装，统一由 mpv 播放。
+nonisolated enum EmbyDirectPlay {
+  struct Selection: Equatable, Sendable {
+    let source: EmbyMediaSource
+    /// 流地址扩展名，帮助播放器识别容器
+    let fileExtension: String
+  }
+
+  typealias Unsupported = PlaybackUnsupported
+
+  /// 取第一个本地文件版本。
+  static func select(from sources: [EmbyMediaSource]) -> Result<Selection, Unsupported> {
+    var firstReason: Unsupported?
+    for source in sources {
+      switch evaluate(source) {
+      case .success(let selection):
+        return .success(selection)
+      case .failure(let reason):
+        if firstReason == nil { firstReason = reason }
+      }
+    }
+    return .failure(firstReason ?? .noSource)
+  }
+
+  static func evaluate(_ source: EmbyMediaSource) -> Result<Selection, Unsupported> {
+    if let sourceProtocol = source.protocol, sourceProtocol.lowercased() != "file" {
+      return .failure(.remoteSource)
+    }
+    // Emby 可能返回 ffprobe 的格式名，例如 `mov,mp4,m4a,3gp,3g2,mj2`、`matroska,webm`。
+    let containerNames = (source.container ?? "")
+      .lowercased()
+      .split(separator: ",")
+      .map { $0.trimmingCharacters(in: .whitespaces) }
+      .filter { !$0.isEmpty }
+    return .success(Selection(source: source, fileExtension: fileExtension(containerNames)))
+  }
+
+  private static func fileExtension(_ containerNames: [String]) -> String {
+    if containerNames.contains(where: { $0 == "matroska" || $0 == "mkv" }) { return "mkv" }
+    if containerNames.contains("mp4") { return "mp4" }
+    let candidate = containerNames.first ?? ""
+    let allowed = CharacterSet.alphanumerics
+    guard !candidate.isEmpty, candidate.unicodeScalars.allSatisfy(allowed.contains) else {
+      return "mkv"
+    }
+    return candidate
+  }
+}
+
+/// Emby 的时间单位 tick 为 100 纳秒。
+nonisolated enum EmbyTicks {
+  static let perSecond: Double = 10_000_000
+
+  static func from(seconds: Double) -> Int { Int(seconds * perSecond) }
+  static func seconds(_ ticks: Int64) -> Double { Double(ticks) / perSecond }
+}

@@ -24,29 +24,23 @@ enum EmbyClientError: LocalizedError, Equatable {
   }
 }
 
-/// 直接访问 Emby 的最小客户端。地址与密钥来自 MoviePilot 媒体服务器配置，和 MoviePilot 会话无关；
-/// 实例创建后不再变化，播放结束时的上报沿用开播时的地址和密钥。
+/// 直接访问 Emby 的最小客户端，只供 Emby 适配器（`EmbyServerConnection`）使用。地址与密钥来自 MoviePilot 媒体服务器配置，
+/// 和 MoviePilot 会话无关；实例创建后不再变化，播放结束时的上报沿用开播时的地址和密钥。
 struct EmbyClient {
   let baseURL: URL
   let deviceID: String
   private let apiKey: String
   private let session: URLSession
 
-  init(baseURL: URL, apiKey: String, deviceID: String = EmbyClient.installDeviceID, session: URLSession = EmbyClient.sharedSession) {
+  init(
+    baseURL: URL, apiKey: String, deviceID: String = EmbyClient.installDeviceID,
+    session: URLSession = MediaServerHTTP.sharedSession
+  ) {
     self.baseURL = baseURL
     self.apiKey = apiKey
     self.deviceID = deviceID
     self.session = session
   }
-
-  static let sharedSession: URLSession = {
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-    configuration.urlCache = nil
-    configuration.httpCookieStorage = nil
-    configuration.timeoutIntervalForRequest = 15
-    return URLSession(configuration: configuration)
-  }()
 
   private static let deviceIDKey = "embyDeviceID"
 
@@ -96,19 +90,9 @@ struct EmbyClient {
       ])
   }
 
-  /// 日志里去掉地址和密钥：mpv 等组件的错误信息可能带出含密钥的流地址。
-  nonisolated static func redactedForLogging(_ text: String) -> String {
-    text
-      .replacingOccurrences(
-        of: #"(?i)\b(?:https?|rtsp|rtmp|ftp|file)://[^\s]+"#, with: "<URL>", options: .regularExpression)
-      .replacingOccurrences(
-        of: #"api_key=[^&\s"']*"#, with: "api_key=<redacted>", options: .regularExpression)
-  }
-
   // MARK: - 接口
 
-  /// 探测地址、用缓存连接发出的第一个请求所用的超时：地址失效时尽快改用其他地址，不等普通请求的 15 秒。
-  static let quickTimeout: TimeInterval = 3
+  static let quickTimeout: TimeInterval = MediaServerHTTP.quickTimeout
 
   func publicSystemInfo(timeout: TimeInterval = quickTimeout) async throws -> EmbyPublicSystemInfo {
     let data = try await send(url(["System", "Info", "Public"]), timeout: timeout)
@@ -149,12 +133,13 @@ struct EmbyClient {
     return try decode(EmbyItemsPage.self, from: data).items
   }
 
-  /// 剧集的全部集（按 Emby 顺序，带用户观看数据），不含缺失的集。
+  /// 剧集的全部集（按 Emby 顺序，带用户观看数据和外部编号），不含缺失的集。
+  /// 单集条目的 `ProviderIds.Tmdb` 是 TMDB 单集 ID，按集播放靠它对应 MoviePilot 集列表里的集。
   func episodes(seriesID: String, userID: String) async throws -> [EmbyItem] {
     let data = try await send(
       url(
         ["Shows", seriesID, "Episodes"],
-        query: ["UserId": userID, "IsMissing": "false"]))
+        query: ["UserId": userID, "IsMissing": "false", "Fields": "ProviderIds"]))
     return try decode(EmbyItemsPage.self, from: data).items
   }
 

@@ -2535,14 +2535,15 @@ class APIService: ObservableObject {
     return try await decodeOrUnwrap([MediaServerPlayItem].self, from: data)
   }
 
-  /// 查询媒体是否已入库，返回媒体服务器中的条目 ID（MoviePilot 媒体库同步表），未入库为 nil。
+  /// 查询媒体是否已入库，返回媒体服务器中的条目（MoviePilot 媒体库同步表），未入库为 nil。
   /// - 对应前端: MoviePilot-Frontend/src/components/cards/MediaCard.vue (handleCheckExists)、
   ///   MoviePilot-Frontend/src/views/discover/MediaDetailView.vue（`existsItemId`，用于“播放”按钮）
   /// - 应用场景: 电影详情页订阅按钮展示入库状态；管理员的应用内播放入口
   /// - 备注: v3.0.1 起该接口的 `success` 恒为 `true`，命中与否只体现在 `data.item`
   ///   （Web 读 `result.item?.id`）；v2 才把命中结果放在 `success` 上。两者都以 `data.item.id` 为准。
-  ///   返回值不包含服务器名称；配置多台服务器时需要调用方逐台确认归属。
-  func fetchMediaServerItemID(media: MediaInfo) async throws -> String? {
+  ///   v3.2.6 起 `data.item.server` 是条目所属服务器的配置名称，与 ID 取自同一条记录；更早的版本或旧缓存没有这个键，
+  ///   这时配置多台服务器需要调用方逐台确认归属。服务器名称只是候选，不代替逐台查找。
+  func fetchMediaServerItemRef(media: MediaInfo) async throws -> MediaServerItemRef? {
     struct MediaServerExistsData: Decodable {
       let item: [String: String]?
     }
@@ -2559,7 +2560,8 @@ class APIService: ObservableObject {
       ])
     let data = try await makeRequest(endpoint: endpoint)
     let result = try await decodeOrUnwrap(MediaServerExistsData.self, from: data)
-    return trimmedNonEmpty([result.item?["id"]])
+    guard let itemID = trimmedNonEmpty([result.item?["id"]]) else { return nil }
+    return MediaServerItemRef(itemID: itemID, server: trimmedNonEmpty([result.item?["server"]]))
   }
 
   // MARK: - 资源搜索
@@ -3196,6 +3198,25 @@ class APIService: ObservableObject {
       guard let self else { throw CancellationError() }
       let data = try await self.makeRequest(endpoint: endpoint)
       return try await self.decodeOrUnwrap([TmdbSeason].self, from: data)
+    }
+  }
+
+  /// 获取某一季的全部集（TMDB），选了剧集组时按剧集组的季。
+  /// - 对应前端: MoviePilot-Frontend/src/views/discover/MediaDetailView.vue (loadSeasonEpisodes)
+  /// - 应用场景: 详情页集列表；按集播放的上一集、下一集
+  /// - 备注: 选了剧集组时 `season` 是组内季号，返回的 `episode_number` 是组内序号，`season_number` 仍是 TMDB 原季号；
+  ///   v3.2.6 起每集带 TMDB 单集 ID（`id`），不随剧集组变化。
+  func fetchTmdbEpisodes(
+    tmdbID: Int, season: Int, episodeGroup: String?, forceRefresh: Bool = false
+  ) async throws -> [TmdbEpisode] {
+    let endpoint = try buildEndpoint(
+      path: "/tmdb/\(tmdbID)/\(season)", params: ["episode_group": trimmedNonEmpty([episodeGroup])])
+    return try await sessionCachedValue(
+      sessionScope.tmdbEpisodesCache, key: endpoint, forceRefresh: forceRefresh
+    ) { [weak self] in
+      guard let self else { throw CancellationError() }
+      let data = try await self.makeRequest(endpoint: endpoint)
+      return try await self.decodeOrUnwrap([TmdbEpisode].self, from: data)
     }
   }
 

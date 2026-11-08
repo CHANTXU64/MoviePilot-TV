@@ -13,13 +13,13 @@ import UIKit
 /// 在 init 里创建会每次多建一套再丢掉。
 struct MPVPlaybackScreen: View {
   let session: PlaybackSession
-  let onExit: () -> Void
+  let onExit: MediaSession.Exit
   let onSwitchItem: MediaSession.SwitchItem
   @State private var mediaSession: MediaSession?
 
   init(
     session: PlaybackSession,
-    onExit: @escaping () -> Void,
+    onExit: @escaping MediaSession.Exit,
     onSwitchItem: @escaping MediaSession.SwitchItem
   ) {
     self.session = session
@@ -124,11 +124,14 @@ final class MediaSession {
   // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
   nonisolated deinit {}
 
-  /// 换集、换版本：交给 `PlaybackCoordinator.switchItem`。
+  /// 换集、换版本：交给 `PlaybackCoordinator.switchItem`。按集播放时带上 MoviePilot 集列表里的那一集。
   typealias SwitchItem = (
-    _ itemID: String, _ mediaSourceID: String?, _ startPosition: Double,
+    _ itemID: String, _ mediaSourceID: String?, _ startPosition: Double, _ episode: MoviePilotEpisode?,
     _ completion: @escaping (PlaybackCoordinator.SwitchResult) -> Void
   ) -> Void
+
+  /// 退出播放，交给 `PlaybackCoordinator.endSession`。`notice` 是要告诉用户的说明（比如下一集在另一台服务器上）。
+  typealias Exit = (_ notice: String?) -> Void
 
   enum State {
     case initial
@@ -160,8 +163,8 @@ final class MediaSession {
 
   /// 与 Swiftfin `mediaSession.logger` 相同的调用方式，写入工程日志。
   struct SessionLogger {
-    func debug(_ message: String) { Logger.debug("[Playback] \(EmbyClient.redactedForLogging(message))") }
-    func error(_ message: String) { Logger.error("[Playback] \(EmbyClient.redactedForLogging(message))") }
+    func debug(_ message: String) { Logger.debug("[Playback] \(PlaybackLog.redacted(message))") }
+    func error(_ message: String) { Logger.error("[Playback] \(PlaybackLog.redacted(message))") }
   }
 
   let mpvPlayer: MPVPlayer
@@ -193,7 +196,7 @@ final class MediaSession {
   private(set) var isCoveringForDisplay: Bool
 
   @ObservationIgnored private let playerAdapter: MPVPlayerAdapter
-  @ObservationIgnored private let onExit: () -> Void
+  @ObservationIgnored private let onExit: Exit
   @ObservationIgnored private let onSwitchItem: SwitchItem
   @ObservationIgnored private var pendingPlaybackStatus: PlaybackRequestStatus?
   @ObservationIgnored private var seekTask: Task<Void, Never>?
@@ -202,12 +205,14 @@ final class MediaSession {
   @ObservationIgnored private var itemObservations: [AnyCancellable] = []
   @ObservationIgnored private var queueObservation: AnyCancellable?
   @ObservationIgnored private var displayTask: Task<Void, Never>?
+  /// 播完时重新查下一集。
+  @ObservationIgnored private var nextLookupTask: Task<Void, Never>?
   /// 已按片源信息向电视申请过显示模式，退出时要还原。
   @ObservationIgnored private var hasRequestedDisplayMode = false
 
   init(
     session: PlaybackSession,
-    onExit: @escaping () -> Void,
+    onExit: @escaping Exit,
     onSwitchItem: @escaping SwitchItem
   ) {
     self.session = session
@@ -216,7 +221,7 @@ final class MediaSession {
     let player = session.makeMPVPlayer()
     mpvPlayer = player
     playerAdapter = MPVPlayerAdapter(player: player)
-    userSession = UserSession(client: session.client, userID: session.userID)
+    userSession = UserSession(session: session)
     isCoveringForDisplay = Self.displayManager?.isDisplayCriteriaMatchingEnabled == true
   }
 
@@ -229,7 +234,7 @@ final class MediaSession {
     return min(max(rate, range.lowerBound), range.upperBound)
   }
 
-  /// 当前条目。片长以 Emby 记录为准，Emby 没有时用 mpv 读到的时长。
+  /// 当前条目。片长以服务器记录为准，服务器没有时用 mpv 读到的时长。
   var item: BaseItemDto {
     var item = playbackItem?.baseItem ?? BaseItemDto(id: session.item.id)
     if item.runtime == nil, let duration = playbackState.duration {
@@ -311,11 +316,11 @@ final class MediaSession {
     refreshPlaybackState()
   }
 
-  /// 开了「匹配内容」时，按 Emby 片源信息在起播前向电视申请显示模式（见 `DisplayModeHint`），切换与载入同时进行；
+  /// 开了「匹配内容」时，按片源信息在起播前向电视申请显示模式（见 `DisplayModeHint`），切换与载入同时进行；
   /// 切换期间 MPVUI 会暂停时钟。认不准格式时不申请，交给 MPVUI 开播后自己申请。返回是否已申请。
   private func requestDisplayMode() -> Bool {
     guard let display = Self.displayManager, display.isDisplayCriteriaMatchingEnabled,
-      let criteria = DisplayModeHint(source: session.mediaSource)?.makeCriteria()
+      let criteria = session.mediaSource.displayModeHint?.makeCriteria()
     else { return false }
     display.preferredDisplayCriteria = criteria
     hasRequestedDisplayMode = true
@@ -352,8 +357,14 @@ final class MediaSession {
 
   /// 退出播放。可重复调用；实际停止和进度上报由外部的退出闭包（结束 `PlaybackSession`）完成。
   func stop() {
+    finish(notice: nil)
+  }
+
+  private func finish(notice: String?) {
     guard !isStopped else { return }
     isStopped = true
+    nextLookupTask?.cancel()
+    nextLookupTask = nil
     displayTask?.cancel()
     displayTask = nil
     if hasRequestedDisplayMode {
@@ -369,24 +380,24 @@ final class MediaSession {
     itemObservations.removeAll()
     queueObservation = nil
     textSubtitles.clear()
-    onExit()
+    onExit(notice)
   }
 
   /// 播放设置里可选的版本：只列能直接播放的片源，多于一个时才显示版本选择。
-  static func versions(of sources: [EmbyMediaSource]) -> [PlaybackMediaSourceInfo] {
-    sources.filter { (try? EmbyDirectPlay.evaluate($0).get()) != nil }.map(PlaybackMediaSourceInfo.init(emby:))
+  static func versions(of sources: [ServerMediaSource]) -> [PlaybackMediaSourceInfo] {
+    sources.filter(\.isDirectlyPlayable).map(PlaybackMediaSourceInfo.init(source:))
   }
 
   /// 为当前条目建立 `MediaPlayerItem`、片段与队列观察。
   private func prepareItem() {
     itemObservations.removeAll()
-    var baseItem = BaseItemDto(emby: session.item)
+    var baseItem = BaseItemDto(item: session.item, episode: session.episode)
     baseItem.mediaSources = Self.versions(of: session.mediaSources)
     let item = MediaPlayerItem(
       baseItem: baseItem,
       source: session.mediaSource,
       player: mpvPlayer,
-      client: session.client,
+      connection: session.connection,
       startSeconds: session.startSeconds)
     playbackItem = item
     if let segments = item.segments {
@@ -395,7 +406,7 @@ final class MediaSession {
 
     if baseItem.type == .episode {
       if queue == nil {
-        let queue = EpisodeMediaPlayerQueue()
+        let queue = MoviePilotEpisodeQueue()
         self.queue = queue
         queueObservation = queue.observe(self)
       }
@@ -409,28 +420,57 @@ final class MediaSession {
     /// 正在换集，上一集刚好播完：等切换完成。
     case waitForSwitch
     case playNext(PlaybackIntent)
+    /// 开着自动播放、按集播放，但还不知道下一集，或已知的下一集是跳过还没入库的集找到的：重新查一次再决定。
+    case lookUpNext
     case exit
   }
 
   /// 播完后怎么做：开了自动播放且有下一集就接着播，否则退出（与 Swiftfin `MediaSession.ended` 相同）。
+  /// 按集播放时，还不知道下一集（开播时没找到、或查询还没回来），或已知的下一集跳过了当时还没入库的集，
+  /// 先重新查一次：播放期间那几集可能刚入库，应按顺序接上。
   /// 不看“能否控制播放”：mpv 先报告就绪变为否、再报告播完，到这里时它总是否。
   static func endAction(
     isSwitchingItem: Bool, isSeeking: Bool, isLiveStream: Bool, isAutoPlayEnabled: Bool,
-    nextItem: PlaybackIntent?
+    nextItem: PlaybackIntent?, canLookUpNext: Bool = false, nextNeedsRecheck: Bool = false
   ) -> EndAction {
     if isSwitchingItem { return .waitForSwitch }
-    guard !isSeeking, !isLiveStream, isAutoPlayEnabled, let nextItem else { return .exit }
-    return .playNext(nextItem)
+    guard !isSeeking, !isLiveStream, isAutoPlayEnabled else { return .exit }
+    if canLookUpNext, nextItem == nil || nextNeedsRecheck { return .lookUpNext }
+    if let nextItem { return .playNext(nextItem) }
+    return .exit
   }
 
   private func ended() {
+    let episodeQueue = queue as? MoviePilotEpisodeQueue
     switch Self.endAction(
       isSwitchingItem: isSwitchingItem, isSeeking: isSeeking, isLiveStream: item.isLiveStream,
-      isAutoPlayEnabled: userSession.isAutoPlayEnabled, nextItem: queue?.nextItem)
+      isAutoPlayEnabled: userSession.isAutoPlayEnabled, nextItem: queue?.nextItem,
+      canLookUpNext: episodeQueue?.canLookUpNext == true, nextNeedsRecheck: episodeQueue?.nextNeedsRecheck == true)
     {
     case .waitForSwitch: break
     case .playNext(let next): playNewItem(intent: next)
+    case .lookUpNext:
+      guard let episodeQueue else { return stop() }
+      lookUpNextAfterEnd(episodeQueue)
     case .exit: stop()
+    }
+  }
+
+  /// 重新查下一集，查询期间显示加载中；查到就接着播，查不到就退出并说明原因（已是最后一集时不说明）。
+  /// 期间用户退出，或手动换了集（`playNewItem` 取消这次查询），结果都丢弃。
+  private func lookUpNextAfterEnd(_ episodeQueue: MoviePilotEpisodeQueue) {
+    isSwitchingItem = true
+    nextLookupTask?.cancel()
+    let endedItemID = session.item.id
+    nextLookupTask = Task { [weak self] in
+      let result = await episodeQueue.lookUpNext()
+      guard let self, !Task.isCancelled, !self.isStopped, self.session.item.id == endedItemID else { return }
+      self.nextLookupTask = nil
+      self.isSwitchingItem = false
+      switch result {
+      case .play(let intent): self.playNewItem(intent: intent)
+      case .unavailable(let reason): self.finish(notice: reason)
+      }
     }
   }
 
@@ -499,12 +539,15 @@ final class MediaSession {
     }
   }
 
-  /// 改播另一集或另一个版本（Swiftfin 的 `playNewItem`）。
+  /// 改播另一集或另一个版本（Swiftfin 的 `playNewItem`）。取代仍在进行的播完查询。
   func playNewItem(intent: PlaybackIntent) {
     guard state != .stopped, let itemID = intent.item.id else { return }
+    nextLookupTask?.cancel()
+    nextLookupTask = nil
     isSwitchingItem = true
     let start = intent.configuration.startSeconds.map { $0.seconds } ?? 0
-    onSwitchItem(itemID, intent.configuration.mediaSourceID, start) { [weak self] result in
+    onSwitchItem(itemID, intent.configuration.mediaSourceID, start, intent.item.moviePilotEpisode) {
+      [weak self] result in
       guard let self, !self.isStopped else { return }
       switch result {
       case .switched:
@@ -596,6 +639,16 @@ final class MediaSession {
 
 }
 
+// MARK: - 按集队列
+
+/// 按集队列跟随的播放界面（见 MoviePilotEpisodeQueue.swift）。
+extension MediaSession: EpisodeQueueHost {
+  var currentItem: BaseItemDto? { playbackItem?.baseItem }
+  var episodeSource: any EpisodeQueueSource { userSession }
+}
+
+extension UserSession: EpisodeQueueSource {}
+
 // MARK: - MediaPlayerItem
 
 /// 与 Swiftfin `MediaPlayerItem` 同名：当前条目、片源、轨道选择、偏移与预览图。轨道选择直接读写 `MPVPlayer`。
@@ -627,21 +680,24 @@ final class MediaPlayerItem {
   /// MoviePilot-TV 不提供第二字幕。
   var secondarySubtitleOffset: Duration = .zero
 
-  init(baseItem: BaseItemDto, source: EmbyMediaSource, player: MPVPlayer, client: EmbyClient, startSeconds: Double) {
+  init(
+    baseItem: BaseItemDto, source: ServerMediaSource, player: MPVPlayer, connection: any MediaServerConnection,
+    startSeconds: Double
+  ) {
     self.baseItem = baseItem
-    mediaSource = PlaybackMediaSourceInfo(emby: source)
+    mediaSource = PlaybackMediaSourceInfo(source: source)
     self.player = player
     chapters = baseItem.fullChapterInfo
     var configuration = MediaPlaybackConfiguration()
     configuration.startSeconds = .milliseconds(Int64(startSeconds * 1000))
     configuration.selectMediaSource(id: source.id)
-    let images = PreviewImageCache(session: EmbyClient.sharedSession)
+    let images = PreviewImageCache(session: MediaServerHTTP.sharedSession)
     previewImageProvider = PreviewImageProvider(
       option: VideoPlayerDefaults.previewImageScrubbing,
       item: baseItem,
       mediaSourceID: source.id,
       chapters: chapters,
-      client: JellyfinClient(emby: client),
+      client: JellyfinClient(connection: connection),
       resolveImage: { await images.image(for: $0) })
     self.configuration = configuration
     images.provider = previewImageProvider

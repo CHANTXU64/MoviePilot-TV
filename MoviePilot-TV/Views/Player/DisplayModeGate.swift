@@ -64,7 +64,8 @@ enum DisplayModeGate {
   }
 }
 
-/// 按 Emby 片源信息提前向电视申请的显示模式（帧率、动态范围）。
+/// 按片源信息提前向电视申请的显示模式（帧率、动态范围）。各服务器适配器把片源信息转成它，见 `ServerMediaSource.displayModeHint`；
+/// Emby 片源由 `init(source:)` 解析。
 /// MPVUI 要等开播、读出视频格式后才申请，电视这时切换会让已经出声的播放停一下。开播前先按这里申请，
 /// 等 MPVUI 再申请同一个模式时电视已经切好，不会再切。规则照 MPVUI `MPVDisplayMatchingContent`：
 /// 帧率按标准帧率族取（23.976 不当 24），杜比视界只认 MPVUI 能原样输出的 Profile 5、8.1、8.4。

@@ -59,10 +59,10 @@ struct PlaybackPresentationModifier: ViewModifier {
       ) { session in
         MPVPlaybackScreen(
           session: session,
-          onExit: { coordinator.endSession(session) },
-          onSwitchItem: { itemID, sourceID, position, completion in
+          onExit: { notice in coordinator.endSession(session, notice: notice) },
+          onSwitchItem: { itemID, sourceID, position, episode, completion in
             coordinator.switchItem(
-              to: itemID, mediaSourceID: sourceID, startPosition: position, in: session,
+              to: itemID, mediaSourceID: sourceID, startPosition: position, episode: episode, in: session,
               completion: completion)
           }
         )
@@ -75,6 +75,11 @@ struct PlaybackPresentationModifier: ViewModifier {
         guard let failure else { return }
         notificationManager.show(message: failure.message, type: .error)
         coordinator.failure = nil
+      }
+      .onChange(of: coordinator.notice) { _, notice in
+        guard let notice else { return }
+        notificationManager.show(message: notice.message, type: .info)
+        coordinator.notice = nil
       }
   }
 }

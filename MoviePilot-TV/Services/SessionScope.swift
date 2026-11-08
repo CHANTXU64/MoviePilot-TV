@@ -18,6 +18,8 @@ final class SessionScope {
   let episodeGroupsCache = CoalescingCache<String, [EpisodeGroup]>(ttl: 120, capacity: 20)
   let mediaSeasonsCache = CoalescingCache<String, [TmdbSeason]>(ttl: 120, capacity: 20)
   let groupSeasonsCache = CoalescingCache<String, [TmdbSeason]>(ttl: 120, capacity: 20)
+  /// 详情页集列表与播放队列共用的季集列表。
+  let tmdbEpisodesCache = CoalescingCache<String, [TmdbEpisode]>(ttl: 120, capacity: 20)
   let subscriptionStatusCache = CoalescingCache<String, Bool>(ttl: 120, capacity: 100)
   let subscriptionSnapshotCache = CoalescingCache<String, [Subscribe]>(
     ttl: 30,
@@ -48,6 +50,7 @@ final class SessionScope {
     episodeGroupsCache.invalidateAll()
     mediaSeasonsCache.invalidateAll()
     groupSeasonsCache.invalidateAll()
+    tmdbEpisodesCache.invalidateAll()
     mediaSourceCatalogCache.invalidateAll()
     mediaServerConfigCache.invalidateAll()
   }

@@ -3,10 +3,11 @@ import Observation
 import SwiftUI
 
 // 移植自 Swiftfin 的播放界面读取的是 Jellyfin SDK 的数据类型（BaseItemDto、ChapterInfo、BaseItemPerson、MediaStream…）。
-// 这里按同名提供只含界面用到成员的适配类型，移植文件不用改类型名。
+// 这里按同名提供只含界面用到成员的适配类型，移植文件不用改类型名；数据来自与服务器无关的 `ServerMediaItem`、`ServerMediaSource`。
 // 目前只填播放本身已有的数据（标题、季集号、片长、mpv 的音轨字幕、可选的版本）。简介、章节、演职员、海报、片源详情、
-// 队列、片头片尾等元数据暂不接入，保持为空，界面大多按 Swiftfin 原逻辑自然隐藏；剧集的自动播放、上一集/下一集和
-// 队列页只看队列是否存在，仍会显示但没有内容。以后接数据时只需填这些字段和接入点。
+// 片头片尾等元数据暂不接入，保持为空，界面大多按 Swiftfin 原逻辑自然隐藏。
+// 从详情页按集播放时，标题、季集号用 MoviePilot 集列表的，上一集/下一集和同季列表也按它走（见 `UserSession`）；
+// 其他入口（首页“最近添加”、整剧从第一集播）没有集列表，队列为空。
 
 // MARK: - 条目
 
@@ -15,18 +16,12 @@ nonisolated enum BaseItemKind: String {
   case photo, photoAlbum, playlist, program, recording, season, series, trailer, tvProgram, video
   case person, other
 
-  init(emby type: String?) {
-    switch type {
-    case "Movie": self = .movie
-    case "Episode": self = .episode
-    case "Season": self = .season
-    case "Series": self = .series
-    case "Video": self = .video
-    case "MusicVideo": self = .musicVideo
-    case "Trailer": self = .trailer
-    case "BoxSet": self = .boxSet
-    case "Person": self = .person
-    default: self = .other
+  init(_ kind: ServerMediaItem.Kind) {
+    switch kind {
+    case .movie: self = .movie
+    case .episode: self = .episode
+    case .series: self = .series
+    case .other: self = .other
     }
   }
 
@@ -44,14 +39,14 @@ nonisolated enum MediaType {
   case audio
 }
 
-/// 直播节目信息。Emby 直连播放没有直播，恒为 nil。
+/// 直播节目信息。直连播放没有直播，恒为 nil。
 nonisolated struct ProgramInfo {
   let id: String?
   let displayTitle: String
   let overview: String?
 }
 
-/// Jellyfin trickplay 图集参数。Emby 没有这套接口，恒为空（接入点见 `JellyfinClient.trickplayTileURL`）。
+/// Jellyfin trickplay 图集参数。目前恒为空（接入点见 `JellyfinClient.trickplayTileURL`）。
 nonisolated struct TrickplayInfo {
   let width: Int?
   let height: Int?
@@ -82,11 +77,13 @@ nonisolated struct BaseItemDto: Identifiable {
   var mediaSources: [PlaybackMediaSourceInfo]?
   var people: [BaseItemPerson]?
   var chapters: [ChapterInfo]?
-  /// 竖版海报、横版缩略图地址（Emby 图片接口，不带密钥）。
+  /// 竖版海报、横版缩略图地址（不带密钥）。
   var portraitImageURL: URL?
   var landscapeImageURL: URL?
+  /// 从详情页按集播放时，MoviePilot 集列表里的这一集；换集时随条目交给协调器。
+  var moviePilotEpisode: MoviePilotEpisode?
 
-  // 直播、节目、附加内容相关，Emby 直连播放不出现。
+  // 直播、节目、附加内容相关，直连播放不出现。
   var currentProgram: ProgramInfo? { nil }
   var trickplay: [String: [String: TrickplayInfo]]? { nil }
   var startDate: Date? { nil }
@@ -101,14 +98,26 @@ nonisolated struct BaseItemDto: Identifiable {
   }
 
   /// 只取播放本身已有的基本字段；其余元数据（简介、海报、演职员、章节、片源详情）暂不接入，保持为空。
-  init(emby item: EmbyItem) {
+  /// 按集播放时，集名和季集号用 MoviePilot 集列表的（与详情页一致），并带上队列用的剧集、季标识；
+  /// 其他条目不带这两个标识，播放界面的队列为空。
+  init(item: ServerMediaItem, episode: QueuedEpisode? = nil) {
     id = item.id
-    name = item.name
-    type = BaseItemKind(emby: item.type)
-    runTimeTicks = item.runTimeTicks.map { Int($0) }
-    indexNumber = item.indexNumber
-    parentIndexNumber = item.parentIndexNumber
-    seriesName = item.seriesName
+    type = BaseItemKind(item.kind)
+    runTimeTicks = item.runtimeSeconds.map { Int($0 * 10_000_000) }
+    if let episode {
+      name = episode.episode.name
+      indexNumber = episode.episode.episodeNumber
+      parentIndexNumber = episode.episode.seasonNumber
+      seriesName = episode.context.seriesName ?? item.seriesName
+      moviePilotEpisode = episode.episode
+      seriesID = String(episode.context.tmdbID)
+      seasonID = UserSession.queueSeasonID(episode.episode.seasonNumber)
+    } else {
+      name = item.name
+      indexNumber = item.episodeNumber
+      parentIndexNumber = item.seasonNumber
+      seriesName = item.seriesName
+    }
   }
 
   // MARK: 与 Swiftfin 的 BaseItemDto 扩展相同的派生值
@@ -375,7 +384,7 @@ nonisolated struct PlaybackMediaSourceInfo: Identifiable, Hashable {
   var mediaStreams: [MediaStream]?
 
   /// 记录片源 ID、版本名和容器；大小、码率和流详情暂不接入。
-  init(emby source: EmbyMediaSource) {
+  init(source: ServerMediaSource) {
     id = source.id
     name = source.name
     container = source.container
@@ -487,46 +496,90 @@ nonisolated enum UserSessionError: Error {
   case missingCurrentSession
 }
 
-/// 与 Swiftfin `UserSession` 同名：当前 Emby 连接与用户。
-/// 队列、相邻集、片头片尾的数据暂不接入，下面三个方法是接入点，目前都返回空，相关界面按 Swiftfin 原逻辑隐藏或显示为空。
+/// 一个方向上的相邻集。
+enum AdjacentEpisode {
+  /// `skippedMissing`：中间跳过了还不在服务器上的集，播完时要重新确认。
+  case episode(BaseItemDto, skippedMissing: Bool)
+  /// 不能接着播的原因：在别的服务器上、无法确认、还不在媒体服务器上。
+  case unavailable(String)
+  /// 这一方向没有集了。
+  case none
+}
+
+/// 与 Swiftfin `UserSession` 同名：当前播放会话的服务器连接与队列数据。
+/// 上一集、下一集和同季列表按 MoviePilot 集列表走，只在当前服务器上找（见 `EpisodeNavigator`）；片头片尾暂不接入。
 @MainActor
 @Observable
 final class UserSession {
   nonisolated deinit {}
 
-  private static let autoPlayKey = "swiftfin.enableNextEpisodeAutoPlay"
+  nonisolated private static let queueSeasonPrefix = "moviepilot-season-"
 
-  @ObservationIgnored let client: EmbyClient
-  @ObservationIgnored let userID: String
+  /// 队列面板按季取集用的季标识。
+  nonisolated static func queueSeasonID(_ season: Int) -> String { "\(queueSeasonPrefix)\(season)" }
 
-  /// 播完自动播下一集。Swiftfin 读写服务器上的用户配置；这里存在本机，默认开（与 Jellyfin/Emby 用户默认值相同）。
-  var isAutoPlayEnabled: Bool {
-    didSet { UserDefaults.standard.set(isAutoPlayEnabled, forKey: Self.autoPlayKey) }
+  nonisolated private static func season(fromQueueSeasonID id: String) -> Int? {
+    guard id.hasPrefix(queueSeasonPrefix) else { return nil }
+    return Int(id.dropFirst(queueSeasonPrefix.count))
   }
 
-  init(client: EmbyClient, userID: String) {
-    self.client = client
-    self.userID = userID
-    isAutoPlayEnabled = UserDefaults.standard.object(forKey: Self.autoPlayKey) as? Bool ?? true
+  /// 播放界面持有会话，这里不延长它的生命周期。
+  @ObservationIgnored private weak var session: PlaybackSession?
+  @ObservationIgnored let connection: any MediaServerConnection
+
+  /// 播完自动播下一集。Swiftfin 读写服务器上的用户配置；这里存在本机，与设置页「播放」的开关是同一个。
+  var isAutoPlayEnabled: Bool {
+    didSet { UserDefaults.standard.set(isAutoPlayEnabled, forKey: PlaybackPreferences.autoPlayNextEpisodeKey) }
+  }
+
+  init(session: PlaybackSession) {
+    self.session = session
+    connection = session.connection
+    isAutoPlayEnabled = PlaybackPreferences.autoPlaysNextEpisode
   }
 
   /// 接入点：片头/片尾片段。
   func mediaSegments(itemID: String) async throws -> [MediaSegmentDto] { [] }
 
-  /// 接入点：同一季的全部集（队列面板）。
-  func seasonEpisodes(seriesID: String, seasonID: String) async throws -> [BaseItemDto] { [] }
+  /// 同一季里能在当前服务器上播的集（队列面板）。
+  func seasonEpisodes(seriesID: String, seasonID: String) async throws -> [BaseItemDto] {
+    guard let session, let queue = session.episodeQueue, let context = session.episode?.context,
+      let season = Self.season(fromQueueSeasonID: seasonID)
+    else { return [] }
+    return try await queue.playableEpisodes(inSeason: season, from: session.playback).map {
+      BaseItemDto(item: $0.item, episode: QueuedEpisode(context: context, episode: $0.episode))
+    }
+  }
 
-  /// 接入点：相邻集（上一集/下一集）。
-  func adjacentEpisodes(seriesID: String, itemID: String) async throws -> [BaseItemDto] { [] }
+  /// 正在播的 `itemID` 在 `direction` 方向的相邻集。会话已换成别的条目时返回 `.none`，由调用方按新条目重新取。
+  /// `refresh` 时重新读服务器和集列表（播完一集要接着播时），播放期间刚入库的集也能找到。
+  func adjacentEpisode(
+    _ direction: EpisodeNavigator.Direction, itemID: String, refresh: Bool = false
+  ) async throws -> AdjacentEpisode {
+    guard let session, session.item.id == itemID, let queue = session.episodeQueue,
+      let context = session.episode?.context
+    else { return .none }
+    switch try await queue.adjacentEpisode(direction, from: session.playback, refresh: refresh) {
+    case .play(let entry, let skippedMissing):
+      return .episode(
+        BaseItemDto(item: entry.item, episode: QueuedEpisode(context: context, episode: entry.episode)),
+        skippedMissing: skippedMissing)
+    case .stop(let reason):
+      return .unavailable(reason)
+    case .missing:
+      return direction == .next ? .unavailable(EpisodeNavigator.nextMissingMessage) : .none
+    case .end:
+      return .none
+    }
+  }
 }
 
-/// 与 Swiftfin 的 `JellyfinClient` 同名：拖动预览图用到的图集地址。
-nonisolated struct JellyfinClient {
-  let emby: EmbyClient
+/// 与 Swiftfin 的 `JellyfinClient` 同名：拖动预览图用到的图集地址，由当前服务器的连接提供。
+struct JellyfinClient {
+  let connection: any MediaServerConnection
 
-  /// Jellyfin trickplay 图集。Emby 没有这套接口；若日后接入 Emby 的 BIF 缩略图，在这里返回图集地址并给条目填 `trickplay`。
   func trickplayTileURL(itemID: String, width: Int, index: Int, mediaSourceID: String) -> URL? {
-    nil
+    connection.trickplayTileURL(itemID: itemID, width: width, index: index, mediaSourceID: mediaSourceID)
   }
 }
 

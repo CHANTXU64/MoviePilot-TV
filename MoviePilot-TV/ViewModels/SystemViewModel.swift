@@ -81,11 +81,72 @@ class SystemViewModel: ObservableObject {
     }
   }
 
-  /// 首页“最近添加”的 Emby 电影和剧集点击后直接在应用内播放；关闭时跳转媒体服务器 App。默认关闭。
+  /// 首页“最近添加”的电影和剧集点击后直接在应用内播放；关闭时跳转媒体服务器 App。默认关闭。
   @Published var homeMediaTapPlaysInApp: Bool = false {
     didSet {
       UserDefaults.standard.set(homeMediaTapPlaysInApp, forKey: Self.homeMediaTapPlaysInAppKey)
     }
+  }
+
+  /// 应用内播放开关，默认开；后端低于 v3.2.6 时设置页不让打开，入口也不显示（见 `InAppPlaybackAvailability`）。
+  @Published var inAppPlaybackEnabled: Bool = true {
+    didSet { PlaybackPreferences.setInAppPlaybackEnabled(inAppPlaybackEnabled) }
+  }
+
+  /// 播完自动播下一集，和播放界面工具栏的“自动播放”是同一个设置。
+  @Published var autoPlayNextEpisode: Bool = true {
+    didSet {
+      UserDefaults.standard.set(autoPlayNextEpisode, forKey: PlaybackPreferences.autoPlayNextEpisodeKey)
+    }
+  }
+
+  /// 后端版本是否支持应用内播放。
+  var backendSupportsInAppPlayback: Bool {
+    InAppPlaybackAvailability.supports(backendVersion: apiService.settings?.BACKEND_VERSION)
+  }
+
+  /// 「播放」设置页的行。
+  enum PlaybackSettingRow: Equatable {
+    /// 后端版本不够：说明版本要求，按下重新读取后端版本（升级后不用重启 App）。
+    case versionRequirement
+    case inAppPlayback
+    case homeMediaTap
+    case autoPlayNextEpisode
+  }
+
+  var playbackSettingRows: [PlaybackSettingRow] {
+    Self.playbackSettingRows(
+      backendVersion: apiService.settings?.BACKEND_VERSION, inAppPlaybackEnabled: inAppPlaybackEnabled)
+  }
+
+  /// 后端低于 v3.2.6 时只有版本说明，开关打不开；开关关着时，只在应用内播放才有意义的两项不显示。
+  static func playbackSettingRows(backendVersion: String?, inAppPlaybackEnabled: Bool) -> [PlaybackSettingRow] {
+    guard InAppPlaybackAvailability.supports(backendVersion: backendVersion) else { return [.versionRequirement] }
+    return inAppPlaybackEnabled ? [.inAppPlayback, .homeMediaTap, .autoPlayNextEpisode] : [.inAppPlayback]
+  }
+
+  @Published private(set) var isCheckingBackendVersion = false
+
+  /// 重新读取后端版本：后端升级到支持的版本后，回到这里按一下就能打开应用内播放。
+  func recheckBackendVersion() async {
+    guard !isCheckingBackendVersion else { return }
+    isCheckingBackendVersion = true
+    defer { isCheckingBackendVersion = false }
+    do {
+      _ = try await apiService.fetchSettings()
+    } catch {
+      Logger.warning("重新读取后端版本失败: \(error.localizedDescription)")
+    }
+  }
+
+  /// 进入「播放」设置页时重读：播放界面里也能改自动播放。
+  func reloadPlaybackSettings() {
+    let enabled = PlaybackPreferences.isInAppPlaybackEnabled
+    if inAppPlaybackEnabled != enabled { inAppPlaybackEnabled = enabled }
+    let autoPlay = PlaybackPreferences.autoPlaysNextEpisode
+    if autoPlayNextEpisode != autoPlay { autoPlayNextEpisode = autoPlay }
+    let homeTap = Self.shouldPlayHomeMediaInApp
+    if homeMediaTapPlaysInApp != homeTap { homeMediaTapPlaysInApp = homeTap }
   }
 
   // MARK: - 站点设置
@@ -217,6 +278,8 @@ class SystemViewModel: ObservableObject {
     preloadTMDBDetails = Self.shouldPreloadTMDBDetails
     autoSearchNewSubscriptions = Self.shouldAutoSearchNewSubscriptions
     homeMediaTapPlaysInApp = Self.shouldPlayHomeMediaInApp
+    inAppPlaybackEnabled = PlaybackPreferences.isInAppPlaybackEnabled
+    autoPlayNextEpisode = PlaybackPreferences.autoPlaysNextEpisode
     checkKeychainStatus()
     apiService.$session
       .sink { [weak self] session in
