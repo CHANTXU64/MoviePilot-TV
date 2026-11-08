@@ -1055,6 +1055,9 @@ final class PlaybackReporter {
 /// 申请一段后台执行时间，`work` 完成或系统收回时结束。
 enum BackgroundExecution {
   private final class Assertion {
+    // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+    nonisolated deinit {}
+
     var id = UIBackgroundTaskIdentifier.invalid
 
     func end() {

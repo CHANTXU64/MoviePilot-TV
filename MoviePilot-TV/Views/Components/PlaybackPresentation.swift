@@ -9,6 +9,9 @@ struct PlaybackPresentationModifier: ViewModifier {
   @State private var presented = PresentedSession()
 
   private final class PresentedSession {
+    // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
+    nonisolated deinit {}
+
     weak var session: PlaybackSession?
   }
 
