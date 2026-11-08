@@ -1,5 +1,5 @@
 {
-  "originHash" : "04b48ba7d45e107c53fe29fc27d5132b7f48c230c0816d454b0cacb9036cda06",
+  "originHash" : "bc9ec900fbb6bfc9c9aeb97c725019ccca4cb4771aae8d6744092e2742c933c6",
   "pins" : [
     {
       "identity" : "kingfisher",
@@ -8,6 +8,24 @@
       "state" : {
         "revision" : "8648fe649c5d62be38721110f835821906e9242a",
         "version" : "8.13.0"
+      }
+    },
+    {
+      "identity" : "mediaaccessibilitykit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/LePips/MediaAccessibilityKit",
+      "state" : {
+        "revision" : "6c2b50d3f2b6ccfa0105cf5fc6315f1d431ca92a",
+        "version" : "0.3.0"
+      }
+    },
+    {
+      "identity" : "mpvui",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/LePips/MPVUI",
+      "state" : {
+        "revision" : "9f15a49dfa04170729047587df81aa0f5ae39ce3",
+        "version" : "0.10.0"
       }
     },
     {

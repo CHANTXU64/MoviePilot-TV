@@ -1,0 +1,46 @@
+//
+// Swiftfin is subject to the terms of the Mozilla Public
+// License, v2.0. If a copy of the MPL was not distributed with this
+// file, you can obtain one at https://mozilla.org/MPL/2.0/.
+//
+// Copyright (c) 2026 Jellyfin & Jellyfin Contributors
+//
+// 本文件改自 Swiftfin：Shared/Extensions/ViewExtensions/Modifiers/ScrollIfLargerThanContainerModifier.swift
+//
+
+import SwiftUI
+
+// TODO: Replace with `defaultScrollAnchor` and `scrollBounceBehavior`
+
+struct ScrollIfLargerThanContainerModifier: ViewModifier {
+
+    @State
+    private var contentSize: CGSize = .zero
+
+    let axes: Axis.Set
+    let padding: CGFloat
+    let alignment: Alignment
+
+    func body(content: Content) -> some View {
+        AlternateLayoutView(alignment: alignment) {
+            Color.clear
+        } content: { layoutSize in
+
+            let isHorizontallyLarger: Bool = (contentSize.width + padding >= layoutSize.width) && axes.contains(.horizontal)
+            let isVerticallyLarger: Bool = (contentSize.height + padding >= layoutSize.height) && axes.contains(.vertical)
+
+            ScrollView(axes) {
+                content
+                    .trackingSize($contentSize)
+            }
+            .frame(
+                maxWidth: axes.contains(.horizontal) ? (isHorizontallyLarger ? .infinity : contentSize.width) : nil,
+                maxHeight: axes.contains(.vertical) ? (isVerticallyLarger ? .infinity : contentSize.height) : nil,
+                alignment: alignment
+            )
+            .scrollClipDisabled()
+            .scrollDisabled((axes.contains(.horizontal) && !isHorizontallyLarger) || (axes.contains(.vertical) && !isVerticallyLarger))
+            .scrollIndicators(.never)
+        }
+    }
+}

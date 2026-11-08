@@ -1,0 +1,154 @@
+//
+// Swiftfin is subject to the terms of the Mozilla Public
+// License, v2.0. If a copy of the MPL was not distributed with this
+// file, you can obtain one at https://mozilla.org/MPL/2.0/.
+//
+// Copyright (c) 2026 Jellyfin & Jellyfin Contributors
+//
+// 本文件改自 Swiftfin：Shared/Objects/MediaPlayerManager/Supplements/MediaPeopleSupplement.swift
+// Modifications for MoviePilot-TV are also licensed under MPL-2.0.
+//
+// 修改：去掉 `import JellyfinAPI`，演职员换成 MoviePilot-TV 的同名 Emby 适配类型；`CollectionHStack` / `CollectionVGrid`
+// 两个第三方包未引入（添加依赖未获授权），使用 Views/Player/SwiftfinPackageShims.swift 中的同名替身。
+// Swift 6 下对 `VideoPlayerSupplement` 的一致性标为 `@MainActor`（与原版 MediaQueueView.swift 的写法相同）。
+//
+
+import SwiftUI
+
+@MainActor
+struct MediaPeopleSupplement {
+
+    let displayTitle: String = L10n.people
+    let id: String = "People"
+    let people: [BaseItemPerson]
+}
+
+extension MediaPeopleSupplement: @MainActor VideoPlayerSupplement {
+
+    var body: some View {
+        PeopleOverlay(supplement: self)
+    }
+
+    private struct PeopleOverlay: PresentationView {
+
+        @AdaptiveLayout
+        private var viewLayout
+
+        @Environment(VideoPlayer.ViewState.self)
+        private var viewState
+
+        private var supplement: MediaPeopleSupplement
+
+        init(supplement: MediaPeopleSupplement) {
+            self.supplement = supplement
+        }
+
+        private var people: [BaseItemPerson] {
+            supplement.people
+        }
+
+        var standardView: some View {
+            CompactOrRegularView(
+                isCompact: viewState.isCompact
+            ) {
+                compactView
+            } regularView: {
+                regularView
+            }
+        }
+
+        private var compactView: some View {
+            CollectionVGrid(
+                uniqueElements: people,
+                id: \.hashValue,
+                layout: .columns(
+                    1,
+                    insets: .init(viewLayout.edgePadding),
+                    itemSpacing: viewLayout.itemSpacing,
+                    lineSpacing: viewLayout.itemSpacing
+                )
+            ) { person, _ in
+                PersonRow(person: person)
+            }
+            .padding(.leading, viewState.supplementInsets.leading)
+            .padding(.trailing, viewState.supplementInsets.trailing)
+        }
+
+        private func personView(for person: BaseItemPerson) -> some View {
+            PosterButton(
+                item: person,
+                displayType: .portrait
+            ) { _ in }
+        }
+
+        private var regularView: some View {
+            CollectionHStack(
+                uniqueElements: people,
+                id: \.hashValue,
+                layout: .minimumWidth(columnWidth: viewLayout.value(standard: 80, large: 150), rows: 1, columnFraction: 0.5)
+            ) { person in
+                personView(for: person)
+            }
+            .clipsToBounds(false)
+            .insets(EdgeInsets(
+                top: 0,
+                leading: max(viewState.supplementInsets.leading, viewLayout.edgePadding),
+                bottom: 0,
+                trailing: max(viewState.supplementInsets.trailing, viewLayout.edgePadding)
+            ))
+            .itemSpacing(viewLayout.itemSpacing)
+            .scrollBehavior(.continuousLeadingEdge)
+            .focusSection()
+        }
+
+        var largeView: some View {
+            standardView
+        }
+    }
+
+    private struct PersonContent: View {
+
+        let person: BaseItemPerson
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(person.displayTitle)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+                    .foregroundStyle(.primary)
+
+                if let role = person.displayRole {
+                    Text(role)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private struct PersonRow: View {
+
+        @AdaptiveLayout
+        private var viewLayout
+
+        let person: BaseItemPerson
+
+        var body: some View {
+            ListRow(insets: .init(horizontal: viewLayout.edgePadding)) {
+                PosterImage(
+                    item: person,
+                    type: .portrait,
+                    size: .extraSmall,
+                    contentMode: .fit
+                )
+                .frame(height: 90)
+                .padding(.vertical, 8)
+            } content: {
+                PersonContent(person: person)
+            }
+        }
+    }
+}

@@ -116,20 +116,20 @@ python3 scripts/test-tvos.py
 python3 scripts/test-tvos.py --full
 ```
 
-`--full` 在 **tvOS 18.5、26.5、最新已安装的 27.x** 上运行完整验证，三个版本同时进行。开始前必须确认三个 runtime 都可用，缺少任何一个就报错，不允许悄悄只跑最新版本。依赖只解析一次，每个版本使用独立的 `tvos-<版本>` 构建目录，避免争用 `build.db`。某一版本的依赖解析、Debug 构建或 Testing 宿主构建失败时，停止其余仍在运行的版本；只有测试执行阶段的普通离线用例失败才等其余版本跑完并汇总。取消会停掉本次已经启动的全部版本。每个版本单独创建临时 Apple TV 模拟器，按本次返回的 UDID 执行构建和测试；成功、失败或取消后只关闭并删除自己创建的设备。不要用日常模拟器的名称或 UDID 执行测试，也不要使用 `erase`、`shutdown all` 或 `delete all`。机器内存紧张时加 `--serial`，改回逐个版本运行。
+`--full` 在 **tvOS 18.5、26.5、最新已安装的 27.x** 上运行完整验证，最多两个版本同时进行：第三个版本等前两个中有一个跑完、删掉自己的模拟器后再开始。开始前必须确认三个 runtime 都可用，缺少任何一个就报错，不允许悄悄只跑最新版本。依赖只解析一次，每个版本使用独立的 `tvos-<版本>` 构建目录，避免争用 `build.db`。某一版本的依赖解析、Debug 构建或 Testing 宿主构建失败时，停止其余仍在运行的版本，排队的版本也不再开始；只有测试执行阶段的普通离线用例失败才等其余版本跑完并汇总。取消会停掉本次已经启动的全部版本，排队的版本不再开始。每个版本单独创建临时 Apple TV 模拟器，按本次返回的 UDID 执行构建和测试；成功、失败或取消后只关闭并删除自己创建的设备。不要用日常模拟器的名称或 UDID 执行测试，也不要使用 `erase`、`shutdown all` 或 `delete all`。机器内存紧张时加 `--serial`，改回逐个版本运行。
 
-CI 使用 GitHub 提供的 `xcode-27` runner，并固定执行 `python3 scripts/test-tvos.py --full --runtime 27.0`；该镜像提供 Xcode 27 与 tvOS 27.0 runtime，见[官方镜像说明](https://github.com/actions/runner-images/issues/14404)。Push 前完整验收使用三版本矩阵；日常构建、定向测试与提交（commit）使用单版本，不要求提前完成提交验收。实际使用的型号、版本和 UDID 会输出在日志中。矩阵模式下，`--result-bundle-path /tmp/tests.xcresult` 会分别生成 `tests-tvos-18.5.xcresult`、`tests-tvos-26.5.xcresult` 和对应 27.x 的结果包。
+CI 使用 GitHub 提供的 `xcode-27` runner，并固定执行 `python3 scripts/test-tvos.py --full --runtime 27.2`；该镜像提供 Xcode 27 与 tvOS 27.0、27.2 runtime，见[官方镜像说明](https://github.com/actions/runner-images/issues/14404)。Push 前完整验收使用三版本矩阵；日常构建、定向测试与提交（commit）使用单版本，不要求提前完成提交验收。实际使用的型号、版本和 UDID 会输出在日志中。矩阵模式下，`--result-bundle-path /tmp/tests.xcresult` 会分别生成 `tests-tvos-18.5.xcresult`、`tests-tvos-26.5.xcresult` 和对应 27.x 的结果包。
 
 脚本保留 `CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-` 和串行测试参数，默认跳过三个真实后端套件。定向验证示例：
 
 ```bash
-python3 scripts/test-tvos.py --runtime 27.0 \
+python3 scripts/test-tvos.py --runtime 27.2 \
   --only-testing MoviePilot-TV-Tests/TestIsolationTests
 ```
 
 测试分为 `build-for-testing` 和 `test-without-building`，宿主构建失败后不启动测试。`--skip-build` 只能与 `--full` 一起使用，跳过依赖解析与 Debug 构建，不能将它单独当作完整验证；只构建模式不接受 `--result-bundle-path`。全套验收复用专用构建目录里的增量产物，不再每次 `clean`。怀疑缓存失真时，只删除这次脚本打印的构建目录，不要删除用户日常的 Xcode DerivedData。
 
-脚本始终传入专用 `-derivedDataPath`，默认在系统临时目录的 `MoviePilot-TV-tests/<仓库标识>/DerivedData` 复用增量缓存，与日常 Xcode 的 DerivedData 隔离。每次运行都把该版本的产物放在 `tvos-<版本>` 子目录，所以日常单版本构建和后来的三版本矩阵可以共用同一份增量结果。整次运行仍共用一把锁：这个目录已有脚本在跑时，新的一次会立即退出。手动调用 xcodebuild 也必须指定独立构建目录，不得占用用户正在使用的目录；不要清理、删除用户日常 DerivedData。可用 `--derived-data-path <专用目录>` 指定其他隔离目录，或用 `--result-bundle-path <新的.xcresult路径>` 保存测试结果。
+脚本始终传入专用 `-derivedDataPath`，默认在仓库内的 `.test-tvos-cache/DerivedData` 复用增量缓存（已被 Git 忽略，并标记为不进 Time Machine 备份），与日常 Xcode 的 DerivedData 隔离。放在仓库里，删掉克隆或 Fork 时缓存一起删掉；不放在系统临时目录：macOS 会逐个删除那里 3 天没访问过的文件，依赖包产物被删掉一半后，之后的构建会一直失败。每次运行都把该版本的产物放在 `tvos-<版本>` 子目录，所以日常单版本构建和后来的三版本矩阵可以共用同一份增量结果。整次运行仍共用一把锁：这个目录已有脚本在跑时，新的一次会立即退出。手动调用 xcodebuild 也必须指定独立构建目录，不得占用用户正在使用的目录；不要清理、删除用户日常 DerivedData。可用 `--derived-data-path <专用目录>` 指定其他隔离目录，或用 `--result-bundle-path <新的.xcresult路径>` 保存测试结果。
 
 发布专属的版本信息改动不要再跑三版本全套。先看业务提交的记录和对应 PR 的 CI。那些提交已经通过 CI，或本机已经对它们跑过三版本全套，就只在最新一个 tvOS 上兜底：
 
@@ -150,7 +150,7 @@ python3 -m unittest discover -s scripts/tests
 
 该命令运行 `scripts/tests` 下全部 Python 测试（含续签脚本的本地命令替身和构建设置检查），不代表真实签名或设备安装验收。实际 IPA 构建、打包只在 `Release` 工作流执行，该工作流只跑打包相关测试。
 
-每个版本内部保持 XCTest 串行。不要移除 `-parallel-testing-enabled NO` 和 `-maximum-concurrent-test-simulator-destinations 1`，否则 XCTest 可能启动多个 `Clone N of Apple TV` 模拟器并并行执行不同测试套件。这和三个 tvOS 版本同时跑是两件事：版本之间可以并行，同一个版本里的用例仍然逐个跑。真实后端兼容测试连版本之间也逐个执行，方便控制副作用套件的执行顺序和排查失败来源；带 `--include-backend-tests` 的矩阵不会并行。测试命令带 `-collect-test-diagnostics never`，失败细节看 `.xcresult`，不再等待 `simctl diagnose`。
+每个版本内部保持 XCTest 串行。不要移除 `-parallel-testing-enabled NO` 和 `-maximum-concurrent-test-simulator-destinations 1`，否则 XCTest 可能启动多个 `Clone N of Apple TV` 模拟器并并行执行不同测试套件。这和多个 tvOS 版本同时跑是两件事：版本之间可以并行（最多两个），同一个版本里的用例仍然逐个跑。真实后端兼容测试连版本之间也逐个执行，方便控制副作用套件的执行顺序和排查失败来源；带 `--include-backend-tests` 的矩阵不会并行。测试命令带 `-collect-test-diagnostics never`，失败细节看 `.xcresult`，不再等待 `simctl diagnose`。
 
 模拟器构建和测试必须保留本地 ad-hoc 签名（`CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-`），不要使用 `CODE_SIGNING_ALLOWED=NO`。测试会覆盖安装主 App 和扩展；关闭签名会丢失 App Group 权限，让 Top Shelf 退回静态图片。宿主测试不启动正常 App 根视图的会话加载与 Top Shelf 同步，避免测试会话写入用户首页。修改签名、打包或共享组时，除测试通过外，还须核对测试结束后的实际共享容器访问和首页展示。
 

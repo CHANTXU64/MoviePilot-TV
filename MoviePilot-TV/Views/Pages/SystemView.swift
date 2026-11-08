@@ -60,6 +60,11 @@ struct SystemView: View {
     apiService.canAccess(.discovery)
   }
 
+  /// 应用内播放需要读取媒体服务器配置，只有管理员可用。
+  private var canConfigurePlayback: Bool {
+    apiService.canRequestSuperUserEndpoints
+  }
+
   private var canConfigureCustomFilters: Bool {
     apiService.canRequestSuperUserEndpoints
   }
@@ -335,6 +340,20 @@ struct SystemView: View {
             row("默认搜索来源", value: mediaSourceButtonLabel, showsDisclosure: true)
           }
           .focused($focusedItem, equals: .mediaSourceSelection)
+        }
+      }
+
+      if canConfigurePlayback {
+        section("播放") {
+          Toggle(
+            "点击首页媒体直接播放",
+            isOn: Binding(
+              get: { viewModel.homeMediaTapPlaysInApp },
+              set: { viewModel.homeMediaTapPlaysInApp = $0 }
+            )
+          )
+          .font(.body.bold())
+          .focused($focusedItem, equals: .homeMediaTapPlaysInApp)
         }
       }
 
@@ -1112,6 +1131,8 @@ struct SystemView: View {
         return "新增订阅后立即开始搜索，无需等待 MoviePilot 稍后自动处理。（只影响 TV 端）"
       case .waitBackgroundImage:
         return "进入媒体详情页前的加载动画会等待背景海报就绪实现平滑过渡，网络较慢时可关闭以更快进入详情页。（只影响 TV 端）"
+      case .homeMediaTapPlaysInApp:
+        return "开启后，首页“最近添加”中的 Emby 电影和剧集点击后直接在应用内播放（剧集从第一集开始）；关闭时跳转媒体服务器 App。长按卡片两种方式都可以选。（只影响 TV 端）"
       case .preloadTMDBDetails:
         return "进入豆瓣、Bangumi 或 AniList 详情页并识别到对应 TMDB 条目后，提前加载其详情，以缩短后续跳转等待时间。（只影响 TV 端）"
       case .mediaSourceSelection:
@@ -1289,6 +1310,7 @@ enum SystemSettingsFocus: Hashable {
   case subtitleSite(Int)
   case appInfo
   case autoSearch
+  case homeMediaTapPlaysInApp
   case preloadTMDBDetails
   case waitBackgroundImage
   case hardFilter

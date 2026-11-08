@@ -40,6 +40,8 @@ class MediaDetailViewModel: ObservableObject {
   @Published var uniqueDirectors: [Person] = []
 
   @Published private(set) var isInLibrary = false
+  /// 管理员且条目在（或无法确认不在）可播放的 Emby 上时，应用内播放的目标。
+  @Published private(set) var inAppPlaybackTarget: PlaybackTarget?
 
   /// 第二页首行数据是否已就绪。
   /// 用于控制 Loading 遮罩的显隐——必须等首行数据加载完才能移除遮罩，
@@ -501,13 +503,38 @@ class MediaDetailViewModel: ObservableObject {
   }
 
   private func loadMediaServerExists() async {
-    guard apiService.canAccess(.subscribe), detail.type == "电影", detail.identity != nil else {
-      return
-    }
+    guard detail.identity != nil else { return }
+    let isMovie = detail.type == "电影"
+    // 电影的入库状态显示在订阅按钮上；剧集只用于管理员的应用内播放（从第一集开始）。
+    let showsLibraryState = isMovie && apiService.canAccess(.subscribe)
+    let offersPlayback = InAppPlaybackAvailability.offers(
+      mediaType: detail.type, canRequestSuperUserEndpoints: apiService.canRequestSuperUserEndpoints)
+    guard showsLibraryState || offersPlayback else { return }
+    let snapshot = apiService.sessionSnapshot()
+    let coordinator = apiService.sessionScope.playbackCoordinator
+    let itemID: String?
     do {
-      isInLibrary = try await apiService.fetchMediaServerExists(media: detail)
+      itemID = try await apiService.fetchMediaServerItemID(media: detail)
+    } catch is CancellationError {
+      return
     } catch {
       Logger.error("检查媒体入库状态失败: \(error)")
+      return
+    }
+    guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot) else { return }
+    if showsLibraryState { isInLibrary = itemID != nil }
+    guard let itemID, offersPlayback else { return }
+    do {
+      // 入库查询返回的条目 ID 不带服务器名，也可能属于 Plex、Jellyfin：需要时先在 Emby 上按外部编号找到它。
+      let servers = try await apiService.fetchCachedMediaServers()
+      guard servers.contains(where: \.supportsInAppPlayback) else { return }
+      let expected = LibraryItemExpectation(media: detail)
+      let target = await coordinator.locateLibraryItem(itemID, expected: expected, in: servers)
+      guard !Task.isCancelled, apiService.isSessionUnchanged(from: snapshot) else { return }
+      inAppPlaybackTarget = target
+    } catch is CancellationError {
+    } catch {
+      Logger.warning("读取媒体服务器配置失败: \(error.localizedDescription)")
     }
   }
 

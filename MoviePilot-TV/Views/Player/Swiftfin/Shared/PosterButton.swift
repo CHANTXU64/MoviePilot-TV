@@ -1,0 +1,109 @@
+//
+// Swiftfin is subject to the terms of the Mozilla Public
+// License, v2.0. If a copy of the MPL was not distributed with this
+// file, you can obtain one at https://mozilla.org/MPL/2.0/.
+//
+// Copyright (c) 2026 Jellyfin & Jellyfin Contributors
+//
+// 本文件改自 Swiftfin：Shared/Components/PosterButton.swift
+// Modifications for MoviePilot-TV are also licensed under MPL-2.0.
+//
+// 修改：`@SharedPoster`（Swiftfin 的共享条目存储）换成普通存储属性；去掉 tvOS 的
+// `focusedValue(\.focusedPoster, AnyPoster(item))`（只供 Swiftfin 首页的背景联动使用，依赖 Jellyfin 条目存储）。
+//
+
+import SwiftUI
+
+struct PosterButton<Item: Poster>: View {
+
+    @AdaptiveLayout
+    private var viewLayout
+
+    @Environment(\.viewContext)
+    private var viewContext
+
+    @Namespace
+    private var namespace
+
+    @State
+    private var posterSize: CGSize = .zero
+
+    var item: Item
+    let displayType: PosterDisplayType
+    let size: PosterDisplayType.Size
+    let action: (Namespace.ID) -> Void
+
+    init(
+        item: Item,
+        displayType: PosterDisplayType,
+        size: PosterDisplayType.Size = .small,
+        action: @escaping (Namespace.ID) -> Void
+    ) {
+        self.item = item
+        self.displayType = displayType
+        self.size = size
+        self.action = action
+    }
+
+    private func contextMenuPreview(width: CGFloat) -> some View {
+        buttonLabel()
+            .posterAccessibility(for: item)
+            .frame(width: width)
+            .padding(20)
+            .backport
+            .glassEffect(in: .rect(cornerRadius: 10))
+    }
+
+    private func posterImage(overlay: some View) -> some View {
+        PosterImage(
+            item: item,
+            type: displayType,
+            size: size
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay { overlay.posterStyle(displayType) }
+        .contentShape(.contextMenuPreview, Rectangle())
+        .matchedTransitionSource(id: "item", in: namespace)
+        .subtleShadow()
+        .hoverEffect(.highlight)
+    }
+
+    private func buttonLabel(overlay: some View = EmptyView()) -> some View {
+        VStack(alignment: .leading) {
+            posterImage(overlay: overlay)
+
+            item.posterLabel
+                .allowsHitTesting(false)
+        }
+    }
+
+    var body: some View {
+        Button {
+            action(namespace)
+        } label: {
+            // Layout required for tvOS focused offset label behavior
+            if viewLayout.isLarge {
+                posterImage(overlay: item.posterOverlay(for: displayType))
+                    .posterAspectRatio(displayType, contentMode: .fit)
+                    .frame(width: posterSize.width > 0 ? posterSize.width : nil)
+                    .posterAccessibility(for: item)
+
+                item.posterLabel
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityHidden(true)
+            } else {
+                buttonLabel(overlay: item.posterOverlay(for: displayType))
+                    .posterAccessibility(for: item)
+            }
+        }
+        .environment(\.posterDisplayType, displayType)
+        .foregroundStyle(.primary, .secondary)
+        .buttonStyle(.borderless)
+        .buttonBorderShape(.roundedRectangle)
+        .trackingSize($posterSize)
+        .posterContextMenu(for: item) {
+            contextMenuPreview(width: posterSize.width)
+                .withViewContext(viewContext)
+        }
+    }
+}

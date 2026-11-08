@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build on disposable tvOS simulators; run targeted tests or the full matrix.
 
-The offline matrix runs tvOS 18.5, 26.5, and the latest 27.x at the same time.
+The offline matrix runs tvOS 18.5, 26.5, and the latest 27.x, at most two of them at the same time.
 Each version keeps its own DerivedData so the builds do not share build.db.
 XCTest inside one version stays serial. Real-backend runs stay one version at a time.
 """
@@ -9,14 +9,12 @@ XCTest inside one version stays serial. Real-backend runs stay one version at a 
 import argparse
 from contextlib import contextmanager
 import fcntl
-import hashlib
 import json
 import os
 from pathlib import Path
 import signal
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import uuid
@@ -30,6 +28,11 @@ BACKEND_SUITES = (
     "BackendCompatibilityPermissionBehaviorTests",
     "BackendCompatibilitySideEffectTests",
 )
+
+
+# Limits load on the Mac: each version builds and tests on its own simulator. The third version starts when
+# one of the first two has finished and removed its simulator.
+MAX_PARALLEL_VERSIONS = 2
 
 
 def emit(message, *, error=False):
@@ -278,11 +281,34 @@ def find_created_simulator(name, runtime_identifier, device_type_identifier):
     return str(uuid.UUID(matches[0]["udid"])).upper() if matches else None
 
 
+# Inside the checkout (ignored by Git), so deleting a clone or fork also deletes its cache. Not under $TMPDIR:
+# macOS deletes files there that were not accessed for three days, one by one, leaving package artifacts
+# half-deleted and breaking every later incremental build.
+DEFAULT_CACHE = REPO / ".test-tvos-cache"
+
+
+BACKUP_EXCLUSION_ATTRIBUTE = "com.apple.metadata:com_apple_backup_excludeItem"
+
+
+def exclude_from_backup(path):
+    # Several GB of rebuildable output. Writes the attribute `tmutil addexclusion` sets, without its ~10 s
+    # wait for backupd; best effort, the build does not depend on it.
+    try:
+        subprocess.run(["xattr", "-w", BACKUP_EXCLUSION_ATTRIBUTE, "com.apple.backupd", str(path)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    except OSError:
+        pass
+
+
 @contextmanager
 def build_directory(requested_path):
-    repo_key = hashlib.sha256(str(REPO).encode()).hexdigest()[:12]
-    directory = (Path(requested_path) if requested_path else
-                 Path(tempfile.gettempdir()) / "MoviePilot-TV-tests" / repo_key / "DerivedData").resolve()
+    if requested_path:
+        directory = Path(requested_path).resolve()
+    else:
+        if not DEFAULT_CACHE.exists():
+            DEFAULT_CACHE.mkdir()
+            exclude_from_backup(DEFAULT_CACHE)
+        directory = DEFAULT_CACHE / "DerivedData"
     directory.mkdir(parents=True, exist_ok=True)
     # Reuse incremental build artifacts, but never overlap two runner invocations.
     with (directory.parent / (directory.name + ".lock")).open("a") as lock:
@@ -299,7 +325,7 @@ def main(argv=None):
     parser.add_argument("--runtime", help="指定一个 tvOS 版本；日常默认使用最新可用版本")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--full", action="store_true",
-                      help="提交验收：完整构建与全套测试；默认三个 tvOS 版本并行")
+                      help="提交验收：完整构建与全套测试；三个 tvOS 版本，最多两个同时运行")
     mode.add_argument("--only-testing", action="append", default=[], metavar="TEST_ID",
                       help="只构建测试宿主并运行指定用例，默认单版本")
     parser.add_argument("--include-backend-tests", action="store_true",
@@ -381,9 +407,13 @@ def run_parallel(args, selections):
     gate = Gate()
     failures = []
     failure_lock = threading.Lock()
-    emit("并行运行：" + "、".join(runtime["version"] for runtime, _ in selections))
+    emit("并行运行（最多同时 " + str(MAX_PARALLEL_VERSIONS) + " 个）："
+         + "、".join(runtime["version"] for runtime, _ in selections))
 
     def worker(runtime, device):
+        # A queued version that starts after a sibling failed or the run was cancelled does nothing.
+        if gate.is_cancelling():
+            return
         prefix = f"[tvOS {runtime['version']}] "
         derived = Path(args.derived_data_path) / f"tvos-{runtime['version']}"
         try:
@@ -404,7 +434,7 @@ def run_parallel(args, selections):
             gate.cancel_children()
             raise
 
-    with ThreadPoolExecutor(max_workers=len(selections)) as pool:
+    with ThreadPoolExecutor(max_workers=min(len(selections), MAX_PARALLEL_VERSIONS)) as pool:
         futures = [pool.submit(worker, runtime, device) for runtime, device in selections]
         try:
             for future in as_completed(futures):
