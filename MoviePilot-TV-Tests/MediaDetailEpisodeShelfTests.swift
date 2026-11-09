@@ -42,6 +42,43 @@ final class MediaDetailEpisodeShelfTests: XCTestCase {
     XCTAssertFalse(MediaDetailEpisodeSeasons.fitsChips(titles: longNames))
   }
 
+  func testLargeSeasonMenuGroupsKeepSpecialsAndEverySeasonReachable() {
+    let special = PickerOption(title: "特别篇", value: 0)
+    let regular = (1...1_003).map { PickerOption(title: "第 \($0) 季", value: $0) }
+    XCTAssertTrue(MediaDetailEpisodeSeasons.menuGroups([special] + regular.prefix(49)).isEmpty)
+    XCTAssertEqual(MediaDetailEpisodeSeasons.menuGroups([special] + regular.prefix(50)).count, 2)
+
+    let groups = MediaDetailEpisodeSeasons.menuGroups([special] + regular)
+    XCTAssertNil(groups.first?.title)
+    XCTAssertEqual(groups.dropFirst().first?.title, "第 1–50 季")
+    XCTAssertEqual(groups.last?.title, "第 1001–1003 季")
+    XCTAssertTrue(groups.allSatisfy { $0.options.count <= 50 })
+    XCTAssertEqual(groups.flatMap(\.options).map(\.value), Array(0...1_003))
+  }
+
+  func testEpisodePagesCoverAllEpisodesAndExpansionOpensTheContainingRange() {
+    let count = 226
+    let shelfPages = DetailPageRanges.ranges(count: count, size: 50)
+    let gridPages = DetailPageRanges.ranges(count: count, size: 100)
+
+    XCTAssertEqual(shelfPages.flatMap { $0 }, Array(0..<count))
+    XCTAssertEqual(gridPages.flatMap { $0 }, Array(0..<count))
+    XCTAssertEqual(shelfPages[3], 150..<200)
+    XCTAssertEqual(
+      DetailPageRanges.current(count: count, size: 100, offset: shelfPages[3].lowerBound),
+      100..<200
+    )
+    XCTAssertEqual(DetailPageRanges.current(count: 51, size: 50, offset: 150), 50..<51)
+  }
+
+  func testPageTitleMatchesOriginalEpisodeNumbersOrUsesPositionsWhenUnordered() {
+    let episodes = [101, 102, 103, 105, 104].enumerated().map { index, number in
+      MoviePilotEpisode(TmdbEpisode(id: nil, episodeNumber: number), season: 1, index: index)
+    }
+    XCTAssertEqual(DetailPageRanges.title(for: 0..<3, numbers: episodes[0..<3].map(\.episodeNumber), unit: "集"), "101–103 集")
+    XCTAssertEqual(DetailPageRanges.title(for: 3..<5, numbers: episodes[3..<5].map(\.episodeNumber), unit: "集"), "第 4–5 项")
+  }
+
   func testCardTextFallsBackWithoutNameOrMetadata() {
     let full = MoviePilotEpisode(
       TmdbEpisode(id: 1, episodeNumber: 3, name: " 暗流 ", airDate: "2024-03-02", runtime: 46),

@@ -1,5 +1,27 @@
 import SwiftUI
 
+/// 按列表位置切页，范围文案优先显示实际编号。
+enum DetailPageRanges {
+  static func ranges(count: Int, size: Int) -> [Range<Int>] {
+    stride(from: 0, to: count, by: size).map { $0..<min($0 + size, count) }
+  }
+
+  static func current(count: Int, size: Int, offset: Int) -> Range<Int> {
+    let start = min(max(offset, 0), max(count - 1, 0)) / size * size
+    return start..<min(start + size, count)
+  }
+
+  static func title(for range: Range<Int>, numbers: [Int?], unit: String) -> String {
+    let ordered = numbers.compactMap { $0 }
+    if ordered.count == range.count, let first = ordered.first, let last = ordered.last,
+      first >= 0, zip(ordered, ordered.dropFirst()).allSatisfy({ $0.0 < $0.1 })
+    {
+      return first == last ? "\(first) \(unit)" : "\(first)–\(last) \(unit)"
+    }
+    return range.count == 1 ? "第 \(range.upperBound) 项" : "第 \(range.lowerBound + 1)–\(range.upperBound) 项"
+  }
+}
+
 /// 季和剧集展开页使用同一个网格宽度，卡片比例决定一行放几张。
 enum DetailExpansionGridLayout {
   static let columnSpacing: CGFloat = 44

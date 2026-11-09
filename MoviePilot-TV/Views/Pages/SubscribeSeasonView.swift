@@ -32,6 +32,8 @@ enum SeasonLayout {
 }
 
 struct SubscribeSeasonContentView: View {
+  private static let seasonPageSize = 100
+
   @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
   @ObservedObject var viewModel: SubscribeSeasonViewModel
   var layout: SeasonLayout = .shelf
@@ -44,6 +46,7 @@ struct SubscribeSeasonContentView: View {
   @EnvironmentObject private var notificationManager: NotificationManager
   @Environment(\.scenePhase) private var scenePhase
   @State private var selectedSeasonDetail: TmdbSeason?
+  @State private var seasonPageOffset = 0
   @FocusState private var focusedSeasonId: Int?
 
   private func performSeasonAction(_ season: TmdbSeason, isSubscribed: Bool) {
@@ -126,33 +129,7 @@ struct SubscribeSeasonContentView: View {
           }
         }
       case .grid(let imageLifecycle):
-        let seasons = viewModel.isLoading || viewModel.hasSeasonLoadError ? [] : viewModel.seasonInfos
-        DetailExpansionGrid(
-          columns: MediaCard.defaultGridColumns,
-          itemIDs: seasons.enumerated().map { index, season in
-            "season:\(season.season_number.map(String.init) ?? "missing"):\(index)"
-          },
-          imageLifecycle: imageLifecycle,
-          cardFocus: $focusedSeasonId,
-          firstFocus: seasons.first?.season_number,
-          lastFocus: seasons.last?.season_number
-        ) {
-          DetailExpansionHeader(title: "订阅   \(viewModel.mediaInfo.title ?? "")") {
-            if !viewModel.episodeGroups.isEmpty {
-              HStack {
-                Spacer()
-                episodeGroupPicker
-              }
-              .focusSection()
-            }
-          }
-        } status: {
-          status
-        } card: { index, onFocus in
-          let season = seasons[index]
-          seasonCard(season, onFocus: onFocus)
-            .focused($focusedSeasonId, equals: season.season_number)
-        }
+        expandedGrid(imageLifecycle: imageLifecycle)
       }
     }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
@@ -211,6 +188,58 @@ struct SubscribeSeasonContentView: View {
     }
   }
 
+  private func expandedGrid(imageLifecycle: PageImageLifecycle) -> some View {
+    let allSeasons = viewModel.isLoading || viewModel.hasSeasonLoadError ? [] : viewModel.seasonInfos
+    let page = DetailPageRanges.current(
+      count: allSeasons.count, size: Self.seasonPageSize, offset: seasonPageOffset
+    )
+    let seasons = allSeasons[page]
+    return DetailExpansionGrid(
+      columns: MediaCard.defaultGridColumns,
+      itemIDs: seasons.indices.map { index in
+        let number = seasons[index].season_number.map(String.init) ?? "missing"
+        return "season:\(viewModel.selectedGroupId):\(number):\(index)"
+      },
+      imageLifecycle: imageLifecycle,
+      cardFocus: $focusedSeasonId,
+      firstFocus: seasons.first?.season_number,
+      lastFocus: seasons.last?.season_number
+    ) {
+      DetailExpansionHeader(title: "订阅   \(viewModel.mediaInfo.title ?? "")") {
+        if allSeasons.count > Self.seasonPageSize || !viewModel.episodeGroups.isEmpty {
+          HStack(spacing: 20) {
+            Spacer(minLength: 0)
+            if allSeasons.count > Self.seasonPageSize {
+              seasonPagePicker(allSeasons, page: page)
+            }
+            episodeGroupPicker
+          }
+          .focusSection()
+        }
+      }
+    } status: {
+      status
+    } card: { index, onFocus in
+      let season = seasons[page.lowerBound + index]
+      seasonCard(season, onFocus: onFocus)
+        .focused($focusedSeasonId, equals: season.season_number)
+    }
+  }
+
+  private func seasonPagePicker(_ seasons: [TmdbSeason], page: Range<Int>) -> some View {
+    ShelfMenuPicker(
+      title: "季数范围",
+      selection: Binding(get: { page.lowerBound }, set: { seasonPageOffset = $0 }),
+      options: DetailPageRanges.ranges(count: seasons.count, size: Self.seasonPageSize).map { range in
+        PickerOption(
+          title: DetailPageRanges.title(for: range, numbers: seasons[range].map(\.season_number), unit: "季"),
+          value: range.lowerBound
+        )
+      }
+    )
+    .fixedSize(horizontal: true, vertical: false)
+  }
+
   @ViewBuilder
   private var episodeGroupPicker: some View {
     if !viewModel.episodeGroups.isEmpty {
@@ -221,6 +250,7 @@ struct SubscribeSeasonContentView: View {
         label: { "剧集组：\($0)" }
       )
       .onChange(of: viewModel.selectedGroupId) { _, _ in
+        seasonPageOffset = 0
         Task { await viewModel.fetchSeasons() }
       }
     }

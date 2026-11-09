@@ -2451,6 +2451,7 @@ struct MediaEpisodeGridRequest: Hashable, Codable {
   let tmdbID: Int
   let initialSeason: Int?
   let initialEpisodeGroup: String?
+  let initialEpisodeOffset: Int?
 }
 
 // MARK: - Transfer History Models
