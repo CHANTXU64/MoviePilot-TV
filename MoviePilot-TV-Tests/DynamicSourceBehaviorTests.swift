@@ -74,6 +74,8 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     )
     let transferSource = try source("MoviePilot-TV/Views/Pages/TransferHistoryView.swift")
     let seasonSource = try source("MoviePilot-TV/Views/Pages/SubscribeSeasonView.swift")
+    let episodeSource = try source("MoviePilot-TV/Views/Pages/MediaDetailEpisodesView.swift")
+    let expansionGridSource = try source("MoviePilot-TV/Views/Components/DetailExpansionGrid.swift")
     let manualSearchSource = try source("MoviePilot-TV/Views/Sheets/ManualMediaSearchSheet.swift")
     let lifecycleSource = try source("MoviePilot-TV/Services/PageImageLifecycle.swift")
     let retentionSource = try source(
@@ -113,10 +115,16 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     XCTAssertTrue(statusSource.contains("TransferHistoryView.shouldMountRows("))
     XCTAssertTrue(transferSource.contains(".onChange(of: keepsRowsMounted)"))
 
-    XCTAssertTrue(seasonSource.contains("@State private var gridListIdentity"))
-    XCTAssertFalse(seasonSource.contains("private let gridListIdentity"))
-    XCTAssertTrue(seasonSource.contains("GridImageDemandContext("))
-    XCTAssertTrue(seasonSource.contains("seasonInfos.prefix(retainedItemCount)"))
+    for source in [seasonSource, episodeSource] {
+      XCTAssertTrue(containsTokensInOrder(source, ["DetailExpansionGrid(", "imageLifecycle: imageLifecycle"]))
+    }
+    XCTAssertTrue(expansionGridSource.contains("@State private var listIdentity: GridListIdentity"))
+    XCTAssertTrue(
+      containsTokensInOrder(
+        expansionGridSource,
+        ["dom.retainedItemCount(", "itemIDs.prefix(retainedCount)", "\\.gridImageDemandContext", "GridImageDemandContext("]
+      )
+    )
     XCTAssertTrue(seasonSource.contains("let displayCount = min(10, viewModel.seasonInfos.count)"))
 
     XCTAssertTrue(manualSearchSource.contains("searchTask?.cancel()"))
