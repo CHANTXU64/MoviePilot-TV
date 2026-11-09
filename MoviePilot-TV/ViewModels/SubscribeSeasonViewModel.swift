@@ -101,7 +101,9 @@ class SubscribeSeasonViewModel: ObservableObject {
   private weak var apiService: APIService?
 
   @Published var seasonInfos: [TmdbSeason] = []
-  @Published var episodeGroups: [EpisodeGroup] = []
+  @Published private(set) var defaultSeasonInfos: [TmdbSeason]
+  private let episodeGroupCatalog = EpisodeGroupCatalog()
+  var episodeGroups: [EpisodeGroup] { episodeGroupCatalog.groups }
   @Published var selectedGroupId: String = ""
   // 季库状态映射：0-已入库 (Available), 1-部分缺失 (Partial), 2-完全缺失 (Missing)
   @Published var seasonsNotExisted: [Int: Int] = [:]
@@ -136,6 +138,7 @@ class SubscribeSeasonViewModel: ObservableObject {
     self.apiService = apiService
     self.initialSeason = initialSeason
     self.seasonInfos = mediaInfo.season_info ?? []
+    self.defaultSeasonInfos = mediaInfo.season_info ?? []
     let selectedGroupId =
       Self.episodeGroupTMDBID(for: mediaInfo) != nil
       ? (initialEpisodeGroup ?? "")
@@ -183,6 +186,7 @@ class SubscribeSeasonViewModel: ObservableObject {
     _ load: (revision: Int, episodeGroup: String?),
     snapshot: APIServiceSessionSnapshot
   ) throws {
+    try Task.checkCancellation()
     guard isSeasonLoadCurrent(load, snapshot: snapshot) else { throw CancellationError() }
   }
 
@@ -222,20 +226,6 @@ class SubscribeSeasonViewModel: ObservableObject {
     }
 
     do {
-      if let tmdbId = Self.episodeGroupTMDBID(for: mediaInfo) {
-        do {
-          let loadedEpisodeGroups = try await apiService.fetchEpisodeGroups(tmdbId: tmdbId)
-          try validateSeasonLoad(load, snapshot: snapshot)
-          episodeGroups = loadedEpisodeGroups
-        } catch is CancellationError {
-          throw CancellationError()
-        } catch {
-          try validateSeasonLoad(load, snapshot: snapshot)
-          episodeGroups = []
-          Logger.error("加载剧集组失败: \(error)")
-        }
-      }
-
       // 执行初始分季数据获取
       try await fetchSeasonsInternal(
         forceRefreshSubscriptions: forceRefreshSubscriptions,
@@ -260,6 +250,11 @@ class SubscribeSeasonViewModel: ObservableObject {
       forceRefreshSubscriptions: forceRefreshSubscriptions,
       seasonManagement: isSeasonManagementContext
     )
+  }
+
+  func loadEpisodeGroups() async throws {
+    guard let apiService, let tmdbID = Self.episodeGroupTMDBID(for: mediaInfo) else { return }
+    try await episodeGroupCatalog.load(tmdbID: tmdbID, apiService: apiService)
   }
 
   /// 当用户在界面切换剧集组时触发重新加载
@@ -295,20 +290,32 @@ class SubscribeSeasonViewModel: ObservableObject {
     guard let apiService else { throw CancellationError() }
     try validateSeasonLoad(load, snapshot: snapshot)
     let loadedSeasons: [TmdbSeason]
-    if let episodeGroup = load.episodeGroup {
-      // 逻辑 A：如果选择了剧集组，则按组获取分季
-      loadedSeasons = try await apiService.getGroupSeasons(groupId: episodeGroup)
-    } else if isSeasonManagementContext {
-      // 逻辑 B：分季管理页进入后请求最新的统一媒体季接口。
-      loadedSeasons = try await apiService.getMediaSeasons(media: mediaInfo)
-    } else {
-      // 逻辑 C：详情货架直接使用详情响应中的 season_info。
+    if load.episodeGroup == nil, !isSeasonManagementContext {
       loadedSeasons = mediaInfo.season_info ?? []
+    } else {
+      func fetch(forceRefresh: Bool) async throws -> [TmdbSeason] {
+        if let episodeGroup = load.episodeGroup {
+          return try await apiService.getGroupSeasons(groupId: episodeGroup, forceRefresh: forceRefresh)
+        }
+        return try await apiService.getMediaSeasons(media: mediaInfo, forceRefresh: forceRefresh)
+      }
+
+      let initial = try await fetch(forceRefresh: false)
+      if initial.isEmpty {
+        // 接口查询失败时也可能返回空列表。跳过缓存重查一次，再决定是否显示空态。
+        try validateSeasonLoad(load, snapshot: snapshot)
+        loadedSeasons = try await fetch(forceRefresh: true)
+      } else {
+        loadedSeasons = initial
+      }
     }
     try validateSeasonLoad(load, snapshot: snapshot)
 
     // 按季号升序排列 (S00, S01, S02...)
     seasonInfos = loadedSeasons.sorted { ($0.season_number ?? 0) < ($1.season_number ?? 0) }
+    if load.episodeGroup == nil, mediaInfo.season == nil, !seasonInfos.isEmpty {
+      defaultSeasonInfos = seasonInfos
+    }
 
     // 加载完成后，立即检查每季在媒体服务器中的入库状态
     seasonAvailabilityRevision &+= 1

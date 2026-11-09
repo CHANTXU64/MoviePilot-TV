@@ -315,10 +315,12 @@ struct MediaDetailView: View {
     return ""
   }
 
+  private var episodeMedia: MediaInfo {
+    preloadTask.fullDetail ?? viewModel.detail
+  }
+
   private var episodeTMDBID: Int? {
-    let detail = viewModel.detail
-    guard detail.type == "电视剧", detail.identity?.source == "themoviedb" else { return nil }
-    return MediaIdentifier.validNumericIdentifier(detail.tmdb_id)
+    MediaDetailEpisodeSeasons.tmdbID(for: episodeMedia)
   }
 
   private var seasonInfoCount: Int? {
@@ -508,11 +510,11 @@ struct MediaDetailView: View {
                 .focused($focusedContentRow, equals: "season")
               if let episodeTMDBID {
                 MediaDetailEpisodesView(
-                  media: viewModel.detail,
+                  media: episodeMedia,
                   tmdbID: episodeTMDBID,
                   subscriptionSeasons: shouldShowSeasonSubscriptionSection
                     ? preloadTask.seasonViewModel : nil,
-                  allowsRequests: allowsRequests,
+                  allowsRequests: allowsRequests && preloadTask.fullDetail != nil,
                   isContentVisible: showContentPage,
                   showsHeader: showContentPage || firstVisibleRow != "episodes",
                   onExpand: { navigationCoordinator.push($0) },
@@ -1353,6 +1355,7 @@ struct MediaDetailView: View {
             title: showContentPage ? "分季订阅" : nil,
             showBadges: showContentPage,
             loadsImages: true,
+            allowsEpisodeGroupRequests: allowsRequests,
             onSeasonTap: { season in
               let request = SubscribeSeasonRequest(
                 mediaInfo: viewModel.detail,

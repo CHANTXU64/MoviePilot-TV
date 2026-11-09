@@ -217,7 +217,7 @@ class MediaPreloadTask: ObservableObject {
   /// 分季数据是否已实际加载完毕（seasonViewModel 创建时 isLoading=true，loadData 完成后才设为 true）
   @Published var isSeasonDataLoaded = false
 
-  /// 编排识别、详情等待、分季与订阅的任务（用于取消）
+  /// 编排识别、详情等待、分季、单集预览与订阅的任务（用于取消）
   private var internalTasks: [Task<Void, Never>] = []
   private var detailTask: Task<Void, Never>?
   private var isStarted = false
@@ -251,6 +251,9 @@ class MediaPreloadTask: ObservableObject {
     detailTask = nil
     preparedContent = content
     fullDetail = content.detail
+    if isStarted {
+      startEpisodePreview(for: content.detail)
+    }
     isDetailReady = true
     isDetailFailed = false
   }
@@ -268,6 +271,9 @@ class MediaPreloadTask: ObservableObject {
     // type 显示为合集但缺少 collection_id 时仍按普通媒体预加载，避免空合集 ID 卡住。
     guard partialMedia.shouldPreloadDetail else { return }
 
+    if let fullDetail {
+      startEpisodePreview(for: fullDetail)
+    }
     let detailLoad = Task { await self.loadDetail() }
     detailTask = detailLoad
     internalTasks.append(
@@ -369,6 +375,7 @@ class MediaPreloadTask: ObservableObject {
         // 此时 Codable 解码成功但所有字段为 nil，导致详情页显示 "Unknown" 空白页
         if Self.hasDisplayableDetail(fetched) {
           self.fullDetail = fetched
+          startEpisodePreview(for: fetched)
           let backgroundImageTimeout: Duration =
             SystemViewModel.shouldWaitMediaDetailBackgroundImage ? .seconds(3) : .milliseconds(100)
           await self.prefetchBackgroundImage(for: fetched, timeout: backgroundImageTimeout)
@@ -564,6 +571,31 @@ class MediaPreloadTask: ObservableObject {
     self.seasonViewModel = vm
     await vm.loadData(forceRefreshSubscriptions: false)
     self.isSeasonDataLoaded = true
+  }
+
+  private func startEpisodePreview(for detail: MediaInfo) {
+    guard let apiService, let tmdbID = MediaDetailEpisodeSeasons.tmdbID(for: detail) else { return }
+    guard !MediaDetailView.shouldShowSeasonSubscriptionSection(
+      canSubscribeMedia: apiService.canAccess(.subscribe), detail: detail, isSeasonDataLoaded: true,
+      seasonCount: detail.season_info?.count, hasSeasonLoadError: false
+    ) else { return }
+
+    let seasons = MediaDetailEpisodeSeasons.selectable(detail.season_info ?? []).compactMap(\.season_number)
+    guard let season = MediaDetailEpisodeSeasons.current(
+      selected: nil, preferred: detail.season, available: seasons
+    ) else { return }
+
+    // 只预载首行的单集信息，进入详情后复用同一接口缓存。
+    internalTasks.append(Task {
+      do {
+        try Task.checkCancellation()
+        _ = try await apiService.fetchTmdbEpisodes(tmdbID: tmdbID, season: season, episodeGroup: nil)
+      } catch is CancellationError {
+        return
+      } catch {
+        Logger.debug("预载单集信息失败: \(type(of: error))")
+      }
+    })
   }
 
   // MARK: - ④ 订阅状态

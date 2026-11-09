@@ -49,7 +49,7 @@ enum SubscriptionCancelConfirmation {
       return "默认剧集组"
     }
     if let group = episodeGroups.first(where: { $0.id == episodeGroup }) {
-      return group.name
+      return EpisodeGroupDisplayFormatter.name(group.name)
     }
     return "剧集组：\(episodeGroup)"
   }

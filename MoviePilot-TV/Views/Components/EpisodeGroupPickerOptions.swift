@@ -1,3 +1,22 @@
+import SwiftUI
+
+struct EpisodeGroupMenu {
+  let groups: [EpisodeGroup]
+  let selection: Binding<String>
+
+  @ViewBuilder
+  func control(defaultSeasons: [TmdbSeason]?) -> some View {
+    if !groups.isEmpty {
+      ShelfMenuPicker(
+        title: "剧集组",
+        selection: selection,
+        options: EpisodeGroupPickerOptions.make(groups, defaultSeasons: defaultSeasons),
+        label: { "剧集组：\($0)" }
+      )
+    }
+  }
+}
+
 enum EpisodeGroupPickerOptions {
   /// 只把明确为 0 季或 0 集的组选项移到末尾，两部分各自保留原顺序。
   static func make(_ groups: [EpisodeGroup], defaultSeasons: [TmdbSeason]?) -> [PickerOption<String>] {

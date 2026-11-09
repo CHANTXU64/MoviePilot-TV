@@ -3169,7 +3169,9 @@ class APIService: ObservableObject {
   /// 获取标准电视剧的各季基础信息
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeSeasonDialog.vue (getMediaSeasons)
   /// - 应用场景: 在前端的季订阅弹窗中，当用户**未**选择任何特殊的“剧集组”时，调用此 API 获取并展示该剧集在 TMDB 上定义的标准分季信息（S01, S02 等）。
-  func getMediaSeasons(media: MediaInfo, forceRefresh: Bool = false) async throws -> [TmdbSeason] {
+  func getMediaSeasons(
+    media: MediaInfo, allSeasons: Bool = false, forceRefresh: Bool = false
+  ) async throws -> [TmdbSeason] {
     guard let identity = media.identity else {
       // 遵循 Vue 逻辑，如果无法生成媒体身份，则不发起请求，返回空数组
       return []
@@ -3179,7 +3181,7 @@ class APIService: ObservableObject {
       "media_id": identity.mediaId,
       "title": media.title,
       "year": media.year,
-      "season": media.season.map(String.init),
+      "season": allSeasons ? nil : media.season.map(String.init),
     ]
     let endpoint = try buildEndpoint(path: "/media/seasons", params: params)
     return try await sessionCachedValue(

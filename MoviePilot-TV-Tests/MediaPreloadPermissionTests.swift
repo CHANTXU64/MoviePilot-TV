@@ -59,8 +59,50 @@ final class MediaPreloadPermissionTests: XCTestCase {
     let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
     XCTAssertFalse(paths.contains("/api/v1/mediaserver/notexists"))
     XCTAssertFalse(paths.containsSubscribeListPath)
+    XCTAssertFalse(paths.contains { $0.hasPrefix("/api/v1/tmdb/123/") })
     XCTAssertNil(task.seasonViewModel)
     XCTAssertFalse(task.isSeasonDataLoaded)
+  }
+
+  func testPreloadWarmsOneSeasonOnlyWhenEpisodesAreTheFirstRow() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
+    let stub = MediaPreloadPermissionURLProtocol.stub
+    let episodePath = "/api/v1/tmdb/124/2"
+
+    for canSubscribe in [false, true] {
+      stub.reset()
+      let service = APIService.isolatedTestingInstance()
+      let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+      defer { snapshot.restore(to: service) }
+      if canSubscribe {
+        configureStandardSubscriber(service)
+      } else {
+        configureLimitedUser(service)
+      }
+      let cardSeasons = try JSONDecoder().decode(
+        [TmdbSeason].self, from: Data(#"[{"season_number":1}]"#.utf8)
+      )
+      let task = MediaPreloadTask(
+        partialMedia: MediaInfo(
+          tmdb_id: 124, title: "预览剧集", type: "电视剧", season: 1, season_info: cardSeasons
+        ),
+        apiService: service
+      )
+      task.start()
+      defer { task.cancel() }
+
+      if canSubscribe {
+        try await waitUntil("分季订阅行已就绪") { task.isSeasonDataLoaded }
+        XCTAssertEqual(task.seasonViewModel?.seasonInfos.count, 3)
+        XCTAssertFalse(stub.requestPaths().contains { $0.hasPrefix("/api/v1/tmdb/124/") })
+      } else {
+        try await waitUntil("剧集首行已发起预载") { stub.requestPaths().contains(episodePath) }
+        let episodes = try await service.fetchTmdbEpisodes(tmdbID: 124, season: 2, episodeGroup: nil)
+        XCTAssertEqual(episodes.map(\.name), ["第二季第一集"])
+        XCTAssertEqual(stub.requestPaths().filter { $0.hasPrefix("/api/v1/tmdb/124/") }, [episodePath])
+      }
+    }
   }
 
   func testRestrictedSeasonStatusRefreshDoesNotRequestSubscribeSnapshot() async throws {
@@ -872,6 +914,15 @@ private final class MediaPreloadPermissionURLProtocolStub: @unchecked Sendable {
     switch path {
     case "/api/v1/media/123":
       return (200, jsonData(#"{"tmdb_id":123,"title":"Limited Show","type":"电视剧"}"#))
+    case "/api/v1/media/124":
+      return (
+        200, jsonData(#"""
+          {"tmdb_id":124,"title":"预览剧集","type":"电视剧","season":2,
+           "season_info":[{"season_number":0},{"season_number":1},{"season_number":2}]}
+          """#)
+      )
+    case "/api/v1/tmdb/124/2":
+      return (200, jsonData(#"[{"episode_number":1,"name":"第二季第一集"}]"#))
     case "/api/v1/media/456":
       return (200, jsonData(#"{"tmdb_id":456,"title":"Limited Movie","type":"电影"}"#))
     case "/api/v1/media/987":

@@ -1,0 +1,47 @@
+import Observation
+
+/// 按媒体加载可选编排。一次短暂故障自动重试，成功空列表也视为加载完成。
+@MainActor
+@Observable
+final class EpisodeGroupCatalog {
+  private var loadedGroups: [EpisodeGroup]?
+  var groups: [EpisodeGroup] { loadedGroups ?? [] }
+
+  func load(tmdbID: Int, apiService: APIService) async throws {
+    let session = apiService.sessionSnapshot()
+
+    func validate() throws {
+      try Task.checkCancellation()
+      guard apiService.isSessionUnchanged(from: session) else { throw CancellationError() }
+    }
+
+    for attempt in 0...1 {
+      try validate()
+      guard loadedGroups == nil else { return }
+      do {
+        let groups = try await apiService.fetchEpisodeGroups(tmdbId: tmdbID)
+        try validate()
+        loadedGroups = groups
+        return
+      } catch is CancellationError {
+        throw CancellationError()
+      } catch {
+        try validate()
+        guard loadedGroups == nil else { return }
+        guard attempt == 0, Self.canRetry(error) else {
+          Logger.error("加载剧集组失败: \(type(of: error))")
+          return
+        }
+        try await Task.sleep(for: .milliseconds(500))
+      }
+    }
+  }
+
+  private static func canRetry(_ error: Error) -> Bool {
+    guard let error = error as? APIError else { return false }
+    switch error {
+    case .networkError, .gatewayStatus, .serverMessage: return true
+    default: return false
+    }
+  }
+}

@@ -455,6 +455,11 @@ nonisolated struct MediaInfo: Codable, Identifiable, Hashable {
   let popularity: Double?
   /// 季详情
   let season_info: [TmdbSeason]?
+  /// TMDB 报告的常规季总数，缺失时无法据此判断季清单是否完整。
+  var reportedSeasonCount: Int? {
+    guard case .int(let count) = rawPayload?["number_of_seasons"], count > 0 else { return nil }
+    return count
+  }
   /// 合集ID
   let collection_id: Int?
   /// 导演

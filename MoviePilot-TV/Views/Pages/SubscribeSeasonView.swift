@@ -40,6 +40,7 @@ struct SubscribeSeasonContentView: View {
   var title: String? = nil
   var showBadges: Bool = true
   var loadsImages: Bool = true
+  var allowsEpisodeGroupRequests = true
   var onSeasonTap: ((TmdbSeason) -> Void)? = nil
   var onMoreTapped: (() -> Void)? = nil
 
@@ -131,6 +132,10 @@ struct SubscribeSeasonContentView: View {
       case .grid(let imageLifecycle):
         expandedGrid(imageLifecycle: imageLifecycle)
       }
+    }
+    .task(id: allowsEpisodeGroupRequests) {
+      guard allowsEpisodeGroupRequests else { return }
+      try? await viewModel.loadEpisodeGroups()
     }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
       selectedSeasonDetail = nil
@@ -240,20 +245,13 @@ struct SubscribeSeasonContentView: View {
     .fixedSize(horizontal: true, vertical: false)
   }
 
-  @ViewBuilder
   private var episodeGroupPicker: some View {
-    if !viewModel.episodeGroups.isEmpty {
-      ShelfMenuPicker(
-        title: "剧集组",
-        selection: $viewModel.selectedGroupId,
-        options: EpisodeGroupPickerOptions.make(viewModel.episodeGroups, defaultSeasons: viewModel.mediaInfo.season_info),
-        label: { "剧集组：\($0)" }
-      )
+    EpisodeGroupMenu(groups: viewModel.episodeGroups, selection: $viewModel.selectedGroupId)
+      .control(defaultSeasons: viewModel.defaultSeasonInfos)
       .onChange(of: viewModel.selectedGroupId) { _, _ in
         seasonPageOffset = 0
         Task { await viewModel.fetchSeasons() }
       }
-    }
   }
 
   @ViewBuilder

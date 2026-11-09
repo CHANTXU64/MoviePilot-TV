@@ -29,7 +29,7 @@ struct MediaDetailEpisodesView: View {
   private func shelf(groupID: String?, groupMenu: EpisodeGroupMenu?) -> some View {
     EpisodeBrowser(
       media: media, tmdbID: tmdbID, groupID: groupID, groupMenu: groupMenu,
-      allowsRequests: allowsRequests, isContentVisible: isContentVisible,
+      allowsRequests: allowsRequests,
       layout: .shelf(showsHeader: showsHeader, onExpand: onExpand), onSelect: onSelect
     )
   }
@@ -48,7 +48,7 @@ struct MediaEpisodeGridView: View {
     ) { groupID, groupMenu in
       EpisodeBrowser(
         media: request.mediaInfo, tmdbID: request.tmdbID, groupID: groupID, groupMenu: groupMenu,
-        allowsRequests: allowsRequests, isContentVisible: true,
+        allowsRequests: allowsRequests,
         layout: .grid(imageLifecycle),
         initialSeason: groupID == request.initialEpisodeGroup ? request.initialSeason : nil,
         initialEpisodeOffset: groupID == request.initialEpisodeGroup ? request.initialEpisodeOffset : nil,
@@ -81,7 +81,7 @@ private struct LocalEpisodeGroupView<Content: View>: View {
   let isActive: Bool
   let content: (String?, EpisodeGroupMenu) -> Content
 
-  @State private var groups: [EpisodeGroup] = []
+  @State private var catalog = EpisodeGroupCatalog()
   @State private var selectedGroupID: String
 
   init(
@@ -97,24 +97,13 @@ private struct LocalEpisodeGroupView<Content: View>: View {
   var body: some View {
     content(
       trimmedNonEmpty([selectedGroupID]),
-      EpisodeGroupMenu(groups: groups, selection: $selectedGroupID)
+      EpisodeGroupMenu(groups: catalog.groups, selection: $selectedGroupID)
     )
     .task(id: isActive) {
       guard isActive else { return }
-      do {
-        let loaded = try await apiService.fetchEpisodeGroups(tmdbId: tmdbID)
-        try Task.checkCancellation()
-        groups = loaded
-      } catch {
-        // 默认编排独立可用，剧集组查询失败不挡住当前季。
-      }
+      try? await catalog.load(tmdbID: tmdbID, apiService: apiService)
     }
   }
-}
-
-struct EpisodeGroupMenu {
-  let groups: [EpisodeGroup]
-  let selection: Binding<String>
 }
 
 private enum EpisodeLoadState<Value> {
@@ -152,7 +141,6 @@ private struct EpisodeBrowser: View {
   let groupID: String?
   let groupMenu: EpisodeGroupMenu?
   let allowsRequests: Bool
-  let isContentVisible: Bool
   let layout: EpisodeBrowserLayout
   var initialSeason: Int? = nil
   var initialEpisodeOffset: Int? = nil
@@ -164,7 +152,8 @@ private struct EpisodeBrowser: View {
 
   private struct GroupState {
     let id: String?
-    var loadedSeasons: EpisodeLoadState<[TmdbSeason]>?
+    var loadedSeasons: [TmdbSeason]?
+    var seasonLoad: EpisodeLoadState<Void>?
     var seasonRetry = 0
     var selectedSeason: Int?
     var episodeStates: [Int: EpisodeLoadState<[MoviePilotEpisode]>] = [:]
@@ -197,10 +186,26 @@ private struct EpisodeBrowser: View {
     return MediaDetailEpisodeSeasons.selectable(media.season_info ?? [])
   }
 
+  private var needsSeasonLookup: Bool {
+    groupID != nil || MediaDetailEpisodeSeasons.needsLookup(detailSeasons, media: media)
+  }
+
   private var seasons: [TmdbSeason] {
-    if !detailSeasons.isEmpty { return detailSeasons }
-    guard case .loaded(let loaded) = group.loadedSeasons else { return [] }
-    return MediaDetailEpisodeSeasons.selectable(loaded)
+    group.loadedSeasons ?? detailSeasons
+  }
+
+  private var defaultMenuSeasons: [TmdbSeason]? {
+    let defaults = groupID == nil ? seasons : MediaDetailEpisodeSeasons.selectable(media.season_info ?? [])
+    return MediaDetailEpisodeSeasons.needsLookup(defaults, media: media) ? nil : defaults
+  }
+
+  private var showsSupplementalSeasonRetry: Bool {
+    guard !detailSeasons.isEmpty else { return false }
+    switch group.seasonLoad {
+    case .failed: return true
+    case .loaded: return MediaDetailEpisodeSeasons.needsLookup(seasons, media: media)
+    case .loading, nil: return false
+    }
   }
 
   private var seasonOptions: [SeasonOption] {
@@ -233,7 +238,7 @@ private struct EpisodeBrowser: View {
 
   private var rowContent: RowContent {
     guard let seasonNumber else {
-      switch group.loadedSeasons {
+      switch group.seasonLoad {
       case .failed:
         return .status(.failed("分季信息加载失败"), retry: retrySeasonList)
       case .loaded:
@@ -290,6 +295,7 @@ private struct EpisodeBrowser: View {
   }
 
   var body: some View {
+    let requestedSeason = seasonNumber
     Group {
       switch layout {
       case .grid(let imageLifecycle):
@@ -306,18 +312,19 @@ private struct EpisodeBrowser: View {
         }
       }
     }
-    .task(id: allowsRequests && detailSeasons.isEmpty ? SeasonRequest(groupID: groupID, retry: group.seasonRetry) : nil) {
+    .task(id: allowsRequests && needsSeasonLookup
+      ? SeasonRequest(groupID: groupID, retry: group.seasonRetry) : nil) {
       await loadSeasonsIfNeeded()
     }
     .task(
       id: EpisodeRequest(
         groupID: groupID,
-        season: seasonNumber,
-        retry: seasonNumber.map { group.episodeRetries[$0, default: 0] } ?? 0,
-        isActive: allowsRequests && isContentVisible
+        season: requestedSeason,
+        retry: requestedSeason.map { group.episodeRetries[$0, default: 0] } ?? 0,
+        isActive: allowsRequests
       )
     ) {
-      await loadEpisodesIfNeeded()
+      await loadEpisodesIfNeeded(season: requestedSeason)
     }
     // 焦点停在状态卡上时集列表到了：交给第一集，状态卡被移除时焦点不会跳出本行。
     .onChange(of: firstEpisodeID) { _, firstID in
@@ -333,9 +340,8 @@ private struct EpisodeBrowser: View {
       shelfSeasonSelector
       Spacer(minLength: 0)
       episodePagePicker
-      if let groupMenu, !groupMenu.groups.isEmpty {
-        episodeGroupPicker(groupMenu)
-      }
+      supplementalSeasonRetry
+      groupMenu?.control(defaultSeasons: defaultMenuSeasons)
       if case .shelf(_, let onExpand) = layout, showsExpandButton {
         Button("展开") {
           onExpand(MediaEpisodeGridRequest(
@@ -357,8 +363,9 @@ private struct EpisodeBrowser: View {
         gridSeasonSelector
           .frame(maxWidth: .infinity, alignment: .leading)
         episodePagePicker
+        supplementalSeasonRetry
         if let groupMenu, !groupMenu.groups.isEmpty {
-          episodeGroupPicker(groupMenu)
+          groupMenu.control(defaultSeasons: defaultMenuSeasons)
             .frame(maxWidth: 540, alignment: .trailing)
         }
       }
@@ -367,13 +374,11 @@ private struct EpisodeBrowser: View {
     }
   }
 
-  private func episodeGroupPicker(_ menu: EpisodeGroupMenu) -> some View {
-    ShelfMenuPicker(
-      title: "剧集组",
-      selection: menu.selection,
-      options: EpisodeGroupPickerOptions.make(menu.groups, defaultSeasons: media.season_info),
-      label: { "剧集组：\($0)" }
-    )
+  @ViewBuilder
+  private var supplementalSeasonRetry: some View {
+    if showsSupplementalSeasonRetry {
+      Button("重试分季", systemImage: AppSymbol.retry, action: retrySeasonList)
+    }
   }
 
   @ViewBuilder
@@ -554,34 +559,31 @@ private struct EpisodeBrowser: View {
   // MARK: 加载
 
   private func retrySeasonList() {
-    group.loadedSeasons = .loading
+    group.seasonLoad = .loading
     group.seasonRetry += 1
   }
 
   private func loadSeasonsIfNeeded() async {
-    guard !Task.isCancelled, allowsRequests, detailSeasons.isEmpty else { return }
-    if case .loaded = group.loadedSeasons { return }
-    group.loadedSeasons = .loading
-    let forceRefresh = group.seasonRetry > 0
+    guard !Task.isCancelled, allowsRequests, needsSeasonLookup else { return }
+    if case .loaded = group.seasonLoad { return }
+    group.seasonLoad = .loading
     do {
-      let result: [TmdbSeason]
-      if let groupID {
-        result = try await apiService.getGroupSeasons(groupId: groupID, forceRefresh: forceRefresh)
-      } else {
-        result = try await apiService.getMediaSeasons(media: media, forceRefresh: forceRefresh)
-      }
+      let result = try await MediaDetailEpisodeSeasons.fetch(
+        media: media, groupID: groupID, forceRefresh: group.seasonRetry > 0, apiService: apiService
+      )
       try Task.checkCancellation()
-      group.loadedSeasons = .loaded(result)
+      group.loadedSeasons = result
+      group.seasonLoad = .loaded(())
     } catch is CancellationError {
       return
     } catch {
       guard !Task.isCancelled else { return }
-      group.loadedSeasons = .failed
+      group.seasonLoad = .failed
     }
   }
 
-  private func loadEpisodesIfNeeded() async {
-    guard !Task.isCancelled, allowsRequests, isContentVisible, let season = seasonNumber else { return }
+  private func loadEpisodesIfNeeded(season: Int?) async {
+    guard !Task.isCancelled, allowsRequests, let season else { return }
     if case .loaded(let episodes) = group.episodeStates[season], !episodes.isEmpty { return }
     let retry = group.episodeRetries[season, default: 0]
     group.episodeStates[season] = .loading
@@ -605,6 +607,31 @@ enum MediaDetailEpisodeSeasons {
   /// 胶囊最多放几季、标题总字数上限。超过任一项改用下拉菜单，免得胶囊一行滚不完。
   static let maxChipCount = 8
   static let maxChipCharacters = 48
+
+  static func tmdbID(for media: MediaInfo) -> Int? {
+    guard media.type == "电视剧", media.identity?.source == "themoviedb" else { return nil }
+    return MediaIdentifier.validNumericIdentifier(media.tmdb_id)
+  }
+
+  static func needsLookup(_ seasons: [TmdbSeason], media: MediaInfo) -> Bool {
+    if seasons.isEmpty { return true }
+    guard let expected = media.reportedSeasonCount else { return false }
+    // 第 0 季是特别篇，不计入 TMDB 的常规季总数。
+    return seasons.count(where: { ($0.season_number ?? 0) > 0 }) < expected
+  }
+
+  static func fetch(
+    media: MediaInfo, groupID: String?, forceRefresh: Bool, apiService: APIService
+  ) async throws -> [TmdbSeason] {
+    if let groupID {
+      let seasons = try await apiService.getGroupSeasons(groupId: groupID, forceRefresh: forceRefresh)
+      return selectable(seasons)
+    }
+    let seasons = try await apiService.getMediaSeasons(
+      media: media, allSeasons: true, forceRefresh: forceRefresh
+    )
+    return selectable(seasons + (media.season_info ?? []))
+  }
 
   static func canExpand(seasons: [TmdbSeason], loadedEpisodeCount: Int) -> Bool {
     seasons.count > 1 || loadedEpisodeCount > 10 || (seasons.first?.episode_count ?? 0) > 10
@@ -819,7 +846,9 @@ private struct EpisodeShelfStatusRow: View {
   var body: some View {
     VStack(alignment: .leading, spacing: EpisodeCardLayout.textGap) {
       HStack(spacing: EpisodeCardLayout.spacing) {
-        EpisodeShelfStatusCard(status: status, stillSize: stillSize)
+        EpisodeShelfStatusCard(
+          status: status, stillSize: stillSize, isFocused: statusFocus.wrappedValue == .status
+        )
           .focused(statusFocus, equals: .status)
         if let onRetry {
           Button("重试", systemImage: AppSymbol.retry, action: onRetry)
@@ -848,32 +877,32 @@ struct EpisodeShelfStatusCard: View {
 
   let status: Status
   var stillSize = EpisodeCardLayout.stillSize
+  let isFocused: Bool
 
   var body: some View {
-    // 卡片本身不响应选择键；失败时由旁边的「重试」重新加载。
-    Button {
-    } label: {
-      VStack(spacing: 14) {
-        switch status {
-        case .loading:
-          ProgressView()
-        case .failed:
-          Image(systemName: AppSymbol.warning)
-            .font(.title3)
-            .foregroundStyle(.secondary)
-        case .empty:
-          Image(systemName: AppSymbol.noResults)
-            .font(.title3)
-            .foregroundStyle(.secondary)
-        }
-        Text(status.text)
-          .font(.caption)
+    VStack(spacing: 14) {
+      switch status {
+      case .loading:
+        ProgressView()
+      case .failed:
+        Image(systemName: AppSymbol.warning)
+          .font(.title3)
+          .foregroundStyle(.secondary)
+      case .empty:
+        Image(systemName: AppSymbol.noResults)
+          .font(.title3)
           .foregroundStyle(.secondary)
       }
-      .frame(width: stillSize.width, height: stillSize.height)
+      Text(status.text)
+        .font(.caption)
+        .foregroundStyle(.secondary)
     }
-    .buttonStyle(TextCardButtonStyle())
+    .frame(width: stillSize.width, height: stillSize.height)
+    .textCardFocusAppearance(isFocused: isFocused)
+    .focusable()
+    .accessibilityElement(children: .ignore)
     .accessibilityLabel(status.text)
+    .accessibilityAddTraits(.isStaticText)
   }
 }
 
