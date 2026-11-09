@@ -9,7 +9,7 @@ final class SystemVersionInfoTests: XCTestCase {
     XCTAssertEqual(AppVersionInfo.displayAppVersion(shortVersion: "   "), "未知")
     XCTAssertEqual(AppVersionInfo.displayAppVersion(shortVersion: nil), "未知")
     XCTAssertEqual(AppVersionInfo.minimumCompatibleMoviePilotVersion, "v3.0.4")
-    XCTAssertEqual(AppVersionInfo.latestCompatibleMoviePilotVersion, "v3.2.3")
+    XCTAssertEqual(AppVersionInfo.latestCompatibleMoviePilotVersion, "v3.2.5")
   }
 
   func testProductionRegistryListsSourceReviewedVersions() {
@@ -18,6 +18,7 @@ final class SystemVersionInfoTests: XCTestCase {
       [
         "v3.0.4", "v3.0.5", "v3.0.7", "v3.0.10", "v3.0.10-1", "v3.1.0", "v3.1.1", "v3.1.2", "v3.1.2-1",
         "v3.1.4", "v3.1.6", "v3.1.7", "v3.1.8", "v3.1.9", "v3.2.0", "v3.2.1", "v3.2.2", "v3.2.3",
+        "v3.2.4", "v3.2.5",
       ]
     )
     for version in BackendCompatibilityRegistry.current.versions {
@@ -78,7 +79,9 @@ final class SystemVersionInfoTests: XCTestCase {
       ("v3.2.0-1", .unregistered), ("v3.2.1", .registered), ("3.2.1", .registered),
       ("v3.2.1-1", .unregistered), ("v3.2.2", .registered), ("3.2.2", .registered),
       ("v3.2.2-1", .unregistered), ("v3.2.3", .registered), ("3.2.3", .registered),
-      ("v3.2.3-1", .newerThanRegistry), ("v3.2.1-beta", .unparseable),
+      ("v3.2.3-1", .unregistered), ("v3.2.4", .registered), ("3.2.4", .registered),
+      ("v3.2.4-1", .unregistered), ("v3.2.5", .registered), ("3.2.5", .registered),
+      ("v3.2.5-1", .newerThanRegistry), ("v3.2.1-beta", .unparseable),
       ("v4.0.0", .newerThanRegistry),
     ]
     for (version, status) in cases {
@@ -96,12 +99,12 @@ final class SystemVersionInfoTests: XCTestCase {
     XCTAssertEqual(unregistered.title, "兼容性尚未验证")
     XCTAssertEqual(
       unregistered.message,
-      "当前后端版本：v3.0.8\n已兼容的版本：v3.0.10...v3.2.3"
+      "当前后端版本：v3.0.8\n已兼容的版本：v3.0.10...v3.2.5"
     )
 
-    let newer = try XCTUnwrap(BackendVersionWarning(backendVersion: "v3.2.4"))
+    let newer = try XCTUnwrap(BackendVersionWarning(backendVersion: "v3.2.6"))
     XCTAssertEqual(newer.title, "MoviePilot 后端版本较新")
-    XCTAssertEqual(newer.message, "当前后端版本：v3.2.4\n已兼容的版本：v3.0.4...v3.2.3")
+    XCTAssertEqual(newer.message, "当前后端版本：v3.2.6\n已兼容的版本：v3.0.4...v3.2.5")
 
     let unparseable = try XCTUnwrap(BackendVersionWarning(backendVersion: "v3.0.10-1-beta"))
     XCTAssertEqual(unparseable.title, "无法确认 MoviePilot 后端版本")
@@ -117,7 +120,7 @@ final class SystemVersionInfoTests: XCTestCase {
       XCTAssertFalse(warning.message.contains("实测"))
     }
     for warning in [unparseable, missing] {
-      XCTAssertTrue(warning.message.hasSuffix("已兼容的版本：v3.0.4...v3.2.3"))
+      XCTAssertTrue(warning.message.hasSuffix("已兼容的版本：v3.0.4...v3.2.5"))
     }
   }
 
