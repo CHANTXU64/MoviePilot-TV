@@ -326,11 +326,7 @@ struct SubscribePanel: View {
         selection: Binding(
           get: { viewModel.subscribe.episode_group ?? "" },
           set: { viewModel.subscribe.episode_group = $0.isEmpty ? nil : $0 }),
-        options: [PickerOption(title: "默认", value: "")]
-          + viewModel.episodeGroups.map {
-            PickerOption(
-              title: "\($0.name) (\($0.group_count)季 \($0.episode_count)集)", value: $0.id)
-          })
+        options: EpisodeGroupPickerOptions.make(viewModel.episodeGroups, defaultSeasons: nil))
     case .season:
       SheetPicker(
         title: field.title,

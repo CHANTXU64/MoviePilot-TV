@@ -4,10 +4,13 @@ import XCTest
 
 @MainActor
 final class MediaDetailEpisodeShelfTests: XCTestCase {
-  private func season(_ number: Int?) -> TmdbSeason {
-    try! JSONDecoder().decode(
+  private func season(_ number: Int?, episodeCount: Int? = nil) -> TmdbSeason {
+    var fields = [String: Int]()
+    fields["season_number"] = number
+    fields["episode_count"] = episodeCount
+    return try! JSONDecoder().decode(
       TmdbSeason.self,
-      from: JSONSerialization.data(withJSONObject: number.map { ["season_number": $0] } ?? [:]))
+      from: JSONSerialization.data(withJSONObject: fields))
   }
 
   func testSelectableSeasonsKeepSpecialsFirstAndDropInvalidOrDuplicate() {
@@ -53,7 +56,58 @@ final class MediaDetailEpisodeShelfTests: XCTestCase {
       accuracy: 0.001)
   }
 
-  func testEpisodeGroupMenuStartsWithDefaultOrder() {
-    XCTAssertEqual(EpisodeGroup.menuOptions([]).map(\.value), [""])
+  func testEpisodeGroupMenuStartsWithDefaultOrderAndShowsGroupCounts() throws {
+    let group = try JSONDecoder().decode(
+      EpisodeGroup.self,
+      from: Data(#"{"id":"group-a","name":"播出顺序","group_count":3,"episode_count":22}"#.utf8))
+    let options = EpisodeGroupPickerOptions.make(
+      [group], defaultSeasons: [season(0, episodeCount: 2), season(1, episodeCount: 12)])
+
+    XCTAssertEqual(options.map(\.value), ["", "group-a"])
+    XCTAssertEqual(options.map(\.detail), ["2 季 · 14 集", "3 季 · 22 集"])
+  }
+
+  func testDefaultGroupMenuOmitsUnknownCounts() {
+    XCTAssertNil(EpisodeGroupPickerOptions.make([], defaultSeasons: nil).first?.detail)
+    XCTAssertNil(EpisodeGroupPickerOptions.make([], defaultSeasons: []).first?.detail)
+    XCTAssertEqual(
+      EpisodeGroupPickerOptions.make([], defaultSeasons: [season(1), season(2, episodeCount: 8)]).first?.detail,
+      "2 季")
+  }
+
+  func testGroupsWithZeroSeasonsOrEpisodesMoveBehindPopulatedGroupsInOriginalOrder() throws {
+    let groups = try JSONDecoder().decode([EpisodeGroup].self, from: Data("""
+      [
+        {"id":"zero-seasons","name":"season4","group_count":0,"episode_count":8},
+        {"id":"full-a","name":"Story Arc","group_count":5,"episode_count":66},
+        {"id":"zero-episodes","name":"Director's Cut Seasons","group_count":1,"episode_count":0},
+        {"id":"full-b","name":"Seasons","group_count":5,"episode_count":170}
+      ]
+      """.utf8))
+    let mixed = EpisodeGroupPickerOptions.make(groups, defaultSeasons: [season(1, episodeCount: 0)])
+    XCTAssertEqual(mixed.map(\.value), ["full-a", "full-b", "", "zero-seasons", "zero-episodes"])
+    XCTAssertEqual(mixed.map(\.title), ["故事线", "季", "默认", "第 4 季", "导演剪辑版"])
+
+    let emptyGroups = [groups[0], groups[2]]
+    let allEmpty = EpisodeGroupPickerOptions.make(emptyGroups, defaultSeasons: [season(1, episodeCount: 0)])
+    XCTAssertEqual(allEmpty.map(\.value), ["", "zero-seasons", "zero-episodes"])
+  }
+
+  func testEpisodeGroupTitlesOnlyShowOrderWhenTheOriginalNameIncludesIt() {
+    for name in ["Digital", "DVD", "Blu-ray", "Bluray", "Production", "TV"] {
+      XCTAssertFalse(EpisodeGroupDisplayFormatter.name(name).contains("顺序"), name)
+      let orderName = "\(name) Order"
+      XCTAssertTrue(EpisodeGroupDisplayFormatter.name(orderName).contains("顺序"), orderName)
+    }
+  }
+
+  func testLongGroupMenuTitleUsesTheTitleLineAndKeepsCountsSeparate() {
+    let option = PickerOption(title: "Director's Cut Seasons\nSpecial Edition", value: "cut", detail: "1 季 · 0 集")
+    let title = option.singleLineMenuTitle
+    XCTAssertTrue(title.hasSuffix("…"))
+    XCTAssertFalse(title.contains("\n"))
+    XCTAssertFalse(title.contains("1 季 · 0 集"))
+    XCTAssertEqual(option.detail, "1 季 · 0 集")
+    XCTAssertEqual(option.title, "Director's Cut Seasons\nSpecial Edition")
   }
 }

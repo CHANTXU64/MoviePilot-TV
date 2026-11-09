@@ -1,37 +1,6 @@
 import Kingfisher
 import SwiftUI
 
-enum SeasonDisplayFormatter {
-  /// 季卡与详情 Sheet 共用季名规则，避免 S00、缺失和非法季号出现不同文案。
-  static func name(seasonNumber: Int?, rawName: String?) -> String {
-    guard let seasonNumber else { return "未知季" }
-
-    switch seasonNumber {
-    case 0:
-      return nonEmpty(rawName) ?? "特别篇"
-    case let seasonNumber where seasonNumber > 0:
-      return "第 \(seasonNumber) 季"
-    default:
-      return "未知季"
-    }
-  }
-
-  /// 将可选文本统一裁剪空白；纯空白值按缺失处理。
-  static func nonEmpty(_ value: String?) -> String? {
-    guard let value else { return nil }
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmed.isEmpty ? nil : trimmed
-  }
-
-  static func cardTitle(seasonNumber: Int?, rawName: String?, airDate: String?) -> String {
-    var title = name(seasonNumber: seasonNumber, rawName: rawName)
-    if let airDate = nonEmpty(airDate) {
-      title += " · \(airDate.prefix(4))"
-    }
-    return title
-  }
-}
-
 struct SubscribeSeasonView: View {
   @StateObject private var viewModel: SubscribeSeasonViewModel
   @ObservedObject var imageLifecycle: PageImageLifecycle
@@ -466,7 +435,7 @@ struct SubscribeSeasonContentView: View {
       ShelfMenuPicker(
         title: "剧集组",
         selection: $viewModel.selectedGroupId,
-        options: EpisodeGroup.menuOptions(viewModel.episodeGroups),
+        options: EpisodeGroupPickerOptions.make(viewModel.episodeGroups, defaultSeasons: viewModel.mediaInfo.season_info),
         label: { "剧集组：\($0)" }
       )
       .onChange(of: viewModel.selectedGroupId) { _, _ in

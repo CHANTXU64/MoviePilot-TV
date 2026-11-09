@@ -148,7 +148,9 @@ private struct EpisodeShelf: View {
   }
 
   private func seasonName(_ season: TmdbSeason, number: Int) -> String {
-    if groupID != nil, let name = trimmedNonEmpty([season.name]) { return name }
+    if groupID != nil, let name = trimmedNonEmpty([season.name]) {
+      return SeasonDisplayFormatter.localizedLabel(name)
+    }
     return SeasonDisplayFormatter.name(seasonNumber: number, rawName: season.name)
   }
 
@@ -163,9 +165,9 @@ private struct EpisodeShelf: View {
     guard let seasonNumber else {
       switch loadedSeasons {
       case .failed:
-        return .status(.failed("分季信息加载失败"), retry: { seasonRetry += 1 })
+        return .status(.failed("分季信息加载失败"), retry: retrySeasonList)
       case .loaded:
-        return .status(.empty("暂无分季信息"), retry: nil)
+        return .status(.empty("暂无分季信息"), retry: retrySeasonList)
       case .loading, nil:
         return .status(.loading("正在加载分季信息"), retry: nil)
       }
@@ -228,7 +230,7 @@ private struct EpisodeShelf: View {
         ShelfMenuPicker(
           title: "剧集组",
           selection: groupMenu.selection,
-          options: EpisodeGroup.menuOptions(groupMenu.groups),
+          options: EpisodeGroupPickerOptions.make(groupMenu.groups, defaultSeasons: media.season_info),
           label: { "剧集组：\($0)" }
         )
       }
@@ -318,16 +320,22 @@ private struct EpisodeShelf: View {
 
   // MARK: 加载
 
+  private func retrySeasonList() {
+    loadedSeasons = .loading
+    seasonRetry += 1
+  }
+
   private func loadSeasonsIfNeeded() async {
     guard allowsRequests, detailSeasons.isEmpty else { return }
     if case .loaded = loadedSeasons { return }
     loadedSeasons = .loading
+    let forceRefresh = seasonRetry > 0
     do {
       let result: [TmdbSeason]
       if let groupID {
-        result = try await apiService.getGroupSeasons(groupId: groupID)
+        result = try await apiService.getGroupSeasons(groupId: groupID, forceRefresh: forceRefresh)
       } else {
-        result = try await apiService.getMediaSeasons(media: media)
+        result = try await apiService.getMediaSeasons(media: media, forceRefresh: forceRefresh)
       }
       try Task.checkCancellation()
       loadedSeasons = .loaded(result)
@@ -500,7 +508,7 @@ struct EpisodeCardText: View {
         .lineLimit(1, reservesSpace: true)
       Text(episode?.displayTitle ?? "剧集标题")
         .font(.caption.bold())
-        .foregroundStyle(.primary)
+        .foregroundStyle(isFocused ? .primary : .secondary)
         .lineLimit(1, reservesSpace: true)
       Text(episode.map { $0.displayOverview ?? "暂无简介" } ?? "单集简介\n单集简介")
         .font(.caption)
@@ -522,7 +530,7 @@ struct EpisodeCardText: View {
 
 // MARK: - 状态
 
-/// 行里还没有单集可显示时：剧照大小、可聚焦的状态卡，失败时旁边跟「重试」。
+/// 行里还没有单集可显示时：剧照大小、可聚焦的状态卡，能重试时按钮在它右侧。
 /// 加载中、失败、为空是同一张卡，状态变化时焦点留在原地。下面按卡片文字预留同样高度，内容到了行高不跳。
 private struct EpisodeShelfStatusRow: View {
   let status: EpisodeShelfStatusCard.Status
@@ -633,13 +641,5 @@ extension MoviePilotEpisode {
 
   var displayOverview: String? {
     trimmedNonEmpty([overview])
-  }
-}
-
-extension EpisodeGroup {
-  /// 剧集组下拉菜单的选项：第一项是 TMDB 默认顺序（空字符串）。
-  static func menuOptions(_ groups: [EpisodeGroup]) -> [PickerOption<String>] {
-    [PickerOption(title: "默认", value: "")]
-      + groups.map { PickerOption(title: $0.name, value: $0.id) }
   }
 }

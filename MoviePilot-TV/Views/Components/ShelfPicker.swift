@@ -71,11 +71,12 @@ struct ShelfMenuPicker<Value: Hashable>: View {
   var label: ((String) -> String)? = nil
 
   var body: some View {
-    let value = SheetPicker<Value>.displayTitle(for: selection, in: options)
+    let selected = options.first { $0.value == selection }
+    let value = selected?.title ?? SheetPicker<Value>.displayTitle(for: selection, in: options)
     Menu {
       Picker(title, selection: $selection) {
         ForEach(options) { option in
-          Text(option.title).tag(option.value)
+          option.menuLabel().tag(option.value)
         }
       }
       .pickerStyle(.inline)
@@ -83,6 +84,11 @@ struct ShelfMenuPicker<Value: Hashable>: View {
       HStack(spacing: 12) {
         Text(label?(value) ?? value)
           .lineLimit(1)
+        if let detail = selected?.detail {
+          Text(detail)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: true, vertical: false)
+        }
         Image(systemName: AppSymbol.menuDisclosure)
           .font(.caption.bold())
           .foregroundStyle(.secondary)
@@ -92,7 +98,7 @@ struct ShelfMenuPicker<Value: Hashable>: View {
     .menuStyle(.button)
     .buttonBorderShape(.capsule)
     .accessibilityLabel(title)
-    .accessibilityValue(value)
+    .accessibilityValue(selected?.titleWithDetail ?? value)
   }
 }
 

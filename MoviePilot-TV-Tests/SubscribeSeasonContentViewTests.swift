@@ -1017,6 +1017,30 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     XCTAssertFalse(viewModel.isLoading)
   }
 
+  func testEpisodeGroupSeasonRetryReplacesCachedEmptyResult() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscriptionSnapshotURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    service.baseURLForTesting = "http://subscription-snapshot-tests.local"
+    configureSubscriptionSnapshotAccess(service)
+    let stub = SubscriptionSnapshotURLProtocol.stub
+    await stub.reset()
+    await stub.setEmptyGroupSeasons(groupId: "group-retry")
+
+    let initial = try await service.getGroupSeasons(groupId: "group-retry")
+    XCTAssertTrue(initial.isEmpty)
+
+    await stub.setGroupSeasons(groupId: "group-retry", seasonNumber: 2)
+    let cached = try await service.getGroupSeasons(groupId: "group-retry")
+    XCTAssertTrue(cached.isEmpty)
+
+    let retried = try await service.getGroupSeasons(groupId: "group-retry", forceRefresh: true)
+    let updated = try await service.getGroupSeasons(groupId: "group-retry")
+    XCTAssertEqual(retried.compactMap(\.season_number), [2])
+    XCTAssertEqual(updated.compactMap(\.season_number), [2])
+  }
+
   func testChangingEpisodeGroupPreventsOlderSeasonLoadFromOverwritingNewSelection()
     async throws
   {
@@ -1686,6 +1710,16 @@ final class SubscribeSeasonContentViewTests: XCTestCase {
     )
   }
 
+  func testSeasonDisplayFormatterLocalizesGenericGroupSeasonLabels() {
+    XCTAssertEqual(SeasonDisplayFormatter.localizedLabel("Season 3"), "第 3 季")
+    XCTAssertEqual(SeasonDisplayFormatter.localizedLabel("season4"), "第 4 季")
+    XCTAssertEqual(SeasonDisplayFormatter.name(seasonNumber: 0, rawName: "Specials"), "特别篇")
+    XCTAssertEqual(SeasonDisplayFormatter.localizedLabel("Season 3 - Arlong Park"), "第 3 季 · Arlong Park")
+    XCTAssertEqual(SeasonDisplayFormatter.localizedLabel("S3 • Twelve Guardian Ninja"), "第 3 季 · Twelve Guardian Ninja")
+    XCTAssertEqual(SeasonDisplayFormatter.localizedLabel("SP • Specials"), "特别篇")
+    XCTAssertEqual(SeasonDisplayFormatter.localizedLabel("1997"), "1997")
+  }
+
   func testSeasonCardAndDetailSheetUseSharedDisplayFormatter() throws {
     let testFileURL = URL(fileURLWithPath: #filePath)
     let repositoryRoot = testFileURL.deletingLastPathComponent().deletingLastPathComponent()
@@ -2306,6 +2340,13 @@ private actor SubscriptionSnapshotURLProtocolStub {
     seasonAvailabilityResponse = SubscriptionSnapshotStubResponse(
       statusCode: statusCode,
       data: Data(json.utf8)
+    )
+  }
+
+  func setEmptyGroupSeasons(groupId: String) {
+    groupSeasonResponses[groupId] = SubscriptionSnapshotStubResponse(
+      statusCode: 200,
+      data: Data("[]".utf8)
     )
   }
 

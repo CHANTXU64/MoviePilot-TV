@@ -3169,7 +3169,7 @@ class APIService: ObservableObject {
   /// 获取标准电视剧的各季基础信息
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeSeasonDialog.vue (getMediaSeasons)
   /// - 应用场景: 在前端的季订阅弹窗中，当用户**未**选择任何特殊的“剧集组”时，调用此 API 获取并展示该剧集在 TMDB 上定义的标准分季信息（S01, S02 等）。
-  func getMediaSeasons(media: MediaInfo) async throws -> [TmdbSeason] {
+  func getMediaSeasons(media: MediaInfo, forceRefresh: Bool = false) async throws -> [TmdbSeason] {
     guard let identity = media.identity else {
       // 遵循 Vue 逻辑，如果无法生成媒体身份，则不发起请求，返回空数组
       return []
@@ -3182,7 +3182,9 @@ class APIService: ObservableObject {
       "season": media.season.map(String.init),
     ]
     let endpoint = try buildEndpoint(path: "/media/seasons", params: params)
-    return try await sessionCachedValue(sessionScope.mediaSeasonsCache, key: endpoint) { [weak self] in
+    return try await sessionCachedValue(
+      sessionScope.mediaSeasonsCache, key: endpoint, forceRefresh: forceRefresh
+    ) { [weak self] in
       guard let self else { throw CancellationError() }
       let data = try await self.makeRequest(endpoint: endpoint)
       return try await self.decodeOrUnwrap([TmdbSeason].self, from: data)
@@ -3192,9 +3194,11 @@ class APIService: ObservableObject {
   /// 获取特定剧集组（如长篇连载划分的部/篇）下的季信息
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeSeasonDialog.vue (getGroupSeasons)
   /// - 应用场景: 在前端的季订阅弹窗中，当用户从下拉列表中**选择**了某个“剧集组”（如“司法岛篇”）后，调用此 API 以获取该组专属的分季信息。
-  func getGroupSeasons(groupId: String) async throws -> [TmdbSeason] {
+  func getGroupSeasons(groupId: String, forceRefresh: Bool = false) async throws -> [TmdbSeason] {
     let endpoint = "/media/group/seasons/\(groupId)"
-    return try await sessionCachedValue(sessionScope.groupSeasonsCache, key: endpoint) { [weak self] in
+    return try await sessionCachedValue(
+      sessionScope.groupSeasonsCache, key: endpoint, forceRefresh: forceRefresh
+    ) { [weak self] in
       guard let self else { throw CancellationError() }
       let data = try await self.makeRequest(endpoint: endpoint)
       return try await self.decodeOrUnwrap([TmdbSeason].self, from: data)
