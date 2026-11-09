@@ -35,6 +35,7 @@ struct SubscribeSeasonContentView: View {
   private static let seasonPageSize = 100
 
   @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
+  @ObservedObject private var apiService = APIService.shared
   @ObservedObject var viewModel: SubscribeSeasonViewModel
   var layout: SeasonLayout = .shelf
   var title: String? = nil
@@ -118,6 +119,7 @@ struct SubscribeSeasonContentView: View {
   }
 
   var body: some View {
+    let session = apiService.sessionSnapshot()
     Group {
       switch layout {
       case .shelf:
@@ -133,8 +135,8 @@ struct SubscribeSeasonContentView: View {
         expandedGrid(imageLifecycle: imageLifecycle)
       }
     }
-    .task(id: allowsEpisodeGroupRequests) {
-      guard allowsEpisodeGroupRequests else { return }
+    .task(id: allowsEpisodeGroupRequests ? session : nil) {
+      guard allowsEpisodeGroupRequests, apiService.isSessionUnchanged(from: session) else { return }
       try? await viewModel.loadEpisodeGroups()
     }
     .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in

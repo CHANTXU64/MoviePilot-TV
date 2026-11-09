@@ -63,7 +63,6 @@ final class TMDBDetailPreloadTests: XCTestCase {
         for: douban,
         fullDetail: douban,
         recognizedTmdbId: 101,
-        didFailToLoadDetail: false,
         isEnabled: false
       )
     )
@@ -72,7 +71,6 @@ final class TMDBDetailPreloadTests: XCTestCase {
         for: douban,
         fullDetail: nil,
         recognizedTmdbId: 101,
-        didFailToLoadDetail: false,
         isEnabled: true
       )
     )
@@ -81,7 +79,6 @@ final class TMDBDetailPreloadTests: XCTestCase {
         for: MediaInfo(tmdb_id: 101, title: "TMDB", type: "电影"),
         fullDetail: MediaInfo(tmdb_id: 101, title: "TMDB", type: "电影"),
         recognizedTmdbId: 101,
-        didFailToLoadDetail: false,
         isEnabled: true
       )
     )
@@ -96,11 +93,9 @@ final class TMDBDetailPreloadTests: XCTestCase {
       for: bangumi,
       fullDetail: nil,
       recognizedTmdbId: 890,
-      didFailToLoadDetail: true,
       isEnabled: true
     )
-    XCTAssertEqual(bangumiTarget?.tmdb_id, 890)
-    XCTAssertNil(bangumiTarget?.poster_path)
+    XCTAssertNil(bangumiTarget)
   }
 
   @MainActor
@@ -125,9 +120,8 @@ final class TMDBDetailPreloadTests: XCTestCase {
 
     let preloadTarget = MediaDetailContainerView.tmdbPreloadTarget(
       for: anilist,
-      fullDetail: nil,
+      fullDetail: anilist,
       recognizedTmdbId: 209_867,
-      didFailToLoadDetail: true,
       isEnabled: true
     )
     let jumpTarget = await MediaActionHandler().getTMDBJumpTarget(
@@ -160,7 +154,6 @@ final class TMDBDetailPreloadTests: XCTestCase {
       for: source,
       fullDetail: fullDetail,
       recognizedTmdbId: nil,
-      didFailToLoadDetail: false,
       isEnabled: true
     )
     let jumpTarget = MediaActionHandler.tmdbJumpTarget(for: fullDetail, tmdbId: 101)

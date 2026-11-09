@@ -431,12 +431,14 @@ class APIService: ObservableObject {
     _ cache: CoalescingCache<String, Value>,
     key: String,
     forceRefresh: Bool = false,
+    acceptsCachedValue: (Value) -> Bool = { _ in true },
     load: @escaping @MainActor () async throws -> Value
   ) async throws -> Value {
     let snapshot = sessionSnapshot()
     return try await cache.value(
       for: key,
       forceRefresh: forceRefresh,
+      acceptsCachedValue: acceptsCachedValue,
       validate: { try validateSessionSnapshot(snapshot) }
     ) { [weak self] in
       guard let self, self.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
@@ -3198,12 +3200,20 @@ class APIService: ObservableObject {
   /// - 应用场景: 在前端的季订阅弹窗中，当用户从下拉列表中**选择**了某个“剧集组”（如“司法岛篇”）后，调用此 API 以获取该组专属的分季信息。
   func getGroupSeasons(groupId: String, forceRefresh: Bool = false) async throws -> [TmdbSeason] {
     let endpoint = "/media/group/seasons/\(groupId)"
+    let snapshot = sessionSnapshot()
     return try await sessionCachedValue(
-      sessionScope.groupSeasonsCache, key: endpoint, forceRefresh: forceRefresh
+      sessionScope.groupSeasonsCache, key: endpoint, forceRefresh: forceRefresh,
+      acceptsCachedValue: { !$0.isEmpty }
     ) { [weak self] in
       guard let self else { throw CancellationError() }
-      let data = try await self.makeRequest(endpoint: endpoint)
-      return try await self.decodeOrUnwrap([TmdbSeason].self, from: data)
+      let data = try await makeRequest(endpoint: endpoint)
+      let seasons = try await decodeOrUnwrap([TmdbSeason].self, from: data)
+      guard seasons.isEmpty, !forceRefresh else { return seasons }
+
+      // 后端查询失败也可能回空。由同一个在途读取重查，所有等待者一起收到最终结果。
+      try validateSessionSnapshot(snapshot)
+      let retried = try await makeRequest(endpoint: endpoint)
+      return try await decodeOrUnwrap([TmdbSeason].self, from: retried)
     }
   }
 

@@ -16,20 +16,22 @@ struct MediaDetailEpisodesView: View {
   var body: some View {
     if let subscriptionSeasons {
       SharedEpisodeGroupView(seasons: subscriptionSeasons) { groupID in
-        shelf(groupID: groupID, groupMenu: nil)
+        shelf(groupID: groupID, groupMenu: nil, catalog: subscriptionSeasons.episodeGroupCatalog)
       }
     } else {
       LocalEpisodeGroupView(tmdbID: tmdbID, isActive: allowsRequests && isContentVisible) {
-        groupID, groupMenu in
-        shelf(groupID: groupID, groupMenu: groupMenu)
+        groupID, groupMenu, catalog in
+        shelf(groupID: groupID, groupMenu: groupMenu, catalog: catalog)
       }
     }
   }
 
-  private func shelf(groupID: String?, groupMenu: EpisodeGroupMenu?) -> some View {
+  private func shelf(
+    groupID: String?, groupMenu: EpisodeGroupMenu?, catalog: EpisodeGroupCatalog
+  ) -> some View {
     EpisodeBrowser(
       media: media, tmdbID: tmdbID, groupID: groupID, groupMenu: groupMenu,
-      allowsRequests: allowsRequests,
+      catalog: catalog, allowsRequests: allowsRequests,
       layout: .shelf(showsHeader: showsHeader, onExpand: onExpand), onSelect: onSelect
     )
   }
@@ -45,10 +47,10 @@ struct MediaEpisodeGridView: View {
     LocalEpisodeGroupView(
       tmdbID: request.tmdbID, isActive: allowsRequests,
       initialGroupID: request.initialEpisodeGroup
-    ) { groupID, groupMenu in
+    ) { groupID, groupMenu, catalog in
       EpisodeBrowser(
         media: request.mediaInfo, tmdbID: request.tmdbID, groupID: groupID, groupMenu: groupMenu,
-        allowsRequests: allowsRequests,
+        catalog: catalog, allowsRequests: allowsRequests,
         layout: .grid(imageLifecycle),
         initialSeason: groupID == request.initialEpisodeGroup ? request.initialSeason : nil,
         initialEpisodeOffset: groupID == request.initialEpisodeGroup ? request.initialEpisodeOffset : nil,
@@ -64,7 +66,7 @@ struct MediaEpisodeGridView: View {
   }
 }
 
-/// 详情页有分季订阅时，沿用它的剧集组选择（选择器在分季订阅的行头）。只观察选择，单集请求不等待订阅或入库查询。
+/// 详情页沿用分季订阅的剧集组选择。两行共享季表，单集请求可独立进行。
 private struct SharedEpisodeGroupView<Content: View>: View {
   @ObservedObject var seasons: SubscribeSeasonViewModel
   let content: (String?) -> Content
@@ -79,14 +81,14 @@ private struct LocalEpisodeGroupView<Content: View>: View {
   @ObservedObject private var apiService = APIService.shared
   let tmdbID: Int
   let isActive: Bool
-  let content: (String?, EpisodeGroupMenu) -> Content
+  let content: (String?, EpisodeGroupMenu, EpisodeGroupCatalog) -> Content
 
   @State private var catalog = EpisodeGroupCatalog()
   @State private var selectedGroupID: String
 
   init(
     tmdbID: Int, isActive: Bool, initialGroupID: String? = nil,
-    content: @escaping (String?, EpisodeGroupMenu) -> Content
+    content: @escaping (String?, EpisodeGroupMenu, EpisodeGroupCatalog) -> Content
   ) {
     self.tmdbID = tmdbID
     self.isActive = isActive
@@ -95,12 +97,14 @@ private struct LocalEpisodeGroupView<Content: View>: View {
   }
 
   var body: some View {
+    let session = apiService.sessionSnapshot()
     content(
       trimmedNonEmpty([selectedGroupID]),
-      EpisodeGroupMenu(groups: catalog.groups, selection: $selectedGroupID)
+      EpisodeGroupMenu(groups: catalog.groups, selection: $selectedGroupID),
+      catalog
     )
-    .task(id: isActive) {
-      guard isActive else { return }
+    .task(id: isActive ? session : nil) {
+      guard isActive, apiService.isSessionUnchanged(from: session) else { return }
       try? await catalog.load(tmdbID: tmdbID, apiService: apiService)
     }
   }
@@ -140,6 +144,7 @@ private struct EpisodeBrowser: View {
   let tmdbID: Int
   let groupID: String?
   let groupMenu: EpisodeGroupMenu?
+  let catalog: EpisodeGroupCatalog
   let allowsRequests: Bool
   let layout: EpisodeBrowserLayout
   var initialSeason: Int? = nil
@@ -170,13 +175,14 @@ private struct EpisodeBrowser: View {
   private struct SeasonRequest: Equatable {
     let groupID: String?
     let retry: Int
+    let session: APIServiceSessionSnapshot
   }
 
   private struct EpisodeRequest: Equatable {
     let groupID: String?
     let season: Int?
     let retry: Int
-    let isActive: Bool
+    let session: APIServiceSessionSnapshot
   }
 
   // MARK: 季
@@ -191,7 +197,10 @@ private struct EpisodeBrowser: View {
   }
 
   private var seasons: [TmdbSeason] {
-    group.loadedSeasons ?? detailSeasons
+    if let groupID {
+      return MediaDetailEpisodeSeasons.selectable(catalog.seasonsByGroup[groupID] ?? [])
+    }
+    return group.loadedSeasons ?? detailSeasons
   }
 
   private var defaultMenuSeasons: [TmdbSeason]? {
@@ -295,6 +304,7 @@ private struct EpisodeBrowser: View {
   }
 
   var body: some View {
+    let session = apiService.sessionSnapshot()
     let requestedSeason = seasonNumber
     Group {
       switch layout {
@@ -313,18 +323,18 @@ private struct EpisodeBrowser: View {
       }
     }
     .task(id: allowsRequests && needsSeasonLookup
-      ? SeasonRequest(groupID: groupID, retry: group.seasonRetry) : nil) {
-      await loadSeasonsIfNeeded()
+      ? SeasonRequest(groupID: groupID, retry: group.seasonRetry, session: session) : nil) {
+      await loadSeasonsIfNeeded(session: session)
     }
     .task(
-      id: EpisodeRequest(
+      id: allowsRequests ? EpisodeRequest(
         groupID: groupID,
         season: requestedSeason,
         retry: requestedSeason.map { group.episodeRetries[$0, default: 0] } ?? 0,
-        isActive: allowsRequests
-      )
+        session: session
+      ) : nil
     ) {
-      await loadEpisodesIfNeeded(season: requestedSeason)
+      await loadEpisodesIfNeeded(season: requestedSeason, session: session)
     }
     // 焦点停在状态卡上时集列表到了：交给第一集，状态卡被移除时焦点不会跳出本行。
     .onChange(of: firstEpisodeID) { _, firstID in
@@ -563,27 +573,36 @@ private struct EpisodeBrowser: View {
     group.seasonRetry += 1
   }
 
-  private func loadSeasonsIfNeeded() async {
-    guard !Task.isCancelled, allowsRequests, needsSeasonLookup else { return }
-    if case .loaded = group.seasonLoad { return }
+  private func canPublish(_ session: APIServiceSessionSnapshot) -> Bool {
+    !Task.isCancelled && apiService.uiIdentity == catalog.uiIdentity
+      && apiService.isSessionUnchanged(from: session)
+  }
+
+  private func loadSeasonsIfNeeded(session: APIServiceSessionSnapshot) async {
+    guard allowsRequests, needsSeasonLookup, canPublish(session) else { return }
+    if case .loaded = group.seasonLoad, !seasons.isEmpty { return }
+    let forceRefresh = group.seasonRetry > 0
     group.seasonLoad = .loading
     do {
-      let result = try await MediaDetailEpisodeSeasons.fetch(
-        media: media, groupID: groupID, forceRefresh: group.seasonRetry > 0, apiService: apiService
-      )
-      try Task.checkCancellation()
-      group.loadedSeasons = result
+      if let groupID {
+        try await catalog.loadSeasons(groupID: groupID, apiService: apiService, forceRefresh: forceRefresh)
+      } else {
+        let result = try await MediaDetailEpisodeSeasons.fetch(
+          media: media, forceRefresh: forceRefresh, apiService: apiService
+        )
+        guard canPublish(session) else { return }
+        group.loadedSeasons = result
+      }
+      guard canPublish(session) else { return }
       group.seasonLoad = .loaded(())
-    } catch is CancellationError {
-      return
     } catch {
-      guard !Task.isCancelled else { return }
+      guard canPublish(session) else { return }
       group.seasonLoad = .failed
     }
   }
 
-  private func loadEpisodesIfNeeded(season: Int?) async {
-    guard !Task.isCancelled, allowsRequests, let season else { return }
+  private func loadEpisodesIfNeeded(season: Int?, session: APIServiceSessionSnapshot) async {
+    guard allowsRequests, let season, canPublish(session) else { return }
     if case .loaded(let episodes) = group.episodeStates[season], !episodes.isEmpty { return }
     let retry = group.episodeRetries[season, default: 0]
     group.episodeStates[season] = .loading
@@ -591,12 +610,10 @@ private struct EpisodeBrowser: View {
       let result = try await apiService.fetchTmdbEpisodes(
         tmdbID: tmdbID, season: season, episodeGroup: groupID, forceRefresh: retry > 0
       )
-      try Task.checkCancellation()
+      guard canPublish(session) else { return }
       group.episodeStates[season] = .loaded(MoviePilotEpisode.list(result, season: season))
-    } catch is CancellationError {
-      return
     } catch {
-      guard !Task.isCancelled else { return }
+      guard canPublish(session) else { return }
       group.episodeStates[season] = .failed
     }
   }
@@ -621,12 +638,8 @@ enum MediaDetailEpisodeSeasons {
   }
 
   static func fetch(
-    media: MediaInfo, groupID: String?, forceRefresh: Bool, apiService: APIService
+    media: MediaInfo, forceRefresh: Bool, apiService: APIService
   ) async throws -> [TmdbSeason] {
-    if let groupID {
-      let seasons = try await apiService.getGroupSeasons(groupId: groupID, forceRefresh: forceRefresh)
-      return selectable(seasons)
-    }
     let seasons = try await apiService.getMediaSeasons(
       media: media, allSeasons: true, forceRefresh: forceRefresh
     )

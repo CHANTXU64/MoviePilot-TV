@@ -4,10 +4,29 @@ import Observation
 @MainActor
 @Observable
 final class EpisodeGroupCatalog {
+  // 与分季模型一起释放时，避开 tvOS 18 的隔离析构回部署问题。
+  nonisolated deinit {}
+
+  let uiIdentity: String
   private var loadedGroups: [EpisodeGroup]?
   var groups: [EpisodeGroup] { loadedGroups ?? [] }
+  private(set) var seasonsByGroup: [String: [TmdbSeason]] = [:]
+
+  init(apiService: APIService = .shared) {
+    uiIdentity = apiService.uiIdentity
+  }
+
+  func loadSeasons(groupID: String, apiService: APIService, forceRefresh: Bool = false) async throws {
+    guard apiService.uiIdentity == uiIdentity else { throw CancellationError() }
+    let snapshot = apiService.sessionSnapshot()
+    let seasons = try await apiService.getGroupSeasons(groupId: groupID, forceRefresh: forceRefresh)
+    try Task.checkCancellation()
+    guard apiService.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
+    seasonsByGroup[groupID] = seasons.sorted { ($0.season_number ?? 0) < ($1.season_number ?? 0) }
+  }
 
   func load(tmdbID: Int, apiService: APIService) async throws {
+    guard apiService.uiIdentity == uiIdentity else { throw CancellationError() }
     let session = apiService.sessionSnapshot()
 
     func validate() throws {

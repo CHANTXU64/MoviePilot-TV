@@ -100,9 +100,15 @@ class SubscribeSeasonViewModel: ObservableObject {
   // 分季模型也可能被会话预载缓存持有，不能反向延长服务的生命周期。
   private weak var apiService: APIService?
 
-  @Published var seasonInfos: [TmdbSeason] = []
+  @Published private var standardSeasonInfos: [TmdbSeason]
+  var seasonInfos: [TmdbSeason] {
+    if let effectiveEpisodeGroup {
+      return episodeGroupCatalog.seasonsByGroup[effectiveEpisodeGroup] ?? []
+    }
+    return standardSeasonInfos
+  }
   @Published private(set) var defaultSeasonInfos: [TmdbSeason]
-  private let episodeGroupCatalog = EpisodeGroupCatalog()
+  let episodeGroupCatalog: EpisodeGroupCatalog
   var episodeGroups: [EpisodeGroup] { episodeGroupCatalog.groups }
   @Published var selectedGroupId: String = ""
   // 季库状态映射：0-已入库 (Available), 1-部分缺失 (Partial), 2-完全缺失 (Missing)
@@ -137,8 +143,9 @@ class SubscribeSeasonViewModel: ObservableObject {
     self.mediaInfo = mediaInfo
     self.apiService = apiService
     self.initialSeason = initialSeason
-    self.seasonInfos = mediaInfo.season_info ?? []
+    self.standardSeasonInfos = mediaInfo.season_info ?? []
     self.defaultSeasonInfos = mediaInfo.season_info ?? []
+    self.episodeGroupCatalog = EpisodeGroupCatalog(apiService: apiService)
     let selectedGroupId =
       Self.episodeGroupTMDBID(for: mediaInfo) != nil
       ? (initialEpisodeGroup ?? "")
@@ -289,33 +296,28 @@ class SubscribeSeasonViewModel: ObservableObject {
   ) async throws {
     guard let apiService else { throw CancellationError() }
     try validateSeasonLoad(load, snapshot: snapshot)
-    let loadedSeasons: [TmdbSeason]
-    if load.episodeGroup == nil, !isSeasonManagementContext {
-      loadedSeasons = mediaInfo.season_info ?? []
+    if let episodeGroup = load.episodeGroup {
+      try await episodeGroupCatalog.loadSeasons(groupID: episodeGroup, apiService: apiService)
     } else {
-      func fetch(forceRefresh: Bool) async throws -> [TmdbSeason] {
-        if let episodeGroup = load.episodeGroup {
-          return try await apiService.getGroupSeasons(groupId: episodeGroup, forceRefresh: forceRefresh)
+      let loadedSeasons: [TmdbSeason]
+      if isSeasonManagementContext {
+        let initial = try await apiService.getMediaSeasons(media: mediaInfo)
+        if initial.isEmpty {
+          try validateSeasonLoad(load, snapshot: snapshot)
+          loadedSeasons = try await apiService.getMediaSeasons(media: mediaInfo, forceRefresh: true)
+        } else {
+          loadedSeasons = initial
         }
-        return try await apiService.getMediaSeasons(media: mediaInfo, forceRefresh: forceRefresh)
-      }
-
-      let initial = try await fetch(forceRefresh: false)
-      if initial.isEmpty {
-        // 接口查询失败时也可能返回空列表。跳过缓存重查一次，再决定是否显示空态。
-        try validateSeasonLoad(load, snapshot: snapshot)
-        loadedSeasons = try await fetch(forceRefresh: true)
       } else {
-        loadedSeasons = initial
+        loadedSeasons = mediaInfo.season_info ?? []
+      }
+      try validateSeasonLoad(load, snapshot: snapshot)
+      standardSeasonInfos = loadedSeasons.sorted { ($0.season_number ?? 0) < ($1.season_number ?? 0) }
+      if mediaInfo.season == nil, !standardSeasonInfos.isEmpty {
+        defaultSeasonInfos = standardSeasonInfos
       }
     }
     try validateSeasonLoad(load, snapshot: snapshot)
-
-    // 按季号升序排列 (S00, S01, S02...)
-    seasonInfos = loadedSeasons.sorted { ($0.season_number ?? 0) < ($1.season_number ?? 0) }
-    if load.episodeGroup == nil, mediaInfo.season == nil, !seasonInfos.isEmpty {
-      defaultSeasonInfos = seasonInfos
-    }
 
     // 加载完成后，立即检查每季在媒体服务器中的入库状态
     seasonAvailabilityRevision &+= 1
