@@ -27,6 +27,13 @@ final class MediaDetailEpisodeShelfTests: XCTestCase {
     XCTAssertNil(MediaDetailEpisodeSeasons.current(selected: nil, preferred: 1, available: []))
   }
 
+  func testExpandIsAvailableForMultipleSeasonsOrMoreThanTenEpisodes() {
+    XCTAssertFalse(MediaDetailEpisodeSeasons.canExpand(seasons: [season(1, episodeCount: 10)], loadedEpisodeCount: 10))
+    XCTAssertTrue(MediaDetailEpisodeSeasons.canExpand(seasons: [season(1, episodeCount: 11)], loadedEpisodeCount: 0))
+    XCTAssertTrue(MediaDetailEpisodeSeasons.canExpand(seasons: [season(1)], loadedEpisodeCount: 11))
+    XCTAssertTrue(MediaDetailEpisodeSeasons.canExpand(seasons: [season(1), season(2)], loadedEpisodeCount: 0))
+  }
+
   func testManySeasonsOrLongGroupSeasonNamesUseMenuInsteadOfChips() {
     let few = (1...8).map { "第 \($0) 季" }
     XCTAssertTrue(MediaDetailEpisodeSeasons.fitsChips(titles: few))
@@ -50,10 +57,12 @@ final class MediaDetailEpisodeShelfTests: XCTestCase {
   }
 
   func testFocusedPlatterLinesUpWithScaledStill() {
-    let scaledWidth = EpisodeCardLayout.stillSize.width * EpisodeCardLayout.focusedScale
-    XCTAssertEqual(
-      EpisodeCardLayout.stillSize.width + 2 * EpisodeCardLayout.platterHorizontalInset, scaledWidth,
-      accuracy: 0.001)
+    for width in [EpisodeCardLayout.stillSize.width, EpisodeCardLayout.gridStillSize.width] {
+      XCTAssertEqual(
+        width + 2 * EpisodeCardLayout.platterHorizontalInset(stillWidth: width),
+        width * EpisodeCardLayout.focusedScale,
+        accuracy: 0.001)
+    }
   }
 
   func testEpisodeGroupMenuStartsWithDefaultOrderAndShowsGroupCounts() throws {

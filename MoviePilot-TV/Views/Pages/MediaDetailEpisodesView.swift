@@ -10,6 +10,7 @@ struct MediaDetailEpisodesView: View {
   let isContentVisible: Bool
   /// 第一页底部只露出卡片：本行是第二页首行时，行头在翻到第二页后才出现，与其他行一致。
   let showsHeader: Bool
+  let onExpand: (MediaEpisodeGridRequest) -> Void
   let onSelect: (MoviePilotEpisode) -> Void
 
   var body: some View {
@@ -26,13 +27,39 @@ struct MediaDetailEpisodesView: View {
   }
 
   private func shelf(groupID: String?, groupMenu: EpisodeGroupMenu?) -> some View {
-    EpisodeShelf(
+    EpisodeBrowser(
       media: media, tmdbID: tmdbID, groupID: groupID, groupMenu: groupMenu,
       allowsRequests: allowsRequests, isContentVisible: isContentVisible,
-      showsHeader: showsHeader, onSelect: onSelect
+      layout: .shelf(showsHeader: showsHeader, onExpand: onExpand), onSelect: onSelect
     )
-    // 换剧集组后季号含义不同，季列表、选中的季和已加载的集都从头来。
-    .id(groupID)
+  }
+}
+
+struct MediaEpisodeGridView: View {
+  let request: MediaEpisodeGridRequest
+  let imageLifecycle: PageImageLifecycle
+  let allowsRequests: Bool
+  @State private var selectedEpisode: MoviePilotEpisode?
+
+  var body: some View {
+    LocalEpisodeGroupView(
+      tmdbID: request.tmdbID, isActive: allowsRequests,
+      initialGroupID: request.initialEpisodeGroup
+    ) { groupID, groupMenu in
+      EpisodeBrowser(
+        media: request.mediaInfo, tmdbID: request.tmdbID, groupID: groupID, groupMenu: groupMenu,
+        allowsRequests: allowsRequests, isContentVisible: true,
+        layout: .grid(imageLifecycle),
+        initialSeason: groupID == request.initialEpisodeGroup ? request.initialSeason : nil,
+        onSelect: { selectedEpisode = $0 }
+      )
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .imageNavigationPresentationWillReset, object: APIService.shared)) { _ in
+      selectedEpisode = nil
+    }
+    .sheet(item: $selectedEpisode) { episode in
+      EpisodeDetailSheet(episode: episode)
+    }
   }
 }
 
@@ -51,15 +78,25 @@ private struct LocalEpisodeGroupView<Content: View>: View {
   @ObservedObject private var apiService = APIService.shared
   let tmdbID: Int
   let isActive: Bool
-  let content: (String?, EpisodeGroupMenu?) -> Content
+  let content: (String?, EpisodeGroupMenu) -> Content
 
   @State private var groups: [EpisodeGroup] = []
-  @State private var selectedGroupID = ""
+  @State private var selectedGroupID: String
+
+  init(
+    tmdbID: Int, isActive: Bool, initialGroupID: String? = nil,
+    content: @escaping (String?, EpisodeGroupMenu) -> Content
+  ) {
+    self.tmdbID = tmdbID
+    self.isActive = isActive
+    self.content = content
+    _selectedGroupID = State(initialValue: initialGroupID ?? "")
+  }
 
   var body: some View {
     content(
       trimmedNonEmpty([selectedGroupID]),
-      groups.isEmpty ? nil : EpisodeGroupMenu(groups: groups, selection: $selectedGroupID)
+      EpisodeGroupMenu(groups: groups, selection: $selectedGroupID)
     )
     .task(id: isActive) {
       guard isActive else { return }
@@ -95,7 +132,12 @@ private struct SeasonOption: Identifiable {
   let title: String
 }
 
-private struct EpisodeShelf: View {
+private enum EpisodeBrowserLayout {
+  case shelf(showsHeader: Bool, onExpand: (MediaEpisodeGridRequest) -> Void)
+  case grid(PageImageLifecycle)
+}
+
+private struct EpisodeBrowser: View {
   @ObservedObject private var apiService = APIService.shared
   let media: MediaInfo
   let tmdbID: Int
@@ -103,18 +145,36 @@ private struct EpisodeShelf: View {
   let groupMenu: EpisodeGroupMenu?
   let allowsRequests: Bool
   let isContentVisible: Bool
-  let showsHeader: Bool
+  let layout: EpisodeBrowserLayout
+  var initialSeason: Int? = nil
   let onSelect: (MoviePilotEpisode) -> Void
 
-  @State private var loadedSeasons: EpisodeLoadState<[TmdbSeason]>?
-  @State private var seasonRetry = 0
-  @State private var selectedSeason: Int?
-  /// 本剧集组下已请求过的季，切回去直接显示，不再闪一次加载。
-  @State private var episodeStates: [Int: EpisodeLoadState<[MoviePilotEpisode]>] = [:]
-  @State private var episodeRetries: [Int: Int] = [:]
+  @State private var storedGroup = GroupState(id: nil)
   @FocusState private var focus: EpisodeRowFocus?
+  @FocusState private var focusedSeason: Int?
+
+  private struct GroupState {
+    let id: String?
+    var loadedSeasons: EpisodeLoadState<[TmdbSeason]>?
+    var seasonRetry = 0
+    var selectedSeason: Int?
+    var episodeStates: [Int: EpisodeLoadState<[MoviePilotEpisode]>] = [:]
+    var episodeRetries: [Int: Int] = [:]
+  }
+
+  // 切换剧集组时只更换数据，不重建剧集组按钮，保留遥控器焦点。
+  private var group: GroupState {
+    get { storedGroup.id == groupID ? storedGroup : GroupState(id: groupID) }
+    nonmutating set { storedGroup = newValue }
+  }
+
+  private struct SeasonRequest: Equatable {
+    let groupID: String?
+    let retry: Int
+  }
 
   private struct EpisodeRequest: Equatable {
+    let groupID: String?
     let season: Int?
     let retry: Int
     let isActive: Bool
@@ -129,7 +189,7 @@ private struct EpisodeShelf: View {
 
   private var seasons: [TmdbSeason] {
     if !detailSeasons.isEmpty { return detailSeasons }
-    guard case .loaded(let loaded) = loadedSeasons else { return [] }
+    guard case .loaded(let loaded) = group.loadedSeasons else { return [] }
     return MediaDetailEpisodeSeasons.selectable(loaded)
   }
 
@@ -141,7 +201,7 @@ private struct EpisodeShelf: View {
 
   private var seasonNumber: Int? {
     MediaDetailEpisodeSeasons.current(
-      selected: selectedSeason,
+      selected: group.selectedSeason ?? initialSeason,
       preferred: groupID == nil ? media.season : nil,
       available: seasonOptions.map(\.id)
     )
@@ -163,7 +223,7 @@ private struct EpisodeShelf: View {
 
   private var rowContent: RowContent {
     guard let seasonNumber else {
-      switch loadedSeasons {
+      switch group.loadedSeasons {
       case .failed:
         return .status(.failed("分季信息加载失败"), retry: retrySeasonList)
       case .loaded:
@@ -172,8 +232,8 @@ private struct EpisodeShelf: View {
         return .status(.loading("正在加载分季信息"), retry: nil)
       }
     }
-    let retry = { episodeRetries[seasonNumber, default: 0] += 1 }
-    switch episodeStates[seasonNumber] {
+    let retry = { group.episodeRetries[seasonNumber, default: 0] += 1 }
+    switch group.episodeStates[seasonNumber] {
     case .loaded(let episodes) where !episodes.isEmpty:
       return .episodes(episodes)
     case .loaded:
@@ -191,23 +251,41 @@ private struct EpisodeShelf: View {
     return episodes.first?.id
   }
 
-  var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      if showsHeader {
-        header
-          .transition(.opacity.combined(with: .move(edge: .bottom)))
-      }
-      row
-        // 同演员行：翻页时行头从卡片位置往上滑入，卡片盖在它上面，不被胶囊挡住。
-        .zIndex(2)
+  private var showsExpandButton: Bool {
+    let loadedCount: Int
+    if case .episodes(let episodes) = rowContent {
+      loadedCount = episodes.count
+    } else {
+      loadedCount = 0
     }
-    .task(id: allowsRequests && detailSeasons.isEmpty ? seasonRetry : nil) {
+    return MediaDetailEpisodeSeasons.canExpand(seasons: seasons, loadedEpisodeCount: loadedCount)
+  }
+
+  var body: some View {
+    Group {
+      switch layout {
+      case .grid(let imageLifecycle):
+        expandedGrid(imageLifecycle: imageLifecycle)
+      case .shelf(let showsHeader, _):
+        VStack(alignment: .leading, spacing: 0) {
+          if showsHeader {
+            shelfHeader
+              .transition(.opacity.combined(with: .move(edge: .bottom)))
+          }
+          shelfContent
+            // 同演员行：翻页时行头从卡片位置往上滑入，卡片盖在它上面，不被胶囊挡住。
+            .zIndex(2)
+        }
+      }
+    }
+    .task(id: allowsRequests && detailSeasons.isEmpty ? SeasonRequest(groupID: groupID, retry: group.seasonRetry) : nil) {
       await loadSeasonsIfNeeded()
     }
     .task(
       id: EpisodeRequest(
+        groupID: groupID,
         season: seasonNumber,
-        retry: seasonNumber.map { episodeRetries[$0, default: 0] } ?? 0,
+        retry: seasonNumber.map { group.episodeRetries[$0, default: 0] } ?? 0,
         isActive: allowsRequests && isContentVisible
       )
     ) {
@@ -222,17 +300,20 @@ private struct EpisodeShelf: View {
 
   // MARK: 行头
 
-  private var header: some View {
+  private var shelfHeader: some View {
     HStack(spacing: 20) {
-      seasonSelector
+      shelfSeasonSelector
       Spacer(minLength: 0)
-      if let groupMenu {
-        ShelfMenuPicker(
-          title: "剧集组",
-          selection: groupMenu.selection,
-          options: EpisodeGroupPickerOptions.make(groupMenu.groups, defaultSeasons: media.season_info),
-          label: { "剧集组：\($0)" }
-        )
+      if let groupMenu, !groupMenu.groups.isEmpty {
+        episodeGroupPicker(groupMenu)
+      }
+      if case .shelf(_, let onExpand) = layout, showsExpandButton {
+        Button("展开") {
+          onExpand(MediaEpisodeGridRequest(
+            mediaInfo: media, tmdbID: tmdbID, initialSeason: seasonNumber, initialEpisodeGroup: groupID
+          ))
+        }
+        .accessibilityLabel("展开剧集")
       }
     }
     .font(.callout)
@@ -240,30 +321,135 @@ private struct EpisodeShelf: View {
     .focusSection()
   }
 
+  private var gridHeader: some View {
+    DetailExpansionHeader(title: media.cleanedTitle ?? media.title ?? "剧集") {
+      HStack(spacing: 20) {
+        gridSeasonSelector
+          .frame(maxWidth: .infinity, alignment: .leading)
+        if let groupMenu, !groupMenu.groups.isEmpty {
+          episodeGroupPicker(groupMenu)
+            .frame(maxWidth: 540, alignment: .trailing)
+        }
+      }
+      .font(.callout)
+      .focusSection()
+    }
+  }
+
+  private func episodeGroupPicker(_ menu: EpisodeGroupMenu) -> some View {
+    ShelfMenuPicker(
+      title: "剧集组",
+      selection: menu.selection,
+      options: EpisodeGroupPickerOptions.make(menu.groups, defaultSeasons: media.season_info),
+      label: { "剧集组：\($0)" }
+    )
+  }
+
   @ViewBuilder
-  private var seasonSelector: some View {
+  private var shelfSeasonSelector: some View {
     let options = seasonOptions
     if let seasonNumber, options.count > 1 {
-      if MediaDetailEpisodeSeasons.fitsChips(titles: options.map(\.title)) {
-        ShelfPicker(
-          items: options,
-          selection: Binding(
-            get: { options.first { $0.id == seasonNumber } },
-            set: { if let option = $0 { selectedSeason = option.id } }
-          ),
-          title: \.title
-        )
-      } else {
-        sectionTitle("剧集")
-        ShelfMenuPicker(
-          title: "季",
-          selection: Binding(get: { seasonNumber }, set: { selectedSeason = $0 }),
-          options: options.map { PickerOption(title: $0.title, value: $0.id) }
-        )
-      }
+      seasonControls(options, selection: seasonNumber, showsMenuTitle: true)
     } else {
       sectionTitle(options.first?.title ?? "剧集")
     }
+  }
+
+  @ViewBuilder
+  private var gridSeasonSelector: some View {
+    if let seasonNumber {
+      seasonControls(seasonOptions, selection: seasonNumber, showsMenuTitle: false)
+    }
+  }
+
+  @ViewBuilder
+  private func seasonControls(_ options: [SeasonOption], selection: Int, showsMenuTitle: Bool) -> some View {
+    if MediaDetailEpisodeSeasons.fitsChips(titles: options.map(\.title)) {
+      // 同一行的季按钮与剧集组都直接参与横向焦点；季名放不下时改用菜单。
+      ViewThatFits(in: .horizontal) {
+        HStack(spacing: 20) {
+          ForEach(options) { option in
+            ShelfChip(
+              title: option.title, isSelected: selection == option.id,
+              isFocused: focusedSeason == option.id
+            ) {
+              group.selectedSeason = option.id
+            }
+            .focused($focusedSeason, equals: option.id)
+          }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        seasonMenu(options, selection: selection, showsTitle: showsMenuTitle)
+      }
+    } else {
+      seasonMenu(options, selection: selection, showsTitle: showsMenuTitle)
+    }
+  }
+
+  private func seasonMenu(_ options: [SeasonOption], selection: Int, showsTitle: Bool) -> some View {
+    HStack(spacing: 20) {
+      if showsTitle { sectionTitle("剧集") }
+      ShelfMenuPicker(
+        title: "季",
+        selection: Binding(get: { selection }, set: { group.selectedSeason = $0 }),
+        options: options.map { PickerOption(title: $0.title, value: $0.id) }
+      )
+    }
+  }
+
+  private func expandedGrid(imageLifecycle: PageImageLifecycle) -> some View {
+    let content = rowContent
+    let episodes: [MoviePilotEpisode] = if case .episodes(let episodes) = content { episodes } else { [] }
+    return DetailExpansionGrid(
+      columns: EpisodeCardLayout.gridColumns,
+      itemIDs: episodes.map { "\(groupID ?? ""):\($0.id)" },
+      imageLifecycle: imageLifecycle,
+      cardFocus: $focus,
+      firstFocus: episodes.first.map { .episode($0.id) },
+      lastFocus: episodes.last.map { .episode($0.id) }
+    ) {
+      gridHeader
+    } status: {
+      if case .status(let status, let retry) = content {
+        statusRow(status, retry: retry, stillSize: EpisodeCardLayout.gridStillSize)
+          .padding()
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+    } card: { index, onFocus in
+      episodeCard(episodes[index], stillSize: EpisodeCardLayout.gridStillSize, onFocus: onFocus)
+    }
+  }
+
+  @ViewBuilder
+  private var shelfContent: some View {
+    switch rowContent {
+    case .episodes(let episodes):
+      shelfRow(episodes)
+    case .status(let status, let retry):
+      statusRow(status, retry: retry, stillSize: EpisodeCardLayout.stillSize)
+        .padding(.horizontal, 81)
+        .padding(.top, 25)
+        .padding(.bottom, 30)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+  }
+
+  private func statusRow(
+    _ status: EpisodeShelfStatusCard.Status, retry: (() -> Void)?, stillSize: CGSize
+  ) -> some View {
+    EpisodeShelfStatusRow(
+      status: status,
+      statusFocus: $focus,
+      stillSize: stillSize,
+      onRetry: retry.map { retry in
+        {
+          // 先把焦点交给状态卡：按下后重试按钮随即消失，焦点不能跟着掉出本行。
+          focus = .status
+          retry()
+        }
+      }
+    )
+    .focusSection()
   }
 
   private func sectionTitle(_ text: String) -> some View {
@@ -277,59 +463,46 @@ private struct EpisodeShelf: View {
 
   // MARK: 卡片行
 
-  @ViewBuilder
-  private var row: some View {
-    switch rowContent {
-    case .episodes(let episodes):
-      ScrollView(.horizontal, showsIndicators: false) {
-        LazyHStack(alignment: .top, spacing: EpisodeCardLayout.spacing) {
-          ForEach(episodes) { episode in
-            EpisodeCard(
-              episode: episode,
-              stillURL: apiService.getSeasonPosterURL(posterPath: episode.stillPath, mediaPosterPath: nil),
-              onSelect: { onSelect(episode) }
-            )
-            .focused($focus, equals: .episode(episode.id))
-          }
+  private func shelfRow(_ episodes: [MoviePilotEpisode]) -> some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      LazyHStack(alignment: .top, spacing: EpisodeCardLayout.spacing) {
+        ForEach(episodes) { episode in
+          episodeCard(episode, stillSize: EpisodeCardLayout.stillSize)
         }
-        .padding(.horizontal, 81)
-        .padding(.top, 25)
-        .padding(.bottom, 30)
       }
-      .scrollClipDisabled()
-      .focusSection()
-    case .status(let status, let retry):
-      EpisodeShelfStatusRow(
-        status: status,
-        statusFocus: $focus,
-        onRetry: retry.map { retry in
-          {
-            // 先把焦点交给状态卡：按下后重试按钮随即消失，焦点不能跟着掉出本行。
-            focus = .status
-            retry()
-          }
-        }
-      )
       .padding(.horizontal, 81)
       .padding(.top, 25)
       .padding(.bottom, 30)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .focusSection()
     }
+    .scrollClipDisabled()
+    .focusSection()
+  }
+
+  private func episodeCard(
+    _ episode: MoviePilotEpisode, stillSize: CGSize, onFocus: ((Bool) -> Void)? = nil
+  ) -> some View {
+    EpisodeCard(
+      episode: episode,
+      stillURL: apiService.getSeasonPosterURL(posterPath: episode.stillPath, mediaPosterPath: nil),
+      stillSize: stillSize,
+      onSelect: { onSelect(episode) },
+      onFocus: onFocus
+    )
+    .focused($focus, equals: .episode(episode.id))
   }
 
   // MARK: 加载
 
   private func retrySeasonList() {
-    loadedSeasons = .loading
-    seasonRetry += 1
+    group.loadedSeasons = .loading
+    group.seasonRetry += 1
   }
 
   private func loadSeasonsIfNeeded() async {
-    guard allowsRequests, detailSeasons.isEmpty else { return }
-    if case .loaded = loadedSeasons { return }
-    loadedSeasons = .loading
-    let forceRefresh = seasonRetry > 0
+    guard !Task.isCancelled, allowsRequests, detailSeasons.isEmpty else { return }
+    if case .loaded = group.loadedSeasons { return }
+    group.loadedSeasons = .loading
+    let forceRefresh = group.seasonRetry > 0
     do {
       let result: [TmdbSeason]
       if let groupID {
@@ -338,31 +511,31 @@ private struct EpisodeShelf: View {
         result = try await apiService.getMediaSeasons(media: media, forceRefresh: forceRefresh)
       }
       try Task.checkCancellation()
-      loadedSeasons = .loaded(result)
+      group.loadedSeasons = .loaded(result)
     } catch is CancellationError {
       return
     } catch {
       guard !Task.isCancelled else { return }
-      loadedSeasons = .failed
+      group.loadedSeasons = .failed
     }
   }
 
   private func loadEpisodesIfNeeded() async {
-    guard allowsRequests, isContentVisible, let season = seasonNumber else { return }
-    if case .loaded(let episodes) = episodeStates[season], !episodes.isEmpty { return }
-    let retry = episodeRetries[season, default: 0]
-    episodeStates[season] = .loading
+    guard !Task.isCancelled, allowsRequests, isContentVisible, let season = seasonNumber else { return }
+    if case .loaded(let episodes) = group.episodeStates[season], !episodes.isEmpty { return }
+    let retry = group.episodeRetries[season, default: 0]
+    group.episodeStates[season] = .loading
     do {
       let result = try await apiService.fetchTmdbEpisodes(
         tmdbID: tmdbID, season: season, episodeGroup: groupID, forceRefresh: retry > 0
       )
       try Task.checkCancellation()
-      episodeStates[season] = .loaded(MoviePilotEpisode.list(result, season: season))
+      group.episodeStates[season] = .loaded(MoviePilotEpisode.list(result, season: season))
     } catch is CancellationError {
       return
     } catch {
       guard !Task.isCancelled else { return }
-      episodeStates[season] = .failed
+      group.episodeStates[season] = .failed
     }
   }
 }
@@ -372,6 +545,10 @@ enum MediaDetailEpisodeSeasons {
   /// 胶囊最多放几季、标题总字数上限。超过任一项改用下拉菜单，免得胶囊一行滚不完。
   static let maxChipCount = 8
   static let maxChipCharacters = 48
+
+  static func canExpand(seasons: [TmdbSeason], loadedEpisodeCount: Int) -> Bool {
+    seasons.count > 1 || loadedEpisodeCount > 10 || (seasons.first?.episode_count ?? 0) > 10
+  }
 
   /// 去掉缺季号、负季号和重复季号，按季号升序（特别篇第 0 季在最前，与分季订阅一致）。
   static func selectable(_ seasons: [TmdbSeason]) -> [TmdbSeason] {
@@ -400,6 +577,16 @@ enum MediaDetailEpisodeSeasons {
 enum EpisodeCardLayout {
   static let spacing: CGFloat = 40
   static let stillSize = CGSize(width: 410, height: 231)
+  private static let gridColumnCount = 4
+  static let gridStillSize: CGSize = {
+    let posterGridWidth = DetailExpansionGridLayout.width(
+      columnWidth: MediaCard.defaultPosterSize.width, columnCount: MediaCard.defaultGridColumns.count
+    )
+    let gaps = CGFloat(gridColumnCount - 1) * DetailExpansionGridLayout.columnSpacing
+    let width = (posterGridWidth - gaps) / CGFloat(gridColumnCount)
+    return CGSize(width: width, height: width * stillSize.height / stillSize.width)
+  }()
+  static let gridColumns = DetailExpansionGridLayout.columns(width: gridStillSize.width, count: gridColumnCount)
   static let stillCornerRadius: CGFloat = 20
   static let focusedScale: CGFloat = 1.08
   /// 剧照和文字之间的距离（未聚焦）。
@@ -410,12 +597,12 @@ enum EpisodeCardLayout {
   static let platterGap: CGFloat = 10
 
   /// 底板左右各伸出多少：正好与放大后的剧照左右两边对齐。
-  static var platterHorizontalInset: CGFloat {
-    stillSize.width * (focusedScale - 1) / 2
+  static func platterHorizontalInset(stillWidth: CGFloat) -> CGFloat {
+    stillWidth * (focusedScale - 1) / 2
   }
 
   /// 聚焦时文字下移多少：让底板顶边落在放大后剧照下方 `platterGap` 处。
-  static var focusedTextOffset: CGFloat {
+  static func focusedTextOffset(stillSize: CGSize) -> CGFloat {
     stillSize.height * (focusedScale - 1) / 2 + platterGap + platterVerticalInset - textGap
   }
 }
@@ -423,18 +610,24 @@ enum EpisodeCardLayout {
 private struct EpisodeCard: View {
   let episode: MoviePilotEpisode
   let stillURL: URL?
+  let stillSize: CGSize
   let onSelect: () -> Void
+  let onFocus: ((Bool) -> Void)?
 
   @FocusState private var isFocused: Bool
 
   var body: some View {
     Button(action: onSelect) {
-      EpisodeCardContent(episode: episode, stillURL: stillURL, isFocused: isFocused)
-        .contentShape(.rect)
+      EpisodeCardContent(
+        episode: episode, stillURL: stillURL, isFocused: isFocused,
+        stillSize: stillSize
+      )
+      .contentShape(.rect)
     }
     .buttonStyle(EpisodeCardButtonStyle())
     .focusEffectDisabled()
     .focused($isFocused)
+    .onChange(of: isFocused) { _, focused in onFocus?(focused) }
     .accessibilityLabel(episode.cardTitle)
     .accessibilityValue(episode.metadata.joined(separator: "，"))
   }
@@ -455,6 +648,7 @@ struct EpisodeCardContent: View {
   let episode: MoviePilotEpisode?
   var stillURL: URL?
   var isFocused = false
+  var stillSize = EpisodeCardLayout.stillSize
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -463,10 +657,10 @@ struct EpisodeCardContent: View {
       still
         .scaleEffect(isFocused ? EpisodeCardLayout.focusedScale : 1)
         .shadow(color: .black.opacity(isFocused ? 0.5 : 0), radius: 20, y: 10)
-      EpisodeCardText(episode: episode, isFocused: isFocused)
-        .offset(y: isFocused ? EpisodeCardLayout.focusedTextOffset : 0)
+      EpisodeCardText(episode: episode, isFocused: isFocused, stillWidth: stillSize.width)
+        .offset(y: isFocused ? EpisodeCardLayout.focusedTextOffset(stillSize: stillSize) : 0)
     }
-    .frame(width: EpisodeCardLayout.stillSize.width, alignment: .leading)
+    .frame(width: stillSize.width, alignment: .leading)
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: isFocused)
   }
 
@@ -480,15 +674,14 @@ struct EpisodeCardContent: View {
       if episode != nil {
         PageManagedImage(
           url: stillURL,
-          processor: DownsamplingImageProcessor(size: EpisodeCardLayout.stillSize),
-          // Hero 和剧集区在同一次滚动过渡中都可能可见，图片随导航页的生命周期释放。
+          processor: DownsamplingImageProcessor(size: stillSize),
           isEnabled: true,
           participatesInPageLifecycle: true,
           skipsMemoryCache: true
         )
       }
     }
-    .frame(width: EpisodeCardLayout.stillSize.width, height: EpisodeCardLayout.stillSize.height)
+    .frame(width: stillSize.width, height: stillSize.height)
     .clipShape(.rect(cornerRadius: EpisodeCardLayout.stillCornerRadius))
     .accessibilityHidden(true)
   }
@@ -498,6 +691,7 @@ struct EpisodeCardContent: View {
 struct EpisodeCardText: View {
   let episode: MoviePilotEpisode?
   var isFocused = false
+  var stillWidth = EpisodeCardLayout.stillSize.width
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
@@ -522,7 +716,7 @@ struct EpisodeCardText: View {
       // 底板只画在背景里往外伸，不改变卡片的布局尺寸。
       RoundedRectangle(cornerRadius: EpisodeCardLayout.stillCornerRadius, style: .continuous)
         .fill(Color.white.opacity(isFocused ? 0.18 : 0))
-        .padding(.horizontal, -EpisodeCardLayout.platterHorizontalInset)
+        .padding(.horizontal, -EpisodeCardLayout.platterHorizontalInset(stillWidth: stillWidth))
         .padding(.vertical, -EpisodeCardLayout.platterVerticalInset)
     }
   }
@@ -535,19 +729,20 @@ struct EpisodeCardText: View {
 private struct EpisodeShelfStatusRow: View {
   let status: EpisodeShelfStatusCard.Status
   var statusFocus: FocusState<EpisodeRowFocus?>.Binding
+  let stillSize: CGSize
   let onRetry: (() -> Void)?
 
   var body: some View {
     VStack(alignment: .leading, spacing: EpisodeCardLayout.textGap) {
       HStack(spacing: EpisodeCardLayout.spacing) {
-        EpisodeShelfStatusCard(status: status)
+        EpisodeShelfStatusCard(status: status, stillSize: stillSize)
           .focused(statusFocus, equals: .status)
         if let onRetry {
           Button("重试", systemImage: AppSymbol.retry, action: onRetry)
         }
       }
-      EpisodeCardText(episode: nil)
-        .frame(width: EpisodeCardLayout.stillSize.width)
+      EpisodeCardText(episode: nil, stillWidth: stillSize.width)
+        .frame(width: stillSize.width)
         .hidden()
         .accessibilityHidden(true)
     }
@@ -568,6 +763,7 @@ struct EpisodeShelfStatusCard: View {
   }
 
   let status: Status
+  var stillSize = EpisodeCardLayout.stillSize
 
   var body: some View {
     // 卡片本身不响应选择键；失败时由旁边的「重试」重新加载。
@@ -590,7 +786,7 @@ struct EpisodeShelfStatusCard: View {
           .font(.caption)
           .foregroundStyle(.secondary)
       }
-      .frame(width: EpisodeCardLayout.stillSize.width, height: EpisodeCardLayout.stillSize.height)
+      .frame(width: stillSize.width, height: stillSize.height)
     }
     .buttonStyle(TextCardButtonStyle())
     .accessibilityLabel(status.text)

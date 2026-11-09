@@ -253,10 +253,7 @@ struct MediaCard: View {
       |> ResizingImageProcessor(referenceSize: defaultPosterSize, mode: .aspectFill)
   }
 
-  static let defaultGridColumns = Array(
-    repeating: GridItem(.fixed(256), spacing: 44, alignment: .top),
-    count: 6
-  )
+  static let defaultGridColumns = DetailExpansionGridLayout.columns(width: defaultPosterSize.width, count: 6)
 
   let title: String
   let posterUrl: URL?

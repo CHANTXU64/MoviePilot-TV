@@ -2446,6 +2446,13 @@ struct SubscribeSeasonRequest: Hashable, Codable {
   let initialEpisodeGroup: String?
 }
 
+struct MediaEpisodeGridRequest: Hashable, Codable {
+  let mediaInfo: MediaInfo
+  let tmdbID: Int
+  let initialSeason: Int?
+  let initialEpisodeGroup: String?
+}
+
 // MARK: - Transfer History Models
 
 struct TransferHistoryResponse: Codable {

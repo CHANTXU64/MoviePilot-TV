@@ -515,6 +515,7 @@ struct MediaDetailView: View {
                   allowsRequests: allowsRequests,
                   isContentVisible: showContentPage,
                   showsHeader: showContentPage || firstVisibleRow != "episodes",
+                  onExpand: { navigationCoordinator.push($0) },
                   onSelect: { selectedEpisode = $0 }
                 )
                 .id(episodeTMDBID)

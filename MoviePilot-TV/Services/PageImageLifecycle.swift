@@ -238,6 +238,7 @@ enum ImageNavigationRoute: Hashable {
   case resourceSearch(ResourceSearchRequest)
   case subtitleSearch(SubtitleSearchRequest)
   case subscribeSeason(SubscribeSeasonRequest)
+  case mediaEpisodes(MediaEpisodeGridRequest)
 }
 
 struct ImageNavigationEntry: Identifiable, Hashable {
@@ -551,6 +552,11 @@ final class ImageNavigationCoordinator: ObservableObject {
   @discardableResult
   func push(_ request: SubscribeSeasonRequest) -> ImageNavigationEntry {
     push(.subscribeSeason(request))
+  }
+
+  @discardableResult
+  func push(_ request: MediaEpisodeGridRequest) -> ImageNavigationEntry {
+    push(.mediaEpisodes(request))
   }
 
   func lifecycle(for entry: ImageNavigationEntry) -> PageImageLifecycle {

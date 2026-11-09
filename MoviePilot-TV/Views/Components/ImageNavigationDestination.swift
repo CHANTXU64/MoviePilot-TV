@@ -65,6 +65,9 @@ struct ImageNavigationDestination: View {
           initialEpisodeGroup: request.initialEpisodeGroup,
           imageLifecycle: lifecycle
         )
+
+      case .mediaEpisodes(let request):
+        MediaEpisodeGridView(request: request, imageLifecycle: lifecycle, allowsRequests: allowsRequests)
       }
     }
     .environment(\.pageImageLifecycle, lifecycle)

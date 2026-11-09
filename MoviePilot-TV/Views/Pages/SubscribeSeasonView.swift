@@ -4,10 +4,6 @@ import SwiftUI
 struct SubscribeSeasonView: View {
   @StateObject private var viewModel: SubscribeSeasonViewModel
   @ObservedObject var imageLifecycle: PageImageLifecycle
-  @EnvironmentObject private var navigationCoordinator: ImageNavigationCoordinator
-  @State private var gridListIdentity: GridListIdentity
-  @StateObject private var gridDOMRetention: GridDOMRetentionController
-  @StateObject private var gridImageRetention: GridImageLifecycleController
 
   init(
     mediaInfo: MediaInfo,
@@ -16,135 +12,23 @@ struct SubscribeSeasonView: View {
     imageLifecycle: PageImageLifecycle
   ) {
     self.imageLifecycle = imageLifecycle
-    let listIdentity = GridListIdentity.make()
-    _gridListIdentity = State(initialValue: listIdentity)
     _viewModel = StateObject(
       wrappedValue: SubscribeSeasonViewModel(
         mediaInfo: mediaInfo,
         initialSeason: initialSeason,
         initialEpisodeGroup: initialEpisodeGroup
       ))
-    _gridDOMRetention = StateObject(
-      wrappedValue: GridDOMRetentionController(
-        listIdentity: listIdentity,
-        itemIDs: [],
-        columnCount: MediaCard.defaultGridColumns.count
-      )
-    )
-    _gridImageRetention = StateObject(
-      wrappedValue: GridImageLifecycleController(
-        listIdentity: listIdentity,
-        itemIDs: [],
-        columnCount: MediaCard.defaultGridColumns.count,
-        imageLifecycle: imageLifecycle
-      )
-    )
   }
 
   var body: some View {
-    let itemIDs = Self.gridItemIDs(for: viewModel.seasonInfos)
-    let retainedItemCount = gridDOMRetention.retainedItemCount(
-      for: viewModel.seasonInfos.count,
-      listIdentity: gridListIdentity
-    )
-
-    ScrollView {
-      SubscribeSeasonContentView(
-        viewModel: viewModel,
-        layout: .grid,
-        loadsImages: true,
-        gridLifecycle: SeasonGridLifecycleContext(
-          listIdentity: gridListIdentity,
-          itemIDs: itemIDs,
-          retainedItemCount: retainedItemCount,
-          imageController: gridImageRetention,
-          onFocus: handleGridFocus
-        )
-      )
-    }
-    .focusSection()
-    .onScrollGeometryChange(
-      for: CGFloat.self,
-      of: { geometry in
-        geometry.contentOffset.y + geometry.contentInsets.top
-      },
-      action: { _, adjustedOffsetY in
-        gridDOMRetention.scrollPositionChanged(adjustedOffsetY: adjustedOffsetY)
-      }
-    )
-    .onScrollPhaseChange { _, newPhase in
-      gridDOMRetention.scrollPhaseChanged(newPhase)
-    }
-    .onAppear {
-      gridDOMRetention.reconcile(listIdentity: gridListIdentity, itemIDs: itemIDs)
-      gridImageRetention.reconcile(listIdentity: gridListIdentity, itemIDs: itemIDs)
-      gridDOMRetention.setViewActive(true)
-      gridDOMRetention.setStackInteractive(navigationCoordinator.isStackInteractive)
-    }
-    .onChange(of: itemIDs) { oldItemIDs, newItemIDs in
-      let isAppend = newItemIDs.count >= oldItemIDs.count
-        && newItemIDs.prefix(oldItemIDs.count).elementsEqual(oldItemIDs)
-      let newIdentity = isAppend ? gridListIdentity : gridListIdentity.advanced()
-      if newIdentity != gridListIdentity {
-        gridListIdentity = newIdentity
-      }
-      gridDOMRetention.reconcile(listIdentity: newIdentity, itemIDs: newItemIDs)
-      gridImageRetention.reconcile(listIdentity: newIdentity, itemIDs: newItemIDs)
-    }
-    .onChange(of: navigationCoordinator.isStackInteractive) { _, isInteractive in
-      gridDOMRetention.setStackInteractive(isInteractive)
-    }
-    .onDisappear {
-      gridDOMRetention.setViewActive(false)
-    }
-    .task {
-      await viewModel.loadSeasonManagementData()
-    }
-  }
-
-  private static func gridItemIDs(for seasons: [TmdbSeason]) -> [MediaInfo.ID] {
-    seasons.enumerated().map { index, season in
-      "season:\(season.season_number.map(String.init) ?? "missing"):\(index)"
-    }
-  }
-
-  private func handleGridFocus(
-    listIdentity: GridListIdentity,
-    itemIDs: [MediaInfo.ID],
-    itemID: MediaInfo.ID,
-    itemIndex: Int,
-    isFocused: Bool
-  ) {
-    gridImageRetention.reconcileEventSnapshot(listIdentity: listIdentity, itemIDs: itemIDs)
-    gridDOMRetention.reconcileEventSnapshot(listIdentity: listIdentity, itemIDs: itemIDs)
-    guard gridImageRetention.cardFocusChanged(
-      listIdentity: listIdentity,
-      itemID: itemID,
-      itemIndex: itemIndex,
-      isFocused: isFocused
-    ) else { return }
-    _ = gridDOMRetention.cardFocusChanged(
-      listIdentity: listIdentity,
-      itemID: itemID,
-      itemIndex: itemIndex,
-      isFocused: isFocused
-    )
+    SubscribeSeasonContentView(viewModel: viewModel, layout: .grid(imageLifecycle))
+      .task { await viewModel.loadSeasonManagementData() }
   }
 }
 
-/// Shared content view used both in standalone SubscribeSeasonView and embedded in MediaDetailView
 enum SeasonLayout {
   case shelf
-  case grid
-}
-
-struct SeasonGridLifecycleContext {
-  let listIdentity: GridListIdentity
-  let itemIDs: [MediaInfo.ID]
-  let retainedItemCount: Int
-  let imageController: GridImageLifecycleController
-  let onFocus:
-    (GridListIdentity, [MediaInfo.ID], MediaInfo.ID, Int, Bool) -> Void
+  case grid(PageImageLifecycle)
 }
 
 struct SubscribeSeasonContentView: View {
@@ -156,14 +40,11 @@ struct SubscribeSeasonContentView: View {
   var loadsImages: Bool = true
   var onSeasonTap: ((TmdbSeason) -> Void)? = nil
   var onMoreTapped: (() -> Void)? = nil
-  var gridLifecycle: SeasonGridLifecycleContext? = nil
 
   @EnvironmentObject private var notificationManager: NotificationManager
   @Environment(\.scenePhase) private var scenePhase
   @State private var selectedSeasonDetail: TmdbSeason?
   @FocusState private var focusedSeasonId: Int?
-  @FocusState private var isTopRedirectorFocused: Bool
-  @FocusState private var isBottomRedirectorFocused: Bool
 
   private func performSeasonAction(_ season: TmdbSeason, isSubscribed: Bool) {
     let source = navigationCoordinator.sourceToken()
@@ -233,143 +114,44 @@ struct SubscribeSeasonContentView: View {
   }
 
   var body: some View {
-    VStack(spacing: 0) {
-      // Header Section (Title + Picker)
-      VStack(spacing: 0) {
-        if layout == .grid {
-          Text("订阅   \(viewModel.mediaInfo.title ?? "")")
-            .font(.title2.bold())
-            .foregroundColor(.secondary)
-        }
-        headerSection
-      }
-      .padding(.bottom, layout == .grid ? 20 : 0)
-
-      if viewModel.isLoading {
-        ProgressView("加载中...")
-          .frame(maxWidth: .infinity, minHeight: 200)
-      } else if viewModel.hasSeasonLoadError {
-        VStack(spacing: 16) {
-          Image(systemName: AppSymbol.warning)
-            .font(.system(size: 48))
-            .foregroundColor(.secondary)
-          Text("分季信息加载失败")
-            .foregroundColor(.secondary)
-          Button {
-            Task {
-              await viewModel.retryLoadData()
-            }
-          } label: {
-            HStack(spacing: 8) {
-              Image(systemName: AppSymbol.retry)
-              Text("重试")
-            }
+    Group {
+      switch layout {
+      case .shelf:
+        VStack(spacing: 0) {
+          shelfHeader
+          if viewModel.seasonInfos.isEmpty || viewModel.isLoading || viewModel.hasSeasonLoadError {
+            status
+          } else {
+            shelf
           }
         }
-        .frame(maxWidth: .infinity, minHeight: 200)
-        .focusSection()
-      } else if viewModel.seasonInfos.isEmpty {
-        VStack(spacing: 16) {
-          Image(systemName: AppSymbol.noResults)
-            .font(.system(size: 48))
-            .foregroundColor(.gray)
-          Text("未查询到季集信息")
-            .foregroundColor(.secondary)
-        }
-        .frame(maxWidth: .infinity, minHeight: 200)
-      } else {
-        switch layout {
-        case .shelf:
-          ScrollView(.horizontal, showsIndicators: false) {
-            LazyHStack(spacing: 40) {
-              let displayCount = min(10, viewModel.seasonInfos.count)
-              ForEach(viewModel.seasonInfos.prefix(displayCount), id: \.self) { season in
-                seasonCard(season)
-                  .focused($focusedSeasonId, equals: season.season_number)
+      case .grid(let imageLifecycle):
+        let seasons = viewModel.isLoading || viewModel.hasSeasonLoadError ? [] : viewModel.seasonInfos
+        DetailExpansionGrid(
+          columns: MediaCard.defaultGridColumns,
+          itemIDs: seasons.enumerated().map { index, season in
+            "season:\(season.season_number.map(String.init) ?? "missing"):\(index)"
+          },
+          imageLifecycle: imageLifecycle,
+          cardFocus: $focusedSeasonId,
+          firstFocus: seasons.first?.season_number,
+          lastFocus: seasons.last?.season_number
+        ) {
+          DetailExpansionHeader(title: "订阅   \(viewModel.mediaInfo.title ?? "")") {
+            if !viewModel.episodeGroups.isEmpty {
+              HStack {
+                Spacer()
+                episodeGroupPicker
               }
-              if viewModel.seasonInfos.count > 10 {
-                let nextSeason = viewModel.seasonInfos[displayCount]
-                viewAllCard(nextSeason: nextSeason)
-                  .focused($focusedSeasonId, equals: -1)
-              }
+              .focusSection()
             }
-            .padding(.horizontal, 81)
-            .padding(.top, 25)
-            .padding(.bottom, 30)
           }
-          .scrollClipDisabled()
-          .focusSection()
-        case .grid:
-          let gridLifecycle = gridLifecycle
-          let retainedItemCount = min(
-            viewModel.seasonInfos.count,
-            gridLifecycle?.retainedItemCount ?? viewModel.seasonInfos.count
-          )
-          VStack(spacing: 0) {
-            // Top Focus Redirector: Catches focus when navigating down from header
-            Color.clear
-              .frame(height: 1)
-              .focusable(focusedSeasonId == nil)
-              .focused($isTopRedirectorFocused)
-              .onChange(of: isTopRedirectorFocused) { _, isFocused in
-                if isFocused {
-                  focusedSeasonId = viewModel.seasonInfos.first?.season_number
-                  isTopRedirectorFocused = false
-                }
-              }
-
-            LazyVGrid(columns: MediaCard.defaultGridColumns, spacing: 40) {
-              ForEach(
-                Array(viewModel.seasonInfos.prefix(retainedItemCount).enumerated()),
-                id: \.offset
-              ) { entry in
-                let index = entry.offset
-                let season = entry.element
-                let itemID = gridLifecycle?.itemIDs[index]
-                  ?? "season:\(season.season_number.map(String.init) ?? "missing"):\(index)"
-                seasonCard(
-                  season,
-                  onFocus: { isFocused in
-                    guard let gridLifecycle else { return }
-                    gridLifecycle.onFocus(
-                      gridLifecycle.listIdentity,
-                      gridLifecycle.itemIDs,
-                      itemID,
-                      index,
-                      isFocused
-                    )
-                  }
-                )
-                  .focused($focusedSeasonId, equals: season.season_number)
-                  .environment(
-                    \.gridImageDemandContext,
-                    gridLifecycle.map {
-                      GridImageDemandContext(
-                        controller: $0.imageController,
-                        listIdentity: $0.listIdentity,
-                        itemIDs: $0.itemIDs,
-                        itemID: itemID,
-                        itemIndex: index
-                      )
-                    }
-                  )
-              }
-            }
-            .id(gridLifecycle?.listIdentity.id)
-            .padding()
-
-            // Focus Redirector: Catches focus when navigating down from an incomplete row
-            Color.clear
-              .frame(height: 1)
-              .focusable()
-              .focused($isBottomRedirectorFocused)
-              .onChange(of: isBottomRedirectorFocused) { _, isFocused in
-                if isFocused {
-                  focusedSeasonId = viewModel.seasonInfos.last?.season_number
-                  isBottomRedirectorFocused = false
-                }
-              }
-          }
+        } status: {
+          status
+        } card: { index, onFocus in
+          let season = seasons[index]
+          seasonCard(season, onFocus: onFocus)
+            .focused($focusedSeasonId, equals: season.season_number)
         }
       }
     }
@@ -445,8 +227,8 @@ struct SubscribeSeasonContentView: View {
   }
 
   @ViewBuilder
-  private var headerSection: some View {
-    if let title = title {
+  private var shelfHeader: some View {
+    if let title {
       let content = HStack {
         Text(title)
           .font(.callout)
@@ -457,30 +239,75 @@ struct SubscribeSeasonContentView: View {
 
         HStack(spacing: 20) {
           episodeGroupPicker
-
-          if layout == .shelf, viewModel.seasonInfos.count > 10 {
-            Button("展开") {
-              onMoreTapped?()
-            }
+          if viewModel.seasonInfos.count > 10 {
+            Button("展开") { onMoreTapped?() }
           }
         }
       }
       .padding(.horizontal, 89)
-      .padding(.vertical, 0)
 
-      if !viewModel.episodeGroups.isEmpty || (layout == .shelf && viewModel.seasonInfos.count > 10) {
+      if !viewModel.episodeGroups.isEmpty || viewModel.seasonInfos.count > 10 {
         content.focusSection()
       } else {
         content
       }
-    } else if layout == .grid && !viewModel.episodeGroups.isEmpty {
-      HStack {
-        Spacer()
-        episodeGroupPicker
-      }
-      .padding(.vertical, 0)
-      .focusSection()
     }
+  }
+
+  @ViewBuilder
+  private var status: some View {
+    if viewModel.isLoading {
+      ProgressView("加载中...")
+        .frame(maxWidth: .infinity, minHeight: 200)
+    } else if viewModel.hasSeasonLoadError {
+      VStack(spacing: 16) {
+        Image(systemName: AppSymbol.warning)
+          .font(.system(size: 48))
+          .foregroundColor(.secondary)
+        Text("分季信息加载失败")
+          .foregroundColor(.secondary)
+        Button {
+          Task { await viewModel.retryLoadData() }
+        } label: {
+          HStack(spacing: 8) {
+            Image(systemName: AppSymbol.retry)
+            Text("重试")
+          }
+        }
+      }
+      .frame(maxWidth: .infinity, minHeight: 200)
+      .focusSection()
+    } else {
+      VStack(spacing: 16) {
+        Image(systemName: AppSymbol.noResults)
+          .font(.system(size: 48))
+          .foregroundColor(.gray)
+        Text("未查询到季集信息")
+          .foregroundColor(.secondary)
+      }
+      .frame(maxWidth: .infinity, minHeight: 200)
+    }
+  }
+
+  private var shelf: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      LazyHStack(spacing: 40) {
+        let displayCount = min(10, viewModel.seasonInfos.count)
+        ForEach(viewModel.seasonInfos.prefix(displayCount), id: \.self) { season in
+          seasonCard(season)
+            .focused($focusedSeasonId, equals: season.season_number)
+        }
+        if viewModel.seasonInfos.count > 10 {
+          viewAllCard(nextSeason: viewModel.seasonInfos[displayCount])
+            .focused($focusedSeasonId, equals: -1)
+        }
+      }
+      .padding(.horizontal, 81)
+      .padding(.top, 25)
+      .padding(.bottom, 30)
+    }
+    .scrollClipDisabled()
+    .focusSection()
   }
 
   @ViewBuilder
