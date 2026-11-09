@@ -60,6 +60,42 @@ struct ShelfPicker<Item: Identifiable>: View {
   }
 }
 
+/// 货架行头的下拉选择：当前值后面跟上下箭头，与 Sheet 里的菜单行（`SheetPicker`）同一个标记，
+/// 一眼能和直接生效的胶囊、按钮区分开。选项多到胶囊放不下（如季很多）或本来就是一组设置（剧集组）时用它。
+struct ShelfMenuPicker<Value: Hashable>: View {
+  /// 菜单标题与无障碍名称
+  let title: String
+  @Binding var selection: Value
+  let options: [PickerOption<Value>]
+  /// 按钮上的文字由当前值生成，如「剧集组：默认」；不传时只显示当前值。
+  var label: ((String) -> String)? = nil
+
+  var body: some View {
+    let value = SheetPicker<Value>.displayTitle(for: selection, in: options)
+    Menu {
+      Picker(title, selection: $selection) {
+        ForEach(options) { option in
+          Text(option.title).tag(option.value)
+        }
+      }
+      .pickerStyle(.inline)
+    } label: {
+      HStack(spacing: 12) {
+        Text(label?(value) ?? value)
+          .lineLimit(1)
+        Image(systemName: AppSymbol.menuDisclosure)
+          .font(.caption.bold())
+          .foregroundStyle(.secondary)
+          .accessibilityHidden(true)
+      }
+    }
+    .menuStyle(.button)
+    .buttonBorderShape(.capsule)
+    .accessibilityLabel(title)
+    .accessibilityValue(value)
+  }
+}
+
 /// 货架胶囊的底色和字色。未聚焦时不使用实心白，也不另画边框。
 /// 亮白色只留给系统焦点。
 struct ShelfChipAppearance: Equatable {

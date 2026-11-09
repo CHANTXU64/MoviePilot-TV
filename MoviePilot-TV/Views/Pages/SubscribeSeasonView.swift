@@ -463,13 +463,12 @@ struct SubscribeSeasonContentView: View {
   @ViewBuilder
   private var episodeGroupPicker: some View {
     if !viewModel.episodeGroups.isEmpty {
-      Picker("剧集组", selection: $viewModel.selectedGroupId) {
-        Text("剧集组：默认").tag("")
-        ForEach(viewModel.episodeGroups) { group in
-          Text("剧集组：\(group.name)").tag(group.id)
-        }
-      }
-      .pickerStyle(.menu)
+      ShelfMenuPicker(
+        title: "剧集组",
+        selection: $viewModel.selectedGroupId,
+        options: EpisodeGroup.menuOptions(viewModel.episodeGroups),
+        label: { "剧集组：\($0)" }
+      )
       .onChange(of: viewModel.selectedGroupId) { _, _ in
         Task { await viewModel.fetchSeasons() }
       }
