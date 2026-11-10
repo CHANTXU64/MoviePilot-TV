@@ -20,6 +20,7 @@ struct PageManagedImage: View {
   var scaleFactor: CGFloat? = nil
   var alignsImageAtTop = false
   var loadsDiskFileSynchronously = false
+  var preparesBackdropPreview = false
   var fadeDuration: TimeInterval = 0.25
   var onSuccess: (() -> Void)?
   var onFailure: (() -> Void)?
@@ -35,6 +36,7 @@ struct PageManagedImage: View {
       scaleFactor: scaleFactor,
       alignsImageAtTop: alignsImageAtTop,
       loadsDiskFileSynchronously: loadsDiskFileSynchronously,
+      preparesBackdropPreview: preparesBackdropPreview,
       fadeDuration: fadeDuration,
       onSuccess: onSuccess,
       onFailure: onFailure,
@@ -57,6 +59,7 @@ private struct PageManagedImageSurface: UIViewRepresentable {
   let scaleFactor: CGFloat?
   let alignsImageAtTop: Bool
   let loadsDiskFileSynchronously: Bool
+  let preparesBackdropPreview: Bool
   let fadeDuration: TimeInterval
   let onSuccess: (() -> Void)?
   let onFailure: (() -> Void)?
@@ -91,6 +94,7 @@ private struct PageManagedImageSurface: UIViewRepresentable {
       loadsDiskFileSynchronously: loadsDiskFileSynchronously,
       fadeDuration: fadeDuration,
       scaleFactor: scaleFactor,
+      preparesBackdropPreview: preparesBackdropPreview,
       onSuccess: onSuccess,
       onFailure: onFailure,
       lifecycle: lifecycle,
@@ -184,6 +188,7 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
   private var surfaceDemandIDs: [ObjectIdentifier: UUID] = [:]
   private var demands: [UUID: Bool] = [:]
   private var pageImageAllowed = true
+  private var preparesBackdropPreview = false
   private var decodedImage: UIImage?
   private var downloadTask: DownloadTask?
   private var isRetrieving = false
@@ -270,6 +275,13 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
     updateLoading()
   }
 
+  func setPreparesBackdropPreview(_ enabled: Bool) {
+    guard preparesBackdropPreview != enabled else { return }
+    preparesBackdropPreview = enabled
+    if let decodedImage { prepareBackdropPreviewIfNeeded(from: decodedImage) }
+    updateLoading()
+  }
+
   func setGridImageDemandContext(_ context: GridImageDemandContext?) {
     if let context,
       gridImageController === context.controller,
@@ -337,11 +349,14 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
 
   private func updateLoading() {
     removeDeadSurfaces()
-    guard shouldLoadImage else {
+    let shouldLoad = shouldLoadImage
+    if !shouldLoad {
       releaseDecodedImage()
-      return
     }
-    guard decodedImage == nil, !isRetrieving, !didFail else { return }
+    if role == .detailBackdrop, decodedImage == nil {
+      renderBackdropPreview()
+    }
+    guard shouldLoad, decodedImage == nil, !isRetrieving, !didFail else { return }
 
     generation &+= 1
     let requestGeneration = generation
@@ -388,10 +403,39 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
     didFail = false
     guard shouldLoadImage else { return }
     decodedImage = image
+    prepareBackdropPreviewIfNeeded(from: image)
     let imageFadeDuration = cachesGridImageInMemory && fromMemoryCache ? 0 : fadeDuration
     for surface in liveDemandingSurfaces {
       surface.install(image, fadeDuration: imageFadeDuration)
       surface.notifySuccess(for: key)
+    }
+  }
+
+  private func prepareBackdropPreviewIfNeeded(from image: UIImage) {
+    guard preparesBackdropPreview, let lifecycle, lifecycle.backdropPreview(for: key) == nil else { return }
+    let longEdge = max(image.size.width, image.size.height)
+    guard longEdge > 0 else { return }
+    let ratio = min(1, 160 / longEdge)
+    let size = CGSize(width: image.size.width * ratio, height: image.size.height * ratio)
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 1
+    format.preferredRange = .standard
+    // 每条仍可返回的路由只保存一张小图，原尺寸图仍由详情背景权限控制。
+    let preview = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+      image.draw(in: CGRect(origin: .zero, size: size))
+    }
+    lifecycle.storeBackdropPreview(preview, for: key)
+  }
+
+  private func renderBackdropPreview() {
+    let preview = preparesBackdropPreview && lifecycle?.keepsContentImages == true
+      ? lifecycle?.backdropPreview(for: key) : nil
+    for surface in liveDemandingSurfaces where surface.image !== preview {
+      if let preview {
+        surface.install(preview, fadeDuration: 0)
+      } else {
+        surface.clearRenderedImage()
+      }
     }
   }
 
@@ -487,6 +531,7 @@ final class PageManagedImageView: UIImageView {
     loadsDiskFileSynchronously: Bool,
     fadeDuration: TimeInterval,
     scaleFactor: CGFloat? = nil,
+    preparesBackdropPreview: Bool = false,
     onSuccess: (() -> Void)?,
     onFailure: (() -> Void)?,
     lifecycle: PageImageLifecycle?,
@@ -517,6 +562,7 @@ final class PageManagedImageView: UIImageView {
 
     if slot?.key == key, self.lifecycle === managedLifecycle, self.demandLease === demandLease {
       slot?.setGridImageDemandContext(managedGridContext)
+      slot?.setPreparesBackdropPreview(preparesBackdropPreview)
       demandLease.bind(to: slot, isEnabled: isEnabled)
       return
     }
@@ -549,6 +595,7 @@ final class PageManagedImageView: UIImageView {
       )
     }
     newSlot.setGridImageDemandContext(managedGridContext)
+    newSlot.setPreparesBackdropPreview(preparesBackdropPreview)
     replaceSlot(
       with: newSlot,
       lifecycle: managedLifecycle,

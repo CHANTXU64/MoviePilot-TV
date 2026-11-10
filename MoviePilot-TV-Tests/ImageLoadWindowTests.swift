@@ -646,7 +646,7 @@ final class ImageLoadWindowTests: XCTestCase {
     XCTAssertFalse(lifecycle.keepsContentImages)
   }
 
-  func testPopWaitsForOutgoingDetailBackdropBeforeRestoringParent() async throws {
+  func testPopShowsParentPreviewBeforeOutgoingDetailBackdropIsReleased() async throws {
     let coordinator = ImageNavigationCoordinator(
       apiService: .testingInstance(), removedLifecycleRetention: .milliseconds(40)
     )
@@ -658,12 +658,20 @@ final class ImageLoadWindowTests: XCTestCase {
     parentBackdrop.attach(parentSurface, demandID: parentDemand.id)
     parentDemand.bind(to: parentBackdrop, isEnabled: true)
     parent.setDetailBackdropVisible(true)
-    let image = try XCTUnwrap(UIImage(systemName: "film"))
+    let size = CGSize(width: 960, height: 540)
+    let image = UIGraphicsImageRenderer(size: size).image { context in
+      UIColor.blue.setFill()
+      context.fill(CGRect(origin: .zero, size: size))
+    }
     parentBackdrop.acceptRetrievedImage(image)
+    parentBackdrop.setPreparesBackdropPreview(true)
     XCTAssertTrue(parentSurface.image === image)
 
     let child = coordinator.lifecycle(for: coordinator.push(resourceRequest("child")))
-    XCTAssertNil(parentSurface.image)
+    let preview = try XCTUnwrap(parentSurface.image)
+    XCTAssertEqual(preview.cgImage?.width, 160)
+    XCTAssertEqual(preview.cgImage?.height, 90)
+    XCTAssertFalse(preview === image)
     XCTAssertFalse(parentBackdrop.hasLoadedPageImage)
     let childBackdrop = makeSlot(key: "child", lifecycle: child, role: .detailBackdrop)
     let childSurface = PageManagedImageView()
@@ -675,6 +683,7 @@ final class ImageLoadWindowTests: XCTestCase {
 
     coordinator.path.removeLast()
     XCTAssertTrue(parent.keepsActivePageImages)
+    XCTAssertTrue(parentSurface.image === preview)
     XCTAssertEqual(parentBackdrop.retrievalStartCount, 1)
     XCTAssertTrue(childSurface.image === image)
 
@@ -684,6 +693,9 @@ final class ImageLoadWindowTests: XCTestCase {
     XCTAssertNil(childSurface.image)
     XCTAssertNil(childSurface.layer.contents)
     XCTAssertFalse(childBackdrop.hasLoadedPageImage)
+    XCTAssertTrue(parentSurface.image === preview)
+    parentBackdrop.acceptRetrievedImage(image)
+    XCTAssertTrue(parentSurface.image === image)
   }
 
   func testHidingDetailBackdropClearsAttachedSurfaceAndRejectsLateImage() throws {
@@ -696,8 +708,10 @@ final class ImageLoadWindowTests: XCTestCase {
     backdrop.attach(surface, demandID: demand.id)
     demand.bind(to: backdrop, isEnabled: true)
     lifecycle.setDetailBackdropVisible(true)
+    backdrop.setPreparesBackdropPreview(true)
     let image = try XCTUnwrap(UIImage(systemName: "film"))
     backdrop.acceptRetrievedImage(image)
+    XCTAssertNotNil(lifecycle.backdropPreview(for: "detail"))
     surface.layer.contents = image.cgImage
     XCTAssertTrue(surface.image === image)
 
@@ -707,6 +721,7 @@ final class ImageLoadWindowTests: XCTestCase {
     XCTAssertNil(surface.image)
     XCTAssertNil(surface.layer.contents)
     XCTAssertFalse(backdrop.hasLoadedPageImage)
+    XCTAssertNil(lifecycle.backdropPreview(for: "detail"))
 
     lifecycle.setDetailBackdropVisible(true)
     XCTAssertEqual(backdrop.retrievalStartCount, 2)

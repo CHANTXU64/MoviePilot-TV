@@ -68,6 +68,7 @@ final class PageImageLifecycle: ObservableObject {
   private(set) var isStackInteractive = false
   /// 页面强持有图片 slot 的请求描述；UIView 可以销毁，slot 仍能在 adjacent 时预热。
   private var imageResources: [String: any PageImageResource] = [:]
+  private var detailBackdropPreview: (key: String, image: UIImage)?
   private var stackObservers: [ObjectIdentifier: WeakPageImageStackObserver] = [:]
 
   init(id: UUID = UUID(), phase: PageImagePhase = .active) {
@@ -92,9 +93,20 @@ final class PageImageLifecycle: ObservableObject {
   func setDetailBackdropVisible(_ isVisible: Bool) {
     guard !isRemoved, isDetailBackdropVisible != isVisible else { return }
     isDetailBackdropVisible = isVisible
+    if !isVisible { detailBackdropPreview = nil }
     for resource in imageResources.values where resource.role == .detailBackdrop {
       updateImageResource(resource)
     }
+  }
+
+  func backdropPreview(for key: String) -> UIImage? {
+    guard detailBackdropPreview?.key == key else { return nil }
+    return detailBackdropPreview?.image
+  }
+
+  func storeBackdropPreview(_ image: UIImage, for key: String) {
+    guard !isRemoved else { return }
+    detailBackdropPreview = (key, image)
   }
 
   private var keepsStackImages: Bool {
@@ -203,6 +215,7 @@ final class PageImageLifecycle: ObservableObject {
 
   /// Pop 动画结束后的终态。即使 SwiftUI 继续持有旧 destination，也会同步清空其图片 surface。
   fileprivate func finishRemoval() {
+    detailBackdropPreview = nil
     update(
       phase: .released,
       isStackForeground: false,
