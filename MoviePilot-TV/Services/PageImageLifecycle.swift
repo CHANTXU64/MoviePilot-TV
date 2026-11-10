@@ -17,6 +17,11 @@ enum PageImageRole: String {
   case content
   case activePage
   case detailBackdrop
+  case detailBackdropFallback
+
+  var isDetailBackdrop: Bool {
+    self == .detailBackdrop || self == .detailBackdropFallback
+  }
 }
 
 /// 页面图片的实际渲染资源。生命周期直接驱动 surface，不依赖隐藏的 SwiftUI 页面重算 body。
@@ -68,7 +73,7 @@ final class PageImageLifecycle: ObservableObject {
   private(set) var isStackInteractive = false
   /// 页面强持有图片 slot 的请求描述；UIView 可以销毁，slot 仍能在 adjacent 时预热。
   private var imageResources: [String: any PageImageResource] = [:]
-  private var detailBackdropPreview: (key: String, image: UIImage)?
+  private var detailBackdropPreview: (key: String, role: PageImageRole, image: UIImage)?
   private var stackObservers: [ObjectIdentifier: WeakPageImageStackObserver] = [:]
 
   init(id: UUID = UUID(), phase: PageImagePhase = .active) {
@@ -94,7 +99,7 @@ final class PageImageLifecycle: ObservableObject {
     guard !isRemoved, isDetailBackdropVisible != isVisible else { return }
     isDetailBackdropVisible = isVisible
     if !isVisible { detailBackdropPreview = nil }
-    for resource in imageResources.values where resource.role == .detailBackdrop {
+    for resource in imageResources.values where resource.role.isDetailBackdrop {
       updateImageResource(resource)
     }
   }
@@ -104,9 +109,16 @@ final class PageImageLifecycle: ObservableObject {
     return detailBackdropPreview?.image
   }
 
-  func storeBackdropPreview(_ image: UIImage, for key: String) {
-    guard !isRemoved else { return }
-    detailBackdropPreview = (key, image)
+  func prepareBackdropPreview(for key: String, role: PageImageRole, makePreview: () -> UIImage?) {
+    guard !isRemoved, isDetailBackdropVisible, detailBackdropPreview?.key != key else { return }
+    // 本地卡片在详情背景下方。只要主背景仍属于该页，转场也应使用它的小图。
+    if role == .detailBackdropFallback, let preview = detailBackdropPreview,
+      preview.role == .detailBackdrop, imageResources[preview.key] != nil
+    {
+      return
+    }
+    guard let image = makePreview() else { return }
+    detailBackdropPreview = (key, role, image)
   }
 
   private var keepsStackImages: Bool {
@@ -237,7 +249,7 @@ final class PageImageLifecycle: ObservableObject {
     let isAllowed = switch resource.role {
     case .content: keepsContentImages
     case .activePage: keepsActivePageImages
-    case .detailBackdrop: keepsDetailBackdrop
+    case .detailBackdrop, .detailBackdropFallback: keepsDetailBackdrop
     }
     resource.setPageImageAllowed(isAllowed)
   }

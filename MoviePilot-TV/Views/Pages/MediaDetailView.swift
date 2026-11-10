@@ -46,6 +46,7 @@ private struct MediaDetailBackgroundLayer: View {
   let usingPosterAsBackdrop: Bool
   let showingContentPage: Bool
   let hidesContentPageBackground: Bool
+  var role: PageImageRole = .detailBackdrop
   var onFailure: ((URL) -> Void)? = nil
 
   var body: some View {
@@ -74,7 +75,7 @@ private struct MediaDetailBackgroundLayer: View {
           screenScale: screenScale
         ),
         isEnabled: true,
-        role: .detailBackdrop,
+        role: role,
         participatesInPageLifecycle: true,
         skipsMemoryCache: true,
         scaleFactor: MediaDetailBackgroundImage.downsampleScale(
@@ -377,6 +378,7 @@ struct MediaDetailView: View {
           url: localBackground, usingPosterAsBackdrop: cachedContent?.backgroundIsPoster ?? true,
           showingContentPage: showContentPage,
           hidesContentPageBackground: hidesContentPageBackground,
+          role: cachedContent == nil ? .detailBackdropFallback : .detailBackdrop,
           onFailure: { _ in cachedBackgroundFailed = true }
         )
       }

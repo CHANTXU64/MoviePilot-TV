@@ -68,7 +68,7 @@ private struct PageManagedImageSurface: UIViewRepresentable {
     let imageView = PageManagedImageView()
     imageView.contentMode = .scaleAspectFill
     imageView.clipsToBounds = true
-    if role == .detailBackdrop {
+    if role.isDetailBackdrop {
       return PageBackdropImageContainer(imageView: imageView)
     }
     return imageView
@@ -339,9 +339,13 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
     removeDeadSurfaces()
     let shouldLoad = shouldLoadImage
     if !shouldLoad {
+      // 主背景被替换时，仍在显示的本地卡片可以接替返回小图。
+      if role == .detailBackdropFallback, let decodedImage {
+        prepareBackdropPreviewIfNeeded(from: decodedImage)
+      }
       releaseDecodedImage()
     }
-    if role == .detailBackdrop, decodedImage == nil {
+    if role.isDetailBackdrop, decodedImage == nil {
       renderBackdropPreview()
     }
     guard shouldLoad, decodedImage == nil, !isRetrieving, !didFail else { return }
@@ -400,19 +404,19 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
   }
 
   private func prepareBackdropPreviewIfNeeded(from image: UIImage) {
-    guard role == .detailBackdrop, let lifecycle, lifecycle.backdropPreview(for: key) == nil else { return }
-    let longEdge = max(image.size.width, image.size.height)
-    guard longEdge > 0 else { return }
-    let ratio = min(1, 160 / longEdge)
-    let size = CGSize(width: image.size.width * ratio, height: image.size.height * ratio)
-    let format = UIGraphicsImageRendererFormat()
-    format.scale = 1
-    format.preferredRange = .standard
-    // 每条仍可返回的路由只保存一张小图，原尺寸图仍由详情背景权限控制。
-    let preview = UIGraphicsImageRenderer(size: size, format: format).image { _ in
-      image.draw(in: CGRect(origin: .zero, size: size))
+    guard role.isDetailBackdrop else { return }
+    lifecycle?.prepareBackdropPreview(for: key, role: role) {
+      let longEdge = max(image.size.width, image.size.height)
+      guard longEdge > 0 else { return nil }
+      let ratio = min(1, 160 / longEdge)
+      let size = CGSize(width: image.size.width * ratio, height: image.size.height * ratio)
+      let format = UIGraphicsImageRendererFormat()
+      format.scale = 1
+      format.preferredRange = .standard
+      return UIGraphicsImageRenderer(size: size, format: format).image { _ in
+        image.draw(in: CGRect(origin: .zero, size: size))
+      }
     }
-    lifecycle.storeBackdropPreview(preview, for: key)
   }
 
   private func renderBackdropPreview() {

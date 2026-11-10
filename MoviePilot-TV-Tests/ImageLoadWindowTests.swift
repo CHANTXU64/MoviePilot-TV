@@ -666,12 +666,23 @@ final class ImageLoadWindowTests: XCTestCase {
     parentBackdrop.acceptRetrievedImage(image)
     XCTAssertTrue(parentSurface.image === image)
 
+    let card = makeSlot(key: "card", lifecycle: parent, role: .detailBackdropFallback)
+    let cardSurface = PageManagedImageView()
+    let cardDemand = PageImageDemandLease()
+    card.attach(cardSurface, demandID: cardDemand.id)
+    cardDemand.bind(to: card, isEnabled: true)
+    let cardImage = try XCTUnwrap(UIImage(systemName: "photo"))
+    card.acceptRetrievedImage(cardImage)
+    XCTAssertTrue(cardSurface.image === cardImage)
+
     let child = coordinator.lifecycle(for: coordinator.push(resourceRequest("child")))
     let preview = try XCTUnwrap(parentSurface.image)
     XCTAssertEqual(preview.cgImage?.width, 160)
     XCTAssertEqual(preview.cgImage?.height, 90)
     XCTAssertFalse(preview === image)
     XCTAssertFalse(parentBackdrop.hasLoadedPageImage)
+    XCTAssertFalse(card.hasLoadedPageImage)
+    XCTAssertNil(cardSurface.image)
     let childBackdrop = makeSlot(key: "child", lifecycle: child, role: .detailBackdrop)
     let childSurface = PageManagedImageView()
     let childDemand = PageImageDemandLease()
@@ -696,6 +707,41 @@ final class ImageLoadWindowTests: XCTestCase {
     XCTAssertTrue(parentSurface.image === preview)
     parentBackdrop.acceptRetrievedImage(image)
     XCTAssertTrue(parentSurface.image === image)
+  }
+
+  func testDetailBackdropCardCanProvidePreviewAfterPrimaryIsRemoved() throws {
+    let coordinator = ImageNavigationCoordinator(apiService: .testingInstance())
+    coordinator.setStackForeground(true)
+    let parent = coordinator.lifecycle(for: coordinator.push(resourceRequest("parent")))
+    parent.setDetailBackdropVisible(true)
+    let card = makeSlot(key: "card", lifecycle: parent, role: .detailBackdropFallback)
+    let cardSurface = PageManagedImageView()
+    let cardDemand = PageImageDemandLease()
+    card.attach(cardSurface, demandID: cardDemand.id)
+    cardDemand.bind(to: card, isEnabled: true)
+    let cardImage = try XCTUnwrap(UIImage(systemName: "photo"))
+    card.acceptRetrievedImage(cardImage)
+    XCTAssertNotNil(parent.backdropPreview(for: "card"))
+
+    let backdrop = makeSlot(key: "backdrop", lifecycle: parent, role: .detailBackdrop)
+    let backdropSurface = PageManagedImageView()
+    let backdropDemand = PageImageDemandLease()
+    backdrop.attach(backdropSurface, demandID: backdropDemand.id)
+    backdropDemand.bind(to: backdrop, isEnabled: true)
+    backdrop.acceptRetrievedImage(try XCTUnwrap(UIImage(systemName: "film")))
+    XCTAssertNil(parent.backdropPreview(for: "card"))
+    backdropDemand.cancel()
+    backdrop.detach(backdropSurface)
+
+    coordinator.push(resourceRequest("child"))
+    let preview = try XCTUnwrap(cardSurface.image)
+    XCTAssertTrue(preview === parent.backdropPreview(for: "card"))
+    XCTAssertFalse(preview === cardImage)
+    XCTAssertFalse(card.hasLoadedPageImage)
+
+    parent.setDetailBackdropVisible(false)
+    XCTAssertNil(parent.backdropPreview(for: "card"))
+    XCTAssertNil(cardSurface.image)
   }
 
   func testHidingDetailBackdropClearsAttachedSurfaceAndRejectsLateImage() throws {
