@@ -2,11 +2,6 @@ import Kingfisher
 import SwiftUI
 import UIKit
 
-enum PageImageRole {
-  case content
-  case activePage
-}
-
 /// 卡片共用的可释放图片 surface。
 ///
 /// `PageImageLifecycle` 会直接调用底层 UIImageView 清图，因此被 NavigationStack 隐藏的页面
@@ -22,6 +17,8 @@ struct PageManagedImage: View {
   var role: PageImageRole = .content
   let participatesInPageLifecycle: Bool
   let skipsMemoryCache: Bool
+  var scaleFactor: CGFloat? = nil
+  var alignsImageAtTop = false
   var loadsDiskFileSynchronously = false
   var fadeDuration: TimeInterval = 0.25
   var onSuccess: (() -> Void)?
@@ -35,6 +32,8 @@ struct PageManagedImage: View {
       role: role,
       participatesInPageLifecycle: participatesInPageLifecycle,
       skipsMemoryCache: skipsMemoryCache,
+      scaleFactor: scaleFactor,
+      alignsImageAtTop: alignsImageAtTop,
       loadsDiskFileSynchronously: loadsDiskFileSynchronously,
       fadeDuration: fadeDuration,
       onSuccess: onSuccess,
@@ -55,6 +54,8 @@ private struct PageManagedImageSurface: UIViewRepresentable {
   let role: PageImageRole
   let participatesInPageLifecycle: Bool
   let skipsMemoryCache: Bool
+  let scaleFactor: CGFloat?
+  let alignsImageAtTop: Bool
   let loadsDiskFileSynchronously: Bool
   let fadeDuration: TimeInterval
   let onSuccess: (() -> Void)?
@@ -67,6 +68,9 @@ private struct PageManagedImageSurface: UIViewRepresentable {
     let imageView = PageManagedImageView()
     imageView.contentMode = .scaleAspectFill
     imageView.clipsToBounds = true
+    if role == .detailBackdrop {
+      return PageBackdropImageContainer(imageView: imageView)
+    }
     return imageView
   }
 
@@ -74,7 +78,9 @@ private struct PageManagedImageSurface: UIViewRepresentable {
     _ uiView: UIView,
     context _: UIViewRepresentableContext<PageManagedImageSurface>
   ) {
-    guard let imageView = uiView as? PageManagedImageView else { return }
+    let backdrop = uiView as? PageBackdropImageContainer
+    backdrop?.alignsImageAtTop = alignsImageAtTop
+    guard let imageView = backdrop?.imageView ?? (uiView as? PageManagedImageView) else { return }
     imageView.configure(
       url: url,
       processor: processor,
@@ -84,6 +90,7 @@ private struct PageManagedImageSurface: UIViewRepresentable {
       skipsMemoryCache: skipsMemoryCache,
       loadsDiskFileSynchronously: loadsDiskFileSynchronously,
       fadeDuration: fadeDuration,
+      scaleFactor: scaleFactor,
       onSuccess: onSuccess,
       onFailure: onFailure,
       lifecycle: lifecycle,
@@ -93,7 +100,34 @@ private struct PageManagedImageSurface: UIViewRepresentable {
   }
 
   static func dismantleUIView(_ uiView: UIView, coordinator _: Void) {
-    (uiView as? PageManagedImageView)?.detach()
+    let imageView = (uiView as? PageBackdropImageContainer)?.imageView ?? (uiView as? PageManagedImageView)
+    imageView?.detach()
+  }
+}
+
+/// 海报作为背景时，从画面顶端开始裁切。
+private final class PageBackdropImageContainer: UIView {
+  let imageView: PageManagedImageView
+  var alignsImageAtTop = false {
+    didSet { if alignsImageAtTop != oldValue { setNeedsLayout() } }
+  }
+
+  init(imageView: PageManagedImageView) {
+    self.imageView = imageView
+    super.init(frame: .zero)
+    clipsToBounds = true
+    addSubview(imageView)
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) { nil }
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    imageView.frame = bounds
+    if alignsImageAtTop, let size = imageView.image?.size, size.width > 0 {
+      imageView.frame.size.height = max(bounds.height, size.height * bounds.width / size.width)
+    }
   }
 }
 
@@ -135,10 +169,11 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
 
   private let url: URL
   private let processor: any ImageProcessor
-  private let role: PageImageRole
+  let role: PageImageRole
   private let skipsMemoryCache: Bool
   private let loadsDiskFileSynchronously: Bool
   private let fadeDuration: TimeInterval
+  private let scaleFactor: CGFloat?
   private let performsImageRetrieval: Bool
   private weak var lifecycle: PageImageLifecycle?
   private weak var gridImageController: GridImageLifecycleController?
@@ -148,8 +183,7 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
   private var surfaces: [ObjectIdentifier: WeakPageManagedImageView] = [:]
   private var surfaceDemandIDs: [ObjectIdentifier: UUID] = [:]
   private var demands: [UUID: Bool] = [:]
-  private var contentImagesAllowed = true
-  private var activePageImagesAllowed = true
+  private var pageImageAllowed = true
   private var decodedImage: UIImage?
   private var downloadTask: DownloadTask?
   private var isRetrieving = false
@@ -165,6 +199,7 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
     skipsMemoryCache: Bool,
     loadsDiskFileSynchronously: Bool,
     fadeDuration: TimeInterval,
+    scaleFactor: CGFloat? = nil,
     performsImageRetrieval: Bool = true,
     lifecycle: PageImageLifecycle? = nil
   ) {
@@ -175,6 +210,7 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
     self.skipsMemoryCache = skipsMemoryCache
     self.loadsDiskFileSynchronously = loadsDiskFileSynchronously
     self.fadeDuration = fadeDuration
+    self.scaleFactor = scaleFactor
     self.performsImageRetrieval = performsImageRetrieval
     self.lifecycle = lifecycle
   }
@@ -229,9 +265,8 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
     discardIfUnused()
   }
 
-  func setPageImagePermissions(contentAllowed: Bool, activePageAllowed: Bool) {
-    contentImagesAllowed = contentAllowed
-    activePageImagesAllowed = activePageAllowed
+  func setPageImageAllowed(_ isAllowed: Bool) {
+    pageImageAllowed = isAllowed
     updateLoading()
   }
 
@@ -278,12 +313,18 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
     demands.values.contains(true)
   }
 
+  private var cachesGridImageInMemory: Bool {
+    gridImageController?.usesFocusWindow == false
+  }
+
+  private var shouldLoadImage: Bool {
+    guard isRequested, pageAllowsImage else { return false }
+    // 海报墙的视图回收后，解码图由有容量限制的缓存持有。
+    return !cachesGridImageInMemory || !liveDemandingSurfaces.isEmpty
+  }
+
   private var pageAllowsImage: Bool {
-    let roleAllowed = switch role {
-    case .content: contentImagesAllowed
-    case .activePage: activePageImagesAllowed
-    }
-    guard roleAllowed else { return false }
+    guard pageImageAllowed else { return false }
     guard requiresGridImagePermission else { return true }
     guard let gridImageController, let gridImageListIdentity, let gridImageItemIndex else {
       return false
@@ -296,7 +337,7 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
 
   private func updateLoading() {
     removeDeadSurfaces()
-    guard isRequested, pageAllowsImage else {
+    guard shouldLoadImage else {
       releaseDecodedImage()
       return
     }
@@ -311,7 +352,10 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
     let service = APIService.shared
     var options = service.imageOptions(for: url)
     options.append(.processor(processor))
-    if skipsMemoryCache {
+    if let scaleFactor {
+      options.append(.scaleFactor(scaleFactor))
+    }
+    if skipsMemoryCache && !cachesGridImageInMemory {
       options.append(TransientDecodedImage.skipMemoryCache)
     }
     if loadsDiskFileSynchronously {
@@ -326,7 +370,7 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
         guard let self, requestGeneration == self.generation else { return }
         switch result {
         case .success(let value):
-          self.acceptRetrievedImage(value.image)
+          self.acceptRetrievedImage(value.image, fromMemoryCache: value.cacheType == .memory)
         case .failure:
           self.downloadTask = nil
           self.isRetrieving = false
@@ -338,18 +382,15 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
   }
 
   /// 接收一次有效解码结果。下载回调与状态机测试共用同一生产转换入口。
-  func acceptRetrievedImage(_ image: UIImage) {
+  func acceptRetrievedImage(_ image: UIImage, fromMemoryCache: Bool = false) {
     downloadTask = nil
     isRetrieving = false
     didFail = false
-    guard isRequested, pageAllowsImage else { return }
+    guard shouldLoadImage else { return }
     decodedImage = image
-    renderImageOnSurfaces(image)
-  }
-
-  private func renderImageOnSurfaces(_ image: UIImage) {
+    let imageFadeDuration = cachesGridImageInMemory && fromMemoryCache ? 0 : fadeDuration
     for surface in liveDemandingSurfaces {
-      surface.install(image, fadeDuration: fadeDuration)
+      surface.install(image, fadeDuration: imageFadeDuration)
       surface.notifySuccess(for: key)
     }
   }
@@ -445,6 +486,7 @@ final class PageManagedImageView: UIImageView {
     skipsMemoryCache: Bool,
     loadsDiskFileSynchronously: Bool,
     fadeDuration: TimeInterval,
+    scaleFactor: CGFloat? = nil,
     onSuccess: (() -> Void)?,
     onFailure: (() -> Void)?,
     lifecycle: PageImageLifecycle?,
@@ -467,11 +509,11 @@ final class PageManagedImageView: UIImageView {
 
     let service = APIService.shared
     let source = service.imageSource(for: url)
-    let roleKey = role == .content ? "content" : "active"
     let gridKey = managedGridContext.map {
       "grid:\($0.listIdentity.id.uuidString):\($0.listIdentity.generation):\($0.itemID):\($0.itemIndex)"
     } ?? "grid:none"
-    let key = "\(service.imageConfigurationIdentity)|\(source.cacheKey)|\(processor.identifier)|\(roleKey)|\(gridKey)|disk:\(loadsDiskFileSynchronously)|skip:\(skipsMemoryCache)|fade:\(fadeDuration)"
+    let scaleKey = scaleFactor.map { "\($0)" } ?? "default"
+    let key = "\(service.imageConfigurationIdentity)|\(source.cacheKey)|\(processor.identifier)|\(role.rawValue)|\(gridKey)|disk:\(loadsDiskFileSynchronously)|skip:\(skipsMemoryCache)|fade:\(fadeDuration)|scale:\(scaleKey)"
 
     if slot?.key == key, self.lifecycle === managedLifecycle, self.demandLease === demandLease {
       slot?.setGridImageDemandContext(managedGridContext)
@@ -490,6 +532,7 @@ final class PageManagedImageView: UIImageView {
           skipsMemoryCache: skipsMemoryCache,
           loadsDiskFileSynchronously: loadsDiskFileSynchronously,
           fadeDuration: fadeDuration,
+          scaleFactor: scaleFactor,
           lifecycle: managedLifecycle
         )
       }
@@ -501,7 +544,8 @@ final class PageManagedImageView: UIImageView {
         role: role,
         skipsMemoryCache: skipsMemoryCache,
         loadsDiskFileSynchronously: loadsDiskFileSynchronously,
-        fadeDuration: fadeDuration
+        fadeDuration: fadeDuration,
+        scaleFactor: scaleFactor
       )
     }
     newSlot.setGridImageDemandContext(managedGridContext)
@@ -527,6 +571,7 @@ final class PageManagedImageView: UIImageView {
     layer.removeAllAnimations()
     guard fadeDuration > 0, self.image == nil else {
       self.image = image
+      (superview as? PageBackdropImageContainer)?.setNeedsLayout()
       return
     }
     UIView.transition(

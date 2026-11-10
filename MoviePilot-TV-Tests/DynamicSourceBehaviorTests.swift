@@ -4,10 +4,15 @@ import XCTest
 
 @MainActor
 final class DynamicSourceBehaviorTests: XCTestCase {
-  func testApplicationAppliesKingfisherMemoryCachePolicyAtLaunch() throws {
+  func testApplicationAppliesKingfisherMemoryCachePolicyAtLaunchAndWhenSettingsChangeInSource() throws {
     let appSource = try source("MoviePilot-TV/App/MoviePilot-TVApp.swift")
+    let contentSource = try source("MoviePilot-TV/Views/ContentView.swift")
 
-    XCTAssertTrue(appSource.contains("KingfisherCachePolicy.apply()"))
+    XCTAssertTrue(appSource.contains("KingfisherCachePolicy.apply(memoryOptimizationEnabled: true)"))
+    XCTAssertTrue(containsTrimmedLineSequence(contentSource, [
+      ".onChange(of: memoryOptimization.isEnabled, initial: true) { _, enabled in",
+      "KingfisherCachePolicy.apply(memoryOptimizationEnabled: enabled)",
+    ]))
   }
 
   func testMediaGridEquatableIdentityIncludesImageConfigurationInSource() throws {

@@ -1,13 +1,4 @@
-import Kingfisher
 import SwiftUI
-
-private final class MediaDetailImageLifetime {
-  // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
-  nonisolated deinit {}
-
-  var isBackgroundMounted = true
-  var didReleaseAfterPop = false
-}
 
 /// 详情页「演员 / 职员」合并行当前展示的分类。
 enum MediaDetailCreditKind: String, CaseIterable, Identifiable {
@@ -53,62 +44,53 @@ enum MediaDetailCreditKind: String, CaseIterable, Identifiable {
 private struct MediaDetailBackgroundLayer: View {
   let url: URL?
   let usingPosterAsBackdrop: Bool
+  let showingContentPage: Bool
+  let hidesContentPageBackground: Bool
   var onFailure: ((URL) -> Void)? = nil
-  var onLoaded: ((URL) -> Void)? = nil
+
+  var body: some View {
+    let showsBlurredBackground = showingContentPage && !hidesContentPageBackground
+    image
+      .blur(
+        radius: showsBlurredBackground && !usingPosterAsBackdrop ? MediaDetailBackgroundImage.blurRadius : 0,
+        opaque: true
+      )
+      .opacity(hidesContentPageBackground ? 0 : 1)
+      .animation(.easeInOut(duration: MediaDetailView.contentPageBackgroundFadeDuration), value: showingContentPage)
+      .animation(.easeInOut(duration: MediaDetailView.contentPageBackgroundFadeDuration), value: hidesContentPageBackground)
+      .accessibilityHidden(true)
+  }
 
   @ViewBuilder
-  var body: some View {
+  private var image: some View {
     if let url {
       let size = UIScreen.main.bounds.size
       let screenScale = UIScreen.main.scale
-      backgroundImage(
-        url,
+      PageManagedImage(
+        url: url,
         processor: MediaDetailBackgroundImage.heroProcessor(
           for: size,
           usingPosterAsBackdrop: usingPosterAsBackdrop,
           screenScale: screenScale
         ),
+        isEnabled: true,
+        role: .detailBackdrop,
+        participatesInPageLifecycle: true,
+        skipsMemoryCache: true,
         scaleFactor: MediaDetailBackgroundImage.downsampleScale(
           for: size,
           screenScale: screenScale
         ),
-        alignment: usingPosterAsBackdrop ? .top : .center
+        alignsImageAtTop: usingPosterAsBackdrop,
+        fadeDuration: 0,
+        onFailure: { onFailure?(url) }
       )
+      .frame(width: size.width, height: size.height)
+      .ignoresSafeArea()
     } else {
       Color.gray.opacity(0.3)
         .ignoresSafeArea()
     }
-  }
-
-  private func backgroundImage(
-    _ url: URL,
-    processor: any ImageProcessor,
-    scaleFactor: CGFloat,
-    alignment: Alignment
-  ) -> some View {
-    KFImage.sessionImage(url)
-      .onSuccess { _ in
-        onLoaded?(url)
-      }
-      .onFailure { _ in
-        onFailure?(url)
-      }
-      .placeholder {
-        EmptyView()
-      }
-      .setProcessor(processor)
-      .scaleFactor(scaleFactor)
-      .skippingMemoryCache()
-      .cancelOnDisappear(true)
-      .resizable()
-      .aspectRatio(contentMode: .fill)
-      .frame(
-        width: UIScreen.main.bounds.width,
-        height: UIScreen.main.bounds.height,
-        alignment: alignment
-      )
-      .id("\(url.absoluteString)-\(processor.identifier)")
-      .ignoresSafeArea()
   }
 }
 
@@ -121,6 +103,7 @@ struct MediaDetailView: View {
   @EnvironmentObject private var mediaActionHandler: MediaActionHandler
   @EnvironmentObject private var notificationManager: NotificationManager
   @ObservedObject private var apiService = APIService.shared
+  private var memoryOptimization = MemoryOptimizationSettings()
   /// 预加载任务：订阅状态、TMDB 识别、分季信息的唯一数据源
   @ObservedObject var preloadTask: MediaPreloadTask
   /// 由 ContainerView 传入，当第二页首行内容就绪时回写 true，控制 Loading 遮罩显隐
@@ -135,15 +118,12 @@ struct MediaDetailView: View {
   }
   let allowsRequests: Bool
   @State private var showContentPage = false
+  private var hidesContentPageBackground: Bool { showContentPage && memoryOptimization.isEnabled }
   /// TMDB 跳转动作的同步防重入标记；预识别期间沿用原有 disabled 门禁。
   @State private var isTMDBJumpInFlight = false
   @State private var hasAppeared = false
   @State private var hasRefreshedSubscriptionAfterFullDetail = false
-  @State private var isBackgroundMounted = true
-  @State private var backgroundGeneration = 0
   @State private var didReleaseAfterPop = false
-  @State private var imageLifetime = MediaDetailImageLifetime()
-  @State private var contentPageBackgroundUnmountTask: Task<Void, Never>?
 
   // 订阅相关 UI 状态（弹窗开关，纯 UI 逻辑）
   @State private var sheetSubscribe: Subscribe?
@@ -382,24 +362,6 @@ struct MediaDetailView: View {
 
   nonisolated static let contentPageBackgroundFadeDuration: TimeInterval = 0.4
 
-  static func shouldRefreshBackground(isMounted: Bool, showingContentPage: Bool) -> Bool {
-    !isMounted && !showingContentPage
-  }
-
-  static func shouldUnmountContentPageBackground(
-    fadeElapsed: Bool,
-    showingContentPage: Bool
-  ) -> Bool {
-    fadeElapsed && showingContentPage
-  }
-
-  static func shouldDiscardLoadedBackground(
-    didReleaseAfterPop: Bool,
-    isBackgroundMounted: Bool
-  ) -> Bool {
-    didReleaseAfterPop || !isBackgroundMounted
-  }
-
   var body: some View {
     let backgroundColor = Color(white: 0.1)
 
@@ -407,40 +369,42 @@ struct MediaDetailView: View {
       backgroundColor
         .ignoresSafeArea()
 
-      if isBackgroundMounted, imageLifecycle.keepsActivePageImages,
-        (cachedContent != nil || presentationStyle == .direct),
+      if (cachedContent != nil || presentationStyle == .direct),
         let localBackground = cachedContent?.backgroundURL ?? loadingPosterURL,
         localBackground.isFileURL
       {
         MediaDetailBackgroundLayer(
           url: localBackground, usingPosterAsBackdrop: cachedContent?.backgroundIsPoster ?? true,
+          showingContentPage: showContentPage,
+          hidesContentPageBackground: hidesContentPageBackground,
           onFailure: { _ in cachedBackgroundFailed = true }
         )
-          .opacity(showContentPage ? 0 : 1)
       }
 
-      if isBackgroundMounted && imageLifecycle.keepsActivePageImages,
-        cachedContent == nil,
+      if cachedContent == nil,
         presentationStyle == .standard || (allowsRequests && preloadTask.fullDetail != nil)
       {
         MediaDetailBackgroundLayer(
           url: viewModel.backgroundUrl,
           usingPosterAsBackdrop: viewModel.isUsingPosterAsBackdrop,
+          showingContentPage: showContentPage,
+          hidesContentPageBackground: hidesContentPageBackground,
           onFailure: { failedURL in
             viewModel.useBackgroundFallback(afterFailing: failedURL)
-          },
-          onLoaded: { url in
-            discardLoadedBackgroundIfAbandoned(url: url)
           }
         )
-        .id(backgroundGeneration)
-        .opacity(showContentPage ? 0 : 1)
+        .transition(.opacity)
+      }
+
+      backgroundColor
+        .opacity(showContentPage && !hidesContentPageBackground ? 0.5 : 0)
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
         .animation(
           .easeInOut(duration: Self.contentPageBackgroundFadeDuration),
           value: showContentPage
         )
-        .transition(.opacity)
-      }
 
       // 首屏动态阴影
       ZStack {
@@ -538,7 +502,7 @@ struct MediaDetailView: View {
             .animation(Self.pageTransitionAnimation, value: showContentPage)
             .onChange(of: isHeroFocused) { _, focused in
               guard focused else { return }
-              remountBackgroundForHeroIfNeeded()
+              imageLifecycle.setDetailBackdropVisible(true)
               withAnimation(Self.pageTransitionAnimation) {
                 showContentPage = false
               }
@@ -567,6 +531,7 @@ struct MediaDetailView: View {
       }
     }
     .disabled(!allowsRequests)
+    .environment(\.pageImageLifecycle, imageLifecycle)
     .onChange(of: apiService.imageConfigurationIdentity) { _, _ in
       guard allowsRequests else { return }
       viewModel.refreshBackgroundForImageConfiguration()
@@ -577,29 +542,25 @@ struct MediaDetailView: View {
       // 取消防抖任务，防止视图消失后仍发起无意义的预加载请求
       recommendPreloadDebounce?.cancel()
       similarPreloadDebounce?.cancel()
-      contentPageBackgroundUnmountTask?.cancel()
-      contentPageBackgroundUnmountTask = nil
       handleRouteRemovalIfNeeded()
     }
     .onAppear {
       handleRouteRemovalIfNeeded()
-      remountBackgroundIfNeeded()
     }
-    .onChange(of: showContentPage) { _, showingContent in
-      contentPageBackgroundUnmountTask?.cancel()
-      contentPageBackgroundUnmountTask = nil
-      if showingContent {
-        scheduleUnmountBackgroundAfterContentPageFade()
-      } else {
-        remountBackgroundIfNeeded()
+    .task(id: hidesContentPageBackground) {
+      if hidesContentPageBackground {
+        try? await Task.sleep(for: .seconds(Self.contentPageBackgroundFadeDuration))
       }
+      guard !Task.isCancelled else { return }
+      imageLifecycle.setDetailBackdropVisible(!hidesContentPageBackground)
     }
-    .onChange(of: imageLifecycle.keepsActivePageImages) { _, keepsBackground in
-      if keepsBackground {
-        remountBackgroundIfNeeded()
-      } else {
-        unmountBackgroundForNavigation()
-      }
+    .onChange(of: imageLifecycle.keepsDetailBackdrop, initial: true) { _, keepsBackground in
+      apiService.mediaPreloader.setHeroPresented(
+        keepsBackground && !imageLifecycle.isRemoved,
+        for: viewModel.detail,
+        owner: routeID,
+        size: UIScreen.main.bounds.size
+      )
     }
     .onChange(of: imageLifecycle.isRemoved) { _, removed in
       if removed {
@@ -790,89 +751,9 @@ struct MediaDetailView: View {
     navigationCoordinator.push(media)
   }
 
-  private func releaseBackground() {
-    contentPageBackgroundUnmountTask?.cancel()
-    contentPageBackgroundUnmountTask = nil
-    guard isBackgroundMounted else { return }
-    isBackgroundMounted = false
-    imageLifetime.isBackgroundMounted = false
-    let size = UIScreen.main.bounds.size
-    let screenScale = UIScreen.main.scale
-    APIService.shared.mediaPreloader.setHeroPresented(
-      false,
-      for: viewModel.detail,
-      owner: routeID,
-      size: size,
-      screenScale: screenScale,
-    )
-  }
-
-  private func discardLoadedBackgroundIfAbandoned(url: URL) {
-    APIService.shared.mediaPreloader.discardLoadedBackgroundIfAbandoned(
-      url: url,
-      detail: viewModel.detail,
-      usingPosterAsBackdrop: viewModel.isUsingPosterAsBackdrop,
-      isAbandoned: Self.shouldDiscardLoadedBackground(
-        didReleaseAfterPop: imageLifetime.didReleaseAfterPop,
-        isBackgroundMounted: imageLifetime.isBackgroundMounted
-      ),
-      size: UIScreen.main.bounds.size
-    )
-  }
-
-  private func remountBackgroundIfNeeded() {
-    guard !imageLifecycle.isRemoved,
-      imageLifecycle.keepsActivePageImages,
-      !showContentPage
-    else { return }
-    APIService.shared.mediaPreloader.setHeroPresented(
-      true,
-      for: viewModel.detail,
-      owner: routeID,
-      size: UIScreen.main.bounds.size
-    )
-    guard Self.shouldRefreshBackground(
-      isMounted: isBackgroundMounted,
-      showingContentPage: showContentPage
-    ) else { return }
-    remountBackgroundForHeroIfNeeded()
-  }
-
-  /// 回到 Hero 时先挂上透明背景，再随 showContentPage 淡入。
-  private func remountBackgroundForHeroIfNeeded() {
-    guard !isBackgroundMounted else { return }
-    backgroundGeneration &+= 1
-    isBackgroundMounted = true
-    imageLifetime.isBackgroundMounted = true
-  }
-
-  /// 下滑淡出结束后再卸背景，避免动画中途突然消失。
-  private func scheduleUnmountBackgroundAfterContentPageFade() {
-    contentPageBackgroundUnmountTask = Task { @MainActor in
-      try? await Task.sleep(for: .seconds(Self.contentPageBackgroundFadeDuration))
-      guard
-        !Task.isCancelled,
-        Self.shouldUnmountContentPageBackground(
-          fadeElapsed: true,
-          showingContentPage: showContentPage
-        )
-      else { return }
-      unmountBackgroundForContentPage()
-    }
-  }
-
-  private func unmountBackgroundForContentPage() {
-    releaseBackground()
-  }
-
-  private func unmountBackgroundForNavigation() {
-    releaseBackground()
-  }
-
   private func handleRouteRemovalIfNeeded() {
     guard imageLifecycle.isRemoved, !didReleaseAfterPop else { return }
     didReleaseAfterPop = true
-    imageLifetime.didReleaseAfterPop = true
     viewModel.cancelForPop()
   }
 

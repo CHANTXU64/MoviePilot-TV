@@ -24,6 +24,7 @@ struct SystemView: View {
   @StateObject private var logViewerViewModel: LogViewerViewModel
   @StateObject private var mediaSources = MediaSourceOptionsModel()
   @ObservedObject private var apiService: APIService
+  private var memoryOptimization: MemoryOptimizationSettings
   @EnvironmentObject private var topShelfManager: TopShelfManager
   @State private var showAppInfo = false
   @State private var selectedDetail: SystemSettingsDetailItem?
@@ -38,6 +39,7 @@ struct SystemView: View {
   init(isSelected: Bool = true, apiService: APIService = .shared, initialPage: SystemSettingsPage = .root) {
     self.isSelected = isSelected
     self.apiService = apiService
+    memoryOptimization = MemoryOptimizationSettings(apiService: apiService)
     _topShelfExplore = StateObject(wrappedValue: ExploreViewModel(apiService: apiService, loadsResults: false))
     _viewModel = StateObject(wrappedValue: SystemViewModel(apiService: apiService))
     _recommendViewModel = StateObject(wrappedValue: RecommendViewModel(selectShelf: false, apiService: apiService))
@@ -234,6 +236,8 @@ struct SystemView: View {
                 if canConfigureRecommendations {
                   mediaSourceSelectionPage
                 }
+              case .memoryOptimization:
+                memoryOptimizationPage
               case .siteSelection:
                 if canConfigureSearch {
                   siteSelectionPage
@@ -379,6 +383,19 @@ struct SystemView: View {
         )
         .font(.body.bold())
         .focused($focusedItem, equals: .waitBackgroundImage)
+      }
+
+      section("性能") {
+        Button {
+          push(.memoryOptimization)
+        } label: {
+          row(
+            "内存优化",
+            value: memoryOptimizationTitle(for: memoryOptimization.mode),
+            showsDisclosure: true
+          )
+        }
+        .focused($focusedItem, equals: .memoryOptimization)
       }
 
       if canConfigureSearch {
@@ -911,6 +928,28 @@ struct SystemView: View {
     }
   }
 
+  private var memoryOptimizationPage: some View {
+    section("内存优化") {
+      ForEach(MemoryOptimizationMode.allCases) { mode in
+        Button {
+          memoryOptimization.mode = mode
+        } label: {
+          row(
+            memoryOptimizationTitle(for: mode),
+            value: memoryOptimization.mode == mode ? "已选择" : nil
+          )
+        }
+        .accessibilityAddTraits(memoryOptimization.mode == mode ? .isSelected : [])
+        .focused($focusedItem, equals: .memoryOptimizationMode(mode))
+      }
+    }
+  }
+
+  private func memoryOptimizationTitle(for mode: MemoryOptimizationMode) -> String {
+    guard mode == .automatic else { return mode.title }
+    return "自动（\(memoryOptimization.automaticIsEnabled ? "开启" : "关闭")）"
+  }
+
   private var versionRequirementValue: String {
     if viewModel.isCheckingBackendVersion { return "正在检查" }
     if viewModel.backendVersionCheckFailed { return "检查失败，按下重试" }
@@ -1044,6 +1083,8 @@ struct SystemView: View {
       target = .changelog
     case .mediaSourceSelection:
       target = .mediaSourceSelection
+    case .memoryOptimization:
+      target = .memoryOptimization
     case .siteSelection:
       target = .siteSelection
     case .subtitleSiteSelection:
@@ -1079,6 +1120,8 @@ struct SystemView: View {
       target = AppChangelog.latest.map { .changelogVersion($0.version) } ?? .changelog
     case .mediaSourceSelection:
       target = .defaultMediaSource
+    case .memoryOptimization:
+      target = .memoryOptimizationMode(memoryOptimization.mode)
     case .siteSelection:
       target = .allSites
     case .subtitleSiteSelection:
@@ -1118,7 +1161,7 @@ struct SystemView: View {
     switch route.last {
     case .softFilter:
       return .softFilterNone
-    case .root, .connection, .changelog, .logs, .mediaSourceSelection, .siteSelection,
+    case .root, .connection, .changelog, .logs, .mediaSourceSelection, .memoryOptimization, .siteSelection,
       .subtitleSiteSelection, .hardFilter, .playback,
       .recommendation, .topShelfSelection, .topShelfRecommendations, .topShelfExplore,
       .topShelfExploreSources, .topShelfExploreField, .none:
@@ -1130,7 +1173,7 @@ struct SystemView: View {
     switch route.last {
     case .softFilter:
       return .softFilterRule(ruleId)
-    case .root, .connection, .changelog, .logs, .mediaSourceSelection, .siteSelection,
+    case .root, .connection, .changelog, .logs, .mediaSourceSelection, .memoryOptimization, .siteSelection,
       .subtitleSiteSelection, .hardFilter, .playback,
       .recommendation, .topShelfSelection, .topShelfRecommendations, .topShelfExplore,
       .topShelfExploreSources, .topShelfExploreField, .none:
@@ -1201,6 +1244,8 @@ struct SystemView: View {
         return "进入媒体详情页前的加载动画会等待背景海报就绪实现平滑过渡，网络较慢时可关闭以更快进入详情页。（只影响 TV 端）"
       case .playbackSettings:
         return "设置应用内播放、首页点击行为和自动播放下一集。（只影响 TV 端）"
+      case .memoryOptimization:
+        return memoryOptimizationDescription
       case .preloadTMDBDetails:
         return "进入豆瓣、Bangumi 或 AniList 详情页并识别到对应 TMDB 条目后，提前加载其详情，以缩短后续跳转等待时间。（只影响 TV 端）"
       case .mediaSourceSelection:
@@ -1232,7 +1277,7 @@ struct SystemView: View {
         .topShelfModeRecommendation, .topShelfModeExplore, .topShelfExploreSource,
         .topShelfExploreField, .topShelfExploreOption, .topShelfExploreSourceOption,
         .topShelfExploreSave, .topShelfExploreReset, .logRecording, .logDownRedirector, .logLevelFilter,
-        .homeMediaTapPlaysInApp, .inAppPlayback, .autoPlayNextEpisode,
+        .homeMediaTapPlaysInApp, .inAppPlayback, .autoPlayNextEpisode, .memoryOptimizationMode,
         .logTimeFilter:
         break
       }
@@ -1272,6 +1317,8 @@ struct SystemView: View {
       return "查看本机保存的应用日志，可按级别和时间筛选，最长保留 7 天。"
     case .mediaSourceSelection:
       return "设置聚合搜索默认使用的媒体来源。（只影响 TV 端）"
+    case .memoryOptimization:
+      return memoryOptimizationDescription
     case .siteSelection:
       return "设置资源搜索默认使用的站点。（只影响 TV 端）"
     case .subtitleSiteSelection:
@@ -1289,6 +1336,10 @@ struct SystemView: View {
     case .playback:
       return "设置应用内播放。（只影响 TV 端）"
     }
+  }
+
+  private var memoryOptimizationDescription: String {
+    "应用内播放可用且已开启时，自动关闭内存优化。"
   }
 
   private func filterRulePreviewDescription(for ruleId: String) -> String {
@@ -1359,6 +1410,7 @@ enum SystemSettingsPage: Hashable {
   case changelog
   case logs
   case mediaSourceSelection
+  case memoryOptimization
   case siteSelection
   case subtitleSiteSelection
   case hardFilter
@@ -1382,6 +1434,8 @@ enum SystemSettingsFocus: Hashable {
   case logLevelFilter
   case logTimeFilter
   case mediaSourceSelection
+  case memoryOptimization
+  case memoryOptimizationMode(MemoryOptimizationMode)
   case defaultMediaSource
   case mediaSource(MediaSearchSource)
   case siteSelection

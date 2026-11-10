@@ -210,9 +210,11 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// 当前会话能否在应用内播放：管理员、后端版本支持、设置里没关。各入口另外判断媒体类型和服务器。
   private var allowsPlayback: Bool {
     guard let apiService else { return false }
-    return apiService.canRequestSuperUserEndpoints
-      && InAppPlaybackAvailability.isEnabled(
-        backendVersion: apiService.settings?.BACKEND_VERSION, userEnabled: isEnabledInSettings())
+    return InAppPlaybackAvailability.isEnabledForSession(
+      canRequestSuperUserEndpoints: apiService.canRequestSuperUserEndpoints,
+      backendVersion: apiService.settings?.BACKEND_VERSION,
+      userEnabled: isEnabledInSettings()
+    )
   }
 
   func play(_ target: PlaybackTarget) {

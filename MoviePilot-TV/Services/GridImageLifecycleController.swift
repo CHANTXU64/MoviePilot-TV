@@ -72,10 +72,12 @@ final class GridImageLifecycleController: ObservableObject, PageImageStackObserv
     let listIdentity: GridListIdentity
     let itemCount: Int
     let activation: Activation
+    let usesFocusWindow: Bool
   }
 
   private(set) var activation: Activation = .disarmed
   private(set) var listIdentity: GridListIdentity
+  private(set) var usesFocusWindow = true
   var listID: UUID { listIdentity.id }
 
   private var itemIDs: [MediaInfo.ID]
@@ -193,6 +195,13 @@ final class GridImageLifecycleController: ObservableObject, PageImageStackObserv
     )
   }
 
+  func setUsesFocusWindow(_ enabled: Bool) {
+    guard usesFocusWindow != enabled else { return }
+    let previousPermissions = permissionSnapshot
+    usesFocusWindow = enabled
+    notifyResources(changedFrom: previousPermissions)
+  }
+
   func register(
     _ resource: any GridImageDemandResource,
     listIdentity resourceIdentity: GridListIdentity,
@@ -255,7 +264,8 @@ final class GridImageLifecycleController: ObservableObject, PageImageStackObserv
     PermissionSnapshot(
       listIdentity: listIdentity,
       itemCount: itemIDs.count,
-      activation: activation
+      activation: activation,
+      usesFocusWindow: usesFocusWindow
     )
   }
 
@@ -288,7 +298,7 @@ final class GridImageLifecycleController: ObservableObject, PageImageStackObserv
         itemIndex: resource.itemIndex,
         snapshot: currentPermissions
       )
-      if wasAllowed != isAllowed {
+      if wasAllowed != isAllowed || previousPermissions.usesFocusWindow != usesFocusWindow {
         resource.value?.gridImageDemandPermissionDidChange()
       }
     }
@@ -303,6 +313,8 @@ final class GridImageLifecycleController: ObservableObject, PageImageStackObserv
       snapshot.itemCount > 0,
       (0..<snapshot.itemCount).contains(itemIndex)
     else { return false }
+
+    if !snapshot.usesFocusWindow { return snapshot.activation != .disarmed }
 
     switch snapshot.activation {
     case .disarmed:

@@ -41,15 +41,6 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains("_TSK"))
   }
 
-  func testSystemViewDoesNotExposeLegacyMemoryOptimizationSetting() throws {
-    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/SystemView.swift")
-    let contentSource = try Self.source(at: "MoviePilot-TV/ViewModels/ContentViewModel.swift")
-
-    XCTAssertFalse(source.contains("memoryOptimization"))
-    XCTAssertFalse(source.contains("内存优化"))
-    XCTAssertFalse(contentSource.contains("MemoryOptimization"))
-  }
-
   func testBackendVersionObserverDefersInitialSessionReplayUntilStartup() throws {
     let source = try Self.source(at: "MoviePilot-TV/ViewModels/ContentViewModel.swift")
     let sessionPublisher = try XCTUnwrap(source.range(of: "apiService.$session"))
@@ -821,15 +812,11 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(source.contains(".frame(minHeight: UIScreen.main.bounds.height, alignment: .top)"))
   }
 
-  func testMediaDetailNavigationUsesUnifiedImageLifecycle() throws {
+  func testMediaDetailNavigationUsesUnifiedImageLifecycleInSource() throws {
     let detailSource = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
     let menuSource = try Self.source(at: "MoviePilot-TV/Views/Components/MediaContextMenu.swift")
 
     XCTAssertTrue(detailSource.contains("@ObservedObject var imageLifecycle: PageImageLifecycle"))
-    XCTAssertTrue(
-      detailSource.contains(".onChange(of: imageLifecycle.keepsActivePageImages)")
-    )
-    XCTAssertTrue(detailSource.contains("unmountBackgroundForNavigation()"))
     XCTAssertTrue(detailSource.contains("navigationCoordinator.push(destination)"))
     XCTAssertTrue(menuSource.contains("navigationCoordinator.push(item)"))
     XCTAssertFalse(detailSource.contains("navigationPath.count"))
@@ -889,36 +876,6 @@ final class SystemViewDefaultStyleTests: XCTestCase {
     XCTAssertFalse(
       source.contains("loadsImage: !isReady && imageLifecycle.keepsActivePageImages")
     )
-  }
-
-  func testMediaDetailDoesNotLoadBackgroundOnContentPageUntilHero() throws {
-    let source = try Self.source(at: "MoviePilot-TV/Views/Pages/MediaDetailView.swift")
-
-    XCTAssertNotNil(source.range(
-      of: #"if isBackgroundMounted && imageLifecycle.keepsActivePageImages\s*[{,]"#,
-      options: .regularExpression
-    ))
-    XCTAssertFalse(
-      source.contains("shouldShowBackground(isMounted: isBackgroundMounted, showingContentPage:")
-    )
-    XCTAssertTrue(source.contains(".opacity(showContentPage ? 0 : 1)"))
-    XCTAssertTrue(source.contains("scheduleUnmountBackgroundAfterContentPageFade()"))
-    XCTAssertTrue(
-      source.contains("try? await Task.sleep(for: .seconds(Self.contentPageBackgroundFadeDuration))")
-    )
-    XCTAssertTrue(source.contains("remountBackgroundForHeroIfNeeded()"))
-    XCTAssertTrue(
-      containsTokensInOrder(
-        source,
-        [
-          "remountBackgroundForHeroIfNeeded()",
-          "withAnimation(Self.pageTransitionAnimation) {",
-          "showContentPage = false",
-        ]
-      )
-    )
-    XCTAssertTrue(source.contains("imageLifecycle.keepsActivePageImages,"))
-    XCTAssertTrue(source.contains("!showContentPage"))
   }
 
   func testSystemViewModelRechecksPermissionBeforePublishingCustomRules() throws {

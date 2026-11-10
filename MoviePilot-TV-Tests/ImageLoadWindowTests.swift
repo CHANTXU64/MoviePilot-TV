@@ -184,7 +184,7 @@ final class ImageLoadWindowTests: XCTestCase {
     imageView.layer.add(CABasicAnimation(keyPath: "opacity"), forKey: "fade")
 
     XCTAssertNotNil(imageView.image)
-    slot.setPageImagePermissions(contentAllowed: false, activePageAllowed: false)
+    slot.setPageImageAllowed(false)
 
     XCTAssertNil(imageView.image)
     XCTAssertNil(imageView.layer.contents)
@@ -347,7 +347,7 @@ final class ImageLoadWindowTests: XCTestCase {
     demandLease.bind(to: slot, isEnabled: true)
 
     XCTAssertEqual(slot.retrievalStartCount, 1)
-    slot.setPageImagePermissions(contentAllowed: false, activePageAllowed: false)
+    slot.setPageImageAllowed(false)
     demandLease.cancel()
   }
 
@@ -646,6 +646,74 @@ final class ImageLoadWindowTests: XCTestCase {
     XCTAssertFalse(lifecycle.keepsContentImages)
   }
 
+  func testPopWaitsForOutgoingDetailBackdropBeforeRestoringParent() async throws {
+    let coordinator = ImageNavigationCoordinator(
+      apiService: .testingInstance(), removedLifecycleRetention: .milliseconds(40)
+    )
+    coordinator.setStackForeground(true)
+    let parent = coordinator.lifecycle(for: coordinator.push(resourceRequest("parent")))
+    let parentBackdrop = makeSlot(key: "parent", lifecycle: parent, role: .detailBackdrop)
+    let parentSurface = PageManagedImageView()
+    let parentDemand = PageImageDemandLease()
+    parentBackdrop.attach(parentSurface, demandID: parentDemand.id)
+    parentDemand.bind(to: parentBackdrop, isEnabled: true)
+    parent.setDetailBackdropVisible(true)
+    let image = try XCTUnwrap(UIImage(systemName: "film"))
+    parentBackdrop.acceptRetrievedImage(image)
+    XCTAssertTrue(parentSurface.image === image)
+
+    let child = coordinator.lifecycle(for: coordinator.push(resourceRequest("child")))
+    XCTAssertNil(parentSurface.image)
+    XCTAssertFalse(parentBackdrop.hasLoadedPageImage)
+    let childBackdrop = makeSlot(key: "child", lifecycle: child, role: .detailBackdrop)
+    let childSurface = PageManagedImageView()
+    let childDemand = PageImageDemandLease()
+    childBackdrop.attach(childSurface, demandID: childDemand.id)
+    childDemand.bind(to: childBackdrop, isEnabled: true)
+    child.setDetailBackdropVisible(true)
+    childBackdrop.acceptRetrievedImage(image)
+
+    coordinator.path.removeLast()
+    XCTAssertTrue(parent.keepsActivePageImages)
+    XCTAssertEqual(parentBackdrop.retrievalStartCount, 1)
+    XCTAssertTrue(childSurface.image === image)
+
+    await waitUntil("returning backdrop to start after child cleanup") {
+      parentBackdrop.retrievalStartCount == 2
+    }
+    XCTAssertNil(childSurface.image)
+    XCTAssertNil(childSurface.layer.contents)
+    XCTAssertFalse(childBackdrop.hasLoadedPageImage)
+  }
+
+  func testHidingDetailBackdropClearsAttachedSurfaceAndRejectsLateImage() throws {
+    let coordinator = ImageNavigationCoordinator(apiService: .testingInstance())
+    coordinator.setStackForeground(true)
+    let lifecycle = coordinator.lifecycle(for: coordinator.push(resourceRequest("detail")))
+    let backdrop = makeSlot(key: "detail", lifecycle: lifecycle, role: .detailBackdrop)
+    let surface = PageManagedImageView()
+    let demand = PageImageDemandLease()
+    backdrop.attach(surface, demandID: demand.id)
+    demand.bind(to: backdrop, isEnabled: true)
+    lifecycle.setDetailBackdropVisible(true)
+    let image = try XCTUnwrap(UIImage(systemName: "film"))
+    backdrop.acceptRetrievedImage(image)
+    surface.layer.contents = image.cgImage
+    XCTAssertTrue(surface.image === image)
+
+    lifecycle.setDetailBackdropVisible(false)
+    backdrop.acceptRetrievedImage(image)
+    XCTAssertTrue(lifecycle.keepsActivePageImages)
+    XCTAssertNil(surface.image)
+    XCTAssertNil(surface.layer.contents)
+    XCTAssertFalse(backdrop.hasLoadedPageImage)
+
+    lifecycle.setDetailBackdropVisible(true)
+    XCTAssertEqual(backdrop.retrievalStartCount, 2)
+    backdrop.acceptRetrievedImage(image)
+    XCTAssertTrue(surface.image === image)
+  }
+
   func testSameMediaUsesIndependentRouteOwnersAcrossStacks() {
     let preloadService = APIService.testingInstance()
     defer { withExtendedLifetime(preloadService) {} }
@@ -742,13 +810,17 @@ final class ImageLoadWindowTests: XCTestCase {
     try? await Task.sleep(for: duration)
   }
 
-  private func makeSlot(key: String, lifecycle: PageImageLifecycle) -> PageImageSlot {
+  private func makeSlot(
+    key: String,
+    lifecycle: PageImageLifecycle,
+    role: PageImageRole = .content
+  ) -> PageImageSlot {
     lifecycle.retainedImageResource(for: key) {
       PageImageSlot(
         key: key,
         url: URL(string: "https://example.invalid/\(key).jpg")!,
         processor: DownsamplingImageProcessor(size: CGSize(width: 100, height: 150)),
-        role: .content,
+        role: role,
         skipsMemoryCache: true,
         loadsDiskFileSynchronously: false,
         fadeDuration: 0,
@@ -761,7 +833,7 @@ final class ImageLoadWindowTests: XCTestCase {
 
 @MainActor
 private final class ImageResourceProbe: PageImageResource {
-  private let role: PageImageRole
+  let role: PageImageRole
   private(set) var isLoaded = false
 
   init(role: PageImageRole) {
@@ -772,12 +844,7 @@ private final class ImageResourceProbe: PageImageResource {
     isLoaded
   }
 
-  func setPageImagePermissions(contentAllowed: Bool, activePageAllowed: Bool) {
-    switch role {
-    case .content:
-      isLoaded = contentAllowed
-    case .activePage:
-      isLoaded = activePageAllowed
-    }
+  func setPageImageAllowed(_ isAllowed: Bool) {
+    isLoaded = isAllowed
   }
 }

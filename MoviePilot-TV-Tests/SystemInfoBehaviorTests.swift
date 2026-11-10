@@ -154,6 +154,45 @@ extension SystemSessionBehaviorTests {
     XCTAssertFalse(viewModel.autoPlayNextEpisode)
   }
 
+  func testAutomaticMemoryOptimizationFollowsPlaybackAvailableToCurrentSession() {
+    let defaults = UserDefaults.standard
+    let modeKey = MemoryOptimizationSettings.modeKey
+    let playbackKey = PlaybackPreferences.inAppPlaybackKey
+    let originalMode = defaults.object(forKey: modeKey)
+    let originalPlayback = defaults.object(forKey: playbackKey)
+    defer {
+      defaults.set(originalMode, forKey: modeKey)
+      defaults.set(originalPlayback, forKey: playbackKey)
+    }
+
+    let service = APIService.isolatedTestingInstance()
+    service.currentUserForTesting = superUserToken()
+    service.settings = GlobalSettings(BACKEND_VERSION: "v3.2.5")
+    defaults.removeObject(forKey: playbackKey)
+    let settings = MemoryOptimizationSettings(apiService: service)
+    settings.mode = .automatic
+    XCTAssertTrue(PlaybackPreferences.isInAppPlaybackEnabled)
+    XCTAssertTrue(settings.automaticIsEnabled)
+    XCTAssertTrue(settings.isEnabled)
+
+    for version in [nil, "custom", "v3.2.6", "v3.2.6-1"] {
+      service.settings = GlobalSettings(BACKEND_VERSION: version)
+      XCTAssertEqual(settings.isEnabled, version == nil || version == "custom")
+    }
+    PlaybackPreferences.setInAppPlaybackEnabled(false)
+    XCTAssertTrue(settings.isEnabled)
+    PlaybackPreferences.setInAppPlaybackEnabled(true)
+    XCTAssertFalse(settings.isEnabled)
+
+    settings.mode = .enabled
+    XCTAssertTrue(settings.isEnabled)
+    settings.mode = .automatic
+    service.currentUserForTesting = nonManageToken()
+    XCTAssertTrue(settings.isEnabled)
+    settings.mode = .disabled
+    XCTAssertFalse(settings.isEnabled)
+  }
+
   func testLoadSystemInfoUsesPublicBackendVersionForManageNonSuperuser() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SystemInfoURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SystemInfoURLProtocol.self) }

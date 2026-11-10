@@ -1051,34 +1051,6 @@ class MediaPreloader: ObservableObject {
     releasePresentedHero(owner: owner, size: size, screenScale: screenScale, imageCache: imageCache)
   }
 
-  func discardLoadedBackgroundIfAbandoned(
-    url: URL,
-    detail: MediaInfo,
-    usingPosterAsBackdrop: Bool,
-    isAbandoned: Bool,
-    size: CGSize,
-    screenScale: CGFloat = UIScreen.main.scale,
-    imageCache: ImageCache = .default
-  ) {
-    guard let apiService else { return }
-    guard isAbandoned, presentedHeroOwners[detail.id]?.isEmpty != false else { return }
-    let cacheKey = apiService.imageSource(for: url).cacheKey
-    MediaDetailBackgroundImage.removeHeroFromMemory(
-      for: url,
-      size: size,
-      usingPosterAsBackdrop: usingPosterAsBackdrop,
-      screenScale: screenScale,
-      cacheKey: cacheKey,
-      cache: imageCache
-    )
-    removeBackgroundTargetHeroesFromMemory(
-      for: detail,
-      size: size,
-      screenScale: screenScale,
-      imageCache: imageCache
-    )
-  }
-
   /// 通过 mediaId（如 "tmdb:123"）查找对应的预加载任务。
   /// 用于 SubscribeSheet 关闭后回写订阅状态。
   func findTask(byMediaId mediaId: String) -> MediaPreloadTask? {

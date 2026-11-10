@@ -302,58 +302,23 @@ final class MPImageWarmerTests: XCTestCase {
     XCTAssertTrue(Self.skipsMemoryCache(parsed.memoryCacheExpiration))
   }
 
-  func testDefaultKingfisherMemoryCachePolicyUses250MiBForFiveMinutes() {
+  func testKingfisherMemoryCachePolicyChangesLimitOnExistingCache() {
     let cache = ImageCache(name: "memory-cache-policy-\(UUID().uuidString)")
     defer {
       cache.clearMemoryCache()
       cache.clearDiskCache()
     }
 
-    KingfisherCachePolicy.apply(to: cache)
+    KingfisherCachePolicy.apply(memoryOptimizationEnabled: false, to: cache)
 
+    XCTAssertEqual(cache.memoryStorage.config.totalCostLimit, 300 * 1024 * 1024)
+    KingfisherCachePolicy.apply(memoryOptimizationEnabled: true, to: cache)
     XCTAssertEqual(cache.memoryStorage.config.totalCostLimit, 250 * 1024 * 1024)
     guard case .seconds(let seconds) = cache.memoryStorage.config.expiration else {
       XCTFail("Expected a seconds-based memory cache expiration")
       return
     }
     XCTAssertEqual(seconds, 300)
-  }
-
-  func testBackgroundAppearanceRefreshesOnlyUnmountedHeroPage() {
-    XCTAssertTrue(
-      MediaDetailView.shouldRefreshBackground(isMounted: false, showingContentPage: false)
-    )
-    XCTAssertFalse(
-      MediaDetailView.shouldRefreshBackground(isMounted: true, showingContentPage: false)
-    )
-    XCTAssertFalse(
-      MediaDetailView.shouldRefreshBackground(isMounted: false, showingContentPage: true)
-    )
-    XCTAssertFalse(
-      MediaDetailView.shouldRefreshBackground(isMounted: true, showingContentPage: true)
-    )
-  }
-
-  func testContentPageKeepsBackgroundUntilFadeCompletes() {
-    XCTAssertEqual(MediaDetailView.contentPageBackgroundFadeDuration, 0.4)
-    XCTAssertFalse(
-      MediaDetailView.shouldUnmountContentPageBackground(
-        fadeElapsed: false,
-        showingContentPage: true
-      )
-    )
-    XCTAssertTrue(
-      MediaDetailView.shouldUnmountContentPageBackground(
-        fadeElapsed: true,
-        showingContentPage: true
-      )
-    )
-    XCTAssertFalse(
-      MediaDetailView.shouldUnmountContentPageBackground(
-        fadeElapsed: true,
-        showingContentPage: false
-      )
-    )
   }
 
   func testDetailHeroDownsamplesToTwoKLongEdge() {
@@ -574,27 +539,6 @@ final class MPImageWarmerTests: XCTestCase {
     XCTAssertNotEqual(task.imageRetrieveGeneration, generation)
   }
 
-  func testShouldDiscardLoadedBackgroundWhenPoppedOrUnmounted() {
-    XCTAssertFalse(
-      MediaDetailView.shouldDiscardLoadedBackground(
-        didReleaseAfterPop: false,
-        isBackgroundMounted: true
-      )
-    )
-    XCTAssertTrue(
-      MediaDetailView.shouldDiscardLoadedBackground(
-        didReleaseAfterPop: true,
-        isBackgroundMounted: true
-      )
-    )
-    XCTAssertTrue(
-      MediaDetailView.shouldDiscardLoadedBackground(
-        didReleaseAfterPop: false,
-        isBackgroundMounted: false
-      )
-    )
-  }
-
   func testLoadingPosterProcessorIsDistinctFromCardPoster() {
     let loading = MediaDetailLoadingPoster.processor
     let card = MediaCard.posterProcessor(for: MediaCard.defaultPosterSize)
@@ -741,78 +685,6 @@ final class MPImageWarmerTests: XCTestCase {
       ),
       .memory,
       "同一张海报的卡片尺寸应保留，只清加载遮罩那一档"
-    )
-  }
-
-  func testAbandonedForegroundHeroIsRemovedOnLateCompletion() async throws {
-    let sharedService = APIService.shared
-    let snapshot = SystemSessionServiceSnapshot.capture(service: sharedService)
-    defer { snapshot.restore(to: sharedService) }
-    sharedService.useImageCache = false
-
-    let preloadService = APIService.testingInstance()
-    defer { withExtendedLifetime(preloadService) {} }
-    let preloader = preloadService.mediaPreloader
-    defer { preloader.clearAll() }
-    let cache = ImageCache(name: "abandoned-hero-\(UUID().uuidString)")
-    defer {
-      cache.clearMemoryCache()
-      cache.clearDiskCache()
-    }
-
-    let media = MediaInfo(
-      tmdb_id: 760_201,
-      title: "晚到背景",
-      poster_path: nil,
-      backdrop_path: "https://example.com/late-hero.jpg"
-    )
-    let url = try XCTUnwrap(media.imageURLs.backdrop)
-    let size = CGSize(width: 32, height: 18)
-    let processor = MediaDetailBackgroundImage.heroProcessor(
-      for: size,
-      usingPosterAsBackdrop: false,
-      screenScale: UIScreen.main.scale
-    )
-    let image = UIGraphicsImageRenderer(size: size).image { context in
-      UIColor.red.setFill()
-      context.cgContext.fill(CGRect(origin: .zero, size: size))
-    }
-    try await cache.store(
-      image,
-      forKey: url.cacheKey,
-      processorIdentifier: processor.identifier
-    )
-
-    preloader.discardLoadedBackgroundIfAbandoned(
-      url: url,
-      detail: media,
-      usingPosterAsBackdrop: false,
-      isAbandoned: false,
-      size: size,
-      imageCache: cache
-    )
-    XCTAssertEqual(
-      cache.imageCachedType(
-        forKey: url.cacheKey,
-        processorIdentifier: processor.identifier
-      ),
-      .memory
-    )
-
-    preloader.discardLoadedBackgroundIfAbandoned(
-      url: url,
-      detail: media,
-      usingPosterAsBackdrop: false,
-      isAbandoned: true,
-      size: size,
-      imageCache: cache
-    )
-    XCTAssertEqual(
-      cache.imageCachedType(
-        forKey: url.cacheKey,
-        processorIdentifier: processor.identifier
-      ),
-      .disk
     )
   }
 
