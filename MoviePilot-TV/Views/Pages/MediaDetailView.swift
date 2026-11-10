@@ -869,6 +869,8 @@ struct MediaDetailView: View {
     }
   }
 
+  // Xcode 27.2 的 Release 优化器内联此判断时可能触发 SIL 校验崩溃。
+  @inline(never)
   static func shouldShowSeasonSubscriptionSection(
     canSubscribeMedia: Bool,
     detail: MediaInfo,
