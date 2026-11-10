@@ -82,7 +82,6 @@ private struct MediaDetailBackgroundLayer: View {
           screenScale: screenScale
         ),
         alignsImageAtTop: usingPosterAsBackdrop,
-        preparesBackdropPreview: showingContentPage && !hidesContentPageBackground,
         fadeDuration: 0,
         onFailure: { onFailure?(url) }
       )

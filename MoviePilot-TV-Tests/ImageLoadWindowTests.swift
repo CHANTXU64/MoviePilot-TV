@@ -646,7 +646,7 @@ final class ImageLoadWindowTests: XCTestCase {
     XCTAssertFalse(lifecycle.keepsContentImages)
   }
 
-  func testPopShowsParentPreviewBeforeOutgoingDetailBackdropIsReleased() async throws {
+  func testPopShowsParentHeroPreviewBeforeOutgoingDetailBackdropIsReleased() async throws {
     let coordinator = ImageNavigationCoordinator(
       apiService: .testingInstance(), removedLifecycleRetention: .milliseconds(40)
     )
@@ -664,7 +664,6 @@ final class ImageLoadWindowTests: XCTestCase {
       context.fill(CGRect(origin: .zero, size: size))
     }
     parentBackdrop.acceptRetrievedImage(image)
-    parentBackdrop.setPreparesBackdropPreview(true)
     XCTAssertTrue(parentSurface.image === image)
 
     let child = coordinator.lifecycle(for: coordinator.push(resourceRequest("child")))
@@ -679,13 +678,14 @@ final class ImageLoadWindowTests: XCTestCase {
     childBackdrop.attach(childSurface, demandID: childDemand.id)
     childDemand.bind(to: childBackdrop, isEnabled: true)
     child.setDetailBackdropVisible(true)
-    childBackdrop.acceptRetrievedImage(image)
+    let childImage = try XCTUnwrap(UIImage(systemName: "film"))
+    childBackdrop.acceptRetrievedImage(childImage)
 
     coordinator.path.removeLast()
     XCTAssertTrue(parent.keepsActivePageImages)
     XCTAssertTrue(parentSurface.image === preview)
     XCTAssertEqual(parentBackdrop.retrievalStartCount, 1)
-    XCTAssertTrue(childSurface.image === image)
+    XCTAssertTrue(childSurface.image === childImage)
 
     await waitUntil("returning backdrop to start after child cleanup") {
       parentBackdrop.retrievalStartCount == 2
@@ -708,7 +708,6 @@ final class ImageLoadWindowTests: XCTestCase {
     backdrop.attach(surface, demandID: demand.id)
     demand.bind(to: backdrop, isEnabled: true)
     lifecycle.setDetailBackdropVisible(true)
-    backdrop.setPreparesBackdropPreview(true)
     let image = try XCTUnwrap(UIImage(systemName: "film"))
     backdrop.acceptRetrievedImage(image)
     XCTAssertNotNil(lifecycle.backdropPreview(for: "detail"))
@@ -727,6 +726,7 @@ final class ImageLoadWindowTests: XCTestCase {
     XCTAssertEqual(backdrop.retrievalStartCount, 2)
     backdrop.acceptRetrievedImage(image)
     XCTAssertTrue(surface.image === image)
+    XCTAssertNotNil(lifecycle.backdropPreview(for: "detail"))
   }
 
   func testSameMediaUsesIndependentRouteOwnersAcrossStacks() {

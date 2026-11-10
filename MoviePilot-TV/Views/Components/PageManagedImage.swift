@@ -20,7 +20,6 @@ struct PageManagedImage: View {
   var scaleFactor: CGFloat? = nil
   var alignsImageAtTop = false
   var loadsDiskFileSynchronously = false
-  var preparesBackdropPreview = false
   var fadeDuration: TimeInterval = 0.25
   var onSuccess: (() -> Void)?
   var onFailure: (() -> Void)?
@@ -36,7 +35,6 @@ struct PageManagedImage: View {
       scaleFactor: scaleFactor,
       alignsImageAtTop: alignsImageAtTop,
       loadsDiskFileSynchronously: loadsDiskFileSynchronously,
-      preparesBackdropPreview: preparesBackdropPreview,
       fadeDuration: fadeDuration,
       onSuccess: onSuccess,
       onFailure: onFailure,
@@ -59,7 +57,6 @@ private struct PageManagedImageSurface: UIViewRepresentable {
   let scaleFactor: CGFloat?
   let alignsImageAtTop: Bool
   let loadsDiskFileSynchronously: Bool
-  let preparesBackdropPreview: Bool
   let fadeDuration: TimeInterval
   let onSuccess: (() -> Void)?
   let onFailure: (() -> Void)?
@@ -94,7 +91,6 @@ private struct PageManagedImageSurface: UIViewRepresentable {
       loadsDiskFileSynchronously: loadsDiskFileSynchronously,
       fadeDuration: fadeDuration,
       scaleFactor: scaleFactor,
-      preparesBackdropPreview: preparesBackdropPreview,
       onSuccess: onSuccess,
       onFailure: onFailure,
       lifecycle: lifecycle,
@@ -188,7 +184,6 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
   private var surfaceDemandIDs: [ObjectIdentifier: UUID] = [:]
   private var demands: [UUID: Bool] = [:]
   private var pageImageAllowed = true
-  private var preparesBackdropPreview = false
   private var decodedImage: UIImage?
   private var downloadTask: DownloadTask?
   private var isRetrieving = false
@@ -272,13 +267,6 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
 
   func setPageImageAllowed(_ isAllowed: Bool) {
     pageImageAllowed = isAllowed
-    updateLoading()
-  }
-
-  func setPreparesBackdropPreview(_ enabled: Bool) {
-    guard preparesBackdropPreview != enabled else { return }
-    preparesBackdropPreview = enabled
-    if let decodedImage { prepareBackdropPreviewIfNeeded(from: decodedImage) }
     updateLoading()
   }
 
@@ -412,7 +400,7 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
   }
 
   private func prepareBackdropPreviewIfNeeded(from image: UIImage) {
-    guard preparesBackdropPreview, let lifecycle, lifecycle.backdropPreview(for: key) == nil else { return }
+    guard role == .detailBackdrop, let lifecycle, lifecycle.backdropPreview(for: key) == nil else { return }
     let longEdge = max(image.size.width, image.size.height)
     guard longEdge > 0 else { return }
     let ratio = min(1, 160 / longEdge)
@@ -428,7 +416,7 @@ final class PageImageSlot: PageImageResource, GridImageDemandResource {
   }
 
   private func renderBackdropPreview() {
-    let preview = preparesBackdropPreview && lifecycle?.keepsContentImages == true
+    let preview = lifecycle?.keepsContentImages == true
       ? lifecycle?.backdropPreview(for: key) : nil
     for surface in liveDemandingSurfaces where surface.image !== preview {
       if let preview {
@@ -531,7 +519,6 @@ final class PageManagedImageView: UIImageView {
     loadsDiskFileSynchronously: Bool,
     fadeDuration: TimeInterval,
     scaleFactor: CGFloat? = nil,
-    preparesBackdropPreview: Bool = false,
     onSuccess: (() -> Void)?,
     onFailure: (() -> Void)?,
     lifecycle: PageImageLifecycle?,
@@ -562,7 +549,6 @@ final class PageManagedImageView: UIImageView {
 
     if slot?.key == key, self.lifecycle === managedLifecycle, self.demandLease === demandLease {
       slot?.setGridImageDemandContext(managedGridContext)
-      slot?.setPreparesBackdropPreview(preparesBackdropPreview)
       demandLease.bind(to: slot, isEnabled: isEnabled)
       return
     }
@@ -595,7 +581,6 @@ final class PageManagedImageView: UIImageView {
       )
     }
     newSlot.setGridImageDemandContext(managedGridContext)
-    newSlot.setPreparesBackdropPreview(preparesBackdropPreview)
     replaceSlot(
       with: newSlot,
       lifecycle: managedLifecycle,
