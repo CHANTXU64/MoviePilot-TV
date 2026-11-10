@@ -497,9 +497,12 @@ private struct EpisodeBrowser: View {
     switch rowContent {
     case .episodes(let episodes):
       let page = visibleEpisodes(episodes)
-      shelfRow(page)
-        .id(page.first?.id)
-        .id(groupID)
+      let focusedID: MoviePilotEpisode.ID? = if case .episode(let id) = focus { id } else { nil }
+      EpisodeShelfRow(episodes: page, focusedEpisodeID: focusedID) { episode, loadsImage in
+        episodeCard(episode, stillSize: EpisodeCardLayout.stillSize, loadsImage: loadsImage)
+      }
+      .id(page.first?.id)
+      .id(groupID)
     case .status(let status, let retry):
       statusRow(status, retry: retry, stillSize: EpisodeCardLayout.stillSize)
         .padding(.horizontal, 81)
@@ -538,28 +541,17 @@ private struct EpisodeBrowser: View {
 
   // MARK: 卡片行
 
-  private func shelfRow(_ episodes: ArraySlice<MoviePilotEpisode>) -> some View {
-    ScrollView(.horizontal, showsIndicators: false) {
-      LazyHStack(alignment: .top, spacing: EpisodeCardLayout.spacing) {
-        ForEach(episodes) { episode in
-          episodeCard(episode, stillSize: EpisodeCardLayout.stillSize)
-        }
-      }
-      .padding(.horizontal, 81)
-      .padding(.top, 25)
-      .padding(.bottom, 30)
-    }
-    .scrollClipDisabled()
-    .focusSection()
-  }
-
   private func episodeCard(
-    _ episode: MoviePilotEpisode, stillSize: CGSize, onFocus: ((Bool) -> Void)? = nil
+    _ episode: MoviePilotEpisode,
+    stillSize: CGSize,
+    loadsImage: Bool = true,
+    onFocus: ((Bool) -> Void)? = nil
   ) -> some View {
     EpisodeCard(
       episode: episode,
       stillURL: apiService.getSeasonPosterURL(posterPath: episode.stillPath, mediaPosterPath: nil),
       stillSize: stillSize,
+      loadsImage: loadsImage,
       onSelect: { onSelect(episode) },
       onFocus: onFocus
     )
@@ -725,10 +717,41 @@ enum EpisodeCardLayout {
   }
 }
 
+private struct EpisodeShelfRow<Card: View>: View {
+  let episodes: ArraySlice<MoviePilotEpisode>
+  let focusedEpisodeID: MoviePilotEpisode.ID?
+  @ViewBuilder let card: (MoviePilotEpisode, Bool) -> Card
+  @State private var imageAnchorID: MoviePilotEpisode.ID?
+
+  var body: some View {
+    let anchorID = focusedEpisodeID ?? imageAnchorID
+    let anchorIndex = episodes.firstIndex { $0.id == anchorID }
+      .map { $0 - episodes.startIndex }
+    ScrollView(.horizontal, showsIndicators: false) {
+      LazyHStack(alignment: .top, spacing: EpisodeCardLayout.spacing) {
+        ForEach(Array(episodes.enumerated()), id: \.element.id) { offset, episode in
+          card(episode, ImageLoadWindow.containsHorizontalItem(
+            at: offset, itemCount: episodes.count, anchorIndex: anchorIndex, cardKind: .media
+          ))
+        }
+      }
+      .padding(.horizontal, 81)
+      .padding(.top, 25)
+      .padding(.bottom, 30)
+    }
+    .scrollClipDisabled()
+    .focusSection()
+    .onChange(of: focusedEpisodeID, initial: true) { _, id in
+      if let id { imageAnchorID = id }
+    }
+  }
+}
+
 private struct EpisodeCard: View {
   let episode: MoviePilotEpisode
   let stillURL: URL?
   let stillSize: CGSize
+  let loadsImage: Bool
   let onSelect: () -> Void
   let onFocus: ((Bool) -> Void)?
 
@@ -738,7 +761,7 @@ private struct EpisodeCard: View {
     Button(action: onSelect) {
       EpisodeCardContent(
         episode: episode, stillURL: stillURL, isFocused: isFocused,
-        stillSize: stillSize
+        stillSize: stillSize, loadsImage: loadsImage
       )
       .contentShape(.rect)
     }
@@ -767,6 +790,7 @@ struct EpisodeCardContent: View {
   var stillURL: URL?
   var isFocused = false
   var stillSize = EpisodeCardLayout.stillSize
+  var loadsImage = true
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -792,7 +816,7 @@ struct EpisodeCardContent: View {
         PageManagedImage(
           url: stillURL,
           processor: DownsamplingImageProcessor(size: stillSize),
-          isEnabled: true,
+          isEnabled: loadsImage,
           participatesInPageLifecycle: true,
           skipsMemoryCache: true
         )
