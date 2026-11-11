@@ -297,6 +297,55 @@ final class MPImageWarmerTests: XCTestCase {
     XCTAssertTrue(Self.skipsMemoryCache(posterOptions.memoryCacheExpiration))
   }
 
+  /// 背景预热不论何时完成都不会把解码大图写进内存缓存，页面放弃背景后无需再补删。
+  func testHeroRetrievalNeverStoresDecodedBackgroundInMemory() async throws {
+    let cache = ImageCache(name: "hero-retrieval-\(UUID().uuidString)")
+    defer {
+      cache.clearMemoryCache()
+      cache.clearDiskCache()
+    }
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("hero-retrieval-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let fileURL = directory.appendingPathComponent("hero.png")
+    let size = CGSize(width: 32, height: 18)
+    let screenScale: CGFloat = 2
+    let image = UIGraphicsImageRenderer(size: size).image { context in
+      UIColor.green.setFill()
+      context.cgContext.fill(CGRect(origin: .zero, size: size))
+    }
+    try XCTUnwrap(image.pngData()).write(to: fileURL)
+    let provider = LocalFileImageDataProvider(fileURL: fileURL)
+    var options = MediaDetailBackgroundImage.heroOptions(
+      for: size,
+      scaleFactor: screenScale,
+      usingPosterAsBackdrop: false
+    )
+    options.append(.targetCache(cache))
+
+    let result = try await KingfisherManager.shared.retrieveImage(
+      with: .provider(provider),
+      options: options
+    )
+
+    XCTAssertGreaterThan(result.image.size.width, 0)
+    let processorIDs = [
+      MediaDetailBackgroundImage.heroProcessor(
+        for: size,
+        usingPosterAsBackdrop: false,
+        screenScale: screenScale
+      ).identifier,
+      DefaultImageProcessor.default.identifier,
+    ]
+    for processorID in processorIDs {
+      XCTAssertNotEqual(
+        cache.imageCachedType(forKey: provider.cacheKey, processorIdentifier: processorID),
+        .memory
+      )
+    }
+  }
+
   func testTransientDecodedImageSkipsMemoryCache() {
     let parsed = KingfisherParsedOptionsInfo([TransientDecodedImage.skipMemoryCache])
     XCTAssertTrue(Self.skipsMemoryCache(parsed.memoryCacheExpiration))
