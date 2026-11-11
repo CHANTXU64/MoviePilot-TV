@@ -33,6 +33,108 @@ enum UIPreviewScenesComponents {
           )
         },
         .page(
+          id: "component.emptyDataTitleOnly",
+          title: "空状态 · 仅标题",
+          note:
+            "EmptyDataView 只给标题、不给描述和操作：内部仍放一个透明可聚焦占位，避免焦点直接跳走。"
+        ) {
+          EmptyDataView(title: "暂无内容")
+        },
+        .page(
+          id: "component.emptyDataRetry",
+          title: "空状态 · 带重试",
+          note:
+            "EmptyDataView 的“说明 + 重试”组合；首页/整理历史等页面目前各自手写错误块，没有复用这个带重试的空状态。"
+        ) {
+          EmptyDataView(
+            title: "加载失败",
+            systemImage: AppSymbol.warning,
+            description: "网络连接失败，请检查网络后重试。",
+            actionTitle: "重试"
+          ) {}
+        },
+        .page(
+          id: "component.loadingState",
+          title: "首屏加载态",
+          note:
+            "项目没有骨架屏组件，首屏加载统一用 ProgressView + 文案；首页/推荐/探索/状态页的具体加载态见各自场景。"
+        ) {
+          VStack(spacing: 24) {
+            ProgressView()
+            Text("正在加载…")
+              .font(.body)
+              .foregroundStyle(.secondary)
+          }
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+        },
+        .page(
+          id: "component.errorStatusCard",
+          title: "错误卡片",
+          note:
+            "详情页豆瓣讨论区复用的 DoubanDiscussionStatusCard：加载失败、加载中、空内容三种同尺寸状态卡，失败卡下方的“重试”由所在行提供。"
+        ) {
+          VStack(spacing: 36) {
+            HStack(spacing: 24) {
+              DoubanDiscussionStatusCard(kind: .comment, status: .failed)
+              DoubanDiscussionStatusCard(kind: .review, status: .loading)
+              DoubanDiscussionStatusCard(kind: .comment, status: .empty)
+            }
+            Button("重试") {}
+              .buttonStyle(.borderedProminent)
+          }
+          .padding(60)
+        },
+        .page(
+          id: "component.buttonStates",
+          title: "按钮 · 焦点与禁用",
+          note:
+            "tvOS 原生按钮的焦点高亮与禁用态并排展示：禁用按钮不接收焦点；长文案按钮需要在焦点放大后仍保持可读。进入场景后焦点会落在第一个可用按钮。"
+        ) {
+          UIPreviewButtonStatesDemo()
+        },
+        .page(
+          id: "component.notificationWarning",
+          title: "通知 · 警告",
+          note: "Notification 警告提示（权限或连接状态异常时使用）。"
+        ) {
+          UIPreviewNotificationDemo(
+            type: .warning,
+            message: "当前账号权限不足，部分入口已隐藏。"
+          )
+        },
+        .page(
+          id: "component.notificationInfo",
+          title: "通知 · 普通信息",
+          note: "Notification 普通信息提示（无强调色的默认类型）。"
+        ) {
+          UIPreviewNotificationDemo(
+            type: .info,
+            message: "已切换到推荐货架：近期热门。"
+          )
+        },
+        .page(
+          id: "component.notificationLongText",
+          title: "通知 · 超长文案",
+          note:
+            "超长通知没有行数上限，胶囊会随文本变宽；在窄屏/长中文下可能超出安全区。用于确认截断或换行策略是否需要产品侧补充。"
+        ) {
+          UIPreviewNotificationDemo(
+            type: .error,
+            message:
+              "整理失败：目标磁盘空间不足，且源文件已被其他任务占用。请先清理目标存储、停止正在执行的下载任务，再回到整理历史重试。若问题仍然存在，请检查下载器与 MoviePilot 后端连接状态，并查看系统日志中的完整错误堆栈。"
+          )
+        },
+        .page(
+          id: "component.paginatorFailure",
+          title: "分页器 · 连续失败",
+          note:
+            "真实 Paginator 第一页与后续两页都失败：网格保持空态，分页器记录 hasError / lastError，并在第 3 次失败后让全局显示“加载数据失败，请重试。”。预览默认通知在 5 秒后消失，底部状态区会保留分页器状态。",
+          environment: UIPreviewEnvironment.standard,
+          behaviors: [UIPreviewBehaviorKey.componentPaginator: .error(.networkTimeout)]
+        ) {
+          UIPreviewPaginatorFailureDemo()
+        },
+        .page(
           id: "component.mediaCards",
           title: "媒体卡片各种状态",
           note: "MediaCard：类型/评分角标、已订阅与更新进度、来源图标、查看更多卡片。"
@@ -220,6 +322,116 @@ private struct UIPreviewNotificationDemo: View {
       .onAppear {
         notificationManager.show(message: message, type: type, duration: 600)
       }
+  }
+}
+
+/// 原生按钮焦点/禁用对照。禁用按钮不参与焦点链，焦点会直接落到可用按钮。
+private struct UIPreviewButtonStatesDemo: View {
+  var body: some View {
+    VStack(alignment: .leading, spacing: 48) {
+      VStack(alignment: .leading, spacing: 12) {
+        Text("焦点态 / 禁用态")
+          .font(.headline)
+        Text("禁用按钮不能聚焦；焦点放大后长标题仍应完整可读。")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+
+      HStack(spacing: 48) {
+        Button("可操作按钮") {}
+          .buttonStyle(.borderedProminent)
+        Button("禁用按钮") {}
+          .buttonStyle(.bordered)
+          .disabled(true)
+      }
+
+      Button("长文案按钮 · 确认删除这条整理记录并停止自动重试") {}
+        .buttonStyle(.bordered)
+    }
+    .padding(80)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  }
+}
+
+/// 直接驱动真实 `Paginator`，连续制造 3 次失败以触达错误上限和全局通知。
+@MainActor
+private struct UIPreviewPaginatorFailureDemo: View {
+  @StateObject private var paginator: Paginator<MediaInfo>
+  @StateObject private var navigationCoordinator = ImageNavigationCoordinator()
+  @State private var didStart = false
+
+  init() {
+    _paginator = StateObject(
+      wrappedValue: Paginator<MediaInfo>(
+        threshold: 8,
+        fetcher: { _ in
+          try await UIPreviewFixtures.componentPaginatorMedia()
+        },
+        processor: { items, newItems in
+          let existing = Set(items.map(\.id))
+          let additions = newItems.filter { !existing.contains($0.id) }
+          guard !additions.isEmpty else { return false }
+          items.append(contentsOf: additions)
+          return true
+        }
+      )
+    )
+  }
+
+  var body: some View {
+    MediaGridView(
+      imageLifecycle: navigationCoordinator.rootLifecycle,
+      listIdentity: paginator.listIdentity,
+      items: paginator.items,
+      isLoading: paginator.isFirstLoading,
+      isLoadingMore: paginator.isLoadingMore,
+      onLoadMore: { id in
+        Task { await paginator.loadMore(id) }
+      },
+      header: { statusHeader }
+    )
+    .environment(\.pageImageLifecycle, navigationCoordinator.rootLifecycle)
+    .environmentObject(navigationCoordinator)
+    .task {
+      guard !didStart else { return }
+      didStart = true
+      await paginator.refresh()
+      await paginator.loadMore(nil)
+      await paginator.loadMore(nil)
+    }
+  }
+
+  private var statusHeader: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text("Paginator · 连续失败")
+        .font(.headline)
+      HStack(spacing: 24) {
+        statusLine("hasError", paginator.hasError ? "true" : "false")
+        statusLine("hasMore", paginator.hasMore ? "true" : "false")
+        statusLine("consecutiveErrorCount", "3")
+      }
+      if let error = paginator.lastError {
+        Text("lastError：\(error.localizedDescription)")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      Text("第 3 次失败后停止加载，并触发全局通知“加载数据失败，请重试。”。")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(.horizontal, 8)
+  }
+
+  private func statusLine(_ name: String, _ value: String) -> some View {
+    HStack(spacing: 6) {
+      Text(name)
+        .font(.system(.caption, design: .monospaced))
+        .foregroundStyle(.secondary)
+      Text(value)
+        .font(.system(.caption, design: .monospaced))
+        .foregroundStyle(.primary)
+    }
   }
 }
 #endif

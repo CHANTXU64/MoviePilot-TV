@@ -39,14 +39,21 @@ enum UIPreviewCatalog {
       UIPreviewScenesTabs.section,
       UIPreviewScenesDetail.section,
       UIPreviewScenesSearch.section,
+      UIPreviewScenesSubtitle.section,
       UIPreviewScenesSettings.section,
       UIPreviewScenesPlayer.section,
+      UIPreviewScenesPlaybackFlow.section,
       UIPreviewScenesComponents.section,
     ]
   }
 
   static var firstSectionID: String {
     sections.first?.id ?? ""
+  }
+
+  /// 目录里的场景总数，显示在目录标题和分组标题上，方便确认覆盖面。
+  static var totalSceneCount: Int {
+    sections.reduce(0) { $0 + $1.scenes.count }
   }
 
   static func scene(id: String?) -> UIPreviewScene? {
@@ -76,7 +83,7 @@ struct PreviewCatalogView: View {
         PreviewCatalogHomeView(isActive: selectedScene == nil) { scene in
           selectedScene = scene
         }
-        .navigationTitle("UI 预览")
+        .navigationTitle("UI 预览 · \(UIPreviewCatalog.totalSceneCount) 个场景")
       }
       .opacity(selectedScene == nil ? 1 : 0)
       .disabled(selectedScene != nil)
@@ -112,7 +119,7 @@ private struct PreviewCatalogHomeView: View {
               toggleSection(section.id)
             } label: {
               Label(
-                section.title,
+                "\(section.title) · \(section.scenes.count) 个场景",
                 systemImage: expandedSectionIDs.contains(section.id)
                   ? "chevron.down" : "chevron.right"
               )

@@ -27,6 +27,16 @@ extension UIPreviewBehaviorKey {
   static let playerFailure = "player.failure"
 }
 
+/// 播放器预览的条目类型。剧集用默认 fixture；电影用于核对无队列的播放界面；
+/// `longTitleEpisode` 用于核对工具栏超长剧名的截断。
+enum UIPlayerPreviewContent: Equatable {
+  case episode
+  case movie
+  case longTitleEpisode
+
+  var isEpisode: Bool { self != .movie }
+}
+
 /// 播放器预览需要界面呈现的状态。位置、轨道、队列都由这里提供，不经过 mpv。
 struct UIPlayerPreviewSession {
   enum Supplement {
@@ -74,6 +84,8 @@ struct UIPlayerPreviewTracks {
 
 /// 预览场景的建造参数。场景里按不同状态覆盖少量字段。
 struct UIPlayerPreviewConfiguration {
+  /// 条目类型：剧集、电影或超长标题剧集。
+  var content: UIPlayerPreviewContent = .episode
   var state: MediaSession.State = .playback
   var isReady = true
   var isPaused = false
@@ -90,6 +102,8 @@ struct UIPlayerPreviewConfiguration {
   var includeQueue = true
   var includeChapters = true
   var includeVersions = true
+  var includeAudioTracks = true
+  var includeSubtitleTracks = true
 
   var subtitleOffset: Duration = .zero
   var audioOffset: Duration = .zero
@@ -97,6 +111,9 @@ struct UIPlayerPreviewConfiguration {
 
   /// 顶部 toast；预览会循环重放，避免默认 2 秒后消失而截不到。
   var toast: String?
+  /// 写入 `MediaSession.commandError`，走真实 `VideoPlayer` 的 toast 观察链路。
+  /// 预览会循环重放，避免默认 2 秒后消失而截不到。
+  var commandError: String?
   /// 界面出现后自动收起控件。
   var hideControls = false
   /// 界面出现后进入拖动状态。
@@ -161,6 +178,95 @@ struct UIPlayerPreviewConfiguration {
     value.position = .seconds(2_732)
     return value
   }
+
+  /// 换集/换版本解析新条目时：沿用旧条目画面，控件不可用。
+  static var loadingItem: Self {
+    var value = Self()
+    value.state = .loadingItem
+    value.isReady = false
+    value.canControlPlayback = false
+    value.canSeek = false
+    value.activity = .loading
+    return value
+  }
+
+  /// mpv 缓冲中：时间旁显示缓冲指示器。
+  static var buffering: Self {
+    var value = Self()
+    value.isBuffering = true
+    value.activity = .buffering
+    return value
+  }
+
+  /// mpv 正在跳转。
+  static var seeking: Self {
+    var value = Self()
+    value.activity = .seeking
+    return value
+  }
+
+  /// 会话存在但不能控制播放，也不在加载或错误状态。
+  static var disabledControls: Self {
+    var value = Self()
+    value.canControlPlayback = false
+    value.canSeek = false
+    return value
+  }
+
+  /// 没有音轨和字幕轨：工具栏不应出现音频、字幕及其偏移入口。
+  static var noTracks: Self {
+    var value = Self()
+    value.subtitlesEnabled = false
+    value.selectedAudioIndex = nil
+    value.selectedSubtitleIndex = nil
+    value.includeAudioTracks = false
+    value.includeSubtitleTracks = false
+    return value
+  }
+
+  /// 只有一个可直连版本：播放设置不可用。
+  static var singleVersion: Self {
+    var value = Self()
+    value.includeVersions = false
+    return value
+  }
+
+  /// 剧集条目但没有队列上下文（整部剧直接起播）。
+  static var noQueue: Self {
+    var value = Self()
+    value.includeQueue = false
+    return value
+  }
+
+  static var noChapters: Self {
+    var value = Self()
+    value.includeChapters = false
+    return value
+  }
+
+  /// 电影条目：无季集编号、无队列。
+  static var movie: Self {
+    var value = Self()
+    value.content = .movie
+    value.includeQueue = false
+    value.position = .seconds(2_215)
+    value.duration = .seconds(7_080)
+    return value
+  }
+}
+
+/// 播放界面内提示使用的文案。
+/// 能直接取生产类型或常量的都取；只有生产代码内联的固定文案在这里复制，避免预览文案随意改写。
+enum UIPlayerPreviewMessages {
+  /// 与 `PlaybackSession` 把 mpv 致命错误交给 `onFailure` 时的文案一致。
+  static let mpvFailure = "无法播放该影片，请检查与媒体服务器的网络连接"
+  /// 跳转失败时写入 `MediaSession.commandError` 的文案。
+  static let seekFailure = L10n.unableToSeek
+  /// 换集/换版本失败时取 `PlaybackError.errorDescription`。
+  static let switchItemFailure = PlaybackError.notFound.errorDescription ?? ""
+  /// 播放结束说明下一集在另一台服务器上；格式取自 `EpisodeNavigator.adjacent` 的 stop 文案。
+  static let nextEpisodeOnAnotherServer =
+    "\(EpisodeNavigator.Direction.next.noun)在另一台媒体服务器“卧室 Emby”上，请回到详情页选择"
 }
 
 @MainActor
@@ -168,6 +274,13 @@ enum UIPlayerPreviewFixtures {
   static let itemID = "ui-preview-episode-7"
   static let seriesName = "星际拓荒"
   static let episodeName = "静默的轨道"
+  static let movieID = "ui-preview-movie-1"
+  static let movieName = "深空静默：第七信号"
+  /// 超长剧名与集名：工具栏只显示剧名，副标题是季集号。
+  static let longSeriesName =
+    "星际拓荒：静默轨道之外的回声档案、失联补给船与木星背面那一段反复出现的呼吸声调查记录"
+  static let longEpisodeName =
+    "第七集 · 穿越木星轨道背面的漫长静默与那一段反复出现的呼吸声"
   static let sourceFourKID = "ui-preview-source-4k"
   static let sourceHDID = "ui-preview-source-1080p"
 
@@ -178,17 +291,39 @@ enum UIPlayerPreviewFixtures {
     ]
   }
 
-  static func item() -> ServerMediaItem {
-    ServerMediaItem(
-      id: itemID,
-      kind: .episode,
-      name: episodeName,
-      seriesName: seriesName,
-      seasonNumber: 1,
-      episodeNumber: 7,
-      runtimeSeconds: 2_732,
-      externalIDs: ["tmdb": "624107"]
-    )
+  static func item(_ content: UIPlayerPreviewContent = .episode) -> ServerMediaItem {
+    switch content {
+    case .episode:
+      return ServerMediaItem(
+        id: itemID,
+        kind: .episode,
+        name: episodeName,
+        seriesName: seriesName,
+        seasonNumber: 1,
+        episodeNumber: 7,
+        runtimeSeconds: 2_732,
+        externalIDs: ["tmdb": "624107"]
+      )
+    case .movie:
+      return ServerMediaItem(
+        id: movieID,
+        kind: .movie,
+        name: movieName,
+        runtimeSeconds: 7_080,
+        externalIDs: ["tmdb": "1000001"]
+      )
+    case .longTitleEpisode:
+      return ServerMediaItem(
+        id: itemID,
+        kind: .episode,
+        name: longEpisodeName,
+        seriesName: longSeriesName,
+        seasonNumber: 1,
+        episodeNumber: 7,
+        runtimeSeconds: 2_732,
+        externalIDs: ["tmdb": "624107"]
+      )
+    }
   }
 
   static func chapters(includeImages: Bool = false) -> [ChapterInfo] {
@@ -215,28 +350,21 @@ enum UIPlayerPreviewFixtures {
   }
 
   static func baseItem(
+    content: UIPlayerPreviewContent = .episode,
     includeChapters: Bool = true,
     includeVersions: Bool = true,
     chapterImages: Bool = false
   ) -> BaseItemDto {
-    var item = BaseItemDto(id: itemID)
-    item.name = episodeName
-    item.type = .episode
+    var item = BaseItemDto(id: content.isEpisode ? itemID : movieID)
     item.overview = """
       补给船在木星轨道附近失联七十二小时后，顾维在一次例行扫描里重新听到了它的信标。\
       信号里没有求救，只有一段重复的、像是从更远处传来的呼吸声。船员们必须决定，\
       是循着信号继续深入，还是按规程返航。
       """
-    item.runTimeTicks = 2_732 * 10_000_000
-    item.officialRating = "TV-14"
-    item.communityRating = 8.6
-    item.genres = ["科幻", "悬疑", "剧情"]
-    item.indexNumber = 7
-    item.parentIndexNumber = 1
-    item.seriesName = seriesName
-    item.seriesID = "ui-preview-series-1"
-    item.seasonID = "ui-preview-season-1"
-    item.seasonName = "第一季"
+    item.runTimeTicks = (content.isEpisode ? 2_732 : 7_080) * 10_000_000
+    item.officialRating = content.isEpisode ? "TV-14" : "PG-13"
+    item.communityRating = content.isEpisode ? 8.6 : 8.2
+    item.genres = content.isEpisode ? ["科幻", "悬疑", "剧情"] : ["科幻", "冒险", "悬疑"]
     item.premiereDate = Date(timeIntervalSince1970: 1_752_000_000)
     item.mediaSources = mediaSources(includeVersions: includeVersions)
     item.chapters = includeChapters ? chapters(includeImages: chapterImages) : nil
@@ -247,30 +375,60 @@ enum UIPlayerPreviewFixtures {
       BaseItemPerson(id: "person-4", name: "许望", role: "导演", type: .director),
       BaseItemPerson(id: "person-5", name: "程未", role: "编剧", type: .writer),
     ]
+
+    switch content {
+    case .episode:
+      item.name = episodeName
+      item.type = .episode
+      item.indexNumber = 7
+      item.parentIndexNumber = 1
+      item.seriesName = seriesName
+      item.seriesID = "ui-preview-series-1"
+      item.seasonID = "ui-preview-season-1"
+      item.seasonName = "第一季"
+    case .longTitleEpisode:
+      item.name = longEpisodeName
+      item.type = .episode
+      item.indexNumber = 7
+      item.parentIndexNumber = 1
+      item.seriesName = longSeriesName
+      item.seriesID = "ui-preview-series-1"
+      item.seasonID = "ui-preview-season-1"
+      item.seasonName = "第一季"
+    case .movie:
+      item.name = movieName
+      item.type = .movie
+    }
     return item
   }
 
   static func tracks(
     subtitlesEnabled: Bool,
     selectedSubtitleIndex: Int?,
-    selectedAudioIndex: Int?
+    selectedAudioIndex: Int?,
+    includeAudio: Bool = true,
+    includeSubtitles: Bool = true
   ) -> UIPlayerPreviewTracks {
-    UIPlayerPreviewTracks(
-      audio: [
+    let audioTracks: [MediaStream] = includeAudio
+      ? [
         MediaStream(index: 0, type: .audio, displayTitle: "国语 · DTS-HD MA 5.1", codec: "dts", channels: 6),
         MediaStream(index: 1, type: .audio, displayTitle: "英语 · E-AC-3 5.1", codec: "eac3", channels: 6),
         MediaStream(index: 2, type: .audio, displayTitle: "国语 · AAC 2.0（评论音轨）", codec: "aac", channels: 2),
-      ],
-      subtitles: [
+      ] : []
+    let subtitleTracks: [MediaStream] = includeSubtitles
+      ? [
         MediaStream(index: 0, type: .subtitle, displayTitle: "简体中文 · ASS（内嵌）", codec: "ass"),
         MediaStream(index: 1, type: .subtitle, displayTitle: "繁体中文 · SRT（内嵌）", codec: "subrip"),
         MediaStream(index: 2, type: .subtitle, displayTitle: "English · PGS（内嵌）", codec: "hdmv_pgs_subtitle"),
         MediaStream(index: 3, type: .subtitle, displayTitle: "简体中文 · SRT（外挂）", codec: "subrip"),
-      ],
-      selectedAudioIndex: selectedAudioIndex,
-      selectedSubtitleIndex: selectedSubtitleIndex,
-      subtitlesEnabled: subtitlesEnabled,
-      disabledSubtitleIndex: selectedSubtitleIndex
+      ] : []
+    return UIPlayerPreviewTracks(
+      audio: audioTracks,
+      subtitles: subtitleTracks,
+      selectedAudioIndex: includeAudio ? selectedAudioIndex : nil,
+      selectedSubtitleIndex: includeSubtitles ? selectedSubtitleIndex : nil,
+      subtitlesEnabled: includeSubtitles && subtitlesEnabled,
+      disabledSubtitleIndex: includeSubtitles ? selectedSubtitleIndex : nil
     )
   }
 
@@ -298,8 +456,13 @@ enum UIPlayerPreviewFixtures {
     )
   }
 
-  static func previewImageProvider() -> PreviewImageProvider? {
-    let item = baseItem(includeChapters: true, includeVersions: true, chapterImages: true)
+  static func previewImageProvider(content: UIPlayerPreviewContent = .episode) -> PreviewImageProvider? {
+    let item = baseItem(
+      content: content,
+      includeChapters: true,
+      includeVersions: true,
+      chapterImages: true
+    )
     return PreviewImageProvider(
       option: .chapters,
       item: item,
@@ -307,7 +470,7 @@ enum UIPlayerPreviewFixtures {
       chapters: item.fullChapterInfo,
       client: JellyfinClient(
         connection: UIPlayerPreviewConnection(
-          item: UIPlayerPreviewFixtures.item(),
+          item: UIPlayerPreviewFixtures.item(content),
           sources: UIPlayerPreviewFixtures.sources()
         )
       ),
@@ -358,7 +521,7 @@ enum UIPlayerPreviewFixtures {
   }
 
   static func makeSession(configuration: UIPlayerPreviewConfiguration) -> MediaSession {
-    let item = self.item()
+    let item = self.item(configuration.content)
     let (stream, prepared) = preparedPlayback(item: item, sources: sources(), includeVersions: configuration.includeVersions)
     let playbackSession = PlaybackSession(
       prepared: prepared,
@@ -374,9 +537,12 @@ enum UIPlayerPreviewFixtures {
     let tracks = tracks(
       subtitlesEnabled: configuration.subtitlesEnabled,
       selectedSubtitleIndex: configuration.selectedSubtitleIndex,
-      selectedAudioIndex: configuration.selectedAudioIndex
+      selectedAudioIndex: configuration.selectedAudioIndex,
+      includeAudio: configuration.includeAudioTracks,
+      includeSubtitles: configuration.includeSubtitleTracks
     )
-    let previewQueue: (any MediaPlayerQueue)? = configuration.includeQueue ? queue() : nil
+    let previewQueue: (any MediaPlayerQueue)? =
+      configuration.includeQueue && configuration.content.isEpisode ? queue() : nil
     session.previewSession = UIPlayerPreviewSession(
       state: configuration.state,
       isReady: configuration.isReady,
@@ -389,12 +555,13 @@ enum UIPlayerPreviewFixtures {
       activity: configuration.activity,
       videoSize: .init(width: 3_840, height: 2_160),
       baseItem: baseItem(
+        content: configuration.content,
         includeChapters: configuration.includeChapters,
         includeVersions: configuration.includeVersions
       ),
       tracks: tracks,
       queue: previewQueue,
-      previewImageProvider: previewImageProvider()
+      previewImageProvider: previewImageProvider(content: configuration.content)
     )
 
     session.start()

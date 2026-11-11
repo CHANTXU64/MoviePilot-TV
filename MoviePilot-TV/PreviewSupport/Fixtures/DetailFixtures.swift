@@ -16,6 +16,16 @@ enum UIPreviewDetailContext {
   static let manySeasons = "detail.manySeasons"
   /// `"1"`：详情带剧集组，用于剧集分组入口。
   static let episodeGroup = "detail.episodeGroup"
+  /// `"1"`：详情不返回 season_info，用于预览「剧集行回查分季失败」。
+  static let emptySeasons = "detail.emptySeasons"
+  /// `"1"`：新建订阅时把订阅置为暂停的接口返回业务失败。
+  static let pauseFailure = "detail.pauseFailure"
+  /// `"1"`：保存订阅后启用这个订阅的接口返回业务失败。
+  static let resumeFailure = "detail.resumeFailure"
+  /// `"1"`：保存订阅接口返回业务失败。
+  static let saveRejected = "detail.saveRejected"
+  /// `"1"`：豆瓣短评 / 影评第一页声明更大的 total，让分页器继续请求下一页。
+  static let doubanPagination = "detail.doubanPagination"
 }
 
 // MARK: - 媒体详情
@@ -139,6 +149,9 @@ extension UIPreviewFixtures {
       return detailExternalMovieMedia()
     }
     if media.type == "电视剧" {
+      if backend.context(UIPreviewDetailContext.emptySeasons) == "1" {
+        return detailTVMedia(seasons: [])
+      }
       if backend.context(UIPreviewDetailContext.manySeasons) == "1" {
         return detailTVMedia(seasons: previewManySeasons)
       }
@@ -191,11 +204,65 @@ extension UIPreviewFixtures {
     start: Int,
     count: Int
   ) async throws -> DoubanCommentPage {
-    try await UIPreviewBackend.shared.gate(UIPreviewBehaviorKey.detailDoubanComments)
-    if UIPreviewBackend.shared.isEmpty(for: UIPreviewBehaviorKey.detailDoubanComments) || start > 0 {
+    let backend = UIPreviewBackend.shared
+    let key =
+      start > 0
+      ? UIPreviewBehaviorKey.detailDoubanCommentsMore
+      : UIPreviewBehaviorKey.detailDoubanComments
+    try await backend.gate(key)
+    let isFirstPageEmpty = backend.isEmpty(for: UIPreviewBehaviorKey.detailDoubanComments)
+    if backend.isEmpty(for: key) || isFirstPageEmpty {
       return decode(
         DoubanCommentPage.self,
         #"{"start":\#(start),"count":0,"total":3,"items":[]}"#
+      )
+    }
+    let paginated = backend.context(UIPreviewDetailContext.doubanPagination) == "1"
+    if start > 0 {
+      guard paginated else {
+        return decode(
+          DoubanCommentPage.self,
+          #"{"start":\#(start),"count":0,"total":3,"items":[]}"#
+        )
+      }
+      return decode(
+        DoubanCommentPage.self,
+        #"""
+        {
+          "start": \#(start),
+          "count": 3,
+          "total": 13,
+          "items": [
+            {
+              "id": "preview-comment-page2-1",
+              "comment": "第二遍看才注意到，加油站的收音机一直在播同一条路况。",
+              "rating": 4.5,
+              "vote_count": 37,
+              "create_time": "2026-02-20 10:12:00",
+              "author": {"id": "preview-user-6", "name": "长途电台", "avatar": null, "url": null},
+              "url": "https://movie.douban.com/review/4/"
+            },
+            {
+              "id": "preview-comment-page2-2",
+              "comment": "结尾停在车门关上的一刻，比给出答案更有余味。",
+              "rating": 4.0,
+              "vote_count": 22,
+              "create_time": "2026-02-18 19:40:00",
+              "author": {"id": "preview-user-7", "name": "路肩", "avatar": null, "url": null},
+              "url": "https://movie.douban.com/review/5/"
+            },
+            {
+              "id": "preview-comment-page2-3",
+              "comment": "配乐在某些段落压得太满，但整体仍然值得。",
+              "rating": 3.5,
+              "vote_count": 9,
+              "create_time": "2026-02-16 08:05:00",
+              "author": {"id": "preview-user-8", "name": "逆风", "avatar": null, "url": null},
+              "url": "https://movie.douban.com/review/6/"
+            }
+          ]
+        }
+        """#
       )
     }
     return decode(
@@ -204,7 +271,7 @@ extension UIPreviewFixtures {
       {
         "start": 0,
         "count": 3,
-        "total": 3,
+        "total": \#(paginated ? 13 : 3),
         "items": [
           {
             "id": "preview-comment-1",
@@ -245,11 +312,58 @@ extension UIPreviewFixtures {
     start: Int,
     count: Int
   ) async throws -> DoubanReviewPage {
-    try await UIPreviewBackend.shared.gate(UIPreviewBehaviorKey.detailDoubanReviews)
-    if UIPreviewBackend.shared.isEmpty(for: UIPreviewBehaviorKey.detailDoubanReviews) || start > 0 {
+    let backend = UIPreviewBackend.shared
+    let key =
+      start > 0
+      ? UIPreviewBehaviorKey.detailDoubanReviewsMore
+      : UIPreviewBehaviorKey.detailDoubanReviews
+    try await backend.gate(key)
+    let isFirstPageEmpty = backend.isEmpty(for: UIPreviewBehaviorKey.detailDoubanReviews)
+    if backend.isEmpty(for: key) || isFirstPageEmpty {
       return decode(
         DoubanReviewPage.self,
         #"{"start":\#(start),"count":0,"total":2,"items":[]}"#
+      )
+    }
+    let paginated = backend.context(UIPreviewDetailContext.doubanPagination) == "1"
+    if start > 0 {
+      guard paginated else {
+        return decode(
+          DoubanReviewPage.self,
+          #"{"start":\#(start),"count":0,"total":2,"items":[]}"#
+        )
+      }
+      return decode(
+        DoubanReviewPage.self,
+        #"""
+        {
+          "start": \#(start),
+          "count": 2,
+          "total": 12,
+          "items": [
+            {
+              "id": "preview-review-page2-1",
+              "title": "把公路当作流程，而不是隐喻",
+              "abstract": "第二次看时更确定，影片真正关心的是人在被迫停下的间隙里如何重新安排自己的时间。公路只是把这种安排放大了。",
+              "rating": 4.5,
+              "useful_count": 96,
+              "create_time": "2026-02-11 15:30:00",
+              "author": {"id": "preview-user-9", "name": "里程碑", "avatar": null, "url": null},
+              "url": "https://movie.douban.com/review/12/"
+            },
+            {
+              "id": "preview-review-page2-2",
+              "title": "沉默的调度",
+              "abstract": "导演很少让人物把话说满，镜头也不急着替他们解释。那些没有发生的对话，构成了影片最主要的张力。",
+              "rating": 4.0,
+              "useful_count": 54,
+              "create_time": "2026-02-08 09:18:00",
+              "author": {"id": "preview-user-10", "name": "空镜", "avatar": null, "url": null},
+              "url": "https://movie.douban.com/review/13/"
+            }
+          ]
+        }
+        """#
       )
     }
     return decode(
@@ -258,7 +372,7 @@ extension UIPreviewFixtures {
       {
         "start": 0,
         "count": 2,
-        "total": 2,
+        "total": \#(paginated ? 12 : 2),
         "items": [
           {
             "id": "preview-review-1",
@@ -340,6 +454,16 @@ extension UIPreviewFixtures {
     state: String
   ) async throws -> (success: Bool, message: String?) {
     try await UIPreviewBackend.shared.gate(UIPreviewBehaviorKey.detailUpdateSubscriptionStatus)
+    if state == "S",
+      UIPreviewBackend.shared.context(UIPreviewDetailContext.pauseFailure) == "1"
+    {
+      return (false, "预览模拟业务失败：无法将新建的订阅置为暂停")
+    }
+    if state == "R",
+      UIPreviewBackend.shared.context(UIPreviewDetailContext.resumeFailure) == "1"
+    {
+      return (false, "预览模拟业务失败：订阅已保存，但暂时无法启用")
+    }
     return (true, nil)
   }
 
@@ -348,6 +472,9 @@ extension UIPreviewFixtures {
     draft: Subscribe
   ) async throws -> (success: Bool, message: String?) {
     try await UIPreviewBackend.shared.gate(UIPreviewBehaviorKey.detailSaveSubscription)
+    if UIPreviewBackend.shared.context(UIPreviewDetailContext.saveRejected) == "1" {
+      return (false, "预览模拟业务失败：保存订阅被后端拒绝")
+    }
     return (true, nil)
   }
 
@@ -831,7 +958,9 @@ extension UIPreviewBehaviorKey {
   static let detailActors = "detail.actors"
   static let detailActorsMore = "detail.actorsMore"
   static let detailDoubanComments = "detail.doubanComments"
+  static let detailDoubanCommentsMore = "detail.doubanCommentsMore"
   static let detailDoubanReviews = "detail.doubanReviews"
+  static let detailDoubanReviewsMore = "detail.doubanReviewsMore"
   static let detailCollection = "detail.collection"
   static let detailCollectionMore = "detail.collectionMore"
   static let detailPerson = "detail.person"

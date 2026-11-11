@@ -124,6 +124,42 @@ final class UIPreviewModeTests: XCTestCase {
     XCTAssertFalse(subscriptions.isEmpty)
   }
 
+  @MainActor
+  func testErrorBehaviorThrowsTypedErrorsWithVisibleDescriptions() async throws {
+    let backend = UIPreviewBackend.shared
+    let key = UIPreviewBehaviorKey.homeSubscriptions
+
+    let kinds: [UIPreviewErrorKind] = [
+      .invalidURL,
+      .networkTimeout,
+      .networkOffline,
+      .networkConnectionLost,
+      .decoding,
+      .serverMessage("服务器繁忙，请稍后重试"),
+      .gateway(503),
+      .http(403),
+      .authenticationChallenge(statusCode: 401, message: "请重新登录"),
+      .credentialsRejected,
+      .mfaUnsupported,
+      .unauthorized,
+      .unknown,
+      .business("自定义业务错误"),
+    ]
+
+    for kind in kinds {
+      backend.activate(UIPreviewEnvironment.standard.with(behaviors: [key: .error(kind)]))
+      do {
+        _ = try await UIPreviewFixtures.homeSubscriptions()
+        XCTFail("error(\(kind)) 行为必须让 fixture 抛错。")
+      } catch {
+        let description = (error as? LocalizedError)?.errorDescription ?? ""
+        XCTAssertFalse(description.isEmpty, "error(\(kind)) 抛出的错误必须有可见文案。")
+      }
+    }
+
+    backend.activate(UIPreviewEnvironment.standard)
+  }
+
   // MARK: - APIService 预览钩子
 
   func testAPIServicePreviewHooksShortCircuitBeforeNetwork() throws {
@@ -214,6 +250,8 @@ final class UIPreviewModeTests: XCTestCase {
       "player.",
       "sheet.",
       "component.",
+      "subtitle.",
+      "log.",
     ]
     for prefix in requiredPrefixes {
       XCTAssertTrue(
@@ -221,10 +259,11 @@ final class UIPreviewModeTests: XCTestCase {
         "缺少 \(prefix) 前缀的预览场景。"
       )
     }
-    // 当前分组：应用启动与全局、主框架与一级页面、详情、搜索、设置/登录/日志、播放器、核心组件。
-    XCTAssertGreaterThanOrEqual(UIPreviewCatalog.sections.count, 7)
+    // 当前分组：应用启动与全局、主框架与一级页面、详情、搜索、字幕搜索、设置/登录/日志、播放器、播放流程、核心组件。
+    XCTAssertGreaterThanOrEqual(UIPreviewCatalog.sections.count, 9)
     // 旧分支目录有 163 个场景，重建后不允许明显缩水。
-    XCTAssertGreaterThanOrEqual(sceneIDs.count, 120)
+    print("UI_PREVIEW_SCENE_COUNT=\(sceneIDs.count)")
+    XCTAssertGreaterThanOrEqual(sceneIDs.count, 380)
   }
 
   @MainActor

@@ -21,6 +21,8 @@ final class UIPreviewBackend {
     case empty
     /// 抛出模拟失败（页面展示失败状态/提示）。
     case failure
+    /// 抛出指定类型的错误，用于预览不同错误种类下页面/提示的差异。
+    case error(UIPreviewErrorKind)
     /// 永不返回，用于长时间保持加载中。
     case hang
     /// 延迟后再返回 fixture 数据，用于提交中/刷新中等过渡态。
@@ -70,13 +72,15 @@ final class UIPreviewBackend {
     behavior(for: key) == .empty
   }
 
-  /// 统一处理 failure / hang / delayed；`data` 与 `empty` 直接返回，由 fixture 决定数据形态。
+  /// 统一处理 failure / error / hang / delayed；`data` 与 `empty` 直接返回，由 fixture 决定数据形态。
   func gate(_ key: String) async throws {
     switch behavior(for: key) {
     case .data, .empty:
       return
     case .failure:
       throw UIPreviewBackendError.simulatedFailure(feature: key)
+    case .error(let kind):
+      throw kind.makeError()
     case .hang:
       try await Task.sleep(for: .seconds(60 * 60 * 24 * 365))
       throw CancellationError()
@@ -112,10 +116,73 @@ final class UIPreviewBackend {
   }
 }
 
+/// UI 预览可模拟的错误种类。
+///
+/// 预览渲染真实页面，页面拿到的是真实错误对象，因此不同错误类型下的提示、重试、
+/// 鉴权跳转或网络说明都能按线上分支走一遍。`makeError()` 构造的是生产代码里同名
+/// `APIError`/`UIPreviewBackendError` 实例；调用方只通过 `localizedDescription` 展示。
+enum UIPreviewErrorKind: Equatable {
+  case invalidURL
+  case networkTimeout
+  case networkOffline
+  case networkConnectionLost
+  case decoding
+  /// 后端 `success=false` 的业务错误，`message` 是后端返回的文案。
+  case serverMessage(String)
+  /// 502/503/504 反向代理错误。
+  case gateway(Int)
+  /// 其他 HTTP 状态码（403、404、429、500 等）。
+  case http(Int)
+  /// 需要交互的鉴权挑战（401 且返回了提示文案）。
+  case authenticationChallenge(statusCode: Int, message: String?)
+  case credentialsRejected
+  case mfaUnsupported
+  case unauthorized
+  case unknown
+  /// 自定义业务错误文案（没有对应生产错误类型时使用）。
+  case business(String)
+
+  func makeError() -> Error {
+    switch self {
+    case .invalidURL:
+      return APIError.invalidURL
+    case .networkTimeout:
+      return APIError.networkError(URLError(.timedOut))
+    case .networkOffline:
+      return APIError.networkError(URLError(.notConnectedToInternet))
+    case .networkConnectionLost:
+      return APIError.networkError(URLError(.networkConnectionLost))
+    case .decoding:
+      return APIError.decodingError(
+        DecodingError.dataCorrupted(
+          .init(codingPath: [], debugDescription: "The given data was not valid JSON.")))
+    case .serverMessage(let message):
+      return APIError.serverMessage(message)
+    case .gateway(let status):
+      return APIError.gatewayStatus(status, "HTTP \(status)")
+    case .http(let status):
+      return APIError.authenticationChallenge(statusCode: status, message: nil)
+    case .authenticationChallenge(let statusCode, let message):
+      return APIError.authenticationChallenge(statusCode: statusCode, message: message)
+    case .credentialsRejected:
+      return APIError.credentialsRejected
+    case .mfaUnsupported:
+      return APIError.mfaUnsupported
+    case .unauthorized:
+      return APIError.unauthorized
+    case .unknown:
+      return APIError.unknown
+    case .business(let message):
+      return UIPreviewBackendError.business(message)
+    }
+  }
+}
+
 /// UI 预览模拟后端的错误。Debug 下可见，Release 不编译。
 enum UIPreviewBackendError: LocalizedError {
   case missingStub(endpoint: String)
   case simulatedFailure(feature: String)
+  case business(String)
 
   var errorDescription: String? {
     switch self {
@@ -123,6 +190,8 @@ enum UIPreviewBackendError: LocalizedError {
       return "UI 预览未提供该接口的模拟数据：\(endpoint)"
     case .simulatedFailure(let feature):
       return "UI 预览：模拟加载失败（\(feature)）"
+    case .business(let message):
+      return message
     }
   }
 }

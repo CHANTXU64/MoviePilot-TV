@@ -41,6 +41,37 @@ struct UIPreviewPageHost<Content: View>: View {
   }
 }
 
+/// 顶部通知条场景容器：渲染真实页面（或指定背景），并在出现时让 `NotificationManager`
+/// 显示一条通知。用于播放失败、登录失效、保存失败等全局提示类状态；默认时长很长，便于截图。
+/// 通知条由目录根视图的 `withNotification()` 统一渲染。
+struct UIPreviewBannerHost<Backdrop: View>: View {
+  @EnvironmentObject private var notificationManager: NotificationManager
+
+  private let type: NotificationType
+  private let message: String
+  private let duration: Double
+  private let backdrop: Backdrop
+
+  init(
+    type: NotificationType,
+    message: String,
+    duration: Double = 600,
+    @ViewBuilder backdrop: () -> Backdrop
+  ) {
+    self.type = type
+    self.message = message
+    self.duration = duration
+    self.backdrop = backdrop()
+  }
+
+  var body: some View {
+    backdrop
+      .onAppear {
+        notificationManager.show(message: message, type: type, duration: duration)
+      }
+  }
+}
+
 extension UIPreviewEnvironment {
   /// 在当前环境上覆盖若干接口行为。
   func with(behaviors: [String: UIPreviewBackend.Behavior]) -> UIPreviewEnvironment {

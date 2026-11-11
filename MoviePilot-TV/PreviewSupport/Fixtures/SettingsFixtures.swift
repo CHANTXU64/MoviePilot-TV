@@ -24,6 +24,18 @@ enum UIPreviewContextKey {
   static let loginAutoSubmit = "login.autoSubmit"
   /// 为 "1" 时，日志 fixture 返回大量记录，用于验证滚动。
   static let logLongList = "log.longList"
+  /// 为 "1" 时，日志 fixture 只返回 INFO / DEBUG，默认的 WARN 筛选会得到空结果。
+  static let logOnlyInfo = "log.onlyInfo"
+  /// 为 "1" 时，日志 fixture 追加一条多行长错误，验证卡片截断与详情换行。
+  static let logLongMessage = "log.longMessage"
+  /// 为 "1" 时，日志读取结果附带「清理失败」存储问题。
+  static let logMaintenanceFailure = "log.maintenanceFailure"
+  /// 为 "1" 时，日志读取结果附带「保存失败」存储问题。
+  static let logWriteFailure = "log.writeFailure"
+  /// 为 "1" 时，日志读取结果附带「单条过大未保存」存储问题。
+  static let logRecordTooLarge = "log.recordTooLarge"
+  /// 为 "1" 时，过滤规则 fixture 追加一条非法正则规则，用于验证 FilterError 的用户可见文案。
+  static let settingsInvalidRule = "settings.invalidRule"
 }
 
 extension UIPreviewFixtures {
@@ -41,12 +53,25 @@ extension UIPreviewFixtures {
   // MARK: - 设置：过滤规则
 
   /// 自定义过滤规则（设置页硬过滤 / 软过滤共用的列表）。
+  /// `settings.invalidRule` 为 "1" 时额外返回一条 include 非法正则的规则，
+  /// 选中它后资源搜索会抛出 `CustomFilterService.FilterError`，用于预览规则校验失败文案。
   static func customFilterRules() async throws -> [CustomRule] {
     try await UIPreviewBackend.shared.gate(UIPreviewBehaviorKey.settingsCustomRules)
     if UIPreviewBackend.shared.isEmpty(for: UIPreviewBehaviorKey.settingsCustomRules) {
       return []
     }
-    return customRules
+    guard UIPreviewBackend.shared.context(UIPreviewContextKey.settingsInvalidRule) == "1" else {
+      return customRules
+    }
+    return customRules + [
+      CustomRule(
+        id: "rule-invalid-regex",
+        name: "损坏的硬过滤规则",
+        include: ["[unclosed"],
+        size_range: "many-gb",
+        seeders: "many"
+      )
+    ]
   }
 
   // MARK: - 设置：系统环境 / 媒体来源
@@ -95,11 +120,63 @@ extension UIPreviewFixtures {
 
     let now = Date()
     let longList = UIPreviewBackend.shared.context(UIPreviewContextKey.logLongList) == "1"
-    let matching = logRecords(now: now, longList: longList)
+    var source = logRecords(now: now, longList: longList)
+    if UIPreviewBackend.shared.context(UIPreviewContextKey.logLongMessage) == "1" {
+      source.append(longMessageRecord(now: now))
+    }
+    if UIPreviewBackend.shared.context(UIPreviewContextKey.logOnlyInfo) == "1" {
+      source = source.filter { $0.level == .info || $0.level == .debug }
+    }
+    let matching = source
       .filter { query.matches($0, now: now, retention: PersistentLogStore.retention) }
       .sorted { $0.timestamp > $1.timestamp }
     let records = Array(matching.prefix(max(0, query.limit)))
-    return LogQueryResult(records: records, isTruncated: matching.count > records.count)
+    return LogQueryResult(
+      records: records,
+      isTruncated: matching.count > records.count,
+      storageIssues: logStorageIssues()
+    )
+  }
+
+  /// 由场景上下文构造的本地日志存储问题，用于预览 LogViewerView 的橙色错误条。
+  private static func logStorageIssues() -> Set<LogStorageIssue> {
+    let backend = UIPreviewBackend.shared
+    var issues: Set<LogStorageIssue> = []
+    if backend.context(UIPreviewContextKey.logMaintenanceFailure) == "1" {
+      issues.insert(.maintenanceFailed)
+    }
+    if backend.context(UIPreviewContextKey.logWriteFailure) == "1" {
+      issues.insert(.writeFailed)
+    }
+    if backend.context(UIPreviewContextKey.logRecordTooLarge) == "1" {
+      issues.insert(.recordTooLarge)
+    }
+    return issues
+  }
+
+  /// 一条包含多行堆栈与超长单行的错误日志。
+  private static func longMessageRecord(now: Date) -> LogRecord {
+    LogRecord(
+      id: previewLogID(999),
+      timestamp: previewTimestamp(secondsAgo: 20, now: now),
+      level: .error,
+      message: """
+        资源搜索流式连接中断，已回退到分页接口
+        请求：/api/v1/search?keyword=tmdb%3A88001
+        站点：AlphaPT、BetaPT、GammaPT
+        错误：The network connection was lost.
+        重试：2/3
+        ---
+        ResourceSearchSession.start
+          APIService.performRequest
+          URLSession.data(for:)
+        后续：已回退到分页接口，部分结果可能缺失；这是一行用于验证卡片截断的较长文本，包含站点、接口、重试次数和回退结果，预期在日志卡片里只显示前几行，进入详情后才能看到完整内容。
+        """,
+      fileName: "ResourceSearchSession.swift",
+      function: "start(request:)",
+      line: 418,
+      metadata: ["keyword": "tmdb:88001", "fallback": "paged"]
+    )
   }
 
   /// 日志 fixture。时间都相对当前时间生成，默认的「今天 / WARN」筛选也能看到记录。

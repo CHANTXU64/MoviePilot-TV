@@ -198,6 +198,10 @@ extension UIPreviewFixtures {
 
   // MARK: - 整理历史
 
+  /// 整理历史列表。除分页外还支持三个预览专用变体：
+  /// - `transfer.historyLongList`：生成 24 条记录，用来触发第二页；
+  /// - `transfer.historyOnlyFailed`：只保留失败记录，隔离失败原因样式；
+  /// - `title`：按标题过滤，用来展示关键词搜索后的空结果。
   static func transferHistory(page: Int, count: Int, title: String?) async throws
     -> TransferHistoryResponse
   {
@@ -208,11 +212,38 @@ extension UIPreviewFixtures {
     if UIPreviewBackend.shared.isEmpty(for: UIPreviewBehaviorKey.transferHistory) {
       return TransferHistoryResponse(list: [], total: 0)
     }
-    let all = transferHistoryItems
-    if page <= 1 {
-      return TransferHistoryResponse(list: all, total: all.count)
+
+    var all: [TransferHistory]
+    if UIPreviewBackend.shared.context(UIPreviewContextKey.transferHistoryLongList) == "1" {
+      all = (1...24).map { index in
+        transfer(
+          id: 44_100 + index,
+          title: "预览整理记录 \(String(format: "%02d", index))",
+          status: index % 4 != 0,
+          mode: index.isMultiple(of: 2) ? "copy" : "softlink"
+        )
+      }
+    } else {
+      all = transferHistoryItems
     }
-    return TransferHistoryResponse(list: [], total: all.count)
+    if UIPreviewBackend.shared.context(UIPreviewContextKey.transferHistoryOnlyFailed) == "1" {
+      all = all.filter { !$0.status.value }
+    }
+
+    let keyword = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !keyword.isEmpty {
+      all = all.filter {
+        ($0.title ?? "").localizedCaseInsensitiveContains(keyword)
+      }
+    }
+
+    let pageSize = max(count, 1)
+    let start = max(page - 1, 0) * pageSize
+    guard start < all.count else {
+      return TransferHistoryResponse(list: [], total: all.count)
+    }
+    let end = min(start + pageSize, all.count)
+    return TransferHistoryResponse(list: Array(all[start..<end]), total: all.count)
   }
 
   static func transferStorages() async throws -> [StorageConf] {
@@ -231,6 +262,12 @@ extension UIPreviewFixtures {
   }
 
   // MARK: - 共享辅助
+
+  /// 分页器失败态演示：只经过 `component.paginator` 行为门，由调用方决定返回数据还是抛错。
+  static func componentPaginatorMedia() async throws -> [MediaInfo] {
+    try await UIPreviewBackend.shared.gate(UIPreviewBehaviorKey.componentPaginator)
+    return previewMediaGrid
+  }
 
   static func mediaTitled(id: Int, title: String) -> MediaInfo {
     baseTVMedia(id: id, title: title)
@@ -262,5 +299,14 @@ extension UIPreviewBehaviorKey {
   static let transferHistoryMore = "transfer.historyMore"
   static let transferStorages = "transfer.storages"
   static let searchSites = "search.sites"
+  /// 核心组件区「Paginator 连续失败」演示使用的独立接口门。
+  static let componentPaginator = "component.paginator"
+}
+
+extension UIPreviewContextKey {
+  /// 为 "1" 时整理历史返回 24 条记录，用于触发第二页加载。
+  static let transferHistoryLongList = "transfer.historyLongList"
+  /// 为 "1" 时整理历史只返回失败记录，用于隔离失败原因样式。
+  static let transferHistoryOnlyFailed = "transfer.historyOnlyFailed"
 }
 #endif

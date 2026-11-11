@@ -56,6 +56,54 @@ enum UIPreviewScenesTabs {
         ) {
           UIPreviewTabRootView(tab: .home)
         },
+        .page(
+          id: "home.subscriptionsTimeout",
+          title: "首页 · 订阅列表超时",
+          note:
+            "最近添加正常；订阅接口模拟网络超时，页面顶部提示“部分数据加载失败，当前显示的是旧数据”并保留最近添加区块。订阅与最近添加使用不同的接口键，失败互不影响。",
+          behaviors: [UIPreviewBehaviorKey.detailSubscriptions: .error(.networkTimeout)]
+        ) {
+          UIPreviewTabRootView(tab: .home)
+        },
+        .page(
+          id: "home.subscriptionsUnauthorized",
+          title: "首页 · 订阅列表登录失效",
+          note:
+            "订阅接口返回“登录已失效”。APIError 的本地化文案不会出现在首页，只落到同一条“部分数据加载失败”提示；验证底层错误细节不会泄漏给用户。",
+          behaviors: [UIPreviewBehaviorKey.detailSubscriptions: .error(.unauthorized)]
+        ) {
+          UIPreviewTabRootView(tab: .home)
+        },
+        .page(
+          id: "home.latestFailureOffline",
+          title: "首页 · 最近添加离线",
+          note:
+            "媒体服务器配置读取成功，但“最近添加”接口离线失败：最近添加为空并提示部分失败，我的订阅仍然完整展示。",
+          behaviors: [UIPreviewBehaviorKey.homeMediaServerLatest: .error(.networkOffline)]
+        ) {
+          UIPreviewTabRootView(tab: .home)
+        },
+        .page(
+          id: "home.allSectionsFailure",
+          title: "首页 · 全部区块失败",
+          note:
+            "最近添加与订阅同时失败且没有旧数据：顶部只显示“部分数据加载失败，当前显示的是旧数据”和“重试”，最近添加区显示“该服务器暂无最近内容”，生产没有整页“加载失败”错误页。",
+          behaviors: [
+            UIPreviewBehaviorKey.homeMediaServerLatest: .error(.gateway(503)),
+            UIPreviewBehaviorKey.detailSubscriptions: .error(.networkConnectionLost),
+          ]
+        ) {
+          UIPreviewTabRootView(tab: .home)
+        },
+        .page(
+          id: "home.refreshFailure",
+          title: "首页 · 刷新失败保留旧数据",
+          note:
+            "进入场景先成功加载一屏，随后把最近添加与订阅都切为失败并调用真实 refreshData：旧快照保留，顶部出现部分失败提示，用于验证自动刷新/手动重试失败不会清空已有内容。",
+          environment: UIPreviewEnvironment.standard
+        ) {
+          UIPreviewHomeRefreshFailureScene()
+        },
 
         // MARK: 推荐
         .page(
@@ -97,6 +145,33 @@ enum UIPreviewScenesTabs {
         ) {
           UIPreviewTabRootView(tab: .recommend)
         },
+        .page(
+          id: "recommend.timeout",
+          title: "推荐 · 加载超时",
+          note:
+            "推荐接口以网络超时失败。推荐页没有单独的错误卡片，货架列表保持空态；用于确认超时与普通失败在 UI 上同形，错误细节只进日志。",
+          behaviors: [UIPreviewBehaviorKey.recommendMedia: .error(.networkTimeout)]
+        ) {
+          UIPreviewTabRootView(tab: .recommend)
+        },
+        .page(
+          id: "recommend.loadMoreFailure",
+          title: "推荐 · 加载更多失败",
+          note:
+            "第一页正常，第二页返回 502。分页器保留已加载货架、不弹出错误；连续失败 3 次才会由分页器发全局通知。",
+          behaviors: [UIPreviewBehaviorKey.recommendMore: .error(.gateway(502))]
+        ) {
+          UIPreviewTabRootView(tab: .recommend)
+        },
+        .page(
+          id: "recommend.sourcesFailure",
+          title: "推荐 · 推荐来源失败",
+          note:
+            "推荐来源接口失败、推荐数据正常：来自“更多推荐”等来源的货架缺失，内置货架仍显示，属于部分区块失败。",
+          behaviors: [UIPreviewBehaviorKey.recommendSources: .error(.decoding)]
+        ) {
+          UIPreviewTabRootView(tab: .recommend)
+        },
 
         // MARK: 探索
         .page(
@@ -127,6 +202,42 @@ enum UIPreviewScenesTabs {
           title: "探索 · 加载失败",
           note: "发现列表接口失败。",
           behaviors: [UIPreviewBehaviorKey.recommendMedia: .failure]
+        ) {
+          UIPreviewTabRootView(tab: .explore)
+        },
+        .page(
+          id: "explore.timeout",
+          title: "探索 · 加载超时",
+          note:
+            "发现列表接口网络超时：网格保持空态，页面不展示具体错误文案；连续失败 3 次才由分页器发全局错误通知。",
+          behaviors: [UIPreviewBehaviorKey.recommendMedia: .error(.networkTimeout)]
+        ) {
+          UIPreviewTabRootView(tab: .explore)
+        },
+        .page(
+          id: "explore.unauthorized",
+          title: "探索 · 登录失效",
+          note:
+            "发现列表接口返回“登录已失效”。预览钩子直接抛错，不经过真实 401 会话处理，因此页面只表现为空网格；会话失效链路需在真实网络下验证。",
+          behaviors: [UIPreviewBehaviorKey.recommendMedia: .error(.unauthorized)]
+        ) {
+          UIPreviewTabRootView(tab: .explore)
+        },
+        .page(
+          id: "explore.sourceFailurePartial",
+          title: "探索 · 来源接口失败",
+          note:
+            "动态发现来源接口失败、列表接口正常：来源行保留内置项，额外的“豆瓣热榜”来源缺失，列表内容不受影响。",
+          behaviors: [UIPreviewBehaviorKey.discoverSources: .error(.serverMessage("来源服务暂不可用"))]
+        ) {
+          UIPreviewTabRootView(tab: .explore)
+        },
+        .page(
+          id: "explore.loadMoreFailure",
+          title: "探索 · 加载更多失败",
+          note:
+            "第一页正常，第二页网络超时。分页器保留第一页网格，静默失败；只有连续失败触达上限后才弹出全局通知。",
+          behaviors: [UIPreviewBehaviorKey.recommendMore: .error(.networkTimeout)]
         ) {
           UIPreviewTabRootView(tab: .explore)
         },
@@ -190,6 +301,45 @@ enum UIPreviewScenesTabs {
           UIPreviewTabRootView(tab: .status)
         },
         .page(
+          id: "status.statisticTimeout",
+          title: "状态 · 统计超时",
+          note:
+            "统计接口网络超时。统计、存储、下载器三项用 async let 并发加载，任一失败会让三项都保持 nil，最终统一显示“未获取”，不会出现半套数据。",
+          behaviors: [UIPreviewBehaviorKey.statusStatistic: .error(.networkTimeout)]
+        ) {
+          UIPreviewTabRootView(tab: .status)
+        },
+        .page(
+          id: "status.storageDecoding",
+          title: "状态 · 存储解码失败",
+          note:
+            "存储接口返回无法解码的响应。页面只显示“未获取”，不会暴露“响应解析失败”等底层文案；用于确认解码失败与超时在仪表盘上不可区分。",
+          behaviors: [UIPreviewBehaviorKey.statusStorage: .error(.decoding)]
+        ) {
+          UIPreviewTabRootView(tab: .status)
+        },
+        .page(
+          id: "status.downloaderOffline",
+          title: "状态 · 下载器概览离线",
+          note:
+            "下载器概览接口离线失败。与下载任务列表使用不同的接口键：仪表盘三项“未获取”，下方下载任务仍可正常加载。",
+          behaviors: [UIPreviewBehaviorKey.statusDownloader: .error(.networkOffline)]
+        ) {
+          UIPreviewTabRootView(tab: .status)
+        },
+        .page(
+          id: "status.partialDashboardFailure",
+          title: "状态 · 仪表盘部分接口失败",
+          note:
+            "统计与存储失败、下载器成功：因为三路结果在同一个 async let 元组里汇总，成功的一路也不会展示，三项全部显示“未获取”。",
+          behaviors: [
+            UIPreviewBehaviorKey.statusStatistic: .error(.serverMessage("统计服务异常")),
+            UIPreviewBehaviorKey.statusStorage: .error(.gateway(504)),
+          ]
+        ) {
+          UIPreviewTabRootView(tab: .status)
+        },
+        .page(
           id: "status.noManagePermission",
           title: "状态 · 无管理权限",
           note: "没有管理权限的用户，状态 Tab 不可见。",
@@ -238,6 +388,68 @@ enum UIPreviewScenesTabs {
           }
         },
         .page(
+          id: "status.downloadingItemsTimeout",
+          title: "状态 · 下载任务接口超时",
+          note:
+            "下载器在线、任务列表接口超时：页面最终显示“暂无下载任务”，没有错误文案或重试入口；只有连续失败 5 次才弹出“下载任务刷新失败，正在自动重试。”，这是当前的一处反馈缺口。",
+          behaviors: [UIPreviewBehaviorKey.downloadingItems: .error(.networkTimeout)]
+        ) {
+          UIPreviewPageHost {
+            ScrollView {
+              DownloadTaskView(isSelected: true)
+                .padding(60)
+            }
+          }
+        },
+        .page(
+          id: "status.downloadingClientsFailure",
+          title: "状态 · 下载器列表失败",
+          note:
+            "下载器配置接口失败：页面显示“下载器加载失败，正在自动重试”，任务列表为空；与任务接口失败时的纯空态不同。",
+          behaviors: [UIPreviewBehaviorKey.downloadClients: .error(.unauthorized)]
+        ) {
+          UIPreviewPageHost {
+            ScrollView {
+              DownloadTaskView(isSelected: true)
+                .padding(60)
+            }
+          }
+        },
+        .page(
+          id: "status.downloadingNoClients",
+          title: "状态 · 未配置下载器",
+          note:
+            "下载器配置返回空列表：没有可选择的下载器，页面只显示“暂无下载任务”，不会提示“未配置下载器”或引导去设置。",
+          behaviors: [UIPreviewBehaviorKey.downloadClients: .empty]
+        ) {
+          UIPreviewPageHost {
+            ScrollView {
+              DownloadTaskView(isSelected: true)
+                .padding(60)
+            }
+          }
+        },
+        .page(
+          id: "status.downloadingOperationFailure",
+          title: "状态 · 暂停下载失败通知",
+          note:
+            "覆盖真实下载列表并展示操作失败后的全局错误通知“暂停下载失败，请稍后重试。”。预览无法注入点击，因此通知文案按生产提示直接展示；恢复/删除失败共用同一条错误通知通道。",
+          environment: UIPreviewEnvironment.standard
+        ) {
+          UIPreviewBannerHost(
+            type: .error,
+            message: "暂停下载失败，请稍后重试。",
+            duration: 600
+          ) {
+            UIPreviewPageHost {
+              ScrollView {
+                DownloadTaskView(isSelected: true)
+                  .padding(60)
+              }
+            }
+          }
+        },
+        .page(
           id: "status.transferHistory",
           title: "状态 · 整理历史",
           note: "整理历史列表：媒体信息、整理状态、批量操作入口。"
@@ -276,6 +488,53 @@ enum UIPreviewScenesTabs {
           }
         },
         .page(
+          id: "status.transferHistoryTimeout",
+          title: "状态 · 整理历史超时",
+          note:
+            "整理历史接口网络超时。页面只显示“没有数据”，与真正空列表同形；超时/解析失败等错误细节不会出现在列表里。",
+          behaviors: [UIPreviewBehaviorKey.transferHistory: .error(.networkTimeout)]
+        ) {
+          UIPreviewPageHost {
+            ScrollView {
+              TransferHistoryView(viewModel: TransferHistoryViewModel(), isSelected: true)
+                .padding(60)
+            }
+          }
+        },
+        .page(
+          id: "status.transferHistorySearchEmpty",
+          title: "状态 · 整理历史搜索为空",
+          note:
+            "进入场景后立即用不存在的关键词调用真实 search(with:)：无论首次加载是否先完成，搜索都会重置分页并再刷新一次，最终展示“没有数据”。整理历史没有状态筛选，只支持关键词。",
+          environment: UIPreviewEnvironment.standard
+        ) {
+          UIPreviewTransferSearchEmptyScene()
+        },
+        .page(
+          id: "status.transferHistoryFailedOnly",
+          title: "状态 · 整理失败记录",
+          note:
+            "只返回失败记录（状态 false），聚焦其中一条时展示红色失败原因；原因超过 20 个字符会截断，完整内容需进入详情或日志确认。",
+          environment: transferFailedEnvironment
+        ) {
+          UIPreviewPageHost {
+            ScrollView {
+              TransferHistoryView(viewModel: TransferHistoryViewModel(), isSelected: true)
+                .padding(60)
+            }
+          }
+        },
+        .page(
+          id: "status.transferHistoryLoadMoreFailure",
+          title: "状态 · 整理历史加载更多失败",
+          note:
+            "先加载 24 条记录的第一页（20 条），再用真实分页器连续触发 3 次第二页失败：列表保留第一页内容，触达错误上限后分页器停止加载并弹出“加载数据失败，请重试。”。",
+          environment: transferLoadMoreFailureEnvironment,
+          behaviors: [UIPreviewBehaviorKey.transferHistoryMore: .error(.networkTimeout)]
+        ) {
+          UIPreviewTransferLoadMoreFailureScene()
+        },
+        .page(
           id: "status.manageOnly",
           title: "状态 · 仅管理权限",
           note: "非超级管理员只有 manage 权限：仪表盘概览隐藏，下载/整理仍可见。",
@@ -294,6 +553,107 @@ enum UIPreviewScenesTabs {
         },
       ]
     )
+  }
+
+  /// 只返回失败记录的整理历史环境。
+  private static var transferFailedEnvironment: UIPreviewEnvironment {
+    var environment = UIPreviewEnvironment.standard
+    environment.context[UIPreviewContextKey.transferHistoryOnlyFailed] = "1"
+    return environment
+  }
+
+  /// 24 条整理历史 + 第二页失败的环境。
+  private static var transferLoadMoreFailureEnvironment: UIPreviewEnvironment {
+    var environment = UIPreviewEnvironment.standard
+    environment.context[UIPreviewContextKey.transferHistoryLongList] = "1"
+    return environment
+  }
+}
+
+// MARK: - 刷新失败 / 搜索为空 / 加载更多失败
+
+/// 先成功加载首页，再切换为失败行为并调用真实 `refreshData`，用于验证旧数据保留。
+@MainActor
+private struct UIPreviewHomeRefreshFailureScene: View {
+  @StateObject private var viewModel = HomeViewModel()
+  @StateObject private var mediaActionHandler = MediaActionHandler()
+  @State private var didStart = false
+  @State private var isReady = false
+
+  var body: some View {
+    Group {
+      if isReady {
+        HomeView(viewModel: viewModel)
+      } else {
+        ProgressView("正在加载首页…")
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      }
+    }
+    .environmentObject(mediaActionHandler)
+    .withNotification()
+    .task {
+      guard !didStart else { return }
+      didStart = true
+      UIPreviewBackend.shared.activate(.standard)
+      await viewModel.loadData()
+
+      var failed = UIPreviewEnvironment.standard
+      failed.behaviors[UIPreviewBehaviorKey.homeMediaServerLatest] = .error(.networkTimeout)
+      failed.behaviors[UIPreviewBehaviorKey.detailSubscriptions] = .error(.networkOffline)
+      UIPreviewBackend.shared.activate(failed)
+      await viewModel.refreshData()
+      isReady = true
+    }
+  }
+}
+
+/// 用真实 `search(with:)` 走一次不存在的关键词，验证过滤后的空结果。
+@MainActor
+private struct UIPreviewTransferSearchEmptyScene: View {
+  @StateObject private var viewModel = TransferHistoryViewModel()
+  @State private var didSearch = false
+
+  var body: some View {
+    UIPreviewPageHost {
+      ScrollView {
+        TransferHistoryView(viewModel: viewModel, isSelected: true)
+          .padding(60)
+      }
+    }
+    .task {
+      guard !didSearch else { return }
+      didSearch = true
+      viewModel.search(with: "不存在的整理记录")
+    }
+  }
+}
+
+/// 第一页加载 20 条后连续触发 3 次第二页失败，触达分页器错误上限。
+@MainActor
+private struct UIPreviewTransferLoadMoreFailureScene: View {
+  @StateObject private var viewModel = TransferHistoryViewModel()
+  @State private var didStart = false
+
+  var body: some View {
+    UIPreviewPageHost {
+      ScrollView {
+        TransferHistoryView(viewModel: viewModel, isSelected: true)
+          .padding(60)
+      }
+    }
+    .task {
+      guard !didStart else { return }
+      didStart = true
+
+      // 等页面自己的首次 refresh 完成，再基于真实条目触发加载更多。
+      for _ in 0..<30 where viewModel.items.isEmpty {
+        try? await Task.sleep(for: .milliseconds(100))
+      }
+      guard let last = viewModel.items.last else { return }
+      for _ in 0..<3 {
+        await viewModel.loadMore(currentItemId: last.id)
+      }
+    }
   }
 }
 #endif

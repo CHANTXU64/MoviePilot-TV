@@ -267,6 +267,7 @@ PR CI 只执行 Simulator 构建、测试和脚本回归，不编译或打包发
 2. 预览渲染的是线上真实 View/ViewModel，只通过 `APIService` 的 DEBUG fixture 钩子替换数据。修改生产 ViewModel/View 的加载链路、模型字段或页面入口后，要同步检查预览目录对应场景是否仍能正常渲染，并补充新增页面/状态。
 3. 不要把 `.github/workflows/release-preview-guard.yml` 删掉或放宽；它负责确保 Release 产物不包含预览入口。
 4. 预览数据、订阅/下载等写操作都必须走模拟后端，不能在预览里访问真实 MoviePilot 后端或写入真实登录状态。
+5. 补充页面状态时优先用真实错误对象：`UIPreviewBackend.Behavior.error(UIPreviewErrorKind)` 覆盖超时、离线、4xx/5xx、解析失败、鉴权与业务错误；全局提示用 `UIPreviewBannerHost`，播放呈现代码用 `PlaybackCoordinator.installUIPreviewPresentation`（均只在 Debug 编译）。目录标题会显示总场景数，便于核对覆盖面。
 
 ## 文档维护规则
 

@@ -130,6 +130,14 @@ extension UIPreviewFixtures {
     if UIPreviewBackend.shared.isEmpty(for: UIPreviewBehaviorKey.searchAllSites) {
       return []
     }
+    if UIPreviewBackend.shared.hasBehavior(for: UIPreviewBehaviorKey.searchAllSitesDisabled) {
+      // 站点全部停用：页面仍会拿到完整列表（可展示名称），但没有 active 站点。
+      return sites.map {
+        Site(
+          id: $0.id, name: $0.name, domain: $0.domain, url: $0.url,
+          downloader: $0.downloader, is_active: FlexibleBool(false))
+      }
+    }
     return sites
   }
 
@@ -195,13 +203,87 @@ extension UIPreviewFixtures {
       return
     }
 
+    // 首屏的场景变体。变体键只判断是否出现（场景传 `.data`），用来演示真实
+    // `ResourceSearchSession` 对非完整事件、部分来源失败和长时间搜索的处理。
+    if isInitial {
+      if backend.hasBehavior(for: UIPreviewBehaviorKey.resourceMalformedBatch) {
+        try await sendResourceEvent(
+          resourceProgressEvent(text: "正在搜索 全部站点…", value: 28),
+          receive: receive
+        )
+        // total_items 与 items 数量不一致：事务完整性校验会抛 incompletePage。
+        try await sendResourceEvent(resourceMalformedBatchEvent(page: page), receive: receive)
+        return
+      }
+
+      if backend.hasBehavior(for: UIPreviewBehaviorKey.resourceSourcesAllUnavailable) {
+        try await sendResourceEvent(
+          resourceProgressEvent(text: "正在搜索 全部站点…", value: 28),
+          receive: receive
+        )
+        // 先给 4 条预览，让「已收到部分结果」的状态可见；终页再声明来源全部失败。
+        try await sendResourceEvent(
+          resourcePreviewEvent(items: resourceSearchContexts),
+          receive: receive
+        )
+        try await Task.sleep(for: .milliseconds(1200))
+        let failedSources = ["1", "3", "7"].map {
+          resourceSourceFact(
+            source: $0, page: page, canContinue: false,
+            error: "\(resourceSiteName(for: $0)) 无法连接")
+        }
+        try await sendResourceEvent(
+          resourceBatchEvent(items: [], sources: failedSources),
+          receive: receive
+        )
+        return
+      }
+
+      if backend.hasBehavior(for: UIPreviewBehaviorKey.resourceSourcesPartialFailure) {
+        try await sendResourceEvent(
+          resourceProgressEvent(text: "正在搜索 全部站点…", value: 28),
+          receive: receive
+        )
+        // BetaHD 失败：结果里只保留成功来源的条目，来源事实保留错误。
+        let items = resourceSearchContexts.filter { $0.torrent_info?.site_name != "BetaHD" }
+        let sources = ["1", "3", "7"].map { id in
+          resourceSourceFact(
+            source: id, page: page, canContinue: true,
+            error: id == "3" ? "BetaHD 连接超时，本页结果为空。" : nil)
+        }
+        try await sendResourceEvent(
+          resourceBatchEvent(items: items, sources: sources),
+          receive: receive
+        )
+        return
+      }
+
+      if backend.hasBehavior(for: UIPreviewBehaviorKey.resourceStuckProgress) {
+        try await sendResourceEvent(
+          resourceProgressEvent(text: "正在搜索 全部站点…", value: 28),
+          receive: receive
+        )
+        try await sendResourceEvent(
+          resourceProgressEvent(text: "正在过滤 全部站点 的结果…", value: 72),
+          receive: receive
+        )
+        try await sendResourceEvent(
+          resourcePreviewEvent(items: resourceSearchContexts),
+          receive: receive
+        )
+        // 场景配置 `.hang`：收到预览后长时间等待，页面停在「停止并查看」。
+        try await backend.gate(UIPreviewBehaviorKey.resourceStuckProgress)
+        return
+      }
+    }
+
     let name = isInitial ? "全部站点" : resourceSiteName(for: source)
     try await sendResourceEvent(
-      resourceProgressEvent(text: "正在搜索 \(name)…", value: 0.28),
+      resourceProgressEvent(text: "正在搜索 \(name)…", value: 28),
       receive: receive
     )
     try await sendResourceEvent(
-      resourceProgressEvent(text: "正在过滤 \(name) 的结果…", value: 0.72),
+      resourceProgressEvent(text: "正在过滤 \(name) 的结果…", value: 72),
       receive: receive
     )
 
@@ -309,6 +391,9 @@ extension UIPreviewFixtures {
     payload: AddDownloadRequest
   ) async throws -> (success: Bool, message: String?) {
     try await UIPreviewBackend.shared.gate(UIPreviewBehaviorKey.searchAddDownload)
+    if UIPreviewBackend.shared.hasBehavior(for: UIPreviewBehaviorKey.searchAddDownloadOffline) {
+      return (false, "预览：下载器 qb-main 当前离线，未接受任务。")
+    }
     if UIPreviewBackend.shared.isEmpty(for: UIPreviewBehaviorKey.searchAddDownload) {
       return (false, "预览：后端拒绝了这次下载（保存路径不可用）")
     }
@@ -356,6 +441,7 @@ extension UIPreviewFixtures {
     try await receive(event, 512)
   }
 
+  /// `value` 是百分比（与线上 SSE 一致；页面 `ProgressView(total: 100)`）。
   private static func resourceProgressEvent(text: String, value: Double) -> SearchStreamEvent {
     SearchStreamEvent(
       type: "append",
@@ -365,6 +451,44 @@ extension UIPreviewFixtures {
       enable: nil,
       total_items: nil,
       items: nil,
+      message: nil,
+      message_i18n: nil,
+      data: nil
+    )
+  }
+
+  /// 只有预览变体使用的非完整批次：`total_items` 比 items 多 1，
+  /// 让 `SearchReplaceBatchState` 抛出 incompletePage，走真实的失败提示。
+  private static func resourceMalformedBatchEvent(page: Int) -> SearchStreamEvent {
+    SearchStreamEvent(
+      type: "replace",
+      text: "正在整理结果…",
+      text_i18n: nil,
+      value: 1,
+      enable: nil,
+      total_items: resourceSearchContexts.count + 1,
+      items: resourceSearchContexts,
+      message: nil,
+      message_i18n: nil,
+      sources: resourceSourceFacts(page: page, canContinue: false),
+      stage: "done",
+      replace_batch: true,
+      batch_index: 0,
+      batch_count: 1,
+      data: nil
+    )
+  }
+
+  /// 搜索过程中的预览批次：不是终页，`ResourceSearchSession` 会保留这些条目。
+  private static func resourcePreviewEvent(items: [Context]) -> SearchStreamEvent {
+    SearchStreamEvent(
+      type: "append",
+      text: "已收到部分结果，等待站点继续返回…",
+      text_i18n: nil,
+      value: 88,
+      enable: nil,
+      total_items: nil,
+      items: items,
       message: nil,
       message_i18n: nil,
       data: nil
@@ -406,7 +530,8 @@ extension UIPreviewFixtures {
   private static func resourceSourceFact(
     source: String?,
     page: Int,
-    canContinue: Bool
+    canContinue: Bool,
+    error: String? = nil
   ) -> ResourceSearchSource {
     let id = source ?? ""
     return ResourceSearchSource(
@@ -414,7 +539,7 @@ extension UIPreviewFixtures {
       site_name: resourceSiteName(for: id),
       page: page,
       can_continue: canContinue,
-      error: nil
+      error: error
     )
   }
 
@@ -492,7 +617,23 @@ extension UIPreviewBehaviorKey {
   static let resourcePage = "search.resourcePage"
   static let resourcePageMore = "search.resourcePageMore"
 
-  // 写入型操作。
+  // 资源 SSE 的首屏场景变体。只在场景显式设置时生效；除特别说明外取值用 `.data`
+  // 作为开关，具体数据形态由 SearchFixtures 决定。
+  /// 终页 `total_items` 与 items 数量不一致，走 incompletePage 失败提示。
+  static let resourceMalformedBatch = "search.resourceMalformedBatch"
+  /// BetaHD 来源失败，成功来源的结果照常保留。
+  static let resourceSourcesPartialFailure = "search.resourceSourcesPartialFailure"
+  /// 先发 4 条预览，终页再让全部来源带 error 且不可继续；终页后无重试入口。
+  static let resourceSourcesAllUnavailable = "search.resourceSourcesAllUnavailable"
+  /// 收到预览结果后长时间等待；场景取 `.hang`。
+  static let resourceStuckProgress = "search.resourceStuckProgress"
+
+  // 站点与写入型操作。
+  /// 权威站点列表仍返回完整名称，但所有站点都是停用状态。
+  static let searchAllSitesDisabled = "search.allSitesDisabled"
+  /// 添加下载时下载器离线，后端返回业务失败文案。
+  static let searchAddDownloadOffline = "search.addDownloadOffline"
+
   static let searchAddDownload = "search.addDownload"
   static let searchForkSubscription = "search.forkSubscription"
 }

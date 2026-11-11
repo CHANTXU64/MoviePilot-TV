@@ -151,6 +151,11 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   /// 所有播放会话共用的上报队列：上一次播放的写回不会晚于下一次播放的上报和写回。
   private let reporter = PlaybackReporter()
   private var switchTask: Task<Void, Never>?
+
+  #if DEBUG
+  /// UI 预览专用：不经过真实起播流程，直接让「正在准备播放」遮罩出现。
+  private var uiPreviewResolving = false
+  #endif
   private nonisolated struct ConnectionKey: Hashable, Sendable {
     let type: String
     let name: String
@@ -179,6 +184,9 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
   }
 
   var isResolving: Bool {
+    #if DEBUG
+    if uiPreviewResolving { return true }
+    #endif
     guard case .resolving = phase else { return false }
     return true
   }
@@ -187,6 +195,18 @@ final class PlaybackCoordinator: ObservableObject, EpisodeQueueProviding {
     guard case .prompting(let prompt) = phase else { return nil }
     return prompt
   }
+
+  #if DEBUG
+  /// UI 预览专用：直接安装「解析中」遮罩或「续播询问」呈现状态。
+  /// 预览目录用它渲染真实 `PlaybackPresentationModifier`，不发起真实起播。
+  func installUIPreviewPresentation(
+    isResolving: Bool = false,
+    resumePrompt: ResumePrompt? = nil
+  ) {
+    uiPreviewResolving = isResolving
+    phase = resumePrompt.map(Phase.prompting) ?? .idle
+  }
+  #endif
 
   var session: PlaybackSession? {
     guard case .playing(let session) = phase else { return nil }

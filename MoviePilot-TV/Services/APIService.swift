@@ -3088,6 +3088,11 @@ class APIService: ObservableObject {
   func openSubtitleSearchStream(
     _ request: SubtitleSearchRequest
   ) -> AsyncThrowingStream<SubtitleSearchEvent, Error> {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return UIPreviewFixtures.subtitleSearchStream(request)
+    }
+    #endif
     do {
       let endpoint = try subtitleSearchEndpoint(for: request, streaming: true)
       return streamSSE(endpoint: endpoint, as: SubtitleSearchEvent.self)
@@ -3097,6 +3102,11 @@ class APIService: ObservableObject {
   }
 
   func searchSubtitles(_ request: SubtitleSearchRequest) async throws -> [SubtitleInfo] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.subtitleSearchResults(request)
+    }
+    #endif
     let endpoint = try subtitleSearchEndpoint(for: request, streaming: false)
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([SubtitleInfo].self, from: data)
