@@ -425,9 +425,11 @@ final class EpisodeTrialServiceTests: XCTestCase {
       let start = await service.start(request)
       XCTAssertEqual(start, .searching)
 
-      try await waitUntil { service.progress[request.key] == .noEligibleResource }
+      // 进度先变成没有资源，随后才删除临时订阅，两件事都等到。
+      try await waitUntil {
+        service.progress[request.key] == .noEligibleResource && fixture.mutations.last == "DELETE subscribe/81"
+      }
       XCTAssertEqual(sleeper.pollDelays, [EpisodeTrialService.activePollInterval])
-      XCTAssertEqual(fixture.mutations.last, "DELETE subscribe/81")
       page.cancel()
       await page.value
     }
@@ -519,6 +521,8 @@ final class EpisodeTrialServiceTests: XCTestCase {
       XCTAssertEqual(start, .searching)
 
       try await waitUntil { service.progress[request.key]?.isReady == true }
+      // 可以播放是在这次刷新中途发布的；排一次刷新，等这次推进完整结束再离开页面。
+      _ = await service.refresh(request)
       page.cancel()
       await page.value
       // 已经可以播放、没有可跟踪的事，页面离开后也不转给后台。
