@@ -3370,6 +3370,13 @@ class APIService: ObservableObject {
     return batch
   }
 
+  /// 停止试看订阅的这次搜索。已经越过下载边界或已结束时后端返回 success=false，调用方照常删除订阅。
+  func cancelEpisodeTrialBatch(id: String) async throws -> Bool {
+    guard EpisodeTrialBatch.isValidID(id) else { throw APIError.invalidURL }
+    let data = try await makeRequest(endpoint: "/subscribe/execution/batches/\(id)/cancel", method: "PUT")
+    return try decodeStrictActionResponseSync(from: data).success
+  }
+
   /// 通过订阅 ID 删除订阅
   /// - 对应前端: 1. `MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue` 2. `MoviePilot-Frontend/src/views/subscribe/SubscribeListView.vue`
   /// - 应用场景: 1. 在订阅编辑弹窗中点击“取消订阅”按钮。 2. 在订阅列表页进行批量删除操作时并发调用。

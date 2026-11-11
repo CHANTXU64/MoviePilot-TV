@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 设置页「试看规则」：和订阅大面板同样的版式，右边是搜索和下载规则，左栏是说明和「保存」。
+/// 设置页「试看订阅规则」：和订阅大面板同样的版式，右边是搜索和下载规则，左栏是说明和「保存」。
 struct EpisodeTrialRuleSheet: View {
   @Environment(\.dismiss) private var dismiss
   @StateObject private var viewModel: EpisodeTrialRuleViewModel
@@ -18,9 +18,9 @@ struct EpisodeTrialRuleSheet: View {
       helpText: focusedField?.help
     ) {
       VStack(alignment: .leading, spacing: 16) {
-        Text("试看规则")
+        Text("试看订阅规则")
           .font(.headline.bold())
-        Text("试看一集时，临时订阅按这里的规则搜索和下载，只找这一集。没有设置的项沿用 MoviePilot 的默认设置。")
+        Text("试看一集时，临时订阅按这里的规则搜索和下载。")
           .font(.caption)
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)

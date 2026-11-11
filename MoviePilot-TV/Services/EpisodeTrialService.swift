@@ -13,6 +13,8 @@ final class EpisodeTrialService: ObservableObject {
   private static let restartable = EpisodeTrialProgress.unavailable("上次试看准备未完成，可以重新发起")
   private static let editedElsewhere = EpisodeTrialProgress.unavailable("试看订阅已由其他入口修改")
   private static let formalEnded = EpisodeTrialProgress.unavailable("原订阅已结束，可以发起试看")
+  static let cancelled = EpisodeTrialProgress.unavailable("已取消试看，可以重新发起")
+  private static let cancelFailed = EpisodeTrialProgress.unavailable(EpisodeTrialHoldNotice.cancelFailure)
   /// 临时订阅创建后这段时间内补搜通常还在进行，清理检查得勤一些；之后放慢，直到服务器上没有本服务的临时订阅。
   private static let activeCleanupPeriod: TimeInterval = 20 * 60
   private static let activeCleanupInterval = Duration.seconds(20)
@@ -183,6 +185,53 @@ final class EpisodeTrialService: ObservableObject {
     let followsFormalOnly = job.formalSubscriptionID != nil && job.temporary == nil && job.creationMarker == nil
       && job.downloadHash == nil
     return followsFormalOnly ? Self.formalPollInterval : Self.activePollInterval
+  }
+
+  /// 用户在订阅卡片或订阅面板上取消试看：停掉还在进行的搜索，删除这条试看订阅，这一季就能正常订阅。
+  /// 别的设备或重装前发起的试看也能取消；已经提交给下载器的任务不动。返回试看订阅是否已经不在了。
+  func cancelTrial(subscriptionID id: Int) async -> Bool {
+    let seasonKey = jobs.values.first { $0.temporary?.id == id }?.target?.seasonKey ?? "cancel-\(id)"
+    let result = await enqueue(seasonKey: seasonKey, key: "cancel-\(id)", kind: .start) { service in
+      await service.performCancel(subscriptionID: id)
+    }
+    return result == Self.cancelled
+  }
+
+  /// 取消只是停掉搜索、删掉订阅，旧版本后端也能做；试看订阅只有管理员建得出来，也只有管理员能删。
+  var canCancelTrial: Bool { !isTornDown && api?.canRequestSuperUserEndpoints == true }
+
+  private func performCancel(subscriptionID id: Int) async -> EpisodeTrialProgress {
+    guard canCancelTrial, !Task.isCancelled, let api else { return Self.cancelFailed }
+    let operation = Operation(api: api, session: api.sessionSnapshot())
+    do {
+      let row = try await operation.api.fetchSubscriptions(forceRefresh: true).first { $0.id == id }
+      try operation.check()
+      // 确认时看到的是试看订阅，这时同一个 ID 已经不是了，就不删。
+      if let row, !row.isEpisodeTrial { return Self.cancelFailed }
+      let owned = jobs.filter { _, job in
+        job.temporary?.id == id || (row?.filter != nil && job.creationMarker == row?.filter)
+      }
+      if let row {
+        let batches = Set(([row.execution_status?.batch_id] + owned.values.map(\.batchID)).compactMap { $0 })
+        for batch in batches where EpisodeTrialBatch.isValidID(batch) {
+          _ = try? await operation.api.cancelEpisodeTrialBatch(id: batch)
+          try operation.check()
+        }
+        guard try await operation.api.deleteSubscription(id: id) else { return Self.cancelFailed }
+        try operation.check()
+      }
+      for (key, job) in owned {
+        var ended = EpisodeTrialJob()
+        ended.target = job.target
+        ended.finishedTemporaryID = id
+        ended.progress = Self.cancelled
+        try save(ended, key: key)
+      }
+      NotificationCenter.default.post(name: .subscriptionDidUpdate, object: nil)
+      return Self.cancelled
+    } catch {
+      return Self.cancelFailed
+    }
   }
 
   func tearDown() {

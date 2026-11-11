@@ -21,6 +21,9 @@ class SubscribeSheetViewModel: ObservableObject {
   @Published var canRetryLoad = false
   /// 这一季正被试看订阅占着。Sheet 用系统提示框告知后关闭，等试看结束再订阅。
   @Published private(set) var isHeldByEpisodeTrial = false
+  /// 正在取消占着这一季的试看订阅，之后接着准备订阅。
+  @Published private(set) var isReleasingEpisodeTrial = false
+  private var heldTrialSubscriptionID: Int?
 
   // 最后一次查询确认不存在时才保持为新订阅；查到既有记录后切换为编辑。
   @Published private(set) var isNewSubscription: Bool
@@ -271,7 +274,7 @@ class SubscribeSheetViewModel: ObservableObject {
               return false
             }
             guard !fullSubscribe.isEpisodeTrial else {
-              showEpisodeTrialInProgress()
+              showEpisodeTrialInProgress(id: fullSubscribe.id)
               return false
             }
             self.subscribe = fullSubscribe
@@ -432,7 +435,7 @@ class SubscribeSheetViewModel: ObservableObject {
     if fullSubscribe.isEpisodeTrial {
       createdSubscriptionReceipt = nil
       subscribe.id = nil
-      showEpisodeTrialInProgress()
+      showEpisodeTrialInProgress(id: fullSubscribe.id)
       return false
     }
     if shouldRollbackCreatedSubscription {
@@ -447,12 +450,42 @@ class SubscribeSheetViewModel: ObservableObject {
   }
 
   /// 后端按季去重，试看订阅还在时这一季没法另建订阅。
-  private func showEpisodeTrialInProgress() {
+  private func showEpisodeTrialInProgress(id: Int?) {
+    heldTrialSubscriptionID = id
     isHeldByEpisodeTrial = true
   }
 
   func acknowledgeEpisodeTrialHold() {
     isHeldByEpisodeTrial = false
+  }
+
+  /// 当前账号能否取消试看订阅（管理员）。
+  var canCancelEpisodeTrial: Bool {
+    heldTrialSubscriptionID != nil && apiService.sessionScope.episodeTrial.canCancelTrial
+  }
+
+  /// 「取消试看，继续订阅」：先取消占着这一季的试看订阅，再重新准备这次订阅；失败时可以重试。
+  /// 只做到准备好订阅面板，订阅仍要用户自己按。提示标记同步放下，关提示框时不会连带关掉订阅面板。
+  @discardableResult
+  func cancelEpisodeTrialAndContinue() -> Task<Void, Never>? {
+    guard canCancelEpisodeTrial, let id = heldTrialSubscriptionID, !isReleasingEpisodeTrial else { return nil }
+    isHeldByEpisodeTrial = false
+    heldTrialSubscriptionID = nil
+    isReleasingEpisodeTrial = true
+    return Task { await releaseEpisodeTrial(id: id) }
+  }
+
+  private func releaseEpisodeTrial(id: Int) async {
+    let snapshot = apiService.sessionSnapshot()
+    let cancelled = await apiService.sessionScope.episodeTrial.cancelTrial(subscriptionID: id)
+    isReleasingEpisodeTrial = false
+    guard canPublishLoadResult(from: snapshot), !shouldRollbackCreatedSubscription else { return }
+    guard cancelled else {
+      canRetryLoad = true
+      loadErrorMessage = EpisodeTrialHoldNotice.cancelFailure
+      return
+    }
+    await loadData()
   }
 
   private func clearLoadedOptions() {

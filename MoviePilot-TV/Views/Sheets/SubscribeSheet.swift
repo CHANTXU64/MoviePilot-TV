@@ -67,9 +67,14 @@ struct SubscribeSheet: View {
         }
       )
     ) {
-      Button("好", role: .cancel) {}
+      if viewModel.canCancelEpisodeTrial {
+        Button(EpisodeTrialHoldNotice.cancelAndSubscribeTitle, role: .destructive) {
+          viewModel.cancelEpisodeTrialAndContinue()
+        }
+      }
+      Button(EpisodeTrialHoldNotice.backTitle, role: .cancel) {}
     } message: {
-      Text(EpisodeTrialHoldNotice.subscribeMessage)
+      Text(viewModel.canCancelEpisodeTrial ? EpisodeTrialHoldNotice.subscribeMessage : EpisodeTrialHoldNotice.waitMessage)
     }
     .onAppear {
       guard !hasAppeared else { return }

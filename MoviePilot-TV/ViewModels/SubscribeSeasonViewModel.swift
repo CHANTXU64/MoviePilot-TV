@@ -659,6 +659,21 @@ class SubscribeSeasonViewModel: ObservableObject {
     seasonSubscriptions[seasonNumber] != nil
   }
 
+  /// 当前账号能否取消试看订阅（管理员）。
+  var canCancelEpisodeTrial: Bool { apiService?.sessionScope.episodeTrial.canCancelTrial == true }
+
+  /// 取消这一季的试看订阅：停掉它的搜索、删除订阅，再刷新各季订阅状态。
+  func cancelEpisodeTrial(season seasonNumber: Int) async {
+    guard let apiService, let summary = seasonSubscriptions[seasonNumber], summary.isEpisodeTrial else { return }
+    subscribingSeasons.insert(seasonNumber)
+    defer { subscribingSeasons.remove(seasonNumber) }
+    let sessionSnapshot = apiService.sessionSnapshot()
+    let cancelled = await apiService.sessionScope.episodeTrial.cancelTrial(subscriptionID: summary.id)
+    guard apiService.isSessionUnchanged(from: sessionSnapshot) else { return }
+    if !cancelled { errorMessage = EpisodeTrialHoldNotice.cancelFailure }
+    _ = try? await refreshSubscriptionSummaries(forceRefresh: true)
+  }
+
   func isSeasonHeldByEpisodeTrial(_ seasonNumber: Int) -> Bool {
     seasonSubscriptions[seasonNumber]?.isEpisodeTrial == true
   }

@@ -163,7 +163,7 @@ struct SubscribePanel: View {
     viewModel.loadErrorMessage ?? viewModel.errorMessage
   }
 
-  private var isBusy: Bool { isSaving || isReloading || viewModel.isLoading }
+  private var isBusy: Bool { isSaving || isReloading || viewModel.isLoading || viewModel.isReleasingEpisodeTrial }
 
 
   /// 加载失败时先重新加载，真正加载完成后再执行；没失败就直接执行。

@@ -1755,6 +1755,81 @@ final class SubscribeSheetViewModelTests: XCTestCase {
     XCTAssertEqual([postCount, pauseCount, deleteCount], [0, 0, 0])
   }
 
+  func testCancellingEpisodeTrialReleasesSeasonThenPreparesSubscriptionAgain() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    let trial = #"{"id":816,"name":"试看中","type":"电视剧","tmdbid":123482,"season":2,"state":"S","filter":"tv-episode-trial-1800000000-c"}"#
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET", path: "/api/v1/subscribe/media/123482", json: #"{"id":816,"tmdbid":123482,"season":2}"#)
+    await SubscribeSheetURLProtocol.stub.respond(method: "GET", path: "/api/v1/subscribe/816", json: trial)
+    await SubscribeSheetURLProtocol.stub.respond(method: "GET", path: "/api/v1/subscribe/", json: "[\(trial)]")
+    await SubscribeSheetURLProtocol.stub.respond(method: "GET", path: "/api/v1/subscribe", json: "[\(trial)]")
+    await SubscribeSheetURLProtocol.stub.respond(method: "DELETE", path: "/api/v1/subscribe/816", json: #"{"success":true}"#)
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
+    configureSuperSubscriber(service)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(name: "试看中", type: "电视剧", season: 2, tmdbid: 123482),
+      isNewSubscription: true,
+      apiService: service
+    )
+    let loaded = await viewModel.loadData()
+    XCTAssertFalse(loaded)
+    XCTAssertTrue(viewModel.isHeldByEpisodeTrial)
+    XCTAssertTrue(viewModel.canCancelEpisodeTrial)
+
+    let release = viewModel.cancelEpisodeTrialAndContinue()
+    XCTAssertFalse(viewModel.isHeldByEpisodeTrial, "提示标记同步放下，关提示框不会关掉订阅面板")
+    XCTAssertTrue(viewModel.isReleasingEpisodeTrial)
+    await release?.value
+
+    let deleteCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "DELETE", path: "/api/v1/subscribe/816")
+    let lookupCount = await SubscribeSheetURLProtocol.stub.requestCount(
+      method: "GET", path: "/api/v1/subscribe/media/123482")
+    XCTAssertEqual(deleteCount, 1)
+    XCTAssertEqual(lookupCount, 2, "取消后重新查询并准备订阅")
+    XCTAssertFalse(viewModel.isReleasingEpisodeTrial)
+    await viewModel.cancel()
+  }
+
+  func testSubscriberCannotCancelSomeoneElsesEpisodeTrial() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }
+
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = SubscribeSheetServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+
+    await SubscribeSheetURLProtocol.stub.reset()
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET", path: "/api/v1/subscribe/media/123483", json: #"{"id":817,"tmdbid":123483,"season":1}"#)
+    await SubscribeSheetURLProtocol.stub.respond(
+      method: "GET", path: "/api/v1/subscribe/817",
+      json: #"{"id":817,"name":"别人的试看","type":"电视剧","tmdbid":123483,"season":1,"state":"S","filter":"tv-episode-trial-1800000000-d"}"#)
+    service.baseURLForTesting = "http://subscribe-sheet-tests.local"
+    configureSubscriber(service)
+
+    let viewModel = SubscribeSheetViewModel(
+      subscribe: Subscribe(name: "别人的试看", type: "电视剧", season: 1, tmdbid: 123483),
+      isNewSubscription: true,
+      apiService: service
+    )
+    _ = await viewModel.loadData()
+    XCTAssertTrue(viewModel.isHeldByEpisodeTrial)
+    XCTAssertFalse(viewModel.canCancelEpisodeTrial)
+    XCTAssertNil(viewModel.cancelEpisodeTrialAndContinue(), "普通用户不会发起取消")
+    let deleteCount = await SubscribeSheetURLProtocol.stub.requestCount(method: "DELETE")
+    XCTAssertEqual(deleteCount, 0)
+    await viewModel.cancel()
+  }
+
   func testCreatedReceiptForEpisodeTrialRowIsNeitherEditedNorRolledBack() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(SubscribeSheetURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(SubscribeSheetURLProtocol.self) }

@@ -72,7 +72,7 @@ struct SystemView: View {
     apiService.canRequestSuperUserEndpoints
   }
 
-  /// 试看规则只在试看可用时显示：管理员，且后端版本支持（见 `EpisodeTrialAvailability`）。
+  /// 试看订阅规则只在试看可用时显示：管理员，且后端版本支持（见 `EpisodeTrialAvailability`）。
   private var canConfigureEpisodeTrial: Bool {
     canConfigureSubscriptions
       && EpisodeTrialAvailability.isAvailable(
@@ -345,7 +345,7 @@ struct SystemView: View {
               showsEpisodeTrialRule = true
             } label: {
               EpisodeTrialRuleSummary(service: apiService.sessionScope.episodeTrial) {
-                row("试看规则", value: $0)
+                row("试看订阅规则", value: $0)
               }
             }
             .focused($focusedItem, equals: .episodeTrialRule)
@@ -1669,7 +1669,7 @@ enum SystemFilterRulePreview {
   }
 }
 
-/// 「试看规则」一行的摘要，跟着当前账号保存的规则变化。
+/// 「试看订阅规则」一行的摘要，跟着当前账号保存的规则变化。
 private struct EpisodeTrialRuleSummary<Label: View>: View {
   @ObservedObject var service: EpisodeTrialService
   @ViewBuilder let label: (String) -> Label

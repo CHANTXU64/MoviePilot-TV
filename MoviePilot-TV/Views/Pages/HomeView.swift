@@ -542,6 +542,13 @@ private struct SubscribeItemView: View {
         } label: {
           Label("详情", systemImage: AppSymbol.details)
         }
+        if viewModel.canCancelEpisodeTrial {
+          Button(role: .destructive) {
+            showsEpisodeTrialNotice = true
+          } label: {
+            Label(EpisodeTrialHoldNotice.cancelTitle, systemImage: AppSymbol.unsubscribe)
+          }
+        }
       } else {
         actionMenu
       }
@@ -559,9 +566,23 @@ private struct SubscribeItemView: View {
       Text(SubscriptionCancelConfirmation.message(for: item))
     }
     .alert(EpisodeTrialHoldNotice.title, isPresented: $showsEpisodeTrialNotice) {
-      Button("好", role: .cancel) {}
+      if viewModel.canCancelEpisodeTrial {
+        Button(EpisodeTrialHoldNotice.cancelTitle, role: .destructive) {
+          cancelEpisodeTrial()
+        }
+      }
+      Button(EpisodeTrialHoldNotice.backTitle, role: .cancel) {}
     } message: {
-      Text(EpisodeTrialHoldNotice.manageMessage)
+      Text(viewModel.canCancelEpisodeTrial ? EpisodeTrialHoldNotice.manageMessage : EpisodeTrialHoldNotice.infoMessage)
+    }
+  }
+
+  private func cancelEpisodeTrial() {
+    Task {
+      guard await viewModel.cancelEpisodeTrial(subscribe: item) else {
+        notificationManager.show(message: EpisodeTrialHoldNotice.cancelFailure, type: .error)
+        return
+      }
     }
   }
 

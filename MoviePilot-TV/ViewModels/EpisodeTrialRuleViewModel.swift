@@ -1,7 +1,7 @@
 import Combine
 import Foundation
 
-/// 设置页「试看规则」的编辑草稿。打开时从当前账号保存的规则生成，按「保存」才写回；按 Menu 关掉不保存。
+/// 设置页「试看订阅规则」的编辑草稿。打开时从当前账号保存的规则生成，按「保存」才写回；按 Menu 关掉不保存。
 @MainActor
 final class EpisodeTrialRuleViewModel: ObservableObject {
   // 显式非隔离析构，避开 tvOS 18 的隔离析构回部署崩溃。
@@ -49,7 +49,7 @@ final class EpisodeTrialRuleViewModel: ObservableObject {
     } catch {
       guard apiService.isSessionUnchanged(from: session) else { return }
       Logger.error("加载试看规则选项失败: \(error)")
-      loadErrorMessage = "试看规则的选项没有加载完整，请重试。"
+      loadErrorMessage = "试看订阅规则的选项没有加载完整，请重试。"
     }
   }
 
@@ -60,7 +60,7 @@ final class EpisodeTrialRuleViewModel: ObservableObject {
       try service.saveRule(EpisodeTrialRule(settingsOf: draft))
       return true
     } catch {
-      saveErrorMessage = "试看规则没有保存，请关闭后重新打开。"
+      saveErrorMessage = "试看订阅规则没有保存，请关闭后重新打开。"
       return false
     }
   }

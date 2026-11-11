@@ -181,9 +181,15 @@ struct SubscribeSeasonContentView: View {
         set: { if !$0 { viewModel.episodeTrialNoticeSeason = nil } }
       )
     ) {
-      Button("好", role: .cancel) {}
+      if viewModel.canCancelEpisodeTrial {
+        Button(EpisodeTrialHoldNotice.cancelTitle, role: .destructive) {
+          guard let season = viewModel.episodeTrialNoticeSeason else { return }
+          Task { await viewModel.cancelEpisodeTrial(season: season) }
+        }
+      }
+      Button(EpisodeTrialHoldNotice.backTitle, role: .cancel) {}
     } message: {
-      Text(EpisodeTrialHoldNotice.manageMessage)
+      Text(viewModel.canCancelEpisodeTrial ? EpisodeTrialHoldNotice.manageMessage : EpisodeTrialHoldNotice.infoMessage)
     }
     .onChange(of: scenePhase) { _, phase in
       guard phase == .active else { return }
@@ -376,7 +382,7 @@ struct SubscribeSeasonContentView: View {
     let bottomLeft = statusText.map { "\(episodeCount) 集 · \($0)" }
     let footerText =
       isProcessing
-        ? "取消订阅中"
+        ? (isHeldByTrial ? "取消试看中" : "取消订阅中")
         : (isSubscribed ? (viewModel.subscriptionStatusText(for: seasonNumber) ?? "已订阅") : "订阅")
 
     MediaCard(
@@ -406,7 +412,14 @@ struct SubscribeSeasonContentView: View {
     .compositingGroup()
     .contextMenu {
       if isHeldByTrial {
-        // 试看订阅不能取消；菜单只留详情，按卡片本身会说明原因。
+        if viewModel.canCancelEpisodeTrial {
+          Button(role: .destructive) {
+            guard !isProcessing else { return }
+            viewModel.episodeTrialNoticeSeason = seasonNumber
+          } label: {
+            Label(EpisodeTrialHoldNotice.cancelTitle, systemImage: AppSymbol.unsubscribe)
+          }
+        }
       } else if isSubscribed {
         Button(role: .destructive) {
           guard !isProcessing else { return }

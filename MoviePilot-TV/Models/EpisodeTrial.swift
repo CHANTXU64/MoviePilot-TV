@@ -198,14 +198,17 @@ nonisolated struct EpisodeTrialJob: Codable, Sendable {
   var previousDownloadHistoryIDs: Set<Int> = []
 
   var isTracking: Bool {
-    if progress.isReady { return temporary != nil || creationMarker != nil }
+    // 可以播放、整理失败都算结束：只剩服务器上的临时订阅要收尾。整理失败后在 MoviePilot 重新整理成功的，
+    // 页面再打开时按媒体库发现。
+    if progress.isReady || progress == .organizationFailed { return temporary != nil || creationMarker != nil }
     return formalSubscriptionID != nil || temporary != nil || creationMarker != nil || searchPending
       || (batchID != nil && !searchFinished) || searchMayHaveDownloaded || downloadHash != nil
   }
 
   /// 服务器上不再有本任务的临时订阅，也不会有本任务提交的下载时，才允许重新发起。
   var canRestart: Bool {
-    !progress.isReady && formalSubscriptionID == nil && temporary == nil && creationMarker == nil
+    if progress == .organizationFailed { return temporary == nil && creationMarker == nil }
+    return !progress.isReady && formalSubscriptionID == nil && temporary == nil && creationMarker == nil
       && !searchPending && !searchMayHaveDownloaded && downloadHash == nil
   }
 
@@ -456,8 +459,16 @@ nonisolated extension Subscribe {
 /// 碰到试看订阅时的系统提示框文字，订阅面板、首页订阅卡和季订阅页共用。
 nonisolated enum EpisodeTrialHoldNotice {
   static let title = "这一季正在试看"
-  static let subscribeMessage = "试看结束后再订阅这一季。"
-  static let manageMessage = "这是试看一集用的临时订阅，试看结束后会自动删除，期间不能编辑、暂停或取消。"
+  static let subscribeMessage = "要订阅这一季，先取消试看。已经下载的文件不会删除。"
+  /// 不能取消试看的账号（不是管理员）看到的说明。
+  static let waitMessage = "试看结束后再订阅这一季。"
+  static let manageMessage = "这是试看一集用的临时订阅，试看结束后会自动删除。取消试看后，这一季就能正常订阅；已经下载的文件不会删除。"
+  /// 不能取消试看的账号（不是管理员）在订阅卡片上看到的说明。
+  static let infoMessage = "这是试看一集用的临时订阅，试看结束后会自动删除。"
+  static let cancelTitle = "取消试看"
+  static let cancelAndSubscribeTitle = "取消试看，继续订阅"
+  static let backTitle = "返回"
+  static let cancelFailure = "暂时无法取消试看，请稍后重试。"
 }
 
 /// 试看的这一集入库后的提示。用户多半已经离开详情页，看不到进度，所以用全局提示告诉他可以播放了。
