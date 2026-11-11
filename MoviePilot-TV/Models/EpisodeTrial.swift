@@ -459,3 +459,13 @@ nonisolated enum EpisodeTrialHoldNotice {
   static let subscribeMessage = "试看结束后再订阅这一季。"
   static let manageMessage = "这是试看一集用的临时订阅，试看结束后会自动删除，期间不能编辑、暂停或取消。"
 }
+
+/// 试看的这一集入库后的提示。用户多半已经离开详情页，看不到进度，所以用全局提示告诉他可以播放了。
+nonisolated enum EpisodeTrialReadyNotice {
+  static let messageKey = "message"
+
+  static func message(for request: EpisodeTrialRequest) -> String {
+    let title = trimmedNonEmpty([request.media.title]).map { "《\($0)》" } ?? "试看的剧集"
+    return "\(title)第 \(request.season) 季第 \(request.episodeNumber) 集已入库，可以播放了。"
+  }
+}

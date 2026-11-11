@@ -421,13 +421,15 @@ final class EpisodeTrialServiceTests: XCTestCase {
     let fixture = EpisodeTrialURLProtocol.fixture
     let sleeper = PollSleeper { fixture.setMode(.noResource) }
     try await withService(sleep: sleeper.sleep) { _, service, _, request in
+      let page = try await openPage(service, request)
       let start = await service.start(request)
       XCTAssertEqual(start, .searching)
 
-      await service.poll(request)
+      try await waitUntil { service.progress[request.key] == .noEligibleResource }
       XCTAssertEqual(sleeper.pollDelays, [EpisodeTrialService.activePollInterval])
-      XCTAssertEqual(service.progress[request.key], .noEligibleResource)
       XCTAssertEqual(fixture.mutations.last, "DELETE subscribe/81")
+      page.cancel()
+      await page.value
     }
   }
 
@@ -435,9 +437,14 @@ final class EpisodeTrialServiceTests: XCTestCase {
     let fixture = EpisodeTrialURLProtocol.fixture
     let sleeper = PollSleeper {}
     try await withService(sleep: sleeper.sleep) { _, service, _, request in
-      await service.poll(request)
+      let page = try await openPage(service, request)
+      let requests = fixture.requestCount
+      try await Task.sleep(for: .milliseconds(100))
+      XCTAssertEqual(fixture.requestCount, requests, "没有可跟踪的事时页面不请求后端")
       XCTAssertEqual(sleeper.pollDelays, [])
       XCTAssertEqual(fixture.mutations, [])
+      page.cancel()
+      await page.value
     }
   }
 
@@ -446,38 +453,114 @@ final class EpisodeTrialServiceTests: XCTestCase {
     fixture.setMode(.pausedFormal)
     let sleeper = PollSleeper { fixture.setMode(.missingFormal) }
     try await withService(sleep: sleeper.sleep) { _, service, _, request in
+      let page = try await openPage(service, request)
       let paused = await service.start(request)
       XCTAssertEqual(paused, .subscriptionPaused)
 
-      await service.poll(request)
+      try await waitUntil { service.progress[request.key] == .unavailable("原订阅已结束，可以发起试看") }
       XCTAssertEqual(sleeper.pollDelays, [EpisodeTrialService.formalPollInterval])
-      XCTAssertEqual(service.progress[request.key], .unavailable("原订阅已结束，可以发起试看"))
       XCTAssertEqual(fixture.mutations, [])
+      page.cancel()
+      await page.value
     }
   }
 
-  func testLeavingThePageStopsPollingButKeepsTheTrial() async throws {
-    let sleeper = PollSleeper(suspendsPolls: true) {}
-    try await withService(sleep: sleeper.sleep) { _, service, _, request in
+  func testLeavingThePageHandsOverAndAnnouncesWhenReady() async throws {
+    let fixture = EpisodeTrialURLProtocol.fixture
+    let library = LibraryBox()
+    // 第 1 次等待属于页面；页面离开后第 2 次属于后台跟踪，这时这一集整理完并入库。
+    let sleeper = PollSleeper([.suspend, .proceed {
+      fixture.setMode(.transferred)
+      library.value = .playable(server: "测试媒体库")
+    }])
+    try await withService(sleep: sleeper.sleep, availability: { _ in library.value }) { api, service, _, request in
+      let notices = ReadyNoticeRecorder(api: api)
+      let page = try await openPage(service, request)
+      let start = await service.start(request)
+      XCTAssertEqual(start, .searching)
+      try await waitUntil { sleeper.pollDelays.count == 1 }
+      page.cancel()
+      await page.value
+
+      try await waitUntil { notices.messages.count == 1 }
+      XCTAssertEqual(service.progress[request.key], .ready(server: "测试媒体库"))
+      XCTAssertEqual(sleeper.pollDelays, [EpisodeTrialService.activePollInterval, EpisodeTrialService.activePollInterval])
+      XCTAssertEqual(notices.messages, ["《试看测试》第 2 季第 5 集已入库，可以播放了。"])
+    }
+  }
+
+  func testStartWithoutPageIsFollowedAndAnnounced() async throws {
+    let fixture = EpisodeTrialURLProtocol.fixture
+    let library = LibraryBox()
+    let sleeper = PollSleeper([.proceed {
+      fixture.setMode(.transferred)
+      library.value = .playable(server: "测试媒体库")
+    }])
+    try await withService(sleep: sleeper.sleep, availability: { _ in library.value }) { api, service, _, request in
+      let notices = ReadyNoticeRecorder(api: api)
+      let start = await service.start(request)
+      XCTAssertEqual(start, .searching)
+      try await waitUntil { notices.messages.count == 1 }
+      XCTAssertEqual(service.progress[request.key], .ready(server: "测试媒体库"))
+    }
+  }
+
+  func testVisiblePageShowsReadyWithoutNotice() async throws {
+    let fixture = EpisodeTrialURLProtocol.fixture
+    let library = LibraryBox()
+    let sleeper = PollSleeper([.proceed {
+      fixture.setMode(.transferred)
+      library.value = .playable(server: "测试媒体库")
+    }])
+    try await withService(sleep: sleeper.sleep, availability: { _ in library.value }) { api, service, _, request in
+      let notices = ReadyNoticeRecorder(api: api)
+      let page = try await openPage(service, request)
       let start = await service.start(request)
       XCTAssertEqual(start, .searching)
 
-      let page = Task { await service.poll(request) }
-      for _ in 0..<300 where sleeper.pollDelays.isEmpty {
-        try await Task.sleep(for: .milliseconds(10))
-      }
-      XCTAssertEqual(sleeper.pollDelays, [EpisodeTrialService.activePollInterval])
+      try await waitUntil { service.progress[request.key]?.isReady == true }
       page.cancel()
       await page.value
-      XCTAssertEqual(service.progress[request.key], .searching)
-      XCTAssertFalse(EpisodeTrialURLProtocol.fixture.mutations.contains("DELETE subscribe/81"))
+      // 已经可以播放、没有可跟踪的事，页面离开后也不转给后台。
+      try await Task.sleep(for: .milliseconds(100))
+      XCTAssertEqual(notices.messages, [])
+      XCTAssertEqual(sleeper.pollDelays.count, 1)
     }
+  }
+
+  func testWaitingForFormalSubscriptionIsNotFollowedInBackground() async throws {
+    let fixture = EpisodeTrialURLProtocol.fixture
+    fixture.setMode(.pausedFormal)
+    let sleeper = PollSleeper([], then: .suspend)
+    try await withService(sleep: sleeper.sleep) { _, service, _, request in
+      let paused = await service.start(request)
+      XCTAssertEqual(paused, .subscriptionPaused)
+      try await Task.sleep(for: .milliseconds(100))
+      XCTAssertEqual(sleeper.pollDelays, [])
+    }
+  }
+
+  /// 打开显示这一集的页面，等它第一次刷新完、进入等待。
+  private func openPage(
+    _ service: EpisodeTrialService, _ request: EpisodeTrialRequest
+  ) async throws -> Task<Void, Never> {
+    let page = Task { await service.poll(request) }
+    try await waitUntil { service.progress[request.key] != nil }
+    return page
+  }
+
+  private func waitUntil(_ condition: @MainActor () -> Bool) async throws {
+    for _ in 0..<300 where !condition() {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertTrue(condition())
   }
 
   private func withService(
     library: EpisodeAvailability = .notOnServer, clock: TrialClock = TrialClock(),
     rule: EpisodeTrialRule? = EpisodeTrialRule(sites: [7], quality: "WEB-DL", include: "WEB", customWords: "test words"),
     sleep: EpisodeTrialService.Sleep? = nil,
+    availability: EpisodeTrialService.Availability? = nil,
     _ body: (APIService, EpisodeTrialService, UserDefaults, EpisodeTrialRequest) async throws -> Void
   ) async throws {
     let persistence = APIServicePersistenceSnapshot.capture()
@@ -492,9 +575,10 @@ final class EpisodeTrialServiceTests: XCTestCase {
       permissions: nil, user_id: 81, user_name: "fixture", avatar: nil)
     api.replaceSessionForTesting(baseURL: "https://episode-trial.local", token: token.access_token, currentUser: token)
     api.settings = GlobalSettings(BACKEND_VERSION: "v3.2.6")
+    let availability = availability ?? { _ in library }
     let service = sleep.map { sleep in
-      EpisodeTrialService(api: api, defaults: defaults, now: { clock.now }, sleep: sleep) { _ in library }
-    } ?? EpisodeTrialService(api: api, defaults: defaults, now: { clock.now }) { _ in library }
+      EpisodeTrialService(api: api, defaults: defaults, now: { clock.now }, sleep: sleep, availability: availability)
+    } ?? EpisodeTrialService(api: api, defaults: defaults, now: { clock.now }, availability: availability)
     defer { service.tearDown() }
     if let rule { try service.saveRule(rule) }
     let request = try XCTUnwrap(EpisodeTrialRequest(
@@ -505,35 +589,78 @@ final class EpisodeTrialServiceTests: XCTestCase {
   }
 }
 
-/// 页面轮询的等待：记下间隔，执行一次服务器变化后立即返回（或一直挂起到页面离开）；
-/// 定时清理的等待一直挂起，不干扰轮询的断言。
+/// 轮询（页面和后台跟踪）的等待按步骤编排：挂起到被取消，或执行一次服务器变化后立即返回；
+/// 步骤用完后按 `then` 处理。定时清理的等待一直挂起，不干扰轮询的断言。被取消的等待不计入。
 nonisolated private final class PollSleeper: @unchecked Sendable {
+  enum Step {
+    case suspend
+    case proceed(@Sendable () -> Void)
+  }
+
   private let lock = NSLock()
   private var requested: [Duration] = []
-  private let suspendsPolls: Bool
-  private let onPoll: @Sendable () -> Void
+  private var steps: [Step]
+  private let rest: Step
 
-  init(suspendsPolls: Bool = false, onPoll: @escaping @Sendable () -> Void) {
-    self.suspendsPolls = suspendsPolls
-    self.onPoll = onPoll
+  init(_ steps: [Step], then rest: Step = .suspend) {
+    self.steps = steps
+    self.rest = rest
+  }
+
+  convenience init(onPoll: @escaping @Sendable () -> Void) {
+    self.init([], then: .proceed(onPoll))
   }
 
   var pollDelays: [Duration] { lock.withLock { requested } }
 
   var sleep: EpisodeTrialService.Sleep {
     { [self] delay in
+      try Task.checkCancellation()
       let polls = [EpisodeTrialService.activePollInterval, EpisodeTrialService.formalPollInterval]
       guard polls.contains(delay) else {
         try await Task.sleep(for: .seconds(3600))
         return
       }
-      lock.withLock { requested.append(delay) }
-      if suspendsPolls {
-        try await Task.sleep(for: .seconds(3600))
-      } else {
-        onPoll()
+      let step = lock.withLock { () -> Step in
+        requested.append(delay)
+        return steps.isEmpty ? rest : steps.removeFirst()
+      }
+      switch step {
+      case .suspend: try await Task.sleep(for: .seconds(3600))
+      case .proceed(let change): change()
       }
     }
+  }
+}
+
+/// 测试改变的媒体库结果，后台跟踪的等待里会改它。
+nonisolated private final class LibraryBox: @unchecked Sendable {
+  private let lock = NSLock()
+  private var stored: EpisodeAvailability = .notOnServer
+
+  var value: EpisodeAvailability {
+    get { lock.withLock { stored } }
+    set { lock.withLock { stored = newValue } }
+  }
+}
+
+/// 记下某个 APIService 的试看服务发出的入库通知。
+@MainActor
+private final class ReadyNoticeRecorder {
+  private(set) var messages: [String] = []
+  private var observer: NSObjectProtocol?
+
+  init(api: APIService) {
+    observer = NotificationCenter.default.addObserver(
+      forName: .episodeTrialDidBecomeReady, object: api, queue: .main
+    ) { [weak self] notification in
+      let message = notification.userInfo?[EpisodeTrialReadyNotice.messageKey] as? String
+      MainActor.assumeIsolated { self?.messages.append(message ?? "") }
+    }
+  }
+
+  isolated deinit {
+    if let observer { NotificationCenter.default.removeObserver(observer) }
   }
 }
 

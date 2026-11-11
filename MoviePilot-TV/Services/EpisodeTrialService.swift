@@ -34,6 +34,15 @@ final class EpisodeTrialService: ObservableObject {
   private var seasonRuns: [String: SeasonRun] = [:]
   private var cleanupLoop: Task<Void, Never>?
   private var isTornDown = false
+  /// 正在显示这一集的页面，各自等着这一集被发起后接着刷新。有页面时进度直接显示在页面上，不另发通知。
+  private var visiblePages: [String: [UUID: AsyncStream<Void>.Continuation]] = [:]
+  /// 没有页面在看时接着跟踪的试看。只在本次运行内、试看还在进行时存在。
+  private var followers: [String: Follower] = [:]
+
+  private struct Follower {
+    let id: UUID
+    let task: Task<Void, Never>
+  }
 
   /// 范围大的推进覆盖范围小的：发起包含刷新，刷新包含清理。
   private enum RunKind: Int, Comparable {
@@ -84,9 +93,15 @@ final class EpisodeTrialService: ObservableObject {
   }
 
   func start(_ request: EpisodeTrialRequest) async -> EpisodeTrialProgress {
-    await enqueue(seasonKey: request.seasonKey, key: request.key, kind: .start) { service in
+    let result = await enqueue(seasonKey: request.seasonKey, key: request.key, kind: .start) { service in
       await service.run(request, mayCreate: true)
     }
+    if let pages = visiblePages[request.key] {
+      for page in pages.values { page.yield() }
+    } else {
+      follow(request)
+    }
+    return result
   }
 
   func refresh(_ request: EpisodeTrialRequest) async -> EpisodeTrialProgress {
@@ -95,15 +110,72 @@ final class EpisodeTrialService: ObservableObject {
     }
   }
 
-  /// 页面可见期间按间隔刷新这一集的进度，调用方在页面的 `.task` 里等待它，页面离开时任务取消就停。
-  /// 只推进已有的试看，不会发起新的；这一集没有需要跟踪的事（可以播放、已结束或从没发起）时自己停下。
-  /// 停下后由页面在用户操作或重新出现时再调用。
+  /// 页面显示这一集期间刷新进度，调用方在页面的 `.task` 里等待它，页面离开、任务取消时才返回。
+  /// 试看进行中按间隔刷新；没有需要跟踪的事（从没发起、已结束或可以播放）时不请求后端，等这一集被发起再继续。
+  /// 只推进已有的试看，不会发起新的。页面离开时试看还在进行，就转给服务在后台接着跟踪。
   func poll(_ request: EpisodeTrialRequest) async {
+    let key = request.key
+    let id = UUID()
+    let (started, continuation) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
+    followers.removeValue(forKey: key)?.task.cancel()
+    visiblePages[key, default: [:]][id] = continuation
+    defer { leavePage(request, id: id) }
+    var wakeUps = started.makeAsyncIterator()
     while !Task.isCancelled, !isTornDown {
-      _ = await refresh(request)
-      guard !Task.isCancelled, let delay = pollDelay(for: request.key) else { return }
-      do { try await sleep(delay) } catch { return }
+      let before = progress[key]
+      let current = await refresh(request)
+      // 刷新途中页面离开了，这次变成可以播放已经没人看到，照样通知。
+      if Task.isCancelled, visiblePages[key]?.count == 1 {
+        announceIfReady(request, from: before, to: current)
+      }
+      guard !Task.isCancelled else { return }
+      if let delay = pollDelay(for: key) {
+        do { try await sleep(delay) } catch { return }
+      } else if await wakeUps.next() == nil {
+        return
+      }
     }
+  }
+
+  private func leavePage(_ request: EpisodeTrialRequest, id: UUID) {
+    visiblePages[request.key]?.removeValue(forKey: id)?.finish()
+    guard visiblePages[request.key]?.isEmpty != false else { return }
+    visiblePages[request.key] = nil
+    follow(request)
+  }
+
+  /// 没有页面在看时接着跟踪进行中的试看，入库后发通知，用户离开详情页也能知道可以播放了。
+  /// 只在等正式订阅时不跟，避免 App 开着就一直请求后端。App 重启后不会恢复，进度等页面再打开时刷新。
+  private func follow(_ request: EpisodeTrialRequest) {
+    let key = request.key
+    guard !isTornDown, followers[key] == nil, backgroundDelay(for: key) != nil else { return }
+    let id = UUID()
+    let sleep = self.sleep
+    let task = Task { [weak self] in
+      while let delay = self?.backgroundDelay(for: key) {
+        do { try await sleep(delay) } catch { break }
+        guard let self, !Task.isCancelled else { break }
+        let before = self.progress[key]
+        let current = await self.refresh(request)
+        guard !Task.isCancelled else { break }
+        self.announceIfReady(request, from: before, to: current)
+      }
+      if self?.followers[key]?.id == id { self?.followers[key] = nil }
+    }
+    followers[key] = Follower(id: id, task: task)
+  }
+
+  private func backgroundDelay(for key: String) -> Duration? {
+    pollDelay(for: key) == Self.activePollInterval ? Self.activePollInterval : nil
+  }
+
+  private func announceIfReady(
+    _ request: EpisodeTrialRequest, from before: EpisodeTrialProgress?, to current: EpisodeTrialProgress
+  ) {
+    guard current.isReady, before?.isReady != true, !isTornDown, let api else { return }
+    NotificationCenter.default.post(
+      name: .episodeTrialDidBecomeReady, object: api,
+      userInfo: [EpisodeTrialReadyNotice.messageKey: EpisodeTrialReadyNotice.message(for: request)])
   }
 
   private func pollDelay(for key: String) -> Duration? {
@@ -119,6 +191,10 @@ final class EpisodeTrialService: ObservableObject {
     seasonRuns.removeAll()
     cleanupLoop?.cancel()
     cleanupLoop = nil
+    for follower in followers.values { follower.task.cancel() }
+    followers.removeAll()
+    for pages in visiblePages.values { for page in pages.values { page.finish() } }
+    visiblePages.removeAll()
     jobs.removeAll()
     progress.removeAll()
   }
