@@ -151,6 +151,7 @@ struct MediaDetailView: View {
   @State private var unsubscribeConfirmationMessage = ""
   /// 当前打开的豆瓣短评/影评详情
   @State private var selectedDoubanDiscussion: DoubanDiscussionEntry?
+  @State private var selectedEpisode: MoviePilotEpisode?
   /// 「演员 / 职员」行选中的分类。默认演员；演员确认为空、退到职员后记成职员，
   /// 之后演员重新加载（如页面重新激活时重试空结果）也不会让这一行消失或被换掉。
   @State private var selectedCreditKind: MediaDetailCreditKind = .cast
@@ -296,6 +297,9 @@ struct MediaDetailView: View {
     if shouldShowSeasonSubscriptionSection {
       return "season"
     }
+    if episodeTMDBID != nil {
+      return "episodes"
+    }
     if creditKind != nil {
       return "credits"
     }
@@ -309,6 +313,10 @@ struct MediaDetailView: View {
       return "similar"
     }
     return ""
+  }
+
+  private var episodeTMDBID: Int? {
+    MediaDetailEpisodeSeasons.tmdbID(for: viewModel.detail)
   }
 
   private var seasonInfoCount: Int? {
@@ -330,7 +338,8 @@ struct MediaDetailView: View {
       isSeasonDataLoaded: preloadTask.isSeasonDataLoaded,
       seasonCount: seasonInfoCount,
       hasSeasonLoadError: hasSeasonLoadError,
-      isSeasonLoading: isSeasonLoading
+      isSeasonLoading: isSeasonLoading,
+      hasSelectedEpisodeGroup: trimmedNonEmpty([preloadTask.seasonViewModel?.selectedGroupId]) != nil
     )
   }
 
@@ -496,6 +505,21 @@ struct MediaDetailView: View {
 
               seasonSubscriptionSection
                 .focused($focusedContentRow, equals: "season")
+              if let episodeTMDBID {
+                MediaDetailEpisodesView(
+                  media: viewModel.detail,
+                  tmdbID: episodeTMDBID,
+                  subscriptionSeasons: shouldShowSeasonSubscriptionSection
+                    ? preloadTask.seasonViewModel : nil,
+                  allowsRequests: allowsRequests,
+                  isContentVisible: showContentPage,
+                  showsHeader: showContentPage || firstVisibleRow != "episodes",
+                  onExpand: { navigationCoordinator.push($0) },
+                  onSelect: { selectedEpisode = $0 }
+                )
+                .id(episodeTMDBID)
+                .focused($focusedContentRow, equals: "episodes")
+              }
               creditsSection
                 .focused($focusedContentRow, equals: "credits")
               doubanDiscussionSection
@@ -634,9 +658,7 @@ struct MediaDetailView: View {
         )
       }
     }
-    // 焦点恢复关键：当 fullDetail 加载完成后，应用完整详情。
-    // MediaDetailView 从第一帧就存在于视图树中（用 partialMedia 初始化），
-    // 在 fullDetail 就绪前不配置任何内容，仅由 Loading 遮罩覆盖。
+    // 背景就绪后应用完整详情并完成首行准备。
     .onChange(of: preloadTask.isDetailReady) { _, isLoaded in
       if isLoaded, allowsRequests, presentationStyle == .standard {
         Task { @MainActor in
@@ -713,6 +735,7 @@ struct MediaDetailView: View {
       sheetSubscribe = nil
       showUnsubscribeConfirm = false
       selectedDoubanDiscussion = nil
+      selectedEpisode = nil
     }
     .mediaSubscriptionAlerts(using: subscriptionHandler)
     // 短评/影评详情：正文长文靠段落焦点停靠点驱动纵向滚动，不用浏览器打开豆瓣链接。
@@ -721,6 +744,9 @@ struct MediaDetailView: View {
         entry: entry,
         avatarURL: apiService.getDoubanCommentAvatarImageUrl(entry.avatar)
       )
+    }
+    .sheet(item: $selectedEpisode) { episode in
+      EpisodeDetailSheet(episode: episode)
     }
     .onChange(of: focusedButton) { _, newValue in
       if let newValue = newValue {
@@ -968,13 +994,13 @@ struct MediaDetailView: View {
     isSeasonDataLoaded: Bool,
     seasonCount: Int?,
     hasSeasonLoadError: Bool,
-    isSeasonLoading: Bool = false
+    isSeasonLoading: Bool = false,
+    hasSelectedEpisodeGroup: Bool = false
   ) -> Bool {
     guard canSubscribeMedia && detail.type == "电视剧" && !detail.canDirectlySubscribe else {
       return false
     }
-    if isSeasonLoading { return true }
-    if hasSeasonLoadError { return true }
+    if isSeasonLoading || hasSeasonLoadError || hasSelectedEpisodeGroup { return true }
     return !isSeasonDataLoaded || (seasonCount ?? 0) > 0
   }
 
@@ -1099,17 +1125,9 @@ struct MediaDetailView: View {
           }
 
           // Action Buttons — Apple TV style: primary + icon buttons
-          if presentationStyle == .direct {
-            if !allowsRequests {
-              Label("正在验证登录状态…", systemImage: AppSymbol.account)
-                .font(.caption).foregroundStyle(.secondary)
-            } else if preloadTask.isDetailFailed {
-              Text("详情加载失败，请返回后重试")
-                .font(.caption).foregroundStyle(.secondary)
-            } else if preloadTask.fullDetail == nil {
-              ProgressView("正在加载详情…")
-                .font(.caption)
-            }
+          if presentationStyle == .direct && !allowsRequests {
+            Label("正在验证登录状态…", systemImage: AppSymbol.account)
+              .font(.caption).foregroundStyle(.secondary)
           }
           HStack(spacing: 20) {
             if let playbackTarget = viewModel.inAppPlaybackTarget {
@@ -1324,6 +1342,7 @@ struct MediaDetailView: View {
             title: showContentPage ? "分季订阅" : nil,
             showBadges: showContentPage,
             loadsImages: true,
+            allowsEpisodeGroupRequests: allowsRequests,
             onSeasonTap: { season in
               let request = SubscribeSeasonRequest(
                 mediaInfo: viewModel.detail,

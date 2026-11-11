@@ -14,8 +14,6 @@ extension Notification.Name {
   static let authenticationNeedsAttention = Notification.Name("authenticationNeedsAttention")
   /// 分页连续失败达到上限，交由全局通知提示用户自行重试
   static let paginatorDidReachErrorLimit = Notification.Name("paginatorDidReachErrorLimit")
-  /// 媒体详情连续失败达到上限，交由全局通知提示用户
-  static let mediaDetailLoadDidFail = Notification.Name("mediaDetailLoadDidFail")
   /// 当前服务器和用户的默认搜索来源或站点发生变化
   static let searchDefaultsDidChange = Notification.Name("searchDefaultsDidChange")
 }
@@ -455,6 +453,11 @@ nonisolated struct MediaInfo: Codable, Identifiable, Hashable {
   let popularity: Double?
   /// 季详情
   let season_info: [TmdbSeason]?
+  /// TMDB 报告的常规季总数，缺失时无法据此判断季清单是否完整。
+  var reportedSeasonCount: Int? {
+    guard case .int(let count) = rawPayload?["number_of_seasons"], count > 0 else { return nil }
+    return count
+  }
   /// 合集ID
   let collection_id: Int?
   /// 导演
@@ -2444,6 +2447,14 @@ struct SubscribeSeasonRequest: Hashable, Codable {
   let mediaInfo: MediaInfo
   let initialSeason: Int?
   let initialEpisodeGroup: String?
+}
+
+struct MediaEpisodeGridRequest: Hashable, Codable {
+  let mediaInfo: MediaInfo
+  let tmdbID: Int
+  let initialSeason: Int?
+  let initialEpisodeGroup: String?
+  let initialEpisodeOffset: Int?
 }
 
 // MARK: - Transfer History Models

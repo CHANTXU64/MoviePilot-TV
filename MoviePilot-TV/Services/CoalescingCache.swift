@@ -93,6 +93,7 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
   func value(
     for key: Key,
     forceRefresh: Bool = false,
+    acceptsCachedValue: (Value) -> Bool = { _ in true },
     validate: () throws -> Void,
     load: @escaping @MainActor () async throws -> Value
   ) async throws -> Value {
@@ -101,7 +102,7 @@ final class CoalescingCache<Key: Hashable & Sendable, Value: Sendable> {
     var startsNewLoad = forceRefresh
     while true {
       try validate()
-      if !startsNewLoad, let cached = cachedValue(for: key) {
+      if !startsNewLoad, let cached = cachedValue(for: key), acceptsCachedValue(cached) {
         return cached
       }
 

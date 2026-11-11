@@ -1,14 +1,55 @@
 import SwiftUI
+import UIKit
 
 struct PickerOption<Value: Hashable>: Identifiable {
   let id: Value
   let title: String
   let value: Value
+  let detail: String?
 
-  init(title: String, value: Value) {
+  init(title: String, value: Value, detail: String? = nil) {
     self.title = title
     self.value = value
     self.id = value
+    self.detail = detail
+  }
+
+  var titleWithDetail: String {
+    guard let detail else { return title }
+    return "\(title) · \(detail)"
+  }
+
+  var singleLineMenuTitle: String {
+    let name = title.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    let attributes: [NSAttributedString.Key: Any] = [.font: UIFont.preferredFont(forTextStyle: .body)]
+    // 系统菜单独立排版。用正文尺寸测量，并为对勾和左右内边距留出空间。
+    let maxTextWidth: CGFloat = 360
+    if (name as NSString).size(withAttributes: attributes).width <= maxTextWidth {
+      return name
+    }
+    var prefix = name[...]
+    while !prefix.isEmpty {
+      prefix.removeLast()
+      let shortened = "\(prefix)…"
+      if (shortened as NSString).size(withAttributes: attributes).width <= maxTextWidth {
+        return shortened
+      }
+    }
+    return "…"
+  }
+
+  @ViewBuilder
+  func menuLabel(truncatesTitle: Bool = true) -> some View {
+    if let detail {
+      // 原生菜单将 LabeledContent 的内容渲染为独立副标题。
+      LabeledContent {
+        Text(detail)
+      } label: {
+        Text(singleLineMenuTitle)
+      }
+    } else {
+      Text(truncatesTitle ? singleLineMenuTitle : title)
+    }
   }
 }
 
@@ -41,14 +82,18 @@ struct SheetPicker<Value: Hashable>: View {
       } else {
         Picker(title, selection: $selection) {
           ForEach(options) { option in
-            Text(option.title).tag(option.value)
+            option.menuLabel(truncatesTitle: false)
+              .tag(option.value)
           }
         }
         .pickerStyle(.inline)
       }
     } label: {
       LabeledContent(title) {
-        MenuRowValue(text: Self.displayTitle(for: selection, in: options))
+        MenuRowValue(
+          text: Self.displayTitle(for: selection, in: options),
+          detail: options.first { $0.value == selection }?.detail
+        )
       }
       .if(SheetStyleFix.shouldApply) { view in
         view.padding(.horizontal)
@@ -95,12 +140,18 @@ struct SheetMultiPicker<T, ID: Hashable>: View {
 /// 区别于跳转下一页（右箭头）和输入框。
 private struct MenuRowValue: View {
   let text: String
+  var detail: String? = nil
 
   var body: some View {
     HStack(spacing: 12) {
       Text(text)
         .lineLimit(1)
         .minimumScaleFactor(0.7)
+      if let detail {
+        Text(detail)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: true, vertical: false)
+      }
       Image(systemName: AppSymbol.menuDisclosure)
         .font(.caption.bold())
         .foregroundStyle(.secondary)

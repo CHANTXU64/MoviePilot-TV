@@ -113,10 +113,6 @@ final class DynamicSourceBehaviorTests: XCTestCase {
     XCTAssertTrue(statusSource.contains("TransferHistoryView.shouldMountRows("))
     XCTAssertTrue(transferSource.contains(".onChange(of: keepsRowsMounted)"))
 
-    XCTAssertTrue(seasonSource.contains("@State private var gridListIdentity"))
-    XCTAssertFalse(seasonSource.contains("private let gridListIdentity"))
-    XCTAssertTrue(seasonSource.contains("GridImageDemandContext("))
-    XCTAssertTrue(seasonSource.contains("seasonInfos.prefix(retainedItemCount)"))
     XCTAssertTrue(seasonSource.contains("let displayCount = min(10, viewModel.seasonInfos.count)"))
 
     XCTAssertTrue(manualSearchSource.contains("searchTask?.cancel()"))
@@ -133,6 +129,22 @@ final class DynamicSourceBehaviorTests: XCTestCase {
       detailSource.contains(
         "loadingPosterReleaseDelay = PresentationTransitionRetention.duration"
       )
+    )
+  }
+
+  func testExpandedSeasonAndEpisodeGridsWireImageLifecycleInSource() throws {
+    let seasonSource = try source("MoviePilot-TV/Views/Pages/SubscribeSeasonView.swift")
+    let episodeSource = try source("MoviePilot-TV/Views/Pages/MediaDetailEpisodesView.swift")
+    let expansionGridSource = try source("MoviePilot-TV/Views/Components/DetailExpansionGrid.swift")
+
+    // 这里只验证两页的接线，保留窗口与图片需求行为由控制器用例覆盖。
+    for source in [seasonSource, episodeSource] {
+      XCTAssertTrue(containsTokensInOrder(source, ["DetailExpansionGrid(", "imageLifecycle: imageLifecycle"]))
+    }
+    XCTAssertTrue(expansionGridSource.contains("@State private var listIdentity: GridListIdentity"))
+    XCTAssertFalse(expansionGridSource.contains("private let listIdentity"))
+    XCTAssertTrue(
+      containsTrimmedLineSequence(expansionGridSource, [".environment(", "\\.gridImageDemandContext,", "GridImageDemandContext("])
     )
   }
 

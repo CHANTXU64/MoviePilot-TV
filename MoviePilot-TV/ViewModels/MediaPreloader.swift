@@ -207,7 +207,12 @@ class MediaPreloadTask: ObservableObject {
   // ⭐ 首屏可展示状态：完整详情已加载，且背景/海报已预取或等待超时
   @Published var fullDetail: MediaInfo?
   @Published var isDetailReady = false
-  @Published var isDetailFailed = false
+  @Published private(set) var isDetailFailed = false
+  @Published private(set) var detailRetryNumber: Int?
+  /// 详情终止加载的原因，供过渡画面说明。
+  @Published private(set) var detailFailureReason: String?
+  /// 由预加载器提供：当前是否有导航页面持有本任务。只在预加载器的 owner 表里记录一份。
+  fileprivate var isNavigationOwned: @MainActor () -> Bool = { false }
 
   // 可选预加载数据（持久存在，加载完直接显示）
   @Published var tmdbId: Int?
@@ -217,7 +222,7 @@ class MediaPreloadTask: ObservableObject {
   /// 分季数据是否已实际加载完毕（seasonViewModel 创建时 isLoading=true，loadData 完成后才设为 true）
   @Published var isSeasonDataLoaded = false
 
-  /// 编排识别、详情等待、分季与订阅的任务（用于取消）
+  /// 编排识别、详情等待、分季、单集预览与订阅的任务（用于取消）
   private var internalTasks: [Task<Void, Never>] = []
   private var detailTask: Task<Void, Never>?
   private var isStarted = false
@@ -251,8 +256,13 @@ class MediaPreloadTask: ObservableObject {
     detailTask = nil
     preparedContent = content
     fullDetail = content.detail
+    if isStarted {
+      startEpisodePreview(for: content.detail)
+    }
     isDetailReady = true
     isDetailFailed = false
+    detailRetryNumber = nil
+    detailFailureReason = nil
   }
 
   nonisolated static func hasDisplayableDetail(_ detail: MediaInfo) -> Bool {
@@ -268,6 +278,9 @@ class MediaPreloadTask: ObservableObject {
     // type 显示为合集但缺少 collection_id 时仍按普通媒体预加载，避免空合集 ID 卡住。
     guard partialMedia.shouldPreloadDetail else { return }
 
+    if let fullDetail {
+      startEpisodePreview(for: fullDetail)
+    }
     let detailLoad = Task { await self.loadDetail() }
     detailTask = detailLoad
     internalTasks.append(
@@ -283,10 +296,7 @@ class MediaPreloadTask: ObservableObject {
         await detailLoad.value
         self.detailTask = nil
         try? await tmdbRecognition
-        guard !Task.isCancelled else { return }
-
-        // 无论成功还是失败，都尝试加载依赖任务（失败时用 partialMedia 做 fallback）
-        let canonical = fullDetail ?? partialMedia
+        guard !Task.isCancelled, let canonical = fullDetail else { return }
 
         // F-221: partial 阶段可能因 canJumpToTMDB=false（无可识别身份）跳过识别；
         // full detail 到达后若补出 douban/bangumi/anilist 身份但无 TMDB 目标，
@@ -358,57 +368,93 @@ class MediaPreloadTask: ObservableObject {
 
   private func loadDetail() async {
     guard fullDetail == nil else { return }
-    guard let apiService else { return }
-    let maxRetries = 2
-    for attempt in 0...maxRetries {
-      if Task.isCancelled { return }
+    guard let uiIdentity = apiService?.uiIdentity,
+      partialMedia.identity != nil, trimmedNonEmpty([partialMedia.type]) != nil
+    else {
+      markDetailFailed(reason: nil)
+      return
+    }
+
+    var delay: Duration = .milliseconds(1500)
+    var attempt = 0
+    while true {
+      guard !Task.isCancelled, let apiService, apiService.uiIdentity == uiIdentity else { return }
+      attempt += 1
+      let snapshot = apiService.sessionSnapshot()
       do {
         let fetched = try await apiService.fetchMediaDetail(media: partialMedia)
         try Task.checkCancellation()
+        guard apiService.isSessionUnchanged(from: snapshot) else { throw CancellationError() }
         // 校验返回数据有效性：API 可能返回 200 但 body 是空/残缺 JSON
         // 此时 Codable 解码成功但所有字段为 nil，导致详情页显示 "Unknown" 空白页
         if Self.hasDisplayableDetail(fetched) {
           self.fullDetail = fetched
+          startEpisodePreview(for: fetched)
           let backgroundImageTimeout: Duration =
             SystemViewModel.shouldWaitMediaDetailBackgroundImage ? .seconds(3) : .milliseconds(100)
           await self.prefetchBackgroundImage(for: fetched, timeout: backgroundImageTimeout)
           try Task.checkCancellation()
+          detailRetryNumber = nil
           self.isDetailReady = true
           return
         } else {
           Logger.warning(
-            "第 \(attempt + 1) 次请求详情返回空数据，等待重试",
+            "第 \(attempt) 次请求详情返回空数据",
             metadata: ["title": partialMedia.title ?? "", "mediaId": partialMedia.id]
           )
-          if attempt < maxRetries {
-            try await Task.sleep(nanoseconds: 1_500_000_000)  // 等待 1.5 秒后重试
-          }
         }
       } catch {
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, apiService.uiIdentity == uiIdentity else { return }
         Logger.error(
-          "加载详情失败(attempt \(attempt + 1)): \(error)",
+          "加载详情失败（第 \(attempt) 次，\(type(of: error))）",
           metadata: ["title": partialMedia.title ?? "", "mediaId": partialMedia.id]
         )
-        if attempt < maxRetries {
-          try? await Task.sleep(nanoseconds: 1_500_000_000)
-        } else {
-          markDetailFailed()
+        // 会话已更换时，旧请求的错误不代表当前结果，按可重试处理。
+        if apiService.isSessionUnchanged(from: snapshot), !Self.canRetryDetail(after: error) {
+          markDetailFailed(reason: Self.detailFailureReason(for: error))
           return
         }
       }
+      // 焦点候选只短暂预载。实际打开的详情在导航 owner 存活期间继续等待。
+      if attempt >= 3, !isNavigationOwned() {
+        markDetailFailed(reason: nil)
+        return
+      }
+      detailRetryNumber = attempt
+      do {
+        try await Task.sleep(for: delay)
+      } catch {
+        return
+      }
+      delay = min(delay * 2, .seconds(8))
     }
-    Logger.error(
-      "API 重试后仍返回空数据，视为失败",
-      metadata: ["title": partialMedia.title ?? "", "mediaId": partialMedia.id]
-    )
-    markDetailFailed()
   }
 
-  /// 详情连续失败终态：置失败标志并交由全局通知提示用户。
-  private func markDetailFailed() {
+  private func markDetailFailed(reason: String?) {
     isDetailFailed = true
-    NotificationCenter.default.post(name: .mediaDetailLoadDidFail, object: nil)
+    detailRetryNumber = nil
+    detailFailureReason = reason
+  }
+
+  /// 连接故障、网关错误、5xx、空详情和同账号重登打断的请求会继续重试；
+  /// 权限拒绝、4xx、业务失败和无法解析的响应重试也不会变化，直接停下并说明原因。
+  nonisolated static func canRetryDetail(after error: Error) -> Bool {
+    if error is CancellationError { return true }
+    guard let error = error as? APIError else { return false }
+    switch error {
+    case .networkError, .gatewayStatus:
+      return true
+    case .serverMessage(let message):
+      guard let status = APIService.httpStatusCode(fromServerMessage: message) else { return false }
+      return status >= 500 || status == 408 || status == 429
+    case .invalidURL, .decodingError, .authenticationChallenge, .credentialsRejected,
+      .mfaUnsupported, .unauthorized, .unknown:
+      return false
+    }
+  }
+
+  nonisolated static func detailFailureReason(for error: Error) -> String? {
+    trimmedNonEmpty([(error as? LocalizedError)?.errorDescription])
   }
 
   // MARK: - ② 预热背景图
@@ -564,6 +610,31 @@ class MediaPreloadTask: ObservableObject {
     self.seasonViewModel = vm
     await vm.loadData(forceRefreshSubscriptions: false)
     self.isSeasonDataLoaded = true
+  }
+
+  private func startEpisodePreview(for detail: MediaInfo) {
+    guard let apiService, let tmdbID = MediaDetailEpisodeSeasons.tmdbID(for: detail) else { return }
+    guard !MediaDetailView.shouldShowSeasonSubscriptionSection(
+      canSubscribeMedia: apiService.canAccess(.subscribe), detail: detail, isSeasonDataLoaded: true,
+      seasonCount: detail.season_info?.count, hasSeasonLoadError: false
+    ) else { return }
+
+    let seasons = MediaDetailEpisodeSeasons.selectable(detail.season_info ?? []).compactMap(\.season_number)
+    guard let season = MediaDetailEpisodeSeasons.current(
+      selected: nil, preferred: detail.season, available: seasons
+    ) else { return }
+
+    // 只预载首行的单集信息，进入详情后复用同一接口缓存。
+    internalTasks.append(Task {
+      do {
+        try Task.checkCancellation()
+        _ = try await apiService.fetchTmdbEpisodes(tmdbID: tmdbID, season: season, episodeGroup: nil)
+      } catch is CancellationError {
+        return
+      } catch {
+        Logger.debug("预载单集信息失败: \(type(of: error))")
+      }
+    })
   }
 
   // MARK: - ④ 订阅状态
@@ -795,9 +866,8 @@ class MediaPreloader: ObservableObject {
   ) -> MediaPreloadTask {
     let key = media.id
     if let existing = cache[key] {
-      // 失败的任务不缓存：移除后重新创建，允许自动重试
-      // 场景：API 超时/网络抖动/后端返回空数据 → 任务卡在 isDetailFailed 永远无法恢复
-      if existing.isDetailFailed {
+      // 重启失败的候选预载，同时保留仍由导航栈持有的任务。
+      if existing.isDetailFailed, navigationOwners[key] == nil {
         existing.cancel()
         cache.removeValue(forKey: key)
       } else {
@@ -811,6 +881,7 @@ class MediaPreloader: ObservableObject {
     let task = MediaPreloadTask(
       partialMedia: media, apiService: apiService, preparedContent: preparedContent
     )
+    task.isNavigationOwned = { [weak self] in self?.navigationOwners[key] != nil }
     guard apiService != nil else {
       task.cancel()
       return task

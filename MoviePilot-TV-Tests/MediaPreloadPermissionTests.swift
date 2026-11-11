@@ -1,9 +1,144 @@
+import SwiftUI
 import XCTest
 
 @testable import MoviePilot_TV
 
 @MainActor
 final class MediaPreloadPermissionTests: XCTestCase {
+  func testNavigatedDetailRetriesPastPreloadLimitWithoutPublishingCardSeasons() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    let stub = MediaPreloadPermissionURLProtocol.stub
+    stub.reset()
+    configureStandardSubscriber(service)
+
+    let cardSeasons = try JSONDecoder().decode([TmdbSeason].self, from: Data(#"[{"season_number":7}]"#.utf8))
+    let media = MediaInfo(tmdb_id: 125, title: "卡片标题", type: "电视剧", season_info: cardSeasons)
+    let preloader = service.mediaPreloader
+    let owner = UUID()
+    let task = try XCTUnwrap(preloader.acquireNavigation(for: media, owner: owner))
+    defer { preloader.tearDown() }
+
+    try await waitUntil("前台详情进入第 1 次重试") { task.detailRetryNumber == 1 }
+    XCTAssertNil(task.fullDetail)
+    XCTAssertNil(task.seasonViewModel)
+    XCTAssertFalse(task.isDetailReady)
+    XCTAssertFalse(stub.requestPaths().contains("/api/v1/mediaserver/notexists"))
+
+    try await waitUntil("前台详情进入第 2 次重试", timeoutNanoseconds: 4_000_000_000) {
+      task.detailRetryNumber == 2
+    }
+    try await waitUntil("前台详情进入第 3 次重试", timeoutNanoseconds: 5_000_000_000) {
+      task.detailRetryNumber == 3
+    }
+
+    try await waitUntil("前台详情跨过预载上限后恢复", timeoutNanoseconds: 14_000_000_000) {
+      task.isDetailReady && task.isSeasonDataLoaded
+    }
+    XCTAssertEqual(task.fullDetail?.title, "完整详情")
+    XCTAssertEqual(task.seasonViewModel?.seasonInfos.compactMap(\.season_number), [2, 3])
+    XCTAssertNil(task.detailRetryNumber)
+    XCTAssertFalse(task.isDetailFailed)
+  }
+
+  func testNavigatedDetailStopsOnClientErrorAndExplainsReason() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    let stub = MediaPreloadPermissionURLProtocol.stub
+    stub.reset()
+    configureStandardSubscriber(service)
+
+    let media = MediaInfo(tmdb_id: 126, title: "不存在的详情", type: "电视剧")
+    let preloader = service.mediaPreloader
+    let task = try XCTUnwrap(preloader.acquireNavigation(for: media, owner: UUID()))
+    defer { preloader.tearDown() }
+
+    try await waitUntil("4xx 直接终止") { task.isDetailFailed }
+    XCTAssertNil(task.detailRetryNumber)
+    XCTAssertEqual(task.detailFailureReason, "404: Not Found")
+    try await Task.sleep(for: .milliseconds(1700))
+    XCTAssertEqual(stub.requestPaths().filter { $0 == "/api/v1/media/126" }.count, 1)
+    XCTAssertTrue(preloader.preload(for: media) === task, "仍被导航持有的终态任务不重建")
+  }
+
+  func testDetailRetryPolicySeparatesTransientAndPermanentErrors() {
+    let retryable: [Error] = [
+      CancellationError(),
+      APIError.networkError(URLError(.timedOut)),
+      APIError.gatewayStatus(502, "502"),
+      APIService.serverMessageError(statusCode: 500, data: Data("{}".utf8)),
+      APIService.serverMessageError(statusCode: 429, data: Data()),
+    ]
+    for error in retryable {
+      XCTAssertTrue(MediaPreloadTask.canRetryDetail(after: error), "\(error)")
+    }
+    let permanent: [Error] = [
+      APIError.invalidURL,
+      APIError.decodingError(URLError(.cannotDecodeContentData)),
+      APIError.authenticationChallenge(statusCode: 403, message: "无权访问"),
+      APIError.credentialsRejected,
+      APIError.mfaUnsupported,
+      APIError.unauthorized,
+      APIError.unknown,
+      APIService.serverMessageError(statusCode: 404, data: Data(#"{"detail":"Not Found"}"#.utf8)),
+      APIService.serverMessageError(statusCode: 422, data: Data()),
+      APIError.serverMessage("500 部影片未识别"),
+      APIError.serverMessage("Request failed"),
+    ]
+    for error in permanent {
+      XCTAssertFalse(MediaPreloadTask.canRetryDetail(after: error), "\(error)")
+    }
+    XCTAssertEqual(
+      MediaPreloadTask.detailFailureReason(for: APIError.authenticationChallenge(statusCode: 403, message: nil)),
+      "HTTP 403"
+    )
+  }
+
+  func testPoppingRetryingDetailReactivatesSourceAndCancelsRetry() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
+    let service = APIService.isolatedTestingInstance()
+    let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+    defer { snapshot.restore(to: service) }
+    let stub = MediaPreloadPermissionURLProtocol.stub
+    stub.reset()
+    configureStandardSubscriber(service)
+
+    let preloader = service.mediaPreloader
+    let navigation = ImageNavigationCoordinator(apiService: service)
+    navigation.setStackForeground(true)
+    let source = navigation.push(ResourceSearchRequest(
+      keyword: "来源页面", type: nil, area: nil, title: nil,
+      year: nil, season: nil, mediaInfo: nil, sites: nil
+    ))
+    let sourceLifecycle = navigation.lifecycle(for: source)
+    let media = MediaInfo(tmdb_id: 125, title: "待重试详情", type: "电视剧")
+    let detail = navigation.push(media)
+    let detailLifecycle = navigation.lifecycle(for: detail)
+    let task = try XCTUnwrap(navigation.preloadTask(for: detail))
+    defer { preloader.tearDown() }
+    try await waitUntil("详情进入重试") { task.detailRetryNumber == 1 }
+    XCTAssertEqual(sourceLifecycle.phase, .adjacent)
+
+    navigation.path.removeLast()
+
+    XCTAssertEqual(navigation.topEntryID, source.id)
+    XCTAssertEqual(sourceLifecycle.phase, .active)
+    XCTAssertTrue(detailLifecycle.isRemoved)
+    XCTAssertTrue(preloader.isFocusPreloadSuppressed(for: media.id, stackID: navigation.id))
+
+    try await Task.sleep(for: .milliseconds(1600))
+    XCTAssertEqual(stub.requestPaths().filter { $0 == "/api/v1/media/125" }.count, 1)
+    XCTAssertNil(task.fullDetail)
+    XCTAssertNil(preloader.getTask(for: media))
+  }
+
   func testRestrictedUserTvDetailDoesNotWaitForHiddenSeasonRow() async throws {
     XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
     defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
@@ -59,8 +194,50 @@ final class MediaPreloadPermissionTests: XCTestCase {
     let paths = MediaPreloadPermissionURLProtocol.stub.requestPaths()
     XCTAssertFalse(paths.contains("/api/v1/mediaserver/notexists"))
     XCTAssertFalse(paths.containsSubscribeListPath)
+    XCTAssertFalse(paths.contains { $0.hasPrefix("/api/v1/tmdb/123/") })
     XCTAssertNil(task.seasonViewModel)
     XCTAssertFalse(task.isSeasonDataLoaded)
+  }
+
+  func testPreloadWarmsOneSeasonOnlyWhenEpisodesAreTheFirstRow() async throws {
+    XCTAssertTrue(APIService.installURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self))
+    defer { APIService.removeURLProtocolForTesting(MediaPreloadPermissionURLProtocol.self) }
+    let stub = MediaPreloadPermissionURLProtocol.stub
+    let episodePath = "/api/v1/tmdb/124/2"
+
+    for canSubscribe in [false, true] {
+      stub.reset()
+      let service = APIService.isolatedTestingInstance()
+      let snapshot = MediaPreloadPermissionServiceSnapshot.capture(service: service)
+      defer { snapshot.restore(to: service) }
+      if canSubscribe {
+        configureStandardSubscriber(service)
+      } else {
+        configureLimitedUser(service)
+      }
+      let cardSeasons = try JSONDecoder().decode(
+        [TmdbSeason].self, from: Data(#"[{"season_number":1}]"#.utf8)
+      )
+      let task = MediaPreloadTask(
+        partialMedia: MediaInfo(
+          tmdb_id: 124, title: "预览剧集", type: "电视剧", season: 1, season_info: cardSeasons
+        ),
+        apiService: service
+      )
+      task.start()
+      defer { task.cancel() }
+
+      if canSubscribe {
+        try await waitUntil("分季订阅行已就绪") { task.isSeasonDataLoaded }
+        XCTAssertEqual(task.seasonViewModel?.seasonInfos.count, 3)
+        XCTAssertFalse(stub.requestPaths().contains { $0.hasPrefix("/api/v1/tmdb/124/") })
+      } else {
+        try await waitUntil("剧集首行已发起预载") { stub.requestPaths().contains(episodePath) }
+        let episodes = try await service.fetchTmdbEpisodes(tmdbID: 124, season: 2, episodeGroup: nil)
+        XCTAssertEqual(episodes.map(\.name), ["第二季第一集"])
+        XCTAssertEqual(stub.requestPaths().filter { $0.hasPrefix("/api/v1/tmdb/124/") }, [episodePath])
+      }
+    }
   }
 
   func testRestrictedSeasonStatusRefreshDoesNotRequestSubscribeSnapshot() async throws {
@@ -872,6 +1049,24 @@ private final class MediaPreloadPermissionURLProtocolStub: @unchecked Sendable {
     switch path {
     case "/api/v1/media/123":
       return (200, jsonData(#"{"tmdb_id":123,"title":"Limited Show","type":"电视剧"}"#))
+    case "/api/v1/media/124":
+      return (
+        200, jsonData(#"""
+          {"tmdb_id":124,"title":"预览剧集","type":"电视剧","season":2,
+           "season_info":[{"season_number":0},{"season_number":1},{"season_number":2}]}
+          """#)
+      )
+    case "/api/v1/tmdb/124/2":
+      return (200, jsonData(#"[{"episode_number":1,"name":"第二季第一集"}]"#))
+    case "/api/v1/media/125":
+      switch requestPaths().filter({ $0 == path }).count {
+      case 1, 3: return (500, jsonData("{}"))
+      case 2: return (200, jsonData("{}"))
+      default:
+        return (200, jsonData(#"{"tmdb_id":125,"title":"完整详情","type":"电视剧","season_info":[{"season_number":2},{"season_number":3}]}"#))
+      }
+    case "/api/v1/media/126":
+      return (404, jsonData(#"{"detail":"Not Found"}"#))
     case "/api/v1/media/456":
       return (200, jsonData(#"{"tmdb_id":456,"title":"Limited Movie","type":"电影"}"#))
     case "/api/v1/media/987":

@@ -18,6 +18,8 @@ private struct MediaLoadingView: View {
   let year: String?
   let rating: Double?
   let overview: String?
+  let statusMessage: String?
+  let isUnavailable: Bool
   /// 如果数据已预加载完毕，跳过飞入动画
   let isAlreadyLoaded: Bool
   /// 加载结束后卸载透明遮罩内的解码海报，只保留稳定的视图结构。
@@ -55,8 +57,6 @@ private struct MediaLoadingView: View {
 
   var body: some View {
     ZStack {
-      // 不透明背景：Detail 层不再用 opacity(0) 隐藏（否则内容区会失去焦点），
-      // 视觉遮挡改由遮罩完成，必须完全不透明才能盖住未就绪的详情内容。
       Rectangle()
         .fill(Color(white: 0.08))
         .ignoresSafeArea()
@@ -98,14 +98,20 @@ private struct MediaLoadingView: View {
 
         // 文本信息区
         VStack(spacing: 12) {
-          if let title = title, !title.isEmpty {
-            HStack(spacing: 12) {
+          HStack(spacing: 12) {
+            if !isUnavailable {
               ProgressView()
                 .tint(.primary)
+            }
+            if let title, !title.isEmpty {
               Text(title)
                 .font(.title3.bold())
                 .foregroundColor(.primary)
             }
+          }
+          if let statusMessage {
+            Text(statusMessage)
+              .font(.caption)
           }
 
           HStack(spacing: 8) {
@@ -192,10 +198,6 @@ private struct MediaLoadingView: View {
 /// 负责从 MediaPreloader 获取预加载任务，管理加载状态，
 /// 在 fullDetail 就绪后通过 applyFullDetail 刷新 MediaDetailView。
 ///
-/// ⚠️ 焦点恢复关键设计：
-/// MediaDetailView 从第一帧起就存在于视图树中（用 partialMedia 初始化），
-/// Loading 只负责视觉遮挡，真实详情始终留在原生焦点树中。
-/// 不按 Loading 状态限制按钮动作，不禁用整页、不向 Loading 转移焦点。
 struct MediaDetailContainerView: View {
   let media: MediaInfo
   let routeID: UUID
@@ -236,19 +238,18 @@ struct MediaDetailContainerView: View {
     for sourceMedia: MediaInfo,
     fullDetail: MediaInfo?,
     recognizedTmdbId: Int?,
-    didFailToLoadDetail: Bool,
     isEnabled: Bool = SystemViewModel.shouldPreloadTMDBDetails
   ) -> MediaInfo? {
     guard isEnabled,
       sourceMedia.tmdb_id == nil,
       sourceMedia.canJumpToTMDB,
-      let jumpSource = fullDetail ?? (didFailToLoadDetail ? sourceMedia : nil),
-      let tmdbId = recognizedTmdbId ?? fullDetail?.tmdb_id
+      let fullDetail,
+      let tmdbId = recognizedTmdbId ?? fullDetail.tmdb_id
     else {
       return nil
     }
 
-    return MediaActionHandler.tmdbJumpTarget(for: jumpSource, tmdbId: tmdbId)
+    return MediaActionHandler.tmdbJumpTarget(for: fullDetail, tmdbId: tmdbId)
   }
 
   var body: some View {
@@ -314,51 +315,50 @@ private struct MediaDetailContainerContent: View {
       initialValue: transitionPosterURL ?? media.imageURLs.poster
     )
     _keepsLoadingPosterImage = State(
-      initialValue: !preloadTask.isDetailReady && !preloadTask.isDetailFailed
+      initialValue: !preloadTask.isDetailReady
     )
   }
 
-  /// 只决定 Loading 遮罩显隐，不用于禁用详情焦点或按钮动作。
-  /// 预加载命中和详情失败直接结束 Loading，冷加载等待首行及最短展示时间。
+  /// 冷加载在完整详情的首行准备好后结束过渡。
   private var isReady: Bool {
-    wasPreloaded
-      || ((preloadTask.isDetailReady && isContentReady) && minTimeElapsed)
-      || preloadTask.isDetailFailed
+    guard preloadTask.fullDetail != nil else { return false }
+    return !presentationStyle.usesLoadingTransition || wasPreloaded
+      || (preloadTask.isDetailReady && isContentReady && minTimeElapsed)
+  }
+
+  private var loadingStatusMessage: String? {
+    if !allowsRequests { return "正在验证登录状态…" }
+    if preloadTask.isDetailFailed {
+      guard let reason = preloadTask.detailFailureReason else { return "无法加载详情，请返回后重试" }
+      return "无法加载详情（\(reason)），请返回后重试"
+    }
+    return preloadTask.detailRetryNumber.map { "重试加载中……（第 \($0) 次）" }
   }
 
   private var tmdbPreloadTarget: MediaInfo? {
     MediaDetailContainerView.tmdbPreloadTarget(
       for: media,
       fullDetail: preloadTask.fullDetail,
-      recognizedTmdbId: preloadTask.tmdbId,
-      didFailToLoadDetail: preloadTask.isDetailFailed
+      recognizedTmdbId: preloadTask.tmdbId
     )
   }
 
   var body: some View {
-    // ⚠️ 焦点恢复核心设计：
-    // MediaDetailView 无条件渲染（从第一帧就存在），用 partialMedia 初始化。
-    // Loading 叠加在上方，仅通过 opacity 控制显隐。
-    // 真实详情从首帧就留在焦点树中，方向导航始终由 tvOS 原生 Focus Engine 管理。
-    let detail = preloadTask.fullDetail ?? media
-
     ZStack {
-      // Detail 层 — 无条件渲染，从第一帧就存在于视图树中。
-      // 保持 opacity(1)；不按加载状态 disabled，避免整个详情区被移出焦点树。
-      // 接受 Loading 期间可能误触，避免加载判定把正常按钮锁成无响应。
-      MediaDetailView(
-        detail: detail,
-        preloadTask: preloadTask,
-        isContentReady: $isContentReady,
-        routeID: routeID,
-        imageLifecycle: imageLifecycle,
-        loadingPosterURL: loadingPosterURL,
-        presentationStyle: presentationStyle,
-        allowsRequests: allowsRequests
-      )
+      if let detail = preloadTask.fullDetail {
+        MediaDetailView(
+          detail: detail,
+          preloadTask: preloadTask,
+          isContentReady: $isContentReady,
+          routeID: routeID,
+          imageLifecycle: imageLifecycle,
+          loadingPosterURL: loadingPosterURL,
+          presentationStyle: presentationStyle,
+          allowsRequests: allowsRequests
+        )
+      }
 
-      if presentationStyle.usesLoadingTransition {
-        // Loading 遮罩层 — 始终存在于视图树中，通过 opacity 控制显隐
+      if presentationStyle.usesLoadingTransition || !isReady {
         MediaLoadingView(
           title: media.cleanedTitle ?? media.title,
           posterUrl: loadingPosterURL,
@@ -366,6 +366,8 @@ private struct MediaDetailContainerContent: View {
           year: media.year,
           rating: media.vote_average,
           overview: media.overview,
+          statusMessage: loadingStatusMessage,
+          isUnavailable: preloadTask.isDetailFailed,
           isAlreadyLoaded: wasPreloaded,
           loadsImage: keepsLoadingPosterImage && imageLifecycle.keepsActivePageImages
         )
@@ -391,7 +393,6 @@ private struct MediaDetailContainerContent: View {
       reportInitialContentReady()
     }
     .onChange(of: preloadTask.fullDetail) { _, _ in reportInitialContentReady() }
-    .onChange(of: preloadTask.isDetailFailed) { _, _ in reportInitialContentReady() }
     .task(id: tmdbPreloadTarget?.id) {
       guard allowsRequests, let target = tmdbPreloadTarget else { return }
       APIService.shared.mediaPreloader.preloadAuxiliary(
@@ -402,7 +403,7 @@ private struct MediaDetailContainerContent: View {
   }
 
   private func reportInitialContentReady() {
-    if preloadTask.fullDetail != nil || preloadTask.isDetailFailed {
+    if preloadTask.fullDetail != nil {
       onInitialContentReady()
     }
   }
