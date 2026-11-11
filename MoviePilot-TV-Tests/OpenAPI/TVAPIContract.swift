@@ -944,6 +944,16 @@ enum TVAPIContractCatalog {
 
   private static var transferOperations: [TVAPIOperation] {
     [
+      // 单集试看按下载历史和整理队列跟踪这一集；运行时从 v3.2.6 起才调用，登记方式同试看的搜索批次。
+      TVAPIOperationBuilder.get(
+        "/history/download",
+        query: [
+          TVAPIParam.query("page", alwaysSent: true, type: .integer),
+          TVAPIParam.query("count", alwaysSent: true, type: .integer),
+        ],
+        coverage: mutationUnit
+      ),
+      TVAPIOperationBuilder.get("/transfer/queue", coverage: mutationUnit),
       TVAPIOperationBuilder.get(
         "/history/transfer",
         query: [
@@ -1110,6 +1120,20 @@ enum TVAPIContractCatalog {
         "/subscribe/search/{subscribe_id}",
         pathParams: [TVAPIParam.path("subscribe_id", type: .integer)],
         coverage: sideEffect
+      ),
+      // 单集试看跟踪搜索批次；运行时从 v3.2.6 起才调用（EpisodeTrialAvailability）。登记表最新只到 v3.2.5，
+      // 按版本登记会让源码扫描报未登记；发版登记 v3.2.6 后改为按试看门禁登记。
+      TVAPIOperationBuilder.get(
+        "/subscribe/execution/batches/{batch_id}",
+        pathParams: [TVAPIParam.path("batch_id")],
+        coverage: mutationUnit
+      ),
+      // 取消试看时停掉它的搜索；只要求管理员，不受试看版本门禁限制。
+      TVAPIOperationBuilder.mutation(
+        "PUT",
+        "/subscribe/execution/batches/{batch_id}/cancel",
+        pathParams: [TVAPIParam.path("batch_id")],
+        coverage: mutationUnit
       ),
       TVAPIOperationBuilder.mutation(
         "POST",
