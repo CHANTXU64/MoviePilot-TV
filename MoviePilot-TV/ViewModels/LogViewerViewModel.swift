@@ -133,6 +133,18 @@ final class LogViewerViewModel: ObservableObject {
     if records.isEmpty {
       isLoading = true
     }
+    #if DEBUG
+    // UI 预览：日志来自本机持久化文件，场景里改读 fixture；失败映射为读取失败。
+    if UIPreviewMode.isEnabled() {
+      let result = await UIPreviewFixtures.logQueryResult(query: query)
+      guard generation == reloadGeneration else { return }
+      records = result.records
+      isTruncated = result.isTruncated
+      storageIssues = result.storageIssues
+      isLoading = false
+      return
+    }
+    #endif
     let result = await store.records(matching: query)
     guard generation == reloadGeneration else { return }
     records = result.records

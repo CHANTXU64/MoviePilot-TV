@@ -26,6 +26,20 @@ class LoginViewModel: ObservableObject {
     } else {
       serverURL = apiService.baseURL
     }
+
+    #if DEBUG
+    // UI 预览：场景可在登录草稿之外再请求自动提交一次，用于展示「提交中 / 登录失败」。
+    // 延迟到首帧渲染后再发请求，确保 LoginView 的 errorMessage onChange 已经挂上。
+    if UIPreviewMode.isEnabled(),
+      UIPreviewBackend.shared.context(UIPreviewContextKey.loginAutoSubmit) == "1"
+    {
+      Task { [weak self] in
+        try? await Task.sleep(for: .seconds(0.4))
+        guard let self else { return }
+        _ = await self.login()
+      }
+    }
+    #endif
   }
 
   func login() async -> Bool {

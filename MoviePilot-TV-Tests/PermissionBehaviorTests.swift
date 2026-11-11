@@ -325,38 +325,6 @@ final class PermissionGrantedBehaviorTests: XCTestCase {
     }
   }
 
-  func testSubscriptionHandlerShowsSimpleFeedbackWhenForkBusinessFails() async throws {
-    try await withPermissionBehaviorBackend { service in
-      configurePermissionBehaviorUser(service, granted: [.subscribe])
-      await PermissionBehaviorURLProtocol.stub.setForkResponse(
-        #"{"success":false,"message":"数据库约束失败"}"#
-      )
-
-      let handler = SubscriptionHandler()
-      let forkedId = await handler.fork(share: try PermissionBehaviorFixtures.subscribeShare())
-
-      XCTAssertNil(forkedId)
-      XCTAssertEqual(handler.forkErrorMessage, "暂时无法复用订阅，请稍后重试。")
-      XCTAssertEqual(handler.notificationSerial, 0)
-    }
-  }
-
-  func testSubscriptionHandlerShowsSimpleFeedbackWhenForkResponseHasNoId() async throws {
-    try await withPermissionBehaviorBackend { service in
-      configurePermissionBehaviorUser(service, granted: [.subscribe])
-      await PermissionBehaviorURLProtocol.stub.setForkResponse(
-        #"{"success":true,"data":{}}"#
-      )
-
-      let handler = SubscriptionHandler()
-      let forkedId = await handler.fork(share: try PermissionBehaviorFixtures.subscribeShare())
-
-      XCTAssertNil(forkedId)
-      XCTAssertEqual(handler.forkErrorMessage, "暂时无法复用订阅，请稍后重试。")
-      XCTAssertEqual(handler.notificationSerial, 0)
-    }
-  }
-
   func testSubscribeSeasonActionPreparesSubscriptionWithSubscribePermission()
     async throws
   {

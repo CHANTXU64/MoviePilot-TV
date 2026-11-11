@@ -173,12 +173,21 @@ final class MediaSession {
   let session: PlaybackSession
   private(set) var playbackItem: MediaPlayerItem?
   let userSession: UserSession
+  #if DEBUG
+    /// UI 预览：只驱动界面状态，不启动 mpv、不访问媒体服务器。见 `PreviewSupport/Fixtures/PlayerFixtures.swift`。
+    var previewSession: UIPlayerPreviewSession?
+  #endif
   private(set) var queue: (any MediaPlayerQueue)?
   private(set) var playbackRequestStatus: PlaybackRequestStatus = .playing
   var commandError: String?
 
   var rate: Double = 1 {
-    didSet { mpvPlayer.setPlaybackRate(effectiveRate) }
+    didSet {
+      #if DEBUG
+        if previewSession != nil { return }
+      #endif
+      mpvPlayer.setPlaybackRate(effectiveRate)
+    }
   }
 
   /// 就绪、可跳转、缓冲与时长，值变化时才更新。
@@ -246,6 +255,9 @@ final class MediaSession {
   }
 
   var state: State {
+    #if DEBUG
+      if let previewSession { return previewSession.state }
+    #endif
     if isStopped { return .stopped }
     guard hasStarted else { return .initial }
     if isSwitchingItem { return .loadingItem }
@@ -254,20 +266,37 @@ final class MediaSession {
 
   /// 当前显示的播放位置：有未完成的跳转时是跳转目标。
   var seconds: Duration {
-    pendingSeek ?? observedPosition
+    #if DEBUG
+      if let previewSession { return previewSession.position }
+    #endif
+    return pendingSeek ?? observedPosition
   }
 
-  var isSeeking: Bool { pendingSeek != nil }
+  var isSeeking: Bool {
+    #if DEBUG
+      if previewSession != nil { return false }
+    #endif
+    return pendingSeek != nil
+  }
 
   var canControlPlayback: Bool {
-    (state == .preparing || state == .playback) && playbackState.isReady
+    #if DEBUG
+      if let previewSession { return previewSession.canControlPlayback }
+    #endif
+    return (state == .preparing || state == .playback) && playbackState.isReady
   }
 
   var canSeek: Bool {
-    canControlPlayback && playbackState.isSeekable && !item.isLiveStream
+    #if DEBUG
+      if let previewSession { return previewSession.canSeek }
+    #endif
+    return canControlPlayback && playbackState.isSeekable && !item.isLiveStream
   }
 
   var activity: Activity? {
+    #if DEBUG
+      if let previewSession { return previewSession.activity }
+    #endif
     switch state {
     case .initial, .loadingItem: return .loading
     case .preparing where !playbackState.isReady: return .loading
@@ -278,7 +307,12 @@ final class MediaSession {
     return playbackState.isBuffering ? .buffering : nil
   }
 
-  var videoSize: CGSize { playerAdapter.videoState.videoSize }
+  var videoSize: CGSize {
+    #if DEBUG
+      if let previewSession { return previewSession.videoSize }
+    #endif
+    return playerAdapter.videoState.videoSize
+  }
 
   /// 投屏只在 iOS 上有。
   var isRemotePlayback: Bool { false }
@@ -291,6 +325,12 @@ final class MediaSession {
   func start() {
     guard !hasStarted, !isStopped else { return }
     hasStarted = true
+    #if DEBUG
+      if previewSession != nil {
+        preparePreviewItem()
+        return
+      }
+    #endif
     prepareItem()
     textSubtitles.start(mpvPlayer)
     observeEvents()
@@ -360,6 +400,13 @@ final class MediaSession {
 
   /// 退出播放。可重复调用；实际停止和进度上报由外部的退出闭包（结束 `PlaybackSession`）完成。
   func stop() {
+    #if DEBUG
+      if previewSession != nil {
+        previewSession?.state = .stopped
+        isStopped = true
+        return
+      }
+    #endif
     finish(notice: nil)
   }
 
@@ -418,6 +465,31 @@ final class MediaSession {
       queue = nil
     }
   }
+
+  #if DEBUG
+    /// UI 预览：用 fixture 条目替换真实片源解析，轨道、队列和预览图都来自假会话。
+    private func preparePreviewItem() {
+      guard let previewSession else { return }
+      let item = MediaPlayerItem(
+        baseItem: previewSession.baseItem,
+        source: session.mediaSource,
+        player: mpvPlayer,
+        connection: session.connection,
+        startSeconds: 0)
+      item.installPreviewTracks(previewSession.tracks)
+      item.installPreviewImageProvider(previewSession.previewImageProvider)
+      playbackItem = item
+      queue = previewSession.queue
+      playbackState = PlaybackState(
+        isReady: previewSession.isReady,
+        isSeekable: previewSession.canSeek,
+        isBuffering: previewSession.isBuffering,
+        duration: previewSession.duration)
+      playbackRequestStatus = previewSession.isPaused ? .paused : .playing
+      // 预览没有真实的显示模式切换，避免「切换显示模式」的黑屏遮住整个界面。
+      isCoveringForDisplay = false
+    }
+  #endif
 
   enum EndAction {
     /// 正在换集，上一集刚好播完：等切换完成。
@@ -490,6 +562,12 @@ final class MediaSession {
   func setPlaybackRequestStatus(status: PlaybackRequestStatus) {
     guard state != .stopped, state != .error else { return }
     playbackRequestStatus = status
+    #if DEBUG
+      if previewSession != nil {
+        previewSession?.isPaused = status == .paused
+        return
+      }
+    #endif
     guard hasStarted else { return }
     pendingPlaybackStatus = status
     switch status {
@@ -509,6 +587,12 @@ final class MediaSession {
     let limit = playbackState.duration ?? item.runtime
     let target = max(.zero, limit.map { min(position, $0) } ?? position)
     commandError = nil
+    #if DEBUG
+      if previewSession != nil {
+        previewSession?.position = target
+        return true
+      }
+    #endif
     guard target != seconds else { return true }
     pendingSeek = target
     if seekTask == nil {
@@ -564,6 +648,9 @@ final class MediaSession {
   /// 改播另一集或另一个版本（Swiftfin 的 `playNewItem`）。取代仍在进行的播完查询。
   func playNewItem(intent: PlaybackIntent) {
     guard state != .stopped, let itemID = intent.item.id else { return }
+    #if DEBUG
+      if previewSession != nil { return }
+    #endif
     nextLookupTask?.cancel()
     nextLookupTask = nil
     isSwitchingItem = true
@@ -688,19 +775,42 @@ final class MediaPlayerItem {
   let mediaSource: PlaybackMediaSourceInfo
   let chapters: [ChapterInfo.FullInfo]
   let segments: MediaSegmentObserver? = MediaSegmentObserver()
-  @ObservationIgnored let previewImageProvider: PreviewImageProvider?
+  @ObservationIgnored private(set) var previewImageProvider: PreviewImageProvider?
   var configuration = MediaPlaybackConfiguration()
 
   @ObservationIgnored private let player: MPVPlayer
   /// 字幕关闭时记住的轨道；nil 表示还没选过，打开时用默认轨道。
   private var disabledSubtitleTrackIndex: Int?
 
+  #if DEBUG
+    /// UI 预览：假轨道表与选中状态。见 `PreviewSupport/Fixtures/PlayerFixtures.swift`。
+    var previewTracks: UIPlayerPreviewTracks?
+
+    func installPreviewTracks(_ tracks: UIPlayerPreviewTracks) {
+      previewTracks = tracks
+    }
+
+    func installPreviewImageProvider(_ provider: PreviewImageProvider?) {
+      previewImageProvider = provider
+    }
+  #endif
+
   var audioOffset: Duration = .zero {
-    didSet { player.setAudioDelay(audioOffset) }
+    didSet {
+      #if DEBUG
+        if previewTracks != nil { return }
+      #endif
+      player.setAudioDelay(audioOffset)
+    }
   }
 
   var subtitleOffset: Duration = .zero {
-    didSet { player.setSubtitleDelay(subtitleOffset, for: .primary) }
+    didSet {
+      #if DEBUG
+        if previewTracks != nil { return }
+      #endif
+      player.setSubtitleDelay(subtitleOffset, for: .primary)
+    }
   }
 
   /// MoviePilot-TV 不提供第二字幕。
@@ -729,7 +839,12 @@ final class MediaPlayerItem {
     images.provider = previewImageProvider
   }
 
-  private var canSelectTracks: Bool { player.isPlaybackReady }
+  private var canSelectTracks: Bool {
+    #if DEBUG
+      if previewTracks != nil { return true }
+    #endif
+    return player.isPlaybackReady
+  }
 
   private func stream(for track: MPVMediaTrack, offset: Int, type: MediaStreamType) -> MediaStream {
     MediaStream(
@@ -744,11 +859,17 @@ final class MediaPlayerItem {
   }
 
   var audioStreams: [MediaStream] {
-    player.audioTracks.enumerated().map { stream(for: $1, offset: $0, type: .audio) }
+    #if DEBUG
+      if let previewTracks { return previewTracks.audio }
+    #endif
+    return player.audioTracks.enumerated().map { stream(for: $1, offset: $0, type: .audio) }
   }
 
   var subtitleStreams: [MediaStream] {
-    player.subtitleTracks.enumerated().map { stream(for: $1, offset: $0, type: .subtitle) }
+    #if DEBUG
+      if let previewTracks { return previewTracks.subtitles }
+    #endif
+    return player.subtitleTracks.enumerated().map { stream(for: $1, offset: $0, type: .subtitle) }
   }
 
   /// MoviePilot-TV 不提供第二字幕。
@@ -758,8 +879,19 @@ final class MediaPlayerItem {
   var isShowingSubtitlesOnSkipBack: Bool { false }
 
   var selectedAudioStreamIndex: Int? {
-    get { player.audioTracks.first(where: \.isSelected)?.mpvID }
+    get {
+      #if DEBUG
+        if let previewTracks { return previewTracks.selectedAudioIndex }
+      #endif
+      return player.audioTracks.first(where: \.isSelected)?.mpvID
+    }
     set {
+      #if DEBUG
+        if previewTracks != nil {
+          previewTracks?.selectedAudioIndex = newValue
+          return
+        }
+      #endif
       guard canSelectTracks, let newValue,
         let track = player.audioTracks.first(where: { $0.mpvID == newValue }), !track.isSelected
       else { return }
@@ -768,17 +900,31 @@ final class MediaPlayerItem {
   }
 
   var selectedSubtitleStreamIndex: Int? {
-    player.selectedSubtitle(for: .primary)?.mpvID
+    #if DEBUG
+      if let previewTracks { return previewTracks.selectedSubtitleIndex }
+    #endif
+    return player.selectedSubtitle(for: .primary)?.mpvID
   }
 
   var selectedSecondarySubtitleStreamIndex: Int? { nil }
 
   var subtitlesEnabled: Bool {
-    player.selectedSubtitle(for: .primary) != nil
+    #if DEBUG
+      if let previewTracks { return previewTracks.subtitlesEnabled }
+    #endif
+    return player.selectedSubtitle(for: .primary) != nil
   }
 
   func subtitleTrackIndex(secondary: Bool) -> Int {
     guard !secondary else { return -1 }
+    #if DEBUG
+      if let previewTracks {
+        if previewTracks.subtitlesEnabled {
+          return previewTracks.selectedSubtitleIndex ?? previewTracks.defaultSubtitleIndex ?? -1
+        }
+        return previewTracks.disabledSubtitleIndex ?? previewTracks.defaultSubtitleIndex ?? -1
+      }
+    #endif
     let index: Int =
       if subtitlesEnabled {
         player.selectedSubtitle(for: .primary)?.mpvID ?? -1
@@ -790,11 +936,29 @@ final class MediaPlayerItem {
   }
 
   private var defaultSubtitleTrackIndex: Int {
-    player.subtitleTracks.first(where: \.isDefault)?.mpvID ?? player.subtitleTracks.first?.mpvID ?? -1
+    #if DEBUG
+      if let previewTracks { return previewTracks.defaultSubtitleIndex ?? -1 }
+    #endif
+    return player.subtitleTracks.first(where: \.isDefault)?.mpvID ?? player.subtitleTracks.first?.mpvID ?? -1
   }
 
   /// 字幕开着时切换轨道（选“无”即关闭）；关着时只记住，下次打开用它。
   func setSubtitleTrack(index: Int, secondary: Bool) {
+    #if DEBUG
+      if previewTracks != nil {
+        guard !secondary,
+              index == -1 || previewTracks?.subtitles.contains(where: { $0.index == index }) == true
+        else { return }
+        previewTracks?.disabledSubtitleIndex = index
+        if index == -1 {
+          previewTracks?.subtitlesEnabled = false
+          previewTracks?.selectedSubtitleIndex = nil
+        } else if previewTracks?.subtitlesEnabled == true {
+          previewTracks?.selectedSubtitleIndex = index
+        }
+        return
+      }
+    #endif
     guard !secondary, canSelectTracks,
       index == -1 || player.subtitleTracks.contains(where: { $0.mpvID == index })
     else { return }
@@ -804,6 +968,18 @@ final class MediaPlayerItem {
   }
 
   func setSubtitlesEnabled(_ enabled: Bool) {
+    #if DEBUG
+      if previewTracks != nil {
+        guard enabled != subtitlesEnabled else { return }
+        previewTracks?.subtitlesEnabled = enabled
+        if enabled {
+          let remembered = previewTracks?.disabledSubtitleIndex ?? -1
+          previewTracks?.selectedSubtitleIndex =
+            remembered == -1 ? previewTracks?.defaultSubtitleIndex : remembered
+        }
+        return
+      }
+    #endif
     guard canSelectTracks, enabled != subtitlesEnabled else { return }
     var index = subtitleTrackIndex(secondary: false)
     if enabled {

@@ -28,6 +28,18 @@ struct VideoPlayer: View {
 
     let mediaSession: MediaSession
 
+    init(mediaSession: MediaSession) {
+        self.mediaSession = mediaSession
+    }
+
+    #if DEBUG
+      /// UI 预览：从场景外部注入 `ViewState`，以便直接展示拖动、面板、隐藏控件等状态。
+      init(mediaSession: MediaSession, previewViewState: ViewState) {
+        self.mediaSession = mediaSession
+        _viewState = State(initialValue: previewViewState)
+      }
+    #endif
+
     var body: some View {
         Container(
             viewState: viewState,

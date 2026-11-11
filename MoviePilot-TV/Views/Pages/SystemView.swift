@@ -1203,6 +1203,10 @@ struct SystemView: View {
   }
 
   private func presentUpdateNoticeIfNeeded() {
+    #if DEBUG
+    // UI 预览不弹版本更新提示，避免遮挡场景；也不写 AppChangelog 已读标记。
+    if UIPreviewMode.isEnabled() { return }
+    #endif
     guard isSelected, updateNotice == nil else { return }
     guard let entry = AppChangelog.pendingUpdate(appVersion: viewModel.appVersion) else { return }
     updateNotice = entry

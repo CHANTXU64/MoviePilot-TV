@@ -1,6 +1,43 @@
 import SwiftUI
 
 struct ContentView: View {
+  /// 测试可注入真实根 ViewModel；App 入口不传，由 `RealAppContentView` 自己创建。
+  private let injectedViewModel: ContentViewModel?
+
+  init() {
+    injectedViewModel = nil
+  }
+
+  init(viewModel: ContentViewModel) {
+    injectedViewModel = viewModel
+  }
+
+  var body: some View {
+    #if DEBUG
+    // UI 预览分支先于真实根状态创建，预览目录不会读写用户的登录态、Top Shelf 或缓存。
+    if UIPreviewMode.isEnabled() {
+      PreviewCatalogView(initialSceneID: UIPreviewMode.sceneID())
+    } else {
+      realContent
+    }
+    #else
+    realContent
+    #endif
+  }
+
+  @ViewBuilder
+  private var realContent: some View {
+    if let injectedViewModel {
+      RealAppContentView(viewModel: injectedViewModel)
+    } else {
+      RealAppContentView()
+    }
+  }
+}
+
+/// 真实 App 根视图。Debug 的 UI 预览目录也需要复用同一套真实 Tab/启动逻辑，
+/// 因此从 `ContentView` 中拆出，避免预览另写一份根容器导致与线上结构漂移。
+struct RealAppContentView: View {
   @StateObject private var viewModel: ContentViewModel
   private var memoryOptimization = MemoryOptimizationSettings()
   @Environment(\.scenePhase) private var scenePhase
@@ -47,7 +84,14 @@ struct ContentView: View {
     }
     .task {
       updateTopShelfPriority()
+      #if DEBUG
+      // UI 预览目录不应改写用户桌面 Top Shelf 的共享数据。
+      if !UIPreviewMode.isEnabled() {
+        topShelfManager.start()
+      }
+      #else
       topShelfManager.start()
+      #endif
       await viewModel.prepareStartupIfNeeded()
     }
     .onChange(of: memoryOptimization.isEnabled, initial: true) { _, enabled in

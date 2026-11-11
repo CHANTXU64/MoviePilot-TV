@@ -640,6 +640,13 @@ class APIService: ObservableObject {
   }
 
   func logout() {
+    #if DEBUG
+    // UI 预览中退出登录只切换预览会话，不能清理用户的真实 Keychain 凭据。
+    if UIPreviewMode.isEnabled() {
+      UIPreviewBackend.shared.activate(.loggedOut)
+      return
+    }
+    #endif
     let revision = nextStoredRevision()
     persistMarker(StoredSessionMarker(revision: revision, storage: .tombstone))
     storageLocation = .tombstone
@@ -723,6 +730,32 @@ class APIService: ObservableObject {
   func canAccess(_ permission: UserPermissionKey) -> Bool {
     currentOrStoredUser?.canAccess(permission) == true
   }
+
+  #if DEBUG
+  // MARK: - UI 预览会话（仅 Debug + -uiPreviewMode）
+
+  /// 安装/切换预览会话身份。
+  /// 只替换内存会话（`persist: false`），不写 Keychain、不写真实偏好。
+  func installUIPreviewSession(token: Token?, baseURL: String) {
+    guard UIPreviewMode.isEnabled() else { return }
+    guard let normalizedURL = Self.normalizedBaseURL(baseURL) else { return }
+    let nextToken = token.flatMap { $0.access_token.isEmpty ? nil : $0.access_token }
+    if session.baseURL == normalizedURL,
+      session.token == nextToken,
+      session.currentUser == token
+    {
+      return
+    }
+    replaceSession(
+      baseURL: normalizedURL,
+      token: nextToken,
+      currentUser: token,
+      username: token?.user_name,
+      password: nil,
+      persist: false
+    )
+  }
+  #endif
 
   func sessionSnapshot() -> APIServiceSessionSnapshot {
     APIServiceSessionSnapshot(epoch: session.epoch)
@@ -1044,7 +1077,14 @@ class APIService: ObservableObject {
     session = nextState
     storedUsername = username
     storedPassword = password
+    #if DEBUG
+    // UI 预览会话是内存临时身份，不能覆盖用户真实的服务器地址偏好。
+    if !UIPreviewMode.isEnabled() {
+      UserDefaults.standard.set(normalizedURL, forKey: "serverURL")
+    }
+    #else
     UserDefaults.standard.set(normalizedURL, forKey: "serverURL")
+    #endif
     oldRuntime.cancel()
     releaseSessionScopeIfNeeded(for: nextState)
     invalidateAllSessionCaches()
@@ -1158,6 +1198,10 @@ class APIService: ObservableObject {
   }
 
   func refreshCurrentUserForStartup() async {
+    #if DEBUG
+    // UI 预览使用内存 fixture 会话，不做真实 /user/current 校验。
+    if UIPreviewMode.isEnabled() { return }
+    #endif
     _ = await recoverCurrentUserFromCurrentUserEndpoint()
   }
 
@@ -1182,6 +1226,15 @@ class APIService: ObservableObject {
   private func makeRequest(
     endpoint: String, method: String = "GET", body: Data? = nil, isForm: Bool = false
   ) async throws -> Data {
+    #if DEBUG
+    // UI 预览：任何未被业务方法预览钩子拦截的请求都不允许访问真实后端。
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewBackend.shared.unstubbedRequest(
+        endpoint: endpoint,
+        method: method
+      )
+    }
+    #endif
     let lease = currentLease()
     do {
       return try await performRequest(
@@ -1742,6 +1795,10 @@ class APIService: ObservableObject {
   /// 仅在 App 启动、切回前台或 Tab 切换时调用，频率极低且不阻塞 UI。
   /// Token 失效时优先用保存的凭据自动登录，当前验证随会话切换结束。
   func validateTokenSilently() {
+    #if DEBUG
+    // UI 预览的会话是 fixture，不需要验证 Token。
+    if UIPreviewMode.isEnabled() { return }
+    #endif
     guard isLoggedIn, !isCandidateLoginActive(for: session.epoch) else { return }
 
     Task {
@@ -1762,6 +1819,14 @@ class APIService: ObservableObject {
     password: String,
     serverURL: String? = nil
   ) async throws -> Token {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      try await UIPreviewBackend.shared.gate(UIPreviewBehaviorKey.loginAccessToken)
+      let token = UIPreviewFixtures.userToken()
+      UIPreviewBackend.shared.activate(.standard)
+      return token
+    }
+    #endif
     guard let targetBaseURL = Self.normalizedBaseURL(serverURL ?? baseURL) else {
       throw APIError.invalidURL
     }
@@ -1855,6 +1920,11 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/dashboard/AnalyticsMediaStatistic.vue
   /// - 应用场景: 首页仪表盘展示各类媒体的数量统计。
   func fetchStatistic() async throws -> Statistic {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.dashboardStatistic()
+    }
+    #endif
     let data = try await makeRequest(endpoint: "/dashboard/statistic")
     return try await decodeOrUnwrap(Statistic.self, from: data)
   }
@@ -1863,6 +1933,11 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/dashboard/AnalyticsStorage.vue
   /// - 应用场景: 首页仪表盘展示磁盘/网盘的存储使用情况。
   func fetchStorage() async throws -> Storage {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.dashboardStorage()
+    }
+    #endif
     let data = try await makeRequest(endpoint: "/dashboard/storage")
     return try await decodeOrUnwrap(Storage.self, from: data)
   }
@@ -1871,6 +1946,11 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/dashboard/AnalyticsSpeed.vue
   /// - 应用场景: 首页仪表盘展示当前下载速度与任务信息。
   func fetchDownloaderInfo() async throws -> DownloaderInfo {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.dashboardDownloader()
+    }
+    #endif
     let data = try await makeRequest(endpoint: "/dashboard/downloader")
     return try await decodeOrUnwrap(DownloaderInfo.self, from: data)
   }
@@ -1879,6 +1959,13 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/utils/globalSetting.ts (fetchGlobalSettings)
   /// - 应用场景: 初始化系统基础配置（如 TMDB 图片域名、是否启用图片缓存等）。
   func fetchSettings() async throws -> GlobalSettings {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      let response = UIPreviewBackend.shared.globalSettings()
+      self.settings = response
+      return response
+    }
+    #endif
     let snapshot = sessionSnapshot()
     do {
       let data = try await makeRequest(endpoint: "/system/global?token=moviepilot")
@@ -1906,6 +1993,11 @@ class APIService: ObservableObject {
 
   /// 获取系统环境变量
   func fetchSystemEnv() async throws -> SystemEnv {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.systemEnv()
+    }
+    #endif
     let data = try await makeRequest(endpoint: "/system/env")
     return try await decodeOrUnwrap(SystemEnv.self, from: data)
   }
@@ -1918,6 +2010,11 @@ class APIService: ObservableObject {
     page: Int = 1,
     source: MediaSearchSource? = nil
   ) async throws -> [MediaInfo] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.searchMedia(query: query, page: page, source: source)
+    }
+    #endif
     var params = [
       "type": "media",
       "title": query,
@@ -1948,6 +2045,11 @@ class APIService: ObservableObject {
     year: String? = nil,
     type: String? = nil
   ) async throws -> Int? {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailRecognizeTmdb(title: title, year: year, type: type)
+    }
+    #endif
     let snapshot = sessionSnapshot()
     var queryTitle = title.trimmingCharacters(in: .whitespaces)
     let searchYear = year?.trimmingCharacters(in: .whitespaces)
@@ -2115,7 +2217,16 @@ class APIService: ObservableObject {
 
   /// 宿主内置与启用插件注册的媒体来源目录，与 Web `useMediaSources` 同源。
   func fetchMediaSources() async throws -> [MediaSourceInfo] {
-    try await sessionCachedValue(sessionScope.mediaSourceCatalogCache, key: "sources") { [weak self] in
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      if UIPreviewBackend.shared.hasBehavior(for: UIPreviewBehaviorKey.settingsMediaSources) {
+        return try await UIPreviewFixtures.mediaSourceCatalog()
+      }
+      return try await UIPreviewFixtures.searchMediaSources()
+    }
+    #endif
+    return try await sessionCachedValue(sessionScope.mediaSourceCatalogCache, key: "sources") {
+      [weak self] in
       guard let self else { throw CancellationError() }
       let data = try await self.makeRequest(endpoint: "/media/source")
       return try await self.decodeOrUnwrap([MediaSourceInfo].self, from: data)
@@ -2127,6 +2238,11 @@ class APIService: ObservableObject {
     title: String,
     source: MediaSearchSource
   ) async throws -> [MediaInfo] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.searchManualMedia(title: title, source: source)
+    }
+    #endif
     let endpoint = try buildEndpoint(
       path: "/media/search",
       params: [
@@ -2147,6 +2263,11 @@ class APIService: ObservableObject {
     page: Int = 1,
     source: MediaSearchSource? = nil
   ) async throws -> [MediaInfo] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.searchCollection(query: query, page: page, source: source)
+    }
+    #endif
     var params = [
       "type": "collection",
       "title": query,
@@ -2169,6 +2290,11 @@ class APIService: ObservableObject {
     page: Int = 1,
     source: MediaSearchSource? = nil
   ) async throws -> [Person] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.searchPerson(query: query, page: page, source: source)
+    }
+    #endif
     var params = [
       "type": "person",
       "title": query,
@@ -2195,17 +2321,32 @@ class APIService: ObservableObject {
   ///   2. 发现页面 (ExploreViewModel)：按数据源分类加载列表。
   ///   3. 详情页面逻辑支撑：作为 fetchMediaRecommendations 和 fetchMediaSimilar 的底层实现，详情页不能直接调用。
   func fetchRecommend(path: String, page: Int = 1) async throws -> [MediaInfo] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.recommendMedia(path: path, page: page)
+    }
+    #endif
     let endpoint = try relativeBackendEndpoint(path: path, params: ["page": String(page)])
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([MediaInfo].self, from: data)
   }
 
   func fetchDiscoverSources() async throws -> [DiscoverSourceDescriptor] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.discoverSources()
+    }
+    #endif
     let data = try await makeRequest(endpoint: "/discover/source")
     return try await decodeOrUnwrap([DiscoverSourceDescriptor].self, from: data)
   }
 
   func fetchRecommendSources() async throws -> [RecommendSourceDescriptor] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.recommendSources()
+    }
+    #endif
     let data = try await makeRequest(endpoint: "/recommend/source")
     return try await decodeOrUnwrap([RecommendSourceDescriptor].self, from: data)
   }
@@ -2214,6 +2355,11 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/subscribe/SubscribeShareView.vue (fetchData)
   /// - 应用场景: "探索"页面的"订阅分享"板块，分页加载用户分享的订阅规则。
   func fetchSubscriptionShares(path: String, page: Int = 1) async throws -> [SubscribeShare] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.subscriptionShares(path: path, page: page)
+    }
+    #endif
     let absolutePath = path.hasPrefix("/") ? path : "/\(path)"
     let endpoint = try buildEndpoint(
       path: absolutePath,
@@ -2230,6 +2376,11 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/subscribe/SubscribeShareView.vue (但增加了搜索功能)
   /// - 应用场景: 聚合搜索页面，与电影、电视剧、人物等结果一同展示。
   func searchSubscriptionShares(query: String, page: Int = 1) async throws -> [SubscribeShare] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.searchSubscriptionShares(query: query, page: page)
+    }
+    #endif
     let endpoint = try buildEndpoint(
       path: "/subscribe/shares",
       params: [
@@ -2246,6 +2397,11 @@ class APIService: ObservableObject {
   /// - 应用场景: 在媒体详情页底部，根据 Web 支持的辅助内容来源获取“推荐”列表。
   /// - ⚠️ 注意: Bangumi 的推荐接口不需要传 type。
   func fetchMediaRecommendations(detail: MediaInfo, page: Int = 1) async throws -> [MediaInfo] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailRecommendations(detail: detail, page: page)
+    }
+    #endif
     guard let identity = detail.auxiliaryContentIdentity else { return [] }
     var path: String?
     if identity.source == "themoviedb" {
@@ -2271,6 +2427,11 @@ class APIService: ObservableObject {
   /// - 应用场景: 媒体详情页获取相似推荐内容。
   /// - ⚠️ 注意: Web 只要详情包含有效 TMDB ID 就显示相似内容，不要求主身份为 TMDB。
   func fetchMediaSimilar(detail: MediaInfo, page: Int = 1) async throws -> [MediaInfo] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailSimilar(detail: detail, page: page)
+    }
+    #endif
     guard let identity = detail.auxiliaryContentIdentity, identity.source == "themoviedb" else {
       return []
     }
@@ -2284,6 +2445,11 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/cards/MediaCard.vue (触发跳转), MoviePilot-Frontend/src/views/discover/MediaCardListView.vue (分页加载)
   /// - 应用场景: 用户点击合集卡片后，在合集详情页分页浏览影片列表。
   func fetchCollection(collectionId: Int, page: Int, title: String) async throws -> [MediaInfo] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailCollection(collectionId: collectionId, page: page, title: title)
+    }
+    #endif
     let endpoint = try buildEndpoint(
       path: "/tmdb/collection/\(collectionId)",
       params: [
@@ -2298,6 +2464,11 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/pages/downloading.vue, src/components/dialog/SiteAddEditDialog.vue, src/components/dialog/AddDownloadDialog.vue, src/components/dialog/SubscribeEditDialog.vue
   /// - 应用场景: 获取系统配置的所有下载器实例，用于切换下载器视图或在站点/订阅配置中选择下载目标
   func fetchDownloadClients() async throws -> [DownloaderConf] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.downloadClients()
+    }
+    #endif
     let data = try await makeRequest(endpoint: "/download/clients")
     return try await decodeOrUnwrap([DownloaderConf].self, from: data)
   }
@@ -2306,6 +2477,11 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/reorganize/DownloadingListView.vue (通过 apipath)
   /// - 应用场景: 获取特定下载器当前的下载任务列表
   func fetchDownloading(clientName: String) async throws -> [DownloadingInfo] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.downloadingItems(clientName: clientName)
+    }
+    #endif
     let endpoint = try buildEndpoint(path: "/download/", params: ["name": clientName])
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([DownloadingInfo].self, from: data)
@@ -2359,6 +2535,11 @@ class APIService: ObservableObject {
   func fetchTransferHistory(page: Int, count: Int, title: String?) async throws
     -> TransferHistoryResponse
   {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.transferHistory(page: page, count: count, title: title)
+    }
+    #endif
     let endpoint = try buildEndpoint(
       path: "/history/transfer",
       params: [
@@ -2501,6 +2682,11 @@ class APIService: ObservableObject {
   /// - 对应前端: `MoviePilot-Frontend/src/components/dialog/ReorganizeDialog.vue` (loadStorages)
   /// - 应用场景: 在手动整理弹窗中，加载可用的目标存储（如 local, alipan, rclone 等）列表。
   func fetchStorages() async throws -> [StorageConf] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.transferStorages()
+    }
+    #endif
     struct ConfigValue: Decodable {
       let value: [StorageConf]
     }
@@ -2527,7 +2713,12 @@ class APIService: ObservableObject {
   /// 会话内缓存的媒体服务器配置，供首页、详情页判断能否应用内播放，以及播放时连接 Emby。
   /// 配置里有密钥，只保存在内存。`forceRefresh` 重新读取并写回缓存（首页加载、播放失败后核对配置）。
   func fetchCachedMediaServers(forceRefresh: Bool = false) async throws -> [MediaServerConf] {
-    try await sessionCachedValue(
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.homeMediaServers()
+    }
+    #endif
+    return try await sessionCachedValue(
       sessionScope.mediaServerConfigCache, key: "MediaServers", forceRefresh: forceRefresh
     ) { [weak self] in
       guard let self else { throw CancellationError() }
@@ -2539,6 +2730,11 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/dashboard/MediaServerLatest.vue
   /// - 应用场景: 首页仪表盘展示最近添加的影片
   func fetchMediaServerLatest(server: String) async throws -> [MediaServerPlayItem] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.homeMediaServerLatest(server: server)
+    }
+    #endif
     let endpoint = try buildEndpoint(path: "/mediaserver/latest", params: ["server": server])
     let data = try await makeRequest(endpoint: endpoint)
     return try await decodeOrUnwrap([MediaServerPlayItem].self, from: data)
@@ -2553,6 +2749,11 @@ class APIService: ObservableObject {
   ///   v3.2.6 起 `data.item.server` 是条目所属服务器的配置名称，与 ID 取自同一条记录；更早的版本或旧缓存没有这个键，
   ///   这时配置多台服务器需要调用方逐台确认归属。服务器名称只是候选，不代替逐台查找。
   func fetchMediaServerItemRef(media: MediaInfo) async throws -> MediaServerItemRef? {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailMediaServerItemRef(media: media)
+    }
+    #endif
     struct MediaServerExistsData: Decodable {
       let item: [String: String]?
     }
@@ -2751,6 +2952,17 @@ class APIService: ObservableObject {
     maximumEventBytes: @escaping @MainActor @Sendable () throws -> Int,
     receive: @escaping @MainActor @Sendable (SearchStreamEvent, Int) async throws -> Void
   ) async throws {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.resourceSearchPage(
+        query: query,
+        source: source,
+        page: page,
+        maximumEventBytes: maximumEventBytes,
+        receive: receive
+      )
+    }
+    #endif
     let lease = currentLease()
     var params: [String: String?] = [
       "sites": query.sites, "manual_paging": "true", "page": String(page), "source": source,
@@ -2891,6 +3103,11 @@ class APIService: ObservableObject {
   }
 
   func fetchDownloadDirectories() async throws -> [DownloadDirectory] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailDownloadDirectories()
+    }
+    #endif
     let data = try await makeRequest(endpoint: "/download/paths")
     return try await decodeOrUnwrap([DownloadDirectory].self, from: data)
   }
@@ -2903,6 +3120,11 @@ class APIService: ObservableObject {
     mediaId: String,
     savePath: String?
   ) async throws {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailDownloadSubtitle(subtitle: subtitle, mediaSource: mediaSource, mediaId: mediaId, savePath: savePath)
+    }
+    #endif
     let body = try JSONEncoder().encode(SubtitleDownloadRequest(
       subtitle: subtitle,
       mediaSource: mediaSource,
@@ -2943,6 +3165,11 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/discover/MediaDetailView.vue
   /// - 应用场景: 影视剧详情页的主接口，获取最全的媒体信息。
   func fetchMediaDetail(media: MediaInfo) async throws -> MediaInfo {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailMediaDetail(media: media)
+    }
+    #endif
     guard media.identity != nil else {
       // 遵循 Vue 逻辑，如果无法生成媒体身份，则不发起请求，并可能导致上层视图显示“无数据”。
       throw APIError.invalidURL
@@ -2964,6 +3191,11 @@ class APIService: ObservableObject {
   /// - ⚠️ 参数说明:
   ///   - `source`: **数据源，决定API的路由**。前端直接将其作为路径的一部分。
   func fetchPersonDetail(personId: String, source: String?) async throws -> Person {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailPersonDetail(personId: personId, source: source)
+    }
+    #endif
     let sourcePath = try personSourcePath(source)
     let endpoint = "/\(sourcePath)/person/\(personId)"
     let data = try await makeRequest(endpoint: endpoint)
@@ -2978,6 +3210,11 @@ class APIService: ObservableObject {
   func fetchPersonCredits(personId: String, source: String?, page: Int = 1) async throws
     -> [MediaInfo]
   {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailPersonCredits(personId: personId, source: source, page: page)
+    }
+    #endif
     let sourcePath = try personSourcePath(source)
     let endpoint = try buildEndpoint(
       path: "/\(sourcePath)/person/credits/\(personId)",
@@ -3002,6 +3239,11 @@ class APIService: ObservableObject {
   /// - 对应前端: `MoviePilot-Frontend/src/pages/credits.vue` (调用 `PersonCardListView.vue` 进行分页加载)
   /// - 应用场景: 影视详情页按 Web 的 TMDB、豆瓣、Bangumi、AniList 字段顺序展示演员，支持分页加载。
   func fetchMediaActors(detail: MediaInfo, page: Int) async throws -> [Person] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailActors(detail: detail, page: page)
+    }
+    #endif
     guard let identity = detail.auxiliaryContentIdentity else { return [] }
     let path: String
     if identity.source == "themoviedb" {
@@ -3034,6 +3276,11 @@ class APIService: ObservableObject {
     start: Int,
     count: Int = DoubanDiscussionAvailability.pageSize
   ) async throws -> DoubanCommentPage {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailDoubanComments(doubanId: doubanId, typeName: typeName, start: start, count: count)
+    }
+    #endif
     let endpoint = try doubanDiscussionEndpoint(
       kind: "interests",
       doubanId: doubanId,
@@ -3055,6 +3302,11 @@ class APIService: ObservableObject {
     start: Int,
     count: Int = DoubanDiscussionAvailability.pageSize
   ) async throws -> DoubanReviewPage {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailDoubanReviews(doubanId: doubanId, typeName: typeName, start: start, count: count)
+    }
+    #endif
     let endpoint = try doubanDiscussionEndpoint(
       kind: "reviews",
       doubanId: doubanId,
@@ -3093,6 +3345,11 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue
   /// - 应用场景: 在 **订阅编辑对话框** 中，作为“订阅站点”下拉菜单的数据源。
   func fetchSites() async throws -> [Site] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.searchSites()
+    }
+    #endif
     let data = try await makeRequest(endpoint: "/site/rss")
     return try await decodeOrUnwrap([Site].self, from: data)
   }
@@ -3101,6 +3358,14 @@ class APIService: ObservableObject {
   /// - 对应后端: `/site/`（site.py:39-47），需要 **manage** 权限，返回全部站点。
   /// - 应用场景: 作为资源搜索的权威站点列表（F-209/F-210），调用方按 `is_active` 过滤。
   func fetchAllSites() async throws -> [Site] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      if UIPreviewBackend.shared.hasBehavior(for: UIPreviewBehaviorKey.settingsSites) {
+        return try await UIPreviewFixtures.allSites()
+      }
+      return try await UIPreviewFixtures.searchAllSites()
+    }
+    #endif
     let data = try await makeRequest(endpoint: "/site/")
     return try await decodeOrUnwrap([Site].self, from: data)
   }
@@ -3110,6 +3375,14 @@ class APIService: ObservableObject {
   /// - Returns: 站点列表 + 是否拿到权威域。仅 authoritative 时按 availableSites 做归一化才有意义，
   ///   降级域（订阅子集）不能用来裁剪已保存的合法站点选择（F-210 破坏性副作用）。
   func fetchSearchableSites() async throws -> (sites: [Site], authoritative: Bool) {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      if UIPreviewBackend.shared.hasBehavior(for: UIPreviewBehaviorKey.settingsSites) {
+        return (try await UIPreviewFixtures.allSites(), authoritative: true)
+      }
+      return (try await UIPreviewFixtures.searchAllSites(), authoritative: true)
+    }
+    #endif
     if canAccess(.manage) {
       do {
         return (try await fetchAllSites(), authoritative: true)
@@ -3124,6 +3397,11 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/views/setting/AccountSettingDirectory.vue
   /// - 应用场景: 添加下载时选择目标存储目录
   func fetchDirectories() async throws -> [TransferDirectoryConf] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.searchDirectories()
+    }
+    #endif
     struct ConfigValue: Decodable {
       let value: [TransferDirectoryConf]
     }
@@ -3134,6 +3412,13 @@ class APIService: ObservableObject {
 
   /// 获取配置的搜索站点 (IndexerSites)
   func fetchIndexerSites() async throws -> [Int] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.searchAllSites()
+        .filter { $0.is_active?.value == true }
+        .map(\.id)
+    }
+    #endif
     struct ConfigValue: Decodable {
       let value: [Int]?
     }
@@ -3146,6 +3431,11 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue
   /// - 应用场景: 这是一个通用接口，Vue在多个场景中被调用以获取过滤规则组下拉选项：1. **订阅编辑对话框**中的“过滤规则组”。
   func fetchFilterRuleGroups() async throws -> [FilterRuleGroup] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.searchFilterRuleGroups()
+    }
+    #endif
     struct ConfigValue: Decodable {
       let value: [FilterRuleGroup]
     }
@@ -3158,6 +3448,14 @@ class APIService: ObservableObject {
   /// - 对应后端: CustomFilterRules 配置项
   /// - 应用场景: 在设置页面加载可用的自定义规则列表，供用户选择后用于前端资源搜索结果的过滤。
   func fetchCustomFilterRules() async throws -> [CustomRule] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      if UIPreviewBackend.shared.hasBehavior(for: UIPreviewBehaviorKey.settingsCustomRules) {
+        return try await UIPreviewFixtures.customFilterRules()
+      }
+      return try await UIPreviewFixtures.searchCustomFilterRules()
+    }
+    #endif
     let data = try await makeRequest(endpoint: "/system/setting/CustomFilterRules")
     let config = try await decodeOrUnwrap(CustomFilterRulesResponse.self, from: data)
     return config.value
@@ -3167,6 +3465,11 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeSeasonDialog.vue, MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue
   /// - 应用场景: 在前端，有两个地方会用到：1. **季订阅弹窗**中，用于展示所有可供选择的剧集组（如“司法岛篇”）。 2. **订阅配置编辑弹窗**中，当编辑一个电视剧订阅时，作为“剧集组”下拉框的数据源，允许用户修改该订阅所属的剧集组。
   func fetchEpisodeGroups(tmdbId: Int) async throws -> [EpisodeGroup] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailEpisodeGroups(tmdbId: tmdbId)
+    }
+    #endif
     let endpoint = "/media/groups/\(tmdbId)"
     return try await sessionCachedValue(sessionScope.episodeGroupsCache, key: endpoint) { [weak self] in
       guard let self else { throw CancellationError() }
@@ -3181,6 +3484,11 @@ class APIService: ObservableObject {
   func getMediaSeasons(
     media: MediaInfo, allSeasons: Bool = false, forceRefresh: Bool = false
   ) async throws -> [TmdbSeason] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailMediaSeasons(media: media, allSeasons: allSeasons)
+    }
+    #endif
     guard let identity = media.identity else {
       // 遵循 Vue 逻辑，如果无法生成媒体身份，则不发起请求，返回空数组
       return []
@@ -3208,6 +3516,11 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeSeasonDialog.vue (getGroupSeasons)
   /// - 应用场景: 在前端的季订阅弹窗中，当用户从下拉列表中**选择**了某个“剧集组”（如“司法岛篇”）后，调用此 API 以获取该组专属的分季信息。
   func getGroupSeasons(groupId: String, forceRefresh: Bool = false) async throws -> [TmdbSeason] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailGroupSeasons(groupId: groupId)
+    }
+    #endif
     let endpoint = "/media/group/seasons/\(groupId)"
     // 与标准季表相同：空结果可能是后端查询失败，不跨页面复用。
     return try await sessionCachedValue(
@@ -3228,6 +3541,11 @@ class APIService: ObservableObject {
   func fetchTmdbEpisodes(
     tmdbID: Int, season: Int, episodeGroup: String?, forceRefresh: Bool = false
   ) async throws -> [TmdbEpisode] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailSeasonEpisodes(tmdbID: tmdbID, season: season, episodeGroup: episodeGroup)
+    }
+    #endif
     let endpoint = try buildEndpoint(
       path: "/tmdb/\(tmdbID)/\(season)", params: ["episode_group": trimmedNonEmpty([episodeGroup])])
     return try await sessionCachedValue(
@@ -3243,6 +3561,11 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeSeasonDialog.vue
   /// - 应用场景: 在前端的 **分季订阅弹窗** 中，实时标记哪些季“已入库”、“部分缺失”或“完全缺失”。
   func checkSeasonsNotExists(mediaInfo: MediaInfo) async throws -> [NotExistMediaInfo] {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailSeasonsNotExists(mediaInfo: mediaInfo)
+    }
+    #endif
     let body = try JSONEncoder().encode(mediaInfo)
     let data = try await makeRequest(
       endpoint: "/mediaserver/notexists",
@@ -3256,6 +3579,11 @@ class APIService: ObservableObject {
   func saveSubscription(original: Subscribe, draft: Subscribe) async throws -> (
     success: Bool, message: String?
   ) {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailSaveSubscription(original: original, draft: draft)
+    }
+    #endif
     let body = try JSONEncoder().encode(SubscriptionWriteDTO(original: original, draft: draft))
     let endpoint = "/subscribe/"
     let data = try await makeRequest(
@@ -3281,6 +3609,11 @@ class APIService: ObservableObject {
     request: SubscribeRequest,
     subscribe: Subscribe
   ) async throws -> Int? {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailAddSubscription(request: request, subscribe: subscribe)
+    }
+    #endif
     let body = try JSONEncoder().encode(request)
     let data = try await makeRequest(
       endpoint: "/subscribe/",
@@ -3328,6 +3661,11 @@ class APIService: ObservableObject {
   func deleteSubscriptionResult(media: MediaInfo, season: Int?) async throws -> (
     success: Bool, message: String?
   ) {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailDeleteSubscriptionResult(media: media, season: season)
+    }
+    #endif
     guard let identity = media.identity else {
       // 遵循 Vue 逻辑，如果无法生成媒体身份，则不发起请求，返回失败
       return (false, "媒体身份不完整")
@@ -3381,6 +3719,11 @@ class APIService: ObservableObject {
   /// - 应用场景: 在"订阅分享"中，点击"复用"按钮，基于分享的配置创建一个新的个人订阅。
   func forkSubscription(share: SubscribeShare) async throws -> Int {
     let body = try JSONEncoder().encode(share)
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.forkSubscription(share: share)
+    }
+    #endif
     let data = try await makeRequest(
       endpoint: "/subscribe/fork",
       method: "POST",
@@ -3418,6 +3761,11 @@ class APIService: ObservableObject {
   ) async throws -> (
     success: Bool, message: String?
   ) {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailUpdateSubscriptionStatus(id: id, state: state)
+    }
+    #endif
     let endpoint = try buildEndpoint(path: "/subscribe/status/\(id)", params: ["state": state])
     let data = try await makeRequest(endpoint: endpoint, method: "PUT")
     let result = try decodeStrictActionResponseSync(from: data)
@@ -3431,6 +3779,11 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/cards/SubscribeCard.vue (searchSubscribe)
   /// - 应用场景: 用户在订阅列表手动点击“搜索”按钮，强制后端立即针对该条目执行一次资源检索。
   func searchSubscription(id: Int) async throws -> Bool {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailSearchSubscription(id: id)
+    }
+    #endif
     let data = try await makeRequest(endpoint: "/subscribe/search/\(id)", method: "POST")
     let success = try decodeStrictActionResponseSync(from: data).success
     if success {
@@ -3457,6 +3810,11 @@ class APIService: ObservableObject {
   /// - 对应前端: MoviePilot-Frontend/src/components/dialog/SubscribeEditDialog.vue
   /// - 应用场景: 编辑订阅前获取完整订阅配置
   func fetchSubscription(id: Int) async throws -> Subscribe {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailSubscription(id: id)
+    }
+    #endif
     let data = try await makeRequest(endpoint: "/subscribe/\(id)")
     let subscription = try await decodeOrUnwrap(Subscribe.self, from: data)
     guard id > 0, subscription.id == id else {
@@ -3479,6 +3837,11 @@ class APIService: ObservableObject {
     season: Int? = nil,
     includeVideoMetadataFallback: Bool = true
   ) async throws -> SubscriptionLookupResult? {
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailSubscriptionLookup(media: media, season: season, includeVideoMetadataFallback: includeVideoMetadataFallback)
+    }
+    #endif
     struct SubscribeLookupResp: Codable {
       let id: Int?
       let tmdbid: Int?
@@ -3573,7 +3936,12 @@ class APIService: ObservableObject {
   /// - 对应前端: `MoviePilot-Frontend/src/views/subscribe/SubscribeListView.vue`, `MoviePilot-Frontend/src/views/subscribe/FullCalendarView.swift`
   /// - 应用场景: 1. **订阅列表页面** (`SubscribeListView`) 的核心数据源。 2. **日历视图** (`FullCalendarView`) 的数据源。 (注: 全局搜索栏不直接调用此API)
   func fetchSubscriptions(forceRefresh: Bool = false) async throws -> [Subscribe] {
-    try await sessionCachedValue(
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.detailSubscriptions()
+    }
+    #endif
+    return try await sessionCachedValue(
       sessionScope.subscriptionSnapshotCache,
       key: "subscriptions",
       forceRefresh: forceRefresh
@@ -3591,6 +3959,11 @@ class APIService: ObservableObject {
     success: Bool, message: String?
   ) {
     let encoder = JSONEncoder()
+    #if DEBUG
+    if UIPreviewMode.isEnabled() {
+      return try await UIPreviewFixtures.addDownload(payload: payload)
+    }
+    #endif
     encoder.outputFormatting = .prettyPrinted
     let body = try encoder.encode(payload)
 
