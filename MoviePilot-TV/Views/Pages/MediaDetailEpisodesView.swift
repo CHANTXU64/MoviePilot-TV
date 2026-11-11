@@ -721,6 +721,7 @@ private struct EpisodeShelfRow<Card: View>: View {
   let episodes: ArraySlice<MoviePilotEpisode>
   let focusedEpisodeID: MoviePilotEpisode.ID?
   @ViewBuilder let card: (MoviePilotEpisode, Bool) -> Card
+  private var memoryOptimization = MemoryOptimizationSettings()
   @State private var imageAnchorID: MoviePilotEpisode.ID?
 
   var body: some View {
@@ -731,7 +732,8 @@ private struct EpisodeShelfRow<Card: View>: View {
       LazyHStack(alignment: .top, spacing: EpisodeCardLayout.spacing) {
         ForEach(Array(episodes.enumerated()), id: \.element.id) { offset, episode in
           card(episode, ImageLoadWindow.containsHorizontalItem(
-            at: offset, itemCount: episodes.count, anchorIndex: anchorIndex, cardKind: .media
+            at: offset, itemCount: episodes.count, anchorIndex: anchorIndex, cardKind: .episode,
+            usesFocusWindow: memoryOptimization.isEnabled
           ))
         }
       }

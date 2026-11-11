@@ -7,23 +7,44 @@ import XCTest
 
 @MainActor
 final class ImageLoadWindowTests: XCTestCase {
+  func testEpisodeWindowKeepsFourStillsEachSideUnlessFocusWindowIsOff() {
+    func loaded(anchor: Int?, usesFocusWindow: Bool = true) -> Set<Int> {
+      Set(
+        (0..<30).filter {
+          ImageLoadWindow.containsHorizontalItem(
+            at: $0, itemCount: 30, anchorIndex: anchor, cardKind: .episode,
+            usesFocusWindow: usesFocusWindow)
+        }
+      )
+    }
+
+    XCTAssertEqual(loaded(anchor: nil), Set(0...4))
+    XCTAssertEqual(loaded(anchor: 10), Set(6...14))
+    XCTAssertEqual(loaded(anchor: 29), Set(25...29))
+    XCTAssertEqual(loaded(anchor: 10, usesFocusWindow: false), Set(0..<30))
+    XCTAssertFalse(
+      ImageLoadWindow.containsHorizontalItem(
+        at: 30, itemCount: 30, anchorIndex: 10, cardKind: .episode, usesFocusWindow: false)
+    )
+  }
+
   func testMediaHorizontalWindowMovesInBothDirections() {
     let initial = Set(
       (0..<20).filter {
         ImageLoadWindow.containsHorizontalItem(
-          at: $0, itemCount: 20, anchorIndex: 5, cardKind: .media)
+          at: $0, itemCount: 20, anchorIndex: 5, cardKind: .media, usesFocusWindow: true)
       }
     )
     let forward = Set(
       (0..<20).filter {
         ImageLoadWindow.containsHorizontalItem(
-          at: $0, itemCount: 20, anchorIndex: 8, cardKind: .media)
+          at: $0, itemCount: 20, anchorIndex: 8, cardKind: .media, usesFocusWindow: true)
       }
     )
     let backward = Set(
       (0..<20).filter {
         ImageLoadWindow.containsHorizontalItem(
-          at: $0, itemCount: 20, anchorIndex: 4, cardKind: .media)
+          at: $0, itemCount: 20, anchorIndex: 4, cardKind: .media, usesFocusWindow: true)
       }
     )
 
@@ -38,7 +59,7 @@ final class ImageLoadWindowTests: XCTestCase {
     let loaded = Set(
       (0..<30).filter {
         ImageLoadWindow.containsHorizontalItem(
-          at: $0, itemCount: 30, anchorIndex: 12, cardKind: .person)
+          at: $0, itemCount: 30, anchorIndex: 12, cardKind: .person, usesFocusWindow: true)
       }
     )
 
@@ -81,13 +102,13 @@ final class ImageLoadWindowTests: XCTestCase {
     let media = Set(
       (0..<20).filter {
         ImageLoadWindow.containsHorizontalItem(
-          at: $0, itemCount: 20, anchorIndex: 19, cardKind: .media)
+          at: $0, itemCount: 20, anchorIndex: 19, cardKind: .media, usesFocusWindow: true)
       }
     )
     let people = Set(
       (0..<30).filter {
         ImageLoadWindow.containsHorizontalItem(
-          at: $0, itemCount: 30, anchorIndex: 29, cardKind: .person)
+          at: $0, itemCount: 30, anchorIndex: 29, cardKind: .person, usesFocusWindow: true)
       }
     )
     let grid = Set(

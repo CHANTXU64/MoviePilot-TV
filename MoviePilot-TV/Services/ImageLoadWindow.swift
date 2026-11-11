@@ -4,10 +4,13 @@ enum ImageLoadWindow {
   enum HorizontalCardKind {
     case media
     case person
+    /// 单集剧照卡较宽，一屏只放 4 张。
+    case episode
   }
 
   nonisolated static let mediaHorizontalRadius = 6
   nonisolated static let personHorizontalRadius = 8
+  nonisolated static let episodeHorizontalRadius = 4
   nonisolated static let gridPinnedTopRowCount = 2
   nonisolated static let gridRowsBefore = 2
   nonisolated static let gridRowsAfter = 2
@@ -16,14 +19,19 @@ enum ImageLoadWindow {
     at index: Int,
     itemCount: Int,
     anchorIndex: Int?,
-    cardKind: HorizontalCardKind
+    cardKind: HorizontalCardKind,
+    usesFocusWindow: Bool
   ) -> Bool {
+    // 不按焦点窗口时，已挂载的卡片都保留图片。
+    guard usesFocusWindow else { return (0..<itemCount).contains(index) }
     let radius: Int
     switch cardKind {
     case .media:
       radius = mediaHorizontalRadius
     case .person:
       radius = personHorizontalRadius
+    case .episode:
+      radius = episodeHorizontalRadius
     }
     return contains(
       index: index,

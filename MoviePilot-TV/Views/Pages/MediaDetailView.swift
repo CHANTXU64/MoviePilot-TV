@@ -256,7 +256,8 @@ struct MediaDetailView: View {
       at: index,
       itemCount: items.count,
       anchorIndex: anchorIndex,
-      cardKind: cardKind
+      cardKind: cardKind,
+      usesFocusWindow: memoryOptimization.isEnabled
     )
   }
 
